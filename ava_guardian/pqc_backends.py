@@ -36,7 +36,6 @@ AI Co-Architects: Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | De
 """
 
 import os
-import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional, cast
@@ -409,7 +408,9 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
         try:
             sig = _oqs_module.Signature("ML-DSA-65")
             return cast(bool, sig.verify(message, signature, public_key))
-        except Exception:  # nosec B110 - intentional broad catch to return False on verification errors
+        except (
+            Exception
+        ):  # nosec B110 - intentional broad catch to return False on verification errors
             return False
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)

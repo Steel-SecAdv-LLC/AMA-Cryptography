@@ -17,9 +17,7 @@ def main() -> None:
     info = get_pqc_backend_info()
 
     if status != PQCStatus.AVAILABLE:
-        raise SystemExit(
-            "PQC unavailable: install liboqs-python and ensure it loads correctly."
-        )
+        raise SystemExit("PQC unavailable: install liboqs-python and ensure it loads correctly.")
 
     backend = info.get("dilithium_backend")
     if backend is None:
