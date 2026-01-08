@@ -281,7 +281,7 @@ setup(
     # This section is kept in sync for compatibility with older tools.
     install_requires=[
         "cryptography>=41.0.0",
-        "numpy>=1.24.0,<2.0.0",
+        "numpy>=1.24.0,<3.0.0",
         "scipy>=1.7.0",
     ],
     extras_require={
