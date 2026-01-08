@@ -5,7 +5,7 @@
 
 ## Methodology
 - Reviewed primary documentation (README, SECURITY_ANALYSIS, ARCHITECTURE, MONITORING, BENCHMARKS, IMPLEMENTATION_GUIDE).
-- Skimmed key Python modules (`ava_guardian/crypto_api.py`, PQC backends, monitoring utilities).
+- Reviewed key Python modules (`ava_guardian/crypto_api.py`, PQC backends, monitoring utilities).
 - Executed `python -m pytest` (failed: missing dependency `pytest`).
 - Focused on validity of claims, functional coverage, usability, and alignment between stated and actual capabilities.
 
@@ -37,7 +37,7 @@
 - Test suite cannot be confirmed in this environment (missing `pytest`); CI status should be consulted for actual coverage.
 
 ## Recommendations
-1. Make `liboqs` + `pytest` installation explicit in quick-start for users expecting PQC and tests; consider failing closed when PQC is requested but unavailable.
+1. Make `liboqs` + `pytest` installation explicit in quick-start for users expecting PQC and tests; when PQC is requested but unavailable, raise an error instead of proceeding with a non-constant-time fallback.
 2. Run CI/constant-time checks on target hardware; publish results or third-party review to strengthen validity.
 3. Provide a minimal “sanity check” script that asserts backend availability and runs a sample hybrid sign/verify path.
 
