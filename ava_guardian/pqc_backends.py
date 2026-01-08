@@ -87,8 +87,6 @@ _DILITHIUM_BACKEND: Optional[str] = None
 _KYBER_BACKEND: Optional[str] = None
 _SPHINCS_BACKEND: Optional[str] = None
 _oqs_module: Any = None
-_dilithium3_module: Any = None
-
 try:
     # Try liboqs-python first (recommended - fast C implementation)
     import oqs as _oqs_module  # type: ignore[no-redef]
@@ -408,8 +406,11 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
 
     if DILITHIUM_BACKEND == "liboqs" and _oqs_module is not None:
-        sig = _oqs_module.Signature("ML-DSA-65")
-        return cast(bool, sig.verify(message, signature, public_key))
+        try:
+            sig = _oqs_module.Signature("ML-DSA-65")
+            return cast(bool, sig.verify(message, signature, public_key))
+        except Exception:  # nosec B110 - intentional broad catch to return False on verification errors
+            return False
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
