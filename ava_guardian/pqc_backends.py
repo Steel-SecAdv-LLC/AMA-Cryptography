@@ -417,9 +417,9 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
         try:
             sig = _oqs_module.Signature("ML-DSA-65")
             verification_result = sig.verify(message, signature, public_key)
+            return cast(bool, verification_result)
         except Exception:  # nosec B110 - intentional broad catch for signature verification
             return False
-        return cast(bool, verification_result)
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
