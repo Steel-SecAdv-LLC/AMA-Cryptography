@@ -23,7 +23,7 @@
 
 ### Usability
 - Excellent narrative documentation and Makefile targets for build/lint/test; Docker images and platform notes included.
-- Setup is non-trivial: requires liboqs, compiler toolchain, and optional OpenSSL for TSA. Users without `pytest`/dev deps will see failed tests (as observed).
+- Setup is non-trivial: requires liboqs, compiler toolchain, and optional OpenSSL for TSA. Users without `pytest`/development dependencies will see failed tests (as observed).
 - Default behavior is permissive: PQC falls back to slower/non-constant-time code unless `AVA_REQUIRE_CONSTANT_TIME` is set—users must opt in to stricter posture.
 
 ### Capabilities vs. Claims
@@ -37,7 +37,7 @@
 - Test suite cannot be confirmed in this environment (missing `pytest`); CI status should be consulted for actual coverage.
 
 ## Recommendations
-1. Make `liboqs` + `pytest` installation explicit in quick-start steps for users who expect PQC features and test execution.
+1. Make `liboqs` and `pytest` installation explicit in quick-start steps for users who expect PQC features and test execution.
 2. When PQC is requested but unavailable, raise an error instead of proceeding with a non-constant-time fallback.
 3. Run CI/constant-time checks on target hardware; publish results or third-party review to strengthen validity.
 4. Provide a minimal “sanity check” script that asserts backend availability and runs a sample hybrid sign/verify path.
