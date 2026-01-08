@@ -725,6 +725,7 @@ KAT vectors are sourced from NIST PQC submissions and validate that the cryptogr
 | [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md) | Comprehensive deployment and build guide |
 | [ENHANCED_FEATURES.md](ENHANCED_FEATURES.md) | In-depth feature documentation |
 | [MONITORING.md](MONITORING.md) | 3R security monitoring guide |
+| [AUDIT_REPORT.md](AUDIT_REPORT.md) | Repository-level audit (validity, functionality, usability, capabilities) |
 
 </details>
 
