@@ -28,7 +28,7 @@
 
 ### Capabilities vs. Claims
 - Core capabilities (hybrid signing/verification, PQC KEM/signatures, monitoring, key lifecycle) are present in code and aligned with documentation, subject to backend availability.
-- Performance and security claims are benchmark- and self-assessment–backed; no independent verification is provided.
+- Performance and security claims are backed by benchmarks and self-assessments; no independent verification is provided.
 - Ethical binding and bio-inspired constructs are documented conceptual overlays; functional impact is limited to domain-separated HKDF/context handling.
 
 ## Risks and Gaps
@@ -37,9 +37,10 @@
 - Test suite cannot be confirmed in this environment (missing `pytest`); CI status should be consulted for actual coverage.
 
 ## Recommendations
-1. Make `liboqs` + `pytest` installation explicit in quick-start for users expecting PQC and tests; when PQC is requested but unavailable, raise an error instead of proceeding with a non-constant-time fallback.
-2. Run CI/constant-time checks on target hardware; publish results or third-party review to strengthen validity.
-3. Provide a minimal “sanity check” script that asserts backend availability and runs a sample hybrid sign/verify path.
+1. Make `liboqs` + `pytest` installation explicit in quick-start steps for users who expect PQC features and test execution.
+2. When PQC is requested but unavailable, raise an error instead of proceeding with a non-constant-time fallback.
+3. Run CI/constant-time checks on target hardware; publish results or third-party review to strengthen validity.
+4. Provide a minimal “sanity check” script that asserts backend availability and runs a sample hybrid sign/verify path.
 
 ## Conclusion
-Ava Guardian presents a well-documented experimental PQC/hybrid cryptography framework with runtime monitoring and multi-language layers. Functionality matches claims within documented constraints, but production deployment still requires third-party audit, strict constant-time configuration, and verified PQC backends. Usability is strong for experienced practitioners, yet dependency setup remains the primary barrier for new users.
+Ava Guardian presents a well-documented experimental PQC/hybrid cryptography framework with runtime monitoring and multi-language layers. Functionality matches claims within documented constraints, but production deployment still requires third-party audit, strict constant-time configuration, and verified PQC backends. Usability is strong for experienced practitioners. Dependency setup remains the primary barrier for new users.
