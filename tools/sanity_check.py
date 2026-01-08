@@ -31,7 +31,7 @@ def main() -> None:
         keypair = crypto.generate_keypair()
         signature = crypto.sign(b"sanity-check", keypair.secret_key)
         valid = crypto.verify(b"sanity-check", signature.signature, keypair.public_key)
-    except (PQCUnavailableError, Exception) as exc:  # noqa: BLE001 - intentional broad catch
+    except (PQCUnavailableError, Exception) as exc:  # noqa: BLE001 - intentional broad catch to surface any crypto/runtime errors during smoke test
         raise SystemExit(f"PQC sanity check failed: {exc}")
 
     if not valid:
