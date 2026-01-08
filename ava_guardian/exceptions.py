@@ -34,14 +34,13 @@ class PQCUnavailableError(RuntimeError):
     Raised when post-quantum cryptography is required but unavailable.
 
     This exception indicates that a PQC operation was requested but the
-    necessary backend (liboqs-python or pqcrypto) is not installed.
+    necessary backend (liboqs-python) is not installed.
 
     Inherits from RuntimeError to maintain backward compatibility with
     existing tests and code that expects this exception hierarchy.
 
-    To resolve, install one of:
-        pip install liboqs-python  # Recommended, requires Python 3.10+
-        pip install pqcrypto       # Alternative, pure Python
+    To resolve, install:
+        pip install liboqs-python  # Requires compatible liboqs shared library
     """
 
     pass
@@ -50,7 +49,7 @@ class PQCUnavailableError(RuntimeError):
 class QuantumSignatureUnavailableError(PQCUnavailableError):
     """
     Raised when quantum-resistant signature operations are requested but
-    the required libraries (liboqs-python or pqcrypto) are not available.
+    the required library (liboqs-python) is not available.
 
     This exception ensures fail-closed behavior for quantum signatures,
     preventing the system from silently degrading to insecure placeholders.

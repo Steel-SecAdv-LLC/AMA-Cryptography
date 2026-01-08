@@ -25,8 +25,7 @@ Supported Algorithms:
 - Kyber-1024 (ML-KEM): Key encapsulation mechanism (NIST FIPS 203)
 - SPHINCS+-SHA2-256f: Hash-based signatures (NIST FIPS 205)
 
-This module provides real quantum-resistant implementations via liboqs,
-with pqcrypto as a fallback for signatures only.
+This module provides quantum-resistant implementations via liboqs only.
 
 Standards:
 - NIST FIPS 203: ML-KEM (Kyber)
@@ -37,7 +36,6 @@ AI Co-Architects: Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | De
 """
 
 import os
-import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional, cast
@@ -88,8 +86,6 @@ _DILITHIUM_BACKEND: Optional[str] = None
 _KYBER_BACKEND: Optional[str] = None
 _SPHINCS_BACKEND: Optional[str] = None
 _oqs_module: Any = None
-_dilithium3_module: Any = None
-
 try:
     # Try liboqs-python first (recommended - fast C implementation)
     import oqs as _oqs_module  # type: ignore[no-redef]
@@ -124,19 +120,8 @@ except BaseException:
     # We use BaseException here specifically to catch SystemExit which
     # liboqs-python raises when it fails to auto-install the native library.
     _oqs_module = None
-    try:
-        # Fall back to pqcrypto (pure Python) - signatures only
-        from pqcrypto.sign import dilithium3 as _dilithium3_module  # type: ignore[no-redef]
-
-        _DILITHIUM_AVAILABLE = True
-        _DILITHIUM_BACKEND = "pqcrypto"
-        # pqcrypto doesn't support Kyber or SPHINCS+
-        _KYBER_AVAILABLE = False
-        _SPHINCS_AVAILABLE = False
-    except BaseException:
-        # Same reasoning - catch all failures including SystemExit
-        _DILITHIUM_AVAILABLE = False
-        _DILITHIUM_BACKEND = None
+    _DILITHIUM_AVAILABLE = False
+    _DILITHIUM_BACKEND = None
 
 
 # Public API for checking availability
@@ -151,32 +136,13 @@ SPHINCS_BACKEND: Optional[str] = _SPHINCS_BACKEND
 # SECURITY WARNINGS AND CONSTANT-TIME ENFORCEMENT
 # =============================================================================
 
-# Issue warning if using non-constant-time backend (pqcrypto)
-if _DILITHIUM_BACKEND == "pqcrypto" and _dilithium3_module is not None:
-    warnings.warn(
-        "Using pure Python PQC implementation (pqcrypto). This is NOT constant-time "
-        "and may be vulnerable to timing side-channels. Do not use in environments "
-        "where timing attacks are a concern. Install liboqs-python for constant-time "
-        "implementations: pip install liboqs-python. "
-        "Set AVA_REQUIRE_CONSTANT_TIME=true to reject this configuration.",
-        SecurityWarning,
-        stacklevel=2,
-    )
-
 # Enforce constant-time requirement if AVA_REQUIRE_CONSTANT_TIME is set
 if AVA_REQUIRE_CONSTANT_TIME:
-    # Require liboqs-based implementations for all PQC algorithms
-    if _DILITHIUM_AVAILABLE and _DILITHIUM_BACKEND != "liboqs":
-        raise PQCUnavailableError(
-            "PQC_UNAVAILABLE: AVA_REQUIRE_CONSTANT_TIME is set but a verified "
-            "constant-time Dilithium backend (liboqs) is not available. "
-            "The pqcrypto backend is not guaranteed constant-time. "
-            "Install liboqs-python: pip install liboqs-python"
-        )
     if not _DILITHIUM_AVAILABLE:
         raise PQCUnavailableError(
-            "PQC_UNAVAILABLE: AVA_REQUIRE_CONSTANT_TIME is set but no Dilithium "
-            "backend is available. Install liboqs-python: pip install liboqs-python"
+            "PQC_UNAVAILABLE: AVA_REQUIRE_CONSTANT_TIME is set but a liboqs "
+            "Dilithium backend is not available. "
+            "Install liboqs-python: pip install liboqs-python"
         )
 
 # Key sizes from liboqs (authoritative source)
@@ -214,7 +180,7 @@ _SPHINCS_UNKNOWN_STATE = "SPHINCS_UNAVAILABLE: Unknown backend state"
 # Backend unavailable error messages
 _DILITHIUM_UNAVAILABLE_MSG = (
     f"PQC_UNAVAILABLE: Dilithium backend not available. "
-    f"Install liboqs-python (recommended) or pqcrypto: {_INSTALL_LIBOQS}"
+    f"Install liboqs-python: {_INSTALL_LIBOQS}"
 )
 _KYBER_UNAVAILABLE_MSG = f"KYBER_UNAVAILABLE: Kyber-1024 backend not available. {_INSTALL_LIBOQS}"
 _SPHINCS_UNAVAILABLE_MSG = (
@@ -391,10 +357,6 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
         private_key = sig.export_secret_key()
         return DilithiumKeyPair(private_key=private_key, public_key=public_key)
 
-    elif DILITHIUM_BACKEND == "pqcrypto" and _dilithium3_module is not None:
-        public_key, private_key = _dilithium3_module.generate_keypair()
-        return DilithiumKeyPair(private_key=private_key, public_key=public_key)
-
     # Should not reach here if DILITHIUM_AVAILABLE is True
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -421,9 +383,6 @@ def dilithium_sign(message: bytes, private_key: bytes) -> bytes:
         sig.secret_key = private_key
         return cast(bytes, sig.sign(message))
 
-    elif DILITHIUM_BACKEND == "pqcrypto" and _dilithium3_module is not None:
-        return cast(bytes, _dilithium3_module.sign(message, private_key))
-
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
 
@@ -449,14 +408,9 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
         try:
             sig = _oqs_module.Signature("ML-DSA-65")
             return cast(bool, sig.verify(message, signature, public_key))
-        except Exception:  # nosec B110 - intentional broad catch for signature verification
-            return False
-
-    elif DILITHIUM_BACKEND == "pqcrypto" and _dilithium3_module is not None:
-        try:
-            _dilithium3_module.verify(message, signature, public_key)
-            return True
-        except Exception:  # nosec B110 - intentional broad catch for signature verification
+        except (
+            Exception
+        ):  # nosec B110 - intentional broad catch to return False on verification errors
             return False
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
