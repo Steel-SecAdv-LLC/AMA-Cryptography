@@ -141,17 +141,11 @@ SPHINCS_BACKEND: Optional[str] = _SPHINCS_BACKEND
 
 # Enforce constant-time requirement if AVA_REQUIRE_CONSTANT_TIME is set
 if AVA_REQUIRE_CONSTANT_TIME:
-    # Require liboqs-based implementations for all PQC algorithms
-    if _DILITHIUM_AVAILABLE and _DILITHIUM_BACKEND != "liboqs":
+    if not (_DILITHIUM_AVAILABLE and _DILITHIUM_BACKEND == "liboqs"):
         raise PQCUnavailableError(
             "PQC_UNAVAILABLE: AVA_REQUIRE_CONSTANT_TIME is set but a verified "
             "constant-time Dilithium backend (liboqs) is not available. "
             "Install liboqs-python: pip install liboqs-python"
-        )
-    if not _DILITHIUM_AVAILABLE:
-        raise PQCUnavailableError(
-            "PQC_UNAVAILABLE: AVA_REQUIRE_CONSTANT_TIME is set but no Dilithium "
-            "backend is available. Install liboqs-python: pip install liboqs-python"
         )
 
 # Key sizes from liboqs (authoritative source)
