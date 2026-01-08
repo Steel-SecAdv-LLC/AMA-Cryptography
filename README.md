@@ -1136,6 +1136,6 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 <img src="assets/ama_logo.png" alt="AMA" height="24">
 
-*Last updated: 2025-12-06*
+*Last updated: 2026-01-08*
 
 </div>
