@@ -143,8 +143,8 @@ SPHINCS_BACKEND: Optional[str] = _SPHINCS_BACKEND
 if AVA_REQUIRE_CONSTANT_TIME:
     if not _DILITHIUM_AVAILABLE:
         raise PQCUnavailableError(
-            "PQC_UNAVAILABLE: AVA_REQUIRE_CONSTANT_TIME is set but a verified "
-            "constant-time Dilithium backend (liboqs) is not available. "
+            "PQC_UNAVAILABLE: AVA_REQUIRE_CONSTANT_TIME is set but a liboqs "
+            "Dilithium backend is not available. "
             "Install liboqs-python: pip install liboqs-python"
         )
 
@@ -408,11 +408,8 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
 
     if DILITHIUM_BACKEND == "liboqs" and _oqs_module is not None:
-        try:
-            sig = _oqs_module.Signature("ML-DSA-65")
-            return cast(bool, sig.verify(message, signature, public_key))
-        except Exception:  # nosec B110 - intentional broad catch for signature verification
-            return False
+        sig = _oqs_module.Signature("ML-DSA-65")
+        return cast(bool, sig.verify(message, signature, public_key))
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 

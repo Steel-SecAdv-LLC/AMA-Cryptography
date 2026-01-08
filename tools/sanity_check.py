@@ -22,10 +22,13 @@ def main() -> None:
         )
 
     backend = info.get("dilithium_backend")
-    if backend != "liboqs":
-        detail = "unavailable" if backend is None else f"'{backend}'"
+    if backend is None:
         raise SystemExit(
-            f"PQC backend is {detail}. Install liboqs-python for constant-time support."
+            "PQC backend unavailable. Install liboqs-python for constant-time support."
+        )
+    if backend != "liboqs":
+        raise SystemExit(
+            f"PQC backend is '{backend}'. Install liboqs-python for constant-time support."
         )
 
     crypto = AvaGuardianCrypto(algorithm=AlgorithmType.HYBRID_SIG)
