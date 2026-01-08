@@ -227,10 +227,9 @@ Future-proof cryptography:
 
 | Backend | Constant-Time | Recommended Use |
 |---------|---------------|-----------------|
-| liboqs-python | Yes (C implementation) | Production environments |
-| pqcrypto | No (Pure Python) | Development/testing only |
+| liboqs-python | Yes (C implementation) | Required for PQC |
 
-> **WARNING:** The pure Python PQC fallback (pqcrypto) is NOT constant-time and may be vulnerable to timing side-channel attacks. For production environments where timing attacks are a concern, install liboqs-python: `pip install liboqs-python`. Set the environment variable `AVA_REQUIRE_CONSTANT_TIME=true` to refuse non-constant-time backends at runtime.
+> **WARNING:** PQC operations now fail closed when liboqs-python is unavailable. Install `liboqs-python` to enable PQC features. Set the environment variable `AVA_REQUIRE_CONSTANT_TIME=true` to enforce constant-time operation at runtime.
 
 > **Note:** liboqs-python may show version mismatch warnings (e.g., "liboqs version differs from liboqs-python version"). This is typically harmless and occurs when the native liboqs library version differs from the Python bindings. The cryptographic operations remain correct.
 
@@ -433,6 +432,10 @@ cd Ava-Guardian
 # Install dependencies
 pip install -r requirements.txt -r requirements-dev.txt
 
+# Enable PQC backends and tests
+pip install liboqs-python
+pip install pytest  # already included in requirements-dev.txt; list here explicitly for clarity
+
 # Build everything (C library + Python extensions)
 make all
 
@@ -442,6 +445,8 @@ make test
 # Install system-wide
 sudo make install
 ```
+
+> PQC operations require `liboqs-python`. If the backend is unavailable, PQC calls fail closed with an error.
 
 ### Platform-Specific Notes
 
@@ -607,6 +612,9 @@ make test
 
 # Performance benchmarks
 make benchmark
+
+# Minimal PQC sanity check (requires liboqs-python)
+python tools/sanity_check.py
 ```
 
 ### Test Coverage
@@ -725,7 +733,6 @@ KAT vectors are sourced from NIST PQC submissions and validate that the cryptogr
 | [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md) | Comprehensive deployment and build guide |
 | [ENHANCED_FEATURES.md](ENHANCED_FEATURES.md) | In-depth feature documentation |
 | [MONITORING.md](MONITORING.md) | 3R security monitoring guide |
-| [AUDIT_REPORT.md](AUDIT_REPORT.md) | Repository-level audit (validity, functionality, usability, capabilities) |
 
 </details>
 

@@ -18,7 +18,7 @@ Design Philosophy:
 - Performance optimized (uses C/Cython when available)
 
 PQC Backend:
-- ML-DSA-65 (CRYSTALS-Dilithium) via liboqs or pqcrypto
+- ML-DSA-65 (CRYSTALS-Dilithium) via liboqs (required)
 - Raises PQCUnavailableError if PQC backend not installed
 - Use get_pqc_capabilities() to check availability before use
 """
