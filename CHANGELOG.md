@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 1.3 |
-| Last Updated | 2026-01-08 |
+| Document Version | 1.1 |
+| Last Updated | 2026-01-09 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -360,9 +360,7 @@ This public v1.0.0 release is based on internal development version 4.0.0, which
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 1.3 | 2026-01-08 | Version 1.3 release with comprehensive audit and version updates |
-| 1.2 | 2025-12-04 | Version 1.2 release with code quality improvements |
-| 1.1 | 2025-11-29 | Native C library, constant-time verification, HKDF unification |
+| 1.1 | 2026-01-09 | Version 1.1 release with comprehensive documentation updates |
 | 1.0 | 2025-11-22 | First public open-source release (Apache 2.0) |
 
 ---

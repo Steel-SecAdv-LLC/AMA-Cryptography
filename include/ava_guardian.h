@@ -17,9 +17,9 @@
 /**
  * @file ava_guardian.h
  * @brief Ava Guardian ♱ (AG♱) - Core C API for Post-Quantum Cryptography
- * @version 1.3
+ * @version 1.1
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2025-12-06
+ * @date 2026-01-09
  *
  * High-performance C implementation of quantum-resistant cryptographic primitives.
  */
@@ -39,9 +39,9 @@ extern "C" {
  * ============================================================================ */
 
 #define AVA_GUARDIAN_VERSION_MAJOR 1
-#define AVA_GUARDIAN_VERSION_MINOR 3
+#define AVA_GUARDIAN_VERSION_MINOR 1
 #define AVA_GUARDIAN_VERSION_PATCH 0
-#define AVA_GUARDIAN_VERSION_STRING "1.3"
+#define AVA_GUARDIAN_VERSION_STRING "1.1"
 
 /* ============================================================================
  * ALGORITHM IDENTIFIERS

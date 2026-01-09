@@ -51,7 +51,7 @@ except ImportError:
     np = None
 
 # Configuration
-VERSION = "1.3"
+VERSION = "1.1"
 USE_CYTHON = CYTHON_AVAILABLE and not os.getenv("AVA_NO_CYTHON")
 USE_C_EXTENSIONS = not os.getenv("AVA_NO_C_EXTENSIONS")
 DEBUG = bool(os.getenv("AVA_DEBUG"))

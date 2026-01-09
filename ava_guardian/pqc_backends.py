@@ -163,7 +163,7 @@ SPHINCS_SECRET_KEY_BYTES = 128
 SPHINCS_SIGNATURE_BYTES = 49856
 
 # ============================================================================
-# ERROR MESSAGE CONSTANTS (v1.3 Refactoring)
+# ERROR MESSAGE CONSTANTS (v1.1 Refactoring)
 # ============================================================================
 # FIXME: Consider extracting backend availability checking into a decorator
 # pattern to reduce code duplication across generate_*/sign/verify functions.

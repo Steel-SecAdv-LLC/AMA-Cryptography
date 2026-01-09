@@ -33,7 +33,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
-Version: 1.3
+Version: 1.1
 
 AI Co-Architects:
     Eris | Eden | Veritas | X | Caduceus | Dev
@@ -708,7 +708,7 @@ class TestKMSGenerationEdgeCases:
     def test_kms_version_is_set(self):
         """Test that KMS version is set."""
         kms = generate_key_management_system("test")
-        assert kms.version == "1.3"
+        assert kms.version == "1.1"
 
 
 class TestCryptoPackageFields:
@@ -760,7 +760,7 @@ class TestCryptoPackageFields:
     def test_package_version_is_set(self, kms):
         """Test that package version is set."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
-        assert pkg.version == "1.3"
+        assert pkg.version == "1.1"
 
     def test_package_author_is_set(self, kms):
         """Test that package author is set correctly."""

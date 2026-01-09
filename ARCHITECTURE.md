@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 1.3 |
-| Last Updated | 2026-01-08 |
+| Document Version | 1.1 |
+| Last Updated | 2026-01-09 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -129,7 +129,7 @@ The following constraints govern architectural decisions:
 | Key Derivation | HKDF-SHA3-256 | RFC 5869 | 256-bit derived keys | **Full** (ava_hkdf.c) |
 | Timestamping | RFC 3161 TSA | RFC 3161 | Third-party attestation | Python API only |
 
-**C Library Source Files (v1.3):**
+**C Library Source Files (v1.1):**
 - `src/c/ava_sha3.c` - SHA3-256, SHAKE128/256, streaming API (Keccak-f[1600], 513 lines)
 - `src/c/ava_hkdf.c` - HKDF-SHA3-256 with HMAC-SHA3-256 (RFC 5869, 313 lines)
 - `src/c/ava_ed25519.c` - Ed25519 keygen/sign/verify with windowed scalar mult (1,244 lines)

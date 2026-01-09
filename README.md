@@ -31,7 +31,7 @@
 **Author/Inventor:** Andrew E. A.
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
-**Version:** 1.3
+**Version:** 1.1
 **AI Co-Architects:** Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 
 ---
@@ -215,7 +215,7 @@ Future-proof cryptography:
 - **Partial (NTT)**: Core polynomial operations (NTT, inverse NTT, compression) implemented; full KEM requires liboqs.
 - **Stub (liboqs)**: Returns `AVA_ERROR_NOT_IMPLEMENTED` without liboqs. Enable with `-DAVA_USE_LIBOQS=ON`.
 
-**C Library Implementations (v1.3):**
+**C Library Implementations (v1.1):**
 - `ava_sha3.c`: SHA3-256, SHAKE128, SHAKE256 (Keccak-f[1600] sponge construction)
 - `ava_hkdf.c`: HKDF-SHA3-256 with HMAC-SHA3-256 (RFC 5869 compliant)
 - `ava_ed25519.c`: Ed25519 keygen/sign/verify (SHA-512, field arithmetic for GF(2^255-19))
@@ -1134,7 +1134,11 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 *Architected with inherent radical honesty, unconventional methodology, protective servitude, and ethical immutability.*
 
-<img src="assets/ama_logo.png" alt="AMA" height="24">
+<div align="center">
+
+<img width="27" height="29" alt="image" src="https://github.com/user-attachments/assets/12254743-9798-46df-bc27-4b25857141fe" />
+
+</div>
 
 *Last updated: 2026-01-08*
 
