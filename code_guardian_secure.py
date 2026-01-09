@@ -23,7 +23,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
-Version: 1.3
+Version: 1.1
 Project: Post-quantum cryptographic security system
 
 AI Co-Architects:
@@ -52,7 +52,7 @@ Standards Compliance:
 - RFC 5869: HMAC-based Extract-and-Expand Key Derivation (HKDF)
 - RFC 3161: Internet X.509 Public Key Infrastructure Time-Stamp Protocol
 
-Version: 1.3
+Version: 1.1
 Python: 3.8+
 License: Apache License 2.0
 """
@@ -1521,7 +1521,7 @@ def generate_key_management_system(
         dilithium_keypair=dilithium_keypair,
         creation_date=datetime.now(timezone.utc).isoformat(),
         rotation_schedule="quarterly",
-        version="1.3",
+        version="1.1",
         ethical_vector=ethical_vector,
         quantum_signatures_enabled=quantum_signatures_enabled,
     )
@@ -1852,7 +1852,7 @@ def create_crypto_package(  # noqa: C901 - high-level orchestrator; refactor wou
         author=author,
         ed25519_pubkey=kms.ed25519_keypair.public_key.hex(),
         dilithium_pubkey=dilithium_pubkey,
-        version="1.3",
+        version="1.1",
         ethical_vector=ethical_vector,
         ethical_hash=ethical_hash_hex,
         quantum_signatures_enabled=quantum_signatures_enabled,

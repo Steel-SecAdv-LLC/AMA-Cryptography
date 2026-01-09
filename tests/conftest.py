@@ -288,7 +288,7 @@ def sample_omni_code() -> dict:
             "content": "Sample Omni-Code for testing",
             "metadata": {
                 "created_by": "test_suite",
-                "version": "1.0.0",
+                "version": "1.1",
             },
         },
     }

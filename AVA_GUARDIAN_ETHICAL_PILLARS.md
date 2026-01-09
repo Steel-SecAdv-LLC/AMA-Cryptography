@@ -6,8 +6,8 @@
 **Author/Inventor:** Andrew E. A.  
 **Organization:** Steel Security Advisors LLC
 
-**Version:** 1.3  
-**Date:** 2026-01-08
+**Version:** 1.1  
+**Date:** 2026-01-09
 
 ---
 

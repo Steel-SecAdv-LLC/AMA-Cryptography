@@ -312,7 +312,7 @@ Ava Guardian ♱ delivers **high-performance cryptography** with:
 |---------|------|---------|
 | 1.0.0 | 2025-11-26 | Initial professional release |
 | 1.1.0 | 2025-11-29 | Updated benchmarks with fresh measurements from Python 3.12 |
-| 1.3 | 2025-12-06 | Version 1.3 release with version updates and enhancements |
+| 1.1 | 2026-01-09 | Version 1.1 release with version updates and enhancements |
 
 ---
 

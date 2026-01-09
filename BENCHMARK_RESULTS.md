@@ -13,7 +13,7 @@
 
 ## Executive Summary
 
-Complete performance benchmarks for Ava Guardian ♱ v1.3, including **comparative analysis against OpenSSL and liboqs** implementations.
+Complete performance benchmarks for Ava Guardian ♱ v1.1, including **comparative analysis against OpenSSL and liboqs** implementations.
 
 **Test Environment:**
 - OS: Linux 4.4.0 x86_64
