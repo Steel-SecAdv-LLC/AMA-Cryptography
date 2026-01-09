@@ -22,13 +22,13 @@ Post-quantum cryptographic security system with rigorous mathematical foundation
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
-Version: 1.3
+Version: 1.1
 
 AI Co-Architects:
     Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 """
 
-__version__ = "1.3"
+__version__ = "1.1"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
 from ava_guardian.double_helix_engine import AvaEquationEngine

@@ -39,7 +39,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
-Version: 1.3
+Version: 1.1
 Project: Ava Guardian ♱ 3R Runtime Monitoring
 
 AI Co-Architects:
@@ -118,7 +118,7 @@ class IncrementalStats:
         self.M2 = 0.0
 
 
-__version__ = "1.3"
+__version__ = "1.1"
 __all__ = [
     "IncrementalStats",
     "EWMAStats",

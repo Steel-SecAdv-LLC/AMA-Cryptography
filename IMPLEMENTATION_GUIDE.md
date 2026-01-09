@@ -1327,6 +1327,6 @@ Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 
 ---
 
-**Document Version:** 1.3  
-**Last Updated:** 2025-12-06
+**Document Version:** 1.1  
+**Last Updated:** 2026-01-09
 **Copyright (C) 2025 Steel Security Advisors LLC**

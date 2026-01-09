@@ -10,7 +10,7 @@ import ava_guardian
 def test_version():
     """Test that version is correctly set"""
     assert hasattr(ava_guardian, "__version__")
-    assert ava_guardian.__version__ == "1.3"
+    assert ava_guardian.__version__ == "1.1"
 
 
 def test_author():
