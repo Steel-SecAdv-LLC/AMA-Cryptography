@@ -31,7 +31,7 @@
 **Author/Inventor:** Andrew E. A.
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
-**Version:** 1.3
+**Version:** 1.1
 **AI Co-Architects:** Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 
 ---
@@ -1134,7 +1134,11 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 *Architected with inherent radical honesty, unconventional methodology, protective servitude, and ethical immutability.*
 
-<img src="assets/ama_logo.png" alt="AMA" height="24">
+<div align="center">
+
+<img width="27" height="29" alt="image" src="https://github.com/user-attachments/assets/12254743-9798-46df-bc27-4b25857141fe" />
+
+</div>
 
 *Last updated: 2026-01-08*
 
