@@ -287,7 +287,7 @@ setup(
     extras_require={
         # Note: The PyPI package is 'liboqs-python' which provides the 'oqs' module
         "quantum": ["liboqs-python>=0.10.0,<0.11.0"],
-        "quantum-alt": ["pqcrypto>=0.1.3,<0.2.0"],
+        "quantum-alt": ["pqcrypto>=0.1.3,<0.5.0"],
         # PyNaCl for enhanced secure memory operations (libsodium bindings)
         "secure-memory": ["pynacl>=1.5.0"],
         "dev": [
