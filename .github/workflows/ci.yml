@@ -161,7 +161,7 @@ jobs:
         bandit -r . -ll
 
     - name: Upload Bandit report
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: bandit-security-report
@@ -192,7 +192,7 @@ jobs:
         python benchmarks/benchmark_runner.py --verbose --output benchmark-results.json
 
     - name: Upload benchmark results
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: benchmark-results
@@ -228,7 +228,7 @@ jobs:
         ./dudect_harness 50000
 
     - name: Upload timing analysis results
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: constant-time-results
