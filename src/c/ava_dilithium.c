@@ -935,8 +935,17 @@ static void dil_expand_matrix(dil_poly mat[DIL_K][DIL_L],
     }
 }
 
-/* Get random bytes from OS */
+/**
+ * Random bytes hook for KAT testing.
+ * When non-NULL, replaces /dev/urandom for deterministic output.
+ */
+ava_error_t (*ava_dilithium_randombytes_hook)(uint8_t* buf, size_t len) = NULL;
+
+/* Get random bytes from OS (or from test hook if set) */
 static ava_error_t dil_randombytes(uint8_t *buf, size_t len) {
+    if (ava_dilithium_randombytes_hook) {
+        return ava_dilithium_randombytes_hook(buf, len);
+    }
     FILE *f = fopen("/dev/urandom", "rb");
     if (!f) {
         return AVA_ERROR_CRYPTO;

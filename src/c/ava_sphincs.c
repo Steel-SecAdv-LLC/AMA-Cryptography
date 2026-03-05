@@ -868,8 +868,17 @@ static int spx_ht_verify(const uint8_t *msg, const uint8_t *sig,
  * TOP-LEVEL API: KEY GENERATION, SIGNING, VERIFICATION
  * ============================================================================ */
 
-/* Get random bytes from OS */
+/**
+ * Random bytes hook for KAT testing.
+ * When non-NULL, replaces /dev/urandom for deterministic output.
+ */
+ava_error_t (*ava_sphincs_randombytes_hook)(uint8_t* buf, size_t len) = NULL;
+
+/* Get random bytes from OS (or from test hook if set) */
 static ava_error_t spx_randombytes(uint8_t *buf, size_t len) {
+    if (ava_sphincs_randombytes_hook) {
+        return ava_sphincs_randombytes_hook(buf, len);
+    }
     FILE *f = fopen("/dev/urandom", "rb");
     if (!f) {
         return AVA_ERROR_CRYPTO;
