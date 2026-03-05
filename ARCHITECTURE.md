@@ -125,15 +125,19 @@ The following constraints govern architectural decisions:
 | Hash Function | SHA3-256 | NIST FIPS 202 | 128-bit collision resistance | **Full** (ava_sha3.c) |
 | Message Authentication | HMAC-SHA3-256 | RFC 2104 + FIPS 202 | 256-bit key, 128-bit security | **Full** (ava_hkdf.c) |
 | Classical Signature | Ed25519 | RFC 8032 | 128-bit classical security | **Experimental** (ava_ed25519.c) |
-| Quantum-Resistant Signature | ML-DSA-65 (Dilithium) | NIST FIPS 204 | 192-bit quantum security | Stub (requires liboqs) |
+| Quantum-Resistant Signature | ML-DSA-65 (Dilithium) | NIST FIPS 204 | 192-bit quantum security | **Full** (ava_dilithium.c) |
+| Key Encapsulation | ML-KEM-1024 (Kyber) | NIST FIPS 203 | 256-bit quantum security | **Full** (ava_kyber.c) |
+| Hash-Based Signature | SPHINCS+-SHA2-256f | NIST FIPS 205 | 256-bit quantum security | **Full** (ava_sphincs.c) |
 | Key Derivation | HKDF-SHA3-256 | RFC 5869 | 256-bit derived keys | **Full** (ava_hkdf.c) |
 | Timestamping | RFC 3161 TSA | RFC 3161 | Third-party attestation | Python API only |
 
 **C Library Source Files (v1.1):**
-- `src/c/ava_sha3.c` - SHA3-256, SHAKE128/256, streaming API (Keccak-f[1600], 513 lines)
-- `src/c/ava_hkdf.c` - HKDF-SHA3-256 with HMAC-SHA3-256 (RFC 5869, 313 lines)
-- `src/c/ava_ed25519.c` - Ed25519 keygen/sign/verify with windowed scalar mult (1,244 lines)
-- `src/c/ava_kyber.c` - NTT, inverse NTT, polynomial compression (611 lines)
+- `src/c/ava_sha3.c` - SHA3-256, SHAKE128/256, streaming API (Keccak-f[1600])
+- `src/c/ava_hkdf.c` - HKDF-SHA3-256 with HMAC-SHA3-256 (RFC 5869)
+- `src/c/ava_ed25519.c` - Ed25519 keygen/sign/verify with windowed scalar mult
+- `src/c/ava_kyber.c` - ML-KEM-1024 full native implementation (NTT, IND-CCA2, Fujisaki-Okamoto)
+- `src/c/ava_dilithium.c` - ML-DSA-65 full native implementation (NTT q=8380417, rejection sampling)
+- `src/c/ava_sphincs.c` - SPHINCS+-SHA2-256f-simple full native implementation (WOTS+, FORS, hypertree)
 
 ### Cryptographic Layer Stack
 

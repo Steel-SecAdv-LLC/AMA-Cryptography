@@ -18,8 +18,8 @@ Design Philosophy:
 - Performance optimized (uses C/Cython when available)
 
 PQC Backend:
-- ML-DSA-65 (CRYSTALS-Dilithium) via liboqs (required)
-- Raises PQCUnavailableError if PQC backend not installed
+- ML-DSA-65 (CRYSTALS-Dilithium) via native C or liboqs
+- Raises PQCUnavailableError if no PQC backend is available
 - Use get_pqc_capabilities() to check availability before use
 """
 
@@ -104,7 +104,7 @@ if not pqc_available:
         warnings.simplefilter("default", UserWarning)
         warnings.warn(
             "Quantum-resistant cryptography NOT available. "
-            "Install liboqs-python for post-quantum protection.",
+            "Build native C library or install liboqs-python for post-quantum protection.",
             category=UserWarning,
             stacklevel=2,
         )
@@ -279,8 +279,8 @@ class MLDSAProvider(CryptoProvider):
         """
         if not self._available:
             raise PQCUnavailableError(
-                "PQC_UNAVAILABLE: ML-DSA-65 requires liboqs-python or pqcrypto. "
-                "Install with: pip install liboqs-python"
+                "PQC_UNAVAILABLE: ML-DSA-65 requires native C backend or liboqs-python. "
+                "Build native library or install liboqs-python."
             )
 
         kp = generate_dilithium_keypair()
@@ -312,7 +312,7 @@ class MLDSAProvider(CryptoProvider):
         """
         if not self._available:
             raise PQCUnavailableError(
-                "PQC_UNAVAILABLE: ML-DSA-65 requires liboqs-python or pqcrypto."
+                "PQC_UNAVAILABLE: ML-DSA-65 requires native C backend or liboqs-python."
             )
 
         sig_bytes = dilithium_sign(message, secret_key)
@@ -345,7 +345,7 @@ class MLDSAProvider(CryptoProvider):
         """
         if not self._available:
             raise PQCUnavailableError(
-                "PQC_UNAVAILABLE: ML-DSA-65 requires liboqs-python or pqcrypto."
+                "PQC_UNAVAILABLE: ML-DSA-65 requires native C backend or liboqs-python."
             )
 
         return dilithium_verify(message, signature, public_key)
@@ -489,7 +489,7 @@ class KyberProvider(KEMProvider):
         if not KYBER_AVAILABLE:
             raise KyberUnavailableError(
                 "KYBER_UNAVAILABLE: Kyber-1024 backend not available. "
-                "Install liboqs-python: pip install liboqs-python"
+                "Build native library or install liboqs-python."
             )
 
     def generate_keypair(self) -> KeyPair:
@@ -589,7 +589,7 @@ class SphincsProvider(CryptoProvider):
         if not SPHINCS_AVAILABLE:
             raise SphincsUnavailableError(
                 "SPHINCS_UNAVAILABLE: SPHINCS+-256f backend not available. "
-                "Install liboqs-python: pip install liboqs-python"
+                "Build native library or install liboqs-python."
             )
 
     def generate_keypair(self) -> KeyPair:
@@ -704,7 +704,7 @@ class HybridSignatureProvider(CryptoProvider):
         if not self._pqc_available:
             raise PQCUnavailableError(
                 "PQC_UNAVAILABLE: Hybrid signatures require ML-DSA-65. "
-                "Install liboqs-python: pip install liboqs-python"
+                "Build native library or install liboqs-python."
             )
 
         classical_keys = self.classical_provider.generate_keypair()
@@ -1032,9 +1032,9 @@ def get_pqc_capabilities() -> Dict[str, Any]:
         },
         "key_sizes": info.get("algorithms", {}),
         "install_instructions": (
-            "pip install liboqs-python"
+            "Build native C library (cmake --build build) or pip install liboqs-python"
             if not (info["dilithium_available"] or info["kyber_available"])
-            else "PQC backend already installed"
+            else "PQC backend already available"
         ),
     }
 
@@ -1054,8 +1054,8 @@ class CryptoPackageConfig:
         tsa_url: RFC 3161 Time Stamp Authority URL (default: None)
 
     Note:
-        - Kyber-1024 requires liboqs-python backend
-        - SPHINCS+-256f requires liboqs-python backend
+        - Kyber-1024 requires native C backend or liboqs-python
+        - SPHINCS+-256f requires native C backend or liboqs-python
         - When use_sphincs=True, SPHINCS+ signature is added alongside primary signature
         - RFC 3161 timestamping requires network access to TSA server
     """
@@ -1233,7 +1233,7 @@ def create_crypto_package(
         if not SPHINCS_AVAILABLE:
             raise SphincsUnavailableError(
                 "SPHINCS_UNAVAILABLE: SPHINCS+-256f backend not available. "
-                "Install liboqs-python: pip install liboqs-python"
+                "Build native library or install liboqs-python."
             )
         sphincs_provider = SphincsProvider()
         sphincs_keypair = sphincs_provider.generate_keypair()
@@ -1273,7 +1273,7 @@ def create_crypto_package(
         if not KYBER_AVAILABLE:
             raise KyberUnavailableError(
                 "KYBER_UNAVAILABLE: Kyber-1024 backend not available. "
-                "Install liboqs-python: pip install liboqs-python"
+                "Build native library or install liboqs-python."
             )
         kyber_provider = KyberProvider()
         kyber_keypair = kyber_provider.generate_keypair()

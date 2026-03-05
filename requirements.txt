@@ -4,18 +4,18 @@
 # Core cryptographic library (required)
 cryptography>=41.0.0
 
-# Quantum-resistant cryptography (recommended for production)
-# The PyPI package is 'liboqs-python' (provides 'oqs' module)
-# Provides ML-DSA (Dilithium) and ML-KEM (Kyber) implementations
-# Note: liboqs-python wheels only available for Python 3.10+
-liboqs-python>=0.10.0; python_version >= "3.10"
-
-# NOTE: The 'liboqs-python' package wraps the liboqs C library for quantum-resistant crypto.
-# If installation fails, ensure liboqs is installed on your system:
+# Quantum-resistant cryptography (optional — native C backend preferred)
+# The native C library (libava_guardian) provides ML-DSA-65, Kyber-1024,
+# and SPHINCS+-256f without external PQC dependencies. Build with:
+#   cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build
+#
+# liboqs-python is an alternative backend (optional, Python 3.10+ only):
+# liboqs-python>=0.10.0; python_version >= "3.10"
+#
+# NOTE: If using liboqs-python, ensure liboqs is installed on your system:
 #   - Ubuntu: sudo apt-get install liboqs-dev
 #   - macOS: brew install liboqs
 #   - Or build from source: https://github.com/open-quantum-safe/liboqs
-# Alternative (less maintained): pqcrypto>=0.1.3,<0.2.0
 
 # Secure memory operations (optional but recommended)
 # Provides memory locking (mlock) and secure zeroing via libsodium

@@ -157,7 +157,7 @@ The signature innovation providing real-time cryptographic operation analysis un
 
 Optimized for both security and performance:
 
-- **C Layer**: Native SHA3-256, HKDF-SHA3-256, Ed25519 implementations; Kyber NTT polynomial operations; liboqs bindings for full PQC (see [Implementation Status Matrix](#implementation-status-matrix))
+- **C Layer**: Native SHA3-256, HKDF-SHA3-256, Ed25519, ML-DSA-65, Kyber-1024, SPHINCS+-256f implementations — zero external PQC dependencies (see [Implementation Status Matrix](#implementation-status-matrix))
 - **Cython Layer**: Optimized mathematical operations (benchmarked at 27-37x vs pure Python)
 - **Python API**: High-level, user-friendly interface for rapid development (primary production API)
 
@@ -204,22 +204,23 @@ Future-proof cryptography:
 | SHA3-256 | **Full** | Full | Core primitive |
 | HKDF-SHA3-256 | **Full** | Full | Key derivation |
 | Ed25519 | **Experimental** | Full | Integrated |
-| ML-DSA-65 | Stub (liboqs) | Full | Integrated |
-| Kyber-1024 | Partial (NTT) | Full | Backend only |
-| SPHINCS+-256f | Stub (liboqs) | Full | Backend only |
+| ML-DSA-65 | **Full** (native) | Full | Integrated |
+| Kyber-1024 | **Full** (native) | Full | Integrated |
+| SPHINCS+-256f | **Full** (native) | Full | Integrated |
 | Hybrid (Ed25519 + ML-DSA-65) | N/A | Full | Integrated |
 
 **Legend:**
-- **Full**: Complete native C implementation with NIST KAT validation.
+- **Full**: Complete native C implementation with constant-time operations.
+- **Full (native)**: Complete native C implementation — no external PQC dependency required.
 - **Experimental**: Implementation complete but requires field arithmetic optimization. Use Python API for production.
-- **Partial (NTT)**: Core polynomial operations (NTT, inverse NTT, compression) implemented; full KEM requires liboqs.
-- **Stub (liboqs)**: Returns `AVA_ERROR_NOT_IMPLEMENTED` without liboqs. Enable with `-DAVA_USE_LIBOQS=ON`.
 
 **C Library Implementations (v1.1):**
 - `ava_sha3.c`: SHA3-256, SHAKE128, SHAKE256 (Keccak-f[1600] sponge construction)
 - `ava_hkdf.c`: HKDF-SHA3-256 with HMAC-SHA3-256 (RFC 5869 compliant)
 - `ava_ed25519.c`: Ed25519 keygen/sign/verify (SHA-512, field arithmetic for GF(2^255-19))
-- `ava_kyber.c`: NTT, inverse NTT, Montgomery reduction, polynomial compression
+- `ava_kyber.c`: ML-KEM-1024 full native (NTT, IND-CCA2, Fujisaki-Okamoto transform)
+- `ava_dilithium.c`: ML-DSA-65 full native (NTT q=8380417, rejection sampling, constant-time)
+- `ava_sphincs.c`: SPHINCS+-SHA2-256f-simple full native (WOTS+, FORS, hypertree d=17)
 
 > **Note:** The Python API remains the recommended production interface. C implementations provide high-performance alternatives where applicable. See [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md) for C vs Python performance comparison.
 

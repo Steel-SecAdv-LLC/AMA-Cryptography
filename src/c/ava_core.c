@@ -20,17 +20,19 @@
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2025-12-06
  *
- * LIBOQS INTEGRATION
- * ==================
- * This file provides integration with liboqs for post-quantum cryptography.
- * When AVA_USE_LIBOQS is defined and liboqs is linked, the implementation
- * uses liboqs for ML-DSA (Dilithium) and Kyber operations.
+ * PQC DISPATCH
+ * ============
+ * This file dispatches PQC operations to the appropriate backend:
+ * - AVA_USE_LIBOQS: Uses liboqs for ML-DSA, Kyber, SPHINCS+ operations
+ * - AVA_USE_NATIVE_PQC (default): Uses native C implementations from
+ *   ava_dilithium.c, ava_kyber.c, and ava_sphincs.c
  *
- * Build with liboqs:
+ * Build native (default):
+ *   cmake ..
+ *
+ * Build with liboqs (optional):
  *   cmake -DAVA_USE_LIBOQS=ON ..
  *   Link against: -loqs
- *
- * Without liboqs, functions return AVA_ERROR_NOT_IMPLEMENTED.
  */
 
 #include "../include/ava_guardian.h"
@@ -40,6 +42,25 @@
 /* liboqs integration - conditionally include if available */
 #ifdef AVA_USE_LIBOQS
 #include <oqs/oqs.h>
+#endif
+
+/* Native PQC implementations */
+#ifdef AVA_USE_NATIVE_PQC
+extern ava_error_t ava_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key);
+extern ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
+                                       const uint8_t *message, size_t message_len,
+                                       const uint8_t *secret_key);
+extern ava_error_t ava_dilithium_verify(const uint8_t *message, size_t message_len,
+                                         const uint8_t *signature, size_t signature_len,
+                                         const uint8_t *public_key);
+
+extern ava_error_t ava_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key);
+extern ava_error_t ava_sphincs_sign(uint8_t *signature, size_t *signature_len,
+                                     const uint8_t *message, size_t message_len,
+                                     const uint8_t *secret_key);
+extern ava_error_t ava_sphincs_verify(const uint8_t *message, size_t message_len,
+                                       const uint8_t *signature, size_t signature_len,
+                                       const uint8_t *public_key);
 #endif
 
 /**
@@ -232,7 +253,7 @@ static void get_key_sizes(
 }
 
 /**
- * Key generation using liboqs
+ * Key generation
  */
 ava_error_t ava_keypair_generate(
     ava_context_t* ctx,
@@ -283,13 +304,43 @@ ava_error_t ava_keypair_generate(
     if (ctx->algorithm == AVA_ALG_ED25519) {
         return AVA_ERROR_NOT_IMPLEMENTED;
     }
+#elif defined(AVA_USE_NATIVE_PQC)
+    /* Native PQC dispatch */
+    switch (ctx->algorithm) {
+        case AVA_ALG_ML_DSA_65:
+            return ava_dilithium_keypair(public_key, secret_key);
+
+        case AVA_ALG_KYBER_1024:
+            /* Kyber keypair generation dispatches to ava_kyber.c internal */
+            /* The kyber_keypair_generate is static in ava_kyber.c, so we
+             * call it through a thin wrapper defined below */
+            {
+                extern ava_error_t ava_kyber_keypair(uint8_t* pk, size_t pk_len,
+                                                      uint8_t* sk, size_t sk_len);
+                return ava_kyber_keypair(public_key, public_key_len,
+                                        secret_key, secret_key_len);
+            }
+
+        case AVA_ALG_SPHINCS_256F:
+            return ava_sphincs_keypair(public_key, secret_key);
+
+        case AVA_ALG_ED25519:
+            return AVA_ERROR_NOT_IMPLEMENTED;
+
+        case AVA_ALG_HYBRID:
+            /* Hybrid: generate Dilithium keypair */
+            return ava_dilithium_keypair(public_key, secret_key);
+
+        default:
+            return AVA_ERROR_NOT_IMPLEMENTED;
+    }
 #endif
 
     return AVA_ERROR_NOT_IMPLEMENTED;
 }
 
 /**
- * Sign message using liboqs
+ * Sign message
  */
 ava_error_t ava_sign(
     ava_context_t* ctx,
@@ -342,8 +393,52 @@ ava_error_t ava_sign(
         (void)secret_key_len;
         return AVA_ERROR_NOT_IMPLEMENTED;
     }
+#elif defined(AVA_USE_NATIVE_PQC)
+    /* Native PQC dispatch */
+    switch (ctx->algorithm) {
+        case AVA_ALG_ML_DSA_65:
+            if (secret_key_len < AVA_ML_DSA_65_SECRET_KEY_BYTES) {
+                return AVA_ERROR_INVALID_PARAM;
+            }
+            if (*signature_len < AVA_ML_DSA_65_SIGNATURE_BYTES) {
+                *signature_len = AVA_ML_DSA_65_SIGNATURE_BYTES;
+                return AVA_ERROR_INVALID_PARAM;
+            }
+            return ava_dilithium_sign(signature, signature_len,
+                                      message, message_len, secret_key);
+
+        case AVA_ALG_SPHINCS_256F:
+            if (secret_key_len < AVA_SPHINCS_256F_SECRET_KEY_BYTES) {
+                return AVA_ERROR_INVALID_PARAM;
+            }
+            if (*signature_len < AVA_SPHINCS_256F_SIGNATURE_BYTES) {
+                *signature_len = AVA_SPHINCS_256F_SIGNATURE_BYTES;
+                return AVA_ERROR_INVALID_PARAM;
+            }
+            return ava_sphincs_sign(signature, signature_len,
+                                    message, message_len, secret_key);
+
+        case AVA_ALG_KYBER_1024:
+            return AVA_ERROR_INVALID_PARAM;  /* KEM doesn't support signing */
+
+        case AVA_ALG_HYBRID:
+            /* Hybrid: sign with Dilithium */
+            if (secret_key_len < AVA_ML_DSA_65_SECRET_KEY_BYTES) {
+                return AVA_ERROR_INVALID_PARAM;
+            }
+            if (*signature_len < AVA_ML_DSA_65_SIGNATURE_BYTES) {
+                *signature_len = AVA_ML_DSA_65_SIGNATURE_BYTES;
+                return AVA_ERROR_INVALID_PARAM;
+            }
+            return ava_dilithium_sign(signature, signature_len,
+                                      message, message_len, secret_key);
+
+        default:
+            break;
+    }
+    (void)secret_key_len;
 #else
-    /* Suppress unused parameter warnings when liboqs not available */
+    /* Suppress unused parameter warnings */
     (void)message_len;
     (void)secret_key_len;
 #endif
@@ -352,7 +447,7 @@ ava_error_t ava_sign(
 }
 
 /**
- * Verify signature using liboqs
+ * Verify signature
  */
 ava_error_t ava_verify(
     ava_context_t* ctx,
@@ -401,8 +496,41 @@ ava_error_t ava_verify(
         (void)public_key_len;
         return AVA_ERROR_NOT_IMPLEMENTED;
     }
+#elif defined(AVA_USE_NATIVE_PQC)
+    /* Native PQC dispatch */
+    switch (ctx->algorithm) {
+        case AVA_ALG_ML_DSA_65:
+            if (public_key_len < AVA_ML_DSA_65_PUBLIC_KEY_BYTES) {
+                return AVA_ERROR_INVALID_PARAM;
+            }
+            return ava_dilithium_verify(message, message_len,
+                                        signature, signature_len, public_key);
+
+        case AVA_ALG_SPHINCS_256F:
+            if (public_key_len < AVA_SPHINCS_256F_PUBLIC_KEY_BYTES) {
+                return AVA_ERROR_INVALID_PARAM;
+            }
+            return ava_sphincs_verify(message, message_len,
+                                      signature, signature_len, public_key);
+
+        case AVA_ALG_KYBER_1024:
+            return AVA_ERROR_INVALID_PARAM;  /* KEM doesn't support verification */
+
+        case AVA_ALG_HYBRID:
+            if (public_key_len < AVA_ML_DSA_65_PUBLIC_KEY_BYTES) {
+                return AVA_ERROR_INVALID_PARAM;
+            }
+            return ava_dilithium_verify(message, message_len,
+                                        signature, signature_len, public_key);
+
+        default:
+            break;
+    }
+    (void)message_len;
+    (void)signature_len;
+    (void)public_key_len;
 #else
-    /* Suppress unused parameter warnings when liboqs not available */
+    /* Suppress unused parameter warnings */
     (void)message_len;
     (void)signature_len;
     (void)public_key_len;
@@ -412,7 +540,7 @@ ava_error_t ava_verify(
 }
 
 /**
- * KEM Encapsulation using liboqs
+ * KEM Encapsulation
  *
  * Generates a shared secret and ciphertext using the recipient's public key.
  * The shared secret can be used for symmetric encryption.
@@ -468,8 +596,23 @@ ava_error_t ava_kem_encapsulate(
     if (ctx->sig) {
         return AVA_ERROR_INVALID_PARAM;
     }
+#elif defined(AVA_USE_NATIVE_PQC)
+    /* Native Kyber-1024 encapsulation */
+    if (ctx->algorithm == AVA_ALG_KYBER_1024) {
+        extern ava_error_t ava_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
+                                                  uint8_t* ct, size_t* ct_len,
+                                                  uint8_t* ss, size_t ss_len);
+        return ava_kyber_encapsulate(public_key, public_key_len,
+                                     ciphertext, ciphertext_len,
+                                     shared_secret, shared_secret_len);
+    }
+    /* Signature algorithms don't support encapsulation */
+    if (ctx->algorithm == AVA_ALG_ML_DSA_65 ||
+        ctx->algorithm == AVA_ALG_SPHINCS_256F) {
+        return AVA_ERROR_INVALID_PARAM;
+    }
 #else
-    /* Suppress unused parameter warnings when liboqs not available */
+    /* Suppress unused parameter warnings */
     (void)public_key_len;
     (void)shared_secret_len;
 #endif
@@ -478,7 +621,7 @@ ava_error_t ava_kem_encapsulate(
 }
 
 /**
- * KEM Decapsulation using liboqs
+ * KEM Decapsulation
  *
  * Recovers the shared secret from a ciphertext using the recipient's secret key.
  * Uses implicit rejection for IND-CCA2 security.
@@ -532,8 +675,22 @@ ava_error_t ava_kem_decapsulate(
     if (ctx->sig) {
         return AVA_ERROR_INVALID_PARAM;
     }
+#elif defined(AVA_USE_NATIVE_PQC)
+    /* Native Kyber-1024 decapsulation */
+    if (ctx->algorithm == AVA_ALG_KYBER_1024) {
+        extern ava_error_t ava_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
+                                                  const uint8_t* sk, size_t sk_len,
+                                                  uint8_t* ss, size_t ss_len);
+        return ava_kyber_decapsulate(ciphertext, ciphertext_len,
+                                     secret_key, secret_key_len,
+                                     shared_secret, shared_secret_len);
+    }
+    if (ctx->algorithm == AVA_ALG_ML_DSA_65 ||
+        ctx->algorithm == AVA_ALG_SPHINCS_256F) {
+        return AVA_ERROR_INVALID_PARAM;
+    }
 #else
-    /* Suppress unused parameter warnings when liboqs not available */
+    /* Suppress unused parameter warnings */
     (void)ciphertext_len;
     (void)secret_key_len;
     (void)shared_secret_len;
