@@ -332,6 +332,24 @@ ava_error_t ava_sha3_256(
     uint8_t* output
 );
 
+/**
+ * @brief SHA3-512 hash (FIPS 202)
+ *
+ * Computes the SHA3-512 cryptographic hash of the input data.
+ * Uses the Keccak-f[1600] sponge construction with rate 72 and capacity 128.
+ * Required by FIPS 203 (ML-KEM) as the G function.
+ *
+ * @param input Input data
+ * @param input_len Length of input
+ * @param output Output buffer (64 bytes)
+ * @return AVA_SUCCESS or error code
+ */
+ava_error_t ava_sha3_512(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+);
+
 /* ============================================================================
  * STREAMING SHA3-256 API (init/update/final)
  * Enables hashing of large data streams without loading everything into memory

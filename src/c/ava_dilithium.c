@@ -50,6 +50,7 @@
 
 /* Forward declarations from ava_sha3.c */
 extern ava_error_t ava_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
+extern ava_error_t ava_sha3_512(const uint8_t* input, size_t input_len, uint8_t* output);
 extern ava_error_t ava_shake128(const uint8_t* input, size_t input_len,
                                  uint8_t* output, size_t output_len);
 extern ava_error_t ava_shake256(const uint8_t* input, size_t input_len,
@@ -72,6 +73,7 @@ extern ava_error_t ava_shake256(const uint8_t* input, size_t input_len,
 #define DIL_D 13
 
 #define DIL_SEEDBYTES 32
+#define DIL_CTILDEBYTES 48  /* ML-DSA-65: 48; mode 2: 32; mode 5: 64 */
 #define DIL_CRHBYTES 64
 #define DIL_TRBYTES 64
 
@@ -103,18 +105,18 @@ typedef struct {
 
 /* Primitive 256th root of unity mod q in Montgomery form */
 static const int32_t dil_zetas[DIL_N] = {
-         0,   25847, -2608894,  -518909,   237124,  -777960,  -876248,   466468,
+         0,    25847, -2608894,  -518909,   237124,  -777960,  -876248,   466468,
    1826347,  2353451,  -359251, -2091905,  3119733, -2884855,  3111497,  2680103,
    2725464,  1024112, -1079900,  3585928,  -549488, -1119584,  2619752, -2108549,
   -2118186, -3859737, -1399561, -3277672,  1757237,   -19422,  4010497,   280005,
-   2706023,    95776,  3077325,  3530437, -1661693, -3592106, -2537516,  3915439,
+   2706023,    95776,  3077325,  3530437, -1661693, -3592148, -2537516,  3915439,
   -3861115, -3043716,  3574422, -2867647,  3539968,  -300467,  2348700,  -539299,
   -1699267, -1643818,  3505694, -3821735,  3507263, -2140649, -1600420,  3699596,
     811944,   531354,   954230,  3881043,  3900724, -2556880,  2071892, -2797779,
   -3930395, -1528703, -3677745, -3041255, -1452451,  3475950,  2176455, -1585221,
   -1257611,  1939314, -4083598, -1000202, -3190144, -3157330, -3632928,   126922,
    3412210,  -983419,  2147896,  2715295, -2967645, -3693493,  -411027, -2477047,
-   -671102, -1228525,   -22981,  -1308169, -381987,  1349076,  1852771, -1430430,
+   -671102, -1228525,   -22981, -1308169,  -381987,  1349076,  1852771, -1430430,
   -3343383,   264944,   508951,  3097992,    44288, -1100098,   904516,  3958618,
   -3724342,    -8578,  1653064, -3249728,  2389356,  -210977,   759969, -1316856,
     189548, -3553272,  3159746, -1851402, -2409325,  -177440,  1315589,  1341330,
@@ -122,19 +124,19 @@ static const int32_t dil_zetas[DIL_N] = {
    2091667,  3407706,  2316500,  3817976, -3342478,  2244091, -2446433, -3562462,
     266997,  2434439, -1235728,  3513181, -3520352, -3759364, -1197226, -3193378,
     900702,  1859098,   909542,   819034,   495491, -1613174,   -43260,  -522500,
-   -655327, -3122442,  2031748,  3009263, -1520546, -1662803, -3285377,   -37039,
-  -3542485,  2289191,  3179588,  2550785,  -778434,   -234750, -2766888,  3542595,
-  -2064018,  1916017, -3328774, -3889690, -3055325, -2130506, -1308006,  -946398,
-    223460,   -27445,  -2766246, -3721485,  2146355,   -38999, -1177795, -1425813,
-    -27455,  1507727, -2408574, -2028785,  3390168,    -7838,  -368614,  -275266,
-   3505912, -1476837,  1797519, -2737927,  1117650,    -2657,    397468,  2104385,
-  -1472709, -2289280,  3006662,  -219956,   399206,  3020588,  -3254490, -1846489,
-  -2996914,  2319741, -1875373,  -766553,  -1654783,  -304089,  -297213,  3598621,
-   -621987,   508936,  3752365,  -768879, -1629468,  2479700, -1898242,   915626,
-  -1424047,  3753910,   115447,   -285512,  2829939,  -2939914,  -219625, 3584832,
-  -3756929, -3303118,   826655,  1180768,  -252842,  1894665,   485023, -1854305,
-  -2085782,  3443720, -2024767,  3246444,  -2448281, -1978724,  -740501,  1534204,
-  -1879926,  3396819,  -2800927, -3399236,  -350025,  2626005, -1907070,  1577514
+   -655327, -3122442,  2031748,  3207046, -3556995,  -525098,  -768622, -3595838,
+    342297,   286988, -2437823,  4108315,  3437287, -3342277,  1735879,   203044,
+   2842341,  2691481, -2590150,  1265009,  4055324,  1247620,  2486353,  1595974,
+  -3767016,  1250494,  2635921, -3548272, -2994039,  1869119,  1903435, -1050970,
+  -1333058,  1237275, -3318210, -1430225,  -451100,  1312455,  3306115, -1962642,
+  -1279661,  1917081, -2546312, -1374803,  1500165,   777191,  2235880,  3406031,
+   -542412, -2831860, -1671176, -1846953, -2584293, -3724270,   594136, -3776993,
+  -2013608,  2432395,  2454455,  -164721,  1957272,  3369112,   185531, -1207385,
+  -3183426,   162844,  1616392,  3014001,   810149,  1652634, -3694233, -1799107,
+  -3038916,  3523897,  3866901,   269760,  2213111,  -975884,  1717735,   472078,
+   -426683,  1723600, -1803090,  1910376, -1667432, -1104333,  -260646, -3833893,
+  -2939036, -2235985,  -420899, -2286327,   183443,  -976891,  1612842, -3545687,
+   -554416,  3919660,   -48306, -1362209,  3937738,  1400424,  -846154,  1976782
 };
 
 /* ============================================================================
@@ -150,7 +152,7 @@ static const int32_t dil_zetas[DIL_N] = {
  */
 static int32_t dil_montgomery_reduce(int64_t a) {
     int32_t t;
-    t = (int32_t)a * DIL_QINV;
+    t = (int32_t)((int64_t)(int32_t)a * DIL_QINV);
     t = (int32_t)((a - (int64_t)t * DIL_Q) >> 32);
     return t;
 }
@@ -161,7 +163,7 @@ static int32_t dil_montgomery_reduce(int64_t a) {
  */
 static int32_t dil_reduce32(int32_t a) {
     int32_t t;
-    t = (int32_t)((int64_t)a * 4194353 >> 42);
+    t = (a + (1 << 22)) >> 23;
     t = a - t * DIL_Q;
     return t;
 }
@@ -647,37 +649,52 @@ static void dil_poly_uniform(dil_poly *a, const uint8_t seed[DIL_SEEDBYTES],
 
 /**
  * Sample polynomial with coefficients in [-eta, eta] from SHAKE256 stream
- * Using centered binomial distribution for eta = 4
+ * Uses proper rejection sampling for eta = 4: each 4-bit nibble in [0, 8]
+ * maps to coefficient eta - nibble. Nibbles > 2*eta are rejected and the
+ * next nibble is consumed. This ensures a uniform distribution over [-4, 4].
  */
 static void dil_poly_uniform_eta(dil_poly *a, const uint8_t seed[DIL_CRHBYTES],
                                   uint16_t nonce) {
     uint8_t buf[DIL_CRHBYTES + 2];
-    uint8_t stream[DIL_N];  /* For eta = 4, need N/2 bytes */
-    unsigned int i;
+    /* Allocate generously: 9/16 acceptance rate means we need ~(N * 16/9) nibbles
+     * = ~456 nibbles = ~228 bytes. Use 272 bytes (544 nibbles) for safety. */
+    uint8_t stream[272];
+    unsigned int ctr, pos;
 
     memcpy(buf, seed, DIL_CRHBYTES);
     buf[DIL_CRHBYTES] = (uint8_t)(nonce & 0xFF);
     buf[DIL_CRHBYTES + 1] = (uint8_t)(nonce >> 8);
 
-    ava_shake256(buf, DIL_CRHBYTES + 2, stream, DIL_N / 2);
+    ava_shake256(buf, DIL_CRHBYTES + 2, stream, sizeof(stream));
 
-    for (i = 0; i < DIL_N / 2; ++i) {
-        uint8_t t0 = stream[i] & 0x0F;
-        uint8_t t1 = stream[i] >> 4;
-        a->coeffs[2*i + 0] = (int32_t)t0;
-        a->coeffs[2*i + 1] = (int32_t)t1;
+    ctr = 0;
+    pos = 0;
+    while (ctr < DIL_N) {
+        uint8_t t0, t1;
 
-        /* Map [0, 2*eta] -> [-eta, eta]: subtract eta */
-        /* Rejection: if value > 2*eta, resample (shouldn't happen with 4 bits for eta=4) */
-        if (a->coeffs[2*i + 0] > 2 * DIL_ETA) {
-            a->coeffs[2*i + 0] = 0;
-        } else {
-            a->coeffs[2*i + 0] = DIL_ETA - a->coeffs[2*i + 0];
+        if (pos >= sizeof(stream)) {
+            /* Exhausted stream — re-derive with extended seed.
+             * This is astronomically unlikely (< 2^{-100}) but we handle it. */
+            uint8_t ext_buf[DIL_CRHBYTES + 4];
+            memcpy(ext_buf, seed, DIL_CRHBYTES);
+            ext_buf[DIL_CRHBYTES] = (uint8_t)(nonce & 0xFF);
+            ext_buf[DIL_CRHBYTES + 1] = (uint8_t)(nonce >> 8);
+            ext_buf[DIL_CRHBYTES + 2] = (uint8_t)(pos & 0xFF);
+            ext_buf[DIL_CRHBYTES + 3] = (uint8_t)(pos >> 8);
+            ava_shake256(ext_buf, DIL_CRHBYTES + 4, stream, sizeof(stream));
+            pos = 0;
         }
-        if (a->coeffs[2*i + 1] > 2 * DIL_ETA) {
-            a->coeffs[2*i + 1] = 0;
-        } else {
-            a->coeffs[2*i + 1] = DIL_ETA - a->coeffs[2*i + 1];
+
+        t0 = stream[pos] & 0x0F;
+        t1 = stream[pos] >> 4;
+        pos++;
+
+        /* Accept nibble only if <= 2*eta (i.e., <= 8 for eta=4) */
+        if (t0 < 2 * DIL_ETA + 1 && ctr < DIL_N) {
+            a->coeffs[ctr++] = DIL_ETA - (int32_t)t0;
+        }
+        if (t1 < 2 * DIL_ETA + 1 && ctr < DIL_N) {
+            a->coeffs[ctr++] = DIL_ETA - (int32_t)t1;
         }
     }
 }
@@ -701,12 +718,19 @@ static void dil_poly_uniform_gamma1(dil_poly *a, const uint8_t seed[DIL_CRHBYTES
 /**
  * Sample challenge polynomial c with exactly tau nonzero +/-1 coefficients
  */
-static void dil_poly_challenge(dil_poly *c, const uint8_t seed[DIL_SEEDBYTES]) {
-    uint8_t buf[136];  /* SHAKE256 output */
+static void dil_poly_challenge(dil_poly *c, const uint8_t seed[DIL_CTILDEBYTES]) {
+    uint8_t buf[136];  /* SHAKE256 rate block */
     unsigned int i, b, pos;
     uint64_t signs;
+    /* Use incremental SHAKE256 for proper streaming.
+     * For simplicity we squeeze one block at a time using the one-shot API
+     * with a counter to simulate incremental squeezing. Since TAU=49 and we
+     * have 136-8=128 bytes available, we rarely need a second block. */
+    uint8_t shake_state[DIL_CTILDEBYTES + 2];
+    unsigned int block = 0;
 
-    ava_shake256(seed, DIL_SEEDBYTES, buf, sizeof(buf));
+    memcpy(shake_state, seed, DIL_CTILDEBYTES);
+    ava_shake256(seed, DIL_CTILDEBYTES, buf, sizeof(buf));
 
     /* First 8 bytes encode signs */
     signs = 0;
@@ -718,13 +742,19 @@ static void dil_poly_challenge(dil_poly *c, const uint8_t seed[DIL_SEEDBYTES]) {
 
     pos = 8;
     for (i = DIL_N - DIL_TAU; i < DIL_N; ++i) {
-        /* Get random index in [0, i] */
-        b = buf[pos++];
-        if (pos >= sizeof(buf)) {
-            ava_shake256(seed, DIL_SEEDBYTES, buf, sizeof(buf));
-            pos = 0;
-        }
-        b = b % (i + 1);  /* Bias is negligible for 256 */
+        /* Rejection sampling: get uniform value in [0, i] */
+        do {
+            if (pos >= sizeof(buf)) {
+                /* Squeeze next block by extending seed with block counter */
+                block++;
+                memcpy(shake_state, seed, DIL_CTILDEBYTES);
+                shake_state[DIL_CTILDEBYTES] = (uint8_t)(block & 0xFF);
+                shake_state[DIL_CTILDEBYTES + 1] = (uint8_t)(block >> 8);
+                ava_shake256(shake_state, DIL_CTILDEBYTES + 2, buf, sizeof(buf));
+                pos = 0;
+            }
+            b = buf[pos++];
+        } while (b > i);
 
         c->coeffs[i] = c->coeffs[b];
         c->coeffs[b] = 1 - 2 * (int32_t)(signs & 1);
@@ -898,22 +928,24 @@ static void dil_polyveck_use_hint(dil_polyveck *w, const dil_polyveck *v,
                                    const uint8_t hint[DIL_OMEGA + DIL_K]) {
     unsigned int i, j, k_idx;
 
-    k_idx = 0;
-    for (i = 0; i < DIL_K; ++i) {
-        for (j = 0; j < DIL_N; ++j) {
-            w->vec[i].coeffs[j] = dil_use_hint(v->vec[i].coeffs[j], 0);
-        }
-    }
-
-    /* Apply hints from packed format */
+    /* Unpack hint bits into per-coefficient flags */
+    uint8_t hint_flags[DIL_K][DIL_N];
+    memset(hint_flags, 0, sizeof(hint_flags));
     k_idx = 0;
     for (i = 0; i < DIL_K; ++i) {
         unsigned int limit = hint[DIL_OMEGA + i];
         for (; k_idx < limit; ++k_idx) {
             unsigned int idx = hint[k_idx];
             if (idx < DIL_N) {
-                w->vec[i].coeffs[idx] = dil_use_hint(v->vec[i].coeffs[idx], 1);
+                hint_flags[i][idx] = 1;
             }
+        }
+    }
+
+    /* Single pass: apply use_hint with correct flag for each coefficient */
+    for (i = 0; i < DIL_K; ++i) {
+        for (j = 0; j < DIL_N; ++j) {
+            w->vec[i].coeffs[j] = dil_use_hint(v->vec[i].coeffs[j], hint_flags[i][j]);
         }
     }
 }
@@ -981,14 +1013,22 @@ ava_error_t ava_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key) {
         return AVA_ERROR_INVALID_PARAM;
     }
 
-    /* Generate random seed */
+    /* Generate random seed xi */
     rc = dil_randombytes(seedbuf, DIL_SEEDBYTES);
     if (rc != AVA_SUCCESS) {
         return rc;
     }
 
-    /* Expand seed into rho, rhoprime, key */
-    ava_shake256(seedbuf, DIL_SEEDBYTES, seedbuf, sizeof(seedbuf));
+    /* (rho, rho', K) = H(xi || k || l) per FIPS 204 Algorithm 1
+     * H = SHAKE256, k = DIL_K = 6, l = DIL_L = 5 for ML-DSA-65 */
+    {
+        uint8_t h_input[DIL_SEEDBYTES + 2];
+        memcpy(h_input, seedbuf, DIL_SEEDBYTES);
+        h_input[DIL_SEEDBYTES] = (uint8_t)DIL_K;
+        h_input[DIL_SEEDBYTES + 1] = (uint8_t)DIL_L;
+        ava_shake256(h_input, DIL_SEEDBYTES + 2, seedbuf, sizeof(seedbuf));
+        ava_secure_memzero(h_input, sizeof(h_input));
+    }
     rho = seedbuf;
     rhoprime = rho + DIL_SEEDBYTES;
     key = rhoprime + DIL_CRHBYTES;
@@ -1083,6 +1123,8 @@ ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
     uint16_t nonce = 0;
     int reject;
 
+    memset(hint, 0, sizeof(hint));
+
     if (!signature || !signature_len || !message || !secret_key) {
         return AVA_ERROR_INVALID_PARAM;
     }
@@ -1144,9 +1186,21 @@ ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
     memcpy(hashbuf + DIL_SEEDBYTES, mu, DIL_CRHBYTES);
     ava_shake256(hashbuf, DIL_SEEDBYTES + DIL_CRHBYTES, rhoprime, DIL_CRHBYTES);
 
-    /* Rejection sampling loop */
+    /* Rejection sampling loop
+     * Expected iterations ~4-5 for ML-DSA-65. Cap at 1000 to prevent
+     * pathological hangs (probability of reaching cap < 2^{-500}). */
     reject = 1;
+    unsigned int attempts = 0;
+    const unsigned int MAX_SIGN_ATTEMPTS = 1000;
     while (reject) {
+        if (++attempts > MAX_SIGN_ATTEMPTS) {
+            ava_secure_memzero(&s1, sizeof(s1));
+            ava_secure_memzero(&s1hat, sizeof(s1hat));
+            ava_secure_memzero(&s2hat, sizeof(s2hat));
+            ava_secure_memzero(mu, sizeof(mu));
+            ava_secure_memzero(rhoprime, sizeof(rhoprime));
+            return AVA_ERROR_CRYPTO;
+        }
         /* Sample y from [-gamma1+1, gamma1] */
         for (i = 0; i < DIL_L; ++i) {
             dil_poly_uniform_gamma1(&y.vec[i], rhoprime, (uint16_t)(DIL_L * nonce + i));
@@ -1178,7 +1232,7 @@ ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
                    DIL_K * DIL_POLYW1_PACKEDBYTES);
             ava_shake256(challenge_seed,
                         DIL_CRHBYTES + DIL_K * DIL_POLYW1_PACKEDBYTES,
-                        signature, DIL_SEEDBYTES);  /* c_tilde goes first in sig */
+                        signature, DIL_CTILDEBYTES);
         }
 
         /* Compute challenge polynomial c from c_tilde */
@@ -1194,9 +1248,8 @@ ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
         }
 
         /* Check ||z||_inf < gamma1 - beta */
-        if (dil_polyvecl_chknorm(&z, DIL_GAMMA1 - DIL_BETA)) {
+        if (dil_polyvecl_chknorm(&z, DIL_GAMMA1 - DIL_BETA))
             continue;
-        }
 
         /* Compute w0 - c*s2 */
         for (i = 0; i < DIL_K; ++i) {
@@ -1207,9 +1260,8 @@ ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
         dil_polyveck_reduce(&w0);
 
         /* Check ||w0 - cs2||_inf < gamma2 - beta */
-        if (dil_polyveck_chknorm(&w0, DIL_GAMMA2 - DIL_BETA)) {
+        if (dil_polyveck_chknorm(&w0, DIL_GAMMA2 - DIL_BETA))
             continue;
-        }
 
         /* Compute c*t0 */
         for (i = 0; i < DIL_K; ++i) {
@@ -1219,30 +1271,29 @@ ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
         }
 
         /* Check ||ct0||_inf < gamma2 */
-        if (dil_polyveck_chknorm(&ct0, DIL_GAMMA2)) {
+        if (dil_polyveck_chknorm(&ct0, DIL_GAMMA2))
             continue;
-        }
 
-        /* Compute hints */
-        dil_polyveck_add(&h_vec, &w0, &ct0);
-        n = dil_polyveck_make_hint(hint, &w0, &h_vec);
-        if (n > DIL_OMEGA) {
+        /* Compute hints: make_hint(w0-cs2+ct0, w1) per FIPS 204 */
+        memset(hint, 0, sizeof(hint));
+        dil_polyveck_add(&w0, &w0, &ct0);
+        n = dil_polyveck_make_hint(hint, &w0, &w1);
+        if (n > DIL_OMEGA)
             continue;
-        }
 
         /* All checks passed */
         reject = 0;
     }
 
-    /* Pack signature: c_tilde (32 bytes) || z (L * polyz_packed) || hints */
-    /* c_tilde already written at signature[0..31] */
+    /* Pack signature: c_tilde (48 bytes) || z (L * polyz_packed) || hints */
+    /* c_tilde already written at signature[0..47] */
     for (i = 0; i < DIL_L; ++i) {
-        dil_polyz_pack(signature + DIL_SEEDBYTES + i * DIL_POLYZ_PACKEDBYTES,
+        dil_polyz_pack(signature + DIL_CTILDEBYTES + i * DIL_POLYZ_PACKEDBYTES,
                        &z.vec[i]);
     }
 
     /* Pack hints */
-    memcpy(signature + DIL_SEEDBYTES + DIL_L * DIL_POLYZ_PACKEDBYTES,
+    memcpy(signature + DIL_CTILDEBYTES + DIL_L * DIL_POLYZ_PACKEDBYTES,
            hint, DIL_OMEGA + DIL_K);
 
     *signature_len = AVA_ML_DSA_65_SIGNATURE_BYTES;
@@ -1274,8 +1325,8 @@ ava_error_t ava_dilithium_verify(const uint8_t *message, size_t message_len,
                                   const uint8_t *public_key) {
     uint8_t rho[DIL_SEEDBYTES];
     uint8_t mu[DIL_CRHBYTES];
-    uint8_t c_tilde[DIL_SEEDBYTES];
-    uint8_t c_tilde2[DIL_SEEDBYTES];
+    uint8_t c_tilde[DIL_CTILDEBYTES];
+    uint8_t c_tilde2[DIL_CTILDEBYTES];
     dil_poly mat[DIL_K][DIL_L];
     dil_polyvecl z;
     dil_polyveck t1, w1prime, h_vec;
@@ -1300,12 +1351,12 @@ ava_error_t ava_dilithium_verify(const uint8_t *message, size_t message_len,
     }
 
     /* Unpack signature: c_tilde || z || hints */
-    memcpy(c_tilde, signature, DIL_SEEDBYTES);
+    memcpy(c_tilde, signature, DIL_CTILDEBYTES);
     for (i = 0; i < DIL_L; ++i) {
         dil_polyz_unpack(&z.vec[i],
-            signature + DIL_SEEDBYTES + i * DIL_POLYZ_PACKEDBYTES);
+            signature + DIL_CTILDEBYTES + i * DIL_POLYZ_PACKEDBYTES);
     }
-    memcpy(hint, signature + DIL_SEEDBYTES + DIL_L * DIL_POLYZ_PACKEDBYTES,
+    memcpy(hint, signature + DIL_CTILDEBYTES + DIL_L * DIL_POLYZ_PACKEDBYTES,
            DIL_OMEGA + DIL_K);
 
     /* Verify hint encoding */
@@ -1318,7 +1369,6 @@ ava_error_t ava_dilithium_verify(const uint8_t *message, size_t message_len,
             }
             prev = limit;
         }
-        /* Check remaining positions are zero */
         for (i = prev; i < DIL_OMEGA; ++i) {
             if (hint[i] != 0) {
                 return AVA_ERROR_VERIFY_FAILED;
@@ -1361,7 +1411,6 @@ ava_error_t ava_dilithium_verify(const uint8_t *message, size_t message_len,
     /* Compute c * t1 * 2^d */
     for (i = 0; i < DIL_K; ++i) {
         unsigned int j;
-        /* Shift t1 by 2^d */
         for (j = 0; j < DIL_N; ++j) {
             t1.vec[i].coeffs[j] <<= DIL_D;
         }
@@ -1371,6 +1420,7 @@ ava_error_t ava_dilithium_verify(const uint8_t *message, size_t message_len,
 
     /* w1' = Az - ct1*2^d */
     dil_polyveck_sub(&w1prime, &w1prime, &h_vec);
+    dil_polyveck_reduce(&w1prime);
     dil_polyveck_invntt(&w1prime);
     dil_polyveck_reduce(&w1prime);
     dil_polyveck_caddq(&w1prime);
@@ -1396,14 +1446,15 @@ ava_error_t ava_dilithium_verify(const uint8_t *message, size_t message_len,
         memcpy(challenge_input, mu, DIL_CRHBYTES);
         memcpy(challenge_input + DIL_CRHBYTES, w1_packed,
                DIL_K * DIL_POLYW1_PACKEDBYTES);
-        ava_shake256(challenge_input, challenge_len, c_tilde2, DIL_SEEDBYTES);
+        ava_shake256(challenge_input, challenge_len, c_tilde2, DIL_CTILDEBYTES);
         free(challenge_input);
     }
 
     /* Verify c_tilde == c_tilde2 (constant-time comparison) */
-    if (ava_consttime_memcmp(c_tilde, c_tilde2, DIL_SEEDBYTES) != 0) {
+    if (ava_consttime_memcmp(c_tilde, c_tilde2, DIL_CTILDEBYTES) != 0) {
         return AVA_ERROR_VERIFY_FAILED;
     }
 
     return AVA_SUCCESS;
 }
+

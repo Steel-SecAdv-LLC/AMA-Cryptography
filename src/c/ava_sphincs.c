@@ -251,7 +251,6 @@ static void spx_prf(uint8_t *out, const uint8_t *pub_seed,
 static void spx_prf_msg(uint8_t *out, const uint8_t *sk_prf,
                           const uint8_t *opt_rand,
                           const uint8_t *msg, size_t msglen) {
-    uint8_t hmac_key[SPX_N];
     unsigned int outlen = 0;
 
     /* HMAC-SHA256(sk_prf, opt_rand || msg) */
@@ -261,8 +260,6 @@ static void spx_prf_msg(uint8_t *out, const uint8_t *sk_prf,
     HMAC_Update(ctx, msg, msglen);
     HMAC_Final(ctx, out, &outlen);
     HMAC_CTX_free(ctx);
-
-    (void)hmac_key;
 }
 
 /**
@@ -272,26 +269,24 @@ static void spx_hash_message(uint8_t *digest, uint64_t *tree, uint32_t *leaf_idx
                                const uint8_t *R, const uint8_t *pk,
                                const uint8_t *msg, size_t msglen) {
     uint8_t buf[SPX_FORS_MSG_BYTES + 8 + 4];  /* message hash output */
-    uint8_t seed[2 * SPX_N + SPX_N];
-    size_t seed_len = 2 * SPX_N + SPX_N;
-
-    /* Construct seed: R || pk_seed || pk_root */
-    memcpy(seed, R, SPX_N);
-    memcpy(seed + SPX_N, pk, 2 * SPX_N);
-
-    /* Generate enough pseudorandom bytes using MGF1 */
     size_t buflen = SPX_FORS_MSG_BYTES + 8 + 4;
 
-    /* SHA-256(R || pk || msg) then MGF1 expand */
+    /* H_msg per FIPS 205 Sec 11.2: MGF1-SHA-256(R || PK.seed || SHA-256(R || PK.seed || PK.root || M)) */
     {
         SHA256_CTX ctx;
         uint8_t hash[32];
+        uint8_t mgf_seed[SPX_N + SPX_N + 32];
+
         SHA256_Init(&ctx);
         SHA256_Update(&ctx, R, SPX_N);
         SHA256_Update(&ctx, pk, 2 * SPX_N);
         SHA256_Update(&ctx, msg, msglen);
         SHA256_Final(hash, &ctx);
-        mgf1_sha256(buf, buflen, hash, 32);
+
+        memcpy(mgf_seed, R, SPX_N);
+        memcpy(mgf_seed + SPX_N, pk, SPX_N);  /* PK.seed only */
+        memcpy(mgf_seed + 2 * SPX_N, hash, 32);
+        mgf1_sha256(buf, buflen, mgf_seed, sizeof(mgf_seed));
     }
 
     /* Extract FORS message digest */
@@ -306,7 +301,7 @@ static void spx_hash_message(uint8_t *digest, uint64_t *tree, uint32_t *leaf_idx
         }
     }
     /* Mask tree index to valid range */
-    *tree &= ((uint64_t)1 << (SPX_FULL_HEIGHT - SPX_TREE_HEIGHT)) - 1;
+    *tree &= (~(uint64_t)0) >> (64 - (SPX_FULL_HEIGHT - SPX_TREE_HEIGHT));
 
     /* Extract leaf index (4 bytes) */
     *leaf_idx = 0;
@@ -390,6 +385,7 @@ static void spx_wots_gen_pk(uint8_t *pk, const uint8_t *sk_seed,
 
     for (i = 0; i < SPX_WOTS_LEN; ++i) {
         spx_set_chain_addr(addr, i);
+        spx_set_hash_addr(addr, 0);
         spx_prf(chain_in, pub_seed, sk_seed, addr);
         spx_wots_gen_chain(pk + i * SPX_N, chain_in, 0, SPX_WOTS_W - 1,
                            pub_seed, addr);
@@ -415,6 +411,7 @@ static void spx_wots_sign(uint8_t *sig, const uint8_t *msg,
 
     for (i = 0; i < SPX_WOTS_LEN; ++i) {
         spx_set_chain_addr(addr, i);
+        spx_set_hash_addr(addr, 0);
         spx_prf(chain_in, pub_seed, sk_seed, addr);
         spx_wots_gen_chain(sig + i * SPX_N, chain_in, 0, basew[i],
                            pub_seed, addr);
@@ -489,39 +486,35 @@ static void spx_fors_treehash(uint8_t *root, uint8_t *auth_path,
     spx_set_type(addr, SPX_ADDR_TYPE_FORSTREE);
 
     for (i = 0; i < (1u << SPX_FORS_HEIGHT); ++i) {
-        /* Compute leaf */
-        uint8_t node[SPX_N];
-        spx_fors_gen_leaf(node, sk_seed, pub_seed, offset + i, addr);
+        /* Generate leaf directly onto the stack */
+        spx_fors_gen_leaf(stack + sp * SPX_N, sk_seed, pub_seed, offset + i, addr);
+        heights[sp] = 0;
+        sp++;
 
-        /* Save auth path node if needed */
-        if (i == (leaf_idx ^ 1u)) {
-            memcpy(auth_path, node, SPX_N);
+        /* Save height-0 auth path sibling */
+        if ((leaf_idx ^ 1u) == i) {
+            memcpy(auth_path, stack + (sp - 1) * SPX_N, SPX_N);
         }
 
         /* Treehash: merge nodes up the tree */
-        unsigned int h = 0;
-        while (sp > 0 && heights[sp - 1] == h) {
-            if (h < SPX_FORS_HEIGHT) {
-                /* Save auth path */
-                if (((i >> (h + 1)) ^ 1) == (leaf_idx >> (h + 1))) {
-                    memcpy(auth_path + (h + 1) * SPX_N,
-                           stack + (sp - 1) * SPX_N, SPX_N);
-                }
-            }
-            spx_set_tree_height(addr, h + 1);
-            spx_set_tree_index(addr, offset + (i >> (h + 1)));
+        while (sp >= 2 && heights[sp - 1] == heights[sp - 2]) {
+            uint32_t tree_node_idx = i >> (heights[sp - 1] + 1);
 
-            uint8_t combined[2 * SPX_N];
-            memcpy(combined, stack + (sp - 1) * SPX_N, SPX_N);
-            memcpy(combined + SPX_N, node, SPX_N);
-            spx_thash(node, combined, 2, pub_seed, addr);
+            spx_set_tree_height(addr, heights[sp - 1] + 1);
+            spx_set_tree_index(addr, offset + tree_node_idx);
+
+            /* Merge in place: hash stack[sp-2..sp-1] into stack[sp-2] */
+            spx_thash(stack + (sp - 2) * SPX_N,
+                      stack + (sp - 2) * SPX_N, 2, pub_seed, addr);
             sp--;
-            h++;
-        }
+            heights[sp - 1]++;
 
-        memcpy(stack + sp * SPX_N, node, SPX_N);
-        heights[sp] = h;
-        sp++;
+            /* Save auth path sibling at this height (after merge) */
+            if (((leaf_idx >> heights[sp - 1]) ^ 1u) == tree_node_idx) {
+                memcpy(auth_path + heights[sp - 1] * SPX_N,
+                       stack + (sp - 1) * SPX_N, SPX_N);
+            }
+        }
     }
 
     memcpy(root, stack, SPX_N);
@@ -537,9 +530,8 @@ static void spx_fors_sign(uint8_t *sig, uint8_t *pk,
     uint8_t roots[SPX_FORS_TREES * SPX_N];
     unsigned int indices[SPX_FORS_TREES];
 
-    /* Extract indices from message digest */
+    /* Extract indices from message digest (MSB-first per FIPS 205) */
     {
-        unsigned int bits_done = 0;
         unsigned int byte_idx = 0;
         unsigned int bit_offset = 0;
 
@@ -552,8 +544,8 @@ static void spx_fors_sign(uint8_t *sig, uint8_t *pk,
                 unsigned int take = (bits_left < avail) ? bits_left : avail;
                 unsigned int mask = (1u << take) - 1;
 
-                indices[i] |= ((msg_digest[byte_idx] >> bit_offset) & mask)
-                              << (SPX_FORS_HEIGHT - bits_left);
+                indices[i] |= ((msg_digest[byte_idx] >> (8 - bit_offset - take)) & mask)
+                              << (bits_left - take);
 
                 bit_offset += take;
                 bits_left -= take;
@@ -596,7 +588,7 @@ static void spx_fors_pk_from_sig(uint8_t *pk, const uint8_t *sig,
     uint8_t roots[SPX_FORS_TREES * SPX_N];
     unsigned int indices[SPX_FORS_TREES];
 
-    /* Extract indices from message digest */
+    /* Extract indices from message digest (MSB-first per FIPS 205) */
     {
         unsigned int byte_idx = 0;
         unsigned int bit_offset = 0;
@@ -610,8 +602,8 @@ static void spx_fors_pk_from_sig(uint8_t *pk, const uint8_t *sig,
                 unsigned int take = (bits_left < avail) ? bits_left : avail;
                 unsigned int mask = (1u << take) - 1;
 
-                indices[i] |= ((msg_digest[byte_idx] >> bit_offset) & mask)
-                              << (SPX_FORS_HEIGHT - bits_left);
+                indices[i] |= ((msg_digest[byte_idx] >> (8 - bit_offset - take)) & mask)
+                              << (bits_left - take);
 
                 bit_offset += take;
                 bits_left -= take;
@@ -695,37 +687,36 @@ static void spx_xmss_treehash(uint8_t *root, uint8_t *auth_path,
     uint32_t i;
 
     for (i = 0; i < (1u << SPX_TREE_HEIGHT); ++i) {
-        uint8_t node[SPX_N];
-        spx_xmss_gen_leaf(node, sk_seed, pub_seed, i, addr);
-
-        /* Save auth path node */
-        if (i == (leaf_idx ^ 1u)) {
-            memcpy(auth_path, node, SPX_N);
-        }
-
-        unsigned int h = 0;
-        while (sp > 0 && heights[sp - 1] == h) {
-            if (h < SPX_TREE_HEIGHT) {
-                if (((i >> (h + 1)) ^ 1) == (leaf_idx >> (h + 1))) {
-                    memcpy(auth_path + (h + 1) * SPX_N,
-                           stack + (sp - 1) * SPX_N, SPX_N);
-                }
-            }
-            spx_set_tree_height(addr, h + 1);
-            spx_set_tree_index(addr, i >> (h + 1));
-
-            uint8_t combined[2 * SPX_N];
-            memcpy(combined, stack + (sp - 1) * SPX_N, SPX_N);
-            memcpy(combined + SPX_N, node, SPX_N);
-            spx_set_type(addr, SPX_ADDR_TYPE_HASHTREE);
-            spx_thash(node, combined, 2, pub_seed, addr);
-            sp--;
-            h++;
-        }
-
-        memcpy(stack + sp * SPX_N, node, SPX_N);
-        heights[sp] = h;
+        /* Generate leaf directly onto the stack */
+        spx_xmss_gen_leaf(stack + sp * SPX_N, sk_seed, pub_seed, i, addr);
+        heights[sp] = 0;
         sp++;
+
+        /* Save height-0 auth path sibling */
+        if ((leaf_idx ^ 1u) == i) {
+            memcpy(auth_path, stack + (sp - 1) * SPX_N, SPX_N);
+        }
+
+        /* Treehash: merge nodes up the tree */
+        while (sp >= 2 && heights[sp - 1] == heights[sp - 2]) {
+            uint32_t tree_node_idx = i >> (heights[sp - 1] + 1);
+
+            spx_set_type(addr, SPX_ADDR_TYPE_HASHTREE);
+            spx_set_tree_height(addr, heights[sp - 1] + 1);
+            spx_set_tree_index(addr, tree_node_idx);
+
+            /* Merge in place: hash stack[sp-2..sp-1] into stack[sp-2] */
+            spx_thash(stack + (sp - 2) * SPX_N,
+                      stack + (sp - 2) * SPX_N, 2, pub_seed, addr);
+            sp--;
+            heights[sp - 1]++;
+
+            /* Save auth path sibling at this height (after merge) */
+            if (((leaf_idx >> heights[sp - 1]) ^ 1u) == tree_node_idx) {
+                memcpy(auth_path + heights[sp - 1] * SPX_N,
+                       stack + (sp - 1) * SPX_N, SPX_N);
+            }
+        }
     }
 
     memcpy(root, stack, SPX_N);

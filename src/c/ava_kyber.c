@@ -50,6 +50,7 @@
 
 /* Forward declarations from ava_sha3.c */
 extern ava_error_t ava_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
+extern ava_error_t ava_sha3_512(const uint8_t* input, size_t input_len, uint8_t* output);
 extern ava_error_t ava_shake128(const uint8_t* input, size_t input_len,
                                  uint8_t* output, size_t output_len);
 extern ava_error_t ava_shake256(const uint8_t* input, size_t input_len,
@@ -388,10 +389,15 @@ static ava_error_t kyber_keypair_generate(
             return err;
         }
 
-        /* G(d) = (rho, sigma) */
-        ava_sha3_256(d, 32, buf);  /* Hash d to get more seed material */
-        /* Expand d into rho || sigma using SHAKE256 */
-        ava_shake256(d, 32, buf, 64);
+        /* G(d || byte(k)) = (rho, sigma) per FIPS 203 Algorithm 15
+         * G = SHA3-512, k = KYBER_K = 4 for Kyber-1024 */
+        {
+            uint8_t g_input[33];
+            memcpy(g_input, d, 32);
+            g_input[32] = (uint8_t)KYBER_K;
+            ava_sha3_512(g_input, 33, buf);
+            ava_secure_memzero(g_input, sizeof(g_input));
+        }
         rho = buf;
         sigma = buf + 32;
 
@@ -422,6 +428,8 @@ static ava_error_t kyber_keypair_generate(
         memcpy(public_key + KYBER_K * 384, rho, 32);
 
         /* Pack secret key: sk = (s || pk || H(pk) || z) */
+        polyvec_reduce(&s);  /* Reduce NTT(s) before serialization — coeff_normalize
+                                only handles [-q, 2q-1], but NTT output can exceed this */
         polyvec_tobytes(secret_key, &s);
         memcpy(secret_key + KYBER_K * 384, public_key, AVA_KYBER_1024_PUBLIC_KEY_BYTES);
 
@@ -586,14 +594,16 @@ static ava_error_t kyber_encapsulate(
             return err;
         }
 
-        /* Hash m with H(pk) to get (K, r) where K = shared secret, r = coins */
+        /* (K, r) = G(m || H(pk)) per FIPS 203 Algorithm 17
+         * H = SHA3-256, G = SHA3-512 */
         {
             uint8_t pk_hash[32];
-            uint8_t m_hash_input[64];
+            uint8_t g_input[64];
             ava_sha3_256(public_key, AVA_KYBER_1024_PUBLIC_KEY_BYTES, pk_hash);
-            memcpy(m_hash_input, m, 32);
-            memcpy(m_hash_input + 32, pk_hash, 32);
-            ava_shake256(m_hash_input, 64, kr, 64);
+            memcpy(g_input, m, 32);
+            memcpy(g_input + 32, pk_hash, 32);
+            ava_sha3_512(g_input, 64, kr);
+            ava_secure_memzero(g_input, sizeof(g_input));
         }
 
         /* Deterministic CPA encryption with m and coins r = kr+32 */
@@ -710,12 +720,14 @@ static ava_error_t kyber_decapsulate(
             }
         }
 
-        /* Re-derive (K, r) = G(m || H(pk)) */
+        /* Re-derive (K, r) = G(m || H(pk)) per FIPS 203 Algorithm 18
+         * G = SHA3-512 */
         {
-            uint8_t m_hash_input[64];
-            memcpy(m_hash_input, m, 32);
-            memcpy(m_hash_input + 32, h_pk, 32);
-            ava_shake256(m_hash_input, 64, kr, 64);
+            uint8_t g_input[64];
+            memcpy(g_input, m, 32);
+            memcpy(g_input + 32, h_pk, 32);
+            ava_sha3_512(g_input, 64, kr);
+            ava_secure_memzero(g_input, sizeof(g_input));
         }
 
         /* Re-encrypt with recovered m and derived coins r = kr+32.
@@ -1573,7 +1585,7 @@ static int16_t montgomery_reduce(int32_t a) {
     int32_t t;
     int16_t u;
 
-    u = (int16_t)(a * 62209);  /* q^-1 mod 2^16 = 62209 */
+    u = (int16_t)((int64_t)a * 62209);  /* q^-1 mod 2^16 = 62209 */
     t = (int32_t)u * KYBER_Q;
     t = a - t;
     t >>= 16;
