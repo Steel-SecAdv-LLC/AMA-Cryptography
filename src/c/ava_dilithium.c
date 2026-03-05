@@ -55,6 +55,14 @@ extern ava_error_t ava_shake128(const uint8_t* input, size_t input_len,
                                  uint8_t* output, size_t output_len);
 extern ava_error_t ava_shake256(const uint8_t* input, size_t input_len,
                                  uint8_t* output, size_t output_len);
+extern ava_error_t ava_shake256_inc_init(ava_sha3_ctx* ctx);
+extern ava_error_t ava_shake256_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
+extern ava_error_t ava_shake256_inc_finalize(ava_sha3_ctx* ctx);
+extern ava_error_t ava_shake256_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen);
+extern ava_error_t ava_shake128_inc_init(ava_sha3_ctx* ctx);
+extern ava_error_t ava_shake128_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
+extern ava_error_t ava_shake128_inc_finalize(ava_sha3_ctx* ctx);
+extern ava_error_t ava_shake128_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen);
 
 /* ============================================================================
  * ML-DSA-65 PARAMETERS (NIST FIPS 204)
@@ -605,25 +613,35 @@ static void dil_polyw1_pack(uint8_t *r, const dil_poly *a) {
  * ============================================================================ */
 
 /**
- * Sample uniform polynomial from SHAKE128 stream
+ * Sample uniform polynomial from SHAKE128 stream (FIPS 204 RejNTTPoly)
  * Rejection sampling to get coefficients in [0, q)
+ * Uses incremental SHAKE128 for proper XOF streaming.
  */
 static void dil_poly_uniform(dil_poly *a, const uint8_t seed[DIL_SEEDBYTES],
                               uint16_t nonce) {
     unsigned int ctr, pos;
     uint8_t buf[DIL_SEEDBYTES + 2];
-    uint8_t stream[768];  /* SHAKE128 output buffer */
+    uint8_t stream[168 * 5];  /* 5 SHAKE128 blocks */
     int32_t t;
+    ava_sha3_ctx shake_ctx;
 
     memcpy(buf, seed, DIL_SEEDBYTES);
     buf[DIL_SEEDBYTES] = (uint8_t)(nonce & 0xFF);
     buf[DIL_SEEDBYTES + 1] = (uint8_t)(nonce >> 8);
 
-    ava_shake128(buf, DIL_SEEDBYTES + 2, stream, sizeof(stream));
+    ava_shake128_inc_init(&shake_ctx);
+    ava_shake128_inc_absorb(&shake_ctx, buf, DIL_SEEDBYTES + 2);
+    ava_shake128_inc_finalize(&shake_ctx);
+    ava_shake128_inc_squeeze(&shake_ctx, stream, sizeof(stream));
 
     ctr = 0;
     pos = 0;
     while (ctr < DIL_N) {
+        if (pos + 3 > sizeof(stream)) {
+            /* Squeeze more bytes from the XOF */
+            ava_shake128_inc_squeeze(&shake_ctx, stream, sizeof(stream));
+            pos = 0;
+        }
         t  = stream[pos++];
         t |= (int32_t)stream[pos++] << 8;
         t |= (int32_t)stream[pos++] << 16;
@@ -631,18 +649,6 @@ static void dil_poly_uniform(dil_poly *a, const uint8_t seed[DIL_SEEDBYTES],
 
         if (t < DIL_Q) {
             a->coeffs[ctr++] = t;
-        }
-
-        if (pos >= sizeof(stream) - 3 && ctr < DIL_N) {
-            /* Need more bytes - re-expand with offset */
-            uint8_t ext_buf[DIL_SEEDBYTES + 4];
-            memcpy(ext_buf, seed, DIL_SEEDBYTES);
-            ext_buf[DIL_SEEDBYTES] = (uint8_t)(nonce & 0xFF);
-            ext_buf[DIL_SEEDBYTES + 1] = (uint8_t)(nonce >> 8);
-            ext_buf[DIL_SEEDBYTES + 2] = (uint8_t)(pos & 0xFF);
-            ext_buf[DIL_SEEDBYTES + 3] = (uint8_t)(pos >> 8);
-            ava_shake128(ext_buf, DIL_SEEDBYTES + 4, stream, sizeof(stream));
-            pos = 0;
         }
     }
 }
@@ -653,19 +659,25 @@ static void dil_poly_uniform(dil_poly *a, const uint8_t seed[DIL_SEEDBYTES],
  * maps to coefficient eta - nibble. Nibbles > 2*eta are rejected and the
  * next nibble is consumed. This ensures a uniform distribution over [-4, 4].
  */
+/**
+ * Sample polynomial with coefficients in [-eta, eta] from SHAKE256 stream
+ * (FIPS 204 RejBoundedPoly). Uses incremental SHAKE256 for proper XOF streaming.
+ */
 static void dil_poly_uniform_eta(dil_poly *a, const uint8_t seed[DIL_CRHBYTES],
                                   uint16_t nonce) {
     uint8_t buf[DIL_CRHBYTES + 2];
-    /* Allocate generously: 9/16 acceptance rate means we need ~(N * 16/9) nibbles
-     * = ~456 nibbles = ~228 bytes. Use 272 bytes (544 nibbles) for safety. */
-    uint8_t stream[272];
+    uint8_t stream[136 * 2];  /* 2 SHAKE256 blocks */
     unsigned int ctr, pos;
+    ava_sha3_ctx shake_ctx;
 
     memcpy(buf, seed, DIL_CRHBYTES);
     buf[DIL_CRHBYTES] = (uint8_t)(nonce & 0xFF);
     buf[DIL_CRHBYTES + 1] = (uint8_t)(nonce >> 8);
 
-    ava_shake256(buf, DIL_CRHBYTES + 2, stream, sizeof(stream));
+    ava_shake256_inc_init(&shake_ctx);
+    ava_shake256_inc_absorb(&shake_ctx, buf, DIL_CRHBYTES + 2);
+    ava_shake256_inc_finalize(&shake_ctx);
+    ava_shake256_inc_squeeze(&shake_ctx, stream, sizeof(stream));
 
     ctr = 0;
     pos = 0;
@@ -673,15 +685,7 @@ static void dil_poly_uniform_eta(dil_poly *a, const uint8_t seed[DIL_CRHBYTES],
         uint8_t t0, t1;
 
         if (pos >= sizeof(stream)) {
-            /* Exhausted stream — re-derive with extended seed.
-             * This is astronomically unlikely (< 2^{-100}) but we handle it. */
-            uint8_t ext_buf[DIL_CRHBYTES + 4];
-            memcpy(ext_buf, seed, DIL_CRHBYTES);
-            ext_buf[DIL_CRHBYTES] = (uint8_t)(nonce & 0xFF);
-            ext_buf[DIL_CRHBYTES + 1] = (uint8_t)(nonce >> 8);
-            ext_buf[DIL_CRHBYTES + 2] = (uint8_t)(pos & 0xFF);
-            ext_buf[DIL_CRHBYTES + 3] = (uint8_t)(pos >> 8);
-            ava_shake256(ext_buf, DIL_CRHBYTES + 4, stream, sizeof(stream));
+            ava_shake256_inc_squeeze(&shake_ctx, stream, sizeof(stream));
             pos = 0;
         }
 
@@ -689,7 +693,6 @@ static void dil_poly_uniform_eta(dil_poly *a, const uint8_t seed[DIL_CRHBYTES],
         t1 = stream[pos] >> 4;
         pos++;
 
-        /* Accept nibble only if <= 2*eta (i.e., <= 8 for eta=4) */
         if (t0 < 2 * DIL_ETA + 1 && ctr < DIL_N) {
             a->coeffs[ctr++] = DIL_ETA - (int32_t)t0;
         }
@@ -716,21 +719,20 @@ static void dil_poly_uniform_gamma1(dil_poly *a, const uint8_t seed[DIL_CRHBYTES
 }
 
 /**
- * Sample challenge polynomial c with exactly tau nonzero +/-1 coefficients
+ * Sample challenge polynomial c with exactly tau nonzero +/-1 coefficients.
+ * Uses proper incremental SHAKE256 absorb/squeeze per FIPS 204.
  */
 static void dil_poly_challenge(dil_poly *c, const uint8_t seed[DIL_CTILDEBYTES]) {
     uint8_t buf[136];  /* SHAKE256 rate block */
     unsigned int i, b, pos;
     uint64_t signs;
-    /* Use incremental SHAKE256 for proper streaming.
-     * For simplicity we squeeze one block at a time using the one-shot API
-     * with a counter to simulate incremental squeezing. Since TAU=49 and we
-     * have 136-8=128 bytes available, we rarely need a second block. */
-    uint8_t shake_state[DIL_CTILDEBYTES + 2];
-    unsigned int block = 0;
+    ava_sha3_ctx shake_ctx;
 
-    memcpy(shake_state, seed, DIL_CTILDEBYTES);
-    ava_shake256(seed, DIL_CTILDEBYTES, buf, sizeof(buf));
+    /* Absorb seed, finalize, then squeeze first block */
+    ava_shake256_inc_init(&shake_ctx);
+    ava_shake256_inc_absorb(&shake_ctx, seed, DIL_CTILDEBYTES);
+    ava_shake256_inc_finalize(&shake_ctx);
+    ava_shake256_inc_squeeze(&shake_ctx, buf, sizeof(buf));
 
     /* First 8 bytes encode signs */
     signs = 0;
@@ -745,12 +747,8 @@ static void dil_poly_challenge(dil_poly *c, const uint8_t seed[DIL_CTILDEBYTES])
         /* Rejection sampling: get uniform value in [0, i] */
         do {
             if (pos >= sizeof(buf)) {
-                /* Squeeze next block by extending seed with block counter */
-                block++;
-                memcpy(shake_state, seed, DIL_CTILDEBYTES);
-                shake_state[DIL_CTILDEBYTES] = (uint8_t)(block & 0xFF);
-                shake_state[DIL_CTILDEBYTES + 1] = (uint8_t)(block >> 8);
-                ava_shake256(shake_state, DIL_CTILDEBYTES + 2, buf, sizeof(buf));
+                /* Squeeze next block from the same SHAKE256 state */
+                ava_shake256_inc_squeeze(&shake_ctx, buf, sizeof(buf));
                 pos = 0;
             }
             b = buf[pos++];
@@ -967,17 +965,22 @@ static void dil_expand_matrix(dil_poly mat[DIL_K][DIL_L],
     }
 }
 
+#ifdef AVA_TESTING_MODE
 /**
  * Random bytes hook for KAT testing.
  * When non-NULL, replaces /dev/urandom for deterministic output.
+ * Only available in test builds (AVA_TESTING_MODE).
  */
 ava_error_t (*ava_dilithium_randombytes_hook)(uint8_t* buf, size_t len) = NULL;
+#endif
 
 /* Get random bytes from OS (or from test hook if set) */
 static ava_error_t dil_randombytes(uint8_t *buf, size_t len) {
+#ifdef AVA_TESTING_MODE
     if (ava_dilithium_randombytes_hook) {
         return ava_dilithium_randombytes_hook(buf, len);
     }
+#endif
     FILE *f = fopen("/dev/urandom", "rb");
     if (!f) {
         return AVA_ERROR_CRYPTO;

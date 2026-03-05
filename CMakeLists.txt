@@ -159,6 +159,13 @@ endif()
 # Tests
 if(AVA_BUILD_TESTS)
     enable_testing()
+    # Enable test hooks (randombytes hooks) in the library for KAT testing
+    if(AVA_BUILD_SHARED)
+        target_compile_definitions(ava_guardian_shared PRIVATE AVA_TESTING_MODE)
+    endif()
+    if(AVA_BUILD_STATIC)
+        target_compile_definitions(ava_guardian_static PRIVATE AVA_TESTING_MODE)
+    endif()
     add_subdirectory(tests/c)
 endif()
 

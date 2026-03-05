@@ -312,20 +312,25 @@ static void kyber_gennoise(polyvec* r, const uint8_t seed[32], uint8_t nonce) {
     }
 }
 
+#ifdef AVA_TESTING_MODE
 /**
  * Random bytes hook for KAT testing.
  * When non-NULL, all random byte generation uses this function instead of
  * /dev/urandom, allowing deterministic KAT vector reproduction.
+ * Only available in test builds (AVA_TESTING_MODE).
  */
 ava_error_t (*ava_kyber_randombytes_hook)(uint8_t* buf, size_t len) = NULL;
+#endif
 
 /**
  * Get random bytes from OS (or from test hook if set)
  */
 static ava_error_t kyber_randombytes(uint8_t* buf, size_t len) {
+#ifdef AVA_TESTING_MODE
     if (ava_kyber_randombytes_hook) {
         return ava_kyber_randombytes_hook(buf, len);
     }
+#endif
     FILE* f = fopen("/dev/urandom", "rb");
     if (!f) {
         return AVA_ERROR_CRYPTO;

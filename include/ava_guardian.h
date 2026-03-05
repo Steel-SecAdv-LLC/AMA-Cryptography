@@ -360,7 +360,7 @@ ava_error_t ava_sha3_512(
  */
 typedef struct {
     uint64_t state[25];     /**< Keccak state (1600 bits) */
-    uint8_t buffer[136];    /**< Rate buffer (136 bytes for SHA3-256) */
+    uint8_t buffer[168];    /**< Rate buffer (168 bytes max for SHAKE128; 136 for SHA3-256/SHAKE256) */
     size_t buffer_len;      /**< Current bytes in buffer */
     int finalized;          /**< Set to 1 after final() called */
 } ava_sha3_ctx;
@@ -395,6 +395,58 @@ ava_error_t ava_sha3_update(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
  * @return AVA_SUCCESS or error code
  */
 ava_error_t ava_sha3_final(ava_sha3_ctx* ctx, uint8_t* output);
+
+/* ============================================================================
+ * STREAMING SHAKE256 API (init/absorb/finalize/squeeze)
+ * Enables incremental absorb and multi-block squeeze for SHAKE256 (XOF)
+ * Reuses ava_sha3_ctx since SHAKE256 rate = 136 = SHA3-256 rate
+ * ============================================================================ */
+
+/**
+ * @brief Initialize SHAKE256 incremental context
+ */
+ava_error_t ava_shake256_inc_init(ava_sha3_ctx* ctx);
+
+/**
+ * @brief Absorb data into SHAKE256 incremental context
+ */
+ava_error_t ava_shake256_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
+
+/**
+ * @brief Finalize SHAKE256 absorption (apply padding). Must be called before squeeze.
+ */
+ava_error_t ava_shake256_inc_finalize(ava_sha3_ctx* ctx);
+
+/**
+ * @brief Squeeze output bytes from finalized SHAKE256 context. Can be called multiple times.
+ */
+ava_error_t ava_shake256_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen);
+
+/* ============================================================================
+ * STREAMING SHAKE128 API (init/absorb/finalize/squeeze)
+ * Enables incremental absorb and multi-block squeeze for SHAKE128 (XOF)
+ * SHAKE128 rate = 168 bytes
+ * ============================================================================ */
+
+/**
+ * @brief Initialize SHAKE128 incremental context
+ */
+ava_error_t ava_shake128_inc_init(ava_sha3_ctx* ctx);
+
+/**
+ * @brief Absorb data into SHAKE128 incremental context
+ */
+ava_error_t ava_shake128_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
+
+/**
+ * @brief Finalize SHAKE128 absorption (apply padding). Must be called before squeeze.
+ */
+ava_error_t ava_shake128_inc_finalize(ava_sha3_ctx* ctx);
+
+/**
+ * @brief Squeeze output bytes from finalized SHAKE128 context. Can be called multiple times.
+ */
+ava_error_t ava_shake128_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen);
 
 /**
  * @brief HKDF key derivation (RFC 5869)

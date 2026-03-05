@@ -140,7 +140,7 @@ static void spx_copy_keypair_addr(spx_addr out, const spx_addr in) {
 }
 
 /**
- * Serialize address to bytes (big-endian)
+ * Serialize address to bytes (big-endian, full 32-byte ADRS)
  */
 static void spx_addr_to_bytes(uint8_t *bytes, const spx_addr addr) {
     unsigned int i;
@@ -150,6 +150,45 @@ static void spx_addr_to_bytes(uint8_t *bytes, const spx_addr addr) {
         bytes[4*i + 2] = (uint8_t)(addr[i] >> 8);
         bytes[4*i + 3] = (uint8_t)(addr[i]);
     }
+}
+
+/**
+ * Compress address to 22-byte ADRSc per FIPS 205 Section 11.1.
+ * ADRSc = ADRS[3] || ADRS[8:16] || ADRS[19] || ADRS[20:32]
+ *
+ * Drops high bytes of layer (bytes 0-2), tree_high (bytes 4-7),
+ * and high bytes of keypair/padding word (bytes 16-18).
+ */
+static void spx_addr_compress(uint8_t *out, const spx_addr addr) {
+    /* ADRS[3]: low byte of layer address */
+    out[0] = (uint8_t)(addr[0]);
+
+    /* ADRS[8:16]: full addr[2] (tree_low) + full addr[3] (type) */
+    out[1] = (uint8_t)(addr[2] >> 24);
+    out[2] = (uint8_t)(addr[2] >> 16);
+    out[3] = (uint8_t)(addr[2] >> 8);
+    out[4] = (uint8_t)(addr[2]);
+    out[5] = (uint8_t)(addr[3] >> 24);
+    out[6] = (uint8_t)(addr[3] >> 16);
+    out[7] = (uint8_t)(addr[3] >> 8);
+    out[8] = (uint8_t)(addr[3]);
+
+    /* ADRS[19]: low byte of addr[4] (keypair address) */
+    out[9] = (uint8_t)(addr[4]);
+
+    /* ADRS[20:32]: full addr[5], addr[6], addr[7] */
+    out[10] = (uint8_t)(addr[5] >> 24);
+    out[11] = (uint8_t)(addr[5] >> 16);
+    out[12] = (uint8_t)(addr[5] >> 8);
+    out[13] = (uint8_t)(addr[5]);
+    out[14] = (uint8_t)(addr[6] >> 24);
+    out[15] = (uint8_t)(addr[6] >> 16);
+    out[16] = (uint8_t)(addr[6] >> 8);
+    out[17] = (uint8_t)(addr[6]);
+    out[18] = (uint8_t)(addr[7] >> 24);
+    out[19] = (uint8_t)(addr[7] >> 16);
+    out[20] = (uint8_t)(addr[7] >> 8);
+    out[21] = (uint8_t)(addr[7]);
 }
 
 /* ============================================================================
@@ -205,20 +244,23 @@ static void mgf1_sha256(uint8_t *out, size_t outlen,
 
 /**
  * SPHINCS+ T_l function (tweakable hash for l-byte message)
- * Simple variant: SHA-256(pub_seed || addr || msg)
+ * FIPS 205 Section 11.1 simple variant:
+ * SHA-256(PK.seed || toByte(0, 64-n) || ADRSc || M)
  */
 static void spx_thash(uint8_t *out, const uint8_t *in, unsigned int inblocks,
                        const uint8_t *pub_seed, const spx_addr addr) {
-    uint8_t addr_bytes[32];
+    uint8_t addr_c[22];
+    static const uint8_t padding[64 - SPX_N] = {0};  /* toByte(0, 64-n) */
     SHA256_CTX ctx;
     uint8_t hash[32];
 
-    spx_addr_to_bytes(addr_bytes, addr);
+    spx_addr_compress(addr_c, addr);
 
     SHA256_Init(&ctx);
-    SHA256_Update(&ctx, pub_seed, SPX_N);
-    SHA256_Update(&ctx, addr_bytes, sizeof(addr_bytes));
-    SHA256_Update(&ctx, in, inblocks * SPX_N);
+    SHA256_Update(&ctx, pub_seed, SPX_N);          /* PK.seed (32 bytes) */
+    SHA256_Update(&ctx, padding, sizeof(padding));  /* toByte(0, 32) */
+    SHA256_Update(&ctx, addr_c, sizeof(addr_c));    /* ADRSc (22 bytes) */
+    SHA256_Update(&ctx, in, inblocks * SPX_N);      /* M */
     SHA256_Final(hash, &ctx);
 
     memcpy(out, hash, SPX_N);
@@ -226,20 +268,23 @@ static void spx_thash(uint8_t *out, const uint8_t *in, unsigned int inblocks,
 
 /**
  * PRF: keyed hash for secret value generation
- * PRF(sk_seed, addr) = SHA-256(pub_seed || addr || sk_seed)
+ * FIPS 205 Section 11.1:
+ * PRF(PK.seed, SK.seed, ADRS) = Trunc_n(SHA-256(PK.seed || toByte(0, 64-n) || ADRSc || SK.seed))
  */
 static void spx_prf(uint8_t *out, const uint8_t *pub_seed,
                      const uint8_t *sk_seed, const spx_addr addr) {
-    uint8_t addr_bytes[32];
+    uint8_t addr_c[22];
+    static const uint8_t padding[64 - SPX_N] = {0};  /* toByte(0, 64-n) */
     SHA256_CTX ctx;
     uint8_t hash[32];
 
-    spx_addr_to_bytes(addr_bytes, addr);
+    spx_addr_compress(addr_c, addr);
 
     SHA256_Init(&ctx);
-    SHA256_Update(&ctx, pub_seed, SPX_N);
-    SHA256_Update(&ctx, addr_bytes, sizeof(addr_bytes));
-    SHA256_Update(&ctx, sk_seed, SPX_N);
+    SHA256_Update(&ctx, pub_seed, SPX_N);          /* PK.seed (32 bytes) */
+    SHA256_Update(&ctx, padding, sizeof(padding));  /* toByte(0, 32) */
+    SHA256_Update(&ctx, addr_c, sizeof(addr_c));    /* ADRSc (22 bytes) */
+    SHA256_Update(&ctx, sk_seed, SPX_N);            /* SK.seed (32 bytes) */
     SHA256_Final(hash, &ctx);
 
     memcpy(out, hash, SPX_N);
@@ -271,21 +316,26 @@ static void spx_hash_message(uint8_t *digest, uint64_t *tree, uint32_t *leaf_idx
     uint8_t buf[SPX_FORS_MSG_BYTES + 8 + 4];  /* message hash output */
     size_t buflen = SPX_FORS_MSG_BYTES + 8 + 4;
 
-    /* H_msg per FIPS 205 Sec 11.2: MGF1-SHA-256(R || PK.seed || SHA-256(R || PK.seed || PK.root || M)) */
+    /* H_msg per FIPS 205 Sec 11.1 SHA-256:
+     * MGF1-SHA-256(R || PK.seed || toByte(0, 64-n) || SHA-256(R || PK.seed || PK.root || M), m) */
     {
         SHA256_CTX ctx;
         uint8_t hash[32];
-        uint8_t mgf_seed[SPX_N + SPX_N + 32];
+        /* MGF1 seed: R(32) + PK.seed(32) + padding(32) + hash(32) = 128 bytes */
+        uint8_t mgf_seed[SPX_N + SPX_N + (64 - SPX_N) + 32];
 
+        /* Inner hash: SHA-256(R || PK.seed || PK.root || M) */
         SHA256_Init(&ctx);
         SHA256_Update(&ctx, R, SPX_N);
-        SHA256_Update(&ctx, pk, 2 * SPX_N);
+        SHA256_Update(&ctx, pk, 2 * SPX_N);  /* PK.seed || PK.root */
         SHA256_Update(&ctx, msg, msglen);
         SHA256_Final(hash, &ctx);
 
+        /* Build MGF1 seed: R || PK.seed || toByte(0, 64-n) || hash */
         memcpy(mgf_seed, R, SPX_N);
         memcpy(mgf_seed + SPX_N, pk, SPX_N);  /* PK.seed only */
-        memcpy(mgf_seed + 2 * SPX_N, hash, 32);
+        memset(mgf_seed + 2 * SPX_N, 0, 64 - SPX_N);  /* toByte(0, 64-n) */
+        memcpy(mgf_seed + 2 * SPX_N + (64 - SPX_N), hash, 32);
         mgf1_sha256(buf, buflen, mgf_seed, sizeof(mgf_seed));
     }
 
@@ -862,14 +912,19 @@ static int spx_ht_verify(const uint8_t *msg, const uint8_t *sig,
 /**
  * Random bytes hook for KAT testing.
  * When non-NULL, replaces /dev/urandom for deterministic output.
+ * Only available in test builds (AVA_TESTING_MODE).
  */
+#ifdef AVA_TESTING_MODE
 ava_error_t (*ava_sphincs_randombytes_hook)(uint8_t* buf, size_t len) = NULL;
+#endif
 
 /* Get random bytes from OS (or from test hook if set) */
 static ava_error_t spx_randombytes(uint8_t *buf, size_t len) {
+#ifdef AVA_TESTING_MODE
     if (ava_sphincs_randombytes_hook) {
         return ava_sphincs_randombytes_hook(buf, len);
     }
+#endif
     FILE *f = fopen("/dev/urandom", "rb");
     if (!f) {
         return AVA_ERROR_CRYPTO;

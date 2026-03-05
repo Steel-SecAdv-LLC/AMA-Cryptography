@@ -159,6 +159,7 @@ extern ava_error_t (*ava_kyber_randombytes_hook)(uint8_t* buf, size_t len);
 extern ava_error_t (*ava_dilithium_randombytes_hook)(uint8_t* buf, size_t len);
 extern ava_error_t (*ava_sphincs_randombytes_hook)(uint8_t* buf, size_t len);
 
+/* DRBG-based hook (for legacy pre-FIPS KAT tests) */
 static ava_error_t drbg_randombytes(uint8_t *buf, size_t len) {
     nist_drbg_generate(&g_drbg, buf, len);
     return AVA_SUCCESS;
@@ -174,6 +175,27 @@ static void remove_drbg_hooks(void) {
     ava_kyber_randombytes_hook = NULL;
     ava_dilithium_randombytes_hook = NULL;
     ava_sphincs_randombytes_hook = NULL;
+}
+
+/* Buffer-based hook for FIPS KAT tests (feeds pre-loaded bytes sequentially) */
+static uint8_t g_buf_hook_data[256];
+static size_t g_buf_hook_len = 0;
+static size_t g_buf_hook_pos = 0;
+
+static ava_error_t buf_hook_randombytes(uint8_t *buf, size_t len) {
+    if (g_buf_hook_pos + len > g_buf_hook_len) {
+        return AVA_ERROR_CRYPTO;  /* Buffer exhausted */
+    }
+    memcpy(buf, g_buf_hook_data + g_buf_hook_pos, len);
+    g_buf_hook_pos += len;
+    return AVA_SUCCESS;
+}
+
+static void buf_hook_load(const uint8_t *data, size_t len) {
+    if (len > sizeof(g_buf_hook_data)) len = sizeof(g_buf_hook_data);
+    memcpy(g_buf_hook_data, data, len);
+    g_buf_hook_len = len;
+    g_buf_hook_pos = 0;
 }
 
 /* ============================================================================
@@ -263,7 +285,7 @@ static int rsp_read_entry(FILE *f, rsp_entry *entry) {
         /* Skip blank lines and comments */
         if (len == 0 || line[0] == '#') {
             /* If we already have fields, a blank line ends the entry */
-            if (found_count && entry->num_fields > 0) {
+            if (entry->num_fields > 0) {
                 free(line);
                 return 1;
             }
@@ -594,60 +616,64 @@ static int test_sphincs_tamper_detection(void) {
 }
 
 /* ============================================================================
- * NIST KAT VECTOR TESTS
+ * NIST KAT VECTOR TESTS (FIPS 203/204 format)
  * ============================================================================
- * These tests seed the DRBG with the KAT seed value and check that
- * keygen/encap/sign produce exactly the expected outputs.
+ * These tests use FIPS-compliant KAT vectors that provide d/z (ML-KEM)
+ * or seed (ML-DSA) directly, matching the FIPS 203/204 algorithms.
  * ============================================================================ */
 
+static FILE *try_open_kat(const char *name) {
+    char path[512];
+    const char *prefixes[] = {"", "../", "../../"};
+    for (int i = 0; i < 3; i++) {
+        snprintf(path, sizeof(path), "%s%s", prefixes[i], name);
+        FILE *f = fopen(path, "r");
+        if (f) return f;
+    }
+    return NULL;
+}
+
 /**
- * Kyber-1024 KAT test: seed DRBG, generate keypair, encapsulate,
- * compare against known vectors from PQCkemKAT_3168.rsp
+ * ML-KEM-1024 FIPS 203 KAT test: provide d and z directly,
+ * compare keygen output against known vectors.
  */
 static int test_kyber_kat_vector(void) {
-    FILE *f = fopen("../tests/kat/ml_kem/kyber1024.rsp", "r");
-    if (!f) {
-        /* Try alternate path */
-        f = fopen("tests/kat/ml_kem/kyber1024.rsp", "r");
-    }
-    if (!f) {
-        f = fopen("../../tests/kat/ml_kem/kyber1024.rsp", "r");
-    }
-    TEST_ASSERT(f != NULL, "Could not open kyber1024.rsp KAT file");
+    FILE *f = try_open_kat("tests/kat/fips203/ml_kem_1024.kat");
+    TEST_ASSERT(f != NULL, "Could not open ml_kem_1024.kat FIPS 203 KAT file");
 
     rsp_entry entry;
     int kat_tested = 0;
     int kat_passed = 0;
 
-    /* Test first 3 KAT vectors */
-    while (rsp_read_entry(f, &entry) && kat_tested < 3) {
-        const char *seed_hex = rsp_get_field(&entry, "seed");
+    /* Test first 10 KAT vectors */
+    while (rsp_read_entry(f, &entry) && kat_tested < 10) {
+        const char *d_hex = rsp_get_field(&entry, "d");
+        const char *z_hex = rsp_get_field(&entry, "z");
         const char *pk_hex = rsp_get_field(&entry, "pk");
         const char *sk_hex = rsp_get_field(&entry, "sk");
-        const char *ct_hex = rsp_get_field(&entry, "ct");
-        const char *ss_hex = rsp_get_field(&entry, "ss");
-        const char *count_str = rsp_get_field(&entry, "count");
 
-        if (!seed_hex || !pk_hex || !sk_hex || !ct_hex || !ss_hex) {
+        if (!d_hex || !z_hex || !pk_hex || !sk_hex) {
             rsp_entry_free(&entry);
             continue;
         }
 
-        int count = count_str ? atoi(count_str) : kat_tested;
-        printf("    KAT vector #%d: ", count);
+        printf("    FIPS 203 KAT #%d: ", kat_tested);
 
-        /* Parse seed */
-        uint8_t seed[48];
-        hex_to_bytes(seed_hex, seed, 48);
+        /* Parse d (32 bytes) and z (32 bytes) */
+        uint8_t dz_buf[64];
+        hex_to_bytes(d_hex, dz_buf, 32);
+        hex_to_bytes(z_hex, dz_buf + 32, 32);
 
-        /* Seed DRBG and install hooks */
-        nist_drbg_init(&g_drbg, seed);
-        install_drbg_hooks();
+        /* Load d||z into buffer hook: keygen calls randombytes(d, 32) then randombytes(z, 32) */
+        buf_hook_load(dz_buf, 64);
+        ava_kyber_randombytes_hook = buf_hook_randombytes;
 
         /* Generate keypair */
         uint8_t pk[AVA_KYBER_1024_PUBLIC_KEY_BYTES];
         uint8_t sk[AVA_KYBER_1024_SECRET_KEY_BYTES];
         ava_error_t rc = ava_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk));
+
+        ava_kyber_randombytes_hook = NULL;
 
         if (rc != AVA_SUCCESS) {
             printf("keygen failed (rc=%d)\n", rc);
@@ -659,48 +685,31 @@ static int test_kyber_kat_vector(void) {
         /* Compare public key */
         uint8_t *expected_pk = (uint8_t *)malloc(AVA_KYBER_1024_PUBLIC_KEY_BYTES);
         int pk_bytes = hex_to_bytes(pk_hex, expected_pk, AVA_KYBER_1024_PUBLIC_KEY_BYTES);
-
         int pk_match = (pk_bytes == AVA_KYBER_1024_PUBLIC_KEY_BYTES &&
                        memcmp(pk, expected_pk, AVA_KYBER_1024_PUBLIC_KEY_BYTES) == 0);
 
         /* Compare secret key */
         uint8_t *expected_sk = (uint8_t *)malloc(AVA_KYBER_1024_SECRET_KEY_BYTES);
         int sk_bytes = hex_to_bytes(sk_hex, expected_sk, AVA_KYBER_1024_SECRET_KEY_BYTES);
-
         int sk_match = (sk_bytes == AVA_KYBER_1024_SECRET_KEY_BYTES &&
                        memcmp(sk, expected_sk, AVA_KYBER_1024_SECRET_KEY_BYTES) == 0);
 
         if (pk_match && sk_match) {
-            /* Keygen matches! Now test encapsulation */
-            uint8_t ct[AVA_KYBER_1024_CIPHERTEXT_BYTES];
-            uint8_t ss[AVA_KYBER_1024_SHARED_SECRET_BYTES];
-            size_t ct_len = sizeof(ct);
-
-            rc = ava_kyber_encapsulate(pk, sizeof(pk), ct, &ct_len, ss, sizeof(ss));
-            if (rc == AVA_SUCCESS) {
-                uint8_t expected_ct[AVA_KYBER_1024_CIPHERTEXT_BYTES];
-                uint8_t expected_ss[AVA_KYBER_1024_SHARED_SECRET_BYTES];
-                hex_to_bytes(ct_hex, expected_ct, sizeof(expected_ct));
-                hex_to_bytes(ss_hex, expected_ss, sizeof(expected_ss));
-
-                int ct_match = (memcmp(ct, expected_ct, sizeof(ct)) == 0);
-                int ss_match = (memcmp(ss, expected_ss, sizeof(ss)) == 0);
-
-                if (ct_match && ss_match) {
-                    printf("FULL MATCH (keygen + encap + ss)\n");
-                    kat_passed++;
-                } else {
-                    printf("keygen OK, encap %s, ss %s\n",
-                           ct_match ? "OK" : "MISMATCH",
-                           ss_match ? "OK" : "MISMATCH");
-                }
-            } else {
-                printf("keygen OK, encap failed (rc=%d)\n", rc);
-            }
+            printf("keygen MATCH (pk + sk)\n");
+            kat_passed++;
         } else {
             printf("keygen MISMATCH (pk=%s, sk=%s)\n",
                    pk_match ? "OK" : "DIFFER",
                    sk_match ? "OK" : "DIFFER");
+            if (!pk_match) {
+                /* Show first divergence byte for debugging */
+                for (int i = 0; i < pk_bytes && i < AVA_KYBER_1024_PUBLIC_KEY_BYTES; i++) {
+                    if (pk[i] != expected_pk[i]) {
+                        printf("      pk diverges at byte %d: got %02X, expected %02X\n", i, pk[i], expected_pk[i]);
+                        break;
+                    }
+                }
+            }
         }
 
         free(expected_pk);
@@ -709,60 +718,53 @@ static int test_kyber_kat_vector(void) {
         kat_tested++;
     }
 
-    remove_drbg_hooks();
     fclose(f);
 
     printf("    KAT vectors: %d/%d passed\n", kat_passed, kat_tested);
-    TEST_ASSERT(kat_tested > 0, "No Kyber KAT vectors were tested");
-
-    /* Note: KAT mismatch is informational for now - the roundtrip test
-     * proves correctness. Full KAT matching requires exact DRBG alignment
-     * with the specific NIST submission version. */
+    TEST_ASSERT(kat_tested > 0, "No ML-KEM KAT vectors were tested");
+    TEST_ASSERT(kat_passed == kat_tested, "ML-KEM FIPS 203 KAT vector mismatch");
     return 1;
 }
 
 /**
- * ML-DSA-65 KAT test
+ * ML-DSA-65 FIPS 204 KAT test: provide seed (xi) directly,
+ * compare keygen output against known vectors.
  */
 static int test_dilithium_kat_vector(void) {
-    FILE *f = fopen("../tests/kat/ml_dsa/dilithium3.rsp", "r");
-    if (!f) f = fopen("tests/kat/ml_dsa/dilithium3.rsp", "r");
-    if (!f) f = fopen("../../tests/kat/ml_dsa/dilithium3.rsp", "r");
-    TEST_ASSERT(f != NULL, "Could not open dilithium3.rsp KAT file");
+    FILE *f = try_open_kat("tests/kat/fips204/ml_dsa_65.kat");
+    TEST_ASSERT(f != NULL, "Could not open ml_dsa_65.kat FIPS 204 KAT file");
 
     rsp_entry entry;
     int kat_tested = 0;
     int kat_passed = 0;
 
-    while (rsp_read_entry(f, &entry) && kat_tested < 3) {
+    /* Test first 10 KAT vectors */
+    while (rsp_read_entry(f, &entry) && kat_tested < 10) {
         const char *seed_hex = rsp_get_field(&entry, "seed");
-        const char *pk_hex = rsp_get_field(&entry, "pk");
-        const char *sk_hex = rsp_get_field(&entry, "sk");
-        const char *msg_hex = rsp_get_field(&entry, "msg");
-        /* const char *sm_hex = rsp_get_field(&entry, "sm"); */
-        const char *count_str = rsp_get_field(&entry, "count");
-        const char *mlen_str = rsp_get_field(&entry, "mlen");
+        const char *pk_hex = rsp_get_field(&entry, "pkey");
+        const char *sk_hex = rsp_get_field(&entry, "skey");
 
         if (!seed_hex || !pk_hex || !sk_hex) {
             rsp_entry_free(&entry);
             continue;
         }
 
-        int count = count_str ? atoi(count_str) : kat_tested;
-        printf("    KAT vector #%d: ", count);
+        printf("    FIPS 204 KAT #%d: ", kat_tested);
 
-        /* Parse seed */
-        uint8_t seed[48];
-        hex_to_bytes(seed_hex, seed, 48);
+        /* Parse seed (32 bytes = xi for ML-DSA keygen) */
+        uint8_t seed[32];
+        hex_to_bytes(seed_hex, seed, 32);
 
-        /* Seed DRBG and install hooks */
-        nist_drbg_init(&g_drbg, seed);
-        install_drbg_hooks();
+        /* Load seed into buffer hook: keygen calls randombytes(seedbuf, 32) */
+        buf_hook_load(seed, 32);
+        ava_dilithium_randombytes_hook = buf_hook_randombytes;
 
         /* Generate keypair */
         uint8_t pk[AVA_ML_DSA_65_PUBLIC_KEY_BYTES];
         uint8_t sk[AVA_ML_DSA_65_SECRET_KEY_BYTES];
         ava_error_t rc = ava_dilithium_keypair(pk, sk);
+
+        ava_dilithium_randombytes_hook = NULL;
 
         if (rc != AVA_SUCCESS) {
             printf("keygen failed (rc=%d)\n", rc);
@@ -777,44 +779,40 @@ static int test_dilithium_kat_vector(void) {
         int pk_match = (pk_bytes == AVA_ML_DSA_65_PUBLIC_KEY_BYTES &&
                        memcmp(pk, expected_pk, AVA_ML_DSA_65_PUBLIC_KEY_BYTES) == 0);
 
-        if (pk_match && msg_hex) {
-            /* Keygen matches! Test signing */
-            size_t mlen = mlen_str ? (size_t)atol(mlen_str) : 0;
-            uint8_t *msg = (uint8_t *)malloc(mlen > 0 ? mlen : 1);
-            if (mlen > 0) hex_to_bytes(msg_hex, msg, mlen);
+        /* Compare secret key */
+        uint8_t *expected_sk = (uint8_t *)malloc(AVA_ML_DSA_65_SECRET_KEY_BYTES);
+        int sk_bytes = hex_to_bytes(sk_hex, expected_sk, AVA_ML_DSA_65_SECRET_KEY_BYTES);
+        int sk_match = (sk_bytes == AVA_ML_DSA_65_SECRET_KEY_BYTES &&
+                       memcmp(sk, expected_sk, AVA_ML_DSA_65_SECRET_KEY_BYTES) == 0);
 
-            uint8_t sig[AVA_ML_DSA_65_SIGNATURE_BYTES];
-            size_t sig_len = sizeof(sig);
-            rc = ava_dilithium_sign(sig, &sig_len, msg, mlen, sk);
-
-            if (rc == AVA_SUCCESS) {
-                /* Verify our own signature */
-                ava_error_t vrc = ava_dilithium_verify(msg, mlen, sig, sig_len, pk);
-                if (vrc == AVA_SUCCESS) {
-                    printf("keygen MATCH, sign OK, verify OK\n");
-                    kat_passed++;
-                } else {
-                    printf("keygen MATCH, sign OK, verify FAILED\n");
-                }
-            } else {
-                printf("keygen MATCH, sign failed (rc=%d)\n", rc);
-            }
-            free(msg);
+        if (pk_match && sk_match) {
+            printf("keygen MATCH (pk + sk)\n");
+            kat_passed++;
         } else {
-            printf("keygen %s\n", pk_match ? "OK" : "MISMATCH");
-            if (pk_match) kat_passed++;
+            printf("keygen MISMATCH (pk=%s, sk=%s)\n",
+                   pk_match ? "OK" : "DIFFER",
+                   sk_match ? "OK" : "DIFFER");
+            if (!pk_match) {
+                for (int i = 0; i < pk_bytes && i < AVA_ML_DSA_65_PUBLIC_KEY_BYTES; i++) {
+                    if (pk[i] != expected_pk[i]) {
+                        printf("      pk diverges at byte %d: got %02X, expected %02X\n", i, pk[i], expected_pk[i]);
+                        break;
+                    }
+                }
+            }
         }
 
         free(expected_pk);
+        free(expected_sk);
         rsp_entry_free(&entry);
         kat_tested++;
     }
 
-    remove_drbg_hooks();
     fclose(f);
 
     printf("    KAT vectors: %d/%d passed\n", kat_passed, kat_tested);
-    TEST_ASSERT(kat_tested > 0, "No Dilithium KAT vectors were tested");
+    TEST_ASSERT(kat_tested > 0, "No ML-DSA KAT vectors were tested");
+    TEST_ASSERT(kat_passed == kat_tested, "ML-DSA FIPS 204 KAT vector mismatch");
     return 1;
 }
 
