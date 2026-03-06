@@ -146,20 +146,6 @@ class KeyPair:
     algorithm: AlgorithmType
     metadata: Dict[str, Any]
 
-    def __del__(self):
-        """
-        Best-effort cleanup marker for secret key.
-
-        Note: Python bytes are immutable and cannot be securely zeroed.
-        This is a marker for where cleanup would occur with mutable types.
-        For production systems requiring strong memory protection, store
-        secrets in bytearray and use secure_memzero() before deletion.
-        """
-        if hasattr(self, "secret_key") and self.secret_key:
-            from ava_guardian.secure_memory import secure_cleanup_bytes
-
-            secure_cleanup_bytes(self.secret_key)
-
 
 @dataclass
 class Signature:
@@ -195,20 +181,6 @@ class EncapsulatedSecret:
     shared_secret: bytes = field(repr=False)  # SENSITIVE - excluded from repr to prevent exposure
     algorithm: AlgorithmType
     metadata: Dict[str, Any]
-
-    def __del__(self):
-        """
-        Best-effort cleanup marker for shared secret.
-
-        Note: Python bytes are immutable and cannot be securely zeroed.
-        This is a marker for where cleanup would occur with mutable types.
-        For production systems requiring strong memory protection, store
-        secrets in bytearray and use secure_memzero() before deletion.
-        """
-        if hasattr(self, "shared_secret") and self.shared_secret:
-            from ava_guardian.secure_memory import secure_cleanup_bytes
-
-            secure_cleanup_bytes(self.shared_secret)
 
 
 class CryptoProvider(ABC):
@@ -483,7 +455,6 @@ class KyberProvider(KEMProvider):
     def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON):
         self.backend = backend
         self.algorithm = AlgorithmType.KYBER_1024
-        self._is_placeholder = False
 
         if not KYBER_AVAILABLE:
             raise KyberUnavailableError(

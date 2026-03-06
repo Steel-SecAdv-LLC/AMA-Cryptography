@@ -490,7 +490,7 @@ def dilithium_sign(message: bytes, private_key: bytes) -> bytes:
 
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(DILITHIUM_SIGNATURE_BYTES)
-        sig_len = ctypes.c_size_t(0)
+        sig_len = ctypes.c_size_t(DILITHIUM_SIGNATURE_BYTES)
         rc = _native_lib.ava_dilithium_sign(
             sig_buf, ctypes.byref(sig_len),
             message, ctypes.c_size_t(len(message)),
@@ -615,7 +615,7 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
 
     if KYBER_BACKEND == "native" and _native_lib is not None:
         ct_buf = ctypes.create_string_buffer(KYBER_CIPHERTEXT_BYTES)
-        ct_len = ctypes.c_size_t(0)
+        ct_len = ctypes.c_size_t(KYBER_CIPHERTEXT_BYTES)
         ss_buf = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
         rc = _native_lib.ava_kyber_encapsulate(
             public_key, ctypes.c_size_t(len(public_key)),
@@ -767,7 +767,7 @@ def sphincs_sign(message: bytes, secret_key: bytes) -> bytes:
 
     if SPHINCS_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(SPHINCS_SIGNATURE_BYTES)
-        sig_len = ctypes.c_size_t(0)
+        sig_len = ctypes.c_size_t(SPHINCS_SIGNATURE_BYTES)
         rc = _native_lib.ava_sphincs_sign(
             sig_buf, ctypes.byref(sig_len),
             message, ctypes.c_size_t(len(message)),

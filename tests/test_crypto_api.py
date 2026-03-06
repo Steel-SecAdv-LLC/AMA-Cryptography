@@ -296,7 +296,9 @@ class TestKyberProvider:
 def test_kyber_provider_not_placeholder():
     """Verify KyberProvider is not a placeholder."""
     provider = KyberProvider()
-    assert not hasattr(provider, "_is_placeholder") or not provider._is_placeholder
+    # KyberProvider should be functional, not a stub
+    keypair = provider.generate_keypair()
+    assert keypair is not None
 
 
 @pytest.mark.skipif(not SPHINCS_AVAILABLE, reason="SPHINCS+ backend not available")

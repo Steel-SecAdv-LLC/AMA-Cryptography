@@ -482,37 +482,6 @@ def _init_libsodium() -> bool:
 _SODIUM_INITIALIZED = _init_libsodium()
 
 
-def secure_cleanup_bytes(data: bytes) -> None:
-    """
-    Placeholder for secure cleanup of bytes objects.
-
-    WARNING: This function does NOT actually zero the original bytes object.
-    Python bytes objects are immutable, and there is no reliable way to
-    overwrite their memory contents. This function exists only as a marker
-    for where secure cleanup SHOULD occur if the data were stored in a
-    mutable type like bytearray.
-
-    For truly secure secret handling, use:
-    - bytearray instead of bytes for secret keys
-    - SecureBuffer context manager for temporary sensitive data
-    - secure_memzero() on mutable buffers
-
-    Args:
-        data: The bytes object (cleanup is a no-op for immutable bytes)
-
-    Note:
-        This is called from KeyPair.__del__ and EncapsulatedSecret.__del__
-        as a best-effort marker. The actual security benefit is minimal
-        because Python bytes are immutable. For production systems requiring
-        strong memory protection, store secrets in bytearray and use
-        secure_memzero() before deletion.
-    """
-    # No-op: Python bytes are immutable and cannot be securely zeroed.
-    # This function exists as documentation and a marker for where
-    # secure cleanup would occur with mutable types.
-    pass
-
-
 def get_status() -> dict:
     """
     Get secure memory module status.
@@ -544,7 +513,6 @@ __all__ = [
     "get_status",
     "is_available",
     "secure_buffer",
-    "secure_cleanup_bytes",
     "secure_memzero",
     "secure_mlock",
     "secure_munlock",

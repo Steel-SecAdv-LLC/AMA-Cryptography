@@ -52,13 +52,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-quantum = [
-    # PQC is now provided natively by the C library (no external deps needed)
-    # Build with: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build
-]
-quantum-alt = [
-    # Deprecated — use native C backend instead
-]
 hsm = [
     # PKCS#11 support for hardware security modules
     "PyKCS11>=1.5.0",

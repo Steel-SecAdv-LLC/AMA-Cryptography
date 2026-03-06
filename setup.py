@@ -285,9 +285,6 @@ setup(
         "scipy>=1.7.0",
     ],
     extras_require={
-        # PQC is provided natively by the C library (no external deps needed)
-        "quantum": [],  # Native C backend provides all PQC algorithms
-        "quantum-alt": [],  # Deprecated — use native C backend
         # PyNaCl for enhanced secure memory operations (libsodium bindings)
         "secure-memory": ["pynacl>=1.5.0"],
         "dev": [
