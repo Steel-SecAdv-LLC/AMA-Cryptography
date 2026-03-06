@@ -53,12 +53,11 @@ dependencies = [
 
 [project.optional-dependencies]
 quantum = [
-    # liboqs-python for quantum-resistant cryptography
-    # The PyPI package is 'liboqs-python' (provides 'oqs' module)
-    "liboqs-python>=0.10.0",
+    # PQC is now provided natively by the C library (no external deps needed)
+    # Build with: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build
 ]
 quantum-alt = [
-    "pqcrypto>=0.1.3",
+    # Deprecated — use native C backend instead
 ]
 hsm = [
     # PKCS#11 support for hardware security modules
