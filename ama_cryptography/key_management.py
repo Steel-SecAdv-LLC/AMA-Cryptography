@@ -559,7 +559,7 @@ class SecureKeyStorage:
             return False  # Nothing to migrate
 
         # Read all existing keys with old parameters
-        old_keys: Dict[str, Tuple[bytes, Dict]] = {}
+        old_keys: Dict[str, Tuple[bytes, Dict[str, Any]]] = {}
         for key_file in self.storage_path.glob("*.json"):
             if key_file.name.startswith("."):
                 continue
@@ -632,7 +632,7 @@ class SecureKeyStorage:
         storage._derive_key_from_password(master_password)
         return storage
 
-    def store_key(self, key_id: str, key_data: bytes, metadata: Optional[Dict] = None) -> None:
+    def store_key(self, key_id: str, key_data: bytes, metadata: Optional[Dict[str, Any]] = None) -> None:
         """
         Store key with AES-256-GCM authenticated encryption.
 
@@ -748,14 +748,14 @@ class SecureKeyStorage:
             return True
         return False
 
-    def list_keys(self) -> list:
+    def list_keys(self) -> List[str]:
         """
         List all stored key IDs.
 
         Returns:
             List of key IDs stored in this storage
         """
-        key_ids = []
+        key_ids: List[str] = []
         for key_file in self.storage_path.glob("*.json"):
             if not key_file.name.startswith("."):
                 key_ids.append(key_file.stem)
@@ -765,7 +765,7 @@ class SecureKeyStorage:
         """Context manager entry."""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, exc_type: Optional[Type[BaseException]], exc_val: Optional[BaseException], exc_tb: Optional[TracebackType]) -> None:
         """Context manager exit - securely clear encryption key from memory."""
         # Securely zero the encryption key
         if hasattr(self, "encryption_key") and self.encryption_key:
@@ -826,7 +826,7 @@ class HSMKeyStorage:
         token_label: str = "AmaCryptography",
         pin: Optional[str] = None,  # nosec B107
         slot_index: Optional[int] = None,
-    ):
+    ) -> None:
         """
         Initialize HSM connection.
 
