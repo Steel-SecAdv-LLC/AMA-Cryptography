@@ -50,7 +50,7 @@ AI Co-Architects:Eris | Eden | Veritas | X | Caduceus | Dev
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterator, List
+from typing import Dict, Iterator, List, Optional
 
 import pytest
 
@@ -259,6 +259,76 @@ def load_dilithium_kat_vectors(filepath: Path, max_vectors: int = 10) -> List[Di
 # =============================================================================
 # KAT Vector Availability Checks
 # =============================================================================
+
+
+@dataclass
+class FIPS204KATVector:
+    """
+    A FIPS 204 ML-DSA KAT test vector.
+
+    Fields from FIPS 204 .kat files:
+    - seed: 32-byte seed for deterministic key generation
+    - pk: Public key bytes
+    - sk: Secret key bytes
+    - mlen: Message length in bytes
+    - msg: Message bytes
+    - ctx_len: Context string length
+    - ctx: Context string bytes
+    - sig: Signature bytes (3309 for ML-DSA-65)
+    """
+
+    seed: bytes
+    pk: bytes
+    sk: bytes
+    mlen: int
+    msg: bytes
+    ctx_len: int
+    ctx: bytes
+    sig: bytes
+
+
+FIPS204_DIR = KAT_DIR / "fips204"
+
+
+def load_fips204_kat_vectors(filepath: Path, max_vectors: int = 10) -> List[FIPS204KATVector]:
+    """
+    Load FIPS 204 ML-DSA KAT vectors from a .kat file.
+
+    Args:
+        filepath: Path to the KAT .kat file
+        max_vectors: Maximum number of vectors to load
+
+    Returns:
+        List of FIPS204KATVector objects
+    """
+    vectors = []
+    for i, raw in enumerate(parse_kat_file(filepath)):
+        if i >= max_vectors:
+            break
+
+        try:
+            ctx_hex = raw.get("ctx", "")
+            vectors.append(
+                FIPS204KATVector(
+                    seed=bytes.fromhex(raw["seed"]),
+                    pk=bytes.fromhex(raw["pkey"]),
+                    sk=bytes.fromhex(raw["skey"]),
+                    mlen=int(raw["mlen"]),
+                    msg=bytes.fromhex(raw["msg"]) if raw["msg"] else b"",
+                    ctx_len=int(raw.get("ctx_len", 0)),
+                    ctx=bytes.fromhex(ctx_hex) if ctx_hex else b"",
+                    sig=bytes.fromhex(raw["sig"]),
+                )
+            )
+        except (KeyError, ValueError):
+            continue
+
+    return vectors
+
+
+def fips204_kat_available() -> bool:
+    """Check if FIPS 204 ML-DSA-65 KAT vectors are available."""
+    return (FIPS204_DIR / "ml_dsa_65.kat").exists()
 
 
 def kat_files_available() -> bool:
@@ -582,15 +652,14 @@ class TestMLDSAKATValidation:
         not dilithium_kat_available("dilithium3"),
         reason="Dilithium3 KAT vectors not available",
     )
-    def test_dilithium3_verify_kat_signature(self):
+    def test_dilithium3_roundtrip3_rejects_gracefully(self):
         """
-        Attempt to verify KAT signatures with KAT public keys.
+        Verify that pre-FIPS round-3 Dilithium3 KAT signatures are
+        correctly rejected by our FIPS 204 ML-DSA-65 backend.
 
-        The native C backend uses its own key serialization format
-        which differs from the NIST KAT vector format. This test
-        validates that verification either succeeds (interoperable
-        backend) or returns False (non-interoperable key format)
-        without crashing.
+        Round-3 Dilithium3 uses 3293-byte signatures (c_tilde=32, tr=48).
+        Our FIPS 204 backend uses 3309-byte signatures (c_tilde=48, tr=64).
+        These are incompatible — verify must return False without crashing.
         """
         vectors = load_dilithium_kat_vectors(ML_DSA_DIR / "dilithium3.rsp", max_vectors=5)
 
@@ -600,12 +669,41 @@ class TestMLDSAKATValidation:
             signature = kat.sm[:sig_len]
             message = kat.msg
 
-            # Verify using KAT public key — may return False if backend
-            # key format is not interoperable with NIST KAT vectors
+            # Must return False (size mismatch: 3293 != 3309)
             is_valid = dilithium_verify(message, signature, kat.pk)
-            # Assert result is a bool (backend handled gracefully)
-            assert isinstance(is_valid, bool), (
-                f"Vector {i}: dilithium_verify returned non-bool: {type(is_valid)}"
+            assert is_valid is False, (
+                f"Vector {i}: round-3 Dilithium3 signature should not verify "
+                f"against FIPS 204 ML-DSA-65 backend"
+            )
+
+    @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
+    @pytest.mark.skipif(
+        not fips204_kat_available(),
+        reason="FIPS 204 ML-DSA-65 KAT vectors not available",
+    )
+    def test_fips204_ml_dsa_65_verify_kat_signature(self):
+        """
+        Verify FIPS 204 ML-DSA-65 KAT signatures against KAT public keys.
+
+        The KAT vectors use the external signing interface (Algorithm 2)
+        which prepends 0x00 || len(ctx) || ctx to the message before
+        passing to the internal sign function (Algorithm 7). Our C backend
+        implements internal verify (Algorithm 8), so we reconstruct the
+        internal message format before calling dilithium_verify.
+        """
+        vectors = load_fips204_kat_vectors(
+            FIPS204_DIR / "ml_dsa_65.kat", max_vectors=10
+        )
+        assert len(vectors) >= 5, "Need at least 5 FIPS 204 KAT vectors"
+
+        for i, kat in enumerate(vectors):
+            # FIPS 204 external interface: M' = 0x00 || len(ctx) || ctx || msg
+            internal_msg = bytes([0x00, kat.ctx_len]) + kat.ctx + kat.msg
+
+            is_valid = dilithium_verify(internal_msg, kat.sig, kat.pk)
+            assert is_valid, (
+                f"Vector {i}: FIPS 204 ML-DSA-65 KAT signature verification "
+                f"failed (msg_len={kat.mlen}, ctx_len={kat.ctx_len})"
             )
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")

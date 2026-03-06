@@ -842,7 +842,7 @@ class TestMonitorIntegration:
     """Integration tests with full Ava Guardian ♱ system."""
 
     def test_end_to_end_monitoring(self):
-        """Test complete workflow with monitoring."""
+        """Test complete workflow with monitoring and baseline convergence."""
         # Import here to avoid circular dependency
         import sys
         from pathlib import Path
@@ -862,27 +862,32 @@ class TestMonitorIntegration:
         monitor = AvaGuardianMonitor(enabled=True)
         kms = generate_key_management_system("integration-test")
 
-        # Create monitored package
-        pkg = create_crypto_package(
-            MASTER_CODES_STR, MASTER_HELIX_PARAMS, kms, "test", monitor=monitor
-        )
+        # Run 32 create+verify cycles to exceed the 30-sample baseline threshold.
+        # The monitor requires 30+ timing samples per operation before populating
+        # baseline_stats for anomaly detection.
+        for cycle in range(32):
+            pkg = create_crypto_package(
+                MASTER_CODES_STR, MASTER_HELIX_PARAMS, kms, "test", monitor=monitor
+            )
 
-        # Verify monitored package
-        results = verify_crypto_package(
-            MASTER_CODES_STR,
-            MASTER_HELIX_PARAMS,
-            pkg,
-            kms.hmac_key,
-            monitor=monitor,
-        )
+            results = verify_crypto_package(
+                MASTER_CODES_STR,
+                MASTER_HELIX_PARAMS,
+                pkg,
+                kms.hmac_key,
+                monitor=monitor,
+            )
 
         # Core checks should pass (rfc3161 is None when no TSA is used)
         core_checks = {k: v for k, v in results.items() if v is not None}
         assert all(core_checks.values()), f"Failed checks: {results}"
 
-        # Monitor should be active
+        # Monitor should be active with populated baseline stats
         report = monitor.get_security_report()
         assert report["status"] == "active"
+        assert len(report["timing_baseline"]) > 0, (
+            "timing_baseline should be populated after 32 cycles"
+        )
 
 
 if __name__ == "__main__":
