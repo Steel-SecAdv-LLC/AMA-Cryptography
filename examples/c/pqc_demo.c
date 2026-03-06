@@ -63,7 +63,7 @@ static int demo_ml_dsa_65(void) {
     ctx = ava_context_init(AVA_ALG_ML_DSA_65);
     if (!ctx) {
         fprintf(stderr, "   ERROR: Failed to initialize context\n");
-        fprintf(stderr, "   (Is liboqs installed and was the library built with -DAVA_USE_LIBOQS=ON?)\n");
+        fprintf(stderr, "   (Was the library built with -DAVA_USE_NATIVE_PQC=ON?)\n");
         return -1;
     }
     printf("   OK: Context initialized\n\n");
@@ -76,7 +76,7 @@ static int demo_ml_dsa_65(void) {
     err = ava_keypair_generate(ctx, public_key, sizeof(public_key),
                                secret_key, sizeof(secret_key));
     if (err == AVA_ERROR_NOT_IMPLEMENTED) {
-        printf("   SKIPPED: PQC not available (build with -DAVA_USE_LIBOQS=ON)\n");
+        printf("   SKIPPED: PQC not available (build with -DAVA_USE_NATIVE_PQC=ON)\n");
         result = 1;  /* Not a failure, just not available */
         goto cleanup;
     } else if (err != AVA_SUCCESS) {
@@ -169,7 +169,7 @@ static int demo_kyber_1024(void) {
     ctx = ava_context_init(AVA_ALG_KYBER_1024);
     if (!ctx) {
         fprintf(stderr, "   ERROR: Failed to initialize context\n");
-        fprintf(stderr, "   (Is liboqs installed and was the library built with -DAVA_USE_LIBOQS=ON?)\n");
+        fprintf(stderr, "   (Was the library built with -DAVA_USE_NATIVE_PQC=ON?)\n");
         return -1;
     }
     printf("   OK: Context initialized\n\n");
@@ -182,7 +182,7 @@ static int demo_kyber_1024(void) {
     err = ava_keypair_generate(ctx, public_key, sizeof(public_key),
                                secret_key, sizeof(secret_key));
     if (err == AVA_ERROR_NOT_IMPLEMENTED) {
-        printf("   SKIPPED: PQC not available (build with -DAVA_USE_LIBOQS=ON)\n");
+        printf("   SKIPPED: PQC not available (build with -DAVA_USE_NATIVE_PQC=ON)\n");
         result = 1;
         goto cleanup;
     } else if (err != AVA_SUCCESS) {
@@ -257,8 +257,8 @@ int main(void) {
     printf("Ava Guardian Post-Quantum Cryptography Demo\n");
     printf("===========================================\n");
     printf("\nLibrary version: %s\n", ava_version_string());
-    printf("\nThis demo requires liboqs. Build with:\n");
-    printf("  cmake -DAVA_USE_LIBOQS=ON ..\n\n");
+    printf("\nBuild with native PQC:\n");
+    printf("  cmake -DAVA_USE_NATIVE_PQC=ON ..\n\n");
 
     /* Run ML-DSA-65 demo */
     ml_dsa_result = demo_ml_dsa_65();
@@ -273,10 +273,10 @@ int main(void) {
     printf("===========================================\n");
     printf("ML-DSA-65:   %s\n",
            ml_dsa_result == 0 ? "PASSED" :
-           ml_dsa_result == 1 ? "SKIPPED (liboqs not available)" : "FAILED");
+           ml_dsa_result == 1 ? "SKIPPED (native PQC not available)" : "FAILED");
     printf("Kyber-1024:  %s\n",
            kyber_result == 0 ? "PASSED" :
-           kyber_result == 1 ? "SKIPPED (liboqs not available)" : "FAILED");
+           kyber_result == 1 ? "SKIPPED (native PQC not available)" : "FAILED");
     printf("===========================================\n");
 
     /* Return failure if any test failed (not skipped) */

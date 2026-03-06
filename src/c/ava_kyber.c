@@ -37,11 +37,6 @@
 #include <stdint.h>
 #include <stdio.h>
 
-/* liboqs integration */
-#ifdef AVA_USE_LIBOQS
-#include <oqs/oqs.h>
-#endif
-
 /* Forward declarations from ava_sha3.c */
 extern ava_error_t ava_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
 extern ava_error_t ava_sha3_512(const uint8_t* input, size_t input_len, uint8_t* output);
@@ -340,8 +335,7 @@ static ava_error_t kyber_randombytes(uint8_t* buf, size_t len) {
 /**
  * Generate Kyber-1024 keypair
  *
- * When built with AVA_USE_LIBOQS, uses liboqs ML-KEM-1024 implementation.
- * When built with AVA_USE_NATIVE_PQC (default), uses the native implementation.
+ * Native ML-KEM-1024 implementation (FIPS 203 compliant).
  *
  * @param public_key Output buffer for public key (1568 bytes)
  * @param public_key_len Length of public key buffer
@@ -360,20 +354,7 @@ static ava_error_t kyber_keypair_generate(
         return AVA_ERROR_INVALID_PARAM;
     }
 
-#ifdef AVA_USE_LIBOQS
-    OQS_KEM *kem = OQS_KEM_new(OQS_KEM_alg_ml_kem_1024);
-    if (!kem) {
-        return AVA_ERROR_CRYPTO;
-    }
-
-    OQS_STATUS rc = OQS_KEM_keypair(kem, public_key, secret_key);
-    OQS_KEM_free(kem);
-
-    if (rc != OQS_SUCCESS) {
-        return AVA_ERROR_CRYPTO;
-    }
-    return AVA_SUCCESS;
-#elif defined(AVA_USE_NATIVE_PQC)
+#ifdef AVA_USE_NATIVE_PQC
     {
         /* Native Kyber-1024 key generation (NIST FIPS 203, Algorithm 15) */
         uint8_t d[32], buf[64];
@@ -532,8 +513,7 @@ static void kyber_cpapke_enc(uint8_t *ct, const uint8_t *m,
 /**
  * Encapsulate shared secret
  *
- * When built with AVA_USE_LIBOQS, uses liboqs ML-KEM-1024 implementation.
- * When built with AVA_USE_NATIVE_PQC (default), uses native implementation.
+ * Native ML-KEM-1024 implementation (FIPS 203 compliant).
  *
  * @param public_key Recipient's public key (1568 bytes)
  * @param public_key_len Length of public key
@@ -556,27 +536,7 @@ static ava_error_t kyber_encapsulate(
         return AVA_ERROR_INVALID_PARAM;
     }
 
-#ifdef AVA_USE_LIBOQS
-    if (*ciphertext_len < AVA_KYBER_1024_CIPHERTEXT_BYTES) {
-        *ciphertext_len = AVA_KYBER_1024_CIPHERTEXT_BYTES;
-        return AVA_ERROR_INVALID_PARAM;
-    }
-
-    OQS_KEM *kem = OQS_KEM_new(OQS_KEM_alg_ml_kem_1024);
-    if (!kem) {
-        return AVA_ERROR_CRYPTO;
-    }
-
-    OQS_STATUS rc = OQS_KEM_encaps(kem, ciphertext, shared_secret, public_key);
-    OQS_KEM_free(kem);
-
-    if (rc != OQS_SUCCESS) {
-        return AVA_ERROR_CRYPTO;
-    }
-
-    *ciphertext_len = AVA_KYBER_1024_CIPHERTEXT_BYTES;
-    return AVA_SUCCESS;
-#elif defined(AVA_USE_NATIVE_PQC)
+#ifdef AVA_USE_NATIVE_PQC
     {
         /* Native Kyber-1024 encapsulation (NIST FIPS 203, Algorithm 17) */
         uint8_t m[32], kr[64];
@@ -631,8 +591,7 @@ static ava_error_t kyber_encapsulate(
 /**
  * Decapsulate shared secret
  *
- * When built with AVA_USE_LIBOQS, uses liboqs ML-KEM-1024 implementation.
- * When built with AVA_USE_NATIVE_PQC (default), uses native implementation.
+ * Native ML-KEM-1024 implementation (FIPS 203 compliant).
  *
  * Uses implicit rejection for IND-CCA2 security: returns a deterministic
  * but random-looking value if decapsulation fails.
@@ -659,20 +618,7 @@ static ava_error_t kyber_decapsulate(
         return AVA_ERROR_INVALID_PARAM;
     }
 
-#ifdef AVA_USE_LIBOQS
-    OQS_KEM *kem = OQS_KEM_new(OQS_KEM_alg_ml_kem_1024);
-    if (!kem) {
-        return AVA_ERROR_CRYPTO;
-    }
-
-    OQS_STATUS rc = OQS_KEM_decaps(kem, shared_secret, ciphertext, secret_key);
-    OQS_KEM_free(kem);
-
-    if (rc != OQS_SUCCESS) {
-        return AVA_ERROR_CRYPTO;
-    }
-    return AVA_SUCCESS;
-#elif defined(AVA_USE_NATIVE_PQC)
+#ifdef AVA_USE_NATIVE_PQC
     {
         /* Native Kyber-1024 decapsulation (NIST FIPS 203, Algorithm 18) */
         /* Uses implicit rejection for IND-CCA2 security */

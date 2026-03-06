@@ -387,7 +387,7 @@ class TestMLKEMKATValidation:
     when given known inputs from NIST KAT vectors.
 
     Note: Full KAT validation requires deterministic key generation from seeds,
-    which is not exposed by liboqs-python's high-level API. These tests validate
+    which requires low-level seed access. These tests validate
     what is possible with the available API:
     - Key size validation against KAT vectors
     - Encapsulation/decapsulation round-trip with KAT keys (where API permits)
@@ -518,7 +518,7 @@ class TestMLDSAKATValidation:
             kat.pk
         ), f"Public key size mismatch: {len(keypair.public_key)} vs KAT {len(kat.pk)}"
 
-        # Note: liboqs secret key may include public key, so size may differ
+        # Note: secret key may include public key, so size may differ
         # The important thing is that it's at least as large as the KAT sk
         assert len(keypair.private_key) >= len(
             kat.sk
@@ -533,7 +533,7 @@ class TestMLDSAKATValidation:
         """Verify Dilithium3 signature size is within expected range.
 
         Note: The KAT vectors are from the original Dilithium submission (3293 bytes),
-        while liboqs implements the final FIPS 204 ML-DSA standard (3309 bytes).
+        while the native implementation follows FIPS 204 ML-DSA standard (3309 bytes).
         Both are valid implementations of the same algorithm family.
         """
         vectors = load_dilithium_kat_vectors(ML_DSA_DIR / "dilithium3.rsp", max_vectors=1)

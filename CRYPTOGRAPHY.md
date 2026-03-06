@@ -202,9 +202,8 @@ All key material is securely wiped after use via `secure_wipe()` which:
 
 ### Backend Selection
 
-PQC backends are selected at runtime:
-1. **Native C library** (default) - Full native implementations of ML-DSA-65, Kyber-1024, SPHINCS+-256f (NIST KAT validated)
-2. **liboqs-python** (legacy fallback) - Open Quantum Safe implementation
+PQC is provided by the native C library:
+1. **Native C library** - Full native implementations of ML-DSA-65, Kyber-1024, SPHINCS+-256f (NIST FIPS 203/204/205 KAT validated)
 
 Check availability with:
 ```python

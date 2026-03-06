@@ -1173,6 +1173,10 @@ ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
 
     /* Compute mu = H(tr || M) */
     {
+        /* Guard against integer overflow in allocation size */
+        if (message_len > SIZE_MAX - DIL_TRBYTES) {
+            return AVA_ERROR_INVALID_PARAM;
+        }
         uint8_t *mu_input = (uint8_t *)malloc(DIL_TRBYTES + message_len);
         if (!mu_input) {
             return AVA_ERROR_MEMORY;
@@ -1392,6 +1396,10 @@ ava_error_t ava_dilithium_verify(const uint8_t *message, size_t message_len,
 
     /* Compute mu = H(tr || M) */
     {
+        /* Guard against integer overflow in allocation size */
+        if (message_len > SIZE_MAX - DIL_TRBYTES) {
+            return AVA_ERROR_VERIFY_FAILED;
+        }
         uint8_t *mu_input = (uint8_t *)malloc(DIL_TRBYTES + message_len);
         if (!mu_input) {
             return AVA_ERROR_MEMORY;
@@ -1399,6 +1407,7 @@ ava_error_t ava_dilithium_verify(const uint8_t *message, size_t message_len,
         memcpy(mu_input, tr, DIL_TRBYTES);
         memcpy(mu_input + DIL_TRBYTES, message, message_len);
         ava_shake256(mu_input, DIL_TRBYTES + message_len, mu, DIL_CRHBYTES);
+        ava_secure_memzero(mu_input, DIL_TRBYTES + message_len);
         free(mu_input);
     }
 

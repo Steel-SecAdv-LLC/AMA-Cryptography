@@ -886,8 +886,7 @@ class TestMonitorIntegration:
             assert len(report["timing_baseline"]) > 0
 
         except (ImportError, Exception) as e:
-            # Skip if imports fail (missing dependencies) or if there are
-            # version mismatches (e.g., liboqs version warnings)
+            # Skip if imports fail (missing dependencies)
             pytest.skip(f"Integration test requires full Ava Guardian ♱ system: {e}")
 
 

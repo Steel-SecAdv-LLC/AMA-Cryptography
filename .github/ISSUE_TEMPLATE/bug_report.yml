@@ -121,8 +121,8 @@ body:
       description: List versions of installed cryptographic libraries
       placeholder: |
         cryptography: 41.0.5
-        liboqs-python: 0.8.0
-        (or run: pip list | grep -E 'cryptography|oqs|pqcrypto')
+        native C library: built with AVA_USE_NATIVE_PQC=ON
+        (or run: pip list | grep cryptography)
       render: text
     validations:
       required: true
@@ -134,9 +134,7 @@ body:
       description: Which quantum-resistant library are you using (if any)?
       options:
         - None
-        - liboqs-python
-        - pqcrypto
-        - Both installed
+        - Native C backend (AVA_USE_NATIVE_PQC=ON)
     validations:
       required: true
 

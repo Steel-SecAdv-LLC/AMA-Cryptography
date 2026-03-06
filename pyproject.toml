@@ -157,7 +157,6 @@ filterwarnings = [
     "error",
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",
-    "ignore:liboqs version.*differs from liboqs-python:UserWarning",
 ]
 
 # Coverage configuration

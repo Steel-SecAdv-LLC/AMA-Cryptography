@@ -380,9 +380,8 @@ pip install ava-guardian
 
 **With Quantum Resistance (Recommended):**
 ```bash
-pip install ava-guardian[quantum]
-# or
-pip install liboqs-python
+pip install ava-guardian
+cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build
 ```
 
 **Development Installation:**

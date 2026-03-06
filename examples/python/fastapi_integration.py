@@ -19,7 +19,7 @@ Features:
 
 Usage:
     pip install fastapi uvicorn cryptography
-    pip install liboqs-python  # Optional: for quantum-resistant signatures
+    # Optional: build native C library for quantum-resistant signatures
     python fastapi_integration.py
 
 Then visit:
@@ -223,7 +223,7 @@ async def sign_data(request: SignRequest):
         if not capabilities.get("dilithium_available"):
             raise HTTPException(
                 status_code=400,
-                detail="ML-DSA-65 not available. Install liboqs-python.",
+                detail="ML-DSA-65 not available. Build native C library.",
             )
         crypto = AvaGuardianCrypto(algorithm=AlgorithmType.ML_DSA_65)
         keypair = crypto.generate_keypair()

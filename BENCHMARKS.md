@@ -29,7 +29,7 @@ This document provides **transparent, honest performance metrics** for Ava Guard
 - **CPU**: Modern multi-core processor (AVX2 capable)
 - **RAM**: 8GB+
 - **Python**: 3.8-3.12
-- **Dilithium Backend**: liboqs (recommended) or pqcrypto
+- **Dilithium Backend**: Native C (FIPS 204 compliant)
 
 ---
 
@@ -42,7 +42,7 @@ This document provides **transparent, honest performance metrics** for Ava Guard
 | Master Secret (256-bit) | ~0.001 | >1.1M | Measured | CSPRNG entropy |
 | HKDF Derivation | ~0.08 | ~13k | Measured | SHA3-256 based |
 | Ed25519 KeyGen | ~0.04 | ~22k | Measured | Classical signatures |
-| Dilithium KeyGen | ~0.09 | ~11k | Measured | Post-quantum (liboqs) |
+| Dilithium KeyGen | ~0.09 | ~11k | Measured | Post-quantum (native) |
 | **Full KMS** | **~0.23** | **~4.3k** | Measured | Complete key suite |
 
 **Analysis**: Full key management system generation in <0.25ms, suitable for on-demand key creation.
@@ -302,7 +302,7 @@ Ava Guardian ♱ delivers **high-performance cryptography** with:
 3. RFC 8032: Ed25519 - https://datatracker.ietf.org/doc/html/rfc8032
 4. RFC 2104: HMAC - https://datatracker.ietf.org/doc/html/rfc2104
 5. RFC 5869: HKDF - https://datatracker.ietf.org/doc/html/rfc5869
-6. liboqs benchmarks: https://github.com/open-quantum-safe/liboqs
+6. NIST FIPS 203: ML-KEM - https://csrc.nist.gov/pubs/fips/203/final
 
 ---
 

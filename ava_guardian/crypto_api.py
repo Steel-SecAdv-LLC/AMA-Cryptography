@@ -124,10 +124,9 @@ class AlgorithmType(Enum):
 class CryptoBackend(Enum):
     """Available implementation backends"""
 
-    C_LIBRARY = auto()  # libava_guardian.so (fastest)
+    C_LIBRARY = auto()  # libava_guardian.so (fastest, native PQC)
     CYTHON = auto()  # Cython optimized (fast)
     PURE_PYTHON = auto()  # Pure Python (fallback)
-    LIBOQS = auto()  # Legacy (deprecated — use C_LIBRARY with native PQC)
 
 
 @dataclass
@@ -261,7 +260,7 @@ class MLDSAProvider(CryptoProvider):
     Standard: NIST FIPS 204 (ML-DSA)
     """
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.LIBOQS):
+    def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY):
         self.backend = backend
         self.algorithm = AlgorithmType.ML_DSA_65
         self._available = DILITHIUM_AVAILABLE
@@ -997,7 +996,7 @@ def get_pqc_capabilities() -> Dict[str, Any]:
         - dilithium_available: bool
         - kyber_available: bool
         - sphincs_available: bool
-        - backend: "native" or "liboqs" or None
+        - backend: "native" or None
         - algorithms: dict of algorithm availability
         - install_instructions: str (if unavailable)
 

@@ -50,54 +50,54 @@ from ava_guardian.pqc_backends import (
 
 
 class TestDilithiumConstants:
-    """Test ML-DSA-65 (Dilithium) constants from liboqs."""
+    """Test ML-DSA-65 (Dilithium) constants per NIST FIPS."""
 
     def test_dilithium_public_key_size(self):
-        """Verify ML-DSA-65 public key size matches liboqs specification."""
+        """Verify ML-DSA-65 public key size matches NIST FIPS specification."""
         assert DILITHIUM_PUBLIC_KEY_BYTES == 1952
 
     def test_dilithium_secret_key_size(self):
-        """Verify ML-DSA-65 secret key size matches liboqs specification."""
+        """Verify ML-DSA-65 secret key size matches NIST FIPS specification."""
         assert DILITHIUM_SECRET_KEY_BYTES == 4032
 
     def test_dilithium_signature_size(self):
-        """Verify ML-DSA-65 signature size matches liboqs specification."""
+        """Verify ML-DSA-65 signature size matches NIST FIPS specification."""
         assert DILITHIUM_SIGNATURE_BYTES == 3309
 
 
 class TestKyberConstants:
-    """Test Kyber-1024 (ML-KEM) constants from liboqs."""
+    """Test Kyber-1024 (ML-KEM) constants per NIST FIPS."""
 
     def test_kyber_public_key_size(self):
-        """Verify Kyber-1024 public key size matches liboqs specification."""
+        """Verify Kyber-1024 public key size matches NIST FIPS specification."""
         assert KYBER_PUBLIC_KEY_BYTES == 1568
 
     def test_kyber_secret_key_size(self):
-        """Verify Kyber-1024 secret key size matches liboqs specification."""
+        """Verify Kyber-1024 secret key size matches NIST FIPS specification."""
         assert KYBER_SECRET_KEY_BYTES == 3168
 
     def test_kyber_ciphertext_size(self):
-        """Verify Kyber-1024 ciphertext size matches liboqs specification."""
+        """Verify Kyber-1024 ciphertext size matches NIST FIPS specification."""
         assert KYBER_CIPHERTEXT_BYTES == 1568
 
     def test_kyber_shared_secret_size(self):
-        """Verify Kyber-1024 shared secret size matches liboqs specification."""
+        """Verify Kyber-1024 shared secret size matches NIST FIPS specification."""
         assert KYBER_SHARED_SECRET_BYTES == 32
 
 
 class TestSphincsConstants:
-    """Test SPHINCS+-SHA2-256f-simple constants from liboqs."""
+    """Test SPHINCS+-SHA2-256f-simple constants per NIST FIPS."""
 
     def test_sphincs_public_key_size(self):
-        """Verify SPHINCS+-256f public key size matches liboqs specification."""
+        """Verify SPHINCS+-256f public key size matches NIST FIPS specification."""
         assert SPHINCS_PUBLIC_KEY_BYTES == 64
 
     def test_sphincs_secret_key_size(self):
-        """Verify SPHINCS+-256f secret key size matches liboqs specification."""
+        """Verify SPHINCS+-256f secret key size matches NIST FIPS specification."""
         assert SPHINCS_SECRET_KEY_BYTES == 128
 
     def test_sphincs_signature_size(self):
-        """Verify SPHINCS+-256f signature size matches liboqs specification."""
+        """Verify SPHINCS+-256f signature size matches NIST FIPS specification."""
         assert SPHINCS_SIGNATURE_BYTES == 49856
 
 
@@ -105,8 +105,8 @@ class TestBackendAvailability:
     """Test backend availability detection."""
 
     def test_dilithium_backend_type(self):
-        """Verify Dilithium backend is either liboqs, pqcrypto, or None."""
-        assert DILITHIUM_BACKEND in ("liboqs", "pqcrypto", None)
+        """Verify Dilithium backend is either native or None."""
+        assert DILITHIUM_BACKEND in ("native", None)
 
     def test_dilithium_availability_consistency(self):
         """Verify DILITHIUM_AVAILABLE matches backend presence."""
@@ -116,8 +116,8 @@ class TestBackendAvailability:
             assert DILITHIUM_AVAILABLE is False
 
     def test_kyber_backend_type(self):
-        """Verify Kyber backend is either liboqs or None."""
-        assert KYBER_BACKEND in ("liboqs", None)
+        """Verify Kyber backend is either native or None."""
+        assert KYBER_BACKEND in ("native", None)
 
     def test_kyber_availability_consistency(self):
         """Verify KYBER_AVAILABLE matches backend presence."""
@@ -127,8 +127,8 @@ class TestBackendAvailability:
             assert KYBER_AVAILABLE is False
 
     def test_sphincs_backend_type(self):
-        """Verify SPHINCS+ backend is either liboqs or None."""
-        assert SPHINCS_BACKEND in ("liboqs", None)
+        """Verify SPHINCS+ backend is either native or None."""
+        assert SPHINCS_BACKEND in ("native", None)
 
     def test_sphincs_availability_consistency(self):
         """Verify SPHINCS_AVAILABLE matches backend presence."""

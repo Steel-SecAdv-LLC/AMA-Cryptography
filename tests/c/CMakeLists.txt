@@ -21,7 +21,7 @@ add_ava_test(test_hkdf test_hkdf.c)
 add_ava_test(test_ed25519 test_ed25519.c)
 
 # PQC Known Answer Tests (KAT)
-if(AVA_USE_NATIVE_PQC AND NOT AVA_USE_LIBOQS)
+if(AVA_USE_NATIVE_PQC)
     add_executable(test_kat test_kat.c)
     if(AVA_BUILD_SHARED)
         target_link_libraries(test_kat ava_guardian_shared)

@@ -84,56 +84,19 @@ AVA_REQUIRE_CONSTANT_TIME = os.getenv("AVA_REQUIRE_CONSTANT_TIME", "").lower() i
     "on",
 }
 
-# Backend detection
+# Backend detection — native C library only
 _DILITHIUM_AVAILABLE = False
 _KYBER_AVAILABLE = False
 _SPHINCS_AVAILABLE = False
 _DILITHIUM_BACKEND: Optional[str] = None
 _KYBER_BACKEND: Optional[str] = None
 _SPHINCS_BACKEND: Optional[str] = None
-_oqs_module: Any = None
-try:
-    # Try liboqs-python first (recommended - fast C implementation)
-    import oqs as _oqs_module  # type: ignore[no-redef]
-
-    _DILITHIUM_AVAILABLE = True
-    _DILITHIUM_BACKEND = "liboqs"
-
-    # Check for Kyber-1024 support
-    try:
-        _test_kem = _oqs_module.KeyEncapsulation("Kyber1024")
-        _KYBER_AVAILABLE = True
-        _KYBER_BACKEND = "liboqs"
-        del _test_kem
-    except Exception:
-        _KYBER_AVAILABLE = False
-
-    # Check for SPHINCS+-SHA2-256f-simple support
-    try:
-        _test_sig = _oqs_module.Signature("SPHINCS+-SHA2-256f-simple")
-        _SPHINCS_AVAILABLE = True
-        _SPHINCS_BACKEND = "liboqs"
-        del _test_sig
-    except Exception:
-        _SPHINCS_AVAILABLE = False
-
-except BaseException:
-    # BaseException catches:
-    # - ImportError: package not installed
-    # - RuntimeError: package installed but shared library missing
-    # - OSError: library loading issues
-    # - SystemExit: liboqs-python auto-install failure (critical for CI)
-    # We use BaseException here specifically to catch SystemExit which
-    # liboqs-python raises when it fails to auto-install the native library.
-    _oqs_module = None
-    _DILITHIUM_AVAILABLE = False
-    _DILITHIUM_BACKEND = None
 
 # ============================================================================
 # NATIVE C BACKEND DETECTION
 # ============================================================================
-# If liboqs is not available, attempt to load the native Ava Guardian shared
-# library which provides ML-DSA-65, Kyber-1024, and SPHINCS+-256f via pure C.
+# Load the native Ava Guardian shared library which provides ML-DSA-65,
+# Kyber-1024, and SPHINCS+-256f via pure C (FIPS 203/204/205 compliant).
 
 _native_lib: Any = None
 
@@ -259,15 +222,14 @@ def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
-if not _DILITHIUM_AVAILABLE:
-    _native_lib = _find_native_library()
-    if _native_lib is not None and _setup_native_ctypes(_native_lib):
-        _DILITHIUM_AVAILABLE = True
-        _DILITHIUM_BACKEND = "native"
-        _KYBER_AVAILABLE = True
-        _KYBER_BACKEND = "native"
-        _SPHINCS_AVAILABLE = True
-        _SPHINCS_BACKEND = "native"
+_native_lib = _find_native_library()
+if _native_lib is not None and _setup_native_ctypes(_native_lib):
+    _DILITHIUM_AVAILABLE = True
+    _DILITHIUM_BACKEND = "native"
+    _KYBER_AVAILABLE = True
+    _KYBER_BACKEND = "native"
+    _SPHINCS_AVAILABLE = True
+    _SPHINCS_BACKEND = "native"
 
 
 # Public API for checking availability
@@ -496,13 +458,7 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
     if not DILITHIUM_AVAILABLE:
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
 
-    if DILITHIUM_BACKEND == "liboqs" and _oqs_module is not None:
-        sig = _oqs_module.Signature("ML-DSA-65")
-        public_key = sig.generate_keypair()
-        private_key = sig.export_secret_key()
-        return DilithiumKeyPair(private_key=private_key, public_key=public_key)
-
-    elif DILITHIUM_BACKEND == "native" and _native_lib is not None:
+    if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         pk_buf = ctypes.create_string_buffer(DILITHIUM_PUBLIC_KEY_BYTES)
         sk_buf = ctypes.create_string_buffer(DILITHIUM_SECRET_KEY_BYTES)
         rc = _native_lib.ava_dilithium_keypair(pk_buf, sk_buf)
@@ -524,7 +480,7 @@ def dilithium_sign(message: bytes, private_key: bytes) -> bytes:
         private_key: Dilithium private key (4032 bytes)
 
     Returns:
-        Dilithium signature (3293 bytes)
+        Dilithium signature (3309 bytes)
 
     Raises:
         QuantumSignatureUnavailableError: If no Dilithium backend is available
@@ -532,12 +488,7 @@ def dilithium_sign(message: bytes, private_key: bytes) -> bytes:
     if not DILITHIUM_AVAILABLE:
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
 
-    if DILITHIUM_BACKEND == "liboqs" and _oqs_module is not None:
-        sig = _oqs_module.Signature("ML-DSA-65")
-        sig.secret_key = private_key
-        return cast(bytes, sig.sign(message))
-
-    elif DILITHIUM_BACKEND == "native" and _native_lib is not None:
+    if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(DILITHIUM_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(0)
         rc = _native_lib.ava_dilithium_sign(
@@ -572,16 +523,7 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
     if not DILITHIUM_AVAILABLE:
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
 
-    if DILITHIUM_BACKEND == "liboqs" and _oqs_module is not None:
-        try:
-            sig = _oqs_module.Signature("ML-DSA-65")
-            return cast(bool, sig.verify(message, signature, public_key))
-        except (
-            Exception
-        ):  # nosec B110 - intentional broad catch to return False on verification errors
-            return False
-
-    elif DILITHIUM_BACKEND == "native" and _native_lib is not None:
+    if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ava_dilithium_verify(
             message, ctypes.c_size_t(len(message)),
             signature, ctypes.c_size_t(len(signature)),
@@ -620,13 +562,7 @@ def generate_kyber_keypair() -> KyberKeyPair:
     if not KYBER_AVAILABLE:
         raise KyberUnavailableError(_KYBER_UNAVAILABLE_MSG)
 
-    if KYBER_BACKEND == "liboqs" and _oqs_module is not None:
-        kem = _oqs_module.KeyEncapsulation("Kyber1024")
-        public_key = kem.generate_keypair()
-        secret_key = kem.export_secret_key()
-        return KyberKeyPair(secret_key=secret_key, public_key=public_key)
-
-    elif KYBER_BACKEND == "native" and _native_lib is not None:
+    if KYBER_BACKEND == "native" and _native_lib is not None:
         pk_buf = ctypes.create_string_buffer(KYBER_PUBLIC_KEY_BYTES)
         sk_buf = ctypes.create_string_buffer(KYBER_SECRET_KEY_BYTES)
         rc = _native_lib.ava_kyber_keypair(
@@ -677,12 +613,7 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
             f"got {len(public_key)}"
         )
 
-    if KYBER_BACKEND == "liboqs" and _oqs_module is not None:
-        kem = _oqs_module.KeyEncapsulation("Kyber1024")
-        ciphertext, shared_secret = kem.encap_secret(public_key)
-        return KyberEncapsulation(ciphertext=ciphertext, shared_secret=shared_secret)
-
-    elif KYBER_BACKEND == "native" and _native_lib is not None:
+    if KYBER_BACKEND == "native" and _native_lib is not None:
         ct_buf = ctypes.create_string_buffer(KYBER_CIPHERTEXT_BYTES)
         ct_len = ctypes.c_size_t(0)
         ss_buf = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
@@ -743,13 +674,7 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: bytes) -> bytes:
             f"got {len(secret_key)}"
         )
 
-    if KYBER_BACKEND == "liboqs" and _oqs_module is not None:
-        kem = _oqs_module.KeyEncapsulation("Kyber1024")
-        kem.secret_key = secret_key
-        shared_secret = kem.decap_secret(ciphertext)
-        return cast(bytes, shared_secret)
-
-    elif KYBER_BACKEND == "native" and _native_lib is not None:
+    if KYBER_BACKEND == "native" and _native_lib is not None:
         ss_buf = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
         rc = _native_lib.ava_kyber_decapsulate(
             ciphertext, ctypes.c_size_t(len(ciphertext)),
@@ -794,13 +719,7 @@ def generate_sphincs_keypair() -> SphincsKeyPair:
     if not SPHINCS_AVAILABLE:
         raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
 
-    if SPHINCS_BACKEND == "liboqs" and _oqs_module is not None:
-        sig = _oqs_module.Signature("SPHINCS+-SHA2-256f-simple")
-        public_key = sig.generate_keypair()
-        secret_key = sig.export_secret_key()
-        return SphincsKeyPair(secret_key=secret_key, public_key=public_key)
-
-    elif SPHINCS_BACKEND == "native" and _native_lib is not None:
+    if SPHINCS_BACKEND == "native" and _native_lib is not None:
         pk_buf = ctypes.create_string_buffer(SPHINCS_PUBLIC_KEY_BYTES)
         sk_buf = ctypes.create_string_buffer(SPHINCS_SECRET_KEY_BYTES)
         rc = _native_lib.ava_sphincs_keypair(pk_buf, sk_buf)
@@ -846,12 +765,7 @@ def sphincs_sign(message: bytes, secret_key: bytes) -> bytes:
             f"got {len(secret_key)}"
         )
 
-    if SPHINCS_BACKEND == "liboqs" and _oqs_module is not None:
-        sig = _oqs_module.Signature("SPHINCS+-SHA2-256f-simple")
-        sig.secret_key = secret_key
-        return cast(bytes, sig.sign(message))
-
-    elif SPHINCS_BACKEND == "native" and _native_lib is not None:
+    if SPHINCS_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(SPHINCS_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(0)
         rc = _native_lib.ava_sphincs_sign(
@@ -901,14 +815,7 @@ def sphincs_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
             f"got {len(public_key)}"
         )
 
-    if SPHINCS_BACKEND == "liboqs" and _oqs_module is not None:
-        try:
-            sig = _oqs_module.Signature("SPHINCS+-SHA2-256f-simple")
-            return cast(bool, sig.verify(message, signature, public_key))
-        except Exception:  # nosec B110 - intentional broad catch for signature verification
-            return False
-
-    elif SPHINCS_BACKEND == "native" and _native_lib is not None:
+    if SPHINCS_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ava_sphincs_verify(
             message, ctypes.c_size_t(len(message)),
             signature, ctypes.c_size_t(len(signature)),

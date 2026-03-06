@@ -71,9 +71,9 @@ class TestCryptoBackend:
         """Verify PURE_PYTHON backend exists."""
         assert hasattr(CryptoBackend, "PURE_PYTHON")
 
-    def test_liboqs_exists(self):
-        """Verify LIBOQS backend exists."""
-        assert hasattr(CryptoBackend, "LIBOQS")
+    def test_c_library_exists(self):
+        """Verify C_LIBRARY backend exists."""
+        assert hasattr(CryptoBackend, "C_LIBRARY")
 
 
 class TestKeyPairDataclass:
