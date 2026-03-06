@@ -1,4 +1,4 @@
-# Contributing to Ava Guardian ♱
+# Contributing to AMA Cryptography ♱
 
 ## Document Information
 
@@ -13,7 +13,7 @@
 
 ## Overview
 
-This document provides guidelines for contributing to the Ava Guardian ♱ quantum-resistant cryptographic protection system. Ava Guardian ♱ is released under the Apache License 2.0 as free and open-source software, accessible for universal use as a knowledge vault and bridge to cryptographic frontiers.
+This document provides guidelines for contributing to the AMA Cryptography ♱ quantum-resistant cryptographic protection system. AMA Cryptography ♱ is released under the Apache License 2.0 as free and open-source software, accessible for universal use as a knowledge vault and bridge to cryptographic frontiers.
 
 ---
 
@@ -76,8 +76,8 @@ Please **DO NOT** submit pull requests that:
 
 ```bash
 # Fork the repository on GitHub, then clone your fork
-git clone https://github.com/YOUR_USERNAME/Ava-Guardian.git
-cd Ava-Guardian
+git clone https://github.com/YOUR_USERNAME/AMA-Cryptography.git
+cd AMA-Cryptography
 ```
 
 ### 2. Create Development Environment
@@ -92,7 +92,7 @@ pip install --upgrade pip
 pip install cryptography
 
 # Build native PQC C library (recommended — zero external PQC dependencies)
-cmake -B build -DAVA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release && cmake --build build
+cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release && cmake --build build
 
 # Install development tools
 pip install -e ".[dev]"  # Installs pytest, black, flake8, mypy, isort

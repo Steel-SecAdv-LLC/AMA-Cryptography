@@ -15,103 +15,103 @@
  */
 
 /**
- * @file ava_core.c
- * @brief Core Ava Guardian ♱ context and lifecycle management
+ * @file ama_core.c
+ * @brief Core AMA Cryptography ♱ context and lifecycle management
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2025-12-06
  *
  * PQC DISPATCH
  * ============
  * This file dispatches PQC operations to the native C backend:
- * - AVA_USE_NATIVE_PQC (default): Uses native C implementations from
- *   ava_dilithium.c, ava_kyber.c, and ava_sphincs.c
+ * - AMA_USE_NATIVE_PQC (default): Uses native C implementations from
+ *   ama_dilithium.c, ama_kyber.c, and ama_sphincs.c
  * - All implementations pass NIST FIPS 203/204/205 KAT validation
  *
  * Build (default):
- *   cmake -DAVA_USE_NATIVE_PQC=ON ..
+ *   cmake -DAMA_USE_NATIVE_PQC=ON ..
  */
 
-#include "../include/ava_guardian.h"
+#include "../include/ama_cryptography.h"
 #include <stdlib.h>
 #include <string.h>
 
 /* Native PQC implementations */
-#ifdef AVA_USE_NATIVE_PQC
-extern ava_error_t ava_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key);
-extern ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
+#ifdef AMA_USE_NATIVE_PQC
+extern ama_error_t ama_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key);
+extern ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len,
                                        const uint8_t *message, size_t message_len,
                                        const uint8_t *secret_key);
-extern ava_error_t ava_dilithium_verify(const uint8_t *message, size_t message_len,
+extern ama_error_t ama_dilithium_verify(const uint8_t *message, size_t message_len,
                                          const uint8_t *signature, size_t signature_len,
                                          const uint8_t *public_key);
 
-extern ava_error_t ava_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key);
-extern ava_error_t ava_sphincs_sign(uint8_t *signature, size_t *signature_len,
+extern ama_error_t ama_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key);
+extern ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
                                      const uint8_t *message, size_t message_len,
                                      const uint8_t *secret_key);
-extern ava_error_t ava_sphincs_verify(const uint8_t *message, size_t message_len,
+extern ama_error_t ama_sphincs_verify(const uint8_t *message, size_t message_len,
                                        const uint8_t *signature, size_t signature_len,
                                        const uint8_t *public_key);
 #endif
 
 /**
- * Ava Guardian ♱ context structure (opaque)
+ * AMA Cryptography ♱ context structure (opaque)
  */
-struct ava_context_t {
+struct ama_context_t {
     ava_algorithm_t algorithm;
     void* algorithm_ctx;  /* Algorithm-specific context */
     uint32_t magic;       /* Magic number for validation */
 };
 
-#define AVA_CONTEXT_MAGIC 0x41564147  /* "AVAG" */
+#define AMA_CONTEXT_MAGIC 0x41564147  /* "AVAG" */
 
 /**
  * Version information
  */
-const char* ava_version_string(void) {
-    return AVA_GUARDIAN_VERSION_STRING;
+const char* ama_version_string(void) {
+    return AMA_CRYPTOGRAPHY_VERSION_STRING;
 }
 
-void ava_version_number(int* major, int* minor, int* patch) {
-    if (major) *major = AVA_GUARDIAN_VERSION_MAJOR;
-    if (minor) *minor = AVA_GUARDIAN_VERSION_MINOR;
-    if (patch) *patch = AVA_GUARDIAN_VERSION_PATCH;
+void ama_version_number(int* major, int* minor, int* patch) {
+    if (major) *major = AMA_CRYPTOGRAPHY_VERSION_MAJOR;
+    if (minor) *minor = AMA_CRYPTOGRAPHY_VERSION_MINOR;
+    if (patch) *patch = AMA_CRYPTOGRAPHY_VERSION_PATCH;
 }
 
 /**
- * Initialize Ava Guardian ♱ context
+ * Initialize AMA Cryptography ♱ context
  */
-ava_context_t* ava_context_init(ava_algorithm_t algorithm) {
-    ava_context_t* ctx;
+ama_context_t* ama_context_init(ava_algorithm_t algorithm) {
+    ama_context_t* ctx;
 
     /* Validate algorithm */
-    if (algorithm < AVA_ALG_ML_DSA_65 || algorithm > AVA_ALG_HYBRID) {
+    if (algorithm < AMA_ALG_ML_DSA_65 || algorithm > AMA_ALG_HYBRID) {
         return NULL;
     }
 
     /* Allocate context */
-    ctx = (ava_context_t*)calloc(1, sizeof(ava_context_t));
+    ctx = (ama_context_t*)calloc(1, sizeof(ama_context_t));
     if (!ctx) {
         return NULL;
     }
 
     ctx->algorithm = algorithm;
-    ctx->magic = AVA_CONTEXT_MAGIC;
+    ctx->magic = AMA_CONTEXT_MAGIC;
     ctx->algorithm_ctx = NULL;
 
     return ctx;
 }
 
 /**
- * Free Ava Guardian ♱ context
+ * Free AMA Cryptography ♱ context
  */
-void ava_context_free(ava_context_t* ctx) {
+void ama_context_free(ama_context_t* ctx) {
     if (!ctx) {
         return;
     }
 
     /* Validate magic number */
-    if (ctx->magic != AVA_CONTEXT_MAGIC) {
+    if (ctx->magic != AMA_CONTEXT_MAGIC) {
         return;
     }
 
@@ -122,7 +122,7 @@ void ava_context_free(ava_context_t* ctx) {
     }
 
     /* Scrub context */
-    ava_secure_memzero(ctx, sizeof(ava_context_t));
+    ama_secure_memzero(ctx, sizeof(ama_context_t));
 
     /* Free memory */
     free(ctx);
@@ -131,8 +131,8 @@ void ava_context_free(ava_context_t* ctx) {
 /**
  * Validate context
  */
-static inline int validate_context(const ava_context_t* ctx) {
-    return (ctx != NULL && ctx->magic == AVA_CONTEXT_MAGIC);
+static inline int validate_context(const ama_context_t* ctx) {
+    return (ctx != NULL && ctx->magic == AMA_CONTEXT_MAGIC);
 }
 
 /**
@@ -145,28 +145,28 @@ static void get_key_sizes(
     size_t* signature_size
 ) {
     switch (alg) {
-        case AVA_ALG_ML_DSA_65:
-            *public_key_size = AVA_ML_DSA_65_PUBLIC_KEY_BYTES;
-            *secret_key_size = AVA_ML_DSA_65_SECRET_KEY_BYTES;
-            *signature_size = AVA_ML_DSA_65_SIGNATURE_BYTES;
+        case AMA_ALG_ML_DSA_65:
+            *public_key_size = AMA_ML_DSA_65_PUBLIC_KEY_BYTES;
+            *secret_key_size = AMA_ML_DSA_65_SECRET_KEY_BYTES;
+            *signature_size = AMA_ML_DSA_65_SIGNATURE_BYTES;
             break;
 
-        case AVA_ALG_KYBER_1024:
-            *public_key_size = AVA_KYBER_1024_PUBLIC_KEY_BYTES;
-            *secret_key_size = AVA_KYBER_1024_SECRET_KEY_BYTES;
+        case AMA_ALG_KYBER_1024:
+            *public_key_size = AMA_KYBER_1024_PUBLIC_KEY_BYTES;
+            *secret_key_size = AMA_KYBER_1024_SECRET_KEY_BYTES;
             *signature_size = 0;  /* KEM doesn't have signatures */
             break;
 
-        case AVA_ALG_SPHINCS_256F:
-            *public_key_size = AVA_SPHINCS_256F_PUBLIC_KEY_BYTES;
-            *secret_key_size = AVA_SPHINCS_256F_SECRET_KEY_BYTES;
-            *signature_size = AVA_SPHINCS_256F_SIGNATURE_BYTES;
+        case AMA_ALG_SPHINCS_256F:
+            *public_key_size = AMA_SPHINCS_256F_PUBLIC_KEY_BYTES;
+            *secret_key_size = AMA_SPHINCS_256F_SECRET_KEY_BYTES;
+            *signature_size = AMA_SPHINCS_256F_SIGNATURE_BYTES;
             break;
 
-        case AVA_ALG_ED25519:
-            *public_key_size = AVA_ED25519_PUBLIC_KEY_BYTES;
-            *secret_key_size = AVA_ED25519_SECRET_KEY_BYTES;
-            *signature_size = AVA_ED25519_SIGNATURE_BYTES;
+        case AMA_ALG_ED25519:
+            *public_key_size = AMA_ED25519_PUBLIC_KEY_BYTES;
+            *secret_key_size = AMA_ED25519_SECRET_KEY_BYTES;
+            *signature_size = AMA_ED25519_SIGNATURE_BYTES;
             break;
 
         default:
@@ -180,8 +180,8 @@ static void get_key_sizes(
 /**
  * Key generation
  */
-ava_error_t ava_keypair_generate(
-    ava_context_t* ctx,
+ama_error_t ama_keypair_generate(
+    ama_context_t* ctx,
     uint8_t* public_key,
     size_t public_key_len,
     uint8_t* secret_key,
@@ -190,60 +190,60 @@ ava_error_t ava_keypair_generate(
     size_t expected_pk_size, expected_sk_size, sig_size;
 
     if (!validate_context(ctx)) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     if (!public_key || !secret_key) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     /* Check sizes */
     get_key_sizes(ctx->algorithm, &expected_pk_size, &expected_sk_size, &sig_size);
 
     if (public_key_len < expected_pk_size || secret_key_len < expected_sk_size) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
-#ifdef AVA_USE_NATIVE_PQC
+#ifdef AMA_USE_NATIVE_PQC
     /* Native PQC dispatch */
     switch (ctx->algorithm) {
-        case AVA_ALG_ML_DSA_65:
-            return ava_dilithium_keypair(public_key, secret_key);
+        case AMA_ALG_ML_DSA_65:
+            return ama_dilithium_keypair(public_key, secret_key);
 
-        case AVA_ALG_KYBER_1024:
-            /* Kyber keypair generation dispatches to ava_kyber.c internal */
-            /* The kyber_keypair_generate is static in ava_kyber.c, so we
+        case AMA_ALG_KYBER_1024:
+            /* Kyber keypair generation dispatches to ama_kyber.c internal */
+            /* The kyber_keypair_generate is static in ama_kyber.c, so we
              * call it through a thin wrapper defined below */
             {
-                extern ava_error_t ava_kyber_keypair(uint8_t* pk, size_t pk_len,
+                extern ama_error_t ama_kyber_keypair(uint8_t* pk, size_t pk_len,
                                                       uint8_t* sk, size_t sk_len);
-                return ava_kyber_keypair(public_key, public_key_len,
+                return ama_kyber_keypair(public_key, public_key_len,
                                         secret_key, secret_key_len);
             }
 
-        case AVA_ALG_SPHINCS_256F:
-            return ava_sphincs_keypair(public_key, secret_key);
+        case AMA_ALG_SPHINCS_256F:
+            return ama_sphincs_keypair(public_key, secret_key);
 
-        case AVA_ALG_ED25519:
-            return AVA_ERROR_NOT_IMPLEMENTED;
+        case AMA_ALG_ED25519:
+            return AMA_ERROR_NOT_IMPLEMENTED;
 
-        case AVA_ALG_HYBRID:
+        case AMA_ALG_HYBRID:
             /* Hybrid: generate Dilithium keypair */
-            return ava_dilithium_keypair(public_key, secret_key);
+            return ama_dilithium_keypair(public_key, secret_key);
 
         default:
-            return AVA_ERROR_NOT_IMPLEMENTED;
+            return AMA_ERROR_NOT_IMPLEMENTED;
     }
 #endif
 
-    return AVA_ERROR_NOT_IMPLEMENTED;
+    return AMA_ERROR_NOT_IMPLEMENTED;
 }
 
 /**
  * Sign message
  */
-ava_error_t ava_sign(
-    ava_context_t* ctx,
+ama_error_t ama_sign(
+    ama_context_t* ctx,
     const uint8_t* message,
     size_t message_len,
     const uint8_t* secret_key,
@@ -252,51 +252,51 @@ ava_error_t ava_sign(
     size_t* signature_len
 ) {
     if (!validate_context(ctx)) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     if (!message || !secret_key || !signature || !signature_len) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
-#ifdef AVA_USE_NATIVE_PQC
+#ifdef AMA_USE_NATIVE_PQC
     /* Native PQC dispatch */
     switch (ctx->algorithm) {
-        case AVA_ALG_ML_DSA_65:
-            if (secret_key_len < AVA_ML_DSA_65_SECRET_KEY_BYTES) {
-                return AVA_ERROR_INVALID_PARAM;
+        case AMA_ALG_ML_DSA_65:
+            if (secret_key_len < AMA_ML_DSA_65_SECRET_KEY_BYTES) {
+                return AMA_ERROR_INVALID_PARAM;
             }
-            if (*signature_len < AVA_ML_DSA_65_SIGNATURE_BYTES) {
-                *signature_len = AVA_ML_DSA_65_SIGNATURE_BYTES;
-                return AVA_ERROR_INVALID_PARAM;
+            if (*signature_len < AMA_ML_DSA_65_SIGNATURE_BYTES) {
+                *signature_len = AMA_ML_DSA_65_SIGNATURE_BYTES;
+                return AMA_ERROR_INVALID_PARAM;
             }
-            return ava_dilithium_sign(signature, signature_len,
+            return ama_dilithium_sign(signature, signature_len,
                                       message, message_len, secret_key);
 
-        case AVA_ALG_SPHINCS_256F:
-            if (secret_key_len < AVA_SPHINCS_256F_SECRET_KEY_BYTES) {
-                return AVA_ERROR_INVALID_PARAM;
+        case AMA_ALG_SPHINCS_256F:
+            if (secret_key_len < AMA_SPHINCS_256F_SECRET_KEY_BYTES) {
+                return AMA_ERROR_INVALID_PARAM;
             }
-            if (*signature_len < AVA_SPHINCS_256F_SIGNATURE_BYTES) {
-                *signature_len = AVA_SPHINCS_256F_SIGNATURE_BYTES;
-                return AVA_ERROR_INVALID_PARAM;
+            if (*signature_len < AMA_SPHINCS_256F_SIGNATURE_BYTES) {
+                *signature_len = AMA_SPHINCS_256F_SIGNATURE_BYTES;
+                return AMA_ERROR_INVALID_PARAM;
             }
-            return ava_sphincs_sign(signature, signature_len,
+            return ama_sphincs_sign(signature, signature_len,
                                     message, message_len, secret_key);
 
-        case AVA_ALG_KYBER_1024:
-            return AVA_ERROR_INVALID_PARAM;  /* KEM doesn't support signing */
+        case AMA_ALG_KYBER_1024:
+            return AMA_ERROR_INVALID_PARAM;  /* KEM doesn't support signing */
 
-        case AVA_ALG_HYBRID:
+        case AMA_ALG_HYBRID:
             /* Hybrid: sign with Dilithium */
-            if (secret_key_len < AVA_ML_DSA_65_SECRET_KEY_BYTES) {
-                return AVA_ERROR_INVALID_PARAM;
+            if (secret_key_len < AMA_ML_DSA_65_SECRET_KEY_BYTES) {
+                return AMA_ERROR_INVALID_PARAM;
             }
-            if (*signature_len < AVA_ML_DSA_65_SIGNATURE_BYTES) {
-                *signature_len = AVA_ML_DSA_65_SIGNATURE_BYTES;
-                return AVA_ERROR_INVALID_PARAM;
+            if (*signature_len < AMA_ML_DSA_65_SIGNATURE_BYTES) {
+                *signature_len = AMA_ML_DSA_65_SIGNATURE_BYTES;
+                return AMA_ERROR_INVALID_PARAM;
             }
-            return ava_dilithium_sign(signature, signature_len,
+            return ama_dilithium_sign(signature, signature_len,
                                       message, message_len, secret_key);
 
         default:
@@ -309,14 +309,14 @@ ava_error_t ava_sign(
     (void)secret_key_len;
 #endif
 
-    return AVA_ERROR_NOT_IMPLEMENTED;
+    return AMA_ERROR_NOT_IMPLEMENTED;
 }
 
 /**
  * Verify signature
  */
-ava_error_t ava_verify(
-    ava_context_t* ctx,
+ama_error_t ama_verify(
+    ama_context_t* ctx,
     const uint8_t* message,
     size_t message_len,
     const uint8_t* signature,
@@ -325,38 +325,38 @@ ava_error_t ava_verify(
     size_t public_key_len
 ) {
     if (!validate_context(ctx)) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     if (!message || !signature || !public_key) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
-#ifdef AVA_USE_NATIVE_PQC
+#ifdef AMA_USE_NATIVE_PQC
     /* Native PQC dispatch */
     switch (ctx->algorithm) {
-        case AVA_ALG_ML_DSA_65:
-            if (public_key_len < AVA_ML_DSA_65_PUBLIC_KEY_BYTES) {
-                return AVA_ERROR_INVALID_PARAM;
+        case AMA_ALG_ML_DSA_65:
+            if (public_key_len < AMA_ML_DSA_65_PUBLIC_KEY_BYTES) {
+                return AMA_ERROR_INVALID_PARAM;
             }
-            return ava_dilithium_verify(message, message_len,
+            return ama_dilithium_verify(message, message_len,
                                         signature, signature_len, public_key);
 
-        case AVA_ALG_SPHINCS_256F:
-            if (public_key_len < AVA_SPHINCS_256F_PUBLIC_KEY_BYTES) {
-                return AVA_ERROR_INVALID_PARAM;
+        case AMA_ALG_SPHINCS_256F:
+            if (public_key_len < AMA_SPHINCS_256F_PUBLIC_KEY_BYTES) {
+                return AMA_ERROR_INVALID_PARAM;
             }
-            return ava_sphincs_verify(message, message_len,
+            return ama_sphincs_verify(message, message_len,
                                       signature, signature_len, public_key);
 
-        case AVA_ALG_KYBER_1024:
-            return AVA_ERROR_INVALID_PARAM;  /* KEM doesn't support verification */
+        case AMA_ALG_KYBER_1024:
+            return AMA_ERROR_INVALID_PARAM;  /* KEM doesn't support verification */
 
-        case AVA_ALG_HYBRID:
-            if (public_key_len < AVA_ML_DSA_65_PUBLIC_KEY_BYTES) {
-                return AVA_ERROR_INVALID_PARAM;
+        case AMA_ALG_HYBRID:
+            if (public_key_len < AMA_ML_DSA_65_PUBLIC_KEY_BYTES) {
+                return AMA_ERROR_INVALID_PARAM;
             }
-            return ava_dilithium_verify(message, message_len,
+            return ama_dilithium_verify(message, message_len,
                                         signature, signature_len, public_key);
 
         default:
@@ -372,7 +372,7 @@ ava_error_t ava_verify(
     (void)public_key_len;
 #endif
 
-    return AVA_ERROR_NOT_IMPLEMENTED;
+    return AMA_ERROR_NOT_IMPLEMENTED;
 }
 
 /**
@@ -381,8 +381,8 @@ ava_error_t ava_verify(
  * Generates a shared secret and ciphertext using the recipient's public key.
  * The shared secret can be used for symmetric encryption.
  */
-ava_error_t ava_kem_encapsulate(
-    ava_context_t* ctx,
+ama_error_t ama_kem_encapsulate(
+    ama_context_t* ctx,
     const uint8_t* public_key,
     size_t public_key_len,
     uint8_t* ciphertext,
@@ -391,27 +391,27 @@ ava_error_t ava_kem_encapsulate(
     size_t shared_secret_len
 ) {
     if (!validate_context(ctx)) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     if (!public_key || !ciphertext || !ciphertext_len || !shared_secret) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
-#ifdef AVA_USE_NATIVE_PQC
+#ifdef AMA_USE_NATIVE_PQC
     /* Native Kyber-1024 encapsulation */
-    if (ctx->algorithm == AVA_ALG_KYBER_1024) {
-        extern ava_error_t ava_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
+    if (ctx->algorithm == AMA_ALG_KYBER_1024) {
+        extern ama_error_t ama_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
                                                   uint8_t* ct, size_t* ct_len,
                                                   uint8_t* ss, size_t ss_len);
-        return ava_kyber_encapsulate(public_key, public_key_len,
+        return ama_kyber_encapsulate(public_key, public_key_len,
                                      ciphertext, ciphertext_len,
                                      shared_secret, shared_secret_len);
     }
     /* Signature algorithms don't support encapsulation */
-    if (ctx->algorithm == AVA_ALG_ML_DSA_65 ||
-        ctx->algorithm == AVA_ALG_SPHINCS_256F) {
-        return AVA_ERROR_INVALID_PARAM;
+    if (ctx->algorithm == AMA_ALG_ML_DSA_65 ||
+        ctx->algorithm == AMA_ALG_SPHINCS_256F) {
+        return AMA_ERROR_INVALID_PARAM;
     }
 #else
     /* Suppress unused parameter warnings */
@@ -419,7 +419,7 @@ ava_error_t ava_kem_encapsulate(
     (void)shared_secret_len;
 #endif
 
-    return AVA_ERROR_NOT_IMPLEMENTED;
+    return AMA_ERROR_NOT_IMPLEMENTED;
 }
 
 /**
@@ -428,8 +428,8 @@ ava_error_t ava_kem_encapsulate(
  * Recovers the shared secret from a ciphertext using the recipient's secret key.
  * Uses implicit rejection for IND-CCA2 security.
  */
-ava_error_t ava_kem_decapsulate(
-    ava_context_t* ctx,
+ama_error_t ama_kem_decapsulate(
+    ama_context_t* ctx,
     const uint8_t* ciphertext,
     size_t ciphertext_len,
     const uint8_t* secret_key,
@@ -438,26 +438,26 @@ ava_error_t ava_kem_decapsulate(
     size_t shared_secret_len
 ) {
     if (!validate_context(ctx)) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     if (!ciphertext || !secret_key || !shared_secret) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
-#ifdef AVA_USE_NATIVE_PQC
+#ifdef AMA_USE_NATIVE_PQC
     /* Native Kyber-1024 decapsulation */
-    if (ctx->algorithm == AVA_ALG_KYBER_1024) {
-        extern ava_error_t ava_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
+    if (ctx->algorithm == AMA_ALG_KYBER_1024) {
+        extern ama_error_t ama_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
                                                   const uint8_t* sk, size_t sk_len,
                                                   uint8_t* ss, size_t ss_len);
-        return ava_kyber_decapsulate(ciphertext, ciphertext_len,
+        return ama_kyber_decapsulate(ciphertext, ciphertext_len,
                                      secret_key, secret_key_len,
                                      shared_secret, shared_secret_len);
     }
-    if (ctx->algorithm == AVA_ALG_ML_DSA_65 ||
-        ctx->algorithm == AVA_ALG_SPHINCS_256F) {
-        return AVA_ERROR_INVALID_PARAM;
+    if (ctx->algorithm == AMA_ALG_ML_DSA_65 ||
+        ctx->algorithm == AMA_ALG_SPHINCS_256F) {
+        return AMA_ERROR_INVALID_PARAM;
     }
 #else
     /* Suppress unused parameter warnings */
@@ -466,5 +466,5 @@ ava_error_t ava_kem_decapsulate(
     (void)shared_secret_len;
 #endif
 
-    return AVA_ERROR_NOT_IMPLEMENTED;
+    return AMA_ERROR_NOT_IMPLEMENTED;
 }

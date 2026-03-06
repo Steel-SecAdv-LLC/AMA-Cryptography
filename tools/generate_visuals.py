@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate visual diagrams for Ava Guardian documentation.
+Generate visual diagrams for AMA Cryptography documentation.
 
 Creates:
 1. 6-Layer Defense-in-Depth diagram
@@ -81,7 +81,7 @@ def create_defense_layers_diagram():
     ax.text(
         8,
         11.5,
-        "Ava Guardian: 6-Layer Defense-in-Depth Architecture",
+        "AMA Cryptography: 6-Layer Defense-in-Depth Architecture",
         ha="center",
         fontsize=18,
         fontweight="bold",
@@ -182,12 +182,12 @@ def create_defense_layers_diagram():
                 arrowprops=dict(arrowstyle="->", color="#9CA3AF", lw=1.5),
             )
 
-    # Comparison box: Typical vs Ava Guardian
+    # Comparison box: Typical vs AMA Cryptography
     # Typical system box
     ax.text(
         8,
         1.8,
-        "Comparison: Typical System vs Ava Guardian",
+        "Comparison: Typical System vs AMA Cryptography",
         ha="center",
         fontsize=12,
         fontweight="bold",
@@ -217,7 +217,7 @@ def create_defense_layers_diagram():
     )
     ax.text(5, 0.55, "(Hash + Signature)", ha="center", va="center", fontsize=9, color="white")
 
-    # Ava Guardian (6 layers)
+    # AMA Cryptography (6 layers)
     colors_mini = ["#22C55E", "#14B8A6", "#0EA5E9", "#3B82F6", "#6366F1", "#8B5CF6"]
     for j, c in enumerate(colors_mini):
         rect_ag = mpatches.FancyBboxPatch(
@@ -233,7 +233,7 @@ def create_defense_layers_diagram():
     ax.text(
         11.1,
         0.9,
-        "Ava Guardian: 6 Layers",
+        "AMA Cryptography: 6 Layers",
         ha="center",
         va="center",
         fontsize=11,
@@ -272,7 +272,7 @@ def create_performance_comparison():
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
     # Data from BENCHMARK_RESULTS.md
-    implementations = ["Ava Guardian\n(Standard)", "Ava Guardian\n(Optimized)", "OpenSSL+liboqs"]
+    implementations = ["AMA Cryptography\n(Standard)", "AMA Cryptography\n(Optimized)", "OpenSSL+liboqs"]
     x_pos = np.arange(len(implementations))
 
     # Throughput data (ops/sec)
@@ -498,7 +498,7 @@ def create_full_package_performance():
     fig.text(
         0.5,
         0.91,
-        "Component latencies and end-to-end throughput for the complete Ava Guardian package",
+        "Component latencies and end-to-end throughput for the complete AMA Cryptography package",
         ha="center",
         fontsize=11,
         color="#6B7280",
@@ -1247,7 +1247,7 @@ def create_quantum_comparison():
 
 
 if __name__ == "__main__":
-    print("Generating Ava Guardian visual diagrams...")
+    print("Generating AMA Cryptography visual diagrams...")
     print("=" * 50)
 
     create_defense_layers_diagram()

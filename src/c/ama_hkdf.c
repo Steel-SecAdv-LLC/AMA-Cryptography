@@ -15,7 +15,7 @@
  */
 
 /**
- * @file ava_hkdf.c
+ * @file ama_hkdf.c
  * @brief HKDF (RFC 5869) key derivation using HMAC-SHA3-256
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2025-12-06
@@ -29,7 +29,7 @@
  * - Constant-time operations where possible
  */
 
-#include "../include/ava_guardian.h"
+#include "../include/ama_cryptography.h"
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -38,8 +38,8 @@
 #define SHA3_256_BLOCK_SIZE 136  /* Rate for SHA3-256 */
 #define SHA3_256_DIGEST_SIZE 32
 
-/* Forward declaration from ava_sha3.c */
-extern ava_error_t ava_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
+/* Forward declaration from ama_sha3.c */
+extern ama_error_t ama_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
 
 /**
  * HMAC-SHA3-256
@@ -52,9 +52,9 @@ extern ava_error_t ava_sha3_256(const uint8_t* input, size_t input_len, uint8_t*
  * @param data Data to authenticate
  * @param data_len Length of data
  * @param output Output buffer (32 bytes)
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-static ava_error_t hmac_sha3_256(
+static ama_error_t hmac_sha3_256(
     const uint8_t* key,
     size_t key_len,
     const uint8_t* data,
@@ -70,12 +70,12 @@ static ava_error_t hmac_sha3_256(
     const uint8_t* actual_key;
     size_t actual_key_len;
     size_t i;
-    ava_error_t rc;
+    ama_error_t rc;
 
     /* If key is longer than block size, hash it first */
     if (key_len > SHA3_256_BLOCK_SIZE) {
-        rc = ava_sha3_256(key, key_len, key_hash);
-        if (rc != AVA_SUCCESS) {
+        rc = ama_sha3_256(key, key_len, key_hash);
+        if (rc != AMA_SUCCESS) {
             return rc;
         }
         actual_key = key_hash;
@@ -98,40 +98,40 @@ static ava_error_t hmac_sha3_256(
     /* Inner hash: H(K XOR ipad || data) */
     inner_data = (uint8_t*)malloc(SHA3_256_BLOCK_SIZE + data_len);
     if (!inner_data) {
-        rc = AVA_ERROR_MEMORY;
+        rc = AMA_ERROR_MEMORY;
         goto cleanup;
     }
     memcpy(inner_data, k_ipad, SHA3_256_BLOCK_SIZE);
     if (data_len > 0) {
         memcpy(inner_data + SHA3_256_BLOCK_SIZE, data, data_len);
     }
-    rc = ava_sha3_256(inner_data, SHA3_256_BLOCK_SIZE + data_len, inner_hash);
-    if (rc != AVA_SUCCESS) {
+    rc = ama_sha3_256(inner_data, SHA3_256_BLOCK_SIZE + data_len, inner_hash);
+    if (rc != AMA_SUCCESS) {
         goto cleanup;
     }
 
     /* Outer hash: H(K XOR opad || inner_hash) */
     outer_data = (uint8_t*)malloc(SHA3_256_BLOCK_SIZE + SHA3_256_DIGEST_SIZE);
     if (!outer_data) {
-        rc = AVA_ERROR_MEMORY;
+        rc = AMA_ERROR_MEMORY;
         goto cleanup;
     }
     memcpy(outer_data, k_opad, SHA3_256_BLOCK_SIZE);
     memcpy(outer_data + SHA3_256_BLOCK_SIZE, inner_hash, SHA3_256_DIGEST_SIZE);
-    rc = ava_sha3_256(outer_data, SHA3_256_BLOCK_SIZE + SHA3_256_DIGEST_SIZE, output);
+    rc = ama_sha3_256(outer_data, SHA3_256_BLOCK_SIZE + SHA3_256_DIGEST_SIZE, output);
 
 cleanup:
     /* Scrub sensitive data */
-    ava_secure_memzero(k_ipad, sizeof(k_ipad));
-    ava_secure_memzero(k_opad, sizeof(k_opad));
-    ava_secure_memzero(key_hash, sizeof(key_hash));
-    ava_secure_memzero(inner_hash, sizeof(inner_hash));
+    ama_secure_memzero(k_ipad, sizeof(k_ipad));
+    ama_secure_memzero(k_opad, sizeof(k_opad));
+    ama_secure_memzero(key_hash, sizeof(key_hash));
+    ama_secure_memzero(inner_hash, sizeof(inner_hash));
     if (inner_data) {
-        ava_secure_memzero(inner_data, SHA3_256_BLOCK_SIZE + data_len);
+        ama_secure_memzero(inner_data, SHA3_256_BLOCK_SIZE + data_len);
         free(inner_data);
     }
     if (outer_data) {
-        ava_secure_memzero(outer_data, SHA3_256_BLOCK_SIZE + SHA3_256_DIGEST_SIZE);
+        ama_secure_memzero(outer_data, SHA3_256_BLOCK_SIZE + SHA3_256_DIGEST_SIZE);
         free(outer_data);
     }
 
@@ -149,9 +149,9 @@ cleanup:
  * @param ikm Input key material
  * @param ikm_len Length of IKM
  * @param prk Output pseudorandom key (32 bytes)
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-static ava_error_t hkdf_extract(
+static ama_error_t hkdf_extract(
     const uint8_t* salt,
     size_t salt_len,
     const uint8_t* ikm,
@@ -184,9 +184,9 @@ static ava_error_t hkdf_extract(
  * @param info_len Length of info
  * @param okm Output key material
  * @param okm_len Desired output length
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-static ava_error_t hkdf_expand(
+static ama_error_t hkdf_expand(
     const uint8_t* prk,
     size_t prk_len,
     const uint8_t* info,
@@ -200,18 +200,18 @@ static ava_error_t hkdf_expand(
     size_t done = 0;
     size_t todo;
     uint8_t counter = 1;
-    ava_error_t rc = AVA_SUCCESS;
+    ama_error_t rc = AMA_SUCCESS;
 
     /* Maximum output is 255 * hash_length */
     if (okm_len > 255 * SHA3_256_DIGEST_SIZE) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     /* Allocate buffer for T_prev || info || counter */
     expand_len = SHA3_256_DIGEST_SIZE + info_len + 1;
     expand_data = (uint8_t*)malloc(expand_len);
     if (!expand_data) {
-        return AVA_ERROR_MEMORY;
+        return AMA_ERROR_MEMORY;
     }
 
     memset(T, 0, sizeof(T));
@@ -233,7 +233,7 @@ static ava_error_t hkdf_expand(
 
         /* T(i) = HMAC(PRK, T(i-1) || info || i) */
         rc = hmac_sha3_256(prk, prk_len, expand_data, offset, T);
-        if (rc != AVA_SUCCESS) {
+        if (rc != AMA_SUCCESS) {
             goto cleanup;
         }
 
@@ -248,9 +248,9 @@ static ava_error_t hkdf_expand(
     }
 
 cleanup:
-    ava_secure_memzero(T, sizeof(T));
+    ama_secure_memzero(T, sizeof(T));
     if (expand_data) {
-        ava_secure_memzero(expand_data, expand_len);
+        ama_secure_memzero(expand_data, expand_len);
         free(expand_data);
     }
 
@@ -271,9 +271,9 @@ cleanup:
  * @param info_len Length of info
  * @param okm Output key material buffer
  * @param okm_len Desired length of output
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_hkdf(
+ama_error_t ama_hkdf(
     const uint8_t* salt,
     size_t salt_len,
     const uint8_t* ikm,
@@ -284,22 +284,22 @@ ava_error_t ava_hkdf(
     size_t okm_len
 ) {
     uint8_t prk[SHA3_256_DIGEST_SIZE];
-    ava_error_t rc;
+    ama_error_t rc;
 
     /* Validate parameters */
     if (!ikm && ikm_len > 0) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
     if (!okm) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
     if (okm_len == 0) {
-        return AVA_SUCCESS;
+        return AMA_SUCCESS;
     }
 
     /* Extract */
     rc = hkdf_extract(salt, salt_len, ikm, ikm_len, prk);
-    if (rc != AVA_SUCCESS) {
+    if (rc != AMA_SUCCESS) {
         goto cleanup;
     }
 
@@ -307,7 +307,7 @@ ava_error_t ava_hkdf(
     rc = hkdf_expand(prk, sizeof(prk), info, info_len, okm, okm_len);
 
 cleanup:
-    ava_secure_memzero(prk, sizeof(prk));
+    ama_secure_memzero(prk, sizeof(prk));
 
     return rc;
 }

@@ -2,26 +2,26 @@
 # Copyright 2025 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 
-"""Basic tests for Ava Guardian ♱"""
+"""Basic tests for AMA Cryptography ♱"""
 
-import ava_guardian
+import ama_cryptography
 
 
 def test_version():
     """Test that version is correctly set"""
-    assert hasattr(ava_guardian, "__version__")
-    assert ava_guardian.__version__ == "1.1"
+    assert hasattr(ama_cryptography, "__version__")
+    assert ama_cryptography.__version__ == "2.0"
 
 
 def test_author():
     """Test that author is correctly set"""
-    assert hasattr(ava_guardian, "__author__")
-    assert "Andrew E. A." in ava_guardian.__author__
+    assert hasattr(ama_cryptography, "__author__")
+    assert "Andrew E. A." in ama_cryptography.__author__
 
 
 def test_imports():
     """Test that key components can be imported"""
-    from ava_guardian import (
+    from ama_cryptography import (
         HELIX_PARAMS,
         LAMBDA_DECAY,
         OMNI_CODES,
@@ -29,7 +29,7 @@ def test_imports():
         PHI_CUBED,
         PHI_SQUARED,
         SIGMA_QUADRATIC_THRESHOLD,
-        AvaEquationEngine,
+        AmaEquationEngine,
         calculate_sigma_quadratic,
         enforce_sigma_quadratic_threshold,
         golden_ratio_convergence_proof,
@@ -52,7 +52,7 @@ def test_imports():
     assert SIGMA_QUADRATIC_THRESHOLD is not None
 
     # Verify callables exist
-    assert callable(AvaEquationEngine)
+    assert callable(AmaEquationEngine)
     assert callable(calculate_sigma_quadratic)
     assert callable(enforce_sigma_quadratic_threshold)
     assert callable(golden_ratio_convergence_proof)
@@ -66,17 +66,17 @@ def test_imports():
 
 
 def test_equation_engine_exists():
-    """Test that AvaEquationEngine can be instantiated"""
-    from ava_guardian import AvaEquationEngine
+    """Test that AmaEquationEngine can be instantiated"""
+    from ama_cryptography import AmaEquationEngine
 
     # Just verify it exists and is callable
-    assert AvaEquationEngine is not None
-    assert callable(AvaEquationEngine)
+    assert AmaEquationEngine is not None
+    assert callable(AmaEquationEngine)
 
 
 def test_mathematical_constants():
     """Test that mathematical constants are correctly defined"""
-    from ava_guardian import PHI, PHI_CUBED, PHI_SQUARED
+    from ama_cryptography import PHI, PHI_CUBED, PHI_SQUARED
 
     # Golden ratio should be approximately 1.618
     assert 1.6 < PHI < 1.7

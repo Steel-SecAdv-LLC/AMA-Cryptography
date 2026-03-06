@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Ava Guardian ♱ (AG♱) - Cryptographic API Tests
+AMA Cryptography ♱ (AG♱) - Cryptographic API Tests
 
 Comprehensive test suite for crypto_api.py providing coverage
 of all cryptographic providers including Ed25519, ML-DSA-65,
@@ -16,12 +16,12 @@ from unittest.mock import patch
 
 import pytest
 
-from ava_guardian.crypto_api import (
+from ama_cryptography.crypto_api import (
     DILITHIUM_AVAILABLE,
     KYBER_AVAILABLE,
     SPHINCS_AVAILABLE,
     AlgorithmType,
-    AvaGuardianCrypto,
+    AmaCryptography,
     CryptoBackend,
     CryptoProvider,
     Ed25519Provider,
@@ -392,17 +392,17 @@ class TestHybridSignatureProvider:
         assert is_valid is False
 
 
-class TestAvaGuardianCrypto:
-    """Test AvaGuardianCrypto main interface."""
+class TestAmaCryptography:
+    """Test AmaCryptography main interface."""
 
     def test_instantiation(self):
-        """Verify AvaGuardianCrypto can be instantiated."""
-        crypto = AvaGuardianCrypto()
+        """Verify AmaCryptography can be instantiated."""
+        crypto = AmaCryptography()
         assert crypto is not None
 
     def test_ed25519_sign_and_verify(self):
-        """Verify Ed25519 signing and verification via AvaGuardianCrypto."""
-        crypto = AvaGuardianCrypto(algorithm=AlgorithmType.ED25519)
+        """Verify Ed25519 signing and verification via AmaCryptography."""
+        crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
         keypair = crypto.generate_keypair()
         message = b"Test message"
         signature = crypto.sign(message, keypair.secret_key)
@@ -411,8 +411,8 @@ class TestAvaGuardianCrypto:
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
     def test_ml_dsa_sign_and_verify(self):
-        """Verify ML-DSA-65 signing and verification via AvaGuardianCrypto."""
-        crypto = AvaGuardianCrypto(algorithm=AlgorithmType.ML_DSA_65)
+        """Verify ML-DSA-65 signing and verification via AmaCryptography."""
+        crypto = AmaCryptography(algorithm=AlgorithmType.ML_DSA_65)
         keypair = crypto.generate_keypair()
         message = b"Test message"
         signature = crypto.sign(message, keypair.secret_key)
@@ -421,8 +421,8 @@ class TestAvaGuardianCrypto:
 
     @pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber not available")
     def test_kyber_encapsulate_and_decapsulate(self):
-        """Verify Kyber-1024 KEM via AvaGuardianCrypto."""
-        crypto = AvaGuardianCrypto(algorithm=AlgorithmType.KYBER_1024)
+        """Verify Kyber-1024 KEM via AmaCryptography."""
+        crypto = AmaCryptography(algorithm=AlgorithmType.KYBER_1024)
         keypair = crypto.generate_keypair()
         encapsulated = crypto.encapsulate(keypair.public_key)
         shared_secret = crypto.decapsulate(encapsulated.ciphertext, keypair.secret_key)
@@ -430,8 +430,8 @@ class TestAvaGuardianCrypto:
 
     @pytest.mark.skipif(not SPHINCS_AVAILABLE, reason="SPHINCS+ not available")
     def test_sphincs_sign_and_verify(self):
-        """Verify SPHINCS+-256f signing and verification via AvaGuardianCrypto."""
-        crypto = AvaGuardianCrypto(algorithm=AlgorithmType.SPHINCS_256F)
+        """Verify SPHINCS+-256f signing and verification via AmaCryptography."""
+        crypto = AmaCryptography(algorithm=AlgorithmType.SPHINCS_256F)
         keypair = crypto.generate_keypair()
         message = b"Test message"
         signature = crypto.sign(message, keypair.secret_key)
@@ -496,13 +496,13 @@ class TestUnavailableProviderErrors:
 
     def test_kyber_provider_raises_error(self):
         """Verify KyberProvider raises error when unavailable."""
-        with patch("ava_guardian.crypto_api.KYBER_AVAILABLE", False):
+        with patch("ama_cryptography.crypto_api.KYBER_AVAILABLE", False):
             with pytest.raises(KyberUnavailableError):
                 KyberProvider()
 
     def test_sphincs_provider_raises_error(self):
         """Verify SphincsProvider raises error when unavailable."""
-        with patch("ava_guardian.crypto_api.SPHINCS_AVAILABLE", False):
+        with patch("ama_cryptography.crypto_api.SPHINCS_AVAILABLE", False):
             with pytest.raises(SphincsUnavailableError):
                 SphincsProvider()
 

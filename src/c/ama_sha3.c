@@ -15,7 +15,7 @@
  */
 
 /**
- * @file ava_sha3.c
+ * @file ama_sha3.c
  * @brief SHA3-256 and SHAKE implementations using Keccak-f[1600]
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2025-12-06
@@ -30,7 +30,7 @@
  * - No table lookups that could leak timing information
  */
 
-#include "../include/ava_guardian.h"
+#include "../include/ama_cryptography.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -187,9 +187,9 @@ static void keccak_absorb(
  * @param input Input data to hash
  * @param input_len Length of input in bytes
  * @param output Output buffer (must be 32 bytes)
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_sha3_256(
+ama_error_t ama_sha3_256(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output
@@ -199,10 +199,10 @@ ava_error_t ava_sha3_256(
     size_t remaining, block_size, i;
 
     if (!input && input_len > 0) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
     if (!output) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     /* Initialize state to zero */
@@ -234,10 +234,10 @@ ava_error_t ava_sha3_256(
     }
 
     /* Scrub sensitive data */
-    ava_secure_memzero(state, sizeof(state));
-    ava_secure_memzero(block, sizeof(block));
+    ama_secure_memzero(state, sizeof(state));
+    ama_secure_memzero(block, sizeof(block));
 
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
 /**
@@ -250,9 +250,9 @@ ava_error_t ava_sha3_256(
  * @param input Input data to hash
  * @param input_len Length of input in bytes
  * @param output Output buffer (must be 64 bytes)
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_sha3_512(
+ama_error_t ama_sha3_512(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output
@@ -262,10 +262,10 @@ ava_error_t ava_sha3_512(
     size_t remaining, i;
 
     if (!input && input_len > 0) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
     if (!output) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     /* Initialize state to zero */
@@ -297,10 +297,10 @@ ava_error_t ava_sha3_512(
     }
 
     /* Scrub sensitive data */
-    ava_secure_memzero(state, sizeof(state));
-    ava_secure_memzero(block, sizeof(block));
+    ama_secure_memzero(state, sizeof(state));
+    ama_secure_memzero(block, sizeof(block));
 
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
 /**
@@ -312,9 +312,9 @@ ava_error_t ava_sha3_512(
  * @param input_len Length of input
  * @param output Output buffer
  * @param output_len Desired output length
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_shake128(
+ama_error_t ama_shake128(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output,
@@ -326,10 +326,10 @@ ava_error_t ava_shake128(
     const size_t rate = 168;
 
     if (!input && input_len > 0) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
     if (!output) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     /* Initialize state */
@@ -375,10 +375,10 @@ ava_error_t ava_shake128(
     }
 
     /* Scrub sensitive data */
-    ava_secure_memzero(state, sizeof(state));
-    ava_secure_memzero(block, sizeof(block));
+    ama_secure_memzero(state, sizeof(state));
+    ama_secure_memzero(block, sizeof(block));
 
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
 /**
@@ -390,9 +390,9 @@ ava_error_t ava_shake128(
  * @param input_len Length of input
  * @param output Output buffer
  * @param output_len Desired output length
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_shake256(
+ama_error_t ama_shake256(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output,
@@ -404,10 +404,10 @@ ava_error_t ava_shake256(
     const size_t rate = 136;
 
     if (!input && input_len > 0) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
     if (!output) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     /* Initialize state */
@@ -450,10 +450,10 @@ ava_error_t ava_shake256(
         }
     }
 
-    ava_secure_memzero(state, sizeof(state));
-    ava_secure_memzero(block, sizeof(block));
+    ama_secure_memzero(state, sizeof(state));
+    ama_secure_memzero(block, sizeof(block));
 
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
 /* ============================================================================
@@ -464,9 +464,9 @@ ava_error_t ava_shake256(
 /**
  * Initialize SHA3-256 streaming context
  */
-ava_error_t ava_sha3_init(ava_sha3_ctx* ctx) {
+ama_error_t ama_sha3_init(ama_sha3_ctx* ctx) {
     if (!ctx) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     memset(ctx->state, 0, sizeof(ctx->state));
@@ -474,26 +474,26 @@ ava_error_t ava_sha3_init(ava_sha3_ctx* ctx) {
     ctx->buffer_len = 0;
     ctx->finalized = 0;
 
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
 /**
  * Update SHA3-256 with additional data
  */
-ava_error_t ava_sha3_update(ava_sha3_ctx* ctx, const uint8_t* data, size_t len) {
+ama_error_t ama_sha3_update(ama_sha3_ctx* ctx, const uint8_t* data, size_t len) {
     size_t i;
 
     if (!ctx) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
     if (ctx->finalized) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
     if (!data && len > 0) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
     if (len == 0) {
-        return AVA_SUCCESS;
+        return AMA_SUCCESS;
     }
 
     /* If we have buffered data, try to fill the buffer first */
@@ -532,21 +532,21 @@ ava_error_t ava_sha3_update(ava_sha3_ctx* ctx, const uint8_t* data, size_t len) 
         ctx->buffer_len = len;
     }
 
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
 /**
  * Finalize SHA3-256 and output digest
  */
-ava_error_t ava_sha3_final(ava_sha3_ctx* ctx, uint8_t* output) {
+ama_error_t ama_sha3_final(ama_sha3_ctx* ctx, uint8_t* output) {
     uint8_t block[SHA3_256_RATE];
     size_t i;
 
     if (!ctx || !output) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
     if (ctx->finalized) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     /* Prepare final block with padding */
@@ -572,11 +572,11 @@ ava_error_t ava_sha3_final(ava_sha3_ctx* ctx, uint8_t* output) {
 
     /* Mark as finalized and scrub sensitive data */
     ctx->finalized = 1;
-    ava_secure_memzero(ctx->state, sizeof(ctx->state));
-    ava_secure_memzero(ctx->buffer, sizeof(ctx->buffer));
-    ava_secure_memzero(block, sizeof(block));
+    ama_secure_memzero(ctx->state, sizeof(ctx->state));
+    ama_secure_memzero(ctx->buffer, sizeof(ctx->buffer));
+    ama_secure_memzero(block, sizeof(block));
 
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
 /* ============================================================================
@@ -586,21 +586,21 @@ ava_error_t ava_sha3_final(ava_sha3_ctx* ctx, uint8_t* output) {
 
 #define SHAKE256_RATE 136
 
-ava_error_t ava_shake256_inc_init(ava_sha3_ctx* ctx) {
-    if (!ctx) return AVA_ERROR_INVALID_PARAM;
+ama_error_t ama_shake256_inc_init(ama_sha3_ctx* ctx) {
+    if (!ctx) return AMA_ERROR_INVALID_PARAM;
     memset(ctx->state, 0, sizeof(ctx->state));
     memset(ctx->buffer, 0, sizeof(ctx->buffer));
     ctx->buffer_len = 0;
     ctx->finalized = 0;
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
-ava_error_t ava_shake256_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len) {
+ama_error_t ama_shake256_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size_t len) {
     size_t i;
-    if (!ctx) return AVA_ERROR_INVALID_PARAM;
-    if (ctx->finalized) return AVA_ERROR_INVALID_PARAM;
-    if (!data && len > 0) return AVA_ERROR_INVALID_PARAM;
-    if (len == 0) return AVA_SUCCESS;
+    if (!ctx) return AMA_ERROR_INVALID_PARAM;
+    if (ctx->finalized) return AMA_ERROR_INVALID_PARAM;
+    if (!data && len > 0) return AMA_ERROR_INVALID_PARAM;
+    if (len == 0) return AMA_SUCCESS;
 
     /* Fill partial buffer */
     if (ctx->buffer_len > 0) {
@@ -634,14 +634,14 @@ ava_error_t ava_shake256_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size
         memcpy(ctx->buffer, data, len);
         ctx->buffer_len = len;
     }
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
-ava_error_t ava_shake256_inc_finalize(ava_sha3_ctx* ctx) {
+ama_error_t ama_shake256_inc_finalize(ama_sha3_ctx* ctx) {
     uint8_t block[SHAKE256_RATE];
     size_t i;
-    if (!ctx) return AVA_ERROR_INVALID_PARAM;
-    if (ctx->finalized) return AVA_ERROR_INVALID_PARAM;
+    if (!ctx) return AMA_ERROR_INVALID_PARAM;
+    if (ctx->finalized) return AMA_ERROR_INVALID_PARAM;
 
     memset(block, 0, sizeof(block));
     if (ctx->buffer_len > 0) {
@@ -658,13 +658,13 @@ ava_error_t ava_shake256_inc_finalize(ava_sha3_ctx* ctx) {
 
     ctx->finalized = 1;
     ctx->buffer_len = 0;  /* Reuse buffer_len as squeeze position */
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
-ava_error_t ava_shake256_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen) {
+ama_error_t ama_shake256_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen) {
     size_t i, available, tocopy;
-    if (!ctx || !output) return AVA_ERROR_INVALID_PARAM;
-    if (!ctx->finalized) return AVA_ERROR_INVALID_PARAM;
+    if (!ctx || !output) return AMA_ERROR_INVALID_PARAM;
+    if (!ctx->finalized) return AMA_ERROR_INVALID_PARAM;
 
     /* buffer_len tracks how many bytes have been consumed from the current block */
     while (outlen > 0) {
@@ -687,7 +687,7 @@ ava_error_t ava_shake256_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t 
             ctx->buffer_len = 0;
         }
     }
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
 /* ============================================================================
@@ -697,21 +697,21 @@ ava_error_t ava_shake256_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t 
 
 #define SHAKE128_RATE 168
 
-ava_error_t ava_shake128_inc_init(ava_sha3_ctx* ctx) {
-    if (!ctx) return AVA_ERROR_INVALID_PARAM;
+ama_error_t ama_shake128_inc_init(ama_sha3_ctx* ctx) {
+    if (!ctx) return AMA_ERROR_INVALID_PARAM;
     memset(ctx->state, 0, sizeof(ctx->state));
     memset(ctx->buffer, 0, sizeof(ctx->buffer));
     ctx->buffer_len = 0;
     ctx->finalized = 0;
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
-ava_error_t ava_shake128_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len) {
+ama_error_t ama_shake128_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size_t len) {
     size_t i;
-    if (!ctx) return AVA_ERROR_INVALID_PARAM;
-    if (ctx->finalized) return AVA_ERROR_INVALID_PARAM;
-    if (!data && len > 0) return AVA_ERROR_INVALID_PARAM;
-    if (len == 0) return AVA_SUCCESS;
+    if (!ctx) return AMA_ERROR_INVALID_PARAM;
+    if (ctx->finalized) return AMA_ERROR_INVALID_PARAM;
+    if (!data && len > 0) return AMA_ERROR_INVALID_PARAM;
+    if (len == 0) return AMA_SUCCESS;
 
     if (ctx->buffer_len > 0) {
         size_t space = SHAKE128_RATE - ctx->buffer_len;
@@ -742,14 +742,14 @@ ava_error_t ava_shake128_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size
         memcpy(ctx->buffer, data, len);
         ctx->buffer_len = len;
     }
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
-ava_error_t ava_shake128_inc_finalize(ava_sha3_ctx* ctx) {
+ama_error_t ama_shake128_inc_finalize(ama_sha3_ctx* ctx) {
     uint8_t block[SHAKE128_RATE];
     size_t i;
-    if (!ctx) return AVA_ERROR_INVALID_PARAM;
-    if (ctx->finalized) return AVA_ERROR_INVALID_PARAM;
+    if (!ctx) return AMA_ERROR_INVALID_PARAM;
+    if (ctx->finalized) return AMA_ERROR_INVALID_PARAM;
 
     memset(block, 0, sizeof(block));
     if (ctx->buffer_len > 0) {
@@ -765,13 +765,13 @@ ava_error_t ava_shake128_inc_finalize(ava_sha3_ctx* ctx) {
 
     ctx->finalized = 1;
     ctx->buffer_len = 0;
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
-ava_error_t ava_shake128_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen) {
+ama_error_t ama_shake128_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen) {
     size_t i, available, tocopy;
-    if (!ctx || !output) return AVA_ERROR_INVALID_PARAM;
-    if (!ctx->finalized) return AVA_ERROR_INVALID_PARAM;
+    if (!ctx || !output) return AMA_ERROR_INVALID_PARAM;
+    if (!ctx->finalized) return AMA_ERROR_INVALID_PARAM;
 
     while (outlen > 0) {
         available = SHAKE128_RATE - ctx->buffer_len;
@@ -791,5 +791,5 @@ ava_error_t ava_shake128_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t 
             ctx->buffer_len = 0;
         }
     }
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }

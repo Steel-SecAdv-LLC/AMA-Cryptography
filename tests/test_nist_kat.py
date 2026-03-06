@@ -43,7 +43,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
-Version: 1.1
+Version: 2.0
 
 AI Co-Architects:Eris | Eden | Veritas | X | Caduceus | Dev
 """
@@ -56,7 +56,7 @@ import pytest
 
 # Import PQC backends for testing
 try:
-    from ava_guardian.pqc_backends import (
+    from ama_cryptography.pqc_backends import (
         DILITHIUM_AVAILABLE,
         DILITHIUM_BACKEND,
         KYBER_AVAILABLE,

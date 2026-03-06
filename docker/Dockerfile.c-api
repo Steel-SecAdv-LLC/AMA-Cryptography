@@ -1,12 +1,12 @@
-# Dockerfile for Ava Guardian C API Build
+# Dockerfile for AMA Cryptography C API Build
 # Provides reproducible C library builds with native PQC
 #
 # Copyright 2025 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 #
 # Usage:
-#   docker build -t ava-guardian-c-api:latest -f docker/Dockerfile.c-api .
-#   docker run -v $(pwd)/output:/output ava-guardian-c-api:latest
+#   docker build -t ama-cryptography-c-api:latest -f docker/Dockerfile.c-api .
+#   docker run -v $(pwd)/output:/output ama-cryptography-c-api:latest
 #
 # The built libraries will be copied to the mounted /output directory.
 
@@ -26,17 +26,17 @@ RUN apt-get update && apt-get install -y \
     python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Ava Guardian source
-WORKDIR /ava-guardian
+# Copy AMA Cryptography source
+WORKDIR /ama-cryptography
 COPY . .
 
-# Build Ava Guardian C library with native PQC
+# Build AMA Cryptography C library with native PQC
 RUN mkdir -p build && cd build && \
     cmake .. \
-        -DAVA_USE_NATIVE_PQC=ON \
-        -DAVA_BUILD_SHARED=ON \
-        -DAVA_BUILD_STATIC=ON \
-        -DAVA_ENABLE_SIMD=ON \
+        -DAMA_USE_NATIVE_PQC=ON \
+        -DAMA_BUILD_SHARED=ON \
+        -DAMA_BUILD_STATIC=ON \
+        -DAMA_ENABLE_SIMD=ON \
         -DCMAKE_BUILD_TYPE=Release && \
     make -j$(nproc)
 
@@ -48,9 +48,9 @@ RUN apt-get update && apt-get install -y \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Ava Guardian libraries and headers
-COPY --from=builder /ava-guardian/build/lib* /usr/local/lib/
-COPY --from=builder /ava-guardian/include/ava_guardian.h /usr/local/include/
+# Copy AMA Cryptography libraries and headers
+COPY --from=builder /ama-cryptography/build/lib* /usr/local/lib/
+COPY --from=builder /ama-cryptography/include/ama_cryptography.h /usr/local/include/
 
 # Update library cache
 RUN ldconfig
@@ -60,14 +60,14 @@ WORKDIR /output
 
 # Default command: copy built artifacts to mounted volume
 CMD ["sh", "-c", "mkdir -p /output/lib /output/include && \
-    cp /usr/local/lib/libava_guardian* /output/lib/ 2>/dev/null || true && \
-    cp /usr/local/include/ava_guardian.h /output/include/ && \
-    echo 'Ava Guardian C API libraries exported to /output' && \
+    cp /usr/local/lib/libama_cryptography* /output/lib/ 2>/dev/null || true && \
+    cp /usr/local/include/ama_cryptography.h /output/include/ && \
+    echo 'AMA Cryptography C API libraries exported to /output' && \
     echo 'Contents:' && \
     ls -la /output/lib/ /output/include/"]
 
 # Labels
-LABEL org.opencontainers.image.title="Ava Guardian C API"
+LABEL org.opencontainers.image.title="AMA Cryptography C API"
 LABEL org.opencontainers.image.description="Reproducible C library build with native PQC (FIPS 203/204/205)"
 LABEL org.opencontainers.image.version="1.2"
 LABEL org.opencontainers.image.vendor="Steel Security Advisors LLC"

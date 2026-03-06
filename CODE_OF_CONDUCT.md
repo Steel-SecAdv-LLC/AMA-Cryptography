@@ -80,7 +80,7 @@ This Code of Conduct specifically applies to:
 * Project-related communications via email
 * Project-related technical discussions and code reviews
 * Representation of the project at conferences or events
-* Any other community interaction related to Ava Guardian
+* Any other community interaction related to AMA Cryptography
 
 ## Enforcement
 

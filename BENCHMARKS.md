@@ -1,4 +1,4 @@
-# Ava Guardian ♱ Performance Benchmarks
+# AMA Cryptography ♱ Performance Benchmarks
 
 ## Document Information
 
@@ -13,7 +13,7 @@
 
 ## Executive Summary
 
-This document provides **transparent, honest performance metrics** for Ava Guardian ♱ v1.0.0. We distinguish between:
+This document provides **transparent, honest performance metrics** for AMA Cryptography ♱ v1.0.0. We distinguish between:
 - **Measured**: Actual benchmark results from live testing
 - **Projected**: Estimates based on architecture (not yet measured)
 - **Unknown**: Requires additional testing
@@ -148,7 +148,7 @@ Quantum advantage: ~1.8x FASTER for verification
 **Practical Implications**:
 - Write-heavy workloads: Quantum signatures add latency
 - Read-heavy workloads: Quantum signatures improve performance
-- Ava Guardian ♱ uses **hybrid approach** (both Ed25519 + ML-DSA-65) for best of both worlds
+- AMA Cryptography ♱ uses **hybrid approach** (both Ed25519 + ML-DSA-65) for best of both worlds
 
 ---
 
@@ -235,7 +235,7 @@ These benchmarks compare our Cython-optimized mathematical engine against pure P
 
 ### 9.1 Tiered Tolerance Approach
 
-Ava Guardian uses a **tiered tolerance system** for CI benchmark regression detection:
+AMA Cryptography uses a **tiered tolerance system** for CI benchmark regression detection:
 
 | Tier | Benchmarks | Tolerance | Detects | Rationale |
 |------|-----------|-----------|---------|-----------|
@@ -283,7 +283,7 @@ python -m cProfile -o profile.stats code_guardian_secure.py
 
 ## 11. Conclusion
 
-Ava Guardian ♱ delivers **high-performance cryptography** with:
+AMA Cryptography ♱ delivers **high-performance cryptography** with:
 
 - **4,052 verifications/sec** (single-threaded)
 - **<0.32ms package creation** (typical)

@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
-#include "ava_guardian.h"
+#include "ama_cryptography.h"
 
 #define TEST_ASSERT(condition, message) \
     do { \
@@ -28,26 +28,26 @@ int main(void) {
     printf("Constant-Time Operations Test Suite\n");
     printf("===========================================\n\n");
 
-    /* Test 1: ava_consttime_memcmp with identical buffers */
+    /* Test 1: ama_consttime_memcmp with identical buffers */
     memset(a, 0xAA, sizeof(a));
     memset(b, 0xAA, sizeof(b));
-    result = ava_consttime_memcmp(a, b, sizeof(a));
+    result = ama_consttime_memcmp(a, b, sizeof(a));
     TEST_ASSERT(result == 0, "memcmp: identical buffers should return 0");
 
-    /* Test 2: ava_consttime_memcmp with different buffers */
+    /* Test 2: ama_consttime_memcmp with different buffers */
     b[0] = 0xBB;
-    result = ava_consttime_memcmp(a, b, sizeof(a));
+    result = ama_consttime_memcmp(a, b, sizeof(a));
     TEST_ASSERT(result != 0, "memcmp: different buffers should return non-zero");
 
-    /* Test 3: ava_consttime_memcmp with difference at end */
+    /* Test 3: ama_consttime_memcmp with difference at end */
     memset(b, 0xAA, sizeof(b));
     b[63] = 0xBB;
-    result = ava_consttime_memcmp(a, b, sizeof(a));
+    result = ama_consttime_memcmp(a, b, sizeof(a));
     TEST_ASSERT(result != 0, "memcmp: difference at end detected");
 
-    /* Test 4: ava_secure_memzero */
+    /* Test 4: ama_secure_memzero */
     memset(a, 0xFF, sizeof(a));
-    ava_secure_memzero(a, sizeof(a));
+    ama_secure_memzero(a, sizeof(a));
     int all_zero = 1;
     for (size_t i = 0; i < sizeof(a); i++) {
         if (a[i] != 0) {
@@ -57,10 +57,10 @@ int main(void) {
     }
     TEST_ASSERT(all_zero, "secure_memzero: buffer should be all zeros");
 
-    /* Test 5: ava_consttime_swap with condition = 1 */
+    /* Test 5: ama_consttime_swap with condition = 1 */
     memset(a, 0xAA, sizeof(a));
     memset(b, 0xBB, sizeof(b));
-    ava_consttime_swap(1, a, b, sizeof(a));
+    ama_consttime_swap(1, a, b, sizeof(a));
     int a_is_bb = 1, b_is_aa = 1;
     for (size_t i = 0; i < sizeof(a); i++) {
         if (a[i] != 0xBB) a_is_bb = 0;
@@ -68,10 +68,10 @@ int main(void) {
     }
     TEST_ASSERT(a_is_bb && b_is_aa, "consttime_swap: buffers swapped when condition=1");
 
-    /* Test 6: ava_consttime_swap with condition = 0 */
+    /* Test 6: ama_consttime_swap with condition = 0 */
     memset(a, 0xAA, sizeof(a));
     memset(b, 0xBB, sizeof(b));
-    ava_consttime_swap(0, a, b, sizeof(a));
+    ama_consttime_swap(0, a, b, sizeof(a));
     a_is_bb = 1;
     b_is_aa = 1;
     int a_is_aa = 1, b_is_bb = 1;

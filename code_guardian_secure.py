@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-Ava Guardian ♱ (AG♱): Ethical-Cryptographic SHA3-256 Security System
+AMA Cryptography ♱ (AG♱): Ethical-Cryptographic SHA3-256 Security System
 =====================================================================
 
 Complete cryptographic protection system for helical mathematical Omni-Codes.
@@ -23,7 +23,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
-Version: 1.1
+Version: 2.0
 Project: Post-quantum cryptographic security system
 
 AI Co-Architects:
@@ -52,7 +52,7 @@ Standards Compliance:
 - RFC 5869: HMAC-based Extract-and-Expand Key Derivation (HKDF)
 - RFC 3161: Internet X.509 Public Key Infrastructure Time-Stamp Protocol
 
-Version: 1.1
+Version: 2.0
 Python: 3.8+
 License: Apache License 2.0
 """
@@ -71,7 +71,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, cast
 
 if TYPE_CHECKING:
-    from ava_guardian_monitor import AvaGuardianMonitor
+    from ama_cryptography_monitor import AmaCryptographyMonitor
 
 # Cryptographic dependencies
 try:
@@ -88,20 +88,20 @@ except ImportError:
     raise
 
 # Import centralized exception classes
-from ava_guardian.exceptions import QuantumSignatureUnavailableError
+from ama_cryptography.exceptions import QuantumSignatureUnavailableError
 
 # Quantum-resistant cryptography (CRYSTALS-Dilithium)
 # Import from centralized PQC backends module (DRY principle)
 # We import the backend functions with underscore prefix and wrap them
 # to allow tests to monkeypatch module-level DILITHIUM_* variables
-from ava_guardian.pqc_backends import DILITHIUM_AVAILABLE as _PQC_DILITHIUM_AVAILABLE
-from ava_guardian.pqc_backends import DILITHIUM_BACKEND as _PQC_DILITHIUM_BACKEND
-from ava_guardian.pqc_backends import (
+from ama_cryptography.pqc_backends import DILITHIUM_AVAILABLE as _PQC_DILITHIUM_AVAILABLE
+from ama_cryptography.pqc_backends import DILITHIUM_BACKEND as _PQC_DILITHIUM_BACKEND
+from ama_cryptography.pqc_backends import (
     DilithiumKeyPair,
 )
-from ava_guardian.pqc_backends import dilithium_sign as _pqc_dilithium_sign
-from ava_guardian.pqc_backends import dilithium_verify as _pqc_dilithium_verify
-from ava_guardian.pqc_backends import generate_dilithium_keypair as _pqc_generate_dilithium_keypair
+from ama_cryptography.pqc_backends import dilithium_sign as _pqc_dilithium_sign
+from ama_cryptography.pqc_backends import dilithium_verify as _pqc_dilithium_verify
+from ama_cryptography.pqc_backends import generate_dilithium_keypair as _pqc_generate_dilithium_keypair
 
 # Module-level variables for backward compatibility with tests
 # Tests can monkeypatch these to test different backend paths
@@ -138,7 +138,7 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
     if not available:
         raise QuantumSignatureUnavailableError(
             "PQC_UNAVAILABLE: Dilithium backend not available. "
-            "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
+            "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
         )
 
     return _pqc_generate_dilithium_keypair()
@@ -170,7 +170,7 @@ def dilithium_sign(message: bytes, private_key: bytes) -> bytes:
     if not available:
         raise QuantumSignatureUnavailableError(
             "PQC_UNAVAILABLE: Dilithium backend not available. "
-            "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
+            "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
         )
 
     return _pqc_dilithium_sign(message, private_key)
@@ -203,7 +203,7 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
     if not available:
         raise QuantumSignatureUnavailableError(
             "PQC_UNAVAILABLE: Dilithium backend not available. "
-            "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
+            "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
         )
 
     return _pqc_dilithium_verify(message, signature, public_key)
@@ -212,7 +212,7 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
 # ============================================================================
 # EXCEPTIONS
 # ============================================================================
-# NOTE: QuantumSignatureUnavailableError is imported from ava_guardian.exceptions
+# NOTE: QuantumSignatureUnavailableError is imported from ama_cryptography.exceptions
 
 
 class QuantumSignatureRequiredError(Exception):
@@ -799,7 +799,7 @@ def ed25519_verify(
 # CRYSTALS-DILITHIUM QUANTUM-RESISTANT SIGNATURES
 # ============================================================================
 # NOTE: DilithiumKeyPair, generate_dilithium_keypair, dilithium_sign, and
-# dilithium_verify are now imported from ava_guardian.pqc_backends (DRY).
+# dilithium_verify are now imported from ama_cryptography.pqc_backends (DRY).
 # See that module for the authoritative implementation and documentation.
 # ============================================================================
 
@@ -1469,7 +1469,7 @@ def generate_key_management_system(
         print("=" * 70)
         print("System will use Ed25519 classical signatures only.")
         print("To enable quantum resistance, build native C library:")
-        print("  cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build")
+        print("  cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build")
         print("=" * 70 + "\n")
 
     return KeyManagementSystem(
@@ -1480,7 +1480,7 @@ def generate_key_management_system(
         dilithium_keypair=dilithium_keypair,
         creation_date=datetime.now(timezone.utc).isoformat(),
         rotation_schedule="quarterly",
-        version="1.1",
+        version="2.0",
         ethical_vector=ethical_vector,
         quantum_signatures_enabled=quantum_signatures_enabled,
     )
@@ -1513,7 +1513,7 @@ def export_public_keys(kms: KeyManagementSystem, output_dir: Path) -> None:
     # Create README
     readme_path = output_dir / "README.txt"
     with open(readme_path, "w") as f:
-        f.write("Ava Guardian ♱ (AG♱) - Public Keys\n")
+        f.write("AMA Cryptography ♱ (AG♱) - Public Keys\n")
         f.write("=" * 50 + "\n\n")
         f.write(f"Generated: {kms.creation_date}\n")
         f.write(f"Version: {kms.version}\n")
@@ -1551,7 +1551,7 @@ def export_public_keys(kms: KeyManagementSystem, output_dir: Path) -> None:
 
 # Domain separation constants for hybrid signature binding
 # These ensure Ed25519 and Dilithium sign identical, versioned messages
-SIGNATURE_DOMAIN_PREFIX = b"AG-PKG-v2"  # Ava Guardian Package v2
+SIGNATURE_DOMAIN_PREFIX = b"AMA-PKG-v2"  # AMA Cryptography Package v2
 SIGNATURE_FORMAT_V1 = "1.0.0"  # Legacy: signs raw content_hash
 SIGNATURE_FORMAT_V2 = "2.0.0"  # Current: signs domain-separated message
 
@@ -1580,7 +1580,7 @@ def build_signature_message(
     SIGNATURE_DOMAIN_PREFIX || version_bytes || content_hash || ethical_hash
 
     Where:
-    - SIGNATURE_DOMAIN_PREFIX = b"AG-PKG-v2" (9 bytes)
+    - SIGNATURE_DOMAIN_PREFIX = b"AMA-PKG-v2" (9 bytes)
     - version_bytes = UTF-8 encoded version string (5 bytes for "2.0.0")
     - content_hash = SHA3-256 hash of canonical code encoding (32 bytes)
     - ethical_hash = SHA3-256 hash of ethical vector (32 bytes)
@@ -1636,7 +1636,7 @@ class CryptoPackage:
     --------------------------
     - 1.0.0 (legacy): Ed25519 and Dilithium sign raw content_hash
     - 2.0.0 (current): Ed25519 and Dilithium sign domain-separated message:
-      b"AG-PKG-v2" || version || content_hash || ethical_hash
+      b"AMA-PKG-v2" || version || content_hash || ethical_hash
 
     The v2 format provides:
     - Domain separation to prevent cross-protocol signature replay
@@ -1678,7 +1678,7 @@ def create_crypto_package(  # noqa: C901 - high-level orchestrator; refactor wou
     author: str,
     use_rfc3161: bool = False,
     tsa_url: Optional[str] = None,
-    monitor: Optional["AvaGuardianMonitor"] = None,
+    monitor: Optional["AmaCryptographyMonitor"] = None,
 ) -> CryptoPackage:
     """
     Create cryptographically signed package for Omni-Codes.
@@ -1811,7 +1811,7 @@ def create_crypto_package(  # noqa: C901 - high-level orchestrator; refactor wou
         author=author,
         ed25519_pubkey=kms.ed25519_keypair.public_key.hex(),
         dilithium_pubkey=dilithium_pubkey,
-        version="1.1",
+        version="2.0",
         ethical_vector=ethical_vector,
         ethical_hash=ethical_hash_hex,
         quantum_signatures_enabled=quantum_signatures_enabled,
@@ -1832,7 +1832,7 @@ def _verify_timestamp_value(timestamp_str: str) -> bool:
 def _verify_dilithium_with_policy(
     signature_message: bytes,
     package: CryptoPackage,
-    monitor: Optional["AvaGuardianMonitor"],
+    monitor: Optional["AmaCryptographyMonitor"],
     require_quantum_signatures: bool,
 ) -> Optional[bool]:
     """
@@ -1904,7 +1904,7 @@ def verify_crypto_package(
     helix_params: List[Tuple[float, float]],
     package: CryptoPackage,
     hmac_key: bytes,
-    monitor: Optional["AvaGuardianMonitor"] = None,
+    monitor: Optional["AmaCryptographyMonitor"] = None,
     require_quantum_signatures: Optional[bool] = None,
 ) -> Dict[str, Optional[bool]]:
     """
@@ -2038,10 +2038,10 @@ def verify_crypto_package(
 
 def main():
     """
-    Demonstrate complete Ava Guardian ♱ system with all Omni-Codes.
+    Demonstrate complete AMA Cryptography ♱ system with all Omni-Codes.
     """
     print("\n" + "=" * 70)
-    print("Ava Guardian ♱ (AG♱): SHA3-256 Security Hash")
+    print("AMA Cryptography ♱ (AG♱): SHA3-256 Security Hash")
     print("=" * 70)
     print("\nCopyright (C) 2025 Steel Security Advisors LLC")
     print("Author/Inventor: Andrew E. A.")

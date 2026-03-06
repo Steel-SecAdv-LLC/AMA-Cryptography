@@ -5,9 +5,9 @@
 cryptography>=41.0.0
 
 # Quantum-resistant cryptography — fully native C backend
-# The native C library (libava_guardian) provides ML-DSA-65, Kyber-1024,
+# The native C library (libama_cryptography) provides ML-DSA-65, Kyber-1024,
 # and SPHINCS+-256f without any external PQC dependencies. Build with:
-#   cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build
+#   cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
 #
 # All implementations pass NIST KAT (Known Answer Test) validation:
 #   - FIPS 203 (ML-KEM-1024): 10/10 KAT vectors pass

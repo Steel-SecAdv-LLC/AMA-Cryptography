@@ -17,7 +17,7 @@
  */
 
 #define _POSIX_C_SOURCE 200809L  /* for strdup */
-#include "../../include/ava_guardian.h"
+#include "../../include/ama_cryptography.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -155,26 +155,26 @@ static void nist_drbg_generate(nist_drbg_ctx *ctx, uint8_t *out, size_t outlen) 
  * deterministic output for KAT vector reproduction.
  * ============================================================================ */
 
-extern ava_error_t (*ava_kyber_randombytes_hook)(uint8_t* buf, size_t len);
-extern ava_error_t (*ava_dilithium_randombytes_hook)(uint8_t* buf, size_t len);
-extern ava_error_t (*ava_sphincs_randombytes_hook)(uint8_t* buf, size_t len);
+extern ama_error_t (*ama_kyber_randombytes_hook)(uint8_t* buf, size_t len);
+extern ama_error_t (*ama_dilithium_randombytes_hook)(uint8_t* buf, size_t len);
+extern ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t* buf, size_t len);
 
 /* DRBG-based hook (for legacy pre-FIPS KAT tests) */
-static ava_error_t drbg_randombytes(uint8_t *buf, size_t len) {
+static ama_error_t drbg_randombytes(uint8_t *buf, size_t len) {
     nist_drbg_generate(&g_drbg, buf, len);
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
 static void install_drbg_hooks(void) {
-    ava_kyber_randombytes_hook = drbg_randombytes;
-    ava_dilithium_randombytes_hook = drbg_randombytes;
-    ava_sphincs_randombytes_hook = drbg_randombytes;
+    ama_kyber_randombytes_hook = drbg_randombytes;
+    ama_dilithium_randombytes_hook = drbg_randombytes;
+    ama_sphincs_randombytes_hook = drbg_randombytes;
 }
 
 static void remove_drbg_hooks(void) {
-    ava_kyber_randombytes_hook = NULL;
-    ava_dilithium_randombytes_hook = NULL;
-    ava_sphincs_randombytes_hook = NULL;
+    ama_kyber_randombytes_hook = NULL;
+    ama_dilithium_randombytes_hook = NULL;
+    ama_sphincs_randombytes_hook = NULL;
 }
 
 /* Buffer-based hook for FIPS KAT tests (feeds pre-loaded bytes sequentially) */
@@ -182,13 +182,13 @@ static uint8_t g_buf_hook_data[256];
 static size_t g_buf_hook_len = 0;
 static size_t g_buf_hook_pos = 0;
 
-static ava_error_t buf_hook_randombytes(uint8_t *buf, size_t len) {
+static ama_error_t buf_hook_randombytes(uint8_t *buf, size_t len) {
     if (g_buf_hook_pos + len > g_buf_hook_len) {
-        return AVA_ERROR_CRYPTO;  /* Buffer exhausted */
+        return AMA_ERROR_CRYPTO;  /* Buffer exhausted */
     }
     memcpy(buf, g_buf_hook_data + g_buf_hook_pos, len);
     g_buf_hook_pos += len;
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
 static void buf_hook_load(const uint8_t *data, size_t len) {
@@ -338,26 +338,26 @@ static const char *rsp_get_field(const rsp_entry *e, const char *name) {
  * EXTERN DECLARATIONS FOR NATIVE PQC API
  * ============================================================================ */
 
-extern ava_error_t ava_kyber_keypair(uint8_t* pk, size_t pk_len,
+extern ama_error_t ama_kyber_keypair(uint8_t* pk, size_t pk_len,
                                       uint8_t* sk, size_t sk_len);
-extern ava_error_t ava_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
+extern ama_error_t ama_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
                                           uint8_t* ct, size_t* ct_len,
                                           uint8_t* ss, size_t ss_len);
-extern ava_error_t ava_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
+extern ama_error_t ama_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
                                           const uint8_t* sk, size_t sk_len,
                                           uint8_t* ss, size_t ss_len);
-extern ava_error_t ava_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key);
-extern ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
+extern ama_error_t ama_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key);
+extern ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len,
                                        const uint8_t *message, size_t message_len,
                                        const uint8_t *secret_key);
-extern ava_error_t ava_dilithium_verify(const uint8_t *message, size_t message_len,
+extern ama_error_t ama_dilithium_verify(const uint8_t *message, size_t message_len,
                                          const uint8_t *signature, size_t signature_len,
                                          const uint8_t *public_key);
-extern ava_error_t ava_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key);
-extern ava_error_t ava_sphincs_sign(uint8_t *signature, size_t *signature_len,
+extern ama_error_t ama_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key);
+extern ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
                                      const uint8_t *message, size_t message_len,
                                      const uint8_t *secret_key);
-extern ava_error_t ava_sphincs_verify(const uint8_t *message, size_t message_len,
+extern ama_error_t ama_sphincs_verify(const uint8_t *message, size_t message_len,
                                        const uint8_t *signature, size_t signature_len,
                                        const uint8_t *public_key);
 
@@ -372,32 +372,32 @@ extern ava_error_t ava_sphincs_verify(const uint8_t *message, size_t message_len
  * Kyber-1024: keygen -> encapsulate -> decapsulate -> shared secrets match
  */
 static int test_kyber_roundtrip(void) {
-    uint8_t pk[AVA_KYBER_1024_PUBLIC_KEY_BYTES];
-    uint8_t sk[AVA_KYBER_1024_SECRET_KEY_BYTES];
-    uint8_t ct[AVA_KYBER_1024_CIPHERTEXT_BYTES];
-    uint8_t ss_enc[AVA_KYBER_1024_SHARED_SECRET_BYTES];
-    uint8_t ss_dec[AVA_KYBER_1024_SHARED_SECRET_BYTES];
+    uint8_t pk[AMA_KYBER_1024_PUBLIC_KEY_BYTES];
+    uint8_t sk[AMA_KYBER_1024_SECRET_KEY_BYTES];
+    uint8_t ct[AMA_KYBER_1024_CIPHERTEXT_BYTES];
+    uint8_t ss_enc[AMA_KYBER_1024_SHARED_SECRET_BYTES];
+    uint8_t ss_dec[AMA_KYBER_1024_SHARED_SECRET_BYTES];
     size_t ct_len = sizeof(ct);
-    ava_error_t rc;
+    ama_error_t rc;
 
     /* Generate keypair */
-    rc = ava_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk));
-    TEST_ASSERT(rc == AVA_SUCCESS, "Kyber keypair generation failed");
+    rc = ama_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk));
+    TEST_ASSERT(rc == AMA_SUCCESS, "Kyber keypair generation failed");
 
     /* Encapsulate */
-    rc = ava_kyber_encapsulate(pk, sizeof(pk), ct, &ct_len, ss_enc, sizeof(ss_enc));
-    TEST_ASSERT(rc == AVA_SUCCESS, "Kyber encapsulation failed");
-    TEST_ASSERT(ct_len == AVA_KYBER_1024_CIPHERTEXT_BYTES, "Kyber ciphertext wrong size");
+    rc = ama_kyber_encapsulate(pk, sizeof(pk), ct, &ct_len, ss_enc, sizeof(ss_enc));
+    TEST_ASSERT(rc == AMA_SUCCESS, "Kyber encapsulation failed");
+    TEST_ASSERT(ct_len == AMA_KYBER_1024_CIPHERTEXT_BYTES, "Kyber ciphertext wrong size");
 
     /* Decapsulate */
-    rc = ava_kyber_decapsulate(ct, ct_len, sk, sizeof(sk), ss_dec, sizeof(ss_dec));
-    TEST_ASSERT(rc == AVA_SUCCESS, "Kyber decapsulation failed");
+    rc = ama_kyber_decapsulate(ct, ct_len, sk, sizeof(sk), ss_dec, sizeof(ss_dec));
+    TEST_ASSERT(rc == AMA_SUCCESS, "Kyber decapsulation failed");
 
     /* Shared secrets must match */
-    TEST_ASSERT(memcmp(ss_enc, ss_dec, AVA_KYBER_1024_SHARED_SECRET_BYTES) == 0,
+    TEST_ASSERT(memcmp(ss_enc, ss_dec, AMA_KYBER_1024_SHARED_SECRET_BYTES) == 0,
                 "Kyber shared secrets DO NOT MATCH - ROUNDTRIP FAILURE");
 
-    printf("    Shared secrets match (%d bytes)\n", AVA_KYBER_1024_SHARED_SECRET_BYTES);
+    printf("    Shared secrets match (%d bytes)\n", AMA_KYBER_1024_SHARED_SECRET_BYTES);
     return 1;
 }
 
@@ -405,30 +405,30 @@ static int test_kyber_roundtrip(void) {
  * Kyber-1024: verify implicit rejection works (tampered ciphertext)
  */
 static int test_kyber_implicit_rejection(void) {
-    uint8_t pk[AVA_KYBER_1024_PUBLIC_KEY_BYTES];
-    uint8_t sk[AVA_KYBER_1024_SECRET_KEY_BYTES];
-    uint8_t ct[AVA_KYBER_1024_CIPHERTEXT_BYTES];
-    uint8_t ss_enc[AVA_KYBER_1024_SHARED_SECRET_BYTES];
-    uint8_t ss_dec[AVA_KYBER_1024_SHARED_SECRET_BYTES];
+    uint8_t pk[AMA_KYBER_1024_PUBLIC_KEY_BYTES];
+    uint8_t sk[AMA_KYBER_1024_SECRET_KEY_BYTES];
+    uint8_t ct[AMA_KYBER_1024_CIPHERTEXT_BYTES];
+    uint8_t ss_enc[AMA_KYBER_1024_SHARED_SECRET_BYTES];
+    uint8_t ss_dec[AMA_KYBER_1024_SHARED_SECRET_BYTES];
     size_t ct_len = sizeof(ct);
-    ava_error_t rc;
+    ama_error_t rc;
 
-    rc = ava_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk));
-    TEST_ASSERT(rc == AVA_SUCCESS, "Kyber keypair generation failed");
+    rc = ama_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk));
+    TEST_ASSERT(rc == AMA_SUCCESS, "Kyber keypair generation failed");
 
-    rc = ava_kyber_encapsulate(pk, sizeof(pk), ct, &ct_len, ss_enc, sizeof(ss_enc));
-    TEST_ASSERT(rc == AVA_SUCCESS, "Kyber encapsulation failed");
+    rc = ama_kyber_encapsulate(pk, sizeof(pk), ct, &ct_len, ss_enc, sizeof(ss_enc));
+    TEST_ASSERT(rc == AMA_SUCCESS, "Kyber encapsulation failed");
 
     /* Tamper with ciphertext */
     ct[0] ^= 0xFF;
     ct[100] ^= 0xFF;
 
     /* Decapsulate tampered ciphertext - should succeed but produce different SS */
-    rc = ava_kyber_decapsulate(ct, ct_len, sk, sizeof(sk), ss_dec, sizeof(ss_dec));
-    TEST_ASSERT(rc == AVA_SUCCESS, "Kyber decap should succeed (implicit rejection)");
+    rc = ama_kyber_decapsulate(ct, ct_len, sk, sizeof(sk), ss_dec, sizeof(ss_dec));
+    TEST_ASSERT(rc == AMA_SUCCESS, "Kyber decap should succeed (implicit rejection)");
 
     /* Shared secrets must NOT match (implicit rejection) */
-    TEST_ASSERT(memcmp(ss_enc, ss_dec, AVA_KYBER_1024_SHARED_SECRET_BYTES) != 0,
+    TEST_ASSERT(memcmp(ss_enc, ss_dec, AMA_KYBER_1024_SHARED_SECRET_BYTES) != 0,
                 "Kyber implicit rejection FAILED - tampered CT produced same SS!");
 
     printf("    Implicit rejection working (tampered CT produces different SS)\n");
@@ -439,25 +439,25 @@ static int test_kyber_implicit_rejection(void) {
  * ML-DSA-65: keygen -> sign -> verify -> pass
  */
 static int test_dilithium_roundtrip(void) {
-    uint8_t pk[AVA_ML_DSA_65_PUBLIC_KEY_BYTES];
-    uint8_t sk[AVA_ML_DSA_65_SECRET_KEY_BYTES];
-    uint8_t sig[AVA_ML_DSA_65_SIGNATURE_BYTES];
+    uint8_t pk[AMA_ML_DSA_65_PUBLIC_KEY_BYTES];
+    uint8_t sk[AMA_ML_DSA_65_SECRET_KEY_BYTES];
+    uint8_t sig[AMA_ML_DSA_65_SIGNATURE_BYTES];
     size_t sig_len = sizeof(sig);
-    const uint8_t msg[] = "Ava Guardian - Post-Quantum Cryptography Self-Test";
-    ava_error_t rc;
+    const uint8_t msg[] = "AMA Cryptography - Post-Quantum Cryptography Self-Test";
+    ama_error_t rc;
 
     /* Generate keypair */
-    rc = ava_dilithium_keypair(pk, sk);
-    TEST_ASSERT(rc == AVA_SUCCESS, "Dilithium keypair generation failed");
+    rc = ama_dilithium_keypair(pk, sk);
+    TEST_ASSERT(rc == AMA_SUCCESS, "Dilithium keypair generation failed");
 
     /* Sign */
-    rc = ava_dilithium_sign(sig, &sig_len, msg, sizeof(msg) - 1, sk);
-    TEST_ASSERT(rc == AVA_SUCCESS, "Dilithium signing failed");
-    TEST_ASSERT(sig_len == AVA_ML_DSA_65_SIGNATURE_BYTES, "Dilithium signature wrong size");
+    rc = ama_dilithium_sign(sig, &sig_len, msg, sizeof(msg) - 1, sk);
+    TEST_ASSERT(rc == AMA_SUCCESS, "Dilithium signing failed");
+    TEST_ASSERT(sig_len == AMA_ML_DSA_65_SIGNATURE_BYTES, "Dilithium signature wrong size");
 
     /* Verify */
-    rc = ava_dilithium_verify(msg, sizeof(msg) - 1, sig, sig_len, pk);
-    TEST_ASSERT(rc == AVA_SUCCESS,
+    rc = ama_dilithium_verify(msg, sizeof(msg) - 1, sig, sig_len, pk);
+    TEST_ASSERT(rc == AMA_SUCCESS,
                 "Dilithium verification FAILED - ROUNDTRIP FAILURE");
 
     printf("    Sign/verify roundtrip OK (sig = %zu bytes)\n", sig_len);
@@ -468,34 +468,34 @@ static int test_dilithium_roundtrip(void) {
  * ML-DSA-65: tampered message should fail verification
  */
 static int test_dilithium_tamper_detection(void) {
-    uint8_t pk[AVA_ML_DSA_65_PUBLIC_KEY_BYTES];
-    uint8_t sk[AVA_ML_DSA_65_SECRET_KEY_BYTES];
-    uint8_t sig[AVA_ML_DSA_65_SIGNATURE_BYTES];
+    uint8_t pk[AMA_ML_DSA_65_PUBLIC_KEY_BYTES];
+    uint8_t sk[AMA_ML_DSA_65_SECRET_KEY_BYTES];
+    uint8_t sig[AMA_ML_DSA_65_SIGNATURE_BYTES];
     size_t sig_len = sizeof(sig);
     uint8_t msg[] = "Original message for Dilithium tamper test";
-    ava_error_t rc;
+    ama_error_t rc;
 
-    rc = ava_dilithium_keypair(pk, sk);
-    TEST_ASSERT(rc == AVA_SUCCESS, "Dilithium keypair generation failed");
+    rc = ama_dilithium_keypair(pk, sk);
+    TEST_ASSERT(rc == AMA_SUCCESS, "Dilithium keypair generation failed");
 
-    rc = ava_dilithium_sign(sig, &sig_len, msg, sizeof(msg) - 1, sk);
-    TEST_ASSERT(rc == AVA_SUCCESS, "Dilithium signing failed");
+    rc = ama_dilithium_sign(sig, &sig_len, msg, sizeof(msg) - 1, sk);
+    TEST_ASSERT(rc == AMA_SUCCESS, "Dilithium signing failed");
 
     /* Verify original passes */
-    rc = ava_dilithium_verify(msg, sizeof(msg) - 1, sig, sig_len, pk);
-    TEST_ASSERT(rc == AVA_SUCCESS, "Dilithium verification of original message failed");
+    rc = ama_dilithium_verify(msg, sizeof(msg) - 1, sig, sig_len, pk);
+    TEST_ASSERT(rc == AMA_SUCCESS, "Dilithium verification of original message failed");
 
     /* Tamper with message */
     msg[0] ^= 0x01;
-    rc = ava_dilithium_verify(msg, sizeof(msg) - 1, sig, sig_len, pk);
-    TEST_ASSERT(rc == AVA_ERROR_VERIFY_FAILED,
+    rc = ama_dilithium_verify(msg, sizeof(msg) - 1, sig, sig_len, pk);
+    TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
                 "Dilithium FAILED to detect tampered message!");
 
     /* Tamper with signature */
     msg[0] ^= 0x01;  /* Restore message */
     sig[0] ^= 0xFF;
-    rc = ava_dilithium_verify(msg, sizeof(msg) - 1, sig, sig_len, pk);
-    TEST_ASSERT(rc == AVA_ERROR_VERIFY_FAILED,
+    rc = ama_dilithium_verify(msg, sizeof(msg) - 1, sig, sig_len, pk);
+    TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
                 "Dilithium FAILED to detect tampered signature!");
 
     printf("    Tamper detection OK (modified msg and sig both rejected)\n");
@@ -506,15 +506,15 @@ static int test_dilithium_tamper_detection(void) {
  * ML-DSA-65: multiple sign/verify with different messages
  */
 static int test_dilithium_multiple_messages(void) {
-    uint8_t pk[AVA_ML_DSA_65_PUBLIC_KEY_BYTES];
-    uint8_t sk[AVA_ML_DSA_65_SECRET_KEY_BYTES];
-    uint8_t sig[AVA_ML_DSA_65_SIGNATURE_BYTES];
+    uint8_t pk[AMA_ML_DSA_65_PUBLIC_KEY_BYTES];
+    uint8_t sk[AMA_ML_DSA_65_SECRET_KEY_BYTES];
+    uint8_t sig[AMA_ML_DSA_65_SIGNATURE_BYTES];
     size_t sig_len;
-    ava_error_t rc;
+    ama_error_t rc;
     int i;
 
-    rc = ava_dilithium_keypair(pk, sk);
-    TEST_ASSERT(rc == AVA_SUCCESS, "Dilithium keypair generation failed");
+    rc = ama_dilithium_keypair(pk, sk);
+    TEST_ASSERT(rc == AMA_SUCCESS, "Dilithium keypair generation failed");
 
     /* Sign and verify 5 different messages with same key */
     const char *messages[] = {
@@ -527,13 +527,13 @@ static int test_dilithium_multiple_messages(void) {
 
     for (i = 0; i < 5; i++) {
         sig_len = sizeof(sig);
-        rc = ava_dilithium_sign(sig, &sig_len, (const uint8_t *)messages[i],
+        rc = ama_dilithium_sign(sig, &sig_len, (const uint8_t *)messages[i],
                                 strlen(messages[i]), sk);
-        TEST_ASSERT(rc == AVA_SUCCESS, "Dilithium signing failed for multi-message test");
+        TEST_ASSERT(rc == AMA_SUCCESS, "Dilithium signing failed for multi-message test");
 
-        rc = ava_dilithium_verify((const uint8_t *)messages[i], strlen(messages[i]),
+        rc = ama_dilithium_verify((const uint8_t *)messages[i], strlen(messages[i]),
                                   sig, sig_len, pk);
-        TEST_ASSERT(rc == AVA_SUCCESS, "Dilithium verification failed for multi-message test");
+        TEST_ASSERT(rc == AMA_SUCCESS, "Dilithium verification failed for multi-message test");
     }
 
     printf("    5/5 messages signed and verified correctly\n");
@@ -544,30 +544,30 @@ static int test_dilithium_multiple_messages(void) {
  * SPHINCS+-SHA2-256f: keygen -> sign -> verify -> pass
  */
 static int test_sphincs_roundtrip(void) {
-    uint8_t pk[AVA_SPHINCS_256F_PUBLIC_KEY_BYTES];
-    uint8_t sk[AVA_SPHINCS_256F_SECRET_KEY_BYTES];
+    uint8_t pk[AMA_SPHINCS_256F_PUBLIC_KEY_BYTES];
+    uint8_t sk[AMA_SPHINCS_256F_SECRET_KEY_BYTES];
     uint8_t *sig;
-    size_t sig_len = AVA_SPHINCS_256F_SIGNATURE_BYTES;
+    size_t sig_len = AMA_SPHINCS_256F_SIGNATURE_BYTES;
     const uint8_t msg[] = "SPHINCS+ hash-based signature self-test";
-    ava_error_t rc;
+    ama_error_t rc;
 
     /* Allocate signature buffer on heap (49856 bytes is large) */
-    sig = (uint8_t *)malloc(AVA_SPHINCS_256F_SIGNATURE_BYTES);
+    sig = (uint8_t *)malloc(AMA_SPHINCS_256F_SIGNATURE_BYTES);
     TEST_ASSERT(sig != NULL, "Failed to allocate SPHINCS+ signature buffer");
 
     /* Generate keypair */
-    rc = ava_sphincs_keypair(pk, sk);
-    TEST_ASSERT(rc == AVA_SUCCESS, "SPHINCS+ keypair generation failed");
+    rc = ama_sphincs_keypair(pk, sk);
+    TEST_ASSERT(rc == AMA_SUCCESS, "SPHINCS+ keypair generation failed");
 
     /* Sign */
-    rc = ava_sphincs_sign(sig, &sig_len, msg, sizeof(msg) - 1, sk);
-    TEST_ASSERT(rc == AVA_SUCCESS, "SPHINCS+ signing failed");
-    TEST_ASSERT(sig_len == AVA_SPHINCS_256F_SIGNATURE_BYTES,
+    rc = ama_sphincs_sign(sig, &sig_len, msg, sizeof(msg) - 1, sk);
+    TEST_ASSERT(rc == AMA_SUCCESS, "SPHINCS+ signing failed");
+    TEST_ASSERT(sig_len == AMA_SPHINCS_256F_SIGNATURE_BYTES,
                 "SPHINCS+ signature wrong size");
 
     /* Verify */
-    rc = ava_sphincs_verify(msg, sizeof(msg) - 1, sig, sig_len, pk);
-    TEST_ASSERT(rc == AVA_SUCCESS,
+    rc = ama_sphincs_verify(msg, sizeof(msg) - 1, sig, sig_len, pk);
+    TEST_ASSERT(rc == AMA_SUCCESS,
                 "SPHINCS+ verification FAILED - ROUNDTRIP FAILURE");
 
     printf("    Sign/verify roundtrip OK (sig = %zu bytes)\n", sig_len);
@@ -579,30 +579,30 @@ static int test_sphincs_roundtrip(void) {
  * SPHINCS+: tampered message should fail verification
  */
 static int test_sphincs_tamper_detection(void) {
-    uint8_t pk[AVA_SPHINCS_256F_PUBLIC_KEY_BYTES];
-    uint8_t sk[AVA_SPHINCS_256F_SECRET_KEY_BYTES];
+    uint8_t pk[AMA_SPHINCS_256F_PUBLIC_KEY_BYTES];
+    uint8_t sk[AMA_SPHINCS_256F_SECRET_KEY_BYTES];
     uint8_t *sig;
-    size_t sig_len = AVA_SPHINCS_256F_SIGNATURE_BYTES;
+    size_t sig_len = AMA_SPHINCS_256F_SIGNATURE_BYTES;
     uint8_t msg[] = "SPHINCS+ tamper detection test message";
-    ava_error_t rc;
+    ama_error_t rc;
 
-    sig = (uint8_t *)malloc(AVA_SPHINCS_256F_SIGNATURE_BYTES);
+    sig = (uint8_t *)malloc(AMA_SPHINCS_256F_SIGNATURE_BYTES);
     TEST_ASSERT(sig != NULL, "Failed to allocate SPHINCS+ signature buffer");
 
-    rc = ava_sphincs_keypair(pk, sk);
-    TEST_ASSERT(rc == AVA_SUCCESS, "SPHINCS+ keypair generation failed");
+    rc = ama_sphincs_keypair(pk, sk);
+    TEST_ASSERT(rc == AMA_SUCCESS, "SPHINCS+ keypair generation failed");
 
-    rc = ava_sphincs_sign(sig, &sig_len, msg, sizeof(msg) - 1, sk);
-    TEST_ASSERT(rc == AVA_SUCCESS, "SPHINCS+ signing failed");
+    rc = ama_sphincs_sign(sig, &sig_len, msg, sizeof(msg) - 1, sk);
+    TEST_ASSERT(rc == AMA_SUCCESS, "SPHINCS+ signing failed");
 
     /* Verify original */
-    rc = ava_sphincs_verify(msg, sizeof(msg) - 1, sig, sig_len, pk);
-    TEST_ASSERT(rc == AVA_SUCCESS, "SPHINCS+ verification of original failed");
+    rc = ama_sphincs_verify(msg, sizeof(msg) - 1, sig, sig_len, pk);
+    TEST_ASSERT(rc == AMA_SUCCESS, "SPHINCS+ verification of original failed");
 
     /* Tamper with message */
     msg[0] ^= 0x01;
-    rc = ava_sphincs_verify(msg, sizeof(msg) - 1, sig, sig_len, pk);
-    TEST_ASSERT(rc == AVA_ERROR_VERIFY_FAILED,
+    rc = ama_sphincs_verify(msg, sizeof(msg) - 1, sig, sig_len, pk);
+    TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
                 "SPHINCS+ FAILED to detect tampered message!");
 
     printf("    Tamper detection OK\n");
@@ -661,16 +661,16 @@ static int test_kyber_kat_vector(void) {
 
         /* Load d||z into buffer hook: keygen calls randombytes(d, 32) then randombytes(z, 32) */
         buf_hook_load(dz_buf, 64);
-        ava_kyber_randombytes_hook = buf_hook_randombytes;
+        ama_kyber_randombytes_hook = buf_hook_randombytes;
 
         /* Generate keypair */
-        uint8_t pk[AVA_KYBER_1024_PUBLIC_KEY_BYTES];
-        uint8_t sk[AVA_KYBER_1024_SECRET_KEY_BYTES];
-        ava_error_t rc = ava_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk));
+        uint8_t pk[AMA_KYBER_1024_PUBLIC_KEY_BYTES];
+        uint8_t sk[AMA_KYBER_1024_SECRET_KEY_BYTES];
+        ama_error_t rc = ama_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk));
 
-        ava_kyber_randombytes_hook = NULL;
+        ama_kyber_randombytes_hook = NULL;
 
-        if (rc != AVA_SUCCESS) {
+        if (rc != AMA_SUCCESS) {
             printf("keygen failed (rc=%d)\n", rc);
             rsp_entry_free(&entry);
             kat_tested++;
@@ -678,16 +678,16 @@ static int test_kyber_kat_vector(void) {
         }
 
         /* Compare public key */
-        uint8_t *expected_pk = (uint8_t *)malloc(AVA_KYBER_1024_PUBLIC_KEY_BYTES);
-        int pk_bytes = hex_to_bytes(pk_hex, expected_pk, AVA_KYBER_1024_PUBLIC_KEY_BYTES);
-        int pk_match = (pk_bytes == AVA_KYBER_1024_PUBLIC_KEY_BYTES &&
-                       memcmp(pk, expected_pk, AVA_KYBER_1024_PUBLIC_KEY_BYTES) == 0);
+        uint8_t *expected_pk = (uint8_t *)malloc(AMA_KYBER_1024_PUBLIC_KEY_BYTES);
+        int pk_bytes = hex_to_bytes(pk_hex, expected_pk, AMA_KYBER_1024_PUBLIC_KEY_BYTES);
+        int pk_match = (pk_bytes == AMA_KYBER_1024_PUBLIC_KEY_BYTES &&
+                       memcmp(pk, expected_pk, AMA_KYBER_1024_PUBLIC_KEY_BYTES) == 0);
 
         /* Compare secret key */
-        uint8_t *expected_sk = (uint8_t *)malloc(AVA_KYBER_1024_SECRET_KEY_BYTES);
-        int sk_bytes = hex_to_bytes(sk_hex, expected_sk, AVA_KYBER_1024_SECRET_KEY_BYTES);
-        int sk_match = (sk_bytes == AVA_KYBER_1024_SECRET_KEY_BYTES &&
-                       memcmp(sk, expected_sk, AVA_KYBER_1024_SECRET_KEY_BYTES) == 0);
+        uint8_t *expected_sk = (uint8_t *)malloc(AMA_KYBER_1024_SECRET_KEY_BYTES);
+        int sk_bytes = hex_to_bytes(sk_hex, expected_sk, AMA_KYBER_1024_SECRET_KEY_BYTES);
+        int sk_match = (sk_bytes == AMA_KYBER_1024_SECRET_KEY_BYTES &&
+                       memcmp(sk, expected_sk, AMA_KYBER_1024_SECRET_KEY_BYTES) == 0);
 
         if (pk_match && sk_match) {
             printf("keygen MATCH (pk + sk)\n");
@@ -698,7 +698,7 @@ static int test_kyber_kat_vector(void) {
                    sk_match ? "OK" : "DIFFER");
             if (!pk_match) {
                 /* Show first divergence byte for debugging */
-                for (int i = 0; i < pk_bytes && i < AVA_KYBER_1024_PUBLIC_KEY_BYTES; i++) {
+                for (int i = 0; i < pk_bytes && i < AMA_KYBER_1024_PUBLIC_KEY_BYTES; i++) {
                     if (pk[i] != expected_pk[i]) {
                         printf("      pk diverges at byte %d: got %02X, expected %02X\n", i, pk[i], expected_pk[i]);
                         break;
@@ -752,16 +752,16 @@ static int test_dilithium_kat_vector(void) {
 
         /* Load seed into buffer hook: keygen calls randombytes(seedbuf, 32) */
         buf_hook_load(seed, 32);
-        ava_dilithium_randombytes_hook = buf_hook_randombytes;
+        ama_dilithium_randombytes_hook = buf_hook_randombytes;
 
         /* Generate keypair */
-        uint8_t pk[AVA_ML_DSA_65_PUBLIC_KEY_BYTES];
-        uint8_t sk[AVA_ML_DSA_65_SECRET_KEY_BYTES];
-        ava_error_t rc = ava_dilithium_keypair(pk, sk);
+        uint8_t pk[AMA_ML_DSA_65_PUBLIC_KEY_BYTES];
+        uint8_t sk[AMA_ML_DSA_65_SECRET_KEY_BYTES];
+        ama_error_t rc = ama_dilithium_keypair(pk, sk);
 
-        ava_dilithium_randombytes_hook = NULL;
+        ama_dilithium_randombytes_hook = NULL;
 
-        if (rc != AVA_SUCCESS) {
+        if (rc != AMA_SUCCESS) {
             printf("keygen failed (rc=%d)\n", rc);
             rsp_entry_free(&entry);
             kat_tested++;
@@ -769,16 +769,16 @@ static int test_dilithium_kat_vector(void) {
         }
 
         /* Compare public key */
-        uint8_t *expected_pk = (uint8_t *)malloc(AVA_ML_DSA_65_PUBLIC_KEY_BYTES);
-        int pk_bytes = hex_to_bytes(pk_hex, expected_pk, AVA_ML_DSA_65_PUBLIC_KEY_BYTES);
-        int pk_match = (pk_bytes == AVA_ML_DSA_65_PUBLIC_KEY_BYTES &&
-                       memcmp(pk, expected_pk, AVA_ML_DSA_65_PUBLIC_KEY_BYTES) == 0);
+        uint8_t *expected_pk = (uint8_t *)malloc(AMA_ML_DSA_65_PUBLIC_KEY_BYTES);
+        int pk_bytes = hex_to_bytes(pk_hex, expected_pk, AMA_ML_DSA_65_PUBLIC_KEY_BYTES);
+        int pk_match = (pk_bytes == AMA_ML_DSA_65_PUBLIC_KEY_BYTES &&
+                       memcmp(pk, expected_pk, AMA_ML_DSA_65_PUBLIC_KEY_BYTES) == 0);
 
         /* Compare secret key */
-        uint8_t *expected_sk = (uint8_t *)malloc(AVA_ML_DSA_65_SECRET_KEY_BYTES);
-        int sk_bytes = hex_to_bytes(sk_hex, expected_sk, AVA_ML_DSA_65_SECRET_KEY_BYTES);
-        int sk_match = (sk_bytes == AVA_ML_DSA_65_SECRET_KEY_BYTES &&
-                       memcmp(sk, expected_sk, AVA_ML_DSA_65_SECRET_KEY_BYTES) == 0);
+        uint8_t *expected_sk = (uint8_t *)malloc(AMA_ML_DSA_65_SECRET_KEY_BYTES);
+        int sk_bytes = hex_to_bytes(sk_hex, expected_sk, AMA_ML_DSA_65_SECRET_KEY_BYTES);
+        int sk_match = (sk_bytes == AMA_ML_DSA_65_SECRET_KEY_BYTES &&
+                       memcmp(sk, expected_sk, AMA_ML_DSA_65_SECRET_KEY_BYTES) == 0);
 
         if (pk_match && sk_match) {
             printf("keygen MATCH (pk + sk)\n");
@@ -788,7 +788,7 @@ static int test_dilithium_kat_vector(void) {
                    pk_match ? "OK" : "DIFFER",
                    sk_match ? "OK" : "DIFFER");
             if (!pk_match) {
-                for (int i = 0; i < pk_bytes && i < AVA_ML_DSA_65_PUBLIC_KEY_BYTES; i++) {
+                for (int i = 0; i < pk_bytes && i < AMA_ML_DSA_65_PUBLIC_KEY_BYTES; i++) {
                     if (pk[i] != expected_pk[i]) {
                         printf("      pk diverges at byte %d: got %02X, expected %02X\n", i, pk[i], expected_pk[i]);
                         break;
@@ -869,26 +869,26 @@ static int test_kyber_compress_roundtrip(void) {
      * which exercises all compression paths. The roundtrip test above
      * already validates this. This test specifically checks the 11-bit path. */
 
-    uint8_t pk[AVA_KYBER_1024_PUBLIC_KEY_BYTES];
-    uint8_t sk[AVA_KYBER_1024_SECRET_KEY_BYTES];
-    uint8_t ct[AVA_KYBER_1024_CIPHERTEXT_BYTES];
-    uint8_t ss1[AVA_KYBER_1024_SHARED_SECRET_BYTES];
-    uint8_t ss2[AVA_KYBER_1024_SHARED_SECRET_BYTES];
+    uint8_t pk[AMA_KYBER_1024_PUBLIC_KEY_BYTES];
+    uint8_t sk[AMA_KYBER_1024_SECRET_KEY_BYTES];
+    uint8_t ct[AMA_KYBER_1024_CIPHERTEXT_BYTES];
+    uint8_t ss1[AMA_KYBER_1024_SHARED_SECRET_BYTES];
+    uint8_t ss2[AMA_KYBER_1024_SHARED_SECRET_BYTES];
     size_t ct_len;
-    ava_error_t rc;
+    ama_error_t rc;
     int i, successes = 0;
 
     /* Run 10 roundtrips to stress-test compression */
     for (i = 0; i < 10; i++) {
-        rc = ava_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk));
-        if (rc != AVA_SUCCESS) continue;
+        rc = ama_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk));
+        if (rc != AMA_SUCCESS) continue;
 
         ct_len = sizeof(ct);
-        rc = ava_kyber_encapsulate(pk, sizeof(pk), ct, &ct_len, ss1, sizeof(ss1));
-        if (rc != AVA_SUCCESS) continue;
+        rc = ama_kyber_encapsulate(pk, sizeof(pk), ct, &ct_len, ss1, sizeof(ss1));
+        if (rc != AMA_SUCCESS) continue;
 
-        rc = ava_kyber_decapsulate(ct, ct_len, sk, sizeof(sk), ss2, sizeof(ss2));
-        if (rc != AVA_SUCCESS) continue;
+        rc = ama_kyber_decapsulate(ct, ct_len, sk, sizeof(sk), ss2, sizeof(ss2));
+        if (rc != AMA_SUCCESS) continue;
 
         if (memcmp(ss1, ss2, sizeof(ss1)) == 0) {
             successes++;
@@ -914,7 +914,7 @@ int main(int argc, char *argv[]) {
     setbuf(stderr, NULL);
 
     printf("================================================================\n");
-    printf("  Ava Guardian - PQC Known Answer Test (KAT) Framework\n");
+    printf("  AMA Cryptography - PQC Known Answer Test (KAT) Framework\n");
     printf("  Steel Security Advisors LLC\n");
     printf("================================================================\n\n");
 

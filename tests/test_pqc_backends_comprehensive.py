@@ -18,7 +18,7 @@ Test Categories:
 
 import pytest
 
-from ava_guardian.pqc_backends import (
+from ama_cryptography.pqc_backends import (
     DILITHIUM_AVAILABLE,
     DILITHIUM_BACKEND,
     DILITHIUM_PUBLIC_KEY_BYTES,
@@ -353,7 +353,7 @@ class TestDilithiumUnavailable:
     @pytest.fixture
     def mock_unavailable(self, monkeypatch):
         """Mock Dilithium as unavailable."""
-        monkeypatch.setattr("ava_guardian.pqc_backends.DILITHIUM_AVAILABLE", False)
+        monkeypatch.setattr("ama_cryptography.pqc_backends.DILITHIUM_AVAILABLE", False)
 
     def test_generate_raises_error(self, mock_unavailable):
         """generate_dilithium_keypair raises when unavailable."""
@@ -466,7 +466,7 @@ class TestKyberUnavailable:
     @pytest.fixture
     def mock_unavailable(self, monkeypatch):
         """Mock Kyber as unavailable."""
-        monkeypatch.setattr("ava_guardian.pqc_backends.KYBER_AVAILABLE", False)
+        monkeypatch.setattr("ama_cryptography.pqc_backends.KYBER_AVAILABLE", False)
 
     def test_generate_raises_error(self, mock_unavailable):
         """generate_kyber_keypair raises when unavailable."""
@@ -561,7 +561,7 @@ class TestSphincsUnavailable:
     @pytest.fixture
     def mock_unavailable(self, monkeypatch):
         """Mock SPHINCS+ as unavailable."""
-        monkeypatch.setattr("ava_guardian.pqc_backends.SPHINCS_AVAILABLE", False)
+        monkeypatch.setattr("ama_cryptography.pqc_backends.SPHINCS_AVAILABLE", False)
 
     def test_generate_raises_error(self, mock_unavailable):
         """generate_sphincs_keypair raises when unavailable."""

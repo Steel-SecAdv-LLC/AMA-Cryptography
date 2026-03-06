@@ -5,7 +5,7 @@
 Pytest Configuration and Shared Fixtures
 =========================================
 
-Centralized test fixtures for the Ava Guardian ♱ test suite.
+Centralized test fixtures for the AMA Cryptography ♱ test suite.
 Provides reusable components for cryptographic testing.
 
 This file consolidates fixtures from across the test suite to:
@@ -85,7 +85,7 @@ def test_password() -> str:
 @pytest.fixture
 def hd_derivation(master_seed: bytes):
     """Provide an HDKeyDerivation instance with deterministic seed."""
-    from ava_guardian.key_management import HDKeyDerivation
+    from ama_cryptography.key_management import HDKeyDerivation
 
     return HDKeyDerivation(seed=master_seed)
 
@@ -93,7 +93,7 @@ def hd_derivation(master_seed: bytes):
 @pytest.fixture
 def hd_derivation_random():
     """Provide an HDKeyDerivation instance with random seed."""
-    from ava_guardian.key_management import HDKeyDerivation
+    from ama_cryptography.key_management import HDKeyDerivation
 
     return HDKeyDerivation()
 
@@ -106,7 +106,7 @@ def hd_derivation_random():
 @pytest.fixture
 def rotation_manager():
     """Provide a KeyRotationManager with default settings."""
-    from ava_guardian.key_management import KeyRotationManager
+    from ama_cryptography.key_management import KeyRotationManager
 
     return KeyRotationManager()
 
@@ -114,7 +114,7 @@ def rotation_manager():
 @pytest.fixture
 def rotation_manager_short_period():
     """Provide a KeyRotationManager with very short rotation period."""
-    from ava_guardian.key_management import KeyRotationManager
+    from ama_cryptography.key_management import KeyRotationManager
 
     return KeyRotationManager(rotation_period=timedelta(seconds=0))
 
@@ -122,7 +122,7 @@ def rotation_manager_short_period():
 @pytest.fixture
 def rotation_manager_long_period():
     """Provide a KeyRotationManager with long rotation period."""
-    from ava_guardian.key_management import KeyRotationManager
+    from ama_cryptography.key_management import KeyRotationManager
 
     return KeyRotationManager(rotation_period=timedelta(days=365))
 
@@ -135,7 +135,7 @@ def rotation_manager_long_period():
 @pytest.fixture
 def secure_storage(temp_storage_path: Path, test_password: str):
     """Provide a SecureKeyStorage instance with password-derived key."""
-    from ava_guardian.key_management import SecureKeyStorage
+    from ama_cryptography.key_management import SecureKeyStorage
 
     return SecureKeyStorage(temp_storage_path, master_password=test_password)
 
@@ -143,7 +143,7 @@ def secure_storage(temp_storage_path: Path, test_password: str):
 @pytest.fixture
 def secure_storage_no_password(temp_storage_path: Path):
     """Provide a SecureKeyStorage instance with random encryption key."""
-    from ava_guardian.key_management import SecureKeyStorage
+    from ama_cryptography.key_management import SecureKeyStorage
 
     return SecureKeyStorage(temp_storage_path)
 
@@ -155,18 +155,18 @@ def secure_storage_no_password(temp_storage_path: Path):
 
 @pytest.fixture
 def crypto_ed25519():
-    """Provide an AvaGuardianCrypto instance for Ed25519."""
-    from ava_guardian.crypto_api import AlgorithmType, AvaGuardianCrypto
+    """Provide an AmaCryptography instance for Ed25519."""
+    from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
 
-    return AvaGuardianCrypto(algorithm=AlgorithmType.ED25519)
+    return AmaCryptography(algorithm=AlgorithmType.ED25519)
 
 
 @pytest.fixture
 def crypto_hybrid():
-    """Provide an AvaGuardianCrypto instance for hybrid signatures."""
-    from ava_guardian.crypto_api import AlgorithmType, AvaGuardianCrypto
+    """Provide an AmaCryptography instance for hybrid signatures."""
+    from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
 
-    return AvaGuardianCrypto(algorithm=AlgorithmType.HYBRID_SIG)
+    return AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
 
 
 @pytest.fixture
@@ -179,7 +179,7 @@ def ed25519_keypair(crypto_ed25519) -> Tuple[bytes, bytes]:
 @pytest.fixture
 def test_message() -> bytes:
     """Provide a standard test message for signature tests."""
-    return b"Test message for Ava Guardian cryptographic operations."
+    return b"Test message for AMA Cryptography cryptographic operations."
 
 
 @pytest.fixture
@@ -196,7 +196,7 @@ def test_message_large() -> bytes:
 @pytest.fixture
 def pqc_backend_info():
     """Provide current PQC backend availability info."""
-    from ava_guardian.pqc_backends import get_pqc_backend_info
+    from ama_cryptography.pqc_backends import get_pqc_backend_info
 
     return get_pqc_backend_info()
 
@@ -204,7 +204,7 @@ def pqc_backend_info():
 @pytest.fixture
 def dilithium_available():
     """Check if Dilithium is available."""
-    from ava_guardian.pqc_backends import DILITHIUM_AVAILABLE
+    from ama_cryptography.pqc_backends import DILITHIUM_AVAILABLE
 
     return DILITHIUM_AVAILABLE
 
@@ -212,7 +212,7 @@ def dilithium_available():
 @pytest.fixture
 def kyber_available():
     """Check if Kyber is available."""
-    from ava_guardian.pqc_backends import KYBER_AVAILABLE
+    from ama_cryptography.pqc_backends import KYBER_AVAILABLE
 
     return KYBER_AVAILABLE
 
@@ -220,7 +220,7 @@ def kyber_available():
 @pytest.fixture
 def sphincs_available():
     """Check if SPHINCS+ is available."""
-    from ava_guardian.pqc_backends import SPHINCS_AVAILABLE
+    from ama_cryptography.pqc_backends import SPHINCS_AVAILABLE
 
     return SPHINCS_AVAILABLE
 
@@ -232,10 +232,10 @@ def sphincs_available():
 
 @pytest.fixture
 def equation_engine():
-    """Provide an AvaEquationEngine instance."""
-    from ava_guardian.double_helix_engine import AvaEquationEngine
+    """Provide an AmaEquationEngine instance."""
+    from ama_cryptography.double_helix_engine import AmaEquationEngine
 
-    return AvaEquationEngine()
+    return AmaEquationEngine()
 
 
 @pytest.fixture
@@ -253,24 +253,24 @@ def initial_state():
 
 @pytest.fixture
 def guardian_monitor():
-    """Provide an AvaGuardianMonitor instance."""
+    """Provide an AmaCryptographyMonitor instance."""
     try:
-        from ava_guardian_monitor import AvaGuardianMonitor
+        from ama_cryptography_monitor import AmaCryptographyMonitor
 
-        return AvaGuardianMonitor(enabled=True)
+        return AmaCryptographyMonitor(enabled=True)
     except ImportError:
-        pytest.skip("ava_guardian_monitor not available")
+        pytest.skip("ama_cryptography_monitor not available")
 
 
 @pytest.fixture
 def guardian_monitor_disabled():
-    """Provide a disabled AvaGuardianMonitor instance."""
+    """Provide a disabled AmaCryptographyMonitor instance."""
     try:
-        from ava_guardian_monitor import AvaGuardianMonitor
+        from ama_cryptography_monitor import AmaCryptographyMonitor
 
-        return AvaGuardianMonitor(enabled=False)
+        return AmaCryptographyMonitor(enabled=False)
     except ImportError:
-        pytest.skip("ava_guardian_monitor not available")
+        pytest.skip("ama_cryptography_monitor not available")
 
 
 # =============================================================================
@@ -288,7 +288,7 @@ def sample_omni_code() -> dict:
             "content": "Sample Omni-Code for testing",
             "metadata": {
                 "created_by": "test_suite",
-                "version": "1.1",
+                "version": "2.0",
             },
         },
     }

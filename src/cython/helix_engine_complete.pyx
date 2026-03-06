@@ -10,10 +10,10 @@
 Copyright 2025 Steel Security Advisors LLC
 Licensed under the Apache License, Version 2.0
 
-Ava Guardian ♱ Complete Double-Helix Engine (Cython)
+AMA Cryptography ♱ Complete Double-Helix Engine (Cython)
 =====================================================
 
-Optimized implementation of ALL 18+ Ava Equation variants.
+Optimized implementation of ALL 18+ AMA Equation variants.
 Targets 30-100x speedup over pure Python through complete Cython optimization.
 
 Complete Helix_1 Terms (Discovery/Exploration):
@@ -51,7 +51,7 @@ cdef double LAMBDA_DECAY = 0.18
 
 cdef class AvaEngineOptimized:
     """
-    Ultra-optimized Ava Equation Engine with all 18+ variants.
+    Ultra-optimized AMA Equation Engine with all 18+ variants.
 
     Achieves 30-100x speedup through:
     - Cython C-level compilation

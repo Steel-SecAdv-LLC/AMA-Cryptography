@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-Comprehensive performance benchmarking suite for Ava Guardian
+Comprehensive performance benchmarking suite for AMA Cryptography
 
 Benchmarks:
 - Pure Python vs Cython operations
@@ -119,7 +119,7 @@ class PerformanceBenchmark:
 
 def benchmark_lyapunov_functions():
     """Benchmark Lyapunov function implementations"""
-    from ava_guardian.equations import lyapunov_function  # noqa: F401
+    from ama_cryptography.equations import lyapunov_function  # noqa: F401
 
     state = np.random.randn(1000)
     target = np.ones(1000)
@@ -131,7 +131,7 @@ def benchmark_lyapunov_functions():
 
     # Try to import Cython version
     try:
-        from ava_guardian.math_engine import lyapunov_function_fast
+        from ama_cryptography.math_engine import lyapunov_function_fast
 
         bench.compare_implementations(
             "Lyapunov Function",
@@ -165,7 +165,7 @@ def benchmark_matrix_operations():
 
     # Try Cython version
     try:
-        from ava_guardian.math_engine import matrix_vector_multiply
+        from ama_cryptography.math_engine import matrix_vector_multiply
 
         bench.compare_implementations(
             "Matrix-Vector Multiplication",
@@ -184,9 +184,9 @@ def benchmark_matrix_operations():
 
 def benchmark_helix_evolution():
     """Benchmark double-helix evolution"""
-    from ava_guardian.double_helix_engine import AvaEquationEngine
+    from ama_cryptography.double_helix_engine import AmaEquationEngine
 
-    engine = AvaEquationEngine(state_dim=100, random_seed=42)
+    engine = AmaEquationEngine(state_dim=100, random_seed=42)
     state = np.random.randn(100) * 0.5
 
     def run_step(eng, s):
@@ -204,11 +204,11 @@ def benchmark_constant_time_ops():
         # Try to import C library
         import ctypes
 
-        lib = ctypes.CDLL("build/lib/libava_guardian.so")
+        lib = ctypes.CDLL("build/lib/libama_cryptography.so")
 
         # Setup function signatures
-        lib.ava_consttime_memcmp.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
-        lib.ava_consttime_memcmp.restype = ctypes.c_int
+        lib.ama_consttime_memcmp.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
+        lib.ama_consttime_memcmp.restype = ctypes.c_int
 
         a = b"A" * 1024
         b = b"A" * 1024
@@ -216,7 +216,7 @@ def benchmark_constant_time_ops():
         pb = ctypes.c_char_p(b)
 
         def c_memcmp():
-            return lib.ava_consttime_memcmp(pa, pb, 1024)
+            return lib.ama_consttime_memcmp(pa, pb, 1024)
 
         bench = PerformanceBenchmark(iterations=100000)
         bench.run_benchmark("Constant-Time Memcmp (C)", c_memcmp)
@@ -231,7 +231,7 @@ def benchmark_constant_time_ops():
 def main():
     """Run all benchmarks"""
     print("=" * 70)
-    print("Ava Guardian ♱ Performance Benchmark Suite")
+    print("AMA Cryptography ♱ Performance Benchmark Suite")
     print("=" * 70)
 
     all_results = []

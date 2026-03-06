@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-Ava Guardian ♱ (AG♱) - Benchmark Validation Suite
+AMA Cryptography ♱ (AG♱) - Benchmark Validation Suite
 ==================================================
 
 Empirically validates all performance claims in BENCHMARKS.md against
@@ -14,8 +14,8 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
-Version: 1.1
-Project: Ava Guardian ♱ Performance Validation
+Version: 2.0
+Project: AMA Cryptography ♱ Performance Validation
 """
 
 import hashlib
@@ -218,7 +218,7 @@ class BenchmarkValidator:
                     algorithm=hashes.SHA3_256(),
                     length=32,
                     salt=salt,
-                    info=b"ava-guardian-key",
+                    info=b"ama-cryptography-key",
                 )
                 return hkdf.derive(master)
 
@@ -261,7 +261,7 @@ class BenchmarkValidator:
         print("CRYPTOGRAPHIC OPERATION BENCHMARKS")
         print("=" * 70)
 
-        test_data = b"Ava Guardian benchmark test data for cryptographic operations" * 10
+        test_data = b"AMA Cryptography benchmark test data for cryptographic operations" * 10
 
         # SHA3-256 hashing
         def sha3_hash():
@@ -351,9 +351,9 @@ class BenchmarkValidator:
         print("=" * 70)
 
         try:
-            from ava_guardian_monitor import AvaGuardianMonitor
+            from ama_cryptography_monitor import AmaCryptographyMonitor
 
-            monitor = AvaGuardianMonitor(enabled=True)
+            monitor = AmaCryptographyMonitor(enabled=True)
 
             # Measure timing monitor overhead (this is the hot-path instrumentation)
             # The documented <2% overhead refers to this timing instrumentation
@@ -396,7 +396,7 @@ class BenchmarkValidator:
         pass_rate = (passed / total * 100) if total > 0 else 0
 
         report = []
-        report.append("# Ava Guardian ♱ Benchmark Validation Report")
+        report.append("# AMA Cryptography ♱ Benchmark Validation Report")
         report.append("")
         report.append("## Summary")
         report.append("")
@@ -465,7 +465,7 @@ class BenchmarkValidator:
 def main() -> int:
     """Run benchmark validation suite."""
     print("=" * 70)
-    print("Ava Guardian ♱ (AG♱) - Benchmark Validation Suite")
+    print("AMA Cryptography ♱ (AG♱) - Benchmark Validation Suite")
     print("=" * 70)
     print("\nValidating performance claims from BENCHMARKS.md...")
 

@@ -7,7 +7,7 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "ava_guardian.h"
+#include "ama_cryptography.h"
 
 #define TEST_ASSERT(condition, message) \
     do { \
@@ -50,7 +50,7 @@ int main(void) {
     uint8_t public_key[32];
     uint8_t secret_key[64];
     uint8_t signature[64];
-    ava_error_t rc;
+    ama_error_t rc;
 
     printf("===========================================\n");
     printf("Ed25519 Test Suite\n");
@@ -70,28 +70,28 @@ int main(void) {
 
     /* Test 1: Keypair generation with known seed */
     memcpy(secret_key, rfc8032_sk_seed, 32);
-    rc = ava_ed25519_keypair(public_key, secret_key);
-    TEST_ASSERT(rc == AVA_SUCCESS, "ed25519_keypair: should succeed");
+    rc = ama_ed25519_keypair(public_key, secret_key);
+    TEST_ASSERT(rc == AMA_SUCCESS, "ed25519_keypair: should succeed");
 
     /* Test 2: Sign empty message */
-    rc = ava_ed25519_sign(signature, NULL, 0, secret_key);
-    TEST_ASSERT(rc == AVA_SUCCESS, "ed25519_sign: empty message should succeed");
+    rc = ama_ed25519_sign(signature, NULL, 0, secret_key);
+    TEST_ASSERT(rc == AMA_SUCCESS, "ed25519_sign: empty message should succeed");
 
     /* Test 3: Sign longer message */
     const uint8_t message[] = "The quick brown fox jumps over the lazy dog";
-    rc = ava_ed25519_sign(signature, message, sizeof(message) - 1, secret_key);
-    TEST_ASSERT(rc == AVA_SUCCESS, "ed25519_sign: longer message should succeed");
+    rc = ama_ed25519_sign(signature, message, sizeof(message) - 1, secret_key);
+    TEST_ASSERT(rc == AMA_SUCCESS, "ed25519_sign: longer message should succeed");
 
     /* Test 4: NULL parameters should fail gracefully */
-    rc = ava_ed25519_sign(NULL, message, sizeof(message) - 1, secret_key);
-    TEST_ASSERT(rc == AVA_ERROR_INVALID_PARAM, "ed25519_sign: NULL signature should fail");
-    rc = ava_ed25519_verify(signature, message, sizeof(message) - 1, NULL);
-    TEST_ASSERT(rc == AVA_ERROR_INVALID_PARAM, "ed25519_verify: NULL public key should fail");
+    rc = ama_ed25519_sign(NULL, message, sizeof(message) - 1, secret_key);
+    TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, "ed25519_sign: NULL signature should fail");
+    rc = ama_ed25519_verify(signature, message, sizeof(message) - 1, NULL);
+    TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, "ed25519_verify: NULL public key should fail");
 
     /* Test 5: Deterministic signatures */
     uint8_t sig1[64], sig2[64];
-    rc = ava_ed25519_sign(sig1, message, sizeof(message) - 1, secret_key);
-    rc = ava_ed25519_sign(sig2, message, sizeof(message) - 1, secret_key);
+    rc = ama_ed25519_sign(sig1, message, sizeof(message) - 1, secret_key);
+    rc = ama_ed25519_sign(sig2, message, sizeof(message) - 1, secret_key);
     TEST_ASSERT(memcmp(sig1, sig2, 64) == 0, "ed25519_sign: deterministic signatures");
 
     /* Note: Full sign/verify roundtrip tests are skipped because the

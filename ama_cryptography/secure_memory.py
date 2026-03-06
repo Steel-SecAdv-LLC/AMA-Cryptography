@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-Ava Guardian Secure Memory Module
+AMA Cryptography Secure Memory Module
 =================================
 
 Provides secure memory operations with optional libsodium enhancement
@@ -43,7 +43,7 @@ Implementation Notes:
     with direct libsodium linking.
 
 Usage:
-    from ava_guardian.secure_memory import (
+    from ama_cryptography.secure_memory import (
         SecureBuffer,
         secure_memzero,
         secure_mlock,
@@ -70,7 +70,8 @@ Author/Inventor: Andrew E. A.
 
 import warnings
 from contextlib import contextmanager
-from typing import Optional, Union
+from types import TracebackType
+from typing import Dict, Generator, Optional, Type, Union
 
 # Try to import pynacl for libsodium bindings
 _HAS_NACL = False
@@ -406,7 +407,12 @@ class SecureBuffer:
 
         return self._data
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> None:
         """Exit context, zero and unlock buffer."""
         if self._data is not None:
             # Always zero the buffer
@@ -425,7 +431,7 @@ class SecureBuffer:
 
 
 @contextmanager
-def secure_buffer(size: int, lock: bool = True):
+def secure_buffer(size: int, lock: bool = True) -> Generator[bytearray, None, None]:
     """
     Functional context manager for secure buffers.
 
@@ -482,7 +488,7 @@ def _init_libsodium() -> bool:
 _SODIUM_INITIALIZED = _init_libsodium()
 
 
-def get_status() -> dict:
+def get_status() -> Dict[str, Union[bool, str]]:
     """
     Get secure memory module status.
 

@@ -2,21 +2,21 @@
 # Copyright 2025 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 #
-# Sphinx configuration for Ava Guardian ♱ Python API documentation
+# Sphinx configuration for AMA Cryptography ♱ Python API documentation
 
 import os
 import sys
 
 # Add source to path
-# Add parent directory to path so autodoc can find ava_guardian package
+# Add parent directory to path so autodoc can find ama_cryptography package
 sys.path.insert(0, os.path.abspath(".."))
 
 # Project information
-project = "Ava Guardian ♱"
+project = "AMA Cryptography ♱"
 copyright = "2025, Steel Security Advisors LLC"
 author = "Andrew E. A."
-version = "1.1"
-release = "1.1"
+version = "2.0"
+release = "2.0"
 
 # General configuration
 extensions = [
@@ -119,25 +119,25 @@ html_show_sphinx = True
 html_show_copyright = True
 
 # HTML help
-htmlhelp_basename = "AvaGuardiandoc"
+htmlhelp_basename = "AmaCryptographydoc"
 
 # LaTeX output
 latex_elements = {}
 latex_documents = [
-    (master_doc, "AvaGuardian.tex", f"{project} Documentation", author, "manual"),
+    (master_doc, "AmaCryptography.tex", f"{project} Documentation", author, "manual"),
 ]
 
 # Manual pages
-man_pages = [(master_doc, "ava-guardian", f"{project} Documentation", [author], 1)]
+man_pages = [(master_doc, "ama-cryptography", f"{project} Documentation", [author], 1)]
 
 # Texinfo output
 texinfo_documents = [
     (
         master_doc,
-        "AvaGuardian",
+        "AmaCryptography",
         f"{project} Documentation",
         author,
-        "AvaGuardian",
+        "AmaCryptography",
         "Quantum-Resistant Cryptographic Protection System.",
         "Miscellaneous",
     ),
