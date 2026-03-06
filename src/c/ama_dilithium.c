@@ -151,7 +151,7 @@ static const int32_t dil_zetas[DIL_N] = {
  * MONTGOMERY AND MODULAR ARITHMETIC
  * ============================================================================ */
 
-#define DIL_MONT (-4186625)   /* 2^32 mod q */
+#define DIL_MONT (-4186625)   /* 2^32 mod q (Montgomery R, retained for reference) */
 #define DIL_QINV 58728449     /* q^(-1) mod 2^32 */
 
 /**
