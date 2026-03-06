@@ -255,11 +255,11 @@ setup(
         "Programming Language :: C",
         "Programming Language :: Cython",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
         "Topic :: Security :: Cryptography",
         "Topic :: Software Development :: Libraries :: Python Modules",
         "Typing :: Typed",
@@ -275,7 +275,7 @@ setup(
         "pqc",
         "security",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.9",
     packages=find_packages(exclude=["tests", "tests.*", "examples", "examples.*", "src", "src.*"]),
     # Note: pyproject.toml is the authoritative source for dependencies.
     # This section is kept in sync for compatibility with older tools.

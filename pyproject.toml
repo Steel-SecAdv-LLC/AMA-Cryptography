@@ -33,16 +33,16 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Security :: Cryptography",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Typing :: Typed"
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 dependencies = [
     "cryptography>=41.0.0",
     # NumPy/SciPy: Version constraints aligned with requirements-dev.txt
@@ -84,7 +84,7 @@ Issues = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/issues"
 # Black configuration
 [tool.black]
 line-length = 100
-target-version = ["py38", "py39", "py310", "py311", "py312"]
+target-version = ["py39", "py310", "py311", "py312", "py313"]
 include = '\.pyi?$'
 extend-exclude = '''
 /(
