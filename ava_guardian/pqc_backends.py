@@ -121,10 +121,12 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
         search_dirs.append(pkg_dir / build_dir)
 
     # System paths
-    search_dirs.extend([
-        Path("/usr/local/lib"),
-        Path("/usr/lib"),
-    ])
+    search_dirs.extend(
+        [
+            Path("/usr/local/lib"),
+            Path("/usr/lib"),
+        ]
+    )
 
     # LD_LIBRARY_PATH / DYLD_LIBRARY_PATH
     env_path = os.getenv("LD_LIBRARY_PATH", "") or os.getenv("DYLD_LIBRARY_PATH", "")
@@ -164,37 +166,49 @@ def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
         lib.ava_dilithium_keypair.restype = ctypes.c_int
 
         lib.ava_dilithium_sign.argtypes = [
-            ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t),
-            ctypes.c_char_p, ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_char_p,
+            ctypes.c_size_t,
             ctypes.c_char_p,
         ]
         lib.ava_dilithium_sign.restype = ctypes.c_int
 
         lib.ava_dilithium_verify.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,
-            ctypes.c_char_p, ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
             ctypes.c_char_p,
         ]
         lib.ava_dilithium_verify.restype = ctypes.c_int
 
         # Kyber-1024
         lib.ava_kyber_keypair.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,
-            ctypes.c_char_p, ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
         ]
         lib.ava_kyber_keypair.restype = ctypes.c_int
 
         lib.ava_kyber_encapsulate.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,
-            ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t),
-            ctypes.c_char_p, ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_char_p,
+            ctypes.c_size_t,
         ]
         lib.ava_kyber_encapsulate.restype = ctypes.c_int
 
         lib.ava_kyber_decapsulate.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,
-            ctypes.c_char_p, ctypes.c_size_t,
-            ctypes.c_char_p, ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
         ]
         lib.ava_kyber_decapsulate.restype = ctypes.c_int
 
@@ -203,15 +217,19 @@ def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
         lib.ava_sphincs_keypair.restype = ctypes.c_int
 
         lib.ava_sphincs_sign.argtypes = [
-            ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t),
-            ctypes.c_char_p, ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_char_p,
+            ctypes.c_size_t,
             ctypes.c_char_p,
         ]
         lib.ava_sphincs_sign.restype = ctypes.c_int
 
         lib.ava_sphincs_verify.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,
-            ctypes.c_char_p, ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
             ctypes.c_char_p,
         ]
         lib.ava_sphincs_verify.restype = ctypes.c_int
@@ -284,12 +302,8 @@ _KYBER_UNKNOWN_STATE = "KYBER_UNAVAILABLE: Unknown backend state"
 _SPHINCS_UNKNOWN_STATE = "SPHINCS_UNAVAILABLE: Unknown backend state"
 
 # Backend unavailable error messages
-_DILITHIUM_UNAVAILABLE_MSG = (
-    f"PQC_UNAVAILABLE: Dilithium backend not available. {_INSTALL_HINT}"
-)
-_KYBER_UNAVAILABLE_MSG = (
-    f"KYBER_UNAVAILABLE: Kyber-1024 backend not available. {_INSTALL_HINT}"
-)
+_DILITHIUM_UNAVAILABLE_MSG = f"PQC_UNAVAILABLE: Dilithium backend not available. {_INSTALL_HINT}"
+_KYBER_UNAVAILABLE_MSG = f"KYBER_UNAVAILABLE: Kyber-1024 backend not available. {_INSTALL_HINT}"
 _SPHINCS_UNAVAILABLE_MSG = (
     f"SPHINCS_UNAVAILABLE: SPHINCS+-256f backend not available. {_INSTALL_HINT}"
 )
@@ -492,8 +506,10 @@ def dilithium_sign(message: bytes, private_key: bytes) -> bytes:
         sig_buf = ctypes.create_string_buffer(DILITHIUM_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(DILITHIUM_SIGNATURE_BYTES)
         rc = _native_lib.ava_dilithium_sign(
-            sig_buf, ctypes.byref(sig_len),
-            message, ctypes.c_size_t(len(message)),
+            sig_buf,
+            ctypes.byref(sig_len),
+            message,
+            ctypes.c_size_t(len(message)),
             private_key,
         )
         if rc != 0:
@@ -525,8 +541,10 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
 
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ava_dilithium_verify(
-            message, ctypes.c_size_t(len(message)),
-            signature, ctypes.c_size_t(len(signature)),
+            message,
+            ctypes.c_size_t(len(message)),
+            signature,
+            ctypes.c_size_t(len(signature)),
             public_key,
         )
         return rc == 0
@@ -566,13 +584,13 @@ def generate_kyber_keypair() -> KyberKeyPair:
         pk_buf = ctypes.create_string_buffer(KYBER_PUBLIC_KEY_BYTES)
         sk_buf = ctypes.create_string_buffer(KYBER_SECRET_KEY_BYTES)
         rc = _native_lib.ava_kyber_keypair(
-            pk_buf, ctypes.c_size_t(KYBER_PUBLIC_KEY_BYTES),
-            sk_buf, ctypes.c_size_t(KYBER_SECRET_KEY_BYTES),
+            pk_buf,
+            ctypes.c_size_t(KYBER_PUBLIC_KEY_BYTES),
+            sk_buf,
+            ctypes.c_size_t(KYBER_SECRET_KEY_BYTES),
         )
         if rc != 0:
-            raise KyberUnavailableError(
-                f"Native kyber_keypair failed with error code {rc}"
-            )
+            raise KyberUnavailableError(f"Native kyber_keypair failed with error code {rc}")
         return KyberKeyPair(secret_key=bytes(sk_buf), public_key=bytes(pk_buf))
 
     raise KyberUnavailableError(_KYBER_UNKNOWN_STATE)
@@ -618,14 +636,15 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
         ct_len = ctypes.c_size_t(KYBER_CIPHERTEXT_BYTES)
         ss_buf = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
         rc = _native_lib.ava_kyber_encapsulate(
-            public_key, ctypes.c_size_t(len(public_key)),
-            ct_buf, ctypes.byref(ct_len),
-            ss_buf, ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
+            public_key,
+            ctypes.c_size_t(len(public_key)),
+            ct_buf,
+            ctypes.byref(ct_len),
+            ss_buf,
+            ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
         )
         if rc != 0:
-            raise KyberUnavailableError(
-                f"Native kyber_encapsulate failed with error code {rc}"
-            )
+            raise KyberUnavailableError(f"Native kyber_encapsulate failed with error code {rc}")
         return KyberEncapsulation(
             ciphertext=bytes(ct_buf[: ct_len.value]),
             shared_secret=bytes(ss_buf),
@@ -677,14 +696,15 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: bytes) -> bytes:
     if KYBER_BACKEND == "native" and _native_lib is not None:
         ss_buf = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
         rc = _native_lib.ava_kyber_decapsulate(
-            ciphertext, ctypes.c_size_t(len(ciphertext)),
-            secret_key, ctypes.c_size_t(len(secret_key)),
-            ss_buf, ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
+            ciphertext,
+            ctypes.c_size_t(len(ciphertext)),
+            secret_key,
+            ctypes.c_size_t(len(secret_key)),
+            ss_buf,
+            ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
         )
         if rc != 0:
-            raise KyberUnavailableError(
-                f"Native kyber_decapsulate failed with error code {rc}"
-            )
+            raise KyberUnavailableError(f"Native kyber_decapsulate failed with error code {rc}")
         return bytes(ss_buf)
 
     raise KyberUnavailableError(_KYBER_UNKNOWN_STATE)
@@ -724,9 +744,7 @@ def generate_sphincs_keypair() -> SphincsKeyPair:
         sk_buf = ctypes.create_string_buffer(SPHINCS_SECRET_KEY_BYTES)
         rc = _native_lib.ava_sphincs_keypair(pk_buf, sk_buf)
         if rc != 0:
-            raise SphincsUnavailableError(
-                f"Native sphincs_keypair failed with error code {rc}"
-            )
+            raise SphincsUnavailableError(f"Native sphincs_keypair failed with error code {rc}")
         return SphincsKeyPair(secret_key=bytes(sk_buf), public_key=bytes(pk_buf))
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
@@ -769,14 +787,14 @@ def sphincs_sign(message: bytes, secret_key: bytes) -> bytes:
         sig_buf = ctypes.create_string_buffer(SPHINCS_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(SPHINCS_SIGNATURE_BYTES)
         rc = _native_lib.ava_sphincs_sign(
-            sig_buf, ctypes.byref(sig_len),
-            message, ctypes.c_size_t(len(message)),
+            sig_buf,
+            ctypes.byref(sig_len),
+            message,
+            ctypes.c_size_t(len(message)),
             secret_key,
         )
         if rc != 0:
-            raise SphincsUnavailableError(
-                f"Native sphincs_sign failed with error code {rc}"
-            )
+            raise SphincsUnavailableError(f"Native sphincs_sign failed with error code {rc}")
         return bytes(sig_buf[: sig_len.value])
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
@@ -817,8 +835,10 @@ def sphincs_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
 
     if SPHINCS_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ava_sphincs_verify(
-            message, ctypes.c_size_t(len(message)),
-            signature, ctypes.c_size_t(len(signature)),
+            message,
+            ctypes.c_size_t(len(message)),
+            signature,
+            ctypes.c_size_t(len(signature)),
             public_key,
         )
         return rc == 0

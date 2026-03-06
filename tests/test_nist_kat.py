@@ -691,9 +691,7 @@ class TestMLDSAKATValidation:
         implements internal verify (Algorithm 8), so we reconstruct the
         internal message format before calling dilithium_verify.
         """
-        vectors = load_fips204_kat_vectors(
-            FIPS204_DIR / "ml_dsa_65.kat", max_vectors=10
-        )
+        vectors = load_fips204_kat_vectors(FIPS204_DIR / "ml_dsa_65.kat", max_vectors=10)
         assert len(vectors) >= 5, "Need at least 5 FIPS 204 KAT vectors"
 
         for i, kat in enumerate(vectors):

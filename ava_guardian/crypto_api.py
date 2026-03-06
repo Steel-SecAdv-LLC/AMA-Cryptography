@@ -282,9 +282,7 @@ class MLDSAProvider(CryptoProvider):
             PQCUnavailableError: If no Dilithium backend is available
         """
         if not self._available:
-            raise PQCUnavailableError(
-                "PQC_UNAVAILABLE: ML-DSA-65 requires native C backend."
-            )
+            raise PQCUnavailableError("PQC_UNAVAILABLE: ML-DSA-65 requires native C backend.")
 
         sig_bytes = dilithium_sign(message, secret_key)
         message_hash = hashlib.sha3_256(message).digest()
@@ -315,9 +313,7 @@ class MLDSAProvider(CryptoProvider):
             PQCUnavailableError: If no Dilithium backend is available
         """
         if not self._available:
-            raise PQCUnavailableError(
-                "PQC_UNAVAILABLE: ML-DSA-65 requires native C backend."
-            )
+            raise PQCUnavailableError("PQC_UNAVAILABLE: ML-DSA-65 requires native C backend.")
 
         return dilithium_verify(message, signature, public_key)
 

@@ -109,7 +109,6 @@ DILITHIUM_AVAILABLE: bool = _PQC_DILITHIUM_AVAILABLE
 DILITHIUM_BACKEND: Optional[str] = _PQC_DILITHIUM_BACKEND
 
 
-
 # ============================================================================
 # DILITHIUM WRAPPER FUNCTIONS (for test compatibility)
 # ============================================================================

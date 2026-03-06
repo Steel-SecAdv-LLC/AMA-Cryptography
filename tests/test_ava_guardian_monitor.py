@@ -885,9 +885,9 @@ class TestMonitorIntegration:
         # Monitor should be active with populated baseline stats
         report = monitor.get_security_report()
         assert report["status"] == "active"
-        assert len(report["timing_baseline"]) > 0, (
-            "timing_baseline should be populated after 32 cycles"
-        )
+        assert (
+            len(report["timing_baseline"]) > 0
+        ), "timing_baseline should be populated after 32 cycles"
 
 
 if __name__ == "__main__":
