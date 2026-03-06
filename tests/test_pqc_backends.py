@@ -12,6 +12,8 @@ Copyright 2025 Steel Security Advisors LLC
 Licensed under the Apache License, Version 2.0
 """
 
+from unittest.mock import patch
+
 import pytest
 
 from ava_guardian.pqc_backends import (
@@ -375,47 +377,47 @@ class TestSphincsSignatures:
 class TestUnavailableBackendErrors:
     """Test error handling when backends are unavailable."""
 
-    @pytest.mark.skipif(DILITHIUM_AVAILABLE, reason="Dilithium is available")
     def test_dilithium_unavailable_error(self):
         """Verify PQCUnavailableError is raised when backend missing."""
-        with pytest.raises(PQCUnavailableError):
-            generate_dilithium_keypair()
+        with patch("ava_guardian.pqc_backends.DILITHIUM_AVAILABLE", False):
+            with pytest.raises(PQCUnavailableError):
+                generate_dilithium_keypair()
 
-    @pytest.mark.skipif(KYBER_AVAILABLE, reason="Kyber is available")
     def test_kyber_unavailable_error_keygen(self):
         """Verify KyberUnavailableError is raised for keygen when backend missing."""
-        with pytest.raises(KyberUnavailableError):
-            generate_kyber_keypair()
+        with patch("ava_guardian.pqc_backends.KYBER_AVAILABLE", False):
+            with pytest.raises(KyberUnavailableError):
+                generate_kyber_keypair()
 
-    @pytest.mark.skipif(KYBER_AVAILABLE, reason="Kyber is available")
     def test_kyber_unavailable_error_encapsulate(self):
         """Verify KyberUnavailableError is raised for encapsulate when backend missing."""
-        with pytest.raises(KyberUnavailableError):
-            kyber_encapsulate(b"fake_public_key")
+        with patch("ava_guardian.pqc_backends.KYBER_AVAILABLE", False):
+            with pytest.raises(KyberUnavailableError):
+                kyber_encapsulate(b"fake_public_key")
 
-    @pytest.mark.skipif(KYBER_AVAILABLE, reason="Kyber is available")
     def test_kyber_unavailable_error_decapsulate(self):
         """Verify KyberUnavailableError is raised for decapsulate when backend missing."""
-        with pytest.raises(KyberUnavailableError):
-            kyber_decapsulate(b"fake_ciphertext", b"fake_secret_key")
+        with patch("ava_guardian.pqc_backends.KYBER_AVAILABLE", False):
+            with pytest.raises(KyberUnavailableError):
+                kyber_decapsulate(b"fake_ciphertext", b"fake_secret_key")
 
-    @pytest.mark.skipif(SPHINCS_AVAILABLE, reason="SPHINCS+ is available")
     def test_sphincs_unavailable_error_keygen(self):
         """Verify SphincsUnavailableError is raised for keygen when backend missing."""
-        with pytest.raises(SphincsUnavailableError):
-            generate_sphincs_keypair()
+        with patch("ava_guardian.pqc_backends.SPHINCS_AVAILABLE", False):
+            with pytest.raises(SphincsUnavailableError):
+                generate_sphincs_keypair()
 
-    @pytest.mark.skipif(SPHINCS_AVAILABLE, reason="SPHINCS+ is available")
     def test_sphincs_unavailable_error_sign(self):
         """Verify SphincsUnavailableError is raised for sign when backend missing."""
-        with pytest.raises(SphincsUnavailableError):
-            sphincs_sign(b"message", b"fake_secret_key")
+        with patch("ava_guardian.pqc_backends.SPHINCS_AVAILABLE", False):
+            with pytest.raises(SphincsUnavailableError):
+                sphincs_sign(b"message", b"fake_secret_key")
 
-    @pytest.mark.skipif(SPHINCS_AVAILABLE, reason="SPHINCS+ is available")
     def test_sphincs_unavailable_error_verify(self):
         """Verify SphincsUnavailableError is raised for verify when backend missing."""
-        with pytest.raises(SphincsUnavailableError):
-            sphincs_verify(b"message", b"signature", b"public_key")
+        with patch("ava_guardian.pqc_backends.SPHINCS_AVAILABLE", False):
+            with pytest.raises(SphincsUnavailableError):
+                sphincs_verify(b"message", b"signature", b"public_key")
 
 
 class TestDataclassFields:

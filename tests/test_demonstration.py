@@ -237,12 +237,16 @@ class TestErrorHandling:
         """
         Test behavior when cryptography library is missing.
 
-        Note: This test is informational only since cryptography is required.
-        The actual implementation should raise ImportError if cryptography is missing.
+        Validates that functions depending on the cryptography library
+        raise RuntimeError when CRYPTO_AVAILABLE is False.
         """
-        # This test documents expected behavior but cannot be easily tested
-        # without manipulating import paths
-        pytest.skip("Cryptography library is required; cannot test missing scenario")
+        from unittest.mock import patch
+
+        from code_guardian_secure import generate_ed25519_keypair
+
+        with patch("code_guardian_secure.CRYPTO_AVAILABLE", False):
+            with pytest.raises(RuntimeError, match="cryptography library required"):
+                generate_ed25519_keypair()
 
     def test_graceful_quantum_library_fallback(self):
         """
