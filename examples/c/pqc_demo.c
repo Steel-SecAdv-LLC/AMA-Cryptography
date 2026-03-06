@@ -5,13 +5,13 @@
  * @file pqc_demo.c
  * @brief Post-Quantum Cryptography demonstration using Ava Guardian C API
  *
- * This demo exercises the full PQC capabilities when built with liboqs:
+ * This demo exercises the full native PQC capabilities:
  * - ML-DSA-65 (Dilithium) key generation, signing, and verification
  * - Kyber-1024 key encapsulation mechanism (keygen, encaps, decaps)
  *
- * Build with liboqs support:
+ * Build with native PQC (default):
  *   mkdir build && cd build
- *   cmake -DAVA_USE_LIBOQS=ON ..
+ *   cmake -DAVA_USE_NATIVE_PQC=ON ..
  *   make
  *   ./bin/pqc_demo
  */

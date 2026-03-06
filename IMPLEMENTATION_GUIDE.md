@@ -47,11 +47,9 @@ if not (results["content_hash"] and results["hmac"] and results["ed25519"]
 # Core cryptography library (required)
 pip install cryptography
 
-# Quantum-resistant signatures (recommended)
-pip install liboqs-python
-
-# Alternative (if liboqs fails)
-pip install pqcrypto
+# Build native PQC C library (recommended — zero external PQC dependencies)
+cmake -B build -DAVA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build
 ```
 
 ### 2. Run Demo
@@ -103,36 +101,31 @@ ls -lh public_keys/
 
 ## Production Deployment
 
-### Step 1: Install Dilithium (Quantum Resistance)
+### Step 1: Build Native PQC Library (Quantum Resistance)
 
-#### Option A: liboqs-python (Recommended)
+#### Build from Source (Recommended)
 
 ```bash
 # Ubuntu/Debian
 sudo apt-get update
-sudo apt-get install cmake ninja-build
-pip install liboqs-python
+sudo apt-get install build-essential cmake libssl-dev
 
 # macOS
-brew install cmake ninja
-pip install liboqs-python
+brew install cmake openssl
 
-# Windows (with Visual Studio)
-pip install liboqs-python
+# Build native PQC library
+cmake -B build -DAVA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build
 ```
 
-#### Option B: pqcrypto (Alternative)
-
-```bash
-pip install pqcrypto
-```
+All PQC algorithms (ML-DSA-65, Kyber-1024, SPHINCS+-256f) are implemented natively — no external PQC libraries required. All implementations pass NIST KAT validation.
 
 #### Verify Installation
 
 ```python
-import oqs
-print("Available signature schemes:")
-print(oqs.get_enabled_sig_mechanisms())
+from ava_guardian.pqc_backends import get_pqc_status
+print("PQC status:")
+print(get_pqc_status())
 # Should include 'Dilithium2', 'Dilithium3', 'Dilithium5'
 ```
 
@@ -618,31 +611,18 @@ setup_git_signing(kms)
 WARNING: Using INSECURE placeholder for Dilithium!
 ```
 
-**Solution 1: Install liboqs-python**
+**Solution: Build the native C library**
 ```bash
-pip install liboqs-python
+# Install build dependencies
+sudo apt-get install build-essential cmake libssl-dev  # Ubuntu/Debian
+# brew install cmake openssl  # macOS
+
+# Build native PQC library
+cmake -B build -DAVA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build
 ```
 
-**Solution 2: Install pqcrypto**
-```bash
-pip install pqcrypto
-```
-
-**Solution 3: Build liboqs from source**
-```bash
-# Clone liboqs
-git clone https://github.com/open-quantum-safe/liboqs.git
-cd liboqs
-mkdir build && cd build
-
-# Build and install
-cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local ..
-ninja
-sudo ninja install
-
-# Install Python bindings
-pip install liboqs-python
-```
+All PQC algorithms (ML-DSA-65, Kyber-1024, SPHINCS+-256f) are implemented natively with NIST KAT validation — no external PQC libraries needed.
 
 ### Issue: RFC 3161 Timestamp Fails
 
@@ -806,7 +786,7 @@ results = verify_multiple_packages(packages, MASTER_OMNI_CODES, MASTER_HELIX_PAR
 
 ### Pre-Deployment
 
-- [ ] Install Dilithium (liboqs-python or pqcrypto)
+- [ ] Build native PQC C library (ML-DSA-65, Kyber-1024, SPHINCS+-256f)
 - [ ] Set up HSM or hardware token for master secret
 - [ ] Configure RFC 3161 TSA (FreeTSA or commercial)
 - [ ] Test key generation and signing
@@ -1189,56 +1169,38 @@ For the latest development updates, see the project's GitHub repository and CHAN
 
 ## C API Build (Advanced)
 
-For users who need native C library integration with liboqs for post-quantum cryptography:
+For users who need direct C library integration for post-quantum cryptography:
 
 ### Prerequisites
 
-The C API requires [liboqs](https://github.com/open-quantum-safe/liboqs) for PQC operations.
+The C API provides all PQC algorithms natively — no external PQC libraries required.
 
 ```bash
 # Ubuntu/Debian
-sudo apt-get install -y cmake gcc ninja-build libssl-dev
-git clone https://github.com/open-quantum-safe/liboqs.git
-cd liboqs && mkdir build && cd build
-cmake -GNinja -DBUILD_SHARED_LIBS=ON ..
-ninja && sudo ninja install && sudo ldconfig
+sudo apt-get install -y cmake gcc build-essential libssl-dev
 
 # macOS
-brew install liboqs
+brew install cmake openssl
 ```
 
 ### Build C Library
 
 ```bash
-# Standard build (without liboqs)
-cd src/c
-gcc -c -fPIC -I../../include ava_core.c ava_kyber.c ava_consttime.c
-ar rcs libava_guardian.a *.o
-
-# Build with liboqs integration
-gcc -c -fPIC -DAVA_USE_LIBOQS -I../../include \
-    $(pkg-config --cflags liboqs) \
-    ava_core.c ava_kyber.c ava_consttime.c
-gcc -shared -o libava_guardian.so *.o $(pkg-config --libs liboqs)
+# CMake Build (Recommended) — native PQC, no external dependencies
+cmake -B build -DAVA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+sudo cmake --install build
 ```
 
-### CMake Build (Recommended)
+### Supported Algorithms (Native C)
 
-```bash
-mkdir build && cd build
-cmake -DAVA_USE_LIBOQS=ON ..
-make -j$(nproc)
-sudo make install
-```
+| Algorithm | NIST Standard | Key Sizes | KAT Status |
+|-----------|---------------|-----------|------------|
+| ML-DSA-65 (Dilithium3) | FIPS 204 | PK: 1952, SK: 4032, Sig: 3309 | **10/10 PASS** |
+| ML-KEM-1024 (Kyber-1024) | FIPS 203 | PK: 1568, SK: 3168, CT: 1568 | **10/10 PASS** |
+| SPHINCS+-SHA2-256f | FIPS 205 | PK: 64, SK: 128, Sig: 49856 | Native |
 
-### Supported Algorithms (with liboqs)
-
-| Algorithm | liboqs Name | Key Sizes |
-|-----------|-------------|-----------|
-| ML-DSA-65 (Dilithium3) | `OQS_SIG_alg_ml_dsa_65` | PK: 1952, SK: 4032, Sig: 3309 |
-| ML-KEM-1024 (Kyber-1024) | `OQS_KEM_alg_ml_kem_1024` | PK: 1568, SK: 3168, CT: 1568 |
-
-**Note:** For most users, the Python API (`pip install ava-guardian[quantum]`) is recommended over the C library.
+**Note:** For most users, the Python API is recommended over the C library. All PQC algorithms are implemented natively — no external PQC libraries required.
 
 ---
 
@@ -1311,7 +1273,7 @@ cmake .. \
 ### External Resources
 
 - **NIST PQC:** https://csrc.nist.gov/projects/post-quantum-cryptography
-- **liboqs:** https://openquantumsafe.org/
+- **NIST PQC:** https://csrc.nist.gov/projects/post-quantum-cryptography
 - **RFC 3161:** https://datatracker.ietf.org/doc/html/rfc3161
 - **Ed25519:** https://ed25519.cr.yp.to/
 

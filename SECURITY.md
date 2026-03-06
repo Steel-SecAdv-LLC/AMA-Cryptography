@@ -169,7 +169,7 @@ Users deploying Ava Guardian ♱ in production should:
 - **NEVER:** Reuse keys across different Omni-Code packages
 
 ### Cryptographic Operations
-- **REQUIRED:** Install quantum-resistant libraries (`liboqs-python` or `pqcrypto`)
+- **REQUIRED:** Build native PQC C library (`cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build`)
 - **REQUIRED:** Enable all six cryptographic layers (no fallbacks in production)
 - **REQUIRED:** Use RFC 3161 trusted timestamp authorities
 - **RECOMMENDED:** Use multiple TSAs for redundancy

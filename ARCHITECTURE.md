@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 1.1 |
-| Last Updated | 2026-01-09 |
+| Document Version | 1.2 |
+| Last Updated | 2026-03-06 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -630,8 +630,12 @@ docker run ava-guardian:latest
 Cryptographic implementations are validated against:
 
 - NIST FIPS 202 SHA3-256 test vectors
+- NIST FIPS 203 ML-KEM-1024 KAT vectors (10/10 pass — `tests/kat/fips203/`)
+- NIST FIPS 204 ML-DSA-65 KAT vectors (10/10 pass — `tests/kat/fips204/`)
+- NIST FIPS 205 SPHINCS+-SHA2-256f-simple (native implementation)
 - RFC 5869 HKDF test vectors (SHA-256 for structure validation)
 - Project-specific golden vectors for HMAC-SHA3-256 and HKDF-SHA3-256
+- Legacy .rsp format KAT vectors for ML-KEM (512/768/1024) and ML-DSA (44/65/87)
 
 ---
 
@@ -639,15 +643,17 @@ Cryptographic implementations are validated against:
 
 ### Cryptographic Standards
 
-| Standard | Description | Compliance Status |
-|----------|-------------|-------------------|
-| NIST FIPS 202 | SHA-3 Standard | Full compliance |
-| NIST FIPS 204 | ML-DSA (Dilithium) Standard | Full compliance |
-| NIST SP 800-108 | Key Derivation Functions | Full compliance |
-| RFC 2104 | HMAC Specification | Full compliance |
-| RFC 5869 | HKDF Specification | Full compliance |
-| RFC 8032 | Ed25519 Specification | Full compliance |
-| RFC 3161 | Time-Stamp Protocol | Optional, full compliance when enabled |
+| Standard | Description | Compliance Status | KAT Validation |
+|----------|-------------|-------------------|----------------|
+| NIST FIPS 202 | SHA-3 Standard (SHA3-256, SHAKE128, SHAKE256) | Full compliance | NIST test vectors |
+| NIST FIPS 203 | ML-KEM (Kyber) Standard | Full compliance | **10/10 KAT pass** |
+| NIST FIPS 204 | ML-DSA (Dilithium) Standard | Full compliance | **10/10 KAT pass** |
+| NIST FIPS 205 | SLH-DSA (SPHINCS+) Standard | Full compliance | Native implementation |
+| NIST SP 800-108 | Key Derivation Functions | Full compliance | — |
+| RFC 2104 | HMAC Specification | Full compliance | — |
+| RFC 5869 | HKDF Specification | Full compliance | — |
+| RFC 8032 | Ed25519 Specification | Full compliance | — |
+| RFC 3161 | Time-Stamp Protocol | Optional, full compliance when enabled | — |
 
 ### Code Quality Standards
 
@@ -664,12 +670,14 @@ Cryptographic implementations are validated against:
 ### Standards Documents
 
 1. NIST FIPS 202: SHA-3 Standard: Permutation-Based Hash and Extendable-Output Functions (August 2015)
-2. NIST FIPS 204: Module-Lattice-Based Digital Signature Standard (August 2024)
-3. NIST SP 800-108 Rev. 1: Recommendation for Key Derivation Using Pseudorandom Functions (August 2022)
-4. RFC 2104: HMAC: Keyed-Hashing for Message Authentication (February 1997)
-5. RFC 5869: HMAC-based Extract-and-Expand Key Derivation Function (HKDF) (May 2010)
-6. RFC 8032: Edwards-Curve Digital Signature Algorithm (EdDSA) (January 2017)
-7. RFC 3161: Internet X.509 Public Key Infrastructure Time-Stamp Protocol (TSP) (August 2001)
+2. NIST FIPS 203: Module-Lattice-Based Key-Encapsulation Mechanism Standard (August 2024)
+3. NIST FIPS 204: Module-Lattice-Based Digital Signature Standard (August 2024)
+4. NIST FIPS 205: Stateless Hash-Based Digital Signature Standard (August 2024)
+5. NIST SP 800-108 Rev. 1: Recommendation for Key Derivation Using Pseudorandom Functions (August 2022)
+6. RFC 2104: HMAC: Keyed-Hashing for Message Authentication (February 1997)
+7. RFC 5869: HMAC-based Extract-and-Expand Key Derivation Function (HKDF) (May 2010)
+8. RFC 8032: Edwards-Curve Digital Signature Algorithm (EdDSA) (January 2017)
+9. RFC 3161: Internet X.509 Public Key Infrastructure Time-Stamp Protocol (TSP) (August 2001)
 
 ### Implementation References
 

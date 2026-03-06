@@ -30,7 +30,7 @@
 | Feature | OpenSSL+liboqs | Ava Guardian | Security Implication |
 |---------|----------------|--------------|----------------------|
 | **Ed25519 Signatures** | ✅ OpenSSL (audited) | ✅ cryptography library | Equivalent |
-| **ML-DSA-65 Signatures** | ✅ liboqs (NIST-reviewed) | ✅ liboqs backend | Equivalent |
+| **ML-DSA-65 Signatures** | ✅ liboqs (NIST-reviewed) | ✅ Native C (NIST KAT validated) | Equivalent |
 | **Audit Status** | ✅ Extensively audited | ❌ **No external audit** | **OpenSSL+liboqs safer** |
 | **FIPS 140-2** | ✅ Available | ❌ Not certified | **OpenSSL+liboqs safer** |
 

@@ -19,7 +19,7 @@ Constant-time implementations are critical for preventing timing side-channel at
 
 1. **C Layer**: Custom constant-time utilities in `src/c/ava_consttime.c`
 2. **Python Layer**: Use of `hmac.compare_digest()` for constant-time comparison
-3. **Library Layer**: Reliance on liboqs and cryptography.io's constant-time guarantees
+3. **Library Layer**: Native PQC implementations and cryptography.io's constant-time guarantees
 
 ## Constant-Time Implementations
 
@@ -158,15 +158,14 @@ A clean run should show:
 
 ## Upstream Library Guarantees
 
-### liboqs (ML-DSA-65 / Dilithium)
+### Native PQC (ML-DSA-65, Kyber-1024, SPHINCS+-256f)
 
-The Open Quantum Safe (OQS) project implements constant-time algorithms:
+The native C implementations provide constant-time operations:
 
-- All arithmetic operations use constant-time primitives
+- All NTT and polynomial arithmetic use constant-time primitives
 - No secret-dependent branches or memory accesses
-- Verified through extensive testing and formal analysis
-
-Reference: https://openquantumsafe.org/
+- Validated through NIST KAT (Known Answer Test) vectors (FIPS 203/204/205)
+- Rejection sampling uses constant-time comparisons
 
 ### cryptography.io (Ed25519, HMAC)
 

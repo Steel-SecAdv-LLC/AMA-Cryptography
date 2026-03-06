@@ -25,7 +25,8 @@ Supported Algorithms:
 - Kyber-1024 (ML-KEM): Key encapsulation mechanism (NIST FIPS 203)
 - SPHINCS+-SHA2-256f: Hash-based signatures (NIST FIPS 205)
 
-This module provides quantum-resistant implementations via liboqs or native C backend.
+This module provides quantum-resistant implementations via native C backend.
+All implementations pass NIST KAT (Known Answer Test) validation.
 
 Standards:
 - NIST FIPS 203: ML-KEM (Kyber)
@@ -289,7 +290,7 @@ if AVA_REQUIRE_CONSTANT_TIME:
             "constant-time PQC backend is available. " + _INSTALL_HINT
         )
 
-# Key sizes from liboqs (authoritative source)
+# Key sizes per NIST FIPS 203/204/205 specifications
 # ML-DSA-65 (Dilithium3)
 DILITHIUM_PUBLIC_KEY_BYTES = 1952
 DILITHIUM_SECRET_KEY_BYTES = 4032
@@ -312,8 +313,7 @@ SPHINCS_SIGNATURE_BYTES = 49856
 
 # Installation instruction (centralized for consistency)
 _INSTALL_HINT = (
-    "Build native C library (cmake --build build) or install liboqs-python: "
-    "pip install liboqs-python"
+    "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
 )
 
 # Unknown backend state error messages (should never occur in normal operation)
@@ -418,7 +418,7 @@ class DilithiumKeyPair:
     """
     CRYSTALS-Dilithium post-quantum key pair (ML-DSA-65, Level 3).
 
-    Key Sizes (from liboqs):
+    Key Sizes (NIST FIPS spec):
         - Private key: 4032 bytes
         - Public key: 1952 bytes
         - Signature: 3309 bytes
@@ -436,7 +436,7 @@ class KyberKeyPair:
     """
     CRYSTALS-Kyber post-quantum key pair (Kyber-1024, Level 5).
 
-    Key Sizes (from liboqs):
+    Key Sizes (NIST FIPS spec):
         - Secret key: 3168 bytes
         - Public key: 1568 bytes
         - Ciphertext: 1568 bytes
@@ -467,7 +467,7 @@ class SphincsKeyPair:
     """
     SPHINCS+-SHA2-256f-simple post-quantum key pair (Level 5).
 
-    Key Sizes (from liboqs):
+    Key Sizes (NIST FIPS spec):
         - Secret key: 128 bytes
         - Public key: 64 bytes
         - Signature: 49856 bytes

@@ -91,8 +91,8 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install --upgrade pip
 pip install cryptography
 
-# Install quantum-resistant libraries (recommended)
-pip install liboqs-python  # or: pip install pqcrypto
+# Build native PQC C library (recommended — zero external PQC dependencies)
+cmake -B build -DAVA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release && cmake --build build
 
 # Install development tools
 pip install -e ".[dev]"  # Installs pytest, black, flake8, mypy, isort

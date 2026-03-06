@@ -285,9 +285,10 @@ setup(
         "scipy>=1.7.0",
     ],
     extras_require={
-        # Note: The PyPI package is 'liboqs-python' which provides the 'oqs' module
-        "quantum": ["liboqs-python>=0.10.0,<0.11.0"],
-        "quantum-alt": ["pqcrypto>=0.1.3,<0.5.0"],
+        # Note: PQC is now provided natively by the C library (no external deps needed)
+        # Legacy liboqs-python support retained for backward compatibility
+        "quantum": [],  # Native C backend provides all PQC algorithms
+        "quantum-alt": [],  # Deprecated — use native C backend
         # PyNaCl for enhanced secure memory operations (libsodium bindings)
         "secure-memory": ["pynacl>=1.5.0"],
         "dev": [
@@ -306,7 +307,6 @@ setup(
             "sphinx-autodoc-typehints>=1.22.0",
         ],
         "all": [
-            "liboqs-python>=0.10.0,<0.11.0",
             "pynacl>=1.5.0",
             "pytest>=7.0.0",
             "pytest-cov>=4.0.0",

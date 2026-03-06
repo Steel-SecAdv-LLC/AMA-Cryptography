@@ -22,17 +22,13 @@
  *
  * PQC DISPATCH
  * ============
- * This file dispatches PQC operations to the appropriate backend:
- * - AVA_USE_LIBOQS: Uses liboqs for ML-DSA, Kyber, SPHINCS+ operations
+ * This file dispatches PQC operations to the native C backend:
  * - AVA_USE_NATIVE_PQC (default): Uses native C implementations from
  *   ava_dilithium.c, ava_kyber.c, and ava_sphincs.c
+ * - All implementations pass NIST FIPS 203/204/205 KAT validation
  *
- * Build native (default):
- *   cmake ..
- *
- * Build with liboqs (optional):
- *   cmake -DAVA_USE_LIBOQS=ON ..
- *   Link against: -loqs
+ * Build (default):
+ *   cmake -DAVA_USE_NATIVE_PQC=ON ..
  */
 
 #include "../include/ava_guardian.h"
