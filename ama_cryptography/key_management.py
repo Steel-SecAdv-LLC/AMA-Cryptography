@@ -26,13 +26,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, cast
+from types import TracebackType
+from typing import Any, Dict, List, Optional, Tuple, Type, cast
+
+from ama_cryptography.exceptions import SecurityWarning  # noqa: F401 — re-exported for public API
 
 # Configure module logger
 logger = logging.getLogger(__name__)
-
-# Import from centralized exceptions module
-from ama_cryptography.exceptions import SecurityWarning  # noqa: E402, F401
 
 
 class KeyStatus(Enum):
@@ -102,7 +102,7 @@ class HDKeyDerivation:
     # This is the order of the generator point G on the secp256k1 curve
     SECP256K1_N = int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
 
-    def __init__(self, seed: Optional[bytes] = None, seed_phrase: Optional[str] = None):
+    def __init__(self, seed: Optional[bytes] = None, seed_phrase: Optional[str] = None) -> None:
         """
         Initialize HD key derivation
 
@@ -261,7 +261,7 @@ class KeyRotationManager:
     Supports gradual migration from old to new keys.
     """
 
-    def __init__(self, rotation_period: timedelta = timedelta(days=90)):
+    def __init__(self, rotation_period: timedelta = timedelta(days=90)) -> None:
         """
         Initialize rotation manager
 
@@ -463,7 +463,7 @@ class SecureKeyStorage:
         - Backward compatibility with legacy AES-CFB encrypted keys
     """
 
-    def __init__(self, storage_path: Path, master_password: Optional[str] = None):
+    def __init__(self, storage_path: Path, master_password: Optional[str] = None) -> None:
         """
         Initialize secure storage
 

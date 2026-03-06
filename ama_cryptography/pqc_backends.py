@@ -44,6 +44,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
 
+from ama_cryptography.exceptions import (  # noqa: F401 — re-exported for public API
+    PQCUnavailableError,
+    QuantumSignatureUnavailableError,
+    SecurityWarning,
+)
+
 F = TypeVar("F", bound=Callable[..., Any])
 
 
@@ -52,15 +58,6 @@ class PQCStatus(Enum):
 
     AVAILABLE = "AVAILABLE"
     UNAVAILABLE = "UNAVAILABLE"
-
-
-# Import from centralized exceptions module (DRY principle)
-# PQCUnavailableError and QuantumSignatureUnavailableError are defined there
-from ama_cryptography.exceptions import (  # noqa: E402, F401
-    PQCUnavailableError,
-    QuantumSignatureUnavailableError,
-    SecurityWarning,
-)
 
 
 class KyberUnavailableError(PQCUnavailableError):

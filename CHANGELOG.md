@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 1.1 |
-| Last Updated | 2026-01-09 |
+| Document Version | 2.0 |
+| Last Updated | 2026-03-06 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -14,6 +14,54 @@
 ## Overview
 
 All notable changes to AMA Cryptography ♱ will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [2.0.0] - 2026-03-06
+
+### Changed - Full Project Rename
+
+**Breaking:** Renamed project from Ava Guardian to AMA Cryptography.
+
+#### Summary
+
+Complete rename of all 450+ references across the codebase. This is a breaking change
+for all downstream consumers (including Mercury Agent).
+
+#### Key Changes
+
+- **Package:** `ava-guardian` -> `ama-cryptography`, `ava_guardian` -> `ama_cryptography`
+- **Classes:** `AvaGuardianCrypto` -> `AmaCryptography`, `AvaGuardianMonitor` -> `AmaCryptographyMonitor`, `AvaEquationEngine` -> `AmaEquationEngine`
+- **C API:** All `ava_*` functions renamed to `ama_*` (dilithium, kyber, sphincs, ed25519, consttime, sha3, hkdf, core)
+- **Constants:** `AVA_GUARDIAN_*` -> `AMA_CRYPTOGRAPHY_*`/`AMA_CRYPTO_*`, `AVA_*` -> `AMA_*`
+- **Domain prefix:** `AG-PKG-v2` -> `AMA-PKG-v2`
+- **Library:** `libava_guardian.so` -> `libama_cryptography.so`
+- **Header guard:** `AVA_GUARDIAN_H` -> `AMA_CRYPTOGRAPHY_H`
+- **Files:** All source files, headers, configs, docs renamed accordingly
+
+### Added - Strict Type Checking
+
+- Added type annotations to all functions in `crypto_api.py`, `secure_memory.py`, `key_management.py`, `double_helix_engine.py`
+- Enabled `disallow_untyped_defs = true` and `disallow_incomplete_defs = true` in mypy config
+- Removed `--no-strict-optional` from pre-commit and CI
+- Changed `continue-on-error: true` to `false` for mypy CI steps
+- Expanded mypy checking from `code_guardian_secure.py` only to full `ama_cryptography/` package
+
+### Improved - Code Quality
+
+- Audited all 32 silenced checks (type: ignore, noqa, nosec, pragma: no cover)
+- Fixed 2 unnecessary `# noqa: E402` late imports (moved to top-level)
+- Removed 2 unused variables (`_percentages`, `_arrow_style` in generate_visuals.py)
+- Documented justification for remaining suppressions (94% confirmed necessary)
+
+### Migration Guide for Mercury Agent
+
+After upgrading to AMA Cryptography v2.0:
+- Update `pyproject.toml`: `ava-guardian` -> `ama-cryptography`
+- Update all imports: `import ava_guardian` -> `import ama_cryptography`
+- Update environment variables: `AVA_REQUIRE_REAL_PQC` -> `AMA_REQUIRE_REAL_PQC`
+- Update `MercuryGuardianAdapter` import paths
+- Mercury's adapter pattern isolates the dependency well; rename is straightforward
 
 ---
 
