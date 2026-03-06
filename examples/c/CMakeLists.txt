@@ -9,7 +9,7 @@ else()
 endif()
 
 # PQC demo demonstrating ML-DSA-65 and Kyber-1024
-# Requires liboqs: cmake -DAVA_USE_LIBOQS=ON ..
+# Requires native PQC: cmake -DAVA_USE_NATIVE_PQC=ON ..
 add_executable(pqc_demo pqc_demo.c)
 if(AVA_BUILD_SHARED)
     target_link_libraries(pqc_demo ava_guardian_shared)

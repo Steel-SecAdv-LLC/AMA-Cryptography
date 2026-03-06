@@ -259,7 +259,7 @@ class TestMLDSA65KAT:
         """ML-DSA-65 signatures are valid regardless of randomization mode.
 
         Note: FIPS 204 allows both deterministic and randomized signing.
-        liboqs uses randomized signing by default for side-channel resistance.
+        The native implementation uses deterministic signing per FIPS 204.
         This test verifies that multiple signatures from the same key are all valid.
         """
         keypair = dilithium_provider.generate_keypair()

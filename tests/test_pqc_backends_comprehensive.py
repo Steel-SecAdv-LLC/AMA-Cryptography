@@ -590,21 +590,21 @@ class TestBackendConsistency:
     def test_dilithium_backend_matches_availability(self):
         """Dilithium backend is set iff available."""
         if DILITHIUM_AVAILABLE:
-            assert DILITHIUM_BACKEND in ["liboqs", "pqcrypto"]
+            assert DILITHIUM_BACKEND == "native"
         else:
             assert DILITHIUM_BACKEND is None
 
     def test_kyber_backend_matches_availability(self):
         """Kyber backend is set iff available."""
         if KYBER_AVAILABLE:
-            assert KYBER_BACKEND == "liboqs"
+            assert KYBER_BACKEND == "native"
         else:
             assert KYBER_BACKEND is None
 
     def test_sphincs_backend_matches_availability(self):
         """SPHINCS+ backend is set iff available."""
         if SPHINCS_AVAILABLE:
-            assert SPHINCS_BACKEND == "liboqs"
+            assert SPHINCS_BACKEND == "native"
         else:
             assert SPHINCS_BACKEND is None
 

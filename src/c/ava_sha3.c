@@ -43,6 +43,10 @@
 #define SHA3_256_CAPACITY 64  /* 2*256 / 8 = 64 bytes */
 #define SHA3_256_DIGEST_SIZE 32
 
+/* SHA3-512 parameters */
+#define SHA3_512_RATE 72      /* (1600 - 2*512) / 8 = 72 bytes */
+#define SHA3_512_DIGEST_SIZE 64
+
 /* Round constants for Keccak-f[1600] */
 static const uint64_t keccak_rc[KECCAK_ROUNDS] = {
     0x0000000000000001ULL, 0x0000000000008082ULL,
@@ -226,6 +230,69 @@ ava_error_t ava_sha3_256(
 
     /* Squeeze output */
     for (i = 0; i < SHA3_256_DIGEST_SIZE / 8; i++) {
+        store64_le(output + i * 8, state[i]);
+    }
+
+    /* Scrub sensitive data */
+    ava_secure_memzero(state, sizeof(state));
+    ava_secure_memzero(block, sizeof(block));
+
+    return AVA_SUCCESS;
+}
+
+/**
+ * SHA3-512 hash function
+ *
+ * Computes the SHA3-512 hash of the input data.
+ * Implements FIPS 202 SHA3-512. Required by FIPS 203 (ML-KEM) as
+ * the G function for key generation and encapsulation.
+ *
+ * @param input Input data to hash
+ * @param input_len Length of input in bytes
+ * @param output Output buffer (must be 64 bytes)
+ * @return AVA_SUCCESS or error code
+ */
+ava_error_t ava_sha3_512(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+) {
+    uint64_t state[KECCAK_STATE_SIZE];
+    uint8_t block[SHA3_512_RATE];
+    size_t remaining, i;
+
+    if (!input && input_len > 0) {
+        return AVA_ERROR_INVALID_PARAM;
+    }
+    if (!output) {
+        return AVA_ERROR_INVALID_PARAM;
+    }
+
+    /* Initialize state to zero */
+    memset(state, 0, sizeof(state));
+
+    /* Absorb full blocks */
+    keccak_absorb(state, input, input_len, SHA3_512_RATE);
+
+    /* Handle remaining bytes with padding */
+    remaining = input_len % SHA3_512_RATE;
+    memset(block, 0, sizeof(block));
+    if (remaining > 0) {
+        memcpy(block, input + (input_len - remaining), remaining);
+    }
+
+    /* SHA3 padding: 0x06...0x80 */
+    block[remaining] = 0x06;
+    block[SHA3_512_RATE - 1] |= 0x80;
+
+    /* Absorb final padded block */
+    for (i = 0; i < SHA3_512_RATE / 8; i++) {
+        state[i] ^= load64_le(block + i * 8);
+    }
+    keccak_f1600(state);
+
+    /* Squeeze output (64 bytes = 8 words) */
+    for (i = 0; i < SHA3_512_DIGEST_SIZE / 8; i++) {
         store64_le(output + i * 8, state[i]);
     }
 
@@ -509,5 +576,220 @@ ava_error_t ava_sha3_final(ava_sha3_ctx* ctx, uint8_t* output) {
     ava_secure_memzero(ctx->buffer, sizeof(ctx->buffer));
     ava_secure_memzero(block, sizeof(block));
 
+    return AVA_SUCCESS;
+}
+
+/* ============================================================================
+ * STREAMING SHAKE256 API (init/absorb/finalize/squeeze)
+ * SHAKE256 rate = 136 bytes (same as SHA3-256), padding = 0x1F
+ * ============================================================================ */
+
+#define SHAKE256_RATE 136
+
+ava_error_t ava_shake256_inc_init(ava_sha3_ctx* ctx) {
+    if (!ctx) return AVA_ERROR_INVALID_PARAM;
+    memset(ctx->state, 0, sizeof(ctx->state));
+    memset(ctx->buffer, 0, sizeof(ctx->buffer));
+    ctx->buffer_len = 0;
+    ctx->finalized = 0;
+    return AVA_SUCCESS;
+}
+
+ava_error_t ava_shake256_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len) {
+    size_t i;
+    if (!ctx) return AVA_ERROR_INVALID_PARAM;
+    if (ctx->finalized) return AVA_ERROR_INVALID_PARAM;
+    if (!data && len > 0) return AVA_ERROR_INVALID_PARAM;
+    if (len == 0) return AVA_SUCCESS;
+
+    /* Fill partial buffer */
+    if (ctx->buffer_len > 0) {
+        size_t space = SHAKE256_RATE - ctx->buffer_len;
+        size_t to_copy = (len < space) ? len : space;
+        memcpy(ctx->buffer + ctx->buffer_len, data, to_copy);
+        ctx->buffer_len += to_copy;
+        data += to_copy;
+        len -= to_copy;
+        if (ctx->buffer_len == SHAKE256_RATE) {
+            for (i = 0; i < SHAKE256_RATE / 8; i++) {
+                ctx->state[i] ^= load64_le(ctx->buffer + i * 8);
+            }
+            keccak_f1600(ctx->state);
+            ctx->buffer_len = 0;
+        }
+    }
+
+    /* Full blocks */
+    while (len >= SHAKE256_RATE) {
+        for (i = 0; i < SHAKE256_RATE / 8; i++) {
+            ctx->state[i] ^= load64_le(data + i * 8);
+        }
+        keccak_f1600(ctx->state);
+        data += SHAKE256_RATE;
+        len -= SHAKE256_RATE;
+    }
+
+    /* Buffer remainder */
+    if (len > 0) {
+        memcpy(ctx->buffer, data, len);
+        ctx->buffer_len = len;
+    }
+    return AVA_SUCCESS;
+}
+
+ava_error_t ava_shake256_inc_finalize(ava_sha3_ctx* ctx) {
+    uint8_t block[SHAKE256_RATE];
+    size_t i;
+    if (!ctx) return AVA_ERROR_INVALID_PARAM;
+    if (ctx->finalized) return AVA_ERROR_INVALID_PARAM;
+
+    memset(block, 0, sizeof(block));
+    if (ctx->buffer_len > 0) {
+        memcpy(block, ctx->buffer, ctx->buffer_len);
+    }
+    /* SHAKE padding: 0x1F...0x80 */
+    block[ctx->buffer_len] = 0x1F;
+    block[SHAKE256_RATE - 1] |= 0x80;
+
+    for (i = 0; i < SHAKE256_RATE / 8; i++) {
+        ctx->state[i] ^= load64_le(block + i * 8);
+    }
+    keccak_f1600(ctx->state);
+
+    ctx->finalized = 1;
+    ctx->buffer_len = 0;  /* Reuse buffer_len as squeeze position */
+    return AVA_SUCCESS;
+}
+
+ava_error_t ava_shake256_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen) {
+    size_t i, available, tocopy;
+    if (!ctx || !output) return AVA_ERROR_INVALID_PARAM;
+    if (!ctx->finalized) return AVA_ERROR_INVALID_PARAM;
+
+    /* buffer_len tracks how many bytes have been consumed from the current block */
+    while (outlen > 0) {
+        available = SHAKE256_RATE - ctx->buffer_len;
+        tocopy = (outlen < available) ? outlen : available;
+
+        /* Extract bytes from state at current offset */
+        for (i = 0; i < tocopy; i++) {
+            size_t pos = ctx->buffer_len + i;
+            output[i] = (uint8_t)(ctx->state[pos / 8] >> ((pos % 8) * 8));
+        }
+
+        output += tocopy;
+        outlen -= tocopy;
+        ctx->buffer_len += tocopy;
+
+        /* If we consumed the whole block, squeeze next one */
+        if (ctx->buffer_len == SHAKE256_RATE && outlen > 0) {
+            keccak_f1600(ctx->state);
+            ctx->buffer_len = 0;
+        }
+    }
+    return AVA_SUCCESS;
+}
+
+/* ============================================================================
+ * STREAMING SHAKE128 API (init/absorb/finalize/squeeze)
+ * SHAKE128 rate = 168 bytes, padding = 0x1F
+ * ============================================================================ */
+
+#define SHAKE128_RATE 168
+
+ava_error_t ava_shake128_inc_init(ava_sha3_ctx* ctx) {
+    if (!ctx) return AVA_ERROR_INVALID_PARAM;
+    memset(ctx->state, 0, sizeof(ctx->state));
+    memset(ctx->buffer, 0, sizeof(ctx->buffer));
+    ctx->buffer_len = 0;
+    ctx->finalized = 0;
+    return AVA_SUCCESS;
+}
+
+ava_error_t ava_shake128_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len) {
+    size_t i;
+    if (!ctx) return AVA_ERROR_INVALID_PARAM;
+    if (ctx->finalized) return AVA_ERROR_INVALID_PARAM;
+    if (!data && len > 0) return AVA_ERROR_INVALID_PARAM;
+    if (len == 0) return AVA_SUCCESS;
+
+    if (ctx->buffer_len > 0) {
+        size_t space = SHAKE128_RATE - ctx->buffer_len;
+        size_t to_copy = (len < space) ? len : space;
+        memcpy(ctx->buffer + ctx->buffer_len, data, to_copy);
+        ctx->buffer_len += to_copy;
+        data += to_copy;
+        len -= to_copy;
+        if (ctx->buffer_len == SHAKE128_RATE) {
+            for (i = 0; i < SHAKE128_RATE / 8; i++) {
+                ctx->state[i] ^= load64_le(ctx->buffer + i * 8);
+            }
+            keccak_f1600(ctx->state);
+            ctx->buffer_len = 0;
+        }
+    }
+
+    while (len >= SHAKE128_RATE) {
+        for (i = 0; i < SHAKE128_RATE / 8; i++) {
+            ctx->state[i] ^= load64_le(data + i * 8);
+        }
+        keccak_f1600(ctx->state);
+        data += SHAKE128_RATE;
+        len -= SHAKE128_RATE;
+    }
+
+    if (len > 0) {
+        memcpy(ctx->buffer, data, len);
+        ctx->buffer_len = len;
+    }
+    return AVA_SUCCESS;
+}
+
+ava_error_t ava_shake128_inc_finalize(ava_sha3_ctx* ctx) {
+    uint8_t block[SHAKE128_RATE];
+    size_t i;
+    if (!ctx) return AVA_ERROR_INVALID_PARAM;
+    if (ctx->finalized) return AVA_ERROR_INVALID_PARAM;
+
+    memset(block, 0, sizeof(block));
+    if (ctx->buffer_len > 0) {
+        memcpy(block, ctx->buffer, ctx->buffer_len);
+    }
+    block[ctx->buffer_len] = 0x1F;
+    block[SHAKE128_RATE - 1] |= 0x80;
+
+    for (i = 0; i < SHAKE128_RATE / 8; i++) {
+        ctx->state[i] ^= load64_le(block + i * 8);
+    }
+    keccak_f1600(ctx->state);
+
+    ctx->finalized = 1;
+    ctx->buffer_len = 0;
+    return AVA_SUCCESS;
+}
+
+ava_error_t ava_shake128_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen) {
+    size_t i, available, tocopy;
+    if (!ctx || !output) return AVA_ERROR_INVALID_PARAM;
+    if (!ctx->finalized) return AVA_ERROR_INVALID_PARAM;
+
+    while (outlen > 0) {
+        available = SHAKE128_RATE - ctx->buffer_len;
+        tocopy = (outlen < available) ? outlen : available;
+
+        for (i = 0; i < tocopy; i++) {
+            size_t pos = ctx->buffer_len + i;
+            output[i] = (uint8_t)(ctx->state[pos / 8] >> ((pos % 8) * 8));
+        }
+
+        output += tocopy;
+        outlen -= tocopy;
+        ctx->buffer_len += tocopy;
+
+        if (ctx->buffer_len == SHAKE128_RATE && outlen > 0) {
+            keccak_f1600(ctx->state);
+            ctx->buffer_len = 0;
+        }
+    }
     return AVA_SUCCESS;
 }

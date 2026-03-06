@@ -74,7 +74,7 @@ typedef enum {
  * KEY SIZES (bytes)
  * ============================================================================ */
 
-/* ML-DSA-65 (Dilithium3) - Key sizes from liboqs */
+/* ML-DSA-65 (Dilithium3) - FIPS 204 */
 #define AVA_ML_DSA_65_PUBLIC_KEY_BYTES 1952
 #define AVA_ML_DSA_65_SECRET_KEY_BYTES 4032
 #define AVA_ML_DSA_65_SIGNATURE_BYTES 3309
@@ -128,8 +128,8 @@ void ava_context_free(ava_context_t* ctx);
  * @brief Generate a new keypair (constant-time)
  *
  * Generates a cryptographic keypair for the algorithm specified in the context.
- * Supports ML-DSA-65, Kyber-1024, SPHINCS+-256f, and hybrid modes when built
- * with AVA_USE_LIBOQS. Ed25519 uses the native implementation.
+ * Supports ML-DSA-65, Kyber-1024, SPHINCS+-256f, Ed25519, and hybrid modes.
+ * All algorithms use native implementations (no external PQC dependencies).
  *
  * @param ctx Initialized context
  * @param public_key Output buffer for public key
@@ -154,7 +154,7 @@ ava_error_t ava_keypair_generate(
  * @brief Sign a message (constant-time)
  *
  * Signs a message using the algorithm specified in the context.
- * Supports ML-DSA-65, SPHINCS+-256f when built with AVA_USE_LIBOQS.
+ * Supports ML-DSA-65, SPHINCS+-256f, and Ed25519 natively.
  *
  * @param ctx Initialized context
  * @param message Message to sign
@@ -179,7 +179,7 @@ ava_error_t ava_sign(
  * @brief Verify a signature (constant-time)
  *
  * Verifies a signature using the algorithm specified in the context.
- * Supports ML-DSA-65, SPHINCS+-256f when built with AVA_USE_LIBOQS.
+ * Supports ML-DSA-65, SPHINCS+-256f, and Ed25519 natively.
  *
  * @param ctx Initialized context
  * @param message Message to verify
@@ -209,7 +209,7 @@ ava_error_t ava_verify(
  *
  * Performs KEM encapsulation using Kyber-1024 (ML-KEM-1024).
  * Generates a random shared secret and ciphertext using the recipient's public key.
- * Requires AVA_USE_LIBOQS to be defined.
+ * Uses native implementation (FIPS 203 compliant).
  *
  * @param ctx Initialized context (must be Kyber-1024)
  * @param public_key Recipient's public key
@@ -235,8 +235,7 @@ ava_error_t ava_kem_encapsulate(
  *
  * Performs KEM decapsulation using Kyber-1024 (ML-KEM-1024).
  * Recovers the shared secret from ciphertext using the recipient's secret key.
- * Uses implicit rejection for IND-CCA2 security.
- * Requires AVA_USE_LIBOQS to be defined.
+ * Uses implicit rejection for IND-CCA2 security (FIPS 203 compliant).
  *
  * @param ctx Initialized context (must be Kyber-1024)
  * @param ciphertext Ciphertext to decapsulate
@@ -332,6 +331,24 @@ ava_error_t ava_sha3_256(
     uint8_t* output
 );
 
+/**
+ * @brief SHA3-512 hash (FIPS 202)
+ *
+ * Computes the SHA3-512 cryptographic hash of the input data.
+ * Uses the Keccak-f[1600] sponge construction with rate 72 and capacity 128.
+ * Required by FIPS 203 (ML-KEM) as the G function.
+ *
+ * @param input Input data
+ * @param input_len Length of input
+ * @param output Output buffer (64 bytes)
+ * @return AVA_SUCCESS or error code
+ */
+ava_error_t ava_sha3_512(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+);
+
 /* ============================================================================
  * STREAMING SHA3-256 API (init/update/final)
  * Enables hashing of large data streams without loading everything into memory
@@ -342,7 +359,7 @@ ava_error_t ava_sha3_256(
  */
 typedef struct {
     uint64_t state[25];     /**< Keccak state (1600 bits) */
-    uint8_t buffer[136];    /**< Rate buffer (136 bytes for SHA3-256) */
+    uint8_t buffer[168];    /**< Rate buffer (168 bytes max for SHAKE128; 136 for SHA3-256/SHAKE256) */
     size_t buffer_len;      /**< Current bytes in buffer */
     int finalized;          /**< Set to 1 after final() called */
 } ava_sha3_ctx;
@@ -377,6 +394,58 @@ ava_error_t ava_sha3_update(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
  * @return AVA_SUCCESS or error code
  */
 ava_error_t ava_sha3_final(ava_sha3_ctx* ctx, uint8_t* output);
+
+/* ============================================================================
+ * STREAMING SHAKE256 API (init/absorb/finalize/squeeze)
+ * Enables incremental absorb and multi-block squeeze for SHAKE256 (XOF)
+ * Reuses ava_sha3_ctx since SHAKE256 rate = 136 = SHA3-256 rate
+ * ============================================================================ */
+
+/**
+ * @brief Initialize SHAKE256 incremental context
+ */
+ava_error_t ava_shake256_inc_init(ava_sha3_ctx* ctx);
+
+/**
+ * @brief Absorb data into SHAKE256 incremental context
+ */
+ava_error_t ava_shake256_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
+
+/**
+ * @brief Finalize SHAKE256 absorption (apply padding). Must be called before squeeze.
+ */
+ava_error_t ava_shake256_inc_finalize(ava_sha3_ctx* ctx);
+
+/**
+ * @brief Squeeze output bytes from finalized SHAKE256 context. Can be called multiple times.
+ */
+ava_error_t ava_shake256_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen);
+
+/* ============================================================================
+ * STREAMING SHAKE128 API (init/absorb/finalize/squeeze)
+ * Enables incremental absorb and multi-block squeeze for SHAKE128 (XOF)
+ * SHAKE128 rate = 168 bytes
+ * ============================================================================ */
+
+/**
+ * @brief Initialize SHAKE128 incremental context
+ */
+ava_error_t ava_shake128_inc_init(ava_sha3_ctx* ctx);
+
+/**
+ * @brief Absorb data into SHAKE128 incremental context
+ */
+ava_error_t ava_shake128_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
+
+/**
+ * @brief Finalize SHAKE128 absorption (apply padding). Must be called before squeeze.
+ */
+ava_error_t ava_shake128_inc_finalize(ava_sha3_ctx* ctx);
+
+/**
+ * @brief Squeeze output bytes from finalized SHAKE128 context. Can be called multiple times.
+ */
+ava_error_t ava_shake128_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen);
 
 /**
  * @brief HKDF key derivation (RFC 5869)

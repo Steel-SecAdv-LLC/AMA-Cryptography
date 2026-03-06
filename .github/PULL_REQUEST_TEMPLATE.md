@@ -114,7 +114,7 @@ Example:
 **Environment:**
 - Python version(s):
 - Operating System:
-- Quantum libraries: [ ] liboqs-python [ ] pqcrypto [ ] None
+- PQC backend: [ ] Native C library [ ] None
 
 **Test Cases:**
 1.

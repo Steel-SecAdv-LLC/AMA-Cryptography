@@ -18,7 +18,7 @@ Usage:
 
 Requirements:
     pip install cryptography
-    pip install liboqs-python  # Optional: for quantum-resistant signatures
+    # Optional: build native C library for quantum-resistant signatures
 """
 
 import sys
@@ -71,7 +71,7 @@ def example_1_simple_signing():
         print(f"PQC signature size: {len(signature_pqc.signature)} bytes")
     except Exception as e:
         print(f"\nNote: PQC not available ({e})")
-        print("Install liboqs-python for quantum resistance.")
+        print("Build native C library for quantum resistance.")
 
 
 def example_2_key_management():
@@ -240,7 +240,7 @@ def example_4_humanitarian_use_case():
     if package.dilithium_signature:
         print("  - ML-DSA-65 quantum-resistant signature")
     else:
-        print("  - (Quantum signatures available with liboqs-python)")
+        print("  - (Quantum signatures available with native C library)")
 
     # Verify integrity
     results = verify_crypto_package(

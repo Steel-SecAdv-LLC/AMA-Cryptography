@@ -18,23 +18,7 @@ option(AVA_ENABLE_SIMD "Enable SIMD optimizations" ON)
 option(AVA_ENABLE_AVX2 "Enable AVX2 instructions" ON)
 option(AVA_ENABLE_SANITIZERS "Enable address/undefined sanitizers" OFF)
 option(AVA_ENABLE_LTO "Enable link-time optimization" ON)
-option(AVA_USE_LIBOQS "Enable liboqs for post-quantum cryptography" OFF)
-
-# Find liboqs if requested
-if(AVA_USE_LIBOQS)
-    find_library(LIBOQS_LIBRARY NAMES oqs liboqs)
-    find_path(LIBOQS_INCLUDE_DIR NAMES oqs/oqs.h)
-    
-    if(LIBOQS_LIBRARY AND LIBOQS_INCLUDE_DIR)
-        message(STATUS "Found liboqs: ${LIBOQS_LIBRARY}")
-        message(STATUS "liboqs include: ${LIBOQS_INCLUDE_DIR}")
-        set(AVA_LIBOQS_FOUND TRUE)
-    else()
-        message(WARNING "liboqs requested but not found. PQC functions will return AVA_ERROR_NOT_IMPLEMENTED.")
-        message(WARNING "Install liboqs: https://github.com/open-quantum-safe/liboqs")
-        set(AVA_LIBOQS_FOUND FALSE)
-    endif()
-endif()
+option(AVA_USE_NATIVE_PQC "Enable native PQC implementations (ML-DSA-65, Kyber-1024, SPHINCS+)" ON)
 
 # C standard
 set(CMAKE_C_STANDARD 11)
@@ -87,11 +71,20 @@ endif()
 set(AVA_SOURCES
     src/c/ava_core.c
     src/c/ava_consttime.c
-    src/c/ava_kyber.c
     src/c/ava_sha3.c
     src/c/ava_hkdf.c
     src/c/ava_ed25519.c
 )
+
+# Add native PQC source files when enabled
+if(AVA_USE_NATIVE_PQC)
+    list(APPEND AVA_SOURCES
+        src/c/ava_kyber.c
+        src/c/ava_dilithium.c
+        src/c/ava_sphincs.c
+    )
+    message(STATUS "Native PQC enabled: ML-DSA-65, Kyber-1024, SPHINCS+-256f")
+endif()
 
 # Find dependencies
 find_package(OpenSSL REQUIRED)
@@ -110,11 +103,8 @@ if(AVA_BUILD_SHARED)
     )
     target_compile_definitions(ava_guardian_shared PRIVATE AVA_BUILDING_SHARED)
     
-    # Add liboqs support if available
-    if(AVA_USE_LIBOQS AND AVA_LIBOQS_FOUND)
-        target_compile_definitions(ava_guardian_shared PRIVATE AVA_USE_LIBOQS)
-        target_include_directories(ava_guardian_shared PRIVATE ${LIBOQS_INCLUDE_DIR})
-        target_link_libraries(ava_guardian_shared PRIVATE ${LIBOQS_LIBRARY})
+    if(AVA_USE_NATIVE_PQC)
+        target_compile_definitions(ava_guardian_shared PRIVATE AVA_USE_NATIVE_PQC)
     endif()
 endif()
 
@@ -129,11 +119,8 @@ if(AVA_BUILD_STATIC)
         PRIVATE OpenSSL::Crypto
     )
     
-    # Add liboqs support if available
-    if(AVA_USE_LIBOQS AND AVA_LIBOQS_FOUND)
-        target_compile_definitions(ava_guardian_static PRIVATE AVA_USE_LIBOQS)
-        target_include_directories(ava_guardian_static PRIVATE ${LIBOQS_INCLUDE_DIR})
-        target_link_libraries(ava_guardian_static PRIVATE ${LIBOQS_LIBRARY})
+    if(AVA_USE_NATIVE_PQC)
+        target_compile_definitions(ava_guardian_static PRIVATE AVA_USE_NATIVE_PQC)
     endif()
 endif()
 
@@ -145,6 +132,20 @@ endif()
 # Tests
 if(AVA_BUILD_TESTS)
     enable_testing()
+
+    # Build a separate test-only static library with AVA_TESTING_MODE enabled.
+    # This exposes randombytes_hook function pointers for deterministic KAT testing
+    # WITHOUT contaminating the installable production libraries.
+    add_library(ava_guardian_test STATIC ${AVA_SOURCES})
+    set_target_properties(ava_guardian_test PROPERTIES
+        OUTPUT_NAME "ava_guardian_test"
+    )
+    target_link_libraries(ava_guardian_test PRIVATE OpenSSL::Crypto)
+    target_compile_definitions(ava_guardian_test PRIVATE AVA_TESTING_MODE)
+    if(AVA_USE_NATIVE_PQC)
+        target_compile_definitions(ava_guardian_test PRIVATE AVA_USE_NATIVE_PQC)
+    endif()
+
     add_subdirectory(tests/c)
 endif()
 
@@ -195,15 +196,12 @@ message(STATUS "  Sanitizers:     ${AVA_ENABLE_SANITIZERS}")
 message(STATUS "  LTO:            ${AVA_ENABLE_LTO}")
 message(STATUS "")
 message(STATUS "Post-Quantum Cryptography:")
-message(STATUS "  liboqs enabled: ${AVA_USE_LIBOQS}")
-if(AVA_USE_LIBOQS)
-    if(AVA_LIBOQS_FOUND)
-        message(STATUS "  liboqs found:   YES (${LIBOQS_LIBRARY})")
-        message(STATUS "  PQC algorithms: ML-DSA-65, Kyber-1024, SPHINCS+-256f")
-    else()
-        message(STATUS "  liboqs found:   NO (PQC functions will return NOT_IMPLEMENTED)")
-    endif()
+message(STATUS "  Native PQC:     ${AVA_USE_NATIVE_PQC}")
+if(AVA_USE_NATIVE_PQC)
+    message(STATUS "  PQC backend:    NATIVE")
+    message(STATUS "  PQC algorithms: ML-DSA-65 (ava_dilithium.c), Kyber-1024 (ava_kyber.c), SPHINCS+-256f (ava_sphincs.c)")
+    message(STATUS "  FIPS compliance: FIPS 203 (ML-KEM), FIPS 204 (ML-DSA), FIPS 205 (SLH-DSA)")
 else()
-    message(STATUS "  liboqs found:   DISABLED (use -DAVA_USE_LIBOQS=ON to enable)")
+    message(STATUS "  PQC backend:    NONE (use -DAVA_USE_NATIVE_PQC=ON)")
 endif()
 message(STATUS "")

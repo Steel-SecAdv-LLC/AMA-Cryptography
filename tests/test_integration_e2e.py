@@ -342,23 +342,21 @@ class TestErrorRecoveryAndGracefulDegradation:
 
     def test_pqc_unavailable_graceful_handling(self):
         """Test graceful handling when PQC is unavailable."""
-        from ava_guardian.pqc_backends import (
-            DILITHIUM_AVAILABLE,
-            PQCUnavailableError,
-        )
-
-        if DILITHIUM_AVAILABLE:
-            pytest.skip("PQC is available, skipping unavailability test")
+        from unittest.mock import patch
 
         from ava_guardian.crypto_api import (
             AlgorithmType,
             AvaGuardianCrypto,
         )
+        from ava_guardian.pqc_backends import (
+            PQCUnavailableError,
+        )
 
-        # Should raise appropriate error
-        with pytest.raises(PQCUnavailableError):
-            crypto = AvaGuardianCrypto(algorithm=AlgorithmType.ML_DSA_65)
-            crypto.generate_keypair()
+        # Mock Dilithium as unavailable to test error path
+        with patch("ava_guardian.pqc_backends.DILITHIUM_AVAILABLE", False):
+            with pytest.raises(PQCUnavailableError):
+                crypto = AvaGuardianCrypto(algorithm=AlgorithmType.ML_DSA_65)
+                crypto.generate_keypair()
 
 
 class TestPerformanceRegression:

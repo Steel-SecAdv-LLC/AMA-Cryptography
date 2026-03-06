@@ -42,6 +42,7 @@ import secrets
 import struct
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -376,10 +377,9 @@ class TestDilithiumSignatures:
 
     def test_unavailable_raises_exception(self):
         """When Dilithium unavailable, operations should raise QuantumSignatureUnavailableError."""
-        if DILITHIUM_AVAILABLE:
-            pytest.skip("Dilithium is available, cannot test unavailable path")
-        with pytest.raises(QuantumSignatureUnavailableError):
-            generate_dilithium_keypair()
+        with patch("ava_guardian.pqc_backends.DILITHIUM_AVAILABLE", False):
+            with pytest.raises(QuantumSignatureUnavailableError):
+                generate_dilithium_keypair()
 
 
 class TestKeyDerivation:

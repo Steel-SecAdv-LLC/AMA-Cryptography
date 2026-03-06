@@ -17,16 +17,19 @@ def main() -> None:
     info = get_pqc_backend_info()
 
     if status != PQCStatus.AVAILABLE:
-        raise SystemExit("PQC unavailable: install liboqs-python and ensure it loads correctly.")
+        raise SystemExit(
+            "PQC unavailable: build native C library with "
+            "cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
 
     backend = info.get("dilithium_backend")
     if backend is None:
         raise SystemExit(
-            "PQC backend unavailable. Install liboqs-python for constant-time support."
+            "PQC backend unavailable. Build native C library."
         )
-    if backend != "liboqs":
+    if backend != "native":
         raise SystemExit(
-            f"PQC backend is '{backend}'. Install liboqs-python for constant-time support."
+            f"PQC backend is '{backend}'. Expected 'native'."
         )
 
     crypto = AvaGuardianCrypto(algorithm=AlgorithmType.HYBRID_SIG)
@@ -40,7 +43,7 @@ def main() -> None:
     if not valid:
         raise SystemExit("PQC sanity check failed: signature verification returned False.")
 
-    print("PQC sanity check passed: liboqs backend available and hybrid sign/verify succeeded.")
+    print("PQC sanity check passed: native backend available and hybrid sign/verify succeeded.")
 
 
 if __name__ == "__main__":

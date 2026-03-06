@@ -12,6 +12,8 @@ Copyright 2025 Steel Security Advisors LLC
 Licensed under the Apache License, Version 2.0
 """
 
+from unittest.mock import patch
+
 import pytest
 
 from ava_guardian.crypto_api import (
@@ -71,9 +73,9 @@ class TestCryptoBackend:
         """Verify PURE_PYTHON backend exists."""
         assert hasattr(CryptoBackend, "PURE_PYTHON")
 
-    def test_liboqs_exists(self):
-        """Verify LIBOQS backend exists."""
-        assert hasattr(CryptoBackend, "LIBOQS")
+    def test_c_library_exists(self):
+        """Verify C_LIBRARY backend exists."""
+        assert hasattr(CryptoBackend, "C_LIBRARY")
 
 
 class TestKeyPairDataclass:
@@ -296,7 +298,9 @@ class TestKyberProvider:
 def test_kyber_provider_not_placeholder():
     """Verify KyberProvider is not a placeholder."""
     provider = KyberProvider()
-    assert not hasattr(provider, "_is_placeholder") or not provider._is_placeholder
+    # KyberProvider should be functional, not a stub
+    keypair = provider.generate_keypair()
+    assert keypair is not None
 
 
 @pytest.mark.skipif(not SPHINCS_AVAILABLE, reason="SPHINCS+ backend not available")
@@ -490,17 +494,17 @@ class TestGetPqcCapabilities:
 class TestUnavailableProviderErrors:
     """Test error handling when providers are unavailable."""
 
-    @pytest.mark.skipif(KYBER_AVAILABLE, reason="Kyber is available")
     def test_kyber_provider_raises_error(self):
         """Verify KyberProvider raises error when unavailable."""
-        with pytest.raises(KyberUnavailableError):
-            KyberProvider()
+        with patch("ava_guardian.crypto_api.KYBER_AVAILABLE", False):
+            with pytest.raises(KyberUnavailableError):
+                KyberProvider()
 
-    @pytest.mark.skipif(SPHINCS_AVAILABLE, reason="SPHINCS+ is available")
     def test_sphincs_provider_raises_error(self):
         """Verify SphincsProvider raises error when unavailable."""
-        with pytest.raises(SphincsUnavailableError):
-            SphincsProvider()
+        with patch("ava_guardian.crypto_api.SPHINCS_AVAILABLE", False):
+            with pytest.raises(SphincsUnavailableError):
+                SphincsProvider()
 
 
 class TestProviderAbstractBase:

@@ -124,9 +124,8 @@ class TestDemonstration:
         - No exceptions raised
         - No warnings about missing critical dependencies
 
-        Note: Some external libraries (like liboqs-python) may produce stderr
-        output during auto-install attempts. These are filtered out as they
-        don't indicate errors in our code.
+        Note: Stderr output is not checked as it may contain non-error messages
+        from external processes.
         """
         # Get the path to the main script
         script_path = Path(__file__).parent.parent / "code_guardian_secure.py"
@@ -148,7 +147,6 @@ class TestDemonstration:
         )
 
         # Check for errors in stdout only (our code's output)
-        # Stderr may contain external library messages (e.g., liboqs auto-install)
         stdout = result.stdout
 
         # Should not contain these error indicators in our output
@@ -175,35 +173,27 @@ class TestDemonstration:
         Test demonstration with quantum-resistant libraries if available.
 
         This test is marked as 'slow' and checks:
-        - Dilithium signature generation (if liboqs-python or pqcrypto available)
+        - Dilithium signature generation (if native C backend available)
         - Quantum-resistant verification
-        - Proper fallback if libraries not available
+        - Proper fallback if native library not available
 
-        Note: This test may be skipped if quantum libraries are not installed.
+        Note: This test may be skipped if native C library is not built.
         """
-        # Test quantum library availability in subprocess to avoid import warnings affecting pytest
         script_path = Path(__file__).parent.parent / "code_guardian_secure.py"
 
-        # Check if quantum libraries work by running a quick test
+        # Check if native PQC backend is available
         test_script = """
 import sys
 try:
-    import oqs
-    sig = oqs.Signature("ML-DSA-65")
-    print("liboqs_available")
+    from ava_guardian.pqc_backends import DILITHIUM_AVAILABLE, DILITHIUM_BACKEND
+    if DILITHIUM_AVAILABLE:
+        print("native_available")
+    else:
+        print("no_native_backend")
     sys.exit(0)
 except Exception:
-    pass
-
-try:
-    from pqcrypto.sign import dilithium3
-    print("pqcrypto_available")
+    print("no_native_backend")
     sys.exit(0)
-except Exception:
-    pass
-
-print("no_quantum_libraries")
-sys.exit(0)
 """
 
         quantum_check = subprocess.run(
@@ -213,8 +203,7 @@ sys.exit(0)
             timeout=30,
         )
 
-        quantum_available = "available" in quantum_check.stdout
-        quantum_backend = quantum_check.stdout.strip()
+        quantum_available = "native_available" in quantum_check.stdout
 
         # Run the demonstration
         result = subprocess.run(
@@ -231,7 +220,7 @@ sys.exit(0)
             # If quantum libraries available, verify Dilithium signatures are working
             assert (
                 "Dilithium" in result.stdout
-            ), f"Dilithium not found in output despite {quantum_backend} being available"
+            ), "Dilithium not found in output despite native backend being available"
             # Should not have warnings about missing quantum libraries
             assert "WARNING: Dilithium not available" not in result.stdout
             # Should have successful verification
@@ -248,12 +237,16 @@ class TestErrorHandling:
         """
         Test behavior when cryptography library is missing.
 
-        Note: This test is informational only since cryptography is required.
-        The actual implementation should raise ImportError if cryptography is missing.
+        Validates that functions depending on the cryptography library
+        raise RuntimeError when CRYPTO_AVAILABLE is False.
         """
-        # This test documents expected behavior but cannot be easily tested
-        # without manipulating import paths
-        pytest.skip("Cryptography library is required; cannot test missing scenario")
+        from unittest.mock import patch
+
+        from code_guardian_secure import generate_ed25519_keypair
+
+        with patch("code_guardian_secure.CRYPTO_AVAILABLE", False):
+            with pytest.raises(RuntimeError, match="cryptography library required"):
+                generate_ed25519_keypair()
 
     def test_graceful_quantum_library_fallback(self):
         """

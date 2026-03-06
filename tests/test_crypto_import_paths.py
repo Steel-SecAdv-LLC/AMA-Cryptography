@@ -18,7 +18,7 @@ Ava Guardian ♱ (AG♱): Import Path and Edge Case Tests
 ======================================================
 
 Tests for import error handling, CRYPTO_AVAILABLE/DILITHIUM_AVAILABLE paths,
-pqcrypto backend paths, RFC 3161 success paths, and other edge cases needed
+RFC 3161 success paths, and other edge cases needed
 for 100% test coverage.
 
 Organization: Steel Security Advisors LLC
@@ -99,89 +99,10 @@ class TestFieldSizeValidation:
             dgs.length_prefixed_encode(huge)
 
 
-# ============================================================================
-# PQCRYPTO BACKEND TESTS
-# ============================================================================
-
-
-# ML-DSA-65 key sizes per liboqs
+# ML-DSA-65 key sizes per NIST FIPS 204
 FAKE_PRIVATE_KEY = b"K" * 4032  # 4032 bytes for ML-DSA-65 secret key
 FAKE_PUBLIC_KEY = b"P" * 1952  # 1952 bytes for ML-DSA-65 public key
 FAKE_SIGNATURE = b"S" * 3309  # 3309 bytes for ML-DSA-65 signature
-
-
-class FakeDilithium3:
-    """Fake pqcrypto dilithium3 module for testing."""
-
-    @staticmethod
-    def generate_keypair():
-        """Generate fake keypair."""
-        return FAKE_PUBLIC_KEY, FAKE_PRIVATE_KEY
-
-    @staticmethod
-    def sign(message, private_key):
-        """Sign with fake signature."""
-        return FAKE_SIGNATURE
-
-    @staticmethod
-    def verify(message, signature, public_key):
-        """Verify signature (no exception = success)."""
-        if signature != FAKE_SIGNATURE:
-            raise Exception("Invalid signature")
-
-
-class TestPqcryptoBackend:
-    """Tests for pqcrypto backend paths."""
-
-    def test_generate_dilithium_keypair_pqcrypto(self, monkeypatch):
-        """Test Dilithium keypair generation with pqcrypto backend."""
-        monkeypatch.setattr(dgs, "DILITHIUM_AVAILABLE", True)
-        monkeypatch.setattr(dgs, "DILITHIUM_BACKEND", "pqcrypto")
-        # Set dilithium3 as module attribute since it may not exist
-        if not hasattr(dgs, "dilithium3"):
-            monkeypatch.setattr(dgs, "dilithium3", FakeDilithium3, raising=False)
-        else:
-            monkeypatch.setattr(dgs, "dilithium3", FakeDilithium3)
-
-        kp = dgs.generate_dilithium_keypair()
-        assert kp.public_key == FAKE_PUBLIC_KEY
-        assert kp.private_key == FAKE_PRIVATE_KEY
-
-    def test_dilithium_sign_pqcrypto(self, monkeypatch):
-        """Test Dilithium signing with pqcrypto backend."""
-        monkeypatch.setattr(dgs, "DILITHIUM_AVAILABLE", True)
-        monkeypatch.setattr(dgs, "DILITHIUM_BACKEND", "pqcrypto")
-        if not hasattr(dgs, "dilithium3"):
-            monkeypatch.setattr(dgs, "dilithium3", FakeDilithium3, raising=False)
-        else:
-            monkeypatch.setattr(dgs, "dilithium3", FakeDilithium3)
-
-        sig = dgs.dilithium_sign(b"msg", FAKE_PRIVATE_KEY)
-        assert sig == FAKE_SIGNATURE
-
-    def test_dilithium_verify_pqcrypto_success(self, monkeypatch):
-        """Test Dilithium verification with pqcrypto backend (success)."""
-        monkeypatch.setattr(dgs, "DILITHIUM_AVAILABLE", True)
-        monkeypatch.setattr(dgs, "DILITHIUM_BACKEND", "pqcrypto")
-        if not hasattr(dgs, "dilithium3"):
-            monkeypatch.setattr(dgs, "dilithium3", FakeDilithium3, raising=False)
-        else:
-            monkeypatch.setattr(dgs, "dilithium3", FakeDilithium3)
-
-        result = dgs.dilithium_verify(b"msg", FAKE_SIGNATURE, FAKE_PUBLIC_KEY)
-        assert result is True
-
-    def test_dilithium_verify_pqcrypto_failure(self, monkeypatch):
-        """Test Dilithium verification with pqcrypto backend (failure)."""
-        monkeypatch.setattr(dgs, "DILITHIUM_AVAILABLE", True)
-        monkeypatch.setattr(dgs, "DILITHIUM_BACKEND", "pqcrypto")
-        if not hasattr(dgs, "dilithium3"):
-            monkeypatch.setattr(dgs, "dilithium3", FakeDilithium3, raising=False)
-        else:
-            monkeypatch.setattr(dgs, "dilithium3", FakeDilithium3)
-
-        result = dgs.dilithium_verify(b"msg", b"WRONG_SIGNATURE", FAKE_PUBLIC_KEY)
-        assert result is False
 
 
 # ============================================================================
@@ -249,7 +170,7 @@ class TestDilithiumUnavailablePaths:
         kms = dgs.generate_key_management_system("author")
         out = capsys.readouterr().out
         assert "Quantum-resistant signatures disabled" in out
-        assert "pip install liboqs-python" in out
+        assert "native C library" in out
         assert kms.quantum_signatures_enabled is False
         assert kms.dilithium_keypair is None
 
@@ -424,49 +345,6 @@ class TestMainFunctionBranches:
         dgs.main()
         out = capsys.readouterr().out
         assert "VERIFICATION FAILED" in out or "INVALID" in out
-
-
-# ============================================================================
-# PQCRYPTO ERROR PATH TESTS
-# ============================================================================
-
-
-class FakeDilithium3WithErrors:
-    """Fake pqcrypto dilithium3 module that raises errors."""
-
-    @staticmethod
-    def generate_keypair():
-        """Generate keypair that raises error."""
-        raise Exception("pqcrypto generate error")
-
-    @staticmethod
-    def sign(message, private_key):
-        """Sign that raises error."""
-        raise Exception("pqcrypto sign error")
-
-    @staticmethod
-    def verify(message, signature, public_key):
-        """Verify that raises error."""
-        raise Exception("pqcrypto verify error")
-
-
-class TestPqcryptoErrorPaths:
-    """Tests for pqcrypto backend error paths."""
-
-    def test_generate_dilithium_keypair_pqcrypto_error(self, monkeypatch):
-        """Test Dilithium keypair generation error with pqcrypto backend."""
-        monkeypatch.setattr(dgs, "DILITHIUM_AVAILABLE", True)
-        monkeypatch.setattr(dgs, "DILITHIUM_BACKEND", "pqcrypto")
-        if not hasattr(dgs, "dilithium3"):
-            monkeypatch.setattr(dgs, "dilithium3", FakeDilithium3WithErrors, raising=False)
-        else:
-            monkeypatch.setattr(dgs, "dilithium3", FakeDilithium3WithErrors)
-
-        # The function should raise QuantumSignatureUnavailableError when pqcrypto fails
-        # But actually looking at the code, it doesn't catch exceptions in pqcrypto path
-        # So this will raise the underlying exception
-        with pytest.raises(Exception):
-            dgs.generate_dilithium_keypair()
 
 
 if __name__ == "__main__":

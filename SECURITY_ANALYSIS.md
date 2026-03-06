@@ -1329,7 +1329,7 @@ Ava Guardian ♱ provides cryptographic protection for Omni-Code (helical mathem
 
 2. **Third-Party Audit**: Obtain professional security audit before production use
 
-3. **Deploy ML-DSA-65**: Install liboqs or equivalent for quantum resistance
+3. **Deploy ML-DSA-65**: Build native C library for quantum resistance (NIST KAT validated)
 
 4. **Enable RFC 3161**: Use trusted TSA for legal-strength timestamps
 

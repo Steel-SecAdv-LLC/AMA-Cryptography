@@ -68,7 +68,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, cast
 
 if TYPE_CHECKING:
     from ava_guardian_monitor import AvaGuardianMonitor
@@ -108,16 +108,6 @@ from ava_guardian.pqc_backends import generate_dilithium_keypair as _pqc_generat
 DILITHIUM_AVAILABLE: bool = _PQC_DILITHIUM_AVAILABLE
 DILITHIUM_BACKEND: Optional[str] = _PQC_DILITHIUM_BACKEND
 
-# Optional pqcrypto module reference for test mocking
-# Tests can set this to FakeDilithium3 to test pqcrypto paths
-dilithium3: Any = None
-try:
-    from pqcrypto.sign import dilithium3 as _dilithium3_module
-
-    dilithium3 = _dilithium3_module
-except ImportError:
-    pass
-
 
 # ============================================================================
 # DILITHIUM WRAPPER FUNCTIONS (for test compatibility)
@@ -144,23 +134,13 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
     # Get current module to check monkeypatched values
     this_module = sys.modules[__name__]
     available = getattr(this_module, "DILITHIUM_AVAILABLE", _PQC_DILITHIUM_AVAILABLE)
-    backend = getattr(this_module, "DILITHIUM_BACKEND", _PQC_DILITHIUM_BACKEND)
 
     if not available:
         raise QuantumSignatureUnavailableError(
             "PQC_UNAVAILABLE: Dilithium backend not available. "
-            "Install liboqs-python (recommended) or pqcrypto: "
-            "pip install liboqs-python"
+            "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
         )
 
-    # Check for pqcrypto backend (used by tests with FakeDilithium3)
-    if backend == "pqcrypto":
-        d3 = getattr(this_module, "dilithium3", None)
-        if d3 is not None:
-            public_key, private_key = d3.generate_keypair()
-            return DilithiumKeyPair(private_key=private_key, public_key=public_key)
-
-    # Default to centralized PQC backend
     return _pqc_generate_dilithium_keypair()
 
 
@@ -176,7 +156,7 @@ def dilithium_sign(message: bytes, private_key: bytes) -> bytes:
         private_key: Dilithium private key (4032 bytes)
 
     Returns:
-        Dilithium signature (3293 bytes)
+        Dilithium signature (3309 bytes)
 
     Raises:
         QuantumSignatureUnavailableError: If no Dilithium backend is available
@@ -186,21 +166,13 @@ def dilithium_sign(message: bytes, private_key: bytes) -> bytes:
     # Get current module to check monkeypatched values
     this_module = sys.modules[__name__]
     available = getattr(this_module, "DILITHIUM_AVAILABLE", _PQC_DILITHIUM_AVAILABLE)
-    backend = getattr(this_module, "DILITHIUM_BACKEND", _PQC_DILITHIUM_BACKEND)
 
     if not available:
         raise QuantumSignatureUnavailableError(
             "PQC_UNAVAILABLE: Dilithium backend not available. "
-            "Install liboqs-python (recommended) or pqcrypto."
+            "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
         )
 
-    # Check for pqcrypto backend (used by tests with FakeDilithium3)
-    if backend == "pqcrypto":
-        d3 = getattr(this_module, "dilithium3", None)
-        if d3 is not None:
-            return cast(bytes, d3.sign(message, private_key))
-
-    # Default to centralized PQC backend
     return _pqc_dilithium_sign(message, private_key)
 
 
@@ -227,25 +199,13 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
     # Get current module to check monkeypatched values
     this_module = sys.modules[__name__]
     available = getattr(this_module, "DILITHIUM_AVAILABLE", _PQC_DILITHIUM_AVAILABLE)
-    backend = getattr(this_module, "DILITHIUM_BACKEND", _PQC_DILITHIUM_BACKEND)
 
     if not available:
         raise QuantumSignatureUnavailableError(
             "PQC_UNAVAILABLE: Dilithium backend not available. "
-            "Install liboqs-python (recommended) or pqcrypto."
+            "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
         )
 
-    # Check for pqcrypto backend (used by tests with FakeDilithium3)
-    if backend == "pqcrypto":
-        d3 = getattr(this_module, "dilithium3", None)
-        if d3 is not None:
-            try:
-                d3.verify(message, signature, public_key)
-                return True
-            except Exception:
-                return False
-
-    # Default to centralized PQC backend
     return _pqc_dilithium_verify(message, signature, public_key)
 
 
@@ -1445,7 +1405,7 @@ def generate_key_management_system(
        - Ed25519 seed for classical signatures (with ethical binding)
        - Dilithium seed for quantum-resistant signatures (reserved)
     3. Generate Ed25519 key pair from ethically-derived seed
-    4. Generate Dilithium key pair (from liboqs/pqcrypto or placeholder)
+    4. Generate Dilithium key pair (from native C backend)
 
     Ethical Integration:
     --------------------
@@ -1501,16 +1461,15 @@ def generate_key_management_system(
             print("WARNING: Quantum-resistant signatures disabled")
             print("=" * 70)
             print("System will use Ed25519 classical signatures only.")
-            print("To enable quantum resistance, install liboqs-python or pqcrypto.")
+            print("To enable quantum resistance, build native C library:")
             print("=" * 70 + "\n")
     else:
         print("\n" + "=" * 70)
         print("WARNING: Quantum-resistant signatures disabled")
         print("=" * 70)
         print("System will use Ed25519 classical signatures only.")
-        print("To enable quantum resistance, install:")
-        print("  Option 1 (Recommended): pip install liboqs-python")
-        print("  Option 2 (Alternative): pip install pqcrypto")
+        print("To enable quantum resistance, build native C library:")
+        print("  cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build")
         print("=" * 70 + "\n")
 
     return KeyManagementSystem(
@@ -1573,7 +1532,7 @@ def export_public_keys(kms: KeyManagementSystem, output_dir: Path) -> None:
         else:
             f.write("Dilithium Public Key: NOT AVAILABLE\n")
             f.write("  Quantum-resistant signatures are disabled.\n")
-            f.write("  Install liboqs-python or pqcrypto to enable.\n\n")
+            f.write("  Build native C library to enable.\n\n")
         f.write("These public keys can be safely distributed.\n")
         f.write("Use them to verify signatures on Omni-Code packages.\n")
 

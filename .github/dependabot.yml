@@ -25,8 +25,6 @@ updates:
     ignore:
       - dependency-name: "cryptography"
         update-types: ["version-update:semver-major"]
-      - dependency-name: "liboqs-python"
-        update-types: ["version-update:semver-major"]
 
   # Enable security updates for GitHub Actions
   - package-ecosystem: "github-actions"

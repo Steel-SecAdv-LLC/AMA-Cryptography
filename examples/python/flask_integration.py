@@ -17,7 +17,7 @@ Features:
 
 Usage:
     pip install flask cryptography
-    pip install liboqs-python  # Optional: for quantum-resistant signatures
+    # Optional: build native C library for quantum-resistant signatures
     python flask_integration.py
 
 Then visit:

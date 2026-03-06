@@ -31,7 +31,7 @@ This document provides an overview of the cryptographic algorithms used in Ava G
 
 ML-DSA-65 is the primary post-quantum signature algorithm, providing 192-bit quantum security based on the Module Learning With Errors (MLWE) problem.
 
-**Key Sizes (per liboqs):**
+**Key Sizes (FIPS 204):**
 - Public Key: 1,952 bytes
 - Private Key: 4,032 bytes
 - Signature: 3,309 bytes
@@ -202,9 +202,8 @@ All key material is securely wiped after use via `secure_wipe()` which:
 
 ### Backend Selection
 
-PQC backends are selected at runtime:
-1. **liboqs-python** (recommended) - Open Quantum Safe implementation
-2. **pqcrypto** (fallback) - Alternative Python bindings
+PQC is provided by the native C library:
+1. **Native C library** - Full native implementations of ML-DSA-65, Kyber-1024, SPHINCS+-256f (NIST FIPS 203/204/205 KAT validated)
 
 Check availability with:
 ```python

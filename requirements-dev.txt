@@ -4,10 +4,8 @@
 # Core cryptographic library (required)
 cryptography>=41.0.0
 
-# Quantum-resistant cryptography (optional but recommended)
-# Uncomment one of the following:
-# liboqs-python>=0.8.0
-# pqcrypto>=0.1.0
+# Quantum-resistant cryptography is provided natively by the C library
+# Build with: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build
 
 # Build dependencies (required for Cython extensions)
 Cython>=3.0.0,<3.1.0; python_version < "3.9"

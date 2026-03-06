@@ -147,23 +147,17 @@ constant-time-check-full:
 	@cd tools/constant_time && $(MAKE) test-full
 	@echo "✓ Full constant-time verification complete"
 
-# Simplified C API build (handles liboqs detection automatically)
+# Build C API with native PQC
 c-api:
-	@echo "Building C API library..."
+	@echo "Building C API library with native PQC..."
 	@mkdir -p build
 	@cd build && cmake .. -DAVA_BUILD_SHARED=ON -DAVA_BUILD_STATIC=ON \
-		$$(pkg-config --exists liboqs 2>/dev/null && echo "-DAVA_USE_LIBOQS=ON" || echo "") \
-		&& $(MAKE)
+		-DAVA_USE_NATIVE_PQC=ON && $(MAKE)
 	@echo "✓ C API built successfully"
 	@echo "  Shared library: build/lib/libava_guardian.so"
 	@echo "  Static library: build/lib/libava_guardian.a"
 	@echo "  Headers: include/ava_guardian.h"
-	@if pkg-config --exists liboqs 2>/dev/null; then \
-		echo "  liboqs: ENABLED (PQC operations available)"; \
-	else \
-		echo "  liboqs: NOT FOUND (PQC operations will return AVA_ERROR_NOT_IMPLEMENTED)"; \
-		echo "  To enable PQC: Install liboqs and rebuild"; \
-	fi
+	@echo "  PQC: NATIVE (ML-DSA-65, Kyber-1024, SPHINCS+-256f)"
 
 # Build C API Docker image for reproducible builds
 docker-c-api:
@@ -186,7 +180,7 @@ help:
 	@echo "Main targets:"
 	@echo "  make all            - Build C library and Python extensions"
 	@echo "  make c              - Build C library only"
-	@echo "  make c-api          - Build C API (auto-detects liboqs)"
+	@echo "  make c-api          - Build C API with native PQC"
 	@echo "  make python         - Build Python package"
 	@echo "  make test           - Run all tests"
 	@echo "  make benchmark      - Run performance benchmarks"

@@ -1,5 +1,5 @@
 # Dockerfile for Ava Guardian C API Build
-# Provides reproducible C library builds with liboqs integration
+# Provides reproducible C library builds with native PQC
 #
 # Copyright 2025 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
@@ -26,30 +26,14 @@ RUN apt-get update && apt-get install -y \
     python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Build and install liboqs from source
-WORKDIR /tmp
-RUN git clone --depth 1 --branch main https://github.com/open-quantum-safe/liboqs.git && \
-    cd liboqs && \
-    mkdir build && cd build && \
-    cmake -GNinja \
-        -DCMAKE_INSTALL_PREFIX=/usr/local \
-        -DBUILD_SHARED_LIBS=ON \
-        -DOQS_BUILD_ONLY_LIB=ON \
-        -DOQS_USE_OPENSSL=ON \
-        .. && \
-    ninja && \
-    ninja install && \
-    ldconfig && \
-    cd /tmp && rm -rf liboqs
-
 # Copy Ava Guardian source
 WORKDIR /ava-guardian
 COPY . .
 
-# Build Ava Guardian C library with liboqs support
+# Build Ava Guardian C library with native PQC
 RUN mkdir -p build && cd build && \
     cmake .. \
-        -DAVA_USE_LIBOQS=ON \
+        -DAVA_USE_NATIVE_PQC=ON \
         -DAVA_BUILD_SHARED=ON \
         -DAVA_BUILD_STATIC=ON \
         -DAVA_ENABLE_SIMD=ON \
@@ -64,10 +48,6 @@ RUN apt-get update && apt-get install -y \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy liboqs libraries
-COPY --from=builder /usr/local/lib/liboqs* /usr/local/lib/
-COPY --from=builder /usr/local/include/oqs /usr/local/include/oqs
-
 # Copy Ava Guardian libraries and headers
 COPY --from=builder /ava-guardian/build/lib* /usr/local/lib/
 COPY --from=builder /ava-guardian/include/ava_guardian.h /usr/local/include/
@@ -81,16 +61,14 @@ WORKDIR /output
 # Default command: copy built artifacts to mounted volume
 CMD ["sh", "-c", "mkdir -p /output/lib /output/include && \
     cp /usr/local/lib/libava_guardian* /output/lib/ 2>/dev/null || true && \
-    cp /usr/local/lib/liboqs* /output/lib/ 2>/dev/null || true && \
     cp /usr/local/include/ava_guardian.h /output/include/ && \
-    cp -r /usr/local/include/oqs /output/include/ 2>/dev/null || true && \
     echo 'Ava Guardian C API libraries exported to /output' && \
     echo 'Contents:' && \
     ls -la /output/lib/ /output/include/"]
 
 # Labels
 LABEL org.opencontainers.image.title="Ava Guardian C API"
-LABEL org.opencontainers.image.description="Reproducible C library build with liboqs PQC support"
-LABEL org.opencontainers.image.version="1.1"
+LABEL org.opencontainers.image.description="Reproducible C library build with native PQC (FIPS 203/204/205)"
+LABEL org.opencontainers.image.version="1.2"
 LABEL org.opencontainers.image.vendor="Steel Security Advisors LLC"
 LABEL org.opencontainers.image.licenses="Apache-2.0"

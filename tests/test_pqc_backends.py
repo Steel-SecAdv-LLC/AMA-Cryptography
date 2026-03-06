@@ -12,6 +12,8 @@ Copyright 2025 Steel Security Advisors LLC
 Licensed under the Apache License, Version 2.0
 """
 
+from unittest.mock import patch
+
 import pytest
 
 from ava_guardian.pqc_backends import (
@@ -50,54 +52,54 @@ from ava_guardian.pqc_backends import (
 
 
 class TestDilithiumConstants:
-    """Test ML-DSA-65 (Dilithium) constants from liboqs."""
+    """Test ML-DSA-65 (Dilithium) constants per NIST FIPS."""
 
     def test_dilithium_public_key_size(self):
-        """Verify ML-DSA-65 public key size matches liboqs specification."""
+        """Verify ML-DSA-65 public key size matches NIST FIPS specification."""
         assert DILITHIUM_PUBLIC_KEY_BYTES == 1952
 
     def test_dilithium_secret_key_size(self):
-        """Verify ML-DSA-65 secret key size matches liboqs specification."""
+        """Verify ML-DSA-65 secret key size matches NIST FIPS specification."""
         assert DILITHIUM_SECRET_KEY_BYTES == 4032
 
     def test_dilithium_signature_size(self):
-        """Verify ML-DSA-65 signature size matches liboqs specification."""
+        """Verify ML-DSA-65 signature size matches NIST FIPS specification."""
         assert DILITHIUM_SIGNATURE_BYTES == 3309
 
 
 class TestKyberConstants:
-    """Test Kyber-1024 (ML-KEM) constants from liboqs."""
+    """Test Kyber-1024 (ML-KEM) constants per NIST FIPS."""
 
     def test_kyber_public_key_size(self):
-        """Verify Kyber-1024 public key size matches liboqs specification."""
+        """Verify Kyber-1024 public key size matches NIST FIPS specification."""
         assert KYBER_PUBLIC_KEY_BYTES == 1568
 
     def test_kyber_secret_key_size(self):
-        """Verify Kyber-1024 secret key size matches liboqs specification."""
+        """Verify Kyber-1024 secret key size matches NIST FIPS specification."""
         assert KYBER_SECRET_KEY_BYTES == 3168
 
     def test_kyber_ciphertext_size(self):
-        """Verify Kyber-1024 ciphertext size matches liboqs specification."""
+        """Verify Kyber-1024 ciphertext size matches NIST FIPS specification."""
         assert KYBER_CIPHERTEXT_BYTES == 1568
 
     def test_kyber_shared_secret_size(self):
-        """Verify Kyber-1024 shared secret size matches liboqs specification."""
+        """Verify Kyber-1024 shared secret size matches NIST FIPS specification."""
         assert KYBER_SHARED_SECRET_BYTES == 32
 
 
 class TestSphincsConstants:
-    """Test SPHINCS+-SHA2-256f-simple constants from liboqs."""
+    """Test SPHINCS+-SHA2-256f-simple constants per NIST FIPS."""
 
     def test_sphincs_public_key_size(self):
-        """Verify SPHINCS+-256f public key size matches liboqs specification."""
+        """Verify SPHINCS+-256f public key size matches NIST FIPS specification."""
         assert SPHINCS_PUBLIC_KEY_BYTES == 64
 
     def test_sphincs_secret_key_size(self):
-        """Verify SPHINCS+-256f secret key size matches liboqs specification."""
+        """Verify SPHINCS+-256f secret key size matches NIST FIPS specification."""
         assert SPHINCS_SECRET_KEY_BYTES == 128
 
     def test_sphincs_signature_size(self):
-        """Verify SPHINCS+-256f signature size matches liboqs specification."""
+        """Verify SPHINCS+-256f signature size matches NIST FIPS specification."""
         assert SPHINCS_SIGNATURE_BYTES == 49856
 
 
@@ -105,8 +107,8 @@ class TestBackendAvailability:
     """Test backend availability detection."""
 
     def test_dilithium_backend_type(self):
-        """Verify Dilithium backend is either liboqs, pqcrypto, or None."""
-        assert DILITHIUM_BACKEND in ("liboqs", "pqcrypto", None)
+        """Verify Dilithium backend is either native or None."""
+        assert DILITHIUM_BACKEND in ("native", None)
 
     def test_dilithium_availability_consistency(self):
         """Verify DILITHIUM_AVAILABLE matches backend presence."""
@@ -116,8 +118,8 @@ class TestBackendAvailability:
             assert DILITHIUM_AVAILABLE is False
 
     def test_kyber_backend_type(self):
-        """Verify Kyber backend is either liboqs or None."""
-        assert KYBER_BACKEND in ("liboqs", None)
+        """Verify Kyber backend is either native or None."""
+        assert KYBER_BACKEND in ("native", None)
 
     def test_kyber_availability_consistency(self):
         """Verify KYBER_AVAILABLE matches backend presence."""
@@ -127,8 +129,8 @@ class TestBackendAvailability:
             assert KYBER_AVAILABLE is False
 
     def test_sphincs_backend_type(self):
-        """Verify SPHINCS+ backend is either liboqs or None."""
-        assert SPHINCS_BACKEND in ("liboqs", None)
+        """Verify SPHINCS+ backend is either native or None."""
+        assert SPHINCS_BACKEND in ("native", None)
 
     def test_sphincs_availability_consistency(self):
         """Verify SPHINCS_AVAILABLE matches backend presence."""
@@ -375,47 +377,47 @@ class TestSphincsSignatures:
 class TestUnavailableBackendErrors:
     """Test error handling when backends are unavailable."""
 
-    @pytest.mark.skipif(DILITHIUM_AVAILABLE, reason="Dilithium is available")
     def test_dilithium_unavailable_error(self):
         """Verify PQCUnavailableError is raised when backend missing."""
-        with pytest.raises(PQCUnavailableError):
-            generate_dilithium_keypair()
+        with patch("ava_guardian.pqc_backends.DILITHIUM_AVAILABLE", False):
+            with pytest.raises(PQCUnavailableError):
+                generate_dilithium_keypair()
 
-    @pytest.mark.skipif(KYBER_AVAILABLE, reason="Kyber is available")
     def test_kyber_unavailable_error_keygen(self):
         """Verify KyberUnavailableError is raised for keygen when backend missing."""
-        with pytest.raises(KyberUnavailableError):
-            generate_kyber_keypair()
+        with patch("ava_guardian.pqc_backends.KYBER_AVAILABLE", False):
+            with pytest.raises(KyberUnavailableError):
+                generate_kyber_keypair()
 
-    @pytest.mark.skipif(KYBER_AVAILABLE, reason="Kyber is available")
     def test_kyber_unavailable_error_encapsulate(self):
         """Verify KyberUnavailableError is raised for encapsulate when backend missing."""
-        with pytest.raises(KyberUnavailableError):
-            kyber_encapsulate(b"fake_public_key")
+        with patch("ava_guardian.pqc_backends.KYBER_AVAILABLE", False):
+            with pytest.raises(KyberUnavailableError):
+                kyber_encapsulate(b"fake_public_key")
 
-    @pytest.mark.skipif(KYBER_AVAILABLE, reason="Kyber is available")
     def test_kyber_unavailable_error_decapsulate(self):
         """Verify KyberUnavailableError is raised for decapsulate when backend missing."""
-        with pytest.raises(KyberUnavailableError):
-            kyber_decapsulate(b"fake_ciphertext", b"fake_secret_key")
+        with patch("ava_guardian.pqc_backends.KYBER_AVAILABLE", False):
+            with pytest.raises(KyberUnavailableError):
+                kyber_decapsulate(b"fake_ciphertext", b"fake_secret_key")
 
-    @pytest.mark.skipif(SPHINCS_AVAILABLE, reason="SPHINCS+ is available")
     def test_sphincs_unavailable_error_keygen(self):
         """Verify SphincsUnavailableError is raised for keygen when backend missing."""
-        with pytest.raises(SphincsUnavailableError):
-            generate_sphincs_keypair()
+        with patch("ava_guardian.pqc_backends.SPHINCS_AVAILABLE", False):
+            with pytest.raises(SphincsUnavailableError):
+                generate_sphincs_keypair()
 
-    @pytest.mark.skipif(SPHINCS_AVAILABLE, reason="SPHINCS+ is available")
     def test_sphincs_unavailable_error_sign(self):
         """Verify SphincsUnavailableError is raised for sign when backend missing."""
-        with pytest.raises(SphincsUnavailableError):
-            sphincs_sign(b"message", b"fake_secret_key")
+        with patch("ava_guardian.pqc_backends.SPHINCS_AVAILABLE", False):
+            with pytest.raises(SphincsUnavailableError):
+                sphincs_sign(b"message", b"fake_secret_key")
 
-    @pytest.mark.skipif(SPHINCS_AVAILABLE, reason="SPHINCS+ is available")
     def test_sphincs_unavailable_error_verify(self):
         """Verify SphincsUnavailableError is raised for verify when backend missing."""
-        with pytest.raises(SphincsUnavailableError):
-            sphincs_verify(b"message", b"signature", b"public_key")
+        with patch("ava_guardian.pqc_backends.SPHINCS_AVAILABLE", False):
+            with pytest.raises(SphincsUnavailableError):
+                sphincs_verify(b"message", b"signature", b"public_key")
 
 
 class TestDataclassFields:

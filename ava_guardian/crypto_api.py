@@ -18,8 +18,8 @@ Design Philosophy:
 - Performance optimized (uses C/Cython when available)
 
 PQC Backend:
-- ML-DSA-65 (CRYSTALS-Dilithium) via liboqs (required)
-- Raises PQCUnavailableError if PQC backend not installed
+- ML-DSA-65 (CRYSTALS-Dilithium) via native C implementation
+- Raises PQCUnavailableError if native C backend is not built
 - Use get_pqc_capabilities() to check availability before use
 """
 
@@ -104,7 +104,7 @@ if not pqc_available:
         warnings.simplefilter("default", UserWarning)
         warnings.warn(
             "Quantum-resistant cryptography NOT available. "
-            "Install liboqs-python for post-quantum protection.",
+            "Build native C library for post-quantum protection: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build",
             category=UserWarning,
             stacklevel=2,
         )
@@ -124,10 +124,9 @@ class AlgorithmType(Enum):
 class CryptoBackend(Enum):
     """Available implementation backends"""
 
-    C_LIBRARY = auto()  # libava_guardian.so (fastest)
+    C_LIBRARY = auto()  # libava_guardian.so (fastest, native PQC)
     CYTHON = auto()  # Cython optimized (fast)
     PURE_PYTHON = auto()  # Pure Python (fallback)
-    LIBOQS = auto()  # liboqs reference implementation
 
 
 @dataclass
@@ -146,20 +145,6 @@ class KeyPair:
     secret_key: bytes = field(repr=False)  # SENSITIVE - excluded from repr to prevent exposure
     algorithm: AlgorithmType
     metadata: Dict[str, Any]
-
-    def __del__(self):
-        """
-        Best-effort cleanup marker for secret key.
-
-        Note: Python bytes are immutable and cannot be securely zeroed.
-        This is a marker for where cleanup would occur with mutable types.
-        For production systems requiring strong memory protection, store
-        secrets in bytearray and use secure_memzero() before deletion.
-        """
-        if hasattr(self, "secret_key") and self.secret_key:
-            from ava_guardian.secure_memory import secure_cleanup_bytes
-
-            secure_cleanup_bytes(self.secret_key)
 
 
 @dataclass
@@ -196,20 +181,6 @@ class EncapsulatedSecret:
     shared_secret: bytes = field(repr=False)  # SENSITIVE - excluded from repr to prevent exposure
     algorithm: AlgorithmType
     metadata: Dict[str, Any]
-
-    def __del__(self):
-        """
-        Best-effort cleanup marker for shared secret.
-
-        Note: Python bytes are immutable and cannot be securely zeroed.
-        This is a marker for where cleanup would occur with mutable types.
-        For production systems requiring strong memory protection, store
-        secrets in bytearray and use secure_memzero() before deletion.
-        """
-        if hasattr(self, "shared_secret") and self.shared_secret:
-            from ava_guardian.secure_memory import secure_cleanup_bytes
-
-            secure_cleanup_bytes(self.shared_secret)
 
 
 class CryptoProvider(ABC):
@@ -254,14 +225,14 @@ class MLDSAProvider(CryptoProvider):
     """
     ML-DSA-65 (CRYSTALS-Dilithium) provider.
 
-    Provides real post-quantum signatures via liboqs or pqcrypto backends.
+    Provides real post-quantum signatures via native C backend.
     Raises PQCUnavailableError if no PQC backend is installed.
 
     Security: NIST Security Level 3 (192-bit quantum security)
     Standard: NIST FIPS 204 (ML-DSA)
     """
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.LIBOQS):
+    def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY):
         self.backend = backend
         self.algorithm = AlgorithmType.ML_DSA_65
         self._available = DILITHIUM_AVAILABLE
@@ -279,8 +250,8 @@ class MLDSAProvider(CryptoProvider):
         """
         if not self._available:
             raise PQCUnavailableError(
-                "PQC_UNAVAILABLE: ML-DSA-65 requires liboqs-python or pqcrypto. "
-                "Install with: pip install liboqs-python"
+                "PQC_UNAVAILABLE: ML-DSA-65 requires native C backend. "
+                "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
             )
 
         kp = generate_dilithium_keypair()
@@ -311,9 +282,7 @@ class MLDSAProvider(CryptoProvider):
             PQCUnavailableError: If no Dilithium backend is available
         """
         if not self._available:
-            raise PQCUnavailableError(
-                "PQC_UNAVAILABLE: ML-DSA-65 requires liboqs-python or pqcrypto."
-            )
+            raise PQCUnavailableError("PQC_UNAVAILABLE: ML-DSA-65 requires native C backend.")
 
         sig_bytes = dilithium_sign(message, secret_key)
         message_hash = hashlib.sha3_256(message).digest()
@@ -344,9 +313,7 @@ class MLDSAProvider(CryptoProvider):
             PQCUnavailableError: If no Dilithium backend is available
         """
         if not self._available:
-            raise PQCUnavailableError(
-                "PQC_UNAVAILABLE: ML-DSA-65 requires liboqs-python or pqcrypto."
-            )
+            raise PQCUnavailableError("PQC_UNAVAILABLE: ML-DSA-65 requires native C backend.")
 
         return dilithium_verify(message, signature, public_key)
 
@@ -465,10 +432,10 @@ class KyberProvider(KEMProvider):
     Kyber-1024 (ML-KEM) provider - Real quantum-resistant implementation.
 
     Provides IND-CCA2 secure key encapsulation based on the Module-LWE
-    (Learning With Errors) problem. Uses liboqs for the underlying
-    cryptographic operations.
+    (Learning With Errors) problem. Uses native C implementation
+    (FIPS 203 compliant, NIST KAT validated).
 
-    Key Sizes (from liboqs):
+    Key Sizes (FIPS 203):
         - Public key: 1568 bytes
         - Secret key: 3168 bytes
         - Ciphertext: 1568 bytes
@@ -484,12 +451,11 @@ class KyberProvider(KEMProvider):
     def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON):
         self.backend = backend
         self.algorithm = AlgorithmType.KYBER_1024
-        self._is_placeholder = False
 
         if not KYBER_AVAILABLE:
             raise KyberUnavailableError(
                 "KYBER_UNAVAILABLE: Kyber-1024 backend not available. "
-                "Install liboqs-python: pip install liboqs-python"
+                "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
             )
 
     def generate_keypair(self) -> KeyPair:
@@ -567,7 +533,7 @@ class SphincsProvider(CryptoProvider):
     vulnerabilities. The 'f' variant is optimized for fast signing at
     the cost of larger signatures (~49KB).
 
-    Key Sizes (from liboqs):
+    Key Sizes (NIST FIPS spec):
         - Public key: 64 bytes
         - Secret key: 128 bytes
         - Signature: 49856 bytes
@@ -589,7 +555,7 @@ class SphincsProvider(CryptoProvider):
         if not SPHINCS_AVAILABLE:
             raise SphincsUnavailableError(
                 "SPHINCS_UNAVAILABLE: SPHINCS+-256f backend not available. "
-                "Install liboqs-python: pip install liboqs-python"
+                "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
             )
 
     def generate_keypair(self) -> KeyPair:
@@ -681,9 +647,9 @@ class HybridSignatureProvider(CryptoProvider):
     ED25519_SK_SIZE = 32
     ED25519_PK_SIZE = 32
     ED25519_SIG_SIZE = 64
-    DILITHIUM_SK_SIZE = 4032  # ML-DSA-65 per liboqs
+    DILITHIUM_SK_SIZE = 4032  # ML-DSA-65 per FIPS 204
     DILITHIUM_PK_SIZE = 1952
-    DILITHIUM_SIG_SIZE = 3309  # ML-DSA-65 per liboqs
+    DILITHIUM_SIG_SIZE = 3309  # ML-DSA-65 per FIPS 204
 
     def __init__(self):
         self.classical_provider = Ed25519Provider()
@@ -704,7 +670,7 @@ class HybridSignatureProvider(CryptoProvider):
         if not self._pqc_available:
             raise PQCUnavailableError(
                 "PQC_UNAVAILABLE: Hybrid signatures require ML-DSA-65. "
-                "Install liboqs-python: pip install liboqs-python"
+                "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
             )
 
         classical_keys = self.classical_provider.generate_keypair()
@@ -997,7 +963,7 @@ def get_pqc_capabilities() -> Dict[str, Any]:
         - dilithium_available: bool
         - kyber_available: bool
         - sphincs_available: bool
-        - backend: "liboqs" or "pqcrypto" or None
+        - backend: "native" or None
         - algorithms: dict of algorithm availability
         - install_instructions: str (if unavailable)
 
@@ -1032,9 +998,9 @@ def get_pqc_capabilities() -> Dict[str, Any]:
         },
         "key_sizes": info.get("algorithms", {}),
         "install_instructions": (
-            "pip install liboqs-python"
+            "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
             if not (info["dilithium_available"] or info["kyber_available"])
-            else "PQC backend already installed"
+            else "PQC backend already available"
         ),
     }
 
@@ -1054,8 +1020,8 @@ class CryptoPackageConfig:
         tsa_url: RFC 3161 Time Stamp Authority URL (default: None)
 
     Note:
-        - Kyber-1024 requires liboqs-python backend
-        - SPHINCS+-256f requires liboqs-python backend
+        - Kyber-1024 requires native C backend (build with -DAVA_USE_NATIVE_PQC=ON)
+        - SPHINCS+-256f requires native C backend (build with -DAVA_USE_NATIVE_PQC=ON)
         - When use_sphincs=True, SPHINCS+ signature is added alongside primary signature
         - RFC 3161 timestamping requires network access to TSA server
     """
@@ -1233,7 +1199,7 @@ def create_crypto_package(
         if not SPHINCS_AVAILABLE:
             raise SphincsUnavailableError(
                 "SPHINCS_UNAVAILABLE: SPHINCS+-256f backend not available. "
-                "Install liboqs-python: pip install liboqs-python"
+                "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
             )
         sphincs_provider = SphincsProvider()
         sphincs_keypair = sphincs_provider.generate_keypair()
@@ -1273,7 +1239,7 @@ def create_crypto_package(
         if not KYBER_AVAILABLE:
             raise KyberUnavailableError(
                 "KYBER_UNAVAILABLE: Kyber-1024 backend not available. "
-                "Install liboqs-python: pip install liboqs-python"
+                "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
             )
         kyber_provider = KyberProvider()
         kyber_keypair = kyber_provider.generate_keypair()

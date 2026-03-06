@@ -62,7 +62,7 @@ int main(void) {
      * For production use, link against libsodium or similar.
      */
     printf("⚠ WARNING: Ed25519 native C implementation is experimental.\n");
-    printf("   For production, use Python API with liboqs-python.\n\n");
+    printf("   For production, use Python API or native PQC backend.\n\n");
 
     /* Suppress unused warnings for test vectors */
     (void)rfc8032_pk_expected;
