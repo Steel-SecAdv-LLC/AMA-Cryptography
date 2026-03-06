@@ -56,7 +56,7 @@ class PQCStatus(Enum):
 
 # Import from centralized exceptions module (DRY principle)
 # PQCUnavailableError and QuantumSignatureUnavailableError are defined there
-from ama_cryptography.exceptions import (  # noqa: E402, F401
+from ama_cryptography.exceptions import (  # noqa: E402
     PQCUnavailableError,
     QuantumSignatureUnavailableError,
     SecurityWarning,

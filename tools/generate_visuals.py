@@ -518,7 +518,7 @@ def create_full_package_performance():
     names = [c[0] for c in components]
     times = [c[1] for c in components]
     colors_layers = [c[2] for c in components]
-    _percentages = [c[3] for c in components]  # noqa: F841
+    # Percentages extracted but not displayed in chart (available for future use)
 
     y_pos = range(len(names))
     ax_layers.barh(y_pos, times, color=colors_layers, edgecolor="white", linewidth=1.5, height=0.55)
@@ -962,7 +962,6 @@ def create_ethical_binding_flow():
     )
 
     # Draw arrows from triads to aggregator
-    _arrow_style = dict(arrowstyle="->", color="#9CA3AF", lw=1.5)  # noqa: F841
     for x, y in triad_positions:
         ax.annotate(
             "",

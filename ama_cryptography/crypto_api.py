@@ -92,8 +92,8 @@ try:
     )
 except ImportError:
     RFC3161_AVAILABLE = False
-    TimestampUnavailableError = Exception  # type: ignore[misc,assignment]
-    TimestampError = Exception  # type: ignore[misc,assignment]
+    TimestampUnavailableError = Exception  # type: ignore[misc,assignment] — fallback when rfc3161 unavailable
+    TimestampError = Exception  # type: ignore[misc,assignment] — fallback when rfc3161 unavailable
     get_timestamp = None
 
 # Runtime PQC availability check

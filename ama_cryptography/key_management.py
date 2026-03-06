@@ -32,7 +32,7 @@ from typing import Any, Dict, Optional, Tuple, cast
 logger = logging.getLogger(__name__)
 
 # Import from centralized exceptions module
-from ama_cryptography.exceptions import SecurityWarning  # noqa: E402, F401
+from ama_cryptography.exceptions import SecurityWarning  # noqa: E402
 
 
 class KeyStatus(Enum):
