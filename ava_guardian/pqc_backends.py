@@ -101,19 +101,19 @@ _SPHINCS_BACKEND: Optional[str] = None
 _native_lib: Any = None
 
 
-def _find_native_library() -> Optional[ctypes.CDLL]:
-    """Locate and load the native ava_guardian shared library."""
-    # Determine platform-specific library name
+def _get_lib_names() -> list:
+    """Return platform-specific library names."""
     system = platform.system()
     if system == "Darwin":
-        lib_names = ["libava_guardian.dylib", "libava_guardian.so"]
+        return ["libava_guardian.dylib", "libava_guardian.so"]
     elif system == "Windows":
-        lib_names = ["ava_guardian.dll", "libava_guardian.dll"]
-    else:
-        lib_names = ["libava_guardian.so"]
+        return ["ava_guardian.dll", "libava_guardian.dll"]
+    return ["libava_guardian.so"]
 
-    # Search paths: build directory, install paths, LD_LIBRARY_PATH
-    search_dirs = []
+
+def _get_search_dirs() -> list:
+    """Build the list of directories to search for the native library."""
+    search_dirs: list = []
 
     # Project build directories (relative to this file's package)
     pkg_dir = Path(__file__).resolve().parent.parent
@@ -121,12 +121,7 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
         search_dirs.append(pkg_dir / build_dir)
 
     # System paths
-    search_dirs.extend(
-        [
-            Path("/usr/local/lib"),
-            Path("/usr/lib"),
-        ]
-    )
+    search_dirs.extend([Path("/usr/local/lib"), Path("/usr/lib")])
 
     # LD_LIBRARY_PATH / DYLD_LIBRARY_PATH
     env_path = os.getenv("LD_LIBRARY_PATH", "") or os.getenv("DYLD_LIBRARY_PATH", "")
@@ -134,15 +129,30 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
         if p:
             search_dirs.append(Path(p))
 
+    return search_dirs
+
+
+def _try_load_library(lib_path: Path) -> Optional[ctypes.CDLL]:
+    """Try to load a shared library from the given path. Returns None on failure."""
+    try:
+        return ctypes.CDLL(str(lib_path))
+    except OSError:
+        return None
+
+
+def _find_native_library() -> Optional[ctypes.CDLL]:
+    """Locate and load the native ava_guardian shared library."""
+    lib_names = _get_lib_names()
+    search_dirs = _get_search_dirs()
+
     # AVA_GUARDIAN_LIB_PATH override
     override = os.getenv("AVA_GUARDIAN_LIB_PATH")
     if override:
         override_path = Path(override)
         if override_path.is_file():
-            try:
-                return ctypes.CDLL(str(override_path))
-            except OSError:
-                pass
+            lib = _try_load_library(override_path)
+            if lib is not None:
+                return lib
         elif override_path.is_dir():
             search_dirs.insert(0, override_path)
 
@@ -150,10 +160,9 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
         for lib_name in lib_names:
             lib_path = search_dir / lib_name
             if lib_path.is_file():
-                try:
-                    return ctypes.CDLL(str(lib_path))
-                except OSError:
-                    continue
+                lib = _try_load_library(lib_path)
+                if lib is not None:
+                    return lib
 
     return None
 

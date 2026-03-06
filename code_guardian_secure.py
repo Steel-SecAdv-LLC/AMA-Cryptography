@@ -68,7 +68,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, cast
 
 if TYPE_CHECKING:
     from ava_guardian_monitor import AvaGuardianMonitor
@@ -134,7 +134,6 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
     # Get current module to check monkeypatched values
     this_module = sys.modules[__name__]
     available = getattr(this_module, "DILITHIUM_AVAILABLE", _PQC_DILITHIUM_AVAILABLE)
-    backend = getattr(this_module, "DILITHIUM_BACKEND", _PQC_DILITHIUM_BACKEND)
 
     if not available:
         raise QuantumSignatureUnavailableError(
@@ -167,7 +166,6 @@ def dilithium_sign(message: bytes, private_key: bytes) -> bytes:
     # Get current module to check monkeypatched values
     this_module = sys.modules[__name__]
     available = getattr(this_module, "DILITHIUM_AVAILABLE", _PQC_DILITHIUM_AVAILABLE)
-    backend = getattr(this_module, "DILITHIUM_BACKEND", _PQC_DILITHIUM_BACKEND)
 
     if not available:
         raise QuantumSignatureUnavailableError(
@@ -201,7 +199,6 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
     # Get current module to check monkeypatched values
     this_module = sys.modules[__name__]
     available = getattr(this_module, "DILITHIUM_AVAILABLE", _PQC_DILITHIUM_AVAILABLE)
-    backend = getattr(this_module, "DILITHIUM_BACKEND", _PQC_DILITHIUM_BACKEND)
 
     if not available:
         raise QuantumSignatureUnavailableError(

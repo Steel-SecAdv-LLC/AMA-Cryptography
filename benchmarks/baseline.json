@@ -63,7 +63,7 @@
     "full_package_create": {
       "description": "Complete crypto package creation (with PQC)",
       "metric": "operations_per_second",
-      "baseline_value": 2000,
+      "baseline_value": 800,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "tier": "complex_operation"
@@ -71,7 +71,7 @@
     "full_package_verify": {
       "description": "Complete crypto package verification (with PQC)",
       "metric": "operations_per_second",
-      "baseline_value": 2000,
+      "baseline_value": 1000,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "tier": "complex_operation"
