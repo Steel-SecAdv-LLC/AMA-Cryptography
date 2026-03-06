@@ -799,7 +799,7 @@ class AmaCryptography:
         self,
         algorithm: AlgorithmType = AlgorithmType.HYBRID_SIG,
         backend: CryptoBackend = CryptoBackend.C_LIBRARY,
-    ):
+    ) -> None:
         """
         Initialize cryptographic API
 
