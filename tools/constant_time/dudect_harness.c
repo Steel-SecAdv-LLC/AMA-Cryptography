@@ -30,7 +30,7 @@
 #include <time.h>
 
 /* Include the constant-time header */
-#include "ava_guardian.h"
+#include "ama_cryptography.h"
 
 /* Default number of iterations */
 #define DEFAULT_ITERATIONS 1000000
@@ -98,7 +98,7 @@ static void random_bytes(uint8_t *buf, size_t len) {
 }
 
 /**
- * Test ava_consttime_memcmp for timing leakage
+ * Test ama_consttime_memcmp for timing leakage
  *
  * Class 0: Compare identical buffers (result = 0)
  * Class 1: Compare buffers differing at random position (result != 0)
@@ -113,7 +113,7 @@ static double test_consttime_memcmp(int iterations) {
     uint8_t a[BUFFER_SIZE];
     uint8_t b[BUFFER_SIZE];
 
-    printf("Testing ava_consttime_memcmp (%d iterations)...\n", iterations);
+    printf("Testing ama_consttime_memcmp (%d iterations)...\n", iterations);
 
     for (int i = 0; i < iterations; i++) {
         /* Generate random base buffer */
@@ -131,7 +131,7 @@ static double test_consttime_memcmp(int iterations) {
 
         /* Measure execution time */
         uint64_t start = get_time_ns();
-        volatile int result = ava_consttime_memcmp(a, b, BUFFER_SIZE);
+        volatile int result = ama_consttime_memcmp(a, b, BUFFER_SIZE);
         uint64_t end = get_time_ns();
         (void)result;
 
@@ -143,7 +143,7 @@ static double test_consttime_memcmp(int iterations) {
 }
 
 /**
- * Test ava_consttime_swap for timing leakage
+ * Test ama_consttime_swap for timing leakage
  *
  * Class 0: Swap with condition = 0 (no swap)
  * Class 1: Swap with condition = 1 (swap)
@@ -158,7 +158,7 @@ static double test_consttime_swap(int iterations) {
     uint8_t a[BUFFER_SIZE];
     uint8_t b[BUFFER_SIZE];
 
-    printf("Testing ava_consttime_swap (%d iterations)...\n", iterations);
+    printf("Testing ama_consttime_swap (%d iterations)...\n", iterations);
 
     for (int i = 0; i < iterations; i++) {
         /* Generate random buffers */
@@ -170,7 +170,7 @@ static double test_consttime_swap(int iterations) {
 
         /* Measure execution time */
         uint64_t start = get_time_ns();
-        ava_consttime_swap(class_idx, a, b, BUFFER_SIZE);
+        ama_consttime_swap(class_idx, a, b, BUFFER_SIZE);
         uint64_t end = get_time_ns();
 
         /* Update statistics */
@@ -220,7 +220,7 @@ static double test_secure_memzero(int iterations) {
 }
 
 /**
- * Test ava_consttime_lookup for timing leakage
+ * Test ama_consttime_lookup for timing leakage
  *
  * Class 0: Lookup index in first half of table (index < TABLE_SIZE/2)
  * Class 1: Lookup index in second half of table (index >= TABLE_SIZE/2)
@@ -241,7 +241,7 @@ static double test_consttime_lookup(int iterations) {
     /* Initialize table with random data */
     random_bytes(table, sizeof(table));
 
-    printf("Testing ava_consttime_lookup (%d iterations)...\n", iterations);
+    printf("Testing ama_consttime_lookup (%d iterations)...\n", iterations);
 
     for (int i = 0; i < iterations; i++) {
         /* Determine class: 0 = first half, 1 = second half */
@@ -256,7 +256,7 @@ static double test_consttime_lookup(int iterations) {
 
         /* Measure execution time */
         uint64_t start = get_time_ns();
-        ava_consttime_lookup(table, TABLE_SIZE, ELEM_SIZE, index, output);
+        ama_consttime_lookup(table, TABLE_SIZE, ELEM_SIZE, index, output);
         uint64_t end = get_time_ns();
 
         /* Update statistics */
@@ -267,7 +267,7 @@ static double test_consttime_lookup(int iterations) {
 }
 
 /**
- * Test ava_consttime_copy for timing leakage
+ * Test ama_consttime_copy for timing leakage
  *
  * Class 0: Copy with condition = 0 (no copy)
  * Class 1: Copy with condition = 1 (copy)
@@ -282,7 +282,7 @@ static double test_consttime_copy(int iterations) {
     uint8_t src[BUFFER_SIZE];
     uint8_t dst[BUFFER_SIZE];
 
-    printf("Testing ava_consttime_copy (%d iterations)...\n", iterations);
+    printf("Testing ama_consttime_copy (%d iterations)...\n", iterations);
 
     for (int i = 0; i < iterations; i++) {
         /* Generate random buffers */
@@ -294,7 +294,7 @@ static double test_consttime_copy(int iterations) {
 
         /* Measure execution time */
         uint64_t start = get_time_ns();
-        ava_consttime_copy(class_idx, dst, src, BUFFER_SIZE);
+        ama_consttime_copy(class_idx, dst, src, BUFFER_SIZE);
         uint64_t end = get_time_ns();
 
         /* Update statistics */
@@ -330,7 +330,7 @@ int main(int argc, char *argv[]) {
 
     printf("=======================================================\n");
     printf("dudect-style Constant-Time Verification Harness\n");
-    printf("Ava Guardian Cryptographic Library\n");
+    printf("AMA Cryptography Cryptographic Library\n");
     printf("=======================================================\n\n");
     printf("Methodology: Welch's t-test on execution times\n");
     printf("Threshold: |t| < %.1f (99.999%% confidence)\n", T_THRESHOLD);
@@ -345,11 +345,11 @@ int main(int argc, char *argv[]) {
     printf("\n=======================================================\n");
     printf("Results Summary (5 constant-time functions)\n");
     printf("=======================================================\n");
-    print_result("ava_consttime_memcmp ", t_memcmp);
-    print_result("ava_consttime_swap   ", t_swap);
+    print_result("ama_consttime_memcmp ", t_memcmp);
+    print_result("ama_consttime_swap   ", t_swap);
     print_result("ava_secure_memzero   ", t_memzero);
-    print_result("ava_consttime_lookup ", t_lookup);
-    print_result("ava_consttime_copy   ", t_copy);
+    print_result("ama_consttime_lookup ", t_lookup);
+    print_result("ama_consttime_copy   ", t_copy);
 
     int all_passed = (fabs(t_memcmp) < T_THRESHOLD) &&
                      (fabs(t_swap) < T_THRESHOLD) &&

@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-Ava Guardian ♱ (AG♱): Comprehensive System Test Suite
+AMA Cryptography ♱ (AG♱): Comprehensive System Test Suite
 ===================================================
 
 100% System Testing for complete coverage of all cryptographic operations,
@@ -199,7 +199,7 @@ class TestExportPublicKeys:
             assert readme_path.exists()
             with open(readme_path, "r") as f:
                 content = f.read()
-            assert "Ava Guardian" in content
+            assert "AMA Cryptography" in content
             assert kms.creation_date in content
             assert kms.version in content
             assert kms.ed25519_keypair.public_key.hex() in content
@@ -555,7 +555,7 @@ class TestMainFunction:
             timeout=120,
         )
         output = result.stdout
-        assert "Ava Guardian" in output
+        assert "AMA Cryptography" in output
         assert "Generating key management system" in output
         assert "Creating Omni-Code cryptographic package" in output
         assert "Verifying cryptographic package" in output
@@ -573,7 +573,7 @@ class TestMainFunction:
             temp_script = Path(tmpdir) / "code_guardian_secure.py"
             shutil.copy(script_path, temp_script)
 
-            # Set PYTHONPATH to include repo root so ava_guardian can be imported
+            # Set PYTHONPATH to include repo root so ama_cryptography can be imported
             env = os.environ.copy()
             env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
 
@@ -602,7 +602,7 @@ class TestMainFunction:
             temp_script = Path(tmpdir) / "code_guardian_secure.py"
             shutil.copy(script_path, temp_script)
 
-            # Set PYTHONPATH to include repo root so ava_guardian can be imported
+            # Set PYTHONPATH to include repo root so ama_cryptography can be imported
             env = os.environ.copy()
             env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
 
@@ -708,7 +708,7 @@ class TestKMSGenerationEdgeCases:
     def test_kms_version_is_set(self):
         """Test that KMS version is set."""
         kms = generate_key_management_system("test")
-        assert kms.version == "1.1"
+        assert kms.version == "2.0"
 
 
 class TestCryptoPackageFields:
@@ -760,7 +760,7 @@ class TestCryptoPackageFields:
     def test_package_version_is_set(self, kms):
         """Test that package version is set."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
-        assert pkg.version == "1.1"
+        assert pkg.version == "2.0"
 
     def test_package_author_is_set(self, kms):
         """Test that package author is set correctly."""

@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from ava_guardian.key_management import (
+from ama_cryptography.key_management import (
     KeyRotationManager,
     KeyStatus,
     SecureKeyStorage,

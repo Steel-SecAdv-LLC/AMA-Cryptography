@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a bug or unexpected behavior in Ava Guardian
+description: Report a bug or unexpected behavior in AMA Cryptography
 title: "[BUG] "
 labels: ["bug", "needs-triage"]
 assignees: []
@@ -11,7 +11,7 @@ body:
         Thank you for reporting a bug! Please provide detailed information to help us resolve the issue.
 
         **⚠️ SECURITY WARNING:** If this is a security vulnerability, DO NOT open a public issue.
-        Please report it privately via email to steel.secadv.llc@outlook.com following our [Security Policy](https://github.com/Steel-SecAdv-LLC/Ava-Guardian/blob/main/SECURITY.md).
+        Please report it privately via email to steel.secadv.llc@outlook.com following our [Security Policy](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/SECURITY.md).
 
   - type: textarea
     id: description
@@ -175,5 +175,5 @@ body:
           required: false
         - label: This is NOT a security vulnerability (I would report those privately)
           required: true
-        - label: I have read the [Contributing Guidelines](https://github.com/Steel-SecAdv-LLC/Ava-Guardian/blob/main/CONTRIBUTING.md)
+        - label: I have read the [Contributing Guidelines](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/CONTRIBUTING.md)
           required: true

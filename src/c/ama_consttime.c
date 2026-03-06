@@ -15,7 +15,7 @@
  */
 
 /**
- * @file ava_consttime.c
+ * @file ama_consttime.c
  * @brief Constant-time cryptographic operations
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2025-12-06
@@ -24,7 +24,7 @@
  * All operations execute in constant time regardless of input values.
  */
 
-#include "../include/ava_guardian.h"
+#include "../include/ama_cryptography.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -39,7 +39,7 @@
  * @param len Number of bytes to compare
  * @return 0 if equal, 1 if different (constant time)
  */
-int ava_consttime_memcmp(const void* a, const void* b, size_t len) {
+int ama_consttime_memcmp(const void* a, const void* b, size_t len) {
     const volatile uint8_t* va = (const volatile uint8_t*)a;
     const volatile uint8_t* vb = (const volatile uint8_t*)b;
     uint8_t diff = 0;
@@ -86,7 +86,7 @@ void ava_secure_memzero(void* ptr, size_t len) {
  * @param b Second buffer
  * @param len Number of bytes to swap
  */
-void ava_consttime_swap(int condition, void* a, void* b, size_t len) {
+void ama_consttime_swap(int condition, void* a, void* b, size_t len) {
     volatile uint8_t* va = (volatile uint8_t*)a;
     volatile uint8_t* vb = (volatile uint8_t*)b;
     size_t i;
@@ -205,7 +205,7 @@ static inline int consttime_eq_size(size_t a, size_t b) {
  * @param index Index to retrieve (may be secret)
  * @param output Output buffer for element
  */
-void ava_consttime_lookup(
+void ama_consttime_lookup(
     const void* table,
     size_t table_len,
     size_t elem_size,
@@ -246,7 +246,7 @@ void ava_consttime_lookup(
  * @param src Source buffer
  * @param len Number of bytes
  */
-void ava_consttime_copy(int condition, void* dst, const void* src, size_t len) {
+void ama_consttime_copy(int condition, void* dst, const void* src, size_t len) {
     volatile uint8_t* vdst = (volatile uint8_t*)dst;
     const volatile uint8_t* vsrc = (const volatile uint8_t*)src;
     size_t i;

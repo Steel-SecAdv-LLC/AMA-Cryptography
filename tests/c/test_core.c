@@ -7,7 +7,7 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "ava_guardian.h"
+#include "ama_cryptography.h"
 
 #define TEST_ASSERT(condition, message) \
     do { \
@@ -31,11 +31,11 @@ int main(void) {
     /* Test 1: Version string */
     version_str = ava_version_string();
     TEST_ASSERT(version_str != NULL, "version_string: should not be NULL");
-    TEST_ASSERT(strcmp(version_str, AVA_GUARDIAN_VERSION_STRING) == 0, "version_string: should be '" AVA_GUARDIAN_VERSION_STRING "'");
+    TEST_ASSERT(strcmp(version_str, AMA_CRYPTO_VERSION_STRING) == 0, "version_string: should be '" AMA_CRYPTO_VERSION_STRING "'");
 
     /* Test 2: Version number */
     ava_version_number(&major, &minor, &patch);
-    TEST_ASSERT(major == AVA_GUARDIAN_VERSION_MAJOR && minor == AVA_GUARDIAN_VERSION_MINOR && patch == AVA_GUARDIAN_VERSION_PATCH, "version_number: should be " AVA_GUARDIAN_VERSION_STRING);
+    TEST_ASSERT(major == AMA_CRYPTO_VERSION_MAJOR && minor == AMA_CRYPTO_VERSION_MINOR && patch == AMA_CRYPTO_VERSION_PATCH, "version_number: should be " AMA_CRYPTO_VERSION_STRING);
 
     /* Test 3: Context initialization for ML-DSA-65 */
     ctx = ava_context_init(AVA_ALG_ML_DSA_65);

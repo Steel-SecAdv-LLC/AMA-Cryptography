@@ -15,7 +15,7 @@
  */
 
 /**
- * @file ava_ed25519.c
+ * @file ama_ed25519.c
  * @brief Ed25519 digital signature implementation (RFC 8032)
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2025-12-06
@@ -32,7 +32,7 @@
  * - Cofactor handling per RFC 8032
  */
 
-#include "../include/ava_guardian.h"
+#include "../include/ama_cryptography.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -1064,7 +1064,7 @@ static void sc25519_muladd(uint8_t *s, const uint8_t *a, const uint8_t *b, const
  * @param secret_key Output: 64-byte secret key (seed || public_key)
  * @return AVA_SUCCESS or error code
  */
-ava_error_t ava_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]) {
+ava_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]) {
     uint8_t hash[64];
     ge25519_p3 A;
 
@@ -1106,7 +1106,7 @@ ava_error_t ava_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]) 
  * @param secret_key 64-byte secret key
  * @return AVA_SUCCESS or error code
  */
-ava_error_t ava_ed25519_sign(
+ava_error_t ama_ed25519_sign(
     uint8_t signature[64],
     const uint8_t *message,
     size_t message_len,
@@ -1179,7 +1179,7 @@ ava_error_t ava_ed25519_sign(
  * @param public_key 32-byte public key
  * @return AVA_SUCCESS if valid, AVA_ERROR_VERIFY_FAILED if invalid
  */
-ava_error_t ava_ed25519_verify(
+ava_error_t ama_ed25519_verify(
     const uint8_t signature[64],
     const uint8_t *message,
     size_t message_len,

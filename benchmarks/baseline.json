@@ -1,8 +1,8 @@
 {
   "metadata": {
-    "version": "1.1",
+    "version": "2.0",
     "created": "2025-11-27T10:00:00Z",
-    "description": "Ava Guardian ♱ performance baseline for regression detection",
+    "description": "AMA Cryptography ♱ performance baseline for regression detection",
     "system": "GitHub Actions ubuntu-latest, Python 3.11",
     "notes": "Tiered tolerance approach: Tier 1 microbenchmarks (SHA3, HMAC, Ed25519, HKDF) use 25% tolerance to detect ~1.7-1.8x regressions. Tier 2 complex operations (full package, PQC) use 35-40% tolerance to account for higher variance. Baselines calibrated below CI runner performance for headroom."
   },

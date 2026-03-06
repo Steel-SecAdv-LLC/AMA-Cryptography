@@ -2,12 +2,12 @@
  * Copyright 2025 Steel Security Advisors LLC
  * Licensed under the Apache License, Version 2.0
  *
- * Simple example demonstrating Ava Guardian ♱ C API usage
+ * Simple example demonstrating AMA Cryptography ♱ C API usage
  */
 
 #include <stdio.h>
 #include <string.h>
-#include "ava_guardian.h"
+#include "ama_cryptography.h"
 
 int main(void) {
     ava_context_t* ctx;
@@ -15,7 +15,7 @@ int main(void) {
     const char* version_str;
 
     printf("===========================================\n");
-    printf("Ava Guardian ♱ C API Example\n");
+    printf("AMA Cryptography ♱ C API Example\n");
     printf("===========================================\n\n");
 
     /* Get version information */
@@ -43,11 +43,11 @@ int main(void) {
     memset(a, 0xAA, sizeof(a));
     memset(b, 0xAA, sizeof(b));
 
-    int result = ava_consttime_memcmp(a, b, sizeof(a));
+    int result = ama_consttime_memcmp(a, b, sizeof(a));
     printf("  Identical buffers: %s\n", result == 0 ? "✓ PASS" : "✗ FAIL");
 
     b[0] = 0xBB;
-    result = ava_consttime_memcmp(a, b, sizeof(a));
+    result = ama_consttime_memcmp(a, b, sizeof(a));
     printf("  Different buffers: %s\n", result != 0 ? "✓ PASS" : "✗ FAIL");
 
     /* Test secure memzero */

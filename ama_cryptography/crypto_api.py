@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-Ava Guardian ♱ (AG♱) - Algorithm-Agnostic Cryptographic API
+AMA Cryptography ♱ (AG♱) - Algorithm-Agnostic Cryptographic API
 ===========================================================
 
 Unified interface for all post-quantum cryptographic algorithms.
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
         Ed25519PublicKey,
     )
 
-from ava_guardian.pqc_backends import (
+from ama_cryptography.pqc_backends import (
     DILITHIUM_AVAILABLE,
     DILITHIUM_BACKEND,
     KYBER_AVAILABLE,
@@ -84,7 +84,7 @@ except ImportError:
 
 # Import RFC 3161 timestamping
 try:
-    from ava_guardian.rfc3161_timestamp import (
+    from ama_cryptography.rfc3161_timestamp import (
         RFC3161_AVAILABLE,
         TimestampError,
         TimestampUnavailableError,
@@ -124,7 +124,7 @@ class AlgorithmType(Enum):
 class CryptoBackend(Enum):
     """Available implementation backends"""
 
-    C_LIBRARY = auto()  # libava_guardian.so (fastest, native PQC)
+    C_LIBRARY = auto()  # libama_cryptography.so (fastest, native PQC)
     CYTHON = auto()  # Cython optimized (fast)
     PURE_PYTHON = auto()  # Pure Python (fallback)
 
@@ -781,15 +781,15 @@ class HybridSignatureProvider(CryptoProvider):
         return classical_valid and pqc_valid
 
 
-class AvaGuardianCrypto:
+class AmaCryptography:
     """
-    Main Ava Guardian ♱ Cryptographic API
+    Main AMA Cryptography ♱ Cryptographic API
 
     Provides unified interface to all cryptographic operations with
     automatic algorithm selection and fallback mechanisms.
 
     Example:
-        >>> crypto = AvaGuardianCrypto(algorithm=AlgorithmType.HYBRID_SIG)
+        >>> crypto = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
         >>> keypair = crypto.generate_keypair()
         >>> signature = crypto.sign(b"Hello, World!", keypair.secret_key)
         >>> valid = crypto.verify(b"Hello, World!", signature.signature, keypair.public_key)
@@ -904,7 +904,7 @@ def quick_sign(
     Returns:
         (keypair, signature)
     """
-    crypto = AvaGuardianCrypto(algorithm=algorithm)
+    crypto = AmaCryptography(algorithm=algorithm)
     keypair = crypto.generate_keypair()
     signature = crypto.sign(message, keypair.secret_key)
     return keypair, signature
@@ -928,7 +928,7 @@ def quick_verify(
     Returns:
         True if valid, False otherwise
     """
-    crypto = AvaGuardianCrypto(algorithm=algorithm)
+    crypto = AmaCryptography(algorithm=algorithm)
     return crypto.verify(message, signature, public_key)
 
 
@@ -944,7 +944,7 @@ def quick_kem(
     Returns:
         (keypair, encapsulated_secret)
     """
-    crypto = AvaGuardianCrypto(algorithm=algorithm)
+    crypto = AmaCryptography(algorithm=algorithm)
     keypair = crypto.generate_keypair()
     encapsulated = crypto.encapsulate(keypair.public_key)
     return keypair, encapsulated
@@ -970,7 +970,7 @@ def get_pqc_capabilities() -> Dict[str, Any]:
     Example:
         >>> caps = get_pqc_capabilities()
         >>> if caps["status"] == "AVAILABLE":
-        ...     crypto = AvaGuardianCrypto(algorithm=AlgorithmType.ML_DSA_65)
+        ...     crypto = AmaCryptography(algorithm=AlgorithmType.ML_DSA_65)
         ... else:
         ...     print(caps["install_instructions"])
     """
@@ -1189,7 +1189,7 @@ def create_crypto_package(
     kem_shared_secret: Optional[bytes] = None
 
     # Generate primary signature
-    primary_crypto = AvaGuardianCrypto(algorithm=config.signature_algorithm)
+    primary_crypto = AmaCryptography(algorithm=config.signature_algorithm)
     primary_keypair = primary_crypto.generate_keypair()
     primary_signature = primary_crypto.sign(content, primary_keypair.secret_key)
     keypairs[config.signature_algorithm.name] = primary_keypair
@@ -1214,7 +1214,7 @@ def create_crypto_package(
         master_secret = secrets.token_bytes(32)  # 256-bit master secret
         derived_keys, hkdf_salt = derive_keys(
             master_secret=master_secret,
-            info="ava_guardian_crypto_package_v1",
+            info="ama_cryptography_crypto_package_v1",
             num_keys=config.num_derived_keys,
             ethical_vector=None,  # Use default ethical vector
             salt=None,  # Generate random salt
@@ -1331,7 +1331,7 @@ def verify_crypto_package(
         sig_alg = AlgorithmType.HYBRID_SIG
 
     if sig_alg_name in package.keypairs:
-        primary_crypto = AvaGuardianCrypto(algorithm=sig_alg)
+        primary_crypto = AmaCryptography(algorithm=sig_alg)
         results["primary"] = primary_crypto.verify(
             content,
             package.primary_signature.signature,
@@ -1369,7 +1369,7 @@ __all__ = [
     "KyberProvider",
     "SphincsProvider",
     "HybridSignatureProvider",
-    "AvaGuardianCrypto",
+    "AmaCryptography",
     "quick_sign",
     "quick_verify",
     "quick_kem",

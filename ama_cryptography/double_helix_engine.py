@@ -14,13 +14,13 @@
 # limitations under the License.
 
 """
-Ava Guardian ♱ (AG♱) - Double-Helix Evolution Engine
+AMA Cryptography ♱ (AG♱) - Double-Helix Evolution Engine
 =====================================================
 
 **IMPORTANT: NON-CRYPTOGRAPHIC MODULE**
 
 This module provides mathematical modeling and analytical utilities for the
-Ava Guardian system. It is NOT a cryptographic primitive and should NOT be
+AMA Cryptography system. It is NOT a cryptographic primitive and should NOT be
 relied upon for security guarantees. The Double-Helix Evolution Engine
 implements:
 
@@ -57,7 +57,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import numpy.typing as npt
 
-from ava_guardian.equations import (
+from ama_cryptography.equations import (
     LAMBDA_DECAY,
     PHI,
     PHI_CUBED,
@@ -72,11 +72,11 @@ from ava_guardian.equations import (
 # Configure module logger
 logger = logging.getLogger(__name__)
 
-__version__ = "1.1"
+__version__ = "2.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
 
-class AvaEquationEngine:
+class AmaEquationEngine:
     """
     Ava Equation Engine with Double-Helix Evolution Architecture.
 
@@ -541,11 +541,11 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     logger.info("=" * 70)
-    logger.info("Ava Guardian ♱ (AG♱) - Double-Helix Evolution Engine Demo")
+    logger.info("AMA Cryptography ♱ (AG♱) - Double-Helix Evolution Engine Demo")
     logger.info("=" * 70)
 
     # Create engine with default configuration
-    engine = AvaEquationEngine(state_dim=50, random_seed=42)
+    engine = AmaEquationEngine(state_dim=50, random_seed=42)
 
     logger.info("\nEngine Configuration:")
     logger.info(f"  State dimension: {engine.state_dim}")

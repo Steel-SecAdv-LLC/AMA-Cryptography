@@ -10,7 +10,7 @@
 #include <string.h>
 #include <time.h>
 #include <stdint.h>
-#include "ava_guardian.h"
+#include "ama_cryptography.h"
 
 #define ITERATIONS 10000
 #define WARMUP 100
@@ -46,23 +46,23 @@ static uint8_t test_key[64];
 
 /* Benchmark functions */
 static void bench_sha3_256_short(void) {
-    ava_sha3_256((const uint8_t*)"Hello, World!", 13, test_output);
+    ama_sha3_256((const uint8_t*)"Hello, World!", 13, test_output);
 }
 
 static void bench_sha3_256_1kb(void) {
-    ava_sha3_256(test_message, 1024, test_output);
+    ama_sha3_256(test_message, 1024, test_output);
 }
 
 static void bench_hkdf_32(void) {
-    ava_hkdf(test_key, 32, test_key, 32, (const uint8_t*)"info", 4, test_output, 32);
+    ama_hkdf(test_key, 32, test_key, 32, (const uint8_t*)"info", 4, test_output, 32);
 }
 
 static void bench_hkdf_64(void) {
-    ava_hkdf(test_key, 32, test_key, 32, (const uint8_t*)"info", 4, test_output, 64);
+    ama_hkdf(test_key, 32, test_key, 32, (const uint8_t*)"info", 4, test_output, 64);
 }
 
 static void bench_consttime_memcmp(void) {
-    ava_consttime_memcmp(test_message, test_message + 512, 512);
+    ama_consttime_memcmp(test_message, test_message + 512, 512);
 }
 
 static void bench_secure_memzero(void) {
@@ -71,18 +71,18 @@ static void bench_secure_memzero(void) {
 
 static void bench_ed25519_sign(void) {
     uint8_t sig[64];
-    ava_ed25519_sign(sig, test_message, 32, test_key);
+    ama_ed25519_sign(sig, test_message, 32, test_key);
 }
 
 static void bench_sha3_streaming(void) {
-    ava_sha3_ctx ctx;
-    ava_sha3_init(&ctx);
+    ama_sha3_ctx ctx;
+    ama_sha3_init(&ctx);
     /* Simulate streaming: 4 chunks of 256 bytes each */
-    ava_sha3_update(&ctx, test_message, 256);
-    ava_sha3_update(&ctx, test_message + 256, 256);
-    ava_sha3_update(&ctx, test_message + 512, 256);
-    ava_sha3_update(&ctx, test_message + 768, 256);
-    ava_sha3_final(&ctx, test_output);
+    ama_sha3_update(&ctx, test_message, 256);
+    ama_sha3_update(&ctx, test_message + 256, 256);
+    ama_sha3_update(&ctx, test_message + 512, 256);
+    ama_sha3_update(&ctx, test_message + 768, 256);
+    ama_sha3_final(&ctx, test_output);
 }
 
 int main(void) {
@@ -93,7 +93,7 @@ int main(void) {
     /* Generate Ed25519 keypair for signing benchmark */
     uint8_t pk[32], sk[64];
     memcpy(sk, test_key, 32);
-    ava_ed25519_keypair(pk, sk);
+    ama_ed25519_keypair(pk, sk);
     memcpy(test_key, sk, 64);
 
     printf("============================================================\n");

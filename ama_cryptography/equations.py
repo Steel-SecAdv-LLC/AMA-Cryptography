@@ -14,12 +14,12 @@
 # limitations under the License.
 
 """
-Ava Guardian ♱ (AG♱) - Mathematical Equations Suite
+AMA Cryptography ♱ (AG♱) - Mathematical Equations Suite
 ====================================================
 
 **IMPORTANT: NON-CRYPTOGRAPHIC MODULE**
 
-This module provides mathematical and analytical utilities for the Ava Guardian
+This module provides mathematical and analytical utilities for the AMA Cryptography
 system. It is NOT a cryptographic primitive and should NOT be relied upon for
 security guarantees. The functions here implement mathematical frameworks for:
 
@@ -59,7 +59,7 @@ import numpy.typing as npt
 # Configure module logger
 logger = logging.getLogger(__name__)
 
-__version__ = "1.1"
+__version__ = "2.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 __all__ = [
     "PHI",
@@ -530,7 +530,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     logger.info("=" * 70)
-    logger.info("Ava Guardian ♱ (AG♱) - Mathematical Foundations Verification")
+    logger.info("AMA Cryptography ♱ (AG♱) - Mathematical Foundations Verification")
     logger.info("=" * 70)
 
     # Verify all frameworks

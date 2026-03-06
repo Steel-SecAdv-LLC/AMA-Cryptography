@@ -15,7 +15,7 @@
  */
 
 /**
- * @file ava_dilithium.c
+ * @file ama_dilithium.c
  * @brief ML-DSA-65 (CRYSTALS-Dilithium) Digital Signature - Native C Implementation
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2026-03-05
@@ -42,27 +42,27 @@
  * - Rejection sampling for signatures
  */
 
-#include "../include/ava_guardian.h"
+#include "../include/ama_cryptography.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <openssl/rand.h>
 
-/* Forward declarations from ava_sha3.c */
-extern ava_error_t ava_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
-extern ava_error_t ava_sha3_512(const uint8_t* input, size_t input_len, uint8_t* output);
+/* Forward declarations from ama_sha3.c */
+extern ava_error_t ama_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
+extern ava_error_t ama_sha3_512(const uint8_t* input, size_t input_len, uint8_t* output);
 extern ava_error_t ava_shake128(const uint8_t* input, size_t input_len,
                                  uint8_t* output, size_t output_len);
 extern ava_error_t ava_shake256(const uint8_t* input, size_t input_len,
                                  uint8_t* output, size_t output_len);
-extern ava_error_t ava_shake256_inc_init(ava_sha3_ctx* ctx);
-extern ava_error_t ava_shake256_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
-extern ava_error_t ava_shake256_inc_finalize(ava_sha3_ctx* ctx);
-extern ava_error_t ava_shake256_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen);
-extern ava_error_t ava_shake128_inc_init(ava_sha3_ctx* ctx);
-extern ava_error_t ava_shake128_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
-extern ava_error_t ava_shake128_inc_finalize(ava_sha3_ctx* ctx);
-extern ava_error_t ava_shake128_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen);
+extern ava_error_t ava_shake256_inc_init(ama_sha3_ctx* ctx);
+extern ava_error_t ava_shake256_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
+extern ava_error_t ava_shake256_inc_finalize(ama_sha3_ctx* ctx);
+extern ava_error_t ava_shake256_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen);
+extern ava_error_t ava_shake128_inc_init(ama_sha3_ctx* ctx);
+extern ava_error_t ava_shake128_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
+extern ava_error_t ava_shake128_inc_finalize(ama_sha3_ctx* ctx);
+extern ava_error_t ava_shake128_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen);
 
 /* ============================================================================
  * ML-DSA-65 PARAMETERS (NIST FIPS 204)
@@ -623,7 +623,7 @@ static void dil_poly_uniform(dil_poly *a, const uint8_t seed[DIL_SEEDBYTES],
     uint8_t buf[DIL_SEEDBYTES + 2];
     uint8_t stream[168 * 5];  /* 5 SHAKE128 blocks */
     int32_t t;
-    ava_sha3_ctx shake_ctx;
+    ama_sha3_ctx shake_ctx;
 
     memcpy(buf, seed, DIL_SEEDBYTES);
     buf[DIL_SEEDBYTES] = (uint8_t)(nonce & 0xFF);
@@ -668,7 +668,7 @@ static void dil_poly_uniform_eta(dil_poly *a, const uint8_t seed[DIL_CRHBYTES],
     uint8_t buf[DIL_CRHBYTES + 2];
     uint8_t stream[136 * 2];  /* 2 SHAKE256 blocks */
     unsigned int ctr, pos;
-    ava_sha3_ctx shake_ctx;
+    ama_sha3_ctx shake_ctx;
 
     memcpy(buf, seed, DIL_CRHBYTES);
     buf[DIL_CRHBYTES] = (uint8_t)(nonce & 0xFF);
@@ -726,7 +726,7 @@ static void dil_poly_challenge(dil_poly *c, const uint8_t seed[DIL_CTILDEBYTES])
     uint8_t buf[136];  /* SHAKE256 rate block */
     unsigned int i, b, pos;
     uint64_t signs;
-    ava_sha3_ctx shake_ctx;
+    ama_sha3_ctx shake_ctx;
 
     /* Absorb seed, finalize, then squeeze first block */
     ava_shake256_inc_init(&shake_ctx);
@@ -971,14 +971,14 @@ static void dil_expand_matrix(dil_poly mat[DIL_K][DIL_L],
  * When non-NULL, replaces /dev/urandom for deterministic output.
  * Only available in test builds (AVA_TESTING_MODE).
  */
-ava_error_t (*ava_dilithium_randombytes_hook)(uint8_t* buf, size_t len) = NULL;
+ava_error_t (*ama_dilithium_randombytes_hook)(uint8_t* buf, size_t len) = NULL;
 #endif
 
 /* Get random bytes from OS (or from test hook if set) */
 static ava_error_t dil_randombytes(uint8_t *buf, size_t len) {
 #ifdef AVA_TESTING_MODE
-    if (ava_dilithium_randombytes_hook) {
-        return ava_dilithium_randombytes_hook(buf, len);
+    if (ama_dilithium_randombytes_hook) {
+        return ama_dilithium_randombytes_hook(buf, len);
     }
 #endif
     if (RAND_bytes(buf, (int)len) != 1) {
@@ -996,7 +996,7 @@ static ava_error_t dil_randombytes(uint8_t *buf, size_t len) {
  * @param secret_key Output buffer for secret key (4032 bytes)
  * @return AVA_SUCCESS or error code
  */
-ava_error_t ava_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key) {
+ava_error_t ama_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key) {
     uint8_t seedbuf[2 * DIL_SEEDBYTES + DIL_CRHBYTES];
     uint8_t *rho, *rhoprime, *key;
     dil_poly mat[DIL_K][DIL_L];
@@ -1104,7 +1104,7 @@ ava_error_t ava_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key) {
  * @param secret_key Secret key (4032 bytes)
  * @return AVA_SUCCESS or error code
  */
-ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
+ava_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len,
                                 const uint8_t *message, size_t message_len,
                                 const uint8_t *secret_key) {
     uint8_t *rho, *key, *tr;
@@ -1321,7 +1321,7 @@ ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
  * @param public_key Public key (1952 bytes)
  * @return AVA_SUCCESS if valid, AVA_ERROR_VERIFY_FAILED if invalid
  */
-ava_error_t ava_dilithium_verify(const uint8_t *message, size_t message_len,
+ava_error_t ama_dilithium_verify(const uint8_t *message, size_t message_len,
                                   const uint8_t *signature, size_t signature_len,
                                   const uint8_t *public_key) {
     uint8_t rho[DIL_SEEDBYTES];
@@ -1457,7 +1457,7 @@ ava_error_t ava_dilithium_verify(const uint8_t *message, size_t message_len,
     }
 
     /* Verify c_tilde == c_tilde2 (constant-time comparison) */
-    if (ava_consttime_memcmp(c_tilde, c_tilde2, DIL_CTILDEBYTES) != 0) {
+    if (ama_consttime_memcmp(c_tilde, c_tilde2, DIL_CTILDEBYTES) != 0) {
         return AVA_ERROR_VERIFY_FAILED;
     }
 

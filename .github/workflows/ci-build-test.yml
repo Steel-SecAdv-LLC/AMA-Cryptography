@@ -140,7 +140,7 @@ jobs:
           # UTF-8 encoding for Windows to support Unicode symbols (♱) in output
           PYTHONIOENCODING: ${{ matrix.os == 'windows-latest' && 'utf-8' || '' }}
           PYTHONUTF8: ${{ matrix.os == 'windows-latest' && '1' || '' }}
-        run: pytest tests/ -v --cov=ava_guardian --cov-report=xml
+        run: pytest tests/ -v --cov=ama_cryptography --cov-report=xml
 
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
@@ -168,16 +168,16 @@ jobs:
           pip install black flake8 mypy isort
 
       - name: Check formatting (black)
-        run: black --check --diff ava_guardian/ tests/
+        run: black --check --diff ama_cryptography/ tests/
 
       - name: Check import sorting (isort)
-        run: isort --check-only --diff ava_guardian/ tests/
+        run: isort --check-only --diff ama_cryptography/ tests/
 
       - name: Lint (flake8)
-        run: flake8 ava_guardian/ tests/ --max-line-length=100
+        run: flake8 ama_cryptography/ tests/ --max-line-length=100
 
       - name: Type check (mypy)
-        run: mypy ava_guardian/ --ignore-missing-imports
+        run: mypy ama_cryptography/ --ignore-missing-imports
         continue-on-error: true
 
   # Security Audit
@@ -202,7 +202,7 @@ jobs:
         continue-on-error: true
 
       - name: Security scan (bandit)
-        run: bandit -r ava_guardian/ -ll
+        run: bandit -r ama_cryptography/ -ll
         continue-on-error: true
 
   # Docker Build
@@ -223,7 +223,7 @@ jobs:
           file: docker/Dockerfile
           push: false
           load: true
-          tags: ava-guardian:ubuntu
+          tags: ama-cryptography:ubuntu
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -234,14 +234,14 @@ jobs:
           file: docker/Dockerfile.alpine
           push: false
           load: true
-          tags: ava-guardian:alpine
+          tags: ama-cryptography:alpine
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Test Ubuntu image
         run: |
-          docker run --rm ava-guardian:ubuntu python3 -c "import ava_guardian; print('OK')"
+          docker run --rm ama-cryptography:ubuntu python3 -c "import ama_cryptography; print('OK')"
 
       - name: Test Alpine image
         run: |
-          docker run --rm ava-guardian:alpine python3 -c "import ava_guardian; print('OK')"
+          docker run --rm ama-cryptography:alpine python3 -c "import ama_cryptography; print('OK')"

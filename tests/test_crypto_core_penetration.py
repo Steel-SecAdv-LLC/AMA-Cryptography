@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-Ava Guardian ♱ (AG♱): Core Cryptographic Penetration Test Suite
+AMA Cryptography ♱ (AG♱): Core Cryptographic Penetration Test Suite
 =============================================================
 
 100% Penetration Validation for cryptographic primitives.
@@ -377,7 +377,7 @@ class TestDilithiumSignatures:
 
     def test_unavailable_raises_exception(self):
         """When Dilithium unavailable, operations should raise QuantumSignatureUnavailableError."""
-        with patch("ava_guardian.pqc_backends.DILITHIUM_AVAILABLE", False):
+        with patch("ama_cryptography.pqc_backends.DILITHIUM_AVAILABLE", False):
             with pytest.raises(QuantumSignatureUnavailableError):
                 generate_dilithium_keypair()
 

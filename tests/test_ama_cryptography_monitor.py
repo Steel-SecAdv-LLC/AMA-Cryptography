@@ -14,16 +14,16 @@
 # limitations under the License.
 
 """
-Ava Guardian ♱ (AG♱): 3R Monitoring Test Suite
+AMA Cryptography ♱ (AG♱): 3R Monitoring Test Suite
 ===============================================
 
-Comprehensive test suite for Ava Guardian ♱ 3R Monitoring.
+Comprehensive test suite for AMA Cryptography ♱ 3R Monitoring.
 
 Tests cover:
 - ResonanceEngine timing detection
 - RecursionEngine pattern analysis
 - RefactoringAnalyzer complexity metrics
-- AvaGuardianMonitor integration
+- AmaCryptographyMonitor integration
 - Performance overhead validation
 
 Organization: Steel Security Advisors LLC
@@ -31,7 +31,7 @@ Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2026-01-09
 Version: 1.1
-Project: Ava Guardian ♱ 3R Test Suite
+Project: AMA Cryptography ♱ 3R Test Suite
 
 AI Co-Architects:
     Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
@@ -42,8 +42,8 @@ import ast
 import numpy as np
 import pytest
 
-from ava_guardian_monitor import (
-    AvaGuardianMonitor,
+from ama_cryptography_monitor import (
+    AmaCryptographyMonitor,
     IncrementalStats,
     RecursionPatternMonitor,
     RefactoringAnalyzer,
@@ -439,10 +439,10 @@ class TestRecursionPatternMonitor:
             call_count[0] += 1
             return result
 
-        # Patch time.time in the ava_guardian_monitor module
-        import ava_guardian_monitor
+        # Patch time.time in the ama_cryptography_monitor module
+        import ama_cryptography_monitor
 
-        monkeypatch.setattr(ava_guardian_monitor.time, "time", mock_time)
+        monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
 
         # Record normal packages with deterministic timestamps
         for i in range(20):
@@ -473,10 +473,10 @@ class TestRecursionPatternMonitor:
         def mock_time():
             return next(timestamp_iter)
 
-        # Patch time.time in the ava_guardian_monitor module
-        import ava_guardian_monitor
+        # Patch time.time in the ama_cryptography_monitor module
+        import ama_cryptography_monitor
 
-        monkeypatch.setattr(ava_guardian_monitor.time, "time", mock_time)
+        monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
 
         # Record packages with deterministic timestamps
         for i in range(16):
@@ -506,10 +506,10 @@ class TestRecursionPatternMonitor:
             call_count[0] += 1
             return result
 
-        # Patch time.time in the ava_guardian_monitor module
-        import ava_guardian_monitor
+        # Patch time.time in the ama_cryptography_monitor module
+        import ama_cryptography_monitor
 
-        monkeypatch.setattr(ava_guardian_monitor.time, "time", mock_time)
+        monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
 
         # Record packages with deterministic timestamps
         for i in range(30):
@@ -540,10 +540,10 @@ class TestRecursionPatternMonitor:
             call_count[0] += 1
             return result
 
-        # Patch time.time in the ava_guardian_monitor module
-        import ava_guardian_monitor
+        # Patch time.time in the ama_cryptography_monitor module
+        import ama_cryptography_monitor
 
-        monkeypatch.setattr(ava_guardian_monitor.time, "time", mock_time)
+        monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
 
         # Normal size: 7 codes
         for i in range(15):
@@ -701,19 +701,19 @@ def complex_function(a, b, c, d):
         assert "error" in results
 
 
-class TestAvaGuardianMonitor:
+class TestAmaCryptographyMonitor:
     """Test suite for integrated monitor."""
 
     def test_initialization_disabled(self):
         """Test monitor initialization in disabled state."""
-        monitor = AvaGuardianMonitor(enabled=False)
+        monitor = AmaCryptographyMonitor(enabled=False)
 
         assert monitor.enabled is False
         assert len(monitor.alerts) == 0
 
     def test_initialization_enabled(self):
         """Test monitor initialization in enabled state."""
-        monitor = AvaGuardianMonitor(enabled=True)
+        monitor = AmaCryptographyMonitor(enabled=True)
 
         assert monitor.enabled is True
         assert isinstance(monitor.timing, ResonanceTimingMonitor)
@@ -722,7 +722,7 @@ class TestAvaGuardianMonitor:
 
     def test_monitor_crypto_operation_disabled(self):
         """Test that monitoring is no-op when disabled."""
-        monitor = AvaGuardianMonitor(enabled=False)
+        monitor = AmaCryptographyMonitor(enabled=False)
 
         # Should do nothing
         monitor.monitor_crypto_operation("test_op", 10.0)
@@ -732,7 +732,7 @@ class TestAvaGuardianMonitor:
 
     def test_monitor_crypto_operation_enabled(self):
         """Test operation monitoring when enabled."""
-        monitor = AvaGuardianMonitor(enabled=True)
+        monitor = AmaCryptographyMonitor(enabled=True)
 
         # Record operations
         for i in range(50):
@@ -743,7 +743,7 @@ class TestAvaGuardianMonitor:
 
     def test_record_package_signing_disabled(self):
         """Test package recording is no-op when disabled."""
-        monitor = AvaGuardianMonitor(enabled=False)
+        monitor = AmaCryptographyMonitor(enabled=False)
 
         monitor.record_package_signing({"code_count": 7})
 
@@ -755,7 +755,7 @@ class TestAvaGuardianMonitor:
         Uses deterministic timestamps to ensure consistent behavior across
         all CI environments.
         """
-        monitor = AvaGuardianMonitor(enabled=True)
+        monitor = AmaCryptographyMonitor(enabled=True)
 
         # Create deterministic timestamps
         base_time = 1000000.0
@@ -766,10 +766,10 @@ class TestAvaGuardianMonitor:
             call_count[0] += 1
             return result
 
-        # Patch time.time in the ava_guardian_monitor module
-        import ava_guardian_monitor
+        # Patch time.time in the ama_cryptography_monitor module
+        import ama_cryptography_monitor
 
-        monkeypatch.setattr(ava_guardian_monitor.time, "time", mock_time)
+        monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
 
         for i in range(15):
             monitor.record_package_signing({"code_count": 7})
@@ -778,7 +778,7 @@ class TestAvaGuardianMonitor:
 
     def test_get_security_report_disabled(self):
         """Test report generation when disabled."""
-        monitor = AvaGuardianMonitor(enabled=False)
+        monitor = AmaCryptographyMonitor(enabled=False)
 
         report = monitor.get_security_report()
         assert report["status"] == "monitoring_disabled"
@@ -789,7 +789,7 @@ class TestAvaGuardianMonitor:
         Uses deterministic timestamps to ensure consistent behavior across
         all CI environments.
         """
-        monitor = AvaGuardianMonitor(enabled=True)
+        monitor = AmaCryptographyMonitor(enabled=True)
 
         # Create deterministic timestamps
         base_time = 1000000.0
@@ -800,10 +800,10 @@ class TestAvaGuardianMonitor:
             call_count[0] += 1
             return result
 
-        # Patch time.time in the ava_guardian_monitor module
-        import ava_guardian_monitor
+        # Patch time.time in the ama_cryptography_monitor module
+        import ama_cryptography_monitor
 
-        monkeypatch.setattr(ava_guardian_monitor.time, "time", mock_time)
+        monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
 
         # Generate some activity
         for i in range(20):
@@ -821,7 +821,7 @@ class TestAvaGuardianMonitor:
 
     def test_alert_pruning(self):
         """Test that alerts are pruned to prevent memory exhaustion."""
-        monitor = AvaGuardianMonitor(enabled=True, alert_retention=10)
+        monitor = AmaCryptographyMonitor(enabled=True, alert_retention=10)
 
         # Generate many alerts by establishing baseline then injecting
         # anomalies
@@ -839,7 +839,7 @@ class TestAvaGuardianMonitor:
 # Integration test markers
 @pytest.mark.integration
 class TestMonitorIntegration:
-    """Integration tests with full Ava Guardian ♱ system."""
+    """Integration tests with full AMA Cryptography ♱ system."""
 
     def test_end_to_end_monitoring(self):
         """Test complete workflow with monitoring and baseline convergence."""
@@ -859,7 +859,7 @@ class TestMonitorIntegration:
         )
 
         # Setup
-        monitor = AvaGuardianMonitor(enabled=True)
+        monitor = AmaCryptographyMonitor(enabled=True)
         kms = generate_key_management_system("integration-test")
 
         # Run 32 create+verify cycles to exceed the 30-sample baseline threshold.

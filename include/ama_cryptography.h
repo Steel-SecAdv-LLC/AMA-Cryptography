@@ -15,17 +15,17 @@
  */
 
 /**
- * @file ava_guardian.h
- * @brief Ava Guardian ♱ (AG♱) - Core C API for Post-Quantum Cryptography
- * @version 1.1
+ * @file ama_cryptography.h
+ * @brief AMA Cryptography ♱ (AG♱) - Core C API for Post-Quantum Cryptography
+ * @version 2.0
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2026-01-09
  *
  * High-performance C implementation of quantum-resistant cryptographic primitives.
  */
 
-#ifndef AVA_GUARDIAN_H
-#define AVA_GUARDIAN_H
+#ifndef AMA_CRYPTO_H
+#define AMA_CRYPTO_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -38,10 +38,10 @@ extern "C" {
  * VERSION INFORMATION
  * ============================================================================ */
 
-#define AVA_GUARDIAN_VERSION_MAJOR 1
-#define AVA_GUARDIAN_VERSION_MINOR 1
-#define AVA_GUARDIAN_VERSION_PATCH 0
-#define AVA_GUARDIAN_VERSION_STRING "1.1"
+#define AMA_CRYPTO_VERSION_MAJOR 1
+#define AMA_CRYPTO_VERSION_MINOR 1
+#define AMA_CRYPTO_VERSION_PATCH 0
+#define AMA_CRYPTO_VERSION_STRING "2.0"
 
 /* ============================================================================
  * ALGORITHM IDENTIFIERS
@@ -108,14 +108,14 @@ typedef struct ava_signature_t ava_signature_t;
  * ============================================================================ */
 
 /**
- * @brief Initialize Ava Guardian ♱ context
+ * @brief Initialize AMA Cryptography ♱ context
  * @param algorithm Algorithm to use
  * @return Opaque context pointer, NULL on failure
  */
 ava_context_t* ava_context_init(ava_algorithm_t algorithm);
 
 /**
- * @brief Free Ava Guardian ♱ context and scrub memory
+ * @brief Free AMA Cryptography ♱ context and scrub memory
  * @param ctx Context to free
  */
 void ava_context_free(ava_context_t* ctx);
@@ -267,7 +267,7 @@ ava_error_t ava_kem_decapsulate(
  * @param len Length to compare
  * @return 0 if equal, non-zero otherwise (timing-safe)
  */
-int ava_consttime_memcmp(const void* a, const void* b, size_t len);
+int ama_consttime_memcmp(const void* a, const void* b, size_t len);
 
 /**
  * @brief Secure memory scrubbing
@@ -283,7 +283,7 @@ void ava_secure_memzero(void* ptr, size_t len);
  * @param b Second buffer
  * @param len Length to swap
  */
-void ava_consttime_swap(int condition, void* a, void* b, size_t len);
+void ama_consttime_swap(int condition, void* a, void* b, size_t len);
 
 /**
  * @brief Constant-time table lookup
@@ -293,7 +293,7 @@ void ava_consttime_swap(int condition, void* a, void* b, size_t len);
  * @param index Index to lookup (may be secret)
  * @param output Output buffer for selected element
  */
-void ava_consttime_lookup(
+void ama_consttime_lookup(
     const void* table,
     size_t table_len,
     size_t elem_size,
@@ -308,7 +308,7 @@ void ava_consttime_lookup(
  * @param src Source buffer
  * @param len Length to copy
  */
-void ava_consttime_copy(int condition, void* dst, const void* src, size_t len);
+void ama_consttime_copy(int condition, void* dst, const void* src, size_t len);
 
 /* ============================================================================
  * HASHING AND KEY DERIVATION
@@ -325,7 +325,7 @@ void ava_consttime_copy(int condition, void* dst, const void* src, size_t len);
  * @param output Output buffer (32 bytes)
  * @return AVA_SUCCESS or error code
  */
-ava_error_t ava_sha3_256(
+ava_error_t ama_sha3_256(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output
@@ -343,7 +343,7 @@ ava_error_t ava_sha3_256(
  * @param output Output buffer (64 bytes)
  * @return AVA_SUCCESS or error code
  */
-ava_error_t ava_sha3_512(
+ava_error_t ama_sha3_512(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output
@@ -362,7 +362,7 @@ typedef struct {
     uint8_t buffer[168];    /**< Rate buffer (168 bytes max for SHAKE128; 136 for SHA3-256/SHAKE256) */
     size_t buffer_len;      /**< Current bytes in buffer */
     int finalized;          /**< Set to 1 after final() called */
-} ava_sha3_ctx;
+} ama_sha3_ctx;
 
 /**
  * @brief Initialize SHA3-256 streaming context
@@ -370,7 +370,7 @@ typedef struct {
  * @param ctx Context to initialize
  * @return AVA_SUCCESS or error code
  */
-ava_error_t ava_sha3_init(ava_sha3_ctx* ctx);
+ava_error_t ama_sha3_init(ama_sha3_ctx* ctx);
 
 /**
  * @brief Update SHA3-256 with additional data
@@ -382,7 +382,7 @@ ava_error_t ava_sha3_init(ava_sha3_ctx* ctx);
  * @param len Length of data in bytes
  * @return AVA_SUCCESS or error code
  */
-ava_error_t ava_sha3_update(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
+ava_error_t ama_sha3_update(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
 
 /**
  * @brief Finalize SHA3-256 and output digest
@@ -393,33 +393,33 @@ ava_error_t ava_sha3_update(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
  * @param output Output buffer (32 bytes)
  * @return AVA_SUCCESS or error code
  */
-ava_error_t ava_sha3_final(ava_sha3_ctx* ctx, uint8_t* output);
+ava_error_t ama_sha3_final(ama_sha3_ctx* ctx, uint8_t* output);
 
 /* ============================================================================
  * STREAMING SHAKE256 API (init/absorb/finalize/squeeze)
  * Enables incremental absorb and multi-block squeeze for SHAKE256 (XOF)
- * Reuses ava_sha3_ctx since SHAKE256 rate = 136 = SHA3-256 rate
+ * Reuses ama_sha3_ctx since SHAKE256 rate = 136 = SHA3-256 rate
  * ============================================================================ */
 
 /**
  * @brief Initialize SHAKE256 incremental context
  */
-ava_error_t ava_shake256_inc_init(ava_sha3_ctx* ctx);
+ava_error_t ava_shake256_inc_init(ama_sha3_ctx* ctx);
 
 /**
  * @brief Absorb data into SHAKE256 incremental context
  */
-ava_error_t ava_shake256_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
+ava_error_t ava_shake256_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
 
 /**
  * @brief Finalize SHAKE256 absorption (apply padding). Must be called before squeeze.
  */
-ava_error_t ava_shake256_inc_finalize(ava_sha3_ctx* ctx);
+ava_error_t ava_shake256_inc_finalize(ama_sha3_ctx* ctx);
 
 /**
  * @brief Squeeze output bytes from finalized SHAKE256 context. Can be called multiple times.
  */
-ava_error_t ava_shake256_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen);
+ava_error_t ava_shake256_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen);
 
 /* ============================================================================
  * STREAMING SHAKE128 API (init/absorb/finalize/squeeze)
@@ -430,22 +430,22 @@ ava_error_t ava_shake256_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t 
 /**
  * @brief Initialize SHAKE128 incremental context
  */
-ava_error_t ava_shake128_inc_init(ava_sha3_ctx* ctx);
+ava_error_t ava_shake128_inc_init(ama_sha3_ctx* ctx);
 
 /**
  * @brief Absorb data into SHAKE128 incremental context
  */
-ava_error_t ava_shake128_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
+ava_error_t ava_shake128_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
 
 /**
  * @brief Finalize SHAKE128 absorption (apply padding). Must be called before squeeze.
  */
-ava_error_t ava_shake128_inc_finalize(ava_sha3_ctx* ctx);
+ava_error_t ava_shake128_inc_finalize(ama_sha3_ctx* ctx);
 
 /**
  * @brief Squeeze output bytes from finalized SHAKE128 context. Can be called multiple times.
  */
-ava_error_t ava_shake128_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen);
+ava_error_t ava_shake128_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen);
 
 /**
  * @brief HKDF key derivation (RFC 5869)
@@ -464,7 +464,7 @@ ava_error_t ava_shake128_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t 
  * @param okm_len Desired length of OKM
  * @return AVA_SUCCESS or error code
  */
-ava_error_t ava_hkdf(
+ava_error_t ama_hkdf(
     const uint8_t* salt,
     size_t salt_len,
     const uint8_t* ikm,
@@ -490,7 +490,7 @@ ava_error_t ava_hkdf(
  * @param secret_key Input/Output: 64-byte buffer (seed in, seed||pk out)
  * @return AVA_SUCCESS or error code
  */
-ava_error_t ava_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]);
+ava_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]);
 
 /**
  * @brief Sign a message with Ed25519
@@ -504,7 +504,7 @@ ava_error_t ava_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]);
  * @param secret_key 64-byte secret key (seed || public_key)
  * @return AVA_SUCCESS or error code
  */
-ava_error_t ava_ed25519_sign(
+ava_error_t ama_ed25519_sign(
     uint8_t signature[64],
     const uint8_t *message,
     size_t message_len,
@@ -523,7 +523,7 @@ ava_error_t ava_ed25519_sign(
  * @param public_key 32-byte public key
  * @return AVA_SUCCESS if valid, AVA_ERROR_VERIFY_FAILED if invalid
  */
-ava_error_t ava_ed25519_verify(
+ava_error_t ama_ed25519_verify(
     const uint8_t signature[64],
     const uint8_t *message,
     size_t message_len,
@@ -552,4 +552,4 @@ void ava_version_number(int* major, int* minor, int* patch);
 }
 #endif
 
-#endif /* AVA_GUARDIAN_H */
+#endif /* AMA_CRYPTO_H */

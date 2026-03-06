@@ -3,7 +3,7 @@
  * Licensed under the Apache License, Version 2.0
  *
  * @file pqc_demo.c
- * @brief Post-Quantum Cryptography demonstration using Ava Guardian C API
+ * @brief Post-Quantum Cryptography demonstration using AMA Cryptography C API
  *
  * This demo exercises the full native PQC capabilities:
  * - ML-DSA-65 (Dilithium) key generation, signing, and verification
@@ -19,10 +19,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "ava_guardian.h"
+#include "ama_cryptography.h"
 
 /* Test message for signing */
-static const char* TEST_MESSAGE = "Ava Guardian PQC Demo - Quantum-Resistant Cryptography";
+static const char* TEST_MESSAGE = "AMA Cryptography PQC Demo - Quantum-Resistant Cryptography";
 
 /**
  * Print hex dump of data
@@ -120,7 +120,7 @@ static int demo_ml_dsa_65(void) {
 
     /* Test with tampered message */
     printf("5. Testing tampered message detection...\n");
-    const char* tampered = "Ava Guardian PQC Demo - TAMPERED MESSAGE!";
+    const char* tampered = "AMA Cryptography PQC Demo - TAMPERED MESSAGE!";
     err = ava_verify(ctx, (const uint8_t*)tampered, strlen(tampered),
                      signature, signature_len,
                      public_key, sizeof(public_key));
@@ -228,7 +228,7 @@ static int demo_kyber_1024(void) {
 
     /* Verify shared secrets match */
     printf("5. Verifying shared secrets match...\n");
-    if (ava_consttime_memcmp(shared_secret_enc, shared_secret_dec,
+    if (ama_consttime_memcmp(shared_secret_enc, shared_secret_dec,
                              sizeof(shared_secret_enc)) == 0) {
         printf("   OK: Shared secrets match! Key exchange successful.\n\n");
     } else {
@@ -254,7 +254,7 @@ int main(void) {
     int ml_dsa_result, kyber_result;
 
     printf("===========================================\n");
-    printf("Ava Guardian Post-Quantum Cryptography Demo\n");
+    printf("AMA Cryptography Post-Quantum Cryptography Demo\n");
     printf("===========================================\n");
     printf("\nLibrary version: %s\n", ava_version_string());
     printf("\nBuild with native PQC:\n");

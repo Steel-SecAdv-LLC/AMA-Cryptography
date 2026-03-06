@@ -3,10 +3,10 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-Ava Guardian ♱ Flask Integration Example
+AMA Cryptography ♱ Flask Integration Example
 =========================================
 
-Demonstrates integrating Ava Guardian ♱ cryptographic protection into a Flask
+Demonstrates integrating AMA Cryptography ♱ cryptographic protection into a Flask
 web application for secure API endpoints.
 
 Features:
@@ -42,9 +42,9 @@ except ImportError:
     print("This example demonstrates Flask integration patterns.")
     sys.exit(1)
 
-from ava_guardian.crypto_api import (  # noqa: E402
+from ama_cryptography.crypto_api import (  # noqa: E402
     AlgorithmType,
-    AvaGuardianCrypto,
+    AmaCryptography,
     get_pqc_capabilities,
 )
 from code_guardian_secure import (  # noqa: E402
@@ -55,10 +55,10 @@ from code_guardian_secure import (  # noqa: E402
 # Initialize Flask app
 app = Flask(__name__)
 
-# Initialize Ava Guardian ♱ cryptographic system
+# Initialize AMA Cryptography ♱ cryptographic system
 # In production, load keys from secure storage (HSM, Vault, etc.)
 KMS = generate_key_management_system("Flask API Server")
-CRYPTO = AvaGuardianCrypto(algorithm=AlgorithmType.ED25519)
+CRYPTO = AmaCryptography(algorithm=AlgorithmType.ED25519)
 KEYPAIR = CRYPTO.generate_keypair()
 
 
@@ -132,7 +132,7 @@ def health_check():
 
     return {
         "status": "healthy",
-        "service": "Ava Guardian ♱ Flask API",
+        "service": "AMA Cryptography ♱ Flask API",
         "timestamp": datetime.utcnow().isoformat(),
         "pqc_available": capabilities.get("dilithium_available", False),
         "algorithms": (
@@ -145,7 +145,7 @@ def health_check():
 @sign_response
 def sign_data():
     """
-    Sign arbitrary data with Ava Guardian ♱.
+    Sign arbitrary data with AMA Cryptography ♱.
 
     Request body:
         {"data": "your data to sign"}
@@ -211,7 +211,7 @@ def get_protected_data():
     """
     Get cryptographically protected data package.
 
-    Returns a complete Ava Guardian ♱ crypto package with:
+    Returns a complete AMA Cryptography ♱ crypto package with:
     - Content hash (SHA3-256)
     - HMAC authentication
     - Ed25519 signature
@@ -316,7 +316,7 @@ def main():
     print("AVA GUARDIAN ♱ - FLASK INTEGRATION EXAMPLE")
     print("=" * 60)
     print()
-    print("Starting Flask server with Ava Guardian ♱ cryptographic protection...")
+    print("Starting Flask server with AMA Cryptography ♱ cryptographic protection...")
     print()
     print("Available endpoints:")
     print("  GET  /api/health          - Health check (signed)")

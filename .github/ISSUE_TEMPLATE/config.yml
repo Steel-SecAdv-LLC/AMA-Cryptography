@@ -1,11 +1,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security Vulnerability
-    url: https://github.com/Steel-SecAdv-LLC/Ava-Guardian/blob/main/SECURITY.md
+    url: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/SECURITY.md
     about: Please report security vulnerabilities privately via email (DO NOT open public issues)
   - name: Question or Discussion
-    url: https://github.com/Steel-SecAdv-LLC/Ava-Guardian/discussions
+    url: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/discussions
     about: Ask questions or discuss ideas with the community
   - name: Documentation
-    url: https://github.com/Steel-SecAdv-LLC/Ava-Guardian/blob/main/README.md
+    url: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/README.md
     about: Read the comprehensive documentation including SECURITY_ANALYSIS.md and IMPLEMENTATION_GUIDE.md

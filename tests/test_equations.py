@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-Ava Guardian ♱ (AG♱): Mathematical Equations Test Suite
+AMA Cryptography ♱ (AG♱): Mathematical Equations Test Suite
 ========================================================
 
 Comprehensive tests for 5 mathematical frameworks:
@@ -39,9 +39,9 @@ import unittest
 
 import numpy as np
 
-sys.path.insert(0, "/home/user/Ava-Guardian")
+sys.path.insert(0, "/home/user/AMA-Cryptography")
 
-from ava_guardian.equations import (  # noqa: E402
+from ama_cryptography.equations import (  # noqa: E402
     PHI,
     PHI_CUBED,
     calculate_sigma_quadratic,

@@ -13,7 +13,7 @@
 
 ## Overview
 
-Ava Guardian ♱ includes optional runtime security monitoring using the 3R Mechanism, a security framework developed by Steel Security Advisors LLC. The 3R Mechanism provides three complementary approaches to runtime security analysis:
+AMA Cryptography ♱ includes optional runtime security monitoring using the 3R Mechanism, a security framework developed by Steel Security Advisors LLC. The 3R Mechanism provides three complementary approaches to runtime security analysis:
 
 | Component | Function | Purpose |
 |-----------|----------|---------|
@@ -132,11 +132,11 @@ Ava Guardian ♱ includes optional runtime security monitoring using the 3R Mech
 ### Basic Usage
 
 ```python
-from ava_guardian_monitor import AvaGuardianMonitor
+from ama_cryptography_monitor import AmaCryptographyMonitor
 from code_guardian_secure import *
 
 # Enable monitoring
-monitor = AvaGuardianMonitor(enabled=True)
+monitor = AmaCryptographyMonitor(enabled=True)
 
 # Generate keys
 kms = generate_key_management_system("Steel-SecAdv-LLC")
@@ -160,7 +160,7 @@ print(f"Total alerts: {report['total_alerts']}")
 
 ```python
 # Custom thresholds
-monitor = AvaGuardianMonitor(
+monitor = AmaCryptographyMonitor(
     enabled=True,
     alert_retention=5000  # Keep last 5000 alerts
 )
@@ -228,7 +228,7 @@ Prevent denial-of-service via alert spam:
 
 ```python
 # Built-in: max 1000 alerts retained by default
-monitor = AvaGuardianMonitor(alert_retention=1000)
+monitor = AmaCryptographyMonitor(alert_retention=1000)
 
 # Alerts auto-pruned to prevent memory exhaustion
 ```
@@ -238,7 +238,7 @@ monitor = AvaGuardianMonitor(alert_retention=1000)
 ## API Reference
 
 **Key Classes**:
-- `AvaGuardianMonitor`: Main interface
+- `AmaCryptographyMonitor`: Main interface
 - `ResonanceTimingMonitor`: Timing analysis
 - `RecursionPatternMonitor`: Pattern analysis  
 - `RefactoringAnalyzer`: Code complexity
@@ -249,7 +249,7 @@ monitor = AvaGuardianMonitor(alert_retention=1000)
 - `get_security_report()`
 - `analyze_codebase(directory)`
 
-See inline documentation in `ava_guardian_monitor.py` for complete API details.
+See inline documentation in `ama_cryptography_monitor.py` for complete API details.
 
 ---
 

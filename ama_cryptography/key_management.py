@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-Ava Guardian ♱ Key Management System
+AMA Cryptography ♱ Key Management System
 =====================================
 
 Enterprise-grade key management with:
@@ -32,7 +32,7 @@ from typing import Any, Dict, Optional, Tuple, cast
 logger = logging.getLogger(__name__)
 
 # Import from centralized exceptions module
-from ava_guardian.exceptions import SecurityWarning  # noqa: E402, F401
+from ama_cryptography.exceptions import SecurityWarning  # noqa: E402, F401
 
 
 class KeyStatus(Enum):
@@ -129,7 +129,7 @@ class HDKeyDerivation:
 
     def _generate_master_key(self) -> Tuple[bytes, bytes]:
         """Generate master key and chain code from seed"""
-        h = hmac.new(b"Ava Guardian Master Key", self.master_seed, hashlib.sha512)
+        h = hmac.new(b"AMA Cryptography Master Key", self.master_seed, hashlib.sha512)
         hmac_result = h.digest()
 
         master_key = hmac_result[:32]
@@ -823,7 +823,7 @@ class HSMKeyStorage:
         self,
         hsm_type: str = "softhsm",
         library_path: Optional[str] = None,
-        token_label: str = "AvaGuardian",
+        token_label: str = "AmaCryptography",
         pin: Optional[str] = None,  # nosec B107
         slot_index: Optional[int] = None,
     ):
@@ -858,7 +858,7 @@ class HSMKeyStorage:
             return PyKCS11
         except ImportError:
             raise ImportError(
-                "HSM support requires PyKCS11. Install with: pip install ava-guardian[hsm]"
+                "HSM support requires PyKCS11. Install with: pip install ama-cryptography[hsm]"
             )
 
     def _resolve_library_path(self, hsm_type: str, library_path: Optional[str]) -> str:
@@ -1109,7 +1109,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     logger.info("=" * 70)
-    logger.info("Ava Guardian ♱ Key Management Demonstration")
+    logger.info("AMA Cryptography ♱ Key Management Demonstration")
     logger.info("=" * 70)
 
     # HD Key Derivation

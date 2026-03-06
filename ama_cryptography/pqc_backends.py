@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-Ava Guardian ♱ (AG♱) - Post-Quantum Cryptography Backends
+AMA Cryptography ♱ (AG♱) - Post-Quantum Cryptography Backends
 ==========================================================
 
 Centralized PQC backend detection and implementation.
@@ -56,7 +56,7 @@ class PQCStatus(Enum):
 
 # Import from centralized exceptions module (DRY principle)
 # PQCUnavailableError and QuantumSignatureUnavailableError are defined there
-from ava_guardian.exceptions import (  # noqa: E402, F401
+from ama_cryptography.exceptions import (  # noqa: E402, F401
     PQCUnavailableError,
     QuantumSignatureUnavailableError,
     SecurityWarning,
@@ -95,7 +95,7 @@ _SPHINCS_BACKEND: Optional[str] = None
 # ============================================================================
 # NATIVE C BACKEND DETECTION
 # ============================================================================
-# Load the native Ava Guardian shared library which provides ML-DSA-65,
+# Load the native AMA Cryptography shared library which provides ML-DSA-65,
 # Kyber-1024, and SPHINCS+-256f via pure C (FIPS 203/204/205 compliant).
 
 _native_lib: Any = None
@@ -105,10 +105,10 @@ def _get_lib_names() -> list:
     """Return platform-specific library names."""
     system = platform.system()
     if system == "Darwin":
-        return ["libava_guardian.dylib", "libava_guardian.so"]
+        return ["libama_cryptography.dylib", "libama_cryptography.so"]
     elif system == "Windows":
-        return ["ava_guardian.dll", "libava_guardian.dll"]
-    return ["libava_guardian.so"]
+        return ["ama_cryptography.dll", "libama_cryptography.dll"]
+    return ["libama_cryptography.so"]
 
 
 def _get_search_dirs() -> list:
@@ -141,12 +141,12 @@ def _try_load_library(lib_path: Path) -> Optional[ctypes.CDLL]:
 
 
 def _find_native_library() -> Optional[ctypes.CDLL]:
-    """Locate and load the native ava_guardian shared library."""
+    """Locate and load the native ama_cryptography shared library."""
     lib_names = _get_lib_names()
     search_dirs = _get_search_dirs()
 
-    # AVA_GUARDIAN_LIB_PATH override
-    override = os.getenv("AVA_GUARDIAN_LIB_PATH")
+    # AMA_CRYPTO_LIB_PATH override
+    override = os.getenv("AMA_CRYPTO_LIB_PATH")
     if override:
         override_path = Path(override)
         if override_path.is_file():
@@ -171,37 +171,37 @@ def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
     """Configure ctypes function signatures for the native library. Returns True on success."""
     try:
         # ML-DSA-65 (Dilithium)
-        lib.ava_dilithium_keypair.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-        lib.ava_dilithium_keypair.restype = ctypes.c_int
+        lib.ama_dilithium_keypair.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+        lib.ama_dilithium_keypair.restype = ctypes.c_int
 
-        lib.ava_dilithium_sign.argtypes = [
+        lib.ama_dilithium_sign.argtypes = [
             ctypes.c_char_p,
             ctypes.POINTER(ctypes.c_size_t),
             ctypes.c_char_p,
             ctypes.c_size_t,
             ctypes.c_char_p,
         ]
-        lib.ava_dilithium_sign.restype = ctypes.c_int
+        lib.ama_dilithium_sign.restype = ctypes.c_int
 
-        lib.ava_dilithium_verify.argtypes = [
+        lib.ama_dilithium_verify.argtypes = [
             ctypes.c_char_p,
             ctypes.c_size_t,
             ctypes.c_char_p,
             ctypes.c_size_t,
             ctypes.c_char_p,
         ]
-        lib.ava_dilithium_verify.restype = ctypes.c_int
+        lib.ama_dilithium_verify.restype = ctypes.c_int
 
         # Kyber-1024
-        lib.ava_kyber_keypair.argtypes = [
+        lib.ama_kyber_keypair.argtypes = [
             ctypes.c_char_p,
             ctypes.c_size_t,
             ctypes.c_char_p,
             ctypes.c_size_t,
         ]
-        lib.ava_kyber_keypair.restype = ctypes.c_int
+        lib.ama_kyber_keypair.restype = ctypes.c_int
 
-        lib.ava_kyber_encapsulate.argtypes = [
+        lib.ama_kyber_encapsulate.argtypes = [
             ctypes.c_char_p,
             ctypes.c_size_t,
             ctypes.c_char_p,
@@ -209,9 +209,9 @@ def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_char_p,
             ctypes.c_size_t,
         ]
-        lib.ava_kyber_encapsulate.restype = ctypes.c_int
+        lib.ama_kyber_encapsulate.restype = ctypes.c_int
 
-        lib.ava_kyber_decapsulate.argtypes = [
+        lib.ama_kyber_decapsulate.argtypes = [
             ctypes.c_char_p,
             ctypes.c_size_t,
             ctypes.c_char_p,
@@ -219,29 +219,29 @@ def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_char_p,
             ctypes.c_size_t,
         ]
-        lib.ava_kyber_decapsulate.restype = ctypes.c_int
+        lib.ama_kyber_decapsulate.restype = ctypes.c_int
 
         # SPHINCS+-256f
-        lib.ava_sphincs_keypair.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-        lib.ava_sphincs_keypair.restype = ctypes.c_int
+        lib.ama_sphincs_keypair.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+        lib.ama_sphincs_keypair.restype = ctypes.c_int
 
-        lib.ava_sphincs_sign.argtypes = [
+        lib.ama_sphincs_sign.argtypes = [
             ctypes.c_char_p,
             ctypes.POINTER(ctypes.c_size_t),
             ctypes.c_char_p,
             ctypes.c_size_t,
             ctypes.c_char_p,
         ]
-        lib.ava_sphincs_sign.restype = ctypes.c_int
+        lib.ama_sphincs_sign.restype = ctypes.c_int
 
-        lib.ava_sphincs_verify.argtypes = [
+        lib.ama_sphincs_verify.argtypes = [
             ctypes.c_char_p,
             ctypes.c_size_t,
             ctypes.c_char_p,
             ctypes.c_size_t,
             ctypes.c_char_p,
         ]
-        lib.ava_sphincs_verify.restype = ctypes.c_int
+        lib.ama_sphincs_verify.restype = ctypes.c_int
 
         return True
     except AttributeError:
@@ -302,7 +302,7 @@ SPHINCS_SECRET_KEY_BYTES = 128
 SPHINCS_SIGNATURE_BYTES = 49856
 
 # ============================================================================
-# ERROR MESSAGE CONSTANTS (v1.1 Refactoring)
+# ERROR MESSAGE CONSTANTS (v2.0 Refactoring)
 # ============================================================================
 
 # Unknown backend state error messages (should never occur in normal operation)
@@ -484,7 +484,7 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         pk_buf = ctypes.create_string_buffer(DILITHIUM_PUBLIC_KEY_BYTES)
         sk_buf = ctypes.create_string_buffer(DILITHIUM_SECRET_KEY_BYTES)
-        rc = _native_lib.ava_dilithium_keypair(pk_buf, sk_buf)
+        rc = _native_lib.ama_dilithium_keypair(pk_buf, sk_buf)
         if rc != 0:
             raise QuantumSignatureUnavailableError(
                 f"Native dilithium_keypair failed with error code {rc}"
@@ -514,7 +514,7 @@ def dilithium_sign(message: bytes, private_key: bytes) -> bytes:
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(DILITHIUM_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(DILITHIUM_SIGNATURE_BYTES)
-        rc = _native_lib.ava_dilithium_sign(
+        rc = _native_lib.ama_dilithium_sign(
             sig_buf,
             ctypes.byref(sig_len),
             message,
@@ -549,7 +549,7 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
 
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
-        rc = _native_lib.ava_dilithium_verify(
+        rc = _native_lib.ama_dilithium_verify(
             message,
             ctypes.c_size_t(len(message)),
             signature,
@@ -592,7 +592,7 @@ def generate_kyber_keypair() -> KyberKeyPair:
     if KYBER_BACKEND == "native" and _native_lib is not None:
         pk_buf = ctypes.create_string_buffer(KYBER_PUBLIC_KEY_BYTES)
         sk_buf = ctypes.create_string_buffer(KYBER_SECRET_KEY_BYTES)
-        rc = _native_lib.ava_kyber_keypair(
+        rc = _native_lib.ama_kyber_keypair(
             pk_buf,
             ctypes.c_size_t(KYBER_PUBLIC_KEY_BYTES),
             sk_buf,
@@ -644,7 +644,7 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
         ct_buf = ctypes.create_string_buffer(KYBER_CIPHERTEXT_BYTES)
         ct_len = ctypes.c_size_t(KYBER_CIPHERTEXT_BYTES)
         ss_buf = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
-        rc = _native_lib.ava_kyber_encapsulate(
+        rc = _native_lib.ama_kyber_encapsulate(
             public_key,
             ctypes.c_size_t(len(public_key)),
             ct_buf,
@@ -704,7 +704,7 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: bytes) -> bytes:
 
     if KYBER_BACKEND == "native" and _native_lib is not None:
         ss_buf = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
-        rc = _native_lib.ava_kyber_decapsulate(
+        rc = _native_lib.ama_kyber_decapsulate(
             ciphertext,
             ctypes.c_size_t(len(ciphertext)),
             secret_key,
@@ -751,7 +751,7 @@ def generate_sphincs_keypair() -> SphincsKeyPair:
     if SPHINCS_BACKEND == "native" and _native_lib is not None:
         pk_buf = ctypes.create_string_buffer(SPHINCS_PUBLIC_KEY_BYTES)
         sk_buf = ctypes.create_string_buffer(SPHINCS_SECRET_KEY_BYTES)
-        rc = _native_lib.ava_sphincs_keypair(pk_buf, sk_buf)
+        rc = _native_lib.ama_sphincs_keypair(pk_buf, sk_buf)
         if rc != 0:
             raise SphincsUnavailableError(f"Native sphincs_keypair failed with error code {rc}")
         return SphincsKeyPair(secret_key=bytes(sk_buf), public_key=bytes(pk_buf))
@@ -795,7 +795,7 @@ def sphincs_sign(message: bytes, secret_key: bytes) -> bytes:
     if SPHINCS_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(SPHINCS_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(SPHINCS_SIGNATURE_BYTES)
-        rc = _native_lib.ava_sphincs_sign(
+        rc = _native_lib.ama_sphincs_sign(
             sig_buf,
             ctypes.byref(sig_len),
             message,
@@ -843,7 +843,7 @@ def sphincs_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
         )
 
     if SPHINCS_BACKEND == "native" and _native_lib is not None:
-        rc = _native_lib.ava_sphincs_verify(
+        rc = _native_lib.ama_sphincs_verify(
             message,
             ctypes.c_size_t(len(message)),
             signature,

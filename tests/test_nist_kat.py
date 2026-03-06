@@ -56,7 +56,7 @@ import pytest
 
 # Import PQC backends for testing
 try:
-    from ava_guardian.pqc_backends import (
+    from ama_cryptography.pqc_backends import (
         DILITHIUM_AVAILABLE,
         DILITHIUM_BACKEND,
         KYBER_AVAILABLE,

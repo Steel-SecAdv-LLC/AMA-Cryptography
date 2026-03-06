@@ -13,7 +13,7 @@
 
 ## Overview
 
-Ava Guardian ♱ is a production-grade quantum-resistant cryptographic protection system released under the Apache License 2.0 as free and open-source software. Security is our highest priority. We take all vulnerabilities seriously and appreciate responsible disclosure from the security research community.
+AMA Cryptography ♱ is a production-grade quantum-resistant cryptographic protection system released under the Apache License 2.0 as free and open-source software. Security is our highest priority. We take all vulnerabilities seriously and appreciate responsible disclosure from the security research community.
 
 ---
 
@@ -30,7 +30,7 @@ We actively maintain and provide security updates for the following versions:
 
 ## Security Features
 
-Ava Guardian ♱ implements defense-in-depth with six independent security layers:
+AMA Cryptography ♱ implements defense-in-depth with six independent security layers:
 
 1. **SHA3-256 Content Hashing** (NIST FIPS 202)
 2. **HMAC-SHA3-256 Authentication** (RFC 2104)
@@ -50,7 +50,7 @@ If you discover a security vulnerability in AG♱, please report it responsibly:
 **Instead, please:**
 
 1. **Email:** steel.sa.llc@gmail.com
-2. **Subject:** [SECURITY] Ava Guardian ♱ (AG♱)  Vulnerability Report
+2. **Subject:** [SECURITY] AMA Cryptography ♱ (AG♱)  Vulnerability Report
 3. **Include:**
    - Detailed description of the vulnerability
    - Steps to reproduce the issue
@@ -142,13 +142,13 @@ Security updates are released as follows:
 - **Low vulnerabilities:** Addressed in regular development cycle
 
 Security advisories are published:
-- GitHub Security Advisories (https://github.com/Steel-SecAdv-LLC/Ava-Guardian/security/advisories)
+- GitHub Security Advisories (https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/security/advisories)
 - Release notes with [SECURITY] tag
 - Email notification to users who have starred the repository (when critical)
 
 ## Responsible Disclosure Recognition
 
-We deeply appreciate security researchers who help keep Ava Guardian ♱ secure. Reporters who follow responsible disclosure will be:
+We deeply appreciate security researchers who help keep AMA Cryptography ♱ secure. Reporters who follow responsible disclosure will be:
 
 - **Credited** in the security advisory (unless anonymity is requested)
 - **Acknowledged** in the CHANGELOG and release notes
@@ -159,7 +159,7 @@ We do not currently offer a bug bounty program but may consider recognition rewa
 
 ## Security Best Practices
 
-Users deploying Ava Guardian ♱ in production should:
+Users deploying AMA Cryptography ♱ in production should:
 
 ### Key Management
 - **REQUIRED:** Store master secrets in FIPS 140-2 Level 3+ HSMs for production
@@ -215,7 +215,7 @@ We will deprecate cryptographic algorithms when:
 
 ## Security Audits
 
-Ava Guardian ♱ has undergone internal security analysis documented in `SECURITY_ANALYSIS.md`. We welcome:
+AMA Cryptography ♱ has undergone internal security analysis documented in `SECURITY_ANALYSIS.md`. We welcome:
 
 - Independent security audits from qualified cryptographers
 - Academic review of our mathematical proofs
@@ -226,7 +226,7 @@ Please contact us at steel.sa.llc@gmail.com to coordinate security audit efforts
 
 ## Compliance and Standards
 
-Ava Guardian ♱ is designed to comply with:
+AMA Cryptography ♱ is designed to comply with:
 
 - **NIST FIPS 202** - SHA-3 Standard
 - **NIST FIPS 204** - Module-Lattice-Based Digital Signature Standard (Dilithium)

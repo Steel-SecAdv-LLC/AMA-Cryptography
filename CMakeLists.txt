@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.15)
 
-project(AvaGuardian
+project(AmaCryptography
     VERSION 1.1
     DESCRIPTION "Quantum-Resistant Cryptographic Protection System"
     LANGUAGES C CXX
@@ -69,19 +69,19 @@ endif()
 
 # Source files
 set(AVA_SOURCES
-    src/c/ava_core.c
-    src/c/ava_consttime.c
-    src/c/ava_sha3.c
-    src/c/ava_hkdf.c
-    src/c/ava_ed25519.c
+    src/c/ama_core.c
+    src/c/ama_consttime.c
+    src/c/ama_sha3.c
+    src/c/ama_hkdf.c
+    src/c/ama_ed25519.c
 )
 
 # Add native PQC source files when enabled
 if(AVA_USE_NATIVE_PQC)
     list(APPEND AVA_SOURCES
-        src/c/ava_kyber.c
-        src/c/ava_dilithium.c
-        src/c/ava_sphincs.c
+        src/c/ama_kyber.c
+        src/c/ama_dilithium.c
+        src/c/ama_sphincs.c
     )
     message(STATUS "Native PQC enabled: ML-DSA-65, Kyber-1024, SPHINCS+-256f")
 endif()
@@ -91,36 +91,36 @@ find_package(OpenSSL REQUIRED)
 
 # Create shared library
 if(AVA_BUILD_SHARED)
-    add_library(ava_guardian_shared SHARED ${AVA_SOURCES})
-    set_target_properties(ava_guardian_shared PROPERTIES
-        OUTPUT_NAME "ava_guardian"
+    add_library(ama_cryptography_shared SHARED ${AVA_SOURCES})
+    set_target_properties(ama_cryptography_shared PROPERTIES
+        OUTPUT_NAME "ama_cryptography"
         VERSION ${PROJECT_VERSION}
         SOVERSION ${PROJECT_VERSION_MAJOR}
-        PUBLIC_HEADER "include/ava_guardian.h"
+        PUBLIC_HEADER "include/ama_cryptography.h"
     )
-    target_link_libraries(ava_guardian_shared
+    target_link_libraries(ama_cryptography_shared
         PRIVATE OpenSSL::Crypto
     )
-    target_compile_definitions(ava_guardian_shared PRIVATE AVA_BUILDING_SHARED)
+    target_compile_definitions(ama_cryptography_shared PRIVATE AVA_BUILDING_SHARED)
     
     if(AVA_USE_NATIVE_PQC)
-        target_compile_definitions(ava_guardian_shared PRIVATE AVA_USE_NATIVE_PQC)
+        target_compile_definitions(ama_cryptography_shared PRIVATE AVA_USE_NATIVE_PQC)
     endif()
 endif()
 
 # Create static library
 if(AVA_BUILD_STATIC)
-    add_library(ava_guardian_static STATIC ${AVA_SOURCES})
-    set_target_properties(ava_guardian_static PROPERTIES
-        OUTPUT_NAME "ava_guardian_static"
-        PUBLIC_HEADER "include/ava_guardian.h"
+    add_library(ama_cryptography_static STATIC ${AVA_SOURCES})
+    set_target_properties(ama_cryptography_static PROPERTIES
+        OUTPUT_NAME "ama_cryptography_static"
+        PUBLIC_HEADER "include/ama_cryptography.h"
     )
-    target_link_libraries(ava_guardian_static
+    target_link_libraries(ama_cryptography_static
         PRIVATE OpenSSL::Crypto
     )
     
     if(AVA_USE_NATIVE_PQC)
-        target_compile_definitions(ava_guardian_static PRIVATE AVA_USE_NATIVE_PQC)
+        target_compile_definitions(ama_cryptography_static PRIVATE AVA_USE_NATIVE_PQC)
     endif()
 endif()
 
@@ -136,14 +136,14 @@ if(AVA_BUILD_TESTS)
     # Build a separate test-only static library with AVA_TESTING_MODE enabled.
     # This exposes randombytes_hook function pointers for deterministic KAT testing
     # WITHOUT contaminating the installable production libraries.
-    add_library(ava_guardian_test STATIC ${AVA_SOURCES})
-    set_target_properties(ava_guardian_test PROPERTIES
-        OUTPUT_NAME "ava_guardian_test"
+    add_library(ama_cryptography_test STATIC ${AVA_SOURCES})
+    set_target_properties(ama_cryptography_test PROPERTIES
+        OUTPUT_NAME "ama_cryptography_test"
     )
-    target_link_libraries(ava_guardian_test PRIVATE OpenSSL::Crypto)
-    target_compile_definitions(ava_guardian_test PRIVATE AVA_TESTING_MODE)
+    target_link_libraries(ama_cryptography_test PRIVATE OpenSSL::Crypto)
+    target_compile_definitions(ama_cryptography_test PRIVATE AVA_TESTING_MODE)
     if(AVA_USE_NATIVE_PQC)
-        target_compile_definitions(ava_guardian_test PRIVATE AVA_USE_NATIVE_PQC)
+        target_compile_definitions(ama_cryptography_test PRIVATE AVA_USE_NATIVE_PQC)
     endif()
 
     add_subdirectory(tests/c)
@@ -151,7 +151,7 @@ endif()
 
 # Installation
 if(AVA_BUILD_SHARED)
-    install(TARGETS ava_guardian_shared
+    install(TARGETS ama_cryptography_shared
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib
         PUBLIC_HEADER DESTINATION include
@@ -159,7 +159,7 @@ if(AVA_BUILD_SHARED)
 endif()
 
 if(AVA_BUILD_STATIC)
-    install(TARGETS ava_guardian_static
+    install(TARGETS ama_cryptography_static
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib
         PUBLIC_HEADER DESTINATION include
@@ -168,17 +168,17 @@ endif()
 
 # pkg-config
 configure_file(
-    ${CMAKE_SOURCE_DIR}/ava_guardian.pc.in
-    ${CMAKE_BINARY_DIR}/ava_guardian.pc
+    ${CMAKE_SOURCE_DIR}/ama_cryptography.pc.in
+    ${CMAKE_BINARY_DIR}/ama_cryptography.pc
     @ONLY
 )
-install(FILES ${CMAKE_BINARY_DIR}/ava_guardian.pc
+install(FILES ${CMAKE_BINARY_DIR}/ama_cryptography.pc
     DESTINATION lib/pkgconfig
 )
 
 # Print configuration summary
 message(STATUS "")
-message(STATUS "Ava Guardian ♱ Configuration Summary")
+message(STATUS "AMA Cryptography ♱ Configuration Summary")
 message(STATUS "=====================================")
 message(STATUS "Version:          ${PROJECT_VERSION}")
 message(STATUS "Build type:       ${CMAKE_BUILD_TYPE}")
@@ -199,7 +199,7 @@ message(STATUS "Post-Quantum Cryptography:")
 message(STATUS "  Native PQC:     ${AVA_USE_NATIVE_PQC}")
 if(AVA_USE_NATIVE_PQC)
     message(STATUS "  PQC backend:    NATIVE")
-    message(STATUS "  PQC algorithms: ML-DSA-65 (ava_dilithium.c), Kyber-1024 (ava_kyber.c), SPHINCS+-256f (ava_sphincs.c)")
+    message(STATUS "  PQC algorithms: ML-DSA-65 (ama_dilithium.c), Kyber-1024 (ama_kyber.c), SPHINCS+-256f (ama_sphincs.c)")
     message(STATUS "  FIPS compliance: FIPS 203 (ML-KEM), FIPS 204 (ML-DSA), FIPS 205 (SLH-DSA)")
 else()
     message(STATUS "  PQC backend:    NONE (use -DAVA_USE_NATIVE_PQC=ON)")

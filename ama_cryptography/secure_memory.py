@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-Ava Guardian Secure Memory Module
+AMA Cryptography Secure Memory Module
 =================================
 
 Provides secure memory operations with optional libsodium enhancement
@@ -43,7 +43,7 @@ Implementation Notes:
     with direct libsodium linking.
 
 Usage:
-    from ava_guardian.secure_memory import (
+    from ama_cryptography.secure_memory import (
         SecureBuffer,
         secure_memzero,
         secure_mlock,

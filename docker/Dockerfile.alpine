@@ -1,7 +1,7 @@
 # Copyright 2025 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 #
-# Alpine Linux build for Ava Guardian ♱ - minimal container size
+# Alpine Linux build for AMA Cryptography ♱ - minimal container size
 # ~50MB vs ~200MB for Ubuntu-based image
 
 FROM alpine:3.18 AS builder
@@ -36,17 +36,17 @@ RUN apk add --no-cache \
     python3 \
     py3-pip
 
-RUN adduser -D -u 1000 ava
+RUN adduser -D -u 1000 ama
 
 COPY --from=builder /build/build/lib/*.so* /usr/local/lib/
 COPY --from=builder /build/dist/*.whl /tmp/
 
-# Install Python package and runtime dependencies (numpy, scipy required by ava_guardian)
+# Install Python package and runtime dependencies (numpy, scipy required by ama_cryptography)
 RUN pip3 install --no-cache-dir /tmp/*.whl && \
     pip3 install --no-cache-dir numpy scipy && \
     rm -rf /tmp/*.whl
 
-USER ava
+USER ama
 WORKDIR /app
 
-CMD ["python3", "-c", "import ava_guardian; print(f'Ava Guardian ♱ v{ava_guardian.__version__} (Alpine)')"]
+CMD ["python3", "-c", "import ama_cryptography; print(f'AMA Cryptography ♱ v{ama_cryptography.__version__} (Alpine)')"]

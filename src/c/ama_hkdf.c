@@ -15,7 +15,7 @@
  */
 
 /**
- * @file ava_hkdf.c
+ * @file ama_hkdf.c
  * @brief HKDF (RFC 5869) key derivation using HMAC-SHA3-256
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2025-12-06
@@ -29,7 +29,7 @@
  * - Constant-time operations where possible
  */
 
-#include "../include/ava_guardian.h"
+#include "../include/ama_cryptography.h"
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -38,8 +38,8 @@
 #define SHA3_256_BLOCK_SIZE 136  /* Rate for SHA3-256 */
 #define SHA3_256_DIGEST_SIZE 32
 
-/* Forward declaration from ava_sha3.c */
-extern ava_error_t ava_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
+/* Forward declaration from ama_sha3.c */
+extern ava_error_t ama_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
 
 /**
  * HMAC-SHA3-256
@@ -74,7 +74,7 @@ static ava_error_t hmac_sha3_256(
 
     /* If key is longer than block size, hash it first */
     if (key_len > SHA3_256_BLOCK_SIZE) {
-        rc = ava_sha3_256(key, key_len, key_hash);
+        rc = ama_sha3_256(key, key_len, key_hash);
         if (rc != AVA_SUCCESS) {
             return rc;
         }
@@ -105,7 +105,7 @@ static ava_error_t hmac_sha3_256(
     if (data_len > 0) {
         memcpy(inner_data + SHA3_256_BLOCK_SIZE, data, data_len);
     }
-    rc = ava_sha3_256(inner_data, SHA3_256_BLOCK_SIZE + data_len, inner_hash);
+    rc = ama_sha3_256(inner_data, SHA3_256_BLOCK_SIZE + data_len, inner_hash);
     if (rc != AVA_SUCCESS) {
         goto cleanup;
     }
@@ -118,7 +118,7 @@ static ava_error_t hmac_sha3_256(
     }
     memcpy(outer_data, k_opad, SHA3_256_BLOCK_SIZE);
     memcpy(outer_data + SHA3_256_BLOCK_SIZE, inner_hash, SHA3_256_DIGEST_SIZE);
-    rc = ava_sha3_256(outer_data, SHA3_256_BLOCK_SIZE + SHA3_256_DIGEST_SIZE, output);
+    rc = ama_sha3_256(outer_data, SHA3_256_BLOCK_SIZE + SHA3_256_DIGEST_SIZE, output);
 
 cleanup:
     /* Scrub sensitive data */
@@ -273,7 +273,7 @@ cleanup:
  * @param okm_len Desired length of output
  * @return AVA_SUCCESS or error code
  */
-ava_error_t ava_hkdf(
+ava_error_t ama_hkdf(
     const uint8_t* salt,
     size_t salt_len,
     const uint8_t* ikm,

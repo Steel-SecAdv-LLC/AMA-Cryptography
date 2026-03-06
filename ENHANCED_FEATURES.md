@@ -1,4 +1,4 @@
-# Ava Guardian ♱ Enhanced Features
+# AMA Cryptography ♱ Enhanced Features
 
 ## Document Information
 
@@ -13,7 +13,7 @@
 
 ## Overview
 
-Ava Guardian ♱ 1.0 introduces a multi-language architecture that combines the security of C, the performance of Cython, and the usability of Python. This document describes the enhanced features available in the current release.
+AMA Cryptography ♱ 1.0 introduces a multi-language architecture that combines the security of C, the performance of Cython, and the usability of Python. This document describes the enhanced features available in the current release.
 
 ---
 
@@ -29,7 +29,7 @@ Ava Guardian ♱ 1.0 introduces a multi-language architecture that combines the 
                                |
 +------------------------------v------------------------------+
 |                  PYTHON BINDINGS & API                      |
-|            ava_guardian/  (High-level interface)            |
+|            ama_cryptography/  (High-level interface)            |
 +----+--------------------------------------------+------------+
      |                                            |
 +----v----------------------------+   +-----------v-----------+
@@ -41,7 +41,7 @@ Ava Guardian ♱ 1.0 introduces a multi-language architecture that combines the 
 +----+----------------------------+   +-----------------------+
      |
 +----v--------------------------------------------------------+
-|              C CORE LIBRARY (libava_guardian)               |
+|              C CORE LIBRARY (libama_cryptography)               |
 |                  src/c/  include/                           |
 |  - Constant-time cryptographic primitives                   |
 |  - ML-DSA-65, Kyber-1024, SPHINCS+-256f                     |
@@ -77,7 +77,7 @@ Helix evolution step      3.4 ms      0.18 ms    18.9x
 
 All cryptographic operations execute in constant time:
 
-1. **ava_consttime_memcmp()**: Timing-attack resistant comparison
+1. **ama_consttime_memcmp()**: Timing-attack resistant comparison
    - Volatile pointer usage prevents optimization
    - Data-independent control flow
    - Bitwise accumulation instead of branching
@@ -86,7 +86,7 @@ All cryptographic operations execute in constant time:
    - Memory barrier to prevent optimization
    - Guaranteed zeroing of sensitive data
 
-3. **ava_consttime_swap()**: Conditional data-independent swap
+3. **ama_consttime_swap()**: Conditional data-independent swap
    - XOR-based swap without branches
    - Mask-based selection
 
@@ -113,7 +113,7 @@ AVX2 support for polynomial operations:
 
 **Key Encapsulation Mechanism**
 
-> **Integration Status:** Backend implemented in `ava_guardian/pqc_backends.py`. Integration into main signing workflow pending.
+> **Integration Status:** Backend implemented in `ama_cryptography/pqc_backends.py`. Integration into main signing workflow pending.
 
 - Public key: 1568 bytes
 - Secret key: 3168 bytes
@@ -126,7 +126,7 @@ AVX2 support for polynomial operations:
 
 **Stateless Hash-Based Signatures**
 
-> **Integration Status:** Backend implemented in `ava_guardian/pqc_backends.py`. Integration into main signing workflow pending.
+> **Integration Status:** Backend implemented in `ama_cryptography/pqc_backends.py`. Integration into main signing workflow pending.
 
 - Public key: 64 bytes
 - Secret key: 128 bytes
@@ -222,7 +222,7 @@ Tests:
 
 Run with:
 ```bash
-pytest tests/ -v --cov=ava_guardian
+pytest tests/ -v --cov=ama_cryptography
 ```
 
 ## Docker Support
@@ -238,8 +238,8 @@ FROM ubuntu:22.04
 
 Build and run:
 ```bash
-docker build -t ava-guardian -f docker/Dockerfile .
-docker run --rm ava-guardian
+docker build -t ama-cryptography -f docker/Dockerfile .
+docker run --rm ama-cryptography
 ```
 
 ### Alpine-based Image
@@ -253,8 +253,8 @@ FROM alpine:3.18
 
 Build and run:
 ```bash
-docker build -t ava-guardian:alpine -f docker/Dockerfile.alpine .
-docker run --rm ava-guardian:alpine
+docker build -t ama-cryptography:alpine -f docker/Dockerfile.alpine .
+docker run --rm ama-cryptography:alpine
 ```
 
 ### Docker Compose
@@ -268,7 +268,7 @@ docker-compose ps           # Check status
 ```
 
 Services:
-- `ava-guardian`: Main service
+- `ama-cryptography`: Main service
 - `ava-monitor`: Monitoring service
 - `ava-benchmark`: Periodic benchmarks
 
@@ -399,9 +399,9 @@ Note: C extensions may require additional setup on Windows.
 
 All cryptographic comparisons and operations execute in constant time:
 
-✓ Memory comparisons (ava_consttime_memcmp)
-✓ Conditional swaps (ava_consttime_swap)
-✓ Array lookups (ava_consttime_lookup)
+✓ Memory comparisons (ama_consttime_memcmp)
+✓ Conditional swaps (ama_consttime_swap)
+✓ Array lookups (ama_consttime_lookup)
 ✓ Signature verification
 ✓ Key generation
 
@@ -429,8 +429,8 @@ The new multi-language architecture is fully backward compatible:
 
 ```python
 # Old code still works
-from ava_guardian import AvaEquationEngine
-engine = AvaEquationEngine(state_dim=100)
+from ama_cryptography import AmaEquationEngine
+engine = AmaEquationEngine(state_dim=100)
 ```
 
 No changes required! The system automatically uses:
@@ -450,7 +450,7 @@ pip install Cython
 python setup.py build_ext --inplace
 
 # Verify
-python -c "from ava_guardian.math_engine import benchmark_matrix_operations; print(benchmark_matrix_operations())"
+python -c "from ama_cryptography.math_engine import benchmark_matrix_operations; print(benchmark_matrix_operations())"
 ```
 
 ## Version Compatibility

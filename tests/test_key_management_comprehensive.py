@@ -24,7 +24,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ava_guardian.key_management import (
+from ama_cryptography.key_management import (
     HDKeyDerivation,
     HSMKeyStorage,
     KeyMetadata,

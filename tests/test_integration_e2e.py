@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-Ava Guardian ♱ End-to-End Integration Tests
+AMA Cryptography ♱ End-to-End Integration Tests
 ============================================
 
 Complete workflow integration tests covering:
@@ -172,7 +172,7 @@ class TestKeyManagementWorkflows:
 
     def test_hd_key_derivation_determinism(self):
         """Test that HD key derivation is deterministic."""
-        from ava_guardian.key_management import HDKeyDerivation
+        from ama_cryptography.key_management import HDKeyDerivation
 
         seed = b"test_seed_for_deterministic_derivation_32bytes!"
 
@@ -188,7 +188,7 @@ class TestKeyManagementWorkflows:
 
     def test_key_rotation_workflow(self):
         """Test complete key rotation workflow."""
-        from ava_guardian.key_management import KeyRotationManager
+        from ama_cryptography.key_management import KeyRotationManager
 
         manager = KeyRotationManager(rotation_period=timedelta(days=90))
 
@@ -223,7 +223,7 @@ class TestKeyManagementWorkflows:
 
     def test_secure_storage_encryption(self):
         """Test secure key storage with encryption."""
-        from ava_guardian.key_management import SecureKeyStorage
+        from ama_cryptography.key_management import SecureKeyStorage
 
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = SecureKeyStorage(
@@ -257,9 +257,9 @@ class TestMultiAlgorithmInteroperability:
 
     def test_algorithm_switching(self):
         """Test switching between different algorithms."""
-        from ava_guardian.crypto_api import (
+        from ama_cryptography.crypto_api import (
             AlgorithmType,
-            AvaGuardianCrypto,
+            AmaCryptography,
         )
 
         message = b"Test message for algorithm switching"
@@ -267,14 +267,14 @@ class TestMultiAlgorithmInteroperability:
         algorithms = [AlgorithmType.ED25519]
 
         # Check if PQC is available
-        from ava_guardian.pqc_backends import DILITHIUM_AVAILABLE
+        from ama_cryptography.pqc_backends import DILITHIUM_AVAILABLE
 
         if DILITHIUM_AVAILABLE:
             algorithms.append(AlgorithmType.ML_DSA_65)
             algorithms.append(AlgorithmType.HYBRID_SIG)
 
         for algo in algorithms:
-            crypto = AvaGuardianCrypto(algorithm=algo)
+            crypto = AmaCryptography(algorithm=algo)
             keypair = crypto.generate_keypair()
             signature = crypto.sign(message, keypair.secret_key)
             valid = crypto.verify(message, signature.signature, keypair.public_key)
@@ -282,20 +282,20 @@ class TestMultiAlgorithmInteroperability:
 
     def test_cross_verification_fails(self):
         """Test that signatures from one algorithm don't verify with another."""
-        from ava_guardian.crypto_api import (
+        from ama_cryptography.crypto_api import (
             AlgorithmType,
-            AvaGuardianCrypto,
+            AmaCryptography,
         )
 
         message = b"Cross verification test"
 
         # Sign with Ed25519
-        ed_crypto = AvaGuardianCrypto(algorithm=AlgorithmType.ED25519)
+        ed_crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
         ed_keypair = ed_crypto.generate_keypair()
         ed_signature = ed_crypto.sign(message, ed_keypair.secret_key)
 
         # Try to verify with different key (should fail)
-        ed_crypto2 = AvaGuardianCrypto(algorithm=AlgorithmType.ED25519)
+        ed_crypto2 = AmaCryptography(algorithm=AlgorithmType.ED25519)
         ed_keypair2 = ed_crypto2.generate_keypair()
 
         valid = ed_crypto2.verify(message, ed_signature.signature, ed_keypair2.public_key)
@@ -307,12 +307,12 @@ class TestErrorRecoveryAndGracefulDegradation:
 
     def test_invalid_key_handling(self):
         """Test handling of invalid keys."""
-        from ava_guardian.crypto_api import (
+        from ama_cryptography.crypto_api import (
             AlgorithmType,
-            AvaGuardianCrypto,
+            AmaCryptography,
         )
 
-        crypto = AvaGuardianCrypto(algorithm=AlgorithmType.ED25519)
+        crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
         message = b"Test message"
 
         # Invalid key should not crash, just fail verification
@@ -326,12 +326,12 @@ class TestErrorRecoveryAndGracefulDegradation:
 
     def test_empty_message_handling(self):
         """Test handling of empty messages."""
-        from ava_guardian.crypto_api import (
+        from ama_cryptography.crypto_api import (
             AlgorithmType,
-            AvaGuardianCrypto,
+            AmaCryptography,
         )
 
-        crypto = AvaGuardianCrypto(algorithm=AlgorithmType.ED25519)
+        crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
         empty_message = b""
 
         keypair = crypto.generate_keypair()
@@ -344,18 +344,18 @@ class TestErrorRecoveryAndGracefulDegradation:
         """Test graceful handling when PQC is unavailable."""
         from unittest.mock import patch
 
-        from ava_guardian.crypto_api import (
+        from ama_cryptography.crypto_api import (
             AlgorithmType,
-            AvaGuardianCrypto,
+            AmaCryptography,
         )
-        from ava_guardian.pqc_backends import (
+        from ama_cryptography.pqc_backends import (
             PQCUnavailableError,
         )
 
         # Mock Dilithium as unavailable to test error path
-        with patch("ava_guardian.pqc_backends.DILITHIUM_AVAILABLE", False):
+        with patch("ama_cryptography.pqc_backends.DILITHIUM_AVAILABLE", False):
             with pytest.raises(PQCUnavailableError):
-                crypto = AvaGuardianCrypto(algorithm=AlgorithmType.ML_DSA_65)
+                crypto = AmaCryptography(algorithm=AlgorithmType.ML_DSA_65)
                 crypto.generate_keypair()
 
 
@@ -364,12 +364,12 @@ class TestPerformanceRegression:
 
     def test_signature_performance(self):
         """Test that signature operations meet performance targets."""
-        from ava_guardian.crypto_api import (
+        from ama_cryptography.crypto_api import (
             AlgorithmType,
-            AvaGuardianCrypto,
+            AmaCryptography,
         )
 
-        crypto = AvaGuardianCrypto(algorithm=AlgorithmType.ED25519)
+        crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
         message = b"Performance test message" * 100
         keypair = crypto.generate_keypair()
 
@@ -589,7 +589,7 @@ class TestCryptoAPIIntegration:
 
     def test_pqc_capabilities_reporting(self):
         """Test PQC capabilities are correctly reported."""
-        from ava_guardian.crypto_api import get_pqc_capabilities
+        from ama_cryptography.crypto_api import get_pqc_capabilities
 
         caps = get_pqc_capabilities()
 
@@ -600,12 +600,12 @@ class TestCryptoAPIIntegration:
 
     def test_constant_time_compare(self):
         """Test constant-time comparison function."""
-        from ava_guardian.crypto_api import (
+        from ama_cryptography.crypto_api import (
             AlgorithmType,
-            AvaGuardianCrypto,
+            AmaCryptography,
         )
 
-        crypto = AvaGuardianCrypto(algorithm=AlgorithmType.ED25519)
+        crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
 
         # Equal values
         a = b"test_value_123"

@@ -2,10 +2,10 @@
 # Copyright 2025 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 """
-Ava Guardian ♱ Exception Classes
+AMA Cryptography ♱ Exception Classes
 =================================
 
-Centralized exception and warning classes for the Ava Guardian package.
+Centralized exception and warning classes for the AMA Cryptography package.
 All modules should import exceptions from this module to ensure consistency.
 
 Organization: Steel Security Advisors LLC

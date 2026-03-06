@@ -250,7 +250,7 @@ class TestDomainSeparationFuzzing:
         """Signature message starts with domain prefix."""
         ethical_hash = secrets.token_bytes(32)
         msg = build_signature_message(content_hash, ethical_hash, SIGNATURE_FORMAT_V2)
-        assert msg.startswith(b"AG-PKG-v2"), "Message must start with domain prefix"
+        assert msg.startswith(b"AMA-PKG-v2"), "Message must start with domain prefix"
 
     @given(st.binary(min_size=32, max_size=32))
     def test_ed25519_signs_domain_separated_message(self, content_hash):

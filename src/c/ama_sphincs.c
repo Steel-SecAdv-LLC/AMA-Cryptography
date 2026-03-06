@@ -15,7 +15,7 @@
  */
 
 /**
- * @file ava_sphincs.c
+ * @file ama_sphincs.c
  * @brief SPHINCS+-SHA2-256f-simple Hash-Based Signatures - Native C Implementation
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2026-03-05
@@ -46,11 +46,11 @@
  * - Constant-time hash computations
  *
  * Note: Uses SHA-256 internally (via OpenSSL) as specified by the
- * "SHA2" variant. The existing ava_sha3.c provides SHA3/SHAKE which
+ * "SHA2" variant. The existing ama_sha3.c provides SHA3/SHAKE which
  * is used for domain separation and message hashing.
  */
 
-#include "../include/ava_guardian.h"
+#include "../include/ama_cryptography.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -932,7 +932,7 @@ static int spx_ht_verify(const uint8_t *msg, const uint8_t *sig,
     }
 
     /* Compare computed root with expected root */
-    return ava_consttime_memcmp(node, root, SPX_N);
+    return ama_consttime_memcmp(node, root, SPX_N);
 }
 
 /* ============================================================================
@@ -945,14 +945,14 @@ static int spx_ht_verify(const uint8_t *msg, const uint8_t *sig,
  * Only available in test builds (AVA_TESTING_MODE).
  */
 #ifdef AVA_TESTING_MODE
-ava_error_t (*ava_sphincs_randombytes_hook)(uint8_t* buf, size_t len) = NULL;
+ava_error_t (*ama_sphincs_randombytes_hook)(uint8_t* buf, size_t len) = NULL;
 #endif
 
 /* Get random bytes from OS (or from test hook if set) */
 static ava_error_t spx_randombytes(uint8_t *buf, size_t len) {
 #ifdef AVA_TESTING_MODE
-    if (ava_sphincs_randombytes_hook) {
-        return ava_sphincs_randombytes_hook(buf, len);
+    if (ama_sphincs_randombytes_hook) {
+        return ama_sphincs_randombytes_hook(buf, len);
     }
 #endif
     if (RAND_bytes(buf, (int)len) != 1) {
@@ -970,7 +970,7 @@ static ava_error_t spx_randombytes(uint8_t *buf, size_t len) {
  * @param secret_key Output buffer for secret key (128 bytes)
  * @return AVA_SUCCESS or error code
  */
-ava_error_t ava_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key) {
+ava_error_t ama_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key) {
     spx_addr addr;
     uint8_t root[SPX_N];
     ava_error_t rc;
@@ -1020,7 +1020,7 @@ ava_error_t ava_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key) {
  * @param secret_key Secret key (128 bytes)
  * @return AVA_SUCCESS or error code
  */
-ava_error_t ava_sphincs_sign(uint8_t *signature, size_t *signature_len,
+ava_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
                               const uint8_t *message, size_t message_len,
                               const uint8_t *secret_key) {
     const uint8_t *sk_seed = secret_key;
@@ -1095,7 +1095,7 @@ ava_error_t ava_sphincs_sign(uint8_t *signature, size_t *signature_len,
  * @param public_key Public key (64 bytes)
  * @return AVA_SUCCESS if valid, AVA_ERROR_VERIFY_FAILED if invalid
  */
-ava_error_t ava_sphincs_verify(const uint8_t *message, size_t message_len,
+ava_error_t ama_sphincs_verify(const uint8_t *message, size_t message_len,
                                 const uint8_t *signature, size_t signature_len,
                                 const uint8_t *public_key) {
     const uint8_t *pub_seed = public_key;

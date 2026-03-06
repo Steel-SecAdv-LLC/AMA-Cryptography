@@ -3,9 +3,9 @@ exec_prefix=${prefix}
 libdir=${exec_prefix}/lib
 includedir=${prefix}/include
 
-Name: Ava Guardian
+Name: AMA Cryptography
 Description: Quantum-Resistant Cryptographic Protection System
 Version: @PROJECT_VERSION@
 Requires: openssl >= 1.1.1
-Libs: -L${libdir} -lava_guardian
+Libs: -L${libdir} -lama_cryptography
 Cflags: -I${includedir}

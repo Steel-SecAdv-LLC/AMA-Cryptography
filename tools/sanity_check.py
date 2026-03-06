@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Minimal PQC sanity check for Ava Guardian ♱.
+Minimal PQC sanity check for AMA Cryptography ♱.
 
 This script asserts PQC backend availability and exercises a hybrid
 sign/verify path. It exits non-zero on failure so it can be used in CI
 or local smoke testing.
 """
 
-from ava_guardian.crypto_api import AlgorithmType, AvaGuardianCrypto
-from ava_guardian.exceptions import PQCUnavailableError
-from ava_guardian.pqc_backends import PQCStatus, get_pqc_backend_info, get_pqc_status
+from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
+from ama_cryptography.exceptions import PQCUnavailableError
+from ama_cryptography.pqc_backends import PQCStatus, get_pqc_backend_info, get_pqc_status
 
 
 def main() -> None:
@@ -32,7 +32,7 @@ def main() -> None:
             f"PQC backend is '{backend}'. Expected 'native'."
         )
 
-    crypto = AvaGuardianCrypto(algorithm=AlgorithmType.HYBRID_SIG)
+    crypto = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
     try:
         keypair = crypto.generate_keypair()
         signature = crypto.sign(b"sanity-check", keypair.secret_key)

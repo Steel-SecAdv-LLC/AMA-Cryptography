@@ -1,4 +1,4 @@
-# CODEOWNERS for Ava Guardian
+# CODEOWNERS for AMA Cryptography
 # https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 #
 # These owners will be requested for review when someone opens a pull request
@@ -12,7 +12,7 @@
 
 # Core cryptographic implementation - requires security review
 /dna_guardian_secure.py @Steel-SecAdv-LLC
-/ava_guardian/ @Steel-SecAdv-LLC
+/ama_cryptography/ @Steel-SecAdv-LLC
 /src/ @Steel-SecAdv-LLC
 /include/ @Steel-SecAdv-LLC
 
@@ -25,7 +25,7 @@
 # Cryptographic documentation
 /CRYPTOGRAPHY.md @Steel-SecAdv-LLC
 /ARCHITECTURE.md @Steel-SecAdv-LLC
-/AVA_GUARDIAN_ETHICAL_PILLARS.md @Steel-SecAdv-LLC
+/AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md @Steel-SecAdv-LLC
 
 # Test suite - ensures cryptographic correctness
 /tests/ @Steel-SecAdv-LLC

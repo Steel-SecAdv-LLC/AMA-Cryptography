@@ -1,4 +1,4 @@
-# Ava Guardian ♱ (AG♱): Implementation Guide
+# AMA Cryptography ♱ (AG♱): Implementation Guide
 ## Practical Guide to Deploying Cryptographic Protection
 
 **Copyright (C) 2025 Steel Security Advisors LLC**  
@@ -61,7 +61,7 @@ python3 code_guardian_secure.py
 Expected output:
 ```
 ==================================================================
-Ava Guardian ♱ (AG♱): SHA3-256 Security Hash
+AMA Cryptography ♱ (AG♱): SHA3-256 Security Hash
 ==================================================================
 
 [1/5] Generating key management system...
@@ -123,7 +123,7 @@ All PQC algorithms (ML-DSA-65, Kyber-1024, SPHINCS+-256f) are implemented native
 #### Verify Installation
 
 ```python
-from ava_guardian.pqc_backends import get_pqc_status
+from ama_cryptography.pqc_backends import get_pqc_status
 print("PQC status:")
 print(get_pqc_status())
 # Output should report ML-DSA-65, Kyber-1024, and SPHINCS+-256f as available
@@ -1151,13 +1151,13 @@ pip install -r requirements.txt
 
 For migration assistance:
 - Email: steel.sa.llc@gmail.com
-- GitHub Issues: https://github.com/Steel-SecAdv-LLC/Ava-Guardian/issues
+- GitHub Issues: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/issues
 
 ---
 
 ## Ongoing Development
 
-Ava Guardian ♱ is under continuous development with a focus on maintaining the highest security standards while expanding capabilities:
+AMA Cryptography ♱ is under continuous development with a focus on maintaining the highest security standards while expanding capabilities:
 
 - **Security Updates:** Continuous security updates and performance optimizations based on emerging cryptographic research and threat landscape changes
 - **CRISPR-Inspired Technologies:** Integration of CRISPR-inspired cryptographic technologies from related repositories, extending the biological metaphor into novel protection mechanisms
