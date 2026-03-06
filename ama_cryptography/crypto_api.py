@@ -232,7 +232,7 @@ class MLDSAProvider(CryptoProvider):
     Standard: NIST FIPS 204 (ML-DSA)
     """
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY):
+    def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY) -> None:
         self.backend = backend
         self.algorithm = AlgorithmType.ML_DSA_65
         self._available = DILITHIUM_AVAILABLE
@@ -329,7 +329,7 @@ class Ed25519Provider(CryptoProvider):
     Standard: RFC 8032
     """
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON):
+    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON) -> None:
         self.backend = backend
         self.algorithm = AlgorithmType.ED25519
 
@@ -448,7 +448,7 @@ class KyberProvider(KEMProvider):
         KyberUnavailableError: If Kyber backend is not available
     """
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON):
+    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON) -> None:
         self.backend = backend
         self.algorithm = AlgorithmType.KYBER_1024
 
@@ -548,7 +548,7 @@ class SphincsProvider(CryptoProvider):
         SphincsUnavailableError: If SPHINCS+ backend is not available
     """
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON):
+    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON) -> None:
         self.backend = backend
         self.algorithm = AlgorithmType.SPHINCS_256F
 
@@ -651,7 +651,7 @@ class HybridSignatureProvider(CryptoProvider):
     DILITHIUM_PK_SIZE = 1952
     DILITHIUM_SIG_SIZE = 3309  # ML-DSA-65 per FIPS 204
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.classical_provider = Ed25519Provider()
         self.pqc_provider = MLDSAProvider()
         self.algorithm = AlgorithmType.HYBRID_SIG
@@ -799,7 +799,7 @@ class AmaCryptography:
         self,
         algorithm: AlgorithmType = AlgorithmType.HYBRID_SIG,
         backend: CryptoBackend = CryptoBackend.C_LIBRARY,
-    ):
+    ) -> None:
         """
         Initialize cryptographic API
 
@@ -811,7 +811,7 @@ class AmaCryptography:
         self.backend = backend
         self.provider = self._get_provider()
 
-    def _get_provider(self):
+    def _get_provider(self) -> Union[CryptoProvider, KEMProvider]:
         """Get appropriate provider for selected algorithm"""
         if self.algorithm == AlgorithmType.ML_DSA_65:
             return MLDSAProvider(self.backend)

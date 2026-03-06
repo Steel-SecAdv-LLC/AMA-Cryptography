@@ -178,7 +178,7 @@ jobs:
 
       - name: Type check (mypy)
         run: mypy ama_cryptography/ --ignore-missing-imports
-        continue-on-error: true
+        continue-on-error: false
 
   # Security Audit
   security:

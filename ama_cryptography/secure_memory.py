@@ -70,7 +70,7 @@ Author/Inventor: Andrew E. A.
 
 import warnings
 from contextlib import contextmanager
-from typing import Optional, Union
+from typing import Any, Generator, Optional, Union
 
 # Try to import pynacl for libsodium bindings
 _HAS_NACL = False
@@ -406,7 +406,7 @@ class SecureBuffer:
 
         return self._data
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, exc_type: Optional[type], exc_val: Optional[BaseException], exc_tb: Optional[Any]) -> None:
         """Exit context, zero and unlock buffer."""
         if self._data is not None:
             # Always zero the buffer
@@ -425,7 +425,7 @@ class SecureBuffer:
 
 
 @contextmanager
-def secure_buffer(size: int, lock: bool = True):
+def secure_buffer(size: int, lock: bool = True) -> Generator[bytearray, None, None]:
     """
     Functional context manager for secure buffers.
 

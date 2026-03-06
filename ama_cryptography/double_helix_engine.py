@@ -121,7 +121,7 @@ class AmaEquationEngine:
         state_dim: Optional[int] = None,
         config: Optional[Dict] = None,
         random_seed: Optional[int] = None,
-    ):
+    ) -> None:
         """
         Initialize Ava Equation Engine.
 
@@ -191,25 +191,25 @@ class AmaEquationEngine:
         self.target_state = np.ones(self.state_dim) * 1.3
         self.temperature = 1.0  # For simulated annealing
 
-    def _initialize_ethical_matrix(self):
+    def _initialize_ethical_matrix(self) -> None:
         """Initialize positive-definite ethical constraint matrix."""
         self.ethical_matrix = initialize_ethical_matrix(self.state_dim)
 
-    def _initialize_vqe_params(self):
+    def _initialize_vqe_params(self) -> None:
         """Initialize Variational Quantum Eigensolver parameters."""
         # Simple parameterized quantum circuit simulation
         self.vqe_params = np.random.randn(self.state_dim) * 0.1 * PHI_CUBED
         self.vqe_hamiltonian = np.random.randn(self.state_dim, self.state_dim) * 0.01
         self.vqe_hamiltonian = (self.vqe_hamiltonian + self.vqe_hamiltonian.T) / 2  # Symmetric
 
-    def _initialize_qbm_matrix(self):
+    def _initialize_qbm_matrix(self) -> None:
         """Initialize Quantum Boltzmann Machine coupling matrix."""
         # Symmetric coupling matrix J
         J = np.random.randn(self.state_dim, self.state_dim) * 0.05 * PHI_CUBED
         self.qbm_matrix = (J + J.T) / 2
         np.fill_diagonal(self.qbm_matrix, 0)  # No self-coupling
 
-    def _initialize_attention(self):
+    def _initialize_attention(self) -> None:
         """Initialize self-attention mechanism weights."""
         # Simplified attention: Query, Key, Value projections
         scale = 0.1 * PHI_CUBED / np.sqrt(self.state_dim)

@@ -127,9 +127,9 @@ jobs:
         isort --check-only --diff ama_cryptography/ tests/ code_guardian_secure.py
 
     - name: Type checking with MyPy
-      continue-on-error: true
+      continue-on-error: false
       run: |
-        mypy code_guardian_secure.py --no-strict-optional --ignore-missing-imports
+        mypy ama_cryptography/ --ignore-missing-imports
 
   security-checks:
     name: Security Checks

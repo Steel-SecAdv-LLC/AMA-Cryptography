@@ -102,7 +102,7 @@ class HDKeyDerivation:
     # This is the order of the generator point G on the secp256k1 curve
     SECP256K1_N = int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
 
-    def __init__(self, seed: Optional[bytes] = None, seed_phrase: Optional[str] = None):
+    def __init__(self, seed: Optional[bytes] = None, seed_phrase: Optional[str] = None) -> None:
         """
         Initialize HD key derivation
 
@@ -261,7 +261,7 @@ class KeyRotationManager:
     Supports gradual migration from old to new keys.
     """
 
-    def __init__(self, rotation_period: timedelta = timedelta(days=90)):
+    def __init__(self, rotation_period: timedelta = timedelta(days=90)) -> None:
         """
         Initialize rotation manager
 
@@ -463,7 +463,7 @@ class SecureKeyStorage:
         - Backward compatibility with legacy AES-CFB encrypted keys
     """
 
-    def __init__(self, storage_path: Path, master_password: Optional[str] = None):
+    def __init__(self, storage_path: Path, master_password: Optional[str] = None) -> None:
         """
         Initialize secure storage
 
@@ -765,7 +765,7 @@ class SecureKeyStorage:
         """Context manager entry."""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, exc_type: Optional[type], exc_val: Optional[BaseException], exc_tb: Optional[Any]) -> None:
         """Context manager exit - securely clear encryption key from memory."""
         # Securely zero the encryption key
         if hasattr(self, "encryption_key") and self.encryption_key:
@@ -826,7 +826,7 @@ class HSMKeyStorage:
         token_label: str = "AmaCryptography",
         pin: Optional[str] = None,  # nosec B107
         slot_index: Optional[int] = None,
-    ):
+    ) -> None:
         """
         Initialize HSM connection.
 
