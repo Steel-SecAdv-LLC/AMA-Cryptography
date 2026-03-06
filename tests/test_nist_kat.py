@@ -50,7 +50,7 @@ AI Co-Architects:Eris | Eden | Veritas | X | Caduceus | Dev
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional
+from typing import Dict, Iterator, List
 
 import pytest
 

@@ -55,9 +55,15 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <openssl/sha.h>
-#include <openssl/hmac.h>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
+#include <openssl/opensslv.h>
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#include <openssl/core_names.h>
+#include <openssl/params.h>
+#else
+#include <openssl/hmac.h>
+#endif
 
 /* ============================================================================
  * SPHINCS+-SHA2-256f-simple PARAMETERS
@@ -196,10 +202,14 @@ static void spx_addr_compress(uint8_t *out, const spx_addr addr) {
  * ============================================================================ */
 
 /**
- * SHA-256 helper
+ * SHA-256 helper (EVP API for OpenSSL 3.0+ compatibility)
  */
 static void sha256(uint8_t *out, const uint8_t *in, size_t inlen) {
-    SHA256(in, inlen, out);
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+    EVP_DigestUpdate(ctx, in, inlen);
+    EVP_DigestFinal_ex(ctx, out, NULL);
+    EVP_MD_CTX_free(ctx);
 }
 
 /**
@@ -207,11 +217,12 @@ static void sha256(uint8_t *out, const uint8_t *in, size_t inlen) {
  */
 static void sha256_2(uint8_t *out, const uint8_t *in1, size_t in1len,
                       const uint8_t *in2, size_t in2len) {
-    SHA256_CTX ctx;
-    SHA256_Init(&ctx);
-    SHA256_Update(&ctx, in1, in1len);
-    SHA256_Update(&ctx, in2, in2len);
-    SHA256_Final(out, &ctx);
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+    EVP_DigestUpdate(ctx, in1, in1len);
+    EVP_DigestUpdate(ctx, in2, in2len);
+    EVP_DigestFinal_ex(ctx, out, NULL);
+    EVP_MD_CTX_free(ctx);
 }
 
 /**
@@ -221,7 +232,6 @@ static void mgf1_sha256(uint8_t *out, size_t outlen,
                           const uint8_t *seed, size_t seedlen) {
     uint8_t buf[32];
     uint8_t counter[4] = {0, 0, 0, 0};
-    SHA256_CTX ctx;
     size_t i, blocks;
 
     blocks = (outlen + 31) / 32;
@@ -231,10 +241,12 @@ static void mgf1_sha256(uint8_t *out, size_t outlen,
         counter[2] = (uint8_t)(i >> 8);
         counter[3] = (uint8_t)i;
 
-        SHA256_Init(&ctx);
-        SHA256_Update(&ctx, seed, seedlen);
-        SHA256_Update(&ctx, counter, 4);
-        SHA256_Final(buf, &ctx);
+        EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+        EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+        EVP_DigestUpdate(ctx, seed, seedlen);
+        EVP_DigestUpdate(ctx, counter, 4);
+        EVP_DigestFinal_ex(ctx, buf, NULL);
+        EVP_MD_CTX_free(ctx);
 
         size_t tocopy = (outlen - i * 32 < 32) ? outlen - i * 32 : 32;
         memcpy(out + i * 32, buf, tocopy);
@@ -251,17 +263,18 @@ static void spx_thash(uint8_t *out, const uint8_t *in, unsigned int inblocks,
                        const uint8_t *pub_seed, const spx_addr addr) {
     uint8_t addr_c[22];
     static const uint8_t padding[64 - SPX_N] = {0};  /* toByte(0, 64-n) */
-    SHA256_CTX ctx;
     uint8_t hash[32];
 
     spx_addr_compress(addr_c, addr);
 
-    SHA256_Init(&ctx);
-    SHA256_Update(&ctx, pub_seed, SPX_N);          /* PK.seed (32 bytes) */
-    SHA256_Update(&ctx, padding, sizeof(padding));  /* toByte(0, 32) */
-    SHA256_Update(&ctx, addr_c, sizeof(addr_c));    /* ADRSc (22 bytes) */
-    SHA256_Update(&ctx, in, inblocks * SPX_N);      /* M */
-    SHA256_Final(hash, &ctx);
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+    EVP_DigestUpdate(ctx, pub_seed, SPX_N);          /* PK.seed (32 bytes) */
+    EVP_DigestUpdate(ctx, padding, sizeof(padding));  /* toByte(0, 32) */
+    EVP_DigestUpdate(ctx, addr_c, sizeof(addr_c));    /* ADRSc (22 bytes) */
+    EVP_DigestUpdate(ctx, in, inblocks * SPX_N);      /* M */
+    EVP_DigestFinal_ex(ctx, hash, NULL);
+    EVP_MD_CTX_free(ctx);
 
     memcpy(out, hash, SPX_N);
 }
@@ -275,17 +288,18 @@ static void spx_prf(uint8_t *out, const uint8_t *pub_seed,
                      const uint8_t *sk_seed, const spx_addr addr) {
     uint8_t addr_c[22];
     static const uint8_t padding[64 - SPX_N] = {0};  /* toByte(0, 64-n) */
-    SHA256_CTX ctx;
     uint8_t hash[32];
 
     spx_addr_compress(addr_c, addr);
 
-    SHA256_Init(&ctx);
-    SHA256_Update(&ctx, pub_seed, SPX_N);          /* PK.seed (32 bytes) */
-    SHA256_Update(&ctx, padding, sizeof(padding));  /* toByte(0, 32) */
-    SHA256_Update(&ctx, addr_c, sizeof(addr_c));    /* ADRSc (22 bytes) */
-    SHA256_Update(&ctx, sk_seed, SPX_N);            /* SK.seed (32 bytes) */
-    SHA256_Final(hash, &ctx);
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+    EVP_DigestUpdate(ctx, pub_seed, SPX_N);          /* PK.seed (32 bytes) */
+    EVP_DigestUpdate(ctx, padding, sizeof(padding));  /* toByte(0, 32) */
+    EVP_DigestUpdate(ctx, addr_c, sizeof(addr_c));    /* ADRSc (22 bytes) */
+    EVP_DigestUpdate(ctx, sk_seed, SPX_N);            /* SK.seed (32 bytes) */
+    EVP_DigestFinal_ex(ctx, hash, NULL);
+    EVP_MD_CTX_free(ctx);
 
     memcpy(out, hash, SPX_N);
 }
@@ -296,15 +310,30 @@ static void spx_prf(uint8_t *out, const uint8_t *pub_seed,
 static void spx_prf_msg(uint8_t *out, const uint8_t *sk_prf,
                           const uint8_t *opt_rand,
                           const uint8_t *msg, size_t msglen) {
+    /* HMAC-SHA256(sk_prf, opt_rand || msg) via EVP_MAC (OpenSSL 3.0+) */
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    EVP_MAC *mac = EVP_MAC_fetch(NULL, "HMAC", NULL);
+    EVP_MAC_CTX *ctx = EVP_MAC_CTX_new(mac);
+    OSSL_PARAM params[] = {
+        OSSL_PARAM_construct_utf8_string("digest", "SHA256", 0),
+        OSSL_PARAM_construct_end()
+    };
+    EVP_MAC_init(ctx, sk_prf, SPX_N, params);
+    EVP_MAC_update(ctx, opt_rand, SPX_N);
+    EVP_MAC_update(ctx, msg, msglen);
+    size_t mac_outlen = 0;
+    EVP_MAC_final(ctx, out, &mac_outlen, 32);
+    EVP_MAC_CTX_free(ctx);
+    EVP_MAC_free(mac);
+#else
     unsigned int outlen = 0;
-
-    /* HMAC-SHA256(sk_prf, opt_rand || msg) */
     HMAC_CTX *ctx = HMAC_CTX_new();
     HMAC_Init_ex(ctx, sk_prf, SPX_N, EVP_sha256(), NULL);
     HMAC_Update(ctx, opt_rand, SPX_N);
     HMAC_Update(ctx, msg, msglen);
     HMAC_Final(ctx, out, &outlen);
     HMAC_CTX_free(ctx);
+#endif
 }
 
 /**
@@ -319,17 +348,18 @@ static void spx_hash_message(uint8_t *digest, uint64_t *tree, uint32_t *leaf_idx
     /* H_msg per FIPS 205 Sec 11.1 SHA-256:
      * MGF1-SHA-256(R || PK.seed || toByte(0, 64-n) || SHA-256(R || PK.seed || PK.root || M), m) */
     {
-        SHA256_CTX ctx;
         uint8_t hash[32];
         /* MGF1 seed: R(32) + PK.seed(32) + padding(32) + hash(32) = 128 bytes */
         uint8_t mgf_seed[SPX_N + SPX_N + (64 - SPX_N) + 32];
 
         /* Inner hash: SHA-256(R || PK.seed || PK.root || M) */
-        SHA256_Init(&ctx);
-        SHA256_Update(&ctx, R, SPX_N);
-        SHA256_Update(&ctx, pk, 2 * SPX_N);  /* PK.seed || PK.root */
-        SHA256_Update(&ctx, msg, msglen);
-        SHA256_Final(hash, &ctx);
+        EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+        EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+        EVP_DigestUpdate(ctx, R, SPX_N);
+        EVP_DigestUpdate(ctx, pk, 2 * SPX_N);  /* PK.seed || PK.root */
+        EVP_DigestUpdate(ctx, msg, msglen);
+        EVP_DigestFinal_ex(ctx, hash, NULL);
+        EVP_MD_CTX_free(ctx);
 
         /* Build MGF1 seed: R || PK.seed || toByte(0, 64-n) || hash */
         memcpy(mgf_seed, R, SPX_N);
@@ -925,15 +955,9 @@ static ava_error_t spx_randombytes(uint8_t *buf, size_t len) {
         return ava_sphincs_randombytes_hook(buf, len);
     }
 #endif
-    FILE *f = fopen("/dev/urandom", "rb");
-    if (!f) {
+    if (RAND_bytes(buf, (int)len) != 1) {
         return AVA_ERROR_CRYPTO;
     }
-    if (fread(buf, 1, len, f) != len) {
-        fclose(f);
-        return AVA_ERROR_CRYPTO;
-    }
-    fclose(f);
     return AVA_SUCCESS;
 }
 

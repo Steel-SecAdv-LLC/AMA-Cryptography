@@ -272,7 +272,6 @@ static int rsp_read_entry(FILE *f, rsp_entry *entry) {
     if (!line) return 0;
 
     entry->num_fields = 0;
-    int found_count = 0;
 
     while (fgets(line, RSP_MAX_LINE, f)) {
         /* Strip trailing whitespace */
@@ -308,10 +307,6 @@ static int rsp_read_entry(FILE *f, rsp_entry *entry) {
         /* Extract value (trim spaces) */
         char *val = eq + 1;
         while (*val == ' ' || *val == '\t') val++;
-
-        if (strcmp(name, "count") == 0) {
-            found_count = 1;
-        }
 
         /* Store the field */
         if (entry->num_fields < RSP_MAX_FIELDS) {

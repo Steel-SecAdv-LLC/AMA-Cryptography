@@ -71,7 +71,6 @@ endif()
 set(AVA_SOURCES
     src/c/ava_core.c
     src/c/ava_consttime.c
-    src/c/ava_kyber.c
     src/c/ava_sha3.c
     src/c/ava_hkdf.c
     src/c/ava_ed25519.c
@@ -80,6 +79,7 @@ set(AVA_SOURCES
 # Add native PQC source files when enabled
 if(AVA_USE_NATIVE_PQC)
     list(APPEND AVA_SOURCES
+        src/c/ava_kyber.c
         src/c/ava_dilithium.c
         src/c/ava_sphincs.c
     )
@@ -132,13 +132,20 @@ endif()
 # Tests
 if(AVA_BUILD_TESTS)
     enable_testing()
-    # Enable test hooks (randombytes hooks) in the library for KAT testing
-    if(AVA_BUILD_SHARED)
-        target_compile_definitions(ava_guardian_shared PRIVATE AVA_TESTING_MODE)
+
+    # Build a separate test-only static library with AVA_TESTING_MODE enabled.
+    # This exposes randombytes_hook function pointers for deterministic KAT testing
+    # WITHOUT contaminating the installable production libraries.
+    add_library(ava_guardian_test STATIC ${AVA_SOURCES})
+    set_target_properties(ava_guardian_test PROPERTIES
+        OUTPUT_NAME "ava_guardian_test"
+    )
+    target_link_libraries(ava_guardian_test PRIVATE OpenSSL::Crypto)
+    target_compile_definitions(ava_guardian_test PRIVATE AVA_TESTING_MODE)
+    if(AVA_USE_NATIVE_PQC)
+        target_compile_definitions(ava_guardian_test PRIVATE AVA_USE_NATIVE_PQC)
     endif()
-    if(AVA_BUILD_STATIC)
-        target_compile_definitions(ava_guardian_static PRIVATE AVA_TESTING_MODE)
-    endif()
+
     add_subdirectory(tests/c)
 endif()
 

@@ -43,10 +43,10 @@
  */
 
 #include "../include/ava_guardian.h"
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <openssl/rand.h>
 
 /* Forward declarations from ava_sha3.c */
 extern ava_error_t ava_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
@@ -981,15 +981,9 @@ static ava_error_t dil_randombytes(uint8_t *buf, size_t len) {
         return ava_dilithium_randombytes_hook(buf, len);
     }
 #endif
-    FILE *f = fopen("/dev/urandom", "rb");
-    if (!f) {
+    if (RAND_bytes(buf, (int)len) != 1) {
         return AVA_ERROR_CRYPTO;
     }
-    if (fread(buf, 1, len, f) != len) {
-        fclose(f);
-        return AVA_ERROR_CRYPTO;
-    }
-    fclose(f);
     return AVA_SUCCESS;
 }
 

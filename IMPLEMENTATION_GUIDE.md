@@ -126,7 +126,7 @@ All PQC algorithms (ML-DSA-65, Kyber-1024, SPHINCS+-256f) are implemented native
 from ava_guardian.pqc_backends import get_pqc_status
 print("PQC status:")
 print(get_pqc_status())
-# Should include 'Dilithium2', 'Dilithium3', 'Dilithium5'
+# Output should report ML-DSA-65, Kyber-1024, and SPHINCS+-256f as available
 ```
 
 ### Step 2: Set Up Key Management
@@ -1273,7 +1273,7 @@ cmake .. \
 ### External Resources
 
 - **NIST PQC:** https://csrc.nist.gov/projects/post-quantum-cryptography
-- **NIST PQC:** https://csrc.nist.gov/projects/post-quantum-cryptography
+- **Open Quantum Safe:** https://openquantumsafe.org/
 - **RFC 3161:** https://datatracker.ietf.org/doc/html/rfc3161
 - **Ed25519:** https://ed25519.cr.yp.to/
 

@@ -42,7 +42,7 @@ import platform
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar, cast
+from typing import Any, Callable, Optional, TypeVar
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -244,6 +244,11 @@ SPHINCS_BACKEND: Optional[str] = _SPHINCS_BACKEND
 # SECURITY WARNINGS AND CONSTANT-TIME ENFORCEMENT
 # =============================================================================
 
+# Installation instruction (must be defined before constant-time enforcement)
+_INSTALL_HINT = (
+    "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
+)
+
 # Enforce constant-time requirement if AVA_REQUIRE_CONSTANT_TIME is set
 if AVA_REQUIRE_CONSTANT_TIME:
     if not _DILITHIUM_AVAILABLE:
@@ -272,11 +277,6 @@ SPHINCS_SIGNATURE_BYTES = 49856
 # ============================================================================
 # ERROR MESSAGE CONSTANTS (v1.1 Refactoring)
 # ============================================================================
-
-# Installation instruction (centralized for consistency)
-_INSTALL_HINT = (
-    "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
-)
 
 # Unknown backend state error messages (should never occur in normal operation)
 _DILITHIUM_UNKNOWN_STATE = "PQC_UNAVAILABLE: Unknown backend state"

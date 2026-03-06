@@ -344,13 +344,12 @@ class TestErrorRecoveryAndGracefulDegradation:
         """Test graceful handling when PQC is unavailable."""
         from unittest.mock import patch
 
-        from ava_guardian.pqc_backends import (
-            PQCUnavailableError,
-        )
-
         from ava_guardian.crypto_api import (
             AlgorithmType,
             AvaGuardianCrypto,
+        )
+        from ava_guardian.pqc_backends import (
+            PQCUnavailableError,
         )
 
         # Mock Dilithium as unavailable to test error path

@@ -35,7 +35,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include <stdio.h>
+#include <openssl/rand.h>
 
 /* Forward declarations from ava_sha3.c */
 extern ava_error_t ava_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
@@ -320,15 +320,9 @@ static ava_error_t kyber_randombytes(uint8_t* buf, size_t len) {
         return ava_kyber_randombytes_hook(buf, len);
     }
 #endif
-    FILE* f = fopen("/dev/urandom", "rb");
-    if (!f) {
+    if (RAND_bytes(buf, (int)len) != 1) {
         return AVA_ERROR_CRYPTO;
     }
-    if (fread(buf, 1, len, f) != len) {
-        fclose(f);
-        return AVA_ERROR_CRYPTO;
-    }
-    fclose(f);
     return AVA_SUCCESS;
 }
 
@@ -1545,7 +1539,7 @@ static int16_t montgomery_reduce(int32_t a) {
 static int16_t barrett_reduce(int16_t a) {
     int16_t t;
     const int16_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
-    t = ((int32_t)v * a + (1 << 25)) >> 26;
+    t = ((int32_t)v * a) >> 26;
     t *= KYBER_Q;
     return a - t;
 }
