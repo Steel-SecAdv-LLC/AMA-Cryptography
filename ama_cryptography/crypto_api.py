@@ -325,6 +325,10 @@ class Ed25519Provider(CryptoProvider):
     Provides classical (non-quantum-resistant) signatures.
     Use MLDSAProvider for post-quantum security.
 
+    Backend priority:
+    1. Native C implementation (zero external deps)
+    2. PyCA cryptography library (fallback)
+
     Security: 128-bit classical security (NOT quantum-resistant)
     Standard: RFC 8032
     """
@@ -333,10 +337,33 @@ class Ed25519Provider(CryptoProvider):
         self.backend = backend
         self.algorithm = AlgorithmType.ED25519
 
+        from ama_cryptography.pqc_backends import _native_lib
+        self._use_native = _native_lib is not None
+
     def generate_keypair(self) -> KeyPair:
-        """Generate Ed25519 keypair"""
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import ed25519
+        """Generate Ed25519 keypair (native C preferred, PyCA fallback)."""
+        if self._use_native:
+            from ama_cryptography.pqc_backends import native_ed25519_keypair
+
+            pk_bytes, sk_bytes = native_ed25519_keypair()
+            # Return 32-byte seed as secret_key for API consistency
+            # The full 64-byte key is seed || public_key
+            return KeyPair(
+                public_key=pk_bytes,
+                secret_key=sk_bytes[:32],
+                algorithm=self.algorithm,
+                metadata={"backend": "native_c", "key_size": 32},
+            )
+
+        # PyCA fallback
+        try:
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric import ed25519
+        except ImportError:
+            raise RuntimeError(
+                "Ed25519 requires either the native C library or "
+                "'pip install cryptography'. Neither is available."
+            )
 
         private_key = ed25519.Ed25519PrivateKey.generate()
         public_key = private_key.public_key()
@@ -362,20 +389,53 @@ class Ed25519Provider(CryptoProvider):
         """
         Sign message with Ed25519.
 
-        Performance: Now optimized to accept both bytes and key objects.
-        For high-throughput scenarios, pass Ed25519PrivateKey object.
+        Accepts both 32-byte seeds and Ed25519PrivateKey objects.
+        When using native backend with a 32-byte seed, the seed is expanded
+        to a 64-byte key (seed || public_key) before signing.
 
         Args:
             message: Data to sign
-            secret_key: Either 32-byte Ed25519 private key (bytes) OR
-                       Ed25519PrivateKey object (for 2x performance)
+            secret_key: 32-byte Ed25519 seed (bytes), 64-byte native key (bytes),
+                       or Ed25519PrivateKey object
 
         Returns:
             Signature object with Ed25519 signature
         """
-        from cryptography.hazmat.primitives.asymmetric import ed25519
+        if self._use_native and isinstance(secret_key, bytes):
+            from ama_cryptography.pqc_backends import (
+                native_ed25519_keypair_from_seed,
+                native_ed25519_sign,
+            )
 
-        # Smart type handling for performance
+            # Handle 32-byte seed: expand to 64-byte native format
+            if len(secret_key) == 32:
+                _, full_sk = native_ed25519_keypair_from_seed(secret_key)
+            elif len(secret_key) == 64:
+                full_sk = secret_key
+            else:
+                raise ValueError(
+                    f"Ed25519 secret key must be 32 or 64 bytes, got {len(secret_key)}"
+                )
+
+            sig_bytes = native_ed25519_sign(message, full_sk)
+            message_hash = hashlib.sha3_256(message).digest()
+
+            return Signature(
+                signature=sig_bytes,
+                algorithm=self.algorithm,
+                message_hash=message_hash,
+                metadata={"signature_size": len(sig_bytes), "backend": "native_c"},
+            )
+
+        # PyCA fallback (or key object passed directly)
+        try:
+            from cryptography.hazmat.primitives.asymmetric import ed25519
+        except ImportError:
+            raise RuntimeError(
+                "Ed25519 requires either the native C library or "
+                "'pip install cryptography'. Neither is available."
+            )
+
         if isinstance(secret_key, bytes):
             private_key = ed25519.Ed25519PrivateKey.from_private_bytes(secret_key)
         else:
@@ -388,7 +448,7 @@ class Ed25519Provider(CryptoProvider):
             signature=sig_bytes,
             algorithm=self.algorithm,
             message_hash=message_hash,
-            metadata={"signature_size": len(sig_bytes)},
+            metadata={"signature_size": len(sig_bytes), "backend": "cryptography"},
         )
 
     def verify(
@@ -397,8 +457,7 @@ class Ed25519Provider(CryptoProvider):
         """
         Verify Ed25519 signature.
 
-        Performance: Now optimized to accept both bytes and key objects.
-        For high-throughput scenarios, pass Ed25519PublicKey object.
+        Accepts both raw bytes and Ed25519PublicKey objects.
 
         Args:
             message: Original data that was signed
@@ -409,11 +468,22 @@ class Ed25519Provider(CryptoProvider):
         Returns:
             True if signature is valid, False otherwise
         """
-        from cryptography.exceptions import InvalidSignature
-        from cryptography.hazmat.primitives.asymmetric import ed25519
+        if self._use_native and isinstance(public_key, bytes):
+            from ama_cryptography.pqc_backends import native_ed25519_verify
+
+            return native_ed25519_verify(signature, message, public_key)
+
+        # PyCA fallback (or key object passed directly)
+        try:
+            from cryptography.exceptions import InvalidSignature
+            from cryptography.hazmat.primitives.asymmetric import ed25519
+        except ImportError:
+            raise RuntimeError(
+                "Ed25519 requires either the native C library or "
+                "'pip install cryptography'. Neither is available."
+            )
 
         try:
-            # Smart type handling for performance
             if isinstance(public_key, bytes):
                 pub_key = ed25519.Ed25519PublicKey.from_public_bytes(public_key)
             else:
@@ -985,7 +1055,7 @@ def get_pqc_capabilities() -> Dict[str, Any]:
         "algorithms": {
             "ML_DSA_65": info["dilithium_available"],
             "HYBRID_SIG": info["dilithium_available"],
-            "ED25519": True,  # Always available via cryptography
+            "ED25519": True,  # Available via native C or PyCA cryptography
             "KYBER_1024": info["kyber_available"],
             "SPHINCS_256F": info["sphincs_available"],
         },

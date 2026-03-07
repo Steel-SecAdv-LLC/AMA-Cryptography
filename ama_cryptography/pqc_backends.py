@@ -240,6 +240,26 @@ def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_sphincs_verify.restype = ctypes.c_int
 
+        # Ed25519 (RFC 8032)
+        lib.ama_ed25519_keypair.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+        lib.ama_ed25519_keypair.restype = ctypes.c_int
+
+        lib.ama_ed25519_sign.argtypes = [
+            ctypes.c_char_p,   # signature[64]
+            ctypes.c_char_p,   # message
+            ctypes.c_size_t,   # message_len
+            ctypes.c_char_p,   # secret_key[64]
+        ]
+        lib.ama_ed25519_sign.restype = ctypes.c_int
+
+        lib.ama_ed25519_verify.argtypes = [
+            ctypes.c_char_p,   # signature[64]
+            ctypes.c_char_p,   # message
+            ctypes.c_size_t,   # message_len
+            ctypes.c_char_p,   # public_key[32]
+        ]
+        lib.ama_ed25519_verify.restype = ctypes.c_int
+
         return True
     except AttributeError:
         # Library found but missing expected symbols — not built with AMA_USE_NATIVE_PQC
@@ -297,6 +317,11 @@ KYBER_SHARED_SECRET_BYTES = 32
 SPHINCS_PUBLIC_KEY_BYTES = 64
 SPHINCS_SECRET_KEY_BYTES = 128
 SPHINCS_SIGNATURE_BYTES = 49856
+
+# Ed25519 (RFC 8032)
+ED25519_PUBLIC_KEY_BYTES = 32
+ED25519_SECRET_KEY_BYTES = 64
+ED25519_SIGNATURE_BYTES = 64
 
 # ============================================================================
 # ERROR MESSAGE CONSTANTS
@@ -850,6 +875,142 @@ def sphincs_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
         return bool(rc == 0)
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
+
+
+# ============================================================================
+# ED25519 NATIVE C BACKEND (RFC 8032)
+# ============================================================================
+
+
+def native_ed25519_keypair() -> tuple:
+    """
+    Generate Ed25519 keypair using native C backend.
+
+    Returns:
+        (public_key, secret_key) — 32-byte pk, 64-byte sk (seed || pk)
+
+    Raises:
+        RuntimeError: If native library is not available or keypair generation fails
+    """
+    import secrets as _secrets
+
+    if _native_lib is None:
+        raise RuntimeError(
+            "Ed25519 native backend not available. " + _INSTALL_HINT
+        )
+
+    pk_buf = ctypes.create_string_buffer(ED25519_PUBLIC_KEY_BYTES)
+    sk_buf = ctypes.create_string_buffer(ED25519_SECRET_KEY_BYTES)
+
+    # Seed the first 32 bytes — the C function expects caller-provided entropy
+    seed = _secrets.token_bytes(32)
+    ctypes.memmove(sk_buf, seed, 32)
+
+    rc = _native_lib.ama_ed25519_keypair(pk_buf, sk_buf)
+    if rc != 0:
+        raise RuntimeError(f"Ed25519 keypair generation failed (rc={rc})")
+
+    return bytes(pk_buf), bytes(sk_buf)
+
+
+def native_ed25519_keypair_from_seed(seed: bytes) -> tuple:
+    """
+    Generate Ed25519 keypair from a specific 32-byte seed.
+
+    This is the deterministic variant used for interop testing and
+    key format conversion (32-byte seed -> 64-byte native key).
+
+    Args:
+        seed: Exactly 32 bytes of seed material
+
+    Returns:
+        (public_key, secret_key) — 32-byte pk, 64-byte sk (seed || pk)
+
+    Raises:
+        ValueError: If seed is not exactly 32 bytes
+        RuntimeError: If native library is not available
+    """
+    if len(seed) != 32:
+        raise ValueError(f"Ed25519 seed must be 32 bytes, got {len(seed)}")
+
+    if _native_lib is None:
+        raise RuntimeError(
+            "Ed25519 native backend not available. " + _INSTALL_HINT
+        )
+
+    pk_buf = ctypes.create_string_buffer(ED25519_PUBLIC_KEY_BYTES)
+    sk_buf = ctypes.create_string_buffer(ED25519_SECRET_KEY_BYTES)
+
+    # Load seed into first 32 bytes of sk_buf
+    ctypes.memmove(sk_buf, seed, 32)
+
+    rc = _native_lib.ama_ed25519_keypair(pk_buf, sk_buf)
+    if rc != 0:
+        raise RuntimeError(f"Ed25519 keypair generation failed (rc={rc})")
+
+    return bytes(pk_buf), bytes(sk_buf)
+
+
+def native_ed25519_sign(message: bytes, secret_key: bytes) -> bytes:
+    """
+    Sign message with Ed25519 using native C backend.
+
+    Args:
+        message: Data to sign (arbitrary length)
+        secret_key: 64-byte secret key (seed || public_key)
+
+    Returns:
+        64-byte Ed25519 signature
+
+    Raises:
+        RuntimeError: If native library is not available or signing fails
+        ValueError: If secret_key has incorrect length
+    """
+    if _native_lib is None:
+        raise RuntimeError(
+            "Ed25519 native backend not available. " + _INSTALL_HINT
+        )
+
+    if len(secret_key) != ED25519_SECRET_KEY_BYTES:
+        raise ValueError(
+            f"Ed25519 secret key must be {ED25519_SECRET_KEY_BYTES} bytes, "
+            f"got {len(secret_key)}"
+        )
+
+    sig_buf = ctypes.create_string_buffer(ED25519_SIGNATURE_BYTES)
+    rc = _native_lib.ama_ed25519_sign(
+        sig_buf, message, ctypes.c_size_t(len(message)), secret_key
+    )
+    if rc != 0:
+        raise RuntimeError(f"Ed25519 signing failed (rc={rc})")
+
+    return bytes(sig_buf)
+
+
+def native_ed25519_verify(signature: bytes, message: bytes, public_key: bytes) -> bool:
+    """
+    Verify Ed25519 signature using native C backend.
+
+    Args:
+        signature: 64-byte Ed25519 signature
+        message: Original data that was signed
+        public_key: 32-byte Ed25519 public key
+
+    Returns:
+        True if signature is valid, False otherwise
+
+    Raises:
+        RuntimeError: If native library is not available
+    """
+    if _native_lib is None:
+        raise RuntimeError(
+            "Ed25519 native backend not available. " + _INSTALL_HINT
+        )
+
+    rc = _native_lib.ama_ed25519_verify(
+        signature, message, ctypes.c_size_t(len(message)), public_key
+    )
+    return rc == 0
 
 
 # ============================================================================
