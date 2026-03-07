@@ -31,10 +31,12 @@ AI Co-Architects:
 
 import sys
 import unittest
+from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, "/home/user/AMA-Cryptography")
+# Derive repo root relative to this file for portability
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ama_cryptography.double_helix_engine import AmaEquationEngine  # noqa: E402
 from ama_cryptography.equations import PHI_CUBED, calculate_sigma_quadratic  # noqa: E402

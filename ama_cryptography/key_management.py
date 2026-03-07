@@ -632,7 +632,9 @@ class SecureKeyStorage:
         storage._derive_key_from_password(master_password)
         return storage
 
-    def store_key(self, key_id: str, key_data: bytes, metadata: Optional[Dict[str, Any]] = None) -> None:
+    def store_key(
+        self, key_id: str, key_data: bytes, metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
         """
         Store key with AES-256-GCM authenticated encryption.
 
@@ -765,7 +767,12 @@ class SecureKeyStorage:
         """Context manager entry."""
         return self
 
-    def __exit__(self, exc_type: Optional[Type[BaseException]], exc_val: Optional[BaseException], exc_tb: Optional[TracebackType]) -> None:
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> None:
         """Context manager exit - securely clear encryption key from memory."""
         # Securely zero the encryption key
         if hasattr(self, "encryption_key") and self.encryption_key:

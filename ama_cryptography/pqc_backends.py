@@ -299,7 +299,7 @@ SPHINCS_SECRET_KEY_BYTES = 128
 SPHINCS_SIGNATURE_BYTES = 49856
 
 # ============================================================================
-# ERROR MESSAGE CONSTANTS (v1.1 Refactoring)
+# ERROR MESSAGE CONSTANTS
 # ============================================================================
 
 # Unknown backend state error messages (should never occur in normal operation)
@@ -522,7 +522,7 @@ def dilithium_sign(message: bytes, private_key: bytes) -> bytes:
             raise QuantumSignatureUnavailableError(
                 f"Native dilithium_sign failed with error code {rc}"
             )
-        return bytes(sig_buf[: sig_len.value])
+        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -553,7 +553,7 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
             ctypes.c_size_t(len(signature)),
             public_key,
         )
-        return rc == 0
+        return bool(rc == 0)
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -652,7 +652,7 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
         if rc != 0:
             raise KyberUnavailableError(f"Native kyber_encapsulate failed with error code {rc}")
         return KyberEncapsulation(
-            ciphertext=bytes(ct_buf[: ct_len.value]),
+            ciphertext=bytes(ct_buf[: ct_len.value]),  # type: ignore[arg-type]
             shared_secret=bytes(ss_buf),
         )
 
@@ -801,7 +801,7 @@ def sphincs_sign(message: bytes, secret_key: bytes) -> bytes:
         )
         if rc != 0:
             raise SphincsUnavailableError(f"Native sphincs_sign failed with error code {rc}")
-        return bytes(sig_buf[: sig_len.value])
+        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
 
@@ -847,7 +847,7 @@ def sphincs_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
             ctypes.c_size_t(len(signature)),
             public_key,
         )
-        return rc == 0
+        return bool(rc == 0)
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
 

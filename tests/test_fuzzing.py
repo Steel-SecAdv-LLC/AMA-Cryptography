@@ -227,10 +227,10 @@ class TestDomainSeparationFuzzing:
         st.binary(min_size=32, max_size=32),
     )
     def test_signature_message_length(self, content_hash, ethical_hash):
-        """Signature message has expected length (78 bytes for v2)."""
+        """Signature message has expected length (79 bytes for v2)."""
         msg = build_signature_message(content_hash, ethical_hash, SIGNATURE_FORMAT_V2)
-        # 9 (prefix) + 5 (version) + 32 (content_hash) + 32 (ethical_hash) = 78
-        assert len(msg) == 78, f"Expected 78 bytes, got {len(msg)}"
+        # 10 (prefix) + 5 (version) + 32 (content_hash) + 32 (ethical_hash) = 79
+        assert len(msg) == 79, f"Expected 79 bytes, got {len(msg)}"
 
     @given(
         st.binary(min_size=32, max_size=32),

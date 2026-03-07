@@ -94,7 +94,7 @@ except ImportError:
     RFC3161_AVAILABLE = False
     TimestampUnavailableError = Exception  # type: ignore[misc,assignment]
     TimestampError = Exception  # type: ignore[misc,assignment]
-    get_timestamp = None
+    get_timestamp = None  # type: ignore[assignment]
 
 # Runtime PQC availability check
 pqc_available = DILITHIUM_AVAILABLE or KYBER_AVAILABLE or SPHINCS_AVAILABLE
@@ -828,7 +828,7 @@ class AmaCryptography:
 
     def generate_keypair(self) -> KeyPair:
         """Generate cryptographic keypair"""
-        return cast(KeyPair, self.provider.generate_keypair())
+        return self.provider.generate_keypair()
 
     def sign(self, message: bytes, secret_key: bytes) -> Signature:
         """Sign a message"""

@@ -723,11 +723,11 @@ static ama_error_t kyber_decapsulate(
 /* ============================================================================
  * DEBUG / TEST FUNCTIONS
  * ============================================================================
- * These functions are only compiled in test builds (AVA_TESTING_MODE).
+ * These functions are only compiled in test builds (AMA_TESTING_MODE).
  * They provide NTT roundtrip verification, polynomial multiplication tests,
  * and CPA encrypt/decrypt roundtrip diagnostics for development validation.
  * ============================================================================ */
-#ifdef AVA_TESTING_MODE
+#ifdef AMA_TESTING_MODE
 #include <stdio.h>
 
 /**
@@ -1484,7 +1484,7 @@ int ama_kyber_debug_cpa_roundtrip(void) {
 #endif
 }
 
-#endif /* AVA_TESTING_MODE - end of debug/test functions */
+#endif /* AMA_TESTING_MODE - end of debug/test functions */
 
 /* ============================================================================
  * PUBLIC WRAPPERS FOR CORE DISPATCH

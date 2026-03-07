@@ -101,7 +101,9 @@ from ama_cryptography.pqc_backends import (
 )
 from ama_cryptography.pqc_backends import dilithium_sign as _pqc_dilithium_sign
 from ama_cryptography.pqc_backends import dilithium_verify as _pqc_dilithium_verify
-from ama_cryptography.pqc_backends import generate_dilithium_keypair as _pqc_generate_dilithium_keypair
+from ama_cryptography.pqc_backends import (
+    generate_dilithium_keypair as _pqc_generate_dilithium_keypair,
+)
 
 # Module-level variables for backward compatibility with tests
 # Tests can monkeypatch these to test different backend paths
@@ -715,7 +717,7 @@ def ed25519_sign(message: bytes, private_key: Union[bytes, ed25519.Ed25519Privat
         # Already a key object - no reconstruction overhead!
         key = private_key
 
-    signature = key.sign(message)
+    signature: bytes = key.sign(message)
     return signature
 
 
@@ -1580,12 +1582,12 @@ def build_signature_message(
     SIGNATURE_DOMAIN_PREFIX || version_bytes || content_hash || ethical_hash
 
     Where:
-    - SIGNATURE_DOMAIN_PREFIX = b"AMA-PKG-v2" (9 bytes)
+    - SIGNATURE_DOMAIN_PREFIX = b"AMA-PKG-v2" (10 bytes)
     - version_bytes = UTF-8 encoded version string (5 bytes for "2.0.0")
     - content_hash = SHA3-256 hash of canonical code encoding (32 bytes)
     - ethical_hash = SHA3-256 hash of ethical vector (32 bytes)
 
-    Total: 78 bytes for v2 format
+    Total: 79 bytes for v2 format
 
     Args:
         content_hash: SHA3-256 hash of canonical code encoding (32 bytes)
@@ -2036,7 +2038,7 @@ def verify_crypto_package(
 # ============================================================================
 
 
-def main():
+def main() -> None:
     """
     Demonstrate complete AMA Cryptography ♱ system with all Omni-Codes.
     """
