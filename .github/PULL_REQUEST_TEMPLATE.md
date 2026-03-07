@@ -210,8 +210,8 @@ Example:
 ### Pre-Submission Checklist
 <!-- All items must be checked before requesting review -->
 
-- [ ] I have read the [Contributing Guidelines](https://github.com/Steel-SecAdv-LLC/Ava-Guardian/blob/main/CONTRIBUTING.md)
-- [ ] I have read the [Code of Conduct](https://github.com/Steel-SecAdv-LLC/Ava-Guardian/blob/main/CODE_OF_CONDUCT.md)
+- [ ] I have read the [Contributing Guidelines](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/CONTRIBUTING.md)
+- [ ] I have read the [Code of Conduct](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/CODE_OF_CONDUCT.md)
 - [ ] My code follows the project's coding standards
 - [ ] I have performed a self-review of my own code
 - [ ] I have commented my code, particularly in hard-to-understand areas

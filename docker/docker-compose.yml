@@ -1,62 +1,62 @@
 # Copyright 2025 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 #
-# Docker Compose configuration for Ava Guardian ♱
+# Docker Compose configuration for AMA Cryptography ♱
 
 version: '3.8'
 
 services:
-  # Main Ava Guardian ♱ service
-  ava-guardian:
+  # Main AMA Cryptography ♱ service
+  ama-cryptography:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: ava-guardian:latest
-    container_name: ava-guardian-main
+    image: ama-cryptography:latest
+    container_name: ama-cryptography-main
     restart: unless-stopped
     volumes:
       - ../data:/data
-      - ../logs:/var/log/ava-guardian
+      - ../logs:/var/log/ama-cryptography
     environment:
-      - AVA_LOG_LEVEL=INFO
-      - AVA_DATA_DIR=/data
+      - AMA_LOG_LEVEL=INFO
+      - AMA_DATA_DIR=/data
     networks:
-      - ava-net
+      - ama-net
     healthcheck:
-      test: ["CMD", "python3", "-c", "import ava_guardian"]
+      test: ["CMD", "python3", "-c", "import ama_cryptography"]
       interval: 30s
       timeout: 5s
       retries: 3
 
   # Monitoring service
-  ava-monitor:
-    image: ava-guardian:latest
-    container_name: ava-guardian-monitor
+  ama-monitor:
+    image: ama-cryptography:latest
+    container_name: ama-cryptography-monitor
     restart: unless-stopped
-    command: python3 /app/ava_guardian_monitor_demo.py
+    command: python3 /app/ama_cryptography_monitor_demo.py
     volumes:
       - ../data:/data
-      - ../logs:/var/log/ava-guardian
+      - ../logs:/var/log/ama-cryptography
     networks:
-      - ava-net
+      - ama-net
     depends_on:
-      - ava-guardian
+      - ama-cryptography
 
   # Benchmark service (run periodically)
-  ava-benchmark:
-    image: ava-guardian:latest
-    container_name: ava-guardian-benchmark
+  ama-benchmark:
+    image: ama-cryptography:latest
+    container_name: ama-cryptography-benchmark
     command: python3 /app/benchmark_suite.py
     volumes:
       - ../data:/data
       - ../benchmarks:/app/benchmarks
     networks:
-      - ava-net
+      - ama-net
     profiles:
       - benchmark
 
 networks:
-  ava-net:
+  ama-net:
     driver: bridge
     ipam:
       config:

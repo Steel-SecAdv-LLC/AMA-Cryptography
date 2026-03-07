@@ -1,7 +1,7 @@
 # Copyright 2025 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 #
-# Multi-stage Docker build for Ava Guardian ♱
+# Multi-stage Docker build for AMA Cryptography ♱
 # Optimized for production deployment with minimal attack surface
 
 # Stage 1: Builder
@@ -30,12 +30,12 @@ COPY . .
 RUN mkdir -p build && cd build && \
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
-        -DAVA_BUILD_SHARED=ON \
-        -DAVA_BUILD_STATIC=OFF \
-        -DAVA_BUILD_TESTS=OFF \
-        -DAVA_BUILD_EXAMPLES=OFF \
-        -DAVA_ENABLE_AVX2=OFF \
-        -DAVA_ENABLE_LTO=ON && \
+        -DAMA_BUILD_SHARED=ON \
+        -DAMA_BUILD_STATIC=OFF \
+        -DAMA_BUILD_TESTS=OFF \
+        -DAMA_BUILD_EXAMPLES=OFF \
+        -DAMA_ENABLE_AVX2=OFF \
+        -DAMA_ENABLE_LTO=ON && \
     cmake --build . --config Release -j$(nproc)
 
 # Build Python package
@@ -46,8 +46,8 @@ RUN python3 setup.py build_ext --inplace && \
 FROM ubuntu:22.04
 
 LABEL maintainer="Steel Security Advisors LLC <steel.sa.llc@gmail.com>"
-LABEL description="Ava Guardian ♱ - Quantum-Resistant Cryptographic Protection System"
-LABEL version="1.1"
+LABEL description="AMA Cryptography ♱ - Quantum-Resistant Cryptographic Protection System"
+LABEL version="2.0"
 
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y \
@@ -66,7 +66,7 @@ COPY --from=builder /build/build/lib/*.so* /usr/local/lib/
 COPY --from=builder /build/dist/*.whl /tmp/
 COPY --from=builder /build/requirements.txt /tmp/
 
-# Install Python package and runtime dependencies (numpy, scipy required by ava_guardian)
+# Install Python package and runtime dependencies (numpy, scipy required by ama_cryptography)
 RUN pip3 install --no-cache-dir /tmp/*.whl && \
     pip3 install --no-cache-dir -r /tmp/requirements.txt && \
     pip3 install --no-cache-dir numpy scipy && \
@@ -81,11 +81,11 @@ WORKDIR /app
 COPY --chown=ava:ava examples/ /app/examples/
 COPY --chown=ava:ava README.md LICENSE /app/
 # Copy monitor and benchmark scripts to /app for docker-compose services
-COPY --chown=ava:ava ava_guardian_monitor_demo.py benchmark_suite.py /app/
+COPY --chown=ava:ava ama_cryptography_monitor_demo.py benchmark_suite.py /app/
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD python3 -c "import ava_guardian; print('OK')" || exit 1
+    CMD python3 -c "import ama_cryptography; print('OK')" || exit 1
 
 # Default command
-CMD ["python3", "-c", "import ava_guardian; print(f'Ava Guardian ♱ v{ava_guardian.__version__} ready')"]
+CMD ["python3", "-c", "import ama_cryptography; print(f'AMA Cryptography ♱ v{ama_cryptography.__version__} ready')"]

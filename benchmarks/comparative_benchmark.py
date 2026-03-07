@@ -6,10 +6,10 @@
 Comparative Performance Benchmarking
 =====================================
 
-Compare Ava Guardian ♱ performance against other hybrid PQC implementations:
+Compare AMA Cryptography ♱ performance against other hybrid PQC implementations:
 - OpenSSL + liboqs (via cryptography library)
 - Pure liboqs-python
-- Ava Guardian hybrid implementation
+- AMA Cryptography hybrid implementation
 
 Tests hybrid Ed25519 + ML-DSA-65 (Dilithium) signature performance.
 """
@@ -42,7 +42,7 @@ class BenchmarkResult:
 
 
 class ComparativeBenchmark:
-    """Compare Ava Guardian against other implementations"""
+    """Compare AMA Cryptography against other implementations"""
 
     def __init__(self, iterations: int = 1000):
         self.iterations = iterations
@@ -112,10 +112,10 @@ class ComparativeBenchmark:
             available=True,
         )
 
-    def benchmark_ava_guardian(self):
-        """Benchmark Ava Guardian hybrid implementation"""
+    def benchmark_ama_cryptography(self):
+        """Benchmark AMA Cryptography hybrid implementation"""
         print("\n" + "=" * 70)
-        print("AVA GUARDIAN ♱ HYBRID IMPLEMENTATION")
+        print("AMA CRYPTOGRAPHY ♱ HYBRID IMPLEMENTATION")
         print("=" * 70)
 
         try:
@@ -131,7 +131,7 @@ class ComparativeBenchmark:
 
             self.results.append(
                 self.benchmark_operation(
-                    "Ava Guardian",
+                    "AMA Cryptography",
                     "Ed25519 Sign",
                     lambda: ed25519_sign(test_data, ed_keypair.private_key),
                 )
@@ -140,7 +140,7 @@ class ComparativeBenchmark:
             ed_sig = ed25519_sign(test_data, ed_keypair.private_key)
             self.results.append(
                 self.benchmark_operation(
-                    "Ava Guardian",
+                    "AMA Cryptography",
                     "Ed25519 Verify",
                     lambda: ed25519_verify(test_data, ed_sig, ed_keypair.public_key),
                 )
@@ -158,16 +158,16 @@ class ComparativeBenchmark:
                 if dil_keypair:
                     self.results.append(
                         self.benchmark_operation(
-                            "Ava Guardian",
+                            "AMA Cryptography",
                             "ML-DSA-65 Sign",
-                            lambda: dilithium_sign(test_data, dil_keypair.private_key),
+                            lambda: dilithium_sign(test_data, dil_keypair.secret_key),
                         )
                     )
 
-                    dil_sig = dilithium_sign(test_data, dil_keypair.private_key)
+                    dil_sig = dilithium_sign(test_data, dil_keypair.secret_key)
                     self.results.append(
                         self.benchmark_operation(
-                            "Ava Guardian",
+                            "AMA Cryptography",
                             "ML-DSA-65 Verify",
                             lambda: dilithium_verify(test_data, dil_sig, dil_keypair.public_key),
                         )
@@ -176,23 +176,23 @@ class ComparativeBenchmark:
                     # Hybrid operation (both signatures)
                     def hybrid_sign():
                         ed25519_sign(test_data, ed_keypair.private_key)
-                        dilithium_sign(test_data, dil_keypair.private_key)
+                        dilithium_sign(test_data, dil_keypair.secret_key)
 
                     def hybrid_verify():
                         ed25519_verify(test_data, ed_sig, ed_keypair.public_key)
                         dilithium_verify(test_data, dil_sig, dil_keypair.public_key)
 
                     self.results.append(
-                        self.benchmark_operation("Ava Guardian", "Hybrid Sign", hybrid_sign)
+                        self.benchmark_operation("AMA Cryptography", "Hybrid Sign", hybrid_sign)
                     )
                     self.results.append(
-                        self.benchmark_operation("Ava Guardian", "Hybrid Verify", hybrid_verify)
+                        self.benchmark_operation("AMA Cryptography", "Hybrid Verify", hybrid_verify)
                     )
             except Exception as e:
                 print(f"  ⚠ Dilithium not available: {e}")
 
         except Exception as e:
-            print(f"  ❌ Error benchmarking Ava Guardian: {e}")
+            print(f"  ❌ Error benchmarking AMA Cryptography: {e}")
 
     def benchmark_cryptography_ed25519(self):
         """Benchmark cryptography library (OpenSSL backend) Ed25519"""
@@ -382,29 +382,29 @@ class ComparativeBenchmark:
             if len(results) < 2:
                 continue
 
-            # Find Ava Guardian result as baseline
-            ava_result = next((r for r in results if r.implementation == "Ava Guardian"), None)
-            if not ava_result:
+            # Find AMA Cryptography result as baseline
+            ama_result = next((r for r in results if r.implementation == "AMA Cryptography"), None)
+            if not ama_result:
                 continue
 
             print(f"\n{operation}:")
             print(
-                f"  Ava Guardian: {ava_result.mean_time_ms:.4f}ms ({ava_result.ops_per_sec:.2f} ops/sec)"
+                f"  AMA Cryptography: {ama_result.mean_time_ms:.4f}ms ({ama_result.ops_per_sec:.2f} ops/sec)"
             )
 
             for result in results:
-                if result.implementation == "Ava Guardian":
+                if result.implementation == "AMA Cryptography":
                     continue
 
-                slowdown = result.mean_time_ms / ava_result.mean_time_ms
+                slowdown = result.mean_time_ms / ama_result.mean_time_ms
 
                 print(
-                    f"  {result.implementation}: {result.mean_time_ms:.4f}ms ({result.ops_per_sec:.2f} ops/sec) - {slowdown:.2f}x vs Ava Guardian"
+                    f"  {result.implementation}: {result.mean_time_ms:.4f}ms ({result.ops_per_sec:.2f} ops/sec) - {slowdown:.2f}x vs AMA Cryptography"
                 )
 
                 comparisons[f"{operation}_{result.implementation}"] = {
                     "slowdown_factor": slowdown,
-                    "ava_guardian_faster_by_percent": (slowdown - 1) * 100,
+                    "ama_cryptography_faster_by_percent": (slowdown - 1) * 100,
                 }
 
         return comparisons
@@ -441,10 +441,10 @@ class ComparativeBenchmark:
 def main():
     """Run comparative benchmarks"""
     print("=" * 70)
-    print("AVA GUARDIAN ♱ - COMPARATIVE PERFORMANCE BENCHMARK")
+    print("AMA CRYPTOGRAPHY ♱ - COMPARATIVE PERFORMANCE BENCHMARK")
     print("=" * 70)
     print()
-    print("Comparing Ava Guardian against:")
+    print("Comparing AMA Cryptography against:")
     print("  1. cryptography library (OpenSSL backend)")
     print("  2. liboqs-python (direct)")
     print()
@@ -452,7 +452,7 @@ def main():
     bench = ComparativeBenchmark(iterations=1000)
 
     # Run all benchmarks
-    bench.benchmark_ava_guardian()
+    bench.benchmark_ama_cryptography()
     bench.benchmark_cryptography_ed25519()
     bench.benchmark_liboqs_direct()
     bench.benchmark_hybrid_openssl_liboqs()

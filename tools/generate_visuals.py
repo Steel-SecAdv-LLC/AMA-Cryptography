@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate visual diagrams for Ava Guardian documentation.
+Generate visual diagrams for AMA Cryptography documentation.
 
 Creates:
 1. 6-Layer Defense-in-Depth diagram
@@ -81,7 +81,7 @@ def create_defense_layers_diagram():
     ax.text(
         8,
         11.5,
-        "Ava Guardian: 6-Layer Defense-in-Depth Architecture",
+        "AMA Cryptography: 6-Layer Defense-in-Depth Architecture",
         ha="center",
         fontsize=18,
         fontweight="bold",
@@ -182,12 +182,12 @@ def create_defense_layers_diagram():
                 arrowprops=dict(arrowstyle="->", color="#9CA3AF", lw=1.5),
             )
 
-    # Comparison box: Typical vs Ava Guardian
+    # Comparison box: Typical vs AMA Cryptography
     # Typical system box
     ax.text(
         8,
         1.8,
-        "Comparison: Typical System vs Ava Guardian",
+        "Comparison: Typical System vs AMA Cryptography",
         ha="center",
         fontsize=12,
         fontweight="bold",
@@ -217,7 +217,7 @@ def create_defense_layers_diagram():
     )
     ax.text(5, 0.55, "(Hash + Signature)", ha="center", va="center", fontsize=9, color="white")
 
-    # Ava Guardian (6 layers)
+    # AMA Cryptography (6 layers)
     colors_mini = ["#22C55E", "#14B8A6", "#0EA5E9", "#3B82F6", "#6366F1", "#8B5CF6"]
     for j, c in enumerate(colors_mini):
         rect_ag = mpatches.FancyBboxPatch(
@@ -233,7 +233,7 @@ def create_defense_layers_diagram():
     ax.text(
         11.1,
         0.9,
-        "Ava Guardian: 6 Layers",
+        "AMA Cryptography: 6 Layers",
         ha="center",
         va="center",
         fontsize=11,
@@ -272,7 +272,7 @@ def create_performance_comparison():
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
     # Data from BENCHMARK_RESULTS.md
-    implementations = ["Ava Guardian\n(Standard)", "Ava Guardian\n(Optimized)", "OpenSSL+liboqs"]
+    implementations = ["AMA Cryptography\n(Standard)", "AMA Cryptography\n(Optimized)", "OpenSSL+liboqs"]
     x_pos = np.arange(len(implementations))
 
     # Throughput data (ops/sec)
@@ -498,7 +498,7 @@ def create_full_package_performance():
     fig.text(
         0.5,
         0.91,
-        "Component latencies and end-to-end throughput for the complete Ava Guardian package",
+        "Component latencies and end-to-end throughput for the complete AMA Cryptography package",
         ha="center",
         fontsize=11,
         color="#6B7280",
@@ -518,7 +518,7 @@ def create_full_package_performance():
     names = [c[0] for c in components]
     times = [c[1] for c in components]
     colors_layers = [c[2] for c in components]
-    _percentages = [c[3] for c in components]  # noqa: F841
+    # percentages available in c[3] if needed for labels
 
     y_pos = range(len(names))
     ax_layers.barh(y_pos, times, color=colors_layers, edgecolor="white", linewidth=1.5, height=0.55)
@@ -687,7 +687,7 @@ def create_test_coverage():
         "Performance\n& Monitoring",
     ]
     # Approximate distribution based on test file analysis
-    test_counts = [180, 150, 120, 140, 139]  # Total = 729
+    test_counts = [198, 170, 135, 150, 145]  # Total = 798
     total_tests = sum(test_counts)
     percentages = [100 * c / total_tests for c in test_counts]
     colors = ["#22C55E", "#3B82F6", "#8B5CF6", "#F59E0B", "#EF4444"]
@@ -751,7 +751,7 @@ def create_test_coverage():
 
     # Overall title
     fig.suptitle(
-        "Test Suite Coverage: 729 Tests Across 25 Files (~11,000 Lines)",
+        "Test Suite Coverage: 798 Tests Across 32 Files (~11,000 Lines)",
         fontsize=14,
         fontweight="bold",
         y=1.02,
@@ -761,7 +761,7 @@ def create_test_coverage():
     fig.text(
         0.5,
         -0.06,
-        f"Total: {total_tests} tests | 25 test files | ~11,000 LOC | "
+        f"Total: {total_tests} tests | 32 test files | ~11,000 LOC | "
         "Categories: NIST KATs, PQC, Key Mgmt, Memory Security, Performance",
         ha="center",
         fontsize=9,
@@ -962,7 +962,7 @@ def create_ethical_binding_flow():
     )
 
     # Draw arrows from triads to aggregator
-    _arrow_style = dict(arrowstyle="->", color="#9CA3AF", lw=1.5)  # noqa: F841
+    # Arrow styling is set inline in annotate() calls below
     for x, y in triad_positions:
         ax.annotate(
             "",
@@ -1247,7 +1247,7 @@ def create_quantum_comparison():
 
 
 if __name__ == "__main__":
-    print("Generating Ava Guardian visual diagrams...")
+    print("Generating AMA Cryptography visual diagrams...")
     print("=" * 50)
 
     create_defense_layers_diagram()

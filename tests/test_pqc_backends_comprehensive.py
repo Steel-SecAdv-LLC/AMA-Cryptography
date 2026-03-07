@@ -18,7 +18,7 @@ Test Categories:
 
 import pytest
 
-from ava_guardian.pqc_backends import (
+from ama_cryptography.pqc_backends import (
     DILITHIUM_AVAILABLE,
     DILITHIUM_BACKEND,
     DILITHIUM_PUBLIC_KEY_BYTES,
@@ -195,10 +195,10 @@ class TestDataclasses:
     def test_dilithium_keypair(self):
         """DilithiumKeyPair stores keys correctly."""
         keypair = DilithiumKeyPair(
-            private_key=b"x" * 4032,
+            secret_key=b"x" * 4032,
             public_key=b"y" * 1952,
         )
-        assert len(keypair.private_key) == 4032
+        assert len(keypair.secret_key) == 4032
         assert len(keypair.public_key) == 1952
 
     def test_kyber_keypair(self):
@@ -277,13 +277,13 @@ class TestDilithiumOperations:
     def test_generate_keypair(self, dilithium_keypair):
         """Generate Dilithium keypair successfully."""
         assert len(dilithium_keypair.public_key) == DILITHIUM_PUBLIC_KEY_BYTES
-        assert len(dilithium_keypair.private_key) == DILITHIUM_SECRET_KEY_BYTES
+        assert len(dilithium_keypair.secret_key) == DILITHIUM_SECRET_KEY_BYTES
 
     def test_sign_and_verify(self, dilithium_keypair):
         """Sign message and verify signature."""
         message = b"Test message for Dilithium signature"
 
-        signature = dilithium_sign(message, dilithium_keypair.private_key)
+        signature = dilithium_sign(message, dilithium_keypair.secret_key)
         assert len(signature) > 0
 
         is_valid = dilithium_verify(message, signature, dilithium_keypair.public_key)
@@ -294,7 +294,7 @@ class TestDilithiumOperations:
         message = b"Original message"
         wrong_message = b"Tampered message"
 
-        signature = dilithium_sign(message, dilithium_keypair.private_key)
+        signature = dilithium_sign(message, dilithium_keypair.secret_key)
         is_valid = dilithium_verify(wrong_message, signature, dilithium_keypair.public_key)
 
         assert is_valid is False
@@ -303,7 +303,7 @@ class TestDilithiumOperations:
         """Verification fails with wrong signature."""
         message = b"Test message"
 
-        signature = dilithium_sign(message, dilithium_keypair.private_key)
+        signature = dilithium_sign(message, dilithium_keypair.secret_key)
         wrong_signature = bytes([b ^ 0xFF for b in signature[:100]]) + signature[100:]
 
         is_valid = dilithium_verify(message, wrong_signature, dilithium_keypair.public_key)
@@ -314,14 +314,14 @@ class TestDilithiumOperations:
         message = b"Test message"
         other_keypair = generate_dilithium_keypair()
 
-        signature = dilithium_sign(message, dilithium_keypair.private_key)
+        signature = dilithium_sign(message, dilithium_keypair.secret_key)
         is_valid = dilithium_verify(message, signature, other_keypair.public_key)
 
         assert is_valid is False
 
     def test_sign_empty_message(self, dilithium_keypair):
         """Can sign empty message."""
-        signature = dilithium_sign(b"", dilithium_keypair.private_key)
+        signature = dilithium_sign(b"", dilithium_keypair.secret_key)
         is_valid = dilithium_verify(b"", signature, dilithium_keypair.public_key)
 
         assert is_valid is True
@@ -330,7 +330,7 @@ class TestDilithiumOperations:
         """Can sign large message."""
         large_message = b"x" * (1024 * 1024)  # 1 MB
 
-        signature = dilithium_sign(large_message, dilithium_keypair.private_key)
+        signature = dilithium_sign(large_message, dilithium_keypair.secret_key)
         is_valid = dilithium_verify(large_message, signature, dilithium_keypair.public_key)
 
         assert is_valid is True
@@ -344,7 +344,7 @@ class TestDilithiumOperations:
         kp2 = generate_dilithium_keypair()
 
         assert kp1.public_key != kp2.public_key
-        assert kp1.private_key != kp2.private_key
+        assert kp1.secret_key != kp2.secret_key
 
 
 class TestDilithiumUnavailable:
@@ -353,7 +353,7 @@ class TestDilithiumUnavailable:
     @pytest.fixture
     def mock_unavailable(self, monkeypatch):
         """Mock Dilithium as unavailable."""
-        monkeypatch.setattr("ava_guardian.pqc_backends.DILITHIUM_AVAILABLE", False)
+        monkeypatch.setattr("ama_cryptography.pqc_backends.DILITHIUM_AVAILABLE", False)
 
     def test_generate_raises_error(self, mock_unavailable):
         """generate_dilithium_keypair raises when unavailable."""
@@ -466,7 +466,7 @@ class TestKyberUnavailable:
     @pytest.fixture
     def mock_unavailable(self, monkeypatch):
         """Mock Kyber as unavailable."""
-        monkeypatch.setattr("ava_guardian.pqc_backends.KYBER_AVAILABLE", False)
+        monkeypatch.setattr("ama_cryptography.pqc_backends.KYBER_AVAILABLE", False)
 
     def test_generate_raises_error(self, mock_unavailable):
         """generate_kyber_keypair raises when unavailable."""
@@ -561,7 +561,7 @@ class TestSphincsUnavailable:
     @pytest.fixture
     def mock_unavailable(self, monkeypatch):
         """Mock SPHINCS+ as unavailable."""
-        monkeypatch.setattr("ava_guardian.pqc_backends.SPHINCS_AVAILABLE", False)
+        monkeypatch.setattr("ama_cryptography.pqc_backends.SPHINCS_AVAILABLE", False)
 
     def test_generate_raises_error(self, mock_unavailable):
         """generate_sphincs_keypair raises when unavailable."""

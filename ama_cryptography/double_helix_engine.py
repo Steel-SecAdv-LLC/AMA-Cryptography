@@ -14,13 +14,13 @@
 # limitations under the License.
 
 """
-Ava Guardian ♱ (AG♱) - Double-Helix Evolution Engine
+AMA Cryptography ♱ (AG♱) - Double-Helix Evolution Engine
 =====================================================
 
 **IMPORTANT: NON-CRYPTOGRAPHIC MODULE**
 
 This module provides mathematical modeling and analytical utilities for the
-Ava Guardian system. It is NOT a cryptographic primitive and should NOT be
+AMA Cryptography system. It is NOT a cryptographic primitive and should NOT be
 relied upon for security guarantees. The Double-Helix Evolution Engine
 implements:
 
@@ -32,7 +32,7 @@ These utilities support system analytics and modeling but do not provide
 cryptographic protection. For cryptographic operations, use the dedicated
 modules: pqc_backends.py, crypto_api.py, and code_guardian_secure.py.
 
-Implements 18+ Ava Equation variants with Double-Helix Evolution Architecture.
+Implements 18+ AMA Equation variants with Double-Helix Evolution Architecture.
 
 Fundamental Equation:
     ℵ(𝔄_{t+1}) = Helix_1(𝔄_t) ⊗ Helix_2(𝔄_t)
@@ -45,7 +45,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
-Version: 1.1
+Version: 2.0
 
 AI Co-Architects:
     Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
@@ -57,7 +57,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import numpy.typing as npt
 
-from ava_guardian.equations import (
+from ama_cryptography.equations import (
     LAMBDA_DECAY,
     PHI,
     PHI_CUBED,
@@ -72,13 +72,13 @@ from ava_guardian.equations import (
 # Configure module logger
 logger = logging.getLogger(__name__)
 
-__version__ = "1.1"
+__version__ = "2.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
 
-class AvaEquationEngine:
+class AmaEquationEngine:
     """
-    Ava Equation Engine with Double-Helix Evolution Architecture.
+    AMA Equation Engine with Double-Helix Evolution Architecture.
 
     Implements 18+ equation variants:
     ℵ(𝔄_{t+1}) = Helix_1(𝔄_t) ⊗ Helix_2(𝔄_t)
@@ -119,11 +119,11 @@ class AvaEquationEngine:
     def __init__(
         self,
         state_dim: Optional[int] = None,
-        config: Optional[Dict] = None,
+        config: Optional[Dict[str, float]] = None,
         random_seed: Optional[int] = None,
-    ):
+    ) -> None:
         """
-        Initialize Ava Equation Engine.
+        Initialize AMA Equation Engine.
 
         Args:
             state_dim: State vector dimension (default: int(50 * φ³) ≈ 212)
@@ -191,25 +191,25 @@ class AvaEquationEngine:
         self.target_state = np.ones(self.state_dim) * 1.3
         self.temperature = 1.0  # For simulated annealing
 
-    def _initialize_ethical_matrix(self):
+    def _initialize_ethical_matrix(self) -> None:
         """Initialize positive-definite ethical constraint matrix."""
         self.ethical_matrix = initialize_ethical_matrix(self.state_dim)
 
-    def _initialize_vqe_params(self):
+    def _initialize_vqe_params(self) -> None:
         """Initialize Variational Quantum Eigensolver parameters."""
         # Simple parameterized quantum circuit simulation
         self.vqe_params = np.random.randn(self.state_dim) * 0.1 * PHI_CUBED
         self.vqe_hamiltonian = np.random.randn(self.state_dim, self.state_dim) * 0.01
         self.vqe_hamiltonian = (self.vqe_hamiltonian + self.vqe_hamiltonian.T) / 2  # Symmetric
 
-    def _initialize_qbm_matrix(self):
+    def _initialize_qbm_matrix(self) -> None:
         """Initialize Quantum Boltzmann Machine coupling matrix."""
         # Symmetric coupling matrix J
         J = np.random.randn(self.state_dim, self.state_dim) * 0.05 * PHI_CUBED
         self.qbm_matrix = (J + J.T) / 2
         np.fill_diagonal(self.qbm_matrix, 0)  # No self-coupling
 
-    def _initialize_attention(self):
+    def _initialize_attention(self) -> None:
         """Initialize self-attention mechanism weights."""
         # Simplified attention: Query, Key, Value projections
         scale = 0.1 * PHI_CUBED / np.sqrt(self.state_dim)
@@ -513,7 +513,7 @@ class AvaEquationEngine:
         else:
             state = initial_state.copy()
 
-        history = []
+        history: List[float] = []
 
         for t in range(max_steps):
             state_prev = state.copy()
@@ -541,11 +541,11 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     logger.info("=" * 70)
-    logger.info("Ava Guardian ♱ (AG♱) - Double-Helix Evolution Engine Demo")
+    logger.info("AMA Cryptography ♱ (AG♱) - Double-Helix Evolution Engine Demo")
     logger.info("=" * 70)
 
     # Create engine with default configuration
-    engine = AvaEquationEngine(state_dim=50, random_seed=42)
+    engine = AmaEquationEngine(state_dim=50, random_seed=42)
 
     logger.info("\nEngine Configuration:")
     logger.info(f"  State dimension: {engine.state_dim}")

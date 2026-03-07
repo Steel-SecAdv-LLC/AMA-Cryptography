@@ -1,4 +1,4 @@
-# Ava Guardian ♱ (AG♱): Implementation Guide
+# AMA Cryptography ♱ (AG♱): Implementation Guide
 ## Practical Guide to Deploying Cryptographic Protection
 
 **Copyright (C) 2025 Steel Security Advisors LLC**  
@@ -48,7 +48,7 @@ if not (results["content_hash"] and results["hmac"] and results["ed25519"]
 pip install cryptography
 
 # Build native PQC C library (recommended — zero external PQC dependencies)
-cmake -B build -DAVA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
+cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
@@ -61,7 +61,7 @@ python3 code_guardian_secure.py
 Expected output:
 ```
 ==================================================================
-Ava Guardian ♱ (AG♱): SHA3-256 Security Hash
+AMA Cryptography ♱ (AG♱): SHA3-256 Security Hash
 ==================================================================
 
 [1/5] Generating key management system...
@@ -114,7 +114,7 @@ sudo apt-get install build-essential cmake libssl-dev
 brew install cmake openssl
 
 # Build native PQC library
-cmake -B build -DAVA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
+cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
@@ -123,7 +123,7 @@ All PQC algorithms (ML-DSA-65, Kyber-1024, SPHINCS+-256f) are implemented native
 #### Verify Installation
 
 ```python
-from ava_guardian.pqc_backends import get_pqc_status
+from ama_cryptography.pqc_backends import get_pqc_status
 print("PQC status:")
 print(get_pqc_status())
 # Output should report ML-DSA-65, Kyber-1024, and SPHINCS+-256f as available
@@ -618,7 +618,7 @@ sudo apt-get install build-essential cmake libssl-dev  # Ubuntu/Debian
 # brew install cmake openssl  # macOS
 
 # Build native PQC library
-cmake -B build -DAVA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
+cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
@@ -1151,13 +1151,13 @@ pip install -r requirements.txt
 
 For migration assistance:
 - Email: steel.sa.llc@gmail.com
-- GitHub Issues: https://github.com/Steel-SecAdv-LLC/Ava-Guardian/issues
+- GitHub Issues: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/issues
 
 ---
 
 ## Ongoing Development
 
-Ava Guardian ♱ is under continuous development with a focus on maintaining the highest security standards while expanding capabilities:
+AMA Cryptography ♱ is under continuous development with a focus on maintaining the highest security standards while expanding capabilities:
 
 - **Security Updates:** Continuous security updates and performance optimizations based on emerging cryptographic research and threat landscape changes
 - **CRISPR-Inspired Technologies:** Integration of CRISPR-inspired cryptographic technologies from related repositories, extending the biological metaphor into novel protection mechanisms
@@ -1187,7 +1187,7 @@ brew install cmake openssl
 
 ```bash
 # CMake Build (Recommended) — native PQC, no external dependencies
-cmake -B build -DAVA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
+cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 sudo cmake --install build
 ```
@@ -1213,26 +1213,26 @@ cmake .. \
     -DCMAKE_SYSTEM_NAME=Linux \
     -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
     -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
-    -DAVA_ENABLE_AVX2=OFF
+    -DAMA_ENABLE_AVX2=OFF
 ```
 
 ### CMake Build Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `AVA_BUILD_SHARED` | ON | Build shared library (.so/.dylib/.dll) |
-| `AVA_BUILD_STATIC` | ON | Build static library (.a/.lib) |
-| `AVA_ENABLE_SIMD` | ON | Enable SIMD optimizations |
-| `AVA_ENABLE_AVX2` | ON | Enable AVX2 instructions |
-| `AVA_ENABLE_LTO` | ON | Enable link-time optimization |
+| `AMA_BUILD_SHARED` | ON | Build shared library (.so/.dylib/.dll) |
+| `AMA_BUILD_STATIC` | ON | Build static library (.a/.lib) |
+| `AMA_ENABLE_SIMD` | ON | Enable SIMD optimizations |
+| `AMA_ENABLE_AVX2` | ON | Enable AVX2 instructions |
+| `AMA_ENABLE_LTO` | ON | Enable link-time optimization |
 
 ### Environment Variables (Python Build)
 
 | Variable | Effect |
 |----------|--------|
-| `AVA_NO_CYTHON=1` | Disable Cython (use pure Python) |
-| `AVA_NO_C_EXTENSIONS=1` | Disable C extensions |
-| `AVA_DEBUG=1` | Enable debug symbols |
+| `AMA_NO_CYTHON=1` | Disable Cython (use pure Python) |
+| `AMA_NO_C_EXTENSIONS=1` | Disable C extensions |
+| `AMA_DEBUG=1` | Enable debug symbols |
 
 ---
 

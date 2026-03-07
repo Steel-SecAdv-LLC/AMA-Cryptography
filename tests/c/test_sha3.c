@@ -7,7 +7,7 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "ava_guardian.h"
+#include "ama_cryptography.h"
 
 #define TEST_ASSERT(condition, message) \
     do { \
@@ -37,50 +37,50 @@ static const uint8_t sha3_256_abc_expected[32] = {
 
 int main(void) {
     uint8_t output[32];
-    ava_error_t rc;
+    ama_error_t rc;
 
     printf("===========================================\n");
     printf("SHA3-256 Test Suite\n");
     printf("===========================================\n\n");
 
     /* Test 1: Empty string */
-    rc = ava_sha3_256(NULL, 0, output);
-    TEST_ASSERT(rc == AVA_SUCCESS, "sha3_256: empty string should succeed");
+    rc = ama_sha3_256(NULL, 0, output);
+    TEST_ASSERT(rc == AMA_SUCCESS, "sha3_256: empty string should succeed");
     TEST_ASSERT(memcmp(output, sha3_256_empty_expected, 32) == 0,
                 "sha3_256: empty string hash matches NIST KAT");
 
     /* Test 2: "abc" */
-    rc = ava_sha3_256((const uint8_t*)"abc", 3, output);
-    TEST_ASSERT(rc == AVA_SUCCESS, "sha3_256: 'abc' should succeed");
+    rc = ama_sha3_256((const uint8_t*)"abc", 3, output);
+    TEST_ASSERT(rc == AMA_SUCCESS, "sha3_256: 'abc' should succeed");
     TEST_ASSERT(memcmp(output, sha3_256_abc_expected, 32) == 0,
                 "sha3_256: 'abc' hash matches NIST KAT");
 
     /* Test 3: NULL output should fail */
-    rc = ava_sha3_256((const uint8_t*)"test", 4, NULL);
-    TEST_ASSERT(rc == AVA_ERROR_INVALID_PARAM,
+    rc = ama_sha3_256((const uint8_t*)"test", 4, NULL);
+    TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
                 "sha3_256: NULL output should return INVALID_PARAM");
 
     /* Test 4: Longer message */
     const char* long_msg = "The quick brown fox jumps over the lazy dog";
-    rc = ava_sha3_256((const uint8_t*)long_msg, strlen(long_msg), output);
-    TEST_ASSERT(rc == AVA_SUCCESS, "sha3_256: longer message should succeed");
+    rc = ama_sha3_256((const uint8_t*)long_msg, strlen(long_msg), output);
+    TEST_ASSERT(rc == AMA_SUCCESS, "sha3_256: longer message should succeed");
     /* Verify it produces consistent output */
     uint8_t output2[32];
-    rc = ava_sha3_256((const uint8_t*)long_msg, strlen(long_msg), output2);
+    rc = ama_sha3_256((const uint8_t*)long_msg, strlen(long_msg), output2);
     TEST_ASSERT(memcmp(output, output2, 32) == 0,
                 "sha3_256: deterministic output");
 
     /* Test 5: 136-byte message (exactly one block) */
     uint8_t block_msg[136];
     memset(block_msg, 0xAA, sizeof(block_msg));
-    rc = ava_sha3_256(block_msg, sizeof(block_msg), output);
-    TEST_ASSERT(rc == AVA_SUCCESS, "sha3_256: 136-byte (one block) should succeed");
+    rc = ama_sha3_256(block_msg, sizeof(block_msg), output);
+    TEST_ASSERT(rc == AMA_SUCCESS, "sha3_256: 136-byte (one block) should succeed");
 
     /* Test 6: 137-byte message (crosses block boundary) */
     uint8_t cross_msg[137];
     memset(cross_msg, 0xBB, sizeof(cross_msg));
-    rc = ava_sha3_256(cross_msg, sizeof(cross_msg), output);
-    TEST_ASSERT(rc == AVA_SUCCESS, "sha3_256: 137-byte (cross block) should succeed");
+    rc = ama_sha3_256(cross_msg, sizeof(cross_msg), output);
+    TEST_ASSERT(rc == AMA_SUCCESS, "sha3_256: 137-byte (cross block) should succeed");
 
     printf("\n===========================================\n");
     printf("All SHA3-256 tests passed!\n");

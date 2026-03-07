@@ -14,16 +14,16 @@
 # limitations under the License.
 
 """
-Ava Guardian ♱ (AG♱): Double-Helix Evolution Engine Test Suite
+AMA Cryptography ♱ (AG♱): Double-Helix Evolution Engine Test Suite
 ================================================================
 
-Tests for 18+ Ava Equation variants and Double-Helix architecture.
+Tests for 18+ AMA Equation variants and Double-Helix architecture.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
-Version: 1.1
+Version: 2.0
 
 AI Co-Architects:
     Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
@@ -31,34 +31,36 @@ AI Co-Architects:
 
 import sys
 import unittest
+from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, "/home/user/Ava-Guardian")
+# Derive repo root relative to this file for portability
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ava_guardian.double_helix_engine import AvaEquationEngine  # noqa: E402
-from ava_guardian.equations import PHI_CUBED, calculate_sigma_quadratic  # noqa: E402
+from ama_cryptography.double_helix_engine import AmaEquationEngine  # noqa: E402
+from ama_cryptography.equations import PHI_CUBED, calculate_sigma_quadratic  # noqa: E402
 
 
-class TestAvaEquationEngineInitialization(unittest.TestCase):
+class TestAmaEquationEngineInitialization(unittest.TestCase):
     """Test engine initialization and configuration."""
 
     def test_default_initialization(self):
         """Test engine initializes with default parameters."""
-        engine = AvaEquationEngine(random_seed=42)
+        engine = AmaEquationEngine(random_seed=42)
         self.assertIsNotNone(engine)
         self.assertEqual(engine.state_dim, int(50 * PHI_CUBED))
 
     def test_custom_dimension(self):
         """Test engine with custom state dimension."""
         dim = 100
-        engine = AvaEquationEngine(state_dim=dim, random_seed=42)
+        engine = AmaEquationEngine(state_dim=dim, random_seed=42)
         self.assertEqual(engine.state_dim, dim)
         self.assertEqual(len(engine.velocity), dim)
 
     def test_ethical_matrix_initialized(self):
         """Test ethical constraint matrix is initialized."""
-        engine = AvaEquationEngine(state_dim=50, random_seed=42)
+        engine = AmaEquationEngine(state_dim=50, random_seed=42)
         self.assertIsNotNone(engine.ethical_matrix)
         self.assertEqual(engine.ethical_matrix.shape, (50, 50))
 
@@ -68,7 +70,7 @@ class TestAvaEquationEngineInitialization(unittest.TestCase):
 
     def test_quantum_components_initialized(self):
         """Test quantum-inspired components are initialized."""
-        engine = AvaEquationEngine(state_dim=50, random_seed=42)
+        engine = AmaEquationEngine(state_dim=50, random_seed=42)
         self.assertIsNotNone(engine.vqe_params)
         self.assertIsNotNone(engine.vqe_hamiltonian)
         self.assertIsNotNone(engine.qbm_matrix)
@@ -82,7 +84,7 @@ class TestDoubleHelixEvolution(unittest.TestCase):
 
     def setUp(self):
         """Create engine for testing."""
-        self.engine = AvaEquationEngine(state_dim=50, random_seed=42)
+        self.engine = AmaEquationEngine(state_dim=50, random_seed=42)
         self.initial_state = np.random.randn(50) * 0.1
 
     def test_step_execution(self):
@@ -138,7 +140,7 @@ class TestConvergence(unittest.TestCase):
 
     def setUp(self):
         """Create engine for testing."""
-        self.engine = AvaEquationEngine(state_dim=50, random_seed=42)
+        self.engine = AmaEquationEngine(state_dim=50, random_seed=42)
 
     def test_converge_executes(self):
         """Test convergence runs without errors."""
@@ -183,7 +185,7 @@ class TestIndividualTerms(unittest.TestCase):
 
     def setUp(self):
         """Create engine for testing."""
-        self.engine = AvaEquationEngine(state_dim=50, random_seed=42)
+        self.engine = AmaEquationEngine(state_dim=50, random_seed=42)
         self.state = np.random.randn(50) * 0.1
 
     def test_quantum_term(self):
@@ -241,20 +243,20 @@ class TestTermEnableDisable(unittest.TestCase):
     def test_disable_quantum_term(self):
         """Test disabling quantum term."""
         config = {"enable_Q": False}
-        engine = AvaEquationEngine(state_dim=50, config=config, random_seed=42)
+        engine = AmaEquationEngine(state_dim=50, config=config, random_seed=42)
         self.assertFalse(engine.enable_Q)
 
     def test_disable_vqe_term(self):
         """Test disabling VQE term."""
         config = {"enable_VQE": False}
-        engine = AvaEquationEngine(state_dim=50, config=config, random_seed=42)
+        engine = AmaEquationEngine(state_dim=50, config=config, random_seed=42)
         self.assertFalse(engine.enable_VQE)
 
     def test_custom_term_weights(self):
         """Test custom term weight configuration."""
         custom_alpha = 2.0
         config = {"alpha": custom_alpha}
-        engine = AvaEquationEngine(state_dim=50, config=config, random_seed=42)
+        engine = AmaEquationEngine(state_dim=50, config=config, random_seed=42)
         self.assertEqual(engine.alpha, custom_alpha)
 
 

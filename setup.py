@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-Ava Guardian ♱ Setup Script
+AMA Cryptography ♱ Setup Script
 ============================
 
 Multi-language build system with C extensions and Cython optimizations.
@@ -17,10 +17,10 @@ Build modes:
     python setup.py bdist_wheel   # Binary wheel distribution
 
 Environment variables:
-    AVA_NO_CYTHON=1              # Disable Cython compilation (use pure Python)
-    AVA_NO_C_EXTENSIONS=1        # Disable C extensions
-    AVA_DEBUG=1                  # Enable debug symbols
-    AVA_COVERAGE=1               # Enable coverage instrumentation
+    AMA_NO_CYTHON=1              # Disable Cython compilation (use pure Python)
+    AMA_NO_C_EXTENSIONS=1        # Disable C extensions
+    AMA_DEBUG=1                  # Enable debug symbols
+    AMA_COVERAGE=1               # Enable coverage instrumentation
 """
 
 import os
@@ -51,11 +51,11 @@ except ImportError:
     np = None
 
 # Configuration
-VERSION = "1.1"
-USE_CYTHON = CYTHON_AVAILABLE and not os.getenv("AVA_NO_CYTHON")
-USE_C_EXTENSIONS = not os.getenv("AVA_NO_C_EXTENSIONS")
-DEBUG = bool(os.getenv("AVA_DEBUG"))
-COVERAGE = bool(os.getenv("AVA_COVERAGE"))
+VERSION = "2.0"
+USE_CYTHON = CYTHON_AVAILABLE and not os.getenv("AMA_NO_CYTHON")
+USE_C_EXTENSIONS = not os.getenv("AMA_NO_C_EXTENSIONS")
+DEBUG = bool(os.getenv("AMA_DEBUG"))
+COVERAGE = bool(os.getenv("AMA_COVERAGE"))
 
 # Read long description
 long_description = Path("README.md").read_text(encoding="utf-8")
@@ -104,13 +104,13 @@ def get_extension_modules():
 
     # C library sources
     c_sources = [
-        "src/c/ava_core.c",
-        "src/c/ava_consttime.c",
+        "src/c/ama_core.c",
+        "src/c/ama_consttime.c",
     ]
 
     # Core C extension
     core_ext = Extension(
-        name="ava_guardian._core",
+        name="ama_cryptography._core",
         sources=c_sources,
         include_dirs=["include"],
         extra_compile_args=compiler_flags,
@@ -128,7 +128,7 @@ def get_extension_modules():
             math_include_dirs.append(np.get_include())
 
         math_ext = Extension(
-            name="ava_guardian.math_engine",
+            name="ama_cryptography.math_engine",
             sources=["src/cython/math_engine.pyx"],
             include_dirs=math_include_dirs,
             extra_compile_args=compiler_flags,
@@ -188,10 +188,10 @@ class CMakeBuild(build_ext):
 
         cmake_args = [
             f"-DCMAKE_BUILD_TYPE={'Debug' if DEBUG else 'Release'}",
-            "-DAVA_BUILD_SHARED=ON",
-            "-DAVA_BUILD_STATIC=ON",
-            "-DAVA_BUILD_TESTS=OFF",  # Tests are run separately
-            "-DAVA_BUILD_EXAMPLES=OFF",
+            "-DAMA_BUILD_SHARED=ON",
+            "-DAMA_BUILD_STATIC=ON",
+            "-DAMA_BUILD_TESTS=OFF",  # Tests are run separately
+            "-DAMA_BUILD_EXAMPLES=OFF",
         ]
 
         build_args = ["--config", "Debug" if DEBUG else "Release"]
@@ -230,7 +230,7 @@ class CMakeBuild(build_ext):
 
 # Package configuration
 setup(
-    name="ava-guardian",
+    name="ama-cryptography",
     version=VERSION,
     description="Quantum-Resistant Cryptographic Protection System",
     long_description=long_description,
@@ -239,11 +239,11 @@ setup(
     author_email="steel.sa.llc@gmail.com",
     maintainer="Steel Security Advisors LLC",
     maintainer_email="steel.sa.llc@gmail.com",
-    url="https://github.com/Steel-SecAdv-LLC/Ava-Guardian",
+    url="https://github.com/Steel-SecAdv-LLC/AMA-Cryptography",
     project_urls={
-        "Documentation": "https://github.com/Steel-SecAdv-LLC/Ava-Guardian/blob/main/README.md",
-        "Source": "https://github.com/Steel-SecAdv-LLC/Ava-Guardian",
-        "Issues": "https://github.com/Steel-SecAdv-LLC/Ava-Guardian/issues",
+        "Documentation": "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/README.md",
+        "Source": "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography",
+        "Issues": "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/issues",
     },
     license="Apache-2.0",
     classifiers=[
@@ -325,7 +325,7 @@ setup(
 # Print build configuration
 if __name__ == "__main__":
     print("=" * 70)
-    print("Ava Guardian Build Configuration")
+    print("AMA Cryptography Build Configuration")
     print("=" * 70)
     print(f"Version:          {VERSION}")
     print(f"Python:           {sys.version.split()[0]}")

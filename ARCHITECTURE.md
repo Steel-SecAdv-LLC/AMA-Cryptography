@@ -1,10 +1,10 @@
-# Ava Guardian ♱ System Architecture
+# AMA Cryptography ♱ System Architecture
 
 ## Document Information
 
 | Property | Value |
 |----------|-------|
-| Document Version | 1.2 |
+| Document Version | 2.0 |
 | Last Updated | 2026-03-06 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
@@ -13,9 +13,9 @@
 
 ## Executive Summary
 
-Ava Guardian ♱ (AG♱) is a production-grade cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. The architecture implements defense-in-depth security through six independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
+AMA Cryptography ♱ (AG♱) is a production-grade cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. The architecture implements defense-in-depth security through six independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
 
-This document provides a comprehensive technical reference for system architects, security engineers, and developers working with or evaluating the Ava Guardian ♱ system.
+This document provides a comprehensive technical reference for system architects, security engineers, and developers working with or evaluating the AMA Cryptography ♱ system.
 
 ---
 
@@ -41,7 +41,7 @@ This document provides a comprehensive technical reference for system architects
 
 ### Purpose
 
-Ava Guardian ♱ provides cryptographic protection for structured data (referred to as "Omni-Codes" within the system) using a hybrid classical/quantum-resistant signature scheme. The system is designed for long-term data integrity assurance (50+ years) in environments where quantum computing threats must be considered.
+AMA Cryptography ♱ provides cryptographic protection for structured data (referred to as "Omni-Codes" within the system) using a hybrid classical/quantum-resistant signature scheme. The system is designed for long-term data integrity assurance (50+ years) in environments where quantum computing threats must be considered.
 
 ### Scope
 
@@ -60,7 +60,7 @@ The following are explicitly not goals of this architecture:
 
 ```
 +------------------------------------------------------------------+
-|                      AVA GUARDIAN SYSTEM                          |
+|                      AMA CRYPTOGRAPHY SYSTEM                          |
 +------------------------------------------------------------------+
 |                                                                   |
 |  +--------------------+  +--------------------+  +---------------+|
@@ -90,7 +90,7 @@ The following are explicitly not goals of this architecture:
 
 ### Design Philosophy
 
-The Ava Guardian ♱ architecture is built on the following foundational principles:
+The AMA Cryptography ♱ architecture is built on the following foundational principles:
 
 **Security Through Mathematical Rigor**: All security claims are backed by formal proofs or reduction arguments to well-studied cryptographic assumptions. No security-by-obscurity mechanisms are employed.
 
@@ -122,22 +122,22 @@ The following constraints govern architectural decisions:
 
 | Primitive | Algorithm | Standard | Security Level | C Implementation |
 |-----------|-----------|----------|----------------|------------------|
-| Hash Function | SHA3-256 | NIST FIPS 202 | 128-bit collision resistance | **Full** (ava_sha3.c) |
-| Message Authentication | HMAC-SHA3-256 | RFC 2104 + FIPS 202 | 256-bit key, 128-bit security | **Full** (ava_hkdf.c) |
-| Classical Signature | Ed25519 | RFC 8032 | 128-bit classical security | **Experimental** (ava_ed25519.c) |
-| Quantum-Resistant Signature | ML-DSA-65 (Dilithium) | NIST FIPS 204 | 192-bit quantum security | **Full** (ava_dilithium.c) |
-| Key Encapsulation | ML-KEM-1024 (Kyber) | NIST FIPS 203 | 256-bit quantum security | **Full** (ava_kyber.c) |
-| Hash-Based Signature | SPHINCS+-SHA2-256f | NIST FIPS 205 | 256-bit quantum security | **Full** (ava_sphincs.c) |
-| Key Derivation | HKDF-SHA3-256 | RFC 5869 | 256-bit derived keys | **Full** (ava_hkdf.c) |
+| Hash Function | SHA3-256 | NIST FIPS 202 | 128-bit collision resistance | **Full** (ama_sha3.c) |
+| Message Authentication | HMAC-SHA3-256 | RFC 2104 + FIPS 202 | 256-bit key, 128-bit security | **Full** (ama_hkdf.c) |
+| Classical Signature | Ed25519 | RFC 8032 | 128-bit classical security | **Experimental** (ama_ed25519.c) |
+| Quantum-Resistant Signature | ML-DSA-65 (Dilithium) | NIST FIPS 204 | 192-bit quantum security | **Full** (ama_dilithium.c) |
+| Key Encapsulation | ML-KEM-1024 (Kyber) | NIST FIPS 203 | 256-bit quantum security | **Full** (ama_kyber.c) |
+| Hash-Based Signature | SPHINCS+-SHA2-256f | NIST FIPS 205 | 256-bit quantum security | **Full** (ama_sphincs.c) |
+| Key Derivation | HKDF-SHA3-256 | RFC 5869 | 256-bit derived keys | **Full** (ama_hkdf.c) |
 | Timestamping | RFC 3161 TSA | RFC 3161 | Third-party attestation | Python API only |
 
 **C Library Source Files (v1.1):**
-- `src/c/ava_sha3.c` - SHA3-256, SHAKE128/256, streaming API (Keccak-f[1600])
-- `src/c/ava_hkdf.c` - HKDF-SHA3-256 with HMAC-SHA3-256 (RFC 5869)
-- `src/c/ava_ed25519.c` - Ed25519 keygen/sign/verify with windowed scalar mult
-- `src/c/ava_kyber.c` - ML-KEM-1024 full native implementation (NTT, IND-CCA2, Fujisaki-Okamoto)
-- `src/c/ava_dilithium.c` - ML-DSA-65 full native implementation (NTT q=8380417, rejection sampling)
-- `src/c/ava_sphincs.c` - SPHINCS+-SHA2-256f-simple full native implementation (WOTS+, FORS, hypertree)
+- `src/c/ama_sha3.c` - SHA3-256, SHAKE128/256, streaming API (Keccak-f[1600])
+- `src/c/ama_hkdf.c` - HKDF-SHA3-256 with HMAC-SHA3-256 (RFC 5869)
+- `src/c/ama_ed25519.c` - Ed25519 keygen/sign/verify with windowed scalar mult
+- `src/c/ama_kyber.c` - ML-KEM-1024 full native implementation (NTT, IND-CCA2, Fujisaki-Okamoto)
+- `src/c/ama_dilithium.c` - ML-DSA-65 full native implementation (NTT q=8380417, rejection sampling)
+- `src/c/ama_sphincs.c` - SPHINCS+-SHA2-256f-simple full native implementation (WOTS+, FORS, hypertree)
 
 ### Cryptographic Layer Stack
 
@@ -432,9 +432,9 @@ class CryptoPackage:
 All keys are derived from the master secret using HKDF-SHA3-256 with domain-separated info parameters:
 
 ```
-hmac_key = HKDF(master_secret, info="ava-guardian-hmac-key-v1")
-ed25519_seed = HKDF(master_secret, info="ava-guardian-ed25519-seed-v1")
-dilithium_seed = HKDF(master_secret, info="ava-guardian-dilithium-seed-v1")
+hmac_key = HKDF(master_secret, info="ama-cryptography-hmac-key-v1")
+ed25519_seed = HKDF(master_secret, info="ama-cryptography-ed25519-seed-v1")
+dilithium_seed = HKDF(master_secret, info="ama-cryptography-dilithium-seed-v1")
 ```
 
 ### Key Rotation
@@ -578,7 +578,7 @@ python code_guardian_secure.py
 
 **Containerized Deployment**: Docker images available
 ```bash
-docker run ava-guardian:latest
+docker run ama-cryptography:latest
 ```
 
 ### Scalability Considerations

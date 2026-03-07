@@ -43,7 +43,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
-Version: 1.1
+Version: 2.0
 
 AI Co-Architects:Eris | Eden | Veritas | X | Caduceus | Dev
 """
@@ -56,7 +56,7 @@ import pytest
 
 # Import PQC backends for testing
 try:
-    from ava_guardian.pqc_backends import (
+    from ama_cryptography.pqc_backends import (
         DILITHIUM_AVAILABLE,
         DILITHIUM_BACKEND,
         KYBER_AVAILABLE,
@@ -590,9 +590,9 @@ class TestMLDSAKATValidation:
 
         # Note: secret key may include public key, so size may differ
         # The important thing is that it's at least as large as the KAT sk
-        assert len(keypair.private_key) >= len(
+        assert len(keypair.secret_key) >= len(
             kat.sk
-        ), f"Secret key too small: {len(keypair.private_key)} vs KAT {len(kat.sk)}"
+        ), f"Secret key too small: {len(keypair.secret_key)} vs KAT {len(kat.sk)}"
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
     @pytest.mark.skipif(
@@ -615,7 +615,7 @@ class TestMLDSAKATValidation:
         # Generate keypair and sign a message
         keypair = generate_dilithium_keypair()
         message = b"Test message for signature size validation"
-        signature = dilithium_sign(message, keypair.private_key)
+        signature = dilithium_sign(message, keypair.secret_key)
 
         # Accept both original Dilithium (3293) and final ML-DSA-65 (3309) sizes
         # The difference is due to FIPS 204 standardization changes
@@ -641,7 +641,7 @@ class TestMLDSAKATValidation:
             message = kat.msg if kat.msg else b"Empty message test"
 
             # Sign with our keypair
-            signature = dilithium_sign(message, keypair.private_key)
+            signature = dilithium_sign(message, keypair.secret_key)
 
             # Verify signature
             is_valid = dilithium_verify(message, signature, keypair.public_key)
@@ -733,7 +733,7 @@ class TestMLDSAKATValidation:
         # Generate multiple signatures
         signatures = []
         for _ in range(3):
-            sig = dilithium_sign(message, keypair.private_key)
+            sig = dilithium_sign(message, keypair.secret_key)
             signatures.append(sig)
 
         # All signatures should verify
@@ -750,7 +750,7 @@ class TestMLDSAKATValidation:
         keypair2 = generate_dilithium_keypair()
 
         message = b"Test message"
-        signature = dilithium_sign(message, keypair1.private_key)
+        signature = dilithium_sign(message, keypair1.secret_key)
 
         # Should verify with correct key
         assert dilithium_verify(message, signature, keypair1.public_key)
@@ -764,7 +764,7 @@ class TestMLDSAKATValidation:
         keypair = generate_dilithium_keypair()
 
         message = b"Original message"
-        signature = dilithium_sign(message, keypair.private_key)
+        signature = dilithium_sign(message, keypair.secret_key)
 
         # Should verify with original message
         assert dilithium_verify(message, signature, keypair.public_key)

@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-Ava Guardian ♱ (AG♱): Import Path and Edge Case Tests
+AMA Cryptography ♱ (AG♱): Import Path and Edge Case Tests
 ======================================================
 
 Tests for import error handling, CRYPTO_AVAILABLE/DILITHIUM_AVAILABLE paths,
@@ -25,7 +25,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
-Version: 1.1
+Version: 2.0
 
 AI Co-Architects:
     Eris | Eden | Veritas | X | Caduceus | Dev
@@ -250,7 +250,7 @@ class TestMainFunctionDirect:
         monkeypatch.chdir(tmp_path)
         dgs.main()
         out = capsys.readouterr().out
-        assert "Ava Guardian" in out
+        assert "AMA Cryptography" in out
         assert "ALL VERIFICATIONS PASSED" in out
         assert (tmp_path / "CRYPTO_PACKAGE.json").exists()
         assert (tmp_path / "public_keys").is_dir()

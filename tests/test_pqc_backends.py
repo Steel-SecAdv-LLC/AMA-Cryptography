@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Ava Guardian ♱ (AG♱) - Post-Quantum Cryptography Backend Tests
+AMA Cryptography ♱ (AG♱) - Post-Quantum Cryptography Backend Tests
 
 Comprehensive test suite for pqc_backends.py providing 100% coverage
 of all PQC backend functionality including ML-DSA-65 (Dilithium),
@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from ava_guardian.pqc_backends import (
+from ama_cryptography.pqc_backends import (
     DILITHIUM_AVAILABLE,
     DILITHIUM_BACKEND,
     DILITHIUM_PUBLIC_KEY_BYTES,
@@ -221,14 +221,14 @@ class TestDilithiumKeyGeneration:
     def test_private_key_size(self):
         """Verify generated private key has correct size."""
         keypair = generate_dilithium_keypair()
-        assert len(keypair.private_key) == DILITHIUM_SECRET_KEY_BYTES
+        assert len(keypair.secret_key) == DILITHIUM_SECRET_KEY_BYTES
 
     def test_keypairs_are_unique(self):
         """Verify each keypair generation produces unique keys."""
         keypair1 = generate_dilithium_keypair()
         keypair2 = generate_dilithium_keypair()
         assert keypair1.public_key != keypair2.public_key
-        assert keypair1.private_key != keypair2.private_key
+        assert keypair1.secret_key != keypair2.secret_key
 
 
 @pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber backend not available")
@@ -379,43 +379,43 @@ class TestUnavailableBackendErrors:
 
     def test_dilithium_unavailable_error(self):
         """Verify PQCUnavailableError is raised when backend missing."""
-        with patch("ava_guardian.pqc_backends.DILITHIUM_AVAILABLE", False):
+        with patch("ama_cryptography.pqc_backends.DILITHIUM_AVAILABLE", False):
             with pytest.raises(PQCUnavailableError):
                 generate_dilithium_keypair()
 
     def test_kyber_unavailable_error_keygen(self):
         """Verify KyberUnavailableError is raised for keygen when backend missing."""
-        with patch("ava_guardian.pqc_backends.KYBER_AVAILABLE", False):
+        with patch("ama_cryptography.pqc_backends.KYBER_AVAILABLE", False):
             with pytest.raises(KyberUnavailableError):
                 generate_kyber_keypair()
 
     def test_kyber_unavailable_error_encapsulate(self):
         """Verify KyberUnavailableError is raised for encapsulate when backend missing."""
-        with patch("ava_guardian.pqc_backends.KYBER_AVAILABLE", False):
+        with patch("ama_cryptography.pqc_backends.KYBER_AVAILABLE", False):
             with pytest.raises(KyberUnavailableError):
                 kyber_encapsulate(b"fake_public_key")
 
     def test_kyber_unavailable_error_decapsulate(self):
         """Verify KyberUnavailableError is raised for decapsulate when backend missing."""
-        with patch("ava_guardian.pqc_backends.KYBER_AVAILABLE", False):
+        with patch("ama_cryptography.pqc_backends.KYBER_AVAILABLE", False):
             with pytest.raises(KyberUnavailableError):
                 kyber_decapsulate(b"fake_ciphertext", b"fake_secret_key")
 
     def test_sphincs_unavailable_error_keygen(self):
         """Verify SphincsUnavailableError is raised for keygen when backend missing."""
-        with patch("ava_guardian.pqc_backends.SPHINCS_AVAILABLE", False):
+        with patch("ama_cryptography.pqc_backends.SPHINCS_AVAILABLE", False):
             with pytest.raises(SphincsUnavailableError):
                 generate_sphincs_keypair()
 
     def test_sphincs_unavailable_error_sign(self):
         """Verify SphincsUnavailableError is raised for sign when backend missing."""
-        with patch("ava_guardian.pqc_backends.SPHINCS_AVAILABLE", False):
+        with patch("ama_cryptography.pqc_backends.SPHINCS_AVAILABLE", False):
             with pytest.raises(SphincsUnavailableError):
                 sphincs_sign(b"message", b"fake_secret_key")
 
     def test_sphincs_unavailable_error_verify(self):
         """Verify SphincsUnavailableError is raised for verify when backend missing."""
-        with patch("ava_guardian.pqc_backends.SPHINCS_AVAILABLE", False):
+        with patch("ama_cryptography.pqc_backends.SPHINCS_AVAILABLE", False):
             with pytest.raises(SphincsUnavailableError):
                 sphincs_verify(b"message", b"signature", b"public_key")
 
@@ -428,7 +428,7 @@ class TestDataclassFields:
         assert hasattr(DilithiumKeyPair, "__dataclass_fields__")
         fields = DilithiumKeyPair.__dataclass_fields__
         assert "public_key" in fields
-        assert "private_key" in fields
+        assert "secret_key" in fields
 
     def test_kyber_keypair_fields(self):
         """Verify KyberKeyPair has required fields."""

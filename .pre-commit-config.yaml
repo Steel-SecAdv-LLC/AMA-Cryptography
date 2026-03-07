@@ -1,4 +1,4 @@
-# Pre-commit hooks for Ava Guardian ♱
+# Pre-commit hooks for AMA Cryptography ♱
 # Install: pip install pre-commit && pre-commit install
 # Run manually: pre-commit run --all-files
 
@@ -40,7 +40,7 @@ repos:
     rev: v1.9.0
     hooks:
       - id: mypy
-        args: ['--no-strict-optional', '--ignore-missing-imports']
+        args: ['--ignore-missing-imports']
         additional_dependencies:
           - types-requests
 

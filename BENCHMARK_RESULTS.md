@@ -1,4 +1,4 @@
-# Ava Guardian ♱ Benchmark Results
+# AMA Cryptography ♱ Benchmark Results
 
 ## Document Information
 
@@ -13,7 +13,7 @@
 
 ## Executive Summary
 
-Performance benchmarks for Ava Guardian ♱ v1.2 with **fully native PQC implementations** (FIPS 203/204/205). All post-quantum cryptography is provided by the built-in C library — no external dependencies (liboqs, pqcrypto) required.
+Performance benchmarks for AMA Cryptography ♱ v1.2 with **fully native PQC implementations** (FIPS 203/204/205). All post-quantum cryptography is provided by the built-in C library — no external dependencies (liboqs, pqcrypto) required.
 
 **Test Environment:**
 - OS: Linux 4.4.0 x86_64
@@ -102,7 +102,7 @@ Direct C library benchmarks (10,000 iterations + 100 warmup).
 
 ## Full 6-Layer Package Performance
 
-Ava Guardian's complete security package includes:
+AMA Cryptography's complete security package includes:
 
 | Layer | Component | Time |
 |-------|-----------|------|
@@ -131,7 +131,7 @@ Ava Guardian's complete security package includes:
 
 ### Native PQC — No External Dependencies
 
-As of v1.2, Ava Guardian uses fully native C implementations for all post-quantum algorithms:
+As of v1.2, AMA Cryptography uses fully native C implementations for all post-quantum algorithms:
 
 - **ML-KEM-1024** (FIPS 203): Key encapsulation with IND-CCA2 security
 - **ML-DSA-65** (FIPS 204): Digital signatures with EUF-CMA security
@@ -142,7 +142,7 @@ All implementations include NIST Known Answer Test (KAT) validation. No liboqs, 
 ### Build
 
 ```bash
-cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build
+cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
 ```
 
 ---

@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-Ava Guardian ♱ (AG♱): Mathematical Equations Test Suite
+AMA Cryptography ♱ (AG♱): Mathematical Equations Test Suite
 ========================================================
 
 Comprehensive tests for 5 mathematical frameworks:
@@ -28,7 +28,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
-Version: 1.1
+Version: 2.0
 
 AI Co-Architects:
     Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
@@ -36,12 +36,14 @@ AI Co-Architects:
 
 import sys
 import unittest
+from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, "/home/user/Ava-Guardian")
+# Derive repo root relative to this file for portability
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ava_guardian.equations import (  # noqa: E402
+from ama_cryptography.equations import (  # noqa: E402
     PHI,
     PHI_CUBED,
     calculate_sigma_quadratic,

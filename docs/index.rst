@@ -1,7 +1,7 @@
-Ava Guardian ♱ Documentation
+AMA Cryptography ♱ Documentation
 ============================
 
-Welcome to the Ava Guardian ♱ documentation. This system provides quantum-resistant
+Welcome to the AMA Cryptography ♱ documentation. This system provides quantum-resistant
 cryptographic protection with a multi-language architecture optimized for both
 security and performance.
 
@@ -9,12 +9,12 @@ security and performance.
 
    Comprehensive documentation is available in the repository root as Markdown files:
 
-   * `README.md <https://github.com/Steel-SecAdv-LLC/Ava-Guardian/blob/main/README.md>`_ - Quick start and overview
-   * `ARCHITECTURE.md <https://github.com/Steel-SecAdv-LLC/Ava-Guardian/blob/main/ARCHITECTURE.md>`_ - System architecture
-   * `IMPLEMENTATION_GUIDE.md <https://github.com/Steel-SecAdv-LLC/Ava-Guardian/blob/main/IMPLEMENTATION_GUIDE.md>`_ - Deployment guide
-   * `SECURITY_ANALYSIS.md <https://github.com/Steel-SecAdv-LLC/Ava-Guardian/blob/main/SECURITY_ANALYSIS.md>`_ - Security analysis
-   * `CRYPTOGRAPHY.md <https://github.com/Steel-SecAdv-LLC/Ava-Guardian/blob/main/CRYPTOGRAPHY.md>`_ - Cryptographic details
-   * `CONTRIBUTING.md <https://github.com/Steel-SecAdv-LLC/Ava-Guardian/blob/main/CONTRIBUTING.md>`_ - Contribution guidelines
+   * `README.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/README.md>`_ - Quick start and overview
+   * `ARCHITECTURE.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/ARCHITECTURE.md>`_ - System architecture
+   * `IMPLEMENTATION_GUIDE.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/IMPLEMENTATION_GUIDE.md>`_ - Deployment guide
+   * `SECURITY_ANALYSIS.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/SECURITY_ANALYSIS.md>`_ - Security analysis
+   * `CRYPTOGRAPHY.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/CRYPTOGRAPHY.md>`_ - Cryptographic details
+   * `CONTRIBUTING.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/CONTRIBUTING.md>`_ - Contribution guidelines
 
 Quick Links
 -----------
@@ -26,7 +26,7 @@ Quick Links
 Overview
 --------
 
-Ava Guardian ♱ (AG♱) is a secure post-quantum cryptographic (PQC)
+AMA Cryptography ♱ (AG♱) is a secure post-quantum cryptographic (PQC)
 system featuring:
 
 - **Multi-Algorithm Support**: ML-DSA-65, Kyber-1024, SPHINCS+-256f
@@ -75,24 +75,24 @@ Installation
 .. code-block:: bash
 
    # Install from source
-   git clone https://github.com/Steel-SecAdv-LLC/Ava-Guardian.git
-   cd Ava-Guardian
+   git clone https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git
+   cd AMA-Cryptography
    make all
    sudo make install
 
    # Or with pip (when available)
-   pip install ava-guardian
+   pip install ama-cryptography
 
 Quick Example
 ~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   from ava_guardian import AvaEquationEngine
+   from ama_cryptography import AmaEquationEngine
    import numpy as np
 
    # Initialize engine
-   engine = AvaEquationEngine(state_dim=100, random_seed=42)
+   engine = AmaEquationEngine(state_dim=100, random_seed=42)
 
    # Run evolution
    initial_state = np.random.randn(100) * 0.5
@@ -106,21 +106,21 @@ C API Example
 
 .. code-block:: c
 
-   #include "ava_guardian.h"
+   #include "ama_cryptography.h"
 
    int main(void) {
-       ava_context_t* ctx = ava_context_init(AVA_ALG_ML_DSA_65);
+       ama_context_t* ctx = ama_context_init(AMA_ALG_ML_DSA_65);
 
-       uint8_t public_key[AVA_ML_DSA_65_PUBLIC_KEY_BYTES];
-       uint8_t secret_key[AVA_ML_DSA_65_SECRET_KEY_BYTES];
+       uint8_t public_key[AMA_ML_DSA_65_PUBLIC_KEY_BYTES];
+       uint8_t secret_key[AMA_ML_DSA_65_SECRET_KEY_BYTES];
 
-       ava_error_t err = ava_keypair_generate(
+       ama_error_t err = ama_keypair_generate(
            ctx, public_key, sizeof(public_key),
            secret_key, sizeof(secret_key)
        );
 
-       ava_secure_memzero(secret_key, sizeof(secret_key));
-       ava_context_free(ctx);
+       ama_secure_memzero(secret_key, sizeof(secret_key));
+       ama_context_free(ctx);
        return 0;
    }
 
@@ -135,8 +135,8 @@ Contact
 -------
 
 - Email: steel.sa.llc@gmail.com
-- GitHub: https://github.com/Steel-SecAdv-LLC/Ava-Guardian
-- Issues: https://github.com/Steel-SecAdv-LLC/Ava-Guardian/issues
+- GitHub: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography
+- Issues: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/issues
 
 Indices and tables
 ==================

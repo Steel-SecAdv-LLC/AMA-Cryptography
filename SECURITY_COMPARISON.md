@@ -1,4 +1,4 @@
-# Security Comparison: Ava Guardian vs OpenSSL+liboqs
+# Security Comparison: AMA Cryptography vs OpenSSL+liboqs
 
 ## Document Information
 
@@ -13,13 +13,13 @@
 
 ## Executive Summary
 
-**Question:** Is Ava Guardian safer or more secure than OpenSSL + liboqs?
+**Question:** Is AMA Cryptography safer or more secure than OpenSSL + liboqs?
 
 **Short Answer:**
 - **Theoretically:** YES (more defense layers)
 - **Practically:** DEPENDS (lacks external audit vs battle-tested code)
 
-**Nuanced Answer:** Ava Guardian provides **architectural security advantages** through defense-in-depth, but OpenSSL+liboqs has **implementation maturity advantages** through extensive auditing.
+**Nuanced Answer:** AMA Cryptography provides **architectural security advantages** through defense-in-depth, but OpenSSL+liboqs has **implementation maturity advantages** through extensive auditing.
 
 ---
 
@@ -27,7 +27,7 @@
 
 ### Core Cryptographic Primitives
 
-| Feature | OpenSSL+liboqs | Ava Guardian | Security Implication |
+| Feature | OpenSSL+liboqs | AMA Cryptography | Security Implication |
 |---------|----------------|--------------|----------------------|
 | **Ed25519 Signatures** | ✅ OpenSSL (audited) | ✅ cryptography library | Equivalent |
 | **ML-DSA-65 Signatures** | ✅ liboqs (NIST-reviewed) | ✅ Native C (NIST KAT validated) | Equivalent |
@@ -40,7 +40,7 @@
 
 ### Defense-in-Depth Architecture
 
-| Security Layer | OpenSSL+liboqs | Ava Guardian | Security Value |
+| Security Layer | OpenSSL+liboqs | AMA Cryptography | Security Value |
 |----------------|----------------|--------------|----------------|
 | **SHA3-256 Content Hash** | ❌ Not included | ✅ Layer 1 | Integrity verification |
 | **HMAC-SHA3-256** | ❌ Not included | ✅ Layer 2 | Authentication |
@@ -48,15 +48,15 @@
 | **ML-DSA-65 Signature** | ✅ Yes | ✅ Layer 4 | Quantum resistance |
 | **HKDF Key Derivation** | ⚠️ Manual | ✅ Layer 5 (integrated) | Key independence |
 | **RFC 3161 Timestamps** | ❌ Not included | ✅ Layer 6 (optional) | Non-repudiation |
-| **Total Layers** | **2** | **6** | **Ava Guardian has 3x more layers** |
+| **Total Layers** | **2** | **6** | **AMA Cryptography has 3x more layers** |
 
-**Verdict:** **Ava Guardian provides significantly more defense-in-depth.**
+**Verdict:** **AMA Cryptography provides significantly more defense-in-depth.**
 
 ---
 
 ### Runtime Security Features
 
-| Feature | OpenSSL+liboqs | Ava Guardian | Security Benefit |
+| Feature | OpenSSL+liboqs | AMA Cryptography | Security Benefit |
 |---------|----------------|--------------|------------------|
 | **3R Monitoring** | ❌ None | ✅ Yes (<2% overhead) | Anomaly detection |
 | **Constant-time Verification** | ✅ (OpenSSL) | ✅ (with dudect tests) | Side-channel resistance |
@@ -64,7 +64,7 @@
 | **Bounds Checking** | ⚠️ Manual | ✅ Automatic (Python) | Buffer overflow prevention |
 | **Secure Memory Wiping** | ✅ Yes | ✅ Yes | Key material protection |
 
-**Verdict:** **Mixed** - OpenSSL has proven constant-time impl, Ava Guardian adds runtime monitoring.
+**Verdict:** **Mixed** - OpenSSL has proven constant-time impl, AMA Cryptography adds runtime monitoring.
 
 ---
 
@@ -77,9 +77,9 @@
 | Implementation | Protection | Outcome |
 |----------------|------------|---------|
 | OpenSSL+liboqs | ML-DSA-65 still valid | ✅ Protected |
-| Ava Guardian | ML-DSA-65 + HMAC + SHA3 | ✅ **Better protected** (multiple fallbacks) |
+| AMA Cryptography | ML-DSA-65 + HMAC + SHA3 | ✅ **Better protected** (multiple fallbacks) |
 
-**Winner:** **Ava Guardian** - multiple independent layers mean attacker must break ALL of them.
+**Winner:** **AMA Cryptography** - multiple independent layers mean attacker must break ALL of them.
 
 ---
 
@@ -90,7 +90,7 @@
 | Implementation | Risk Assessment | Mitigation |
 |----------------|-----------------|------------|
 | OpenSSL+liboqs | Lower risk | ✅ Extensively audited, battle-tested |
-| Ava Guardian | Higher risk | ❌ **No external audit**, more complex codebase |
+| AMA Cryptography | Higher risk | ❌ **No external audit**, more complex codebase |
 
 **Winner:** **OpenSSL+liboqs** - proven track record, fewer bugs likely.
 
@@ -104,7 +104,7 @@
 |----------------|------------|--------------|
 | OpenSSL | Constant-time primitives | ✅ Extensively tested in production |
 | liboqs | Constant-time ML-DSA-65 | ✅ NIST-reviewed |
-| Ava Guardian | Constant-time utils + dudect | ⚠️ **Self-tested only** |
+| AMA Cryptography | Constant-time utils + dudect | ⚠️ **Self-tested only** |
 
 **Winner:** **OpenSSL+liboqs** - proven constant-time implementations.
 
@@ -117,9 +117,9 @@
 | Implementation | Protection | Recovery |
 |----------------|------------|----------|
 | OpenSSL+liboqs | Key hygiene (user responsibility) | No additional protection |
-| Ava Guardian | HSM requirement + key derivation | Same ultimate vulnerability, but better practices |
+| AMA Cryptography | HSM requirement + key derivation | Same ultimate vulnerability, but better practices |
 
-**Tie:** Both equally vulnerable if keys are compromised. Ava Guardian's architecture REQUIRES HSM, which is good practice.
+**Tie:** Both equally vulnerable if keys are compromised. AMA Cryptography's architecture REQUIRES HSM, which is good practice.
 
 ---
 
@@ -130,7 +130,7 @@
 | Implementation | Risk | Attack Surface |
 |----------------|------|----------------|
 | OpenSSL+liboqs | 2 dependencies | Smaller attack surface |
-| Ava Guardian | OpenSSL + liboqs + Python + Cython + cryptography | **Larger attack surface** |
+| AMA Cryptography | OpenSSL + liboqs + Python + Cython + cryptography | **Larger attack surface** |
 
 **Winner:** **OpenSSL+liboqs** - fewer dependencies means smaller attack surface.
 
@@ -143,9 +143,9 @@
 | Implementation | Impact | Mitigation |
 |----------------|--------|------------|
 | OpenSSL+liboqs | Signatures may be forged | Relies on ML-DSA-65 |
-| Ava Guardian | Signatures may be forged | **Also has HMAC + SHA3 + HKDF layers** |
+| AMA Cryptography | Signatures may be forged | **Also has HMAC + SHA3 + HKDF layers** |
 
-**Winner:** **Ava Guardian** - defense-in-depth means attack requires breaking multiple independent systems.
+**Winner:** **AMA Cryptography** - defense-in-depth means attack requires breaking multiple independent systems.
 
 ---
 
@@ -153,20 +153,20 @@
 
 ### Cryptographic Strength
 
-| Property | OpenSSL+liboqs | Ava Guardian | Analysis |
+| Property | OpenSSL+liboqs | AMA Cryptography | Analysis |
 |----------|----------------|--------------|----------|
 | **Classical Security** | 128-bit (Ed25519) | 128-bit (Ed25519) | **Equivalent** |
 | **Quantum Security** | 192-bit (ML-DSA-65) | 192-bit (ML-DSA-65) | **Equivalent** |
-| **Hash Security** | N/A | 128-bit (SHA3-256) | **Ava Guardian adds integrity layer** |
-| **MAC Security** | N/A | 256-bit (HMAC-SHA3-256) | **Ava Guardian adds authentication** |
+| **Hash Security** | N/A | 128-bit (SHA3-256) | **AMA Cryptography adds integrity layer** |
+| **MAC Security** | N/A | 256-bit (HMAC-SHA3-256) | **AMA Cryptography adds authentication** |
 
-**Overall:** Cryptographic strength is **equivalent** for signatures, but Ava Guardian adds **additional security properties** through extra layers.
+**Overall:** Cryptographic strength is **equivalent** for signatures, but AMA Cryptography adds **additional security properties** through extra layers.
 
 ---
 
 ### Implementation Assurance
 
-| Property | OpenSSL+liboqs | Ava Guardian | Winner |
+| Property | OpenSSL+liboqs | AMA Cryptography | Winner |
 |----------|----------------|--------------|--------|
 | **External Audit** | ✅ Multiple audits | ❌ None | **OpenSSL+liboqs** |
 | **FIPS Certification** | ✅ Available | ❌ No | **OpenSSL+liboqs** |
@@ -180,7 +180,7 @@
 
 ## Honest Security Assessment
 
-### When Ava Guardian is MORE Secure
+### When AMA Cryptography is MORE Secure
 
 1. ✅ **Against algorithm breaks** - Multiple independent layers mean breaking one doesn't compromise the system
 2. ✅ **Against zero-days** - Defense-in-depth means attacker needs multiple exploits
@@ -198,7 +198,7 @@
 
 ### The Nuanced Truth
 
-**Ava Guardian provides ARCHITECTURAL security advantages:**
+**AMA Cryptography provides ARCHITECTURAL security advantages:**
 - More security layers (6 vs 2)
 - Runtime monitoring
 - Better defense against multi-vector attacks
@@ -219,16 +219,16 @@
 - ✓ You will implement your own defense-in-depth layers
 - ✓ Regulatory compliance requires certified libraries
 
-### Use Ava Guardian when:
+### Use AMA Cryptography when:
 - ✓ You accept the **lack of external audit** risk
 - ✓ You need integrated defense-in-depth (6 layers)
 - ✓ You want runtime security monitoring (3R)
 - ✓ You value architectural security over implementation maturity
 - ✓ You can wait for **future external audit** before production use
 
-### CRITICAL Security Requirements for Ava Guardian
+### CRITICAL Security Requirements for AMA Cryptography
 
-Before using Ava Guardian in production:
+Before using AMA Cryptography in production:
 
 1. **MANDATORY External Audit**
    - Independent cryptographic review
@@ -251,7 +251,7 @@ Before using Ava Guardian in production:
 
 ## Bottom Line
 
-**Is Ava Guardian safer or more secure?**
+**Is AMA Cryptography safer or more secure?**
 
 **Architecturally:** YES
 - 6 security layers vs 2
@@ -265,11 +265,11 @@ Before using Ava Guardian in production:
 
 **For Production Use:**
 - **OpenSSL+liboqs:** Ready now (with caveats)
-- **Ava Guardian:** Ready **AFTER external audit + FIPS certification**
+- **AMA Cryptography:** Ready **AFTER external audit + FIPS certification**
 
 **The Honest Answer:**
 
-Ava Guardian **COULD BE more secure** if it receives proper external auditing. The architecture provides genuine security advantages. But **as it stands**, OpenSSL+liboqs is **more trustworthy** for production because it has been extensively audited and battle-tested.
+AMA Cryptography **COULD BE more secure** if it receives proper external auditing. The architecture provides genuine security advantages. But **as it stands**, OpenSSL+liboqs is **more trustworthy** for production because it has been extensively audited and battle-tested.
 
 **Security is not just about features - it's about proven correctness.**
 
@@ -279,7 +279,7 @@ Ava Guardian **COULD BE more secure** if it receives proper external auditing. T
 
 1. OpenSSL Security Audits: https://www.openssl.org/policies/secpolicy.html
 2. liboqs NIST Submission: https://openquantumsafe.org/
-3. Ava Guardian Security Analysis: SECURITY_ANALYSIS.md
+3. AMA Cryptography Security Analysis: SECURITY_ANALYSIS.md
 4. FIPS 140-2 Requirements: https://csrc.nist.gov/publications/detail/fips/140/2/final
 
 ---

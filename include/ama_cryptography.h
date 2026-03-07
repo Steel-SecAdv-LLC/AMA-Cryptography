@@ -15,17 +15,17 @@
  */
 
 /**
- * @file ava_guardian.h
- * @brief Ava Guardian ♱ (AG♱) - Core C API for Post-Quantum Cryptography
- * @version 1.1
+ * @file ama_cryptography.h
+ * @brief AMA Cryptography ♱ (AG♱) - Core C API for Post-Quantum Cryptography
+ * @version 2.0
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2026-01-09
  *
  * High-performance C implementation of quantum-resistant cryptographic primitives.
  */
 
-#ifndef AVA_GUARDIAN_H
-#define AVA_GUARDIAN_H
+#ifndef AMA_CRYPTOGRAPHY_H
+#define AMA_CRYPTOGRAPHY_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -38,87 +38,87 @@ extern "C" {
  * VERSION INFORMATION
  * ============================================================================ */
 
-#define AVA_GUARDIAN_VERSION_MAJOR 1
-#define AVA_GUARDIAN_VERSION_MINOR 1
-#define AVA_GUARDIAN_VERSION_PATCH 0
-#define AVA_GUARDIAN_VERSION_STRING "1.1"
+#define AMA_CRYPTOGRAPHY_VERSION_MAJOR 2
+#define AMA_CRYPTOGRAPHY_VERSION_MINOR 0
+#define AMA_CRYPTOGRAPHY_VERSION_PATCH 0
+#define AMA_CRYPTOGRAPHY_VERSION_STRING "2.0"
 
 /* ============================================================================
  * ALGORITHM IDENTIFIERS
  * ============================================================================ */
 
 typedef enum {
-    AVA_ALG_ML_DSA_65 = 0,    /**< CRYSTALS-Dilithium (ML-DSA-65) */
-    AVA_ALG_KYBER_1024 = 1,   /**< CRYSTALS-Kyber (Kyber-1024) */
-    AVA_ALG_SPHINCS_256F = 2, /**< SPHINCS+-256f */
-    AVA_ALG_ED25519 = 3,      /**< Ed25519 (classical) */
-    AVA_ALG_HYBRID = 4        /**< Hybrid mode (classical + PQC) */
-} ava_algorithm_t;
+    AMA_ALG_ML_DSA_65 = 0,    /**< CRYSTALS-Dilithium (ML-DSA-65) */
+    AMA_ALG_KYBER_1024 = 1,   /**< CRYSTALS-Kyber (Kyber-1024) */
+    AMA_ALG_SPHINCS_256F = 2, /**< SPHINCS+-256f */
+    AMA_ALG_ED25519 = 3,      /**< Ed25519 (classical) */
+    AMA_ALG_HYBRID = 4        /**< Hybrid mode (classical + PQC) */
+} ama_algorithm_t;
 
 /* ============================================================================
  * ERROR CODES
  * ============================================================================ */
 
 typedef enum {
-    AVA_SUCCESS = 0,
-    AVA_ERROR_INVALID_PARAM = -1,
-    AVA_ERROR_MEMORY = -2,
-    AVA_ERROR_CRYPTO = -3,
-    AVA_ERROR_VERIFY_FAILED = -4,
-    AVA_ERROR_NOT_IMPLEMENTED = -5,
-    AVA_ERROR_TIMING_ATTACK = -6,
-    AVA_ERROR_SIDE_CHANNEL = -7
-} ava_error_t;
+    AMA_SUCCESS = 0,
+    AMA_ERROR_INVALID_PARAM = -1,
+    AMA_ERROR_MEMORY = -2,
+    AMA_ERROR_CRYPTO = -3,
+    AMA_ERROR_VERIFY_FAILED = -4,
+    AMA_ERROR_NOT_IMPLEMENTED = -5,
+    AMA_ERROR_TIMING_ATTACK = -6,
+    AMA_ERROR_SIDE_CHANNEL = -7
+} ama_error_t;
 
 /* ============================================================================
  * KEY SIZES (bytes)
  * ============================================================================ */
 
 /* ML-DSA-65 (Dilithium3) - FIPS 204 */
-#define AVA_ML_DSA_65_PUBLIC_KEY_BYTES 1952
-#define AVA_ML_DSA_65_SECRET_KEY_BYTES 4032
-#define AVA_ML_DSA_65_SIGNATURE_BYTES 3309
+#define AMA_ML_DSA_65_PUBLIC_KEY_BYTES 1952
+#define AMA_ML_DSA_65_SECRET_KEY_BYTES 4032
+#define AMA_ML_DSA_65_SIGNATURE_BYTES 3309
 
 /* Kyber-1024 */
-#define AVA_KYBER_1024_PUBLIC_KEY_BYTES 1568
-#define AVA_KYBER_1024_SECRET_KEY_BYTES 3168
-#define AVA_KYBER_1024_CIPHERTEXT_BYTES 1568
-#define AVA_KYBER_1024_SHARED_SECRET_BYTES 32
+#define AMA_KYBER_1024_PUBLIC_KEY_BYTES 1568
+#define AMA_KYBER_1024_SECRET_KEY_BYTES 3168
+#define AMA_KYBER_1024_CIPHERTEXT_BYTES 1568
+#define AMA_KYBER_1024_SHARED_SECRET_BYTES 32
 
 /* SPHINCS+-256f */
-#define AVA_SPHINCS_256F_PUBLIC_KEY_BYTES 64
-#define AVA_SPHINCS_256F_SECRET_KEY_BYTES 128
-#define AVA_SPHINCS_256F_SIGNATURE_BYTES 49856
+#define AMA_SPHINCS_256F_PUBLIC_KEY_BYTES 64
+#define AMA_SPHINCS_256F_SECRET_KEY_BYTES 128
+#define AMA_SPHINCS_256F_SIGNATURE_BYTES 49856
 
 /* Ed25519 */
-#define AVA_ED25519_PUBLIC_KEY_BYTES 32
-#define AVA_ED25519_SECRET_KEY_BYTES 64
-#define AVA_ED25519_SIGNATURE_BYTES 64
+#define AMA_ED25519_PUBLIC_KEY_BYTES 32
+#define AMA_ED25519_SECRET_KEY_BYTES 64
+#define AMA_ED25519_SIGNATURE_BYTES 64
 
 /* ============================================================================
  * OPAQUE TYPES
  * ============================================================================ */
 
-typedef struct ava_context_t ava_context_t;
-typedef struct ava_keypair_t ava_keypair_t;
-typedef struct ava_signature_t ava_signature_t;
+typedef struct ama_context_t ama_context_t;
+typedef struct ama_keypair_t ama_keypair_t;
+typedef struct ama_signature_t ama_signature_t;
 
 /* ============================================================================
  * CONTEXT MANAGEMENT
  * ============================================================================ */
 
 /**
- * @brief Initialize Ava Guardian ♱ context
+ * @brief Initialize AMA Cryptography ♱ context
  * @param algorithm Algorithm to use
  * @return Opaque context pointer, NULL on failure
  */
-ava_context_t* ava_context_init(ava_algorithm_t algorithm);
+ama_context_t* ama_context_init(ama_algorithm_t algorithm);
 
 /**
- * @brief Free Ava Guardian ♱ context and scrub memory
+ * @brief Free AMA Cryptography ♱ context and scrub memory
  * @param ctx Context to free
  */
-void ava_context_free(ava_context_t* ctx);
+void ama_context_free(ama_context_t* ctx);
 
 /* ============================================================================
  * KEY GENERATION
@@ -136,10 +136,10 @@ void ava_context_free(ava_context_t* ctx);
  * @param public_key_len Length of public key buffer
  * @param secret_key Output buffer for secret key
  * @param secret_key_len Length of secret key buffer
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_keypair_generate(
-    ava_context_t* ctx,
+ama_error_t ama_keypair_generate(
+    ama_context_t* ctx,
     uint8_t* public_key,
     size_t public_key_len,
     uint8_t* secret_key,
@@ -163,10 +163,10 @@ ava_error_t ava_keypair_generate(
  * @param secret_key_len Length of secret key
  * @param signature Output buffer for signature
  * @param signature_len Pointer to signature length (in/out)
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_sign(
-    ava_context_t* ctx,
+ama_error_t ama_sign(
+    ama_context_t* ctx,
     const uint8_t* message,
     size_t message_len,
     const uint8_t* secret_key,
@@ -188,10 +188,10 @@ ava_error_t ava_sign(
  * @param signature_len Length of signature
  * @param public_key Public key
  * @param public_key_len Length of public key
- * @return AVA_SUCCESS if valid, AVA_ERROR_VERIFY_FAILED if invalid
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
  */
-ava_error_t ava_verify(
-    ava_context_t* ctx,
+ama_error_t ama_verify(
+    ama_context_t* ctx,
     const uint8_t* message,
     size_t message_len,
     const uint8_t* signature,
@@ -218,10 +218,10 @@ ava_error_t ava_verify(
  * @param ciphertext_len Pointer to ciphertext length (in/out)
  * @param shared_secret Output buffer for shared secret
  * @param shared_secret_len Length of shared secret buffer
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_kem_encapsulate(
-    ava_context_t* ctx,
+ama_error_t ama_kem_encapsulate(
+    ama_context_t* ctx,
     const uint8_t* public_key,
     size_t public_key_len,
     uint8_t* ciphertext,
@@ -244,10 +244,10 @@ ava_error_t ava_kem_encapsulate(
  * @param secret_key_len Length of secret key
  * @param shared_secret Output buffer for shared secret
  * @param shared_secret_len Length of shared secret buffer
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_kem_decapsulate(
-    ava_context_t* ctx,
+ama_error_t ama_kem_decapsulate(
+    ama_context_t* ctx,
     const uint8_t* ciphertext,
     size_t ciphertext_len,
     const uint8_t* secret_key,
@@ -267,14 +267,14 @@ ava_error_t ava_kem_decapsulate(
  * @param len Length to compare
  * @return 0 if equal, non-zero otherwise (timing-safe)
  */
-int ava_consttime_memcmp(const void* a, const void* b, size_t len);
+int ama_consttime_memcmp(const void* a, const void* b, size_t len);
 
 /**
  * @brief Secure memory scrubbing
  * @param ptr Memory to scrub
  * @param len Length to scrub
  */
-void ava_secure_memzero(void* ptr, size_t len);
+void ama_secure_memzero(void* ptr, size_t len);
 
 /**
  * @brief Constant-time conditional swap
@@ -283,7 +283,7 @@ void ava_secure_memzero(void* ptr, size_t len);
  * @param b Second buffer
  * @param len Length to swap
  */
-void ava_consttime_swap(int condition, void* a, void* b, size_t len);
+void ama_consttime_swap(int condition, void* a, void* b, size_t len);
 
 /**
  * @brief Constant-time table lookup
@@ -293,7 +293,7 @@ void ava_consttime_swap(int condition, void* a, void* b, size_t len);
  * @param index Index to lookup (may be secret)
  * @param output Output buffer for selected element
  */
-void ava_consttime_lookup(
+void ama_consttime_lookup(
     const void* table,
     size_t table_len,
     size_t elem_size,
@@ -308,7 +308,7 @@ void ava_consttime_lookup(
  * @param src Source buffer
  * @param len Length to copy
  */
-void ava_consttime_copy(int condition, void* dst, const void* src, size_t len);
+void ama_consttime_copy(int condition, void* dst, const void* src, size_t len);
 
 /* ============================================================================
  * HASHING AND KEY DERIVATION
@@ -323,9 +323,9 @@ void ava_consttime_copy(int condition, void* dst, const void* src, size_t len);
  * @param input Input data
  * @param input_len Length of input
  * @param output Output buffer (32 bytes)
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_sha3_256(
+ama_error_t ama_sha3_256(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output
@@ -341,9 +341,9 @@ ava_error_t ava_sha3_256(
  * @param input Input data
  * @param input_len Length of input
  * @param output Output buffer (64 bytes)
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_sha3_512(
+ama_error_t ama_sha3_512(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output
@@ -362,15 +362,15 @@ typedef struct {
     uint8_t buffer[168];    /**< Rate buffer (168 bytes max for SHAKE128; 136 for SHA3-256/SHAKE256) */
     size_t buffer_len;      /**< Current bytes in buffer */
     int finalized;          /**< Set to 1 after final() called */
-} ava_sha3_ctx;
+} ama_sha3_ctx;
 
 /**
  * @brief Initialize SHA3-256 streaming context
  *
  * @param ctx Context to initialize
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_sha3_init(ava_sha3_ctx* ctx);
+ama_error_t ama_sha3_init(ama_sha3_ctx* ctx);
 
 /**
  * @brief Update SHA3-256 with additional data
@@ -380,9 +380,9 @@ ava_error_t ava_sha3_init(ava_sha3_ctx* ctx);
  * @param ctx Initialized context
  * @param data Data to absorb
  * @param len Length of data in bytes
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_sha3_update(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
+ama_error_t ama_sha3_update(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
 
 /**
  * @brief Finalize SHA3-256 and output digest
@@ -391,35 +391,35 @@ ava_error_t ava_sha3_update(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
  *
  * @param ctx Context to finalize
  * @param output Output buffer (32 bytes)
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_sha3_final(ava_sha3_ctx* ctx, uint8_t* output);
+ama_error_t ama_sha3_final(ama_sha3_ctx* ctx, uint8_t* output);
 
 /* ============================================================================
  * STREAMING SHAKE256 API (init/absorb/finalize/squeeze)
  * Enables incremental absorb and multi-block squeeze for SHAKE256 (XOF)
- * Reuses ava_sha3_ctx since SHAKE256 rate = 136 = SHA3-256 rate
+ * Reuses ama_sha3_ctx since SHAKE256 rate = 136 = SHA3-256 rate
  * ============================================================================ */
 
 /**
  * @brief Initialize SHAKE256 incremental context
  */
-ava_error_t ava_shake256_inc_init(ava_sha3_ctx* ctx);
+ama_error_t ama_shake256_inc_init(ama_sha3_ctx* ctx);
 
 /**
  * @brief Absorb data into SHAKE256 incremental context
  */
-ava_error_t ava_shake256_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
+ama_error_t ama_shake256_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
 
 /**
  * @brief Finalize SHAKE256 absorption (apply padding). Must be called before squeeze.
  */
-ava_error_t ava_shake256_inc_finalize(ava_sha3_ctx* ctx);
+ama_error_t ama_shake256_inc_finalize(ama_sha3_ctx* ctx);
 
 /**
  * @brief Squeeze output bytes from finalized SHAKE256 context. Can be called multiple times.
  */
-ava_error_t ava_shake256_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen);
+ama_error_t ama_shake256_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen);
 
 /* ============================================================================
  * STREAMING SHAKE128 API (init/absorb/finalize/squeeze)
@@ -430,22 +430,22 @@ ava_error_t ava_shake256_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t 
 /**
  * @brief Initialize SHAKE128 incremental context
  */
-ava_error_t ava_shake128_inc_init(ava_sha3_ctx* ctx);
+ama_error_t ama_shake128_inc_init(ama_sha3_ctx* ctx);
 
 /**
  * @brief Absorb data into SHAKE128 incremental context
  */
-ava_error_t ava_shake128_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
+ama_error_t ama_shake128_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
 
 /**
  * @brief Finalize SHAKE128 absorption (apply padding). Must be called before squeeze.
  */
-ava_error_t ava_shake128_inc_finalize(ava_sha3_ctx* ctx);
+ama_error_t ama_shake128_inc_finalize(ama_sha3_ctx* ctx);
 
 /**
  * @brief Squeeze output bytes from finalized SHAKE128 context. Can be called multiple times.
  */
-ava_error_t ava_shake128_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen);
+ama_error_t ama_shake128_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen);
 
 /**
  * @brief HKDF key derivation (RFC 5869)
@@ -462,9 +462,9 @@ ava_error_t ava_shake128_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t 
  * @param info_len Length of info
  * @param okm Output key material
  * @param okm_len Desired length of OKM
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_hkdf(
+ama_error_t ama_hkdf(
     const uint8_t* salt,
     size_t salt_len,
     const uint8_t* ikm,
@@ -488,9 +488,9 @@ ava_error_t ava_hkdf(
  *
  * @param public_key Output: 32-byte public key
  * @param secret_key Input/Output: 64-byte buffer (seed in, seed||pk out)
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]);
+ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]);
 
 /**
  * @brief Sign a message with Ed25519
@@ -502,9 +502,9 @@ ava_error_t ava_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]);
  * @param message Message to sign
  * @param message_len Length of message
  * @param secret_key 64-byte secret key (seed || public_key)
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_ed25519_sign(
+ama_error_t ama_ed25519_sign(
     uint8_t signature[64],
     const uint8_t *message,
     size_t message_len,
@@ -521,9 +521,9 @@ ava_error_t ava_ed25519_sign(
  * @param message Message to verify
  * @param message_len Length of message
  * @param public_key 32-byte public key
- * @return AVA_SUCCESS if valid, AVA_ERROR_VERIFY_FAILED if invalid
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
  */
-ava_error_t ava_ed25519_verify(
+ama_error_t ama_ed25519_verify(
     const uint8_t signature[64],
     const uint8_t *message,
     size_t message_len,
@@ -538,7 +538,7 @@ ava_error_t ava_ed25519_verify(
  * @brief Get library version string
  * @return Version string (e.g., "1.0.0")
  */
-const char* ava_version_string(void);
+const char* ama_version_string(void);
 
 /**
  * @brief Get library version number
@@ -546,10 +546,10 @@ const char* ava_version_string(void);
  * @param minor Output for minor version
  * @param patch Output for patch version
  */
-void ava_version_number(int* major, int* minor, int* patch);
+void ama_version_number(int* major, int* minor, int* patch);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* AVA_GUARDIAN_H */
+#endif /* AMA_CRYPTOGRAPHY_H */

@@ -5,7 +5,7 @@
 cryptography>=41.0.0
 
 # Quantum-resistant cryptography is provided natively by the C library
-# Build with: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build
+# Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
 
 # Build dependencies (required for Cython extensions)
 Cython>=3.0.0,<3.1.0; python_version < "3.9"

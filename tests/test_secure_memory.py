@@ -2,7 +2,7 @@
 # Copyright 2025 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 """
-Tests for the secure memory module (ava_guardian.secure_memory).
+Tests for the secure memory module (ama_cryptography.secure_memory).
 
 Verifies:
 - Memory zeroing functionality
@@ -23,7 +23,7 @@ class TestSecureMemoryAvailability:
 
     def test_module_imports(self):
         """Module imports successfully regardless of pynacl availability."""
-        from ava_guardian import secure_memory
+        from ama_cryptography import secure_memory
 
         # Should always have these functions
         assert hasattr(secure_memory, "secure_memzero")
@@ -36,14 +36,14 @@ class TestSecureMemoryAvailability:
 
     def test_is_available_returns_bool(self):
         """is_available() returns a boolean."""
-        from ava_guardian.secure_memory import is_available
+        from ama_cryptography.secure_memory import is_available
 
         result = is_available()
         assert isinstance(result, bool)
 
     def test_get_status_returns_dict(self):
         """get_status() returns status dictionary."""
-        from ava_guardian.secure_memory import get_status
+        from ama_cryptography.secure_memory import get_status
 
         status = get_status()
         assert isinstance(status, dict)
@@ -58,7 +58,7 @@ class TestSecureMemzero:
 
     def test_zeros_bytearray(self):
         """secure_memzero zeros all bytes in a bytearray."""
-        from ava_guardian.secure_memory import secure_memzero
+        from ama_cryptography.secure_memory import secure_memzero
 
         data = bytearray(secrets.token_bytes(1000))
         assert any(b != 0 for b in data), "Test data should not be all zeros"
@@ -69,7 +69,7 @@ class TestSecureMemzero:
 
     def test_zeros_memoryview(self):
         """secure_memzero works with memoryview."""
-        from ava_guardian.secure_memory import secure_memzero
+        from ama_cryptography.secure_memory import secure_memzero
 
         data = bytearray(100)
         for i in range(len(data)):
@@ -82,7 +82,7 @@ class TestSecureMemzero:
 
     def test_handles_empty_buffer(self):
         """secure_memzero handles empty buffer."""
-        from ava_guardian.secure_memory import secure_memzero
+        from ama_cryptography.secure_memory import secure_memzero
 
         data = bytearray()
         secure_memzero(data)  # Should not raise
@@ -90,7 +90,7 @@ class TestSecureMemzero:
 
     def test_preserves_length(self):
         """secure_memzero preserves buffer length."""
-        from ava_guardian.secure_memory import secure_memzero
+        from ama_cryptography.secure_memory import secure_memzero
 
         original_len = 500
         data = bytearray(secrets.token_bytes(original_len))
@@ -101,7 +101,7 @@ class TestSecureMemzero:
 
     def test_rejects_immutable_bytes(self):
         """secure_memzero rejects immutable bytes."""
-        from ava_guardian.secure_memory import secure_memzero
+        from ama_cryptography.secure_memory import secure_memzero
 
         data = b"immutable"
         with pytest.raises(TypeError):
@@ -109,7 +109,7 @@ class TestSecureMemzero:
 
     def test_large_buffer(self):
         """secure_memzero handles large buffers."""
-        from ava_guardian.secure_memory import secure_memzero
+        from ama_cryptography.secure_memory import secure_memzero
 
         size = 1024 * 1024  # 1 MB
         data = bytearray(size)
@@ -131,7 +131,7 @@ class TestSecureMlock:
         """secure_mlock returns boolean indicating success or graceful fallback."""
         import warnings
 
-        from ava_guardian.secure_memory import secure_mlock
+        from ama_cryptography.secure_memory import secure_mlock
 
         data = bytearray(4096)
 
@@ -146,7 +146,7 @@ class TestSecureMlock:
         """Can lock and unlock memory without error."""
         import warnings
 
-        from ava_guardian.secure_memory import secure_mlock, secure_munlock
+        from ama_cryptography.secure_memory import secure_mlock, secure_munlock
 
         data = bytearray(4096)
 
@@ -165,7 +165,7 @@ class TestSecureMlock:
         """secure_mlock handles empty buffer."""
         import warnings
 
-        from ava_guardian.secure_memory import secure_mlock
+        from ama_cryptography.secure_memory import secure_mlock
 
         data = bytearray()
 
@@ -182,7 +182,7 @@ class TestConstantTimeCompare:
 
     def test_equal_strings(self):
         """constant_time_compare returns True for equal bytes."""
-        from ava_guardian.secure_memory import constant_time_compare
+        from ama_cryptography.secure_memory import constant_time_compare
 
         a = b"secret password"
         b = b"secret password"
@@ -191,7 +191,7 @@ class TestConstantTimeCompare:
 
     def test_unequal_strings(self):
         """constant_time_compare returns False for different bytes."""
-        from ava_guardian.secure_memory import constant_time_compare
+        from ama_cryptography.secure_memory import constant_time_compare
 
         a = b"secret password"
         b = b"secret Password"  # Different case
@@ -200,7 +200,7 @@ class TestConstantTimeCompare:
 
     def test_different_lengths(self):
         """constant_time_compare returns False for different lengths."""
-        from ava_guardian.secure_memory import constant_time_compare
+        from ama_cryptography.secure_memory import constant_time_compare
 
         a = b"short"
         b = b"longer string"
@@ -209,14 +209,14 @@ class TestConstantTimeCompare:
 
     def test_empty_strings(self):
         """constant_time_compare handles empty bytes."""
-        from ava_guardian.secure_memory import constant_time_compare
+        from ama_cryptography.secure_memory import constant_time_compare
 
         assert constant_time_compare(b"", b"") is True
         assert constant_time_compare(b"", b"x") is False
 
     def test_random_bytes(self):
         """constant_time_compare works with random bytes."""
-        from ava_guardian.secure_memory import constant_time_compare
+        from ama_cryptography.secure_memory import constant_time_compare
 
         a = secrets.token_bytes(32)
         b = secrets.token_bytes(32)
@@ -235,7 +235,7 @@ class TestSecureBuffer:
         """SecureBuffer can be used as context manager."""
         import warnings
 
-        from ava_guardian.secure_memory import SecureBuffer
+        from ama_cryptography.secure_memory import SecureBuffer
 
         # Suppress expected warning when pynacl mlock is unavailable
         with warnings.catch_warnings():
@@ -251,7 +251,7 @@ class TestSecureBuffer:
         """SecureBuffer zeros data on context exit."""
         import warnings
 
-        from ava_guardian.secure_memory import SecureBuffer
+        from ama_cryptography.secure_memory import SecureBuffer
 
         buffer_ref = None
 
@@ -267,7 +267,7 @@ class TestSecureBuffer:
 
     def test_access_outside_context_raises(self):
         """Accessing SecureBuffer.data outside context raises."""
-        from ava_guardian.secure_memory import SecureBuffer
+        from ama_cryptography.secure_memory import SecureBuffer
 
         sb = SecureBuffer(32)
 
@@ -276,14 +276,14 @@ class TestSecureBuffer:
 
     def test_size_property(self):
         """SecureBuffer.size returns correct size."""
-        from ava_guardian.secure_memory import SecureBuffer
+        from ama_cryptography.secure_memory import SecureBuffer
 
         sb = SecureBuffer(64)
         assert sb.size == 64
 
     def test_negative_size_raises(self):
         """SecureBuffer with negative size raises ValueError."""
-        from ava_guardian.secure_memory import SecureBuffer
+        from ama_cryptography.secure_memory import SecureBuffer
 
         with pytest.raises(ValueError):
             SecureBuffer(-1)
@@ -292,7 +292,7 @@ class TestSecureBuffer:
         """SecureBuffer with zero size works."""
         import warnings
 
-        from ava_guardian.secure_memory import SecureBuffer
+        from ama_cryptography.secure_memory import SecureBuffer
 
         # Suppress expected warning when pynacl mlock is unavailable
         with warnings.catch_warnings():
@@ -304,7 +304,7 @@ class TestSecureBuffer:
         """SecureBuffer zeros data even if exception occurs."""
         import warnings
 
-        from ava_guardian.secure_memory import SecureBuffer
+        from ama_cryptography.secure_memory import SecureBuffer
 
         buffer_ref = None
 
@@ -328,7 +328,7 @@ class TestSecureBufferFunction:
         """secure_buffer() can be used as context manager."""
         import warnings
 
-        from ava_guardian.secure_memory import secure_buffer
+        from ama_cryptography.secure_memory import secure_buffer
 
         # Suppress expected warning when pynacl mlock is unavailable
         with warnings.catch_warnings():
@@ -341,7 +341,7 @@ class TestSecureBufferFunction:
         """secure_buffer() zeros data on exit."""
         import warnings
 
-        from ava_guardian.secure_memory import secure_buffer
+        from ama_cryptography.secure_memory import secure_buffer
 
         buffer_ref = None
 
@@ -360,7 +360,7 @@ class TestSecureRandomBytes:
 
     def test_generates_correct_length(self):
         """secure_random_bytes generates correct length."""
-        from ava_guardian.secure_memory import secure_random_bytes
+        from ama_cryptography.secure_memory import secure_random_bytes
 
         for size in [0, 1, 16, 32, 100, 1000]:
             result = secure_random_bytes(size)
@@ -368,14 +368,14 @@ class TestSecureRandomBytes:
 
     def test_returns_bytes(self):
         """secure_random_bytes returns bytes type."""
-        from ava_guardian.secure_memory import secure_random_bytes
+        from ama_cryptography.secure_memory import secure_random_bytes
 
         result = secure_random_bytes(32)
         assert isinstance(result, bytes)
 
     def test_different_each_call(self):
         """secure_random_bytes returns different values each call."""
-        from ava_guardian.secure_memory import secure_random_bytes
+        from ama_cryptography.secure_memory import secure_random_bytes
 
         results = [secure_random_bytes(32) for _ in range(10)]
         # All should be unique (with overwhelming probability)
@@ -383,7 +383,7 @@ class TestSecureRandomBytes:
 
     def test_negative_size_raises(self):
         """secure_random_bytes with negative size raises ValueError."""
-        from ava_guardian.secure_memory import secure_random_bytes
+        from ama_cryptography.secure_memory import secure_random_bytes
 
         with pytest.raises(ValueError):
             secure_random_bytes(-1)
@@ -396,7 +396,7 @@ class TestPlatformCompatibility:
         """Module works on current platform."""
         import warnings
 
-        from ava_guardian.secure_memory import (
+        from ama_cryptography.secure_memory import (
             SecureBuffer,
             constant_time_compare,
             get_status,
@@ -428,7 +428,7 @@ class TestPlatformCompatibility:
     @pytest.mark.skipif(platform.system() == "Windows", reason="mlock may fail on Windows")
     def test_mlock_on_unix(self):
         """Memory locking may work on Unix systems."""
-        from ava_guardian.secure_memory import get_status, secure_mlock
+        from ama_cryptography.secure_memory import get_status, secure_mlock
 
         status = get_status()
         if status["mlock_available"]:

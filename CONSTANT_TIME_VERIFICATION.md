@@ -11,29 +11,29 @@
 
 ---
 
-This document describes the constant-time verification methodology and tooling for Ava Guardian's cryptographic implementations.
+This document describes the constant-time verification methodology and tooling for AMA Cryptography's cryptographic implementations.
 
 ## Overview
 
-Constant-time implementations are critical for preventing timing side-channel attacks. Ava Guardian employs a defense-in-depth approach to constant-time security:
+Constant-time implementations are critical for preventing timing side-channel attacks. AMA Cryptography employs a defense-in-depth approach to constant-time security:
 
-1. **C Layer**: Custom constant-time utilities in `src/c/ava_consttime.c`
+1. **C Layer**: Custom constant-time utilities in `src/c/ama_consttime.c`
 2. **Python Layer**: Use of `hmac.compare_digest()` for constant-time comparison
 3. **Library Layer**: Native PQC implementations and cryptography.io's constant-time guarantees
 
 ## Constant-Time Implementations
 
-### C Utilities (`src/c/ava_consttime.c`)
+### C Utilities (`src/c/ama_consttime.c`)
 
 All 5 constant-time functions are implemented and verified:
 
 | Function | Purpose | Implementation | dudect Verified |
 |----------|---------|----------------|-----------------|
-| `ava_consttime_memcmp()` | Byte array comparison | XOR accumulation without early exit | Yes |
-| `ava_secure_memzero()` | Secure memory clearing | Volatile pointer to prevent optimization | Yes |
-| `ava_consttime_swap()` | Conditional buffer swap | Bitwise masking based on condition | Yes |
-| `ava_consttime_lookup()` | Table lookup | Full table scan with conditional copy | Yes |
-| `ava_consttime_copy()` | Conditional copy | Bitwise masking based on condition | Yes |
+| `ama_consttime_memcmp()` | Byte array comparison | XOR accumulation without early exit | Yes |
+| `ama_secure_memzero()` | Secure memory clearing | Volatile pointer to prevent optimization | Yes |
+| `ama_consttime_swap()` | Conditional buffer swap | Bitwise masking based on condition | Yes |
+| `ama_consttime_lookup()` | Table lookup | Full table scan with conditional copy | Yes |
+| `ama_consttime_copy()` | Conditional copy | Bitwise masking based on condition | Yes |
 
 ### Python Utilities (`code_guardian_secure.py`)
 
@@ -90,23 +90,23 @@ make
 ```
 =======================================================
 dudect-style Constant-Time Verification Harness
-Ava Guardian Cryptographic Library
+AMA Cryptography Cryptographic Library
 =======================================================
 
 Methodology: Welch's t-test on execution times
 Threshold: |t| < 4.5 (99.999% confidence)
 Iterations: 1000000 per test
 
-Testing ava_consttime_memcmp (1000000 iterations)...
-Testing ava_consttime_swap (1000000 iterations)...
-Testing ava_secure_memzero (1000000 iterations)...
+Testing ama_consttime_memcmp (1000000 iterations)...
+Testing ama_consttime_swap (1000000 iterations)...
+Testing ama_secure_memzero (1000000 iterations)...
 
 =======================================================
 Results Summary
 =======================================================
-  ava_consttime_memcmp: t = 0.1234 [PASS - no leakage detected]
-  ava_consttime_swap  : t = -0.5678 [PASS - no leakage detected]
-  ava_secure_memzero  : t = 0.0912 [PASS - no leakage detected]
+  ama_consttime_memcmp: t = 0.1234 [PASS - no leakage detected]
+  ama_consttime_swap  : t = -0.5678 [PASS - no leakage detected]
+  ama_secure_memzero  : t = 0.0912 [PASS - no leakage detected]
 
 Overall: PASS - No timing leakage detected
 =======================================================
@@ -191,9 +191,9 @@ make
 ```
 
 These tests verify:
-- `ava_consttime_memcmp`: Identical buffers return 0, different buffers return non-zero
-- `ava_secure_memzero`: Buffer is completely zeroed
-- `ava_consttime_swap`: Buffers are swapped when condition=1, unchanged when condition=0
+- `ama_consttime_memcmp`: Identical buffers return 0, different buffers return non-zero
+- `ama_secure_memzero`: Buffer is completely zeroed
+- `ama_consttime_swap`: Buffers are swapped when condition=1, unchanged when condition=0
 
 ## Limitations and Caveats
 

@@ -13,10 +13,10 @@
 # limitations under the License.
 
 """
-Ava Guardian ♱ (AG♱): Demonstration Test Suite
+AMA Cryptography ♱ (AG♱): Demonstration Test Suite
 ===============================================
 
-Test suite for validating Ava Guardian ♱ demonstration functionality.
+Test suite for validating AMA Cryptography ♱ demonstration functionality.
 
 This test module validates that the demonstration function executes successfully
 and produces correct output, verifying all six cryptographic layers.
@@ -25,7 +25,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
-Version: 1.1
+Version: 2.0
 
 AI Co-Architects:
     Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
@@ -97,7 +97,7 @@ class TestDemonstration:
 
         # Critical output checks
         required_outputs = [
-            ("Ava Guardian", "Title banner"),
+            ("AMA Cryptography", "Title banner"),
             ("Generating key management system", "Key generation step"),
             ("Creating Omni-Code cryptographic package", "Package creation step"),
             ("Verifying cryptographic package", "Verification step"),
@@ -185,7 +185,7 @@ class TestDemonstration:
         test_script = """
 import sys
 try:
-    from ava_guardian.pqc_backends import DILITHIUM_AVAILABLE, DILITHIUM_BACKEND
+    from ama_cryptography.pqc_backends import DILITHIUM_AVAILABLE, DILITHIUM_BACKEND
     if DILITHIUM_AVAILABLE:
         print("native_available")
     else:
