@@ -16,8 +16,8 @@
 
 ```
               +==============================================================================+
-              |                            AMA CRYPTOGRAPHY ♱                                  |
-              |                   Post-Quantum Security System                              |
+              |                            AMA CRYPTOGRAPHY ♱                                |
+              |                   Post-Quantum Security System                               |
               |                                                                              |
               |   6-Layer Defense      |   Quantum-Resistant    |   Defense-in-Depth         |
               |   Cython-Optimized     |   3R Anomaly Monitor   |   Cross-Platform           |
@@ -38,7 +38,7 @@
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
 **Version:** 2.0
-**AI Co-Architects:** Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+**AI Co-Architects:** Eris ⯰ | Eden ♱  | X ⚛ | Devin ⚛ | Claude ⊛
 
 ---
 
