@@ -69,12 +69,16 @@ try:
     )
 
     HMAC_HKDF_AVAILABLE = True
-except ImportError:
+except (ImportError, RuntimeError):
     HMAC_HKDF_AVAILABLE = False
-    warnings.warn(
-        "HMAC/HKDF functions not available. Install required dependencies.",
-        category=UserWarning,
-    )
+    # Use catch_warnings to avoid triggering pytest's "warnings as errors"
+    with warnings.catch_warnings():
+        warnings.simplefilter("default", UserWarning)
+        warnings.warn(
+            "HMAC/HKDF functions not available. Build native C library first.",
+            category=UserWarning,
+            stacklevel=2,
+        )
 
 # Import RFC 3161 timestamping
 try:

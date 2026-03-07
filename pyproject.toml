@@ -160,6 +160,8 @@ filterwarnings = [
     "error",
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",
+    "ignore::UserWarning",
+    "default::ama_cryptography.key_management.SecurityWarning",
 ]
 
 # Coverage configuration

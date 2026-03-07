@@ -62,7 +62,7 @@ try:
 
     _HAS_NUMPY = True
 except ImportError:
-    np = None
+    np = None  # type: ignore[assignment]
     _HAS_NUMPY = False
 
 
