@@ -313,6 +313,30 @@ def _setup_aes_gcm_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
+# HKDF native availability
+_HKDF_NATIVE_AVAILABLE = False
+
+
+def _setup_hkdf_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for HKDF functions. Separate from PQC setup."""
+    try:
+        lib.ama_hkdf.argtypes = [
+            ctypes.c_char_p,  # salt
+            ctypes.c_size_t,  # salt_len
+            ctypes.c_char_p,  # ikm
+            ctypes.c_size_t,  # ikm_len
+            ctypes.c_char_p,  # info
+            ctypes.c_size_t,  # info_len
+            ctypes.c_char_p,  # okm
+            ctypes.c_size_t,  # okm_len
+        ]
+        lib.ama_hkdf.restype = ctypes.c_int
+
+        return True
+    except AttributeError:
+        return False
+
+
 _native_lib = _find_native_library()
 if _native_lib is not None:
     if _setup_native_ctypes(_native_lib):
@@ -324,6 +348,7 @@ if _native_lib is not None:
         _SPHINCS_BACKEND = "native"
     _ED25519_NATIVE_AVAILABLE = _setup_ed25519_ctypes(_native_lib)
     _AES_GCM_NATIVE_AVAILABLE = _setup_aes_gcm_ctypes(_native_lib)
+    _HKDF_NATIVE_AVAILABLE = _setup_hkdf_ctypes(_native_lib)
 
 
 # Public API for checking availability
@@ -1180,6 +1205,59 @@ def native_aes256_gcm_decrypt(
         raise ValueError("AES-256-GCM authentication tag verification failed")
 
     return bytes(pt_buf)
+
+
+# ============================================================================
+# HKDF NATIVE C BACKEND (RFC 5869)
+# ============================================================================
+
+
+def native_hkdf(
+    ikm: bytes,
+    length: int,
+    salt: "Optional[bytes]" = None,
+    info: bytes = b"",
+) -> bytes:
+    """
+    HKDF key derivation using native C backend (HMAC-SHA3-256).
+
+    Args:
+        ikm: Input key material
+        length: Desired output length in bytes (max 8160 = 255*32)
+        salt: Optional salt (None uses zero-length salt per RFC 5869)
+        info: Context/application-specific info
+
+    Returns:
+        Derived key material of requested length
+
+    Raises:
+        RuntimeError: If native library is not available
+        ValueError: If length exceeds maximum
+    """
+    if _native_lib is None or not _HKDF_NATIVE_AVAILABLE:
+        raise RuntimeError("HKDF native backend not available. " + _INSTALL_HINT)
+
+    if length > 8160:
+        raise ValueError(f"HKDF output length must be <= 8160, got {length}")
+    if length <= 0:
+        raise ValueError(f"HKDF output length must be > 0, got {length}")
+
+    okm_buf = ctypes.create_string_buffer(length)
+
+    rc = _native_lib.ama_hkdf(
+        salt if salt else None,
+        ctypes.c_size_t(len(salt) if salt else 0),
+        ikm,
+        ctypes.c_size_t(len(ikm)),
+        info if len(info) > 0 else None,
+        ctypes.c_size_t(len(info)),
+        okm_buf,
+        ctypes.c_size_t(length),
+    )
+    if rc != 0:
+        raise RuntimeError(f"HKDF derivation failed (rc={rc})")
+
+    return bytes(okm_buf)
 
 
 # ============================================================================

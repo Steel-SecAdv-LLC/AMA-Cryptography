@@ -163,10 +163,8 @@ class TestSecureKeyStorageGCM:
             # Try to retrieve with different password
             storage2 = SecureKeyStorage(path, master_password="wrong-password")
 
-            # AES-GCM raises InvalidTag on wrong key
-            from cryptography.exceptions import InvalidTag
-
-            with pytest.raises(InvalidTag):
+            # Native AES-GCM raises ValueError on authentication failure
+            with pytest.raises(ValueError):
                 storage2.retrieve_key("test-key")
 
     def test_key_id_validation(self):

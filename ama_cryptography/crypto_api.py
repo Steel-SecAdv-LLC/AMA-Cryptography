@@ -29,13 +29,7 @@ import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
-
-if TYPE_CHECKING:
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-        Ed25519PrivateKey,
-        Ed25519PublicKey,
-    )
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ama_cryptography.pqc_backends import (
     DILITHIUM_AVAILABLE,
@@ -326,193 +320,91 @@ class Ed25519Provider(CryptoProvider):
     Provides classical (non-quantum-resistant) signatures.
     Use MLDSAProvider for post-quantum security.
 
-    Backend priority:
-    1. Native C implementation (zero external deps)
-    2. PyCA cryptography library (fallback)
+    Uses native C implementation (zero external dependencies).
 
     Security: 128-bit classical security (NOT quantum-resistant)
     Standard: RFC 8032
     """
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON) -> None:
+    def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY) -> None:
         self.backend = backend
         self.algorithm = AlgorithmType.ED25519
 
         from ama_cryptography.pqc_backends import _ED25519_NATIVE_AVAILABLE, _native_lib
 
-        # Honor the backend parameter:
-        # C_LIBRARY = force native (error if unavailable)
-        # PURE_PYTHON = force PyCA cryptography fallback
-        # Default: auto-detect (native preferred)
-        if backend == CryptoBackend.C_LIBRARY:
-            self._use_native = _native_lib is not None and _ED25519_NATIVE_AVAILABLE
-            if not self._use_native:
-                raise RuntimeError(
-                    "Ed25519 native C backend requested but not available. "
-                    "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
-                )
-        elif backend == CryptoBackend.PURE_PYTHON:
-            self._use_native = False
-        else:
-            self._use_native = _native_lib is not None and _ED25519_NATIVE_AVAILABLE
+        if not (_native_lib is not None and _ED25519_NATIVE_AVAILABLE):
+            raise RuntimeError(
+                "Ed25519 native C backend not available. "
+                "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+            )
 
     def generate_keypair(self) -> KeyPair:
-        """Generate Ed25519 keypair (native C preferred, PyCA fallback)."""
-        if self._use_native:
-            from ama_cryptography.pqc_backends import native_ed25519_keypair
+        """Generate Ed25519 keypair using native C backend."""
+        from ama_cryptography.pqc_backends import native_ed25519_keypair
 
-            pk_bytes, sk_bytes = native_ed25519_keypair()
-            # Return 32-byte seed as secret_key for API consistency
-            # The full 64-byte key is seed || public_key
-            return KeyPair(
-                public_key=pk_bytes,
-                secret_key=sk_bytes[:32],
-                algorithm=self.algorithm,
-                metadata={"backend": "native_c", "key_size": 32},
-            )
-
-        # PyCA fallback
-        try:
-            from cryptography.hazmat.primitives import serialization
-            from cryptography.hazmat.primitives.asymmetric import ed25519
-        except ImportError:
-            raise RuntimeError(
-                "Ed25519 requires either the native C library or "
-                "'pip install cryptography'. Neither is available."
-            )
-
-        private_key = ed25519.Ed25519PrivateKey.generate()
-        public_key = private_key.public_key()
-
-        sk_bytes = private_key.private_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PrivateFormat.Raw,
-            encryption_algorithm=serialization.NoEncryption(),
-        )
-
-        pk_bytes = public_key.public_bytes(
-            encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw
-        )
-
+        pk_bytes, sk_bytes = native_ed25519_keypair()
+        # Return 32-byte seed as secret_key for API consistency
+        # The full 64-byte key is seed || public_key
         return KeyPair(
             public_key=pk_bytes,
-            secret_key=sk_bytes,
+            secret_key=sk_bytes[:32],
             algorithm=self.algorithm,
-            metadata={"backend": "cryptography", "key_size": len(pk_bytes)},
+            metadata={"backend": "native_c", "key_size": 32},
         )
 
-    def sign(self, message: bytes, secret_key: "Union[bytes, Ed25519PrivateKey]") -> Signature:
+    def sign(self, message: bytes, secret_key: bytes) -> Signature:
         """
-        Sign message with Ed25519.
-
-        Accepts both 32-byte seeds and Ed25519PrivateKey objects.
-        When using native backend with a 32-byte seed, the seed is expanded
-        to a 64-byte key (seed || public_key) before signing.
+        Sign message with Ed25519 using native C backend.
 
         Args:
             message: Data to sign
-            secret_key: 32-byte Ed25519 seed (bytes), 64-byte native key (bytes),
-                       or Ed25519PrivateKey object
+            secret_key: 32-byte Ed25519 seed or 64-byte native key
 
         Returns:
             Signature object with Ed25519 signature
         """
-        if self._use_native and isinstance(secret_key, bytes):
-            from ama_cryptography.pqc_backends import (
-                native_ed25519_keypair_from_seed,
-                native_ed25519_sign,
-            )
+        from ama_cryptography.pqc_backends import (
+            native_ed25519_keypair_from_seed,
+            native_ed25519_sign,
+        )
 
-            # Handle 32-byte seed: expand to 64-byte native format
-            if len(secret_key) == 32:
-                _, full_sk = native_ed25519_keypair_from_seed(secret_key)
-            elif len(secret_key) == 64:
-                full_sk = secret_key
-            else:
-                raise ValueError(
-                    f"Ed25519 secret key must be 32 or 64 bytes, got {len(secret_key)}"
-                )
-
-            sig_bytes = native_ed25519_sign(message, full_sk)
-            message_hash = hashlib.sha3_256(message).digest()
-
-            return Signature(
-                signature=sig_bytes,
-                algorithm=self.algorithm,
-                message_hash=message_hash,
-                metadata={"signature_size": len(sig_bytes), "backend": "native_c"},
-            )
-
-        # PyCA fallback (or key object passed directly)
-        try:
-            from cryptography.hazmat.primitives.asymmetric import ed25519
-        except ImportError:
-            raise RuntimeError(
-                "Ed25519 requires either the native C library or "
-                "'pip install cryptography'. Neither is available."
-            )
-
-        if isinstance(secret_key, bytes):
-            private_key = ed25519.Ed25519PrivateKey.from_private_bytes(secret_key)
+        # Handle 32-byte seed: expand to 64-byte native format
+        if len(secret_key) == 32:
+            _, full_sk = native_ed25519_keypair_from_seed(secret_key)
+        elif len(secret_key) == 64:
+            full_sk = secret_key
         else:
-            private_key = secret_key  # Already a key object
+            raise ValueError(
+                f"Ed25519 secret key must be 32 or 64 bytes, got {len(secret_key)}"
+            )
 
-        sig_bytes = private_key.sign(message)
+        sig_bytes = native_ed25519_sign(message, full_sk)
         message_hash = hashlib.sha3_256(message).digest()
 
         return Signature(
             signature=sig_bytes,
             algorithm=self.algorithm,
             message_hash=message_hash,
-            metadata={"signature_size": len(sig_bytes), "backend": "cryptography"},
+            metadata={"signature_size": len(sig_bytes), "backend": "native_c"},
         )
 
-    def verify(
-        self, message: bytes, signature: bytes, public_key: "Union[bytes, Ed25519PublicKey]"
-    ) -> bool:
+    def verify(self, message: bytes, signature: bytes, public_key: bytes) -> bool:
         """
-        Verify Ed25519 signature.
-
-        Accepts both raw bytes and Ed25519PublicKey objects.
+        Verify Ed25519 signature using native C backend.
 
         Args:
             message: Original data that was signed
             signature: 64-byte Ed25519 signature
-            public_key: Either 32-byte Ed25519 public key (bytes) OR
-                       Ed25519PublicKey object (for better performance)
+            public_key: 32-byte Ed25519 public key
 
         Returns:
             True if signature is valid, False otherwise
         """
-        if self._use_native and isinstance(public_key, bytes):
-            from ama_cryptography.pqc_backends import native_ed25519_verify
-
-            try:
-                return native_ed25519_verify(signature, message, public_key)
-            except ValueError:
-                return False
-
-        # PyCA fallback (or key object passed directly)
-        try:
-            from cryptography.exceptions import InvalidSignature
-            from cryptography.hazmat.primitives.asymmetric import ed25519
-        except ImportError:
-            raise RuntimeError(
-                "Ed25519 requires either the native C library or "
-                "'pip install cryptography'. Neither is available."
-            )
+        from ama_cryptography.pqc_backends import native_ed25519_verify
 
         try:
-            if isinstance(public_key, bytes):
-                pub_key = ed25519.Ed25519PublicKey.from_public_bytes(public_key)
-            else:
-                pub_key = public_key  # Already a key object
-
-            pub_key.verify(signature, message)
-            return True
-        except InvalidSignature:
-            return False
-        except Exception:
+            return native_ed25519_verify(signature, message, public_key)
+        except ValueError:
             return False
 
 
@@ -725,30 +617,23 @@ class AESGCMProvider:
     Uses native C backend (NIST SP 800-38D) with PyCA cryptography fallback.
 
     Backend priority:
-    1. Native C implementation (zero external deps)
-    2. PyCA cryptography library (fallback)
+    Uses native C implementation (zero external dependencies).
 
     Security: 256-bit key, 96-bit nonce, 128-bit auth tag
     Standard: NIST SP 800-38D
     """
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON) -> None:
+    def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY) -> None:
         self.backend = backend
         self.algorithm = AlgorithmType.AES_256_GCM
 
         from ama_cryptography.pqc_backends import _AES_GCM_NATIVE_AVAILABLE, _native_lib
 
-        if backend == CryptoBackend.C_LIBRARY:
-            self._use_native = _native_lib is not None and _AES_GCM_NATIVE_AVAILABLE
-            if not self._use_native:
-                raise RuntimeError(
-                    "AES-256-GCM native C backend requested but not available. "
-                    "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
-                )
-        elif backend == CryptoBackend.PURE_PYTHON:
-            self._use_native = False
-        else:
-            self._use_native = _native_lib is not None and _AES_GCM_NATIVE_AVAILABLE
+        if not (_native_lib is not None and _AES_GCM_NATIVE_AVAILABLE):
+            raise RuntimeError(
+                "AES-256-GCM native C backend not available. "
+                "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+            )
 
     def encrypt(
         self,
@@ -779,36 +664,15 @@ class AESGCMProvider:
         elif len(nonce) != 12:
             raise ValueError(f"AES-256-GCM nonce must be 12 bytes, got {len(nonce)}")
 
-        if self._use_native:
-            from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
+        from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
-            ct, tag = native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
-            return {
-                "ciphertext": ct,
-                "nonce": nonce,
-                "tag": tag,
-                "aad": aad,
-                "backend": "native_c",
-            }
-
-        # PyCA fallback
-        try:
-            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        except ImportError:
-            raise RuntimeError(
-                "AES-256-GCM requires either the native C library or "
-                "'pip install cryptography'. Neither is available."
-            )
-
-        aesgcm = AESGCM(key)
-        ct = aesgcm.encrypt(nonce, plaintext, aad if aad else None)
-        # PyCA returns ciphertext || tag (last 16 bytes)
+        ct, tag = native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
         return {
-            "ciphertext": ct[:-16],
+            "ciphertext": ct,
             "nonce": nonce,
-            "tag": ct[-16:],
+            "tag": tag,
             "aad": aad,
-            "backend": "cryptography",
+            "backend": "native_c",
         }
 
     def decrypt(
@@ -842,25 +706,9 @@ class AESGCMProvider:
         if len(tag) != 16:
             raise ValueError(f"AES-256-GCM tag must be 16 bytes, got {len(tag)}")
 
-        if self._use_native:
-            from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
+        from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
 
-            return native_aes256_gcm_decrypt(key, nonce, ciphertext, tag, aad)
-
-        # PyCA fallback
-        try:
-            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        except ImportError:
-            raise RuntimeError(
-                "AES-256-GCM requires either the native C library or "
-                "'pip install cryptography'. Neither is available."
-            )
-
-        aesgcm = AESGCM(key)
-        try:
-            return bytes(aesgcm.decrypt(nonce, ciphertext + tag, aad if aad else None))
-        except Exception:
-            raise ValueError("AES-256-GCM authentication tag verification failed")
+        return native_aes256_gcm_decrypt(key, nonce, ciphertext, tag, aad)
 
 
 class HybridSignatureProvider(CryptoProvider):
@@ -953,13 +801,8 @@ class HybridSignatureProvider(CryptoProvider):
         classical_sk_bytes = secret_key[: self.ED25519_SK_SIZE]
         pqc_sk = secret_key[self.ED25519_SK_SIZE :]
 
-        # Optimize: Reconstruct Ed25519 key object once and pass to provider
-        from cryptography.hazmat.primitives.asymmetric import ed25519
-
-        classical_sk = ed25519.Ed25519PrivateKey.from_private_bytes(classical_sk_bytes)
-
-        # Create both signatures (Ed25519Provider now accepts key objects)
-        classical_sig = self.classical_provider.sign(message, classical_sk)
+        # Create both signatures using native backends
+        classical_sig = self.classical_provider.sign(message, classical_sk_bytes)
         pqc_sig = self.pqc_provider.sign(message, pqc_sk)
 
         # Combine signatures (Ed25519 first, then Dilithium)
@@ -1004,13 +847,10 @@ class HybridSignatureProvider(CryptoProvider):
         classical_sig = signature[: self.ED25519_SIG_SIZE]
         pqc_sig = signature[self.ED25519_SIG_SIZE :]
 
-        # Optimize: Reconstruct Ed25519 key object once and pass to provider
-        from cryptography.hazmat.primitives.asymmetric import ed25519
-
-        classical_pk = ed25519.Ed25519PublicKey.from_public_bytes(classical_pk_bytes)
-
-        # Both must verify for hybrid security (Ed25519Provider now accepts key objects)
-        classical_valid = self.classical_provider.verify(message, classical_sig, classical_pk)
+        # Both must verify for hybrid security
+        classical_valid = self.classical_provider.verify(
+            message, classical_sig, classical_pk_bytes
+        )
         pqc_valid = self.pqc_provider.verify(message, pqc_sig, pqc_pk)
 
         return classical_valid and pqc_valid
