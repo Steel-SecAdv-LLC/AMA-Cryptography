@@ -271,7 +271,7 @@ def create_performance_comparison():
     """Create advanced multi-factor performance comparison with line charts."""
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
-    # Data from BENCHMARK_RESULTS.md
+    # Data from BENCHMARKS.md
     implementations = ["AMA Cryptography\n(Standard)", "AMA Cryptography\n(Optimized)", "OpenSSL+liboqs"]
     x_pos = np.arange(len(implementations))
 
@@ -505,7 +505,7 @@ def create_full_package_performance():
     )
 
     # === LEFT PANEL: Per-layer latency breakdown ===
-    # Data from BENCHMARK_RESULTS.md (approximate per-operation latencies)
+    # Data from BENCHMARKS.md (approximate per-operation latencies)
     components = [
         ("HKDF Key Derivation", 0.144, "#8B5CF6", "39.3%"),
         ("ML-DSA-65 Signature", 0.109, "#3B82F6", "29.8%"),
@@ -611,7 +611,7 @@ def create_full_package_performance():
         0.03,
         "Dual signatures (Ed25519 + ML-DSA-65) and HKDF dominate latency. "
         "Hashing, HMAC, and 3R monitoring are negligible (<2% combined).\n"
-        "Data from BENCHMARK_RESULTS.md. Reference hardware: 16-core Linux, 13GB RAM.",
+        "Data from BENCHMARKS.md. Reference hardware: 16-core Linux, 13GB RAM.",
         ha="center",
         fontsize=9,
         color="#6B7280",

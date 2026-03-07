@@ -1,5 +1,5 @@
 /**
- * Copyright 2025 Steel Security Advisors LLC
+ * Copyright 2025-2026 Steel Security Advisors LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,6 +36,21 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+
+/* C11 atomics for thread-safe lazy initialization of base point tables.
+ * Falls back to volatile on pre-C11 compilers (MSVC, older GCC). */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+  #include <stdatomic.h>
+  #define AMA_ATOMIC_INT            _Atomic int
+  #define AMA_ATOMIC_LOAD(p)        atomic_load_explicit(&(p), memory_order_acquire)
+  #define AMA_ATOMIC_STORE(p, v)    atomic_store_explicit(&(p), (v), memory_order_release)
+#else
+  /* Pre-C11 fallback: volatile provides compiler ordering but not hardware
+   * fence guarantees. Acceptable on x86 (TSO) but not on ARM/POWER. */
+  #define AMA_ATOMIC_INT            volatile int
+  #define AMA_ATOMIC_LOAD(p)        (p)
+  #define AMA_ATOMIC_STORE(p, v)    ((p) = (v))
+#endif
 
 /* ============================================================================
  * SHA-512 IMPLEMENTATION (Required by Ed25519)
@@ -388,12 +403,49 @@ static void fe25519_mul(fe25519 h, const fe25519 f, const fe25519 g) {
     h[5] = h5; h[6] = h6; h[7] = h7; h[8] = h8; h[9] = h9;
 }
 
-/* Squaring: uses fe25519_mul(h, f, f) which is correct and handles aliasing
- * via local variables. An optimized squaring routine could exploit symmetry
- * (f[j]*f[k] = f[k]*f[j]) but requires careful coefficient computation
- * in the radix-2^25.5 representation; the generic multiply is safer. */
+/*
+ * Optimized squaring exploiting f[j]*f[k] = f[k]*f[j] symmetry.
+ * Reduces ~100 multiplications (generic mul) to ~55 (dedicated sq).
+ * Based on the SUPERCOP ref10 fe_sq implementation.
+ * Uses the same interleaved carry propagation as fe25519_mul.
+ */
 static void fe25519_sq(fe25519 h, const fe25519 f) {
-    fe25519_mul(h, f, f);
+    int64_t f0 = f[0], f1 = f[1], f2 = f[2], f3 = f[3], f4 = f[4];
+    int64_t f5 = f[5], f6 = f[6], f7 = f[7], f8 = f[8], f9 = f[9];
+    int64_t f0_2 = 2 * f0, f1_2 = 2 * f1, f2_2 = 2 * f2, f3_2 = 2 * f3;
+    int64_t f4_2 = 2 * f4, f5_2 = 2 * f5, f6_2 = 2 * f6, f7_2 = 2 * f7;
+    int64_t f5_38 = 38 * f5, f6_19 = 19 * f6, f7_38 = 38 * f7;
+    int64_t f8_19 = 19 * f8, f9_38 = 38 * f9;
+
+    int64_t h0 = f0*f0    + f1_2*f9_38 + f2_2*f8_19 + f3_2*f7_38 + f4_2*f6_19 + f5*f5_38;
+    int64_t h1 = f0_2*f1  + f2*f9_38   + f3_2*f8_19 + f4*f7_38   + f5_2*f6_19;
+    int64_t h2 = f0_2*f2  + f1_2*f1    + f3_2*f9_38 + f4_2*f8_19 + f5_2*f7_38 + f6*f6_19;
+    int64_t h3 = f0_2*f3  + f1_2*f2    + f4*f9_38   + f5_2*f8_19 + f6*f7_38;
+    int64_t h4 = f0_2*f4  + f1_2*f3_2  + f2*f2      + f5_2*f9_38 + f6_2*f8_19 + f7*f7_38;
+    int64_t h5 = f0_2*f5  + f1_2*f4    + f2_2*f3    + f6*f9_38   + f7_2*f8_19;
+    int64_t h6 = f0_2*f6  + f1_2*f5_2  + f2_2*f4    + f3_2*f3    + f7_2*f9_38 + f8*f8_19;
+    int64_t h7 = f0_2*f7  + f1_2*f6    + f2_2*f5    + f3_2*f4    + f8*f9_38;
+    int64_t h8 = f0_2*f8  + f1_2*f7_2  + f2_2*f6    + f3_2*f5_2  + f4*f4     + f9*f9_38;
+    int64_t h9 = f0_2*f9  + f1_2*f8    + f2_2*f7    + f3_2*f6    + f4_2*f5;
+
+    int64_t carry0, carry1, carry2, carry3, carry4;
+    int64_t carry5, carry6, carry7, carry8, carry9;
+
+    carry0 = (h0 + ((int64_t)1 << 25)) >> 26; h1 += carry0; h0 -= carry0 * ((int64_t)1 << 26);
+    carry4 = (h4 + ((int64_t)1 << 25)) >> 26; h5 += carry4; h4 -= carry4 * ((int64_t)1 << 26);
+    carry1 = (h1 + ((int64_t)1 << 24)) >> 25; h2 += carry1; h1 -= carry1 * ((int64_t)1 << 25);
+    carry5 = (h5 + ((int64_t)1 << 24)) >> 25; h6 += carry5; h5 -= carry5 * ((int64_t)1 << 25);
+    carry2 = (h2 + ((int64_t)1 << 25)) >> 26; h3 += carry2; h2 -= carry2 * ((int64_t)1 << 26);
+    carry6 = (h6 + ((int64_t)1 << 25)) >> 26; h7 += carry6; h6 -= carry6 * ((int64_t)1 << 26);
+    carry3 = (h3 + ((int64_t)1 << 24)) >> 25; h4 += carry3; h3 -= carry3 * ((int64_t)1 << 25);
+    carry7 = (h7 + ((int64_t)1 << 24)) >> 25; h8 += carry7; h7 -= carry7 * ((int64_t)1 << 25);
+    carry4 = (h4 + ((int64_t)1 << 25)) >> 26; h5 += carry4; h4 -= carry4 * ((int64_t)1 << 26);
+    carry8 = (h8 + ((int64_t)1 << 25)) >> 26; h9 += carry8; h8 -= carry8 * ((int64_t)1 << 26);
+    carry9 = (h9 + ((int64_t)1 << 24)) >> 25; h0 += carry9 * 19; h9 -= carry9 * ((int64_t)1 << 25);
+    carry0 = (h0 + ((int64_t)1 << 25)) >> 26; h1 += carry0; h0 -= carry0 * ((int64_t)1 << 26);
+
+    h[0] = h0; h[1] = h1; h[2] = h2; h[3] = h3; h[4] = h4;
+    h[5] = h5; h[6] = h6; h[7] = h7; h[8] = h8; h[9] = h9;
 }
 
 /* Inversion via Fermat's little theorem: a^(-1) = a^(p-2) mod p */
@@ -549,10 +601,10 @@ static int ge25519_frombytes(ge25519_p3 *h, const uint8_t *s);
  * This avoids hardcoding limb values that depend on the radix representation.
  */
 static ge25519_p3 B;
-static volatile int B_initialized = 0;
+static AMA_ATOMIC_INT B_initialized = 0;
 
 static void ensure_base_point(void) {
-    if (B_initialized) return;
+    if (AMA_ATOMIC_LOAD(B_initialized)) return;
 
     static const uint8_t base_compressed[32] = {
         0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
@@ -569,10 +621,10 @@ static void ensure_base_point(void) {
 
     memcpy(&B, &B_local, sizeof(ge25519_p3));
 
-    /* Memory barrier: ensure B is fully written before B_initialized is set.
-     * On x86 this is implicit due to strong memory ordering, but volatile
-     * prevents the compiler from reordering the store. */
-    B_initialized = 1;
+    /* Release store: ensures B is fully written before the flag is visible.
+     * With C11 atomics this provides a proper release fence; on pre-C11
+     * compilers the volatile fallback relies on x86 TSO ordering. */
+    AMA_ATOMIC_STORE(B_initialized, 1);
 }
 
 static void ge25519_p3_0(ge25519_p3 *h) {
@@ -757,6 +809,13 @@ static void ge25519_add(ge25519_p1p1 *r, const ge25519_p3 *p, const ge25519_p3 *
     fe25519_copy(r->T, F);
 }
 
+/* Helper: p3 -> p2 projection (drops T coordinate) */
+static inline void ge25519_p3_to_p2(ge25519_p2 *r, const ge25519_p3 *p) {
+    fe25519_copy(r->X, p->X);
+    fe25519_copy(r->Y, p->Y);
+    fe25519_copy(r->Z, p->Z);
+}
+
 /* Scalar multiplication using double-and-add */
 static void ge25519_scalarmult(ge25519_p3 *r, const uint8_t *scalar, const ge25519_p3 *p) {
     ge25519_p3 Q;
@@ -770,13 +829,7 @@ static void ge25519_scalarmult(ge25519_p3 *r, const uint8_t *scalar, const ge255
         int bit = (scalar[i >> 3] >> (i & 7)) & 1;
 
         /* Q = 2*Q */
-        p2.X[0] = Q.X[0]; p2.X[1] = Q.X[1]; p2.X[2] = Q.X[2]; p2.X[3] = Q.X[3]; p2.X[4] = Q.X[4];
-        p2.X[5] = Q.X[5]; p2.X[6] = Q.X[6]; p2.X[7] = Q.X[7]; p2.X[8] = Q.X[8]; p2.X[9] = Q.X[9];
-        p2.Y[0] = Q.Y[0]; p2.Y[1] = Q.Y[1]; p2.Y[2] = Q.Y[2]; p2.Y[3] = Q.Y[3]; p2.Y[4] = Q.Y[4];
-        p2.Y[5] = Q.Y[5]; p2.Y[6] = Q.Y[6]; p2.Y[7] = Q.Y[7]; p2.Y[8] = Q.Y[8]; p2.Y[9] = Q.Y[9];
-        p2.Z[0] = Q.Z[0]; p2.Z[1] = Q.Z[1]; p2.Z[2] = Q.Z[2]; p2.Z[3] = Q.Z[3]; p2.Z[4] = Q.Z[4];
-        p2.Z[5] = Q.Z[5]; p2.Z[6] = Q.Z[6]; p2.Z[7] = Q.Z[7]; p2.Z[8] = Q.Z[8]; p2.Z[9] = Q.Z[9];
-
+        ge25519_p3_to_p2(&p2, &Q);
         ge25519_p2_dbl(&t, &p2);
         ge25519_p1p1_to_p3(&Q, &t);
 
@@ -797,11 +850,11 @@ static void ge25519_scalarmult(ge25519_p3 *r, const uint8_t *scalar, const ge255
 
 /* Precomputed table: table[i] = (i+1)*B for i in [0,15] */
 static ge25519_p3 ge_base_table[16];
-static volatile int ge_base_table_ready = 0;
+static AMA_ATOMIC_INT ge_base_table_ready = 0;
 
 /* Initialize precomputed basepoint table (thread-safe via local computation) */
 static void ge25519_init_base_table(void) {
-    if (ge_base_table_ready) return;
+    if (AMA_ATOMIC_LOAD(ge_base_table_ready)) return;
 
     ensure_base_point();
 
@@ -819,7 +872,7 @@ static void ge25519_init_base_table(void) {
     }
 
     memcpy(ge_base_table, local_table, sizeof(ge_base_table));
-    ge_base_table_ready = 1;
+    AMA_ATOMIC_STORE(ge_base_table_ready, 1);
 }
 
 /* Constant-time table lookup */
@@ -863,12 +916,7 @@ static void ge25519_scalarmult_base_windowed(ge25519_p3 *r, const uint8_t *scala
     for (i = 63; i >= 0; i--) {
         /* Q = 16*Q (4 doublings) */
         for (int j = 0; j < 4; j++) {
-            p2.X[0] = Q.X[0]; p2.X[1] = Q.X[1]; p2.X[2] = Q.X[2]; p2.X[3] = Q.X[3]; p2.X[4] = Q.X[4];
-            p2.X[5] = Q.X[5]; p2.X[6] = Q.X[6]; p2.X[7] = Q.X[7]; p2.X[8] = Q.X[8]; p2.X[9] = Q.X[9];
-            p2.Y[0] = Q.Y[0]; p2.Y[1] = Q.Y[1]; p2.Y[2] = Q.Y[2]; p2.Y[3] = Q.Y[3]; p2.Y[4] = Q.Y[4];
-            p2.Y[5] = Q.Y[5]; p2.Y[6] = Q.Y[6]; p2.Y[7] = Q.Y[7]; p2.Y[8] = Q.Y[8]; p2.Y[9] = Q.Y[9];
-            p2.Z[0] = Q.Z[0]; p2.Z[1] = Q.Z[1]; p2.Z[2] = Q.Z[2]; p2.Z[3] = Q.Z[3]; p2.Z[4] = Q.Z[4];
-            p2.Z[5] = Q.Z[5]; p2.Z[6] = Q.Z[6]; p2.Z[7] = Q.Z[7]; p2.Z[8] = Q.Z[8]; p2.Z[9] = Q.Z[9];
+            ge25519_p3_to_p2(&p2, &Q);
             ge25519_p2_dbl(&t, &p2);
             ge25519_p1p1_to_p3(&Q, &t);
         }

@@ -256,4 +256,4 @@ Non-compliance with these standards should be reported as a high-severity securi
 
 ---
 
-Copyright 2025 Steel Security Advisors LLC. Licensed under Apache License 2.0.
+Copyright 2025-2026 Steel Security Advisors LLC. Licensed under Apache License 2.0.

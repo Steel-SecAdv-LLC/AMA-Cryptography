@@ -1,8 +1,16 @@
 /**
- * Copyright 2025 Steel Security Advisors LLC
+ * Copyright 2025-2026 Steel Security Advisors LLC
  * Licensed under the Apache License, Version 2.0
  *
- * Unit tests for Ed25519 implementation
+ * Unit tests for Ed25519 implementation (RFC 8032)
+ *
+ * Validates:
+ * - Key generation against RFC 8032 Test Vector 1
+ * - Signature generation against RFC 8032 expected output
+ * - Full sign/verify roundtrip
+ * - Tamper detection (modified signature/message rejection)
+ * - Parameter validation (NULL handling)
+ * - Deterministic signature property
  */
 
 #include <stdio.h>
@@ -12,14 +20,14 @@
 #define TEST_ASSERT(condition, message) \
     do { \
         if (!(condition)) { \
-            fprintf(stderr, "✗ FAIL: %s\n", message); \
+            fprintf(stderr, "FAIL: %s\n", message); \
             return 1; \
         } else { \
-            printf("✓ PASS: %s\n", message); \
+            printf("PASS: %s\n", message); \
         } \
     } while(0)
 
-/* RFC 8032 Test Vector 1 */
+/* RFC 8032 Test Vector 1: known seed */
 static const uint8_t rfc8032_sk_seed[32] = {
     0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60,
     0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
@@ -27,6 +35,7 @@ static const uint8_t rfc8032_sk_seed[32] = {
     0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60
 };
 
+/* RFC 8032 Test Vector 1: expected public key */
 static const uint8_t rfc8032_pk_expected[32] = {
     0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7,
     0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a,
@@ -34,7 +43,7 @@ static const uint8_t rfc8032_pk_expected[32] = {
     0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a
 };
 
-/* Empty message signature from RFC 8032 */
+/* RFC 8032 Test Vector 1: expected signature on empty message */
 static const uint8_t rfc8032_sig_empty[64] = {
     0xe5, 0x56, 0x43, 0x00, 0xc3, 0x60, 0xac, 0x72,
     0x90, 0x86, 0xe2, 0xcc, 0x80, 0x6e, 0x82, 0x8a,
@@ -53,54 +62,67 @@ int main(void) {
     ama_error_t rc;
 
     printf("===========================================\n");
-    printf("Ed25519 Test Suite\n");
+    printf("Ed25519 Test Suite (RFC 8032)\n");
     printf("===========================================\n\n");
-
-    /* NOTE: Ed25519 implementation needs further validation.
-     * The field arithmetic implementation requires additional work
-     * to match RFC 8032 test vectors exactly.
-     * For production use, link against libsodium or similar.
-     */
-    printf("Ed25519 native C implementation — field arithmetic optimization pending.\n");
-    printf("   For production, consider Python API or native PQC backend.\n\n");
-
-    /* Suppress unused warnings for test vectors */
-    (void)rfc8032_pk_expected;
-    (void)rfc8032_sig_empty;
 
     /* Test 1: Keypair generation with known seed */
     memcpy(secret_key, rfc8032_sk_seed, 32);
     rc = ama_ed25519_keypair(public_key, secret_key);
     TEST_ASSERT(rc == AMA_SUCCESS, "ed25519_keypair: should succeed");
 
-    /* Test 2: Sign empty message */
+    /* Test 2: Public key matches RFC 8032 test vector */
+    TEST_ASSERT(memcmp(public_key, rfc8032_pk_expected, 32) == 0,
+                "ed25519_keypair: public key matches RFC 8032 vector 1");
+
+    /* Test 3: Sign empty message */
     rc = ama_ed25519_sign(signature, NULL, 0, secret_key);
     TEST_ASSERT(rc == AMA_SUCCESS, "ed25519_sign: empty message should succeed");
 
-    /* Test 3: Sign longer message */
+    /* Test 4: Signature matches RFC 8032 expected output */
+    TEST_ASSERT(memcmp(signature, rfc8032_sig_empty, 64) == 0,
+                "ed25519_sign: signature matches RFC 8032 vector 1 (empty msg)");
+
+    /* Test 5: Verify empty message signature */
+    rc = ama_ed25519_verify(signature, NULL, 0, public_key);
+    TEST_ASSERT(rc == AMA_SUCCESS,
+                "ed25519_verify: empty message roundtrip OK");
+
+    /* Test 6: Sign/verify roundtrip with longer message */
     const uint8_t message[] = "The quick brown fox jumps over the lazy dog";
     rc = ama_ed25519_sign(signature, message, sizeof(message) - 1, secret_key);
     TEST_ASSERT(rc == AMA_SUCCESS, "ed25519_sign: longer message should succeed");
 
-    /* Test 4: NULL parameters should fail gracefully */
+    rc = ama_ed25519_verify(signature, message, sizeof(message) - 1, public_key);
+    TEST_ASSERT(rc == AMA_SUCCESS,
+                "ed25519_verify: longer message roundtrip OK");
+
+    /* Test 7: Tamper detection - modified signature must be rejected */
+    signature[0] ^= 0x01;
+    rc = ama_ed25519_verify(signature, message, sizeof(message) - 1, public_key);
+    TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
+                "ed25519_verify: tampered signature correctly rejected");
+    signature[0] ^= 0x01;  /* restore */
+
+    /* Test 8: Tamper detection - modified message must be rejected */
+    uint8_t tampered_msg[] = "The quick brown fox jumps over the lazy cat";
+    rc = ama_ed25519_verify(signature, tampered_msg, sizeof(tampered_msg) - 1, public_key);
+    TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
+                "ed25519_verify: tampered message correctly rejected");
+
+    /* Test 9: NULL parameters should fail gracefully */
     rc = ama_ed25519_sign(NULL, message, sizeof(message) - 1, secret_key);
     TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, "ed25519_sign: NULL signature should fail");
     rc = ama_ed25519_verify(signature, message, sizeof(message) - 1, NULL);
     TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, "ed25519_verify: NULL public key should fail");
 
-    /* Test 5: Deterministic signatures */
+    /* Test 10: Deterministic signatures */
     uint8_t sig1[64], sig2[64];
     rc = ama_ed25519_sign(sig1, message, sizeof(message) - 1, secret_key);
     rc = ama_ed25519_sign(sig2, message, sizeof(message) - 1, secret_key);
     TEST_ASSERT(memcmp(sig1, sig2, 64) == 0, "ed25519_sign: deterministic signatures");
 
-    /* Note: Full sign/verify roundtrip tests are skipped because the
-     * field arithmetic implementation needs further work to match
-     * RFC 8032. Use Python API with cryptography library for production. */
-    printf("\n⚠ Note: Verify roundtrip tests skipped - needs field arithmetic fixes.\n");
-
     printf("\n===========================================\n");
-    printf("All Ed25519 tests passed!\n");
+    printf("All Ed25519 tests passed (including RFC 8032 KAT + roundtrip)!\n");
     printf("===========================================\n");
 
     return 0;

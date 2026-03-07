@@ -33,11 +33,11 @@
               +==============================================================================+
 ```
 
-**Copyright 2025 Steel Security Advisors LLC**
+**Copyright 2025-2026 Steel Security Advisors LLC**
 **Author/Inventor:** Andrew E. A.
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
-**Version:** 2.0
+**Version:** 2.1
 **AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
@@ -218,7 +218,7 @@ Future-proof cryptography:
 **Legend:**
 - **Full**: Complete native C implementation with constant-time operations.
 - **Full (native)**: Complete native C implementation — no external PQC dependency required.
-- **Note**: Ed25519 C implementation has field arithmetic optimization pending. Python API uses optimized OpenSSL backend.
+- **Note**: Ed25519 C implementation includes dedicated `fe25519_sq()` field arithmetic optimization (v2.1). Full RFC 8032 sign/verify roundtrip verified.
 
 **C Library Implementations (v1.1):**
 - `ama_sha3.c`: SHA3-256, SHAKE128, SHAKE256 (Keccak-f[1600] sponge construction)
@@ -228,7 +228,7 @@ Future-proof cryptography:
 - `ama_dilithium.c`: ML-DSA-65 full native (NTT q=8380417, rejection sampling, constant-time)
 - `ama_sphincs.c`: SPHINCS+-SHA2-256f-simple full native (WOTS+, FORS, hypertree d=17)
 
-> **Note:** The Python API remains the recommended production interface. C implementations provide high-performance alternatives where applicable. See [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md) for C vs Python performance comparison.
+> **Note:** The Python API remains the recommended production interface. C implementations provide high-performance alternatives where applicable. See [BENCHMARKS.md](BENCHMARKS.md) for C vs Python performance comparison.
 
 **PQC Backend Security Considerations:**
 
@@ -368,7 +368,7 @@ Complete security package with all defense layers:
 | Ed25519 Sign | 10,453 ops/sec | **20,921 ops/sec** (2x faster) |
 | Ed25519 Verify | 8,068 ops/sec | 8,496 ops/sec |
 
-**Performance Tip:** For high-throughput scenarios, pass `Ed25519PrivateKey` objects instead of bytes to achieve 2x faster signing. See [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md) for usage examples.
+**Performance Tip:** For high-throughput scenarios, pass `Ed25519PrivateKey` objects instead of bytes to achieve 2x faster signing. See [BENCHMARKS.md](BENCHMARKS.md) for full performance data.
 
 *Benchmarks: Linux x86_64, Python 3.11, 16 CPU cores, 13GB RAM, 1,000 iterations per operation.*
 
@@ -1060,7 +1060,7 @@ This multi-disciplinary synthesis uses NIST-standard primitives (SHA3-256, HMAC-
 
 ## License
 
-Copyright 2025 Steel Security Advisors LLC
+Copyright 2025-2026 Steel Security Advisors LLC
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) file for details.
 

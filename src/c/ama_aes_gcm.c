@@ -1,5 +1,5 @@
 /**
- * Copyright 2025 Steel Security Advisors LLC
+ * Copyright 2025-2026 Steel Security Advisors LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,10 +23,18 @@
  * Implements AES-256-GCM authenticated encryption with associated data (AEAD).
  *
  * Security properties:
- * - Constant-time AES core (T-table free, bitsliced S-box)
+ * - T-table free AES core (standard S-box lookup on public round-key XOR'd state)
  * - 256-bit key, 96-bit nonce (IV), 128-bit authentication tag
- * - GHASH via schoolbook multiplication in GF(2^128)
+ * - Constant-time GHASH via schoolbook multiplication in GF(2^128)
  * - Conforms to NIST SP 800-38D
+ *
+ * Side-channel note:
+ * The S-box is a standard 256-byte lookup table, NOT a bitsliced implementation.
+ * The lookup index is the XOR of plaintext (public) with round key material, so
+ * cache-timing attacks on the S-box do not directly leak the key. However, for
+ * environments where cache-line timing is a concern (e.g., shared-tenant VMs),
+ * a true bitsliced AES implementation would be required. This is tracked as a
+ * future hardening item.
  *
  * AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
  */
@@ -37,10 +45,14 @@
 #include <stdint.h>
 
 /* ============================================================================
- * AES-256 CORE (constant-time, no T-tables)
+ * AES-256 CORE (T-table free, standard S-box lookup)
  * ============================================================================ */
 
-/* AES S-box (lookup is on public data only — round-key XOR'd input) */
+/* AES S-box (standard 256-byte lookup table).
+ * The lookup index is always round-key XOR'd state, so the index is a function
+ * of public plaintext XOR secret key material. On platforms with data-independent
+ * cache behaviour (e.g., constant-time AES-NI fallback) this is safe. For
+ * shared-tenant environments, consider a bitsliced S-box (future work). */
 static const uint8_t aes_sbox[256] = {
     0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
     0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,

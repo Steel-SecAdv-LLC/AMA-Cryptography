@@ -1,0 +1,44 @@
+---
+# AMA Cryptography C code style
+# Apply with: clang-format -i src/c/*.c include/*.h
+Language: C
+BasedOnStyle: LLVM
+
+# Indentation
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+IndentCaseLabels: false
+
+# Braces
+BreakBeforeBraces: Attach
+AllowShortBlocksOnASingleLine: Empty
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+
+# Line length
+ColumnLimit: 100
+
+# Alignment
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignOperands: Align
+AlignTrailingComments: true
+
+# Spacing
+SpaceAfterCStyleCast: false
+SpaceBeforeParens: ControlStatements
+SpacesInParentheses: false
+
+# Includes
+SortIncludes: false  # Preserve include order (security-sensitive)
+
+# Pointer alignment
+PointerAlignment: Right
+
+# Comments
+ReflowComments: true
+SpacesBeforeTrailingComments: 2
+...
