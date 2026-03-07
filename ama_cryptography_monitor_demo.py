@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱): 3R Monitoring Demonstration
+AMA Cryptography: 3R Monitoring Demonstration
 ==================================================
 
 Demonstrates:
@@ -32,7 +32,7 @@ Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
 Version: 2.0
-Project: AMA Cryptography ♱ 3R Runtime Monitoring
+Project: AMA Cryptography 3R Runtime Monitoring
 
 AI Co-Architects:
     Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
@@ -230,7 +230,7 @@ def demo_security_report() -> None:
 def main():
     """Run all demos."""
     print("=" * 70)
-    print("  AMA CRYPTOGRAPHY ♱ - 3R SECURITY MONITORING DEMONSTRATION")
+    print("  AMA CRYPTOGRAPHY - 3R SECURITY MONITORING DEMONSTRATION")
     print("=" * 70)
     print("\n  Showcasing runtime security analysis capabilities")
     print("  Steel Security Advisors LLC - 2025")

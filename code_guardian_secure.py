@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱): Ethical-Cryptographic SHA3-256 Security System
+AMA Cryptography: Ethical-Cryptographic SHA3-256 Security System
 =====================================================================
 
 Complete cryptographic protection system for helical mathematical Omni-Codes.
@@ -1515,7 +1515,7 @@ def export_public_keys(kms: KeyManagementSystem, output_dir: Path) -> None:
     # Create README
     readme_path = output_dir / "README.txt"
     with open(readme_path, "w") as f:
-        f.write("AMA Cryptography ♱ (AG♱) - Public Keys\n")
+        f.write("AMA Cryptography - Public Keys\n")
         f.write("=" * 50 + "\n\n")
         f.write(f"Generated: {kms.creation_date}\n")
         f.write(f"Version: {kms.version}\n")
@@ -2040,10 +2040,10 @@ def verify_crypto_package(
 
 def main() -> None:
     """
-    Demonstrate complete AMA Cryptography ♱ system with all Omni-Codes.
+    Demonstrate complete AMA Cryptography system with all Omni-Codes.
     """
     print("\n" + "=" * 70)
-    print("AMA Cryptography ♱ (AG♱): SHA3-256 Security Hash")
+    print("AMA Cryptography: SHA3-256 Security Hash")
     print("=" * 70)
     print("\nCopyright (C) 2025 Steel Security Advisors LLC")
     print("Author/Inventor: Andrew E. A.")

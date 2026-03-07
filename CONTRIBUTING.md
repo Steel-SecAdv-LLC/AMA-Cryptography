@@ -1,4 +1,4 @@
-# Contributing to AMA Cryptography ♱
+# Contributing to AMA Cryptography
 
 ## Document Information
 
@@ -13,7 +13,7 @@
 
 ## Overview
 
-This document provides guidelines for contributing to the AMA Cryptography ♱ quantum-resistant cryptographic protection system. AMA Cryptography ♱ is released under the Apache License 2.0 as free and open-source software, accessible for universal use as a knowledge vault and bridge to cryptographic frontiers.
+This document provides guidelines for contributing to the AMA Cryptography quantum-resistant cryptographic protection system. AMA Cryptography is released under the Apache License 2.0 as free and open-source software, accessible for universal use as a knowledge vault and bridge to cryptographic frontiers.
 
 ---
 
@@ -64,7 +64,7 @@ Please **DO NOT** submit pull requests that:
 
 - Weaken cryptographic security in any way
 - Remove or bypass security layers
-- Introduce unproven or experimental cryptographic algorithms
+- Introduce unproven or non-standard cryptographic algorithms
 - Break standards compliance (NIST FIPS 202, 204, RFC 2104, 5869, 8032, 3161)
 - Add unnecessary dependencies
 - Include proprietary or non-Apache 2.0 compatible code
@@ -156,7 +156,7 @@ All contributions must maintain compliance with:
 | Standard | Version | Compliance Level | Documentation |
 |----------|---------|------------------|---------------|
 | NIST FIPS 202 | 2015 | Mandatory | SHA-3 Standard |
-| NIST FIPS 204 | 2023 | Mandatory | Module-Lattice-Based Digital Signature Standard |
+| NIST FIPS 204 | 2024 | Mandatory | Module-Lattice-Based Digital Signature Standard |
 | NIST SP 800-108 | Rev. 1 | Mandatory | Key Derivation Using Pseudorandom Functions |
 | RFC 2104 | 1997 | Mandatory | HMAC |
 | RFC 5869 | 2010 | Mandatory | HKDF |

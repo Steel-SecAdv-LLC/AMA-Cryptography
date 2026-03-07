@@ -1,7 +1,7 @@
 # Copyright 2025 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 #
-# Alpine Linux build for AMA Cryptography ♱ - minimal container size
+# Alpine Linux build for AMA Cryptography - minimal container size
 # ~50MB vs ~200MB for Ubuntu-based image
 
 FROM alpine:3.18 AS builder
@@ -41,7 +41,7 @@ RUN adduser -D -u 1000 ava
 COPY --from=builder /build/build/lib/*.so* /usr/local/lib/
 COPY --from=builder /build/dist/*.whl /tmp/
 
-# Install Python package and runtime dependencies (numpy, scipy required by ama_cryptography)
+# Install Python package and numpy/scipy (required by equations/double_helix at import)
 RUN pip3 install --no-cache-dir /tmp/*.whl && \
     pip3 install --no-cache-dir numpy scipy && \
     rm -rf /tmp/*.whl
@@ -49,4 +49,4 @@ RUN pip3 install --no-cache-dir /tmp/*.whl && \
 USER ava
 WORKDIR /app
 
-CMD ["python3", "-c", "import ama_cryptography; print(f'AMA Cryptography ♱ v{ama_cryptography.__version__} (Alpine)')"]
+CMD ["python3", "-c", "import ama_cryptography; print(f'AMA Cryptography v{ama_cryptography.__version__} (Alpine)')"]

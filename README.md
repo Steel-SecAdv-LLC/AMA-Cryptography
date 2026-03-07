@@ -16,8 +16,8 @@
 
 ```
               +==============================================================================+
-              |                              AMA CRYPTOGRAPHY ♱                                  |
-              |                Experimental Post-Quantum Security System                     |
+              |                            AMA CRYPTOGRAPHY ♱                                  |
+              |                   Post-Quantum Security System                              |
               |                                                                              |
               |   6-Layer Defense      |   Quantum-Resistant    |   Defense-in-Depth         |
               |   Cython-Optimized     |   3R Anomaly Monitor   |   Cross-Platform           |
@@ -44,13 +44,13 @@
 
 ## Executive Summary
 
-AMA Cryptography ♱ (AG♱) is an experimental hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Research-grade, not externally audited. Providing secure, multi-language cryptographic security system designed to protect people, data, and networks against both classical and quantum threats. Built on a foundation of mathematically rigorous post-quantum cryptography (PQC), AG♱ delivers security-hardened features with exceptional performance.
+AMA Cryptography is a hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Community-tested, not externally audited. A secure, multi-language cryptographic security system designed to protect people, data, and networks against both classical and quantum threats. Built on a foundation of mathematically rigorous post-quantum cryptography (PQC), AMA Cryptography delivers security-hardened features with exceptional performance.
 
 Novel in assimilation, the system combines cutting-edge NIST-approved post-quantum algorithms with a unique 3R runtime security monitoring framework, creating a defense-in-depth architecture that provides unprecedented visibility into cryptographic operations while maintaining less than 2% performance overhead. The multi-language architecture (C + Cython + Python) enables both maximum security through constant-time implementations and optional Cython acceleration (18-37x speedup when built), making it suitable for environments ranging from high-security government applications to performance-critical enterprise systems.
 
 **Protecting people, data, and networks with quantum-resistant cryptography**
 
-> **Project Philosophy:** Promoting action over inaction in the hope of helping secure critical systems against emerging quantum threats. This project is experimental and under active development. While we strive for cryptographic rigor, users should remain cautious and conduct independent security reviews before production deployment. The perceived absence of a threat does not constitute the lack of a threat. Our goal is to deter, mitigate, and elevate security posture—not create new vulnerabilities.
+> **Project Philosophy:** Promoting action over inaction in the hope of helping secure critical systems against emerging quantum threats. This project is under active development. While we strive for cryptographic rigor, users should remain cautious and conduct independent security reviews before production deployment. The perceived absence of a threat does not constitute the lack of a threat. Our goal is to deter, mitigate, and elevate security posture—not create new vulnerabilities.
 > 
 > **Security Disclosure:** This is a self-assessed cryptographic implementation without third-party audit. Production use REQUIRES:
 > - FIPS 140-2 Level 3+ HSM for master secrets (no software-only keys in high-security environments)
@@ -58,7 +58,7 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 > - Constant-time implementation verification for side-channel resistance
 > - Secure file permissions for key files and cryptographic packages (store on encrypted volumes with restricted access)
 >
-> **Status:** Experimental | Community-tested | Not externally audited
+> **Status:** Community-tested | Not externally audited
 > **Last Updated:** 2026-03-06
 > **Audit Status:** Community-tested, not externally audited. See [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) for self-assessment details.
 >
@@ -103,9 +103,9 @@ Current cryptographic systems face three critical challenges:
 2. **Black Box Security**: Most cryptographic libraries provide no runtime visibility into side-channel vulnerabilities or anomalous behavior
 3. **Performance vs Security Trade-off**: Quantum-resistant algorithms are significantly slower, creating adoption barriers
 
-### The AG♱ Solution
+### The AMA Cryptography Solution
 
-AG♱ addresses all three challenges through:
+AMA Cryptography addresses all three challenges through:
 
 - **Quantum Resistance**: NIST-approved ML-DSA-65 (FIPS 204) and Kyber-1024 (FIPS 203) provide 50+ years of protection
 - **Transparent Security**: 3R monitoring (Resonance-Recursion-Refactoring) provides real-time cryptographic operation analysis
@@ -209,7 +209,7 @@ Future-proof cryptography:
 |-----------|--------------|-------------------|-------------|
 | SHA3-256 | **Full** | Full | Core primitive |
 | HKDF-SHA3-256 | **Full** | Full | Key derivation |
-| Ed25519 | **Experimental** | Full | Integrated |
+| Ed25519 | **Full** | Full | Integrated |
 | ML-DSA-65 | **Full** (native) | Full | Integrated |
 | Kyber-1024 | **Full** (native) | Full | Integrated |
 | SPHINCS+-256f | **Full** (native) | Full | Integrated |
@@ -218,7 +218,7 @@ Future-proof cryptography:
 **Legend:**
 - **Full**: Complete native C implementation with constant-time operations.
 - **Full (native)**: Complete native C implementation — no external PQC dependency required.
-- **Experimental**: Implementation complete but requires field arithmetic optimization. Use Python API for production.
+- **Note**: Ed25519 C implementation has field arithmetic optimization pending. Python API uses optimized OpenSSL backend.
 
 **C Library Implementations (v1.1):**
 - `ama_sha3.c`: SHA3-256, SHAKE128, SHAKE256 (Keccak-f[1600] sponge construction)
@@ -244,7 +244,7 @@ Future-proof cryptography:
 
 ## Use Cases by Sector 🌐
 
-> **Experimental Research Areas:** The use cases below represent targeted experimental applications where AG♱'s quantum-resistant cryptography may provide value. These are research-grade implementations requiring independent validation before deployment in regulated, clinical, or mission-critical environments.
+> **Research Areas:** The use cases below represent targeted applications where AMA Cryptography's quantum-resistant cryptography may provide value. These implementations require independent validation before deployment in regulated, clinical, or mission-critical environments.
 
 <details>
 <summary><strong>Real-world scenarios (click to expand)</strong></summary>
@@ -978,7 +978,7 @@ make security-audit
 <details>
 <summary><strong>Ethical Cryptography</strong> - Mathematically-Bound Ethical Constraints</summary>
 
-AMA Cryptography ♱ pioneers the integration of ethical principles directly into cryptographic operations through mathematically rigorous constraints. Unlike traditional security systems that treat ethics as policy overlays, AG♱ embeds ethical considerations into the cryptographic foundation itself.
+AMA Cryptography pioneers the integration of ethical principles directly into cryptographic operations through mathematically rigorous constraints. Unlike traditional security systems that treat ethics as policy overlays, AMA Cryptography embeds ethical considerations into the cryptographic foundation itself.
 
 **12 Omni-Code Ethical Pillars** are mathematically integrated into key derivation:
 
@@ -1004,7 +1004,7 @@ The ethical integration achieves:
 <details>
 <summary><strong>Bio-Inspired Security</strong> - Omni-Code Architecture for Data Structures</summary>
 
-AG♱ employs a revolutionary bio-inspired approach where data structures mirror the elegance and resilience of biological DNA. This metaphor extends beyond naming conventions into the actual architecture of cryptographic packages.
+AMA Cryptography employs a revolutionary bio-inspired approach where data structures mirror the elegance and resilience of biological DNA. This metaphor extends beyond naming conventions into the actual architecture of cryptographic packages.
 
 **Master Omni-Codes** - Seven foundational codes govern the system:
 
@@ -1029,7 +1029,7 @@ AG♱ employs a revolutionary bio-inspired approach where data structures mirror
 <details>
 <summary><strong>Multi-Disciplinary Approach</strong> - Quantum-Cyber-Ancient Synergies</summary>
 
-AG♱ transcends traditional computer science boundaries by synthesizing insights from quantum mechanics, ancient mathematics, philosophy, and biological systems into a unified security framework.
+AMA Cryptography transcends traditional computer science boundaries by synthesizing insights from quantum mechanics, ancient mathematics, philosophy, and biological systems into a unified security framework.
 
 **Cross-Domain Synergies**:
 
@@ -1079,7 +1079,7 @@ GitHub's dependency graph is enabled for this repository. Once the repository is
 | General Inquiries | steel.sa.llc@gmail.com |
 | Security Issues | See [SECURITY.md](SECURITY.md) for responsible disclosure |
 | GitHub Issues | [Issues Page](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/issues) |
-| GitHub Repository | [AG♱](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography) |
+| GitHub Repository | [AMA Cryptography](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography) |
 
 ---
 
@@ -1100,7 +1100,7 @@ GitHub's dependency graph is enabled for this repository. Once the repository is
 
 ### Development Model
 
-**Conceptual Architect:** Steel Security Advisors LLC and Andrew E. A. conceived, directed, validated, and supervised the development of AMA Cryptography ♱ (AG♱).
+**Conceptual Architect:** Steel Security Advisors LLC and Andrew E. A. conceived, directed, validated, and supervised the development of AMA Cryptography.
 
 **AI Co-Architects:** More than 99% of the codebase, documentation, mathematical frameworks, and technical implementation was constructed by AI systems: Eris ⯰, Eden ♱, Veritas 💠, X ⚛, Caduceus ⚚, and Dev ⚕.
 
@@ -1146,7 +1146,7 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 <div align="center">
 
-**AMA Cryptography ♱ (AG♱) - Protecting people, data, and networks with quantum-resistant cryptography**
+**AMA Cryptography - Protecting people, data, and networks with quantum-resistant cryptography**
 
 *Architected with inherent radical honesty, unconventional methodology, protective servitude, and ethical immutability.*
 

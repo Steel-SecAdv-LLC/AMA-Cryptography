@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AMA Cryptography ♱ (AG♱) - Post-Quantum Cryptography Backend Tests
+AMA Cryptography - Post-Quantum Cryptography Backend Tests
 
 Comprehensive test suite for pqc_backends.py providing 100% coverage
 of all PQC backend functionality including ML-DSA-65 (Dilithium),

@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-AMA Cryptography ♱ (AG♱) - Algorithm-Agnostic Cryptographic API
+AMA Cryptography - Algorithm-Agnostic Cryptographic API
 ===========================================================
 
 Unified interface for all post-quantum cryptographic algorithms.
@@ -783,7 +783,7 @@ class HybridSignatureProvider(CryptoProvider):
 
 class AmaCryptography:
     """
-    Main AMA Cryptography ♱ Cryptographic API
+    Main AMA Cryptography Cryptographic API
 
     Provides unified interface to all cryptographic operations with
     automatic algorithm selection and fallback mechanisms.

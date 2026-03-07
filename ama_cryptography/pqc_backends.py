@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱) - Post-Quantum Cryptography Backends
+AMA Cryptography - Post-Quantum Cryptography Backends
 ==========================================================
 
 Centralized PQC backend detection and implementation.

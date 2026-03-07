@@ -1,11 +1,11 @@
-# AMA Cryptography ♱ Benchmark Results
+# AMA Cryptography Benchmark Results
 
 ## Document Information
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.0 |
-| Test Date | 2026-03-06 |
+| Document Version | 2.0.1 |
+| Test Date | 2026-03-07 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -13,15 +13,17 @@
 
 ## Executive Summary
 
-Performance benchmarks for AMA Cryptography ♱ v1.2 with **fully native PQC implementations** (FIPS 203/204/205). All post-quantum cryptography is provided by the built-in C library — no external dependencies (liboqs, pqcrypto) required.
+Performance benchmarks for AMA Cryptography v2.0 with **fully native PQC implementations** (FIPS 203/204/205). All post-quantum cryptography is provided by the built-in C library with zero OpenSSL dependency — no external dependencies (liboqs, pqcrypto) required.
 
 **Test Environment:**
 - OS: Linux 4.4.0 x86_64
 - CPU: 16 cores
 - Memory: 13.0 GB
 - Python: 3.11
-- PQC Backend: Native C (FIPS 203/204/205)
+- PQC Backend: Native C (FIPS 203/204/205, zero OpenSSL dependency)
 - Iterations: 1,000 per operation
+
+> **Note on variance:** Throughput numbers vary by hardware. C library benchmarks below are from a 16-core test system. Python API benchmarks in BENCHMARKS.md reflect CI runner (shared VM) performance. Both are legitimate measurements of different execution contexts.
 
 ---
 
@@ -72,13 +74,13 @@ Direct C library benchmarks (10,000 iterations + 100 warmup).
 |-------------|------------|---------|
 | 32 bytes | **165,419 ops/sec** | 6.045 µs/op |
 
-### Ed25519 (Native C — Experimental)
+### Ed25519 (Native C)
 
 | Operation | Throughput | Latency |
 |-----------|------------|---------|
 | Sign (32-byte msg) | **9,182 ops/sec** | 108.9 µs/op |
 
-> **Note:** The native C Ed25519 implementation is experimental. For production, the Python API leverages the cryptography (OpenSSL) library for Ed25519.
+> **Note:** The native C Ed25519 implementation has field arithmetic optimization pending. For production, the Python API leverages the cryptography (OpenSSL) library for Ed25519.
 
 ### Constant-Time Utilities
 
@@ -123,7 +125,7 @@ AMA Cryptography's complete security package includes:
 | HKDF (32B) | 165,419 ops/sec | 21,443 ops/sec | **7.7x** |
 | Ed25519 Sign | 9,182 ops/sec | 10,453 ops/sec | 0.88x* |
 
-\*Python Ed25519 uses the optimized cryptography/OpenSSL library. C implementation is experimental.
+\*Python Ed25519 uses the optimized cryptography/OpenSSL library. C implementation has field arithmetic optimization pending.
 
 ---
 
@@ -131,7 +133,7 @@ AMA Cryptography's complete security package includes:
 
 ### Native PQC — No External Dependencies
 
-As of v1.2, AMA Cryptography uses fully native C implementations for all post-quantum algorithms:
+As of v2.0, AMA Cryptography uses fully native C implementations for all post-quantum algorithms:
 
 - **ML-KEM-1024** (FIPS 203): Key encapsulation with IND-CCA2 security
 - **ML-DSA-65** (FIPS 204): Digital signatures with EUF-CMA security
@@ -147,6 +149,6 @@ cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
 
 ---
 
-**Generated:** 2026-03-06
+**Generated:** 2026-03-07
 **Copyright:** 2025-2026 Steel Security Advisors LLC
 **License:** Apache License 2.0

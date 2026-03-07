@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱) - Mathematical Equations Suite
+AMA Cryptography - Mathematical Equations Suite
 ====================================================
 
 **IMPORTANT: NON-CRYPTOGRAPHIC MODULE**
@@ -530,7 +530,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     logger.info("=" * 70)
-    logger.info("AMA Cryptography ♱ (AG♱) - Mathematical Foundations Verification")
+    logger.info("AMA Cryptography - Mathematical Foundations Verification")
     logger.info("=" * 70)
 
     # Verify all frameworks

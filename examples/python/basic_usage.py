@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-AMA Cryptography ♱ Basic Usage Example
+AMA Cryptography Basic Usage Example
 ===================================
 
 Quick start guide demonstrating core cryptographic operations:
@@ -257,9 +257,9 @@ def example_4_humanitarian_use_case():
 def main():
     """Run all examples."""
     print("=" * 60)
-    print("AMA CRYPTOGRAPHY ♱ - BASIC USAGE EXAMPLES")
+    print("AMA CRYPTOGRAPHY - BASIC USAGE EXAMPLES")
     print("=" * 60)
-    print("\nThese examples demonstrate core AMA Cryptography ♱ capabilities.")
+    print("\nThese examples demonstrate core AMA Cryptography capabilities.")
     print("For full documentation, see: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography")
 
     try:

@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱): Mathematical Equations Test Suite
+AMA Cryptography: Mathematical Equations Test Suite
 ========================================================
 
 Comprehensive tests for 5 mathematical frameworks:

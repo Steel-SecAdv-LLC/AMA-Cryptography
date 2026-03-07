@@ -14,13 +14,13 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱): 3R Runtime Anomaly Monitoring System
+AMA Cryptography: 3R Runtime Anomaly Monitoring System
 ==========================================================
 
 3R Mechanism: Resonance-Recursion-Refactoring for runtime anomaly monitoring.
 
 The 3R Mechanism is a novel runtime anomaly monitoring framework developed for
-AMA Cryptography ♱ by Steel Security Advisors LLC. It provides three complementary
+AMA Cryptography by Steel Security Advisors LLC. It provides three complementary
 approaches to runtime security analysis without compromising cryptographic
 integrity or performance.
 
@@ -40,22 +40,106 @@ Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
 Version: 2.0
-Project: AMA Cryptography ♱ 3R Runtime Monitoring
+Project: AMA Cryptography 3R Runtime Monitoring
 
 AI Co-Architects:
     Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 """
 
 import ast
+import cmath
+import math
 import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
-import numpy as np
-from numpy.typing import NDArray
-from scipy.fft import fft, fftfreq
+# numpy/scipy are optional — used by equations/double_helix when available,
+# but the core 3R monitor operates without them.
+try:
+    import numpy as np
+
+    _HAS_NUMPY = True
+except ImportError:
+    np = None
+    _HAS_NUMPY = False
+
+
+def _median_sorted(values: List[float]) -> float:
+    """Median of a pre-sorted list. O(1) after sort."""
+    n = len(values)
+    if n == 0:
+        return 0.0
+    mid = n // 2
+    if n % 2 == 1:
+        return values[mid]
+    return (values[mid - 1] + values[mid]) / 2.0
+
+
+def _mean(values: List[float]) -> float:
+    """Arithmetic mean."""
+    if not values:
+        return 0.0
+    return sum(values) / len(values)
+
+
+def _std(values: List[float]) -> float:
+    """Population standard deviation."""
+    if len(values) < 2:
+        return 0.0
+    m = _mean(values)
+    return math.sqrt(sum((x - m) ** 2 for x in values) / len(values))
+
+
+def _fft_cooley_tukey(x: List[complex]) -> List[complex]:
+    """
+    Radix-2 Cooley-Tukey FFT.
+
+    Input length must be a power of 2 (zero-pad if necessary).
+    This is explicitly documented as "not hot path" in the monitor —
+    it runs on-demand for resonance detection, not per-operation.
+    """
+    n = len(x)
+    if n <= 1:
+        return x
+
+    # Bit-reversal permutation + iterative butterfly
+    # More efficient than recursive for our sizes
+    result = list(x)
+    bits = n.bit_length() - 1
+    for i in range(n):
+        j = 0
+        for b in range(bits):
+            j |= ((i >> b) & 1) << (bits - 1 - b)
+        if j > i:
+            result[i], result[j] = result[j], result[i]
+
+    length = 2
+    while length <= n:
+        half = length // 2
+        w_base = -2.0 * cmath.pi / length
+        for start in range(0, n, length):
+            for k in range(half):
+                w = cmath.exp(complex(0, w_base * k))
+                even = result[start + k]
+                odd = result[start + k + half] * w
+                result[start + k] = even + odd
+                result[start + k + half] = even - odd
+        length *= 2
+
+    return result
+
+
+def _fftfreq(n: int) -> List[float]:
+    """Equivalent to scipy.fft.fftfreq(n) — frequency bins for DFT of length n."""
+    freqs = []
+    for i in range(n):
+        if i < (n + 1) // 2:
+            freqs.append(float(i) / n)
+        else:
+            freqs.append(float(i - n) / n)
+    return freqs
 
 
 class IncrementalStats:
@@ -97,7 +181,7 @@ class IncrementalStats:
         delta2 = x - self.mean
         self.M2 += delta * delta2
         variance = self.M2 / self.n if self.n > 1 else 0.0
-        return self.mean, float(np.sqrt(variance))
+        return self.mean, math.sqrt(variance)
 
     def get_stats(self) -> Tuple[float, float]:
         """
@@ -109,7 +193,7 @@ class IncrementalStats:
         if self.n < 2:
             return self.mean, 0.0
         variance = self.M2 / self.n
-        return self.mean, float(np.sqrt(variance))
+        return self.mean, math.sqrt(variance)
 
     def reset(self) -> None:
         """Reset all accumulators to initial state."""
@@ -220,7 +304,7 @@ class EWMAStats:
             # EWMA variance (exponentially weighted)
             self.variance = (1 - self.alpha) * (self.variance + self.alpha * delta * delta)
 
-        return self.mean, float(np.sqrt(self.variance))
+        return self.mean, math.sqrt(self.variance)
 
     def get_stats(self) -> Tuple[float, float]:
         """
@@ -229,7 +313,7 @@ class EWMAStats:
         Returns:
             Tuple of (mean, std)
         """
-        return self.mean, float(np.sqrt(self.variance))
+        return self.mean, math.sqrt(self.variance)
 
     def get_mad(self) -> float:
         """
@@ -244,9 +328,10 @@ class EWMAStats:
         if len(self._recent_values) < 3:
             return 0.0
 
-        values = np.array(self._recent_values)
-        median = np.median(values)
-        mad = np.median(np.abs(values - median))
+        values = sorted(self._recent_values)
+        median = _median_sorted(values)
+        deviations = sorted(abs(v - median) for v in values)
+        mad = _median_sorted(deviations)
         return float(mad)
 
     def is_anomaly_mad(self, x: float, threshold: float = 3.5) -> bool:
@@ -272,8 +357,8 @@ class EWMAStats:
         if mad == 0:
             return False
 
-        values = np.array(self._recent_values)
-        median = float(np.median(values))
+        values = sorted(self._recent_values)
+        median = _median_sorted(values)
         modified_z = abs(x - median) / (1.4826 * mad)
         return modified_z > threshold
 
@@ -512,26 +597,33 @@ class ResonanceTimingMonitor:
         if operation not in self.timing_history:
             return {}
 
-        # Convert deque to numpy array for FFT (on-demand, not hot path)
-        # Use list() for efficient conversion, then slice for window_size
+        # Slice to window_size (on-demand, not hot path)
         history_list = list(self.timing_history[operation])
-        timings = np.array(history_list[-self.window_size :])
+        timings = history_list[-self.window_size :]
 
         if len(timings) < 8:
             return {}
 
-        # FFT analysis
-        fft_result = fft(timings)
-        freqs = fftfreq(len(timings))
-        power = np.abs(fft_result) ** 2
+        # Zero-pad to next power of 2 for Cooley-Tukey
+        n = len(timings)
+        n_padded = 1
+        while n_padded < n:
+            n_padded <<= 1
+        x = [complex(v) for v in timings] + [complex(0)] * (n_padded - n)
 
-        # Find dominant frequency (excluding DC component)
-        dominant_idx = np.argmax(power[1:]) + 1
+        # FFT analysis (pure Python Cooley-Tukey)
+        fft_result = _fft_cooley_tukey(x)
+        freqs = _fftfreq(n_padded)
+        power = [abs(c) ** 2 for c in fft_result]
+
+        # Find dominant frequency (excluding DC component at index 0)
+        power_no_dc = power[1:]
+        dominant_idx = power_no_dc.index(max(power_no_dc)) + 1
         dominant_freq = freqs[dominant_idx]
         dominant_power = power[dominant_idx]
 
-        # Calculate mean power for comparison
-        mean_power = np.mean(power[1:])
+        # Mean power excluding DC
+        mean_power = _mean(power_no_dc)
 
         return {
             "dominant_frequency": float(dominant_freq),
@@ -616,7 +708,7 @@ class RecursionPatternMonitor:
 
         # Extract time series features
         timestamps = [p["timestamp"] for p in self.package_history]
-        intervals = np.diff(timestamps)
+        intervals = [timestamps[i + 1] - timestamps[i] for i in range(len(timestamps) - 1)]
 
         # Recursive hierarchical analysis
         features = self._recursive_extract(intervals, depth=0)
@@ -644,10 +736,10 @@ class RecursionPatternMonitor:
                     )
 
         # Check for package size anomalies
-        code_counts = [p.get("code_count", 0) for p in self.package_history]
+        code_counts = [float(p.get("code_count", 0)) for p in self.package_history]
         if len(code_counts) > 10:
-            mean_count = np.mean(code_counts)
-            std_count = np.std(code_counts)
+            mean_count = _mean(code_counts)
+            std_count = _std(code_counts)
             recent_count = code_counts[-1]
 
             if std_count > 0:
@@ -672,7 +764,7 @@ class RecursionPatternMonitor:
             "total_packages": len(self.package_history),
         }
 
-    def _recursive_extract(self, data: "NDArray[np.floating[Any]]", depth: int) -> Dict[str, Any]:
+    def _recursive_extract(self, data: List[float], depth: int) -> Dict[str, Any]:
         """
         Recursively extract features at multiple scales.
 
@@ -693,9 +785,9 @@ class RecursionPatternMonitor:
             return {}
 
         features = {
-            f"level_{depth}_mean": float(np.mean(data)),
-            f"level_{depth}_std": float(np.std(data)),
-            f"level_{depth}_range": float(np.max(data) - np.min(data)),
+            f"level_{depth}_mean": _mean(data),
+            f"level_{depth}_std": _std(data),
+            f"level_{depth}_range": max(data) - min(data),
             f"level_{depth}_samples": len(data),
         }
 
@@ -797,8 +889,8 @@ class RefactoringAnalyzer:
             # Add complexity summary
             if complexity_values:
                 metrics["complexity_summary"] = {
-                    "mean": float(np.mean(complexity_values)),
-                    "max": int(np.max(complexity_values)),
+                    "mean": _mean([float(c) for c in complexity_values]),
+                    "max": max(complexity_values),
                     "high_complexity_functions": sum(1 for c in complexity_values if c > 10),
                 }
 
@@ -867,7 +959,7 @@ class RefactoringAnalyzer:
 
 class AmaCryptographyMonitor:
     """
-    Unified monitoring interface for AMA Cryptography ♱.
+    Unified monitoring interface for AMA Cryptography.
 
     Combines 3R Mechanism components (Resonance-Recursion-Refactoring)
     for comprehensive security monitoring without compromising cryptographic
@@ -985,8 +1077,8 @@ class AmaCryptographyMonitor:
         if all_complexities:
             aggregate = {
                 "total_functions": len(all_complexities),
-                "mean_complexity": float(np.mean(all_complexities)),
-                "max_complexity": int(np.max(all_complexities)),
+                "mean_complexity": _mean([float(c) for c in all_complexities]),
+                "max_complexity": max(all_complexities),
                 "high_complexity_count": sum(1 for c in all_complexities if c > 10),
             }
 

@@ -13,7 +13,7 @@
 
 ## Overview
 
-AMA Cryptography ♱ includes optional runtime security monitoring using the 3R Mechanism, a security framework developed by Steel Security Advisors LLC. The 3R Mechanism provides three complementary approaches to runtime security analysis:
+AMA Cryptography includes optional runtime security monitoring using the 3R Mechanism, a security framework developed by Steel Security Advisors LLC. The 3R Mechanism provides three complementary approaches to runtime security analysis:
 
 | Component | Function | Purpose |
 |-----------|----------|---------|

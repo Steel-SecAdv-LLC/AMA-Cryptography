@@ -35,7 +35,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include <openssl/rand.h>
+#include "ama_platform_rand.h"
 
 /* Forward declarations from ama_sha3.c */
 extern ama_error_t ama_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
@@ -320,10 +320,7 @@ static ama_error_t kyber_randombytes(uint8_t* buf, size_t len) {
         return ama_kyber_randombytes_hook(buf, len);
     }
 #endif
-    if (RAND_bytes(buf, (int)len) != 1) {
-        return AMA_ERROR_CRYPTO;
-    }
-    return AMA_SUCCESS;
+    return ama_randombytes(buf, len);
 }
 
 /**

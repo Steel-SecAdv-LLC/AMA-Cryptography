@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-AMA Cryptography ♱ Setup Script
+AMA Cryptography Setup Script
 ============================
 
 Multi-language build system with C extensions and Cython optimizations.
@@ -108,14 +108,13 @@ def get_extension_modules():
         "src/c/ama_consttime.c",
     ]
 
-    # Core C extension
+    # Core C extension (no external library dependencies)
     core_ext = Extension(
         name="ama_cryptography._core",
         sources=c_sources,
         include_dirs=["include"],
         extra_compile_args=compiler_flags,
         extra_link_args=linker_flags,
-        libraries=["crypto"] if platform.system() != "Windows" else [],
     )
     extensions.append(core_ext)
 
@@ -281,10 +280,14 @@ setup(
     # This section is kept in sync for compatibility with older tools.
     install_requires=[
         "cryptography>=41.0.0",
-        "numpy>=1.24.0,<3.0.0",
-        "scipy>=1.7.0",
     ],
     extras_require={
+        # numpy/scipy: optional, used by equations/double_helix and 3R monitor
+        # when available. Core cryptographic operations work without them.
+        "monitoring": [
+            "numpy>=1.24.0,<3.0.0",
+            "scipy>=1.7.0",
+        ],
         # PyNaCl for enhanced secure memory operations (libsodium bindings)
         "secure-memory": ["pynacl>=1.5.0"],
         "dev": [
@@ -296,6 +299,8 @@ setup(
             "mypy>=1.0.0",
             "isort>=5.12.0",
             "Cython>=3.0.0",
+            "numpy>=1.24.0,<3.0.0",
+            "scipy>=1.7.0",
         ],
         "docs": [
             "sphinx>=6.0.0",

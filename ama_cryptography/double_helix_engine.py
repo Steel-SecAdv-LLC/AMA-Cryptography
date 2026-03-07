@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱) - Double-Helix Evolution Engine
+AMA Cryptography - Double-Helix Evolution Engine
 =====================================================
 
 **IMPORTANT: NON-CRYPTOGRAPHIC MODULE**
@@ -541,7 +541,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     logger.info("=" * 70)
-    logger.info("AMA Cryptography ♱ (AG♱) - Double-Helix Evolution Engine Demo")
+    logger.info("AMA Cryptography - Double-Helix Evolution Engine Demo")
     logger.info("=" * 70)
 
     # Create engine with default configuration

@@ -1,17 +1,17 @@
-# Cryptographic Algorithms - AMA Cryptography ♱
+# Cryptographic Algorithms - AMA Cryptography
 
 ## Document Information
 
 | Property | Value |
 |----------|-------|
-| Document Version | 1.1 |
-| Last Updated | 2026-01-09 |
+| Document Version | 2.0 |
+| Last Updated | 2026-03-07 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
 ---
 
-This document provides an overview of the cryptographic algorithms used in AMA Cryptography ♱ (AG♱), their security properties, and references to official specifications.
+This document provides an overview of the cryptographic algorithms used in AMA Cryptography, their security properties, and references to official specifications.
 
 ## Algorithm Summary
 
@@ -139,7 +139,7 @@ HKDF is used for key derivation from master secrets.
 
 ## Hybrid Signature Scheme
 
-AG♱ supports hybrid signatures combining Ed25519 and ML-DSA-65:
+AMA Cryptography supports hybrid signatures combining Ed25519 and ML-DSA-65:
 
 ```
 HybridSign(message, sk_ed25519, sk_dilithium):
@@ -157,7 +157,7 @@ HybridVerify(message, signature, pk_ed25519, pk_dilithium):
 
 ## Defense-in-Depth Layers
 
-AG♱ applies six independent cryptographic layers:
+AMA Cryptography applies six independent cryptographic layers:
 
 1. **Canonical Encoding** - Length-prefixed encoding prevents concatenation attacks
 2. **SHA3-256 Hash** - Content integrity with collision resistance

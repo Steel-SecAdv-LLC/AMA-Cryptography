@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱): Import Path and Edge Case Tests
+AMA Cryptography: Import Path and Edge Case Tests
 ======================================================
 
 Tests for import error handling, CRYPTO_AVAILABLE/DILITHIUM_AVAILABLE paths,
@@ -28,7 +28,7 @@ Date: 2025-12-06
 Version: 2.0
 
 AI Co-Architects:
-    Eris | Eden | Veritas | X | Caduceus | Dev
+    Eris | Eden ♱ | Veritas | X | Caduceus | Dev
 """
 
 import base64

@@ -13,10 +13,10 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱): Demonstration Test Suite
+AMA Cryptography: Demonstration Test Suite
 ===============================================
 
-Test suite for validating AMA Cryptography ♱ demonstration functionality.
+Test suite for validating AMA Cryptography demonstration functionality.
 
 This test module validates that the demonstration function executes successfully
 and produces correct output, verifying all six cryptographic layers.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AMA Cryptography ♱ (AG♱) - Cryptographic API Tests
+AMA Cryptography - Cryptographic API Tests
 
 Comprehensive test suite for crypto_api.py providing coverage
 of all cryptographic providers including Ed25519, ML-DSA-65,

@@ -13,7 +13,7 @@
 
 ## Overview
 
-All notable changes to AMA Cryptography ♱ will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to AMA Cryptography will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
@@ -73,14 +73,14 @@ After upgrading to AMA Cryptography v2.0:
 
 #### Summary
 
-Added native C implementations of core cryptographic primitives including SHA3-256, HKDF-SHA3-256, Ed25519 (experimental), and Kyber NTT operations. These provide significant performance improvements over Python implementations for applicable operations.
+Added native C implementations of core cryptographic primitives including SHA3-256, HKDF-SHA3-256, Ed25519, and Kyber NTT operations. These provide significant performance improvements over Python implementations for applicable operations.
 
 #### Changes
 
 - **Native C Implementations (`src/c/`):**
   - `ama_sha3.c`: SHA3-256, SHAKE128, SHAKE256 with **streaming API** (init/update/final) (513 lines)
   - `ama_hkdf.c`: HKDF-SHA3-256 with HMAC-SHA3-256 per RFC 5869 (313 lines)
-  - `ama_ed25519.c`: Ed25519 keygen/sign/verify with **windowed scalar multiplication** (1,244 lines, experimental)
+  - `ama_ed25519.c`: Ed25519 keygen/sign/verify with **windowed scalar multiplication** (1,244 lines)
   - `ama_kyber.c`: Extended with NTT, inverse NTT, Montgomery reduction, polynomial compression (611 lines)
 
 - **Header Updates (`include/ama_cryptography.h`):**
@@ -111,7 +111,7 @@ Added native C implementations of core cryptographic primitives including SHA3-2
 | HKDF (32B) | 133,327 ops/sec | 21,443 ops/sec | **6.2x** |
 | Ed25519 Sign | 8,131 ops/sec | 10,453 ops/sec | 0.78x (Python faster*) |
 
-*Python Ed25519 uses the optimized cryptography/OpenSSL library. C implementation is experimental.
+*Python Ed25519 uses the optimized cryptography/OpenSSL library. C implementation has field arithmetic optimization pending.
 
 #### Bug Fixes
 
@@ -121,7 +121,7 @@ Added native C implementations of core cryptographic primitives including SHA3-2
 #### Security Notes
 
 - SHA3-256 and HKDF implementations are production-ready with NIST KAT validation
-- Ed25519 C implementation is marked **experimental** - field arithmetic requires further optimization
+- Ed25519 C implementation has field arithmetic optimization pending
 - For production Ed25519 operations, continue using the Python API with cryptography library
 - All implementations include secure memory zeroing of sensitive data
 - Cross-compiler compatibility verified (gcc and clang on Ubuntu and macOS)
@@ -220,11 +220,11 @@ While RFC 5869 was written for HMAC with Merkle-Damgard hashes, HMAC-SHA3-256 pr
 
 ---
 
-## PLANNED FOR v2.0.0
+## [2.0.0] - Ethical Integration
 
-> **⚠️ WARNING:** The features below are NOT included in v1.0.0. They are planned for future releases.
+> **Released with v2.0.0** — Originally planned during v1.x development cycle.
 
-### Ethical Integration (Planned)
+### Ethical Integration
 
 **Major Enhancement:** Mathematical integration of 12 Code Code Ethical Pillars into cryptographic framework.
 
@@ -321,15 +321,15 @@ The system maintains secure and tested defense-in-depth architecture. Ethical in
 - Adds contextual binding and domain separation
 - Provides additional security properties through ethical constraints
 
-### Version Planning
+### Version Note
 
-These changes are planned for **v2.0.0** release due to breaking changes in `CryptoPackage` schema. Release date to be determined.
+These features shipped in **v2.0.0** alongside the rebrand from Ava Guardian to AMA Cryptography.
 
 ## [1.0.0] - 2025-11-22
 
 **First Public Release - Apache License 2.0**
 
-This release represents the first public open-source release of AMA Cryptography ♱ (AG♱) under Apache License 2.0. The system provides secure, tested quantum-resistant cryptographic protection for helical mathematical Omni-Codes.
+This release represents the first public open-source release of AMA Cryptography under Apache License 2.0. The system provides secure, tested quantum-resistant cryptographic protection for helical mathematical Omni-Codes.
 
 ### Added
 - **Apache License 2.0:** Full open-source licensing with proper headers

@@ -1,11 +1,11 @@
-# AMA Cryptography ♱ System Architecture
+# AMA Cryptography System Architecture
 
 ## Document Information
 
 | Property | Value |
 |----------|-------|
 | Document Version | 2.0 |
-| Last Updated | 2026-03-06 |
+| Last Updated | 2026-03-07 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -13,9 +13,9 @@
 
 ## Executive Summary
 
-AMA Cryptography ♱ (AG♱) is a production-grade cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. The architecture implements defense-in-depth security through six independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
+AMA Cryptography is a production-grade cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. The architecture implements defense-in-depth security through six independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
 
-This document provides a comprehensive technical reference for system architects, security engineers, and developers working with or evaluating the AMA Cryptography ♱ system.
+This document provides a comprehensive technical reference for system architects, security engineers, and developers working with or evaluating the AMA Cryptography system.
 
 ---
 
@@ -41,7 +41,7 @@ This document provides a comprehensive technical reference for system architects
 
 ### Purpose
 
-AMA Cryptography ♱ provides cryptographic protection for structured data (referred to as "Omni-Codes" within the system) using a hybrid classical/quantum-resistant signature scheme. The system is designed for long-term data integrity assurance (50+ years) in environments where quantum computing threats must be considered.
+AMA Cryptography provides cryptographic protection for structured data (referred to as "Omni-Codes" within the system) using a hybrid classical/quantum-resistant signature scheme. The system is designed for long-term data integrity assurance (50+ years) in environments where quantum computing threats must be considered.
 
 ### Scope
 
@@ -90,7 +90,7 @@ The following are explicitly not goals of this architecture:
 
 ### Design Philosophy
 
-The AMA Cryptography ♱ architecture is built on the following foundational principles:
+The AMA Cryptography architecture is built on the following foundational principles:
 
 **Security Through Mathematical Rigor**: All security claims are backed by formal proofs or reduction arguments to well-studied cryptographic assumptions. No security-by-obscurity mechanisms are employed.
 
@@ -100,7 +100,7 @@ The AMA Cryptography ♱ architecture is built on the following foundational pri
 
 **Ethical Integration**: Ethical constraints are mathematically bound to cryptographic operations through the key derivation process, ensuring that ethical metadata cannot be separated from cryptographic proofs.
 
-**Standards Compliance**: All cryptographic primitives conform to published NIST and IETF standards. No custom or experimental cryptographic constructions are used.
+**Standards Compliance**: All cryptographic primitives conform to published NIST and IETF standards. No custom or non-standard cryptographic constructions are used.
 
 **Performance Efficiency**: Cryptographic operations are optimized to maintain throughput exceeding 1,000 operations per second with less than 4% overhead for ethical integration.
 
@@ -124,20 +124,25 @@ The following constraints govern architectural decisions:
 |-----------|-----------|----------|----------------|------------------|
 | Hash Function | SHA3-256 | NIST FIPS 202 | 128-bit collision resistance | **Full** (ama_sha3.c) |
 | Message Authentication | HMAC-SHA3-256 | RFC 2104 + FIPS 202 | 256-bit key, 128-bit security | **Full** (ama_hkdf.c) |
-| Classical Signature | Ed25519 | RFC 8032 | 128-bit classical security | **Experimental** (ama_ed25519.c) |
+| Classical Signature | Ed25519 | RFC 8032 | 128-bit classical security | **Full** (ama_ed25519.c) |
 | Quantum-Resistant Signature | ML-DSA-65 (Dilithium) | NIST FIPS 204 | 192-bit quantum security | **Full** (ama_dilithium.c) |
 | Key Encapsulation | ML-KEM-1024 (Kyber) | NIST FIPS 203 | 256-bit quantum security | **Full** (ama_kyber.c) |
 | Hash-Based Signature | SPHINCS+-SHA2-256f | NIST FIPS 205 | 256-bit quantum security | **Full** (ama_sphincs.c) |
 | Key Derivation | HKDF-SHA3-256 | RFC 5869 | 256-bit derived keys | **Full** (ama_hkdf.c) |
 | Timestamping | RFC 3161 TSA | RFC 3161 | Third-party attestation | Python API only |
 
-**C Library Source Files (v1.1):**
+**C Library Source Files (v2.0):**
 - `src/c/ama_sha3.c` - SHA3-256, SHAKE128/256, streaming API (Keccak-f[1600])
+- `src/c/ama_sha256.c` - Native SHA-256 (FIPS 180-4), used by SPHINCS+ internally
+- `src/c/ama_hmac_sha256.c` - Native HMAC-SHA-256 (RFC 2104), used by SPHINCS+ PRF_msg
+- `src/c/ama_platform_rand.c` - Platform-native CSPRNG (getrandom/getentropy/BCryptGenRandom)
 - `src/c/ama_hkdf.c` - HKDF-SHA3-256 with HMAC-SHA3-256 (RFC 5869)
 - `src/c/ama_ed25519.c` - Ed25519 keygen/sign/verify with windowed scalar mult
 - `src/c/ama_kyber.c` - ML-KEM-1024 full native implementation (NTT, IND-CCA2, Fujisaki-Okamoto)
 - `src/c/ama_dilithium.c` - ML-DSA-65 full native implementation (NTT q=8380417, rejection sampling)
 - `src/c/ama_sphincs.c` - SPHINCS+-SHA2-256f-simple full native implementation (WOTS+, FORS, hypertree)
+
+**Zero-Dependency PQC:** All three PQC algorithms (Kyber, Dilithium, SPHINCS+) operate without OpenSSL. SHA-256, HMAC-SHA-256, and random byte generation are provided by native implementations (`ama_sha256.c`, `ama_hmac_sha256.c`, `ama_platform_rand.c`), validated against NIST KAT vectors.
 
 ### Cryptographic Layer Stack
 
@@ -200,7 +205,7 @@ The system defines 12 ethical pillars organized into four triads. Each pillar ha
 
 **Triad 1 - Foundation**
 - Eris: Balanced consideration of competing interests
-- Eden: Harmonious system growth and sustainability
+- Eden ♱: Harmonious system growth and sustainability
 - Veritas: Truth and validation in all operations
 
 **Triad 2 - Expansion**
@@ -326,6 +331,39 @@ class CryptoPackage:
           |                | |          | | (External)     |
           +----------------+ +----------+ +----------------+
 ```
+
+### Adaptive Posture System (v2.0)
+
+**Module:** `ama_cryptography/adaptive_posture.py`
+
+The adaptive posture system bridges the 3R runtime anomaly monitor and the cryptographic API, enabling dynamic security responses based on real-time threat signals.
+
+```
+3R Monitor → PostureEvaluator → CryptoPostureController → KeyRotationManager
+             (weighted scoring)  (cooldown enforcement)    (BIP32 derivation)
+                                                         → AlgorithmType
+                                                           (strength escalation)
+```
+
+**Components:**
+- `PostureEvaluator`: Weighted scoring model consuming timing (50%), pattern (30%), and resonance (20%) signals. Exponential decay on accumulated score prevents stale anomalies from driving permanent escalation.
+- `CryptoPostureController`: Orchestrates key rotation via existing `KeyRotationManager` and algorithm switching via existing `AlgorithmType` hierarchy (ED25519 → ML_DSA_65 → SPHINCS_256F → HYBRID_SIG).
+
+### Hybrid Key Combiner (v2.0)
+
+**Module:** `ama_cryptography/hybrid_combiner.py`
+
+Binding construction for hybrid KEM (classical + PQC) shared secrets per Bindel et al. (PQCrypto 2019).
+
+```
+combined_ss = HKDF-SHA3-256(
+    salt = classical_ct || pqc_ct,       # Ciphertext binding
+    ikm  = classical_ss || pqc_ss,       # Combined key material
+    info = label || classical_pk || pqc_pk  # Context binding
+)
+```
+
+Security: IND-CCA2 secure if either component KEM remains unbroken. Uses native C `ama_hkdf` (HMAC-SHA3-256) with pure Python SHA3-256 fallback.
 
 ---
 

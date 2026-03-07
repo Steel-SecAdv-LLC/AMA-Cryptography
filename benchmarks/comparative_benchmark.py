@@ -6,7 +6,7 @@
 Comparative Performance Benchmarking
 =====================================
 
-Compare AMA Cryptography ♱ performance against other hybrid PQC implementations:
+Compare AMA Cryptography performance against other hybrid PQC implementations:
 - OpenSSL + liboqs (via cryptography library)
 - Pure liboqs-python
 - AMA Cryptography hybrid implementation
@@ -115,7 +115,7 @@ class ComparativeBenchmark:
     def benchmark_ama_cryptography(self):
         """Benchmark AMA Cryptography hybrid implementation"""
         print("\n" + "=" * 70)
-        print("AMA CRYPTOGRAPHY ♱ HYBRID IMPLEMENTATION")
+        print("AMA CRYPTOGRAPHY HYBRID IMPLEMENTATION")
         print("=" * 70)
 
         try:
@@ -441,7 +441,7 @@ class ComparativeBenchmark:
 def main():
     """Run comparative benchmarks"""
     print("=" * 70)
-    print("AMA CRYPTOGRAPHY ♱ - COMPARATIVE PERFORMANCE BENCHMARK")
+    print("AMA CRYPTOGRAPHY - COMPARATIVE PERFORMANCE BENCHMARK")
     print("=" * 70)
     print()
     print("Comparing AMA Cryptography against:")

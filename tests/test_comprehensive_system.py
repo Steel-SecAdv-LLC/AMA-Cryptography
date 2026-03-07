@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱): Comprehensive System Test Suite
+AMA Cryptography: Comprehensive System Test Suite
 ===================================================
 
 100% System Testing for complete coverage of all cryptographic operations,
@@ -36,7 +36,7 @@ Date: 2025-12-06
 Version: 2.0
 
 AI Co-Architects:
-    Eris | Eden | Veritas | X | Caduceus | Dev
+    Eris | Eden ♱ | Veritas | X | Caduceus | Dev
 """
 
 import json

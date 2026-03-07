@@ -3,10 +3,10 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-AMA Cryptography ♱ Complete Feature Demonstration
+AMA Cryptography Complete Feature Demonstration
 ==============================================
 
-Comprehensive demonstration of all AMA Cryptography ♱ capabilities:
+Comprehensive demonstration of all AMA Cryptography capabilities:
 - Algorithm-agnostic cryptographic API
 - Hierarchical deterministic key derivation
 - Key rotation and management
@@ -334,9 +334,9 @@ def demo_performance():
 def main():
     """Run all demonstrations"""
     print("=" * 70)
-    print("AMA CRYPTOGRAPHY ♱ COMPLETE FEATURE DEMONSTRATION")
+    print("AMA CRYPTOGRAPHY COMPLETE FEATURE DEMONSTRATION")
     print("=" * 70)
-    print("\nDemonstrating all capabilities of AMA Cryptography ♱ 2.0")
+    print("\nDemonstrating all capabilities of AMA Cryptography 2.0")
     print("Production-grade multi-language PQC system")
     print()
 
@@ -352,7 +352,7 @@ def main():
         print("\n" + "=" * 70)
         print("✓ ALL DEMONSTRATIONS COMPLETED SUCCESSFULLY")
         print("=" * 70)
-        print("\nAMA Cryptography ♱ - Protecting people, data, and networks")
+        print("\nAMA Cryptography - Protecting people, data, and networks")
         print("with quantum-resistant cryptography and ethical AI")
         print()
 

@@ -231,7 +231,7 @@ def benchmark_constant_time_ops():
 def main():
     """Run all benchmarks"""
     print("=" * 70)
-    print("AMA Cryptography ♱ Performance Benchmark Suite")
+    print("AMA Cryptography Performance Benchmark Suite")
     print("=" * 70)
 
     all_results = []

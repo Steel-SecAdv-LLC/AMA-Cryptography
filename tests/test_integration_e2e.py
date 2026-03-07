@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-AMA Cryptography ♱ End-to-End Integration Tests
+AMA Cryptography End-to-End Integration Tests
 ============================================
 
 Complete workflow integration tests covering:

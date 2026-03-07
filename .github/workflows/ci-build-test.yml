@@ -43,20 +43,19 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake libssl-dev ${{ matrix.cc }} ${{ matrix.cxx }}
+          sudo apt-get install -y cmake ${{ matrix.cc }} ${{ matrix.cxx }}
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
         run: |
-          brew install cmake openssl gcc@12
+          brew install cmake gcc@12
 
       - name: Configure CMake
         run: |
           mkdir -p build
           cd build
-          # Set compiler and OpenSSL path
+          # Set compiler path
           if [ "$RUNNER_OS" = "macOS" ]; then
-            OPENSSL_ROOT=$(brew --prefix openssl)
             # For GCC on macOS, use full path
             if [ "${{ matrix.compiler }}" = "gcc" ]; then
               CC_PATH=$(brew --prefix gcc@12)/bin/gcc-12
@@ -66,7 +65,6 @@ jobs:
               CXX_PATH=${{ matrix.cxx }}
             fi
           else
-            OPENSSL_ROOT=""
             CC_PATH=${{ matrix.cc }}
             CXX_PATH=${{ matrix.cxx }}
           fi
@@ -78,8 +76,7 @@ jobs:
             -DAMA_BUILD_SHARED=ON \
             -DAMA_BUILD_STATIC=ON \
             -DAMA_BUILD_TESTS=ON \
-            -DAMA_ENABLE_AVX2=OFF \
-            ${OPENSSL_ROOT:+-DOPENSSL_ROOT_DIR=${OPENSSL_ROOT}}
+            -DAMA_ENABLE_AVX2=ON
 
       - name: Build
         run: cmake --build build --config Release -j4
@@ -114,7 +111,7 @@ jobs:
 
       - name: Install system dependencies (macOS)
         if: matrix.os == 'macos-latest'
-        run: brew install cmake openssl
+        run: brew install cmake
 
       - name: Install Python build dependencies
         run: |
@@ -137,7 +134,7 @@ jobs:
 
       - name: Run tests
         env:
-          # UTF-8 encoding for Windows to support Unicode symbols (♱) in output
+          # UTF-8 encoding for Windows to support Unicode symbols in output
           PYTHONIOENCODING: ${{ matrix.os == 'windows-latest' && 'utf-8' || '' }}
           PYTHONUTF8: ${{ matrix.os == 'windows-latest' && '1' || '' }}
         run: pytest tests/ -v --cov=ama_cryptography --cov-report=xml

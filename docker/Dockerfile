@@ -1,7 +1,7 @@
 # Copyright 2025 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 #
-# Multi-stage Docker build for AMA Cryptography ♱
+# Multi-stage Docker build for AMA Cryptography
 # Optimized for production deployment with minimal attack surface
 
 # Stage 1: Builder
@@ -46,7 +46,7 @@ RUN python3 setup.py build_ext --inplace && \
 FROM ubuntu:22.04
 
 LABEL maintainer="Steel Security Advisors LLC <steel.sa.llc@gmail.com>"
-LABEL description="AMA Cryptography ♱ - Quantum-Resistant Cryptographic Protection System"
+LABEL description="AMA Cryptography - Quantum-Resistant Cryptographic Protection System"
 LABEL version="2.0"
 
 # Install runtime dependencies only
@@ -66,7 +66,8 @@ COPY --from=builder /build/build/lib/*.so* /usr/local/lib/
 COPY --from=builder /build/dist/*.whl /tmp/
 COPY --from=builder /build/requirements.txt /tmp/
 
-# Install Python package and runtime dependencies (numpy, scipy required by ama_cryptography)
+# Install Python package and runtime dependencies
+# numpy/scipy required by equations/double_helix modules imported at package init
 RUN pip3 install --no-cache-dir /tmp/*.whl && \
     pip3 install --no-cache-dir -r /tmp/requirements.txt && \
     pip3 install --no-cache-dir numpy scipy && \
@@ -88,4 +89,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD python3 -c "import ama_cryptography; print('OK')" || exit 1
 
 # Default command
-CMD ["python3", "-c", "import ama_cryptography; print(f'AMA Cryptography ♱ v{ama_cryptography.__version__} ready')"]
+CMD ["python3", "-c", "import ama_cryptography; print(f'AMA Cryptography v{ama_cryptography.__version__} ready')"]

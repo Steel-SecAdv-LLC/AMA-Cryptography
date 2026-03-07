@@ -14,10 +14,10 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱): 3R Monitoring Test Suite
+AMA Cryptography: 3R Monitoring Test Suite
 ===============================================
 
-Comprehensive test suite for AMA Cryptography ♱ 3R Monitoring.
+Comprehensive test suite for AMA Cryptography 3R Monitoring.
 
 Tests cover:
 - ResonanceEngine timing detection
@@ -31,7 +31,7 @@ Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2026-01-09
 Version: 2.0
-Project: AMA Cryptography ♱ 3R Test Suite
+Project: AMA Cryptography 3R Test Suite
 
 AI Co-Architects:
     Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
@@ -839,7 +839,7 @@ class TestAmaCryptographyMonitor:
 # Integration test markers
 @pytest.mark.integration
 class TestMonitorIntegration:
-    """Integration tests with full AMA Cryptography ♱ system."""
+    """Integration tests with full AMA Cryptography system."""
 
     def test_end_to_end_monitoring(self):
         """Test complete workflow with monitoring and baseline convergence."""

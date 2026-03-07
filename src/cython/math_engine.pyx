@@ -9,7 +9,7 @@
 Copyright 2025 Steel Security Advisors LLC
 Licensed under the Apache License, Version 2.0
 
-AMA Cryptography ♱ High-Performance Mathematical Engine (Cython)
+AMA Cryptography High-Performance Mathematical Engine (Cython)
 =============================================================
 
 Optimized mathematical operations for cryptographic primitives.

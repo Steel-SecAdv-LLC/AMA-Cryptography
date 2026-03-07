@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱): Double-Helix Evolution Engine Test Suite
+AMA Cryptography: Double-Helix Evolution Engine Test Suite
 ================================================================
 
 Tests for 18+ AMA Equation variants and Double-Helix architecture.
