@@ -90,7 +90,7 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 
 ---
 
-## Key Capabilities ⚡
+## Key Capabilities 
 
 <details>
 <summary><strong>Problem Statement and Solution</strong></summary>
