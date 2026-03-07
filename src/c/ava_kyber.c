@@ -720,13 +720,19 @@ static ava_error_t kyber_decapsulate(
 #endif
 }
 
+/* ============================================================================
+ * DEBUG / TEST FUNCTIONS
+ * ============================================================================
+ * These functions are only compiled in test builds (AVA_TESTING_MODE).
+ * They provide NTT roundtrip verification, polynomial multiplication tests,
+ * and CPA encrypt/decrypt roundtrip diagnostics for development validation.
+ * ============================================================================ */
+#ifdef AVA_TESTING_MODE
+#include <stdio.h>
+
 /**
- * Debug function: tests CPA encrypt -> decrypt roundtrip at the polynomial level.
- * Returns 0 if the recovered message matches, 1 if it differs.
- * This bypasses the FO transform to isolate CPA correctness.
- */
-/**
- * Debug: test NTT -> INVNTT roundtrip
+ * Debug: test NTT -> INVNTT roundtrip and polynomial arithmetic correctness.
+ * Returns 0 if all sub-tests pass, 1 if any fails.
  */
 int ava_kyber_debug_ntt_roundtrip(void) {
     poly a, b, c, d;
@@ -1477,6 +1483,8 @@ int ava_kyber_debug_cpa_roundtrip(void) {
     return 1;
 #endif
 }
+
+#endif /* AVA_TESTING_MODE - end of debug/test functions */
 
 /* ============================================================================
  * PUBLIC WRAPPERS FOR CORE DISPATCH
