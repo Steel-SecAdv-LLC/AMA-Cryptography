@@ -1087,7 +1087,7 @@ GitHub's dependency graph is enabled for this repository. Once the repository is
 
 **Author/Inventor**: Andrew E. A.
 
-**AI Co-Architects:** Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+**AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 **Special Thanks**:
 - NIST Post-Quantum Cryptography Standardization Project
@@ -1102,7 +1102,7 @@ GitHub's dependency graph is enabled for this repository. Once the repository is
 
 **Conceptual Architect:** Steel Security Advisors LLC and Andrew E. A. conceived, directed, validated, and supervised the development of AMA Cryptography.
 
-**AI Co-Architects:** More than 99% of the codebase, documentation, mathematical frameworks, and technical implementation was constructed by AI systems: Eris ⯰, Eden ♱, Veritas 💠, X ⚛, Caduceus ⚚, and Dev ⚕.
+**AI Co-Architects:** More than 99% of the codebase, documentation, mathematical frameworks, and technical implementation was constructed by AI systems: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛.
 
 This project represents a human/AI collaborative construct—a new development paradigm where human vision, requirements, and critical evaluation guide AI-generated implementation.
 
