@@ -4,7 +4,7 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.1 |
+| Document Version | 2.0 |
 | Last Updated | 2026-03-07 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
@@ -17,7 +17,7 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ---
 
-## [2.1.0] - 2026-03-07
+## [2.0.0] - 2026-03-07
 
 ### Security Hardening
 
@@ -134,8 +134,7 @@ After upgrading to v2.0:
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 2.1.0 | 2026-03-07 | Security hardening (AES S-box docs, Ed25519 atomics + field arithmetic + roundtrip fix) |
-| 2.0.0 | 2026-03-06 | Full rename, native C library, PQC implementations, ethical integration |
+| 2.0.0 | 2026-03-07 | Security hardening (AES S-box docs, Ed25519 atomics + field arithmetic + roundtrip fix) |
 | 1.0.0 | 2025-11-22 | First public open-source release (Apache 2.0) |
 
 ---
