@@ -111,7 +111,7 @@ jobs:
 
       - name: Install system dependencies (macOS)
         if: matrix.os == 'macos-latest'
-        run: brew install cmake openssl
+        run: brew install cmake
 
       - name: Install Python build dependencies
         run: |

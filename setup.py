@@ -108,14 +108,13 @@ def get_extension_modules():
         "src/c/ama_consttime.c",
     ]
 
-    # Core C extension
+    # Core C extension (no external library dependencies)
     core_ext = Extension(
         name="ama_cryptography._core",
         sources=c_sources,
         include_dirs=["include"],
         extra_compile_args=compiler_flags,
         extra_link_args=linker_flags,
-        libraries=["crypto"] if platform.system() != "Windows" else [],
     )
     extensions.append(core_ext)
 

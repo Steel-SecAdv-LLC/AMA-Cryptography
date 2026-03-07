@@ -78,7 +78,7 @@ class HybridCombiner:
     Combines classical and PQC shared secrets via binding HKDF construction.
 
     Uses the native C HKDF-SHA3-256 (ama_hkdf) when available, falling
-    back to Python HKDF-SHA-256 via hashlib when the C library is not built.
+    back to Python HKDF-SHA3-256 via hashlib when the C library is not built.
 
     The combiner is algorithm-agnostic: it accepts raw shared secrets and
     ciphertexts from any classical + PQC KEM pair.

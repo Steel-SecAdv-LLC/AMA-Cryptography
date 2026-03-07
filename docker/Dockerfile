@@ -34,7 +34,7 @@ RUN mkdir -p build && cd build && \
         -DAMA_BUILD_STATIC=OFF \
         -DAMA_BUILD_TESTS=OFF \
         -DAMA_BUILD_EXAMPLES=OFF \
-        -DAMA_ENABLE_AVX2=ON \
+        -DAMA_ENABLE_AVX2=OFF \
         -DAMA_ENABLE_LTO=ON && \
     cmake --build . --config Release -j$(nproc)
 
@@ -67,9 +67,10 @@ COPY --from=builder /build/dist/*.whl /tmp/
 COPY --from=builder /build/requirements.txt /tmp/
 
 # Install Python package and runtime dependencies
-# numpy/scipy are optional — install with pip install "ama-cryptography[monitoring]"
+# numpy/scipy required by equations/double_helix modules imported at package init
 RUN pip3 install --no-cache-dir /tmp/*.whl && \
     pip3 install --no-cache-dir -r /tmp/requirements.txt && \
+    pip3 install --no-cache-dir numpy scipy && \
     rm -rf /tmp/*.whl /tmp/requirements.txt && \
     ldconfig
 

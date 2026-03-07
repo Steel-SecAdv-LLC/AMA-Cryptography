@@ -24,7 +24,7 @@ RUN mkdir build && cd build && \
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
         -DAMA_BUILD_SHARED=ON \
-        -DAMA_ENABLE_AVX2=ON && \
+        -DAMA_ENABLE_AVX2=OFF && \
     cmake --build . -j$(nproc)
 
 RUN python3 setup.py bdist_wheel
@@ -41,8 +41,9 @@ RUN adduser -D -u 1000 ava
 COPY --from=builder /build/build/lib/*.so* /usr/local/lib/
 COPY --from=builder /build/dist/*.whl /tmp/
 
-# Install Python package (numpy/scipy are optional — install with [monitoring] extra)
+# Install Python package and numpy/scipy (required by equations/double_helix at import)
 RUN pip3 install --no-cache-dir /tmp/*.whl && \
+    pip3 install --no-cache-dir numpy scipy && \
     rm -rf /tmp/*.whl
 
 USER ava

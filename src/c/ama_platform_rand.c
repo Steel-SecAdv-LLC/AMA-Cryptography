@@ -109,9 +109,18 @@ ama_error_t ama_randombytes(uint8_t *buf, size_t len) {
     if (f == NULL) {
         return AMA_ERROR_CRYPTO;
     }
-    size_t nread = fread(buf, 1, len, f);
+    size_t offset = 0;
+    while (offset < len) {
+        size_t nread = fread(buf + offset, 1, len - offset, f);
+        if (nread == 0) {
+            /* EOF or error — cannot recover */
+            fclose(f);
+            return AMA_ERROR_CRYPTO;
+        }
+        offset += nread;
+    }
     fclose(f);
-    return (nread == len) ? AMA_SUCCESS : AMA_ERROR_CRYPTO;
+    return AMA_SUCCESS;
 
 #endif
 }

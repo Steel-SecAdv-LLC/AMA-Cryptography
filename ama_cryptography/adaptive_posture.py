@@ -262,7 +262,8 @@ class CryptoPostureController:
         ...     logger.warning(f"Posture action: {evaluation.action}")
     """
 
-    # Algorithm preference ordering: higher index = stronger
+    # Algorithm preference ordering: higher index = stronger.
+    # Keys correspond to AlgorithmType enum names in crypto_api.py.
     ALGORITHM_STRENGTH = {
         "ED25519": 0,
         "ML_DSA_65": 1,
