@@ -40,9 +40,9 @@ class TestLazyImportWithoutNumpy:
             import ama_cryptography
             print(ama_cryptography.__version__)
         """)
-        assert result.returncode == 0, (
-            f"Import failed with numpy blocked.\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        )
+        assert (
+            result.returncode == 0
+        ), f"Import failed with numpy blocked.\nstdout: {result.stdout}\nstderr: {result.stderr}"
         assert result.stdout.strip() == "2.0"
 
     def test_math_import_gives_clear_error(self):
@@ -63,9 +63,9 @@ class TestLazyImportWithoutNumpy:
                     print(f'ERROR: exception did not mention numpy: {e}')
                     sys.exit(1)
         """)
-        assert result.returncode == 0, (
-            f"Expected clear numpy error.\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        )
+        assert (
+            result.returncode == 0
+        ), f"Expected clear numpy error.\nstdout: {result.stdout}\nstderr: {result.stderr}"
         assert "OK" in result.stdout
 
     def test_engine_import_gives_clear_error(self):
@@ -86,9 +86,9 @@ class TestLazyImportWithoutNumpy:
                     print(f'ERROR: exception did not mention numpy: {e}')
                     sys.exit(1)
         """)
-        assert result.returncode == 0, (
-            f"Expected clear numpy error.\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        )
+        assert (
+            result.returncode == 0
+        ), f"Expected clear numpy error.\nstdout: {result.stdout}\nstderr: {result.stderr}"
         assert "OK" in result.stdout
 
 

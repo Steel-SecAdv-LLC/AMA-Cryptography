@@ -257,18 +257,18 @@ def _setup_ed25519_ctypes(lib: ctypes.CDLL) -> bool:
         lib.ama_ed25519_keypair.restype = ctypes.c_int
 
         lib.ama_ed25519_sign.argtypes = [
-            ctypes.c_char_p,   # signature[64]
-            ctypes.c_char_p,   # message
-            ctypes.c_size_t,   # message_len
-            ctypes.c_char_p,   # secret_key[64]
+            ctypes.c_char_p,  # signature[64]
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # secret_key[64]
         ]
         lib.ama_ed25519_sign.restype = ctypes.c_int
 
         lib.ama_ed25519_verify.argtypes = [
-            ctypes.c_char_p,   # signature[64]
-            ctypes.c_char_p,   # message
-            ctypes.c_size_t,   # message_len
-            ctypes.c_char_p,   # public_key[32]
+            ctypes.c_char_p,  # signature[64]
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # public_key[32]
         ]
         lib.ama_ed25519_verify.restype = ctypes.c_int
 
@@ -285,26 +285,26 @@ def _setup_aes_gcm_ctypes(lib: ctypes.CDLL) -> bool:
     """Configure ctypes for AES-256-GCM functions. Separate from PQC setup."""
     try:
         lib.ama_aes256_gcm_encrypt.argtypes = [
-            ctypes.c_char_p,   # key[32]
-            ctypes.c_char_p,   # nonce[12]
-            ctypes.c_char_p,   # plaintext
-            ctypes.c_size_t,   # pt_len
-            ctypes.c_char_p,   # aad
-            ctypes.c_size_t,   # aad_len
-            ctypes.c_char_p,   # ciphertext
-            ctypes.c_char_p,   # tag[16]
+            ctypes.c_char_p,  # key[32]
+            ctypes.c_char_p,  # nonce[12]
+            ctypes.c_char_p,  # plaintext
+            ctypes.c_size_t,  # pt_len
+            ctypes.c_char_p,  # aad
+            ctypes.c_size_t,  # aad_len
+            ctypes.c_char_p,  # ciphertext
+            ctypes.c_char_p,  # tag[16]
         ]
         lib.ama_aes256_gcm_encrypt.restype = ctypes.c_int
 
         lib.ama_aes256_gcm_decrypt.argtypes = [
-            ctypes.c_char_p,   # key[32]
-            ctypes.c_char_p,   # nonce[12]
-            ctypes.c_char_p,   # ciphertext
-            ctypes.c_size_t,   # ct_len
-            ctypes.c_char_p,   # aad
-            ctypes.c_size_t,   # aad_len
-            ctypes.c_char_p,   # tag[16]
-            ctypes.c_char_p,   # plaintext
+            ctypes.c_char_p,  # key[32]
+            ctypes.c_char_p,  # nonce[12]
+            ctypes.c_char_p,  # ciphertext
+            ctypes.c_size_t,  # ct_len
+            ctypes.c_char_p,  # aad
+            ctypes.c_size_t,  # aad_len
+            ctypes.c_char_p,  # tag[16]
+            ctypes.c_char_p,  # plaintext
         ]
         lib.ama_aes256_gcm_decrypt.restype = ctypes.c_int
 
@@ -950,9 +950,7 @@ def native_ed25519_keypair() -> tuple:
     import secrets as _secrets
 
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
-        raise RuntimeError(
-            "Ed25519 native backend not available. " + _INSTALL_HINT
-        )
+        raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
 
     pk_buf = ctypes.create_string_buffer(ED25519_PUBLIC_KEY_BYTES)
     sk_buf = ctypes.create_string_buffer(ED25519_SECRET_KEY_BYTES)
@@ -989,9 +987,7 @@ def native_ed25519_keypair_from_seed(seed: bytes) -> tuple:
         raise ValueError(f"Ed25519 seed must be 32 bytes, got {len(seed)}")
 
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
-        raise RuntimeError(
-            "Ed25519 native backend not available. " + _INSTALL_HINT
-        )
+        raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
 
     pk_buf = ctypes.create_string_buffer(ED25519_PUBLIC_KEY_BYTES)
     sk_buf = ctypes.create_string_buffer(ED25519_SECRET_KEY_BYTES)
@@ -1022,9 +1018,7 @@ def native_ed25519_sign(message: bytes, secret_key: bytes) -> bytes:
         ValueError: If secret_key has incorrect length
     """
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
-        raise RuntimeError(
-            "Ed25519 native backend not available. " + _INSTALL_HINT
-        )
+        raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
 
     if len(secret_key) != ED25519_SECRET_KEY_BYTES:
         raise ValueError(
@@ -1033,9 +1027,7 @@ def native_ed25519_sign(message: bytes, secret_key: bytes) -> bytes:
         )
 
     sig_buf = ctypes.create_string_buffer(ED25519_SIGNATURE_BYTES)
-    rc = _native_lib.ama_ed25519_sign(
-        sig_buf, message, ctypes.c_size_t(len(message)), secret_key
-    )
+    rc = _native_lib.ama_ed25519_sign(sig_buf, message, ctypes.c_size_t(len(message)), secret_key)
     if rc != 0:
         raise RuntimeError(f"Ed25519 signing failed (rc={rc})")
 
@@ -1059,14 +1051,11 @@ def native_ed25519_verify(signature: bytes, message: bytes, public_key: bytes) -
         ValueError: If signature or public_key has incorrect length
     """
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
-        raise RuntimeError(
-            "Ed25519 native backend not available. " + _INSTALL_HINT
-        )
+        raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
 
     if len(signature) != ED25519_SIGNATURE_BYTES:
         raise ValueError(
-            f"Ed25519 signature must be {ED25519_SIGNATURE_BYTES} bytes, "
-            f"got {len(signature)}"
+            f"Ed25519 signature must be {ED25519_SIGNATURE_BYTES} bytes, " f"got {len(signature)}"
         )
     if len(public_key) != ED25519_PUBLIC_KEY_BYTES:
         raise ValueError(
@@ -1074,7 +1063,7 @@ def native_ed25519_verify(signature: bytes, message: bytes, public_key: bytes) -
             f"got {len(public_key)}"
         )
 
-    rc = _native_lib.ama_ed25519_verify(
+    rc: int = _native_lib.ama_ed25519_verify(
         signature, message, ctypes.c_size_t(len(message)), public_key
     )
     return rc == 0
@@ -1108,18 +1097,13 @@ def native_aes256_gcm_encrypt(
         ValueError: If key or nonce has incorrect length
     """
     if _native_lib is None or not _AES_GCM_NATIVE_AVAILABLE:
-        raise RuntimeError(
-            "AES-256-GCM native backend not available. " + _INSTALL_HINT
-        )
+        raise RuntimeError("AES-256-GCM native backend not available. " + _INSTALL_HINT)
 
     if len(key) != AES256_KEY_BYTES:
-        raise ValueError(
-            f"AES-256 key must be {AES256_KEY_BYTES} bytes, got {len(key)}"
-        )
+        raise ValueError(f"AES-256 key must be {AES256_KEY_BYTES} bytes, got {len(key)}")
     if len(nonce) != AES256_GCM_NONCE_BYTES:
         raise ValueError(
-            f"AES-256-GCM nonce must be {AES256_GCM_NONCE_BYTES} bytes, "
-            f"got {len(nonce)}"
+            f"AES-256-GCM nonce must be {AES256_GCM_NONCE_BYTES} bytes, " f"got {len(nonce)}"
         )
 
     ct_buf = ctypes.create_string_buffer(len(plaintext))
@@ -1167,23 +1151,17 @@ def native_aes256_gcm_decrypt(
         ama_cryptography.exceptions.SecurityWarning: If tag verification fails
     """
     if _native_lib is None or not _AES_GCM_NATIVE_AVAILABLE:
-        raise RuntimeError(
-            "AES-256-GCM native backend not available. " + _INSTALL_HINT
-        )
+        raise RuntimeError("AES-256-GCM native backend not available. " + _INSTALL_HINT)
 
     if len(key) != AES256_KEY_BYTES:
-        raise ValueError(
-            f"AES-256 key must be {AES256_KEY_BYTES} bytes, got {len(key)}"
-        )
+        raise ValueError(f"AES-256 key must be {AES256_KEY_BYTES} bytes, got {len(key)}")
     if len(nonce) != AES256_GCM_NONCE_BYTES:
         raise ValueError(
-            f"AES-256-GCM nonce must be {AES256_GCM_NONCE_BYTES} bytes, "
-            f"got {len(nonce)}"
+            f"AES-256-GCM nonce must be {AES256_GCM_NONCE_BYTES} bytes, " f"got {len(nonce)}"
         )
     if len(tag) != AES256_GCM_TAG_BYTES:
         raise ValueError(
-            f"AES-256-GCM tag must be {AES256_GCM_TAG_BYTES} bytes, "
-            f"got {len(tag)}"
+            f"AES-256-GCM tag must be {AES256_GCM_TAG_BYTES} bytes, " f"got {len(tag)}"
         )
 
     pt_buf = ctypes.create_string_buffer(len(ciphertext))

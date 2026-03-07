@@ -38,18 +38,31 @@ import importlib as _importlib
 # Accessing any math symbol triggers the actual import and surfaces a clear
 # ModuleNotFoundError if numpy is missing.
 
-_EQUATIONS_EXPORTS = frozenset({
-    "HELIX_PARAMS", "LAMBDA_DECAY", "OMNI_CODES", "PHI", "PHI_CUBED",
-    "PHI_SQUARED", "SIGMA_QUADRATIC_THRESHOLD", "calculate_sigma_quadratic",
-    "enforce_sigma_quadratic_threshold", "golden_ratio_convergence_proof",
-    "helix_curvature", "helix_torsion", "initialize_ethical_matrix",
-    "lyapunov_function", "lyapunov_stability_proof", "verify_all_codes",
-    "verify_mathematical_foundations",
-})
+_EQUATIONS_EXPORTS = frozenset(
+    {
+        "HELIX_PARAMS",
+        "LAMBDA_DECAY",
+        "OMNI_CODES",
+        "PHI",
+        "PHI_CUBED",
+        "PHI_SQUARED",
+        "SIGMA_QUADRATIC_THRESHOLD",
+        "calculate_sigma_quadratic",
+        "enforce_sigma_quadratic_threshold",
+        "golden_ratio_convergence_proof",
+        "helix_curvature",
+        "helix_torsion",
+        "initialize_ethical_matrix",
+        "lyapunov_function",
+        "lyapunov_stability_proof",
+        "verify_all_codes",
+        "verify_mathematical_foundations",
+    }
+)
 _ENGINE_EXPORTS = frozenset({"AmaEquationEngine"})
 
 
-def __getattr__(name: str):  # type: ignore[override]
+def __getattr__(name: str) -> object:
     """Lazy-load math modules that require numpy."""
     if name in _EQUATIONS_EXPORTS:
         mod = _importlib.import_module("ama_cryptography.equations")
@@ -63,6 +76,7 @@ def __getattr__(name: str):  # type: ignore[override]
         return val
 
     raise AttributeError(f"module 'ama_cryptography' has no attribute {name!r}")
+
 
 __all__ = [
     "__version__",

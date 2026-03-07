@@ -858,7 +858,7 @@ class AESGCMProvider:
 
         aesgcm = AESGCM(key)
         try:
-            return aesgcm.decrypt(nonce, ciphertext + tag, aad if aad else None)
+            return bytes(aesgcm.decrypt(nonce, ciphertext + tag, aad if aad else None))
         except Exception:
             raise ValueError("AES-256-GCM authentication tag verification failed")
 

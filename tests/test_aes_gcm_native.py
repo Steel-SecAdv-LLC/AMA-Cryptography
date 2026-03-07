@@ -12,7 +12,6 @@ Tests encrypt/decrypt, authentication, edge cases, and interop with PyCA.
 AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 """
 
-import os
 import secrets
 
 import pytest
@@ -39,10 +38,7 @@ skip_no_native = pytest.mark.skipif(
 # ============================================================================
 
 # Test Case 16 from NIST SP 800-38D (AES-256, 96-bit IV)
-NIST_KEY_16 = bytes.fromhex(
-    "feffe9928665731c6d6a8f9467308308"
-    "feffe9928665731c6d6a8f9467308308"
-)
+NIST_KEY_16 = bytes.fromhex("feffe9928665731c6d6a8f9467308308" "feffe9928665731c6d6a8f9467308308")
 NIST_NONCE_16 = bytes.fromhex("cafebabefacedbaddecaf888")
 NIST_PT_16 = bytes.fromhex(
     "d9313225f88406e5a55909c5aff5269a"
@@ -50,10 +46,7 @@ NIST_PT_16 = bytes.fromhex(
     "1c3c0c95956809532fcf0e2449a6b525"
     "b16aedf5aa0de657ba637b391aafd255"
 )
-NIST_AAD_16 = bytes.fromhex(
-    "feedfacedeadbeeffeedfacedeadbeef"
-    "abaddad2"
-)
+NIST_AAD_16 = bytes.fromhex("feedfacedeadbeeffeedfacedeadbeef" "abaddad2")
 NIST_CT_16 = bytes.fromhex(
     "522dc1f099567d07f47f37a32a84427d"
     "643a8cdcbfe5c0c97598a2bd2555d1aa"
@@ -296,12 +289,14 @@ class TestAESGCMNISTVectors:
             native_aes256_gcm_encrypt,
         )
 
-        ct, tag = native_aes256_gcm_encrypt(
-            NIST_KEY_16, NIST_NONCE_16, NIST_PT_16, NIST_AAD_16
-        )
+        ct, tag = native_aes256_gcm_encrypt(NIST_KEY_16, NIST_NONCE_16, NIST_PT_16, NIST_AAD_16)
 
-        assert ct == NIST_CT_16, f"Ciphertext mismatch:\n  got:    {ct.hex()}\n  expect: {NIST_CT_16.hex()}"
-        assert tag == NIST_TAG_16, f"Tag mismatch:\n  got:    {tag.hex()}\n  expect: {NIST_TAG_16.hex()}"
+        assert (
+            ct == NIST_CT_16
+        ), f"Ciphertext mismatch:\n  got:    {ct.hex()}\n  expect: {NIST_CT_16.hex()}"
+        assert (
+            tag == NIST_TAG_16
+        ), f"Tag mismatch:\n  got:    {tag.hex()}\n  expect: {NIST_TAG_16.hex()}"
 
         # Verify decryption
         pt = native_aes256_gcm_decrypt(
@@ -372,9 +367,7 @@ class TestAESGCMProvider:
         result = provider.encrypt(plaintext, key)
         assert result["backend"] == "native_c"
 
-        pt = provider.decrypt(
-            result["ciphertext"], key, result["nonce"], result["tag"]
-        )
+        pt = provider.decrypt(result["ciphertext"], key, result["nonce"], result["tag"])
         assert pt == plaintext
 
     def test_provider_with_aad(self):
@@ -387,9 +380,7 @@ class TestAESGCMProvider:
         aad = b"header info"
 
         result = provider.encrypt(plaintext, key, aad=aad)
-        pt = provider.decrypt(
-            result["ciphertext"], key, result["nonce"], result["tag"], aad=aad
-        )
+        pt = provider.decrypt(result["ciphertext"], key, result["nonce"], result["tag"], aad=aad)
         assert pt == plaintext
 
     def test_provider_auto_generates_nonce(self):

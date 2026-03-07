@@ -234,16 +234,15 @@ class TestEd25519Interop:
         _, pyca_sig = _pyca_sign(seed, message)
 
         assert native_sig == pyca_sig, (
-            f"Signature mismatch:\n"
-            f"  native: {native_sig.hex()}\n"
-            f"  pyca:   {pyca_sig.hex()}"
+            f"Signature mismatch:\n" f"  native: {native_sig.hex()}\n" f"  pyca:   {pyca_sig.hex()}"
         )
 
     def test_key_format_compatibility(self):
         """32-byte seed -> 64-byte native key conversion is lossless."""
-        from ama_cryptography.pqc_backends import native_ed25519_keypair_from_seed
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric import ed25519
+
+        from ama_cryptography.pqc_backends import native_ed25519_keypair_from_seed
 
         seed = bytes(range(32))
 
@@ -279,11 +278,15 @@ class TestEd25519Interop:
         for msg in messages:
             # Native sign -> PyCA verify
             pk, _, native_sig = _native_sign_and_verify(seed, msg)
-            assert _pyca_verify(native_sig, msg, pk), f"PyCA failed to verify native sig for {len(msg)}-byte msg"
+            assert _pyca_verify(
+                native_sig, msg, pk
+            ), f"PyCA failed to verify native sig for {len(msg)}-byte msg"
 
             # PyCA sign -> native verify
             _, pyca_sig = _pyca_sign(seed, msg)
-            assert native_ed25519_verify(pyca_sig, msg, pk), f"Native failed to verify PyCA sig for {len(msg)}-byte msg"
+            assert native_ed25519_verify(
+                pyca_sig, msg, pk
+            ), f"Native failed to verify PyCA sig for {len(msg)}-byte msg"
 
 
 # ---------------------------------------------------------------------------
@@ -297,12 +300,10 @@ RFC8032_VECTORS = [
         # TEST 1 — empty message
         "name": "TEST 1 (empty message)",
         "secret_key_seed": bytes.fromhex(
-            "9d61b19deffd5a60ba844af492ec2cc4"
-            "4449c5697b326919703bac031cae7f60"
+            "9d61b19deffd5a60ba844af492ec2cc4" "4449c5697b326919703bac031cae7f60"
         ),
         "public_key": bytes.fromhex(
-            "d75a980182b10ab7d54bfed3c964073a"
-            "0ee172f3daa62325af021a68f707511a"
+            "d75a980182b10ab7d54bfed3c964073a" "0ee172f3daa62325af021a68f707511a"
         ),
         "message": b"",
         "signature": bytes.fromhex(
@@ -316,12 +317,10 @@ RFC8032_VECTORS = [
         # TEST 2 — single byte 0x72
         "name": "TEST 2 (single byte 0x72)",
         "secret_key_seed": bytes.fromhex(
-            "4ccd089b28ff96da9db6c346ec114e0f"
-            "5b8a319f35aba624da8cf6ed4fb8a6fb"
+            "4ccd089b28ff96da9db6c346ec114e0f" "5b8a319f35aba624da8cf6ed4fb8a6fb"
         ),
         "public_key": bytes.fromhex(
-            "3d4017c3e843895a92b70aa74d1b7ebc"
-            "9c982ccf2ec4968cc0cd55f12af4660c"
+            "3d4017c3e843895a92b70aa74d1b7ebc" "9c982ccf2ec4968cc0cd55f12af4660c"
         ),
         "message": bytes.fromhex("72"),
         "signature": bytes.fromhex(
@@ -335,12 +334,10 @@ RFC8032_VECTORS = [
         # TEST 3 — two-byte message
         "name": "TEST 3 (two-byte message)",
         "secret_key_seed": bytes.fromhex(
-            "c5aa8df43f9f837bedb7442f31dcb7b1"
-            "66d38535076f094b85ce3a2e0b4458f7"
+            "c5aa8df43f9f837bedb7442f31dcb7b1" "66d38535076f094b85ce3a2e0b4458f7"
         ),
         "public_key": bytes.fromhex(
-            "fc51cd8e6218a1a38da47ed00230f058"
-            "0816ed13ba3303ac5deb911548908025"
+            "fc51cd8e6218a1a38da47ed00230f058" "0816ed13ba3303ac5deb911548908025"
         ),
         "message": bytes.fromhex("af82"),
         "signature": bytes.fromhex(
