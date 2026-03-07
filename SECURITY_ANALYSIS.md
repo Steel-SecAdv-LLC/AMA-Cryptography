@@ -1,4 +1,4 @@
-# Ava Guardian ♱ (AG♱): Security Analysis
+# AMA Cryptography ♱ (AG♱): Security Analysis
 ## Cryptographic Foundation and Mathematical Proofs
 
 **Copyright (C) 2025 Steel Security Advisors LLC**  
@@ -29,7 +29,7 @@ Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 
 ## Executive Summary
 
-Ava Guardian ♱ provides cryptographic protection for Omni-Code (helical mathematical data structures) through a defense-in-depth security architecture with six independent layers:
+AMA Cryptography ♱ provides cryptographic protection for Omni-Code (helical mathematical data structures) through a defense-in-depth security architecture with six independent layers:
 
 1. **SHA3-256 Content Hashing** - Collision-resistant integrity verification (NIST FIPS 202)
 2. **HMAC-SHA3-256 Authentication** - Keyed message authentication (RFC 2104)
@@ -1301,7 +1301,7 @@ For 256-bit keys:
 
 ## Conclusion
 
-Ava Guardian ♱ provides cryptographic protection for Omni-Code (helical mathematical data structures) through a defense-in-depth architecture with strong mathematical foundations and standards compliance.
+AMA Cryptography ♱ provides cryptographic protection for Omni-Code (helical mathematical data structures) through a defense-in-depth architecture with strong mathematical foundations and standards compliance.
 
 ### Key Strengths
 

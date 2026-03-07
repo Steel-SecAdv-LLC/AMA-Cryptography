@@ -14,12 +14,12 @@
 # limitations under the License.
 
 """
-Ava Guardian ♱ (AG♱) - Mathematical Equations Suite
+AMA Cryptography ♱ (AG♱) - Mathematical Equations Suite
 ====================================================
 
 **IMPORTANT: NON-CRYPTOGRAPHIC MODULE**
 
-This module provides mathematical and analytical utilities for the Ava Guardian
+This module provides mathematical and analytical utilities for the AMA Cryptography
 system. It is NOT a cryptographic primitive and should NOT be relied upon for
 security guarantees. The functions here implement mathematical frameworks for:
 
@@ -38,13 +38,13 @@ Frameworks:
 2. Lyapunov Stability Theory - Proven exponential convergence O(e^{-0.18t})
 3. Golden Ratio Harmonics - φ³-amplification with Fibonacci convergence < 10⁻⁸
 4. Quadratic Form Constraints - σ_quadratic ≥ 0.96 enforcement
-5. Double-Helix Evolution - Foundation for 18+ Ava Equation variants
+5. Double-Helix Evolution - Foundation for 18+ AMA Equation variants
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
-Version: 1.1
+Version: 2.0
 
 AI Co-Architects:
     Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
@@ -59,7 +59,7 @@ import numpy.typing as npt
 # Configure module logger
 logger = logging.getLogger(__name__)
 
-__version__ = "1.1"
+__version__ = "2.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 __all__ = [
     "PHI",
@@ -530,7 +530,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     logger.info("=" * 70)
-    logger.info("Ava Guardian ♱ (AG♱) - Mathematical Foundations Verification")
+    logger.info("AMA Cryptography ♱ (AG♱) - Mathematical Foundations Verification")
     logger.info("=" * 70)
 
     # Verify all frameworks

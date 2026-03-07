@@ -2,7 +2,7 @@
  * Copyright 2025 Steel Security Advisors LLC
  * Licensed under the Apache License, Version 2.0
  *
- * @file ava_kyber.c
+ * @file ama_kyber.c
  * @brief CRYSTALS-Kyber-1024 Key Encapsulation Mechanism - Native C Implementation
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2025-12-06
@@ -14,7 +14,7 @@
  * Passes all NIST FIPS 203 KAT (Known Answer Test) vectors (10/10).
  *
  * Build (default):
- *   cmake -DAVA_USE_NATIVE_PQC=ON ..
+ *   cmake -DAMA_USE_NATIVE_PQC=ON ..
  *
  * Parameters (Kyber-1024 / ML-KEM-1024):
  * - Security level: NIST Level 5 (~256-bit classical, ~128-bit quantum)
@@ -28,21 +28,21 @@
  * - Module-LWE hardness assumption
  * - Fujisaki-Okamoto transform for IND-CCA2 security
  *
- * For production use: pip install ava-guardian[quantum]
+ * For production use: pip install ama-cryptography[quantum]
  */
 
-#include "../include/ava_guardian.h"
+#include "../include/ama_cryptography.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <openssl/rand.h>
 
-/* Forward declarations from ava_sha3.c */
-extern ava_error_t ava_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
-extern ava_error_t ava_sha3_512(const uint8_t* input, size_t input_len, uint8_t* output);
-extern ava_error_t ava_shake128(const uint8_t* input, size_t input_len,
+/* Forward declarations from ama_sha3.c */
+extern ama_error_t ama_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
+extern ama_error_t ama_sha3_512(const uint8_t* input, size_t input_len, uint8_t* output);
+extern ama_error_t ama_shake128(const uint8_t* input, size_t input_len,
                                  uint8_t* output, size_t output_len);
-extern ava_error_t ava_shake256(const uint8_t* input, size_t input_len,
+extern ama_error_t ama_shake256(const uint8_t* input, size_t input_len,
                                  uint8_t* output, size_t output_len);
 
 /* Kyber-1024 parameters */
@@ -79,13 +79,13 @@ static int16_t montgomery_reduce(int32_t a);
 static int16_t coeff_normalize(int16_t a);
 static void poly_tomont(poly* r);
 
-/* Public wrapper prototypes (called from ava_core.c via extern) */
-ava_error_t ava_kyber_keypair(uint8_t* pk, size_t pk_len,
+/* Public wrapper prototypes (called from ama_core.c via extern) */
+ama_error_t ama_kyber_keypair(uint8_t* pk, size_t pk_len,
                                uint8_t* sk, size_t sk_len);
-ava_error_t ava_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
+ama_error_t ama_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
                                    uint8_t* ct, size_t* ct_len,
                                    uint8_t* ss, size_t ss_len);
-ava_error_t ava_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
+ama_error_t ama_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
                                    const uint8_t* sk, size_t sk_len,
                                    uint8_t* ss, size_t ss_len);
 
@@ -93,8 +93,8 @@ ava_error_t ava_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
  * Kyber context (algorithm-specific)
  */
 typedef struct {
-    uint8_t public_key[AVA_KYBER_1024_PUBLIC_KEY_BYTES];
-    uint8_t secret_key[AVA_KYBER_1024_SECRET_KEY_BYTES];
+    uint8_t public_key[AMA_KYBER_1024_PUBLIC_KEY_BYTES];
+    uint8_t secret_key[AMA_KYBER_1024_SECRET_KEY_BYTES];
     int keys_generated;
 } kyber_context_t;
 
@@ -119,8 +119,8 @@ static void kyber_free(kyber_context_t* ctx) {
     }
 
     /* Scrub sensitive data */
-    ava_secure_memzero(ctx->secret_key, sizeof(ctx->secret_key));
-    ava_secure_memzero(ctx, sizeof(kyber_context_t));
+    ama_secure_memzero(ctx->secret_key, sizeof(ctx->secret_key));
+    ama_secure_memzero(ctx, sizeof(kyber_context_t));
 
     free(ctx);
 }
@@ -226,7 +226,7 @@ static void kyber_poly_uniform(poly* a, const uint8_t seed[32], uint8_t x, uint8
     buf[32] = x;
     buf[33] = y;
 
-    ava_shake128(buf, 34, stream, sizeof(stream));
+    ama_shake128(buf, 34, stream, sizeof(stream));
 
     ctr = 0;
     pos = 0;
@@ -296,34 +296,34 @@ static void kyber_gennoise(polyvec* r, const uint8_t seed[32], uint8_t nonce) {
         memcpy(buf, seed, 32);
         buf[32] = nonce + (uint8_t)i;
         buf[33] = 0;
-        ava_shake256(buf, 33, stream, sizeof(stream));
+        ama_shake256(buf, 33, stream, sizeof(stream));
         kyber_poly_cbd_eta(&r->vec[i], stream);
     }
 }
 
-#ifdef AVA_TESTING_MODE
+#ifdef AMA_TESTING_MODE
 /**
  * Random bytes hook for KAT testing.
  * When non-NULL, all random byte generation uses this function instead of
  * /dev/urandom, allowing deterministic KAT vector reproduction.
- * Only available in test builds (AVA_TESTING_MODE).
+ * Only available in test builds (AMA_TESTING_MODE).
  */
-ava_error_t (*ava_kyber_randombytes_hook)(uint8_t* buf, size_t len) = NULL;
+ama_error_t (*ama_kyber_randombytes_hook)(uint8_t* buf, size_t len) = NULL;
 #endif
 
 /**
  * Get random bytes from OS (or from test hook if set)
  */
-static ava_error_t kyber_randombytes(uint8_t* buf, size_t len) {
-#ifdef AVA_TESTING_MODE
-    if (ava_kyber_randombytes_hook) {
-        return ava_kyber_randombytes_hook(buf, len);
+static ama_error_t kyber_randombytes(uint8_t* buf, size_t len) {
+#ifdef AMA_TESTING_MODE
+    if (ama_kyber_randombytes_hook) {
+        return ama_kyber_randombytes_hook(buf, len);
     }
 #endif
     if (RAND_bytes(buf, (int)len) != 1) {
-        return AVA_ERROR_CRYPTO;
+        return AMA_ERROR_CRYPTO;
     }
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
 /**
@@ -335,31 +335,31 @@ static ava_error_t kyber_randombytes(uint8_t* buf, size_t len) {
  * @param public_key_len Length of public key buffer
  * @param secret_key Output buffer for secret key (3168 bytes)
  * @param secret_key_len Length of secret key buffer
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-static ava_error_t kyber_keypair_generate(
+static ama_error_t kyber_keypair_generate(
     uint8_t* public_key,
     size_t public_key_len,
     uint8_t* secret_key,
     size_t secret_key_len
 ) {
-    if (public_key_len < AVA_KYBER_1024_PUBLIC_KEY_BYTES ||
-        secret_key_len < AVA_KYBER_1024_SECRET_KEY_BYTES) {
-        return AVA_ERROR_INVALID_PARAM;
+    if (public_key_len < AMA_KYBER_1024_PUBLIC_KEY_BYTES ||
+        secret_key_len < AMA_KYBER_1024_SECRET_KEY_BYTES) {
+        return AMA_ERROR_INVALID_PARAM;
     }
 
-#ifdef AVA_USE_NATIVE_PQC
+#ifdef AMA_USE_NATIVE_PQC
     {
         /* Native Kyber-1024 key generation (NIST FIPS 203, Algorithm 15) */
         uint8_t d[32], buf[64];
         uint8_t *rho, *sigma;
         polyvec a[KYBER_K], s, e, pkpv;
         unsigned int i;
-        ava_error_t err;
+        ama_error_t err;
 
         /* Generate random seed d */
         err = kyber_randombytes(d, 32);
-        if (err != AVA_SUCCESS) {
+        if (err != AMA_SUCCESS) {
             return err;
         }
 
@@ -369,8 +369,8 @@ static ava_error_t kyber_keypair_generate(
             uint8_t g_input[33];
             memcpy(g_input, d, 32);
             g_input[32] = (uint8_t)KYBER_K;
-            ava_sha3_512(g_input, 33, buf);
-            ava_secure_memzero(g_input, sizeof(g_input));
+            ama_sha3_512(g_input, 33, buf);
+            ama_secure_memzero(g_input, sizeof(g_input));
         }
         rho = buf;
         sigma = buf + 32;
@@ -405,31 +405,31 @@ static ava_error_t kyber_keypair_generate(
         polyvec_reduce(&s);  /* Reduce NTT(s) before serialization — coeff_normalize
                                 only handles [-q, 2q-1], but NTT output can exceed this */
         polyvec_tobytes(secret_key, &s);
-        memcpy(secret_key + KYBER_K * 384, public_key, AVA_KYBER_1024_PUBLIC_KEY_BYTES);
+        memcpy(secret_key + KYBER_K * 384, public_key, AMA_KYBER_1024_PUBLIC_KEY_BYTES);
 
         /* H(pk) */
-        ava_sha3_256(public_key, AVA_KYBER_1024_PUBLIC_KEY_BYTES,
-                     secret_key + KYBER_K * 384 + AVA_KYBER_1024_PUBLIC_KEY_BYTES);
+        ama_sha3_256(public_key, AMA_KYBER_1024_PUBLIC_KEY_BYTES,
+                     secret_key + KYBER_K * 384 + AMA_KYBER_1024_PUBLIC_KEY_BYTES);
 
         /* Random z for implicit rejection */
         err = kyber_randombytes(
-            secret_key + KYBER_K * 384 + AVA_KYBER_1024_PUBLIC_KEY_BYTES + 32, 32);
-        if (err != AVA_SUCCESS) {
+            secret_key + KYBER_K * 384 + AMA_KYBER_1024_PUBLIC_KEY_BYTES + 32, 32);
+        if (err != AMA_SUCCESS) {
             return err;
         }
 
         /* Scrub sensitive data */
-        ava_secure_memzero(d, sizeof(d));
-        ava_secure_memzero(buf, sizeof(buf));
-        ava_secure_memzero(&s, sizeof(s));
-        ava_secure_memzero(&e, sizeof(e));
+        ama_secure_memzero(d, sizeof(d));
+        ama_secure_memzero(buf, sizeof(buf));
+        ama_secure_memzero(&s, sizeof(s));
+        ama_secure_memzero(&e, sizeof(e));
 
-        return AVA_SUCCESS;
+        return AMA_SUCCESS;
     }
 #else
     (void)public_key;
     (void)secret_key;
-    return AVA_ERROR_NOT_IMPLEMENTED;
+    return AMA_ERROR_NOT_IMPLEMENTED;
 #endif
 }
 
@@ -441,7 +441,7 @@ static ava_error_t kyber_keypair_generate(
  * This separation is critical for the Fujisaki-Okamoto transform:
  * decapsulation must re-encrypt with the SAME coins to compare ciphertexts.
  * ============================================================================ */
-#ifdef AVA_USE_NATIVE_PQC
+#ifdef AMA_USE_NATIVE_PQC
 static void kyber_cpapke_enc(uint8_t *ct, const uint8_t *m,
                               const uint8_t *pk, const uint8_t *coins) {
     polyvec a[KYBER_K], sp, ep, pkpv, bp;
@@ -466,7 +466,7 @@ static void kyber_cpapke_enc(uint8_t *ct, const uint8_t *m,
         uint8_t noise_stream[KYBER_ETA2 * KYBER_N / 4];
         memcpy(noise_buf, coins, 32);
         noise_buf[32] = 2 * (uint8_t)KYBER_K;
-        ava_shake256(noise_buf, 33, noise_stream, sizeof(noise_stream));
+        ama_shake256(noise_buf, 33, noise_stream, sizeof(noise_stream));
         kyber_poly_cbd_eta(&epp, noise_stream);
     }
 
@@ -515,9 +515,9 @@ static void kyber_cpapke_enc(uint8_t *ct, const uint8_t *m,
  * @param ciphertext_len Pointer to ciphertext length (in/out)
  * @param shared_secret Output buffer for shared secret (32 bytes)
  * @param shared_secret_len Length of shared secret buffer
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-static ava_error_t kyber_encapsulate(
+static ama_error_t kyber_encapsulate(
     const uint8_t* public_key,
     size_t public_key_len,
     uint8_t* ciphertext,
@@ -525,25 +525,25 @@ static ava_error_t kyber_encapsulate(
     uint8_t* shared_secret,
     size_t shared_secret_len
 ) {
-    if (public_key_len != AVA_KYBER_1024_PUBLIC_KEY_BYTES ||
-        shared_secret_len != AVA_KYBER_1024_SHARED_SECRET_BYTES) {
-        return AVA_ERROR_INVALID_PARAM;
+    if (public_key_len != AMA_KYBER_1024_PUBLIC_KEY_BYTES ||
+        shared_secret_len != AMA_KYBER_1024_SHARED_SECRET_BYTES) {
+        return AMA_ERROR_INVALID_PARAM;
     }
 
-#ifdef AVA_USE_NATIVE_PQC
+#ifdef AMA_USE_NATIVE_PQC
     {
         /* Native Kyber-1024 encapsulation (NIST FIPS 203, Algorithm 17) */
         uint8_t m[32], kr[64];
-        ava_error_t err;
+        ama_error_t err;
 
-        if (*ciphertext_len < AVA_KYBER_1024_CIPHERTEXT_BYTES) {
-            *ciphertext_len = AVA_KYBER_1024_CIPHERTEXT_BYTES;
-            return AVA_ERROR_INVALID_PARAM;
+        if (*ciphertext_len < AMA_KYBER_1024_CIPHERTEXT_BYTES) {
+            *ciphertext_len = AMA_KYBER_1024_CIPHERTEXT_BYTES;
+            return AMA_ERROR_INVALID_PARAM;
         }
 
         /* Generate random message m */
         err = kyber_randombytes(m, 32);
-        if (err != AVA_SUCCESS) {
+        if (err != AMA_SUCCESS) {
             return err;
         }
 
@@ -552,11 +552,11 @@ static ava_error_t kyber_encapsulate(
         {
             uint8_t pk_hash[32];
             uint8_t g_input[64];
-            ava_sha3_256(public_key, AVA_KYBER_1024_PUBLIC_KEY_BYTES, pk_hash);
+            ama_sha3_256(public_key, AMA_KYBER_1024_PUBLIC_KEY_BYTES, pk_hash);
             memcpy(g_input, m, 32);
             memcpy(g_input + 32, pk_hash, 32);
-            ava_sha3_512(g_input, 64, kr);
-            ava_secure_memzero(g_input, sizeof(g_input));
+            ama_sha3_512(g_input, 64, kr);
+            ama_secure_memzero(g_input, sizeof(g_input));
         }
 
         /* Deterministic CPA encryption with m and coins r = kr+32 */
@@ -565,20 +565,20 @@ static ava_error_t kyber_encapsulate(
         /* Shared secret = first 32 bytes of kr (= K) */
         memcpy(shared_secret, kr, 32);
 
-        *ciphertext_len = AVA_KYBER_1024_CIPHERTEXT_BYTES;
+        *ciphertext_len = AMA_KYBER_1024_CIPHERTEXT_BYTES;
 
         /* Scrub sensitive data */
-        ava_secure_memzero(m, sizeof(m));
-        ava_secure_memzero(kr, sizeof(kr));
+        ama_secure_memzero(m, sizeof(m));
+        ama_secure_memzero(kr, sizeof(kr));
 
-        return AVA_SUCCESS;
+        return AMA_SUCCESS;
     }
 #else
     (void)public_key;
     (void)ciphertext;
     (void)ciphertext_len;
     (void)shared_secret;
-    return AVA_ERROR_NOT_IMPLEMENTED;
+    return AMA_ERROR_NOT_IMPLEMENTED;
 #endif
 }
 
@@ -596,9 +596,9 @@ static ava_error_t kyber_encapsulate(
  * @param secret_key_len Length of secret key
  * @param shared_secret Output buffer for shared secret (32 bytes)
  * @param shared_secret_len Length of shared secret buffer
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-static ava_error_t kyber_decapsulate(
+static ama_error_t kyber_decapsulate(
     const uint8_t* ciphertext,
     size_t ciphertext_len,
     const uint8_t* secret_key,
@@ -606,20 +606,20 @@ static ava_error_t kyber_decapsulate(
     uint8_t* shared_secret,
     size_t shared_secret_len
 ) {
-    if (ciphertext_len != AVA_KYBER_1024_CIPHERTEXT_BYTES ||
-        secret_key_len != AVA_KYBER_1024_SECRET_KEY_BYTES ||
-        shared_secret_len != AVA_KYBER_1024_SHARED_SECRET_BYTES) {
-        return AVA_ERROR_INVALID_PARAM;
+    if (ciphertext_len != AMA_KYBER_1024_CIPHERTEXT_BYTES ||
+        secret_key_len != AMA_KYBER_1024_SECRET_KEY_BYTES ||
+        shared_secret_len != AMA_KYBER_1024_SHARED_SECRET_BYTES) {
+        return AMA_ERROR_INVALID_PARAM;
     }
 
-#ifdef AVA_USE_NATIVE_PQC
+#ifdef AMA_USE_NATIVE_PQC
     {
         /* Native Kyber-1024 decapsulation (NIST FIPS 203, Algorithm 18) */
         /* Uses implicit rejection for IND-CCA2 security */
         polyvec bp, skpv;
         poly v, mp;
         uint8_t m[32], kr[64];
-        uint8_t ct_cmp[AVA_KYBER_1024_CIPHERTEXT_BYTES];
+        uint8_t ct_cmp[AMA_KYBER_1024_CIPHERTEXT_BYTES];
         const uint8_t *pk;
         const uint8_t *h_pk;
         const uint8_t *z;
@@ -629,7 +629,7 @@ static ava_error_t kyber_decapsulate(
         /* Parse secret key: s || pk || H(pk) || z */
         polyvec_frombytes(&skpv, secret_key);
         pk = secret_key + KYBER_K * 384;
-        h_pk = pk + AVA_KYBER_1024_PUBLIC_KEY_BYTES;
+        h_pk = pk + AMA_KYBER_1024_PUBLIC_KEY_BYTES;
         z = h_pk + 32;
 
         /* Decompress ciphertext */
@@ -665,8 +665,8 @@ static ava_error_t kyber_decapsulate(
             uint8_t g_input[64];
             memcpy(g_input, m, 32);
             memcpy(g_input + 32, h_pk, 32);
-            ava_sha3_512(g_input, 64, kr);
-            ava_secure_memzero(g_input, sizeof(g_input));
+            ama_sha3_512(g_input, 64, kr);
+            ama_secure_memzero(g_input, sizeof(g_input));
         }
 
         /* Re-encrypt with recovered m and derived coins r = kr+32.
@@ -675,7 +675,7 @@ static ava_error_t kyber_decapsulate(
         kyber_cpapke_enc(ct_cmp, m, pk, kr + 32);
 
         /* Constant-time comparison of ciphertexts */
-        fail = ava_consttime_memcmp(ciphertext, ct_cmp, AVA_KYBER_1024_CIPHERTEXT_BYTES);
+        fail = ama_consttime_memcmp(ciphertext, ct_cmp, AMA_KYBER_1024_CIPHERTEXT_BYTES);
 
         /* Compute BOTH outcomes, then select in constant time.
          * This prevents timing side-channels from leaking whether
@@ -683,40 +683,40 @@ static ava_error_t kyber_decapsulate(
         {
             /* Always compute the implicit rejection value: H(z || ct) */
             uint8_t ss_reject[32];
-            uint8_t *rej_input = (uint8_t *)malloc(32 + AVA_KYBER_1024_CIPHERTEXT_BYTES);
+            uint8_t *rej_input = (uint8_t *)malloc(32 + AMA_KYBER_1024_CIPHERTEXT_BYTES);
             if (!rej_input) {
-                ava_secure_memzero(m, sizeof(m));
-                ava_secure_memzero(kr, sizeof(kr));
-                return AVA_ERROR_MEMORY;
+                ama_secure_memzero(m, sizeof(m));
+                ama_secure_memzero(kr, sizeof(kr));
+                return AMA_ERROR_MEMORY;
             }
             memcpy(rej_input, z, 32);
-            memcpy(rej_input + 32, ciphertext, AVA_KYBER_1024_CIPHERTEXT_BYTES);
-            ava_shake256(rej_input, 32 + AVA_KYBER_1024_CIPHERTEXT_BYTES,
+            memcpy(rej_input + 32, ciphertext, AMA_KYBER_1024_CIPHERTEXT_BYTES);
+            ama_shake256(rej_input, 32 + AMA_KYBER_1024_CIPHERTEXT_BYTES,
                         ss_reject, 32);
-            ava_secure_memzero(rej_input, 32 + AVA_KYBER_1024_CIPHERTEXT_BYTES);
+            ama_secure_memzero(rej_input, 32 + AMA_KYBER_1024_CIPHERTEXT_BYTES);
             free(rej_input);
 
             /* Start with the valid shared secret (kr), then conditionally
              * overwrite with the rejection value if ciphertexts didn't match.
-             * ava_consttime_copy(condition, dst, src, len):
+             * ama_consttime_copy(condition, dst, src, len):
              *   copies src -> dst if condition != 0 */
             memcpy(shared_secret, kr, 32);
-            ava_consttime_copy(fail, shared_secret, ss_reject, 32);
+            ama_consttime_copy(fail, shared_secret, ss_reject, 32);
 
-            ava_secure_memzero(ss_reject, sizeof(ss_reject));
+            ama_secure_memzero(ss_reject, sizeof(ss_reject));
         }
 
         /* Scrub sensitive data */
-        ava_secure_memzero(m, sizeof(m));
-        ava_secure_memzero(kr, sizeof(kr));
+        ama_secure_memzero(m, sizeof(m));
+        ama_secure_memzero(kr, sizeof(kr));
 
-        return AVA_SUCCESS;
+        return AMA_SUCCESS;
     }
 #else
     (void)ciphertext;
     (void)secret_key;
     (void)shared_secret;
-    return AVA_ERROR_NOT_IMPLEMENTED;
+    return AMA_ERROR_NOT_IMPLEMENTED;
 #endif
 }
 
@@ -734,7 +734,7 @@ static ava_error_t kyber_decapsulate(
  * Debug: test NTT -> INVNTT roundtrip and polynomial arithmetic correctness.
  * Returns 0 if all sub-tests pass, 1 if any fails.
  */
-int ava_kyber_debug_ntt_roundtrip(void) {
+int ama_kyber_debug_ntt_roundtrip(void) {
     poly a, b, c, d;
     int i;
 
@@ -1132,13 +1132,13 @@ int ava_kyber_debug_ntt_roundtrip(void) {
     /* Test 0g: Detailed keygen consistency test */
     printf("  --- Detailed keygen consistency ---\n");
     {
-        uint8_t pk3[AVA_KYBER_1024_PUBLIC_KEY_BYTES];
-        uint8_t sk3[AVA_KYBER_1024_SECRET_KEY_BYTES];
+        uint8_t pk3[AMA_KYBER_1024_PUBLIC_KEY_BYTES];
+        uint8_t sk3[AMA_KYBER_1024_SECRET_KEY_BYTES];
         polyvec A3[KYBER_K], s3, t3, as3;
         const uint8_t *rho3;
 
-        ava_error_t rc3 = kyber_keypair_generate(pk3, sizeof(pk3), sk3, sizeof(sk3));
-        if (rc3 != AVA_SUCCESS) { printf("    keygen failed\n"); }
+        ama_error_t rc3 = kyber_keypair_generate(pk3, sizeof(pk3), sk3, sizeof(sk3));
+        if (rc3 != AMA_SUCCESS) { printf("    keygen failed\n"); }
 
         rho3 = pk3 + KYBER_K * 384;
         polyvec_frombytes(&t3, pk3);     /* t_hat from pk */
@@ -1236,13 +1236,13 @@ int ava_kyber_debug_ntt_roundtrip(void) {
      * Check that t_hat = basemul(A, s_hat)*tomont + e_hat where INVNTT(e_hat) is small */
     printf("  --- Keygen verification test ---\n");
     {
-        uint8_t pk2[AVA_KYBER_1024_PUBLIC_KEY_BYTES];
-        uint8_t sk2[AVA_KYBER_1024_SECRET_KEY_BYTES];
+        uint8_t pk2[AMA_KYBER_1024_PUBLIC_KEY_BYTES];
+        uint8_t sk2[AMA_KYBER_1024_SECRET_KEY_BYTES];
         polyvec A2[KYBER_K], s_hat, t_hat, as_hat;
         const uint8_t *rho2;
 
-        ava_error_t rc2 = kyber_keypair_generate(pk2, sizeof(pk2), sk2, sizeof(sk2));
-        if (rc2 != AVA_SUCCESS) { printf("    keygen failed\n"); return 1; }
+        ama_error_t rc2 = kyber_keypair_generate(pk2, sizeof(pk2), sk2, sizeof(sk2));
+        if (rc2 != AMA_SUCCESS) { printf("    keygen failed\n"); return 1; }
 
         rho2 = pk2 + KYBER_K * 384;
         polyvec_frombytes(&t_hat, pk2);
@@ -1319,16 +1319,16 @@ int ava_kyber_debug_ntt_roundtrip(void) {
     return (max_diff_r == 0) ? 0 : 1;
 }
 
-int ava_kyber_debug_cpa_roundtrip(void) {
-#ifdef AVA_USE_NATIVE_PQC
-    uint8_t pk[AVA_KYBER_1024_PUBLIC_KEY_BYTES];
-    uint8_t sk[AVA_KYBER_1024_SECRET_KEY_BYTES];
+int ama_kyber_debug_cpa_roundtrip(void) {
+#ifdef AMA_USE_NATIVE_PQC
+    uint8_t pk[AMA_KYBER_1024_PUBLIC_KEY_BYTES];
+    uint8_t sk[AMA_KYBER_1024_SECRET_KEY_BYTES];
     unsigned int i;
     const uint8_t *rho;
 
     /* Generate keypair */
-    ava_error_t rc = kyber_keypair_generate(pk, sizeof(pk), sk, sizeof(sk));
-    if (rc != AVA_SUCCESS) { printf("  CPA: keygen failed\n"); return 1; }
+    ama_error_t rc = kyber_keypair_generate(pk, sizeof(pk), sk, sizeof(sk));
+    if (rc != AMA_SUCCESS) { printf("  CPA: keygen failed\n"); return 1; }
 
     /* === Test 1: Inline CPA encrypt/decrypt WITHOUT compression === */
     printf("  --- Test 1: No-compression CPA roundtrip ---\n");
@@ -1358,7 +1358,7 @@ int ava_kyber_debug_cpa_roundtrip(void) {
             uint8_t noise_stream[KYBER_ETA2 * KYBER_N / 4];
             memcpy(noise_buf, coins, 32);
             noise_buf[32] = 2 * (uint8_t)KYBER_K;
-            ava_shake256(noise_buf, 33, noise_stream, sizeof(noise_stream));
+            ama_shake256(noise_buf, 33, noise_stream, sizeof(noise_stream));
             kyber_poly_cbd_eta(&epp, noise_stream);
         }
 
@@ -1432,7 +1432,7 @@ int ava_kyber_debug_cpa_roundtrip(void) {
     /* === Test 2: Full CPA with compression (original test) === */
     printf("  --- Test 2: With-compression CPA roundtrip ---\n");
     {
-        uint8_t ct[AVA_KYBER_1024_CIPHERTEXT_BYTES];
+        uint8_t ct[AMA_KYBER_1024_CIPHERTEXT_BYTES];
         uint8_t m_orig[32], m_recov[32], coins[32];
         polyvec bp, skpv;
         poly v, mp;
@@ -1491,26 +1491,26 @@ int ava_kyber_debug_cpa_roundtrip(void) {
  * ============================================================================ */
 
 /**
- * Public wrapper for Kyber keypair generation (called from ava_core.c)
+ * Public wrapper for Kyber keypair generation (called from ama_core.c)
  */
-ava_error_t ava_kyber_keypair(uint8_t* pk, size_t pk_len,
+ama_error_t ama_kyber_keypair(uint8_t* pk, size_t pk_len,
                                uint8_t* sk, size_t sk_len) {
     return kyber_keypair_generate(pk, pk_len, sk, sk_len);
 }
 
 /**
- * Public wrapper for Kyber encapsulation (called from ava_core.c)
+ * Public wrapper for Kyber encapsulation (called from ama_core.c)
  */
-ava_error_t ava_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
+ama_error_t ama_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
                                    uint8_t* ct, size_t* ct_len,
                                    uint8_t* ss, size_t ss_len) {
     return kyber_encapsulate(pk, pk_len, ct, ct_len, ss, ss_len);
 }
 
 /**
- * Public wrapper for Kyber decapsulation (called from ava_core.c)
+ * Public wrapper for Kyber decapsulation (called from ama_core.c)
  */
-ava_error_t ava_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
+ama_error_t ama_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
                                    const uint8_t* sk, size_t sk_len,
                                    uint8_t* ss, size_t ss_len) {
     return kyber_decapsulate(ct, ct_len, sk, sk_len, ss, ss_len);

@@ -1,5 +1,5 @@
 name: Feature Request
-description: Suggest a new feature or enhancement for Ava Guardian
+description: Suggest a new feature or enhancement for AMA Cryptography
 title: "[FEATURE] "
 labels: ["enhancement", "needs-triage"]
 assignees: []
@@ -182,7 +182,7 @@ body:
       options:
         - label: I have searched existing issues and PRs to ensure this isn't a duplicate
           required: true
-        - label: I have read the [Contributing Guidelines](https://github.com/Steel-SecAdv-LLC/Ava-Guardian/blob/main/CONTRIBUTING.md)
+        - label: I have read the [Contributing Guidelines](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/CONTRIBUTING.md)
           required: true
         - label: I understand that cryptographic features require academic citations and security proofs
           required: true

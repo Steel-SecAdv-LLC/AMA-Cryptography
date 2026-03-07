@@ -3,8 +3,8 @@ requires = ["setuptools>=61.0", "wheel", "Cython>=3.0.0", "numpy>=1.24.0,<3.0.0"
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ava-guardian"
-version = "1.1"
+name = "ama-cryptography"
+version = "2.0"
 description = "Quantum-resistant cryptographic protection system for helical mathematical Omni-Codes"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -76,10 +76,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Steel-SecAdv-LLC/Ava-Guardian"
-Documentation = "https://github.com/Steel-SecAdv-LLC/Ava-Guardian/blob/main/README.md"
-Repository = "https://github.com/Steel-SecAdv-LLC/Ava-Guardian"
-Issues = "https://github.com/Steel-SecAdv-LLC/Ava-Guardian/issues"
+Homepage = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography"
+Documentation = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/README.md"
+Repository = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography"
+Issues = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/issues"
 
 # Black configuration
 [tool.black]
@@ -116,8 +116,8 @@ skip_gitignore = true
 python_version = "3.9"
 warn_return_any = true
 warn_unused_configs = true
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
 check_untyped_defs = true
 disallow_untyped_decorators = false
 no_implicit_optional = true

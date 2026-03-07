@@ -1,4 +1,4 @@
-# Cryptographic Algorithms - Ava Guardian ♱
+# Cryptographic Algorithms - AMA Cryptography ♱
 
 ## Document Information
 
@@ -11,7 +11,7 @@
 
 ---
 
-This document provides an overview of the cryptographic algorithms used in Ava Guardian ♱ (AG♱), their security properties, and references to official specifications.
+This document provides an overview of the cryptographic algorithms used in AMA Cryptography ♱ (AG♱), their security properties, and references to official specifications.
 
 ## Algorithm Summary
 
@@ -63,7 +63,7 @@ Kyber-1024 provides IND-CCA2 secure key encapsulation for establishing shared se
 
 **Standard:** NIST FIPS 203 (2024)
 
-**Integration Status:** Backend implemented in `ava_guardian/pqc_backends.py`. Integration into main signing workflow pending.
+**Integration Status:** Backend implemented in `ama_cryptography/pqc_backends.py`. Integration into main signing workflow pending.
 
 ### SPHINCS+-SHA2-256f-simple
 
@@ -81,7 +81,7 @@ SPHINCS+ provides stateless hash-based signatures with security based only on ha
 
 **Standard:** NIST FIPS 205 (2024)
 
-**Integration Status:** Backend implemented in `ava_guardian/pqc_backends.py`. Integration into main signing workflow pending.
+**Integration Status:** Backend implemented in `ama_cryptography/pqc_backends.py`. Integration into main signing workflow pending.
 
 ## Classical Cryptography
 
@@ -186,10 +186,10 @@ This does not weaken security because:
 
 ### Constant-Time Operations
 
-The C core (`src/c/ava_consttime.c`) provides constant-time utilities:
-- `ava_ct_memcmp()` - Constant-time memory comparison
-- `ava_ct_select()` - Constant-time conditional selection
-- `ava_ct_is_zero()` - Constant-time zero check
+The C core (`src/c/ama_consttime.c`) provides constant-time utilities:
+- `ama_ct_memcmp()` - Constant-time memory comparison
+- `ama_ct_select()` - Constant-time conditional selection
+- `ama_ct_is_zero()` - Constant-time zero check
 
 These prevent timing side-channel attacks on sensitive comparisons.
 
@@ -207,7 +207,7 @@ PQC is provided by the native C library:
 
 Check availability with:
 ```python
-from ava_guardian.pqc_backends import get_pqc_status
+from ama_cryptography.pqc_backends import get_pqc_status
 status = get_pqc_status()
 print(f"Dilithium: {status.dilithium_available}")
 print(f"Kyber: {status.kyber_available}")

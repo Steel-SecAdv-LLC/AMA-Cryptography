@@ -3,10 +3,10 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-Ava Guardian ♱ Complete Feature Demonstration
+AMA Cryptography ♱ Complete Feature Demonstration
 ==============================================
 
-Comprehensive demonstration of all Ava Guardian ♱ capabilities:
+Comprehensive demonstration of all AMA Cryptography ♱ capabilities:
 - Algorithm-agnostic cryptographic API
 - Hierarchical deterministic key derivation
 - Key rotation and management
@@ -24,15 +24,15 @@ import numpy as np
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from ava_guardian.crypto_api import (  # noqa: E402
+from ama_cryptography.crypto_api import (  # noqa: E402
     AlgorithmType,
-    AvaGuardianCrypto,
+    AmaCryptography,
     quick_kem,
     quick_sign,
     quick_verify,
 )
-from ava_guardian.double_helix_engine import AvaEquationEngine  # noqa: E402
-from ava_guardian.key_management import (  # noqa: E402
+from ama_cryptography.double_helix_engine import AmaEquationEngine  # noqa: E402
+from ama_cryptography.key_management import (  # noqa: E402
     HDKeyDerivation,
     KeyRotationManager,
     SecureKeyStorage,
@@ -52,7 +52,7 @@ def demo_crypto_api():
         (AlgorithmType.HYBRID_SIG, "Hybrid (Ed25519 + ML-DSA-65)"),
     ]
 
-    message = b"Ava Guardian protects people, data, and networks!"
+    message = b"AMA Cryptography protects people, data, and networks!"
 
     for algorithm, name in algorithms:
         print(f"\n{name}:")
@@ -102,7 +102,7 @@ def demo_kem():
         print(f"  Shared secret size: {len(encapsulated.shared_secret)} bytes")
 
         # Decapsulate
-        crypto = AvaGuardianCrypto(algorithm=AlgorithmType.KYBER_1024)
+        crypto = AmaCryptography(algorithm=AlgorithmType.KYBER_1024)
         recovered_secret = crypto.decapsulate(encapsulated.ciphertext, keypair.secret_key)
 
         # Verify shared secrets match
@@ -121,7 +121,7 @@ def demo_hd_keys():
     print("=" * 70)
 
     # Create HD derivation from seed phrase
-    seed_phrase = "ava guardian quantum resistant cryptography protection"
+    seed_phrase = "ama cryptography quantum resistant cryptography protection"
     hd = HDKeyDerivation(seed_phrase=seed_phrase)
 
     print(f'\nSeed phrase: "{seed_phrase}"')
@@ -247,7 +247,7 @@ def demo_helix_engine():
     print("=" * 70)
 
     # Create engine
-    engine = AvaEquationEngine(state_dim=100, random_seed=42)
+    engine = AmaEquationEngine(state_dim=100, random_seed=42)
 
     print("\nEngine configuration:")
     print("-" * 70)
@@ -269,7 +269,7 @@ def demo_helix_engine():
     print(f"  Convergence: {(1 - history[-1] / history[0]) * 100:.2f}%")
 
     # Calculate sigma_quadratic
-    from ava_guardian.equations import calculate_sigma_quadratic
+    from ama_cryptography.equations import calculate_sigma_quadratic
 
     sigma = calculate_sigma_quadratic(final_state, engine.ethical_matrix)
     print(f"  σ_quadratic: {sigma:.6f} ({'✓ PASS' if sigma >= 0.96 else '✗ FAIL'} ≥ 0.96)")
@@ -283,7 +283,7 @@ def demo_performance():
 
     try:
         # Try to import optimized Cython engine
-        from ava_guardian.helix_engine_complete import AvaEngineOptimized
+        from ama_cryptography.helix_engine_complete import AvaEngineOptimized
 
         print("\nCython-optimized engine available!")
         print("-" * 70)
@@ -293,7 +293,7 @@ def demo_performance():
         iterations = 100
 
         # Pure Python
-        engine_py = AvaEquationEngine(state_dim=state_dim, random_seed=42)
+        engine_py = AmaEquationEngine(state_dim=state_dim, random_seed=42)
         state_py = np.random.randn(state_dim)
 
         start = time.perf_counter()
@@ -320,7 +320,7 @@ def demo_performance():
         print("\n  Cython engine not built (run: make python)")
         print("  Benchmarking pure Python only...")
 
-        engine = AvaEquationEngine(state_dim=100, random_seed=42)
+        engine = AmaEquationEngine(state_dim=100, random_seed=42)
         state = np.random.randn(100)
 
         start = time.perf_counter()
@@ -334,9 +334,9 @@ def demo_performance():
 def main():
     """Run all demonstrations"""
     print("=" * 70)
-    print("AVA GUARDIAN ♱ COMPLETE FEATURE DEMONSTRATION")
+    print("AMA CRYPTOGRAPHY ♱ COMPLETE FEATURE DEMONSTRATION")
     print("=" * 70)
-    print("\nDemonstrating all capabilities of Ava Guardian ♱ 1.0")
+    print("\nDemonstrating all capabilities of AMA Cryptography ♱ 1.0")
     print("Production-grade multi-language PQC system")
     print()
 
@@ -352,7 +352,7 @@ def main():
         print("\n" + "=" * 70)
         print("✓ ALL DEMONSTRATIONS COMPLETED SUCCESSFULLY")
         print("=" * 70)
-        print("\nAva Guardian ♱ - Protecting people, data, and networks")
+        print("\nAMA Cryptography ♱ - Protecting people, data, and networks")
         print("with quantum-resistant cryptography and ethical AI")
         print()
 

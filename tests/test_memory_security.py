@@ -150,7 +150,7 @@ class TestSensitiveDataCleanup:
 
     def test_key_storage_cleanup_on_delete(self):
         """SecureKeyStorage overwrites file before deletion."""
-        from ava_guardian.key_management import SecureKeyStorage
+        from ama_cryptography.key_management import SecureKeyStorage
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
@@ -171,7 +171,7 @@ class TestSensitiveDataCleanup:
 
     def test_password_not_stored_in_object(self):
         """Master password is not stored in SecureKeyStorage object."""
-        from ava_guardian.key_management import SecureKeyStorage
+        from ama_cryptography.key_management import SecureKeyStorage
 
         with tempfile.TemporaryDirectory() as tmpdir:
             password = "super-secret-password-123"
@@ -187,7 +187,7 @@ class TestSensitiveDataCleanup:
 
     def test_encryption_key_is_derived(self):
         """Encryption key is derived, not the password itself."""
-        from ava_guardian.key_management import SecureKeyStorage
+        from ama_cryptography.key_management import SecureKeyStorage
 
         with tempfile.TemporaryDirectory() as tmpdir:
             password = "test-password"
@@ -201,7 +201,7 @@ class TestSensitiveDataCleanup:
 
     def test_salt_is_random(self):
         """Each new storage gets a unique random salt."""
-        from ava_guardian.key_management import SecureKeyStorage
+        from ama_cryptography.key_management import SecureKeyStorage
 
         salts = []
         for i in range(5):

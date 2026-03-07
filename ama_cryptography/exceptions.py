@@ -2,16 +2,16 @@
 # Copyright 2025 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 """
-Ava Guardian ♱ Exception Classes
+AMA Cryptography ♱ Exception Classes
 =================================
 
-Centralized exception and warning classes for the Ava Guardian package.
+Centralized exception and warning classes for the AMA Cryptography package.
 All modules should import exceptions from this module to ensure consistency.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Date: 2025-12-06
-Version: 1.1
+Version: 2.0
 """
 
 
@@ -40,7 +40,7 @@ class PQCUnavailableError(RuntimeError):
     existing tests and code that expects this exception hierarchy.
 
     To resolve, build the native C library:
-        cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build
+        cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
     """
 
     pass

@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 1.1 |
-| Last Updated | 2026-01-09 |
+| Document Version | 2.0 |
+| Last Updated | 2026-03-06 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -13,7 +13,55 @@
 
 ## Overview
 
-All notable changes to Ava Guardian ♱ will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to AMA Cryptography ♱ will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [2.0.0] - 2026-03-06
+
+### Changed - Full Project Rename
+
+**Breaking:** Renamed project from Ava Guardian to AMA Cryptography.
+
+#### Summary
+
+Complete rename of all 450+ references across the codebase. This is a breaking change
+for all downstream consumers (including Mercury Agent).
+
+#### Key Changes
+
+- **Package:** `ava-guardian` -> `ama-cryptography`, `ava_guardian` -> `ama_cryptography`
+- **Classes:** `AvaGuardianCrypto` -> `AmaCryptography`, `AvaGuardianMonitor` -> `AmaCryptographyMonitor`, `AvaEquationEngine` -> `AmaEquationEngine`
+- **C API:** All `ava_*` functions renamed to `ama_*` (dilithium, kyber, sphincs, ed25519, consttime, sha3, hkdf, core)
+- **Constants:** `AVA_GUARDIAN_*` -> `AMA_CRYPTOGRAPHY_*`/`AMA_CRYPTO_*`, `AVA_*` -> `AMA_*`
+- **Domain prefix:** `AG-PKG-v2` -> `AMA-PKG-v2`
+- **Library:** `libava_guardian.so` -> `libama_cryptography.so`
+- **Header guard:** `AVA_GUARDIAN_H` -> `AMA_CRYPTOGRAPHY_H`
+- **Files:** All source files, headers, configs, docs renamed accordingly
+
+### Added - Strict Type Checking
+
+- Added type annotations to all functions in `crypto_api.py`, `secure_memory.py`, `key_management.py`, `double_helix_engine.py`
+- Enabled `disallow_untyped_defs = true` and `disallow_incomplete_defs = true` in mypy config
+- Removed `--no-strict-optional` from pre-commit and CI
+- Changed `continue-on-error: true` to `false` for mypy CI steps
+- Expanded mypy checking from `code_guardian_secure.py` only to full `ama_cryptography/` package
+
+### Improved - Code Quality
+
+- Audited all 32 silenced checks (type: ignore, noqa, nosec, pragma: no cover)
+- Fixed 2 unnecessary `# noqa: E402` late imports (moved to top-level)
+- Removed 2 unused variables (`_percentages`, `_arrow_style` in generate_visuals.py)
+- Documented justification for remaining suppressions (94% confirmed necessary)
+
+### Migration Guide for Mercury Agent
+
+After upgrading to AMA Cryptography v2.0:
+- Update `pyproject.toml`: `ava-guardian` -> `ama-cryptography`
+- Update all imports: `import ava_guardian` -> `import ama_cryptography`
+- Update environment variables: `AVA_REQUIRE_REAL_PQC` -> `AMA_REQUIRE_REAL_PQC`
+- Update `MercuryGuardianAdapter` import paths
+- Mercury's adapter pattern isolates the dependency well; rename is straightforward
 
 ---
 
@@ -30,19 +78,19 @@ Added native C implementations of core cryptographic primitives including SHA3-2
 #### Changes
 
 - **Native C Implementations (`src/c/`):**
-  - `ava_sha3.c`: SHA3-256, SHAKE128, SHAKE256 with **streaming API** (init/update/final) (513 lines)
-  - `ava_hkdf.c`: HKDF-SHA3-256 with HMAC-SHA3-256 per RFC 5869 (313 lines)
-  - `ava_ed25519.c`: Ed25519 keygen/sign/verify with **windowed scalar multiplication** (1,244 lines, experimental)
-  - `ava_kyber.c`: Extended with NTT, inverse NTT, Montgomery reduction, polynomial compression (611 lines)
+  - `ama_sha3.c`: SHA3-256, SHAKE128, SHAKE256 with **streaming API** (init/update/final) (513 lines)
+  - `ama_hkdf.c`: HKDF-SHA3-256 with HMAC-SHA3-256 per RFC 5869 (313 lines)
+  - `ama_ed25519.c`: Ed25519 keygen/sign/verify with **windowed scalar multiplication** (1,244 lines, experimental)
+  - `ama_kyber.c`: Extended with NTT, inverse NTT, Montgomery reduction, polynomial compression (611 lines)
 
-- **Header Updates (`include/ava_guardian.h`):**
-  - Added Ed25519 standalone API: `ava_ed25519_keypair()`, `ava_ed25519_sign()`, `ava_ed25519_verify()`
-  - Added **Streaming SHA3 API**: `ava_sha3_init()`, `ava_sha3_update()`, `ava_sha3_final()`, `ava_sha3_ctx`
+- **Header Updates (`include/ama_cryptography.h`):**
+  - Added Ed25519 standalone API: `ama_ed25519_keypair()`, `ama_ed25519_sign()`, `ama_ed25519_verify()`
+  - Added **Streaming SHA3 API**: `ama_sha3_init()`, `ama_sha3_update()`, `ama_sha3_final()`, `ama_sha3_ctx`
   - Updated documentation for SHA3-256 and HKDF functions
   - Removed "STUB" notes for implemented functions
 
 - **Build System (`CMakeLists.txt`):**
-  - Added new source files to AVA_SOURCES
+  - Added new source files to AMA_SOURCES
 
 - **Test Suite (`tests/c/`):**
   - `test_sha3.c`: SHA3-256 tests with NIST KAT vectors
@@ -67,8 +115,8 @@ Added native C implementations of core cryptographic primitives including SHA3-2
 
 #### Bug Fixes
 
-- **ava_sha3.c:** Fixed undefined behavior in `rotl64()` when rotation amount n=0. Shifting a 64-bit value by 64 bits is UB in C; this caused test failures on clang while passing on gcc. Fixed by masking n to [0,63] range and handling n=0 explicitly.
-- **ava_ed25519.c:** Added missing `#include <stdlib.h>` which caused build failures on macOS with clang due to implicit function declarations for malloc/free being errors in C99+.
+- **ama_sha3.c:** Fixed undefined behavior in `rotl64()` when rotation amount n=0. Shifting a 64-bit value by 64 bits is UB in C; this caused test failures on clang while passing on gcc. Fixed by masking n to [0,63] range and handling n=0 explicitly.
+- **ama_ed25519.c:** Added missing `#include <stdlib.h>` which caused build failures on macOS with clang due to implicit function declarations for malloc/free being errors in C99+.
 
 #### Security Notes
 
@@ -93,7 +141,7 @@ Addresses remaining security audit concerns by adding constant-time verification
 - **Constant-Time Verification (`tools/constant_time/`):**
   - `dudect_harness.c`: Implements Welch's t-test timing analysis for all 5 constant-time functions
   - `Makefile`: Build system with `make test` (100K iterations) and `make test-full` (1M iterations)
-  - Tests: `ava_consttime_memcmp`, `ava_consttime_swap`, `ava_secure_memzero`, `ava_consttime_lookup`, `ava_consttime_copy`
+  - Tests: `ama_consttime_memcmp`, `ama_consttime_swap`, `ama_secure_memzero`, `ama_consttime_lookup`, `ama_consttime_copy`
   - Threshold: |t| < 4.5 (dudect convention, ~10⁻⁵ false positive probability)
 
 - **Documentation:**
@@ -102,8 +150,8 @@ Addresses remaining security audit concerns by adding constant-time verification
   - `IMPLEMENTATION_GUIDE.md`: Added NIST KAT and constant-time verification to pre-deployment checklist
   - `SECURITY_ANALYSIS.md`: Updated limitations section to reflect addressed concerns
 
-- **Header Fix (`include/ava_guardian.h`):**
-  - Fixed `ava_consttime_lookup` parameter order to match implementation (table_len, elem_size)
+- **Header Fix (`include/ama_cryptography.h`):**
+  - Fixed `ama_consttime_lookup` parameter order to match implementation (table_len, elem_size)
 
 #### Security Analysis
 
@@ -281,7 +329,7 @@ These changes are planned for **v2.0.0** release due to breaking changes in `Cry
 
 **First Public Release - Apache License 2.0**
 
-This release represents the first public open-source release of Ava Guardian ♱ (AG♱) under Apache License 2.0. The system provides secure, tested quantum-resistant cryptographic protection for helical mathematical Omni-Codes.
+This release represents the first public open-source release of AMA Cryptography ♱ (AG♱) under Apache License 2.0. The system provides secure, tested quantum-resistant cryptographic protection for helical mathematical Omni-Codes.
 
 ### Added
 - **Apache License 2.0:** Full open-source licensing with proper headers
@@ -375,19 +423,19 @@ This public v1.0.0 release is based on internal development version 4.0.0, which
 
 **Basic Installation:**
 ```bash
-pip install ava-guardian
+pip install ama-cryptography
 ```
 
 **With Quantum Resistance (Recommended):**
 ```bash
-pip install ava-guardian
-cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build
+pip install ama-cryptography
+cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
 ```
 
 **Development Installation:**
 ```bash
-git clone https://github.com/Steel-SecAdv-LLC/Ava-Guardian.git
-cd Ava-Guardian
+git clone https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git
+cd AMA-Cryptography
 pip install -r requirements-dev.txt
 pytest  # Run tests
 ```
@@ -412,7 +460,7 @@ Future deprecation notices will include:
 No security advisories at this time.
 
 Security advisories will be published at:
-- GitHub Security Advisories: https://github.com/Steel-SecAdv-LLC/Ava-Guardian/security/advisories
+- GitHub Security Advisories: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/security/advisories
 - Release notes with [SECURITY] tag
 
 ---

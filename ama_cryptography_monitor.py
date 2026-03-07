@@ -14,13 +14,13 @@
 # limitations under the License.
 
 """
-Ava Guardian ♱ (AG♱): 3R Runtime Anomaly Monitoring System
+AMA Cryptography ♱ (AG♱): 3R Runtime Anomaly Monitoring System
 ==========================================================
 
 3R Mechanism: Resonance-Recursion-Refactoring for runtime anomaly monitoring.
 
 The 3R Mechanism is a novel runtime anomaly monitoring framework developed for
-Ava Guardian ♱ by Steel Security Advisors LLC. It provides three complementary
+AMA Cryptography ♱ by Steel Security Advisors LLC. It provides three complementary
 approaches to runtime security analysis without compromising cryptographic
 integrity or performance.
 
@@ -39,8 +39,8 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
-Version: 1.1
-Project: Ava Guardian ♱ 3R Runtime Monitoring
+Version: 2.0
+Project: AMA Cryptography ♱ 3R Runtime Monitoring
 
 AI Co-Architects:
     Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
@@ -118,7 +118,7 @@ class IncrementalStats:
         self.M2 = 0.0
 
 
-__version__ = "1.1"
+__version__ = "2.0"
 __all__ = [
     "IncrementalStats",
     "EWMAStats",
@@ -127,7 +127,7 @@ __all__ = [
     "ResonanceTimingMonitor",
     "RecursionPatternMonitor",
     "RefactoringAnalyzer",
-    "AvaGuardianMonitor",
+    "AmaCryptographyMonitor",
     "high_resolution_timer",
 ]
 
@@ -865,9 +865,9 @@ class RefactoringAnalyzer:
             return "Refactor recommended - high complexity"
 
 
-class AvaGuardianMonitor:
+class AmaCryptographyMonitor:
     """
-    Unified monitoring interface for Ava Guardian ♱.
+    Unified monitoring interface for AMA Cryptography ♱.
 
     Combines 3R Mechanism components (Resonance-Recursion-Refactoring)
     for comprehensive security monitoring without compromising cryptographic
@@ -880,7 +880,7 @@ class AvaGuardianMonitor:
     - Observable: Comprehensive reporting for security teams
 
     Usage:
-        >>> monitor = AvaGuardianMonitor(enabled=True)
+        >>> monitor = AmaCryptographyMonitor(enabled=True)
         >>> pkg = create_crypto_package(codes, params, kms, monitor=monitor)
         >>> report = monitor.get_security_report()
         >>> print(f"Alerts: {report['total_alerts']}")
@@ -1055,7 +1055,7 @@ class AvaGuardianMonitor:
 # Module-level convenience functions
 
 
-def create_monitor(enabled: bool = False, alert_retention: int = 1000) -> AvaGuardianMonitor:
+def create_monitor(enabled: bool = False, alert_retention: int = 1000) -> AmaCryptographyMonitor:
     """
     Factory function for creating monitor instances.
 
@@ -1064,6 +1064,6 @@ def create_monitor(enabled: bool = False, alert_retention: int = 1000) -> AvaGua
         alert_retention: Maximum alerts to retain
 
     Returns:
-        Configured AvaGuardianMonitor instance
+        Configured AmaCryptographyMonitor instance
     """
-    return AvaGuardianMonitor(enabled=enabled, alert_retention=alert_retention)
+    return AmaCryptographyMonitor(enabled=enabled, alert_retention=alert_retention)

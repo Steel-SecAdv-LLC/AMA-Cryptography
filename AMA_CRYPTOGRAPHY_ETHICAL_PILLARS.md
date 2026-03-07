@@ -1,4 +1,4 @@
-# Ava Guardian ♱ (AG♱): 12 Omni-Code Ethical Pillars
+# AMA Cryptography ♱ (AG♱): 12 Omni-Code Ethical Pillars
 ## Cryptographic Integration of Ethical Vectors with SHA3-256 Security
 
 **Copyright (C) 2025 Steel Security Advisors LLC**
@@ -13,7 +13,7 @@
 
 ## Executive Summary
 
-The 12 Omni-Code Ethical Pillars extend Ava Guardian ♱'s six-layer cryptographic defense with a mathematically rigorous ethical constraint system. Each pillar maps to specific cryptographic operations, providing verifiable ethical boundaries without compromising security guarantees.
+The 12 Omni-Code Ethical Pillars extend AMA Cryptography ♱'s six-layer cryptographic defense with a mathematically rigorous ethical constraint system. Each pillar maps to specific cryptographic operations, providing verifiable ethical boundaries without compromising security guarantees.
 
 **Key Properties:**
 - **Balanced weighting:** Each pillar = 1.0, Σw = 12.0
@@ -426,7 +426,7 @@ def create_ethical_hkdf_context(
     return enhanced_context
 
 # Example usage
-base_context = b"Ava-Guardian-2025"
+base_context = b"AMA-Cryptography-2025"
 enhanced = create_ethical_hkdf_context(base_context, ethical_vector)
 
 # Result: base_context || SHA3-256(ethical_vector)[:16]
@@ -491,7 +491,7 @@ def derive_key_with_ethics(
         32-byte derived key
     """
     # Create base context
-    base_context = f"Ava-Guardian-{key_type}-2025".encode()
+    base_context = f"AMA-Cryptography-{key_type}-2025".encode()
     
     # Add ethical signature
     enhanced_context = create_ethical_hkdf_context(
@@ -533,7 +533,7 @@ def benchmark_ethical_integration(iterations: int = 1000) -> Dict[str, float]:
     """Measures performance impact of ethical vector integration."""
     
     # Baseline: Standard HKDF without ethical context
-    base_context = b"Ava-Guardian-hmac-2025"
+    base_context = b"AMA-Cryptography-hmac-2025"
     master_secret = os.urandom(32)
     
     start = time.time()
@@ -607,7 +607,7 @@ def benchmark_ethical_integration(iterations: int = 1000) -> Dict[str, float]:
 
 ## Security Impact Assessment
 
-### Original Ava Guardian ♱ Security Posture
+### Original AMA Cryptography ♱ Security Posture
 
 **Security Layers:**
 - Integrity (SHA3-256): Complete
@@ -778,7 +778,7 @@ print(f"✓ Ethical hash: {pkg_dict['ethical_hash'][:16]}...")
 
 ## Conclusion
 
-The 12 Omni-Code Ethical Pillars provide a mathematically rigorous framework for integrating ethical constraints into the Ava Guardian ♱ cryptographic system without compromising security guarantees.
+The 12 Omni-Code Ethical Pillars provide a mathematically rigorous framework for integrating ethical constraints into the AMA Cryptography ♱ cryptographic system without compromising security guarantees.
 
 **Key Achievements:**
 - **Zero security trade-off:** All pillars maintain or enhance cryptographic properties
@@ -796,4 +796,4 @@ This framework demonstrates that ethical constraints and cryptographic strength 
 
 **Built with brutal honesty. Grounded in mathematical proof. Enhanced with ethical certainty.**
 
-**Ava Guardian ♱ (AG♱) - Protecting Omni-Code with cryptographic and ethical integrity.**
+**AMA Cryptography ♱ (AG♱) - Protecting Omni-Code with cryptographic and ethical integrity.**

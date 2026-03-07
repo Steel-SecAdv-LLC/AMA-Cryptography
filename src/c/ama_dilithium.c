@@ -15,7 +15,7 @@
  */
 
 /**
- * @file ava_dilithium.c
+ * @file ama_dilithium.c
  * @brief ML-DSA-65 (CRYSTALS-Dilithium) Digital Signature - Native C Implementation
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2026-03-05
@@ -42,27 +42,27 @@
  * - Rejection sampling for signatures
  */
 
-#include "../include/ava_guardian.h"
+#include "../include/ama_cryptography.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <openssl/rand.h>
 
-/* Forward declarations from ava_sha3.c */
-extern ava_error_t ava_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
-extern ava_error_t ava_sha3_512(const uint8_t* input, size_t input_len, uint8_t* output);
-extern ava_error_t ava_shake128(const uint8_t* input, size_t input_len,
+/* Forward declarations from ama_sha3.c */
+extern ama_error_t ama_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
+extern ama_error_t ama_sha3_512(const uint8_t* input, size_t input_len, uint8_t* output);
+extern ama_error_t ama_shake128(const uint8_t* input, size_t input_len,
                                  uint8_t* output, size_t output_len);
-extern ava_error_t ava_shake256(const uint8_t* input, size_t input_len,
+extern ama_error_t ama_shake256(const uint8_t* input, size_t input_len,
                                  uint8_t* output, size_t output_len);
-extern ava_error_t ava_shake256_inc_init(ava_sha3_ctx* ctx);
-extern ava_error_t ava_shake256_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
-extern ava_error_t ava_shake256_inc_finalize(ava_sha3_ctx* ctx);
-extern ava_error_t ava_shake256_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen);
-extern ava_error_t ava_shake128_inc_init(ava_sha3_ctx* ctx);
-extern ava_error_t ava_shake128_inc_absorb(ava_sha3_ctx* ctx, const uint8_t* data, size_t len);
-extern ava_error_t ava_shake128_inc_finalize(ava_sha3_ctx* ctx);
-extern ava_error_t ava_shake128_inc_squeeze(ava_sha3_ctx* ctx, uint8_t* output, size_t outlen);
+extern ama_error_t ama_shake256_inc_init(ama_sha3_ctx* ctx);
+extern ama_error_t ama_shake256_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
+extern ama_error_t ama_shake256_inc_finalize(ama_sha3_ctx* ctx);
+extern ama_error_t ama_shake256_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen);
+extern ama_error_t ama_shake128_inc_init(ama_sha3_ctx* ctx);
+extern ama_error_t ama_shake128_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
+extern ama_error_t ama_shake128_inc_finalize(ama_sha3_ctx* ctx);
+extern ama_error_t ama_shake128_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen);
 
 /* ============================================================================
  * ML-DSA-65 PARAMETERS (NIST FIPS 204)
@@ -623,23 +623,23 @@ static void dil_poly_uniform(dil_poly *a, const uint8_t seed[DIL_SEEDBYTES],
     uint8_t buf[DIL_SEEDBYTES + 2];
     uint8_t stream[168 * 5];  /* 5 SHAKE128 blocks */
     int32_t t;
-    ava_sha3_ctx shake_ctx;
+    ama_sha3_ctx shake_ctx;
 
     memcpy(buf, seed, DIL_SEEDBYTES);
     buf[DIL_SEEDBYTES] = (uint8_t)(nonce & 0xFF);
     buf[DIL_SEEDBYTES + 1] = (uint8_t)(nonce >> 8);
 
-    ava_shake128_inc_init(&shake_ctx);
-    ava_shake128_inc_absorb(&shake_ctx, buf, DIL_SEEDBYTES + 2);
-    ava_shake128_inc_finalize(&shake_ctx);
-    ava_shake128_inc_squeeze(&shake_ctx, stream, sizeof(stream));
+    ama_shake128_inc_init(&shake_ctx);
+    ama_shake128_inc_absorb(&shake_ctx, buf, DIL_SEEDBYTES + 2);
+    ama_shake128_inc_finalize(&shake_ctx);
+    ama_shake128_inc_squeeze(&shake_ctx, stream, sizeof(stream));
 
     ctr = 0;
     pos = 0;
     while (ctr < DIL_N) {
         if (pos + 3 > sizeof(stream)) {
             /* Squeeze more bytes from the XOF */
-            ava_shake128_inc_squeeze(&shake_ctx, stream, sizeof(stream));
+            ama_shake128_inc_squeeze(&shake_ctx, stream, sizeof(stream));
             pos = 0;
         }
         t  = stream[pos++];
@@ -668,16 +668,16 @@ static void dil_poly_uniform_eta(dil_poly *a, const uint8_t seed[DIL_CRHBYTES],
     uint8_t buf[DIL_CRHBYTES + 2];
     uint8_t stream[136 * 2];  /* 2 SHAKE256 blocks */
     unsigned int ctr, pos;
-    ava_sha3_ctx shake_ctx;
+    ama_sha3_ctx shake_ctx;
 
     memcpy(buf, seed, DIL_CRHBYTES);
     buf[DIL_CRHBYTES] = (uint8_t)(nonce & 0xFF);
     buf[DIL_CRHBYTES + 1] = (uint8_t)(nonce >> 8);
 
-    ava_shake256_inc_init(&shake_ctx);
-    ava_shake256_inc_absorb(&shake_ctx, buf, DIL_CRHBYTES + 2);
-    ava_shake256_inc_finalize(&shake_ctx);
-    ava_shake256_inc_squeeze(&shake_ctx, stream, sizeof(stream));
+    ama_shake256_inc_init(&shake_ctx);
+    ama_shake256_inc_absorb(&shake_ctx, buf, DIL_CRHBYTES + 2);
+    ama_shake256_inc_finalize(&shake_ctx);
+    ama_shake256_inc_squeeze(&shake_ctx, stream, sizeof(stream));
 
     ctr = 0;
     pos = 0;
@@ -685,7 +685,7 @@ static void dil_poly_uniform_eta(dil_poly *a, const uint8_t seed[DIL_CRHBYTES],
         uint8_t t0, t1;
 
         if (pos >= sizeof(stream)) {
-            ava_shake256_inc_squeeze(&shake_ctx, stream, sizeof(stream));
+            ama_shake256_inc_squeeze(&shake_ctx, stream, sizeof(stream));
             pos = 0;
         }
 
@@ -714,7 +714,7 @@ static void dil_poly_uniform_gamma1(dil_poly *a, const uint8_t seed[DIL_CRHBYTES
     buf[DIL_CRHBYTES] = (uint8_t)(nonce & 0xFF);
     buf[DIL_CRHBYTES + 1] = (uint8_t)(nonce >> 8);
 
-    ava_shake256(buf, DIL_CRHBYTES + 2, stream, DIL_POLYZ_PACKEDBYTES);
+    ama_shake256(buf, DIL_CRHBYTES + 2, stream, DIL_POLYZ_PACKEDBYTES);
     dil_polyz_unpack(a, stream);
 }
 
@@ -726,13 +726,13 @@ static void dil_poly_challenge(dil_poly *c, const uint8_t seed[DIL_CTILDEBYTES])
     uint8_t buf[136];  /* SHAKE256 rate block */
     unsigned int i, b, pos;
     uint64_t signs;
-    ava_sha3_ctx shake_ctx;
+    ama_sha3_ctx shake_ctx;
 
     /* Absorb seed, finalize, then squeeze first block */
-    ava_shake256_inc_init(&shake_ctx);
-    ava_shake256_inc_absorb(&shake_ctx, seed, DIL_CTILDEBYTES);
-    ava_shake256_inc_finalize(&shake_ctx);
-    ava_shake256_inc_squeeze(&shake_ctx, buf, sizeof(buf));
+    ama_shake256_inc_init(&shake_ctx);
+    ama_shake256_inc_absorb(&shake_ctx, seed, DIL_CTILDEBYTES);
+    ama_shake256_inc_finalize(&shake_ctx);
+    ama_shake256_inc_squeeze(&shake_ctx, buf, sizeof(buf));
 
     /* First 8 bytes encode signs */
     signs = 0;
@@ -748,7 +748,7 @@ static void dil_poly_challenge(dil_poly *c, const uint8_t seed[DIL_CTILDEBYTES])
         do {
             if (pos >= sizeof(buf)) {
                 /* Squeeze next block from the same SHAKE256 state */
-                ava_shake256_inc_squeeze(&shake_ctx, buf, sizeof(buf));
+                ama_shake256_inc_squeeze(&shake_ctx, buf, sizeof(buf));
                 pos = 0;
             }
             b = buf[pos++];
@@ -965,26 +965,26 @@ static void dil_expand_matrix(dil_poly mat[DIL_K][DIL_L],
     }
 }
 
-#ifdef AVA_TESTING_MODE
+#ifdef AMA_TESTING_MODE
 /**
  * Random bytes hook for KAT testing.
  * When non-NULL, replaces /dev/urandom for deterministic output.
- * Only available in test builds (AVA_TESTING_MODE).
+ * Only available in test builds (AMA_TESTING_MODE).
  */
-ava_error_t (*ava_dilithium_randombytes_hook)(uint8_t* buf, size_t len) = NULL;
+ama_error_t (*ama_dilithium_randombytes_hook)(uint8_t* buf, size_t len) = NULL;
 #endif
 
 /* Get random bytes from OS (or from test hook if set) */
-static ava_error_t dil_randombytes(uint8_t *buf, size_t len) {
-#ifdef AVA_TESTING_MODE
-    if (ava_dilithium_randombytes_hook) {
-        return ava_dilithium_randombytes_hook(buf, len);
+static ama_error_t dil_randombytes(uint8_t *buf, size_t len) {
+#ifdef AMA_TESTING_MODE
+    if (ama_dilithium_randombytes_hook) {
+        return ama_dilithium_randombytes_hook(buf, len);
     }
 #endif
     if (RAND_bytes(buf, (int)len) != 1) {
-        return AVA_ERROR_CRYPTO;
+        return AMA_ERROR_CRYPTO;
     }
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
 /**
@@ -994,9 +994,9 @@ static ava_error_t dil_randombytes(uint8_t *buf, size_t len) {
  *
  * @param public_key Output buffer for public key (1952 bytes)
  * @param secret_key Output buffer for secret key (4032 bytes)
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key) {
+ama_error_t ama_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key) {
     uint8_t seedbuf[2 * DIL_SEEDBYTES + DIL_CRHBYTES];
     uint8_t *rho, *rhoprime, *key;
     dil_poly mat[DIL_K][DIL_L];
@@ -1004,15 +1004,15 @@ ava_error_t ava_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key) {
     dil_polyveck s2, t1, t0, t;
     uint8_t tr[DIL_TRBYTES];
     unsigned int i;
-    ava_error_t rc;
+    ama_error_t rc;
 
     if (!public_key || !secret_key) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     /* Generate random seed xi */
     rc = dil_randombytes(seedbuf, DIL_SEEDBYTES);
-    if (rc != AVA_SUCCESS) {
+    if (rc != AMA_SUCCESS) {
         return rc;
     }
 
@@ -1023,8 +1023,8 @@ ava_error_t ava_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key) {
         memcpy(h_input, seedbuf, DIL_SEEDBYTES);
         h_input[DIL_SEEDBYTES] = (uint8_t)DIL_K;
         h_input[DIL_SEEDBYTES + 1] = (uint8_t)DIL_L;
-        ava_shake256(h_input, DIL_SEEDBYTES + 2, seedbuf, sizeof(seedbuf));
-        ava_secure_memzero(h_input, sizeof(h_input));
+        ama_shake256(h_input, DIL_SEEDBYTES + 2, seedbuf, sizeof(seedbuf));
+        ama_secure_memzero(h_input, sizeof(h_input));
     }
     rho = seedbuf;
     rhoprime = rho + DIL_SEEDBYTES;
@@ -1061,7 +1061,7 @@ ava_error_t ava_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key) {
     }
 
     /* Compute tr = H(pk) */
-    ava_shake256(public_key, AVA_ML_DSA_65_PUBLIC_KEY_BYTES, tr, DIL_TRBYTES);
+    ama_shake256(public_key, AMA_ML_DSA_65_PUBLIC_KEY_BYTES, tr, DIL_TRBYTES);
 
     /* Pack secret key: rho || key || tr || s1 || s2 || t0 */
     memcpy(secret_key, rho, DIL_SEEDBYTES);
@@ -1084,12 +1084,12 @@ ava_error_t ava_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key) {
     }
 
     /* Scrub sensitive data */
-    ava_secure_memzero(seedbuf, sizeof(seedbuf));
-    ava_secure_memzero(&s1, sizeof(s1));
-    ava_secure_memzero(&s1hat, sizeof(s1hat));
-    ava_secure_memzero(&s2, sizeof(s2));
+    ama_secure_memzero(seedbuf, sizeof(seedbuf));
+    ama_secure_memzero(&s1, sizeof(s1));
+    ama_secure_memzero(&s1hat, sizeof(s1hat));
+    ama_secure_memzero(&s2, sizeof(s2));
 
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
 /**
@@ -1102,9 +1102,9 @@ ava_error_t ava_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key) {
  * @param message Message to sign
  * @param message_len Length of message
  * @param secret_key Secret key (4032 bytes)
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
+ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len,
                                 const uint8_t *message, size_t message_len,
                                 const uint8_t *secret_key) {
     uint8_t *rho, *key, *tr;
@@ -1123,12 +1123,12 @@ ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
     memset(hint, 0, sizeof(hint));
 
     if (!signature || !signature_len || !message || !secret_key) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
-    if (*signature_len < AVA_ML_DSA_65_SIGNATURE_BYTES) {
-        *signature_len = AVA_ML_DSA_65_SIGNATURE_BYTES;
-        return AVA_ERROR_INVALID_PARAM;
+    if (*signature_len < AMA_ML_DSA_65_SIGNATURE_BYTES) {
+        *signature_len = AMA_ML_DSA_65_SIGNATURE_BYTES;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     /* Unpack secret key */
@@ -1169,23 +1169,23 @@ ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
     {
         /* Guard against integer overflow in allocation size */
         if (message_len > SIZE_MAX - DIL_TRBYTES) {
-            return AVA_ERROR_INVALID_PARAM;
+            return AMA_ERROR_INVALID_PARAM;
         }
         uint8_t *mu_input = (uint8_t *)malloc(DIL_TRBYTES + message_len);
         if (!mu_input) {
-            return AVA_ERROR_MEMORY;
+            return AMA_ERROR_MEMORY;
         }
         memcpy(mu_input, tr, DIL_TRBYTES);
         memcpy(mu_input + DIL_TRBYTES, message, message_len);
-        ava_shake256(mu_input, DIL_TRBYTES + message_len, mu, DIL_CRHBYTES);
-        ava_secure_memzero(mu_input, DIL_TRBYTES + message_len);
+        ama_shake256(mu_input, DIL_TRBYTES + message_len, mu, DIL_CRHBYTES);
+        ama_secure_memzero(mu_input, DIL_TRBYTES + message_len);
         free(mu_input);
     }
 
     /* Compute rhoprime = H(key || mu) for deterministic signing */
     memcpy(hashbuf, key, DIL_SEEDBYTES);
     memcpy(hashbuf + DIL_SEEDBYTES, mu, DIL_CRHBYTES);
-    ava_shake256(hashbuf, DIL_SEEDBYTES + DIL_CRHBYTES, rhoprime, DIL_CRHBYTES);
+    ama_shake256(hashbuf, DIL_SEEDBYTES + DIL_CRHBYTES, rhoprime, DIL_CRHBYTES);
 
     /* Rejection sampling loop
      * Expected iterations ~4-5 for ML-DSA-65. Cap at 1000 to prevent
@@ -1195,12 +1195,12 @@ ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
     const unsigned int MAX_SIGN_ATTEMPTS = 1000;
     while (reject) {
         if (++attempts > MAX_SIGN_ATTEMPTS) {
-            ava_secure_memzero(&s1, sizeof(s1));
-            ava_secure_memzero(&s1hat, sizeof(s1hat));
-            ava_secure_memzero(&s2hat, sizeof(s2hat));
-            ava_secure_memzero(mu, sizeof(mu));
-            ava_secure_memzero(rhoprime, sizeof(rhoprime));
-            return AVA_ERROR_CRYPTO;
+            ama_secure_memzero(&s1, sizeof(s1));
+            ama_secure_memzero(&s1hat, sizeof(s1hat));
+            ama_secure_memzero(&s2hat, sizeof(s2hat));
+            ama_secure_memzero(mu, sizeof(mu));
+            ama_secure_memzero(rhoprime, sizeof(rhoprime));
+            return AMA_ERROR_CRYPTO;
         }
         /* Sample y from [-gamma1+1, gamma1] */
         for (i = 0; i < DIL_L; ++i) {
@@ -1231,7 +1231,7 @@ ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
             memcpy(challenge_seed, mu, DIL_CRHBYTES);
             memcpy(challenge_seed + DIL_CRHBYTES, w1_packed,
                    DIL_K * DIL_POLYW1_PACKEDBYTES);
-            ava_shake256(challenge_seed,
+            ama_shake256(challenge_seed,
                         DIL_CRHBYTES + DIL_K * DIL_POLYW1_PACKEDBYTES,
                         signature, DIL_CTILDEBYTES);
         }
@@ -1297,16 +1297,16 @@ ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
     memcpy(signature + DIL_CTILDEBYTES + DIL_L * DIL_POLYZ_PACKEDBYTES,
            hint, DIL_OMEGA + DIL_K);
 
-    *signature_len = AVA_ML_DSA_65_SIGNATURE_BYTES;
+    *signature_len = AMA_ML_DSA_65_SIGNATURE_BYTES;
 
     /* Scrub sensitive data */
-    ava_secure_memzero(&s1, sizeof(s1));
-    ava_secure_memzero(&s1hat, sizeof(s1hat));
-    ava_secure_memzero(&s2hat, sizeof(s2hat));
-    ava_secure_memzero(mu, sizeof(mu));
-    ava_secure_memzero(rhoprime, sizeof(rhoprime));
+    ama_secure_memzero(&s1, sizeof(s1));
+    ama_secure_memzero(&s1hat, sizeof(s1hat));
+    ama_secure_memzero(&s2hat, sizeof(s2hat));
+    ama_secure_memzero(mu, sizeof(mu));
+    ama_secure_memzero(rhoprime, sizeof(rhoprime));
 
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
 /**
@@ -1319,9 +1319,9 @@ ava_error_t ava_dilithium_sign(uint8_t *signature, size_t *signature_len,
  * @param signature Signature to verify (3309 bytes)
  * @param signature_len Length of signature
  * @param public_key Public key (1952 bytes)
- * @return AVA_SUCCESS if valid, AVA_ERROR_VERIFY_FAILED if invalid
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
  */
-ava_error_t ava_dilithium_verify(const uint8_t *message, size_t message_len,
+ama_error_t ama_dilithium_verify(const uint8_t *message, size_t message_len,
                                   const uint8_t *signature, size_t signature_len,
                                   const uint8_t *public_key) {
     uint8_t rho[DIL_SEEDBYTES];
@@ -1337,11 +1337,11 @@ ava_error_t ava_dilithium_verify(const uint8_t *message, size_t message_len,
     unsigned int i;
 
     if (!message || !signature || !public_key) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
-    if (signature_len != AVA_ML_DSA_65_SIGNATURE_BYTES) {
-        return AVA_ERROR_VERIFY_FAILED;
+    if (signature_len != AMA_ML_DSA_65_SIGNATURE_BYTES) {
+        return AMA_ERROR_VERIFY_FAILED;
     }
 
     /* Unpack public key: rho || t1 */
@@ -1366,42 +1366,42 @@ ava_error_t ava_dilithium_verify(const uint8_t *message, size_t message_len,
         for (i = 0; i < DIL_K; ++i) {
             unsigned int limit = hint[DIL_OMEGA + i];
             if (limit < prev || limit > DIL_OMEGA) {
-                return AVA_ERROR_VERIFY_FAILED;
+                return AMA_ERROR_VERIFY_FAILED;
             }
             prev = limit;
         }
         for (i = prev; i < DIL_OMEGA; ++i) {
             if (hint[i] != 0) {
-                return AVA_ERROR_VERIFY_FAILED;
+                return AMA_ERROR_VERIFY_FAILED;
             }
         }
     }
 
     /* Check ||z||_inf < gamma1 - beta */
     if (dil_polyvecl_chknorm(&z, DIL_GAMMA1 - DIL_BETA)) {
-        return AVA_ERROR_VERIFY_FAILED;
+        return AMA_ERROR_VERIFY_FAILED;
     }
 
     /* Expand A from rho */
     dil_expand_matrix(mat, rho);
 
     /* Compute tr = H(pk) */
-    ava_shake256(public_key, AVA_ML_DSA_65_PUBLIC_KEY_BYTES, tr, DIL_TRBYTES);
+    ama_shake256(public_key, AMA_ML_DSA_65_PUBLIC_KEY_BYTES, tr, DIL_TRBYTES);
 
     /* Compute mu = H(tr || M) */
     {
         /* Guard against integer overflow in allocation size */
         if (message_len > SIZE_MAX - DIL_TRBYTES) {
-            return AVA_ERROR_VERIFY_FAILED;
+            return AMA_ERROR_VERIFY_FAILED;
         }
         uint8_t *mu_input = (uint8_t *)malloc(DIL_TRBYTES + message_len);
         if (!mu_input) {
-            return AVA_ERROR_MEMORY;
+            return AMA_ERROR_MEMORY;
         }
         memcpy(mu_input, tr, DIL_TRBYTES);
         memcpy(mu_input + DIL_TRBYTES, message, message_len);
-        ava_shake256(mu_input, DIL_TRBYTES + message_len, mu, DIL_CRHBYTES);
-        ava_secure_memzero(mu_input, DIL_TRBYTES + message_len);
+        ama_shake256(mu_input, DIL_TRBYTES + message_len, mu, DIL_CRHBYTES);
+        ama_secure_memzero(mu_input, DIL_TRBYTES + message_len);
         free(mu_input);
     }
 
@@ -1447,20 +1447,20 @@ ava_error_t ava_dilithium_verify(const uint8_t *message, size_t message_len,
 
         challenge_input = (uint8_t *)malloc(challenge_len);
         if (!challenge_input) {
-            return AVA_ERROR_MEMORY;
+            return AMA_ERROR_MEMORY;
         }
         memcpy(challenge_input, mu, DIL_CRHBYTES);
         memcpy(challenge_input + DIL_CRHBYTES, w1_packed,
                DIL_K * DIL_POLYW1_PACKEDBYTES);
-        ava_shake256(challenge_input, challenge_len, c_tilde2, DIL_CTILDEBYTES);
+        ama_shake256(challenge_input, challenge_len, c_tilde2, DIL_CTILDEBYTES);
         free(challenge_input);
     }
 
     /* Verify c_tilde == c_tilde2 (constant-time comparison) */
-    if (ava_consttime_memcmp(c_tilde, c_tilde2, DIL_CTILDEBYTES) != 0) {
-        return AVA_ERROR_VERIFY_FAILED;
+    if (ama_consttime_memcmp(c_tilde, c_tilde2, DIL_CTILDEBYTES) != 0) {
+        return AMA_ERROR_VERIFY_FAILED;
     }
 
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 

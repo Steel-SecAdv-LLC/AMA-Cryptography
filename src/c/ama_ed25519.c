@@ -15,7 +15,7 @@
  */
 
 /**
- * @file ava_ed25519.c
+ * @file ama_ed25519.c
  * @brief Ed25519 digital signature implementation (RFC 8032)
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2025-12-06
@@ -32,7 +32,7 @@
  * - Cofactor handling per RFC 8032
  */
 
-#include "../include/ava_guardian.h"
+#include "../include/ama_cryptography.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -1062,14 +1062,14 @@ static void sc25519_muladd(uint8_t *s, const uint8_t *a, const uint8_t *b, const
  *
  * @param public_key Output: 32-byte public key
  * @param secret_key Output: 64-byte secret key (seed || public_key)
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]) {
+ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]) {
     uint8_t hash[64];
     ge25519_p3 A;
 
     if (!public_key || !secret_key) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     /* Generate random seed (first 32 bytes of secret_key) */
@@ -1092,9 +1092,9 @@ ava_error_t ava_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]) 
     memcpy(secret_key + 32, public_key, 32);
 
     /* Scrub intermediate values */
-    ava_secure_memzero(hash, sizeof(hash));
+    ama_secure_memzero(hash, sizeof(hash));
 
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
 /**
@@ -1104,9 +1104,9 @@ ava_error_t ava_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]) 
  * @param message Message to sign
  * @param message_len Length of message
  * @param secret_key 64-byte secret key
- * @return AVA_SUCCESS or error code
+ * @return AMA_SUCCESS or error code
  */
-ava_error_t ava_ed25519_sign(
+ama_error_t ama_ed25519_sign(
     uint8_t signature[64],
     const uint8_t *message,
     size_t message_len,
@@ -1119,7 +1119,7 @@ ava_error_t ava_ed25519_sign(
     ge25519_p3 R;
 
     if (!signature || !secret_key || (!message && message_len > 0)) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     /* Hash the secret key */
@@ -1131,7 +1131,7 @@ ava_error_t ava_ed25519_sign(
     /* r = H(h[32..63] || message) mod L */
     buf = (uint8_t *)malloc(32 + message_len);
     if (!buf) {
-        return AVA_ERROR_MEMORY;
+        return AMA_ERROR_MEMORY;
     }
     memcpy(buf, hash + 32, 32);
     if (message_len > 0) {
@@ -1148,7 +1148,7 @@ ava_error_t ava_ed25519_sign(
     free(buf);
     buf = (uint8_t *)malloc(64 + message_len);
     if (!buf) {
-        return AVA_ERROR_MEMORY;
+        return AMA_ERROR_MEMORY;
     }
     memcpy(buf, signature, 32);
     memcpy(buf + 32, secret_key + 32, 32);
@@ -1162,12 +1162,12 @@ ava_error_t ava_ed25519_sign(
     sc25519_muladd(signature + 32, r, hram, hash);
 
     /* Cleanup */
-    ava_secure_memzero(hash, sizeof(hash));
-    ava_secure_memzero(r, sizeof(r));
-    ava_secure_memzero(hram, sizeof(hram));
+    ama_secure_memzero(hash, sizeof(hash));
+    ama_secure_memzero(r, sizeof(r));
+    ama_secure_memzero(hram, sizeof(hram));
     free(buf);
 
-    return AVA_SUCCESS;
+    return AMA_SUCCESS;
 }
 
 /**
@@ -1177,9 +1177,9 @@ ava_error_t ava_ed25519_sign(
  * @param message Message to verify
  * @param message_len Length of message
  * @param public_key 32-byte public key
- * @return AVA_SUCCESS if valid, AVA_ERROR_VERIFY_FAILED if invalid
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
  */
-ava_error_t ava_ed25519_verify(
+ama_error_t ama_ed25519_verify(
     const uint8_t signature[64],
     const uint8_t *message,
     size_t message_len,
@@ -1194,12 +1194,12 @@ ava_error_t ava_ed25519_verify(
     int i;
 
     if (!signature || !public_key || (!message && message_len > 0)) {
-        return AVA_ERROR_INVALID_PARAM;
+        return AMA_ERROR_INVALID_PARAM;
     }
 
     /* Decode public key */
     if (ge25519_frombytes(&A, public_key) != 0) {
-        return AVA_ERROR_VERIFY_FAILED;
+        return AMA_ERROR_VERIFY_FAILED;
     }
 
     /* Negate A for later subtraction */
@@ -1209,7 +1209,7 @@ ava_error_t ava_ed25519_verify(
     /* H(R || A || message) */
     buf = (uint8_t *)malloc(64 + message_len);
     if (!buf) {
-        return AVA_ERROR_MEMORY;
+        return AMA_ERROR_MEMORY;
     }
     memcpy(buf, signature, 32);
     memcpy(buf + 32, public_key, 32);
@@ -1240,5 +1240,5 @@ ava_error_t ava_ed25519_verify(
         diff |= R_bytes[i] ^ signature[i];
     }
 
-    return (diff == 0) ? AVA_SUCCESS : AVA_ERROR_VERIFY_FAILED;
+    return (diff == 0) ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
 }

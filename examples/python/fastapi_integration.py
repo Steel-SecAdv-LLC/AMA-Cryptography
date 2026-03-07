@@ -3,10 +3,10 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-Ava Guardian ♱ FastAPI Integration Example
+AMA Cryptography ♱ FastAPI Integration Example
 ==========================================
 
-Demonstrates integrating Ava Guardian ♱ cryptographic protection into a FastAPI
+Demonstrates integrating AMA Cryptography ♱ cryptographic protection into a FastAPI
 application with async support for high-performance APIs.
 
 Features:
@@ -50,9 +50,9 @@ except ImportError:
     print("This example demonstrates FastAPI integration patterns.")
     sys.exit(1)
 
-from ava_guardian.crypto_api import (  # noqa: E402
+from ama_cryptography.crypto_api import (  # noqa: E402
     AlgorithmType,
-    AvaGuardianCrypto,
+    AmaCryptography,
     get_pqc_capabilities,
 )
 from code_guardian_secure import (  # noqa: E402
@@ -119,9 +119,9 @@ class HealthResponse(BaseModel):
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="Ava Guardian ♱ API",
+    title="AMA Cryptography ♱ API",
     description="Quantum-resistant cryptographic protection API",
-    version="1.1",
+    version="2.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -135,10 +135,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Ava Guardian ♱ cryptographic system
+# Initialize AMA Cryptography ♱ cryptographic system
 # In production, load keys from secure storage (HSM, Vault, etc.)
 KMS = generate_key_management_system("FastAPI Server")
-CRYPTO = AvaGuardianCrypto(algorithm=AlgorithmType.ED25519)
+CRYPTO = AmaCryptography(algorithm=AlgorithmType.ED25519)
 KEYPAIR = CRYPTO.generate_keypair()
 
 
@@ -197,7 +197,7 @@ async def health_check():
 
     response_data = {
         "status": "healthy",
-        "service": "Ava Guardian ♱ FastAPI",
+        "service": "AMA Cryptography ♱ FastAPI",
         "timestamp": datetime.utcnow().isoformat(),
         "pqc_available": capabilities.get("dilithium_available", False),
         "algorithms": (
@@ -211,7 +211,7 @@ async def health_check():
 @app.post("/api/sign", response_model=SignResponse, tags=["Cryptography"])
 async def sign_data(request: SignRequest):
     """
-    Sign data with Ava Guardian ♱ cryptographic system.
+    Sign data with AMA Cryptography ♱ cryptographic system.
 
     Supports Ed25519 (classical) and ML-DSA-65 (quantum-resistant).
     """
@@ -225,7 +225,7 @@ async def sign_data(request: SignRequest):
                 status_code=400,
                 detail="ML-DSA-65 not available. Build native C library.",
             )
-        crypto = AvaGuardianCrypto(algorithm=AlgorithmType.ML_DSA_65)
+        crypto = AmaCryptography(algorithm=AlgorithmType.ML_DSA_65)
         keypair = crypto.generate_keypair()
     else:
         crypto = CRYPTO
@@ -268,7 +268,7 @@ async def get_protected_data():
     """
     Get a cryptographically protected data package.
 
-    Returns sample data with complete Ava Guardian ♱ protection:
+    Returns sample data with complete AMA Cryptography ♱ protection:
     - SHA3-256 content hash
     - HMAC-SHA3-256 authentication
     - Ed25519 digital signature
@@ -396,10 +396,10 @@ async def global_exception_handler(request: Request, exc: Exception):
 def main():
     """Run the FastAPI server with uvicorn."""
     print("=" * 60)
-    print("AVA GUARDIAN ♱ - FASTAPI INTEGRATION EXAMPLE")
+    print("AMA CRYPTOGRAPHY ♱ - FASTAPI INTEGRATION EXAMPLE")
     print("=" * 60)
     print()
-    print("Starting FastAPI server with Ava Guardian ♱ cryptographic protection...")
+    print("Starting FastAPI server with AMA Cryptography ♱ cryptographic protection...")
     print()
     print("Available endpoints:")
     print("  GET  /api/health          - Health check (signed)")

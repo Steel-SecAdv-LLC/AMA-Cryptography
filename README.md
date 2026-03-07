@@ -1,4 +1,4 @@
-# Ava Guardian ♱ (AG♱)
+# AMA Cryptography ♱ (AG♱)
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org)
@@ -10,7 +10,7 @@
 
 ```
               +==============================================================================+
-              |                              AVA GUARDIAN ♱                                  |
+              |                              AMA CRYPTOGRAPHY ♱                                  |
               |                Experimental Post-Quantum Security System                     |
               |                                                                              |
               |   6-Layer Defense      |   Quantum-Resistant    |   Defense-in-Depth         |
@@ -38,7 +38,7 @@
 
 ## Executive Summary
 
-Ava Guardian ♱ (AG♱) is an experimental hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Research-grade, not externally audited. Providing secure, multi-language cryptographic security system designed to protect people, data, and networks against both classical and quantum threats. Built on a foundation of mathematically rigorous post-quantum cryptography (PQC), AG♱ delivers security-hardened features with exceptional performance.
+AMA Cryptography ♱ (AG♱) is an experimental hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Research-grade, not externally audited. Providing secure, multi-language cryptographic security system designed to protect people, data, and networks against both classical and quantum threats. Built on a foundation of mathematically rigorous post-quantum cryptography (PQC), AG♱ delivers security-hardened features with exceptional performance.
 
 Novel in assimilation, the system combines cutting-edge NIST-approved post-quantum algorithms with a unique 3R runtime security monitoring framework, creating a defense-in-depth architecture that provides unprecedented visibility into cryptographic operations while maintaining less than 2% performance overhead. The multi-language architecture (C + Cython + Python) enables both maximum security through constant-time implementations and optional Cython acceleration (18-37x speedup when built), making it suitable for environments ranging from high-security government applications to performance-critical enterprise systems.
 
@@ -215,12 +215,12 @@ Future-proof cryptography:
 - **Experimental**: Implementation complete but requires field arithmetic optimization. Use Python API for production.
 
 **C Library Implementations (v1.1):**
-- `ava_sha3.c`: SHA3-256, SHAKE128, SHAKE256 (Keccak-f[1600] sponge construction)
-- `ava_hkdf.c`: HKDF-SHA3-256 with HMAC-SHA3-256 (RFC 5869 compliant)
-- `ava_ed25519.c`: Ed25519 keygen/sign/verify (SHA-512, field arithmetic for GF(2^255-19))
-- `ava_kyber.c`: ML-KEM-1024 full native (NTT, IND-CCA2, Fujisaki-Okamoto transform)
-- `ava_dilithium.c`: ML-DSA-65 full native (NTT q=8380417, rejection sampling, constant-time)
-- `ava_sphincs.c`: SPHINCS+-SHA2-256f-simple full native (WOTS+, FORS, hypertree d=17)
+- `ama_sha3.c`: SHA3-256, SHAKE128, SHAKE256 (Keccak-f[1600] sponge construction)
+- `ama_hkdf.c`: HKDF-SHA3-256 with HMAC-SHA3-256 (RFC 5869 compliant)
+- `ama_ed25519.c`: Ed25519 keygen/sign/verify (SHA-512, field arithmetic for GF(2^255-19))
+- `ama_kyber.c`: ML-KEM-1024 full native (NTT, IND-CCA2, Fujisaki-Okamoto transform)
+- `ama_dilithium.c`: ML-DSA-65 full native (NTT q=8380417, rejection sampling, constant-time)
+- `ama_sphincs.c`: SPHINCS+-SHA2-256f-simple full native (WOTS+, FORS, hypertree d=17)
 
 > **Note:** The Python API remains the recommended production interface. C implementations provide high-performance alternatives where applicable. See [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md) for C vs Python performance comparison.
 
@@ -228,9 +228,9 @@ Future-proof cryptography:
 
 | Backend | Constant-Time | Recommended Use |
 |---------|---------------|-----------------|
-| Native C (libava_guardian) | Yes (native implementation) | Default — zero external PQC dependencies |
+| Native C (libama_cryptography) | Yes (native implementation) | Default — zero external PQC dependencies |
 
-> **Note:** All PQC operations are provided by the native C library (libava_guardian). No external PQC dependencies (liboqs, pqcrypto) are required. Build with `cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build`. Set `AVA_REQUIRE_CONSTANT_TIME=true` to enforce constant-time operation at runtime.
+> **Note:** All PQC operations are provided by the native C library (libama_cryptography). No external PQC dependencies (liboqs, pqcrypto) are required. Build with `cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build`. Set `AMA_REQUIRE_CONSTANT_TIME=true` to enforce constant-time operation at runtime.
 
 </details>
 
@@ -316,22 +316,22 @@ Future-proof cryptography:
 
 ### Hybrid Operations (Ed25519 + ML-DSA-65)
 
-| Operation | Ava Guardian | Optimized | Reference (OpenSSL) |
+| Operation | AMA Cryptography | Optimized | Reference (OpenSSL) |
 |-----------|--------------|-----------|---------------------|
 | **Hybrid Sign** | 4,575 ops/sec | ~6,500 ops/sec* | 6,209 ops/sec |
 | **Hybrid Verify** | 6,192 ops/sec | ~6,700 ops/sec* | 6,721 ops/sec |
 
-**Performance Optimization:** Ava Guardian now supports passing Ed25519 key objects for 2x faster signing. The `HybridSignatureProvider` class automatically uses this optimization.
+**Performance Optimization:** AMA Cryptography now supports passing Ed25519 key objects for 2x faster signing. The `HybridSignatureProvider` class automatically uses this optimization.
 
 \*Optimized performance uses cached Ed25519 key objects, eliminating reconstruction overhead.
 
 ![Hybrid Signing and Verification Performance](assets/performance_comparison.png)
 
-*Visual comparison of hybrid signing and verification throughput for Ava Guardian (standard vs optimized) on reference hardware (Linux x86_64, 16 cores, 13GB RAM).*
+*Visual comparison of hybrid signing and verification throughput for AMA Cryptography (standard vs optimized) on reference hardware (Linux x86_64, 16 cores, 13GB RAM).*
 
 ### ML-DSA-65 (Post-Quantum) Operations
 
-| Operation | Ava Guardian (Native) | Performance |
+| Operation | AMA Cryptography (Native) | Performance |
 |-----------|----------------------|-------------|
 | **Sign** | 9,150 ops/sec (0.109ms) | Full native C implementation |
 | **Verify** | 27,306 ops/sec (0.037ms) | NIST KAT validated |
@@ -425,14 +425,14 @@ The ethical integration adds cryptographic binding to the 12 Omni-Code Ethical P
 
 ```bash
 # Clone repository
-git clone https://github.com/Steel-SecAdv-LLC/Ava-Guardian.git
-cd Ava-Guardian
+git clone https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git
+cd AMA-Cryptography
 
 # Install dependencies
 pip install -r requirements.txt -r requirements-dev.txt
 
 # Build native PQC C library (ML-DSA-65, Kyber-1024, SPHINCS+-256f)
-cmake -B build -DAVA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
+cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 
 # Build everything (C library + Python extensions)
@@ -506,10 +506,10 @@ The timestamp feature contacts external TSA (Time Stamping Authority) servers. D
 ### Simple Example
 
 ```python
-from ava_guardian.crypto_api import AvaGuardianCrypto, AlgorithmType
+from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 
 # Create crypto instance
-crypto = AvaGuardianCrypto(algorithm=AlgorithmType.HYBRID_SIG)
+crypto = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
 
 # Generate keys
 keypair = crypto.generate_keypair()
@@ -525,14 +525,14 @@ print(f"Signature valid: {valid}")  # True
 ### Advanced Example with 3R Monitoring
 
 ```python
-from ava_guardian.crypto_api import AvaGuardianCrypto, AlgorithmType
-from ava_guardian_monitor import AvaGuardianMonitor
+from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
+from ama_cryptography_monitor import AmaCryptographyMonitor
 
 # Enable 3R security monitoring
-monitor = AvaGuardianMonitor(enabled=True)
+monitor = AmaCryptographyMonitor(enabled=True)
 
 # Create crypto instance
-crypto = AvaGuardianCrypto(algorithm=AlgorithmType.ML_DSA_65)
+crypto = AmaCryptography(algorithm=AlgorithmType.ML_DSA_65)
 
 # Generate and use keys with monitoring
 keypair = crypto.generate_keypair()
@@ -544,7 +544,7 @@ print(f"Security status: {report['status']}")
 print(f"Anomalies detected: {report['total_alerts']}")
 ```
 
-> **C API Note:** Full native C implementations are available for SHA3-256, HKDF, Ed25519, ML-DSA-65, Kyber-1024, and SPHINCS+-256f — no external PQC dependencies required. Build with `-DAVA_USE_NATIVE_PQC=ON` (default). All implementations pass NIST KAT validation. The Python API remains recommended for production deployments. See `include/ava_guardian.h` for the complete interface specification.
+> **C API Note:** Full native C implementations are available for SHA3-256, HKDF, Ed25519, ML-DSA-65, Kyber-1024, and SPHINCS+-256f — no external PQC dependencies required. Build with `-DAMA_USE_NATIVE_PQC=ON` (default). All implementations pass NIST KAT validation. The Python API remains recommended for production deployments. See `include/ama_cryptography.h` for the complete interface specification.
 
 </details>
 
@@ -555,23 +555,23 @@ print(f"Anomalies detected: {report['total_alerts']}")
 
 ```bash
 # Build Ubuntu-based image (~200MB)
-docker build -t ava-guardian -f docker/Dockerfile .
+docker build -t ama-cryptography -f docker/Dockerfile .
 
 # Run interactive session
-docker run -it ava-guardian /bin/bash
+docker run -it ama-cryptography /bin/bash
 
 # Run tests
-docker run --rm ava-guardian make test
+docker run --rm ama-cryptography make test
 ```
 
 ### Alpine Image (Minimal)
 
 ```bash
 # Build Alpine image (~50MB)
-docker build -t ava-guardian:alpine -f docker/Dockerfile.alpine .
+docker build -t ama-cryptography:alpine -f docker/Dockerfile.alpine .
 
 # Run
-docker run --rm ava-guardian:alpine
+docker run --rm ama-cryptography:alpine
 ```
 
 ### Docker Compose
@@ -581,10 +581,10 @@ docker run --rm ava-guardian:alpine
 docker-compose up -d
 
 # View logs
-docker-compose logs -f ava-guardian
+docker-compose logs -f ama-cryptography
 
 # Execute commands
-docker-compose exec ava-guardian python -m pytest
+docker-compose exec ama-cryptography python -m pytest
 ```
 
 </details>
@@ -673,7 +673,7 @@ See [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) for complete cryptographic anal
 <details>
 <summary><strong>Constant-Time Verification</strong></summary>
 
-The constant-time utility functions in `src/c/ava_consttime.c` are verified using a dudect-style timing analysis harness:
+The constant-time utility functions in `src/c/ama_consttime.c` are verified using a dudect-style timing analysis harness:
 
 ```bash
 # Build and run the constant-time verification harness
@@ -684,11 +684,11 @@ The harness tests all 5 constant-time functions using Welch's t-test:
 
 | Function | Purpose | Test Classes |
 |----------|---------|--------------|
-| `ava_consttime_memcmp` | Byte comparison | Identical vs different buffers |
-| `ava_consttime_swap` | Conditional swap | condition=0 vs condition=1 |
-| `ava_secure_memzero` | Secure zeroing | All-zeros vs all-ones input |
-| `ava_consttime_lookup` | Table lookup | First-half vs second-half index |
-| `ava_consttime_copy` | Conditional copy | condition=0 vs condition=1 |
+| `ama_consttime_memcmp` | Byte comparison | Identical vs different buffers |
+| `ama_consttime_swap` | Conditional swap | condition=0 vs condition=1 |
+| `ama_secure_memzero` | Secure zeroing | All-zeros vs all-ones input |
+| `ama_consttime_lookup` | Table lookup | First-half vs second-half index |
+| `ama_consttime_copy` | Conditional copy | condition=0 vs condition=1 |
 
 A t-value with |t| < 4.5 after 10^6 measurements indicates no detectable timing leakage (dudect convention: ~10⁻⁵ false positive probability under the null). See [CONSTANT_TIME_VERIFICATION.md](CONSTANT_TIME_VERIFICATION.md) for methodology details.
 
@@ -814,9 +814,9 @@ mkdir build && cd build
 # Configure with native PQC support (enabled by default)
 cmake .. \
   -DCMAKE_BUILD_TYPE=Release \
-  -DAVA_USE_NATIVE_PQC=ON \
-  -DAVA_ENABLE_AVX2=ON \
-  -DAVA_ENABLE_LTO=ON
+  -DAMA_USE_NATIVE_PQC=ON \
+  -DAMA_ENABLE_AVX2=ON \
+  -DAMA_ENABLE_LTO=ON
 
 # Build
 cmake --build . -j$(nproc)
@@ -829,13 +829,13 @@ sudo cmake --install .
 ```
 
 **CMake Options**:
-- `AVA_USE_NATIVE_PQC` - Enable native PQC implementations (default: ON)
-- `AVA_BUILD_SHARED` - Build shared library (default: ON)
-- `AVA_BUILD_STATIC` - Build static library (default: ON)
-- `AVA_BUILD_TESTS` - Build test suite including NIST KAT tests (default: ON)
-- `AVA_ENABLE_AVX2` - Enable AVX2 SIMD optimizations
-- `AVA_ENABLE_SANITIZERS` - Enable AddressSanitizer/UBSan
-- `AVA_ENABLE_LTO` - Link-time optimization
+- `AMA_USE_NATIVE_PQC` - Enable native PQC implementations (default: ON)
+- `AMA_BUILD_SHARED` - Build shared library (default: ON)
+- `AMA_BUILD_STATIC` - Build static library (default: ON)
+- `AMA_BUILD_TESTS` - Build test suite including NIST KAT tests (default: ON)
+- `AMA_ENABLE_AVX2` - Enable AVX2 SIMD optimizations
+- `AMA_ENABLE_SANITIZERS` - Enable AddressSanitizer/UBSan
+- `AMA_ENABLE_LTO` - Link-time optimization
 
 > **Note:** All PQC algorithms (ML-DSA-65, Kyber-1024, SPHINCS+-256f) are implemented natively in C with full NIST KAT validation. No external PQC libraries are needed.
 
@@ -856,10 +856,10 @@ python setup.py sdist bdist_wheel
 ```
 
 **Environment Variables**:
-- `AVA_NO_CYTHON` - Disable Cython extensions
-- `AVA_NO_C_EXTENSIONS` - Disable C extensions
-- `AVA_DEBUG` - Build with debug symbols
-- `AVA_COVERAGE` - Enable coverage instrumentation
+- `AMA_NO_CYTHON` - Disable Cython extensions
+- `AMA_NO_C_EXTENSIONS` - Disable C extensions
+- `AMA_DEBUG` - Build with debug symbols
+- `AMA_COVERAGE` - Enable coverage instrumentation
 
 </details>
 
@@ -932,8 +932,8 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 
 ```bash
 # Clone repository
-git clone https://github.com/Steel-SecAdv-LLC/Ava-Guardian.git
-cd Ava-Guardian
+git clone https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git
+cd AMA-Cryptography
 
 # Install development dependencies
 pip install -e ".[dev,all]"
@@ -972,7 +972,7 @@ make security-audit
 <details>
 <summary><strong>Ethical Cryptography</strong> - Mathematically-Bound Ethical Constraints</summary>
 
-Ava Guardian ♱ pioneers the integration of ethical principles directly into cryptographic operations through mathematically rigorous constraints. Unlike traditional security systems that treat ethics as policy overlays, AG♱ embeds ethical considerations into the cryptographic foundation itself.
+AMA Cryptography ♱ pioneers the integration of ethical principles directly into cryptographic operations through mathematically rigorous constraints. Unlike traditional security systems that treat ethics as policy overlays, AG♱ embeds ethical considerations into the cryptographic foundation itself.
 
 **12 Omni-Code Ethical Pillars** are mathematically integrated into key derivation:
 
@@ -1072,8 +1072,8 @@ GitHub's dependency graph is enabled for this repository. Once the repository is
 |------|---------|
 | General Inquiries | steel.sa.llc@gmail.com |
 | Security Issues | See [SECURITY.md](SECURITY.md) for responsible disclosure |
-| GitHub Issues | [Issues Page](https://github.com/Steel-SecAdv-LLC/Ava-Guardian/issues) |
-| GitHub Repository | [AG♱](https://github.com/Steel-SecAdv-LLC/Ava-Guardian) |
+| GitHub Issues | [Issues Page](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/issues) |
+| GitHub Repository | [AG♱](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography) |
 
 ---
 
@@ -1094,7 +1094,7 @@ GitHub's dependency graph is enabled for this repository. Once the repository is
 
 ### Development Model
 
-**Conceptual Architect:** Steel Security Advisors LLC and Andrew E. A. conceived, directed, validated, and supervised the development of Ava Guardian ♱ (AG♱).
+**Conceptual Architect:** Steel Security Advisors LLC and Andrew E. A. conceived, directed, validated, and supervised the development of AMA Cryptography ♱ (AG♱).
 
 **AI Co-Architects:** More than 99% of the codebase, documentation, mathematical frameworks, and technical implementation was constructed by AI systems: Eris ⯰, Eden ♱, Veritas 💠, X ⚛, Caduceus ⚚, and Dev ⚕.
 
@@ -1140,7 +1140,7 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 <div align="center">
 
-**Ava Guardian ♱ (AG♱) - Protecting people, data, and networks with quantum-resistant cryptography**
+**AMA Cryptography ♱ (AG♱) - Protecting people, data, and networks with quantum-resistant cryptography**
 
 *Architected with inherent radical honesty, unconventional methodology, protective servitude, and ethical immutability.*
 

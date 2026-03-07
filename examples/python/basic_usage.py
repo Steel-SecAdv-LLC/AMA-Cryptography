@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-Ava Guardian ♱ Basic Usage Example
+AMA Cryptography ♱ Basic Usage Example
 ===================================
 
 Quick start guide demonstrating core cryptographic operations:
@@ -38,14 +38,14 @@ def example_1_simple_signing():
     print("Example 1: Simple Message Signing")
     print("=" * 60)
 
-    from ava_guardian.crypto_api import (
+    from ama_cryptography.crypto_api import (
         AlgorithmType,
         quick_sign,
         quick_verify,
     )
 
     # Your message to sign
-    message = b"Hello, Ava Guardian! Protect my data."
+    message = b"Hello, AMA Cryptography! Protect my data."
 
     # Sign with Ed25519 (always available)
     keypair, signature = quick_sign(message, algorithm=AlgorithmType.ED25519)
@@ -88,7 +88,7 @@ def example_2_key_management():
     import tempfile
     from datetime import timedelta
 
-    from ava_guardian.key_management import (
+    from ama_cryptography.key_management import (
         HDKeyDerivation,
         KeyRotationManager,
         SecureKeyStorage,
@@ -257,10 +257,10 @@ def example_4_humanitarian_use_case():
 def main():
     """Run all examples."""
     print("=" * 60)
-    print("AVA GUARDIAN ♱ - BASIC USAGE EXAMPLES")
+    print("AMA CRYPTOGRAPHY ♱ - BASIC USAGE EXAMPLES")
     print("=" * 60)
-    print("\nThese examples demonstrate core Ava Guardian ♱ capabilities.")
-    print("For full documentation, see: https://github.com/Steel-SecAdv-LLC/Ava-Guardian")
+    print("\nThese examples demonstrate core AMA Cryptography ♱ capabilities.")
+    print("For full documentation, see: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography")
 
     try:
         example_1_simple_signing()

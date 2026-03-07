@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-Ava Guardian ♱ (AG♱): 3R Monitoring Demonstration
+AMA Cryptography ♱ (AG♱): 3R Monitoring Demonstration
 ==================================================
 
 Demonstrates:
@@ -31,8 +31,8 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
-Version: 1.1
-Project: Ava Guardian ♱ 3R Runtime Monitoring
+Version: 2.0
+Project: AMA Cryptography ♱ 3R Runtime Monitoring
 
 AI Co-Architects:
     Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
@@ -40,7 +40,7 @@ AI Co-Architects:
 
 import time
 
-from ava_guardian_monitor import AvaGuardianMonitor
+from ama_cryptography_monitor import AmaCryptographyMonitor
 from code_guardian_secure import (
     MASTER_CODES_STR,
     MASTER_HELIX_PARAMS,
@@ -61,7 +61,7 @@ def demo_timing_monitoring() -> None:
     """Demonstrate runtime timing anomaly monitoring."""
     print_section("3R DEMO: ResonanceEngine - Runtime Timing Anomaly Monitoring")
 
-    monitor = AvaGuardianMonitor(enabled=True)
+    monitor = AmaCryptographyMonitor(enabled=True)
     kms = generate_key_management_system("Demo-Timing")
 
     print("\n[1/4] Creating packages with normal timing...")
@@ -110,7 +110,7 @@ def demo_pattern_analysis() -> None:
     """Demonstrate signing pattern analysis."""
     print_section("3R DEMO: RecursionEngine - Pattern Analysis")
 
-    monitor = AvaGuardianMonitor(enabled=True)
+    monitor = AmaCryptographyMonitor(enabled=True)
     kms = generate_key_management_system("Demo-Pattern")
 
     print("\n[1/3] Creating normal package series...")
@@ -161,7 +161,7 @@ def demo_resonance_detection() -> None:
     """Demonstrate FFT-based resonance detection."""
     print_section("3R DEMO: Resonance Detection via FFT")
 
-    monitor = AvaGuardianMonitor(enabled=True)
+    monitor = AmaCryptographyMonitor(enabled=True)
     kms = generate_key_management_system("Demo-Resonance")
 
     print("\n[1/2] Creating packages for frequency analysis...")
@@ -193,7 +193,7 @@ def demo_security_report() -> None:
     """Demonstrate comprehensive security reporting."""
     print_section("3R DEMO: Comprehensive Security Report")
 
-    monitor = AvaGuardianMonitor(enabled=True)
+    monitor = AmaCryptographyMonitor(enabled=True)
     kms = generate_key_management_system("Demo-Report")
 
     print("\n[1/2] Simulating production workload...")
@@ -230,7 +230,7 @@ def demo_security_report() -> None:
 def main():
     """Run all demos."""
     print("=" * 70)
-    print("  AVA GUARDIAN ♱ - 3R SECURITY MONITORING DEMONSTRATION")
+    print("  AMA CRYPTOGRAPHY ♱ - 3R SECURITY MONITORING DEMONSTRATION")
     print("=" * 70)
     print("\n  Showcasing runtime security analysis capabilities")
     print("  Steel Security Advisors LLC - 2025")

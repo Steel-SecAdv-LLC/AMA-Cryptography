@@ -3,7 +3,7 @@
   "iterations": 1000,
   "results": [
     {
-      "implementation": "Ava Guardian",
+      "implementation": "AMA Cryptography",
       "operation": "Ed25519 Sign",
       "iterations": 1000,
       "mean_time_ms": 0.1036935270002175,
@@ -13,7 +13,7 @@
       "error": null
     },
     {
-      "implementation": "Ava Guardian",
+      "implementation": "AMA Cryptography",
       "operation": "Ed25519 Verify",
       "iterations": 1000,
       "mean_time_ms": 0.12645323800046526,
@@ -23,7 +23,7 @@
       "error": null
     },
     {
-      "implementation": "Ava Guardian",
+      "implementation": "AMA Cryptography",
       "operation": "ML-DSA-65 Sign",
       "iterations": 1000,
       "mean_time_ms": 0.11692453299991712,
@@ -33,7 +33,7 @@
       "error": null
     },
     {
-      "implementation": "Ava Guardian",
+      "implementation": "AMA Cryptography",
       "operation": "ML-DSA-65 Verify",
       "iterations": 1000,
       "mean_time_ms": 0.03703708400064443,
@@ -43,7 +43,7 @@
       "error": null
     },
     {
-      "implementation": "Ava Guardian",
+      "implementation": "AMA Cryptography",
       "operation": "Hybrid Sign",
       "iterations": 1000,
       "mean_time_ms": 0.21856502300053648,
@@ -53,7 +53,7 @@
       "error": null
     },
     {
-      "implementation": "Ava Guardian",
+      "implementation": "AMA Cryptography",
       "operation": "Hybrid Verify",
       "iterations": 1000,
       "mean_time_ms": 0.1614933519999795,
@@ -126,27 +126,27 @@
   "comparisons": {
     "Ed25519 Sign_cryptography (OpenSSL)": {
       "slowdown_factor": 0.452894759765598,
-      "ava_guardian_faster_by_percent": -54.7105240234402
+      "ama_cryptography_faster_by_percent": -54.7105240234402
     },
     "Ed25519 Verify_cryptography (OpenSSL)": {
       "slowdown_factor": 0.9510793942618856,
-      "ava_guardian_faster_by_percent": -4.892060573811441
+      "ama_cryptography_faster_by_percent": -4.892060573811441
     },
     "ML-DSA-65 Sign_liboqs-python": {
       "slowdown_factor": 0.8893734559584004,
-      "ava_guardian_faster_by_percent": -11.062654404159955
+      "ama_cryptography_faster_by_percent": -11.062654404159955
     },
     "ML-DSA-65 Verify_liboqs-python": {
       "slowdown_factor": 0.8345214488097558,
-      "ava_guardian_faster_by_percent": -16.547855119024423
+      "ama_cryptography_faster_by_percent": -16.547855119024423
     },
     "Hybrid Sign_OpenSSL+liboqs": {
       "slowdown_factor": 0.7369119577731208,
-      "ava_guardian_faster_by_percent": -26.30880422268792
+      "ama_cryptography_faster_by_percent": -26.30880422268792
     },
     "Hybrid Verify_OpenSSL+liboqs": {
       "slowdown_factor": 0.921336786671535,
-      "ava_guardian_faster_by_percent": -7.866321332846504
+      "ama_cryptography_faster_by_percent": -7.866321332846504
     }
   }
 }

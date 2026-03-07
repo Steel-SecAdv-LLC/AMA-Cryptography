@@ -2,36 +2,36 @@
  * Kyber-1024 debug test - isolates CPA encrypt/decrypt
  */
 #define _POSIX_C_SOURCE 200809L
-#include "../../include/ava_guardian.h"
+#include "../../include/ama_cryptography.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 
-extern ava_error_t ava_kyber_keypair(uint8_t* pk, size_t pk_len,
+extern ama_error_t ama_kyber_keypair(uint8_t* pk, size_t pk_len,
                                       uint8_t* sk, size_t sk_len);
-extern ava_error_t ava_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
+extern ama_error_t ama_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
                                           uint8_t* ct, size_t* ct_len,
                                           uint8_t* ss, size_t ss_len);
-extern ava_error_t ava_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
+extern ama_error_t ama_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
                                           const uint8_t* sk, size_t sk_len,
                                           uint8_t* ss, size_t ss_len);
 
 int main(void) {
     setbuf(stdout, NULL);
 
-    uint8_t pk[AVA_KYBER_1024_PUBLIC_KEY_BYTES];
-    uint8_t sk[AVA_KYBER_1024_SECRET_KEY_BYTES];
-    uint8_t ct[AVA_KYBER_1024_CIPHERTEXT_BYTES];
+    uint8_t pk[AMA_KYBER_1024_PUBLIC_KEY_BYTES];
+    uint8_t sk[AMA_KYBER_1024_SECRET_KEY_BYTES];
+    uint8_t ct[AMA_KYBER_1024_CIPHERTEXT_BYTES];
     uint8_t ss_enc[32], ss_dec[32];
     size_t ct_len = sizeof(ct);
-    ava_error_t rc;
+    ama_error_t rc;
 
     printf("Kyber-1024 Debug Test\n");
     printf("=====================\n\n");
 
     printf("Step 1: Keypair generation...\n");
-    rc = ava_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk));
+    rc = ama_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk));
     printf("  keygen: %s (rc=%d)\n", rc == 0 ? "OK" : "FAIL", rc);
     if (rc != 0) return 1;
 
@@ -42,11 +42,11 @@ int main(void) {
     printf("  sk[0..3]: %02X%02X%02X%02X\n", sk[0], sk[1], sk[2], sk[3]);
 
     /* Check that sk contains pk */
-    int pk_in_sk = (memcmp(sk + 4*384, pk, AVA_KYBER_1024_PUBLIC_KEY_BYTES) == 0);
+    int pk_in_sk = (memcmp(sk + 4*384, pk, AMA_KYBER_1024_PUBLIC_KEY_BYTES) == 0);
     printf("  sk contains pk: %s\n", pk_in_sk ? "YES" : "NO");
 
     printf("\nStep 2: Encapsulation...\n");
-    rc = ava_kyber_encapsulate(pk, sizeof(pk), ct, &ct_len, ss_enc, sizeof(ss_enc));
+    rc = ama_kyber_encapsulate(pk, sizeof(pk), ct, &ct_len, ss_enc, sizeof(ss_enc));
     printf("  encap: %s (rc=%d, ct_len=%zu)\n", rc == 0 ? "OK" : "FAIL", rc, ct_len);
     if (rc != 0) return 1;
 
@@ -55,7 +55,7 @@ int main(void) {
            ss_enc[4], ss_enc[5], ss_enc[6], ss_enc[7]);
 
     printf("\nStep 3: Decapsulation...\n");
-    rc = ava_kyber_decapsulate(ct, ct_len, sk, sizeof(sk), ss_dec, sizeof(ss_dec));
+    rc = ama_kyber_decapsulate(ct, ct_len, sk, sizeof(sk), ss_dec, sizeof(ss_dec));
     printf("  decap: %s (rc=%d)\n", rc == 0 ? "OK" : "FAIL", rc);
 
     printf("  ss_dec[0..7]: %02X%02X%02X%02X%02X%02X%02X%02X\n",

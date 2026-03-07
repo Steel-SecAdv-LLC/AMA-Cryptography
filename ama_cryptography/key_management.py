@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-Ava Guardian ♱ Key Management System
+AMA Cryptography ♱ Key Management System
 =====================================
 
 Enterprise-grade key management with:
@@ -26,13 +26,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, cast
+from types import TracebackType
+from typing import Any, Dict, List, Optional, Tuple, Type, cast
+
+from ama_cryptography.exceptions import SecurityWarning  # noqa: F401 — re-exported for public API
 
 # Configure module logger
 logger = logging.getLogger(__name__)
-
-# Import from centralized exceptions module
-from ava_guardian.exceptions import SecurityWarning  # noqa: E402, F401
 
 
 class KeyStatus(Enum):
@@ -102,7 +102,7 @@ class HDKeyDerivation:
     # This is the order of the generator point G on the secp256k1 curve
     SECP256K1_N = int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
 
-    def __init__(self, seed: Optional[bytes] = None, seed_phrase: Optional[str] = None):
+    def __init__(self, seed: Optional[bytes] = None, seed_phrase: Optional[str] = None) -> None:
         """
         Initialize HD key derivation
 
@@ -129,7 +129,7 @@ class HDKeyDerivation:
 
     def _generate_master_key(self) -> Tuple[bytes, bytes]:
         """Generate master key and chain code from seed"""
-        h = hmac.new(b"Ava Guardian Master Key", self.master_seed, hashlib.sha512)
+        h = hmac.new(b"AMA Cryptography Master Key", self.master_seed, hashlib.sha512)
         hmac_result = h.digest()
 
         master_key = hmac_result[:32]
@@ -261,7 +261,7 @@ class KeyRotationManager:
     Supports gradual migration from old to new keys.
     """
 
-    def __init__(self, rotation_period: timedelta = timedelta(days=90)):
+    def __init__(self, rotation_period: timedelta = timedelta(days=90)) -> None:
         """
         Initialize rotation manager
 
@@ -463,7 +463,7 @@ class SecureKeyStorage:
         - Backward compatibility with legacy AES-CFB encrypted keys
     """
 
-    def __init__(self, storage_path: Path, master_password: Optional[str] = None):
+    def __init__(self, storage_path: Path, master_password: Optional[str] = None) -> None:
         """
         Initialize secure storage
 
@@ -559,7 +559,7 @@ class SecureKeyStorage:
             return False  # Nothing to migrate
 
         # Read all existing keys with old parameters
-        old_keys: Dict[str, Tuple[bytes, Dict]] = {}
+        old_keys: Dict[str, Tuple[bytes, Dict[str, Any]]] = {}
         for key_file in self.storage_path.glob("*.json"):
             if key_file.name.startswith("."):
                 continue
@@ -632,7 +632,7 @@ class SecureKeyStorage:
         storage._derive_key_from_password(master_password)
         return storage
 
-    def store_key(self, key_id: str, key_data: bytes, metadata: Optional[Dict] = None) -> None:
+    def store_key(self, key_id: str, key_data: bytes, metadata: Optional[Dict[str, Any]] = None) -> None:
         """
         Store key with AES-256-GCM authenticated encryption.
 
@@ -748,14 +748,14 @@ class SecureKeyStorage:
             return True
         return False
 
-    def list_keys(self) -> list:
+    def list_keys(self) -> List[str]:
         """
         List all stored key IDs.
 
         Returns:
             List of key IDs stored in this storage
         """
-        key_ids = []
+        key_ids: List[str] = []
         for key_file in self.storage_path.glob("*.json"):
             if not key_file.name.startswith("."):
                 key_ids.append(key_file.stem)
@@ -765,7 +765,7 @@ class SecureKeyStorage:
         """Context manager entry."""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, exc_type: Optional[Type[BaseException]], exc_val: Optional[BaseException], exc_tb: Optional[TracebackType]) -> None:
         """Context manager exit - securely clear encryption key from memory."""
         # Securely zero the encryption key
         if hasattr(self, "encryption_key") and self.encryption_key:
@@ -823,10 +823,10 @@ class HSMKeyStorage:
         self,
         hsm_type: str = "softhsm",
         library_path: Optional[str] = None,
-        token_label: str = "AvaGuardian",
+        token_label: str = "AmaCryptography",
         pin: Optional[str] = None,  # nosec B107
         slot_index: Optional[int] = None,
-    ):
+    ) -> None:
         """
         Initialize HSM connection.
 
@@ -858,7 +858,7 @@ class HSMKeyStorage:
             return PyKCS11
         except ImportError:
             raise ImportError(
-                "HSM support requires PyKCS11. Install with: pip install ava-guardian[hsm]"
+                "HSM support requires PyKCS11. Install with: pip install ama-cryptography[hsm]"
             )
 
     def _resolve_library_path(self, hsm_type: str, library_path: Optional[str]) -> str:
@@ -1109,7 +1109,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     logger.info("=" * 70)
-    logger.info("Ava Guardian ♱ Key Management Demonstration")
+    logger.info("AMA Cryptography ♱ Key Management Demonstration")
     logger.info("=" * 70)
 
     # HD Key Derivation

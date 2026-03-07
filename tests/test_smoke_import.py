@@ -17,7 +17,7 @@ import pytest
 def test_import_math_engine():
     """Test that math_engine module can be imported."""
     try:
-        mod = importlib.import_module("ava_guardian.math_engine")
+        mod = importlib.import_module("ama_cryptography.math_engine")
         assert mod is not None, "Module imported but is None"
     except ImportError as e:
         pytest.skip(f"math_engine not built (Cython extension): {e}")
@@ -26,7 +26,7 @@ def test_import_math_engine():
 def test_math_engine_has_matrix_vector_multiply():
     """Test that math_engine exports matrix_vector_multiply function."""
     try:
-        mod = importlib.import_module("ava_guardian.math_engine")
+        mod = importlib.import_module("ama_cryptography.math_engine")
         assert hasattr(
             mod, "matrix_vector_multiply"
         ), "matrix_vector_multiply function not found in math_engine"
@@ -39,7 +39,7 @@ def test_math_engine_has_matrix_vector_multiply():
 def test_math_engine_has_core_functions():
     """Test that math_engine exports other core functions."""
     try:
-        mod = importlib.import_module("ava_guardian.math_engine")
+        mod = importlib.import_module("ama_cryptography.math_engine")
 
         # Check for other key exported functions
         expected_functions = [

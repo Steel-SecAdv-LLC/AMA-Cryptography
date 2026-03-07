@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-Ava Guardian ♱ (AG♱) - Mathematical Suite Package
+AMA Cryptography ♱ (AG♱) - Mathematical Suite Package
 ==================================================
 
 Post-quantum cryptographic security system with rigorous mathematical foundations.
@@ -22,17 +22,17 @@ Post-quantum cryptographic security system with rigorous mathematical foundation
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
-Version: 1.1
+Version: 2.0
 
 AI Co-Architects:
     Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 """
 
-__version__ = "1.1"
+__version__ = "2.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
-from ava_guardian.double_helix_engine import AvaEquationEngine
-from ava_guardian.equations import (
+from ama_cryptography.double_helix_engine import AmaEquationEngine
+from ama_cryptography.equations import (
     HELIX_PARAMS,
     LAMBDA_DECAY,
     OMNI_CODES,
@@ -72,5 +72,5 @@ __all__ = [
     "enforce_sigma_quadratic_threshold",
     "initialize_ethical_matrix",
     "verify_mathematical_foundations",
-    "AvaEquationEngine",
+    "AmaEquationEngine",
 ]

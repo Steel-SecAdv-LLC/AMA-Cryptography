@@ -71,7 +71,7 @@ jobs:
 
         # Verify critical outputs
         checks = [
-            ('Ava Guardian', 'Title present'),
+            ('AMA Cryptography', 'Title present'),
             ('Generating key management system', 'Key generation'),
             ('Creating Omni-Code cryptographic package', 'Package creation'),
             ('Signing package', 'Signing process'),
@@ -116,20 +116,20 @@ jobs:
 
     - name: Check code formatting with Black
       run: |
-        black --check --diff ava_guardian/ tests/ code_guardian_secure.py
+        black --check --diff ama_cryptography/ tests/ code_guardian_secure.py
 
     - name: Lint with Flake8
       run: |
-        flake8 ava_guardian/ tests/ code_guardian_secure.py --count --show-source --statistics --max-line-length=100
+        flake8 ama_cryptography/ tests/ code_guardian_secure.py --count --show-source --statistics --max-line-length=100
 
     - name: Check import order with isort
       run: |
-        isort --check-only --diff ava_guardian/ tests/ code_guardian_secure.py
+        isort --check-only --diff ama_cryptography/ tests/ code_guardian_secure.py
 
     - name: Type checking with MyPy
-      continue-on-error: true
+      continue-on-error: false
       run: |
-        mypy code_guardian_secure.py --no-strict-optional --ignore-missing-imports
+        mypy ama_cryptography/ code_guardian_secure.py --ignore-missing-imports
 
   security-checks:
     name: Security Checks

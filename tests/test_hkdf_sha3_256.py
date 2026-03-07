@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-Ava Guardian ♱ (AG♱): Tests for HKDF-SHA3-256 key derivation with ethical context integration.
+AMA Cryptography ♱ (AG♱): Tests for HKDF-SHA3-256 key derivation with ethical context integration.
 
 This module provides comprehensive tests for:
 1. HKDF-SHA3-256 deterministic key derivation
@@ -363,13 +363,13 @@ class TestProjectSpecificVectors:
         """
         Project-specific HMAC-SHA3-256 test vector #2.
 
-        Key: "Ava Guardian HMAC Key 32 bytes!!" (32 bytes)
+        Key: "AMA Cryptography HMAC Key 32 bytes!!" (32 bytes)
         Message: "test message for HMAC-SHA3-256"
         Expected: Computed with cryptography library, hardcoded for regression.
         """
         import hmac as hmac_module
 
-        key = b"Ava Guardian HMAC Key 32 bytes!!"
+        key = b"AMA Cryptography HMAC Key 32 bytes!!"
         message = b"test message for HMAC-SHA3-256"
 
         tag = hmac_module.new(key, message, hashlib.sha3_256).digest()

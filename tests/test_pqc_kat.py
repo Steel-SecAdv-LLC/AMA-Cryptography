@@ -4,7 +4,7 @@
 """
 NIST Known Answer Tests (KAT) for Post-Quantum Cryptography.
 
-Validates Ava Guardian's PQC implementations against NIST FIPS 203/204 specifications.
+Validates AMA Cryptography's PQC implementations against NIST FIPS 203/204 specifications.
 These tests verify correct key sizes, signature sizes, and round-trip functionality
 to ensure cryptographic compliance.
 
@@ -153,12 +153,12 @@ class MLKEM512Spec:
 @pytest.fixture
 def dilithium_provider():
     """Get Dilithium provider if available."""
-    from ava_guardian.pqc_backends import DILITHIUM_AVAILABLE
+    from ama_cryptography.pqc_backends import DILITHIUM_AVAILABLE
 
     if not DILITHIUM_AVAILABLE:
         pytest.skip("Dilithium backend not available (install oqs package)")
 
-    from ava_guardian.pqc_backends import DilithiumProvider
+    from ama_cryptography.pqc_backends import DilithiumProvider
 
     return DilithiumProvider()
 
@@ -166,12 +166,12 @@ def dilithium_provider():
 @pytest.fixture
 def kyber_provider():
     """Get Kyber provider if available."""
-    from ava_guardian.pqc_backends import KYBER_AVAILABLE
+    from ama_cryptography.pqc_backends import KYBER_AVAILABLE
 
     if not KYBER_AVAILABLE:
         pytest.skip("Kyber backend not available (install oqs package)")
 
-    from ava_guardian.pqc_backends import KyberProvider
+    from ama_cryptography.pqc_backends import KyberProvider
 
     return KyberProvider()
 

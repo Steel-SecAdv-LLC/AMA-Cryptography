@@ -15,7 +15,7 @@ INCLUDE_DIR = ../../include
 DUDECT_HARNESS = dudect_harness
 
 # Source files
-CONSTTIME_SRC = $(SRC_DIR)/ava_consttime.c
+CONSTTIME_SRC = $(SRC_DIR)/ama_consttime.c
 
 .PHONY: all clean test help
 

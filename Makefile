@@ -1,7 +1,7 @@
 # Copyright 2025 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 #
-# Makefile for Ava Guardian ♱
+# Makefile for AMA Cryptography ♱
 #
 # Quick build targets:
 #   make all        - Build everything (C library + Python extensions)
@@ -40,7 +40,7 @@ test-c: c
 
 test-python: python
 	@echo "Running Python tests..."
-	@pytest tests/ -v --cov=ava_guardian --cov-report=term-missing
+	@pytest tests/ -v --cov=ama_cryptography --cov-report=term-missing
 	@echo "✓ Python tests passed"
 
 # Run benchmarks
@@ -63,7 +63,7 @@ clean:
 
 # Install system-wide
 install: all
-	@echo "Installing Ava Guardian ♱..."
+	@echo "Installing AMA Cryptography ♱..."
 	@cd build && sudo $(MAKE) install
 	@pip3 install -e .
 	@echo "✓ Installed successfully"
@@ -77,15 +77,15 @@ dev-install:
 # Format code
 format:
 	@echo "Formatting code..."
-	@black ava_guardian/ tests/ *.py
-	@isort ava_guardian/ tests/ *.py
+	@black ama_cryptography/ tests/ *.py
+	@isort ama_cryptography/ tests/ *.py
 	@echo "✓ Code formatted"
 
 # Lint code
 lint:
 	@echo "Linting code..."
-	@flake8 ava_guardian/ tests/ --max-line-length=100
-	@mypy ava_guardian/ --ignore-missing-imports
+	@flake8 ama_cryptography/ tests/ --max-line-length=100
+	@mypy ama_cryptography/ --ignore-missing-imports
 	@echo "✓ Lint passed"
 
 # Generate documentation
@@ -101,7 +101,7 @@ docs:
 # Build Docker image
 docker:
 	@echo "Building Docker image..."
-	@docker build -t ava-guardian:latest -f docker/Dockerfile .
+	@docker build -t ama-cryptography:latest -f docker/Dockerfile .
 	@echo "✓ Docker image built"
 
 # Create release distribution
@@ -114,17 +114,17 @@ dist: clean
 security-audit:
 	@echo "Running security audit..."
 	@pip-audit
-	@bandit -r ava_guardian/ -ll
+	@bandit -r ama_cryptography/ -ll
 	@echo "✓ Security audit complete"
 
 # Comprehensive security scan (bandit + semgrep + dependency scanning)
 security-scan:
 	@echo "Running comprehensive security scan..."
 	@echo "[1/3] Running bandit for Python security issues..."
-	@bandit -r ava_guardian/ code_guardian_secure.py -ll -f json -o bandit-report.json || true
-	@bandit -r ava_guardian/ code_guardian_secure.py -ll
+	@bandit -r ama_cryptography/ code_guardian_secure.py -ll -f json -o bandit-report.json || true
+	@bandit -r ama_cryptography/ code_guardian_secure.py -ll
 	@echo "[2/3] Running semgrep for cryptographic rules..."
-	@semgrep --config .semgrep.yml ava_guardian/ code_guardian_secure.py --json -o semgrep-report.json 2>/dev/null || echo "  (semgrep not installed or no rules matched)"
+	@semgrep --config .semgrep.yml ama_cryptography/ code_guardian_secure.py --json -o semgrep-report.json 2>/dev/null || echo "  (semgrep not installed or no rules matched)"
 	@echo "[3/3] Running pip-audit for dependency vulnerabilities..."
 	@pip-audit --format json -o pip-audit-report.json 2>/dev/null || pip-audit || echo "  (pip-audit completed)"
 	@echo "✓ Comprehensive security scan complete"
@@ -151,20 +151,20 @@ constant-time-check-full:
 c-api:
 	@echo "Building C API library with native PQC..."
 	@mkdir -p build
-	@cd build && cmake .. -DAVA_BUILD_SHARED=ON -DAVA_BUILD_STATIC=ON \
-		-DAVA_USE_NATIVE_PQC=ON && $(MAKE)
+	@cd build && cmake .. -DAMA_BUILD_SHARED=ON -DAMA_BUILD_STATIC=ON \
+		-DAMA_USE_NATIVE_PQC=ON && $(MAKE)
 	@echo "✓ C API built successfully"
-	@echo "  Shared library: build/lib/libava_guardian.so"
-	@echo "  Static library: build/lib/libava_guardian.a"
-	@echo "  Headers: include/ava_guardian.h"
+	@echo "  Shared library: build/lib/libama_cryptography.so"
+	@echo "  Static library: build/lib/libama_cryptography.a"
+	@echo "  Headers: include/ama_cryptography.h"
 	@echo "  PQC: NATIVE (ML-DSA-65, Kyber-1024, SPHINCS+-256f)"
 
 # Build C API Docker image for reproducible builds
 docker-c-api:
 	@echo "Building C API Docker image..."
-	@docker build -t ava-guardian-c-api:latest -f docker/Dockerfile.c-api .
+	@docker build -t ama-cryptography-c-api:latest -f docker/Dockerfile.c-api .
 	@echo "✓ C API Docker image built"
-	@echo "  Usage: docker run -v \$$(pwd)/output:/output ava-guardian-c-api:latest"
+	@echo "  Usage: docker run -v \$$(pwd)/output:/output ama-cryptography-c-api:latest"
 
 # Performance profiling
 profile: python
@@ -174,7 +174,7 @@ profile: python
 
 # Help
 help:
-	@echo "Ava Guardian ♱ Build System"
+	@echo "AMA Cryptography ♱ Build System"
 	@echo "============================"
 	@echo ""
 	@echo "Main targets:"

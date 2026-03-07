@@ -94,7 +94,7 @@ def get_timestamp(
         tsa_url: URL of RFC 3161 Time-Stamp Authority
                  Default: FreeTSA.org public service
         hash_algorithm: Hash algorithm to use ('sha256', 'sha3-256', 'sha512')
-                       Default: 'sha3-256' (consistent with Ava Guardian)
+                       Default: 'sha3-256' (consistent with AMA Cryptography)
         certificate_file: Optional path to TSA certificate for verification
 
     Returns:

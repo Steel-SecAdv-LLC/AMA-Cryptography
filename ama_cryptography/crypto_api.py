@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-Ava Guardian ♱ (AG♱) - Algorithm-Agnostic Cryptographic API
+AMA Cryptography ♱ (AG♱) - Algorithm-Agnostic Cryptographic API
 ===========================================================
 
 Unified interface for all post-quantum cryptographic algorithms.
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
         Ed25519PublicKey,
     )
 
-from ava_guardian.pqc_backends import (
+from ama_cryptography.pqc_backends import (
     DILITHIUM_AVAILABLE,
     DILITHIUM_BACKEND,
     KYBER_AVAILABLE,
@@ -84,7 +84,7 @@ except ImportError:
 
 # Import RFC 3161 timestamping
 try:
-    from ava_guardian.rfc3161_timestamp import (
+    from ama_cryptography.rfc3161_timestamp import (
         RFC3161_AVAILABLE,
         TimestampError,
         TimestampUnavailableError,
@@ -104,7 +104,7 @@ if not pqc_available:
         warnings.simplefilter("default", UserWarning)
         warnings.warn(
             "Quantum-resistant cryptography NOT available. "
-            "Build native C library for post-quantum protection: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build",
+            "Build native C library for post-quantum protection: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build",
             category=UserWarning,
             stacklevel=2,
         )
@@ -124,7 +124,7 @@ class AlgorithmType(Enum):
 class CryptoBackend(Enum):
     """Available implementation backends"""
 
-    C_LIBRARY = auto()  # libava_guardian.so (fastest, native PQC)
+    C_LIBRARY = auto()  # libama_cryptography.so (fastest, native PQC)
     CYTHON = auto()  # Cython optimized (fast)
     PURE_PYTHON = auto()  # Pure Python (fallback)
 
@@ -232,7 +232,7 @@ class MLDSAProvider(CryptoProvider):
     Standard: NIST FIPS 204 (ML-DSA)
     """
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY):
+    def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY) -> None:
         self.backend = backend
         self.algorithm = AlgorithmType.ML_DSA_65
         self._available = DILITHIUM_AVAILABLE
@@ -251,7 +251,7 @@ class MLDSAProvider(CryptoProvider):
         if not self._available:
             raise PQCUnavailableError(
                 "PQC_UNAVAILABLE: ML-DSA-65 requires native C backend. "
-                "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
+                "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
             )
 
         kp = generate_dilithium_keypair()
@@ -329,7 +329,7 @@ class Ed25519Provider(CryptoProvider):
     Standard: RFC 8032
     """
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON):
+    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON) -> None:
         self.backend = backend
         self.algorithm = AlgorithmType.ED25519
 
@@ -448,14 +448,14 @@ class KyberProvider(KEMProvider):
         KyberUnavailableError: If Kyber backend is not available
     """
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON):
+    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON) -> None:
         self.backend = backend
         self.algorithm = AlgorithmType.KYBER_1024
 
         if not KYBER_AVAILABLE:
             raise KyberUnavailableError(
                 "KYBER_UNAVAILABLE: Kyber-1024 backend not available. "
-                "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
+                "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
             )
 
     def generate_keypair(self) -> KeyPair:
@@ -548,14 +548,14 @@ class SphincsProvider(CryptoProvider):
         SphincsUnavailableError: If SPHINCS+ backend is not available
     """
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON):
+    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON) -> None:
         self.backend = backend
         self.algorithm = AlgorithmType.SPHINCS_256F
 
         if not SPHINCS_AVAILABLE:
             raise SphincsUnavailableError(
                 "SPHINCS_UNAVAILABLE: SPHINCS+-256f backend not available. "
-                "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
+                "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
             )
 
     def generate_keypair(self) -> KeyPair:
@@ -651,7 +651,7 @@ class HybridSignatureProvider(CryptoProvider):
     DILITHIUM_PK_SIZE = 1952
     DILITHIUM_SIG_SIZE = 3309  # ML-DSA-65 per FIPS 204
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.classical_provider = Ed25519Provider()
         self.pqc_provider = MLDSAProvider()
         self.algorithm = AlgorithmType.HYBRID_SIG
@@ -670,7 +670,7 @@ class HybridSignatureProvider(CryptoProvider):
         if not self._pqc_available:
             raise PQCUnavailableError(
                 "PQC_UNAVAILABLE: Hybrid signatures require ML-DSA-65. "
-                "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
+                "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
             )
 
         classical_keys = self.classical_provider.generate_keypair()
@@ -781,15 +781,15 @@ class HybridSignatureProvider(CryptoProvider):
         return classical_valid and pqc_valid
 
 
-class AvaGuardianCrypto:
+class AmaCryptography:
     """
-    Main Ava Guardian ♱ Cryptographic API
+    Main AMA Cryptography ♱ Cryptographic API
 
     Provides unified interface to all cryptographic operations with
     automatic algorithm selection and fallback mechanisms.
 
     Example:
-        >>> crypto = AvaGuardianCrypto(algorithm=AlgorithmType.HYBRID_SIG)
+        >>> crypto = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
         >>> keypair = crypto.generate_keypair()
         >>> signature = crypto.sign(b"Hello, World!", keypair.secret_key)
         >>> valid = crypto.verify(b"Hello, World!", signature.signature, keypair.public_key)
@@ -799,7 +799,7 @@ class AvaGuardianCrypto:
         self,
         algorithm: AlgorithmType = AlgorithmType.HYBRID_SIG,
         backend: CryptoBackend = CryptoBackend.C_LIBRARY,
-    ):
+    ) -> None:
         """
         Initialize cryptographic API
 
@@ -811,7 +811,7 @@ class AvaGuardianCrypto:
         self.backend = backend
         self.provider = self._get_provider()
 
-    def _get_provider(self):
+    def _get_provider(self) -> Union[CryptoProvider, KEMProvider]:
         """Get appropriate provider for selected algorithm"""
         if self.algorithm == AlgorithmType.ML_DSA_65:
             return MLDSAProvider(self.backend)
@@ -904,7 +904,7 @@ def quick_sign(
     Returns:
         (keypair, signature)
     """
-    crypto = AvaGuardianCrypto(algorithm=algorithm)
+    crypto = AmaCryptography(algorithm=algorithm)
     keypair = crypto.generate_keypair()
     signature = crypto.sign(message, keypair.secret_key)
     return keypair, signature
@@ -928,7 +928,7 @@ def quick_verify(
     Returns:
         True if valid, False otherwise
     """
-    crypto = AvaGuardianCrypto(algorithm=algorithm)
+    crypto = AmaCryptography(algorithm=algorithm)
     return crypto.verify(message, signature, public_key)
 
 
@@ -944,7 +944,7 @@ def quick_kem(
     Returns:
         (keypair, encapsulated_secret)
     """
-    crypto = AvaGuardianCrypto(algorithm=algorithm)
+    crypto = AmaCryptography(algorithm=algorithm)
     keypair = crypto.generate_keypair()
     encapsulated = crypto.encapsulate(keypair.public_key)
     return keypair, encapsulated
@@ -970,7 +970,7 @@ def get_pqc_capabilities() -> Dict[str, Any]:
     Example:
         >>> caps = get_pqc_capabilities()
         >>> if caps["status"] == "AVAILABLE":
-        ...     crypto = AvaGuardianCrypto(algorithm=AlgorithmType.ML_DSA_65)
+        ...     crypto = AmaCryptography(algorithm=AlgorithmType.ML_DSA_65)
         ... else:
         ...     print(caps["install_instructions"])
     """
@@ -998,7 +998,7 @@ def get_pqc_capabilities() -> Dict[str, Any]:
         },
         "key_sizes": info.get("algorithms", {}),
         "install_instructions": (
-            "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
+            "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
             if not (info["dilithium_available"] or info["kyber_available"])
             else "PQC backend already available"
         ),
@@ -1020,8 +1020,8 @@ class CryptoPackageConfig:
         tsa_url: RFC 3161 Time Stamp Authority URL (default: None)
 
     Note:
-        - Kyber-1024 requires native C backend (build with -DAVA_USE_NATIVE_PQC=ON)
-        - SPHINCS+-256f requires native C backend (build with -DAVA_USE_NATIVE_PQC=ON)
+        - Kyber-1024 requires native C backend (build with -DAMA_USE_NATIVE_PQC=ON)
+        - SPHINCS+-256f requires native C backend (build with -DAMA_USE_NATIVE_PQC=ON)
         - When use_sphincs=True, SPHINCS+ signature is added alongside primary signature
         - RFC 3161 timestamping requires network access to TSA server
     """
@@ -1189,7 +1189,7 @@ def create_crypto_package(
     kem_shared_secret: Optional[bytes] = None
 
     # Generate primary signature
-    primary_crypto = AvaGuardianCrypto(algorithm=config.signature_algorithm)
+    primary_crypto = AmaCryptography(algorithm=config.signature_algorithm)
     primary_keypair = primary_crypto.generate_keypair()
     primary_signature = primary_crypto.sign(content, primary_keypair.secret_key)
     keypairs[config.signature_algorithm.name] = primary_keypair
@@ -1199,7 +1199,7 @@ def create_crypto_package(
         if not SPHINCS_AVAILABLE:
             raise SphincsUnavailableError(
                 "SPHINCS_UNAVAILABLE: SPHINCS+-256f backend not available. "
-                "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
+                "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
             )
         sphincs_provider = SphincsProvider()
         sphincs_keypair = sphincs_provider.generate_keypair()
@@ -1214,7 +1214,7 @@ def create_crypto_package(
         master_secret = secrets.token_bytes(32)  # 256-bit master secret
         derived_keys, hkdf_salt = derive_keys(
             master_secret=master_secret,
-            info="ava_guardian_crypto_package_v1",
+            info="ama_cryptography_crypto_package_v1",
             num_keys=config.num_derived_keys,
             ethical_vector=None,  # Use default ethical vector
             salt=None,  # Generate random salt
@@ -1239,7 +1239,7 @@ def create_crypto_package(
         if not KYBER_AVAILABLE:
             raise KyberUnavailableError(
                 "KYBER_UNAVAILABLE: Kyber-1024 backend not available. "
-                "Build native C library: cmake -B build -DAVA_USE_NATIVE_PQC=ON && cmake --build build"
+                "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
             )
         kyber_provider = KyberProvider()
         kyber_keypair = kyber_provider.generate_keypair()
@@ -1331,7 +1331,7 @@ def verify_crypto_package(
         sig_alg = AlgorithmType.HYBRID_SIG
 
     if sig_alg_name in package.keypairs:
-        primary_crypto = AvaGuardianCrypto(algorithm=sig_alg)
+        primary_crypto = AmaCryptography(algorithm=sig_alg)
         results["primary"] = primary_crypto.verify(
             content,
             package.primary_signature.signature,
@@ -1369,7 +1369,7 @@ __all__ = [
     "KyberProvider",
     "SphincsProvider",
     "HybridSignatureProvider",
-    "AvaGuardianCrypto",
+    "AmaCryptography",
     "quick_sign",
     "quick_verify",
     "quick_kem",
