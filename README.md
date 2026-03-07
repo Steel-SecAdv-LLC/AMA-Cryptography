@@ -1,4 +1,10 @@
-# AMA Cryptography ♱ (AG♱)
+# AMA Cryptography
+
+<div align="center">
+
+  <img width="917" height="194" alt="image" src="https://github.com/user-attachments/assets/b8cf718e-82e0-4254-94bc-8c6aad12a895" />
+
+</div>
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org)
