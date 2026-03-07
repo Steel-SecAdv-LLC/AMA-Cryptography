@@ -117,8 +117,11 @@ int main(void) {
 
     /* Test 10: Deterministic signatures */
     uint8_t sig1[64], sig2[64];
-    rc = ama_ed25519_sign(sig1, message, sizeof(message) - 1, secret_key);
-    rc = ama_ed25519_sign(sig2, message, sizeof(message) - 1, secret_key);
+    ama_error_t rc1, rc2;
+    rc1 = ama_ed25519_sign(sig1, message, sizeof(message) - 1, secret_key);
+    TEST_ASSERT(rc1 == AMA_SUCCESS, "ed25519_sign: first deterministic sign should succeed");
+    rc2 = ama_ed25519_sign(sig2, message, sizeof(message) - 1, secret_key);
+    TEST_ASSERT(rc2 == AMA_SUCCESS, "ed25519_sign: second deterministic sign should succeed");
     TEST_ASSERT(memcmp(sig1, sig2, 64) == 0, "ed25519_sign: deterministic signatures");
 
     printf("\n===========================================\n");

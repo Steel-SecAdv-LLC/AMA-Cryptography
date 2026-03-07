@@ -23,18 +23,26 @@
  * Implements AES-256-GCM authenticated encryption with associated data (AEAD).
  *
  * Security properties:
- * - T-table free AES core (standard S-box lookup on public round-key XOR'd state)
+ * - T-table free AES core (standard S-box lookup, no T-table acceleration)
  * - 256-bit key, 96-bit nonce (IV), 128-bit authentication tag
  * - Constant-time GHASH via schoolbook multiplication in GF(2^128)
  * - Conforms to NIST SP 800-38D
  *
- * Side-channel note:
+ * Side-channel WARNING:
  * The S-box is a standard 256-byte lookup table, NOT a bitsliced implementation.
- * The lookup index is the XOR of plaintext (public) with round key material, so
- * cache-timing attacks on the S-box do not directly leak the key. However, for
- * environments where cache-line timing is a concern (e.g., shared-tenant VMs),
- * a true bitsliced AES implementation would be required. This is tracked as a
- * future hardening item.
+ * The lookup index is state[i] = plaintext[i] XOR round_key[i], which is
+ * KEY-DEPENDENT. On processors with data-dependent cache behaviour (virtually
+ * all modern CPUs without AES-NI), this makes the implementation vulnerable to
+ * cache-timing attacks (Bernstein 2005, Osvik-Shamir-Tromer 2006). Table-based
+ * AES is NOT constant-time on general-purpose hardware.
+ *
+ * Mitigations by deployment context:
+ * - Hardware AES-NI / ARMv8-CE: Use hardware instructions (immune to table
+ *   timing). This implementation does not currently use AES-NI.
+ * - Dedicated hardware / single-tenant: Risk is reduced but not eliminated.
+ * - Shared-tenant VMs / hostile co-residency: This implementation is NOT safe.
+ *   A bitsliced AES or AES-NI backend is required. This is tracked as a
+ *   future hardening item.
  *
  * AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
  */
@@ -49,10 +57,9 @@
  * ============================================================================ */
 
 /* AES S-box (standard 256-byte lookup table).
- * The lookup index is always round-key XOR'd state, so the index is a function
- * of public plaintext XOR secret key material. On platforms with data-independent
- * cache behaviour (e.g., constant-time AES-NI fallback) this is safe. For
- * shared-tenant environments, consider a bitsliced S-box (future work). */
+ * WARNING: The lookup index is state[i] = plaintext[i] XOR round_key[i],
+ * which is key-dependent. This table-based approach is NOT constant-time
+ * on CPUs with data-dependent cache behaviour. See file header for details. */
 static const uint8_t aes_sbox[256] = {
     0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
     0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,

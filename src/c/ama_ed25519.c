@@ -26,10 +26,16 @@
  *   Base point order: L = 2^252 + 27742317777372353535851937790883648493
  *
  * Security properties:
- * - Constant-time field arithmetic
- * - No secret-dependent branches
+ * - Constant-time field arithmetic (fe25519 operations)
+ * - Constant-time base point scalar multiplication (windowed with cmov)
+ * - Constant-time table lookups (linear scan, no secret-dependent indexing)
+ * - Thread-safe lazy initialization via CAS tri-state protocol
  * - Proper scalar clamping
  * - Cofactor handling per RFC 8032
+ *
+ * Note: ge25519_scalarmult() (variable-base) uses double-and-add and is
+ * NOT constant-time. It is used only for verification where the scalar
+ * (derived from the hash of the signature) is public.
  */
 
 #include "../include/ama_cryptography.h"
@@ -38,19 +44,32 @@
 #include <stdint.h>
 
 /* C11 atomics for thread-safe lazy initialization of base point tables.
+ * Uses a tri-state CAS protocol: 0 = uninitialized, 1 = initializing, 2 = ready.
  * Falls back to volatile on pre-C11 compilers (MSVC, older GCC). */
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
   #include <stdatomic.h>
   #define AMA_ATOMIC_INT            _Atomic int
   #define AMA_ATOMIC_LOAD(p)        atomic_load_explicit(&(p), memory_order_acquire)
   #define AMA_ATOMIC_STORE(p, v)    atomic_store_explicit(&(p), (v), memory_order_release)
+  /* CAS: atomically set *p from expected to desired; returns 1 on success */
+  #define AMA_ATOMIC_CAS(p, expected, desired) \
+      atomic_compare_exchange_strong_explicit(&(p), &(expected), (desired), \
+          memory_order_acq_rel, memory_order_acquire)
 #else
   /* Pre-C11 fallback: volatile provides compiler ordering but not hardware
    * fence guarantees. Acceptable on x86 (TSO) but not on ARM/POWER. */
   #define AMA_ATOMIC_INT            volatile int
   #define AMA_ATOMIC_LOAD(p)        (p)
   #define AMA_ATOMIC_STORE(p, v)    ((p) = (v))
+  /* Fallback CAS: NOT truly atomic — safe only on single-core or x86 TSO. */
+  #define AMA_ATOMIC_CAS(p, expected, desired) \
+      ((p) == (expected) ? ((p) = (desired), 1) : ((expected) = (p), 0))
 #endif
+
+/* Tri-state constants for lazy initialization protocol */
+#define AMA_INIT_UNINIT       0
+#define AMA_INIT_IN_PROGRESS  1
+#define AMA_INIT_READY        2
 
 /* ============================================================================
  * SHA-512 IMPLEMENTATION (Required by Ed25519)
@@ -604,27 +623,44 @@ static ge25519_p3 B;
 static AMA_ATOMIC_INT B_initialized = 0;
 
 static void ensure_base_point(void) {
-    if (AMA_ATOMIC_LOAD(B_initialized)) return;
+    int state = AMA_ATOMIC_LOAD(B_initialized);
 
-    static const uint8_t base_compressed[32] = {
-        0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
-        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
-        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
-        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
-    };
+    if (state == AMA_INIT_READY) return;
 
-    /* Decompression into a local variable first, then publish atomically.
-     * This ensures a concurrent reader never sees a partially-written B. */
-    ge25519_p3 B_local;
-    int rc = ge25519_frombytes(&B_local, base_compressed);
-    if (rc != 0) return;  /* Should never happen with the canonical base point */
+    /* Try to claim the initializer role via CAS: UNINIT -> IN_PROGRESS.
+     * Exactly one thread wins; all others spin-wait below. */
+    if (state == AMA_INIT_UNINIT) {
+        int expected = AMA_INIT_UNINIT;
+        if (AMA_ATOMIC_CAS(B_initialized, expected, AMA_INIT_IN_PROGRESS)) {
+            /* We are the sole initializer. Decompress into a local first,
+             * then publish via memcpy + release store. */
+            static const uint8_t base_compressed[32] = {
+                0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+                0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+                0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+                0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+            };
+            ge25519_p3 B_local;
+            int rc = ge25519_frombytes(&B_local, base_compressed);
+            if (rc != 0) {
+                /* Decompression failed (should never happen). Reset to UNINIT
+                 * so another thread can retry. */
+                AMA_ATOMIC_STORE(B_initialized, AMA_INIT_UNINIT);
+                return;
+            }
+            memcpy(&B, &B_local, sizeof(ge25519_p3));
 
-    memcpy(&B, &B_local, sizeof(ge25519_p3));
+            /* Release store: B is fully written before flag becomes READY. */
+            AMA_ATOMIC_STORE(B_initialized, AMA_INIT_READY);
+            return;
+        }
+        /* CAS failed — another thread is initializing. Fall through to spin. */
+    }
 
-    /* Release store: ensures B is fully written before the flag is visible.
-     * With C11 atomics this provides a proper release fence; on pre-C11
-     * compilers the volatile fallback relies on x86 TSO ordering. */
-    AMA_ATOMIC_STORE(B_initialized, 1);
+    /* Spin-wait until the initializer thread publishes READY. */
+    while (AMA_ATOMIC_LOAD(B_initialized) != AMA_INIT_READY) {
+        /* Busy-wait. This path is extremely short-lived (one-time init). */
+    }
 }
 
 static void ge25519_p3_0(ge25519_p3 *h) {
@@ -852,56 +888,74 @@ static void ge25519_scalarmult(ge25519_p3 *r, const uint8_t *scalar, const ge255
 static ge25519_p3 ge_base_table[16];
 static AMA_ATOMIC_INT ge_base_table_ready = 0;
 
-/* Initialize precomputed basepoint table (thread-safe via local computation) */
+/* Initialize precomputed basepoint table.
+ * Thread-safe via CAS tri-state: only one thread computes, others spin-wait. */
 static void ge25519_init_base_table(void) {
-    if (AMA_ATOMIC_LOAD(ge_base_table_ready)) return;
+    int state = AMA_ATOMIC_LOAD(ge_base_table_ready);
 
-    ensure_base_point();
+    if (state == AMA_INIT_READY) return;
 
-    /* Compute into local table first, then publish atomically */
-    ge25519_p3 local_table[16];
-    ge25519_p1p1 t;
+    if (state == AMA_INIT_UNINIT) {
+        int expected = AMA_INIT_UNINIT;
+        if (AMA_ATOMIC_CAS(ge_base_table_ready, expected, AMA_INIT_IN_PROGRESS)) {
+            /* Sole initializer thread. */
+            ensure_base_point();
 
-    /* table[0] = 1*B */
-    memcpy(&local_table[0], &B, sizeof(ge25519_p3));
+            /* Compute into local table first, then publish */
+            ge25519_p3 local_table[16];
+            ge25519_p1p1 t;
 
-    /* table[i] = (i+1)*B = table[i-1] + B */
-    for (int i = 1; i < 16; i++) {
-        ge25519_add(&t, &local_table[i-1], &B);
-        ge25519_p1p1_to_p3(&local_table[i], &t);
-    }
+            /* table[0] = 1*B */
+            memcpy(&local_table[0], &B, sizeof(ge25519_p3));
 
-    memcpy(ge_base_table, local_table, sizeof(ge_base_table));
-    AMA_ATOMIC_STORE(ge_base_table_ready, 1);
-}
+            /* table[i] = (i+1)*B = table[i-1] + B */
+            for (int i = 1; i < 16; i++) {
+                ge25519_add(&t, &local_table[i-1], &B);
+                ge25519_p1p1_to_p3(&local_table[i], &t);
+            }
 
-/* Constant-time table lookup */
-static void ge25519_table_lookup(ge25519_p3 *r, int idx) {
-    /* idx is in [0, 15], we want table[idx] */
-    ge25519_p3_0(r);
-
-    for (int i = 0; i < 16; i++) {
-        int64_t mask = -((int64_t)(i == idx));
-        for (int j = 0; j < 10; j++) {
-            r->X[j] ^= mask & (r->X[j] ^ ge_base_table[i].X[j]);
-            r->Y[j] ^= mask & (r->Y[j] ^ ge_base_table[i].Y[j]);
-            r->Z[j] ^= mask & (r->Z[j] ^ ge_base_table[i].Z[j]);
-            r->T[j] ^= mask & (r->T[j] ^ ge_base_table[i].T[j]);
+            memcpy(ge_base_table, local_table, sizeof(ge_base_table));
+            AMA_ATOMIC_STORE(ge_base_table_ready, AMA_INIT_READY);
+            return;
         }
     }
+
+    /* Spin-wait until the initializer thread publishes READY. */
+    while (AMA_ATOMIC_LOAD(ge_base_table_ready) != AMA_INIT_READY) {
+        /* Busy-wait. One-time cost during first use. */
+    }
 }
 
-/* Optimized base point multiplication using 4-bit windows
+/* Constant-time conditional move: r = (flag ? p : r).
+ * flag MUST be 0 or 1. No branching on flag. */
+static void ge25519_cmov(ge25519_p3 *r, const ge25519_p3 *p, int flag) {
+    int64_t mask = -(int64_t)flag;
+    for (int j = 0; j < 10; j++) {
+        r->X[j] ^= mask & (r->X[j] ^ p->X[j]);
+        r->Y[j] ^= mask & (r->Y[j] ^ p->Y[j]);
+        r->Z[j] ^= mask & (r->Z[j] ^ p->Z[j]);
+        r->T[j] ^= mask & (r->T[j] ^ p->T[j]);
+    }
+}
+
+/* Optimized base point multiplication using 4-bit windows (constant-time)
  *
  * Algorithm:
  * 1. Write scalar s in radix-16: s = sum(s_i * 16^i) where s_i in [0,15]
  * 2. Result = sum(s_i * 16^i * B) = sum(table[s_i-1] * 16^i) for s_i > 0
  * 3. Use Horner's method: (((...)*16 + s_63)*16 + s_62)*16 + ...
  *
+ * Constant-time properties:
+ * - Table lookup is always performed (constant-time scan of all 16 entries)
+ * - Addition is always performed; when nibble == 0, the identity is selected
+ *   from the table and the result is conditionally discarded via cmov
+ * - No secret-dependent branches: work per nibble is identical regardless
+ *   of scalar value
+ *
  * This reduces 256 doublings + ~128 additions to 252 doublings + 64 additions
  */
 static void ge25519_scalarmult_base_windowed(ge25519_p3 *r, const uint8_t *scalar) {
-    ge25519_p3 Q, P;
+    ge25519_p3 Q, P, Q_after_add;
     ge25519_p1p1 t;
     ge25519_p2 p2;
     int i;
@@ -925,12 +979,36 @@ static void ge25519_scalarmult_base_windowed(ge25519_p3 *r, const uint8_t *scala
         int byte_idx = i / 2;
         int nibble = (i & 1) ? (scalar[byte_idx] >> 4) : (scalar[byte_idx] & 0x0F);
 
-        /* Q = Q + nibble*B if nibble > 0 */
-        if (nibble > 0) {
-            ge25519_table_lookup(&P, nibble - 1);
-            ge25519_add(&t, &Q, &P);
-            ge25519_p1p1_to_p3(&Q, &t);
+        /* Constant-time: always look up and always add.
+         * When nibble == 0, ge25519_table_lookup selects the identity
+         * (since no table entry matches, r stays as identity from ge25519_p3_0).
+         * We compute Q + P unconditionally, then use cmov to select the
+         * result only when nibble != 0. This eliminates the secret-dependent
+         * branch that would leak scalar nibble values via timing. */
+
+        /* Select table[nibble-1] when nibble > 0, identity when nibble == 0 */
+        int lookup_idx = nibble - 1;  /* -1 when nibble==0; table_lookup yields identity */
+        ge25519_p3_0(&P);
+        for (int k = 0; k < 16; k++) {
+            int64_t mask = -((int64_t)(k == lookup_idx));
+            for (int j = 0; j < 10; j++) {
+                P.X[j] ^= mask & (P.X[j] ^ ge_base_table[k].X[j]);
+                P.Y[j] ^= mask & (P.Y[j] ^ ge_base_table[k].Y[j]);
+                P.Z[j] ^= mask & (P.Z[j] ^ ge_base_table[k].Z[j]);
+                P.T[j] ^= mask & (P.T[j] ^ ge_base_table[k].T[j]);
+            }
         }
+        /* When nibble==0, P is the identity (0,1,1,0). Adding identity is
+         * not free in extended coordinates, so we always compute the addition
+         * but conditionally keep the result. */
+        ge25519_add(&t, &Q, &P);
+        ge25519_p1p1_to_p3(&Q_after_add, &t);
+
+        /* Constant-time select: Q = (nibble != 0) ? Q_after_add : Q */
+        int select = (nibble != 0);          /* 0 or 1, public after clamping */
+        /* Convert to constant-time flag without branch */
+        select = (int)(((unsigned int)(-nibble) | (unsigned int)nibble) >> 31);
+        ge25519_cmov(&Q, &Q_after_add, select);
     }
 
     memcpy(r, &Q, sizeof(ge25519_p3));
