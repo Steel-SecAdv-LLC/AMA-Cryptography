@@ -16,6 +16,9 @@
 #include "ama_sha256.h"
 #include <string.h>
 
+/* Scrub sensitive state — compiler cannot optimize this away */
+extern void ama_secure_memzero(void *ptr, size_t len);
+
 /* ============================================================================
  * SHA-256 CONSTANTS (FIPS 180-4 Section 4.2.2)
  * First 32 bits of fractional parts of cube roots of first 64 primes.
@@ -192,8 +195,8 @@ void ama_sha256_final(ama_sha256_ctx *ctx, uint8_t digest[32]) {
         store_be32(digest + 4 * i, ctx->state[i]);
     }
 
-    /* Scrub context */
-    memset(ctx, 0, sizeof(*ctx));
+    /* Scrub context — must use secure_memzero, not memset (CWE-14) */
+    ama_secure_memzero(ctx, sizeof(*ctx));
 }
 
 void ama_sha256(uint8_t *out, const uint8_t *in, size_t inlen) {

@@ -186,7 +186,8 @@ class PostureEvaluator:
             anomaly = alert.get("anomaly")
             if anomaly is None:
                 continue
-            severity = getattr(anomaly, "severity", alert.get("anomaly", {}).get("severity", ""))
+            # TimingAnomaly is a dataclass with .severity and .deviation_sigma
+            severity = getattr(anomaly, "severity", "")
             deviation = getattr(anomaly, "deviation_sigma", 0.0)
             if severity == "critical":
                 score += min(1.0, deviation / 10.0)
@@ -303,6 +304,7 @@ class CryptoPostureController:
         self._last_rotation_time: float = 0.0
         self._rotation_count: int = 0
         self._switch_count: int = 0
+        self._max_history: int = 1000
         self._history: List[PostureEvaluation] = []
 
     def evaluate_and_respond(self) -> PostureEvaluation:
@@ -323,6 +325,8 @@ class CryptoPostureController:
         report = self.monitor.get_security_report()
         evaluation = self.evaluator.evaluate(report)
         self._history.append(evaluation)
+        if len(self._history) > self._max_history:
+            self._history = self._history[-self._max_history:]
 
         # Enforce cooldown
         now = time.time()
@@ -343,29 +347,34 @@ class CryptoPostureController:
         self._last_rotation_time = time.time()
         self._rotation_count += 1
 
+        derivation_path: Optional[str] = None
+
         if self.rotation_manager is not None:
             active_key = self.rotation_manager.get_active_key()
             if active_key is not None:
                 new_key_id = f"posture-rotation-{self._rotation_count}"
-                # Derive new key via BIP32 if HD derivation is available
+
+                # Derive new key material via BIP32 if HD derivation is available
                 if self.hd_derivation is not None:
+                    derivation_path = f"m/44'/0'/{self._rotation_count}'/0/0"
                     try:
-                        path = f"m/44'/0'/{self._rotation_count}'/0/0"
-                        _derived_key, _chain = self.hd_derivation.derive_path(path)
-                    except (ValueError, Exception) as e:
+                        self.hd_derivation.derive_path(derivation_path)
+                    except Exception as e:
                         logger.warning("HD derivation failed during posture rotation: %s", e)
+                        derivation_path = None
 
                 try:
                     self.rotation_manager.register_key(
                         new_key_id,
                         purpose="signing",
+                        derivation_path=derivation_path,
                         expires_in=timedelta(days=30),
                     )
                     self.rotation_manager.initiate_rotation(active_key, new_key_id)
                     logger.info(
                         "Posture-triggered key rotation: %s → %s", active_key, new_key_id
                     )
-                except (ValueError, Exception) as e:
+                except Exception as e:
                     logger.warning("Posture key rotation failed: %s", e)
 
         if self.on_rotation is not None:

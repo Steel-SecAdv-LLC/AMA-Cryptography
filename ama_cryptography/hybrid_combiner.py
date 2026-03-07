@@ -190,19 +190,39 @@ class HybridCombiner:
     @staticmethod
     def _hkdf_python(salt: bytes, ikm: bytes, info: bytes, okm_len: int) -> bytes:
         """
-        HKDF-SHA-256 fallback (Python, RFC 5869).
+        HKDF-SHA3-256 fallback (Python, RFC 5869 construction with SHA3-256).
 
-        Used when the native C library is not available. Provides the same
-        Extract-then-Expand semantics, using SHA-256 as the PRF.
+        Matches the native C ama_hkdf which uses HMAC-SHA3-256.
+        Both paths MUST use the same hash to produce identical output —
+        otherwise encapsulate/decapsulate across native/fallback would silently
+        produce mismatched secrets.
+
+        SHA3-256 block size (rate) = 136 bytes, digest size = 32 bytes.
         """
         import hmac as _hmac
 
-        hash_len = 32  # SHA-256 digest size
+        hash_len = 32   # SHA3-256 digest size
+        block_size = 136  # SHA3-256 rate (Keccak sponge rate for SHA3-256)
 
-        # Extract: PRK = HMAC-SHA256(salt, IKM)
+        def _hmac_sha3_256(key: bytes, data: bytes) -> bytes:
+            """HMAC-SHA3-256 per RFC 2104, using SHA3-256 as H."""
+            # If key > block_size, hash it first
+            if len(key) > block_size:
+                key = hashlib.sha3_256(key).digest()
+            # Pad key to block_size
+            key_padded = key + b"\x00" * (block_size - len(key))
+            # ipad / opad
+            ipad = bytes(b ^ 0x36 for b in key_padded)
+            opad = bytes(b ^ 0x5c for b in key_padded)
+            # inner = SHA3-256(ipad || data)
+            inner = hashlib.sha3_256(ipad + data).digest()
+            # outer = SHA3-256(opad || inner)
+            return hashlib.sha3_256(opad + inner).digest()
+
+        # Extract: PRK = HMAC-SHA3-256(salt, IKM)
         if not salt:
             salt = b"\x00" * hash_len
-        prk = _hmac.new(salt, ikm, hashlib.sha256).digest()
+        prk = _hmac_sha3_256(salt, ikm)
 
         # Expand: OKM = T(1) || T(2) || ... truncated to okm_len
         n = (okm_len + hash_len - 1) // hash_len
@@ -212,7 +232,7 @@ class HybridCombiner:
         okm = b""
         t_prev = b""
         for i in range(1, n + 1):
-            t_prev = _hmac.new(prk, t_prev + info + bytes([i]), hashlib.sha256).digest()
+            t_prev = _hmac_sha3_256(prk, t_prev + info + bytes([i]))
             okm += t_prev
 
         return okm[:okm_len]
