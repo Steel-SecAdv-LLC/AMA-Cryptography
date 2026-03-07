@@ -132,7 +132,7 @@ jobs:
       - name: Install Python build dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install Cython>=0.29.30 numpy>=1.21
+          pip install "Cython>=0.29.30" "numpy>=1.21"
 
       - name: Install Python dependencies
         run: |

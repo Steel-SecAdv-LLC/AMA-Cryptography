@@ -374,9 +374,7 @@ class Ed25519Provider(CryptoProvider):
         elif len(secret_key) == 64:
             full_sk = secret_key
         else:
-            raise ValueError(
-                f"Ed25519 secret key must be 32 or 64 bytes, got {len(secret_key)}"
-            )
+            raise ValueError(f"Ed25519 secret key must be 32 or 64 bytes, got {len(secret_key)}")
 
         sig_bytes = native_ed25519_sign(message, full_sk)
         message_hash = hashlib.sha3_256(message).digest()
@@ -848,9 +846,7 @@ class HybridSignatureProvider(CryptoProvider):
         pqc_sig = signature[self.ED25519_SIG_SIZE :]
 
         # Both must verify for hybrid security
-        classical_valid = self.classical_provider.verify(
-            message, classical_sig, classical_pk_bytes
-        )
+        classical_valid = self.classical_provider.verify(message, classical_sig, classical_pk_bytes)
         pqc_valid = self.pqc_provider.verify(message, pqc_sig, pqc_pk)
 
         return classical_valid and pqc_valid

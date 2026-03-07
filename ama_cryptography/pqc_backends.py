@@ -114,17 +114,37 @@ def _get_search_dirs() -> list:
 
     # Project build directories (relative to this file's package)
     pkg_dir = Path(__file__).resolve().parent.parent
-    for build_dir in ["build/lib", "build", "cmake-build-release/lib", "cmake-build-debug/lib"]:
+    build_dirs = [
+        "build/lib",
+        "build",
+        "build/bin",  # MSVC puts DLLs in runtime output dir
+        "build/bin/Release",
+        "build/bin/Debug",
+        "build/Release",  # MSVC multi-config output
+        "build/Debug",
+        "build/lib/Release",
+        "build/lib/Debug",
+        "cmake-build-release/lib",
+        "cmake-build-release",
+        "cmake-build-debug/lib",
+        "cmake-build-debug",
+    ]
+    for build_dir in build_dirs:
         search_dirs.append(pkg_dir / build_dir)
 
-    # System paths
-    search_dirs.extend([Path("/usr/local/lib"), Path("/usr/lib")])
+    # System paths (Unix only)
+    if platform.system() != "Windows":
+        search_dirs.extend([Path("/usr/local/lib"), Path("/usr/lib")])
 
-    # LD_LIBRARY_PATH / DYLD_LIBRARY_PATH
-    env_path = os.getenv("LD_LIBRARY_PATH", "") or os.getenv("DYLD_LIBRARY_PATH", "")
-    for p in env_path.split(":"):
-        if p:
-            search_dirs.append(Path(p))
+    # LD_LIBRARY_PATH / DYLD_LIBRARY_PATH / PATH (Windows)
+    env_vars = ["LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"]
+    if platform.system() == "Windows":
+        env_vars.append("PATH")
+    for var in env_vars:
+        env_path = os.getenv(var, "")
+        for p in env_path.split(os.pathsep):
+            if p:
+                search_dirs.append(Path(p))
 
     return search_dirs
 
@@ -132,6 +152,10 @@ def _get_search_dirs() -> list:
 def _try_load_library(lib_path: Path) -> Optional[ctypes.CDLL]:
     """Try to load a shared library from the given path. Returns None on failure."""
     try:
+        if platform.system() == "Windows":
+            # On Windows with Python 3.8+, DLL search paths are restricted.
+            # Use winmode=0 to search the DLL's directory and PATH.
+            return ctypes.CDLL(str(lib_path), winmode=0)
         return ctypes.CDLL(str(lib_path))
     except OSError:
         return None
