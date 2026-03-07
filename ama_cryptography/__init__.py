@@ -25,7 +25,7 @@ Contact: steel.sa.llc@gmail.com
 Version: 2.0
 
 AI Co-Architects:
-    Eris ⯰ | Eden | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+    Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 """
 
 __version__ = "2.0"

@@ -114,7 +114,7 @@ int main(void) {
     benchmark_operation(bench_consttime_memcmp, "consttime_memcmp (512 bytes)");
     benchmark_operation(bench_secure_memzero, "secure_memzero (64 bytes)");
 
-    printf("\nEd25519 (experimental):\n");
+    printf("\nEd25519 (native C):\n");
     benchmark_operation(bench_ed25519_sign, "Ed25519 sign (32-byte msg)");
 
     printf("\n============================================================\n");

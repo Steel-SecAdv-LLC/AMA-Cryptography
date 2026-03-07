@@ -33,7 +33,7 @@ Standards:
 - NIST FIPS 204: ML-DSA (CRYSTALS-Dilithium)
 - NIST FIPS 205: SLH-DSA (SPHINCS+)
 
-AI Co-Architects: Eris ⯰ | Eden | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+AI Co-Architects: Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 """
 
 import ctypes

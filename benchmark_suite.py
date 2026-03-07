@@ -27,7 +27,7 @@ Version: 2.0
 Project: AMA Cryptography Performance Analysis
 
 AI Co-Architects:
-    Eris ⯰ | Eden | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+    Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 """
 
 import hashlib

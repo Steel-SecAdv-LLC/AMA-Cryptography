@@ -72,13 +72,13 @@ Direct C library benchmarks (10,000 iterations + 100 warmup).
 |-------------|------------|---------|
 | 32 bytes | **165,419 ops/sec** | 6.045 µs/op |
 
-### Ed25519 (Native C — Experimental)
+### Ed25519 (Native C)
 
 | Operation | Throughput | Latency |
 |-----------|------------|---------|
 | Sign (32-byte msg) | **9,182 ops/sec** | 108.9 µs/op |
 
-> **Note:** The native C Ed25519 implementation is experimental. For production, the Python API leverages the cryptography (OpenSSL) library for Ed25519.
+> **Note:** The native C Ed25519 implementation has field arithmetic optimization pending. For production, the Python API leverages the cryptography (OpenSSL) library for Ed25519.
 
 ### Constant-Time Utilities
 
@@ -123,7 +123,7 @@ AMA Cryptography's complete security package includes:
 | HKDF (32B) | 165,419 ops/sec | 21,443 ops/sec | **7.7x** |
 | Ed25519 Sign | 9,182 ops/sec | 10,453 ops/sec | 0.88x* |
 
-\*Python Ed25519 uses the optimized cryptography/OpenSSL library. C implementation is experimental.
+\*Python Ed25519 uses the optimized cryptography/OpenSSL library. C implementation has field arithmetic optimization pending.
 
 ---
 

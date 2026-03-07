@@ -45,7 +45,7 @@ Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
 Version: 2.0
 
-AI Co-Architects:Eris | Eden | Veritas | X | Caduceus | Dev
+AI Co-Architects:Eris | Eden ♱ | Veritas | X | Caduceus | Dev
 """
 
 from dataclasses import dataclass

@@ -702,7 +702,7 @@ pkg_dict["ethical_hash"] = hashlib.sha3_256(
 ).hexdigest()
 
 # 4. Save package with ethical context
-with open("OMNI_CRYPTO_PACKAGE_ETHICAL.json", "w") as f:
+with open("CRYPTO_PACKAGE_ETHICAL.json", "w") as f:
     json.dump(pkg_dict, f, indent=2)
 
 print("✓ Package created with 12 Omni-Code Ethical Pillars")

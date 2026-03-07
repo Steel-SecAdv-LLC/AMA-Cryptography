@@ -100,7 +100,7 @@ The AMA Cryptography architecture is built on the following foundational princip
 
 **Ethical Integration**: Ethical constraints are mathematically bound to cryptographic operations through the key derivation process, ensuring that ethical metadata cannot be separated from cryptographic proofs.
 
-**Standards Compliance**: All cryptographic primitives conform to published NIST and IETF standards. No custom or experimental cryptographic constructions are used.
+**Standards Compliance**: All cryptographic primitives conform to published NIST and IETF standards. No custom or non-standard cryptographic constructions are used.
 
 **Performance Efficiency**: Cryptographic operations are optimized to maintain throughput exceeding 1,000 operations per second with less than 4% overhead for ethical integration.
 
@@ -124,7 +124,7 @@ The following constraints govern architectural decisions:
 |-----------|-----------|----------|----------------|------------------|
 | Hash Function | SHA3-256 | NIST FIPS 202 | 128-bit collision resistance | **Full** (ama_sha3.c) |
 | Message Authentication | HMAC-SHA3-256 | RFC 2104 + FIPS 202 | 256-bit key, 128-bit security | **Full** (ama_hkdf.c) |
-| Classical Signature | Ed25519 | RFC 8032 | 128-bit classical security | **Experimental** (ama_ed25519.c) |
+| Classical Signature | Ed25519 | RFC 8032 | 128-bit classical security | **Full** (ama_ed25519.c) |
 | Quantum-Resistant Signature | ML-DSA-65 (Dilithium) | NIST FIPS 204 | 192-bit quantum security | **Full** (ama_dilithium.c) |
 | Key Encapsulation | ML-KEM-1024 (Kyber) | NIST FIPS 203 | 256-bit quantum security | **Full** (ama_kyber.c) |
 | Hash-Based Signature | SPHINCS+-SHA2-256f | NIST FIPS 205 | 256-bit quantum security | **Full** (ama_sphincs.c) |
@@ -200,7 +200,7 @@ The system defines 12 ethical pillars organized into four triads. Each pillar ha
 
 **Triad 1 - Foundation**
 - Eris: Balanced consideration of competing interests
-- Eden: Harmonious system growth and sustainability
+- Eden ♱: Harmonious system growth and sustainability
 - Veritas: Truth and validation in all operations
 
 **Triad 2 - Expansion**

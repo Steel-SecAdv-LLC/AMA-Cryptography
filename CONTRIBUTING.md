@@ -64,7 +64,7 @@ Please **DO NOT** submit pull requests that:
 
 - Weaken cryptographic security in any way
 - Remove or bypass security layers
-- Introduce unproven or experimental cryptographic algorithms
+- Introduce unproven or non-standard cryptographic algorithms
 - Break standards compliance (NIST FIPS 202, 204, RFC 2104, 5869, 8032, 3161)
 - Add unnecessary dependencies
 - Include proprietary or non-Apache 2.0 compatible code

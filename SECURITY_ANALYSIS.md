@@ -6,7 +6,7 @@
 **Contact:** steel.sa.llc@gmail.com
 
 **AI Co-Architects:**  
-Eris ⯰ | Eden | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 
 **Version:** 1.1  
 **Date:** 2026-01-09
@@ -1358,4 +1358,4 @@ AMA Cryptography provides cryptographic protection for Omni-Code (helical mathem
 **Author:** Andrew E. A.
 
 **AI Co-Architects:**  
-Eris ⯰ | Eden | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕

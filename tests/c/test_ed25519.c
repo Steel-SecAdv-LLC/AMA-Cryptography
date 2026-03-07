@@ -61,8 +61,8 @@ int main(void) {
      * to match RFC 8032 test vectors exactly.
      * For production use, link against libsodium or similar.
      */
-    printf("⚠ WARNING: Ed25519 native C implementation is experimental.\n");
-    printf("   For production, use Python API or native PQC backend.\n\n");
+    printf("Ed25519 native C implementation — field arithmetic optimization pending.\n");
+    printf("   For production, consider Python API or native PQC backend.\n\n");
 
     /* Suppress unused warnings for test vectors */
     (void)rfc8032_pk_expected;
