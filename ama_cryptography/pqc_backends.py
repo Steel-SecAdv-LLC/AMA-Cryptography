@@ -33,7 +33,7 @@ Standards:
 - NIST FIPS 204: ML-DSA (CRYSTALS-Dilithium)
 - NIST FIPS 205: SLH-DSA (SPHINCS+)
 
-AI Co-Architects: Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 """
 
 import ctypes
@@ -114,17 +114,37 @@ def _get_search_dirs() -> list:
 
     # Project build directories (relative to this file's package)
     pkg_dir = Path(__file__).resolve().parent.parent
-    for build_dir in ["build/lib", "build", "cmake-build-release/lib", "cmake-build-debug/lib"]:
+    build_dirs = [
+        "build/lib",
+        "build",
+        "build/bin",  # MSVC puts DLLs in runtime output dir
+        "build/bin/Release",
+        "build/bin/Debug",
+        "build/Release",  # MSVC multi-config output
+        "build/Debug",
+        "build/lib/Release",
+        "build/lib/Debug",
+        "cmake-build-release/lib",
+        "cmake-build-release",
+        "cmake-build-debug/lib",
+        "cmake-build-debug",
+    ]
+    for build_dir in build_dirs:
         search_dirs.append(pkg_dir / build_dir)
 
-    # System paths
-    search_dirs.extend([Path("/usr/local/lib"), Path("/usr/lib")])
+    # System paths (Unix only)
+    if platform.system() != "Windows":
+        search_dirs.extend([Path("/usr/local/lib"), Path("/usr/lib")])
 
-    # LD_LIBRARY_PATH / DYLD_LIBRARY_PATH
-    env_path = os.getenv("LD_LIBRARY_PATH", "") or os.getenv("DYLD_LIBRARY_PATH", "")
-    for p in env_path.split(":"):
-        if p:
-            search_dirs.append(Path(p))
+    # LD_LIBRARY_PATH / DYLD_LIBRARY_PATH / PATH (Windows)
+    env_vars = ["LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"]
+    if platform.system() == "Windows":
+        env_vars.append("PATH")
+    for var in env_vars:
+        env_path = os.getenv(var, "")
+        for p in env_path.split(os.pathsep):
+            if p:
+                search_dirs.append(Path(p))
 
     return search_dirs
 
@@ -132,6 +152,10 @@ def _get_search_dirs() -> list:
 def _try_load_library(lib_path: Path) -> Optional[ctypes.CDLL]:
     """Try to load a shared library from the given path. Returns None on failure."""
     try:
+        if platform.system() == "Windows":
+            # On Windows with Python 3.8+, DLL search paths are restricted.
+            # Use winmode=0 to search the DLL's directory and PATH.
+            return ctypes.CDLL(str(lib_path), winmode=0)
         return ctypes.CDLL(str(lib_path))
     except OSError:
         return None
@@ -246,14 +270,109 @@ def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
+# Ed25519 native availability (separate from PQC to avoid breaking PQC on older libs)
+_ED25519_NATIVE_AVAILABLE = False
+
+
+def _setup_ed25519_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for Ed25519 functions. Separate from PQC setup."""
+    try:
+        lib.ama_ed25519_keypair.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+        lib.ama_ed25519_keypair.restype = ctypes.c_int
+
+        lib.ama_ed25519_sign.argtypes = [
+            ctypes.c_char_p,  # signature[64]
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # secret_key[64]
+        ]
+        lib.ama_ed25519_sign.restype = ctypes.c_int
+
+        lib.ama_ed25519_verify.argtypes = [
+            ctypes.c_char_p,  # signature[64]
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # public_key[32]
+        ]
+        lib.ama_ed25519_verify.restype = ctypes.c_int
+
+        return True
+    except AttributeError:
+        return False
+
+
+# AES-256-GCM native availability (separate from PQC)
+_AES_GCM_NATIVE_AVAILABLE = False
+
+
+def _setup_aes_gcm_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for AES-256-GCM functions. Separate from PQC setup."""
+    try:
+        lib.ama_aes256_gcm_encrypt.argtypes = [
+            ctypes.c_char_p,  # key[32]
+            ctypes.c_char_p,  # nonce[12]
+            ctypes.c_char_p,  # plaintext
+            ctypes.c_size_t,  # pt_len
+            ctypes.c_char_p,  # aad
+            ctypes.c_size_t,  # aad_len
+            ctypes.c_char_p,  # ciphertext
+            ctypes.c_char_p,  # tag[16]
+        ]
+        lib.ama_aes256_gcm_encrypt.restype = ctypes.c_int
+
+        lib.ama_aes256_gcm_decrypt.argtypes = [
+            ctypes.c_char_p,  # key[32]
+            ctypes.c_char_p,  # nonce[12]
+            ctypes.c_char_p,  # ciphertext
+            ctypes.c_size_t,  # ct_len
+            ctypes.c_char_p,  # aad
+            ctypes.c_size_t,  # aad_len
+            ctypes.c_char_p,  # tag[16]
+            ctypes.c_char_p,  # plaintext
+        ]
+        lib.ama_aes256_gcm_decrypt.restype = ctypes.c_int
+
+        return True
+    except AttributeError:
+        return False
+
+
+# HKDF native availability
+_HKDF_NATIVE_AVAILABLE = False
+
+
+def _setup_hkdf_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for HKDF functions. Separate from PQC setup."""
+    try:
+        lib.ama_hkdf.argtypes = [
+            ctypes.c_char_p,  # salt
+            ctypes.c_size_t,  # salt_len
+            ctypes.c_char_p,  # ikm
+            ctypes.c_size_t,  # ikm_len
+            ctypes.c_char_p,  # info
+            ctypes.c_size_t,  # info_len
+            ctypes.c_char_p,  # okm
+            ctypes.c_size_t,  # okm_len
+        ]
+        lib.ama_hkdf.restype = ctypes.c_int
+
+        return True
+    except AttributeError:
+        return False
+
+
 _native_lib = _find_native_library()
-if _native_lib is not None and _setup_native_ctypes(_native_lib):
-    _DILITHIUM_AVAILABLE = True
-    _DILITHIUM_BACKEND = "native"
-    _KYBER_AVAILABLE = True
-    _KYBER_BACKEND = "native"
-    _SPHINCS_AVAILABLE = True
-    _SPHINCS_BACKEND = "native"
+if _native_lib is not None:
+    if _setup_native_ctypes(_native_lib):
+        _DILITHIUM_AVAILABLE = True
+        _DILITHIUM_BACKEND = "native"
+        _KYBER_AVAILABLE = True
+        _KYBER_BACKEND = "native"
+        _SPHINCS_AVAILABLE = True
+        _SPHINCS_BACKEND = "native"
+    _ED25519_NATIVE_AVAILABLE = _setup_ed25519_ctypes(_native_lib)
+    _AES_GCM_NATIVE_AVAILABLE = _setup_aes_gcm_ctypes(_native_lib)
+    _HKDF_NATIVE_AVAILABLE = _setup_hkdf_ctypes(_native_lib)
 
 
 # Public API for checking availability
@@ -297,6 +416,16 @@ KYBER_SHARED_SECRET_BYTES = 32
 SPHINCS_PUBLIC_KEY_BYTES = 64
 SPHINCS_SECRET_KEY_BYTES = 128
 SPHINCS_SIGNATURE_BYTES = 49856
+
+# Ed25519 (RFC 8032)
+ED25519_PUBLIC_KEY_BYTES = 32
+ED25519_SECRET_KEY_BYTES = 64
+ED25519_SIGNATURE_BYTES = 64
+
+# AES-256-GCM (NIST SP 800-38D)
+AES256_KEY_BYTES = 32
+AES256_GCM_NONCE_BYTES = 12
+AES256_GCM_TAG_BYTES = 16
 
 # ============================================================================
 # ERROR MESSAGE CONSTANTS
@@ -850,6 +979,309 @@ def sphincs_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
         return bool(rc == 0)
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
+
+
+# ============================================================================
+# ED25519 NATIVE C BACKEND (RFC 8032)
+# ============================================================================
+
+
+def native_ed25519_keypair() -> tuple:
+    """
+    Generate Ed25519 keypair using native C backend.
+
+    Returns:
+        (public_key, secret_key) — 32-byte pk, 64-byte sk (seed || pk)
+
+    Raises:
+        RuntimeError: If native library is not available or keypair generation fails
+    """
+    import secrets as _secrets
+
+    if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
+        raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
+
+    pk_buf = ctypes.create_string_buffer(ED25519_PUBLIC_KEY_BYTES)
+    sk_buf = ctypes.create_string_buffer(ED25519_SECRET_KEY_BYTES)
+
+    # Seed the first 32 bytes — the C function expects caller-provided entropy
+    seed = _secrets.token_bytes(32)
+    ctypes.memmove(sk_buf, seed, 32)
+
+    rc = _native_lib.ama_ed25519_keypair(pk_buf, sk_buf)
+    if rc != 0:
+        raise RuntimeError(f"Ed25519 keypair generation failed (rc={rc})")
+
+    return bytes(pk_buf), bytes(sk_buf)
+
+
+def native_ed25519_keypair_from_seed(seed: bytes) -> tuple:
+    """
+    Generate Ed25519 keypair from a specific 32-byte seed.
+
+    This is the deterministic variant used for interop testing and
+    key format conversion (32-byte seed -> 64-byte native key).
+
+    Args:
+        seed: Exactly 32 bytes of seed material
+
+    Returns:
+        (public_key, secret_key) — 32-byte pk, 64-byte sk (seed || pk)
+
+    Raises:
+        ValueError: If seed is not exactly 32 bytes
+        RuntimeError: If native library is not available
+    """
+    if len(seed) != 32:
+        raise ValueError(f"Ed25519 seed must be 32 bytes, got {len(seed)}")
+
+    if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
+        raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
+
+    pk_buf = ctypes.create_string_buffer(ED25519_PUBLIC_KEY_BYTES)
+    sk_buf = ctypes.create_string_buffer(ED25519_SECRET_KEY_BYTES)
+
+    # Load seed into first 32 bytes of sk_buf
+    ctypes.memmove(sk_buf, seed, 32)
+
+    rc = _native_lib.ama_ed25519_keypair(pk_buf, sk_buf)
+    if rc != 0:
+        raise RuntimeError(f"Ed25519 keypair generation failed (rc={rc})")
+
+    return bytes(pk_buf), bytes(sk_buf)
+
+
+def native_ed25519_sign(message: bytes, secret_key: bytes) -> bytes:
+    """
+    Sign message with Ed25519 using native C backend.
+
+    Args:
+        message: Data to sign (arbitrary length)
+        secret_key: 64-byte secret key (seed || public_key)
+
+    Returns:
+        64-byte Ed25519 signature
+
+    Raises:
+        RuntimeError: If native library is not available or signing fails
+        ValueError: If secret_key has incorrect length
+    """
+    if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
+        raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
+
+    if len(secret_key) != ED25519_SECRET_KEY_BYTES:
+        raise ValueError(
+            f"Ed25519 secret key must be {ED25519_SECRET_KEY_BYTES} bytes, "
+            f"got {len(secret_key)}"
+        )
+
+    sig_buf = ctypes.create_string_buffer(ED25519_SIGNATURE_BYTES)
+    rc = _native_lib.ama_ed25519_sign(sig_buf, message, ctypes.c_size_t(len(message)), secret_key)
+    if rc != 0:
+        raise RuntimeError(f"Ed25519 signing failed (rc={rc})")
+
+    return bytes(sig_buf)
+
+
+def native_ed25519_verify(signature: bytes, message: bytes, public_key: bytes) -> bool:
+    """
+    Verify Ed25519 signature using native C backend.
+
+    Args:
+        signature: 64-byte Ed25519 signature
+        message: Original data that was signed
+        public_key: 32-byte Ed25519 public key
+
+    Returns:
+        True if signature is valid, False otherwise
+
+    Raises:
+        RuntimeError: If native library is not available
+        ValueError: If signature or public_key has incorrect length
+    """
+    if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
+        raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
+
+    if len(signature) != ED25519_SIGNATURE_BYTES:
+        raise ValueError(
+            f"Ed25519 signature must be {ED25519_SIGNATURE_BYTES} bytes, " f"got {len(signature)}"
+        )
+    if len(public_key) != ED25519_PUBLIC_KEY_BYTES:
+        raise ValueError(
+            f"Ed25519 public key must be {ED25519_PUBLIC_KEY_BYTES} bytes, "
+            f"got {len(public_key)}"
+        )
+
+    rc: int = _native_lib.ama_ed25519_verify(
+        signature, message, ctypes.c_size_t(len(message)), public_key
+    )
+    return rc == 0
+
+
+# ============================================================================
+# AES-256-GCM NATIVE C BACKEND (NIST SP 800-38D)
+# ============================================================================
+
+
+def native_aes256_gcm_encrypt(
+    key: bytes,
+    nonce: bytes,
+    plaintext: bytes,
+    aad: bytes = b"",
+) -> tuple:
+    """
+    AES-256-GCM authenticated encryption using native C backend.
+
+    Args:
+        key: 32-byte AES-256 key
+        nonce: 12-byte nonce (IV)
+        plaintext: Data to encrypt
+        aad: Additional authenticated data (default: empty)
+
+    Returns:
+        (ciphertext, tag) — ciphertext same length as plaintext, 16-byte tag
+
+    Raises:
+        RuntimeError: If native library is not available
+        ValueError: If key or nonce has incorrect length
+    """
+    if _native_lib is None or not _AES_GCM_NATIVE_AVAILABLE:
+        raise RuntimeError("AES-256-GCM native backend not available. " + _INSTALL_HINT)
+
+    if len(key) != AES256_KEY_BYTES:
+        raise ValueError(f"AES-256 key must be {AES256_KEY_BYTES} bytes, got {len(key)}")
+    if len(nonce) != AES256_GCM_NONCE_BYTES:
+        raise ValueError(
+            f"AES-256-GCM nonce must be {AES256_GCM_NONCE_BYTES} bytes, " f"got {len(nonce)}"
+        )
+
+    ct_buf = ctypes.create_string_buffer(len(plaintext))
+    tag_buf = ctypes.create_string_buffer(AES256_GCM_TAG_BYTES)
+
+    rc = _native_lib.ama_aes256_gcm_encrypt(
+        key,
+        nonce,
+        plaintext if len(plaintext) > 0 else None,
+        ctypes.c_size_t(len(plaintext)),
+        aad if len(aad) > 0 else None,
+        ctypes.c_size_t(len(aad)),
+        ct_buf,
+        tag_buf,
+    )
+    if rc != 0:
+        raise RuntimeError(f"AES-256-GCM encryption failed (rc={rc})")
+
+    return bytes(ct_buf), bytes(tag_buf)
+
+
+def native_aes256_gcm_decrypt(
+    key: bytes,
+    nonce: bytes,
+    ciphertext: bytes,
+    tag: bytes,
+    aad: bytes = b"",
+) -> bytes:
+    """
+    AES-256-GCM authenticated decryption using native C backend.
+
+    Args:
+        key: 32-byte AES-256 key
+        nonce: 12-byte nonce (IV)
+        ciphertext: Data to decrypt
+        tag: 16-byte authentication tag
+        aad: Additional authenticated data (default: empty)
+
+    Returns:
+        Decrypted plaintext
+
+    Raises:
+        RuntimeError: If native library is not available or decryption fails
+        ValueError: If key, nonce, or tag has incorrect length
+        ama_cryptography.exceptions.SecurityWarning: If tag verification fails
+    """
+    if _native_lib is None or not _AES_GCM_NATIVE_AVAILABLE:
+        raise RuntimeError("AES-256-GCM native backend not available. " + _INSTALL_HINT)
+
+    if len(key) != AES256_KEY_BYTES:
+        raise ValueError(f"AES-256 key must be {AES256_KEY_BYTES} bytes, got {len(key)}")
+    if len(nonce) != AES256_GCM_NONCE_BYTES:
+        raise ValueError(
+            f"AES-256-GCM nonce must be {AES256_GCM_NONCE_BYTES} bytes, " f"got {len(nonce)}"
+        )
+    if len(tag) != AES256_GCM_TAG_BYTES:
+        raise ValueError(
+            f"AES-256-GCM tag must be {AES256_GCM_TAG_BYTES} bytes, " f"got {len(tag)}"
+        )
+
+    pt_buf = ctypes.create_string_buffer(len(ciphertext))
+
+    rc = _native_lib.ama_aes256_gcm_decrypt(
+        key,
+        nonce,
+        ciphertext if len(ciphertext) > 0 else None,
+        ctypes.c_size_t(len(ciphertext)),
+        aad if len(aad) > 0 else None,
+        ctypes.c_size_t(len(aad)),
+        tag,
+        pt_buf,
+    )
+    if rc != 0:
+        raise ValueError("AES-256-GCM authentication tag verification failed")
+
+    return bytes(pt_buf)
+
+
+# ============================================================================
+# HKDF NATIVE C BACKEND (RFC 5869)
+# ============================================================================
+
+
+def native_hkdf(
+    ikm: bytes,
+    length: int,
+    salt: "Optional[bytes]" = None,
+    info: bytes = b"",
+) -> bytes:
+    """
+    HKDF key derivation using native C backend (HMAC-SHA3-256).
+
+    Args:
+        ikm: Input key material
+        length: Desired output length in bytes (max 8160 = 255*32)
+        salt: Optional salt (None uses zero-length salt per RFC 5869)
+        info: Context/application-specific info
+
+    Returns:
+        Derived key material of requested length
+
+    Raises:
+        RuntimeError: If native library is not available
+        ValueError: If length exceeds maximum
+    """
+    if _native_lib is None or not _HKDF_NATIVE_AVAILABLE:
+        raise RuntimeError("HKDF native backend not available. " + _INSTALL_HINT)
+
+    if length > 8160:
+        raise ValueError(f"HKDF output length must be <= 8160, got {length}")
+    if length <= 0:
+        raise ValueError(f"HKDF output length must be > 0, got {length}")
+
+    okm_buf = ctypes.create_string_buffer(length)
+
+    rc = _native_lib.ama_hkdf(
+        salt if salt else None,
+        ctypes.c_size_t(len(salt) if salt else 0),
+        ikm,
+        ctypes.c_size_t(len(ikm)),
+        info if len(info) > 0 else None,
+        ctypes.c_size_t(len(info)),
+        okm_buf,
+        ctypes.c_size_t(length),
+    )
+    if rc != 0:
+        raise RuntimeError(f"HKDF derivation failed (rc={rc})")
+
+    return bytes(okm_buf)
 
 
 # ============================================================================

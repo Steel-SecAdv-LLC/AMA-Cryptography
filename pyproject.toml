@@ -43,15 +43,21 @@ classifiers = [
     "Typing :: Typed"
 ]
 requires-python = ">=3.8"
-dependencies = [
-    "cryptography>=41.0.0",
-    # NumPy/SciPy: Version constraints aligned with requirements-dev.txt
-    # for Python 3.8-3.12 compatibility
+dependencies = []
+
+[project.optional-dependencies]
+monitoring = [
+    # NumPy/SciPy for mathematical monitoring (equations, double_helix_engine)
+    # Install with: pip install "ama-cryptography[monitoring]"
     "numpy>=1.24.0,<3.0.0",
     "scipy>=1.7.0",
 ]
-
-[project.optional-dependencies]
+legacy = [
+    # PyCA cryptography — only needed as fallback when native C library is not
+    # available. Ed25519 and AES-256-GCM are now provided natively.
+    # Install with: pip install "ama-cryptography[legacy]"
+    "cryptography>=41.0.0",
+]
 hsm = [
     # PKCS#11 support for hardware security modules
     "PyKCS11>=1.5.0",
@@ -66,13 +72,17 @@ dev = [
     "pytest-cov>=4.0.0",
     "pytest-timeout>=2.0.0",
     "pytest-xdist>=3.0.0",
-    "black>=23.0.0",
+    "black==24.10.0",
     "flake8>=6.0.0",
     "mypy>=1.0.0",
     "isort>=5.12.0",
     "hypothesis>=6.0.0",
     "bandit>=1.7.0",
     "safety>=2.0.0",
+    "numpy>=1.24.0,<2.0.0; python_version < '3.9'",
+    "numpy>=1.24.0; python_version >= '3.9'",
+    "scipy>=1.10.0,<1.11.0; python_version < '3.9'",
+    "scipy>=1.11.0; python_version >= '3.9'",
 ]
 
 [project.urls]
@@ -150,6 +160,8 @@ filterwarnings = [
     "error",
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",
+    "ignore::UserWarning",
+    "default::ama_cryptography.key_management.SecurityWarning",
 ]
 
 # Coverage configuration

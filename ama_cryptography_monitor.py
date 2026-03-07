@@ -43,7 +43,7 @@ Version: 2.0
 Project: AMA Cryptography 3R Runtime Monitoring
 
 AI Co-Architects:
-    Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+    Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 """
 
 import ast
@@ -62,7 +62,7 @@ try:
 
     _HAS_NUMPY = True
 except ImportError:
-    np = None
+    np = None  # type: ignore[assignment]
     _HAS_NUMPY = False
 
 

@@ -646,17 +646,19 @@ class SecureKeyStorage:
         Raises:
             ValueError: If key_id is empty or contains invalid characters
         """
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
         # Validate key_id
         if not key_id or not key_id.replace("-", "").replace("_", "").isalnum():
             raise ValueError("key_id must be non-empty alphanumeric (with - and _ allowed)")
 
         nonce = secrets.token_bytes(12)  # 96-bit nonce for GCM (NIST recommended)
-        aesgcm = AESGCM(self.encryption_key)
 
         # Encrypt with key_id as associated data (binds ciphertext to key_id)
-        ciphertext = aesgcm.encrypt(nonce, key_data, key_id.encode("utf-8"))
+        ct, tag = native_aes256_gcm_encrypt(
+            self.encryption_key, nonce, key_data, key_id.encode("utf-8")
+        )
+        ciphertext = ct + tag  # Store as combined ct||tag for format compatibility
 
         storage_data = {
             "key_id": key_id,
@@ -684,10 +686,9 @@ class SecureKeyStorage:
             Decrypted key bytes or None if not found
 
         Raises:
-            cryptography.exceptions.InvalidTag: If authentication fails (tampering detected)
-            ValueError: For unknown encryption algorithms
+            ValueError: If authentication fails (tampering detected) or unknown algorithm
         """
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
 
         key_file = self.storage_path / f"{key_id}.json"
         if not key_file.exists():
@@ -696,37 +697,21 @@ class SecureKeyStorage:
         with open(key_file, "r") as f:
             storage_data = json.load(f)
 
-        algorithm = storage_data.get("algorithm", "AES-256-CFB")  # Legacy default
+        algorithm = storage_data.get("algorithm", "AES-256-GCM")
 
         if algorithm == "AES-256-GCM":
-            ciphertext = base64.b64decode(storage_data["ciphertext"])
+            combined = base64.b64decode(storage_data["ciphertext"])
             nonce = base64.b64decode(storage_data["nonce"])
 
-            aesgcm = AESGCM(self.encryption_key)
-            # Decrypt with authentication (will raise InvalidTag if tampered)
-            plaintext: bytes = aesgcm.decrypt(nonce, ciphertext, key_id.encode("utf-8"))
+            # Split combined ct||tag (last 16 bytes = tag)
+            ct = combined[:-16]
+            tag = combined[-16:]
+
+            # Decrypt with authentication (raises ValueError if tampered)
+            plaintext: bytes = native_aes256_gcm_decrypt(
+                self.encryption_key, nonce, ct, tag, key_id.encode("utf-8")
+            )
             return plaintext
-
-        elif algorithm == "AES-256-CFB":
-            # Legacy support - decrypt old format
-            from cryptography.hazmat.backends import default_backend
-            from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-
-            warnings.warn(
-                f"Key '{key_id}' uses legacy AES-CFB encryption. "
-                "Re-store this key to upgrade to AES-GCM.",
-                SecurityWarning,
-            )
-
-            encrypted_data = bytes.fromhex(storage_data["encrypted_data"])
-            iv = bytes.fromhex(storage_data["iv"])
-
-            cipher = Cipher(
-                algorithms.AES(self.encryption_key), modes.CFB(iv), backend=default_backend()
-            )
-            decryptor = cipher.decryptor()
-            result: bytes = decryptor.update(encrypted_data) + decryptor.finalize()
-            return result
 
         else:
             raise ValueError(f"Unknown encryption algorithm: {algorithm}")

@@ -22,9 +22,15 @@ import hashlib
 import json
 
 import pytest
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+try:
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    _PYCA_AVAILABLE = True
+except ImportError:
+    _PYCA_AVAILABLE = False
 
 
 class TestHKDFSHA3256:
@@ -283,6 +289,7 @@ class TestNISTSHA3256Vectors:
         assert result == expected_hex, f"SHA3-256('abc') mismatch: {result} != {expected_hex}"
 
 
+@pytest.mark.skipif(not _PYCA_AVAILABLE, reason="PyCA cryptography not installed")
 class TestRFC5869HKDFStructure:
     """
     Validate HKDF structure against RFC 5869 test vectors (using SHA-256).
@@ -378,6 +385,7 @@ class TestProjectSpecificVectors:
         expected_hex = "051c4e79ca4e387c5136f249c6e87ca9f7cce2be15cc46d588dd90afeef0f279"
         assert tag.hex() == expected_hex, "HMAC-SHA3-256 project vector #2 failed"
 
+    @pytest.mark.skipif(not _PYCA_AVAILABLE, reason="PyCA cryptography not installed")
     def test_hkdf_sha3_256_project_vector(self):
         """
         Project-specific HKDF-SHA3-256 test vector.

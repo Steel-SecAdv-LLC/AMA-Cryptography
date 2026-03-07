@@ -35,7 +35,7 @@ Version: 2.0
 Project: AMA Cryptography 3R Runtime Monitoring
 
 AI Co-Architects:
-    Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+    Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 """
 
 import time
