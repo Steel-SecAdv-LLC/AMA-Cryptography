@@ -892,7 +892,7 @@ make install      # Install system-wide
 
 ---
 
-## Mathematical Foundations 🧬
+## Mathematical Foundations 
 
 <details>
 <summary><strong>Research and Innovation</strong></summary>
