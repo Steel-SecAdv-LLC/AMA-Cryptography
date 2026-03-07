@@ -498,15 +498,13 @@ class TestSecureKeyStorageComprehensive:
         assert not key_file.exists()
 
     def test_wrong_password_fails_decryption(self, temp_storage_path, test_key_material):
-        """Wrong password fails to decrypt."""
-        from cryptography.exceptions import InvalidTag
-
+        """Wrong password fails to decrypt (AES-GCM authentication failure)."""
         storage1 = SecureKeyStorage(temp_storage_path, master_password="correct")
         storage1.store_key("test-key", test_key_material)
 
         storage2 = SecureKeyStorage(temp_storage_path, master_password="wrong")
 
-        with pytest.raises(InvalidTag):
+        with pytest.raises(ValueError):
             storage2.retrieve_key("test-key")
 
     def test_invalid_key_id_empty(self, secure_storage):
@@ -632,45 +630,6 @@ class TestSecureKeyStorageMigration:
 
 class TestSecureKeyStorageLegacy:
     """Tests for legacy AES-CFB format support."""
-
-    def test_retrieve_legacy_format_warning(self, temp_storage_path, test_password):
-        """Retrieving legacy AES-CFB key emits warning."""
-        from cryptography.hazmat.backends import default_backend
-        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-
-        # Create storage to get encryption key
-        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
-
-        # Manually create legacy format file
-        iv = secrets.token_bytes(16)
-        cipher = Cipher(
-            algorithms.AES(storage.encryption_key), modes.CFB(iv), backend=default_backend()
-        )
-        encryptor = cipher.encryptor()
-        plaintext = b"legacy-key-data"
-        encrypted = encryptor.update(plaintext) + encryptor.finalize()
-
-        legacy_data = {
-            "key_id": "legacy-key",
-            "encrypted_data": encrypted.hex(),
-            "iv": iv.hex(),
-            "algorithm": "AES-256-CFB",
-            "version": 1,
-        }
-
-        key_file = temp_storage_path / "legacy-key.json"
-        with open(key_file, "w") as f:
-            json.dump(legacy_data, f)
-
-        # Retrieve should work with warning
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            retrieved = storage.retrieve_key("legacy-key")
-
-            assert retrieved == plaintext
-            assert len(w) == 1
-            assert issubclass(w[0].category, SecurityWarning)
-            assert "legacy AES-CFB" in str(w[0].message)
 
     def test_retrieve_unknown_algorithm(self, temp_storage_path, test_password):
         """Retrieving unknown algorithm raises ValueError."""

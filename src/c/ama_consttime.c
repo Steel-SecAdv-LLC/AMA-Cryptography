@@ -27,6 +27,9 @@
 #include "../include/ama_cryptography.h"
 #include <string.h>
 #include <stdint.h>
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
 
 /**
  * Constant-time memory comparison
@@ -72,7 +75,11 @@ void ama_secure_memzero(void* ptr, size_t len) {
     }
 
     /* Additional barrier to prevent optimization */
+#ifdef _MSC_VER
+    _ReadWriteBarrier();
+#else
     __asm__ __volatile__("" ::: "memory");
+#endif
 }
 
 /**

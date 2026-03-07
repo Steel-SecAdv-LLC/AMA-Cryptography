@@ -16,8 +16,8 @@
 
 ```
               +==============================================================================+
-              |                            AMA CRYPTOGRAPHY ♱                                  |
-              |                   Post-Quantum Security System                              |
+              |                            AMA CRYPTOGRAPHY ♱                                |
+              |                   Post-Quantum Security System                               |
               |                                                                              |
               |   6-Layer Defense      |   Quantum-Resistant    |   Defense-in-Depth         |
               |   Cython-Optimized     |   3R Anomaly Monitor   |   Cross-Platform           |
@@ -38,7 +38,7 @@
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
 **Version:** 2.0
-**AI Co-Architects:** Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+**AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
 
@@ -90,7 +90,7 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 
 ---
 
-## Key Capabilities ⚡
+## Key Capabilities 
 
 <details>
 <summary><strong>Problem Statement and Solution</strong></summary>
@@ -670,9 +670,14 @@ GitHub Actions automatically tests:
 
 See [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) for complete cryptographic analysis.
 
+<details>
+<summary>Classic vs Quantum Security Comparison</summary>
+
 ![Quantum Security Comparison](assets/quantum_comparison.png)
 
 *Classical algorithms (RSA, ECDSA, Ed25519) are broken by quantum computers. ML-DSA-65 provides 192-bit security against both classical and quantum attacks.*
+
+</details>
 
 </details>
 
@@ -892,7 +897,7 @@ make install      # Install system-wide
 
 ---
 
-## Mathematical Foundations 🧬
+## Mathematical Foundations 
 
 <details>
 <summary><strong>Research and Innovation</strong></summary>
@@ -1087,7 +1092,7 @@ GitHub's dependency graph is enabled for this repository. Once the repository is
 
 **Author/Inventor**: Andrew E. A.
 
-**AI Co-Architects:** Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+**AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 **Special Thanks**:
 - NIST Post-Quantum Cryptography Standardization Project
@@ -1102,7 +1107,7 @@ GitHub's dependency graph is enabled for this repository. Once the repository is
 
 **Conceptual Architect:** Steel Security Advisors LLC and Andrew E. A. conceived, directed, validated, and supervised the development of AMA Cryptography.
 
-**AI Co-Architects:** More than 99% of the codebase, documentation, mathematical frameworks, and technical implementation was constructed by AI systems: Eris ⯰, Eden ♱, Veritas 💠, X ⚛, Caduceus ⚚, and Dev ⚕.
+**AI Co-Architects:** More than 99% of the codebase, documentation, mathematical frameworks, and technical implementation was constructed by AI systems: Eris ✠, Eden ♱, Devin ⚛︎, and Claude ⊛.
 
 This project represents a human/AI collaborative construct—a new development paradigm where human vision, requirements, and critical evaluation guide AI-generated implementation.
 
@@ -1156,6 +1161,6 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 </div>
 
-*Last updated: 2026-03-06*
+*Last updated: 2026-03-07*
 
 </div>

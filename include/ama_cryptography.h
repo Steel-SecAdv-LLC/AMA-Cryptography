@@ -34,6 +34,17 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 
+/* DLL export/import macro for Windows */
+#if defined(_WIN32) || defined(_WIN64)
+  #ifdef AMA_BUILDING_SHARED
+    #define AMA_API __declspec(dllexport)
+  #else
+    #define AMA_API __declspec(dllimport)
+  #endif
+#else
+  #define AMA_API
+#endif
+
 /* ============================================================================
  * VERSION INFORMATION
  * ============================================================================ */
@@ -112,13 +123,13 @@ typedef struct ama_signature_t ama_signature_t;
  * @param algorithm Algorithm to use
  * @return Opaque context pointer, NULL on failure
  */
-ama_context_t* ama_context_init(ama_algorithm_t algorithm);
+AMA_API ama_context_t* ama_context_init(ama_algorithm_t algorithm);
 
 /**
  * @brief Free AMA Cryptography context and scrub memory
  * @param ctx Context to free
  */
-void ama_context_free(ama_context_t* ctx);
+AMA_API void ama_context_free(ama_context_t* ctx);
 
 /* ============================================================================
  * KEY GENERATION
@@ -138,7 +149,7 @@ void ama_context_free(ama_context_t* ctx);
  * @param secret_key_len Length of secret key buffer
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_keypair_generate(
+AMA_API ama_error_t ama_keypair_generate(
     ama_context_t* ctx,
     uint8_t* public_key,
     size_t public_key_len,
@@ -165,7 +176,7 @@ ama_error_t ama_keypair_generate(
  * @param signature_len Pointer to signature length (in/out)
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_sign(
+AMA_API ama_error_t ama_sign(
     ama_context_t* ctx,
     const uint8_t* message,
     size_t message_len,
@@ -190,7 +201,7 @@ ama_error_t ama_sign(
  * @param public_key_len Length of public key
  * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
  */
-ama_error_t ama_verify(
+AMA_API ama_error_t ama_verify(
     ama_context_t* ctx,
     const uint8_t* message,
     size_t message_len,
@@ -220,7 +231,7 @@ ama_error_t ama_verify(
  * @param shared_secret_len Length of shared secret buffer
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_kem_encapsulate(
+AMA_API ama_error_t ama_kem_encapsulate(
     ama_context_t* ctx,
     const uint8_t* public_key,
     size_t public_key_len,
@@ -246,7 +257,7 @@ ama_error_t ama_kem_encapsulate(
  * @param shared_secret_len Length of shared secret buffer
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_kem_decapsulate(
+AMA_API ama_error_t ama_kem_decapsulate(
     ama_context_t* ctx,
     const uint8_t* ciphertext,
     size_t ciphertext_len,
@@ -267,14 +278,14 @@ ama_error_t ama_kem_decapsulate(
  * @param len Length to compare
  * @return 0 if equal, non-zero otherwise (timing-safe)
  */
-int ama_consttime_memcmp(const void* a, const void* b, size_t len);
+AMA_API int ama_consttime_memcmp(const void* a, const void* b, size_t len);
 
 /**
  * @brief Secure memory scrubbing
  * @param ptr Memory to scrub
  * @param len Length to scrub
  */
-void ama_secure_memzero(void* ptr, size_t len);
+AMA_API void ama_secure_memzero(void* ptr, size_t len);
 
 /**
  * @brief Constant-time conditional swap
@@ -283,7 +294,7 @@ void ama_secure_memzero(void* ptr, size_t len);
  * @param b Second buffer
  * @param len Length to swap
  */
-void ama_consttime_swap(int condition, void* a, void* b, size_t len);
+AMA_API void ama_consttime_swap(int condition, void* a, void* b, size_t len);
 
 /**
  * @brief Constant-time table lookup
@@ -293,7 +304,7 @@ void ama_consttime_swap(int condition, void* a, void* b, size_t len);
  * @param index Index to lookup (may be secret)
  * @param output Output buffer for selected element
  */
-void ama_consttime_lookup(
+AMA_API void ama_consttime_lookup(
     const void* table,
     size_t table_len,
     size_t elem_size,
@@ -308,7 +319,7 @@ void ama_consttime_lookup(
  * @param src Source buffer
  * @param len Length to copy
  */
-void ama_consttime_copy(int condition, void* dst, const void* src, size_t len);
+AMA_API void ama_consttime_copy(int condition, void* dst, const void* src, size_t len);
 
 /* ============================================================================
  * HASHING AND KEY DERIVATION
@@ -325,7 +336,7 @@ void ama_consttime_copy(int condition, void* dst, const void* src, size_t len);
  * @param output Output buffer (32 bytes)
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_sha3_256(
+AMA_API ama_error_t ama_sha3_256(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output
@@ -343,7 +354,7 @@ ama_error_t ama_sha3_256(
  * @param output Output buffer (64 bytes)
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_sha3_512(
+AMA_API ama_error_t ama_sha3_512(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output
@@ -370,7 +381,7 @@ typedef struct {
  * @param ctx Context to initialize
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_sha3_init(ama_sha3_ctx* ctx);
+AMA_API ama_error_t ama_sha3_init(ama_sha3_ctx* ctx);
 
 /**
  * @brief Update SHA3-256 with additional data
@@ -382,7 +393,7 @@ ama_error_t ama_sha3_init(ama_sha3_ctx* ctx);
  * @param len Length of data in bytes
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_sha3_update(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
+AMA_API ama_error_t ama_sha3_update(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
 
 /**
  * @brief Finalize SHA3-256 and output digest
@@ -393,7 +404,7 @@ ama_error_t ama_sha3_update(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
  * @param output Output buffer (32 bytes)
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_sha3_final(ama_sha3_ctx* ctx, uint8_t* output);
+AMA_API ama_error_t ama_sha3_final(ama_sha3_ctx* ctx, uint8_t* output);
 
 /* ============================================================================
  * STREAMING SHAKE256 API (init/absorb/finalize/squeeze)
@@ -404,22 +415,22 @@ ama_error_t ama_sha3_final(ama_sha3_ctx* ctx, uint8_t* output);
 /**
  * @brief Initialize SHAKE256 incremental context
  */
-ama_error_t ama_shake256_inc_init(ama_sha3_ctx* ctx);
+AMA_API ama_error_t ama_shake256_inc_init(ama_sha3_ctx* ctx);
 
 /**
  * @brief Absorb data into SHAKE256 incremental context
  */
-ama_error_t ama_shake256_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
+AMA_API ama_error_t ama_shake256_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
 
 /**
  * @brief Finalize SHAKE256 absorption (apply padding). Must be called before squeeze.
  */
-ama_error_t ama_shake256_inc_finalize(ama_sha3_ctx* ctx);
+AMA_API ama_error_t ama_shake256_inc_finalize(ama_sha3_ctx* ctx);
 
 /**
  * @brief Squeeze output bytes from finalized SHAKE256 context. Can be called multiple times.
  */
-ama_error_t ama_shake256_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen);
+AMA_API ama_error_t ama_shake256_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen);
 
 /* ============================================================================
  * STREAMING SHAKE128 API (init/absorb/finalize/squeeze)
@@ -430,22 +441,22 @@ ama_error_t ama_shake256_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t 
 /**
  * @brief Initialize SHAKE128 incremental context
  */
-ama_error_t ama_shake128_inc_init(ama_sha3_ctx* ctx);
+AMA_API ama_error_t ama_shake128_inc_init(ama_sha3_ctx* ctx);
 
 /**
  * @brief Absorb data into SHAKE128 incremental context
  */
-ama_error_t ama_shake128_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
+AMA_API ama_error_t ama_shake128_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
 
 /**
  * @brief Finalize SHAKE128 absorption (apply padding). Must be called before squeeze.
  */
-ama_error_t ama_shake128_inc_finalize(ama_sha3_ctx* ctx);
+AMA_API ama_error_t ama_shake128_inc_finalize(ama_sha3_ctx* ctx);
 
 /**
  * @brief Squeeze output bytes from finalized SHAKE128 context. Can be called multiple times.
  */
-ama_error_t ama_shake128_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen);
+AMA_API ama_error_t ama_shake128_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen);
 
 /**
  * @brief HKDF key derivation (RFC 5869)
@@ -464,7 +475,7 @@ ama_error_t ama_shake128_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t 
  * @param okm_len Desired length of OKM
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_hkdf(
+AMA_API ama_error_t ama_hkdf(
     const uint8_t* salt,
     size_t salt_len,
     const uint8_t* ikm,
@@ -490,7 +501,7 @@ ama_error_t ama_hkdf(
  * @param secret_key Input/Output: 64-byte buffer (seed in, seed||pk out)
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]);
+AMA_API ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]);
 
 /**
  * @brief Sign a message with Ed25519
@@ -504,7 +515,7 @@ ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]);
  * @param secret_key 64-byte secret key (seed || public_key)
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_ed25519_sign(
+AMA_API ama_error_t ama_ed25519_sign(
     uint8_t signature[64],
     const uint8_t *message,
     size_t message_len,
@@ -523,11 +534,73 @@ ama_error_t ama_ed25519_sign(
  * @param public_key 32-byte public key
  * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
  */
-ama_error_t ama_ed25519_verify(
+AMA_API ama_error_t ama_ed25519_verify(
     const uint8_t signature[64],
     const uint8_t *message,
     size_t message_len,
     const uint8_t public_key[32]
+);
+
+/* ============================================================================
+ * AES-256-GCM AUTHENTICATED ENCRYPTION (NIST SP 800-38D)
+ * ============================================================================ */
+
+#define AMA_AES256_KEY_BYTES   32
+#define AMA_AES256_GCM_NONCE_BYTES 12
+#define AMA_AES256_GCM_TAG_BYTES   16
+
+/**
+ * @brief AES-256-GCM authenticated encryption
+ *
+ * Encrypts plaintext and produces ciphertext + 16-byte authentication tag.
+ * Conforms to NIST SP 800-38D.
+ *
+ * @param key        32-byte AES-256 key
+ * @param nonce      12-byte nonce (IV)
+ * @param plaintext  Plaintext to encrypt (can be NULL if pt_len == 0)
+ * @param pt_len     Length of plaintext
+ * @param aad        Additional authenticated data (can be NULL if aad_len == 0)
+ * @param aad_len    Length of AAD
+ * @param ciphertext Output: ciphertext (same length as plaintext)
+ * @param tag        Output: 16-byte authentication tag
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_aes256_gcm_encrypt(
+    const uint8_t key[32],
+    const uint8_t nonce[12],
+    const uint8_t *plaintext,
+    size_t pt_len,
+    const uint8_t *aad,
+    size_t aad_len,
+    uint8_t *ciphertext,
+    uint8_t tag[16]
+);
+
+/**
+ * @brief AES-256-GCM authenticated decryption
+ *
+ * Verifies authentication tag and decrypts ciphertext.
+ * Returns AMA_ERROR_VERIFY_FAILED if tag mismatch.
+ *
+ * @param key        32-byte AES-256 key
+ * @param nonce      12-byte nonce (IV)
+ * @param ciphertext Ciphertext to decrypt
+ * @param ct_len     Length of ciphertext
+ * @param aad        Additional authenticated data (can be NULL if aad_len == 0)
+ * @param aad_len    Length of AAD
+ * @param tag        16-byte authentication tag to verify
+ * @param plaintext  Output: decrypted plaintext (same length as ciphertext)
+ * @return AMA_SUCCESS or AMA_ERROR_VERIFY_FAILED
+ */
+AMA_API ama_error_t ama_aes256_gcm_decrypt(
+    const uint8_t key[32],
+    const uint8_t nonce[12],
+    const uint8_t *ciphertext,
+    size_t ct_len,
+    const uint8_t *aad,
+    size_t aad_len,
+    const uint8_t tag[16],
+    uint8_t *plaintext
 );
 
 /* ============================================================================
@@ -538,7 +611,7 @@ ama_error_t ama_ed25519_verify(
  * @brief Get library version string
  * @return Version string (e.g., "1.0.0")
  */
-const char* ama_version_string(void);
+AMA_API const char* ama_version_string(void);
 
 /**
  * @brief Get library version number
@@ -546,7 +619,7 @@ const char* ama_version_string(void);
  * @param minor Output for minor version
  * @param patch Output for patch version
  */
-void ama_version_number(int* major, int* minor, int* patch);
+AMA_API void ama_version_number(int* major, int* minor, int* patch);
 
 #ifdef __cplusplus
 }

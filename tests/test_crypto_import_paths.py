@@ -49,25 +49,25 @@ class TestCryptoAvailableFalse:
     def test_generate_ed25519_keypair_requires_crypto(self, monkeypatch):
         """Test that generate_ed25519_keypair raises when crypto unavailable."""
         monkeypatch.setattr(dgs, "CRYPTO_AVAILABLE", False)
-        with pytest.raises(RuntimeError, match="cryptography library required"):
+        with pytest.raises(RuntimeError, match="AMA native C library required"):
             dgs.generate_ed25519_keypair()
 
     def test_ed25519_sign_requires_crypto(self, monkeypatch):
         """Test that ed25519_sign raises when crypto unavailable."""
         monkeypatch.setattr(dgs, "CRYPTO_AVAILABLE", False)
-        with pytest.raises(RuntimeError, match="cryptography library required"):
+        with pytest.raises(RuntimeError, match="AMA native C library required"):
             dgs.ed25519_sign(b"msg", b"\x00" * 32)
 
     def test_ed25519_verify_requires_crypto(self, monkeypatch):
         """Test that ed25519_verify raises when crypto unavailable."""
         monkeypatch.setattr(dgs, "CRYPTO_AVAILABLE", False)
-        with pytest.raises(RuntimeError, match="cryptography library required"):
+        with pytest.raises(RuntimeError, match="AMA native C library required"):
             dgs.ed25519_verify(b"msg", b"\x00" * 64, b"\x00" * 32)
 
     def test_derive_keys_requires_crypto(self, monkeypatch):
         """Test that derive_keys raises when crypto unavailable."""
         monkeypatch.setattr(dgs, "CRYPTO_AVAILABLE", False)
-        with pytest.raises(RuntimeError, match="cryptography library required"):
+        with pytest.raises(RuntimeError, match="AMA native C library required"):
             dgs.derive_keys(b"\x00" * 32, "info")
 
 

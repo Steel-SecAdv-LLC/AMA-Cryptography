@@ -6,7 +6,7 @@
 **Contact:** steel.sa.llc@gmail.com
 
 **AI Co-Architects:**  
-Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 **Version:** 1.1  
 **Date:** 2026-01-09
@@ -1285,7 +1285,7 @@ Email: steel.sa.llc@gmail.com
 **Author/Inventor:** Andrew E. A.
 
 **AI Co-Architects:**  
-Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
 

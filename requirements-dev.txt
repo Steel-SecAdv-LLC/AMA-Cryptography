@@ -1,10 +1,7 @@
 # Development and Testing Dependencies
 # Install with: pip install -r requirements-dev.txt
 
-# Core cryptographic library (required)
-cryptography>=41.0.0
-
-# Quantum-resistant cryptography is provided natively by the C library
+# ALL cryptographic operations provided natively by the C library (ZERO external deps)
 # Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
 
 # Build dependencies (required for Cython extensions)
@@ -28,7 +25,7 @@ pytest-xdist>=3.0.0
 hypothesis>=6.0.0
 
 # Code Quality
-black>=23.0.0
+black==24.10.0; python_version >= "3.9"
 flake8>=6.0.0
 isort>=5.12.0
 mypy>=1.0.0

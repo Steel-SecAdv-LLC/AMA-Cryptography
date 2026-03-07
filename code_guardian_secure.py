@@ -27,7 +27,7 @@ Version: 2.0
 Project: Post-quantum cryptographic security system
 
 AI Co-Architects:
-    Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+    Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 Security Layers (6-Layer Defense-in-Depth):
 -------------------------------------------
@@ -73,19 +73,23 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, cast
 if TYPE_CHECKING:
     from ama_cryptography_monitor import AmaCryptographyMonitor
 
-# Cryptographic dependencies
-try:
-    from cryptography.hazmat.backends import default_backend
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import ed25519
-    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+# Cryptographic dependencies — native C backend (zero external deps)
+from ama_cryptography.pqc_backends import (
+    _ED25519_NATIVE_AVAILABLE,
+    _HKDF_NATIVE_AVAILABLE,
+    native_ed25519_keypair,
+    native_ed25519_keypair_from_seed,
+    native_ed25519_sign,
+    native_ed25519_verify,
+    native_hkdf,
+)
 
-    CRYPTO_AVAILABLE = True
-except ImportError:
-    CRYPTO_AVAILABLE = False
-    print("ERROR: Install cryptography library")
-    print("  pip install cryptography")
-    raise
+CRYPTO_AVAILABLE = _ED25519_NATIVE_AVAILABLE and _HKDF_NATIVE_AVAILABLE
+if not CRYPTO_AVAILABLE:
+    raise RuntimeError(
+        "AMA native C library required. "
+        "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+    )
 
 # Import centralized exception classes
 from ama_cryptography.exceptions import QuantumSignatureUnavailableError
@@ -593,7 +597,7 @@ class Ed25519KeyPair:
 
 def generate_ed25519_keypair(seed: Optional[bytes] = None) -> Ed25519KeyPair:
     """
-    Generate Ed25519 key pair.
+    Generate Ed25519 key pair using native C backend.
 
     Key Generation Algorithm (RFC 8032, Section 5.1.5):
     ----------------------------------------------------
@@ -624,39 +628,29 @@ def generate_ed25519_keypair(seed: Optional[bytes] = None) -> Ed25519KeyPair:
         Ed25519KeyPair with private and public keys
 
     Raises:
-        RuntimeError: If cryptography library not available
+        RuntimeError: If native C library not available
         ValueError: If seed is provided but not 32 bytes
     """
     if not CRYPTO_AVAILABLE:
-        raise RuntimeError("cryptography library required for Ed25519")
-
+        raise RuntimeError(
+            "AMA native C library required for Ed25519 key generation. "
+            "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
     if seed is not None:
         if len(seed) != 32:
             raise ValueError("Seed must be exactly 32 bytes")
-        # Deterministic generation from seed
-        private_key = ed25519.Ed25519PrivateKey.from_private_bytes(seed)
+        public_bytes, sk_bytes = native_ed25519_keypair_from_seed(seed)
+        # Return the 32-byte seed as private key (consistent with original API)
+        return Ed25519KeyPair(private_key=seed, public_key=public_bytes)
     else:
-        # Generate random key using CSPRNG
-        private_key = ed25519.Ed25519PrivateKey.generate()
-
-    public_key = private_key.public_key()
-
-    # Serialize keys to raw bytes
-    private_bytes = private_key.private_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PrivateFormat.Raw,
-        encryption_algorithm=serialization.NoEncryption(),
-    )
-    public_bytes = public_key.public_bytes(
-        encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw
-    )
-
-    return Ed25519KeyPair(private_key=private_bytes, public_key=public_bytes)
+        public_bytes, sk_bytes = native_ed25519_keypair()
+        # sk_bytes is seed||pk (64 bytes), return just the 32-byte seed
+        return Ed25519KeyPair(private_key=sk_bytes[:32], public_key=public_bytes)
 
 
-def ed25519_sign(message: bytes, private_key: Union[bytes, ed25519.Ed25519PrivateKey]) -> bytes:
+def ed25519_sign(message: bytes, private_key: bytes) -> bytes:
     """
-    Sign message with Ed25519 (deterministic).
+    Sign message with Ed25519 (deterministic) using native C backend.
 
     Signature Algorithm (RFC 8032, Section 5.1.6):
     -----------------------------------------------
@@ -683,49 +677,33 @@ def ed25519_sign(message: bytes, private_key: Union[bytes, ed25519.Ed25519Privat
     Security: Determinism is secure for Ed25519 because nonce r is
               derived from hash of private key and message.
 
-    Performance Optimization:
-    -------------------------
-    For high-throughput scenarios (>10,000 signatures/sec), pass an
-    Ed25519PrivateKey object instead of bytes to eliminate key
-    reconstruction overhead (~2x faster):
-
-        key_obj = ed25519.Ed25519PrivateKey.from_private_bytes(key_bytes)
-        for msg in messages:
-            signature = ed25519_sign(msg, key_obj)  # 2x faster
-
     Args:
         message: Data to sign (arbitrary length)
-        private_key: Either 32-byte Ed25519 private key (bytes) OR
-                    Ed25519PrivateKey object (for 2x performance)
+        private_key: 32-byte Ed25519 private key seed
 
     Returns:
         64-byte signature (R || s format)
 
     Raises:
-        RuntimeError: If cryptography library not available
-        ValueError: If private_key bytes are not 32 bytes
+        RuntimeError: If native C library not available
+        ValueError: If private_key is not 32 bytes
     """
     if not CRYPTO_AVAILABLE:
-        raise RuntimeError("cryptography library required")
+        raise RuntimeError(
+            "AMA native C library required for Ed25519 signing. "
+            "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
+    if len(private_key) != 32:
+        raise ValueError("Ed25519 private key must be 32 bytes")
 
-    # Smart type handling: accept both bytes and key objects
-    if isinstance(private_key, bytes):
-        if len(private_key) != 32:
-            raise ValueError("Ed25519 private key must be 32 bytes")
-        key = ed25519.Ed25519PrivateKey.from_private_bytes(private_key)
-    else:
-        # Already a key object - no reconstruction overhead!
-        key = private_key
-
-    signature: bytes = key.sign(message)
-    return signature
+    # Convert 32-byte seed to 64-byte native key format (seed || pk)
+    _, sk_bytes = native_ed25519_keypair_from_seed(private_key)
+    return native_ed25519_sign(message, sk_bytes)
 
 
-def ed25519_verify(
-    message: bytes, signature: bytes, public_key: Union[bytes, ed25519.Ed25519PublicKey]
-) -> bool:
+def ed25519_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
     """
-    Verify Ed25519 signature.
+    Verify Ed25519 signature using native C backend.
 
     Verification Algorithm (RFC 8032, Section 5.1.7):
     --------------------------------------------------
@@ -753,48 +731,29 @@ def ed25519_verify(
     3. Malleability: Ed25519 is strongly binding (no malleability)
     4. Side-channel attacks: Use constant-time operations
 
-    Performance Optimization:
-    -------------------------
-    For high-throughput scenarios, pass an Ed25519PublicKey object
-    instead of bytes to eliminate key reconstruction overhead:
-
-        key_obj = ed25519.Ed25519PublicKey.from_public_bytes(key_bytes)
-        for msg, sig in verifications:
-            valid = ed25519_verify(msg, sig, key_obj)  # Faster
-
     Args:
         message: Original data that was signed
         signature: 64-byte Ed25519 signature
-        public_key: Either 32-byte Ed25519 public key (bytes) OR
-                   Ed25519PublicKey object (for better performance)
+        public_key: 32-byte Ed25519 public key
 
     Returns:
         True if signature is valid, False otherwise
 
     Raises:
-        RuntimeError: If cryptography library not available
-        ValueError: If signature is not 64 bytes or public_key bytes not 32 bytes
+        RuntimeError: If native C library not available
+        ValueError: If signature is not 64 bytes or public_key not 32 bytes
     """
     if not CRYPTO_AVAILABLE:
-        raise RuntimeError("cryptography library required")
-
+        raise RuntimeError(
+            "AMA native C library required for Ed25519 verification. "
+            "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
     if len(signature) != 64:
         raise ValueError("Ed25519 signature must be 64 bytes")
+    if len(public_key) != 32:
+        raise ValueError("Ed25519 public key must be 32 bytes")
 
-    # Smart type handling: accept both bytes and key objects
-    if isinstance(public_key, bytes):
-        if len(public_key) != 32:
-            raise ValueError("Ed25519 public key must be 32 bytes")
-        key = ed25519.Ed25519PublicKey.from_public_bytes(public_key)
-    else:
-        # Already a key object - no reconstruction overhead!
-        key = public_key
-
-    try:
-        key.verify(signature, message)
-        return True
-    except Exception:
-        return False
+    return native_ed25519_verify(signature, message, public_key)
 
 
 # ============================================================================
@@ -1213,11 +1172,14 @@ def derive_keys(
         Tuple of (List of 32-byte derived keys with ethical context, salt used)
 
     Raises:
-        RuntimeError: If cryptography library not available
+        RuntimeError: If native C library not available
         ValueError: If master_secret has insufficient entropy (< 16 bytes)
     """
     if not CRYPTO_AVAILABLE:
-        raise RuntimeError("cryptography library required for HKDF")
+        raise RuntimeError(
+            "AMA native C library required for HKDF. "
+            "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
 
     if len(master_secret) < 32:
         raise ValueError("Master secret must be at least 32 bytes (256 bits entropy)")
@@ -1240,19 +1202,16 @@ def derive_keys(
         # Enhance with ethical context
         enhanced_context = create_ethical_hkdf_context(base_context, ethical_vector)
 
-        # Use HKDF with SHA3-256 for consistency with project's SHA3 emphasis
-        # Note: While RFC 5869 was written for HMAC with Merkle-Damgard hashes,
-        # HMAC-SHA3-256 is a secure PRF and HKDF-SHA3-256 maintains equivalent security.
+        # Use native HKDF with HMAC-SHA3-256 (zero external dependencies)
+        # Native C library implements RFC 5869 Extract-then-Expand with SHA3-256.
         # Per RFC 5869 Section 3.1: "Ideally, the salt value is a random (or pseudorandom)
         # string of the length HashLen."
-        hkdf = HKDF(
-            algorithm=hashes.SHA3_256(),
+        derived_key = native_hkdf(
+            ikm=master_secret,
             length=32,
             salt=hkdf_salt,  # Random salt for optimal security (RFC 5869)
             info=enhanced_context,  # Enhanced with ethical signature
-            backend=default_backend(),
         )
-        derived_key = hkdf.derive(master_secret)
         derived_keys.append(derived_key)
 
     return derived_keys, hkdf_salt
@@ -2048,7 +2007,7 @@ def main() -> None:
     print("\nCopyright (C) 2025 Steel Security Advisors LLC")
     print("Author/Inventor: Andrew E. A.")
     print("\nAI Co-Architects:")
-    print("  Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕")
+    print("  Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛")
     print("\n" + "=" * 70)
 
     # Generate key management system
