@@ -38,7 +38,7 @@
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
 **Version:** 2.0
-**AI Co-Architects:** Eris ⯰ | Eden ♱  | X ⚛ | Devin ⚛ | Claude ⊛
+**AI Co-Architects:** Eris ⯰ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
 
