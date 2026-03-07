@@ -285,5 +285,5 @@ AMA Cryptography **COULD BE more secure** if it receives proper external auditin
 ---
 
 **Generated:** 2026-01-09
-**Copyright:** 2025 Steel Security Advisors LLC
+**Copyright:** 2025-2026 Steel Security Advisors LLC
 **License:** Apache License 2.0

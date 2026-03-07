@@ -257,4 +257,4 @@ Example:
 
 **By submitting this pull request, I confirm that my contribution is made under the terms of the Apache License 2.0.**
 
-Copyright (C) 2025 Steel Security Advisors LLC
+Copyright (C) 2025-2026 Steel Security Advisors LLC

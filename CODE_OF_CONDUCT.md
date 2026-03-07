@@ -197,6 +197,6 @@ All reports will be handled with discretion and confidentiality.
 
 ---
 
-**Copyright (C) 2025 Steel Security Advisors LLC**
+**Copyright (C) 2025-2026 Steel Security Advisors LLC**
 **Last Updated:** 2026-01-09
 **Version:** 1.1

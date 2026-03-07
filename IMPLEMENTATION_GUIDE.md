@@ -1,7 +1,7 @@
 # AMA Cryptography: Implementation Guide
 ## Practical Guide to Deploying Cryptographic Protection
 
-**Copyright (C) 2025 Steel Security Advisors LLC**  
+**Copyright (C) 2025-2026 Steel Security Advisors LLC**  
 **Author/Inventor:** Andrew E. A.  
 **Contact:** steel.sa.llc@gmail.com
 
@@ -1291,4 +1291,4 @@ Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 **Document Version:** 1.1  
 **Last Updated:** 2026-01-09
-**Copyright (C) 2025 Steel Security Advisors LLC**
+**Copyright (C) 2025-2026 Steel Security Advisors LLC**

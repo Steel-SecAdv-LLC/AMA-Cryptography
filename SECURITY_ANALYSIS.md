@@ -1,7 +1,7 @@
 # AMA Cryptography: Security Analysis
 ## Cryptographic Foundation and Mathematical Proofs
 
-**Copyright (C) 2025 Steel Security Advisors LLC**  
+**Copyright (C) 2025-2026 Steel Security Advisors LLC**  
 **Author/Inventor:** Andrew E. A.  
 **Contact:** steel.sa.llc@gmail.com
 
@@ -1354,7 +1354,7 @@ AMA Cryptography provides cryptographic protection for Omni-Code (helical mathem
 
 **Document Version:** 1.1
 **Last Updated:** 2026-01-09  
-**Copyright (C) 2025 Steel Security Advisors LLC**  
+**Copyright (C) 2025-2026 Steel Security Advisors LLC**  
 **Author:** Andrew E. A.
 
 **AI Co-Architects:**  

@@ -1,7 +1,7 @@
 # AMA Cryptography: 12 Omni-Code Ethical Pillars
 ## Cryptographic Integration of Ethical Vectors with SHA3-256 Security
 
-**Copyright (C) 2025 Steel Security Advisors LLC**
+**Copyright (C) 2025-2026 Steel Security Advisors LLC**
 **Project:** Omni-Code Helix SHA3-256 Ethical Framework  
 **Author/Inventor:** Andrew E. A.  
 **Organization:** Steel Security Advisors LLC
