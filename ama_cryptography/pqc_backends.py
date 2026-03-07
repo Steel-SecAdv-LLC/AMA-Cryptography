@@ -401,7 +401,7 @@ class DilithiumKeyPair:
     CRYSTALS-Dilithium post-quantum key pair (ML-DSA-65, Level 3).
 
     Key Sizes (NIST FIPS spec):
-        - Private key: 4032 bytes
+        - Secret key: 4032 bytes
         - Public key: 1952 bytes
         - Signature: 3309 bytes
 
@@ -409,7 +409,7 @@ class DilithiumKeyPair:
     Standard: NIST FIPS 204 (ML-DSA)
     """
 
-    private_key: bytes = field(repr=False)  # 4032 bytes for ML-DSA-65 (excluded from repr)
+    secret_key: bytes = field(repr=False)  # 4032 bytes for ML-DSA-65 (excluded from repr)
     public_key: bytes  # 1952 bytes for ML-DSA-65
 
 
@@ -486,18 +486,18 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
             raise QuantumSignatureUnavailableError(
                 f"Native dilithium_keypair failed with error code {rc}"
             )
-        return DilithiumKeyPair(private_key=bytes(sk_buf), public_key=bytes(pk_buf))
+        return DilithiumKeyPair(secret_key=bytes(sk_buf), public_key=bytes(pk_buf))
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
 
-def dilithium_sign(message: bytes, private_key: bytes) -> bytes:
+def dilithium_sign(message: bytes, secret_key: bytes) -> bytes:
     """
     Sign message with CRYSTALS-Dilithium (ML-DSA-65).
 
     Args:
         message: Data to sign
-        private_key: Dilithium private key (4032 bytes)
+        secret_key: Dilithium secret key (4032 bytes)
 
     Returns:
         Dilithium signature (3309 bytes)
@@ -516,7 +516,7 @@ def dilithium_sign(message: bytes, private_key: bytes) -> bytes:
             ctypes.byref(sig_len),
             message,
             ctypes.c_size_t(len(message)),
-            private_key,
+            secret_key,
         )
         if rc != 0:
             raise QuantumSignatureUnavailableError(
@@ -888,7 +888,7 @@ class DilithiumProvider:
             _DilithiumKATKeyPair with public_key and secret_key attributes
         """
         kp = generate_dilithium_keypair()
-        return _DilithiumKATKeyPair(public_key=kp.public_key, secret_key=kp.private_key)
+        return _DilithiumKATKeyPair(public_key=kp.public_key, secret_key=kp.secret_key)
 
     def sign(self, message: bytes, secret_key: bytes) -> bytes:
         """

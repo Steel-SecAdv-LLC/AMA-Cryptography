@@ -1029,7 +1029,7 @@ class TestQuantumSignatureAvailability:
 
         keypair = generate_dilithium_keypair()
         message = b"test message"
-        sig = dilithium_sign(message, keypair.private_key)
+        sig = dilithium_sign(message, keypair.secret_key)
         assert dilithium_verify(message, sig, keypair.public_key) is True
 
 

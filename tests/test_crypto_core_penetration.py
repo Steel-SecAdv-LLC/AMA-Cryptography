@@ -332,13 +332,13 @@ class TestDilithiumSignatures:
         """Key generation produces valid keypair."""
         keypair = generate_dilithium_keypair()
         assert len(keypair.public_key) == 1952  # ML-DSA-65
-        assert len(keypair.private_key) > 0
+        assert len(keypair.secret_key) > 0
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
     def test_signature_creation(self):
         """Signature creation works."""
         keypair = generate_dilithium_keypair()
-        sig = dilithium_sign(b"test", keypair.private_key)
+        sig = dilithium_sign(b"test", keypair.secret_key)
         assert len(sig) > 0
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
@@ -346,7 +346,7 @@ class TestDilithiumSignatures:
         """Valid signature should verify."""
         keypair = generate_dilithium_keypair()
         message = b"test message"
-        sig = dilithium_sign(message, keypair.private_key)
+        sig = dilithium_sign(message, keypair.secret_key)
         assert dilithium_verify(message, sig, keypair.public_key) is True
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
@@ -355,7 +355,7 @@ class TestDilithiumSignatures:
         kp1 = generate_dilithium_keypair()
         kp2 = generate_dilithium_keypair()
         message = b"test message"
-        sig = dilithium_sign(message, kp1.private_key)
+        sig = dilithium_sign(message, kp1.secret_key)
         assert dilithium_verify(message, sig, kp2.public_key) is False
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
@@ -363,7 +363,7 @@ class TestDilithiumSignatures:
         """Tampered message should fail verification."""
         keypair = generate_dilithium_keypair()
         message = b"test message"
-        sig = dilithium_sign(message, keypair.private_key)
+        sig = dilithium_sign(message, keypair.secret_key)
         assert dilithium_verify(b"tampered", sig, keypair.public_key) is False
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
@@ -371,7 +371,7 @@ class TestDilithiumSignatures:
         """Tampered signature should fail verification."""
         keypair = generate_dilithium_keypair()
         message = b"test message"
-        sig = dilithium_sign(message, keypair.private_key)
+        sig = dilithium_sign(message, keypair.secret_key)
         tampered_sig = bytes([sig[0] ^ 0xFF]) + sig[1:]
         assert dilithium_verify(message, tampered_sig, keypair.public_key) is False
 

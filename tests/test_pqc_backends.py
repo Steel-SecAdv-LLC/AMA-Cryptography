@@ -221,14 +221,14 @@ class TestDilithiumKeyGeneration:
     def test_private_key_size(self):
         """Verify generated private key has correct size."""
         keypair = generate_dilithium_keypair()
-        assert len(keypair.private_key) == DILITHIUM_SECRET_KEY_BYTES
+        assert len(keypair.secret_key) == DILITHIUM_SECRET_KEY_BYTES
 
     def test_keypairs_are_unique(self):
         """Verify each keypair generation produces unique keys."""
         keypair1 = generate_dilithium_keypair()
         keypair2 = generate_dilithium_keypair()
         assert keypair1.public_key != keypair2.public_key
-        assert keypair1.private_key != keypair2.private_key
+        assert keypair1.secret_key != keypair2.secret_key
 
 
 @pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber backend not available")
@@ -428,7 +428,7 @@ class TestDataclassFields:
         assert hasattr(DilithiumKeyPair, "__dataclass_fields__")
         fields = DilithiumKeyPair.__dataclass_fields__
         assert "public_key" in fields
-        assert "private_key" in fields
+        assert "secret_key" in fields
 
     def test_kyber_keypair_fields(self):
         """Verify KyberKeyPair has required fields."""

@@ -160,11 +160,11 @@ class ComparativeBenchmark:
                         self.benchmark_operation(
                             "AMA Cryptography",
                             "ML-DSA-65 Sign",
-                            lambda: dilithium_sign(test_data, dil_keypair.private_key),
+                            lambda: dilithium_sign(test_data, dil_keypair.secret_key),
                         )
                     )
 
-                    dil_sig = dilithium_sign(test_data, dil_keypair.private_key)
+                    dil_sig = dilithium_sign(test_data, dil_keypair.secret_key)
                     self.results.append(
                         self.benchmark_operation(
                             "AMA Cryptography",
@@ -176,7 +176,7 @@ class ComparativeBenchmark:
                     # Hybrid operation (both signatures)
                     def hybrid_sign():
                         ed25519_sign(test_data, ed_keypair.private_key)
-                        dilithium_sign(test_data, dil_keypair.private_key)
+                        dilithium_sign(test_data, dil_keypair.secret_key)
 
                     def hybrid_verify():
                         ed25519_verify(test_data, ed_sig, ed_keypair.public_key)

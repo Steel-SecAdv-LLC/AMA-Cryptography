@@ -257,7 +257,7 @@ class MLDSAProvider(CryptoProvider):
         kp = generate_dilithium_keypair()
         return KeyPair(
             public_key=kp.public_key,
-            secret_key=kp.private_key,
+            secret_key=kp.secret_key,
             algorithm=self.algorithm,
             metadata={
                 "backend": self._backend_name,

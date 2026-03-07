@@ -146,7 +146,7 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
     return _pqc_generate_dilithium_keypair()
 
 
-def dilithium_sign(message: bytes, private_key: bytes) -> bytes:
+def dilithium_sign(message: bytes, secret_key: bytes) -> bytes:
     """
     Sign message with CRYSTALS-Dilithium (ML-DSA-65).
 
@@ -155,7 +155,7 @@ def dilithium_sign(message: bytes, private_key: bytes) -> bytes:
 
     Args:
         message: Data to sign
-        private_key: Dilithium private key (4032 bytes)
+        secret_key: Dilithium secret key (4032 bytes)
 
     Returns:
         Dilithium signature (3309 bytes)
@@ -175,7 +175,7 @@ def dilithium_sign(message: bytes, private_key: bytes) -> bytes:
             "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
         )
 
-    return _pqc_dilithium_sign(message, private_key)
+    return _pqc_dilithium_sign(message, secret_key)
 
 
 def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
@@ -1772,7 +1772,7 @@ def create_crypto_package(  # noqa: C901 - high-level orchestrator; refactor wou
         if monitor:
             start_time = time.time()
         try:
-            dilithium_sig = dilithium_sign(signature_message, kms.dilithium_keypair.private_key)
+            dilithium_sig = dilithium_sign(signature_message, kms.dilithium_keypair.secret_key)
             dilithium_pubkey = kms.dilithium_keypair.public_key.hex()
             quantum_signatures_enabled = True
         except QuantumSignatureUnavailableError:

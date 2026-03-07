@@ -275,7 +275,7 @@ class TestDilithiumFuzzing:
             return  # Skip if Dilithium not available
 
         kp = generate_dilithium_keypair()
-        sig = dilithium_sign(message, kp.private_key)
+        sig = dilithium_sign(message, kp.secret_key)
         assert dilithium_verify(
             message, sig, kp.public_key
         ), "Valid Dilithium signature must verify"
@@ -287,7 +287,7 @@ class TestDilithiumFuzzing:
             return
 
         kp = generate_dilithium_keypair()
-        sig = bytearray(dilithium_sign(message, kp.private_key))
+        sig = bytearray(dilithium_sign(message, kp.secret_key))
         sig[0] ^= 0xFF
         assert not dilithium_verify(message, bytes(sig), kp.public_key), "Modified sig must fail"
 
@@ -299,7 +299,7 @@ class TestDilithiumFuzzing:
 
         kp1 = generate_dilithium_keypair()
         kp2 = generate_dilithium_keypair()
-        sig = dilithium_sign(message, kp1.private_key)
+        sig = dilithium_sign(message, kp1.secret_key)
         assert not dilithium_verify(message, sig, kp2.public_key), "Wrong key must fail"
 
     @given(st.binary(min_size=32, max_size=32))
@@ -312,7 +312,7 @@ class TestDilithiumFuzzing:
         msg = build_signature_message(content_hash, ethical_hash, SIGNATURE_FORMAT_V2)
 
         kp = generate_dilithium_keypair()
-        sig = dilithium_sign(msg, kp.private_key)
+        sig = dilithium_sign(msg, kp.secret_key)
         assert dilithium_verify(
             msg, sig, kp.public_key
         ), "Dilithium must verify domain-separated message"

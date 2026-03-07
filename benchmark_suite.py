@@ -209,12 +209,12 @@ class BenchmarkSuite:
         # Dilithium signing
         results["dilithium_sign"] = self.benchmark_operation(
             "Dilithium Signing",
-            lambda: dilithium_sign(test_data, kms.dilithium_keypair.private_key),
+            lambda: dilithium_sign(test_data, kms.dilithium_keypair.secret_key),
             iterations=100,
         )
 
         # Dilithium verification
-        dilithium_sig = dilithium_sign(test_data, kms.dilithium_keypair.private_key)
+        dilithium_sig = dilithium_sign(test_data, kms.dilithium_keypair.secret_key)
         results["dilithium_verify"] = self.benchmark_operation(
             "Dilithium Verification",
             lambda: dilithium_verify(test_data, dilithium_sig, kms.dilithium_keypair.public_key),
