@@ -79,14 +79,18 @@ set(AMA_SOURCES
 # Add native PQC source files when enabled
 if(AMA_USE_NATIVE_PQC)
     list(APPEND AMA_SOURCES
+        src/c/ama_platform_rand.c
+        src/c/ama_sha256.c
+        src/c/ama_hmac_sha256.c
         src/c/ama_kyber.c
         src/c/ama_dilithium.c
         src/c/ama_sphincs.c
     )
-    message(STATUS "Native PQC enabled: ML-DSA-65, Kyber-1024, SPHINCS+-256f")
+    message(STATUS "Native PQC enabled: ML-DSA-65, Kyber-1024, SPHINCS+-256f (zero OpenSSL dependency)")
 endif()
 
-# Find dependencies
+# OpenSSL: required for core (Ed25519, HKDF use SHA3 which is native,
+# but ama_core.c still references OpenSSL for some operations)
 find_package(OpenSSL REQUIRED)
 
 # Create shared library
