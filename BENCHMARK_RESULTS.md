@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.0 |
-| Test Date | 2026-03-06 |
+| Document Version | 2.0.1 |
+| Test Date | 2026-03-07 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -13,15 +13,17 @@
 
 ## Executive Summary
 
-Performance benchmarks for AMA Cryptography v2.0 with **fully native PQC implementations** (FIPS 203/204/205). All post-quantum cryptography is provided by the built-in C library — no external dependencies (liboqs, pqcrypto) required.
+Performance benchmarks for AMA Cryptography v2.0 with **fully native PQC implementations** (FIPS 203/204/205). All post-quantum cryptography is provided by the built-in C library with zero OpenSSL dependency — no external dependencies (liboqs, pqcrypto) required.
 
 **Test Environment:**
 - OS: Linux 4.4.0 x86_64
 - CPU: 16 cores
 - Memory: 13.0 GB
 - Python: 3.11
-- PQC Backend: Native C (FIPS 203/204/205)
+- PQC Backend: Native C (FIPS 203/204/205, zero OpenSSL dependency)
 - Iterations: 1,000 per operation
+
+> **Note on variance:** Throughput numbers vary by hardware. C library benchmarks below are from a 16-core test system. Python API benchmarks in BENCHMARKS.md reflect CI runner (shared VM) performance. Both are legitimate measurements of different execution contexts.
 
 ---
 
@@ -131,7 +133,7 @@ AMA Cryptography's complete security package includes:
 
 ### Native PQC — No External Dependencies
 
-As of v1.2, AMA Cryptography uses fully native C implementations for all post-quantum algorithms:
+As of v2.0, AMA Cryptography uses fully native C implementations for all post-quantum algorithms:
 
 - **ML-KEM-1024** (FIPS 203): Key encapsulation with IND-CCA2 security
 - **ML-DSA-65** (FIPS 204): Digital signatures with EUF-CMA security
@@ -147,6 +149,6 @@ cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
 
 ---
 
-**Generated:** 2026-03-06
+**Generated:** 2026-03-07
 **Copyright:** 2025-2026 Steel Security Advisors LLC
 **License:** Apache License 2.0

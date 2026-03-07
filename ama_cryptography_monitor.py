@@ -59,9 +59,10 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 # but the core 3R monitor operates without them.
 try:
     import numpy as np
+
     _HAS_NUMPY = True
 except ImportError:
-    np = None  # type: ignore[assignment]
+    np = None
     _HAS_NUMPY = False
 
 

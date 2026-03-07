@@ -326,7 +326,7 @@ class CryptoPostureController:
         evaluation = self.evaluator.evaluate(report)
         self._history.append(evaluation)
         if len(self._history) > self._max_history:
-            self._history = self._history[-self._max_history:]
+            self._history = self._history[-self._max_history :]
 
         # Enforce cooldown
         now = time.time()
@@ -371,9 +371,7 @@ class CryptoPostureController:
                         expires_in=timedelta(days=30),
                     )
                     self.rotation_manager.initiate_rotation(active_key, new_key_id)
-                    logger.info(
-                        "Posture-triggered key rotation: %s → %s", active_key, new_key_id
-                    )
+                    logger.info("Posture-triggered key rotation: %s → %s", active_key, new_key_id)
                 except Exception as e:
                     logger.warning("Posture key rotation failed: %s", e)
 
@@ -387,9 +385,7 @@ class CryptoPostureController:
         """Switch to a stronger algorithm."""
         current_strength = self.ALGORITHM_STRENGTH.get(self.current_algorithm, 0)
         # Find next stronger algorithm
-        candidates = sorted(
-            self.ALGORITHM_STRENGTH.items(), key=lambda x: x[1]
-        )
+        candidates = sorted(self.ALGORITHM_STRENGTH.items(), key=lambda x: x[1])
         new_algorithm = self.current_algorithm
         for alg, strength in candidates:
             if strength > current_strength:

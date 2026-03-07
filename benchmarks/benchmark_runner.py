@@ -220,18 +220,15 @@ def run_full_package_verify_benchmark(iterations: int = 20) -> float:
 
 
 def run_dilithium_keygen_benchmark(iterations: int = 20) -> Optional[float]:
-    """Benchmark Dilithium key generation (if available)."""
+    """Benchmark ML-DSA-65 key generation via native C library."""
     try:
-        import oqs
+        from ama_cryptography.pqc_backends import DILITHIUM_AVAILABLE, dilithium_keypair
 
-        # Try ML-DSA-65 first (NIST standard name), fall back to Dilithium3
-        try:
-            sig = oqs.Signature("ML-DSA-65")
-        except Exception:
-            sig = oqs.Signature("Dilithium3")
+        if not DILITHIUM_AVAILABLE:
+            return None
 
         def operation():
-            sig.generate_keypair()
+            dilithium_keypair()
 
         return benchmark_operation(operation, iterations, warmup=2)
     except (ImportError, Exception):
@@ -239,20 +236,22 @@ def run_dilithium_keygen_benchmark(iterations: int = 20) -> Optional[float]:
 
 
 def run_dilithium_sign_benchmark(iterations: int = 20) -> Optional[float]:
-    """Benchmark Dilithium signing (if available)."""
+    """Benchmark ML-DSA-65 signing via native C library."""
     try:
-        import oqs
+        from ama_cryptography.pqc_backends import (
+            DILITHIUM_AVAILABLE,
+            dilithium_keypair,
+            dilithium_sign,
+        )
 
-        # Try ML-DSA-65 first (NIST standard name), fall back to Dilithium3
-        try:
-            sig = oqs.Signature("ML-DSA-65")
-        except Exception:
-            sig = oqs.Signature("Dilithium3")
-        sig.generate_keypair()
-        message = b"Test message for Dilithium signing" * 10
+        if not DILITHIUM_AVAILABLE:
+            return None
+
+        kp = dilithium_keypair()
+        message = b"Test message for ML-DSA-65 signing" * 10
 
         def operation():
-            sig.sign(message)
+            dilithium_sign(message, kp.secret_key)
 
         return benchmark_operation(operation, iterations, warmup=2)
     except (ImportError, Exception):
@@ -260,21 +259,24 @@ def run_dilithium_sign_benchmark(iterations: int = 20) -> Optional[float]:
 
 
 def run_dilithium_verify_benchmark(iterations: int = 20) -> Optional[float]:
-    """Benchmark Dilithium verification (if available)."""
+    """Benchmark ML-DSA-65 verification via native C library."""
     try:
-        import oqs
+        from ama_cryptography.pqc_backends import (
+            DILITHIUM_AVAILABLE,
+            dilithium_keypair,
+            dilithium_sign,
+            dilithium_verify,
+        )
 
-        # Try ML-DSA-65 first (NIST standard name), fall back to Dilithium3
-        try:
-            sig = oqs.Signature("ML-DSA-65")
-        except Exception:
-            sig = oqs.Signature("Dilithium3")
-        public_key = sig.generate_keypair()
-        message = b"Test message for Dilithium signing" * 10
-        signature = sig.sign(message)
+        if not DILITHIUM_AVAILABLE:
+            return None
+
+        kp = dilithium_keypair()
+        message = b"Test message for ML-DSA-65 signing" * 10
+        signature = dilithium_sign(message, kp.secret_key)
 
         def operation():
-            sig.verify(message, signature, public_key)
+            dilithium_verify(message, signature, kp.public_key)
 
         return benchmark_operation(operation, iterations, warmup=2)
     except (ImportError, Exception):

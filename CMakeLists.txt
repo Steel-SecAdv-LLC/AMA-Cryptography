@@ -55,10 +55,14 @@ if(AMA_ENABLE_SANITIZERS)
     set(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -fsanitize=address,undefined")
 endif()
 
-# SIMD flags
+# SIMD flags (AVX2 is x86_64-only — skip on ARM/Apple Silicon)
 if(AMA_ENABLE_SIMD)
     if(AMA_ENABLE_AVX2)
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx2 -DAMA_HAS_AVX2")
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86")
+            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx2 -DAMA_HAS_AVX2")
+        else()
+            message(STATUS "AVX2 requested but architecture is ${CMAKE_SYSTEM_PROCESSOR} — skipping")
+        endif()
     endif()
 endif()
 
@@ -89,9 +93,13 @@ if(AMA_USE_NATIVE_PQC)
     message(STATUS "Native PQC enabled: ML-DSA-65, Kyber-1024, SPHINCS+-256f (zero OpenSSL dependency)")
 endif()
 
-# OpenSSL: required for core (Ed25519, HKDF use SHA3 which is native,
-# but ama_core.c still references OpenSSL for some operations)
-find_package(OpenSSL REQUIRED)
+# OpenSSL: no longer required — all cryptographic operations use native
+# implementations. Kept as optional for backward compatibility with
+# downstream builds that may pass -DOPENSSL_ROOT_DIR.
+find_package(OpenSSL QUIET)
+if(OPENSSL_FOUND)
+    message(STATUS "OpenSSL found: ${OPENSSL_VERSION} (not used by AMA sources)")
+endif()
 
 # Create shared library
 if(AMA_BUILD_SHARED)
@@ -101,9 +109,6 @@ if(AMA_BUILD_SHARED)
         VERSION ${PROJECT_VERSION}
         SOVERSION ${PROJECT_VERSION_MAJOR}
         PUBLIC_HEADER "include/ama_cryptography.h"
-    )
-    target_link_libraries(ama_cryptography_shared
-        PRIVATE OpenSSL::Crypto
     )
     target_compile_definitions(ama_cryptography_shared PRIVATE AMA_BUILDING_SHARED)
     
@@ -119,10 +124,6 @@ if(AMA_BUILD_STATIC)
         OUTPUT_NAME "ama_cryptography_static"
         PUBLIC_HEADER "include/ama_cryptography.h"
     )
-    target_link_libraries(ama_cryptography_static
-        PRIVATE OpenSSL::Crypto
-    )
-    
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_static PRIVATE AMA_USE_NATIVE_PQC)
     endif()
@@ -144,7 +145,6 @@ if(AMA_BUILD_TESTS)
     set_target_properties(ama_cryptography_test PROPERTIES
         OUTPUT_NAME "ama_cryptography_test"
     )
-    target_link_libraries(ama_cryptography_test PRIVATE OpenSSL::Crypto)
     target_compile_definitions(ama_cryptography_test PRIVATE AMA_TESTING_MODE)
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_test PRIVATE AMA_USE_NATIVE_PQC)

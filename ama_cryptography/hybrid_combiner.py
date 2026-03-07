@@ -43,7 +43,7 @@ import ctypes
 import hashlib
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +116,7 @@ class HybridCombiner:
         """Attempt to load the native library via pqc_backends."""
         try:
             from ama_cryptography.pqc_backends import _native_lib
+
             return _native_lib
         except (ImportError, AttributeError):
             return None
@@ -125,10 +126,14 @@ class HybridCombiner:
         """Configure ctypes for ama_hkdf. Returns True on success."""
         try:
             lib.ama_hkdf.argtypes = [
-                ctypes.c_char_p, ctypes.c_size_t,  # salt, salt_len
-                ctypes.c_char_p, ctypes.c_size_t,  # ikm, ikm_len
-                ctypes.c_char_p, ctypes.c_size_t,  # info, info_len
-                ctypes.c_char_p, ctypes.c_size_t,  # okm, okm_len
+                ctypes.c_char_p,
+                ctypes.c_size_t,  # salt, salt_len
+                ctypes.c_char_p,
+                ctypes.c_size_t,  # ikm, ikm_len
+                ctypes.c_char_p,
+                ctypes.c_size_t,  # info, info_len
+                ctypes.c_char_p,
+                ctypes.c_size_t,  # okm, okm_len
             ]
             lib.ama_hkdf.restype = ctypes.c_int
             return True
@@ -178,10 +183,14 @@ class HybridCombiner:
         """HKDF via native C ama_hkdf (HMAC-SHA3-256)."""
         okm_buf = ctypes.create_string_buffer(okm_len)
         rc = self._native_lib.ama_hkdf(
-            salt, ctypes.c_size_t(len(salt)),
-            ikm, ctypes.c_size_t(len(ikm)),
-            info, ctypes.c_size_t(len(info)),
-            okm_buf, ctypes.c_size_t(okm_len),
+            salt,
+            ctypes.c_size_t(len(salt)),
+            ikm,
+            ctypes.c_size_t(len(ikm)),
+            info,
+            ctypes.c_size_t(len(info)),
+            okm_buf,
+            ctypes.c_size_t(okm_len),
         )
         if rc != 0:
             raise RuntimeError(f"Native HKDF failed with error code {rc}")
@@ -199,9 +208,7 @@ class HybridCombiner:
 
         SHA3-256 block size (rate) = 136 bytes, digest size = 32 bytes.
         """
-        import hmac as _hmac
-
-        hash_len = 32   # SHA3-256 digest size
+        hash_len = 32  # SHA3-256 digest size
         block_size = 136  # SHA3-256 rate (Keccak sponge rate for SHA3-256)
 
         def _hmac_sha3_256(key: bytes, data: bytes) -> bytes:
@@ -213,7 +220,7 @@ class HybridCombiner:
             key_padded = key + b"\x00" * (block_size - len(key))
             # ipad / opad
             ipad = bytes(b ^ 0x36 for b in key_padded)
-            opad = bytes(b ^ 0x5c for b in key_padded)
+            opad = bytes(b ^ 0x5C for b in key_padded)
             # inner = SHA3-256(ipad || data)
             inner = hashlib.sha3_256(ipad + data).digest()
             # outer = SHA3-256(opad || inner)
