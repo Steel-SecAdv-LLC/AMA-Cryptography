@@ -102,21 +102,9 @@ def get_extension_modules():
     if not USE_C_EXTENSIONS:
         return extensions
 
-    # C library sources
-    c_sources = [
-        "src/c/ama_core.c",
-        "src/c/ama_consttime.c",
-    ]
-
-    # Core C extension (no external library dependencies)
-    core_ext = Extension(
-        name="ama_cryptography._core",
-        sources=c_sources,
-        include_dirs=["include"],
-        extra_compile_args=compiler_flags,
-        extra_link_args=linker_flags,
-    )
-    extensions.append(core_ext)
+    # Note: The native C library (ama_core.c, ama_consttime.c, etc.) is built
+    # by CMake in CMakeBuild.run(), NOT as a Python extension module.
+    # Those files lack PyInit_* functions required for Python C extensions.
 
     # Cython mathematical engine (if Cython available)
     if USE_CYTHON:
@@ -223,8 +211,15 @@ class CMakeBuild(build_ext):
             # Don't re-raise - allow installation to continue
             return
 
-        # Continue with Python extension build
-        super().run()
+        # Continue with Python extension build (Cython, if available).
+        # Tolerate failure — the native C library (built above by cmake) is
+        # the primary backend; Cython math extensions are optional.
+        try:
+            super().run()
+        except Exception as e:
+            print(f"WARNING: Python extension build failed: {e}")
+            print("         Cython math extensions will not be available.")
+            print("         Native C library was built successfully by CMake.")
 
 
 # Package configuration
@@ -294,7 +289,7 @@ setup(
             "pytest>=7.0.0",
             "pytest-cov>=4.0.0",
             "pytest-benchmark>=4.0.0",
-            "black>=23.0.0",
+            "black==24.10.0; python_version>='3.9'",
             "flake8>=6.0.0",
             "mypy>=1.0.0",
             "isort>=5.12.0",
@@ -312,7 +307,7 @@ setup(
             "pytest>=7.0.0",
             "pytest-cov>=4.0.0",
             "pytest-benchmark>=4.0.0",
-            "black>=23.0.0",
+            "black==24.10.0; python_version>='3.9'",
             "flake8>=6.0.0",
             "mypy>=1.0.0",
             "isort>=5.12.0",
