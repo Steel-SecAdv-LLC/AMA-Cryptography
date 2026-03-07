@@ -549,17 +549,29 @@ static int ge25519_frombytes(ge25519_p3 *h, const uint8_t *s);
  * This avoids hardcoding limb values that depend on the radix representation.
  */
 static ge25519_p3 B;
-static int B_initialized = 0;
+static volatile int B_initialized = 0;
 
 static void ensure_base_point(void) {
     if (B_initialized) return;
+
     static const uint8_t base_compressed[32] = {
         0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
         0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
         0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
         0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
     };
-    ge25519_frombytes(&B, base_compressed);
+
+    /* Decompression into a local variable first, then publish atomically.
+     * This ensures a concurrent reader never sees a partially-written B. */
+    ge25519_p3 B_local;
+    int rc = ge25519_frombytes(&B_local, base_compressed);
+    if (rc != 0) return;  /* Should never happen with the canonical base point */
+
+    memcpy(&B, &B_local, sizeof(ge25519_p3));
+
+    /* Memory barrier: ensure B is fully written before B_initialized is set.
+     * On x86 this is implicit due to strong memory ordering, but volatile
+     * prevents the compiler from reordering the store. */
     B_initialized = 1;
 }
 
@@ -785,24 +797,28 @@ static void ge25519_scalarmult(ge25519_p3 *r, const uint8_t *scalar, const ge255
 
 /* Precomputed table: table[i] = (i+1)*B for i in [0,15] */
 static ge25519_p3 ge_base_table[16];
-static int ge_base_table_ready = 0;
+static volatile int ge_base_table_ready = 0;
 
-/* Initialize precomputed basepoint table */
+/* Initialize precomputed basepoint table (thread-safe via local computation) */
 static void ge25519_init_base_table(void) {
     if (ge_base_table_ready) return;
 
     ensure_base_point();
+
+    /* Compute into local table first, then publish atomically */
+    ge25519_p3 local_table[16];
     ge25519_p1p1 t;
 
     /* table[0] = 1*B */
-    memcpy(&ge_base_table[0], &B, sizeof(ge25519_p3));
+    memcpy(&local_table[0], &B, sizeof(ge25519_p3));
 
     /* table[i] = (i+1)*B = table[i-1] + B */
     for (int i = 1; i < 16; i++) {
-        ge25519_add(&t, &ge_base_table[i-1], &B);
-        ge25519_p1p1_to_p3(&ge_base_table[i], &t);
+        ge25519_add(&t, &local_table[i-1], &B);
+        ge25519_p1p1_to_p3(&local_table[i], &t);
     }
 
+    memcpy(ge_base_table, local_table, sizeof(ge_base_table));
     ge_base_table_ready = 1;
 }
 

@@ -240,7 +240,19 @@ def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_sphincs_verify.restype = ctypes.c_int
 
-        # Ed25519 (RFC 8032)
+        return True
+    except AttributeError:
+        # Library found but missing expected symbols — not built with AMA_USE_NATIVE_PQC
+        return False
+
+
+# Ed25519 native availability (separate from PQC to avoid breaking PQC on older libs)
+_ED25519_NATIVE_AVAILABLE = False
+
+
+def _setup_ed25519_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for Ed25519 functions. Separate from PQC setup."""
+    try:
         lib.ama_ed25519_keypair.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
         lib.ama_ed25519_keypair.restype = ctypes.c_int
 
@@ -262,18 +274,56 @@ def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
 
         return True
     except AttributeError:
-        # Library found but missing expected symbols — not built with AMA_USE_NATIVE_PQC
+        return False
+
+
+# AES-256-GCM native availability (separate from PQC)
+_AES_GCM_NATIVE_AVAILABLE = False
+
+
+def _setup_aes_gcm_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for AES-256-GCM functions. Separate from PQC setup."""
+    try:
+        lib.ama_aes256_gcm_encrypt.argtypes = [
+            ctypes.c_char_p,   # key[32]
+            ctypes.c_char_p,   # nonce[12]
+            ctypes.c_char_p,   # plaintext
+            ctypes.c_size_t,   # pt_len
+            ctypes.c_char_p,   # aad
+            ctypes.c_size_t,   # aad_len
+            ctypes.c_char_p,   # ciphertext
+            ctypes.c_char_p,   # tag[16]
+        ]
+        lib.ama_aes256_gcm_encrypt.restype = ctypes.c_int
+
+        lib.ama_aes256_gcm_decrypt.argtypes = [
+            ctypes.c_char_p,   # key[32]
+            ctypes.c_char_p,   # nonce[12]
+            ctypes.c_char_p,   # ciphertext
+            ctypes.c_size_t,   # ct_len
+            ctypes.c_char_p,   # aad
+            ctypes.c_size_t,   # aad_len
+            ctypes.c_char_p,   # tag[16]
+            ctypes.c_char_p,   # plaintext
+        ]
+        lib.ama_aes256_gcm_decrypt.restype = ctypes.c_int
+
+        return True
+    except AttributeError:
         return False
 
 
 _native_lib = _find_native_library()
-if _native_lib is not None and _setup_native_ctypes(_native_lib):
-    _DILITHIUM_AVAILABLE = True
-    _DILITHIUM_BACKEND = "native"
-    _KYBER_AVAILABLE = True
-    _KYBER_BACKEND = "native"
-    _SPHINCS_AVAILABLE = True
-    _SPHINCS_BACKEND = "native"
+if _native_lib is not None:
+    if _setup_native_ctypes(_native_lib):
+        _DILITHIUM_AVAILABLE = True
+        _DILITHIUM_BACKEND = "native"
+        _KYBER_AVAILABLE = True
+        _KYBER_BACKEND = "native"
+        _SPHINCS_AVAILABLE = True
+        _SPHINCS_BACKEND = "native"
+    _ED25519_NATIVE_AVAILABLE = _setup_ed25519_ctypes(_native_lib)
+    _AES_GCM_NATIVE_AVAILABLE = _setup_aes_gcm_ctypes(_native_lib)
 
 
 # Public API for checking availability
@@ -322,6 +372,11 @@ SPHINCS_SIGNATURE_BYTES = 49856
 ED25519_PUBLIC_KEY_BYTES = 32
 ED25519_SECRET_KEY_BYTES = 64
 ED25519_SIGNATURE_BYTES = 64
+
+# AES-256-GCM (NIST SP 800-38D)
+AES256_KEY_BYTES = 32
+AES256_GCM_NONCE_BYTES = 12
+AES256_GCM_TAG_BYTES = 16
 
 # ============================================================================
 # ERROR MESSAGE CONSTANTS
@@ -894,7 +949,7 @@ def native_ed25519_keypair() -> tuple:
     """
     import secrets as _secrets
 
-    if _native_lib is None:
+    if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
         raise RuntimeError(
             "Ed25519 native backend not available. " + _INSTALL_HINT
         )
@@ -933,7 +988,7 @@ def native_ed25519_keypair_from_seed(seed: bytes) -> tuple:
     if len(seed) != 32:
         raise ValueError(f"Ed25519 seed must be 32 bytes, got {len(seed)}")
 
-    if _native_lib is None:
+    if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
         raise RuntimeError(
             "Ed25519 native backend not available. " + _INSTALL_HINT
         )
@@ -966,7 +1021,7 @@ def native_ed25519_sign(message: bytes, secret_key: bytes) -> bytes:
         RuntimeError: If native library is not available or signing fails
         ValueError: If secret_key has incorrect length
     """
-    if _native_lib is None:
+    if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
         raise RuntimeError(
             "Ed25519 native backend not available. " + _INSTALL_HINT
         )
@@ -1001,16 +1056,152 @@ def native_ed25519_verify(signature: bytes, message: bytes, public_key: bytes) -
 
     Raises:
         RuntimeError: If native library is not available
+        ValueError: If signature or public_key has incorrect length
     """
-    if _native_lib is None:
+    if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
         raise RuntimeError(
             "Ed25519 native backend not available. " + _INSTALL_HINT
+        )
+
+    if len(signature) != ED25519_SIGNATURE_BYTES:
+        raise ValueError(
+            f"Ed25519 signature must be {ED25519_SIGNATURE_BYTES} bytes, "
+            f"got {len(signature)}"
+        )
+    if len(public_key) != ED25519_PUBLIC_KEY_BYTES:
+        raise ValueError(
+            f"Ed25519 public key must be {ED25519_PUBLIC_KEY_BYTES} bytes, "
+            f"got {len(public_key)}"
         )
 
     rc = _native_lib.ama_ed25519_verify(
         signature, message, ctypes.c_size_t(len(message)), public_key
     )
     return rc == 0
+
+
+# ============================================================================
+# AES-256-GCM NATIVE C BACKEND (NIST SP 800-38D)
+# ============================================================================
+
+
+def native_aes256_gcm_encrypt(
+    key: bytes,
+    nonce: bytes,
+    plaintext: bytes,
+    aad: bytes = b"",
+) -> tuple:
+    """
+    AES-256-GCM authenticated encryption using native C backend.
+
+    Args:
+        key: 32-byte AES-256 key
+        nonce: 12-byte nonce (IV)
+        plaintext: Data to encrypt
+        aad: Additional authenticated data (default: empty)
+
+    Returns:
+        (ciphertext, tag) — ciphertext same length as plaintext, 16-byte tag
+
+    Raises:
+        RuntimeError: If native library is not available
+        ValueError: If key or nonce has incorrect length
+    """
+    if _native_lib is None or not _AES_GCM_NATIVE_AVAILABLE:
+        raise RuntimeError(
+            "AES-256-GCM native backend not available. " + _INSTALL_HINT
+        )
+
+    if len(key) != AES256_KEY_BYTES:
+        raise ValueError(
+            f"AES-256 key must be {AES256_KEY_BYTES} bytes, got {len(key)}"
+        )
+    if len(nonce) != AES256_GCM_NONCE_BYTES:
+        raise ValueError(
+            f"AES-256-GCM nonce must be {AES256_GCM_NONCE_BYTES} bytes, "
+            f"got {len(nonce)}"
+        )
+
+    ct_buf = ctypes.create_string_buffer(len(plaintext))
+    tag_buf = ctypes.create_string_buffer(AES256_GCM_TAG_BYTES)
+
+    rc = _native_lib.ama_aes256_gcm_encrypt(
+        key,
+        nonce,
+        plaintext if len(plaintext) > 0 else None,
+        ctypes.c_size_t(len(plaintext)),
+        aad if len(aad) > 0 else None,
+        ctypes.c_size_t(len(aad)),
+        ct_buf,
+        tag_buf,
+    )
+    if rc != 0:
+        raise RuntimeError(f"AES-256-GCM encryption failed (rc={rc})")
+
+    return bytes(ct_buf), bytes(tag_buf)
+
+
+def native_aes256_gcm_decrypt(
+    key: bytes,
+    nonce: bytes,
+    ciphertext: bytes,
+    tag: bytes,
+    aad: bytes = b"",
+) -> bytes:
+    """
+    AES-256-GCM authenticated decryption using native C backend.
+
+    Args:
+        key: 32-byte AES-256 key
+        nonce: 12-byte nonce (IV)
+        ciphertext: Data to decrypt
+        tag: 16-byte authentication tag
+        aad: Additional authenticated data (default: empty)
+
+    Returns:
+        Decrypted plaintext
+
+    Raises:
+        RuntimeError: If native library is not available or decryption fails
+        ValueError: If key, nonce, or tag has incorrect length
+        ama_cryptography.exceptions.SecurityWarning: If tag verification fails
+    """
+    if _native_lib is None or not _AES_GCM_NATIVE_AVAILABLE:
+        raise RuntimeError(
+            "AES-256-GCM native backend not available. " + _INSTALL_HINT
+        )
+
+    if len(key) != AES256_KEY_BYTES:
+        raise ValueError(
+            f"AES-256 key must be {AES256_KEY_BYTES} bytes, got {len(key)}"
+        )
+    if len(nonce) != AES256_GCM_NONCE_BYTES:
+        raise ValueError(
+            f"AES-256-GCM nonce must be {AES256_GCM_NONCE_BYTES} bytes, "
+            f"got {len(nonce)}"
+        )
+    if len(tag) != AES256_GCM_TAG_BYTES:
+        raise ValueError(
+            f"AES-256-GCM tag must be {AES256_GCM_TAG_BYTES} bytes, "
+            f"got {len(tag)}"
+        )
+
+    pt_buf = ctypes.create_string_buffer(len(ciphertext))
+
+    rc = _native_lib.ama_aes256_gcm_decrypt(
+        key,
+        nonce,
+        ciphertext if len(ciphertext) > 0 else None,
+        ctypes.c_size_t(len(ciphertext)),
+        aad if len(aad) > 0 else None,
+        ctypes.c_size_t(len(aad)),
+        tag,
+        pt_buf,
+    )
+    if rc != 0:
+        raise ValueError("AES-256-GCM authentication tag verification failed")
+
+    return bytes(pt_buf)
 
 
 # ============================================================================

@@ -531,6 +531,68 @@ ama_error_t ama_ed25519_verify(
 );
 
 /* ============================================================================
+ * AES-256-GCM AUTHENTICATED ENCRYPTION (NIST SP 800-38D)
+ * ============================================================================ */
+
+#define AMA_AES256_KEY_BYTES   32
+#define AMA_AES256_GCM_NONCE_BYTES 12
+#define AMA_AES256_GCM_TAG_BYTES   16
+
+/**
+ * @brief AES-256-GCM authenticated encryption
+ *
+ * Encrypts plaintext and produces ciphertext + 16-byte authentication tag.
+ * Conforms to NIST SP 800-38D.
+ *
+ * @param key        32-byte AES-256 key
+ * @param nonce      12-byte nonce (IV)
+ * @param plaintext  Plaintext to encrypt (can be NULL if pt_len == 0)
+ * @param pt_len     Length of plaintext
+ * @param aad        Additional authenticated data (can be NULL if aad_len == 0)
+ * @param aad_len    Length of AAD
+ * @param ciphertext Output: ciphertext (same length as plaintext)
+ * @param tag        Output: 16-byte authentication tag
+ * @return AMA_SUCCESS or error code
+ */
+ama_error_t ama_aes256_gcm_encrypt(
+    const uint8_t key[32],
+    const uint8_t nonce[12],
+    const uint8_t *plaintext,
+    size_t pt_len,
+    const uint8_t *aad,
+    size_t aad_len,
+    uint8_t *ciphertext,
+    uint8_t tag[16]
+);
+
+/**
+ * @brief AES-256-GCM authenticated decryption
+ *
+ * Verifies authentication tag and decrypts ciphertext.
+ * Returns AMA_ERROR_VERIFY_FAILED if tag mismatch.
+ *
+ * @param key        32-byte AES-256 key
+ * @param nonce      12-byte nonce (IV)
+ * @param ciphertext Ciphertext to decrypt
+ * @param ct_len     Length of ciphertext
+ * @param aad        Additional authenticated data (can be NULL if aad_len == 0)
+ * @param aad_len    Length of AAD
+ * @param tag        16-byte authentication tag to verify
+ * @param plaintext  Output: decrypted plaintext (same length as ciphertext)
+ * @return AMA_SUCCESS or AMA_ERROR_VERIFY_FAILED
+ */
+ama_error_t ama_aes256_gcm_decrypt(
+    const uint8_t key[32],
+    const uint8_t nonce[12],
+    const uint8_t *ciphertext,
+    size_t ct_len,
+    const uint8_t *aad,
+    size_t aad_len,
+    const uint8_t tag[16],
+    uint8_t *plaintext
+);
+
+/* ============================================================================
  * VERSIONING
  * ============================================================================ */
 

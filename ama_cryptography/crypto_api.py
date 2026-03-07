@@ -117,6 +117,7 @@ class AlgorithmType(Enum):
     KYBER_1024 = auto()  # CRYSTALS-Kyber (KEM)
     SPHINCS_256F = auto()  # SPHINCS+ (signatures)
     ED25519 = auto()  # Classical Ed25519 (signatures)
+    AES_256_GCM = auto()  # AES-256-GCM (authenticated encryption)
     HYBRID_SIG = auto()  # Hybrid: Ed25519 + ML-DSA-65
     HYBRID_KEM = auto()  # Hybrid: X25519 + Kyber-1024
 
@@ -337,8 +338,23 @@ class Ed25519Provider(CryptoProvider):
         self.backend = backend
         self.algorithm = AlgorithmType.ED25519
 
-        from ama_cryptography.pqc_backends import _native_lib
-        self._use_native = _native_lib is not None
+        from ama_cryptography.pqc_backends import _ED25519_NATIVE_AVAILABLE, _native_lib
+
+        # Honor the backend parameter:
+        # C_LIBRARY = force native (error if unavailable)
+        # PURE_PYTHON = force PyCA cryptography fallback
+        # Default: auto-detect (native preferred)
+        if backend == CryptoBackend.C_LIBRARY:
+            self._use_native = _native_lib is not None and _ED25519_NATIVE_AVAILABLE
+            if not self._use_native:
+                raise RuntimeError(
+                    "Ed25519 native C backend requested but not available. "
+                    "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+                )
+        elif backend == CryptoBackend.PURE_PYTHON:
+            self._use_native = False
+        else:
+            self._use_native = _native_lib is not None and _ED25519_NATIVE_AVAILABLE
 
     def generate_keypair(self) -> KeyPair:
         """Generate Ed25519 keypair (native C preferred, PyCA fallback)."""
@@ -471,7 +487,10 @@ class Ed25519Provider(CryptoProvider):
         if self._use_native and isinstance(public_key, bytes):
             from ama_cryptography.pqc_backends import native_ed25519_verify
 
-            return native_ed25519_verify(signature, message, public_key)
+            try:
+                return native_ed25519_verify(signature, message, public_key)
+            except ValueError:
+                return False
 
         # PyCA fallback (or key object passed directly)
         try:
@@ -696,6 +715,152 @@ class SphincsProvider(CryptoProvider):
             ValueError: If public_key has incorrect length
         """
         return sphincs_verify(message, signature, public_key)
+
+
+class AESGCMProvider:
+    """
+    AES-256-GCM authenticated encryption provider.
+
+    Provides symmetric authenticated encryption with associated data (AEAD).
+    Uses native C backend (NIST SP 800-38D) with PyCA cryptography fallback.
+
+    Backend priority:
+    1. Native C implementation (zero external deps)
+    2. PyCA cryptography library (fallback)
+
+    Security: 256-bit key, 96-bit nonce, 128-bit auth tag
+    Standard: NIST SP 800-38D
+    """
+
+    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON) -> None:
+        self.backend = backend
+        self.algorithm = AlgorithmType.AES_256_GCM
+
+        from ama_cryptography.pqc_backends import _AES_GCM_NATIVE_AVAILABLE, _native_lib
+
+        if backend == CryptoBackend.C_LIBRARY:
+            self._use_native = _native_lib is not None and _AES_GCM_NATIVE_AVAILABLE
+            if not self._use_native:
+                raise RuntimeError(
+                    "AES-256-GCM native C backend requested but not available. "
+                    "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+                )
+        elif backend == CryptoBackend.PURE_PYTHON:
+            self._use_native = False
+        else:
+            self._use_native = _native_lib is not None and _AES_GCM_NATIVE_AVAILABLE
+
+    def encrypt(
+        self,
+        plaintext: bytes,
+        key: bytes,
+        nonce: "Optional[bytes]" = None,
+        aad: bytes = b"",
+    ) -> "dict":
+        """
+        Encrypt plaintext with AES-256-GCM.
+
+        Args:
+            plaintext: Data to encrypt
+            key: 32-byte AES-256 key
+            nonce: 12-byte nonce (auto-generated if None)
+            aad: Additional authenticated data
+
+        Returns:
+            Dict with 'ciphertext', 'nonce', 'tag', 'aad' keys
+        """
+        import secrets as _secrets
+
+        if len(key) != 32:
+            raise ValueError(f"AES-256 key must be 32 bytes, got {len(key)}")
+
+        if nonce is None:
+            nonce = _secrets.token_bytes(12)
+        elif len(nonce) != 12:
+            raise ValueError(f"AES-256-GCM nonce must be 12 bytes, got {len(nonce)}")
+
+        if self._use_native:
+            from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
+
+            ct, tag = native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
+            return {
+                "ciphertext": ct,
+                "nonce": nonce,
+                "tag": tag,
+                "aad": aad,
+                "backend": "native_c",
+            }
+
+        # PyCA fallback
+        try:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        except ImportError:
+            raise RuntimeError(
+                "AES-256-GCM requires either the native C library or "
+                "'pip install cryptography'. Neither is available."
+            )
+
+        aesgcm = AESGCM(key)
+        ct = aesgcm.encrypt(nonce, plaintext, aad if aad else None)
+        # PyCA returns ciphertext || tag (last 16 bytes)
+        return {
+            "ciphertext": ct[:-16],
+            "nonce": nonce,
+            "tag": ct[-16:],
+            "aad": aad,
+            "backend": "cryptography",
+        }
+
+    def decrypt(
+        self,
+        ciphertext: bytes,
+        key: bytes,
+        nonce: bytes,
+        tag: bytes,
+        aad: bytes = b"",
+    ) -> bytes:
+        """
+        Decrypt ciphertext with AES-256-GCM.
+
+        Args:
+            ciphertext: Encrypted data
+            key: 32-byte AES-256 key
+            nonce: 12-byte nonce used during encryption
+            tag: 16-byte authentication tag
+            aad: Additional authenticated data used during encryption
+
+        Returns:
+            Decrypted plaintext
+
+        Raises:
+            ValueError: If authentication tag verification fails
+        """
+        if len(key) != 32:
+            raise ValueError(f"AES-256 key must be 32 bytes, got {len(key)}")
+        if len(nonce) != 12:
+            raise ValueError(f"AES-256-GCM nonce must be 12 bytes, got {len(nonce)}")
+        if len(tag) != 16:
+            raise ValueError(f"AES-256-GCM tag must be 16 bytes, got {len(tag)}")
+
+        if self._use_native:
+            from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
+
+            return native_aes256_gcm_decrypt(key, nonce, ciphertext, tag, aad)
+
+        # PyCA fallback
+        try:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        except ImportError:
+            raise RuntimeError(
+                "AES-256-GCM requires either the native C library or "
+                "'pip install cryptography'. Neither is available."
+            )
+
+        aesgcm = AESGCM(key)
+        try:
+            return aesgcm.decrypt(nonce, ciphertext + tag, aad if aad else None)
+        except Exception:
+            raise ValueError("AES-256-GCM authentication tag verification failed")
 
 
 class HybridSignatureProvider(CryptoProvider):

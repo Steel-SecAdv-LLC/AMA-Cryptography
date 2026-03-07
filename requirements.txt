@@ -1,27 +1,32 @@
 # Production Dependencies
 # Install with: pip install -r requirements.txt
 
-# Core cryptographic library (required)
-cryptography>=41.0.0
+# Core cryptographic operations — ZERO external dependencies required.
+# Ed25519, AES-256-GCM, SHA-512 are provided by the native C library.
+# Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
+
+# Legacy PyCA cryptography fallback (OPTIONAL)
+# Only needed if native C library is not built/available.
+# Install with: pip install "ama-cryptography[legacy]"
+# cryptography>=41.0.0
 
 # Quantum-resistant cryptography — fully native C backend
 # The native C library (libama_cryptography) provides ML-DSA-65, Kyber-1024,
-# and SPHINCS+-256f without any external PQC dependencies. Build with:
-#   cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
+# and SPHINCS+-256f without any external PQC dependencies.
 #
 # All implementations pass NIST KAT (Known Answer Test) validation:
 #   - FIPS 203 (ML-KEM-1024): 10/10 KAT vectors pass
 #   - FIPS 204 (ML-DSA-65): 10/10 KAT vectors pass
 #   - FIPS 205 (SPHINCS+-SHA2-256f-simple): Native implementation
 
-# Secure memory operations (optional but recommended)
+# Secure memory operations (OPTIONAL, recommended for high-security environments)
 # Provides memory locking (mlock) and secure zeroing via libsodium
-# Install for enhanced memory protection in high-security environments
-pynacl>=1.5.0
+# Install with: pip install "ama-cryptography[secure-memory]"
+# pynacl>=1.5.0
 
 # Mathematical monitoring dependencies (OPTIONAL)
 # The core cryptographic operations work without numpy/scipy.
-# Install these for mathematical monitoring (equations, double_helix_engine):
+# Install for mathematical monitoring (equations, double_helix_engine):
 #   pip install "ama-cryptography[monitoring]"
 #
 # numpy>=1.24.0,<3.0.0

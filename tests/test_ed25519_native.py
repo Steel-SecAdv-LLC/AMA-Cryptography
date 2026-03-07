@@ -427,7 +427,7 @@ class TestEd25519ProviderNative:
         """Ed25519Provider.generate_keypair() works with native backend."""
         from ama_cryptography.crypto_api import CryptoBackend, Ed25519Provider
 
-        provider = Ed25519Provider(backend=CryptoBackend.PURE_PYTHON)
+        provider = Ed25519Provider(backend=CryptoBackend.C_LIBRARY)
         keypair = provider.generate_keypair()
 
         assert len(keypair.public_key) == 32
@@ -437,7 +437,7 @@ class TestEd25519ProviderNative:
         """Ed25519Provider sign/verify roundtrip works."""
         from ama_cryptography.crypto_api import CryptoBackend, Ed25519Provider
 
-        provider = Ed25519Provider(backend=CryptoBackend.PURE_PYTHON)
+        provider = Ed25519Provider(backend=CryptoBackend.C_LIBRARY)
         keypair = provider.generate_keypair()
 
         message = b"provider integration test"

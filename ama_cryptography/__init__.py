@@ -53,10 +53,14 @@ def __getattr__(name: str):  # type: ignore[override]
     """Lazy-load math modules that require numpy."""
     if name in _EQUATIONS_EXPORTS:
         mod = _importlib.import_module("ama_cryptography.equations")
-        return getattr(mod, name)
+        val = getattr(mod, name)
+        globals()[name] = val
+        return val
     elif name in _ENGINE_EXPORTS:
         mod = _importlib.import_module("ama_cryptography.double_helix_engine")
-        return getattr(mod, name)
+        val = getattr(mod, name)
+        globals()[name] = val
+        return val
 
     raise AttributeError(f"module 'ama_cryptography' has no attribute {name!r}")
 

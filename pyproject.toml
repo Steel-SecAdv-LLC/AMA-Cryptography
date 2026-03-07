@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel", "Cython>=3.0.0"]
+requires = ["setuptools>=61.0", "wheel", "Cython>=3.0.0", "numpy>=1.24.0,<3.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -43,9 +43,7 @@ classifiers = [
     "Typing :: Typed"
 ]
 requires-python = ">=3.8"
-dependencies = [
-    "cryptography>=41.0.0",
-]
+dependencies = []
 
 [project.optional-dependencies]
 monitoring = [
@@ -53,6 +51,12 @@ monitoring = [
     # Install with: pip install "ama-cryptography[monitoring]"
     "numpy>=1.24.0,<3.0.0",
     "scipy>=1.7.0",
+]
+legacy = [
+    # PyCA cryptography — only needed as fallback when native C library is not
+    # available. Ed25519 and AES-256-GCM are now provided natively.
+    # Install with: pip install "ama-cryptography[legacy]"
+    "cryptography>=41.0.0",
 ]
 hsm = [
     # PKCS#11 support for hardware security modules
