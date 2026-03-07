@@ -632,7 +632,10 @@ def generate_ed25519_keypair(seed: Optional[bytes] = None) -> Ed25519KeyPair:
         ValueError: If seed is provided but not 32 bytes
     """
     if not CRYPTO_AVAILABLE:
-        raise RuntimeError("cryptography library required for Ed25519 key generation")
+        raise RuntimeError(
+            "AMA native C library required for Ed25519 key generation. "
+            "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
     if seed is not None:
         if len(seed) != 32:
             raise ValueError("Seed must be exactly 32 bytes")
@@ -686,7 +689,10 @@ def ed25519_sign(message: bytes, private_key: bytes) -> bytes:
         ValueError: If private_key is not 32 bytes
     """
     if not CRYPTO_AVAILABLE:
-        raise RuntimeError("cryptography library required for Ed25519 signing")
+        raise RuntimeError(
+            "AMA native C library required for Ed25519 signing. "
+            "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
     if len(private_key) != 32:
         raise ValueError("Ed25519 private key must be 32 bytes")
 
@@ -738,7 +744,10 @@ def ed25519_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
         ValueError: If signature is not 64 bytes or public_key not 32 bytes
     """
     if not CRYPTO_AVAILABLE:
-        raise RuntimeError("cryptography library required for Ed25519 verification")
+        raise RuntimeError(
+            "AMA native C library required for Ed25519 verification. "
+            "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
     if len(signature) != 64:
         raise ValueError("Ed25519 signature must be 64 bytes")
     if len(public_key) != 32:
@@ -1163,11 +1172,14 @@ def derive_keys(
         Tuple of (List of 32-byte derived keys with ethical context, salt used)
 
     Raises:
-        RuntimeError: If cryptography library not available
+        RuntimeError: If native C library not available
         ValueError: If master_secret has insufficient entropy (< 16 bytes)
     """
     if not CRYPTO_AVAILABLE:
-        raise RuntimeError("cryptography library required for HKDF")
+        raise RuntimeError(
+            "AMA native C library required for HKDF. "
+            "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
 
     if len(master_secret) < 32:
         raise ValueError("Master secret must be at least 32 bytes (256 bits entropy)")

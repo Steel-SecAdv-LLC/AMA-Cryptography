@@ -273,9 +273,7 @@ setup(
     packages=find_packages(exclude=["tests", "tests.*", "examples", "examples.*", "src", "src.*"]),
     # Note: pyproject.toml is the authoritative source for dependencies.
     # This section is kept in sync for compatibility with older tools.
-    install_requires=[
-        "cryptography>=41.0.0",
-    ],
+    install_requires=[],
     extras_require={
         # numpy/scipy: optional, used by equations/double_helix and 3R monitor
         # when available. Core cryptographic operations work without them.

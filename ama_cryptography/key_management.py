@@ -703,6 +703,12 @@ class SecureKeyStorage:
             combined = base64.b64decode(storage_data["ciphertext"])
             nonce = base64.b64decode(storage_data["nonce"])
 
+            if len(combined) < 16:
+                raise ValueError(
+                    f"Key '{key_id}' has corrupted ciphertext: "
+                    "authentication tag is missing or truncated"
+                )
+
             # Split combined ct||tag (last 16 bytes = tag)
             ct = combined[:-16]
             tag = combined[-16:]
@@ -712,6 +718,13 @@ class SecureKeyStorage:
                 self.encryption_key, nonce, ct, tag, key_id.encode("utf-8")
             )
             return plaintext
+
+        elif algorithm == "AES-256-CFB":
+            raise ValueError(
+                f"Key '{key_id}' uses legacy AES-256-CFB encryption which is no "
+                "longer supported. Re-store this key using the current API to "
+                "upgrade to AES-256-GCM authenticated encryption."
+            )
 
         else:
             raise ValueError(f"Unknown encryption algorithm: {algorithm}")

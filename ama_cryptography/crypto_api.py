@@ -616,10 +616,8 @@ class AESGCMProvider:
     AES-256-GCM authenticated encryption provider.
 
     Provides symmetric authenticated encryption with associated data (AEAD).
-    Uses native C backend (NIST SP 800-38D) with PyCA cryptography fallback.
-
-    Backend priority:
-    Uses native C implementation (zero external dependencies).
+    Uses native C backend (NIST SP 800-38D). Requires the native C library;
+    raises RuntimeError if not available.
 
     Security: 256-bit key, 96-bit nonce, 128-bit auth tag
     Standard: NIST SP 800-38D
@@ -1049,7 +1047,10 @@ def get_pqc_capabilities() -> Dict[str, Any]:
         ... else:
         ...     print(caps["install_instructions"])
     """
+    from ama_cryptography.pqc_backends import _ED25519_NATIVE_AVAILABLE, _native_lib
+
     info = get_pqc_backend_info()
+    ed25519_available = _native_lib is not None and _ED25519_NATIVE_AVAILABLE
 
     return {
         "status": info["status"],
@@ -1059,8 +1060,8 @@ def get_pqc_capabilities() -> Dict[str, Any]:
         "backend": info["backend"],
         "algorithms": {
             "ML_DSA_65": info["dilithium_available"],
-            "HYBRID_SIG": info["dilithium_available"],
-            "ED25519": True,  # Available via native C or PyCA cryptography
+            "HYBRID_SIG": info["dilithium_available"] and ed25519_available,
+            "ED25519": ed25519_available,
             "KYBER_1024": info["kyber_available"],
             "SPHINCS_256F": info["sphincs_available"],
         },

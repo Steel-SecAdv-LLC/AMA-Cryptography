@@ -1195,9 +1195,9 @@ def native_aes256_gcm_decrypt(
         Decrypted plaintext
 
     Raises:
-        RuntimeError: If native library is not available or decryption fails
-        ValueError: If key, nonce, or tag has incorrect length
-        ama_cryptography.exceptions.SecurityWarning: If tag verification fails
+        RuntimeError: If native library is not available
+        ValueError: If key, nonce, or tag has incorrect length, or if
+            authentication tag verification fails
     """
     if _native_lib is None or not _AES_GCM_NATIVE_AVAILABLE:
         raise RuntimeError("AES-256-GCM native backend not available. " + _INSTALL_HINT)
