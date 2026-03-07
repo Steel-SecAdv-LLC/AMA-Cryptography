@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-AMA Cryptography ♱ (AG♱) - Post-Quantum Cryptography Backend Tests
+AMA Cryptography - Post-Quantum Cryptography Backend Tests
 
 Comprehensive test suite for pqc_backends.py providing 100% coverage
 of all PQC backend functionality including ML-DSA-65 (Dilithium),
 Kyber-1024 (ML-KEM), and SPHINCS+-256f.
 
-AI Co-Architects: Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+AI Co-Architects: Eris ⯰ | Eden | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 
 Copyright 2025 Steel Security Advisors LLC
 Licensed under the Apache License, Version 2.0

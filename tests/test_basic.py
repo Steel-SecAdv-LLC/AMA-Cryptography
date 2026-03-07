@@ -2,7 +2,7 @@
 # Copyright 2025 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 
-"""Basic tests for AMA Cryptography ♱"""
+"""Basic tests for AMA Cryptography"""
 
 import ama_cryptography
 

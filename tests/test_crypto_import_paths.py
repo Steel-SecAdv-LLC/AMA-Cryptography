@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱): Import Path and Edge Case Tests
+AMA Cryptography: Import Path and Edge Case Tests
 ======================================================
 
 Tests for import error handling, CRYPTO_AVAILABLE/DILITHIUM_AVAILABLE paths,

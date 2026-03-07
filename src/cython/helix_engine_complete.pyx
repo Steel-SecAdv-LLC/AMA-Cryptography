@@ -10,7 +10,7 @@
 Copyright 2025 Steel Security Advisors LLC
 Licensed under the Apache License, Version 2.0
 
-AMA Cryptography ♱ Complete Double-Helix Engine (Cython)
+AMA Cryptography Complete Double-Helix Engine (Cython)
 =====================================================
 
 Optimized implementation of ALL 18+ AMA Equation variants.

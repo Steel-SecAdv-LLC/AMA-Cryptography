@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-AMA Cryptography ♱ (AG♱) - Benchmark Validation Suite
+AMA Cryptography - Benchmark Validation Suite
 ==================================================
 
 Empirically validates all performance claims in BENCHMARKS.md against
@@ -15,7 +15,7 @@ Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
 Version: 2.0
-Project: AMA Cryptography ♱ Performance Validation
+Project: AMA Cryptography Performance Validation
 """
 
 import hashlib
@@ -396,7 +396,7 @@ class BenchmarkValidator:
         pass_rate = (passed / total * 100) if total > 0 else 0
 
         report = []
-        report.append("# AMA Cryptography ♱ Benchmark Validation Report")
+        report.append("# AMA Cryptography Benchmark Validation Report")
         report.append("")
         report.append("## Summary")
         report.append("")
@@ -465,7 +465,7 @@ class BenchmarkValidator:
 def main() -> int:
     """Run benchmark validation suite."""
     print("=" * 70)
-    print("AMA Cryptography ♱ (AG♱) - Benchmark Validation Suite")
+    print("AMA Cryptography - Benchmark Validation Suite")
     print("=" * 70)
     print("\nValidating performance claims from BENCHMARKS.md...")
 

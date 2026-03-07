@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱): Comprehensive System Test Suite
+AMA Cryptography: Comprehensive System Test Suite
 ===================================================
 
 100% System Testing for complete coverage of all cryptographic operations,

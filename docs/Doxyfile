@@ -1,8 +1,8 @@
-# Doxyfile for AMA Cryptography ♱ C API Documentation
+# Doxyfile for AMA Cryptography C API Documentation
 # Copyright 2025 Steel Security Advisors LLC
 
 # Project information
-PROJECT_NAME           = "AMA Cryptography ♱"
+PROJECT_NAME           = "AMA Cryptography"
 PROJECT_NUMBER         = 2.0
 PROJECT_BRIEF          = "Quantum-Resistant Cryptographic Protection System"
 PROJECT_LOGO           =

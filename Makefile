@@ -1,7 +1,7 @@
 # Copyright 2025 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 #
-# Makefile for AMA Cryptography ♱
+# Makefile for AMA Cryptography
 #
 # Quick build targets:
 #   make all        - Build everything (C library + Python extensions)
@@ -63,7 +63,7 @@ clean:
 
 # Install system-wide
 install: all
-	@echo "Installing AMA Cryptography ♱..."
+	@echo "Installing AMA Cryptography..."
 	@cd build && sudo $(MAKE) install
 	@pip3 install -e .
 	@echo "✓ Installed successfully"
@@ -174,7 +174,7 @@ profile: python
 
 # Help
 help:
-	@echo "AMA Cryptography ♱ Build System"
+	@echo "AMA Cryptography Build System"
 	@echo "============================"
 	@echo ""
 	@echo "Main targets:"

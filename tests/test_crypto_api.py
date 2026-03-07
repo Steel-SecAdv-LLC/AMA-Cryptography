@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-AMA Cryptography ♱ (AG♱) - Cryptographic API Tests
+AMA Cryptography - Cryptographic API Tests
 
 Comprehensive test suite for crypto_api.py providing coverage
 of all cryptographic providers including Ed25519, ML-DSA-65,
 Kyber-1024, SPHINCS+-256f, and hybrid signature schemes.
 
-AI Co-Architects: Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+AI Co-Architects: Eris ⯰ | Eden | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 
 Copyright 2025 Steel Security Advisors LLC
 Licensed under the Apache License, Version 2.0

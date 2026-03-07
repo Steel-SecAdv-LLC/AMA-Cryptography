@@ -3,10 +3,10 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-AMA Cryptography ♱ Flask Integration Example
+AMA Cryptography Flask Integration Example
 =========================================
 
-Demonstrates integrating AMA Cryptography ♱ cryptographic protection into a Flask
+Demonstrates integrating AMA Cryptography cryptographic protection into a Flask
 web application for secure API endpoints.
 
 Features:
@@ -55,7 +55,7 @@ from code_guardian_secure import (  # noqa: E402
 # Initialize Flask app
 app = Flask(__name__)
 
-# Initialize AMA Cryptography ♱ cryptographic system
+# Initialize AMA Cryptography cryptographic system
 # In production, load keys from secure storage (HSM, Vault, etc.)
 KMS = generate_key_management_system("Flask API Server")
 CRYPTO = AmaCryptography(algorithm=AlgorithmType.ED25519)
@@ -132,7 +132,7 @@ def health_check():
 
     return {
         "status": "healthy",
-        "service": "AMA Cryptography ♱ Flask API",
+        "service": "AMA Cryptography Flask API",
         "timestamp": datetime.utcnow().isoformat(),
         "pqc_available": capabilities.get("dilithium_available", False),
         "algorithms": (
@@ -145,7 +145,7 @@ def health_check():
 @sign_response
 def sign_data():
     """
-    Sign arbitrary data with AMA Cryptography ♱.
+    Sign arbitrary data with AMA Cryptography.
 
     Request body:
         {"data": "your data to sign"}
@@ -211,7 +211,7 @@ def get_protected_data():
     """
     Get cryptographically protected data package.
 
-    Returns a complete AMA Cryptography ♱ crypto package with:
+    Returns a complete AMA Cryptography crypto package with:
     - Content hash (SHA3-256)
     - HMAC authentication
     - Ed25519 signature
@@ -313,10 +313,10 @@ def handle_error(error):
 def main():
     """Run the Flask development server."""
     print("=" * 60)
-    print("AMA CRYPTOGRAPHY ♱ - FLASK INTEGRATION EXAMPLE")
+    print("AMA CRYPTOGRAPHY - FLASK INTEGRATION EXAMPLE")
     print("=" * 60)
     print()
-    print("Starting Flask server with AMA Cryptography ♱ cryptographic protection...")
+    print("Starting Flask server with AMA Cryptography cryptographic protection...")
     print()
     print("Available endpoints:")
     print("  GET  /api/health          - Health check (signed)")

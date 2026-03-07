@@ -1,7 +1,7 @@
-AMA Cryptography ♱ Documentation
+AMA Cryptography Documentation
 ============================
 
-Welcome to the AMA Cryptography ♱ documentation. This system provides quantum-resistant
+Welcome to the AMA Cryptography documentation. This system provides quantum-resistant
 cryptographic protection with a multi-language architecture optimized for both
 security and performance.
 
@@ -26,7 +26,7 @@ Quick Links
 Overview
 --------
 
-AMA Cryptography ♱ (AG♱) is a secure post-quantum cryptographic (PQC)
+AMA Cryptography is a secure post-quantum cryptographic (PQC)
 system featuring:
 
 - **Multi-Algorithm Support**: ML-DSA-65, Kyber-1024, SPHINCS+-256f

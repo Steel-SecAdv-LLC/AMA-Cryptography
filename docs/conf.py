@@ -2,7 +2,7 @@
 # Copyright 2025 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 #
-# Sphinx configuration for AMA Cryptography ♱ Python API documentation
+# Sphinx configuration for AMA Cryptography Python API documentation
 
 import os
 import sys
@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, os.path.abspath(".."))
 
 # Project information
-project = "AMA Cryptography ♱"
+project = "AMA Cryptography"
 copyright = "2025, Steel Security Advisors LLC"
 author = "Andrew E. A."
 version = "2.0"

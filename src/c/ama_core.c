@@ -16,7 +16,7 @@
 
 /**
  * @file ama_core.c
- * @brief Core AMA Cryptography ♱ context and lifecycle management
+ * @brief Core AMA Cryptography context and lifecycle management
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2025-12-06
  *
@@ -55,7 +55,7 @@ extern ama_error_t ama_sphincs_verify(const uint8_t *message, size_t message_len
 #endif
 
 /**
- * AMA Cryptography ♱ context structure (opaque)
+ * AMA Cryptography context structure (opaque)
  */
 struct ama_context_t {
     ama_algorithm_t algorithm;
@@ -79,7 +79,7 @@ void ama_version_number(int* major, int* minor, int* patch) {
 }
 
 /**
- * Initialize AMA Cryptography ♱ context
+ * Initialize AMA Cryptography context
  */
 ama_context_t* ama_context_init(ama_algorithm_t algorithm) {
     ama_context_t* ctx;
@@ -103,7 +103,7 @@ ama_context_t* ama_context_init(ama_algorithm_t algorithm) {
 }
 
 /**
- * Free AMA Cryptography ♱ context
+ * Free AMA Cryptography context
  */
 void ama_context_free(ama_context_t* ctx) {
     if (!ctx) {

@@ -178,7 +178,7 @@ install(FILES ${CMAKE_BINARY_DIR}/ama_cryptography.pc
 
 # Print configuration summary
 message(STATUS "")
-message(STATUS "AMA Cryptography ♱ Configuration Summary")
+message(STATUS "AMA Cryptography Configuration Summary")
 message(STATUS "=====================================")
 message(STATUS "Version:          ${PROJECT_VERSION}")
 message(STATUS "Build type:       ${CMAKE_BUILD_TYPE}")

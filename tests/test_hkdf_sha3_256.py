@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-AMA Cryptography ♱ (AG♱): Tests for HKDF-SHA3-256 key derivation with ethical context integration.
+AMA Cryptography: Tests for HKDF-SHA3-256 key derivation with ethical context integration.
 
 This module provides comprehensive tests for:
 1. HKDF-SHA3-256 deterministic key derivation

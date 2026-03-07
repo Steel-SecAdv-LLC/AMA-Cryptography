@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-AMA Cryptography ♱ Setup Script
+AMA Cryptography Setup Script
 ============================
 
 Multi-language build system with C extensions and Cython optimizations.

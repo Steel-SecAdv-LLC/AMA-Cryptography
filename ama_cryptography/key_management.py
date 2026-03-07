@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-AMA Cryptography ♱ Key Management System
+AMA Cryptography Key Management System
 =====================================
 
 Enterprise-grade key management with:
@@ -1116,7 +1116,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     logger.info("=" * 70)
-    logger.info("AMA Cryptography ♱ Key Management Demonstration")
+    logger.info("AMA Cryptography Key Management Demonstration")
     logger.info("=" * 70)
 
     # HD Key Derivation

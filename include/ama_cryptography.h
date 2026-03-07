@@ -16,7 +16,7 @@
 
 /**
  * @file ama_cryptography.h
- * @brief AMA Cryptography ♱ (AG♱) - Core C API for Post-Quantum Cryptography
+ * @brief AMA Cryptography - Core C API for Post-Quantum Cryptography
  * @version 2.0
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2026-01-09
@@ -108,14 +108,14 @@ typedef struct ama_signature_t ama_signature_t;
  * ============================================================================ */
 
 /**
- * @brief Initialize AMA Cryptography ♱ context
+ * @brief Initialize AMA Cryptography context
  * @param algorithm Algorithm to use
  * @return Opaque context pointer, NULL on failure
  */
 ama_context_t* ama_context_init(ama_algorithm_t algorithm);
 
 /**
- * @brief Free AMA Cryptography ♱ context and scrub memory
+ * @brief Free AMA Cryptography context and scrub memory
  * @param ctx Context to free
  */
 void ama_context_free(ama_context_t* ctx);

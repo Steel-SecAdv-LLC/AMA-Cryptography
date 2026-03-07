@@ -13,7 +13,7 @@
 
 ## Overview
 
-AMA Cryptography ♱ is a production-grade quantum-resistant cryptographic protection system released under the Apache License 2.0 as free and open-source software. Security is our highest priority. We take all vulnerabilities seriously and appreciate responsible disclosure from the security research community.
+AMA Cryptography is a production-grade quantum-resistant cryptographic protection system released under the Apache License 2.0 as free and open-source software. Security is our highest priority. We take all vulnerabilities seriously and appreciate responsible disclosure from the security research community.
 
 ---
 
@@ -30,7 +30,7 @@ We actively maintain and provide security updates for the following versions:
 
 ## Security Features
 
-AMA Cryptography ♱ implements defense-in-depth with six independent security layers:
+AMA Cryptography implements defense-in-depth with six independent security layers:
 
 1. **SHA3-256 Content Hashing** (NIST FIPS 202)
 2. **HMAC-SHA3-256 Authentication** (RFC 2104)
@@ -43,14 +43,14 @@ AMA Cryptography ♱ implements defense-in-depth with six independent security l
 
 ### Critical Security Issues
 
-If you discover a security vulnerability in AG♱, please report it responsibly:
+If you discover a security vulnerability in AMA Cryptography, please report it responsibly:
 
 **DO NOT** open a public GitHub issue for security vulnerabilities.
 
 **Instead, please:**
 
 1. **Email:** steel.sa.llc@gmail.com
-2. **Subject:** [SECURITY] AMA Cryptography ♱ (AG♱)  Vulnerability Report
+2. **Subject:** [SECURITY] AMA Cryptography  Vulnerability Report
 3. **Include:**
    - Detailed description of the vulnerability
    - Steps to reproduce the issue
@@ -148,7 +148,7 @@ Security advisories are published:
 
 ## Responsible Disclosure Recognition
 
-We deeply appreciate security researchers who help keep AMA Cryptography ♱ secure. Reporters who follow responsible disclosure will be:
+We deeply appreciate security researchers who help keep AMA Cryptography secure. Reporters who follow responsible disclosure will be:
 
 - **Credited** in the security advisory (unless anonymity is requested)
 - **Acknowledged** in the CHANGELOG and release notes
@@ -159,7 +159,7 @@ We do not currently offer a bug bounty program but may consider recognition rewa
 
 ## Security Best Practices
 
-Users deploying AMA Cryptography ♱ in production should:
+Users deploying AMA Cryptography in production should:
 
 ### Key Management
 - **REQUIRED:** Store master secrets in FIPS 140-2 Level 3+ HSMs for production
@@ -215,7 +215,7 @@ We will deprecate cryptographic algorithms when:
 
 ## Security Audits
 
-AMA Cryptography ♱ has undergone internal security analysis documented in `SECURITY_ANALYSIS.md`. We welcome:
+AMA Cryptography has undergone internal security analysis documented in `SECURITY_ANALYSIS.md`. We welcome:
 
 - Independent security audits from qualified cryptographers
 - Academic review of our mathematical proofs
@@ -226,7 +226,7 @@ Please contact us at steel.sa.llc@gmail.com to coordinate security audit efforts
 
 ## Compliance and Standards
 
-AMA Cryptography ♱ is designed to comply with:
+AMA Cryptography is designed to comply with:
 
 - **NIST FIPS 202** - SHA-3 Standard
 - **NIST FIPS 204** - Module-Lattice-Based Digital Signature Standard (Dilithium)

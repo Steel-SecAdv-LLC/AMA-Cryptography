@@ -1,7 +1,7 @@
 # Copyright 2025 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 #
-# Multi-stage Docker build for AMA Cryptography ♱
+# Multi-stage Docker build for AMA Cryptography
 # Optimized for production deployment with minimal attack surface
 
 # Stage 1: Builder
@@ -34,7 +34,7 @@ RUN mkdir -p build && cd build && \
         -DAMA_BUILD_STATIC=OFF \
         -DAMA_BUILD_TESTS=OFF \
         -DAMA_BUILD_EXAMPLES=OFF \
-        -DAMA_ENABLE_AVX2=OFF \
+        -DAMA_ENABLE_AVX2=ON \
         -DAMA_ENABLE_LTO=ON && \
     cmake --build . --config Release -j$(nproc)
 
@@ -46,7 +46,7 @@ RUN python3 setup.py build_ext --inplace && \
 FROM ubuntu:22.04
 
 LABEL maintainer="Steel Security Advisors LLC <steel.sa.llc@gmail.com>"
-LABEL description="AMA Cryptography ♱ - Quantum-Resistant Cryptographic Protection System"
+LABEL description="AMA Cryptography - Quantum-Resistant Cryptographic Protection System"
 LABEL version="2.0"
 
 # Install runtime dependencies only
@@ -88,4 +88,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD python3 -c "import ama_cryptography; print('OK')" || exit 1
 
 # Default command
-CMD ["python3", "-c", "import ama_cryptography; print(f'AMA Cryptography ♱ v{ama_cryptography.__version__} ready')"]
+CMD ["python3", "-c", "import ama_cryptography; print(f'AMA Cryptography v{ama_cryptography.__version__} ready')"]

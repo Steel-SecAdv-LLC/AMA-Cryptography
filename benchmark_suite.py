@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱): Comprehensive Benchmark Suite
+AMA Cryptography: Comprehensive Benchmark Suite
 ====================================================
 
 Live empirical performance analysis with ethical integration.
@@ -24,10 +24,10 @@ Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
 Version: 2.0
-Project: AMA Cryptography ♱ Performance Analysis
+Project: AMA Cryptography Performance Analysis
 
 AI Co-Architects:
-    Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+    Eris ⯰ | Eden | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 """
 
 import hashlib
@@ -69,7 +69,7 @@ from code_guardian_secure import (
 
 
 class BenchmarkSuite:
-    """Comprehensive performance benchmarking for AMA Cryptography ♱."""
+    """Comprehensive performance benchmarking for AMA Cryptography."""
 
     def __init__(self):
         self.results = {}
@@ -343,7 +343,7 @@ class BenchmarkSuite:
 
     def run_comprehensive_benchmark(self) -> Dict:
         """Run complete benchmark suite."""
-        print("🚀 Starting Comprehensive AMA Cryptography ♱ Benchmark Suite...")
+        print("🚀 Starting Comprehensive AMA Cryptography Benchmark Suite...")
         print(f"System: {self.system_info['platform']}")
         print(f"CPU: {self.system_info['cpu_count']} cores")
         print(f"Memory: {self.system_info['memory_gb']} GB")

@@ -14,13 +14,13 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱): 3R Runtime Anomaly Monitoring System
+AMA Cryptography: 3R Runtime Anomaly Monitoring System
 ==========================================================
 
 3R Mechanism: Resonance-Recursion-Refactoring for runtime anomaly monitoring.
 
 The 3R Mechanism is a novel runtime anomaly monitoring framework developed for
-AMA Cryptography ♱ by Steel Security Advisors LLC. It provides three complementary
+AMA Cryptography by Steel Security Advisors LLC. It provides three complementary
 approaches to runtime security analysis without compromising cryptographic
 integrity or performance.
 
@@ -40,10 +40,10 @@ Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2025-12-06
 Version: 2.0
-Project: AMA Cryptography ♱ 3R Runtime Monitoring
+Project: AMA Cryptography 3R Runtime Monitoring
 
 AI Co-Architects:
-    Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+    Eris ⯰ | Eden | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 """
 
 import ast
@@ -867,7 +867,7 @@ class RefactoringAnalyzer:
 
 class AmaCryptographyMonitor:
     """
-    Unified monitoring interface for AMA Cryptography ♱.
+    Unified monitoring interface for AMA Cryptography.
 
     Combines 3R Mechanism components (Resonance-Recursion-Refactoring)
     for comprehensive security monitoring without compromising cryptographic

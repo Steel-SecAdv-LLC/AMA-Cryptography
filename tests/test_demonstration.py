@@ -13,10 +13,10 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱): Demonstration Test Suite
+AMA Cryptography: Demonstration Test Suite
 ===============================================
 
-Test suite for validating AMA Cryptography ♱ demonstration functionality.
+Test suite for validating AMA Cryptography demonstration functionality.
 
 This test module validates that the demonstration function executes successfully
 and produces correct output, verifying all six cryptographic layers.
@@ -28,7 +28,7 @@ Date: 2025-12-06
 Version: 2.0
 
 AI Co-Architects:
-    Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+    Eris ⯰ | Eden | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 """
 
 import subprocess

@@ -13,7 +13,7 @@
 
 ## Overview
 
-All notable changes to AMA Cryptography ♱ will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to AMA Cryptography will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
@@ -329,7 +329,7 @@ These changes are planned for **v2.0.0** release due to breaking changes in `Cry
 
 **First Public Release - Apache License 2.0**
 
-This release represents the first public open-source release of AMA Cryptography ♱ (AG♱) under Apache License 2.0. The system provides secure, tested quantum-resistant cryptographic protection for helical mathematical Omni-Codes.
+This release represents the first public open-source release of AMA Cryptography under Apache License 2.0. The system provides secure, tested quantum-resistant cryptographic protection for helical mathematical Omni-Codes.
 
 ### Added
 - **Apache License 2.0:** Full open-source licensing with proper headers

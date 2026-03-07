@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱): Core Cryptographic Penetration Test Suite
+AMA Cryptography: Core Cryptographic Penetration Test Suite
 =============================================================
 
 100% Penetration Validation for cryptographic primitives.

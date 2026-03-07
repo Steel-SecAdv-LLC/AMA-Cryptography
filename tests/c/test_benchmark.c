@@ -97,7 +97,7 @@ int main(void) {
     memcpy(test_key, sk, 64);
 
     printf("============================================================\n");
-    printf("AMA CRYPTOGRAPHY ♱ - C LIBRARY PERFORMANCE BENCHMARKS\n");
+    printf("AMA CRYPTOGRAPHY - C LIBRARY PERFORMANCE BENCHMARKS\n");
     printf("============================================================\n");
     printf("Iterations: %d (+ %d warmup)\n\n", ITERATIONS, WARMUP);
 

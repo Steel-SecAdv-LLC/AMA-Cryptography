@@ -2,7 +2,7 @@
  * Copyright 2025 Steel Security Advisors LLC
  * Licensed under the Apache License, Version 2.0
  *
- * Simple example demonstrating AMA Cryptography ♱ C API usage
+ * Simple example demonstrating AMA Cryptography C API usage
  */
 
 #include <stdio.h>
@@ -15,7 +15,7 @@ int main(void) {
     const char* version_str;
 
     printf("===========================================\n");
-    printf("AMA Cryptography ♱ C API Example\n");
+    printf("AMA Cryptography C API Example\n");
     printf("===========================================\n\n");
 
     /* Get version information */

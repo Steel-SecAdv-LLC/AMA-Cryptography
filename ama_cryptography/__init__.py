@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱) - Mathematical Suite Package
+AMA Cryptography - Mathematical Suite Package
 ==================================================
 
 Post-quantum cryptographic security system with rigorous mathematical foundations.
@@ -25,7 +25,7 @@ Contact: steel.sa.llc@gmail.com
 Version: 2.0
 
 AI Co-Architects:
-    Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+    Eris ⯰ | Eden | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 """
 
 __version__ = "2.0"

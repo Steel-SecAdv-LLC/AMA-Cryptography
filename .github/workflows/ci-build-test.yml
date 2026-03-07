@@ -78,7 +78,7 @@ jobs:
             -DAMA_BUILD_SHARED=ON \
             -DAMA_BUILD_STATIC=ON \
             -DAMA_BUILD_TESTS=ON \
-            -DAMA_ENABLE_AVX2=OFF \
+            -DAMA_ENABLE_AVX2=ON \
             ${OPENSSL_ROOT:+-DOPENSSL_ROOT_DIR=${OPENSSL_ROOT}}
 
       - name: Build
@@ -137,7 +137,7 @@ jobs:
 
       - name: Run tests
         env:
-          # UTF-8 encoding for Windows to support Unicode symbols (♱) in output
+          # UTF-8 encoding for Windows to support Unicode symbols in output
           PYTHONIOENCODING: ${{ matrix.os == 'windows-latest' && 'utf-8' || '' }}
           PYTHONUTF8: ${{ matrix.os == 'windows-latest' && '1' || '' }}
         run: pytest tests/ -v --cov=ama_cryptography --cov-report=xml

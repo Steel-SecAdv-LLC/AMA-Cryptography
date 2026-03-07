@@ -5,7 +5,7 @@
 Pytest Configuration and Shared Fixtures
 =========================================
 
-Centralized test fixtures for the AMA Cryptography ♱ test suite.
+Centralized test fixtures for the AMA Cryptography test suite.
 Provides reusable components for cryptographic testing.
 
 This file consolidates fixtures from across the test suite to:

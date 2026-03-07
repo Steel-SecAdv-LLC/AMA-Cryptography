@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-AMA Cryptography ♱ (AG♱): Double-Helix Evolution Engine Test Suite
+AMA Cryptography: Double-Helix Evolution Engine Test Suite
 ================================================================
 
 Tests for 18+ AMA Equation variants and Double-Helix architecture.
@@ -26,7 +26,7 @@ Date: 2025-12-06
 Version: 2.0
 
 AI Co-Architects:
-    Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+    Eris ⯰ | Eden | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
 """
 
 import sys

@@ -1,4 +1,4 @@
-# AMA Cryptography ♱ Benchmark Results
+# AMA Cryptography Benchmark Results
 
 ## Document Information
 
@@ -13,7 +13,7 @@
 
 ## Executive Summary
 
-Performance benchmarks for AMA Cryptography ♱ v1.2 with **fully native PQC implementations** (FIPS 203/204/205). All post-quantum cryptography is provided by the built-in C library — no external dependencies (liboqs, pqcrypto) required.
+Performance benchmarks for AMA Cryptography v1.2 with **fully native PQC implementations** (FIPS 203/204/205). All post-quantum cryptography is provided by the built-in C library — no external dependencies (liboqs, pqcrypto) required.
 
 **Test Environment:**
 - OS: Linux 4.4.0 x86_64

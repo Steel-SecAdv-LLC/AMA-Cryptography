@@ -1,4 +1,4 @@
-# AMA Cryptography ♱ System Architecture
+# AMA Cryptography System Architecture
 
 ## Document Information
 
@@ -13,9 +13,9 @@
 
 ## Executive Summary
 
-AMA Cryptography ♱ (AG♱) is a production-grade cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. The architecture implements defense-in-depth security through six independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
+AMA Cryptography is a production-grade cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. The architecture implements defense-in-depth security through six independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
 
-This document provides a comprehensive technical reference for system architects, security engineers, and developers working with or evaluating the AMA Cryptography ♱ system.
+This document provides a comprehensive technical reference for system architects, security engineers, and developers working with or evaluating the AMA Cryptography system.
 
 ---
 
@@ -41,7 +41,7 @@ This document provides a comprehensive technical reference for system architects
 
 ### Purpose
 
-AMA Cryptography ♱ provides cryptographic protection for structured data (referred to as "Omni-Codes" within the system) using a hybrid classical/quantum-resistant signature scheme. The system is designed for long-term data integrity assurance (50+ years) in environments where quantum computing threats must be considered.
+AMA Cryptography provides cryptographic protection for structured data (referred to as "Omni-Codes" within the system) using a hybrid classical/quantum-resistant signature scheme. The system is designed for long-term data integrity assurance (50+ years) in environments where quantum computing threats must be considered.
 
 ### Scope
 
@@ -90,7 +90,7 @@ The following are explicitly not goals of this architecture:
 
 ### Design Philosophy
 
-The AMA Cryptography ♱ architecture is built on the following foundational principles:
+The AMA Cryptography architecture is built on the following foundational principles:
 
 **Security Through Mathematical Rigor**: All security claims are backed by formal proofs or reduction arguments to well-studied cryptographic assumptions. No security-by-obscurity mechanisms are employed.
 

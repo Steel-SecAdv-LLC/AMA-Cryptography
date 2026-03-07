@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Minimal PQC sanity check for AMA Cryptography ♱.
+Minimal PQC sanity check for AMA Cryptography.
 
 This script asserts PQC backend availability and exercises a hybrid
 sign/verify path. It exits non-zero on failure so it can be used in CI

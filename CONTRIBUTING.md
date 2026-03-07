@@ -1,4 +1,4 @@
-# Contributing to AMA Cryptography ♱
+# Contributing to AMA Cryptography
 
 ## Document Information
 
@@ -13,7 +13,7 @@
 
 ## Overview
 
-This document provides guidelines for contributing to the AMA Cryptography ♱ quantum-resistant cryptographic protection system. AMA Cryptography ♱ is released under the Apache License 2.0 as free and open-source software, accessible for universal use as a knowledge vault and bridge to cryptographic frontiers.
+This document provides guidelines for contributing to the AMA Cryptography quantum-resistant cryptographic protection system. AMA Cryptography is released under the Apache License 2.0 as free and open-source software, accessible for universal use as a knowledge vault and bridge to cryptographic frontiers.
 
 ---
 
