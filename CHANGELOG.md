@@ -220,11 +220,11 @@ While RFC 5869 was written for HMAC with Merkle-Damgard hashes, HMAC-SHA3-256 pr
 
 ---
 
-## PLANNED FOR v2.0.0
+## [2.0.0] - Ethical Integration
 
-> **⚠️ WARNING:** The features below are NOT included in v1.0.0. They are planned for future releases.
+> **Released with v2.0.0** — Originally planned during v1.x development cycle.
 
-### Ethical Integration (Planned)
+### Ethical Integration
 
 **Major Enhancement:** Mathematical integration of 12 Code Code Ethical Pillars into cryptographic framework.
 
@@ -321,9 +321,9 @@ The system maintains secure and tested defense-in-depth architecture. Ethical in
 - Adds contextual binding and domain separation
 - Provides additional security properties through ethical constraints
 
-### Version Planning
+### Version Note
 
-These changes are planned for **v2.0.0** release due to breaking changes in `CryptoPackage` schema. Release date to be determined.
+These features shipped in **v2.0.0** alongside the rebrand from Ava Guardian to AMA Cryptography.
 
 ## [1.0.0] - 2025-11-22
 

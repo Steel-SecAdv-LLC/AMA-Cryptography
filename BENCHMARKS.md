@@ -13,7 +13,7 @@
 
 ## Executive Summary
 
-This document provides **transparent, honest performance metrics** for AMA Cryptography v1.0.0. We distinguish between:
+This document provides **transparent, honest performance metrics** for AMA Cryptography v2.0. We distinguish between:
 - **Measured**: Actual benchmark results from live testing
 - **Projected**: Estimates based on architecture (not yet measured)
 - **Unknown**: Requires additional testing

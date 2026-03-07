@@ -458,10 +458,10 @@ python -c "from ama_cryptography.math_engine import benchmark_matrix_operations;
 | Component | Version | Notes |
 |-----------|---------|-------|
 | Python | 3.8+ | Type hints support |
-| NumPy | 1.24+ | Array operations |
+| NumPy | 1.24+ | Optional (equations/monitoring) |
 | Cython | 0.29.30+ | Optional (for speedup) |
 | CMake | 3.15+ | C library build |
-| OpenSSL | 1.1.1+ | Cryptographic primitives |
+| OpenSSL | 1.1.1+ | Ed25519 and core operations |
 | GCC | 9+ | C11 support |
 | Clang | 10+ | C11 support |
 | MSVC | 2019+ | Windows builds |

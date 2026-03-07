@@ -66,10 +66,10 @@ COPY --from=builder /build/build/lib/*.so* /usr/local/lib/
 COPY --from=builder /build/dist/*.whl /tmp/
 COPY --from=builder /build/requirements.txt /tmp/
 
-# Install Python package and runtime dependencies (numpy, scipy required by ama_cryptography)
+# Install Python package and runtime dependencies
+# numpy/scipy are optional — install with pip install "ama-cryptography[monitoring]"
 RUN pip3 install --no-cache-dir /tmp/*.whl && \
     pip3 install --no-cache-dir -r /tmp/requirements.txt && \
-    pip3 install --no-cache-dir numpy scipy && \
     rm -rf /tmp/*.whl /tmp/requirements.txt && \
     ldconfig
 

@@ -23,8 +23,8 @@ We actively maintain and provide security updates for the following versions:
 
 | Version | Supported | Status |
 |---------|-----------|--------|
-| 1.0.x | Yes | Active development and security updates |
-| < 1.0 | No | No longer supported |
+| 2.0.x | Yes | Active development and security updates |
+| 1.0.x | No | Superseded by v2.0 |
 
 ---
 
@@ -35,7 +35,7 @@ AMA Cryptography implements defense-in-depth with six independent security layer
 1. **SHA3-256 Content Hashing** (NIST FIPS 202)
 2. **HMAC-SHA3-256 Authentication** (RFC 2104)
 3. **Ed25519 Digital Signatures** (RFC 8032)
-4. **CRYSTALS-Dilithium Quantum-Resistant Signatures** (NIST FIPS 204)
+4. **ML-DSA-65 Quantum-Resistant Signatures** (NIST FIPS 204)
 5. **HKDF Key Derivation** (RFC 5869, NIST SP 800-108)
 6. **RFC 3161 Trusted Timestamps**
 
