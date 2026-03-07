@@ -687,7 +687,7 @@ def create_test_coverage():
         "Performance\n& Monitoring",
     ]
     # Approximate distribution based on test file analysis
-    test_counts = [180, 150, 120, 140, 139]  # Total = 729
+    test_counts = [198, 170, 135, 150, 145]  # Total = 798
     total_tests = sum(test_counts)
     percentages = [100 * c / total_tests for c in test_counts]
     colors = ["#22C55E", "#3B82F6", "#8B5CF6", "#F59E0B", "#EF4444"]
@@ -751,7 +751,7 @@ def create_test_coverage():
 
     # Overall title
     fig.suptitle(
-        "Test Suite Coverage: 729 Tests Across 25 Files (~11,000 Lines)",
+        "Test Suite Coverage: 798 Tests Across 32 Files (~11,000 Lines)",
         fontsize=14,
         fontweight="bold",
         y=1.02,
@@ -761,7 +761,7 @@ def create_test_coverage():
     fig.text(
         0.5,
         -0.06,
-        f"Total: {total_tests} tests | 25 test files | ~11,000 LOC | "
+        f"Total: {total_tests} tests | 32 test files | ~11,000 LOC | "
         "Categories: NIST KATs, PQC, Key Mgmt, Memory Security, Performance",
         ha="center",
         fontsize=9,

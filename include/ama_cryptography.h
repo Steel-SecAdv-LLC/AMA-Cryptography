@@ -53,7 +53,7 @@ typedef enum {
     AMA_ALG_SPHINCS_256F = 2, /**< SPHINCS+-256f */
     AMA_ALG_ED25519 = 3,      /**< Ed25519 (classical) */
     AMA_ALG_HYBRID = 4        /**< Hybrid mode (classical + PQC) */
-} ava_algorithm_t;
+} ama_algorithm_t;
 
 /* ============================================================================
  * ERROR CODES
@@ -100,7 +100,7 @@ typedef enum {
  * ============================================================================ */
 
 typedef struct ama_context_t ama_context_t;
-typedef struct ava_keypair_t ava_keypair_t;
+typedef struct ama_keypair_t ama_keypair_t;
 typedef struct ama_signature_t ama_signature_t;
 
 /* ============================================================================
@@ -112,7 +112,7 @@ typedef struct ama_signature_t ama_signature_t;
  * @param algorithm Algorithm to use
  * @return Opaque context pointer, NULL on failure
  */
-ama_context_t* ama_context_init(ava_algorithm_t algorithm);
+ama_context_t* ama_context_init(ama_algorithm_t algorithm);
 
 /**
  * @brief Free AMA Cryptography ♱ context and scrub memory

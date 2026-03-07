@@ -1145,7 +1145,7 @@ if __name__ == "__main__":
     logger.info("-" * 70)
     import tempfile
 
-    demo_storage_path = Path(tempfile.gettempdir()) / "ava_keys_demo"
+    demo_storage_path = Path(tempfile.gettempdir()) / "ama_keys_demo"
     storage = SecureKeyStorage(demo_storage_path, master_password="test_password_123")  # nosec B106
 
     # Store a key

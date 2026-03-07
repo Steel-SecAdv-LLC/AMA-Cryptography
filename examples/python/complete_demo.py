@@ -283,7 +283,7 @@ def demo_performance():
 
     try:
         # Try to import optimized Cython engine
-        from ama_cryptography.helix_engine_complete import AvaEngineOptimized
+        from ama_cryptography.helix_engine_complete import AmaEngineOptimized
 
         print("\nCython-optimized engine available!")
         print("-" * 70)
@@ -302,7 +302,7 @@ def demo_performance():
         time_py = time.perf_counter() - start
 
         # Cython
-        engine_cy = AvaEngineOptimized(state_dim=state_dim, random_seed=42)
+        engine_cy = AmaEngineOptimized(state_dim=state_dim, random_seed=42)
         state_cy = np.random.randn(state_dim)
 
         start = time.perf_counter()

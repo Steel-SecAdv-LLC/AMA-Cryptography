@@ -49,7 +49,7 @@ cdef double LAMBDA_DECAY = 0.18
 # COMPLETE DOUBLE-HELIX ENGINE WITH ALL 18+ VARIANTS
 # ============================================================================
 
-cdef class AvaEngineOptimized:
+cdef class AmaEngineOptimized:
     """
     Ultra-optimized AMA Equation Engine with all 18+ variants.
 

@@ -58,12 +58,12 @@ extern ama_error_t ama_sphincs_verify(const uint8_t *message, size_t message_len
  * AMA Cryptography ♱ context structure (opaque)
  */
 struct ama_context_t {
-    ava_algorithm_t algorithm;
+    ama_algorithm_t algorithm;
     void* algorithm_ctx;  /* Algorithm-specific context */
     uint32_t magic;       /* Magic number for validation */
 };
 
-#define AMA_CONTEXT_MAGIC 0x41564147  /* "AVAG" */
+#define AMA_CONTEXT_MAGIC 0x414D4143  /* "AMAC" */
 
 /**
  * Version information
@@ -81,7 +81,7 @@ void ama_version_number(int* major, int* minor, int* patch) {
 /**
  * Initialize AMA Cryptography ♱ context
  */
-ama_context_t* ama_context_init(ava_algorithm_t algorithm) {
+ama_context_t* ama_context_init(ama_algorithm_t algorithm) {
     ama_context_t* ctx;
 
     /* Validate algorithm */
@@ -139,7 +139,7 @@ static inline int validate_context(const ama_context_t* ctx) {
  * Get expected key sizes for algorithm
  */
 static void get_key_sizes(
-    ava_algorithm_t alg,
+    ama_algorithm_t alg,
     size_t* public_key_size,
     size_t* secret_key_size,
     size_t* signature_size
