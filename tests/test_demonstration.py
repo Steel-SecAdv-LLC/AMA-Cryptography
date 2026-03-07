@@ -245,7 +245,7 @@ class TestErrorHandling:
         from code_guardian_secure import generate_ed25519_keypair
 
         with patch("code_guardian_secure.CRYPTO_AVAILABLE", False):
-            with pytest.raises(RuntimeError, match="cryptography library required"):
+            with pytest.raises(RuntimeError, match="AMA native C library required"):
                 generate_ed25519_keypair()
 
     def test_graceful_quantum_library_fallback(self):
