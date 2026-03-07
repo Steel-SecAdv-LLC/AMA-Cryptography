@@ -27,7 +27,7 @@ Version: 2.0
 Project: Post-quantum cryptographic security system
 
 AI Co-Architects:
-    Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕
+    Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 Security Layers (6-Layer Defense-in-Depth):
 -------------------------------------------
@@ -2048,7 +2048,7 @@ def main() -> None:
     print("\nCopyright (C) 2025 Steel Security Advisors LLC")
     print("Author/Inventor: Andrew E. A.")
     print("\nAI Co-Architects:")
-    print("  Eris ⯰ | Eden ♱ | Veritas 💠 | X ⚛ | Caduceus ⚚ | Dev ⚕")
+    print("  Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛")
     print("\n" + "=" * 70)
 
     # Generate key management system
