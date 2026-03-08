@@ -33,13 +33,15 @@ class TestLazyImportWithoutNumpy:
 
     def test_import_without_numpy(self):
         """import ama_cryptography succeeds and exposes __version__ without numpy."""
-        result = _run_script("""\
+        result = _run_script(
+            """\
             import sys
             sys.modules['numpy'] = None
             sys.modules['scipy'] = None
             import ama_cryptography
             print(ama_cryptography.__version__)
-        """)
+        """
+        )
         assert (
             result.returncode == 0
         ), f"Import failed with numpy blocked.\nstdout: {result.stdout}\nstderr: {result.stderr}"
