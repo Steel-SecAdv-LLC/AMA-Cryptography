@@ -51,7 +51,7 @@ except ImportError:
     np = None
 
 # Configuration
-VERSION = "2.0"
+VERSION = "2.0.0"
 USE_CYTHON = CYTHON_AVAILABLE and not os.getenv("AMA_NO_CYTHON")
 USE_C_EXTENSIONS = not os.getenv("AMA_NO_C_EXTENSIONS")
 DEBUG = bool(os.getenv("AMA_DEBUG"))
@@ -254,6 +254,7 @@ setup(
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
         "Topic :: Security :: Cryptography",
         "Topic :: Software Development :: Libraries :: Python Modules",
         "Typing :: Typed",
@@ -263,11 +264,18 @@ setup(
         "quantum-resistant",
         "post-quantum-cryptography",
         "dilithium",
-        "kyber",
-        "sphincs",
         "ml-dsa",
+        "kyber",
+        "ml-kem",
+        "sphincs",
+        "ed25519",
+        "aes-gcm",
+        "sha3",
+        "hmac",
         "pqc",
         "security",
+        "integrity-protection",
+        "digital-signatures",
     ],
     python_requires=">=3.8",
     packages=find_packages(exclude=["tests", "tests.*", "examples", "examples.*", "src", "src.*"]),
@@ -281,19 +289,30 @@ setup(
             "numpy>=1.24.0,<3.0.0",
             "scipy>=1.7.0",
         ],
+        # PyCA cryptography — only needed as fallback when native C library is not available
+        "legacy": ["cryptography>=41.0.0"],
+        # PKCS#11 support for hardware security modules
+        "hsm": ["PyKCS11>=1.5.0"],
         # PyNaCl for enhanced secure memory operations (libsodium bindings)
         "secure-memory": ["pynacl>=1.5.0"],
         "dev": [
             "pytest>=7.0.0",
             "pytest-cov>=4.0.0",
+            "pytest-timeout>=2.1.0",
             "pytest-benchmark>=4.0.0",
+            "pytest-xdist>=3.0.0",
+            "hypothesis>=6.0.0",
             "black==24.10.0; python_version>='3.9'",
             "flake8>=6.0.0",
             "mypy>=1.0.0",
             "isort>=5.12.0",
+            "bandit>=1.7.0",
+            "safety>=2.3.0",
             "Cython>=3.0.0",
-            "numpy>=1.24.0,<3.0.0",
-            "scipy>=1.7.0",
+            "numpy>=1.24.0,<2.0.0; python_version<'3.9'",
+            "numpy>=1.24.0; python_version>='3.9'",
+            "scipy>=1.10.0,<1.11.0; python_version<'3.9'",
+            "scipy>=1.11.0; python_version>='3.9'",
         ],
         "docs": [
             "sphinx>=6.0.0",
@@ -302,16 +321,24 @@ setup(
         ],
         "all": [
             "pynacl>=1.5.0",
+            "PyKCS11>=1.5.0",
             "pytest>=7.0.0",
             "pytest-cov>=4.0.0",
+            "pytest-timeout>=2.1.0",
             "pytest-benchmark>=4.0.0",
+            "pytest-xdist>=3.0.0",
+            "hypothesis>=6.0.0",
             "black==24.10.0; python_version>='3.9'",
             "flake8>=6.0.0",
             "mypy>=1.0.0",
             "isort>=5.12.0",
+            "bandit>=1.7.0",
             "Cython>=3.0.0",
             "sphinx>=6.0.0",
             "sphinx-rtd-theme>=1.2.0",
+            "sphinx-autodoc-typehints>=1.22.0",
+            "numpy>=1.24.0,<3.0.0",
+            "scipy>=1.7.0",
         ],
     },
     ext_modules=get_cythonized_extensions(),

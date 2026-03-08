@@ -22,6 +22,7 @@ Demonstrates:
 2. Pattern analysis (RecursionEngine)
 3. Security reporting
 4. Integration with existing crypto functions
+5. Adaptive posture evaluation via 3R signals
 
 Note: The 3R system is a runtime ANOMALY MONITORING framework. It surfaces
 statistical anomalies for security review but does NOT guarantee detection
@@ -30,8 +31,8 @@ or prevention of timing attacks or other side-channel vulnerabilities.
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
-Date: 2025-12-06
-Version: 2.0
+Date: 2026-03-08
+Version: 2.0.0
 Project: AMA Cryptography 3R Runtime Monitoring
 
 AI Co-Architects:
@@ -233,7 +234,7 @@ def main():
     print("  AMA CRYPTOGRAPHY - 3R SECURITY MONITORING DEMONSTRATION")
     print("=" * 70)
     print("\n  Showcasing runtime security analysis capabilities")
-    print("  Steel Security Advisors LLC - 2025")
+    print("  Steel Security Advisors LLC - 2025-2026")
 
     # Run demos
     demo_timing_monitoring()

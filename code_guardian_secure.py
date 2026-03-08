@@ -22,8 +22,8 @@ Complete cryptographic protection system for helical mathematical Omni-Codes.
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
-Date: 2025-12-06
-Version: 2.0
+Date: 2026-03-08
+Version: 2.0.0
 Project: Post-quantum cryptographic security system
 
 AI Co-Architects:
@@ -33,26 +33,33 @@ Security Layers (6-Layer Defense-in-Depth):
 -------------------------------------------
 1. SHA3-256 content hashing (NIST FIPS 202)
 2. HMAC-SHA3-256 authentication (RFC 2104)
-3. Ed25519 digital signatures (RFC 8032)
-4. CRYSTALS-Dilithium quantum-resistant signatures (NIST FIPS 204) - required by default
-5. HKDF key derivation (RFC 5869, NIST SP 800-108)
+3. Ed25519 digital signatures (RFC 8032) — native C backend
+4. CRYSTALS-Dilithium quantum-resistant signatures (NIST FIPS 204) — native C backend, required
+5. HKDF key derivation (RFC 5869, NIST SP 800-108) — native C backend
 6. RFC 3161 trusted timestamps with cryptographic verification (RFC 3161)
 
 Additional Features:
 --------------------
+- AES-256-GCM authenticated encryption — native C backend
+- Kyber-1024 (ML-KEM) key encapsulation — native C backend (NIST FIPS 203)
+- SPHINCS+-SHA2-256f hash-based signatures — native C backend (NIST FIPS 205)
+- Hybrid KEM combiner (classical + PQC) with ciphertext binding
+- Adaptive cryptographic posture system driven by 3R monitor signals
 - HSM integration support for secure key storage
 
 Standards Compliance:
 ---------------------
 - NIST FIPS 202: SHA-3 Standard
+- NIST FIPS 203: ML-KEM (Kyber-1024)
+- NIST FIPS 204: ML-DSA (CRYSTALS-Dilithium)
+- NIST FIPS 205: SLH-DSA (SPHINCS+-SHA2-256f)
 - NIST SP 800-108: Key Derivation Using Pseudorandom Functions
-- NIST PQC Round 3: CRYSTALS-Dilithium
 - RFC 8032: Edwards-Curve Digital Signature Algorithm (EdDSA)
 - RFC 2104: HMAC: Keyed-Hashing for Message Authentication
 - RFC 5869: HMAC-based Extract-and-Expand Key Derivation (HKDF)
 - RFC 3161: Internet X.509 Public Key Infrastructure Time-Stamp Protocol
 
-Version: 2.0
+Version: 2.0.0
 Python: 3.8+
 License: Apache License 2.0
 """

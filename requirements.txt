@@ -1,8 +1,13 @@
-# Production Dependencies
+# Production Dependencies for AMA Cryptography 2.0
 # Install with: pip install -r requirements.txt
-
-# Core cryptographic operations — ZERO external dependencies required.
-# Ed25519, AES-256-GCM, SHA-512 are provided by the native C library.
+#
+# Core cryptographic operations — ZERO external Python dependencies required.
+# The native C library (libama_cryptography) provides:
+#   - Ed25519 digital signatures (RFC 8032)
+#   - AES-256-GCM authenticated encryption
+#   - HKDF key derivation (RFC 5869)
+#   - SHA3-256 / SHA-512 hashing
+#   - Constant-time comparison utilities
 # Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
 
 # Legacy PyCA cryptography fallback (OPTIONAL)
@@ -23,6 +28,11 @@
 # Provides memory locking (mlock) and secure zeroing via libsodium
 # Install with: pip install "ama-cryptography[secure-memory]"
 # pynacl>=1.5.0
+
+# HSM integration (OPTIONAL)
+# PKCS#11 support for hardware security modules
+# Install with: pip install "ama-cryptography[hsm]"
+# PyKCS11>=1.5.0
 
 # Mathematical monitoring dependencies (OPTIONAL)
 # The core cryptographic operations work without numpy/scipy.

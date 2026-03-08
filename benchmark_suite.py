@@ -22,8 +22,8 @@ Live empirical performance analysis with ethical integration.
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
-Date: 2025-12-06
-Version: 2.0
+Date: 2026-03-08
+Version: 2.0.0
 Project: AMA Cryptography Performance Analysis
 
 AI Co-Architects:
@@ -32,6 +32,7 @@ AI Co-Architects:
 
 import hashlib
 import json
+import os
 import platform
 import secrets
 import statistics
@@ -39,10 +40,14 @@ import time
 from datetime import datetime, timezone
 from typing import Dict
 
-import psutil
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+# psutil is optional — used for richer system info when available
+try:
+    import psutil
+
+    _HAS_PSUTIL = True
+except ImportError:
+    psutil = None  # type: ignore[assignment]
+    _HAS_PSUTIL = False
 
 from code_guardian_secure import (
     DILITHIUM_AVAILABLE,
@@ -77,16 +82,19 @@ class BenchmarkSuite:
 
     def _get_system_info(self) -> Dict:
         """Collect system information for benchmark context."""
-        return {
+        info: Dict = {
             "platform": platform.platform(),
             "processor": platform.processor(),
             "python_version": platform.python_version(),
-            "cpu_count": psutil.cpu_count(),
-            "memory_gb": round(psutil.virtual_memory().total / (1024**3), 2),
+            "cpu_count": os.cpu_count(),
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "dilithium_backend": DILITHIUM_BACKEND,
             "dilithium_available": DILITHIUM_AVAILABLE,
         }
+        if _HAS_PSUTIL:
+            info["cpu_count"] = psutil.cpu_count()
+            info["memory_gb"] = round(psutil.virtual_memory().total / (1024**3), 2)
+        return info
 
     def benchmark_operation(
         self, operation_name: str, operation_func, iterations: int = 1000
@@ -274,38 +282,23 @@ class BenchmarkSuite:
             iterations=10000,
         )
 
-        # HKDF with vs without ethical context
+        # HKDF with vs without ethical context (both use native C backend)
         master_secret = secrets.token_bytes(32)
 
-        # Standard HKDF (baseline)
-        def standard_hkdf():
-            hkdf = HKDF(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=None,
-                info=b"test:0",
-                backend=default_backend(),
-            )
-            return hkdf.derive(master_secret)
-
+        # Standard HKDF via native derive_keys (baseline)
         results["hkdf_standard"] = self.benchmark_operation(
-            "Standard HKDF", standard_hkdf, iterations=1000
+            "Standard HKDF (Native)",
+            lambda: derive_keys(master_secret, "benchmark:baseline", num_keys=1),
+            iterations=1000,
         )
 
-        # Ethical HKDF
-        def ethical_hkdf():
-            enhanced_context = create_ethical_hkdf_context(b"test:0", ETHICAL_VECTOR)
-            hkdf = HKDF(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=None,
-                info=enhanced_context,
-                backend=default_backend(),
-            )
-            return hkdf.derive(master_secret)
-
+        # Ethical HKDF via derive_keys with ethical vector
         results["hkdf_ethical"] = self.benchmark_operation(
-            "Ethical HKDF", ethical_hkdf, iterations=1000
+            "Ethical HKDF (Native)",
+            lambda: derive_keys(
+                master_secret, "benchmark:ethical", num_keys=1, ethical_vector=ETHICAL_VECTOR
+            ),
+            iterations=1000,
         )
 
         # Calculate overhead
@@ -346,7 +339,8 @@ class BenchmarkSuite:
         print("🚀 Starting Comprehensive AMA Cryptography Benchmark Suite...")
         print(f"System: {self.system_info['platform']}")
         print(f"CPU: {self.system_info['cpu_count']} cores")
-        print(f"Memory: {self.system_info['memory_gb']} GB")
+        if "memory_gb" in self.system_info:
+            print(f"Memory: {self.system_info['memory_gb']} GB")
         print(f"Dilithium: {self.system_info['dilithium_backend']}")
         print("=" * 70)
 
