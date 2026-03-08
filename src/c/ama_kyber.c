@@ -5,7 +5,7 @@
  * @file ama_kyber.c
  * @brief CRYSTALS-Kyber-1024 Key Encapsulation Mechanism - Native C Implementation
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2025-12-06
+ * @date 2026-03-08
  *
  * IMPLEMENTATION STATUS: FULL NATIVE (FIPS 203 COMPLIANT)
  * =======================================================

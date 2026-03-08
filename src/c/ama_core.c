@@ -18,7 +18,7 @@
  * @file ama_core.c
  * @brief Core AMA Cryptography context and lifecycle management
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2025-12-06
+ * @date 2026-03-08
  *
  * PQC DISPATCH
  * ============

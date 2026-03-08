@@ -5,7 +5,7 @@
  * @file ama_hmac_sha256.c
  * @brief Native HMAC-SHA-256 implementation (RFC 2104 / FIPS 198-1)
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-03-07
+ * @date 2026-03-08
  *
  * Replaces OpenSSL EVP_MAC(HMAC-SHA256) / HMAC_CTX calls in
  * ama_sphincs.c spx_prf_msg() for zero-dependency SPHINCS+ operation.

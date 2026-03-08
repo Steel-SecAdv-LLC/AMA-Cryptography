@@ -18,7 +18,7 @@
  * @file ama_aes_gcm.c
  * @brief AES-256-GCM authenticated encryption (NIST SP 800-38D)
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-03-07
+ * @date 2026-03-08
  *
  * Implements AES-256-GCM authenticated encryption with associated data (AEAD).
  *

@@ -19,7 +19,7 @@
  * @brief AMA Cryptography - Core C API for Post-Quantum Cryptography
  * @version 2.0
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-01-09
+ * @date 2026-03-08
  *
  * High-performance C implementation of quantum-resistant cryptographic primitives.
  */
