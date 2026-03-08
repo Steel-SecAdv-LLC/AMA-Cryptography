@@ -8,8 +8,8 @@
 **AI Co-Architects:**  
 Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
-**Version:** 1.1  
-**Date:** 2026-01-09
+**Version:** 2.0
+**Date:** 2026-03-08
 
 ---
 
@@ -44,13 +44,15 @@ if not (results["content_hash"] and results["hmac"] and results["ed25519"]
 ### 1. Install Dependencies
 
 ```bash
-# Core cryptography library (required)
-pip install cryptography
-
-# Build native PQC C library (recommended — zero external PQC dependencies)
+# Build native C library (all cryptographic primitives — zero external dependencies)
 cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build
+
+# Install Python package
+pip install -e .
 ```
+
+**Note:** As of v2.0, all cryptographic primitives (SHA3-256, HKDF-SHA3-256, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+) are implemented natively in C. No external cryptographic libraries are required.
 
 ### 2. Run Demo
 
@@ -108,17 +110,17 @@ ls -lh public_keys/
 ```bash
 # Ubuntu/Debian
 sudo apt-get update
-sudo apt-get install build-essential cmake libssl-dev
+sudo apt-get install build-essential cmake
 
 # macOS
-brew install cmake openssl
+brew install cmake
 
-# Build native PQC library
+# Build native C library (all crypto primitives — zero external dependencies)
 cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-All PQC algorithms (ML-DSA-65, Kyber-1024, SPHINCS+-256f) are implemented natively — no external PQC libraries required. All implementations pass NIST KAT validation.
+All cryptographic algorithms (SHA3-256, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+-256f) are implemented natively — no external libraries required. PQC implementations pass NIST KAT validation (10/10 for ML-DSA-65 and ML-KEM-1024).
 
 #### Verify Installation
 
@@ -614,15 +616,15 @@ WARNING: Using INSECURE placeholder for Dilithium!
 **Solution: Build the native C library**
 ```bash
 # Install build dependencies
-sudo apt-get install build-essential cmake libssl-dev  # Ubuntu/Debian
-# brew install cmake openssl  # macOS
+sudo apt-get install build-essential cmake  # Ubuntu/Debian
+# brew install cmake  # macOS
 
-# Build native PQC library
+# Build native C library (all crypto primitives)
 cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-All PQC algorithms (ML-DSA-65, Kyber-1024, SPHINCS+-256f) are implemented natively with NIST KAT validation — no external PQC libraries needed.
+All cryptographic algorithms are implemented natively with NIST KAT validation — no external libraries needed.
 
 ### Issue: RFC 3161 Timestamp Fails
 
@@ -1173,20 +1175,20 @@ For users who need direct C library integration for post-quantum cryptography:
 
 ### Prerequisites
 
-The C API provides all PQC algorithms natively — no external PQC libraries required.
+The C API provides all cryptographic algorithms natively — no external libraries required.
 
 ```bash
 # Ubuntu/Debian
-sudo apt-get install -y cmake gcc build-essential libssl-dev
+sudo apt-get install -y cmake gcc build-essential
 
 # macOS
-brew install cmake openssl
+brew install cmake
 ```
 
 ### Build C Library
 
 ```bash
-# CMake Build (Recommended) — native PQC, no external dependencies
+# CMake Build (Recommended) — all crypto primitives native, zero external dependencies
 cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 sudo cmake --install build
@@ -1200,7 +1202,7 @@ sudo cmake --install build
 | ML-KEM-1024 (Kyber-1024) | FIPS 203 | PK: 1568, SK: 3168, CT: 1568 | **10/10 PASS** |
 | SPHINCS+-SHA2-256f | FIPS 205 | PK: 64, SK: 128, Sig: 49856 | Native |
 
-**Note:** For most users, the Python API is recommended over the C library. All PQC algorithms are implemented natively — no external PQC libraries required.
+**Note:** For most users, the Python API is recommended over the C library. All cryptographic algorithms are implemented natively — no external libraries required.
 
 ---
 
@@ -1289,6 +1291,6 @@ Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
 
-**Document Version:** 1.1  
-**Last Updated:** 2026-01-09
+**Document Version:** 2.0
+**Last Updated:** 2026-03-08
 **Copyright (C) 2025-2026 Steel Security Advisors LLC**

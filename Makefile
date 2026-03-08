@@ -1,4 +1,4 @@
-# Copyright 2025 Steel Security Advisors LLC
+# Copyright 2025-2026 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 #
 # Makefile for AMA Cryptography
@@ -19,9 +19,9 @@ all: c python
 
 # Build C library with CMake
 c:
-	@echo "Building C library..."
+	@echo "Building C library (native PQC + all crypto primitives)..."
 	@mkdir -p build
-	@cd build && cmake .. && $(MAKE)
+	@cd build && cmake .. -DAMA_USE_NATIVE_PQC=ON && $(MAKE)
 	@echo "✓ C library built successfully"
 
 # Build Python package with extensions

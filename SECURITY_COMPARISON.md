@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 1.1 |
-| Last Updated | 2026-01-09 |
+| Document Version | 2.0 |
+| Last Updated | 2026-03-08 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -29,8 +29,11 @@
 
 | Feature | OpenSSL+liboqs | AMA Cryptography | Security Implication |
 |---------|----------------|--------------|----------------------|
-| **Ed25519 Signatures** | ✅ OpenSSL (audited) | ✅ Native C (RFC 8032 KAT validated) | Equivalent |
-| **ML-DSA-65 Signatures** | ✅ liboqs (NIST-reviewed) | ✅ Native C (NIST KAT validated) | Equivalent |
+| **Ed25519 Signatures** | ✅ OpenSSL (audited) | ✅ Native C (RFC 8032 KAT validated, C11 atomics) | Equivalent |
+| **ML-DSA-65 Signatures** | ✅ liboqs (NIST-reviewed) | ✅ Native C (NIST KAT validated, 10/10 pass) | Equivalent |
+| **ML-KEM-1024 (Kyber)** | ✅ liboqs (NIST-reviewed) | ✅ Native C (NIST KAT validated, 10/10 pass) | Equivalent |
+| **SPHINCS+-SHA2-256f** | ✅ liboqs | ✅ Native C (FIPS 205) | Equivalent |
+| **AES-256-GCM** | ✅ OpenSSL (audited) | ✅ Native C (SP 800-38D) | OpenSSL has AES-NI |
 | **Audit Status** | ✅ Extensively audited | ❌ **No external audit** | **OpenSSL+liboqs safer** |
 | **FIPS 140-2** | ✅ Available | ❌ Not certified | **OpenSSL+liboqs safer** |
 
@@ -59,7 +62,9 @@
 | Feature | OpenSSL+liboqs | AMA Cryptography | Security Benefit |
 |---------|----------------|--------------|------------------|
 | **3R Monitoring** | ❌ None | ✅ Yes (<2% overhead) | Anomaly detection |
-| **Constant-time Verification** | ✅ (OpenSSL) | ✅ (with dudect tests) | Side-channel resistance |
+| **Adaptive Posture** | ❌ None | ✅ Yes (runtime threat response) | Automated key rotation, algorithm switching |
+| **Hybrid KEM Combiner** | ❌ None | ✅ Yes (IND-CCA2 binding) | Classical + PQC key encapsulation |
+| **Constant-time Verification** | ✅ (OpenSSL) | ✅ (with dudect tests, C11 atomics) | Side-channel resistance |
 | **Memory Safety** | ✅ (C with sanitizers) | ⚠️ Python (GC) + C | Language-dependent |
 | **Bounds Checking** | ⚠️ Manual | ✅ Automatic (Python) | Buffer overflow prevention |
 | **Secure Memory Wiping** | ✅ Yes | ✅ Yes | Key material protection |
@@ -130,9 +135,9 @@
 | Implementation | Risk | Attack Surface |
 |----------------|------|----------------|
 | OpenSSL+liboqs | 2 dependencies | Smaller attack surface |
-| AMA Cryptography | OpenSSL + liboqs + Python + Cython + cryptography | **Larger attack surface** |
+| AMA Cryptography | Native C + Python (zero core deps) | **Comparable attack surface** |
 
-**Winner:** **OpenSSL+liboqs** - fewer dependencies means smaller attack surface.
+**Winner:** **Mixed** - AMA Cryptography v2.0 has zero core cryptographic dependencies (all native C). Optional dependencies (numpy, scipy, pynacl) are only for monitoring and secure memory features. The core cryptographic path has a comparable attack surface to OpenSSL+liboqs.
 
 ---
 
@@ -159,6 +164,7 @@
 | **Quantum Security** | 192-bit (ML-DSA-65) | 192-bit (ML-DSA-65) | **Equivalent** |
 | **Hash Security** | N/A | 128-bit (SHA3-256) | **AMA Cryptography adds integrity layer** |
 | **MAC Security** | N/A | 256-bit (HMAC-SHA3-256) | **AMA Cryptography adds authentication** |
+| **AEAD** | ✅ AES-256-GCM (AES-NI) | ✅ AES-256-GCM (native C) | **Equivalent** (OpenSSL has hardware accel.) |
 
 **Overall:** Cryptographic strength is **equivalent** for signatures, but AMA Cryptography adds **additional security properties** through extra layers.
 
@@ -170,7 +176,7 @@
 |----------|----------------|--------------|--------|
 | **External Audit** | ✅ Multiple audits | ❌ None | **OpenSSL+liboqs** |
 | **FIPS Certification** | ✅ Available | ❌ No | **OpenSSL+liboqs** |
-| **Battle Testing** | ✅ Years in production | ⚠️ New (v1.0) | **OpenSSL+liboqs** |
+| **Battle Testing** | ✅ Years in production | ⚠️ v2.0 (community-tested) | **OpenSSL+liboqs** |
 | **Bug Bounty** | ✅ Active programs | ❌ None | **OpenSSL+liboqs** |
 | **Code Review** | ✅ Public, extensive | ⚠️ Self-review | **OpenSSL+liboqs** |
 
@@ -187,6 +193,8 @@
 3. ✅ **For integrity verification** - SHA3-256 + HMAC add layers not present in basic hybrid
 4. ✅ **For anomaly detection** - 3R monitoring can detect attacks OpenSSL+liboqs would miss
 5. ✅ **For key management** - Integrated HKDF with domain separation prevents key reuse
+6. ✅ **For adaptive response** - Automated key rotation and algorithm switching on threat detection
+7. ✅ **For hybrid KEM** - IND-CCA2 binding combiner ensures security if either component KEM holds
 
 ### When OpenSSL+liboqs is MORE Secure
 
@@ -200,13 +208,17 @@
 
 **AMA Cryptography provides ARCHITECTURAL security advantages:**
 - More security layers (6 vs 2)
-- Runtime monitoring
+- Runtime monitoring with adaptive posture response
 - Better defense against multi-vector attacks
+- Zero core dependencies (all native C implementations)
+- Hybrid KEM combiner with IND-CCA2 binding
+- Automated key rotation and algorithm switching
 
 **OpenSSL+liboqs provides IMPLEMENTATION security advantages:**
 - Proven correctness through audits
 - Simpler, less code to analyze
 - FIPS certification path
+- Hardware-accelerated AES (AES-NI)
 
 ---
 
@@ -222,7 +234,8 @@
 ### Use AMA Cryptography when:
 - ✓ You accept the **lack of external audit** risk
 - ✓ You need integrated defense-in-depth (6 layers)
-- ✓ You want runtime security monitoring (3R)
+- ✓ You want runtime security monitoring (3R) with adaptive posture response
+- ✓ You need a zero-dependency cryptographic stack (all native C)
 - ✓ You value architectural security over implementation maturity
 - ✓ You can wait for **future external audit** before production use
 
@@ -284,6 +297,6 @@ AMA Cryptography **COULD BE more secure** if it receives proper external auditin
 
 ---
 
-**Generated:** 2026-01-09
+**Generated:** 2026-03-08
 **Copyright:** 2025-2026 Steel Security Advisors LLC
 **License:** Apache License 2.0

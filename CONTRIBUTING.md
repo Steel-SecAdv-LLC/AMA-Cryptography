@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 1.1 |
-| Last Updated | 2026-01-09 |
+| Document Version | 2.0 |
+| Last Updated | 2026-03-08 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -65,7 +65,7 @@ Please **DO NOT** submit pull requests that:
 - Weaken cryptographic security in any way
 - Remove or bypass security layers
 - Introduce unproven or non-standard cryptographic algorithms
-- Break standards compliance (NIST FIPS 202, 204, RFC 2104, 5869, 8032, 3161)
+- Break standards compliance (NIST FIPS 202, 203, 204, 205, SP 800-38D, RFC 2104, 5869, 8032, 3161)
 - Add unnecessary dependencies
 - Include proprietary or non-Apache 2.0 compatible code
 - Lack mathematical justification for cryptographic changes
@@ -87,11 +87,10 @@ cd AMA-Cryptography
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# Install dependencies
+# Install dependencies (zero core deps — all crypto is native C)
 pip install --upgrade pip
-pip install cryptography
 
-# Build native PQC C library (recommended — zero external PQC dependencies)
+# Build native C library (all cryptographic primitives)
 cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release && cmake --build build
 
 # Install development tools
@@ -155,8 +154,11 @@ All contributions must maintain compliance with:
 
 | Standard | Version | Compliance Level | Documentation |
 |----------|---------|------------------|---------------|
-| NIST FIPS 202 | 2015 | Mandatory | SHA-3 Standard |
-| NIST FIPS 204 | 2024 | Mandatory | Module-Lattice-Based Digital Signature Standard |
+| NIST FIPS 202 | 2015 | Mandatory | SHA-3 Standard (SHA3-256, SHAKE128/256) |
+| NIST FIPS 203 | 2024 | Mandatory | ML-KEM (Kyber) Key Encapsulation |
+| NIST FIPS 204 | 2024 | Mandatory | ML-DSA (Dilithium) Digital Signatures |
+| NIST FIPS 205 | 2024 | Mandatory | SLH-DSA (SPHINCS+) Hash-Based Signatures |
+| NIST SP 800-38D | 2007 | Mandatory | AES-GCM Authenticated Encryption |
 | NIST SP 800-108 | Rev. 1 | Mandatory | Key Derivation Using Pseudorandom Functions |
 | RFC 2104 | 1997 | Mandatory | HMAC |
 | RFC 5869 | 2010 | Mandatory | HKDF |
@@ -286,7 +288,7 @@ All tests must:
 
 ```python
 import pytest
-from code_guardian_secure import generate_ed25519_keypair, sign_data
+from ama_cryptography.crypto_api import generate_ed25519_keypair, sign_data
 
 class TestEd25519Signatures:
     """Test Ed25519 signature generation and verification."""
@@ -332,7 +334,7 @@ class TestEd25519Signatures:
    black .
    isort .
    flake8 .
-   mypy code_guardian_secure.py
+   mypy ama_cryptography/
    pytest
    ```
 
@@ -404,7 +406,7 @@ When you open a PR, include:
 2. **Code Review:** At least one maintainer approval required
 3. **Security Review:** Cryptographic changes require additional review
 4. **Documentation Review:** All docs must be accurate
-5. **Testing:** All tests must pass on Python 3.8-3.11
+5. **Testing:** All tests must pass on Python 3.8-3.12
 
 ### After Approval
 
@@ -511,6 +513,8 @@ If you have questions about contributing:
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0.0 | 2025-11-26 | Initial professional release |
+| 1.1.0 | 2026-01-09 | Version alignment, terminology updates |
+| 2.0.0 | 2026-03-08 | Zero-dependency architecture, FIPS 203/204/205, updated module references |
 
 ---
 

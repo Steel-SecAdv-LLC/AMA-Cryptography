@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 2.0 |
-| Last Updated | 2026-03-07 |
+| Last Updated | 2026-03-08 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -15,15 +15,16 @@ This document provides an overview of the cryptographic algorithms used in AMA C
 
 ## Algorithm Summary
 
-| Algorithm | Type | Security Level | Standard | Status |
-|-----------|------|----------------|----------|--------|
-| ML-DSA-65 (Dilithium) | Digital Signature | NIST Level 3 (192-bit) | FIPS 204 | Primary PQC |
-| Kyber-1024 | Key Encapsulation | NIST Level 5 (256-bit) | FIPS 203 | Backend Ready |
-| SPHINCS+-SHA2-256f | Hash-Based Signature | NIST Level 5 (256-bit) | FIPS 205 | Backend Ready |
-| Ed25519 | Digital Signature | 128-bit classical | RFC 8032 | Classical Fallback |
-| SHA3-256 | Hash Function | 128-bit collision | FIPS 202 | Content Hashing |
-| HMAC-SHA3-256 | MAC | 256-bit | RFC 2104 | Authentication |
-| HKDF-SHA3-256 | Key Derivation | 256-bit | RFC 5869 | Key Management |
+| Algorithm | Type | Security Level | Standard | Implementation | Status |
+|-----------|------|----------------|----------|----------------|--------|
+| ML-DSA-65 (Dilithium) | Digital Signature | NIST Level 3 (192-bit) | FIPS 204 | Native C (`ama_dilithium.c`) | Primary PQC |
+| ML-KEM-1024 (Kyber) | Key Encapsulation | NIST Level 5 (256-bit) | FIPS 203 | Native C (`ama_kyber.c`) | Backend Ready |
+| SPHINCS+-SHA2-256f | Hash-Based Signature | NIST Level 5 (256-bit) | FIPS 205 | Native C (`ama_sphincs.c`) | Backend Ready |
+| AES-256-GCM | Authenticated Encryption | 256-bit | SP 800-38D | Native C (`ama_aes_gcm.c`) | Full |
+| Ed25519 | Digital Signature | 128-bit classical | RFC 8032 | Native C (`ama_ed25519.c`) | Classical + Hybrid |
+| SHA3-256 | Hash Function | 128-bit collision | FIPS 202 | Native C (`ama_sha3.c`) | Content Hashing |
+| HMAC-SHA3-256 | MAC | 256-bit | RFC 2104 | Native C | Authentication |
+| HKDF-SHA3-256 | Key Derivation | 256-bit | RFC 5869 | Native C (`ama_hkdf.c`) | Key Management |
 
 ## Post-Quantum Cryptography (PQC)
 
@@ -39,7 +40,7 @@ ML-DSA-65 is the primary post-quantum signature algorithm, providing 192-bit qua
 **Security Properties:**
 - EUF-CMA secure in the Quantum Random Oracle Model (QROM)
 - Based on MLWE hardness assumption
-- Quantum attack cost: ~2^160 operations (Grover-accelerated BKZ)
+- Quantum attack cost: ~2^190 operations (Grover-accelerated BKZ)
 
 **Standard:** NIST FIPS 204 (2024)
 
@@ -87,7 +88,7 @@ SPHINCS+ provides stateless hash-based signatures with security based only on ha
 
 ### Ed25519
 
-Ed25519 provides classical digital signatures as a fallback when PQC libraries are unavailable.
+Ed25519 provides classical digital signatures for hybrid mode (Ed25519 + ML-DSA-65).
 
 **Key Sizes:**
 - Public Key: 32 bytes
@@ -101,7 +102,31 @@ Ed25519 provides classical digital signatures as a fallback when PQC libraries a
 
 **Standard:** RFC 8032
 
-**Usage:** Classical fallback and hybrid signatures (Ed25519 + ML-DSA-65).
+**Implementation (v2.0):** Native C (`ama_ed25519.c`) with:
+- Dedicated `fe25519_sq()` field squaring (~55 muls vs ~100, based on SUPERCOP ref10)
+- C11 `_Atomic` with `memory_order_acquire`/`memory_order_release` for thread-safe initialization
+- Sign/verify roundtrip validated against RFC 8032 Test Vector 1 (12 tests)
+- Fallback to volatile for pre-C11 compilers (MSVC compatibility)
+
+**Usage:** Classical signatures and hybrid signatures (Ed25519 + ML-DSA-65).
+
+### AES-256-GCM
+
+AES-256-GCM provides authenticated encryption with associated data (AEAD).
+
+**Parameters:**
+- Key: 256 bits
+- IV/Nonce: 96 bits
+- Tag: 128 bits
+
+**Security Properties:**
+- IND-CPA confidentiality under AES-256 PRP assumption
+- INT-CTXT authenticity with forgery probability ≤ 2^-128
+- 128-bit quantum security (Grover's bound)
+
+**Standard:** NIST SP 800-38D
+
+**Implementation:** Native C (`ama_aes_gcm.c`). Uses 256-byte lookup table S-box — **not** constant-time with respect to cache-timing in shared-tenant environments. For such deployments, hardware AES-NI or bitsliced implementations are recommended.
 
 ### SHA3-256
 
@@ -137,7 +162,9 @@ HKDF is used for key derivation from master secrets.
 
 **Standard:** RFC 5869
 
-## Hybrid Signature Scheme
+## Hybrid Constructions
+
+### Hybrid Signature Scheme
 
 AMA Cryptography supports hybrid signatures combining Ed25519 and ML-DSA-65:
 
@@ -154,6 +181,22 @@ HybridVerify(message, signature, pk_ed25519, pk_dilithium):
 ```
 
 **Security:** Secure against both classical and quantum adversaries. Both signatures must verify for acceptance.
+
+### Hybrid KEM Combiner
+
+AMA Cryptography supports hybrid key encapsulation combining a classical KEM with a PQC KEM via a binding construction (Bindel et al., PQCrypto 2019):
+
+```
+combined_ss = HKDF-SHA3-256(
+    salt = classical_ct || pqc_ct,         # Ciphertext binding
+    ikm  = classical_ss || pqc_ss,         # Combined key material
+    info = label || classical_pk || pqc_pk  # Context binding
+)
+```
+
+**Security:** IND-CCA2 secure if **either** component KEM remains unbroken. Ciphertext binding prevents mix-and-match attacks.
+
+**Implementation:** `ama_cryptography/hybrid_combiner.py` — uses native C HKDF-SHA3-256 with Python fallback.
 
 ## Defense-in-Depth Layers
 
@@ -184,14 +227,32 @@ This does not weaken security because:
 
 ## Implementation Notes
 
+### Zero-Dependency Architecture (v2.0)
+
+All cryptographic primitives are implemented natively in C with zero external dependencies:
+
+| Source File | Algorithm | Standard |
+|-------------|-----------|----------|
+| `ama_sha3.c` | SHA3-256, SHAKE128/256 | FIPS 202 |
+| `ama_hkdf.c` | HKDF-SHA3-256 | RFC 5869 |
+| `ama_ed25519.c` | Ed25519 (C11 atomics) | RFC 8032 |
+| `ama_aes_gcm.c` | AES-256-GCM | SP 800-38D |
+| `ama_dilithium.c` | ML-DSA-65 | FIPS 204 |
+| `ama_kyber.c` | ML-KEM-1024 | FIPS 203 |
+| `ama_sphincs.c` | SPHINCS+-SHA2-256f | FIPS 205 |
+| `ama_consttime.c` | Constant-time utilities | — |
+| `ama_platform_rand.c` | Platform CSPRNG | — |
+
 ### Constant-Time Operations
 
 The C core (`src/c/ama_consttime.c`) provides constant-time utilities:
-- `ama_ct_memcmp()` - Constant-time memory comparison
-- `ama_ct_select()` - Constant-time conditional selection
-- `ama_ct_is_zero()` - Constant-time zero check
+- `ama_consttime_memcmp()` - Constant-time memory comparison (XOR accumulation)
+- `ama_consttime_swap()` - Conditional buffer swap (bitwise masking)
+- `ama_consttime_lookup()` - Table lookup (full table scan)
+- `ama_consttime_copy()` - Conditional copy (bitwise masking)
+- `ama_secure_memzero()` - Compiler-proof memory scrubbing
 
-These prevent timing side-channel attacks on sensitive comparisons.
+All verified via dudect-style timing analysis (see [CONSTANT_TIME_VERIFICATION.md](CONSTANT_TIME_VERIFICATION.md)).
 
 ### Key Zeroization
 
@@ -202,8 +263,10 @@ All key material is securely wiped after use via `secure_wipe()` which:
 
 ### Backend Selection
 
-PQC is provided by the native C library:
-1. **Native C library** - Full native implementations of ML-DSA-65, Kyber-1024, SPHINCS+-256f (NIST FIPS 203/204/205 KAT validated)
+PQC is provided by the native C library (`libama_cryptography.so`):
+- **ML-DSA-65** - NIST KAT validated (10/10 pass, FIPS 204)
+- **ML-KEM-1024** - NIST KAT validated (10/10 pass, FIPS 203)
+- **SPHINCS+-SHA2-256f** - Native C (FIPS 205)
 
 Check availability with:
 ```python
@@ -211,7 +274,21 @@ from ama_cryptography.pqc_backends import get_pqc_status
 status = get_pqc_status()
 print(f"Dilithium: {status.dilithium_available}")
 print(f"Kyber: {status.kyber_available}")
+print(f"SPHINCS+: {status.sphincs_available}")
 ```
+
+### Adaptive Cryptographic Posture
+
+The adaptive posture system (`ama_cryptography/adaptive_posture.py`) bridges the 3R monitor with runtime security responses:
+
+| Threat Level | Score | Response |
+|-------------|-------|----------|
+| NOMINAL | 0.0-0.3 | No action |
+| ELEVATED | 0.3-0.6 | Increase monitoring |
+| HIGH | 0.6-0.8 | Rotate keys |
+| CRITICAL | 0.8-1.0 | Rotate keys + switch algorithm + alert |
+
+Algorithm strength ordering: ED25519 (0) → ML_DSA_65 (1) → SPHINCS_256F (2) → HYBRID_SIG (3)
 
 ## References
 

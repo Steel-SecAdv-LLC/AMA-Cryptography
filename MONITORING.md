@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 1.1 |
-| Last Updated | 2026-01-09 |
+| Document Version | 2.0 |
+| Last Updated | 2026-03-08 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -22,6 +22,8 @@ AMA Cryptography includes optional runtime security monitoring using the 3R Mech
 | RefactoringEngine | Code complexity metrics | Static analysis for manual security review |
 
 **Design Philosophy**: The 3R Mechanism follows a strict observe-analyze-alert paradigm. It never automatically modifies cryptographic code, ensuring that all security-critical changes require human review and approval.
+
+**v2.0 Integration**: The 3R monitor is now bridged to the **Adaptive Cryptographic Posture System** (`ama_cryptography/adaptive_posture.py`), which can automatically respond to threat-level changes with key rotation and algorithm switching. See [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) for details.
 
 ---
 
@@ -253,6 +255,44 @@ See inline documentation in `ama_cryptography_monitor.py` for complete API detai
 
 ---
 
+## Adaptive Posture Integration (v2.0)
+
+The 3R monitor feeds into the **Adaptive Cryptographic Posture System**, which evaluates anomaly scores and triggers automated responses:
+
+```python
+from ama_cryptography.adaptive_posture import PostureEvaluator, CryptoPostureController
+
+# Create evaluator with weighted scoring
+evaluator = PostureEvaluator()
+
+# Feed anomalies from 3R monitor
+evaluator.record_timing_anomaly(score=0.7)
+evaluator.record_pattern_anomaly(score=0.5)
+
+# Evaluate threat level
+level = evaluator.evaluate()
+# Returns: NOMINAL | ELEVATED | HIGH | CRITICAL
+
+# Controller automates responses
+controller = CryptoPostureController(evaluator)
+controller.respond()  # Key rotation, algorithm switching based on level
+```
+
+**Weighted Scoring Model:**
+- Timing anomalies: 50% weight (ResonanceEngine)
+- Pattern anomalies: 30% weight (RecursionEngine)
+- Resonance analysis: 20% weight
+- Exponential decay prevents stale anomalies from driving permanent escalation
+
+**Automated Response Levels:**
+
+| Level | Score | Response |
+|-------|-------|----------|
+| NOMINAL | 0.0-0.3 | No action |
+| ELEVATED | 0.3-0.6 | Increase monitoring frequency |
+| HIGH | 0.6-0.8 | Rotate keys |
+| CRITICAL | 0.8-1.0 | Rotate keys + switch algorithm + alert |
+
 ---
 
 ## Document History
@@ -260,6 +300,8 @@ See inline documentation in `ama_cryptography_monitor.py` for complete API detai
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0.0 | 2025-11-26 | Initial professional release |
+| 1.1.0 | 2026-01-09 | Version alignment |
+| 2.0.0 | 2026-03-08 | Adaptive posture integration, weighted scoring model |
 
 ---
 

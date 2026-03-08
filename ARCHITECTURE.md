@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 2.0 |
-| Last Updated | 2026-03-07 |
+| Last Updated | 2026-03-08 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -606,12 +606,12 @@ The security analysis assumes:
 
 **Library Integration**: Import directly into Python applications
 ```python
-from code_guardian_secure import create_crypto_package, verify_crypto_package
+from ama_cryptography.crypto_api import create_crypto_package, verify_crypto_package
 ```
 
-**Command-Line Interface**: Execute as standalone script
+**Command-Line Interface**: Execute as standalone module
 ```bash
-python code_guardian_secure.py
+python -m ama_cryptography
 ```
 
 **Containerized Deployment**: Docker images available
@@ -719,7 +719,7 @@ Cryptographic implementations are validated against:
 
 ### Implementation References
 
-- `code_guardian_secure.py`: Core cryptographic implementation
+- `ama_cryptography/crypto_api.py`: Core cryptographic implementation
 - `SECURITY_ANALYSIS.md`: Detailed security proofs and analysis
 - `BENCHMARKS.md`: Performance measurement methodology and results
 - `IMPLEMENTATION_GUIDE.md`: Deployment and integration guide
@@ -731,6 +731,8 @@ Cryptographic implementations are validated against:
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0.0 | 2025-11-26 | Steel Security Advisors LLC | Initial professional release |
+| 1.1.0 | 2026-01-09 | Steel Security Advisors LLC | Version alignment |
+| 2.0.0 | 2026-03-08 | Steel Security Advisors LLC | Zero-dependency native C architecture, adaptive posture, hybrid KEM combiner, AES-256-GCM, FIPS 203/204/205 compliance |
 
 ---
 

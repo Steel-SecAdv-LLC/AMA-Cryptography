@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 1.1 |
-| Last Updated | 2026-01-09 |
+| Document Version | 2.0 |
+| Last Updated | 2026-03-08 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -13,7 +13,7 @@
 
 ## Overview
 
-AMA Cryptography 1.0 introduces a multi-language architecture that combines the security of C, the performance of Cython, and the usability of Python. This document describes the enhanced features available in the current release.
+AMA Cryptography v2.0 features a zero-dependency, multi-language architecture that combines the security of native C cryptographic primitives with the usability of Python. All cryptographic operations are implemented natively — no external cryptographic libraries required. This document describes the enhanced features available in the current release.
 
 ---
 
@@ -44,7 +44,9 @@ AMA Cryptography 1.0 introduces a multi-language architecture that combines the 
 |              C CORE LIBRARY (libama_cryptography)               |
 |                  src/c/  include/                           |
 |  - Constant-time cryptographic primitives                   |
-|  - ML-DSA-65, Kyber-1024, SPHINCS+-256f                     |
+|  - ML-DSA-65, Kyber-1024, SPHINCS+-256f (FIPS 203/204/205)  |
+|  - AES-256-GCM, Ed25519, SHA3-256, HKDF-SHA3-256            |
+|  - C11 atomics for thread-safe initialization                |
 |  - Memory-safe context management                           |
 |  - SIMD optimizations (AVX2)                                |
 +-------------------------------------------------------------+
@@ -101,38 +103,96 @@ AVX2 support for polynomial operations:
 
 ### ML-DSA-65 (CRYSTALS-Dilithium)
 
-**NIST PQC Selected Algorithm**
+**NIST FIPS 204 — Native C Implementation**
 
-- Public key: 1952 bytes
-- Secret key: 4016 bytes
-- Signature: 3309 bytes
-- Security: NIST Level 3 (~192-bit classical)
+- Public key: 1,952 bytes
+- Secret key: 4,032 bytes
+- Signature: ~3,293 bytes
+- Security: NIST Level 3 (~192-bit quantum)
 - Constant-time implementation
+- NIST KAT validated: **10/10 PASS**
 
 ### Kyber-1024 (ML-KEM)
 
-**Key Encapsulation Mechanism**
+**NIST FIPS 203 — Native C Implementation**
 
-> **Integration Status:** Backend implemented in `ama_cryptography/pqc_backends.py`. Integration into main signing workflow pending.
+> **Integration Status:** Backend implemented in `ama_cryptography/pqc_backends.py`. Available via hybrid KEM combiner (`ama_cryptography/hybrid_combiner.py`).
 
-- Public key: 1568 bytes
-- Secret key: 3168 bytes
-- Ciphertext: 1568 bytes
+- Public key: 1,568 bytes
+- Secret key: 3,168 bytes
+- Ciphertext: 1,568 bytes
 - Shared secret: 32 bytes
-- Security: NIST Level 5 (~256-bit classical)
-- IND-CCA2 secure
+- Security: NIST Level 5 (~256-bit quantum)
+- IND-CCA2 secure (Fujisaki-Okamoto transform)
+- NIST KAT validated: **10/10 PASS**
 
-### SPHINCS+-256f
+### SPHINCS+-SHA2-256f-simple
 
-**Stateless Hash-Based Signatures**
+**NIST FIPS 205 — Native C Implementation**
 
-> **Integration Status:** Backend implemented in `ama_cryptography/pqc_backends.py`. Integration into main signing workflow pending.
+> **Integration Status:** Backend implemented in `ama_cryptography/pqc_backends.py`. Available via adaptive posture system (`ama_cryptography/adaptive_posture.py`).
 
 - Public key: 64 bytes
 - Secret key: 128 bytes
-- Signature: 49856 bytes
-- Security: 256-bit post-quantum
-- No quantum speedup possible
+- Signature: 49,856 bytes
+- Security: 256-bit post-quantum (hash-based, no lattice assumptions)
+- Stateless — no state management required (unlike XMSS/LMS)
+- WOTS+ one-time signatures, FORS few-time signatures, hypertree (d=17)
+
+### AES-256-GCM
+
+**NIST SP 800-38D — Native C Implementation**
+
+- Key: 256 bits
+- IV/Nonce: 96 bits
+- Tag: 128 bits
+- Security: IND-CPA + INT-CTXT (128-bit quantum via Grover's bound)
+- **Note:** Lookup-table S-box, not constant-time for cache-timing in shared-tenant environments
+
+## Adaptive Cryptographic Posture System (v2.0)
+
+**Module:** `ama_cryptography/adaptive_posture.py`
+
+The adaptive posture system bridges the 3R runtime anomaly monitor with the cryptographic API for dynamic security responses.
+
+**Components:**
+- **PostureEvaluator** — Weighted scoring: timing (50%), pattern (30%), resonance (20%) with exponential decay
+- **CryptoPostureController** — Key rotation, algorithm switching, cooldown enforcement (300s default)
+
+**Threat Levels:**
+
+| Level | Score | Automated Response |
+|-------|-------|--------------------|
+| NOMINAL | 0.0-0.3 | No action |
+| ELEVATED | 0.3-0.6 | Increase monitoring frequency |
+| HIGH | 0.6-0.8 | Rotate keys |
+| CRITICAL | 0.8-1.0 | Rotate keys + switch algorithm + alert |
+
+**Algorithm Strength Ordering:**
+ED25519 (0) → ML_DSA_65 (1) → SPHINCS_256F (2) → HYBRID_SIG (3)
+
+---
+
+## Hybrid KEM Combiner (v2.0)
+
+**Module:** `ama_cryptography/hybrid_combiner.py`
+
+Binding construction for hybrid key encapsulation (classical + PQC) per Bindel et al. (PQCrypto 2019):
+
+```
+combined_ss = HKDF-SHA3-256(
+    salt = classical_ct || pqc_ct,         # Ciphertext binding
+    ikm  = classical_ss || pqc_ss,         # Combined key material
+    info = label || classical_pk || pqc_pk  # Context binding
+)
+```
+
+**Security Properties:**
+- IND-CCA2 secure if **either** component KEM remains unbroken
+- Ciphertext binding prevents mix-and-match attacks
+- Uses native C HKDF-SHA3-256 with Python fallback
+
+---
 
 ## Build System
 
@@ -457,14 +517,15 @@ python -c "from ama_cryptography.math_engine import benchmark_matrix_operations;
 
 | Component | Version | Notes |
 |-----------|---------|-------|
-| Python | 3.8+ | Type hints support |
+| Python | 3.8-3.12 | Type hints support |
 | NumPy | 1.24+ | Optional (equations/monitoring) |
 | Cython | 0.29.30+ | Optional (for speedup) |
 | CMake | 3.15+ | C library build |
-| OpenSSL | 1.1.1+ | Ed25519 and core operations |
-| GCC | 9+ | C11 support |
+| GCC | 9+ | C11 support (required for atomics) |
 | Clang | 10+ | C11 support |
-| MSVC | 2019+ | Windows builds |
+| MSVC | 2019+ | Windows builds (volatile fallback for atomics) |
+
+**Note:** OpenSSL is **no longer required** as of v2.0. All cryptographic primitives (SHA3, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+) are implemented natively in C.
 
 ---
 
@@ -473,6 +534,8 @@ python -c "from ama_cryptography.math_engine import benchmark_matrix_operations;
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0.0 | 2025-11-26 | Initial professional release |
+| 1.1.0 | 2026-01-09 | Version alignment |
+| 2.0.0 | 2026-03-08 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, FIPS 203/204/205, KAT validation |
 
 ---
 
