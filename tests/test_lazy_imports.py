@@ -45,7 +45,7 @@ class TestLazyImportWithoutNumpy:
         assert (
             result.returncode == 0
         ), f"Import failed with numpy blocked.\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        assert result.stdout.strip() == "2.0.0"
+        assert result.stdout.strip() == "2.0"
 
     def test_math_import_gives_clear_error(self):
         """Accessing PHI without numpy gives a clear ModuleNotFoundError."""

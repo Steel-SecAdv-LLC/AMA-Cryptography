@@ -69,6 +69,7 @@ from code_guardian_secure import (
     hmac_authenticate,
     hmac_verify,
     length_prefixed_encode,
+    native_hkdf,
     verify_crypto_package,
 )
 
@@ -86,7 +87,7 @@ class BenchmarkSuite:
             "platform": platform.platform(),
             "processor": platform.processor(),
             "python_version": platform.python_version(),
-            "cpu_count": os.cpu_count(),
+            "cpu_count": os.cpu_count() or 1,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "dilithium_backend": DILITHIUM_BACKEND,
             "dilithium_available": DILITHIUM_AVAILABLE,
@@ -284,15 +285,19 @@ class BenchmarkSuite:
 
         # HKDF with vs without ethical context (both use native C backend)
         master_secret = secrets.token_bytes(32)
+        hkdf_salt = secrets.token_bytes(32)
+        plain_info = b"benchmark:baseline:0"
 
-        # Standard HKDF via native derive_keys (baseline)
+        # Raw native HKDF without ethical context (genuine baseline)
         results["hkdf_standard"] = self.benchmark_operation(
             "Standard HKDF (Native)",
-            lambda: derive_keys(master_secret, "benchmark:baseline", num_keys=1),
+            lambda: native_hkdf(
+                ikm=master_secret, length=32, salt=hkdf_salt, info=plain_info
+            ),
             iterations=1000,
         )
 
-        # Ethical HKDF via derive_keys with ethical vector
+        # HKDF via derive_keys which adds ethical context overhead
         results["hkdf_ethical"] = self.benchmark_operation(
             "Ethical HKDF (Native)",
             lambda: derive_keys(
@@ -326,9 +331,10 @@ class BenchmarkSuite:
             codes = MASTER_CODES * size
             helix_params = MASTER_HELIX_PARAMS * size
 
+            # Bind codes/helix_params via default args to avoid closure-over-loop-variable bug
             results[f"dna_size_{size}"] = self.benchmark_operation(
                 f"Code Processing (size={size})",
-                lambda: create_crypto_package(codes, helix_params, kms, "benchmark"),
+                lambda c=codes, h=helix_params: create_crypto_package(c, h, kms, "benchmark"),
                 iterations=50,
             )
 

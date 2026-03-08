@@ -8,5 +8,4 @@ Description: Quantum-Resistant Cryptographic Protection System — Zero-Dependen
 URL: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography
 Version: @PROJECT_VERSION@
 Libs: -L${libdir} -lama_cryptography
-Libs.private: -lm
 Cflags: -I${includedir}
