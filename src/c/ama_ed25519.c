@@ -987,10 +987,13 @@ static void ge25519_scalarmult_base_windowed(ge25519_p3 *r, const uint8_t *scala
          * branch that would leak scalar nibble values via timing. */
 
         /* Select table[nibble-1] when nibble > 0, identity when nibble == 0 */
-        int lookup_idx = nibble - 1;  /* -1 when nibble==0; table_lookup yields identity */
+        int lookup_idx = nibble - 1;  /* -1 when nibble==0; no table entry matches */
         ge25519_p3_0(&P);
         for (int k = 0; k < 16; k++) {
-            int64_t mask = -((int64_t)(k == lookup_idx));
+            /* Branchless equality: mask = all-ones when k == lookup_idx, else 0.
+             * Uses arithmetic to avoid compiler-generated branches on secret data. */
+            unsigned int diff = (unsigned int)(k ^ lookup_idx);
+            int64_t mask = -(int64_t)(1 & ((diff - 1) >> 31));
             for (int j = 0; j < 10; j++) {
                 P.X[j] ^= mask & (P.X[j] ^ ge_base_table[k].X[j]);
                 P.Y[j] ^= mask & (P.Y[j] ^ ge_base_table[k].Y[j]);
@@ -1004,10 +1007,10 @@ static void ge25519_scalarmult_base_windowed(ge25519_p3 *r, const uint8_t *scala
         ge25519_add(&t, &Q, &P);
         ge25519_p1p1_to_p3(&Q_after_add, &t);
 
-        /* Constant-time select: Q = (nibble != 0) ? Q_after_add : Q */
-        int select = (nibble != 0);          /* 0 or 1, public after clamping */
-        /* Convert to constant-time flag without branch */
-        select = (int)(((unsigned int)(-nibble) | (unsigned int)nibble) >> 31);
+        /* Constant-time select: Q = (nibble != 0) ? Q_after_add : Q
+         * The scalar nibble is secret (derived from SHA-512 of private seed),
+         * so we must avoid any branch on its value. */
+        int select = (int)(((unsigned int)(-nibble) | (unsigned int)nibble) >> 31);
         ge25519_cmov(&Q, &Q_after_add, select);
     }
 

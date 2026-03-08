@@ -20,10 +20,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ama_cryptography.hybrid_combiner import (
-    _HYBRID_LABEL,
-    HybridCombiner,
-)
+from ama_cryptography.hybrid_combiner import _HYBRID_LABEL, HybridCombiner
 
 # ---------------------------------------------------------------------------
 # Helpers

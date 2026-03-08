@@ -38,10 +38,7 @@ class TestSecureMemoryErrorClasses:
 
     def test_secure_memory_not_available_exists(self):
         """SecureMemoryNotAvailable class is defined."""
-        from ama_cryptography.secure_memory import (
-            SecureMemoryError,
-            SecureMemoryNotAvailable,
-        )
+        from ama_cryptography.secure_memory import SecureMemoryError, SecureMemoryNotAvailable
 
         assert issubclass(SecureMemoryNotAvailable, SecureMemoryError)
 

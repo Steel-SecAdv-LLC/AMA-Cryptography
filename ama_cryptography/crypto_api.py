@@ -63,10 +63,7 @@ from ama_cryptography.pqc_backends import (
 
 # Import HMAC and HKDF from legacy module
 try:
-    from code_guardian_secure import (
-        derive_keys,
-        hmac_authenticate,
-    )
+    from code_guardian_secure import derive_keys, hmac_authenticate
 
     HMAC_HKDF_AVAILABLE = True
 except (ImportError, RuntimeError):

@@ -59,11 +59,7 @@ from code_guardian_secure import (  # noqa: E402
 
 # Import Dilithium functions if available
 if DILITHIUM_AVAILABLE:
-    from code_guardian_secure import (
-        dilithium_sign,
-        dilithium_verify,
-        generate_dilithium_keypair,
-    )
+    from code_guardian_secure import dilithium_sign, dilithium_verify, generate_dilithium_keypair
 
 
 class TestLengthPrefixFuzzing:

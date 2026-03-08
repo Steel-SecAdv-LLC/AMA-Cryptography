@@ -17,11 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from ama_cryptography.key_management import (
-    KeyRotationManager,
-    KeyStatus,
-    SecureKeyStorage,
-)
+from ama_cryptography.key_management import KeyRotationManager, KeyStatus, SecureKeyStorage
 
 
 class TestKeyRotationLifecycle:

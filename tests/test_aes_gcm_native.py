@@ -18,10 +18,7 @@ import pytest
 
 # Check if native library is available
 try:
-    from ama_cryptography.pqc_backends import (
-        _AES_GCM_NATIVE_AVAILABLE,
-        _native_lib,
-    )
+    from ama_cryptography.pqc_backends import _AES_GCM_NATIVE_AVAILABLE, _native_lib
 
     NATIVE_AVAILABLE = _native_lib is not None and _AES_GCM_NATIVE_AVAILABLE
 except ImportError:
