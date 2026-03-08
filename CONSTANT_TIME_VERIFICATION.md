@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 1.1 |
-| Last Updated | 2026-01-09 |
+| Document Version | 2.0 |
+| Last Updated | 2026-03-08 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -17,9 +17,10 @@ This document describes the constant-time verification methodology and tooling f
 
 Constant-time implementations are critical for preventing timing side-channel attacks. AMA Cryptography employs a defense-in-depth approach to constant-time security:
 
-1. **C Layer**: Custom constant-time utilities in `src/c/ama_consttime.c`
+1. **C Layer**: Custom constant-time utilities in `src/c/ama_consttime.c` (C11 atomics for thread safety)
 2. **Python Layer**: Use of `hmac.compare_digest()` for constant-time comparison
-3. **Library Layer**: Native PQC implementations and cryptography.io's constant-time guarantees
+3. **Native PQC Layer**: All PQC implementations (ML-DSA-65, Kyber-1024, SPHINCS+) use constant-time primitives internally
+4. **Ed25519 Layer**: Dedicated `fe25519_sq()` field squaring, C11 `_Atomic` initialization guards
 
 ## Constant-Time Implementations
 
@@ -35,7 +36,7 @@ All 5 constant-time functions are implemented and verified:
 | `ama_consttime_lookup()` | Table lookup | Full table scan with conditional copy | Yes |
 | `ama_consttime_copy()` | Conditional copy | Bitwise masking based on condition | Yes |
 
-### Python Utilities (`code_guardian_secure.py`)
+### Python Utilities (`ama_cryptography/crypto_api.py`)
 
 HMAC verification uses Python's `hmac.compare_digest()`:
 
@@ -167,15 +168,20 @@ The native C implementations provide constant-time operations:
 - Validated through NIST KAT (Known Answer Test) vectors (FIPS 203/204/205)
 - Rejection sampling uses constant-time comparisons
 
-### cryptography.io (Ed25519, HMAC)
+### Native Ed25519 (`src/c/ama_ed25519.c`)
 
-The Python cryptography library uses OpenSSL's constant-time implementations:
+The native C Ed25519 implementation provides constant-time operations:
 
-- Ed25519 uses constant-time scalar multiplication
-- HMAC uses constant-time comparison internally
-- Backed by OpenSSL's extensively audited codebase
+- Constant-time scalar multiplication (Montgomery ladder)
+- No secret-dependent branches or memory accesses
+- Dedicated `fe25519_sq()` exploiting multiplication symmetry (~55 muls vs ~100)
+- C11 `_Atomic` with `memory_order_acquire`/`memory_order_release` for thread-safe base point initialization
+- Fallback to volatile for pre-C11 compilers (MSVC compatibility)
+- Sign/verify roundtrip validated against RFC 8032 Test Vector 1 (12 tests)
 
-Reference: https://cryptography.io/en/latest/
+### Native AES-256-GCM (`src/c/ama_aes_gcm.c`)
+
+**Caveat:** The AES-256-GCM implementation uses a 256-byte lookup table for S-box operations. This is **not** constant-time with respect to cache-timing side channels in shared-tenant environments. For deployments where cache-timing attacks are a concern, use hardware AES-NI instructions or a bitsliced implementation.
 
 ## Functional Correctness Tests
 
@@ -230,4 +236,4 @@ These tests verify:
 
 4. Open Quantum Safe Project. https://openquantumsafe.org/
 
-5. Python cryptography library. https://cryptography.io/
+5. AMA Cryptography Ed25519 Implementation. `src/c/ama_ed25519.c`
