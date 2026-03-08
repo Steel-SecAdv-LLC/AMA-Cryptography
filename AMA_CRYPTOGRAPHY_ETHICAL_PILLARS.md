@@ -6,8 +6,8 @@
 **Author/Inventor:** Andrew E. A.  
 **Organization:** Steel Security Advisors LLC
 
-**Version:** 1.1  
-**Date:** 2026-01-09
+**Version:** 2.0
+**Date:** 2026-03-08
 
 ---
 
@@ -20,7 +20,7 @@ The 12 Omni-Code Ethical Pillars extend AMA Cryptography's six-layer cryptograph
 - **HKDF integration:** 128-bit ethical signature in key derivation context
 - **Collision resistance:** Maintains SHA3-256's 2^128 security level
 - **Zero performance impact:** <0.01ms overhead per operation
-- **Standards compliant:** Compatible with NIST FIPS 202, SP 800-108
+- **Standards compliant:** Compatible with NIST FIPS 202, 203, 204, 205, SP 800-108
 
 ---
 
@@ -104,7 +104,7 @@ P(collision via E(m)) ≤ 2⁻²⁵⁶ (SHA3-256 bound)
 - HMAC-SHA3-256: ~128-bit security (RFC 2104)
 - Ed25519: ~128-bit classical security (RFC 8032)
 - ML-DSA-65 (Dilithium): ~192-bit quantum security (NIST FIPS 204)
-- HKDF-SHA256: ~256-bit key derivation (RFC 5869)
+- HKDF-SHA3-256: ~256-bit key derivation (RFC 5869)
 
 **Defense-in-Depth Principle:**
 ```
@@ -464,9 +464,7 @@ Conclusion: Ethical integration is cryptographically safe ∎
 ## HKDF Implementation with Ethical Context
 
 ```python
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.backends import default_backend
+from ama_cryptography.crypto_api import derive_keys
 import os
 
 def derive_key_with_ethics(
@@ -476,40 +474,34 @@ def derive_key_with_ethics(
 ) -> bytes:
     """
     Derives cryptographic key with ethical context integration.
-    
+
     Compliant with:
     - RFC 5869 (HKDF)
     - NIST SP 800-108 (Key Derivation)
     - NIST FIPS 202 (SHA-3)
-    
+
+    Uses native C HKDF-SHA3-256 (v2.0, zero external dependencies).
+
     Args:
         master_secret: 256-bit master secret from CSPRNG
         key_type: Purpose identifier ("hmac", "ed25519", etc.)
         ethical_vector: 12-pillar ethical weights
-    
+
     Returns:
         32-byte derived key
     """
     # Create base context
     base_context = f"AMA-Cryptography-{key_type}-2025".encode()
-    
+
     # Add ethical signature
     enhanced_context = create_ethical_hkdf_context(
-        base_context, 
+        base_context,
         ethical_vector
     )
-    
-    # HKDF-SHA3-256 key derivation
-    hkdf = HKDF(
-        algorithm=hashes.SHA3_256(),
-        length=32,
-        salt=None,  # Not required for high-entropy master_secret
-        info=enhanced_context,
-        backend=default_backend()
-    )
-    
-    derived_key = hkdf.derive(master_secret)
-    
+
+    # HKDF-SHA3-256 key derivation (native C implementation)
+    derived_key = derive_keys(master_secret, enhanced_context)
+
     return derived_key
 
 # Example: Derive HMAC key with ethical context
@@ -535,34 +527,20 @@ def benchmark_ethical_integration(iterations: int = 1000) -> Dict[str, float]:
     # Baseline: Standard HKDF without ethical context
     base_context = b"AMA-Cryptography-hmac-2025"
     master_secret = os.urandom(32)
-    
+
     start = time.time()
     for _ in range(iterations):
-        hkdf = HKDF(
-            algorithm=hashes.SHA3_256(),
-            length=32,
-            salt=None,
-            info=base_context,
-            backend=default_backend()
-        )
-        _ = hkdf.derive(master_secret)
+        _ = derive_keys(master_secret, base_context)
     baseline_time = (time.time() - start) / iterations
-    
+
     # Enhanced: HKDF with ethical context
     start = time.time()
     for _ in range(iterations):
         enhanced_context = create_ethical_hkdf_context(
-            base_context, 
+            base_context,
             ethical_vector
         )
-        hkdf = HKDF(
-            algorithm=hashes.SHA3_256(),
-            length=32,
-            salt=None,
-            info=enhanced_context,
-            backend=default_backend()
-        )
-        _ = hkdf.derive(master_secret)
+        _ = derive_keys(master_secret, enhanced_context)
     enhanced_time = (time.time() - start) / iterations
     
     overhead = enhanced_time - baseline_time
@@ -593,7 +571,7 @@ def benchmark_ethical_integration(iterations: int = 1000) -> Dict[str, float]:
 | Omniscient | NIST FIPS 202 | 6.1 (SHA-3) | ✓ Full |
 | Omnipercipient | RFC 3161 | 2.4 (TSP) | ✓ Full |
 | Omnilegent | NIST FIPS 202 | 6.1 (Encoding) | ✓ Full |
-| Omnipotent | NIST FIPS 204 | 5.3 (Dilithium) | ✓ Full |
+| Omnipotent | NIST FIPS 203/204/205 | PQC Standards | ✓ Full |
 | Omnificent | RFC 5869 | 4 (HKDF) | ✓ Full |
 | Omniactive | - | Performance | ✓ Verified |
 | Omnipresent | - | Architecture | ✓ Design |
@@ -643,7 +621,7 @@ def benchmark_ethical_integration(iterations: int = 1000) -> Dict[str, float]:
 ### Complete Workflow with Ethical Integration
 
 ```python
-from code_guardian_secure import *
+from ama_cryptography.crypto_api import *
 import json
 
 # 1. Define ethical vector (12 pillars, balanced weighting)
@@ -744,35 +722,39 @@ print(f"✓ Ethical hash: {pkg_dict['ethical_hash'][:16]}...")
 
 1. **NIST FIPS 202** (2015). "SHA-3 Standard: Permutation-Based Hash and Extendable-Output Functions." National Institute of Standards and Technology.
 
-2. **NIST FIPS 204** (2024). "Module-Lattice-Based Digital Signature Standard." National Institute of Standards and Technology.
+2. **NIST FIPS 203** (2024). "Module-Lattice-Based Key-Encapsulation Mechanism Standard." National Institute of Standards and Technology.
 
-3. **RFC 5869** (2010). Krawczyk, H. & Eronen, P. "HMAC-based Extract-and-Expand Key Derivation Function (HKDF)." Internet Engineering Task Force.
+3. **NIST FIPS 204** (2024). "Module-Lattice-Based Digital Signature Standard." National Institute of Standards and Technology.
 
-4. **RFC 3161** (2001). Adams, C., Cain, P., Pinkas, D., & Zuccherato, R. "Internet X.509 Public Key Infrastructure Time-Stamp Protocol (TSP)." IETF.
+4. **NIST FIPS 205** (2024). "Stateless Hash-Based Digital Signature Standard." National Institute of Standards and Technology.
 
-5. **RFC 2104** (1997). Krawczyk, H., Bellare, M., & Canetti, R. "HMAC: Keyed-Hashing for Message Authentication." IETF.
+5. **RFC 5869** (2010). Krawczyk, H. & Eronen, P. "HMAC-based Extract-and-Expand Key Derivation Function (HKDF)." Internet Engineering Task Force.
+
+6. **RFC 3161** (2001). Adams, C., Cain, P., Pinkas, D., & Zuccherato, R. "Internet X.509 Public Key Infrastructure Time-Stamp Protocol (TSP)." IETF.
+
+7. **RFC 2104** (1997). Krawczyk, H., Bellare, M., & Canetti, R. "HMAC: Keyed-Hashing for Message Authentication." IETF.
 
 ### Academic Papers
 
-6. **Ducas, L., et al.** (2018). "CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme." *IACR Transactions on Cryptographic Hardware and Embedded Systems*, 2018(1), 238-268.
+8. **Ducas, L., et al.** (2018). "CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme." *IACR Transactions on Cryptographic Hardware and Embedded Systems*, 2018(1), 238-268.
 
-7. **Krawczyk, H.** (2010). "Cryptographic Extraction and Key Derivation: The HKDF Scheme." *Advances in Cryptology – CRYPTO 2010*, LNCS 6223, 631-648.
+9. **Krawczyk, H.** (2010). "Cryptographic Extraction and Key Derivation: The HKDF Scheme." *Advances in Cryptology – CRYPTO 2010*, LNCS 6223, 631-648.
 
-8. **Bernstein, D. J., et al.** (2011). "High-speed high-security signatures." *Journal of Cryptographic Engineering*, 2(2), 77-89.
+10. **Bernstein, D. J., et al.** (2011). "High-speed high-security signatures." *Journal of Cryptographic Engineering*, 2(2), 77-89.
 
-9. **Bertoni, G., et al.** (2011). "The Keccak SHA-3 submission." *Submission to NIST*, Round 3.
+11. **Bertoni, G., et al.** (2011). "The Keccak SHA-3 submission." *Submission to NIST*, Round 3.
 
-10. **Bernstein, D. J. & Lange, T.** (2017). "Post-quantum cryptography." *Nature*, 549(7671), 188-194.
+12. **Bernstein, D. J. & Lange, T.** (2017). "Post-quantum cryptography." *Nature*, 549(7671), 188-194.
 
 ### Security Analysis
 
-11. **Schneier, B.** (1999). "Attack Trees: Modeling Security Threats." *Dr. Dobb's Journal*, December 1999.
+13. **Schneier, B.** (1999). "Attack Trees: Modeling Security Threats." *Dr. Dobb's Journal*, December 1999.
 
-12. **NIST SP 800-57** (2020). "Recommendation for Key Management." National Institute of Standards and Technology.
+14. **NIST SP 800-57** (2020). "Recommendation for Key Management." National Institute of Standards and Technology.
 
-13. **NIST SP 800-108** (2009). "Recommendation for Key Derivation Using Pseudorandom Functions." NIST.
+15. **NIST SP 800-108** (2009). "Recommendation for Key Derivation Using Pseudorandom Functions." NIST.
 
-14. **NIST SP 800-140** (2020). "Cryptographic Module Validation Program." NIST.
+16. **NIST SP 800-140** (2020). "Cryptographic Module Validation Program." NIST.
 
 ---
 
@@ -783,7 +765,7 @@ The 12 Omni-Code Ethical Pillars provide a mathematically rigorous framework for
 **Key Achievements:**
 - **Zero security trade-off:** All pillars maintain or enhance cryptographic properties
 - **Balanced structure:** 4 triads × 3 pillars = 12 total, Σw = 12.0
-- **Standards compliance:** NIST FIPS 202, 204; RFC 2104, 3161, 5869
+- **Standards compliance:** NIST FIPS 202, 203, 204, 205; RFC 2104, 3161, 5869
 - **Secure and ready:** <4% overhead, >1,000 ops/sec throughput
 - **Formally verified:** Mathematical proofs for all security claims
 - **Quantum resistant:** 50+ years post-quantum security via Dilithium
