@@ -13,7 +13,7 @@
 
 ## Executive Summary
 
-This document provides **transparent, honest performance metrics** for AMA Cryptography v2.1. We distinguish between:
+This document provides **transparent, honest performance metrics** for AMA Cryptography v2.0. We distinguish between:
 - **Measured**: Actual benchmark results from live testing
 - **Projected**: Estimates based on architecture (not yet measured)
 - **Unknown**: Requires additional testing
@@ -62,14 +62,14 @@ This document provides **transparent, honest performance metrics** for AMA Crypt
 
 | Operation | Mean (ms) | Ops/sec | Status | Notes |
 |-----------|-----------|---------|--------|-------|
-| Ed25519 Sign | ~0.05 | ~20,000 | Measured | RFC 8032 (v2.1: roundtrip verified) |
+| Ed25519 Sign | ~0.05 | ~20,000 | Measured | RFC 8032 (v2.0: roundtrip verified) |
 | Ed25519 Verify | ~0.12 | ~8,000 | Measured | Full RFC 8032 KAT pass |
 | ML-DSA-65 Sign | ~0.473 | ~2,115 | Measured | NIST FIPS 204 |
 | ML-DSA-65 Verify | ~0.156 | ~6,398 | Measured | Faster than Ed25519 verify |
 | SLH-DSA Sign | ~45.757 | ~22 | Measured | FIPS 205 (SPHINCS+-SHA2-256f) |
 | SLH-DSA Verify | ~1.222 | ~818 | Measured | Stateless hash-based |
 
-> **v2.1 Note**: Ed25519 sign/verify roundtrip now fully passes RFC 8032 Test Vector 1 (public key derivation, empty-message signature, and verification). Previously skipped due to field arithmetic issues; fixed with dedicated `fe25519_sq()` optimization.
+> **v2.0 Note**: Ed25519 sign/verify roundtrip now fully passes RFC 8032 Test Vector 1 (public key derivation, empty-message signature, and verification). Previously skipped due to field arithmetic issues; fixed with dedicated `fe25519_sq()` optimization.
 
 ![Signature Performance](benchmarks/charts/signature_performance.svg)
 
@@ -300,13 +300,13 @@ python benchmarks/generate_charts.py --output-dir docs/images
 
 ## 11. Conclusion
 
-AMA Cryptography v2.1 delivers **production-grade cryptography** with:
+AMA Cryptography v2.0 delivers **production-grade cryptography** with:
 
 - **~2,600 verifications/sec** (single-threaded, CI hardware)
 - **<2ms package creation** (typical on CI; <0.5ms on dedicated hardware)
 - **<2% monitoring overhead** (3R system)
 - **Linear scaling to ~700 codes**
-- **Full RFC 8032 Ed25519 roundtrip** (sign + verify, v2.1)
+- **Full RFC 8032 Ed25519 roundtrip** (sign + verify, v2.0)
 - **Post-quantum ready**: ML-DSA-65, ML-KEM-1024, SLH-DSA
 - **4–8x C library speedup** over Python API for hash/KDF operations
 
@@ -332,7 +332,7 @@ AMA Cryptography v2.1 delivers **production-grade cryptography** with:
 | 1.0.0 | 2025-11-26 | Initial professional release |
 | 1.1.0 | 2025-11-29 | Updated benchmarks with fresh measurements from Python 3.12 |
 | 2.0 | 2026-03-06 | Recalibrated baselines; native C library benchmarks; PQC additions |
-| 2.1 | 2026-03-07 | Added SLH-DSA/ML-KEM/AES-GCM benchmarks; SVG chart generation; Ed25519 v2.1 roundtrip verified; consolidated from BENCHMARK_RESULTS.md |
+| 2.0 | 2026-03-07 | Added SLH-DSA/ML-KEM/AES-GCM benchmarks; SVG chart generation; Ed25519 roundtrip verified; consolidated from BENCHMARK_RESULTS.md |
 
 ---
 

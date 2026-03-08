@@ -218,7 +218,7 @@ Future-proof cryptography:
 **Legend:**
 - **Full**: Complete native C implementation with constant-time operations.
 - **Full (native)**: Complete native C implementation — no external PQC dependency required.
-- **Note**: Ed25519 C implementation includes dedicated `fe25519_sq()` field arithmetic optimization (v2.1). Full RFC 8032 sign/verify roundtrip verified.
+- **Note**: Ed25519 C implementation includes dedicated `fe25519_sq()` field arithmetic optimization (v2.0). Full RFC 8032 sign/verify roundtrip verified.
 
 **C Library Implementations (v1.1):**
 - `ama_sha3.c`: SHA3-256, SHAKE128, SHAKE256 (Keccak-f[1600] sponge construction)
