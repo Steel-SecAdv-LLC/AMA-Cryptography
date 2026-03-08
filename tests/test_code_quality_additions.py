@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 Steel Security Advisors LLC
+# Copyright 2025-2026 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 """
 Tests for Code Quality Additions
@@ -38,10 +38,7 @@ class TestSecureMemoryErrorClasses:
 
     def test_secure_memory_not_available_exists(self):
         """SecureMemoryNotAvailable class is defined."""
-        from ama_cryptography.secure_memory import (
-            SecureMemoryError,
-            SecureMemoryNotAvailable,
-        )
+        from ama_cryptography.secure_memory import SecureMemoryError, SecureMemoryNotAvailable
 
         assert issubclass(SecureMemoryNotAvailable, SecureMemoryError)
 

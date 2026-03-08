@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 Steel Security Advisors LLC
+# Copyright 2025-2026 Steel Security Advisors LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -100,9 +100,7 @@ from ama_cryptography.exceptions import QuantumSignatureUnavailableError
 # to allow tests to monkeypatch module-level DILITHIUM_* variables
 from ama_cryptography.pqc_backends import DILITHIUM_AVAILABLE as _PQC_DILITHIUM_AVAILABLE
 from ama_cryptography.pqc_backends import DILITHIUM_BACKEND as _PQC_DILITHIUM_BACKEND
-from ama_cryptography.pqc_backends import (
-    DilithiumKeyPair,
-)
+from ama_cryptography.pqc_backends import DilithiumKeyPair
 from ama_cryptography.pqc_backends import dilithium_sign as _pqc_dilithium_sign
 from ama_cryptography.pqc_backends import dilithium_verify as _pqc_dilithium_verify
 from ama_cryptography.pqc_backends import (
@@ -2004,7 +2002,7 @@ def main() -> None:
     print("\n" + "=" * 70)
     print("AMA Cryptography: SHA3-256 Security Hash")
     print("=" * 70)
-    print("\nCopyright (C) 2025 Steel Security Advisors LLC")
+    print("\nCopyright (C) 2025-2026 Steel Security Advisors LLC")
     print("Author/Inventor: Andrew E. A.")
     print("\nAI Co-Architects:")
     print("  Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛")

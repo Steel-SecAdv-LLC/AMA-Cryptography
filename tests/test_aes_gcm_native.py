@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 Steel Security Advisors LLC
+# Copyright 2025-2026 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 
 """
@@ -18,10 +18,7 @@ import pytest
 
 # Check if native library is available
 try:
-    from ama_cryptography.pqc_backends import (
-        _AES_GCM_NATIVE_AVAILABLE,
-        _native_lib,
-    )
+    from ama_cryptography.pqc_backends import _AES_GCM_NATIVE_AVAILABLE, _native_lib
 
     NATIVE_AVAILABLE = _native_lib is not None and _AES_GCM_NATIVE_AVAILABLE
 except ImportError:

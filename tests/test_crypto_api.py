@@ -8,7 +8,7 @@ Kyber-1024, SPHINCS+-256f, and hybrid signature schemes.
 
 AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
-Copyright 2025 Steel Security Advisors LLC
+Copyright 2025-2026 Steel Security Advisors LLC
 Licensed under the Apache License, Version 2.0
 """
 

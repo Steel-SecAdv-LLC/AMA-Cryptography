@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 Steel Security Advisors LLC
+# Copyright 2025-2026 Steel Security Advisors LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -59,7 +59,7 @@ import numpy.typing as npt
 # Configure module logger
 logger = logging.getLogger(__name__)
 
-__version__ = "2.0"
+__version__ = "2.0.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 __all__ = [
     "PHI",

@@ -263,4 +263,4 @@ See inline documentation in `ama_cryptography_monitor.py` for complete API detai
 
 ---
 
-Copyright 2025 Steel Security Advisors LLC. Licensed under Apache License 2.0.
+Copyright 2025-2026 Steel Security Advisors LLC. Licensed under Apache License 2.0.

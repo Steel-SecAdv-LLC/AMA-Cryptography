@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 Steel Security Advisors LLC
+# Copyright 2025-2026 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 
 """
@@ -51,10 +51,7 @@ def _pyca_available() -> bool:
 
 def _native_sign_and_verify(seed: bytes, message: bytes) -> tuple:
     """Sign with native C backend. Returns (pk, sk, signature)."""
-    from ama_cryptography.pqc_backends import (
-        native_ed25519_keypair_from_seed,
-        native_ed25519_sign,
-    )
+    from ama_cryptography.pqc_backends import native_ed25519_keypair_from_seed, native_ed25519_sign
 
     pk, sk = native_ed25519_keypair_from_seed(seed)
     sig = native_ed25519_sign(message, sk)
@@ -141,10 +138,7 @@ class TestNativeEd25519:
 
     def test_verify_rejects_wrong_key(self):
         """Native verify rejects signature made with different key."""
-        from ama_cryptography.pqc_backends import (
-            native_ed25519_keypair,
-            native_ed25519_verify,
-        )
+        from ama_cryptography.pqc_backends import native_ed25519_keypair, native_ed25519_verify
 
         seed = bytes(range(32))
         message = b"test message"

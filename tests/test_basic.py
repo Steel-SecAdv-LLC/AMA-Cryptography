@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 Steel Security Advisors LLC
+# Copyright 2025-2026 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 
 """Basic tests for AMA Cryptography"""
@@ -10,7 +10,7 @@ import ama_cryptography
 def test_version():
     """Test that version is correctly set"""
     assert hasattr(ama_cryptography, "__version__")
-    assert ama_cryptography.__version__ == "2.0"
+    assert ama_cryptography.__version__ == "2.0.0"
 
 
 def test_author():

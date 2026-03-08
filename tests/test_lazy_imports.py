@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 Steel Security Advisors LLC
+# Copyright 2025-2026 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 
 """
@@ -45,7 +45,7 @@ class TestLazyImportWithoutNumpy:
         assert (
             result.returncode == 0
         ), f"Import failed with numpy blocked.\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        assert result.stdout.strip() == "2.0"
+        assert result.stdout.strip() == "2.0.0"
 
     def test_math_import_gives_clear_error(self):
         """Accessing PHI without numpy gives a clear ModuleNotFoundError."""

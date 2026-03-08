@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 Steel Security Advisors LLC
+# Copyright 2025-2026 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 
 """
@@ -257,10 +257,7 @@ class TestMultiAlgorithmInteroperability:
 
     def test_algorithm_switching(self):
         """Test switching between different algorithms."""
-        from ama_cryptography.crypto_api import (
-            AlgorithmType,
-            AmaCryptography,
-        )
+        from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
 
         message = b"Test message for algorithm switching"
 
@@ -282,10 +279,7 @@ class TestMultiAlgorithmInteroperability:
 
     def test_cross_verification_fails(self):
         """Test that signatures from one algorithm don't verify with another."""
-        from ama_cryptography.crypto_api import (
-            AlgorithmType,
-            AmaCryptography,
-        )
+        from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
 
         message = b"Cross verification test"
 
@@ -307,10 +301,7 @@ class TestErrorRecoveryAndGracefulDegradation:
 
     def test_invalid_key_handling(self):
         """Test handling of invalid keys."""
-        from ama_cryptography.crypto_api import (
-            AlgorithmType,
-            AmaCryptography,
-        )
+        from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
 
         crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
         message = b"Test message"
@@ -326,10 +317,7 @@ class TestErrorRecoveryAndGracefulDegradation:
 
     def test_empty_message_handling(self):
         """Test handling of empty messages."""
-        from ama_cryptography.crypto_api import (
-            AlgorithmType,
-            AmaCryptography,
-        )
+        from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
 
         crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
         empty_message = b""
@@ -344,13 +332,8 @@ class TestErrorRecoveryAndGracefulDegradation:
         """Test graceful handling when PQC is unavailable."""
         from unittest.mock import patch
 
-        from ama_cryptography.crypto_api import (
-            AlgorithmType,
-            AmaCryptography,
-        )
-        from ama_cryptography.pqc_backends import (
-            PQCUnavailableError,
-        )
+        from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
+        from ama_cryptography.pqc_backends import PQCUnavailableError
 
         # Mock Dilithium as unavailable to test error path
         with patch("ama_cryptography.pqc_backends.DILITHIUM_AVAILABLE", False):
@@ -364,10 +347,7 @@ class TestPerformanceRegression:
 
     def test_signature_performance(self):
         """Test that signature operations meet performance targets."""
-        from ama_cryptography.crypto_api import (
-            AlgorithmType,
-            AmaCryptography,
-        )
+        from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
 
         crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
         message = b"Performance test message" * 100
@@ -540,10 +520,7 @@ class TestEthicalIntegration:
 
     def test_ethical_vector_in_key_derivation(self):
         """Test that ethical vector is properly integrated."""
-        from code_guardian_secure import (
-            ETHICAL_VECTOR,
-            create_ethical_hkdf_context,
-        )
+        from code_guardian_secure import ETHICAL_VECTOR, create_ethical_hkdf_context
 
         # Verify ethical vector structure
         assert len(ETHICAL_VECTOR) == 12
@@ -600,10 +577,7 @@ class TestCryptoAPIIntegration:
 
     def test_constant_time_compare(self):
         """Test constant-time comparison function."""
-        from ama_cryptography.crypto_api import (
-            AlgorithmType,
-            AmaCryptography,
-        )
+        from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
 
         crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
 

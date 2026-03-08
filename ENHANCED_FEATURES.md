@@ -476,4 +476,4 @@ python -c "from ama_cryptography.math_engine import benchmark_matrix_operations;
 
 ---
 
-Copyright 2025 Steel Security Advisors LLC. Licensed under Apache License 2.0.
+Copyright 2025-2026 Steel Security Advisors LLC. Licensed under Apache License 2.0.

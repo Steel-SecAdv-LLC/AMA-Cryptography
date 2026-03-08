@@ -1,5 +1,5 @@
 /**
- * Copyright 2025 Steel Security Advisors LLC
+ * Copyright 2025-2026 Steel Security Advisors LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,10 +23,26 @@
  * Implements AES-256-GCM authenticated encryption with associated data (AEAD).
  *
  * Security properties:
- * - Constant-time AES core (T-table free, bitsliced S-box)
+ * - T-table free AES core (standard S-box lookup, no T-table acceleration)
  * - 256-bit key, 96-bit nonce (IV), 128-bit authentication tag
- * - GHASH via schoolbook multiplication in GF(2^128)
+ * - Constant-time GHASH via schoolbook multiplication in GF(2^128)
  * - Conforms to NIST SP 800-38D
+ *
+ * Side-channel WARNING:
+ * The S-box is a standard 256-byte lookup table, NOT a bitsliced implementation.
+ * The lookup index is state[i] = plaintext[i] XOR round_key[i], which is
+ * KEY-DEPENDENT. On processors with data-dependent cache behaviour (virtually
+ * all modern CPUs without AES-NI), this makes the implementation vulnerable to
+ * cache-timing attacks (Bernstein 2005, Osvik-Shamir-Tromer 2006). Table-based
+ * AES is NOT constant-time on general-purpose hardware.
+ *
+ * Mitigations by deployment context:
+ * - Hardware AES-NI / ARMv8-CE: Use hardware instructions (immune to table
+ *   timing). This implementation does not currently use AES-NI.
+ * - Dedicated hardware / single-tenant: Risk is reduced but not eliminated.
+ * - Shared-tenant VMs / hostile co-residency: This implementation is NOT safe.
+ *   A bitsliced AES or AES-NI backend is required. This is tracked as a
+ *   future hardening item.
  *
  * AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
  */
@@ -37,10 +53,13 @@
 #include <stdint.h>
 
 /* ============================================================================
- * AES-256 CORE (constant-time, no T-tables)
+ * AES-256 CORE (T-table free, standard S-box lookup)
  * ============================================================================ */
 
-/* AES S-box (lookup is on public data only — round-key XOR'd input) */
+/* AES S-box (standard 256-byte lookup table).
+ * WARNING: The lookup index is state[i] = plaintext[i] XOR round_key[i],
+ * which is key-dependent. This table-based approach is NOT constant-time
+ * on CPUs with data-dependent cache behaviour. See file header for details. */
 static const uint8_t aes_sbox[256] = {
     0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
     0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,

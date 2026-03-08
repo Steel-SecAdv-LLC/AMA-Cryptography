@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 Steel Security Advisors LLC
+# Copyright 2025-2026 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 
 """
@@ -63,10 +63,7 @@ from ama_cryptography.pqc_backends import (
 
 # Import HMAC and HKDF from legacy module
 try:
-    from code_guardian_secure import (
-        derive_keys,
-        hmac_authenticate,
-    )
+    from code_guardian_secure import derive_keys, hmac_authenticate
 
     HMAC_HKDF_AVAILABLE = True
 except (ImportError, RuntimeError):

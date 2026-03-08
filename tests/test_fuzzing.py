@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 Steel Security Advisors LLC
+# Copyright 2025-2026 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 """
 Fuzzing tests using Hypothesis for property-based testing.
@@ -59,11 +59,7 @@ from code_guardian_secure import (  # noqa: E402
 
 # Import Dilithium functions if available
 if DILITHIUM_AVAILABLE:
-    from code_guardian_secure import (
-        dilithium_sign,
-        dilithium_verify,
-        generate_dilithium_keypair,
-    )
+    from code_guardian_secure import dilithium_sign, dilithium_verify, generate_dilithium_keypair
 
 
 class TestLengthPrefixFuzzing:

@@ -29,7 +29,7 @@
 
 | Feature | OpenSSL+liboqs | AMA Cryptography | Security Implication |
 |---------|----------------|--------------|----------------------|
-| **Ed25519 Signatures** | ✅ OpenSSL (audited) | ✅ cryptography library | Equivalent |
+| **Ed25519 Signatures** | ✅ OpenSSL (audited) | ✅ Native C (RFC 8032 KAT validated) | Equivalent |
 | **ML-DSA-65 Signatures** | ✅ liboqs (NIST-reviewed) | ✅ Native C (NIST KAT validated) | Equivalent |
 | **Audit Status** | ✅ Extensively audited | ❌ **No external audit** | **OpenSSL+liboqs safer** |
 | **FIPS 140-2** | ✅ Available | ❌ Not certified | **OpenSSL+liboqs safer** |
@@ -285,5 +285,5 @@ AMA Cryptography **COULD BE more secure** if it receives proper external auditin
 ---
 
 **Generated:** 2026-01-09
-**Copyright:** 2025 Steel Security Advisors LLC
+**Copyright:** 2025-2026 Steel Security Advisors LLC
 **License:** Apache License 2.0
