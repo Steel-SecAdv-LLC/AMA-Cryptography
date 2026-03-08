@@ -39,7 +39,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2026-03-08
-Version: 2.0.0
+Version: 2.0
 Project: AMA Cryptography 3R Runtime Monitoring
 
 AI Co-Architects:
@@ -202,7 +202,7 @@ class IncrementalStats:
         self.M2 = 0.0
 
 
-__version__ = "2.0.0"
+__version__ = "2.0"
 __all__ = [
     "IncrementalStats",
     "EWMAStats",

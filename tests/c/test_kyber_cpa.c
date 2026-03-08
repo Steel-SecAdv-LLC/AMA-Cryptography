@@ -1,3 +1,10 @@
+/**
+ * Copyright 2025-2026 Steel Security Advisors LLC
+ * Licensed under the Apache License, Version 2.0
+ *
+ * Kyber-1024 CPA roundtrip test — exercises NTT and CPA encrypt/decrypt
+ * in isolation to verify correctness of the native PQC backend.
+ */
 #include "../../include/ama_cryptography.h"
 #include <stdio.h>
 extern int ama_kyber_debug_ntt_roundtrip(void);

@@ -23,7 +23,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2026-03-08
-Version: 2.0.0
+Version: 2.0
 Project: Post-quantum cryptographic security system
 
 AI Co-Architects:
@@ -59,7 +59,7 @@ Standards Compliance:
 - RFC 5869: HMAC-based Extract-and-Expand Key Derivation (HKDF)
 - RFC 3161: Internet X.509 Public Key Infrastructure Time-Stamp Protocol
 
-Version: 2.0.0
+Version: 2.0
 Python: 3.8+
 License: Apache License 2.0
 """
