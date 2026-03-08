@@ -222,13 +222,16 @@ def run_full_package_verify_benchmark(iterations: int = 20) -> float:
 def run_dilithium_keygen_benchmark(iterations: int = 20) -> Optional[float]:
     """Benchmark ML-DSA-65 key generation via native C library."""
     try:
-        from ama_cryptography.pqc_backends import DILITHIUM_AVAILABLE, dilithium_keypair
+        from ama_cryptography.pqc_backends import (
+            DILITHIUM_AVAILABLE,
+            generate_dilithium_keypair,
+        )
 
         if not DILITHIUM_AVAILABLE:
             return None
 
         def operation():
-            dilithium_keypair()
+            generate_dilithium_keypair()
 
         return benchmark_operation(operation, iterations, warmup=2)
     except (ImportError, Exception):
@@ -240,14 +243,14 @@ def run_dilithium_sign_benchmark(iterations: int = 20) -> Optional[float]:
     try:
         from ama_cryptography.pqc_backends import (
             DILITHIUM_AVAILABLE,
-            dilithium_keypair,
             dilithium_sign,
+            generate_dilithium_keypair,
         )
 
         if not DILITHIUM_AVAILABLE:
             return None
 
-        kp = dilithium_keypair()
+        kp = generate_dilithium_keypair()
         message = b"Test message for ML-DSA-65 signing" * 10
 
         def operation():
@@ -263,15 +266,15 @@ def run_dilithium_verify_benchmark(iterations: int = 20) -> Optional[float]:
     try:
         from ama_cryptography.pqc_backends import (
             DILITHIUM_AVAILABLE,
-            dilithium_keypair,
             dilithium_sign,
             dilithium_verify,
+            generate_dilithium_keypair,
         )
 
         if not DILITHIUM_AVAILABLE:
             return None
 
-        kp = dilithium_keypair()
+        kp = generate_dilithium_keypair()
         message = b"Test message for ML-DSA-65 signing" * 10
         signature = dilithium_sign(message, kp.secret_key)
 
