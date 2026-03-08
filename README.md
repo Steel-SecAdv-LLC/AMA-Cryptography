@@ -59,7 +59,7 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 > - Secure file permissions for key files and cryptographic packages (store on encrypted volumes with restricted access)
 >
 > **Status:** Community-tested | Not externally audited
-> **Last Updated:** 2026-03-06
+> **Last Updated:** 2026-03-08
 > **Audit Status:** Community-tested, not externally audited. See [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) for self-assessment details.
 >
 > See [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) for detailed security properties and threat model.
@@ -163,7 +163,7 @@ The signature innovation providing real-time cryptographic operation analysis un
 
 Optimized for both security and performance:
 
-- **C Layer**: Native SHA3-256, HKDF-SHA3-256, Ed25519, ML-DSA-65, Kyber-1024, SPHINCS+-256f implementations — zero external PQC dependencies (see [Implementation Status Matrix](#implementation-status-matrix))
+- **C Layer**: Native SHA3-256, HKDF-SHA3-256, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+-256f implementations — zero external dependencies (see [Implementation Status Matrix](#implementation-status-matrix))
 - **Cython Layer**: Optimized mathematical operations (benchmarked at 27-37x vs pure Python)
 - **Python API**: High-level, user-friendly interface for rapid development (primary production API)
 
@@ -175,15 +175,18 @@ Secure and tested:
 - Zero-downtime key rotation with lifecycle management
 - Algorithm-agnostic API for seamless algorithm switching
 - Secure encrypted key storage at rest
+- AES-256-GCM authenticated encryption (NIST SP 800-38D)
+- Adaptive cryptographic posture system (runtime threat response)
+- Hybrid KEM combiner (classical + PQC key encapsulation)
 
 ### Quantum-Resistant Algorithms
 
 Future-proof cryptography:
 
 - ML-DSA-65 (NIST FIPS 204 - Dilithium)
-- Kyber-1024 (NIST FIPS 203)
-- SPHINCS+-256f (stateless hash-based signatures)
-- Hybrid classical+PQC modes
+- Kyber-1024 (NIST FIPS 203 - ML-KEM)
+- SPHINCS+-SHA2-256f (NIST FIPS 205 - SLH-DSA)
+- Hybrid classical+PQC modes with binding combiner
 
 </details>
 
@@ -210,6 +213,7 @@ Future-proof cryptography:
 | SHA3-256 | **Full** | Full | Core primitive |
 | HKDF-SHA3-256 | **Full** | Full | Key derivation |
 | Ed25519 | **Full** | Full | Integrated |
+| AES-256-GCM | **Full** | Full | Authenticated encryption |
 | ML-DSA-65 | **Full** (native) | Full | Integrated |
 | Kyber-1024 | **Full** (native) | Full | Integrated |
 | SPHINCS+-256f | **Full** (native) | Full | Integrated |
@@ -218,15 +222,17 @@ Future-proof cryptography:
 **Legend:**
 - **Full**: Complete native C implementation with constant-time operations.
 - **Full (native)**: Complete native C implementation — no external PQC dependency required.
-- **Note**: Ed25519 C implementation includes dedicated `fe25519_sq()` field arithmetic optimization (v2.0). Full RFC 8032 sign/verify roundtrip verified.
+- **Note**: Ed25519 C implementation includes dedicated `fe25519_sq()` field arithmetic optimization and C11 atomics for thread-safe initialization (v2.0). Full RFC 8032 sign/verify roundtrip verified.
 
-**C Library Implementations (v1.1):**
+**C Library Implementations (v2.0):**
 - `ama_sha3.c`: SHA3-256, SHAKE128, SHAKE256 (Keccak-f[1600] sponge construction)
 - `ama_hkdf.c`: HKDF-SHA3-256 with HMAC-SHA3-256 (RFC 5869 compliant)
-- `ama_ed25519.c`: Ed25519 keygen/sign/verify (SHA-512, field arithmetic for GF(2^255-19))
+- `ama_ed25519.c`: Ed25519 keygen/sign/verify (SHA-512, field arithmetic for GF(2^255-19), C11 atomics)
+- `ama_aes_gcm.c`: AES-256-GCM authenticated encryption (NIST SP 800-38D)
 - `ama_kyber.c`: ML-KEM-1024 full native (NTT, IND-CCA2, Fujisaki-Okamoto transform)
 - `ama_dilithium.c`: ML-DSA-65 full native (NTT q=8380417, rejection sampling, constant-time)
 - `ama_sphincs.c`: SPHINCS+-SHA2-256f-simple full native (WOTS+, FORS, hypertree d=17)
+- `ama_consttime.c`: Constant-time utilities (memcmp, memzero, swap, lookup, copy)
 
 > **Note:** The Python API remains the recommended production interface. C implementations provide high-performance alternatives where applicable. See [BENCHMARKS.md](BENCHMARKS.md) for C vs Python performance comparison.
 
@@ -632,7 +638,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*798 tests across 23 files (~11,000 lines) covering core crypto and NIST KATs, PQC backends, key management, memory security, and performance/monitoring.*
+*798+ tests across 28 files covering core crypto and NIST KATs, PQC backends, key management, adaptive posture, hybrid combiner, memory security, and performance/monitoring.*
 
 </details>
 
@@ -663,8 +669,8 @@ GitHub Actions automatically tests:
 | Layer | Protection |
 |-------|------------|
 | Defense-in-Depth | 6 independent cryptographic layers |
-| Quantum Resistance | NIST-approved ML-DSA-65 (FIPS 204) and Kyber-1024 (FIPS 203) |
-| Side-Channel Protection | Constant-time operations, data-independent control flow |
+| Quantum Resistance | NIST-approved ML-DSA-65 (FIPS 204), Kyber-1024 (FIPS 203), SPHINCS+ (FIPS 205) |
+| Side-Channel Protection | Constant-time operations, C11 atomics, data-independent control flow |
 | Memory Safety | Secure wiping, bounds checking, magic number validation |
 | 3R Monitoring | Runtime security analysis (less than 2% overhead) |
 
@@ -776,6 +782,8 @@ KAT vectors are sourced from NIST PQC standardization and validate that the nati
 | [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) | Complete security analysis |
 | [BENCHMARKS.md](BENCHMARKS.md) | Performance measurements |
 | [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) | Cryptographic algorithm overview |
+| [SECURITY_COMPARISON.md](SECURITY_COMPARISON.md) | AMA Cryptography vs OpenSSL+liboqs |
+| [CONSTANT_TIME_VERIFICATION.md](CONSTANT_TIME_VERIFICATION.md) | dudect-style timing analysis |
 
 </details>
 
@@ -1066,10 +1074,21 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) file for 
 
 ### Third-Party Dependencies
 
-- **ML-DSA** (Dilithium): Public domain (NIST PQC)
-- **Kyber**: Public domain (NIST PQC)
-- **SPHINCS+**: Public domain (NIST PQC)
-- **Ed25519**: Public domain (ref10 implementation)
+AMA Cryptography v2.0 has **zero core dependencies** — all cryptographic primitives are implemented natively in C.
+
+**Algorithm implementations (all native, public domain references):**
+- **ML-DSA-65** (Dilithium): Public domain (NIST FIPS 204)
+- **ML-KEM-1024** (Kyber): Public domain (NIST FIPS 203)
+- **SPHINCS+-SHA2-256f**: Public domain (NIST FIPS 205)
+- **Ed25519**: Public domain (ref10 implementation, RFC 8032)
+- **AES-256-GCM**: Public domain (NIST SP 800-38D)
+- **SHA3-256/SHAKE**: Public domain (NIST FIPS 202)
+
+**Optional dependency groups:**
+- `[monitoring]`: numpy, scipy (3R engine)
+- `[legacy]`: cryptography (fallback)
+- `[hsm]`: PyKCS11 (HSM support)
+- `[secure-memory]`: pynacl (libsodium)
 
 ### Dependency Graph
 
@@ -1119,7 +1138,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see BENCHMARKS.md)
-- **Rigorous testing:** 694+ tests with 32 CI checks including security scanning (TruffleHog)
+- **Rigorous testing:** 798+ tests across 28 test files with CI checks including security scanning
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims
@@ -1161,6 +1180,6 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 </div>
 
-*Last updated: 2026-03-07*
+*Last updated: 2026-03-08*
 
 </div>

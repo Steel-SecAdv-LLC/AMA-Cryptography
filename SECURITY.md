@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 1.1 |
-| Last Updated | 2026-01-09 |
+| Document Version | 2.0 |
+| Last Updated | 2026-03-08 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -13,7 +13,7 @@
 
 ## Overview
 
-AMA Cryptography is a production-grade quantum-resistant cryptographic protection system released under the Apache License 2.0 as free and open-source software. Security is our highest priority. We take all vulnerabilities seriously and appreciate responsible disclosure from the security research community.
+AMA Cryptography is a production-grade quantum-resistant cryptographic protection system released under the Apache License 2.0 as free and open-source software. As of v2.0, all cryptographic primitives are implemented natively in C with zero core dependencies. Security is our highest priority. We take all vulnerabilities seriously and appreciate responsible disclosure from the security research community.
 
 ---
 
@@ -34,10 +34,18 @@ AMA Cryptography implements defense-in-depth with six independent security layer
 
 1. **SHA3-256 Content Hashing** (NIST FIPS 202)
 2. **HMAC-SHA3-256 Authentication** (RFC 2104)
-3. **Ed25519 Digital Signatures** (RFC 8032)
+3. **Ed25519 Digital Signatures** (RFC 8032, C11 atomics hardened)
 4. **ML-DSA-65 Quantum-Resistant Signatures** (NIST FIPS 204)
-5. **HKDF Key Derivation** (RFC 5869, NIST SP 800-108)
+5. **HKDF-SHA3-256 Key Derivation** (RFC 5869, NIST SP 800-108)
 6. **RFC 3161 Trusted Timestamps**
+
+### Additional Cryptographic Capabilities
+
+- **AES-256-GCM Authenticated Encryption** (NIST SP 800-38D)
+- **ML-KEM-1024 Key Encapsulation** (NIST FIPS 203)
+- **SPHINCS+-SHA2-256f Hash-Based Signatures** (NIST FIPS 205)
+- **Adaptive Cryptographic Posture System** (runtime threat-level response)
+- **Hybrid KEM Combiner** (IND-CCA2 binding construction per Bindel et al.)
 
 ## Reporting a Vulnerability
 
@@ -168,6 +176,11 @@ Users deploying AMA Cryptography in production should:
 - **NEVER:** Store private keys in plain text or version control
 - **NEVER:** Reuse keys across different Omni-Code packages
 
+### Zero-Dependency Architecture (v2.0)
+- **REQUIRED:** Build native C library (`cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build`)
+- All cryptographic primitives (SHA3, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+) are native C — no external cryptographic dependencies required
+- Optional: numpy/scipy for 3R monitoring, pynacl for libsodium secure memory, PyKCS11 for HSM
+
 ### Cryptographic Operations
 - **REQUIRED:** Build native PQC C library (`cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build`)
 - **REQUIRED:** Enable all six cryptographic layers (no fallbacks in production)
@@ -176,8 +189,8 @@ Users deploying AMA Cryptography in production should:
 - **RECOMMENDED:** Verify all signatures before trusting package contents
 
 ### Dependency Management
-- **REQUIRED:** Keep cryptographic dependencies up to date
-- **REQUIRED:** Monitor security advisories for `cryptography` library
+- **NOTE:** v2.0 has zero core cryptographic dependencies — all primitives are native C
+- **REQUIRED:** Keep optional dependencies up to date (numpy, scipy, pynacl if used)
 - **REQUIRED:** Enable Dependabot for automated security updates
 - **RECOMMENDED:** Pin dependency versions for reproducible builds
 - **RECOMMENDED:** Verify package signatures from PyPI
@@ -198,10 +211,13 @@ Users deploying AMA Cryptography in production should:
 | SHA3-256 | 2^128 | 2^128 | ✓ Secure |
 | HMAC-SHA3-256 | 2^128 | 2^128 | ✓ Secure |
 | Ed25519 | 2^126 | ~10^7 gates* | ⚠ Quantum-vulnerable |
-| Dilithium-3 | 2^207 | 2^192 | ✓ Quantum-secure |
+| ML-DSA-65 (Dilithium-3) | 2^207 | 2^192 | ✓ Quantum-secure |
+| ML-KEM-1024 (Kyber) | 2^256 | 2^128 | ✓ Quantum-secure |
+| SPHINCS+-SHA2-256f | 2^256 | 2^128 | ✓ Quantum-secure |
+| AES-256-GCM | 2^256 | 2^128 | ✓ Quantum-secure |
 | HKDF | 2^128 | 2^128 | ✓ Secure |
 
-*Ed25519 is vulnerable to sufficiently large quantum computers, but Dilithium provides quantum-resistant backup.
+*Ed25519 is vulnerable to sufficiently large quantum computers, but ML-DSA-65 provides quantum-resistant backup.
 
 ### Cryptographic Deprecation Policy
 
@@ -228,8 +244,11 @@ Please contact us at steel.sa.llc@gmail.com to coordinate security audit efforts
 
 AMA Cryptography is designed to comply with:
 
-- **NIST FIPS 202** - SHA-3 Standard
-- **NIST FIPS 204** - Module-Lattice-Based Digital Signature Standard (Dilithium)
+- **NIST FIPS 202** - SHA-3 Standard (SHA3-256, SHAKE128, SHAKE256)
+- **NIST FIPS 203** - Module-Lattice-Based Key-Encapsulation Mechanism (ML-KEM / Kyber)
+- **NIST FIPS 204** - Module-Lattice-Based Digital Signature Standard (ML-DSA / Dilithium)
+- **NIST FIPS 205** - Stateless Hash-Based Digital Signature Standard (SLH-DSA / SPHINCS+)
+- **NIST SP 800-38D** - Recommendation for Block Cipher Modes: GCM (AES-256-GCM)
 - **NIST SP 800-108** - Recommendation for Key Derivation Using Pseudorandom Functions
 - **NIST SP 800-57** - Recommendation for Key Management
 - **RFC 2104** - HMAC: Keyed-Hashing for Message Authentication
@@ -253,6 +272,8 @@ Non-compliance with these standards should be reported as a high-severity securi
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0.0 | 2025-11-26 | Initial professional release |
+| 1.1.0 | 2026-01-09 | Version alignment, terminology updates |
+| 2.0.0 | 2026-03-08 | Zero-dependency native C architecture, FIPS 203/204/205 compliance, AES-256-GCM, adaptive posture system, hybrid KEM combiner, Ed25519 atomics hardening |
 
 ---
 
