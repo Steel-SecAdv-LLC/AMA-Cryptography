@@ -93,7 +93,7 @@ class BenchmarkSuite:
             "dilithium_available": DILITHIUM_AVAILABLE,
         }
         if _HAS_PSUTIL:
-            info["cpu_count"] = psutil.cpu_count()
+            info["cpu_count"] = psutil.cpu_count() or info["cpu_count"]
             info["memory_gb"] = round(psutil.virtual_memory().total / (1024**3), 2)
         return info
 
