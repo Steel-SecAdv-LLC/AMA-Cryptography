@@ -1,7 +1,8 @@
-# Development and Testing Dependencies
+# Development and Testing Dependencies for AMA Cryptography 2.0
 # Install with: pip install -r requirements-dev.txt
-
-# ALL cryptographic operations provided natively by the C library (ZERO external deps)
+#
+# ALL cryptographic operations provided natively by the C library (ZERO external deps).
+# Native C backend: Ed25519, AES-256-GCM, HKDF, ML-DSA-65, Kyber-1024, SPHINCS+.
 # Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
 
 # Build dependencies (required for Cython extensions)
@@ -33,6 +34,9 @@ mypy>=1.0.0
 # Security Scanning
 bandit>=1.7.0
 safety>=2.3.0
+
+# Benchmarking (optional — benchmark_suite.py uses psutil when available)
+# psutil>=5.9.0
 
 # Build and packaging
 setuptools>=61.0

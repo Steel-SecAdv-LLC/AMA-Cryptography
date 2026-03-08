@@ -10,7 +10,7 @@ import ama_cryptography
 def test_version():
     """Test that version is correctly set"""
     assert hasattr(ama_cryptography, "__version__")
-    assert ama_cryptography.__version__ == "2.0.0"
+    assert ama_cryptography.__version__ == "2.0"
 
 
 def test_author():

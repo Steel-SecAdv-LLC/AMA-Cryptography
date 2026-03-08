@@ -22,13 +22,13 @@ Post-quantum cryptographic security system with rigorous mathematical foundation
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
-Version: 2.0.0
+Version: 2.0
 
 AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 """
 
-__version__ = "2.0.0"
+__version__ = "2.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
 import importlib as _importlib

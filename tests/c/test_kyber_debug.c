@@ -1,5 +1,9 @@
 /**
- * Kyber-1024 debug test - isolates CPA encrypt/decrypt
+ * Copyright 2025-2026 Steel Security Advisors LLC
+ * Licensed under the Apache License, Version 2.0
+ *
+ * Kyber-1024 debug test — isolates CPA encrypt/decrypt
+ * to verify correctness of the native PQC backend.
  */
 #define _POSIX_C_SOURCE 200809L
 #include "../../include/ama_cryptography.h"

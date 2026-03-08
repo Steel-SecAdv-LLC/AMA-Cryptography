@@ -5,7 +5,7 @@
  * @file ama_sha256.h
  * @brief Native SHA-256 implementation (NIST FIPS 180-4)
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-03-07
+ * @date 2026-03-08
  *
  * Provides SHA-256 hashing without OpenSSL dependency.
  * Used by SPHINCS+-SHA2-256f-simple (FIPS 205) internally.

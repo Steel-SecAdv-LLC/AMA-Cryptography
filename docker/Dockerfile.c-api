@@ -1,7 +1,7 @@
 # Dockerfile for AMA Cryptography C API Build
 # Provides reproducible C library builds with native PQC
 #
-# Copyright 2025 Steel Security Advisors LLC
+# Copyright 2025-2026 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 #
 # Usage:

@@ -6,7 +6,7 @@
 # cython: embedsignature=True
 
 """
-Copyright 2025 Steel Security Advisors LLC
+Copyright 2025-2026 Steel Security Advisors LLC
 Licensed under the Apache License, Version 2.0
 
 AMA Cryptography High-Performance Mathematical Engine (Cython)

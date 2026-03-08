@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ama-cryptography"
-version = "2.0.0"
+version = "2.0"
 description = "Quantum-resistant cryptographic protection system for helical mathematical Omni-Codes"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -19,9 +19,15 @@ keywords = [
     "quantum-resistant",
     "post-quantum-cryptography",
     "dilithium",
+    "ml-dsa",
+    "kyber",
+    "ml-kem",
+    "sphincs",
     "ed25519",
+    "aes-gcm",
     "sha3",
     "hmac",
+    "pqc",
     "security",
     "integrity-protection",
     "digital-signatures"
@@ -32,12 +38,15 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
+    "Programming Language :: C",
+    "Programming Language :: Cython",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Security :: Cryptography",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Typing :: Typed"
@@ -70,15 +79,16 @@ secure-memory = [
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
-    "pytest-timeout>=2.0.0",
+    "pytest-timeout>=2.1.0",
+    "pytest-benchmark>=4.0.0",
     "pytest-xdist>=3.0.0",
+    "hypothesis>=6.0.0",
     "black==24.10.0; python_version >= '3.9'",
     "flake8>=6.0.0",
     "mypy>=1.0.0",
     "isort>=5.12.0",
-    "hypothesis>=6.0.0",
     "bandit>=1.7.0",
-    "safety>=2.0.0",
+    "safety>=2.3.0",
     "numpy>=1.24.0,<2.0.0; python_version < '3.9'",
     "numpy>=1.24.0; python_version >= '3.9'",
     "scipy>=1.10.0,<1.11.0; python_version < '3.9'",

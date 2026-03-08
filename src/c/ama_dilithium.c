@@ -18,7 +18,7 @@
  * @file ama_dilithium.c
  * @brief ML-DSA-65 (CRYSTALS-Dilithium) Digital Signature - Native C Implementation
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-03-05
+ * @date 2026-03-08
  *
  * Full native implementation of ML-DSA-65 (NIST FIPS 204) digital signatures.
  * Implements keypair generation, signing, and verification using the

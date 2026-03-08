@@ -5,7 +5,7 @@
  * @file ama_platform_rand.h
  * @brief Platform-native cryptographic random number generation
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-03-07
+ * @date 2026-03-08
  *
  * Provides OS-level CSPRNG access without OpenSSL dependency.
  * Supports Linux (getrandom), macOS (getentropy), Windows (BCryptGenRandom),

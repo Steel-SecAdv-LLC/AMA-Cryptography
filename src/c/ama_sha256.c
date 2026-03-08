@@ -5,7 +5,7 @@
  * @file ama_sha256.c
  * @brief Native SHA-256 implementation (NIST FIPS 180-4)
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-03-07
+ * @date 2026-03-08
  *
  * Full SHA-256 per FIPS 180-4. Replaces OpenSSL EVP_Digest(SHA-256) calls
  * in ama_sphincs.c for zero-dependency SPHINCS+ operation.
