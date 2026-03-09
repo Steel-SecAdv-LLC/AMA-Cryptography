@@ -167,13 +167,11 @@ class HDKeyDerivation:
             data = b"\x00" + parent_key + index.to_bytes(4, "big")
         else:
             # Non-hardened derivation: HMAC-SHA512(Key = cpar, Data = serP(point(kpar)) || ser32(i))
-            # BIP32 requires the compressed secp256k1 public key (33 bytes),
-            # which needs elliptic curve point multiplication (kpar * G).
-            raise NotImplementedError(
-                "Non-hardened BIP32 derivation requires secp256k1 point multiplication "
-                "to compute the compressed public key from the parent private key. "
-                "Use hardened derivation (index >= 2^31) or add secp256k1 curve arithmetic."
-            )
+            # BIP32 requires the compressed secp256k1 public key (33 bytes).
+            from ama_cryptography.pqc_backends import native_secp256k1_pubkey_from_privkey
+
+            compressed_pubkey = native_secp256k1_pubkey_from_privkey(parent_key)
+            data = compressed_pubkey + index.to_bytes(4, "big")
 
         h = hmac.new(parent_chain, data, hashlib.sha512)
         hmac_result = h.digest()
@@ -480,11 +478,15 @@ class SecureKeyStorage:
         self.storage_path.mkdir(parents=True, exist_ok=True)
 
         # Key derivation parameters (versioned for future upgrades)
-        self.KDF_VERSION = 2
-        self.KDF_ITERATIONS = 600000  # OWASP 2024 recommendation
+        self.KDF_VERSION = 3  # v3 = Argon2id, v2 = PBKDF2 600k, v1 = PBKDF2 100k
+        self.KDF_ITERATIONS = 600000  # OWASP 2024 recommendation (PBKDF2 fallback)
         self.KDF_LEGACY_ITERATIONS = 100000  # Pre-v2 default iterations
         self.KDF_SALT_BYTES = 32  # Salt size in bytes
         self.KDF_KEY_BYTES = 32  # Derived key size (AES-256)
+        # Argon2id parameters (RFC 9106 recommended minimums)
+        self.ARGON2_T_COST = 3  # iterations
+        self.ARGON2_M_COST = 65536  # 64 MiB
+        self.ARGON2_PARALLELISM = 4  # lanes
 
         # Salt file with secure permissions
         self.salt_file = self.storage_path / ".salt"
@@ -523,27 +525,67 @@ class SecureKeyStorage:
                 f.write(self.salt)
             os.chmod(self.salt_file, 0o600)
 
+            # Determine algorithm: prefer Argon2id, fall back to PBKDF2
+            try:
+                from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE
+                use_argon2 = _ARGON2_NATIVE_AVAILABLE
+            except ImportError:
+                use_argon2 = False
+
+            if use_argon2:
+                algorithm = "Argon2id"
+                version = 3
+            else:
+                algorithm = "PBKDF2-HMAC-SHA256"
+                version = 2
+
             # Save KDF metadata
             metadata = {
-                "version": self.KDF_VERSION,
-                "algorithm": "PBKDF2-HMAC-SHA256",
-                "iterations": self.KDF_ITERATIONS,
+                "version": version,
+                "algorithm": algorithm,
                 "salt_bytes": self.KDF_SALT_BYTES,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            if algorithm == "PBKDF2-HMAC-SHA256":
+                metadata["iterations"] = self.KDF_ITERATIONS
+            else:
+                metadata["t_cost"] = self.ARGON2_T_COST
+                metadata["m_cost"] = self.ARGON2_M_COST
+                metadata["parallelism"] = self.ARGON2_PARALLELISM
             with open(self.metadata_file, "w") as f:
                 json.dump(metadata, f, indent=2)
             os.chmod(self.metadata_file, 0o600)
             iterations = self.KDF_ITERATIONS
-            version = self.KDF_VERSION
 
-        self.encryption_key = bytearray(hashlib.pbkdf2_hmac(
-            "sha256",
-            master_password.encode("utf-8"),
-            self.salt,
-            iterations,
-            self.KDF_KEY_BYTES,
-        ))
+        # Derive key using the appropriate algorithm
+        if version >= 3:
+            try:
+                from ama_cryptography.pqc_backends import native_argon2id
+                self.encryption_key = bytearray(native_argon2id(
+                    master_password.encode("utf-8"),
+                    self.salt,
+                    t_cost=self.ARGON2_T_COST,
+                    m_cost=self.ARGON2_M_COST,
+                    parallelism=self.ARGON2_PARALLELISM,
+                    out_len=self.KDF_KEY_BYTES,
+                ))
+            except (ImportError, RuntimeError):
+                # Argon2id unavailable at runtime — fall back to PBKDF2
+                self.encryption_key = bytearray(hashlib.pbkdf2_hmac(
+                    "sha256",
+                    master_password.encode("utf-8"),
+                    self.salt,
+                    self.KDF_ITERATIONS,
+                    self.KDF_KEY_BYTES,
+                ))
+        else:
+            self.encryption_key = bytearray(hashlib.pbkdf2_hmac(
+                "sha256",
+                master_password.encode("utf-8"),
+                self.salt,
+                iterations,
+                self.KDF_KEY_BYTES,
+            ))
 
         # Warn if using legacy parameters
         if version < 2:
@@ -578,14 +620,30 @@ class SecureKeyStorage:
         # Generate new salt
         new_salt = secrets.token_bytes(self.KDF_SALT_BYTES)
 
-        # Derive new key
-        new_encryption_key = bytearray(hashlib.pbkdf2_hmac(
-            "sha256",
-            master_password.encode("utf-8"),
-            new_salt,
-            self.KDF_ITERATIONS,
-            self.KDF_KEY_BYTES,
-        ))
+        # Derive new key — prefer Argon2id, fall back to PBKDF2
+        try:
+            from ama_cryptography.pqc_backends import native_argon2id, _ARGON2_NATIVE_AVAILABLE
+            use_argon2 = _ARGON2_NATIVE_AVAILABLE
+        except ImportError:
+            use_argon2 = False
+
+        if use_argon2:
+            new_encryption_key = bytearray(native_argon2id(
+                master_password.encode("utf-8"),
+                new_salt,
+                t_cost=self.ARGON2_T_COST,
+                m_cost=self.ARGON2_M_COST,
+                parallelism=self.ARGON2_PARALLELISM,
+                out_len=self.KDF_KEY_BYTES,
+            ))
+        else:
+            new_encryption_key = bytearray(hashlib.pbkdf2_hmac(
+                "sha256",
+                master_password.encode("utf-8"),
+                new_salt,
+                self.KDF_ITERATIONS,
+                self.KDF_KEY_BYTES,
+            ))
 
         # Re-encrypt all keys
         old_key = self.encryption_key
@@ -604,11 +662,16 @@ class SecureKeyStorage:
             # Update metadata
             metadata = {
                 "version": self.KDF_VERSION,
-                "algorithm": "PBKDF2-HMAC-SHA256",
-                "iterations": self.KDF_ITERATIONS,
+                "algorithm": "Argon2id" if use_argon2 else "PBKDF2-HMAC-SHA256",
                 "salt_bytes": self.KDF_SALT_BYTES,
                 "migrated_at": datetime.now(timezone.utc).isoformat(),
             }
+            if use_argon2:
+                metadata["t_cost"] = self.ARGON2_T_COST
+                metadata["m_cost"] = self.ARGON2_M_COST
+                metadata["parallelism"] = self.ARGON2_PARALLELISM
+            else:
+                metadata["iterations"] = self.KDF_ITERATIONS
             with open(self.metadata_file, "w") as f:
                 json.dump(metadata, f, indent=2)
 
@@ -623,11 +686,14 @@ class SecureKeyStorage:
         """Recover storage instance from existing salt file."""
         storage = cls.__new__(cls)
         storage.storage_path = Path(storage_path)
-        storage.KDF_VERSION = 2
+        storage.KDF_VERSION = 3
         storage.KDF_ITERATIONS = 600000
         storage.KDF_LEGACY_ITERATIONS = 100000  # Pre-v2 default iterations
         storage.KDF_SALT_BYTES = 32  # Salt size in bytes
         storage.KDF_KEY_BYTES = 32  # Derived key size (AES-256)
+        storage.ARGON2_T_COST = 3
+        storage.ARGON2_M_COST = 65536
+        storage.ARGON2_PARALLELISM = 4
         storage.salt_file = storage.storage_path / ".salt"
         storage.metadata_file = storage.storage_path / ".kdf_metadata.json"
 

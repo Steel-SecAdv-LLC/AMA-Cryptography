@@ -604,6 +604,210 @@ AMA_API ama_error_t ama_aes256_gcm_decrypt(
 );
 
 /* ============================================================================
+ * SECP256K1 ELLIPTIC CURVE (BIP32 HD KEY DERIVATION)
+ * ============================================================================ */
+
+#define AMA_SECP256K1_PRIVKEY_BYTES  32
+#define AMA_SECP256K1_PUBKEY_BYTES   33  /* SEC1 compressed */
+
+/**
+ * @brief Scalar multiplication on secp256k1
+ *
+ * Computes out = scalar * (point_x, point_y) using a constant-time Montgomery ladder.
+ *
+ * @param scalar    32-byte big-endian scalar
+ * @param point_x   32-byte big-endian X coordinate of input point
+ * @param point_y   32-byte big-endian Y coordinate of input point
+ * @param out_x     Output: 32-byte big-endian X coordinate of result
+ * @param out_y     Output: 32-byte big-endian Y coordinate of result
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_secp256k1_point_mul(
+    const uint8_t scalar[32],
+    const uint8_t point_x[32],
+    const uint8_t point_y[32],
+    uint8_t out_x[32],
+    uint8_t out_y[32]
+);
+
+/**
+ * @brief Compute compressed SEC1 public key from private key
+ *
+ * Performs constant-time Montgomery ladder scalar multiplication on secp256k1.
+ * Output is 33 bytes: 0x02 or 0x03 prefix + 32-byte X coordinate.
+ *
+ * @param privkey 32-byte private key (must be in [1, N-1])
+ * @param compressed_pubkey Output: 33-byte compressed public key
+ * @return AMA_SUCCESS or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_secp256k1_pubkey_from_privkey(
+    const uint8_t privkey[32],
+    uint8_t compressed_pubkey[33]
+);
+
+/* ============================================================================
+ * X25519 KEY EXCHANGE (RFC 7748)
+ * ============================================================================ */
+
+#define AMA_X25519_KEY_BYTES 32
+
+/**
+ * @brief Generate X25519 keypair
+ *
+ * Generates a random secret key (clamped per RFC 7748) and computes
+ * the corresponding public key via scalar multiplication with base point 9.
+ *
+ * @param public_key Output: 32-byte public key
+ * @param secret_key Output: 32-byte secret key (clamped)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_x25519_keypair(
+    uint8_t public_key[32],
+    uint8_t secret_key[32]
+);
+
+/**
+ * @brief X25519 Diffie-Hellman key exchange
+ *
+ * Computes shared_secret = X25519(our_secret_key, their_public_key).
+ * Returns AMA_ERROR_CRYPTO if result is all-zero (low-order point rejection).
+ *
+ * @param shared_secret Output: 32-byte shared secret
+ * @param our_secret_key Our 32-byte secret key
+ * @param their_public_key Their 32-byte public key
+ * @return AMA_SUCCESS or AMA_ERROR_CRYPTO
+ */
+AMA_API ama_error_t ama_x25519_key_exchange(
+    uint8_t shared_secret[32],
+    const uint8_t our_secret_key[32],
+    const uint8_t their_public_key[32]
+);
+
+/* ============================================================================
+ * ARGON2ID KEY DERIVATION (RFC 9106)
+ * ============================================================================ */
+
+#define AMA_ARGON2_SALT_BYTES  16
+#define AMA_ARGON2_TAG_BYTES   32
+
+/**
+ * @brief Argon2id password hashing / key derivation (RFC 9106)
+ *
+ * Memory-hard KDF with resistance to GPU/ASIC attacks.
+ * Single-threaded execution (parallelism affects block layout only).
+ *
+ * @param password    Password bytes
+ * @param pwd_len     Password length
+ * @param salt        Salt (16+ bytes recommended)
+ * @param salt_len    Salt length
+ * @param t_cost      Time cost (iterations, >= 1)
+ * @param m_cost      Memory cost in KiB (>= 8 * parallelism)
+ * @param parallelism Degree of parallelism (lanes)
+ * @param output      Output tag buffer
+ * @param out_len     Desired output length (>= 4)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_argon2id(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    uint8_t *output, size_t out_len
+);
+
+/* ============================================================================
+ * CHACHA20-POLY1305 AEAD (RFC 8439)
+ * ============================================================================ */
+
+#define AMA_CHACHA20_KEY_BYTES    32
+#define AMA_CHACHA20_NONCE_BYTES  12
+#define AMA_POLY1305_TAG_BYTES    16
+
+/**
+ * @brief ChaCha20-Poly1305 AEAD encryption (RFC 8439)
+ *
+ * Encrypts plaintext and produces ciphertext + 16-byte authentication tag.
+ *
+ * @param key        32-byte key
+ * @param nonce      12-byte nonce
+ * @param plaintext  Plaintext to encrypt (can be NULL if pt_len == 0)
+ * @param pt_len     Length of plaintext
+ * @param aad        Additional authenticated data (can be NULL if aad_len == 0)
+ * @param aad_len    Length of AAD
+ * @param ciphertext Output: ciphertext (same length as plaintext)
+ * @param tag        Output: 16-byte authentication tag
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_chacha20poly1305_encrypt(
+    const uint8_t key[32],
+    const uint8_t nonce[12],
+    const uint8_t *plaintext, size_t pt_len,
+    const uint8_t *aad, size_t aad_len,
+    uint8_t *ciphertext,
+    uint8_t tag[16]
+);
+
+/**
+ * @brief ChaCha20-Poly1305 AEAD decryption (RFC 8439)
+ *
+ * Verifies tag and decrypts. Fail-closed: zeros plaintext on tag mismatch.
+ *
+ * @param key        32-byte key
+ * @param nonce      12-byte nonce
+ * @param ciphertext Ciphertext to decrypt
+ * @param ct_len     Length of ciphertext
+ * @param aad        Additional authenticated data (can be NULL if aad_len == 0)
+ * @param aad_len    Length of AAD
+ * @param tag        16-byte authentication tag to verify
+ * @param plaintext  Output: decrypted plaintext (same length as ciphertext)
+ * @return AMA_SUCCESS or AMA_ERROR_VERIFY_FAILED
+ */
+AMA_API ama_error_t ama_chacha20poly1305_decrypt(
+    const uint8_t key[32],
+    const uint8_t nonce[12],
+    const uint8_t *ciphertext, size_t ct_len,
+    const uint8_t *aad, size_t aad_len,
+    const uint8_t tag[16],
+    uint8_t *plaintext
+);
+
+/* ============================================================================
+ * DETERMINISTIC KEYGEN FROM SEED (KAT TESTING)
+ * ============================================================================ */
+
+/**
+ * @brief Deterministic Kyber-1024 keypair from seed
+ *
+ * Generates keypair from provided seeds, bypassing RNG.
+ * Used for NIST KAT validation.
+ *
+ * @param d   32-byte seed for key generation
+ * @param z   32-byte seed for implicit rejection
+ * @param pk  Output: public key (1568 bytes)
+ * @param sk  Output: secret key (3168 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_kyber_keypair_from_seed(
+    const uint8_t d[32], const uint8_t z[32],
+    uint8_t *pk, uint8_t *sk
+);
+
+/**
+ * @brief Deterministic ML-DSA-65 keypair from seed
+ *
+ * Generates keypair from provided seed, bypassing RNG.
+ * Used for NIST KAT validation.
+ *
+ * @param xi          32-byte seed
+ * @param public_key  Output: public key (1952 bytes)
+ * @param secret_key  Output: secret key (4032 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_dilithium_keypair_from_seed(
+    const uint8_t xi[32],
+    uint8_t *public_key, uint8_t *secret_key
+);
+
+/* ============================================================================
  * VERSIONING
  * ============================================================================ */
 

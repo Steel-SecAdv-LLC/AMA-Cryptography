@@ -383,13 +383,14 @@ class TestHDKeyDerivation:
 
         assert key1 != key2
 
-    def test_non_hardened_raises(self):
-        """Non-hardened derivation raises NotImplementedError."""
+    def test_non_hardened_derivation(self):
+        """Non-hardened derivation works with native secp256k1."""
         from ama_cryptography.key_management import HDKeyDerivation
 
         hd = HDKeyDerivation()
-        with pytest.raises(NotImplementedError):
-            hd.derive_path("m/44'/0'/0'/0/0")
+        key, chain = hd.derive_path("m/44'/0'/0'/0/0")
+        assert len(key) == 32
+        assert len(chain) == 32
 
     def test_deterministic_derivation(self):
         """Same seed produces same keys."""

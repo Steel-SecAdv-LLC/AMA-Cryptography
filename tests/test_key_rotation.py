@@ -202,9 +202,15 @@ class TestSecureKeyStorageGCM:
             with open(metadata_file, "r") as f:
                 metadata = json.load(f)
 
-            assert metadata["version"] == 2
-            assert metadata["iterations"] == 600000
-            assert metadata["algorithm"] == "PBKDF2-HMAC-SHA256"
+            # v3 = Argon2id (preferred when native lib available), v2 = PBKDF2
+            assert metadata["version"] in (2, 3)
+            if metadata["version"] == 3:
+                assert metadata["algorithm"] == "Argon2id"
+                assert "t_cost" in metadata
+                assert "m_cost" in metadata
+            else:
+                assert metadata["algorithm"] == "PBKDF2-HMAC-SHA256"
+                assert metadata["iterations"] == 600000
 
     def test_from_existing_recovery(self):
         """Can recover storage from existing salt file."""

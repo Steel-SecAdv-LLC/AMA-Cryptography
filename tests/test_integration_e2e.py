@@ -180,8 +180,8 @@ class TestKeyManagementWorkflows:
         hd1 = HDKeyDerivation(seed=seed)
         hd2 = HDKeyDerivation(seed=seed)
 
-        key1, chain1 = hd1.derive_path("m/44'/0'/0'")
-        key2, chain2 = hd2.derive_path("m/44'/0'/0'")
+        key1, chain1 = hd1.derive_path("m/44'/0'/0'/0/0")
+        key2, chain2 = hd2.derive_path("m/44'/0'/0'/0/0")
 
         assert key1 == key2
         assert chain1 == chain2

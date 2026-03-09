@@ -77,9 +77,10 @@ class TestHDKeyDerivationComprehensive:
         assert hd1.master_key != hd2.master_key
 
     def test_derive_path_standard(self, hd_derivation):
-        """Non-hardened BIP44 path raises NotImplementedError (needs secp256k1)."""
-        with pytest.raises(NotImplementedError):
-            hd_derivation.derive_path("m/44'/0'/0'/0/0")
+        """Standard BIP44 path with non-hardened derivation (uses native secp256k1)."""
+        key, chain = hd_derivation.derive_path("m/44'/0'/0'/0/0")
+        assert len(key) == 32
+        assert len(chain) == 32
 
     def test_derive_path_hardened_only(self, hd_derivation):
         """Derive key with all hardened derivation."""
@@ -89,14 +90,16 @@ class TestHDKeyDerivationComprehensive:
         assert len(chain) == 32
 
     def test_derive_path_non_hardened_only(self, hd_derivation):
-        """Non-hardened derivation raises NotImplementedError (needs secp256k1)."""
-        with pytest.raises(NotImplementedError):
-            hd_derivation.derive_path("m/0/1/2")
+        """Non-hardened-only derivation (uses native secp256k1)."""
+        key, chain = hd_derivation.derive_path("m/0/1/2")
+        assert len(key) == 32
+        assert len(chain) == 32
 
     def test_derive_path_mixed(self, hd_derivation):
-        """Mixed hardened/non-hardened path raises NotImplementedError at non-hardened step."""
-        with pytest.raises(NotImplementedError):
-            hd_derivation.derive_path("m/44'/0'/0'/0/5")
+        """Mixed hardened/non-hardened path (uses native secp256k1)."""
+        key, chain = hd_derivation.derive_path("m/44'/0'/0'/0/5")
+        assert len(key) == 32
+        assert len(chain) == 32
 
     def test_derive_path_invalid_no_m_prefix(self, hd_derivation):
         """Path must start with 'm'."""
@@ -111,9 +114,9 @@ class TestHDKeyDerivationComprehensive:
         assert chain == hd_derivation.master_chain_code
 
     def test_derive_key_convenience_method(self, hd_derivation):
-        """derive_key with non-hardened levels raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            hd_derivation.derive_key(purpose=44, account=0, change=0, index=0)
+        """derive_key with non-hardened levels (uses native secp256k1)."""
+        key = hd_derivation.derive_key(purpose=44, account=0, change=0, index=0)
+        assert len(key) == 32
 
     def test_derive_path_different_hardened_purposes(self, hd_derivation):
         """Different hardened purposes yield different keys."""
@@ -155,10 +158,10 @@ class TestHDKeyDerivationComprehensive:
         expected = int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
         assert HDKeyDerivation.SECP256K1_N == expected
 
-    def test_derive_large_non_hardened_index_raises(self, hd_derivation):
-        """Non-hardened derivation raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            hd_derivation.derive_path("m/0/2147483646")
+    def test_derive_large_non_hardened_index(self, hd_derivation):
+        """Non-hardened derivation with large index (uses native secp256k1)."""
+        key, chain = hd_derivation.derive_path("m/0/2147483646")
+        assert len(key) == 32
 
     def test_derive_large_hardened_index(self, hd_derivation):
         """Derive with large hardened index."""
@@ -533,9 +536,15 @@ class TestSecureKeyStorageComprehensive:
         with open(metadata_file) as f:
             metadata = json.load(f)
 
-        assert metadata["version"] == 2
-        assert metadata["iterations"] == 600000
-        assert metadata["algorithm"] == "PBKDF2-HMAC-SHA256"
+        # v3 = Argon2id (preferred when native lib available), v2 = PBKDF2
+        assert metadata["version"] in (2, 3)
+        if metadata["version"] == 3:
+            assert metadata["algorithm"] == "Argon2id"
+            assert "t_cost" in metadata
+            assert "m_cost" in metadata
+        else:
+            assert metadata["algorithm"] == "PBKDF2-HMAC-SHA256"
+            assert metadata["iterations"] == 600000
 
     def test_salt_file_reused(self, temp_storage_path, test_password):
         """Existing salt file is reused."""

@@ -1090,6 +1090,108 @@ ama_error_t ama_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key) {
 }
 
 /**
+ * Deterministic ML-DSA-65 keypair from seed (for KAT testing).
+ *
+ * Generates a keypair deterministically from a provided 32-byte seed,
+ * bypassing the random number generator entirely.
+ *
+ * @param xi         Seed value (32 bytes, replaces random generation)
+ * @param public_key Output buffer for public key (1952 bytes)
+ * @param secret_key Output buffer for secret key (4032 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+ama_error_t ama_dilithium_keypair_from_seed(
+    const uint8_t xi[32],
+    uint8_t *public_key, uint8_t *secret_key)
+{
+    uint8_t seedbuf[2 * DIL_SEEDBYTES + DIL_CRHBYTES];
+    uint8_t *rho, *rhoprime, *key;
+    dil_poly mat[DIL_K][DIL_L];
+    dil_polyvecl s1, s1hat;
+    dil_polyveck s2, t1, t0, t;
+    uint8_t tr[DIL_TRBYTES];
+    unsigned int i;
+
+    if (!xi || !public_key || !secret_key) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    /* (rho, rho', K) = H(xi || k || l) per FIPS 204 Algorithm 1 */
+    {
+        uint8_t h_input[DIL_SEEDBYTES + 2];
+        memcpy(h_input, xi, DIL_SEEDBYTES);
+        h_input[DIL_SEEDBYTES] = (uint8_t)DIL_K;
+        h_input[DIL_SEEDBYTES + 1] = (uint8_t)DIL_L;
+        ama_shake256(h_input, DIL_SEEDBYTES + 2, seedbuf, sizeof(seedbuf));
+        ama_secure_memzero(h_input, sizeof(h_input));
+    }
+    rho = seedbuf;
+    rhoprime = rho + DIL_SEEDBYTES;
+    key = rhoprime + DIL_CRHBYTES;
+
+    /* Expand matrix A from rho */
+    dil_expand_matrix(mat, rho);
+
+    /* Sample secret vectors s1 and s2 */
+    for (i = 0; i < DIL_L; ++i) {
+        dil_poly_uniform_eta(&s1.vec[i], rhoprime, (uint16_t)i);
+    }
+    for (i = 0; i < DIL_K; ++i) {
+        dil_poly_uniform_eta(&s2.vec[i], rhoprime, (uint16_t)(DIL_L + i));
+    }
+
+    /* Compute t = A*s1 + s2 */
+    s1hat = s1;
+    dil_polyvecl_ntt(&s1hat);
+    dil_polyvec_matrix_pointwise(&t, mat, &s1hat);
+    dil_polyveck_invntt(&t);
+    dil_polyveck_add(&t, &t, &s2);
+    dil_polyveck_reduce(&t);
+    dil_polyveck_caddq(&t);
+
+    /* Power2Round: t = t1*2^d + t0 */
+    dil_polyveck_power2round(&t1, &t0, &t);
+
+    /* Pack public key: rho || t1 */
+    memcpy(public_key, rho, DIL_SEEDBYTES);
+    for (i = 0; i < DIL_K; ++i) {
+        dil_polyt1_pack(public_key + DIL_SEEDBYTES + i * DIL_POLYT1_PACKEDBYTES,
+                        &t1.vec[i]);
+    }
+
+    /* Compute tr = H(pk) */
+    ama_shake256(public_key, AMA_ML_DSA_65_PUBLIC_KEY_BYTES, tr, DIL_TRBYTES);
+
+    /* Pack secret key: rho || key || tr || s1 || s2 || t0 */
+    memcpy(secret_key, rho, DIL_SEEDBYTES);
+    memcpy(secret_key + DIL_SEEDBYTES, key, DIL_SEEDBYTES);
+    memcpy(secret_key + 2 * DIL_SEEDBYTES, tr, DIL_TRBYTES);
+
+    for (i = 0; i < DIL_L; ++i) {
+        dil_polyeta_pack(secret_key + 2 * DIL_SEEDBYTES + DIL_TRBYTES +
+                         i * DIL_POLYETA_PACKEDBYTES, &s1.vec[i]);
+    }
+    for (i = 0; i < DIL_K; ++i) {
+        dil_polyeta_pack(secret_key + 2 * DIL_SEEDBYTES + DIL_TRBYTES +
+                         DIL_L * DIL_POLYETA_PACKEDBYTES +
+                         i * DIL_POLYETA_PACKEDBYTES, &s2.vec[i]);
+    }
+    for (i = 0; i < DIL_K; ++i) {
+        dil_polyt0_pack(secret_key + 2 * DIL_SEEDBYTES + DIL_TRBYTES +
+                        (DIL_L + DIL_K) * DIL_POLYETA_PACKEDBYTES +
+                        i * DIL_POLYT0_PACKEDBYTES, &t0.vec[i]);
+    }
+
+    /* Scrub sensitive data */
+    ama_secure_memzero(seedbuf, sizeof(seedbuf));
+    ama_secure_memzero(&s1, sizeof(s1));
+    ama_secure_memzero(&s1hat, sizeof(s1hat));
+    ama_secure_memzero(&s2, sizeof(s2));
+
+    return AMA_SUCCESS;
+}
+
+/**
  * ML-DSA-65 Signing (NIST FIPS 204, Algorithm 2)
  *
  * Signs a message using ML-DSA-65 with rejection sampling.

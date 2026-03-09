@@ -100,6 +100,10 @@ if(AMA_USE_NATIVE_PQC)
         src/c/ama_kyber.c
         src/c/ama_dilithium.c
         src/c/ama_sphincs.c
+        src/c/ama_secp256k1.c
+        src/c/ama_x25519.c
+        src/c/ama_argon2.c
+        src/c/ama_chacha20poly1305.c
     )
     message(STATUS "Native PQC enabled: ML-DSA-65, Kyber-1024, SPHINCS+-256f (zero OpenSSL dependency)")
 endif()
