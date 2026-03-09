@@ -777,6 +777,144 @@ AMA_API ama_error_t ama_chacha20poly1305_decrypt(
 );
 
 /* ============================================================================
+ * DIRECT PQC ALGORITHM ACCESS
+ * ============================================================================ */
+
+/**
+ * @brief Generate ML-DSA-65 (Dilithium) keypair
+ *
+ * @param public_key Output: public key (1952 bytes)
+ * @param secret_key Output: secret key (4032 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_dilithium_keypair(
+    uint8_t *public_key, uint8_t *secret_key
+);
+
+/**
+ * @brief Sign message with ML-DSA-65 (Dilithium)
+ *
+ * @param signature     Output: signature buffer
+ * @param signature_len Output: actual signature length
+ * @param message       Message to sign
+ * @param message_len   Length of message
+ * @param secret_key    Secret key (4032 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_dilithium_sign(
+    uint8_t *signature, size_t *signature_len,
+    const uint8_t *message, size_t message_len,
+    const uint8_t *secret_key
+);
+
+/**
+ * @brief Verify ML-DSA-65 (Dilithium) signature
+ *
+ * @param message       Message to verify
+ * @param message_len   Length of message
+ * @param signature     Signature to verify
+ * @param signature_len Length of signature
+ * @param public_key    Public key (1952 bytes)
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
+ */
+AMA_API ama_error_t ama_dilithium_verify(
+    const uint8_t *message, size_t message_len,
+    const uint8_t *signature, size_t signature_len,
+    const uint8_t *public_key
+);
+
+/**
+ * @brief Generate Kyber-1024 keypair
+ *
+ * @param pk     Output: public key buffer
+ * @param pk_len Public key buffer length
+ * @param sk     Output: secret key buffer
+ * @param sk_len Secret key buffer length
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_kyber_keypair(
+    uint8_t *pk, size_t pk_len,
+    uint8_t *sk, size_t sk_len
+);
+
+/**
+ * @brief Kyber-1024 key encapsulation
+ *
+ * @param pk     Public key
+ * @param pk_len Public key length
+ * @param ct     Output: ciphertext buffer
+ * @param ct_len Output: ciphertext length
+ * @param ss     Output: shared secret buffer
+ * @param ss_len Shared secret buffer length
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_kyber_encapsulate(
+    const uint8_t *pk, size_t pk_len,
+    uint8_t *ct, size_t *ct_len,
+    uint8_t *ss, size_t ss_len
+);
+
+/**
+ * @brief Kyber-1024 key decapsulation
+ *
+ * @param ct     Ciphertext
+ * @param ct_len Ciphertext length
+ * @param sk     Secret key
+ * @param sk_len Secret key length
+ * @param ss     Output: shared secret buffer
+ * @param ss_len Shared secret buffer length
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_kyber_decapsulate(
+    const uint8_t *ct, size_t ct_len,
+    const uint8_t *sk, size_t sk_len,
+    uint8_t *ss, size_t ss_len
+);
+
+/**
+ * @brief Generate SPHINCS+-256f keypair
+ *
+ * @param public_key Output: public key (64 bytes)
+ * @param secret_key Output: secret key (128 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_sphincs_keypair(
+    uint8_t *public_key, uint8_t *secret_key
+);
+
+/**
+ * @brief Sign message with SPHINCS+-256f
+ *
+ * @param signature     Output: signature buffer
+ * @param signature_len Output: actual signature length
+ * @param message       Message to sign
+ * @param message_len   Length of message
+ * @param secret_key    Secret key (128 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_sphincs_sign(
+    uint8_t *signature, size_t *signature_len,
+    const uint8_t *message, size_t message_len,
+    const uint8_t *secret_key
+);
+
+/**
+ * @brief Verify SPHINCS+-256f signature
+ *
+ * @param message       Message to verify
+ * @param message_len   Length of message
+ * @param signature     Signature to verify
+ * @param signature_len Length of signature
+ * @param public_key    Public key (64 bytes)
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
+ */
+AMA_API ama_error_t ama_sphincs_verify(
+    const uint8_t *message, size_t message_len,
+    const uint8_t *signature, size_t signature_len,
+    const uint8_t *public_key
+);
+
+/* ============================================================================
  * DETERMINISTIC KEYGEN FROM SEED (KAT TESTING)
  * ============================================================================ */
 

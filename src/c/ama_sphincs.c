@@ -915,7 +915,7 @@ static ama_error_t spx_randombytes(uint8_t *buf, size_t len) {
  * @param secret_key Output buffer for secret key (128 bytes)
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key) {
+AMA_API ama_error_t ama_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key) {
     spx_addr addr;
     uint8_t root[SPX_N];
     ama_error_t rc;
@@ -965,7 +965,7 @@ ama_error_t ama_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key) {
  * @param secret_key Secret key (128 bytes)
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
+AMA_API ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
                               const uint8_t *message, size_t message_len,
                               const uint8_t *secret_key) {
     const uint8_t *sk_seed = secret_key;
@@ -1040,7 +1040,7 @@ ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
  * @param public_key Public key (64 bytes)
  * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
  */
-ama_error_t ama_sphincs_verify(const uint8_t *message, size_t message_len,
+AMA_API ama_error_t ama_sphincs_verify(const uint8_t *message, size_t message_len,
                                 const uint8_t *signature, size_t signature_len,
                                 const uint8_t *public_key) {
     const uint8_t *pub_seed = public_key;

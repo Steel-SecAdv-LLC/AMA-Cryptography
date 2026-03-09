@@ -993,7 +993,7 @@ static ama_error_t dil_randombytes(uint8_t *buf, size_t len) {
  * @param secret_key Output buffer for secret key (4032 bytes)
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key) {
+AMA_API ama_error_t ama_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key) {
     uint8_t seedbuf[2 * DIL_SEEDBYTES + DIL_CRHBYTES];
     uint8_t *rho, *rhoprime, *key;
     dil_poly mat[DIL_K][DIL_L];
@@ -1100,7 +1100,7 @@ ama_error_t ama_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key) {
  * @param secret_key Output buffer for secret key (4032 bytes)
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_dilithium_keypair_from_seed(
+AMA_API ama_error_t ama_dilithium_keypair_from_seed(
     const uint8_t xi[32],
     uint8_t *public_key, uint8_t *secret_key)
 {
@@ -1203,7 +1203,7 @@ ama_error_t ama_dilithium_keypair_from_seed(
  * @param secret_key Secret key (4032 bytes)
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len,
+AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len,
                                 const uint8_t *message, size_t message_len,
                                 const uint8_t *secret_key) {
     uint8_t *rho, *key, *tr;
@@ -1420,7 +1420,7 @@ ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len,
  * @param public_key Public key (1952 bytes)
  * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
  */
-ama_error_t ama_dilithium_verify(const uint8_t *message, size_t message_len,
+AMA_API ama_error_t ama_dilithium_verify(const uint8_t *message, size_t message_len,
                                   const uint8_t *signature, size_t signature_len,
                                   const uint8_t *public_key) {
     uint8_t rho[DIL_SEEDBYTES];
