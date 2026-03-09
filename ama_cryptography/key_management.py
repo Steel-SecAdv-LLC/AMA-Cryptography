@@ -534,6 +534,7 @@ class SecureKeyStorage:
             # Determine algorithm: prefer Argon2id, fall back to PBKDF2
             try:
                 from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE
+
                 use_argon2 = _ARGON2_NATIVE_AVAILABLE
             except ImportError:
                 use_argon2 = False
@@ -567,14 +568,17 @@ class SecureKeyStorage:
         if version >= 3:
             try:
                 from ama_cryptography.pqc_backends import native_argon2id
-                self.encryption_key = bytearray(native_argon2id(
-                    master_password.encode("utf-8"),
-                    self.salt,
-                    t_cost=self.ARGON2_T_COST,
-                    m_cost=self.ARGON2_M_COST,
-                    parallelism=self.ARGON2_PARALLELISM,
-                    out_len=self.KDF_KEY_BYTES,
-                ))
+
+                self.encryption_key = bytearray(
+                    native_argon2id(
+                        master_password.encode("utf-8"),
+                        self.salt,
+                        t_cost=self.ARGON2_T_COST,
+                        m_cost=self.ARGON2_M_COST,
+                        parallelism=self.ARGON2_PARALLELISM,
+                        out_len=self.KDF_KEY_BYTES,
+                    )
+                )
             except (ImportError, RuntimeError) as exc:
                 raise RuntimeError(
                     "Argon2id native library required to open this key store "
@@ -582,13 +586,15 @@ class SecureKeyStorage:
                     "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
                 ) from exc
         else:
-            self.encryption_key = bytearray(hashlib.pbkdf2_hmac(
-                "sha256",
-                master_password.encode("utf-8"),
-                self.salt,
-                iterations,
-                self.KDF_KEY_BYTES,
-            ))
+            self.encryption_key = bytearray(
+                hashlib.pbkdf2_hmac(
+                    "sha256",
+                    master_password.encode("utf-8"),
+                    self.salt,
+                    iterations,
+                    self.KDF_KEY_BYTES,
+                )
+            )
 
         # Warn if using legacy parameters
         if version < 2:
@@ -626,27 +632,32 @@ class SecureKeyStorage:
         # Derive new key — prefer Argon2id, fall back to PBKDF2
         try:
             from ama_cryptography.pqc_backends import native_argon2id, _ARGON2_NATIVE_AVAILABLE
+
             use_argon2 = _ARGON2_NATIVE_AVAILABLE
         except ImportError:
             use_argon2 = False
 
         if use_argon2:
-            new_encryption_key = bytearray(native_argon2id(
-                master_password.encode("utf-8"),
-                new_salt,
-                t_cost=self.ARGON2_T_COST,
-                m_cost=self.ARGON2_M_COST,
-                parallelism=self.ARGON2_PARALLELISM,
-                out_len=self.KDF_KEY_BYTES,
-            ))
+            new_encryption_key = bytearray(
+                native_argon2id(
+                    master_password.encode("utf-8"),
+                    new_salt,
+                    t_cost=self.ARGON2_T_COST,
+                    m_cost=self.ARGON2_M_COST,
+                    parallelism=self.ARGON2_PARALLELISM,
+                    out_len=self.KDF_KEY_BYTES,
+                )
+            )
         else:
-            new_encryption_key = bytearray(hashlib.pbkdf2_hmac(
-                "sha256",
-                master_password.encode("utf-8"),
-                new_salt,
-                self.KDF_ITERATIONS,
-                self.KDF_KEY_BYTES,
-            ))
+            new_encryption_key = bytearray(
+                hashlib.pbkdf2_hmac(
+                    "sha256",
+                    master_password.encode("utf-8"),
+                    new_salt,
+                    self.KDF_ITERATIONS,
+                    self.KDF_KEY_BYTES,
+                )
+            )
 
         # Re-encrypt all keys
         old_key = self.encryption_key

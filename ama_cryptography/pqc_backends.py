@@ -410,15 +410,15 @@ def _setup_argon2_ctypes(lib: ctypes.CDLL) -> bool:
     """Configure ctypes for Argon2id functions."""
     try:
         lib.ama_argon2id.argtypes = [
-            ctypes.c_char_p,   # password
-            ctypes.c_size_t,   # pwd_len
-            ctypes.c_char_p,   # salt
-            ctypes.c_size_t,   # salt_len
-            ctypes.c_uint32,   # t_cost
-            ctypes.c_uint32,   # m_cost
-            ctypes.c_uint32,   # parallelism
-            ctypes.c_char_p,   # output
-            ctypes.c_size_t,   # out_len
+            ctypes.c_char_p,  # password
+            ctypes.c_size_t,  # pwd_len
+            ctypes.c_char_p,  # salt
+            ctypes.c_size_t,  # salt_len
+            ctypes.c_uint32,  # t_cost
+            ctypes.c_uint32,  # m_cost
+            ctypes.c_uint32,  # parallelism
+            ctypes.c_char_p,  # output
+            ctypes.c_size_t,  # out_len
         ]
         lib.ama_argon2id.restype = ctypes.c_int
         return True
@@ -434,26 +434,26 @@ def _setup_chacha20poly1305_ctypes(lib: ctypes.CDLL) -> bool:
     """Configure ctypes for ChaCha20-Poly1305 functions."""
     try:
         lib.ama_chacha20poly1305_encrypt.argtypes = [
-            ctypes.c_char_p,   # key[32]
-            ctypes.c_char_p,   # nonce[12]
-            ctypes.c_char_p,   # plaintext
-            ctypes.c_size_t,   # pt_len
-            ctypes.c_char_p,   # aad
-            ctypes.c_size_t,   # aad_len
-            ctypes.c_char_p,   # ciphertext
-            ctypes.c_char_p,   # tag[16]
+            ctypes.c_char_p,  # key[32]
+            ctypes.c_char_p,  # nonce[12]
+            ctypes.c_char_p,  # plaintext
+            ctypes.c_size_t,  # pt_len
+            ctypes.c_char_p,  # aad
+            ctypes.c_size_t,  # aad_len
+            ctypes.c_char_p,  # ciphertext
+            ctypes.c_char_p,  # tag[16]
         ]
         lib.ama_chacha20poly1305_encrypt.restype = ctypes.c_int
 
         lib.ama_chacha20poly1305_decrypt.argtypes = [
-            ctypes.c_char_p,   # key[32]
-            ctypes.c_char_p,   # nonce[12]
-            ctypes.c_char_p,   # ciphertext
-            ctypes.c_size_t,   # ct_len
-            ctypes.c_char_p,   # aad
-            ctypes.c_size_t,   # aad_len
-            ctypes.c_char_p,   # tag[16]
-            ctypes.c_char_p,   # plaintext
+            ctypes.c_char_p,  # key[32]
+            ctypes.c_char_p,  # nonce[12]
+            ctypes.c_char_p,  # ciphertext
+            ctypes.c_size_t,  # ct_len
+            ctypes.c_char_p,  # aad
+            ctypes.c_size_t,  # aad_len
+            ctypes.c_char_p,  # tag[16]
+            ctypes.c_char_p,  # plaintext
         ]
         lib.ama_chacha20poly1305_decrypt.restype = ctypes.c_int
         return True
@@ -469,17 +469,17 @@ def _setup_deterministic_keygen_ctypes(lib: ctypes.CDLL) -> bool:
     """Configure ctypes for deterministic keygen functions."""
     try:
         lib.ama_kyber_keypair_from_seed.argtypes = [
-            ctypes.c_char_p,   # d[32]
-            ctypes.c_char_p,   # z[32]
-            ctypes.c_char_p,   # pk
-            ctypes.c_char_p,   # sk
+            ctypes.c_char_p,  # d[32]
+            ctypes.c_char_p,  # z[32]
+            ctypes.c_char_p,  # pk
+            ctypes.c_char_p,  # sk
         ]
         lib.ama_kyber_keypair_from_seed.restype = ctypes.c_int
 
         lib.ama_dilithium_keypair_from_seed.argtypes = [
-            ctypes.c_char_p,   # xi[32]
-            ctypes.c_char_p,   # public_key
-            ctypes.c_char_p,   # secret_key
+            ctypes.c_char_p,  # xi[32]
+            ctypes.c_char_p,  # public_key
+            ctypes.c_char_p,  # secret_key
         ]
         lib.ama_dilithium_keypair_from_seed.restype = ctypes.c_int
         return True
@@ -1619,9 +1619,7 @@ def native_x25519_keypair() -> tuple:
     return bytes(pk_buf), bytes(sk_buf)
 
 
-def native_x25519_key_exchange(
-    our_secret_key: bytes, their_public_key: bytes
-) -> bytes:
+def native_x25519_key_exchange(our_secret_key: bytes, their_public_key: bytes) -> bytes:
     """
     X25519 Diffie-Hellman key exchange.
 
@@ -1681,10 +1679,15 @@ def native_argon2id(
 
     out_buf = ctypes.create_string_buffer(out_len)
     rc = _native_lib.ama_argon2id(
-        password, len(password),
-        salt, len(salt),
-        t_cost, m_cost, parallelism,
-        out_buf, out_len,
+        password,
+        len(password),
+        salt,
+        len(salt),
+        t_cost,
+        m_cost,
+        parallelism,
+        out_buf,
+        out_len,
     )
     if rc != 0:
         raise RuntimeError(f"Argon2id failed (rc={rc})")
@@ -1716,10 +1719,14 @@ def native_chacha20poly1305_encrypt(
     tag_buf = ctypes.create_string_buffer(POLY1305_TAG_BYTES)
 
     rc = _native_lib.ama_chacha20poly1305_encrypt(
-        key, nonce,
-        plaintext, len(plaintext),
-        aad if aad else None, len(aad),
-        ct_buf, tag_buf,
+        key,
+        nonce,
+        plaintext,
+        len(plaintext),
+        aad if aad else None,
+        len(aad),
+        ct_buf,
+        tag_buf,
     )
     if rc != 0:
         raise RuntimeError(f"ChaCha20-Poly1305 encrypt failed (rc={rc})")
@@ -1749,10 +1756,14 @@ def native_chacha20poly1305_decrypt(
     pt_buf = ctypes.create_string_buffer(len(ciphertext))
 
     rc = _native_lib.ama_chacha20poly1305_decrypt(
-        key, nonce,
-        ciphertext, len(ciphertext),
-        aad if aad else None, len(aad),
-        tag, pt_buf,
+        key,
+        nonce,
+        ciphertext,
+        len(ciphertext),
+        aad if aad else None,
+        len(aad),
+        tag,
+        pt_buf,
     )
     if rc != 0:
         raise RuntimeError(f"ChaCha20-Poly1305 decrypt failed (rc={rc})")

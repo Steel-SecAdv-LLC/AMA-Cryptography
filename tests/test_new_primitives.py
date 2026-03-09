@@ -79,9 +79,7 @@ class TestSecp256k1:
         """Same private key always yields same public key."""
         from ama_cryptography.pqc_backends import native_secp256k1_pubkey_from_privkey
 
-        privkey = bytes.fromhex(
-            "E8F32E723DECF4051AEFAC8E2C93C9C5B214313817CDB01A1494B917C8436B35"
-        )
+        privkey = bytes.fromhex("E8F32E723DECF4051AEFAC8E2C93C9C5B214313817CDB01A1494B917C8436B35")
         pubkey1 = native_secp256k1_pubkey_from_privkey(privkey)
         pubkey2 = native_secp256k1_pubkey_from_privkey(privkey)
         assert pubkey1 == pubkey2
@@ -222,7 +220,11 @@ class TestArgon2id:
         from ama_cryptography.pqc_backends import native_argon2id
 
         common = dict(
-            password=b"password", salt=b"e" * 16, t_cost=1, m_cost=64, parallelism=1,
+            password=b"password",
+            salt=b"e" * 16,
+            t_cost=1,
+            m_cost=64,
+            parallelism=1,
         )
         r32 = native_argon2id(out_len=32, **common)
         r64 = native_argon2id(out_len=64, **common)
@@ -327,10 +329,7 @@ class TestChaCha20Poly1305:
             native_chacha20poly1305_decrypt,
         )
 
-        key = bytes.fromhex(
-            "808182838485868788898a8b8c8d8e8f"
-            "909192939495969798999a9b9c9d9e9f"
-        )
+        key = bytes.fromhex("808182838485868788898a8b8c8d8e8f" "909192939495969798999a9b9c9d9e9f")
         nonce = bytes.fromhex("070000004041424344454647")
         aad = bytes.fromhex("50515253c0c1c2c3c4c5c6c7")
         plaintext = (
