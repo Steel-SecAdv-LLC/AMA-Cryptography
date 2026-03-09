@@ -664,7 +664,7 @@ class SecureKeyStorage:
 
             # Update metadata
             metadata = {
-                "version": self.KDF_VERSION,
+                "version": self.KDF_VERSION if use_argon2 else 2,
                 "algorithm": "Argon2id" if use_argon2 else "PBKDF2-HMAC-SHA256",
                 "salt_bytes": self.KDF_SALT_BYTES,
                 "migrated_at": datetime.now(timezone.utc).isoformat(),
