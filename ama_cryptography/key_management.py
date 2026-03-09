@@ -166,9 +166,12 @@ class HDKeyDerivation:
             # Hardened derivation: HMAC-SHA512(Key = cpar, Data = 0x00 || ser256(kpar) || ser32(i))
             data = b"\x00" + parent_key + index.to_bytes(4, "big")
         else:
-            # Non-hardened derivation (requires public key, simplified here)
-            # In full BIP32, this would use the compressed public key
-            data = parent_key + index.to_bytes(4, "big")
+            # Non-hardened derivation: HMAC-SHA512(Key = cpar, Data = serP(point(kpar)) || ser32(i))
+            # BIP32 requires the compressed secp256k1 public key (33 bytes).
+            from ama_cryptography.pqc_backends import native_secp256k1_pubkey_from_privkey
+
+            compressed_pubkey = native_secp256k1_pubkey_from_privkey(parent_key)
+            data = compressed_pubkey + index.to_bytes(4, "big")
 
         h = hmac.new(parent_chain, data, hashlib.sha512)
         hmac_result = h.digest()
@@ -237,7 +240,13 @@ class HDKeyDerivation:
 
     def derive_key(self, purpose: int, account: int = 0, change: int = 0, index: int = 0) -> bytes:
         """
-        Derive key using standard path structure
+        Derive key using fully-hardened path structure.
+
+        All four path levels use hardened derivation to avoid requiring
+        the secp256k1 public key computation needed by non-hardened BIP32
+        child key derivation.
+
+        Path: m/{purpose}'/{account}'/{change}'/{index}'
 
         Args:
             purpose: Purpose (e.g., 44 for BIP44)
@@ -246,9 +255,9 @@ class HDKeyDerivation:
             index: Address index
 
         Returns:
-            Derived key
+            Derived key (32 bytes)
         """
-        path = f"m/{purpose}'/{account}'/{change}/{index}"
+        path = f"m/{purpose}'/{account}'/{change}'/{index}'"
         key, _ = self.derive_path(path)
         return key
 
@@ -295,7 +304,7 @@ class KeyRotationManager:
         Returns:
             KeyMetadata
         """
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         expires_at = now + expires_in if expires_in else None
 
         metadata = KeyMetadata(
@@ -340,7 +349,7 @@ class KeyRotationManager:
         metadata = self.keys[key_id]
 
         # Check expiration
-        if metadata.expires_at and datetime.now() >= metadata.expires_at:
+        if metadata.expires_at and datetime.now(timezone.utc) >= metadata.expires_at:
             return True
 
         # Check usage limit
@@ -348,7 +357,7 @@ class KeyRotationManager:
             return True
 
         # Check rotation period
-        if datetime.now() - metadata.created_at >= self.rotation_period:
+        if datetime.now(timezone.utc) - metadata.created_at >= self.rotation_period:
             return True
 
         return False
@@ -475,11 +484,15 @@ class SecureKeyStorage:
         self.storage_path.mkdir(parents=True, exist_ok=True)
 
         # Key derivation parameters (versioned for future upgrades)
-        self.KDF_VERSION = 2
-        self.KDF_ITERATIONS = 600000  # OWASP 2024 recommendation
+        self.KDF_VERSION = 3  # v3 = Argon2id, v2 = PBKDF2 600k, v1 = PBKDF2 100k
+        self.KDF_ITERATIONS = 600000  # OWASP 2024 recommendation (PBKDF2 fallback)
         self.KDF_LEGACY_ITERATIONS = 100000  # Pre-v2 default iterations
         self.KDF_SALT_BYTES = 32  # Salt size in bytes
         self.KDF_KEY_BYTES = 32  # Derived key size (AES-256)
+        # Argon2id parameters (RFC 9106 recommended minimums)
+        self.ARGON2_T_COST = 3  # iterations
+        self.ARGON2_M_COST = 65536  # 64 MiB
+        self.ARGON2_PARALLELISM = 4  # lanes
 
         # Salt file with secure permissions
         self.salt_file = self.storage_path / ".salt"
@@ -489,7 +502,7 @@ class SecureKeyStorage:
             self._derive_key_from_password(master_password)
         else:
             # Generate random encryption key (should be HSM-backed in production)
-            self.encryption_key = secrets.token_bytes(32)
+            self.encryption_key = bytearray(secrets.token_bytes(32))
             self.salt: Optional[bytes] = None  # No salt needed for random key
 
     def _derive_key_from_password(self, master_password: str) -> None:
@@ -518,27 +531,94 @@ class SecureKeyStorage:
                 f.write(self.salt)
             os.chmod(self.salt_file, 0o600)
 
+            # Determine algorithm: prefer Argon2id, fall back to PBKDF2
+            try:
+                from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE
+
+                use_argon2 = _ARGON2_NATIVE_AVAILABLE
+            except ImportError:
+                use_argon2 = False
+
+            if use_argon2:
+                algorithm = "Argon2id"
+                version = 3
+            else:
+                algorithm = "PBKDF2-HMAC-SHA256"
+                version = 2
+
             # Save KDF metadata
             metadata = {
-                "version": self.KDF_VERSION,
-                "algorithm": "PBKDF2-HMAC-SHA256",
-                "iterations": self.KDF_ITERATIONS,
+                "version": version,
+                "algorithm": algorithm,
                 "salt_bytes": self.KDF_SALT_BYTES,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            if algorithm == "PBKDF2-HMAC-SHA256":
+                metadata["iterations"] = self.KDF_ITERATIONS
+            else:
+                metadata["t_cost"] = self.ARGON2_T_COST
+                metadata["m_cost"] = self.ARGON2_M_COST
+                metadata["parallelism"] = self.ARGON2_PARALLELISM
             with open(self.metadata_file, "w") as f:
                 json.dump(metadata, f, indent=2)
             os.chmod(self.metadata_file, 0o600)
             iterations = self.KDF_ITERATIONS
-            version = self.KDF_VERSION
 
-        self.encryption_key = hashlib.pbkdf2_hmac(
-            "sha256",
-            master_password.encode("utf-8"),
-            self.salt,
-            iterations,
-            self.KDF_KEY_BYTES,
-        )
+        # Derive key using the appropriate algorithm
+        if version >= 3:
+            # Read stored Argon2id parameters so existing keystores remain
+            # decryptable even if class-level defaults change later.
+            t_cost = self.ARGON2_T_COST
+            m_cost = self.ARGON2_M_COST
+            parallelism = self.ARGON2_PARALLELISM
+            if self.metadata_file.exists():
+                try:
+                    with open(self.metadata_file, "r") as _f:
+                        _meta = json.load(_f)
+                    algorithm = _meta.get("algorithm")
+                    if algorithm is not None and algorithm != "Argon2id":
+                        raise RuntimeError(
+                            f"Unsupported KDF algorithm for v{version} store: {algorithm}"
+                        )
+                    t_cost = int(_meta.get("t_cost", t_cost))
+                    m_cost = int(_meta.get("m_cost", m_cost))
+                    parallelism = int(_meta.get("parallelism", parallelism))
+                except (OSError, ValueError, TypeError, KeyError) as _exc:
+                    logger.warning(
+                        "Could not read Argon2id params from %s, using defaults: %s",
+                        self.metadata_file,
+                        _exc,
+                    )
+
+            try:
+                from ama_cryptography.pqc_backends import native_argon2id
+
+                self.encryption_key = bytearray(
+                    native_argon2id(
+                        master_password.encode("utf-8"),
+                        self.salt,
+                        t_cost=t_cost,
+                        m_cost=m_cost,
+                        parallelism=parallelism,
+                        out_len=self.KDF_KEY_BYTES,
+                    )
+                )
+            except (ImportError, RuntimeError) as exc:
+                raise RuntimeError(
+                    "Argon2id native library required to open this key store "
+                    "(written with KDF version 3). Rebuild: "
+                    "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+                ) from exc
+        else:
+            self.encryption_key = bytearray(
+                hashlib.pbkdf2_hmac(
+                    "sha256",
+                    master_password.encode("utf-8"),
+                    self.salt,
+                    iterations,
+                    self.KDF_KEY_BYTES,
+                )
+            )
 
         # Warn if using legacy parameters
         if version < 2:
@@ -573,14 +653,35 @@ class SecureKeyStorage:
         # Generate new salt
         new_salt = secrets.token_bytes(self.KDF_SALT_BYTES)
 
-        # Derive new key
-        new_encryption_key = hashlib.pbkdf2_hmac(
-            "sha256",
-            master_password.encode("utf-8"),
-            new_salt,
-            self.KDF_ITERATIONS,
-            self.KDF_KEY_BYTES,
-        )
+        # Derive new key — prefer Argon2id, fall back to PBKDF2
+        try:
+            from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE, native_argon2id
+
+            use_argon2 = _ARGON2_NATIVE_AVAILABLE
+        except ImportError:
+            use_argon2 = False
+
+        if use_argon2:
+            new_encryption_key = bytearray(
+                native_argon2id(
+                    master_password.encode("utf-8"),
+                    new_salt,
+                    t_cost=self.ARGON2_T_COST,
+                    m_cost=self.ARGON2_M_COST,
+                    parallelism=self.ARGON2_PARALLELISM,
+                    out_len=self.KDF_KEY_BYTES,
+                )
+            )
+        else:
+            new_encryption_key = bytearray(
+                hashlib.pbkdf2_hmac(
+                    "sha256",
+                    master_password.encode("utf-8"),
+                    new_salt,
+                    self.KDF_ITERATIONS,
+                    self.KDF_KEY_BYTES,
+                )
+            )
 
         # Re-encrypt all keys
         old_key = self.encryption_key
@@ -598,12 +699,17 @@ class SecureKeyStorage:
 
             # Update metadata
             metadata = {
-                "version": self.KDF_VERSION,
-                "algorithm": "PBKDF2-HMAC-SHA256",
-                "iterations": self.KDF_ITERATIONS,
+                "version": self.KDF_VERSION if use_argon2 else 2,
+                "algorithm": "Argon2id" if use_argon2 else "PBKDF2-HMAC-SHA256",
                 "salt_bytes": self.KDF_SALT_BYTES,
                 "migrated_at": datetime.now(timezone.utc).isoformat(),
             }
+            if use_argon2:
+                metadata["t_cost"] = self.ARGON2_T_COST
+                metadata["m_cost"] = self.ARGON2_M_COST
+                metadata["parallelism"] = self.ARGON2_PARALLELISM
+            else:
+                metadata["iterations"] = self.KDF_ITERATIONS
             with open(self.metadata_file, "w") as f:
                 json.dump(metadata, f, indent=2)
 
@@ -618,11 +724,14 @@ class SecureKeyStorage:
         """Recover storage instance from existing salt file."""
         storage = cls.__new__(cls)
         storage.storage_path = Path(storage_path)
-        storage.KDF_VERSION = 2
+        storage.KDF_VERSION = 3
         storage.KDF_ITERATIONS = 600000
         storage.KDF_LEGACY_ITERATIONS = 100000  # Pre-v2 default iterations
         storage.KDF_SALT_BYTES = 32  # Salt size in bytes
         storage.KDF_KEY_BYTES = 32  # Derived key size (AES-256)
+        storage.ARGON2_T_COST = 3
+        storage.ARGON2_M_COST = 65536
+        storage.ARGON2_PARALLELISM = 4
         storage.salt_file = storage.storage_path / ".salt"
         storage.metadata_file = storage.storage_path / ".kdf_metadata.json"
 
@@ -655,8 +764,9 @@ class SecureKeyStorage:
         nonce = secrets.token_bytes(12)  # 96-bit nonce for GCM (NIST recommended)
 
         # Encrypt with key_id as associated data (binds ciphertext to key_id)
+        # Convert bytearray to bytes for ctypes compatibility
         ct, tag = native_aes256_gcm_encrypt(
-            self.encryption_key, nonce, key_data, key_id.encode("utf-8")
+            bytes(self.encryption_key), nonce, key_data, key_id.encode("utf-8")
         )
         ciphertext = ct + tag  # Store as combined ct||tag for format compatibility
 
@@ -714,8 +824,9 @@ class SecureKeyStorage:
             tag = combined[-16:]
 
             # Decrypt with authentication (raises ValueError if tampered)
+            # Convert bytearray to bytes for ctypes compatibility
             plaintext: bytes = native_aes256_gcm_decrypt(
-                self.encryption_key, nonce, ct, tag, key_id.encode("utf-8")
+                bytes(self.encryption_key), nonce, ct, tag, key_id.encode("utf-8")
             )
             return plaintext
 
@@ -772,11 +883,10 @@ class SecureKeyStorage:
         exc_tb: Optional[TracebackType],
     ) -> None:
         """Context manager exit - securely clear encryption key from memory."""
-        # Securely zero the encryption key
+        # Securely zero the encryption key in-place (bytearray allows mutation)
         if hasattr(self, "encryption_key") and self.encryption_key:
-            # Overwrite with zeros before dereferencing
-            key_len = len(self.encryption_key)
-            self.encryption_key = b"\x00" * key_len
+            for i in range(len(self.encryption_key)):
+                self.encryption_key[i] = 0
         return None
 
 
@@ -1122,9 +1232,9 @@ if __name__ == "__main__":
     logger.info("-" * 70)
     hd = HDKeyDerivation()
 
-    # Derive keys for different purposes
-    signing_key = hd.derive_key(purpose=44, account=0, change=0, index=0)
-    encryption_key = hd.derive_key(purpose=44, account=0, change=0, index=1)
+    # Derive keys for different purposes (hardened-only paths)
+    signing_key, _ = hd.derive_path("m/44'/0'/0'")
+    encryption_key, _ = hd.derive_path("m/44'/0'/1'")
 
     logger.info(f"Signing key:    {signing_key.hex()[:32]}...")
     logger.info(f"Encryption key: {encryption_key.hex()[:32]}...")

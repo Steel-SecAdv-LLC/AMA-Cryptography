@@ -171,7 +171,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install "black==24.10.0" "flake8>=7.0,<8" "mypy>=1.9,<2" "isort>=5.13,<6"
+          pip install "black==25.11.0" "flake8>=7.0,<8" "mypy>=1.9,<2" "isort>=5.13,<6"
 
       - name: Check formatting (black)
         run: black --check --diff ama_cryptography/ tests/
@@ -218,6 +218,22 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
+      - name: Pre-pull BuildKit image (with retries)
+        run: |
+          # Pre-pull the BuildKit image used by setup-buildx-action to
+          # survive transient Docker Hub outages (504, network timeouts).
+          IMAGE="moby/buildkit:buildx-stable-1"
+          for attempt in 1 2 3 4 5; do
+            echo "Attempt ${attempt}/5: pulling ${IMAGE}..."
+            if docker pull "${IMAGE}"; then
+              echo "Successfully pulled ${IMAGE}"
+              exit 0
+            fi
+            echo "Pull failed, waiting $((attempt * 10))s before retry..."
+            sleep $((attempt * 10))
+          done
+          echo "::warning::All 5 pull attempts for ${IMAGE} failed; buildx setup will retry internally"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

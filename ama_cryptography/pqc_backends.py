@@ -361,6 +361,132 @@ def _setup_hkdf_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
+# secp256k1 native availability
+_SECP256K1_NATIVE_AVAILABLE = False
+
+
+def _setup_secp256k1_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for secp256k1 functions."""
+    try:
+        lib.ama_secp256k1_pubkey_from_privkey.argtypes = [
+            ctypes.c_char_p,  # privkey[32]
+            ctypes.c_char_p,  # compressed_pubkey[33]
+        ]
+        lib.ama_secp256k1_pubkey_from_privkey.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
+# X25519 native availability
+_X25519_NATIVE_AVAILABLE = False
+
+
+def _setup_x25519_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for X25519 functions."""
+    try:
+        lib.ama_x25519_keypair.argtypes = [
+            ctypes.c_char_p,  # public_key[32]
+            ctypes.c_char_p,  # secret_key[32]
+        ]
+        lib.ama_x25519_keypair.restype = ctypes.c_int
+
+        lib.ama_x25519_key_exchange.argtypes = [
+            ctypes.c_char_p,  # shared_secret[32]
+            ctypes.c_char_p,  # our_secret_key[32]
+            ctypes.c_char_p,  # their_public_key[32]
+        ]
+        lib.ama_x25519_key_exchange.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
+# Argon2id native availability
+_ARGON2_NATIVE_AVAILABLE = False
+
+
+def _setup_argon2_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for Argon2id functions."""
+    try:
+        lib.ama_argon2id.argtypes = [
+            ctypes.c_char_p,  # password
+            ctypes.c_size_t,  # pwd_len
+            ctypes.c_char_p,  # salt
+            ctypes.c_size_t,  # salt_len
+            ctypes.c_uint32,  # t_cost
+            ctypes.c_uint32,  # m_cost
+            ctypes.c_uint32,  # parallelism
+            ctypes.c_char_p,  # output
+            ctypes.c_size_t,  # out_len
+        ]
+        lib.ama_argon2id.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
+# ChaCha20-Poly1305 native availability
+_CHACHA20_POLY1305_NATIVE_AVAILABLE = False
+
+
+def _setup_chacha20poly1305_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for ChaCha20-Poly1305 functions."""
+    try:
+        lib.ama_chacha20poly1305_encrypt.argtypes = [
+            ctypes.c_char_p,  # key[32]
+            ctypes.c_char_p,  # nonce[12]
+            ctypes.c_char_p,  # plaintext
+            ctypes.c_size_t,  # pt_len
+            ctypes.c_char_p,  # aad
+            ctypes.c_size_t,  # aad_len
+            ctypes.c_char_p,  # ciphertext
+            ctypes.c_char_p,  # tag[16]
+        ]
+        lib.ama_chacha20poly1305_encrypt.restype = ctypes.c_int
+
+        lib.ama_chacha20poly1305_decrypt.argtypes = [
+            ctypes.c_char_p,  # key[32]
+            ctypes.c_char_p,  # nonce[12]
+            ctypes.c_char_p,  # ciphertext
+            ctypes.c_size_t,  # ct_len
+            ctypes.c_char_p,  # aad
+            ctypes.c_size_t,  # aad_len
+            ctypes.c_char_p,  # tag[16]
+            ctypes.c_char_p,  # plaintext
+        ]
+        lib.ama_chacha20poly1305_decrypt.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
+# Deterministic keygen native availability
+_DETERMINISTIC_KEYGEN_AVAILABLE = False
+
+
+def _setup_deterministic_keygen_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for deterministic keygen functions."""
+    try:
+        lib.ama_kyber_keypair_from_seed.argtypes = [
+            ctypes.c_char_p,  # d[32]
+            ctypes.c_char_p,  # z[32]
+            ctypes.c_char_p,  # pk
+            ctypes.c_char_p,  # sk
+        ]
+        lib.ama_kyber_keypair_from_seed.restype = ctypes.c_int
+
+        lib.ama_dilithium_keypair_from_seed.argtypes = [
+            ctypes.c_char_p,  # xi[32]
+            ctypes.c_char_p,  # public_key
+            ctypes.c_char_p,  # secret_key
+        ]
+        lib.ama_dilithium_keypair_from_seed.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
 _native_lib = _find_native_library()
 if _native_lib is not None:
     if _setup_native_ctypes(_native_lib):
@@ -373,6 +499,11 @@ if _native_lib is not None:
     _ED25519_NATIVE_AVAILABLE = _setup_ed25519_ctypes(_native_lib)
     _AES_GCM_NATIVE_AVAILABLE = _setup_aes_gcm_ctypes(_native_lib)
     _HKDF_NATIVE_AVAILABLE = _setup_hkdf_ctypes(_native_lib)
+    _SECP256K1_NATIVE_AVAILABLE = _setup_secp256k1_ctypes(_native_lib)
+    _X25519_NATIVE_AVAILABLE = _setup_x25519_ctypes(_native_lib)
+    _ARGON2_NATIVE_AVAILABLE = _setup_argon2_ctypes(_native_lib)
+    _CHACHA20_POLY1305_NATIVE_AVAILABLE = _setup_chacha20poly1305_ctypes(_native_lib)
+    _DETERMINISTIC_KEYGEN_AVAILABLE = _setup_deterministic_keygen_ctypes(_native_lib)
 
 
 # Public API for checking availability
@@ -426,6 +557,22 @@ ED25519_SIGNATURE_BYTES = 64
 AES256_KEY_BYTES = 32
 AES256_GCM_NONCE_BYTES = 12
 AES256_GCM_TAG_BYTES = 16
+
+# secp256k1 (BIP32)
+SECP256K1_PRIVKEY_BYTES = 32
+SECP256K1_PUBKEY_BYTES = 33
+
+# X25519 (RFC 7748)
+X25519_KEY_BYTES = 32
+
+# Argon2id (RFC 9106)
+ARGON2_SALT_BYTES = 16
+ARGON2_TAG_BYTES = 32
+
+# ChaCha20-Poly1305 (RFC 8439)
+CHACHA20_KEY_BYTES = 32
+CHACHA20_NONCE_BYTES = 12
+POLY1305_TAG_BYTES = 16
 
 # ============================================================================
 # ERROR MESSAGE CONSTANTS
@@ -1409,3 +1556,303 @@ class KyberProvider:
             Shared secret bytes
         """
         return kyber_decapsulate(ciphertext, secret_key)
+
+
+# ============================================================================
+# SECP256K1 NATIVE WRAPPERS
+# ============================================================================
+
+
+def native_secp256k1_pubkey_from_privkey(privkey: bytes) -> bytes:
+    """
+    Compute compressed SEC1 public key from 32-byte private key.
+
+    Args:
+        privkey: 32-byte secp256k1 private key
+
+    Returns:
+        33-byte compressed public key (0x02/0x03 prefix + X)
+
+    Raises:
+        ValueError: If privkey is not 32 bytes
+        RuntimeError: If native library is not available
+    """
+    if len(privkey) != SECP256K1_PRIVKEY_BYTES:
+        raise ValueError(f"Private key must be {SECP256K1_PRIVKEY_BYTES} bytes, got {len(privkey)}")
+
+    if _native_lib is None or not _SECP256K1_NATIVE_AVAILABLE:
+        raise RuntimeError("secp256k1 native backend not available. " + _INSTALL_HINT)
+
+    pubkey_buf = ctypes.create_string_buffer(SECP256K1_PUBKEY_BYTES)
+    rc = _native_lib.ama_secp256k1_pubkey_from_privkey(privkey, pubkey_buf)
+    if rc != 0:
+        raise RuntimeError(f"secp256k1 pubkey derivation failed (rc={rc})")
+
+    return bytes(pubkey_buf)
+
+
+# ============================================================================
+# X25519 NATIVE WRAPPERS
+# ============================================================================
+
+
+def native_x25519_keypair() -> tuple:
+    """
+    Generate X25519 keypair.
+
+    Returns:
+        (public_key, secret_key) — both 32 bytes
+
+    Raises:
+        RuntimeError: If native library is not available
+    """
+    if _native_lib is None or not _X25519_NATIVE_AVAILABLE:
+        raise RuntimeError("X25519 native backend not available. " + _INSTALL_HINT)
+
+    pk_buf = ctypes.create_string_buffer(X25519_KEY_BYTES)
+    sk_buf = ctypes.create_string_buffer(X25519_KEY_BYTES)
+
+    rc = _native_lib.ama_x25519_keypair(pk_buf, sk_buf)
+    if rc != 0:
+        raise RuntimeError(f"X25519 keypair generation failed (rc={rc})")
+
+    return bytes(pk_buf), bytes(sk_buf)
+
+
+def native_x25519_key_exchange(our_secret_key: bytes, their_public_key: bytes) -> bytes:
+    """
+    X25519 Diffie-Hellman key exchange.
+
+    Args:
+        our_secret_key: Our 32-byte secret key
+        their_public_key: Their 32-byte public key
+
+    Returns:
+        32-byte shared secret
+
+    Raises:
+        RuntimeError: On low-order point or native library unavailable
+    """
+    if _native_lib is None or not _X25519_NATIVE_AVAILABLE:
+        raise RuntimeError("X25519 native backend not available. " + _INSTALL_HINT)
+
+    if len(our_secret_key) != 32:
+        raise ValueError(f"X25519 secret key must be 32 bytes, got {len(our_secret_key)}")
+    if len(their_public_key) != 32:
+        raise ValueError(f"X25519 public key must be 32 bytes, got {len(their_public_key)}")
+
+    ss_buf = ctypes.create_string_buffer(X25519_KEY_BYTES)
+    rc = _native_lib.ama_x25519_key_exchange(ss_buf, our_secret_key, their_public_key)
+    if rc != 0:
+        raise RuntimeError(f"X25519 key exchange failed (rc={rc})")
+
+    return bytes(ss_buf)
+
+
+# ============================================================================
+# ARGON2ID NATIVE WRAPPERS
+# ============================================================================
+
+
+def native_argon2id(
+    password: bytes,
+    salt: bytes,
+    t_cost: int = 3,
+    m_cost: int = 65536,
+    parallelism: int = 4,
+    out_len: int = 32,
+) -> bytes:
+    """
+    Argon2id key derivation (RFC 9106).
+
+    Args:
+        password: Password bytes
+        salt: Salt bytes (16+ recommended)
+        t_cost: Time cost (iterations)
+        m_cost: Memory cost in KiB
+        parallelism: Degree of parallelism
+        out_len: Desired output length
+
+    Returns:
+        Derived key bytes
+
+    Raises:
+        RuntimeError: If native library is not available
+    """
+    if _native_lib is None or not _ARGON2_NATIVE_AVAILABLE:
+        raise RuntimeError("Argon2id native backend not available. " + _INSTALL_HINT)
+
+    out_buf = ctypes.create_string_buffer(out_len)
+    rc = _native_lib.ama_argon2id(
+        password,
+        len(password),
+        salt,
+        len(salt),
+        t_cost,
+        m_cost,
+        parallelism,
+        out_buf,
+        out_len,
+    )
+    if rc != 0:
+        raise RuntimeError(f"Argon2id failed (rc={rc})")
+
+    return bytes(out_buf)
+
+
+# ============================================================================
+# CHACHA20-POLY1305 NATIVE WRAPPERS
+# ============================================================================
+
+
+def native_chacha20poly1305_encrypt(
+    key: bytes,
+    nonce: bytes,
+    plaintext: bytes,
+    aad: bytes = b"",
+) -> tuple:
+    """
+    ChaCha20-Poly1305 AEAD encryption (RFC 8439).
+
+    Returns:
+        (ciphertext, tag) — ciphertext same length as plaintext, 16-byte tag
+    """
+    if _native_lib is None or not _CHACHA20_POLY1305_NATIVE_AVAILABLE:
+        raise RuntimeError("ChaCha20-Poly1305 native backend not available. " + _INSTALL_HINT)
+
+    if len(key) != 32:
+        raise ValueError(f"ChaCha20-Poly1305 key must be 32 bytes, got {len(key)}")
+    if len(nonce) != 12:
+        raise ValueError(f"ChaCha20-Poly1305 nonce must be 12 bytes, got {len(nonce)}")
+
+    pt_len = len(plaintext)
+    pt_ptr = plaintext if pt_len > 0 else None
+    aad_ptr = aad if aad and len(aad) > 0 else None
+    aad_len = len(aad) if aad else 0
+
+    ct_buf = ctypes.create_string_buffer(pt_len)
+    tag_buf = ctypes.create_string_buffer(POLY1305_TAG_BYTES)
+
+    rc = _native_lib.ama_chacha20poly1305_encrypt(
+        key,
+        nonce,
+        pt_ptr,
+        pt_len,
+        aad_ptr,
+        aad_len,
+        ct_buf,
+        tag_buf,
+    )
+    if rc != 0:
+        raise RuntimeError(f"ChaCha20-Poly1305 encrypt failed (rc={rc})")
+
+    return bytes(ct_buf), bytes(tag_buf)
+
+
+def native_chacha20poly1305_decrypt(
+    key: bytes,
+    nonce: bytes,
+    ciphertext: bytes,
+    tag: bytes,
+    aad: bytes = b"",
+) -> bytes:
+    """
+    ChaCha20-Poly1305 AEAD decryption (RFC 8439).
+
+    Returns:
+        Decrypted plaintext
+
+    Raises:
+        RuntimeError: On tag verification failure
+    """
+    if _native_lib is None or not _CHACHA20_POLY1305_NATIVE_AVAILABLE:
+        raise RuntimeError("ChaCha20-Poly1305 native backend not available. " + _INSTALL_HINT)
+
+    if len(key) != 32:
+        raise ValueError(f"ChaCha20-Poly1305 key must be 32 bytes, got {len(key)}")
+    if len(nonce) != 12:
+        raise ValueError(f"ChaCha20-Poly1305 nonce must be 12 bytes, got {len(nonce)}")
+    if len(tag) != 16:
+        raise ValueError(f"ChaCha20-Poly1305 tag must be 16 bytes, got {len(tag)}")
+
+    ct_len = len(ciphertext)
+    ct_ptr = ciphertext if ct_len > 0 else None
+    aad_ptr = aad if aad and len(aad) > 0 else None
+    aad_len = len(aad) if aad else 0
+
+    pt_buf = ctypes.create_string_buffer(ct_len)
+
+    rc = _native_lib.ama_chacha20poly1305_decrypt(
+        key,
+        nonce,
+        ct_ptr,
+        ct_len,
+        aad_ptr,
+        aad_len,
+        tag,
+        pt_buf,
+    )
+    if rc != 0:
+        raise RuntimeError(f"ChaCha20-Poly1305 decrypt failed (rc={rc})")
+
+    return bytes(pt_buf)
+
+
+# ============================================================================
+# DETERMINISTIC KEYGEN NATIVE WRAPPERS
+# ============================================================================
+
+
+def native_kyber_keypair_from_seed(d: bytes, z: bytes) -> tuple:
+    """
+    Deterministic Kyber-1024 keypair from seed.
+
+    Args:
+        d: 32-byte seed for key generation
+        z: 32-byte seed for implicit rejection
+
+    Returns:
+        (public_key, secret_key)
+    """
+    if _native_lib is None or not _DETERMINISTIC_KEYGEN_AVAILABLE:
+        raise RuntimeError("Deterministic keygen not available. " + _INSTALL_HINT)
+
+    if len(d) != 32:
+        raise ValueError(f"Kyber seed d must be 32 bytes, got {len(d)}")
+    if len(z) != 32:
+        raise ValueError(f"Kyber seed z must be 32 bytes, got {len(z)}")
+
+    pk_buf = ctypes.create_string_buffer(KYBER_PUBLIC_KEY_BYTES)
+    sk_buf = ctypes.create_string_buffer(KYBER_SECRET_KEY_BYTES)
+
+    rc = _native_lib.ama_kyber_keypair_from_seed(d, z, pk_buf, sk_buf)
+    if rc != 0:
+        raise RuntimeError(f"Kyber deterministic keygen failed (rc={rc})")
+
+    return bytes(pk_buf), bytes(sk_buf)
+
+
+def native_dilithium_keypair_from_seed(xi: bytes) -> tuple:
+    """
+    Deterministic ML-DSA-65 keypair from seed.
+
+    Args:
+        xi: 32-byte seed
+
+    Returns:
+        (public_key, secret_key)
+    """
+    if _native_lib is None or not _DETERMINISTIC_KEYGEN_AVAILABLE:
+        raise RuntimeError("Deterministic keygen not available. " + _INSTALL_HINT)
+
+    if len(xi) != 32:
+        raise ValueError(f"Dilithium seed xi must be 32 bytes, got {len(xi)}")
+
+    pk_buf = ctypes.create_string_buffer(DILITHIUM_PUBLIC_KEY_BYTES)
+    sk_buf = ctypes.create_string_buffer(DILITHIUM_SECRET_KEY_BYTES)
+
+    rc = _native_lib.ama_dilithium_keypair_from_seed(xi, pk_buf, sk_buf)
+    if rc != 0:
+        raise RuntimeError(f"Dilithium deterministic keygen failed (rc={rc})")
+
+    return bytes(pk_buf), bytes(sk_buf)

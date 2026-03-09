@@ -417,7 +417,10 @@ class TestKATVectorParsing:
         assert v.count == 0
         assert len(v.seed) == 48, "Seed should be 48 bytes"
         assert len(v.pk) == 1952, f"Dilithium3 pk should be 1952 bytes, got {len(v.pk)}"
-        assert len(v.sk) == 4016, f"Dilithium3 sk should be 4016 bytes, got {len(v.sk)}"
+        # Round-3 Dilithium3 KAT vectors use 4016-byte secret keys (c_tilde=32, tr=48).
+        # FIPS 204 ML-DSA-65 final uses 4032-byte secret keys (c_tilde=48, tr=64).
+        # See pqc_backends.DILITHIUM_SECRET_KEY_BYTES (4032) for the FIPS 204 size.
+        assert len(v.sk) == 4016, f"Dilithium3 (round-3) sk should be 4016 bytes, got {len(v.sk)}"
         # Signature is embedded in sm (sm = sig || msg)
         sig_len = v.smlen - v.mlen
         assert sig_len == 3293, f"Dilithium3 sig should be 3293 bytes, got {sig_len}"
@@ -718,6 +721,7 @@ class TestMLDSAKATValidation:
             # Verify KAT vector internal consistency
             assert len(kat.seed) == 48, f"Vector {i}: Invalid seed length"
             assert len(kat.pk) == 1952, f"Vector {i}: Invalid pk length"
+            # Round-3 Dilithium3 sk = 4016 bytes (not FIPS 204 ML-DSA-65 final = 4032)
             assert len(kat.sk) == 4016, f"Vector {i}: Invalid sk length"
 
             # Verify signature length

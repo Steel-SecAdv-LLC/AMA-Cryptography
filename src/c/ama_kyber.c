@@ -80,12 +80,12 @@ static int16_t coeff_normalize(int16_t a);
 static void poly_tomont(poly* r);
 
 /* Public wrapper prototypes (called from ama_core.c via extern) */
-ama_error_t ama_kyber_keypair(uint8_t* pk, size_t pk_len,
+AMA_API ama_error_t ama_kyber_keypair(uint8_t* pk, size_t pk_len,
                                uint8_t* sk, size_t sk_len);
-ama_error_t ama_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
+AMA_API ama_error_t ama_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
                                    uint8_t* ct, size_t* ct_len,
                                    uint8_t* ss, size_t ss_len);
-ama_error_t ama_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
+AMA_API ama_error_t ama_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
                                    const uint8_t* sk, size_t sk_len,
                                    uint8_t* ss, size_t ss_len);
 
@@ -1490,15 +1490,99 @@ int ama_kyber_debug_cpa_roundtrip(void) {
 /**
  * Public wrapper for Kyber keypair generation (called from ama_core.c)
  */
-ama_error_t ama_kyber_keypair(uint8_t* pk, size_t pk_len,
+AMA_API ama_error_t ama_kyber_keypair(uint8_t* pk, size_t pk_len,
                                uint8_t* sk, size_t sk_len) {
     return kyber_keypair_generate(pk, pk_len, sk, sk_len);
 }
 
 /**
+ * Deterministic Kyber-1024 keypair from seed (for KAT testing).
+ *
+ * Generates a Kyber keypair deterministically from provided seed values,
+ * bypassing the random number generator entirely.
+ *
+ * @param d    Seed for key generation (32 bytes)
+ * @param z    Seed for implicit rejection (32 bytes)
+ * @param pk   Output public key buffer (1568 bytes)
+ * @param sk   Output secret key buffer (3168 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_kyber_keypair_from_seed(
+    const uint8_t d[32], const uint8_t z[32],
+    uint8_t *pk, uint8_t *sk)
+{
+#ifdef AMA_USE_NATIVE_PQC
+    uint8_t buf[64];
+    uint8_t *rho, *sigma;
+    polyvec a[KYBER_K], s, e, pkpv;
+    unsigned int i;
+
+    if (!d || !z || !pk || !sk) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    /* G(d || byte(k)) = (rho, sigma) per FIPS 203 Algorithm 15 */
+    {
+        uint8_t g_input[33];
+        memcpy(g_input, d, 32);
+        g_input[32] = (uint8_t)KYBER_K;
+        ama_sha3_512(g_input, 33, buf);
+        ama_secure_memzero(g_input, sizeof(g_input));
+    }
+    rho = buf;
+    sigma = buf + 32;
+
+    /* Generate matrix A from rho (in NTT domain) */
+    kyber_gen_matrix(a, rho, 0);
+
+    /* Sample secret vector s and error vector e from CBD */
+    kyber_gennoise(&s, sigma, 0);
+    kyber_gennoise(&e, sigma, (uint8_t)KYBER_K);
+
+    /* NTT(s), NTT(e) */
+    polyvec_ntt(&s);
+    polyvec_ntt(&e);
+
+    /* Compute t = A*s + e (in NTT domain) */
+    for (i = 0; i < KYBER_K; i++) {
+        polyvec_basemul_acc(&pkpv.vec[i], &a[i], &s);
+        poly_tomont(&pkpv.vec[i]);
+        poly_add(&pkpv.vec[i], &pkpv.vec[i], &e.vec[i]);
+    }
+    polyvec_reduce(&pkpv);
+
+    /* Pack public key: pk = (t || rho) */
+    polyvec_tobytes(pk, &pkpv);
+    memcpy(pk + KYBER_K * 384, rho, 32);
+
+    /* Pack secret key: sk = (s || pk || H(pk) || z) */
+    polyvec_reduce(&s);
+    polyvec_tobytes(sk, &s);
+    memcpy(sk + KYBER_K * 384, pk, AMA_KYBER_1024_PUBLIC_KEY_BYTES);
+
+    /* H(pk) */
+    ama_sha3_256(pk, AMA_KYBER_1024_PUBLIC_KEY_BYTES,
+                 sk + KYBER_K * 384 + AMA_KYBER_1024_PUBLIC_KEY_BYTES);
+
+    /* z for implicit rejection (provided by caller) */
+    memcpy(sk + KYBER_K * 384 + AMA_KYBER_1024_PUBLIC_KEY_BYTES + 32, z, 32);
+
+    /* Scrub sensitive data */
+    ama_secure_memzero(buf, sizeof(buf));
+    ama_secure_memzero(&s, sizeof(s));
+    ama_secure_memzero(&e, sizeof(e));
+
+    return AMA_SUCCESS;
+#else
+    (void)d; (void)z; (void)pk; (void)sk;
+    return AMA_ERROR_NOT_IMPLEMENTED;
+#endif
+}
+
+/**
  * Public wrapper for Kyber encapsulation (called from ama_core.c)
  */
-ama_error_t ama_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
+AMA_API ama_error_t ama_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
                                    uint8_t* ct, size_t* ct_len,
                                    uint8_t* ss, size_t ss_len) {
     return kyber_encapsulate(pk, pk_len, ct, ct_len, ss, ss_len);
@@ -1507,7 +1591,7 @@ ama_error_t ama_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
 /**
  * Public wrapper for Kyber decapsulation (called from ama_core.c)
  */
-ama_error_t ama_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
+AMA_API ama_error_t ama_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
                                    const uint8_t* sk, size_t sk_len,
                                    uint8_t* ss, size_t ss_len) {
     return kyber_decapsulate(ct, ct_len, sk, sk_len, ss, ss_len);
