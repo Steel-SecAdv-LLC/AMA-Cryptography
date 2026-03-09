@@ -57,14 +57,13 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 
 # numpy/scipy are optional — used by equations/double_helix when available,
 # but the core 3R monitor operates without them.
-np: Any = None
 _HAS_NUMPY = False
 try:
-    import numpy as np
+    import numpy as np  # noqa: F811 — guarded re-import after sentinel
 
     _HAS_NUMPY = True
 except ImportError:
-    pass
+    np = None  # type: ignore[assignment]  # sentinel when numpy is absent
 
 
 def _median_sorted(values: List[float]) -> float:
