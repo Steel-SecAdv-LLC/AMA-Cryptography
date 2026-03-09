@@ -240,7 +240,13 @@ class HDKeyDerivation:
 
     def derive_key(self, purpose: int, account: int = 0, change: int = 0, index: int = 0) -> bytes:
         """
-        Derive key using standard path structure
+        Derive key using fully-hardened path structure.
+
+        All four path levels use hardened derivation to avoid requiring
+        the secp256k1 public key computation needed by non-hardened BIP32
+        child key derivation.
+
+        Path: m/{purpose}'/{account}'/{change}'/{index}'
 
         Args:
             purpose: Purpose (e.g., 44 for BIP44)
@@ -249,9 +255,9 @@ class HDKeyDerivation:
             index: Address index
 
         Returns:
-            Derived key
+            Derived key (32 bytes)
         """
-        path = f"m/{purpose}'/{account}'/{change}/{index}"
+        path = f"m/{purpose}'/{account}'/{change}'/{index}'"
         key, _ = self.derive_path(path)
         return key
 

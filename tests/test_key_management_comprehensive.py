@@ -114,9 +114,13 @@ class TestHDKeyDerivationComprehensive:
         assert chain == hd_derivation.master_chain_code
 
     def test_derive_key_convenience_method(self, hd_derivation):
-        """derive_key with non-hardened levels (uses native secp256k1)."""
+        """derive_key uses fully-hardened path and matches derive_path."""
         key = hd_derivation.derive_key(purpose=44, account=0, change=0, index=0)
         assert len(key) == 32
+
+        # Verify it matches the equivalent fully-hardened derive_path call
+        expected_key, _ = hd_derivation.derive_path("m/44'/0'/0'/0'")
+        assert key == expected_key
 
     def test_derive_path_different_hardened_purposes(self, hd_derivation):
         """Different hardened purposes yield different keys."""
