@@ -364,24 +364,32 @@ class TestHDKeyDerivation:
     """Tests for HD key derivation."""
 
     def test_derive_key_returns_bytes(self):
-        """derive_key returns bytes."""
+        """derive_path with hardened-only path returns bytes."""
         from ama_cryptography.key_management import HDKeyDerivation
 
         hd = HDKeyDerivation()
-        key = hd.derive_key(purpose=44, account=0, change=0, index=0)
+        key, _ = hd.derive_path("m/44'/0'/0'")
 
         assert isinstance(key, bytes)
         assert len(key) == 32
 
     def test_different_indices_different_keys(self):
-        """Different indices produce different keys."""
+        """Different hardened indices produce different keys."""
         from ama_cryptography.key_management import HDKeyDerivation
 
         hd = HDKeyDerivation()
-        key1 = hd.derive_key(purpose=44, account=0, change=0, index=0)
-        key2 = hd.derive_key(purpose=44, account=0, change=0, index=1)
+        key1, _ = hd.derive_path("m/44'/0'/0'")
+        key2, _ = hd.derive_path("m/44'/0'/1'")
 
         assert key1 != key2
+
+    def test_non_hardened_raises(self):
+        """Non-hardened derivation raises NotImplementedError."""
+        from ama_cryptography.key_management import HDKeyDerivation
+
+        hd = HDKeyDerivation()
+        with pytest.raises(NotImplementedError):
+            hd.derive_path("m/44'/0'/0'/0/0")
 
     def test_deterministic_derivation(self):
         """Same seed produces same keys."""
@@ -392,8 +400,8 @@ class TestHDKeyDerivation:
         hd1 = HDKeyDerivation(seed=seed)
         hd2 = HDKeyDerivation(seed=seed)
 
-        key1 = hd1.derive_key(purpose=44, account=0, change=0, index=0)
-        key2 = hd2.derive_key(purpose=44, account=0, change=0, index=0)
+        key1, _ = hd1.derive_path("m/44'/0'/0'")
+        key2, _ = hd2.derive_path("m/44'/0'/0'")
 
         assert key1 == key2
 

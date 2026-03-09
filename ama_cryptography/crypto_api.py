@@ -1243,13 +1243,9 @@ def create_crypto_package(
         hmac_key = secrets.token_bytes(32)  # 256-bit HMAC key
         hmac_tag = hmac_authenticate(content, hmac_key)
     else:
-        # Fallback to simple keyed hash if HMAC not available
-        hmac_key = secrets.token_bytes(32)
-        hmac_tag = hashlib.sha3_256(hmac_key + content).digest()
-        warnings.warn(
-            "HMAC not available, using keyed hash fallback. "
-            "Install code_guardian_secure dependencies for full HMAC support.",
-            category=UserWarning,
+        raise RuntimeError(
+            "Native library required. Build: "
+            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
         )
 
     # ========================================================================
@@ -1293,16 +1289,9 @@ def create_crypto_package(
             salt=None,  # Generate random salt
         )
     else:
-        # Fallback to simple key derivation if HKDF not available
-        hkdf_salt = secrets.token_bytes(32)
-        derived_keys = []
-        for i in range(config.num_derived_keys):
-            key_material = hashlib.sha3_256(hkdf_salt + content + i.to_bytes(4, "big")).digest()
-            derived_keys.append(key_material)
-        warnings.warn(
-            "HKDF not available, using simple key derivation fallback. "
-            "Install code_guardian_secure dependencies for full HKDF support.",
-            category=UserWarning,
+        raise RuntimeError(
+            "Native library required. Build: "
+            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
         )
 
     # ========================================================================

@@ -166,9 +166,14 @@ class HDKeyDerivation:
             # Hardened derivation: HMAC-SHA512(Key = cpar, Data = 0x00 || ser256(kpar) || ser32(i))
             data = b"\x00" + parent_key + index.to_bytes(4, "big")
         else:
-            # Non-hardened derivation (requires public key, simplified here)
-            # In full BIP32, this would use the compressed public key
-            data = parent_key + index.to_bytes(4, "big")
+            # Non-hardened derivation: HMAC-SHA512(Key = cpar, Data = serP(point(kpar)) || ser32(i))
+            # BIP32 requires the compressed secp256k1 public key (33 bytes),
+            # which needs elliptic curve point multiplication (kpar * G).
+            raise NotImplementedError(
+                "Non-hardened BIP32 derivation requires secp256k1 point multiplication "
+                "to compute the compressed public key from the parent private key. "
+                "Use hardened derivation (index >= 2^31) or add secp256k1 curve arithmetic."
+            )
 
         h = hmac.new(parent_chain, data, hashlib.sha512)
         hmac_result = h.digest()
@@ -295,7 +300,7 @@ class KeyRotationManager:
         Returns:
             KeyMetadata
         """
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         expires_at = now + expires_in if expires_in else None
 
         metadata = KeyMetadata(
@@ -340,7 +345,7 @@ class KeyRotationManager:
         metadata = self.keys[key_id]
 
         # Check expiration
-        if metadata.expires_at and datetime.now() >= metadata.expires_at:
+        if metadata.expires_at and datetime.now(timezone.utc) >= metadata.expires_at:
             return True
 
         # Check usage limit
@@ -348,7 +353,7 @@ class KeyRotationManager:
             return True
 
         # Check rotation period
-        if datetime.now() - metadata.created_at >= self.rotation_period:
+        if datetime.now(timezone.utc) - metadata.created_at >= self.rotation_period:
             return True
 
         return False
@@ -489,7 +494,7 @@ class SecureKeyStorage:
             self._derive_key_from_password(master_password)
         else:
             # Generate random encryption key (should be HSM-backed in production)
-            self.encryption_key = secrets.token_bytes(32)
+            self.encryption_key = bytearray(secrets.token_bytes(32))
             self.salt: Optional[bytes] = None  # No salt needed for random key
 
     def _derive_key_from_password(self, master_password: str) -> None:
@@ -532,13 +537,13 @@ class SecureKeyStorage:
             iterations = self.KDF_ITERATIONS
             version = self.KDF_VERSION
 
-        self.encryption_key = hashlib.pbkdf2_hmac(
+        self.encryption_key = bytearray(hashlib.pbkdf2_hmac(
             "sha256",
             master_password.encode("utf-8"),
             self.salt,
             iterations,
             self.KDF_KEY_BYTES,
-        )
+        ))
 
         # Warn if using legacy parameters
         if version < 2:
@@ -574,13 +579,13 @@ class SecureKeyStorage:
         new_salt = secrets.token_bytes(self.KDF_SALT_BYTES)
 
         # Derive new key
-        new_encryption_key = hashlib.pbkdf2_hmac(
+        new_encryption_key = bytearray(hashlib.pbkdf2_hmac(
             "sha256",
             master_password.encode("utf-8"),
             new_salt,
             self.KDF_ITERATIONS,
             self.KDF_KEY_BYTES,
-        )
+        ))
 
         # Re-encrypt all keys
         old_key = self.encryption_key
@@ -655,8 +660,9 @@ class SecureKeyStorage:
         nonce = secrets.token_bytes(12)  # 96-bit nonce for GCM (NIST recommended)
 
         # Encrypt with key_id as associated data (binds ciphertext to key_id)
+        # Convert bytearray to bytes for ctypes compatibility
         ct, tag = native_aes256_gcm_encrypt(
-            self.encryption_key, nonce, key_data, key_id.encode("utf-8")
+            bytes(self.encryption_key), nonce, key_data, key_id.encode("utf-8")
         )
         ciphertext = ct + tag  # Store as combined ct||tag for format compatibility
 
@@ -714,8 +720,9 @@ class SecureKeyStorage:
             tag = combined[-16:]
 
             # Decrypt with authentication (raises ValueError if tampered)
+            # Convert bytearray to bytes for ctypes compatibility
             plaintext: bytes = native_aes256_gcm_decrypt(
-                self.encryption_key, nonce, ct, tag, key_id.encode("utf-8")
+                bytes(self.encryption_key), nonce, ct, tag, key_id.encode("utf-8")
             )
             return plaintext
 
@@ -772,11 +779,10 @@ class SecureKeyStorage:
         exc_tb: Optional[TracebackType],
     ) -> None:
         """Context manager exit - securely clear encryption key from memory."""
-        # Securely zero the encryption key
+        # Securely zero the encryption key in-place (bytearray allows mutation)
         if hasattr(self, "encryption_key") and self.encryption_key:
-            # Overwrite with zeros before dereferencing
-            key_len = len(self.encryption_key)
-            self.encryption_key = b"\x00" * key_len
+            for i in range(len(self.encryption_key)):
+                self.encryption_key[i] = 0
         return None
 
 
@@ -1122,9 +1128,9 @@ if __name__ == "__main__":
     logger.info("-" * 70)
     hd = HDKeyDerivation()
 
-    # Derive keys for different purposes
-    signing_key = hd.derive_key(purpose=44, account=0, change=0, index=0)
-    encryption_key = hd.derive_key(purpose=44, account=0, change=0, index=1)
+    # Derive keys for different purposes (hardened-only paths)
+    signing_key, _ = hd.derive_path("m/44'/0'/0'")
+    encryption_key, _ = hd.derive_path("m/44'/0'/1'")
 
     logger.info(f"Signing key:    {signing_key.hex()[:32]}...")
     logger.info(f"Encryption key: {encryption_key.hex()[:32]}...")

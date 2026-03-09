@@ -77,11 +77,9 @@ class TestHDKeyDerivationComprehensive:
         assert hd1.master_key != hd2.master_key
 
     def test_derive_path_standard(self, hd_derivation):
-        """Derive key from standard BIP44 path."""
-        key, chain = hd_derivation.derive_path("m/44'/0'/0'/0/0")
-
-        assert len(key) == 32
-        assert len(chain) == 32
+        """Non-hardened BIP44 path raises NotImplementedError (needs secp256k1)."""
+        with pytest.raises(NotImplementedError):
+            hd_derivation.derive_path("m/44'/0'/0'/0/0")
 
     def test_derive_path_hardened_only(self, hd_derivation):
         """Derive key with all hardened derivation."""
@@ -91,18 +89,14 @@ class TestHDKeyDerivationComprehensive:
         assert len(chain) == 32
 
     def test_derive_path_non_hardened_only(self, hd_derivation):
-        """Derive key with non-hardened derivation."""
-        key, chain = hd_derivation.derive_path("m/0/1/2")
-
-        assert len(key) == 32
-        assert len(chain) == 32
+        """Non-hardened derivation raises NotImplementedError (needs secp256k1)."""
+        with pytest.raises(NotImplementedError):
+            hd_derivation.derive_path("m/0/1/2")
 
     def test_derive_path_mixed(self, hd_derivation):
-        """Derive key with mixed hardened/non-hardened derivation."""
-        key, chain = hd_derivation.derive_path("m/44'/0'/0'/0/5")
-
-        assert len(key) == 32
-        assert len(chain) == 32
+        """Mixed hardened/non-hardened path raises NotImplementedError at non-hardened step."""
+        with pytest.raises(NotImplementedError):
+            hd_derivation.derive_path("m/44'/0'/0'/0/5")
 
     def test_derive_path_invalid_no_m_prefix(self, hd_derivation):
         """Path must start with 'm'."""
@@ -117,46 +111,38 @@ class TestHDKeyDerivationComprehensive:
         assert chain == hd_derivation.master_chain_code
 
     def test_derive_key_convenience_method(self, hd_derivation):
-        """Test convenience derive_key method."""
-        key = hd_derivation.derive_key(purpose=44, account=0, change=0, index=0)
+        """derive_key with non-hardened levels raises NotImplementedError."""
+        with pytest.raises(NotImplementedError):
+            hd_derivation.derive_key(purpose=44, account=0, change=0, index=0)
 
-        assert len(key) == 32
-
-    def test_derive_key_different_purposes(self, hd_derivation):
-        """Different purposes yield different keys."""
-        key1 = hd_derivation.derive_key(purpose=44, account=0, change=0, index=0)
-        key2 = hd_derivation.derive_key(purpose=49, account=0, change=0, index=0)
-
-        assert key1 != key2
-
-    def test_derive_key_different_accounts(self, hd_derivation):
-        """Different accounts yield different keys."""
-        key1 = hd_derivation.derive_key(purpose=44, account=0, change=0, index=0)
-        key2 = hd_derivation.derive_key(purpose=44, account=1, change=0, index=0)
+    def test_derive_path_different_hardened_purposes(self, hd_derivation):
+        """Different hardened purposes yield different keys."""
+        key1, _ = hd_derivation.derive_path("m/44'/0'/0'")
+        key2, _ = hd_derivation.derive_path("m/49'/0'/0'")
 
         assert key1 != key2
 
-    def test_derive_key_different_indices(self, hd_derivation):
-        """Different indices yield different keys."""
-        key1 = hd_derivation.derive_key(purpose=44, account=0, change=0, index=0)
-        key2 = hd_derivation.derive_key(purpose=44, account=0, change=0, index=1)
+    def test_derive_path_different_hardened_accounts(self, hd_derivation):
+        """Different hardened accounts yield different keys."""
+        key1, _ = hd_derivation.derive_path("m/44'/0'/0'")
+        key2, _ = hd_derivation.derive_path("m/44'/1'/0'")
 
         assert key1 != key2
 
-    def test_derive_key_change_address(self, hd_derivation):
-        """Change addresses (change=1) differ from external (change=0)."""
-        key_external = hd_derivation.derive_key(purpose=44, account=0, change=0, index=0)
-        key_change = hd_derivation.derive_key(purpose=44, account=0, change=1, index=0)
+    def test_derive_path_different_hardened_indices(self, hd_derivation):
+        """Different hardened indices yield different keys."""
+        key1, _ = hd_derivation.derive_path("m/44'/0'/0'")
+        key2, _ = hd_derivation.derive_path("m/44'/0'/1'")
 
-        assert key_external != key_change
+        assert key1 != key2
 
     def test_deterministic_derivation(self, master_seed):
         """Same seed produces same derived keys."""
         hd1 = HDKeyDerivation(seed=master_seed)
         hd2 = HDKeyDerivation(seed=master_seed)
 
-        key1 = hd1.derive_key(purpose=44, account=0, change=0, index=0)
-        key2 = hd2.derive_key(purpose=44, account=0, change=0, index=0)
+        key1, _ = hd1.derive_path("m/44'/0'/0'")
+        key2, _ = hd2.derive_path("m/44'/0'/0'")
 
         assert key1 == key2
 
@@ -169,15 +155,14 @@ class TestHDKeyDerivationComprehensive:
         expected = int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
         assert HDKeyDerivation.SECP256K1_N == expected
 
-    def test_derive_large_index(self, hd_derivation):
-        """Derive with large non-hardened index."""
-        key, chain = hd_derivation.derive_path("m/0/2147483646")  # Max non-hardened
-
-        assert len(key) == 32
+    def test_derive_large_non_hardened_index_raises(self, hd_derivation):
+        """Non-hardened derivation raises NotImplementedError."""
+        with pytest.raises(NotImplementedError):
+            hd_derivation.derive_path("m/0/2147483646")
 
     def test_derive_large_hardened_index(self, hd_derivation):
         """Derive with large hardened index."""
-        key = hd_derivation.derive_key(purpose=2147483647, account=0, change=0, index=0)
+        key, _ = hd_derivation.derive_path("m/2147483647'")
 
         assert len(key) == 32
 
@@ -215,7 +200,7 @@ class TestKeyRotationManagerComprehensive:
         meta = rotation_manager.register_key("key-1", "encryption", expires_in=timedelta(days=30))
 
         assert meta.expires_at is not None
-        assert meta.expires_at > datetime.now()
+        assert meta.expires_at > datetime.now(timezone.utc)
 
     def test_register_key_with_max_usage(self, rotation_manager):
         """Register key with usage limit."""
