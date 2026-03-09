@@ -107,9 +107,7 @@ from ama_cryptography.exceptions import QuantumSignatureUnavailableError
 # to allow tests to monkeypatch module-level DILITHIUM_* variables
 from ama_cryptography.pqc_backends import DILITHIUM_AVAILABLE as _PQC_DILITHIUM_AVAILABLE
 from ama_cryptography.pqc_backends import DILITHIUM_BACKEND as _PQC_DILITHIUM_BACKEND
-from ama_cryptography.pqc_backends import (
-    DilithiumKeyPair,
-)
+from ama_cryptography.pqc_backends import DilithiumKeyPair
 from ama_cryptography.pqc_backends import dilithium_sign as _pqc_dilithium_sign
 from ama_cryptography.pqc_backends import dilithium_verify as _pqc_dilithium_verify
 from ama_cryptography.pqc_backends import (

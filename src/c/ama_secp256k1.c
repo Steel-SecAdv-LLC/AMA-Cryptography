@@ -119,6 +119,22 @@ static inline uint128_t MUL64(uint64_t a, uint64_t b) {
     return r;
 }
 
+/* Portable 128-bit addition: a + b */
+static inline uint128_t ADD128(uint128_t a, uint128_t b) {
+    uint128_t r;
+    r.lo = a.lo + b.lo;
+    r.hi = a.hi + b.hi + (r.lo < a.lo ? 1 : 0);
+    return r;
+}
+
+/* Portable construct uint128_t from a uint64_t scalar */
+static inline uint128_t U128_FROM_U64(uint64_t v) {
+    uint128_t r;
+    r.lo = v;
+    r.hi = 0;
+    return r;
+}
+
 #define LO64(x) ((x).lo)
 #define HI64(x) ((x).hi)
 #endif
@@ -356,6 +372,7 @@ static void secp256k1_fe_mul(secp256k1_fe *r, const secp256k1_fe *a, const secp2
     const uint64_t R52 = 0x1000003D10ULL; /* (2^32 + 977) << 4  =  R << 4 */
 
     /* Schoolbook multiply: accumulate products for each result limb */
+#ifdef __SIZEOF_INT128__
     acc0 = MUL64(a->v[0], b->v[0]);
 
     acc1 = MUL64(a->v[0], b->v[1]);
@@ -389,57 +406,112 @@ static void secp256k1_fe_mul(secp256k1_fe *r, const secp256k1_fe *a, const secp2
     acc7 += MUL64(a->v[4], b->v[3]);
 
     acc8 = MUL64(a->v[4], b->v[4]);
+#else
+    acc0 = MUL64(a->v[0], b->v[0]);
 
-    /* Extract lower 52 bits of each accumulator and propagate carry upward */
+    acc1 = MUL64(a->v[0], b->v[1]);
+    acc1 = ADD128(acc1, MUL64(a->v[1], b->v[0]));
+
+    acc2 = MUL64(a->v[0], b->v[2]);
+    acc2 = ADD128(acc2, MUL64(a->v[1], b->v[1]));
+    acc2 = ADD128(acc2, MUL64(a->v[2], b->v[0]));
+
+    acc3 = MUL64(a->v[0], b->v[3]);
+    acc3 = ADD128(acc3, MUL64(a->v[1], b->v[2]));
+    acc3 = ADD128(acc3, MUL64(a->v[2], b->v[1]));
+    acc3 = ADD128(acc3, MUL64(a->v[3], b->v[0]));
+
+    acc4 = MUL64(a->v[0], b->v[4]);
+    acc4 = ADD128(acc4, MUL64(a->v[1], b->v[3]));
+    acc4 = ADD128(acc4, MUL64(a->v[2], b->v[2]));
+    acc4 = ADD128(acc4, MUL64(a->v[3], b->v[1]));
+    acc4 = ADD128(acc4, MUL64(a->v[4], b->v[0]));
+
+    acc5 = MUL64(a->v[1], b->v[4]);
+    acc5 = ADD128(acc5, MUL64(a->v[2], b->v[3]));
+    acc5 = ADD128(acc5, MUL64(a->v[3], b->v[2]));
+    acc5 = ADD128(acc5, MUL64(a->v[4], b->v[1]));
+
+    acc6 = MUL64(a->v[2], b->v[4]);
+    acc6 = ADD128(acc6, MUL64(a->v[3], b->v[3]));
+    acc6 = ADD128(acc6, MUL64(a->v[4], b->v[2]));
+
+    acc7 = MUL64(a->v[3], b->v[4]);
+    acc7 = ADD128(acc7, MUL64(a->v[4], b->v[3]));
+
+    acc8 = MUL64(a->v[4], b->v[4]);
+#endif
+
+    /* Extract lower 52 bits of each accumulator and propagate carry upward.
+     *
+     * On native __int128: use direct += and casts.
+     * On portable struct path: use ADD128/U128_FROM_U64 helpers and
+     * reconstruct the full carry from lo and hi parts explicitly. */
+#ifdef __SIZEOF_INT128__
     r0 = LO64(acc0) & SECP256K1_LIMB_MASK;
     acc1 += (uint128_t)(LO64(acc0) >> 52);
-#ifdef __SIZEOF_INT128__
     acc1 += (uint128_t)HI64(acc0) << 12;
-#endif
 
     r1 = LO64(acc1) & SECP256K1_LIMB_MASK;
     acc2 += (uint128_t)(LO64(acc1) >> 52);
-#ifdef __SIZEOF_INT128__
     acc2 += (uint128_t)HI64(acc1) << 12;
-#endif
 
     r2 = LO64(acc2) & SECP256K1_LIMB_MASK;
     acc3 += (uint128_t)(LO64(acc2) >> 52);
-#ifdef __SIZEOF_INT128__
     acc3 += (uint128_t)HI64(acc2) << 12;
-#endif
 
     r3 = LO64(acc3) & SECP256K1_LIMB_MASK;
     acc4 += (uint128_t)(LO64(acc3) >> 52);
-#ifdef __SIZEOF_INT128__
     acc4 += (uint128_t)HI64(acc3) << 12;
-#endif
 
     r4 = LO64(acc4) & SECP256K1_LIMB_MASK;
     acc5 += (uint128_t)(LO64(acc4) >> 52);
-#ifdef __SIZEOF_INT128__
     acc5 += (uint128_t)HI64(acc4) << 12;
-#endif
 
     r5 = LO64(acc5) & SECP256K1_LIMB_MASK;
     acc6 += (uint128_t)(LO64(acc5) >> 52);
-#ifdef __SIZEOF_INT128__
     acc6 += (uint128_t)HI64(acc5) << 12;
-#endif
 
     r6 = LO64(acc6) & SECP256K1_LIMB_MASK;
     acc7 += (uint128_t)(LO64(acc6) >> 52);
-#ifdef __SIZEOF_INT128__
     acc7 += (uint128_t)HI64(acc6) << 12;
-#endif
 
     r7 = LO64(acc7) & SECP256K1_LIMB_MASK;
     acc8 += (uint128_t)(LO64(acc7) >> 52);
-#ifdef __SIZEOF_INT128__
     acc8 += (uint128_t)HI64(acc7) << 12;
-#endif
 
     r8 = LO64(acc8) & SECP256K1_LIMB_MASK;
+#else
+    /* Portable carry propagation: each accumulator's bits above 52 (from
+     * both lo and hi parts) feed into the next accumulator. Since the
+     * struct MUL64 already places the full 128-bit result, we reconstruct
+     * the carry as (lo >> 52) | (hi << 12). */
+    r0 = LO64(acc0) & SECP256K1_LIMB_MASK;
+    acc1 = ADD128(acc1, U128_FROM_U64((LO64(acc0) >> 52) | (HI64(acc0) << 12)));
+
+    r1 = LO64(acc1) & SECP256K1_LIMB_MASK;
+    acc2 = ADD128(acc2, U128_FROM_U64((LO64(acc1) >> 52) | (HI64(acc1) << 12)));
+
+    r2 = LO64(acc2) & SECP256K1_LIMB_MASK;
+    acc3 = ADD128(acc3, U128_FROM_U64((LO64(acc2) >> 52) | (HI64(acc2) << 12)));
+
+    r3 = LO64(acc3) & SECP256K1_LIMB_MASK;
+    acc4 = ADD128(acc4, U128_FROM_U64((LO64(acc3) >> 52) | (HI64(acc3) << 12)));
+
+    r4 = LO64(acc4) & SECP256K1_LIMB_MASK;
+    acc5 = ADD128(acc5, U128_FROM_U64((LO64(acc4) >> 52) | (HI64(acc4) << 12)));
+
+    r5 = LO64(acc5) & SECP256K1_LIMB_MASK;
+    acc6 = ADD128(acc6, U128_FROM_U64((LO64(acc5) >> 52) | (HI64(acc5) << 12)));
+
+    r6 = LO64(acc6) & SECP256K1_LIMB_MASK;
+    acc7 = ADD128(acc7, U128_FROM_U64((LO64(acc6) >> 52) | (HI64(acc6) << 12)));
+
+    r7 = LO64(acc7) & SECP256K1_LIMB_MASK;
+    acc8 = ADD128(acc8, U128_FROM_U64((LO64(acc7) >> 52) | (HI64(acc7) << 12)));
+
+    r8 = LO64(acc8) & SECP256K1_LIMB_MASK;
+#endif
 
     /*
      * Reduction: fold r5..r8 (and acc8 overflow) back into r0..r4.
