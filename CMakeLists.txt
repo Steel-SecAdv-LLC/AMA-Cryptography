@@ -126,9 +126,14 @@ if(AMA_BUILD_SHARED)
         PUBLIC_HEADER "include/ama_cryptography.h"
     )
     target_compile_definitions(ama_cryptography_shared PRIVATE AMA_BUILDING_SHARED)
-    
+
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_shared PRIVATE AMA_USE_NATIVE_PQC)
+    endif()
+
+    # Windows: link bcrypt for BCryptGenRandom (used by ama_platform_rand.c)
+    if(WIN32)
+        target_link_libraries(ama_cryptography_shared PRIVATE bcrypt)
     endif()
 endif()
 
@@ -141,6 +146,10 @@ if(AMA_BUILD_STATIC)
     )
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_static PRIVATE AMA_USE_NATIVE_PQC)
+    endif()
+
+    if(WIN32)
+        target_link_libraries(ama_cryptography_static PRIVATE bcrypt)
     endif()
 endif()
 
@@ -163,6 +172,10 @@ if(AMA_BUILD_TESTS)
     target_compile_definitions(ama_cryptography_test PRIVATE AMA_TESTING_MODE)
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_test PRIVATE AMA_USE_NATIVE_PQC)
+    endif()
+
+    if(WIN32)
+        target_link_libraries(ama_cryptography_test PRIVATE bcrypt)
     endif()
 
     add_subdirectory(tests/c)
