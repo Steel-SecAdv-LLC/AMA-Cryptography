@@ -59,6 +59,7 @@
   /* Pre-C11 fallback: volatile provides compiler ordering but not hardware
    * fence guarantees. Acceptable on x86 (TSO) but not on ARM/POWER. */
   #if defined(__arm__) || defined(__aarch64__) || defined(__ARM_ARCH) || \
+      defined(_M_ARM) || defined(_M_ARM64) || \
       defined(__PPC__) || defined(__ppc__) || defined(__powerpc__) || defined(__POWERPC__)
     #error "Pre-C11 volatile-based atomics have no memory fence on ARM/AArch64/POWER. Use a C11 compiler with stdatomic.h support."
   #endif
