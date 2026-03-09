@@ -144,6 +144,7 @@ if(AMA_BUILD_STATIC)
         OUTPUT_NAME "ama_cryptography_static"
         PUBLIC_HEADER "include/ama_cryptography.h"
     )
+    target_compile_definitions(ama_cryptography_static PRIVATE AMA_BUILDING_STATIC)
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_static PRIVATE AMA_USE_NATIVE_PQC)
     endif()

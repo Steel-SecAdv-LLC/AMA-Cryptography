@@ -34,10 +34,16 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 
-/* DLL export/import macro for Windows */
+/* DLL export/import macro for Windows.
+ *
+ * When compiling the library itself (shared or static), AMA_API is either
+ * __declspec(dllexport) or empty.  Only external consumers of the shared
+ * DLL get __declspec(dllimport). */
 #if defined(_WIN32) || defined(_WIN64)
   #ifdef AMA_BUILDING_SHARED
     #define AMA_API __declspec(dllexport)
+  #elif defined(AMA_BUILDING_STATIC) || defined(AMA_TESTING_MODE)
+    #define AMA_API  /* static library or test build — no dllimport */
   #else
     #define AMA_API __declspec(dllimport)
   #endif
