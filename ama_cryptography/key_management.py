@@ -575,15 +575,12 @@ class SecureKeyStorage:
                     parallelism=self.ARGON2_PARALLELISM,
                     out_len=self.KDF_KEY_BYTES,
                 ))
-            except (ImportError, RuntimeError):
-                # Argon2id unavailable at runtime — fall back to PBKDF2
-                self.encryption_key = bytearray(hashlib.pbkdf2_hmac(
-                    "sha256",
-                    master_password.encode("utf-8"),
-                    self.salt,
-                    self.KDF_ITERATIONS,
-                    self.KDF_KEY_BYTES,
-                ))
+            except (ImportError, RuntimeError) as exc:
+                raise RuntimeError(
+                    "Argon2id native library required to open this key store "
+                    "(written with KDF version 3). Rebuild: "
+                    "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+                ) from exc
         else:
             self.encryption_key = bytearray(hashlib.pbkdf2_hmac(
                 "sha256",
