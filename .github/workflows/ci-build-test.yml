@@ -171,7 +171,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install "black==24.10.0" "flake8>=7.0,<8" "mypy>=1.9,<2" "isort>=5.13,<6"
+          pip install "black==25.11.0" "flake8>=7.0,<8" "mypy>=1.9,<2" "isort>=5.13,<6"
 
       - name: Check formatting (black)
         run: black --check --diff ama_cryptography/ tests/
