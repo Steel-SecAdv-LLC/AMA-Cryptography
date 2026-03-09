@@ -62,7 +62,7 @@ try:
 
     _HAS_NUMPY = True
 except ImportError:
-    np = None
+    np = None  # type: ignore[assignment]  # numpy is optional; None sentinel when unavailable
     _HAS_NUMPY = False
 
 
