@@ -917,8 +917,8 @@ static void secp256k1_jac_add(secp256k1_jac *r, const secp256k1_jac *p, const se
      * If h_is_zero && s_is_zero: use doubled
      * If h_is_zero && !s_is_zero: use infinity (P = -Q)
      * Otherwise: use out */
-    mask_h = -(uint64_t)h_is_zero;  /* all-ones if H==0 */
-    mask_s = -(uint64_t)s_is_zero;  /* all-ones if S==0 */
+    mask_h = (uint64_t)(0u - (uint64_t)h_is_zero);  /* all-ones if H==0; MSVC C4146-safe */
+    mask_s = (uint64_t)(0u - (uint64_t)s_is_zero);  /* all-ones if S==0; MSVC C4146-safe */
 
     /* When H==0 && S==0: select doubled; when H==0 && S!=0: select infinity */
     {
@@ -947,8 +947,8 @@ static void secp256k1_jac_add(secp256k1_jac *r, const secp256k1_jac *p, const se
 
     /* Handle infinity inputs: if P is infinity, result = Q; if Q is infinity, result = P */
     {
-        uint64_t mask_p = -(uint64_t)p_inf;
-        uint64_t mask_q = -(uint64_t)q_inf;
+        uint64_t mask_p = (uint64_t)(0u - (uint64_t)p_inf);  /* MSVC C4146-safe */
+        uint64_t mask_q = (uint64_t)(0u - (uint64_t)q_inf);  /* MSVC C4146-safe */
         int k;
         for (k = 0; k < SECP256K1_FE_LIMBS; k++) {
             out.X.v[k] = (q->X.v[k] & mask_p) | (out.X.v[k] & ~mask_p);
