@@ -631,7 +631,7 @@ class SecureKeyStorage:
 
         # Derive new key — prefer Argon2id, fall back to PBKDF2
         try:
-            from ama_cryptography.pqc_backends import native_argon2id, _ARGON2_NATIVE_AVAILABLE
+            from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE, native_argon2id
 
             use_argon2 = _ARGON2_NATIVE_AVAILABLE
         except ImportError:

@@ -14,11 +14,11 @@ Tests for Phase 2 cryptographic primitives:
 import pytest
 
 from ama_cryptography.pqc_backends import (
-    _SECP256K1_NATIVE_AVAILABLE,
-    _X25519_NATIVE_AVAILABLE,
     _ARGON2_NATIVE_AVAILABLE,
     _CHACHA20_POLY1305_NATIVE_AVAILABLE,
     _DETERMINISTIC_KEYGEN_AVAILABLE,
+    _SECP256K1_NATIVE_AVAILABLE,
+    _X25519_NATIVE_AVAILABLE,
 )
 
 # Skip entire module if native library is not built
@@ -128,10 +128,7 @@ class TestX25519:
 
     def test_key_exchange_symmetric(self):
         """A and B compute the same shared secret."""
-        from ama_cryptography.pqc_backends import (
-            native_x25519_keypair,
-            native_x25519_key_exchange,
-        )
+        from ama_cryptography.pqc_backends import native_x25519_key_exchange, native_x25519_keypair
 
         pk_a, sk_a = native_x25519_keypair()
         pk_b, sk_b = native_x25519_keypair()
@@ -144,10 +141,7 @@ class TestX25519:
 
     def test_key_exchange_different_peers(self):
         """Different peers produce different shared secrets."""
-        from ama_cryptography.pqc_backends import (
-            native_x25519_keypair,
-            native_x25519_key_exchange,
-        )
+        from ama_cryptography.pqc_backends import native_x25519_key_exchange, native_x25519_keypair
 
         pk_a, sk_a = native_x25519_keypair()
         pk_b, _ = native_x25519_keypair()
@@ -246,8 +240,8 @@ class TestChaCha20Poly1305:
     def test_encrypt_decrypt_roundtrip(self):
         """Encrypt then decrypt recovers original plaintext."""
         from ama_cryptography.pqc_backends import (
-            native_chacha20poly1305_encrypt,
             native_chacha20poly1305_decrypt,
+            native_chacha20poly1305_encrypt,
         )
 
         key = b"\x01" * 32
@@ -265,8 +259,8 @@ class TestChaCha20Poly1305:
     def test_wrong_key_fails(self):
         """Decryption with wrong key fails."""
         from ama_cryptography.pqc_backends import (
-            native_chacha20poly1305_encrypt,
             native_chacha20poly1305_decrypt,
+            native_chacha20poly1305_encrypt,
         )
 
         key = b"\x01" * 32
@@ -279,8 +273,8 @@ class TestChaCha20Poly1305:
     def test_wrong_tag_fails(self):
         """Decryption with corrupted tag fails."""
         from ama_cryptography.pqc_backends import (
-            native_chacha20poly1305_encrypt,
             native_chacha20poly1305_decrypt,
+            native_chacha20poly1305_encrypt,
         )
 
         key = b"\x01" * 32
@@ -295,8 +289,8 @@ class TestChaCha20Poly1305:
     def test_wrong_aad_fails(self):
         """Decryption with wrong AAD fails."""
         from ama_cryptography.pqc_backends import (
-            native_chacha20poly1305_encrypt,
             native_chacha20poly1305_decrypt,
+            native_chacha20poly1305_encrypt,
         )
 
         key = b"\x01" * 32
@@ -309,8 +303,8 @@ class TestChaCha20Poly1305:
     def test_empty_plaintext(self):
         """Encrypt/decrypt with empty plaintext (AAD-only authentication)."""
         from ama_cryptography.pqc_backends import (
-            native_chacha20poly1305_encrypt,
             native_chacha20poly1305_decrypt,
+            native_chacha20poly1305_encrypt,
         )
 
         key = b"\x01" * 32
@@ -325,8 +319,8 @@ class TestChaCha20Poly1305:
     def test_rfc8439_test_vector(self):
         """RFC 8439 Section 2.8.2 AEAD test vector."""
         from ama_cryptography.pqc_backends import (
-            native_chacha20poly1305_encrypt,
             native_chacha20poly1305_decrypt,
+            native_chacha20poly1305_encrypt,
         )
 
         key = bytes.fromhex("808182838485868788898a8b8c8d8e8f" "909192939495969798999a9b9c9d9e9f")
@@ -405,9 +399,9 @@ class TestDeterministicKeygen:
     def test_kyber_encaps_decaps_with_deterministic_keys(self):
         """Deterministically generated Kyber keys work for encaps/decaps."""
         from ama_cryptography.pqc_backends import (
-            native_kyber_keypair_from_seed,
-            kyber_encapsulate,
             kyber_decapsulate,
+            kyber_encapsulate,
+            native_kyber_keypair_from_seed,
         )
 
         d = b"\xdd" * 32
@@ -421,9 +415,9 @@ class TestDeterministicKeygen:
     def test_dilithium_sign_verify_with_deterministic_keys(self):
         """Deterministically generated Dilithium keys work for sign/verify."""
         from ama_cryptography.pqc_backends import (
-            native_dilithium_keypair_from_seed,
             dilithium_sign,
             dilithium_verify,
+            native_dilithium_keypair_from_seed,
         )
 
         xi = b"\xff" * 32
