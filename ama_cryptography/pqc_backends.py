@@ -1636,6 +1636,11 @@ def native_x25519_key_exchange(our_secret_key: bytes, their_public_key: bytes) -
     if _native_lib is None or not _X25519_NATIVE_AVAILABLE:
         raise RuntimeError("X25519 native backend not available. " + _INSTALL_HINT)
 
+    if len(our_secret_key) != 32:
+        raise ValueError(f"X25519 secret key must be 32 bytes, got {len(our_secret_key)}")
+    if len(their_public_key) != 32:
+        raise ValueError(f"X25519 public key must be 32 bytes, got {len(their_public_key)}")
+
     ss_buf = ctypes.create_string_buffer(X25519_KEY_BYTES)
     rc = _native_lib.ama_x25519_key_exchange(ss_buf, our_secret_key, their_public_key)
     if rc != 0:
@@ -1715,16 +1720,26 @@ def native_chacha20poly1305_encrypt(
     if _native_lib is None or not _CHACHA20_POLY1305_NATIVE_AVAILABLE:
         raise RuntimeError("ChaCha20-Poly1305 native backend not available. " + _INSTALL_HINT)
 
-    ct_buf = ctypes.create_string_buffer(len(plaintext))
+    if len(key) != 32:
+        raise ValueError(f"ChaCha20-Poly1305 key must be 32 bytes, got {len(key)}")
+    if len(nonce) != 12:
+        raise ValueError(f"ChaCha20-Poly1305 nonce must be 12 bytes, got {len(nonce)}")
+
+    pt_len = len(plaintext)
+    pt_ptr = plaintext if pt_len > 0 else None
+    aad_ptr = aad if aad and len(aad) > 0 else None
+    aad_len = len(aad) if aad else 0
+
+    ct_buf = ctypes.create_string_buffer(pt_len)
     tag_buf = ctypes.create_string_buffer(POLY1305_TAG_BYTES)
 
     rc = _native_lib.ama_chacha20poly1305_encrypt(
         key,
         nonce,
-        plaintext,
-        len(plaintext),
-        aad if aad else None,
-        len(aad),
+        pt_ptr,
+        pt_len,
+        aad_ptr,
+        aad_len,
         ct_buf,
         tag_buf,
     )
@@ -1753,15 +1768,27 @@ def native_chacha20poly1305_decrypt(
     if _native_lib is None or not _CHACHA20_POLY1305_NATIVE_AVAILABLE:
         raise RuntimeError("ChaCha20-Poly1305 native backend not available. " + _INSTALL_HINT)
 
-    pt_buf = ctypes.create_string_buffer(len(ciphertext))
+    if len(key) != 32:
+        raise ValueError(f"ChaCha20-Poly1305 key must be 32 bytes, got {len(key)}")
+    if len(nonce) != 12:
+        raise ValueError(f"ChaCha20-Poly1305 nonce must be 12 bytes, got {len(nonce)}")
+    if len(tag) != 16:
+        raise ValueError(f"ChaCha20-Poly1305 tag must be 16 bytes, got {len(tag)}")
+
+    ct_len = len(ciphertext)
+    ct_ptr = ciphertext if ct_len > 0 else None
+    aad_ptr = aad if aad and len(aad) > 0 else None
+    aad_len = len(aad) if aad else 0
+
+    pt_buf = ctypes.create_string_buffer(ct_len)
 
     rc = _native_lib.ama_chacha20poly1305_decrypt(
         key,
         nonce,
-        ciphertext,
-        len(ciphertext),
-        aad if aad else None,
-        len(aad),
+        ct_ptr,
+        ct_len,
+        aad_ptr,
+        aad_len,
         tag,
         pt_buf,
     )
@@ -1790,6 +1817,11 @@ def native_kyber_keypair_from_seed(d: bytes, z: bytes) -> tuple:
     if _native_lib is None or not _DETERMINISTIC_KEYGEN_AVAILABLE:
         raise RuntimeError("Deterministic keygen not available. " + _INSTALL_HINT)
 
+    if len(d) != 32:
+        raise ValueError(f"Kyber seed d must be 32 bytes, got {len(d)}")
+    if len(z) != 32:
+        raise ValueError(f"Kyber seed z must be 32 bytes, got {len(z)}")
+
     pk_buf = ctypes.create_string_buffer(KYBER_PUBLIC_KEY_BYTES)
     sk_buf = ctypes.create_string_buffer(KYBER_SECRET_KEY_BYTES)
 
@@ -1812,6 +1844,9 @@ def native_dilithium_keypair_from_seed(xi: bytes) -> tuple:
     """
     if _native_lib is None or not _DETERMINISTIC_KEYGEN_AVAILABLE:
         raise RuntimeError("Deterministic keygen not available. " + _INSTALL_HINT)
+
+    if len(xi) != 32:
+        raise ValueError(f"Dilithium seed xi must be 32 bytes, got {len(xi)}")
 
     pk_buf = ctypes.create_string_buffer(DILITHIUM_PUBLIC_KEY_BYTES)
     sk_buf = ctypes.create_string_buffer(DILITHIUM_SECRET_KEY_BYTES)

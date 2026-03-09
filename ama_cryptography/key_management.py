@@ -566,6 +566,30 @@ class SecureKeyStorage:
 
         # Derive key using the appropriate algorithm
         if version >= 3:
+            # Read stored Argon2id parameters so existing keystores remain
+            # decryptable even if class-level defaults change later.
+            t_cost = self.ARGON2_T_COST
+            m_cost = self.ARGON2_M_COST
+            parallelism = self.ARGON2_PARALLELISM
+            if self.metadata_file.exists():
+                try:
+                    with open(self.metadata_file, "r") as _f:
+                        _meta = json.load(_f)
+                    algorithm = _meta.get("algorithm")
+                    if algorithm is not None and algorithm != "Argon2id":
+                        raise RuntimeError(
+                            f"Unsupported KDF algorithm for v{version} store: {algorithm}"
+                        )
+                    t_cost = int(_meta.get("t_cost", t_cost))
+                    m_cost = int(_meta.get("m_cost", m_cost))
+                    parallelism = int(_meta.get("parallelism", parallelism))
+                except (OSError, ValueError, TypeError, KeyError) as _exc:
+                    logger.warning(
+                        "Could not read Argon2id params from %s, using defaults: %s",
+                        self.metadata_file,
+                        _exc,
+                    )
+
             try:
                 from ama_cryptography.pqc_backends import native_argon2id
 
@@ -573,9 +597,9 @@ class SecureKeyStorage:
                     native_argon2id(
                         master_password.encode("utf-8"),
                         self.salt,
-                        t_cost=self.ARGON2_T_COST,
-                        m_cost=self.ARGON2_M_COST,
-                        parallelism=self.ARGON2_PARALLELISM,
+                        t_cost=t_cost,
+                        m_cost=m_cost,
+                        parallelism=parallelism,
                         out_len=self.KDF_KEY_BYTES,
                     )
                 )
