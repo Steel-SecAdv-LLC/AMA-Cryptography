@@ -16,6 +16,7 @@ Date: 2026-03-08
 Version: 2.0
 """
 
+import ama_cryptography.secure_memory
 import importlib
 import logging
 import warnings
@@ -121,8 +122,6 @@ class TestSecureMemoryFallbackBehavior:
 
     def test_mlock_without_nacl_returns_false(self):
         """secure_mlock returns False when pynacl unavailable."""
-        import ama_cryptography.secure_memory
-
         with patch("ama_cryptography.secure_memory._HAS_NACL", False):
             # Need to reload to pick up the patched value
             importlib.reload(ama_cryptography.secure_memory)
@@ -139,8 +138,6 @@ class TestSecureMemoryFallbackBehavior:
 
     def test_munlock_without_nacl_returns_false(self):
         """secure_munlock returns False when pynacl unavailable."""
-        import ama_cryptography.secure_memory
-
         with patch("ama_cryptography.secure_memory._HAS_NACL", False):
             importlib.reload(ama_cryptography.secure_memory)
 

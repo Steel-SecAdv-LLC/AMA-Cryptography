@@ -75,12 +75,10 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, cast
 
-try:
+if TYPE_CHECKING:
     from ama_cryptography_monitor import AmaCryptographyMonitor
-except ImportError:
-    AmaCryptographyMonitor = None  # type: ignore[assignment,misc]
 
 # Cryptographic dependencies — native C backend (zero external deps)
 from ama_cryptography.pqc_backends import (

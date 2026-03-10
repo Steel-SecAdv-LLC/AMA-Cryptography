@@ -39,6 +39,7 @@ AI Co-Architects:
 
 import ast
 
+import ama_cryptography_monitor
 import numpy as np
 import pytest
 
@@ -428,8 +429,6 @@ class TestRecursionPatternMonitor:
         false positive anomalies. The test verifies that perfectly regular
         intervals (0.01s apart) produce zero anomalies.
         """
-        import ama_cryptography_monitor
-
         monitor = RecursionPatternMonitor()
 
         # Create deterministic timestamps: exactly 0.01s apart
@@ -461,8 +460,6 @@ class TestRecursionPatternMonitor:
         Uses deterministic timestamps to reliably trigger frequency anomaly
         detection. Creates 15 regular intervals followed by one large gap.
         """
-        import ama_cryptography_monitor
-
         monitor = RecursionPatternMonitor()
 
         # Create deterministic timestamps: 15 regular intervals, then one large gap
@@ -495,8 +492,6 @@ class TestRecursionPatternMonitor:
         Uses deterministic timestamps to ensure consistent feature extraction
         across all CI environments.
         """
-        import ama_cryptography_monitor
-
         monitor = RecursionPatternMonitor(max_depth=3)
 
         # Create deterministic timestamps: exactly 0.01s apart
@@ -529,8 +524,6 @@ class TestRecursionPatternMonitor:
         Uses deterministic timestamps to ensure consistent behavior across
         all CI environments.
         """
-        import ama_cryptography_monitor
-
         monitor = RecursionPatternMonitor()
 
         # Create deterministic timestamps: exactly 0.01s apart
@@ -755,8 +748,6 @@ class TestAmaCryptographyMonitor:
         Uses deterministic timestamps to ensure consistent behavior across
         all CI environments.
         """
-        import ama_cryptography_monitor
-
         monitor = AmaCryptographyMonitor(enabled=True)
 
         # Create deterministic timestamps
@@ -789,8 +780,6 @@ class TestAmaCryptographyMonitor:
         Uses deterministic timestamps to ensure consistent behavior across
         all CI environments.
         """
-        import ama_cryptography_monitor
-
         monitor = AmaCryptographyMonitor(enabled=True)
 
         # Create deterministic timestamps

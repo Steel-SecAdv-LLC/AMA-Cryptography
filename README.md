@@ -649,7 +649,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*798+ tests across 28 files covering core crypto and NIST KATs, PQC backends, key management, adaptive posture, hybrid combiner, memory security, and performance/monitoring.*
+*798+ tests across 29 files covering core crypto and NIST KATs, PQC backends, key management, adaptive posture, hybrid combiner, memory security, and performance/monitoring.*
 
 </details>
 
@@ -663,7 +663,7 @@ GitHub Actions automatically tests:
 | C library | GCC, Clang on Ubuntu/macOS |
 | Python package | Python 3.8-3.11 on Linux |
 | Code quality | black, flake8, mypy |
-| Security scanning | pip-audit, bandit |
+| Security scanning | pip-audit, bandit, CodeQL static analysis |
 | Docker builds | Ubuntu + Alpine images |
 
 ### CI Matrix
@@ -1149,7 +1149,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see BENCHMARKS.md)
-- **Rigorous testing:** 798+ tests across 28 test files with CI checks including security scanning
+- **Rigorous testing:** 798+ tests across 29 test files with CI checks including security scanning
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims
@@ -1191,6 +1191,6 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 </div>
 
-*Last updated: 2026-03-08*
+*Last updated: 2026-03-10*
 
 </div>
