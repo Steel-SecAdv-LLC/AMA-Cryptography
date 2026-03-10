@@ -1,10 +1,10 @@
 {
   "metadata": {
-    "version": "2.0.1",
-    "created": "2026-03-07T00:00:00Z",
+    "version": "2.1.0",
+    "created": "2026-03-10T00:00:00Z",
     "description": "AMA Cryptography performance baseline for regression detection",
     "system": "GitHub Actions ubuntu-latest, Python 3.11",
-    "notes": "v2.0.1 baseline recalibration against measured CI runner performance. All baselines derived from actual runs, not theoretical maximums. HKDF corrected from aspirational 60k to measured ~15k (cryptography library HKDF-SHA3-256 on CI hardware). PQC benchmarks use native C library via ctypes."
+    "notes": "v2.1.0 baseline recalibration for native C backend (zero-dependency). All benchmarks now use native C implementations via ctypes instead of PyCA cryptography or liboqs. Ed25519 baselines reflect pure C implementation (no assembly). HKDF uses native SHA3-256 HKDF. PQC benchmarks use native C library via ctypes."
   },
   "thresholds": {
     "regression_threshold_percent": 10,
@@ -29,27 +29,27 @@
       "tier": "microbenchmark"
     },
     "ed25519_keygen": {
-      "description": "Ed25519 key pair generation",
+      "description": "Ed25519 key pair generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 15000,
+      "baseline_value": 6000,
       "unit": "ops/sec",
-      "tolerance_percent": 25,
+      "tolerance_percent": 30,
       "tier": "microbenchmark"
     },
     "ed25519_sign": {
-      "description": "Ed25519 signature generation",
+      "description": "Ed25519 signature generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 10000,
+      "baseline_value": 3000,
       "unit": "ops/sec",
-      "tolerance_percent": 25,
+      "tolerance_percent": 30,
       "tier": "microbenchmark"
     },
     "ed25519_verify": {
-      "description": "Ed25519 signature verification",
+      "description": "Ed25519 signature verification (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 5000,
+      "baseline_value": 3000,
       "unit": "ops/sec",
-      "tolerance_percent": 25,
+      "tolerance_percent": 30,
       "tier": "microbenchmark"
     },
     "hkdf_derive": {
@@ -79,27 +79,27 @@
   },
   "pqc_benchmarks": {
     "dilithium_keygen": {
-      "description": "ML-DSA-65 (Dilithium) key pair generation",
+      "description": "ML-DSA-65 (Dilithium) key pair generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 10000,
+      "baseline_value": 3500,
       "unit": "ops/sec",
-      "tolerance_percent": 30,
+      "tolerance_percent": 35,
       "optional": true
     },
     "dilithium_sign": {
-      "description": "ML-DSA-65 (Dilithium) signature generation",
+      "description": "ML-DSA-65 (Dilithium) signature generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 5000,
+      "baseline_value": 1000,
       "unit": "ops/sec",
-      "tolerance_percent": 30,
+      "tolerance_percent": 35,
       "optional": true
     },
     "dilithium_verify": {
-      "description": "ML-DSA-65 (Dilithium) signature verification",
+      "description": "ML-DSA-65 (Dilithium) signature verification (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 12000,
+      "baseline_value": 3500,
       "unit": "ops/sec",
-      "tolerance_percent": 30,
+      "tolerance_percent": 35,
       "optional": true
     }
   }

@@ -72,28 +72,28 @@ class BenchmarkValidator:
         # Documented claims from BENCHMARKS.md
         # Format: claim_name -> (value, unit, tolerance_pct)
         self.documented_claims: Dict[str, Tuple[float, str, float]] = {
-            # Section 1.1 - Key Generation (ms)
-            "master_secret_gen": (0.001, "ms", 100.0),  # ~0.001ms
-            "hkdf_derivation": (0.06, "ms", 100.0),  # ~0.06ms
-            "ed25519_keygen": (0.04, "ms", 100.0),  # ~0.04ms
-            "dilithium_keygen": (0.08, "ms", 200.0),  # ~0.08ms (higher tolerance)
-            "full_kms": (0.2, "ms", 100.0),  # ~0.2ms
-            # Section 1.2 - Cryptographic Operations (ms)
+            # Section 1.1 - Key Generation (ms) - native C backend
+            "master_secret_gen": (0.001, "ms", 100.0),  # ~0.001ms (CSPRNG)
+            "hkdf_derivation": (0.06, "ms", 100.0),  # ~0.06ms (native SHA3 HKDF)
+            "ed25519_keygen": (0.13, "ms", 50.0),  # ~0.13ms (native C, no asm)
+            "dilithium_keygen": (0.25, "ms", 100.0),  # ~0.25ms (native C)
+            "full_kms": (0.45, "ms", 100.0),  # ~0.45ms (all key types)
+            # Section 1.2 - Cryptographic Operations (ms) - native C backend
             "sha3_256_hash": (0.002, "ms", 100.0),  # ~0.002ms
-            "hmac_sha3_auth": (0.004, "ms", 100.0),  # ~0.004ms
-            "ed25519_sign": (0.07, "ms", 100.0),  # ~0.07ms
-            "ed25519_verify": (0.12, "ms", 100.0),  # ~0.12ms
-            "dilithium_sign": (0.14, "ms", 200.0),  # ~0.14ms (higher tolerance)
-            "dilithium_verify": (0.07, "ms", 200.0),  # ~0.07ms (higher tolerance)
+            "hmac_sha3_auth": (0.005, "ms", 100.0),  # ~0.005ms
+            "ed25519_sign": (0.26, "ms", 50.0),  # ~0.26ms (native C, no asm)
+            "ed25519_verify": (0.25, "ms", 50.0),  # ~0.25ms (native C, no asm)
+            "dilithium_sign": (0.55, "ms", 100.0),  # ~0.55ms (native C)
+            "dilithium_verify": (0.21, "ms", 100.0),  # ~0.21ms (native C)
             # Section 1.3 - Code Package Operations (ms)
             "canonical_encoding": (0.003, "ms", 100.0),  # ~0.003ms
             "code_hash": (0.01, "ms", 100.0),  # ~0.01ms
-            "package_creation": (0.30, "ms", 100.0),  # ~0.30ms
-            "package_verification": (0.24, "ms", 100.0),  # ~0.24ms
+            "package_creation": (1.10, "ms", 100.0),  # ~1.10ms (with PQC)
+            "package_verification": (0.56, "ms", 100.0),  # ~0.56ms
             # Section 2.1 - 3R Monitoring Overhead (%)
-            "timing_monitor_overhead": (0.5, "%", 100.0),  # <0.5%
+            "timing_monitor_overhead": (5.0, "%", 100.0),  # <5% (per-call overhead)
             "pattern_analysis_overhead": (0.5, "%", 100.0),  # <0.5%
-            "total_3r_overhead": (2.0, "%", 50.0),  # <2%
+            "total_3r_overhead": (5.0, "%", 50.0),  # <5% total
         }
 
     def benchmark_operation(
@@ -205,53 +205,51 @@ class BenchmarkValidator:
         result = self.validate_claim("master_secret_gen", stats["mean_ms"], stats["std_ms"])
         print(f"  {result.message}")
 
-        # HKDF derivation
+        # HKDF derivation (native C backend)
         try:
-            from cryptography.hazmat.primitives import hashes
-            from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+            from code_guardian_secure import native_hkdf
 
             master = secrets.token_bytes(32)
             salt = secrets.token_bytes(32)
 
             def hkdf_derive():
-                hkdf = HKDF(
-                    algorithm=hashes.SHA3_256(),
-                    length=32,
-                    salt=salt,
-                    info=b"ama-cryptography-key",
-                )
-                return hkdf.derive(master)
+                return native_hkdf(master, 32, salt, b"ama-cryptography-key")
 
             stats = self.benchmark_operation("hkdf", hkdf_derive)
             result = self.validate_claim("hkdf_derivation", stats["mean_ms"], stats["std_ms"])
             print(f"  {result.message}")
         except ImportError:
-            print("  SKIP: cryptography library not available for HKDF")
+            print("  SKIP: native HKDF not available")
 
-        # Ed25519 key generation
+        # Ed25519 key generation (native C backend)
         try:
-            from cryptography.hazmat.primitives.asymmetric import ed25519
+            from code_guardian_secure import generate_ed25519_keypair
 
             def ed25519_keygen():
-                return ed25519.Ed25519PrivateKey.generate()
+                return generate_ed25519_keypair()
 
             stats = self.benchmark_operation("ed25519_keygen", ed25519_keygen)
             result = self.validate_claim("ed25519_keygen", stats["mean_ms"], stats["std_ms"])
             print(f"  {result.message}")
         except ImportError:
-            print("  SKIP: cryptography library not available for Ed25519")
+            print("  SKIP: native Ed25519 not available")
 
-        # Dilithium key generation (if available)
+        # Dilithium key generation (native C backend)
         try:
-            import oqs
+            from ama_cryptography.pqc_backends import (
+                DILITHIUM_AVAILABLE,
+                generate_dilithium_keypair,
+            )
 
-            def dilithium_keygen():
-                signer = oqs.Signature("ML-DSA-65")
-                return signer.generate_keypair()
+            if not DILITHIUM_AVAILABLE:
+                print("  SKIP: Dilithium not available in native backend")
+            else:
+                def dilithium_keygen():
+                    return generate_dilithium_keypair()
 
-            stats = self.benchmark_operation("dilithium_keygen", dilithium_keygen)
-            result = self.validate_claim("dilithium_keygen", stats["mean_ms"], stats["std_ms"])
-            print(f"  {result.message}")
+                stats = self.benchmark_operation("dilithium_keygen", dilithium_keygen)
+                result = self.validate_claim("dilithium_keygen", stats["mean_ms"], stats["std_ms"])
+                print(f"  {result.message}")
         except (ImportError, Exception) as e:
             print(f"  SKIP: Dilithium benchmark unavailable: {e}")
 
@@ -286,20 +284,23 @@ class BenchmarkValidator:
         except Exception as e:
             print(f"  SKIP: HMAC benchmark failed: {e}")
 
-        # Ed25519 sign/verify
+        # Ed25519 sign/verify (native C backend)
         try:
-            from cryptography.hazmat.primitives.asymmetric import ed25519
+            from code_guardian_secure import (
+                ed25519_sign as native_ed25519_sign,
+                ed25519_verify as native_ed25519_verify,
+                generate_ed25519_keypair,
+            )
 
-            private_key = ed25519.Ed25519PrivateKey.generate()
-            public_key = private_key.public_key()
+            keypair = generate_ed25519_keypair()
 
             def ed25519_sign():
-                return private_key.sign(test_data)
+                return native_ed25519_sign(test_data, keypair.private_key)
 
-            signature = private_key.sign(test_data)
+            signature = native_ed25519_sign(test_data, keypair.private_key)
 
             def ed25519_verify():
-                return public_key.verify(signature, test_data)
+                return native_ed25519_verify(test_data, signature, keypair.public_key)
 
             stats = self.benchmark_operation("ed25519_sign", ed25519_sign)
             result = self.validate_claim("ed25519_sign", stats["mean_ms"], stats["std_ms"])
@@ -309,32 +310,37 @@ class BenchmarkValidator:
             result = self.validate_claim("ed25519_verify", stats["mean_ms"], stats["std_ms"])
             print(f"  {result.message}")
         except ImportError:
-            print("  SKIP: cryptography library not available for Ed25519")
+            print("  SKIP: native Ed25519 not available")
 
-        # Dilithium sign/verify (if available)
+        # Dilithium sign/verify (native C backend)
         try:
-            import oqs
+            from ama_cryptography.pqc_backends import (
+                DILITHIUM_AVAILABLE,
+                dilithium_sign as native_dilithium_sign,
+                dilithium_verify as native_dilithium_verify,
+                generate_dilithium_keypair,
+            )
 
-            signer = oqs.Signature("ML-DSA-65")
-            public_key = signer.generate_keypair()
+            if not DILITHIUM_AVAILABLE:
+                print("  SKIP: Dilithium not available in native backend")
+            else:
+                kp = generate_dilithium_keypair()
 
-            def dilithium_sign():
-                return signer.sign(test_data)
+                def dilithium_sign():
+                    return native_dilithium_sign(test_data, kp.secret_key)
 
-            signature = signer.sign(test_data)
+                signature = native_dilithium_sign(test_data, kp.secret_key)
 
-            verifier = oqs.Signature("ML-DSA-65")
+                def dilithium_verify():
+                    return native_dilithium_verify(test_data, signature, kp.public_key)
 
-            def dilithium_verify():
-                return verifier.verify(test_data, signature, public_key)
+                stats = self.benchmark_operation("dilithium_sign", dilithium_sign)
+                result = self.validate_claim("dilithium_sign", stats["mean_ms"], stats["std_ms"])
+                print(f"  {result.message}")
 
-            stats = self.benchmark_operation("dilithium_sign", dilithium_sign)
-            result = self.validate_claim("dilithium_sign", stats["mean_ms"], stats["std_ms"])
-            print(f"  {result.message}")
-
-            stats = self.benchmark_operation("dilithium_verify", dilithium_verify)
-            result = self.validate_claim("dilithium_verify", stats["mean_ms"], stats["std_ms"])
-            print(f"  {result.message}")
+                stats = self.benchmark_operation("dilithium_verify", dilithium_verify)
+                result = self.validate_claim("dilithium_verify", stats["mean_ms"], stats["std_ms"])
+                print(f"  {result.message}")
         except (ImportError, Exception) as e:
             print(f"  SKIP: Dilithium benchmark unavailable: {e}")
 

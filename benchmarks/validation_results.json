@@ -1,0 +1,138 @@
+{
+  "timestamp": "2026-03-10T05:13:14.213333",
+  "iterations": 1000,
+  "warmup": 100,
+  "system_info": {
+    "python_version": "3.11.14",
+    "platform": "Linux-6.18.5-x86_64-with-glibc2.39",
+    "processor": "x86_64"
+  },
+  "results": [
+    {
+      "claim_name": "master_secret_gen",
+      "documented_value": 0.001,
+      "measured_value": 0.0005588609997175809,
+      "unit": "ms",
+      "tolerance_pct": 100.0,
+      "passed": true,
+      "message": "PASS: 0.0006ms <= 0.0020ms (claimed: 0.001ms)",
+      "iterations": 1000,
+      "std_dev": 0.0006459270218248233
+    },
+    {
+      "claim_name": "hkdf_derivation",
+      "documented_value": 0.06,
+      "measured_value": 0.008834726998202314,
+      "unit": "ms",
+      "tolerance_pct": 100.0,
+      "passed": true,
+      "message": "PASS: 0.0088ms <= 0.1200ms (claimed: 0.06ms)",
+      "iterations": 1000,
+      "std_dev": 0.0033798186969751353
+    },
+    {
+      "claim_name": "ed25519_keygen",
+      "documented_value": 0.13,
+      "measured_value": 0.11489836099781314,
+      "unit": "ms",
+      "tolerance_pct": 50.0,
+      "passed": true,
+      "message": "PASS: 0.1149ms <= 0.1950ms (claimed: 0.13ms)",
+      "iterations": 1000,
+      "std_dev": 0.010826480657380703
+    },
+    {
+      "claim_name": "dilithium_keygen",
+      "documented_value": 0.25,
+      "measured_value": 0.22849277200054985,
+      "unit": "ms",
+      "tolerance_pct": 100.0,
+      "passed": true,
+      "message": "PASS: 0.2285ms <= 0.5000ms (claimed: 0.25ms)",
+      "iterations": 1000,
+      "std_dev": 0.025416404590081883
+    },
+    {
+      "claim_name": "sha3_256_hash",
+      "documented_value": 0.002,
+      "measured_value": 0.002066030998776114,
+      "unit": "ms",
+      "tolerance_pct": 100.0,
+      "passed": true,
+      "message": "PASS: 0.0021ms <= 0.0040ms (claimed: 0.002ms)",
+      "iterations": 1000,
+      "std_dev": 0.0007415673327873053
+    },
+    {
+      "claim_name": "hmac_sha3_auth",
+      "documented_value": 0.005,
+      "measured_value": 0.004803917998629004,
+      "unit": "ms",
+      "tolerance_pct": 100.0,
+      "passed": true,
+      "message": "PASS: 0.0048ms <= 0.0100ms (claimed: 0.005ms)",
+      "iterations": 1000,
+      "std_dev": 0.003337358114960103
+    },
+    {
+      "claim_name": "ed25519_sign",
+      "documented_value": 0.26,
+      "measured_value": 0.23441099999615744,
+      "unit": "ms",
+      "tolerance_pct": 50.0,
+      "passed": true,
+      "message": "PASS: 0.2344ms <= 0.3900ms (claimed: 0.26ms)",
+      "iterations": 1000,
+      "std_dev": 0.013818232406019718
+    },
+    {
+      "claim_name": "ed25519_verify",
+      "documented_value": 0.25,
+      "measured_value": 0.24709612399738035,
+      "unit": "ms",
+      "tolerance_pct": 50.0,
+      "passed": true,
+      "message": "PASS: 0.2471ms <= 0.3750ms (claimed: 0.25ms)",
+      "iterations": 1000,
+      "std_dev": 0.012029662891256529
+    },
+    {
+      "claim_name": "dilithium_sign",
+      "documented_value": 0.55,
+      "measured_value": 0.3844153309993317,
+      "unit": "ms",
+      "tolerance_pct": 100.0,
+      "passed": true,
+      "message": "PASS: 0.3844ms <= 1.1000ms (claimed: 0.55ms)",
+      "iterations": 1000,
+      "std_dev": 0.024706715957617975
+    },
+    {
+      "claim_name": "dilithium_verify",
+      "documented_value": 0.21,
+      "measured_value": 0.20350839499826634,
+      "unit": "ms",
+      "tolerance_pct": 100.0,
+      "passed": true,
+      "message": "PASS: 0.2035ms <= 0.4200ms (claimed: 0.21ms)",
+      "iterations": 1000,
+      "std_dev": 0.01266293035105144
+    },
+    {
+      "claim_name": "timing_monitor_overhead",
+      "documented_value": 5.0,
+      "measured_value": 4.460049666742331,
+      "unit": "%",
+      "tolerance_pct": 100.0,
+      "passed": true,
+      "message": "PASS: 4.4600% <= 10.0000% (claimed: 5.0%)",
+      "iterations": 1000,
+      "std_dev": 0.0
+    }
+  ],
+  "summary": {
+    "total": 11,
+    "passed": 11,
+    "failed": 0
+  }
+}
