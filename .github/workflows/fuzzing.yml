@@ -1,0 +1,203 @@
+name: CI - Fuzzing (libFuzzer)
+
+on:
+  push:
+    branches: [ main, develop, 'claude/**' ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      fuzz_duration:
+        description: 'Fuzzing duration per target (seconds)'
+        required: false
+        default: '60'
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz-core:
+    name: Fuzz Core Primitives (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_sha3
+          - fuzz_ed25519
+          - fuzz_aes_gcm
+          - fuzz_hkdf
+          - fuzz_consttime
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang
+
+      - name: Build fuzz targets
+        run: |
+          cmake -B build-fuzz \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DAMA_BUILD_FUZZ=ON \
+            -DAMA_BUILD_TESTS=OFF \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_ENABLE_LTO=OFF \
+            -DAMA_USE_NATIVE_PQC=ON
+          cmake --build build-fuzz --target ${{ matrix.target }} -j$(nproc)
+
+      - name: Run fuzzer (${{ matrix.target }})
+        env:
+          FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || '30' }}
+        run: |
+          mkdir -p corpus/${{ matrix.target }}
+          mkdir -p artifacts/${{ matrix.target }}
+          echo "Fuzzing ${{ matrix.target }} for ${FUZZ_DURATION}s..."
+          ./build-fuzz/bin/${{ matrix.target }} \
+            -max_total_time=${FUZZ_DURATION} \
+            -max_len=4096 \
+            -artifact_prefix=artifacts/${{ matrix.target }}/ \
+            corpus/${{ matrix.target }}/
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-${{ matrix.target }}
+          path: artifacts/${{ matrix.target }}/
+          retention-days: 30
+
+  fuzz-pqc:
+    name: Fuzz PQC Primitives (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_dilithium
+          - fuzz_kyber
+          - fuzz_chacha20poly1305
+          - fuzz_x25519
+          - fuzz_argon2
+          - fuzz_secp256k1
+        # SPHINCS+ is too slow for CI fuzzing — run manually
+        # - fuzz_sphincs
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang
+
+      - name: Build fuzz targets
+        run: |
+          cmake -B build-fuzz \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DAMA_BUILD_FUZZ=ON \
+            -DAMA_BUILD_TESTS=OFF \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_ENABLE_LTO=OFF \
+            -DAMA_USE_NATIVE_PQC=ON
+          cmake --build build-fuzz --target ${{ matrix.target }} -j$(nproc)
+
+      - name: Run fuzzer (${{ matrix.target }})
+        env:
+          FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || '30' }}
+        run: |
+          mkdir -p corpus/${{ matrix.target }}
+          mkdir -p artifacts/${{ matrix.target }}
+          echo "Fuzzing ${{ matrix.target }} for ${FUZZ_DURATION}s..."
+          ./build-fuzz/bin/${{ matrix.target }} \
+            -max_total_time=${FUZZ_DURATION} \
+            -max_len=4096 \
+            -artifact_prefix=artifacts/${{ matrix.target }}/ \
+            corpus/${{ matrix.target }}/
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-${{ matrix.target }}
+          path: artifacts/${{ matrix.target }}/
+          retention-days: 30
+
+  fuzz-consttime-aes:
+    name: Fuzz AES-GCM (constant-time bitsliced backend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang
+
+      - name: Build with constant-time AES
+        run: |
+          cmake -B build-fuzz-ct \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DAMA_BUILD_FUZZ=ON \
+            -DAMA_BUILD_TESTS=OFF \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_ENABLE_LTO=OFF \
+            -DAMA_AES_CONSTTIME=ON \
+            -DAMA_USE_NATIVE_PQC=ON
+          cmake --build build-fuzz-ct --target fuzz_aes_gcm -j$(nproc)
+
+      - name: Run AES-GCM fuzzer (consttime backend)
+        run: |
+          mkdir -p corpus/fuzz_aes_gcm_ct
+          mkdir -p artifacts/fuzz_aes_gcm_ct
+          ./build-fuzz-ct/bin/fuzz_aes_gcm \
+            -max_total_time=30 \
+            -max_len=4096 \
+            -artifact_prefix=artifacts/fuzz_aes_gcm_ct/ \
+            corpus/fuzz_aes_gcm_ct/
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-aes-gcm-consttime
+          path: artifacts/fuzz_aes_gcm_ct/
+          retention-days: 30
+
+  constant-time-crypto:
+    name: Constant-Time Verification (Crypto Primitives)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake
+
+      - name: Build C library
+        run: |
+          mkdir -p build
+          cd build && cmake .. && make
+
+      - name: Build and run dudect harnesses
+        run: |
+          cd tools/constant_time
+          make clean && make all
+          echo "=== Utility function timing analysis ==="
+          ./dudect_harness 50000
+          echo "=== Crypto primitive timing analysis ==="
+          ./dudect_crypto 50000
