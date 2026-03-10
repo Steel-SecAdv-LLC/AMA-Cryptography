@@ -23,6 +23,30 @@ from unittest.mock import patch
 
 import pytest
 
+# Check if native backends are available
+try:
+    from ama_cryptography.pqc_backends import (
+        _AES_GCM_NATIVE_AVAILABLE,
+        _SECP256K1_NATIVE_AVAILABLE,
+        _native_lib,
+    )
+
+    _NATIVE_AES_GCM = _native_lib is not None and _AES_GCM_NATIVE_AVAILABLE
+    _NATIVE_SECP256K1 = _native_lib is not None and _SECP256K1_NATIVE_AVAILABLE
+except ImportError:
+    _NATIVE_AES_GCM = False
+    _NATIVE_SECP256K1 = False
+
+skip_no_native_aes = pytest.mark.skipif(
+    not _NATIVE_AES_GCM,
+    reason="Native AES-256-GCM backend not available (build with cmake)",
+)
+
+skip_no_native_secp256k1 = pytest.mark.skipif(
+    not _NATIVE_SECP256K1,
+    reason="Native secp256k1 backend not available (build with cmake)",
+)
+
 # =============================================================================
 # SECURE MEMORY ERROR HANDLING TESTS
 # =============================================================================
@@ -251,6 +275,7 @@ class TestKeyManagementDecryptPaths:
         storage = SecureKeyStorage(storage_path, master_password="test_password_123")
         return storage
 
+    @skip_no_native_aes
     def test_store_and_retrieve_key(self, temp_storage):
         """Store and retrieve a key using AES-256-GCM."""
         import secrets
@@ -267,6 +292,7 @@ class TestKeyManagementDecryptPaths:
         assert retrieved == key_data
         assert isinstance(retrieved, bytes)
 
+    @skip_no_native_aes
     def test_retrieve_returns_bytes_type(self, temp_storage):
         """Retrieved key is explicitly bytes type."""
         import secrets
@@ -285,6 +311,7 @@ class TestKeyManagementDecryptPaths:
         result = temp_storage.retrieve_key("nonexistent-key")
         assert result is None
 
+    @skip_no_native_aes
     def test_store_multiple_keys(self, temp_storage):
         """Store and retrieve multiple keys."""
         import secrets
@@ -302,6 +329,7 @@ class TestKeyManagementDecryptPaths:
             retrieved = temp_storage.retrieve_key(key_id)
             assert retrieved == expected_data
 
+    @skip_no_native_aes
     def test_delete_key(self, temp_storage):
         """Delete a key removes it from storage."""
         import secrets
@@ -322,6 +350,7 @@ class TestKeyManagementDecryptPaths:
         result = temp_storage.delete_key("nonexistent")
         assert result is False
 
+    @skip_no_native_aes
     def test_list_keys(self, temp_storage):
         """List all stored keys."""
         import secrets
@@ -340,6 +369,7 @@ class TestKeyManagementDecryptPaths:
 class TestKeyManagementContextManager:
     """Tests for SecureKeyStorage context manager."""
 
+    @skip_no_native_aes
     def test_context_manager_closes(self, tmp_path):
         """SecureKeyStorage context manager closes properly."""
         from ama_cryptography.key_management import SecureKeyStorage
@@ -376,6 +406,7 @@ class TestHDKeyDerivation:
 
         assert key1 != key2
 
+    @skip_no_native_secp256k1
     def test_non_hardened_derivation(self):
         """Non-hardened derivation works with native secp256k1."""
         from ama_cryptography.key_management import HDKeyDerivation

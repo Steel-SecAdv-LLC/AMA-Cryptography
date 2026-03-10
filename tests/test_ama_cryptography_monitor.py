@@ -850,13 +850,17 @@ class TestMonitorIntegration:
         # Add parent directory to path
         sys.path.insert(0, str(Path(__file__).parent.parent))
 
-        from code_guardian_secure import (
-            MASTER_CODES_STR,
-            MASTER_HELIX_PARAMS,
-            create_crypto_package,
-            generate_key_management_system,
-            verify_crypto_package,
-        )
+        try:
+            from code_guardian_secure import (
+                MASTER_CODES_STR,
+                MASTER_HELIX_PARAMS,
+                create_crypto_package,
+                generate_key_management_system,
+                verify_crypto_package,
+            )
+        except RuntimeError:
+            pytest.skip("Native C library required for code_guardian_secure")
+            return  # pragma: no cover — unreachable; tells static analysis skip() diverges
 
         # Setup
         monitor = AmaCryptographyMonitor(enabled=True)
