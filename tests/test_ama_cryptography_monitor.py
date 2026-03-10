@@ -39,10 +39,10 @@ AI Co-Architects:
 
 import ast
 
-import ama_cryptography_monitor
 import numpy as np
 import pytest
 
+import ama_cryptography_monitor
 from ama_cryptography_monitor import (
     AmaCryptographyMonitor,
     IncrementalStats,

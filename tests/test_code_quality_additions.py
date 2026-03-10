@@ -16,13 +16,14 @@ Date: 2026-03-08
 Version: 2.0
 """
 
-import ama_cryptography.secure_memory
 import importlib
 import logging
 import warnings
 from unittest.mock import patch
 
 import pytest
+
+import ama_cryptography.secure_memory
 
 # Check if native backends are available
 try:
