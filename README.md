@@ -48,6 +48,10 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 
 **Protecting people, data, and networks with quantum-resistant cryptography**
 
+> **Design Philosophy:** Built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the 6-layer defense architecture, double-helix key evolution, and adaptive posture system) is an original design by Steel Security Advisors LLC.
+>
+> **Integration:** AMA Cryptography serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent), providing quantum-resistant security for Mercury Agent's services.
+
 > **Project Philosophy:** Promoting action over inaction in the hope of helping secure critical systems against emerging quantum threats. This project is under active development. While we strive for cryptographic rigor, users should remain cautious and conduct independent security reviews before production deployment. The perceived absence of a threat does not constitute the lack of a threat. Our goal is to deter, mitigate, and elevate security posture—not create new vulnerabilities.
 > 
 > **Security Disclosure:** This is a self-assessed cryptographic implementation without third-party audit. Production use REQUIRES:
@@ -57,7 +61,7 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 > - Secure file permissions for key files and cryptographic packages (store on encrypted volumes with restricted access)
 >
 > **Status:** Community-tested | Not externally audited
-> **Last Updated:** 2026-03-08
+> **Last Updated:** 2026-03-10
 > **Audit Status:** Community-tested, not externally audited. See [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) for self-assessment details.
 >
 > See [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) for detailed security properties and threat model.
@@ -215,6 +219,10 @@ Future-proof cryptography:
 | ML-DSA-65 | **Full** (native) | Full | Integrated |
 | Kyber-1024 | **Full** (native) | Full | Integrated |
 | SPHINCS+-256f | **Full** (native) | Full | Integrated |
+| X25519 | **Full** | Full | Key exchange |
+| ChaCha20-Poly1305 | **Full** | Full | Alternative AEAD |
+| Argon2 | **Full** | Full | Password hashing |
+| secp256k1 | **Full** | Full | HD key derivation |
 | Hybrid (Ed25519 + ML-DSA-65) | N/A | Full | Integrated |
 
 **Legend:**
@@ -231,6 +239,11 @@ Future-proof cryptography:
 - `ama_dilithium.c`: ML-DSA-65 full native (NTT q=8380417, rejection sampling, constant-time)
 - `ama_sphincs.c`: SPHINCS+-SHA2-256f-simple full native (WOTS+, FORS, hypertree d=17)
 - `ama_consttime.c`: Constant-time utilities (memcmp, memzero, swap, lookup, copy)
+- `ama_x25519.c`: X25519 Diffie-Hellman key exchange (RFC 7748)
+- `ama_chacha20poly1305.c`: ChaCha20-Poly1305 AEAD (RFC 8439)
+- `ama_argon2.c`: Argon2id password hashing (RFC 9106)
+- `ama_secp256k1.c`: secp256k1 elliptic curve operations (HD key derivation)
+- `ama_aes_bitsliced.c`: Bitsliced AES S-box (cache-timing hardened, optional via `-DAMA_AES_CONSTTIME=ON`)
 
 > **Note:** The Python API remains the recommended production interface. C implementations provide high-performance alternatives where applicable. See [BENCHMARKS.md](BENCHMARKS.md) for C vs Python performance comparison.
 
@@ -995,10 +1008,10 @@ AMA Cryptography pioneers the integration of ethical principles directly into cr
 
 | Triad | Pillars | Cryptographic Binding |
 |-------|---------|----------------------|
-| **Compassion** | Empathy, Care, Support | HKDF context derivation |
-| **Evidence** | Truth, Verification, Proof | Signature validation chains |
-| **Justice** | Fairness, Accountability, Rights | Access control primitives |
-| **Altruism** | Service, Protection, Benefit | Key encapsulation policies |
+| **Knowledge** | Omniscient, Omnipercipient, Omnilegent | SHA3-256/HMAC verification coverage |
+| **Power** | Omnipotent, Omnificent, Omniactive | Key generation, real-time protection |
+| **Coverage** | Omnipresent, Omnitemporal, Omnidirectional | Multi-layer defense, temporal integrity |
+| **Omnibenevolence** | Omnibenevolent, Omniperfect, Omnivalent | Ethical foundation, hybrid security |
 
 The ethical integration achieves:
 - **Balanced weighting**: Σw = 12.0 across all pillars

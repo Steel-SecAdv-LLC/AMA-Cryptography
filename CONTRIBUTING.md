@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.0 |
-| Last Updated | 2026-03-08 |
+| Document Version | 2.1 |
+| Last Updated | 2026-03-10 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -164,6 +164,9 @@ All contributions must maintain compliance with:
 | RFC 5869 | 2010 | Mandatory | HKDF |
 | RFC 8032 | 2017 | Mandatory | EdDSA (Ed25519) |
 | RFC 3161 | 2001 | Mandatory | Time-Stamp Protocol |
+| RFC 7748 | 2016 | Mandatory | Elliptic Curves for Security (X25519) |
+| RFC 8439 | 2018 | Mandatory | ChaCha20-Poly1305 AEAD |
+| RFC 9106 | 2021 | Mandatory | Argon2 Memory-Hard Function |
 
 ### Changes to Cryptographic Standards
 
@@ -515,6 +518,7 @@ If you have questions about contributing:
 | 1.0.0 | 2025-11-26 | Initial professional release |
 | 1.1.0 | 2026-01-09 | Version alignment, terminology updates |
 | 2.0.0 | 2026-03-08 | Zero-dependency architecture, FIPS 203/204/205, updated module references |
+| 2.0.1 | 2026-03-10 | Phase 2 primitives, Mercury Agent integration documentation |
 
 ---
 

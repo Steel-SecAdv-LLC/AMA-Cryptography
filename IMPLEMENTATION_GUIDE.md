@@ -8,8 +8,8 @@
 **AI Co-Architects:**  
 Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
-**Version:** 2.0
-**Date:** 2026-03-08
+**Version:** 2.1
+**Date:** 2026-03-10
 
 ---
 
@@ -1161,8 +1161,9 @@ For migration assistance:
 
 AMA Cryptography is under continuous development with a focus on maintaining the highest security standards while expanding capabilities:
 
+- **Mercury Agent Integration:** AMA Cryptography serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent), providing quantum-resistant security for Mercury Agent's services
 - **Security Updates:** Continuous security updates and performance optimizations based on emerging cryptographic research and threat landscape changes
-- **CRISPR-Inspired Technologies:** Integration of CRISPR-inspired cryptographic technologies from related repositories, extending the biological metaphor into novel protection mechanisms
+- **Phase 2 Primitives:** X25519 key exchange (RFC 7748), ChaCha20-Poly1305 AEAD (RFC 8439), Argon2id password hashing (RFC 9106), and secp256k1 HD key derivation are now available in the native C library
 - **Community-Driven Features:** Feature development driven by real-world usage patterns and community feedback, ensuring the system evolves to meet practical security needs
 
 For the latest development updates, see the project's GitHub repository and CHANGELOG.md.
@@ -1291,6 +1292,6 @@ Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
 
-**Document Version:** 2.0
-**Last Updated:** 2026-03-08
+**Document Version:** 2.1
+**Last Updated:** 2026-03-10
 **Copyright (C) 2025-2026 Steel Security Advisors LLC**

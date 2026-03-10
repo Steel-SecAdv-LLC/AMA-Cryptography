@@ -8,8 +8,8 @@
 **AI Co-Architects:**  
 Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
-**Version:** 2.0
-**Date:** 2026-03-08
+**Version:** 2.1
+**Date:** 2026-03-10
 
 ---
 

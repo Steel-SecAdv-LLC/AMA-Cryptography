@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 2.0 |
-| Last Updated | 2026-03-08 |
+| Last Updated | 2026-03-10 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -13,7 +13,7 @@
 
 ## Executive Summary
 
-AMA Cryptography is a production-grade cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. The architecture implements defense-in-depth security through six independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
+AMA Cryptography is a production-grade cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. It serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent). The architecture implements defense-in-depth security through six independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
 
 This document provides a comprehensive technical reference for system architects, security engineers, and developers working with or evaluating the AMA Cryptography system.
 
@@ -51,7 +51,7 @@ This architecture covers the core cryptographic engine, key management system, e
 
 The following are explicitly not goals of this architecture:
 
-- General-purpose encryption services (the system focuses on signing and integrity)
+- General-purpose encryption-as-a-service (the system provides AES-256-GCM and hybrid KEM for targeted use cases, not as a generic encryption service)
 - Real-time streaming cryptographic operations
 - Hardware-level cryptographic acceleration
 - Certificate authority or PKI infrastructure
@@ -100,7 +100,7 @@ The AMA Cryptography architecture is built on the following foundational princip
 
 **Ethical Integration**: Ethical constraints are mathematically bound to cryptographic operations through the key derivation process, ensuring that ethical metadata cannot be separated from cryptographic proofs.
 
-**Standards Compliance**: All cryptographic primitives conform to published NIST and IETF standards. No custom or non-standard cryptographic constructions are used.
+**Standards Compliance**: Built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the 6-layer defense architecture, key evolution, and adaptive posture system) is an original design.
 
 **Performance Efficiency**: Cryptographic operations are optimized to maintain throughput exceeding 1,000 operations per second with less than 4% overhead for ethical integration.
 
@@ -130,6 +130,10 @@ The following constraints govern architectural decisions:
 | Hash-Based Signature | SPHINCS+-SHA2-256f | NIST FIPS 205 | 256-bit quantum security | **Full** (ama_sphincs.c) |
 | Key Derivation | HKDF-SHA3-256 | RFC 5869 | 256-bit derived keys | **Full** (ama_hkdf.c) |
 | Timestamping | RFC 3161 TSA | RFC 3161 | Third-party attestation | Python API only |
+| Key Exchange | X25519 | RFC 7748 | 128-bit classical security | **Full** (ama_x25519.c) |
+| Alternative AEAD | ChaCha20-Poly1305 | RFC 8439 | 256-bit key, 128-bit security | **Full** (ama_chacha20poly1305.c) |
+| Password Hashing | Argon2id | RFC 9106 | Memory-hard KDF | **Full** (ama_argon2.c) |
+| EC Operations | secp256k1 | SEC 2 | HD key derivation support | **Full** (ama_secp256k1.c) |
 
 **C Library Source Files (v2.0):**
 - `src/c/ama_sha3.c` - SHA3-256, SHAKE128/256, streaming API (Keccak-f[1600])
@@ -141,6 +145,12 @@ The following constraints govern architectural decisions:
 - `src/c/ama_kyber.c` - ML-KEM-1024 full native implementation (NTT, IND-CCA2, Fujisaki-Okamoto)
 - `src/c/ama_dilithium.c` - ML-DSA-65 full native implementation (NTT q=8380417, rejection sampling)
 - `src/c/ama_sphincs.c` - SPHINCS+-SHA2-256f-simple full native implementation (WOTS+, FORS, hypertree)
+
+- `src/c/ama_x25519.c` - X25519 Diffie-Hellman key exchange (RFC 7748)
+- `src/c/ama_chacha20poly1305.c` - ChaCha20-Poly1305 AEAD (RFC 8439)
+- `src/c/ama_argon2.c` - Argon2id password hashing (RFC 9106)
+- `src/c/ama_secp256k1.c` - secp256k1 elliptic curve operations (HD key derivation)
+- `src/c/ama_aes_bitsliced.c` - Bitsliced AES S-box (cache-timing hardened, optional via `-DAMA_AES_CONSTTIME=ON`)
 
 **Zero-Dependency PQC:** All three PQC algorithms (Kyber, Dilithium, SPHINCS+) operate without OpenSSL. SHA-256, HMAC-SHA-256, and random byte generation are provided by native implementations (`ama_sha256.c`, `ama_hmac_sha256.c`, `ama_platform_rand.c`), validated against NIST KAT vectors.
 
@@ -187,7 +197,7 @@ Layer 1: Canonical Length-Prefixed Encoding
 | Ed25519 Signature | 512 bits | (R, s) pair |
 | ML-DSA-65 Private Key | 4,032 bytes | Lattice-based secret key |
 | ML-DSA-65 Public Key | 1,952 bytes | Lattice-based public key |
-| ML-DSA-65 Signature | ~3,293 bytes | Lattice-based signature |
+| ML-DSA-65 Signature | 3,309 bytes | Lattice-based signature |
 | SHA3-256 Output | 256 bits | Collision-resistant digest |
 | HKDF Salt | 256 bits | Optional, zeros if not provided |
 
@@ -203,25 +213,25 @@ The Ethical Integration Framework mathematically binds ethical metadata to crypt
 
 The system defines 12 ethical pillars organized into four triads. Each pillar has a symbolic identifier and a weight value. The sum of all weights equals 12.0, ensuring balanced representation.
 
-**Triad 1 - Foundation**
-- Eris: Balanced consideration of competing interests
-- Eden ♱: Harmonious system growth and sustainability
-- Veritas: Truth and validation in all operations
+**Triad 1 - Knowledge Domain (Verification Layer)**
+- Omniscient: Complete verification coverage across all data inputs
+- Omnipercipient: Multi-dimensional anomaly detection (temporal, structural, cryptographic)
+- Omnilegent: Complete data validation with canonical encoding
 
-**Triad 2 - Expansion**
-- X: Accommodation of unknown future requirements
-- Caduceus: Balanced exchange and fair dealing
-- Dev: Continuous development and improvement
+**Triad 2 - Power Domain (Cryptographic Generation)**
+- Omnipotent: Maximum cryptographic strength against all known attacks
+- Omnificent: Secure, reproducible key generation with proper entropy
+- Omniactive: Continuous real-time protection with minimal latency
 
-**Triad 3 - Wisdom**
-- Sophia: Integration of diverse knowledge sources
-- Minerva: Strategic decision-making capability
-- Athena: Practical application of wisdom
+**Triad 3 - Coverage Domain (Defense-in-Depth)**
+- Omnipresent: Security presence across all six cryptographic layers
+- Omnitemporal: Temporal integrity with trusted timestamping
+- Omnidirectional: Complete attack surface coverage (classical, quantum, concatenation, forgery)
 
-**Triad 4 - Transcendence**
-- Isis: Regenerative and self-healing properties
-- Thoth: Preservation and transmission of knowledge
-- Hermes: Connectivity and communication
+**Triad 4 - Omnibenevolence Domain (Ethical Constraints)**
+- Omnibenevolent: Cryptographic operations serve protective, non-malicious purposes
+- Omniperfect: Provably correct implementation with formal verification
+- Omnivalent: Hybrid classical + quantum resistance for long-term security
 
 ### Mathematical Integration
 
@@ -733,6 +743,7 @@ Cryptographic implementations are validated against:
 | 1.0.0 | 2025-11-26 | Steel Security Advisors LLC | Initial professional release |
 | 1.1.0 | 2026-01-09 | Steel Security Advisors LLC | Version alignment |
 | 2.0.0 | 2026-03-08 | Steel Security Advisors LLC | Zero-dependency native C architecture, adaptive posture, hybrid KEM combiner, AES-256-GCM, FIPS 203/204/205 compliance |
+| 2.0.1 | 2026-03-10 | Steel Security Advisors LLC | Phase 2 primitives (X25519, ChaCha20-Poly1305, Argon2, secp256k1), ethical pillar alignment, composition protocol clarification, Mercury Agent integration |
 
 ---
 
