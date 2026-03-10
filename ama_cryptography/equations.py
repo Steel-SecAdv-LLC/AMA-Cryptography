@@ -90,7 +90,6 @@ __all__ = [
 PHI = (1 + np.sqrt(5)) / 2  # Golden ratio φ ≈ 1.618034
 PHI_SQUARED = PHI**2  # φ² ≈ 2.618034
 PHI_CUBED = PHI**3  # φ³ ≈ 4.236068
-TAU = 2 * np.pi  # τ = 2π ≈ 6.283185
 
 SIGMA_QUADRATIC_THRESHOLD = 0.96  # Quadratic form constraint
 LAMBDA_DECAY = 0.18  # Lyapunov decay rate O(e^{-0.18t})

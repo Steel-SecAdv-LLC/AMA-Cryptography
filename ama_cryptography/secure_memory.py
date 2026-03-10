@@ -84,7 +84,7 @@ try:
     _HAS_NACL = True
     _nacl = nacl
 except ImportError:
-    pass
+    pass  # pynacl optional; pure Python fallback used
 
 
 class SecureMemoryError(Exception):
@@ -156,7 +156,7 @@ def secure_memzero(data: Union[bytearray, memoryview]) -> None:
                 _nacl.bindings.sodium_memzero(data)
                 return
         except (AttributeError, TypeError):
-            pass
+            pass  # sodium_memzero not available; fall through to Python fallback
 
     # Fallback: Pure Python with multiple passes (less secure but functional)
     # This is similar to existing secure_wipe() but included for completeness
@@ -258,7 +258,7 @@ def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> bool:
             _nacl.bindings.sodium_munlock(data)
             return True
     except (OSError, AttributeError, TypeError):
-        pass
+        pass  # munlock not available on this platform
 
     return False
 

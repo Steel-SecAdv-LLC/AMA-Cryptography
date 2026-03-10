@@ -52,6 +52,15 @@ extern ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
 extern ama_error_t ama_sphincs_verify(const uint8_t *message, size_t message_len,
                                        const uint8_t *signature, size_t signature_len,
                                        const uint8_t *public_key);
+
+extern ama_error_t ama_kyber_keypair(uint8_t* pk, size_t pk_len,
+                                      uint8_t* sk, size_t sk_len);
+extern ama_error_t ama_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
+                                          uint8_t* ct, size_t* ct_len,
+                                          uint8_t* ss, size_t ss_len);
+extern ama_error_t ama_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
+                                          const uint8_t* sk, size_t sk_len,
+                                          uint8_t* ss, size_t ss_len);
 #endif
 
 /**
@@ -211,15 +220,8 @@ ama_error_t ama_keypair_generate(
             return ama_dilithium_keypair(public_key, secret_key);
 
         case AMA_ALG_KYBER_1024:
-            /* Kyber keypair generation dispatches to ama_kyber.c internal */
-            /* The kyber_keypair_generate is static in ama_kyber.c, so we
-             * call it through a thin wrapper defined below */
-            {
-                extern ama_error_t ama_kyber_keypair(uint8_t* pk, size_t pk_len,
-                                                      uint8_t* sk, size_t sk_len);
-                return ama_kyber_keypair(public_key, public_key_len,
-                                        secret_key, secret_key_len);
-            }
+            return ama_kyber_keypair(public_key, public_key_len,
+                                    secret_key, secret_key_len);
 
         case AMA_ALG_SPHINCS_256F:
             return ama_sphincs_keypair(public_key, secret_key);
@@ -401,9 +403,6 @@ ama_error_t ama_kem_encapsulate(
 #ifdef AMA_USE_NATIVE_PQC
     /* Native Kyber-1024 encapsulation */
     if (ctx->algorithm == AMA_ALG_KYBER_1024) {
-        extern ama_error_t ama_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
-                                                  uint8_t* ct, size_t* ct_len,
-                                                  uint8_t* ss, size_t ss_len);
         return ama_kyber_encapsulate(public_key, public_key_len,
                                      ciphertext, ciphertext_len,
                                      shared_secret, shared_secret_len);
@@ -448,9 +447,6 @@ ama_error_t ama_kem_decapsulate(
 #ifdef AMA_USE_NATIVE_PQC
     /* Native Kyber-1024 decapsulation */
     if (ctx->algorithm == AMA_ALG_KYBER_1024) {
-        extern ama_error_t ama_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
-                                                  const uint8_t* sk, size_t sk_len,
-                                                  uint8_t* ss, size_t ss_len);
         return ama_kyber_decapsulate(ciphertext, ciphertext_len,
                                      secret_key, secret_key_len,
                                      shared_secret, shared_secret_len);

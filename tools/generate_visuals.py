@@ -639,7 +639,7 @@ def create_monitoring_overhead():
     colors = ["#3B82F6", "#F59E0B"]
     explode = (0, 0.05)
 
-    wedges, texts, autotexts = ax.pie(
+    wedges, _texts, _autotexts = ax.pie(
         sizes,
         explode=explode,
         labels=labels,
@@ -852,7 +852,6 @@ def create_ethical_binding_flow():
     ]
 
     # Draw 4 triad boxes in 2x2 grid on the left
-    triad_positions = [(1.8, 8.5), (1.8, 5.5), (1.8, 2.5), (5.5, 5.5)]
     triad_positions = [(1.8, 8.2), (5.5, 8.2), (1.8, 4.8), (5.5, 4.8)]
 
     for idx, ((name, color, subtitle, pillars), (x, y)) in enumerate(zip(triads, triad_positions)):

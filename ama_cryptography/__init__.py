@@ -31,72 +31,59 @@ AI Co-Architects:
 __version__ = "2.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
-import importlib as _importlib
+# Import math modules that require numpy.
+# If numpy is not installed, the math symbols are not available and
+# importing them will raise ImportError with a clear message.
+_MATH_AVAILABLE = False
+try:
+    from ama_cryptography.equations import (
+        HELIX_PARAMS,
+        LAMBDA_DECAY,
+        OMNI_CODES,
+        PHI,
+        PHI_CUBED,
+        PHI_SQUARED,
+        SIGMA_QUADRATIC_THRESHOLD,
+        calculate_sigma_quadratic,
+        enforce_sigma_quadratic_threshold,
+        golden_ratio_convergence_proof,
+        helix_curvature,
+        helix_torsion,
+        initialize_ethical_matrix,
+        lyapunov_function,
+        lyapunov_stability_proof,
+        verify_all_codes,
+        verify_mathematical_foundations,
+    )
+    from ama_cryptography.double_helix_engine import AmaEquationEngine
 
-# Lazy-load math modules that require numpy (PEP 562).
-# This allows `import ama_cryptography` to succeed without numpy installed.
-# Accessing any math symbol triggers the actual import and surfaces a clear
-# ModuleNotFoundError if numpy is missing.
-
-_EQUATIONS_EXPORTS = frozenset(
-    {
-        "HELIX_PARAMS",
-        "LAMBDA_DECAY",
-        "OMNI_CODES",
-        "PHI",
-        "PHI_CUBED",
-        "PHI_SQUARED",
-        "SIGMA_QUADRATIC_THRESHOLD",
-        "calculate_sigma_quadratic",
-        "enforce_sigma_quadratic_threshold",
-        "golden_ratio_convergence_proof",
-        "helix_curvature",
-        "helix_torsion",
-        "initialize_ethical_matrix",
-        "lyapunov_function",
-        "lyapunov_stability_proof",
-        "verify_all_codes",
-        "verify_mathematical_foundations",
-    }
-)
-_ENGINE_EXPORTS = frozenset({"AmaEquationEngine"})
-
-
-def __getattr__(name: str) -> object:
-    """Lazy-load math modules that require numpy."""
-    if name in _EQUATIONS_EXPORTS:
-        mod = _importlib.import_module("ama_cryptography.equations")
-        val = getattr(mod, name)
-        globals()[name] = val
-        return val
-    elif name in _ENGINE_EXPORTS:
-        mod = _importlib.import_module("ama_cryptography.double_helix_engine")
-        val = getattr(mod, name)
-        globals()[name] = val
-        return val
-
-    raise AttributeError(f"module 'ama_cryptography' has no attribute {name!r}")
-
+    _MATH_AVAILABLE = True
+except (ImportError, ModuleNotFoundError):
+    pass
 
 __all__ = [
     "__version__",
     "__author__",
-    "PHI",
-    "PHI_SQUARED",
-    "PHI_CUBED",
-    "SIGMA_QUADRATIC_THRESHOLD",
-    "LAMBDA_DECAY",
-    "OMNI_CODES",
-    "HELIX_PARAMS",
-    "helix_curvature",
-    "helix_torsion",
-    "verify_all_codes",
-    "lyapunov_function",
-    "lyapunov_stability_proof",
-    "golden_ratio_convergence_proof",
-    "calculate_sigma_quadratic",
-    "enforce_sigma_quadratic_threshold",
-    "initialize_ethical_matrix",
-    "verify_mathematical_foundations",
-    "AmaEquationEngine",
 ]
+
+if _MATH_AVAILABLE:
+    __all__ += [
+        "PHI",
+        "PHI_SQUARED",
+        "PHI_CUBED",
+        "SIGMA_QUADRATIC_THRESHOLD",
+        "LAMBDA_DECAY",
+        "OMNI_CODES",
+        "HELIX_PARAMS",
+        "helix_curvature",
+        "helix_torsion",
+        "verify_all_codes",
+        "lyapunov_function",
+        "lyapunov_stability_proof",
+        "golden_ratio_convergence_proof",
+        "calculate_sigma_quadratic",
+        "enforce_sigma_quadratic_threshold",
+        "initialize_ethical_matrix",
+        "verify_mathematical_foundations",
+        "AmaEquationEngine",
+    ]

@@ -16,11 +16,14 @@ Date: 2026-03-08
 Version: 2.0
 """
 
+import importlib
 import logging
 import warnings
 from unittest.mock import patch
 
 import pytest
+
+import ama_cryptography.secure_memory
 
 # =============================================================================
 # SECURE MEMORY ERROR HANDLING TESTS
@@ -46,19 +49,15 @@ class TestSecureMemoryErrorClasses:
         """SecureMemoryError can be raised and caught."""
         from ama_cryptography.secure_memory import SecureMemoryError
 
-        with pytest.raises(SecureMemoryError) as exc_info:
+        with pytest.raises(SecureMemoryError, match="test error message"):
             raise SecureMemoryError("test error message")
-
-        assert "test error message" in str(exc_info.value)
 
     def test_secure_memory_not_available_can_be_raised(self):
         """SecureMemoryNotAvailable can be raised and caught."""
         from ama_cryptography.secure_memory import SecureMemoryNotAvailable
 
-        with pytest.raises(SecureMemoryNotAvailable) as exc_info:
+        with pytest.raises(SecureMemoryNotAvailable, match="pynacl"):
             raise SecureMemoryNotAvailable("pynacl not installed")
-
-        assert "pynacl" in str(exc_info.value)
 
     def test_check_nacl_available_raises_when_unavailable(self):
         """_check_nacl_available raises when pynacl is unavailable."""
@@ -101,11 +100,7 @@ class TestSecureMemoryFallbackBehavior:
     def test_mlock_without_nacl_returns_false(self):
         """secure_mlock returns False when pynacl unavailable."""
         with patch("ama_cryptography.secure_memory._HAS_NACL", False):
-            # Need to re-import to pick up the patched value
-            import importlib
-
-            import ama_cryptography.secure_memory
-
+            # Need to reload to pick up the patched value
             importlib.reload(ama_cryptography.secure_memory)
 
             data = bytearray(100)
@@ -121,10 +116,6 @@ class TestSecureMemoryFallbackBehavior:
     def test_munlock_without_nacl_returns_false(self):
         """secure_munlock returns False when pynacl unavailable."""
         with patch("ama_cryptography.secure_memory._HAS_NACL", False):
-            import importlib
-
-            import ama_cryptography.secure_memory
-
             importlib.reload(ama_cryptography.secure_memory)
 
             data = bytearray(100)

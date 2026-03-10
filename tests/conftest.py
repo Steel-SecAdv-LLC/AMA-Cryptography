@@ -256,10 +256,10 @@ def guardian_monitor():
     """Provide an AmaCryptographyMonitor instance."""
     try:
         from ama_cryptography_monitor import AmaCryptographyMonitor
-
-        return AmaCryptographyMonitor(enabled=True)
     except ImportError:
         pytest.skip("ama_cryptography_monitor not available")
+        return None
+    return AmaCryptographyMonitor(enabled=True)
 
 
 @pytest.fixture
@@ -267,10 +267,10 @@ def guardian_monitor_disabled():
     """Provide a disabled AmaCryptographyMonitor instance."""
     try:
         from ama_cryptography_monitor import AmaCryptographyMonitor
-
-        return AmaCryptographyMonitor(enabled=False)
     except ImportError:
         pytest.skip("ama_cryptography_monitor not available")
+        return None
+    return AmaCryptographyMonitor(enabled=False)
 
 
 # =============================================================================

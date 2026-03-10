@@ -138,7 +138,6 @@ class PostureEvaluator:
             )
 
         signals: Dict[str, Any] = {}
-        score = 0.0
 
         # Score timing anomalies
         recent_alerts = monitor_report.get("recent_alerts", [])

@@ -610,14 +610,14 @@ typedef struct {
     fe25519 yplusx, yminusx, xy2d;
 } ge25519_precomp;
 
-/* d = -121665/121666 */
-static const fe25519 d = {
+/* d = -121665/121666 (named ed_d to avoid shadowing SHA-512 local 'd') */
+static const fe25519 ed_d = {
     -10913610, 13857413, -15372611, 6949391, 114729,
     -8787816, -6275908, -3247719, -18696448, -12055116
 };
 
 /* 2*d */
-static const fe25519 d2 = {
+static const fe25519 ed_d2 = {
     -21827239, -5839606, -30745221, 13898782, 229458,
     15978800, -12551817, -6495438, 29715968, 9444199
 };
@@ -631,7 +631,7 @@ static int ge25519_frombytes(ge25519_p3 *h, const uint8_t *s);
  * the sign bit of x in the high bit of the last byte.
  * This avoids hardcoding limb values that depend on the radix representation.
  */
-static ge25519_p3 B;
+static ge25519_p3 ed_B;
 static AMA_ATOMIC_INT B_initialized = 0;
 
 static void ensure_base_point(void) {
@@ -660,9 +660,9 @@ static void ensure_base_point(void) {
                 AMA_ATOMIC_STORE(B_initialized, AMA_INIT_UNINIT);
                 return;
             }
-            memcpy(&B, &B_local, sizeof(ge25519_p3));
+            memcpy(&ed_B, &B_local, sizeof(ge25519_p3));
 
-            /* Release store: B is fully written before flag becomes READY. */
+            /* Release store: ed_B is fully written before flag becomes READY. */
             AMA_ATOMIC_STORE(B_initialized, AMA_INIT_READY);
             return;
         }
@@ -709,7 +709,7 @@ static int ge25519_frombytes(ge25519_p3 *h, const uint8_t *s) {
 
     /* u = y^2 - 1, v = dy^2 + 1 */
     fe25519_sq(u, h->Y);
-    fe25519_mul(v, u, d);
+    fe25519_mul(v, u, ed_d);
     fe25519_sub(u, u, h->Z);
     fe25519_add(v, v, h->Z);
 
@@ -843,7 +843,7 @@ static void ge25519_add(ge25519_p1p1 *r, const ge25519_p3 *p, const ge25519_p3 *
     fe25519_add(C, q->Y, q->X);
     fe25519_mul(B, B, C);
     fe25519_mul(C, p->T, q->T);
-    fe25519_mul(C, C, d2);
+    fe25519_mul(C, C, ed_d2);
     fe25519_mul(D, p->Z, q->Z);
     fe25519_add(D, D, D);
     fe25519_sub(E, B, A);
@@ -918,11 +918,11 @@ static void ge25519_init_base_table(void) {
             ge25519_p1p1 t;
 
             /* table[0] = 1*B */
-            memcpy(&local_table[0], &B, sizeof(ge25519_p3));
+            memcpy(&local_table[0], &ed_B, sizeof(ge25519_p3));
 
             /* table[i] = (i+1)*B = table[i-1] + B */
             for (int i = 1; i < 16; i++) {
-                ge25519_add(&t, &local_table[i-1], &B);
+                ge25519_add(&t, &local_table[i-1], &ed_B);
                 ge25519_p1p1_to_p3(&local_table[i], &t);
             }
 

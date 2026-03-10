@@ -106,7 +106,6 @@ from ama_cryptography.exceptions import QuantumSignatureUnavailableError
 # We import the backend functions with underscore prefix and wrap them
 # to allow tests to monkeypatch module-level DILITHIUM_* variables
 from ama_cryptography.pqc_backends import DILITHIUM_AVAILABLE as _PQC_DILITHIUM_AVAILABLE
-from ama_cryptography.pqc_backends import DILITHIUM_BACKEND as _PQC_DILITHIUM_BACKEND
 from ama_cryptography.pqc_backends import DilithiumKeyPair
 from ama_cryptography.pqc_backends import dilithium_sign as _pqc_dilithium_sign
 from ama_cryptography.pqc_backends import dilithium_verify as _pqc_dilithium_verify
@@ -114,10 +113,9 @@ from ama_cryptography.pqc_backends import (
     generate_dilithium_keypair as _pqc_generate_dilithium_keypair,
 )
 
-# Module-level variables for backward compatibility with tests
-# Tests can monkeypatch these to test different backend paths
+# Module-level variable for backward compatibility with tests
+# Tests can monkeypatch this to test different backend paths
 DILITHIUM_AVAILABLE: bool = _PQC_DILITHIUM_AVAILABLE
-DILITHIUM_BACKEND: Optional[str] = _PQC_DILITHIUM_BACKEND
 
 
 # ============================================================================
@@ -1693,16 +1691,14 @@ def create_crypto_package(  # noqa: C901 - high-level orchestrator; refactor wou
     # Note: Empty author is allowed for backward compatibility with existing tests
 
     # 1. Compute canonical hash
-    if monitor:
-        start_time = time.time()
+    start_time = time.time()
     content_hash = canonical_hash_code(codes, helix_params)
     if monitor:
         duration_ms = (time.time() - start_time) * 1000
         monitor.monitor_crypto_operation("sha3_256_hash", duration_ms)
 
     # 2. Generate HMAC authentication tag
-    if monitor:
-        start_time = time.time()
+    start_time = time.time()
     hmac_tag = hmac_authenticate(content_hash, kms.hmac_key)
     if monitor:
         duration_ms = (time.time() - start_time) * 1000
@@ -1721,8 +1717,7 @@ def create_crypto_package(  # noqa: C901 - high-level orchestrator; refactor wou
     )
 
     # 5. Sign with Ed25519 (domain-separated message)
-    if monitor:
-        start_time = time.time()
+    start_time = time.time()
     ed25519_sig = ed25519_sign(signature_message, kms.ed25519_keypair.private_key)
     if monitor:
         duration_ms = (time.time() - start_time) * 1000
@@ -1733,8 +1728,7 @@ def create_crypto_package(  # noqa: C901 - high-level orchestrator; refactor wou
     dilithium_pubkey = None
     quantum_signatures_enabled = False
     if kms.quantum_signatures_enabled and kms.dilithium_keypair is not None:
-        if monitor:
-            start_time = time.time()
+        start_time = time.time()
         try:
             dilithium_sig = dilithium_sign(signature_message, kms.dilithium_keypair.secret_key)
             dilithium_pubkey = kms.dilithium_keypair.public_key.hex()

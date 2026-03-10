@@ -201,8 +201,8 @@ def verify_signature():
                 "algorithm": "Ed25519",
             }
         )
-    except Exception as e:
-        return jsonify({"error": str(e), "valid": False}), 400
+    except Exception:
+        return jsonify({"error": "Verification failed", "valid": False}), 400
 
 
 @app.route("/api/protected-data", methods=["GET"])
@@ -329,8 +329,8 @@ def main():
     print("Server public key:", KEYPAIR.public_key.hex()[:32] + "...")
     print()
 
-    # Run development server (debug=True is intentional for this example)
-    app.run(host="127.0.0.1", port=5000, debug=True)  # nosec B201
+    # Run development server
+    app.run(host="127.0.0.1", port=5000, debug=False)
 
 
 if __name__ == "__main__":

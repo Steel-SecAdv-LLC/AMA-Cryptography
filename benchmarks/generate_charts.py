@@ -15,7 +15,6 @@ Licensed under the Apache License, Version 2.0
 
 import argparse
 import os
-import sys
 
 # Benchmark data (measured values from CI and dedicated test systems)
 CRYPTO_OPS = {

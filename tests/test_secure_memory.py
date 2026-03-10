@@ -306,7 +306,7 @@ class TestSecureBuffer:
 
         from ama_cryptography.secure_memory import SecureBuffer
 
-        buffer_ref = None
+        buffer_ref = bytearray(50)
 
         # Suppress expected warning when pynacl mlock is unavailable
         with warnings.catch_warnings():
@@ -314,7 +314,7 @@ class TestSecureBuffer:
             with pytest.raises(ValueError):
                 with SecureBuffer(50) as buf:
                     buf[:] = b"sensitive" + b"\x00" * 41
-                    buffer_ref = buf
+                    buffer_ref[:] = buf[:]
                     raise ValueError("Test exception")
 
         # Should still be zeroed
