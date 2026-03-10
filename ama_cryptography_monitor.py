@@ -55,17 +55,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
-# numpy/scipy are optional — used by equations/double_helix when available,
-# but the core 3R monitor operates without them.
-_HAS_NUMPY = False
-try:
-    import numpy  # noqa: F401
-
-    _HAS_NUMPY = True
-except ImportError:
-    pass
-
-
 def _median_sorted(values: List[float]) -> float:
     """Median of a pre-sorted list. O(1) after sort."""
     n = len(values)

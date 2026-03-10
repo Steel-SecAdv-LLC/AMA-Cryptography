@@ -312,6 +312,7 @@ class TestAESGCMInterop:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         except Exception:
             pytest.skip("PyCA cryptography not installed")
+            return  # pragma: no cover — unreachable; tells static analysis skip() diverges
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
@@ -332,6 +333,7 @@ class TestAESGCMInterop:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         except Exception:
             pytest.skip("PyCA cryptography not installed")
+            return  # pragma: no cover — unreachable; tells static analysis skip() diverges
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
 

@@ -81,7 +81,11 @@ try:
     )
 
 except (ImportError, ModuleNotFoundError):
-    pass
+    import logging as _logging
+
+    _logging.getLogger(__name__).debug(
+        "numpy not available; math exports use lazy __getattr__ fallback"
+    )
 
 
 def __getattr__(name: str) -> object:

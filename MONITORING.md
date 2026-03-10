@@ -17,9 +17,9 @@ AMA Cryptography includes optional runtime security monitoring using the 3R Mech
 
 | Component | Function | Purpose |
 |-----------|----------|---------|
-| ResonanceEngine | Runtime timing anomaly monitoring | Frequency-domain analysis of operation timings (statistical anomaly detection) |
-| RecursionEngine | Pattern analysis | Hierarchical anomaly detection across time scales |
-| RefactoringEngine | Code complexity metrics | Static analysis for manual security review |
+| ResonanceTimingMonitor | Runtime timing anomaly monitoring | Frequency-domain analysis of operation timings (statistical anomaly detection) |
+| RecursionPatternMonitor | Pattern analysis | Hierarchical anomaly detection across time scales |
+| RefactoringAnalyzer | Code complexity metrics | Static analysis for manual security review |
 
 **Design Philosophy**: The 3R Mechanism follows a strict observe-analyze-alert paradigm. It never automatically modifies cryptographic code, ensuring that all security-critical changes require human review and approval.
 
@@ -33,17 +33,17 @@ AMA Cryptography includes optional runtime security monitoring using the 3R Mech
 +-----------------------------------------------------------+
 |                  3R Security Monitoring                    |
 +-----------------------------------------------------------+
-|  ResonanceEngine                                           |
+|  ResonanceTimingMonitor                                           |
 |  - FFT-based timing analysis                               |
 |  - Statistical anomaly detection                           |
 |  - Side-channel vulnerability identification               |
 +-----------------------------------------------------------+
-|  RecursionEngine                                           |
+|  RecursionPatternMonitor                                           |
 |  - Multi-scale pattern extraction                          |
 |  - Hierarchical feature analysis                           |
 |  - Signing frequency anomaly detection                     |
 +-----------------------------------------------------------+
-|  RefactoringEngine                                         |
+|  RefactoringAnalyzer                                         |
 |  - Cyclomatic complexity calculation                       |
 |  - Code quality metrics                                    |
 |  - Read-only analysis (never auto-modifies)                |
@@ -54,7 +54,7 @@ AMA Cryptography includes optional runtime security monitoring using the 3R Mech
 
 ## Component Deep Dive
 
-### ResonanceEngine: Runtime Timing Anomaly Monitoring
+### ResonanceTimingMonitor: Runtime Timing Anomaly Monitoring
 
 **Purpose**: Surface statistical timing anomalies through frequency-domain analysis for security review.
 
@@ -81,7 +81,7 @@ AMA Cryptography includes optional runtime security monitoring using the 3R Mech
 
 ---
 
-### RecursionEngine: Hierarchical Pattern Analysis
+### RecursionPatternMonitor: Hierarchical Pattern Analysis
 
 **Purpose**: Detect anomalies in signing patterns across multiple time scales.
 
@@ -105,7 +105,7 @@ AMA Cryptography includes optional runtime security monitoring using the 3R Mech
 
 ---
 
-### RefactoringEngine: Code Complexity Analysis
+### RefactoringAnalyzer: Code Complexity Analysis
 
 **Purpose**: Provide complexity metrics for manual security review.
 
@@ -145,7 +145,7 @@ kms = generate_key_management_system("Steel-SecAdv-LLC")
 
 # Create monitored package
 pkg = create_crypto_package(
-    MASTER_OMNI_CODES_STR,
+    MASTER_CODES_STR,
     MASTER_HELIX_PARAMS,
     kms,
     "author",
@@ -279,8 +279,8 @@ controller.respond()  # Key rotation, algorithm switching based on level
 ```
 
 **Weighted Scoring Model:**
-- Timing anomalies: 50% weight (ResonanceEngine)
-- Pattern anomalies: 30% weight (RecursionEngine)
+- Timing anomalies: 50% weight (ResonanceTimingMonitor)
+- Pattern anomalies: 30% weight (RecursionPatternMonitor)
 - Resonance analysis: 20% weight
 - Exponential decay prevents stale anomalies from driving permanent escalation
 
