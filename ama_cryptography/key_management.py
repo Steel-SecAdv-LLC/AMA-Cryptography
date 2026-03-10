@@ -117,6 +117,9 @@ class HDKeyDerivation:
             self.master_seed = seed
         else:
             # Derive seed from phrase (simplified BIP39)
+            # seed_phrase is guaranteed non-None here: seed is None (from elif)
+            # and not both None (from first if).
+            assert seed_phrase is not None
             self.master_seed = hashlib.pbkdf2_hmac(
                 "sha512", seed_phrase.encode("utf-8"), b"mnemonic", 2048, 64
             )
