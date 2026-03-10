@@ -375,17 +375,137 @@ class BenchmarkSuite:
         """Save benchmark results to JSON file."""
         with open(filename, "w") as f:
             json.dump(self.results, f, indent=2)
-        print(f"📊 Results saved to: {filename}")
+        print(f"Results saved to: {filename}")
+
+    def generate_markdown(self, output_path: str = "BENCHMARKS.md") -> str:
+        """Generate markdown report with tables and ASCII bar charts."""
+        if not self.results:
+            return ""
+
+        lines = []
+        lines.append("# AMA Cryptography Benchmark Results")
+        lines.append("")
+        lines.append(f"**Date:** {self.results.get('benchmark_start', 'N/A')}")
+        lines.append(f"**Platform:** {self.system_info.get('platform', 'N/A')}")
+        lines.append(f"**CPU Cores:** {self.system_info.get('cpu_count', 'N/A')}")
+        if "memory_gb" in self.system_info:
+            lines.append(f"**Memory:** {self.system_info['memory_gb']} GB")
+        lines.append(f"**Python:** {self.system_info.get('python_version', 'N/A')}")
+        lines.append(f"**Dilithium Backend:** {self.system_info.get('dilithium_backend', 'N/A')}")
+        dur = self.results.get("benchmark_duration_sec", 0)
+        lines.append(f"**Total Duration:** {dur:.2f}s")
+        lines.append("")
+
+        # --- Helper to render a section as a markdown table ---
+        def _render_table(title: str, section_key: str, skip_keys: tuple = ()):
+            section = self.results.get(section_key, {})
+            if not section:
+                return
+            lines.append(f"## {title}")
+            lines.append("")
+            lines.append("| Operation | Mean (ms) | Median (ms) | Std Dev (ms) | Ops/sec | Iterations |")
+            lines.append("|-----------|----------:|------------:|-------------:|--------:|-----------:|")
+            for name, stats in section.items():
+                if name in skip_keys or not isinstance(stats, dict) or "mean_ms" not in stats:
+                    continue
+                lines.append(
+                    f"| {name} | {stats['mean_ms']:.4f} | {stats['median_ms']:.4f} "
+                    f"| {stats['std_dev_ms']:.4f} | {stats['ops_per_sec']:,.2f} "
+                    f"| {stats['iterations']} |"
+                )
+            lines.append("")
+
+        _render_table("Key Generation", "key_generation")
+        _render_table("Cryptographic Operations", "cryptographic_operations")
+        _render_table("Code Operations", "dna_operations")
+        _render_table("Ethical Integration", "ethical_integration", skip_keys=("ethical_overhead",))
+
+        # Ethical overhead callout
+        ethical = self.results.get("ethical_integration", {})
+        if "ethical_overhead" in ethical:
+            oh = ethical["ethical_overhead"]
+            lines.append(f"> **Ethical context overhead:** {oh['overhead_ms']:.4f} ms "
+                         f"({oh['overhead_pct']:.2f}%)")
+            lines.append("")
+
+        # --- Scalability table ---
+        scalability = self.results.get("scalability", {})
+        if scalability:
+            lines.append("## Scalability (Package Creation by Input Size)")
+            lines.append("")
+            lines.append("| Input Scale | Mean (ms) | Ops/sec | Iterations |")
+            lines.append("|------------:|----------:|--------:|-----------:|")
+            for name, stats in scalability.items():
+                if not isinstance(stats, dict) or "mean_ms" not in stats:
+                    continue
+                label = name.replace("dna_size_", "")
+                lines.append(
+                    f"| {label}x | {stats['mean_ms']:.4f} | "
+                    f"{stats['ops_per_sec']:,.2f} | {stats['iterations']} |"
+                )
+            lines.append("")
+
+        # --- ASCII bar chart for ops/sec comparison ---
+        lines.append("## Performance Comparison (ops/sec)")
+        lines.append("")
+        lines.append("```")
+
+        chart_entries = []
+        for section_key in ("key_generation", "cryptographic_operations", "dna_operations"):
+            section = self.results.get(section_key, {})
+            for name, stats in section.items():
+                if isinstance(stats, dict) and "ops_per_sec" in stats:
+                    chart_entries.append((name, stats["ops_per_sec"]))
+
+        if chart_entries:
+            max_ops = max(v for _, v in chart_entries)
+            max_label = max(len(n) for n, _ in chart_entries)
+            bar_width = 40
+
+            for name, ops in chart_entries:
+                bar_len = int((ops / max_ops) * bar_width) if max_ops > 0 else 0
+                bar = "\u2588" * bar_len
+                lines.append(f"{name:>{max_label}} | {bar} {ops:,.0f}")
+
+        lines.append("```")
+        lines.append("")
+
+        # --- Write file ---
+        md_content = "\n".join(lines)
+        with open(output_path, "w") as f:
+            f.write(md_content)
+        print(f"Markdown report saved to: {output_path}")
+        return md_content
 
 
 def main():
     """Run benchmark suite and save results."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="AMA Cryptography Benchmark Suite")
+    parser.add_argument(
+        "--markdown", "-m", type=str, default="BENCHMARKS.md",
+        help="Path for markdown report output (default: BENCHMARKS.md)",
+    )
+    parser.add_argument(
+        "--json", "-j", type=str, default="benchmark_results.json",
+        help="Path for JSON results output (default: benchmark_results.json)",
+    )
+    parser.add_argument(
+        "--no-markdown", action="store_true",
+        help="Skip markdown report generation",
+    )
+    args = parser.parse_args()
+
     suite = BenchmarkSuite()
     results = suite.run_comprehensive_benchmark()
-    suite.save_results()
+    suite.save_results(args.json)
+
+    if not args.no_markdown:
+        suite.generate_markdown(args.markdown)
 
     # Print summary
-    print("\n🎯 PERFORMANCE SUMMARY:")
+    print("\nPERFORMANCE SUMMARY:")
     print("=" * 50)
 
     crypto_ops = results["cryptographic_operations"]

@@ -1,0 +1,182 @@
+name: CI - Static Analysis (C Code)
+
+on:
+  push:
+    branches: [ main, develop, 'claude/**' ]
+  pull_request:
+    branches: [ main, develop ]
+
+permissions:
+  contents: read
+  security-events: write  # Required for CodeQL SARIF upload
+
+jobs:
+  cppcheck:
+    name: Cppcheck Static Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: sudo apt-get update && sudo apt-get install -y cppcheck
+
+      - name: Run cppcheck on C sources
+        run: |
+          cppcheck \
+            --enable=warning,style,performance,portability \
+            --suppress=missingIncludeSystem \
+            --suppress=unusedFunction \
+            --error-exitcode=1 \
+            --inline-suppr \
+            --std=c11 \
+            -I include/ \
+            -DAMA_USE_NATIVE_PQC \
+            --force \
+            src/c/ 2>&1 | tee cppcheck-report.txt
+
+      - name: Upload cppcheck report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cppcheck-report
+          path: cppcheck-report.txt
+          retention-days: 30
+
+  clang-analyzer:
+    name: Clang Static Analyzer (scan-build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang clang-tools
+
+      - name: Run scan-build
+        run: |
+          mkdir -p build-scan
+          cd build-scan
+          scan-build --status-bugs \
+            -enable-checker security.FloatLoopCounter \
+            -enable-checker security.insecureAPI.UncheckedReturn \
+            -enable-checker alpha.security.ArrayBoundV2 \
+            -enable-checker alpha.security.MallocOverflow \
+            -enable-checker alpha.security.ReturnPtrRange \
+            -enable-checker alpha.security.taint.TaintPropagation \
+            cmake .. \
+              -DCMAKE_C_COMPILER=clang \
+              -DAMA_USE_NATIVE_PQC=ON \
+              -DAMA_BUILD_TESTS=OFF \
+              -DAMA_BUILD_EXAMPLES=OFF \
+              -DAMA_ENABLE_LTO=OFF
+          scan-build --status-bugs \
+            -enable-checker security.FloatLoopCounter \
+            -enable-checker security.insecureAPI.UncheckedReturn \
+            -enable-checker alpha.security.ArrayBoundV2 \
+            -enable-checker alpha.security.MallocOverflow \
+            -enable-checker alpha.security.ReturnPtrRange \
+            -enable-checker alpha.security.taint.TaintPropagation \
+            make -j$(nproc)
+
+      - name: Upload scan-build report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-build-report
+          path: /tmp/scan-build-*
+          retention-days: 30
+
+  codeql:
+    name: CodeQL Security Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: c-cpp, python
+          queries: security-and-quality
+
+      - name: Build C library for CodeQL
+        run: |
+          cmake -B build \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=OFF \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_ENABLE_LTO=OFF
+          cmake --build build -j$(nproc)
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:c-cpp"
+
+  compiler-warnings:
+    name: Strict Compiler Warnings
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ${{ matrix.compiler }}
+
+      - name: Build with strict warnings (Werror)
+        run: |
+          cmake -B build-strict \
+            -DCMAKE_C_COMPILER=${{ matrix.compiler }} \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wno-sign-conversion" \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_ENABLE_LTO=OFF
+          cmake --build build-strict -j$(nproc)
+
+      - name: Run tests
+        run: cd build-strict && ctest --output-on-failure
+
+  address-sanitizer:
+    name: AddressSanitizer + UBSan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang
+
+      - name: Build with ASan + UBSan
+        run: |
+          cmake -B build-asan \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_ENABLE_LTO=OFF
+          cmake --build build-asan -j$(nproc)
+
+      - name: Run tests under sanitizers
+        env:
+          ASAN_OPTIONS: detect_leaks=1:detect_stack_use_after_return=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: cd build-asan && ctest --output-on-failure

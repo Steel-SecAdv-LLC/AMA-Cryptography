@@ -713,6 +713,9 @@ static int test_kyber_kat_vector(void) {
         kat_tested++;
     }
 
+    /* Free any residual entry from the last rsp_read_entry call
+     * (e.g., when loop exits due to kat_tested >= 10) */
+    rsp_entry_free(&entry);
     fclose(f);
 
     printf("    KAT vectors: %d/%d passed\n", kat_passed, kat_tested);
@@ -803,6 +806,9 @@ static int test_dilithium_kat_vector(void) {
         kat_tested++;
     }
 
+    /* Free any residual entry from the last rsp_read_entry call
+     * (e.g., when loop exits due to kat_tested >= 10) */
+    rsp_entry_free(&entry);
     fclose(f);
 
     printf("    KAT vectors: %d/%d passed\n", kat_passed, kat_tested);

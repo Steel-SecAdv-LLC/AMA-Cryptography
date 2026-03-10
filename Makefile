@@ -12,7 +12,7 @@
 #   make install    - Install library system-wide
 #   make docker     - Build Docker image
 
-.PHONY: all c python test clean install docker help c-api constant-time-check security-scan
+.PHONY: all c python test clean install docker help c-api constant-time-check security-scan fuzz fuzz-run
 
 # Default target
 all: c python
@@ -147,6 +147,31 @@ constant-time-check-full:
 	@cd tools/constant_time && $(MAKE) test-full
 	@echo "✓ Full constant-time verification complete"
 
+# Build fuzzing harnesses (requires clang)
+fuzz:
+	@echo "Building fuzzing harnesses (libFuzzer + ASan)..."
+	@mkdir -p build-fuzz
+	@cd build-fuzz && cmake .. \
+		-DCMAKE_C_COMPILER=clang \
+		-DCMAKE_BUILD_TYPE=Debug \
+		-DAMA_BUILD_FUZZ=ON \
+		-DAMA_BUILD_TESTS=OFF \
+		-DAMA_BUILD_EXAMPLES=OFF \
+		-DAMA_ENABLE_LTO=OFF \
+		-DAMA_USE_NATIVE_PQC=ON && $(MAKE)
+	@echo "✓ Fuzz harnesses built in build-fuzz/bin/"
+
+# Run a quick fuzzing smoke test (10 seconds per target)
+fuzz-run: fuzz
+	@echo "Running fuzzing smoke tests (10 seconds each)..."
+	@for target in fuzz_sha3 fuzz_ed25519 fuzz_aes_gcm fuzz_hkdf fuzz_consttime; do \
+		echo "  Fuzzing $$target..."; \
+		./build-fuzz/bin/$$target \
+			-max_total_time=10 -max_len=4096 \
+			build-fuzz/corpus/$$target/ 2>&1 | tail -3; \
+	done
+	@echo "✓ Fuzzing smoke tests complete"
+
 # Build C API with native PQC
 c-api:
 	@echo "Building C API library with native PQC..."
@@ -193,6 +218,8 @@ help:
 	@echo "  make security-scan        - Run comprehensive security scan (bandit + semgrep + pip-audit)"
 	@echo "  make constant-time-check  - Run constant-time verification (100K iterations)"
 	@echo "  make constant-time-check-full - Run full constant-time verification (1M iterations)"
+	@echo "  make fuzz                 - Build libFuzzer harnesses (requires clang)"
+	@echo "  make fuzz-run             - Run 10-second fuzzing smoke tests"
 	@echo ""
 	@echo "Development targets:"
 	@echo "  make format         - Format code with black/isort"

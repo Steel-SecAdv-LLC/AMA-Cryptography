@@ -409,6 +409,55 @@ def generate_report(results: List[BenchmarkResult]) -> Dict[str, Any]:
     }
 
 
+def generate_markdown_report(results: List[BenchmarkResult], report: Dict[str, Any]) -> str:
+    """Generate a markdown report with tables and bar chart."""
+    lines = []
+    lines.append("# Benchmark Regression Report")
+    lines.append("")
+    lines.append(f"**Timestamp:** {report['timestamp']}")
+    summary = report["summary"]
+    lines.append(
+        f"**Results:** {summary['passed']}/{summary['total']} passed, "
+        f"{summary['failed']} failed, {summary['warnings']} warnings"
+    )
+    lines.append("")
+
+    # Results table
+    lines.append("## Results")
+    lines.append("")
+    lines.append(
+        "| Primitive | Ops/sec | Baseline | Delta | Tolerance | Status |"
+    )
+    lines.append(
+        "|-----------|--------:|---------:|------:|----------:|--------|"
+    )
+    for r in results:
+        status = "PASS" if r.passed else ("WARN" if r.optional else "**FAIL**")
+        lines.append(
+            f"| {r.description} | {r.ops_per_second:,.0f} | {r.baseline_value:,.0f} "
+            f"| {r.regression_percent:+.1f}% | {r.tolerance_percent:.0f}% | {status} |"
+        )
+    lines.append("")
+
+    # ASCII bar chart
+    if results:
+        lines.append("## Throughput Comparison")
+        lines.append("")
+        lines.append("```")
+        max_ops = max(r.ops_per_second for r in results) if results else 1
+        max_label = max(len(r.name) for r in results)
+        bar_width = 40
+        for r in results:
+            bar_len = int((r.ops_per_second / max_ops) * bar_width) if max_ops > 0 else 0
+            bar = "\u2588" * bar_len
+            marker = " " if r.passed else " !"
+            lines.append(f"{r.name:>{max_label}} |{marker}{bar} {r.ops_per_second:,.0f}")
+        lines.append("```")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -435,6 +484,11 @@ def main():
         "--update-baseline",
         action="store_true",
         help="Update baseline with current results (use with caution)",
+    )
+    parser.add_argument(
+        "--markdown",
+        type=Path,
+        help="Path to write markdown report with tables and charts",
     )
 
     args = parser.parse_args()
@@ -477,6 +531,12 @@ def main():
         with open(args.output, "w") as f:
             json.dump(report, f, indent=2)
         print(f"Report written to: {args.output}")
+
+    if args.markdown:
+        md = generate_markdown_report(results, report)
+        with open(args.markdown, "w") as f:
+            f.write(md)
+        print(f"Markdown report written to: {args.markdown}")
 
     # Summary
     summary = report["summary"]

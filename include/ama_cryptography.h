@@ -952,6 +952,37 @@ AMA_API ama_error_t ama_dilithium_keypair_from_seed(
 );
 
 /* ============================================================================
+ * CONSTANT-TIME AES S-BOX (bitsliced / algebraic decomposition)
+ * ============================================================================ */
+
+/**
+ * @brief Constant-time AES S-box substitution
+ *
+ * Computes the AES SubBytes transformation using algebraic decomposition
+ * in GF((2^4)^2) tower field arithmetic. No lookup tables are used —
+ * all operations are bitwise, eliminating cache-timing side channels.
+ *
+ * When AMA_AES_CONSTTIME is defined, the AES-GCM implementation uses
+ * this function instead of the standard 256-byte S-box table.
+ *
+ * @param x Input byte
+ * @return S-box output byte
+ */
+AMA_API uint8_t ama_aes_sbox_consttime(uint8_t x);
+
+/**
+ * @brief AES-256 key expansion using constant-time S-box
+ */
+AMA_API void ama_aes256_key_expansion_consttime(
+    const uint8_t key[32], uint8_t round_keys[240]);
+
+/**
+ * @brief AES-256 block encryption using constant-time S-box
+ */
+AMA_API void ama_aes256_encrypt_block_consttime(
+    const uint8_t round_keys[240], const uint8_t in[16], uint8_t out[16]);
+
+/* ============================================================================
  * VERSIONING
  * ============================================================================ */
 

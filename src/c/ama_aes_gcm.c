@@ -56,6 +56,14 @@
  * AES-256 CORE (T-table free, standard S-box lookup)
  * ============================================================================ */
 
+/* When AMA_AES_CONSTTIME is defined, the S-box lookup and block encryption
+ * are replaced by the algebraic constant-time implementation from
+ * ama_aes_bitsliced.c. This eliminates cache-timing side channels. */
+#ifdef AMA_AES_CONSTTIME
+/* Constant-time S-box provided by ama_aes_bitsliced.c (tower field GF((2^4)^2)) */
+#define aes256_key_expansion(key, rk) ama_aes256_key_expansion_consttime(key, rk)
+#define aes256_encrypt_block(rk, in, out) ama_aes256_encrypt_block_consttime(rk, in, out)
+#else
 /* AES S-box (standard 256-byte lookup table).
  * WARNING: The lookup index is state[i] = plaintext[i] XOR round_key[i],
  * which is key-dependent. This table-based approach is NOT constant-time
@@ -175,6 +183,7 @@ static void aes256_encrypt_block(const uint8_t round_keys[240],
 
     memcpy(out, state, 16);
 }
+#endif /* !AMA_AES_CONSTTIME */
 
 /* ============================================================================
  * GHASH (GF(2^128) multiplication for GCM authentication)
