@@ -1,5 +1,3 @@
-# AMA Cryptography
-
 <div align="center">
 
   <img width="917" height="194" alt="image" src="https://github.com/user-attachments/assets/b8cf718e-82e0-4254-94bc-8c6aad12a895" />
@@ -17,7 +15,7 @@
 ```
               +==============================================================================+
               |                            AMA CRYPTOGRAPHY ♱                                |
-              |                   Post-Quantum Security System                               |
+              |                       Post-Quantum Security System                           |
               |                                                                              |
               |   6-Layer Defense      |   Quantum-Resistant    |   Defense-in-Depth         |
               |   Cython-Optimized     |   3R Anomaly Monitor   |   Cross-Platform           |
@@ -29,7 +27,7 @@
               |   ML-DSA-65/Kyber      |   NumPy Integration    |   Key Management           |
               |   SPHINCS+/NTT Ops     |   Math Engine          |   3R Monitoring            |
               |                                                                              |
-              |                   Built for a civilized evolution.                           |
+              |                       Built for a civilized evolution.                       |
               +==============================================================================+
 ```
 
@@ -42,7 +40,7 @@
 
 ---
 
-## Executive Summary
+## Executive Summary 🌎 
 
 AMA Cryptography is a hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Community-tested, not externally audited. A secure, multi-language cryptographic security system designed to protect people, data, and networks against both classical and quantum threats. Built on a foundation of mathematically rigorous post-quantum cryptography (PQC), AMA Cryptography delivers security-hardened features with exceptional performance.
 
@@ -255,7 +253,7 @@ Future-proof cryptography:
 <details>
 <summary><strong>Real-world scenarios (click to expand)</strong></summary>
 
-### Humanitarian and Conservation 🌎 
+### Humanitarian and Conservation 
 
 **Unique Value:** Protection of sensitive field data with runtime attack detection (Not approved for clinical, medical, or regulated government deployment without independent audit):
 
@@ -321,10 +319,18 @@ Future-proof cryptography:
 
 ---
 
-## Performance Metrics 📊
+## Performance Metrics
 
 <details>
 <summary><strong>Cryptographic Operation Benchmarks</strong></summary>
+
+![Performance Dashboard](assets/performance_dashboard.png)
+
+*Multi-panel performance dashboard showing cryptographic throughput, signature latency, scalability, key generation speed, 6-layer breakdown, regression analysis, validation claims, and hybrid performance — all from real benchmark data.*
+
+![Benchmark Report](assets/benchmark_report.png)
+
+*Comprehensive benchmark report with latency distribution, sign vs verify analysis, category performance, top/bottom operations, ethical overhead, regression improvement, NIST FIPS compliance, and summary statistics.*
 
 ### Hybrid Operations (Ed25519 + ML-DSA-65)
 
@@ -336,10 +342,6 @@ Future-proof cryptography:
 **Performance Optimization:** AMA Cryptography now supports passing Ed25519 key objects for 2x faster signing. The `HybridSignatureProvider` class automatically uses this optimization.
 
 \*Optimized performance uses cached Ed25519 key objects, eliminating reconstruction overhead.
-
-![Hybrid Signing and Verification Performance](assets/performance_comparison.png)
-
-*Visual comparison of hybrid signing and verification throughput for AMA Cryptography (standard vs optimized) on reference hardware (Linux x86_64, 16 cores, 13GB RAM).*
 
 ### ML-DSA-65 (Post-Quantum) Operations
 
@@ -360,10 +362,6 @@ Complete security package with all defense layers:
 | Package Verify (6 layers) | 0.199ms | 5,029 ops/sec |
 
 **6 Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65, HKDF, RFC 3161 (optional)
-
-![Package Performance](assets/package_performance.png)
-
-*Complete 6-layer cryptographic packages can be created at 3,595 ops/sec and verified at 5,029 ops/sec.*
 
 ### Core Cryptographic Primitives
 
@@ -810,7 +808,7 @@ KAT vectors are sourced from NIST PQC standardization and validate that the nati
 
 ---
 
-## Build System 🖥️
+## Build System 
 
 <details>
 <summary><strong>CMake (C Library with Native PQC)</strong></summary>

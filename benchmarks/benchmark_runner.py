@@ -106,60 +106,56 @@ def run_hmac_sha3_256_benchmark(iterations: int = 100) -> float:
 
 
 def run_ed25519_keygen_benchmark(iterations: int = 50) -> float:
-    """Benchmark Ed25519 key generation."""
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    """Benchmark Ed25519 key generation using native C backend."""
+    from code_guardian_secure import generate_ed25519_keypair
 
     def operation():
-        Ed25519PrivateKey.generate()
+        generate_ed25519_keypair()
 
     return benchmark_operation(operation, iterations)
 
 
 def run_ed25519_sign_benchmark(iterations: int = 50) -> float:
-    """Benchmark Ed25519 signing."""
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    """Benchmark Ed25519 signing using native C backend."""
+    from code_guardian_secure import ed25519_sign, generate_ed25519_keypair
 
-    private_key = Ed25519PrivateKey.generate()
+    keypair = generate_ed25519_keypair()
     message = b"Test message for signing" * 10
 
     def operation():
-        private_key.sign(message)
+        ed25519_sign(message, keypair.private_key)
 
     return benchmark_operation(operation, iterations)
 
 
 def run_ed25519_verify_benchmark(iterations: int = 50) -> float:
-    """Benchmark Ed25519 verification."""
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    """Benchmark Ed25519 verification using native C backend."""
+    from code_guardian_secure import (
+        ed25519_sign,
+        ed25519_verify,
+        generate_ed25519_keypair,
+    )
 
-    private_key = Ed25519PrivateKey.generate()
-    public_key = private_key.public_key()
+    keypair = generate_ed25519_keypair()
     message = b"Test message for signing" * 10
-    signature = private_key.sign(message)
+    signature = ed25519_sign(message, keypair.private_key)
 
     def operation():
-        public_key.verify(signature, message)
+        ed25519_verify(message, signature, keypair.public_key)
 
     return benchmark_operation(operation, iterations)
 
 
 def run_hkdf_derive_benchmark(iterations: int = 100) -> float:
-    """Benchmark HKDF key derivation."""
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    """Benchmark HKDF key derivation using native C backend."""
+    from code_guardian_secure import native_hkdf
 
     master_secret = secrets.token_bytes(32)
     salt = secrets.token_bytes(32)
     info = b"benchmark-test"
 
     def operation():
-        hkdf = HKDF(
-            algorithm=hashes.SHA3_256(),
-            length=96,  # 3 x 32-byte keys
-            salt=salt,
-            info=info,
-        )
-        hkdf.derive(master_secret)
+        native_hkdf(master_secret, 96, salt, info)
 
     return benchmark_operation(operation, iterations)
 

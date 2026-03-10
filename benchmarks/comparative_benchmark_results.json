@@ -1,14 +1,14 @@
 {
-  "timestamp": "2025-11-28T20:30:05.521310",
+  "timestamp": "2026-03-10T05:13:14.785438",
   "iterations": 1000,
   "results": [
     {
       "implementation": "AMA Cryptography",
       "operation": "Ed25519 Sign",
       "iterations": 1000,
-      "mean_time_ms": 0.1036935270002175,
-      "median_time_ms": 0.0945100000109278,
-      "ops_per_sec": 9643.803513385194,
+      "mean_time_ms": 0.2416008009995494,
+      "median_time_ms": 0.23564199995007584,
+      "ops_per_sec": 4139.05912506418,
       "available": true,
       "error": null
     },
@@ -16,9 +16,9 @@
       "implementation": "AMA Cryptography",
       "operation": "Ed25519 Verify",
       "iterations": 1000,
-      "mean_time_ms": 0.12645323800046526,
-      "median_time_ms": 0.12108950001277208,
-      "ops_per_sec": 7908.061634580846,
+      "mean_time_ms": 0.2430119819985066,
+      "median_time_ms": 0.24270149998528723,
+      "ops_per_sec": 4115.023431256757,
       "available": true,
       "error": null
     },
@@ -26,9 +26,9 @@
       "implementation": "AMA Cryptography",
       "operation": "ML-DSA-65 Sign",
       "iterations": 1000,
-      "mean_time_ms": 0.11692453299991712,
-      "median_time_ms": 0.10256600000957405,
-      "ops_per_sec": 8552.52507188298,
+      "mean_time_ms": 0.2657076740015327,
+      "median_time_ms": 0.26464600000508653,
+      "ops_per_sec": 3763.5345074535994,
       "available": true,
       "error": null
     },
@@ -36,9 +36,9 @@
       "implementation": "AMA Cryptography",
       "operation": "ML-DSA-65 Verify",
       "iterations": 1000,
-      "mean_time_ms": 0.03703708400064443,
-      "median_time_ms": 0.03454950000048029,
-      "ops_per_sec": 26999.965763573626,
+      "mean_time_ms": 0.20476367999651757,
+      "median_time_ms": 0.20510950002972095,
+      "ops_per_sec": 4883.67858995798,
       "available": true,
       "error": null
     },
@@ -46,9 +46,9 @@
       "implementation": "AMA Cryptography",
       "operation": "Hybrid Sign",
       "iterations": 1000,
-      "mean_time_ms": 0.21856502300053648,
-      "median_time_ms": 0.20130849999588918,
-      "ops_per_sec": 4575.29748480179,
+      "mean_time_ms": 0.49354837099792803,
+      "median_time_ms": 0.4969589999745949,
+      "ops_per_sec": 2026.143856939603,
       "available": true,
       "error": null
     },
@@ -56,97 +56,42 @@
       "implementation": "AMA Cryptography",
       "operation": "Hybrid Verify",
       "iterations": 1000,
-      "mean_time_ms": 0.1614933519999795,
-      "median_time_ms": 0.15729300000089097,
-      "ops_per_sec": 6192.205360875331,
+      "mean_time_ms": 0.45068999500210793,
+      "median_time_ms": 0.454220000051464,
+      "ops_per_sec": 2218.8200561126787,
       "available": true,
       "error": null
     },
     {
       "implementation": "cryptography (OpenSSL)",
-      "operation": "Ed25519 Sign",
-      "iterations": 1000,
-      "mean_time_ms": 0.046962255000011055,
-      "median_time_ms": 0.04565049999882831,
-      "ops_per_sec": 21293.696395110597,
-      "available": true,
-      "error": null
-    },
-    {
-      "implementation": "cryptography (OpenSSL)",
-      "operation": "Ed25519 Verify",
-      "iterations": 1000,
-      "mean_time_ms": 0.12026706899993655,
-      "median_time_ms": 0.11621849999698952,
-      "ops_per_sec": 8314.828059878366,
-      "available": true,
-      "error": null
+      "operation": "Ed25519",
+      "iterations": 0,
+      "mean_time_ms": 0,
+      "median_time_ms": 0,
+      "ops_per_sec": 0,
+      "available": false,
+      "error": "cryptography library not available: ImportError"
     },
     {
       "implementation": "liboqs-python",
-      "operation": "ML-DSA-65 Sign",
-      "iterations": 1000,
-      "mean_time_ms": 0.10398957600045833,
-      "median_time_ms": 0.08573000000922093,
-      "ops_per_sec": 9616.34846934651,
-      "available": true,
-      "error": null
-    },
-    {
-      "implementation": "liboqs-python",
-      "operation": "ML-DSA-65 Verify",
-      "iterations": 1000,
-      "mean_time_ms": 0.03090824099990641,
-      "median_time_ms": 0.030495000004293615,
-      "ops_per_sec": 32353.83081175755,
-      "available": true,
-      "error": null
+      "operation": "ML-DSA-65",
+      "iterations": 0,
+      "mean_time_ms": 0,
+      "median_time_ms": 0,
+      "ops_per_sec": 0,
+      "available": false,
+      "error": "liboqs-python not available: ModuleNotFoundError"
     },
     {
       "implementation": "OpenSSL+liboqs",
-      "operation": "Hybrid Sign",
-      "iterations": 1000,
-      "mean_time_ms": 0.16106317900005251,
-      "median_time_ms": 0.14126899999666875,
-      "ops_per_sec": 6208.7437129232,
-      "available": true,
-      "error": null
-    },
-    {
-      "implementation": "OpenSSL+liboqs",
-      "operation": "Hybrid Verify",
-      "iterations": 1000,
-      "mean_time_ms": 0.14878976600047622,
-      "median_time_ms": 0.14704550000033123,
-      "ops_per_sec": 6720.892349523551,
-      "available": true,
-      "error": null
+      "operation": "Hybrid",
+      "iterations": 0,
+      "mean_time_ms": 0,
+      "median_time_ms": 0,
+      "ops_per_sec": 0,
+      "available": false,
+      "error": "Dependencies not available: ImportError"
     }
   ],
-  "comparisons": {
-    "Ed25519 Sign_cryptography (OpenSSL)": {
-      "slowdown_factor": 0.452894759765598,
-      "ama_cryptography_faster_by_percent": -54.7105240234402
-    },
-    "Ed25519 Verify_cryptography (OpenSSL)": {
-      "slowdown_factor": 0.9510793942618856,
-      "ama_cryptography_faster_by_percent": -4.892060573811441
-    },
-    "ML-DSA-65 Sign_liboqs-python": {
-      "slowdown_factor": 0.8893734559584004,
-      "ama_cryptography_faster_by_percent": -11.062654404159955
-    },
-    "ML-DSA-65 Verify_liboqs-python": {
-      "slowdown_factor": 0.8345214488097558,
-      "ama_cryptography_faster_by_percent": -16.547855119024423
-    },
-    "Hybrid Sign_OpenSSL+liboqs": {
-      "slowdown_factor": 0.7369119577731208,
-      "ama_cryptography_faster_by_percent": -26.30880422268792
-    },
-    "Hybrid Verify_OpenSSL+liboqs": {
-      "slowdown_factor": 0.921336786671535,
-      "ama_cryptography_faster_by_percent": -7.866321332846504
-    }
-  }
+  "comparisons": {}
 }

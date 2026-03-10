@@ -201,6 +201,16 @@ class ComparativeBenchmark:
         print("=" * 70)
 
         try:
+            # Pre-check: verify cryptography library is functional
+            # (guards against broken CFFI/Rust/pyo3 bindings that panic on import)
+            import subprocess
+            check = subprocess.run(
+                [sys.executable, "-c", "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey"],
+                capture_output=True, timeout=5,
+            )
+            if check.returncode != 0:
+                raise ImportError("cryptography library has broken bindings")
+
             from cryptography.hazmat.primitives.asymmetric.ed25519 import (
                 Ed25519PrivateKey,
             )
@@ -227,8 +237,8 @@ class ComparativeBenchmark:
                 )
             )
 
-        except Exception as e:
-            print(f"  ❌ Error benchmarking cryptography library: {e}")
+        except (ImportError, OSError, Exception) as e:
+            print(f"  SKIP: cryptography library not available ({type(e).__name__})")
             self.results.append(
                 BenchmarkResult(
                     implementation="cryptography (OpenSSL)",
@@ -238,7 +248,7 @@ class ComparativeBenchmark:
                     median_time_ms=0,
                     ops_per_sec=0,
                     available=False,
-                    error=str(e),
+                    error=f"cryptography library not available: {type(e).__name__}",
                 )
             )
 
@@ -275,7 +285,7 @@ class ComparativeBenchmark:
                     )
                 )
             except Exception as e:
-                print(f"  ⚠ ML-DSA-65 error: {e}")
+                print(f"  SKIP: ML-DSA-65 error: {e}")
                 self.results.append(
                     BenchmarkResult(
                         implementation="liboqs-python",
@@ -289,8 +299,8 @@ class ComparativeBenchmark:
                     )
                 )
 
-        except ImportError as e:
-            print(f"  ⚠ liboqs-python not available: {e}")
+        except (ImportError, Exception) as e:
+            print(f"  SKIP: liboqs-python not available ({type(e).__name__})")
             self.results.append(
                 BenchmarkResult(
                     implementation="liboqs-python",
@@ -300,11 +310,9 @@ class ComparativeBenchmark:
                     median_time_ms=0,
                     ops_per_sec=0,
                     available=False,
-                    error="liboqs-python not installed",
+                    error=f"liboqs-python not available: {type(e).__name__}",
                 )
             )
-        except Exception as e:
-            print(f"  ❌ Error benchmarking liboqs: {e}")
 
     def benchmark_hybrid_openssl_liboqs(self):
         """Benchmark hybrid Ed25519 (OpenSSL) + ML-DSA-65 (liboqs)"""
@@ -313,6 +321,15 @@ class ComparativeBenchmark:
         print("=" * 70)
 
         try:
+            # Pre-check: verify both libraries are functional
+            import subprocess
+            check = subprocess.run(
+                [sys.executable, "-c", "import oqs; from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey"],
+                capture_output=True, timeout=5,
+            )
+            if check.returncode != 0:
+                raise ImportError("oqs and/or cryptography library not available")
+
             import oqs
             from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -346,8 +363,8 @@ class ComparativeBenchmark:
                 self.benchmark_operation("OpenSSL+liboqs", "Hybrid Verify", hybrid_verify)
             )
 
-        except Exception as e:
-            print(f"  ⚠ Hybrid benchmark error: {e}")
+        except (ImportError, Exception) as e:
+            print(f"  SKIP: Hybrid benchmark requires both cryptography and liboqs ({type(e).__name__})")
             self.results.append(
                 BenchmarkResult(
                     implementation="OpenSSL+liboqs",
@@ -357,7 +374,7 @@ class ComparativeBenchmark:
                     median_time_ms=0,
                     ops_per_sec=0,
                     available=False,
-                    error=str(e),
+                    error=f"Dependencies not available: {type(e).__name__}",
                 )
             )
 
