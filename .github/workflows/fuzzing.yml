@@ -53,7 +53,7 @@ jobs:
 
       - name: Run fuzzer (${{ matrix.target }})
         env:
-          FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || '30' }}
+          FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || '60' }}
         run: |
           mkdir -p corpus/${{ matrix.target }}
           mkdir -p artifacts/${{ matrix.target }}
@@ -112,7 +112,7 @@ jobs:
 
       - name: Run fuzzer (${{ matrix.target }})
         env:
-          FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || '30' }}
+          FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || '60' }}
         run: |
           mkdir -p corpus/${{ matrix.target }}
           mkdir -p artifacts/${{ matrix.target }}

@@ -164,7 +164,7 @@ jobs:
         bandit -r . -ll
 
     - name: Upload Bandit report
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: bandit-security-report
@@ -202,14 +202,16 @@ jobs:
 
     - name: Run benchmark regression tests
       run: |
-        python benchmarks/benchmark_runner.py --verbose --output benchmark-results.json
+        python benchmarks/benchmark_runner.py --verbose --output benchmark-results.json --markdown benchmark-report.md
 
     - name: Upload benchmark results
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: benchmark-results
-        path: benchmark-results.json
+        path: |
+          benchmark-results.json
+          benchmark-report.md
 
   constant-time-check:
     name: Constant-Time Verification (Smoke Test)
@@ -232,16 +234,19 @@ jobs:
         cmake ..
         make
 
-    - name: Build and run dudect harness
+    - name: Build and run dudect harnesses
       run: |
         cd tools/constant_time
         make clean
-        make
-        # Run smoke test with 50K iterations (faster for CI)
+        make all
+        # Run smoke tests with 50K iterations (faster for CI)
+        echo "=== Utility function timing analysis ==="
         ./dudect_harness 50000
+        echo "=== Crypto primitive timing analysis ==="
+        ./dudect_crypto 50000
 
     - name: Upload timing analysis results
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: constant-time-results
