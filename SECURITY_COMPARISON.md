@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.0 |
-| Last Updated | 2026-03-08 |
+| Document Version | 2.1 |
+| Last Updated | 2026-03-10 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -34,6 +34,9 @@
 | **ML-KEM-1024 (Kyber)** | ✅ liboqs (NIST-reviewed) | ✅ Native C (NIST KAT validated, 10/10 pass) | Equivalent |
 | **SPHINCS+-SHA2-256f** | ✅ liboqs | ✅ Native C (FIPS 205) | Equivalent |
 | **AES-256-GCM** | ✅ OpenSSL (audited) | ✅ Native C (SP 800-38D) | OpenSSL has AES-NI |
+| **X25519 Key Exchange** | ✅ OpenSSL (audited) | ✅ Native C (RFC 7748) | Equivalent |
+| **ChaCha20-Poly1305** | ✅ OpenSSL (audited) | ✅ Native C (RFC 8439, constant-time) | Equivalent |
+| **Argon2id** | ⚠️ Not built-in | ✅ Native C (RFC 9106) | **AMA has built-in** |
 | **Audit Status** | ✅ Extensively audited | ❌ **No external audit** | **OpenSSL+liboqs safer** |
 | **FIPS 140-2** | ✅ Available | ❌ Not certified | **OpenSSL+liboqs safer** |
 
@@ -164,7 +167,7 @@
 | **Quantum Security** | 192-bit (ML-DSA-65) | 192-bit (ML-DSA-65) | **Equivalent** |
 | **Hash Security** | N/A | 128-bit (SHA3-256) | **AMA Cryptography adds integrity layer** |
 | **MAC Security** | N/A | 256-bit (HMAC-SHA3-256) | **AMA Cryptography adds authentication** |
-| **AEAD** | ✅ AES-256-GCM (AES-NI) | ✅ AES-256-GCM (native C) | **Equivalent** (OpenSSL has hardware accel.) |
+| **AEAD** | ✅ AES-256-GCM (AES-NI) | ✅ AES-256-GCM + ChaCha20-Poly1305 (native C) | AMA offers constant-time AEAD alternative |
 
 **Overall:** Cryptographic strength is **equivalent** for signatures, but AMA Cryptography adds **additional security properties** through extra layers.
 
@@ -297,6 +300,6 @@ AMA Cryptography **COULD BE more secure** if it receives proper external auditin
 
 ---
 
-**Generated:** 2026-03-08
+**Generated:** 2026-03-10
 **Copyright:** 2025-2026 Steel Security Advisors LLC
 **License:** Apache License 2.0

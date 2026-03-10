@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.0 |
-| Last Updated | 2026-03-08 |
+| Document Version | 2.1 |
+| Last Updated | 2026-03-10 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -148,6 +148,48 @@ AVX2 support for polynomial operations:
 - Tag: 128 bits
 - Security: IND-CPA + INT-CTXT (128-bit quantum via Grover's bound)
 - **Note:** Lookup-table S-box, not constant-time for cache-timing in shared-tenant environments
+
+### X25519 (Key Exchange)
+
+**RFC 7748 — Native C Implementation**
+
+- Public key: 32 bytes
+- Private key: 32 bytes (clamped scalar)
+- Shared secret: 32 bytes
+- Security: 128-bit classical (NOT quantum-resistant)
+- Used as classical component in hybrid KEM combiner
+
+### ChaCha20-Poly1305 (Alternative AEAD)
+
+**RFC 8439 — Native C Implementation**
+
+- Key: 256 bits
+- Nonce: 96 bits
+- Tag: 128 bits
+- Security: IND-CPA + INT-CTXT (128-bit quantum via Grover's bound)
+- **Constant-time by design** — no table lookups, no cache-timing concerns
+- Recommended alternative to AES-256-GCM in shared-tenant environments
+
+### Argon2id (Password Hashing)
+
+**RFC 9106 — Native C Implementation**
+
+- Memory cost: Configurable (recommended: 64 MiB+)
+- Time cost: Configurable (recommended: 3+ iterations)
+- Output: Variable length (recommended: 32 bytes)
+- Memory-hard: Resists GPU/ASIC brute-force attacks
+- Winner of Password Hashing Competition (2015)
+
+### secp256k1 (HD Key Derivation)
+
+**SEC 2 — Native C Implementation**
+
+- Private key: 32 bytes
+- Public key: 33 bytes (compressed) / 65 bytes (uncompressed)
+- Security: 128-bit classical (NOT quantum-resistant)
+- BIP32-compliant hierarchical deterministic key derivation
+
+---
 
 ## Adaptive Cryptographic Posture System (v2.0)
 
@@ -525,7 +567,7 @@ python -c "from ama_cryptography.math_engine import benchmark_matrix_operations;
 | Clang | 10+ | C11 support |
 | MSVC | 2019+ | Windows builds (volatile fallback for atomics) |
 
-**Note:** OpenSSL is **no longer required** as of v2.0. All cryptographic primitives (SHA3, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+) are implemented natively in C.
+**Note:** OpenSSL is **no longer required** as of v2.0. All cryptographic primitives (SHA3, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+, X25519, ChaCha20-Poly1305, Argon2, secp256k1) are implemented natively in C.
 
 ---
 
@@ -536,6 +578,7 @@ python -c "from ama_cryptography.math_engine import benchmark_matrix_operations;
 | 1.0.0 | 2025-11-26 | Initial professional release |
 | 1.1.0 | 2026-01-09 | Version alignment |
 | 2.0.0 | 2026-03-08 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, FIPS 203/204/205, KAT validation |
+| 2.0.1 | 2026-03-10 | Phase 2 primitives (X25519, ChaCha20-Poly1305, Argon2, secp256k1), fuzzing harnesses, threat model, Mercury Agent integration |
 
 ---
 

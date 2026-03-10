@@ -4,14 +4,16 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.0 |
-| Last Updated | 2026-03-08 |
+| Document Version | 2.1 |
+| Last Updated | 2026-03-10 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
 ---
 
 This document provides an overview of the cryptographic algorithms used in AMA Cryptography, their security properties, and references to official specifications.
+
+> **Design Note:** AMA Cryptography is built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the 6-layer defense architecture, double-helix key evolution, and adaptive posture system) is an original design by Steel Security Advisors LLC. AMA Cryptography serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent).
 
 ## Algorithm Summary
 
@@ -25,6 +27,10 @@ This document provides an overview of the cryptographic algorithms used in AMA C
 | SHA3-256 | Hash Function | 128-bit collision | FIPS 202 | Native C (`ama_sha3.c`) | Content Hashing |
 | HMAC-SHA3-256 | MAC | 256-bit | RFC 2104 | Native C | Authentication |
 | HKDF-SHA3-256 | Key Derivation | 256-bit | RFC 5869 | Native C (`ama_hkdf.c`) | Key Management |
+| X25519 | Key Exchange | 128-bit classical | RFC 7748 | Native C (`ama_x25519.c`) | Hybrid KEM |
+| ChaCha20-Poly1305 | Authenticated Encryption | 256-bit | RFC 8439 | Native C (`ama_chacha20poly1305.c`) | Alternative AEAD |
+| Argon2id | Password Hashing | Memory-hard | RFC 9106 | Native C (`ama_argon2.c`) | Key Derivation |
+| secp256k1 | Elliptic Curve | 128-bit classical | SEC 2 | Native C (`ama_secp256k1.c`) | HD Key Derivation |
 
 ## Post-Quantum Cryptography (PQC)
 
@@ -242,6 +248,11 @@ All cryptographic primitives are implemented natively in C with zero external de
 | `ama_sphincs.c` | SPHINCS+-SHA2-256f | FIPS 205 |
 | `ama_consttime.c` | Constant-time utilities | — |
 | `ama_platform_rand.c` | Platform CSPRNG | — |
+| `ama_x25519.c` | X25519 key exchange | RFC 7748 |
+| `ama_chacha20poly1305.c` | ChaCha20-Poly1305 AEAD | RFC 8439 |
+| `ama_argon2.c` | Argon2id password hashing | RFC 9106 |
+| `ama_secp256k1.c` | secp256k1 curve operations | SEC 2 |
+| `ama_aes_bitsliced.c` | Bitsliced AES S-box | — (optional) |
 
 ### Constant-Time Operations
 
@@ -290,6 +301,82 @@ The adaptive posture system (`ama_cryptography/adaptive_posture.py`) bridges the
 
 Algorithm strength ordering: ED25519 (0) → ML_DSA_65 (1) → SPHINCS_256F (2) → HYBRID_SIG (3)
 
+## Phase 2 Cryptographic Primitives
+
+### X25519 (Diffie-Hellman Key Exchange)
+
+X25519 provides elliptic curve Diffie-Hellman key exchange on Curve25519.
+
+**Parameters:**
+- Public Key: 32 bytes
+- Private Key: 32 bytes (clamped scalar)
+- Shared Secret: 32 bytes
+
+**Security Properties:**
+- 128-bit classical security
+- NOT quantum-resistant (vulnerable to Shor's algorithm)
+- Used in hybrid KEM combiner (classical component alongside Kyber-1024)
+
+**Standard:** RFC 7748
+
+**Implementation:** Native C (`ama_x25519.c`)
+
+### ChaCha20-Poly1305 (Alternative AEAD)
+
+ChaCha20-Poly1305 provides authenticated encryption as an alternative to AES-256-GCM, particularly suitable for environments where AES hardware acceleration is unavailable or cache-timing resistance is required.
+
+**Parameters:**
+- Key: 256 bits
+- Nonce: 96 bits
+- Tag: 128 bits
+
+**Security Properties:**
+- IND-CPA confidentiality under ChaCha20 PRP assumption
+- INT-CTXT authenticity
+- Constant-time by design (no table lookups, no cache-timing concerns)
+- 128-bit quantum security (Grover's bound)
+
+**Standard:** RFC 8439
+
+**Implementation:** Native C (`ama_chacha20poly1305.c`). Software-only, constant-time — recommended for shared-tenant environments where AES cache-timing is a concern.
+
+### Argon2id (Password Hashing)
+
+Argon2id provides memory-hard password hashing, combining data-dependent and data-independent memory access patterns for resistance against both GPU and side-channel attacks.
+
+**Parameters:**
+- Memory cost: Configurable (recommended: 64 MiB+)
+- Time cost: Configurable (recommended: 3+ iterations)
+- Parallelism: Configurable
+- Output: Variable length (recommended: 32 bytes)
+
+**Security Properties:**
+- Memory-hard: Resists GPU/ASIC brute-force attacks
+- Hybrid mode: Data-independent first pass + data-dependent second pass
+- Winner of the Password Hashing Competition (2015)
+
+**Standard:** RFC 9106
+
+**Implementation:** Native C (`ama_argon2.c`)
+
+### secp256k1 (Elliptic Curve Operations)
+
+secp256k1 provides elliptic curve operations supporting BIP32-compliant hierarchical deterministic (HD) key derivation.
+
+**Parameters:**
+- Private Key: 32 bytes (scalar)
+- Public Key: 33 bytes (compressed) or 65 bytes (uncompressed)
+- Curve Order: 2^256 - 432420386565659656852420866394968145599
+
+**Security Properties:**
+- 128-bit classical security
+- NOT quantum-resistant
+- Used for HD key derivation (BIP32 compliance)
+
+**Standard:** SEC 2 (Standards for Efficient Cryptography)
+
+**Implementation:** Native C (`ama_secp256k1.c`)
+
 ## References
 
 1. NIST FIPS 202 (2015). "SHA-3 Standard: Permutation-Based Hash and Extendable-Output Functions."
@@ -300,6 +387,9 @@ Algorithm strength ordering: ED25519 (0) → ML_DSA_65 (1) → SPHINCS_256F (2) 
 6. RFC 5869 (2010). "HMAC-based Extract-and-Expand Key Derivation Function (HKDF)."
 7. RFC 8032 (2017). "Edwards-Curve Digital Signature Algorithm (EdDSA)."
 8. RFC 3161 (2001). "Internet X.509 Public Key Infrastructure Time-Stamp Protocol (TSP)."
+9. RFC 7748 (2016). "Elliptic Curves for Security."
+10. RFC 8439 (2018). "ChaCha20 and Poly1305 for IETF Protocols."
+11. RFC 9106 (2021). "Argon2 Memory-Hard Function for Password Hashing and Proof-of-Work Applications."
 
 ## See Also
 

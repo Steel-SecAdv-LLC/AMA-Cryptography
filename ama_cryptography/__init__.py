@@ -36,7 +36,6 @@ import importlib as _importlib
 # Eagerly import math modules when numpy is available.
 # When numpy is NOT installed, __getattr__ provides a clear ImportError
 # mentioning numpy (tested by test_lazy_imports.py).
-_MATH_AVAILABLE = False
 _EQUATIONS_EXPORTS = frozenset(
     {
         "HELIX_PARAMS",
@@ -81,7 +80,6 @@ try:
         verify_mathematical_foundations,
     )
 
-    _MATH_AVAILABLE = True
 except (ImportError, ModuleNotFoundError):
     pass
 

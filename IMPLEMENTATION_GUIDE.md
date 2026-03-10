@@ -8,8 +8,8 @@
 **AI Co-Architects:**  
 Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
-**Version:** 2.0
-**Date:** 2026-03-08
+**Version:** 2.1
+**Date:** 2026-03-10
 
 ---
 
@@ -860,7 +860,7 @@ class CryptoPackage:
     ed25519_pubkey: str
     dilithium_pubkey: str
     version: str
-    ethical_vector: Dict[str, float]  # NEW: 12 Omni-Code Ethical Pillars
+    ethical_vector: Dict[str, float]  # NEW: 4 Omni-Code Ethical Pillars
     ethical_hash: str                 # NEW: SHA3-256 hash of ethical vector
 ```
 
@@ -1023,10 +1023,10 @@ class KeyManagementSystem:
 **Default Ethical Vector:**
 ```python
 ETHICAL_VECTOR = {
-    "omniscient": 1.0, "omnipercipient": 1.0, "omnilegent": 1.0,
-    "omnipotent": 1.0, "omnificent": 1.0, "omniactive": 1.0,
-    "omnipresent": 1.0, "omnitemporal": 1.0, "omnidirectional": 1.0,
-    "omnibenevolent": 1.0, "omniperfect": 1.0, "omnivalent": 1.0,
+    "omniscient": 3.0,        # Triad of Wisdom
+    "omnipotent": 3.0,        # Triad of Agency
+    "omnidirectional": 3.0,   # Triad of Geography
+    "omnibenevolent": 3.0,    # Triad of Integrity
 }
 # Constraint: Σw = 12.0
 ```
@@ -1035,18 +1035,10 @@ ETHICAL_VECTOR = {
 ```python
 # Define custom ethical vector for domain-specific use
 custom_ethical_vector = {
-    "omniscient": 1.5,      # Increased awareness
-    "omnipercipient": 1.5,  # Enhanced detection
-    "omnilegent": 1.0,
-    "omnipotent": 1.0,
-    "omnificent": 1.0,
-    "omniactive": 1.0,
-    "omnipresent": 1.0,
-    "omnitemporal": 1.0,
-    "omnidirectional": 1.0,
-    "omnibenevolent": 0.5,  # Reduced for specific use case
-    "omniperfect": 1.5,     # Increased correctness
-    "omnivalent": 1.0,
+    "omniscient": 4.0,        # Increased verification emphasis
+    "omnipotent": 3.0,        # Standard strength
+    "omnidirectional": 3.0,   # Standard coverage
+    "omnibenevolent": 2.0,    # Reduced for specific use case
 }
 
 # Verify constraint
@@ -1161,8 +1153,9 @@ For migration assistance:
 
 AMA Cryptography is under continuous development with a focus on maintaining the highest security standards while expanding capabilities:
 
+- **Mercury Agent Integration:** AMA Cryptography serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent), providing quantum-resistant security for Mercury Agent's services
 - **Security Updates:** Continuous security updates and performance optimizations based on emerging cryptographic research and threat landscape changes
-- **CRISPR-Inspired Technologies:** Integration of CRISPR-inspired cryptographic technologies from related repositories, extending the biological metaphor into novel protection mechanisms
+- **Phase 2 Primitives:** X25519 key exchange (RFC 7748), ChaCha20-Poly1305 AEAD (RFC 8439), Argon2id password hashing (RFC 9106), and secp256k1 HD key derivation are now available in the native C library
 - **Community-Driven Features:** Feature development driven by real-world usage patterns and community feedback, ensuring the system evolves to meet practical security needs
 
 For the latest development updates, see the project's GitHub repository and CHANGELOG.md.
@@ -1291,6 +1284,6 @@ Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
 
-**Document Version:** 2.0
-**Last Updated:** 2026-03-08
+**Document Version:** 2.1
+**Last Updated:** 2026-03-10
 **Copyright (C) 2025-2026 Steel Security Advisors LLC**

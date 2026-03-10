@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.0 |
-| Last Updated | 2026-03-08 |
+| Document Version | 2.1 |
+| Last Updated | 2026-03-10 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -14,6 +14,50 @@
 ## Overview
 
 All notable changes to AMA Cryptography will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [2.0.1] - 2026-03-10
+
+### Added - Phase 2 Cryptographic Primitives (PR #92)
+
+Expanded the native C cryptographic library with additional primitives:
+
+- **`ama_x25519.c`**: X25519 Diffie-Hellman key exchange (RFC 7748) — used as classical component in hybrid KEM combiner
+- **`ama_chacha20poly1305.c`**: ChaCha20-Poly1305 AEAD (RFC 8439) — constant-time alternative to AES-256-GCM for shared-tenant environments
+- **`ama_argon2.c`**: Argon2id memory-hard password hashing (RFC 9106) — configurable memory/time cost
+- **`ama_secp256k1.c`**: secp256k1 elliptic curve operations — BIP32-compliant HD key derivation support
+
+All 64 CI jobs passing after Phase 2 integration.
+
+### Added - Constant-Time Testing & Fuzzing Infrastructure (PR #94)
+
+- 11 coverage-guided fuzzing harnesses (libFuzzer) for all cryptographic primitives
+- dudect-style constant-time verification harness with Welch's t-test (|t| < 4.5 threshold)
+- Comprehensive threat model documentation (`THREAT_MODEL.md`) with threat catalog, mitigations, and verification matrix
+
+### Changed - Benchmark Refactoring (PR #95)
+
+- Refactored benchmark suite to target native C backend with updated performance baselines
+- Removed legacy Python-only benchmarks that no longer reflect v2.0 architecture
+
+### Changed - Import System Refactoring (PR #96)
+
+- Refactored lazy loading to eager imports for math modules when numpy is available
+- Fixed code quality issues identified during import system audit
+- Improved error messages when optional dependencies are missing
+
+### Fixed - Windows CI Resilience (PR #93)
+
+- Made Windows CMake install resilient to Chocolatey CDN outages
+- Added fallback mechanisms for package manager failures in CI
+
+### Documentation Updates (2026-03-10)
+
+- **Composition protocol clarification**: All documentation now accurately states that AMA Cryptography uses standardized primitives with an original composition protocol
+- **Mercury Agent integration**: Documented AMA Cryptography's role as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent)
+- **Ethical pillar redesign**: Consolidated from 12 named pillars to 4 Omni-Code Ethical Pillars (Omniscient, Omnipotent, Omnidirectional, Omnibenevolent), each governing a triad of three sub-properties (Wisdom, Agency, Geography, Integrity)
+- **Phase 2 primitives**: Added X25519, ChaCha20-Poly1305, Argon2, secp256k1 to all relevant documentation
 
 ---
 
@@ -134,6 +178,7 @@ After upgrading to v2.0:
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 2.0.1 | 2026-03-10 | Phase 2 primitives (X25519, ChaCha20-Poly1305, Argon2, secp256k1), fuzzing/threat model, benchmark refactor, documentation alignment |
 | 2.0.0 | 2026-03-08 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics + field arithmetic, FIPS 203/204/205 |
 | 1.0.0 | 2025-11-22 | First public open-source release (Apache 2.0) |
 

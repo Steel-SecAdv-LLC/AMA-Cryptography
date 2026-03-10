@@ -192,7 +192,6 @@ def create_performance_dashboard():
     # ── Panel 7: Validation Claims (bottom-left) ─────────────────────
     ax = axes[2, 0]
     val_results = validation["results"][:8]
-    val_names = [r["claim_name"].replace("_", "\n") for r in val_results]
     val_claimed = [r["documented_value"] for r in val_results]
     val_measured = [r["measured_value"] for r in val_results]
     ax.scatter(val_claimed, val_measured, c="#00d2ff", s=60, zorder=5,
@@ -453,7 +452,7 @@ def create_benchmark_report():
         f"  Median Throughput:    {np.median(all_throughputs):>12,.0f} ops/s\n\n"
         f"  NIST Standards:       6/6 FIPS\n"
         f"  Crypto Layers:        6 defense-in-depth\n"
-        f"  Ethical Pillars:      12 Omni-Code\n"
+        f"  Ethical Pillars:      4 Omni-Code\n"
         f"  Monitoring Overhead:  <2%\n\n"
         f"  Backend:   Native C + Cython\n"
         f"  Algorithms: SHA3 | Ed25519 | ML-DSA-65\n"

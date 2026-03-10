@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.0 |
-| Last Updated | 2026-03-08 |
+| Document Version | 2.1 |
+| Last Updated | 2026-03-10 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -178,7 +178,7 @@ Users deploying AMA Cryptography in production should:
 
 ### Zero-Dependency Architecture (v2.0)
 - **REQUIRED:** Build native C library (`cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build`)
-- All cryptographic primitives (SHA3, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+) are native C — no external cryptographic dependencies required
+- All cryptographic primitives (SHA3, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+, X25519, ChaCha20-Poly1305, Argon2, secp256k1) are native C — no external cryptographic dependencies required
 - Optional: numpy/scipy for 3R monitoring, pynacl for libsodium secure memory, PyKCS11 for HSM
 
 ### Cryptographic Operations
@@ -216,8 +216,11 @@ Users deploying AMA Cryptography in production should:
 | SPHINCS+-SHA2-256f | 2^256 | 2^128 | ✓ Quantum-secure |
 | AES-256-GCM | 2^256 | 2^128 | ✓ Quantum-secure |
 | HKDF | 2^128 | 2^128 | ✓ Secure |
+| X25519 | 2^128 | ~10^7 gates* | ⚠ Quantum-vulnerable |
+| ChaCha20-Poly1305 | 2^256 | 2^128 | ✓ Quantum-secure |
+| Argon2id | Memory-hard | Memory-hard | ✓ Secure |
 
-*Ed25519 is vulnerable to sufficiently large quantum computers, but ML-DSA-65 provides quantum-resistant backup.
+*Ed25519 and X25519 are vulnerable to sufficiently large quantum computers, but ML-DSA-65 provides quantum-resistant backup.
 
 ### Cryptographic Deprecation Policy
 
@@ -274,6 +277,7 @@ Non-compliance with these standards should be reported as a high-severity securi
 | 1.0.0 | 2025-11-26 | Initial professional release |
 | 1.1.0 | 2026-01-09 | Version alignment, terminology updates |
 | 2.0.0 | 2026-03-08 | Zero-dependency native C architecture, FIPS 203/204/205 compliance, AES-256-GCM, adaptive posture system, hybrid KEM combiner, Ed25519 atomics hardening |
+| 2.0.1 | 2026-03-10 | Phase 2 primitives (X25519, ChaCha20-Poly1305, Argon2, secp256k1), fuzzing harnesses, threat model documentation |
 
 ---
 

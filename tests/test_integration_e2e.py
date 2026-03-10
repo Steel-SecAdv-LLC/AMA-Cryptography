@@ -523,7 +523,7 @@ class TestEthicalIntegration:
         from code_guardian_secure import ETHICAL_VECTOR, create_ethical_hkdf_context
 
         # Verify ethical vector structure
-        assert len(ETHICAL_VECTOR) == 12
+        assert len(ETHICAL_VECTOR) == 4
         assert sum(ETHICAL_VECTOR.values()) == 12.0
 
         # Create ethical context with base context bytes
@@ -533,32 +533,24 @@ class TestEthicalIntegration:
         assert len(context) > 0
 
     def test_ethical_pillars_coverage(self):
-        """Test that all 12 Omni-Code ethical pillars are present."""
+        """Test that all 4 Omni-Code ethical pillars are present."""
         from code_guardian_secure import ETHICAL_VECTOR
 
-        # The 12 Omni-Code Ethical Pillars organized in 4 triads
+        # The 4 Omni-Code Ethical Pillars, each governing a triad
         expected_pillars = [
-            # Triad 1: Knowledge Domain
+            # Pillar 1: Omniscient — Triad of Wisdom
             "omniscient",
-            "omnipercipient",
-            "omnilegent",
-            # Triad 2: Power Domain
+            # Pillar 2: Omnipotent — Triad of Agency
             "omnipotent",
-            "omnificent",
-            "omniactive",
-            # Triad 3: Coverage Domain
-            "omnipresent",
-            "omnitemporal",
+            # Pillar 3: Omnidirectional — Triad of Geography
             "omnidirectional",
-            # Triad 4: Omnibenevolence Domain
+            # Pillar 4: Omnibenevolent — Triad of Integrity
             "omnibenevolent",
-            "omniperfect",
-            "omnivalent",
         ]
 
         for pillar in expected_pillars:
             assert pillar in ETHICAL_VECTOR, f"Missing pillar: {pillar}"
-            assert ETHICAL_VECTOR[pillar] == 1.0
+            assert ETHICAL_VECTOR[pillar] == 3.0
 
 
 class TestCryptoAPIIntegration:

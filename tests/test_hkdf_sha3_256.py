@@ -153,18 +153,10 @@ class TestEthicalHKDFContext:
 
         # Modified ethical vector
         modified_vector = {
-            "omniscient": 2.0,  # Changed from 1.0
-            "omnipercipient": 1.0,
-            "omnilegent": 1.0,
-            "omnipotent": 1.0,
-            "omnificent": 1.0,
-            "omniactive": 1.0,
-            "omnipresent": 1.0,
-            "omnitemporal": 1.0,
-            "omnidirectional": 1.0,
-            "omnibenevolent": 1.0,
-            "omniperfect": 1.0,
-            "omnivalent": 0.0,  # Changed to maintain sum
+            "omniscient": 4.0,  # Changed from 3.0
+            "omnipotent": 3.0,
+            "omnidirectional": 3.0,
+            "omnibenevolent": 2.0,  # Changed to maintain sum
         }
         enhanced2 = create_ethical_hkdf_context(base_context, modified_vector)
 
@@ -184,18 +176,10 @@ class TestEthicalHKDFContext:
 
         # Modified ethical vector
         modified_vector = {
-            "omniscient": 2.0,
-            "omnipercipient": 1.0,
-            "omnilegent": 1.0,
-            "omnipotent": 1.0,
-            "omnificent": 1.0,
-            "omniactive": 1.0,
-            "omnipresent": 1.0,
-            "omnitemporal": 1.0,
-            "omnidirectional": 1.0,
-            "omnibenevolent": 1.0,
-            "omniperfect": 1.0,
-            "omnivalent": 0.0,
+            "omniscient": 4.0,  # Changed from 3.0
+            "omnipotent": 3.0,
+            "omnidirectional": 3.0,
+            "omnibenevolent": 2.0,  # Changed to maintain sum
         }
         keys2, _ = derive_keys(
             master_secret, info, num_keys=1, ethical_vector=modified_vector, salt=fixed_salt
@@ -435,8 +419,8 @@ class TestProjectSpecificVectors:
 
         # Verify the ethical vector constraint
         assert sum(ETHICAL_VECTOR.values()) == 12.0, "Ethical vector sum != 12.0"
-        assert all(w == 1.0 for w in ETHICAL_VECTOR.values()), "Not all weights == 1.0"
-        assert len(ETHICAL_VECTOR) == 12, "Ethical vector should have 12 pillars"
+        assert all(w == 3.0 for w in ETHICAL_VECTOR.values()), "Not all weights == 3.0"
+        assert len(ETHICAL_VECTOR) == 4, "Ethical vector should have 4 pillars"
 
         # Compute ethical signature
         ethical_json = json.dumps(ETHICAL_VECTOR, sort_keys=True)

@@ -508,13 +508,13 @@ class TestEthicalVectorIntegration:
         """Test that ethical vector weights sum to 12.0."""
         assert sum(ETHICAL_VECTOR.values()) == 12.0
 
-    def test_ethical_vector_all_weights_equal_one(self):
-        """Test that all ethical vector weights equal 1.0."""
-        assert all(w == 1.0 for w in ETHICAL_VECTOR.values())
+    def test_ethical_vector_all_weights_equal_three(self):
+        """Test that all ethical vector weights equal 3.0."""
+        assert all(w == 3.0 for w in ETHICAL_VECTOR.values())
 
-    def test_ethical_vector_has_twelve_pillars(self):
-        """Test that ethical vector has exactly 12 pillars."""
-        assert len(ETHICAL_VECTOR) == 12
+    def test_ethical_vector_has_four_pillars(self):
+        """Test that ethical vector has exactly 4 pillars."""
+        assert len(ETHICAL_VECTOR) == 4
 
     def test_ethical_context_with_none_uses_default(self):
         """Test that None ethical vector uses default."""
