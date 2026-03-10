@@ -552,33 +552,25 @@ P(OKM(i₁) = OKM(i₂)) ≤ 2^-256
 
 #### Ethical Vector Definition
 
-The system integrates a 12-dimensional ethical vector into key derivation to provide cryptographic binding to ethical constraints:
+The system integrates a 4-dimensional ethical vector into key derivation to provide cryptographic binding to ethical constraints:
 
 ```python
 ETHICAL_VECTOR = {
-    # Triad 1: Knowledge Domain
-    "omniscient": 1.0,      # Complete awareness
-    "omnipercipient": 1.0,  # Multi-dimensional detection
-    "omnilegent": 1.0,      # Data validation
-    
-    # Triad 2: Power Domain
-    "omnipotent": 1.0,      # Maximum strength
-    "omnificent": 1.0,      # Key generation
-    "omniactive": 1.0,      # Real-time protection
-    
-    # Triad 3: Coverage Domain
-    "omnipresent": 1.0,     # Multi-layer defense
-    "omnitemporal": 1.0,    # Temporal integrity
-    "omnidirectional": 1.0, # Attack surface coverage
-    
-    # Triad 4: Omnibenevolence Domain
-    "omnibenevolent": 1.0,  # Ethical foundation
-    "omniperfect": 1.0,     # Mathematical correctness
-    "omnivalent": 1.0,      # Hybrid security
+    # Pillar 1: Omniscient — Triad of Wisdom
+    "omniscient": 3.0,        # Verification + Detection + Validation
+
+    # Pillar 2: Omnipotent — Triad of Agency
+    "omnipotent": 3.0,        # Strength + Generation + Protection
+
+    # Pillar 3: Omnidirectional — Triad of Geography
+    "omnidirectional": 3.0,   # Defense + Temporal + Coverage
+
+    # Pillar 4: Omnibenevolent — Triad of Integrity
+    "omnibenevolent": 3.0,    # Ethics + Correctness + Hybrid
 }
 ```
 
-**Constraint:** Σw = 12.0 (balanced weighting, each pillar w_i = 1.0)
+**Constraint:** Σw = 12.0 (balanced weighting, each pillar w_i = 3.0)
 
 #### Enhanced HKDF Construction
 

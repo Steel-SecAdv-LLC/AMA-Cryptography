@@ -67,7 +67,7 @@ The following are explicitly not goals of this architecture:
 |  | Cryptographic      |  | Ethical            |  | Key           ||
 |  | Pipeline           |  | Integration        |  | Management    ||
 |  |                    |  |                    |  |               ||
-|  | - SHA3-256 Hash    |  | - 12 Ethical       |  | - HKDF        ||
+|  | - SHA3-256 Hash    |  | - 4 Ethical        |  | - HKDF        ||
 |  | - HMAC-SHA3-256    |  |   Pillars          |  | - Key Rotation||
 |  | - Ed25519          |  | - Constraint       |  | - HSM Support ||
 |  | - ML-DSA-65        |  |   Validation       |  |               ||
@@ -211,27 +211,27 @@ The Ethical Integration Framework mathematically binds ethical metadata to crypt
 
 ### Ethical Pillar Structure
 
-The system defines 12 ethical pillars organized into four triads. Each pillar has a symbolic identifier and a weight value. The sum of all weights equals 12.0, ensuring balanced representation.
+The system defines 4 ethical pillars, each governing a triad of three sub-properties. Each pillar has a weight of 3.0 (3 sub-properties × 1.0). The sum of all weights equals 12.0, ensuring balanced representation.
 
-**Triad 1 - Knowledge Domain (Verification Layer)**
-- Omniscient: Complete verification coverage across all data inputs
-- Omnipercipient: Multi-dimensional anomaly detection (temporal, structural, cryptographic)
-- Omnilegent: Complete data validation with canonical encoding
+**Pillar 1: Omniscient — Triad of Wisdom (Verification Layer)**
+- Complete verification: SHA3-256 coverage across all data inputs
+- Multi-dimensional detection: Temporal, structural, cryptographic anomaly detection
+- Complete data validation: Canonical encoding eliminates concatenation attacks
 
-**Triad 2 - Power Domain (Cryptographic Generation)**
-- Omnipotent: Maximum cryptographic strength against all known attacks
-- Omnificent: Secure, reproducible key generation with proper entropy
-- Omniactive: Continuous real-time protection with minimal latency
+**Pillar 2: Omnipotent — Triad of Agency (Cryptographic Generation)**
+- Maximum cryptographic strength: Defense-in-depth against all known attacks
+- Secure key generation: CSPRNG + HKDF-SHA3-256 with proper entropy
+- Real-time protection: >1,000 ops/sec with minimal latency
 
-**Triad 3 - Coverage Domain (Defense-in-Depth)**
-- Omnipresent: Security presence across all six cryptographic layers
-- Omnitemporal: Temporal integrity with trusted timestamping
-- Omnidirectional: Complete attack surface coverage (classical, quantum, concatenation, forgery)
+**Pillar 3: Omnidirectional — Triad of Geography (Defense-in-Depth)**
+- Multi-layer defense: Security presence across all six cryptographic layers
+- Temporal integrity: Trusted timestamping via RFC 3161
+- Attack surface coverage: Classical, quantum, concatenation, forgery defense
 
-**Triad 4 - Omnibenevolence Domain (Ethical Constraints)**
-- Omnibenevolent: Cryptographic operations serve protective, non-malicious purposes
-- Omniperfect: Provably correct implementation with formal verification
-- Omnivalent: Hybrid classical + quantum resistance for long-term security
+**Pillar 4: Omnibenevolent — Triad of Integrity (Ethical Constraints)**
+- Ethical foundation: Cryptographic operations serve protective, non-malicious purposes
+- Mathematical correctness: Provably correct implementation with formal verification
+- Hybrid security: Classical + quantum resistance for long-term security
 
 ### Mathematical Integration
 

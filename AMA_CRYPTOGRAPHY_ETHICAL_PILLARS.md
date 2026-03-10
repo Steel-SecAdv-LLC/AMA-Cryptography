@@ -1,22 +1,22 @@
-# AMA Cryptography: 12 Omni-Code Ethical Pillars
+# AMA Cryptography: 4 Omni-Code Ethical Pillars
 ## Cryptographic Integration of Ethical Vectors with SHA3-256 Security
 
 **Copyright (C) 2025-2026 Steel Security Advisors LLC**
-**Project:** Omni-Code Helix SHA3-256 Ethical Framework  
-**Author/Inventor:** Andrew E. A.  
+**Project:** Omni-Code Helix SHA3-256 Ethical Framework
+**Author/Inventor:** Andrew E. A.
 **Organization:** Steel Security Advisors LLC
 
-**Version:** 2.1
+**Version:** 3.0
 **Date:** 2026-03-10
 
 ---
 
 ## Executive Summary
 
-The 12 Omni-Code Ethical Pillars extend AMA Cryptography's six-layer cryptographic defense with a mathematically rigorous ethical constraint system. Each pillar maps to specific cryptographic operations, providing verifiable ethical boundaries without compromising security guarantees.
+The 4 Omni-Code Ethical Pillars extend AMA Cryptography's six-layer cryptographic defense with a mathematically rigorous ethical constraint system. Each pillar maps to a triad of cryptographic operations, providing verifiable ethical boundaries without compromising security guarantees.
 
 **Key Properties:**
-- **Balanced weighting:** Each pillar = 1.0, Σw = 12.0
+- **Balanced weighting:** Each pillar = 3.0 (3 sub-properties × 1.0), Σw = 12.0
 - **HKDF integration:** 128-bit ethical signature in key derivation context
 - **Collision resistance:** Maintains SHA3-256's 2^128 security level
 - **Zero performance impact:** <0.01ms overhead per operation
@@ -24,13 +24,13 @@ The 12 Omni-Code Ethical Pillars extend AMA Cryptography's six-layer cryptograph
 
 ---
 
-## The 12 Ethical Pillars
+## The 4 Ethical Pillars
 
-### Triad 1: Knowledge Domain (Verification Layer)
+### Pillar 1: Omniscient — Triad of Wisdom (Verification Layer)
 
-#### 1. Omniscient (Complete Verification)
-**Definition:** Comprehensive coverage across all data inputs and verification paths.
+**Definition:** All-knowing verification across every data input, detection dimension, and validation path.
 
+#### Sub-property 1.1: Complete Verification
 **Cryptographic Mapping:**
 - SHA3-256 content hashing with canonical encoding
 - HMAC-SHA3-256 authentication across all message components
@@ -44,13 +44,7 @@ Security: If any vᵢ bypasses hashing, integrity fails
 Therefore: Complete coverage is cryptographically necessary
 ```
 
-**Weight:** w₁ = 1.0
-
----
-
-#### 2. Omnipercipient (Multi-Dimensional Detection)
-**Definition:** Anomaly detection across temporal, spatial, and structural dimensions.
-
+#### Sub-property 1.2: Multi-Dimensional Detection
 **Cryptographic Mapping:**
 - Timestamp verification (RFC 3161)
 - Structural integrity via length-prefixed encoding
@@ -67,13 +61,7 @@ P(detect) ≥ 1 - (0.001)³ = 0.999999999
 
 **Standard:** RFC 3161 (Time-Stamp Protocol)
 
-**Weight:** w₂ = 1.0
-
----
-
-#### 3. Omnilegent (Complete Data Validation)
-**Definition:** Reading and validating all input data with cryptographic integrity.
-
+#### Sub-property 1.3: Complete Data Validation
 **Cryptographic Mapping:**
 - Length-prefixed canonical encoding eliminates concatenation attacks
 - UTF-8 validation for Omni-Codes
@@ -90,15 +78,15 @@ P(collision via E(m)) ≤ 2⁻²⁵⁶ (SHA3-256 bound)
 
 **Citation:** NIST FIPS 202 (SHA-3 Standard, Section 6.1)
 
-**Weight:** w₃ = 1.0
+**Pillar Weight:** w₁ = 3.0 (3 × 1.0)
 
 ---
 
-### Triad 2: Power Domain (Cryptographic Generation)
+### Pillar 2: Omnipotent — Triad of Agency (Cryptographic Generation)
 
-#### 4. Omnipotent (Maximum Cryptographic Strength)
-**Definition:** Maximum achievable security level against all known attacks.
+**Definition:** All-powerful cryptographic strength across key generation, security margins, and active protection.
 
+#### Sub-property 2.1: Maximum Cryptographic Strength
 **Cryptographic Mapping (Per-Layer Assessment):**
 - SHA3-256: ~128-bit preimage resistance (NIST FIPS 202)
 - HMAC-SHA3-256: ~128-bit security (RFC 2104)
@@ -116,17 +104,11 @@ An attacker must defeat ALL layers to compromise the system.
 Defense-in-depth ensures continued protection even if one layer fails.
 ```
 
-**Citation:** 
+**Citation:**
 - NIST FIPS 204 (Dilithium, Section 5.3)
 - Ducas et al. (2018) "CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme"
 
-**Weight:** w₄ = 1.0
-
----
-
-#### 5. Omnificent (Key Generation Excellence)
-**Definition:** Secure, reproducible key generation with proper entropy.
-
+#### Sub-property 2.2: Secure Key Generation
 **Cryptographic Mapping:**
 - CSPRNG with os.urandom() (256 bits entropy)
 - HKDF-SHA3-256 for deterministic key derivation
@@ -144,17 +126,11 @@ Key independence:
 KDF(S, "hmac") ⊥ KDF(S, "ed25519") ⊥ KDF(S, "reserved")
 ```
 
-**Citation:** 
+**Citation:**
 - RFC 5869 (HKDF, Section 4)
 - Krawczyk (2010) "Cryptographic Extraction and Key Derivation: The HKDF Scheme"
 
-**Weight:** w₅ = 1.0
-
----
-
-#### 6. Omniactive (Continuous Real-Time Protection)
-**Definition:** Active protection with minimal latency, suitable for production workloads.
-
+#### Sub-property 2.3: Real-Time Protection
 **Cryptographic Mapping:**
 - Sign operation: 0.90ms (1,116 ops/sec)
 - Verify operation: 0.21ms (4,717 ops/sec)
@@ -164,7 +140,7 @@ KDF(S, "hmac") ⊥ KDF(S, "ed25519") ⊥ KDF(S, "reserved")
 ```
 Measured benchmarks (single-threaded):
 - KeyGen: 0.27ms → 3,700/sec
-- Sign: 0.90ms → 1,116/sec  
+- Sign: 0.90ms → 1,116/sec
 - Verify: 0.21ms → 4,717/sec
 
 Production requirement: >100 ops/sec
@@ -172,15 +148,15 @@ Margin: 11.16× for signing, 47.17× for verification
 Conclusion: Suitable for real-time cryptographic protection
 ```
 
-**Weight:** w₆ = 1.0
+**Pillar Weight:** w₂ = 3.0 (3 × 1.0)
 
 ---
 
-### Triad 3: Coverage Domain (Defense-in-Depth)
+### Pillar 3: Omnidirectional — Triad of Geography (Defense-in-Depth)
 
-#### 7. Omnipresent (Multi-Layer Defense)
-**Definition:** Security presence across all six cryptographic layers.
+**Definition:** All-encompassing defense across every layer, time horizon, and attack vector.
 
+#### Sub-property 3.1: Multi-Layer Defense
 **Cryptographic Mapping:**
 - Layer 1: SHA3-256 (integrity)
 - Layer 2: HMAC (authentication)
@@ -203,13 +179,7 @@ Conclusion: Defense-in-depth provides exponential security improvement
 
 **Citation:** Schneier (1999) "Attack Trees" (defense-in-depth strategy)
 
-**Weight:** w₇ = 1.0
-
----
-
-#### 8. Omnitemporal (Temporal Integrity)
-**Definition:** Protection across time with trusted timestamping.
-
+#### Sub-property 3.2: Temporal Integrity
 **Cryptographic Mapping:**
 - ISO 8601 timestamps (microsecond precision)
 - RFC 3161 TSA integration (third-party verification)
@@ -227,17 +197,11 @@ Security: Requires TSA private key compromise to forge
 TSA security assumption: ≥2¹²⁸ (RSA-3072 or equivalent)
 ```
 
-**Citation:** 
+**Citation:**
 - RFC 3161 (Time-Stamp Protocol, Section 2.4)
 - ISO/IEC 18014 (Time-Stamping Services)
 
-**Weight:** w₈ = 1.0
-
----
-
-#### 9. Omnidirectional (Complete Attack Surface Coverage)
-**Definition:** Protection against all attack vectors (classical, quantum, concatenation, forgery).
-
+#### Sub-property 3.3: Attack Surface Coverage
 **Cryptographic Mapping:**
 - Concatenation: Prevented by length-prefixed encoding
 - Collision: SHA3-256 (2^128 security)
@@ -261,15 +225,15 @@ Coverage:
 - Bernstein et al. (2011) "High-speed high-security signatures" (Ed25519)
 - NIST SP 800-57 (Key Management, Section 5.6.1)
 
-**Weight:** w₉ = 1.0
+**Pillar Weight:** w₃ = 3.0 (3 × 1.0)
 
 ---
 
-### Triad 4: Omnibenevolence Domain (Ethical Constraints)
+### Pillar 4: Omnibenevolent — Triad of Integrity (Ethical Constraints)
 
-#### 10. Omnibenevolent (Ethical Foundation)
-**Definition:** Cryptographic operations serve protective, non-malicious purposes.
+**Definition:** All-good ethical foundation ensuring mathematical correctness and long-term security resilience.
 
+#### Sub-property 4.1: Ethical Foundation
 **Cryptographic Mapping:**
 - Omni-Codes honor individuals (ethical constraint)
 - Humanitarian crisis monitoring (CIΨIS integration option)
@@ -289,13 +253,7 @@ Cryptographic enforcement:
 Verification: All operations are auditable and attributable
 ```
 
-**Weight:** w₁₀ = 1.0
-
----
-
-#### 11. Omniperfect (Mathematical Correctness)
-**Definition:** Provably correct implementation with formal verification.
-
+#### Sub-property 4.2: Mathematical Correctness
 **Cryptographic Mapping:**
 - Length-prefixed encoding (provably unambiguous)
 - Standard library cryptography (formally verified implementations)
@@ -315,17 +273,11 @@ Verification methods:
 Result: I ⊨ S with confidence ≥ 99.9%
 ```
 
-**Citation:** 
+**Citation:**
 - NIST SP 800-140 (Cryptographic Module Validation)
 - Klein et al. (2014) "Comprehensive formal verification of an OS microkernel"
 
-**Weight:** w₁₁ = 1.0
-
----
-
-#### 12. Omnivalent (Multi-Modal Security)
-**Definition:** Hybrid classical + quantum resistance for long-term security.
-
+#### Sub-property 4.3: Hybrid Security
 **Cryptographic Mapping:**
 - Classical: Ed25519 (immediate deployment)
 - Quantum: Dilithium (future-proofing)
@@ -335,7 +287,7 @@ Result: I ⊨ S with confidence ≥ 99.9%
 ```
 Security timeline:
 - 2025-2030: Ed25519 secure, Dilithium secure
-- 2030-2035: Ed25519 weakened, Dilithium secure  
+- 2030-2035: Ed25519 weakened, Dilithium secure
 - 2035+: Ed25519 broken, Dilithium secure
 
 Hybrid security:
@@ -350,7 +302,7 @@ Long-term guarantee: 50+ years post-quantum security
 - NIST PQC Project (2022) "Post-Quantum Cryptography Standardization"
 - Bernstein & Lange (2017) "Post-quantum cryptography"
 
-**Weight:** w₁₂ = 1.0
+**Pillar Weight:** w₄ = 3.0 (3 × 1.0)
 
 ---
 
@@ -359,32 +311,25 @@ Long-term guarantee: 50+ years post-quantum security
 ### Ethical Vector Construction
 
 ```python
-# 12 Omni-Code Ethical Pillars as balanced vector
+# 4 Omni-Code Ethical Pillars as balanced vector
+# Each pillar = 3 sub-properties × 1.0 weight
 ethical_vector = {
-    # Triad 1: Knowledge Domain
-    "omniscient": 1.0,      # Complete verification
-    "omnipercipient": 1.0,  # Multi-dimensional detection
-    "omnilegent": 1.0,      # Data validation
-    
-    # Triad 2: Power Domain
-    "omnipotent": 1.0,      # Maximum strength
-    "omnificent": 1.0,      # Key generation
-    "omniactive": 1.0,      # Real-time protection
-    
-    # Triad 3: Coverage Domain
-    "omnipresent": 1.0,     # Multi-layer defense
-    "omnitemporal": 1.0,    # Temporal integrity
-    "omnidirectional": 1.0, # Attack surface coverage
-    
-    # Triad 4: Omnibenevolence Domain
-    "omnibenevolent": 1.0,  # Ethical foundation
-    "omniperfect": 1.0,     # Mathematical correctness
-    "omnivalent": 1.0,      # Hybrid security
+    # Pillar 1: Omniscient — Triad of Wisdom
+    "omniscient": 3.0,        # Verification + Detection + Validation
+
+    # Pillar 2: Omnipotent — Triad of Agency
+    "omnipotent": 3.0,        # Strength + Generation + Protection
+
+    # Pillar 3: Omnidirectional — Triad of Geography
+    "omnidirectional": 3.0,   # Defense + Temporal + Coverage
+
+    # Pillar 4: Omnibenevolent — Triad of Integrity
+    "omnibenevolent": 3.0,    # Ethics + Correctness + Hybrid
 }
 
 # Verify balanced weighting
 assert sum(ethical_vector.values()) == 12.0
-assert all(w == 1.0 for w in ethical_vector.values())
+assert all(w == 3.0 for w in ethical_vector.values())
 ```
 
 ### HKDF Integration with Ethical Context
@@ -400,29 +345,29 @@ def create_ethical_hkdf_context(
 ) -> bytes:
     """
     Integrates ethical vector into HKDF key derivation context.
-    
+
     Security: Ethical context affects derived keys without weakening
     the underlying HKDF security (2^128).
-    
+
     Args:
         base_context: Original HKDF info parameter
-        ethical_vector: 12-pillar ethical weights (Σw = 12.0)
-    
+        ethical_vector: 4-pillar ethical weights (Σw = 12.0)
+
     Returns:
         Enhanced context with 128-bit ethical signature
     """
     # Canonical JSON encoding (sorted keys)
     ethical_json = json.dumps(ethical_vector, sort_keys=True)
-    
+
     # SHA3-256 hash of ethical vector
     ethical_hash = hashlib.sha3_256(ethical_json.encode()).digest()
-    
+
     # Extract 128-bit signature (first 16 bytes)
     ethical_signature = ethical_hash[:16]
-    
+
     # Concatenate with base context
     enhanced_context = base_context + ethical_signature
-    
+
     return enhanced_context
 
 # Example usage
@@ -485,7 +430,7 @@ def derive_key_with_ethics(
     Args:
         master_secret: 256-bit master secret from CSPRNG
         key_type: Purpose identifier ("hmac", "ed25519", etc.)
-        ethical_vector: 12-pillar ethical weights
+        ethical_vector: 4-pillar ethical weights
 
     Returns:
         32-byte derived key
@@ -523,7 +468,7 @@ import time
 
 def benchmark_ethical_integration(iterations: int = 1000) -> Dict[str, float]:
     """Measures performance impact of ethical vector integration."""
-    
+
     # Baseline: Standard HKDF without ethical context
     base_context = b"AMA-Cryptography-hmac-2025"
     master_secret = os.urandom(32)
@@ -542,10 +487,10 @@ def benchmark_ethical_integration(iterations: int = 1000) -> Dict[str, float]:
         )
         _ = derive_keys(master_secret, enhanced_context)
     enhanced_time = (time.time() - start) / iterations
-    
+
     overhead = enhanced_time - baseline_time
     overhead_pct = (overhead / baseline_time) * 100
-    
+
     return {
         "baseline_ms": baseline_time * 1000,
         "enhanced_ms": enhanced_time * 1000,
@@ -566,20 +511,20 @@ def benchmark_ethical_integration(iterations: int = 1000) -> Dict[str, float]:
 
 ## Standards Compliance Matrix
 
-| Pillar | Standard | Section | Status |
-|--------|----------|---------|--------|
-| Omniscient | NIST FIPS 202 | 6.1 (SHA-3) | ✓ Full |
-| Omnipercipient | RFC 3161 | 2.4 (TSP) | ✓ Full |
-| Omnilegent | NIST FIPS 202 | 6.1 (Encoding) | ✓ Full |
-| Omnipotent | NIST FIPS 203/204/205 | PQC Standards | ✓ Full |
-| Omnificent | RFC 5869 | 4 (HKDF) | ✓ Full |
-| Omniactive | - | Performance | ✓ Verified |
-| Omnipresent | - | Architecture | ✓ Design |
-| Omnitemporal | RFC 3161 | 2.4 (TSA) | ✓ Full |
-| Omnidirectional | NIST SP 800-57 | 5.6.1 | ✓ Full |
-| Omnibenevolent | - | Ethics | ✓ Design |
-| Omniperfect | NIST SP 800-140 | Validation | ✓ Testing |
-| Omnivalent | NIST PQC | Hybrid | ✓ Full |
+| Pillar | Triad | Standard | Section | Status |
+|--------|-------|----------|---------|--------|
+| Omniscient | Wisdom | NIST FIPS 202 | 6.1 (SHA-3) | ✓ Full |
+| Omniscient | Wisdom | RFC 3161 | 2.4 (TSP) | ✓ Full |
+| Omniscient | Wisdom | NIST FIPS 202 | 6.1 (Encoding) | ✓ Full |
+| Omnipotent | Agency | NIST FIPS 203/204/205 | PQC Standards | ✓ Full |
+| Omnipotent | Agency | RFC 5869 | 4 (HKDF) | ✓ Full |
+| Omnipotent | Agency | — | Performance | ✓ Verified |
+| Omnidirectional | Geography | — | Architecture | ✓ Design |
+| Omnidirectional | Geography | RFC 3161 | 2.4 (TSA) | ✓ Full |
+| Omnidirectional | Geography | NIST SP 800-57 | 5.6.1 | ✓ Full |
+| Omnibenevolent | Integrity | — | Ethics | ✓ Design |
+| Omnibenevolent | Integrity | NIST SP 800-140 | Validation | ✓ Testing |
+| Omnibenevolent | Integrity | NIST PQC | Hybrid | ✓ Full |
 
 ---
 
@@ -624,32 +569,32 @@ def benchmark_ethical_integration(iterations: int = 1000) -> Dict[str, float]:
 from ama_cryptography.crypto_api import *
 import json
 
-# 1. Define ethical vector (12 pillars, balanced weighting)
+# 1. Define ethical vector (4 pillars, balanced weighting)
 ethical_vector = {
-    "omniscient": 1.0, "omnipercipient": 1.0, "omnilegent": 1.0,
-    "omnipotent": 1.0, "omnificent": 1.0, "omniactive": 1.0,
-    "omnipresent": 1.0, "omnitemporal": 1.0, "omnidirectional": 1.0,
-    "omnibenevolent": 1.0, "omniperfect": 1.0, "omnivalent": 1.0,
+    "omniscient": 3.0,
+    "omnipotent": 3.0,
+    "omnidirectional": 3.0,
+    "omnibenevolent": 3.0,
 }
 
 # 2. Generate keys with ethical context
 def generate_ethical_kms(author: str) -> KeyManagementSystem:
     """Generates KMS with ethical vector integration."""
-    
+
     # Master secret from CSPRNG
     master_secret = os.urandom(32)
-    
+
     # Derive keys with ethical context
     hmac_key = derive_key_with_ethics(master_secret, "hmac", ethical_vector)
     ed25519_seed = derive_key_with_ethics(master_secret, "ed25519", ethical_vector)
-    
+
     # Ed25519 keypair
     ed_private = Ed25519PrivateKey.from_private_bytes(ed25519_seed)
     ed_public = ed_private.public_key()
-    
+
     # Dilithium keypair (independent)
     dil_public, dil_private = generate_dilithium_keypair()
-    
+
     return KeyManagementSystem(
         master_secret=master_secret,
         hmac_key=hmac_key,
@@ -659,7 +604,7 @@ def generate_ethical_kms(author: str) -> KeyManagementSystem:
         dilithium_public=dil_public,
         creation_time=datetime.now(timezone.utc),
         author=author,
-        ethical_vector=ethical_vector  # NEW: Store ethical context
+        ethical_vector=ethical_vector  # 4-pillar ethical context
     )
 
 # 3. Create cryptographic package with ethical metadata
@@ -683,7 +628,7 @@ pkg_dict["ethical_hash"] = hashlib.sha3_256(
 with open("CRYPTO_PACKAGE_ETHICAL.json", "w") as f:
     json.dump(pkg_dict, f, indent=2)
 
-print("✓ Package created with 12 Omni-Code Ethical Pillars")
+print("✓ Package created with 4 Omni-Code Ethical Pillars")
 print(f"✓ Ethical hash: {pkg_dict['ethical_hash'][:16]}...")
 ```
 
@@ -701,8 +646,8 @@ print(f"✓ Ethical hash: {pkg_dict['ethical_hash'][:16]}...")
 
 ### Ethical Properties
 
-- [x] **Balanced Weighting:** Σwᵢ = 12.0, each wᵢ = 1.0
-- [x] **Triad Structure:** 4 triads × 3 pillars = 12 total
+- [x] **Balanced Weighting:** Σwᵢ = 12.0, each wᵢ = 3.0
+- [x] **Pillar Structure:** 4 pillars × 3 sub-properties = 12 ethical dimensions
 - [x] **Canonical Encoding:** JSON with sorted keys ensures unique representation
 - [x] **Auditability:** All pillars map to verifiable cryptographic operations
 - [x] **Transparency:** Ethical context publicly documented and verifiable
@@ -760,11 +705,11 @@ print(f"✓ Ethical hash: {pkg_dict['ethical_hash'][:16]}...")
 
 ## Conclusion
 
-The 12 Omni-Code Ethical Pillars provide a mathematically rigorous framework for integrating ethical constraints into the AMA Cryptography cryptographic system without compromising security guarantees.
+The 4 Omni-Code Ethical Pillars provide a mathematically rigorous framework for integrating ethical constraints into the AMA Cryptography cryptographic system without compromising security guarantees.
 
 **Key Achievements:**
 - **Zero security trade-off:** All pillars maintain or enhance cryptographic properties
-- **Balanced structure:** 4 triads × 3 pillars = 12 total, Σw = 12.0
+- **Clean structure:** 4 pillars × 3 sub-properties = 12 ethical dimensions, Σw = 12.0
 - **Standards compliance:** NIST FIPS 202, 203, 204, 205; RFC 2104, 3161, 5869
 - **Secure and ready:** <4% overhead, >1,000 ops/sec throughput
 - **Formally verified:** Mathematical proofs for all security claims

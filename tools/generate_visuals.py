@@ -782,7 +782,7 @@ def create_test_coverage():
 
 
 def create_ethical_binding_flow():
-    """Create comprehensive ethical binding diagram showing 12 pillars with weights."""
+    """Create comprehensive ethical binding diagram showing 4 pillars with weights."""
     fig, ax = plt.subplots(figsize=(18, 12))
     ax.set_xlim(0, 18)
     ax.set_ylim(0, 12)
@@ -801,52 +801,52 @@ def create_ethical_binding_flow():
     ax.text(
         9,
         10.9,
-        "12 Omni-Code Ethical Pillars bound to keys and signatures via SHA3-256 + HKDF",
+        "4 Omni-Code Ethical Pillars bound to keys and signatures via SHA3-256 + HKDF",
         ha="center",
         fontsize=12,
         color="#6B7280",
     )
 
-    # Define the 4 triads with their pillars
+    # Define the 4 pillars with their triads
     triads = [
         (
-            "Triad 1: Knowledge",
+            "Omniscient: Wisdom",
             "#3B82F6",
             "Verification Layer",
             [
-                ("omniscient", "Complete verification"),
-                ("omnipercipient", "Multi-dimensional detection"),
-                ("omnilegent", "Data validation"),
+                ("verification", "Complete verification"),
+                ("detection", "Multi-dimensional detection"),
+                ("validation", "Data validation"),
             ],
         ),
         (
-            "Triad 2: Authority",
+            "Omnipotent: Agency",
             "#22C55E",
             "Cryptographic Generation",
             [
-                ("omnipotent", "Maximum strength"),
-                ("omnificent", "Key generation"),
-                ("omniactive", "Real-time protection"),
+                ("strength", "Maximum strength"),
+                ("generation", "Key generation"),
+                ("protection", "Real-time protection"),
             ],
         ),
         (
-            "Triad 3: Horizon",
+            "Omnidirectional: Geography",
             "#0EA5E9",
             "Defense-in-Depth",
             [
-                ("omnipresent", "Multi-layer defense"),
-                ("omnitemporal", "Temporal integrity"),
-                ("omnidirectional", "Attack surface coverage"),
+                ("defense", "Multi-layer defense"),
+                ("temporal", "Temporal integrity"),
+                ("coverage", "Attack surface coverage"),
             ],
         ),
         (
-            "Triad 4: Omnibenevolence",
+            "Omnibenevolent: Integrity",
             "#8B5CF6",
             "Ethical Constraints",
             [
-                ("omnibenevolent", "Ethical foundation"),
-                ("omniperfect", "Mathematical correctness"),
-                ("omnivalent", "Hybrid security"),
+                ("ethics", "Ethical foundation"),
+                ("correctness", "Mathematical correctness"),
+                ("hybrid", "Hybrid security"),
             ],
         ),
     ]
@@ -947,7 +947,7 @@ def create_ethical_binding_flow():
         color="#1F2937",
     )
     ax.text(
-        agg_x, agg_y - 0.05, "12 pillars", ha="center", va="center", fontsize=9, color="#374151"
+        agg_x, agg_y - 0.05, "4 pillars", ha="center", va="center", fontsize=9, color="#374151"
     )
     ax.text(
         agg_x,
@@ -1129,7 +1129,7 @@ def create_ethical_binding_flow():
     ax.text(
         9,
         0.8,
-        "The 12 Omni-Code Ethical Pillars form a balanced vector (each w = 1.0, total = 12.0).\n"
+        "The 4 Omni-Code Ethical Pillars form a balanced vector (each w = 3.0, total = 12.0).\n"
         "This vector is hashed with SHA3-256 and a 128-bit signature is injected into HKDF context and signature messages,\n"
         "cryptographically binding keys and signatures to an explicit ethical profile. This is binding, not enforcement.",
         ha="center",

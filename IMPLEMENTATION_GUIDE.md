@@ -860,7 +860,7 @@ class CryptoPackage:
     ed25519_pubkey: str
     dilithium_pubkey: str
     version: str
-    ethical_vector: Dict[str, float]  # NEW: 12 Omni-Code Ethical Pillars
+    ethical_vector: Dict[str, float]  # NEW: 4 Omni-Code Ethical Pillars
     ethical_hash: str                 # NEW: SHA3-256 hash of ethical vector
 ```
 
@@ -1023,10 +1023,10 @@ class KeyManagementSystem:
 **Default Ethical Vector:**
 ```python
 ETHICAL_VECTOR = {
-    "omniscient": 1.0, "omnipercipient": 1.0, "omnilegent": 1.0,
-    "omnipotent": 1.0, "omnificent": 1.0, "omniactive": 1.0,
-    "omnipresent": 1.0, "omnitemporal": 1.0, "omnidirectional": 1.0,
-    "omnibenevolent": 1.0, "omniperfect": 1.0, "omnivalent": 1.0,
+    "omniscient": 3.0,        # Triad of Wisdom
+    "omnipotent": 3.0,        # Triad of Agency
+    "omnidirectional": 3.0,   # Triad of Geography
+    "omnibenevolent": 3.0,    # Triad of Integrity
 }
 # Constraint: Σw = 12.0
 ```
@@ -1035,18 +1035,10 @@ ETHICAL_VECTOR = {
 ```python
 # Define custom ethical vector for domain-specific use
 custom_ethical_vector = {
-    "omniscient": 1.5,      # Increased awareness
-    "omnipercipient": 1.5,  # Enhanced detection
-    "omnilegent": 1.0,
-    "omnipotent": 1.0,
-    "omnificent": 1.0,
-    "omniactive": 1.0,
-    "omnipresent": 1.0,
-    "omnitemporal": 1.0,
-    "omnidirectional": 1.0,
-    "omnibenevolent": 0.5,  # Reduced for specific use case
-    "omniperfect": 1.5,     # Increased correctness
-    "omnivalent": 1.0,
+    "omniscient": 4.0,        # Increased verification emphasis
+    "omnipotent": 3.0,        # Standard strength
+    "omnidirectional": 3.0,   # Standard coverage
+    "omnibenevolent": 2.0,    # Reduced for specific use case
 }
 
 # Verify constraint

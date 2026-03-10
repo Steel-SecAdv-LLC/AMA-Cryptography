@@ -427,7 +427,7 @@ Complete security package with all defense layers:
 | HKDF Derivation | 0.006ms | 0.018ms | 213.79% |
 | Context Creation | - | 0.011ms | - |
 
-The ethical integration adds cryptographic binding to the 12 Omni-Code Ethical Pillars with minimal impact on overall system performance.
+The ethical integration adds cryptographic binding to the 4 Omni-Code Ethical Pillars with minimal impact on overall system performance.
 
 *Benchmarks: Linux x86_64, Python 3.12, 8 CPU cores, 31GB RAM, 1,000 iterations.*
 
@@ -1004,14 +1004,14 @@ make security-audit
 
 AMA Cryptography pioneers the integration of ethical principles directly into cryptographic operations through mathematically rigorous constraints. Unlike traditional security systems that treat ethics as policy overlays, AMA Cryptography embeds ethical considerations into the cryptographic foundation itself.
 
-**12 Omni-Code Ethical Pillars** are mathematically integrated into key derivation:
+**4 Omni-Code Ethical Pillars** are mathematically integrated into key derivation:
 
-| Triad | Pillars | Cryptographic Binding |
-|-------|---------|----------------------|
-| **Knowledge** | Omniscient, Omnipercipient, Omnilegent | SHA3-256/HMAC verification coverage |
-| **Power** | Omnipotent, Omnificent, Omniactive | Key generation, real-time protection |
-| **Coverage** | Omnipresent, Omnitemporal, Omnidirectional | Multi-layer defense, temporal integrity |
-| **Omnibenevolence** | Omnibenevolent, Omniperfect, Omnivalent | Ethical foundation, hybrid security |
+| Pillar | Triad | Sub-Properties |
+|--------|-------|----------------|
+| **Omniscient** | Wisdom | Complete verification, multi-dimensional detection, data validation |
+| **Omnipotent** | Agency | Maximum strength, secure key generation, real-time protection |
+| **Omnidirectional** | Geography | Multi-layer defense, temporal integrity, attack surface coverage |
+| **Omnibenevolent** | Integrity | Ethical foundation, mathematical correctness, hybrid security |
 
 The ethical integration achieves:
 - **Balanced weighting**: Σw = 12.0 across all pillars
@@ -1061,7 +1061,7 @@ AMA Cryptography transcends traditional computer science boundaries by synthesiz
 |--------|--------------|----------------|
 | **Quantum Mechanics** | Lattice-based cryptography, uncertainty principles | ML-DSA-65, Kyber-1024 post-quantum algorithms |
 | **Ancient Mathematics** | Prime number theory, geometric scaling | Helical parameters, golden ratio optimizations |
-| **Philosophy** | Ethical frameworks, epistemology | 12 Ethical Pillars, truth verification |
+| **Philosophy** | Ethical frameworks, epistemology | 4 Ethical Pillars, truth verification |
 | **Biology** | DNA structure, evolutionary resilience | Bio-inspired data architecture, adaptive security |
 | **Physics** | Resonance detection, timing analysis | 3R monitoring (Resonance-Recursion-Refactoring) |
 

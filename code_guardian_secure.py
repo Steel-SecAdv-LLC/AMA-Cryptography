@@ -992,33 +992,25 @@ def _verify_rfc3161_token(
 
 
 # ============================================================================
-# 12 OMNI-CODE ETHICAL PILLARS INTEGRATION
+# 4 OMNI-CODE ETHICAL PILLARS INTEGRATION
 # ============================================================================
 
-# 12 Ethical Pillars as balanced vector (Σw = 12.0)
+# 4 Ethical Pillars as balanced vector (Σw = 12.0, each pillar = 3.0)
 ETHICAL_VECTOR = {
-    # Triad 1: Knowledge Domain (Verification Layer)
-    "omniscient": 1.0,  # Complete verification
-    "omnipercipient": 1.0,  # Multi-dimensional detection
-    "omnilegent": 1.0,  # Data validation
-    # Triad 2: Power Domain (Cryptographic Generation)
-    "omnipotent": 1.0,  # Maximum strength
-    "omnificent": 1.0,  # Key generation
-    "omniactive": 1.0,  # Real-time protection
-    # Triad 3: Coverage Domain (Defense-in-Depth)
-    "omnipresent": 1.0,  # Multi-layer defense
-    "omnitemporal": 1.0,  # Temporal integrity
-    "omnidirectional": 1.0,  # Attack surface coverage
-    # Triad 4: Omnibenevolence Domain (Ethical Constraints)
-    "omnibenevolent": 1.0,  # Ethical foundation
-    "omniperfect": 1.0,  # Mathematical correctness
-    "omnivalent": 1.0,  # Hybrid security
+    # Pillar 1: Omniscient — Triad of Wisdom (Verification Layer)
+    "omniscient": 3.0,  # Verification + Detection + Validation
+    # Pillar 2: Omnipotent — Triad of Agency (Cryptographic Generation)
+    "omnipotent": 3.0,  # Strength + Generation + Protection
+    # Pillar 3: Omnidirectional — Triad of Geography (Defense-in-Depth)
+    "omnidirectional": 3.0,  # Defense + Temporal + Coverage
+    # Pillar 4: Omnibenevolent — Triad of Integrity (Ethical Constraints)
+    "omnibenevolent": 3.0,  # Ethics + Correctness + Hybrid
 }
 
 # Verify balanced weighting - runtime check instead of assert for fail-closed security
-if sum(ETHICAL_VECTOR.values()) != 12.0 or not all(w == 1.0 for w in ETHICAL_VECTOR.values()):
+if sum(ETHICAL_VECTOR.values()) != 12.0 or not all(w == 3.0 for w in ETHICAL_VECTOR.values()):
     raise RuntimeError(
-        "ETHICAL_VECTOR configuration error: must have 12 weights of 1.0 each (Σw = 12.0)"
+        "ETHICAL_VECTOR configuration error: must have 4 weights of 3.0 each (Σw = 12.0)"
     )
 
 
@@ -1351,7 +1343,7 @@ class KeyManagementSystem:
     creation_date: str  # ISO 8601 timestamp
     rotation_schedule: str  # e.g., "quarterly"
     version: str  # KMS version
-    ethical_vector: Dict[str, float]  # 12 Ethical Pillars
+    ethical_vector: Dict[str, float]  # 4 Ethical Pillars
     quantum_signatures_enabled: bool = True  # False if Dilithium unavailable
 
 
@@ -1373,7 +1365,7 @@ def generate_key_management_system(
 
     Ethical Integration:
     --------------------
-    The 12 Ethical Pillars are integrated into key derivation via:
+    The 4 Ethical Pillars are integrated into key derivation via:
     1. Enhanced HKDF context includes 128-bit ethical signature
     2. Keys are cryptographically bound to ethical constraints
     3. Ethical vector is stored with KMS for verification
@@ -1629,7 +1621,7 @@ class CryptoPackage:
     ed25519_pubkey: str  # Ed25519 public key hex
     dilithium_pubkey: Optional[str]  # Dilithium public key hex (None if unavailable)
     version: str  # Package version
-    ethical_vector: Dict[str, float]  # 12 Ethical Pillars
+    ethical_vector: Dict[str, float]  # 4 Ethical Pillars
     ethical_hash: str  # SHA3-256 hash of ethical vector (hex)
     quantum_signatures_enabled: bool = True  # False if Dilithium unavailable
     signature_format_version: str = SIGNATURE_FORMAT_V2  # Signature binding format

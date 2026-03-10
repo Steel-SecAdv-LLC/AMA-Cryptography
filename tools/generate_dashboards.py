@@ -453,7 +453,7 @@ def create_benchmark_report():
         f"  Median Throughput:    {np.median(all_throughputs):>12,.0f} ops/s\n\n"
         f"  NIST Standards:       6/6 FIPS\n"
         f"  Crypto Layers:        6 defense-in-depth\n"
-        f"  Ethical Pillars:      12 Omni-Code\n"
+        f"  Ethical Pillars:      4 Omni-Code\n"
         f"  Monitoring Overhead:  <2%\n\n"
         f"  Backend:   Native C + Cython\n"
         f"  Algorithms: SHA3 | Ed25519 | ML-DSA-65\n"

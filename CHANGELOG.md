@@ -56,7 +56,7 @@ All 64 CI jobs passing after Phase 2 integration.
 
 - **Composition protocol clarification**: All documentation now accurately states that AMA Cryptography uses standardized primitives with an original composition protocol
 - **Mercury Agent integration**: Documented AMA Cryptography's role as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent)
-- **Ethical pillar alignment**: Corrected ethical pillar names across all documentation to match the canonical 12 Omni-Code Ethical Pillars (Omniscient, Omnipercipient, Omnilegent, etc.)
+- **Ethical pillar redesign**: Consolidated from 12 named pillars to 4 Omni-Code Ethical Pillars (Omniscient, Omnipotent, Omnidirectional, Omnibenevolent), each governing a triad of three sub-properties (Wisdom, Agency, Geography, Integrity)
 - **Phase 2 primitives**: Added X25519, ChaCha20-Poly1305, Argon2, secp256k1 to all relevant documentation
 
 ---
