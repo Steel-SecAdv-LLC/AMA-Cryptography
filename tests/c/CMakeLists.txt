@@ -20,10 +20,15 @@ add_ama_test(test_ed25519 test_ed25519.c)
 
 # PQC Known Answer Tests (KAT) and debug tests
 if(AMA_USE_NATIVE_PQC)
-    add_executable(test_kat test_kat.c)
-    target_link_libraries(test_kat ama_cryptography_test OpenSSL::Crypto)
-    add_test(NAME test_kat COMMAND test_kat
-             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    # test_kat uses OpenSSL EVP for NIST AES-256-CTR DRBG to reproduce KAT vectors
+    if(OPENSSL_FOUND)
+        add_executable(test_kat test_kat.c)
+        target_link_libraries(test_kat ama_cryptography_test OpenSSL::Crypto)
+        add_test(NAME test_kat COMMAND test_kat
+                 WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    else()
+        message(STATUS "OpenSSL not found — skipping test_kat (NIST KAT vectors)")
+    endif()
 
     # Kyber debug / CPA isolation tests (run manually or via ctest)
     add_ama_test(test_kyber_debug test_kyber_debug.c)

@@ -4,7 +4,7 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.0 |
+| Document Version | 2.1 |
 | Last Updated | 2026-03-10 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
@@ -262,9 +262,10 @@ The system enforces the following constraints on ethical pillars:
 
 ### Core Components
 
-#### OmniGuardianSecure
+#### code_guardian_secure
 
-The primary cryptographic engine implementing the complete security framework.
+The primary cryptographic module implementing the complete security framework
+via standalone functions (not a class).
 
 **Responsibilities**:
 - Cryptographic package creation and verification
@@ -273,9 +274,9 @@ The primary cryptographic engine implementing the complete security framework.
 - Standards compliance validation
 
 **Key Interfaces**:
-- `create_crypto_package(data, params, kms, author, use_rfc3161, tsa_url) -> CryptoPackage`
-- `verify_crypto_package(data, params, pkg, hmac_key) -> Dict[str, bool]`
-- `generate_ed25519_keypair(seed) -> Ed25519KeyPair`
+- `create_crypto_package(codes, helix_params, kms, author, use_rfc3161=False, tsa_url=None, monitor=None) -> CryptoPackage`
+- `verify_crypto_package(codes, helix_params, pkg, hmac_key=None, require_quantum_signatures=None) -> Dict[str, bool]`
+- `generate_ed25519_keypair(seed=None) -> Ed25519KeyPair`
 - `generate_dilithium_keypair() -> DilithiumKeyPair`
 
 #### KeyManagementSystem
@@ -319,6 +320,10 @@ class CryptoPackage:
     ed25519_pubkey: str       # Embedded public key
     dilithium_pubkey: str     # Embedded public key
     version: str              # Package format version
+    ethical_vector: Dict[str, float]  # 4 Ethical Pillar scores
+    ethical_hash: str         # SHA3-256 hash of ethical vector
+    quantum_signatures_enabled: bool  # Whether PQC signatures are present
+    signature_format_version: str     # Signature format version tag
 ```
 
 ### Component Interactions
@@ -326,7 +331,7 @@ class CryptoPackage:
 ```
 +-------------------+     +-------------------+     +-------------------+
 |                   |     |                   |     |                   |
-|  Application      |---->|  OmniGuardianSecure|---->|  CryptoPackage    |
+|  Application      |---->|  code_guardian_secure|---->|  CryptoPackage    |
 |  Interface        |     |                   |     |  (Output)         |
 |                   |     +--------+----------+     |                   |
 +-------------------+              |                +-------------------+

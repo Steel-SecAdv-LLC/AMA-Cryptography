@@ -21,12 +21,12 @@ jobs:
         include:
           - os: ubuntu-latest
             compiler: gcc
-            cc: gcc-11
-            cxx: g++-11
+            cc: gcc-13
+            cxx: g++-13
           - os: ubuntu-latest
             compiler: clang
-            cc: clang-14
-            cxx: clang++-14
+            cc: clang-18
+            cxx: clang++-18
           - os: macos-latest
             compiler: gcc
             cc: gcc-12
@@ -43,7 +43,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ${{ matrix.cc }} ${{ matrix.cxx }}
+          sudo apt-get install -y cmake libssl-dev ${{ matrix.cc }} ${{ matrix.cxx }}
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'

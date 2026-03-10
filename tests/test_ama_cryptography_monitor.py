@@ -42,7 +42,6 @@ import ast
 import numpy as np
 import pytest
 
-import ama_cryptography_monitor
 from ama_cryptography_monitor import (
     AmaCryptographyMonitor,
     IncrementalStats,
@@ -429,6 +428,8 @@ class TestRecursionPatternMonitor:
         false positive anomalies. The test verifies that perfectly regular
         intervals (0.01s apart) produce zero anomalies.
         """
+        import ama_cryptography_monitor
+
         monitor = RecursionPatternMonitor()
 
         # Create deterministic timestamps: exactly 0.01s apart
@@ -460,6 +461,8 @@ class TestRecursionPatternMonitor:
         Uses deterministic timestamps to reliably trigger frequency anomaly
         detection. Creates 15 regular intervals followed by one large gap.
         """
+        import ama_cryptography_monitor
+
         monitor = RecursionPatternMonitor()
 
         # Create deterministic timestamps: 15 regular intervals, then one large gap
@@ -492,6 +495,8 @@ class TestRecursionPatternMonitor:
         Uses deterministic timestamps to ensure consistent feature extraction
         across all CI environments.
         """
+        import ama_cryptography_monitor
+
         monitor = RecursionPatternMonitor(max_depth=3)
 
         # Create deterministic timestamps: exactly 0.01s apart
@@ -524,6 +529,8 @@ class TestRecursionPatternMonitor:
         Uses deterministic timestamps to ensure consistent behavior across
         all CI environments.
         """
+        import ama_cryptography_monitor
+
         monitor = RecursionPatternMonitor()
 
         # Create deterministic timestamps: exactly 0.01s apart
@@ -748,6 +755,8 @@ class TestAmaCryptographyMonitor:
         Uses deterministic timestamps to ensure consistent behavior across
         all CI environments.
         """
+        import ama_cryptography_monitor
+
         monitor = AmaCryptographyMonitor(enabled=True)
 
         # Create deterministic timestamps
@@ -780,6 +789,8 @@ class TestAmaCryptographyMonitor:
         Uses deterministic timestamps to ensure consistent behavior across
         all CI environments.
         """
+        import ama_cryptography_monitor
+
         monitor = AmaCryptographyMonitor(enabled=True)
 
         # Create deterministic timestamps
@@ -839,13 +850,17 @@ class TestMonitorIntegration:
         # Add parent directory to path
         sys.path.insert(0, str(Path(__file__).parent.parent))
 
-        from code_guardian_secure import (
-            MASTER_CODES_STR,
-            MASTER_HELIX_PARAMS,
-            create_crypto_package,
-            generate_key_management_system,
-            verify_crypto_package,
-        )
+        try:
+            from code_guardian_secure import (
+                MASTER_CODES_STR,
+                MASTER_HELIX_PARAMS,
+                create_crypto_package,
+                generate_key_management_system,
+                verify_crypto_package,
+            )
+        except RuntimeError:
+            pytest.skip("Native C library required for code_guardian_secure")
+            return  # pragma: no cover — unreachable; tells static analysis skip() diverges
 
         # Setup
         monitor = AmaCryptographyMonitor(enabled=True)
