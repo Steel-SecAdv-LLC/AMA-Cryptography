@@ -1,0 +1,72 @@
+name: Sync Wiki
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'wiki/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Publish wiki pages to GitHub Wiki
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          WIKI_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.wiki.git"
+
+          # Try to clone the wiki. The GitHub wiki is a separate git repository
+          # that only exists after at least one page has been created through the UI.
+          if git clone "$WIKI_URL" /tmp/wiki 2>/dev/null; then
+            echo "✓ Cloned existing wiki repository."
+          else
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "  WIKI NOT INITIALIZED — one-time setup required"
+            echo ""
+            echo "  The GitHub Wiki is a separate git repo that GitHub creates"
+            echo "  only after the very first page is saved through the web UI."
+            echo ""
+            echo "  Complete these steps ONCE, then re-run this workflow:"
+            echo ""
+            echo "  1. Go to https://github.com/${{ github.repository }}/wiki"
+            echo "  2. Click 'Create the first page'"
+            echo "  3. Set the title to: Home"
+            echo "  4. Paste any placeholder text (e.g. 'Initializing...')"
+            echo "  5. Click 'Save Page'"
+            echo "  6. Return to Actions → Sync Wiki → Run workflow"
+            echo ""
+            echo "  The workflow will then overwrite that placeholder with all"
+            echo "  17 wiki pages from the wiki/ directory automatically."
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            # Exit 0 so the PR/push is not marked as failed — this is a setup
+            # reminder, not a code error.
+            exit 0
+          fi
+
+          # Copy all wiki pages from the source tree into the cloned wiki repo
+          cp -r wiki/. /tmp/wiki/
+
+          cd /tmp/wiki
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add --all
+
+          if git diff --cached --quiet; then
+            echo "No wiki changes to publish — already up to date."
+          else
+            git commit -m "docs(wiki): sync from main repository"
+            git push origin HEAD
+            echo ""
+            echo "✓ Wiki published successfully!"
+            echo "  View at: https://github.com/${{ github.repository }}/wiki"
+          fi
