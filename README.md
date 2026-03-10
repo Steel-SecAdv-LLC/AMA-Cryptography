@@ -319,7 +319,10 @@ Future-proof cryptography:
 
 ---
 
-## Performance Metrics 
+## Performance Metrics
+
+<details>
+<summary><strong>Cryptographic Operation Benchmarks</strong></summary>
 
 ![Performance Dashboard](assets/performance_dashboard.png)
 
@@ -328,9 +331,6 @@ Future-proof cryptography:
 ![Benchmark Report](assets/benchmark_report.png)
 
 *Comprehensive benchmark report with latency distribution, sign vs verify analysis, category performance, top/bottom operations, ethical overhead, regression improvement, NIST FIPS compliance, and summary statistics.*
-
-<details>
-<summary><strong>Cryptographic Operation Benchmarks</strong></summary>
 
 ### Hybrid Operations (Ed25519 + ML-DSA-65)
 
@@ -342,10 +342,6 @@ Future-proof cryptography:
 **Performance Optimization:** AMA Cryptography now supports passing Ed25519 key objects for 2x faster signing. The `HybridSignatureProvider` class automatically uses this optimization.
 
 \*Optimized performance uses cached Ed25519 key objects, eliminating reconstruction overhead.
-
-![Hybrid Signing and Verification Performance](assets/performance_comparison.png)
-
-*Visual comparison of hybrid signing and verification throughput for AMA Cryptography (standard vs optimized) on reference hardware (Linux x86_64, 16 cores, 13GB RAM).*
 
 ### ML-DSA-65 (Post-Quantum) Operations
 
@@ -366,10 +362,6 @@ Complete security package with all defense layers:
 | Package Verify (6 layers) | 0.199ms | 5,029 ops/sec |
 
 **6 Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65, HKDF, RFC 3161 (optional)
-
-![Package Performance](assets/package_performance.png)
-
-*Complete 6-layer cryptographic packages can be created at 3,595 ops/sec and verified at 5,029 ops/sec.*
 
 ### Core Cryptographic Primitives
 
