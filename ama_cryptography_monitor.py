@@ -59,11 +59,11 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 # but the core 3R monitor operates without them.
 _HAS_NUMPY = False
 try:
-    import numpy as np
+    import numpy  # noqa: F401
 
     _HAS_NUMPY = True
 except ImportError:
-    np = None  # type: ignore[assignment,unused-ignore]
+    pass
 
 
 def _median_sorted(values: List[float]) -> float:

@@ -58,9 +58,7 @@ import pytest
 try:
     from ama_cryptography.pqc_backends import (
         DILITHIUM_AVAILABLE,
-        DILITHIUM_BACKEND,
         KYBER_AVAILABLE,
-        KYBER_BACKEND,
         dilithium_sign,
         dilithium_verify,
         generate_dilithium_keypair,
@@ -74,8 +72,6 @@ except ImportError:
     PQC_AVAILABLE = False
     DILITHIUM_AVAILABLE = False
     KYBER_AVAILABLE = False
-    DILITHIUM_BACKEND = None
-    KYBER_BACKEND = None
 
 # Path to KAT vector files
 KAT_DIR = Path(__file__).parent / "kat"

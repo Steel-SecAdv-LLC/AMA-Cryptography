@@ -310,13 +310,8 @@ class TestAESGCMInterop:
         """Native-encrypted data must be decryptable by PyCA cryptography."""
         try:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        except (ImportError, Exception):
+        except Exception:
             pytest.skip("PyCA cryptography not installed")
-        except BaseException as exc:
-            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-                raise
-            # pyo3_runtime.PanicException inherits BaseException, not Exception
-            pytest.skip("PyCA cryptography not functional (CFFI/Rust bindings broken)")
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
@@ -335,13 +330,8 @@ class TestAESGCMInterop:
         """PyCA-encrypted data must be decryptable by native backend."""
         try:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        except (ImportError, Exception):
+        except Exception:
             pytest.skip("PyCA cryptography not installed")
-        except BaseException as exc:
-            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-                raise
-            # pyo3_runtime.PanicException inherits BaseException, not Exception
-            pytest.skip("PyCA cryptography not functional (CFFI/Rust bindings broken)")
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
 

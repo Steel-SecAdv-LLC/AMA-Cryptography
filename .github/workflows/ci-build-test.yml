@@ -276,8 +276,8 @@ jobs:
           push: false
           load: true
           tags: ama-cryptography:ubuntu
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=ubuntu
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,scope=ubuntu,mode=max' || '' }}
 
       - name: Build Alpine image
         uses: docker/build-push-action@v7
@@ -287,8 +287,8 @@ jobs:
           push: false
           load: true
           tags: ama-cryptography:alpine
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=alpine
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,scope=alpine,mode=max' || '' }}
 
       - name: Test Ubuntu image
         run: |

@@ -42,6 +42,7 @@ import ast
 import numpy as np
 import pytest
 
+import ama_cryptography_monitor
 from ama_cryptography_monitor import (
     AmaCryptographyMonitor,
     IncrementalStats,
@@ -181,7 +182,7 @@ class TestIncrementalStats:
         """Test numerical stability with 1000+ values."""
         stats = IncrementalStats()
         np.random.seed(42)  # Reproducible
-        values = np.random.randn(1000) * 100 + 500  # Mean ~500, std ~100
+        values = list(np.random.randn(1000) * 100 + 500)  # Mean ~500, std ~100
 
         for v in values:
             stats.update(float(v))
@@ -296,7 +297,7 @@ class TestResonanceTimingMonitor:
 
         # Record few samples
         for i in range(10):
-            anomaly = monitor.record_timing("test_op", 10.0)
+            monitor.record_timing("test_op", 10.0)
 
         # No anomaly should be detected yet
         anomaly = monitor.record_timing("test_op", 100.0)  # Huge spike
@@ -440,8 +441,6 @@ class TestRecursionPatternMonitor:
             return result
 
         # Patch time.time in the ama_cryptography_monitor module
-        import ama_cryptography_monitor
-
         monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
 
         # Record normal packages with deterministic timestamps
@@ -474,8 +473,6 @@ class TestRecursionPatternMonitor:
             return next(timestamp_iter)
 
         # Patch time.time in the ama_cryptography_monitor module
-        import ama_cryptography_monitor
-
         monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
 
         # Record packages with deterministic timestamps
@@ -507,8 +504,6 @@ class TestRecursionPatternMonitor:
             return result
 
         # Patch time.time in the ama_cryptography_monitor module
-        import ama_cryptography_monitor
-
         monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
 
         # Record packages with deterministic timestamps
@@ -541,8 +536,6 @@ class TestRecursionPatternMonitor:
             return result
 
         # Patch time.time in the ama_cryptography_monitor module
-        import ama_cryptography_monitor
-
         monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
 
         # Normal size: 7 codes
@@ -767,8 +760,6 @@ class TestAmaCryptographyMonitor:
             return result
 
         # Patch time.time in the ama_cryptography_monitor module
-        import ama_cryptography_monitor
-
         monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
 
         for i in range(15):
@@ -801,8 +792,6 @@ class TestAmaCryptographyMonitor:
             return result
 
         # Patch time.time in the ama_cryptography_monitor module
-        import ama_cryptography_monitor
-
         monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
 
         # Generate some activity

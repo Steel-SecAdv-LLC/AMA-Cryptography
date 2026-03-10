@@ -195,7 +195,6 @@ def create_performance_dashboard():
     val_names = [r["claim_name"].replace("_", "\n") for r in val_results]
     val_claimed = [r["documented_value"] for r in val_results]
     val_measured = [r["measured_value"] for r in val_results]
-    x_pos = np.arange(len(val_names))
     ax.scatter(val_claimed, val_measured, c="#00d2ff", s=60, zorder=5,
                edgecolors="#ffffff", linewidths=0.5)
     max_val = max(max(val_claimed), max(val_measured)) * 1.2
@@ -231,8 +230,6 @@ def create_performance_dashboard():
     ax = axes[2, 2]
     ax.axis("off")
     # Draw summary box
-    total_ops = len(bench["cryptographic_operations"]) + len(bench["key_generation"]) + \
-                len(bench["dna_operations"]) + len(bench["ethical_integration"]) - 1
     metrics_text = (
         "AMA CRYPTOGRAPHY  BENCHMARK RESULTS\n"
         "=" * 42 + "\n\n"

@@ -4,19 +4,17 @@
 
 """Basic tests for AMA Cryptography"""
 
-import ama_cryptography
+from ama_cryptography import __author__, __version__
 
 
 def test_version():
     """Test that version is correctly set"""
-    assert hasattr(ama_cryptography, "__version__")
-    assert ama_cryptography.__version__ == "2.0"
+    assert __version__ == "2.0"
 
 
 def test_author():
     """Test that author is correctly set"""
-    assert hasattr(ama_cryptography, "__author__")
-    assert "Andrew E. A." in ama_cryptography.__author__
+    assert "Andrew E. A." in __author__
 
 
 def test_imports():

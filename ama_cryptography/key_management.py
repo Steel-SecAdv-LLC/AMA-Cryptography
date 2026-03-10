@@ -115,14 +115,14 @@ class HDKeyDerivation:
             self.master_seed = secrets.token_bytes(64)
         elif seed is not None:
             self.master_seed = seed
-        elif seed_phrase is not None:
+        else:
             # Derive seed from phrase (simplified BIP39)
+            # seed_phrase is guaranteed non-None here: seed is None (from elif)
+            # and not both None (from first if).
+            assert seed_phrase is not None
             self.master_seed = hashlib.pbkdf2_hmac(
                 "sha512", seed_phrase.encode("utf-8"), b"mnemonic", 2048, 64
             )
-        else:
-            # Should never reach here due to earlier check
-            self.master_seed = secrets.token_bytes(64)
 
         # Generate master key
         self.master_key, self.master_chain_code = self._generate_master_key()
@@ -1245,8 +1245,8 @@ if __name__ == "__main__":
     rotation_mgr = KeyRotationManager(rotation_period=timedelta(days=90))
 
     # Register keys
-    key1_meta = rotation_mgr.register_key("key-v1", "signing", max_usage=1000)
-    key2_meta = rotation_mgr.register_key("key-v2", "signing")
+    rotation_mgr.register_key("key-v1", "signing", max_usage=1000)
+    rotation_mgr.register_key("key-v2", "signing")
 
     logger.info(f"Active key: {rotation_mgr.get_active_key()}")
     logger.info(f"Should rotate: {rotation_mgr.should_rotate('key-v1')}")

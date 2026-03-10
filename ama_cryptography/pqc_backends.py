@@ -44,11 +44,17 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
 
-from ama_cryptography.exceptions import (  # noqa: F401 — re-exported for public API
+from ama_cryptography.exceptions import (
     PQCUnavailableError,
     QuantumSignatureUnavailableError,
     SecurityWarning,
 )
+
+__all__ = [
+    "PQCUnavailableError",
+    "QuantumSignatureUnavailableError",
+    "SecurityWarning",
+]
 
 F = TypeVar("F", bound=Callable[..., Any])
 

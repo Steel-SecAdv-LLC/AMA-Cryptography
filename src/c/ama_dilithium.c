@@ -693,7 +693,7 @@ static void dil_poly_uniform_eta(dil_poly *a, const uint8_t seed[DIL_CRHBYTES],
         t1 = stream[pos] >> 4;
         pos++;
 
-        if (t0 < 2 * DIL_ETA + 1 && ctr < DIL_N) {
+        if (t0 < 2 * DIL_ETA + 1) {
             a->coeffs[ctr++] = DIL_ETA - (int32_t)t0;
         }
         if (t1 < 2 * DIL_ETA + 1 && ctr < DIL_N) {
@@ -933,10 +933,8 @@ static void dil_polyveck_use_hint(dil_polyveck *w, const dil_polyveck *v,
     for (i = 0; i < DIL_K; ++i) {
         unsigned int limit = hint[DIL_OMEGA + i];
         for (; k_idx < limit; ++k_idx) {
-            unsigned int idx = hint[k_idx];
-            if (idx < DIL_N) {
-                hint_flags[i][idx] = 1;
-            }
+            /* hint[k_idx] is uint8_t (0-255), always valid index for DIL_N=256 */
+            hint_flags[i][hint[k_idx]] = 1;
         }
     }
 

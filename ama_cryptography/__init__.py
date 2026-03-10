@@ -33,11 +33,10 @@ __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
 import importlib as _importlib
 
-# Lazy-load math modules that require numpy (PEP 562).
-# This allows `import ama_cryptography` to succeed without numpy installed.
-# Accessing any math symbol triggers the actual import and surfaces a clear
-# ModuleNotFoundError if numpy is missing.
-
+# Eagerly import math modules when numpy is available.
+# When numpy is NOT installed, __getattr__ provides a clear ImportError
+# mentioning numpy (tested by test_lazy_imports.py).
+_MATH_AVAILABLE = False
 _EQUATIONS_EXPORTS = frozenset(
     {
         "HELIX_PARAMS",
@@ -60,21 +59,45 @@ _EQUATIONS_EXPORTS = frozenset(
     }
 )
 _ENGINE_EXPORTS = frozenset({"AmaEquationEngine"})
+try:
+    from ama_cryptography.double_helix_engine import AmaEquationEngine
+    from ama_cryptography.equations import (
+        HELIX_PARAMS,
+        LAMBDA_DECAY,
+        OMNI_CODES,
+        PHI,
+        PHI_CUBED,
+        PHI_SQUARED,
+        SIGMA_QUADRATIC_THRESHOLD,
+        calculate_sigma_quadratic,
+        enforce_sigma_quadratic_threshold,
+        golden_ratio_convergence_proof,
+        helix_curvature,
+        helix_torsion,
+        initialize_ethical_matrix,
+        lyapunov_function,
+        lyapunov_stability_proof,
+        verify_all_codes,
+        verify_mathematical_foundations,
+    )
+
+    _MATH_AVAILABLE = True
+except (ImportError, ModuleNotFoundError):
+    pass
 
 
 def __getattr__(name: str) -> object:
-    """Lazy-load math modules that require numpy."""
+    """Provide a clear error when math symbols are accessed without numpy."""
     if name in _EQUATIONS_EXPORTS:
         mod = _importlib.import_module("ama_cryptography.equations")
         val = getattr(mod, name)
         globals()[name] = val
         return val
-    elif name in _ENGINE_EXPORTS:
+    if name in _ENGINE_EXPORTS:
         mod = _importlib.import_module("ama_cryptography.double_helix_engine")
         val = getattr(mod, name)
         globals()[name] = val
         return val
-
     raise AttributeError(f"module 'ama_cryptography' has no attribute {name!r}")
 
 

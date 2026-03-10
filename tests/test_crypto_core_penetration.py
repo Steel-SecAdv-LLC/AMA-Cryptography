@@ -716,8 +716,7 @@ class TestMalformedInputHandling:
             # If it doesn't crash, content_hash should be False
             assert results["content_hash"] is False
         except ValueError:
-            # Acceptable to raise ValueError for invalid hex
-            pass
+            pass  # Acceptable to raise ValueError for invalid hex
 
     def test_invalid_hex_in_hmac_tag(self, kms):
         """Invalid hex in hmac_tag should not crash."""
@@ -727,7 +726,7 @@ class TestMalformedInputHandling:
             results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
             assert results["hmac"] is False
         except ValueError:
-            pass
+            pass  # Acceptable to raise ValueError for invalid HMAC
 
     def test_truncated_signature(self, kms):
         """Truncated signature should not crash."""
@@ -737,7 +736,7 @@ class TestMalformedInputHandling:
             results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
             assert results["ed25519"] is False
         except ValueError:
-            pass
+            pass  # Acceptable for truncated signature
 
     def test_empty_signature(self, kms):
         """Empty signature should not crash."""
@@ -747,7 +746,7 @@ class TestMalformedInputHandling:
             results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
             assert results["ed25519"] is False
         except ValueError:
-            pass
+            pass  # Acceptable for empty signature
 
 
 class TestKeySecurityProperties:
