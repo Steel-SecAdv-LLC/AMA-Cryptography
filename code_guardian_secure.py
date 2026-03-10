@@ -1044,7 +1044,7 @@ def create_ethical_hkdf_context(
 
     Args:
         base_context: Original HKDF info parameter
-        ethical_vector: 12-pillar ethical weights (Σw = 12.0)
+        ethical_vector: 4-pillar ethical weights (Σw = 12.0)
 
     Returns:
         Enhanced context with 128-bit ethical signature
@@ -1158,7 +1158,7 @@ def derive_keys(
         master_secret: High-entropy master key (≥32 bytes recommended)
         info: Context string for domain separation
         num_keys: Number of independent keys to derive
-        ethical_vector: 12-pillar ethical weights (defaults to ETHICAL_VECTOR)
+        ethical_vector: 4-pillar ethical weights (defaults to ETHICAL_VECTOR)
         salt: Optional salt for HKDF. If None, generates random 32-byte salt
               for optimal security per RFC 5869. Provide explicit salt only
               for deterministic testing purposes.
@@ -1382,7 +1382,7 @@ def generate_key_management_system(
 
     Args:
         author: Key owner identifier (for domain separation)
-        ethical_vector: 12-pillar ethical weights (defaults to ETHICAL_VECTOR)
+        ethical_vector: 4-pillar ethical weights (defaults to ETHICAL_VECTOR)
 
     Returns:
         KeyManagementSystem with all keys initialized and ethical integration

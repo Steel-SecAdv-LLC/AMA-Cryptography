@@ -771,21 +771,6 @@ static void dil_polyvecl_ntt(dil_polyvecl *v) {
     }
 }
 
-static void dil_polyvecl_invntt(dil_polyvecl *v) {
-    unsigned int i;
-    for (i = 0; i < DIL_L; ++i) {
-        dil_poly_invntt(&v->vec[i]);
-    }
-}
-
-static void dil_polyvecl_add(dil_polyvecl *w, const dil_polyvecl *u,
-                              const dil_polyvecl *v) {
-    unsigned int i;
-    for (i = 0; i < DIL_L; ++i) {
-        dil_poly_add(&w->vec[i], &u->vec[i], &v->vec[i]);
-    }
-}
-
 static int dil_polyvecl_chknorm(const dil_polyvecl *v, int32_t bound) {
     unsigned int i;
     for (i = 0; i < DIL_L; ++i) {
@@ -1210,7 +1195,7 @@ AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len
     uint8_t hashbuf[DIL_SEEDBYTES + DIL_CRHBYTES];
     dil_poly mat[DIL_K][DIL_L];
     dil_polyvecl s1, y, z;
-    dil_polyveck s2, t0, w1, w0, h_vec, ct0, cs2;
+    dil_polyveck s2, t0, w1, w0, ct0, cs2;
     dil_poly cp;
     uint8_t hint[DIL_OMEGA + DIL_K];
     unsigned int n, i;

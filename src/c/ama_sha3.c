@@ -94,7 +94,7 @@ static inline uint64_t rotl64(uint64_t x, unsigned int n) {
  * Keccak-f[1600] permutation
  */
 static void keccak_f1600(uint64_t state[KECCAK_STATE_SIZE]) {
-    uint64_t C[5], D[5], B[25], temp;
+    uint64_t C[5], D[5], B[25];
     unsigned int round, x, y;
 
     for (round = 0; round < KECCAK_ROUNDS; round++) {
@@ -196,7 +196,7 @@ ama_error_t ama_sha3_256(
 ) {
     uint64_t state[KECCAK_STATE_SIZE];
     uint8_t block[SHA3_256_RATE];
-    size_t remaining, block_size, i;
+    size_t remaining, i;
 
     if (!input && input_len > 0) {
         return AMA_ERROR_INVALID_PARAM;

@@ -523,7 +523,7 @@ class TestEthicalIntegration:
         from code_guardian_secure import ETHICAL_VECTOR, create_ethical_hkdf_context
 
         # Verify ethical vector structure
-        assert len(ETHICAL_VECTOR) == 12
+        assert len(ETHICAL_VECTOR) == 4
         assert sum(ETHICAL_VECTOR.values()) == 12.0
 
         # Create ethical context with base context bytes

@@ -639,7 +639,7 @@ def create_monitoring_overhead():
     colors = ["#3B82F6", "#F59E0B"]
     explode = (0, 0.05)
 
-    wedges, _texts, _autotexts = ax.pie(
+    ax.pie(
         sizes,
         explode=explode,
         labels=labels,
