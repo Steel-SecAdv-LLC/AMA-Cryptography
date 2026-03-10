@@ -1,5 +1,3 @@
-# AMA Cryptography
-
 <div align="center">
 
   <img width="917" height="194" alt="image" src="https://github.com/user-attachments/assets/b8cf718e-82e0-4254-94bc-8c6aad12a895" />
@@ -17,7 +15,7 @@
 ```
               +==============================================================================+
               |                            AMA CRYPTOGRAPHY ♱                                |
-              |                   Post-Quantum Security System                               |
+              |                       Post-Quantum Security System                           |
               |                                                                              |
               |   6-Layer Defense      |   Quantum-Resistant    |   Defense-in-Depth         |
               |   Cython-Optimized     |   3R Anomaly Monitor   |   Cross-Platform           |
@@ -29,7 +27,7 @@
               |   ML-DSA-65/Kyber      |   NumPy Integration    |   Key Management           |
               |   SPHINCS+/NTT Ops     |   Math Engine          |   3R Monitoring            |
               |                                                                              |
-              |                   Built for a civilized evolution.                           |
+              |                       Built for a civilized evolution.                       |
               +==============================================================================+
 ```
 
@@ -42,7 +40,7 @@
 
 ---
 
-## Executive Summary
+## Executive Summary 🌎 
 
 AMA Cryptography is a hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Community-tested, not externally audited. A secure, multi-language cryptographic security system designed to protect people, data, and networks against both classical and quantum threats. Built on a foundation of mathematically rigorous post-quantum cryptography (PQC), AMA Cryptography delivers security-hardened features with exceptional performance.
 
@@ -255,7 +253,7 @@ Future-proof cryptography:
 <details>
 <summary><strong>Real-world scenarios (click to expand)</strong></summary>
 
-### Humanitarian and Conservation 🌎 
+### Humanitarian and Conservation 
 
 **Unique Value:** Protection of sensitive field data with runtime attack detection (Not approved for clinical, medical, or regulated government deployment without independent audit):
 
@@ -321,7 +319,7 @@ Future-proof cryptography:
 
 ---
 
-## Performance Metrics 📊
+## Performance Metrics 
 
 <details>
 <summary><strong>Cryptographic Operation Benchmarks</strong></summary>
@@ -810,7 +808,7 @@ KAT vectors are sourced from NIST PQC standardization and validate that the nati
 
 ---
 
-## Build System 🖥️
+## Build System 
 
 <details>
 <summary><strong>CMake (C Library with Native PQC)</strong></summary>
