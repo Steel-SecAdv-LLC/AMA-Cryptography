@@ -321,6 +321,14 @@ Future-proof cryptography:
 
 ## Performance Metrics 
 
+![Performance Dashboard](assets/performance_dashboard.png)
+
+*Multi-panel performance dashboard showing cryptographic throughput, signature latency, scalability, key generation speed, 6-layer breakdown, regression analysis, validation claims, and hybrid performance — all from real benchmark data.*
+
+![Benchmark Report](assets/benchmark_report.png)
+
+*Comprehensive benchmark report with latency distribution, sign vs verify analysis, category performance, top/bottom operations, ethical overhead, regression improvement, NIST FIPS compliance, and summary statistics.*
+
 <details>
 <summary><strong>Cryptographic Operation Benchmarks</strong></summary>
 

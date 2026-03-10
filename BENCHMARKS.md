@@ -7,6 +7,12 @@
 **Dilithium Backend:** native
 **Total Duration:** 8.44s
 
+## Dashboard Overview
+
+![Performance Dashboard](assets/performance_dashboard.png)
+
+![Benchmark Report](assets/benchmark_report.png)
+
 ## Key Generation
 
 | Operation | Mean (ms) | Median (ms) | Std Dev (ms) | Ops/sec | Iterations |
