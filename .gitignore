@@ -230,3 +230,5 @@ build-fuzz-ct/
 build-asan/
 build-scan/
 build-strict/
+build-verify/
+build-verify2/
