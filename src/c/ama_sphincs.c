@@ -144,19 +144,6 @@ static void spx_copy_keypair_addr(spx_addr out, const spx_addr in) {
 }
 
 /**
- * Serialize address to bytes (big-endian, full 32-byte ADRS)
- */
-static void spx_addr_to_bytes(uint8_t *bytes, const spx_addr addr) {
-    unsigned int i;
-    for (i = 0; i < 8; ++i) {
-        bytes[4*i + 0] = (uint8_t)(addr[i] >> 24);
-        bytes[4*i + 1] = (uint8_t)(addr[i] >> 16);
-        bytes[4*i + 2] = (uint8_t)(addr[i] >> 8);
-        bytes[4*i + 3] = (uint8_t)(addr[i]);
-    }
-}
-
-/**
  * Compress address to 22-byte ADRSc per FIPS 205 Section 11.1.
  * ADRSc = ADRS[3] || ADRS[8:16] || ADRS[19] || ADRS[20:32]
  *

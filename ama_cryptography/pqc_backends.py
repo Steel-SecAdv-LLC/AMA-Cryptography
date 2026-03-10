@@ -42,7 +42,7 @@ import platform
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Optional
 
 from ama_cryptography.exceptions import (
     PQCUnavailableError,
@@ -55,8 +55,6 @@ __all__ = [
     "QuantumSignatureUnavailableError",
     "SecurityWarning",
 ]
-
-F = TypeVar("F", bound=Callable[..., Any])
 
 
 class PQCStatus(Enum):
@@ -571,13 +569,7 @@ SECP256K1_PUBKEY_BYTES = 33
 # X25519 (RFC 7748)
 X25519_KEY_BYTES = 32
 
-# Argon2id (RFC 9106)
-ARGON2_SALT_BYTES = 16
-ARGON2_TAG_BYTES = 32
-
 # ChaCha20-Poly1305 (RFC 8439)
-CHACHA20_KEY_BYTES = 32
-CHACHA20_NONCE_BYTES = 12
 POLY1305_TAG_BYTES = 16
 
 # ============================================================================

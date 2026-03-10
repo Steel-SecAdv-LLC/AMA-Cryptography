@@ -560,16 +560,6 @@ static void fe25519_pow22523(fe25519 out, const fe25519 z) {
     fe25519_mul(out, t1, z);
 }
 
-/* Conditional swap (constant time) */
-static void fe25519_cswap(fe25519 f, fe25519 g, int b) {
-    int64_t mask = -(int64_t)b;
-    for (int i = 0; i < 10; i++) {
-        int64_t x = mask & (f[i] ^ g[i]);
-        f[i] ^= x;
-        g[i] ^= x;
-    }
-}
-
 /* Check if negative (LSB of reduced value) */
 static int fe25519_isnegative(const fe25519 f) {
     uint8_t s[32];
@@ -754,26 +744,11 @@ static int ge25519_frombytes(ge25519_p3 *h, const uint8_t *s) {
     return 0;
 }
 
-/* p1p1 -> p2 */
-static void ge25519_p1p1_to_p2(ge25519_p2 *r, const ge25519_p1p1 *p) {
-    fe25519_mul(r->X, p->X, p->T);
-    fe25519_mul(r->Y, p->Y, p->Z);
-    fe25519_mul(r->Z, p->Z, p->T);
-}
-
 /* p1p1 -> p3 */
 static void ge25519_p1p1_to_p3(ge25519_p3 *r, const ge25519_p1p1 *p) {
     fe25519_mul(r->X, p->X, p->T);
     fe25519_mul(r->Y, p->Y, p->Z);
     fe25519_mul(r->Z, p->Z, p->T);
-    fe25519_mul(r->T, p->X, p->Y);
-}
-
-/* p2 -> p3 (extend) */
-static void ge25519_p2_to_p3(ge25519_p3 *r, const ge25519_p2 *p) {
-    fe25519_copy(r->X, p->X);
-    fe25519_copy(r->Y, p->Y);
-    fe25519_copy(r->Z, p->Z);
     fe25519_mul(r->T, p->X, p->Y);
 }
 
@@ -790,36 +765,6 @@ static void ge25519_p2_dbl(ge25519_p1p1 *r, const ge25519_p2 *p) {
     fe25519_sub(r->Z, r->Z, r->X);
     fe25519_sub(r->X, t0, r->Y);
     fe25519_sub(r->T, r->T, r->Z);
-}
-
-/* Add: p3 + precomp -> p1p1 */
-static void ge25519_madd(ge25519_p1p1 *r, const ge25519_p3 *p, const ge25519_precomp *q) {
-    fe25519 t0;
-    fe25519_add(r->X, p->Y, p->X);
-    fe25519_sub(r->Y, p->Y, p->X);
-    fe25519_mul(r->Z, r->X, q->yplusx);
-    fe25519_mul(r->Y, r->Y, q->yminusx);
-    fe25519_mul(r->T, q->xy2d, p->T);
-    fe25519_add(t0, p->Z, p->Z);
-    fe25519_sub(r->X, r->Z, r->Y);
-    fe25519_add(r->Y, r->Z, r->Y);
-    fe25519_add(r->Z, t0, r->T);
-    fe25519_sub(r->T, t0, r->T);
-}
-
-/* Sub: p3 - precomp -> p1p1 */
-static void ge25519_msub(ge25519_p1p1 *r, const ge25519_p3 *p, const ge25519_precomp *q) {
-    fe25519 t0;
-    fe25519_add(r->X, p->Y, p->X);
-    fe25519_sub(r->Y, p->Y, p->X);
-    fe25519_mul(r->Z, r->X, q->yminusx);
-    fe25519_mul(r->Y, r->Y, q->yplusx);
-    fe25519_mul(r->T, q->xy2d, p->T);
-    fe25519_add(t0, p->Z, p->Z);
-    fe25519_sub(r->X, r->Z, r->Y);
-    fe25519_add(r->Y, r->Z, r->Y);
-    fe25519_sub(r->Z, t0, r->T);
-    fe25519_add(r->T, t0, r->T);
 }
 
 /*
@@ -1616,7 +1561,6 @@ ama_error_t ama_ed25519_verify(
     uint8_t *buf;
     ge25519_p3 A, R_check;
     ge25519_p1p1 t;
-    ge25519_p2 p2;
     uint8_t R_bytes[32];
     int i;
 

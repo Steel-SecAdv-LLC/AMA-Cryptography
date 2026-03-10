@@ -38,11 +38,11 @@ AI Co-Architects:
 """
 
 import ast
+import time
 
 import numpy as np
 import pytest
 
-import ama_cryptography_monitor
 from ama_cryptography_monitor import (
     AmaCryptographyMonitor,
     IncrementalStats,
@@ -441,7 +441,7 @@ class TestRecursionPatternMonitor:
             return result
 
         # Patch time.time in the ama_cryptography_monitor module
-        monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
+        monkeypatch.setattr(time, "time", mock_time)
 
         # Record normal packages with deterministic timestamps
         for i in range(20):
@@ -473,7 +473,7 @@ class TestRecursionPatternMonitor:
             return next(timestamp_iter)
 
         # Patch time.time in the ama_cryptography_monitor module
-        monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
+        monkeypatch.setattr(time, "time", mock_time)
 
         # Record packages with deterministic timestamps
         for i in range(16):
@@ -504,7 +504,7 @@ class TestRecursionPatternMonitor:
             return result
 
         # Patch time.time in the ama_cryptography_monitor module
-        monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
+        monkeypatch.setattr(time, "time", mock_time)
 
         # Record packages with deterministic timestamps
         for i in range(30):
@@ -536,7 +536,7 @@ class TestRecursionPatternMonitor:
             return result
 
         # Patch time.time in the ama_cryptography_monitor module
-        monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
+        monkeypatch.setattr(time, "time", mock_time)
 
         # Normal size: 7 codes
         for i in range(15):
@@ -760,7 +760,7 @@ class TestAmaCryptographyMonitor:
             return result
 
         # Patch time.time in the ama_cryptography_monitor module
-        monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
+        monkeypatch.setattr(time, "time", mock_time)
 
         for i in range(15):
             monitor.record_package_signing({"code_count": 7})
@@ -792,7 +792,7 @@ class TestAmaCryptographyMonitor:
             return result
 
         # Patch time.time in the ama_cryptography_monitor module
-        monkeypatch.setattr(ama_cryptography_monitor.time, "time", mock_time)
+        monkeypatch.setattr(time, "time", mock_time)
 
         # Generate some activity
         for i in range(20):

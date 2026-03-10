@@ -31,12 +31,12 @@ AI Co-Architects:
 __version__ = "2.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
+import contextlib
 import importlib as _importlib
 
 # Eagerly import math modules when numpy is available.
 # When numpy is NOT installed, __getattr__ provides a clear ImportError
 # mentioning numpy (tested by test_lazy_imports.py).
-_MATH_AVAILABLE = False
 _EQUATIONS_EXPORTS = frozenset(
     {
         "HELIX_PARAMS",
@@ -59,7 +59,7 @@ _EQUATIONS_EXPORTS = frozenset(
     }
 )
 _ENGINE_EXPORTS = frozenset({"AmaEquationEngine"})
-try:
+with contextlib.suppress(ImportError, ModuleNotFoundError):
     from ama_cryptography.double_helix_engine import AmaEquationEngine
     from ama_cryptography.equations import (
         HELIX_PARAMS,
@@ -80,10 +80,6 @@ try:
         verify_all_codes,
         verify_mathematical_foundations,
     )
-
-    _MATH_AVAILABLE = True
-except (ImportError, ModuleNotFoundError):
-    pass
 
 
 def __getattr__(name: str) -> object:

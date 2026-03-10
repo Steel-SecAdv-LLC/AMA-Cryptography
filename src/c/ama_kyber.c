@@ -98,32 +98,7 @@ typedef struct {
     int keys_generated;
 } kyber_context_t;
 
-/**
- * Initialize Kyber-1024 context
- */
-static kyber_context_t* kyber_init(void) {
-    kyber_context_t* ctx = (kyber_context_t*)calloc(1, sizeof(kyber_context_t));
-    if (!ctx) {
-        return NULL;
-    }
-    ctx->keys_generated = 0;
-    return ctx;
-}
 
-/**
- * Free Kyber context
- */
-static void kyber_free(kyber_context_t* ctx) {
-    if (!ctx) {
-        return;
-    }
-
-    /* Scrub sensitive data */
-    ama_secure_memzero(ctx->secret_key, sizeof(ctx->secret_key));
-    ama_secure_memzero(ctx, sizeof(kyber_context_t));
-
-    free(ctx);
-}
 
 /* ============================================================================
  * NATIVE KYBER HELPER FUNCTIONS

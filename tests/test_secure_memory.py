@@ -306,19 +306,21 @@ class TestSecureBuffer:
 
         from ama_cryptography.secure_memory import SecureBuffer
 
-        buffer_ref = None  # noqa: F841 — used below as reference to buf
-
         # Suppress expected warning when pynacl mlock is unavailable
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
-            with pytest.raises(ValueError):
-                with SecureBuffer(50) as buf:
-                    buf[:] = b"sensitive" + b"\x00" * 41
-                    buffer_ref = buf  # noqa: F841 — reference kept for assertion
+            secure_buf = SecureBuffer(50)
+            exc_caught = False
+            try:
+                with secure_buf:
+                    secure_buf[:] = b"sensitive" + b"\x00" * 41
                     raise ValueError("Test exception")
+            except ValueError:
+                exc_caught = True
 
-        # buf was zeroed by SecureBuffer.__exit__; buffer_ref is the same object
-        assert all(b == 0 for b in buffer_ref)
+        assert exc_caught, "ValueError should have been raised"
+        # secure_buf was zeroed by SecureBuffer.__exit__
+        assert all(b == 0 for b in secure_buf)
 
 
 class TestSecureBufferFunction:
