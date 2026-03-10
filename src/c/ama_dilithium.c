@@ -1552,12 +1552,22 @@ AMA_API ama_error_t ama_dilithium_verify(const uint8_t *message, size_t message_
         memcpy(challenge_input + DIL_CRHBYTES, w1_packed,
                DIL_K * DIL_POLYW1_PACKEDBYTES);
         ama_shake256(challenge_input, challenge_len, c_tilde2, DIL_CTILDEBYTES);
+        ama_secure_memzero(challenge_input, challenge_len);
         free(challenge_input);
     }
 
     /* Verify c_tilde == c_tilde2 (constant-time comparison) */
-    if (ama_consttime_memcmp(c_tilde, c_tilde2, DIL_CTILDEBYTES) != 0) {
-        return AMA_ERROR_VERIFY_FAILED;
+    {
+        int match = ama_consttime_memcmp(c_tilde, c_tilde2, DIL_CTILDEBYTES);
+
+        /* Scrub verification intermediates before returning */
+        ama_secure_memzero(mu, sizeof(mu));
+        ama_secure_memzero(c_tilde, sizeof(c_tilde));
+        ama_secure_memzero(c_tilde2, sizeof(c_tilde2));
+
+        if (match != 0) {
+            return AMA_ERROR_VERIFY_FAILED;
+        }
     }
 
     return AMA_SUCCESS;

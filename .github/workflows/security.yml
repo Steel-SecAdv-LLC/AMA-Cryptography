@@ -56,6 +56,159 @@ jobs:
           bandit-report.json
         retention-days: 90
 
+  sbom:
+    name: SBOM Generation (CycloneDX)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install cyclonedx-bom pip-audit
+        pip install -r requirements-lock.txt
+
+    - name: Generate Python SBOM (CycloneDX)
+      run: |
+        cyclonedx-py environment \
+          --output sbom-python.json \
+          --output-format json
+
+    - name: Generate dependency tree
+      run: |
+        pip list --format=json > pip-list.json
+        pip-audit --format=json --output pip-audit.json || true
+
+    - name: Create C library SBOM component
+      run: |
+        cat > sbom-c-library.json << 'SBOM_EOF'
+        {
+          "bomFormat": "CycloneDX",
+          "specVersion": "1.5",
+          "serialNumber": "urn:uuid:ama-cryptography-c-library",
+          "version": 1,
+          "metadata": {
+            "component": {
+              "type": "library",
+              "name": "ama-cryptography",
+              "version": "2.0",
+              "description": "Quantum-resistant cryptographic protection system",
+              "licenses": [{"license": {"id": "Apache-2.0"}}],
+              "supplier": {"name": "Steel Security Advisors LLC"}
+            }
+          },
+          "components": [
+            {
+              "type": "library",
+              "name": "ama_sha3",
+              "version": "2.0",
+              "description": "SHA3-256/512, SHAKE128/256 (NIST FIPS 202)",
+              "scope": "required",
+              "purl": "pkg:generic/ama_sha3@2.0"
+            },
+            {
+              "type": "library",
+              "name": "ama_ed25519",
+              "version": "2.0",
+              "description": "Ed25519 digital signatures (RFC 8032)",
+              "scope": "required",
+              "purl": "pkg:generic/ama_ed25519@2.0"
+            },
+            {
+              "type": "library",
+              "name": "ama_dilithium",
+              "version": "2.0",
+              "description": "ML-DSA-65 post-quantum signatures (NIST FIPS 204)",
+              "scope": "required",
+              "purl": "pkg:generic/ama_dilithium@2.0"
+            },
+            {
+              "type": "library",
+              "name": "ama_kyber",
+              "version": "2.0",
+              "description": "Kyber-1024 ML-KEM (NIST FIPS 203)",
+              "scope": "required",
+              "purl": "pkg:generic/ama_kyber@2.0"
+            },
+            {
+              "type": "library",
+              "name": "ama_sphincs",
+              "version": "2.0",
+              "description": "SPHINCS+-256f SLH-DSA (NIST FIPS 205)",
+              "scope": "required",
+              "purl": "pkg:generic/ama_sphincs@2.0"
+            },
+            {
+              "type": "library",
+              "name": "ama_aes_gcm",
+              "version": "2.0",
+              "description": "AES-256-GCM AEAD (NIST SP 800-38D)",
+              "scope": "required",
+              "purl": "pkg:generic/ama_aes_gcm@2.0"
+            },
+            {
+              "type": "library",
+              "name": "ama_chacha20poly1305",
+              "version": "2.0",
+              "description": "ChaCha20-Poly1305 AEAD (RFC 8439)",
+              "scope": "required",
+              "purl": "pkg:generic/ama_chacha20poly1305@2.0"
+            },
+            {
+              "type": "library",
+              "name": "ama_x25519",
+              "version": "2.0",
+              "description": "X25519 ECDH key exchange (RFC 7748)",
+              "scope": "required",
+              "purl": "pkg:generic/ama_x25519@2.0"
+            },
+            {
+              "type": "library",
+              "name": "ama_argon2",
+              "version": "2.0",
+              "description": "Argon2id password hashing (RFC 9106)",
+              "scope": "required",
+              "purl": "pkg:generic/ama_argon2@2.0"
+            },
+            {
+              "type": "library",
+              "name": "ama_hkdf",
+              "version": "2.0",
+              "description": "HKDF-SHA3-256 key derivation (RFC 5869)",
+              "scope": "required",
+              "purl": "pkg:generic/ama_hkdf@2.0"
+            },
+            {
+              "type": "library",
+              "name": "ama_secp256k1",
+              "version": "2.0",
+              "description": "secp256k1 elliptic curve operations",
+              "scope": "required",
+              "purl": "pkg:generic/ama_secp256k1@2.0"
+            }
+          ],
+          "dependencies": []
+        }
+        SBOM_EOF
+
+    - name: Upload SBOM artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: sbom
+        path: |
+          sbom-python.json
+          sbom-c-library.json
+          pip-list.json
+          pip-audit.json
+        retention-days: 90
+
   secret-scanning:
     name: Secret Scanning
     runs-on: ubuntu-latest

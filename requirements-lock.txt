@@ -1,0 +1,79 @@
+# AMA-Cryptography pinned development dependencies
+# Generated: 2026-03-10
+# Python: 3.11.14
+# Platform: linux (x86_64)
+#
+# Reproduce with: pip install -r requirements-lock.txt
+# Update with:    pip install -r requirements-dev.txt && pip freeze > requirements-lock.txt
+#
+# NOTE: The library itself has ZERO runtime dependencies.
+# These are development/testing/CI dependencies only.
+
+# --- Core test framework ---
+pytest==9.0.2
+pytest-benchmark==5.2.3
+pytest-cov==7.0.0
+pytest-timeout==2.4.0
+pytest-xdist==3.8.0
+hypothesis==6.151.9
+coverage==7.13.4
+
+# --- Linting & formatting ---
+black==25.11.0
+flake8==7.3.0
+isort==8.0.1
+mypy==1.19.1
+mypy_extensions==1.1.0
+pycodestyle==2.14.0
+pyflakes==3.4.0
+mccabe==0.7.0
+
+# --- Security scanning ---
+bandit==1.9.4
+safety==3.7.0
+safety-schemas==0.0.16
+
+# --- Scientific (monitoring extras) ---
+numpy==2.4.3
+scipy==1.17.1
+
+# --- Transitive dependencies ---
+annotated-doc==0.0.4
+annotated-types==0.7.0
+anyio==4.12.1
+Authlib==1.6.9
+click==8.3.1
+dparse==0.6.4
+execnet==2.1.2
+filelock==3.25.1
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+iniconfig==2.3.0
+joblib==1.5.3
+librt==0.8.1
+markdown-it-py==4.0.0
+marshmallow==4.2.2
+mdurl==0.1.2
+nltk==3.9.3
+pathspec==1.0.4
+platformdirs==4.9.4
+pluggy==1.6.0
+py-cpuinfo==9.0.0
+pydantic==2.12.5
+pydantic_core==2.41.5
+Pygments==2.19.2
+python-dateutil==2.9.0.post0
+pytokens==0.4.1
+regex==2026.2.28
+rich==14.3.3
+ruamel.yaml==0.19.1
+shellingham==1.5.4
+sortedcontainers==2.4.0
+stevedore==5.7.0
+tenacity==9.1.4
+tomlkit==0.14.0
+tqdm==4.67.3
+typer==0.24.1
+typing-inspection==0.4.2
+typing_extensions==4.15.0

@@ -199,6 +199,12 @@ static void sha512(const uint8_t *data, size_t len, uint8_t out[64]) {
     for (i = 0; i < 8; i++) {
         store64_be(out + i * 8, state[i]);
     }
+
+    /* Scrub intermediate state — block may contain padded message data,
+     * state contains the hash internals. Both are sensitive when SHA-512
+     * is used for Ed25519 seed expansion (secret key -> scalar). */
+    ama_secure_memzero(block, sizeof(block));
+    ama_secure_memzero(state, sizeof(state));
 }
 
 /* ============================================================================
@@ -1559,9 +1565,12 @@ ama_error_t ama_ed25519_sign(
     ge25519_p3_tobytes(signature, &R);
 
     /* H(R || A || message) */
+    ama_secure_memzero(buf, 32 + message_len);
     free(buf);
     buf = (uint8_t *)malloc(64 + message_len);
     if (!buf) {
+        ama_secure_memzero(hash, sizeof(hash));
+        ama_secure_memzero(r, sizeof(r));
         return AMA_ERROR_MEMORY;
     }
     memcpy(buf, signature, 32);
@@ -1575,10 +1584,11 @@ ama_error_t ama_ed25519_sign(
     /* s = r + H(R||A||M) * a mod L */
     sc25519_muladd(signature + 32, r, hram, hash);
 
-    /* Cleanup */
+    /* Cleanup — scrub all sensitive intermediates */
     ama_secure_memzero(hash, sizeof(hash));
     ama_secure_memzero(r, sizeof(r));
     ama_secure_memzero(hram, sizeof(hram));
+    ama_secure_memzero(buf, 64 + message_len);
     free(buf);
 
     return AMA_SUCCESS;
