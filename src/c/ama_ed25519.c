@@ -372,8 +372,9 @@ static void fe25519_neg(fe25519 h, const fe25519 f) {
 static void fe25519_carry(fe25519 h) {
     int64_t carry;
     for (int i = 0; i < 10; i++) {
-        carry = h[i] >> ((i & 1) ? 25 : 26);
-        h[i] -= carry << ((i & 1) ? 25 : 26);
+        int bits = (i & 1) ? 25 : 26;
+        carry = h[i] >> bits;
+        h[i] -= carry * ((int64_t)1 << bits);
         if (i < 9) h[i + 1] += carry;
         else h[0] += 19 * carry;
     }
@@ -1102,19 +1103,21 @@ static void sc25519_reduce(uint8_t *s) {
     s9 -= s18 * 997805; s10 += s18 * 136657; s11 -= s18 * 683901;
     s18 = 0;
 
-    /* Carry propagation (first round) */
-    carry = (s6 + (1 << 20)) >> 21; s7 += carry; s6 -= carry << 21;
-    carry = (s8 + (1 << 20)) >> 21; s9 += carry; s8 -= carry << 21;
-    carry = (s10 + (1 << 20)) >> 21; s11 += carry; s10 -= carry << 21;
-    carry = (s12 + (1 << 20)) >> 21; s13 += carry; s12 -= carry << 21;
-    carry = (s14 + (1 << 20)) >> 21; s15 += carry; s14 -= carry << 21;
-    carry = (s16 + (1 << 20)) >> 21; s17 += carry; s16 -= carry << 21;
+    /* Carry propagation (first round)
+     * Use multiplication instead of left-shift to avoid UB on negative carry
+     * (C99/C11: left-shift of negative signed integer is undefined behavior) */
+    carry = (s6 + ((int64_t)1 << 20)) >> 21; s7 += carry; s6 -= carry * ((int64_t)1 << 21);
+    carry = (s8 + ((int64_t)1 << 20)) >> 21; s9 += carry; s8 -= carry * ((int64_t)1 << 21);
+    carry = (s10 + ((int64_t)1 << 20)) >> 21; s11 += carry; s10 -= carry * ((int64_t)1 << 21);
+    carry = (s12 + ((int64_t)1 << 20)) >> 21; s13 += carry; s12 -= carry * ((int64_t)1 << 21);
+    carry = (s14 + ((int64_t)1 << 20)) >> 21; s15 += carry; s14 -= carry * ((int64_t)1 << 21);
+    carry = (s16 + ((int64_t)1 << 20)) >> 21; s17 += carry; s16 -= carry * ((int64_t)1 << 21);
 
-    carry = (s7 + (1 << 20)) >> 21; s8 += carry; s7 -= carry << 21;
-    carry = (s9 + (1 << 20)) >> 21; s10 += carry; s9 -= carry << 21;
-    carry = (s11 + (1 << 20)) >> 21; s12 += carry; s11 -= carry << 21;
-    carry = (s13 + (1 << 20)) >> 21; s14 += carry; s13 -= carry << 21;
-    carry = (s15 + (1 << 20)) >> 21; s16 += carry; s15 -= carry << 21;
+    carry = (s7 + ((int64_t)1 << 20)) >> 21; s8 += carry; s7 -= carry * ((int64_t)1 << 21);
+    carry = (s9 + ((int64_t)1 << 20)) >> 21; s10 += carry; s9 -= carry * ((int64_t)1 << 21);
+    carry = (s11 + ((int64_t)1 << 20)) >> 21; s12 += carry; s11 -= carry * ((int64_t)1 << 21);
+    carry = (s13 + ((int64_t)1 << 20)) >> 21; s14 += carry; s13 -= carry * ((int64_t)1 << 21);
+    carry = (s15 + ((int64_t)1 << 20)) >> 21; s16 += carry; s15 -= carry * ((int64_t)1 << 21);
 
     /* Second pass: reduce s17..s12 into s5..s10 range */
     s5 += s17 * 666643; s6 += s17 * 470296; s7 += s17 * 654183;
@@ -1142,19 +1145,19 @@ static void sc25519_reduce(uint8_t *s) {
     s12 = 0;
 
     /* Carry propagation — interleaved evens then odds (ref10 pattern) */
-    carry = (s0 + (1 << 20)) >> 21; s1 += carry; s0 -= carry << 21;
-    carry = (s2 + (1 << 20)) >> 21; s3 += carry; s2 -= carry << 21;
-    carry = (s4 + (1 << 20)) >> 21; s5 += carry; s4 -= carry << 21;
-    carry = (s6 + (1 << 20)) >> 21; s7 += carry; s6 -= carry << 21;
-    carry = (s8 + (1 << 20)) >> 21; s9 += carry; s8 -= carry << 21;
-    carry = (s10 + (1 << 20)) >> 21; s11 += carry; s10 -= carry << 21;
+    carry = (s0 + ((int64_t)1 << 20)) >> 21; s1 += carry; s0 -= carry * ((int64_t)1 << 21);
+    carry = (s2 + ((int64_t)1 << 20)) >> 21; s3 += carry; s2 -= carry * ((int64_t)1 << 21);
+    carry = (s4 + ((int64_t)1 << 20)) >> 21; s5 += carry; s4 -= carry * ((int64_t)1 << 21);
+    carry = (s6 + ((int64_t)1 << 20)) >> 21; s7 += carry; s6 -= carry * ((int64_t)1 << 21);
+    carry = (s8 + ((int64_t)1 << 20)) >> 21; s9 += carry; s8 -= carry * ((int64_t)1 << 21);
+    carry = (s10 + ((int64_t)1 << 20)) >> 21; s11 += carry; s10 -= carry * ((int64_t)1 << 21);
 
-    carry = (s1 + (1 << 20)) >> 21; s2 += carry; s1 -= carry << 21;
-    carry = (s3 + (1 << 20)) >> 21; s4 += carry; s3 -= carry << 21;
-    carry = (s5 + (1 << 20)) >> 21; s6 += carry; s5 -= carry << 21;
-    carry = (s7 + (1 << 20)) >> 21; s8 += carry; s7 -= carry << 21;
-    carry = (s9 + (1 << 20)) >> 21; s10 += carry; s9 -= carry << 21;
-    carry = (s11 + (1 << 20)) >> 21; s12 += carry; s11 -= carry << 21;
+    carry = (s1 + ((int64_t)1 << 20)) >> 21; s2 += carry; s1 -= carry * ((int64_t)1 << 21);
+    carry = (s3 + ((int64_t)1 << 20)) >> 21; s4 += carry; s3 -= carry * ((int64_t)1 << 21);
+    carry = (s5 + ((int64_t)1 << 20)) >> 21; s6 += carry; s5 -= carry * ((int64_t)1 << 21);
+    carry = (s7 + ((int64_t)1 << 20)) >> 21; s8 += carry; s7 -= carry * ((int64_t)1 << 21);
+    carry = (s9 + ((int64_t)1 << 20)) >> 21; s10 += carry; s9 -= carry * ((int64_t)1 << 21);
+    carry = (s11 + ((int64_t)1 << 20)) >> 21; s12 += carry; s11 -= carry * ((int64_t)1 << 21);
 
     /* Reduce s12 overflow via L coefficients */
     s0 += s12 * 666643; s1 += s12 * 470296; s2 += s12 * 654183;
@@ -1162,18 +1165,18 @@ static void sc25519_reduce(uint8_t *s) {
     s12 = 0;
 
     /* Sequential carry using floor division (>> 21) */
-    carry = s0 >> 21; s1 += carry; s0 -= carry << 21;
-    carry = s1 >> 21; s2 += carry; s1 -= carry << 21;
-    carry = s2 >> 21; s3 += carry; s2 -= carry << 21;
-    carry = s3 >> 21; s4 += carry; s3 -= carry << 21;
-    carry = s4 >> 21; s5 += carry; s4 -= carry << 21;
-    carry = s5 >> 21; s6 += carry; s5 -= carry << 21;
-    carry = s6 >> 21; s7 += carry; s6 -= carry << 21;
-    carry = s7 >> 21; s8 += carry; s7 -= carry << 21;
-    carry = s8 >> 21; s9 += carry; s8 -= carry << 21;
-    carry = s9 >> 21; s10 += carry; s9 -= carry << 21;
-    carry = s10 >> 21; s11 += carry; s10 -= carry << 21;
-    carry = s11 >> 21; s12 += carry; s11 -= carry << 21;
+    carry = s0 >> 21; s1 += carry; s0 -= carry * ((int64_t)1 << 21);
+    carry = s1 >> 21; s2 += carry; s1 -= carry * ((int64_t)1 << 21);
+    carry = s2 >> 21; s3 += carry; s2 -= carry * ((int64_t)1 << 21);
+    carry = s3 >> 21; s4 += carry; s3 -= carry * ((int64_t)1 << 21);
+    carry = s4 >> 21; s5 += carry; s4 -= carry * ((int64_t)1 << 21);
+    carry = s5 >> 21; s6 += carry; s5 -= carry * ((int64_t)1 << 21);
+    carry = s6 >> 21; s7 += carry; s6 -= carry * ((int64_t)1 << 21);
+    carry = s7 >> 21; s8 += carry; s7 -= carry * ((int64_t)1 << 21);
+    carry = s8 >> 21; s9 += carry; s8 -= carry * ((int64_t)1 << 21);
+    carry = s9 >> 21; s10 += carry; s9 -= carry * ((int64_t)1 << 21);
+    carry = s10 >> 21; s11 += carry; s10 -= carry * ((int64_t)1 << 21);
+    carry = s11 >> 21; s12 += carry; s11 -= carry * ((int64_t)1 << 21);
 
     /* Second s12 wrap-around */
     s0 += s12 * 666643; s1 += s12 * 470296; s2 += s12 * 654183;
@@ -1181,17 +1184,17 @@ static void sc25519_reduce(uint8_t *s) {
     s12 = 0;
 
     /* Final sequential carry */
-    carry = s0 >> 21; s1 += carry; s0 -= carry << 21;
-    carry = s1 >> 21; s2 += carry; s1 -= carry << 21;
-    carry = s2 >> 21; s3 += carry; s2 -= carry << 21;
-    carry = s3 >> 21; s4 += carry; s3 -= carry << 21;
-    carry = s4 >> 21; s5 += carry; s4 -= carry << 21;
-    carry = s5 >> 21; s6 += carry; s5 -= carry << 21;
-    carry = s6 >> 21; s7 += carry; s6 -= carry << 21;
-    carry = s7 >> 21; s8 += carry; s7 -= carry << 21;
-    carry = s8 >> 21; s9 += carry; s8 -= carry << 21;
-    carry = s9 >> 21; s10 += carry; s9 -= carry << 21;
-    carry = s10 >> 21; s11 += carry; s10 -= carry << 21;
+    carry = s0 >> 21; s1 += carry; s0 -= carry * ((int64_t)1 << 21);
+    carry = s1 >> 21; s2 += carry; s1 -= carry * ((int64_t)1 << 21);
+    carry = s2 >> 21; s3 += carry; s2 -= carry * ((int64_t)1 << 21);
+    carry = s3 >> 21; s4 += carry; s3 -= carry * ((int64_t)1 << 21);
+    carry = s4 >> 21; s5 += carry; s4 -= carry * ((int64_t)1 << 21);
+    carry = s5 >> 21; s6 += carry; s5 -= carry * ((int64_t)1 << 21);
+    carry = s6 >> 21; s7 += carry; s6 -= carry * ((int64_t)1 << 21);
+    carry = s7 >> 21; s8 += carry; s7 -= carry * ((int64_t)1 << 21);
+    carry = s8 >> 21; s9 += carry; s8 -= carry * ((int64_t)1 << 21);
+    carry = s9 >> 21; s10 += carry; s9 -= carry * ((int64_t)1 << 21);
+    carry = s10 >> 21; s11 += carry; s10 -= carry * ((int64_t)1 << 21);
 
     /* Pack 12 limbs into 32 bytes */
     s[0] = (uint8_t)(s0 >> 0);
@@ -1299,30 +1302,30 @@ static void sc25519_muladd(uint8_t *s, const uint8_t *a, const uint8_t *b, const
     int64_t carry;
 
     /* Reduce mod L */
-    carry = (s0 + (1 << 20)) >> 21; s1 += carry; s0 -= carry << 21;
-    carry = (s2 + (1 << 20)) >> 21; s3 += carry; s2 -= carry << 21;
-    carry = (s4 + (1 << 20)) >> 21; s5 += carry; s4 -= carry << 21;
-    carry = (s6 + (1 << 20)) >> 21; s7 += carry; s6 -= carry << 21;
-    carry = (s8 + (1 << 20)) >> 21; s9 += carry; s8 -= carry << 21;
-    carry = (s10 + (1 << 20)) >> 21; s11 += carry; s10 -= carry << 21;
-    carry = (s12 + (1 << 20)) >> 21; s13 += carry; s12 -= carry << 21;
-    carry = (s14 + (1 << 20)) >> 21; s15 += carry; s14 -= carry << 21;
-    carry = (s16 + (1 << 20)) >> 21; s17 += carry; s16 -= carry << 21;
-    carry = (s18 + (1 << 20)) >> 21; s19 += carry; s18 -= carry << 21;
-    carry = (s20 + (1 << 20)) >> 21; s21 += carry; s20 -= carry << 21;
-    carry = (s22 + (1 << 20)) >> 21; s23 += carry; s22 -= carry << 21;
+    carry = (s0 + ((int64_t)1 << 20)) >> 21; s1 += carry; s0 -= carry * ((int64_t)1 << 21);
+    carry = (s2 + ((int64_t)1 << 20)) >> 21; s3 += carry; s2 -= carry * ((int64_t)1 << 21);
+    carry = (s4 + ((int64_t)1 << 20)) >> 21; s5 += carry; s4 -= carry * ((int64_t)1 << 21);
+    carry = (s6 + ((int64_t)1 << 20)) >> 21; s7 += carry; s6 -= carry * ((int64_t)1 << 21);
+    carry = (s8 + ((int64_t)1 << 20)) >> 21; s9 += carry; s8 -= carry * ((int64_t)1 << 21);
+    carry = (s10 + ((int64_t)1 << 20)) >> 21; s11 += carry; s10 -= carry * ((int64_t)1 << 21);
+    carry = (s12 + ((int64_t)1 << 20)) >> 21; s13 += carry; s12 -= carry * ((int64_t)1 << 21);
+    carry = (s14 + ((int64_t)1 << 20)) >> 21; s15 += carry; s14 -= carry * ((int64_t)1 << 21);
+    carry = (s16 + ((int64_t)1 << 20)) >> 21; s17 += carry; s16 -= carry * ((int64_t)1 << 21);
+    carry = (s18 + ((int64_t)1 << 20)) >> 21; s19 += carry; s18 -= carry * ((int64_t)1 << 21);
+    carry = (s20 + ((int64_t)1 << 20)) >> 21; s21 += carry; s20 -= carry * ((int64_t)1 << 21);
+    carry = (s22 + ((int64_t)1 << 20)) >> 21; s23 += carry; s22 -= carry * ((int64_t)1 << 21);
 
-    carry = (s1 + (1 << 20)) >> 21; s2 += carry; s1 -= carry << 21;
-    carry = (s3 + (1 << 20)) >> 21; s4 += carry; s3 -= carry << 21;
-    carry = (s5 + (1 << 20)) >> 21; s6 += carry; s5 -= carry << 21;
-    carry = (s7 + (1 << 20)) >> 21; s8 += carry; s7 -= carry << 21;
-    carry = (s9 + (1 << 20)) >> 21; s10 += carry; s9 -= carry << 21;
-    carry = (s11 + (1 << 20)) >> 21; s12 += carry; s11 -= carry << 21;
-    carry = (s13 + (1 << 20)) >> 21; s14 += carry; s13 -= carry << 21;
-    carry = (s15 + (1 << 20)) >> 21; s16 += carry; s15 -= carry << 21;
-    carry = (s17 + (1 << 20)) >> 21; s18 += carry; s17 -= carry << 21;
-    carry = (s19 + (1 << 20)) >> 21; s20 += carry; s19 -= carry << 21;
-    carry = (s21 + (1 << 20)) >> 21; s22 += carry; s21 -= carry << 21;
+    carry = (s1 + ((int64_t)1 << 20)) >> 21; s2 += carry; s1 -= carry * ((int64_t)1 << 21);
+    carry = (s3 + ((int64_t)1 << 20)) >> 21; s4 += carry; s3 -= carry * ((int64_t)1 << 21);
+    carry = (s5 + ((int64_t)1 << 20)) >> 21; s6 += carry; s5 -= carry * ((int64_t)1 << 21);
+    carry = (s7 + ((int64_t)1 << 20)) >> 21; s8 += carry; s7 -= carry * ((int64_t)1 << 21);
+    carry = (s9 + ((int64_t)1 << 20)) >> 21; s10 += carry; s9 -= carry * ((int64_t)1 << 21);
+    carry = (s11 + ((int64_t)1 << 20)) >> 21; s12 += carry; s11 -= carry * ((int64_t)1 << 21);
+    carry = (s13 + ((int64_t)1 << 20)) >> 21; s14 += carry; s13 -= carry * ((int64_t)1 << 21);
+    carry = (s15 + ((int64_t)1 << 20)) >> 21; s16 += carry; s15 -= carry * ((int64_t)1 << 21);
+    carry = (s17 + ((int64_t)1 << 20)) >> 21; s18 += carry; s17 -= carry * ((int64_t)1 << 21);
+    carry = (s19 + ((int64_t)1 << 20)) >> 21; s20 += carry; s19 -= carry * ((int64_t)1 << 21);
+    carry = (s21 + ((int64_t)1 << 20)) >> 21; s22 += carry; s21 -= carry * ((int64_t)1 << 21);
 
     /* Reduce high limbs */
     s11 += s23 * 666643; s12 += s23 * 470296; s13 += s23 * 654183;
@@ -1349,18 +1352,18 @@ static void sc25519_muladd(uint8_t *s, const uint8_t *a, const uint8_t *b, const
     s9 -= s18 * 997805; s10 += s18 * 136657; s11 -= s18 * 683901;
     s18 = 0;
 
-    carry = (s6 + (1 << 20)) >> 21; s7 += carry; s6 -= carry << 21;
-    carry = (s8 + (1 << 20)) >> 21; s9 += carry; s8 -= carry << 21;
-    carry = (s10 + (1 << 20)) >> 21; s11 += carry; s10 -= carry << 21;
-    carry = (s12 + (1 << 20)) >> 21; s13 += carry; s12 -= carry << 21;
-    carry = (s14 + (1 << 20)) >> 21; s15 += carry; s14 -= carry << 21;
-    carry = (s16 + (1 << 20)) >> 21; s17 += carry; s16 -= carry << 21;
+    carry = (s6 + ((int64_t)1 << 20)) >> 21; s7 += carry; s6 -= carry * ((int64_t)1 << 21);
+    carry = (s8 + ((int64_t)1 << 20)) >> 21; s9 += carry; s8 -= carry * ((int64_t)1 << 21);
+    carry = (s10 + ((int64_t)1 << 20)) >> 21; s11 += carry; s10 -= carry * ((int64_t)1 << 21);
+    carry = (s12 + ((int64_t)1 << 20)) >> 21; s13 += carry; s12 -= carry * ((int64_t)1 << 21);
+    carry = (s14 + ((int64_t)1 << 20)) >> 21; s15 += carry; s14 -= carry * ((int64_t)1 << 21);
+    carry = (s16 + ((int64_t)1 << 20)) >> 21; s17 += carry; s16 -= carry * ((int64_t)1 << 21);
 
-    carry = (s7 + (1 << 20)) >> 21; s8 += carry; s7 -= carry << 21;
-    carry = (s9 + (1 << 20)) >> 21; s10 += carry; s9 -= carry << 21;
-    carry = (s11 + (1 << 20)) >> 21; s12 += carry; s11 -= carry << 21;
-    carry = (s13 + (1 << 20)) >> 21; s14 += carry; s13 -= carry << 21;
-    carry = (s15 + (1 << 20)) >> 21; s16 += carry; s15 -= carry << 21;
+    carry = (s7 + ((int64_t)1 << 20)) >> 21; s8 += carry; s7 -= carry * ((int64_t)1 << 21);
+    carry = (s9 + ((int64_t)1 << 20)) >> 21; s10 += carry; s9 -= carry * ((int64_t)1 << 21);
+    carry = (s11 + ((int64_t)1 << 20)) >> 21; s12 += carry; s11 -= carry * ((int64_t)1 << 21);
+    carry = (s13 + ((int64_t)1 << 20)) >> 21; s14 += carry; s13 -= carry * ((int64_t)1 << 21);
+    carry = (s15 + ((int64_t)1 << 20)) >> 21; s16 += carry; s15 -= carry * ((int64_t)1 << 21);
 
     s5 += s17 * 666643; s6 += s17 * 470296; s7 += s17 * 654183;
     s8 -= s17 * 997805; s9 += s17 * 136657; s10 -= s17 * 683901;
@@ -1387,19 +1390,19 @@ static void sc25519_muladd(uint8_t *s, const uint8_t *a, const uint8_t *b, const
     s12 = 0;
 
     /* Carry propagation — interleaved evens then odds (ref10 pattern) */
-    carry = (s0 + (1 << 20)) >> 21; s1 += carry; s0 -= carry << 21;
-    carry = (s2 + (1 << 20)) >> 21; s3 += carry; s2 -= carry << 21;
-    carry = (s4 + (1 << 20)) >> 21; s5 += carry; s4 -= carry << 21;
-    carry = (s6 + (1 << 20)) >> 21; s7 += carry; s6 -= carry << 21;
-    carry = (s8 + (1 << 20)) >> 21; s9 += carry; s8 -= carry << 21;
-    carry = (s10 + (1 << 20)) >> 21; s11 += carry; s10 -= carry << 21;
+    carry = (s0 + ((int64_t)1 << 20)) >> 21; s1 += carry; s0 -= carry * ((int64_t)1 << 21);
+    carry = (s2 + ((int64_t)1 << 20)) >> 21; s3 += carry; s2 -= carry * ((int64_t)1 << 21);
+    carry = (s4 + ((int64_t)1 << 20)) >> 21; s5 += carry; s4 -= carry * ((int64_t)1 << 21);
+    carry = (s6 + ((int64_t)1 << 20)) >> 21; s7 += carry; s6 -= carry * ((int64_t)1 << 21);
+    carry = (s8 + ((int64_t)1 << 20)) >> 21; s9 += carry; s8 -= carry * ((int64_t)1 << 21);
+    carry = (s10 + ((int64_t)1 << 20)) >> 21; s11 += carry; s10 -= carry * ((int64_t)1 << 21);
 
-    carry = (s1 + (1 << 20)) >> 21; s2 += carry; s1 -= carry << 21;
-    carry = (s3 + (1 << 20)) >> 21; s4 += carry; s3 -= carry << 21;
-    carry = (s5 + (1 << 20)) >> 21; s6 += carry; s5 -= carry << 21;
-    carry = (s7 + (1 << 20)) >> 21; s8 += carry; s7 -= carry << 21;
-    carry = (s9 + (1 << 20)) >> 21; s10 += carry; s9 -= carry << 21;
-    carry = (s11 + (1 << 20)) >> 21; s12 += carry; s11 -= carry << 21;
+    carry = (s1 + ((int64_t)1 << 20)) >> 21; s2 += carry; s1 -= carry * ((int64_t)1 << 21);
+    carry = (s3 + ((int64_t)1 << 20)) >> 21; s4 += carry; s3 -= carry * ((int64_t)1 << 21);
+    carry = (s5 + ((int64_t)1 << 20)) >> 21; s6 += carry; s5 -= carry * ((int64_t)1 << 21);
+    carry = (s7 + ((int64_t)1 << 20)) >> 21; s8 += carry; s7 -= carry * ((int64_t)1 << 21);
+    carry = (s9 + ((int64_t)1 << 20)) >> 21; s10 += carry; s9 -= carry * ((int64_t)1 << 21);
+    carry = (s11 + ((int64_t)1 << 20)) >> 21; s12 += carry; s11 -= carry * ((int64_t)1 << 21);
 
     /* Reduce s12 overflow via L coefficients */
     s0 += s12 * 666643; s1 += s12 * 470296; s2 += s12 * 654183;
@@ -1407,18 +1410,18 @@ static void sc25519_muladd(uint8_t *s, const uint8_t *a, const uint8_t *b, const
     s12 = 0;
 
     /* Sequential carry using floor division (>> 21) */
-    carry = s0 >> 21; s1 += carry; s0 -= carry << 21;
-    carry = s1 >> 21; s2 += carry; s1 -= carry << 21;
-    carry = s2 >> 21; s3 += carry; s2 -= carry << 21;
-    carry = s3 >> 21; s4 += carry; s3 -= carry << 21;
-    carry = s4 >> 21; s5 += carry; s4 -= carry << 21;
-    carry = s5 >> 21; s6 += carry; s5 -= carry << 21;
-    carry = s6 >> 21; s7 += carry; s6 -= carry << 21;
-    carry = s7 >> 21; s8 += carry; s7 -= carry << 21;
-    carry = s8 >> 21; s9 += carry; s8 -= carry << 21;
-    carry = s9 >> 21; s10 += carry; s9 -= carry << 21;
-    carry = s10 >> 21; s11 += carry; s10 -= carry << 21;
-    carry = s11 >> 21; s12 += carry; s11 -= carry << 21;
+    carry = s0 >> 21; s1 += carry; s0 -= carry * ((int64_t)1 << 21);
+    carry = s1 >> 21; s2 += carry; s1 -= carry * ((int64_t)1 << 21);
+    carry = s2 >> 21; s3 += carry; s2 -= carry * ((int64_t)1 << 21);
+    carry = s3 >> 21; s4 += carry; s3 -= carry * ((int64_t)1 << 21);
+    carry = s4 >> 21; s5 += carry; s4 -= carry * ((int64_t)1 << 21);
+    carry = s5 >> 21; s6 += carry; s5 -= carry * ((int64_t)1 << 21);
+    carry = s6 >> 21; s7 += carry; s6 -= carry * ((int64_t)1 << 21);
+    carry = s7 >> 21; s8 += carry; s7 -= carry * ((int64_t)1 << 21);
+    carry = s8 >> 21; s9 += carry; s8 -= carry * ((int64_t)1 << 21);
+    carry = s9 >> 21; s10 += carry; s9 -= carry * ((int64_t)1 << 21);
+    carry = s10 >> 21; s11 += carry; s10 -= carry * ((int64_t)1 << 21);
+    carry = s11 >> 21; s12 += carry; s11 -= carry * ((int64_t)1 << 21);
 
     /* Second s12 wrap-around */
     s0 += s12 * 666643; s1 += s12 * 470296; s2 += s12 * 654183;
@@ -1426,17 +1429,17 @@ static void sc25519_muladd(uint8_t *s, const uint8_t *a, const uint8_t *b, const
     s12 = 0;
 
     /* Final sequential carry */
-    carry = s0 >> 21; s1 += carry; s0 -= carry << 21;
-    carry = s1 >> 21; s2 += carry; s1 -= carry << 21;
-    carry = s2 >> 21; s3 += carry; s2 -= carry << 21;
-    carry = s3 >> 21; s4 += carry; s3 -= carry << 21;
-    carry = s4 >> 21; s5 += carry; s4 -= carry << 21;
-    carry = s5 >> 21; s6 += carry; s5 -= carry << 21;
-    carry = s6 >> 21; s7 += carry; s6 -= carry << 21;
-    carry = s7 >> 21; s8 += carry; s7 -= carry << 21;
-    carry = s8 >> 21; s9 += carry; s8 -= carry << 21;
-    carry = s9 >> 21; s10 += carry; s9 -= carry << 21;
-    carry = s10 >> 21; s11 += carry; s10 -= carry << 21;
+    carry = s0 >> 21; s1 += carry; s0 -= carry * ((int64_t)1 << 21);
+    carry = s1 >> 21; s2 += carry; s1 -= carry * ((int64_t)1 << 21);
+    carry = s2 >> 21; s3 += carry; s2 -= carry * ((int64_t)1 << 21);
+    carry = s3 >> 21; s4 += carry; s3 -= carry * ((int64_t)1 << 21);
+    carry = s4 >> 21; s5 += carry; s4 -= carry * ((int64_t)1 << 21);
+    carry = s5 >> 21; s6 += carry; s5 -= carry * ((int64_t)1 << 21);
+    carry = s6 >> 21; s7 += carry; s6 -= carry * ((int64_t)1 << 21);
+    carry = s7 >> 21; s8 += carry; s7 -= carry * ((int64_t)1 << 21);
+    carry = s8 >> 21; s9 += carry; s8 -= carry * ((int64_t)1 << 21);
+    carry = s9 >> 21; s10 += carry; s9 -= carry * ((int64_t)1 << 21);
+    carry = s10 >> 21; s11 += carry; s10 -= carry * ((int64_t)1 << 21);
 
     /* Pack 12 limbs into 32 bytes */
     s[0] = (uint8_t)(s0 >> 0);

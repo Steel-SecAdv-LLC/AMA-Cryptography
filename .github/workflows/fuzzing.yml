@@ -37,7 +37,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake clang
+          sudo apt-get install -y cmake clang libclang-rt-dev
 
       - name: Build fuzz targets
         run: |
@@ -96,7 +96,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake clang
+          sudo apt-get install -y cmake clang libclang-rt-dev
 
       - name: Build fuzz targets
         run: |
@@ -142,7 +142,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake clang
+          sudo apt-get install -y cmake clang libclang-rt-dev
 
       - name: Build with constant-time AES
         run: |

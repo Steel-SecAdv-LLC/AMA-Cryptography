@@ -78,8 +78,8 @@ jobs:
     - name: Generate Python SBOM (CycloneDX)
       run: |
         cyclonedx-py environment \
-          --output sbom-python.json \
-          --output-format json
+          -o sbom-python.json \
+          --of JSON
 
     - name: Generate dependency tree
       run: |
