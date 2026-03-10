@@ -312,7 +312,9 @@ class TestAESGCMInterop:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         except (ImportError, Exception):
             pytest.skip("PyCA cryptography not installed")
-        except BaseException:
+        except BaseException as exc:
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
             # pyo3_runtime.PanicException inherits BaseException, not Exception
             pytest.skip("PyCA cryptography not functional (CFFI/Rust bindings broken)")
 
@@ -335,7 +337,9 @@ class TestAESGCMInterop:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         except (ImportError, Exception):
             pytest.skip("PyCA cryptography not installed")
-        except BaseException:
+        except BaseException as exc:
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
             # pyo3_runtime.PanicException inherits BaseException, not Exception
             pytest.skip("PyCA cryptography not functional (CFFI/Rust bindings broken)")
 

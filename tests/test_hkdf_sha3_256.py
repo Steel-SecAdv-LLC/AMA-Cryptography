@@ -31,7 +31,9 @@ try:
     _PYCA_AVAILABLE = True
 except Exception:
     _PYCA_AVAILABLE = False
-except BaseException:
+except BaseException as exc:
+    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+        raise
     # pyo3_runtime.PanicException (from broken Rust/CFFI bindings, e.g. missing
     # _cffi_backend module) inherits from BaseException, not Exception.
     _PYCA_AVAILABLE = False
