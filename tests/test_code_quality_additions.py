@@ -59,37 +59,37 @@ class TestSecureMemoryErrorClasses:
 
     def test_secure_memory_error_exists(self):
         """SecureMemoryError class is defined."""
-        from _sm_module import SecureMemoryError
+        from ama_cryptography.secure_memory import SecureMemoryError
 
         assert issubclass(SecureMemoryError, Exception)
 
     def test_secure_memory_not_available_exists(self):
         """SecureMemoryNotAvailable class is defined."""
-        from _sm_module import SecureMemoryError, SecureMemoryNotAvailable
+        from ama_cryptography.secure_memory import SecureMemoryError, SecureMemoryNotAvailable
 
         assert issubclass(SecureMemoryNotAvailable, SecureMemoryError)
 
     def test_secure_memory_error_can_be_raised(self):
         """SecureMemoryError can be raised and caught."""
-        from _sm_module import SecureMemoryError
+        from ama_cryptography.secure_memory import SecureMemoryError
 
         with pytest.raises(SecureMemoryError, match="test error message"):
             raise SecureMemoryError("test error message")
 
     def test_secure_memory_not_available_can_be_raised(self):
         """SecureMemoryNotAvailable can be raised and caught."""
-        from _sm_module import SecureMemoryNotAvailable
+        from ama_cryptography.secure_memory import SecureMemoryNotAvailable
 
         with pytest.raises(SecureMemoryNotAvailable, match="pynacl"):
             raise SecureMemoryNotAvailable("pynacl not installed")
 
     def test_check_nacl_available_raises_when_unavailable(self):
         """_check_nacl_available raises when pynacl is unavailable."""
-        from _sm_module import SecureMemoryNotAvailable
+        from ama_cryptography.secure_memory import SecureMemoryNotAvailable
 
         # Temporarily mock _HAS_NACL to False
-        with patch("_sm_module._HAS_NACL", False):
-            from _sm_module import _check_nacl_available
+        with patch("ama_cryptography.secure_memory._HAS_NACL", False):
+            from ama_cryptography.secure_memory import _check_nacl_available
 
             with pytest.raises(SecureMemoryNotAvailable):
                 _check_nacl_available()
@@ -100,7 +100,7 @@ class TestSecureMemoryFallbackBehavior:
 
     def test_secure_memzero_fallback_works(self):
         """secure_memzero works without pynacl (fallback mode)."""
-        from _sm_module import _fallback_memzero
+        from ama_cryptography.secure_memory import _fallback_memzero
 
         data = bytearray(b"sensitive data here")
         _fallback_memzero(data)
@@ -109,7 +109,7 @@ class TestSecureMemoryFallbackBehavior:
 
     def test_fallback_memzero_multipass(self):
         """Fallback memzero performs multi-pass overwrite."""
-        from _sm_module import _fallback_memzero
+        from ama_cryptography.secure_memory import _fallback_memzero
 
         # Create data and verify fallback zeros it
         data = bytearray(100)
@@ -123,7 +123,7 @@ class TestSecureMemoryFallbackBehavior:
 
     def test_mlock_without_nacl_returns_false(self):
         """secure_mlock returns False when pynacl unavailable."""
-        with patch("_sm_module._HAS_NACL", False):
+        with patch("ama_cryptography.secure_memory._HAS_NACL", False):
             # Need to reload to pick up the patched value
             importlib.reload(_sm_module)
 
@@ -139,7 +139,7 @@ class TestSecureMemoryFallbackBehavior:
 
     def test_munlock_without_nacl_returns_false(self):
         """secure_munlock returns False when pynacl unavailable."""
-        with patch("_sm_module._HAS_NACL", False):
+        with patch("ama_cryptography.secure_memory._HAS_NACL", False):
             importlib.reload(_sm_module)
 
             data = bytearray(100)
@@ -156,7 +156,7 @@ class TestSecureMemoryGetStatus:
 
     def test_get_status_returns_all_keys(self):
         """get_status returns all expected keys."""
-        from _sm_module import get_status
+        from ama_cryptography.secure_memory import get_status
 
         status = get_status()
 
@@ -167,14 +167,14 @@ class TestSecureMemoryGetStatus:
 
     def test_get_status_backend_values(self):
         """get_status backend is either libsodium or fallback."""
-        from _sm_module import get_status
+        from ama_cryptography.secure_memory import get_status
 
         status = get_status()
         assert status["backend"] in ("libsodium", "fallback")
 
     def test_get_status_types(self):
         """get_status returns correct types."""
-        from _sm_module import get_status
+        from ama_cryptography.secure_memory import get_status
 
         status = get_status()
 
@@ -493,14 +493,14 @@ class TestSecureRandomBytes:
 
     def test_zero_length(self):
         """Zero length returns empty bytes."""
-        from _sm_module import secure_random_bytes
+        from ama_cryptography.secure_memory import secure_random_bytes
 
         result = secure_random_bytes(0)
         assert result == b""
 
     def test_large_size(self):
         """Can generate large random buffers."""
-        from _sm_module import secure_random_bytes
+        from ama_cryptography.secure_memory import secure_random_bytes
 
         size = 1024 * 100  # 100 KB
         result = secure_random_bytes(size)
@@ -510,7 +510,7 @@ class TestSecureRandomBytes:
 
     def test_entropy_quality(self):
         """Random bytes have reasonable entropy."""
-        from _sm_module import secure_random_bytes
+        from ama_cryptography.secure_memory import secure_random_bytes
 
         data = secure_random_bytes(1000)
 
@@ -529,21 +529,21 @@ class TestConstantTimeCompareEdgeCases:
 
     def test_single_byte_equal(self):
         """Single byte comparison (equal)."""
-        from _sm_module import constant_time_compare
+        from ama_cryptography.secure_memory import constant_time_compare
 
         assert constant_time_compare(b"\x00", b"\x00") is True
         assert constant_time_compare(b"\xff", b"\xff") is True
 
     def test_single_byte_different(self):
         """Single byte comparison (different)."""
-        from _sm_module import constant_time_compare
+        from ama_cryptography.secure_memory import constant_time_compare
 
         assert constant_time_compare(b"\x00", b"\x01") is False
         assert constant_time_compare(b"\x00", b"\xff") is False
 
     def test_null_bytes(self):
         """Comparison with null bytes."""
-        from _sm_module import constant_time_compare
+        from ama_cryptography.secure_memory import constant_time_compare
 
         a = b"\x00" * 32
         b = b"\x00" * 32
@@ -552,7 +552,7 @@ class TestConstantTimeCompareEdgeCases:
 
     def test_high_bytes(self):
         """Comparison with high bytes."""
-        from _sm_module import constant_time_compare
+        from ama_cryptography.secure_memory import constant_time_compare
 
         a = b"\xff" * 32
         b = b"\xff" * 32
@@ -561,7 +561,7 @@ class TestConstantTimeCompareEdgeCases:
 
     def test_one_bit_difference(self):
         """Detects single bit difference."""
-        from _sm_module import constant_time_compare
+        from ama_cryptography.secure_memory import constant_time_compare
 
         a = b"\x00" * 31 + b"\x00"
         b = b"\x00" * 31 + b"\x01"
