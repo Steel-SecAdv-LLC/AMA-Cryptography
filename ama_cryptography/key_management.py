@@ -30,6 +30,7 @@ from types import TracebackType
 from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
 from ama_cryptography.exceptions import SecurityWarning  # noqa: F401 — re-exported for public API
+from ama_cryptography.secure_memory import secure_memzero
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -866,11 +867,11 @@ class SecureKeyStorage:
         Returns:
             List of key IDs stored in this storage
         """
-        key_ids: List[str] = []
-        for key_file in self.storage_path.glob("*.json"):
-            if not key_file.name.startswith("."):
-                key_ids.append(key_file.stem)
-        return key_ids
+        return [
+            key_file.stem
+            for key_file in self.storage_path.glob("*.json")
+            if not key_file.name.startswith(".")
+        ]
 
     def __enter__(self) -> "SecureKeyStorage":
         """Context manager entry."""
@@ -885,8 +886,7 @@ class SecureKeyStorage:
         """Context manager exit - securely clear encryption key from memory."""
         # Securely zero the encryption key in-place (bytearray allows mutation)
         if hasattr(self, "encryption_key") and self.encryption_key:
-            for i in range(len(self.encryption_key)):
-                self.encryption_key[i] = 0
+            secure_memzero(self.encryption_key)
         return None
 
 

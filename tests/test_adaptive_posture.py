@@ -294,10 +294,9 @@ class TestCryptoPostureController:
         hd.derive_path.assert_called_once()
 
     def test_history_bounded(self):
-        """History should not grow beyond _max_history."""
+        """History should not grow beyond max_history."""
         monitor = self._make_monitor({"recent_alerts": [], "total_alerts": 0})
-        controller = CryptoPostureController(monitor=monitor)
-        controller._max_history = 5
+        controller = CryptoPostureController(monitor=monitor, max_history=5)
         for _ in range(20):
             controller.evaluate_and_respond()
         assert len(controller._history) <= 5
