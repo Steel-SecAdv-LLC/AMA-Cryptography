@@ -1,12 +1,10 @@
 ## AMA Cryptography
 
-**Legend:** 🜚 Gold (assurance) · 🔷 Blue (crypto) · ⬛ Black/Gray (runtime)
-
 **[🏠 Home](Home)**
 
 ---
 
-### 🔷 Build & Integrate
+### Build & Integrate
 - [Installation](Installation)
 - [Quick Start](Quick-Start)
 - [API Reference](API-Reference)
@@ -14,14 +12,14 @@
 
 ---
 
-### 🜚 Assurance & Governance
+### Assurance & Governance
 - [Security Model](Security-Model)
 - [Key Management](Key-Management)
 - [Adaptive Posture](Adaptive-Posture)
 
 ---
 
-### ⬛ Runtime & Performance
+### Runtime & Performance
 - [Secure Memory](Secure-Memory)
 - [Hybrid Cryptography](Hybrid-Cryptography)
 - [Performance Benchmarks](Performance-Benchmarks)

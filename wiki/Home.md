@@ -1,24 +1,16 @@
-<div align="center" style="background: linear-gradient(120deg, #000000 0%, #111111 32%, #11AEED 62%, #B4B124 100%); color: #f6f6f6; padding: 26px; border: 2px solid #000000; border-radius: 14px;">
-
 # AMA Cryptography Wiki
 
 **Post-Quantum Security System — built for people, data, and networks**
 
-<div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:10px;">
-  <span style="background:#B4B124; color:#000; padding:6px 10px; border:1px solid #000;">Gold • Assurance & governance</span>
-  <span style="background:#11AEED; color:#000; padding:6px 10px; border:1px solid #000;">Blue • Cryptography & transport</span>
-  <span style="background:#1c1c1c; color:#f6f6f6; padding:6px 10px; border:1px solid #B4B124;">Black/Gray • Execution & observability</span>
-</div>
-
-</div>
+> A hybrid classical and post-quantum cryptographic framework combining NIST-standardized algorithms with defense-in-depth architecture and runtime observability.
 
 ---
 
-## How to use this wiki (fast lane)
+## How to use this wiki
 
-- **Ship quickly:** Use the blue tracks for code: [Installation](Installation) → [Quick Start](Quick-Start) → [API Reference](API-Reference).  
-- **Assure correctness:** Follow the gold tracks for governance: [Security Model](Security-Model) → [Key Management](Key-Management) → [Adaptive Posture](Adaptive-Posture).  
-- **Operate safely:** Follow the black/gray tracks for runtime: [Secure Memory](Secure-Memory) → [Hybrid Cryptography](Hybrid-Cryptography) → [Performance Benchmarks](Performance-Benchmarks).  
+- **Build & integrate:** [Installation](Installation) → [Quick Start](Quick-Start) → [API Reference](API-Reference)
+- **Assure correctness:** [Security Model](Security-Model) → [Key Management](Key-Management) → [Adaptive Posture](Adaptive-Posture)
+- **Operate & observe:** [Secure Memory](Secure-Memory) → [Hybrid Cryptography](Hybrid-Cryptography) → [Performance Benchmarks](Performance-Benchmarks)
 - **Need a map?** Start with the system flow below; every node links to deeper pages.
 
 ---
@@ -44,7 +36,7 @@ classDef black fill:#000000,stroke:#B4B124,color:#f6f6f6;
 classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 ```
 
-**Why it matters:** Each stage is independently checkable. An attacker must subvert the gold (assurance), blue (crypto), and black/gray (execution) layers in sequence — a defense-in-depth chain instead of a single gate.
+**Why it matters:** Each stage is independently checkable. An attacker must subvert the assurance, cryptographic, and execution layers in sequence — a defense-in-depth chain instead of a single gate.
 
 ---
 
@@ -68,29 +60,29 @@ classDef gray fill:#1f1f1f,stroke:#11AEED,color:#f6f6f6;
 
 ---
 
-## Navigation by intent (choose one)
+## Navigation by intent
 
-- **Build & integrate (blue):**
+- **Build & Integrate:**
   - [Installation](Installation) — requirements, toolchains, wheels
   - [Quick Start](Quick-Start) — minimal create/verify package in 5 minutes
   - [API Reference](API-Reference) + [C API](C-API-Reference) — production calls, return codes
-- **Assurance & lifecycle (gold):**
+- **Assurance & Lifecycle:**
   - [Security Model](Security-Model) — threat coverage, residual risks, disclosure path
   - [Key Management](Key-Management) — hardened HD derivation, rotation, custody
   - [Adaptive Posture](Adaptive-Posture) — runtime policy toggles and allowed fallbacks
-- **Operations & performance (black/gray):**
+- **Operations & Performance:**
   - [Secure Memory](Secure-Memory) — zeroization, constant-time expectations
   - [Hybrid Cryptography](Hybrid-Cryptography) — binding combiners and KEM flow
   - [Performance Benchmarks](Performance-Benchmarks) — throughput, latency, scaling curves
 
 ---
 
-## Build-with confidence checklist
+## Build-with-confidence checklist
 
-1. **Decide the trust surface (gold):** choose HSM/HKDF parameters; align with [Security Model](Security-Model).  
-2. **Assemble the pipeline (blue):** wire the API call sequence from [Quick Start](Quick-Start) or [API-Reference](API-Reference).  
-3. **Harden execution (black/gray):** enable zeroization + monitoring from [Secure-Memory](Secure-Memory) and [Adaptive-Posture](Adaptive-Posture).  
-4. **Measure and watch:** run the 3R loop and record telemetry per [Performance-Benchmarks](Performance-Benchmarks).  
+1. **Define the trust surface:** choose HSM/HKDF parameters; align with [Security Model](Security-Model).
+2. **Assemble the pipeline:** wire the API call sequence from [Quick Start](Quick-Start) or [API Reference](API-Reference).
+3. **Harden execution:** enable zeroization + monitoring from [Secure Memory](Secure-Memory) and [Adaptive Posture](Adaptive-Posture).
+4. **Measure and observe:** run the 3R loop and record telemetry per [Performance Benchmarks](Performance-Benchmarks).
 
 ---
 
