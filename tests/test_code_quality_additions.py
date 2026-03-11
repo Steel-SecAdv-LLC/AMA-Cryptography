@@ -23,7 +23,7 @@ from unittest.mock import patch
 
 import pytest
 
-import ama_cryptography.secure_memory
+from ama_cryptography import secure_memory as _sm_module
 
 # Check if native backends are available
 try:
@@ -125,30 +125,30 @@ class TestSecureMemoryFallbackBehavior:
         """secure_mlock returns False when pynacl unavailable."""
         with patch("ama_cryptography.secure_memory._HAS_NACL", False):
             # Need to reload to pick up the patched value
-            importlib.reload(ama_cryptography.secure_memory)
+            importlib.reload(_sm_module)
 
             data = bytearray(100)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", RuntimeWarning)
-                result = ama_cryptography.secure_memory.secure_mlock(data)
+                result = _sm_module.secure_mlock(data)
 
             assert result is False
 
             # Restore
-            importlib.reload(ama_cryptography.secure_memory)
+            importlib.reload(_sm_module)
 
     def test_munlock_without_nacl_returns_false(self):
         """secure_munlock returns False when pynacl unavailable."""
         with patch("ama_cryptography.secure_memory._HAS_NACL", False):
-            importlib.reload(ama_cryptography.secure_memory)
+            importlib.reload(_sm_module)
 
             data = bytearray(100)
-            result = ama_cryptography.secure_memory.secure_munlock(data)
+            result = _sm_module.secure_munlock(data)
 
             assert result is False
 
             # Restore
-            importlib.reload(ama_cryptography.secure_memory)
+            importlib.reload(_sm_module)
 
 
 class TestSecureMemoryGetStatus:
