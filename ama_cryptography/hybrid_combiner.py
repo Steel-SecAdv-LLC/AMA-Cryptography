@@ -43,7 +43,7 @@ import ctypes
 import hashlib
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, List
 
 logger = logging.getLogger(__name__)
 
@@ -236,13 +236,13 @@ class HybridCombiner:
         if n > 255:
             raise ValueError("HKDF output length exceeds maximum (255 * hash_len)")
 
-        okm = b""
+        okm_parts: List[bytes] = []
         t_prev = b""
         for i in range(1, n + 1):
             t_prev = _hmac_sha3_256(prk, t_prev + info + bytes([i]))
-            okm += t_prev
+            okm_parts.append(t_prev)
 
-        return okm[:okm_len]
+        return b"".join(okm_parts)[:okm_len]
 
     def encapsulate_hybrid(
         self,

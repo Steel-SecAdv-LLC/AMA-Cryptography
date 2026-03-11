@@ -25,10 +25,11 @@ Version: 2.0
 
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum, auto
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -215,11 +216,10 @@ class PostureEvaluator:
         """Score resonance analysis results."""
         if not resonance_data:
             return 0.0
-        max_ratio = 0.0
-        for _op, analysis in resonance_data.items():
-            ratio = analysis.get("resonance_ratio", 0.0)
-            if ratio > max_ratio:
-                max_ratio = ratio
+        max_ratio = max(
+            (analysis.get("resonance_ratio", 0.0) for analysis in resonance_data.values()),
+            default=0.0,
+        )
         # Normalize: ratio of 3.0 is threshold, 10.0 is alarming
         return min(1.0, max(0.0, (max_ratio - 3.0) / 7.0))
 
@@ -280,6 +280,7 @@ class CryptoPostureController:
         rotation_cooldown: float = 300.0,
         on_rotation: Optional[Callable[[], None]] = None,
         on_algorithm_switch: Optional[Callable[[str], None]] = None,
+        max_history: int = 1000,
     ) -> None:
         """
         Args:
@@ -291,6 +292,7 @@ class CryptoPostureController:
             rotation_cooldown: Minimum seconds between rotation triggers
             on_rotation: Callback invoked when key rotation is triggered
             on_algorithm_switch: Callback invoked when algorithm is switched
+            max_history: Maximum number of evaluations to retain in history
         """
         self.monitor = monitor
         self.evaluator = evaluator or PostureEvaluator()
@@ -304,8 +306,12 @@ class CryptoPostureController:
         self._last_rotation_time: float = 0.0
         self._rotation_count: int = 0
         self._switch_count: int = 0
-        self._max_history: int = 1000
-        self._history: List[PostureEvaluation] = []
+        self._history: Deque[PostureEvaluation] = deque(maxlen=max_history)
+        # Pre-sorted (ascending strength) for _trigger_algorithm_switch; avoids
+        # repeated sort on every posture-triggered algorithm upgrade.
+        self._sorted_algorithms: List[Tuple[str, int]] = sorted(
+            self.ALGORITHM_STRENGTH.items(), key=lambda x: x[1]
+        )
 
     def evaluate_and_respond(self) -> PostureEvaluation:
         """
@@ -325,8 +331,6 @@ class CryptoPostureController:
         report = self.monitor.get_security_report()
         evaluation = self.evaluator.evaluate(report)
         self._history.append(evaluation)
-        if len(self._history) > self._max_history:
-            self._history = self._history[-self._max_history :]
 
         # Enforce cooldown
         now = time.time()
@@ -384,10 +388,9 @@ class CryptoPostureController:
     def _trigger_algorithm_switch(self) -> None:
         """Switch to a stronger algorithm."""
         current_strength = self.ALGORITHM_STRENGTH.get(self.current_algorithm, 0)
-        # Find next stronger algorithm
-        candidates = sorted(self.ALGORITHM_STRENGTH.items(), key=lambda x: x[1])
+        # Use pre-sorted list (ascending strength) cached at init time
         new_algorithm = self.current_algorithm
-        for alg, strength in candidates:
+        for alg, strength in self._sorted_algorithms:
             if strength > current_strength:
                 new_algorithm = alg
                 break
@@ -411,7 +414,7 @@ class CryptoPostureController:
         Returns:
             Dict with current state, history stats, and action counts
         """
-        recent = self._history[-10:] if self._history else []
+        recent: List[PostureEvaluation] = list(self._history)[-10:] if self._history else []
         return {
             "current_algorithm": self.current_algorithm,
             "current_threat_level": (

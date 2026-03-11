@@ -1,6 +1,7 @@
 <div align="center">
 
-  <img width="917" height="194" alt="image" src="https://github.com/user-attachments/assets/b8cf718e-82e0-4254-94bc-8c6aad12a895" />
+  <img width="917" height="212" alt="image" src="https://github.com/user-attachments/assets/5bd9ed92-268e-437f-a91b-fac43375820b" />
+
 
 </div>
 
@@ -62,9 +63,6 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 >
 > **Status:** Community-tested | Not externally audited
 > **Last Updated:** 2026-03-10
-> **Audit Status:** Community-tested, not externally audited. See [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) for self-assessment details.
->
-> See [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) for detailed security properties and threat model.
 
 ---
 
@@ -142,7 +140,7 @@ See [Use Cases by Sector](#use-cases-by-sector-) for detailed scenarios.
 | 5. HKDF | Key derivation | Cryptographic key independence |
 | 6. RFC 3161 | Timestamping | Third-party proof of existence |
 
-**Why 6 layers matter:** Overall security is bounded by the weakest cryptographic layer (~128-bit classical, ~192-bit quantum). Defense-in-depth ensures continued protection if one layer is compromised. See [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) for detailed analysis.
+**Why 6 layers matter:** Overall security is bounded by the weakest cryptographic layer (~128-bit classical, ~192-bit quantum). Defense-in-depth ensures continued protection if one layer is compromised. See [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) for detailed analysis.
 
 ![6-Layer Defense Architecture](assets/defense_layers.png)
 
@@ -245,7 +243,7 @@ Future-proof cryptography:
 - `ama_secp256k1.c`: secp256k1 elliptic curve operations (HD key derivation)
 - `ama_aes_bitsliced.c`: Bitsliced AES S-box (cache-timing hardened, optional via `-DAMA_AES_CONSTTIME=ON`)
 
-> **Note:** The Python API remains the recommended production interface. C implementations provide high-performance alternatives where applicable. See [BENCHMARKS.md](BENCHMARKS.md) for C vs Python performance comparison.
+> **Note:** The Python API remains the recommended production interface. C implementations provide high-performance alternatives where applicable.
 
 **PQC Backend Security Considerations:**
 
