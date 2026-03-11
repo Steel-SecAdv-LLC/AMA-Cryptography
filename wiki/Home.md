@@ -1,144 +1,113 @@
-<div align="center">
+<div align="center" style="background: linear-gradient(120deg, #000000 0%, #111111 32%, #11AEED 62%, #B4B124 100%); color: #f6f6f6; padding: 26px; border: 2px solid #000000; border-radius: 14px;">
 
 # AMA Cryptography Wiki
 
-**Post-Quantum Security System**
+**Post-Quantum Security System — built for people, data, and networks**
 
-*Protecting people, data, and networks with quantum-resistant cryptography*
-
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/LICENSE)
-[![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org)
-[![C](https://img.shields.io/badge/C-C11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
-[![PQC](https://img.shields.io/badge/PQC-FIPS%20203%20%7C%20204%20%7C%20205-purple.svg)](Cryptography-Algorithms)
-[![Version](https://img.shields.io/badge/version-2.0-green.svg)](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography)
+<div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:10px;">
+  <span style="background:#B4B124; color:#000; padding:6px 10px; border:1px solid #000;">Gold • Assurance & governance</span>
+  <span style="background:#11AEED; color:#000; padding:6px 10px; border:1px solid #000;">Blue • Cryptography & transport</span>
+  <span style="background:#1c1c1c; color:#f6f6f6; padding:6px 10px; border:1px solid #B4B124;">Black/Gray • Execution & observability</span>
+</div>
 
 </div>
 
 ---
 
-## What is AMA Cryptography?
+## How to use this wiki (fast lane)
 
-AMA Cryptography is a **production-grade, post-quantum cryptographic protection system** that provides quantum-resistant integrity protection for sensitive data structures. It delivers a hybrid classical + post-quantum (PQC) cryptographic framework built on a multi-language architecture (C + Cython + Python).
+- **Ship quickly:** Use the blue tracks for code: [Installation](Installation) → [Quick Start](Quick-Start) → [API Reference](API-Reference).  
+- **Assure correctness:** Follow the gold tracks for governance: [Security Model](Security-Model) → [Key Management](Key-Management) → [Adaptive Posture](Adaptive-Posture).  
+- **Operate safely:** Follow the black/gray tracks for runtime: [Secure Memory](Secure-Memory) → [Hybrid Cryptography](Hybrid-Cryptography) → [Performance Benchmarks](Performance-Benchmarks).  
+- **Need a map?** Start with the system flow below; every node links to deeper pages.
 
+---
+
+## System Blueprint — cryptographic package lifecycle
+
+```mermaid
+flowchart LR
+    raw[Input: data / firmware / tx]:::gray --> prep[Canonicalize + length-prefix]:::gray
+    prep --> sha3[SHA3-256 digest]:::gold
+    sha3 --> hmac[HMAC-SHA3-256 auth]:::blue
+    hmac --> ed[Ed25519 signature]:::black
+    ed --> pqc[ML-DSA-65 signature]:::gold
+    pqc --> ts[RFC 3161 timestamp]:::blue
+    ts --> pkg[Cryptographic package]:::black
+    pkg --> verify[Verify: HKDF keys + integrity + signatures]:::blue
+    verify --> monitor[3R observability loop]:::gold
+    monitor --> action[Adaptive posture (lockdown / rotate / switch algos)]:::black
+
+classDef gold fill:#B4B124,stroke:#000000,color:#000000;
+classDef blue fill:#11AEED,stroke:#000000,color:#000000;
+classDef black fill:#000000,stroke:#B4B124,color:#f6f6f6;
+classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 ```
-+==============================================================================+
-|                            AMA CRYPTOGRAPHY ♱                                |
-|                       Post-Quantum Security System                           |
-|                                                                              |
-|   6-Layer Defense      |   Quantum-Resistant    |   Defense-in-Depth         |
-|   Cython-Optimized     |   3R Anomaly Monitor   |   Cross-Platform           |
-|   HD Key Derivation    |   Algorithm-Agnostic   |   NIST PQC Standards       |
-|                                                                              |
-|   C Layer (Native)     |   Cython Layer         |   Python API               |
-|   ─────────────────    |   ─────────────────    |   ─────────────────        |
-|   SHA3/HKDF/Ed25519    |   18-37x Speedup       |   Algorithm Agnostic       |
-|   ML-DSA-65/Kyber      |   NumPy Integration    |   Key Management           |
-|   SPHINCS+/NTT Ops     |   Math Engine          |   3R Monitoring            |
-|                                                                              |
-|                       Built for a civilized evolution.                       |
-+==============================================================================+
+
+**Why it matters:** Each stage is independently checkable. An attacker must subvert the gold (assurance), blue (crypto), and black/gray (execution) layers in sequence — a defense-in-depth chain instead of a single gate.
+
+---
+
+## Runtime Safety Loop — observability without guessing
+
+```mermaid
+flowchart TD
+    event[Runtime crypto event]:::black --> resonance[Resonance FFT scan]:::blue
+    resonance --> recursion[Recursion multi-scale patterning]:::gold
+    recursion --> refactoring[Refactoring complexity score]:::blue
+    refactoring --> verdict[Permit / flag / escalate]:::black
+    verdict --> posture[Adaptive posture switch]:::gold
+    posture --> log[Telemetry + audit trail]:::gray
+    log --> learn[Feedback to threat model]:::blue
+
+classDef gold fill:#B4B124,stroke:#000000,color:#000000;
+classDef blue fill:#11AEED,stroke:#000000,color:#000000;
+classDef black fill:#000000,stroke:#B4B124,color:#f6f6f6;
+classDef gray fill:#1f1f1f,stroke:#11AEED,color:#f6f6f6;
 ```
 
-**Copyright 2025–2026 Steel Security Advisors LLC**  
-**Author/Inventor:** Andrew E. A.  
-**License:** Apache License 2.0 | **Version:** 2.0
+---
+
+## Navigation by intent (choose one)
+
+- **Build & integrate (blue):**
+  - [Installation](Installation) — requirements, toolchains, wheels
+  - [Quick Start](Quick-Start) — minimal create/verify package in 5 minutes
+  - [API Reference](API-Reference) + [C API](C-API-Reference) — production calls, return codes
+- **Assurance & lifecycle (gold):**
+  - [Security Model](Security-Model) — threat coverage, residual risks, disclosure path
+  - [Key Management](Key-Management) — hardened HD derivation, rotation, custody
+  - [Adaptive Posture](Adaptive-Posture) — runtime policy toggles and allowed fallbacks
+- **Operations & performance (black/gray):**
+  - [Secure Memory](Secure-Memory) — zeroization, constant-time expectations
+  - [Hybrid Cryptography](Hybrid-Cryptography) — binding combiners and KEM flow
+  - [Performance Benchmarks](Performance-Benchmarks) — throughput, latency, scaling curves
 
 ---
 
-## Core Innovations
+## Build-with confidence checklist
 
-### 6-Layer Defense-in-Depth
-
-AMA Cryptography applies six independent cryptographic layers sequentially, providing unprecedented defense-in-depth:
-
-| Layer | Algorithm | Standard | Security |
-|-------|-----------|----------|---------|
-| 1 | Canonical Length-Prefixed Encoding | — | Anti-concatenation |
-| 2 | **SHA3-256** Content Hash | NIST FIPS 202 | 128-bit collision resistance |
-| 3 | **HMAC-SHA3-256** Authentication | RFC 2104 | Keyed message authentication |
-| 4 | **Ed25519** Classical Signature | RFC 8032 | 128-bit classical security |
-| 5 | **ML-DSA-65** Quantum-Resistant Signature | NIST FIPS 204 | 192-bit quantum security |
-| 6 | **RFC 3161** Trusted Timestamp | RFC 3161 | Third-party attestation |
-
-An attacker must defeat **all 6 independent layers** to forge a package. Most systems use only 1–2 layers.
-
-### 3R Runtime Security Monitoring
-
-The system's unique runtime monitoring framework provides real-time visibility into cryptographic operations with less than 2% performance overhead:
-
-- **Resonance Engine** — FFT-based frequency-domain anomaly detection
-- **Recursion Engine** — Multi-scale hierarchical pattern analysis
-- **Refactoring Engine** — Code complexity metrics for security review
-
-### Zero-Dependency Native C Library
-
-All cryptographic primitives are implemented natively in C11 with no external cryptographic dependencies:
-
-- SHA3-256, HMAC-SHA3-256, HKDF-SHA3-256
-- Ed25519, AES-256-GCM, X25519
-- ML-DSA-65 (FIPS 204), ML-KEM-1024 (FIPS 203), SPHINCS+-SHA2-256f (FIPS 205)
-- ChaCha20-Poly1305, Argon2id, secp256k1
+1. **Decide the trust surface (gold):** choose HSM/HKDF parameters; align with [Security Model](Security-Model).  
+2. **Assemble the pipeline (blue):** wire the API call sequence from [Quick Start](Quick-Start) or [API-Reference](API-Reference).  
+3. **Harden execution (black/gray):** enable zeroization + monitoring from [Secure-Memory](Secure-Memory) and [Adaptive-Posture](Adaptive-Posture).  
+4. **Measure and watch:** run the 3R loop and record telemetry per [Performance-Benchmarks](Performance-Benchmarks).  
 
 ---
 
-## Quick Navigation
-
-### Getting Started
-- [Installation](Installation) — System requirements, build instructions, pip install
-- [Quick Start](Quick-Start) — 5-minute guide to creating and verifying your first crypto package
-- [API Reference](API-Reference) — Complete Python API documentation
-
-### Architecture & Design
-- [Architecture](Architecture) — System design, component interactions, data flow
-- [Cryptography Algorithms](Cryptography-Algorithms) — All algorithms, standards, key sizes, security levels
-- [Post-Quantum Cryptography](Post-Quantum-Cryptography) — ML-DSA-65, Kyber-1024, SPHINCS+, hybrid schemes
-- [Security Model](Security-Model) — Threat model, security properties, side-channel analysis
-
-### Advanced Topics
-- [Key Management](Key-Management) — HD key derivation, lifecycle, rotation, HSM support
-- [Secure Memory](Secure-Memory) — SecureBuffer, memory zeroing, constant-time operations
-- [Hybrid Cryptography](Hybrid-Cryptography) — Classical + PQC hybrid KEM, binding combiners
-- [Adaptive Posture](Adaptive-Posture) — Runtime threat response, algorithm switching
-- [C API Reference](C-API-Reference) — Native C library documentation
-
-### Project Info
-- [Performance Benchmarks](Performance-Benchmarks) — Throughput metrics, latency data, scalability
-- [Contributing](Contributing) — How to contribute, coding standards, testing requirements
-
----
-
-## Use Cases by Sector
-
-| Sector | Use Case |
-|--------|----------|
-| **Government & Defense** | Classified data protection with quantum-safe guarantees |
-| **Financial Services** | Transaction signing future-proofed against quantum threats |
-| **Healthcare** | HIPAA-compliant data integrity with audit trails |
-| **Critical Infrastructure** | SCADA/ICS systems requiring long-term security guarantees |
-| **Humanitarian** | Crisis response, whistleblower protection, field data security |
-| **Blockchain & Crypto** | Post-quantum secure digital signatures |
-
----
-
-## Project Status
+## Status snapshot
 
 | Property | Value |
 |----------|-------|
 | Version | 2.0 |
-| Python Support | 3.8+ (including 3.13) |
+| Algorithms | ML-DSA-65, Kyber-1024, SPHINCS+, Ed25519, AES-256-GCM, Argon2id |
 | Platforms | Linux, macOS, Windows |
-| Audit Status | Community-tested; not externally audited |
+| Python | 3.8 – 3.13 |
+| Audit | Community-tested · Not externally audited |
 | License | Apache 2.0 |
-| Contact | steel.sa.llc@gmail.com |
 
-> **Security Disclosure:** This is a self-assessed cryptographic implementation without third-party audit. Production use requires FIPS 140-2 Level 3+ HSM for master secrets, independent security review, and constant-time verification. See [Security Model](Security-Model) for details.
-
----
-
-## Integration
-
-AMA Cryptography serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent), providing quantum-resistant security for Mercury Agent's services.
+> **Production guardrails:** Use a FIPS 140-2 Level 3+ HSM for master secrets, enforce constant-time verification, and perform independent cryptographic review before deployment. See [Security-Model](Security-Model) for requirements.
 
 ---
 
-*Wiki maintained by Steel Security Advisors LLC. Last updated: 2026-03-10.*
+**Contact:** steel.sa.llc@gmail.com — [Report a vulnerability](Security-Model#reporting-vulnerabilities) — [Contribute](Contributing)  
+*Built by Steel Security Advisors LLC. Last updated: 2026-03-11.*
