@@ -64,6 +64,8 @@ Python: 3.8+
 License: Apache License 2.0
 """
 
+from __future__ import annotations
+
 import base64
 import hashlib
 import hmac
@@ -1634,7 +1636,7 @@ def create_crypto_package(  # noqa: C901 - high-level orchestrator; refactor wou
     author: str,
     use_rfc3161: bool = False,
     tsa_url: Optional[str] = None,
-    monitor: Optional["AmaCryptographyMonitor"] = None,
+    monitor: Optional[AmaCryptographyMonitor] = None,
 ) -> CryptoPackage:
     """
     Create cryptographically signed package for Omni-Codes.
@@ -1784,7 +1786,7 @@ def _verify_timestamp_value(timestamp_str: str) -> bool:
 def _verify_dilithium_with_policy(
     signature_message: bytes,
     package: CryptoPackage,
-    monitor: Optional["AmaCryptographyMonitor"],
+    monitor: Optional[AmaCryptographyMonitor],
     require_quantum_signatures: bool,
 ) -> Optional[bool]:
     """
@@ -1856,7 +1858,7 @@ def verify_crypto_package(
     helix_params: List[Tuple[float, float]],
     package: CryptoPackage,
     hmac_key: bytes,
-    monitor: Optional["AmaCryptographyMonitor"] = None,
+    monitor: Optional[AmaCryptographyMonitor] = None,
     require_quantum_signatures: Optional[bool] = None,
 ) -> Dict[str, Optional[bool]]:
     """
