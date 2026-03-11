@@ -1,6 +1,7 @@
 <div align="center">
 
-  <img width="489" height="514" alt="AMA Cryptography" src="assets/ama_logo.png" />
+  <img width="917" height="212" alt="image" src="https://github.com/user-attachments/assets/5bd9ed92-268e-437f-a91b-fac43375820b" />
+
 
 </div>
 
