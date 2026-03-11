@@ -414,7 +414,7 @@ class CryptoPostureController:
         Returns:
             Dict with current state, history stats, and action counts
         """
-        recent = self._history[-10:] if self._history else []
+        recent: List[PostureEvaluation] = list(self._history)[-10:] if self._history else []
         return {
             "current_algorithm": self.current_algorithm,
             "current_threat_level": (
