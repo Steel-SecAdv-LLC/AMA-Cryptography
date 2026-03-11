@@ -19,16 +19,16 @@
 
 ```mermaid
 flowchart LR
-    raw[Input: data / firmware / tx]:::gray --> prep[Canonicalize + length-prefix]:::gray
+    raw["Input: data / firmware / tx"]:::gray --> prep["Canonicalize + length-prefix"]:::gray
     prep --> sha3[SHA3-256 digest]:::gold
     sha3 --> hmac[HMAC-SHA3-256 auth]:::blue
     hmac --> ed[Ed25519 signature]:::black
     ed --> pqc[ML-DSA-65 signature]:::gold
     pqc --> ts[RFC 3161 timestamp]:::blue
     ts --> pkg[Cryptographic package]:::black
-    pkg --> verify[Verify: HKDF keys + integrity + signatures]:::blue
+    pkg --> verify["Verify: HKDF keys + integrity + signatures"]:::blue
     verify --> monitor[3R observability loop]:::gold
-    monitor --> action[Adaptive posture (lockdown / rotate / switch algos)]:::black
+    monitor --> action["Adaptive posture (lockdown / rotate / switch algos)"]:::black
 
 classDef gold fill:#B4B124,stroke:#000000,color:#000000;
 classDef blue fill:#11AEED,stroke:#000000,color:#000000;
@@ -47,9 +47,9 @@ flowchart TD
     event[Runtime crypto event]:::black --> resonance[Resonance FFT scan]:::blue
     resonance --> recursion[Recursion multi-scale patterning]:::gold
     recursion --> refactoring[Refactoring complexity score]:::blue
-    refactoring --> verdict[Permit / flag / escalate]:::black
+    refactoring --> verdict["Permit / flag / escalate"]:::black
     verdict --> posture[Adaptive posture switch]:::gold
-    posture --> log[Telemetry + audit trail]:::gray
+    posture --> log["Telemetry + audit trail"]:::gray
     log --> learn[Feedback to threat model]:::blue
 
 classDef gold fill:#B4B124,stroke:#000000,color:#000000;

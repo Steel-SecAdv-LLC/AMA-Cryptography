@@ -8,29 +8,30 @@ This page describes the system architecture of AMA Cryptography, including the 6
 
 AMA Cryptography is a **defense-in-depth** cryptographic protection system implementing six independent cryptographic layers. It serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent).
 
-```
-+------------------------------------------------------------------+
-|                      AMA CRYPTOGRAPHY SYSTEM                     |
-+------------------------------------------------------------------+
-|                                                                   |
-|  +--------------------+  +--------------------+  +---------------+|
-|  | Cryptographic      |  | Ethical            |  | Key           ||
-|  | Pipeline           |  | Integration        |  | Management    ||
-|  |                    |  |                    |  |               ||
-|  | - SHA3-256 Hash    |  | - 4 Ethical        |  | - HKDF        ||
-|  | - HMAC-SHA3-256    |  |   Pillars          |  | - Key Rotation||
-|  | - Ed25519          |  | - Constraint       |  | - HSM Support ||
-|  | - ML-DSA-65        |  |   Validation       |  |               ||
-|  | - RFC 3161 TSA     |  | - Signature Gen    |  |               ||
-|  +--------------------+  +--------------------+  +---------------+|
-|                                                                   |
-|  +--------------------------------------------------------------+ |
-|  |                    Application Interface                     | |
-|  |                                                              | |
-|  |  create_crypto_package()  |  verify_crypto_package()         | |
-|  |  export_public_keys()     |  generate_key_management_system()| |
-|  +--------------------------------------------------------------+ |
-+------------------------------------------------------------------+
+```mermaid
+flowchart TD
+    subgraph sys["AMA Cryptography System"]
+        direction TB
+        subgraph core["Core Subsystems"]
+            direction LR
+            pipe["Cryptographic Pipeline\nSHA3-256 · HMAC · Ed25519\nML-DSA-65 · RFC 3161"]:::gold
+            eth["Ethical Integration\n4 Omni-Code Pillars\nConstraint Validation"]:::blue
+            km["Key Management\nHKDF · Key Rotation\nHSM Support"]:::gold
+        end
+        subgraph api["Application Interface"]
+            direction LR
+            create["create_crypto_package()"]:::black
+            verify["verify_crypto_package()"]:::black
+            export["export_public_keys()"]:::gray
+            gen["generate_key_management_system()"]:::gray
+        end
+        core --> api
+    end
+
+classDef gold fill:#B4B124,stroke:#000000,color:#000000;
+classDef blue fill:#11AEED,stroke:#000000,color:#000000;
+classDef black fill:#000000,stroke:#B4B124,color:#f6f6f6;
+classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 ```
 
 ---
@@ -59,18 +60,43 @@ Cryptographic operations maintain throughput exceeding 1,000 operations per seco
 
 ## Multi-Language Architecture
 
-```
-┌─────────────────────────────────────────────────────┐
-│                   Python API Layer                   │
-│  (ama_cryptography/*.py — algorithm-agnostic API)   │
-├─────────────────────────────────────────────────────┤
-│                   Cython Layer                       │
-│  (Optional: 18–37x speedup for math engine)         │
-├─────────────────────────────────────────────────────┤
-│                 Native C Library                     │
-│  (src/c/*.c — all cryptographic primitives)         │
-│  Zero external cryptographic dependencies            │
-└─────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph python["Python API Layer (ama_cryptography/)"]
+        direction LR
+        kms["KeyManagementSystem\nkey_management.py\nHKDF derivation"]:::blue
+        cpkg["CryptoPackage\ncreate_crypto_package()\nverify_crypto_package()"]:::blue
+        mon["AmaCryptographyMonitor\nama_cryptography_monitor.py\n3R runtime security"]:::blue
+        capi["AmaCryptography\ncrypto_api.py\nHigh-level interface"]:::blue
+    end
+
+    subgraph cython["Cython Optimization Layer"]
+        math["math_engine.pyx\n18-37x speedup\nNTT, matrix ops"]:::gray
+    end
+
+    subgraph native["Native C Library (src/c/)"]
+        direction TB
+        hkdf["ama_hkdf.c\nHKDF-SHA3-256, HMAC"]:::gold
+        dil["ama_dilithium.c\nML-DSA-65 (FIPS 204)"]:::gold
+        kyber["ama_kyber.c\nML-KEM-1024 (FIPS 203)"]:::gold
+        ed["ama_ed25519.c\nEd25519 C11 atomics"]:::gold
+        sha3["ama_sha3.c\nSHA3-256 / SHAKE128 / SHAKE256"]:::black
+        sphincs["ama_sphincs.c\nSPHINCS+-SHA2-256f"]:::black
+        aesgcm["ama_aes_gcm.c\nAES-256-GCM"]:::black
+        ct["ama_consttime.c\nSide-channel resistant ops"]:::black
+    end
+
+    python --> native
+    cython --> native
+    kms --> hkdf
+    cpkg --> dil
+    cpkg --> ed
+    mon --> sha3
+
+classDef gold fill:#B4B124,stroke:#000000,color:#000000;
+classDef blue fill:#11AEED,stroke:#000000,color:#000000;
+classDef black fill:#000000,stroke:#B4B124,color:#f6f6f6;
+classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 ```
 
 **C Layer (`src/c/`):**
@@ -88,20 +114,20 @@ High-level, algorithm-agnostic interface. Primary production API for integration
 
 Layers are applied sequentially during package creation:
 
-```
-Layer 6: RFC 3161 Trusted Timestamp (optional)
-         ↑
-Layer 5: ML-DSA-65 Quantum-Resistant Signature (FIPS 204)
-         ↑
-Layer 4: Ed25519 Classical Digital Signature (RFC 8032)
-         ↑
-Layer 3: HMAC-SHA3-256 Message Authentication (RFC 2104)
-         ↑
-Layer 2: SHA3-256 Content Hash (FIPS 202)
-         ↑
-Layer 1: Canonical Length-Prefixed Encoding
-         ↑
-      [Input Data]
+```mermaid
+flowchart BT
+    input["Input Data"]:::gray --> L1
+    L1["Layer 1: Canonical Length-Prefixed Encoding"]:::gray --> L2
+    L2["Layer 2: SHA3-256 Content Hash (FIPS 202)"]:::gold --> L3
+    L3["Layer 3: HMAC-SHA3-256 Authentication (RFC 2104)"]:::blue --> L4
+    L4["Layer 4: Ed25519 Classical Signature (RFC 8032)"]:::black --> L5
+    L5["Layer 5: ML-DSA-65 Quantum-Resistant Signature (FIPS 204)"]:::gold --> L6
+    L6["Layer 6: RFC 3161 Trusted Timestamp (optional)"]:::blue
+
+classDef gold fill:#B4B124,stroke:#000000,color:#000000;
+classDef blue fill:#11AEED,stroke:#000000,color:#000000;
+classDef black fill:#000000,stroke:#B4B124,color:#f6f6f6;
+classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 ```
 
 ### Layer-by-Layer Description
@@ -145,25 +171,26 @@ Optional third-party timestamp providing non-repudiation and cryptographic proof
 
 ### Module Dependency Graph
 
-```
-crypto_api.py
-  ├── pqc_backends.py        (Dilithium, Kyber, SPHINCS+)
-  ├── rfc3161_timestamp.py   (RFC 3161 TSP)
-  └── [C library]            (HMAC/HKDF/Ed25519/AES-GCM)
+```mermaid
+flowchart TD
+    capi["crypto_api.py"]:::blue --> pqc["pqc_backends.py\nDilithium, Kyber, SPHINCS+"]:::gold
+    capi --> rfc["rfc3161_timestamp.py\nRFC 3161 TSP"]:::gold
+    capi --> clib["C Library\nHMAC / HKDF / Ed25519 / AES-GCM"]:::black
 
-key_management.py
-  └── secure_memory.py       (Secure zeroing, mlock)
+    km["key_management.py"]:::blue --> sm["secure_memory.py\nSecure zeroing, mlock"]:::gold
 
-hybrid_combiner.py
-  ├── [C library]            (HKDF-SHA3-256)
-  └── pqc_backends.py        (Kyber KEM)
+    hc["hybrid_combiner.py"]:::blue --> clib
+    hc --> pqc
 
-adaptive_posture.py
-  ├── crypto_api.py
-  └── key_management.py
+    ap["adaptive_posture.py"]:::blue --> capi
+    ap --> km
 
-double_helix_engine.py / equations.py
-  └── numpy                  (optional, for monitoring math)
+    dhe["double_helix_engine.py\nequations.py"]:::blue --> np["numpy (optional)"]:::gray
+
+classDef gold fill:#B4B124,stroke:#000000,color:#000000;
+classDef blue fill:#11AEED,stroke:#000000,color:#000000;
+classDef black fill:#000000,stroke:#B4B124,color:#f6f6f6;
+classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 ```
 
 ### C Library Components (`src/c/`)
@@ -191,45 +218,23 @@ double_helix_engine.py / equations.py
 
 ## Data Flow: Package Creation
 
-```
-Input Data (Omni-Codes)
-        │
-        ▼
-┌──────────────────────┐
-│  Canonical Encoding  │  Length-prefixed deterministic encoding
-└──────────────────────┘
-        │
-        ▼
-┌──────────────────────┐
-│   SHA3-256 Hash      │  content_hash = SHA3_256(encoded_data)
-└──────────────────────┘
-        │
-        ▼
-┌──────────────────────┐
-│  HMAC-SHA3-256       │  hmac_tag = HMAC(hmac_key, content_hash)
-└──────────────────────┘
-        │
-        ▼
-┌──────────────────────┐
-│  Ed25519 Sign        │  sig_ed = Ed25519_Sign(content_hash, sk_ed)
-└──────────────────────┘
-        │
-        ▼
-┌──────────────────────┐
-│  ML-DSA-65 Sign      │  sig_pqc = Dilithium_Sign(content_hash, sk_dil)
-└──────────────────────┘
-        │
-        ▼
-┌──────────────────────┐
-│  RFC 3161 Timestamp  │  (optional) ts = TSA_Request(content_hash)
-└──────────────────────┘
-        │
-        ▼
-┌──────────────────────────────────────────────────────┐
-│              Crypto Package (JSON)                    │
-│  { content_hash, hmac_tag, sig_ed25519,               │
-│    sig_dilithium, timestamp, rfc3161_token }          │
-└──────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    input["Input Data"]:::gray
+    encode["Canonical Encoding\nLength-prefixed deterministic encoding"]:::gray
+    hash["SHA3-256 Hash\ncontent_hash = SHA3_256(encoded_data)"]:::gold
+    hmac["HMAC-SHA3-256\nhmac_tag = HMAC(hmac_key, content_hash)"]:::blue
+    ed["Ed25519 Sign\nsig_ed = Ed25519_Sign(content_hash, sk_ed)"]:::black
+    pqc["ML-DSA-65 Sign\nsig_pqc = Dilithium_Sign(content_hash, sk_dil)"]:::gold
+    ts["RFC 3161 Timestamp\nts = TSA_Request(content_hash)"]:::blue
+    pkg["Crypto Package (JSON)\ncontent_hash · hmac_tag · sig_ed25519\nsig_dilithium · timestamp · rfc3161_token"]:::black
+
+    input --> encode --> hash --> hmac --> ed --> pqc --> ts --> pkg
+
+classDef gold fill:#B4B124,stroke:#000000,color:#000000;
+classDef blue fill:#11AEED,stroke:#000000,color:#000000;
+classDef black fill:#000000,stroke:#B4B124,color:#f6f6f6;
+classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 ```
 
 ---
@@ -238,22 +243,21 @@ Input Data (Omni-Codes)
 
 The 3R monitoring framework provides real-time visibility with less than 2% performance overhead:
 
-```
-                   ┌─────────────────────┐
-                   │   3R Monitor        │
-                   ├─────────────────────┤
-  Crypto Ops ───►  │  Resonance Engine   │  FFT anomaly detection
-                   │  (Frequency Domain) │
-                   ├─────────────────────┤
-  Timing Data ───► │  Recursion Engine   │  Multi-scale pattern analysis
-                   │  (Hierarchical)     │
-                   ├─────────────────────┤
-  Code Metrics ──► │  Refactoring Engine │  Complexity analysis
-                   │  (Code Quality)     │
-                   └─────────────────────┘
-                           │
-                           ▼
-                   Anomaly Alerts + Metrics
+```mermaid
+flowchart LR
+    ops["Crypto Ops"]:::gray --> res["Resonance Engine\nFFT anomaly detection"]:::blue
+    timing["Timing Data"]:::gray --> rec["Recursion Engine\nMulti-scale pattern analysis"]:::gold
+    metrics["Code Metrics"]:::gray --> ref["Refactoring Engine\nComplexity analysis"]:::blue
+
+    res --> verdict["PostureEvaluator\nNOMINAL / ELEVATED\nHIGH / CRITICAL"]:::black
+    rec --> verdict
+    ref --> verdict
+    verdict --> alerts["Anomaly Alerts + Metrics"]:::gold
+
+classDef gold fill:#B4B124,stroke:#000000,color:#000000;
+classDef blue fill:#11AEED,stroke:#000000,color:#000000;
+classDef black fill:#000000,stroke:#B4B124,color:#f6f6f6;
+classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 ```
 
 > **Note:** The 3R system surfaces statistical anomalies for security review. It is not a guarantee of detection or prevention for timing attacks or side-channel vulnerabilities.
@@ -262,20 +266,20 @@ The 3R monitoring framework provides real-time visibility with less than 2% perf
 
 ## Key Management Architecture
 
-```
-Master Secret (256-bit CSPRNG)
-        │
-        ▼
-┌──────────────────────┐
-│  HKDF-SHA3-256       │  Domain-separated key derivation
-└──────────────────────┘
-        ├─────────────────► HMAC Key (256-bit)
-        ├─────────────────► Ed25519 Seed (256-bit)
-        ├─────────────────► Dilithium Seed
-        └─────────────────► Derived Subkeys (by path)
+```mermaid
+flowchart TD
+    master["Master Secret\nsecrets.token_bytes(32)"]:::gray --> hkdf["ama_hkdf.c\nHKDF-SHA3-256"]:::gold
+    hkdf --> hmac_key["HMAC Key (256-bit)"]:::blue
+    hkdf --> ed_seed["Ed25519 Seed (256-bit)"]:::blue
+    hkdf --> dil_seed["Dilithium Seed"]:::blue
+    hkdf --> subkeys["Derived Subkeys (by path)"]:::blue
 
-HD Key Derivation Path: m/{purpose}'/{account}'/{change}'/{index}'
-(BIP32-compatible, hardened-only)
+    subkeys --> path["HD Path: m / purpose' / account' / change' / index'\nBIP32-compatible, hardened-only"]:::black
+
+classDef gold fill:#B4B124,stroke:#000000,color:#000000;
+classDef blue fill:#11AEED,stroke:#000000,color:#000000;
+classDef black fill:#000000,stroke:#B4B124,color:#f6f6f6;
+classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 ```
 
 See [Key Management](Key-Management) for full details.
