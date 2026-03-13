@@ -212,8 +212,8 @@ jobs:
       - name: Check import sorting (isort)
         run: isort --check-only --diff ama_cryptography/ tests/
 
-      - name: Type check (mypy)
-        run: mypy ama_cryptography/ --ignore-missing-imports
+      - name: Type check (mypy --strict)
+        run: mypy --strict ama_cryptography/ tests/
         continue-on-error: false
 
   # Security Audit
