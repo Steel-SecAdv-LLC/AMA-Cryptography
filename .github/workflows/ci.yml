@@ -50,9 +50,13 @@ jobs:
         python -m pytest tests/ -v --tb=short --no-cov
 
     - name: Run NIST KAT tests (if oqs available)
-      continue-on-error: true
       run: |
-        python -m pytest tests/test_pqc_kat.py -v --tb=short || echo "KAT tests skipped (oqs not available)"
+        if python -c "import oqs" 2>/dev/null; then
+          echo "oqs available — running KAT tests (hard-fail)"
+          python -m pytest tests/test_pqc_kat.py -v --tb=short
+        else
+          echo "::warning::oqs not available — skipping KAT tests"
+        fi
 
     - name: Run demonstration
       run: |
