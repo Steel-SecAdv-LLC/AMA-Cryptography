@@ -223,7 +223,7 @@ help:
 	@echo ""
 	@echo "Development targets:"
 	@echo "  make format         - Format code with black/isort"
-	@echo "  make lint           - Lint code with flake8/mypy"
+	@echo "  make lint           - Lint code with ruff/mypy"
 	@echo "  make docs           - Generate API documentation"
 	@echo "  make profile        - Profile performance"
 	@echo ""

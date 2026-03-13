@@ -177,9 +177,8 @@ jobs:
     - name: Semgrep security scan (reporting only)
       continue-on-error: true
       run: |
-        pip install semgrep
+        python -m pip install semgrep==1.74.0
         semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json
-        semgrep --config .semgrep.yml ama_cryptography/
 
     - name: Upload Semgrep report
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
