@@ -27,14 +27,11 @@ repos:
       - id: isort
         args: ['--profile=black', '--line-length=100']
 
-  - repo: https://github.com/pycqa/flake8
-    rev: 7.0.0
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.4
     hooks:
-      - id: flake8
-        args: ['--max-line-length=100', '--extend-ignore=E203,W503', '--max-complexity=15']
-        additional_dependencies:
-          - flake8-bugbear
-          - flake8-comprehensions
+      - id: ruff
+        args: ['--fix', '--exit-non-zero-on-fix']
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.9.0
@@ -54,6 +51,6 @@ repos:
 # Configuration notes:
 # - black: Code formatter with 100 char line length
 # - isort: Import sorter with black-compatible profile
-# - flake8: Linter with complexity checking
+# - ruff: Linter (replaces flake8)
 # - mypy: Static type checker
 # - bandit: Security linter (skips assert warnings in tests)

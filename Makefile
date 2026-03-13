@@ -84,7 +84,7 @@ format:
 # Lint code
 lint:
 	@echo "Linting code..."
-	@flake8 ama_cryptography/ tests/ --max-line-length=100
+	@ruff check ama_cryptography/ tests/
 	@mypy ama_cryptography/ --ignore-missing-imports
 	@echo "✓ Lint passed"
 
