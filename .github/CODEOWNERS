@@ -18,7 +18,13 @@
 
 # Security-sensitive configuration and workflows
 /.github/workflows/ @Steel-SecAdv-LLC
+/.github/workflows/ci-build-test.yml @Steel-SecAdv-LLC
+/.github/workflows/ci.yml @Steel-SecAdv-LLC
+/.github/workflows/security.yml @Steel-SecAdv-LLC
+/.github/workflows/static-analysis.yml @Steel-SecAdv-LLC
+/.github/workflows/wiki-sync.yml @Steel-SecAdv-LLC
 /.github/CODEOWNERS @Steel-SecAdv-LLC
+/.github/INVARIANTS.md @Steel-SecAdv-LLC
 /SECURITY.md @Steel-SecAdv-LLC
 /SECURITY_ANALYSIS.md @Steel-SecAdv-LLC
 
