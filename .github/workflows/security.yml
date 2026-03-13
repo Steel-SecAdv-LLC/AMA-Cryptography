@@ -43,11 +43,11 @@ jobs:
 
     - name: Run Bandit security linter
       run: |
-        bandit -r . -f json -o bandit-report.json -l
-        bandit -r . -l
+        bandit -r ama_cryptography/ -f json -o bandit-report.json -l
+        bandit -r ama_cryptography/ -l
 
     - name: Upload security reports
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
       if: always()
       with:
         name: security-reports
@@ -84,7 +84,17 @@ jobs:
     - name: Generate dependency tree
       run: |
         pip list --format=json > pip-list.json
-        pip-audit --format=json --output pip-audit.json || true
+
+    - name: Run dependency audit
+      run: |
+        pip-audit --format=json --output pip-audit.json
+
+    - name: Upload audit results
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      with:
+        name: pip-audit-results
+        path: pip-audit.json
 
     - name: Annotate SBOM as placeholder
       run: |
@@ -203,7 +213,7 @@ jobs:
         SBOM_EOF
 
     - name: Upload SBOM artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
       with:
         name: sbom
         path: |

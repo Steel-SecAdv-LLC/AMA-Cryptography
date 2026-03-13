@@ -11,6 +11,8 @@ Validates that:
 3. All symbols in __all__ load correctly when numpy IS present.
 """
 
+from __future__ import annotations
+
 import subprocess
 import sys
 import textwrap

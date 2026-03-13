@@ -14,6 +14,8 @@ This file consolidates fixtures from across the test suite to:
 - Improve test maintainability
 """
 
+from __future__ import annotations
+
 import secrets
 import tempfile
 from collections.abc import Generator

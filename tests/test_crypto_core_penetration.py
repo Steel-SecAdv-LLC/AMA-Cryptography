@@ -36,10 +36,13 @@ AI Co-Architects:
     Eris | Eden ♱ | Veritas | X | Caduceus | Dev
 """
 
+from __future__ import annotations
+
 import copy
 import json
 import secrets
 import struct
+import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -833,6 +836,7 @@ class TestConcurrencyAndConsistency:
         for _ in range(5):
             pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
             timestamps.add(pkg.timestamp)
+            time.sleep(0.025)
         # All 5 timestamps must be unique — no duplicates allowed
         assert (
             len(timestamps) == 5

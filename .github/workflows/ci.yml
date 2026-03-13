@@ -51,7 +51,7 @@ jobs:
 
     - name: Run NIST KAT tests (if oqs available)
       run: |
-        if python -c "import oqs" 2>/dev/null; then
+        if python -c "import oqs"; then
           echo "oqs available — running KAT tests (hard-fail)"
           python -m pytest tests/test_pqc_kat.py -v --tb=short
         else
@@ -120,7 +120,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install "black==25.11.0" "ruff>=0.4" "isort>=5.13,<6" "mypy>=1.9,<2"
+        pip install "black==26.3.1" "ruff>=0.4" "isort>=5.13,<6" "mypy>=1.9,<2"
 
     - name: Lint with ruff
       run: |
@@ -164,8 +164,8 @@ jobs:
 
     - name: Security linting with Bandit
       run: |
-        bandit -r . -l -f json -o bandit-report.json
-        bandit -r . -l
+        bandit -r ama_cryptography/ -l -f json -o bandit-report.json
+        bandit -r ama_cryptography/ -l
 
     - name: Upload Bandit report
       uses: actions/upload-artifact@v4

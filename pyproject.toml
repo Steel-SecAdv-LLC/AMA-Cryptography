@@ -83,7 +83,7 @@ dev = [
     "pytest-benchmark>=4.0.0",
     "pytest-xdist>=3.0.0",
     "hypothesis>=6.0.0",
-    "black==25.11.0; python_version >= '3.9'",
+    "black>=26.3.1; python_version >= '3.10'",
     "ruff>=0.4.0",
     "mypy>=1.9.0",
     "isort>=5.12.0",
@@ -103,7 +103,7 @@ Issues = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/issues"
 
 # Ruff configuration — replaces flake8, isort
 [tool.ruff]
-target-version = "py39"
+target-version = "py38"
 line-length = 100
 
 [tool.ruff.lint]
@@ -202,7 +202,7 @@ ignore = []  # Do not add ignores without a comment explaining why.
 # Black configuration
 [tool.black]
 line-length = 100
-target-version = ["py39"]
+target-version = ["py38", "py39", "py310", "py311", "py312"]
 skip-string-normalization = false
 
 # isort configuration (handled by ruff I rules, kept for standalone isort compat)
@@ -212,7 +212,7 @@ line_length = 100
 
 # MyPy configuration — strict mode
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.8"
 strict = true
 disallow_untyped_defs = true
 disallow_any_generics = true

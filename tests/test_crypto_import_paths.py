@@ -34,6 +34,7 @@ AI Co-Architects:
 import base64
 from typing import Any
 from unittest.mock import MagicMock, patch
+from urllib.parse import urlparse
 
 import pytest
 
@@ -128,14 +129,21 @@ class TestRFC3161SuccessPath:
         # Verify return value
         assert tsr == b"TSR_RESPONSE"
 
-        # Verify mock was called with expected arguments (not just called)
-        mock_run.assert_called_once()
-        call_args = mock_run.call_args
-        assert call_args is not None, "subprocess.run was not called"
+        # Verify subprocess.run was called with expected signature
+        run_args, run_kwargs = mock_run.call_args
+        assert run_args[0][0] == "openssl", "subprocess.run must invoke openssl for RFC 3161"
+        assert (
+            run_kwargs.get("input") is not None
+        ), "TSQ bytes must be passed as input to subprocess.run"
 
+        # Verify urlopen was called with a Request targeting the TSA URL
         mock_urlopen.assert_called_once()
         urlopen_args = mock_urlopen.call_args
-        assert urlopen_args is not None, "urlopen was not called"
+        request_obj = urlopen_args[0][0]
+        parsed = urlparse(request_obj.full_url)
+        assert (
+            parsed.hostname == "tsa.example.com"
+        ), f"Expected TSA hostname tsa.example.com, got {parsed.hostname}"
 
     def test_create_crypto_package_rfc3161_success(self, monkeypatch: Any) -> None:
         """Test package creation with successful RFC 3161 timestamp."""
@@ -150,10 +158,25 @@ class TestRFC3161SuccessPath:
                 use_rfc3161=True,
             )
 
-        # Verify the mock was called with correct arguments
-        mock_tsa.assert_called_once()
-        call_args = mock_tsa.call_args
-        assert call_args is not None, "get_rfc3161_timestamp was not called"
+        # Verify the mock was called with expected signature
+        tsa_args = mock_tsa.call_args
+        payload = tsa_args.args[0] if tsa_args.args else tsa_args.kwargs.get("data")
+        assert (
+            isinstance(payload, (bytes, bytearray)) and len(payload) > 0
+        ), "TSA payload must be non-empty bytes"
+        url_arg = tsa_args.args[1] if len(tsa_args.args) > 1 else tsa_args.kwargs.get("tsa_url")
+        # When url_arg is None, the function body resolves to its hardcoded
+        # default "https://freetsa.org/tsr".  Verify the source contains that
+        # HTTPS fallback so the test breaks if anyone changes it to HTTP.
+        if url_arg is None:
+            import inspect
+
+            src = inspect.getsource(dgs.get_rfc3161_timestamp)
+            assert (
+                'tsa_url = "https://' in src
+            ), "get_rfc3161_timestamp default TSA URL must use HTTPS"
+        else:
+            assert url_arg.startswith("https://"), "TSA URL must use HTTPS"
 
         # Verify package fields
         assert pkg.timestamp_token == base64.b64encode(b"TSR").decode("ascii")
