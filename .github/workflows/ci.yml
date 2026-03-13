@@ -122,13 +122,13 @@ jobs:
         python -m pip install --upgrade pip
         pip install "black==25.11.0" "ruff>=0.4" "isort>=5.13,<6" "mypy>=1.9,<2"
 
-    - name: Check code formatting with Black
-      run: |
-        black --check --diff ama_cryptography/ tests/ code_guardian_secure.py
-
     - name: Lint with ruff
       run: |
         ruff check .
+
+    - name: Check code formatting with Black
+      run: |
+        black --check --diff .
 
     - name: Check import order with isort
       run: |
