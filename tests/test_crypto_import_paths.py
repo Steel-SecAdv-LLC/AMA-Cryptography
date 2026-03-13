@@ -32,6 +32,7 @@ AI Co-Architects:
 """
 
 import base64
+import unittest.mock
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -128,14 +129,21 @@ class TestRFC3161SuccessPath:
         # Verify return value
         assert tsr == b"TSR_RESPONSE"
 
-        # Verify mock was called with expected arguments (not just called)
-        mock_run.assert_called_once()
-        call_args = mock_run.call_args
-        assert call_args is not None, "subprocess.run was not called"
+        # Verify subprocess.run was called with expected signature
+        mock_run.assert_called_once_with(
+            unittest.mock.ANY,
+            capture_output=True,
+            timeout=unittest.mock.ANY,
+        )
+        # Verify the command list starts with openssl
+        run_cmd = mock_run.call_args[0][0]
+        assert run_cmd[0] == "openssl", f"Expected openssl command, got {run_cmd[0]}"
 
+        # Verify urlopen was called with a Request targeting the TSA URL
         mock_urlopen.assert_called_once()
         urlopen_args = mock_urlopen.call_args
-        assert urlopen_args is not None, "urlopen was not called"
+        request_obj = urlopen_args[0][0]
+        assert "tsa.example.com" in request_obj.full_url
 
     def test_create_crypto_package_rfc3161_success(self, monkeypatch: Any) -> None:
         """Test package creation with successful RFC 3161 timestamp."""
@@ -150,10 +158,12 @@ class TestRFC3161SuccessPath:
                 use_rfc3161=True,
             )
 
-        # Verify the mock was called with correct arguments
+        # Verify the mock was called with expected signature
         mock_tsa.assert_called_once()
         call_args = mock_tsa.call_args
         assert call_args is not None, "get_rfc3161_timestamp was not called"
+        # First positional arg is the data to timestamp (bytes)
+        assert isinstance(call_args[0][0], bytes), "First arg must be bytes (data to timestamp)"
 
         # Verify package fields
         assert pkg.timestamp_token == base64.b64encode(b"TSR").decode("ascii")

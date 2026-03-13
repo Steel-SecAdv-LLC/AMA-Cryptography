@@ -48,6 +48,8 @@ Version: 2.0
 AI Co-Architects:Eris | Eden ♱ | Veritas | X | Caduceus | Dev
 """
 
+from __future__ import annotations
+
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path

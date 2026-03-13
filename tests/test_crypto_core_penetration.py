@@ -36,6 +36,8 @@ AI Co-Architects:
     Eris | Eden ♱ | Veritas | X | Caduceus | Dev
 """
 
+from __future__ import annotations
+
 import copy
 import json
 import secrets

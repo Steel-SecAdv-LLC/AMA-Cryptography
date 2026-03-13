@@ -16,6 +16,8 @@ Tests:
 - RFC 8032 Section 7.1 test vectors (both backends)
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 import pytest

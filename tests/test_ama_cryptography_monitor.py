@@ -608,7 +608,7 @@ def complex_function(a, b, c, d):
     else:
         result = 0
 
-    for _ in range(10):
+    for i in range(10):
         if i % 2 == 0:
             result += i
         else:
