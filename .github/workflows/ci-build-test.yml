@@ -201,7 +201,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install "black==25.11.0" "flake8>=7.0,<8" "mypy>=1.9,<2" "isort>=5.13,<6"
+          pip install "black==25.11.0" "ruff>=0.4" "mypy>=1.9,<2" "isort>=5.13,<6"
 
       - name: Check formatting (black)
         run: black --check --diff ama_cryptography/ tests/
@@ -209,8 +209,8 @@ jobs:
       - name: Check import sorting (isort)
         run: isort --check-only --diff ama_cryptography/ tests/
 
-      - name: Lint (flake8)
-        run: flake8 ama_cryptography/ tests/ --max-line-length=100
+      - name: Lint (ruff)
+        run: ruff check .
 
       - name: Type check (mypy)
         run: mypy ama_cryptography/ --ignore-missing-imports
