@@ -19,14 +19,11 @@ hypothesis==6.151.9
 coverage==7.13.4
 
 # --- Linting & formatting ---
-black==25.11.0
-flake8==7.3.0
+black==26.3.1
 isort==8.0.1
 mypy==1.19.1
 mypy_extensions==1.1.0
-pycodestyle==2.14.0
-pyflakes==3.4.0
-mccabe==0.7.0
+ruff==0.8.3
 
 # --- Security scanning ---
 bandit==1.9.4

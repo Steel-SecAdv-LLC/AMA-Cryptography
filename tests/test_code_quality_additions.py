@@ -16,14 +16,10 @@ Date: 2026-03-08
 Version: 2.0
 """
 
-import importlib
 import logging
-import warnings
-from unittest.mock import patch
+from typing import Any
 
 import pytest
-
-from ama_cryptography import secure_memory as _sm_module
 
 # Check if native backends are available
 try:
@@ -57,104 +53,67 @@ skip_no_native_secp256k1 = pytest.mark.skipif(
 class TestSecureMemoryErrorClasses:
     """Tests for SecureMemoryError exception classes."""
 
-    def test_secure_memory_error_exists(self):
+    def test_secure_memory_error_exists(self) -> None:
         """SecureMemoryError class is defined."""
         from ama_cryptography.secure_memory import SecureMemoryError
 
         assert issubclass(SecureMemoryError, Exception)
 
-    def test_secure_memory_not_available_exists(self):
-        """SecureMemoryNotAvailable class is defined."""
-        from ama_cryptography.secure_memory import SecureMemoryError, SecureMemoryNotAvailable
-
-        assert issubclass(SecureMemoryNotAvailable, SecureMemoryError)
-
-    def test_secure_memory_error_can_be_raised(self):
+    def test_secure_memory_error_can_be_raised(self) -> None:
         """SecureMemoryError can be raised and caught."""
         from ama_cryptography.secure_memory import SecureMemoryError
 
         with pytest.raises(SecureMemoryError, match="test error message"):
             raise SecureMemoryError("test error message")
 
-    def test_secure_memory_not_available_can_be_raised(self):
-        """SecureMemoryNotAvailable can be raised and caught."""
-        from ama_cryptography.secure_memory import SecureMemoryNotAvailable
 
-        with pytest.raises(SecureMemoryNotAvailable, match="pynacl"):
-            raise SecureMemoryNotAvailable("pynacl not installed")
+class TestSecureMemoryImplementation:
+    """Tests for stdlib-only secure memory implementation."""
 
-    def test_check_nacl_available_raises_when_unavailable(self):
-        """_check_nacl_available raises when pynacl is unavailable."""
-        from ama_cryptography.secure_memory import SecureMemoryNotAvailable
-
-        # Temporarily mock _HAS_NACL to False
-        with patch("ama_cryptography.secure_memory._HAS_NACL", False):
-            from ama_cryptography.secure_memory import _check_nacl_available
-
-            with pytest.raises(SecureMemoryNotAvailable):
-                _check_nacl_available()
-
-
-class TestSecureMemoryFallbackBehavior:
-    """Tests for fallback behavior when pynacl is unavailable."""
-
-    def test_secure_memzero_fallback_works(self):
-        """secure_memzero works without pynacl (fallback mode)."""
-        from ama_cryptography.secure_memory import _fallback_memzero
+    def test_secure_memzero_works(self) -> None:
+        """secure_memzero zeros data using multi-pass overwrite."""
+        from ama_cryptography.secure_memory import _memzero
 
         data = bytearray(b"sensitive data here")
-        _fallback_memzero(data)
+        _memzero(data)
 
         assert all(b == 0 for b in data)
 
-    def test_fallback_memzero_multipass(self):
-        """Fallback memzero performs multi-pass overwrite."""
-        from ama_cryptography.secure_memory import _fallback_memzero
+    def test_memzero_multipass(self) -> None:
+        """_memzero performs multi-pass overwrite."""
+        from ama_cryptography.secure_memory import _memzero
 
-        # Create data and verify fallback zeros it
+        # Create data and verify it zeros it
         data = bytearray(100)
         for i in range(len(data)):
             data[i] = 0xAB
 
-        _fallback_memzero(data)
+        _memzero(data)
 
         # All bytes should be zero
         assert all(b == 0 for b in data)
 
-    def test_mlock_without_nacl_returns_false(self):
-        """secure_mlock returns False when pynacl unavailable."""
-        with patch("ama_cryptography.secure_memory._HAS_NACL", False):
-            # Need to reload to pick up the patched value
-            importlib.reload(_sm_module)
+    def test_mlock_raises_not_implemented(self) -> None:
+        """secure_mlock raises NotImplementedError (libsodium removed)."""
+        from ama_cryptography.secure_memory import secure_mlock
 
-            data = bytearray(100)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", RuntimeWarning)
-                result = _sm_module.secure_mlock(data)
+        data = bytearray(100)
+        with pytest.raises(NotImplementedError, match="libsodium"):
+            secure_mlock(data)
 
-            assert result is False
+    def test_munlock_raises_not_implemented(self) -> None:
+        """secure_munlock raises NotImplementedError (libsodium removed)."""
+        from ama_cryptography.secure_memory import secure_munlock
 
-            # Restore
-            importlib.reload(_sm_module)
-
-    def test_munlock_without_nacl_returns_false(self):
-        """secure_munlock returns False when pynacl unavailable."""
-        with patch("ama_cryptography.secure_memory._HAS_NACL", False):
-            importlib.reload(_sm_module)
-
-            data = bytearray(100)
-            result = _sm_module.secure_munlock(data)
-
-            assert result is False
-
-            # Restore
-            importlib.reload(_sm_module)
+        data = bytearray(100)
+        with pytest.raises(NotImplementedError, match="libsodium"):
+            secure_munlock(data)
 
 
 class TestSecureMemoryGetStatus:
     """Tests for get_status function."""
 
-    def test_get_status_returns_all_keys(self):
+    def test_get_status_returns_all_keys(self) -> None:
         """get_status returns all expected keys."""
         from ama_cryptography.secure_memory import get_status
 
@@ -165,14 +124,14 @@ class TestSecureMemoryGetStatus:
         assert "initialized" in status
         assert "mlock_available" in status
 
-    def test_get_status_backend_values(self):
-        """get_status backend is either libsodium or fallback."""
+    def test_get_status_backend_values(self) -> None:
+        """get_status backend is stdlib."""
         from ama_cryptography.secure_memory import get_status
 
         status = get_status()
-        assert status["backend"] in ("libsodium", "fallback")
+        assert status["backend"] == "stdlib"
 
-    def test_get_status_types(self):
+    def test_get_status_types(self) -> None:
         """get_status returns correct types."""
         from ama_cryptography.secure_memory import get_status
 
@@ -192,7 +151,7 @@ class TestSecureMemoryGetStatus:
 class TestLoggingInfrastructure:
     """Tests for logging infrastructure in modules."""
 
-    def test_equations_has_logger(self):
+    def test_equations_has_logger(self) -> None:
         """equations module has logger configured."""
         from ama_cryptography import equations
 
@@ -200,7 +159,7 @@ class TestLoggingInfrastructure:
         assert isinstance(equations.logger, logging.Logger)
         assert equations.logger.name == "ama_cryptography.equations"
 
-    def test_double_helix_engine_has_logger(self):
+    def test_double_helix_engine_has_logger(self) -> None:
         """double_helix_engine module has logger configured."""
         from ama_cryptography import double_helix_engine
 
@@ -208,7 +167,7 @@ class TestLoggingInfrastructure:
         assert isinstance(double_helix_engine.logger, logging.Logger)
         assert double_helix_engine.logger.name == "ama_cryptography.double_helix_engine"
 
-    def test_key_management_has_logger(self):
+    def test_key_management_has_logger(self) -> None:
         """key_management module has logger configured."""
         from ama_cryptography import key_management
 
@@ -216,7 +175,7 @@ class TestLoggingInfrastructure:
         assert isinstance(key_management.logger, logging.Logger)
         assert key_management.logger.name == "ama_cryptography.key_management"
 
-    def test_logger_hierarchy(self):
+    def test_logger_hierarchy(self) -> None:
         """All loggers are under ama_cryptography namespace."""
         from ama_cryptography import double_helix_engine, equations, key_management
 
@@ -227,28 +186,28 @@ class TestLoggingInfrastructure:
 class TestLoggingLevels:
     """Tests for logging level configuration."""
 
-    def test_logger_can_log_info(self):
+    def test_logger_can_log_info(self) -> None:
         """Loggers can log at INFO level."""
         from ama_cryptography import equations
 
         # Should not raise
         equations.logger.info("Test info message")
 
-    def test_logger_can_log_warning(self):
+    def test_logger_can_log_warning(self) -> None:
         """Loggers can log at WARNING level."""
         from ama_cryptography import equations
 
         # Should not raise
         equations.logger.warning("Test warning message")
 
-    def test_logger_can_log_error(self):
+    def test_logger_can_log_error(self) -> None:
         """Loggers can log at ERROR level."""
         from ama_cryptography import equations
 
         # Should not raise
         equations.logger.error("Test error message")
 
-    def test_logger_can_log_debug(self):
+    def test_logger_can_log_debug(self) -> None:
         """Loggers can log at DEBUG level."""
         from ama_cryptography import equations
 
@@ -265,7 +224,7 @@ class TestKeyManagementDecryptPaths:
     """Tests for key_management.py decrypt functionality."""
 
     @pytest.fixture
-    def temp_storage(self, tmp_path):
+    def temp_storage(self, tmp_path: Any) -> Any:
         """Create a temporary storage directory."""
         from ama_cryptography.key_management import SecureKeyStorage
 
@@ -274,7 +233,7 @@ class TestKeyManagementDecryptPaths:
         return storage
 
     @skip_no_native_aes
-    def test_store_and_retrieve_key(self, temp_storage):
+    def test_store_and_retrieve_key(self, temp_storage: Any) -> None:
         """Store and retrieve a key using AES-256-GCM."""
         import secrets
 
@@ -291,7 +250,7 @@ class TestKeyManagementDecryptPaths:
         assert isinstance(retrieved, bytes)
 
     @skip_no_native_aes
-    def test_retrieve_returns_bytes_type(self, temp_storage):
+    def test_retrieve_returns_bytes_type(self, temp_storage: Any) -> None:
         """Retrieved key is explicitly bytes type."""
         import secrets
 
@@ -304,13 +263,13 @@ class TestKeyManagementDecryptPaths:
         # Type check - this tests our type annotation fix
         assert type(retrieved) is bytes
 
-    def test_retrieve_nonexistent_key_returns_none(self, temp_storage):
+    def test_retrieve_nonexistent_key_returns_none(self, temp_storage: Any) -> None:
         """Retrieving non-existent key returns None."""
         result = temp_storage.retrieve_key("nonexistent-key")
         assert result is None
 
     @skip_no_native_aes
-    def test_store_multiple_keys(self, temp_storage):
+    def test_store_multiple_keys(self, temp_storage: Any) -> None:
         """Store and retrieve multiple keys."""
         import secrets
 
@@ -328,7 +287,7 @@ class TestKeyManagementDecryptPaths:
             assert retrieved == expected_data
 
     @skip_no_native_aes
-    def test_delete_key(self, temp_storage):
+    def test_delete_key(self, temp_storage: Any) -> None:
         """Delete a key removes it from storage."""
         import secrets
 
@@ -343,13 +302,13 @@ class TestKeyManagementDecryptPaths:
 
         assert temp_storage.retrieve_key(key_id) is None
 
-    def test_delete_nonexistent_key_returns_false(self, temp_storage):
+    def test_delete_nonexistent_key_returns_false(self, temp_storage: Any) -> None:
         """Deleting non-existent key returns False."""
         result = temp_storage.delete_key("nonexistent")
         assert result is False
 
     @skip_no_native_aes
-    def test_list_keys(self, temp_storage):
+    def test_list_keys(self, temp_storage: Any) -> None:
         """List all stored keys."""
         import secrets
 
@@ -368,7 +327,7 @@ class TestKeyManagementContextManager:
     """Tests for SecureKeyStorage context manager."""
 
     @skip_no_native_aes
-    def test_context_manager_closes(self, tmp_path):
+    def test_context_manager_closes(self, tmp_path: Any) -> None:
         """SecureKeyStorage context manager closes properly."""
         from ama_cryptography.key_management import SecureKeyStorage
 
@@ -384,7 +343,7 @@ class TestKeyManagementContextManager:
 class TestHDKeyDerivation:
     """Tests for HD key derivation."""
 
-    def test_derive_key_returns_bytes(self):
+    def test_derive_key_returns_bytes(self) -> None:
         """derive_path with hardened-only path returns bytes."""
         from ama_cryptography.key_management import HDKeyDerivation
 
@@ -394,7 +353,7 @@ class TestHDKeyDerivation:
         assert isinstance(key, bytes)
         assert len(key) == 32
 
-    def test_different_indices_different_keys(self):
+    def test_different_indices_different_keys(self) -> None:
         """Different hardened indices produce different keys."""
         from ama_cryptography.key_management import HDKeyDerivation
 
@@ -405,7 +364,7 @@ class TestHDKeyDerivation:
         assert key1 != key2
 
     @skip_no_native_secp256k1
-    def test_non_hardened_derivation(self):
+    def test_non_hardened_derivation(self) -> None:
         """Non-hardened derivation works with native secp256k1."""
         from ama_cryptography.key_management import HDKeyDerivation
 
@@ -414,7 +373,7 @@ class TestHDKeyDerivation:
         assert len(key) == 32
         assert len(chain) == 32
 
-    def test_deterministic_derivation(self):
+    def test_deterministic_derivation(self) -> None:
         """Same seed produces same keys."""
         from ama_cryptography.key_management import HDKeyDerivation
 
@@ -432,7 +391,7 @@ class TestHDKeyDerivation:
 class TestKeyRotationManager:
     """Tests for key rotation manager."""
 
-    def test_register_key(self):
+    def test_register_key(self) -> None:
         """Register a new key."""
         from datetime import timedelta
 
@@ -445,7 +404,7 @@ class TestKeyRotationManager:
         assert metadata.key_id == "key-v1"
         assert metadata.purpose == "signing"
 
-    def test_get_active_key(self):
+    def test_get_active_key(self) -> None:
         """Get the active key."""
         from datetime import timedelta
 
@@ -457,7 +416,7 @@ class TestKeyRotationManager:
         active = manager.get_active_key()
         assert active == "key-v1"
 
-    def test_should_rotate_new_key(self):
+    def test_should_rotate_new_key(self) -> None:
         """New key should not need rotation."""
         from datetime import timedelta
 
@@ -468,7 +427,7 @@ class TestKeyRotationManager:
 
         assert manager.should_rotate("key-v1") is False
 
-    def test_initiate_rotation(self):
+    def test_initiate_rotation(self) -> None:
         """Initiate key rotation."""
         from datetime import timedelta
 
@@ -491,14 +450,14 @@ class TestKeyRotationManager:
 class TestSecureRandomBytes:
     """Additional tests for secure random bytes."""
 
-    def test_zero_length(self):
+    def test_zero_length(self) -> None:
         """Zero length returns empty bytes."""
         from ama_cryptography.secure_memory import secure_random_bytes
 
         result = secure_random_bytes(0)
         assert result == b""
 
-    def test_large_size(self):
+    def test_large_size(self) -> None:
         """Can generate large random buffers."""
         from ama_cryptography.secure_memory import secure_random_bytes
 
@@ -508,7 +467,7 @@ class TestSecureRandomBytes:
         assert len(result) == size
         assert isinstance(result, bytes)
 
-    def test_entropy_quality(self):
+    def test_entropy_quality(self) -> None:
         """Random bytes have reasonable entropy."""
         from ama_cryptography.secure_memory import secure_random_bytes
 
@@ -527,21 +486,21 @@ class TestSecureRandomBytes:
 class TestConstantTimeCompareEdgeCases:
     """Edge case tests for constant time comparison."""
 
-    def test_single_byte_equal(self):
+    def test_single_byte_equal(self) -> None:
         """Single byte comparison (equal)."""
         from ama_cryptography.secure_memory import constant_time_compare
 
         assert constant_time_compare(b"\x00", b"\x00") is True
         assert constant_time_compare(b"\xff", b"\xff") is True
 
-    def test_single_byte_different(self):
+    def test_single_byte_different(self) -> None:
         """Single byte comparison (different)."""
         from ama_cryptography.secure_memory import constant_time_compare
 
         assert constant_time_compare(b"\x00", b"\x01") is False
         assert constant_time_compare(b"\x00", b"\xff") is False
 
-    def test_null_bytes(self):
+    def test_null_bytes(self) -> None:
         """Comparison with null bytes."""
         from ama_cryptography.secure_memory import constant_time_compare
 
@@ -550,7 +509,7 @@ class TestConstantTimeCompareEdgeCases:
 
         assert constant_time_compare(a, b) is True
 
-    def test_high_bytes(self):
+    def test_high_bytes(self) -> None:
         """Comparison with high bytes."""
         from ama_cryptography.secure_memory import constant_time_compare
 
@@ -559,7 +518,7 @@ class TestConstantTimeCompareEdgeCases:
 
         assert constant_time_compare(a, b) is True
 
-    def test_one_bit_difference(self):
+    def test_one_bit_difference(self) -> None:
         """Detects single bit difference."""
         from ama_cryptography.secure_memory import constant_time_compare
 
@@ -577,14 +536,13 @@ class TestConstantTimeCompareEdgeCases:
 class TestModuleExports:
     """Tests for module __all__ exports."""
 
-    def test_secure_memory_exports(self):
+    def test_secure_memory_exports(self) -> None:
         """secure_memory exports all expected names."""
         from ama_cryptography import secure_memory
 
         expected_exports = [
             "SecureBuffer",
             "SecureMemoryError",
-            "SecureMemoryNotAvailable",
             "constant_time_compare",
             "get_status",
             "is_available",
@@ -598,7 +556,7 @@ class TestModuleExports:
         for name in expected_exports:
             assert hasattr(secure_memory, name), f"Missing export: {name}"
 
-    def test_key_management_exports(self):
+    def test_key_management_exports(self) -> None:
         """key_management exports expected classes."""
         from ama_cryptography import key_management
 

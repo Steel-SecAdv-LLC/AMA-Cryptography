@@ -15,7 +15,10 @@ Validates:
     - Edge cases: empty inputs, large inputs
 """
 
+from __future__ import annotations
+
 import os
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -31,14 +34,14 @@ def _random_bytes(n: int) -> bytes:
     return os.urandom(n)
 
 
-def _mock_classical_encapsulate(pk: bytes):
+def _mock_classical_encapsulate(pk: bytes) -> tuple[bytes, bytes]:
     """Simulates X25519 encapsulation: returns (ct, ss)."""
     ct = _random_bytes(32)
     ss = _random_bytes(32)
     return ct, ss
 
 
-def _mock_pqc_encapsulate(pk: bytes):
+def _mock_pqc_encapsulate(pk: bytes) -> tuple[bytes, bytes]:
     """Simulates Kyber encapsulation: returns (ct, ss)."""
     ct = _random_bytes(1568)
     ss = _random_bytes(32)
@@ -53,13 +56,13 @@ def _mock_pqc_encapsulate(pk: bytes):
 class TestHybridCombinerPythonHKDF:
     """Tests using the Python HKDF-SHA3-256 fallback (no native lib)."""
 
-    def setup_method(self):
+    def setup_method(self) -> None:
         """Create a combiner forced to Python fallback."""
         # Pass a mock with no ama_hkdf attribute to prevent native detection
         self.combiner = HybridCombiner(native_lib=MagicMock(spec=[]))
         assert not self.combiner._has_native
 
-    def test_combine_produces_32_bytes(self):
+    def test_combine_produces_32_bytes(self) -> None:
         """Default output should be 32 bytes."""
         result = self.combiner.combine(
             classical_ss=_random_bytes(32),
@@ -69,7 +72,7 @@ class TestHybridCombinerPythonHKDF:
         )
         assert len(result) == 32
 
-    def test_combine_custom_output_length(self):
+    def test_combine_custom_output_length(self) -> None:
         """Custom output lengths should work."""
         for length in [16, 48, 64]:
             result = self.combiner.combine(
@@ -81,7 +84,7 @@ class TestHybridCombinerPythonHKDF:
             )
             assert len(result) == length
 
-    def test_deterministic_with_same_inputs(self):
+    def test_deterministic_with_same_inputs(self) -> None:
         """Same inputs must produce same output."""
         css = _random_bytes(32)
         pss = _random_bytes(32)
@@ -94,7 +97,7 @@ class TestHybridCombinerPythonHKDF:
         r2 = self.combiner.combine(css, pss, cct, pct, cpk, ppk)
         assert r1 == r2
 
-    def test_different_secrets_produce_different_output(self):
+    def test_different_secrets_produce_different_output(self) -> None:
         """Changing shared secrets must change the combined secret."""
         cct = _random_bytes(32)
         pct = _random_bytes(1568)
@@ -102,7 +105,7 @@ class TestHybridCombinerPythonHKDF:
         r2 = self.combiner.combine(_random_bytes(32), _random_bytes(32), cct, pct)
         assert r1 != r2
 
-    def test_ciphertext_binding(self):
+    def test_ciphertext_binding(self) -> None:
         """Swapping ciphertexts must change the combined secret (anti-substitution)."""
         css = _random_bytes(32)
         pss = _random_bytes(32)
@@ -114,7 +117,7 @@ class TestHybridCombinerPythonHKDF:
         r2 = self.combiner.combine(css, pss, cct_b, pct)
         assert r1 != r2
 
-    def test_public_key_binding(self):
+    def test_public_key_binding(self) -> None:
         """Different public keys must produce different output."""
         css = _random_bytes(32)
         pss = _random_bytes(32)
@@ -125,7 +128,7 @@ class TestHybridCombinerPythonHKDF:
         r2 = self.combiner.combine(css, pss, cct, pct, _random_bytes(32), b"")
         assert r1 != r2
 
-    def test_label_domain_separation(self):
+    def test_label_domain_separation(self) -> None:
         """Different labels must produce different output."""
         no_native = MagicMock(spec=[])
         combiner_a = HybridCombiner(native_lib=no_native, label=b"label-a")
@@ -140,7 +143,7 @@ class TestHybridCombinerPythonHKDF:
         r2 = combiner_b.combine(css, pss, cct, pct)
         assert r1 != r2
 
-    def test_empty_public_keys_allowed(self):
+    def test_empty_public_keys_allowed(self) -> None:
         """Empty public keys should work (no binding, still valid)."""
         result = self.combiner.combine(
             classical_ss=_random_bytes(32),
@@ -152,7 +155,7 @@ class TestHybridCombinerPythonHKDF:
         )
         assert len(result) == 32
 
-    def test_empty_salt_fallback(self):
+    def test_empty_salt_fallback(self) -> None:
         """HKDF with empty salt should use zero-filled default."""
         result = self.combiner.combine(
             classical_ss=_random_bytes(32),
@@ -171,7 +174,7 @@ class TestHybridCombinerPythonHKDF:
 class TestHybridRoundTrip:
     """Encapsulate + decapsulate must produce identical combined secrets."""
 
-    def test_round_trip_with_mock_kems(self):
+    def test_round_trip_with_mock_kems(self) -> Any:
         """Full encapsulate → decapsulate round-trip."""
         combiner = HybridCombiner(native_lib=None)
 
@@ -187,16 +190,16 @@ class TestHybridRoundTrip:
         pqc_ct = _random_bytes(1568)
         pqc_ss = _random_bytes(32)
 
-        def enc_classical(pk):
+        def enc_classical(pk: Any) -> Any:
             return classical_ct, classical_ss
 
-        def enc_pqc(pk):
+        def enc_pqc(pk: Any) -> Any:
             return pqc_ct, pqc_ss
 
-        def dec_classical(ct, sk):
+        def dec_classical(ct: Any, sk: Any) -> Any:
             return classical_ss
 
-        def dec_pqc(ct, sk):
+        def dec_pqc(ct: Any, sk: Any) -> Any:
             return pqc_ss
 
         encap = combiner.encapsulate_hybrid(enc_classical, enc_pqc, classical_pk, pqc_pk)
@@ -214,7 +217,7 @@ class TestHybridRoundTrip:
         assert encap.combined_secret == decap_secret
         assert len(encap.combined_secret) == 32
 
-    def test_encapsulation_dataclass_fields(self):
+    def test_encapsulation_dataclass_fields(self) -> None:
         """HybridEncapsulation should carry all component data."""
         combiner = HybridCombiner(native_lib=None)
         ct_c = _random_bytes(32)
@@ -234,7 +237,7 @@ class TestHybridRoundTrip:
         assert encap.pqc_shared_secret == ss_p
         assert isinstance(encap.combined_secret, bytes)
 
-    def test_mismatched_ciphertext_breaks_decapsulation(self):
+    def test_mismatched_ciphertext_breaks_decapsulation(self) -> None:
         """Using wrong ciphertext in decapsulation must produce different secret."""
         combiner = HybridCombiner(native_lib=None)
         classical_ss = _random_bytes(32)
@@ -275,14 +278,14 @@ class TestHybridRoundTrip:
 class TestHybridCombinerNativePath:
     """Tests for native C library integration."""
 
-    def test_native_lib_detection(self):
+    def test_native_lib_detection(self) -> None:
         """When native lib has ama_hkdf, _has_native should be True."""
         mock_lib = MagicMock()
         mock_lib.ama_hkdf = MagicMock()
         combiner = HybridCombiner(native_lib=mock_lib)
         assert combiner._has_native
 
-    def test_native_hkdf_called_when_available(self):
+    def test_native_hkdf_called_when_available(self) -> None:
         """combine() should use native path when available."""
         mock_lib = MagicMock()
         mock_lib.ama_hkdf = MagicMock(return_value=0)
@@ -295,7 +298,7 @@ class TestHybridCombinerNativePath:
         )
         mock_lib.ama_hkdf.assert_called_once()
 
-    def test_native_hkdf_error_raises(self):
+    def test_native_hkdf_error_raises(self) -> None:
         """Non-zero return from native HKDF should raise RuntimeError."""
         mock_lib = MagicMock()
         mock_lib.ama_hkdf = MagicMock(return_value=-1)
@@ -308,7 +311,7 @@ class TestHybridCombinerNativePath:
                 pqc_ct=b"\x00" * 1568,
             )
 
-    def test_fallback_when_no_ama_hkdf(self):
+    def test_fallback_when_no_ama_hkdf(self) -> None:
         """Lib without ama_hkdf attribute should fall back to Python."""
         mock_lib = MagicMock(spec=[])  # No attributes
         combiner = HybridCombiner(native_lib=mock_lib)
@@ -331,7 +334,7 @@ class TestHybridCombinerNativePath:
 class TestHKDFEdgeCases:
     """Edge case tests for the Python HKDF-SHA3-256 implementation."""
 
-    def test_large_key_hashed(self):
+    def test_large_key_hashed(self) -> None:
         """HMAC key longer than block_size should be hashed before use."""
         combiner = HybridCombiner(native_lib=None)
         # Use a very large shared secret (> 136 bytes, SHA3-256 block size)
@@ -344,13 +347,13 @@ class TestHKDFEdgeCases:
         )
         assert len(result) == 32
 
-    def test_hkdf_output_exceeding_max_raises(self):
+    def test_hkdf_output_exceeding_max_raises(self) -> None:
         """Output length > 255 * 32 should raise ValueError."""
         combiner = HybridCombiner(native_lib=None)
         with pytest.raises(ValueError, match="exceeds maximum"):
             combiner._hkdf_python(b"salt", b"ikm", b"info", 255 * 32 + 1)
 
-    def test_default_label(self):
+    def test_default_label(self) -> None:
         """Default label should match module constant."""
         combiner = HybridCombiner(native_lib=None)
         assert combiner.label == _HYBRID_LABEL

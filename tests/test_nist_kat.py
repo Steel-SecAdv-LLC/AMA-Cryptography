@@ -48,9 +48,11 @@ Version: 2.0
 AI Co-Architects:Eris | Eden ♱ | Veritas | X | Caduceus | Dev
 """
 
+from __future__ import annotations
+
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterator, List
 
 import pytest
 
@@ -137,7 +139,7 @@ class DilithiumKATVector:
 # =============================================================================
 
 
-def parse_kat_file(filepath: Path) -> Iterator[Dict[str, str]]:
+def parse_kat_file(filepath: Path) -> Iterator[dict[str, str]]:
     """
     Parse a NIST KAT .rsp file into dictionaries of field values.
 
@@ -155,9 +157,9 @@ def parse_kat_file(filepath: Path) -> Iterator[Dict[str, str]]:
     if not filepath.exists():
         return
 
-    current_vector: Dict[str, str] = {}
+    current_vector: dict[str, str] = {}
 
-    with open(filepath, "r") as f:
+    with open(filepath) as f:
         for line in f:
             line = line.strip()
 
@@ -182,7 +184,7 @@ def parse_kat_file(filepath: Path) -> Iterator[Dict[str, str]]:
         yield current_vector
 
 
-def load_kyber_kat_vectors(filepath: Path, max_vectors: int = 10) -> List[KyberKATVector]:
+def load_kyber_kat_vectors(filepath: Path, max_vectors: int = 10) -> list[KyberKATVector]:
     """
     Load Kyber/ML-KEM KAT vectors from a .rsp file.
 
@@ -216,7 +218,7 @@ def load_kyber_kat_vectors(filepath: Path, max_vectors: int = 10) -> List[KyberK
     return vectors
 
 
-def load_dilithium_kat_vectors(filepath: Path, max_vectors: int = 10) -> List[DilithiumKATVector]:
+def load_dilithium_kat_vectors(filepath: Path, max_vectors: int = 10) -> list[DilithiumKATVector]:
     """
     Load Dilithium/ML-DSA KAT vectors from a .rsp file.
 
@@ -286,7 +288,7 @@ class FIPS204KATVector:
 FIPS204_DIR = KAT_DIR / "fips204"
 
 
-def load_fips204_kat_vectors(filepath: Path, max_vectors: int = 10) -> List[FIPS204KATVector]:
+def load_fips204_kat_vectors(filepath: Path, max_vectors: int = 10) -> list[FIPS204KATVector]:
     """
     Load FIPS 204 ML-DSA KAT vectors from a .kat file.
 
@@ -350,7 +352,7 @@ def dilithium_kat_available(variant: str = "dilithium3") -> bool:
 class TestKATVectorParsing:
     """Tests for KAT vector file parsing functionality."""
 
-    def test_kat_directory_exists(self):
+    def test_kat_directory_exists(self) -> None:
         """Verify KAT directory structure exists."""
         assert KAT_DIR.exists(), f"KAT directory not found at {KAT_DIR}"
 
@@ -358,7 +360,7 @@ class TestKATVectorParsing:
         not kyber_kat_available("kyber1024"),
         reason="Kyber-1024 KAT vectors not available",
     )
-    def test_parse_kyber1024_kat(self):
+    def test_parse_kyber1024_kat(self) -> None:
         """Test parsing Kyber-1024 KAT vectors."""
         vectors = load_kyber_kat_vectors(ML_KEM_DIR / "kyber1024.rsp", max_vectors=5)
         assert len(vectors) > 0, "No Kyber-1024 KAT vectors loaded"
@@ -376,7 +378,7 @@ class TestKATVectorParsing:
         not kyber_kat_available("kyber768"),
         reason="Kyber-768 KAT vectors not available",
     )
-    def test_parse_kyber768_kat(self):
+    def test_parse_kyber768_kat(self) -> None:
         """Test parsing Kyber-768 KAT vectors."""
         vectors = load_kyber_kat_vectors(ML_KEM_DIR / "kyber768.rsp", max_vectors=5)
         assert len(vectors) > 0, "No Kyber-768 KAT vectors loaded"
@@ -390,7 +392,7 @@ class TestKATVectorParsing:
         not kyber_kat_available("kyber512"),
         reason="Kyber-512 KAT vectors not available",
     )
-    def test_parse_kyber512_kat(self):
+    def test_parse_kyber512_kat(self) -> None:
         """Test parsing Kyber-512 KAT vectors."""
         vectors = load_kyber_kat_vectors(ML_KEM_DIR / "kyber512.rsp", max_vectors=5)
         assert len(vectors) > 0, "No Kyber-512 KAT vectors loaded"
@@ -404,7 +406,7 @@ class TestKATVectorParsing:
         not dilithium_kat_available("dilithium3"),
         reason="Dilithium3 KAT vectors not available",
     )
-    def test_parse_dilithium3_kat(self):
+    def test_parse_dilithium3_kat(self) -> None:
         """Test parsing Dilithium3 (ML-DSA-65) KAT vectors."""
         vectors = load_dilithium_kat_vectors(ML_DSA_DIR / "dilithium3.rsp", max_vectors=5)
         assert len(vectors) > 0, "No Dilithium3 KAT vectors loaded"
@@ -425,7 +427,7 @@ class TestKATVectorParsing:
         not dilithium_kat_available("dilithium2"),
         reason="Dilithium2 KAT vectors not available",
     )
-    def test_parse_dilithium2_kat(self):
+    def test_parse_dilithium2_kat(self) -> None:
         """Test parsing Dilithium2 (ML-DSA-44) KAT vectors."""
         vectors = load_dilithium_kat_vectors(ML_DSA_DIR / "dilithium2.rsp", max_vectors=5)
         assert len(vectors) > 0, "No Dilithium2 KAT vectors loaded"
@@ -438,7 +440,7 @@ class TestKATVectorParsing:
         not dilithium_kat_available("dilithium5"),
         reason="Dilithium5 KAT vectors not available",
     )
-    def test_parse_dilithium5_kat(self):
+    def test_parse_dilithium5_kat(self) -> None:
         """Test parsing Dilithium5 (ML-DSA-87) KAT vectors."""
         vectors = load_dilithium_kat_vectors(ML_DSA_DIR / "dilithium5.rsp", max_vectors=5)
         assert len(vectors) > 0, "No Dilithium5 KAT vectors loaded"
@@ -468,7 +470,7 @@ class TestMLKEMKATValidation:
         not kyber_kat_available("kyber1024"),
         reason="Kyber-1024 KAT vectors not available",
     )
-    def test_kyber1024_key_sizes_match_kat(self):
+    def test_kyber1024_key_sizes_match_kat(self) -> None:
         """Verify Kyber-1024 key sizes match NIST KAT specifications."""
         vectors = load_kyber_kat_vectors(ML_KEM_DIR / "kyber1024.rsp", max_vectors=1)
         assert len(vectors) > 0, "No KAT vectors loaded"
@@ -489,7 +491,7 @@ class TestMLKEMKATValidation:
         not kyber_kat_available("kyber1024"),
         reason="Kyber-1024 KAT vectors not available",
     )
-    def test_kyber1024_encaps_decaps_roundtrip(self):
+    def test_kyber1024_encaps_decaps_roundtrip(self) -> None:
         """Test Kyber-1024 encapsulation/decapsulation produces matching shared secrets."""
         # Generate fresh keypair (we can't use KAT keys without seed-based keygen)
         keypair = generate_kyber_keypair()
@@ -508,7 +510,7 @@ class TestMLKEMKATValidation:
         not kyber_kat_available("kyber1024"),
         reason="Kyber-1024 KAT vectors not available",
     )
-    def test_kyber1024_shared_secret_size_matches_kat(self):
+    def test_kyber1024_shared_secret_size_matches_kat(self) -> None:
         """Verify shared secret size matches NIST KAT specification."""
         vectors = load_kyber_kat_vectors(ML_KEM_DIR / "kyber1024.rsp", max_vectors=1)
         kat = vectors[0]
@@ -525,7 +527,7 @@ class TestMLKEMKATValidation:
         not kyber_kat_available("kyber1024"),
         reason="Kyber-1024 KAT vectors not available",
     )
-    def test_kyber1024_multiple_kat_vectors(self):
+    def test_kyber1024_multiple_kat_vectors(self) -> None:
         """Validate against multiple KAT vectors for comprehensive coverage."""
         vectors = load_kyber_kat_vectors(ML_KEM_DIR / "kyber1024.rsp", max_vectors=10)
         assert len(vectors) >= 5, "Need at least 5 KAT vectors for comprehensive test"
@@ -539,7 +541,7 @@ class TestMLKEMKATValidation:
             assert len(kat.ss) == 32, f"Vector {i}: Invalid ss length"
 
     @pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber backend not available")
-    def test_kyber_ciphertext_uniqueness(self):
+    def test_kyber_ciphertext_uniqueness(self) -> None:
         """Verify encapsulation produces unique ciphertexts (randomized)."""
         keypair = generate_kyber_keypair()
 
@@ -574,7 +576,7 @@ class TestMLDSAKATValidation:
         not dilithium_kat_available("dilithium3"),
         reason="Dilithium3 KAT vectors not available",
     )
-    def test_dilithium3_key_sizes_match_kat(self):
+    def test_dilithium3_key_sizes_match_kat(self) -> None:
         """Verify Dilithium3 (ML-DSA-65) key sizes match NIST KAT specifications."""
         vectors = load_dilithium_kat_vectors(ML_DSA_DIR / "dilithium3.rsp", max_vectors=1)
         assert len(vectors) > 0, "No KAT vectors loaded"
@@ -598,7 +600,7 @@ class TestMLDSAKATValidation:
         not dilithium_kat_available("dilithium3"),
         reason="Dilithium3 KAT vectors not available",
     )
-    def test_dilithium3_signature_size_matches_kat(self):
+    def test_dilithium3_signature_size_matches_kat(self) -> None:
         """Verify Dilithium3 signature size is within expected range.
 
         Note: The KAT vectors are from the original Dilithium submission (3293 bytes),
@@ -628,7 +630,7 @@ class TestMLDSAKATValidation:
         not dilithium_kat_available("dilithium3"),
         reason="Dilithium3 KAT vectors not available",
     )
-    def test_dilithium3_sign_verify_roundtrip(self):
+    def test_dilithium3_sign_verify_roundtrip(self) -> None:
         """Test Dilithium3 sign/verify produces valid signatures."""
         keypair = generate_dilithium_keypair()
 
@@ -651,7 +653,7 @@ class TestMLDSAKATValidation:
         not dilithium_kat_available("dilithium3"),
         reason="Dilithium3 KAT vectors not available",
     )
-    def test_dilithium3_roundtrip3_rejects_gracefully(self):
+    def test_dilithium3_roundtrip3_rejects_gracefully(self) -> None:
         """
         Verify that pre-FIPS round-3 Dilithium3 KAT signatures are
         correctly rejected by our FIPS 204 ML-DSA-65 backend.
@@ -680,7 +682,7 @@ class TestMLDSAKATValidation:
         not fips204_kat_available(),
         reason="FIPS 204 ML-DSA-65 KAT vectors not available",
     )
-    def test_fips204_ml_dsa_65_verify_kat_signature(self):
+    def test_fips204_ml_dsa_65_verify_kat_signature(self) -> None:
         """
         Verify FIPS 204 ML-DSA-65 KAT signatures against KAT public keys.
 
@@ -708,7 +710,7 @@ class TestMLDSAKATValidation:
         not dilithium_kat_available("dilithium3"),
         reason="Dilithium3 KAT vectors not available",
     )
-    def test_dilithium3_multiple_kat_vectors(self):
+    def test_dilithium3_multiple_kat_vectors(self) -> None:
         """Validate against multiple KAT vectors for comprehensive coverage."""
         vectors = load_dilithium_kat_vectors(ML_DSA_DIR / "dilithium3.rsp", max_vectors=10)
         assert len(vectors) >= 5, "Need at least 5 KAT vectors for comprehensive test"
@@ -725,7 +727,7 @@ class TestMLDSAKATValidation:
             assert sig_len == 3293, f"Vector {i}: Invalid signature length {sig_len}"
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
-    def test_dilithium_signature_uniqueness(self):
+    def test_dilithium_signature_uniqueness(self) -> None:
         """Verify signing produces unique signatures (randomized in some modes)."""
         keypair = generate_dilithium_keypair()
         message = b"Test message for signature uniqueness"
@@ -744,7 +746,7 @@ class TestMLDSAKATValidation:
         # depending on the mode (hedged vs deterministic)
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
-    def test_dilithium_wrong_key_fails(self):
+    def test_dilithium_wrong_key_fails(self) -> None:
         """Verify signatures fail with wrong public key."""
         keypair1 = generate_dilithium_keypair()
         keypair2 = generate_dilithium_keypair()
@@ -759,7 +761,7 @@ class TestMLDSAKATValidation:
         assert not dilithium_verify(message, signature, keypair2.public_key)
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
-    def test_dilithium_modified_message_fails(self):
+    def test_dilithium_modified_message_fails(self) -> None:
         """Verify signatures fail with modified message."""
         keypair = generate_dilithium_keypair()
 
@@ -786,7 +788,7 @@ class TestKATVectorComprehensiveCoverage:
         not kyber_kat_available("kyber1024"),
         reason="Kyber-1024 KAT vectors not available",
     )
-    def test_kyber1024_kat_count(self):
+    def test_kyber1024_kat_count(self) -> None:
         """Verify we can load many Kyber-1024 KAT vectors."""
         vectors = load_kyber_kat_vectors(ML_KEM_DIR / "kyber1024.rsp", max_vectors=100)
         assert len(vectors) >= 10, f"Expected at least 10 vectors, got {len(vectors)}"
@@ -795,7 +797,7 @@ class TestKATVectorComprehensiveCoverage:
         not kyber_kat_available("kyber768"),
         reason="Kyber-768 KAT vectors not available",
     )
-    def test_kyber768_kat_count(self):
+    def test_kyber768_kat_count(self) -> None:
         """Verify we can load many Kyber-768 KAT vectors."""
         vectors = load_kyber_kat_vectors(ML_KEM_DIR / "kyber768.rsp", max_vectors=100)
         assert len(vectors) >= 10, f"Expected at least 10 vectors, got {len(vectors)}"
@@ -804,7 +806,7 @@ class TestKATVectorComprehensiveCoverage:
         not kyber_kat_available("kyber512"),
         reason="Kyber-512 KAT vectors not available",
     )
-    def test_kyber512_kat_count(self):
+    def test_kyber512_kat_count(self) -> None:
         """Verify we can load many Kyber-512 KAT vectors."""
         vectors = load_kyber_kat_vectors(ML_KEM_DIR / "kyber512.rsp", max_vectors=100)
         assert len(vectors) >= 10, f"Expected at least 10 vectors, got {len(vectors)}"
@@ -813,7 +815,7 @@ class TestKATVectorComprehensiveCoverage:
         not dilithium_kat_available("dilithium3"),
         reason="Dilithium3 KAT vectors not available",
     )
-    def test_dilithium3_kat_count(self):
+    def test_dilithium3_kat_count(self) -> None:
         """Verify we can load many Dilithium3 KAT vectors."""
         vectors = load_dilithium_kat_vectors(ML_DSA_DIR / "dilithium3.rsp", max_vectors=100)
         assert len(vectors) >= 10, f"Expected at least 10 vectors, got {len(vectors)}"
@@ -822,7 +824,7 @@ class TestKATVectorComprehensiveCoverage:
         not dilithium_kat_available("dilithium2"),
         reason="Dilithium2 KAT vectors not available",
     )
-    def test_dilithium2_kat_count(self):
+    def test_dilithium2_kat_count(self) -> None:
         """Verify we can load many Dilithium2 KAT vectors."""
         vectors = load_dilithium_kat_vectors(ML_DSA_DIR / "dilithium2.rsp", max_vectors=100)
         assert len(vectors) >= 10, f"Expected at least 10 vectors, got {len(vectors)}"
@@ -831,7 +833,7 @@ class TestKATVectorComprehensiveCoverage:
         not dilithium_kat_available("dilithium5"),
         reason="Dilithium5 KAT vectors not available",
     )
-    def test_dilithium5_kat_count(self):
+    def test_dilithium5_kat_count(self) -> None:
         """Verify we can load many Dilithium5 KAT vectors."""
         vectors = load_dilithium_kat_vectors(ML_DSA_DIR / "dilithium5.rsp", max_vectors=100)
         assert len(vectors) >= 10, f"Expected at least 10 vectors, got {len(vectors)}"
@@ -843,7 +845,7 @@ class TestKATVectorIntegrity:
     """
 
     @pytest.mark.skipif(not kat_files_available(), reason="KAT files not available")
-    def test_kat_files_not_empty(self):
+    def test_kat_files_not_empty(self) -> None:
         """Verify KAT files are not empty."""
         for kat_file in ML_KEM_DIR.glob("*.rsp"):
             assert kat_file.stat().st_size > 0, f"KAT file {kat_file} is empty"
@@ -852,7 +854,7 @@ class TestKATVectorIntegrity:
             assert kat_file.stat().st_size > 0, f"KAT file {kat_file} is empty"
 
     @pytest.mark.skipif(not kat_files_available(), reason="KAT files not available")
-    def test_kat_vectors_have_required_fields(self):
+    def test_kat_vectors_have_required_fields(self) -> None:
         """Verify KAT vectors contain all required fields."""
         # Check Kyber vectors
         for kat_file in ML_KEM_DIR.glob("*.rsp"):

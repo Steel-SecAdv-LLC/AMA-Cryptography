@@ -32,7 +32,9 @@ AI Co-Architects:
 """
 
 import base64
+from typing import Any
 from unittest.mock import MagicMock, patch
+from urllib.parse import urlparse
 
 import pytest
 
@@ -46,25 +48,25 @@ import code_guardian_secure as dgs
 class TestCryptoAvailableFalse:
     """Tests for CRYPTO_AVAILABLE=False paths."""
 
-    def test_generate_ed25519_keypair_requires_crypto(self, monkeypatch):
+    def test_generate_ed25519_keypair_requires_crypto(self, monkeypatch: Any) -> None:
         """Test that generate_ed25519_keypair raises when crypto unavailable."""
         monkeypatch.setattr(dgs, "CRYPTO_AVAILABLE", False)
         with pytest.raises(RuntimeError, match="AMA native C library required"):
             dgs.generate_ed25519_keypair()
 
-    def test_ed25519_sign_requires_crypto(self, monkeypatch):
+    def test_ed25519_sign_requires_crypto(self, monkeypatch: Any) -> None:
         """Test that ed25519_sign raises when crypto unavailable."""
         monkeypatch.setattr(dgs, "CRYPTO_AVAILABLE", False)
         with pytest.raises(RuntimeError, match="AMA native C library required"):
             dgs.ed25519_sign(b"msg", b"\x00" * 32)
 
-    def test_ed25519_verify_requires_crypto(self, monkeypatch):
+    def test_ed25519_verify_requires_crypto(self, monkeypatch: Any) -> None:
         """Test that ed25519_verify raises when crypto unavailable."""
         monkeypatch.setattr(dgs, "CRYPTO_AVAILABLE", False)
         with pytest.raises(RuntimeError, match="AMA native C library required"):
             dgs.ed25519_verify(b"msg", b"\x00" * 64, b"\x00" * 32)
 
-    def test_derive_keys_requires_crypto(self, monkeypatch):
+    def test_derive_keys_requires_crypto(self, monkeypatch: Any) -> None:
         """Test that derive_keys raises when crypto unavailable."""
         monkeypatch.setattr(dgs, "CRYPTO_AVAILABLE", False)
         with pytest.raises(RuntimeError, match="AMA native C library required"):
@@ -79,19 +81,19 @@ class TestCryptoAvailableFalse:
 class TestFieldSizeValidation:
     """Tests for field size validation in length_prefixed_encode."""
 
-    def test_length_prefixed_encode_rejects_over_4gb(self):
+    def test_length_prefixed_encode_rejects_over_4gb(self) -> Any:
         """Test that encoding rejects fields over 4GB."""
 
         class HugeBytes(bytes):
             """Bytes subclass that reports huge length."""
 
-            def __len__(self):
+            def __len__(self) -> Any:
                 return 0xFFFFFFFF + 1
 
         class FakeStr(str):
             """String that encodes to huge bytes."""
 
-            def encode(self, encoding="utf-8"):
+            def encode(self, encoding: Any = "utf-8") -> Any:
                 return HugeBytes(b"x")
 
         huge = FakeStr("x")
@@ -115,7 +117,7 @@ class TestRFC3161SuccessPath:
 
     @patch("urllib.request.urlopen")
     @patch("subprocess.run")
-    def test_rfc3161_success(self, mock_run, mock_urlopen):
+    def test_rfc3161_success(self, mock_run: Any, mock_urlopen: Any) -> None:
         """Test successful RFC 3161 timestamp retrieval."""
         mock_run.return_value = MagicMock(returncode=0, stdout=b"TSQ_DATA")
         mock_resp = MagicMock()
@@ -123,13 +125,31 @@ class TestRFC3161SuccessPath:
         mock_urlopen.return_value.__enter__.return_value = mock_resp
 
         tsr = dgs.get_rfc3161_timestamp(b"data", "https://tsa.example.com")
+
+        # Verify return value
         assert tsr == b"TSR_RESPONSE"
 
-    def test_create_crypto_package_rfc3161_success(self, monkeypatch):
+        # Verify subprocess.run was called with expected signature
+        run_args, run_kwargs = mock_run.call_args
+        assert run_args[0][0] == "openssl", "subprocess.run must invoke openssl for RFC 3161"
+        assert (
+            run_kwargs.get("input") is not None
+        ), "TSQ bytes must be passed as input to subprocess.run"
+
+        # Verify urlopen was called with a Request targeting the TSA URL
+        mock_urlopen.assert_called_once()
+        urlopen_args = mock_urlopen.call_args
+        request_obj = urlopen_args[0][0]
+        parsed = urlparse(request_obj.full_url)
+        assert (
+            parsed.hostname == "tsa.example.com"
+        ), f"Expected TSA hostname tsa.example.com, got {parsed.hostname}"
+
+    def test_create_crypto_package_rfc3161_success(self, monkeypatch: Any) -> None:
         """Test package creation with successful RFC 3161 timestamp."""
         kms = dgs.generate_key_management_system("test_author")
 
-        with patch("code_guardian_secure.get_rfc3161_timestamp", return_value=b"TSR"):
+        with patch("code_guardian_secure.get_rfc3161_timestamp", return_value=b"TSR") as mock_tsa:
             pkg = dgs.create_crypto_package(
                 dgs.MASTER_CODES,
                 dgs.MASTER_HELIX_PARAMS,
@@ -137,7 +157,33 @@ class TestRFC3161SuccessPath:
                 "author",
                 use_rfc3161=True,
             )
+
+        # Verify the mock was called with expected signature
+        tsa_args = mock_tsa.call_args
+        payload = tsa_args.args[0] if tsa_args.args else tsa_args.kwargs.get("data")
+        assert (
+            isinstance(payload, (bytes, bytearray)) and len(payload) > 0
+        ), "TSA payload must be non-empty bytes"
+        url_arg = tsa_args.args[1] if len(tsa_args.args) > 1 else tsa_args.kwargs.get("tsa_url")
+        # When url_arg is None, the function body resolves to its hardcoded
+        # default "https://freetsa.org/tsr".  Verify the source contains that
+        # HTTPS fallback so the test breaks if anyone changes it to HTTP.
+        if url_arg is None:
+            import inspect
+
+            src = inspect.getsource(dgs.get_rfc3161_timestamp)
+            assert (
+                'tsa_url = "https://' in src
+            ), "get_rfc3161_timestamp default TSA URL must use HTTPS"
+        else:
+            assert url_arg.startswith("https://"), "TSA URL must use HTTPS"
+
+        # Verify package fields
         assert pkg.timestamp_token == base64.b64encode(b"TSR").decode("ascii")
+        assert pkg.content_hash is not None, "content_hash must be populated"
+        assert pkg.hmac_tag is not None, "hmac_tag must be populated"
+        assert pkg.ed25519_signature is not None, "ed25519_signature must be populated"
+        assert pkg.timestamp is not None, "timestamp must be populated"
 
 
 # ============================================================================
@@ -148,10 +194,10 @@ class TestRFC3161SuccessPath:
 class TestDilithiumUnavailablePaths:
     """Tests for Dilithium unavailable paths."""
 
-    def test_kms_warns_when_dilithium_generation_fails(self, monkeypatch, capsys):
+    def test_kms_warns_when_dilithium_generation_fails(self, monkeypatch: Any, capsys: Any) -> None:
         """Test KMS generation warning when Dilithium generation fails."""
 
-        def boom():
+        def boom() -> None:
             raise dgs.QuantumSignatureUnavailableError("fail")
 
         monkeypatch.setattr(dgs, "DILITHIUM_AVAILABLE", True)
@@ -163,7 +209,7 @@ class TestDilithiumUnavailablePaths:
         assert kms.quantum_signatures_enabled is False
         assert kms.dilithium_keypair is None
 
-    def test_kms_warns_when_dilithium_not_available(self, monkeypatch, capsys):
+    def test_kms_warns_when_dilithium_not_available(self, monkeypatch: Any, capsys: Any) -> None:
         """Test KMS generation warning when Dilithium not available."""
         monkeypatch.setattr(dgs, "DILITHIUM_AVAILABLE", False)
 
@@ -174,7 +220,11 @@ class TestDilithiumUnavailablePaths:
         assert kms.quantum_signatures_enabled is False
         assert kms.dilithium_keypair is None
 
-    def test_export_public_keys_when_dilithium_unavailable(self, capsys, tmp_path):
+    def test_export_public_keys_when_dilithium_unavailable(
+        self,
+        capsys: Any,
+        tmp_path: Any,
+    ) -> None:
         """Test export_public_keys when Dilithium unavailable."""
         kms = dgs.generate_key_management_system("test_author")
         kms.quantum_signatures_enabled = False
@@ -187,10 +237,13 @@ class TestDilithiumUnavailablePaths:
         out = capsys.readouterr().out
         assert "Dilithium: NOT AVAILABLE" in out
 
-    def test_create_crypto_package_gracefully_degrades_when_dilithium_sign_fails(self, monkeypatch):
+    def test_create_crypto_package_gracefully_degrades_when_dilithium_sign_fails(
+        self,
+        monkeypatch: Any,
+    ) -> None:
         """Test package creation gracefully degrades when Dilithium sign fails."""
 
-        def boom(message, priv):
+        def boom(message: Any, priv: Any) -> None:
             raise dgs.QuantumSignatureUnavailableError("fail")
 
         kms = dgs.generate_key_management_system("test_author")
@@ -202,10 +255,13 @@ class TestDilithiumUnavailablePaths:
         assert pkg.dilithium_signature is None
         assert pkg.quantum_signatures_enabled is False
 
-    def test_verify_dilithium_policy_handles_unavailable_libraries_not_required(self, monkeypatch):
+    def test_verify_dilithium_policy_handles_unavailable_libraries_not_required(
+        self,
+        monkeypatch: Any,
+    ) -> None:
         """Test _verify_dilithium_with_policy when libraries unavailable (not required)."""
 
-        def boom(*args, **kwargs):
+        def boom(*args: Any, **kwargs: Any) -> None:
             raise dgs.QuantumSignatureUnavailableError("oops")
 
         monkeypatch.setattr(dgs, "dilithium_verify", boom)
@@ -219,10 +275,13 @@ class TestDilithiumUnavailablePaths:
         )
         assert result is None
 
-    def test_verify_dilithium_policy_handles_unavailable_libraries_required(self, monkeypatch):
+    def test_verify_dilithium_policy_handles_unavailable_libraries_required(
+        self,
+        monkeypatch: Any,
+    ) -> None:
         """Test _verify_dilithium_with_policy when libraries unavailable (required)."""
 
-        def boom(*args, **kwargs):
+        def boom(*args: Any, **kwargs: Any) -> None:
             raise dgs.QuantumSignatureUnavailableError("oops")
 
         monkeypatch.setattr(dgs, "dilithium_verify", boom)
@@ -245,7 +304,12 @@ class TestDilithiumUnavailablePaths:
 class TestMainFunctionDirect:
     """Tests for main() function via direct call."""
 
-    def test_main_direct_call_covers_demo(self, monkeypatch, capsys, tmp_path):
+    def test_main_direct_call_covers_demo(
+        self,
+        monkeypatch: Any,
+        capsys: Any,
+        tmp_path: Any,
+    ) -> None:
         """Test main() function via direct call for coverage."""
         monkeypatch.chdir(tmp_path)
         dgs.main()
@@ -264,7 +328,7 @@ class TestMainFunctionDirect:
 class TestDeriveKeysEdgeCasesExtended:
     """Extended edge case tests for derive_keys."""
 
-    def test_derive_keys_short_master_secret_raises(self):
+    def test_derive_keys_short_master_secret_raises(self) -> None:
         """Test that derive_keys raises for short master secret."""
         with pytest.raises(ValueError, match="at least 32 bytes"):
             dgs.derive_keys(b"\x00" * 16, "info")
@@ -278,14 +342,19 @@ class TestDeriveKeysEdgeCasesExtended:
 class TestMainFunctionBranches:
     """Tests for main() function branch coverage."""
 
-    def test_main_with_dilithium_unavailable(self, monkeypatch, capsys, tmp_path):
+    def test_main_with_dilithium_unavailable(
+        self,
+        monkeypatch: Any,
+        capsys: Any,
+        tmp_path: Any,
+    ) -> Any:
         """Test main() when Dilithium is unavailable."""
         monkeypatch.chdir(tmp_path)
 
         # Mock generate_key_management_system to return KMS without Dilithium
         original_gen_kms = dgs.generate_key_management_system
 
-        def mock_gen_kms(author):
+        def mock_gen_kms(author: Any) -> Any:
             kms = original_gen_kms(author)
             kms.quantum_signatures_enabled = False
             kms.dilithium_keypair = None
@@ -296,7 +365,7 @@ class TestMainFunctionBranches:
         # Mock create_crypto_package to return package without Dilithium
         original_create_pkg = dgs.create_crypto_package
 
-        def mock_create_pkg(*args, **kwargs):
+        def mock_create_pkg(*args: Any, **kwargs: Any) -> Any:
             pkg = original_create_pkg(*args, **kwargs)
             pkg.quantum_signatures_enabled = False
             pkg.dilithium_signature = None
@@ -308,14 +377,19 @@ class TestMainFunctionBranches:
         out = capsys.readouterr().out
         assert "Dilithium keypair: NOT AVAILABLE" in out or "quantum signatures disabled" in out
 
-    def test_main_with_verification_none_result(self, monkeypatch, capsys, tmp_path):
+    def test_main_with_verification_none_result(
+        self,
+        monkeypatch: Any,
+        capsys: Any,
+        tmp_path: Any,
+    ) -> Any:
         """Test main() when verification returns None for some checks."""
         monkeypatch.chdir(tmp_path)
 
         # Mock verify_crypto_package to return None for dilithium
         original_verify = dgs.verify_crypto_package
 
-        def mock_verify(*args, **kwargs):
+        def mock_verify(*args: Any, **kwargs: Any) -> Any:
             results = original_verify(*args, **kwargs)
             results["dilithium"] = None
             return results
@@ -326,12 +400,17 @@ class TestMainFunctionBranches:
         out = capsys.readouterr().out
         assert "NOT PRESENT/UNSUPPORTED" in out or "ALL VERIFICATIONS PASSED" in out
 
-    def test_main_with_verification_failure(self, monkeypatch, capsys, tmp_path):
+    def test_main_with_verification_failure(
+        self,
+        monkeypatch: Any,
+        capsys: Any,
+        tmp_path: Any,
+    ) -> Any:
         """Test main() when verification fails."""
         monkeypatch.chdir(tmp_path)
 
         # Mock verify_crypto_package to return False for content_hash
-        def mock_verify(*args, **kwargs):
+        def mock_verify(*args: Any, **kwargs: Any) -> Any:
             return {
                 "content_hash": False,
                 "hmac": True,
@@ -345,6 +424,27 @@ class TestMainFunctionBranches:
         dgs.main()
         out = capsys.readouterr().out
         assert "VERIFICATION FAILED" in out or "INVALID" in out
+
+
+# ============================================================================
+# TSA INTEGRATION SKELETON (requires live TSA endpoint)
+# ============================================================================
+
+
+class TestTSAIntegration:
+    """Integration tests for RFC 3161 TSA interaction.
+
+    These tests require a live TSA endpoint and are skipped by default.
+    Run with: pytest -m integration tests/test_crypto_import_paths.py
+    """
+
+    @pytest.mark.integration
+    def test_rfc3161_live_tsa_roundtrip(self) -> None:
+        """End-to-end RFC 3161 timestamp with a live TSA (when available)."""
+        pytest.skip(
+            reason="Live TSA integration test — requires network and a TSA endpoint. "
+            "Enable by providing TSA_URL env var and running with -m integration."
+        )
 
 
 if __name__ == "__main__":

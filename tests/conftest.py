@@ -14,11 +14,14 @@ This file consolidates fixtures from across the test suite to:
 - Improve test maintainability
 """
 
+from __future__ import annotations
+
 import secrets
 import tempfile
+from collections.abc import Generator
 from datetime import timedelta
 from pathlib import Path
-from typing import Generator, Tuple
+from typing import Any
 
 import pytest
 
@@ -83,7 +86,7 @@ def test_password() -> str:
 
 
 @pytest.fixture
-def hd_derivation(master_seed: bytes):
+def hd_derivation(master_seed: bytes) -> Any:
     """Provide an HDKeyDerivation instance with deterministic seed."""
     from ama_cryptography.key_management import HDKeyDerivation
 
@@ -91,7 +94,7 @@ def hd_derivation(master_seed: bytes):
 
 
 @pytest.fixture
-def hd_derivation_random():
+def hd_derivation_random() -> Any:
     """Provide an HDKeyDerivation instance with random seed."""
     from ama_cryptography.key_management import HDKeyDerivation
 
@@ -104,7 +107,7 @@ def hd_derivation_random():
 
 
 @pytest.fixture
-def rotation_manager():
+def rotation_manager() -> Any:
     """Provide a KeyRotationManager with default settings."""
     from ama_cryptography.key_management import KeyRotationManager
 
@@ -112,7 +115,7 @@ def rotation_manager():
 
 
 @pytest.fixture
-def rotation_manager_short_period():
+def rotation_manager_short_period() -> Any:
     """Provide a KeyRotationManager with very short rotation period."""
     from ama_cryptography.key_management import KeyRotationManager
 
@@ -120,7 +123,7 @@ def rotation_manager_short_period():
 
 
 @pytest.fixture
-def rotation_manager_long_period():
+def rotation_manager_long_period() -> Any:
     """Provide a KeyRotationManager with long rotation period."""
     from ama_cryptography.key_management import KeyRotationManager
 
@@ -133,7 +136,7 @@ def rotation_manager_long_period():
 
 
 @pytest.fixture
-def secure_storage(temp_storage_path: Path, test_password: str):
+def secure_storage(temp_storage_path: Path, test_password: str) -> Any:
     """Provide a SecureKeyStorage instance with password-derived key."""
     from ama_cryptography.key_management import SecureKeyStorage
 
@@ -141,7 +144,7 @@ def secure_storage(temp_storage_path: Path, test_password: str):
 
 
 @pytest.fixture
-def secure_storage_no_password(temp_storage_path: Path):
+def secure_storage_no_password(temp_storage_path: Path) -> Any:
     """Provide a SecureKeyStorage instance with random encryption key."""
     from ama_cryptography.key_management import SecureKeyStorage
 
@@ -154,7 +157,7 @@ def secure_storage_no_password(temp_storage_path: Path):
 
 
 @pytest.fixture
-def crypto_ed25519():
+def crypto_ed25519() -> Any:
     """Provide an AmaCryptography instance for Ed25519."""
     from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
 
@@ -162,7 +165,7 @@ def crypto_ed25519():
 
 
 @pytest.fixture
-def crypto_hybrid():
+def crypto_hybrid() -> Any:
     """Provide an AmaCryptography instance for hybrid signatures."""
     from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
 
@@ -170,7 +173,7 @@ def crypto_hybrid():
 
 
 @pytest.fixture
-def ed25519_keypair(crypto_ed25519) -> Tuple[bytes, bytes]:
+def ed25519_keypair(crypto_ed25519: Any) -> tuple[bytes, bytes]:
     """Generate and return an Ed25519 keypair (public_key, secret_key)."""
     keypair = crypto_ed25519.generate_keypair()
     return keypair.public_key, keypair.secret_key
@@ -194,7 +197,7 @@ def test_message_large() -> bytes:
 
 
 @pytest.fixture
-def pqc_backend_info():
+def pqc_backend_info() -> Any:
     """Provide current PQC backend availability info."""
     from ama_cryptography.pqc_backends import get_pqc_backend_info
 
@@ -202,7 +205,7 @@ def pqc_backend_info():
 
 
 @pytest.fixture
-def dilithium_available():
+def dilithium_available() -> Any:
     """Check if Dilithium is available."""
     from ama_cryptography.pqc_backends import DILITHIUM_AVAILABLE
 
@@ -210,7 +213,7 @@ def dilithium_available():
 
 
 @pytest.fixture
-def kyber_available():
+def kyber_available() -> Any:
     """Check if Kyber is available."""
     from ama_cryptography.pqc_backends import KYBER_AVAILABLE
 
@@ -218,7 +221,7 @@ def kyber_available():
 
 
 @pytest.fixture
-def sphincs_available():
+def sphincs_available() -> Any:
     """Check if SPHINCS+ is available."""
     from ama_cryptography.pqc_backends import SPHINCS_AVAILABLE
 
@@ -231,7 +234,7 @@ def sphincs_available():
 
 
 @pytest.fixture
-def equation_engine():
+def equation_engine() -> Any:
     """Provide an AmaEquationEngine instance."""
     from ama_cryptography.double_helix_engine import AmaEquationEngine
 
@@ -239,7 +242,7 @@ def equation_engine():
 
 
 @pytest.fixture
-def initial_state():
+def initial_state() -> Any:
     """Provide an initial state vector for equation tests."""
     import numpy as np
 
@@ -252,7 +255,7 @@ def initial_state():
 
 
 @pytest.fixture
-def guardian_monitor():
+def guardian_monitor() -> Any:
     """Provide an AmaCryptographyMonitor instance."""
     try:
         from ama_cryptography_monitor import AmaCryptographyMonitor
@@ -263,7 +266,7 @@ def guardian_monitor():
 
 
 @pytest.fixture
-def guardian_monitor_disabled():
+def guardian_monitor_disabled() -> Any:
     """Provide a disabled AmaCryptographyMonitor instance."""
     try:
         from ama_cryptography_monitor import AmaCryptographyMonitor
@@ -279,7 +282,7 @@ def guardian_monitor_disabled():
 
 
 @pytest.fixture
-def sample_omni_code() -> dict:
+def sample_omni_code() -> dict[str, Any]:
     """Provide a sample Omni-Code structure for package tests."""
     return {
         "sequence_id": "test-sequence-001",
@@ -318,28 +321,28 @@ def binary_data_large() -> bytes:
 
 
 @pytest.fixture
-def skip_if_no_pqc(pqc_backend_info):
+def skip_if_no_pqc(pqc_backend_info: Any) -> None:
     """Skip test if no PQC backend is available."""
     if pqc_backend_info["status"] == "UNAVAILABLE":
         pytest.skip("No PQC backend available")
 
 
 @pytest.fixture
-def skip_if_no_dilithium(dilithium_available):
+def skip_if_no_dilithium(dilithium_available: Any) -> None:
     """Skip test if Dilithium is not available."""
     if not dilithium_available:
         pytest.skip("Dilithium backend not available")
 
 
 @pytest.fixture
-def skip_if_no_kyber(kyber_available):
+def skip_if_no_kyber(kyber_available: Any) -> None:
     """Skip test if Kyber is not available."""
     if not kyber_available:
         pytest.skip("Kyber backend not available")
 
 
 @pytest.fixture
-def skip_if_no_sphincs(sphincs_available):
+def skip_if_no_sphincs(sphincs_available: Any) -> None:
     """Skip test if SPHINCS+ is not available."""
     if not sphincs_available:
         pytest.skip("SPHINCS+ backend not available")
@@ -350,7 +353,7 @@ def skip_if_no_sphincs(sphincs_available):
 # =============================================================================
 
 
-def pytest_configure(config):
+def pytest_configure(config: Any) -> None:
     """Configure custom pytest markers."""
     config.addinivalue_line(
         "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"

@@ -244,6 +244,7 @@ class BenchmarkValidator:
             if not DILITHIUM_AVAILABLE:
                 print("  SKIP: Dilithium not available in native backend")
             else:
+
                 def dilithium_keygen():
                     return generate_dilithium_keypair()
 

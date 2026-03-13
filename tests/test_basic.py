@@ -7,17 +7,17 @@
 from ama_cryptography import __author__, __version__
 
 
-def test_version():
+def test_version() -> None:
     """Test that version is correctly set"""
     assert __version__ == "2.0"
 
 
-def test_author():
+def test_author() -> None:
     """Test that author is correctly set"""
     assert "Andrew E. A." in __author__
 
 
-def test_imports():
+def test_imports() -> None:
     """Test that key components can be imported"""
     from ama_cryptography import (
         HELIX_PARAMS,
@@ -63,7 +63,7 @@ def test_imports():
     assert callable(verify_mathematical_foundations)
 
 
-def test_equation_engine_exists():
+def test_equation_engine_exists() -> None:
     """Test that AmaEquationEngine can be instantiated"""
     from ama_cryptography import AmaEquationEngine
 
@@ -72,7 +72,7 @@ def test_equation_engine_exists():
     assert callable(AmaEquationEngine)
 
 
-def test_mathematical_constants():
+def test_mathematical_constants() -> None:
     """Test that mathematical constants are correctly defined"""
     from ama_cryptography import PHI, PHI_CUBED, PHI_SQUARED
 

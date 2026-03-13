@@ -14,7 +14,7 @@ import importlib
 import pytest
 
 
-def test_import_math_engine():
+def test_import_math_engine() -> None:
     """Test that math_engine module can be imported."""
     try:
         mod = importlib.import_module("ama_cryptography.math_engine")
@@ -23,7 +23,7 @@ def test_import_math_engine():
         pytest.skip(f"math_engine not built (Cython extension): {e}")
 
 
-def test_math_engine_has_matrix_vector_multiply():
+def test_math_engine_has_matrix_vector_multiply() -> None:
     """Test that math_engine exports matrix_vector_multiply function."""
     try:
         mod = importlib.import_module("ama_cryptography.math_engine")
@@ -36,7 +36,7 @@ def test_math_engine_has_matrix_vector_multiply():
         pytest.skip(f"math_engine not built (Cython extension): {e}")
 
 
-def test_math_engine_has_core_functions():
+def test_math_engine_has_core_functions() -> None:
     """Test that math_engine exports other core functions."""
     try:
         mod = importlib.import_module("ama_cryptography.math_engine")

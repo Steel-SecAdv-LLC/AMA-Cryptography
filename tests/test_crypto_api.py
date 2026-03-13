@@ -45,23 +45,23 @@ from ama_cryptography.crypto_api import (
 class TestAlgorithmType:
     """Test AlgorithmType enum."""
 
-    def test_ed25519_exists(self):
+    def test_ed25519_exists(self) -> None:
         """Verify ED25519 algorithm type exists."""
         assert hasattr(AlgorithmType, "ED25519")
 
-    def test_ml_dsa_65_exists(self):
+    def test_ml_dsa_65_exists(self) -> None:
         """Verify ML_DSA_65 algorithm type exists."""
         assert hasattr(AlgorithmType, "ML_DSA_65")
 
-    def test_kyber_1024_exists(self):
+    def test_kyber_1024_exists(self) -> None:
         """Verify KYBER_1024 algorithm type exists."""
         assert hasattr(AlgorithmType, "KYBER_1024")
 
-    def test_sphincs_256f_exists(self):
+    def test_sphincs_256f_exists(self) -> None:
         """Verify SPHINCS_256F algorithm type exists."""
         assert hasattr(AlgorithmType, "SPHINCS_256F")
 
-    def test_hybrid_sig_exists(self):
+    def test_hybrid_sig_exists(self) -> None:
         """Verify HYBRID_SIG algorithm type exists."""
         assert hasattr(AlgorithmType, "HYBRID_SIG")
 
@@ -69,11 +69,11 @@ class TestAlgorithmType:
 class TestCryptoBackend:
     """Test CryptoBackend enum."""
 
-    def test_pure_python_exists(self):
+    def test_pure_python_exists(self) -> None:
         """Verify PURE_PYTHON backend exists."""
         assert hasattr(CryptoBackend, "PURE_PYTHON")
 
-    def test_c_library_exists(self):
+    def test_c_library_exists(self) -> None:
         """Verify C_LIBRARY backend exists."""
         assert hasattr(CryptoBackend, "C_LIBRARY")
 
@@ -81,7 +81,7 @@ class TestCryptoBackend:
 class TestKeyPairDataclass:
     """Test KeyPair dataclass."""
 
-    def test_keypair_fields(self):
+    def test_keypair_fields(self) -> None:
         """Verify KeyPair has required fields."""
         assert hasattr(KeyPair, "__dataclass_fields__")
         fields = KeyPair.__dataclass_fields__
@@ -90,7 +90,7 @@ class TestKeyPairDataclass:
         assert "algorithm" in fields
         assert "metadata" in fields
 
-    def test_keypair_creation(self):
+    def test_keypair_creation(self) -> None:
         """Verify KeyPair can be created."""
         kp = KeyPair(
             public_key=b"test_public",
@@ -106,7 +106,7 @@ class TestKeyPairDataclass:
 class TestSignatureDataclass:
     """Test Signature dataclass."""
 
-    def test_signature_fields(self):
+    def test_signature_fields(self) -> None:
         """Verify Signature has required fields."""
         assert hasattr(Signature, "__dataclass_fields__")
         fields = Signature.__dataclass_fields__
@@ -115,7 +115,7 @@ class TestSignatureDataclass:
         assert "message_hash" in fields
         assert "metadata" in fields
 
-    def test_signature_creation(self):
+    def test_signature_creation(self) -> None:
         """Verify Signature can be created."""
         sig = Signature(
             signature=b"test_sig",
@@ -131,7 +131,7 @@ class TestSignatureDataclass:
 class TestEncapsulatedSecretDataclass:
     """Test EncapsulatedSecret dataclass."""
 
-    def test_encapsulated_secret_fields(self):
+    def test_encapsulated_secret_fields(self) -> None:
         """Verify EncapsulatedSecret has required fields."""
         assert hasattr(EncapsulatedSecret, "__dataclass_fields__")
         fields = EncapsulatedSecret.__dataclass_fields__
@@ -140,7 +140,7 @@ class TestEncapsulatedSecretDataclass:
         assert "algorithm" in fields
         assert "metadata" in fields
 
-    def test_encapsulated_secret_creation(self):
+    def test_encapsulated_secret_creation(self) -> None:
         """Verify EncapsulatedSecret can be created."""
         es = EncapsulatedSecret(
             ciphertext=b"test_ct",
@@ -156,13 +156,13 @@ class TestEncapsulatedSecretDataclass:
 class TestEd25519Provider:
     """Test Ed25519Provider."""
 
-    def test_provider_instantiation(self):
+    def test_provider_instantiation(self) -> None:
         """Verify Ed25519Provider can be instantiated."""
         provider = Ed25519Provider()
         assert provider is not None
         assert provider.algorithm == AlgorithmType.ED25519
 
-    def test_generate_keypair(self):
+    def test_generate_keypair(self) -> None:
         """Verify keypair generation works."""
         provider = Ed25519Provider()
         keypair = provider.generate_keypair()
@@ -171,7 +171,7 @@ class TestEd25519Provider:
         assert len(keypair.secret_key) == 32
         assert keypair.algorithm == AlgorithmType.ED25519
 
-    def test_sign_and_verify(self):
+    def test_sign_and_verify(self) -> None:
         """Verify signing and verification works."""
         provider = Ed25519Provider()
         keypair = provider.generate_keypair()
@@ -184,7 +184,7 @@ class TestEd25519Provider:
         is_valid = provider.verify(message, signature.signature, keypair.public_key)
         assert is_valid is True
 
-    def test_verify_rejects_tampered_message(self):
+    def test_verify_rejects_tampered_message(self) -> None:
         """Verify tampered messages are rejected."""
         provider = Ed25519Provider()
         keypair = provider.generate_keypair()
@@ -196,7 +196,7 @@ class TestEd25519Provider:
         is_valid = provider.verify(tampered, signature.signature, keypair.public_key)
         assert is_valid is False
 
-    def test_keypairs_are_unique(self):
+    def test_keypairs_are_unique(self) -> None:
         """Verify each keypair generation produces unique keys."""
         provider = Ed25519Provider()
         kp1 = provider.generate_keypair()
@@ -209,13 +209,13 @@ class TestEd25519Provider:
 class TestMLDSAProvider:
     """Test MLDSAProvider (ML-DSA-65/Dilithium)."""
 
-    def test_provider_instantiation(self):
+    def test_provider_instantiation(self) -> None:
         """Verify MLDSAProvider can be instantiated."""
         provider = MLDSAProvider()
         assert provider is not None
         assert provider.algorithm == AlgorithmType.ML_DSA_65
 
-    def test_generate_keypair(self):
+    def test_generate_keypair(self) -> None:
         """Verify keypair generation works."""
         provider = MLDSAProvider()
         keypair = provider.generate_keypair()
@@ -224,7 +224,7 @@ class TestMLDSAProvider:
         assert len(keypair.secret_key) == 4032
         assert keypair.algorithm == AlgorithmType.ML_DSA_65
 
-    def test_sign_and_verify(self):
+    def test_sign_and_verify(self) -> None:
         """Verify signing and verification works."""
         provider = MLDSAProvider()
         keypair = provider.generate_keypair()
@@ -237,7 +237,7 @@ class TestMLDSAProvider:
         is_valid = provider.verify(message, signature.signature, keypair.public_key)
         assert is_valid is True
 
-    def test_verify_rejects_tampered_message(self):
+    def test_verify_rejects_tampered_message(self) -> None:
         """Verify tampered messages are rejected."""
         provider = MLDSAProvider()
         keypair = provider.generate_keypair()
@@ -254,13 +254,13 @@ class TestMLDSAProvider:
 class TestKyberProvider:
     """Test KyberProvider (Kyber-1024/ML-KEM)."""
 
-    def test_provider_instantiation(self):
+    def test_provider_instantiation(self) -> None:
         """Verify KyberProvider can be instantiated."""
         provider = KyberProvider()
         assert provider is not None
         assert provider.algorithm == AlgorithmType.KYBER_1024
 
-    def test_generate_keypair(self):
+    def test_generate_keypair(self) -> None:
         """Verify keypair generation works."""
         provider = KyberProvider()
         keypair = provider.generate_keypair()
@@ -269,7 +269,7 @@ class TestKyberProvider:
         assert len(keypair.secret_key) == 3168
         assert keypair.algorithm == AlgorithmType.KYBER_1024
 
-    def test_encapsulate_and_decapsulate(self):
+    def test_encapsulate_and_decapsulate(self) -> None:
         """Verify encapsulation and decapsulation works."""
         provider = KyberProvider()
         keypair = provider.generate_keypair()
@@ -282,7 +282,7 @@ class TestKyberProvider:
         decapsulated = provider.decapsulate(encapsulated.ciphertext, keypair.secret_key)
         assert decapsulated == encapsulated.shared_secret
 
-    def test_different_encapsulations_produce_different_secrets(self):
+    def test_different_encapsulations_produce_different_secrets(self) -> None:
         """Verify each encapsulation produces unique shared secrets."""
         provider = KyberProvider()
         keypair = provider.generate_keypair()
@@ -295,7 +295,7 @@ class TestKyberProvider:
 
 
 @pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber backend not available")
-def test_kyber_provider_not_placeholder():
+def test_kyber_provider_not_placeholder() -> None:
     """Verify KyberProvider is not a placeholder."""
     provider = KyberProvider()
     # KyberProvider should be functional, not a stub
@@ -307,13 +307,13 @@ def test_kyber_provider_not_placeholder():
 class TestSphincsProvider:
     """Test SphincsProvider (SPHINCS+-SHA2-256f-simple)."""
 
-    def test_provider_instantiation(self):
+    def test_provider_instantiation(self) -> None:
         """Verify SphincsProvider can be instantiated."""
         provider = SphincsProvider()
         assert provider is not None
         assert provider.algorithm == AlgorithmType.SPHINCS_256F
 
-    def test_generate_keypair(self):
+    def test_generate_keypair(self) -> None:
         """Verify keypair generation works."""
         provider = SphincsProvider()
         keypair = provider.generate_keypair()
@@ -322,7 +322,7 @@ class TestSphincsProvider:
         assert len(keypair.secret_key) == 128
         assert keypair.algorithm == AlgorithmType.SPHINCS_256F
 
-    def test_sign_and_verify(self):
+    def test_sign_and_verify(self) -> None:
         """Verify signing and verification works."""
         provider = SphincsProvider()
         keypair = provider.generate_keypair()
@@ -336,7 +336,7 @@ class TestSphincsProvider:
         is_valid = provider.verify(message, signature.signature, keypair.public_key)
         assert is_valid is True
 
-    def test_verify_rejects_tampered_message(self):
+    def test_verify_rejects_tampered_message(self) -> None:
         """Verify tampered messages are rejected."""
         provider = SphincsProvider()
         keypair = provider.generate_keypair()
@@ -353,20 +353,20 @@ class TestSphincsProvider:
 class TestHybridSignatureProvider:
     """Test HybridSignatureProvider (Ed25519 + ML-DSA-65)."""
 
-    def test_provider_instantiation(self):
+    def test_provider_instantiation(self) -> None:
         """Verify HybridSignatureProvider can be instantiated."""
         provider = HybridSignatureProvider()
         assert provider is not None
         assert provider.algorithm == AlgorithmType.HYBRID_SIG
 
-    def test_generate_keypair(self):
+    def test_generate_keypair(self) -> None:
         """Verify hybrid keypair generation works."""
         provider = HybridSignatureProvider()
         keypair = provider.generate_keypair()
         assert isinstance(keypair, KeyPair)
         assert keypair.algorithm == AlgorithmType.HYBRID_SIG
 
-    def test_sign_and_verify(self):
+    def test_sign_and_verify(self) -> None:
         """Verify hybrid signing and verification works."""
         provider = HybridSignatureProvider()
         keypair = provider.generate_keypair()
@@ -379,7 +379,7 @@ class TestHybridSignatureProvider:
         is_valid = provider.verify(message, signature.signature, keypair.public_key)
         assert is_valid is True
 
-    def test_verify_rejects_tampered_message(self):
+    def test_verify_rejects_tampered_message(self) -> None:
         """Verify tampered messages are rejected."""
         provider = HybridSignatureProvider()
         keypair = provider.generate_keypair()
@@ -395,12 +395,12 @@ class TestHybridSignatureProvider:
 class TestAmaCryptography:
     """Test AmaCryptography main interface."""
 
-    def test_instantiation(self):
+    def test_instantiation(self) -> None:
         """Verify AmaCryptography can be instantiated."""
         crypto = AmaCryptography()
         assert crypto is not None
 
-    def test_ed25519_sign_and_verify(self):
+    def test_ed25519_sign_and_verify(self) -> None:
         """Verify Ed25519 signing and verification via AmaCryptography."""
         crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
         keypair = crypto.generate_keypair()
@@ -410,7 +410,7 @@ class TestAmaCryptography:
         assert is_valid is True
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
-    def test_ml_dsa_sign_and_verify(self):
+    def test_ml_dsa_sign_and_verify(self) -> None:
         """Verify ML-DSA-65 signing and verification via AmaCryptography."""
         crypto = AmaCryptography(algorithm=AlgorithmType.ML_DSA_65)
         keypair = crypto.generate_keypair()
@@ -420,7 +420,7 @@ class TestAmaCryptography:
         assert is_valid is True
 
     @pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber not available")
-    def test_kyber_encapsulate_and_decapsulate(self):
+    def test_kyber_encapsulate_and_decapsulate(self) -> None:
         """Verify Kyber-1024 KEM via AmaCryptography."""
         crypto = AmaCryptography(algorithm=AlgorithmType.KYBER_1024)
         keypair = crypto.generate_keypair()
@@ -429,7 +429,7 @@ class TestAmaCryptography:
         assert shared_secret == encapsulated.shared_secret
 
     @pytest.mark.skipif(not SPHINCS_AVAILABLE, reason="SPHINCS+ not available")
-    def test_sphincs_sign_and_verify(self):
+    def test_sphincs_sign_and_verify(self) -> None:
         """Verify SPHINCS+-256f signing and verification via AmaCryptography."""
         crypto = AmaCryptography(algorithm=AlgorithmType.SPHINCS_256F)
         keypair = crypto.generate_keypair()
@@ -442,14 +442,14 @@ class TestAmaCryptography:
 class TestQuickFunctions:
     """Test quick_sign, quick_verify, and quick_kem convenience functions."""
 
-    def test_quick_sign_ed25519(self):
+    def test_quick_sign_ed25519(self) -> None:
         """Verify quick_sign works with Ed25519."""
         message = b"Quick sign test"
         keypair, signature = quick_sign(message, algorithm=AlgorithmType.ED25519)
         assert isinstance(keypair, KeyPair)
         assert isinstance(signature, Signature)
 
-    def test_quick_verify_ed25519(self):
+    def test_quick_verify_ed25519(self) -> None:
         """Verify quick_verify works with Ed25519."""
         message = b"Quick verify test"
         keypair, signature = quick_sign(message, algorithm=AlgorithmType.ED25519)
@@ -459,7 +459,7 @@ class TestQuickFunctions:
         assert is_valid is True
 
     @pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber not available")
-    def test_quick_kem(self):
+    def test_quick_kem(self) -> None:
         """Verify quick_kem works with Kyber-1024."""
         keypair, encapsulated = quick_kem(algorithm=AlgorithmType.KYBER_1024)
         assert isinstance(keypair, KeyPair)
@@ -470,22 +470,22 @@ class TestQuickFunctions:
 class TestGetPqcCapabilities:
     """Test get_pqc_capabilities function."""
 
-    def test_returns_dict(self):
+    def test_returns_dict(self) -> None:
         """Verify get_pqc_capabilities returns a dictionary."""
         caps = get_pqc_capabilities()
         assert isinstance(caps, dict)
 
-    def test_contains_dilithium_info(self):
+    def test_contains_dilithium_info(self) -> None:
         """Verify capabilities contains Dilithium information."""
         caps = get_pqc_capabilities()
         assert "dilithium_available" in caps or "ml_dsa_available" in caps
 
-    def test_contains_kyber_info(self):
+    def test_contains_kyber_info(self) -> None:
         """Verify capabilities contains Kyber information."""
         caps = get_pqc_capabilities()
         assert "kyber_available" in caps
 
-    def test_contains_sphincs_info(self):
+    def test_contains_sphincs_info(self) -> None:
         """Verify capabilities contains SPHINCS+ information."""
         caps = get_pqc_capabilities()
         assert "sphincs_available" in caps
@@ -494,13 +494,13 @@ class TestGetPqcCapabilities:
 class TestUnavailableProviderErrors:
     """Test error handling when providers are unavailable."""
 
-    def test_kyber_provider_raises_error(self):
+    def test_kyber_provider_raises_error(self) -> None:
         """Verify KyberProvider raises error when unavailable."""
         with patch("ama_cryptography.crypto_api.KYBER_AVAILABLE", False):
             with pytest.raises(KyberUnavailableError):
                 KyberProvider()
 
-    def test_sphincs_provider_raises_error(self):
+    def test_sphincs_provider_raises_error(self) -> None:
         """Verify SphincsProvider raises error when unavailable."""
         with patch("ama_cryptography.crypto_api.SPHINCS_AVAILABLE", False):
             with pytest.raises(SphincsUnavailableError):
@@ -510,12 +510,12 @@ class TestUnavailableProviderErrors:
 class TestProviderAbstractBase:
     """Test CryptoProvider abstract base class."""
 
-    def test_crypto_provider_is_abstract(self):
+    def test_crypto_provider_is_abstract(self) -> None:
         """Verify CryptoProvider cannot be instantiated directly."""
         with pytest.raises(TypeError):
             CryptoProvider()
 
-    def test_kem_provider_is_abstract(self):
+    def test_kem_provider_is_abstract(self) -> None:
         """Verify KEMProvider cannot be instantiated directly."""
         with pytest.raises(TypeError):
             KEMProvider()
@@ -529,7 +529,7 @@ class TestEd25519NativeBackendConsistency:
     signatures and that multiple sign/verify cycles work consistently.
     """
 
-    def test_sign_deterministic(self):
+    def test_sign_deterministic(self) -> None:
         """Verify signing is deterministic (same key + message = same signature)."""
         provider = Ed25519Provider()
         keypair = provider.generate_keypair()
@@ -542,7 +542,7 @@ class TestEd25519NativeBackendConsistency:
         assert sig1.signature == sig2.signature
         assert sig1.algorithm == sig2.algorithm
 
-    def test_verify_valid_signature(self):
+    def test_verify_valid_signature(self) -> None:
         """Verify valid signature returns True."""
         provider = Ed25519Provider()
         keypair = provider.generate_keypair()
@@ -553,7 +553,7 @@ class TestEd25519NativeBackendConsistency:
 
         assert valid is True
 
-    def test_verify_invalid_signature_rejected(self):
+    def test_verify_invalid_signature_rejected(self) -> None:
         """Verify invalid signatures are rejected."""
         provider = Ed25519Provider()
         keypair = provider.generate_keypair()
@@ -565,7 +565,7 @@ class TestEd25519NativeBackendConsistency:
 
         assert is_valid is False
 
-    def test_sign_multiple_messages(self):
+    def test_sign_multiple_messages(self) -> None:
         """Verify signing multiple messages with same key works correctly."""
         provider = Ed25519Provider()
         keypair = provider.generate_keypair()

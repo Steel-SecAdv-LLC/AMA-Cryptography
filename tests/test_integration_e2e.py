@@ -34,7 +34,7 @@ import pytest
 class TestFullCryptoPackageLifecycle:
     """End-to-end tests for complete cryptographic package workflows."""
 
-    def test_complete_sign_verify_workflow(self):
+    def test_complete_sign_verify_workflow(self) -> None:
         """Test complete workflow: generate keys -> create package -> verify."""
         from code_guardian_secure import (
             MASTER_CODES,
@@ -76,7 +76,7 @@ class TestFullCryptoPackageLifecycle:
         assert results["hmac"] is True
         assert results["ed25519"] is True
 
-    def test_package_serialization_roundtrip(self):
+    def test_package_serialization_roundtrip(self) -> None:
         """Test that packages can be serialized and deserialized correctly."""
         from code_guardian_secure import (
             MASTER_CODES,
@@ -117,7 +117,7 @@ class TestFullCryptoPackageLifecycle:
         assert results["hmac"] is True
         assert results["ed25519"] is True
 
-    def test_tamper_detection(self):
+    def test_tamper_detection(self) -> None:
         """Test that tampering with package data is detected."""
         from code_guardian_secure import (
             MASTER_CODES,
@@ -170,7 +170,7 @@ class TestFullCryptoPackageLifecycle:
 class TestKeyManagementWorkflows:
     """End-to-end tests for key management operations."""
 
-    def test_hd_key_derivation_determinism(self):
+    def test_hd_key_derivation_determinism(self) -> None:
         """Test that HD key derivation is deterministic."""
         from ama_cryptography.key_management import HDKeyDerivation
 
@@ -186,7 +186,7 @@ class TestKeyManagementWorkflows:
         assert key1 == key2
         assert chain1 == chain2
 
-    def test_key_rotation_workflow(self):
+    def test_key_rotation_workflow(self) -> None:
         """Test complete key rotation workflow."""
         from ama_cryptography.key_management import KeyRotationManager
 
@@ -221,7 +221,7 @@ class TestKeyManagementWorkflows:
         manager.complete_rotation("primary-key-v1")
         assert manager.keys["primary-key-v1"].status.name == "DEPRECATED"
 
-    def test_secure_storage_encryption(self):
+    def test_secure_storage_encryption(self) -> None:
         """Test secure key storage with encryption."""
         from ama_cryptography.key_management import SecureKeyStorage
 
@@ -255,7 +255,7 @@ class TestKeyManagementWorkflows:
 class TestMultiAlgorithmInteroperability:
     """Tests for algorithm switching and hybrid modes."""
 
-    def test_algorithm_switching(self):
+    def test_algorithm_switching(self) -> None:
         """Test switching between different algorithms."""
         from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
 
@@ -277,7 +277,7 @@ class TestMultiAlgorithmInteroperability:
             valid = crypto.verify(message, signature.signature, keypair.public_key)
             assert valid, f"Verification failed for {algo}"
 
-    def test_cross_verification_fails(self):
+    def test_cross_verification_fails(self) -> None:
         """Test that signatures from one algorithm don't verify with another."""
         from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
 
@@ -299,7 +299,7 @@ class TestMultiAlgorithmInteroperability:
 class TestErrorRecoveryAndGracefulDegradation:
     """Tests for error handling and graceful degradation."""
 
-    def test_invalid_key_handling(self):
+    def test_invalid_key_handling(self) -> None:
         """Test handling of invalid keys."""
         from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
 
@@ -315,7 +315,7 @@ class TestErrorRecoveryAndGracefulDegradation:
         result = crypto.verify(message, signature.signature, invalid_key)
         assert result is False
 
-    def test_empty_message_handling(self):
+    def test_empty_message_handling(self) -> None:
         """Test handling of empty messages."""
         from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
 
@@ -328,7 +328,7 @@ class TestErrorRecoveryAndGracefulDegradation:
 
         assert valid
 
-    def test_pqc_unavailable_graceful_handling(self):
+    def test_pqc_unavailable_graceful_handling(self) -> None:
         """Test graceful handling when PQC is unavailable."""
         from unittest.mock import patch
 
@@ -345,7 +345,7 @@ class TestErrorRecoveryAndGracefulDegradation:
 class TestPerformanceRegression:
     """Performance regression tests."""
 
-    def test_signature_performance(self):
+    def test_signature_performance(self) -> None:
         """Test that signature operations meet performance targets."""
         from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
 
@@ -371,7 +371,7 @@ class TestPerformanceRegression:
         assert sign_time < 0.01, f"Signing too slow: {sign_time:.4f}s"
         assert verify_time < 0.01, f"Verification too slow: {verify_time:.4f}s"
 
-    def test_hash_performance(self):
+    def test_hash_performance(self) -> None:
         """Test that hashing operations meet performance targets."""
         import sys
 
@@ -404,7 +404,7 @@ class TestPerformanceRegression:
 class TestHumanitarianUseCases:
     """Tests for humanitarian and crisis response scenarios."""
 
-    def test_crisis_data_protection(self):
+    def test_crisis_data_protection(self) -> None:
         """Test protecting sensitive crisis response data."""
         from code_guardian_secure import (
             create_crypto_package,
@@ -440,7 +440,7 @@ class TestHumanitarianUseCases:
         assert results["hmac"] is True
         assert results["ed25519"] is True
 
-    def test_whistleblower_document_signing(self):
+    def test_whistleblower_document_signing(self) -> None:
         """Test document signing for whistleblower protection."""
         from code_guardian_secure import (
             create_crypto_package,
@@ -473,7 +473,7 @@ class TestHumanitarianUseCases:
 
         assert all(v is True for k, v in results.items() if v is not None)
 
-    def test_medical_record_integrity(self):
+    def test_medical_record_integrity(self) -> None:
         """Test medical record integrity verification."""
         from code_guardian_secure import (
             create_crypto_package,
@@ -518,7 +518,7 @@ class TestHumanitarianUseCases:
 class TestEthicalIntegration:
     """Tests for ethical framework integration."""
 
-    def test_ethical_vector_in_key_derivation(self):
+    def test_ethical_vector_in_key_derivation(self) -> None:
         """Test that ethical vector is properly integrated."""
         from code_guardian_secure import ETHICAL_VECTOR, create_ethical_hkdf_context
 
@@ -532,7 +532,7 @@ class TestEthicalIntegration:
         assert context is not None
         assert len(context) > 0
 
-    def test_ethical_pillars_coverage(self):
+    def test_ethical_pillars_coverage(self) -> None:
         """Test that all 4 Omni-Code ethical pillars are present."""
         from code_guardian_secure import ETHICAL_VECTOR
 
@@ -556,7 +556,7 @@ class TestEthicalIntegration:
 class TestCryptoAPIIntegration:
     """Integration tests for the crypto API module."""
 
-    def test_pqc_capabilities_reporting(self):
+    def test_pqc_capabilities_reporting(self) -> None:
         """Test PQC capabilities are correctly reported."""
         from ama_cryptography.crypto_api import get_pqc_capabilities
 
@@ -567,7 +567,7 @@ class TestCryptoAPIIntegration:
         assert "sphincs_available" in caps
         assert "algorithms" in caps
 
-    def test_constant_time_compare(self):
+    def test_constant_time_compare(self) -> None:
         """Test constant-time comparison function."""
         from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
 

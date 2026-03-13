@@ -36,7 +36,7 @@ except Exception:
 class TestHKDFSHA3256:
     """Test suite for HKDF-SHA3-256 key derivation."""
 
-    def test_hkdf_sha3_256_deterministic(self):
+    def test_hkdf_sha3_256_deterministic(self) -> None:
         """Test that HKDF-SHA3-256 produces deterministic outputs with same salt."""
         from code_guardian_secure import derive_keys
 
@@ -46,15 +46,15 @@ class TestHKDFSHA3256:
         fixed_salt = b"fixed_salt_for_testing_32_bytes!"
 
         # Derive keys twice with same inputs and same salt
-        keys1, salt1 = derive_keys(master_secret, info, num_keys=3, salt=fixed_salt)
-        keys2, salt2 = derive_keys(master_secret, info, num_keys=3, salt=fixed_salt)
+        keys1, _salt1 = derive_keys(master_secret, info, num_keys=3, salt=fixed_salt)
+        keys2, _salt2 = derive_keys(master_secret, info, num_keys=3, salt=fixed_salt)
 
         # Should produce identical keys with same salt
         assert keys1 == keys2
         assert len(keys1) == 3
         assert all(len(k) == 32 for k in keys1)
 
-    def test_hkdf_sha3_256_different_info_produces_different_keys(self):
+    def test_hkdf_sha3_256_different_info_produces_different_keys(self) -> None:
         """Test that different info parameters produce different keys."""
         from code_guardian_secure import derive_keys
 
@@ -67,7 +67,7 @@ class TestHKDFSHA3256:
         # Different contexts should produce different keys
         assert keys1[0] != keys2[0]
 
-    def test_hkdf_sha3_256_different_master_produces_different_keys(self):
+    def test_hkdf_sha3_256_different_master_produces_different_keys(self) -> None:
         """Test that different master secrets produce different keys."""
         from code_guardian_secure import derive_keys
 
@@ -82,7 +82,7 @@ class TestHKDFSHA3256:
         # Different master secrets should produce different keys
         assert keys1[0] != keys2[0]
 
-    def test_hkdf_sha3_256_key_independence(self):
+    def test_hkdf_sha3_256_key_independence(self) -> None:
         """Test that derived keys are independent of each other."""
         from code_guardian_secure import derive_keys
 
@@ -103,7 +103,7 @@ class TestHKDFSHA3256:
                     assert key_i != key_j
                     assert hashlib.sha3_256(key_i).digest() != key_j
 
-    def test_hkdf_sha3_256_minimum_master_secret_length(self):
+    def test_hkdf_sha3_256_minimum_master_secret_length(self) -> None:
         """Test that master secret must be at least 32 bytes."""
         from code_guardian_secure import derive_keys
 
@@ -119,7 +119,7 @@ class TestHKDFSHA3256:
 class TestEthicalHKDFContext:
     """Test suite for ethical HKDF context integration."""
 
-    def test_ethical_context_creation(self):
+    def test_ethical_context_creation(self) -> None:
         """Test that ethical context is properly created."""
         from code_guardian_secure import create_ethical_hkdf_context
 
@@ -131,7 +131,7 @@ class TestEthicalHKDFContext:
         # Should append 16 bytes (128-bit ethical signature)
         assert len(enhanced) == len(base_context) + 16
 
-    def test_ethical_context_deterministic(self):
+    def test_ethical_context_deterministic(self) -> None:
         """Test that ethical context creation is deterministic."""
         from code_guardian_secure import create_ethical_hkdf_context
 
@@ -142,7 +142,7 @@ class TestEthicalHKDFContext:
 
         assert enhanced1 == enhanced2
 
-    def test_ethical_context_different_vectors_produce_different_contexts(self):
+    def test_ethical_context_different_vectors_produce_different_contexts(self) -> None:
         """Test that different ethical vectors produce different contexts."""
         from code_guardian_secure import create_ethical_hkdf_context
 
@@ -163,7 +163,7 @@ class TestEthicalHKDFContext:
         # Different ethical vectors should produce different contexts
         assert enhanced1 != enhanced2
 
-    def test_ethical_vector_affects_derived_keys(self):
+    def test_ethical_vector_affects_derived_keys(self) -> None:
         """Test that ethical vector changes affect derived keys."""
         from code_guardian_secure import derive_keys
 
@@ -192,7 +192,7 @@ class TestEthicalHKDFContext:
 class TestHMACSHA3256:
     """Test suite for HMAC-SHA3-256 authentication."""
 
-    def test_hmac_sha3_256_deterministic(self):
+    def test_hmac_sha3_256_deterministic(self) -> None:
         """Test that HMAC-SHA3-256 produces deterministic outputs."""
         from code_guardian_secure import hmac_authenticate
 
@@ -205,7 +205,7 @@ class TestHMACSHA3256:
         assert tag1 == tag2
         assert len(tag1) == 32  # SHA3-256 output
 
-    def test_hmac_sha3_256_verification(self):
+    def test_hmac_sha3_256_verification(self) -> None:
         """Test HMAC-SHA3-256 verification."""
         from code_guardian_secure import hmac_authenticate, hmac_verify
 
@@ -224,7 +224,7 @@ class TestHMACSHA3256:
         modified_tag = bytes([tag[0] ^ 1]) + tag[1:]
         assert hmac_verify(message, modified_tag, key) is False
 
-    def test_hmac_sha3_256_minimum_key_length(self):
+    def test_hmac_sha3_256_minimum_key_length(self) -> None:
         """Test that HMAC key must be at least 32 bytes."""
         from code_guardian_secure import hmac_authenticate
 
@@ -246,7 +246,7 @@ class TestNISTSHA3256Vectors:
     https://csrc.nist.gov/publications/detail/fips/202/final
     """
 
-    def test_sha3_256_empty_string_nist_fips_202(self):
+    def test_sha3_256_empty_string_nist_fips_202(self) -> None:
         """
         NIST FIPS 202 SHA3-256 test vector: empty string.
 
@@ -259,7 +259,7 @@ class TestNISTSHA3256Vectors:
         result = hashlib.sha3_256(message).hexdigest()
         assert result == expected_hex, f"SHA3-256('') mismatch: {result} != {expected_hex}"
 
-    def test_sha3_256_abc_nist_fips_202(self):
+    def test_sha3_256_abc_nist_fips_202(self) -> None:
         """
         NIST FIPS 202 SHA3-256 test vector: "abc".
 
@@ -283,7 +283,7 @@ class TestRFC5869HKDFStructure:
     https://datatracker.ietf.org/doc/html/rfc5869
     """
 
-    def test_hkdf_sha256_rfc5869_test_case_1(self):
+    def test_hkdf_sha256_rfc5869_test_case_1(self) -> None:
         """
         RFC 5869 Appendix A, Test Case 1 (HKDF-SHA256).
 
@@ -330,7 +330,7 @@ class TestProjectSpecificVectors:
     (version 41.0+) and cross-validated for consistency.
     """
 
-    def test_hmac_sha3_256_project_vector_1(self):
+    def test_hmac_sha3_256_project_vector_1(self) -> None:
         """
         Project-specific HMAC-SHA3-256 test vector #1.
 
@@ -350,7 +350,7 @@ class TestProjectSpecificVectors:
         expected_hex = "e841c164e5b4f10c9f3985587962af72fd607a951196fc92fb3a5251941784ea"
         assert tag.hex() == expected_hex, "HMAC-SHA3-256 project vector #1 failed"
 
-    def test_hmac_sha3_256_project_vector_2(self):
+    def test_hmac_sha3_256_project_vector_2(self) -> None:
         """
         Project-specific HMAC-SHA3-256 test vector #2.
 
@@ -370,7 +370,7 @@ class TestProjectSpecificVectors:
         assert tag.hex() == expected_hex, "HMAC-SHA3-256 project vector #2 failed"
 
     @pytest.mark.skipif(not _PYCA_AVAILABLE, reason="PyCA cryptography not installed")
-    def test_hkdf_sha3_256_project_vector(self):
+    def test_hkdf_sha3_256_project_vector(self) -> None:
         """
         Project-specific HKDF-SHA3-256 test vector.
 
@@ -408,7 +408,7 @@ class TestProjectSpecificVectors:
         assert okm1 == okm2, "HKDF-SHA3-256 is not deterministic"
         assert len(okm1) == 32, "HKDF-SHA3-256 output length incorrect"
 
-    def test_ethical_signature_golden_vector(self):
+    def test_ethical_signature_golden_vector(self) -> None:
         """
         Project-specific ethical signature test vector.
 
@@ -438,7 +438,7 @@ class TestProjectSpecificVectors:
 class TestKeyManagementSystem:
     """Test suite for key management system integration."""
 
-    def test_kms_generation_uses_hkdf_sha3_256(self):
+    def test_kms_generation_uses_hkdf_sha3_256(self) -> None:
         """Test that KMS generation uses HKDF-SHA3-256."""
         from code_guardian_secure import generate_key_management_system
 
@@ -452,7 +452,7 @@ class TestKeyManagementSystem:
         assert kms.ed25519_keypair is not None
         assert kms.version is not None
 
-    def test_kms_deterministic_with_same_master_secret(self):
+    def test_kms_deterministic_with_same_master_secret(self) -> None:
         """Test that KMS derivation is deterministic given same master secret and salt."""
         from code_guardian_secure import derive_keys
 
