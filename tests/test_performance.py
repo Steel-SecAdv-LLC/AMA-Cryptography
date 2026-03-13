@@ -16,7 +16,7 @@ timing is unreliable. Set AMA_SKIP_PERF_TESTS=1 to skip.
 import os
 import secrets
 import time
-from typing import Callable
+from typing import Any, Callable
 
 import pytest
 
@@ -39,7 +39,7 @@ _force_run = _ci_perf or _skip_env in ("0", "false", "no")
 SKIP_PERF = _skip_env in ("1", "true", "yes") or (_in_ci and not _force_run)
 
 
-def benchmark(func: Callable, iterations: int = 1000) -> float:  # type: ignore[type-arg]
+def benchmark(func: Callable[..., Any], iterations: int = 1000) -> float:
     """
     Benchmark a function and return operations per second.
 

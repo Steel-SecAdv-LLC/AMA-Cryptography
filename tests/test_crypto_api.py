@@ -513,12 +513,12 @@ class TestProviderAbstractBase:
     def test_crypto_provider_is_abstract(self) -> None:
         """Verify CryptoProvider cannot be instantiated directly."""
         with pytest.raises(TypeError):
-            CryptoProvider()  # type: ignore[abstract]
+            CryptoProvider()
 
     def test_kem_provider_is_abstract(self) -> None:
         """Verify KEMProvider cannot be instantiated directly."""
         with pytest.raises(TypeError):
-            KEMProvider()  # type: ignore[abstract]
+            KEMProvider()
 
 
 class TestEd25519NativeBackendConsistency:

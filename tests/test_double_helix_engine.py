@@ -32,6 +32,7 @@ AI Co-Architects:
 import sys
 import unittest
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -242,14 +243,14 @@ class TestTermEnableDisable(unittest.TestCase):
 
     def test_disable_quantum_term(self) -> None:
         """Test disabling quantum term."""
-        config = {"enable_Q": False}
-        engine = AmaEquationEngine(state_dim=50, config=config, random_seed=42)  # type: ignore[arg-type]
+        config: dict[str, Any] = {"enable_Q": False}
+        engine = AmaEquationEngine(state_dim=50, config=config, random_seed=42)
         self.assertFalse(engine.enable_Q)
 
     def test_disable_vqe_term(self) -> None:
         """Test disabling VQE term."""
-        config = {"enable_VQE": False}
-        engine = AmaEquationEngine(state_dim=50, config=config, random_seed=42)  # type: ignore[arg-type]
+        config: dict[str, Any] = {"enable_VQE": False}
+        engine = AmaEquationEngine(state_dim=50, config=config, random_seed=42)
         self.assertFalse(engine.enable_VQE)
 
     def test_custom_term_weights(self) -> None:

@@ -11,6 +11,8 @@ Tests for Phase 2 cryptographic primitives:
 - Deterministic keygen (Kyber-1024, ML-DSA-65)
 """
 
+from typing import Any
+
 import pytest
 
 from ama_cryptography.pqc_backends import (
@@ -179,7 +181,7 @@ class TestArgon2id:
         """Same inputs produce same output."""
         from ama_cryptography.pqc_backends import native_argon2id
 
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "password": b"test_password",
             "salt": b"a" * 16,
             "t_cost": 1,
@@ -187,47 +189,53 @@ class TestArgon2id:
             "parallelism": 1,
             "out_len": 32,
         }
-        r1 = native_argon2id(**kwargs)  # type: ignore[arg-type]
-        r2 = native_argon2id(**kwargs)  # type: ignore[arg-type]
+        r1 = native_argon2id(**kwargs)
+        r2 = native_argon2id(**kwargs)
         assert r1 == r2
 
     def test_different_passwords_differ(self) -> None:
         """Different passwords produce different outputs."""
         from ama_cryptography.pqc_backends import native_argon2id
 
-        common = {"salt": b"b" * 16, "t_cost": 1, "m_cost": 64, "parallelism": 1, "out_len": 32}
-        r1 = native_argon2id(password=b"password1", **common)  # type: ignore[arg-type]
-        r2 = native_argon2id(password=b"password2", **common)  # type: ignore[arg-type]
+        common: dict[str, Any] = {
+            "salt": b"b" * 16,
+            "t_cost": 1,
+            "m_cost": 64,
+            "parallelism": 1,
+            "out_len": 32,
+        }
+        r1 = native_argon2id(password=b"password1", **common)
+        r2 = native_argon2id(password=b"password2", **common)
         assert r1 != r2
 
     def test_different_salts_differ(self) -> None:
         """Different salts produce different outputs."""
         from ama_cryptography.pqc_backends import native_argon2id
 
-        common = {
+        common: dict[str, Any] = {
             "password": b"password",
             "t_cost": 1,
             "m_cost": 64,
             "parallelism": 1,
             "out_len": 32,
         }
-        r1 = native_argon2id(salt=b"c" * 16, **common)  # type: ignore[arg-type]
-        r2 = native_argon2id(salt=b"d" * 16, **common)  # type: ignore[arg-type]
+        r1 = native_argon2id(salt=b"c" * 16, **common)
+        r2 = native_argon2id(salt=b"d" * 16, **common)
         assert r1 != r2
 
     def test_variable_output_length(self) -> None:
         """Different output lengths produce different-length results."""
         from ama_cryptography.pqc_backends import native_argon2id
 
-        common = {
+        common: dict[str, Any] = {
             "password": b"password",
             "salt": b"e" * 16,
             "t_cost": 1,
             "m_cost": 64,
             "parallelism": 1,
         }
-        r32 = native_argon2id(out_len=32, **common)  # type: ignore[arg-type]
-        r64 = native_argon2id(out_len=64, **common)  # type: ignore[arg-type]
+        r32 = native_argon2id(out_len=32, **common)
+        r64 = native_argon2id(out_len=64, **common)
         assert len(r32) == 32
         assert len(r64) == 64
 

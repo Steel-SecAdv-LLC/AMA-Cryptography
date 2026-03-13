@@ -6,14 +6,13 @@ Tests for the secure memory module (ama_cryptography.secure_memory).
 
 Verifies:
 - Memory zeroing functionality
-- Memory locking (mlock) when available
+- Memory locking raises NotImplementedError (libsodium removed)
 - SecureBuffer context manager behavior
 - Constant-time comparison
-- Graceful fallback when pynacl is not available
 """
 
-import platform
 import secrets
+from typing import Any
 
 import pytest
 
@@ -22,7 +21,7 @@ class TestSecureMemoryAvailability:
     """Tests for module availability and status."""
 
     def test_module_imports(self) -> None:
-        """Module imports successfully regardless of pynacl availability."""
+        """Module imports successfully."""
         from ama_cryptography import secure_memory
 
         # Should always have these functions
@@ -34,12 +33,12 @@ class TestSecureMemoryAvailability:
         assert hasattr(secure_memory, "is_available")
         assert hasattr(secure_memory, "get_status")
 
-    def test_is_available_returns_bool(self) -> None:
-        """is_available() returns a boolean."""
+    def test_is_available_returns_true(self) -> None:
+        """is_available() returns True (stdlib implementation always available)."""
         from ama_cryptography.secure_memory import is_available
 
         result = is_available()
-        assert isinstance(result, bool)
+        assert result is True
 
     def test_get_status_returns_dict(self) -> None:
         """get_status() returns status dictionary."""
@@ -47,10 +46,10 @@ class TestSecureMemoryAvailability:
 
         status = get_status()
         assert isinstance(status, dict)
-        assert "available" in status
-        assert "backend" in status
-        assert "initialized" in status
-        assert status["backend"] in ("libsodium", "fallback")
+        assert status["available"] is True
+        assert status["backend"] == "stdlib"
+        assert status["initialized"] is True
+        assert status["mlock_available"] is False
 
 
 class TestSecureMemzero:
@@ -103,9 +102,9 @@ class TestSecureMemzero:
         """secure_memzero rejects immutable bytes."""
         from ama_cryptography.secure_memory import secure_memzero
 
-        data = b"immutable"
+        data: Any = b"immutable"
         with pytest.raises(TypeError):
-            secure_memzero(data)  # type: ignore[arg-type]
+            secure_memzero(data)
 
     def test_large_buffer(self) -> None:
         """secure_memzero handles large buffers."""
@@ -125,56 +124,23 @@ class TestSecureMemzero:
 
 
 class TestSecureMlock:
-    """Tests for memory locking functionality."""
+    """Tests for memory locking functionality (raises NotImplementedError)."""
 
-    def test_mlock_returns_bool(self) -> None:
-        """secure_mlock returns boolean indicating success or graceful fallback."""
-        import warnings
-
+    def test_mlock_raises_not_implemented(self) -> None:
+        """secure_mlock raises NotImplementedError (libsodium removed)."""
         from ama_cryptography.secure_memory import secure_mlock
 
         data = bytearray(4096)
+        with pytest.raises(NotImplementedError):
+            secure_mlock(data)
 
-        # Suppress expected warning when pynacl mlock is unavailable
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            result = secure_mlock(data)
-
-        assert isinstance(result, bool)
-
-    def test_mlock_munlock_roundtrip(self) -> None:
-        """Can lock and unlock memory without error."""
-        import warnings
-
-        from ama_cryptography.secure_memory import secure_mlock, secure_munlock
+    def test_munlock_raises_not_implemented(self) -> None:
+        """secure_munlock raises NotImplementedError (libsodium removed)."""
+        from ama_cryptography.secure_memory import secure_munlock
 
         data = bytearray(4096)
-
-        # Suppress expected warning when pynacl mlock is unavailable
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            locked = secure_mlock(data)
-            # Whether it succeeds depends on system limits
-            # Just verify no crash
-
-            if locked:
-                secure_munlock(data)
-                # May or may not succeed depending on implementation
-
-    def test_mlock_empty_buffer(self) -> None:
-        """secure_mlock handles empty buffer."""
-        import warnings
-
-        from ama_cryptography.secure_memory import secure_mlock
-
-        data = bytearray()
-
-        # Suppress expected warning when pynacl mlock is unavailable
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            result = secure_mlock(data)  # Should not raise
-
-        assert isinstance(result, bool)
+        with pytest.raises(NotImplementedError):
+            secure_munlock(data)
 
 
 class TestConstantTimeCompare:
@@ -233,34 +199,21 @@ class TestSecureBuffer:
 
     def test_basic_usage(self) -> None:
         """SecureBuffer can be used as context manager."""
-        import warnings
-
         from ama_cryptography.secure_memory import SecureBuffer
 
-        # Suppress expected warning when pynacl mlock is unavailable
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            with SecureBuffer(32) as buf:
-                assert len(buf) == 32
-                buf[:] = secrets.token_bytes(32)
-                # Can use buffer within context
-
-        # Buffer is zeroed after context exits
+        with SecureBuffer(32) as buf:
+            assert len(buf) == 32
+            buf[:] = secrets.token_bytes(32)
 
     def test_buffer_zeroed_on_exit(self) -> None:
         """SecureBuffer zeros data on context exit."""
-        import warnings
-
         from ama_cryptography.secure_memory import SecureBuffer
 
         buffer_ref = None
 
-        # Suppress expected warning when pynacl mlock is unavailable
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            with SecureBuffer(100) as buf:
-                buf[:] = b"x" * 100
-                buffer_ref = buf
+        with SecureBuffer(100) as buf:
+            buf[:] = b"x" * 100
+            buffer_ref = buf
 
         # After exit, buffer should be zeroed
         assert all(b == 0 for b in buffer_ref)
@@ -281,6 +234,13 @@ class TestSecureBuffer:
         sb = SecureBuffer(64)
         assert sb.size == 64
 
+    def test_locked_property_always_false(self) -> None:
+        """SecureBuffer.locked is always False (no libsodium)."""
+        from ama_cryptography.secure_memory import SecureBuffer
+
+        sb = SecureBuffer(32)
+        assert sb.locked is False
+
     def test_negative_size_raises(self) -> None:
         """SecureBuffer with negative size raises ValueError."""
         from ama_cryptography.secure_memory import SecureBuffer
@@ -290,34 +250,24 @@ class TestSecureBuffer:
 
     def test_zero_size(self) -> None:
         """SecureBuffer with zero size works."""
-        import warnings
-
         from ama_cryptography.secure_memory import SecureBuffer
 
-        # Suppress expected warning when pynacl mlock is unavailable
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            with SecureBuffer(0) as buf:
-                assert len(buf) == 0
+        with SecureBuffer(0) as buf:
+            assert len(buf) == 0
 
     def test_exception_still_zeros(self) -> None:
         """SecureBuffer zeros data even if exception occurs."""
-        import warnings
-
         from ama_cryptography.secure_memory import SecureBuffer
 
         buffer_ref = None
 
-        # Suppress expected warning when pynacl mlock is unavailable
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            try:
-                with SecureBuffer(50) as buf:
-                    buf[:] = b"sensitive" + b"\x00" * 41
-                    buffer_ref = buf
-                    raise ValueError("Test exception")
-            except ValueError:
-                pass
+        try:
+            with SecureBuffer(50) as buf:
+                buf[:] = b"sensitive" + b"\x00" * 41
+                buffer_ref = buf
+                raise ValueError("Test exception")
+        except ValueError:
+            pass
 
         # buf was zeroed by SecureBuffer.__exit__; buffer_ref is the same object
         assert buffer_ref is not None
@@ -329,31 +279,21 @@ class TestSecureBufferFunction:
 
     def test_basic_usage(self) -> None:
         """secure_buffer() can be used as context manager."""
-        import warnings
-
         from ama_cryptography.secure_memory import secure_buffer
 
-        # Suppress expected warning when pynacl mlock is unavailable
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            with secure_buffer(32) as buf:
-                assert len(buf) == 32
-                buf[:] = secrets.token_bytes(32)
+        with secure_buffer(32) as buf:
+            assert len(buf) == 32
+            buf[:] = secrets.token_bytes(32)
 
     def test_buffer_zeroed_on_exit(self) -> None:
         """secure_buffer() zeros data on exit."""
-        import warnings
-
         from ama_cryptography.secure_memory import secure_buffer
 
         buffer_ref = None
 
-        # Suppress expected warning when pynacl mlock is unavailable
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            with secure_buffer(100) as buf:
-                buf[:] = b"x" * 100
-                buffer_ref = buf
+        with secure_buffer(100) as buf:
+            buf[:] = b"x" * 100
+            buffer_ref = buf
 
         assert all(b == 0 for b in buffer_ref)
 
@@ -397,8 +337,6 @@ class TestPlatformCompatibility:
 
     def test_works_on_current_platform(self) -> None:
         """Module works on current platform."""
-        import warnings
-
         from ama_cryptography.secure_memory import (
             SecureBuffer,
             constant_time_compare,
@@ -410,6 +348,7 @@ class TestPlatformCompatibility:
         # All basic operations should work
         status = get_status()
         assert status is not None
+        assert status["available"] is True
 
         data = bytearray(32)
         secure_memzero(data)
@@ -421,21 +360,6 @@ class TestPlatformCompatibility:
         rand = secure_random_bytes(16)
         assert len(rand) == 16
 
-        # Suppress expected warning when pynacl mlock is unavailable
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            with SecureBuffer(32) as buf:
-                buf[:] = rand + rand
-                assert len(buf) == 32
-
-    @pytest.mark.skipif(platform.system() == "Windows", reason="mlock may fail on Windows")
-    def test_mlock_on_unix(self) -> None:
-        """Memory locking may work on Unix systems."""
-        from ama_cryptography.secure_memory import get_status, secure_mlock
-
-        status = get_status()
-        if status["mlock_available"]:
-            data = bytearray(4096)
-            # May or may not succeed depending on ulimit
-            result = secure_mlock(data)
-            assert isinstance(result, bool)
+        with SecureBuffer(32) as buf:
+            buf[:] = rand + rand
+            assert len(buf) == 32

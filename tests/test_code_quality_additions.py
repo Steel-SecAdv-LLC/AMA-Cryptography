@@ -16,15 +16,10 @@ Date: 2026-03-08
 Version: 2.0
 """
 
-import importlib
 import logging
-import warnings
 from typing import Any
-from unittest.mock import patch
 
 import pytest
-
-from ama_cryptography import secure_memory as _sm_module
 
 # Check if native backends are available
 try:
@@ -64,12 +59,6 @@ class TestSecureMemoryErrorClasses:
 
         assert issubclass(SecureMemoryError, Exception)
 
-    def test_secure_memory_not_available_exists(self) -> None:
-        """SecureMemoryNotAvailable class is defined."""
-        from ama_cryptography.secure_memory import SecureMemoryError, SecureMemoryNotAvailable
-
-        assert issubclass(SecureMemoryNotAvailable, SecureMemoryError)
-
     def test_secure_memory_error_can_be_raised(self) -> None:
         """SecureMemoryError can be raised and caught."""
         from ama_cryptography.secure_memory import SecureMemoryError
@@ -77,79 +66,48 @@ class TestSecureMemoryErrorClasses:
         with pytest.raises(SecureMemoryError, match="test error message"):
             raise SecureMemoryError("test error message")
 
-    def test_secure_memory_not_available_can_be_raised(self) -> None:
-        """SecureMemoryNotAvailable can be raised and caught."""
-        from ama_cryptography.secure_memory import SecureMemoryNotAvailable
 
-        with pytest.raises(SecureMemoryNotAvailable, match="pynacl"):
-            raise SecureMemoryNotAvailable("pynacl not installed")
+class TestSecureMemoryImplementation:
+    """Tests for stdlib-only secure memory implementation."""
 
-    def test_check_nacl_available_raises_when_unavailable(self) -> None:
-        """_check_nacl_available raises when pynacl is unavailable."""
-        from ama_cryptography.secure_memory import SecureMemoryNotAvailable
-
-        # Temporarily mock _HAS_NACL to False
-        with patch("ama_cryptography.secure_memory._HAS_NACL", False):
-            from ama_cryptography.secure_memory import _check_nacl_available
-
-            with pytest.raises(SecureMemoryNotAvailable):
-                _check_nacl_available()
-
-
-class TestSecureMemoryFallbackBehavior:
-    """Tests for fallback behavior when pynacl is unavailable."""
-
-    def test_secure_memzero_fallback_works(self) -> None:
-        """secure_memzero works without pynacl (fallback mode)."""
-        from ama_cryptography.secure_memory import _fallback_memzero
+    def test_secure_memzero_works(self) -> None:
+        """secure_memzero zeros data using multi-pass overwrite."""
+        from ama_cryptography.secure_memory import _memzero
 
         data = bytearray(b"sensitive data here")
-        _fallback_memzero(data)
+        _memzero(data)
 
         assert all(b == 0 for b in data)
 
-    def test_fallback_memzero_multipass(self) -> None:
-        """Fallback memzero performs multi-pass overwrite."""
-        from ama_cryptography.secure_memory import _fallback_memzero
+    def test_memzero_multipass(self) -> None:
+        """_memzero performs multi-pass overwrite."""
+        from ama_cryptography.secure_memory import _memzero
 
-        # Create data and verify fallback zeros it
+        # Create data and verify it zeros it
         data = bytearray(100)
         for i in range(len(data)):
             data[i] = 0xAB
 
-        _fallback_memzero(data)
+        _memzero(data)
 
         # All bytes should be zero
         assert all(b == 0 for b in data)
 
-    def test_mlock_without_nacl_returns_false(self) -> None:
-        """secure_mlock returns False when pynacl unavailable."""
-        with patch("ama_cryptography.secure_memory._HAS_NACL", False):
-            # Need to reload to pick up the patched value
-            importlib.reload(_sm_module)
+    def test_mlock_raises_not_implemented(self) -> None:
+        """secure_mlock raises NotImplementedError (libsodium removed)."""
+        from ama_cryptography.secure_memory import secure_mlock
 
-            data = bytearray(100)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", RuntimeWarning)
-                result = _sm_module.secure_mlock(data)
+        data = bytearray(100)
+        with pytest.raises(NotImplementedError, match="libsodium"):
+            secure_mlock(data)
 
-            assert result is False
+    def test_munlock_raises_not_implemented(self) -> None:
+        """secure_munlock raises NotImplementedError (libsodium removed)."""
+        from ama_cryptography.secure_memory import secure_munlock
 
-            # Restore
-            importlib.reload(_sm_module)
-
-    def test_munlock_without_nacl_returns_false(self) -> None:
-        """secure_munlock returns False when pynacl unavailable."""
-        with patch("ama_cryptography.secure_memory._HAS_NACL", False):
-            importlib.reload(_sm_module)
-
-            data = bytearray(100)
-            result = _sm_module.secure_munlock(data)
-
-            assert result is False
-
-            # Restore
-            importlib.reload(_sm_module)
+        data = bytearray(100)
+        with pytest.raises(NotImplementedError, match="libsodium"):
+            secure_munlock(data)
 
 
 class TestSecureMemoryGetStatus:
@@ -167,11 +125,11 @@ class TestSecureMemoryGetStatus:
         assert "mlock_available" in status
 
     def test_get_status_backend_values(self) -> None:
-        """get_status backend is either libsodium or fallback."""
+        """get_status backend is stdlib."""
         from ama_cryptography.secure_memory import get_status
 
         status = get_status()
-        assert status["backend"] in ("libsodium", "fallback")
+        assert status["backend"] == "stdlib"
 
     def test_get_status_types(self) -> None:
         """get_status returns correct types."""
@@ -585,7 +543,6 @@ class TestModuleExports:
         expected_exports = [
             "SecureBuffer",
             "SecureMemoryError",
-            "SecureMemoryNotAvailable",
             "constant_time_compare",
             "get_status",
             "is_available",

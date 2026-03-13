@@ -280,7 +280,7 @@ def guardian_monitor_disabled() -> Any:
 
 
 @pytest.fixture
-def sample_omni_code() -> dict:  # type: ignore[type-arg]
+def sample_omni_code() -> dict[str, Any]:
     """Provide a sample Omni-Code structure for package tests."""
     return {
         "sequence_id": "test-sequence-001",

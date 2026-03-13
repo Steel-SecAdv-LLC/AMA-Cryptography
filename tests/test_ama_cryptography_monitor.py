@@ -666,14 +666,16 @@ def complex_function(a, b, c, d):
         code = "def f(x): return x"
         tree = ast.parse(code)
         func_node = tree.body[0]
-        complexity = analyzer._calculate_complexity(func_node)  # type: ignore[arg-type]
+        assert isinstance(func_node, ast.FunctionDef)
+        complexity = analyzer._calculate_complexity(func_node)
         assert complexity == 1
 
         # Function with if: complexity = 2
         code = "def f(x):\n    if x > 0:\n        return x\n    return 0"
         tree = ast.parse(code)
         func_node = tree.body[0]
-        complexity = analyzer._calculate_complexity(func_node)  # type: ignore[arg-type]
+        assert isinstance(func_node, ast.FunctionDef)
+        complexity = analyzer._calculate_complexity(func_node)
         assert complexity == 2
 
     def test_recommendation_generation(self) -> None:

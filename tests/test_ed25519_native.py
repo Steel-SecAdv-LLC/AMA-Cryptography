@@ -51,7 +51,7 @@ def _pyca_available() -> bool:
         return False
 
 
-def _native_sign_and_verify(seed: bytes, message: bytes) -> tuple:  # type: ignore[type-arg]
+def _native_sign_and_verify(seed: bytes, message: bytes) -> tuple[Any, ...]:
     """Sign with native C backend. Returns (pk, sk, signature)."""
     from ama_cryptography.pqc_backends import native_ed25519_keypair_from_seed, native_ed25519_sign
 
@@ -60,7 +60,7 @@ def _native_sign_and_verify(seed: bytes, message: bytes) -> tuple:  # type: igno
     return pk, sk, sig
 
 
-def _pyca_sign(seed: bytes, message: bytes) -> tuple:  # type: ignore[type-arg]
+def _pyca_sign(seed: bytes, message: bytes) -> tuple[Any, ...]:
     """Sign with PyCA. Returns (pk_bytes, sig_bytes)."""
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ed25519

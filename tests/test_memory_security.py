@@ -214,4 +214,5 @@ class TestSensitiveDataCleanup:
 
         # All salts should be 32 bytes
         for salt in salts:
-            assert len(salt) == 32, "Salt should be 32 bytes"  # type: ignore[arg-type]
+            assert salt is not None
+            assert len(salt) == 32, "Salt should be 32 bytes"

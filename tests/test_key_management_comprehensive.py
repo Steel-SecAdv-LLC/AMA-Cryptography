@@ -25,7 +25,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ama_cryptography.key_management import (  # type: ignore[attr-defined]
+from ama_cryptography.key_management import (
     HDKeyDerivation,
     HSMKeyStorage,
     KeyMetadata,

@@ -266,6 +266,18 @@ module = "tests.*"
 disallow_untyped_decorators = false
 disallow_untyped_calls = false
 
+[[tool.mypy.overrides]]
+module = "tests.test_crypto_api"
+disable_error_code = ["abstract"]
+
+[[tool.mypy.overrides]]
+module = "tests.test_crypto_import_paths"
+disable_error_code = ["override"]
+
+[[tool.mypy.overrides]]
+module = "tests.test_key_management_comprehensive"
+disable_error_code = ["attr-defined"]
+
 # Pytest configuration (consolidated from pytest.ini)
 [tool.pytest.ini_options]
 minversion = "7.0"

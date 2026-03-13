@@ -92,7 +92,7 @@ class TestFieldSizeValidation:
         class FakeStr(str):
             """String that encodes to huge bytes."""
 
-            def encode(self, encoding: Any = "utf-8") -> Any:  # type: ignore[override]
+            def encode(self, encoding: Any = "utf-8") -> Any:
                 return HugeBytes(b"x")
 
         huge = FakeStr("x")
