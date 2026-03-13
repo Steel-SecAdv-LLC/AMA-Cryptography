@@ -710,13 +710,15 @@ class TestMalformedInputHandling:
         """Invalid hex in content_hash should not crash."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         pkg.content_hash = "not_valid_hex!!!"
-        # Should not raise, should return False for content_hash
+        # Should either return False for content_hash or raise ValueError
         try:
             results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
-            # If it doesn't crash, content_hash should be False
             assert results["content_hash"] is False
         except ValueError:
-            pass  # Acceptable to raise ValueError for invalid hex
+            # ValueError is acceptable for invalid hex — the function rejects bad input
+            pass
+        except Exception as exc:
+            pytest.fail(f"Unexpected exception for invalid hex: {exc!r}")
 
     def test_invalid_hex_in_hmac_tag(self, kms):
         """Invalid hex in hmac_tag should not crash."""
@@ -726,7 +728,10 @@ class TestMalformedInputHandling:
             results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
             assert results["hmac"] is False
         except ValueError:
-            pass  # Acceptable to raise ValueError for invalid HMAC
+            # ValueError is acceptable for invalid HMAC hex — the function rejects bad input
+            pass
+        except Exception as exc:
+            pytest.fail(f"Unexpected exception for invalid HMAC hex: {exc!r}")
 
     def test_truncated_signature(self, kms):
         """Truncated signature should not crash."""
@@ -736,7 +741,10 @@ class TestMalformedInputHandling:
             results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
             assert results["ed25519"] is False
         except ValueError:
-            pass  # Acceptable for truncated signature
+            # ValueError is acceptable for truncated signature — the function rejects bad input
+            pass
+        except Exception as exc:
+            pytest.fail(f"Unexpected exception for truncated signature: {exc!r}")
 
     def test_empty_signature(self, kms):
         """Empty signature should not crash."""
@@ -746,7 +754,10 @@ class TestMalformedInputHandling:
             results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
             assert results["ed25519"] is False
         except ValueError:
-            pass  # Acceptable for empty signature
+            # ValueError is acceptable for empty signature — the function rejects bad input
+            pass
+        except Exception as exc:
+            pytest.fail(f"Unexpected exception for empty signature: {exc!r}")
 
 
 class TestKeySecurityProperties:
@@ -821,8 +832,10 @@ class TestConcurrencyAndConsistency:
         for _ in range(5):
             pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
             timestamps.add(pkg.timestamp)
-        # Timestamps should be unique (or at least mostly unique)
-        assert len(timestamps) >= 1
+        # All 5 timestamps must be unique — no duplicates allowed
+        assert len(timestamps) == 5, (
+            f"Expected 5 unique timestamps, got {len(timestamps)}: duplicates detected"
+        )
 
 
 if __name__ == "__main__":
