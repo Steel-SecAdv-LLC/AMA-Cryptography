@@ -205,7 +205,7 @@ class TestCryptoPostureController:
             rotation_cooldown=0,
         )
         controller.evaluate_and_respond()
-        on_rotation.assert_called()
+        on_rotation.assert_called_once()
 
     def test_algorithm_switch_callback_triggered(self) -> None:
         """Algorithm switch callback should fire on ROTATE_AND_SWITCH."""
