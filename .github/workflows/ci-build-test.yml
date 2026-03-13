@@ -237,7 +237,7 @@ jobs:
         run: pip-audit
 
       - name: Security scan (bandit)
-        run: bandit -r ama_cryptography/ -ll
+        run: bandit -r ama_cryptography/ -l
 
   # Docker Build
   docker:
