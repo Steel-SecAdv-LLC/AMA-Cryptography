@@ -55,6 +55,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
+
 def _median_sorted(values: List[float]) -> float:
     """Median of a pre-sorted list. O(1) after sort."""
     n = len(values)

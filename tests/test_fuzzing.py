@@ -11,7 +11,9 @@ potential security issues.
 
 import os
 import secrets
+from typing import Any
 
+import pytest
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
@@ -66,7 +68,7 @@ class TestLengthPrefixFuzzing:
     """Fuzz tests for length-prefixed encoding."""
 
     @given(st.lists(st.text(max_size=500), min_size=1, max_size=20))
-    def test_encoding_deterministic(self, fields):
+    def test_encoding_deterministic(self, fields: Any) -> None:
         """Same input always produces same output (determinism)."""
         e1 = length_prefixed_encode(*fields)
         e2 = length_prefixed_encode(*fields)
@@ -76,7 +78,7 @@ class TestLengthPrefixFuzzing:
         st.lists(st.text(max_size=100), min_size=1, max_size=10),
         st.lists(st.text(max_size=100), min_size=1, max_size=10),
     )
-    def test_no_collisions(self, fields1, fields2):
+    def test_no_collisions(self, fields1: Any, fields2: Any) -> None:
         """Different inputs produce different outputs (collision resistance)."""
         assume(fields1 != fields2)
         e1 = length_prefixed_encode(*fields1)
@@ -84,7 +86,7 @@ class TestLengthPrefixFuzzing:
         assert e1 != e2, f"Collision detected: {fields1} vs {fields2}"
 
     @given(st.lists(st.binary(max_size=100), min_size=1, max_size=10))
-    def test_binary_fields_roundtrip(self, fields):
+    def test_binary_fields_roundtrip(self, fields: Any) -> None:
         """Binary fields encode without error."""
         # Convert binary to strings for encoding
         str_fields = [f.hex() for f in fields]
@@ -107,7 +109,7 @@ class TestCanonicalHashFuzzing:
             max_size=20,
         ),
     )
-    def test_hash_deterministic(self, dna, params):
+    def test_hash_deterministic(self, dna: Any, params: Any) -> None:
         """Hash is deterministic for same inputs."""
         h1 = canonical_hash_code(dna, params)
         h2 = canonical_hash_code(dna, params)
@@ -118,7 +120,7 @@ class TestCanonicalHashFuzzing:
         st.text(min_size=1, max_size=100, alphabet="ACGT"),
         st.text(min_size=1, max_size=100, alphabet="ACGT"),
     )
-    def test_different_dna_different_hash(self, dna1, dna2):
+    def test_different_dna_different_hash(self, dna1: Any, dna2: Any) -> None:
         """Different Code sequences produce different hashes."""
         assume(dna1 != dna2)
         params = [(1.0, 1.0)]
@@ -131,14 +133,14 @@ class TestHMACFuzzing:
     """Fuzz tests for HMAC authentication."""
 
     @given(st.binary(max_size=10000))
-    def test_hmac_roundtrip(self, message):
+    def test_hmac_roundtrip(self, message: Any) -> None:
         """HMAC verify accepts valid tags."""
         key = secrets.token_bytes(32)
         tag = hmac_authenticate(message, key)
         assert hmac_verify(message, tag, key), "Valid HMAC must verify"
 
     @given(st.binary(max_size=1000))
-    def test_modified_tag_fails(self, message):
+    def test_modified_tag_fails(self, message: Any) -> None:
         """Modified tags fail verification (integrity)."""
         key = secrets.token_bytes(32)
         tag = bytearray(hmac_authenticate(message, key))
@@ -146,7 +148,7 @@ class TestHMACFuzzing:
         assert not hmac_verify(message, bytes(tag), key), "Modified tag must fail"
 
     @given(st.binary(max_size=1000))
-    def test_wrong_key_fails(self, message):
+    def test_wrong_key_fails(self, message: Any) -> None:
         """Wrong key fails verification (authentication)."""
         key1 = secrets.token_bytes(32)
         key2 = secrets.token_bytes(32)
@@ -155,7 +157,7 @@ class TestHMACFuzzing:
         assert not hmac_verify(message, tag, key2), "Wrong key must fail"
 
     @given(st.binary(max_size=1000), st.binary(max_size=1000))
-    def test_modified_message_fails(self, message1, message2):
+    def test_modified_message_fails(self, message1: Any, message2: Any) -> None:
         """Modified message fails verification."""
         assume(message1 != message2)
         key = secrets.token_bytes(32)
@@ -167,14 +169,14 @@ class TestEd25519Fuzzing:
     """Fuzz tests for Ed25519 signatures."""
 
     @given(st.binary(max_size=10000))
-    def test_sign_verify_roundtrip(self, message):
+    def test_sign_verify_roundtrip(self, message: Any) -> None:
         """Signatures verify correctly."""
         kp = generate_ed25519_keypair()
         sig = ed25519_sign(message, kp.private_key)
         assert ed25519_verify(message, sig, kp.public_key), "Valid signature must verify"
 
     @given(st.binary(max_size=1000))
-    def test_modified_signature_fails(self, message):
+    def test_modified_signature_fails(self, message: Any) -> None:
         """Modified signatures fail verification."""
         kp = generate_ed25519_keypair()
         sig = bytearray(ed25519_sign(message, kp.private_key))
@@ -182,7 +184,7 @@ class TestEd25519Fuzzing:
         assert not ed25519_verify(message, bytes(sig), kp.public_key), "Modified sig must fail"
 
     @given(st.binary(max_size=1000))
-    def test_wrong_key_fails(self, message):
+    def test_wrong_key_fails(self, message: Any) -> None:
         """Wrong public key fails verification."""
         kp1 = generate_ed25519_keypair()
         kp2 = generate_ed25519_keypair()
@@ -194,7 +196,7 @@ class TestSecureWipeFuzzing:
     """Fuzz tests for secure memory wiping."""
 
     @given(st.binary(min_size=1, max_size=10000))
-    def test_wipe_zeros_all_bytes(self, data):
+    def test_wipe_zeros_all_bytes(self, data: Any) -> None:
         """secure_wipe zeros all bytes in bytearray."""
         ba = bytearray(data)
         assume(any(b != 0 for b in ba))  # Ensure not already zeroed
@@ -212,7 +214,7 @@ class TestDomainSeparationFuzzing:
         st.binary(min_size=32, max_size=32),  # content_hash (SHA3-256)
         st.binary(min_size=32, max_size=32),  # ethical_hash (SHA3-256)
     )
-    def test_signature_message_deterministic(self, content_hash, ethical_hash):
+    def test_signature_message_deterministic(self, content_hash: Any, ethical_hash: Any) -> None:
         """Same inputs always produce same signature message."""
         msg1 = build_signature_message(content_hash, ethical_hash, SIGNATURE_FORMAT_V2)
         msg2 = build_signature_message(content_hash, ethical_hash, SIGNATURE_FORMAT_V2)
@@ -222,7 +224,7 @@ class TestDomainSeparationFuzzing:
         st.binary(min_size=32, max_size=32),
         st.binary(min_size=32, max_size=32),
     )
-    def test_signature_message_length(self, content_hash, ethical_hash):
+    def test_signature_message_length(self, content_hash: Any, ethical_hash: Any) -> None:
         """Signature message has expected length (79 bytes for v2)."""
         msg = build_signature_message(content_hash, ethical_hash, SIGNATURE_FORMAT_V2)
         # 10 (prefix) + 5 (version) + 32 (content_hash) + 32 (ethical_hash) = 79
@@ -234,7 +236,13 @@ class TestDomainSeparationFuzzing:
         st.binary(min_size=32, max_size=32),
         st.binary(min_size=32, max_size=32),
     )
-    def test_different_inputs_different_messages(self, ch1, eh1, ch2, eh2):
+    def test_different_inputs_different_messages(
+        self,
+        ch1: Any,
+        eh1: Any,
+        ch2: Any,
+        eh2: Any,
+    ) -> None:
         """Different inputs produce different signature messages."""
         assume(ch1 != ch2 or eh1 != eh2)
         msg1 = build_signature_message(ch1, eh1, SIGNATURE_FORMAT_V2)
@@ -242,14 +250,14 @@ class TestDomainSeparationFuzzing:
         assert msg1 != msg2, "Different inputs must produce different messages"
 
     @given(st.binary(min_size=32, max_size=32))
-    def test_signature_message_contains_domain_prefix(self, content_hash):
+    def test_signature_message_contains_domain_prefix(self, content_hash: Any) -> None:
         """Signature message starts with domain prefix."""
         ethical_hash = secrets.token_bytes(32)
         msg = build_signature_message(content_hash, ethical_hash, SIGNATURE_FORMAT_V2)
         assert msg.startswith(b"AMA-PKG-v2"), "Message must start with domain prefix"
 
     @given(st.binary(min_size=32, max_size=32))
-    def test_ed25519_signs_domain_separated_message(self, content_hash):
+    def test_ed25519_signs_domain_separated_message(self, content_hash: Any) -> None:
         """Ed25519 can sign and verify domain-separated messages."""
         ethical_hash = secrets.token_bytes(32)
         msg = build_signature_message(content_hash, ethical_hash, SIGNATURE_FORMAT_V2)
@@ -265,10 +273,10 @@ class TestDilithiumFuzzing:
     """Fuzz tests for Dilithium (ML-DSA-65) signatures."""
 
     @given(st.binary(max_size=10000))
-    def test_dilithium_sign_verify_roundtrip(self, message):
+    def test_dilithium_sign_verify_roundtrip(self, message: Any) -> None:
         """Dilithium signatures verify correctly."""
         if not DILITHIUM_AVAILABLE:
-            return  # Skip if Dilithium not available
+            pytest.skip(reason="Dilithium not available")
 
         kp = generate_dilithium_keypair()
         sig = dilithium_sign(message, kp.secret_key)
@@ -277,10 +285,10 @@ class TestDilithiumFuzzing:
         ), "Valid Dilithium signature must verify"
 
     @given(st.binary(max_size=1000))
-    def test_dilithium_modified_signature_fails(self, message):
+    def test_dilithium_modified_signature_fails(self, message: Any) -> None:
         """Modified Dilithium signatures fail verification."""
         if not DILITHIUM_AVAILABLE:
-            return
+            pytest.skip(reason="Dilithium not available")
 
         kp = generate_dilithium_keypair()
         sig = bytearray(dilithium_sign(message, kp.secret_key))
@@ -288,10 +296,10 @@ class TestDilithiumFuzzing:
         assert not dilithium_verify(message, bytes(sig), kp.public_key), "Modified sig must fail"
 
     @given(st.binary(max_size=1000))
-    def test_dilithium_wrong_key_fails(self, message):
+    def test_dilithium_wrong_key_fails(self, message: Any) -> None:
         """Wrong Dilithium public key fails verification."""
         if not DILITHIUM_AVAILABLE:
-            return
+            pytest.skip(reason="Dilithium not available")
 
         kp1 = generate_dilithium_keypair()
         kp2 = generate_dilithium_keypair()
@@ -299,10 +307,10 @@ class TestDilithiumFuzzing:
         assert not dilithium_verify(message, sig, kp2.public_key), "Wrong key must fail"
 
     @given(st.binary(min_size=32, max_size=32))
-    def test_dilithium_signs_domain_separated_message(self, content_hash):
+    def test_dilithium_signs_domain_separated_message(self, content_hash: Any) -> None:
         """Dilithium can sign and verify domain-separated messages."""
         if not DILITHIUM_AVAILABLE:
-            return
+            pytest.skip(reason="Dilithium not available")
 
         ethical_hash = secrets.token_bytes(32)
         msg = build_signature_message(content_hash, ethical_hash, SIGNATURE_FORMAT_V2)
@@ -328,7 +336,7 @@ class TestCryptoPackageFuzzing:
             max_size=10,
         ),
     )
-    def test_package_roundtrip(self, codes, helix_params):
+    def test_package_roundtrip(self, codes: Any, helix_params: Any) -> None:
         """Created packages verify successfully."""
         kms = generate_key_management_system("fuzz_test")
         pkg = create_crypto_package(codes, helix_params, kms, "fuzz_author")
@@ -351,7 +359,7 @@ class TestCryptoPackageFuzzing:
         st.text(min_size=1, max_size=100, alphabet="ACGT"),
         st.text(min_size=1, max_size=100, alphabet="ACGT"),
     )
-    def test_tampered_dna_fails(self, dna1, dna2):
+    def test_tampered_dna_fails(self, dna1: Any, dna2: Any) -> None:
         """Verification fails when Omni-Codes are tampered."""
         assume(dna1 != dna2)
         params = [(1.0, 1.0)]

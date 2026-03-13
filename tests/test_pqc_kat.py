@@ -18,6 +18,7 @@ References:
 """
 
 import secrets
+from typing import Any
 
 import pytest
 
@@ -151,7 +152,7 @@ class MLKEM512Spec:
 
 
 @pytest.fixture
-def dilithium_provider():
+def dilithium_provider() -> Any:
     """Get Dilithium provider if available."""
     from ama_cryptography.pqc_backends import DILITHIUM_AVAILABLE
 
@@ -164,7 +165,7 @@ def dilithium_provider():
 
 
 @pytest.fixture
-def kyber_provider():
+def kyber_provider() -> Any:
     """Get Kyber provider if available."""
     from ama_cryptography.pqc_backends import KYBER_AVAILABLE
 
@@ -184,7 +185,7 @@ def kyber_provider():
 class TestMLDSA65KAT:
     """Known Answer Tests for ML-DSA-65 (Dilithium3)."""
 
-    def test_public_key_size(self, dilithium_provider):
+    def test_public_key_size(self, dilithium_provider: Any) -> None:
         """Public key size matches NIST FIPS 204 specification."""
         keypair = dilithium_provider.generate_keypair()
         assert len(keypair.public_key) == MLDSA65Spec.PUBLIC_KEY_BYTES, (
@@ -192,7 +193,7 @@ class TestMLDSA65KAT:
             f"got {len(keypair.public_key)}"
         )
 
-    def test_secret_key_size(self, dilithium_provider):
+    def test_secret_key_size(self, dilithium_provider: Any) -> None:
         """Secret key size matches NIST FIPS 204 specification."""
         keypair = dilithium_provider.generate_keypair()
         assert len(keypair.secret_key) == MLDSA65Spec.SECRET_KEY_BYTES, (
@@ -200,7 +201,7 @@ class TestMLDSA65KAT:
             f"got {len(keypair.secret_key)}"
         )
 
-    def test_signature_size(self, dilithium_provider):
+    def test_signature_size(self, dilithium_provider: Any) -> None:
         """Signature size matches NIST FIPS 204 specification."""
         keypair = dilithium_provider.generate_keypair()
         message = b"NIST FIPS 204 KAT test message"
@@ -211,7 +212,7 @@ class TestMLDSA65KAT:
             f"got {len(signature)}"
         )
 
-    def test_sign_verify_roundtrip(self, dilithium_provider):
+    def test_sign_verify_roundtrip(self, dilithium_provider: Any) -> None:
         """Sign/verify round-trip produces valid signature."""
         keypair = dilithium_provider.generate_keypair()
         message = b"Round-trip test message for ML-DSA-65"
@@ -221,7 +222,7 @@ class TestMLDSA65KAT:
 
         assert is_valid, "Valid signature should verify successfully"
 
-    def test_invalid_signature_fails(self, dilithium_provider):
+    def test_invalid_signature_fails(self, dilithium_provider: Any) -> None:
         """Modified signature fails verification."""
         keypair = dilithium_provider.generate_keypair()
         message = b"Test message"
@@ -233,7 +234,7 @@ class TestMLDSA65KAT:
         is_valid = dilithium_provider.verify(message, bytes(signature), keypair.public_key)
         assert not is_valid, "Modified signature should fail verification"
 
-    def test_wrong_message_fails(self, dilithium_provider):
+    def test_wrong_message_fails(self, dilithium_provider: Any) -> None:
         """Signature on different message fails verification."""
         keypair = dilithium_provider.generate_keypair()
         message1 = b"Original message"
@@ -244,7 +245,7 @@ class TestMLDSA65KAT:
 
         assert not is_valid, "Signature should not verify for different message"
 
-    def test_wrong_public_key_fails(self, dilithium_provider):
+    def test_wrong_public_key_fails(self, dilithium_provider: Any) -> None:
         """Signature fails verification with wrong public key."""
         keypair1 = dilithium_provider.generate_keypair()
         keypair2 = dilithium_provider.generate_keypair()
@@ -255,7 +256,7 @@ class TestMLDSA65KAT:
 
         assert not is_valid, "Signature should not verify with different public key"
 
-    def test_signature_consistency(self, dilithium_provider):
+    def test_signature_consistency(self, dilithium_provider: Any) -> None:
         """ML-DSA-65 signatures are valid regardless of randomization mode.
 
         Note: FIPS 204 allows both deterministic and randomized signing.
@@ -276,7 +277,7 @@ class TestMLDSA65KAT:
             message, sig2, keypair.public_key
         ), "Second signature should verify"
 
-    def test_empty_message(self, dilithium_provider):
+    def test_empty_message(self, dilithium_provider: Any) -> None:
         """Can sign and verify empty message."""
         keypair = dilithium_provider.generate_keypair()
         message = b""
@@ -286,7 +287,7 @@ class TestMLDSA65KAT:
 
         assert is_valid, "Empty message signature should verify"
 
-    def test_large_message(self, dilithium_provider):
+    def test_large_message(self, dilithium_provider: Any) -> None:
         """Can sign and verify large message."""
         keypair = dilithium_provider.generate_keypair()
         message = secrets.token_bytes(1024 * 1024)  # 1 MB
@@ -296,7 +297,7 @@ class TestMLDSA65KAT:
 
         assert is_valid, "Large message signature should verify"
 
-    def test_entropy_in_keys(self, dilithium_provider):
+    def test_entropy_in_keys(self, dilithium_provider: Any) -> None:
         """Generated keys have sufficient entropy."""
         keypair = dilithium_provider.generate_keypair()
 
@@ -317,7 +318,7 @@ class TestMLDSA65KAT:
 class TestMLKEM1024KAT:
     """Known Answer Tests for ML-KEM-1024 (Kyber-1024)."""
 
-    def test_public_key_size(self, kyber_provider):
+    def test_public_key_size(self, kyber_provider: Any) -> None:
         """Public key size matches NIST FIPS 203 specification."""
         keypair = kyber_provider.generate_keypair()
         assert len(keypair.public_key) == MLKEM1024Spec.PUBLIC_KEY_BYTES, (
@@ -325,7 +326,7 @@ class TestMLKEM1024KAT:
             f"got {len(keypair.public_key)}"
         )
 
-    def test_secret_key_size(self, kyber_provider):
+    def test_secret_key_size(self, kyber_provider: Any) -> None:
         """Secret key size matches NIST FIPS 203 specification."""
         keypair = kyber_provider.generate_keypair()
         assert len(keypair.secret_key) == MLKEM1024Spec.SECRET_KEY_BYTES, (
@@ -333,7 +334,7 @@ class TestMLKEM1024KAT:
             f"got {len(keypair.secret_key)}"
         )
 
-    def test_ciphertext_size(self, kyber_provider):
+    def test_ciphertext_size(self, kyber_provider: Any) -> None:
         """Ciphertext size matches NIST FIPS 203 specification."""
         keypair = kyber_provider.generate_keypair()
         ciphertext, _ = kyber_provider.encapsulate(keypair.public_key)
@@ -343,7 +344,7 @@ class TestMLKEM1024KAT:
             f"got {len(ciphertext)}"
         )
 
-    def test_shared_secret_size(self, kyber_provider):
+    def test_shared_secret_size(self, kyber_provider: Any) -> None:
         """Shared secret size matches NIST FIPS 203 specification."""
         keypair = kyber_provider.generate_keypair()
         _, shared_secret = kyber_provider.encapsulate(keypair.public_key)
@@ -353,7 +354,7 @@ class TestMLKEM1024KAT:
             f"got {len(shared_secret)}"
         )
 
-    def test_encapsulate_decapsulate_roundtrip(self, kyber_provider):
+    def test_encapsulate_decapsulate_roundtrip(self, kyber_provider: Any) -> None:
         """Encapsulate/decapsulate round-trip produces matching shared secrets."""
         keypair = kyber_provider.generate_keypair()
 
@@ -364,7 +365,7 @@ class TestMLKEM1024KAT:
             shared_secret_enc == shared_secret_dec
         ), "Encapsulated and decapsulated shared secrets must match"
 
-    def test_different_keypairs_different_secrets(self, kyber_provider):
+    def test_different_keypairs_different_secrets(self, kyber_provider: Any) -> None:
         """Different keypairs produce different shared secrets."""
         keypair1 = kyber_provider.generate_keypair()
         keypair2 = kyber_provider.generate_keypair()
@@ -375,7 +376,7 @@ class TestMLKEM1024KAT:
         # With overwhelming probability, secrets should differ
         assert secret1 != secret2, "Different keypairs should produce different secrets"
 
-    def test_encapsulation_randomness(self, kyber_provider):
+    def test_encapsulation_randomness(self, kyber_provider: Any) -> None:
         """Multiple encapsulations produce different ciphertexts."""
         keypair = kyber_provider.generate_keypair()
 
@@ -385,7 +386,7 @@ class TestMLKEM1024KAT:
         # Encapsulation should be randomized
         assert ct1 != ct2, "Multiple encapsulations should produce different ciphertexts"
 
-    def test_wrong_secret_key_implicit_rejection(self, kyber_provider):
+    def test_wrong_secret_key_implicit_rejection(self, kyber_provider: Any) -> None:
         """Decapsulation with wrong secret key uses implicit rejection."""
         keypair1 = kyber_provider.generate_keypair()
         keypair2 = kyber_provider.generate_keypair()
@@ -400,7 +401,7 @@ class TestMLKEM1024KAT:
             shared_secret_enc != shared_secret_wrong
         ), "Decapsulation with wrong key should not produce matching secret"
 
-    def test_entropy_in_shared_secret(self, kyber_provider):
+    def test_entropy_in_shared_secret(self, kyber_provider: Any) -> None:
         """Shared secret has good entropy distribution."""
         keypair = kyber_provider.generate_keypair()
         _, shared_secret = kyber_provider.encapsulate(keypair.public_key)
@@ -420,7 +421,11 @@ class TestMLKEM1024KAT:
 class TestPQCInteroperability:
     """Tests for PQC algorithm interoperability and consistency."""
 
-    def test_dilithium_kyber_independent(self, dilithium_provider, kyber_provider):
+    def test_dilithium_kyber_independent(
+        self,
+        dilithium_provider: Any,
+        kyber_provider: Any,
+    ) -> None:
         """Dilithium and Kyber operations are independent."""
         # Generate both keypairs
         dil_keypair = dilithium_provider.generate_keypair()
@@ -447,7 +452,7 @@ class TestPQCStress:
     """Stress tests for PQC operations."""
 
     @pytest.mark.parametrize("iterations", [10])
-    def test_dilithium_repeated_operations(self, dilithium_provider, iterations):
+    def test_dilithium_repeated_operations(self, dilithium_provider: Any, iterations: Any) -> None:
         """Repeated Dilithium operations remain consistent."""
         keypair = dilithium_provider.generate_keypair()
 
@@ -457,7 +462,7 @@ class TestPQCStress:
             assert dilithium_provider.verify(message, signature, keypair.public_key)
 
     @pytest.mark.parametrize("iterations", [10])
-    def test_kyber_repeated_operations(self, kyber_provider, iterations):
+    def test_kyber_repeated_operations(self, kyber_provider: Any, iterations: Any) -> None:
         """Repeated Kyber operations remain consistent."""
         keypair = kyber_provider.generate_keypair()
 

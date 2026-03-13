@@ -201,19 +201,19 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install "black==25.11.0" "flake8>=7.0,<8" "mypy>=1.9,<2" "isort>=5.13,<6"
+          pip install "black==25.11.0" "ruff>=0.4" "mypy>=1.9,<2" "isort>=5.13,<6"
+
+      - name: Lint (ruff)
+        run: ruff check .
 
       - name: Check formatting (black)
-        run: black --check --diff ama_cryptography/ tests/
+        run: black --check --diff .
 
       - name: Check import sorting (isort)
         run: isort --check-only --diff ama_cryptography/ tests/
 
-      - name: Lint (flake8)
-        run: flake8 ama_cryptography/ tests/ --max-line-length=100
-
-      - name: Type check (mypy)
-        run: mypy ama_cryptography/ --ignore-missing-imports
+      - name: Type check (mypy --strict)
+        run: mypy --strict ama_cryptography/ tests/
         continue-on-error: false
 
   # Security Audit
@@ -235,11 +235,9 @@ jobs:
 
       - name: Audit dependencies
         run: pip-audit
-        continue-on-error: true
 
       - name: Security scan (bandit)
-        run: bandit -r ama_cryptography/ -ll
-        continue-on-error: true
+        run: bandit -r ama_cryptography/ -l
 
   # Docker Build
   docker:

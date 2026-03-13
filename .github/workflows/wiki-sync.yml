@@ -26,9 +26,10 @@ jobs:
 
           # Try to clone the wiki. The GitHub wiki is a separate git repository
           # that only exists after at least one page has been created through the UI.
-          if git clone "$WIKI_URL" /tmp/wiki 2>/dev/null; then
+          if git clone "$WIKI_URL" /tmp/wiki; then
             echo "✓ Cloned existing wiki repository."
           else
+            echo "::error::Failed to clone wiki repository — check GH_TOKEN permissions"
             echo ""
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "  WIKI NOT INITIALIZED — one-time setup required"

@@ -16,6 +16,10 @@ Tests:
 - RFC 8032 Section 7.1 test vectors (both backends)
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 import pytest
 
 from ama_cryptography.pqc_backends import (
@@ -49,7 +53,7 @@ def _pyca_available() -> bool:
         return False
 
 
-def _native_sign_and_verify(seed: bytes, message: bytes) -> tuple:
+def _native_sign_and_verify(seed: bytes, message: bytes) -> tuple[Any, ...]:
     """Sign with native C backend. Returns (pk, sk, signature)."""
     from ama_cryptography.pqc_backends import native_ed25519_keypair_from_seed, native_ed25519_sign
 
@@ -58,7 +62,7 @@ def _native_sign_and_verify(seed: bytes, message: bytes) -> tuple:
     return pk, sk, sig
 
 
-def _pyca_sign(seed: bytes, message: bytes) -> tuple:
+def _pyca_sign(seed: bytes, message: bytes) -> tuple[Any, ...]:
     """Sign with PyCA. Returns (pk_bytes, sig_bytes)."""
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -95,7 +99,7 @@ def _pyca_verify(signature: bytes, message: bytes, pk_bytes: bytes) -> bool:
 class TestNativeEd25519:
     """Tests for the native C Ed25519 implementation (no PyCA required)."""
 
-    def test_keypair_generation(self):
+    def test_keypair_generation(self) -> None:
         """Native keypair generation produces correct key sizes."""
         from ama_cryptography.pqc_backends import native_ed25519_keypair
 
@@ -105,7 +109,7 @@ class TestNativeEd25519:
         # public key should be embedded in sk[32:64]
         assert sk[32:] == pk
 
-    def test_deterministic_keypair(self):
+    def test_deterministic_keypair(self) -> None:
         """Same seed produces identical keypair."""
         from ama_cryptography.pqc_backends import native_ed25519_keypair_from_seed
 
@@ -115,18 +119,18 @@ class TestNativeEd25519:
         assert pk1 == pk2
         assert sk1 == sk2
 
-    def test_sign_verify_roundtrip(self):
+    def test_sign_verify_roundtrip(self) -> None:
         """Native sign -> native verify succeeds."""
         from ama_cryptography.pqc_backends import native_ed25519_verify
 
         seed = bytes(range(32))
         message = b"test message for native roundtrip"
-        pk, sk, sig = _native_sign_and_verify(seed, message)
+        pk, _sk, sig = _native_sign_and_verify(seed, message)
 
         assert len(sig) == ED25519_SIGNATURE_BYTES
         assert native_ed25519_verify(sig, message, pk)
 
-    def test_verify_rejects_tampered_message(self):
+    def test_verify_rejects_tampered_message(self) -> None:
         """Native verify rejects tampered message."""
         from ama_cryptography.pqc_backends import native_ed25519_verify
 
@@ -136,7 +140,7 @@ class TestNativeEd25519:
 
         assert not native_ed25519_verify(sig, b"tampered message", pk)
 
-    def test_verify_rejects_wrong_key(self):
+    def test_verify_rejects_wrong_key(self) -> None:
         """Native verify rejects signature made with different key."""
         from ama_cryptography.pqc_backends import native_ed25519_keypair, native_ed25519_verify
 
@@ -148,7 +152,7 @@ class TestNativeEd25519:
         other_pk, _ = native_ed25519_keypair()
         assert not native_ed25519_verify(sig, message, other_pk)
 
-    def test_deterministic_signatures(self):
+    def test_deterministic_signatures(self) -> None:
         """Same seed + message -> identical signature bytes."""
         from ama_cryptography.pqc_backends import (
             native_ed25519_keypair_from_seed,
@@ -163,7 +167,7 @@ class TestNativeEd25519:
         sig2 = native_ed25519_sign(message, sk)
         assert sig1 == sig2
 
-    def test_empty_message(self):
+    def test_empty_message(self) -> None:
         """Signing and verifying an empty message works."""
         from ama_cryptography.pqc_backends import native_ed25519_verify
 
@@ -171,14 +175,14 @@ class TestNativeEd25519:
         pk, _, sig = _native_sign_and_verify(seed, b"")
         assert native_ed25519_verify(sig, b"", pk)
 
-    def test_invalid_seed_length(self):
+    def test_invalid_seed_length(self) -> None:
         """Seed of wrong length raises ValueError."""
         from ama_cryptography.pqc_backends import native_ed25519_keypair_from_seed
 
         with pytest.raises(ValueError, match="32 bytes"):
             native_ed25519_keypair_from_seed(b"too short")
 
-    def test_invalid_sk_length_for_sign(self):
+    def test_invalid_sk_length_for_sign(self) -> None:
         """Secret key of wrong length raises ValueError."""
         from ama_cryptography.pqc_backends import native_ed25519_sign
 
@@ -201,7 +205,7 @@ requires_pyca = pytest.mark.skipif(
 class TestEd25519Interop:
     """Cross-implementation interop tests: native C <-> PyCA cryptography."""
 
-    def test_sign_native_verify_pyca(self):
+    def test_sign_native_verify_pyca(self) -> None:
         """Native C signatures verify with PyCA cryptography."""
         seed = bytes(range(32))
         message = b"native sign, pyca verify"
@@ -209,7 +213,7 @@ class TestEd25519Interop:
         pk, _, sig = _native_sign_and_verify(seed, message)
         assert _pyca_verify(sig, message, pk)
 
-    def test_sign_pyca_verify_native(self):
+    def test_sign_pyca_verify_native(self) -> None:
         """PyCA signatures verify with native C implementation."""
         from ama_cryptography.pqc_backends import native_ed25519_verify
 
@@ -219,7 +223,7 @@ class TestEd25519Interop:
         pk_bytes, sig = _pyca_sign(seed, message)
         assert native_ed25519_verify(sig, message, pk_bytes)
 
-    def test_deterministic_signatures_cross_impl(self):
+    def test_deterministic_signatures_cross_impl(self) -> None:
         """Same seed + message -> identical signature bytes in both implementations."""
         seed = bytes(range(32))
         message = b"cross-implementation deterministic test"
@@ -231,7 +235,7 @@ class TestEd25519Interop:
             f"Signature mismatch:\n" f"  native: {native_sig.hex()}\n" f"  pyca:   {pyca_sig.hex()}"
         )
 
-    def test_key_format_compatibility(self):
+    def test_key_format_compatibility(self) -> None:
         """32-byte seed -> 64-byte native key conversion is lossless."""
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -254,7 +258,7 @@ class TestEd25519Interop:
         assert native_sk[:32] == seed, "Native SK first 32 bytes must be the seed"
         assert native_sk[32:] == native_pk, "Native SK last 32 bytes must be the public key"
 
-    def test_multiple_messages(self):
+    def test_multiple_messages(self) -> None:
         """Interop holds for various message sizes."""
         from ama_cryptography.pqc_backends import native_ed25519_verify
 
@@ -355,7 +359,7 @@ class TestRFC8032Vectors:
         RFC8032_VECTORS,
         ids=[v["name"] for v in RFC8032_VECTORS],
     )
-    def test_rfc8032_native(self, vector):
+    def test_rfc8032_native(self, vector: Any) -> None:
         """RFC 8032 vectors pass with native C implementation."""
         from ama_cryptography.pqc_backends import (
             native_ed25519_keypair_from_seed,
@@ -393,7 +397,7 @@ class TestRFC8032Vectors:
         RFC8032_VECTORS[:3],
         ids=[v["name"] for v in RFC8032_VECTORS[:3]],
     )
-    def test_rfc8032_pyca(self, vector):
+    def test_rfc8032_pyca(self, vector: Any) -> None:
         """RFC 8032 vectors pass with PyCA cryptography."""
         seed = vector["secret_key_seed"]
         expected_pk = vector["public_key"]
@@ -414,7 +418,7 @@ class TestRFC8032Vectors:
 class TestEd25519ProviderNative:
     """Tests for Ed25519Provider with native backend."""
 
-    def test_provider_generates_valid_keypair(self):
+    def test_provider_generates_valid_keypair(self) -> None:
         """Ed25519Provider.generate_keypair() works with native backend."""
         from ama_cryptography.crypto_api import CryptoBackend, Ed25519Provider
 
@@ -424,7 +428,7 @@ class TestEd25519ProviderNative:
         assert len(keypair.public_key) == 32
         assert len(keypair.secret_key) == 32  # 32-byte seed returned
 
-    def test_provider_sign_verify_roundtrip(self):
+    def test_provider_sign_verify_roundtrip(self) -> None:
         """Ed25519Provider sign/verify roundtrip works."""
         from ama_cryptography.crypto_api import CryptoBackend, Ed25519Provider
 

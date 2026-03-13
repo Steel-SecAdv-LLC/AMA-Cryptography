@@ -43,8 +43,8 @@ jobs:
 
     - name: Run Bandit security linter
       run: |
-        bandit -r . -f json -o bandit-report.json -ll
-        bandit -r . -ll
+        bandit -r . -f json -o bandit-report.json -l
+        bandit -r . -l
 
     - name: Upload security reports
       uses: actions/upload-artifact@v4
@@ -85,6 +85,10 @@ jobs:
       run: |
         pip list --format=json > pip-list.json
         pip-audit --format=json --output pip-audit.json || true
+
+    - name: Annotate SBOM as placeholder
+      run: |
+        echo "::warning::SBOM C-library component is a static placeholder — update version and purl fields when the build system emits real metadata"
 
     - name: Create C library SBOM component
       run: |
@@ -220,7 +224,7 @@ jobs:
         fetch-depth: 0
 
     - name: TruffleHog Secret Scanning
-      uses: trufflesecurity/trufflehog@main
+      uses: trufflesecurity/trufflehog@aeb12782f0d33a6fea85467d617ad37ea205154b  # pin: main 2026-03-13
       with:
         path: ./
         extra_args: --debug --only-verified

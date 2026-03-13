@@ -14,6 +14,7 @@ Validates:
     - Monitor-disabled and no-monitor edge cases
 """
 
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -34,7 +35,7 @@ from ama_cryptography.adaptive_posture import (
 class TestPostureEvaluator:
     """Tests for PostureEvaluator threat classification."""
 
-    def test_nominal_on_empty_report(self):
+    def test_nominal_on_empty_report(self) -> None:
         """Empty report with no alerts should yield NOMINAL."""
         evaluator = PostureEvaluator()
         report = {"recent_alerts": [], "total_alerts": 0}
@@ -42,7 +43,7 @@ class TestPostureEvaluator:
         assert result.threat_level == ThreatLevel.NOMINAL
         assert result.action == PostureAction.NONE
 
-    def test_monitoring_disabled(self):
+    def test_monitoring_disabled(self) -> None:
         """Disabled monitoring should yield NOMINAL with zero confidence."""
         evaluator = PostureEvaluator()
         report = {"status": "monitoring_disabled"}
@@ -52,7 +53,7 @@ class TestPostureEvaluator:
         assert result.confidence == 0.0
         assert result.signals["reason"] == "monitoring_disabled"
 
-    def test_elevated_threshold(self):
+    def test_elevated_threshold(self) -> None:
         """Score crossing elevated threshold triggers INCREASE_MONITORING."""
         evaluator = PostureEvaluator(
             elevated_threshold=0.1, high_threshold=0.5, critical_threshold=0.9
@@ -70,7 +71,7 @@ class TestPostureEvaluator:
             PostureAction.ROTATE_KEYS,
         )
 
-    def test_critical_threshold(self):
+    def test_critical_threshold(self) -> None:
         """High severity alerts should eventually reach CRITICAL."""
         evaluator = PostureEvaluator(
             elevated_threshold=0.1, high_threshold=0.3, critical_threshold=0.5
@@ -86,7 +87,7 @@ class TestPostureEvaluator:
         assert result.threat_level == ThreatLevel.CRITICAL
         assert result.action == PostureAction.ROTATE_AND_SWITCH
 
-    def test_decay_reduces_score(self):
+    def test_decay_reduces_score(self) -> None:
         """Accumulated score should decay when fed clean reports."""
         evaluator = PostureEvaluator(decay_rate=0.5)
         # First: inject a score
@@ -106,7 +107,7 @@ class TestPostureEvaluator:
             evaluator.evaluate(report_clean)
         assert evaluator._accumulated_score < score_after_hot * 0.1
 
-    def test_reset_clears_state(self):
+    def test_reset_clears_state(self) -> None:
         """Reset should zero accumulated score and evaluation count."""
         evaluator = PostureEvaluator()
         evaluator._accumulated_score = 5.0
@@ -115,7 +116,7 @@ class TestPostureEvaluator:
         assert evaluator._accumulated_score == 0.0
         assert evaluator._evaluation_count == 0
 
-    def test_confidence_scales_with_alert_count(self):
+    def test_confidence_scales_with_alert_count(self) -> None:
         """Confidence should scale from 0 to 1 based on total_alerts."""
         evaluator = PostureEvaluator()
         report_low = {"recent_alerts": [], "total_alerts": 5}
@@ -127,7 +128,7 @@ class TestPostureEvaluator:
         result_high = evaluator.evaluate(report_high)
         assert result_high.confidence == 1.0
 
-    def test_pattern_alerts_contribute_to_score(self):
+    def test_pattern_alerts_contribute_to_score(self) -> None:
         """Pattern alerts with high z-scores should raise the score."""
         evaluator = PostureEvaluator(elevated_threshold=0.01)
         alerts = [
@@ -140,7 +141,7 @@ class TestPostureEvaluator:
         result = evaluator.evaluate(report)
         assert result.signals["pattern_score"] > 0
 
-    def test_resonance_scoring(self):
+    def test_resonance_scoring(self) -> None:
         """Resonance ratios above 3.0 should contribute score."""
         evaluator = PostureEvaluator()
         report = {
@@ -151,7 +152,7 @@ class TestPostureEvaluator:
         result = evaluator.evaluate(report)
         assert result.signals["resonance_score"] > 0
 
-    def test_resonance_below_threshold(self):
+    def test_resonance_below_threshold(self) -> None:
         """Resonance ratio below 3.0 should contribute zero."""
         evaluator = PostureEvaluator()
         report = {
@@ -171,20 +172,20 @@ class TestPostureEvaluator:
 class TestCryptoPostureController:
     """Tests for CryptoPostureController rotation and switching."""
 
-    def _make_monitor(self, report):
+    def _make_monitor(self, report: Any) -> Any:
         """Create a mock monitor returning the given report."""
         monitor = MagicMock()
         monitor.get_security_report.return_value = report
         return monitor
 
-    def test_no_monitor_returns_nominal(self):
+    def test_no_monitor_returns_nominal(self) -> None:
         """Controller with no monitor should return NOMINAL."""
         controller = CryptoPostureController(monitor=None)
         result = controller.evaluate_and_respond()
         assert result.threat_level == ThreatLevel.NOMINAL
         assert result.signals["reason"] == "no_monitor"
 
-    def test_rotation_callback_triggered(self):
+    def test_rotation_callback_triggered(self) -> None:
         """Rotation callback should fire when action is ROTATE_KEYS."""
         on_rotation = MagicMock()
         # Force a CRITICAL evaluation by pre-loading the evaluator
@@ -206,7 +207,7 @@ class TestCryptoPostureController:
         controller.evaluate_and_respond()
         on_rotation.assert_called()
 
-    def test_algorithm_switch_callback_triggered(self):
+    def test_algorithm_switch_callback_triggered(self) -> None:
         """Algorithm switch callback should fire on ROTATE_AND_SWITCH."""
         on_switch = MagicMock()
         on_rotation = MagicMock()
@@ -230,7 +231,7 @@ class TestCryptoPostureController:
         controller.evaluate_and_respond()
         on_switch.assert_called_with("ML_DSA_65")
 
-    def test_algorithm_upgrade_ordering(self):
+    def test_algorithm_upgrade_ordering(self) -> None:
         """Algorithm should upgrade to next stronger, not skip levels."""
         controller = CryptoPostureController(current_algorithm="ED25519")
         controller._trigger_algorithm_switch()
@@ -240,14 +241,14 @@ class TestCryptoPostureController:
         controller._trigger_algorithm_switch()
         assert controller.current_algorithm == "HYBRID_SIG"
 
-    def test_no_upgrade_at_max_strength(self):
+    def test_no_upgrade_at_max_strength(self) -> None:
         """Already at strongest algorithm should not change."""
         controller = CryptoPostureController(current_algorithm="HYBRID_SIG")
         controller._trigger_algorithm_switch()
         assert controller.current_algorithm == "HYBRID_SIG"
         assert controller._switch_count == 0
 
-    def test_cooldown_prevents_rapid_rotation(self):
+    def test_cooldown_prevents_rapid_rotation(self) -> None:
         """Rotation within cooldown window should be suppressed."""
         on_rotation = MagicMock()
         evaluator = PostureEvaluator(critical_threshold=0.01)
@@ -271,7 +272,7 @@ class TestCryptoPostureController:
         controller.evaluate_and_respond()
         assert on_rotation.call_count == call_count_first
 
-    def test_rotation_manager_integration(self):
+    def test_rotation_manager_integration(self) -> None:
         """Rotation manager should receive register_key and initiate_rotation."""
         rotation_mgr = MagicMock()
         rotation_mgr.get_active_key.return_value = "key-001"
@@ -280,7 +281,7 @@ class TestCryptoPostureController:
         rotation_mgr.register_key.assert_called_once()
         rotation_mgr.initiate_rotation.assert_called_once_with("key-001", "posture-rotation-1")
 
-    def test_hd_derivation_used_when_available(self):
+    def test_hd_derivation_used_when_available(self) -> None:
         """HD derivation should be called during rotation if available."""
         rotation_mgr = MagicMock()
         rotation_mgr.get_active_key.return_value = "key-001"
@@ -293,7 +294,7 @@ class TestCryptoPostureController:
         controller._trigger_rotation()
         hd.derive_path.assert_called_once()
 
-    def test_history_bounded(self):
+    def test_history_bounded(self) -> None:
         """History should not grow beyond max_history."""
         monitor = self._make_monitor({"recent_alerts": [], "total_alerts": 0})
         controller = CryptoPostureController(monitor=monitor, max_history=5)
@@ -301,7 +302,7 @@ class TestCryptoPostureController:
             controller.evaluate_and_respond()
         assert len(controller._history) <= 5
 
-    def test_posture_summary(self):
+    def test_posture_summary(self) -> None:
         """get_posture_summary should return expected keys."""
         controller = CryptoPostureController()
         summary = controller.get_posture_summary()
@@ -312,7 +313,7 @@ class TestCryptoPostureController:
         assert "evaluation_count" in summary
         assert "recent_evaluations" in summary
 
-    def test_reset_clears_all(self):
+    def test_reset_clears_all(self) -> None:
         """Reset should zero all counters and clear history."""
         controller = CryptoPostureController()
         controller._rotation_count = 5
@@ -330,14 +331,14 @@ class TestCryptoPostureController:
         assert controller._switch_count == 0
         assert len(controller._history) == 0
 
-    def test_callback_exception_does_not_crash(self):
+    def test_callback_exception_does_not_crash(self) -> None:
         """Exceptions in callbacks should be caught, not propagated."""
         on_rotation = MagicMock(side_effect=RuntimeError("boom"))
         controller = CryptoPostureController(on_rotation=on_rotation, rotation_cooldown=0)
         # Should not raise
         controller._trigger_rotation()
 
-    def test_rotation_manager_exception_does_not_crash(self):
+    def test_rotation_manager_exception_does_not_crash(self) -> None:
         """Exceptions from rotation_manager should be caught."""
         rotation_mgr = MagicMock()
         rotation_mgr.get_active_key.return_value = "key-001"

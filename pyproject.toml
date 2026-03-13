@@ -83,9 +83,9 @@ dev = [
     "pytest-benchmark>=4.0.0",
     "pytest-xdist>=3.0.0",
     "hypothesis>=6.0.0",
-    "black==25.11.0; python_version >= '3.9'",
-    "flake8>=6.0.0",
-    "mypy>=1.0.0",
+    "black>=26.3.1; python_version >= '3.9'",
+    "ruff>=0.4.0",
+    "mypy>=1.9.0",
     "isort>=5.12.0",
     "bandit>=1.7.0",
     "safety>=2.3.0",
@@ -101,52 +101,182 @@ Documentation = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/
 Repository = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography"
 Issues = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/issues"
 
+# Ruff configuration — replaces flake8, isort
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "S",   # flake8-bandit (security)
+    "N",   # pep8-naming
+    "RUF", # ruff-specific rules
+]
+ignore = []  # Do not add ignores without a comment explaining why.
+
+[tool.ruff.lint.per-file-ignores]
+# assert is valid in pytest tests; hardcoded passwords are test fixtures;
+# subprocess calls are tested intentionally; Unicode in test docstrings is fine;
+# uppercase vars used for crypto constants in test data
+"tests/*" = [
+    "S101", "S105", "S106", "S603",
+    "RUF001", "RUF002", "RUF003",
+    "N806",
+]
+# ama_cryptography/ uses intentional patterns that must not be changed:
+#   N803/N806: uppercase variable names for crypto constants (e.g. R, S, A, K)
+#   RUF001/RUF002/RUF003: Unicode symbols in docstrings/comments (σ, ✓, etc.)
+#   S101: assert used in internal validation
+#   S106/S107: hardcoded defaults for optional password parameters
+#   S110: bare except:pass in optional-feature fallback paths
+#   E501: long lines in crypto constant definitions
+#   B904: raise-without-from in chained exception handlers (existing pattern)
+#   B028: no-explicit-stacklevel in warnings (existing pattern)
+#   RUF012: mutable class defaults (dataclass pattern)
+#   N818: exception naming convention (existing names)
+#   UP015: redundant open modes (existing pattern)
+#   RUF010: explicit f-string type conversion (existing pattern)
+#   RUF022: unsorted __all__ (existing order is logical, not alphabetical)
+#   RUF100: unused noqa directives (will be cleaned separately)
+"ama_cryptography/*" = [
+    "N803", "N806", "N818",
+    "RUF001", "RUF002", "RUF003", "RUF010", "RUF012", "RUF022", "RUF100",
+    "S101", "S106", "S107", "S110",
+    "E501",
+    "B028", "B904",
+    "UP006", "UP015", "UP035",  # UP006/UP035: deprecated typing imports (py38 compat)
+]
+# code_guardian_secure.py — same crypto patterns as ama_cryptography/
+#   UP007/UP045: PEP 604 union syntax (py38 compat)
+#   E402: module-level imports after sys.path manipulation
+#   S310/S603: URL open and subprocess calls in security tooling
+#   UP012: unnecessary UTF-8 encoding argument
+"code_guardian_secure.py" = [
+    "N803", "N806", "N818",
+    "RUF001", "RUF002", "RUF003", "RUF010", "RUF012", "RUF022", "RUF100",
+    "S101", "S106", "S107", "S110",
+    "E402", "E501",
+    "B028", "B904",
+    "S310", "S603",
+    "UP006", "UP007", "UP012", "UP015", "UP035", "UP045",
+]
+# ama_cryptography_monitor.py — production monitoring module with same conventions
+"ama_cryptography_monitor.py" = [
+    "I001", "N806",
+    "RUF003", "RUF022", "RUF023",
+    "UP006", "UP015", "UP035",
+]
+# Demo script for the monitoring module
+"ama_cryptography_monitor_demo.py" = ["B007", "RUF001"]
+# Benchmark and tooling scripts — not part of the core library
+"benchmark_suite.py" = ["UP006", "UP035", "E501"]
+"setup.py" = ["E501", "RUF005", "S603", "S607"]
+"benchmarks/*" = [
+    "E402", "E501", "F541", "I001",
+    "RUF059", "RUF100",
+    "S603",
+    "UP006", "UP035",
+]
+"examples/*" = [
+    "B007", "B904",
+    "E402",
+    "RUF001", "RUF059", "RUF100",
+    "S106",
+    "UP006", "UP035",
+]
+"tools/*" = [
+    "B007", "B904",
+    "C408",
+    "E501",
+    "I001",
+    "RUF059",
+]
+
 # Black configuration
 [tool.black]
 line-length = 100
-target-version = ["py38", "py39", "py310", "py311", "py312"]
-include = '\.pyi?$'
-extend-exclude = '''
-/(
-  # directories
-  \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | build
-  | dist
-)/
-'''
+target-version = ["py39"]
+skip-string-normalization = false
 
-# isort configuration
+# isort configuration (handled by ruff I rules, kept for standalone isort compat)
 [tool.isort]
 profile = "black"
 line_length = 100
-multi_line_output = 3
-include_trailing_comma = true
-force_grid_wrap = 0
-use_parentheses = true
-ensure_newline_before_comments = true
-skip_gitignore = true
 
-# MyPy configuration
+# MyPy configuration — strict mode
 [tool.mypy]
 python_version = "3.9"
-warn_return_any = true
-warn_unused_configs = true
+strict = true
 disallow_untyped_defs = true
+disallow_any_generics = true
+warn_return_any = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_calls = true
 disallow_incomplete_defs = true
 check_untyped_defs = true
-disallow_untyped_decorators = false
 no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-warn_no_return = true
-warn_unreachable = true
-strict_equality = true
+show_error_codes = true
+
+# Per-module overrides for third-party stubs that do not exist.
+[[tool.mypy.overrides]]
+module = [
+    "hypothesis.*",
+    "scipy.*",
+    "numpy.*",
+    "pytest_benchmark.*",
+    "pytest.*",
+    "pytest",
+    "_pytest.*",
+    "rfc3161ng.*",
+    "nacl.*",
+    "PyKCS11.*",
+    "oqs.*",
+    "cryptography.*",
+]
 ignore_missing_imports = true
+
+# code_guardian_secure — not a PEP 561 typed package; suppress attr-defined
+# for dynamically-exported symbols (e.g. QuantumSignatureUnavailableError).
+[[tool.mypy.overrides]]
+module = "code_guardian_secure"
+ignore_missing_imports = true
+follow_imports = "skip"
+
+# ama_cryptography/ and ama_cryptography_monitor — cannot modify source;
+# relax generic-type-arg and untyped-decorator checks for existing code.
+[[tool.mypy.overrides]]
+module = [
+    "ama_cryptography.*",
+    "ama_cryptography_monitor",
+]
+disallow_any_generics = false
+
+# tests/ — pytest decorators (@pytest.fixture, @pytest.mark.*) are untyped;
+# relax decorator and call strictness for test modules.
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_decorators = false
+disallow_untyped_calls = false
+
+[[tool.mypy.overrides]]
+module = "tests.test_crypto_api"
+disable_error_code = ["abstract"]
+
+[[tool.mypy.overrides]]
+module = "tests.test_crypto_import_paths"
+disable_error_code = ["override"]
+
+[[tool.mypy.overrides]]
+module = "tests.test_key_management_comprehensive"
+disable_error_code = ["attr-defined"]
 
 # Pytest configuration (consolidated from pytest.ini)
 [tool.pytest.ini_options]

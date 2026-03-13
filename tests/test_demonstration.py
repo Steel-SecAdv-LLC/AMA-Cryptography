@@ -41,7 +41,7 @@ import pytest
 class TestDemonstration:
     """Test the main demonstration function."""
 
-    def test_demonstration_runs_successfully(self):
+    def test_demonstration_runs_successfully(self) -> None:
         """
         Test that the demonstration script runs without errors.
 
@@ -69,7 +69,7 @@ class TestDemonstration:
             f"STDERR: {result.stderr}"
         )
 
-    def test_demonstration_output_validation(self):
+    def test_demonstration_output_validation(self) -> None:
         """
         Test that the demonstration produces expected output.
 
@@ -115,7 +115,7 @@ class TestDemonstration:
             + f"\n\nActual output:\n{output}"
         )
 
-    def test_demonstration_no_errors(self):
+    def test_demonstration_no_errors(self) -> None:
         """
         Test that the demonstration produces no error messages.
 
@@ -168,7 +168,7 @@ class TestDemonstration:
         )
 
     @pytest.mark.slow
-    def test_demonstration_quantum_libraries(self):
+    def test_demonstration_quantum_libraries(self) -> None:
         """
         Test demonstration with quantum-resistant libraries if available.
 
@@ -233,7 +233,7 @@ except Exception:
 class TestErrorHandling:
     """Test error handling for missing dependencies."""
 
-    def test_missing_cryptography_library(self):
+    def test_missing_cryptography_library(self) -> None:
         """
         Test behavior when cryptography library is missing.
 
@@ -248,7 +248,7 @@ class TestErrorHandling:
             with pytest.raises(RuntimeError, match="AMA native C library required"):
                 generate_ed25519_keypair()
 
-    def test_graceful_quantum_library_fallback(self):
+    def test_graceful_quantum_library_fallback(self) -> None:
         """
         Test that quantum libraries work correctly when available.
 
