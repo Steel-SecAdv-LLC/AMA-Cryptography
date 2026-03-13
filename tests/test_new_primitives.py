@@ -36,7 +36,7 @@ pytestmark = pytest.mark.skipif(
 class TestSecp256k1:
     """Tests for secp256k1 compressed public key derivation."""
 
-    def test_pubkey_from_privkey_basic(self):
+    def test_pubkey_from_privkey_basic(self) -> None:
         """Derive a compressed public key from a valid private key."""
         from ama_cryptography.pqc_backends import native_secp256k1_pubkey_from_privkey
 
@@ -48,7 +48,7 @@ class TestSecp256k1:
         # Generator point G has even Y, so prefix should be 0x02
         assert pubkey[0] in (0x02, 0x03)
 
-    def test_pubkey_from_privkey_known_vector(self):
+    def test_pubkey_from_privkey_known_vector(self) -> None:
         """Verify against a known secp256k1 test vector."""
         from ama_cryptography.pqc_backends import native_secp256k1_pubkey_from_privkey
 
@@ -62,7 +62,7 @@ class TestSecp256k1:
         )
         assert pubkey[1:] == expected_x
 
-    def test_pubkey_from_privkey_2g(self):
+    def test_pubkey_from_privkey_2g(self) -> None:
         """Private key = 2 should produce 2G."""
         from ama_cryptography.pqc_backends import native_secp256k1_pubkey_from_privkey
 
@@ -75,7 +75,7 @@ class TestSecp256k1:
         )
         assert pubkey[1:] == expected_x
 
-    def test_pubkey_deterministic(self):
+    def test_pubkey_deterministic(self) -> None:
         """Same private key always yields same public key."""
         from ama_cryptography.pqc_backends import native_secp256k1_pubkey_from_privkey
 
@@ -84,7 +84,7 @@ class TestSecp256k1:
         pubkey2 = native_secp256k1_pubkey_from_privkey(privkey)
         assert pubkey1 == pubkey2
 
-    def test_pubkey_different_keys_differ(self):
+    def test_pubkey_different_keys_differ(self) -> None:
         """Different private keys yield different public keys."""
         from ama_cryptography.pqc_backends import native_secp256k1_pubkey_from_privkey
 
@@ -92,7 +92,7 @@ class TestSecp256k1:
         pk2 = native_secp256k1_pubkey_from_privkey(b"\x00" * 31 + b"\x02")
         assert pk1 != pk2
 
-    def test_pubkey_wrong_length_raises(self):
+    def test_pubkey_wrong_length_raises(self) -> None:
         """Wrong private key length raises ValueError."""
         from ama_cryptography.pqc_backends import native_secp256k1_pubkey_from_privkey
 
@@ -109,7 +109,7 @@ class TestSecp256k1:
 class TestX25519:
     """Tests for X25519 key exchange (RFC 7748)."""
 
-    def test_keypair_generation(self):
+    def test_keypair_generation(self) -> None:
         """Generate a valid X25519 keypair."""
         from ama_cryptography.pqc_backends import native_x25519_keypair
 
@@ -117,7 +117,7 @@ class TestX25519:
         assert len(pk) == 32
         assert len(sk) == 32
 
-    def test_keypair_uniqueness(self):
+    def test_keypair_uniqueness(self) -> None:
         """Different keypairs have different keys."""
         from ama_cryptography.pqc_backends import native_x25519_keypair
 
@@ -126,7 +126,7 @@ class TestX25519:
         assert pk1 != pk2
         assert sk1 != sk2
 
-    def test_key_exchange_symmetric(self):
+    def test_key_exchange_symmetric(self) -> None:
         """A and B compute the same shared secret."""
         from ama_cryptography.pqc_backends import native_x25519_key_exchange, native_x25519_keypair
 
@@ -139,7 +139,7 @@ class TestX25519:
         assert ss_a == ss_b
         assert len(ss_a) == 32
 
-    def test_key_exchange_different_peers(self):
+    def test_key_exchange_different_peers(self) -> None:
         """Different peers produce different shared secrets."""
         from ama_cryptography.pqc_backends import native_x25519_key_exchange, native_x25519_keypair
 
@@ -161,7 +161,7 @@ class TestX25519:
 class TestArgon2id:
     """Tests for Argon2id KDF (RFC 9106)."""
 
-    def test_basic_derivation(self):
+    def test_basic_derivation(self) -> None:
         """Basic Argon2id derivation produces expected length output."""
         from ama_cryptography.pqc_backends import native_argon2id
 
@@ -175,7 +175,7 @@ class TestArgon2id:
         )
         assert len(result) == 32
 
-    def test_deterministic(self):
+    def test_deterministic(self) -> None:
         """Same inputs produce same output."""
         from ama_cryptography.pqc_backends import native_argon2id
 
@@ -187,20 +187,20 @@ class TestArgon2id:
             "parallelism": 1,
             "out_len": 32,
         }
-        r1 = native_argon2id(**kwargs)
-        r2 = native_argon2id(**kwargs)
+        r1 = native_argon2id(**kwargs)  # type: ignore[arg-type]
+        r2 = native_argon2id(**kwargs)  # type: ignore[arg-type]
         assert r1 == r2
 
-    def test_different_passwords_differ(self):
+    def test_different_passwords_differ(self) -> None:
         """Different passwords produce different outputs."""
         from ama_cryptography.pqc_backends import native_argon2id
 
         common = {"salt": b"b" * 16, "t_cost": 1, "m_cost": 64, "parallelism": 1, "out_len": 32}
-        r1 = native_argon2id(password=b"password1", **common)
-        r2 = native_argon2id(password=b"password2", **common)
+        r1 = native_argon2id(password=b"password1", **common)  # type: ignore[arg-type]
+        r2 = native_argon2id(password=b"password2", **common)  # type: ignore[arg-type]
         assert r1 != r2
 
-    def test_different_salts_differ(self):
+    def test_different_salts_differ(self) -> None:
         """Different salts produce different outputs."""
         from ama_cryptography.pqc_backends import native_argon2id
 
@@ -211,11 +211,11 @@ class TestArgon2id:
             "parallelism": 1,
             "out_len": 32,
         }
-        r1 = native_argon2id(salt=b"c" * 16, **common)
-        r2 = native_argon2id(salt=b"d" * 16, **common)
+        r1 = native_argon2id(salt=b"c" * 16, **common)  # type: ignore[arg-type]
+        r2 = native_argon2id(salt=b"d" * 16, **common)  # type: ignore[arg-type]
         assert r1 != r2
 
-    def test_variable_output_length(self):
+    def test_variable_output_length(self) -> None:
         """Different output lengths produce different-length results."""
         from ama_cryptography.pqc_backends import native_argon2id
 
@@ -226,8 +226,8 @@ class TestArgon2id:
             "m_cost": 64,
             "parallelism": 1,
         }
-        r32 = native_argon2id(out_len=32, **common)
-        r64 = native_argon2id(out_len=64, **common)
+        r32 = native_argon2id(out_len=32, **common)  # type: ignore[arg-type]
+        r64 = native_argon2id(out_len=64, **common)  # type: ignore[arg-type]
         assert len(r32) == 32
         assert len(r64) == 64
 
@@ -243,7 +243,7 @@ class TestArgon2id:
 class TestChaCha20Poly1305:
     """Tests for ChaCha20-Poly1305 AEAD (RFC 8439)."""
 
-    def test_encrypt_decrypt_roundtrip(self):
+    def test_encrypt_decrypt_roundtrip(self) -> None:
         """Encrypt then decrypt recovers original plaintext."""
         from ama_cryptography.pqc_backends import (
             native_chacha20poly1305_decrypt,
@@ -262,7 +262,7 @@ class TestChaCha20Poly1305:
         pt = native_chacha20poly1305_decrypt(key, nonce, ct, tag, aad)
         assert pt == plaintext
 
-    def test_wrong_key_fails(self):
+    def test_wrong_key_fails(self) -> None:
         """Decryption with wrong key fails."""
         from ama_cryptography.pqc_backends import (
             native_chacha20poly1305_decrypt,
@@ -276,7 +276,7 @@ class TestChaCha20Poly1305:
         with pytest.raises(RuntimeError):
             native_chacha20poly1305_decrypt(b"\xff" * 32, nonce, ct, tag, b"")
 
-    def test_wrong_tag_fails(self):
+    def test_wrong_tag_fails(self) -> None:
         """Decryption with corrupted tag fails."""
         from ama_cryptography.pqc_backends import (
             native_chacha20poly1305_decrypt,
@@ -292,7 +292,7 @@ class TestChaCha20Poly1305:
         with pytest.raises(RuntimeError):
             native_chacha20poly1305_decrypt(key, nonce, ct, bytes(bad_tag), b"")
 
-    def test_wrong_aad_fails(self):
+    def test_wrong_aad_fails(self) -> None:
         """Decryption with wrong AAD fails."""
         from ama_cryptography.pqc_backends import (
             native_chacha20poly1305_decrypt,
@@ -306,7 +306,7 @@ class TestChaCha20Poly1305:
         with pytest.raises(RuntimeError):
             native_chacha20poly1305_decrypt(key, nonce, ct, tag, b"wrong")
 
-    def test_empty_plaintext(self):
+    def test_empty_plaintext(self) -> None:
         """Encrypt/decrypt with empty plaintext (AAD-only authentication)."""
         from ama_cryptography.pqc_backends import (
             native_chacha20poly1305_decrypt,
@@ -322,7 +322,7 @@ class TestChaCha20Poly1305:
         pt = native_chacha20poly1305_decrypt(key, nonce, ct, tag, b"just auth")
         assert pt == b""
 
-    def test_rfc8439_test_vector(self):
+    def test_rfc8439_test_vector(self) -> None:
         """RFC 8439 Section 2.8.2 AEAD test vector."""
         from ama_cryptography.pqc_backends import (
             native_chacha20poly1305_decrypt,
@@ -357,7 +357,7 @@ class TestChaCha20Poly1305:
 class TestDeterministicKeygen:
     """Tests for deterministic key generation from seed."""
 
-    def test_kyber_deterministic(self):
+    def test_kyber_deterministic(self) -> None:
         """Same seeds produce same Kyber keypair."""
         from ama_cryptography.pqc_backends import native_kyber_keypair_from_seed
 
@@ -372,7 +372,7 @@ class TestDeterministicKeygen:
         assert len(pk1) == 1568
         assert len(sk1) == 3168
 
-    def test_kyber_different_seeds_differ(self):
+    def test_kyber_different_seeds_differ(self) -> None:
         """Different seeds produce different Kyber keypairs."""
         from ama_cryptography.pqc_backends import native_kyber_keypair_from_seed
 
@@ -380,7 +380,7 @@ class TestDeterministicKeygen:
         pk2, _ = native_kyber_keypair_from_seed(b"\x03" * 32, b"\x04" * 32)
         assert pk1 != pk2
 
-    def test_dilithium_deterministic(self):
+    def test_dilithium_deterministic(self) -> None:
         """Same seed produces same Dilithium keypair."""
         from ama_cryptography.pqc_backends import native_dilithium_keypair_from_seed
 
@@ -394,7 +394,7 @@ class TestDeterministicKeygen:
         assert len(pk1) == 1952
         assert len(sk1) == 4032
 
-    def test_dilithium_different_seeds_differ(self):
+    def test_dilithium_different_seeds_differ(self) -> None:
         """Different seeds produce different Dilithium keypairs."""
         from ama_cryptography.pqc_backends import native_dilithium_keypair_from_seed
 
@@ -402,7 +402,7 @@ class TestDeterministicKeygen:
         pk2, _ = native_dilithium_keypair_from_seed(b"\x02" * 32)
         assert pk1 != pk2
 
-    def test_kyber_encaps_decaps_with_deterministic_keys(self):
+    def test_kyber_encaps_decaps_with_deterministic_keys(self) -> None:
         """Deterministically generated Kyber keys work for encaps/decaps."""
         from ama_cryptography.pqc_backends import (
             kyber_decapsulate,
@@ -418,7 +418,7 @@ class TestDeterministicKeygen:
         ss2 = kyber_decapsulate(result.ciphertext, sk)
         assert result.shared_secret == ss2
 
-    def test_dilithium_sign_verify_with_deterministic_keys(self):
+    def test_dilithium_sign_verify_with_deterministic_keys(self) -> None:
         """Deterministically generated Dilithium keys work for sign/verify."""
         from ama_cryptography.pqc_backends import (
             dilithium_sign,
@@ -442,7 +442,7 @@ class TestDeterministicKeygen:
 class TestBIP32NonHardened:
     """Tests for BIP32 non-hardened derivation with native secp256k1."""
 
-    def test_full_bip44_path(self):
+    def test_full_bip44_path(self) -> None:
         """Full BIP44 path m/44'/0'/0'/0/0 works."""
         from ama_cryptography.key_management import HDKeyDerivation
 
@@ -451,7 +451,7 @@ class TestBIP32NonHardened:
         assert len(key) == 32
         assert len(chain) == 32
 
-    def test_non_hardened_deterministic(self):
+    def test_non_hardened_deterministic(self) -> None:
         """Non-hardened derivation is deterministic."""
         from ama_cryptography.key_management import HDKeyDerivation
 
@@ -464,7 +464,7 @@ class TestBIP32NonHardened:
         assert key1 == key2
         assert chain1 == chain2
 
-    def test_different_non_hardened_indices_differ(self):
+    def test_different_non_hardened_indices_differ(self) -> None:
         """Different non-hardened indices produce different keys."""
         from ama_cryptography.key_management import HDKeyDerivation
 
@@ -473,7 +473,7 @@ class TestBIP32NonHardened:
         key1, _ = hd.derive_path("m/44'/0'/0'/0/1")
         assert key0 != key1
 
-    def test_derive_key_convenience(self):
+    def test_derive_key_convenience(self) -> None:
         """derive_key convenience method works with non-hardened segments."""
         from ama_cryptography.key_management import HDKeyDerivation
 

@@ -39,7 +39,7 @@ _force_run = _ci_perf or _skip_env in ("0", "false", "no")
 SKIP_PERF = _skip_env in ("1", "true", "yes") or (_in_ci and not _force_run)
 
 
-def benchmark(func: Callable, iterations: int = 1000) -> float:
+def benchmark(func: Callable, iterations: int = 1000) -> float:  # type: ignore[type-arg]
     """
     Benchmark a function and return operations per second.
 
@@ -67,7 +67,7 @@ def benchmark(func: Callable, iterations: int = 1000) -> float:
 class TestSHA3Performance:
     """SHA3-256 hashing performance tests."""
 
-    def test_sha3_throughput_small(self):
+    def test_sha3_throughput_small(self) -> None:
         """SHA3-256 throughput for small inputs (>50,000 ops/sec)."""
         dna = "ACGT" * 25  # 100 chars
         params = [(1.0, 1.0)]
@@ -76,7 +76,7 @@ class TestSHA3Performance:
 
         assert ops_per_sec > 50000, f"SHA3 throughput {ops_per_sec:.0f} ops/sec below 50,000"
 
-    def test_sha3_throughput_medium(self):
+    def test_sha3_throughput_medium(self) -> None:
         """SHA3-256 throughput for medium inputs (>10,000 ops/sec)."""
         dna = "ACGT" * 250  # 1000 chars
         params = [(1.0, 1.0)] * 10
@@ -90,7 +90,7 @@ class TestSHA3Performance:
 class TestHMACPerformance:
     """HMAC-SHA256 performance tests."""
 
-    def test_hmac_throughput(self):
+    def test_hmac_throughput(self) -> None:
         """HMAC throughput (>100,000 ops/sec for small messages)."""
         key = secrets.token_bytes(32)
         message = b"test message for HMAC"
@@ -99,7 +99,7 @@ class TestHMACPerformance:
 
         assert ops_per_sec > 100000, f"HMAC throughput {ops_per_sec:.0f} ops/sec below 100,000"
 
-    def test_hmac_throughput_large(self):
+    def test_hmac_throughput_large(self) -> None:
         """HMAC throughput for larger messages (>10,000 ops/sec)."""
         key = secrets.token_bytes(32)
         message = secrets.token_bytes(10000)  # 10KB
@@ -113,13 +113,13 @@ class TestHMACPerformance:
 class TestEd25519Performance:
     """Ed25519 signature performance tests."""
 
-    def test_keygen_throughput(self):
+    def test_keygen_throughput(self) -> None:
         """Ed25519 key generation (>1,000 ops/sec)."""
         ops_per_sec = benchmark(generate_ed25519_keypair, iterations=500)
 
         assert ops_per_sec > 1000, f"Ed25519 keygen {ops_per_sec:.0f} ops/sec below 1,000"
 
-    def test_sign_throughput(self):
+    def test_sign_throughput(self) -> None:
         """Ed25519 signing throughput (>4,000 ops/sec)."""
         from code_guardian_secure import ed25519_sign
 
@@ -131,7 +131,7 @@ class TestEd25519Performance:
         # Threshold lowered for CI runner variability and native seed expansion on each sign
         assert ops_per_sec > 2000, f"Ed25519 sign {ops_per_sec:.0f} ops/sec below 2,000"
 
-    def test_verify_throughput(self):
+    def test_verify_throughput(self) -> None:
         """Ed25519 verification throughput (>4,000 ops/sec)."""
         from code_guardian_secure import ed25519_sign, ed25519_verify
 
@@ -151,7 +151,7 @@ class TestEd25519Performance:
 class TestPackageCreationPerformance:
     """Full cryptographic package creation performance tests."""
 
-    def test_package_creation_latency(self):
+    def test_package_creation_latency(self) -> None:
         """Package creation completes in <100ms."""
         dna = "ACGT" * 100
         params = [(1.0, 1.0)]
@@ -164,7 +164,7 @@ class TestPackageCreationPerformance:
 
         assert elapsed < 0.1, f"Package creation took {elapsed * 1000:.1f}ms, exceeds 100ms"
 
-    def test_package_creation_throughput(self):
+    def test_package_creation_throughput(self) -> None:
         """Package creation throughput (>10 ops/sec)."""
         dna = "ACGT" * 100
         params = [(1.0, 1.0)]
@@ -181,7 +181,7 @@ class TestPackageCreationPerformance:
 class TestMemoryEfficiency:
     """Memory efficiency tests."""
 
-    def test_no_memory_leak_in_loop(self):
+    def test_no_memory_leak_in_loop(self) -> None:
         """Repeated operations don't leak memory."""
         import gc
 

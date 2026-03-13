@@ -20,7 +20,7 @@ from code_guardian_secure import secure_wipe
 class TestSecureWipe:
     """Tests for secure memory wiping."""
 
-    def test_wipe_zeros_bytearray(self):
+    def test_wipe_zeros_bytearray(self) -> None:
         """secure_wipe zeros all bytes in a bytearray."""
         data = bytearray(secrets.token_bytes(1000))
         assert any(b != 0 for b in data), "Test data should not be all zeros"
@@ -29,7 +29,7 @@ class TestSecureWipe:
 
         assert all(b == 0 for b in data), "All bytes must be zeroed after wipe"
 
-    def test_wipe_preserves_length(self):
+    def test_wipe_preserves_length(self) -> None:
         """secure_wipe preserves the length of the bytearray."""
         original_len = 500
         data = bytearray(secrets.token_bytes(original_len))
@@ -38,7 +38,7 @@ class TestSecureWipe:
 
         assert len(data) == original_len, "Length must be preserved"
 
-    def test_wipe_empty_bytearray(self):
+    def test_wipe_empty_bytearray(self) -> None:
         """secure_wipe handles empty bytearray."""
         data = bytearray()
 
@@ -47,7 +47,7 @@ class TestSecureWipe:
 
         assert len(data) == 0
 
-    def test_wipe_single_byte(self):
+    def test_wipe_single_byte(self) -> None:
         """secure_wipe handles single byte."""
         data = bytearray([0xFF])
 
@@ -55,7 +55,7 @@ class TestSecureWipe:
 
         assert data[0] == 0
 
-    def test_wipe_large_buffer(self):
+    def test_wipe_large_buffer(self) -> None:
         """secure_wipe handles large buffers efficiently."""
         size = 10 * 1024 * 1024  # 10 MB
         data = bytearray(size)
@@ -74,7 +74,7 @@ class TestSecureWipe:
 class TestMemoryGrowth:
     """Tests for memory leaks in cryptographic operations."""
 
-    def test_hash_no_memory_growth(self):
+    def test_hash_no_memory_growth(self) -> None:
         """Repeated hashing doesn't leak memory."""
         from code_guardian_secure import canonical_hash_code
 
@@ -93,7 +93,7 @@ class TestMemoryGrowth:
         growth_mb = (final - baseline) / (1024 * 1024)
         assert growth_mb < 1.0, f"Memory grew by {growth_mb:.2f} MB during hashing"
 
-    def test_hmac_no_memory_growth(self):
+    def test_hmac_no_memory_growth(self) -> None:
         """Repeated HMAC operations don't leak memory."""
         from code_guardian_secure import hmac_authenticate
 
@@ -111,7 +111,7 @@ class TestMemoryGrowth:
         growth_mb = (final - baseline) / (1024 * 1024)
         assert growth_mb < 1.0, f"Memory grew by {growth_mb:.2f} MB during HMAC"
 
-    def test_keygen_no_memory_growth(self):
+    def test_keygen_no_memory_growth(self) -> None:
         """Repeated key generation doesn't leak memory."""
         from code_guardian_secure import generate_ed25519_keypair
 
@@ -148,7 +148,7 @@ class TestMemoryGrowth:
 class TestSensitiveDataCleanup:
     """Tests for cleanup of sensitive data."""
 
-    def test_key_storage_cleanup_on_delete(self):
+    def test_key_storage_cleanup_on_delete(self) -> None:
         """SecureKeyStorage overwrites file before deletion."""
         from ama_cryptography.key_management import SecureKeyStorage
 
@@ -169,7 +169,7 @@ class TestSensitiveDataCleanup:
             # File should be gone
             assert not key_file.exists()
 
-    def test_password_not_stored_in_object(self):
+    def test_password_not_stored_in_object(self) -> None:
         """Master password is not stored in SecureKeyStorage object."""
         from ama_cryptography.key_management import SecureKeyStorage
 
@@ -185,7 +185,7 @@ class TestSensitiveDataCleanup:
                 if isinstance(value, bytes):
                     assert password.encode() not in value, f"Password found in attribute {key}"
 
-    def test_encryption_key_is_derived(self):
+    def test_encryption_key_is_derived(self) -> None:
         """Encryption key is derived, not the password itself."""
         from ama_cryptography.key_management import SecureKeyStorage
 
@@ -199,7 +199,7 @@ class TestSensitiveDataCleanup:
             # Encryption key should not be the password
             assert storage.encryption_key != password.encode()
 
-    def test_salt_is_random(self):
+    def test_salt_is_random(self) -> None:
         """Each new storage gets a unique random salt."""
         from ama_cryptography.key_management import SecureKeyStorage
 
@@ -214,4 +214,4 @@ class TestSensitiveDataCleanup:
 
         # All salts should be 32 bytes
         for salt in salts:
-            assert len(salt) == 32, "Salt should be 32 bytes"
+            assert len(salt) == 32, "Salt should be 32 bytes"  # type: ignore[arg-type]

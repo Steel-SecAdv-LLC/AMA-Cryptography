@@ -66,27 +66,27 @@ from ama_cryptography.equations import (
 class TestHelicalGeometricInvariants(unittest.TestCase):
     """Test helical geometric invariant calculations."""
 
-    def test_helix_curvature(self):
+    def test_helix_curvature(self) -> None:
         """Test curvature calculation κ = r/(r² + c²)."""
         r, c = 20.0, 0.7
         kappa = helix_curvature(r, c)
         expected = r / (r**2 + c**2)
         self.assertAlmostEqual(kappa, expected, places=10)
 
-    def test_helix_torsion(self):
+    def test_helix_torsion(self) -> None:
         """Test torsion calculation τ = c/(r² + c²)."""
         r, c = 20.0, 0.7
         tau = helix_torsion(r, c)
         expected = c / (r**2 + c**2)
         self.assertAlmostEqual(tau, expected, places=10)
 
-    def test_fundamental_relation(self):
+    def test_fundamental_relation(self) -> None:
         """Test κ² + τ² = 1/(r² + c²) with machine precision."""
         r, c = 20.0, 0.7
         error = verify_fundamental_relation(r, c)
         self.assertLess(error, 1e-10, "Fundamental relation error too large")
 
-    def test_all_codes(self):
+    def test_all_codes(self) -> None:
         """Test all 7 Omni-Codes verify κ² + τ² = 1/(r²+c²)."""
         results = verify_all_codes()
         self.assertEqual(len(results), 7, "Should verify all 7 Omni-Codes")
@@ -104,26 +104,26 @@ class TestHelicalGeometricInvariants(unittest.TestCase):
 class TestLyapunovStability(unittest.TestCase):
     """Test Lyapunov stability theory implementation."""
 
-    def test_lyapunov_function_positive_definite(self):
+    def test_lyapunov_function_positive_definite(self) -> None:
         """Test V(x) > 0 for x ≠ x*."""
         state = np.array([0.5, 0.3, 0.2])
         target = np.ones(3)
         V = lyapunov_function(state, target)
         self.assertGreater(V, 0, "Lyapunov function must be positive")
 
-    def test_lyapunov_function_zero_at_equilibrium(self):
+    def test_lyapunov_function_zero_at_equilibrium(self) -> None:
         """Test V(x*) = 0 at equilibrium."""
         target = np.ones(3)
         V = lyapunov_function(target, target)
         self.assertAlmostEqual(V, 0.0, places=10, msg="V should be 0 at equilibrium")
 
-    def test_lyapunov_derivative_negative(self):
+    def test_lyapunov_derivative_negative(self) -> None:
         """Test V̇(x) ≤ 0 (negative semi-definite)."""
         V = 1.5
         V_dot = lyapunov_derivative(V)
         self.assertLessEqual(V_dot, 0, "V̇(x) must be non-positive")
 
-    def test_convergence_time_calculation(self):
+    def test_convergence_time_calculation(self) -> None:
         """Test convergence time estimates."""
         V0 = 100.0
         t_99 = convergence_time(V0, 0.01)
@@ -131,7 +131,7 @@ class TestLyapunovStability(unittest.TestCase):
         self.assertGreater(t_999, t_99, "99.9% convergence takes longer than 99%")
         self.assertGreater(t_99, 0, "Convergence time must be positive")
 
-    def test_lyapunov_stability_proof(self):
+    def test_lyapunov_stability_proof(self) -> None:
         """Test complete Lyapunov stability proof."""
         state = np.array([0.5, 0.3, 0.2])
         target = np.ones(3)
@@ -147,25 +147,25 @@ class TestLyapunovStability(unittest.TestCase):
 class TestGoldenRatioHarmonics(unittest.TestCase):
     """Test golden ratio and Fibonacci convergence."""
 
-    def test_fibonacci_sequence_generation(self):
+    def test_fibonacci_sequence_generation(self) -> None:
         """Test Fibonacci sequence generation."""
         fib = fibonacci_sequence(10)
         expected = [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
         self.assertEqual(fib, expected, "Fibonacci sequence incorrect")
 
-    def test_fibonacci_ratio_convergence(self):
+    def test_fibonacci_ratio_convergence(self) -> None:
         """Test F_{n+1}/F_n → φ convergence."""
         converged, ratio, proof = golden_ratio_convergence_proof(30)
         self.assertTrue(converged, "Fibonacci ratio should converge")
         self.assertAlmostEqual(ratio, PHI, places=8, msg="Ratio should equal φ")
         self.assertLess(proof["error"], 1e-8, "Convergence error too large")
 
-    def test_phi_value(self):
+    def test_phi_value(self) -> None:
         """Test φ = (1 + √5)/2 ≈ 1.618034."""
         expected = (1 + np.sqrt(5)) / 2
         self.assertAlmostEqual(PHI, expected, places=15)
 
-    def test_phi_cubed_value(self):
+    def test_phi_cubed_value(self) -> None:
         """Test φ³ ≈ 4.236068."""
         expected = PHI**3
         self.assertAlmostEqual(PHI_CUBED, expected, places=15)
@@ -174,7 +174,7 @@ class TestGoldenRatioHarmonics(unittest.TestCase):
 class TestQuadraticFormConstraints(unittest.TestCase):
     """Test σ_quadratic constraint enforcement."""
 
-    def test_calculate_sigma_quadratic(self):
+    def test_calculate_sigma_quadratic(self) -> None:
         """Test σ_quadratic = x^T·E·x / ||x||² calculation."""
         state = np.array([1.0, 1.0, 1.0])
         E = np.eye(3) * 2.0  # Simple diagonal matrix
@@ -182,7 +182,7 @@ class TestQuadraticFormConstraints(unittest.TestCase):
         expected = 2.0  # For normalized vector and diagonal E=2I
         self.assertAlmostEqual(sigma, expected, places=6)
 
-    def test_sigma_quadratic_enforcement_valid(self):
+    def test_sigma_quadratic_enforcement_valid(self) -> None:
         """Test enforcement when σ_quadratic already meets threshold."""
         state = np.array([1.0, 1.0, 1.0])
         E = np.eye(3) * 2.0
@@ -190,7 +190,7 @@ class TestQuadraticFormConstraints(unittest.TestCase):
         self.assertTrue(valid, "State should be valid")
         np.testing.assert_array_almost_equal(corrected, state)
 
-    def test_sigma_quadratic_enforcement_correction(self):
+    def test_sigma_quadratic_enforcement_correction(self) -> None:
         """Test automatic correction mechanism exists."""
         # Test that the correction function properly scales states
         state = np.array([1.0, 1.0, 1.0])
@@ -216,13 +216,13 @@ class TestQuadraticFormConstraints(unittest.TestCase):
             "Correction should not decrease sigma",
         )
 
-    def test_initialize_ethical_matrix_positive_definite(self):
+    def test_initialize_ethical_matrix_positive_definite(self) -> None:
         """Test ethical matrix is positive-definite."""
         E = initialize_ethical_matrix(10)
         eigenvalues = np.linalg.eigvals(E)
         self.assertTrue(np.all(eigenvalues.real > 0), "All eigenvalues must be positive")
 
-    def test_initialize_ethical_matrix_dimension(self):
+    def test_initialize_ethical_matrix_dimension(self) -> None:
         """Test ethical matrix has correct dimensions."""
         dim = 15
         E = initialize_ethical_matrix(dim)
@@ -232,7 +232,7 @@ class TestQuadraticFormConstraints(unittest.TestCase):
 class TestIntegration(unittest.TestCase):
     """Test integration utilities and overall verification."""
 
-    def test_verify_mathematical_foundations(self):
+    def test_verify_mathematical_foundations(self) -> None:
         """Test comprehensive verification of all frameworks."""
         results = verify_mathematical_foundations()
 

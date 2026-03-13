@@ -57,7 +57,7 @@ NIST_TAG_16 = bytes.fromhex("2df7cd675b4f09163b41ebf980a7f638")
 class TestAESGCMNativeBasic:
     """Basic AES-256-GCM encrypt/decrypt tests."""
 
-    def test_encrypt_decrypt_roundtrip(self):
+    def test_encrypt_decrypt_roundtrip(self) -> None:
         """Basic encrypt then decrypt roundtrip."""
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
@@ -73,7 +73,7 @@ class TestAESGCMNativeBasic:
 
         assert pt == plaintext
 
-    def test_encrypt_decrypt_with_aad(self):
+    def test_encrypt_decrypt_with_aad(self) -> None:
         """Encrypt/decrypt with additional authenticated data."""
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
@@ -90,7 +90,7 @@ class TestAESGCMNativeBasic:
 
         assert pt == plaintext
 
-    def test_wrong_key_fails(self):
+    def test_wrong_key_fails(self) -> None:
         """Decryption with wrong key must fail authentication."""
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
@@ -105,7 +105,7 @@ class TestAESGCMNativeBasic:
         with pytest.raises(ValueError, match="tag verification failed"):
             native_aes256_gcm_decrypt(key2, nonce, ct, tag)
 
-    def test_wrong_nonce_fails(self):
+    def test_wrong_nonce_fails(self) -> None:
         """Decryption with wrong nonce must fail authentication."""
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
@@ -120,7 +120,7 @@ class TestAESGCMNativeBasic:
         with pytest.raises(ValueError, match="tag verification failed"):
             native_aes256_gcm_decrypt(key, nonce2, ct, tag)
 
-    def test_tampered_ciphertext_fails(self):
+    def test_tampered_ciphertext_fails(self) -> None:
         """Tampered ciphertext must fail authentication."""
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
@@ -136,7 +136,7 @@ class TestAESGCMNativeBasic:
         with pytest.raises(ValueError, match="tag verification failed"):
             native_aes256_gcm_decrypt(key, nonce, bytes(tampered), tag)
 
-    def test_tampered_tag_fails(self):
+    def test_tampered_tag_fails(self) -> None:
         """Tampered tag must fail authentication."""
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
@@ -152,7 +152,7 @@ class TestAESGCMNativeBasic:
         with pytest.raises(ValueError, match="tag verification failed"):
             native_aes256_gcm_decrypt(key, nonce, ct, bytes(tampered_tag))
 
-    def test_wrong_aad_fails(self):
+    def test_wrong_aad_fails(self) -> None:
         """Decryption with wrong AAD must fail authentication."""
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
@@ -171,7 +171,7 @@ class TestAESGCMNativeBasic:
 class TestAESGCMNativeEdgeCases:
     """Edge case tests for AES-256-GCM."""
 
-    def test_empty_plaintext(self):
+    def test_empty_plaintext(self) -> None:
         """Empty plaintext should work (AAD-only authentication)."""
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
@@ -187,7 +187,7 @@ class TestAESGCMNativeEdgeCases:
         pt = native_aes256_gcm_decrypt(key, nonce, ct, tag, b"metadata")
         assert pt == b""
 
-    def test_single_byte_plaintext(self):
+    def test_single_byte_plaintext(self) -> None:
         """Single byte plaintext."""
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
@@ -202,7 +202,7 @@ class TestAESGCMNativeEdgeCases:
         pt = native_aes256_gcm_decrypt(key, nonce, ct, tag)
         assert pt == b"\x42"
 
-    def test_non_block_aligned_plaintext(self):
+    def test_non_block_aligned_plaintext(self) -> None:
         """Plaintext not aligned to 16-byte AES block boundary."""
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
@@ -219,7 +219,7 @@ class TestAESGCMNativeEdgeCases:
             pt = native_aes256_gcm_decrypt(key, nonce, ct, tag)
             assert pt == plaintext
 
-    def test_large_plaintext(self):
+    def test_large_plaintext(self) -> None:
         """1 MB plaintext."""
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
@@ -234,7 +234,7 @@ class TestAESGCMNativeEdgeCases:
         pt = native_aes256_gcm_decrypt(key, nonce, ct, tag)
         assert pt == plaintext
 
-    def test_deterministic_encryption(self):
+    def test_deterministic_encryption(self) -> None:
         """Same key+nonce+plaintext must produce same ciphertext."""
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
@@ -253,21 +253,21 @@ class TestAESGCMNativeEdgeCases:
 class TestAESGCMInputValidation:
     """Input validation tests."""
 
-    def test_wrong_key_length(self):
+    def test_wrong_key_length(self) -> None:
         """Key must be exactly 32 bytes."""
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
         with pytest.raises(ValueError, match="32 bytes"):
             native_aes256_gcm_encrypt(b"short", b"\x00" * 12, b"data")
 
-    def test_wrong_nonce_length(self):
+    def test_wrong_nonce_length(self) -> None:
         """Nonce must be exactly 12 bytes."""
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
         with pytest.raises(ValueError, match="12 bytes"):
             native_aes256_gcm_encrypt(b"\x00" * 32, b"short", b"data")
 
-    def test_wrong_tag_length(self):
+    def test_wrong_tag_length(self) -> None:
         """Tag must be exactly 16 bytes."""
         from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
 
@@ -279,7 +279,7 @@ class TestAESGCMInputValidation:
 class TestAESGCMNISTVectors:
     """NIST SP 800-38D test vectors."""
 
-    def test_nist_case_16(self):
+    def test_nist_case_16(self) -> None:
         """NIST SP 800-38D Test Case 16 (AES-256, 96-bit IV, AAD)."""
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
@@ -306,7 +306,7 @@ class TestAESGCMNISTVectors:
 class TestAESGCMInterop:
     """Interop tests between native and PyCA cryptography."""
 
-    def test_native_encrypt_pyca_decrypt(self):
+    def test_native_encrypt_pyca_decrypt(self) -> None:
         """Native-encrypted data must be decryptable by PyCA cryptography."""
         try:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -327,7 +327,7 @@ class TestAESGCMInterop:
         pt = aesgcm.decrypt(nonce, ct + tag, aad)
         assert pt == plaintext
 
-    def test_pyca_encrypt_native_decrypt(self):
+    def test_pyca_encrypt_native_decrypt(self) -> None:
         """PyCA-encrypted data must be decryptable by native backend."""
         try:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -355,7 +355,7 @@ class TestAESGCMInterop:
 class TestAESGCMProvider:
     """Tests for AESGCMProvider in crypto_api.py."""
 
-    def test_provider_encrypt_decrypt(self):
+    def test_provider_encrypt_decrypt(self) -> None:
         """AESGCMProvider encrypt/decrypt roundtrip."""
         from ama_cryptography.crypto_api import AESGCMProvider, CryptoBackend
 
@@ -369,7 +369,7 @@ class TestAESGCMProvider:
         pt = provider.decrypt(result["ciphertext"], key, result["nonce"], result["tag"])
         assert pt == plaintext
 
-    def test_provider_with_aad(self):
+    def test_provider_with_aad(self) -> None:
         """AESGCMProvider with additional authenticated data."""
         from ama_cryptography.crypto_api import AESGCMProvider, CryptoBackend
 
@@ -382,7 +382,7 @@ class TestAESGCMProvider:
         pt = provider.decrypt(result["ciphertext"], key, result["nonce"], result["tag"], aad=aad)
         assert pt == plaintext
 
-    def test_provider_auto_generates_nonce(self):
+    def test_provider_auto_generates_nonce(self) -> None:
         """Provider auto-generates unique nonces when not specified."""
         from ama_cryptography.crypto_api import AESGCMProvider, CryptoBackend
 

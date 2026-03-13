@@ -21,7 +21,7 @@ import pytest
 class TestSecureMemoryAvailability:
     """Tests for module availability and status."""
 
-    def test_module_imports(self):
+    def test_module_imports(self) -> None:
         """Module imports successfully regardless of pynacl availability."""
         from ama_cryptography import secure_memory
 
@@ -34,14 +34,14 @@ class TestSecureMemoryAvailability:
         assert hasattr(secure_memory, "is_available")
         assert hasattr(secure_memory, "get_status")
 
-    def test_is_available_returns_bool(self):
+    def test_is_available_returns_bool(self) -> None:
         """is_available() returns a boolean."""
         from ama_cryptography.secure_memory import is_available
 
         result = is_available()
         assert isinstance(result, bool)
 
-    def test_get_status_returns_dict(self):
+    def test_get_status_returns_dict(self) -> None:
         """get_status() returns status dictionary."""
         from ama_cryptography.secure_memory import get_status
 
@@ -56,7 +56,7 @@ class TestSecureMemoryAvailability:
 class TestSecureMemzero:
     """Tests for secure_memzero function."""
 
-    def test_zeros_bytearray(self):
+    def test_zeros_bytearray(self) -> None:
         """secure_memzero zeros all bytes in a bytearray."""
         from ama_cryptography.secure_memory import secure_memzero
 
@@ -67,7 +67,7 @@ class TestSecureMemzero:
 
         assert all(b == 0 for b in data), "All bytes must be zeroed"
 
-    def test_zeros_memoryview(self):
+    def test_zeros_memoryview(self) -> None:
         """secure_memzero works with memoryview."""
         from ama_cryptography.secure_memory import secure_memzero
 
@@ -80,7 +80,7 @@ class TestSecureMemzero:
 
         assert all(b == 0 for b in data)
 
-    def test_handles_empty_buffer(self):
+    def test_handles_empty_buffer(self) -> None:
         """secure_memzero handles empty buffer."""
         from ama_cryptography.secure_memory import secure_memzero
 
@@ -88,7 +88,7 @@ class TestSecureMemzero:
         secure_memzero(data)  # Should not raise
         assert len(data) == 0
 
-    def test_preserves_length(self):
+    def test_preserves_length(self) -> None:
         """secure_memzero preserves buffer length."""
         from ama_cryptography.secure_memory import secure_memzero
 
@@ -99,15 +99,15 @@ class TestSecureMemzero:
 
         assert len(data) == original_len
 
-    def test_rejects_immutable_bytes(self):
+    def test_rejects_immutable_bytes(self) -> None:
         """secure_memzero rejects immutable bytes."""
         from ama_cryptography.secure_memory import secure_memzero
 
         data = b"immutable"
         with pytest.raises(TypeError):
-            secure_memzero(data)
+            secure_memzero(data)  # type: ignore[arg-type]
 
-    def test_large_buffer(self):
+    def test_large_buffer(self) -> None:
         """secure_memzero handles large buffers."""
         from ama_cryptography.secure_memory import secure_memzero
 
@@ -127,7 +127,7 @@ class TestSecureMemzero:
 class TestSecureMlock:
     """Tests for memory locking functionality."""
 
-    def test_mlock_returns_bool(self):
+    def test_mlock_returns_bool(self) -> None:
         """secure_mlock returns boolean indicating success or graceful fallback."""
         import warnings
 
@@ -142,7 +142,7 @@ class TestSecureMlock:
 
         assert isinstance(result, bool)
 
-    def test_mlock_munlock_roundtrip(self):
+    def test_mlock_munlock_roundtrip(self) -> None:
         """Can lock and unlock memory without error."""
         import warnings
 
@@ -161,7 +161,7 @@ class TestSecureMlock:
                 secure_munlock(data)
                 # May or may not succeed depending on implementation
 
-    def test_mlock_empty_buffer(self):
+    def test_mlock_empty_buffer(self) -> None:
         """secure_mlock handles empty buffer."""
         import warnings
 
@@ -180,7 +180,7 @@ class TestSecureMlock:
 class TestConstantTimeCompare:
     """Tests for constant-time comparison."""
 
-    def test_equal_strings(self):
+    def test_equal_strings(self) -> None:
         """constant_time_compare returns True for equal bytes."""
         from ama_cryptography.secure_memory import constant_time_compare
 
@@ -189,7 +189,7 @@ class TestConstantTimeCompare:
 
         assert constant_time_compare(a, b) is True
 
-    def test_unequal_strings(self):
+    def test_unequal_strings(self) -> None:
         """constant_time_compare returns False for different bytes."""
         from ama_cryptography.secure_memory import constant_time_compare
 
@@ -198,7 +198,7 @@ class TestConstantTimeCompare:
 
         assert constant_time_compare(a, b) is False
 
-    def test_different_lengths(self):
+    def test_different_lengths(self) -> None:
         """constant_time_compare returns False for different lengths."""
         from ama_cryptography.secure_memory import constant_time_compare
 
@@ -207,14 +207,14 @@ class TestConstantTimeCompare:
 
         assert constant_time_compare(a, b) is False
 
-    def test_empty_strings(self):
+    def test_empty_strings(self) -> None:
         """constant_time_compare handles empty bytes."""
         from ama_cryptography.secure_memory import constant_time_compare
 
         assert constant_time_compare(b"", b"") is True
         assert constant_time_compare(b"", b"x") is False
 
-    def test_random_bytes(self):
+    def test_random_bytes(self) -> None:
         """constant_time_compare works with random bytes."""
         from ama_cryptography.secure_memory import constant_time_compare
 
@@ -231,7 +231,7 @@ class TestConstantTimeCompare:
 class TestSecureBuffer:
     """Tests for SecureBuffer context manager."""
 
-    def test_basic_usage(self):
+    def test_basic_usage(self) -> None:
         """SecureBuffer can be used as context manager."""
         import warnings
 
@@ -247,7 +247,7 @@ class TestSecureBuffer:
 
         # Buffer is zeroed after context exits
 
-    def test_buffer_zeroed_on_exit(self):
+    def test_buffer_zeroed_on_exit(self) -> None:
         """SecureBuffer zeros data on context exit."""
         import warnings
 
@@ -265,7 +265,7 @@ class TestSecureBuffer:
         # After exit, buffer should be zeroed
         assert all(b == 0 for b in buffer_ref)
 
-    def test_access_outside_context_raises(self):
+    def test_access_outside_context_raises(self) -> None:
         """Accessing SecureBuffer.data outside context raises."""
         from ama_cryptography.secure_memory import SecureBuffer
 
@@ -274,21 +274,21 @@ class TestSecureBuffer:
         with pytest.raises(RuntimeError):
             _ = sb.data  # Not in context
 
-    def test_size_property(self):
+    def test_size_property(self) -> None:
         """SecureBuffer.size returns correct size."""
         from ama_cryptography.secure_memory import SecureBuffer
 
         sb = SecureBuffer(64)
         assert sb.size == 64
 
-    def test_negative_size_raises(self):
+    def test_negative_size_raises(self) -> None:
         """SecureBuffer with negative size raises ValueError."""
         from ama_cryptography.secure_memory import SecureBuffer
 
         with pytest.raises(ValueError):
             SecureBuffer(-1)
 
-    def test_zero_size(self):
+    def test_zero_size(self) -> None:
         """SecureBuffer with zero size works."""
         import warnings
 
@@ -300,7 +300,7 @@ class TestSecureBuffer:
             with SecureBuffer(0) as buf:
                 assert len(buf) == 0
 
-    def test_exception_still_zeros(self):
+    def test_exception_still_zeros(self) -> None:
         """SecureBuffer zeros data even if exception occurs."""
         import warnings
 
@@ -327,7 +327,7 @@ class TestSecureBuffer:
 class TestSecureBufferFunction:
     """Tests for secure_buffer() context manager function."""
 
-    def test_basic_usage(self):
+    def test_basic_usage(self) -> None:
         """secure_buffer() can be used as context manager."""
         import warnings
 
@@ -340,7 +340,7 @@ class TestSecureBufferFunction:
                 assert len(buf) == 32
                 buf[:] = secrets.token_bytes(32)
 
-    def test_buffer_zeroed_on_exit(self):
+    def test_buffer_zeroed_on_exit(self) -> None:
         """secure_buffer() zeros data on exit."""
         import warnings
 
@@ -361,7 +361,7 @@ class TestSecureBufferFunction:
 class TestSecureRandomBytes:
     """Tests for secure random bytes generation."""
 
-    def test_generates_correct_length(self):
+    def test_generates_correct_length(self) -> None:
         """secure_random_bytes generates correct length."""
         from ama_cryptography.secure_memory import secure_random_bytes
 
@@ -369,14 +369,14 @@ class TestSecureRandomBytes:
             result = secure_random_bytes(size)
             assert len(result) == size
 
-    def test_returns_bytes(self):
+    def test_returns_bytes(self) -> None:
         """secure_random_bytes returns bytes type."""
         from ama_cryptography.secure_memory import secure_random_bytes
 
         result = secure_random_bytes(32)
         assert isinstance(result, bytes)
 
-    def test_different_each_call(self):
+    def test_different_each_call(self) -> None:
         """secure_random_bytes returns different values each call."""
         from ama_cryptography.secure_memory import secure_random_bytes
 
@@ -384,7 +384,7 @@ class TestSecureRandomBytes:
         # All should be unique (with overwhelming probability)
         assert len(set(results)) == 10
 
-    def test_negative_size_raises(self):
+    def test_negative_size_raises(self) -> None:
         """secure_random_bytes with negative size raises ValueError."""
         from ama_cryptography.secure_memory import secure_random_bytes
 
@@ -395,7 +395,7 @@ class TestSecureRandomBytes:
 class TestPlatformCompatibility:
     """Tests for cross-platform compatibility."""
 
-    def test_works_on_current_platform(self):
+    def test_works_on_current_platform(self) -> None:
         """Module works on current platform."""
         import warnings
 
@@ -429,7 +429,7 @@ class TestPlatformCompatibility:
                 assert len(buf) == 32
 
     @pytest.mark.skipif(platform.system() == "Windows", reason="mlock may fail on Windows")
-    def test_mlock_on_unix(self):
+    def test_mlock_on_unix(self) -> None:
         """Memory locking may work on Unix systems."""
         from ama_cryptography.secure_memory import get_status, secure_mlock
 

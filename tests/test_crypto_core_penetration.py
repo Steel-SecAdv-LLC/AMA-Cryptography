@@ -42,6 +42,7 @@ import secrets
 import struct
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -73,37 +74,37 @@ from code_guardian_secure import (
 class TestLengthPrefixedEncoding:
     """Penetration tests for canonical encoding."""
 
-    def test_encoding_produces_deterministic_output(self):
+    def test_encoding_produces_deterministic_output(self) -> None:
         """Same input always produces same output."""
         result1 = length_prefixed_encode("test", "data")
         result2 = length_prefixed_encode("test", "data")
         assert result1 == result2
 
-    def test_encoding_different_inputs_different_outputs(self):
+    def test_encoding_different_inputs_different_outputs(self) -> None:
         """Different inputs produce different outputs (collision resistance)."""
         result1 = length_prefixed_encode("ABC", "DE")
         result2 = length_prefixed_encode("AB", "CDE")
         assert result1 != result2, "Concatenation attack should be prevented"
 
-    def test_encoding_empty_fields(self):
+    def test_encoding_empty_fields(self) -> None:
         """Empty fields should be handled correctly."""
         result = length_prefixed_encode("", "test", "")
         assert len(result) > 0
         assert b"\x00\x00\x00\x00" in result  # Empty field has 0 length
 
-    def test_encoding_unicode_characters(self):
+    def test_encoding_unicode_characters(self) -> None:
         """Unicode characters should be properly encoded."""
         result = length_prefixed_encode("test", MASTER_CODES)
         assert len(result) > 0
 
-    def test_encoding_length_prefix_format(self):
+    def test_encoding_length_prefix_format(self) -> None:
         """Verify 4-byte big-endian length prefix format."""
         result = length_prefixed_encode("test")
         # "test" is 4 bytes, so prefix should be 0x00000004
         assert result[:4] == b"\x00\x00\x00\x04"
         assert result[4:] == b"test"
 
-    def test_encoding_large_field(self):
+    def test_encoding_large_field(self) -> None:
         """Large fields should be handled without overflow."""
         large_data = "A" * 100000
         result = length_prefixed_encode(large_data)
@@ -114,36 +115,36 @@ class TestLengthPrefixedEncoding:
 class TestCanonicalHashCode:
     """Penetration tests for Code hashing."""
 
-    def test_hash_deterministic(self):
+    def test_hash_deterministic(self) -> None:
         """Same Omni-Codes produce same hash."""
         hash1 = canonical_hash_code(MASTER_CODES, MASTER_HELIX_PARAMS)
         hash2 = canonical_hash_code(MASTER_CODES, MASTER_HELIX_PARAMS)
         assert hash1 == hash2
 
-    def test_hash_length(self):
+    def test_hash_length(self) -> None:
         """SHA3-256 produces 32-byte hash."""
         result = canonical_hash_code(MASTER_CODES, MASTER_HELIX_PARAMS)
         assert len(result) == 32
 
-    def test_hash_different_codes_different_hash(self):
+    def test_hash_different_codes_different_hash(self) -> None:
         """Different Omni-Codes produce different hashes."""
         hash1 = canonical_hash_code(MASTER_CODES, MASTER_HELIX_PARAMS)
         hash2 = canonical_hash_code(MASTER_CODES + "X", MASTER_HELIX_PARAMS)
         assert hash1 != hash2
 
-    def test_hash_different_params_different_hash(self):
+    def test_hash_different_params_different_hash(self) -> None:
         """Different helix params produce different hashes."""
         hash1 = canonical_hash_code(MASTER_CODES, MASTER_HELIX_PARAMS)
         modified_params = [(r + 0.001, p) for r, p in MASTER_HELIX_PARAMS]
         hash2 = canonical_hash_code(MASTER_CODES, modified_params)
         assert hash1 != hash2
 
-    def test_hash_empty_codes(self):
+    def test_hash_empty_codes(self) -> None:
         """Empty Omni-Codes should raise ValueError for input validation."""
         with pytest.raises(ValueError, match="codes cannot be empty"):
             canonical_hash_code("", [])
 
-    def test_hash_single_bit_change_avalanche(self):
+    def test_hash_single_bit_change_avalanche(self) -> None:
         """Single character change should produce completely different hash."""
         codes = "ABCDEFGHIJ"
         hash1 = canonical_hash_code(codes, [(1.0, 1.0)])
@@ -156,7 +157,7 @@ class TestCanonicalHashCode:
 class TestHMACAuthentication:
     """Penetration tests for HMAC authentication."""
 
-    def test_hmac_deterministic(self):
+    def test_hmac_deterministic(self) -> None:
         """Same message and key produce same tag."""
         key = secrets.token_bytes(32)
         message = b"test message"
@@ -164,13 +165,13 @@ class TestHMACAuthentication:
         tag2 = hmac_authenticate(message, key)
         assert tag1 == tag2
 
-    def test_hmac_tag_length(self):
+    def test_hmac_tag_length(self) -> None:
         """HMAC-SHA3-256 produces 32-byte tag."""
         key = secrets.token_bytes(32)
         tag = hmac_authenticate(b"test", key)
         assert len(tag) == 32
 
-    def test_hmac_different_keys_different_tags(self):
+    def test_hmac_different_keys_different_tags(self) -> None:
         """Different keys produce different tags."""
         key1 = secrets.token_bytes(32)
         key2 = secrets.token_bytes(32)
@@ -179,21 +180,21 @@ class TestHMACAuthentication:
         tag2 = hmac_authenticate(message, key2)
         assert tag1 != tag2
 
-    def test_hmac_different_messages_different_tags(self):
+    def test_hmac_different_messages_different_tags(self) -> None:
         """Different messages produce different tags."""
         key = secrets.token_bytes(32)
         tag1 = hmac_authenticate(b"message1", key)
         tag2 = hmac_authenticate(b"message2", key)
         assert tag1 != tag2
 
-    def test_hmac_verify_valid_tag(self):
+    def test_hmac_verify_valid_tag(self) -> None:
         """Valid tag should verify successfully."""
         key = secrets.token_bytes(32)
         message = b"test message"
         tag = hmac_authenticate(message, key)
         assert hmac_verify(message, tag, key) is True
 
-    def test_hmac_verify_wrong_key_fails(self):
+    def test_hmac_verify_wrong_key_fails(self) -> None:
         """Wrong key should fail verification."""
         key1 = secrets.token_bytes(32)
         key2 = secrets.token_bytes(32)
@@ -201,14 +202,14 @@ class TestHMACAuthentication:
         tag = hmac_authenticate(message, key1)
         assert hmac_verify(message, tag, key2) is False
 
-    def test_hmac_verify_tampered_message_fails(self):
+    def test_hmac_verify_tampered_message_fails(self) -> None:
         """Tampered message should fail verification."""
         key = secrets.token_bytes(32)
         message = b"test message"
         tag = hmac_authenticate(message, key)
         assert hmac_verify(b"tampered message", tag, key) is False
 
-    def test_hmac_verify_tampered_tag_fails(self):
+    def test_hmac_verify_tampered_tag_fails(self) -> None:
         """Tampered tag should fail verification."""
         key = secrets.token_bytes(32)
         message = b"test message"
@@ -216,19 +217,19 @@ class TestHMACAuthentication:
         tampered_tag = bytes([tag[0] ^ 0xFF]) + tag[1:]
         assert hmac_verify(message, tampered_tag, key) is False
 
-    def test_hmac_minimum_key_length_enforced(self):
+    def test_hmac_minimum_key_length_enforced(self) -> None:
         """Keys shorter than 32 bytes should raise ValueError."""
         short_key = secrets.token_bytes(31)
         with pytest.raises(ValueError, match="at least 32 bytes"):
             hmac_authenticate(b"test", short_key)
 
-    def test_hmac_32_byte_key_accepted(self):
+    def test_hmac_32_byte_key_accepted(self) -> None:
         """32-byte key should be accepted (minimum)."""
         key = secrets.token_bytes(32)
         tag = hmac_authenticate(b"test", key)
         assert len(tag) == 32
 
-    def test_hmac_16_byte_key_rejected(self):
+    def test_hmac_16_byte_key_rejected(self) -> None:
         """16-byte key should now be rejected (hardened minimum is 32 bytes)."""
         key = secrets.token_bytes(16)
         with pytest.raises(ValueError, match="at least 32 bytes"):
@@ -238,13 +239,13 @@ class TestHMACAuthentication:
 class TestEd25519Signatures:
     """Penetration tests for Ed25519 signatures."""
 
-    def test_keypair_generation(self):
+    def test_keypair_generation(self) -> None:
         """Key generation produces valid keypair."""
         keypair = generate_ed25519_keypair()
         assert len(keypair.private_key) == 32
         assert len(keypair.public_key) == 32
 
-    def test_keypair_deterministic_with_seed(self):
+    def test_keypair_deterministic_with_seed(self) -> None:
         """Same seed produces same keypair."""
         seed = secrets.token_bytes(32)
         kp1 = generate_ed25519_keypair(seed)
@@ -252,34 +253,34 @@ class TestEd25519Signatures:
         assert kp1.private_key == kp2.private_key
         assert kp1.public_key == kp2.public_key
 
-    def test_keypair_different_seeds_different_keys(self):
+    def test_keypair_different_seeds_different_keys(self) -> None:
         """Different seeds produce different keypairs."""
         kp1 = generate_ed25519_keypair(secrets.token_bytes(32))
         kp2 = generate_ed25519_keypair(secrets.token_bytes(32))
         assert kp1.private_key != kp2.private_key
         assert kp1.public_key != kp2.public_key
 
-    def test_signature_length(self):
+    def test_signature_length(self) -> None:
         """Ed25519 signature is 64 bytes."""
         keypair = generate_ed25519_keypair()
         sig = ed25519_sign(b"test", keypair.private_key)
         assert len(sig) == 64
 
-    def test_signature_deterministic(self):
+    def test_signature_deterministic(self) -> None:
         """Same message and key produce same signature (Ed25519 is deterministic)."""
         keypair = generate_ed25519_keypair()
         sig1 = ed25519_sign(b"test", keypair.private_key)
         sig2 = ed25519_sign(b"test", keypair.private_key)
         assert sig1 == sig2
 
-    def test_verify_valid_signature(self):
+    def test_verify_valid_signature(self) -> None:
         """Valid signature should verify."""
         keypair = generate_ed25519_keypair()
         message = b"test message"
         sig = ed25519_sign(message, keypair.private_key)
         assert ed25519_verify(message, sig, keypair.public_key) is True
 
-    def test_verify_wrong_public_key_fails(self):
+    def test_verify_wrong_public_key_fails(self) -> None:
         """Wrong public key should fail verification."""
         kp1 = generate_ed25519_keypair()
         kp2 = generate_ed25519_keypair()
@@ -287,14 +288,14 @@ class TestEd25519Signatures:
         sig = ed25519_sign(message, kp1.private_key)
         assert ed25519_verify(message, sig, kp2.public_key) is False
 
-    def test_verify_tampered_message_fails(self):
+    def test_verify_tampered_message_fails(self) -> None:
         """Tampered message should fail verification."""
         keypair = generate_ed25519_keypair()
         message = b"test message"
         sig = ed25519_sign(message, keypair.private_key)
         assert ed25519_verify(b"tampered", sig, keypair.public_key) is False
 
-    def test_verify_tampered_signature_fails(self):
+    def test_verify_tampered_signature_fails(self) -> None:
         """Tampered signature should fail verification."""
         keypair = generate_ed25519_keypair()
         message = b"test message"
@@ -302,23 +303,23 @@ class TestEd25519Signatures:
         tampered_sig = bytes([sig[0] ^ 0xFF]) + sig[1:]
         assert ed25519_verify(message, tampered_sig, keypair.public_key) is False
 
-    def test_wrong_private_key_length_raises(self):
+    def test_wrong_private_key_length_raises(self) -> None:
         """Wrong private key length should raise ValueError."""
         with pytest.raises(ValueError, match="32 bytes"):
             ed25519_sign(b"test", b"short")
 
-    def test_wrong_signature_length_raises(self):
+    def test_wrong_signature_length_raises(self) -> None:
         """Wrong signature length should raise ValueError."""
         keypair = generate_ed25519_keypair()
         with pytest.raises(ValueError, match="64 bytes"):
             ed25519_verify(b"test", b"short", keypair.public_key)
 
-    def test_wrong_public_key_length_raises(self):
+    def test_wrong_public_key_length_raises(self) -> None:
         """Wrong public key length should raise ValueError."""
         with pytest.raises(ValueError, match="32 bytes"):
             ed25519_verify(b"test", b"x" * 64, b"short")
 
-    def test_seed_wrong_length_raises(self):
+    def test_seed_wrong_length_raises(self) -> None:
         """Seed with wrong length should raise ValueError."""
         with pytest.raises(ValueError, match="32 bytes"):
             generate_ed25519_keypair(b"short")
@@ -328,21 +329,21 @@ class TestDilithiumSignatures:
     """Penetration tests for Dilithium quantum-resistant signatures."""
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
-    def test_keypair_generation(self):
+    def test_keypair_generation(self) -> None:
         """Key generation produces valid keypair."""
         keypair = generate_dilithium_keypair()
         assert len(keypair.public_key) == 1952  # ML-DSA-65
         assert len(keypair.secret_key) > 0
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
-    def test_signature_creation(self):
+    def test_signature_creation(self) -> None:
         """Signature creation works."""
         keypair = generate_dilithium_keypair()
         sig = dilithium_sign(b"test", keypair.secret_key)
         assert len(sig) > 0
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
-    def test_verify_valid_signature(self):
+    def test_verify_valid_signature(self) -> None:
         """Valid signature should verify."""
         keypair = generate_dilithium_keypair()
         message = b"test message"
@@ -350,7 +351,7 @@ class TestDilithiumSignatures:
         assert dilithium_verify(message, sig, keypair.public_key) is True
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
-    def test_verify_wrong_public_key_fails(self):
+    def test_verify_wrong_public_key_fails(self) -> None:
         """Wrong public key should fail verification."""
         kp1 = generate_dilithium_keypair()
         kp2 = generate_dilithium_keypair()
@@ -359,7 +360,7 @@ class TestDilithiumSignatures:
         assert dilithium_verify(message, sig, kp2.public_key) is False
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
-    def test_verify_tampered_message_fails(self):
+    def test_verify_tampered_message_fails(self) -> None:
         """Tampered message should fail verification."""
         keypair = generate_dilithium_keypair()
         message = b"test message"
@@ -367,7 +368,7 @@ class TestDilithiumSignatures:
         assert dilithium_verify(b"tampered", sig, keypair.public_key) is False
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
-    def test_verify_tampered_signature_fails(self):
+    def test_verify_tampered_signature_fails(self) -> None:
         """Tampered signature should fail verification."""
         keypair = generate_dilithium_keypair()
         message = b"test message"
@@ -375,7 +376,7 @@ class TestDilithiumSignatures:
         tampered_sig = bytes([sig[0] ^ 0xFF]) + sig[1:]
         assert dilithium_verify(message, tampered_sig, keypair.public_key) is False
 
-    def test_unavailable_raises_exception(self):
+    def test_unavailable_raises_exception(self) -> None:
         """When Dilithium unavailable, operations should raise QuantumSignatureUnavailableError."""
         with patch("ama_cryptography.pqc_backends.DILITHIUM_AVAILABLE", False):
             with pytest.raises(QuantumSignatureUnavailableError):
@@ -385,7 +386,7 @@ class TestDilithiumSignatures:
 class TestKeyDerivation:
     """Penetration tests for HKDF key derivation."""
 
-    def test_derive_keys_deterministic(self):
+    def test_derive_keys_deterministic(self) -> None:
         """Same inputs produce same derived keys with same salt."""
         master = secrets.token_bytes(32)
         fixed_salt = b"fixed_salt_for_testing_32_bytes!"
@@ -393,14 +394,14 @@ class TestKeyDerivation:
         keys2, _ = derive_keys(master, "test", num_keys=3, salt=fixed_salt)
         assert keys1 == keys2
 
-    def test_derive_keys_different_master_different_keys(self):
+    def test_derive_keys_different_master_different_keys(self) -> None:
         """Different master secrets produce different keys."""
         fixed_salt = b"fixed_salt_for_testing_32_bytes!"
         keys1, _ = derive_keys(secrets.token_bytes(32), "test", num_keys=3, salt=fixed_salt)
         keys2, _ = derive_keys(secrets.token_bytes(32), "test", num_keys=3, salt=fixed_salt)
         assert keys1 != keys2
 
-    def test_derive_keys_different_info_different_keys(self):
+    def test_derive_keys_different_info_different_keys(self) -> None:
         """Different info strings produce different keys."""
         master = secrets.token_bytes(32)
         fixed_salt = b"fixed_salt_for_testing_32_bytes!"
@@ -408,7 +409,7 @@ class TestKeyDerivation:
         keys2, _ = derive_keys(master, "info2", num_keys=3, salt=fixed_salt)
         assert keys1 != keys2
 
-    def test_derive_keys_independence(self):
+    def test_derive_keys_independence(self) -> None:
         """Derived keys should be independent of each other."""
         master = secrets.token_bytes(32)
         fixed_salt = b"fixed_salt_for_testing_32_bytes!"
@@ -416,29 +417,29 @@ class TestKeyDerivation:
         # All keys should be different
         assert len({k.hex() for k in keys}) == 5
 
-    def test_derive_keys_length(self):
+    def test_derive_keys_length(self) -> None:
         """Each derived key should be 32 bytes."""
         master = secrets.token_bytes(32)
         keys, _ = derive_keys(master, "test", num_keys=3)
         for key in keys:
             assert len(key) == 32
 
-    def test_derive_keys_minimum_master_length(self):
+    def test_derive_keys_minimum_master_length(self) -> None:
         """Master secret shorter than 32 bytes should raise ValueError."""
         with pytest.raises(ValueError, match="at least 32 bytes"):
             derive_keys(secrets.token_bytes(31), "test")
 
-    def test_derive_keys_32_byte_master_accepted(self):
+    def test_derive_keys_32_byte_master_accepted(self) -> None:
         """32-byte master secret should be accepted (minimum)."""
         keys, _ = derive_keys(secrets.token_bytes(32), "test", num_keys=3)
         assert len(keys) == 3
 
-    def test_derive_keys_16_byte_master_rejected(self):
+    def test_derive_keys_16_byte_master_rejected(self) -> None:
         """16-byte master secret should now be rejected (hardened minimum is 32 bytes)."""
         with pytest.raises(ValueError, match="at least 32 bytes"):
             derive_keys(secrets.token_bytes(16), "test")
 
-    def test_ethical_context_integration(self):
+    def test_ethical_context_integration(self) -> None:
         """Ethical vector should affect key derivation."""
         master = secrets.token_bytes(32)
         fixed_salt = b"fixed_salt_for_testing_32_bytes!"
@@ -452,19 +453,19 @@ class TestKeyDerivation:
 class TestEthicalHKDFContext:
     """Penetration tests for ethical HKDF context creation."""
 
-    def test_context_deterministic(self):
+    def test_context_deterministic(self) -> None:
         """Same inputs produce same context."""
         ctx1 = create_ethical_hkdf_context(b"base", ETHICAL_VECTOR)
         ctx2 = create_ethical_hkdf_context(b"base", ETHICAL_VECTOR)
         assert ctx1 == ctx2
 
-    def test_context_different_base_different_output(self):
+    def test_context_different_base_different_output(self) -> None:
         """Different base contexts produce different outputs."""
         ctx1 = create_ethical_hkdf_context(b"base1", ETHICAL_VECTOR)
         ctx2 = create_ethical_hkdf_context(b"base2", ETHICAL_VECTOR)
         assert ctx1 != ctx2
 
-    def test_context_different_vector_different_output(self):
+    def test_context_different_vector_different_output(self) -> None:
         """Different ethical vectors produce different outputs."""
         ctx1 = create_ethical_hkdf_context(b"base", ETHICAL_VECTOR)
         modified = ETHICAL_VECTOR.copy()
@@ -472,13 +473,13 @@ class TestEthicalHKDFContext:
         ctx2 = create_ethical_hkdf_context(b"base", modified)
         assert ctx1 != ctx2
 
-    def test_context_includes_base(self):
+    def test_context_includes_base(self) -> None:
         """Output should include base context."""
         base = b"test_base_context"
         ctx = create_ethical_hkdf_context(base, ETHICAL_VECTOR)
         assert ctx.startswith(base)
 
-    def test_context_adds_ethical_signature(self):
+    def test_context_adds_ethical_signature(self) -> None:
         """Output should be longer than base (adds 16-byte signature)."""
         base = b"test"
         ctx = create_ethical_hkdf_context(base, ETHICAL_VECTOR)
@@ -488,7 +489,7 @@ class TestEthicalHKDFContext:
 class TestKeyManagementSystem:
     """Penetration tests for KMS generation."""
 
-    def test_kms_generation(self):
+    def test_kms_generation(self) -> None:
         """KMS generation produces valid system."""
         kms = generate_key_management_system("test_author")
         assert len(kms.master_secret) == 32
@@ -496,19 +497,19 @@ class TestKeyManagementSystem:
         assert len(kms.ed25519_keypair.private_key) == 32
         assert len(kms.ed25519_keypair.public_key) == 32
 
-    def test_kms_unique_each_generation(self):
+    def test_kms_unique_each_generation(self) -> None:
         """Each KMS generation produces unique keys."""
         kms1 = generate_key_management_system("test")
         kms2 = generate_key_management_system("test")
         assert kms1.master_secret != kms2.master_secret
         assert kms1.hmac_key != kms2.hmac_key
 
-    def test_kms_ethical_vector_stored(self):
+    def test_kms_ethical_vector_stored(self) -> None:
         """Ethical vector should be stored in KMS."""
         kms = generate_key_management_system("test")
         assert kms.ethical_vector == ETHICAL_VECTOR
 
-    def test_kms_custom_ethical_vector(self):
+    def test_kms_custom_ethical_vector(self) -> None:
         """Custom ethical vector should be used."""
         custom = {"test": 1.0}
         kms = generate_key_management_system("test", ethical_vector=custom)
@@ -519,11 +520,11 @@ class TestCryptoPackageCreation:
     """Penetration tests for crypto package creation."""
 
     @pytest.fixture
-    def kms(self):
+    def kms(self) -> Any:
         """Create KMS for testing."""
         return generate_key_management_system("test_author")
 
-    def test_package_creation(self, kms):
+    def test_package_creation(self, kms: Any) -> None:
         """Package creation produces valid package."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         assert pkg.content_hash is not None
@@ -531,18 +532,18 @@ class TestCryptoPackageCreation:
         assert pkg.ed25519_signature is not None
         assert pkg.timestamp is not None
 
-    def test_package_deterministic_hash(self, kms):
+    def test_package_deterministic_hash(self, kms: Any) -> None:
         """Same Omni-Codes produce same content hash."""
         pkg1 = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         pkg2 = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         assert pkg1.content_hash == pkg2.content_hash
 
-    def test_package_includes_public_keys(self, kms):
+    def test_package_includes_public_keys(self, kms: Any) -> None:
         """Package should include public keys for verification."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         assert pkg.ed25519_pubkey == kms.ed25519_keypair.public_key.hex()
 
-    def test_package_ethical_vector_included(self, kms):
+    def test_package_ethical_vector_included(self, kms: Any) -> None:
         """Package should include ethical vector."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         assert pkg.ethical_vector == kms.ethical_vector
@@ -553,16 +554,16 @@ class TestCryptoPackageVerification:
     """Penetration tests for crypto package verification."""
 
     @pytest.fixture
-    def kms(self):
+    def kms(self) -> Any:
         """Create KMS for testing."""
         return generate_key_management_system("test_author")
 
     @pytest.fixture
-    def valid_package(self, kms):
+    def valid_package(self, kms: Any) -> Any:
         """Create valid package for testing."""
         return create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
 
-    def test_verify_valid_package(self, kms, valid_package):
+    def test_verify_valid_package(self, kms: Any, valid_package: Any) -> None:
         """Valid package should pass all verifications."""
         results = verify_crypto_package(
             MASTER_CODES, MASTER_HELIX_PARAMS, valid_package, kms.hmac_key
@@ -572,7 +573,7 @@ class TestCryptoPackageVerification:
         assert results["ed25519"] is True
         assert results["timestamp"] is True
 
-    def test_verify_tampered_codes_fails(self, kms, valid_package):
+    def test_verify_tampered_codes_fails(self, kms: Any, valid_package: Any) -> None:
         """Tampered Omni-Codes should fail content hash verification."""
         results = verify_crypto_package(
             MASTER_CODES + "TAMPERED",
@@ -583,7 +584,7 @@ class TestCryptoPackageVerification:
         )
         assert results["content_hash"] is False
 
-    def test_verify_tampered_helix_params_fails(self, kms, valid_package):
+    def test_verify_tampered_helix_params_fails(self, kms: Any, valid_package: Any) -> None:
         """Tampered helix params should fail content hash verification."""
         tampered_params = [(r + 1.0, p) for r, p in MASTER_HELIX_PARAMS]
         results = verify_crypto_package(
@@ -595,13 +596,13 @@ class TestCryptoPackageVerification:
         )
         assert results["content_hash"] is False
 
-    def test_verify_wrong_hmac_key_fails(self, valid_package):
+    def test_verify_wrong_hmac_key_fails(self, valid_package: Any) -> None:
         """Wrong HMAC key should fail HMAC verification."""
         wrong_key = secrets.token_bytes(32)
         results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, valid_package, wrong_key)
         assert results["hmac"] is False
 
-    def test_verify_tampered_content_hash_fails(self, kms, valid_package):
+    def test_verify_tampered_content_hash_fails(self, kms: Any, valid_package: Any) -> None:
         """Tampered content hash should fail verification."""
         tampered = copy.copy(valid_package)
         # Flip first character of hash
@@ -609,7 +610,7 @@ class TestCryptoPackageVerification:
         results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, tampered, kms.hmac_key)
         assert results["content_hash"] is False
 
-    def test_verify_tampered_hmac_tag_fails(self, kms, valid_package):
+    def test_verify_tampered_hmac_tag_fails(self, kms: Any, valid_package: Any) -> None:
         """Tampered HMAC tag should fail verification."""
         tampered = copy.copy(valid_package)
         # Flip a bit in the middle of the tag to ensure actual tampering
@@ -620,7 +621,7 @@ class TestCryptoPackageVerification:
         results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, tampered, kms.hmac_key)
         assert results["hmac"] is False
 
-    def test_verify_tampered_ed25519_signature_fails(self, kms, valid_package):
+    def test_verify_tampered_ed25519_signature_fails(self, kms: Any, valid_package: Any) -> None:
         """Tampered Ed25519 signature should fail verification."""
         tampered = copy.copy(valid_package)
         # Use bit-flipping to ensure actual tampering (avoids flaky test if sig starts with 'f')
@@ -631,7 +632,7 @@ class TestCryptoPackageVerification:
         results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, tampered, kms.hmac_key)
         assert results["ed25519"] is False
 
-    def test_verify_wrong_ed25519_pubkey_fails(self, kms, valid_package):
+    def test_verify_wrong_ed25519_pubkey_fails(self, kms: Any, valid_package: Any) -> None:
         """Wrong Ed25519 public key should fail verification."""
         tampered = copy.copy(valid_package)
         other_kp = generate_ed25519_keypair()
@@ -640,7 +641,7 @@ class TestCryptoPackageVerification:
         assert results["ed25519"] is False
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
-    def test_verify_tampered_dilithium_signature_fails(self, kms, valid_package):
+    def test_verify_tampered_dilithium_signature_fails(self, kms: Any, valid_package: Any) -> None:
         """Tampered Dilithium signature should fail verification."""
         if not valid_package.quantum_signatures_enabled:
             pytest.skip("Quantum signatures not enabled")
@@ -664,16 +665,16 @@ class TestTimestampValidation:
     """Penetration tests for timestamp validation."""
 
     @pytest.fixture
-    def kms(self):
+    def kms(self) -> Any:
         return generate_key_management_system("test")
 
-    def test_valid_timestamp_passes(self, kms):
+    def test_valid_timestamp_passes(self, kms: Any) -> None:
         """Current timestamp should pass validation."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
         assert results["timestamp"] is True
 
-    def test_future_timestamp_fails(self, kms):
+    def test_future_timestamp_fails(self, kms: Any) -> None:
         """Future timestamp should fail validation."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         # Set timestamp to tomorrow
@@ -682,7 +683,7 @@ class TestTimestampValidation:
         results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
         assert results["timestamp"] is False
 
-    def test_very_old_timestamp_fails(self, kms):
+    def test_very_old_timestamp_fails(self, kms: Any) -> None:
         """Timestamp older than 10 years should fail."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         # Set timestamp to 11 years ago
@@ -691,7 +692,7 @@ class TestTimestampValidation:
         results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
         assert results["timestamp"] is False
 
-    def test_malformed_timestamp_fails(self, kms):
+    def test_malformed_timestamp_fails(self, kms: Any) -> None:
         """Malformed timestamp should fail gracefully."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         pkg.timestamp = "not-a-valid-timestamp"
@@ -703,10 +704,10 @@ class TestMalformedInputHandling:
     """Penetration tests for malformed/hostile input handling."""
 
     @pytest.fixture
-    def kms(self):
+    def kms(self) -> Any:
         return generate_key_management_system("test")
 
-    def test_invalid_hex_in_content_hash(self, kms):
+    def test_invalid_hex_in_content_hash(self, kms: Any) -> None:
         """Invalid hex in content_hash should not crash."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         pkg.content_hash = "not_valid_hex!!!"
@@ -720,7 +721,7 @@ class TestMalformedInputHandling:
         except Exception as exc:
             pytest.fail(f"Unexpected exception for invalid hex: {exc!r}")
 
-    def test_invalid_hex_in_hmac_tag(self, kms):
+    def test_invalid_hex_in_hmac_tag(self, kms: Any) -> None:
         """Invalid hex in hmac_tag should not crash."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         pkg.hmac_tag = "ZZZZ_invalid"
@@ -733,7 +734,7 @@ class TestMalformedInputHandling:
         except Exception as exc:
             pytest.fail(f"Unexpected exception for invalid HMAC hex: {exc!r}")
 
-    def test_truncated_signature(self, kms):
+    def test_truncated_signature(self, kms: Any) -> None:
         """Truncated signature should not crash."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         pkg.ed25519_signature = pkg.ed25519_signature[:32]  # Truncate to half
@@ -746,7 +747,7 @@ class TestMalformedInputHandling:
         except Exception as exc:
             pytest.fail(f"Unexpected exception for truncated signature: {exc!r}")
 
-    def test_empty_signature(self, kms):
+    def test_empty_signature(self, kms: Any) -> None:
         """Empty signature should not crash."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         pkg.ed25519_signature = ""
@@ -763,7 +764,7 @@ class TestMalformedInputHandling:
 class TestKeySecurityProperties:
     """Tests to verify key material is not leaked."""
 
-    def test_crypto_package_does_not_contain_private_keys(self):
+    def test_crypto_package_does_not_contain_private_keys(self) -> None:
         """CryptoPackage should never contain private keys."""
         kms = generate_key_management_system("test")
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
@@ -775,7 +776,7 @@ class TestKeySecurityProperties:
         assert kms.master_secret.hex() not in pkg_json
         assert kms.hmac_key.hex() not in pkg_json
 
-    def test_crypto_package_does_not_contain_master_secret(self):
+    def test_crypto_package_does_not_contain_master_secret(self) -> None:
         """Master secret should never be in package."""
         kms = generate_key_management_system("test")
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
@@ -790,7 +791,7 @@ class TestKeySecurityProperties:
 class TestDowngradeAttacks:
     """Tests for algorithm downgrade attack resistance."""
 
-    def test_package_without_dilithium_clearly_marked(self):
+    def test_package_without_dilithium_clearly_marked(self) -> None:
         """Package without Dilithium should be clearly marked."""
         kms = generate_key_management_system("test")
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
@@ -799,7 +800,7 @@ class TestDowngradeAttacks:
             assert pkg.quantum_signatures_enabled is False
             assert pkg.dilithium_signature is None
 
-    def test_verification_distinguishes_missing_vs_invalid_dilithium(self):
+    def test_verification_distinguishes_missing_vs_invalid_dilithium(self) -> None:
         """Verification should distinguish missing vs invalid Dilithium."""
         kms = generate_key_management_system("test")
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
@@ -811,7 +812,7 @@ class TestDowngradeAttacks:
 class TestConcurrencyAndConsistency:
     """Tests for consistency across multiple operations."""
 
-    def test_multiple_verifications_consistent(self):
+    def test_multiple_verifications_consistent(self) -> None:
         """Multiple verifications of same package should be consistent."""
         kms = generate_key_management_system("test")
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
@@ -825,7 +826,7 @@ class TestConcurrencyAndConsistency:
         for results in results_list[1:]:
             assert results == results_list[0]
 
-    def test_multiple_package_creations_unique_timestamps(self):
+    def test_multiple_package_creations_unique_timestamps(self) -> None:
         """Multiple package creations should have unique timestamps."""
         kms = generate_key_management_system("test")
         timestamps = set()

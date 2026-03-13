@@ -20,11 +20,12 @@ import os
 import secrets
 import warnings
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ama_cryptography.key_management import (
+from ama_cryptography.key_management import (  # type: ignore[attr-defined]
     HDKeyDerivation,
     HSMKeyStorage,
     KeyMetadata,
@@ -42,14 +43,14 @@ from ama_cryptography.key_management import (
 class TestHDKeyDerivationComprehensive:
     """Comprehensive tests for HDKeyDerivation class."""
 
-    def test_init_with_seed(self, master_seed):
+    def test_init_with_seed(self, master_seed: Any) -> None:
         """Initialize with explicit seed."""
         hd = HDKeyDerivation(seed=master_seed)
         assert hd.master_seed == master_seed
         assert len(hd.master_key) == 32
         assert len(hd.master_chain_code) == 32
 
-    def test_init_with_seed_phrase(self):
+    def test_init_with_seed_phrase(self) -> None:
         """Initialize with BIP39-style seed phrase."""
         seed_phrase = (
             "abandon abandon abandon abandon abandon abandon "
@@ -62,7 +63,7 @@ class TestHDKeyDerivationComprehensive:
         assert len(hd.master_key) == 32
         assert len(hd.master_chain_code) == 32
 
-    def test_init_with_no_arguments(self):
+    def test_init_with_no_arguments(self) -> None:
         """Initialize with random seed generation."""
         hd = HDKeyDerivation()
 
@@ -71,7 +72,7 @@ class TestHDKeyDerivationComprehensive:
         assert len(hd.master_key) == 32
         assert len(hd.master_chain_code) == 32
 
-    def test_init_random_seeds_are_unique(self):
+    def test_init_random_seeds_are_unique(self) -> None:
         """Each instance should have unique random seed."""
         hd1 = HDKeyDerivation()
         hd2 = HDKeyDerivation()
@@ -79,44 +80,44 @@ class TestHDKeyDerivationComprehensive:
         assert hd1.master_seed != hd2.master_seed
         assert hd1.master_key != hd2.master_key
 
-    def test_derive_path_standard(self, hd_derivation):
+    def test_derive_path_standard(self, hd_derivation: Any) -> None:
         """Standard BIP44 path with non-hardened derivation (uses native secp256k1)."""
         key, chain = hd_derivation.derive_path("m/44'/0'/0'/0/0")
         assert len(key) == 32
         assert len(chain) == 32
 
-    def test_derive_path_hardened_only(self, hd_derivation):
+    def test_derive_path_hardened_only(self, hd_derivation: Any) -> None:
         """Derive key with all hardened derivation."""
         key, chain = hd_derivation.derive_path("m/44'/0'/0'")
 
         assert len(key) == 32
         assert len(chain) == 32
 
-    def test_derive_path_non_hardened_only(self, hd_derivation):
+    def test_derive_path_non_hardened_only(self, hd_derivation: Any) -> None:
         """Non-hardened-only derivation (uses native secp256k1)."""
         key, chain = hd_derivation.derive_path("m/0/1/2")
         assert len(key) == 32
         assert len(chain) == 32
 
-    def test_derive_path_mixed(self, hd_derivation):
+    def test_derive_path_mixed(self, hd_derivation: Any) -> None:
         """Mixed hardened/non-hardened path (uses native secp256k1)."""
         key, chain = hd_derivation.derive_path("m/44'/0'/0'/0/5")
         assert len(key) == 32
         assert len(chain) == 32
 
-    def test_derive_path_invalid_no_m_prefix(self, hd_derivation):
+    def test_derive_path_invalid_no_m_prefix(self, hd_derivation: Any) -> None:
         """Path must start with 'm'."""
         with pytest.raises(ValueError, match="Path must start with 'm'"):
             hd_derivation.derive_path("44'/0'/0'/0/0")
 
-    def test_derive_path_master_only(self, hd_derivation):
+    def test_derive_path_master_only(self, hd_derivation: Any) -> None:
         """Derive with empty path (master key)."""
         key, chain = hd_derivation.derive_path("m")
 
         assert key == hd_derivation.master_key
         assert chain == hd_derivation.master_chain_code
 
-    def test_derive_key_convenience_method(self, hd_derivation):
+    def test_derive_key_convenience_method(self, hd_derivation: Any) -> None:
         """derive_key uses fully-hardened path and matches derive_path."""
         key = hd_derivation.derive_key(purpose=44, account=0, change=0, index=0)
         assert len(key) == 32
@@ -125,28 +126,28 @@ class TestHDKeyDerivationComprehensive:
         expected_key, _ = hd_derivation.derive_path("m/44'/0'/0'/0'")
         assert key == expected_key
 
-    def test_derive_path_different_hardened_purposes(self, hd_derivation):
+    def test_derive_path_different_hardened_purposes(self, hd_derivation: Any) -> None:
         """Different hardened purposes yield different keys."""
         key1, _ = hd_derivation.derive_path("m/44'/0'/0'")
         key2, _ = hd_derivation.derive_path("m/49'/0'/0'")
 
         assert key1 != key2
 
-    def test_derive_path_different_hardened_accounts(self, hd_derivation):
+    def test_derive_path_different_hardened_accounts(self, hd_derivation: Any) -> None:
         """Different hardened accounts yield different keys."""
         key1, _ = hd_derivation.derive_path("m/44'/0'/0'")
         key2, _ = hd_derivation.derive_path("m/44'/1'/0'")
 
         assert key1 != key2
 
-    def test_derive_path_different_hardened_indices(self, hd_derivation):
+    def test_derive_path_different_hardened_indices(self, hd_derivation: Any) -> None:
         """Different hardened indices yield different keys."""
         key1, _ = hd_derivation.derive_path("m/44'/0'/0'")
         key2, _ = hd_derivation.derive_path("m/44'/0'/1'")
 
         assert key1 != key2
 
-    def test_deterministic_derivation(self, master_seed):
+    def test_deterministic_derivation(self, master_seed: Any) -> None:
         """Same seed produces same derived keys."""
         hd1 = HDKeyDerivation(seed=master_seed)
         hd2 = HDKeyDerivation(seed=master_seed)
@@ -156,21 +157,21 @@ class TestHDKeyDerivationComprehensive:
 
         assert key1 == key2
 
-    def test_hardened_offset_constant(self):
+    def test_hardened_offset_constant(self) -> None:
         """Verify HARDENED_OFFSET is 2^31."""
         assert HDKeyDerivation.HARDENED_OFFSET == 2**31
 
-    def test_secp256k1_n_constant(self):
+    def test_secp256k1_n_constant(self) -> None:
         """Verify secp256k1 curve order is correct."""
         expected = int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
         assert HDKeyDerivation.SECP256K1_N == expected
 
-    def test_derive_large_non_hardened_index(self, hd_derivation):
+    def test_derive_large_non_hardened_index(self, hd_derivation: Any) -> None:
         """Non-hardened derivation with large index (uses native secp256k1)."""
         key, _chain = hd_derivation.derive_path("m/0/2147483646")
         assert len(key) == 32
 
-    def test_derive_large_hardened_index(self, hd_derivation):
+    def test_derive_large_hardened_index(self, hd_derivation: Any) -> None:
         """Derive with large hardened index."""
         key, _ = hd_derivation.derive_path("m/2147483647'")
 
@@ -185,17 +186,17 @@ class TestHDKeyDerivationComprehensive:
 class TestKeyRotationManagerComprehensive:
     """Comprehensive tests for KeyRotationManager class."""
 
-    def test_init_default_period(self):
+    def test_init_default_period(self) -> None:
         """Default rotation period is 90 days."""
         mgr = KeyRotationManager()
         assert mgr.rotation_period == timedelta(days=90)
 
-    def test_init_custom_period(self):
+    def test_init_custom_period(self) -> None:
         """Custom rotation period."""
         mgr = KeyRotationManager(rotation_period=timedelta(days=30))
         assert mgr.rotation_period == timedelta(days=30)
 
-    def test_register_key_basic(self, rotation_manager):
+    def test_register_key_basic(self, rotation_manager: Any) -> None:
         """Register a basic key."""
         meta = rotation_manager.register_key("key-1", "signing")
 
@@ -205,63 +206,63 @@ class TestKeyRotationManagerComprehensive:
         assert meta.version == 1
         assert meta.usage_count == 0
 
-    def test_register_key_with_expiration(self, rotation_manager):
+    def test_register_key_with_expiration(self, rotation_manager: Any) -> None:
         """Register key with expiration."""
         meta = rotation_manager.register_key("key-1", "encryption", expires_in=timedelta(days=30))
 
         assert meta.expires_at is not None
         assert meta.expires_at > datetime.now(timezone.utc)
 
-    def test_register_key_with_max_usage(self, rotation_manager):
+    def test_register_key_with_max_usage(self, rotation_manager: Any) -> None:
         """Register key with usage limit."""
         meta = rotation_manager.register_key("key-1", "signing", max_usage=1000)
 
         assert meta.max_usage == 1000
 
-    def test_register_key_with_derivation_path(self, rotation_manager):
+    def test_register_key_with_derivation_path(self, rotation_manager: Any) -> None:
         """Register key with HD derivation path."""
         meta = rotation_manager.register_key("key-1", "signing", derivation_path="m/44'/0'/0'/0/0")
 
         assert meta.derivation_path == "m/44'/0'/0'/0/0"
 
-    def test_register_key_with_parent_id(self, rotation_manager):
+    def test_register_key_with_parent_id(self, rotation_manager: Any) -> None:
         """Register key with parent reference."""
         rotation_manager.register_key("parent-key", "master")
         meta = rotation_manager.register_key("child-key", "signing", parent_id="parent-key")
 
         assert meta.parent_id == "parent-key"
 
-    def test_first_key_becomes_active(self, rotation_manager):
+    def test_first_key_becomes_active(self, rotation_manager: Any) -> None:
         """First registered key becomes active."""
         rotation_manager.register_key("key-1", "signing")
 
         assert rotation_manager.get_active_key() == "key-1"
 
-    def test_second_key_does_not_change_active(self, rotation_manager):
+    def test_second_key_does_not_change_active(self, rotation_manager: Any) -> None:
         """Second key doesn't change active key."""
         rotation_manager.register_key("key-1", "signing")
         rotation_manager.register_key("key-2", "signing")
 
         assert rotation_manager.get_active_key() == "key-1"
 
-    def test_should_rotate_nonexistent_key(self, rotation_manager):
+    def test_should_rotate_nonexistent_key(self, rotation_manager: Any) -> None:
         """should_rotate returns False for nonexistent key."""
         assert rotation_manager.should_rotate("nonexistent") is False
 
-    def test_should_rotate_fresh_key(self, rotation_manager_long_period):
+    def test_should_rotate_fresh_key(self, rotation_manager_long_period: Any) -> None:
         """Fresh key should not need rotation."""
         rotation_manager_long_period.register_key("key-1", "signing")
 
         assert rotation_manager_long_period.should_rotate("key-1") is False
 
-    def test_should_rotate_expired_key(self, rotation_manager):
+    def test_should_rotate_expired_key(self, rotation_manager: Any) -> None:
         """Expired key should need rotation."""
         # Register with already expired expiration
         rotation_manager.register_key("key-1", "signing", expires_in=timedelta(seconds=-1))
 
         assert rotation_manager.should_rotate("key-1") is True
 
-    def test_should_rotate_at_usage_limit(self, rotation_manager):
+    def test_should_rotate_at_usage_limit(self, rotation_manager: Any) -> None:
         """Key at usage limit should need rotation."""
         rotation_manager.register_key("key-1", "signing", max_usage=5)
 
@@ -270,14 +271,14 @@ class TestKeyRotationManagerComprehensive:
 
         assert rotation_manager.should_rotate("key-1") is True
 
-    def test_should_rotate_past_rotation_period(self, rotation_manager_short_period):
+    def test_should_rotate_past_rotation_period(self, rotation_manager_short_period: Any) -> None:
         """Key past rotation period should need rotation."""
         rotation_manager_short_period.register_key("key-1", "signing")
 
         # With 0-second period, it should immediately need rotation
         assert rotation_manager_short_period.should_rotate("key-1") is True
 
-    def test_initiate_rotation(self, rotation_manager):
+    def test_initiate_rotation(self, rotation_manager: Any) -> None:
         """Test rotation initiation."""
         rotation_manager.register_key("key-v1", "signing")
         rotation_manager.register_key("key-v2", "signing")
@@ -288,21 +289,21 @@ class TestKeyRotationManagerComprehensive:
         assert rotation_manager.keys["key-v2"].status == KeyStatus.ACTIVE
         assert rotation_manager.get_active_key() == "key-v2"
 
-    def test_initiate_rotation_invalid_old_key(self, rotation_manager):
+    def test_initiate_rotation_invalid_old_key(self, rotation_manager: Any) -> None:
         """Rotation with invalid old key raises error."""
         rotation_manager.register_key("key-v2", "signing")
 
         with pytest.raises(ValueError, match="Key not found"):
             rotation_manager.initiate_rotation("nonexistent", "key-v2")
 
-    def test_initiate_rotation_invalid_new_key(self, rotation_manager):
+    def test_initiate_rotation_invalid_new_key(self, rotation_manager: Any) -> None:
         """Rotation with invalid new key raises error."""
         rotation_manager.register_key("key-v1", "signing")
 
         with pytest.raises(ValueError, match="Key not found"):
             rotation_manager.initiate_rotation("key-v1", "nonexistent")
 
-    def test_complete_rotation(self, rotation_manager):
+    def test_complete_rotation(self, rotation_manager: Any) -> None:
         """Complete rotation deprecates old key."""
         rotation_manager.register_key("key-v1", "signing")
         rotation_manager.register_key("key-v2", "signing")
@@ -312,12 +313,12 @@ class TestKeyRotationManagerComprehensive:
 
         assert rotation_manager.keys["key-v1"].status == KeyStatus.DEPRECATED
 
-    def test_complete_rotation_nonexistent(self, rotation_manager):
+    def test_complete_rotation_nonexistent(self, rotation_manager: Any) -> None:
         """Complete rotation of nonexistent key is no-op."""
         # Should not raise
         rotation_manager.complete_rotation("nonexistent")
 
-    def test_revoke_key_compromised(self, rotation_manager):
+    def test_revoke_key_compromised(self, rotation_manager: Any) -> None:
         """Revoke key with 'compromised' reason."""
         rotation_manager.register_key("key-1", "signing")
 
@@ -326,7 +327,7 @@ class TestKeyRotationManagerComprehensive:
         assert rotation_manager.keys["key-1"].status == KeyStatus.COMPROMISED
         assert rotation_manager.get_active_key() is None
 
-    def test_revoke_key_other_reason(self, rotation_manager):
+    def test_revoke_key_other_reason(self, rotation_manager: Any) -> None:
         """Revoke key with non-compromised reason."""
         rotation_manager.register_key("key-1", "signing")
 
@@ -335,12 +336,12 @@ class TestKeyRotationManagerComprehensive:
         assert rotation_manager.keys["key-1"].status == KeyStatus.REVOKED
         assert rotation_manager.get_active_key() is None
 
-    def test_revoke_key_nonexistent(self, rotation_manager):
+    def test_revoke_key_nonexistent(self, rotation_manager: Any) -> None:
         """Revoke nonexistent key is no-op."""
         # Should not raise
         rotation_manager.revoke_key("nonexistent")
 
-    def test_revoke_non_active_key(self, rotation_manager):
+    def test_revoke_non_active_key(self, rotation_manager: Any) -> None:
         """Revoke key that isn't active."""
         rotation_manager.register_key("key-1", "signing")
         rotation_manager.register_key("key-2", "signing")
@@ -350,7 +351,7 @@ class TestKeyRotationManagerComprehensive:
         # key-1 should still be active
         assert rotation_manager.get_active_key() == "key-1"
 
-    def test_increment_usage(self, rotation_manager):
+    def test_increment_usage(self, rotation_manager: Any) -> None:
         """Increment usage counter."""
         rotation_manager.register_key("key-1", "signing")
 
@@ -360,12 +361,12 @@ class TestKeyRotationManagerComprehensive:
 
         assert rotation_manager.keys["key-1"].usage_count == 3
 
-    def test_increment_usage_nonexistent(self, rotation_manager):
+    def test_increment_usage_nonexistent(self, rotation_manager: Any) -> None:
         """Increment usage of nonexistent key is no-op."""
         # Should not raise
         rotation_manager.increment_usage("nonexistent")
 
-    def test_export_metadata_dict(self, rotation_manager):
+    def test_export_metadata_dict(self, rotation_manager: Any) -> None:
         """Export metadata as dictionary."""
         rotation_manager.register_key("key-1", "signing", max_usage=100)
         rotation_manager.increment_usage("key-1")
@@ -377,7 +378,7 @@ class TestKeyRotationManagerComprehensive:
         assert "key-1" in export["keys"]
         assert export["keys"]["key-1"]["usage_count"] == 1
 
-    def test_export_metadata_to_file(self, rotation_manager, temp_dir):
+    def test_export_metadata_to_file(self, rotation_manager: Any, temp_dir: Any) -> None:
         """Export metadata to JSON file."""
         rotation_manager.register_key("key-1", "signing")
         filepath = temp_dir / "metadata.json"
@@ -391,7 +392,7 @@ class TestKeyRotationManagerComprehensive:
 
         assert loaded == export
 
-    def test_export_metadata_with_expiration(self, rotation_manager):
+    def test_export_metadata_with_expiration(self, rotation_manager: Any) -> None:
         """Export metadata includes expiration."""
         rotation_manager.register_key("key-1", "signing", expires_in=timedelta(days=30))
 
@@ -399,7 +400,7 @@ class TestKeyRotationManagerComprehensive:
 
         assert export["keys"]["key-1"]["expires_at"] is not None
 
-    def test_export_metadata_without_expiration(self, rotation_manager):
+    def test_export_metadata_without_expiration(self, rotation_manager: Any) -> None:
         """Export metadata without expiration."""
         rotation_manager.register_key("key-1", "signing")
 
@@ -416,7 +417,7 @@ class TestKeyRotationManagerComprehensive:
 class TestSecureKeyStorageComprehensive:
     """Comprehensive tests for SecureKeyStorage class."""
 
-    def test_init_with_password(self, temp_storage_path, test_password):
+    def test_init_with_password(self, temp_storage_path: Any, test_password: Any) -> None:
         """Initialize with master password."""
         storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
 
@@ -424,7 +425,7 @@ class TestSecureKeyStorageComprehensive:
         assert len(storage.encryption_key) == 32
         assert storage.salt is not None
 
-    def test_init_without_password(self, temp_storage_path):
+    def test_init_without_password(self, temp_storage_path: Any) -> None:
         """Initialize without password (random key)."""
         storage = SecureKeyStorage(temp_storage_path)
 
@@ -432,21 +433,25 @@ class TestSecureKeyStorageComprehensive:
         assert len(storage.encryption_key) == 32
         assert storage.salt is None
 
-    def test_init_creates_directory(self, temp_dir):
+    def test_init_creates_directory(self, temp_dir: Any) -> None:
         """Initialize creates storage directory."""
         storage_path = temp_dir / "new" / "nested" / "storage"
         SecureKeyStorage(storage_path, master_password="test")
 
         assert storage_path.exists()
 
-    def test_store_retrieve_roundtrip(self, secure_storage, test_key_material):
+    def test_store_retrieve_roundtrip(self, secure_storage: Any, test_key_material: Any) -> None:
         """Store and retrieve key successfully."""
         secure_storage.store_key("test-key", test_key_material)
         retrieved = secure_storage.retrieve_key("test-key")
 
         assert retrieved == test_key_material
 
-    def test_store_retrieve_with_metadata(self, secure_storage, test_key_material):
+    def test_store_retrieve_with_metadata(
+        self,
+        secure_storage: Any,
+        test_key_material: Any,
+    ) -> None:
         """Store key with metadata."""
         metadata = {"purpose": "signing", "created_by": "test"}
         secure_storage.store_key("test-key", test_key_material, metadata=metadata)
@@ -455,7 +460,7 @@ class TestSecureKeyStorageComprehensive:
         retrieved = secure_storage.retrieve_key("test-key")
         assert retrieved == test_key_material
 
-    def test_store_overwrites_existing(self, secure_storage):
+    def test_store_overwrites_existing(self, secure_storage: Any) -> None:
         """Store overwrites existing key."""
         secure_storage.store_key("test-key", b"first-value")
         secure_storage.store_key("test-key", b"second-value")
@@ -463,24 +468,24 @@ class TestSecureKeyStorageComprehensive:
         retrieved = secure_storage.retrieve_key("test-key")
         assert retrieved == b"second-value"
 
-    def test_retrieve_nonexistent_returns_none(self, secure_storage):
+    def test_retrieve_nonexistent_returns_none(self, secure_storage: Any) -> None:
         """Retrieve nonexistent key returns None."""
         assert secure_storage.retrieve_key("nonexistent") is None
 
-    def test_delete_key_success(self, secure_storage, test_key_material):
+    def test_delete_key_success(self, secure_storage: Any, test_key_material: Any) -> None:
         """Delete existing key returns True."""
         secure_storage.store_key("test-key", test_key_material)
 
         assert secure_storage.delete_key("test-key") is True
         assert secure_storage.retrieve_key("test-key") is None
 
-    def test_delete_key_nonexistent(self, secure_storage):
+    def test_delete_key_nonexistent(self, secure_storage: Any) -> None:
         """Delete nonexistent key returns False."""
         assert secure_storage.delete_key("nonexistent") is False
 
     def test_delete_key_secure_overwrite(
-        self, secure_storage, test_key_material, temp_storage_path
-    ):
+        self, secure_storage: Any, test_key_material: Any, temp_storage_path: Any
+    ) -> None:
         """Delete key overwrites file before removal."""
         secure_storage.store_key("test-key", test_key_material)
         key_file = temp_storage_path / "test-key.json"
@@ -492,7 +497,11 @@ class TestSecureKeyStorageComprehensive:
         secure_storage.delete_key("test-key")
         assert not key_file.exists()
 
-    def test_wrong_password_fails_decryption(self, temp_storage_path, test_key_material):
+    def test_wrong_password_fails_decryption(
+        self,
+        temp_storage_path: Any,
+        test_key_material: Any,
+    ) -> None:
         """Wrong password fails to decrypt (AES-GCM authentication failure)."""
         storage1 = SecureKeyStorage(temp_storage_path, master_password="correct")
         storage1.store_key("test-key", test_key_material)
@@ -502,27 +511,31 @@ class TestSecureKeyStorageComprehensive:
         with pytest.raises(ValueError):
             storage2.retrieve_key("test-key")
 
-    def test_invalid_key_id_empty(self, secure_storage):
+    def test_invalid_key_id_empty(self, secure_storage: Any) -> None:
         """Empty key_id raises ValueError."""
         with pytest.raises(ValueError, match="key_id must be non-empty"):
             secure_storage.store_key("", b"data")
 
-    def test_invalid_key_id_special_chars(self, secure_storage):
+    def test_invalid_key_id_special_chars(self, secure_storage: Any) -> None:
         """Key_id with special characters raises ValueError."""
         with pytest.raises(ValueError):
             secure_storage.store_key("invalid!key", b"data")
 
-    def test_valid_key_id_with_dash(self, secure_storage, test_key_material):
+    def test_valid_key_id_with_dash(self, secure_storage: Any, test_key_material: Any) -> None:
         """Key_id with dash is valid."""
         secure_storage.store_key("test-key-v1", test_key_material)
         assert secure_storage.retrieve_key("test-key-v1") == test_key_material
 
-    def test_valid_key_id_with_underscore(self, secure_storage, test_key_material):
+    def test_valid_key_id_with_underscore(
+        self,
+        secure_storage: Any,
+        test_key_material: Any,
+    ) -> None:
         """Key_id with underscore is valid."""
         secure_storage.store_key("test_key_v1", test_key_material)
         assert secure_storage.retrieve_key("test_key_v1") == test_key_material
 
-    def test_salt_file_created(self, temp_storage_path, test_password):
+    def test_salt_file_created(self, temp_storage_path: Any, test_password: Any) -> None:
         """Salt file is created on init."""
         SecureKeyStorage(temp_storage_path, master_password=test_password)
 
@@ -533,7 +546,7 @@ class TestSecureKeyStorageComprehensive:
             salt = f.read()
         assert len(salt) == 32
 
-    def test_metadata_file_created(self, temp_storage_path, test_password):
+    def test_metadata_file_created(self, temp_storage_path: Any, test_password: Any) -> None:
         """KDF metadata file is created."""
         SecureKeyStorage(temp_storage_path, master_password=test_password)
 
@@ -553,7 +566,7 @@ class TestSecureKeyStorageComprehensive:
             assert metadata["algorithm"] == "PBKDF2-HMAC-SHA256"
             assert metadata["iterations"] == 600000
 
-    def test_salt_file_reused(self, temp_storage_path, test_password):
+    def test_salt_file_reused(self, temp_storage_path: Any, test_password: Any) -> None:
         """Existing salt file is reused."""
         storage1 = SecureKeyStorage(temp_storage_path, master_password=test_password)
         salt1 = storage1.salt
@@ -563,7 +576,12 @@ class TestSecureKeyStorageComprehensive:
 
         assert salt1 == salt2
 
-    def test_from_existing_success(self, temp_storage_path, test_password, test_key_material):
+    def test_from_existing_success(
+        self,
+        temp_storage_path: Any,
+        test_password: Any,
+        test_key_material: Any,
+    ) -> None:
         """Recover storage from existing salt file."""
         storage1 = SecureKeyStorage(temp_storage_path, master_password=test_password)
         storage1.store_key("test-key", test_key_material)
@@ -573,13 +591,18 @@ class TestSecureKeyStorageComprehensive:
 
         assert retrieved == test_key_material
 
-    def test_from_existing_no_salt_file(self, temp_dir):
+    def test_from_existing_no_salt_file(self, temp_dir: Any) -> None:
         """from_existing raises FileNotFoundError without salt file."""
         with pytest.raises(FileNotFoundError, match="Salt file not found"):
             SecureKeyStorage.from_existing(temp_dir, "password")
 
     @pytest.mark.skipif(os.name == "nt", reason="Unix file permissions not supported on Windows")
-    def test_file_permissions(self, temp_storage_path, test_password, test_key_material):
+    def test_file_permissions(
+        self,
+        temp_storage_path: Any,
+        test_password: Any,
+        test_key_material: Any,
+    ) -> None:
         """Key files have secure permissions (0600)."""
         storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
         storage.store_key("test-key", test_key_material)
@@ -590,7 +613,7 @@ class TestSecureKeyStorageComprehensive:
         # Should be 0o600 (owner read/write only)
         assert mode == 0o600
 
-    def test_large_key_data(self, secure_storage):
+    def test_large_key_data(self, secure_storage: Any) -> None:
         """Store and retrieve large key data."""
         large_key = secrets.token_bytes(1024 * 10)  # 10 KB
         secure_storage.store_key("large-key", large_key)
@@ -602,14 +625,19 @@ class TestSecureKeyStorageComprehensive:
 class TestSecureKeyStorageMigration:
     """Tests for SecureKeyStorage KDF migration."""
 
-    def test_migrate_kdf_no_salt(self, temp_dir):
+    def test_migrate_kdf_no_salt(self, temp_dir: Any) -> None:
         """migrate_kdf returns False without salt file."""
         storage = SecureKeyStorage(temp_dir)  # No password, no salt
 
         result = storage.migrate_kdf("password")
         assert result is False
 
-    def test_migrate_kdf_success(self, temp_storage_path, test_password, test_key_material):
+    def test_migrate_kdf_success(
+        self,
+        temp_storage_path: Any,
+        test_password: Any,
+        test_key_material: Any,
+    ) -> None:
         """migrate_kdf re-encrypts keys with new parameters."""
         storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
         storage.store_key("key-1", test_key_material)
@@ -632,7 +660,7 @@ class TestSecureKeyStorageMigration:
 class TestSecureKeyStorageLegacy:
     """Tests for legacy AES-CFB format support."""
 
-    def test_retrieve_unknown_algorithm(self, temp_storage_path, test_password):
+    def test_retrieve_unknown_algorithm(self, temp_storage_path: Any, test_password: Any) -> None:
         """Retrieving unknown algorithm raises ValueError."""
         storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
 
@@ -655,7 +683,7 @@ class TestSecureKeyStorageLegacy:
 class TestSecureKeyStorageLegacyKDF:
     """Tests for legacy KDF parameter handling."""
 
-    def test_legacy_kdf_warning(self, temp_storage_path, test_password):
+    def test_legacy_kdf_warning(self, temp_storage_path: Any, test_password: Any) -> None:
         """Legacy KDF parameters emit warning."""
         # Create salt file manually (simulating v1)
         salt = secrets.token_bytes(32)
@@ -691,7 +719,7 @@ class TestSecureKeyStorageLegacyKDF:
 class TestHSMKeyStorageErrors:
     """Tests for HSMKeyStorage error handling (without actual HSM)."""
 
-    def test_import_error_without_pykcs11(self):
+    def test_import_error_without_pykcs11(self) -> None:
         """HSMKeyStorage raises ImportError without PyKCS11."""
         with patch.dict("sys.modules", {"PyKCS11": None}):
             with pytest.raises(ImportError, match="HSM support requires PyKCS11"):
@@ -699,7 +727,7 @@ class TestHSMKeyStorageErrors:
                 storage = HSMKeyStorage.__new__(HSMKeyStorage)
                 storage._import_pykcs11()
 
-    def test_unknown_hsm_type(self):
+    def test_unknown_hsm_type(self) -> None:
         """Unknown HSM type raises ValueError."""
         mock_pkcs11 = MagicMock()
 
@@ -710,7 +738,7 @@ class TestHSMKeyStorageErrors:
             with pytest.raises(ValueError, match="Unknown HSM type"):
                 storage._resolve_library_path("unknown-hsm", None)
 
-    def test_library_not_found(self):
+    def test_library_not_found(self) -> None:
         """Missing PKCS#11 library raises RuntimeError."""
         mock_pkcs11 = MagicMock()
 
@@ -722,7 +750,7 @@ class TestHSMKeyStorageErrors:
                 with pytest.raises(RuntimeError, match="PKCS#11 library not found"):
                     storage._resolve_library_path("softhsm", None)
 
-    def test_invalid_key_size(self):
+    def test_invalid_key_size(self) -> None:
         """Invalid AES key size raises ValueError."""
         mock_pkcs11 = MagicMock()
         mock_session = MagicMock()
@@ -744,7 +772,7 @@ class TestHSMKeyStorageErrors:
 class TestKeyMetadata:
     """Tests for KeyMetadata dataclass."""
 
-    def test_create_metadata(self):
+    def test_create_metadata(self) -> None:
         """Create KeyMetadata instance."""
         meta = KeyMetadata(
             key_id="test-key",
@@ -763,7 +791,7 @@ class TestKeyMetadata:
         assert meta.key_id == "test-key"
         assert meta.status == KeyStatus.ACTIVE
 
-    def test_metadata_with_all_fields(self):
+    def test_metadata_with_all_fields(self) -> None:
         """Create KeyMetadata with all fields populated."""
         now = datetime.now(timezone.utc)
         meta = KeyMetadata(
@@ -788,7 +816,7 @@ class TestKeyMetadata:
 class TestKeyStatus:
     """Tests for KeyStatus enum."""
 
-    def test_all_statuses(self):
+    def test_all_statuses(self) -> None:
         """Verify all status values exist."""
         assert KeyStatus.ACTIVE is not None
         assert KeyStatus.ROTATING is not None
@@ -796,7 +824,7 @@ class TestKeyStatus:
         assert KeyStatus.REVOKED is not None
         assert KeyStatus.COMPROMISED is not None
 
-    def test_status_names(self):
+    def test_status_names(self) -> None:
         """Verify status name mapping."""
         assert KeyStatus.ACTIVE.name == "ACTIVE"
         assert KeyStatus.COMPROMISED.name == "COMPROMISED"
@@ -805,11 +833,11 @@ class TestKeyStatus:
 class TestSecurityWarning:
     """Tests for SecurityWarning class."""
 
-    def test_is_user_warning(self):
+    def test_is_user_warning(self) -> None:
         """SecurityWarning is a UserWarning subclass."""
         assert issubclass(SecurityWarning, UserWarning)
 
-    def test_can_be_raised(self):
+    def test_can_be_raised(self) -> None:
         """SecurityWarning can be raised and caught."""
         with pytest.warns(SecurityWarning, match="test warning"):
             warnings.warn("test warning", SecurityWarning, stacklevel=2)

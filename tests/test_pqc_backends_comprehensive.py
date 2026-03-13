@@ -16,6 +16,8 @@ Test Categories:
 - Error handling and edge cases
 """
 
+from typing import Any
+
 import pytest
 
 from ama_cryptography.pqc_backends import (
@@ -64,17 +66,17 @@ from ama_cryptography.pqc_backends import (
 class TestPQCStatus:
     """Tests for PQC backend status detection."""
 
-    def test_pqc_status_enum_values(self):
+    def test_pqc_status_enum_values(self) -> None:
         """PQCStatus enum has expected values."""
         assert PQCStatus.AVAILABLE.value == "AVAILABLE"
         assert PQCStatus.UNAVAILABLE.value == "UNAVAILABLE"
 
-    def test_get_pqc_status(self):
+    def test_get_pqc_status(self) -> None:
         """get_pqc_status returns valid status."""
         status = get_pqc_status()
         assert status in [PQCStatus.AVAILABLE, PQCStatus.UNAVAILABLE]
 
-    def test_get_pqc_status_matches_availability(self):
+    def test_get_pqc_status_matches_availability(self) -> None:
         """Status matches algorithm availability."""
         status = get_pqc_status()
         if DILITHIUM_AVAILABLE or KYBER_AVAILABLE or SPHINCS_AVAILABLE:
@@ -86,7 +88,7 @@ class TestPQCStatus:
 class TestPQCBackendInfo:
     """Tests for get_pqc_backend_info function."""
 
-    def test_backend_info_structure(self):
+    def test_backend_info_structure(self) -> None:
         """Backend info has expected structure."""
         info = get_pqc_backend_info()
 
@@ -99,7 +101,7 @@ class TestPQCBackendInfo:
         assert "sphincs_backend" in info
         assert "algorithms" in info
 
-    def test_backend_info_algorithms(self):
+    def test_backend_info_algorithms(self) -> None:
         """Backend info has algorithm details."""
         info = get_pqc_backend_info()
 
@@ -107,7 +109,7 @@ class TestPQCBackendInfo:
         assert "Kyber-1024" in info["algorithms"]
         assert "SPHINCS+-256f" in info["algorithms"]
 
-    def test_backend_info_dilithium(self):
+    def test_backend_info_dilithium(self) -> None:
         """Dilithium algorithm info is correct."""
         info = get_pqc_backend_info()
         dilithium = info["algorithms"]["ML-DSA-65"]
@@ -121,7 +123,7 @@ class TestPQCBackendInfo:
             assert dilithium["key_sizes"]["secret_key"] == DILITHIUM_SECRET_KEY_BYTES
             assert dilithium["key_sizes"]["signature"] == DILITHIUM_SIGNATURE_BYTES
 
-    def test_backend_info_kyber(self):
+    def test_backend_info_kyber(self) -> None:
         """Kyber algorithm info is correct."""
         info = get_pqc_backend_info()
         kyber = info["algorithms"]["Kyber-1024"]
@@ -134,7 +136,7 @@ class TestPQCBackendInfo:
             assert kyber["key_sizes"]["public_key"] == KYBER_PUBLIC_KEY_BYTES
             assert kyber["key_sizes"]["secret_key"] == KYBER_SECRET_KEY_BYTES
 
-    def test_backend_info_sphincs(self):
+    def test_backend_info_sphincs(self) -> None:
         """SPHINCS+ algorithm info is correct."""
         info = get_pqc_backend_info()
         sphincs = info["algorithms"]["SPHINCS+-256f"]
@@ -147,7 +149,7 @@ class TestPQCBackendInfo:
             assert sphincs["key_sizes"]["public_key"] == SPHINCS_PUBLIC_KEY_BYTES
             assert sphincs["key_sizes"]["secret_key"] == SPHINCS_SECRET_KEY_BYTES
 
-    def test_backend_info_legacy_fields(self):
+    def test_backend_info_legacy_fields(self) -> None:
         """Backend info includes legacy compatibility fields."""
         info = get_pqc_backend_info()
 
@@ -164,20 +166,20 @@ class TestPQCBackendInfo:
 class TestKeySizeConstants:
     """Tests for key size constants."""
 
-    def test_dilithium_key_sizes(self):
+    def test_dilithium_key_sizes(self) -> None:
         """Dilithium key sizes match NIST specification."""
         assert DILITHIUM_PUBLIC_KEY_BYTES == 1952
         assert DILITHIUM_SECRET_KEY_BYTES == 4032
         assert DILITHIUM_SIGNATURE_BYTES == 3309
 
-    def test_kyber_key_sizes(self):
+    def test_kyber_key_sizes(self) -> None:
         """Kyber-1024 key sizes match NIST specification."""
         assert KYBER_PUBLIC_KEY_BYTES == 1568
         assert KYBER_SECRET_KEY_BYTES == 3168
         assert KYBER_CIPHERTEXT_BYTES == 1568
         assert KYBER_SHARED_SECRET_BYTES == 32
 
-    def test_sphincs_key_sizes(self):
+    def test_sphincs_key_sizes(self) -> None:
         """SPHINCS+-256f key sizes match specification."""
         assert SPHINCS_PUBLIC_KEY_BYTES == 64
         assert SPHINCS_SECRET_KEY_BYTES == 128
@@ -192,7 +194,7 @@ class TestKeySizeConstants:
 class TestDataclasses:
     """Tests for PQC dataclasses."""
 
-    def test_dilithium_keypair(self):
+    def test_dilithium_keypair(self) -> None:
         """DilithiumKeyPair stores keys correctly."""
         keypair = DilithiumKeyPair(
             secret_key=b"x" * 4032,
@@ -201,7 +203,7 @@ class TestDataclasses:
         assert len(keypair.secret_key) == 4032
         assert len(keypair.public_key) == 1952
 
-    def test_kyber_keypair(self):
+    def test_kyber_keypair(self) -> None:
         """KyberKeyPair stores keys correctly."""
         keypair = KyberKeyPair(
             secret_key=b"x" * 3168,
@@ -210,7 +212,7 @@ class TestDataclasses:
         assert len(keypair.secret_key) == 3168
         assert len(keypair.public_key) == 1568
 
-    def test_kyber_encapsulation(self):
+    def test_kyber_encapsulation(self) -> None:
         """KyberEncapsulation stores result correctly."""
         encap = KyberEncapsulation(
             ciphertext=b"c" * 1568,
@@ -219,7 +221,7 @@ class TestDataclasses:
         assert len(encap.ciphertext) == 1568
         assert len(encap.shared_secret) == 32
 
-    def test_sphincs_keypair(self):
+    def test_sphincs_keypair(self) -> None:
         """SphincsKeyPair stores keys correctly."""
         keypair = SphincsKeyPair(
             secret_key=b"x" * 128,
@@ -237,21 +239,21 @@ class TestDataclasses:
 class TestExceptions:
     """Tests for PQC exception classes."""
 
-    def test_pqc_unavailable_error(self):
+    def test_pqc_unavailable_error(self) -> None:
         """PQCUnavailableError is RuntimeError subclass."""
         assert issubclass(PQCUnavailableError, RuntimeError)
 
         with pytest.raises(PQCUnavailableError):
             raise PQCUnavailableError("Test error")
 
-    def test_kyber_unavailable_error(self):
+    def test_kyber_unavailable_error(self) -> None:
         """KyberUnavailableError is PQCUnavailableError subclass."""
         assert issubclass(KyberUnavailableError, PQCUnavailableError)
 
         with pytest.raises(KyberUnavailableError):
             raise KyberUnavailableError("Kyber not available")
 
-    def test_sphincs_unavailable_error(self):
+    def test_sphincs_unavailable_error(self) -> None:
         """SphincsUnavailableError is PQCUnavailableError subclass."""
         assert issubclass(SphincsUnavailableError, PQCUnavailableError)
 
@@ -268,18 +270,18 @@ class TestDilithiumOperations:
     """Tests for Dilithium signature operations."""
 
     @pytest.fixture
-    def dilithium_keypair(self):
+    def dilithium_keypair(self) -> Any:
         """Generate Dilithium keypair for tests."""
         if not DILITHIUM_AVAILABLE:
             pytest.skip("Dilithium not available")
         return generate_dilithium_keypair()
 
-    def test_generate_keypair(self, dilithium_keypair):
+    def test_generate_keypair(self, dilithium_keypair: Any) -> None:
         """Generate Dilithium keypair successfully."""
         assert len(dilithium_keypair.public_key) == DILITHIUM_PUBLIC_KEY_BYTES
         assert len(dilithium_keypair.secret_key) == DILITHIUM_SECRET_KEY_BYTES
 
-    def test_sign_and_verify(self, dilithium_keypair):
+    def test_sign_and_verify(self, dilithium_keypair: Any) -> None:
         """Sign message and verify signature."""
         message = b"Test message for Dilithium signature"
 
@@ -289,7 +291,7 @@ class TestDilithiumOperations:
         is_valid = dilithium_verify(message, signature, dilithium_keypair.public_key)
         assert is_valid is True
 
-    def test_verify_wrong_message(self, dilithium_keypair):
+    def test_verify_wrong_message(self, dilithium_keypair: Any) -> None:
         """Verification fails with wrong message."""
         message = b"Original message"
         wrong_message = b"Tampered message"
@@ -299,7 +301,7 @@ class TestDilithiumOperations:
 
         assert is_valid is False
 
-    def test_verify_wrong_signature(self, dilithium_keypair):
+    def test_verify_wrong_signature(self, dilithium_keypair: Any) -> None:
         """Verification fails with wrong signature."""
         message = b"Test message"
 
@@ -309,7 +311,7 @@ class TestDilithiumOperations:
         is_valid = dilithium_verify(message, wrong_signature, dilithium_keypair.public_key)
         assert is_valid is False
 
-    def test_verify_wrong_key(self, dilithium_keypair):
+    def test_verify_wrong_key(self, dilithium_keypair: Any) -> None:
         """Verification fails with wrong public key."""
         message = b"Test message"
         other_keypair = generate_dilithium_keypair()
@@ -319,14 +321,14 @@ class TestDilithiumOperations:
 
         assert is_valid is False
 
-    def test_sign_empty_message(self, dilithium_keypair):
+    def test_sign_empty_message(self, dilithium_keypair: Any) -> None:
         """Can sign empty message."""
         signature = dilithium_sign(b"", dilithium_keypair.secret_key)
         is_valid = dilithium_verify(b"", signature, dilithium_keypair.public_key)
 
         assert is_valid is True
 
-    def test_sign_large_message(self, dilithium_keypair):
+    def test_sign_large_message(self, dilithium_keypair: Any) -> None:
         """Can sign large message."""
         large_message = b"x" * (1024 * 1024)  # 1 MB
 
@@ -335,7 +337,7 @@ class TestDilithiumOperations:
 
         assert is_valid is True
 
-    def test_keypair_uniqueness(self):
+    def test_keypair_uniqueness(self) -> None:
         """Each keypair is unique."""
         if not DILITHIUM_AVAILABLE:
             pytest.skip("Dilithium not available")
@@ -351,21 +353,21 @@ class TestDilithiumUnavailable:
     """Tests for Dilithium when backend is unavailable."""
 
     @pytest.fixture
-    def mock_unavailable(self, monkeypatch):
+    def mock_unavailable(self, monkeypatch: Any) -> None:
         """Mock Dilithium as unavailable."""
         monkeypatch.setattr("ama_cryptography.pqc_backends.DILITHIUM_AVAILABLE", False)
 
-    def test_generate_raises_error(self, mock_unavailable):
+    def test_generate_raises_error(self, mock_unavailable: Any) -> None:
         """generate_dilithium_keypair raises when unavailable."""
         with pytest.raises(PQCUnavailableError, match="PQC_UNAVAILABLE"):
             generate_dilithium_keypair()
 
-    def test_sign_raises_error(self, mock_unavailable):
+    def test_sign_raises_error(self, mock_unavailable: Any) -> None:
         """dilithium_sign raises when unavailable."""
         with pytest.raises(PQCUnavailableError, match="PQC_UNAVAILABLE"):
             dilithium_sign(b"message", b"key")
 
-    def test_verify_raises_error(self, mock_unavailable):
+    def test_verify_raises_error(self, mock_unavailable: Any) -> None:
         """dilithium_verify raises when unavailable."""
         with pytest.raises(PQCUnavailableError, match="PQC_UNAVAILABLE"):
             dilithium_verify(b"message", b"signature", b"key")
@@ -380,32 +382,32 @@ class TestKyberOperations:
     """Tests for Kyber KEM operations."""
 
     @pytest.fixture
-    def kyber_keypair(self):
+    def kyber_keypair(self) -> Any:
         """Generate Kyber keypair for tests."""
         if not KYBER_AVAILABLE:
             pytest.skip("Kyber not available")
         return generate_kyber_keypair()
 
-    def test_generate_keypair(self, kyber_keypair):
+    def test_generate_keypair(self, kyber_keypair: Any) -> None:
         """Generate Kyber keypair successfully."""
         assert len(kyber_keypair.public_key) == KYBER_PUBLIC_KEY_BYTES
         assert len(kyber_keypair.secret_key) == KYBER_SECRET_KEY_BYTES
 
-    def test_encapsulate(self, kyber_keypair):
+    def test_encapsulate(self, kyber_keypair: Any) -> None:
         """Encapsulate shared secret."""
         encap = kyber_encapsulate(kyber_keypair.public_key)
 
         assert len(encap.ciphertext) == KYBER_CIPHERTEXT_BYTES
         assert len(encap.shared_secret) == KYBER_SHARED_SECRET_BYTES
 
-    def test_decapsulate(self, kyber_keypair):
+    def test_decapsulate(self, kyber_keypair: Any) -> None:
         """Decapsulate shared secret."""
         encap = kyber_encapsulate(kyber_keypair.public_key)
         shared_secret = kyber_decapsulate(encap.ciphertext, kyber_keypair.secret_key)
 
         assert shared_secret == encap.shared_secret
 
-    def test_encap_decap_roundtrip(self, kyber_keypair):
+    def test_encap_decap_roundtrip(self, kyber_keypair: Any) -> None:
         """Full encapsulation/decapsulation roundtrip."""
         # Alice generates keypair
         alice_keypair = kyber_keypair
@@ -419,7 +421,7 @@ class TestKyberOperations:
         # Both should have same shared secret
         assert alice_secret == encap.shared_secret
 
-    def test_encapsulate_invalid_key_length(self):
+    def test_encapsulate_invalid_key_length(self) -> None:
         """Encapsulate raises on invalid key length."""
         if not KYBER_AVAILABLE:
             pytest.skip("Kyber not available")
@@ -427,12 +429,12 @@ class TestKyberOperations:
         with pytest.raises(ValueError, match="Invalid public key length"):
             kyber_encapsulate(b"short")
 
-    def test_decapsulate_invalid_ciphertext_length(self, kyber_keypair):
+    def test_decapsulate_invalid_ciphertext_length(self, kyber_keypair: Any) -> None:
         """Decapsulate raises on invalid ciphertext length."""
         with pytest.raises(ValueError, match="Invalid ciphertext length"):
             kyber_decapsulate(b"short", kyber_keypair.secret_key)
 
-    def test_decapsulate_invalid_key_length(self):
+    def test_decapsulate_invalid_key_length(self) -> None:
         """Decapsulate raises on invalid key length."""
         if not KYBER_AVAILABLE:
             pytest.skip("Kyber not available")
@@ -440,7 +442,7 @@ class TestKyberOperations:
         with pytest.raises(ValueError, match="Invalid secret key length"):
             kyber_decapsulate(b"c" * KYBER_CIPHERTEXT_BYTES, b"short")
 
-    def test_keypair_uniqueness(self):
+    def test_keypair_uniqueness(self) -> None:
         """Each keypair is unique."""
         if not KYBER_AVAILABLE:
             pytest.skip("Kyber not available")
@@ -451,7 +453,7 @@ class TestKyberOperations:
         assert kp1.public_key != kp2.public_key
         assert kp1.secret_key != kp2.secret_key
 
-    def test_encapsulation_uniqueness(self, kyber_keypair):
+    def test_encapsulation_uniqueness(self, kyber_keypair: Any) -> None:
         """Each encapsulation produces unique result."""
         encap1 = kyber_encapsulate(kyber_keypair.public_key)
         encap2 = kyber_encapsulate(kyber_keypair.public_key)
@@ -464,21 +466,21 @@ class TestKyberUnavailable:
     """Tests for Kyber when backend is unavailable."""
 
     @pytest.fixture
-    def mock_unavailable(self, monkeypatch):
+    def mock_unavailable(self, monkeypatch: Any) -> None:
         """Mock Kyber as unavailable."""
         monkeypatch.setattr("ama_cryptography.pqc_backends.KYBER_AVAILABLE", False)
 
-    def test_generate_raises_error(self, mock_unavailable):
+    def test_generate_raises_error(self, mock_unavailable: Any) -> None:
         """generate_kyber_keypair raises when unavailable."""
         with pytest.raises(KyberUnavailableError, match="KYBER_UNAVAILABLE"):
             generate_kyber_keypair()
 
-    def test_encapsulate_raises_error(self, mock_unavailable):
+    def test_encapsulate_raises_error(self, mock_unavailable: Any) -> None:
         """kyber_encapsulate raises when unavailable."""
         with pytest.raises(KyberUnavailableError, match="KYBER_UNAVAILABLE"):
             kyber_encapsulate(b"k" * KYBER_PUBLIC_KEY_BYTES)
 
-    def test_decapsulate_raises_error(self, mock_unavailable):
+    def test_decapsulate_raises_error(self, mock_unavailable: Any) -> None:
         """kyber_decapsulate raises when unavailable."""
         with pytest.raises(KyberUnavailableError, match="KYBER_UNAVAILABLE"):
             kyber_decapsulate(
@@ -496,18 +498,18 @@ class TestSphincsOperations:
     """Tests for SPHINCS+ signature operations."""
 
     @pytest.fixture
-    def sphincs_keypair(self):
+    def sphincs_keypair(self) -> Any:
         """Generate SPHINCS+ keypair for tests."""
         if not SPHINCS_AVAILABLE:
             pytest.skip("SPHINCS+ not available")
         return generate_sphincs_keypair()
 
-    def test_generate_keypair(self, sphincs_keypair):
+    def test_generate_keypair(self, sphincs_keypair: Any) -> None:
         """Generate SPHINCS+ keypair successfully."""
         assert len(sphincs_keypair.public_key) == SPHINCS_PUBLIC_KEY_BYTES
         assert len(sphincs_keypair.secret_key) == SPHINCS_SECRET_KEY_BYTES
 
-    def test_sign_and_verify(self, sphincs_keypair):
+    def test_sign_and_verify(self, sphincs_keypair: Any) -> None:
         """Sign message and verify signature."""
         message = b"Test message for SPHINCS+ signature"
 
@@ -517,7 +519,7 @@ class TestSphincsOperations:
         is_valid = sphincs_verify(message, signature, sphincs_keypair.public_key)
         assert is_valid is True
 
-    def test_verify_wrong_message(self, sphincs_keypair):
+    def test_verify_wrong_message(self, sphincs_keypair: Any) -> None:
         """Verification fails with wrong message."""
         message = b"Original message"
         wrong_message = b"Tampered message"
@@ -527,7 +529,7 @@ class TestSphincsOperations:
 
         assert is_valid is False
 
-    def test_sign_invalid_key_length(self):
+    def test_sign_invalid_key_length(self) -> None:
         """Sign raises on invalid key length."""
         if not SPHINCS_AVAILABLE:
             pytest.skip("SPHINCS+ not available")
@@ -535,7 +537,7 @@ class TestSphincsOperations:
         with pytest.raises(ValueError, match="Invalid secret key length"):
             sphincs_sign(b"message", b"short")
 
-    def test_verify_invalid_key_length(self):
+    def test_verify_invalid_key_length(self) -> None:
         """Verify raises on invalid key length."""
         if not SPHINCS_AVAILABLE:
             pytest.skip("SPHINCS+ not available")
@@ -543,7 +545,7 @@ class TestSphincsOperations:
         with pytest.raises(ValueError, match="Invalid public key length"):
             sphincs_verify(b"message", b"sig", b"short")
 
-    def test_keypair_uniqueness(self):
+    def test_keypair_uniqueness(self) -> None:
         """Each keypair is unique."""
         if not SPHINCS_AVAILABLE:
             pytest.skip("SPHINCS+ not available")
@@ -559,21 +561,21 @@ class TestSphincsUnavailable:
     """Tests for SPHINCS+ when backend is unavailable."""
 
     @pytest.fixture
-    def mock_unavailable(self, monkeypatch):
+    def mock_unavailable(self, monkeypatch: Any) -> None:
         """Mock SPHINCS+ as unavailable."""
         monkeypatch.setattr("ama_cryptography.pqc_backends.SPHINCS_AVAILABLE", False)
 
-    def test_generate_raises_error(self, mock_unavailable):
+    def test_generate_raises_error(self, mock_unavailable: Any) -> None:
         """generate_sphincs_keypair raises when unavailable."""
         with pytest.raises(SphincsUnavailableError, match="SPHINCS_UNAVAILABLE"):
             generate_sphincs_keypair()
 
-    def test_sign_raises_error(self, mock_unavailable):
+    def test_sign_raises_error(self, mock_unavailable: Any) -> None:
         """sphincs_sign raises when unavailable."""
         with pytest.raises(SphincsUnavailableError, match="SPHINCS_UNAVAILABLE"):
             sphincs_sign(b"message", b"k" * SPHINCS_SECRET_KEY_BYTES)
 
-    def test_verify_raises_error(self, mock_unavailable):
+    def test_verify_raises_error(self, mock_unavailable: Any) -> None:
         """sphincs_verify raises when unavailable."""
         with pytest.raises(SphincsUnavailableError, match="SPHINCS_UNAVAILABLE"):
             sphincs_verify(b"message", b"sig", b"k" * SPHINCS_PUBLIC_KEY_BYTES)
@@ -587,28 +589,28 @@ class TestSphincsUnavailable:
 class TestBackendConsistency:
     """Tests to verify backend availability is consistent."""
 
-    def test_dilithium_backend_matches_availability(self):
+    def test_dilithium_backend_matches_availability(self) -> None:
         """Dilithium backend is set iff available."""
         if DILITHIUM_AVAILABLE:
             assert DILITHIUM_BACKEND == "native"
         else:
             assert DILITHIUM_BACKEND is None
 
-    def test_kyber_backend_matches_availability(self):
+    def test_kyber_backend_matches_availability(self) -> None:
         """Kyber backend is set iff available."""
         if KYBER_AVAILABLE:
             assert KYBER_BACKEND == "native"
         else:
             assert KYBER_BACKEND is None
 
-    def test_sphincs_backend_matches_availability(self):
+    def test_sphincs_backend_matches_availability(self) -> None:
         """SPHINCS+ backend is set iff available."""
         if SPHINCS_AVAILABLE:
             assert SPHINCS_BACKEND == "native"
         else:
             assert SPHINCS_BACKEND is None
 
-    def test_availability_constants_are_bool(self):
+    def test_availability_constants_are_bool(self) -> None:
         """Availability constants are boolean."""
         assert isinstance(DILITHIUM_AVAILABLE, bool)
         assert isinstance(KYBER_AVAILABLE, bool)

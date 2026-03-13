@@ -23,7 +23,7 @@ from ama_cryptography.key_management import KeyRotationManager, KeyStatus, Secur
 class TestKeyRotationLifecycle:
     """Tests for key rotation state transitions."""
 
-    def test_initial_key_active(self):
+    def test_initial_key_active(self) -> None:
         """First registered key becomes active."""
         mgr = KeyRotationManager()
         meta = mgr.register_key("key-v1", "signing")
@@ -31,7 +31,7 @@ class TestKeyRotationLifecycle:
         assert meta.status == KeyStatus.ACTIVE
         assert mgr.get_active_key() == "key-v1"
 
-    def test_second_key_pending(self):
+    def test_second_key_pending(self) -> None:
         """Second key starts as pending until rotation."""
         mgr = KeyRotationManager()
         mgr.register_key("key-v1", "signing")
@@ -41,7 +41,7 @@ class TestKeyRotationLifecycle:
         # but the first key remains the active_key_id
         assert mgr.get_active_key() == "key-v1"
 
-    def test_rotation_state_transitions(self):
+    def test_rotation_state_transitions(self) -> None:
         """Rotation moves old key to ROTATING, new key to ACTIVE."""
         mgr = KeyRotationManager()
         mgr.register_key("key-v1", "signing")
@@ -53,7 +53,7 @@ class TestKeyRotationLifecycle:
         assert mgr.keys["key-v2"].status == KeyStatus.ACTIVE
         assert mgr.get_active_key() == "key-v2"
 
-    def test_complete_rotation_deprecates(self):
+    def test_complete_rotation_deprecates(self) -> None:
         """Completing rotation moves old key to DEPRECATED."""
         mgr = KeyRotationManager()
         mgr.register_key("key-v1", "signing")
@@ -63,7 +63,7 @@ class TestKeyRotationLifecycle:
 
         assert mgr.keys["key-v1"].status == KeyStatus.DEPRECATED
 
-    def test_revoke_compromised(self):
+    def test_revoke_compromised(self) -> None:
         """Revoking with reason 'compromised' sets COMPROMISED status."""
         mgr = KeyRotationManager()
         mgr.register_key("key-v1", "signing")
@@ -74,21 +74,21 @@ class TestKeyRotationLifecycle:
         # No active key after revocation
         assert mgr.get_active_key() is None
 
-    def test_should_rotate_after_period(self):
+    def test_should_rotate_after_period(self) -> None:
         """Key should rotate after rotation period expires."""
         mgr = KeyRotationManager(rotation_period=timedelta(seconds=0))
         mgr.register_key("key-v1", "signing")
 
         assert mgr.should_rotate("key-v1") is True
 
-    def test_should_not_rotate_before_period(self):
+    def test_should_not_rotate_before_period(self) -> None:
         """Key should not rotate before period expires."""
         mgr = KeyRotationManager(rotation_period=timedelta(days=90))
         mgr.register_key("key-v1", "signing")
 
         assert mgr.should_rotate("key-v1") is False
 
-    def test_should_rotate_at_usage_limit(self):
+    def test_should_rotate_at_usage_limit(self) -> None:
         """Key should rotate when usage limit reached."""
         mgr = KeyRotationManager()
         mgr.register_key("key-v1", "signing", max_usage=3)
@@ -98,7 +98,7 @@ class TestKeyRotationLifecycle:
 
         assert mgr.should_rotate("key-v1") is True
 
-    def test_should_not_rotate_below_usage_limit(self):
+    def test_should_not_rotate_below_usage_limit(self) -> None:
         """Key should not rotate below usage limit."""
         mgr = KeyRotationManager()
         mgr.register_key("key-v1", "signing", max_usage=10)
@@ -112,7 +112,7 @@ class TestKeyRotationLifecycle:
 class TestSecureKeyStorageGCM:
     """Tests for SecureKeyStorage with AES-GCM encryption."""
 
-    def test_store_retrieve_roundtrip(self):
+    def test_store_retrieve_roundtrip(self) -> None:
         """Key stored can be retrieved."""
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = SecureKeyStorage(Path(tmpdir), master_password="test-password")
@@ -124,14 +124,14 @@ class TestSecureKeyStorageGCM:
 
             assert retrieved == original_key
 
-    def test_retrieve_nonexistent_returns_none(self):
+    def test_retrieve_nonexistent_returns_none(self) -> None:
         """Retrieving non-existent key returns None."""
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = SecureKeyStorage(Path(tmpdir), master_password="test-password")
 
             assert storage.retrieve_key("nonexistent") is None
 
-    def test_delete_key(self):
+    def test_delete_key(self) -> None:
         """Deleted key cannot be retrieved."""
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = SecureKeyStorage(Path(tmpdir), master_password="test-password")
@@ -140,14 +140,14 @@ class TestSecureKeyStorageGCM:
             assert storage.delete_key("test-key") is True
             assert storage.retrieve_key("test-key") is None
 
-    def test_delete_nonexistent_returns_false(self):
+    def test_delete_nonexistent_returns_false(self) -> None:
         """Deleting non-existent key returns False."""
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = SecureKeyStorage(Path(tmpdir), master_password="test-password")
 
             assert storage.delete_key("nonexistent") is False
 
-    def test_wrong_password_fails_decryption(self):
+    def test_wrong_password_fails_decryption(self) -> None:
         """Wrong password fails to decrypt (AES-GCM authentication)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
@@ -163,7 +163,7 @@ class TestSecureKeyStorageGCM:
             with pytest.raises(ValueError):
                 storage2.retrieve_key("test-key")
 
-    def test_key_id_validation(self):
+    def test_key_id_validation(self) -> None:
         """Invalid key_id raises ValueError."""
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = SecureKeyStorage(Path(tmpdir), master_password="test-password")
@@ -174,7 +174,7 @@ class TestSecureKeyStorageGCM:
             with pytest.raises(ValueError):
                 storage.store_key("invalid key!", b"secret")
 
-    def test_salt_file_created(self):
+    def test_salt_file_created(self) -> None:
         """Salt file is created with secure permissions."""
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
@@ -188,7 +188,7 @@ class TestSecureKeyStorageGCM:
                 salt = f.read()
             assert len(salt) == 32
 
-    def test_metadata_file_created(self):
+    def test_metadata_file_created(self) -> None:
         """KDF metadata file is created."""
         with tempfile.TemporaryDirectory() as tmpdir:
             import json
@@ -212,7 +212,7 @@ class TestSecureKeyStorageGCM:
                 assert metadata["algorithm"] == "PBKDF2-HMAC-SHA256"
                 assert metadata["iterations"] == 600000
 
-    def test_from_existing_recovery(self):
+    def test_from_existing_recovery(self) -> None:
         """Can recover storage from existing salt file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
