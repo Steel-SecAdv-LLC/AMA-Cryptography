@@ -12,6 +12,8 @@ potential security issues.
 import os
 import secrets
 
+import pytest
+
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
@@ -268,7 +270,7 @@ class TestDilithiumFuzzing:
     def test_dilithium_sign_verify_roundtrip(self, message):
         """Dilithium signatures verify correctly."""
         if not DILITHIUM_AVAILABLE:
-            return  # Skip if Dilithium not available
+            pytest.skip(reason="Dilithium not available")
 
         kp = generate_dilithium_keypair()
         sig = dilithium_sign(message, kp.secret_key)
@@ -280,7 +282,7 @@ class TestDilithiumFuzzing:
     def test_dilithium_modified_signature_fails(self, message):
         """Modified Dilithium signatures fail verification."""
         if not DILITHIUM_AVAILABLE:
-            return
+            pytest.skip(reason="Dilithium not available")
 
         kp = generate_dilithium_keypair()
         sig = bytearray(dilithium_sign(message, kp.secret_key))
@@ -291,7 +293,7 @@ class TestDilithiumFuzzing:
     def test_dilithium_wrong_key_fails(self, message):
         """Wrong Dilithium public key fails verification."""
         if not DILITHIUM_AVAILABLE:
-            return
+            pytest.skip(reason="Dilithium not available")
 
         kp1 = generate_dilithium_keypair()
         kp2 = generate_dilithium_keypair()
@@ -302,7 +304,7 @@ class TestDilithiumFuzzing:
     def test_dilithium_signs_domain_separated_message(self, content_hash):
         """Dilithium can sign and verify domain-separated messages."""
         if not DILITHIUM_AVAILABLE:
-            return
+            pytest.skip(reason="Dilithium not available")
 
         ethical_hash = secrets.token_bytes(32)
         msg = build_signature_message(content_hash, ethical_hash, SIGNATURE_FORMAT_V2)
