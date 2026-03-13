@@ -235,11 +235,9 @@ jobs:
 
       - name: Audit dependencies
         run: pip-audit
-        continue-on-error: true
 
       - name: Security scan (bandit)
         run: bandit -r ama_cryptography/ -ll
-        continue-on-error: true
 
   # Docker Build
   docker:
