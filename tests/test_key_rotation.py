@@ -199,7 +199,7 @@ class TestSecureKeyStorageGCM:
             metadata_file = path / ".kdf_metadata.json"
             assert metadata_file.exists()
 
-            with open(metadata_file, "r") as f:
+            with open(metadata_file) as f:
                 metadata = json.load(f)
 
             # v3 = Argon2id (preferred when native lib available), v2 = PBKDF2

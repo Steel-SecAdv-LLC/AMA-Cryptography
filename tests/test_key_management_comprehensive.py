@@ -51,7 +51,10 @@ class TestHDKeyDerivationComprehensive:
 
     def test_init_with_seed_phrase(self):
         """Initialize with BIP39-style seed phrase."""
-        seed_phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+        seed_phrase = (
+            "abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon abandon abandon about"
+        )
         hd = HDKeyDerivation(seed_phrase=seed_phrase)
 
         assert hd.master_seed is not None
@@ -164,7 +167,7 @@ class TestHDKeyDerivationComprehensive:
 
     def test_derive_large_non_hardened_index(self, hd_derivation):
         """Non-hardened derivation with large index (uses native secp256k1)."""
-        key, chain = hd_derivation.derive_path("m/0/2147483646")
+        key, _chain = hd_derivation.derive_path("m/0/2147483646")
         assert len(key) == 32
 
     def test_derive_large_hardened_index(self, hd_derivation):
@@ -809,4 +812,4 @@ class TestSecurityWarning:
     def test_can_be_raised(self):
         """SecurityWarning can be raised and caught."""
         with pytest.warns(SecurityWarning, match="test warning"):
-            warnings.warn("test warning", SecurityWarning)
+            warnings.warn("test warning", SecurityWarning, stacklevel=2)

@@ -414,7 +414,7 @@ class TestKeyDerivation:
         fixed_salt = b"fixed_salt_for_testing_32_bytes!"
         keys, _ = derive_keys(master, "test", num_keys=5, salt=fixed_salt)
         # All keys should be different
-        assert len(set(k.hex() for k in keys)) == 5
+        assert len({k.hex() for k in keys}) == 5
 
     def test_derive_keys_length(self):
         """Each derived key should be 32 bytes."""
@@ -782,7 +782,7 @@ class TestKeySecurityProperties:
         pkg_dict = asdict(pkg)
 
         # Check all string values
-        for key, value in pkg_dict.items():
+        for _key, value in pkg_dict.items():
             if isinstance(value, str):
                 assert kms.master_secret.hex() not in value
 
@@ -833,9 +833,9 @@ class TestConcurrencyAndConsistency:
             pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
             timestamps.add(pkg.timestamp)
         # All 5 timestamps must be unique — no duplicates allowed
-        assert len(timestamps) == 5, (
-            f"Expected 5 unique timestamps, got {len(timestamps)}: duplicates detected"
-        )
+        assert (
+            len(timestamps) == 5
+        ), f"Expected 5 unique timestamps, got {len(timestamps)}: duplicates detected"
 
 
 if __name__ == "__main__":

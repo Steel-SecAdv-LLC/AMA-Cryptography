@@ -197,7 +197,7 @@ class TestExportPublicKeys:
             export_public_keys(kms, output_dir)
             readme_path = output_dir / "README.txt"
             assert readme_path.exists()
-            with open(readme_path, "r") as f:
+            with open(readme_path) as f:
                 content = f.read()
             assert "AMA Cryptography" in content
             assert kms.creation_date in content
@@ -615,7 +615,7 @@ class TestMainFunction:
             )
 
             package_path = Path(tmpdir) / "CRYPTO_PACKAGE.json"
-            with open(package_path, "r") as f:
+            with open(package_path) as f:
                 pkg_data = json.load(f)
 
             # Verify expected fields
@@ -964,7 +964,7 @@ class TestDeriveKeysEdgeCases:
         keys, _ = derive_keys(master, "test", num_keys=100)
         assert len(keys) == 100
         # All keys should be unique
-        assert len(set(k.hex() for k in keys)) == 100
+        assert len({k.hex() for k in keys}) == 100
 
     def test_derive_keys_with_empty_info(self):
         """Test deriving keys with empty info string."""

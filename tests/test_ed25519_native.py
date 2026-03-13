@@ -121,7 +121,7 @@ class TestNativeEd25519:
 
         seed = bytes(range(32))
         message = b"test message for native roundtrip"
-        pk, sk, sig = _native_sign_and_verify(seed, message)
+        pk, _sk, sig = _native_sign_and_verify(seed, message)
 
         assert len(sig) == ED25519_SIGNATURE_BYTES
         assert native_ed25519_verify(sig, message, pk)

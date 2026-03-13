@@ -46,8 +46,8 @@ class TestHKDFSHA3256:
         fixed_salt = b"fixed_salt_for_testing_32_bytes!"
 
         # Derive keys twice with same inputs and same salt
-        keys1, salt1 = derive_keys(master_secret, info, num_keys=3, salt=fixed_salt)
-        keys2, salt2 = derive_keys(master_secret, info, num_keys=3, salt=fixed_salt)
+        keys1, _salt1 = derive_keys(master_secret, info, num_keys=3, salt=fixed_salt)
+        keys2, _salt2 = derive_keys(master_secret, info, num_keys=3, salt=fixed_salt)
 
         # Should produce identical keys with same salt
         assert keys1 == keys2

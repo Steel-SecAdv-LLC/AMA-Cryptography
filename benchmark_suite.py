@@ -291,9 +291,7 @@ class BenchmarkSuite:
         # Raw native HKDF without ethical context (genuine baseline)
         results["hkdf_standard"] = self.benchmark_operation(
             "Standard HKDF (Native)",
-            lambda: native_hkdf(
-                ikm=master_secret, length=32, salt=hkdf_salt, info=plain_info
-            ),
+            lambda: native_hkdf(ikm=master_secret, length=32, salt=hkdf_salt, info=plain_info),
             iterations=1000,
         )
 
@@ -403,8 +401,12 @@ class BenchmarkSuite:
                 return
             lines.append(f"## {title}")
             lines.append("")
-            lines.append("| Operation | Mean (ms) | Median (ms) | Std Dev (ms) | Ops/sec | Iterations |")
-            lines.append("|-----------|----------:|------------:|-------------:|--------:|-----------:|")
+            lines.append(
+                "| Operation | Mean (ms) | Median (ms) | Std Dev (ms) | Ops/sec | Iterations |"
+            )
+            lines.append(
+                "|-----------|----------:|------------:|-------------:|--------:|-----------:|"
+            )
             for name, stats in section.items():
                 if name in skip_keys or not isinstance(stats, dict) or "mean_ms" not in stats:
                     continue
@@ -424,8 +426,10 @@ class BenchmarkSuite:
         ethical = self.results.get("ethical_integration", {})
         if "ethical_overhead" in ethical:
             oh = ethical["ethical_overhead"]
-            lines.append(f"> **Ethical context overhead:** {oh['overhead_ms']:.4f} ms "
-                         f"({oh['overhead_pct']:.2f}%)")
+            lines.append(
+                f"> **Ethical context overhead:** {oh['overhead_ms']:.4f} ms "
+                f"({oh['overhead_pct']:.2f}%)"
+            )
             lines.append("")
 
         # --- Scalability table ---
@@ -484,15 +488,22 @@ def main():
 
     parser = argparse.ArgumentParser(description="AMA Cryptography Benchmark Suite")
     parser.add_argument(
-        "--markdown", "-m", type=str, default="BENCHMARKS.md",
+        "--markdown",
+        "-m",
+        type=str,
+        default="BENCHMARKS.md",
         help="Path for markdown report output (default: BENCHMARKS.md)",
     )
     parser.add_argument(
-        "--json", "-j", type=str, default="benchmark_results.json",
+        "--json",
+        "-j",
+        type=str,
+        default="benchmark_results.json",
         help="Path for JSON results output (default: benchmark_results.json)",
     )
     parser.add_argument(
-        "--no-markdown", action="store_true",
+        "--no-markdown",
+        action="store_true",
         help="Skip markdown report generation",
     )
     args = parser.parse_args()

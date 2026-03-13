@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
@@ -31,10 +32,12 @@ REGRESSION_FILE = ROOT / "benchmarks" / "regression_results.json"
 VALIDATION_FILE = ROOT / "benchmarks" / "validation_results.json"
 COMPARATIVE_FILE = ROOT / "benchmarks" / "comparative_benchmark_results.json"
 
+
 # ── Load benchmark data ────────────────────────────────────────────────
 def load_json(path):
     with open(path) as f:
         return json.load(f)
+
 
 bench = load_json(BENCH_FILE)
 regression = load_json(REGRESSION_FILE)
@@ -46,23 +49,33 @@ DARK_BG = "#1a1a2e"
 PANEL_BG = "#16213e"
 TEXT_COLOR = "#e0e0e0"
 GRID_COLOR = "#2a2a4a"
-ACCENT_COLORS = ["#00d2ff", "#7b2ff7", "#ff6b6b", "#ffd93d",
-                 "#6bcb77", "#4d96ff", "#ff922b", "#845ef7"]
+ACCENT_COLORS = [
+    "#00d2ff",
+    "#7b2ff7",
+    "#ff6b6b",
+    "#ffd93d",
+    "#6bcb77",
+    "#4d96ff",
+    "#ff922b",
+    "#845ef7",
+]
 
-plt.rcParams.update({
-    "figure.facecolor": DARK_BG,
-    "axes.facecolor": PANEL_BG,
-    "axes.edgecolor": GRID_COLOR,
-    "axes.labelcolor": TEXT_COLOR,
-    "axes.grid": True,
-    "grid.color": GRID_COLOR,
-    "grid.alpha": 0.4,
-    "text.color": TEXT_COLOR,
-    "xtick.color": TEXT_COLOR,
-    "ytick.color": TEXT_COLOR,
-    "font.family": "DejaVu Sans",
-    "font.size": 9,
-})
+plt.rcParams.update(
+    {
+        "figure.facecolor": DARK_BG,
+        "axes.facecolor": PANEL_BG,
+        "axes.edgecolor": GRID_COLOR,
+        "axes.labelcolor": TEXT_COLOR,
+        "axes.grid": True,
+        "grid.color": GRID_COLOR,
+        "grid.alpha": 0.4,
+        "text.color": TEXT_COLOR,
+        "xtick.color": TEXT_COLOR,
+        "ytick.color": TEXT_COLOR,
+        "font.family": "DejaVu Sans",
+        "font.size": 9,
+    }
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -70,18 +83,35 @@ plt.rcParams.update({
 # ═══════════════════════════════════════════════════════════════════════
 def create_performance_dashboard():
     fig, axes = plt.subplots(3, 3, figsize=(18, 13))
-    fig.suptitle("AMA Cryptography \u2014 Performance Dashboard",
-                 fontsize=18, fontweight="bold", color="#ffffff", y=0.98)
+    fig.suptitle(
+        "AMA Cryptography \u2014 Performance Dashboard",
+        fontsize=18,
+        fontweight="bold",
+        color="#ffffff",
+        y=0.98,
+    )
 
     # ── Panel 1: Crypto Throughput (top-left) ──────────────────────────
     ax = axes[0, 0]
     ops = bench["cryptographic_operations"]
-    names = ["SHA3-256", "HMAC Auth", "HMAC Verify", "Ed25519\nSign",
-             "Ed25519\nVerify", "ML-DSA-65\nSign", "ML-DSA-65\nVerify"]
-    vals = [ops["sha3_256"]["ops_per_sec"], ops["hmac_auth"]["ops_per_sec"],
-            ops["hmac_verify"]["ops_per_sec"], ops["ed25519_sign"]["ops_per_sec"],
-            ops["ed25519_verify"]["ops_per_sec"], ops["dilithium_sign"]["ops_per_sec"],
-            ops["dilithium_verify"]["ops_per_sec"]]
+    names = [
+        "SHA3-256",
+        "HMAC Auth",
+        "HMAC Verify",
+        "Ed25519\nSign",
+        "Ed25519\nVerify",
+        "ML-DSA-65\nSign",
+        "ML-DSA-65\nVerify",
+    ]
+    vals = [
+        ops["sha3_256"]["ops_per_sec"],
+        ops["hmac_auth"]["ops_per_sec"],
+        ops["hmac_verify"]["ops_per_sec"],
+        ops["ed25519_sign"]["ops_per_sec"],
+        ops["ed25519_verify"]["ops_per_sec"],
+        ops["dilithium_sign"]["ops_per_sec"],
+        ops["dilithium_verify"]["ops_per_sec"],
+    ]
     colors = ["#00d2ff", "#00d2ff", "#00d2ff", "#7b2ff7", "#7b2ff7", "#ff6b6b", "#ff6b6b"]
     bars = ax.bar(names, vals, color=colors, edgecolor="none", width=0.7)
     ax.set_yscale("log")
@@ -90,25 +120,54 @@ def create_performance_dashboard():
     ax.tick_params(axis="x", labelsize=7, rotation=0)
     for bar, v in zip(bars, vals):
         label = f"{v:,.0f}" if v < 10000 else f"{v/1000:.0f}K"
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.3,
-                label, ha="center", va="bottom", fontsize=6.5, color=TEXT_COLOR)
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() * 1.3,
+            label,
+            ha="center",
+            va="bottom",
+            fontsize=6.5,
+            color=TEXT_COLOR,
+        )
 
     # ── Panel 2: Signature Latency (top-center) ───────────────────────
     ax = axes[0, 1]
     sig_names = ["Ed25519\nSign", "Ed25519\nVerify", "ML-DSA-65\nSign", "ML-DSA-65\nVerify"]
-    sig_means = [ops["ed25519_sign"]["mean_ms"], ops["ed25519_verify"]["mean_ms"],
-                 ops["dilithium_sign"]["mean_ms"], ops["dilithium_verify"]["mean_ms"]]
-    sig_stds = [ops["ed25519_sign"]["std_dev_ms"], ops["ed25519_verify"]["std_dev_ms"],
-                ops["dilithium_sign"]["std_dev_ms"], ops["dilithium_verify"]["std_dev_ms"]]
+    sig_means = [
+        ops["ed25519_sign"]["mean_ms"],
+        ops["ed25519_verify"]["mean_ms"],
+        ops["dilithium_sign"]["mean_ms"],
+        ops["dilithium_verify"]["mean_ms"],
+    ]
+    sig_stds = [
+        ops["ed25519_sign"]["std_dev_ms"],
+        ops["ed25519_verify"]["std_dev_ms"],
+        ops["dilithium_sign"]["std_dev_ms"],
+        ops["dilithium_verify"]["std_dev_ms"],
+    ]
     sig_colors = ["#7b2ff7", "#845ef7", "#ff6b6b", "#ff922b"]
-    bars = ax.bar(sig_names, sig_means, yerr=sig_stds, color=sig_colors,
-                  edgecolor="none", capsize=3, error_kw={"ecolor": "#888", "linewidth": 1})
+    bars = ax.bar(
+        sig_names,
+        sig_means,
+        yerr=sig_stds,
+        color=sig_colors,
+        edgecolor="none",
+        capsize=3,
+        error_kw={"ecolor": "#888", "linewidth": 1},
+    )
     ax.set_title("Signature Latency (\u00b1\u03c3)", fontsize=10, fontweight="bold", pad=8)
     ax.set_ylabel("Latency (ms)")
     ax.tick_params(axis="x", labelsize=7.5)
     for bar, v in zip(bars, sig_means):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + max(sig_stds) * 1.2,
-                f"{v:.3f}", ha="center", va="bottom", fontsize=7, color=TEXT_COLOR)
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + max(sig_stds) * 1.2,
+            f"{v:.3f}",
+            ha="center",
+            va="bottom",
+            fontsize=7,
+            color=TEXT_COLOR,
+        )
 
     # ── Panel 3: Scalability (top-right) ──────────────────────────────
     ax = axes[0, 2]
@@ -116,28 +175,49 @@ def create_performance_dashboard():
     scale_x = [1, 10, 100, 1000]
     scale_y = [scale[f"dna_size_{s}"]["mean_ms"] for s in scale_x]
     scale_ops = [scale[f"dna_size_{s}"]["ops_per_sec"] for s in scale_x]
-    ax.plot(scale_x, scale_y, "o-", color="#ffd93d", linewidth=2, markersize=7,
-            markerfacecolor="#ffd93d", markeredgecolor="#fff", markeredgewidth=1)
+    ax.plot(
+        scale_x,
+        scale_y,
+        "o-",
+        color="#ffd93d",
+        linewidth=2,
+        markersize=7,
+        markerfacecolor="#ffd93d",
+        markeredgecolor="#fff",
+        markeredgewidth=1,
+    )
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_title("Package Scalability", fontsize=10, fontweight="bold", pad=8)
     ax.set_xlabel("Input Scale (codes)")
     ax.set_ylabel("Latency (ms, log)")
     for x, y, o in zip(scale_x, scale_y, scale_ops):
-        ax.annotate(f"{y:.1f}ms\n({o:,.0f} ops/s)", (x, y),
-                    textcoords="offset points", xytext=(12, -5),
-                    fontsize=6.5, color="#ffd93d")
+        ax.annotate(
+            f"{y:.1f}ms\n({o:,.0f} ops/s)",
+            (x, y),
+            textcoords="offset points",
+            xytext=(12, -5),
+            fontsize=6.5,
+            color="#ffd93d",
+        )
 
     # ── Panel 4: Key Generation (mid-left) ────────────────────────────
     ax = axes[1, 0]
     keygen = bench["key_generation"]
-    kg_names = ["Master\nSecret", "HKDF\nDerivation", "Ed25519\nKeygen",
-                "ML-DSA-65\nKeygen", "Full KMS\nGeneration"]
-    kg_vals = [keygen["master_secret"]["ops_per_sec"],
-               keygen["hkdf_derivation"]["ops_per_sec"],
-               keygen["ed25519_keygen"]["ops_per_sec"],
-               keygen["dilithium_keygen"]["ops_per_sec"],
-               keygen["kms_generation"]["ops_per_sec"]]
+    kg_names = [
+        "Master\nSecret",
+        "HKDF\nDerivation",
+        "Ed25519\nKeygen",
+        "ML-DSA-65\nKeygen",
+        "Full KMS\nGeneration",
+    ]
+    kg_vals = [
+        keygen["master_secret"]["ops_per_sec"],
+        keygen["hkdf_derivation"]["ops_per_sec"],
+        keygen["ed25519_keygen"]["ops_per_sec"],
+        keygen["dilithium_keygen"]["ops_per_sec"],
+        keygen["kms_generation"]["ops_per_sec"],
+    ]
     kg_colors = ["#6bcb77", "#6bcb77", "#4d96ff", "#ff6b6b", "#ffd93d"]
     bars = ax.barh(kg_names, kg_vals, color=kg_colors, edgecolor="none", height=0.6)
     ax.set_xscale("log")
@@ -146,13 +226,18 @@ def create_performance_dashboard():
     ax.tick_params(axis="y", labelsize=7.5)
     for bar, v in zip(bars, kg_vals):
         label = f"{v:,.0f}" if v < 10000 else f"{v/1000:.0f}K"
-        ax.text(bar.get_width() * 1.15, bar.get_y() + bar.get_height() / 2,
-                label, va="center", fontsize=7, color=TEXT_COLOR)
+        ax.text(
+            bar.get_width() * 1.15,
+            bar.get_y() + bar.get_height() / 2,
+            label,
+            va="center",
+            fontsize=7,
+            color=TEXT_COLOR,
+        )
 
     # ── Panel 5: 6-Layer Breakdown (mid-center) ───────────────────────
     ax = axes[1, 1]
-    layer_names = ["SHA3-256 Hash", "HMAC-SHA3", "Ed25519 Sign",
-                   "ML-DSA-65 Sign", "HKDF Derive"]
+    layer_names = ["SHA3-256 Hash", "HMAC-SHA3", "Ed25519 Sign", "ML-DSA-65 Sign", "HKDF Derive"]
     layer_ms = [
         ops["sha3_256"]["mean_ms"],
         ops["hmac_auth"]["mean_ms"],
@@ -162,8 +247,12 @@ def create_performance_dashboard():
     ]
     pie_colors = ["#00d2ff", "#4d96ff", "#7b2ff7", "#ff6b6b", "#6bcb77"]
     wedges, texts, autotexts = ax.pie(
-        layer_ms, labels=layer_names, colors=pie_colors,
-        autopct="%1.1f%%", startangle=140, pctdistance=0.8,
+        layer_ms,
+        labels=layer_names,
+        colors=pie_colors,
+        autopct="%1.1f%%",
+        startangle=140,
+        pctdistance=0.8,
         textprops={"fontsize": 7, "color": TEXT_COLOR},
     )
     for t in autotexts:
@@ -186,27 +275,41 @@ def create_performance_dashboard():
     ax.set_xscale("log")
     ax.set_title("Regression: Measured vs Baseline", fontsize=10, fontweight="bold", pad=8)
     ax.set_xlabel("ops/sec (log)")
-    ax.legend(fontsize=7, loc="lower right",
-              facecolor=PANEL_BG, edgecolor=GRID_COLOR, labelcolor=TEXT_COLOR)
+    ax.legend(
+        fontsize=7,
+        loc="lower right",
+        facecolor=PANEL_BG,
+        edgecolor=GRID_COLOR,
+        labelcolor=TEXT_COLOR,
+    )
 
     # ── Panel 7: Validation Claims (bottom-left) ─────────────────────
     ax = axes[2, 0]
     val_results = validation["results"][:8]
     val_claimed = [r["documented_value"] for r in val_results]
     val_measured = [r["measured_value"] for r in val_results]
-    ax.scatter(val_claimed, val_measured, c="#00d2ff", s=60, zorder=5,
-               edgecolors="#ffffff", linewidths=0.5)
+    ax.scatter(
+        val_claimed, val_measured, c="#00d2ff", s=60, zorder=5, edgecolors="#ffffff", linewidths=0.5
+    )
     max_val = max(max(val_claimed), max(val_measured)) * 1.2
-    ax.plot([0, max_val], [0, max_val], "--", color="#ff6b6b", alpha=0.6,
-            linewidth=1, label="Claimed = Measured")
+    ax.plot(
+        [0, max_val],
+        [0, max_val],
+        "--",
+        color="#ff6b6b",
+        alpha=0.6,
+        linewidth=1,
+        label="Claimed = Measured",
+    )
     ax.set_title("Claimed vs Measured Latency", fontsize=10, fontweight="bold", pad=8)
     ax.set_xlabel("Documented (ms)")
     ax.set_ylabel("Measured (ms)")
     ax.legend(fontsize=7, facecolor=PANEL_BG, edgecolor=GRID_COLOR, labelcolor=TEXT_COLOR)
     for name, cx, mx in zip(val_results, val_claimed, val_measured):
         short = name["claim_name"].split("_")[0]
-        ax.annotate(short, (cx, mx), textcoords="offset points",
-                    xytext=(5, 5), fontsize=5.5, color="#aaa")
+        ax.annotate(
+            short, (cx, mx), textcoords="offset points", xytext=(5, 5), fontsize=5.5, color="#aaa"
+        )
 
     # ── Panel 8: Hybrid Performance (bottom-center) ──────────────────
     ax = axes[2, 1]
@@ -215,15 +318,23 @@ def create_performance_dashboard():
     comp_names = [r["operation"].replace(" ", "\n") for r in comp_avail]
     comp_ops = [r["ops_per_sec"] for r in comp_avail]
     comp_colors = ["#7b2ff7", "#845ef7", "#ff6b6b", "#ff922b", "#ffd93d", "#6bcb77"]
-    bars = ax.bar(comp_names, comp_ops, color=comp_colors[:len(comp_avail)],
-                  edgecolor="none", width=0.6)
+    bars = ax.bar(
+        comp_names, comp_ops, color=comp_colors[: len(comp_avail)], edgecolor="none", width=0.6
+    )
     ax.set_title("Hybrid Crypto Performance", fontsize=10, fontweight="bold", pad=8)
     ax.set_ylabel("ops/sec")
     ax.tick_params(axis="x", labelsize=7)
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
     for bar, v in zip(bars, comp_ops):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + max(comp_ops) * 0.02,
-                f"{v:,.0f}", ha="center", va="bottom", fontsize=6.5, color=TEXT_COLOR)
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + max(comp_ops) * 0.02,
+            f"{v:,.0f}",
+            ha="center",
+            va="bottom",
+            fontsize=6.5,
+            color=TEXT_COLOR,
+        )
 
     # ── Panel 9: Key Metrics (bottom-right) ──────────────────────────
     ax = axes[2, 2]
@@ -247,11 +358,19 @@ def create_performance_dashboard():
         f"  All timings measured on benchmark run\n"
         f"  {bench['benchmark_start'][:10]}"
     )
-    ax.text(0.05, 0.95, metrics_text, transform=ax.transAxes,
-            fontsize=7.5, fontfamily="monospace", color="#00d2ff",
-            verticalalignment="top",
-            bbox=dict(boxstyle="round,pad=0.6", facecolor="#0d1117",
-                      edgecolor="#00d2ff", linewidth=1.5))
+    ax.text(
+        0.05,
+        0.95,
+        metrics_text,
+        transform=ax.transAxes,
+        fontsize=7.5,
+        fontfamily="monospace",
+        color="#00d2ff",
+        verticalalignment="top",
+        bbox=dict(
+            boxstyle="round,pad=0.6", facecolor="#0d1117", edgecolor="#00d2ff", linewidth=1.5
+        ),
+    )
 
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     out = ASSETS_DIR / "performance_dashboard.png"
@@ -265,8 +384,13 @@ def create_performance_dashboard():
 # ═══════════════════════════════════════════════════════════════════════
 def create_benchmark_report():
     fig, axes = plt.subplots(3, 3, figsize=(18, 13))
-    fig.suptitle("AMA Cryptography v2.0 \u2014 Cryptographic Benchmark Report",
-                 fontsize=18, fontweight="bold", color="#ffffff", y=0.98)
+    fig.suptitle(
+        "AMA Cryptography v2.0 \u2014 Cryptographic Benchmark Report",
+        fontsize=18,
+        fontweight="bold",
+        color="#ffffff",
+        y=0.98,
+    )
 
     ops = bench["cryptographic_operations"]
     keygen = bench["key_generation"]
@@ -282,10 +406,16 @@ def create_benchmark_report():
     ax.hist(all_latencies, bins=15, color="#7b2ff7", edgecolor="#1a1a2e", alpha=0.9)
     mean_lat = np.mean(all_latencies)
     median_lat = np.median(all_latencies)
-    ax.axvline(mean_lat, color="#ff6b6b", linestyle="--", linewidth=1.5,
-               label=f"Mean: {mean_lat:.3f}ms")
-    ax.axvline(median_lat, color="#ffd93d", linestyle="--", linewidth=1.5,
-               label=f"Median: {median_lat:.4f}ms")
+    ax.axvline(
+        mean_lat, color="#ff6b6b", linestyle="--", linewidth=1.5, label=f"Mean: {mean_lat:.3f}ms"
+    )
+    ax.axvline(
+        median_lat,
+        color="#ffd93d",
+        linestyle="--",
+        linewidth=1.5,
+        label=f"Median: {median_lat:.4f}ms",
+    )
     ax.set_title("Operation Latency Distribution", fontsize=10, fontweight="bold", pad=8)
     ax.set_xlabel("Latency (ms)")
     ax.set_ylabel("Count")
@@ -300,15 +430,28 @@ def create_benchmark_report():
     for name, (s, v) in sign_ops.items():
         color = "#7b2ff7" if name == "Ed25519" else "#ff6b6b"
         ax.scatter(s, v, s=120, c=color, edgecolors="#fff", linewidths=1, zorder=5)
-        ax.annotate(name, (s, v), textcoords="offset points", xytext=(8, 8),
-                    fontsize=8, color=color, fontweight="bold")
+        ax.annotate(
+            name,
+            (s, v),
+            textcoords="offset points",
+            xytext=(8, 8),
+            fontsize=8,
+            color=color,
+            fontweight="bold",
+        )
     # Add package create/verify
     pc = dna["package_creation"]["mean_ms"]
     pv = dna["package_verification"]["mean_ms"]
-    ax.scatter(pc, pv, s=120, c="#ffd93d", edgecolors="#fff", linewidths=1, zorder=5,
-               marker="D")
-    ax.annotate("Full Package", (pc, pv), textcoords="offset points", xytext=(8, -12),
-                fontsize=8, color="#ffd93d", fontweight="bold")
+    ax.scatter(pc, pv, s=120, c="#ffd93d", edgecolors="#fff", linewidths=1, zorder=5, marker="D")
+    ax.annotate(
+        "Full Package",
+        (pc, pv),
+        textcoords="offset points",
+        xytext=(8, -12),
+        fontsize=8,
+        color="#ffd93d",
+        fontweight="bold",
+    )
     max_v = max(ops["dilithium_sign"]["mean_ms"], pc) * 1.2
     ax.plot([0, max_v], [0, max_v], "--", color="#555", alpha=0.5, linewidth=1)
     ax.set_title("Sign vs Verify Latency", fontsize=10, fontweight="bold", pad=8)
@@ -323,15 +466,18 @@ def create_benchmark_report():
         "Classical Sig": [ops["ed25519_sign"]["ops_per_sec"], ops["ed25519_verify"]["ops_per_sec"]],
         "PQC Sig": [ops["dilithium_sign"]["ops_per_sec"], ops["dilithium_verify"]["ops_per_sec"]],
         "Key Derivation": [keygen["hkdf_derivation"]["ops_per_sec"]],
-        "Key Generation": [keygen["ed25519_keygen"]["ops_per_sec"],
-                           keygen["dilithium_keygen"]["ops_per_sec"]],
-        "DNA Package": [dna["package_creation"]["ops_per_sec"],
-                        dna["package_verification"]["ops_per_sec"]],
+        "Key Generation": [
+            keygen["ed25519_keygen"]["ops_per_sec"],
+            keygen["dilithium_keygen"]["ops_per_sec"],
+        ],
+        "DNA Package": [
+            dna["package_creation"]["ops_per_sec"],
+            dna["package_verification"]["ops_per_sec"],
+        ],
     }
     cat_names = list(categories.keys())
     cat_means = [np.mean(v) for v in categories.values()]
-    cat_colors = ["#00d2ff", "#4d96ff", "#7b2ff7", "#ff6b6b",
-                  "#6bcb77", "#ffd93d", "#ff922b"]
+    cat_colors = ["#00d2ff", "#4d96ff", "#7b2ff7", "#ff6b6b", "#6bcb77", "#ffd93d", "#ff922b"]
     bars = ax.barh(cat_names, cat_means, color=cat_colors, edgecolor="none", height=0.6)
     ax.set_xscale("log")
     ax.set_title("Performance by Category", fontsize=10, fontweight="bold", pad=8)
@@ -339,8 +485,14 @@ def create_benchmark_report():
     ax.tick_params(axis="y", labelsize=7.5)
     for bar, v in zip(bars, cat_means):
         label = f"{v:,.0f}" if v < 10000 else f"{v/1000:.0f}K"
-        ax.text(bar.get_width() * 1.15, bar.get_y() + bar.get_height() / 2,
-                label, va="center", fontsize=7, color=TEXT_COLOR)
+        ax.text(
+            bar.get_width() * 1.15,
+            bar.get_y() + bar.get_height() / 2,
+            label,
+            va="center",
+            fontsize=7,
+            color=TEXT_COLOR,
+        )
 
     # ── Panel 4: Top Operations (mid-left) ────────────────────────────
     ax = axes[1, 0]
@@ -360,8 +512,14 @@ def create_benchmark_report():
     ax.tick_params(axis="y", labelsize=7)
     for bar, v in zip(bars, top_vals[::-1]):
         label = f"{v:,.0f}" if v < 10000 else f"{v/1000:.0f}K"
-        ax.text(bar.get_width() + max(top_vals) * 0.02, bar.get_y() + bar.get_height() / 2,
-                label, va="center", fontsize=6.5, color="#ffd93d")
+        ax.text(
+            bar.get_width() + max(top_vals) * 0.02,
+            bar.get_y() + bar.get_height() / 2,
+            label,
+            va="center",
+            fontsize=6.5,
+            color="#ffd93d",
+        )
 
     # ── Panel 5: Bottom Operations (mid-center) ──────────────────────
     ax = axes[1, 1]
@@ -374,16 +532,24 @@ def create_benchmark_report():
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
     ax.tick_params(axis="y", labelsize=7)
     for bar, v in zip(bars, bot_vals):
-        ax.text(bar.get_width() + max(bot_vals) * 0.03, bar.get_y() + bar.get_height() / 2,
-                f"{v:,.0f}", va="center", fontsize=6.5, color="#00d2ff")
+        ax.text(
+            bar.get_width() + max(bot_vals) * 0.03,
+            bar.get_y() + bar.get_height() / 2,
+            f"{v:,.0f}",
+            va="center",
+            fontsize=6.5,
+            color="#00d2ff",
+        )
 
     # ── Panel 6: Ethical Overhead (mid-right) ─────────────────────────
     ax = axes[1, 2]
     eth = bench["ethical_integration"]
     eth_names = ["Standard\nHKDF", "Ethical\nHKDF", "Ethical\nContext"]
-    eth_vals = [eth["hkdf_standard"]["ops_per_sec"],
-                eth["hkdf_ethical"]["ops_per_sec"],
-                eth["ethical_context"]["ops_per_sec"]]
+    eth_vals = [
+        eth["hkdf_standard"]["ops_per_sec"],
+        eth["hkdf_ethical"]["ops_per_sec"],
+        eth["ethical_context"]["ops_per_sec"],
+    ]
     eth_colors = ["#6bcb77", "#ff6b6b", "#7b2ff7"]
     bars = ax.bar(eth_names, eth_vals, color=eth_colors, edgecolor="none", width=0.5)
     ax.set_title("Ethical Integration Overhead", fontsize=10, fontweight="bold", pad=8)
@@ -391,15 +557,25 @@ def create_benchmark_report():
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}K"))
     # Add overhead annotation
     overhead = eth["ethical_overhead"]["overhead_pct"]
-    ax.annotate(f"Overhead: {overhead:.1f}%\n({eth['ethical_overhead']['overhead_ms']:.4f}ms)",
-                xy=(1, (eth_vals[0] + eth_vals[1]) / 2),
-                fontsize=8, color="#ff6b6b", fontweight="bold",
-                ha="center",
-                bbox=dict(boxstyle="round,pad=0.3", facecolor="#0d1117",
-                          edgecolor="#ff6b6b", alpha=0.8))
+    ax.annotate(
+        f"Overhead: {overhead:.1f}%\n({eth['ethical_overhead']['overhead_ms']:.4f}ms)",
+        xy=(1, (eth_vals[0] + eth_vals[1]) / 2),
+        fontsize=8,
+        color="#ff6b6b",
+        fontweight="bold",
+        ha="center",
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="#0d1117", edgecolor="#ff6b6b", alpha=0.8),
+    )
     for bar, v in zip(bars, eth_vals):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + max(eth_vals) * 0.02,
-                f"{v:,.0f}", ha="center", va="bottom", fontsize=7, color=TEXT_COLOR)
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + max(eth_vals) * 0.02,
+            f"{v:,.0f}",
+            ha="center",
+            va="bottom",
+            fontsize=7,
+            color=TEXT_COLOR,
+        )
 
     # ── Panel 7: Regression Health (bottom-left) ─────────────────────
     ax = axes[2, 0]
@@ -407,21 +583,33 @@ def create_benchmark_report():
     reg_names_short = [r["name"].replace("_", " ").title()[:14] for r in reg]
     reg_pcts = [-r["regression_percent"] for r in reg]  # negative = improvement
     colors_reg = ["#6bcb77" if p > 0 else "#ff6b6b" for p in reg_pcts]
-    bars = ax.barh(reg_names_short[::-1], reg_pcts[::-1],
-                   color=colors_reg[::-1], edgecolor="none", height=0.6)
+    bars = ax.barh(
+        reg_names_short[::-1], reg_pcts[::-1], color=colors_reg[::-1], edgecolor="none", height=0.6
+    )
     ax.axvline(0, color="#555", linewidth=0.8)
     ax.set_title("Regression Improvement (%)", fontsize=10, fontweight="bold", pad=8)
     ax.set_xlabel("Improvement over baseline (%)")
     ax.tick_params(axis="y", labelsize=6)
     for bar, v in zip(bars, reg_pcts[::-1]):
-        ax.text(bar.get_width() + max(reg_pcts) * 0.02, bar.get_y() + bar.get_height() / 2,
-                f"+{v:.0f}%", va="center", fontsize=6, color="#6bcb77")
+        ax.text(
+            bar.get_width() + max(reg_pcts) * 0.02,
+            bar.get_y() + bar.get_height() / 2,
+            f"+{v:.0f}%",
+            va="center",
+            fontsize=6,
+            color="#6bcb77",
+        )
 
     # ── Panel 8: NIST FIPS Compliance (bottom-center) ────────────────
     ax = axes[2, 1]
-    fips_standards = ["FIPS 180-4\n(SHA-2)", "FIPS 202\n(SHA-3)",
-                      "FIPS 186-5\n(Ed25519)", "FIPS 203\n(ML-KEM)",
-                      "FIPS 204\n(ML-DSA)", "FIPS 205\n(SLH-DSA)"]
+    fips_standards = [
+        "FIPS 180-4\n(SHA-2)",
+        "FIPS 202\n(SHA-3)",
+        "FIPS 186-5\n(Ed25519)",
+        "FIPS 203\n(ML-KEM)",
+        "FIPS 204\n(ML-DSA)",
+        "FIPS 205\n(SLH-DSA)",
+    ]
     fips_status = [1, 1, 1, 1, 1, 1]  # all implemented
     fips_colors_map = {1: "#6bcb77", 0.5: "#ffd93d", 0: "#ff6b6b"}
     fips_colors = [fips_colors_map[s] for s in fips_status]
@@ -432,8 +620,15 @@ def create_benchmark_report():
     ax.set_yticklabels(["None", "Partial", "Full"])
     ax.tick_params(axis="x", labelsize=7)
     for bar in bars:
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.03,
-                "\u2713", ha="center", fontsize=14, color="#6bcb77", fontweight="bold")
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.03,
+            "\u2713",
+            ha="center",
+            fontsize=14,
+            color="#6bcb77",
+            fontweight="bold",
+        )
 
     # ── Panel 9: Key Metrics Summary (bottom-right) ──────────────────
     ax = axes[2, 2]
@@ -459,11 +654,19 @@ def create_benchmark_report():
         f"              ML-KEM-1024 | SLH-DSA\n\n"
         f"  {bench['benchmark_start'][:10]} benchmark run"
     )
-    ax.text(0.05, 0.95, summary_text, transform=ax.transAxes,
-            fontsize=7.5, fontfamily="monospace", color="#6bcb77",
-            verticalalignment="top",
-            bbox=dict(boxstyle="round,pad=0.6", facecolor="#0d1117",
-                      edgecolor="#6bcb77", linewidth=1.5))
+    ax.text(
+        0.05,
+        0.95,
+        summary_text,
+        transform=ax.transAxes,
+        fontsize=7.5,
+        fontfamily="monospace",
+        color="#6bcb77",
+        verticalalignment="top",
+        bbox=dict(
+            boxstyle="round,pad=0.6", facecolor="#0d1117", edgecolor="#6bcb77", linewidth=1.5
+        ),
+    )
 
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     out = ASSETS_DIR / "benchmark_report.png"

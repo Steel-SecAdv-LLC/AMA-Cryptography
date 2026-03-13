@@ -143,7 +143,7 @@ class TestX25519:
         """Different peers produce different shared secrets."""
         from ama_cryptography.pqc_backends import native_x25519_key_exchange, native_x25519_keypair
 
-        pk_a, sk_a = native_x25519_keypair()
+        _pk_a, sk_a = native_x25519_keypair()
         pk_b, _ = native_x25519_keypair()
         pk_c, _ = native_x25519_keypair()
 
@@ -179,14 +179,14 @@ class TestArgon2id:
         """Same inputs produce same output."""
         from ama_cryptography.pqc_backends import native_argon2id
 
-        kwargs = dict(
-            password=b"test_password",
-            salt=b"a" * 16,
-            t_cost=1,
-            m_cost=64,
-            parallelism=1,
-            out_len=32,
-        )
+        kwargs = {
+            "password": b"test_password",
+            "salt": b"a" * 16,
+            "t_cost": 1,
+            "m_cost": 64,
+            "parallelism": 1,
+            "out_len": 32,
+        }
         r1 = native_argon2id(**kwargs)
         r2 = native_argon2id(**kwargs)
         assert r1 == r2
@@ -195,7 +195,7 @@ class TestArgon2id:
         """Different passwords produce different outputs."""
         from ama_cryptography.pqc_backends import native_argon2id
 
-        common = dict(salt=b"b" * 16, t_cost=1, m_cost=64, parallelism=1, out_len=32)
+        common = {"salt": b"b" * 16, "t_cost": 1, "m_cost": 64, "parallelism": 1, "out_len": 32}
         r1 = native_argon2id(password=b"password1", **common)
         r2 = native_argon2id(password=b"password2", **common)
         assert r1 != r2
@@ -204,7 +204,13 @@ class TestArgon2id:
         """Different salts produce different outputs."""
         from ama_cryptography.pqc_backends import native_argon2id
 
-        common = dict(password=b"password", t_cost=1, m_cost=64, parallelism=1, out_len=32)
+        common = {
+            "password": b"password",
+            "t_cost": 1,
+            "m_cost": 64,
+            "parallelism": 1,
+            "out_len": 32,
+        }
         r1 = native_argon2id(salt=b"c" * 16, **common)
         r2 = native_argon2id(salt=b"d" * 16, **common)
         assert r1 != r2
@@ -213,13 +219,13 @@ class TestArgon2id:
         """Different output lengths produce different-length results."""
         from ama_cryptography.pqc_backends import native_argon2id
 
-        common = dict(
-            password=b"password",
-            salt=b"e" * 16,
-            t_cost=1,
-            m_cost=64,
-            parallelism=1,
-        )
+        common = {
+            "password": b"password",
+            "salt": b"e" * 16,
+            "t_cost": 1,
+            "m_cost": 64,
+            "parallelism": 1,
+        }
         r32 = native_argon2id(out_len=32, **common)
         r64 = native_argon2id(out_len=64, **common)
         assert len(r32) == 32

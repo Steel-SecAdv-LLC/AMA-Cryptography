@@ -204,9 +204,15 @@ class ComparativeBenchmark:
             # Pre-check: verify cryptography library is functional
             # (guards against broken CFFI/Rust/pyo3 bindings that panic on import)
             import subprocess
+
             check = subprocess.run(
-                [sys.executable, "-c", "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey"],
-                capture_output=True, timeout=5,
+                [
+                    sys.executable,
+                    "-c",
+                    "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey",
+                ],
+                capture_output=True,
+                timeout=5,
             )
             if check.returncode != 0:
                 raise ImportError("cryptography library has broken bindings")
@@ -323,9 +329,15 @@ class ComparativeBenchmark:
         try:
             # Pre-check: verify both libraries are functional
             import subprocess
+
             check = subprocess.run(
-                [sys.executable, "-c", "import oqs; from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey"],
-                capture_output=True, timeout=5,
+                [
+                    sys.executable,
+                    "-c",
+                    "import oqs; from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey",
+                ],
+                capture_output=True,
+                timeout=5,
             )
             if check.returncode != 0:
                 raise ImportError("oqs and/or cryptography library not available")
@@ -364,7 +376,9 @@ class ComparativeBenchmark:
             )
 
         except (ImportError, Exception) as e:
-            print(f"  SKIP: Hybrid benchmark requires both cryptography and liboqs ({type(e).__name__})")
+            print(
+                f"  SKIP: Hybrid benchmark requires both cryptography and liboqs ({type(e).__name__})"
+            )
             self.results.append(
                 BenchmarkResult(
                     implementation="OpenSSL+liboqs",

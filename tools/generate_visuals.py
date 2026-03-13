@@ -272,7 +272,11 @@ def create_performance_comparison():
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
     # Data from BENCHMARKS.md
-    implementations = ["AMA Cryptography\n(Standard)", "AMA Cryptography\n(Optimized)", "OpenSSL+liboqs"]
+    implementations = [
+        "AMA Cryptography\n(Standard)",
+        "AMA Cryptography\n(Optimized)",
+        "OpenSSL+liboqs",
+    ]
     x_pos = np.arange(len(implementations))
 
     # Throughput data (ops/sec)
@@ -946,9 +950,7 @@ def create_ethical_binding_flow():
         fontweight="bold",
         color="#1F2937",
     )
-    ax.text(
-        agg_x, agg_y - 0.05, "4 pillars", ha="center", va="center", fontsize=9, color="#374151"
-    )
+    ax.text(agg_x, agg_y - 0.05, "4 pillars", ha="center", va="center", fontsize=9, color="#374151")
     ax.text(
         agg_x,
         agg_y - 0.4,

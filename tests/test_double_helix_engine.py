@@ -38,8 +38,8 @@ import numpy as np
 # Derive repo root relative to this file for portability
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ama_cryptography.double_helix_engine import AmaEquationEngine  # noqa: E402
-from ama_cryptography.equations import PHI_CUBED, calculate_sigma_quadratic  # noqa: E402
+from ama_cryptography.double_helix_engine import AmaEquationEngine
+from ama_cryptography.equations import PHI_CUBED, calculate_sigma_quadratic
 
 
 class TestAmaEquationEngineInitialization(unittest.TestCase):
@@ -174,7 +174,7 @@ class TestConvergence(unittest.TestCase):
         # This test checks the rollback mechanism exists
         # Actual instability detection depends on parameters
         initial_state = np.random.randn(50) * 0.5
-        final_state, history = self.engine.converge(initial_state, max_steps=50)
+        final_state, _history = self.engine.converge(initial_state, max_steps=50)
 
         # Should complete without errors
         self.assertIsNotNone(final_state)

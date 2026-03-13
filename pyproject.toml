@@ -105,6 +105,8 @@ Issues = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/issues"
 [tool.ruff]
 target-version = "py39"
 line-length = 100
+
+[tool.ruff.lint]
 select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
@@ -119,9 +121,15 @@ select = [
 ]
 ignore = []  # Do not add ignores without a comment explaining why.
 
-[tool.ruff.per-file-ignores]
-# assert is valid in pytest tests
-"tests/*" = ["S101"]
+[tool.ruff.lint.per-file-ignores]
+# assert is valid in pytest tests; hardcoded passwords are test fixtures;
+# subprocess calls are tested intentionally; Unicode in test docstrings is fine;
+# uppercase vars used for crypto constants in test data
+"tests/*" = [
+    "S101", "S105", "S106", "S603",
+    "RUF001", "RUF002", "RUF003",
+    "N806",
+]
 # ama_cryptography/ uses intentional patterns that must not be changed:
 #   N803/N806: uppercase variable names for crypto constants (e.g. R, S, A, K)
 #   RUF001/RUF002/RUF003: Unicode symbols in docstrings/comments (σ, ✓, etc.)
@@ -143,16 +151,52 @@ ignore = []  # Do not add ignores without a comment explaining why.
     "S101", "S106", "S107", "S110",
     "E501",
     "B028", "B904",
-    "UP015",
+    "UP006", "UP015", "UP035",  # UP006/UP035: deprecated typing imports (py38 compat)
 ]
 # code_guardian_secure.py — same crypto patterns as ama_cryptography/
+#   UP007/UP045: PEP 604 union syntax (py38 compat)
+#   E402: module-level imports after sys.path manipulation
+#   S310/S603: URL open and subprocess calls in security tooling
+#   UP012: unnecessary UTF-8 encoding argument
 "code_guardian_secure.py" = [
     "N803", "N806", "N818",
     "RUF001", "RUF002", "RUF003", "RUF010", "RUF012", "RUF022", "RUF100",
     "S101", "S106", "S107", "S110",
-    "E501",
+    "E402", "E501",
     "B028", "B904",
-    "UP015",
+    "S310", "S603",
+    "UP006", "UP007", "UP012", "UP015", "UP035", "UP045",
+]
+# ama_cryptography_monitor.py — production monitoring module with same conventions
+"ama_cryptography_monitor.py" = [
+    "I001", "N806",
+    "RUF003", "RUF022", "RUF023",
+    "UP006", "UP015", "UP035",
+]
+# Demo script for the monitoring module
+"ama_cryptography_monitor_demo.py" = ["B007", "RUF001"]
+# Benchmark and tooling scripts — not part of the core library
+"benchmark_suite.py" = ["UP006", "UP035", "E501"]
+"setup.py" = ["E501", "RUF005", "S603", "S607"]
+"benchmarks/*" = [
+    "E402", "E501", "F541", "I001",
+    "RUF059", "RUF100",
+    "S603",
+    "UP006", "UP035",
+]
+"examples/*" = [
+    "B007", "B904",
+    "E402",
+    "RUF001", "RUF059", "RUF100",
+    "S106",
+    "UP006", "UP035",
+]
+"tools/*" = [
+    "B007", "B904",
+    "C408",
+    "E501",
+    "I001",
+    "RUF059",
 ]
 
 # Black configuration

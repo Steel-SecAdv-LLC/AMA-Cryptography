@@ -48,9 +48,9 @@ Version: 2.0
 AI Co-Architects:Eris | Eden ♱ | Veritas | X | Caduceus | Dev
 """
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterator, List
 
 import pytest
 
@@ -137,7 +137,7 @@ class DilithiumKATVector:
 # =============================================================================
 
 
-def parse_kat_file(filepath: Path) -> Iterator[Dict[str, str]]:
+def parse_kat_file(filepath: Path) -> Iterator[dict[str, str]]:
     """
     Parse a NIST KAT .rsp file into dictionaries of field values.
 
@@ -155,9 +155,9 @@ def parse_kat_file(filepath: Path) -> Iterator[Dict[str, str]]:
     if not filepath.exists():
         return
 
-    current_vector: Dict[str, str] = {}
+    current_vector: dict[str, str] = {}
 
-    with open(filepath, "r") as f:
+    with open(filepath) as f:
         for line in f:
             line = line.strip()
 
@@ -182,7 +182,7 @@ def parse_kat_file(filepath: Path) -> Iterator[Dict[str, str]]:
         yield current_vector
 
 
-def load_kyber_kat_vectors(filepath: Path, max_vectors: int = 10) -> List[KyberKATVector]:
+def load_kyber_kat_vectors(filepath: Path, max_vectors: int = 10) -> list[KyberKATVector]:
     """
     Load Kyber/ML-KEM KAT vectors from a .rsp file.
 
@@ -216,7 +216,7 @@ def load_kyber_kat_vectors(filepath: Path, max_vectors: int = 10) -> List[KyberK
     return vectors
 
 
-def load_dilithium_kat_vectors(filepath: Path, max_vectors: int = 10) -> List[DilithiumKATVector]:
+def load_dilithium_kat_vectors(filepath: Path, max_vectors: int = 10) -> list[DilithiumKATVector]:
     """
     Load Dilithium/ML-DSA KAT vectors from a .rsp file.
 
@@ -286,7 +286,7 @@ class FIPS204KATVector:
 FIPS204_DIR = KAT_DIR / "fips204"
 
 
-def load_fips204_kat_vectors(filepath: Path, max_vectors: int = 10) -> List[FIPS204KATVector]:
+def load_fips204_kat_vectors(filepath: Path, max_vectors: int = 10) -> list[FIPS204KATVector]:
     """
     Load FIPS 204 ML-DSA KAT vectors from a .kat file.
 

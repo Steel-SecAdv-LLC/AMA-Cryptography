@@ -24,13 +24,9 @@ def main() -> None:
 
     backend = info.get("dilithium_backend")
     if backend is None:
-        raise SystemExit(
-            "PQC backend unavailable. Build native C library."
-        )
+        raise SystemExit("PQC backend unavailable. Build native C library.")
     if backend != "native":
-        raise SystemExit(
-            f"PQC backend is '{backend}'. Expected 'native'."
-        )
+        raise SystemExit(f"PQC backend is '{backend}'. Expected 'native'.")
 
     crypto = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
     try:

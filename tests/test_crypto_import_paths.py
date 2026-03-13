@@ -140,9 +140,7 @@ class TestRFC3161SuccessPath:
         """Test package creation with successful RFC 3161 timestamp."""
         kms = dgs.generate_key_management_system("test_author")
 
-        with patch(
-            "code_guardian_secure.get_rfc3161_timestamp", return_value=b"TSR"
-        ) as mock_tsa:
+        with patch("code_guardian_secure.get_rfc3161_timestamp", return_value=b"TSR") as mock_tsa:
             pkg = dgs.create_crypto_package(
                 dgs.MASTER_CODES,
                 dgs.MASTER_HELIX_PARAMS,

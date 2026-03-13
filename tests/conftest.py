@@ -16,9 +16,9 @@ This file consolidates fixtures from across the test suite to:
 
 import secrets
 import tempfile
+from collections.abc import Generator
 from datetime import timedelta
 from pathlib import Path
-from typing import Generator, Tuple
 
 import pytest
 
@@ -170,7 +170,7 @@ def crypto_hybrid():
 
 
 @pytest.fixture
-def ed25519_keypair(crypto_ed25519) -> Tuple[bytes, bytes]:
+def ed25519_keypair(crypto_ed25519) -> tuple[bytes, bytes]:
     """Generate and return an Ed25519 keypair (public_key, secret_key)."""
     keypair = crypto_ed25519.generate_keypair()
     return keypair.public_key, keypair.secret_key

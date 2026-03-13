@@ -43,7 +43,7 @@ import numpy as np
 # Derive repo root relative to this file for portability
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ama_cryptography.equations import (  # noqa: E402
+from ama_cryptography.equations import (
     PHI,
     PHI_CUBED,
     calculate_sigma_quadratic,

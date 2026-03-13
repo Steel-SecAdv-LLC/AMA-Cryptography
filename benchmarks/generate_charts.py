@@ -89,8 +89,13 @@ def generate_charts(output_dir: str) -> None:
     ax.set_title("Signature Performance (Higher = Better)")
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
     for bar, val in zip(bars, ops):
-        ax.text(bar.get_width() + max(ops) * 0.01, bar.get_y() + bar.get_height() / 2,
-                f"{val:,}", va="center", fontsize=9)
+        ax.text(
+            bar.get_width() + max(ops) * 0.01,
+            bar.get_y() + bar.get_height() / 2,
+            f"{val:,}",
+            va="center",
+            fontsize=9,
+        )
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "signature_performance.svg"), format="svg")
     plt.close()
@@ -113,8 +118,14 @@ def generate_charts(output_dir: str) -> None:
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
     for i, (c, p) in enumerate(zip(c_vals, py_vals)):
         speedup = C_VS_PYTHON[ops_names[i]]["speedup"]
-        ax.text(i, max(c, p) + max(c_vals) * 0.02, f"{speedup}x", ha="center", fontsize=10,
-                fontweight="bold")
+        ax.text(
+            i,
+            max(c, p) + max(c_vals) * 0.02,
+            f"{speedup}x",
+            ha="center",
+            fontsize=10,
+            fontweight="bold",
+        )
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "c_vs_python.svg"), format="svg")
     plt.close()
@@ -126,8 +137,15 @@ def generate_charts(output_dir: str) -> None:
     sizes = [ms for _, ms in SIX_LAYER_BREAKDOWN if ms > 0]
     colors_pie = ["#E3F2FD", "#BBDEFB", "#64B5F6", "#1565C0", "#0D47A1"]
     explode = [0, 0, 0.05, 0.1, 0]
-    ax.pie(sizes, explode=explode, labels=labels, colors=colors_pie, autopct="%1.1f%%",
-           shadow=False, startangle=140)
+    ax.pie(
+        sizes,
+        explode=explode,
+        labels=labels,
+        colors=colors_pie,
+        autopct="%1.1f%%",
+        shadow=False,
+        startangle=140,
+    )
     ax.set_title("6-Layer Package Creation Time Breakdown")
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "layer_breakdown.svg"), format="svg")
@@ -143,8 +161,13 @@ def generate_charts(output_dir: str) -> None:
     ax.set_title("ML-KEM-1024 (FIPS 203) Performance")
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
     for bar, val in zip(bars, kem_ops):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 100,
-                f"{val:,}", ha="center", fontsize=10)
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 100,
+            f"{val:,}",
+            ha="center",
+            fontsize=10,
+        )
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "kem_performance.svg"), format="svg")
     plt.close()
@@ -183,7 +206,9 @@ def generate_text_summary() -> None:
 
     print("\nC vs Python:")
     for name, data in C_VS_PYTHON.items():
-        print(f"  {name:20s} C: {data['c']:>10,}  Python: {data['python']:>10,}  ({data['speedup']}x)")
+        print(
+            f"  {name:20s} C: {data['c']:>10,}  Python: {data['python']:>10,}  ({data['speedup']}x)"
+        )
 
     print("\nML-KEM-1024:")
     for name, data in KEM_OPS.items():
@@ -192,8 +217,11 @@ def generate_text_summary() -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate AMA Cryptography benchmark charts")
-    parser.add_argument("--output-dir", default="benchmarks/charts",
-                        help="Output directory for SVG charts (default: benchmarks/charts)")
+    parser.add_argument(
+        "--output-dir",
+        default="benchmarks/charts",
+        help="Output directory for SVG charts (default: benchmarks/charts)",
+    )
     args = parser.parse_args()
     print("Generating AMA Cryptography benchmark charts...")
     generate_charts(args.output_dir)

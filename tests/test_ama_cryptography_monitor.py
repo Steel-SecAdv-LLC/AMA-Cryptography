@@ -281,7 +281,7 @@ class TestResonanceTimingMonitor:
         monitor = ResonanceTimingMonitor()
 
         # Record timings
-        for i in range(50):
+        for _ in range(50):
             _ = monitor.record_timing("test_op", 10.0 + np.random.randn())
 
         # Baseline should exist
@@ -296,7 +296,7 @@ class TestResonanceTimingMonitor:
         monitor = ResonanceTimingMonitor()
 
         # Record few samples
-        for i in range(10):
+        for _ in range(10):
             monitor.record_timing("test_op", 10.0)
 
         # No anomaly should be detected yet
@@ -308,7 +308,7 @@ class TestResonanceTimingMonitor:
         monitor = ResonanceTimingMonitor(threshold_sigma=3.0)
 
         # Establish baseline with tight distribution
-        for i in range(50):
+        for _ in range(50):
             monitor.record_timing("test_op", 10.0 + 0.1 * np.random.randn())
 
         # Inject anomaly - use extreme value to ensure detection with EWMA
@@ -354,7 +354,7 @@ class TestResonanceTimingMonitor:
         monitor = ResonanceTimingMonitor()
 
         # Too few samples
-        for i in range(5):
+        for _ in range(5):
             monitor.record_timing("test_op", 10.0)
 
         resonance = monitor.detect_resonance("test_op")
@@ -382,7 +382,7 @@ class TestResonanceTimingMonitor:
         monitor = ResonanceTimingMonitor(max_history=100)
 
         # Record more than max_history samples
-        for i in range(200):
+        for _ in range(200):
             monitor.record_timing("test_op", 10.0)
 
         # History should be capped
@@ -416,7 +416,7 @@ class TestRecursionPatternMonitor:
         monitor = RecursionPatternMonitor()
 
         # Record < 10 packages
-        for i in range(5):
+        for _ in range(5):
             monitor.record_package({"code_count": 7})
 
         analysis = monitor.analyze_patterns()
@@ -444,7 +444,7 @@ class TestRecursionPatternMonitor:
         monkeypatch.setattr(sys.modules["ama_cryptography_monitor"].time, "time", mock_time)
 
         # Record normal packages with deterministic timestamps
-        for i in range(20):
+        for _ in range(20):
             monitor.record_package({"code_count": 7})
 
         analysis = monitor.analyze_patterns()
@@ -476,7 +476,7 @@ class TestRecursionPatternMonitor:
         monkeypatch.setattr(sys.modules["ama_cryptography_monitor"].time, "time", mock_time)
 
         # Record packages with deterministic timestamps
-        for i in range(16):
+        for _ in range(16):
             monitor.record_package({"code_count": 7})
 
         analysis = monitor.analyze_patterns()
@@ -507,7 +507,7 @@ class TestRecursionPatternMonitor:
         monkeypatch.setattr(sys.modules["ama_cryptography_monitor"].time, "time", mock_time)
 
         # Record packages with deterministic timestamps
-        for i in range(30):
+        for _ in range(30):
             monitor.record_package({"code_count": 7})
 
         analysis = monitor.analyze_patterns()
@@ -539,7 +539,7 @@ class TestRecursionPatternMonitor:
         monkeypatch.setattr(sys.modules["ama_cryptography_monitor"].time, "time", mock_time)
 
         # Normal size: 7 codes
-        for i in range(15):
+        for _ in range(15):
             monitor.record_package({"code_count": 7})
 
         # Unusual size: 100 codes
@@ -607,7 +607,7 @@ def complex_function(a, b, c, d):
     else:
         result = 0
 
-    for i in range(10):
+    for _ in range(10):
         if i % 2 == 0:
             result += i
         else:
@@ -728,7 +728,7 @@ class TestAmaCryptographyMonitor:
         monitor = AmaCryptographyMonitor(enabled=True)
 
         # Record operations
-        for i in range(50):
+        for _ in range(50):
             monitor.monitor_crypto_operation("test_op", 10.0 + np.random.randn())
 
         assert "test_op" in monitor.timing.timing_history
@@ -762,7 +762,7 @@ class TestAmaCryptographyMonitor:
         # Patch time.time in the ama_cryptography_monitor module
         monkeypatch.setattr(sys.modules["ama_cryptography_monitor"].time, "time", mock_time)
 
-        for i in range(15):
+        for _ in range(15):
             monitor.record_package_signing({"code_count": 7})
 
         assert len(monitor.patterns.package_history) == 15
@@ -795,7 +795,7 @@ class TestAmaCryptographyMonitor:
         monkeypatch.setattr(sys.modules["ama_cryptography_monitor"].time, "time", mock_time)
 
         # Generate some activity
-        for i in range(20):
+        for _ in range(20):
             monitor.monitor_crypto_operation("test_op", 10.0)
             monitor.record_package_signing({"code_count": 7})
 
@@ -814,11 +814,11 @@ class TestAmaCryptographyMonitor:
 
         # Generate many alerts by establishing baseline then injecting
         # anomalies
-        for i in range(50):
+        for _ in range(50):
             monitor.monitor_crypto_operation("test_op", 10.0)
 
         # Inject anomalies
-        for i in range(20):
+        for _ in range(20):
             monitor.monitor_crypto_operation("test_op", 100.0)
 
         # Alerts should be capped
@@ -858,7 +858,7 @@ class TestMonitorIntegration:
         # Run 32 create+verify cycles to exceed the 30-sample baseline threshold.
         # The monitor requires 30+ timing samples per operation before populating
         # baseline_stats for anomaly detection.
-        for cycle in range(32):
+        for _cycle in range(32):
             pkg = create_crypto_package(
                 MASTER_CODES_STR, MASTER_HELIX_PARAMS, kms, "test", monitor=monitor
             )

@@ -421,12 +421,8 @@ def generate_markdown_report(results: List[BenchmarkResult], report: Dict[str, A
     # Results table
     lines.append("## Results")
     lines.append("")
-    lines.append(
-        "| Primitive | Ops/sec | Baseline | Delta | Tolerance | Status |"
-    )
-    lines.append(
-        "|-----------|--------:|---------:|------:|----------:|--------|"
-    )
+    lines.append("| Primitive | Ops/sec | Baseline | Delta | Tolerance | Status |")
+    lines.append("|-----------|--------:|---------:|------:|----------:|--------|")
     for r in results:
         status = "PASS" if r.passed else ("WARN" if r.optional else "**FAIL**")
         lines.append(

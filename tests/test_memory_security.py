@@ -132,7 +132,7 @@ class TestMemoryGrowth:
         """Get current memory usage in bytes (platform-dependent)."""
         try:
             # Linux: read from /proc
-            with open("/proc/self/statm", "r") as f:
+            with open("/proc/self/statm") as f:
                 # statm: size resident shared text lib data dt
                 # resident is in pages
                 parts = f.read().split()
@@ -204,7 +204,7 @@ class TestSensitiveDataCleanup:
         from ama_cryptography.key_management import SecureKeyStorage
 
         salts = []
-        for i in range(5):
+        for _ in range(5):
             with tempfile.TemporaryDirectory() as tmpdir:
                 storage = SecureKeyStorage(Path(tmpdir), master_password="test")
                 salts.append(storage.salt)
