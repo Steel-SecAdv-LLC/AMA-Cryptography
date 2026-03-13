@@ -28,13 +28,15 @@ from code_guardian_secure import (
     hmac_authenticate,
 )
 
-# Skip performance tests in CI environments (unreliable timing on shared runners)
-# Can be overridden with AMA_SKIP_PERF_TESTS=0 to force running
+# Skip performance tests in CI environments (unreliable timing on shared runners).
+# Override: set CI_PERF=1 or AMA_SKIP_PERF_TESTS=0 to force running in CI.
 _skip_env = os.environ.get("AMA_SKIP_PERF_TESTS", "").lower()
+_ci_perf = os.environ.get("CI_PERF", "").lower() in ("1", "true", "yes")
 _in_ci = os.environ.get("CI", "").lower() in ("1", "true", "yes") or os.environ.get(
     "GITHUB_ACTIONS", ""
 ).lower() in ("1", "true", "yes")
-SKIP_PERF = _skip_env in ("1", "true", "yes") or (_in_ci and _skip_env not in ("0", "false", "no"))
+_force_run = _ci_perf or _skip_env in ("0", "false", "no")
+SKIP_PERF = _skip_env in ("1", "true", "yes") or (_in_ci and not _force_run)
 
 
 def benchmark(func: Callable, iterations: int = 1000) -> float:
@@ -61,7 +63,7 @@ def benchmark(func: Callable, iterations: int = 1000) -> float:
     return iterations / elapsed
 
 
-@pytest.mark.skipif(SKIP_PERF, reason="Performance tests skipped via AMA_SKIP_PERF_TESTS")
+@pytest.mark.skipif(SKIP_PERF, reason="Performance tests skipped in CI (set CI_PERF=1 to force)")
 class TestSHA3Performance:
     """SHA3-256 hashing performance tests."""
 
@@ -84,7 +86,7 @@ class TestSHA3Performance:
         assert ops_per_sec > 10000, f"SHA3 throughput {ops_per_sec:.0f} ops/sec below 10,000"
 
 
-@pytest.mark.skipif(SKIP_PERF, reason="Performance tests skipped via AMA_SKIP_PERF_TESTS")
+@pytest.mark.skipif(SKIP_PERF, reason="Performance tests skipped in CI (set CI_PERF=1 to force)")
 class TestHMACPerformance:
     """HMAC-SHA256 performance tests."""
 
@@ -107,7 +109,7 @@ class TestHMACPerformance:
         assert ops_per_sec > 10000, f"HMAC throughput {ops_per_sec:.0f} ops/sec below 10,000"
 
 
-@pytest.mark.skipif(SKIP_PERF, reason="Performance tests skipped via AMA_SKIP_PERF_TESTS")
+@pytest.mark.skipif(SKIP_PERF, reason="Performance tests skipped in CI (set CI_PERF=1 to force)")
 class TestEd25519Performance:
     """Ed25519 signature performance tests."""
 
@@ -145,7 +147,7 @@ class TestEd25519Performance:
         assert ops_per_sec > 2000, f"Ed25519 verify {ops_per_sec:.0f} ops/sec below 2,000"
 
 
-@pytest.mark.skipif(SKIP_PERF, reason="Performance tests skipped via AMA_SKIP_PERF_TESTS")
+@pytest.mark.skipif(SKIP_PERF, reason="Performance tests skipped in CI (set CI_PERF=1 to force)")
 class TestPackageCreationPerformance:
     """Full cryptographic package creation performance tests."""
 
@@ -175,7 +177,7 @@ class TestPackageCreationPerformance:
         assert ops_per_sec > 10, f"Package creation {ops_per_sec:.1f} ops/sec below 10"
 
 
-@pytest.mark.skipif(SKIP_PERF, reason="Performance tests skipped via AMA_SKIP_PERF_TESTS")
+@pytest.mark.skipif(SKIP_PERF, reason="Performance tests skipped in CI (set CI_PERF=1 to force)")
 class TestMemoryEfficiency:
     """Memory efficiency tests."""
 
