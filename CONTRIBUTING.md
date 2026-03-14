@@ -189,7 +189,6 @@ All Python code must follow PEP 8 style guidelines:
 # Check formatting
 black --check .
 ruff check .
-isort --check-only .
 ```
 
 ### Type Hints
@@ -238,7 +237,7 @@ All functions must have docstrings including:
 
 Before submitting, verify:
 
-- [ ] Code follows PEP 8 (run `black`, `ruff`, `isort`)
+- [ ] Code follows PEP 8 (run `black`, `ruff`)
 - [ ] All functions have type hints
 - [ ] All functions have comprehensive docstrings
 - [ ] No cryptographic security weaknesses introduced
@@ -335,7 +334,6 @@ class TestEd25519Signatures:
 2. **Run all checks:**
    ```bash
    black .
-   isort .
    ruff check .
    mypy ama_cryptography/
    pytest
