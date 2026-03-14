@@ -17,24 +17,18 @@
 
 ## System Blueprint — cryptographic package lifecycle
 
-```mermaid
-flowchart LR
-    raw["Input: data / firmware / tx"]:::gray --> prep["Canonicalize + length-prefix"]:::gray
-    prep --> sha3[SHA3-256 digest]:::gold
-    sha3 --> hmac[HMAC-SHA3-256 auth]:::blue
-    hmac --> ed[Ed25519 signature]:::black
-    ed --> pqc[ML-DSA-65 signature]:::gold
-    pqc --> ts[RFC 3161 timestamp]:::blue
-    ts --> pkg[Cryptographic package]:::black
-    pkg --> verify["Verify: HKDF keys + integrity + signatures"]:::blue
-    verify --> monitor[3R observability loop]:::gold
-    monitor --> action["Adaptive posture (lockdown / rotate / switch algos)"]:::black
-
-classDef gold fill:#B4B124,stroke:#000000,color:#000000;
-classDef blue fill:#11AEED,stroke:#000000,color:#000000;
-classDef black fill:#000000,stroke:#B4B124,color:#f6f6f6;
-classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
-```
+| Stage | Operation | Standard |
+|-------|-----------|----------|
+| **1. Prepare** | Canonicalize input + length-prefix | — |
+| **2. Hash** | SHA3-256 content digest | NIST FIPS 202 |
+| **3. Authenticate** | HMAC-SHA3-256 tag | RFC 2104 |
+| **4. Sign (classical)** | Ed25519 digital signature | RFC 8032 |
+| **5. Sign (quantum-safe)** | ML-DSA-65 (Dilithium) signature | NIST FIPS 204 |
+| **6. Timestamp** | RFC 3161 trusted timestamp | RFC 3161 |
+| **7. Package** | Bundle all artifacts into `CryptoPackage` | — |
+| **8. Verify** | HKDF-derived keys + integrity + all signatures | RFC 5869 |
+| **9. Observe** | 3R monitor (Resonance / Recursion / Refactoring) | — |
+| **10. Adapt** | Posture switch: lockdown, rotate keys, or switch algorithms | — |
 
 **Why it matters:** Each stage is independently checkable. An attacker must subvert the assurance, cryptographic, and execution layers in sequence — a defense-in-depth chain instead of a single gate.
 
@@ -42,21 +36,15 @@ classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 
 ## Runtime Safety Loop — observability without guessing
 
-```mermaid
-flowchart TD
-    event[Runtime crypto event]:::black --> resonance[Resonance FFT scan]:::blue
-    resonance --> recursion[Recursion multi-scale patterning]:::gold
-    recursion --> refactoring[Refactoring complexity score]:::blue
-    refactoring --> verdict["Permit / flag / escalate"]:::black
-    verdict --> posture[Adaptive posture switch]:::gold
-    posture --> log["Telemetry + audit trail"]:::gray
-    log --> learn[Feedback to threat model]:::blue
-
-classDef gold fill:#B4B124,stroke:#000000,color:#000000;
-classDef blue fill:#11AEED,stroke:#000000,color:#000000;
-classDef black fill:#000000,stroke:#B4B124,color:#f6f6f6;
-classDef gray fill:#1f1f1f,stroke:#11AEED,color:#f6f6f6;
-```
+| Step | 3R Monitor Stage | Output |
+|------|-----------------|--------|
+| **1** | **Resonance** — FFT frequency scan of crypto events | Timing anomaly score |
+| **2** | **Recursion** — Multi-scale pattern detection | Structural deviation flag |
+| **3** | **Refactoring** — Complexity and entropy scoring | Risk classification |
+| **4** | **Verdict** — Permit / Flag / Escalate | Policy decision |
+| **5** | **Adapt** — Posture switch (algorithm swap, key rotation, lockdown) | Runtime reconfiguration |
+| **6** | **Record** — Telemetry + audit trail | Immutable log entry |
+| **7** | **Learn** — Feed results back to threat model | Updated security baseline |
 
 ---
 
