@@ -51,7 +51,7 @@ jobs:
 
     - name: Run NIST KAT tests (if oqs available)
       run: |
-        if python -c "import oqs"; then
+        if python -c "import oqs" 2>/dev/null; then
           echo "oqs available — running KAT tests (hard-fail)"
           python -m pytest tests/test_pqc_kat.py -v --tb=short
         else
