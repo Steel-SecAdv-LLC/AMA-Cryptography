@@ -180,7 +180,7 @@ max-complexity = 15
 # Demo script for the monitoring module
 "ama_cryptography_monitor_demo.py" = ["B007", "RUF001"]
 # Benchmark and tooling scripts — not part of the core library
-"benchmark_suite.py" = ["UP006", "UP035", "E501"]
+"benchmark_suite.py" = ["C901", "UP006", "UP035", "E501"]
 "setup.py" = ["E501", "RUF005", "S603", "S607"]
 "benchmarks/*" = [
     "E402", "E501", "F541", "I001",
