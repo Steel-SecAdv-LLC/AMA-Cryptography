@@ -84,7 +84,7 @@ format:
 # Lint code
 lint:
 	@echo "Linting code..."
-	@flake8 ama_cryptography/ tests/ --max-line-length=100
+	@ruff check ama_cryptography/ tests/
 	@mypy ama_cryptography/ --ignore-missing-imports
 	@echo "✓ Lint passed"
 
@@ -223,7 +223,7 @@ help:
 	@echo ""
 	@echo "Development targets:"
 	@echo "  make format         - Format code with black/isort"
-	@echo "  make lint           - Lint code with flake8/mypy"
+	@echo "  make lint           - Lint code with ruff/mypy"
 	@echo "  make docs           - Generate API documentation"
 	@echo "  make profile        - Profile performance"
 	@echo ""

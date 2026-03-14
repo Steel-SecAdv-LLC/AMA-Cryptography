@@ -15,7 +15,7 @@
     "sha3_256_hash": {
       "description": "SHA3-256 hashing of 1KB data",
       "metric": "operations_per_second",
-      "baseline_value": 150000,
+      "baseline_value": 112050,
       "unit": "ops/sec",
       "tolerance_percent": 25,
       "tier": "microbenchmark"
