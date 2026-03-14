@@ -94,7 +94,7 @@ pip install --upgrade pip
 cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release && cmake --build build
 
 # Install development tools
-pip install -e ".[dev]"  # Installs pytest, black, flake8, mypy, isort
+pip install -e ".[dev]"  # Installs pytest, black, ruff, mypy, isort
 ```
 
 ### 3. Verify Setup
@@ -188,7 +188,7 @@ All Python code must follow PEP 8 style guidelines:
 ```bash
 # Check formatting
 black --check .
-flake8 .
+ruff check .
 isort --check-only .
 ```
 
@@ -238,7 +238,7 @@ All functions must have docstrings including:
 
 Before submitting, verify:
 
-- [ ] Code follows PEP 8 (run `black`, `flake8`, `isort`)
+- [ ] Code follows PEP 8 (run `black`, `ruff`, `isort`)
 - [ ] All functions have type hints
 - [ ] All functions have comprehensive docstrings
 - [ ] No cryptographic security weaknesses introduced
@@ -336,7 +336,7 @@ class TestEd25519Signatures:
    ```bash
    black .
    isort .
-   flake8 .
+   ruff check .
    mypy ama_cryptography/
    pytest
    ```

@@ -21,12 +21,6 @@ repos:
         language_version: python3
         args: ['--line-length=100']
 
-  - repo: https://github.com/pycqa/isort
-    rev: 5.13.2
-    hooks:
-      - id: isort
-        args: ['--profile=black', '--line-length=100']
-
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.8.3
     hooks:
@@ -50,7 +44,6 @@ repos:
 
 # Configuration notes:
 # - black: Code formatter with 100 char line length
-# - isort: Import sorter with black-compatible profile
-# - ruff: Linter (replaces flake8)
+# - ruff: Linter + import sorter (replaces flake8 and isort)
 # - mypy: Static type checker
 # - bandit: Security linter (skips assert warnings in tests)
