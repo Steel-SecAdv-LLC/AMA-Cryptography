@@ -201,16 +201,13 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install "black==26.3.1" "ruff>=0.4" "mypy>=1.9,<2" "isort>=5.13,<6"
+          pip install "black==25.11.0" "ruff>=0.4" "mypy>=1.9,<2"
 
       - name: Lint (ruff)
         run: ruff check .
 
       - name: Check formatting (black)
         run: black --check --diff .
-
-      - name: Check import sorting (isort)
-        run: isort --check-only --diff ama_cryptography/ tests/
 
       - name: Type check (mypy --strict)
         run: mypy --strict ama_cryptography/ tests/

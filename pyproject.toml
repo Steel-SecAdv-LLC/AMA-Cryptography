@@ -83,7 +83,7 @@ dev = [
     "pytest-benchmark>=4.0.0",
     "pytest-xdist>=3.0.0",
     "hypothesis>=6.0.0",
-    "black>=26.3.1; python_version >= '3.10'",
+    "black>=25.11.0; python_version >= '3.9'",
     "ruff>=0.4.0",
     "mypy>=1.9.0",
     "isort>=5.12.0",
@@ -114,12 +114,16 @@ select = [
     "I",   # isort
     "B",   # flake8-bugbear
     "C4",  # flake8-comprehensions
+    "C90", # mccabe complexity
     "UP",  # pyupgrade
     "S",   # flake8-bandit (security)
     "N",   # pep8-naming
     "RUF", # ruff-specific rules
 ]
 ignore = []  # Do not add ignores without a comment explaining why.
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
 
 [tool.ruff.lint.per-file-ignores]
 # assert is valid in pytest tests; hardcoded passwords are test fixtures;
@@ -176,7 +180,7 @@ ignore = []  # Do not add ignores without a comment explaining why.
 # Demo script for the monitoring module
 "ama_cryptography_monitor_demo.py" = ["B007", "RUF001"]
 # Benchmark and tooling scripts — not part of the core library
-"benchmark_suite.py" = ["UP006", "UP035", "E501"]
+"benchmark_suite.py" = ["C901", "UP006", "UP035", "E501"]
 "setup.py" = ["E501", "RUF005", "S603", "S607"]
 "benchmarks/*" = [
     "E402", "E501", "F541", "I001",
@@ -212,7 +216,7 @@ line_length = 100
 
 # MyPy configuration — strict mode
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.9"
 strict = true
 disallow_untyped_defs = true
 disallow_any_generics = true

@@ -9,13 +9,11 @@
 ## INVARIANT-1 — Zero External Crypto Dependencies
 
 AMA Cryptography owns all cryptographic primitives natively.
-**Do NOT introduce or depend on third-party cryptographic packages**
-(`libsodium`, `pynacl`, `cryptography`, OpenSSL bindings, etc.).
+**Do NOT introduce, retain, or fall back to any external library** — including
+`libsodium`, `pynacl`, `hmac` (stdlib), or any third-party cryptographic package.
 
-Python stdlib modules (`hmac`, `hashlib`, `os`, `secrets`) are permitted for
-non-primitive operations (key derivation, OS entropy, hashing). They **must NOT**
-be used as a substitute for AMA's own implementations of constant-time comparison,
-memory zeroing, or core cipher operations.
+If a fix cannot be implemented using AMA's own C library and Python bindings,
+**stop and report** — do not work around it with an external dependency.
 
 ## INVARIANT-2 — Fail-Closed CI
 
