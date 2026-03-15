@@ -23,14 +23,14 @@ only the Python standard library.
 
 Features:
 - Secure zeroing - multi-pass overwrite implementation
-- Constant-time comparison - uses hmac.compare_digest (prevents timing side-channels)
+- Constant-time comparison - AMA C library or pure-Python XOR accumulator
 - SecureBuffer context manager - automatic cleanup on exit
 - Secure random byte generation - uses os.urandom
 
 Implementation Notes:
     - secure_memzero: Multi-pass byte-level overwrite
     - secure_mlock/munlock: Not available without libsodium; raises NotImplementedError
-    - constant_time_compare: Uses hmac.compare_digest (stdlib)
+    - constant_time_compare: ama_consttime_memcmp (C) or XOR accumulator (Python)
     - secure_random_bytes: Uses os.urandom (stdlib)
 
 Usage:
@@ -54,7 +54,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 """
 
-import hmac
+import ctypes
 import os
 from contextlib import contextmanager
 from types import TracebackType
@@ -65,6 +65,28 @@ class SecureMemoryError(Exception):
     """Exception raised for secure memory operation failures."""
 
     pass
+
+
+def _load_native_consttime():  # type: ignore[no-untyped-def]
+    """Try to load ama_consttime_memcmp from AMA's native C library."""
+    try:
+        from ama_cryptography.pqc_backends import _find_native_library
+
+        lib = _find_native_library()
+        if lib is None:
+            return None
+        lib.ama_consttime_memcmp.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+        ]
+        lib.ama_consttime_memcmp.restype = ctypes.c_int
+        return lib.ama_consttime_memcmp
+    except Exception:
+        return None
+
+
+_native_consttime_memcmp = _load_native_consttime()
 
 
 def is_available() -> bool:
@@ -159,8 +181,9 @@ def constant_time_compare(a: bytes, b: bytes) -> bool:
     """
     Compare two byte sequences in constant time.
 
-    Uses hmac.compare_digest from the standard library to prevent
-    timing side-channel attacks.
+    Primary: uses ama_consttime_memcmp from AMA's native C library.
+    Fallback: pure-Python XOR accumulator that pads both inputs to
+    equal length and never short-circuits on length or content.
 
     Args:
         a: First byte sequence
@@ -175,10 +198,26 @@ def constant_time_compare(a: bytes, b: bytes) -> bool:
         >>> constant_time_compare(b"secret", b"Secret")
         False
     """
-    if len(a) != len(b):
-        return False
+    # Try AMA's native C constant-time comparison
+    if _native_consttime_memcmp is not None:
+        if len(a) != len(b):
+            # Length mismatch — still call C function on padded buffers
+            # so timing is independent of which branch was taken
+            max_len = max(len(a), len(b), 1)
+            a_pad = a.ljust(max_len, b"\x00")
+            b_pad = b.ljust(max_len, b"\x00")
+            _native_consttime_memcmp(a_pad, b_pad, max_len)
+            return False
+        return _native_consttime_memcmp(a, b, len(a)) == 0
 
-    return hmac.compare_digest(a, b)
+    # Fallback: pure-Python XOR accumulator — no imports, no early return
+    result = len(a) ^ len(b)
+    max_len = max(len(a), len(b))
+    a_pad = a.ljust(max_len, b"\x00")
+    b_pad = b.ljust(max_len, b"\x00")
+    for x, y in zip(a_pad, b_pad):
+        result |= x ^ y
+    return result == 0
 
 
 def secure_random_bytes(size: int) -> bytes:
