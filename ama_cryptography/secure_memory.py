@@ -58,7 +58,7 @@ import ctypes
 import os
 from contextlib import contextmanager
 from types import TracebackType
-from typing import Dict, Generator, NoReturn, Optional, Type, Union
+from typing import Any, Callable, Dict, Generator, NoReturn, Optional, Type, Union
 
 
 class SecureMemoryError(Exception):
@@ -67,7 +67,7 @@ class SecureMemoryError(Exception):
     pass
 
 
-def _load_native_consttime():  # type: ignore[no-untyped-def]
+def _load_native_consttime() -> Optional[Callable[..., Any]]:
     """Try to load ama_consttime_memcmp from AMA's native C library."""
     try:
         from ama_cryptography.pqc_backends import _find_native_library
@@ -208,7 +208,7 @@ def constant_time_compare(a: bytes, b: bytes) -> bool:
             b_pad = b.ljust(max_len, b"\x00")
             _native_consttime_memcmp(a_pad, b_pad, max_len)
             return False
-        return _native_consttime_memcmp(a, b, len(a)) == 0
+        return bool(_native_consttime_memcmp(a, b, len(a)) == 0)
 
     # Fallback: pure-Python XOR accumulator — no imports, no early return
     result = len(a) ^ len(b)
