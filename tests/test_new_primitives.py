@@ -11,8 +11,6 @@ Tests for Phase 2 cryptographic primitives:
 - Deterministic keygen (Kyber-1024, ML-DSA-65)
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import pytest

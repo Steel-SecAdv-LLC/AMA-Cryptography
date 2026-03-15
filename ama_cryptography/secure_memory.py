@@ -23,14 +23,14 @@ only the Python standard library.
 
 Features:
 - Secure zeroing - multi-pass overwrite implementation
-- Constant-time comparison - XOR accumulator (prevents timing side-channels)
+- Constant-time comparison - uses hmac.compare_digest (prevents timing side-channels)
 - SecureBuffer context manager - automatic cleanup on exit
 - Secure random byte generation - uses os.urandom
 
 Implementation Notes:
     - secure_memzero: Multi-pass byte-level overwrite
     - secure_mlock/munlock: Not available without libsodium; raises NotImplementedError
-    - constant_time_compare: XOR accumulator (no timing side-channels)
+    - constant_time_compare: Uses hmac.compare_digest (stdlib)
     - secure_random_bytes: Uses os.urandom (stdlib)
 
 Usage:
@@ -54,6 +54,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 """
 
+import hmac
 import os
 from contextlib import contextmanager
 from types import TracebackType
@@ -158,7 +159,7 @@ def constant_time_compare(a: bytes, b: bytes) -> bool:
     """
     Compare two byte sequences in constant time.
 
-    Uses a pure-Python XOR accumulator to prevent
+    Uses hmac.compare_digest from the standard library to prevent
     timing side-channel attacks.
 
     Args:
@@ -174,13 +175,10 @@ def constant_time_compare(a: bytes, b: bytes) -> bool:
         >>> constant_time_compare(b"secret", b"Secret")
         False
     """
-    max_len = max(len(a), len(b))
-    a_pad = a.ljust(max_len, b"\x00")
-    b_pad = b.ljust(max_len, b"\x00")
-    result = len(a) ^ len(b)
-    for x, y in zip(a_pad, b_pad):
-        result |= x ^ y
-    return result == 0
+    if len(a) != len(b):
+        return False
+
+    return hmac.compare_digest(a, b)
 
 
 def secure_random_bytes(size: int) -> bytes:
