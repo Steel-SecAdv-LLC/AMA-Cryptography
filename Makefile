@@ -78,7 +78,7 @@ dev-install:
 format:
 	@echo "Formatting code..."
 	@black ama_cryptography/ tests/ *.py
-	@isort ama_cryptography/ tests/ *.py
+	@ruff check --select I --fix ama_cryptography/ tests/ *.py
 	@echo "✓ Code formatted"
 
 # Lint code
@@ -222,7 +222,7 @@ help:
 	@echo "  make fuzz-run             - Run 10-second fuzzing smoke tests"
 	@echo ""
 	@echo "Development targets:"
-	@echo "  make format         - Format code with black/isort"
+	@echo "  make format         - Format code with black/ruff"
 	@echo "  make lint           - Lint code with ruff/mypy"
 	@echo "  make docs           - Generate API documentation"
 	@echo "  make profile        - Profile performance"
