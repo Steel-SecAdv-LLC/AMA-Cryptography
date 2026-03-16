@@ -659,14 +659,14 @@ GitHub Actions automatically tests:
 | Check | Description |
 |-------|-------------|
 | C library | GCC, Clang on Ubuntu/macOS |
-| Python package | Python 3.9-3.12 on Linux |
+| Python package | Python 3.9-3.13 on Linux |
 | Code quality | ruff (lint + import sorting), black, mypy --strict |
 | Security scanning | pip-audit, bandit, Semgrep, CodeQL static analysis |
 | Docker builds | Ubuntu + Alpine images |
 
 ### CI Matrix
 
-- **Python Versions**: 3.9, 3.10, 3.11, 3.12
+- **Python Versions**: 3.9, 3.10, 3.11, 3.12, 3.13
 - **Platforms**: Ubuntu Latest
 - **Jobs**: test, code-quality, security-checks
 

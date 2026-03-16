@@ -93,7 +93,7 @@ classDef gray fill:#1f1f1f,stroke:#11AEED,color:#f6f6f6;
 | Version | 2.0 |
 | Algorithms | ML-DSA-65, Kyber-1024, SPHINCS+, Ed25519, AES-256-GCM, Argon2id |
 | Platforms | Linux, macOS, Windows |
-| Python | 3.9 – 3.12 |
+| Python | 3.9 – 3.13 |
 | Audit | Community-tested · Not externally audited |
 | License | Apache 2.0 |
 
