@@ -257,7 +257,7 @@ The CI pipeline runs on every PR:
 
 | Check | Description |
 |-------|-------------|
-| `ci.yml` | Python tests (matrix: 3.9, 3.10, 3.11, 3.12, 3.13) |
+| `ci.yml` | Python tests (matrix: 3.9, 3.10, 3.11, 3.12) |
 | `ci-build-test.yml` | C library build + C tests |
 | `static-analysis.yml` | Black, ruff, mypy --strict, Semgrep |
 | `security.yml` | Security scanning |
