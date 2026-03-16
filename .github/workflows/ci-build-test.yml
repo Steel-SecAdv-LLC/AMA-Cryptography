@@ -229,6 +229,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install pip-audit bandit safety
+          pip install "cryptography>=46.0.5"
 
       - name: Audit dependencies
         run: pip-audit

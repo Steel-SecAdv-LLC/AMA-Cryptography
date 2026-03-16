@@ -153,6 +153,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install safety bandit
+        pip install "cryptography>=46.0.5"
 
     - name: Check dependencies for vulnerabilities with Safety
       run: |
