@@ -148,10 +148,10 @@ ignore = []  # Do not add ignores without a comment explaining why.
     "S101", "S106", "S107", "S110",
     "E501",
     "B028", "B904",
-    "UP006", "UP015", "UP035",  # UP006/UP035: deprecated typing imports (py38 compat)
+    "UP006", "UP015", "UP035",  # UP006/UP035: deprecated typing imports (existing pattern)
 ]
 # code_guardian_secure.py — same crypto patterns as ama_cryptography/
-#   UP007/UP045: PEP 604 union syntax (py38 compat)
+#   UP007/UP045: PEP 604 union syntax (existing pattern)
 #   E402: module-level imports after sys.path manipulation
 #   S310/S603: URL open and subprocess calls in security tooling
 #   UP012: unnecessary UTF-8 encoding argument
@@ -208,7 +208,7 @@ skip-string-normalization = false
 
 # MyPy configuration — strict mode
 [tool.mypy]
-python_version = "3.9"  # mypy >=1.14 dropped Python 3.8 support
+python_version = "3.9"
 strict = true
 disallow_untyped_defs = true
 disallow_any_generics = true
