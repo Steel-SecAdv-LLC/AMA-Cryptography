@@ -295,6 +295,8 @@ setup(
         "hsm": ["PyKCS11>=1.5.0"],
         # PyNaCl for enhanced secure memory operations (libsodium bindings)
         "secure-memory": ["pynacl>=1.5.0"],
+        # NOTE: pyproject.toml [project.optional-dependencies.dev] is authoritative.
+        # flake8 and isort are superseded by ruff (ruff==0.15.6, see requirements-lock.txt).
         "dev": [
             "pytest>=7.0.0",
             "pytest-cov>=4.0.0",
@@ -303,9 +305,9 @@ setup(
             "pytest-xdist>=3.0.0",
             "hypothesis>=6.0.0",
             "black==25.11.0; python_version>='3.9'",
-            "flake8>=6.0.0",
+            "flake8>=6.0.0",  # legacy — ruff is the active linter
             "mypy>=1.0.0",
-            "isort>=5.12.0",
+            "isort>=5.12.0",  # legacy — ruff handles import sorting
             "bandit>=1.7.0",
             "safety>=2.3.0",
             "Cython>=3.0.0",
@@ -329,9 +331,9 @@ setup(
             "pytest-xdist>=3.0.0",
             "hypothesis>=6.0.0",
             "black==25.11.0; python_version>='3.9'",
-            "flake8>=6.0.0",
+            "flake8>=6.0.0",  # legacy — ruff is the active linter
             "mypy>=1.0.0",
-            "isort>=5.12.0",
+            "isort>=5.12.0",  # legacy — ruff handles import sorting
             "bandit>=1.7.0",
             "safety>=2.3.0",
             "Cython>=3.0.0",
