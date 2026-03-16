@@ -126,14 +126,19 @@ if(OPENSSL_FOUND)
 endif()
 
 # Create shared library
-if(AMA_BUILD_SHARED)
+# MSVC: cmake -E __create_def crashes (access violation) when generating the
+# auto-export .def file for large translation units.  The header already
+# provides __declspec(dllexport) via AMA_API, but the cmake toolchain invokes
+# __create_def *before* the linker sees the declspecs.  Skip the shared
+# library on MSVC; the static library is sufficient for all consumers
+# (Python ctypes, downstream C/C++ projects).
+if(AMA_BUILD_SHARED AND NOT MSVC)
     add_library(ama_cryptography_shared SHARED ${AMA_SOURCES})
     set_target_properties(ama_cryptography_shared PROPERTIES
         OUTPUT_NAME "ama_cryptography"
         VERSION ${PROJECT_VERSION}
         SOVERSION ${PROJECT_VERSION_MAJOR}
         PUBLIC_HEADER "include/ama_cryptography.h"
-        WINDOWS_EXPORT_ALL_SYMBOLS ON
     )
     target_compile_definitions(ama_cryptography_shared PRIVATE AMA_BUILDING_SHARED)
 
