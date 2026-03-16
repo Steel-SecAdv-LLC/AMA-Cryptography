@@ -81,7 +81,7 @@ def _load_native_consttime() -> Optional[Callable[..., Any]]:
             ctypes.c_size_t,
         ]
         lib.ama_consttime_memcmp.restype = ctypes.c_int
-        return lib.ama_consttime_memcmp  # type: ignore[no-any-return]
+        return lib.ama_consttime_memcmp
     except (ImportError, OSError, AttributeError):
         return None
 

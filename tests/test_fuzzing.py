@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 # Copyright 2025-2026 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
+# mypy: disable-error-code="misc"
+# ↑ Hypothesis @given decorator on plain pytest classes triggers a false-positive
+#   "Method must have at least one argument" because the decorator's return type
+#   does not preserve the method signature.  All 15 occurrences are [misc].
 """
 Fuzzing tests using Hypothesis for property-based testing.
 
