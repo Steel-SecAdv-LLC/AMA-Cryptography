@@ -407,7 +407,7 @@ When you open a PR, include:
 2. **Code Review:** At least one maintainer approval required
 3. **Security Review:** Cryptographic changes require additional review
 4. **Documentation Review:** All docs must be accurate
-5. **Testing:** All tests must pass on Python 3.9-3.13
+5. **Testing:** All tests must pass on Python 3.9-3.12
 
 ### After Approval
 
