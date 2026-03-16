@@ -207,7 +207,7 @@ def constant_time_compare(a: bytes, b: bytes) -> bool:
         a_pad = a.ljust(max_len, b"\x00")
         b_pad = b.ljust(max_len, b"\x00")
         length_diff = len(a) ^ len(b)
-        content_diff = _native_consttime_memcmp(a_pad, b_pad, max_len)
+        content_diff: int = _native_consttime_memcmp(a_pad, b_pad, max_len)
         return (length_diff | content_diff) == 0
 
     # Fallback: pure-Python XOR accumulator — no imports, no early return
