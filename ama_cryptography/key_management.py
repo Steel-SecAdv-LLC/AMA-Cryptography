@@ -16,7 +16,6 @@ Enterprise-grade key management with:
 
 import base64
 import hashlib
-import hmac
 import json
 import logging
 import os
@@ -30,6 +29,7 @@ from types import TracebackType
 from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
 from ama_cryptography.exceptions import SecurityWarning  # noqa: F401 — re-exported for public API
+from ama_cryptography.pqc_backends import native_hmac_sha512
 from ama_cryptography.secure_memory import secure_memzero
 
 # Configure module logger
@@ -130,8 +130,7 @@ class HDKeyDerivation:
 
     def _generate_master_key(self) -> Tuple[bytes, bytes]:
         """Generate master key and chain code from seed"""
-        h = hmac.new(b"AMA Cryptography Master Key", self.master_seed, hashlib.sha512)
-        hmac_result = h.digest()
+        hmac_result = native_hmac_sha512(b"AMA Cryptography Master Key", self.master_seed)
 
         master_key = hmac_result[:32]
         chain_code = hmac_result[32:]
@@ -174,8 +173,7 @@ class HDKeyDerivation:
             compressed_pubkey = native_secp256k1_pubkey_from_privkey(parent_key)
             data = compressed_pubkey + index.to_bytes(4, "big")
 
-        h = hmac.new(parent_chain, data, hashlib.sha512)
-        hmac_result = h.digest()
+        hmac_result = native_hmac_sha512(parent_chain, data)
 
         # Split HMAC result: IL (left 32 bytes) and IR (right 32 bytes)
         il = hmac_result[:32]

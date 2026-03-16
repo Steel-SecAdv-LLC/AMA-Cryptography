@@ -382,6 +382,26 @@ def _setup_secp256k1_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
+# HMAC-SHA512 native availability
+_HMAC_SHA512_NATIVE_AVAILABLE = False
+
+
+def _setup_hmac_sha512_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for HMAC-SHA-512 (BIP32 key derivation)."""
+    try:
+        lib.ama_hmac_sha512.argtypes = [
+            ctypes.c_char_p,  # key
+            ctypes.c_size_t,  # key_len
+            ctypes.c_char_p,  # data
+            ctypes.c_size_t,  # data_len
+            ctypes.c_char_p,  # out[64]
+        ]
+        lib.ama_hmac_sha512.restype = None
+        return True
+    except AttributeError:
+        return False
+
+
 # X25519 native availability
 _X25519_NATIVE_AVAILABLE = False
 
@@ -504,6 +524,7 @@ if _native_lib is not None:
     _AES_GCM_NATIVE_AVAILABLE = _setup_aes_gcm_ctypes(_native_lib)
     _HKDF_NATIVE_AVAILABLE = _setup_hkdf_ctypes(_native_lib)
     _SECP256K1_NATIVE_AVAILABLE = _setup_secp256k1_ctypes(_native_lib)
+    _HMAC_SHA512_NATIVE_AVAILABLE = _setup_hmac_sha512_ctypes(_native_lib)
     _X25519_NATIVE_AVAILABLE = _setup_x25519_ctypes(_native_lib)
     _ARGON2_NATIVE_AVAILABLE = _setup_argon2_ctypes(_native_lib)
     _CHACHA20_POLY1305_NATIVE_AVAILABLE = _setup_chacha20poly1305_ctypes(_native_lib)
@@ -1587,6 +1608,35 @@ def native_secp256k1_pubkey_from_privkey(privkey: bytes) -> bytes:
         raise RuntimeError(f"secp256k1 pubkey derivation failed (rc={rc})")
 
     return bytes(pubkey_buf)
+
+
+# ============================================================================
+# HMAC-SHA512 NATIVE WRAPPERS
+# ============================================================================
+
+_HMAC_SHA512_OUT_BYTES = 64
+
+
+def native_hmac_sha512(key: bytes, data: bytes) -> bytes:
+    """
+    Compute HMAC-SHA-512 using AMA's native C library.
+
+    Args:
+        key: HMAC key (any length)
+        data: Message data
+
+    Returns:
+        64-byte HMAC-SHA-512 digest
+
+    Raises:
+        RuntimeError: If native library is not available
+    """
+    if _native_lib is None or not _HMAC_SHA512_NATIVE_AVAILABLE:
+        raise RuntimeError("HMAC-SHA-512 native backend not available. " + _INSTALL_HINT)
+
+    out = ctypes.create_string_buffer(_HMAC_SHA512_OUT_BYTES)
+    _native_lib.ama_hmac_sha512(key, len(key), data, len(data), out)
+    return bytes(out)
 
 
 # ============================================================================

@@ -328,6 +328,26 @@ AMA_API void ama_consttime_lookup(
 AMA_API void ama_consttime_copy(int condition, void* dst, const void* src, size_t len);
 
 /* ============================================================================
+ * HMAC-SHA-512 (RFC 2104 / FIPS 198-1)
+ * ============================================================================ */
+
+/**
+ * @brief Compute HMAC-SHA-512
+ *
+ * Standard HMAC construction per RFC 2104 using SHA-512.
+ * Used by BIP32 HD key derivation (INVARIANT-1 compliant).
+ *
+ * @param key      HMAC key
+ * @param key_len  Key length in bytes
+ * @param data     Message data
+ * @param data_len Data length in bytes
+ * @param out      Output buffer (64 bytes)
+ */
+AMA_API void ama_hmac_sha512(const uint8_t *key, size_t key_len,
+                              const uint8_t *data, size_t data_len,
+                              uint8_t out[64]);
+
+/* ============================================================================
  * HASHING AND KEY DERIVATION
  * ============================================================================ */
 
