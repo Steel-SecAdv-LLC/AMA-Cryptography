@@ -28,7 +28,7 @@ ruff==0.15.6
 # --- Security scanning ---
 bandit==1.9.4
 safety==3.7.0
-safety-schemas==0.0.16
+safety-schemas==0.0.18
 
 # --- Scientific (monitoring extras) ---
 numpy==2.4.3
