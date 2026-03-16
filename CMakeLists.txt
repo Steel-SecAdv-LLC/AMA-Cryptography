@@ -213,7 +213,7 @@ if(AMA_BUILD_TESTS)
 endif()
 
 # Installation
-if(AMA_BUILD_SHARED)
+if(AMA_BUILD_SHARED AND NOT MSVC)
     install(TARGETS ama_cryptography_shared
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib
