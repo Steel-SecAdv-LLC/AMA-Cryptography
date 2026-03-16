@@ -171,9 +171,9 @@ jobs:
         name: bandit-security-report
         path: bandit-report.json
 
-    - name: Semgrep security scan (reporting only)
+    - name: Semgrep security scan
       if: always()
-      continue-on-error: true
+      continue-on-error: false
       run: |
         python -m pip install semgrep==1.74.0
         semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json
