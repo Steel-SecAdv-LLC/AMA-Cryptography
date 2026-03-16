@@ -392,7 +392,7 @@ class TestPerformanceRegression:
         # Linux/macOS due to shared resources.
         # Typical values: Linux ~0.002s, macOS ~0.003s, Windows ~0.02s
         if sys.platform == "win32":
-            threshold = 0.05  # 50ms for Windows CI (observed: ~20ms on Win 3.8)
+            threshold = 0.05  # 50ms for Windows CI (observed: ~20ms on Windows CI)
         else:
             threshold = 0.01  # 10ms for Linux/macOS (observed: ~2-3ms)
 
