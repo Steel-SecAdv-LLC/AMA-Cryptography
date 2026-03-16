@@ -276,8 +276,7 @@ Non-compliance with these standards should be reported as a high-severity securi
 |---------|------|---------|
 | 1.0.0 | 2025-11-26 | Initial professional release |
 | 1.1.0 | 2026-01-09 | Version alignment, terminology updates |
-| 2.0.0 | 2026-03-08 | Zero-dependency native C architecture, FIPS 203/204/205 compliance, AES-256-GCM, adaptive posture system, hybrid KEM combiner, Ed25519 atomics hardening |
-| 2.0.1 | 2026-03-10 | Phase 2 primitives (X25519, ChaCha20-Poly1305, Argon2, secp256k1), fuzzing harnesses, threat model documentation |
+| 2.0.0 | 2026-03-08 | Zero-dependency native C architecture, FIPS 203/204/205 compliance, AES-256-GCM, adaptive posture system, hybrid KEM combiner, Ed25519 atomics hardening, Phase 2 primitives, fuzzing harnesses, threat model documentation |
 
 ---
 

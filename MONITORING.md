@@ -301,8 +301,7 @@ controller.respond()  # Key rotation, algorithm switching based on level
 |---------|------|---------|
 | 1.0.0 | 2025-11-26 | Initial professional release |
 | 1.1.0 | 2026-01-09 | Version alignment |
-| 2.0.0 | 2026-03-08 | Adaptive posture integration, weighted scoring model |
-| 2.0.1 | 2026-03-10 | Documentation alignment, Phase 2 primitives support |
+| 2.0.0 | 2026-03-08 | Adaptive posture integration, weighted scoring model, Phase 2 primitives support |
 
 ---
 

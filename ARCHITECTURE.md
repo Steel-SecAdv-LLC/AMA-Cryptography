@@ -747,8 +747,7 @@ Cryptographic implementations are validated against:
 |---------|------|--------|---------|
 | 1.0.0 | 2025-11-26 | Steel Security Advisors LLC | Initial professional release |
 | 1.1.0 | 2026-01-09 | Steel Security Advisors LLC | Version alignment |
-| 2.0.0 | 2026-03-08 | Steel Security Advisors LLC | Zero-dependency native C architecture, adaptive posture, hybrid KEM combiner, AES-256-GCM, FIPS 203/204/205 compliance |
-| 2.0.1 | 2026-03-10 | Steel Security Advisors LLC | Phase 2 primitives (X25519, ChaCha20-Poly1305, Argon2, secp256k1), ethical pillar alignment, composition protocol clarification, Mercury Agent integration |
+| 2.0.0 | 2026-03-08 | Steel Security Advisors LLC | Zero-dependency native C architecture, adaptive posture, hybrid KEM combiner, AES-256-GCM, FIPS 203/204/205 compliance, Phase 2 primitives, ethical pillar alignment, Mercury Agent integration |
 
 ---
 
