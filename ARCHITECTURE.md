@@ -612,7 +612,7 @@ The security analysis assumes:
 | Resource | Minimum | Recommended |
 |----------|---------|-------------|
 | Operating System | Ubuntu 20.04+ | Ubuntu 22.04+ |
-| Python Version | 3.9 | 3.11+ |
+| Python Version | 3.8 | 3.11+ |
 | Memory | 512 MB | 2 GB |
 | Storage | 100 MB | 500 MB |
 | CPU | 1 core | 4 cores |
