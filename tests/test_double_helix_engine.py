@@ -123,7 +123,7 @@ class TestDoubleHelixEvolution(unittest.TestCase):
 
         # Should be clipped to bound
         bound = 10.0 * PHI_CUBED
-        max_val = np.max(np.abs(state_next))
+        max_val: float = float(np.max(np.abs(state_next)))
         self.assertLessEqual(max_val, bound + 1.0)  # Small tolerance for operations
 
     def test_temperature_annealing(self) -> None:
@@ -237,7 +237,7 @@ class TestIndividualTerms(unittest.TestCase):
         self.assertEqual(len(purity), len(self.state))
         # Should be normalized
         norm = np.linalg.norm(purity)
-        self.assertAlmostEqual(norm, 1.0, places=6)
+        self.assertAlmostEqual(float(norm), 1.0, places=6)
 
 
 class TestTermEnableDisable(unittest.TestCase):

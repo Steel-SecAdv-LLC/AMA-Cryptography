@@ -16,7 +16,6 @@ Enterprise-grade key management with:
 
 import base64
 import hashlib
-import hmac
 import json
 import logging
 import os
@@ -31,6 +30,34 @@ from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
 from ama_cryptography.exceptions import SecurityWarning  # noqa: F401 — re-exported for public API
 from ama_cryptography.secure_memory import secure_memzero
+
+
+def _hmac_sha512(key: bytes, data: bytes) -> bytes:
+    """
+    HMAC-SHA-512 per RFC 2104.
+
+    Primary: AMA native C library (ama_hmac_sha512).
+    Fallback: pure-Python implementation using hashlib.sha512.
+    Does NOT use the stdlib ``hmac`` module (INVARIANT-1).
+    """
+    try:
+        from ama_cryptography.pqc_backends import native_hmac_sha512  # type: ignore[attr-defined]
+
+        result: bytes = native_hmac_sha512(key, data)
+        return result
+    except (RuntimeError, ImportError):
+        pass
+
+    # Pure-Python HMAC-SHA512 (RFC 2104) — no stdlib hmac import.
+    block_size = 128  # SHA-512 block size
+    if len(key) > block_size:
+        key = hashlib.sha512(key).digest()
+    key = key.ljust(block_size, b"\x00")
+    ipad = bytes(k ^ 0x36 for k in key)
+    opad = bytes(k ^ 0x5C for k in key)
+    inner = hashlib.sha512(ipad + data).digest()
+    return hashlib.sha512(opad + inner).digest()
+
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -130,8 +157,7 @@ class HDKeyDerivation:
 
     def _generate_master_key(self) -> Tuple[bytes, bytes]:
         """Generate master key and chain code from seed"""
-        h = hmac.new(b"AMA Cryptography Master Key", self.master_seed, hashlib.sha512)
-        hmac_result = h.digest()
+        hmac_result = _hmac_sha512(b"AMA Cryptography Master Key", self.master_seed)
 
         master_key = hmac_result[:32]
         chain_code = hmac_result[32:]
@@ -174,8 +200,7 @@ class HDKeyDerivation:
             compressed_pubkey = native_secp256k1_pubkey_from_privkey(parent_key)
             data = compressed_pubkey + index.to_bytes(4, "big")
 
-        h = hmac.new(parent_chain, data, hashlib.sha512)
-        hmac_result = h.digest()
+        hmac_result = _hmac_sha512(parent_chain, data)
 
         # Split HMAC result: IL (left 32 bytes) and IR (right 32 bytes)
         il = hmac_result[:32]

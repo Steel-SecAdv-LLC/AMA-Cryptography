@@ -30,7 +30,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install safety bandit pip-audit
-        pip install "cryptography>=41.0.0"
+        pip install "cryptography>=46.0.5"
 
     - name: Run Safety check
       run: |
@@ -72,7 +72,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install cyclonedx-bom pip-audit
+        pip install "cyclonedx-bom==7.2.2" pip-audit
         pip install -r requirements-lock.txt
 
     - name: Generate Python SBOM (CycloneDX)
@@ -234,7 +234,7 @@ jobs:
         fetch-depth: 0
 
     - name: TruffleHog Secret Scanning
-      uses: trufflesecurity/trufflehog@aeb12782f0d33a6fea85467d617ad37ea205154b  # pin: main 2026-03-13
+      uses: trufflesecurity/trufflehog@d17df4845197a68cbc37d33ad0e7f325b45c0033  # pin: main 2026-03-13
       with:
         path: ./
         extra_args: --debug --only-verified

@@ -126,6 +126,9 @@ if(OPENSSL_FOUND)
 endif()
 
 # Create shared library
+# Note: on MSVC the header provides explicit __declspec(dllexport) via AMA_API,
+# so WINDOWS_EXPORT_ALL_SYMBOLS is not needed (and would trigger cmake -E
+# __create_def which crashes on large translation units).
 if(AMA_BUILD_SHARED)
     add_library(ama_cryptography_shared SHARED ${AMA_SOURCES})
     set_target_properties(ama_cryptography_shared PROPERTIES

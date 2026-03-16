@@ -357,7 +357,7 @@ class TestRFC8032Vectors:
     @pytest.mark.parametrize(
         "vector",
         RFC8032_VECTORS,
-        ids=[v["name"] for v in RFC8032_VECTORS],
+        ids=[str(v["name"]) for v in RFC8032_VECTORS],
     )
     def test_rfc8032_native(self, vector: Any) -> None:
         """RFC 8032 vectors pass with native C implementation."""
@@ -395,7 +395,7 @@ class TestRFC8032Vectors:
     @pytest.mark.parametrize(
         "vector",
         RFC8032_VECTORS[:3],
-        ids=[v["name"] for v in RFC8032_VECTORS[:3]],
+        ids=[str(v["name"]) for v in RFC8032_VECTORS[:3]],
     )
     def test_rfc8032_pyca(self, vector: Any) -> None:
         """RFC 8032 vectors pass with PyCA cryptography."""

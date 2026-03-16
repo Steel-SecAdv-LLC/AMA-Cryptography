@@ -120,7 +120,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install "black==26.3.1" "ruff>=0.4" "isort>=5.13,<6" "mypy>=1.9,<2"
+        pip install "black==26.3.1" "ruff>=0.4" "mypy>=1.9,<2"
 
     - name: Lint with ruff
       run: |
@@ -129,10 +129,6 @@ jobs:
     - name: Check code formatting with Black
       run: |
         black --check --diff .
-
-    - name: Check import order with isort
-      run: |
-        isort --check-only --diff ama_cryptography/ tests/ code_guardian_secure.py
 
     - name: Type checking with MyPy (--strict)
       continue-on-error: false
@@ -157,6 +153,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install safety bandit
+        pip install "cryptography>=46.0.5"
 
     - name: Check dependencies for vulnerabilities with Safety
       run: |
@@ -173,6 +170,20 @@ jobs:
       with:
         name: bandit-security-report
         path: bandit-report.json
+
+    - name: Semgrep security scan
+      if: always()
+      continue-on-error: false
+      run: |
+        python -m pip install semgrep==1.74.0
+        semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json
+
+    - name: Upload Semgrep report
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      if: always()
+      with:
+        name: semgrep-security-report
+        path: semgrep-report.json
 
   benchmark-regression:
     name: Benchmark Regression Detection
