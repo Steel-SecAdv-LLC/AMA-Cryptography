@@ -215,6 +215,9 @@ profile = "black"
 line_length = 100
 
 # MyPy configuration — strict mode
+# python_version = "3.9" because mypy >= 1.19 dropped support for 3.8.
+# The project still supports 3.8 at runtime (requires-python = ">=3.8")
+# but type checking targets 3.9 as the lowest mypy-supported version.
 [tool.mypy]
 python_version = "3.9"
 strict = true
