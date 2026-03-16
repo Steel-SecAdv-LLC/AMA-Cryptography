@@ -17,7 +17,7 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ---
 
-## [2.0.1] - 2026-03-10
+## [2.0.0] - 2026-03-07
 
 ### Changed - CI & Toolchain Overhaul (PR #116)
 
@@ -26,7 +26,7 @@ Resolved all CI failures with surgical, security-hardened fixes:
 - **HMAC-SHA512 (INVARIANT-1 compliance):** Replaced stdlib `hmac` import with hand-rolled `_hmac_sha512()` in `key_management.py`, eliminating the last stdlib crypto dependency
 - **Linter migration:** Fully replaced flake8 + isort with **ruff** (`ruff==0.15.6` pinned in `requirements-lock.txt`); updated `.pre-commit-config.yaml` and `Makefile`
 - **Semgrep security scan:** Added Semgrep to CI pipeline (fail-closed), enforcing static security analysis on every PR
-- **mypy --strict:** Now passes with 0 errors; mypy `python_version` bumped from `3.8` to `3.9` (mypy >=1.14 dropped 3.8 support; project still supports Python 3.8+)
+- **mypy --strict:** Now passes with 0 errors; mypy `python_version` bumped from `3.8` to `3.9` (mypy >=1.14 dropped 3.8 support); minimum Python bumped to 3.9
 - **CVE-2026-26007 mitigation:** Pinned `cryptography>=46.0.5` in all CI workflows
 - **cyclonedx-bom pinned:** `cyclonedx-bom==7.2.2` for reproducible SBOM generation
 - **TruffleHog SHA bumped:** Updated to `d17df484…` commit SHA for secret scanning
@@ -72,10 +72,6 @@ All 64 CI jobs passing after Phase 2 integration.
 - **Mercury Agent integration**: Documented AMA Cryptography's role as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent)
 - **Ethical pillar redesign**: Consolidated from 12 named pillars to 4 Omni-Code Ethical Pillars (Omniscient, Omnipotent, Omnidirectional, Omnibenevolent), each governing a triad of three sub-properties (Wisdom, Agency, Geography, Integrity)
 - **Phase 2 primitives**: Added X25519, ChaCha20-Poly1305, Argon2, secp256k1 to all relevant documentation
-
----
-
-## [2.0.0] - 2026-03-07
 
 ### Security Hardening
 
@@ -192,8 +188,7 @@ After upgrading to v2.0:
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 2.0.1 | 2026-03-10 | Phase 2 primitives, CI hardening (PR #116: ruff, Semgrep, HMAC-SHA512, mypy --strict, CVE-2026-26007), fuzzing/threat model, benchmark refactor |
-| 2.0.0 | 2026-03-08 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics + field arithmetic, FIPS 203/204/205 |
+| 2.0.0 | 2026-03-07 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, Phase 2 primitives, CI hardening (PR #116: ruff, Semgrep, HMAC-SHA512, mypy --strict, CVE-2026-26007), FIPS 203/204/205 |
 | 1.0.0 | 2025-11-22 | First public open-source release (Apache 2.0) |
 
 ---
@@ -203,7 +198,7 @@ After upgrading to v2.0:
 ### Installation
 
 **Requirements:**
-- Python 3.8 or higher
+- Python 3.9 or higher
 
 **Basic Installation:**
 ```bash
