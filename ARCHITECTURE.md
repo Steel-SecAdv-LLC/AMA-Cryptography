@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.1 |
-| Last Updated | 2026-03-10 |
+| Document Version | 2.2 |
+| Last Updated | 2026-03-16 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -612,7 +612,7 @@ The security analysis assumes:
 | Resource | Minimum | Recommended |
 |----------|---------|-------------|
 | Operating System | Ubuntu 20.04+ | Ubuntu 22.04+ |
-| Python Version | 3.8 | 3.11+ |
+| Python Version | 3.9 | 3.11+ |
 | Memory | 512 MB | 2 GB |
 | Storage | 100 MB | 500 MB |
 | CPU | 1 core | 4 cores |
@@ -660,12 +660,12 @@ docker run ama-cryptography:latest
 ```
 1. Code Quality
    - black --check (formatting)
-   - isort --check-only (imports)
-   - flake8 (linting)
-   - mypy (type checking)
+   - ruff check (linting + import sorting, replaces flake8 + isort)
+   - mypy --strict (type checking, 0 errors)
 
 2. Security Scanning
    - bandit (code security)
+   - Semgrep (static security analysis, fail-closed)
    - safety (dependency vulnerabilities)
    - pip-audit (package audit)
 
