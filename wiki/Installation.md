@@ -124,7 +124,7 @@ pip install -e ".[hsm]"
 # Libsodium secure memory bindings
 pip install -e ".[secure-memory]"
 
-# Development tools (pytest, black, mypy, flake8, coverage)
+# Development tools (pytest, black, ruff, mypy, coverage)
 pip install -e ".[dev]"
 
 # Documentation generation (Sphinx)

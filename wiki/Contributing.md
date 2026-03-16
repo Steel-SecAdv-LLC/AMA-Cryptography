@@ -34,7 +34,7 @@ pip install -e ".[dev,monitoring]"
 
 This installs all development dependencies:
 - `pytest`, `pytest-cov`, `pytest-benchmark`
-- `black`, `isort`, `mypy`, `flake8`
+- `black`, `ruff`, `mypy`
 - `hypothesis` (property-based testing)
 - `numpy`, `scipy` (for 3R monitoring engine)
 
@@ -44,7 +44,7 @@ This installs all development dependencies:
 pre-commit install
 ```
 
-This runs formatting (Black, isort), linting (flake8), and security scanning (semgrep) automatically on each commit.
+This runs formatting (Black), linting (ruff), and security scanning (Semgrep) automatically on each commit.
 
 ---
 
@@ -55,16 +55,14 @@ This runs formatting (Black, isort), linting (flake8), and security scanning (se
 | Tool | Standard | Config |
 |------|---------|--------|
 | Formatter | Black (line length 88) | `pyproject.toml` |
-| Import order | isort (Black-compatible) | `pyproject.toml` |
-| Linter | flake8 (max-line-length 88) | `pyproject.toml` |
+| Linter + imports | ruff (replaces flake8 + isort) | `pyproject.toml` |
 | Type hints | mypy (strict) | `pyproject.toml` |
 | Docstrings | Google style | — |
 
 Run all checks:
 ```bash
 black ama_cryptography tests
-isort ama_cryptography tests
-flake8 ama_cryptography tests
+ruff check ama_cryptography tests
 mypy ama_cryptography
 ```
 
@@ -170,7 +168,7 @@ Open an issue with:
 2. **Branch** from `main`: `git checkout -b feature/your-feature-name`
 3. **Implement** your change with tests
 4. **Run** the full test suite: `pytest tests/`
-5. **Run** linters: `black`, `isort`, `flake8`, `mypy`
+5. **Run** linters: `black`, `ruff check`, `mypy`
 6. **Commit** with a clear message (see format below)
 7. **Push** to your fork
 8. **Open a PR** against `main`
@@ -259,9 +257,9 @@ The CI pipeline runs on every PR:
 
 | Check | Description |
 |-------|-------------|
-| `ci.yml` | Python tests (matrix: 3.8, 3.9, 3.10, 3.11, 3.12, 3.13) |
+| `ci.yml` | Python tests (matrix: 3.9, 3.10, 3.11, 3.12, 3.13) |
 | `ci-build-test.yml` | C library build + C tests |
-| `static-analysis.yml` | Black, isort, flake8, mypy, semgrep |
+| `static-analysis.yml` | Black, ruff, mypy --strict, Semgrep |
 | `security.yml` | Security scanning |
 | `fuzzing.yml` | libFuzzer regression tests |
 
