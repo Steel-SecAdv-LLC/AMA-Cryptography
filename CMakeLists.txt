@@ -135,6 +135,7 @@ if(AMA_BUILD_SHARED)
         VERSION ${PROJECT_VERSION}
         SOVERSION ${PROJECT_VERSION_MAJOR}
         PUBLIC_HEADER "include/ama_cryptography.h"
+        WINDOWS_EXPORT_ALL_SYMBOLS ON
     )
     target_compile_definitions(ama_cryptography_shared PRIVATE AMA_BUILDING_SHARED)
 

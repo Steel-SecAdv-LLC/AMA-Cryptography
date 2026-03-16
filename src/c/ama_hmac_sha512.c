@@ -16,6 +16,7 @@
  * If key > 128 bytes, K' = SHA-512(key) zero-padded to 128 bytes.
  */
 
+#include "ama_cryptography.h"
 #include "ama_hmac_sha512.h"
 #include "ama_sha512.h"
 #include <string.h>
