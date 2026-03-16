@@ -13,7 +13,7 @@
 # Legacy PyCA cryptography fallback (OPTIONAL)
 # Only needed if native C library is not built/available.
 # Install with: pip install "ama-cryptography[legacy]"
-# cryptography>=41.0.0
+# cryptography>=46.0.5
 
 # Quantum-resistant cryptography — fully native C backend
 # The native C library (libama_cryptography) provides ML-DSA-65, Kyber-1024,

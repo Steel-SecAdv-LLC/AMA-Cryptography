@@ -290,7 +290,7 @@ setup(
             "scipy>=1.7.0",
         ],
         # PyCA cryptography — only needed as fallback when native C library is not available
-        "legacy": ["cryptography>=41.0.0"],
+        "legacy": ["cryptography>=46.0.5"],
         # PKCS#11 support for hardware security modules
         "hsm": ["PyKCS11>=1.5.0"],
         # PyNaCl for enhanced secure memory operations (libsodium bindings)
