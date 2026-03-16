@@ -217,7 +217,7 @@ line_length = 100
 
 # MyPy configuration — strict mode
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.9"  # mypy >=1.14 dropped Python 3.8 support
 strict = true
 disallow_untyped_defs = true
 disallow_any_generics = true

@@ -41,9 +41,10 @@ def _hmac_sha512(key: bytes, data: bytes) -> bytes:
     Does NOT use the stdlib ``hmac`` module (INVARIANT-1).
     """
     try:
-        from ama_cryptography.pqc_backends import native_hmac_sha512
+        from ama_cryptography.pqc_backends import native_hmac_sha512  # type: ignore[attr-defined]
 
-        return native_hmac_sha512(key, data)
+        result: bytes = native_hmac_sha512(key, data)
+        return result
     except (RuntimeError, ImportError):
         pass
 
