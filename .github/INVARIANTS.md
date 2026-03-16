@@ -12,15 +12,17 @@ AMA Cryptography owns all cryptographic primitives natively.
 **Do NOT introduce or depend on third-party cryptographic packages**
 (`libsodium`, `pynacl`, `cryptography`, OpenSSL bindings, etc.).
 
-Python stdlib modules (`hmac`, `hashlib`, `os`, `secrets`) are permitted for
-non-primitive operations (key derivation, OS entropy, hashing). They **must NOT**
-be used as a substitute for AMA's own implementations of constant-time comparison,
-memory zeroing, or core cipher operations.
+Python stdlib modules (`hashlib`, `os`, `secrets`) are permitted for
+non-primitive operations (OS entropy, hashing). They **must NOT** be used as a
+substitute for AMA's own implementations of HMAC, constant-time comparison,
+memory zeroing, or core cipher operations. In particular, `hmac` from stdlib is
+**not permitted** — HMAC-SHA512 is provided by `_hmac_sha512()` in
+`key_management.py`.
 
 ## INVARIANT-2 — Fail-Closed CI
 
-Security-critical CI steps (pip-audit, bandit, KAT tests when oqs is present,
-secret scanning) **must not** use `continue-on-error: true`.
+Security-critical CI steps (pip-audit, bandit, Semgrep, KAT tests when oqs is
+present, secret scanning) **must not** use `continue-on-error: true`.
 Failures in these steps **must** block the pipeline.
 
 ## INVARIANT-3 — Observable Failure States
@@ -38,4 +40,4 @@ to a full commit SHA, not a mutable tag (`@main`, `@v1`, etc.).
 ---
 
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-03-13_
+_Last updated: 2026-03-16_
