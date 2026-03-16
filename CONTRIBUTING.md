@@ -41,7 +41,7 @@ This project adheres to a Code of Conduct that all contributors are expected to 
 
 ### Prerequisites
 
-- Python 3.8 or higher
+- Python 3.9 or higher
 - Git
 - Basic understanding of cryptography
 - Familiarity with NIST and IETF standards
@@ -407,7 +407,7 @@ When you open a PR, include:
 2. **Code Review:** At least one maintainer approval required
 3. **Security Review:** Cryptographic changes require additional review
 4. **Documentation Review:** All docs must be accurate
-5. **Testing:** All tests must pass on Python 3.8-3.13
+5. **Testing:** All tests must pass on Python 3.9-3.13
 
 ### After Approval
 
@@ -516,8 +516,7 @@ If you have questions about contributing:
 | 1.0.0 | 2025-11-26 | Initial professional release |
 | 1.1.0 | 2026-01-09 | Version alignment, terminology updates |
 | 2.0.0 | 2026-03-08 | Zero-dependency architecture, FIPS 203/204/205, updated module references |
-| 2.0.2 | 2026-03-16 | Replace flake8/isort references with ruff, toolchain documentation update |
-| 2.0.1 | 2026-03-10 | Phase 2 primitives, Mercury Agent integration documentation |
+| 2.0.0 | 2026-03-16 | Replace flake8/isort references with ruff, toolchain documentation update |
 
 ---
 
