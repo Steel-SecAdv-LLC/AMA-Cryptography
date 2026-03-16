@@ -78,13 +78,13 @@ dev-install:
 format:
 	@echo "Formatting code..."
 	@black ama_cryptography/ tests/ *.py
-	@isort ama_cryptography/ tests/ *.py
+	@ruff check --select I --fix ama_cryptography/ tests/ *.py
 	@echo "✓ Code formatted"
 
 # Lint code
 lint:
 	@echo "Linting code..."
-	@flake8 ama_cryptography/ tests/ --max-line-length=100
+	@ruff check ama_cryptography/ tests/
 	@mypy ama_cryptography/ --ignore-missing-imports
 	@echo "✓ Lint passed"
 
@@ -222,8 +222,8 @@ help:
 	@echo "  make fuzz-run             - Run 10-second fuzzing smoke tests"
 	@echo ""
 	@echo "Development targets:"
-	@echo "  make format         - Format code with black/isort"
-	@echo "  make lint           - Lint code with flake8/mypy"
+	@echo "  make format         - Format code with black/ruff"
+	@echo "  make lint           - Lint code with ruff/mypy"
 	@echo "  make docs           - Generate API documentation"
 	@echo "  make profile        - Profile performance"
 	@echo ""
