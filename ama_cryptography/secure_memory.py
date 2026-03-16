@@ -200,15 +200,15 @@ def constant_time_compare(a: bytes, b: bytes) -> bool:
     """
     # Try AMA's native C constant-time comparison
     if _native_consttime_memcmp is not None:
-        if len(a) != len(b):
-            # Length mismatch — still call C function on padded buffers
-            # so timing is independent of which branch was taken
-            max_len = max(len(a), len(b), 1)
-            a_pad = a.ljust(max_len, b"\x00")
-            b_pad = b.ljust(max_len, b"\x00")
-            _native_consttime_memcmp(a_pad, b_pad, max_len)
-            return False
-        return bool(_native_consttime_memcmp(a, b, len(a)) == 0)
+        # Branch-free: both length check and content check always execute.
+        # Pad to equal length so memcmp runs on the same number of bytes
+        # regardless of input lengths.
+        max_len = max(len(a), len(b), 1)
+        a_pad = a.ljust(max_len, b"\x00")
+        b_pad = b.ljust(max_len, b"\x00")
+        length_diff = len(a) ^ len(b)
+        content_diff = _native_consttime_memcmp(a_pad, b_pad, max_len)
+        return (length_diff | content_diff) == 0
 
     # Fallback: pure-Python XOR accumulator — no imports, no early return
     result = len(a) ^ len(b)
