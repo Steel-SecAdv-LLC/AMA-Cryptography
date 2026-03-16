@@ -85,10 +85,6 @@ All 64 CI jobs passing after Phase 2 integration.
 - **Ed25519 test suite:** Expanded from 6 tests (sign-only) to 12 tests including RFC 8032 KAT vector matching, full sign/verify roundtrip, tamper detection (modified signature and message rejection), and deterministic signature verification.
 - **Ed25519 code cleanup:** Replaced verbose element-by-element `p3->p2` coordinate copying with `ge25519_p3_to_p2()` helper using `fe25519_copy()`.
 
----
-
-## [2.0.0] - 2026-03-06
-
 ### Changed - Full Project Rename
 
 **Breaking:** Renamed project from Ava Guardian to AMA Cryptography.
