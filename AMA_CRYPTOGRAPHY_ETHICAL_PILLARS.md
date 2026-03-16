@@ -267,7 +267,7 @@ Implementation I must satisfy: I ⊨ S
 Verification methods:
 1. Unit tests: 100+ test cases covering edge cases
 2. Property-based testing: QuickCheck-style invariants
-3. Formal verification: Type safety (Python 3.8+)
+3. Formal verification: Type safety (Python 3.9+)
 4. Standard compliance: NIST FIPS validation
 
 Result: I ⊨ S with confidence ≥ 99.9%

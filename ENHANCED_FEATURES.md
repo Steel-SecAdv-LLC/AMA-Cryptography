@@ -418,7 +418,7 @@ Runs on:
 - Ubuntu (GCC, Clang)
 - macOS (GCC, Clang)
 - Windows (MSVC)
-- Python 3.8-3.13
+- Python 3.9-3.13
 
 Tests:
 - C library compilation and tests
