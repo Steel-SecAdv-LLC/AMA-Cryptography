@@ -94,7 +94,7 @@ pip install --upgrade pip
 cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release && cmake --build build
 
 # Install development tools
-pip install -e ".[dev]"  # Installs pytest, black, ruff, mypy, bandit
+pip install -e ".[dev]"  # Installs pytest, ruff, mypy, bandit (and black on Python 3.10+)
 ```
 
 ### 3. Verify Setup
