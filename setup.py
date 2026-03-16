@@ -249,7 +249,6 @@ setup(
         "Programming Language :: C",
         "Programming Language :: Cython",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
@@ -277,7 +276,7 @@ setup(
         "integrity-protection",
         "digital-signatures",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.9",
     packages=find_packages(exclude=["tests", "tests.*", "examples", "examples.*", "src", "src.*"]),
     # Note: pyproject.toml is the authoritative source for dependencies.
     # This section is kept in sync for compatibility with older tools.
@@ -296,7 +295,6 @@ setup(
         # PyNaCl for enhanced secure memory operations (libsodium bindings)
         "secure-memory": ["pynacl>=1.5.0"],
         # NOTE: pyproject.toml [project.optional-dependencies.dev] is authoritative.
-        # flake8 and isort are superseded by ruff (ruff==0.15.6, see requirements-lock.txt).
         "dev": [
             "pytest>=7.0.0",
             "pytest-cov>=4.0.0",
@@ -304,17 +302,14 @@ setup(
             "pytest-benchmark>=4.0.0",
             "pytest-xdist>=3.0.0",
             "hypothesis>=6.0.0",
-            "black==25.11.0; python_version>='3.9'",
-            "flake8>=6.0.0",  # legacy — ruff is the active linter
-            "mypy>=1.0.0",
-            "isort>=5.12.0",  # legacy — ruff handles import sorting
+            "black==25.11.0; python_version>='3.10'",
+            "ruff>=0.4.0",
+            "mypy>=1.9.0",
             "bandit>=1.7.0",
             "safety>=2.3.0",
             "Cython>=3.0.0",
-            "numpy>=1.24.0,<2.0.0; python_version<'3.9'",
-            "numpy>=1.24.0; python_version>='3.9'",
-            "scipy>=1.10.0,<1.11.0; python_version<'3.9'",
-            "scipy>=1.11.0; python_version>='3.9'",
+            "numpy>=1.24.0",
+            "scipy>=1.11.0",
         ],
         "docs": [
             "sphinx>=6.0.0",
@@ -330,20 +325,17 @@ setup(
             "pytest-benchmark>=4.0.0",
             "pytest-xdist>=3.0.0",
             "hypothesis>=6.0.0",
-            "black==25.11.0; python_version>='3.9'",
-            "flake8>=6.0.0",  # legacy — ruff is the active linter
-            "mypy>=1.0.0",
-            "isort>=5.12.0",  # legacy — ruff handles import sorting
+            "black==25.11.0; python_version>='3.10'",
+            "ruff>=0.4.0",
+            "mypy>=1.9.0",
             "bandit>=1.7.0",
             "safety>=2.3.0",
             "Cython>=3.0.0",
             "sphinx>=6.0.0",
             "sphinx-rtd-theme>=1.2.0",
             "sphinx-autodoc-typehints>=1.22.0",
-            "numpy>=1.24.0,<2.0.0; python_version<'3.9'",
-            "numpy>=1.24.0; python_version>='3.9'",
-            "scipy>=1.10.0,<1.11.0; python_version<'3.9'",
-            "scipy>=1.11.0; python_version>='3.9'",
+            "numpy>=1.24.0",
+            "scipy>=1.11.0",
         ],
     },
     ext_modules=get_cythonized_extensions(),
