@@ -35,15 +35,13 @@ class TestLazyImportWithoutNumpy:
 
     def test_import_without_numpy(self) -> None:
         """import ama_cryptography succeeds and exposes __version__ without numpy."""
-        result = _run_script(
-            """\
+        result = _run_script("""\
             import sys
             sys.modules['numpy'] = None
             sys.modules['scipy'] = None
             import ama_cryptography
             print(ama_cryptography.__version__)
-        """
-        )
+        """)
         assert (
             result.returncode == 0
         ), f"Import failed with numpy blocked.\nstdout: {result.stdout}\nstderr: {result.stderr}"
@@ -51,8 +49,7 @@ class TestLazyImportWithoutNumpy:
 
     def test_math_import_gives_clear_error(self) -> None:
         """Accessing PHI without numpy gives a clear ModuleNotFoundError."""
-        result = _run_script(
-            """\
+        result = _run_script("""\
             import sys
             sys.modules['numpy'] = None
             sys.modules['scipy'] = None
@@ -67,8 +64,7 @@ class TestLazyImportWithoutNumpy:
                 else:
                     print(f'ERROR: exception did not mention numpy: {e}')
                     sys.exit(1)
-        """
-        )
+        """)
         assert (
             result.returncode == 0
         ), f"Expected clear numpy error.\nstdout: {result.stdout}\nstderr: {result.stderr}"
@@ -76,8 +72,7 @@ class TestLazyImportWithoutNumpy:
 
     def test_engine_import_gives_clear_error(self) -> None:
         """Accessing AmaEquationEngine without numpy gives a clear error."""
-        result = _run_script(
-            """\
+        result = _run_script("""\
             import sys
             sys.modules['numpy'] = None
             sys.modules['scipy'] = None
@@ -92,8 +87,7 @@ class TestLazyImportWithoutNumpy:
                 else:
                     print(f'ERROR: exception did not mention numpy: {e}')
                     sys.exit(1)
-        """
-        )
+        """)
         assert (
             result.returncode == 0
         ), f"Expected clear numpy error.\nstdout: {result.stdout}\nstderr: {result.stderr}"
