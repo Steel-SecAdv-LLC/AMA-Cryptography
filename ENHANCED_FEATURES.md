@@ -559,7 +559,7 @@ python -c "from ama_cryptography.math_engine import benchmark_matrix_operations;
 
 | Component | Version | Notes |
 |-----------|---------|-------|
-| Python | 3.8-3.12 | Type hints support |
+| Python | 3.9-3.13 | Type hints support |
 | NumPy | 1.24+ | Optional (equations/monitoring) |
 | Cython | 0.29.30+ | Optional (for speedup) |
 | CMake | 3.15+ | C library build |
