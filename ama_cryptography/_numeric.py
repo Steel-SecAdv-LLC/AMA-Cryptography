@@ -626,7 +626,7 @@ def _qr_tridiagonal_eigvals(
             shift = d[m] - abs(e[m - 1])
         else:
             sign_delta = 1.0 if delta >= 0 else -1.0
-            shift = d[m] - e[m - 1] ** 2 / (delta + sign_delta * math.sqrt(delta**2 + e[m - 1] ** 2))
+            shift = d[m] - e[m - 1] ** 2 / (delta + sign_delta * math.hypot(delta, e[m - 1]))
 
         # Implicit QR step (Givens rotations)
         g = d[l] - shift
