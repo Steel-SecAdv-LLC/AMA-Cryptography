@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.1 |
-| Last Updated | 2026-03-10 |
+| Document Version | 2.2 |
+| Last Updated | 2026-03-16 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -17,7 +17,21 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ---
 
-## [2.0.1] - 2026-03-10
+## [2.0.0] - 2026-03-07
+
+### Changed - CI & Toolchain Overhaul (PR #116)
+
+Resolved all CI failures with surgical, security-hardened fixes:
+
+- **HMAC-SHA512 (INVARIANT-1 compliance):** Replaced stdlib `hmac` import with hand-rolled `_hmac_sha512()` in `key_management.py`, eliminating the last stdlib crypto dependency
+- **Linter migration:** Fully replaced flake8 + isort with **ruff** (`ruff==0.15.6` pinned in `requirements-lock.txt`); updated `.pre-commit-config.yaml` and `Makefile`
+- **Semgrep security scan:** Added Semgrep to CI pipeline (fail-closed), enforcing static security analysis on every PR
+- **mypy --strict:** Now passes with 0 errors; mypy `python_version` bumped from `3.8` to `3.9` (mypy >=1.14 dropped 3.8 support); minimum Python bumped to 3.9
+- **CVE-2026-26007 mitigation:** Pinned `cryptography>=46.0.5` in all CI workflows
+- **cyclonedx-bom pinned:** `cyclonedx-bom==7.2.2` for reproducible SBOM generation
+- **TruffleHog SHA bumped:** Updated to `d17df484…` commit SHA for secret scanning
+- **MSVC shared library:** Switched from `WINDOWS_EXPORT_ALL_SYMBOLS` to explicit `AMA_API` (`__declspec(dllexport)`) macros for controlled symbol visibility
+- **Native C `ama_consttime_memcmp` loader:** Added to `secure_memory.py` for hardware-speed constant-time comparison via ctypes
 
 ### Added - Phase 2 Cryptographic Primitives (PR #92)
 
@@ -59,10 +73,6 @@ All 64 CI jobs passing after Phase 2 integration.
 - **Ethical pillar redesign**: Consolidated from 12 named pillars to 4 Omni-Code Ethical Pillars (Omniscient, Omnipotent, Omnidirectional, Omnibenevolent), each governing a triad of three sub-properties (Wisdom, Agency, Geography, Integrity)
 - **Phase 2 primitives**: Added X25519, ChaCha20-Poly1305, Argon2, secp256k1 to all relevant documentation
 
----
-
-## [2.0.0] - 2026-03-07
-
 ### Security Hardening
 
 - **AES-256-GCM S-box documentation:** Corrected header comments that falsely claimed "bitsliced S-box". The implementation uses a standard 256-byte lookup table on round-key XOR'd state (public data). Added explicit side-channel caveat for shared-tenant environments.
@@ -74,10 +84,6 @@ All 64 CI jobs passing after Phase 2 integration.
 
 - **Ed25519 test suite:** Expanded from 6 tests (sign-only) to 12 tests including RFC 8032 KAT vector matching, full sign/verify roundtrip, tamper detection (modified signature and message rejection), and deterministic signature verification.
 - **Ed25519 code cleanup:** Replaced verbose element-by-element `p3->p2` coordinate copying with `ge25519_p3_to_p2()` helper using `fe25519_copy()`.
-
----
-
-## [2.0.0] - 2026-03-06
 
 ### Changed - Full Project Rename
 
@@ -178,8 +184,7 @@ After upgrading to v2.0:
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 2.0.1 | 2026-03-10 | Phase 2 primitives (X25519, ChaCha20-Poly1305, Argon2, secp256k1), fuzzing/threat model, benchmark refactor, documentation alignment |
-| 2.0.0 | 2026-03-08 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics + field arithmetic, FIPS 203/204/205 |
+| 2.0.0 | 2026-03-07 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, Phase 2 primitives, CI hardening (PR #116: ruff, Semgrep, HMAC-SHA512, mypy --strict, CVE-2026-26007), FIPS 203/204/205 |
 | 1.0.0 | 2025-11-22 | First public open-source release (Apache 2.0) |
 
 ---
@@ -189,7 +194,7 @@ After upgrading to v2.0:
 ### Installation
 
 **Requirements:**
-- Python 3.8 or higher
+- Python 3.9 or higher
 
 **Basic Installation:**
 ```bash

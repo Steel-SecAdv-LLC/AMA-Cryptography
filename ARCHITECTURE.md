@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.1 |
-| Last Updated | 2026-03-10 |
+| Document Version | 2.2 |
+| Last Updated | 2026-03-16 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -612,7 +612,7 @@ The security analysis assumes:
 | Resource | Minimum | Recommended |
 |----------|---------|-------------|
 | Operating System | Ubuntu 20.04+ | Ubuntu 22.04+ |
-| Python Version | 3.8 | 3.11+ |
+| Python Version | 3.9 | 3.11+ |
 | Memory | 512 MB | 2 GB |
 | Storage | 100 MB | 500 MB |
 | CPU | 1 core | 4 cores |
@@ -660,12 +660,12 @@ docker run ama-cryptography:latest
 ```
 1. Code Quality
    - black --check (formatting)
-   - isort --check-only (imports)
-   - flake8 (linting)
-   - mypy (type checking)
+   - ruff check (linting + import sorting, replaces flake8 + isort)
+   - mypy --strict (type checking, 0 errors)
 
 2. Security Scanning
    - bandit (code security)
+   - Semgrep (static security analysis, fail-closed)
    - safety (dependency vulnerabilities)
    - pip-audit (package audit)
 
@@ -747,8 +747,7 @@ Cryptographic implementations are validated against:
 |---------|------|--------|---------|
 | 1.0.0 | 2025-11-26 | Steel Security Advisors LLC | Initial professional release |
 | 1.1.0 | 2026-01-09 | Steel Security Advisors LLC | Version alignment |
-| 2.0.0 | 2026-03-08 | Steel Security Advisors LLC | Zero-dependency native C architecture, adaptive posture, hybrid KEM combiner, AES-256-GCM, FIPS 203/204/205 compliance |
-| 2.0.1 | 2026-03-10 | Steel Security Advisors LLC | Phase 2 primitives (X25519, ChaCha20-Poly1305, Argon2, secp256k1), ethical pillar alignment, composition protocol clarification, Mercury Agent integration |
+| 2.0.0 | 2026-03-08 | Steel Security Advisors LLC | Zero-dependency native C architecture, adaptive posture, hybrid KEM combiner, AES-256-GCM, FIPS 203/204/205 compliance, Phase 2 primitives, ethical pillar alignment, Mercury Agent integration |
 
 ---
 

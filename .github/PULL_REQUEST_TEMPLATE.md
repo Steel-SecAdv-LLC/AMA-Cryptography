@@ -138,8 +138,7 @@ Example:
 - [ ] All functions have comprehensive docstrings
 - [ ] No security warnings from linters (Bandit, etc.)
 - [ ] Black formatting applied (`black .`)
-- [ ] Flake8 linting passed (`flake8 .`)
-- [ ] Import ordering checked (`isort .`)
+- [ ] Ruff linting passed (`ruff check .`)
 - [ ] Type checking passed (`mypy code_guardian_secure.py`)
 
 ### Documentation Updates

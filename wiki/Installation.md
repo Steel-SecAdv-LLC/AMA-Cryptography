@@ -8,7 +8,7 @@ This page covers all supported ways to install and build AMA Cryptography.
 
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
-| Python | 3.8 | 3.11+ |
+| Python | 3.9 | 3.11+ |
 | C Compiler | GCC 7 / Clang 6 | GCC 12 / Clang 16 |
 | CMake | 3.15 | 3.25+ |
 | RAM | 512 MB | 2 GB |
@@ -124,7 +124,7 @@ pip install -e ".[hsm]"
 # Libsodium secure memory bindings
 pip install -e ".[secure-memory]"
 
-# Development tools (pytest, black, mypy, flake8, coverage)
+# Development tools (pytest, black, ruff, mypy, coverage)
 pip install -e ".[dev]"
 
 # Documentation generation (Sphinx)

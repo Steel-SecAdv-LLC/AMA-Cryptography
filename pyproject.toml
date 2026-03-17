@@ -41,7 +41,6 @@ classifiers = [
     "Programming Language :: C",
     "Programming Language :: Cython",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -51,7 +50,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Typing :: Typed"
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 dependencies = []
 
 [project.optional-dependencies]
@@ -86,13 +85,10 @@ dev = [
     "black>=26.3.1; python_version >= '3.10'",
     "ruff>=0.4.0",
     "mypy>=1.9.0",
-    "isort>=5.12.0",
     "bandit>=1.7.0",
     "safety>=2.3.0",
-    "numpy>=1.24.0,<2.0.0; python_version < '3.9'",
-    "numpy>=1.24.0; python_version >= '3.9'",
-    "scipy>=1.10.0,<1.11.0; python_version < '3.9'",
-    "scipy>=1.11.0; python_version >= '3.9'",
+    "numpy>=1.24.0",
+    "scipy>=1.11.0",
 ]
 
 [project.urls]
@@ -103,7 +99,7 @@ Issues = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/issues"
 
 # Ruff configuration — replaces flake8, isort
 [tool.ruff]
-target-version = "py38"
+target-version = "py39"
 line-length = 100
 
 [tool.ruff.lint]
@@ -152,10 +148,10 @@ ignore = []  # Do not add ignores without a comment explaining why.
     "S101", "S106", "S107", "S110",
     "E501",
     "B028", "B904",
-    "UP006", "UP015", "UP035",  # UP006/UP035: deprecated typing imports (py38 compat)
+    "UP006", "UP015", "UP035",  # UP006/UP035: deprecated typing imports (existing pattern)
 ]
 # code_guardian_secure.py — same crypto patterns as ama_cryptography/
-#   UP007/UP045: PEP 604 union syntax (py38 compat)
+#   UP007/UP045: PEP 604 union syntax (existing pattern)
 #   E402: module-level imports after sys.path manipulation
 #   S310/S603: URL open and subprocess calls in security tooling
 #   UP012: unnecessary UTF-8 encoding argument
@@ -207,17 +203,12 @@ max-complexity = 15
 # Black configuration
 [tool.black]
 line-length = 100
-target-version = ["py38", "py39", "py310", "py311", "py312"]
+target-version = ["py39", "py310", "py311", "py312"]
 skip-string-normalization = false
-
-# isort configuration (handled by ruff I rules, kept for standalone isort compat)
-[tool.isort]
-profile = "black"
-line_length = 100
 
 # MyPy configuration — strict mode
 [tool.mypy]
-python_version = "3.9"  # mypy >=1.14 dropped Python 3.8 support
+python_version = "3.9"
 strict = true
 disallow_untyped_defs = true
 disallow_any_generics = true
