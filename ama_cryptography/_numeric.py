@@ -624,68 +624,66 @@ def _tridiagonalize(A: List[List[float]], n: int) -> List[List[float]]:
     return A
 
 
-def _qr_tridiagonal_eigvals(A: List[List[float]], n: int, max_iter: int = 200) -> List[float]:
+def _qr_tridiagonal_eigvals(A: List[List[float]], n: int, max_iter: int = 30) -> List[float]:
     """
-    Implicit-shift QR iteration on a tridiagonal matrix.
-
-    Extracts eigenvalues via Wilkinson shifts for rapid cubic convergence.
+    Eigenvalues of a symmetric tridiagonal matrix via the QL algorithm
+    with implicit Wilkinson shifts (Numerical Recipes tqli).
     """
     # Extract diagonal and sub-diagonal
-    d = [A[i][i] for i in range(n)]  # diagonal
-    e = [A[i + 1][i] for i in range(n - 1)]  # sub-diagonal
-    e.append(0.0)  # sentinel
+    d = [A[i][i] for i in range(n)]
+    e = [A[i + 1][i] for i in range(n - 1)]
+    e.append(0.0)
 
-    for _ in range(max_iter * n):
-        # Find unreduced block [l..m]
-        m = n - 1
-        while m > 0 and abs(e[m - 1]) <= 1e-14 * (abs(d[m - 1]) + abs(d[m])):
-            m -= 1
-        if m == 0:
-            break
+    for l_idx in range(n):  # noqa: E741
+        itr = 0
+        while True:
+            # Find small sub-diagonal element
+            m = l_idx
+            while m < n - 1:
+                dd = abs(d[m]) + abs(d[m + 1])
+                if abs(e[m]) <= 1e-15 * dd:
+                    break
+                m += 1
+            if m == l_idx:
+                break
+            if itr >= max_iter:
+                break
+            itr += 1
 
-        l = m - 1  # noqa: E741
-        while l > 0 and abs(e[l - 1]) > 1e-14 * (abs(d[l - 1]) + abs(d[l])):
-            l -= 1  # noqa: E741
-
-        # Wilkinson shift
-        delta = (d[m] - d[m - 1]) / 2.0
-        if abs(delta) < 1e-300:
-            shift = d[m] - abs(e[m - 1])
-        else:
-            sign_delta = 1.0 if delta >= 0 else -1.0
-            shift = d[m] - e[m - 1] ** 2 / (delta + sign_delta * math.hypot(delta, e[m - 1]))
-
-        # Implicit QR step (Givens rotations)
-        g = d[l] - shift
-        s_rot = 1.0
-        c_rot = 1.0
-        p = 0.0
-
-        for i in range(l, m):
-            f = s_rot * e[i]
-            b = c_rot * e[i]
-            if abs(f) >= abs(g):
-                c_rot = g / f
-                r = math.sqrt(c_rot * c_rot + 1.0)
-                e[i] = f * r
-                s_rot = 1.0 / r
-                c_rot *= s_rot
+            # Wilkinson shift: eigenvalue of trailing 2x2 closer to d[l_idx]
+            g = (d[l_idx + 1] - d[l_idx]) / (2.0 * e[l_idx])
+            r = math.hypot(g, 1.0)
+            if g >= 0:
+                g = d[m] - d[l_idx] + e[l_idx] / (g + r)
             else:
-                s_rot = f / g
-                r = math.sqrt(s_rot * s_rot + 1.0)
-                e[i] = g * r
-                c_rot = 1.0 / r
-                s_rot *= c_rot
+                g = d[m] - d[l_idx] + e[l_idx] / (g - r)
 
-            g = d[i + 1] - p
-            r = (d[i] - g) * s_rot + 2.0 * c_rot * b
-            p = s_rot * r
-            d[i + 1] = g + p
-            g = c_rot * r - b
+            s = 1.0
+            c = 1.0
+            p = 0.0
 
-        d[l] = d[l] - p
-        e[l] = g
-        e[m - 1] = 0.0  # converged
+            for i in range(m - 1, l_idx - 1, -1):
+                f = s * e[i]
+                b = c * e[i]
+                r = math.hypot(f, g)
+                e[i + 1] = r
+                if r < 1e-300:
+                    # Recover from underflow
+                    d[i + 1] -= p
+                    e[m] = 0.0
+                    break
+                s = f / r
+                c = g / r
+                g = d[i + 1] - p
+                r = (d[i] - g) * s + 2.0 * c * b
+                p = s * r
+                d[i + 1] = g + p
+                g = c * r - b
+            else:
+                # Loop completed without break
+                d[l_idx] -= p
+                e[l_idx] = g
+                e[m] = 0.0
 
     return d
 
