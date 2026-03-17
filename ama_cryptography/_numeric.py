@@ -306,6 +306,21 @@ class Mat:
                 for r in range(self.rows)
             ]
             return Mat._wrap(d, self.rows, self.cols)
+        if isinstance(other, (int, float)):
+            d = [
+                [self._data[r][c] - other for c in range(self.cols)]
+                for r in range(self.rows)
+            ]
+            return Mat._wrap(d, self.rows, self.cols)
+        return NotImplemented
+
+    def __rsub__(self, other: object) -> Mat:
+        if isinstance(other, (int, float)):
+            d = [
+                [other - self._data[r][c] for c in range(self.cols)]
+                for r in range(self.rows)
+            ]
+            return Mat._wrap(d, self.rows, self.cols)
         return NotImplemented
 
     def __mul__(self, other: object) -> Mat:
@@ -455,7 +470,7 @@ def sqrt(x: Vec | float) -> Vec | float:
 def log(x: Vec | float) -> Vec | float:
     if isinstance(x, Vec):
         return Vec._wrap([math.log(max(v, 1e-300)) for v in x._data])
-    return math.log(x)
+    return math.log(max(x, 1e-300))
 
 
 def exp(x: Vec | float) -> Vec | float:
