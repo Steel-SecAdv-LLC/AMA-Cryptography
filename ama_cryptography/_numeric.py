@@ -201,6 +201,11 @@ class Vec:
 
     def __matmul__(self, other: object) -> float:
         if isinstance(other, Vec):
+            if len(self._data) != len(other._data):
+                raise ValueError(
+                    f"Vec length mismatch in __matmul__: "
+                    f"{len(self._data)} vs {len(other._data)}"
+                )
             return sum(a * b for a, b in zip(self._data, other._data))
         if isinstance(other, Mat):
             # row-vector @ matrix  →  Vec
@@ -536,6 +541,10 @@ def min_(x: Vec) -> float:
 # ---------------------------------------------------------------------------
 
 def dot(a: Vec, b: Vec) -> float:
+    if len(a._data) != len(b._data):
+        raise ValueError(
+            f"Vec length mismatch in dot(): {len(a._data)} vs {len(b._data)}"
+        )
     return sum(x * y for x, y in zip(a._data, b._data))
 
 
