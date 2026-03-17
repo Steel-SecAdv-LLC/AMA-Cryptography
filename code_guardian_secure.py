@@ -66,13 +66,25 @@ License: Apache License 2.0
 
 from __future__ import annotations
 
+import sys as _sys
 import warnings as _warnings
 
-_warnings.warn(
-    "The code_guardian_secure module is deprecated. Use the ama_cryptography package.",
-    DeprecationWarning,
-    stacklevel=2,
-)
+# Only emit deprecation warning for external callers (not ama_cryptography internals)
+_caller_module: str = ""
+for _depth in range(1, 20):
+    try:
+        _fname: str = _sys._getframe(_depth).f_globals.get("__name__", "")
+    except ValueError:
+        break
+    if _fname and not _fname.startswith(("importlib", "code_guardian_secure")):
+        _caller_module = _fname
+        break
+if not _caller_module.startswith("ama_cryptography"):
+    _warnings.warn(
+        "The code_guardian_secure module is deprecated. Use the ama_cryptography package.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
 import base64
 import hashlib
