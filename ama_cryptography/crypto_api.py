@@ -662,6 +662,11 @@ class AESGCMProvider:
         if len(key) != 32:
             raise ValueError(f"AES-256 key must be 32 bytes, got {len(key)}")
 
+        if nonce is None:
+            nonce = _secrets.token_bytes(12)
+        elif len(nonce) != 12:
+            raise ValueError(f"AES-256-GCM nonce must be 12 bytes, got {len(nonce)}")
+
         key_id: bytes = hashlib.sha256(key).digest()
         count: int = self._encrypt_counters.get(key_id, 0)
         if count >= self._NONCE_SAFETY_LIMIT:
@@ -669,11 +674,6 @@ class AESGCMProvider:
         if count >= int(self._NONCE_SAFETY_LIMIT * 0.75):
             logger.warning("AES-GCM nonce count approaching safety limit. Re-key recommended.")
         self._encrypt_counters[key_id] = count + 1
-
-        if nonce is None:
-            nonce = _secrets.token_bytes(12)
-        elif len(nonce) != 12:
-            raise ValueError(f"AES-256-GCM nonce must be 12 bytes, got {len(nonce)}")
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
