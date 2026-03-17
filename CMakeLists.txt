@@ -19,7 +19,7 @@ option(AMA_ENABLE_AVX2 "Enable AVX2 instructions" ON)
 option(AMA_ENABLE_SANITIZERS "Enable address/undefined sanitizers" OFF)
 option(AMA_ENABLE_LTO "Enable link-time optimization" ON)
 option(AMA_USE_NATIVE_PQC "Enable native PQC implementations (ML-DSA-65, Kyber-1024, SPHINCS+)" ON)
-option(AMA_AES_CONSTTIME "Use constant-time bitsliced AES S-box (eliminates cache-timing)" OFF)
+option(AMA_AES_CONSTTIME "Use constant-time bitsliced AES S-box (eliminates cache-timing)" ON)
 
 # C standard
 set(CMAKE_C_STANDARD 11)
