@@ -1025,6 +1025,8 @@ class AmaCryptography:
 
     def generate_keypair(self) -> KeyPair:
         """Generate cryptographic keypair"""
+        if isinstance(self.provider, AESGCMProvider):
+            raise TypeError("AES-256-GCM does not support keypair generation")
         return self.provider.generate_keypair()
 
     def sign(self, message: bytes, secret_key: bytes) -> Signature:

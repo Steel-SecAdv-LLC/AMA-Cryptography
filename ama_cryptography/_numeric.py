@@ -23,7 +23,7 @@ from __future__ import annotations
 import cmath
 import math
 import random as _stdlib_random
-from typing import List, Sequence, Tuple
+from typing import Iterator, List, Sequence, Tuple, overload
 
 __all__ = [
     "Vec",
@@ -87,21 +87,25 @@ class Vec:
     def __len__(self) -> int:
         return len(self._data)
 
-    def __getitem__(self, idx):  # type: ignore[override]
+    @overload
+    def __getitem__(self, idx: int) -> float: ...
+    @overload
+    def __getitem__(self, idx: slice) -> Vec: ...
+    def __getitem__(self, idx: int | slice) -> float | Vec:
         if isinstance(idx, slice):
             return Vec._wrap(self._data[idx])
         return self._data[idx]
 
-    def __setitem__(self, idx, value) -> None:  # type: ignore[override]
+    def __setitem__(self, idx: int | slice, value: float | Vec | Sequence[float]) -> None:
         if isinstance(idx, slice):
             if isinstance(value, Vec):
                 self._data[idx] = value._data
             else:
-                self._data[idx] = list(value)
+                self._data[idx] = list(value)  # type: ignore[arg-type]
         else:
-            self._data[idx] = float(value)
+            self._data[idx] = float(value)  # type: ignore[arg-type]
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[float]:
         return iter(self._data)
 
     def __repr__(self) -> str:
@@ -134,7 +138,7 @@ class Vec:
             for i in range(len(self._data)):
                 self._data[i] += other
             return self
-        return NotImplemented  # type: ignore[return-value]
+        return NotImplemented
 
     def __sub__(self, other: object) -> Vec:
         if isinstance(other, Vec):
@@ -167,7 +171,7 @@ class Vec:
             for i in range(len(self._data)):
                 self._data[i] *= other
             return self
-        return NotImplemented  # type: ignore[return-value]
+        return NotImplemented
 
     def __truediv__(self, other: object) -> Vec:
         if isinstance(other, Vec):
@@ -213,12 +217,12 @@ class Vec:
                 for k in range(n):
                     s += self._data[k] * other._data[k][j]
                 out[j] = s
-            return Vec._wrap(out)  # type: ignore[return-value]
+            return Vec._wrap(out)  # type: ignore[return-value]  # Vec @ Mat -> Vec
         return NotImplemented
 
     # -- comparison helpers --------------------------------------------------
 
-    def __eq__(self, other: object) -> bool:  # type: ignore[override]
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, Vec):
             return self._data == other._data
         return NotImplemented
@@ -266,16 +270,20 @@ class Mat:
 
     # -- sequence protocol ---------------------------------------------------
 
-    def __getitem__(self, idx):  # type: ignore[override]
+    @overload
+    def __getitem__(self, idx: Tuple[int, int]) -> float: ...
+    @overload
+    def __getitem__(self, idx: int) -> List[float]: ...
+    def __getitem__(self, idx: int | Tuple[int, int]) -> float | List[float]:
         if isinstance(idx, tuple):
             r, c = idx
             return self._data[r][c]
         return self._data[idx]
 
-    def __setitem__(self, idx, value) -> None:  # type: ignore[override]
+    def __setitem__(self, idx: int | Tuple[int, int], value: float | List[float]) -> None:
         if isinstance(idx, tuple):
             r, c = idx
-            self._data[r][c] = float(value)
+            self._data[r][c] = float(value)  # type: ignore[arg-type]
         else:
             if isinstance(value, list):
                 self._data[idx] = [float(x) for x in value]
@@ -348,6 +356,10 @@ class Mat:
 
     # -- matmul --------------------------------------------------------------
 
+    @overload
+    def __matmul__(self, other: Mat) -> Mat: ...
+    @overload
+    def __matmul__(self, other: Vec) -> Vec: ...
     def __matmul__(self, other: object) -> Mat | Vec:
         if isinstance(other, Mat):
             # (m×n) @ (n×p) → (m×p)
@@ -457,7 +469,7 @@ def allclose(a: Vec, b: Vec, atol: float = 1e-8) -> bool:
 
 def real(v: Vec) -> Vec:
     """Return real parts (identity for real Vecs; handles complex leftovers from FFT)."""
-    return Vec._wrap([x.real if isinstance(x, complex) else x for x in v._data])  # type: ignore[union-attr]
+    return Vec._wrap([x.real if isinstance(x, complex) else x for x in v._data])
 
 
 # ---------------------------------------------------------------------------
@@ -465,30 +477,50 @@ def real(v: Vec) -> Vec:
 # ---------------------------------------------------------------------------
 
 
+@overload
+def sqrt(x: Vec) -> Vec: ...
+@overload
+def sqrt(x: float) -> float: ...
 def sqrt(x: Vec | float) -> Vec | float:
     if isinstance(x, Vec):
         return Vec._wrap([math.sqrt(v) for v in x._data])
     return math.sqrt(x)
 
 
+@overload
+def log(x: Vec) -> Vec: ...
+@overload
+def log(x: float) -> float: ...
 def log(x: Vec | float) -> Vec | float:
     if isinstance(x, Vec):
         return Vec._wrap([math.log(max(v, 1e-300)) for v in x._data])
     return math.log(max(x, 1e-300))
 
 
+@overload
+def exp(x: Vec) -> Vec: ...
+@overload
+def exp(x: float) -> float: ...
 def exp(x: Vec | float) -> Vec | float:
     if isinstance(x, Vec):
         return Vec._wrap([math.exp(v) for v in x._data])
     return math.exp(x)
 
 
+@overload
+def sin(x: Vec) -> Vec: ...
+@overload
+def sin(x: float) -> float: ...
 def sin(x: Vec | float) -> Vec | float:
     if isinstance(x, Vec):
         return Vec._wrap([math.sin(v) for v in x._data])
     return math.sin(x)
 
 
+@overload
+def cos(x: Vec) -> Vec: ...
+@overload
+def cos(x: float) -> float: ...
 def cos(x: Vec | float) -> Vec | float:
     if isinstance(x, Vec):
         return Vec._wrap([math.cos(v) for v in x._data])
@@ -790,6 +822,12 @@ class _Random:
     def seed(self, s: int) -> None:
         self._rng.seed(s)
 
+    @overload
+    def randn(self) -> float: ...
+    @overload
+    def randn(self, __n: int) -> Vec: ...
+    @overload
+    def randn(self, __n: int, __m: int) -> Mat: ...
     def randn(self, *shape: int) -> Vec | Mat | float:
         """Standard-normal samples (Box–Muller)."""
         if len(shape) == 0:
@@ -809,11 +847,21 @@ class _Random:
             [float(sum(1 for _ in range(n) if self._rng.random() < p)) for _ in range(size)]
         )
 
+    @overload
+    def uniform(self, lo: float = ..., hi: float = ..., size: None = ...) -> float: ...
+    @overload
+    def uniform(self, lo: float, hi: float, size: int) -> Vec: ...
     def uniform(self, lo: float = 0.0, hi: float = 1.0, size: int | None = None) -> float | Vec:
         if size is None:
             return self._rng.uniform(lo, hi)
         return Vec._wrap([self._rng.uniform(lo, hi) for _ in range(size)])
 
+    @overload
+    def rand(self) -> float: ...
+    @overload
+    def rand(self, __n: int) -> Vec: ...
+    @overload
+    def rand(self, __n: int, __m: int) -> Mat: ...
     def rand(self, *shape: int) -> Vec | Mat | float:
         """Uniform [0, 1) samples."""
         if len(shape) == 0:

@@ -58,7 +58,6 @@ from ama_cryptography._numeric import (
     Mat,
     Vec,
     allclose,
-    array,
     diag,
     eigvals,
     eye,
@@ -466,7 +465,7 @@ def initialize_ethical_matrix(dim: int, scalars: Optional[List[float]] = None) -
         scalars = scalars[:dim] + [PHI_CUBED] * max(0, dim - len(scalars))
 
     # Diagonal matrix from ethical scalars
-    E = diag(array(scalars[:dim]))
+    E = diag(scalars[:dim])
 
     # Small symmetric perturbation
     noise = random.randn(dim, dim)
@@ -509,7 +508,7 @@ def verify_mathematical_foundations() -> Dict[str, bool]:
     results["helical_invariants"] = all(r["valid"] for r in dna_results.values())
 
     # 2. Lyapunov Stability
-    test_state = array([0.5, 0.3, 0.2])
+    test_state = Vec([0.5, 0.3, 0.2])
     test_target = ones(3)
     stable, _, _ = lyapunov_stability_proof(test_state, test_target)
     results["lyapunov_stability"] = stable
@@ -519,7 +518,7 @@ def verify_mathematical_foundations() -> Dict[str, bool]:
     results["golden_ratio"] = converged
 
     # 4. Quadratic Form Constraints
-    test_state_4d = array([1.0, 1.0, 1.0, 1.0])
+    test_state_4d = Vec([1.0, 1.0, 1.0, 1.0])
     E = initialize_ethical_matrix(4)
     sigma = calculate_sigma_quadratic(test_state_4d, E)
     results["sigma_quadratic"] = sigma >= 0.9  # Slightly lower for random E
@@ -555,7 +554,7 @@ if __name__ == "__main__":
         logger.info(f"  {status} {code[:15]}: error = {data['fundamental_error']:.2e}")
 
     logger.info("\n[2/5] Lyapunov Stability Theory:")
-    test_state = array([0.5, 0.3, 0.2])
+    test_state = Vec([0.5, 0.3, 0.2])
     stable, V, proof = lyapunov_stability_proof(test_state)
     logger.info(f"  {'✓' if stable else '✗'} Asymptotic stability: {stable}")
     logger.info(f"  V(x) = {V:.6f}")
@@ -570,7 +569,7 @@ if __name__ == "__main__":
     logger.info(f"  Error   = {proof['error']:.2e}")
 
     logger.info("\n[4/5] Quadratic Form Constraints:")
-    test_state_4d = array([1.0, 1.0, 1.0, 1.0])
+    test_state_4d = Vec([1.0, 1.0, 1.0, 1.0])
     E = initialize_ethical_matrix(4)
     sigma = calculate_sigma_quadratic(test_state_4d, E)
     valid, corrected = enforce_sigma_quadratic_threshold(test_state_4d, E, 0.96)
