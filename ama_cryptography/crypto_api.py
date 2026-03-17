@@ -731,8 +731,9 @@ class HybridKEMProvider(KEMProvider):
     via a binding HKDF construction.
 
     Key layout:
-        public_key  = x25519_pub (32 bytes) || kyber_pub
-        secret_key  = x25519_priv (32 bytes) || kyber_secret
+        public_key  = x25519_pub (32 bytes) || kyber_pub (1568 bytes)
+        secret_key  = x25519_priv (32 bytes) || x25519_pub (32 bytes)
+                      || kyber_secret (3168 bytes) || kyber_pub (1568 bytes)
         ciphertext  = x25519_ephemeral_pub (32 bytes) || kyber_ct
     """
 
@@ -752,7 +753,7 @@ class HybridKEMProvider(KEMProvider):
         kyber_kp = generate_kyber_keypair()
 
         combined_pk: bytes = x25519_pk + kyber_kp.public_key
-        combined_sk: bytes = x25519_sk + kyber_kp.secret_key
+        combined_sk: bytes = x25519_sk + x25519_pk + kyber_kp.secret_key + kyber_kp.public_key
 
         return KeyPair(
             public_key=combined_pk,
@@ -810,22 +811,26 @@ class HybridKEMProvider(KEMProvider):
         x25519_eph_pub: bytes = ciphertext[: self._X25519_KEY_BYTES]
         kyber_ct: bytes = ciphertext[self._X25519_KEY_BYTES :]
 
-        # Split secret key
+        # Split secret key: x25519_sk (32) || x25519_pk (32) || kyber_sk || kyber_pub
         x25519_sk: bytes = secret_key[: self._X25519_KEY_BYTES]
-        kyber_sk: bytes = secret_key[self._X25519_KEY_BYTES :]
+        x25519_pub: bytes = secret_key[self._X25519_KEY_BYTES : 2 * self._X25519_KEY_BYTES]
+        kyber_sk: bytes = secret_key[
+            2 * self._X25519_KEY_BYTES : 2 * self._X25519_KEY_BYTES + KYBER_SECRET_KEY_BYTES
+        ]
+        kyber_pub: bytes = secret_key[2 * self._X25519_KEY_BYTES + KYBER_SECRET_KEY_BYTES :]
 
         # Recover shared secrets
         x25519_ss: bytes = native_x25519_key_exchange(x25519_sk, x25519_eph_pub)
         kyber_ss: bytes = kyber_decapsulate(kyber_ct, kyber_sk)
 
-        # Derive public keys for info binding
-        # X25519 public key is not directly recoverable from sk here,
-        # so we pass empty bytes (matching HybridCombiner's optional pk args)
+        # Combine with matching info binding (must match encapsulate)
         combined_ss: bytes = self._combiner.combine(
             classical_ss=x25519_ss,
             pqc_ss=kyber_ss,
             classical_ct=x25519_eph_pub,
             pqc_ct=kyber_ct,
+            classical_pk=x25519_pub,
+            pqc_pk=kyber_pub,
         )
 
         return combined_ss
