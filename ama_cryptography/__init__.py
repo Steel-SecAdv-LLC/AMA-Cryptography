@@ -33,6 +33,13 @@ __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
 import importlib as _importlib
 
+from .crypto_api import (
+    AlgorithmType,
+    AmaCryptography,
+    create_crypto_package,
+    verify_crypto_package,
+)
+
 # Eagerly import math modules when numpy is available.
 # When numpy is NOT installed, __getattr__ provides a clear ImportError
 # mentioning numpy (tested by test_lazy_imports.py).
@@ -106,6 +113,10 @@ def __getattr__(name: str) -> object:
 __all__ = [
     "__version__",
     "__author__",
+    "AlgorithmType",
+    "AmaCryptography",
+    "create_crypto_package",
+    "verify_crypto_package",
     "PHI",
     "PHI_SQUARED",
     "PHI_CUBED",
