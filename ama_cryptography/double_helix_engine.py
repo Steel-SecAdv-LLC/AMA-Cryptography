@@ -52,11 +52,34 @@ AI Co-Architects:
 """
 
 import logging
+import math
 from typing import Dict, List, Optional, Tuple
 
-import numpy as np
-import numpy.typing as npt
-
+from ama_cryptography._numeric import (
+    Vec,
+    abs_,
+    clip,
+    concatenate,
+    cos,
+    dot,
+    eigvals,
+    fft,
+    fill_diagonal,
+    ifft,
+    linspace,
+    log,
+    maximum,
+    mean,
+    norm,
+    ones,
+    random,
+    real,
+    sign,
+    sin,
+    sum_,
+    zeros,
+    zeros_like,
+)
 from ama_cryptography.equations import (
     LAMBDA_DECAY,
     PHI,
@@ -131,7 +154,7 @@ class AmaEquationEngine:
             random_seed: Random seed for reproducibility
         """
         if random_seed is not None:
-            np.random.seed(random_seed)
+            random.seed(random_seed)
 
         self.state_dim = state_dim if state_dim is not None else int(50 * PHI_CUBED)
         self.config = config if config is not None else {}
@@ -187,8 +210,8 @@ class AmaEquationEngine:
         self._initialize_ethical_matrix()
 
         # State tracking
-        self.velocity = np.zeros(self.state_dim)
-        self.target_state = np.ones(self.state_dim) * 1.3
+        self.velocity = zeros(self.state_dim)
+        self.target_state = ones(self.state_dim) * 1.3
         self.temperature = 1.0  # For simulated annealing
 
     def _initialize_ethical_matrix(self) -> None:
@@ -198,205 +221,209 @@ class AmaEquationEngine:
     def _initialize_vqe_params(self) -> None:
         """Initialize Variational Quantum Eigensolver parameters."""
         # Simple parameterized quantum circuit simulation
-        self.vqe_params = np.random.randn(self.state_dim) * 0.1 * PHI_CUBED
-        self.vqe_hamiltonian = np.random.randn(self.state_dim, self.state_dim) * 0.01
-        self.vqe_hamiltonian = (self.vqe_hamiltonian + self.vqe_hamiltonian.T) / 2  # Symmetric
+        self.vqe_params = random.randn(self.state_dim) * (0.1 * PHI_CUBED)
+        self.vqe_hamiltonian = random.randn(self.state_dim, self.state_dim) * 0.01
+        self.vqe_hamiltonian = (self.vqe_hamiltonian + self.vqe_hamiltonian.T) * 0.5  # Symmetric
 
     def _initialize_qbm_matrix(self) -> None:
         """Initialize Quantum Boltzmann Machine coupling matrix."""
         # Symmetric coupling matrix J
-        J = np.random.randn(self.state_dim, self.state_dim) * 0.05 * PHI_CUBED
-        self.qbm_matrix = (J + J.T) / 2
-        np.fill_diagonal(self.qbm_matrix, 0)  # No self-coupling
+        J = random.randn(self.state_dim, self.state_dim) * (0.05 * PHI_CUBED)
+        self.qbm_matrix = (J + J.T) * 0.5
+        fill_diagonal(self.qbm_matrix, 0)  # No self-coupling
 
     def _initialize_attention(self) -> None:
         """Initialize self-attention mechanism weights."""
         # Simplified attention: Query, Key, Value projections
-        scale = 0.1 * PHI_CUBED / np.sqrt(self.state_dim)
-        self.attn_query = np.random.randn(self.state_dim, self.state_dim) * scale
-        self.attn_key = np.random.randn(self.state_dim, self.state_dim) * scale
-        self.attn_value = np.random.randn(self.state_dim, self.state_dim) * scale
+        scale = 0.1 * PHI_CUBED / math.sqrt(self.state_dim)
+        self.attn_query = random.randn(self.state_dim, self.state_dim) * scale
+        self.attn_key = random.randn(self.state_dim, self.state_dim) * scale
+        self.attn_value = random.randn(self.state_dim, self.state_dim) * scale
 
     # ========================================================================
     # HELIX 1: DISCOVERY/EXPLORATION STRAND TERMS
     # ========================================================================
 
-    def _term_quantum(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_quantum(self, state: Vec) -> Vec:
         """β𝐐: Quantum-inspired noise."""
-        return self.beta * np.random.randn(self.state_dim)
+        return random.randn(self.state_dim) * self.beta
 
-    def _term_perturbation(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_perturbation(self, state: Vec) -> Vec:
         """γ𝐏: Exploration perturbation."""
-        return self.gamma * np.random.randn(self.state_dim)
+        return random.randn(self.state_dim) * self.gamma
 
-    def _term_drift(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_drift(self, state: Vec) -> Vec:
         """δ𝐃: Directional evolution toward target."""
         direction = self.target_state - state
-        norm = np.linalg.norm(direction)
-        if norm > 0:
-            direction = direction / norm
-        return self.delta * direction
+        n = norm(direction)
+        if n > 0:
+            direction = direction * (1.0 / n)
+        return direction * self.delta
 
-    def _term_ethical_gradient(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_ethical_gradient(self, state: Vec) -> Vec:
         """ε𝐄: Ethical gradient from constraint matrix."""
         grad = self.ethical_matrix @ state
-        return self.epsilon * grad / (np.linalg.norm(grad) + 1e-8)
+        return grad * (self.epsilon / (norm(grad) + 1e-8))
 
-    def _term_velocity(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_velocity(self, state: Vec) -> Vec:
         """ν𝐕: Momentum from previous step."""
         # Update velocity with damping
-        self.velocity = 0.9 * self.velocity + 0.1 * (state - self.target_state)
-        return self.nu * self.velocity
+        self.velocity = self.velocity * 0.9 + (state - self.target_state) * 0.1
+        return self.velocity * self.nu
 
-    def _term_wave(self, state: npt.NDArray, t: int) -> npt.NDArray:
+    def _term_wave(self, state: Vec, t: int) -> Vec:
         """ω𝐖: Oscillatory wave component."""
-        frequencies = np.linspace(0.1, 1.0, self.state_dim)
-        waves = np.sin(2 * np.pi * frequencies * t / 10.0)
-        return self.omega * waves * 0.1
+        frequencies = linspace(0.1, 1.0, self.state_dim)
+        waves = sin(frequencies * (2 * math.pi * t / 10.0))
+        return waves * (self.omega * 0.1)
 
-    def _term_resonance(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_resonance(self, state: Vec) -> Vec:
         """𝐑₃: FFT-based resonance patterns."""
         # Simple FFT resonance
-        fft = np.fft.fft(state)
+        f = fft(state)
         # Amplify low frequencies
-        fft[: len(fft) // 4] *= 1.5
-        resonance = np.real(np.fft.ifft(fft))
-        return 0.1 * resonance
+        quarter = len(f) // 4
+        for i in range(quarter):
+            f._data[i] = f._data[i] * 1.5
+        resonance = real(ifft(f))
+        return resonance * 0.1
 
-    def _term_annealing(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_annealing(self, state: Vec) -> Vec:
         """κ𝐀_n: Simulated annealing factor."""
         # Temperature decreases over time
-        annealing_factor = np.exp(-self.temperature)
-        return self.kappa * annealing_factor * np.random.randn(self.state_dim) * 0.1
+        annealing_factor = math.exp(-self.temperature)
+        return random.randn(self.state_dim) * (self.kappa * annealing_factor * 0.1)
 
-    def _term_lyapunov_correction(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_lyapunov_correction(self, state: Vec) -> Vec:
         """λ𝚲: Lyapunov stability correction."""
         V = lyapunov_function(state, self.target_state)
         if V > 0:
-            correction = -(state - self.target_state) / V
-            return self.lambda_coeff * correction * 0.1
-        return np.zeros_like(state)
+            correction = (state - self.target_state) * (-1.0 / V)
+            return correction * (self.lambda_coeff * 0.1)
+        return zeros_like(state)
 
-    def _term_threshold(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_threshold(self, state: Vec) -> Vec:
         """θ𝚯: Activation function (ReLU)."""
-        return self.theta * np.maximum(0, state) * 0.1
+        return maximum(0, state) * (self.theta * 0.1)
 
-    def _term_phi_scaling(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_phi_scaling(self, state: Vec) -> Vec:
         """φ𝚽: Golden ratio scaling."""
-        return (self.phi_scale - 1.0) * state * 0.1
+        return state * ((self.phi_scale - 1.0) * 0.1)
 
-    def _term_zero_mean(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_zero_mean(self, state: Vec) -> Vec:
         """ζ𝐙: Zero-mean normalization."""
-        mean = np.mean(state)
-        return self.zeta * (state - mean) * 0.1
+        m = mean(state)
+        return (state - m) * (self.zeta * 0.1)
 
-    def _term_hamiltonian(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_hamiltonian(self, state: Vec) -> Vec:
         """ℏ𝐡_q: Quantum Hamiltonian energy operator."""
-        return self.hbar * (self.vqe_hamiltonian @ state) * 0.1
+        return (self.vqe_hamiltonian @ state) * (self.hbar * 0.1)
 
-    def _term_vqe(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_vqe(self, state: Vec) -> Vec:
         """𝐕𝐐𝐄: Variational Quantum Eigensolver update."""
         # Simplified VQE: rotate state by parameterized angles
-        rotated = state * np.cos(self.vqe_params) + np.sin(self.vqe_params)
-        return 0.1 * (rotated - state)
+        rotated = state * cos(self.vqe_params) + sin(self.vqe_params)
+        return (rotated - state) * 0.1
 
-    def _term_qbm(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_qbm(self, state: Vec) -> Vec:
         """𝐐𝐁𝐌: Quantum Boltzmann Machine sampling."""
         # Energy-based sampling
-        energy = -0.5 * (state @ self.qbm_matrix @ state)
+        energy = -0.5 * (state @ (self.qbm_matrix @ state))
         # Clip to prevent overflow in exp
-        energy_scaled = np.clip(-energy / (self.temperature + 0.1), -700, 700)
-        prob = 1.0 / (1.0 + np.exp(energy_scaled))
-        sample = np.random.binomial(1, min(0.9, max(0.1, prob)), size=self.state_dim)
-        return 0.05 * (2 * sample - 1)
+        energy_scaled = max(-700.0, min(700.0, -energy / (self.temperature + 0.1)))
+        prob = 1.0 / (1.0 + math.exp(energy_scaled))
+        sample = random.binomial(1, min(0.9, max(0.1, prob)), size=self.state_dim)
+        return sample * 2 - 1.0  # map {0,1} -> {-1,1}, scale by 0.05 below
 
-    def _term_attention(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_attention(self, state: Vec) -> Vec:
         """𝐀𝐭𝐭𝐧: Self-attention mechanism."""
         query = self.attn_query @ state
         key = self.attn_key @ state
         value = self.attn_value @ state
 
         # Attention weights
-        attention_scores = np.dot(query, key) / np.sqrt(self.state_dim)
+        attention_scores = dot(query, key) / math.sqrt(self.state_dim)
         # Clip to prevent overflow in exp
-        attention_scores_clipped = np.clip(-attention_scores, -700, 700)
-        attention_weights = 1.0 / (1.0 + np.exp(attention_scores_clipped))  # Sigmoid
+        attention_scores_clipped = max(-700.0, min(700.0, -attention_scores))
+        attention_weights = 1.0 / (1.0 + math.exp(attention_scores_clipped))  # Sigmoid
 
         # Weighted value
-        attended = attention_weights * value
-        return 0.1 * attended
+        attended = value * attention_weights
+        return attended * 0.1
 
-    def _term_fractal(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_fractal(self, state: Vec) -> Vec:
         """𝐅: Fractal self-similar patterns."""
         # Simple fractal: subdivide and repeat pattern
         half = len(state) // 2
         if half > 0:
-            pattern = np.concatenate([state[:half], state[:half]])
+            pattern = concatenate([state[:half], state[:half]])
             if len(pattern) < len(state):
-                pattern = np.concatenate([pattern, state[: len(state) - len(pattern)]])
-            return 0.05 * (pattern - state)
-        return np.zeros_like(state)
+                pattern = concatenate([pattern, state[: len(state) - len(pattern)]])
+            return (pattern - state) * 0.05
+        return zeros_like(state)
 
-    def _term_symmetry(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_symmetry(self, state: Vec) -> Vec:
         """𝐒: Symmetry constraint projection."""
         # Mirror symmetry
-        mirrored = state[::-1]
-        symmetric = (state + mirrored) / 2
-        return 0.05 * (symmetric - state)
+        mirrored = Vec._wrap(state._data[::-1])
+        symmetric = (state + mirrored) * 0.5
+        return (symmetric - state) * 0.05
 
-    def _term_information(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_information(self, state: Vec) -> Vec:
         """𝐈: Information entropy gradient."""
         # Entropy-based push toward uniform distribution
-        probs = np.abs(state) / (np.sum(np.abs(state)) + 1e-8)
-        entropy: float = float(-np.sum(probs * np.log(probs + 1e-8)))
-        max_entropy = np.log(len(state))
-        info_gradient = (max_entropy - entropy) * np.sign(state - np.mean(state))
-        return 0.05 * info_gradient
+        abs_state = abs_(state)
+        total = sum_(abs_state) + 1e-8
+        probs = abs_state * (1.0 / total)
+        entropy: float = -sum_(probs * log(probs + 1e-8))
+        max_entropy = math.log(len(state))
+        info_gradient = sign(state - mean(state)) * (max_entropy - entropy)
+        return info_gradient * 0.05
 
-    def _term_relativistic(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_relativistic(self, state: Vec) -> Vec:
         """𝐑𝐞𝐥: Relativistic Lorentz-like correction."""
         # Simple velocity-dependent correction
-        velocity_norm = np.linalg.norm(self.velocity) + 1e-8
-        gamma = 1.0 / np.sqrt(1.0 + (velocity_norm / 10.0) ** 2)  # Lorentz factor
-        return 0.05 * (gamma - 1.0) * state
+        velocity_norm = norm(self.velocity) + 1e-8
+        gamma = 1.0 / math.sqrt(1.0 + (velocity_norm / 10.0) ** 2)  # Lorentz factor
+        return state * (0.05 * (gamma - 1.0))
 
-    def _term_alignment(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_alignment(self, state: Vec) -> Vec:
         """ξ𝐀𝐥: Ethical alignment vector."""
         # Align with predefined ethical direction
-        ethical_direction = self.target_state / (np.linalg.norm(self.target_state) + 1e-8)
-        alignment = np.dot(state, ethical_direction)
-        return self.xi * alignment * ethical_direction * 0.1
+        ethical_direction = self.target_state * (1.0 / (norm(self.target_state) + 1e-8))
+        alignment = dot(state, ethical_direction)
+        return ethical_direction * (self.xi * alignment * 0.1)
 
-    def _term_omega_singularity(self, state: npt.NDArray) -> npt.NDArray:
+    def _term_omega_singularity(self, state: Vec) -> Vec:
         """Ω: Omega singularity score."""
         # Convergence metric
-        distance = np.linalg.norm(state - self.target_state)
+        distance = norm(state - self.target_state)
         omega_score = 1.0 / (1.0 + distance)
-        return 0.05 * omega_score * (self.target_state - state)
+        return (self.target_state - state) * (0.05 * omega_score)
 
-    def _term_time_noise(self, state: npt.NDArray, t: int) -> npt.NDArray:
+    def _term_time_noise(self, state: Vec, t: int) -> Vec:
         """η_t: Time-varying noise."""
         # Decreasing noise over time
-        noise_scale = np.exp(-t / 50.0)
-        return noise_scale * np.random.randn(self.state_dim) * 0.1
+        noise_scale = math.exp(-t / 50.0)
+        return random.randn(self.state_dim) * (noise_scale * 0.1)
 
     # ========================================================================
     # HELIX 2: ETHICAL VERIFICATION STRAND
     # ========================================================================
 
-    def _compute_purity(self, state: npt.NDArray) -> npt.NDArray:
+    def _compute_purity(self, state: Vec) -> Vec:
         """α𝐇: Ethical purity invariant."""
         # Purity as normalized state
-        norm = np.linalg.norm(state)
-        if norm > 0:
-            return state / norm
+        n = norm(state)
+        if n > 0:
+            return state * (1.0 / n)
         return state
 
     # ========================================================================
     # DOUBLE-HELIX EVOLUTION STEP
     # ========================================================================
 
-    def step(self, state: npt.NDArray, t: int = 0) -> npt.NDArray:  # noqa: C901
+    def step(self, state: Vec, t: int = 0) -> Vec:  # noqa: C901
         """
         Execute one Double-Helix evolution step.
 
@@ -460,15 +487,15 @@ class AmaEquationEngine:
             helix1 += self._term_time_noise(state, t)
 
         # Helix 2: Ethical Verification Strand
-        helix2 = np.zeros_like(state)
+        helix2 = zeros_like(state)
 
         # Purity invariant (α𝐇)
         purity = self._compute_purity(state)
-        helix2 += self.alpha * purity * 0.1
+        helix2 += purity * (self.alpha * 0.1)
 
         # Lyapunov term (ℓ𝐋)
         lyapunov_grad = self._term_lyapunov_correction(state)
-        helix2 += self.ell * lyapunov_grad
+        helix2 += lyapunov_grad * self.ell
 
         # σ_quadratic enforcement
         sigma = calculate_sigma_quadratic(helix1, self.ethical_matrix)
@@ -479,10 +506,10 @@ class AmaEquationEngine:
         # Boundedness (∞_b)
         if self.enable_inf_b:
             bound = 10.0 * PHI_CUBED
-            helix1 = np.clip(helix1, -bound, bound)
+            helix1 = clip(helix1, -bound, bound)
 
         # Multiplicative coupling: Helix_1 × (1 + normalized_Helix_2)
-        helix2_norm = np.linalg.norm(helix2) / (np.linalg.norm(state) + 1e-8)
+        helix2_norm = norm(helix2) / (norm(state) + 1e-8)
         state_next = helix1 * (1 + helix2_norm * 0.1)
 
         # Decrease temperature for annealing
@@ -492,10 +519,10 @@ class AmaEquationEngine:
 
     def converge(
         self,
-        initial_state: Optional[npt.NDArray] = None,
+        initial_state: Optional[Vec] = None,
         max_steps: int = 100,
         tolerance: float = 1e-4,
-    ) -> Tuple[npt.NDArray, List[float]]:
+    ) -> Tuple[Vec, List[float]]:
         """
         Iteratively converge to stable state with Lyapunov monitoring.
 
@@ -509,7 +536,7 @@ class AmaEquationEngine:
             convergence_history: List of Lyapunov values over time
         """
         if initial_state is None:
-            state = np.random.randn(self.state_dim) * 0.1 * PHI_CUBED
+            state = random.randn(self.state_dim) * (0.1 * PHI_CUBED)
         else:
             state = initial_state.copy()
 
@@ -530,7 +557,7 @@ class AmaEquationEngine:
                 break
 
             # Convergence check
-            if np.linalg.norm(state - state_prev) < tolerance:
+            if norm(state - state_prev) < tolerance:
                 break
 
         return state, history
@@ -549,24 +576,22 @@ if __name__ == "__main__":
 
     logger.info("\nEngine Configuration:")
     logger.info(f"  State dimension: {engine.state_dim}")
-    logger.info(f"  Target state norm: {np.linalg.norm(engine.target_state):.4f}")
-    logger.info(
-        f"  Ethical matrix eigenvalues: [{np.min(np.linalg.eigvals(engine.ethical_matrix).real):.2f}, "
-        f"{np.max(np.linalg.eigvals(engine.ethical_matrix).real):.2f}]"
-    )
+    logger.info(f"  Target state norm: {norm(engine.target_state):.4f}")
+    eigs = eigvals(engine.ethical_matrix)
+    logger.info(f"  Ethical matrix eigenvalues: [{min(eigs):.2f}, {max(eigs):.2f}]")
 
     # Run convergence
     logger.info("\nRunning Double-Helix evolution...")
-    initial_state = np.random.randn(50) * 0.5
+    initial_state = random.randn(50) * 0.5
     final_state, history = engine.converge(initial_state, max_steps=50)
 
     logger.info("\nConvergence Results:")
     logger.info(f"  Initial Lyapunov V(x₀): {history[0]:.6f}")
     logger.info(f"  Final Lyapunov V(xₙ):   {history[-1]:.6f}")
     logger.info(f"  Convergence steps: {len(history)}")
-    logger.info(f"  Final state norm: {np.linalg.norm(final_state):.6f}")
-    logger.info(f"  Target state norm: {np.linalg.norm(engine.target_state):.6f}")
-    logger.info(f"  Distance to target: {np.linalg.norm(final_state - engine.target_state):.6f}")
+    logger.info(f"  Final state norm: {norm(final_state):.6f}")
+    logger.info(f"  Target state norm: {norm(engine.target_state):.6f}")
+    logger.info(f"  Distance to target: {norm(final_state - engine.target_state):.6f}")
 
     # Verify σ_quadratic
     sigma = calculate_sigma_quadratic(final_state, engine.ethical_matrix)

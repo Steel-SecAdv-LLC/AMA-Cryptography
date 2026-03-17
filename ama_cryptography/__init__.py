@@ -31,84 +31,32 @@ AI Co-Architects:
 __version__ = "2.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
-import importlib as _importlib
-
 from .crypto_api import (
     AlgorithmType,
     AmaCryptography,
     create_crypto_package,
     verify_crypto_package,
 )
-
-# Eagerly import math modules when numpy is available.
-# When numpy is NOT installed, __getattr__ provides a clear ImportError
-# mentioning numpy (tested by test_lazy_imports.py).
-_EQUATIONS_EXPORTS = frozenset(
-    {
-        "HELIX_PARAMS",
-        "LAMBDA_DECAY",
-        "OMNI_CODES",
-        "PHI",
-        "PHI_CUBED",
-        "PHI_SQUARED",
-        "SIGMA_QUADRATIC_THRESHOLD",
-        "calculate_sigma_quadratic",
-        "enforce_sigma_quadratic_threshold",
-        "golden_ratio_convergence_proof",
-        "helix_curvature",
-        "helix_torsion",
-        "initialize_ethical_matrix",
-        "lyapunov_function",
-        "lyapunov_stability_proof",
-        "verify_all_codes",
-        "verify_mathematical_foundations",
-    }
+from .double_helix_engine import AmaEquationEngine
+from .equations import (
+    HELIX_PARAMS,
+    LAMBDA_DECAY,
+    OMNI_CODES,
+    PHI,
+    PHI_CUBED,
+    PHI_SQUARED,
+    SIGMA_QUADRATIC_THRESHOLD,
+    calculate_sigma_quadratic,
+    enforce_sigma_quadratic_threshold,
+    golden_ratio_convergence_proof,
+    helix_curvature,
+    helix_torsion,
+    initialize_ethical_matrix,
+    lyapunov_function,
+    lyapunov_stability_proof,
+    verify_all_codes,
+    verify_mathematical_foundations,
 )
-_ENGINE_EXPORTS = frozenset({"AmaEquationEngine"})
-try:
-    from ama_cryptography.double_helix_engine import AmaEquationEngine
-    from ama_cryptography.equations import (
-        HELIX_PARAMS,
-        LAMBDA_DECAY,
-        OMNI_CODES,
-        PHI,
-        PHI_CUBED,
-        PHI_SQUARED,
-        SIGMA_QUADRATIC_THRESHOLD,
-        calculate_sigma_quadratic,
-        enforce_sigma_quadratic_threshold,
-        golden_ratio_convergence_proof,
-        helix_curvature,
-        helix_torsion,
-        initialize_ethical_matrix,
-        lyapunov_function,
-        lyapunov_stability_proof,
-        verify_all_codes,
-        verify_mathematical_foundations,
-    )
-
-except (ImportError, ModuleNotFoundError):
-    import logging as _logging
-
-    _logging.getLogger(__name__).debug(
-        "numpy not available; math exports use lazy __getattr__ fallback"
-    )
-
-
-def __getattr__(name: str) -> object:
-    """Provide a clear error when math symbols are accessed without numpy."""
-    if name in _EQUATIONS_EXPORTS:
-        mod = _importlib.import_module("ama_cryptography.equations")
-        val = getattr(mod, name)
-        globals()[name] = val
-        return val
-    if name in _ENGINE_EXPORTS:
-        mod = _importlib.import_module("ama_cryptography.double_helix_engine")
-        val = getattr(mod, name)
-        globals()[name] = val
-        return val
-    raise AttributeError(f"module 'ama_cryptography' has no attribute {name!r}")
-
 
 __all__ = [
     "__version__",

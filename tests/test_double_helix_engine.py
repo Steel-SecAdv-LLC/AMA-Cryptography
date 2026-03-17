@@ -36,11 +36,18 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 # Derive repo root relative to this file for portability
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from ama_cryptography._numeric import (
+    allclose,
+    eigvals,
+    max_,
+    norm,
+    ones,
+    random,
+    abs_,
+)
 from ama_cryptography.double_helix_engine import AmaEquationEngine
 from ama_cryptography.equations import PHI_CUBED, calculate_sigma_quadratic
 
@@ -68,8 +75,8 @@ class TestAmaEquationEngineInitialization(unittest.TestCase):
         self.assertEqual(engine.ethical_matrix.shape, (50, 50))
 
         # Check positive-definite
-        eigenvalues = np.linalg.eigvals(engine.ethical_matrix)
-        self.assertTrue(np.all(eigenvalues.real > 0))
+        eigs = eigvals(engine.ethical_matrix)
+        self.assertTrue(all(e > 0 for e in eigs))
 
     def test_quantum_components_initialized(self) -> None:
         """Test quantum-inspired components are initialized."""
@@ -88,7 +95,7 @@ class TestDoubleHelixEvolution(unittest.TestCase):
     def setUp(self) -> None:
         """Create engine for testing."""
         self.engine = AmaEquationEngine(state_dim=50, random_seed=42)
-        self.initial_state = np.random.randn(50) * 0.1
+        self.initial_state = random.randn(50) * 0.1
 
     def test_step_execution(self) -> None:
         """Test single evolution step executes."""
@@ -100,7 +107,7 @@ class TestDoubleHelixEvolution(unittest.TestCase):
         """Test evolution step modifies state."""
         state_next = self.engine.step(self.initial_state.copy(), t=0)
         # State should change (not be identical)
-        self.assertFalse(np.allclose(state_next, self.initial_state))
+        self.assertFalse(allclose(state_next, self.initial_state))
 
     def test_sigma_quadratic_enforcement(self) -> None:
         """Test σ_quadratic ≥ 0.96 enforcement during evolution."""
@@ -118,12 +125,12 @@ class TestDoubleHelixEvolution(unittest.TestCase):
     def test_boundedness_enforcement(self) -> None:
         """Test infinity norm boundedness (∞_b)."""
         # Start with large state
-        large_state = np.ones(50) * 100.0
+        large_state = ones(50) * 100.0
         state_next = self.engine.step(large_state, t=0)
 
         # Should be clipped to bound
         bound = 10.0 * PHI_CUBED
-        max_val: float = float(np.max(np.abs(state_next)))
+        max_val: float = max_(abs_(state_next))
         self.assertLessEqual(max_val, bound + 1.0)  # Small tolerance for operations
 
     def test_temperature_annealing(self) -> None:
@@ -147,7 +154,7 @@ class TestConvergence(unittest.TestCase):
 
     def test_converge_executes(self) -> None:
         """Test convergence runs without errors."""
-        initial_state = np.random.randn(50) * 0.5
+        initial_state = random.randn(50) * 0.5
         final_state, history = self.engine.converge(initial_state, max_steps=20)
 
         self.assertIsNotNone(final_state)
@@ -156,7 +163,7 @@ class TestConvergence(unittest.TestCase):
 
     def test_convergence_history_recorded(self) -> None:
         """Test Lyapunov history is recorded."""
-        initial_state = np.random.randn(50) * 0.5
+        initial_state = random.randn(50) * 0.5
         _, history = self.engine.converge(initial_state, max_steps=20)
 
         self.assertGreater(len(history), 0, "History should be non-empty")
@@ -166,7 +173,7 @@ class TestConvergence(unittest.TestCase):
 
     def test_convergence_stops_at_tolerance(self) -> None:
         """Test convergence stops when tolerance is met."""
-        initial_state = np.random.randn(50) * 0.5
+        initial_state = random.randn(50) * 0.5
         _, history = self.engine.converge(initial_state, max_steps=100, tolerance=1e-3)
 
         # Should stop before max_steps if converged
@@ -176,7 +183,7 @@ class TestConvergence(unittest.TestCase):
         """Test rollback occurs if Lyapunov V̇ > 0 (instability)."""
         # This test checks the rollback mechanism exists
         # Actual instability detection depends on parameters
-        initial_state = np.random.randn(50) * 0.5
+        initial_state = random.randn(50) * 0.5
         final_state, _history = self.engine.converge(initial_state, max_steps=50)
 
         # Should complete without errors
@@ -189,7 +196,7 @@ class TestIndividualTerms(unittest.TestCase):
     def setUp(self) -> None:
         """Create engine for testing."""
         self.engine = AmaEquationEngine(state_dim=50, random_seed=42)
-        self.state = np.random.randn(50) * 0.1
+        self.state = random.randn(50) * 0.1
 
     def test_quantum_term(self) -> None:
         """Test β𝐐 quantum noise term."""
@@ -236,8 +243,8 @@ class TestIndividualTerms(unittest.TestCase):
         purity = self.engine._compute_purity(self.state)
         self.assertEqual(len(purity), len(self.state))
         # Should be normalized
-        norm = np.linalg.norm(purity)
-        self.assertAlmostEqual(float(norm), 1.0, places=6)
+        n = norm(purity)
+        self.assertAlmostEqual(float(n), 1.0, places=6)
 
 
 class TestTermEnableDisable(unittest.TestCase):
