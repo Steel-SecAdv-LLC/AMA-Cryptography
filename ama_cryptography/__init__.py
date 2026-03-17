@@ -28,15 +28,14 @@ AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 """
 
+import importlib as _importlib
+from typing import TYPE_CHECKING, Any
+
 __version__ = "2.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
-from .crypto_api import (
-    AlgorithmType,
-    AmaCryptography,
-    create_crypto_package,
-    verify_crypto_package,
-)
+# Eagerly import math modules (double_helix_engine, equations) — they carry
+# no availability-check side effects and are the most frequently used exports.
 from .double_helix_engine import AmaEquationEngine
 from .equations import (
     HELIX_PARAMS,
@@ -57,6 +56,36 @@ from .equations import (
     verify_all_codes,
     verify_mathematical_foundations,
 )
+
+# crypto_api exports are lazy-loaded to avoid side-effect warnings at
+# import time (PQC availability checks, HMAC/HKDF warnings, etc.).
+_CRYPTO_API_EXPORTS = frozenset(
+    {
+        "AlgorithmType",
+        "AmaCryptography",
+        "create_crypto_package",
+        "verify_crypto_package",
+    }
+)
+
+if TYPE_CHECKING:
+    from .crypto_api import (  # noqa: F401
+        AlgorithmType,
+        AmaCryptography,
+        create_crypto_package,
+        verify_crypto_package,
+    )
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy-load crypto_api symbols on first access."""
+    if name in _CRYPTO_API_EXPORTS:
+        mod = _importlib.import_module("ama_cryptography.crypto_api")
+        val: Any = getattr(mod, name)
+        globals()[name] = val
+        return val
+    raise AttributeError(f"module 'ama_cryptography' has no attribute {name!r}")
+
 
 __all__ = [
     "__version__",
