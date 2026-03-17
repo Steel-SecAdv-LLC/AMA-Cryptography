@@ -65,6 +65,7 @@ __all__ = [
 # Vec — 1-D numerical array
 # ---------------------------------------------------------------------------
 
+
 class Vec:
     """1-D array of floats with element-wise arithmetic and ``@`` (dot)."""
 
@@ -191,7 +192,7 @@ class Vec:
 
     def __pow__(self, exp: object) -> Vec:
         if isinstance(exp, (int, float)):
-            return Vec._wrap([a ** exp for a in self._data])
+            return Vec._wrap([a**exp for a in self._data])
         return NotImplemented
 
     def __abs__(self) -> Vec:
@@ -249,6 +250,7 @@ class Vec:
 # ---------------------------------------------------------------------------
 # Mat — 2-D numerical array (row-major list of lists)
 # ---------------------------------------------------------------------------
+
 
 class Mat:
     """2-D array of floats with arithmetic, transpose, and ``@`` (matmul)."""
@@ -310,10 +312,7 @@ class Mat:
             ]
             return Mat._wrap(d, self.rows, self.cols)
         if isinstance(other, (int, float)):
-            d = [
-                [self._data[r][c] + other for c in range(self.cols)]
-                for r in range(self.rows)
-            ]
+            d = [[self._data[r][c] + other for c in range(self.cols)] for r in range(self.rows)]
             return Mat._wrap(d, self.rows, self.cols)
         return NotImplemented
 
@@ -328,28 +327,19 @@ class Mat:
             ]
             return Mat._wrap(d, self.rows, self.cols)
         if isinstance(other, (int, float)):
-            d = [
-                [self._data[r][c] - other for c in range(self.cols)]
-                for r in range(self.rows)
-            ]
+            d = [[self._data[r][c] - other for c in range(self.cols)] for r in range(self.rows)]
             return Mat._wrap(d, self.rows, self.cols)
         return NotImplemented
 
     def __rsub__(self, other: object) -> Mat:
         if isinstance(other, (int, float)):
-            d = [
-                [other - self._data[r][c] for c in range(self.cols)]
-                for r in range(self.rows)
-            ]
+            d = [[other - self._data[r][c] for c in range(self.cols)] for r in range(self.rows)]
             return Mat._wrap(d, self.rows, self.cols)
         return NotImplemented
 
     def __mul__(self, other: object) -> Mat:
         if isinstance(other, (int, float)):
-            d = [
-                [self._data[r][c] * other for c in range(self.cols)]
-                for r in range(self.rows)
-            ]
+            d = [[self._data[r][c] * other for c in range(self.cols)] for r in range(self.rows)]
             return Mat._wrap(d, self.rows, self.cols)
         return NotImplemented
 
@@ -358,10 +348,7 @@ class Mat:
 
     def __truediv__(self, other: object) -> Mat:
         if isinstance(other, (int, float)):
-            d = [
-                [self._data[r][c] / other for c in range(self.cols)]
-                for r in range(self.rows)
-            ]
+            d = [[self._data[r][c] / other for c in range(self.cols)] for r in range(self.rows)]
             return Mat._wrap(d, self.rows, self.cols)
         return NotImplemented
 
@@ -396,6 +383,7 @@ class Mat:
 # ---------------------------------------------------------------------------
 # Construction functions
 # ---------------------------------------------------------------------------
+
 
 def array(data: Sequence[float] | Sequence[Sequence[float]]) -> Vec | Mat:
     """Create a Vec (1-D) or Mat (2-D) from nested sequences."""
@@ -482,6 +470,7 @@ def real(v: Vec) -> Vec:
 # Element-wise math  (operate on Vec, return Vec)
 # ---------------------------------------------------------------------------
 
+
 def sqrt(x: Vec | float) -> Vec | float:
     if isinstance(x, Vec):
         return Vec._wrap([math.sqrt(v) for v in x._data])
@@ -540,11 +529,10 @@ def min_(x: Vec) -> float:
 # Linear algebra
 # ---------------------------------------------------------------------------
 
+
 def dot(a: Vec, b: Vec) -> float:
     if len(a._data) != len(b._data):
-        raise ValueError(
-            f"Vec length mismatch in dot(): {len(a._data)} vs {len(b._data)}"
-        )
+        raise ValueError(f"Vec length mismatch in dot(): {len(a._data)} vs {len(b._data)}")
     return sum(x * y for x, y in zip(a._data, b._data))
 
 
@@ -620,9 +608,7 @@ def _tridiagonalize(A: List[List[float]], n: int) -> List[List[float]]:
     return A
 
 
-def _qr_tridiagonal_eigvals(
-    A: List[List[float]], n: int, max_iter: int = 200
-) -> List[float]:
+def _qr_tridiagonal_eigvals(A: List[List[float]], n: int, max_iter: int = 200) -> List[float]:
     """
     Implicit-shift QR iteration on a tridiagonal matrix.
 
@@ -691,6 +677,7 @@ def _qr_tridiagonal_eigvals(
 # ---------------------------------------------------------------------------
 # FFT / IFFT  (Cooley–Tukey radix-2, arbitrary length via Bluestein)
 # ---------------------------------------------------------------------------
+
 
 def _next_pow2(n: int) -> int:
     p = 1
@@ -792,8 +779,7 @@ def ifft(v: Vec) -> Vec:
         return Vec._wrap([])
 
     x: List[complex] = [
-        v._data[i] if isinstance(v._data[i], complex) else complex(v._data[i])
-        for i in range(n)
+        v._data[i] if isinstance(v._data[i], complex) else complex(v._data[i]) for i in range(n)
     ]
 
     if n & (n - 1) == 0:  # power of 2
@@ -809,6 +795,7 @@ def ifft(v: Vec) -> Vec:
 # ---------------------------------------------------------------------------
 # Seeded PRNG  (wraps stdlib random for reproducibility)
 # ---------------------------------------------------------------------------
+
 
 class _Random:
     """Numpy-compatible random interface backed by stdlib random."""
@@ -827,20 +814,16 @@ class _Random:
             return Vec._wrap([self._box_muller_single() for _ in range(shape[0])])
         if len(shape) == 2:
             rows, cols = shape
-            d = [
-                [self._box_muller_single() for _ in range(cols)]
-                for _ in range(rows)
-            ]
+            d = [[self._box_muller_single() for _ in range(cols)] for _ in range(rows)]
             return Mat._wrap(d, rows, cols)
         raise ValueError(f"randn supports up to 2-D, got {len(shape)}-D")
 
     def binomial(self, n: int, p: float, size: int) -> Vec:
         """Binomial samples."""
         p = max(0.0, min(1.0, p))
-        return Vec._wrap([
-            float(sum(1 for _ in range(n) if self._rng.random() < p))
-            for _ in range(size)
-        ])
+        return Vec._wrap(
+            [float(sum(1 for _ in range(n) if self._rng.random() < p)) for _ in range(size)]
+        )
 
     def uniform(self, lo: float = 0.0, hi: float = 1.0, size: int | None = None) -> float | Vec:
         if size is None:

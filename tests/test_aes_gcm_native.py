@@ -29,6 +29,7 @@ skip_no_native = pytest.mark.skipif(
     reason="Native AES-256-GCM library not available (build with cmake)",
 )
 
+
 def _pyca_crypto_available() -> bool:
     """Check if PyCA cryptography is usable (may be broken if _cffi_backend missing)."""
     try:

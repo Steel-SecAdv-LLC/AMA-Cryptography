@@ -238,7 +238,7 @@ def lyapunov_function(state: Vec, target: Vec) -> float:
         Lyapunov value V(x)
     """
     diff = state - target
-    return float(sum_(diff ** 2))
+    return float(sum_(diff**2))
 
 
 def lyapunov_derivative(V: float, lambda_decay: float = LAMBDA_DECAY) -> float:
@@ -442,9 +442,7 @@ def enforce_sigma_quadratic_threshold(
     return False, corrected_state
 
 
-def initialize_ethical_matrix(
-    dim: int, scalars: Optional[List[float]] = None
-) -> Mat:
+def initialize_ethical_matrix(dim: int, scalars: Optional[List[float]] = None) -> Mat:
     """
     Create positive-definite ethical constraint matrix E.
 

@@ -32,8 +32,6 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-logger: logging.Logger = logging.getLogger(__name__)
-
 from ama_cryptography.pqc_backends import (
     DILITHIUM_AVAILABLE,
     DILITHIUM_BACKEND,
@@ -93,6 +91,8 @@ except ImportError:
     TimestampUnavailableError = Exception  # type: ignore[misc,assignment]
     TimestampError = Exception  # type: ignore[misc,assignment]
     get_timestamp = None  # type: ignore[assignment]
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 # Runtime PQC availability check
 pqc_available = DILITHIUM_AVAILABLE or KYBER_AVAILABLE or SPHINCS_AVAILABLE
@@ -667,9 +667,7 @@ class AESGCMProvider:
         if count >= self._NONCE_SAFETY_LIMIT:
             raise RuntimeError("AES-GCM nonce safety limit exceeded. Re-key required.")
         if count >= int(self._NONCE_SAFETY_LIMIT * 0.75):
-            logger.warning(
-                "AES-GCM nonce count approaching safety limit. Re-key recommended."
-            )
+            logger.warning("AES-GCM nonce count approaching safety limit. Re-key recommended.")
         self._encrypt_counters[key_id] = count + 1
 
         if nonce is None:
