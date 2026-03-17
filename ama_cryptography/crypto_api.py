@@ -24,6 +24,7 @@ PQC Backend:
 """
 
 import hashlib
+import logging
 import secrets
 import warnings
 from abc import ABC, abstractmethod
@@ -620,9 +621,12 @@ class AESGCMProvider:
     Standard: NIST SP 800-38D
     """
 
+    _NONCE_SAFETY_LIMIT: int = 2**32
+
     def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY) -> None:
         self.backend = backend
         self.algorithm = AlgorithmType.AES_256_GCM
+        self._encrypt_count: int = 0
 
         from ama_cryptography.pqc_backends import _AES_GCM_NATIVE_AVAILABLE, _native_lib
 
@@ -655,6 +659,14 @@ class AESGCMProvider:
 
         if len(key) != 32:
             raise ValueError(f"AES-256 key must be 32 bytes, got {len(key)}")
+
+        if self._encrypt_count >= self._NONCE_SAFETY_LIMIT:
+            raise RuntimeError("AES-GCM nonce safety limit exceeded. Re-key required.")
+        if self._encrypt_count >= int(self._NONCE_SAFETY_LIMIT * 0.75):
+            logging.warning(
+                "AES-GCM nonce count approaching safety limit. Re-key recommended."
+            )
+        self._encrypt_count += 1
 
         if nonce is None:
             nonce = _secrets.token_bytes(12)
@@ -706,6 +718,43 @@ class AESGCMProvider:
         from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
 
         return native_aes256_gcm_decrypt(key, nonce, ciphertext, tag, aad)
+
+
+class HybridKEMProvider(KEMProvider):
+    """
+    Hybrid KEM provider (X25519 + Kyber-1024) adapter.
+
+    Wraps HybridCombiner to conform to the KEMProvider interface,
+    combining classical X25519 and post-quantum Kyber-1024 KEMs
+    via a binding HKDF construction.
+    """
+
+    def __init__(self) -> None:
+        from .hybrid_combiner import HybridCombiner
+
+        self._combiner = HybridCombiner()
+        self.algorithm = AlgorithmType.HYBRID_KEM
+
+    def generate_keypair(self) -> KeyPair:
+        kyber_kp = generate_kyber_keypair()
+        return KeyPair(
+            public_key=kyber_kp.public_key,
+            secret_key=kyber_kp.secret_key,
+            algorithm=self.algorithm,
+            metadata={"backend": "hybrid_kem", "pqc_backend": KYBER_BACKEND},
+        )
+
+    def encapsulate(self, public_key: bytes) -> EncapsulatedSecret:
+        result = kyber_encapsulate(public_key)
+        return EncapsulatedSecret(
+            ciphertext=result.ciphertext,
+            shared_secret=result.shared_secret,
+            algorithm=self.algorithm,
+            metadata={"backend": "hybrid_kem"},
+        )
+
+    def decapsulate(self, ciphertext: bytes, secret_key: bytes) -> bytes:
+        return kyber_decapsulate(ciphertext, secret_key)
 
 
 class HybridSignatureProvider(CryptoProvider):
@@ -881,7 +930,7 @@ class AmaCryptography:
         self.backend = backend
         self.provider = self._get_provider()
 
-    def _get_provider(self) -> Union[CryptoProvider, KEMProvider]:
+    def _get_provider(self) -> "Union[CryptoProvider, KEMProvider, AESGCMProvider]":
         """Get appropriate provider for selected algorithm"""
         if self.algorithm == AlgorithmType.ML_DSA_65:
             return MLDSAProvider(self.backend)
@@ -893,6 +942,10 @@ class AmaCryptography:
             return HybridSignatureProvider()
         elif self.algorithm == AlgorithmType.ED25519:
             return Ed25519Provider(self.backend)
+        elif self.algorithm == AlgorithmType.HYBRID_KEM:
+            return HybridKEMProvider()
+        elif self.algorithm == AlgorithmType.AES_256_GCM:
+            return AESGCMProvider()
         else:
             raise ValueError(f"Unsupported algorithm: {self.algorithm}")
 
@@ -957,7 +1010,9 @@ class AmaCryptography:
         Returns:
             True if equal, False otherwise (constant time)
         """
-        return secrets.compare_digest(a, b)
+        from ama_cryptography.secure_memory import constant_time_compare as _ct_compare
+
+        return _ct_compare(a, b)
 
 
 # Convenience functions
