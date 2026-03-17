@@ -727,7 +727,14 @@ class HybridKEMProvider(KEMProvider):
     Wraps HybridCombiner to conform to the KEMProvider interface,
     combining classical X25519 and post-quantum Kyber-1024 KEMs
     via a binding HKDF construction.
+
+    Key layout:
+        public_key  = x25519_pub (32 bytes) || kyber_pub
+        secret_key  = x25519_priv (32 bytes) || kyber_secret
+        ciphertext  = x25519_ephemeral_pub (32 bytes) || kyber_ct
     """
+
+    _X25519_KEY_BYTES: int = 32
 
     def __init__(self) -> None:
         from .hybrid_combiner import HybridCombiner
@@ -736,25 +743,90 @@ class HybridKEMProvider(KEMProvider):
         self.algorithm = AlgorithmType.HYBRID_KEM
 
     def generate_keypair(self) -> KeyPair:
+        """Generate both X25519 and Kyber-1024 keypairs."""
+        from ama_cryptography.pqc_backends import native_x25519_keypair
+
+        x25519_pk, x25519_sk = native_x25519_keypair()
         kyber_kp = generate_kyber_keypair()
+
+        combined_pk: bytes = x25519_pk + kyber_kp.public_key
+        combined_sk: bytes = x25519_sk + kyber_kp.secret_key
+
         return KeyPair(
-            public_key=kyber_kp.public_key,
-            secret_key=kyber_kp.secret_key,
+            public_key=combined_pk,
+            secret_key=combined_sk,
             algorithm=self.algorithm,
-            metadata={"backend": "hybrid_kem", "pqc_backend": KYBER_BACKEND},
+            metadata={
+                "backend": "hybrid_kem",
+                "pqc_backend": KYBER_BACKEND,
+                "x25519_key_bytes": self._X25519_KEY_BYTES,
+            },
         )
 
     def encapsulate(self, public_key: bytes) -> EncapsulatedSecret:
-        result = kyber_encapsulate(public_key)
+        """Perform X25519 ephemeral-static DH + Kyber encapsulation."""
+        from ama_cryptography.pqc_backends import (
+            native_x25519_key_exchange,
+            native_x25519_keypair,
+        )
+
+        # Split recipient public key
+        x25519_pub: bytes = public_key[: self._X25519_KEY_BYTES]
+        kyber_pub: bytes = public_key[self._X25519_KEY_BYTES :]
+
+        # X25519: generate ephemeral keypair + DH
+        eph_pk, eph_sk = native_x25519_keypair()
+        x25519_ss: bytes = native_x25519_key_exchange(eph_sk, x25519_pub)
+
+        # Kyber encapsulation
+        kyber_result = kyber_encapsulate(kyber_pub)
+
+        # Combine via binding HKDF
+        combined_ss: bytes = self._combiner.combine(
+            classical_ss=x25519_ss,
+            pqc_ss=kyber_result.shared_secret,
+            classical_ct=eph_pk,
+            pqc_ct=kyber_result.ciphertext,
+            classical_pk=x25519_pub,
+            pqc_pk=kyber_pub,
+        )
+
+        combined_ct: bytes = eph_pk + kyber_result.ciphertext
+
         return EncapsulatedSecret(
-            ciphertext=result.ciphertext,
-            shared_secret=result.shared_secret,
+            ciphertext=combined_ct,
+            shared_secret=combined_ss,
             algorithm=self.algorithm,
             metadata={"backend": "hybrid_kem"},
         )
 
     def decapsulate(self, ciphertext: bytes, secret_key: bytes) -> bytes:
-        return kyber_decapsulate(ciphertext, secret_key)
+        """Split ciphertext and secret key, recover both shared secrets, combine."""
+        from ama_cryptography.pqc_backends import native_x25519_key_exchange
+
+        # Split ciphertext
+        x25519_eph_pub: bytes = ciphertext[: self._X25519_KEY_BYTES]
+        kyber_ct: bytes = ciphertext[self._X25519_KEY_BYTES :]
+
+        # Split secret key
+        x25519_sk: bytes = secret_key[: self._X25519_KEY_BYTES]
+        kyber_sk: bytes = secret_key[self._X25519_KEY_BYTES :]
+
+        # Recover shared secrets
+        x25519_ss: bytes = native_x25519_key_exchange(x25519_sk, x25519_eph_pub)
+        kyber_ss: bytes = kyber_decapsulate(kyber_ct, kyber_sk)
+
+        # Derive public keys for info binding
+        # X25519 public key is not directly recoverable from sk here,
+        # so we pass empty bytes (matching HybridCombiner's optional pk args)
+        combined_ss: bytes = self._combiner.combine(
+            classical_ss=x25519_ss,
+            pqc_ss=kyber_ss,
+            classical_ct=x25519_eph_pub,
+            pqc_ct=kyber_ct,
+        )
+
+        return combined_ss
 
 
 class HybridSignatureProvider(CryptoProvider):
