@@ -400,3 +400,27 @@ class TestAESGCMProvider:
         r1 = provider.encrypt(b"data1", key)
         r2 = provider.encrypt(b"data1", key)
         assert r1["nonce"] != r2["nonce"]  # Different nonces
+
+    def test_nonce_counter_shared_across_instances(self) -> None:
+        """Nonce counter must persist across AESGCMProvider instances for the same key."""
+        import hashlib
+
+        from ama_cryptography.crypto_api import AESGCMProvider, CryptoBackend
+
+        key = secrets.token_bytes(32)
+        key_id = hashlib.sha256(key).digest()
+
+        # Clear any prior state for this key
+        AESGCMProvider._encrypt_counters.pop(key_id, None)
+
+        provider1 = AESGCMProvider(backend=CryptoBackend.C_LIBRARY)
+        provider1.encrypt(b"msg1", key)
+        provider1.encrypt(b"msg2", key)
+
+        provider2 = AESGCMProvider(backend=CryptoBackend.C_LIBRARY)
+        provider2.encrypt(b"msg3", key)
+
+        assert AESGCMProvider._encrypt_counters[key_id] == 3
+
+        # Clean up
+        AESGCMProvider._encrypt_counters.pop(key_id, None)

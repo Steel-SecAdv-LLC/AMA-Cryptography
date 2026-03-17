@@ -30,7 +30,7 @@ import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, ClassVar, Dict, List, Optional, Tuple, Union
 
 from ama_cryptography.pqc_backends import (
     DILITHIUM_AVAILABLE,
@@ -624,11 +624,11 @@ class AESGCMProvider:
     """
 
     _NONCE_SAFETY_LIMIT: int = 2**32
+    _encrypt_counters: ClassVar[Dict[bytes, int]] = {}
 
     def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY) -> None:
         self.backend = backend
         self.algorithm = AlgorithmType.AES_256_GCM
-        self._encrypt_counters: Dict[bytes, int] = {}
 
         from ama_cryptography.pqc_backends import _AES_GCM_NATIVE_AVAILABLE, _native_lib
 
