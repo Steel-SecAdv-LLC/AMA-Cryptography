@@ -333,7 +333,7 @@ class AmaEquationEngine:
         energy_scaled = max(-700.0, min(700.0, -energy / (self.temperature + 0.1)))
         prob = 1.0 / (1.0 + math.exp(energy_scaled))
         sample = random.binomial(1, min(0.9, max(0.1, prob)), size=self.state_dim)
-        return sample * 2 - 1.0  # map {0,1} -> {-1,1}, scale by 0.05 below
+        return (sample * 2 - 1.0) * 0.05  # map {0,1} -> {-1,1} and apply 0.05 scale factor
 
     def _term_attention(self, state: Vec) -> Vec:
         """𝐀𝐭𝐭𝐧: Self-attention mechanism."""
