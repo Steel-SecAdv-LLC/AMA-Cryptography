@@ -43,8 +43,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ama_cryptography._numeric import (
+    Vec,
     allclose,
-    array,
     eigvals,
     eye,
     ones,
@@ -112,7 +112,7 @@ class TestLyapunovStability(unittest.TestCase):
 
     def test_lyapunov_function_positive_definite(self) -> None:
         """Test V(x) > 0 for x ≠ x*."""
-        state = array([0.5, 0.3, 0.2])
+        state = Vec([0.5, 0.3, 0.2])
         target = ones(3)
         V = lyapunov_function(state, target)
         self.assertGreater(V, 0, "Lyapunov function must be positive")
@@ -139,7 +139,7 @@ class TestLyapunovStability(unittest.TestCase):
 
     def test_lyapunov_stability_proof(self) -> None:
         """Test complete Lyapunov stability proof."""
-        state = array([0.5, 0.3, 0.2])
+        state = Vec([0.5, 0.3, 0.2])
         target = ones(3)
         stable, V, proof = lyapunov_stability_proof(state, target)
 
@@ -182,7 +182,7 @@ class TestQuadraticFormConstraints(unittest.TestCase):
 
     def test_calculate_sigma_quadratic(self) -> None:
         """Test σ_quadratic = x^T·E·x / ||x||² calculation."""
-        state = array([1.0, 1.0, 1.0])
+        state = Vec([1.0, 1.0, 1.0])
         E = eye(3) * 2.0  # Simple diagonal matrix
         sigma = calculate_sigma_quadratic(state, E)
         expected = 2.0  # For normalized vector and diagonal E=2I
@@ -190,7 +190,7 @@ class TestQuadraticFormConstraints(unittest.TestCase):
 
     def test_sigma_quadratic_enforcement_valid(self) -> None:
         """Test enforcement when σ_quadratic already meets threshold."""
-        state = array([1.0, 1.0, 1.0])
+        state = Vec([1.0, 1.0, 1.0])
         E = eye(3) * 2.0
         valid, corrected = enforce_sigma_quadratic_threshold(state, E, threshold=0.96)
         self.assertTrue(valid, "State should be valid")
@@ -199,7 +199,7 @@ class TestQuadraticFormConstraints(unittest.TestCase):
     def test_sigma_quadratic_enforcement_correction(self) -> None:
         """Test automatic correction mechanism exists."""
         # Test that the correction function properly scales states
-        state = array([1.0, 1.0, 1.0])
+        state = Vec([1.0, 1.0, 1.0])
         E = eye(3) * 0.5  # Diagonal matrix with values < threshold
 
         sigma_original = calculate_sigma_quadratic(state, E)
