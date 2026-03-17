@@ -32,6 +32,8 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+logger: logging.Logger = logging.getLogger(__name__)
+
 from ama_cryptography.pqc_backends import (
     DILITHIUM_AVAILABLE,
     DILITHIUM_BACKEND,
@@ -663,7 +665,7 @@ class AESGCMProvider:
         if self._encrypt_count >= self._NONCE_SAFETY_LIMIT:
             raise RuntimeError("AES-GCM nonce safety limit exceeded. Re-key required.")
         if self._encrypt_count >= int(self._NONCE_SAFETY_LIMIT * 0.75):
-            logging.warning(
+            logger.warning(
                 "AES-GCM nonce count approaching safety limit. Re-key recommended."
             )
         self._encrypt_count += 1
