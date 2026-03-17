@@ -110,6 +110,10 @@ class Vec:
 
     def __add__(self, other: object) -> Vec:
         if isinstance(other, Vec):
+            if len(self._data) != len(other._data):
+                raise ValueError(
+                    f"Vec length mismatch in __add__: {len(self._data)} vs {len(other._data)}"
+                )
             return Vec._wrap([a + b for a, b in zip(self._data, other._data)])
         if isinstance(other, (int, float)):
             return Vec._wrap([a + other for a in self._data])
@@ -120,6 +124,10 @@ class Vec:
 
     def __iadd__(self, other: object) -> Vec:
         if isinstance(other, Vec):
+            if len(self._data) != len(other._data):
+                raise ValueError(
+                    f"Vec length mismatch in __iadd__: {len(self._data)} vs {len(other._data)}"
+                )
             for i in range(len(self._data)):
                 self._data[i] += other._data[i]
             return self
@@ -131,6 +139,10 @@ class Vec:
 
     def __sub__(self, other: object) -> Vec:
         if isinstance(other, Vec):
+            if len(self._data) != len(other._data):
+                raise ValueError(
+                    f"Vec length mismatch in __sub__: {len(self._data)} vs {len(other._data)}"
+                )
             return Vec._wrap([a - b for a, b in zip(self._data, other._data)])
         if isinstance(other, (int, float)):
             return Vec._wrap([a - other for a in self._data])
@@ -143,6 +155,10 @@ class Vec:
 
     def __mul__(self, other: object) -> Vec:
         if isinstance(other, Vec):
+            if len(self._data) != len(other._data):
+                raise ValueError(
+                    f"Vec length mismatch in __mul__: {len(self._data)} vs {len(other._data)}"
+                )
             return Vec._wrap([a * b for a, b in zip(self._data, other._data)])
         if isinstance(other, (int, float)):
             return Vec._wrap([a * other for a in self._data])
