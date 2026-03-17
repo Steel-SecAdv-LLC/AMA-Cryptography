@@ -534,16 +534,6 @@ def norm(v: Vec) -> float:
     return math.sqrt(sum(x * x for x in v._data))
 
 
-def _mat_norm_off_diag(m: List[List[float]], n: int) -> float:
-    """Sum of squares of off-diagonal elements (for QR convergence check)."""
-    s = 0.0
-    for i in range(n):
-        for j in range(n):
-            if i != j:
-                s += m[i][j] * m[i][j]
-    return s
-
-
 def eigvals(m: Mat) -> List[float]:
     """
     Compute eigenvalues of a real symmetric matrix via QR iteration.
