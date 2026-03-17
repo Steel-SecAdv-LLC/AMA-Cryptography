@@ -29,6 +29,20 @@ skip_no_native = pytest.mark.skipif(
     reason="Native AES-256-GCM library not available (build with cmake)",
 )
 
+def _pyca_crypto_available() -> bool:
+    """Check if PyCA cryptography is usable (may be broken if _cffi_backend missing)."""
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: F401
+    except BaseException:
+        return False
+    return True
+
+
+skip_no_pyca = pytest.mark.skipif(
+    not _pyca_crypto_available(),
+    reason="PyCA cryptography not available",
+)
+
 
 # ============================================================================
 # NIST SP 800-38D TEST VECTORS
@@ -303,16 +317,13 @@ class TestAESGCMNISTVectors:
 
 
 @skip_no_native
+@skip_no_pyca
 class TestAESGCMInterop:
     """Interop tests between native and PyCA cryptography."""
 
     def test_native_encrypt_pyca_decrypt(self) -> None:
         """Native-encrypted data must be decryptable by PyCA cryptography."""
-        try:
-            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        except Exception:
-            pytest.skip("PyCA cryptography not installed")
-            return  # pragma: no cover — unreachable; tells static analysis skip() diverges
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
@@ -329,11 +340,7 @@ class TestAESGCMInterop:
 
     def test_pyca_encrypt_native_decrypt(self) -> None:
         """PyCA-encrypted data must be decryptable by native backend."""
-        try:
-            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        except Exception:
-            pytest.skip("PyCA cryptography not installed")
-            return  # pragma: no cover — unreachable; tells static analysis skip() diverges
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
 

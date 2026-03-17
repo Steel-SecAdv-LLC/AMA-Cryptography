@@ -55,7 +55,7 @@ clean:
 	@rm -rf build/
 	@rm -rf lib/
 	@rm -rf *.so *.egg-info dist/ .eggs/
-	@find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	@find . -type d -name __pycache__ -exec rm -rf {} + || true
 	@find . -type f -name "*.pyc" -delete
 	@find . -type f -name "*.pyo" -delete
 	@find . -type f -name "*.c" -path "*/src/cython/*" -delete
@@ -124,9 +124,9 @@ security-scan:
 	@bandit -r ama_cryptography/ code_guardian_secure.py -ll -f json -o bandit-report.json || true
 	@bandit -r ama_cryptography/ code_guardian_secure.py -ll
 	@echo "[2/3] Running semgrep for cryptographic rules..."
-	@semgrep --config .semgrep.yml ama_cryptography/ code_guardian_secure.py --json -o semgrep-report.json 2>/dev/null || echo "  (semgrep not installed or no rules matched)"
+	@semgrep --config .semgrep.yml ama_cryptography/ code_guardian_secure.py --json -o semgrep-report.json || echo "  (semgrep not installed or no rules matched)"
 	@echo "[3/3] Running pip-audit for dependency vulnerabilities..."
-	@pip-audit --format json -o pip-audit-report.json 2>/dev/null || pip-audit || echo "  (pip-audit completed)"
+	@pip-audit --format json -o pip-audit-report.json || pip-audit || echo "  (pip-audit completed)"
 	@echo "✓ Comprehensive security scan complete"
 	@echo "  Reports: bandit-report.json, semgrep-report.json, pip-audit-report.json"
 

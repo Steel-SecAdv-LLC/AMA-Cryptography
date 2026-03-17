@@ -43,12 +43,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ama_cryptography._numeric import (
-    Vec,
     allclose,
     array,
     eigvals,
     eye,
-    norm,
     ones,
 )
 from ama_cryptography.equations import (

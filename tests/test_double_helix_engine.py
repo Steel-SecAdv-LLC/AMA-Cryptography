@@ -40,13 +40,13 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ama_cryptography._numeric import (
+    abs_,
     allclose,
     eigvals,
     max_,
     norm,
     ones,
     random,
-    abs_,
 )
 from ama_cryptography.double_helix_engine import AmaEquationEngine
 from ama_cryptography.equations import PHI_CUBED, calculate_sigma_quadratic

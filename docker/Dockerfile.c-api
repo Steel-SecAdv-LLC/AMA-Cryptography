@@ -60,7 +60,7 @@ WORKDIR /output
 
 # Default command: copy built artifacts to mounted volume
 CMD ["sh", "-c", "mkdir -p /output/lib /output/include && \
-    cp /usr/local/lib/libama_cryptography* /output/lib/ 2>/dev/null || true && \
+    cp /usr/local/lib/libama_cryptography* /output/lib/ || true && \
     cp /usr/local/include/ama_cryptography.h /output/include/ && \
     echo 'AMA Cryptography C API libraries exported to /output' && \
     echo 'Contents:' && \
