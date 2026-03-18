@@ -1,0 +1,879 @@
+#!/usr/bin/env python3
+"""Run NIST ACVP test vectors against the AMA Cryptography native C library.
+
+Rules:
+- AFT vectors only. MCT/LDT/VOT are skipped (logged).
+- Non-byte-aligned inputs (bitLength % 8 != 0) are skipped.
+- ML-KEM-1024 only (512/768 not implemented).
+- ML-KEM EncapDecap: decapsulation only (AMA doesn't expose randomness m).
+- ML-DSA-65 SigVer: external/pure interface (TG 3) only.
+- SLH-DSA-SHA2-256f SigVer: external/pure interface (TG 5) only.
+- Uses existing Python ctypes FFI to libama_cryptography.so.
+"""
+from __future__ import annotations
+
+import ctypes
+import json
+import platform
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+VECTORS_DIR = Path(__file__).parent
+REPO_ROOT = VECTORS_DIR.parent
+LIB_DIR = REPO_ROOT / "build" / "lib"
+
+
+# ---------------------------------------------------------------------------
+# Result tracking
+# ---------------------------------------------------------------------------
+@dataclass
+class AlgorithmResult:
+    algorithm: str
+    standard: str
+    source_url: str
+    vectors_tested: int = 0
+    vectors_skipped: int = 0
+    skip_reasons: list[str] = field(default_factory=list)
+    pass_count: int = 0
+    fail_count: int = 0
+    failures: list[dict[str, str]] = field(default_factory=list)
+    mct_skipped: int = 0
+    notes: str = ""
+
+
+RESULTS: list[AlgorithmResult] = []
+
+
+# ---------------------------------------------------------------------------
+# Library loading
+# ---------------------------------------------------------------------------
+def load_library() -> ctypes.CDLL:
+    """Load the AMA Cryptography shared library."""
+    lib_names = ["libama_cryptography.so", "libama_cryptography.so.2"]
+    for name in lib_names:
+        path = LIB_DIR / name
+        if path.is_file():
+            lib = ctypes.CDLL(str(path))
+            _setup_ctypes(lib)
+            return lib
+    raise RuntimeError(f"Cannot find library in {LIB_DIR}")
+
+
+def _setup_ctypes(lib: ctypes.CDLL) -> None:
+    """Configure all ctypes signatures."""
+    c_char_p = ctypes.c_char_p
+    c_size_t = ctypes.c_size_t
+    c_int = ctypes.c_int
+
+    # SHA3-256
+    lib.ama_sha3_256.argtypes = [c_char_p, c_size_t, c_char_p]
+    lib.ama_sha3_256.restype = c_int
+
+    # SHA3-512
+    lib.ama_sha3_512.argtypes = [c_char_p, c_size_t, c_char_p]
+    lib.ama_sha3_512.restype = c_int
+
+    # SHAKE-128 (one-shot)
+    lib.ama_shake128.argtypes = [c_char_p, c_size_t, c_char_p, c_size_t]
+    lib.ama_shake128.restype = c_int
+
+    # SHAKE-256 (one-shot)
+    lib.ama_shake256.argtypes = [c_char_p, c_size_t, c_char_p, c_size_t]
+    lib.ama_shake256.restype = c_int
+
+    # SHA-256
+    lib.ama_sha256.argtypes = [c_char_p, c_char_p, c_size_t]
+    lib.ama_sha256.restype = None
+
+    # HMAC-SHA-256
+    lib.ama_hmac_sha256.argtypes = [
+        c_char_p, c_size_t, c_char_p, c_size_t, c_char_p
+    ]
+    lib.ama_hmac_sha256.restype = None
+
+    # AES-256-GCM encrypt
+    lib.ama_aes256_gcm_encrypt.argtypes = [
+        c_char_p, c_char_p, c_char_p, c_size_t,
+        c_char_p, c_size_t, c_char_p, c_char_p
+    ]
+    lib.ama_aes256_gcm_encrypt.restype = c_int
+
+    # ML-KEM-1024 deterministic keygen
+    lib.ama_kyber_keypair_from_seed.argtypes = [
+        c_char_p, c_char_p, c_char_p, c_char_p
+    ]
+    lib.ama_kyber_keypair_from_seed.restype = c_int
+
+    # ML-KEM-1024 decapsulate
+    lib.ama_kyber_decapsulate.argtypes = [
+        c_char_p, c_size_t, c_char_p, c_size_t, c_char_p, c_size_t
+    ]
+    lib.ama_kyber_decapsulate.restype = c_int
+
+    # ML-DSA-65 deterministic keygen
+    lib.ama_dilithium_keypair_from_seed.argtypes = [
+        c_char_p, c_char_p, c_char_p
+    ]
+    lib.ama_dilithium_keypair_from_seed.restype = c_int
+
+    # ML-DSA-65 verify
+    lib.ama_dilithium_verify.argtypes = [
+        c_char_p, c_size_t, c_char_p, c_size_t, c_char_p
+    ]
+    lib.ama_dilithium_verify.restype = c_int
+
+    # SPHINCS+-256f verify
+    lib.ama_sphincs_verify.argtypes = [
+        c_char_p, c_size_t, c_char_p, c_size_t, c_char_p
+    ]
+    lib.ama_sphincs_verify.restype = c_int
+
+
+# ---------------------------------------------------------------------------
+# Test functions
+# ---------------------------------------------------------------------------
+def test_sha3_256(lib: ctypes.CDLL) -> AlgorithmResult:
+    res = AlgorithmResult(
+        algorithm="SHA3-256",
+        standard="FIPS 202",
+        source_url=(
+            "https://github.com/usnistgov/ACVP-Server/tree/master/"
+            "gen-val/json-files/SHA3-256-2.0"
+        ),
+    )
+    path = VECTORS_DIR / "SHA3-256-2.0.json"
+    data = json.loads(path.read_text())
+    for tg in data["testGroups"]:
+        if tg["testType"] != "AFT":
+            count = len(tg.get("tests", []))
+            res.mct_skipped += count
+            res.skip_reasons.append(
+                f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors"
+            )
+            continue
+        for tc in tg["tests"]:
+            bit_len = tc.get("len", 0)
+            if bit_len % 8 != 0:
+                res.vectors_skipped += 1
+                res.skip_reasons.append(
+                    f"tcId {tc['tcId']}: non-byte-aligned (bitLen={bit_len})"
+                )
+                continue
+            msg = bytes.fromhex(tc["msg"]) if tc["msg"] else b""
+            expected = tc["md"].lower()
+            out = ctypes.create_string_buffer(32)
+            lib.ama_sha3_256(msg, ctypes.c_size_t(len(msg)), out)
+            actual = out.raw.hex()
+            res.vectors_tested += 1
+            if actual == expected:
+                res.pass_count += 1
+            else:
+                res.fail_count += 1
+                res.failures.append({
+                    "tcId": str(tc["tcId"]),
+                    "expected": expected,
+                    "actual": actual,
+                    "note": "Hash mismatch",
+                })
+    return res
+
+
+def test_sha3_512(lib: ctypes.CDLL) -> AlgorithmResult:
+    res = AlgorithmResult(
+        algorithm="SHA3-512",
+        standard="FIPS 202",
+        source_url=(
+            "https://github.com/usnistgov/ACVP-Server/tree/master/"
+            "gen-val/json-files/SHA3-512-2.0"
+        ),
+    )
+    path = VECTORS_DIR / "SHA3-512-2.0.json"
+    data = json.loads(path.read_text())
+    for tg in data["testGroups"]:
+        if tg["testType"] != "AFT":
+            count = len(tg.get("tests", []))
+            res.mct_skipped += count
+            res.skip_reasons.append(
+                f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors"
+            )
+            continue
+        for tc in tg["tests"]:
+            bit_len = tc.get("len", 0)
+            if bit_len % 8 != 0:
+                res.vectors_skipped += 1
+                res.skip_reasons.append(
+                    f"tcId {tc['tcId']}: non-byte-aligned (bitLen={bit_len})"
+                )
+                continue
+            msg = bytes.fromhex(tc["msg"]) if tc["msg"] else b""
+            expected = tc["md"].lower()
+            out = ctypes.create_string_buffer(64)
+            lib.ama_sha3_512(msg, ctypes.c_size_t(len(msg)), out)
+            actual = out.raw.hex()
+            res.vectors_tested += 1
+            if actual == expected:
+                res.pass_count += 1
+            else:
+                res.fail_count += 1
+                res.failures.append({
+                    "tcId": str(tc["tcId"]),
+                    "expected": expected,
+                    "actual": actual,
+                    "note": "Hash mismatch",
+                })
+    return res
+
+
+def test_shake128(lib: ctypes.CDLL) -> AlgorithmResult:
+    res = AlgorithmResult(
+        algorithm="SHAKE-128",
+        standard="FIPS 202",
+        source_url=(
+            "https://github.com/usnistgov/ACVP-Server/tree/master/"
+            "gen-val/json-files/SHAKE-128-1.0"
+        ),
+    )
+    path = VECTORS_DIR / "SHAKE-128-1.0.json"
+    data = json.loads(path.read_text())
+    for tg in data["testGroups"]:
+        if tg["testType"] != "AFT":
+            count = len(tg.get("tests", []))
+            res.mct_skipped += count
+            res.skip_reasons.append(
+                f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors"
+            )
+            continue
+        for tc in tg["tests"]:
+            bit_len = tc.get("len", 0)
+            out_len_bits = tc.get("outLen", 0)
+            if bit_len % 8 != 0:
+                res.vectors_skipped += 1
+                res.skip_reasons.append(
+                    f"tcId {tc['tcId']}: non-byte-aligned input (bitLen={bit_len})"
+                )
+                continue
+            if out_len_bits % 8 != 0:
+                res.vectors_skipped += 1
+                res.skip_reasons.append(
+                    f"tcId {tc['tcId']}: non-byte-aligned output (outLen={out_len_bits})"
+                )
+                continue
+            msg = bytes.fromhex(tc["msg"]) if tc["msg"] else b""
+            out_len = out_len_bits // 8
+            expected = tc["md"].lower()
+            out = ctypes.create_string_buffer(out_len)
+            lib.ama_shake128(msg, ctypes.c_size_t(len(msg)), out, ctypes.c_size_t(out_len))
+            actual = out.raw.hex()
+            res.vectors_tested += 1
+            if actual == expected:
+                res.pass_count += 1
+            else:
+                res.fail_count += 1
+                res.failures.append({
+                    "tcId": str(tc["tcId"]),
+                    "expected": expected[:64] + "..." if len(expected) > 64 else expected,
+                    "actual": actual[:64] + "..." if len(actual) > 64 else actual,
+                    "note": "XOF output mismatch",
+                })
+    return res
+
+
+def test_shake256(lib: ctypes.CDLL) -> AlgorithmResult:
+    res = AlgorithmResult(
+        algorithm="SHAKE-256",
+        standard="FIPS 202",
+        source_url=(
+            "https://github.com/usnistgov/ACVP-Server/tree/master/"
+            "gen-val/json-files/SHAKE-256-1.0"
+        ),
+    )
+    path = VECTORS_DIR / "SHAKE-256-1.0.json"
+    data = json.loads(path.read_text())
+    for tg in data["testGroups"]:
+        if tg["testType"] != "AFT":
+            count = len(tg.get("tests", []))
+            res.mct_skipped += count
+            res.skip_reasons.append(
+                f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors"
+            )
+            continue
+        for tc in tg["tests"]:
+            bit_len = tc.get("len", 0)
+            out_len_bits = tc.get("outLen", 0)
+            if bit_len % 8 != 0:
+                res.vectors_skipped += 1
+                res.skip_reasons.append(
+                    f"tcId {tc['tcId']}: non-byte-aligned input (bitLen={bit_len})"
+                )
+                continue
+            if out_len_bits % 8 != 0:
+                res.vectors_skipped += 1
+                res.skip_reasons.append(
+                    f"tcId {tc['tcId']}: non-byte-aligned output (outLen={out_len_bits})"
+                )
+                continue
+            msg = bytes.fromhex(tc["msg"]) if tc["msg"] else b""
+            out_len = out_len_bits // 8
+            expected = tc["md"].lower()
+            out = ctypes.create_string_buffer(out_len)
+            lib.ama_shake256(msg, ctypes.c_size_t(len(msg)), out, ctypes.c_size_t(out_len))
+            actual = out.raw.hex()
+            res.vectors_tested += 1
+            if actual == expected:
+                res.pass_count += 1
+            else:
+                res.fail_count += 1
+                res.failures.append({
+                    "tcId": str(tc["tcId"]),
+                    "expected": expected[:64] + "..." if len(expected) > 64 else expected,
+                    "actual": actual[:64] + "..." if len(actual) > 64 else actual,
+                    "note": "XOF output mismatch",
+                })
+    return res
+
+
+def test_hmac_sha256(lib: ctypes.CDLL) -> AlgorithmResult:
+    res = AlgorithmResult(
+        algorithm="HMAC-SHA-256",
+        standard="FIPS 198-1",
+        source_url=(
+            "https://github.com/usnistgov/ACVP-Server/tree/master/"
+            "gen-val/json-files/HMAC-SHA2-256-2.0"
+        ),
+    )
+    path = VECTORS_DIR / "HMAC-SHA2-256-2.0.json"
+    data = json.loads(path.read_text())
+    for tg in data["testGroups"]:
+        if tg["testType"] != "AFT":
+            count = len(tg.get("tests", []))
+            res.mct_skipped += count
+            continue
+        for tc in tg["tests"]:
+            key = bytes.fromhex(tc["key"])
+            msg = bytes.fromhex(tc["msg"]) if tc["msg"] else b""
+            mac_len = tc["macLen"] // 8
+            expected = tc["mac"].lower()[:mac_len * 2]
+            out = ctypes.create_string_buffer(32)
+            lib.ama_hmac_sha256(
+                key, ctypes.c_size_t(len(key)),
+                msg, ctypes.c_size_t(len(msg)),
+                out,
+            )
+            actual = out.raw[:mac_len].hex()
+            res.vectors_tested += 1
+            if actual == expected:
+                res.pass_count += 1
+            else:
+                res.fail_count += 1
+                res.failures.append({
+                    "tcId": str(tc["tcId"]),
+                    "expected": expected,
+                    "actual": actual,
+                    "note": "HMAC output mismatch",
+                })
+    return res
+
+
+def test_sha256(lib: ctypes.CDLL) -> AlgorithmResult:
+    res = AlgorithmResult(
+        algorithm="SHA-256",
+        standard="FIPS 180-4",
+        source_url="https://csrc.nist.gov/pubs/fips/180-4/upd1/final",
+    )
+    path = VECTORS_DIR / "SHA-256-FIPS180-4.json"
+    data = json.loads(path.read_text())
+    for tg in data["testGroups"]:
+        if tg["testType"] != "AFT":
+            continue
+        for tc in tg["tests"]:
+            msg = bytes.fromhex(tc["msg"]) if tc["msg"] else b""
+            expected = tc["md"].lower()
+            out = ctypes.create_string_buffer(32)
+            lib.ama_sha256(out, msg, ctypes.c_size_t(len(msg)))
+            actual = out.raw.hex()
+            res.vectors_tested += 1
+            if actual == expected:
+                res.pass_count += 1
+            else:
+                res.fail_count += 1
+                res.failures.append({
+                    "tcId": str(tc["tcId"]),
+                    "expected": expected,
+                    "actual": actual,
+                    "note": "Hash mismatch",
+                })
+    return res
+
+
+def test_aes256gcm(lib: ctypes.CDLL) -> AlgorithmResult:
+    res = AlgorithmResult(
+        algorithm="AES-256-GCM",
+        standard="NIST SP 800-38D",
+        source_url="https://csrc.nist.gov/pubs/sp/800/38/d/final",
+    )
+    path = VECTORS_DIR / "AES-256-GCM-SP800-38D.json"
+    data = json.loads(path.read_text())
+    for tg in data["testGroups"]:
+        if tg["testType"] != "AFT":
+            continue
+        for tc in tg["tests"]:
+            key = bytes.fromhex(tc["key"])
+            iv = bytes.fromhex(tc["iv"])
+            pt = bytes.fromhex(tc["pt"]) if tc["pt"] else b""
+            aad = bytes.fromhex(tc["aad"]) if tc["aad"] else b""
+            expected_ct = tc["ct"].lower()
+            expected_tag = tc["tag"].lower()
+
+            ct_buf = ctypes.create_string_buffer(max(len(pt), 1))
+            tag_buf = ctypes.create_string_buffer(16)
+
+            rc = lib.ama_aes256_gcm_encrypt(
+                key, iv, pt if pt else None, ctypes.c_size_t(len(pt)),
+                aad if aad else None, ctypes.c_size_t(len(aad)),
+                ct_buf, tag_buf,
+            )
+            res.vectors_tested += 1
+            actual_ct = ct_buf.raw[:len(pt)].hex()
+            actual_tag = tag_buf.raw.hex()
+            if rc != 0:
+                res.fail_count += 1
+                res.failures.append({
+                    "tcId": str(tc["tcId"]),
+                    "expected": f"ct={expected_ct} tag={expected_tag}",
+                    "actual": f"error code {rc}",
+                    "note": "AES-GCM encrypt returned error",
+                })
+            elif actual_ct == expected_ct and actual_tag == expected_tag:
+                res.pass_count += 1
+            else:
+                res.fail_count += 1
+                res.failures.append({
+                    "tcId": str(tc["tcId"]),
+                    "expected": f"ct={expected_ct} tag={expected_tag}",
+                    "actual": f"ct={actual_ct} tag={actual_tag}",
+                    "note": "Ciphertext or tag mismatch",
+                })
+    return res
+
+
+def test_ml_kem_keygen(lib: ctypes.CDLL) -> AlgorithmResult:
+    res = AlgorithmResult(
+        algorithm="ML-KEM-1024 KeyGen",
+        standard="FIPS 203",
+        source_url=(
+            "https://github.com/usnistgov/ACVP-Server/tree/master/"
+            "gen-val/json-files/ML-KEM-keyGen-FIPS203"
+        ),
+    )
+    path = VECTORS_DIR / "ML-KEM-keyGen-FIPS203.json"
+    data = json.loads(path.read_text())
+    for tg in data["testGroups"]:
+        if tg["testType"] != "AFT":
+            count = len(tg.get("tests", []))
+            res.mct_skipped += count
+            continue
+        if tg.get("parameterSet") != "ML-KEM-1024":
+            count = len(tg.get("tests", []))
+            res.vectors_skipped += count
+            res.skip_reasons.append(
+                f"TG {tg['tgId']}: skipped {count} vectors "
+                f"(param={tg.get('parameterSet')}, only ML-KEM-1024 tested)"
+            )
+            continue
+        for tc in tg["tests"]:
+            d_seed = bytes.fromhex(tc["d"])
+            z_seed = bytes.fromhex(tc["z"])
+            expected_ek = tc["ek"].lower()
+            expected_dk = tc["dk"].lower()
+
+            pk_buf = ctypes.create_string_buffer(1568)
+            sk_buf = ctypes.create_string_buffer(3168)
+
+            rc = lib.ama_kyber_keypair_from_seed(d_seed, z_seed, pk_buf, sk_buf)
+            res.vectors_tested += 1
+            if rc != 0:
+                res.fail_count += 1
+                res.failures.append({
+                    "tcId": str(tc["tcId"]),
+                    "expected": f"ek={expected_ek[:32]}...",
+                    "actual": f"error code {rc}",
+                    "note": "Deterministic keygen returned error",
+                })
+                continue
+            actual_ek = pk_buf.raw.hex()
+            actual_dk = sk_buf.raw.hex()
+            if actual_ek == expected_ek and actual_dk == expected_dk:
+                res.pass_count += 1
+            else:
+                mismatch = "ek mismatch" if actual_ek != expected_ek else "dk mismatch"
+                res.fail_count += 1
+                res.failures.append({
+                    "tcId": str(tc["tcId"]),
+                    "expected": f"ek={expected_ek[:32]}... dk={expected_dk[:32]}...",
+                    "actual": f"ek={actual_ek[:32]}... dk={actual_dk[:32]}...",
+                    "note": mismatch,
+                })
+    return res
+
+
+def test_ml_kem_decap(lib: ctypes.CDLL) -> AlgorithmResult:
+    res = AlgorithmResult(
+        algorithm="ML-KEM-1024 EncapDecap",
+        standard="FIPS 203",
+        source_url=(
+            "https://github.com/usnistgov/ACVP-Server/tree/master/"
+            "gen-val/json-files/ML-KEM-encapDecap-FIPS203"
+        ),
+        notes="Decapsulation only; deterministic encapsulation not tested "
+              "(AMA does not expose randomness parameter m).",
+    )
+    path = VECTORS_DIR / "ML-KEM-encapDecap-FIPS203.json"
+    data = json.loads(path.read_text())
+    for tg in data["testGroups"]:
+        if tg["testType"] != "AFT":
+            count = len(tg.get("tests", []))
+            res.vectors_skipped += count
+            res.skip_reasons.append(
+                f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors"
+            )
+            continue
+        if tg.get("parameterSet") != "ML-KEM-1024":
+            count = len(tg.get("tests", []))
+            res.vectors_skipped += count
+            res.skip_reasons.append(
+                f"TG {tg['tgId']}: skipped {count} vectors "
+                f"(param={tg.get('parameterSet')}, only ML-KEM-1024 tested)"
+            )
+            continue
+        for tc in tg["tests"]:
+            dk = bytes.fromhex(tc["dk"])
+            c = bytes.fromhex(tc["c"])
+            expected_k = tc["k"].lower()
+
+            ss_buf = ctypes.create_string_buffer(32)
+            rc = lib.ama_kyber_decapsulate(
+                c, ctypes.c_size_t(len(c)),
+                dk, ctypes.c_size_t(len(dk)),
+                ss_buf, ctypes.c_size_t(32),
+            )
+            res.vectors_tested += 1
+            if rc != 0:
+                res.fail_count += 1
+                res.failures.append({
+                    "tcId": str(tc["tcId"]),
+                    "expected": expected_k,
+                    "actual": f"error code {rc}",
+                    "note": "Decapsulation returned error",
+                })
+                continue
+            actual_k = ss_buf.raw.hex()
+            if actual_k == expected_k:
+                res.pass_count += 1
+            else:
+                res.fail_count += 1
+                res.failures.append({
+                    "tcId": str(tc["tcId"]),
+                    "expected": expected_k,
+                    "actual": actual_k,
+                    "note": "Shared secret mismatch after decapsulation",
+                })
+    return res
+
+
+def test_ml_dsa_keygen(lib: ctypes.CDLL) -> AlgorithmResult:
+    res = AlgorithmResult(
+        algorithm="ML-DSA-65 KeyGen",
+        standard="FIPS 204",
+        source_url=(
+            "https://github.com/usnistgov/ACVP-Server/tree/master/"
+            "gen-val/json-files/ML-DSA-keyGen-FIPS204"
+        ),
+    )
+    path = VECTORS_DIR / "ML-DSA-keyGen-FIPS204.json"
+    data = json.loads(path.read_text())
+    for tg in data["testGroups"]:
+        if tg["testType"] != "AFT":
+            count = len(tg.get("tests", []))
+            res.mct_skipped += count
+            continue
+        if tg.get("parameterSet") != "ML-DSA-65":
+            count = len(tg.get("tests", []))
+            res.vectors_skipped += count
+            res.skip_reasons.append(
+                f"TG {tg['tgId']}: skipped {count} vectors "
+                f"(param={tg.get('parameterSet')}, only ML-DSA-65 tested)"
+            )
+            continue
+        for tc in tg["tests"]:
+            seed = bytes.fromhex(tc["seed"])
+            expected_pk = tc["pk"].lower()
+            expected_sk = tc["sk"].lower()
+
+            pk_buf = ctypes.create_string_buffer(1952)
+            sk_buf = ctypes.create_string_buffer(4032)
+
+            rc = lib.ama_dilithium_keypair_from_seed(seed, pk_buf, sk_buf)
+            res.vectors_tested += 1
+            if rc != 0:
+                res.fail_count += 1
+                res.failures.append({
+                    "tcId": str(tc["tcId"]),
+                    "expected": f"pk={expected_pk[:32]}...",
+                    "actual": f"error code {rc}",
+                    "note": "Deterministic keygen returned error",
+                })
+                continue
+            actual_pk = pk_buf.raw.hex()
+            actual_sk = sk_buf.raw.hex()
+            if actual_pk == expected_pk and actual_sk == expected_sk:
+                res.pass_count += 1
+            else:
+                mismatch = "pk mismatch" if actual_pk != expected_pk else "sk mismatch"
+                res.fail_count += 1
+                res.failures.append({
+                    "tcId": str(tc["tcId"]),
+                    "expected": f"pk={expected_pk[:32]}... sk={expected_sk[:32]}...",
+                    "actual": f"pk={actual_pk[:32]}... sk={actual_sk[:32]}...",
+                    "note": mismatch,
+                })
+    return res
+
+
+def test_ml_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
+    """ML-DSA-65 SigVer — external/pure interface (TG 3)."""
+    res = AlgorithmResult(
+        algorithm="ML-DSA-65 SigVer",
+        standard="FIPS 204",
+        source_url=(
+            "https://github.com/usnistgov/ACVP-Server/tree/master/"
+            "gen-val/json-files/ML-DSA-sigVer-FIPS204"
+        ),
+        notes="External/pure interface (TG 3) only. AMA verify API does not "
+              "accept a context parameter; vectors with non-empty context may "
+              "fail if the implementation requires FIPS 204 domain separation.",
+    )
+    path = VECTORS_DIR / "ML-DSA-sigVer-FIPS204.json"
+    data = json.loads(path.read_text())
+    for tg in data["testGroups"]:
+        if tg["tgId"] != 3:
+            count = len(tg.get("tests", []))
+            res.vectors_skipped += count
+            res.skip_reasons.append(
+                f"TG {tg['tgId']}: skipped {count} vectors "
+                f"(only TG 3 external/pure interface tested)"
+            )
+            continue
+        for tc in tg["tests"]:
+            pk = bytes.fromhex(tc["pk"])
+            message = bytes.fromhex(tc["message"])
+            signature = bytes.fromhex(tc["signature"])
+            expected_pass = tc["testPassed"]
+
+            rc = lib.ama_dilithium_verify(
+                message, ctypes.c_size_t(len(message)),
+                signature, ctypes.c_size_t(len(signature)),
+                pk,
+            )
+            # AMA_SUCCESS = 0, AMA_ERROR_VERIFY_FAILED = -4
+            actual_pass = rc == 0
+            res.vectors_tested += 1
+            if actual_pass == expected_pass:
+                res.pass_count += 1
+            else:
+                res.fail_count += 1
+                context_hex = tc.get("context", "")
+                res.failures.append({
+                    "tcId": str(tc["tcId"]),
+                    "expected": f"testPassed={expected_pass}",
+                    "actual": f"testPassed={actual_pass} (rc={rc})",
+                    "note": (
+                        f"SigVer verdict mismatch. context_len="
+                        f"{len(context_hex) // 2}. "
+                        "Root cause may be absence of FIPS 204 "
+                        "external/pure domain-separation wrapper "
+                        "(M' = 0x00 || len(ctx) || ctx || M) in "
+                        "AMA's verify function."
+                    ),
+                })
+    return res
+
+
+def test_slh_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
+    """SLH-DSA-SHA2-256f SigVer — external/pure interface (TG 5)."""
+    res = AlgorithmResult(
+        algorithm="SLH-DSA-SHA2-256f SigVer",
+        standard="FIPS 205",
+        source_url=(
+            "https://github.com/usnistgov/ACVP-Server/tree/master/"
+            "gen-val/json-files/SLH-DSA-sigVer-FIPS205"
+        ),
+        notes="External/pure interface (TG 5) only. AMA verify API does not "
+              "accept a context parameter; vectors with non-empty context may "
+              "fail if the implementation requires FIPS 205 domain separation.",
+    )
+    path = VECTORS_DIR / "SLH-DSA-sigVer-FIPS205.json"
+    data = json.loads(path.read_text())
+    for tg in data["testGroups"]:
+        if tg["tgId"] != 5:
+            count = len(tg.get("tests", []))
+            res.vectors_skipped += count
+            res.skip_reasons.append(
+                f"TG {tg['tgId']}: skipped {count} vectors "
+                f"(only TG 5 SLH-DSA-SHA2-256f external/pure tested)"
+            )
+            continue
+        for tc in tg["tests"]:
+            pk = bytes.fromhex(tc["pk"])
+            message = bytes.fromhex(tc["message"])
+            signature = bytes.fromhex(tc["signature"])
+            expected_pass = tc["testPassed"]
+
+            rc = lib.ama_sphincs_verify(
+                message, ctypes.c_size_t(len(message)),
+                signature, ctypes.c_size_t(len(signature)),
+                pk,
+            )
+            actual_pass = rc == 0
+            res.vectors_tested += 1
+            if actual_pass == expected_pass:
+                res.pass_count += 1
+            else:
+                res.fail_count += 1
+                context_hex = tc.get("context", "")
+                res.failures.append({
+                    "tcId": str(tc["tcId"]),
+                    "expected": f"testPassed={expected_pass}",
+                    "actual": f"testPassed={actual_pass} (rc={rc})",
+                    "note": (
+                        f"SigVer verdict mismatch. context_len="
+                        f"{len(context_hex) // 2}. "
+                        "Root cause may be absence of FIPS 205 "
+                        "external/pure domain-separation wrapper "
+                        "in AMA's verify function."
+                    ),
+                })
+    return res
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def main() -> int:
+    print("=" * 70)
+    print("NIST ACVP Vector Validation — AMA Cryptography")
+    print("=" * 70)
+
+    print("\nLoading native library...")
+    lib = load_library()
+    print(f"  Loaded from {LIB_DIR}")
+
+    env_info = {
+        "os": f"{platform.system()} {platform.release()}",
+        "python": platform.python_version(),
+        "arch": platform.machine(),
+    }
+    print(f"  OS: {env_info['os']}")
+    print(f"  Python: {env_info['python']}")
+    print(f"  Arch: {env_info['arch']}")
+
+    tests = [
+        ("SHA3-256", test_sha3_256),
+        ("SHA3-512", test_sha3_512),
+        ("SHAKE-128", test_shake128),
+        ("SHAKE-256", test_shake256),
+        ("HMAC-SHA-256", test_hmac_sha256),
+        ("SHA-256", test_sha256),
+        ("AES-256-GCM", test_aes256gcm),
+        ("ML-KEM-1024 KeyGen", test_ml_kem_keygen),
+        ("ML-KEM-1024 EncapDecap", test_ml_kem_decap),
+        ("ML-DSA-65 KeyGen", test_ml_dsa_keygen),
+        ("ML-DSA-65 SigVer", test_ml_dsa_sigver),
+        ("SLH-DSA-SHA2-256f SigVer", test_slh_dsa_sigver),
+    ]
+
+    start_time = time.time()
+
+    for name, test_fn in tests:
+        print(f"\n--- {name} ---")
+        try:
+            result = test_fn(lib)
+            RESULTS.append(result)
+            status = "PASS" if result.fail_count == 0 else "FAIL"
+            print(
+                f"  Tested: {result.vectors_tested}  "
+                f"Pass: {result.pass_count}  "
+                f"Fail: {result.fail_count}  "
+                f"Skipped: {result.vectors_skipped}  "
+                f"MCT/other skipped: {result.mct_skipped}  "
+                f"[{status}]"
+            )
+            if result.failures:
+                for f in result.failures[:5]:
+                    print(f"    FAIL tcId={f['tcId']}: {f['note']}")
+                    print(f"      expected: {f['expected']}")
+                    print(f"      actual:   {f['actual']}")
+                if len(result.failures) > 5:
+                    print(f"    ... and {len(result.failures) - 5} more failures")
+        except Exception as e:
+            print(f"  ERROR: {e}")
+            import traceback
+            traceback.print_exc()
+
+    elapsed = time.time() - start_time
+    print(f"\n{'=' * 70}")
+    print(f"Total time: {elapsed:.1f}s")
+
+    # Summary
+    total_tested = sum(r.vectors_tested for r in RESULTS)
+    total_pass = sum(r.pass_count for r in RESULTS)
+    total_fail = sum(r.fail_count for r in RESULTS)
+    total_skip = sum(r.vectors_skipped for r in RESULTS)
+    print(f"Total vectors tested: {total_tested}")
+    print(f"Total pass: {total_pass}")
+    print(f"Total fail: {total_fail}")
+    print(f"Total skipped: {total_skip}")
+
+    # Write results.json
+    algo_list: list[dict[str, object]] = []
+    for r in RESULTS:
+        algo_entry: dict[str, object] = {
+            "algorithm": r.algorithm,
+            "standard": r.standard,
+            "source_url": r.source_url,
+            "vectors_tested": r.vectors_tested,
+            "vectors_skipped": r.vectors_skipped,
+            "skip_reasons": r.skip_reasons,
+            "pass_count": r.pass_count,
+            "fail_count": r.fail_count,
+            "mct_skipped": r.mct_skipped,
+        }
+        if r.notes:
+            algo_entry["notes"] = r.notes
+        if r.failures:
+            algo_entry["failures"] = r.failures
+        algo_list.append(algo_entry)
+
+    results_json: dict[str, object] = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "environment": env_info,
+        "library": "libama_cryptography.so (native C, no liboqs/PQClean)",
+        "summary": {
+            "total_tested": total_tested,
+            "total_pass": total_pass,
+            "total_fail": total_fail,
+            "total_skipped": total_skip,
+        },
+        "algorithms": algo_list,
+    }
+
+    out_path = VECTORS_DIR / "results.json"
+    out_path.write_text(json.dumps(results_json, indent=2))
+    print(f"\nResults written to {out_path}")
+
+    return 1 if total_fail > 0 else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
