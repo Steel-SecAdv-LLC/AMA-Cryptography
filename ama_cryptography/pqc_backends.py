@@ -855,7 +855,7 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
 
 
 def dilithium_verify_ctx(
-    pk: bytes, msg: bytes, ctx: bytes, sig: bytes
+    message: bytes, signature: bytes, public_key: bytes, ctx: bytes
 ) -> bool:
     """
     Verify ML-DSA-65 signature with context (FIPS 204 external/pure).
@@ -863,10 +863,10 @@ def dilithium_verify_ctx(
     Applies M' = 0x00 || len(ctx) || ctx || M domain separation.
 
     Args:
-        pk: Public key (1952 bytes)
-        msg: Raw message
+        message: Raw message
+        signature: Signature (3309 bytes)
+        public_key: Public key (1952 bytes)
         ctx: Context string (0–255 bytes)
-        sig: Signature (3309 bytes)
 
     Returns:
         True if signature is valid, False otherwise
@@ -881,13 +881,13 @@ def dilithium_verify_ctx(
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ama_dilithium_verify_ctx(
-            msg,
-            ctypes.c_size_t(len(msg)),
+            message,
+            ctypes.c_size_t(len(message)),
             ctx,
             ctypes.c_size_t(len(ctx)),
-            sig,
-            ctypes.c_size_t(len(sig)),
-            pk,
+            signature,
+            ctypes.c_size_t(len(signature)),
+            public_key,
         )
         return bool(rc == 0)
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
@@ -1188,7 +1188,7 @@ def sphincs_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
 
 
 def sphincs_verify_ctx(
-    pk: bytes, msg: bytes, ctx: bytes, sig: bytes
+    message: bytes, signature: bytes, public_key: bytes, ctx: bytes
 ) -> bool:
     """
     Verify SLH-DSA-SHA2-256f signature with context (FIPS 205 external/pure).
@@ -1196,10 +1196,10 @@ def sphincs_verify_ctx(
     Applies M' = 0x00 || len(ctx) || ctx || M domain separation.
 
     Args:
-        pk: Public key (64 bytes)
-        msg: Raw message
+        message: Raw message
+        signature: Signature (49856 bytes)
+        public_key: Public key (64 bytes)
         ctx: Context string (0–255 bytes)
-        sig: Signature (49856 bytes)
 
     Returns:
         True if signature is valid, False otherwise
@@ -1214,13 +1214,13 @@ def sphincs_verify_ctx(
         raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
     if SPHINCS_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ama_sphincs_verify_ctx(
-            msg,
-            ctypes.c_size_t(len(msg)),
+            message,
+            ctypes.c_size_t(len(message)),
             ctx,
             ctypes.c_size_t(len(ctx)),
-            sig,
-            ctypes.c_size_t(len(sig)),
-            pk,
+            signature,
+            ctypes.c_size_t(len(signature)),
+            public_key,
         )
         return bool(rc == 0)
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
