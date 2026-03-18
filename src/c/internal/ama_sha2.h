@@ -165,7 +165,7 @@ static void ama_sha512(const uint8_t *data, size_t len, uint8_t out[64]) {
  *
  * This avoids concatenation into a temporary buffer.
  */
-static void ama_hmac_sha512_3(
+static int ama_hmac_sha512_3(
     const uint8_t *key, size_t key_len,
     const uint8_t *part1, size_t part1_len,
     const uint8_t *part2, size_t part2_len,
@@ -195,10 +195,9 @@ static void ama_hmac_sha512_3(
         size_t inner_len = AMA_SHA512_BLOCK_SIZE + part1_len + part2_len + part3_len;
         uint8_t *inner_buf = (uint8_t *)calloc((size_t)1, inner_len);
         if (!inner_buf) {
-            memset(out, 0, AMA_SHA512_DIGEST_SIZE);
             ama_secure_memzero(k_pad, sizeof(k_pad));
             ama_secure_memzero(key_hash, sizeof(key_hash));
-            return;
+            return -1;
         }
         memcpy(inner_buf, k_pad, AMA_SHA512_BLOCK_SIZE);
         if (part1_len > 0) memcpy(inner_buf + AMA_SHA512_BLOCK_SIZE, part1, part1_len);
@@ -227,6 +226,7 @@ static void ama_hmac_sha512_3(
     ama_secure_memzero(k_pad, sizeof(k_pad));
     ama_secure_memzero(inner_hash, sizeof(inner_hash));
     ama_secure_memzero(key_hash, sizeof(key_hash));
+    return 0;
 }
 
 #endif /* AMA_INTERNAL_SHA2_H */

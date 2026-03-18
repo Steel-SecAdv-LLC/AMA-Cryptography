@@ -270,7 +270,7 @@ static void spx_thash(uint8_t *out, const uint8_t *in, unsigned int inblocks,
         /* Build input: PK.seed || toByte(0, 128-n) || ADRSc || M */
         size_t msg_len = (size_t)inblocks * SPX_N;
         size_t total = SPX_N + (128 - SPX_N) + 22 + msg_len;
-        uint8_t *buf = (uint8_t *)calloc(1, total);
+        uint8_t *buf = (uint8_t *)calloc((size_t)1, total);
         if (!buf) {
             memset(out, 0, SPX_N);
             return;
@@ -317,21 +317,24 @@ static void spx_prf(uint8_t *out, const uint8_t *pub_seed,
  * FIPS 205 Section 11.2 Table 5, security category 5 (n=32):
  *   PRF_msg(SK.prf, opt_rand, M) = Trunc_n(HMAC-SHA-512(SK.prf, opt_rand || M))
  */
-static void spx_prf_msg(uint8_t *out, const uint8_t *sk_prf,
+static int spx_prf_msg(uint8_t *out, const uint8_t *sk_prf,
                           const uint8_t *opt_rand,
                           const uint8_t *msg, size_t msglen) {
     uint8_t hmac_out[64];  /* full HMAC-SHA-512 output */
     /* HMAC-SHA-512(SK.prf, opt_rand || msg) — three-part message with empty part3 */
-    ama_hmac_sha512_3(sk_prf, SPX_N, opt_rand, SPX_N, msg, msglen,
-                      NULL, 0, hmac_out);
+    if (ama_hmac_sha512_3(sk_prf, SPX_N, opt_rand, SPX_N, msg, msglen,
+                          NULL, 0, hmac_out) != 0) {
+        return -1;
+    }
     memcpy(out, hmac_out, SPX_N);  /* Trunc_n */
     ama_secure_memzero(hmac_out, sizeof(hmac_out));
+    return 0;
 }
 
 /**
  * H_msg: hash message to obtain FORS message and tree/leaf indices
  */
-static void spx_hash_message(uint8_t *digest, uint64_t *tree, uint32_t *leaf_idx,
+static int spx_hash_message(uint8_t *digest, uint64_t *tree, uint32_t *leaf_idx,
                                const uint8_t *R, const uint8_t *pk,
                                const uint8_t *msg, size_t msglen) {
     uint8_t buf[SPX_FORS_MSG_BYTES + 8 + 4];  /* message hash output */
@@ -351,10 +354,9 @@ static void spx_hash_message(uint8_t *digest, uint64_t *tree, uint32_t *leaf_idx
         {
             /* Build input: R || PK.seed || PK.root || M */
             size_t inner_len = SPX_N + 2 * SPX_N + msglen;
-            uint8_t *inner_buf = (uint8_t *)calloc(1, inner_len);
+            uint8_t *inner_buf = (uint8_t *)calloc((size_t)1, inner_len);
             if (!inner_buf) {
-                memset(buf, 0, buflen);
-                goto hmsg_extract;
+                return -1;
             }
             memcpy(inner_buf, R, SPX_N);
             memcpy(inner_buf + SPX_N, pk, 2 * SPX_N);
@@ -373,7 +375,6 @@ static void spx_hash_message(uint8_t *digest, uint64_t *tree, uint32_t *leaf_idx
         ama_secure_memzero(hash, sizeof(hash));
         ama_secure_memzero(mgf_seed, sizeof(mgf_seed));
     }
-    hmsg_extract:
 
     /* Extract FORS message digest */
     memcpy(digest, buf, SPX_FORS_MSG_BYTES);
@@ -392,6 +393,7 @@ static void spx_hash_message(uint8_t *digest, uint64_t *tree, uint32_t *leaf_idx
     /* Extract leaf index: ceil(h'/8) = 1 byte for h'=SPX_TREE_HEIGHT=4 */
     *leaf_idx = (uint32_t)buf[SPX_FORS_MSG_BYTES + 8];
     *leaf_idx &= ((uint32_t)1 << SPX_TREE_HEIGHT) - 1;
+    return 0;
 }
 
 /* ============================================================================
@@ -1059,7 +1061,9 @@ AMA_API ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
     }
 
     /* Compute R = PRF_msg(sk_prf, opt_rand, msg) */
-    spx_prf_msg(R, sk_prf, opt_rand, message, message_len);
+    if (spx_prf_msg(R, sk_prf, opt_rand, message, message_len) != 0) {
+        return AMA_ERROR_MEMORY;
+    }
 
     /* Write R to signature */
     sig_ptr = signature;
@@ -1067,7 +1071,9 @@ AMA_API ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
     sig_ptr += SPX_N;
 
     /* Compute message hash to get FORS message and indices */
-    spx_hash_message(fors_msg, &tree, &leaf_idx, R, pk, message, message_len);
+    if (spx_hash_message(fors_msg, &tree, &leaf_idx, R, pk, message, message_len) != 0) {
+        return AMA_ERROR_MEMORY;
+    }
 
     /* FORS signature */
     memset(fors_addr, 0, sizeof(fors_addr));
@@ -1125,8 +1131,10 @@ AMA_API ama_error_t ama_sphincs_verify(const uint8_t *message, size_t message_le
     ht_sig = fors_sig + SPX_FORS_BYTES;
 
     /* Compute message hash */
-    spx_hash_message(fors_msg, &tree, &leaf_idx, R, public_key,
-                     message, message_len);
+    if (spx_hash_message(fors_msg, &tree, &leaf_idx, R, public_key,
+                         message, message_len) != 0) {
+        return AMA_ERROR_MEMORY;
+    }
 
     /* Reconstruct FORS public key from signature */
     memset(fors_addr, 0, sizeof(fors_addr));
