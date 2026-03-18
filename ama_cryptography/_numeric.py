@@ -88,9 +88,11 @@ class Vec:
         return len(self._data)
 
     @overload
-    def __getitem__(self, idx: int) -> float: ...
+    def __getitem__(self, idx: int) -> float:
+        pass
     @overload
-    def __getitem__(self, idx: slice) -> Vec: ...
+    def __getitem__(self, idx: slice) -> Vec:
+        pass
     def __getitem__(self, idx: int | slice) -> float | Vec:
         if isinstance(idx, slice):
             return Vec._wrap(self._data[idx])
@@ -271,9 +273,11 @@ class Mat:
     # -- sequence protocol ---------------------------------------------------
 
     @overload
-    def __getitem__(self, idx: Tuple[int, int]) -> float: ...
+    def __getitem__(self, idx: Tuple[int, int]) -> float:
+        pass
     @overload
-    def __getitem__(self, idx: int) -> List[float]: ...
+    def __getitem__(self, idx: int) -> List[float]:
+        pass
     def __getitem__(self, idx: int | Tuple[int, int]) -> float | List[float]:
         if isinstance(idx, tuple):
             r, c = idx
@@ -357,9 +361,11 @@ class Mat:
     # -- matmul --------------------------------------------------------------
 
     @overload
-    def __matmul__(self, other: Mat) -> Mat: ...
+    def __matmul__(self, other: Mat) -> Mat:
+        pass
     @overload
-    def __matmul__(self, other: Vec) -> Vec: ...
+    def __matmul__(self, other: Vec) -> Vec:
+        pass
     def __matmul__(self, other: object) -> Mat | Vec:
         if isinstance(other, Mat):
             # (m×n) @ (n×p) → (m×p)
@@ -478,9 +484,11 @@ def real(v: Vec) -> Vec:
 
 
 @overload
-def sqrt(x: Vec) -> Vec: ...
+def sqrt(x: Vec) -> Vec:
+    pass
 @overload
-def sqrt(x: float) -> float: ...
+def sqrt(x: float) -> float:
+    pass
 def sqrt(x: Vec | float) -> Vec | float:
     if isinstance(x, Vec):
         return Vec._wrap([math.sqrt(v) for v in x._data])
@@ -488,9 +496,11 @@ def sqrt(x: Vec | float) -> Vec | float:
 
 
 @overload
-def log(x: Vec) -> Vec: ...
+def log(x: Vec) -> Vec:
+    pass
 @overload
-def log(x: float) -> float: ...
+def log(x: float) -> float:
+    pass
 def log(x: Vec | float) -> Vec | float:
     if isinstance(x, Vec):
         return Vec._wrap([math.log(max(v, 1e-300)) for v in x._data])
@@ -498,9 +508,11 @@ def log(x: Vec | float) -> Vec | float:
 
 
 @overload
-def exp(x: Vec) -> Vec: ...
+def exp(x: Vec) -> Vec:
+    pass
 @overload
-def exp(x: float) -> float: ...
+def exp(x: float) -> float:
+    pass
 def exp(x: Vec | float) -> Vec | float:
     if isinstance(x, Vec):
         return Vec._wrap([math.exp(v) for v in x._data])
@@ -508,9 +520,11 @@ def exp(x: Vec | float) -> Vec | float:
 
 
 @overload
-def sin(x: Vec) -> Vec: ...
+def sin(x: Vec) -> Vec:
+    pass
 @overload
-def sin(x: float) -> float: ...
+def sin(x: float) -> float:
+    pass
 def sin(x: Vec | float) -> Vec | float:
     if isinstance(x, Vec):
         return Vec._wrap([math.sin(v) for v in x._data])
@@ -518,9 +532,11 @@ def sin(x: Vec | float) -> Vec | float:
 
 
 @overload
-def cos(x: Vec) -> Vec: ...
+def cos(x: Vec) -> Vec:
+    pass
 @overload
-def cos(x: float) -> float: ...
+def cos(x: float) -> float:
+    pass
 def cos(x: Vec | float) -> Vec | float:
     if isinstance(x, Vec):
         return Vec._wrap([math.cos(v) for v in x._data])
@@ -821,11 +837,14 @@ class _Random:
         self._rng.seed(s)
 
     @overload
-    def randn(self) -> float: ...
+    def randn(self) -> float:
+        pass
     @overload
-    def randn(self, __n: int) -> Vec: ...
+    def randn(self, __n: int) -> Vec:
+        pass
     @overload
-    def randn(self, __n: int, __m: int) -> Mat: ...
+    def randn(self, __n: int, __m: int) -> Mat:
+        pass
     def randn(self, *shape: int) -> Vec | Mat | float:
         """Standard-normal samples (Box–Muller)."""
         if len(shape) == 0:
@@ -846,20 +865,25 @@ class _Random:
         )
 
     @overload
-    def uniform(self, lo: float = ..., hi: float = ..., size: None = ...) -> float: ...
+    def uniform(self, lo: float = ..., hi: float = ..., size: None = ...) -> float:
+        pass
     @overload
-    def uniform(self, lo: float, hi: float, size: int) -> Vec: ...
+    def uniform(self, lo: float, hi: float, size: int) -> Vec:
+        pass
     def uniform(self, lo: float = 0.0, hi: float = 1.0, size: int | None = None) -> float | Vec:
         if size is None:
             return self._rng.uniform(lo, hi)
         return Vec._wrap([self._rng.uniform(lo, hi) for _ in range(size)])
 
     @overload
-    def rand(self) -> float: ...
+    def rand(self) -> float:
+        pass
     @overload
-    def rand(self, __n: int) -> Vec: ...
+    def rand(self, __n: int) -> Vec:
+        pass
     @overload
-    def rand(self, __n: int, __m: int) -> Mat: ...
+    def rand(self, __n: int, __m: int) -> Mat:
+        pass
     def rand(self, *shape: int) -> Vec | Mat | float:
         """Uniform [0, 1) samples."""
         if len(shape) == 0:
