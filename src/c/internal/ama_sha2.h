@@ -15,6 +15,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Forward declaration — provided by the including translation unit */
@@ -192,7 +193,7 @@ static void ama_hmac_sha512_3(
     /* Build inner message: k_pad || part1 || part2 || part3 */
     {
         size_t inner_len = AMA_SHA512_BLOCK_SIZE + part1_len + part2_len + part3_len;
-        uint8_t *inner_buf = (uint8_t *)calloc(1, inner_len);
+        uint8_t *inner_buf = (uint8_t *)calloc((size_t)1, inner_len);
         if (!inner_buf) {
             memset(out, 0, AMA_SHA512_DIGEST_SIZE);
             ama_secure_memzero(k_pad, sizeof(k_pad));
