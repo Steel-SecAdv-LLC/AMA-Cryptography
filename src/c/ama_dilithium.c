@@ -1581,6 +1581,13 @@ AMA_API ama_error_t ama_dilithium_verify_ctx(
     size_t wrapped_len;
     ama_error_t result;
 
+    if (message == NULL || signature == NULL || public_key == NULL) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (ctx_len > 0 && ctx == NULL) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
     /* FIPS 204 Section 5.3: context must be at most 255 bytes */
     if (ctx_len > 255) {
         return AMA_ERROR_INVALID_PARAM;
@@ -1592,7 +1599,7 @@ AMA_API ama_error_t ama_dilithium_verify_ctx(
     }
     wrapped_len = 2 + ctx_len + message_len;
 
-    wrapped = (uint8_t *)calloc(1, wrapped_len);
+    wrapped = (uint8_t *)calloc((size_t)1, wrapped_len);
     if (!wrapped) {
         return AMA_ERROR_MEMORY;
     }
