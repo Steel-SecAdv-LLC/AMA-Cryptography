@@ -148,6 +148,13 @@ def _setup_ctypes(lib: ctypes.CDLL) -> None:
 # ---------------------------------------------------------------------------
 # Test functions
 # ---------------------------------------------------------------------------
+def _load_vector_file(path: Path) -> dict | None:
+    """Load a vector JSON file, returning None if it does not exist."""
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text())  # type: ignore[no-any-return]
+
+
 def test_sha3_256(lib: ctypes.CDLL) -> AlgorithmResult:
     res = AlgorithmResult(
         algorithm="SHA3-256",
@@ -158,7 +165,10 @@ def test_sha3_256(lib: ctypes.CDLL) -> AlgorithmResult:
         ),
     )
     path = VECTORS_DIR / "SHA3-256-2.0.json"
-    data = json.loads(path.read_text())
+    data = _load_vector_file(path)
+    if data is None:
+        res.notes = f"Vector file {path.name} not found; run fetch_vectors.py"
+        return res
     for tg in data["testGroups"]:
         if tg["testType"] != "AFT":
             count = len(tg.get("tests", []))
@@ -204,7 +214,10 @@ def test_sha3_512(lib: ctypes.CDLL) -> AlgorithmResult:
         ),
     )
     path = VECTORS_DIR / "SHA3-512-2.0.json"
-    data = json.loads(path.read_text())
+    data = _load_vector_file(path)
+    if data is None:
+        res.notes = f"Vector file {path.name} not found; run fetch_vectors.py"
+        return res
     for tg in data["testGroups"]:
         if tg["testType"] != "AFT":
             count = len(tg.get("tests", []))
@@ -250,7 +263,10 @@ def test_shake128(lib: ctypes.CDLL) -> AlgorithmResult:
         ),
     )
     path = VECTORS_DIR / "SHAKE-128-1.0.json"
-    data = json.loads(path.read_text())
+    data = _load_vector_file(path)
+    if data is None:
+        res.notes = f"Vector file {path.name} not found; run fetch_vectors.py"
+        return res
     for tg in data["testGroups"]:
         if tg["testType"] != "AFT":
             count = len(tg.get("tests", []))
@@ -304,7 +320,10 @@ def test_shake256(lib: ctypes.CDLL) -> AlgorithmResult:
         ),
     )
     path = VECTORS_DIR / "SHAKE-256-1.0.json"
-    data = json.loads(path.read_text())
+    data = _load_vector_file(path)
+    if data is None:
+        res.notes = f"Vector file {path.name} not found; run fetch_vectors.py"
+        return res
     for tg in data["testGroups"]:
         if tg["testType"] != "AFT":
             count = len(tg.get("tests", []))
@@ -358,7 +377,10 @@ def test_hmac_sha256(lib: ctypes.CDLL) -> AlgorithmResult:
         ),
     )
     path = VECTORS_DIR / "HMAC-SHA2-256-2.0.json"
-    data = json.loads(path.read_text())
+    data = _load_vector_file(path)
+    if data is None:
+        res.notes = f"Vector file {path.name} not found; run fetch_vectors.py"
+        return res
     for tg in data["testGroups"]:
         if tg["testType"] != "AFT":
             count = len(tg.get("tests", []))
@@ -397,9 +419,17 @@ def test_sha256(lib: ctypes.CDLL) -> AlgorithmResult:
         source_url="https://csrc.nist.gov/pubs/fips/180-4/upd1/final",
     )
     path = VECTORS_DIR / "SHA-256-FIPS180-4.json"
-    data = json.loads(path.read_text())
+    data = _load_vector_file(path)
+    if data is None:
+        res.notes = f"Vector file {path.name} not found; run fetch_vectors.py"
+        return res
     for tg in data["testGroups"]:
         if tg["testType"] != "AFT":
+            count = len(tg.get("tests", []))
+            res.mct_skipped += count
+            res.skip_reasons.append(
+                f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors"
+            )
             continue
         for tc in tg["tests"]:
             msg = bytes.fromhex(tc["msg"]) if tc["msg"] else b""
@@ -428,9 +458,17 @@ def test_aes256gcm(lib: ctypes.CDLL) -> AlgorithmResult:
         source_url="https://csrc.nist.gov/pubs/sp/800/38/d/final",
     )
     path = VECTORS_DIR / "AES-256-GCM-SP800-38D.json"
-    data = json.loads(path.read_text())
+    data = _load_vector_file(path)
+    if data is None:
+        res.notes = f"Vector file {path.name} not found; run fetch_vectors.py"
+        return res
     for tg in data["testGroups"]:
         if tg["testType"] != "AFT":
+            count = len(tg.get("tests", []))
+            res.mct_skipped += count
+            res.skip_reasons.append(
+                f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors"
+            )
             continue
         for tc in tg["tests"]:
             key = bytes.fromhex(tc["key"])
@@ -482,7 +520,10 @@ def test_ml_kem_keygen(lib: ctypes.CDLL) -> AlgorithmResult:
         ),
     )
     path = VECTORS_DIR / "ML-KEM-keyGen-FIPS203.json"
-    data = json.loads(path.read_text())
+    data = _load_vector_file(path)
+    if data is None:
+        res.notes = f"Vector file {path.name} not found; run fetch_vectors.py"
+        return res
     for tg in data["testGroups"]:
         if tg["testType"] != "AFT":
             count = len(tg.get("tests", []))
@@ -544,7 +585,10 @@ def test_ml_kem_decap(lib: ctypes.CDLL) -> AlgorithmResult:
               "(AMA does not expose randomness parameter m).",
     )
     path = VECTORS_DIR / "ML-KEM-encapDecap-FIPS203.json"
-    data = json.loads(path.read_text())
+    data = _load_vector_file(path)
+    if data is None:
+        res.notes = f"Vector file {path.name} not found; run fetch_vectors.py"
+        return res
     for tg in data["testGroups"]:
         if tg["testType"] != "AFT":
             count = len(tg.get("tests", []))
@@ -606,7 +650,10 @@ def test_ml_dsa_keygen(lib: ctypes.CDLL) -> AlgorithmResult:
         ),
     )
     path = VECTORS_DIR / "ML-DSA-keyGen-FIPS204.json"
-    data = json.loads(path.read_text())
+    data = _load_vector_file(path)
+    if data is None:
+        res.notes = f"Vector file {path.name} not found; run fetch_vectors.py"
+        return res
     for tg in data["testGroups"]:
         if tg["testType"] != "AFT":
             count = len(tg.get("tests", []))
@@ -668,7 +715,10 @@ def test_ml_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
               "which applies FIPS 204 domain-separation wrapper.",
     )
     path = VECTORS_DIR / "ML-DSA-sigVer-FIPS204.json"
-    data = json.loads(path.read_text())
+    data = _load_vector_file(path)
+    if data is None:
+        res.notes = f"Vector file {path.name} not found; run fetch_vectors.py"
+        return res
     for tg in data["testGroups"]:
         if tg["tgId"] != 3:
             count = len(tg.get("tests", []))
@@ -724,7 +774,10 @@ def test_slh_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
               "which applies FIPS 205 domain-separation wrapper.",
     )
     path = VECTORS_DIR / "SLH-DSA-sigVer-FIPS205.json"
-    data = json.loads(path.read_text())
+    data = _load_vector_file(path)
+    if data is None:
+        res.notes = f"Vector file {path.name} not found; run fetch_vectors.py"
+        return res
     for tg in data["testGroups"]:
         if tg["tgId"] != 5:
             count = len(tg.get("tests", []))
