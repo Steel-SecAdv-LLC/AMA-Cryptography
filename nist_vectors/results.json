@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-03-18T04:11:37Z",
+  "timestamp": "2026-03-18T06:05:34Z",
   "environment": {
     "os": "Linux 6.18.5",
     "python": "3.11.14",
@@ -8,8 +8,8 @@
   "library": "libama_cryptography.so (native C, no liboqs/PQClean)",
   "summary": {
     "total_tested": 815,
-    "total_pass": 813,
-    "total_fail": 2,
+    "total_pass": 815,
+    "total_fail": 0,
     "total_skipped": 4757
   },
   "algorithms": [
@@ -4083,24 +4083,10 @@
         "TG 35: skipped 14 vectors (only TG 5 SLH-DSA-SHA2-256f external/pure tested)",
         "TG 36: skipped 14 vectors (only TG 5 SLH-DSA-SHA2-256f external/pure tested)"
       ],
-      "pass_count": 12,
-      "fail_count": 2,
+      "pass_count": 14,
+      "fail_count": 0,
       "mct_skipped": 0,
-      "notes": "External/pure interface (TG 5) only. Uses ama_sphincs_verify_ctx which applies FIPS 205 domain-separation wrapper.",
-      "failures": [
-        {
-          "tcId": "64",
-          "expected": "testPassed=True",
-          "actual": "testPassed=False (rc=-4)",
-          "note": "SigVer verdict mismatch. context_len=103."
-        },
-        {
-          "tcId": "70",
-          "expected": "testPassed=True",
-          "actual": "testPassed=False (rc=-4)",
-          "note": "SigVer verdict mismatch. context_len=251."
-        }
-      ]
+      "notes": "External/pure interface (TG 5) only. Uses ama_sphincs_verify_ctx which applies FIPS 205 domain-separation wrapper."
     }
   ]
 }

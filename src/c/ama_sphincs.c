@@ -139,6 +139,8 @@ static void spx_set_tree_index(spx_addr addr, uint32_t index) {
 static void spx_copy_keypair_addr(spx_addr out, const spx_addr in) {
     memcpy(out, in, sizeof(spx_addr));
     out[3] = SPX_ADDR_TYPE_WOTSPK;
+    out[4] = 0;
+    /* out[5] preserved: keypair address from input (FIPS 205 Alg 7/18) */
     out[6] = 0;
     out[7] = 0;
 }
@@ -151,23 +153,37 @@ static void spx_copy_keypair_addr(spx_addr out, const spx_addr in) {
  * and high bytes of keypair/padding word (bytes 16-18).
  */
 static void spx_addr_compress(uint8_t *out, const spx_addr addr) {
+    /*
+     * FIPS 205 Section 11.1: ADRSc = ADRS[3] || ADRS[8:16] || ADRS[19] || ADRS[20:32]
+     *
+     * FIPS 205 32-byte ADRS layout (Section 4):
+     *   [0:4]   layer        = addr[0]
+     *   [4:8]   tree (high)  = 0 (unused top 4 bytes of 12-byte tree field)
+     *   [8:12]  tree (mid)   = addr[1]
+     *   [12:16] tree (low)   = addr[2]
+     *   [16:20] type         = addr[3]
+     *   [20:24] keypair      = addr[5]
+     *   [24:28] chain/height = addr[6]
+     *   [28:32] hash/index   = addr[7]
+     */
+
     /* ADRS[3]: low byte of layer address */
     out[0] = (uint8_t)(addr[0]);
 
-    /* ADRS[8:16]: full addr[2] (tree_low) + full addr[3] (type) */
-    out[1] = (uint8_t)(addr[2] >> 24);
-    out[2] = (uint8_t)(addr[2] >> 16);
-    out[3] = (uint8_t)(addr[2] >> 8);
-    out[4] = (uint8_t)(addr[2]);
-    out[5] = (uint8_t)(addr[3] >> 24);
-    out[6] = (uint8_t)(addr[3] >> 16);
-    out[7] = (uint8_t)(addr[3] >> 8);
-    out[8] = (uint8_t)(addr[3]);
+    /* ADRS[8:16]: addr[1] (tree mid) || addr[2] (tree low) */
+    out[1] = (uint8_t)(addr[1] >> 24);
+    out[2] = (uint8_t)(addr[1] >> 16);
+    out[3] = (uint8_t)(addr[1] >> 8);
+    out[4] = (uint8_t)(addr[1]);
+    out[5] = (uint8_t)(addr[2] >> 24);
+    out[6] = (uint8_t)(addr[2] >> 16);
+    out[7] = (uint8_t)(addr[2] >> 8);
+    out[8] = (uint8_t)(addr[2]);
 
-    /* ADRS[19]: low byte of addr[4] (keypair address) */
-    out[9] = (uint8_t)(addr[4]);
+    /* ADRS[19]: low byte of type */
+    out[9] = (uint8_t)(addr[3]);
 
-    /* ADRS[20:32]: full addr[5], addr[6], addr[7] */
+    /* ADRS[20:32]: addr[5] (keypair), addr[6] (chain/height), addr[7] (hash/index) */
     out[10] = (uint8_t)(addr[5] >> 24);
     out[11] = (uint8_t)(addr[5] >> 16);
     out[12] = (uint8_t)(addr[5] >> 8);
@@ -185,6 +201,140 @@ static void spx_addr_compress(uint8_t *out, const spx_addr addr) {
 /* ============================================================================
  * HASH FUNCTIONS (SHA-256 based, "simple" variant)
  * ============================================================================ */
+
+/* ============================================================================
+ * SHA-512 (required for FIPS 205 H_msg in security categories {3, 5})
+ * ============================================================================ */
+
+static const uint64_t spx_sha512_k[80] = {
+    0x428a2f98d728ae22ULL, 0x7137449123ef65cdULL, 0xb5c0fbcfec4d3b2fULL, 0xe9b5dba58189dbbcULL,
+    0x3956c25bf348b538ULL, 0x59f111f1b605d019ULL, 0x923f82a4af194f9bULL, 0xab1c5ed5da6d8118ULL,
+    0xd807aa98a3030242ULL, 0x12835b0145706fbeULL, 0x243185be4ee4b28cULL, 0x550c7dc3d5ffb4e2ULL,
+    0x72be5d74f27b896fULL, 0x80deb1fe3b1696b1ULL, 0x9bdc06a725c71235ULL, 0xc19bf174cf692694ULL,
+    0xe49b69c19ef14ad2ULL, 0xefbe4786384f25e3ULL, 0x0fc19dc68b8cd5b5ULL, 0x240ca1cc77ac9c65ULL,
+    0x2de92c6f592b0275ULL, 0x4a7484aa6ea6e483ULL, 0x5cb0a9dcbd41fbd4ULL, 0x76f988da831153b5ULL,
+    0x983e5152ee66dfabULL, 0xa831c66d2db43210ULL, 0xb00327c898fb213fULL, 0xbf597fc7beef0ee4ULL,
+    0xc6e00bf33da88fc2ULL, 0xd5a79147930aa725ULL, 0x06ca6351e003826fULL, 0x142929670a0e6e70ULL,
+    0x27b70a8546d22ffcULL, 0x2e1b21385c26c926ULL, 0x4d2c6dfc5ac42aedULL, 0x53380d139d95b3dfULL,
+    0x650a73548baf63deULL, 0x766a0abb3c77b2a8ULL, 0x81c2c92e47edaee6ULL, 0x92722c851482353bULL,
+    0xa2bfe8a14cf10364ULL, 0xa81a664bbc423001ULL, 0xc24b8b70d0f89791ULL, 0xc76c51a30654be30ULL,
+    0xd192e819d6ef5218ULL, 0xd69906245565a910ULL, 0xf40e35855771202aULL, 0x106aa07032bbd1b8ULL,
+    0x19a4c116b8d2d0c8ULL, 0x1e376c085141ab53ULL, 0x2748774cdf8eeb99ULL, 0x34b0bcb5e19b48a8ULL,
+    0x391c0cb3c5c95a63ULL, 0x4ed8aa4ae3418acbULL, 0x5b9cca4f7763e373ULL, 0x682e6ff3d6b2b8a3ULL,
+    0x748f82ee5defb2fcULL, 0x78a5636f43172f60ULL, 0x84c87814a1f0ab72ULL, 0x8cc702081a6439ecULL,
+    0x90befffa23631e28ULL, 0xa4506cebde82bde9ULL, 0xbef9a3f7b2c67915ULL, 0xc67178f2e372532bULL,
+    0xca273eceea26619cULL, 0xd186b8c721c0c207ULL, 0xeada7dd6cde0eb1eULL, 0xf57d4f7fee6ed178ULL,
+    0x06f067aa72176fbaULL, 0x0a637dc5a2c898a6ULL, 0x113f9804bef90daeULL, 0x1b710b35131c471bULL,
+    0x28db77f523047d84ULL, 0x32caab7b40c72493ULL, 0x3c9ebe0a15c9bebcULL, 0x431d67c49c100d4cULL,
+    0x4cc5d4becb3e42b6ULL, 0x597f299cfc657e2aULL, 0x5fcb6fab3ad6faecULL, 0x6c44198c4a475817ULL
+};
+
+static inline uint64_t spx_rotr64(uint64_t x, unsigned int n) {
+    return (x >> n) | (x << (64 - n));
+}
+
+static void spx_sha512_transform(uint64_t state[8], const uint8_t block[128]) {
+    uint64_t a, b, c, d, e, f, g, h, t1, t2;
+    uint64_t W[80];
+    int i;
+    for (i = 0; i < 16; i++) {
+        W[i] = ((uint64_t)block[i*8] << 56) | ((uint64_t)block[i*8+1] << 48) |
+               ((uint64_t)block[i*8+2] << 40) | ((uint64_t)block[i*8+3] << 32) |
+               ((uint64_t)block[i*8+4] << 24) | ((uint64_t)block[i*8+5] << 16) |
+               ((uint64_t)block[i*8+6] << 8) | ((uint64_t)block[i*8+7]);
+    }
+    for (i = 16; i < 80; i++) {
+        uint64_t s0 = spx_rotr64(W[i-15], 1) ^ spx_rotr64(W[i-15], 8) ^ (W[i-15] >> 7);
+        uint64_t s1 = spx_rotr64(W[i-2], 19) ^ spx_rotr64(W[i-2], 61) ^ (W[i-2] >> 6);
+        W[i] = W[i-16] + s0 + W[i-7] + s1;
+    }
+    a = state[0]; b = state[1]; c = state[2]; d = state[3];
+    e = state[4]; f = state[5]; g = state[6]; h = state[7];
+    for (i = 0; i < 80; i++) {
+        uint64_t S1 = spx_rotr64(e, 14) ^ spx_rotr64(e, 18) ^ spx_rotr64(e, 41);
+        uint64_t ch = (e & f) ^ ((~e) & g);
+        t1 = h + S1 + ch + spx_sha512_k[i] + W[i];
+        uint64_t S0 = spx_rotr64(a, 28) ^ spx_rotr64(a, 34) ^ spx_rotr64(a, 39);
+        uint64_t maj = (a & b) ^ (a & c) ^ (b & c);
+        t2 = S0 + maj;
+        h = g; g = f; f = e; e = d + t1;
+        d = c; c = b; b = a; a = t1 + t2;
+    }
+    state[0] += a; state[1] += b; state[2] += c; state[3] += d;
+    state[4] += e; state[5] += f; state[6] += g; state[7] += h;
+}
+
+/**
+ * SHA-512 one-shot hash (used only for FIPS 205 H_msg in security category 5)
+ */
+static void spx_sha512(const uint8_t *data, size_t len, uint8_t out[64]) {
+    uint64_t state[8] = {
+        0x6a09e667f3bcc908ULL, 0xbb67ae8584caa73bULL,
+        0x3c6ef372fe94f82bULL, 0xa54ff53a5f1d36f1ULL,
+        0x510e527fade682d1ULL, 0x9b05688c2b3e6c1fULL,
+        0x1f83d9abfb41bd6bULL, 0x5be0cd19137e2179ULL
+    };
+    uint8_t block[128];
+    size_t orig_len = len;
+    unsigned int i;
+    while (len >= 128) {
+        spx_sha512_transform(state, data);
+        data += 128;
+        len -= 128;
+    }
+    memset(block, 0, sizeof(block));
+    memcpy(block, data, len);
+    block[len] = 0x80;
+    if (len >= 112) {
+        spx_sha512_transform(state, block);
+        memset(block, 0, sizeof(block));
+    }
+    {
+        uint64_t bit_len = orig_len * 8;
+        block[120] = (uint8_t)(bit_len >> 56); block[121] = (uint8_t)(bit_len >> 48);
+        block[122] = (uint8_t)(bit_len >> 40); block[123] = (uint8_t)(bit_len >> 32);
+        block[124] = (uint8_t)(bit_len >> 24); block[125] = (uint8_t)(bit_len >> 16);
+        block[126] = (uint8_t)(bit_len >> 8);  block[127] = (uint8_t)(bit_len);
+    }
+    spx_sha512_transform(state, block);
+    for (i = 0; i < 8; i++) {
+        out[i*8]   = (uint8_t)(state[i] >> 56); out[i*8+1] = (uint8_t)(state[i] >> 48);
+        out[i*8+2] = (uint8_t)(state[i] >> 40); out[i*8+3] = (uint8_t)(state[i] >> 32);
+        out[i*8+4] = (uint8_t)(state[i] >> 24); out[i*8+5] = (uint8_t)(state[i] >> 16);
+        out[i*8+6] = (uint8_t)(state[i] >> 8);  out[i*8+7] = (uint8_t)(state[i]);
+    }
+    ama_secure_memzero(block, sizeof(block));
+    ama_secure_memzero(state, sizeof(state));
+}
+
+/**
+ * MGF1-SHA-512 — used for FIPS 205 H_msg in security categories {3, 5}
+ */
+static void mgf1_sha512(uint8_t *out, size_t outlen,
+                          const uint8_t *seed, size_t seedlen) {
+    uint8_t buf[64];
+    uint8_t counter[4] = {0, 0, 0, 0};
+    size_t i, blocks;
+    /* Build seed||counter in a temporary buffer for hashing */
+    uint8_t hashbuf[SPX_N + SPX_N + 64 + 4];  /* max seed: 128 + 4 */
+    if (seedlen > sizeof(hashbuf) - 4) {
+        return;  /* safety check */
+    }
+    memcpy(hashbuf, seed, seedlen);
+
+    blocks = (outlen + 63) / 64;
+    for (i = 0; i < blocks; ++i) {
+        hashbuf[seedlen]     = (uint8_t)(i >> 24);
+        hashbuf[seedlen + 1] = (uint8_t)(i >> 16);
+        hashbuf[seedlen + 2] = (uint8_t)(i >> 8);
+        hashbuf[seedlen + 3] = (uint8_t)i;
+        spx_sha512(hashbuf, seedlen + 4, buf);
+        size_t tocopy = (outlen - i * 64 < 64) ? outlen - i * 64 : 64;
+        memcpy(out + i * 64, buf, tocopy);
+    }
+    ama_secure_memzero(buf, sizeof(buf));
+    ama_secure_memzero(hashbuf, sizeof(hashbuf));
+}
 
 /**
  * MGF1-SHA-256 mask generation function — native SHA-256
@@ -215,27 +365,56 @@ static void mgf1_sha256(uint8_t *out, size_t outlen,
 }
 
 /**
- * SPHINCS+ T_l function (tweakable hash for l-byte message)
- * FIPS 205 Section 11.1 simple variant:
- * SHA-256(PK.seed || toByte(0, 64-n) || ADRSc || M)
+ * SPHINCS+ tweakable hash (F, H, T_l) — FIPS 205 Section 11.2 Table 5.
+ *
+ * For security categories {3,5} (n ∈ {24, 32}):
+ *   F (inblocks == 1):  Trunc_n(SHA-256(PK.seed || toByte(0, 64-n) || ADRSc || M))
+ *   H, T_l (inblocks > 1): Trunc_n(SHA-512(PK.seed || toByte(0, 128-n) || ADRSc || M))
  */
 static void spx_thash(uint8_t *out, const uint8_t *in, unsigned int inblocks,
                        const uint8_t *pub_seed, const spx_addr addr) {
     uint8_t addr_c[22];
-    static const uint8_t padding[64 - SPX_N] = {0};  /* toByte(0, 64-n) */
-    uint8_t hash[32];
 
     spx_addr_compress(addr_c, addr);
 
-    ama_sha256_ctx ctx;
-    ama_sha256_init(&ctx);
-    ama_sha256_update(&ctx, pub_seed, SPX_N);          /* PK.seed (32 bytes) */
-    ama_sha256_update(&ctx, padding, sizeof(padding));  /* toByte(0, 32) */
-    ama_sha256_update(&ctx, addr_c, sizeof(addr_c));    /* ADRSc (22 bytes) */
-    ama_sha256_update(&ctx, in, inblocks * SPX_N);      /* M */
-    ama_sha256_final(&ctx, hash);
+    if (inblocks == 1) {
+        /* F: SHA-256 with toByte(0, 64-n) padding */
+        static const uint8_t padding[64 - SPX_N] = {0};
+        uint8_t hash[32];
 
-    memcpy(out, hash, SPX_N);
+        ama_sha256_ctx ctx;
+        ama_sha256_init(&ctx);
+        ama_sha256_update(&ctx, pub_seed, SPX_N);
+        ama_sha256_update(&ctx, padding, sizeof(padding));
+        ama_sha256_update(&ctx, addr_c, sizeof(addr_c));
+        ama_sha256_update(&ctx, in, SPX_N);
+        ama_sha256_final(&ctx, hash);
+
+        memcpy(out, hash, SPX_N);
+    } else {
+        /* H / T_l: SHA-512 with toByte(0, 128-n) padding */
+        static const uint8_t padding[128 - SPX_N] = {0};  /* 96 zero bytes */
+        uint8_t hash[64];
+
+        /* Build input: PK.seed || toByte(0, 128-n) || ADRSc || M */
+        size_t msg_len = (size_t)inblocks * SPX_N;
+        size_t total = SPX_N + (128 - SPX_N) + 22 + msg_len;
+        uint8_t *buf = (uint8_t *)calloc(1, total);
+        if (!buf) {
+            memset(out, 0, SPX_N);
+            return;
+        }
+        memcpy(buf, pub_seed, SPX_N);
+        memcpy(buf + SPX_N, padding, 128 - SPX_N);
+        memcpy(buf + 128, addr_c, 22);
+        memcpy(buf + 150, in, msg_len);
+
+        spx_sha512(buf, total, hash);
+        memcpy(out, hash, SPX_N);
+
+        ama_secure_memzero(buf, total);
+        free(buf);
+    }
 }
 
 /**
@@ -281,28 +460,43 @@ static void spx_hash_message(uint8_t *digest, uint64_t *tree, uint32_t *leaf_idx
     uint8_t buf[SPX_FORS_MSG_BYTES + 8 + 4];  /* message hash output */
     size_t buflen = SPX_FORS_MSG_BYTES + 8 + 4;
 
-    /* H_msg per FIPS 205 Sec 11.1 SHA-256:
-     * MGF1-SHA-256(R || PK.seed || toByte(0, 64-n) || SHA-256(R || PK.seed || PK.root || M), m) */
+    /* H_msg per FIPS 205 Sec 11.2 Table 5, security categories {3,5} (n=32):
+     * MGF1-SHA-512(R || PK.seed || SHA-512(R || PK.seed || PK.root || M), m)
+     *
+     * Note: categories {3,5} use SHA-512 for H_msg (not SHA-256), and the
+     * MGF1 seed has NO toByte(0, 128-n) padding — just R || PK.seed || inner. */
     {
-        uint8_t hash[32];
-        /* MGF1 seed: R(32) + PK.seed(32) + padding(32) + hash(32) = 128 bytes */
-        uint8_t mgf_seed[SPX_N + SPX_N + (64 - SPX_N) + 32];
+        uint8_t hash[64];   /* SHA-512 output = 64 bytes */
+        /* MGF1 seed: R(32) + PK.seed(32) + SHA-512_hash(64) = 128 bytes */
+        uint8_t mgf_seed[SPX_N + SPX_N + 64];
 
-        /* Inner hash: SHA-256(R || PK.seed || PK.root || M) */
-        ama_sha256_ctx sha_ctx;
-        ama_sha256_init(&sha_ctx);
-        ama_sha256_update(&sha_ctx, R, SPX_N);
-        ama_sha256_update(&sha_ctx, pk, 2 * SPX_N);  /* PK.seed || PK.root */
-        ama_sha256_update(&sha_ctx, msg, msglen);
-        ama_sha256_final(&sha_ctx, hash);
+        /* Inner hash: SHA-512(R || PK.seed || PK.root || M) */
+        {
+            /* Build input: R || PK.seed || PK.root || M */
+            size_t inner_len = SPX_N + 2 * SPX_N + msglen;
+            uint8_t *inner_buf = (uint8_t *)calloc(1, inner_len);
+            if (!inner_buf) {
+                memset(buf, 0, buflen);
+                goto hmsg_extract;
+            }
+            memcpy(inner_buf, R, SPX_N);
+            memcpy(inner_buf + SPX_N, pk, 2 * SPX_N);
+            memcpy(inner_buf + 3 * SPX_N, msg, msglen);
+            spx_sha512(inner_buf, inner_len, hash);
+            ama_secure_memzero(inner_buf, inner_len);
+            free(inner_buf);
+        }
 
-        /* Build MGF1 seed: R || PK.seed || toByte(0, 64-n) || hash */
+        /* Build MGF1 seed: R || PK.seed || SHA-512(inner) */
         memcpy(mgf_seed, R, SPX_N);
         memcpy(mgf_seed + SPX_N, pk, SPX_N);  /* PK.seed only */
-        memset(mgf_seed + 2 * SPX_N, 0, 64 - SPX_N);  /* toByte(0, 64-n) */
-        memcpy(mgf_seed + 2 * SPX_N + (64 - SPX_N), hash, 32);
-        mgf1_sha256(buf, buflen, mgf_seed, sizeof(mgf_seed));
+        memcpy(mgf_seed + 2 * SPX_N, hash, 64);
+        mgf1_sha512(buf, buflen, mgf_seed, sizeof(mgf_seed));
+
+        ama_secure_memzero(hash, sizeof(hash));
+        ama_secure_memzero(mgf_seed, sizeof(mgf_seed));
     }
+    hmsg_extract:
 
     /* Extract FORS message digest */
     memcpy(digest, buf, SPX_FORS_MSG_BYTES);
@@ -318,14 +512,8 @@ static void spx_hash_message(uint8_t *digest, uint64_t *tree, uint32_t *leaf_idx
     /* Mask tree index to valid range */
     *tree &= (~(uint64_t)0) >> (64 - (SPX_FULL_HEIGHT - SPX_TREE_HEIGHT));
 
-    /* Extract leaf index (4 bytes) */
-    *leaf_idx = 0;
-    {
-        unsigned int i;
-        for (i = 0; i < 4; ++i) {
-            *leaf_idx |= (uint32_t)buf[SPX_FORS_MSG_BYTES + 8 + i] << (24 - 8 * i);
-        }
-    }
+    /* Extract leaf index: ceil(h'/8) = 1 byte for h'=SPX_TREE_HEIGHT=4 */
+    *leaf_idx = (uint32_t)buf[SPX_FORS_MSG_BYTES + 8];
     *leaf_idx &= ((uint32_t)1 << SPX_TREE_HEIGHT) - 1;
 }
 
@@ -498,8 +686,6 @@ static void spx_fors_treehash(uint8_t *root, uint8_t *auth_path,
     unsigned int sp = 0;
     uint32_t i;
 
-    spx_set_type(addr, SPX_ADDR_TYPE_FORSTREE);
-
     for (i = 0; i < (1u << SPX_FORS_HEIGHT); ++i) {
         /* Generate leaf directly onto the stack */
         spx_fors_gen_leaf(stack + sp * SPX_N, sk_seed, pub_seed, offset + i, addr);
@@ -516,7 +702,7 @@ static void spx_fors_treehash(uint8_t *root, uint8_t *auth_path,
             uint32_t tree_node_idx = i >> (heights[sp - 1] + 1);
 
             spx_set_tree_height(addr, heights[sp - 1] + 1);
-            spx_set_tree_index(addr, offset + tree_node_idx);
+            spx_set_tree_index(addr, (offset + i) >> (heights[sp - 1] + 1));
 
             /* Merge in place: hash stack[sp-2..sp-1] into stack[sp-2] */
             spx_thash(stack + (sp - 2) * SPX_N,
@@ -575,7 +761,6 @@ static void spx_fors_sign(uint8_t *sig, uint8_t *pk,
     /* Generate FORS signatures for each tree */
     for (i = 0; i < SPX_FORS_TREES; ++i) {
         /* Generate leaf secret key value */
-        spx_set_type(fors_addr, SPX_ADDR_TYPE_FORSTREE);
         spx_set_tree_height(fors_addr, 0);
         spx_set_tree_index(fors_addr, i * (1u << SPX_FORS_HEIGHT) + indices[i]);
         spx_fors_gen_sk(sig + i * (SPX_FORS_HEIGHT + 1) * SPX_N,
@@ -588,7 +773,11 @@ static void spx_fors_sign(uint8_t *sig, uint8_t *pk,
     }
 
     /* Compute FORS public key by hashing all roots */
-    spx_set_type(fors_addr, SPX_ADDR_TYPE_FORSPK);
+    {
+        uint32_t saved_keypair = fors_addr[5];
+        spx_set_type(fors_addr, SPX_ADDR_TYPE_FORSPK);
+        fors_addr[5] = saved_keypair;  /* FIPS 205: preserve keypair for FORS_ROOTS */
+    }
     spx_thash(pk, roots, SPX_FORS_TREES, pub_seed, fors_addr);
 }
 
@@ -638,7 +827,6 @@ static void spx_fors_pk_from_sig(uint8_t *pk, const uint8_t *sig,
         uint32_t idx = indices[i];
         uint32_t offset = i * (1u << SPX_FORS_HEIGHT);
 
-        spx_set_type(fors_addr, SPX_ADDR_TYPE_FORSTREE);
         spx_set_tree_height(fors_addr, 0);
         spx_set_tree_index(fors_addr, offset + idx);
 
@@ -648,7 +836,7 @@ static void spx_fors_pk_from_sig(uint8_t *pk, const uint8_t *sig,
         /* Walk up the tree using authentication path */
         for (j = 0; j < SPX_FORS_HEIGHT; ++j) {
             spx_set_tree_height(fors_addr, j + 1);
-            spx_set_tree_index(fors_addr, offset + (idx >> (j + 1)));
+            spx_set_tree_index(fors_addr, (offset + idx) >> (j + 1));
 
             if ((idx >> j) & 1) {
                 memcpy(node + SPX_N, node, SPX_N);
@@ -663,7 +851,11 @@ static void spx_fors_pk_from_sig(uint8_t *pk, const uint8_t *sig,
     }
 
     /* Compute FORS public key */
-    spx_set_type(fors_addr, SPX_ADDR_TYPE_FORSPK);
+    {
+        uint32_t saved_keypair = fors_addr[5];
+        spx_set_type(fors_addr, SPX_ADDR_TYPE_FORSPK);
+        fors_addr[5] = saved_keypair;  /* FIPS 205: preserve keypair for FORS_ROOTS */
+    }
     spx_thash(pk, roots, SPX_FORS_TREES, pub_seed, fors_addr);
 }
 
@@ -1003,6 +1195,7 @@ AMA_API ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
     /* FORS signature */
     memset(fors_addr, 0, sizeof(fors_addr));
     spx_set_tree_addr(fors_addr, tree);
+    spx_set_type(fors_addr, SPX_ADDR_TYPE_FORSTREE);
     spx_set_keypair_addr(fors_addr, leaf_idx);
 
     spx_fors_sign(sig_ptr, fors_pk, fors_msg, sk_seed, pub_seed, fors_addr);
@@ -1061,6 +1254,7 @@ AMA_API ama_error_t ama_sphincs_verify(const uint8_t *message, size_t message_le
     /* Reconstruct FORS public key from signature */
     memset(fors_addr, 0, sizeof(fors_addr));
     spx_set_tree_addr(fors_addr, tree);
+    spx_set_type(fors_addr, SPX_ADDR_TYPE_FORSTREE);
     spx_set_keypair_addr(fors_addr, leaf_idx);
 
     spx_fors_pk_from_sig(fors_pk, fors_sig, fors_msg, pub_seed, fors_addr);

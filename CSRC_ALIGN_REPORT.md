@@ -1,7 +1,7 @@
 # CSRC Alignment Report — NIST ACVP Vector Validation
 
 **Version:** 2.1
-**Date:** 2026-03-18
+**Date:** 2026-03-18 (updated)
 **Organization:** Steel Security Advisors LLC
 **Author:** Andrew E. A.
 
@@ -14,15 +14,10 @@ the AMA Cryptography library (version 2.0). The validation covers 12 algorithm
 functions across 6 NIST standards (FIPS 180-4, FIPS 198-1, FIPS 202, FIPS 203,
 FIPS 204, FIPS 205) and 1 NIST Special Publication (SP 800-38D).
 
-**Summary:** 815 vectors tested, **813 passed**, **2 failed**, 4,757 skipped
+**Summary:** 815 vectors tested, **815 passed**, **0 failed**, 4,757 skipped
 (non-byte-aligned inputs, non-target parameter sets, MCT/LDT/VOT test types).
 
-The 2 remaining failures occur in SLH-DSA-SHA2-256f SigVer (tcId 64, 70) and
-are attributed to a pre-existing issue in the SPHINCS+ verification algorithm
-that rejects valid ACVP test signatures regardless of domain-separation
-wrapping. All other algorithms — including ML-DSA-65 SigVer, which previously
-had 3 failures resolved by adding `ama_dilithium_verify_ctx` — pass 100% of
-applicable vectors.
+All algorithms pass 100% of applicable NIST test vectors.
 
 > **This report constitutes self-attested algorithm compliance using official
 > NIST vectors. It is NOT a CAVP validation certificate and does not represent
@@ -105,8 +100,8 @@ Source files:
 | ML-KEM-1024 EncapDecap | FIPS 203 | ACVP-Server | 25 | 25 | 0 | 140 | Decap only; ML-KEM-512/768/VAL skipped |
 | ML-DSA-65 KeyGen | FIPS 204 | ACVP-Server | 25 | 25 | 0 | 50 | ML-DSA-44/87 skipped |
 | ML-DSA-65 SigVer | FIPS 204 | ACVP-Server | 15 | 15 | 0 | 165 | External/pure TG 3; resolved via `ama_dilithium_verify_ctx` |
-| SLH-DSA-SHA2-256f SigVer | FIPS 205 | ACVP-Server | 14 | 12 | **2** | 490 | External/pure TG 5 only; see §2.3 |
-| **TOTAL** | | | **815** | **813** | **2** | **4,757** | |
+| SLH-DSA-SHA2-256f SigVer | FIPS 205 | ACVP-Server | 14 | 14 | 0 | 490 | External/pure TG 5 only; resolved via FIPS 205 hash function alignment |
+| **TOTAL** | | | **815** | **815** | **0** | **4,757** | |
 
 ### 2.2 Resolved: ML-DSA-65 SigVer (previously 3 failures, now 15/15 pass)
 
@@ -119,36 +114,31 @@ vectors now pass, including vectors with non-empty context strings.
 The original 3 failures (tcId 31, 35, 37) were caused by the absence of this
 wrapper. The internal verify function remains unchanged.
 
-### 2.3 Deviation: SLH-DSA-SHA2-256f SigVer (2 failures)
+### 2.3 Resolved: SLH-DSA-SHA2-256f SigVer (previously 2 failures, now 14/14 pass)
 
-**Status:** The FIPS 205 external/pure domain-separation wrapper
-`ama_sphincs_verify_ctx()` has been added (identical pattern to the ML-DSA
-fix). However, 2 `testPassed=True` vectors still fail verification.
+**Root cause:** Multiple deviations from FIPS 205 Section 11.2 (SHA-2
+instantiation for security categories {3, 5}) in `src/c/ama_sphincs.c`:
 
-**Root cause:** The failures are **not** caused by the domain-separation
-wrapper. Testing confirms that the AMA SPHINCS+ internal verify function
-(`ama_sphincs_verify`) rejects these specific signatures even when called
-directly with the properly wrapped message `M' = 0x00 || len(ctx) || ctx || M`.
-The library's own self-test (generate keypair, sign, verify) passes, indicating
-the core SPHINCS+ algorithm works for self-generated signatures. The ACVP-
-generated valid signatures (tcId 64, 70) fail verification, suggesting a
-subtle incompatibility in the SPHINCS+ verification algorithm relative to the
-NIST reference implementation.
+1. **H_msg used SHA-256 instead of SHA-512.** FIPS 205 Table 5 specifies
+   MGF1-SHA-512 for H_msg in categories {3, 5}. The implementation used
+   MGF1-SHA-256 with incorrect toByte(0, 64-n) padding.
+2. **H and T_l (multi-block thash) used SHA-256 instead of SHA-512.** FIPS 205
+   requires SHA-512 with toByte(0, 128-n) padding for H and T_l in categories
+   {3, 5}; only F (single-block) uses SHA-256.
+3. **ADRSc compression used wrong byte mapping.** The compressed address
+   extracted bytes from the uint32_t[8] layout rather than the FIPS 205
+   32-byte ADRS layout (which has a 12-byte tree address field).
+4. **FORS and WOTS+ keypair address cleared prematurely.** The keypair field
+   was zeroed by setType calls inside FORS loops and in the WOTS+ pk
+   compression address, contrary to FIPS 205 Algorithms 7, 16, and 18
+   which preserve the keypair through these operations.
 
-All 12 `testPassed=False` vectors are correctly rejected.
+**Fix:** SHA-512 hash function added to `ama_sphincs.c` (zero external
+dependencies). H_msg, H, and T_l updated to use SHA-512 for category 5.
+ADRSc compression corrected to FIPS 205 byte layout. Keypair address
+preserved in FORS and WOTS+ pk compression addresses.
 
-**Failed vectors:**
-
-| tcId | Expected | Actual | Context Length |
-|------|----------|--------|----------------|
-| 64 | testPassed=True | testPassed=False (rc=-4) | 103 bytes |
-| 70 | testPassed=True | testPassed=False (rc=-4) | 251 bytes |
-
-**Recommendation:** Investigate the SPHINCS+ verification internals (FORS
-tree reconstruction, hypertree verification, message hash function) for
-potential divergence from the FIPS 205 reference implementation. This requires
-a detailed comparison against the NIST reference code and is beyond the scope
-of this domain-separation wrapper task.
+**Verification:** All 815 NIST ACVP vectors now pass (813/815 previously).
 
 ---
 
@@ -169,22 +159,15 @@ of this domain-separation wrapper task.
 | FIPS 203 | ML-KEM-1024 Decap | **PASS** — 25/25 AFT vectors |
 | FIPS 204 | ML-DSA-65 KeyGen | **PASS** — 25/25 AFT vectors |
 | FIPS 204 | ML-DSA-65 SigVer | **PASS** — 15/15 AFT vectors (via `ama_dilithium_verify_ctx`) |
-| FIPS 205 | SLH-DSA-SHA2-256f SigVer | **PARTIAL** — 12/14 (2 failures: SPHINCS+ verification algorithm issue) |
+| FIPS 205 | SLH-DSA-SHA2-256f SigVer | **PASS** — 14/14 AFT vectors (via `ama_sphincs_verify_ctx` + FIPS 205 hash alignment) |
 
 ### 3.2 Summary
 
 The AMA Cryptography library demonstrates correct implementation of the core
-cryptographic algorithms for all tested NIST standards. Hash functions
-(SHA-256, SHA3-256, SHA3-512, SHAKE-128, SHAKE-256), HMAC-SHA-256,
-AES-256-GCM, ML-KEM-1024 (key generation and decapsulation), ML-DSA-65
-(key generation and signature verification), and all SHA-3 family functions
-pass 100% of applicable NIST test vectors (813/815 total).
-
-The ML-DSA-65 SigVer failures from the initial report have been resolved by
-adding `ama_dilithium_verify_ctx()`, which implements the FIPS 204 external/pure
-domain-separation wrapper. An analogous wrapper `ama_sphincs_verify_ctx()` was
-added for SLH-DSA, but 2 SLH-DSA-SHA2-256f SigVer failures persist due to a
-deeper verification algorithm issue unrelated to domain separation.
+cryptographic algorithms for all tested NIST standards. All 815 applicable
+NIST test vectors pass across hash functions (SHA-256, SHA3-256, SHA3-512,
+SHAKE-128, SHAKE-256), HMAC-SHA-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65,
+and SLH-DSA-SHA2-256f.
 
 ### 3.3 CAVP Disclaimer
 
