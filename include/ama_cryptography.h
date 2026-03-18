@@ -824,6 +824,28 @@ AMA_API ama_error_t ama_dilithium_verify(
 );
 
 /**
+ * @brief Verify ML-DSA-65 signature with context (FIPS 204 external/pure)
+ *
+ * Applies domain-separation wrapper M' = 0x00 || len(ctx) || ctx || M
+ * before delegating to ama_dilithium_verify().
+ *
+ * @param message       Message to verify
+ * @param message_len   Length of message
+ * @param ctx           Context string (0–255 bytes)
+ * @param ctx_len       Length of context (must be <= 255)
+ * @param signature     Signature to verify (3309 bytes)
+ * @param signature_len Length of signature
+ * @param public_key    Public key (1952 bytes)
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
+ */
+AMA_API ama_error_t ama_dilithium_verify_ctx(
+    const uint8_t *message, size_t message_len,
+    const uint8_t *ctx, size_t ctx_len,
+    const uint8_t *signature, size_t signature_len,
+    const uint8_t *public_key
+);
+
+/**
  * @brief Generate Kyber-1024 keypair
  *
  * @param pk     Output: public key buffer
@@ -910,6 +932,28 @@ AMA_API ama_error_t ama_sphincs_sign(
  */
 AMA_API ama_error_t ama_sphincs_verify(
     const uint8_t *message, size_t message_len,
+    const uint8_t *signature, size_t signature_len,
+    const uint8_t *public_key
+);
+
+/**
+ * @brief Verify SPHINCS+-256f signature with context (FIPS 205 external/pure)
+ *
+ * Applies domain-separation wrapper M' = 0x00 || len(ctx) || ctx || M
+ * before delegating to ama_sphincs_verify().
+ *
+ * @param message       Message to verify
+ * @param message_len   Length of message
+ * @param ctx           Context string (0–255 bytes)
+ * @param ctx_len       Length of context (must be <= 255)
+ * @param signature     Signature to verify (49856 bytes)
+ * @param signature_len Length of signature
+ * @param public_key    Public key (64 bytes)
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
+ */
+AMA_API ama_error_t ama_sphincs_verify_ctx(
+    const uint8_t *message, size_t message_len,
+    const uint8_t *ctx, size_t ctx_len,
     const uint8_t *signature, size_t signature_len,
     const uint8_t *public_key
 );

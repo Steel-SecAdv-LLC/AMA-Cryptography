@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-03-18T03:24:59Z",
+  "timestamp": "2026-03-18T04:11:37Z",
   "environment": {
     "os": "Linux 6.18.5",
     "python": "3.11.14",
@@ -8,8 +8,8 @@
   "library": "libama_cryptography.so (native C, no liboqs/PQClean)",
   "summary": {
     "total_tested": 815,
-    "total_pass": 810,
-    "total_fail": 5,
+    "total_pass": 813,
+    "total_fail": 2,
     "total_skipped": 4757
   },
   "algorithms": [
@@ -4035,30 +4035,10 @@
         "TG 11: skipped 15 vectors (only TG 3 external/pure interface tested)",
         "TG 12: skipped 15 vectors (only TG 3 external/pure interface tested)"
       ],
-      "pass_count": 12,
-      "fail_count": 3,
+      "pass_count": 15,
+      "fail_count": 0,
       "mct_skipped": 0,
-      "notes": "External/pure interface (TG 3) only. AMA verify API does not accept a context parameter; vectors with non-empty context may fail if the implementation requires FIPS 204 domain separation.",
-      "failures": [
-        {
-          "tcId": "31",
-          "expected": "testPassed=True",
-          "actual": "testPassed=False (rc=-4)",
-          "note": "SigVer verdict mismatch. context_len=183. Root cause may be absence of FIPS 204 external/pure domain-separation wrapper (M' = 0x00 || len(ctx) || ctx || M) in AMA's verify function."
-        },
-        {
-          "tcId": "35",
-          "expected": "testPassed=True",
-          "actual": "testPassed=False (rc=-4)",
-          "note": "SigVer verdict mismatch. context_len=0. Root cause may be absence of FIPS 204 external/pure domain-separation wrapper (M' = 0x00 || len(ctx) || ctx || M) in AMA's verify function."
-        },
-        {
-          "tcId": "37",
-          "expected": "testPassed=True",
-          "actual": "testPassed=False (rc=-4)",
-          "note": "SigVer verdict mismatch. context_len=133. Root cause may be absence of FIPS 204 external/pure domain-separation wrapper (M' = 0x00 || len(ctx) || ctx || M) in AMA's verify function."
-        }
-      ]
+      "notes": "External/pure interface (TG 3) only. Uses ama_dilithium_verify_ctx which applies FIPS 204 domain-separation wrapper."
     },
     {
       "algorithm": "SLH-DSA-SHA2-256f SigVer",
@@ -4106,19 +4086,19 @@
       "pass_count": 12,
       "fail_count": 2,
       "mct_skipped": 0,
-      "notes": "External/pure interface (TG 5) only. AMA verify API does not accept a context parameter; vectors with non-empty context may fail if the implementation requires FIPS 205 domain separation.",
+      "notes": "External/pure interface (TG 5) only. Uses ama_sphincs_verify_ctx which applies FIPS 205 domain-separation wrapper.",
       "failures": [
         {
           "tcId": "64",
           "expected": "testPassed=True",
           "actual": "testPassed=False (rc=-4)",
-          "note": "SigVer verdict mismatch. context_len=103. Root cause may be absence of FIPS 205 external/pure domain-separation wrapper in AMA's verify function."
+          "note": "SigVer verdict mismatch. context_len=103."
         },
         {
           "tcId": "70",
           "expected": "testPassed=True",
           "actual": "testPassed=False (rc=-4)",
-          "note": "SigVer verdict mismatch. context_len=251. Root cause may be absence of FIPS 205 external/pure domain-separation wrapper in AMA's verify function."
+          "note": "SigVer verdict mismatch. context_len=251."
         }
       ]
     }

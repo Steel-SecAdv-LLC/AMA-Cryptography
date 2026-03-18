@@ -1,6 +1,6 @@
 # CSRC Alignment Report — NIST ACVP Vector Validation
 
-**Version:** 2.0
+**Version:** 2.1
 **Date:** 2026-03-18
 **Organization:** Steel Security Advisors LLC
 **Author:** Andrew E. A.
@@ -14,13 +14,14 @@ the AMA Cryptography library (version 2.0). The validation covers 12 algorithm
 functions across 6 NIST standards (FIPS 180-4, FIPS 198-1, FIPS 202, FIPS 203,
 FIPS 204, FIPS 205) and 1 NIST Special Publication (SP 800-38D).
 
-**Summary:** 815 vectors tested, **810 passed**, **5 failed**, 4,757 skipped
+**Summary:** 815 vectors tested, **813 passed**, **2 failed**, 4,757 skipped
 (non-byte-aligned inputs, non-target parameter sets, MCT/LDT/VOT test types).
 
-All 5 failures occur in signature verification (ML-DSA-65 SigVer: 3 failures;
-SLH-DSA-SHA2-256f SigVer: 2 failures) and are attributed to the absence of the
-FIPS 204/205 external/pure domain-separation wrapper in the library's verify
-functions. All hash, KDF, AEAD, KEM, and key generation functions pass 100% of
+The 2 remaining failures occur in SLH-DSA-SHA2-256f SigVer (tcId 64, 70) and
+are attributed to a pre-existing issue in the SPHINCS+ verification algorithm
+that rejects valid ACVP test signatures regardless of domain-separation
+wrapping. All other algorithms — including ML-DSA-65 SigVer, which previously
+had 3 failures resolved by adding `ama_dilithium_verify_ctx` — pass 100% of
 applicable vectors.
 
 > **This report constitutes self-attested algorithm compliance using official
@@ -103,61 +104,38 @@ Source files:
 | ML-KEM-1024 KeyGen | FIPS 203 | ACVP-Server | 25 | 25 | 0 | 50 | ML-KEM-512/768 skipped |
 | ML-KEM-1024 EncapDecap | FIPS 203 | ACVP-Server | 25 | 25 | 0 | 140 | Decap only; ML-KEM-512/768/VAL skipped |
 | ML-DSA-65 KeyGen | FIPS 204 | ACVP-Server | 25 | 25 | 0 | 50 | ML-DSA-44/87 skipped |
-| ML-DSA-65 SigVer | FIPS 204 | ACVP-Server | 15 | 12 | **3** | 165 | External/pure TG 3 only; see §2.2 |
+| ML-DSA-65 SigVer | FIPS 204 | ACVP-Server | 15 | 15 | 0 | 165 | External/pure TG 3; resolved via `ama_dilithium_verify_ctx` |
 | SLH-DSA-SHA2-256f SigVer | FIPS 205 | ACVP-Server | 14 | 12 | **2** | 490 | External/pure TG 5 only; see §2.3 |
-| **TOTAL** | | | **815** | **810** | **5** | **4,757** | |
+| **TOTAL** | | | **815** | **813** | **2** | **4,757** | |
 
-### 2.2 Deviation: ML-DSA-65 SigVer (3 failures)
+### 2.2 Resolved: ML-DSA-65 SigVer (previously 3 failures, now 15/15 pass)
 
-**Root cause:** The AMA `ama_dilithium_verify()` function implements the
-**internal** ML-DSA verification interface. It verifies signatures over raw
-messages without applying the FIPS 204 external/pure domain-separation wrapper.
+**Resolution:** The function `ama_dilithium_verify_ctx()` was added to
+implement the FIPS 204 external/pure domain-separation wrapper. It applies
+the transformation `M' = 0x00 || len(ctx) || ctx || M` (FIPS 204 Section 5.4)
+before delegating to the internal `ama_dilithium_verify()`. All 15 TG 3
+vectors now pass, including vectors with non-empty context strings.
 
-FIPS 204 Section 5.4 specifies that for the external/pure signature interface,
-the message is pre-processed as:
-
-```
-M' = IntegerToBytes(0, 1) || IntegerToBytes(|ctx|, 1) || ctx || M
-```
-
-where `ctx` is the optional context string. The AMA verify function passes the
-message directly to the internal verification algorithm without this
-transformation.
-
-**Failed vectors:**
-
-| tcId | Expected | Actual | Context Length |
-|------|----------|--------|----------------|
-| 31 | testPassed=True | testPassed=False (rc=-4) | 183 bytes |
-| 35 | testPassed=True | testPassed=False (rc=-4) | 0 bytes |
-| 37 | testPassed=True | testPassed=False (rc=-4) | 133 bytes |
-
-All 3 failures are `testPassed=True` vectors (valid signatures) that the
-library rejected. This is consistent with the domain-separation hypothesis:
-the signature was generated over the wrapped message `M'`, but the library
-verifies against the raw message `M`.
-
-Note: tcId 35 has a zero-length context but still fails, confirming that
-even with empty context the `0x00 || 0x00` prefix is part of the signed
-message in the external/pure interface.
-
-**Recommendation:** Add an external/pure wrapper API (e.g.,
-`ama_dilithium_verify_external()`) that applies the FIPS 204 §5.4
-domain-separation transformation before calling the internal verify. This
-does not require changes to the core ML-DSA implementation.
+The original 3 failures (tcId 31, 35, 37) were caused by the absence of this
+wrapper. The internal verify function remains unchanged.
 
 ### 2.3 Deviation: SLH-DSA-SHA2-256f SigVer (2 failures)
 
-**Root cause:** Analogous to the ML-DSA issue. The AMA `ama_sphincs_verify()`
-function implements the internal SLH-DSA verification interface without the
-FIPS 205 external/pure domain-separation wrapper.
+**Status:** The FIPS 205 external/pure domain-separation wrapper
+`ama_sphincs_verify_ctx()` has been added (identical pattern to the ML-DSA
+fix). However, 2 `testPassed=True` vectors still fail verification.
 
-FIPS 205 Section 10.3 specifies that for the external/pure signature interface,
-the message is pre-processed as:
+**Root cause:** The failures are **not** caused by the domain-separation
+wrapper. Testing confirms that the AMA SPHINCS+ internal verify function
+(`ama_sphincs_verify`) rejects these specific signatures even when called
+directly with the properly wrapped message `M' = 0x00 || len(ctx) || ctx || M`.
+The library's own self-test (generate keypair, sign, verify) passes, indicating
+the core SPHINCS+ algorithm works for self-generated signatures. The ACVP-
+generated valid signatures (tcId 64, 70) fail verification, suggesting a
+subtle incompatibility in the SPHINCS+ verification algorithm relative to the
+NIST reference implementation.
 
-```
-M' = IntegerToBytes(0, 1) || IntegerToBytes(|ctx|, 1) || ctx || M
-```
+All 12 `testPassed=False` vectors are correctly rejected.
 
 **Failed vectors:**
 
@@ -166,12 +144,11 @@ M' = IntegerToBytes(0, 1) || IntegerToBytes(|ctx|, 1) || ctx || M
 | 64 | testPassed=True | testPassed=False (rc=-4) | 103 bytes |
 | 70 | testPassed=True | testPassed=False (rc=-4) | 251 bytes |
 
-Both failures are `testPassed=True` vectors that the library rejected.
-All `testPassed=False` vectors (invalid signatures) were correctly rejected.
-
-**Recommendation:** Add an external/pure wrapper API (e.g.,
-`ama_sphincs_verify_external()`) that applies the FIPS 205 §10.3
-domain-separation transformation before calling the internal verify.
+**Recommendation:** Investigate the SPHINCS+ verification internals (FORS
+tree reconstruction, hypertree verification, message hash function) for
+potential divergence from the FIPS 205 reference implementation. This requires
+a detailed comparison against the NIST reference code and is beyond the scope
+of this domain-separation wrapper task.
 
 ---
 
@@ -191,23 +168,23 @@ domain-separation transformation before calling the internal verify.
 | FIPS 203 | ML-KEM-1024 KeyGen | **PASS** — 25/25 AFT vectors |
 | FIPS 203 | ML-KEM-1024 Decap | **PASS** — 25/25 AFT vectors |
 | FIPS 204 | ML-DSA-65 KeyGen | **PASS** — 25/25 AFT vectors |
-| FIPS 204 | ML-DSA-65 SigVer | **PARTIAL** — 12/15 (3 failures: missing external/pure wrapper) |
-| FIPS 205 | SLH-DSA-SHA2-256f SigVer | **PARTIAL** — 12/14 (2 failures: missing external/pure wrapper) |
+| FIPS 204 | ML-DSA-65 SigVer | **PASS** — 15/15 AFT vectors (via `ama_dilithium_verify_ctx`) |
+| FIPS 205 | SLH-DSA-SHA2-256f SigVer | **PARTIAL** — 12/14 (2 failures: SPHINCS+ verification algorithm issue) |
 
 ### 3.2 Summary
 
 The AMA Cryptography library demonstrates correct implementation of the core
 cryptographic algorithms for all tested NIST standards. Hash functions
 (SHA-256, SHA3-256, SHA3-512, SHAKE-128, SHAKE-256), HMAC-SHA-256,
-AES-256-GCM, ML-KEM-1024 (key generation and decapsulation), and ML-DSA-65
-(key generation) all pass 100% of applicable NIST test vectors.
+AES-256-GCM, ML-KEM-1024 (key generation and decapsulation), ML-DSA-65
+(key generation and signature verification), and all SHA-3 family functions
+pass 100% of applicable NIST test vectors (813/815 total).
 
-The 5 signature verification failures in ML-DSA-65 and SLH-DSA-SHA2-256f are
-caused by a known architectural gap: the library exposes only the **internal**
-verification interface and does not implement the FIPS 204/205 external/pure
-domain-separation wrapper (`M' = 0x00 || len(ctx) || ctx || M`). This is a
-well-defined, fixable gap that does not indicate any deficiency in the core
-signature verification algorithm itself.
+The ML-DSA-65 SigVer failures from the initial report have been resolved by
+adding `ama_dilithium_verify_ctx()`, which implements the FIPS 204 external/pure
+domain-separation wrapper. An analogous wrapper `ama_sphincs_verify_ctx()` was
+added for SLH-DSA, but 2 SLH-DSA-SHA2-256f SigVer failures persist due to a
+deeper verification algorithm issue unrelated to domain separation.
 
 ### 3.3 CAVP Disclaimer
 

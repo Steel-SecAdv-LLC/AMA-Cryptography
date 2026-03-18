@@ -124,11 +124,25 @@ def _setup_ctypes(lib: ctypes.CDLL) -> None:
     ]
     lib.ama_dilithium_verify.restype = c_int
 
+    # ML-DSA-65 verify with context (FIPS 204 external/pure)
+    lib.ama_dilithium_verify_ctx.argtypes = [
+        c_char_p, c_size_t, c_char_p, c_size_t,
+        c_char_p, c_size_t, c_char_p
+    ]
+    lib.ama_dilithium_verify_ctx.restype = c_int
+
     # SPHINCS+-256f verify
     lib.ama_sphincs_verify.argtypes = [
         c_char_p, c_size_t, c_char_p, c_size_t, c_char_p
     ]
     lib.ama_sphincs_verify.restype = c_int
+
+    # SPHINCS+-256f verify with context (FIPS 205 external/pure)
+    lib.ama_sphincs_verify_ctx.argtypes = [
+        c_char_p, c_size_t, c_char_p, c_size_t,
+        c_char_p, c_size_t, c_char_p
+    ]
+    lib.ama_sphincs_verify_ctx.restype = c_int
 
 
 # ---------------------------------------------------------------------------
@@ -650,9 +664,8 @@ def test_ml_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
             "https://github.com/usnistgov/ACVP-Server/tree/master/"
             "gen-val/json-files/ML-DSA-sigVer-FIPS204"
         ),
-        notes="External/pure interface (TG 3) only. AMA verify API does not "
-              "accept a context parameter; vectors with non-empty context may "
-              "fail if the implementation requires FIPS 204 domain separation.",
+        notes="External/pure interface (TG 3) only. Uses ama_dilithium_verify_ctx "
+              "which applies FIPS 204 domain-separation wrapper.",
     )
     path = VECTORS_DIR / "ML-DSA-sigVer-FIPS204.json"
     data = json.loads(path.read_text())
@@ -669,10 +682,13 @@ def test_ml_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
             pk = bytes.fromhex(tc["pk"])
             message = bytes.fromhex(tc["message"])
             signature = bytes.fromhex(tc["signature"])
+            context_hex = tc.get("context", "")
+            ctx = bytes.fromhex(context_hex) if context_hex else b""
             expected_pass = tc["testPassed"]
 
-            rc = lib.ama_dilithium_verify(
+            rc = lib.ama_dilithium_verify_ctx(
                 message, ctypes.c_size_t(len(message)),
+                ctx, ctypes.c_size_t(len(ctx)),
                 signature, ctypes.c_size_t(len(signature)),
                 pk,
             )
@@ -683,18 +699,13 @@ def test_ml_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
                 res.pass_count += 1
             else:
                 res.fail_count += 1
-                context_hex = tc.get("context", "")
                 res.failures.append({
                     "tcId": str(tc["tcId"]),
                     "expected": f"testPassed={expected_pass}",
                     "actual": f"testPassed={actual_pass} (rc={rc})",
                     "note": (
                         f"SigVer verdict mismatch. context_len="
-                        f"{len(context_hex) // 2}. "
-                        "Root cause may be absence of FIPS 204 "
-                        "external/pure domain-separation wrapper "
-                        "(M' = 0x00 || len(ctx) || ctx || M) in "
-                        "AMA's verify function."
+                        f"{len(ctx)}."
                     ),
                 })
     return res
@@ -709,9 +720,8 @@ def test_slh_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
             "https://github.com/usnistgov/ACVP-Server/tree/master/"
             "gen-val/json-files/SLH-DSA-sigVer-FIPS205"
         ),
-        notes="External/pure interface (TG 5) only. AMA verify API does not "
-              "accept a context parameter; vectors with non-empty context may "
-              "fail if the implementation requires FIPS 205 domain separation.",
+        notes="External/pure interface (TG 5) only. Uses ama_sphincs_verify_ctx "
+              "which applies FIPS 205 domain-separation wrapper.",
     )
     path = VECTORS_DIR / "SLH-DSA-sigVer-FIPS205.json"
     data = json.loads(path.read_text())
@@ -728,10 +738,13 @@ def test_slh_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
             pk = bytes.fromhex(tc["pk"])
             message = bytes.fromhex(tc["message"])
             signature = bytes.fromhex(tc["signature"])
+            context_hex = tc.get("context", "")
+            ctx = bytes.fromhex(context_hex) if context_hex else b""
             expected_pass = tc["testPassed"]
 
-            rc = lib.ama_sphincs_verify(
+            rc = lib.ama_sphincs_verify_ctx(
                 message, ctypes.c_size_t(len(message)),
+                ctx, ctypes.c_size_t(len(ctx)),
                 signature, ctypes.c_size_t(len(signature)),
                 pk,
             )
@@ -741,17 +754,13 @@ def test_slh_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
                 res.pass_count += 1
             else:
                 res.fail_count += 1
-                context_hex = tc.get("context", "")
                 res.failures.append({
                     "tcId": str(tc["tcId"]),
                     "expected": f"testPassed={expected_pass}",
                     "actual": f"testPassed={actual_pass} (rc={rc})",
                     "note": (
                         f"SigVer verdict mismatch. context_len="
-                        f"{len(context_hex) // 2}. "
-                        "Root cause may be absence of FIPS 205 "
-                        "external/pure domain-separation wrapper "
-                        "in AMA's verify function."
+                        f"{len(ctx)}."
                     ),
                 })
     return res

@@ -1073,3 +1073,60 @@ AMA_API ama_error_t ama_sphincs_verify(const uint8_t *message, size_t message_le
 
     return AMA_SUCCESS;
 }
+
+/**
+ * SLH-DSA-SHA2-256f Verification with context (FIPS 205, Section 9.2 — external/pure)
+ *
+ * Applies the domain-separation wrapper M' = 0x00 || len(ctx) || ctx || M
+ * defined in FIPS 205 Section 9.2, then delegates to ama_sphincs_verify().
+ *
+ * @param message       Raw message to verify
+ * @param message_len   Length of message
+ * @param ctx           Context string (0–255 bytes)
+ * @param ctx_len       Length of context (must be <= 255)
+ * @param signature     Signature to verify (49856 bytes)
+ * @param signature_len Length of signature
+ * @param public_key    Public key (64 bytes)
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
+ */
+AMA_API ama_error_t ama_sphincs_verify_ctx(
+    const uint8_t *message, size_t message_len,
+    const uint8_t *ctx, size_t ctx_len,
+    const uint8_t *signature, size_t signature_len,
+    const uint8_t *public_key) {
+
+    uint8_t *wrapped;
+    size_t wrapped_len;
+    ama_error_t result;
+
+    /* Context must be at most 255 bytes */
+    if (ctx_len > 255) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    /* Overflow guard: wrapped_len = 2 + ctx_len + message_len */
+    if (message_len > SIZE_MAX - 2 - ctx_len) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    wrapped_len = 2 + ctx_len + message_len;
+
+    wrapped = (uint8_t *)calloc(1, wrapped_len);
+    if (!wrapped) {
+        return AMA_ERROR_MEMORY;
+    }
+
+    /* M' = 0x00 || IntegerToBytes(|ctx|, 1) || ctx || M */
+    wrapped[0] = 0x00;
+    wrapped[1] = (uint8_t)ctx_len;
+    if (ctx_len > 0 && ctx != NULL) {
+        memcpy(wrapped + 2, ctx, ctx_len);
+    }
+    memcpy(wrapped + 2 + ctx_len, message, message_len);
+
+    result = ama_sphincs_verify(wrapped, wrapped_len, signature,
+                                signature_len, public_key);
+
+    ama_secure_memzero(wrapped, wrapped_len);
+    free(wrapped);
+    return result;
+}

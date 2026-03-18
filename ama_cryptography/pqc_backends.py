@@ -217,6 +217,17 @@ def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_dilithium_verify.restype = ctypes.c_int
 
+        lib.ama_dilithium_verify_ctx.argtypes = [
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # ctx
+            ctypes.c_size_t,  # ctx_len
+            ctypes.c_char_p,  # signature
+            ctypes.c_size_t,  # signature_len
+            ctypes.c_char_p,  # public_key
+        ]
+        lib.ama_dilithium_verify_ctx.restype = ctypes.c_int
+
         # Kyber-1024
         lib.ama_kyber_keypair.argtypes = [
             ctypes.c_char_p,
@@ -267,6 +278,17 @@ def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_char_p,
         ]
         lib.ama_sphincs_verify.restype = ctypes.c_int
+
+        lib.ama_sphincs_verify_ctx.argtypes = [
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # ctx
+            ctypes.c_size_t,  # ctx_len
+            ctypes.c_char_p,  # signature
+            ctypes.c_size_t,  # signature_len
+            ctypes.c_char_p,  # public_key
+        ]
+        lib.ama_sphincs_verify_ctx.restype = ctypes.c_int
 
         return True
     except AttributeError:
@@ -832,6 +854,45 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
 
+def dilithium_verify_ctx(
+    pk: bytes, msg: bytes, ctx: bytes, sig: bytes
+) -> bool:
+    """
+    Verify ML-DSA-65 signature with context (FIPS 204 external/pure).
+
+    Applies M' = 0x00 || len(ctx) || ctx || M domain separation.
+
+    Args:
+        pk: Public key (1952 bytes)
+        msg: Raw message
+        ctx: Context string (0–255 bytes)
+        sig: Signature (3309 bytes)
+
+    Returns:
+        True if signature is valid, False otherwise
+
+    Raises:
+        QuantumSignatureUnavailableError: If no Dilithium backend is available
+        ValueError: If ctx exceeds 255 bytes
+    """
+    if len(ctx) > 255:
+        raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
+    if not DILITHIUM_AVAILABLE:
+        raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
+    if DILITHIUM_BACKEND == "native" and _native_lib is not None:
+        rc = _native_lib.ama_dilithium_verify_ctx(
+            msg,
+            ctypes.c_size_t(len(msg)),
+            ctx,
+            ctypes.c_size_t(len(ctx)),
+            sig,
+            ctypes.c_size_t(len(sig)),
+            pk,
+        )
+        return bool(rc == 0)
+    raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
+
+
 # ============================================================================
 # KYBER-1024 (ML-KEM) KEY ENCAPSULATION MECHANISM
 # ============================================================================
@@ -1123,6 +1184,45 @@ def sphincs_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
         )
         return bool(rc == 0)
 
+    raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
+
+
+def sphincs_verify_ctx(
+    pk: bytes, msg: bytes, ctx: bytes, sig: bytes
+) -> bool:
+    """
+    Verify SLH-DSA-SHA2-256f signature with context (FIPS 205 external/pure).
+
+    Applies M' = 0x00 || len(ctx) || ctx || M domain separation.
+
+    Args:
+        pk: Public key (64 bytes)
+        msg: Raw message
+        ctx: Context string (0–255 bytes)
+        sig: Signature (49856 bytes)
+
+    Returns:
+        True if signature is valid, False otherwise
+
+    Raises:
+        SphincsUnavailableError: If SPHINCS+ backend is not available
+        ValueError: If ctx exceeds 255 bytes
+    """
+    if len(ctx) > 255:
+        raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
+    if not SPHINCS_AVAILABLE:
+        raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
+    if SPHINCS_BACKEND == "native" and _native_lib is not None:
+        rc = _native_lib.ama_sphincs_verify_ctx(
+            msg,
+            ctypes.c_size_t(len(msg)),
+            ctx,
+            ctypes.c_size_t(len(ctx)),
+            sig,
+            ctypes.c_size_t(len(sig)),
+            pk,
+        )
+        return bool(rc == 0)
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
 
 
