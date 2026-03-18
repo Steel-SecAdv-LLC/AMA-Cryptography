@@ -244,9 +244,9 @@ def equation_engine() -> Any:
 @pytest.fixture
 def initial_state() -> Any:
     """Provide an initial state vector for equation tests."""
-    import numpy as np
+    from ama_cryptography._numeric import array
 
-    return np.array([1.0, 0.5, 0.25, 0.125, 0.0625])
+    return array([1.0, 0.5, 0.25, 0.125, 0.0625])
 
 
 # =============================================================================

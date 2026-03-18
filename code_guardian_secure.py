@@ -66,14 +66,37 @@ License: Apache License 2.0
 
 from __future__ import annotations
 
+import sys as _sys
+import warnings as _warnings
+
+# Only emit deprecation warning for external callers (not ama_cryptography internals)
+_caller_module: str = ""
+for _depth in range(1, 20):
+    try:
+        _fname: str = _sys._getframe(_depth).f_globals.get("__name__", "")
+    except ValueError:
+        break
+    if _fname and not _fname.startswith(("importlib", "code_guardian_secure")):
+        _caller_module = _fname
+        break
+if not _caller_module.startswith("ama_cryptography"):
+    _warnings.warn(
+        "The code_guardian_secure module is deprecated. Use the ama_cryptography package.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
 import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import struct
 import subprocess  # nosec B404 - subprocess used only with fixed OpenSSL commands for RFC 3161
 import time
+
+_logger = logging.getLogger(__name__)
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -835,7 +858,7 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
 
     parsed_url = urllib.parse.urlparse(tsa_url)
     if parsed_url.scheme not in ("http", "https"):
-        print(f"Warning: Invalid TSA URL scheme '{parsed_url.scheme}', must be http or https")
+        _logger.warning("Invalid TSA URL scheme '%s', must be http or https", parsed_url.scheme)
         return None
 
     try:
@@ -850,7 +873,7 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
         proc = subprocess.run(cmd_query, input=data, capture_output=True, timeout=10)  # nosec B603
 
         if proc.returncode != 0:
-            print(f"Warning: OpenSSL ts-query failed: {proc.stderr.decode()}")
+            _logger.warning("OpenSSL ts-query failed: %s", proc.stderr.decode())
             return None
 
         tsq = proc.stdout
@@ -868,8 +891,8 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
         return cast(bytes, tsr)
 
     except Exception as e:
-        print(f"Warning: RFC 3161 timestamp failed: {e}")
-        print("Falling back to self-asserted timestamp")
+        _logger.warning("RFC 3161 timestamp failed: %s", e)
+        _logger.warning("Falling back to self-asserted timestamp")
         return None
 
 
@@ -912,17 +935,23 @@ def verify_rfc3161_timestamp(
     Returns:
         True if timestamp is cryptographically valid, False otherwise
     """
+    import os
+    import shutil
     import tempfile
 
+    tmp_dir = tempfile.mkdtemp(prefix="ama_rfc3161_")
+    os.chmod(tmp_dir, 0o700)
     try:
-        # Write timestamp token to temporary file for OpenSSL verification
-        with tempfile.NamedTemporaryFile(suffix=".tsr", delete=False) as tsr_file:
-            tsr_file.write(timestamp_token)
-            tsr_path = tsr_file.name
+        # Write timestamp token to secure temporary directory for OpenSSL verification
+        tsr_path = os.path.join(tmp_dir, "timestamp.tsr")
+        fd = os.open(tsr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(timestamp_token)
 
-        with tempfile.NamedTemporaryFile(suffix=".dat", delete=False) as data_file:
-            data_file.write(data)
-            data_path = data_file.name
+        data_path = os.path.join(tmp_dir, "data.dat")
+        fd = os.open(data_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
 
         # Build OpenSSL verification command
         # openssl ts -verify verifies:
@@ -949,12 +978,6 @@ def verify_rfc3161_timestamp(
 
         proc = subprocess.run(cmd_verify, capture_output=True, timeout=10)  # nosec B603
 
-        # Clean up temporary files
-        import os
-
-        os.unlink(tsr_path)
-        os.unlink(data_path)
-
         # OpenSSL returns 0 on successful verification
         if proc.returncode == 0:
             return True
@@ -966,8 +989,10 @@ def verify_rfc3161_timestamp(
             return False
 
     except Exception as e:
-        print(f"Warning: RFC 3161 timestamp verification failed: {e}")
+        _logger.warning("RFC 3161 timestamp verification failed: %s", e)
         return False
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def _verify_rfc3161_token(
@@ -1415,20 +1440,18 @@ def generate_key_management_system(
             dilithium_keypair = generate_dilithium_keypair()
             quantum_signatures_enabled = True
         except QuantumSignatureUnavailableError:
-            print("\n" + "=" * 70)
-            print("WARNING: Quantum-resistant signatures disabled")
-            print("=" * 70)
-            print("System will use Ed25519 classical signatures only.")
-            print("To enable quantum resistance, build native C library:")
-            print("=" * 70 + "\n")
+            _logger.warning(
+                "Quantum-resistant signatures disabled. "
+                "System will use Ed25519 classical signatures only. "
+                "To enable quantum resistance, build native C library."
+            )
     else:
-        print("\n" + "=" * 70)
-        print("WARNING: Quantum-resistant signatures disabled")
-        print("=" * 70)
-        print("System will use Ed25519 classical signatures only.")
-        print("To enable quantum resistance, build native C library:")
-        print("  cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build")
-        print("=" * 70 + "\n")
+        _logger.warning(
+            "Quantum-resistant signatures disabled. "
+            "System will use Ed25519 classical signatures only. "
+            "To enable quantum resistance, build native C library: "
+            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
 
     return KeyManagementSystem(
         master_secret=master_secret,
@@ -1494,12 +1517,12 @@ def export_public_keys(kms: KeyManagementSystem, output_dir: Path) -> None:
         f.write("These public keys can be safely distributed.\n")
         f.write("Use them to verify signatures on Omni-Code packages.\n")
 
-    print(f"  ✓ Public keys exported to: {output_dir}")
-    print(f"    Ed25519: {len(kms.ed25519_keypair.public_key)} bytes")
+    _logger.info("Public keys exported to: %s", output_dir)
+    _logger.info("Ed25519: %d bytes", len(kms.ed25519_keypair.public_key))
     if kms.quantum_signatures_enabled and kms.dilithium_keypair:
-        print(f"    Dilithium: {len(kms.dilithium_keypair.public_key)} bytes")
+        _logger.info("Dilithium: %d bytes", len(kms.dilithium_keypair.public_key))
     else:
-        print("    Dilithium: NOT AVAILABLE (quantum signatures disabled)")
+        _logger.warning("Dilithium: NOT AVAILABLE (quantum signatures disabled)")
 
 
 # ============================================================================
@@ -1641,6 +1664,9 @@ def create_crypto_package(  # noqa: C901 - high-level orchestrator; refactor wou
     """
     Create cryptographically signed package for Omni-Codes.
 
+    .. deprecated::
+        Use :func:`ama_cryptography.crypto_api.create_crypto_package` instead.
+
     Process:
     --------
     1. Compute canonical hash (SHA3-256)
@@ -1666,6 +1692,14 @@ def create_crypto_package(  # noqa: C901 - high-level orchestrator; refactor wou
         TypeError: If codes is not a string or helix_params is not a list
         ValueError: If codes is empty or helix_params is invalid
     """
+    import warnings
+
+    warnings.warn(
+        "code_guardian_secure.create_crypto_package is deprecated. "
+        "Use ama_cryptography.crypto_api.create_crypto_package instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     # Input validation
     if not isinstance(codes, str):
         raise TypeError(f"codes must be a string, got {type(codes).__name__}")
@@ -1916,7 +1950,18 @@ def verify_crypto_package(
         This function catches all exceptions internally and returns False for
         failed verifications rather than raising exceptions. This provides
         clean failure semantics for security-critical code paths.
+
+    .. deprecated::
+        Use :func:`ama_cryptography.crypto_api.verify_crypto_package` instead.
     """
+    import warnings
+
+    warnings.warn(
+        "code_guardian_secure.verify_crypto_package is deprecated. "
+        "Use ama_cryptography.crypto_api.verify_crypto_package instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     # Smart defaulting: require quantum signatures only when Dilithium is available
     if require_quantum_signatures is None:
         require_quantum_signatures = DILITHIUM_AVAILABLE

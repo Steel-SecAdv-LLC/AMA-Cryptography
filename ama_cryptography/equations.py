@@ -51,10 +51,21 @@ AI Co-Architects:
 """
 
 import logging
+import math
 from typing import Dict, List, Optional, Tuple
 
-import numpy as np
-import numpy.typing as npt
+from ama_cryptography._numeric import (
+    Mat,
+    Vec,
+    allclose,
+    diag,
+    eigvals,
+    eye,
+    ones,
+    ones_like,
+    random,
+    sum_,
+)
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -87,7 +98,7 @@ __all__ = [
 # FUNDAMENTAL CONSTANTS
 # ============================================================================
 
-PHI = (1 + np.sqrt(5)) / 2  # Golden ratio φ ≈ 1.618034
+PHI = (1 + math.sqrt(5)) / 2  # Golden ratio φ ≈ 1.618034
 PHI_SQUARED = PHI**2  # φ² ≈ 2.618034
 PHI_CUBED = PHI**3  # φ³ ≈ 4.236068
 
@@ -212,7 +223,7 @@ def verify_all_codes() -> Dict[str, Dict[str, float]]:
 # ============================================================================
 
 
-def lyapunov_function(state: npt.NDArray[np.float64], target: npt.NDArray[np.float64]) -> float:
+def lyapunov_function(state: Vec, target: Vec) -> float:
     """
     Lyapunov function V(x) = ||x - x*||².
 
@@ -225,7 +236,8 @@ def lyapunov_function(state: npt.NDArray[np.float64], target: npt.NDArray[np.flo
     Returns:
         Lyapunov value V(x)
     """
-    return float(np.sum((state - target) ** 2))
+    diff = state - target
+    return float(sum_(diff**2))
 
 
 def lyapunov_derivative(V: float, lambda_decay: float = LAMBDA_DECAY) -> float:
@@ -263,11 +275,11 @@ def convergence_time(
     """
     if V_initial <= 0:
         return 0.0
-    return float(-np.log(threshold) / (2 * lambda_decay))
+    return float(-math.log(threshold) / (2 * lambda_decay))
 
 
 def lyapunov_stability_proof(
-    state: npt.NDArray[np.float64], target: Optional[npt.NDArray[np.float64]] = None
+    state: Vec, target: Optional[Vec] = None
 ) -> Tuple[bool, float, Dict[str, float]]:
     """
     Prove Lyapunov asymptotic stability for given state.
@@ -292,13 +304,13 @@ def lyapunov_stability_proof(
         }
     """
     if target is None:
-        target = np.ones_like(state)
+        target = ones_like(state)
 
     V = lyapunov_function(state, target)
     V_dot = lyapunov_derivative(V)
 
     # Stability conditions
-    is_positive_definite = V > 0 or np.allclose(state, target, atol=1e-10)
+    is_positive_definite = V > 0 or allclose(state, target, atol=1e-10)
     is_negative_derivative = V_dot <= 0
 
     is_stable = is_positive_definite and is_negative_derivative
@@ -308,7 +320,7 @@ def lyapunov_stability_proof(
         "V_dot": V_dot,
         "time_to_99": convergence_time(V, 0.01) if V > 0 else 0.0,
         "time_to_999": convergence_time(V, 0.001) if V > 0 else 0.0,
-        "half_life": np.log(2) / (2 * LAMBDA_DECAY),
+        "half_life": math.log(2) / (2 * LAMBDA_DECAY),
     }
 
     return is_stable, V, proof
@@ -379,7 +391,7 @@ def golden_ratio_convergence_proof(iterations: int = 30) -> Tuple[bool, float, D
 # ============================================================================
 
 
-def calculate_sigma_quadratic(state: npt.NDArray[np.float64], E: npt.NDArray[np.float64]) -> float:
+def calculate_sigma_quadratic(state: Vec, E: Mat) -> float:
     """
     Calculate σ_quadratic = (x^T · E · x) / ||x||².
 
@@ -398,10 +410,10 @@ def calculate_sigma_quadratic(state: npt.NDArray[np.float64], E: npt.NDArray[np.
 
 
 def enforce_sigma_quadratic_threshold(
-    state: npt.NDArray[np.float64],
-    E: npt.NDArray[np.float64],
+    state: Vec,
+    E: Mat,
     threshold: float = SIGMA_QUADRATIC_THRESHOLD,
-) -> Tuple[bool, npt.NDArray[np.float64]]:
+) -> Tuple[bool, Vec]:
     """
     Enforce σ_quadratic ≥ threshold constraint.
 
@@ -423,15 +435,13 @@ def enforce_sigma_quadratic_threshold(
         return True, state
 
     # Correction: scale by √(threshold/σ)
-    scale = np.sqrt(threshold / sigma) if sigma > 0 else 1.0
+    scale = math.sqrt(threshold / sigma) if sigma > 0 else 1.0
     corrected_state = state * scale
 
     return False, corrected_state
 
 
-def initialize_ethical_matrix(
-    dim: int, scalars: Optional[List[float]] = None
-) -> npt.NDArray[np.float64]:
+def initialize_ethical_matrix(dim: int, scalars: Optional[List[float]] = None) -> Mat:
     """
     Create positive-definite ethical constraint matrix E.
 
@@ -455,17 +465,19 @@ def initialize_ethical_matrix(
         scalars = scalars[:dim] + [PHI_CUBED] * max(0, dim - len(scalars))
 
     # Diagonal matrix from ethical scalars
-    E = np.diag(scalars[:dim])
+    E = diag(scalars[:dim])
 
     # Small symmetric perturbation
-    noise = np.random.randn(dim, dim) * 0.01 * PHI_CUBED
-    noise = (noise + noise.T) / 2
-    E = E + noise
+    noise = random.randn(dim, dim)
+    noise = noise * (0.01 * PHI_CUBED)
+    noise_sym = (noise + noise.T) * 0.5
+    E = E + noise_sym
 
     # Ensure positive-definite
-    min_eig: float = float(np.min(np.linalg.eigvals(E).real))
+    eigs = eigvals(E)
+    min_eig: float = min(eigs)
     if min_eig <= 0:
-        E += np.eye(dim) * (abs(min_eig) + 0.1 * PHI_CUBED)
+        E = E + eye(dim) * (abs(min_eig) + 0.1 * PHI_CUBED)
 
     return E
 
@@ -496,8 +508,8 @@ def verify_mathematical_foundations() -> Dict[str, bool]:
     results["helical_invariants"] = all(r["valid"] for r in dna_results.values())
 
     # 2. Lyapunov Stability
-    test_state = np.array([0.5, 0.3, 0.2])
-    test_target = np.ones(3)
+    test_state = Vec([0.5, 0.3, 0.2])
+    test_target = ones(3)
     stable, _, _ = lyapunov_stability_proof(test_state, test_target)
     results["lyapunov_stability"] = stable
 
@@ -506,7 +518,7 @@ def verify_mathematical_foundations() -> Dict[str, bool]:
     results["golden_ratio"] = converged
 
     # 4. Quadratic Form Constraints
-    test_state_4d = np.array([1.0, 1.0, 1.0, 1.0])
+    test_state_4d = Vec([1.0, 1.0, 1.0, 1.0])
     E = initialize_ethical_matrix(4)
     sigma = calculate_sigma_quadratic(test_state_4d, E)
     results["sigma_quadratic"] = sigma >= 0.9  # Slightly lower for random E
@@ -542,7 +554,7 @@ if __name__ == "__main__":
         logger.info(f"  {status} {code[:15]}: error = {data['fundamental_error']:.2e}")
 
     logger.info("\n[2/5] Lyapunov Stability Theory:")
-    test_state = np.array([0.5, 0.3, 0.2])
+    test_state = Vec([0.5, 0.3, 0.2])
     stable, V, proof = lyapunov_stability_proof(test_state)
     logger.info(f"  {'✓' if stable else '✗'} Asymptotic stability: {stable}")
     logger.info(f"  V(x) = {V:.6f}")
@@ -557,7 +569,7 @@ if __name__ == "__main__":
     logger.info(f"  Error   = {proof['error']:.2e}")
 
     logger.info("\n[4/5] Quadratic Form Constraints:")
-    test_state_4d = np.array([1.0, 1.0, 1.0, 1.0])
+    test_state_4d = Vec([1.0, 1.0, 1.0, 1.0])
     E = initialize_ethical_matrix(4)
     sigma = calculate_sigma_quadratic(test_state_4d, E)
     valid, corrected = enforce_sigma_quadratic_threshold(test_state_4d, E, 0.96)

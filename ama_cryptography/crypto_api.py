@@ -24,12 +24,13 @@ PQC Backend:
 """
 
 import hashlib
+import logging
 import secrets
 import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, ClassVar, Dict, List, Optional, Tuple, Union
 
 from ama_cryptography.pqc_backends import (
     DILITHIUM_AVAILABLE,
@@ -90,6 +91,8 @@ except ImportError:
     TimestampUnavailableError = Exception  # type: ignore[misc,assignment]
     TimestampError = Exception  # type: ignore[misc,assignment]
     get_timestamp = None  # type: ignore[assignment]
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 # Runtime PQC availability check
 pqc_available = DILITHIUM_AVAILABLE or KYBER_AVAILABLE or SPHINCS_AVAILABLE
@@ -620,6 +623,9 @@ class AESGCMProvider:
     Standard: NIST SP 800-38D
     """
 
+    _NONCE_SAFETY_LIMIT: int = 2**32
+    _encrypt_counters: ClassVar[Dict[bytes, int]] = {}
+
     def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY) -> None:
         self.backend = backend
         self.algorithm = AlgorithmType.AES_256_GCM
@@ -660,6 +666,14 @@ class AESGCMProvider:
             nonce = _secrets.token_bytes(12)
         elif len(nonce) != 12:
             raise ValueError(f"AES-256-GCM nonce must be 12 bytes, got {len(nonce)}")
+
+        key_id: bytes = hashlib.sha256(key).digest()
+        count: int = self._encrypt_counters.get(key_id, 0)
+        if count >= self._NONCE_SAFETY_LIMIT:
+            raise RuntimeError("AES-GCM nonce safety limit exceeded. Re-key required.")
+        if count >= int(self._NONCE_SAFETY_LIMIT * 0.75):
+            logger.warning("AES-GCM nonce count approaching safety limit. Re-key recommended.")
+        self._encrypt_counters[key_id] = count + 1
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
@@ -706,6 +720,120 @@ class AESGCMProvider:
         from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
 
         return native_aes256_gcm_decrypt(key, nonce, ciphertext, tag, aad)
+
+
+class HybridKEMProvider(KEMProvider):
+    """
+    Hybrid KEM provider (X25519 + Kyber-1024) adapter.
+
+    Wraps HybridCombiner to conform to the KEMProvider interface,
+    combining classical X25519 and post-quantum Kyber-1024 KEMs
+    via a binding HKDF construction.
+
+    Key layout:
+        public_key  = x25519_pub (32 bytes) || kyber_pub (1568 bytes)
+        secret_key  = x25519_priv (32 bytes) || x25519_pub (32 bytes)
+                      || kyber_secret (3168 bytes) || kyber_pub (1568 bytes)
+        ciphertext  = x25519_ephemeral_pub (32 bytes) || kyber_ct
+    """
+
+    _X25519_KEY_BYTES: int = 32
+
+    def __init__(self) -> None:
+        from .hybrid_combiner import HybridCombiner
+
+        self._combiner = HybridCombiner()
+        self.algorithm = AlgorithmType.HYBRID_KEM
+
+    def generate_keypair(self) -> KeyPair:
+        """Generate both X25519 and Kyber-1024 keypairs."""
+        from ama_cryptography.pqc_backends import native_x25519_keypair
+
+        x25519_pk, x25519_sk = native_x25519_keypair()
+        kyber_kp = generate_kyber_keypair()
+
+        combined_pk: bytes = x25519_pk + kyber_kp.public_key
+        combined_sk: bytes = x25519_sk + x25519_pk + kyber_kp.secret_key + kyber_kp.public_key
+
+        return KeyPair(
+            public_key=combined_pk,
+            secret_key=combined_sk,
+            algorithm=self.algorithm,
+            metadata={
+                "backend": "hybrid_kem",
+                "pqc_backend": KYBER_BACKEND,
+                "x25519_key_bytes": self._X25519_KEY_BYTES,
+            },
+        )
+
+    def encapsulate(self, public_key: bytes) -> EncapsulatedSecret:
+        """Perform X25519 ephemeral-static DH + Kyber encapsulation."""
+        from ama_cryptography.pqc_backends import (
+            native_x25519_key_exchange,
+            native_x25519_keypair,
+        )
+
+        # Split recipient public key
+        x25519_pub: bytes = public_key[: self._X25519_KEY_BYTES]
+        kyber_pub: bytes = public_key[self._X25519_KEY_BYTES :]
+
+        # X25519: generate ephemeral keypair + DH
+        eph_pk, eph_sk = native_x25519_keypair()
+        x25519_ss: bytes = native_x25519_key_exchange(eph_sk, x25519_pub)
+
+        # Kyber encapsulation
+        kyber_result = kyber_encapsulate(kyber_pub)
+
+        # Combine via binding HKDF
+        combined_ss: bytes = self._combiner.combine(
+            classical_ss=x25519_ss,
+            pqc_ss=kyber_result.shared_secret,
+            classical_ct=eph_pk,
+            pqc_ct=kyber_result.ciphertext,
+            classical_pk=x25519_pub,
+            pqc_pk=kyber_pub,
+        )
+
+        combined_ct: bytes = eph_pk + kyber_result.ciphertext
+
+        return EncapsulatedSecret(
+            ciphertext=combined_ct,
+            shared_secret=combined_ss,
+            algorithm=self.algorithm,
+            metadata={"backend": "hybrid_kem"},
+        )
+
+    def decapsulate(self, ciphertext: bytes, secret_key: bytes) -> bytes:
+        """Split ciphertext and secret key, recover both shared secrets, combine."""
+        from ama_cryptography.pqc_backends import native_x25519_key_exchange
+
+        # Split ciphertext
+        x25519_eph_pub: bytes = ciphertext[: self._X25519_KEY_BYTES]
+        kyber_ct: bytes = ciphertext[self._X25519_KEY_BYTES :]
+
+        # Split secret key: x25519_sk (32) || x25519_pk (32) || kyber_sk || kyber_pub
+        x25519_sk: bytes = secret_key[: self._X25519_KEY_BYTES]
+        x25519_pub: bytes = secret_key[self._X25519_KEY_BYTES : 2 * self._X25519_KEY_BYTES]
+        kyber_sk: bytes = secret_key[
+            2 * self._X25519_KEY_BYTES : 2 * self._X25519_KEY_BYTES + KYBER_SECRET_KEY_BYTES
+        ]
+        kyber_pub: bytes = secret_key[2 * self._X25519_KEY_BYTES + KYBER_SECRET_KEY_BYTES :]
+
+        # Recover shared secrets
+        x25519_ss: bytes = native_x25519_key_exchange(x25519_sk, x25519_eph_pub)
+        kyber_ss: bytes = kyber_decapsulate(kyber_ct, kyber_sk)
+
+        # Combine with matching info binding (must match encapsulate)
+        combined_ss: bytes = self._combiner.combine(
+            classical_ss=x25519_ss,
+            pqc_ss=kyber_ss,
+            classical_ct=x25519_eph_pub,
+            pqc_ct=kyber_ct,
+            classical_pk=x25519_pub,
+            pqc_pk=kyber_pub,
+        )
+
+        return combined_ss
 
 
 class HybridSignatureProvider(CryptoProvider):
@@ -881,7 +1009,7 @@ class AmaCryptography:
         self.backend = backend
         self.provider = self._get_provider()
 
-    def _get_provider(self) -> Union[CryptoProvider, KEMProvider]:
+    def _get_provider(self) -> "Union[CryptoProvider, KEMProvider, AESGCMProvider]":
         """Get appropriate provider for selected algorithm"""
         if self.algorithm == AlgorithmType.ML_DSA_65:
             return MLDSAProvider(self.backend)
@@ -893,11 +1021,17 @@ class AmaCryptography:
             return HybridSignatureProvider()
         elif self.algorithm == AlgorithmType.ED25519:
             return Ed25519Provider(self.backend)
+        elif self.algorithm == AlgorithmType.HYBRID_KEM:
+            return HybridKEMProvider()
+        elif self.algorithm == AlgorithmType.AES_256_GCM:
+            return AESGCMProvider()
         else:
             raise ValueError(f"Unsupported algorithm: {self.algorithm}")
 
     def generate_keypair(self) -> KeyPair:
         """Generate cryptographic keypair"""
+        if isinstance(self.provider, AESGCMProvider):
+            raise TypeError("AES-256-GCM does not support keypair generation")
         return self.provider.generate_keypair()
 
     def sign(self, message: bytes, secret_key: bytes) -> Signature:
@@ -957,7 +1091,9 @@ class AmaCryptography:
         Returns:
             True if equal, False otherwise (constant time)
         """
-        return secrets.compare_digest(a, b)
+        from ama_cryptography.secure_memory import constant_time_compare as _ct_compare
+
+        return _ct_compare(a, b)
 
 
 # Convenience functions

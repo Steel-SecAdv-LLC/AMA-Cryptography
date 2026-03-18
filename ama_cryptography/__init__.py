@@ -28,76 +28,60 @@ AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 """
 
+import importlib as _importlib
+from typing import TYPE_CHECKING, Any
+
 __version__ = "2.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
-import importlib as _importlib
+# Eagerly import math modules (double_helix_engine, equations) — they carry
+# no availability-check side effects and are the most frequently used exports.
+from .double_helix_engine import AmaEquationEngine
+from .equations import (
+    HELIX_PARAMS,
+    LAMBDA_DECAY,
+    OMNI_CODES,
+    PHI,
+    PHI_CUBED,
+    PHI_SQUARED,
+    SIGMA_QUADRATIC_THRESHOLD,
+    calculate_sigma_quadratic,
+    enforce_sigma_quadratic_threshold,
+    golden_ratio_convergence_proof,
+    helix_curvature,
+    helix_torsion,
+    initialize_ethical_matrix,
+    lyapunov_function,
+    lyapunov_stability_proof,
+    verify_all_codes,
+    verify_mathematical_foundations,
+)
 
-# Eagerly import math modules when numpy is available.
-# When numpy is NOT installed, __getattr__ provides a clear ImportError
-# mentioning numpy (tested by test_lazy_imports.py).
-_EQUATIONS_EXPORTS = frozenset(
+# crypto_api exports are lazy-loaded to avoid side-effect warnings at
+# import time (PQC availability checks, HMAC/HKDF warnings, etc.).
+_CRYPTO_API_EXPORTS = frozenset(
     {
-        "HELIX_PARAMS",
-        "LAMBDA_DECAY",
-        "OMNI_CODES",
-        "PHI",
-        "PHI_CUBED",
-        "PHI_SQUARED",
-        "SIGMA_QUADRATIC_THRESHOLD",
-        "calculate_sigma_quadratic",
-        "enforce_sigma_quadratic_threshold",
-        "golden_ratio_convergence_proof",
-        "helix_curvature",
-        "helix_torsion",
-        "initialize_ethical_matrix",
-        "lyapunov_function",
-        "lyapunov_stability_proof",
-        "verify_all_codes",
-        "verify_mathematical_foundations",
+        "AlgorithmType",
+        "AmaCryptography",
+        "create_crypto_package",
+        "verify_crypto_package",
     }
 )
-_ENGINE_EXPORTS = frozenset({"AmaEquationEngine"})
-try:
-    from ama_cryptography.double_helix_engine import AmaEquationEngine
-    from ama_cryptography.equations import (
-        HELIX_PARAMS,
-        LAMBDA_DECAY,
-        OMNI_CODES,
-        PHI,
-        PHI_CUBED,
-        PHI_SQUARED,
-        SIGMA_QUADRATIC_THRESHOLD,
-        calculate_sigma_quadratic,
-        enforce_sigma_quadratic_threshold,
-        golden_ratio_convergence_proof,
-        helix_curvature,
-        helix_torsion,
-        initialize_ethical_matrix,
-        lyapunov_function,
-        lyapunov_stability_proof,
-        verify_all_codes,
-        verify_mathematical_foundations,
-    )
 
-except (ImportError, ModuleNotFoundError):
-    import logging as _logging
-
-    _logging.getLogger(__name__).debug(
-        "numpy not available; math exports use lazy __getattr__ fallback"
+if TYPE_CHECKING:
+    from .crypto_api import (  # noqa: F401
+        AlgorithmType,
+        AmaCryptography,
+        create_crypto_package,
+        verify_crypto_package,
     )
 
 
-def __getattr__(name: str) -> object:
-    """Provide a clear error when math symbols are accessed without numpy."""
-    if name in _EQUATIONS_EXPORTS:
-        mod = _importlib.import_module("ama_cryptography.equations")
-        val = getattr(mod, name)
-        globals()[name] = val
-        return val
-    if name in _ENGINE_EXPORTS:
-        mod = _importlib.import_module("ama_cryptography.double_helix_engine")
-        val = getattr(mod, name)
+def __getattr__(name: str) -> Any:
+    """Lazy-load crypto_api symbols on first access."""
+    if name in _CRYPTO_API_EXPORTS:
+        mod = _importlib.import_module("ama_cryptography.crypto_api")
+        val: Any = getattr(mod, name)
         globals()[name] = val
         return val
     raise AttributeError(f"module 'ama_cryptography' has no attribute {name!r}")
@@ -106,6 +90,10 @@ def __getattr__(name: str) -> object:
 __all__ = [
     "__version__",
     "__author__",
+    "AlgorithmType",
+    "AmaCryptography",
+    "create_crypto_package",
+    "verify_crypto_package",
     "PHI",
     "PHI_SQUARED",
     "PHI_CUBED",

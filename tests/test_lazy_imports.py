@@ -3,12 +3,12 @@
 # Licensed under the Apache License, Version 2.0
 
 """
-Tests for lazy (PEP 562) imports in ama_cryptography.__init__.
+Tests for imports in ama_cryptography.__init__.
 
 Validates that:
-1. `import ama_cryptography` succeeds without numpy installed.
-2. Accessing a math symbol without numpy gives a clear error.
-3. All symbols in __all__ load correctly when numpy IS present.
+1. `import ama_cryptography` succeeds (no external dependencies required).
+2. All symbols in __all__ load correctly.
+3. Unknown attributes raise AttributeError.
 """
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ def _run_script(script: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-class TestLazyImportWithoutNumpy:
-    """Tests that the package loads without numpy."""
+class TestImportWithoutExternalDeps:
+    """Tests that the package loads without any external numerical libraries."""
 
     def test_import_without_numpy(self) -> None:
         """import ama_cryptography succeeds and exposes __version__ without numpy."""
@@ -47,63 +47,41 @@ class TestLazyImportWithoutNumpy:
         ), f"Import failed with numpy blocked.\nstdout: {result.stdout}\nstderr: {result.stderr}"
         assert result.stdout.strip() == "2.0"
 
-    def test_math_import_gives_clear_error(self) -> None:
-        """Accessing PHI without numpy gives a clear ModuleNotFoundError."""
+    def test_phi_accessible_without_numpy(self) -> None:
+        """PHI is accessible without numpy (uses pure-Python _numeric)."""
         result = _run_script("""\
             import sys
             sys.modules['numpy'] = None
             sys.modules['scipy'] = None
             import ama_cryptography
-            try:
-                _ = ama_cryptography.PHI
-                print('ERROR: No exception raised')
-                sys.exit(1)
-            except ImportError as e:
-                if 'numpy' in str(e).lower():
-                    print('OK: clear numpy error')
-                else:
-                    print(f'ERROR: exception did not mention numpy: {e}')
-                    sys.exit(1)
+            print(f'{ama_cryptography.PHI:.10f}')
         """)
         assert (
             result.returncode == 0
-        ), f"Expected clear numpy error.\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        assert "OK" in result.stdout
+        ), f"PHI access failed without numpy.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        assert result.stdout.strip().startswith("1.618033")
 
-    def test_engine_import_gives_clear_error(self) -> None:
-        """Accessing AmaEquationEngine without numpy gives a clear error."""
+    def test_equation_engine_without_numpy(self) -> None:
+        """AmaEquationEngine instantiates without numpy."""
         result = _run_script("""\
             import sys
             sys.modules['numpy'] = None
             sys.modules['scipy'] = None
             import ama_cryptography
-            try:
-                _ = ama_cryptography.AmaEquationEngine
-                print('ERROR: No exception raised')
-                sys.exit(1)
-            except ImportError as e:
-                if 'numpy' in str(e).lower():
-                    print('OK: clear numpy error')
-                else:
-                    print(f'ERROR: exception did not mention numpy: {e}')
-                    sys.exit(1)
+            engine = ama_cryptography.AmaEquationEngine(state_dim=10, random_seed=42)
+            print(f'dim={engine.state_dim}')
         """)
         assert (
             result.returncode == 0
-        ), f"Expected clear numpy error.\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        assert "OK" in result.stdout
+        ), f"Engine init failed without numpy.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        assert "dim=10" in result.stdout
 
 
-class TestLazyImportWithNumpy:
-    """Tests that all symbols load correctly when numpy IS present."""
+class TestAllSymbolsLoad:
+    """Tests that all symbols load correctly."""
 
-    @pytest.fixture(autouse=True)
-    def _require_numpy(self) -> None:
-        """Skip these tests if numpy is not installed."""
-        pytest.importorskip("numpy")
-
-    def test_math_imports_work_with_numpy(self) -> None:
-        """All symbols in __all__ load correctly when numpy is present."""
+    def test_all_symbols_in_all(self) -> None:
+        """All symbols in __all__ load correctly."""
         import ama_cryptography
 
         for name in ama_cryptography.__all__:
@@ -132,5 +110,5 @@ class TestAttributeError:
         """Accessing a non-existent attribute raises AttributeError."""
         import ama_cryptography
 
-        with pytest.raises(AttributeError, match="no attribute"):
+        with pytest.raises(AttributeError):
             _ = ama_cryptography.NONEXISTENT_SYMBOL

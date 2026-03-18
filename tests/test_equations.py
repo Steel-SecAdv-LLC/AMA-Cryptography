@@ -34,15 +34,21 @@ AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 """
 
+import math
 import sys
 import unittest
 from pathlib import Path
 
-import numpy as np
-
 # Derive repo root relative to this file for portability
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from ama_cryptography._numeric import (
+    Vec,
+    allclose,
+    eigvals,
+    eye,
+    ones,
+)
 from ama_cryptography.equations import (
     PHI,
     PHI_CUBED,
@@ -106,14 +112,14 @@ class TestLyapunovStability(unittest.TestCase):
 
     def test_lyapunov_function_positive_definite(self) -> None:
         """Test V(x) > 0 for x ≠ x*."""
-        state = np.array([0.5, 0.3, 0.2])
-        target = np.ones(3)
+        state = Vec([0.5, 0.3, 0.2])
+        target = ones(3)
         V = lyapunov_function(state, target)
         self.assertGreater(V, 0, "Lyapunov function must be positive")
 
     def test_lyapunov_function_zero_at_equilibrium(self) -> None:
         """Test V(x*) = 0 at equilibrium."""
-        target = np.ones(3)
+        target = ones(3)
         V = lyapunov_function(target, target)
         self.assertAlmostEqual(V, 0.0, places=10, msg="V should be 0 at equilibrium")
 
@@ -133,8 +139,8 @@ class TestLyapunovStability(unittest.TestCase):
 
     def test_lyapunov_stability_proof(self) -> None:
         """Test complete Lyapunov stability proof."""
-        state = np.array([0.5, 0.3, 0.2])
-        target = np.ones(3)
+        state = Vec([0.5, 0.3, 0.2])
+        target = ones(3)
         stable, V, proof = lyapunov_stability_proof(state, target)
 
         self.assertTrue(stable, "System should be Lyapunov stable")
@@ -162,7 +168,7 @@ class TestGoldenRatioHarmonics(unittest.TestCase):
 
     def test_phi_value(self) -> None:
         """Test φ = (1 + √5)/2 ≈ 1.618034."""
-        expected = (1 + np.sqrt(5)) / 2
+        expected = (1 + math.sqrt(5)) / 2
         self.assertAlmostEqual(PHI, expected, places=15)
 
     def test_phi_cubed_value(self) -> None:
@@ -176,25 +182,25 @@ class TestQuadraticFormConstraints(unittest.TestCase):
 
     def test_calculate_sigma_quadratic(self) -> None:
         """Test σ_quadratic = x^T·E·x / ||x||² calculation."""
-        state = np.array([1.0, 1.0, 1.0])
-        E = np.eye(3) * 2.0  # Simple diagonal matrix
+        state = Vec([1.0, 1.0, 1.0])
+        E = eye(3) * 2.0  # Simple diagonal matrix
         sigma = calculate_sigma_quadratic(state, E)
         expected = 2.0  # For normalized vector and diagonal E=2I
         self.assertAlmostEqual(sigma, expected, places=6)
 
     def test_sigma_quadratic_enforcement_valid(self) -> None:
         """Test enforcement when σ_quadratic already meets threshold."""
-        state = np.array([1.0, 1.0, 1.0])
-        E = np.eye(3) * 2.0
+        state = Vec([1.0, 1.0, 1.0])
+        E = eye(3) * 2.0
         valid, corrected = enforce_sigma_quadratic_threshold(state, E, threshold=0.96)
         self.assertTrue(valid, "State should be valid")
-        np.testing.assert_array_almost_equal(corrected, state)
+        self.assertTrue(allclose(corrected, state))
 
     def test_sigma_quadratic_enforcement_correction(self) -> None:
         """Test automatic correction mechanism exists."""
         # Test that the correction function properly scales states
-        state = np.array([1.0, 1.0, 1.0])
-        E = np.eye(3) * 0.5  # Diagonal matrix with values < threshold
+        state = Vec([1.0, 1.0, 1.0])
+        E = eye(3) * 0.5  # Diagonal matrix with values < threshold
 
         sigma_original = calculate_sigma_quadratic(state, E)
         valid, corrected = enforce_sigma_quadratic_threshold(state, E, threshold=0.96)
@@ -206,7 +212,7 @@ class TestQuadraticFormConstraints(unittest.TestCase):
         self.assertLess(sigma_original, 0.96, "Original should be below threshold")
 
         # After correction, verify state was modified
-        self.assertFalse(np.allclose(state, corrected), "State should be corrected")
+        self.assertFalse(allclose(state, corrected), "State should be corrected")
 
         # Verify sigma improved (though may not reach threshold for all matrices)
         sigma_corrected = calculate_sigma_quadratic(corrected, E)
@@ -219,8 +225,8 @@ class TestQuadraticFormConstraints(unittest.TestCase):
     def test_initialize_ethical_matrix_positive_definite(self) -> None:
         """Test ethical matrix is positive-definite."""
         E = initialize_ethical_matrix(10)
-        eigenvalues = np.linalg.eigvals(E)
-        self.assertTrue(np.all(eigenvalues.real > 0), "All eigenvalues must be positive")
+        eigs = eigvals(E)
+        self.assertTrue(all(e > 0 for e in eigs), "All eigenvalues must be positive")
 
     def test_initialize_ethical_matrix_dimension(self) -> None:
         """Test ethical matrix has correct dimensions."""

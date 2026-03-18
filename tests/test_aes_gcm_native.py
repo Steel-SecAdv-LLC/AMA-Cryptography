@@ -30,6 +30,21 @@ skip_no_native = pytest.mark.skipif(
 )
 
 
+def _pyca_crypto_available() -> bool:
+    """Check if PyCA cryptography is usable (may be broken if _cffi_backend missing)."""
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+skip_no_pyca = pytest.mark.skipif(
+    not _pyca_crypto_available(),
+    reason="PyCA cryptography not available",
+)
+
+
 # ============================================================================
 # NIST SP 800-38D TEST VECTORS
 # ============================================================================
@@ -303,16 +318,13 @@ class TestAESGCMNISTVectors:
 
 
 @skip_no_native
+@skip_no_pyca
 class TestAESGCMInterop:
     """Interop tests between native and PyCA cryptography."""
 
     def test_native_encrypt_pyca_decrypt(self) -> None:
         """Native-encrypted data must be decryptable by PyCA cryptography."""
-        try:
-            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        except Exception:
-            pytest.skip("PyCA cryptography not installed")
-            return  # pragma: no cover — unreachable; tells static analysis skip() diverges
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
@@ -329,11 +341,7 @@ class TestAESGCMInterop:
 
     def test_pyca_encrypt_native_decrypt(self) -> None:
         """PyCA-encrypted data must be decryptable by native backend."""
-        try:
-            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        except Exception:
-            pytest.skip("PyCA cryptography not installed")
-            return  # pragma: no cover — unreachable; tells static analysis skip() diverges
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
 
@@ -392,3 +400,27 @@ class TestAESGCMProvider:
         r1 = provider.encrypt(b"data1", key)
         r2 = provider.encrypt(b"data1", key)
         assert r1["nonce"] != r2["nonce"]  # Different nonces
+
+    def test_nonce_counter_shared_across_instances(self) -> None:
+        """Nonce counter must persist across AESGCMProvider instances for the same key."""
+        import hashlib
+
+        from ama_cryptography.crypto_api import AESGCMProvider, CryptoBackend
+
+        key = secrets.token_bytes(32)
+        key_id = hashlib.sha256(key).digest()
+
+        # Clear any prior state for this key
+        AESGCMProvider._encrypt_counters.pop(key_id, None)
+
+        provider1 = AESGCMProvider(backend=CryptoBackend.C_LIBRARY)
+        provider1.encrypt(b"msg1", key)
+        provider1.encrypt(b"msg2", key)
+
+        provider2 = AESGCMProvider(backend=CryptoBackend.C_LIBRARY)
+        provider2.encrypt(b"msg3", key)
+
+        assert AESGCMProvider._encrypt_counters[key_id] == 3
+
+        # Clean up
+        AESGCMProvider._encrypt_counters.pop(key_id, None)

@@ -194,8 +194,9 @@ class TestRFC3161SuccessPath:
 class TestDilithiumUnavailablePaths:
     """Tests for Dilithium unavailable paths."""
 
-    def test_kms_warns_when_dilithium_generation_fails(self, monkeypatch: Any, capsys: Any) -> None:
+    def test_kms_warns_when_dilithium_generation_fails(self, monkeypatch: Any, caplog: Any) -> None:
         """Test KMS generation warning when Dilithium generation fails."""
+        import logging
 
         def boom() -> None:
             raise dgs.QuantumSignatureUnavailableError("fail")
@@ -203,39 +204,43 @@ class TestDilithiumUnavailablePaths:
         monkeypatch.setattr(dgs, "DILITHIUM_AVAILABLE", True)
         monkeypatch.setattr(dgs, "generate_dilithium_keypair", boom)
 
-        kms = dgs.generate_key_management_system("author")
-        out = capsys.readouterr().out
-        assert "Quantum-resistant signatures disabled" in out
+        with caplog.at_level(logging.WARNING, logger="code_guardian_secure"):
+            kms = dgs.generate_key_management_system("author")
+        assert "Quantum-resistant signatures disabled" in caplog.text
         assert kms.quantum_signatures_enabled is False
         assert kms.dilithium_keypair is None
 
-    def test_kms_warns_when_dilithium_not_available(self, monkeypatch: Any, capsys: Any) -> None:
+    def test_kms_warns_when_dilithium_not_available(self, monkeypatch: Any, caplog: Any) -> None:
         """Test KMS generation warning when Dilithium not available."""
+        import logging
+
         monkeypatch.setattr(dgs, "DILITHIUM_AVAILABLE", False)
 
-        kms = dgs.generate_key_management_system("author")
-        out = capsys.readouterr().out
-        assert "Quantum-resistant signatures disabled" in out
-        assert "native C library" in out
+        with caplog.at_level(logging.WARNING, logger="code_guardian_secure"):
+            kms = dgs.generate_key_management_system("author")
+        assert "Quantum-resistant signatures disabled" in caplog.text
+        assert "native C library" in caplog.text
         assert kms.quantum_signatures_enabled is False
         assert kms.dilithium_keypair is None
 
     def test_export_public_keys_when_dilithium_unavailable(
         self,
-        capsys: Any,
+        caplog: Any,
         tmp_path: Any,
     ) -> None:
         """Test export_public_keys when Dilithium unavailable."""
+        import logging
+
         kms = dgs.generate_key_management_system("test_author")
         kms.quantum_signatures_enabled = False
         kms.dilithium_keypair = None
 
         out_dir = tmp_path / "keys"
-        dgs.export_public_keys(kms, out_dir)
+        with caplog.at_level(logging.WARNING, logger="code_guardian_secure"):
+            dgs.export_public_keys(kms, out_dir)
         readme = (out_dir / "README.txt").read_text()
         assert "Dilithium Public Key: NOT AVAILABLE" in readme
-        out = capsys.readouterr().out
-        assert "Dilithium: NOT AVAILABLE" in out
+        assert "Dilithium: NOT AVAILABLE" in caplog.text
 
     def test_create_crypto_package_gracefully_degrades_when_dilithium_sign_fails(
         self,
