@@ -10,6 +10,7 @@ Rules:
 - SLH-DSA-SHA2-256f SigVer: external/pure interface (TG 5) only.
 - Uses existing Python ctypes FFI to libama_cryptography.so.
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -88,59 +89,70 @@ def _setup_ctypes(lib: ctypes.CDLL) -> None:
     lib.ama_sha256.restype = None
 
     # HMAC-SHA-256
-    lib.ama_hmac_sha256.argtypes = [
-        c_char_p, c_size_t, c_char_p, c_size_t, c_char_p
-    ]
+    lib.ama_hmac_sha256.argtypes = [c_char_p, c_size_t, c_char_p, c_size_t, c_char_p]
     lib.ama_hmac_sha256.restype = None
 
     # AES-256-GCM encrypt
     lib.ama_aes256_gcm_encrypt.argtypes = [
-        c_char_p, c_char_p, c_char_p, c_size_t,
-        c_char_p, c_size_t, c_char_p, c_char_p
+        c_char_p,
+        c_char_p,
+        c_char_p,
+        c_size_t,
+        c_char_p,
+        c_size_t,
+        c_char_p,
+        c_char_p,
     ]
     lib.ama_aes256_gcm_encrypt.restype = c_int
 
     # ML-KEM-1024 deterministic keygen
-    lib.ama_kyber_keypair_from_seed.argtypes = [
-        c_char_p, c_char_p, c_char_p, c_char_p
-    ]
+    lib.ama_kyber_keypair_from_seed.argtypes = [c_char_p, c_char_p, c_char_p, c_char_p]
     lib.ama_kyber_keypair_from_seed.restype = c_int
 
     # ML-KEM-1024 decapsulate
     lib.ama_kyber_decapsulate.argtypes = [
-        c_char_p, c_size_t, c_char_p, c_size_t, c_char_p, c_size_t
+        c_char_p,
+        c_size_t,
+        c_char_p,
+        c_size_t,
+        c_char_p,
+        c_size_t,
     ]
     lib.ama_kyber_decapsulate.restype = c_int
 
     # ML-DSA-65 deterministic keygen
-    lib.ama_dilithium_keypair_from_seed.argtypes = [
-        c_char_p, c_char_p, c_char_p
-    ]
+    lib.ama_dilithium_keypair_from_seed.argtypes = [c_char_p, c_char_p, c_char_p]
     lib.ama_dilithium_keypair_from_seed.restype = c_int
 
     # ML-DSA-65 verify
-    lib.ama_dilithium_verify.argtypes = [
-        c_char_p, c_size_t, c_char_p, c_size_t, c_char_p
-    ]
+    lib.ama_dilithium_verify.argtypes = [c_char_p, c_size_t, c_char_p, c_size_t, c_char_p]
     lib.ama_dilithium_verify.restype = c_int
 
     # ML-DSA-65 verify with context (FIPS 204 external/pure)
     lib.ama_dilithium_verify_ctx.argtypes = [
-        c_char_p, c_size_t, c_char_p, c_size_t,
-        c_char_p, c_size_t, c_char_p
+        c_char_p,
+        c_size_t,
+        c_char_p,
+        c_size_t,
+        c_char_p,
+        c_size_t,
+        c_char_p,
     ]
     lib.ama_dilithium_verify_ctx.restype = c_int
 
     # SPHINCS+-256f verify
-    lib.ama_sphincs_verify.argtypes = [
-        c_char_p, c_size_t, c_char_p, c_size_t, c_char_p
-    ]
+    lib.ama_sphincs_verify.argtypes = [c_char_p, c_size_t, c_char_p, c_size_t, c_char_p]
     lib.ama_sphincs_verify.restype = c_int
 
     # SPHINCS+-256f verify with context (FIPS 205 external/pure)
     lib.ama_sphincs_verify_ctx.argtypes = [
-        c_char_p, c_size_t, c_char_p, c_size_t,
-        c_char_p, c_size_t, c_char_p
+        c_char_p,
+        c_size_t,
+        c_char_p,
+        c_size_t,
+        c_char_p,
+        c_size_t,
+        c_char_p,
     ]
     lib.ama_sphincs_verify_ctx.restype = c_int
 
@@ -173,17 +185,13 @@ def test_sha3_256(lib: ctypes.CDLL) -> AlgorithmResult:
         if tg["testType"] != "AFT":
             count = len(tg.get("tests", []))
             res.mct_skipped += count
-            res.skip_reasons.append(
-                f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors"
-            )
+            res.skip_reasons.append(f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors")
             continue
         for tc in tg["tests"]:
             bit_len = tc.get("len", 0)
             if bit_len % 8 != 0:
                 res.vectors_skipped += 1
-                res.skip_reasons.append(
-                    f"tcId {tc['tcId']}: non-byte-aligned (bitLen={bit_len})"
-                )
+                res.skip_reasons.append(f"tcId {tc['tcId']}: non-byte-aligned (bitLen={bit_len})")
                 continue
             msg = bytes.fromhex(tc["msg"]) if tc["msg"] else b""
             expected = tc["md"].lower()
@@ -195,12 +203,14 @@ def test_sha3_256(lib: ctypes.CDLL) -> AlgorithmResult:
                 res.pass_count += 1
             else:
                 res.fail_count += 1
-                res.failures.append({
-                    "tcId": str(tc["tcId"]),
-                    "expected": expected,
-                    "actual": actual,
-                    "note": "Hash mismatch",
-                })
+                res.failures.append(
+                    {
+                        "tcId": str(tc["tcId"]),
+                        "expected": expected,
+                        "actual": actual,
+                        "note": "Hash mismatch",
+                    }
+                )
     return res
 
 
@@ -222,17 +232,13 @@ def test_sha3_512(lib: ctypes.CDLL) -> AlgorithmResult:
         if tg["testType"] != "AFT":
             count = len(tg.get("tests", []))
             res.mct_skipped += count
-            res.skip_reasons.append(
-                f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors"
-            )
+            res.skip_reasons.append(f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors")
             continue
         for tc in tg["tests"]:
             bit_len = tc.get("len", 0)
             if bit_len % 8 != 0:
                 res.vectors_skipped += 1
-                res.skip_reasons.append(
-                    f"tcId {tc['tcId']}: non-byte-aligned (bitLen={bit_len})"
-                )
+                res.skip_reasons.append(f"tcId {tc['tcId']}: non-byte-aligned (bitLen={bit_len})")
                 continue
             msg = bytes.fromhex(tc["msg"]) if tc["msg"] else b""
             expected = tc["md"].lower()
@@ -244,12 +250,14 @@ def test_sha3_512(lib: ctypes.CDLL) -> AlgorithmResult:
                 res.pass_count += 1
             else:
                 res.fail_count += 1
-                res.failures.append({
-                    "tcId": str(tc["tcId"]),
-                    "expected": expected,
-                    "actual": actual,
-                    "note": "Hash mismatch",
-                })
+                res.failures.append(
+                    {
+                        "tcId": str(tc["tcId"]),
+                        "expected": expected,
+                        "actual": actual,
+                        "note": "Hash mismatch",
+                    }
+                )
     return res
 
 
@@ -271,9 +279,7 @@ def test_shake128(lib: ctypes.CDLL) -> AlgorithmResult:
         if tg["testType"] != "AFT":
             count = len(tg.get("tests", []))
             res.mct_skipped += count
-            res.skip_reasons.append(
-                f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors"
-            )
+            res.skip_reasons.append(f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors")
             continue
         for tc in tg["tests"]:
             bit_len = tc.get("len", 0)
@@ -301,12 +307,14 @@ def test_shake128(lib: ctypes.CDLL) -> AlgorithmResult:
                 res.pass_count += 1
             else:
                 res.fail_count += 1
-                res.failures.append({
-                    "tcId": str(tc["tcId"]),
-                    "expected": expected[:64] + "..." if len(expected) > 64 else expected,
-                    "actual": actual[:64] + "..." if len(actual) > 64 else actual,
-                    "note": "XOF output mismatch",
-                })
+                res.failures.append(
+                    {
+                        "tcId": str(tc["tcId"]),
+                        "expected": expected[:64] + "..." if len(expected) > 64 else expected,
+                        "actual": actual[:64] + "..." if len(actual) > 64 else actual,
+                        "note": "XOF output mismatch",
+                    }
+                )
     return res
 
 
@@ -328,9 +336,7 @@ def test_shake256(lib: ctypes.CDLL) -> AlgorithmResult:
         if tg["testType"] != "AFT":
             count = len(tg.get("tests", []))
             res.mct_skipped += count
-            res.skip_reasons.append(
-                f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors"
-            )
+            res.skip_reasons.append(f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors")
             continue
         for tc in tg["tests"]:
             bit_len = tc.get("len", 0)
@@ -358,12 +364,14 @@ def test_shake256(lib: ctypes.CDLL) -> AlgorithmResult:
                 res.pass_count += 1
             else:
                 res.fail_count += 1
-                res.failures.append({
-                    "tcId": str(tc["tcId"]),
-                    "expected": expected[:64] + "..." if len(expected) > 64 else expected,
-                    "actual": actual[:64] + "..." if len(actual) > 64 else actual,
-                    "note": "XOF output mismatch",
-                })
+                res.failures.append(
+                    {
+                        "tcId": str(tc["tcId"]),
+                        "expected": expected[:64] + "..." if len(expected) > 64 else expected,
+                        "actual": actual[:64] + "..." if len(actual) > 64 else actual,
+                        "note": "XOF output mismatch",
+                    }
+                )
     return res
 
 
@@ -390,11 +398,13 @@ def test_hmac_sha256(lib: ctypes.CDLL) -> AlgorithmResult:
             key = bytes.fromhex(tc["key"])
             msg = bytes.fromhex(tc["msg"]) if tc["msg"] else b""
             mac_len = tc["macLen"] // 8
-            expected = tc["mac"].lower()[:mac_len * 2]
+            expected = tc["mac"].lower()[: mac_len * 2]
             out = ctypes.create_string_buffer(32)
             lib.ama_hmac_sha256(
-                key, ctypes.c_size_t(len(key)),
-                msg, ctypes.c_size_t(len(msg)),
+                key,
+                ctypes.c_size_t(len(key)),
+                msg,
+                ctypes.c_size_t(len(msg)),
                 out,
             )
             actual = out.raw[:mac_len].hex()
@@ -403,12 +413,14 @@ def test_hmac_sha256(lib: ctypes.CDLL) -> AlgorithmResult:
                 res.pass_count += 1
             else:
                 res.fail_count += 1
-                res.failures.append({
-                    "tcId": str(tc["tcId"]),
-                    "expected": expected,
-                    "actual": actual,
-                    "note": "HMAC output mismatch",
-                })
+                res.failures.append(
+                    {
+                        "tcId": str(tc["tcId"]),
+                        "expected": expected,
+                        "actual": actual,
+                        "note": "HMAC output mismatch",
+                    }
+                )
     return res
 
 
@@ -427,9 +439,7 @@ def test_sha256(lib: ctypes.CDLL) -> AlgorithmResult:
         if tg["testType"] != "AFT":
             count = len(tg.get("tests", []))
             res.mct_skipped += count
-            res.skip_reasons.append(
-                f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors"
-            )
+            res.skip_reasons.append(f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors")
             continue
         for tc in tg["tests"]:
             msg = bytes.fromhex(tc["msg"]) if tc["msg"] else b""
@@ -442,12 +452,14 @@ def test_sha256(lib: ctypes.CDLL) -> AlgorithmResult:
                 res.pass_count += 1
             else:
                 res.fail_count += 1
-                res.failures.append({
-                    "tcId": str(tc["tcId"]),
-                    "expected": expected,
-                    "actual": actual,
-                    "note": "Hash mismatch",
-                })
+                res.failures.append(
+                    {
+                        "tcId": str(tc["tcId"]),
+                        "expected": expected,
+                        "actual": actual,
+                        "note": "Hash mismatch",
+                    }
+                )
     return res
 
 
@@ -466,9 +478,7 @@ def test_aes256gcm(lib: ctypes.CDLL) -> AlgorithmResult:
         if tg["testType"] != "AFT":
             count = len(tg.get("tests", []))
             res.mct_skipped += count
-            res.skip_reasons.append(
-                f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors"
-            )
+            res.skip_reasons.append(f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors")
             continue
         for tc in tg["tests"]:
             key = bytes.fromhex(tc["key"])
@@ -482,31 +492,40 @@ def test_aes256gcm(lib: ctypes.CDLL) -> AlgorithmResult:
             tag_buf = ctypes.create_string_buffer(16)
 
             rc = lib.ama_aes256_gcm_encrypt(
-                key, iv, pt if pt else None, ctypes.c_size_t(len(pt)),
-                aad if aad else None, ctypes.c_size_t(len(aad)),
-                ct_buf, tag_buf,
+                key,
+                iv,
+                pt if pt else None,
+                ctypes.c_size_t(len(pt)),
+                aad if aad else None,
+                ctypes.c_size_t(len(aad)),
+                ct_buf,
+                tag_buf,
             )
             res.vectors_tested += 1
-            actual_ct = ct_buf.raw[:len(pt)].hex()
+            actual_ct = ct_buf.raw[: len(pt)].hex()
             actual_tag = tag_buf.raw.hex()
             if rc != 0:
                 res.fail_count += 1
-                res.failures.append({
-                    "tcId": str(tc["tcId"]),
-                    "expected": f"ct={expected_ct} tag={expected_tag}",
-                    "actual": f"error code {rc}",
-                    "note": "AES-GCM encrypt returned error",
-                })
+                res.failures.append(
+                    {
+                        "tcId": str(tc["tcId"]),
+                        "expected": f"ct={expected_ct} tag={expected_tag}",
+                        "actual": f"error code {rc}",
+                        "note": "AES-GCM encrypt returned error",
+                    }
+                )
             elif actual_ct == expected_ct and actual_tag == expected_tag:
                 res.pass_count += 1
             else:
                 res.fail_count += 1
-                res.failures.append({
-                    "tcId": str(tc["tcId"]),
-                    "expected": f"ct={expected_ct} tag={expected_tag}",
-                    "actual": f"ct={actual_ct} tag={actual_tag}",
-                    "note": "Ciphertext or tag mismatch",
-                })
+                res.failures.append(
+                    {
+                        "tcId": str(tc["tcId"]),
+                        "expected": f"ct={expected_ct} tag={expected_tag}",
+                        "actual": f"ct={actual_ct} tag={actual_tag}",
+                        "note": "Ciphertext or tag mismatch",
+                    }
+                )
     return res
 
 
@@ -550,12 +569,14 @@ def test_ml_kem_keygen(lib: ctypes.CDLL) -> AlgorithmResult:
             res.vectors_tested += 1
             if rc != 0:
                 res.fail_count += 1
-                res.failures.append({
-                    "tcId": str(tc["tcId"]),
-                    "expected": f"ek={expected_ek[:32]}...",
-                    "actual": f"error code {rc}",
-                    "note": "Deterministic keygen returned error",
-                })
+                res.failures.append(
+                    {
+                        "tcId": str(tc["tcId"]),
+                        "expected": f"ek={expected_ek[:32]}...",
+                        "actual": f"error code {rc}",
+                        "note": "Deterministic keygen returned error",
+                    }
+                )
                 continue
             actual_ek = pk_buf.raw.hex()
             actual_dk = sk_buf.raw.hex()
@@ -564,12 +585,14 @@ def test_ml_kem_keygen(lib: ctypes.CDLL) -> AlgorithmResult:
             else:
                 mismatch = "ek mismatch" if actual_ek != expected_ek else "dk mismatch"
                 res.fail_count += 1
-                res.failures.append({
-                    "tcId": str(tc["tcId"]),
-                    "expected": f"ek={expected_ek[:32]}... dk={expected_dk[:32]}...",
-                    "actual": f"ek={actual_ek[:32]}... dk={actual_dk[:32]}...",
-                    "note": mismatch,
-                })
+                res.failures.append(
+                    {
+                        "tcId": str(tc["tcId"]),
+                        "expected": f"ek={expected_ek[:32]}... dk={expected_dk[:32]}...",
+                        "actual": f"ek={actual_ek[:32]}... dk={actual_dk[:32]}...",
+                        "note": mismatch,
+                    }
+                )
     return res
 
 
@@ -582,7 +605,7 @@ def test_ml_kem_decap(lib: ctypes.CDLL) -> AlgorithmResult:
             "gen-val/json-files/ML-KEM-encapDecap-FIPS203"
         ),
         notes="Decapsulation only; deterministic encapsulation not tested "
-              "(AMA does not expose randomness parameter m).",
+        "(AMA does not expose randomness parameter m).",
     )
     path = VECTORS_DIR / "ML-KEM-encapDecap-FIPS203.json"
     data = _load_vector_file(path)
@@ -593,9 +616,7 @@ def test_ml_kem_decap(lib: ctypes.CDLL) -> AlgorithmResult:
         if tg["testType"] != "AFT":
             count = len(tg.get("tests", []))
             res.vectors_skipped += count
-            res.skip_reasons.append(
-                f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors"
-            )
+            res.skip_reasons.append(f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors")
             continue
         if tg.get("parameterSet") != "ML-KEM-1024":
             count = len(tg.get("tests", []))
@@ -612,31 +633,38 @@ def test_ml_kem_decap(lib: ctypes.CDLL) -> AlgorithmResult:
 
             ss_buf = ctypes.create_string_buffer(32)
             rc = lib.ama_kyber_decapsulate(
-                c, ctypes.c_size_t(len(c)),
-                dk, ctypes.c_size_t(len(dk)),
-                ss_buf, ctypes.c_size_t(32),
+                c,
+                ctypes.c_size_t(len(c)),
+                dk,
+                ctypes.c_size_t(len(dk)),
+                ss_buf,
+                ctypes.c_size_t(32),
             )
             res.vectors_tested += 1
             if rc != 0:
                 res.fail_count += 1
-                res.failures.append({
-                    "tcId": str(tc["tcId"]),
-                    "expected": expected_k,
-                    "actual": f"error code {rc}",
-                    "note": "Decapsulation returned error",
-                })
+                res.failures.append(
+                    {
+                        "tcId": str(tc["tcId"]),
+                        "expected": expected_k,
+                        "actual": f"error code {rc}",
+                        "note": "Decapsulation returned error",
+                    }
+                )
                 continue
             actual_k = ss_buf.raw.hex()
             if actual_k == expected_k:
                 res.pass_count += 1
             else:
                 res.fail_count += 1
-                res.failures.append({
-                    "tcId": str(tc["tcId"]),
-                    "expected": expected_k,
-                    "actual": actual_k,
-                    "note": "Shared secret mismatch after decapsulation",
-                })
+                res.failures.append(
+                    {
+                        "tcId": str(tc["tcId"]),
+                        "expected": expected_k,
+                        "actual": actual_k,
+                        "note": "Shared secret mismatch after decapsulation",
+                    }
+                )
     return res
 
 
@@ -679,12 +707,14 @@ def test_ml_dsa_keygen(lib: ctypes.CDLL) -> AlgorithmResult:
             res.vectors_tested += 1
             if rc != 0:
                 res.fail_count += 1
-                res.failures.append({
-                    "tcId": str(tc["tcId"]),
-                    "expected": f"pk={expected_pk[:32]}...",
-                    "actual": f"error code {rc}",
-                    "note": "Deterministic keygen returned error",
-                })
+                res.failures.append(
+                    {
+                        "tcId": str(tc["tcId"]),
+                        "expected": f"pk={expected_pk[:32]}...",
+                        "actual": f"error code {rc}",
+                        "note": "Deterministic keygen returned error",
+                    }
+                )
                 continue
             actual_pk = pk_buf.raw.hex()
             actual_sk = sk_buf.raw.hex()
@@ -693,12 +723,14 @@ def test_ml_dsa_keygen(lib: ctypes.CDLL) -> AlgorithmResult:
             else:
                 mismatch = "pk mismatch" if actual_pk != expected_pk else "sk mismatch"
                 res.fail_count += 1
-                res.failures.append({
-                    "tcId": str(tc["tcId"]),
-                    "expected": f"pk={expected_pk[:32]}... sk={expected_sk[:32]}...",
-                    "actual": f"pk={actual_pk[:32]}... sk={actual_sk[:32]}...",
-                    "note": mismatch,
-                })
+                res.failures.append(
+                    {
+                        "tcId": str(tc["tcId"]),
+                        "expected": f"pk={expected_pk[:32]}... sk={expected_sk[:32]}...",
+                        "actual": f"pk={actual_pk[:32]}... sk={actual_sk[:32]}...",
+                        "note": mismatch,
+                    }
+                )
     return res
 
 
@@ -712,7 +744,7 @@ def test_ml_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
             "gen-val/json-files/ML-DSA-sigVer-FIPS204"
         ),
         notes="External/pure interface (TG 3) only. Uses ama_dilithium_verify_ctx "
-              "which applies FIPS 204 domain-separation wrapper.",
+        "which applies FIPS 204 domain-separation wrapper.",
     )
     path = VECTORS_DIR / "ML-DSA-sigVer-FIPS204.json"
     data = _load_vector_file(path)
@@ -737,9 +769,12 @@ def test_ml_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
             expected_pass = tc["testPassed"]
 
             rc = lib.ama_dilithium_verify_ctx(
-                message, ctypes.c_size_t(len(message)),
-                ctx, ctypes.c_size_t(len(ctx)),
-                signature, ctypes.c_size_t(len(signature)),
+                message,
+                ctypes.c_size_t(len(message)),
+                ctx,
+                ctypes.c_size_t(len(ctx)),
+                signature,
+                ctypes.c_size_t(len(signature)),
                 pk,
             )
             # AMA_SUCCESS = 0, AMA_ERROR_VERIFY_FAILED = -4
@@ -749,15 +784,14 @@ def test_ml_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
                 res.pass_count += 1
             else:
                 res.fail_count += 1
-                res.failures.append({
-                    "tcId": str(tc["tcId"]),
-                    "expected": f"testPassed={expected_pass}",
-                    "actual": f"testPassed={actual_pass} (rc={rc})",
-                    "note": (
-                        f"SigVer verdict mismatch. context_len="
-                        f"{len(ctx)}."
-                    ),
-                })
+                res.failures.append(
+                    {
+                        "tcId": str(tc["tcId"]),
+                        "expected": f"testPassed={expected_pass}",
+                        "actual": f"testPassed={actual_pass} (rc={rc})",
+                        "note": (f"SigVer verdict mismatch. context_len=" f"{len(ctx)}."),
+                    }
+                )
     return res
 
 
@@ -771,7 +805,7 @@ def test_slh_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
             "gen-val/json-files/SLH-DSA-sigVer-FIPS205"
         ),
         notes="External/pure interface (TG 5) only. Uses ama_sphincs_verify_ctx "
-              "which applies FIPS 205 domain-separation wrapper.",
+        "which applies FIPS 205 domain-separation wrapper.",
     )
     path = VECTORS_DIR / "SLH-DSA-sigVer-FIPS205.json"
     data = _load_vector_file(path)
@@ -796,9 +830,12 @@ def test_slh_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
             expected_pass = tc["testPassed"]
 
             rc = lib.ama_sphincs_verify_ctx(
-                message, ctypes.c_size_t(len(message)),
-                ctx, ctypes.c_size_t(len(ctx)),
-                signature, ctypes.c_size_t(len(signature)),
+                message,
+                ctypes.c_size_t(len(message)),
+                ctx,
+                ctypes.c_size_t(len(ctx)),
+                signature,
+                ctypes.c_size_t(len(signature)),
                 pk,
             )
             actual_pass = rc == 0
@@ -807,15 +844,14 @@ def test_slh_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
                 res.pass_count += 1
             else:
                 res.fail_count += 1
-                res.failures.append({
-                    "tcId": str(tc["tcId"]),
-                    "expected": f"testPassed={expected_pass}",
-                    "actual": f"testPassed={actual_pass} (rc={rc})",
-                    "note": (
-                        f"SigVer verdict mismatch. context_len="
-                        f"{len(ctx)}."
-                    ),
-                })
+                res.failures.append(
+                    {
+                        "tcId": str(tc["tcId"]),
+                        "expected": f"testPassed={expected_pass}",
+                        "actual": f"testPassed={actual_pass} (rc={rc})",
+                        "note": (f"SigVer verdict mismatch. context_len=" f"{len(ctx)}."),
+                    }
+                )
     return res
 
 
@@ -881,6 +917,7 @@ def main() -> int:
         except Exception as e:
             print(f"  ERROR: {e}")
             import traceback
+
             traceback.print_exc()
 
     elapsed = time.time() - start_time

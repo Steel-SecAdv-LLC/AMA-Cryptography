@@ -8,6 +8,7 @@ Vector sourcing rules:
 - SHA-256: FIPS 180-4 Section B.1 reference vectors (hardcoded).
 - AES-256-GCM: SP 800-38D Appendix B TC13-TC16 (hardcoded).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -18,10 +19,7 @@ from pathlib import Path
 
 VECTORS_DIR = Path(__file__).parent
 
-ACVP_BASE = (
-    "https://raw.githubusercontent.com/usnistgov/ACVP-Server/"
-    "master/gen-val/json-files"
-)
+ACVP_BASE = "https://raw.githubusercontent.com/usnistgov/ACVP-Server/" "master/gen-val/json-files"
 
 # Algorithm directory names on ACVP-Server (actual paths verified)
 # Each entry: output_filename -> ACVP-Server directory name
@@ -181,8 +179,7 @@ def create_aes256gcm_vectors() -> None:
                         "86a7a9531534f7da2e4c303d8a318a72"
                         "1c3c0c95956809532fcf0e2449a6b525"
                         "b16aedf5aa0de657ba637b39",
-                        "aad": "feedfacedeadbeeffeedfacedeadbeef"
-                        "abaddad2",
+                        "aad": "feedfacedeadbeeffeedfacedeadbeef" "abaddad2",
                         "ct": "522dc1f099567d07f47f37a32a84427d"
                         "643a8cdcbfe5c0c97598a2bd2555d1aa"
                         "8cb08e48590dbb3da7b08b1056828838"

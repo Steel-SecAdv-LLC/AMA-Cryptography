@@ -854,9 +854,7 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
 
-def dilithium_verify_ctx(
-    message: bytes, signature: bytes, public_key: bytes, ctx: bytes
-) -> bool:
+def dilithium_verify_ctx(message: bytes, signature: bytes, public_key: bytes, ctx: bytes) -> bool:
     """
     Verify ML-DSA-65 signature with context (FIPS 204 external/pure).
 
@@ -1187,9 +1185,7 @@ def sphincs_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
 
 
-def sphincs_verify_ctx(
-    message: bytes, signature: bytes, public_key: bytes, ctx: bytes
-) -> bool:
+def sphincs_verify_ctx(message: bytes, signature: bytes, public_key: bytes, ctx: bytes) -> bool:
     """
     Verify SLH-DSA-SHA2-256f signature with context (FIPS 205 external/pure).
 
