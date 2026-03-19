@@ -114,6 +114,7 @@ from ama_cryptography.pqc_backends import (
     native_ed25519_sign,
     native_ed25519_verify,
     native_hkdf,
+    native_hmac_sha3_256,
 )
 from ama_cryptography.secure_memory import constant_time_compare
 
@@ -509,22 +510,8 @@ def hmac_authenticate(message: bytes, key: bytes) -> bytes:
     if len(key) < 32:
         raise ValueError("HMAC key must be at least 32 bytes for SHA3-256 security")
 
-    # Pure-Python HMAC-SHA3-256 per RFC 2104 (INVARIANT-1: no stdlib hmac)
-    # SHA3-256 block size is 136 bytes (1088-bit rate for Keccak[512])
-    block_size = 136
-
-    # Step 1: If key > block_size, hash it; if shorter, zero-pad to block_size
-    if len(key) > block_size:
-        key = hashlib.sha3_256(key).digest()
-    key_padded = key + b"\x00" * (block_size - len(key))
-
-    # Step 2: XOR key with ipad (0x36) and opad (0x5c)
-    o_key_pad = bytes(b ^ 0x5C for b in key_padded)
-    i_key_pad = bytes(b ^ 0x36 for b in key_padded)
-
-    # Step 3: HMAC = H(o_key_pad || H(i_key_pad || message))
-    inner = hashlib.sha3_256(i_key_pad + message).digest()
-    return hashlib.sha3_256(o_key_pad + inner).digest()
+    # Native C HMAC-SHA3-256 via ama_hmac_sha3_256() (INVARIANT-1 compliant)
+    return native_hmac_sha3_256(key, message)
 
 
 def hmac_verify(message: bytes, tag: bytes, key: bytes) -> bool:

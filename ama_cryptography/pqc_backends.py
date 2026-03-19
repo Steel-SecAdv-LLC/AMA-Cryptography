@@ -382,6 +382,16 @@ def _setup_hkdf_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_hkdf.restype = ctypes.c_int
 
+        # HMAC-SHA3-256 (RFC 2104 with native SHA3-256)
+        lib.ama_hmac_sha3_256.argtypes = [
+            ctypes.c_char_p,  # key
+            ctypes.c_size_t,  # key_len
+            ctypes.c_char_p,  # msg
+            ctypes.c_size_t,  # msg_len
+            ctypes.c_char_p,  # out (32 bytes)
+        ]
+        lib.ama_hmac_sha3_256.restype = ctypes.c_int
+
         return True
     except AttributeError:
         return False
@@ -1523,6 +1533,46 @@ def native_hkdf(
         raise RuntimeError(f"HKDF derivation failed (rc={rc})")
 
     return bytes(okm_buf)
+
+
+# ============================================================================
+# HMAC-SHA3-256 NATIVE C BACKEND (RFC 2104)
+# ============================================================================
+
+
+def native_hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
+    """
+    HMAC-SHA3-256 via native C implementation (ama_hmac_sha3_256).
+
+    INVARIANT-1 compliant — zero external crypto dependencies.
+    RFC 2104 compliant — 136-byte block size for SHA3-256 (Keccak rate).
+
+    Args:
+        key: HMAC key (any length; keys >136 bytes are hashed first)
+        msg: Message to authenticate
+
+    Returns:
+        32-byte HMAC-SHA3-256 tag
+
+    Raises:
+        RuntimeError: If native library is not available
+    """
+    if _native_lib is None or not _HKDF_NATIVE_AVAILABLE:
+        raise RuntimeError("HMAC-SHA3-256 native backend not available. " + _INSTALL_HINT)
+
+    out_buf = ctypes.create_string_buffer(32)
+
+    rc = _native_lib.ama_hmac_sha3_256(
+        key,
+        ctypes.c_size_t(len(key)),
+        msg,
+        ctypes.c_size_t(len(msg)),
+        out_buf,
+    )
+    if rc != 0:
+        raise RuntimeError(f"HMAC-SHA3-256 failed (rc={rc})")
+
+    return bytes(out_buf)
 
 
 # ============================================================================

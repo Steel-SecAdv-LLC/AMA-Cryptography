@@ -139,6 +139,18 @@ cleanup:
 }
 
 /**
+ * Public HMAC-SHA3-256 API.
+ * Delegates to the internal hmac_sha3_256() used by HKDF.
+ */
+AMA_API ama_error_t ama_hmac_sha3_256(
+    const uint8_t *key, size_t key_len,
+    const uint8_t *msg, size_t msg_len,
+    uint8_t out[32]
+) {
+    return hmac_sha3_256(key, key_len, msg, msg_len, out);
+}
+
+/**
  * HKDF-Extract
  *
  * Extracts a pseudorandom key from the input key material.

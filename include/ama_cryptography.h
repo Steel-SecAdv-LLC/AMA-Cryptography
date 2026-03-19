@@ -465,6 +465,25 @@ AMA_API ama_error_t ama_shake128_inc_finalize(ama_sha3_ctx* ctx);
 AMA_API ama_error_t ama_shake128_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen);
 
 /**
+ * @brief HMAC-SHA3-256 per RFC 2104 using AMA's native SHA3-256 implementation.
+ *
+ * @param key       Pointer to key bytes
+ * @param key_len   Key length in bytes (any length; keys >136 bytes are hashed)
+ * @param msg       Pointer to message bytes
+ * @param msg_len   Message length in bytes
+ * @param out       Output buffer, must be at least 32 bytes
+ * @return          AMA_SUCCESS on success, AMA_ERROR_MEMORY on allocation failure
+ *
+ * INVARIANT-1 compliant: uses only ama_sha3.c — zero external crypto dependencies.
+ * Constant-time: output comparison must use ama_consttime_memcmp, not memcmp.
+ */
+AMA_API ama_error_t ama_hmac_sha3_256(
+    const uint8_t *key, size_t key_len,
+    const uint8_t *msg, size_t msg_len,
+    uint8_t out[32]
+);
+
+/**
  * @brief HKDF key derivation (RFC 5869)
  *
  * Derives key material using HKDF with HMAC-SHA3-256.
