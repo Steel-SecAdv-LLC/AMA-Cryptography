@@ -88,7 +88,6 @@ if not _caller_module.startswith("ama_cryptography"):
 
 import base64
 import hashlib
-import hmac
 import json
 import logging
 import secrets
@@ -104,6 +103,9 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, cast
 
 if TYPE_CHECKING:
     from ama_cryptography_monitor import AmaCryptographyMonitor
+
+# Constant-time comparison — native C backend (INVARIANT-1: no stdlib hmac)
+from ama_cryptography.secure_memory import constant_time_compare
 
 # Cryptographic dependencies — native C backend (zero external deps)
 from ama_cryptography.pqc_backends import (
@@ -508,8 +510,22 @@ def hmac_authenticate(message: bytes, key: bytes) -> bytes:
     if len(key) < 32:
         raise ValueError("HMAC key must be at least 32 bytes for SHA3-256 security")
 
-    # Use SHA3-256 for HMAC
-    return hmac.new(key, message, hashlib.sha3_256).digest()
+    # Pure-Python HMAC-SHA3-256 per RFC 2104 (INVARIANT-1: no stdlib hmac)
+    # SHA3-256 block size is 136 bytes (1088-bit rate for Keccak[512])
+    block_size = 136
+
+    # Step 1: If key > block_size, hash it; if shorter, zero-pad to block_size
+    if len(key) > block_size:
+        key = hashlib.sha3_256(key).digest()
+    key_padded = key + b"\x00" * (block_size - len(key))
+
+    # Step 2: XOR key with ipad (0x36) and opad (0x5c)
+    o_key_pad = bytes(b ^ 0x5C for b in key_padded)
+    i_key_pad = bytes(b ^ 0x36 for b in key_padded)
+
+    # Step 3: HMAC = H(o_key_pad || H(i_key_pad || message))
+    inner = hashlib.sha3_256(i_key_pad + message).digest()
+    return hashlib.sha3_256(o_key_pad + inner).digest()
 
 
 def hmac_verify(message: bytes, tag: bytes, key: bytes) -> bool:
@@ -533,7 +549,8 @@ def hmac_verify(message: bytes, tag: bytes, key: bytes) -> bool:
             diff |= tag[i] ^ expected[i]
         return diff == 0  # No early return
 
-    Python's hmac.compare_digest() implements constant-time comparison.
+    Uses ama_cryptography.secure_memory.constant_time_compare() for
+    branch-free comparison (INVARIANT-1: no stdlib hmac.compare_digest).
 
     Reference: Timing attack mitigation in RFC 2104, Section 5
 
@@ -546,7 +563,7 @@ def hmac_verify(message: bytes, tag: bytes, key: bytes) -> bool:
         True if tag is valid, False otherwise
     """
     expected = hmac_authenticate(message, key)
-    return hmac.compare_digest(tag, expected)
+    return constant_time_compare(tag, expected)
 
 
 # ============================================================================
