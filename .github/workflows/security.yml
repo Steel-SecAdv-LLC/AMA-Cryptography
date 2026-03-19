@@ -29,24 +29,11 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install safety bandit pip-audit
-        pip install "cryptography>=46.0.5"
-
-    - name: Run Safety check
-      run: |
-        safety check --output json > safety-report.json
-        safety check --output text
+        pip install bandit pip-audit
 
     - name: Run pip-audit
       run: |
-        # nltk 3.9.3 pulled in transitively by safety — dev-only, not used
-        # at runtime. All three CVEs affect nltk.app.wordnet_app or
-        # nltk.jsontags which are never invoked by AMA Cryptography.
-        # Severity: MODERATE. No fix version available as of 2026-03-19.
-        pip-audit --desc \
-          --ignore-vuln GHSA-rf74-v2fm-23pw \
-          --ignore-vuln CVE-2026-33230 \
-          --ignore-vuln CVE-2026-33231
+        pip-audit --desc
 
     - name: Run Bandit security linter
       run: |
@@ -59,7 +46,6 @@ jobs:
       with:
         name: security-reports
         path: |
-          safety-report.json
           bandit-report.json
         retention-days: 90
 
@@ -94,11 +80,7 @@ jobs:
 
     - name: Run dependency audit
       run: |
-        # See security-audit job for nltk MODERATE CVE justification
-        pip-audit --format=json --output pip-audit.json \
-          --ignore-vuln GHSA-rf74-v2fm-23pw \
-          --ignore-vuln CVE-2026-33230 \
-          --ignore-vuln CVE-2026-33231
+        pip-audit --format=json --output pip-audit.json
 
     - name: Upload audit results
       if: always()

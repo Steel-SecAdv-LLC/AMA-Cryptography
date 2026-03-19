@@ -32,7 +32,7 @@ mypy>=1.9.0
 
 # Security Scanning
 bandit>=1.7.0
-safety>=2.3.0
+# pip-audit (installed in CI) provides dependency vulnerability scanning via OSV.
 
 # Benchmarking (optional — benchmark_suite.py uses psutil when available)
 # psutil>=5.9.0
