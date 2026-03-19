@@ -238,17 +238,14 @@ jobs:
         run: bandit -r ama_cryptography/ -l
 
   # Benchmark Regression Detection
-  # Advisory job during initial baseline period — fails the job on regression
-  # but does not block the overall workflow. Environment variance on shared CI
-  # runners (25-50% depending on operation) means occasional false positives
-  # are expected. Once baseline stabilizes on dedicated runners, this job
-  # should be made required.
+  # Required job — fails the workflow on detected regression.
+  # Environment variance on shared CI runners (25-50%) means baselines
+  # must account for ctypes-fallback throughput, not Cython-optimized peaks.
   benchmark-regression:
     name: Benchmark Regression Detection
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [c-library]
-    continue-on-error: true
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
