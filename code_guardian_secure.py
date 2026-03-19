@@ -114,7 +114,7 @@ from ama_cryptography.pqc_backends import (
     native_ed25519_sign,
     native_ed25519_verify,
     native_hkdf,
-    native_hmac_sha3_256,
+    hmac_sha3_256,
 )
 from ama_cryptography.secure_memory import constant_time_compare
 
@@ -510,8 +510,8 @@ def hmac_authenticate(message: bytes, key: bytes) -> bytes:
     if len(key) < 32:
         raise ValueError("HMAC key must be at least 32 bytes for SHA3-256 security")
 
-    # Native C HMAC-SHA3-256 via ama_hmac_sha3_256() (INVARIANT-1 compliant)
-    return native_hmac_sha3_256(key, message)
+    # Native C HMAC-SHA3-256 — Cython primary, ctypes fallback (INVARIANT-1 compliant)
+    return hmac_sha3_256(key, message)
 
 
 def hmac_verify(message: bytes, tag: bytes, key: bytes) -> bool:
