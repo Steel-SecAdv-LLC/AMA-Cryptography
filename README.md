@@ -164,7 +164,7 @@ The signature innovation providing real-time cryptographic operation analysis un
 Optimized for both security and performance:
 
 - **C Layer**: Native SHA3-256, HKDF-SHA3-256, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+-256f implementations — zero external dependencies (see [Implementation Status Matrix](#implementation-status-matrix))
-- **Cython Layer**: Optimized mathematical operations (benchmarked at 27-37x vs pure Python)
+- **Cython Layer**: Optimized mathematical operations (benchmarked at 18-37x vs pure Python)
 - **Python API**: High-level, user-friendly interface for rapid development (primary production API)
 
 ### Advanced Features
@@ -196,7 +196,7 @@ Future-proof cryptography:
 | Achievement | Description |
 |-------------|-------------|
 | Defense-in-Depth | 6 independent cryptographic layers |
-| Performance | Cython optimization (27-37x vs pure Python baseline) |
+| Performance | Cython optimization (18-37x vs pure Python baseline) |
 | Quantum Resistance | NIST-approved PQC algorithms (ML-DSA-65, Kyber-1024) |
 | Mathematical Rigor | 5 proven frameworks with machine precision |
 | Cross-Platform | Linux, macOS, Windows, ARM64 |
