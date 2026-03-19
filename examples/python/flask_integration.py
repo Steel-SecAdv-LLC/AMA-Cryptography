@@ -103,20 +103,20 @@ def require_hmac_auth(f):
 
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        import hashlib
-        import hmac
+        from ama_cryptography.secure_memory import constant_time_compare
+        from code_guardian_secure import hmac_authenticate
 
         # Get signature from header
         provided_sig = request.headers.get("X-HMAC-Signature")
         if not provided_sig:
             return jsonify({"error": "Missing X-HMAC-Signature header"}), 401
 
-        # Calculate expected signature
+        # Calculate expected signature (INVARIANT-1: no stdlib hmac)
         body = request.get_data()
-        expected_sig = hmac.new(KMS.hmac_key, body, hashlib.sha3_256).hexdigest()
+        expected_sig = hmac_authenticate(body, KMS.hmac_key).hex()
 
         # Constant-time comparison
-        if not hmac.compare_digest(provided_sig, expected_sig):
+        if not constant_time_compare(provided_sig.encode(), expected_sig.encode()):
             return jsonify({"error": "Invalid HMAC signature"}), 401
 
         return f(*args, **kwargs)

@@ -21,7 +21,6 @@ Exit codes:
 
 import argparse
 import hashlib
-import hmac
 import json
 import secrets
 import sys
@@ -95,12 +94,14 @@ def run_sha3_256_benchmark(iterations: int = 100) -> float:
 
 
 def run_hmac_sha3_256_benchmark(iterations: int = 100) -> float:
-    """Benchmark HMAC-SHA3-256."""
+    """Benchmark HMAC-SHA3-256 using project's own implementation."""
+    from code_guardian_secure import hmac_authenticate
+
     key = secrets.token_bytes(32)
     data = b"A" * 1024
 
     def operation():
-        hmac.new(key, data, hashlib.sha3_256).digest()
+        hmac_authenticate(data, key)
 
     return benchmark_operation(operation, iterations)
 
