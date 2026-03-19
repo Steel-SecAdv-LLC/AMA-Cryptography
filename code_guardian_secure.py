@@ -109,12 +109,12 @@ if TYPE_CHECKING:
 from ama_cryptography.pqc_backends import (
     _ED25519_NATIVE_AVAILABLE,
     _HKDF_NATIVE_AVAILABLE,
+    hmac_sha3_256,
     native_ed25519_keypair,
     native_ed25519_keypair_from_seed,
     native_ed25519_sign,
     native_ed25519_verify,
     native_hkdf,
-    hmac_sha3_256,
 )
 from ama_cryptography.secure_memory import constant_time_compare
 
