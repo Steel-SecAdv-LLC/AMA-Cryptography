@@ -419,10 +419,6 @@ The ethical integration adds cryptographic binding to the 4 Omni-Code Ethical Pi
 
 *Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 1,000 iterations.*
 
-![Monitoring Overhead](assets/monitoring_overhead.png)
-
-*Comprehensive runtime security monitoring with less than 2% performance overhead.*
-
 </details>
 
 ---
