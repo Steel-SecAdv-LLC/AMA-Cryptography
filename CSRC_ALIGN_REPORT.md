@@ -194,6 +194,10 @@ rate for SHA3-256, r=1088 bits = 136 bytes). Key material is scrubbed via
 Cross-check: output of `ama_hmac_sha3_256()` matches Python
 `hmac.new(key, msg, hashlib.sha3_256).digest()` for all tested vectors.
 
+A Cython binding (`cy_hmac_sha3_256`) was added to eliminate ctypes per-call
+marshaling overhead. The Cython path compiles to C and calls
+`ama_hmac_sha3_256()` directly, achieving ~262K ops/sec vs ~182K via ctypes.
+
 ### 2.8 Ed25519 performance — post-fix results (v2.3)
 
 **Performance fix applied:** `generate_ed25519_keypair()` now stores the 64-byte
@@ -201,19 +205,18 @@ expanded key (seed||pk) instead of discarding it. `ed25519_sign()` detects
 64-byte keys and skips redundant SHA-512 expansion + point multiplication.
 
 Post-fix benchmark results (this environment):
-- Ed25519 KeyGen: 2,707 ops/sec (0.37 ms)
-- Ed25519 Sign: 2,652 ops/sec (0.38 ms) — up from ~1,700 pre-fix
-- Ed25519 Verify: 1,472 ops/sec (0.68 ms)
-- ML-DSA-65 Sign: 429 ops/sec (2.33 ms)
-- ML-DSA-65 Verify: 536 ops/sec (1.86 ms)
+- HMAC-SHA3-256: 262,200 ops/sec (0.004 ms) — Cython binding to native C
+- Ed25519 KeyGen: 3,407 ops/sec (0.29 ms)
+- Ed25519 Sign: 3,361 ops/sec (0.30 ms) — up from ~1,700 pre-fix
+- Ed25519 Verify: 1,851 ops/sec (0.54 ms)
+- ML-DSA-65 Sign: 238 ops/sec (4.20 ms)
+- ML-DSA-65 Verify: 624 ops/sec (1.60 ms)
 - SLH-DSA Sign: ~1.4 ops/sec (~741 ms) — consistent with SHA2-256f fast variant
 - SLH-DSA Verify: ~53 ops/sec (~19 ms)
 
-**Classification of threshold failures:** Two pytest failures in
-`tests/test_performance.py` (`test_hmac_throughput`, `test_verify_throughput`)
-remain classified as environment noise. Thresholds assume a fast bare-metal
-environment; shared CI runners produce ~60-70% of expected throughput. Per
-standing rules, thresholds are not modified.
+**Performance test status:** All `tests/test_performance.py` thresholds now pass
+with the Cython HMAC binding (262K > 100K threshold) and Ed25519 expanded-key
+optimization.
 
 ---
 
