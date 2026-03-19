@@ -857,8 +857,7 @@ class _Random:
     """Numpy-compatible random interface backed by stdlib random."""
 
     def __init__(self) -> None:
-        # Non-cryptographic PRNG for numerical simulation only
-        self._rng = _stdlib_random.Random()  # noqa: S311  # nosec B311
+        self._rng = _stdlib_random.Random()  # noqa: S311  # nosec B311 — non-crypto PRNG
 
     def seed(self, s: int) -> None:
         self._rng.seed(s)
