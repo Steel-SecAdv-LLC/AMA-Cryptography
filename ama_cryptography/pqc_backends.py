@@ -387,6 +387,25 @@ def _setup_hkdf_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
+# SHA3-256 native availability (raw hash, not HMAC)
+_SHA3_256_NATIVE_AVAILABLE = False
+
+
+def _setup_sha3_256_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for raw SHA3-256 hash (FIPS 202)."""
+    try:
+        lib.ama_sha3_256.argtypes = [
+            ctypes.c_char_p,  # input
+            ctypes.c_size_t,  # input_len
+            ctypes.c_char_p,  # output (32 bytes)
+        ]
+        lib.ama_sha3_256.restype = ctypes.c_int
+
+        return True
+    except AttributeError:
+        return False
+
+
 # HMAC-SHA3-256 native availability (independent of HKDF)
 _HMAC_SHA3_256_NATIVE_AVAILABLE = False
 
@@ -546,6 +565,7 @@ if _native_lib is not None:
     _ED25519_NATIVE_AVAILABLE = _setup_ed25519_ctypes(_native_lib)
     _AES_GCM_NATIVE_AVAILABLE = _setup_aes_gcm_ctypes(_native_lib)
     _HKDF_NATIVE_AVAILABLE = _setup_hkdf_ctypes(_native_lib)
+    _SHA3_256_NATIVE_AVAILABLE = _setup_sha3_256_ctypes(_native_lib)
     _HMAC_SHA3_256_NATIVE_AVAILABLE = _setup_hmac_sha3_256_ctypes(_native_lib)
     _SECP256K1_NATIVE_AVAILABLE = _setup_secp256k1_ctypes(_native_lib)
     _X25519_NATIVE_AVAILABLE = _setup_x25519_ctypes(_native_lib)
@@ -561,6 +581,9 @@ KYBER_AVAILABLE: bool = _KYBER_AVAILABLE
 KYBER_BACKEND: Optional[str] = _KYBER_BACKEND
 SPHINCS_AVAILABLE: bool = _SPHINCS_AVAILABLE
 SPHINCS_BACKEND: Optional[str] = _SPHINCS_BACKEND
+
+# SHA3-256 (raw hash) native availability
+SHA3_256_NATIVE_AVAILABLE: bool = _SHA3_256_NATIVE_AVAILABLE
 
 # HMAC-SHA3-256 availability — determined at import time.
 # Cython binding is probed later (after function definitions), so we
@@ -1556,6 +1579,43 @@ def native_hkdf(
         raise RuntimeError(f"HKDF derivation failed (rc={rc})")
 
     return bytes(okm_buf)
+
+
+# ============================================================================
+# SHA3-256 NATIVE C BACKEND (FIPS 202)
+# ============================================================================
+
+
+def native_sha3_256(data: bytes) -> bytes:
+    """
+    SHA3-256 via native C implementation (ama_sha3_256).
+
+    INVARIANT-1 compliant — zero external crypto dependencies.
+    FIPS 202 compliant — Keccak-f[1600] sponge, rate 136, capacity 64.
+
+    Args:
+        data: Input bytes to hash
+
+    Returns:
+        32-byte SHA3-256 digest
+
+    Raises:
+        RuntimeError: If native library is not available
+    """
+    if _native_lib is None or not _SHA3_256_NATIVE_AVAILABLE:
+        raise RuntimeError("SHA3-256 native backend not available. " + _INSTALL_HINT)
+
+    out_buf = ctypes.create_string_buffer(32)
+
+    rc = _native_lib.ama_sha3_256(
+        data,
+        ctypes.c_size_t(len(data)),
+        out_buf,
+    )
+    if rc != 0:
+        raise RuntimeError(f"SHA3-256 failed (rc={rc})")
+
+    return bytes(out_buf)
 
 
 # ============================================================================

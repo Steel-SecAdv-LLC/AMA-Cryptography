@@ -20,7 +20,6 @@ Exit codes:
 """
 
 import argparse
-import hashlib
 import json
 import secrets
 import sys
@@ -84,11 +83,13 @@ def benchmark_operation(
 
 
 def run_sha3_256_benchmark(iterations: int = 100) -> float:
-    """Benchmark SHA3-256 hashing."""
+    """Benchmark AMA native C SHA3-256 hashing (FIPS 202)."""
+    from ama_cryptography.pqc_backends import native_sha3_256
+
     data = b"A" * 1024  # 1KB data
 
     def operation():
-        hashlib.sha3_256(data).digest()
+        native_sha3_256(data)
 
     return benchmark_operation(operation, iterations)
 
@@ -289,7 +290,7 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
     threshold = baseline["thresholds"]["regression_threshold_percent"]
 
     benchmark_functions = {
-        "sha3_256_hash": run_sha3_256_benchmark,
+        "ama_sha3_256_hash": run_sha3_256_benchmark,
         "hmac_sha3_256": run_hmac_sha3_256_benchmark,
         "ed25519_keygen": run_ed25519_keygen_benchmark,
         "ed25519_sign": run_ed25519_sign_benchmark,

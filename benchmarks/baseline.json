@@ -12,8 +12,8 @@
     "warmup_iterations": 5
   },
   "benchmarks": {
-    "sha3_256_hash": {
-      "description": "SHA3-256 hashing of 1KB data (hashlib, varies by OpenSSL/CPU)",
+    "ama_sha3_256_hash": {
+      "description": "AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes)",
       "metric": "operations_per_second",
       "baseline_value": 160000,
       "unit": "ops/sec",
