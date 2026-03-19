@@ -15,6 +15,7 @@ RFC 2104 compliant: 136-byte block size (SHA3-256 Keccak rate).
 """
 
 from libc.stdint cimport uint8_t
+from libc.stddef cimport size_t
 
 cdef extern from "ama_cryptography.h":
     int ama_hmac_sha3_256(

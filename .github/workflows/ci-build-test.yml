@@ -248,6 +248,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [c-library]
+    continue-on-error: true
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 

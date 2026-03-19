@@ -147,6 +147,16 @@ AMA_API ama_error_t ama_hmac_sha3_256(
     const uint8_t *msg, size_t msg_len,
     uint8_t out[32]
 ) {
+    if (!key || !out) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (!msg && msg_len > 0) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    /* Guard against size_t overflow in SHA3_256_BLOCK_SIZE + msg_len */
+    if (msg_len > SIZE_MAX - SHA3_256_BLOCK_SIZE) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
     return hmac_sha3_256(key, key_len, msg, msg_len, out);
 }
 
