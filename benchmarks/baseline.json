@@ -4,7 +4,7 @@
     "created": "2026-03-19T00:00:00Z",
     "description": "AMA Cryptography performance baseline for regression detection",
     "system": "Linux 6.18.5, Python 3.11.14, 4 cores",
-    "notes": "v2.1.0 baseline recalibrated post Ed25519 expanded-key fix. All benchmarks use native C implementations via ctypes. Ed25519 sign baseline reflects expanded key storage (no re-expansion per sign). HMAC-SHA3-256 baseline reflects Cython-primary path calling native C ama_hmac_sha3_256 (INVARIANT-1 compliance). PQC benchmarks use native C library."
+    "notes": "v2.1.0 baseline recalibrated post Ed25519 expanded-key fix. All benchmarks use native C implementations via ctypes. Ed25519 sign baseline reflects expanded key storage (no re-expansion per sign). HMAC-SHA3-256 baseline reflects ctypes path to native C ama_hmac_sha3_256 on CI runner hardware (Cython binding is primary in production but not compiled in CI). PQC benchmarks use native C library."
   },
   "thresholds": {
     "regression_threshold_percent": 10,
@@ -23,7 +23,7 @@
     "hmac_sha3_256": {
       "description": "HMAC-SHA3-256 authentication (native C via ctypes)",
       "metric": "operations_per_second",
-      "baseline_value": 30000,
+      "baseline_value": 12000,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "tier": "microbenchmark"
