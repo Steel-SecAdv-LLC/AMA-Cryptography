@@ -1260,7 +1260,7 @@ cmake .. \
 
 ### Documentation
 
-- **Security Analysis:** See `SECURITY_ANALYSIS.md` for mathematical proofs
+- **Security Analysis:** See `SECURITY.md` for mathematical proofs
 - **Architecture:** See `ARCHITECTURE.md` for system design
 - **Monitoring:** See `MONITORING.md` for 3R security monitoring
 - **README:** See `README.md` for overview

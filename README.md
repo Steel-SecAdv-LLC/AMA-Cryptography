@@ -683,7 +683,7 @@ GitHub Actions automatically tests:
 | Memory Safety | Secure wiping, bounds checking, magic number validation |
 | 3R Monitoring | Runtime security analysis (less than 2% overhead) |
 
-See [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) for complete cryptographic analysis.
+See [SECURITY.md](SECURITY.md) for complete cryptographic analysis.
 
 <details>
 <summary>Classic vs Quantum Security Comparison</summary>
@@ -788,7 +788,7 @@ KAT vectors are sourced from NIST PQC standardization and validate that the nati
 | Document | Description |
 |----------|-------------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture and design |
-| [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) | Complete security analysis |
+| [SECURITY.md](SECURITY.md) | Complete security analysis |
 | [BENCHMARKS.md](BENCHMARKS.md) | Performance measurements |
 | [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) | Cryptographic algorithm overview |
 | [SECURITY_COMPARISON.md](SECURITY_COMPARISON.md) | AMA Cryptography vs OpenSSL+liboqs |
@@ -1069,7 +1069,7 @@ AMA Cryptography transcends traditional computer science boundaries by synthesiz
 - **Character-driven design**: Competence, commitment, control embedded in architecture
 - **Survivor-first principles**: Security designed to protect the vulnerable
 
-This multi-disciplinary synthesis uses NIST-standard primitives (SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65, HKDF) with ~128-bit classical and ~192-bit quantum security margins. All security analysis is self-assessed; see SECURITY_ANALYSIS.md for derivations and caveats.
+This multi-disciplinary synthesis uses NIST-standard primitives (SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65, HKDF) with ~128-bit classical and ~192-bit quantum security margins. All security analysis is self-assessed; see SECURITY.md for derivations and caveats.
 
 </details>
 

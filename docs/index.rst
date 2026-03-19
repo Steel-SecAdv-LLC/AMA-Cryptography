@@ -12,7 +12,7 @@ security and performance.
    * `README.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/README.md>`_ - Quick start and overview
    * `ARCHITECTURE.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/ARCHITECTURE.md>`_ - System architecture
    * `IMPLEMENTATION_GUIDE.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/IMPLEMENTATION_GUIDE.md>`_ - Deployment guide
-   * `SECURITY_ANALYSIS.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/SECURITY_ANALYSIS.md>`_ - Security analysis
+   * `SECURITY.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/SECURITY.md>`_ - Security analysis
    * `CRYPTOGRAPHY.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/CRYPTOGRAPHY.md>`_ - Cryptographic details
    * `CONTRIBUTING.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/CONTRIBUTING.md>`_ - Contribution guidelines
 
