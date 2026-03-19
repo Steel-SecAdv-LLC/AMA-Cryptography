@@ -553,7 +553,7 @@ The architecture supports optional HSM integration for master secret storage:
 
 **Defense-in-Depth Benefit:** While security is bounded by the weakest layer, the defense-in-depth architecture ensures that even if one layer is compromised (e.g., a future break in Ed25519), other layers continue to provide protection. An attacker must defeat ALL layers to fully compromise the system.
 
-See [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) for detailed security proofs and the formal security bound statement.
+See [SECURITY.md](SECURITY.md) for detailed security proofs and the formal security bound statement.
 
 ### Security Assumptions
 
@@ -735,7 +735,7 @@ Cryptographic implementations are validated against:
 ### Implementation References
 
 - `ama_cryptography/crypto_api.py`: Core cryptographic implementation
-- `SECURITY_ANALYSIS.md`: Detailed security proofs and analysis
+- `SECURITY.md`: Detailed security proofs and analysis
 - `BENCHMARKS.md`: Performance measurement methodology and results
 - `IMPLEMENTATION_GUIDE.md`: Deployment and integration guide
 

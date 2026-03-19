@@ -341,7 +341,7 @@ class TestEd25519Signatures:
 
 3. **Update documentation:**
    - Update README.md if adding features
-   - Update SECURITY_ANALYSIS.md if affecting security
+   - Update SECURITY.md if affecting security
    - Update IMPLEMENTATION_GUIDE.md if changing deployment
    - Add entries to CHANGELOG.md
 
@@ -485,7 +485,7 @@ Extendable-Output Functions (August 2015)
 
 - Review [README.md](README.md) for project overview
 - Check [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md) for usage
-- Read [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) for technical details
+- Read [SECURITY.md](SECURITY.md) for technical details
 - Search existing issues before opening new ones
 - Ask questions in GitHub Discussions
 

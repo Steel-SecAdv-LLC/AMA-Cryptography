@@ -8,4 +8,4 @@ contact_links:
     about: Ask questions or discuss ideas with the community
   - name: Documentation
     url: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/README.md
-    about: Read the comprehensive documentation including SECURITY_ANALYSIS.md and IMPLEMENTATION_GUIDE.md
+    about: Read the comprehensive documentation including SECURITY.md and IMPLEMENTATION_GUIDE.md

@@ -145,7 +145,7 @@ Example:
 <!-- Mark all documentation that was updated -->
 
 - [ ] README.md updated
-- [ ] SECURITY_ANALYSIS.md updated (if security affected)
+- [ ] SECURITY.md updated (if security affected)
 - [ ] IMPLEMENTATION_GUIDE.md updated (if deployment affected)
 - [ ] CHANGELOG.md updated
 - [ ] Inline code comments added for complex logic

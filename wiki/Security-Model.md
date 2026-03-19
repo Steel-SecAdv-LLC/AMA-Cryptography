@@ -206,7 +206,7 @@ AMA Cryptography vs. peer implementations:
 - [RFC 8032](https://tools.ietf.org/html/rfc8032) — Ed25519
 - [RFC 5869](https://tools.ietf.org/html/rfc5869) — HKDF
 - [RFC 3161](https://tools.ietf.org/html/rfc3161) — Trusted Timestamps
-- [SECURITY_ANALYSIS.md](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/SECURITY_ANALYSIS.md) — Self-assessment
+- [SECURITY.md](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/SECURITY.md) — Self-assessment
 - [THREAT_MODEL.md](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/THREAT_MODEL.md) — Detailed threat classification
 
 ---
