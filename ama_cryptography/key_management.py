@@ -964,7 +964,7 @@ class HSMKeyStorage:
         hsm_type: str = "softhsm",
         library_path: Optional[str] = None,
         token_label: str = "AmaCryptography",
-        pin: Optional[str] = None,  # nosec B107
+        pin: Optional[str] = None,  # nosec B107 — PIN is a parameter, not a hardcoded credential
         slot_index: Optional[int] = None,
     ) -> None:
         """
@@ -1223,14 +1223,14 @@ class HSMKeyStorage:
         if hasattr(self, "_logged_in") and self._logged_in:
             try:
                 self.session.logout()
-            except Exception:  # nosec B110
+            except Exception:  # nosec B110 — best-effort cleanup in __del__; no recovery possible
                 pass
             self._logged_in = False
 
         if hasattr(self, "session"):
             try:
                 self.session.closeSession()
-            except Exception:  # nosec B110
+            except Exception:  # nosec B110 — best-effort cleanup in __del__; no recovery possible
                 pass
 
     def __enter__(self) -> "HSMKeyStorage":
@@ -1286,7 +1286,7 @@ if __name__ == "__main__":
     import tempfile
 
     demo_storage_path = Path(tempfile.gettempdir()) / "ama_keys_demo"
-    storage = SecureKeyStorage(demo_storage_path, master_password="test_password_123")  # nosec B106
+    storage = SecureKeyStorage(demo_storage_path, master_password="test_password_123")  # nosec B106 — demo-only hardcoded password, not used in production
 
     # Store a key
     test_key = secrets.token_bytes(32)

@@ -887,7 +887,7 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
         # hash is only used for the TSA request, not for the package integrity.
         cmd_query = ["openssl", "ts", "-query", "-data", "-", "-sha256", "-no_nonce"]
 
-        proc = subprocess.run(cmd_query, input=data, capture_output=True, timeout=10)  # nosec B603
+        proc = subprocess.run(cmd_query, input=data, capture_output=True, timeout=10)  # nosec B603 — args are fixed literals, no user input
 
         if proc.returncode != 0:
             _logger.warning("OpenSSL ts-query failed: %s", proc.stderr.decode())
@@ -902,7 +902,7 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
             tsa_url, data=tsq, headers={"Content-Type": "application/timestamp-query"}
         )
 
-        with urllib.request.urlopen(req, timeout=10) as response:  # nosec B310
+        with urllib.request.urlopen(req, timeout=10) as response:  # nosec B310 — URL scheme validated above (http/https only)
             tsr = response.read()
 
         return cast(bytes, tsr)
@@ -993,7 +993,7 @@ def verify_rfc3161_timestamp(
             # This verifies the signature structure but not the certificate chain
             cmd_verify.append("-no_check_time")
 
-        proc = subprocess.run(cmd_verify, capture_output=True, timeout=10)  # nosec B603
+        proc = subprocess.run(cmd_verify, capture_output=True, timeout=10)  # nosec B603 — args are fixed OpenSSL commands, paths validated by caller
 
         # OpenSSL returns 0 on successful verification
         if proc.returncode == 0:
