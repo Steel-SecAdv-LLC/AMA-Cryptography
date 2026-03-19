@@ -562,6 +562,12 @@ KYBER_BACKEND: Optional[str] = _KYBER_BACKEND
 SPHINCS_AVAILABLE: bool = _SPHINCS_AVAILABLE
 SPHINCS_BACKEND: Optional[str] = _SPHINCS_BACKEND
 
+# HMAC-SHA3-256 availability — determined at import time.
+# Cython binding is probed later (after function definitions), so we
+# expose ctypes availability now and patch after the Cython probe.
+HMAC_SHA3_256_AVAILABLE: bool = _HMAC_SHA3_256_NATIVE_AVAILABLE
+HMAC_SHA3_256_BACKEND: Optional[str] = "native" if _HMAC_SHA3_256_NATIVE_AVAILABLE else None
+
 # =============================================================================
 # SECURITY WARNINGS AND CONSTANT-TIME ENFORCEMENT
 # =============================================================================
@@ -705,6 +711,11 @@ def get_pqc_backend_info() -> dict:
                     else None
                 ),
             },
+        },
+        "HMAC-SHA3-256": {
+            "available": HMAC_SHA3_256_AVAILABLE,
+            "backend": HMAC_SHA3_256_BACKEND,
+            "description": "RFC 2104 HMAC with SHA3-256 (136-byte block)",
         },
         # Legacy field for backward compatibility
         "backend": DILITHIUM_BACKEND,
@@ -1598,6 +1609,26 @@ def _probe_cython_hmac() -> "Optional[Callable[[bytes, bytes], bytes]]":
 
 
 _cy_hmac_fn = _probe_cython_hmac()
+
+# Patch public availability constants now that Cython probe is complete.
+if _cy_hmac_fn is not None:
+    HMAC_SHA3_256_AVAILABLE = True
+    HMAC_SHA3_256_BACKEND = "cython"
+elif _HMAC_SHA3_256_NATIVE_AVAILABLE:
+    HMAC_SHA3_256_AVAILABLE = True
+    HMAC_SHA3_256_BACKEND = "native"
+else:
+    HMAC_SHA3_256_AVAILABLE = False
+    HMAC_SHA3_256_BACKEND = None
+    import warnings
+
+    warnings.warn(
+        "HMAC-SHA3-256 native backend not available. "
+        "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
+        "&& cmake --build build  — or install the Cython extension.",
+        UserWarning,
+        stacklevel=1,
+    )
 
 
 def hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
