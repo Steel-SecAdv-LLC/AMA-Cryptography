@@ -1286,7 +1286,9 @@ if __name__ == "__main__":
     import tempfile
 
     demo_storage_path = Path(tempfile.gettempdir()) / "ama_keys_demo"
-    storage = SecureKeyStorage(demo_storage_path, master_password="test_password_123")  # nosec B106 — demo-only hardcoded password, not used in production
+    storage = SecureKeyStorage(
+        demo_storage_path, master_password="test_password_123"
+    )  # nosec B106 — demo-only hardcoded password, not used in production
 
     # Store a key
     test_key = secrets.token_bytes(32)
