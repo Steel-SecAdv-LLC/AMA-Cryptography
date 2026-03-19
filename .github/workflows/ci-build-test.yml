@@ -233,7 +233,12 @@ jobs:
           pip install "cryptography>=46.0.5"
 
       - name: Audit dependencies
-        run: pip-audit
+        run: |
+          # nltk 3.9.3 (transitive via safety) — MODERATE, dev-only, unreachable
+          pip-audit \
+            --ignore-vuln GHSA-rf74-v2fm-23pw \
+            --ignore-vuln CVE-2026-33230 \
+            --ignore-vuln CVE-2026-33231
 
       - name: Security scan (bandit)
         run: bandit -r ama_cryptography/ -l

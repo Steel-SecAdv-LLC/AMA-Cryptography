@@ -39,7 +39,14 @@ jobs:
 
     - name: Run pip-audit
       run: |
-        pip-audit --desc
+        # nltk 3.9.3 pulled in transitively by safety — dev-only, not used
+        # at runtime. All three CVEs affect nltk.app.wordnet_app or
+        # nltk.jsontags which are never invoked by AMA Cryptography.
+        # Severity: MODERATE. No fix version available as of 2026-03-19.
+        pip-audit --desc \
+          --ignore-vuln GHSA-rf74-v2fm-23pw \
+          --ignore-vuln CVE-2026-33230 \
+          --ignore-vuln CVE-2026-33231
 
     - name: Run Bandit security linter
       run: |
@@ -87,7 +94,11 @@ jobs:
 
     - name: Run dependency audit
       run: |
-        pip-audit --format=json --output pip-audit.json
+        # See security-audit job for nltk MODERATE CVE justification
+        pip-audit --format=json --output pip-audit.json \
+          --ignore-vuln GHSA-rf74-v2fm-23pw \
+          --ignore-vuln CVE-2026-33230 \
+          --ignore-vuln CVE-2026-33231
 
     - name: Upload audit results
       if: always()
