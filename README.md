@@ -367,11 +367,13 @@ Complete security package with all defense layers:
 | Operation | Throughput | Latency |
 |-----------|-----------|---------|
 | SHA3-256 | 907,822 ops/sec | 0.001ms |
-| HMAC-SHA3-256 (native C) | 30,878 ops/sec | 0.032ms |
+| HMAC-SHA3-256 (native C)* | 262,200 ops/sec | 0.004ms |
 | Ed25519 KeyGen | 3,407 ops/sec | 0.29ms |
 | Ed25519 Sign | 3,361 ops/sec | 0.30ms |
 | Ed25519 Verify | 1,851 ops/sec | 0.54ms |
 | HKDF-SHA3-256 | 4,689 ops/sec | 0.21ms |
+
+*HMAC-SHA3-256 via native C (Cython binding). Fallback ctypes path available (~182K ops/sec) when Cython extension is not built. stdlib hmac is not used — INVARIANT-1.
 
 **Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [BENCHMARKS.md](BENCHMARKS.md) for full performance data.
 
