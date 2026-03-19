@@ -42,7 +42,7 @@ import platform
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from ama_cryptography.exceptions import (
     PQCUnavailableError,
@@ -1573,6 +1573,35 @@ def native_hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
         raise RuntimeError(f"HMAC-SHA3-256 failed (rc={rc})")
 
     return bytes(out_buf)
+
+
+_cy_hmac_fn: "Optional[Callable[[bytes, bytes], bytes]]" = None
+_cy_hmac_checked = False
+
+
+def hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
+    """
+    HMAC-SHA3-256 via AMA native C implementation.
+
+    Primary path: Cython binding (zero marshaling overhead).
+    Fallback: ctypes binding (available if Cython extension not built).
+
+    INVARIANT-1 compliant — zero external crypto dependencies.
+    RFC 2104 compliant — 136-byte block size for SHA3-256.
+    """
+    global _cy_hmac_fn, _cy_hmac_checked
+    if not _cy_hmac_checked:
+        try:
+            from ama_cryptography.hmac_binding import cy_hmac_sha3_256
+
+            _cy_hmac_fn = cy_hmac_sha3_256
+        except ImportError:
+            _cy_hmac_fn = None
+        _cy_hmac_checked = True
+
+    if _cy_hmac_fn is not None:
+        return _cy_hmac_fn(key, msg)
+    return native_hmac_sha3_256(key, msg)
 
 
 # ============================================================================
