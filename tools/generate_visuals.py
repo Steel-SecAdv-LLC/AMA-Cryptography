@@ -690,8 +690,8 @@ def create_test_coverage():
         "Memory Security\n& Fuzzing",
         "Performance\n& Monitoring",
     ]
-    # Approximate distribution based on test file analysis
-    test_counts = [198, 170, 135, 150, 145]  # Total = 798
+    # Approximate distribution based on test file analysis (866 tests collected)
+    test_counts = [225, 186, 148, 166, 141]  # Total = 866
     total_tests = sum(test_counts)
     percentages = [100 * c / total_tests for c in test_counts]
     colors = ["#22C55E", "#3B82F6", "#8B5CF6", "#F59E0B", "#EF4444"]
@@ -701,7 +701,7 @@ def create_test_coverage():
 
     ax1.set_xlabel("Number of Tests", fontsize=11)
     ax1.set_title("Test Distribution by Category", fontsize=12, fontweight="bold")
-    ax1.set_xlim(0, 240)
+    ax1.set_xlim(0, 270)
 
     # Add count and percentage labels
     for bar, val, pct in zip(bars, test_counts, percentages):
@@ -755,7 +755,7 @@ def create_test_coverage():
 
     # Overall title
     fig.suptitle(
-        "Test Suite Coverage: 798 Tests Across 32 Files (~11,000 Lines)",
+        f"Test Suite Coverage: {total_tests} Tests Across 32 Files (~11,000 Lines)",
         fontsize=14,
         fontweight="bold",
         y=1.02,
