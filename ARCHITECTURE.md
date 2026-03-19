@@ -603,6 +603,23 @@ The security analysis assumes:
 - Bounded buffer sizes for all operations
 - Automatic cleanup via context managers
 
+### HMAC-SHA3-256 Binding Architecture
+
+`ama_hmac_sha3_256()` is exposed to Python through two binding layers:
+
+**Primary path: Cython (`cy_hmac_sha3_256`)**
+Compiles to C and calls `ama_hmac_sha3_256()` directly. Zero Python marshaling
+overhead. Throughput: ~262K ops/sec.
+
+**Fallback path: ctypes (`native_hmac_sha3_256`)**
+Available when the Cython extension is not built. Incurs per-call Python
+marshaling overhead. Throughput: ~182K ops/sec. Functionally correct; not for
+high-frequency use.
+
+The Cython path is selected automatically when the extension is built (standard
+install). The ctypes fallback is available for environments where Cython cannot
+be compiled.
+
 ---
 
 ## Deployment Architecture
