@@ -179,7 +179,22 @@ All fields classified as attestation/build metadata:
 
 **No key material present.** Safe to commit.
 
-### 2.7 Ed25519 performance — post-fix results (v2.3)
+### 2.7 Native HMAC-SHA3-256 promoted to public API (v2.3)
+
+The internal `hmac_sha3_256()` function in `src/c/ama_hkdf.c` (used by HKDF
+Extract/Expand since v2.0) was promoted to a public `AMA_API` function:
+`ama_hmac_sha3_256()`. This replaces the pure-Python RFC 2104 stopgap that
+was introduced to fix the INVARIANT-1 violation (stdlib `import hmac`).
+
+The C implementation uses SHA3-256 with a 136-byte block size (Keccak-f[1600]
+rate for SHA3-256, r=1088 bits = 136 bytes). Key material is scrubbed via
+`ama_secure_memzero()` on all code paths including OOM. Returns
+`AMA_ERROR_MEMORY` on allocation failure (fail-closed).
+
+Cross-check: output of `ama_hmac_sha3_256()` matches Python
+`hmac.new(key, msg, hashlib.sha3_256).digest()` for all tested vectors.
+
+### 2.8 Ed25519 performance — post-fix results (v2.3)
 
 **Performance fix applied:** `generate_ed25519_keypair()` now stores the 64-byte
 expanded key (seed||pk) instead of discarding it. `ed25519_sign()` detects
@@ -202,7 +217,7 @@ standing rules, thresholds are not modified.
 
 ---
 
-## Section 2.8: Performance Summary
+## Section 2.9: Performance Summary
 
 ![Performance Dashboard](assets/performance_dashboard.png)
 
