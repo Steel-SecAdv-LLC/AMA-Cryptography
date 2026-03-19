@@ -52,7 +52,6 @@ librt==0.8.1
 markdown-it-py==4.0.0
 marshmallow==4.2.2
 mdurl==0.1.2
-nltk==3.9.3
 pathspec==1.0.4
 platformdirs==4.9.4
 pluggy==1.6.0
