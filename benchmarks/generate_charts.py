@@ -16,22 +16,21 @@ Licensed under the Apache License, Version 2.0
 import argparse
 import os
 
-# Benchmark data (measured values from CI and dedicated test systems)
+# Benchmark data (measured 2026-03-19, Linux 6.18.5, native C backend)
 CRYPTO_OPS = {
-    "SHA3-256 (C)": {"ops_sec": 1_264_198, "category": "hash"},
-    "SHA3-256 (Python)": {"ops_sec": 280_000, "category": "hash"},
-    "HMAC-SHA3-256": {"ops_sec": 160_000, "category": "mac"},
-    "HKDF-SHA3-256 (C)": {"ops_sec": 165_419, "category": "kdf"},
-    "HKDF-SHA3-256 (Python)": {"ops_sec": 19_000, "category": "kdf"},
+    "SHA3-256 (C)": {"ops_sec": 591_593, "category": "hash"},
+    "HMAC-SHA3-256": {"ops_sec": 64_402, "category": "mac"},
+    "HKDF-SHA3-256 (C)": {"ops_sec": 12_839, "category": "kdf"},
+    "HKDF-SHA3-256 (ethical)": {"ops_sec": 11_514, "category": "kdf"},
 }
 
 SIGNATURE_OPS = {
-    "Ed25519 Sign": {"ops_sec": 20_000, "latency_ms": 0.05},
-    "Ed25519 Verify": {"ops_sec": 8_000, "latency_ms": 0.12},
-    "ML-DSA-65 Sign": {"ops_sec": 2_115, "latency_ms": 0.473},
-    "ML-DSA-65 Verify": {"ops_sec": 6_398, "latency_ms": 0.156},
-    "SLH-DSA Sign": {"ops_sec": 22, "latency_ms": 45.757},
-    "SLH-DSA Verify": {"ops_sec": 818, "latency_ms": 1.222},
+    "Ed25519 Sign": {"ops_sec": 2_652, "latency_ms": 0.377},
+    "Ed25519 Verify": {"ops_sec": 1_472, "latency_ms": 0.680},
+    "ML-DSA-65 Sign": {"ops_sec": 429, "latency_ms": 2.333},
+    "ML-DSA-65 Verify": {"ops_sec": 536, "latency_ms": 1.864},
+    "SLH-DSA Sign": {"ops_sec": 1, "latency_ms": 741.0},
+    "SLH-DSA Verify": {"ops_sec": 53, "latency_ms": 19.0},
 }
 
 KEM_OPS = {
@@ -41,24 +40,24 @@ KEM_OPS = {
 }
 
 C_VS_PYTHON = {
-    "SHA3-256 (short)": {"c": 1_264_198, "python": 292_790, "speedup": 4.3},
-    "HKDF (32B)": {"c": 165_419, "python": 21_443, "speedup": 7.7},
-    "Ed25519 Sign": {"c": 9_182, "python": 10_453, "speedup": 0.88},
+    "SHA3-256 (short)": {"c": 591_593, "python": 75_505, "speedup": 7.8},
+    "HKDF (32B)": {"c": 12_839, "python": 3_850, "speedup": 3.3},
+    "Ed25519 Sign": {"c": 2_652, "python": 2_652, "speedup": 1.0},
 }
 
 SCALING = {
-    7: {"ms": 0.30, "ops_sec": 3_300},
-    70: {"ms": 0.43, "ops_sec": 2_300},
-    700: {"ms": 1.90, "ops_sec": 526},
-    7000: {"ms": 180, "ops_sec": 5.5},
+    7: {"ms": 3.41, "ops_sec": 293},
+    70: {"ms": 6.82, "ops_sec": 147},
+    700: {"ms": 4.70, "ops_sec": 213},
+    7000: {"ms": 187.29, "ops_sec": 5.34},
 }
 
 SIX_LAYER_BREAKDOWN = [
-    ("SHA3-256 Hash", 0.001),
-    ("HMAC-SHA3-256", 0.006),
-    ("Ed25519 Sign", 0.100),
-    ("ML-DSA-65 Sign", 0.473),
-    ("HKDF Derivation", 0.006),
+    ("SHA3-256 Hash", 0.002),
+    ("HMAC-SHA3-256", 0.016),
+    ("Ed25519 Sign", 0.377),
+    ("ML-DSA-65 Sign", 2.333),
+    ("HKDF Derivation", 0.260),
     ("RFC 3161 Timestamp", 0.0),  # optional
 ]
 

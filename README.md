@@ -343,25 +343,13 @@ Future-proof cryptography:
 
 *Comprehensive benchmark report with latency distribution, sign vs verify analysis, category performance, top/bottom operations, ethical overhead, regression improvement, NIST FIPS compliance, and summary statistics.*
 
-### Hybrid Operations (Ed25519 + ML-DSA-65)
-
-| Operation | AMA Cryptography | Optimized | Reference (OpenSSL) |
-|-----------|--------------|-----------|---------------------|
-| **Hybrid Sign** | 4,575 ops/sec | ~6,500 ops/sec* | 6,209 ops/sec |
-| **Hybrid Verify** | 6,192 ops/sec | ~6,700 ops/sec* | 6,721 ops/sec |
-
-**Performance Optimization:** AMA Cryptography now supports passing Ed25519 key objects for 2x faster signing. The `HybridSignatureProvider` class automatically uses this optimization.
-
-\*Optimized performance uses cached Ed25519 key objects, eliminating reconstruction overhead.
-
 ### ML-DSA-65 (Post-Quantum) Operations
 
 | Operation | AMA Cryptography (Native) | Performance |
 |-----------|----------------------|-------------|
-| **Sign** | 9,150 ops/sec (0.109ms) | Full native C implementation |
-| **Verify** | 27,306 ops/sec (0.037ms) | NIST KAT validated |
-
-**Key Finding:** Native ML-DSA-65 implementation achieves high-performance signing and verification with zero external dependencies.
+| **KeyGen** | 511 ops/sec (1.96ms) | Full native C implementation |
+| **Sign** | 429 ops/sec (2.33ms) | Full native C implementation |
+| **Verify** | 536 ops/sec (1.86ms) | NIST KAT validated |
 
 ### Full 6-Layer Package Performance
 
@@ -369,23 +357,25 @@ Complete security package with all defense layers:
 
 | Operation | Mean Time | Throughput |
 |-----------|-----------|------------|
-| Package Create (6 layers) | 0.278ms | 3,595 ops/sec |
-| Package Verify (6 layers) | 0.199ms | 5,029 ops/sec |
+| Package Create (6 layers) | 3.38ms | 296 ops/sec |
+| Package Verify (6 layers) | 2.62ms | 381 ops/sec |
 
 **6 Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65, HKDF, RFC 3161 (optional)
 
 ### Core Cryptographic Primitives
 
-| Operation | Standard (bytes) | Optimized (key objects) |
-|-----------|------------------|------------------------|
-| SHA3-256 | 292,790 ops/sec | - |
-| HMAC-SHA3-256 | 159,463 ops/sec | - |
-| Ed25519 Sign | 10,453 ops/sec | **20,921 ops/sec** (2x faster) |
-| Ed25519 Verify | 8,068 ops/sec | 8,496 ops/sec |
+| Operation | Throughput | Latency |
+|-----------|-----------|---------|
+| SHA3-256 | 591,593 ops/sec | 0.002ms |
+| HMAC-SHA3-256 | 64,402 ops/sec | 0.016ms |
+| Ed25519 KeyGen | 2,707 ops/sec | 0.37ms |
+| Ed25519 Sign | 2,652 ops/sec | 0.38ms |
+| Ed25519 Verify | 1,472 ops/sec | 0.68ms |
+| HKDF-SHA3-256 | 3,850 ops/sec | 0.26ms |
 
-**Performance Tip:** For high-throughput scenarios, pass `Ed25519PrivateKey` objects instead of bytes to achieve 2x faster signing. See [BENCHMARKS.md](BENCHMARKS.md) for full performance data.
+**Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [BENCHMARKS.md](BENCHMARKS.md) for full performance data.
 
-*Benchmarks: Linux x86_64, Python 3.11, 16 CPU cores, 13GB RAM, 1,000 iterations per operation.*
+*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, native C backend, 1,000 iterations per operation.*
 
 </details>
 
@@ -408,12 +398,12 @@ Complete security package with all defense layers:
 
 | Omni-Code Size | Mean Time | Throughput |
 |---------------|-----------|------------|
-| 1 code | 0.31ms | 3,230 ops/sec |
-| 10 codes | 0.50ms | 1,993 ops/sec |
-| 100 codes | 2.79ms | 359 ops/sec |
-| 1000 codes | 171.32ms | 5.84 ops/sec |
+| 1 code | 3.41ms | 293 ops/sec |
+| 10 codes | 6.82ms | 147 ops/sec |
+| 100 codes | 4.70ms | 213 ops/sec |
+| 1000 codes | 187.29ms | 5.34 ops/sec |
 
-*Benchmarks: Linux x86_64, Python 3.12, 8 CPU cores, 31GB RAM, 50 iterations per size.*
+*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 50 iterations per size.*
 
 </details>
 
@@ -422,12 +412,12 @@ Complete security package with all defense layers:
 
 | Operation | Standard | With Ethics | Overhead |
 |-----------|----------|-------------|----------|
-| HKDF Derivation | 0.006ms | 0.018ms | 213.79% |
-| Context Creation | - | 0.011ms | - |
+| HKDF Derivation | 0.078ms | 0.087ms | 11.42% |
+| Context Creation | - | 0.005ms | - |
 
 The ethical integration adds cryptographic binding to the 4 Omni-Code Ethical Pillars with minimal impact on overall system performance.
 
-*Benchmarks: Linux x86_64, Python 3.12, 8 CPU cores, 31GB RAM, 1,000 iterations.*
+*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 1,000 iterations.*
 
 ![Monitoring Overhead](assets/monitoring_overhead.png)
 

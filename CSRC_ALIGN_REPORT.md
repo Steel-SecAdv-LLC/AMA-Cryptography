@@ -202,6 +202,14 @@ standing rules, thresholds are not modified.
 
 ---
 
+## Section 2.8: Performance Summary
+
+![Performance Dashboard](assets/performance_dashboard.png)
+
+*Benchmark results from the post-fix unified codebase. All measurements use the native C backend with zero external dependencies.*
+
+---
+
 ## Section 3: Conclusion
 
 ### 3.1 Per-Standard Verdict Table
