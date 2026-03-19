@@ -586,7 +586,7 @@ class Ed25519KeyPair:
     Security Level: 128 bits (equivalent to RSA-3072, AES-128)
 
     Key Sizes:
-        - Private key: 32 bytes (256 bits)
+        - Private key: 64 bytes (seed || public_key, expanded for signing performance)
         - Public key: 32 bytes (256 bits, compressed point)
         - Signature: 64 bytes (R || s format)
 
@@ -636,7 +636,7 @@ class Ed25519KeyPair:
                Journal of Cryptographic Engineering, 2(2), 77-89.
     """
 
-    private_key: bytes = field(repr=False)  # 32 bytes - excluded from repr to prevent exposure
+    private_key: bytes = field(repr=False)  # 64 bytes (seed||pk) — excluded from repr to prevent exposure
     public_key: bytes  # 32 bytes
 
 
@@ -685,12 +685,12 @@ def generate_ed25519_keypair(seed: Optional[bytes] = None) -> Ed25519KeyPair:
         if len(seed) != 32:
             raise ValueError("Seed must be exactly 32 bytes")
         public_bytes, sk_bytes = native_ed25519_keypair_from_seed(seed)
-        # Return the 32-byte seed as private key (consistent with original API)
-        return Ed25519KeyPair(private_key=seed, public_key=public_bytes)
+        # Store 64-byte expanded key (seed||pk) to avoid re-expansion on every sign
+        return Ed25519KeyPair(private_key=sk_bytes, public_key=public_bytes)
     else:
         public_bytes, sk_bytes = native_ed25519_keypair()
-        # sk_bytes is seed||pk (64 bytes), return just the 32-byte seed
-        return Ed25519KeyPair(private_key=sk_bytes[:32], public_key=public_bytes)
+        # sk_bytes is seed||pk (64 bytes) — store full expanded key
+        return Ed25519KeyPair(private_key=sk_bytes, public_key=public_bytes)
 
 
 def ed25519_sign(message: bytes, private_key: bytes) -> bytes:
@@ -724,26 +724,30 @@ def ed25519_sign(message: bytes, private_key: bytes) -> bytes:
 
     Args:
         message: Data to sign (arbitrary length)
-        private_key: 32-byte Ed25519 private key seed
+        private_key: 32-byte seed or 64-byte expanded key (seed||pk)
 
     Returns:
         64-byte signature (R || s format)
 
     Raises:
         RuntimeError: If native C library not available
-        ValueError: If private_key is not 32 bytes
+        ValueError: If private_key is not 32 or 64 bytes
     """
     if not CRYPTO_AVAILABLE:
         raise RuntimeError(
             "AMA native C library required for Ed25519 signing. "
             "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
         )
-    if len(private_key) != 32:
-        raise ValueError("Ed25519 private key must be 32 bytes")
 
-    # Convert 32-byte seed to 64-byte native key format (seed || pk)
-    _, sk_bytes = native_ed25519_keypair_from_seed(private_key)
-    return native_ed25519_sign(message, sk_bytes)
+    if len(private_key) == 64:
+        # Fast path: already have expanded key (seed||pk), skip re-expansion
+        return native_ed25519_sign(message, private_key)
+    elif len(private_key) == 32:
+        # Legacy path: 32-byte seed needs expansion (SHA-512 + point multiply)
+        _, sk_bytes = native_ed25519_keypair_from_seed(private_key)
+        return native_ed25519_sign(message, sk_bytes)
+    else:
+        raise ValueError("Ed25519 private key must be 32 bytes (seed) or 64 bytes (expanded)")
 
 
 def ed25519_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
