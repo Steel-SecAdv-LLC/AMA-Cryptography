@@ -318,8 +318,11 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
         baseline_value = config["baseline_value"]
         tolerance = config.get("tolerance_percent", threshold)
 
-        # Calculate regression (negative means faster, positive means slower)
-        regression = ((baseline_value - ops_per_sec) / baseline_value) * 100
+        # Calculate percent change from baseline.
+        # Positive = faster than baseline, negative = slower than baseline.
+        pct_change = ((ops_per_sec - baseline_value) / baseline_value) * 100
+        # Only fail on regressions (slower).  Improvements always pass.
+        regression = -pct_change  # positive = slower
         passed = regression <= tolerance
 
         results.append(
@@ -357,7 +360,8 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
         baseline_value = config["baseline_value"]
         tolerance = config.get("tolerance_percent", threshold)
 
-        regression = ((baseline_value - ops_per_sec) / baseline_value) * 100
+        pct_change = ((ops_per_sec - baseline_value) / baseline_value) * 100
+        regression = -pct_change
         passed = regression <= tolerance
 
         results.append(
