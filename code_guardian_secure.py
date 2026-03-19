@@ -2021,8 +2021,6 @@ def verify_crypto_package(
     except Exception as e:
         # Log unexpected errors but don't fail silently - mark affected checks as False
         # This maintains fail-closed security while providing diagnostic information
-        import logging
-
         logging.getLogger(__name__).warning(
             f"Unexpected error during crypto package verification: {e}"
         )

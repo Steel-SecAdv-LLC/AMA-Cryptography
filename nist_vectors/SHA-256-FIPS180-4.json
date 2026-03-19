@@ -1,0 +1,31 @@
+{
+  "source": "FIPS 180-4 Section B.1",
+  "url": "https://csrc.nist.gov/pubs/fips/180-4/upd1/final",
+  "algorithm": "SHA-256",
+  "testGroups": [
+    {
+      "tgId": 1,
+      "testType": "AFT",
+      "tests": [
+        {
+          "tcId": 1,
+          "msg": "616263",
+          "md": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+          "note": "Input: \"abc\""
+        },
+        {
+          "tcId": 2,
+          "msg": "6162636462636465636465666465666765666768666768696768696a68696a6b696a6b6c6a6b6c6d6b6c6d6e6c6d6e6f6d6e6f706e6f7071",
+          "md": "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+          "note": "Input: 448-bit message"
+        },
+        {
+          "tcId": 3,
+          "msg": "",
+          "md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "note": "Input: empty string"
+        }
+      ]
+    }
+  ]
+}
