@@ -382,7 +382,18 @@ def _setup_hkdf_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_hkdf.restype = ctypes.c_int
 
-        # HMAC-SHA3-256 (RFC 2104 with native SHA3-256)
+        return True
+    except AttributeError:
+        return False
+
+
+# HMAC-SHA3-256 native availability (independent of HKDF)
+_HMAC_SHA3_256_NATIVE_AVAILABLE = False
+
+
+def _setup_hmac_sha3_256_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for HMAC-SHA3-256. Independent from HKDF setup."""
+    try:
         lib.ama_hmac_sha3_256.argtypes = [
             ctypes.c_char_p,  # key
             ctypes.c_size_t,  # key_len
@@ -535,6 +546,7 @@ if _native_lib is not None:
     _ED25519_NATIVE_AVAILABLE = _setup_ed25519_ctypes(_native_lib)
     _AES_GCM_NATIVE_AVAILABLE = _setup_aes_gcm_ctypes(_native_lib)
     _HKDF_NATIVE_AVAILABLE = _setup_hkdf_ctypes(_native_lib)
+    _HMAC_SHA3_256_NATIVE_AVAILABLE = _setup_hmac_sha3_256_ctypes(_native_lib)
     _SECP256K1_NATIVE_AVAILABLE = _setup_secp256k1_ctypes(_native_lib)
     _X25519_NATIVE_AVAILABLE = _setup_x25519_ctypes(_native_lib)
     _ARGON2_NATIVE_AVAILABLE = _setup_argon2_ctypes(_native_lib)
@@ -1557,7 +1569,7 @@ def native_hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
     Raises:
         RuntimeError: If native library is not available
     """
-    if _native_lib is None or not _HKDF_NATIVE_AVAILABLE:
+    if _native_lib is None or not _HMAC_SHA3_256_NATIVE_AVAILABLE:
         raise RuntimeError("HMAC-SHA3-256 native backend not available. " + _INSTALL_HINT)
 
     out_buf = ctypes.create_string_buffer(32)
@@ -1575,8 +1587,17 @@ def native_hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
     return bytes(out_buf)
 
 
-_cy_hmac_fn: "Optional[Callable[[bytes, bytes], bytes]]" = None
-_cy_hmac_checked = False
+def _probe_cython_hmac() -> "Optional[Callable[[bytes, bytes], bytes]]":
+    """Detect Cython HMAC-SHA3-256 binding at module load time."""
+    try:
+        from ama_cryptography.hmac_binding import cy_hmac_sha3_256
+
+        return cy_hmac_sha3_256  # type: ignore[no-any-return]
+    except ImportError:
+        return None
+
+
+_cy_hmac_fn = _probe_cython_hmac()
 
 
 def hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
@@ -1589,16 +1610,6 @@ def hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
     INVARIANT-1 compliant — zero external crypto dependencies.
     RFC 2104 compliant — 136-byte block size for SHA3-256.
     """
-    global _cy_hmac_fn, _cy_hmac_checked
-    if not _cy_hmac_checked:
-        try:
-            from ama_cryptography.hmac_binding import cy_hmac_sha3_256
-
-            _cy_hmac_fn = cy_hmac_sha3_256
-        except ImportError:
-            _cy_hmac_fn = None
-        _cy_hmac_checked = True
-
     if _cy_hmac_fn is not None:
         return _cy_hmac_fn(key, msg)
     return native_hmac_sha3_256(key, msg)
