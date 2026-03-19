@@ -139,4 +139,13 @@ Results are saved to `benchmark_results.json`, `BENCHMARKS.md`, and `benchmarks/
 
 *\* HMAC-SHA3-256 uses Cython binding (zero marshaling overhead) calling native C `ama_hmac_sha3_256`. Fallback: ctypes (~30,878 ops/sec).*
 
+> **Note on HMAC throughput numbers:** The README reports ~262,200 ops/sec while
+> this wiki shows ~30,878 ops/sec for the ctypes fallback. Both numbers are
+> correct under different conditions. The 262,200 figure is a Cython
+> microbenchmark (direct C call, zero marshaling overhead, 32-byte message). The
+> 30,878 figure measures the ctypes fallback path with full Python-to-C
+> marshaling overhead on a 1KB message. CI benchmark baselines use the ctypes
+> path (~12,000 ops/sec on GitHub Actions runners) since Cython extensions are
+> not compiled in CI.
+
 *See [Cryptography Algorithms](Cryptography-Algorithms) for algorithm key sizes, or [Architecture](Architecture) for the multi-language performance architecture.*
