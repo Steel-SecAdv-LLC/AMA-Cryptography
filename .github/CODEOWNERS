@@ -11,7 +11,7 @@
 * @Steel-SecAdv-LLC
 
 # Core cryptographic implementation - requires security review
-/dna_guardian_secure.py @Steel-SecAdv-LLC
+/code_guardian_secure.py @Steel-SecAdv-LLC
 /ama_cryptography/ @Steel-SecAdv-LLC
 /src/ @Steel-SecAdv-LLC
 /include/ @Steel-SecAdv-LLC
@@ -26,7 +26,6 @@
 /.github/CODEOWNERS @Steel-SecAdv-LLC
 /.github/INVARIANTS.md @Steel-SecAdv-LLC
 /SECURITY.md @Steel-SecAdv-LLC
-/SECURITY_ANALYSIS.md @Steel-SecAdv-LLC
 
 # Cryptographic documentation
 /CRYPTOGRAPHY.md @Steel-SecAdv-LLC
@@ -48,5 +47,3 @@
 /benchmarks/ @Steel-SecAdv-LLC
 /benchmark_suite.py @Steel-SecAdv-LLC
 
-# Public keys directory - critical security asset
-/public_keys/ @Steel-SecAdv-LLC
