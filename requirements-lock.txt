@@ -20,7 +20,6 @@ coverage==7.13.4
 
 # --- Linting & formatting ---
 black==26.3.1
-isort==8.0.1
 mypy==1.19.1
 mypy_extensions==1.1.0
 ruff==0.15.6
