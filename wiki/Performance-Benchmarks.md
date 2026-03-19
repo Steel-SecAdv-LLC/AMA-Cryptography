@@ -11,19 +11,19 @@ Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the
 
 | Operation | Mean (ms) | Ops/sec |
 |-----------|----------:|--------:|
-| SHA3-256 | 0.002 | 591,593 |
-| HMAC-SHA3-256 auth | 0.016 | 64,402 |
-| HMAC-SHA3-256 verify | 0.017 | 59,280 |
-| HKDF-SHA3-256 | 0.260 | 3,850 |
-| Ed25519 keygen | 0.369 | 2,707 |
-| Ed25519 sign | 0.377 | 2,652 |
-| Ed25519 verify | 0.680 | 1,472 |
-| ML-DSA-65 keygen | 1.959 | 511 |
-| ML-DSA-65 sign | 2.333 | 429 |
-| ML-DSA-65 verify | 1.864 | 536 |
-| KMS generation | 2.988 | 335 |
-| Package creation (6-layer) | 3.375 | 296 |
-| Package verification | 2.623 | 381 |
+| SHA3-256 | 0.001 | 907,822 |
+| HMAC-SHA3-256 auth (native C) | 0.032 | 30,878 |
+| HMAC-SHA3-256 verify | 0.034 | 29,698 |
+| HKDF-SHA3-256 | 0.213 | 4,689 |
+| Ed25519 keygen | 0.294 | 3,407 |
+| Ed25519 sign | 0.298 | 3,361 |
+| Ed25519 verify | 0.540 | 1,851 |
+| ML-DSA-65 keygen | 1.554 | 644 |
+| ML-DSA-65 sign | 4.204 | 238 |
+| ML-DSA-65 verify | 1.602 | 624 |
+| KMS generation | 2.122 | 471 |
+| Package creation (6-layer) | 2.165 | 462 |
+| Package verification | 2.043 | 489 |
 
 ---
 
