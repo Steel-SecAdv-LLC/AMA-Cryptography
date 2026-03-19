@@ -347,9 +347,9 @@ Future-proof cryptography:
 
 | Operation | AMA Cryptography (Native) | Performance |
 |-----------|----------------------|-------------|
-| **KeyGen** | 511 ops/sec (1.96ms) | Full native C implementation |
-| **Sign** | 429 ops/sec (2.33ms) | Full native C implementation |
-| **Verify** | 536 ops/sec (1.86ms) | NIST KAT validated |
+| **KeyGen** | 644 ops/sec (1.55ms) | Full native C implementation |
+| **Sign** | 238 ops/sec (4.20ms) | Full native C implementation |
+| **Verify** | 624 ops/sec (1.60ms) | NIST KAT validated |
 
 ### Full 6-Layer Package Performance
 
@@ -357,8 +357,8 @@ Complete security package with all defense layers:
 
 | Operation | Mean Time | Throughput |
 |-----------|-----------|------------|
-| Package Create (6 layers) | 3.38ms | 296 ops/sec |
-| Package Verify (6 layers) | 2.62ms | 381 ops/sec |
+| Package Create (6 layers) | 2.17ms | 462 ops/sec |
+| Package Verify (6 layers) | 2.04ms | 489 ops/sec |
 
 **6 Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65, HKDF, RFC 3161 (optional)
 
@@ -366,12 +366,12 @@ Complete security package with all defense layers:
 
 | Operation | Throughput | Latency |
 |-----------|-----------|---------|
-| SHA3-256 | 591,593 ops/sec | 0.002ms |
-| HMAC-SHA3-256 | 64,402 ops/sec | 0.016ms |
-| Ed25519 KeyGen | 2,707 ops/sec | 0.37ms |
-| Ed25519 Sign | 2,652 ops/sec | 0.38ms |
-| Ed25519 Verify | 1,472 ops/sec | 0.68ms |
-| HKDF-SHA3-256 | 3,850 ops/sec | 0.26ms |
+| SHA3-256 | 907,822 ops/sec | 0.001ms |
+| HMAC-SHA3-256 (native C) | 30,878 ops/sec | 0.032ms |
+| Ed25519 KeyGen | 3,407 ops/sec | 0.29ms |
+| Ed25519 Sign | 3,361 ops/sec | 0.30ms |
+| Ed25519 Verify | 1,851 ops/sec | 0.54ms |
+| HKDF-SHA3-256 | 4,689 ops/sec | 0.21ms |
 
 **Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [BENCHMARKS.md](BENCHMARKS.md) for full performance data.
 
