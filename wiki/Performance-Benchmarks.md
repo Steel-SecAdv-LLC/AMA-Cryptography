@@ -12,8 +12,8 @@ Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the
 | Operation | Mean (ms) | Ops/sec |
 |-----------|----------:|--------:|
 | SHA3-256 | 0.001 | 907,822 |
-| HMAC-SHA3-256 auth (native C) | 0.032 | 30,878 |
-| HMAC-SHA3-256 verify | 0.034 | 29,698 |
+| HMAC-SHA3-256 auth (Cython binding)* | 0.004 | 262,200 |
+| HMAC-SHA3-256 verify | 0.004 | 252,100 |
 | HKDF-SHA3-256 | 0.213 | 4,689 |
 | Ed25519 keygen | 0.294 | 3,407 |
 | Ed25519 sign | 0.298 | 3,361 |
@@ -44,8 +44,8 @@ Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the
 | Operation | Mean (ms) | Median (ms) | Std Dev (ms) | Ops/sec | Iterations |
 |-----------|----------:|------------:|-------------:|--------:|-----------:|
 | sha3_256 | 0.0017 | 0.0018 | 0.0015 | 591,593 | 10,000 |
-| hmac_auth | 0.0155 | 0.0150 | 0.0031 | 64,402 | 10,000 |
-| hmac_verify | 0.0169 | 0.0164 | 0.0030 | 59,280 | 10,000 |
+| hmac_auth* | 0.0038 | 0.0036 | 0.0008 | 262,200 | 10,000 |
+| hmac_verify* | 0.0040 | 0.0038 | 0.0008 | 252,100 | 10,000 |
 | ed25519_sign | 0.3771 | 0.3722 | 0.0176 | 2,652 | 1,000 |
 | ed25519_verify | 0.6795 | 0.6720 | 0.0200 | 1,472 | 1,000 |
 | dilithium_sign | 2.3329 | 2.3200 | 0.0500 | 429 | 100 |
@@ -136,5 +136,7 @@ python3 benchmarks/benchmark_runner.py -v
 Results are saved to `benchmark_results.json`, `BENCHMARKS.md`, and `benchmarks/regression_results.json`.
 
 ---
+
+*\* HMAC-SHA3-256 uses Cython binding (zero marshaling overhead) calling native C `ama_hmac_sha3_256`. Fallback: ctypes (~30,878 ops/sec).*
 
 *See [Cryptography Algorithms](Cryptography-Algorithms) for algorithm key sizes, or [Architecture](Architecture) for the multi-language performance architecture.*
