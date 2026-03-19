@@ -62,7 +62,7 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 > - Secure file permissions for key files and cryptographic packages (store on encrypted volumes with restricted access)
 >
 > **Status:** Community-tested | Not externally audited
-> **Last Updated:** 2026-03-10
+> **Last Updated:** 2026-03-19
 
 ---
 
@@ -228,20 +228,30 @@ Future-proof cryptography:
 - **Full (native)**: Complete native C implementation — no external PQC dependency required.
 - **Note**: Ed25519 C implementation includes dedicated `fe25519_sq()` field arithmetic optimization and C11 atomics for thread-safe initialization (v2.0). Full RFC 8032 sign/verify roundtrip verified.
 
-**C Library Implementations (v2.0):**
+**C Library Implementations (v2.0) — 22 source files in `src/c/`:**
+- `ama_core.c`: Library initialization, version, feature detection, shared utilities
 - `ama_sha3.c`: SHA3-256, SHAKE128, SHAKE256 (Keccak-f[1600] sponge construction)
+- `ama_sha256.c`: Native SHA-256 (FIPS 180-4), used by SPHINCS+ internally
 - `ama_hkdf.c`: HKDF-SHA3-256 with HMAC-SHA3-256 (RFC 5869 compliant)
+- `ama_hmac_sha256.c`: Native HMAC-SHA-256 (RFC 2104), used by SPHINCS+ PRF_msg
 - `ama_ed25519.c`: Ed25519 keygen/sign/verify (SHA-512, field arithmetic for GF(2^255-19), C11 atomics)
 - `ama_aes_gcm.c`: AES-256-GCM authenticated encryption (NIST SP 800-38D)
 - `ama_kyber.c`: ML-KEM-1024 full native (NTT, IND-CCA2, Fujisaki-Okamoto transform)
 - `ama_dilithium.c`: ML-DSA-65 full native (NTT q=8380417, rejection sampling, constant-time)
 - `ama_sphincs.c`: SPHINCS+-SHA2-256f-simple full native (WOTS+, FORS, hypertree d=17)
 - `ama_consttime.c`: Constant-time utilities (memcmp, memzero, swap, lookup, copy)
+- `ama_platform_rand.c`: Platform CSPRNG (getrandom/getentropy/BCryptGenRandom)
 - `ama_x25519.c`: X25519 Diffie-Hellman key exchange (RFC 7748)
 - `ama_chacha20poly1305.c`: ChaCha20-Poly1305 AEAD (RFC 8439)
 - `ama_argon2.c`: Argon2id password hashing (RFC 9106)
 - `ama_secp256k1.c`: secp256k1 elliptic curve operations (HD key derivation)
 - `ama_aes_bitsliced.c`: Bitsliced AES S-box (cache-timing hardened, optional via `-DAMA_AES_CONSTTIME=ON`)
+- `internal/ama_sha2.h`: Extracted SHA-512 header-only implementation (deduplication for Ed25519/SPHINCS+)
+
+**Cython Acceleration Modules (`src/cython/`):**
+- `hmac_binding.pyx`: Direct Cython binding to `ama_hmac_sha3_256()` (~262K ops/sec)
+- `math_engine.pyx`: Optimized mathematical operations (Lyapunov, NTT, matrix-vector, helix evolution — 18-37x speedup)
+- `helix_engine_complete.pyx`: Complete helix engine with Cython optimization
 
 > **Note:** The Python API remains the recommended production interface. C implementations provide high-performance alternatives where applicable.
 
@@ -367,7 +377,7 @@ Complete security package with all defense layers:
 | Operation | Throughput | Latency |
 |-----------|-----------|---------|
 | SHA3-256 | 907,822 ops/sec | 0.001ms |
-| HMAC-SHA3-256 (native C)* | 262,200 ops/sec | 0.004ms |
+| HMAC-SHA3-256 (Cython binding)* | 262,200 ops/sec | 0.004ms |
 | Ed25519 KeyGen | 3,407 ops/sec | 0.29ms |
 | Ed25519 Sign | 3,361 ops/sec | 0.30ms |
 | Ed25519 Verify | 1,851 ops/sec | 0.54ms |
@@ -398,12 +408,12 @@ Complete security package with all defense layers:
 <details>
 <summary><strong>Scalability Analysis</strong></summary>
 
-| Omni-Code Size | Mean Time | Throughput |
-|---------------|-----------|------------|
-| 1 code | 3.41ms | 293 ops/sec |
-| 10 codes | 6.82ms | 147 ops/sec |
-| 100 codes | 4.70ms | 213 ops/sec |
-| 1000 codes | 187.29ms | 5.34 ops/sec |
+| Input Scale | Mean Time | Throughput |
+|-------------|-----------|------------|
+| 1x | 2.16ms | 464 ops/sec |
+| 10x | 2.29ms | 438 ops/sec |
+| 100x | 4.59ms | 218 ops/sec |
+| 1000x | 161.48ms | 6.19 ops/sec |
 
 *Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 50 iterations per size.*
 
@@ -414,10 +424,10 @@ Complete security package with all defense layers:
 
 | Operation | Standard | With Ethics | Overhead |
 |-----------|----------|-------------|----------|
-| HKDF Derivation | 0.078ms | 0.087ms | 11.42% |
+| HKDF Derivation | 0.063ms | 0.072ms | 14.79% |
 | Context Creation | - | 0.005ms | - |
 
-The ethical integration adds cryptographic binding to the 4 Omni-Code Ethical Pillars with minimal impact on overall system performance.
+The ethical integration adds cryptographic binding to the 4 Omni-Code Ethical Pillars. The overhead applies to HKDF derivation specifically; end-to-end package creation overhead remains under 2% of total time since HKDF is a small fraction of the pipeline (ML-DSA-65 signing dominates at ~4.2ms).
 
 *Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 1,000 iterations.*
 
@@ -628,14 +638,16 @@ python tools/sanity_check.py
 ### Test Coverage
 
 The test suite includes:
-- Unit tests for all cryptographic primitives
+- Unit tests for all cryptographic primitives (Python and C)
 - Integration tests for package creation and verification
 - Edge case testing for error handling
-- Performance regression tests
+- Performance regression tests with tiered tolerances
+- NIST ACVP vector validation (815 vectors across 12 algorithm functions — see [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md))
+- Fuzz harnesses for 12 C targets (`fuzz/`): AES-GCM, Argon2, ChaCha20-Poly1305, consttime, Dilithium, Ed25519, HKDF, Kyber, secp256k1, SHA3, SPHINCS+, X25519
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*798+ tests across 29 files covering core crypto and NIST KATs, PQC backends, key management, adaptive posture, hybrid combiner, memory security, and performance/monitoring.*
+*866+ tests across 39 files (30 Python + 9 C) covering core crypto and NIST KATs, PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring.*
 
 </details>
 
@@ -657,6 +669,17 @@ GitHub Actions automatically tests:
 - **Python Versions**: 3.9, 3.10, 3.11, 3.12, 3.13
 - **Platforms**: Ubuntu Latest
 - **Jobs**: test, code-quality, security-checks
+
+### CI Workflows
+
+| Workflow | File | Purpose |
+|----------|------|---------|
+| CI - Testing | `ci.yml` | Python test matrix, C build, KAT validation |
+| CI - Build & Test | `ci-build-test.yml` | Full C library build and C test suite |
+| Security | `security.yml` | pip-audit, bandit, Semgrep, secret scanning |
+| Static Analysis | `static-analysis.yml` | CodeQL analysis |
+| Fuzzing | `fuzzing.yml` | C fuzz harnesses (12 targets) |
+| Wiki Sync | `wiki-sync.yml` | Auto-sync wiki/ to GitHub Wiki |
 
 </details>
 
@@ -777,9 +800,11 @@ KAT vectors are sourced from NIST PQC standardization and validate that the nati
 |----------|-------------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture and design |
 | [SECURITY.md](SECURITY.md) | Complete security analysis |
+| [THREAT_MODEL.md](THREAT_MODEL.md) | Threat model and risk assessment |
 | [BENCHMARKS.md](BENCHMARKS.md) | Performance measurements |
 | [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) | Cryptographic algorithm overview |
-| [SECURITY_COMPARISON.md](SECURITY_COMPARISON.md) | AMA Cryptography vs OpenSSL+liboqs |
+| [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md) | NIST ACVP vector validation (815/815 pass) |
+| [CSRC_STANDARDS.md](CSRC_STANDARDS.md) | Governing standards registry |
 | [CONSTANT_TIME_VERIFICATION.md](CONSTANT_TIME_VERIFICATION.md) | dudect-style timing analysis |
 
 </details>
@@ -791,6 +816,9 @@ KAT vectors are sourced from NIST PQC standardization and validate that the nati
 |----------|-------------|
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
+| [INVARIANTS.md](INVARIANTS.md) | Library-level invariants (CSRC_STANDARDS.md mapping) |
+| [.github/INVARIANTS.md](.github/INVARIANTS.md) | PR-level architectural invariants (INVARIANT-1 through INVARIANT-4) |
+| [AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md](AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md) | Ethical pillar specification |
 
 </details>
 
@@ -846,12 +874,15 @@ sudo cmake --install .
 
 **CMake Options**:
 - `AMA_USE_NATIVE_PQC` - Enable native PQC implementations (default: ON)
+- `AMA_AES_CONSTTIME` - Enable bitsliced AES S-box for cache-timing hardening (default: ON)
 - `AMA_BUILD_SHARED` - Build shared library (default: ON)
 - `AMA_BUILD_STATIC` - Build static library (default: ON)
 - `AMA_BUILD_TESTS` - Build test suite including NIST KAT tests (default: ON)
+- `AMA_BUILD_EXAMPLES` - Build C example programs (default: ON)
 - `AMA_ENABLE_AVX2` - Enable AVX2 SIMD optimizations
 - `AMA_ENABLE_SANITIZERS` - Enable AddressSanitizer/UBSan
 - `AMA_ENABLE_LTO` - Link-time optimization
+- `AMA_TESTING_MODE` - Build test-only library (internal)
 
 > **Note:** All PQC algorithms (ML-DSA-65, Kyber-1024, SPHINCS+-256f) are implemented natively in C with full NIST KAT validation. No external PQC libraries are needed.
 
@@ -1002,7 +1033,7 @@ AMA Cryptography pioneers the integration of ethical principles directly into cr
 The ethical integration achieves:
 - **Balanced weighting**: Σw = 12.0 across all pillars
 - **SHA3-256 ethical signatures** in key derivation context
-- **Zero performance impact**: <4% overhead, >1,000 ops/sec maintained
+- **Low performance impact**: ~15% overhead on HKDF derivation, <2% on end-to-end package operations
 - **Survivor-first principles** with bias audits and dynamic compliance
 
 ![Ethical Binding Flow](assets/ethical_binding.png)
@@ -1135,7 +1166,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see BENCHMARKS.md)
-- **Rigorous testing:** 798+ tests across 29 test files with CI checks including security scanning
+- **Rigorous testing:** 866+ tests across 39 test files (30 Python + 9 C) with CI checks including security scanning
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims
@@ -1177,6 +1208,6 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 </div>
 
-*Last updated: 2026-03-10*
+*Last updated: 2026-03-19*
 
 </div>
