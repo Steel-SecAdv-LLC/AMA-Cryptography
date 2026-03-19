@@ -582,9 +582,9 @@ The security analysis assumes:
 
 ### Throughput Characteristics
 
-- **Signing Throughput**: ~1,116 packages/second (single core)
-- **Verification Throughput**: ~4,717 packages/second (single core)
-- **Bottleneck**: ML-DSA-65 signing (780 microseconds, 87% of signing time)
+- **Signing Throughput**: ~296 packages/second (single core, full 6-layer)
+- **Verification Throughput**: ~381 packages/second (single core, full 6-layer)
+- **Bottleneck**: ML-DSA-65 signing (2.33 ms, dominant signing cost)
 
 ### Optimization Strategies
 
