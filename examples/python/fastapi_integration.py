@@ -29,8 +29,6 @@ Then visit:
 """
 
 import asyncio
-import hashlib
-import hmac
 import json
 import sys
 from datetime import datetime
@@ -169,14 +167,13 @@ async def verify_hmac_auth(
             detail="Missing X-HMAC-Signature header",
         )
 
-    body = await request.body()
-    expected_sig = hmac.new(
-        KMS.hmac_key,
-        body,
-        hashlib.sha3_256,
-    ).hexdigest()
+    from ama_cryptography.secure_memory import constant_time_compare
+    from code_guardian_secure import hmac_authenticate
 
-    if not hmac.compare_digest(x_hmac_signature, expected_sig):
+    body = await request.body()
+    expected_sig = hmac_authenticate(body, KMS.hmac_key).hex()
+
+    if not constant_time_compare(x_hmac_signature.encode(), expected_sig.encode()):
         raise HTTPException(
             status_code=401,
             detail="Invalid HMAC signature",

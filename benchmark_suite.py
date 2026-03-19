@@ -50,7 +50,6 @@ except ImportError:
     _HAS_PSUTIL = False
 
 from ama_cryptography.pqc_backends import DILITHIUM_BACKEND
-
 from code_guardian_secure import (
     DILITHIUM_AVAILABLE,
     ETHICAL_VECTOR,
