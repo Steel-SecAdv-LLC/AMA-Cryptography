@@ -34,6 +34,14 @@ COMPARATIVE_FILE = ROOT / "benchmarks" / "comparative_benchmark_results.json"
 
 
 # ── Load benchmark data ────────────────────────────────────────────────
+# TODO: benchmark_results.json, regression_results.json, validation_results.json,
+# and comparative_benchmark_results.json do not exist in the repository.
+# These PNGs (benchmark_report.png, performance_dashboard.png) cannot be
+# regenerated without fabricating data. Re-run the benchmark suite first:
+#   python benchmarks/benchmark_runner.py
+#   python benchmarks/validation_suite.py
+#   python benchmarks/comparative_benchmark.py
+# then re-run this script.
 def load_json(path):
     with open(path) as f:
         return json.load(f)
