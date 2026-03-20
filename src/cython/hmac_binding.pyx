@@ -33,7 +33,7 @@ def cy_hmac_sha3_256(bytes key, bytes msg):
     RFC 2104 compliant: 136-byte block size (SHA3-256 Keccak rate).
 
     Returns 32-byte HMAC digest.
-    Raises ValueError on allocation failure (AMA_ERROR_MEMORY).
+    Raises RuntimeError on native C failure (e.g. AMA_ERROR_MEMORY).
     """
     cdef unsigned char out[32]
     cdef int ret
@@ -44,7 +44,7 @@ def cy_hmac_sha3_256(bytes key, bytes msg):
         out
     )
     if ret != 0:
-        raise ValueError(
-            f"ama_hmac_sha3_256 failed with error {ret} — possible allocation failure"
+        raise RuntimeError(
+            f"ama_hmac_sha3_256 failed (rc={ret})"
         )
     return bytes(out[:32])

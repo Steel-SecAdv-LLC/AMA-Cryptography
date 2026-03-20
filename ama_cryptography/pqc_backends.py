@@ -1700,7 +1700,13 @@ def hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
 
     INVARIANT-1 compliant — zero external crypto dependencies.
     RFC 2104 compliant — 136-byte block size for SHA3-256.
+
+    Raises:
+        RuntimeError: If no HMAC-SHA3-256 backend is available (neither
+            Cython extension nor native C library found).
     """
+    if not HMAC_SHA3_256_AVAILABLE:
+        raise RuntimeError("HMAC-SHA3-256 backend not available. " + _INSTALL_HINT)
     if _cy_hmac_fn is not None:
         return _cy_hmac_fn(key, msg)
     return native_hmac_sha3_256(key, msg)
