@@ -48,8 +48,18 @@ else()
     # Release optimizations
     set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -DNDEBUG")
     set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -fomit-frame-pointer")
-    # Note: -march=native removed for portability across CI environments
-    # Users can add -DCMAKE_C_FLAGS="-march=native" for local optimized builds
+
+    # -march=native enables the full ISA of the build host (AVX2, SHA-NI,
+    # AES-NI, BMI2, AVX-512 etc.). Guarded by AMA_ENABLE_NATIVE_ARCH so CI
+    # can disable it for portable builds.
+    option(AMA_ENABLE_NATIVE_ARCH "Use -march=native for host-optimized builds" OFF)
+    if(AMA_ENABLE_NATIVE_ARCH)
+        set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -march=native")
+        message(STATUS "Native arch: -march=native enabled (host-optimized)")
+    endif()
+
+    # -funroll-loops helps the Keccak-f[1600] 24-round permutation loop
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -funroll-loops")
 
     # Debug flags
     set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -O0 -g3 -DDEBUG")
