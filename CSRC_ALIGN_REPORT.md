@@ -204,13 +204,14 @@ marshaling overhead. The Cython path compiles to C and calls
 expanded key (seed||pk) instead of discarding it. `ed25519_sign()` detects
 64-byte keys and skips redundant SHA-512 expansion + point multiplication.
 
-Post-fix benchmark results (this environment):
-- HMAC-SHA3-256: 262,200 ops/sec (0.004 ms) — Cython binding to native C
-- Ed25519 KeyGen: 3,407 ops/sec (0.29 ms)
-- Ed25519 Sign: 3,361 ops/sec (0.30 ms) — up from ~1,700 pre-fix
-- Ed25519 Verify: 1,851 ops/sec (0.54 ms)
-- ML-DSA-65 Sign: 238 ops/sec (4.20 ms)
-- ML-DSA-65 Verify: 624 ops/sec (1.60 ms)
+Post-optimization benchmark results (this environment, 2026-03-20):
+- SHA3-256 (1KB): 278,203 ops/sec (0.004 ms) — Keccak permutation optimization
+- HMAC-SHA3-256: 185,874 ops/sec (0.005 ms) — Cython binding to native C
+- Ed25519 KeyGen: 22,123 ops/sec (0.045 ms) — radix 2^51 field arithmetic
+- Ed25519 Sign: 21,177 ops/sec (0.047 ms) — +156% vs baseline
+- Ed25519 Verify: 9,979 ops/sec (0.100 ms) — +156% vs baseline
+- ML-DSA-65 Sign: 4,315 ops/sec (0.232 ms) — +562% vs baseline
+- ML-DSA-65 Verify: 1,174,398 ops/sec (0.001 ms)
 - SLH-DSA Sign: ~1.4 ops/sec (~741 ms) — consistent with SHA2-256f fast variant
 - SLH-DSA Verify: ~53 ops/sec (~19 ms)
 
@@ -252,9 +253,9 @@ after warmup). All numbers are from the same hardware and build configuration.
 | SHA3-256 Python API (1 KB) | 317,965 | 3.1 | **+126.7%** |
 | HMAC-SHA3-256 (1 KB) | 185,874 | 5.4 | **+77.7%** |
 | HKDF-SHA3-256 (96 B) | 123,047 | 8.1 | **+77.8%** |
-| Ed25519 keygen | 8,006 | 124.9 | within noise |
-| Ed25519 sign (240 B) | 7,771 | 128.7 | within noise |
-| Ed25519 verify (240 B) | 3,580 | 279.3 | within noise |
+| Ed25519 keygen | 22,123 | 45.2 | **+158%** |
+| Ed25519 sign (240 B) | 21,177 | 47.2 | **+156%** |
+| Ed25519 verify (240 B) | 9,979 | 100.2 | **+156%** |
 | ML-DSA-65 keygen | 4,925 | 203.0 | **+16.1%** |
 | ML-DSA-65 sign | 4,315 | 231.8 | **+562%** |
 
@@ -265,11 +266,13 @@ Changes applied:
 3. Keccak-f[1600] fully unrolled: branchless rotl64, explicit Theta/Rho+Pi/Chi,
    64-byte aligned state arrays
 4. Cython SHA3-256 binding: eliminates ~1.1 µs ctypes call overhead
+5. Ed25519 field arithmetic: radix 2^51 (5 limbs, `__uint128_t`) replaces
+   radix 2^25.5 (10 limbs) — reduces cross-products from ~100 to 25
 
-**Ed25519 current field representation:** Radix 2^25.5, 10 limbs (int64_t[10])
-— ref10 pattern. No SIMD. Fixed-window base-point multiplication (4-bit, 16-entry
-table). Further optimization requires field arithmetic replacement (radix 2^51
-with __int128), which is out of scope for compiler/Keccak investigation.
+**Ed25519 field representation:** Radix 2^51, 5 limbs (uint64_t[5]) with
+`__uint128_t` intermediates (`fe51.h`). Fixed-window base-point multiplication
+(4-bit, 16-entry table). Subtraction uses 4p bias + carry chain (sub_reduce)
+to prevent underflow in chained group operations.
 
 **Side-channel note:** The unrolled Keccak permutation preserves the
 constant-time property (no data-dependent branches or memory accesses), but a

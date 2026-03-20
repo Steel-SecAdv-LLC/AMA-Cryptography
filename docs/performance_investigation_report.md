@@ -146,9 +146,9 @@ and carry propagation. The correctness risk is high and requires:
 - Verifying constant-time properties are preserved
 - Edge case testing for field boundary values
 
-**Recommendation:** This should be a separate, dedicated effort. The current
-implementation is correct and the 8K ops/sec signing throughput is adequate for
-most applications. Documented honestly — no unsafe changes made.
+**Recommendation:** This should be a separate, dedicated effort. *(Completed:
+see `docs/ed25519_field_investigation_report.md` — radix 2^51 replacement
+delivered 21K sign ops/sec, +156% improvement.)*
 
 ---
 
@@ -199,9 +199,9 @@ ctypes overhead more than triples throughput.
 | SHA3-256 Python API (1KB) | 140,233 | 317,965 | **+126.7%** | Phase 1+2+4 |
 | HMAC-SHA3-256 (1KB) | 104,603 | 185,874 | **+77.7%** | Phase 1+2 |
 | HKDF-SHA3-256 (96B) | 69,221 | 123,047 | **+77.8%** | Phase 1+2 |
-| Ed25519 keygen | 8,566 | 8,006 | -6.5% (noise) | — |
-| Ed25519 sign (240B) | 8,272 | 7,771 | -6.1% (noise) | — |
-| Ed25519 verify (240B) | 3,904 | 3,580 | -8.3% (noise) | — |
+| Ed25519 keygen | 8,566 | 22,123 | **+158%** | fe51 field arith |
+| Ed25519 sign (240B) | 8,272 | 21,177 | **+156%** | fe51 field arith |
+| Ed25519 verify (240B) | 3,904 | 9,979 | **+156%** | fe51 field arith |
 | ML-DSA-65 keygen | 4,243 | 4,925 | **+16.1%** | Phase 1 |
 | ML-DSA-65 sign | 652 | 4,315 | **+562%** | Phase 1 |
 | Package create | 852 | 1,939 | **+128%** | Phase 1 |
@@ -222,8 +222,8 @@ ctypes overhead more than triples throughput.
 - SHA3-256 Cython vs ctypes cross-validation: all sizes match
 
 ### Notes
-- Ed25519 measurements show run-to-run variance of ~5-8%. The small negative
-  deltas are within measurement noise, not regressions.
+- Ed25519 now uses radix 2^51 field arithmetic (fe51.h) delivering 2.5×
+  improvement. See `docs/ed25519_field_investigation_report.md` for details.
 - The `-march=native` flag is behind a CMake option (default OFF) to preserve
   CI portability. Production deployments should enable it.
 - The Cython binding generates a version mismatch warning when built with

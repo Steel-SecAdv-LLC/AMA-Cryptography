@@ -378,16 +378,16 @@ Complete security package with all defense layers:
 |-----------|-----------|---------|
 | SHA3-256 | 907,822 ops/sec | 0.001ms |
 | HMAC-SHA3-256 (Cython binding)* | 262,200 ops/sec | 0.004ms |
-| Ed25519 KeyGen | 3,407 ops/sec | 0.29ms |
-| Ed25519 Sign | 3,361 ops/sec | 0.30ms |
-| Ed25519 Verify | 1,851 ops/sec | 0.54ms |
-| HKDF-SHA3-256 | 4,689 ops/sec | 0.21ms |
+| Ed25519 KeyGen | 22,123 ops/sec | 0.045ms |
+| Ed25519 Sign | 21,177 ops/sec | 0.047ms |
+| Ed25519 Verify | 9,979 ops/sec | 0.100ms |
+| HKDF-SHA3-256 | 123,047 ops/sec | 0.008ms |
 
 *HMAC-SHA3-256 via native C (Cython binding). Fallback ctypes path available (~182K ops/sec) when Cython extension is not built. stdlib hmac is not used — INVARIANT-1.
 
-**Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [BENCHMARKS.md](BENCHMARKS.md) for full performance data.
+**Performance Note:** Ed25519 uses radix 2^51 field arithmetic (fe51) for 2.5x throughput improvement. See [BENCHMARKS.md](BENCHMARKS.md) for full performance data.
 
-*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, native C backend, 1,000 iterations per operation.*
+*Benchmarks: Linux 6.18.5 x86_64, Intel Xeon @ 2.10GHz, GCC 13.3, -O3 -march=native, native C backend.*
 
 </details>
 

@@ -132,19 +132,20 @@ KDF(S, "hmac") ⊥ KDF(S, "ed25519") ⊥ KDF(S, "reserved")
 
 #### Sub-property 2.3: Real-Time Protection
 **Cryptographic Mapping:**
-- Sign operation: 0.90ms (1,116 ops/sec)
-- Verify operation: 0.21ms (4,717 ops/sec)
+- Sign operation: 0.047ms (21,177 ops/sec)
+- Verify operation: 0.10ms (9,979 ops/sec)
 - Parallel verification support (4+ cores)
 
 **Performance Proof:**
 ```
-Measured benchmarks (single-threaded):
-- KeyGen: 0.27ms → 3,700/sec
-- Sign: 0.90ms → 1,116/sec
-- Verify: 0.21ms → 4,717/sec
+Measured benchmarks (single-threaded, Intel Xeon @ 2.10GHz,
+GCC 13.3.0, -O3 -march=native -funroll-loops, radix 2^51 fe51):
+- KeyGen: 0.045ms → 22,123/sec
+- Sign: 0.047ms → 21,177/sec
+- Verify: 0.10ms → 9,979/sec
 
 Production requirement: >100 ops/sec
-Margin: 11.16× for signing, 47.17× for verification
+Margin: 211× for signing, 99× for verification
 Conclusion: Suitable for real-time cryptographic protection
 ```
 
