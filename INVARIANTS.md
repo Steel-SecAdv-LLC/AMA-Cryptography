@@ -15,8 +15,9 @@ code is merged.
    or explicitly documented with a migration timeline. No pre-built external
    cryptographic libraries (libsodium, OpenSSL, liboqs, etc.) may be linked.
    Vendoring public-domain source into `src/c/vendor/` and compiling it as part
-   of AMA's own build system is permitted — vendored source becomes AMA IP once
-   integrated.
+   of AMA's own build system is permitted — vendored source is included in-tree
+   and compiled as part of AMA's build system; its original license (documented
+   per component) is unaffected by vendoring.
 
 ---
 
@@ -35,5 +36,5 @@ code is merged.
 - **INVARIANT-1 compliance:** The vendored source is public domain, compiled
   from source as part of AMA's build system, and never linked as a pre-built
   binary. It satisfies INVARIANT-1 under the vendoring policy: vendored
-  public-domain source integrated into AMA's build is AMA IP, not an external
-  dependency.
+  public-domain source is included in-tree and compiled as part of AMA's build
+  system; its original public-domain license is unaffected by vendoring.
