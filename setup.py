@@ -124,10 +124,12 @@ def get_extension_modules():
         )
         extensions.append(math_ext)
 
-        # Platform-conditional rpath: $ORIGIN is ELF/Linux-specific
+        # Platform-conditional rpath: $ORIGIN is ELF/Linux, @loader_path is Mach-O/macOS
         rpath = []
         if sys.platform.startswith("linux"):
             rpath = ["$ORIGIN/../build/lib", "$ORIGIN/../../build/lib"]
+        elif sys.platform == "darwin":
+            rpath = ["@loader_path/../build/lib", "@loader_path/../../build/lib"]
 
         # Cython HMAC-SHA3-256 binding (calls ama_hmac_sha3_256 in libama_cryptography)
         hmac_ext = Extension(

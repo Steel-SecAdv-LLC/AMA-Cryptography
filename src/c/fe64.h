@@ -137,7 +137,13 @@ static inline void fe64_add(fe64 h, const fe64 f, const fe64 g) {
     c += (uint128_t)f[1] + g[1]; h[1] = (uint64_t)c; c >>= 64;
     c += (uint128_t)f[2] + g[2]; h[2] = (uint64_t)c; c >>= 64;
     c += (uint128_t)f[3] + g[3]; h[3] = (uint64_t)c;
-    /* No overflow: result fits in 257 bits max. Reduction deferred. */
+    /* Fold carry out of bit 256: 2^256 ≡ 38 (mod p). Branchless; carry==0 is a no-op. */
+    uint64_t carry = (uint64_t)(c >> 64);
+    c = (uint128_t)h[0] + (uint128_t)carry * 38;
+    h[0] = (uint64_t)c; c >>= 64;
+    c += h[1]; h[1] = (uint64_t)c; c >>= 64;
+    c += h[2]; h[2] = (uint64_t)c; c >>= 64;
+    c += h[3]; h[3] = (uint64_t)c;
 }
 
 static inline void fe64_sub(fe64 h, const fe64 f, const fe64 g) {
@@ -154,29 +160,12 @@ static inline void fe64_sub(fe64 h, const fe64 f, const fe64 g) {
     b = (uint128_t)f[3] - g[3] - (uint64_t)(-(int64_t)(b >> 64) & 1);
     h[3] = (uint64_t)b;
 
-    /* If there's a borrow (b >> 127 set), the result is negative.
-     * Add 2*p = 2^256 - 38. This is: add (2^256 - 38), which in 4 limbs
-     * with wrap is: subtract 38 from h[0] and add 1 to the implicit 2^256 bit.
-     * But since we got a borrow from the 2^256 position, adding 2^256 cancels
-     * the borrow, and we just need to subtract 38 from h[0]. Wait, that's wrong.
-     * Actually: adding 2p = 2^256 - 38 means h += 2^256 - 38. The 2^256 part
-     * wraps and becomes nothing in 256-bit arithmetic. So we add (-38 mod 2^256).
-     * In limb form: add {-38, -1, -1, -1} = {0xFFFFFFFFFFFFFFDA, 0xFF...FE, ...}
-     * No wait, -38 in uint64 is 0xFFFFFFFFFFFFFFDA, and -1 is 0xFFFFFFFFFFFFFFFF.
-     * Actually 2p in 4 limbs (mod 2^256): -38 in uint64 = 0xFFFFFFFFFFFFFFDA,
-     * limbs 1,2,3 = 0xFFFFFFFFFFFFFFFF.
-     * Hmm, this gets complicated. Let me use a simpler approach. */
-
-    /* Simpler approach: if borrow, add 2p = 2^256 - 38 ≡ -38 (mod 2^256) */
-    uint64_t borrow = (uint64_t)(b >> 127) & 1;  /* 1 if negative */
-    /* Adding -38 mod 2^256 when there's a borrow.
-     * But we need to ADD p (not 2p) to fix a single borrow.
-     * p = 2^255 - 19. In limbs: {-19, 0, 0, 0x7FFF...}
-     * Hmm, let's just use the standard trick: if borrow, add 2p. */
-
-    /* Actually let me reconsider. For GF(p) subtraction, if f < g (mod 2^256),
-     * we get f - g + 2^256, which is f - g + 2*p + 38.
-     * So we need to subtract 38 to get f - g + 2*p (which is ≡ f - g mod p). */
+    /*
+     * If subtraction underflowed, the hardware wrapped and implicitly added 2^256.
+     * Since 2^256 ≡ 38 (mod p) for p = 2^255 - 19, the result is 38 too large.
+     * Subtract 38 * borrow from limb 0 (with carry propagation) to compensate.
+     */
+    uint64_t borrow = (uint64_t)(b >> 127) & 1;
     b = (uint128_t)h[0] - (borrow * 38);
     h[0] = (uint64_t)b;
     uint64_t borrow2 = (uint64_t)(-(int64_t)(b >> 64)) & 1;
@@ -285,15 +274,14 @@ static inline void fe64_reduce512(fe64 h, const uint64_t r[8]) {
     acc += h[2]; h[2] = (uint64_t)acc; acc >>= 64;
     acc += h[3]; h[3] = (uint64_t)acc;
 
-    /* A final carry from h[3] is possible after the second pass — fold it. */
+    /* Second fold: a carry from h[3] is possible — fold unconditionally.
+     * Branchless: when top==0 the multiply produces zero and nothing changes. */
     top = (uint64_t)(acc >> 64);
-    if (top) {
-        acc = (uint128_t)h[0] + (uint128_t)top * 38;
-        h[0] = (uint64_t)acc; acc >>= 64;
-        acc += h[1]; h[1] = (uint64_t)acc; acc >>= 64;
-        acc += h[2]; h[2] = (uint64_t)acc; acc >>= 64;
-        acc += h[3]; h[3] = (uint64_t)acc;
-    }
+    acc = (uint128_t)h[0] + (uint128_t)top * 38;
+    h[0] = (uint64_t)acc; acc >>= 64;
+    acc += h[1]; h[1] = (uint64_t)acc; acc >>= 64;
+    acc += h[2]; h[2] = (uint64_t)acc; acc >>= 64;
+    acc += h[3]; h[3] = (uint64_t)acc;
 }
 
 /**
