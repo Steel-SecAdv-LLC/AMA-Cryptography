@@ -1,0 +1,114 @@
+{
+  "SHA3-256 (1KB)": {
+    "ops_per_sec": 156838.14303638643,
+    "median_ns": 6376.0,
+    "mean_ns": 6605.434,
+    "p95_ns": 6872,
+    "median_us": 6.376,
+    "stdev_ns": 2676.2538273101436
+  },
+  "SHA3-256 (64B)": {
+    "ops_per_sec": 727272.7272727273,
+    "median_ns": 1375.0,
+    "mean_ns": 1468.095,
+    "p95_ns": 1475,
+    "median_us": 1.375,
+    "stdev_ns": 1422.199214801352
+  },
+  "SHA3-256 Python API (1KB)": {
+    "ops_per_sec": 144362.63894903997,
+    "median_ns": 6927.0,
+    "mean_ns": 7325.789,
+    "p95_ns": 9638,
+    "median_us": 6.927,
+    "stdev_ns": 2538.565143041333
+  },
+  "HMAC-SHA3-256 (1KB)": {
+    "ops_per_sec": 107938.90657887635,
+    "median_ns": 9264.5,
+    "mean_ns": 9551.126,
+    "p95_ns": 10081,
+    "median_us": 9.2645,
+    "stdev_ns": 2402.571054822509
+  },
+  "HMAC-SHA3-256 Python API (1KB)": {
+    "ops_per_sec": 101112.23458038423,
+    "median_ns": 9890.0,
+    "mean_ns": 11194.738,
+    "p95_ns": 14729,
+    "median_us": 9.89,
+    "stdev_ns": 3149.4389806983536
+  },
+  "HKDF-SHA3-256 (96B output)": {
+    "ops_per_sec": 72698.19344989277,
+    "median_ns": 13755.5,
+    "mean_ns": 14121.868,
+    "p95_ns": 15078,
+    "median_us": 13.7555,
+    "stdev_ns": 3415.4452962563228
+  },
+  "Ed25519 keygen": {
+    "ops_per_sec": 8376.08627368862,
+    "median_ns": 119387.5,
+    "mean_ns": 122608.745,
+    "p95_ns": 145747,
+    "median_us": 119.3875,
+    "stdev_ns": 9495.752274372804
+  },
+  "Ed25519 sign (240B)": {
+    "ops_per_sec": 8168.966911599525,
+    "median_ns": 122414.5,
+    "mean_ns": 125136.75,
+    "p95_ns": 136374,
+    "median_us": 122.4145,
+    "stdev_ns": 8308.556075988125
+  },
+  "Ed25519 verify (240B)": {
+    "ops_per_sec": 3818.069011597385,
+    "median_ns": 261912.5,
+    "mean_ns": 267173.09,
+    "p95_ns": 294673,
+    "median_us": 261.9125,
+    "stdev_ns": 15219.053775811926
+  },
+  "Package create": {
+    "ops_per_sec": 1938.931416117949,
+    "median_ns": 515748.0,
+    "mean_ns": 519665.86,
+    "p95_ns": 553112,
+    "median_us": 515.748,
+    "stdev_ns": 21530.81644850431
+  },
+  "Package verify": {
+    "ops_per_sec": 2151.54168719596,
+    "median_ns": 464783.0,
+    "mean_ns": 483864.22,
+    "p95_ns": 697052,
+    "median_us": 464.783,
+    "stdev_ns": 69070.67543666519
+  },
+  "ML-DSA-65 keygen": {
+    "ops_per_sec": 4924.968110831483,
+    "median_ns": 203047.0,
+    "mean_ns": 207399.29,
+    "p95_ns": 238538,
+    "median_us": 203.047,
+    "stdev_ns": 14976.344090905228
+  },
+  "ML-DSA-65 sign": {
+    "ops_per_sec": 4314.882894078255,
+    "median_ns": 231756.0,
+    "mean_ns": 234577.1,
+    "p95_ns": 261051,
+    "median_us": 231.756,
+    "stdev_ns": 12190.376199645723
+  },
+  "ML-DSA-65 verify": {
+    "ops_per_sec": 1124859.392575928,
+    "median_ns": 889.0,
+    "mean_ns": 901.41,
+    "p95_ns": 1016,
+    "median_us": 0.889,
+    "stdev_ns": 60.22652440930194
+  }
+}
