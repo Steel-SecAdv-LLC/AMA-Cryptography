@@ -20,17 +20,23 @@ lib.ama_sha3_256.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p]
 lib.ama_sha3_256.restype = ctypes.c_int
 
 lib.ama_hmac_sha3_256.argtypes = [
-    ctypes.c_char_p, ctypes.c_size_t,
-    ctypes.c_char_p, ctypes.c_size_t,
+    ctypes.c_char_p,
+    ctypes.c_size_t,
+    ctypes.c_char_p,
+    ctypes.c_size_t,
     ctypes.c_char_p,
 ]
 lib.ama_hmac_sha3_256.restype = ctypes.c_int
 
 lib.ama_hkdf.argtypes = [
-    ctypes.c_char_p, ctypes.c_size_t,  # salt, salt_len
-    ctypes.c_char_p, ctypes.c_size_t,  # ikm, ikm_len
-    ctypes.c_char_p, ctypes.c_size_t,  # info, info_len
-    ctypes.c_char_p, ctypes.c_size_t,  # okm, okm_len
+    ctypes.c_char_p,
+    ctypes.c_size_t,  # salt, salt_len
+    ctypes.c_char_p,
+    ctypes.c_size_t,  # ikm, ikm_len
+    ctypes.c_char_p,
+    ctypes.c_size_t,  # info, info_len
+    ctypes.c_char_p,
+    ctypes.c_size_t,  # okm, okm_len
 ]
 lib.ama_hkdf.restype = ctypes.c_int
 
@@ -39,14 +45,16 @@ lib.ama_ed25519_keypair.restype = ctypes.c_int
 
 lib.ama_ed25519_sign.argtypes = [
     ctypes.c_char_p,
-    ctypes.c_char_p, ctypes.c_size_t,
+    ctypes.c_char_p,
+    ctypes.c_size_t,
     ctypes.c_char_p,
 ]
 lib.ama_ed25519_sign.restype = ctypes.c_int
 
 lib.ama_ed25519_verify.argtypes = [
     ctypes.c_char_p,
-    ctypes.c_char_p, ctypes.c_size_t,
+    ctypes.c_char_p,
+    ctypes.c_size_t,
     ctypes.c_char_p,
 ]
 lib.ama_ed25519_verify.restype = ctypes.c_int
@@ -56,14 +64,18 @@ try:
     lib.ama_dilithium_keypair.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
     lib.ama_dilithium_keypair.restype = ctypes.c_int
     lib.ama_dilithium_sign.argtypes = [
-        ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t),
-        ctypes.c_char_p, ctypes.c_size_t,
+        ctypes.c_char_p,
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.c_char_p,
+        ctypes.c_size_t,
         ctypes.c_char_p,
     ]
     lib.ama_dilithium_sign.restype = ctypes.c_int
     lib.ama_dilithium_verify.argtypes = [
-        ctypes.c_char_p, ctypes.c_size_t,
-        ctypes.c_char_p, ctypes.c_size_t,
+        ctypes.c_char_p,
+        ctypes.c_size_t,
+        ctypes.c_char_p,
+        ctypes.c_size_t,
         ctypes.c_char_p,
     ]
     lib.ama_dilithium_verify.restype = ctypes.c_int
@@ -101,16 +113,20 @@ def benchmark(func, iterations=500, warmup=50):
 def bench_sha3_256():
     data = b"A" * 1024
     out = ctypes.create_string_buffer(32)
+
     def op():
         lib.ama_sha3_256(data, 1024, out)
+
     return benchmark(op, iterations=1000, warmup=100)
 
 
 def bench_sha3_256_short():
     data = b"A" * 64
     out = ctypes.create_string_buffer(32)
+
     def op():
         lib.ama_sha3_256(data, 64, out)
+
     return benchmark(op, iterations=1000, warmup=100)
 
 
@@ -118,8 +134,10 @@ def bench_hmac_sha3_256():
     key = os.urandom(32)
     msg = b"A" * 1024
     out = ctypes.create_string_buffer(32)
+
     def op():
         lib.ama_hmac_sha3_256(key, 32, msg, 1024, out)
+
     return benchmark(op, iterations=500, warmup=50)
 
 
@@ -128,16 +146,20 @@ def bench_hkdf():
     salt = os.urandom(32)
     info = b"benchmark"
     out = ctypes.create_string_buffer(96)
+
     def op():
         lib.ama_hkdf(salt, 32, ikm, 32, info, 9, out, 96)
+
     return benchmark(op, iterations=500, warmup=50)
 
 
 def bench_ed25519_keygen():
     pk = ctypes.create_string_buffer(32)
     sk = ctypes.create_string_buffer(64)
+
     def op():
         lib.ama_ed25519_keypair(pk, sk)
+
     return benchmark(op, iterations=200, warmup=20)
 
 
@@ -147,8 +169,10 @@ def bench_ed25519_sign():
     lib.ama_ed25519_keypair(pk, sk)
     msg = b"Test message for benchmarking" * 8
     sig = ctypes.create_string_buffer(64)
+
     def op():
         lib.ama_ed25519_sign(sig, msg, len(msg), sk)
+
     return benchmark(op, iterations=200, warmup=20)
 
 
@@ -159,16 +183,20 @@ def bench_ed25519_verify():
     msg = b"Test message for benchmarking" * 8
     sig = ctypes.create_string_buffer(64)
     lib.ama_ed25519_sign(sig, msg, len(msg), sk)
+
     def op():
         lib.ama_ed25519_verify(sig, msg, len(msg), pk)
+
     return benchmark(op, iterations=200, warmup=20)
 
 
 def bench_dilithium_keygen():
     pk = ctypes.create_string_buffer(1952)
     sk = ctypes.create_string_buffer(4032)
+
     def op():
         lib.ama_dilithium_keypair(pk, sk)
+
     return benchmark(op, iterations=100, warmup=10)
 
 
@@ -179,8 +207,10 @@ def bench_dilithium_sign():
     msg = b"Test message for ML-DSA-65" * 10
     sig = ctypes.create_string_buffer(3309)
     siglen = ctypes.c_size_t(3309)
+
     def op():
         lib.ama_dilithium_sign(sig, ctypes.byref(siglen), msg, len(msg), sk)
+
     return benchmark(op, iterations=100, warmup=10)
 
 
@@ -192,26 +222,34 @@ def bench_dilithium_verify():
     sig = ctypes.create_string_buffer(3309)
     siglen = ctypes.c_size_t(3309)
     lib.ama_dilithium_sign(sig, ctypes.byref(siglen), msg, len(msg), sk)
+
     def op():
         lib.ama_dilithium_verify(sig, siglen.value, msg, len(msg), pk)
+
     return benchmark(op, iterations=100, warmup=10)
 
 
 # Also measure Python-level overhead (ctypes vs Cython for HMAC)
 def bench_hmac_python_api():
     from ama_cryptography.pqc_backends import native_hmac_sha3_256
+
     key = os.urandom(32)
     msg = b"A" * 1024
+
     def op():
         native_hmac_sha3_256(key, msg)
+
     return benchmark(op, iterations=500, warmup=50)
 
 
 def bench_sha3_python_api():
     from ama_cryptography.pqc_backends import native_sha3_256
+
     data = b"A" * 1024
+
     def op():
         native_sha3_256(data)
+
     return benchmark(op, iterations=1000, warmup=100)
 
 
@@ -221,14 +259,20 @@ def bench_package_create():
         create_crypto_package,
         generate_key_management_system,
     )
+
     kms = generate_key_management_system("Benchmark Test")
     codes = "TEST_OMNI_CODE_12345"
     helix_params = [(1.0, 2.0)]
+
     def op():
         create_crypto_package(
-            codes=codes, helix_params=helix_params,
-            kms=kms, author="Benchmark", use_rfc3161=False,
+            codes=codes,
+            helix_params=helix_params,
+            kms=kms,
+            author="Benchmark",
+            use_rfc3161=False,
         )
+
     return benchmark(op, iterations=50, warmup=5)
 
 
@@ -238,19 +282,27 @@ def bench_package_verify():
         generate_key_management_system,
         verify_crypto_package,
     )
+
     kms = generate_key_management_system("Benchmark Test")
     codes = "TEST_OMNI_CODE_12345"
     helix_params = [(1.0, 2.0)]
     package = create_crypto_package(
-        codes=codes, helix_params=helix_params,
-        kms=kms, author="Benchmark", use_rfc3161=False,
+        codes=codes,
+        helix_params=helix_params,
+        kms=kms,
+        author="Benchmark",
+        use_rfc3161=False,
     )
+
     def op():
         verify_crypto_package(
-            codes=codes, helix_params=helix_params,
-            package=package, hmac_key=kms.hmac_key,
+            codes=codes,
+            helix_params=helix_params,
+            package=package,
+            hmac_key=kms.hmac_key,
             require_quantum_signatures=False,
         )
+
     return benchmark(op, iterations=50, warmup=5)
 
 
@@ -277,11 +329,13 @@ def main():
     ]
 
     if DILITHIUM_AVAILABLE:
-        benchmarks.extend([
-            ("ML-DSA-65 keygen", bench_dilithium_keygen),
-            ("ML-DSA-65 sign", bench_dilithium_sign),
-            ("ML-DSA-65 verify", bench_dilithium_verify),
-        ])
+        benchmarks.extend(
+            [
+                ("ML-DSA-65 keygen", bench_dilithium_keygen),
+                ("ML-DSA-65 sign", bench_dilithium_sign),
+                ("ML-DSA-65 verify", bench_dilithium_verify),
+            ]
+        )
 
     print(f"{'Primitive':<35} {'ops/sec':>12} {'median_us':>12} {'p95_us':>12} {'stdev_us':>12}")
     print("-" * 83)
@@ -290,7 +344,9 @@ def main():
         try:
             r = func()
             results[name] = r
-            print(f"{name:<35} {r['ops_per_sec']:>12,.0f} {r['median_us']:>12.1f} {r['p95_ns']/1000:>12.1f} {r['stdev_ns']/1000:>12.1f}")
+            print(
+                f"{name:<35} {r['ops_per_sec']:>12,.0f} {r['median_us']:>12.1f} {r['p95_ns']/1000:>12.1f} {r['stdev_ns']/1000:>12.1f}"
+            )
         except Exception as e:
             print(f"{name:<35} ERROR: {e}")
             results[name] = {"error": str(e)}

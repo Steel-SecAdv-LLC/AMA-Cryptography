@@ -15,6 +15,8 @@
 #ifndef AMA_FE64_H
 #define AMA_FE64_H
 
+#if defined(__GNUC__) || defined(__clang__)
+
 #include <stdint.h>
 #include <string.h>
 
@@ -402,5 +404,7 @@ static int fe64_iszero(const fe64 f) {
     for (int i = 0; i < 32; i++) ret |= s[i];
     return ret == 0;
 }
+
+#endif /* defined(__GNUC__) || defined(__clang__) */
 
 #endif /* AMA_FE64_H */
