@@ -38,3 +38,9 @@ code is merged.
   binary. It satisfies INVARIANT-1 under the vendoring policy: vendored
   public-domain source is included in-tree and compiled as part of AMA's build
   system; its original public-domain license is unaffected by vendoring.
+- **MSVC ARM64 limitation:** The donna backend provides x86-64 assembly only.
+  The fe51 backend requires `__uint128_t`, which MSVC does not provide on any
+  architecture. Therefore MSVC on ARM64 (Windows on ARM) has no working
+  Ed25519 path. CMakeLists.txt emits `FATAL_ERROR` at configure time for this
+  combination. To build on ARM64 Windows, use GCC or Clang (e.g., via MSYS2
+  or clang-cl) which provide `__uint128_t` and enable the fe51 backend.
