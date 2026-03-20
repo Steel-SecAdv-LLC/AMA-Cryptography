@@ -40,10 +40,13 @@
 
 #include "../include/ama_cryptography.h"
 #include "internal/ama_sha2.h"
-#include "fe51.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+
+#if defined(__GNUC__) || defined(__clang__)
+#include "fe51.h"
+#endif
 
 /* C11 atomics for thread-safe lazy initialization of base point tables.
  * Uses a tri-state CAS protocol: 0 = uninitialized, 1 = initializing, 2 = ready.
@@ -101,7 +104,8 @@ static int64_t load_4(const uint8_t *in) {
     return (int64_t)in[0] | ((int64_t)in[1] << 8) | ((int64_t)in[2] << 16) | ((int64_t)in[3] << 24);
 }
 
-/* Thin wrappers: fe25519_* delegate to fe51_* */
+#if defined(__GNUC__) || defined(__clang__)
+/* Thin wrappers: fe25519_* delegate to fe51_* (requires __uint128_t) */
 static inline void fe25519_frombytes(fe25519 h, const uint8_t *s) { fe51_frombytes(h, s); }
 static inline void fe25519_tobytes(uint8_t *s, const fe25519 h)   { fe51_tobytes(s, h); }
 static inline void fe25519_0(fe25519 h)                            { fe51_0(h); }
@@ -117,6 +121,11 @@ static inline void fe25519_invert(fe25519 out, const fe25519 z)   { fe51_invert(
 static inline void fe25519_pow22523(fe25519 out, const fe25519 z) { fe51_pow22523(out, z); }
 static inline int  fe25519_isnegative(const fe25519 f)             { return fe51_isnegative(f); }
 static inline int  fe25519_iszero(const fe25519 f)                 { return fe51_iszero(f); }
+#else
+/* MSVC: fe51 requires __uint128_t which MSVC lacks.
+ * On Windows builds, use AMA_ED25519_ASSEMBLY=ON (donna shim) instead. */
+#error "ama_ed25519.c requires GCC/Clang for __uint128_t (fe51). On MSVC, enable AMA_ED25519_ASSEMBLY to use the donna shim."
+#endif
 
 /* ============================================================================
  * GROUP OPERATIONS: Extended Twisted Edwards
@@ -428,7 +437,7 @@ static void ge25519_init_base_table(void) {
 /* Constant-time conditional move: r = (flag ? p : r).
  * flag MUST be 0 or 1. No branching on flag. */
 static void ge25519_cmov(ge25519_p3 *r, const ge25519_p3 *p, int flag) {
-    uint64_t mask = -(uint64_t)flag;
+    uint64_t mask = (uint64_t)(-(int64_t)(flag));
     for (int j = 0; j < 5; j++) {
         r->X[j] ^= mask & (r->X[j] ^ p->X[j]);
         r->Y[j] ^= mask & (r->Y[j] ^ p->Y[j]);
@@ -492,7 +501,7 @@ static void ge25519_scalarmult_base_windowed(ge25519_p3 *r, const uint8_t *scala
             /* Branchless equality: mask = all-ones when k == lookup_idx, else 0.
              * Uses arithmetic to avoid compiler-generated branches on secret data. */
             unsigned int diff = (unsigned int)(k ^ lookup_idx);
-            uint64_t mask = -(uint64_t)(1 & ((diff - 1) >> 31));
+            uint64_t mask = (uint64_t)(-(int64_t)(1 & ((diff - 1) >> 31)));
             for (int j = 0; j < 5; j++) {
                 P.X[j] ^= mask & (P.X[j] ^ ge_base_table[k].X[j]);
                 P.Y[j] ^= mask & (P.Y[j] ^ ge_base_table[k].Y[j]);

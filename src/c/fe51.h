@@ -16,6 +16,8 @@
 #ifndef AMA_FE51_H
 #define AMA_FE51_H
 
+#if defined(__GNUC__) || defined(__clang__)
+
 #include <stdint.h>
 #include <string.h>
 
@@ -388,5 +390,7 @@ static int fe51_iszero(const fe51 f) {
     for (int i = 0; i < 32; i++) ret |= s[i];
     return ret == 0;
 }
+
+#endif /* defined(__GNUC__) || defined(__clang__) */
 
 #endif /* AMA_FE51_H */
