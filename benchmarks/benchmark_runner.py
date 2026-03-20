@@ -20,8 +20,6 @@ Exit codes:
 """
 
 import argparse
-import hashlib
-import hmac
 import json
 import secrets
 import sys
@@ -85,22 +83,26 @@ def benchmark_operation(
 
 
 def run_sha3_256_benchmark(iterations: int = 100) -> float:
-    """Benchmark SHA3-256 hashing."""
+    """Benchmark AMA native C SHA3-256 hashing (FIPS 202)."""
+    from ama_cryptography.pqc_backends import native_sha3_256
+
     data = b"A" * 1024  # 1KB data
 
     def operation():
-        hashlib.sha3_256(data).digest()
+        native_sha3_256(data)
 
     return benchmark_operation(operation, iterations)
 
 
 def run_hmac_sha3_256_benchmark(iterations: int = 100) -> float:
-    """Benchmark HMAC-SHA3-256."""
+    """Benchmark HMAC-SHA3-256 using project's own implementation."""
+    from code_guardian_secure import hmac_authenticate
+
     key = secrets.token_bytes(32)
     data = b"A" * 1024
 
     def operation():
-        hmac.new(key, data, hashlib.sha3_256).digest()
+        hmac_authenticate(data, key)
 
     return benchmark_operation(operation, iterations)
 
@@ -288,7 +290,7 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
     threshold = baseline["thresholds"]["regression_threshold_percent"]
 
     benchmark_functions = {
-        "sha3_256_hash": run_sha3_256_benchmark,
+        "ama_sha3_256_hash": run_sha3_256_benchmark,
         "hmac_sha3_256": run_hmac_sha3_256_benchmark,
         "ed25519_keygen": run_ed25519_keygen_benchmark,
         "ed25519_sign": run_ed25519_sign_benchmark,
@@ -317,8 +319,11 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
         baseline_value = config["baseline_value"]
         tolerance = config.get("tolerance_percent", threshold)
 
-        # Calculate regression (negative means faster, positive means slower)
-        regression = ((baseline_value - ops_per_sec) / baseline_value) * 100
+        # Calculate percent change from baseline.
+        # Positive = faster than baseline, negative = slower than baseline.
+        pct_change = ((ops_per_sec - baseline_value) / baseline_value) * 100
+        # Only fail on regressions (slower).  Improvements always pass.
+        regression = -pct_change  # positive = slower
         passed = regression <= tolerance
 
         results.append(
@@ -356,7 +361,8 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
         baseline_value = config["baseline_value"]
         tolerance = config.get("tolerance_percent", threshold)
 
-        regression = ((baseline_value - ops_per_sec) / baseline_value) * 100
+        pct_change = ((ops_per_sec - baseline_value) / baseline_value) * 100
+        regression = -pct_change
         passed = regression <= tolerance
 
         results.append(

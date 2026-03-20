@@ -245,7 +245,7 @@ class TestEd25519Signatures:
     def test_keypair_generation(self) -> None:
         """Key generation produces valid keypair."""
         keypair = generate_ed25519_keypair()
-        assert len(keypair.private_key) == 32
+        assert len(keypair.private_key) == 64  # expanded key: seed||pk
         assert len(keypair.public_key) == 32
 
     def test_keypair_deterministic_with_seed(self) -> None:
@@ -497,7 +497,7 @@ class TestKeyManagementSystem:
         kms = generate_key_management_system("test_author")
         assert len(kms.master_secret) == 32
         assert len(kms.hmac_key) == 32
-        assert len(kms.ed25519_keypair.private_key) == 32
+        assert len(kms.ed25519_keypair.private_key) == 64  # expanded key: seed||pk
         assert len(kms.ed25519_keypair.public_key) == 32
 
     def test_kms_unique_each_generation(self) -> None:

@@ -234,7 +234,7 @@ We will deprecate cryptographic algorithms when:
 
 ## Security Audits
 
-AMA Cryptography has undergone internal security analysis documented in `SECURITY_ANALYSIS.md`. We welcome:
+AMA Cryptography has undergone internal security analysis documented in this file. We welcome:
 
 - Independent security audits from qualified cryptographers
 - Academic review of our mathematical proofs

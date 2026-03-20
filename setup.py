@@ -124,6 +124,20 @@ def get_extension_modules():
         )
         extensions.append(math_ext)
 
+        # Cython HMAC-SHA3-256 binding (calls ama_hmac_sha3_256 in libama_cryptography)
+        hmac_ext = Extension(
+            name="ama_cryptography.hmac_binding",
+            sources=["src/cython/hmac_binding.pyx"],
+            include_dirs=["include"],
+            library_dirs=["build/lib"],
+            libraries=["ama_cryptography"],
+            runtime_library_dirs=["$ORIGIN/../build/lib", "$ORIGIN/../../build/lib"],
+            extra_compile_args=compiler_flags,
+            extra_link_args=linker_flags,
+            language="c",
+        )
+        extensions.append(hmac_ext)
+
     return extensions
 
 

@@ -246,6 +246,11 @@ module = "code_guardian_secure"
 ignore_missing_imports = true
 follow_imports = "skip"
 
+# Cython extension modules — no .py source or PEP 561 stubs.
+[[tool.mypy.overrides]]
+module = "ama_cryptography.hmac_binding"
+ignore_missing_imports = true
+
 # ama_cryptography/ and ama_cryptography_monitor — cannot modify source;
 # relax generic-type-arg and untyped-decorator checks for existing code.
 [[tool.mypy.overrides]]

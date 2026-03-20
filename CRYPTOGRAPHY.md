@@ -215,7 +215,7 @@ AMA Cryptography applies six independent cryptographic layers:
 5. **ML-DSA-65 Signature** - Quantum-resistant asymmetric authentication
 6. **RFC 3161 Timestamp** - Third-party proof of existence (optional)
 
-**Security Bound:** Overall security is bounded by the weakest layer (~128-bit classical, ~192-bit quantum when Dilithium is enforced). Defense-in-depth ensures continued protection if any single layer is compromised. See [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) for detailed analysis.
+**Security Bound:** Overall security is bounded by the weakest layer (~128-bit classical, ~192-bit quantum when Dilithium is enforced). Defense-in-depth ensures continued protection if any single layer is compromised. See [SECURITY.md](SECURITY.md) for detailed analysis.
 
 ### Hash Algorithm Note: RFC 3161 Timestamps
 
@@ -394,5 +394,5 @@ secp256k1 provides elliptic curve operations supporting BIP32-compliant hierarch
 ## See Also
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture and design
-- [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) - Detailed security analysis and proofs
+- [SECURITY.md](SECURITY.md) - Detailed security analysis and proofs
 - [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md) - Deployment and integration guide

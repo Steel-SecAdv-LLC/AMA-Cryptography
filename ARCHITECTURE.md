@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.2 |
-| Last Updated | 2026-03-16 |
+| Document Version | 2.3 |
+| Last Updated | 2026-03-19 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -102,7 +102,9 @@ The AMA Cryptography architecture is built on the following foundational princip
 
 **Standards Compliance**: Built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the 6-layer defense architecture, key evolution, and adaptive posture system) is an original design.
 
-**Performance Efficiency**: Cryptographic operations are optimized to maintain throughput exceeding 1,000 operations per second with less than 4% overhead for ethical integration.
+**Zero External Crypto Dependencies (INVARIANT-1)**: All cryptographic primitives are implemented natively in C. No third-party crypto packages are permitted. See [`.github/INVARIANTS.md`](.github/INVARIANTS.md).
+
+**Performance Efficiency**: Cryptographic operations are optimized to maintain throughput exceeding 450 packages/second for full 6-layer operations.
 
 ### Architectural Constraints
 
@@ -128,29 +130,41 @@ The following constraints govern architectural decisions:
 | Quantum-Resistant Signature | ML-DSA-65 (Dilithium) | NIST FIPS 204 | 192-bit quantum security | **Full** (ama_dilithium.c) |
 | Key Encapsulation | ML-KEM-1024 (Kyber) | NIST FIPS 203 | 256-bit quantum security | **Full** (ama_kyber.c) |
 | Hash-Based Signature | SPHINCS+-SHA2-256f | NIST FIPS 205 | 256-bit quantum security | **Full** (ama_sphincs.c) |
+| Authenticated Encryption | AES-256-GCM | NIST SP 800-38D | 256-bit key, 128-bit security | **Full** (ama_aes_gcm.c) |
 | Key Derivation | HKDF-SHA3-256 | RFC 5869 | 256-bit derived keys | **Full** (ama_hkdf.c) |
 | Timestamping | RFC 3161 TSA | RFC 3161 | Third-party attestation | Python API only |
 | Key Exchange | X25519 | RFC 7748 | 128-bit classical security | **Full** (ama_x25519.c) |
 | Alternative AEAD | ChaCha20-Poly1305 | RFC 8439 | 256-bit key, 128-bit security | **Full** (ama_chacha20poly1305.c) |
 | Password Hashing | Argon2id | RFC 9106 | Memory-hard KDF | **Full** (ama_argon2.c) |
 | EC Operations | secp256k1 | SEC 2 | HD key derivation support | **Full** (ama_secp256k1.c) |
+| Constant-Time Utilities | memcmp, memzero, swap, lookup, copy | — | Side-channel resistance | **Full** (ama_consttime.c) |
+| Platform CSPRNG | getrandom/getentropy/BCryptGenRandom | — | Entropy source | **Full** (ama_platform_rand.c) |
 
-**C Library Source Files (v2.0):**
+**C Library Source Files (v2.0) — 22 files in `src/c/`:**
+
+Core primitives:
+- `src/c/ama_core.c` - Library initialization, version info, feature detection, shared utilities
 - `src/c/ama_sha3.c` - SHA3-256, SHAKE128/256, streaming API (Keccak-f[1600])
 - `src/c/ama_sha256.c` - Native SHA-256 (FIPS 180-4), used by SPHINCS+ internally
 - `src/c/ama_hmac_sha256.c` - Native HMAC-SHA-256 (RFC 2104), used by SPHINCS+ PRF_msg
 - `src/c/ama_platform_rand.c` - Platform-native CSPRNG (getrandom/getentropy/BCryptGenRandom)
 - `src/c/ama_hkdf.c` - HKDF-SHA3-256 with HMAC-SHA3-256 (RFC 5869)
+- `src/c/ama_consttime.c` - Constant-time utilities (memcmp, memzero, swap, lookup, copy)
+- `src/c/internal/ama_sha2.h` - Extracted SHA-512 header-only implementation (deduplication for Ed25519/SPHINCS+)
+
+Signature and key exchange:
 - `src/c/ama_ed25519.c` - Ed25519 keygen/sign/verify with windowed scalar mult
 - `src/c/ama_kyber.c` - ML-KEM-1024 full native implementation (NTT, IND-CCA2, Fujisaki-Okamoto)
 - `src/c/ama_dilithium.c` - ML-DSA-65 full native implementation (NTT q=8380417, rejection sampling)
 - `src/c/ama_sphincs.c` - SPHINCS+-SHA2-256f-simple full native implementation (WOTS+, FORS, hypertree)
-
 - `src/c/ama_x25519.c` - X25519 Diffie-Hellman key exchange (RFC 7748)
+- `src/c/ama_secp256k1.c` - secp256k1 elliptic curve operations (HD key derivation)
+
+Encryption and KDF:
+- `src/c/ama_aes_gcm.c` - AES-256-GCM authenticated encryption (NIST SP 800-38D)
+- `src/c/ama_aes_bitsliced.c` - Bitsliced AES S-box (cache-timing hardened, optional via `-DAMA_AES_CONSTTIME=ON`). Augments `ama_aes_gcm.c` with constant-time S-box when enabled.
 - `src/c/ama_chacha20poly1305.c` - ChaCha20-Poly1305 AEAD (RFC 8439)
 - `src/c/ama_argon2.c` - Argon2id password hashing (RFC 9106)
-- `src/c/ama_secp256k1.c` - secp256k1 elliptic curve operations (HD key derivation)
-- `src/c/ama_aes_bitsliced.c` - Bitsliced AES S-box (cache-timing hardened, optional via `-DAMA_AES_CONSTTIME=ON`)
 
 **Zero-Dependency PQC:** All three PQC algorithms (Kyber, Dilithium, SPHINCS+) operate without OpenSSL. SHA-256, HMAC-SHA-256, and random byte generation are provided by native implementations (`ama_sha256.c`, `ama_hmac_sha256.c`, `ama_platform_rand.c`), validated against NIST KAT vectors.
 
@@ -259,6 +273,31 @@ The system enforces the following constraints on ethical pillars:
 ---
 
 ## Component Architecture
+
+### Python Package Structure
+
+```
+ama_cryptography/
+├── __init__.py            # Package exports, lazy imports
+├── crypto_api.py          # Core API: AmaCryptography, create/verify_crypto_package
+├── key_management.py      # KeyManagementSystem, KeyRotationManager, HD derivation
+├── pqc_backends.py        # Native C bindings (ctypes), PQC algorithm dispatch
+├── adaptive_posture.py    # Adaptive security posture (3R → key rotation/algorithm escalation)
+├── hybrid_combiner.py     # Hybrid KEM combiner (X25519 + ML-KEM-1024)
+├── double_helix_engine.py # Bio-inspired helical data architecture
+├── equations.py           # Mathematical framework (Lyapunov, golden ratio, etc.)
+├── _numeric.py            # Pure-Python numerical utilities (NumPy-free fallback)
+├── secure_memory.py       # Secure zeroing, SecureBytes context manager
+├── rfc3161_timestamp.py   # RFC 3161 TSA client
+├── exceptions.py          # Custom exception hierarchy
+├── hmac_binding.*.so      # Cython HMAC-SHA3-256 binding (compiled)
+└── math_engine.*.so       # Cython math acceleration (compiled)
+
+Root-level modules:
+├── code_guardian_secure.py # Standalone demonstration and package creation
+├── ama_cryptography_monitor.py      # 3R runtime security monitor
+└── ama_cryptography_monitor_demo.py # Monitor demonstration
+```
 
 ### Core Components
 
@@ -553,7 +592,7 @@ The architecture supports optional HSM integration for master secret storage:
 
 **Defense-in-Depth Benefit:** While security is bounded by the weakest layer, the defense-in-depth architecture ensures that even if one layer is compromised (e.g., a future break in Ed25519), other layers continue to provide protection. An attacker must defeat ALL layers to fully compromise the system.
 
-See [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md) for detailed security proofs and the formal security bound statement.
+See [SECURITY.md](SECURITY.md) for detailed security proofs and the formal security bound statement.
 
 ### Security Assumptions
 
@@ -574,17 +613,17 @@ The security analysis assumes:
 
 | Operation | Target Latency | Measured Latency |
 |-----------|---------------|------------------|
-| Key Generation | < 50 ms | ~35 ms |
-| Package Creation | < 200 ms | ~150 ms |
-| Package Verification | < 150 ms | ~85 ms |
-| HMAC Computation | < 1 ms | ~0.3 ms |
-| SHA3-256 Hash | < 1 ms | ~0.2 ms |
+| KMS Generation | < 5 ms | ~2.12 ms |
+| Package Creation (6-layer) | < 5 ms | ~2.17 ms |
+| Package Verification (6-layer) | < 5 ms | ~2.04 ms |
+| HMAC Computation | < 1 ms | ~0.032 ms |
+| SHA3-256 Hash | < 1 ms | ~0.001 ms |
 
 ### Throughput Characteristics
 
-- **Signing Throughput**: ~1,116 packages/second (single core)
-- **Verification Throughput**: ~4,717 packages/second (single core)
-- **Bottleneck**: ML-DSA-65 signing (780 microseconds, 87% of signing time)
+- **Signing Throughput**: ~462 packages/second (single core, full 6-layer)
+- **Verification Throughput**: ~489 packages/second (single core, full 6-layer)
+- **Bottleneck**: ML-DSA-65 signing (4.20 ms, dominant signing cost)
 
 ### Optimization Strategies
 
@@ -596,12 +635,77 @@ The security analysis assumes:
 **Ethical Integration Efficiency**:
 - Cached ethical signatures for repeated operations
 - Optimized pillar validation with early termination
-- Minimal serialization overhead (< 4% total)
+- ~15% overhead on HKDF derivation specifically; <2% impact on end-to-end package operations (ML-DSA-65 signing dominates pipeline at ~4.2ms)
 
 **Memory Management**:
 - Secure zeroing of key material after use
 - Bounded buffer sizes for all operations
 - Automatic cleanup via context managers
+
+### Cython Acceleration Strategy
+
+The system provides two Cython extension modules for performance-critical paths:
+
+**`src/cython/hmac_binding.pyx`** — Direct binding to native `ama_hmac_sha3_256()`:
+- Compiles to C, calls the native function directly with zero Python marshaling
+- Throughput: ~262K ops/sec (vs ~182K ops/sec for ctypes fallback)
+- Auto-selected when extension is built; ctypes fallback for environments without Cython
+
+**`src/cython/math_engine.pyx`** — Optimized mathematical operations:
+- Lyapunov stability computation (27.3x speedup)
+- Matrix-vector multiplication (28.1x speedup)
+- NTT operations (37.7x speedup)
+- Helix evolution (18.9x speedup)
+- NumPy integration for array operations
+
+**`src/cython/helix_engine_complete.pyx`** — Complete helix engine with Cython optimization.
+
+Both compiled `.so` modules are installed into the `ama_cryptography/` package directory. The Python API detects availability at import time and falls back to pure Python implementations when extensions are not built.
+
+### HMAC-SHA3-256 Binding Architecture
+
+`ama_hmac_sha3_256()` is exposed to Python through two binding layers:
+
+**Primary path: Cython (`cy_hmac_sha3_256`)**
+Compiles to C and calls `ama_hmac_sha3_256()` directly. Zero Python marshaling
+overhead. Throughput: ~262K ops/sec.
+
+**Fallback path: ctypes (`native_hmac_sha3_256`)**
+Available when the Cython extension is not built. Incurs per-call Python
+marshaling overhead. Throughput: ~182K ops/sec. Functionally correct; not for
+high-frequency use.
+
+The Cython path is selected automatically when the extension is built (standard
+install). The ctypes fallback is available for environments where Cython cannot
+be compiled.
+
+### Build System Architecture
+
+The C library uses CMake (`CMakeLists.txt`, ~270 lines) with the following key configuration:
+
+| Option | Default | Effect |
+|--------|---------|--------|
+| `AMA_USE_NATIVE_PQC` | ON | Compile ML-DSA-65, ML-KEM-1024, SPHINCS+ from source |
+| `AMA_AES_CONSTTIME` | ON | Add bitsliced AES S-box (`ama_aes_bitsliced.c`) for cache-timing hardening |
+| `AMA_BUILD_TESTS` | ON | Build C test suite (9 test files in `tests/c/`) |
+| `AMA_BUILD_EXAMPLES` | ON | Build C examples (`examples/c/`) |
+| `AMA_TESTING_MODE` | OFF | Build test-only library with internal symbol visibility |
+| `AMA_ENABLE_AVX2` | OFF | Auto-detect and enable AVX2 SIMD optimizations |
+
+When `AMA_USE_NATIVE_PQC=OFF`, the PQC source files are excluded and the library provides only classical primitives (SHA3, Ed25519, HKDF, AES-GCM).
+
+Fuzz harnesses are built separately via `fuzz/CMakeLists.txt` (12 targets covering all C implementations).
+
+### Architectural Invariants
+
+All PRs touching `ama_cryptography/`, `.github/workflows/`, or `tests/` must satisfy the four invariants defined in [`.github/INVARIANTS.md`](.github/INVARIANTS.md):
+
+1. **INVARIANT-1 — Zero External Crypto Dependencies**: All cryptographic primitives are owned natively. No third-party crypto packages (`libsodium`, `pynacl`, `cryptography`, etc.). Python stdlib modules (`hashlib`, `os`, `secrets`) permitted for non-primitive operations only.
+2. **INVARIANT-2 — Fail-Closed CI**: Security-critical CI steps must not use `continue-on-error: true`.
+3. **INVARIANT-3 — Observable Failure States**: No bare `except: pass`, no silent `return`, no stderr suppression.
+4. **INVARIANT-4 — Pinned Action References**: All third-party GitHub Actions pinned to full commit SHA.
+
+Additionally, [`INVARIANTS.md`](INVARIANTS.md) (root) requires that all cryptographic primitives map to a non-deprecated entry in [`CSRC_STANDARDS.md`](CSRC_STANDARDS.md).
 
 ---
 
@@ -647,13 +751,18 @@ docker run ama-cryptography:latest
 
 ### Test Categories
 
-| Category | Purpose | Coverage Target |
-|----------|---------|-----------------|
-| Unit Tests | Individual function validation | 80% line coverage |
-| Integration Tests | Cross-component workflows | All public APIs |
-| Performance Tests | Benchmark validation | All critical paths |
-| Security Tests | Cryptographic correctness | 100% crypto functions |
-| Compliance Tests | Standards adherence | All claimed standards |
+| Category | Purpose | Coverage Target | Files |
+|----------|---------|-----------------|-------|
+| Unit Tests | Individual function validation | 80% line coverage | 30 Python test files |
+| C Unit Tests | Native library validation | All C functions | 9 C test files (`tests/c/`) |
+| Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
+| Performance Tests | Benchmark regression detection | All critical paths | `test_performance.py`, `benchmarks/` |
+| Security Tests | Cryptographic correctness | 100% crypto functions | `test_crypto_core_penetration.py`, `test_memory_security.py` |
+| Compliance Tests | Standards adherence | All claimed standards | `test_nist_kat.py`, `test_pqc_kat.py` |
+| Fuzz Tests | Input mutation testing | 12 C targets | `fuzz/fuzz_*.c` |
+| NIST ACVP Vectors | Official vector validation | 815 vectors, 12 algorithms | `nist_vectors/` |
+
+**Total:** 866+ tests collected across 39 files (30 Python + 9 C).
 
 ### Continuous Integration Pipeline
 
@@ -682,10 +791,14 @@ docker run ama-cryptography:latest
 
 Cryptographic implementations are validated against:
 
-- NIST FIPS 202 SHA3-256 test vectors
+- **NIST ACVP vectors** (`nist_vectors/`): 815 vectors tested, 815 passed across 12 algorithm functions and 7 NIST standards. See [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md) for full breakdown.
+- NIST FIPS 202 SHA3-256, SHA3-512, SHAKE-128, SHAKE-256 test vectors
 - NIST FIPS 203 ML-KEM-1024 KAT vectors (10/10 pass — `tests/kat/fips203/`)
 - NIST FIPS 204 ML-DSA-65 KAT vectors (10/10 pass — `tests/kat/fips204/`)
-- NIST FIPS 205 SPHINCS+-SHA2-256f-simple (native implementation)
+- NIST FIPS 205 SPHINCS+-SHA2-256f-simple SigVer vectors (`nist_vectors/SLH-DSA-sigVer-FIPS205.json`)
+- NIST FIPS 180-4 SHA-256 reference vectors
+- NIST SP 800-38D AES-256-GCM test vectors
+- RFC 2104 HMAC-SHA-256 test vectors
 - RFC 5869 HKDF test vectors (SHA-256 for structure validation)
 - Project-specific golden vectors for HMAC-SHA3-256 and HKDF-SHA3-256
 - Legacy .rsp format KAT vectors for ML-KEM (512/768/1024) and ML-DSA (44/65/87)
@@ -706,6 +819,10 @@ Cryptographic implementations are validated against:
 | RFC 2104 | HMAC Specification | Full compliance | — |
 | RFC 5869 | HKDF Specification | Full compliance | — |
 | RFC 8032 | Ed25519 Specification | Full compliance | — |
+| NIST SP 800-38D | AES-GCM Authenticated Encryption | Full compliance | NIST test vectors |
+| RFC 7748 | X25519 Key Exchange | Full compliance | — |
+| RFC 8439 | ChaCha20-Poly1305 AEAD | Full compliance | — |
+| RFC 9106 | Argon2 Password Hashing | Full compliance | — |
 | RFC 3161 | Time-Stamp Protocol | Optional, full compliance when enabled | — |
 
 ### Code Quality Standards
@@ -731,13 +848,24 @@ Cryptographic implementations are validated against:
 7. RFC 5869: HMAC-based Extract-and-Expand Key Derivation Function (HKDF) (May 2010)
 8. RFC 8032: Edwards-Curve Digital Signature Algorithm (EdDSA) (January 2017)
 9. RFC 3161: Internet X.509 Public Key Infrastructure Time-Stamp Protocol (TSP) (August 2001)
+10. RFC 7748: Elliptic Curves for Security (January 2016)
+11. RFC 8439: ChaCha20 and Poly1305 for IETF Protocols (June 2018)
+12. RFC 9106: Argon2 Memory-Hard Function for Password Hashing and Proof-of-Work Applications (September 2021)
+13. NIST SP 800-38D: Recommendation for Block Cipher Modes of Operation: Galois/Counter Mode (GCM) and GMAC (November 2007)
 
 ### Implementation References
 
 - `ama_cryptography/crypto_api.py`: Core cryptographic implementation
-- `SECURITY_ANALYSIS.md`: Detailed security proofs and analysis
+- `ama_cryptography/pqc_backends.py`: Native C library bindings and PQC dispatch
+- `include/ama_cryptography.h`: Complete C API specification
+- `SECURITY.md`: Detailed security proofs and analysis
+- `THREAT_MODEL.md`: Threat model and risk assessment
 - `BENCHMARKS.md`: Performance measurement methodology and results
+- `CSRC_ALIGN_REPORT.md`: NIST ACVP vector validation results (815/815 pass)
+- `CSRC_STANDARDS.md`: Governing standards registry
 - `IMPLEMENTATION_GUIDE.md`: Deployment and integration guide
+- `.github/INVARIANTS.md`: PR-level architectural invariants
+- `INVARIANTS.md`: Library-level invariants (CSRC_STANDARDS.md mapping)
 
 ---
 
@@ -748,6 +876,8 @@ Cryptographic implementations are validated against:
 | 1.0.0 | 2025-11-26 | Steel Security Advisors LLC | Initial professional release |
 | 1.1.0 | 2026-01-09 | Steel Security Advisors LLC | Version alignment |
 | 2.0.0 | 2026-03-08 | Steel Security Advisors LLC | Zero-dependency native C architecture, adaptive posture, hybrid KEM combiner, AES-256-GCM, FIPS 203/204/205 compliance, Phase 2 primitives, ethical pillar alignment, Mercury Agent integration |
+| 2.2.0 | 2026-03-16 | Steel Security Advisors LLC | HMAC-SHA3-256 Cython binding, CSRC alignment report, SHA-512 deduplication |
+| 2.3.0 | 2026-03-19 | Steel Security Advisors LLC | Comprehensive documentation update: Python package structure, Cython acceleration strategy, build system architecture, INVARIANTS reference, NIST ACVP validation (815 vectors), fuzz testing (12 targets), updated performance figures to match current benchmarks |
 
 ---
 

@@ -88,7 +88,6 @@ if not _caller_module.startswith("ama_cryptography"):
 
 import base64
 import hashlib
-import hmac
 import json
 import logging
 import secrets
@@ -105,16 +104,19 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, cast
 if TYPE_CHECKING:
     from ama_cryptography_monitor import AmaCryptographyMonitor
 
+# Constant-time comparison — native C backend (INVARIANT-1: no stdlib hmac)
 # Cryptographic dependencies — native C backend (zero external deps)
 from ama_cryptography.pqc_backends import (
     _ED25519_NATIVE_AVAILABLE,
     _HKDF_NATIVE_AVAILABLE,
+    hmac_sha3_256,
     native_ed25519_keypair,
     native_ed25519_keypair_from_seed,
     native_ed25519_sign,
     native_ed25519_verify,
     native_hkdf,
 )
+from ama_cryptography.secure_memory import constant_time_compare
 
 CRYPTO_AVAILABLE = _ED25519_NATIVE_AVAILABLE and _HKDF_NATIVE_AVAILABLE
 if not CRYPTO_AVAILABLE:
@@ -508,8 +510,8 @@ def hmac_authenticate(message: bytes, key: bytes) -> bytes:
     if len(key) < 32:
         raise ValueError("HMAC key must be at least 32 bytes for SHA3-256 security")
 
-    # Use SHA3-256 for HMAC
-    return hmac.new(key, message, hashlib.sha3_256).digest()
+    # Native C HMAC-SHA3-256 — Cython primary, ctypes fallback (INVARIANT-1 compliant)
+    return hmac_sha3_256(key, message)
 
 
 def hmac_verify(message: bytes, tag: bytes, key: bytes) -> bool:
@@ -533,7 +535,8 @@ def hmac_verify(message: bytes, tag: bytes, key: bytes) -> bool:
             diff |= tag[i] ^ expected[i]
         return diff == 0  # No early return
 
-    Python's hmac.compare_digest() implements constant-time comparison.
+    Uses ama_cryptography.secure_memory.constant_time_compare() for
+    branch-free comparison (INVARIANT-1: no stdlib hmac.compare_digest).
 
     Reference: Timing attack mitigation in RFC 2104, Section 5
 
@@ -546,7 +549,7 @@ def hmac_verify(message: bytes, tag: bytes, key: bytes) -> bool:
         True if tag is valid, False otherwise
     """
     expected = hmac_authenticate(message, key)
-    return hmac.compare_digest(tag, expected)
+    return constant_time_compare(tag, expected)
 
 
 # ============================================================================
@@ -569,7 +572,7 @@ class Ed25519KeyPair:
     Security Level: 128 bits (equivalent to RSA-3072, AES-128)
 
     Key Sizes:
-        - Private key: 32 bytes (256 bits)
+        - Private key: 64 bytes (seed || public_key, expanded for signing performance)
         - Public key: 32 bytes (256 bits, compressed point)
         - Signature: 64 bytes (R || s format)
 
@@ -619,7 +622,9 @@ class Ed25519KeyPair:
                Journal of Cryptographic Engineering, 2(2), 77-89.
     """
 
-    private_key: bytes = field(repr=False)  # 32 bytes - excluded from repr to prevent exposure
+    private_key: bytes = field(
+        repr=False
+    )  # 64 bytes (seed||pk) — excluded from repr to prevent exposure
     public_key: bytes  # 32 bytes
 
 
@@ -668,12 +673,12 @@ def generate_ed25519_keypair(seed: Optional[bytes] = None) -> Ed25519KeyPair:
         if len(seed) != 32:
             raise ValueError("Seed must be exactly 32 bytes")
         public_bytes, sk_bytes = native_ed25519_keypair_from_seed(seed)
-        # Return the 32-byte seed as private key (consistent with original API)
-        return Ed25519KeyPair(private_key=seed, public_key=public_bytes)
+        # Store 64-byte expanded key (seed||pk) to avoid re-expansion on every sign
+        return Ed25519KeyPair(private_key=sk_bytes, public_key=public_bytes)
     else:
         public_bytes, sk_bytes = native_ed25519_keypair()
-        # sk_bytes is seed||pk (64 bytes), return just the 32-byte seed
-        return Ed25519KeyPair(private_key=sk_bytes[:32], public_key=public_bytes)
+        # sk_bytes is seed||pk (64 bytes) — store full expanded key
+        return Ed25519KeyPair(private_key=sk_bytes, public_key=public_bytes)
 
 
 def ed25519_sign(message: bytes, private_key: bytes) -> bytes:
@@ -707,26 +712,30 @@ def ed25519_sign(message: bytes, private_key: bytes) -> bytes:
 
     Args:
         message: Data to sign (arbitrary length)
-        private_key: 32-byte Ed25519 private key seed
+        private_key: 32-byte seed or 64-byte expanded key (seed||pk)
 
     Returns:
         64-byte signature (R || s format)
 
     Raises:
         RuntimeError: If native C library not available
-        ValueError: If private_key is not 32 bytes
+        ValueError: If private_key is not 32 or 64 bytes
     """
     if not CRYPTO_AVAILABLE:
         raise RuntimeError(
             "AMA native C library required for Ed25519 signing. "
             "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
         )
-    if len(private_key) != 32:
-        raise ValueError("Ed25519 private key must be 32 bytes")
 
-    # Convert 32-byte seed to 64-byte native key format (seed || pk)
-    _, sk_bytes = native_ed25519_keypair_from_seed(private_key)
-    return native_ed25519_sign(message, sk_bytes)
+    if len(private_key) == 64:
+        # Fast path: already have expanded key (seed||pk), skip re-expansion
+        return native_ed25519_sign(message, private_key)
+    elif len(private_key) == 32:
+        # Legacy path: 32-byte seed needs expansion (SHA-512 + point multiply)
+        _, sk_bytes = native_ed25519_keypair_from_seed(private_key)
+        return native_ed25519_sign(message, sk_bytes)
+    else:
+        raise ValueError("Ed25519 private key must be 32 bytes (seed) or 64 bytes (expanded)")
 
 
 def ed25519_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
@@ -870,7 +879,9 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
         # hash is only used for the TSA request, not for the package integrity.
         cmd_query = ["openssl", "ts", "-query", "-data", "-", "-sha256", "-no_nonce"]
 
-        proc = subprocess.run(cmd_query, input=data, capture_output=True, timeout=10)  # nosec B603
+        proc = subprocess.run(
+            cmd_query, input=data, capture_output=True, timeout=10
+        )  # nosec B603 — args are fixed literals, no user input
 
         if proc.returncode != 0:
             _logger.warning("OpenSSL ts-query failed: %s", proc.stderr.decode())
@@ -885,7 +896,9 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
             tsa_url, data=tsq, headers={"Content-Type": "application/timestamp-query"}
         )
 
-        with urllib.request.urlopen(req, timeout=10) as response:  # nosec B310
+        with urllib.request.urlopen(
+            req, timeout=10
+        ) as response:  # nosec B310 — URL scheme validated above (http/https only)
             tsr = response.read()
 
         return cast(bytes, tsr)
@@ -976,7 +989,9 @@ def verify_rfc3161_timestamp(
             # This verifies the signature structure but not the certificate chain
             cmd_verify.append("-no_check_time")
 
-        proc = subprocess.run(cmd_verify, capture_output=True, timeout=10)  # nosec B603
+        proc = subprocess.run(
+            cmd_verify, capture_output=True, timeout=10
+        )  # nosec B603 — args are fixed OpenSSL commands, paths validated by caller
 
         # OpenSSL returns 0 on successful verification
         if proc.returncode == 0:

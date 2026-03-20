@@ -42,7 +42,7 @@ import platform
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from ama_cryptography.exceptions import (
     PQCUnavailableError,
@@ -387,6 +387,46 @@ def _setup_hkdf_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
+# SHA3-256 native availability (raw hash, not HMAC)
+_SHA3_256_NATIVE_AVAILABLE = False
+
+
+def _setup_sha3_256_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for raw SHA3-256 hash (FIPS 202)."""
+    try:
+        lib.ama_sha3_256.argtypes = [
+            ctypes.c_char_p,  # input
+            ctypes.c_size_t,  # input_len
+            ctypes.c_char_p,  # output (32 bytes)
+        ]
+        lib.ama_sha3_256.restype = ctypes.c_int
+
+        return True
+    except AttributeError:
+        return False
+
+
+# HMAC-SHA3-256 native availability (independent of HKDF)
+_HMAC_SHA3_256_NATIVE_AVAILABLE = False
+
+
+def _setup_hmac_sha3_256_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for HMAC-SHA3-256. Independent from HKDF setup."""
+    try:
+        lib.ama_hmac_sha3_256.argtypes = [
+            ctypes.c_char_p,  # key
+            ctypes.c_size_t,  # key_len
+            ctypes.c_char_p,  # msg
+            ctypes.c_size_t,  # msg_len
+            ctypes.c_char_p,  # out (32 bytes)
+        ]
+        lib.ama_hmac_sha3_256.restype = ctypes.c_int
+
+        return True
+    except AttributeError:
+        return False
+
+
 # secp256k1 native availability
 _SECP256K1_NATIVE_AVAILABLE = False
 
@@ -525,6 +565,8 @@ if _native_lib is not None:
     _ED25519_NATIVE_AVAILABLE = _setup_ed25519_ctypes(_native_lib)
     _AES_GCM_NATIVE_AVAILABLE = _setup_aes_gcm_ctypes(_native_lib)
     _HKDF_NATIVE_AVAILABLE = _setup_hkdf_ctypes(_native_lib)
+    _SHA3_256_NATIVE_AVAILABLE = _setup_sha3_256_ctypes(_native_lib)
+    _HMAC_SHA3_256_NATIVE_AVAILABLE = _setup_hmac_sha3_256_ctypes(_native_lib)
     _SECP256K1_NATIVE_AVAILABLE = _setup_secp256k1_ctypes(_native_lib)
     _X25519_NATIVE_AVAILABLE = _setup_x25519_ctypes(_native_lib)
     _ARGON2_NATIVE_AVAILABLE = _setup_argon2_ctypes(_native_lib)
@@ -539,6 +581,15 @@ KYBER_AVAILABLE: bool = _KYBER_AVAILABLE
 KYBER_BACKEND: Optional[str] = _KYBER_BACKEND
 SPHINCS_AVAILABLE: bool = _SPHINCS_AVAILABLE
 SPHINCS_BACKEND: Optional[str] = _SPHINCS_BACKEND
+
+# SHA3-256 (raw hash) native availability
+SHA3_256_NATIVE_AVAILABLE: bool = _SHA3_256_NATIVE_AVAILABLE
+
+# HMAC-SHA3-256 availability — determined at import time.
+# Cython binding is probed later (after function definitions), so we
+# expose ctypes availability now and patch after the Cython probe.
+HMAC_SHA3_256_AVAILABLE: bool = _HMAC_SHA3_256_NATIVE_AVAILABLE
+HMAC_SHA3_256_BACKEND: Optional[str] = "native" if _HMAC_SHA3_256_NATIVE_AVAILABLE else None
 
 # =============================================================================
 # SECURITY WARNINGS AND CONSTANT-TIME ENFORCEMENT
@@ -683,6 +734,11 @@ def get_pqc_backend_info() -> dict:
                     else None
                 ),
             },
+        },
+        "HMAC-SHA3-256": {
+            "available": HMAC_SHA3_256_AVAILABLE,
+            "backend": HMAC_SHA3_256_BACKEND,
+            "description": "RFC 2104 HMAC with SHA3-256 (136-byte block)",
         },
         # Legacy field for backward compatibility
         "backend": DILITHIUM_BACKEND,
@@ -1523,6 +1579,137 @@ def native_hkdf(
         raise RuntimeError(f"HKDF derivation failed (rc={rc})")
 
     return bytes(okm_buf)
+
+
+# ============================================================================
+# SHA3-256 NATIVE C BACKEND (FIPS 202)
+# ============================================================================
+
+
+def native_sha3_256(data: bytes) -> bytes:
+    """
+    SHA3-256 via native C implementation (ama_sha3_256).
+
+    INVARIANT-1 compliant — zero external crypto dependencies.
+    FIPS 202 compliant — Keccak-f[1600] sponge, rate 136, capacity 64.
+
+    Args:
+        data: Input bytes to hash
+
+    Returns:
+        32-byte SHA3-256 digest
+
+    Raises:
+        RuntimeError: If native library is not available
+    """
+    if _native_lib is None or not _SHA3_256_NATIVE_AVAILABLE:
+        raise RuntimeError("SHA3-256 native backend not available. " + _INSTALL_HINT)
+
+    out_buf = ctypes.create_string_buffer(32)
+
+    rc = _native_lib.ama_sha3_256(
+        data,
+        ctypes.c_size_t(len(data)),
+        out_buf,
+    )
+    if rc != 0:
+        raise RuntimeError(f"SHA3-256 failed (rc={rc})")
+
+    return bytes(out_buf)
+
+
+# ============================================================================
+# HMAC-SHA3-256 NATIVE C BACKEND (RFC 2104)
+# ============================================================================
+
+
+def native_hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
+    """
+    HMAC-SHA3-256 via native C implementation (ama_hmac_sha3_256).
+
+    INVARIANT-1 compliant — zero external crypto dependencies.
+    RFC 2104 compliant — 136-byte block size for SHA3-256 (Keccak rate).
+
+    Args:
+        key: HMAC key (any length; keys >136 bytes are hashed first)
+        msg: Message to authenticate
+
+    Returns:
+        32-byte HMAC-SHA3-256 tag
+
+    Raises:
+        RuntimeError: If native library is not available
+    """
+    if _native_lib is None or not _HMAC_SHA3_256_NATIVE_AVAILABLE:
+        raise RuntimeError("HMAC-SHA3-256 native backend not available. " + _INSTALL_HINT)
+
+    out_buf = ctypes.create_string_buffer(32)
+
+    rc = _native_lib.ama_hmac_sha3_256(
+        key,
+        ctypes.c_size_t(len(key)),
+        msg,
+        ctypes.c_size_t(len(msg)),
+        out_buf,
+    )
+    if rc != 0:
+        raise RuntimeError(f"HMAC-SHA3-256 failed (rc={rc})")
+
+    return bytes(out_buf)
+
+
+def _probe_cython_hmac() -> "Optional[Callable[[bytes, bytes], bytes]]":
+    """Detect Cython HMAC-SHA3-256 binding at module load time."""
+    try:
+        from ama_cryptography.hmac_binding import cy_hmac_sha3_256
+
+        return cy_hmac_sha3_256  # type: ignore[no-any-return]
+    except ImportError:
+        return None
+
+
+_cy_hmac_fn = _probe_cython_hmac()
+
+# Patch public availability constants now that Cython probe is complete.
+if _cy_hmac_fn is not None:
+    HMAC_SHA3_256_AVAILABLE = True
+    HMAC_SHA3_256_BACKEND = "cython"
+elif _HMAC_SHA3_256_NATIVE_AVAILABLE:
+    HMAC_SHA3_256_AVAILABLE = True
+    HMAC_SHA3_256_BACKEND = "native"
+else:
+    HMAC_SHA3_256_AVAILABLE = False
+    HMAC_SHA3_256_BACKEND = None
+    import warnings
+
+    warnings.warn(
+        "HMAC-SHA3-256 native backend not available. "
+        "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
+        "&& cmake --build build  — or install the Cython extension.",
+        UserWarning,
+        stacklevel=1,
+    )
+
+
+def hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
+    """
+    HMAC-SHA3-256 via AMA native C implementation.
+
+    Primary path: Cython binding (zero marshaling overhead).
+    Fallback: ctypes binding (available if Cython extension not built).
+
+    INVARIANT-1 compliant — zero external crypto dependencies.
+    RFC 2104 compliant — 136-byte block size for SHA3-256.
+
+    Raises:
+        RuntimeError: If no HMAC-SHA3-256 backend is available (neither
+            Cython extension nor native C library found).
+    """
+    if not HMAC_SHA3_256_AVAILABLE:
+        raise RuntimeError("HMAC-SHA3-256 backend not available. " + _INSTALL_HINT)
+    if _cy_hmac_fn is not None:
+        return _cy_hmac_fn(key, msg)
+    return native_hmac_sha3_256(key, msg)
 
 
 # ============================================================================

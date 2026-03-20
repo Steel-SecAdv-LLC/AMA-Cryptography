@@ -49,9 +49,9 @@ except ImportError:
     psutil = None  # type: ignore[assignment]
     _HAS_PSUTIL = False
 
+from ama_cryptography.pqc_backends import DILITHIUM_BACKEND
 from code_guardian_secure import (
     DILITHIUM_AVAILABLE,
-    DILITHIUM_BACKEND,
     ETHICAL_VECTOR,
     MASTER_CODES,
     MASTER_HELIX_PARAMS,

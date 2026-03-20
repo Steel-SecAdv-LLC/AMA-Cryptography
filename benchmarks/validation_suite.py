@@ -270,14 +270,14 @@ class BenchmarkValidator:
         result = self.validate_claim("sha3_256_hash", stats["mean_ms"], stats["std_ms"])
         print(f"  {result.message}")
 
-        # HMAC-SHA3-256
+        # HMAC-SHA3-256 (INVARIANT-1: use project's own implementation)
         try:
-            import hmac
+            from code_guardian_secure import hmac_authenticate
 
             key = secrets.token_bytes(32)
 
             def hmac_auth():
-                return hmac.new(key, test_data, hashlib.sha3_256).digest()
+                return hmac_authenticate(test_data, key)
 
             stats = self.benchmark_operation("hmac_sha3", hmac_auth)
             result = self.validate_claim("hmac_sha3_auth", stats["mean_ms"], stats["std_ms"])

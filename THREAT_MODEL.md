@@ -139,7 +139,7 @@ AMA Cryptography is a zero-dependency native C cryptographic library providing q
 
 | Threat | Mitigation | Status | Evidence |
 |--------|-----------|--------|----------|
-| T3.1 | HSM/TPM required for production key storage | **REQUIRED** | Documented in SECURITY_ANALYSIS.md |
+| T3.1 | HSM/TPM required for production key storage | **REQUIRED** | Documented in SECURITY.md |
 | T3.1 | Secure memory zeroing prevents post-use leakage | **IMPLEMENTED** | `ama_secure_memzero()` on all key material |
 | T3.2 | 96-bit random nonce from OS CSPRNG | **IMPLEMENTED** | `ama_platform_rand.c` (getrandom/BCrypt) |
 | T3.3 | Platform CSPRNG (getrandom, getentropy, BCryptGenRandom) | **IMPLEMENTED** | `ama_platform_rand.c`, no userspace PRNG |
