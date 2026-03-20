@@ -40,6 +40,7 @@
 
 #include "../include/ama_cryptography.h"
 #include "internal/ama_sha2.h"
+#include "fe51.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -84,372 +85,38 @@
 
 /* ============================================================================
  * FIELD ARITHMETIC: GF(2^255 - 19)
+ *
+ * Radix 2^51 representation (5 limbs), implemented in fe51.h.
+ * This provides ~2x fewer cross-products than the ref10 radix-2^25.5
+ * (10 limb) representation, using __uint128_t intermediates.
  * ============================================================================ */
 
-typedef int64_t fe25519[10];  /* Radix 2^25.5 representation */
+typedef uint64_t fe25519[5];  /* Radix 2^51 representation (backed by fe51.h) */
 
-/* Helper: load 3 bytes little-endian */
+/* Helper: load 3/4 bytes little-endian (used by scalar arithmetic) */
 static int64_t load_3(const uint8_t *in) {
-    int64_t result;
-    result  = (int64_t)in[0];
-    result |= ((int64_t)in[1]) << 8;
-    result |= ((int64_t)in[2]) << 16;
-    return result;
+    return (int64_t)in[0] | ((int64_t)in[1] << 8) | ((int64_t)in[2] << 16);
 }
-
-/* Helper: load 4 bytes little-endian */
 static int64_t load_4(const uint8_t *in) {
-    int64_t result;
-    result  = (int64_t)in[0];
-    result |= ((int64_t)in[1]) << 8;
-    result |= ((int64_t)in[2]) << 16;
-    result |= ((int64_t)in[3]) << 24;
-    return result;
+    return (int64_t)in[0] | ((int64_t)in[1] << 8) | ((int64_t)in[2] << 16) | ((int64_t)in[3] << 24);
 }
 
-/*
- * Load 32 bytes as field element (little-endian).
- * Uses radix 2^25.5: limbs alternate 26 and 25 bits.
- * Based on the SUPERCOP ref10 fe_frombytes implementation.
- */
-static void fe25519_frombytes(fe25519 h, const uint8_t *s) {
-    int64_t h0 = load_4(s);
-    int64_t h1 = load_3(s + 4) << 6;
-    int64_t h2 = load_3(s + 7) << 5;
-    int64_t h3 = load_3(s + 10) << 3;
-    int64_t h4 = load_3(s + 13) << 2;
-    int64_t h5 = load_4(s + 16);
-    int64_t h6 = load_3(s + 20) << 7;
-    int64_t h7 = load_3(s + 23) << 5;
-    int64_t h8 = load_3(s + 26) << 4;
-    int64_t h9 = (load_3(s + 29) & 8388607) << 2;
-
-    int64_t carry0, carry1, carry2, carry3, carry4;
-    int64_t carry5, carry6, carry7, carry8, carry9;
-
-    carry9 = (h9 + ((int64_t)1 << 24)) >> 25; h0 += carry9 * 19; h9 -= carry9 * ((int64_t)1 << 25);
-    carry1 = (h1 + ((int64_t)1 << 24)) >> 25; h2 += carry1; h1 -= carry1 * ((int64_t)1 << 25);
-    carry3 = (h3 + ((int64_t)1 << 24)) >> 25; h4 += carry3; h3 -= carry3 * ((int64_t)1 << 25);
-    carry5 = (h5 + ((int64_t)1 << 24)) >> 25; h6 += carry5; h5 -= carry5 * ((int64_t)1 << 25);
-    carry7 = (h7 + ((int64_t)1 << 24)) >> 25; h8 += carry7; h7 -= carry7 * ((int64_t)1 << 25);
-
-    carry0 = (h0 + ((int64_t)1 << 25)) >> 26; h1 += carry0; h0 -= carry0 * ((int64_t)1 << 26);
-    carry2 = (h2 + ((int64_t)1 << 25)) >> 26; h3 += carry2; h2 -= carry2 * ((int64_t)1 << 26);
-    carry4 = (h4 + ((int64_t)1 << 25)) >> 26; h5 += carry4; h4 -= carry4 * ((int64_t)1 << 26);
-    carry6 = (h6 + ((int64_t)1 << 25)) >> 26; h7 += carry6; h6 -= carry6 * ((int64_t)1 << 26);
-    carry8 = (h8 + ((int64_t)1 << 25)) >> 26; h9 += carry8; h8 -= carry8 * ((int64_t)1 << 26);
-
-    h[0] = h0; h[1] = h1; h[2] = h2; h[3] = h3; h[4] = h4;
-    h[5] = h5; h[6] = h6; h[7] = h7; h[8] = h8; h[9] = h9;
-}
-
-/*
- * Reduce and store field element to 32 bytes (little-endian).
- * Based on the SUPERCOP ref10 fe_tobytes implementation.
- * Limb layout: h[0]=26, h[1]=25, h[2]=26, ..., h[9]=25 bits.
- */
-static void fe25519_tobytes(uint8_t *s, const fe25519 h) {
-    int64_t t[10];
-    int64_t q, carry;
-    int i;
-
-    for (i = 0; i < 10; i++) t[i] = h[i];
-
-    /* Compute q = floor((h + 19) / (2^255 - 19)) to determine if we need final reduction */
-    q = (19 * t[9] + ((int64_t)1 << 24)) >> 25;
-    q = (t[0] + q) >> 26;
-    q = (t[1] + q) >> 25;
-    q = (t[2] + q) >> 26;
-    q = (t[3] + q) >> 25;
-    q = (t[4] + q) >> 26;
-    q = (t[5] + q) >> 25;
-    q = (t[6] + q) >> 26;
-    q = (t[7] + q) >> 25;
-    q = (t[8] + q) >> 26;
-    q = (t[9] + q) >> 25;
-
-    /* If q=1, h >= p, so subtract p by adding 19 */
-    t[0] += 19 * q;
-
-    /* Propagate carries to get canonical form */
-    carry = t[0] >> 26; t[1] += carry; t[0] -= carry * ((int64_t)1 << 26);
-    carry = t[1] >> 25; t[2] += carry; t[1] -= carry * ((int64_t)1 << 25);
-    carry = t[2] >> 26; t[3] += carry; t[2] -= carry * ((int64_t)1 << 26);
-    carry = t[3] >> 25; t[4] += carry; t[3] -= carry * ((int64_t)1 << 25);
-    carry = t[4] >> 26; t[5] += carry; t[4] -= carry * ((int64_t)1 << 26);
-    carry = t[5] >> 25; t[6] += carry; t[5] -= carry * ((int64_t)1 << 25);
-    carry = t[6] >> 26; t[7] += carry; t[6] -= carry * ((int64_t)1 << 26);
-    carry = t[7] >> 25; t[8] += carry; t[7] -= carry * ((int64_t)1 << 25);
-    carry = t[8] >> 26; t[9] += carry; t[8] -= carry * ((int64_t)1 << 26);
-    carry = t[9] >> 25;               t[9] -= carry * ((int64_t)1 << 25);
-
-    /* Pack into 32 bytes (matching 26/25-bit limb boundaries) */
-    s[ 0] = (uint8_t)(t[0] >> 0);
-    s[ 1] = (uint8_t)(t[0] >> 8);
-    s[ 2] = (uint8_t)(t[0] >> 16);
-    s[ 3] = (uint8_t)((t[0] >> 24) | (t[1] * ((int64_t)1 << 2)));
-    s[ 4] = (uint8_t)(t[1] >> 6);
-    s[ 5] = (uint8_t)(t[1] >> 14);
-    s[ 6] = (uint8_t)((t[1] >> 22) | (t[2] * ((int64_t)1 << 3)));
-    s[ 7] = (uint8_t)(t[2] >> 5);
-    s[ 8] = (uint8_t)(t[2] >> 13);
-    s[ 9] = (uint8_t)((t[2] >> 21) | (t[3] * ((int64_t)1 << 5)));
-    s[10] = (uint8_t)(t[3] >> 3);
-    s[11] = (uint8_t)(t[3] >> 11);
-    s[12] = (uint8_t)((t[3] >> 19) | (t[4] * ((int64_t)1 << 6)));
-    s[13] = (uint8_t)(t[4] >> 2);
-    s[14] = (uint8_t)(t[4] >> 10);
-    s[15] = (uint8_t)(t[4] >> 18);
-    s[16] = (uint8_t)(t[5] >> 0);
-    s[17] = (uint8_t)(t[5] >> 8);
-    s[18] = (uint8_t)(t[5] >> 16);
-    s[19] = (uint8_t)((t[5] >> 24) | (t[6] * ((int64_t)1 << 1)));
-    s[20] = (uint8_t)(t[6] >> 7);
-    s[21] = (uint8_t)(t[6] >> 15);
-    s[22] = (uint8_t)((t[6] >> 23) | (t[7] * ((int64_t)1 << 3)));
-    s[23] = (uint8_t)(t[7] >> 5);
-    s[24] = (uint8_t)(t[7] >> 13);
-    s[25] = (uint8_t)((t[7] >> 21) | (t[8] * ((int64_t)1 << 4)));
-    s[26] = (uint8_t)(t[8] >> 4);
-    s[27] = (uint8_t)(t[8] >> 12);
-    s[28] = (uint8_t)((t[8] >> 20) | (t[9] * ((int64_t)1 << 6)));
-    s[29] = (uint8_t)(t[9] >> 2);
-    s[30] = (uint8_t)(t[9] >> 10);
-    s[31] = (uint8_t)(t[9] >> 18);
-}
-
-static void fe25519_0(fe25519 h) {
-    memset(h, 0, sizeof(fe25519));
-}
-
-static void fe25519_1(fe25519 h) {
-    memset(h, 0, sizeof(fe25519));
-    h[0] = 1;
-}
-
-static void fe25519_copy(fe25519 h, const fe25519 f) {
-    memcpy(h, f, sizeof(fe25519));
-}
-
-static void fe25519_add(fe25519 h, const fe25519 f, const fe25519 g) {
-    for (int i = 0; i < 10; i++) h[i] = f[i] + g[i];
-}
-
-static void fe25519_sub(fe25519 h, const fe25519 f, const fe25519 g) {
-    for (int i = 0; i < 10; i++) h[i] = f[i] - g[i];
-}
-
-static void fe25519_neg(fe25519 h, const fe25519 f) {
-    for (int i = 0; i < 10; i++) h[i] = -f[i];
-}
-
-/* Carry and reduce */
-static void fe25519_carry(fe25519 h) {
-    int64_t carry;
-    for (int i = 0; i < 10; i++) {
-        int bits = (i & 1) ? 25 : 26;
-        carry = h[i] >> bits;
-        h[i] -= carry * ((int64_t)1 << bits);
-        if (i < 9) h[i + 1] += carry;
-        else h[0] += 19 * carry;
-    }
-}
-
-/*
- * Multiplication with proper ref10 carry propagation.
- * The carry pattern is critical: it uses biased rounding and an interleaved
- * order (0,4,1,5,2,6,3,7,4,8,9,0) to keep limbs bounded within [-2^25, 2^26).
- * A naive single-pass carry allows limbs to grow, eventually causing int64_t
- * overflow in subsequent multiplications.
- * Based on the SUPERCOP ref10 fe_mul implementation.
- */
-static void fe25519_mul(fe25519 h, const fe25519 f, const fe25519 g) {
-    int64_t f0 = f[0], f1 = f[1], f2 = f[2], f3 = f[3], f4 = f[4];
-    int64_t f5 = f[5], f6 = f[6], f7 = f[7], f8 = f[8], f9 = f[9];
-    int64_t g0 = g[0], g1 = g[1], g2 = g[2], g3 = g[3], g4 = g[4];
-    int64_t g5 = g[5], g6 = g[6], g7 = g[7], g8 = g[8], g9 = g[9];
-    int64_t g1_19 = 19 * g1, g2_19 = 19 * g2, g3_19 = 19 * g3, g4_19 = 19 * g4;
-    int64_t g5_19 = 19 * g5, g6_19 = 19 * g6, g7_19 = 19 * g7, g8_19 = 19 * g8, g9_19 = 19 * g9;
-    int64_t f1_2 = 2 * f1, f3_2 = 2 * f3, f5_2 = 2 * f5, f7_2 = 2 * f7, f9_2 = 2 * f9;
-
-    int64_t h0 = f0*g0 + f1_2*g9_19 + f2*g8_19 + f3_2*g7_19 + f4*g6_19 + f5_2*g5_19 + f6*g4_19 + f7_2*g3_19 + f8*g2_19 + f9_2*g1_19;
-    int64_t h1 = f0*g1 + f1*g0 + f2*g9_19 + f3*g8_19 + f4*g7_19 + f5*g6_19 + f6*g5_19 + f7*g4_19 + f8*g3_19 + f9*g2_19;
-    int64_t h2 = f0*g2 + f1_2*g1 + f2*g0 + f3_2*g9_19 + f4*g8_19 + f5_2*g7_19 + f6*g6_19 + f7_2*g5_19 + f8*g4_19 + f9_2*g3_19;
-    int64_t h3 = f0*g3 + f1*g2 + f2*g1 + f3*g0 + f4*g9_19 + f5*g8_19 + f6*g7_19 + f7*g6_19 + f8*g5_19 + f9*g4_19;
-    int64_t h4 = f0*g4 + f1_2*g3 + f2*g2 + f3_2*g1 + f4*g0 + f5_2*g9_19 + f6*g8_19 + f7_2*g7_19 + f8*g6_19 + f9_2*g5_19;
-    int64_t h5 = f0*g5 + f1*g4 + f2*g3 + f3*g2 + f4*g1 + f5*g0 + f6*g9_19 + f7*g8_19 + f8*g7_19 + f9*g6_19;
-    int64_t h6 = f0*g6 + f1_2*g5 + f2*g4 + f3_2*g3 + f4*g2 + f5_2*g1 + f6*g0 + f7_2*g9_19 + f8*g8_19 + f9_2*g7_19;
-    int64_t h7 = f0*g7 + f1*g6 + f2*g5 + f3*g4 + f4*g3 + f5*g2 + f6*g1 + f7*g0 + f8*g9_19 + f9*g8_19;
-    int64_t h8 = f0*g8 + f1_2*g7 + f2*g6 + f3_2*g5 + f4*g4 + f5_2*g3 + f6*g2 + f7_2*g1 + f8*g0 + f9_2*g9_19;
-    int64_t h9 = f0*g9 + f1*g8 + f2*g7 + f3*g6 + f4*g5 + f5*g4 + f6*g3 + f7*g2 + f8*g1 + f9*g0;
-
-    int64_t carry0, carry1, carry2, carry3, carry4;
-    int64_t carry5, carry6, carry7, carry8, carry9;
-
-    /*
-     * Ref10 interleaved carry propagation.
-     * The order (0,4,1,5,2,6,3,7,4,8,9,0) ensures each limb receives at most
-     * one incoming carry before its own carry is extracted, keeping all limbs
-     * within the range needed to prevent overflow in subsequent multiplications.
-     */
-    carry0 = (h0 + ((int64_t)1 << 25)) >> 26; h1 += carry0; h0 -= carry0 * ((int64_t)1 << 26);
-    carry4 = (h4 + ((int64_t)1 << 25)) >> 26; h5 += carry4; h4 -= carry4 * ((int64_t)1 << 26);
-    carry1 = (h1 + ((int64_t)1 << 24)) >> 25; h2 += carry1; h1 -= carry1 * ((int64_t)1 << 25);
-    carry5 = (h5 + ((int64_t)1 << 24)) >> 25; h6 += carry5; h5 -= carry5 * ((int64_t)1 << 25);
-    carry2 = (h2 + ((int64_t)1 << 25)) >> 26; h3 += carry2; h2 -= carry2 * ((int64_t)1 << 26);
-    carry6 = (h6 + ((int64_t)1 << 25)) >> 26; h7 += carry6; h6 -= carry6 * ((int64_t)1 << 26);
-    carry3 = (h3 + ((int64_t)1 << 24)) >> 25; h4 += carry3; h3 -= carry3 * ((int64_t)1 << 25);
-    carry7 = (h7 + ((int64_t)1 << 24)) >> 25; h8 += carry7; h7 -= carry7 * ((int64_t)1 << 25);
-    carry4 = (h4 + ((int64_t)1 << 25)) >> 26; h5 += carry4; h4 -= carry4 * ((int64_t)1 << 26);
-    carry8 = (h8 + ((int64_t)1 << 25)) >> 26; h9 += carry8; h8 -= carry8 * ((int64_t)1 << 26);
-    carry9 = (h9 + ((int64_t)1 << 24)) >> 25; h0 += carry9 * 19; h9 -= carry9 * ((int64_t)1 << 25);
-    carry0 = (h0 + ((int64_t)1 << 25)) >> 26; h1 += carry0; h0 -= carry0 * ((int64_t)1 << 26);
-
-    h[0] = h0; h[1] = h1; h[2] = h2; h[3] = h3; h[4] = h4;
-    h[5] = h5; h[6] = h6; h[7] = h7; h[8] = h8; h[9] = h9;
-}
-
-/*
- * Optimized squaring exploiting f[j]*f[k] = f[k]*f[j] symmetry.
- * Reduces ~100 multiplications (generic mul) to ~55 (dedicated sq).
- * Based on the SUPERCOP ref10 fe_sq implementation.
- * Uses the same interleaved carry propagation as fe25519_mul.
- */
-static void fe25519_sq(fe25519 h, const fe25519 f) {
-    int64_t f0 = f[0], f1 = f[1], f2 = f[2], f3 = f[3], f4 = f[4];
-    int64_t f5 = f[5], f6 = f[6], f7 = f[7], f8 = f[8], f9 = f[9];
-    int64_t f0_2 = 2 * f0, f1_2 = 2 * f1, f2_2 = 2 * f2, f3_2 = 2 * f3;
-    int64_t f4_2 = 2 * f4, f5_2 = 2 * f5, f6_2 = 2 * f6, f7_2 = 2 * f7;
-    int64_t f5_38 = 38 * f5, f6_19 = 19 * f6, f7_38 = 38 * f7;
-    int64_t f8_19 = 19 * f8, f9_38 = 38 * f9;
-
-    int64_t h0 = f0*f0    + f1_2*f9_38 + f2_2*f8_19 + f3_2*f7_38 + f4_2*f6_19 + f5*f5_38;
-    int64_t h1 = f0_2*f1  + f2*f9_38   + f3_2*f8_19 + f4*f7_38   + f5_2*f6_19;
-    int64_t h2 = f0_2*f2  + f1_2*f1    + f3_2*f9_38 + f4_2*f8_19 + f5_2*f7_38 + f6*f6_19;
-    int64_t h3 = f0_2*f3  + f1_2*f2    + f4*f9_38   + f5_2*f8_19 + f6*f7_38;
-    int64_t h4 = f0_2*f4  + f1_2*f3_2  + f2*f2      + f5_2*f9_38 + f6_2*f8_19 + f7*f7_38;
-    int64_t h5 = f0_2*f5  + f1_2*f4    + f2_2*f3    + f6*f9_38   + f7_2*f8_19;
-    int64_t h6 = f0_2*f6  + f1_2*f5_2  + f2_2*f4    + f3_2*f3    + f7_2*f9_38 + f8*f8_19;
-    int64_t h7 = f0_2*f7  + f1_2*f6    + f2_2*f5    + f3_2*f4    + f8*f9_38;
-    int64_t h8 = f0_2*f8  + f1_2*f7_2  + f2_2*f6    + f3_2*f5_2  + f4*f4     + f9*f9_38;
-    int64_t h9 = f0_2*f9  + f1_2*f8    + f2_2*f7    + f3_2*f6    + f4_2*f5;
-
-    int64_t carry0, carry1, carry2, carry3, carry4;
-    int64_t carry5, carry6, carry7, carry8, carry9;
-
-    carry0 = (h0 + ((int64_t)1 << 25)) >> 26; h1 += carry0; h0 -= carry0 * ((int64_t)1 << 26);
-    carry4 = (h4 + ((int64_t)1 << 25)) >> 26; h5 += carry4; h4 -= carry4 * ((int64_t)1 << 26);
-    carry1 = (h1 + ((int64_t)1 << 24)) >> 25; h2 += carry1; h1 -= carry1 * ((int64_t)1 << 25);
-    carry5 = (h5 + ((int64_t)1 << 24)) >> 25; h6 += carry5; h5 -= carry5 * ((int64_t)1 << 25);
-    carry2 = (h2 + ((int64_t)1 << 25)) >> 26; h3 += carry2; h2 -= carry2 * ((int64_t)1 << 26);
-    carry6 = (h6 + ((int64_t)1 << 25)) >> 26; h7 += carry6; h6 -= carry6 * ((int64_t)1 << 26);
-    carry3 = (h3 + ((int64_t)1 << 24)) >> 25; h4 += carry3; h3 -= carry3 * ((int64_t)1 << 25);
-    carry7 = (h7 + ((int64_t)1 << 24)) >> 25; h8 += carry7; h7 -= carry7 * ((int64_t)1 << 25);
-    carry4 = (h4 + ((int64_t)1 << 25)) >> 26; h5 += carry4; h4 -= carry4 * ((int64_t)1 << 26);
-    carry8 = (h8 + ((int64_t)1 << 25)) >> 26; h9 += carry8; h8 -= carry8 * ((int64_t)1 << 26);
-    carry9 = (h9 + ((int64_t)1 << 24)) >> 25; h0 += carry9 * 19; h9 -= carry9 * ((int64_t)1 << 25);
-    carry0 = (h0 + ((int64_t)1 << 25)) >> 26; h1 += carry0; h0 -= carry0 * ((int64_t)1 << 26);
-
-    h[0] = h0; h[1] = h1; h[2] = h2; h[3] = h3; h[4] = h4;
-    h[5] = h5; h[6] = h6; h[7] = h7; h[8] = h8; h[9] = h9;
-}
-
-/* Inversion via Fermat's little theorem: a^(-1) = a^(p-2) mod p */
-static void fe25519_invert(fe25519 out, const fe25519 z) {
-    fe25519 t0, t1, t2, t3;
-    int i;
-
-    fe25519_sq(t0, z);
-    fe25519_sq(t1, t0);
-    fe25519_sq(t1, t1);
-    fe25519_mul(t1, z, t1);
-    fe25519_mul(t0, t0, t1);
-    fe25519_sq(t2, t0);
-    fe25519_mul(t1, t1, t2);
-    fe25519_sq(t2, t1);
-    for (i = 0; i < 4; i++) fe25519_sq(t2, t2);
-    fe25519_mul(t1, t2, t1);
-    fe25519_sq(t2, t1);
-    for (i = 0; i < 9; i++) fe25519_sq(t2, t2);
-    fe25519_mul(t2, t2, t1);
-    fe25519_sq(t3, t2);
-    for (i = 0; i < 19; i++) fe25519_sq(t3, t3);
-    fe25519_mul(t2, t3, t2);
-    fe25519_sq(t2, t2);
-    for (i = 0; i < 9; i++) fe25519_sq(t2, t2);
-    fe25519_mul(t1, t2, t1);
-    fe25519_sq(t2, t1);
-    for (i = 0; i < 49; i++) fe25519_sq(t2, t2);
-    fe25519_mul(t2, t2, t1);
-    fe25519_sq(t3, t2);
-    for (i = 0; i < 99; i++) fe25519_sq(t3, t3);
-    fe25519_mul(t2, t3, t2);
-    fe25519_sq(t2, t2);
-    for (i = 0; i < 49; i++) fe25519_sq(t2, t2);
-    fe25519_mul(t1, t2, t1);
-    fe25519_sq(t1, t1);
-    for (i = 0; i < 4; i++) fe25519_sq(t1, t1);
-    fe25519_mul(out, t1, t0);
-}
-
-/*
- * Compute z^(2^252 - 3), used for point decompression (sqrt of u/v).
- * Same addition chain as fe25519_invert up to z^(2^250-1), then:
- *   z^(2^252 - 4) * z = z^(2^252 - 3)
- * Based on the SUPERCOP ref10 pow22523 implementation.
- */
-static void fe25519_pow22523(fe25519 out, const fe25519 z) {
-    fe25519 t0, t1, t2, t3;
-    int i;
-
-    fe25519_sq(t0, z);
-    fe25519_sq(t1, t0);
-    fe25519_sq(t1, t1);
-    fe25519_mul(t1, z, t1);
-    fe25519_mul(t0, t0, t1);
-    fe25519_sq(t2, t0);
-    fe25519_mul(t1, t1, t2);
-    fe25519_sq(t2, t1);
-    for (i = 0; i < 4; i++) fe25519_sq(t2, t2);
-    fe25519_mul(t1, t2, t1);
-    fe25519_sq(t2, t1);
-    for (i = 0; i < 9; i++) fe25519_sq(t2, t2);
-    fe25519_mul(t2, t2, t1);
-    fe25519_sq(t3, t2);
-    for (i = 0; i < 19; i++) fe25519_sq(t3, t3);
-    fe25519_mul(t2, t3, t2);
-    fe25519_sq(t2, t2);
-    for (i = 0; i < 9; i++) fe25519_sq(t2, t2);
-    fe25519_mul(t1, t2, t1);
-    fe25519_sq(t2, t1);
-    for (i = 0; i < 49; i++) fe25519_sq(t2, t2);
-    fe25519_mul(t2, t2, t1);
-    fe25519_sq(t3, t2);
-    for (i = 0; i < 99; i++) fe25519_sq(t3, t3);
-    fe25519_mul(t2, t3, t2);
-    fe25519_sq(t2, t2);
-    for (i = 0; i < 49; i++) fe25519_sq(t2, t2);
-    fe25519_mul(t1, t2, t1);
-    fe25519_sq(t1, t1);
-    fe25519_sq(t1, t1);
-    fe25519_mul(out, t1, z);
-}
-
-/* Check if negative (LSB of reduced value) */
-static int fe25519_isnegative(const fe25519 f) {
-    uint8_t s[32];
-    fe25519_tobytes(s, f);
-    return s[0] & 1;
-}
-
-/* Check if zero */
-static int fe25519_iszero(const fe25519 f) {
-    uint8_t s[32];
-    fe25519_tobytes(s, f);
-    int ret = 0;
-    for (int i = 0; i < 32; i++) ret |= s[i];
-    return ret == 0;
-}
+/* Thin wrappers: fe25519_* delegate to fe51_* */
+static inline void fe25519_frombytes(fe25519 h, const uint8_t *s) { fe51_frombytes(h, s); }
+static inline void fe25519_tobytes(uint8_t *s, const fe25519 h)   { fe51_tobytes(s, h); }
+static inline void fe25519_0(fe25519 h)                            { fe51_0(h); }
+static inline void fe25519_1(fe25519 h)                            { fe51_1(h); }
+static inline void fe25519_copy(fe25519 h, const fe25519 f)       { fe51_copy(h, f); }
+static inline void fe25519_add(fe25519 h, const fe25519 f, const fe25519 g) { fe51_add(h, f, g); }
+static inline void fe25519_sub(fe25519 h, const fe25519 f, const fe25519 g) { fe51_sub(h, f, g); }
+static inline void fe25519_neg(fe25519 h, const fe25519 f)        { fe51_neg(h, f); }
+static inline void fe25519_carry(fe25519 h)                        { fe51_carry(h); }
+static inline void fe25519_mul(fe25519 h, const fe25519 f, const fe25519 g) { fe51_mul(h, f, g); }
+static inline void fe25519_sq(fe25519 h, const fe25519 f)         { fe51_sq(h, f); }
+static inline void fe25519_invert(fe25519 out, const fe25519 z)   { fe51_invert(out, z); }
+static inline void fe25519_pow22523(fe25519 out, const fe25519 z) { fe51_pow22523(out, z); }
+static inline int  fe25519_isnegative(const fe25519 f)             { return fe51_isnegative(f); }
+static inline int  fe25519_iszero(const fe25519 f)                 { return fe51_iszero(f); }
 
 /* ============================================================================
  * GROUP OPERATIONS: Extended Twisted Edwards
@@ -477,14 +144,14 @@ typedef struct {
 
 /* d = -121665/121666 (named ed_d to avoid shadowing SHA-512 local 'd') */
 static const fe25519 ed_d = {
-    -10913610, 13857413, -15372611, 6949391, 114729,
-    -8787816, -6275908, -3247719, -18696448, -12055116
+    0x34dca135978a3ULL, 0x1a8283b156ebdULL, 0x5e7a26001c029ULL,
+    0x739c663a03cbbULL, 0x52036cee2b6ffULL
 };
 
 /* 2*d */
 static const fe25519 ed_d2 = {
-    -21827239, -5839606, -30745221, 13898782, 229458,
-    15978800, -12551817, -6495438, 29715968, 9444199
+    0x69b9426b2f159ULL, 0x35050762add7aULL, 0x3cf44c0038052ULL,
+    0x6738cc7407977ULL, 0x2406d9dc56dffULL
 };
 
 /* Forward declaration — needed by ensure_base_point() below */
@@ -603,8 +270,8 @@ static int ge25519_frombytes(ge25519_p3 *h, const uint8_t *s) {
         fe25519_carry(check);
         if (!fe25519_iszero(check)) return -1;
         static const fe25519 sqrt_m1 = {
-            -32595792, -7943725, 9377950, 3500415, 12389472,
-            -272473, -25146209, -2005654, 326686, 11406482
+            0x61b274a0ea0b0ULL, 0x0d5a5fc8f189dULL, 0x7ef5e9cbd0c60ULL,
+            0x78595a6804c9eULL, 0x2b8324804fc1dULL
         };
         fe25519_mul(h->X, h->X, sqrt_m1);
     }
@@ -761,8 +428,8 @@ static void ge25519_init_base_table(void) {
 /* Constant-time conditional move: r = (flag ? p : r).
  * flag MUST be 0 or 1. No branching on flag. */
 static void ge25519_cmov(ge25519_p3 *r, const ge25519_p3 *p, int flag) {
-    int64_t mask = -(int64_t)flag;
-    for (int j = 0; j < 10; j++) {
+    uint64_t mask = -(uint64_t)flag;
+    for (int j = 0; j < 5; j++) {
         r->X[j] ^= mask & (r->X[j] ^ p->X[j]);
         r->Y[j] ^= mask & (r->Y[j] ^ p->Y[j]);
         r->Z[j] ^= mask & (r->Z[j] ^ p->Z[j]);
@@ -825,8 +492,8 @@ static void ge25519_scalarmult_base_windowed(ge25519_p3 *r, const uint8_t *scala
             /* Branchless equality: mask = all-ones when k == lookup_idx, else 0.
              * Uses arithmetic to avoid compiler-generated branches on secret data. */
             unsigned int diff = (unsigned int)(k ^ lookup_idx);
-            int64_t mask = -(int64_t)(1 & ((diff - 1) >> 31));
-            for (int j = 0; j < 10; j++) {
+            uint64_t mask = -(uint64_t)(1 & ((diff - 1) >> 31));
+            for (int j = 0; j < 5; j++) {
                 P.X[j] ^= mask & (P.X[j] ^ ge_base_table[k].X[j]);
                 P.Y[j] ^= mask & (P.Y[j] ^ ge_base_table[k].Y[j]);
                 P.Z[j] ^= mask & (P.Z[j] ^ ge_base_table[k].Z[j]);
