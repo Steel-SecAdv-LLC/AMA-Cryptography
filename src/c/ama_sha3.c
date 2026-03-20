@@ -261,7 +261,7 @@ ama_error_t ama_sha3_256(
     size_t input_len,
     uint8_t* output
 ) {
-    uint64_t state[KECCAK_STATE_SIZE] __attribute__((aligned(64)));
+    _Alignas(64) uint64_t state[KECCAK_STATE_SIZE];
     uint8_t block[SHA3_256_RATE];
     size_t remaining, i;
 
@@ -324,7 +324,7 @@ ama_error_t ama_sha3_512(
     size_t input_len,
     uint8_t* output
 ) {
-    uint64_t state[KECCAK_STATE_SIZE] __attribute__((aligned(64)));
+    _Alignas(64) uint64_t state[KECCAK_STATE_SIZE];
     uint8_t block[SHA3_512_RATE];
     size_t remaining, i;
 
@@ -387,7 +387,7 @@ ama_error_t ama_shake128(
     uint8_t* output,
     size_t output_len
 ) {
-    uint64_t state[KECCAK_STATE_SIZE] __attribute__((aligned(64)));
+    _Alignas(64) uint64_t state[KECCAK_STATE_SIZE];
     uint8_t block[168];  /* SHAKE128 rate = 168 */
     size_t remaining, i, out_idx;
     const size_t rate = 168;
@@ -465,7 +465,7 @@ ama_error_t ama_shake256(
     uint8_t* output,
     size_t output_len
 ) {
-    uint64_t state[KECCAK_STATE_SIZE] __attribute__((aligned(64)));
+    _Alignas(64) uint64_t state[KECCAK_STATE_SIZE];
     uint8_t block[136];  /* SHAKE256 rate = 136 */
     size_t remaining, i, out_idx;
     const size_t rate = 136;

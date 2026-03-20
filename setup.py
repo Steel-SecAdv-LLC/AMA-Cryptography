@@ -124,6 +124,11 @@ def get_extension_modules():
         )
         extensions.append(math_ext)
 
+        # Platform-conditional rpath: $ORIGIN is ELF/Linux-specific
+        rpath = []
+        if sys.platform.startswith("linux"):
+            rpath = ["$ORIGIN/../build/lib", "$ORIGIN/../../build/lib"]
+
         # Cython HMAC-SHA3-256 binding (calls ama_hmac_sha3_256 in libama_cryptography)
         hmac_ext = Extension(
             name="ama_cryptography.hmac_binding",
@@ -131,7 +136,7 @@ def get_extension_modules():
             include_dirs=["include"],
             library_dirs=["build/lib"],
             libraries=["ama_cryptography"],
-            runtime_library_dirs=["$ORIGIN/../build/lib", "$ORIGIN/../../build/lib"],
+            runtime_library_dirs=rpath,
             extra_compile_args=compiler_flags,
             extra_link_args=linker_flags,
             language="c",
@@ -145,7 +150,7 @@ def get_extension_modules():
             include_dirs=["include"],
             library_dirs=["build/lib"],
             libraries=["ama_cryptography"],
-            runtime_library_dirs=["$ORIGIN/../build/lib", "$ORIGIN/../../build/lib"],
+            runtime_library_dirs=rpath,
             extra_compile_args=compiler_flags,
             extra_link_args=linker_flags,
             language="c",

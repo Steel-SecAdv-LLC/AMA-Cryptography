@@ -39,15 +39,19 @@ ed25519_randombytes_unsafe(void *p, size_t len) {
 }
 
 /* Suppress -Wmissing-prototypes for donna's static functions */
+#if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmissing-prototypes"
 #pragma GCC diagnostic ignored "-Wstrict-prototypes"
 #pragma GCC diagnostic ignored "-Wunused-function"
+#endif
 
 /* Include donna's single-file compilation unit */
 #include "vendor/ed25519-donna/ed25519.c"
 
+#if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
+#endif
 
 /* ============================================================================
  * AMA API WRAPPERS

@@ -21,6 +21,7 @@ option(AMA_ENABLE_LTO "Enable link-time optimization" ON)
 option(AMA_USE_NATIVE_PQC "Enable native PQC implementations (ML-DSA-65, Kyber-1024, SPHINCS+)" ON)
 option(AMA_AES_CONSTTIME "Use constant-time bitsliced AES S-box (eliminates cache-timing)" ON)
 option(AMA_ED25519_ASSEMBLY "Enable ed25519-donna x86-64 assembly scalar mult" OFF)
+option(AMA_ENABLE_NATIVE_ARCH "Use -march=native for host-optimized builds" OFF)
 
 # C standard
 set(CMAKE_C_STANDARD 11)
@@ -53,7 +54,6 @@ else()
     # -march=native enables the full ISA of the build host (AVX2, SHA-NI,
     # AES-NI, BMI2, AVX-512 etc.). Guarded by AMA_ENABLE_NATIVE_ARCH so CI
     # can disable it for portable builds.
-    option(AMA_ENABLE_NATIVE_ARCH "Use -march=native for host-optimized builds" OFF)
     if(AMA_ENABLE_NATIVE_ARCH)
         set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -march=native")
         message(STATUS "Native arch: -march=native enabled (host-optimized)")

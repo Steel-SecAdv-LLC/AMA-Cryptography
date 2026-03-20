@@ -167,7 +167,6 @@ static inline void fe64_sub(fe64 h, const fe64 f, const fe64 g) {
 
     /* Simpler approach: if borrow, add 2p = 2^256 - 38 ≡ -38 (mod 2^256) */
     uint64_t borrow = (uint64_t)(b >> 127) & 1;  /* 1 if negative */
-    uint64_t addend = borrow * 38;
     /* Adding -38 mod 2^256 when there's a borrow.
      * But we need to ADD p (not 2p) to fix a single borrow.
      * p = 2^255 - 19. In limbs: {-19, 0, 0, 0x7FFF...}
@@ -283,6 +282,16 @@ static inline void fe64_reduce512(fe64 h, const uint64_t r[8]) {
     acc += h[1]; h[1] = (uint64_t)acc; acc >>= 64;
     acc += h[2]; h[2] = (uint64_t)acc; acc >>= 64;
     acc += h[3]; h[3] = (uint64_t)acc;
+
+    /* A final carry from h[3] is possible after the second pass — fold it. */
+    top = (uint64_t)(acc >> 64);
+    if (top) {
+        acc = (uint128_t)h[0] + (uint128_t)top * 38;
+        h[0] = (uint64_t)acc; acc >>= 64;
+        acc += h[1]; h[1] = (uint64_t)acc; acc >>= 64;
+        acc += h[2]; h[2] = (uint64_t)acc; acc >>= 64;
+        acc += h[3]; h[3] = (uint64_t)acc;
+    }
 }
 
 /**
