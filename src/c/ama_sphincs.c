@@ -1026,10 +1026,6 @@ AMA_API ama_error_t ama_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key
 AMA_API ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
                               const uint8_t *message, size_t message_len,
                               const uint8_t *secret_key) {
-    const uint8_t *sk_seed = secret_key;
-    const uint8_t *sk_prf = secret_key + SPX_N;
-    const uint8_t *pub_seed = secret_key + 2 * SPX_N;
-    const uint8_t *pk_root = secret_key + 3 * SPX_N;
     uint8_t pk[2 * SPX_N];
     uint8_t opt_rand[SPX_N];
     uint8_t R[SPX_N];
@@ -1044,6 +1040,11 @@ AMA_API ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
     if (!signature || !signature_len || !message || !secret_key) {
         return AMA_ERROR_INVALID_PARAM;
     }
+
+    const uint8_t *sk_seed = secret_key;
+    const uint8_t *sk_prf = secret_key + SPX_N;
+    const uint8_t *pub_seed = secret_key + 2 * SPX_N;
+    const uint8_t *pk_root = secret_key + 3 * SPX_N;
 
     if (*signature_len < AMA_SPHINCS_256F_SIGNATURE_BYTES) {
         *signature_len = AMA_SPHINCS_256F_SIGNATURE_BYTES;
@@ -1106,8 +1107,6 @@ AMA_API ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
 AMA_API ama_error_t ama_sphincs_verify(const uint8_t *message, size_t message_len,
                                 const uint8_t *signature, size_t signature_len,
                                 const uint8_t *public_key) {
-    const uint8_t *pub_seed = public_key;
-    const uint8_t *pk_root = public_key + SPX_N;
     const uint8_t *R;
     const uint8_t *fors_sig;
     const uint8_t *ht_sig;
@@ -1120,6 +1119,9 @@ AMA_API ama_error_t ama_sphincs_verify(const uint8_t *message, size_t message_le
     if (!message || !signature || !public_key) {
         return AMA_ERROR_INVALID_PARAM;
     }
+
+    const uint8_t *pub_seed = public_key;
+    const uint8_t *pk_root = public_key + SPX_N;
 
     if (signature_len != AMA_SPHINCS_256F_SIGNATURE_BYTES) {
         return AMA_ERROR_VERIFY_FAILED;

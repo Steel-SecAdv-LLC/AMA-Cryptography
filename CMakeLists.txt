@@ -20,6 +20,26 @@ option(AMA_ENABLE_SANITIZERS "Enable address/undefined sanitizers" OFF)
 option(AMA_ENABLE_LTO "Enable link-time optimization" ON)
 option(AMA_USE_NATIVE_PQC "Enable native PQC implementations (ML-DSA-65, Kyber-1024, SPHINCS+)" ON)
 option(AMA_AES_CONSTTIME "Use constant-time bitsliced AES S-box (eliminates cache-timing)" ON)
+option(AMA_ED25519_ASSEMBLY "Enable ed25519-donna x86-64 assembly scalar mult" OFF)
+option(AMA_ENABLE_NATIVE_ARCH "Use -march=native for host-optimized builds" OFF)
+
+# MSVC lacks __uint128_t required by fe51 field arithmetic. Auto-enable the
+# donna shim (which provides its own field ops) so Windows builds compile.
+# On MSVC ARM64, neither fe51 nor donna is available — fail at configure time.
+if(MSVC AND NOT AMA_ED25519_ASSEMBLY)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64|X86_64")
+        set(AMA_ED25519_ASSEMBLY ON CACHE BOOL
+            "Auto-enabled: MSVC lacks __uint128_t required by fe51" FORCE)
+        message(STATUS
+            "MSVC x64 detected: AMA_ED25519_ASSEMBLY auto-enabled (fe51 requires __uint128_t)")
+    else()
+        message(FATAL_ERROR
+            "AMA Cryptography: MSVC on ${CMAKE_SYSTEM_PROCESSOR} is not supported. "
+            "Ed25519 requires either __uint128_t (GCC/Clang) or x86-64 assembly (donna). "
+            "Neither is available on this compiler/architecture combination. "
+            "Use GCC or Clang to build on non-x64 platforms.")
+    endif()
+endif()
 
 # C standard
 set(CMAKE_C_STANDARD 11)
@@ -48,8 +68,17 @@ else()
     # Release optimizations
     set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -DNDEBUG")
     set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -fomit-frame-pointer")
-    # Note: -march=native removed for portability across CI environments
-    # Users can add -DCMAKE_C_FLAGS="-march=native" for local optimized builds
+
+    # -march=native enables the full ISA of the build host (AVX2, SHA-NI,
+    # AES-NI, BMI2, AVX-512 etc.). Guarded by AMA_ENABLE_NATIVE_ARCH so CI
+    # can disable it for portable builds.
+    if(AMA_ENABLE_NATIVE_ARCH)
+        set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -march=native")
+        message(STATUS "Native arch: -march=native enabled (host-optimized)")
+    endif()
+
+    # -funroll-loops helps the Keccak-f[1600] 24-round permutation loop
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -funroll-loops")
 
     # Debug flags
     set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -O0 -g3 -DDEBUG")
@@ -109,6 +138,22 @@ if(AMA_USE_NATIVE_PQC)
     message(STATUS "Native PQC enabled: ML-DSA-65, Kyber-1024, SPHINCS+-256f (zero OpenSSL dependency)")
 endif()
 
+# ed25519-donna assembly path (x86-64 only)
+if(AMA_ED25519_ASSEMBLY)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+        list(REMOVE_ITEM AMA_SOURCES src/c/ama_ed25519.c)
+        list(APPEND AMA_SOURCES src/c/ed25519_donna_shim.c)
+        # donna needs platform_rand even without native PQC
+        if(NOT AMA_USE_NATIVE_PQC)
+            list(APPEND AMA_SOURCES src/c/ama_platform_rand.c)
+        endif()
+        message(STATUS "Ed25519: donna x86-64 assembly scalar mult (vendored, public domain)")
+    else()
+        message(WARNING "AMA_ED25519_ASSEMBLY requires x86-64 — falling back to fe51")
+        set(AMA_ED25519_ASSEMBLY OFF)
+    endif()
+endif()
+
 # Constant-time AES S-box (bitsliced algebraic decomposition)
 if(AMA_AES_CONSTTIME)
     list(APPEND AMA_SOURCES src/c/ama_aes_bitsliced.c)
@@ -124,6 +169,20 @@ find_package(OpenSSL QUIET)
 if(OPENSSL_FOUND)
     message(STATUS "OpenSSL found: ${OPENSSL_VERSION} (not used by AMA sources)")
 endif()
+
+# Helper: apply ed25519-donna settings to a target
+function(ama_apply_donna_settings target)
+    if(AMA_ED25519_ASSEMBLY)
+        target_compile_definitions(${target} PRIVATE AMA_ED25519_ASSEMBLY)
+        # donna's shim includes vendored source via relative path;
+        # suppress warnings from vendored third-party code
+        if(NOT MSVC)
+            set_source_files_properties(src/c/ed25519_donna_shim.c PROPERTIES
+                COMPILE_FLAGS "-Wno-unused-function -Wno-missing-prototypes -Wno-strict-prototypes"
+            )
+        endif()
+    endif()
+endfunction()
 
 # Create shared library
 # Note: on MSVC the header provides explicit __declspec(dllexport) via AMA_API,
@@ -145,6 +204,7 @@ if(AMA_BUILD_SHARED)
     if(AMA_AES_CONSTTIME)
         target_compile_definitions(ama_cryptography_shared PRIVATE AMA_AES_CONSTTIME)
     endif()
+    ama_apply_donna_settings(ama_cryptography_shared)
 
     # Windows: link bcrypt for BCryptGenRandom (used by ama_platform_rand.c)
     if(WIN32)
@@ -166,6 +226,7 @@ if(AMA_BUILD_STATIC)
     if(AMA_AES_CONSTTIME)
         target_compile_definitions(ama_cryptography_static PRIVATE AMA_AES_CONSTTIME)
     endif()
+    ama_apply_donna_settings(ama_cryptography_static)
 
     if(WIN32)
         target_link_libraries(ama_cryptography_static PRIVATE bcrypt)
@@ -201,6 +262,7 @@ if(AMA_BUILD_TESTS)
     if(AMA_AES_CONSTTIME)
         target_compile_definitions(ama_cryptography_test PRIVATE AMA_AES_CONSTTIME)
     endif()
+    ama_apply_donna_settings(ama_cryptography_test)
 
     if(WIN32)
         target_link_libraries(ama_cryptography_test PRIVATE bcrypt)
@@ -256,6 +318,11 @@ message(STATUS "  Sanitizers:     ${AMA_ENABLE_SANITIZERS}")
 message(STATUS "  Fuzzing:        ${AMA_BUILD_FUZZ}")
 message(STATUS "  AES consttime:  ${AMA_AES_CONSTTIME}")
 message(STATUS "  LTO:            ${AMA_ENABLE_LTO}")
+if(MSVC AND AMA_ED25519_ASSEMBLY)
+    message(STATUS "  Ed25519 donna:  Auto (MSVC — fe51 requires __uint128_t)")
+else()
+    message(STATUS "  Ed25519 donna:  ${AMA_ED25519_ASSEMBLY}")
+endif()
 message(STATUS "")
 message(STATUS "Post-Quantum Cryptography:")
 message(STATUS "  Native PQC:     ${AMA_USE_NATIVE_PQC}")

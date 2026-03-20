@@ -62,7 +62,7 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 > - Secure file permissions for key files and cryptographic packages (store on encrypted volumes with restricted access)
 >
 > **Status:** Community-tested | Not externally audited
-> **Last Updated:** 2026-03-19
+> **Last Updated:** 2026-03-20
 
 ---
 
@@ -226,7 +226,7 @@ Future-proof cryptography:
 **Legend:**
 - **Full**: Complete native C implementation with constant-time operations.
 - **Full (native)**: Complete native C implementation — no external PQC dependency required.
-- **Note**: Ed25519 C implementation includes dedicated `fe25519_sq()` field arithmetic optimization and C11 atomics for thread-safe initialization (v2.0). Full RFC 8032 sign/verify roundtrip verified.
+- **Note**: Ed25519 C implementation uses radix 2^51 field arithmetic (fe51.h — 25 cross-products vs 100 in ref10). Optional ed25519-donna x86-64 assembly backend available via `AMA_ED25519_ASSEMBLY=ON` (auto-enabled on MSVC x64). Full RFC 8032 sign/verify roundtrip verified.
 
 **C Library Implementations (v2.0) — 22 source files in `src/c/`:**
 - `ama_core.c`: Library initialization, version, feature detection, shared utilities
@@ -250,6 +250,7 @@ Future-proof cryptography:
 
 **Cython Acceleration Modules (`src/cython/`):**
 - `hmac_binding.pyx`: Direct Cython binding to `ama_hmac_sha3_256()` (~262K ops/sec)
+- `sha3_binding.pyx`: Direct Cython binding to `ama_sha3_256()` — zero call overhead; ctypes fallback when not built
 - `math_engine.pyx`: Optimized mathematical operations (Lyapunov, NTT, matrix-vector, helix evolution — 18-37x speedup)
 - `helix_engine_complete.pyx`: Complete helix engine with Cython optimization
 
@@ -376,11 +377,11 @@ Complete security package with all defense layers:
 
 | Operation | Throughput | Latency |
 |-----------|-----------|---------|
-| SHA3-256 | 907,822 ops/sec | 0.001ms |
+| SHA3-256 | 222,816 ops/sec | 0.005ms |
 | HMAC-SHA3-256 (Cython binding)* | 262,200 ops/sec | 0.004ms |
-| Ed25519 KeyGen | 3,407 ops/sec | 0.29ms |
-| Ed25519 Sign | 3,361 ops/sec | 0.30ms |
-| Ed25519 Verify | 1,851 ops/sec | 0.54ms |
+| Ed25519 KeyGen | 21,299 ops/sec | 0.05ms |
+| Ed25519 Sign | 20,171 ops/sec | 0.05ms |
+| Ed25519 Verify | 10,067 ops/sec | 0.10ms |
 | HKDF-SHA3-256 | 4,689 ops/sec | 0.21ms |
 
 *HMAC-SHA3-256 via native C (Cython binding). Fallback ctypes path available (~182K ops/sec) when Cython extension is not built. stdlib hmac is not used — INVARIANT-1.
@@ -830,7 +831,7 @@ KAT vectors are sourced from NIST PQC standardization and validate that the nati
 |----------|--------|-----------|
 | Linux | Full support | Ubuntu 22.04, Debian 11, CentOS 8 |
 | macOS | Full support | macOS 12+ (Intel and Apple Silicon) |
-| Windows | Full support | Windows 10/11 (MSVC, MinGW) |
+| Windows | Full support (x64) | Windows 10/11 (MSVC x64, MinGW); MSVC ARM64 emits configure-time error — use GCC/Clang |
 | ARM64 | Full support | Raspberry Pi, AWS Graviton |
 
 ---
@@ -879,9 +880,11 @@ sudo cmake --install .
 - `AMA_BUILD_STATIC` - Build static library (default: ON)
 - `AMA_BUILD_TESTS` - Build test suite including NIST KAT tests (default: ON)
 - `AMA_BUILD_EXAMPLES` - Build C example programs (default: ON)
+- `AMA_ED25519_ASSEMBLY` - Enable ed25519-donna x86-64 assembly scalar mult (default: OFF; auto-ON on MSVC x64)
 - `AMA_ENABLE_AVX2` - Enable AVX2 SIMD optimizations
 - `AMA_ENABLE_SANITIZERS` - Enable AddressSanitizer/UBSan
 - `AMA_ENABLE_LTO` - Link-time optimization
+- `AMA_ENABLE_NATIVE_ARCH` - Enable `-march=native` for host-optimized builds (default: OFF)
 - `AMA_TESTING_MODE` - Build test-only library (internal)
 
 > **Note:** All PQC algorithms (ML-DSA-65, Kyber-1024, SPHINCS+-256f) are implemented natively in C with full NIST KAT validation. No external PQC libraries are needed.
@@ -1109,6 +1112,7 @@ AMA Cryptography v2.0 has **zero core dependencies** — all cryptographic primi
 - **ML-KEM-1024** (Kyber): Public domain (NIST FIPS 203)
 - **SPHINCS+-SHA2-256f**: Public domain (NIST FIPS 205)
 - **Ed25519**: Public domain (ref10 implementation, RFC 8032)
+- **ed25519-donna** (optional assembly backend): Public domain (Andrew Moon) — vendored in `src/c/vendor/ed25519-donna/`, compiled in-tree, enabled via `AMA_ED25519_ASSEMBLY=ON`
 - **AES-256-GCM**: Public domain (NIST SP 800-38D)
 - **SHA3-256/SHAKE**: Public domain (NIST FIPS 202)
 
@@ -1208,6 +1212,6 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 </div>
 
-*Last updated: 2026-03-19*
+*Last updated: 2026-03-20*
 
 </div>

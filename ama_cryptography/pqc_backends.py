@@ -1586,12 +1586,31 @@ def native_hkdf(
 # ============================================================================
 
 
+def _probe_cython_sha3() -> "Optional[Callable[[bytes], bytes]]":
+    """Detect Cython SHA3-256 binding at module load time."""
+    try:
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            from ama_cryptography.sha3_binding import cy_sha3_256
+
+        return cy_sha3_256
+    except (ImportError, AttributeError):
+        return None
+
+
+_cy_sha3_fn = _probe_cython_sha3()
+
+
 def native_sha3_256(data: bytes) -> bytes:
     """
     SHA3-256 via native C implementation (ama_sha3_256).
 
     INVARIANT-1 compliant — zero external crypto dependencies.
     FIPS 202 compliant — Keccak-f[1600] sponge, rate 136, capacity 64.
+    Uses Cython binding when available for zero call overhead,
+    otherwise falls back to ctypes.
 
     Args:
         data: Input bytes to hash
@@ -1602,6 +1621,9 @@ def native_sha3_256(data: bytes) -> bytes:
     Raises:
         RuntimeError: If native library is not available
     """
+    if _cy_sha3_fn is not None:
+        return _cy_sha3_fn(data)
+
     if _native_lib is None or not _SHA3_256_NATIVE_AVAILABLE:
         raise RuntimeError("SHA3-256 native backend not available. " + _INSTALL_HINT)
 

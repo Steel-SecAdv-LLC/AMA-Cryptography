@@ -34,6 +34,7 @@ jobs:
             -I include/ \
             -DAMA_USE_NATIVE_PQC \
             --force \
+            -i src/c/vendor/ \
             src/c/ 2>&1 | tee cppcheck-report.txt
 
       - name: Upload cppcheck report

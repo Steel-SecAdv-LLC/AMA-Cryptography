@@ -82,46 +82,113 @@ static const unsigned int keccak_pi[25] = {
 };
 
 /**
- * Rotate left operation (constant-time)
- * Handles n=0 case to avoid undefined behavior (shifting by 64 bits)
+ * Rotate left operation (constant-time, branchless)
+ * The mask handles n=0 without a branch: when n=0, both shifts produce
+ * defined results because n is masked to [0,63].
  */
 static inline uint64_t rotl64(uint64_t x, unsigned int n) {
-    n &= 63;  /* Ensure n is in range [0, 63] to avoid UB */
-    return n ? ((x << n) | (x >> (64 - n))) : x;
+    /* GCC/Clang recognize this pattern and emit a single ROL instruction */
+    return (x << (n & 63)) | (x >> ((64 - n) & 63));
 }
 
 /**
- * Keccak-f[1600] permutation
+ * Keccak-f[1600] permutation — optimized for throughput.
+ *
+ * Optimizations applied:
+ * - Pragma unroll on the 24-round loop
+ * - Theta D[] computed without modulo (explicit indexing)
+ * - Chi step unrolled to eliminate (x+1)%5 and (x+2)%5 modulo
+ * - Rho+Pi combined with direct constant rotation offsets
  */
 static void keccak_f1600(uint64_t state[KECCAK_STATE_SIZE]) {
     uint64_t C[5], D[5], B[25];
-    unsigned int round, x, y;
+    unsigned int round;
 
+#if defined(__GNUC__) || defined(__clang__)
+    #pragma GCC unroll 24
+#endif
     for (round = 0; round < KECCAK_ROUNDS; round++) {
-        /* Theta step */
-        for (x = 0; x < 5; x++) {
-            C[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
-        }
-        for (x = 0; x < 5; x++) {
-            D[x] = C[(x + 4) % 5] ^ rotl64(C[(x + 1) % 5], 1);
-        }
-        for (y = 0; y < 25; y += 5) {
-            for (x = 0; x < 5; x++) {
-                state[y + x] ^= D[x];
-            }
-        }
+        /* Theta step — column parities */
+        C[0] = state[0] ^ state[5] ^ state[10] ^ state[15] ^ state[20];
+        C[1] = state[1] ^ state[6] ^ state[11] ^ state[16] ^ state[21];
+        C[2] = state[2] ^ state[7] ^ state[12] ^ state[17] ^ state[22];
+        C[3] = state[3] ^ state[8] ^ state[13] ^ state[18] ^ state[23];
+        C[4] = state[4] ^ state[9] ^ state[14] ^ state[19] ^ state[24];
 
-        /* Rho and Pi steps combined */
-        for (x = 0; x < 25; x++) {
-            B[keccak_pi[x]] = rotl64(state[x], keccak_rho[x]);
-        }
+        /* Theta step — D values (no modulo) */
+        D[0] = C[4] ^ rotl64(C[1], 1);
+        D[1] = C[0] ^ rotl64(C[2], 1);
+        D[2] = C[1] ^ rotl64(C[3], 1);
+        D[3] = C[2] ^ rotl64(C[4], 1);
+        D[4] = C[3] ^ rotl64(C[0], 1);
 
-        /* Chi step */
-        for (y = 0; y < 25; y += 5) {
-            for (x = 0; x < 5; x++) {
-                state[y + x] = B[y + x] ^ ((~B[y + (x + 1) % 5]) & B[y + (x + 2) % 5]);
-            }
-        }
+        state[ 0] ^= D[0]; state[ 1] ^= D[1]; state[ 2] ^= D[2]; state[ 3] ^= D[3]; state[ 4] ^= D[4];
+        state[ 5] ^= D[0]; state[ 6] ^= D[1]; state[ 7] ^= D[2]; state[ 8] ^= D[3]; state[ 9] ^= D[4];
+        state[10] ^= D[0]; state[11] ^= D[1]; state[12] ^= D[2]; state[13] ^= D[3]; state[14] ^= D[4];
+        state[15] ^= D[0]; state[16] ^= D[1]; state[17] ^= D[2]; state[18] ^= D[3]; state[19] ^= D[4];
+        state[20] ^= D[0]; state[21] ^= D[1]; state[22] ^= D[2]; state[23] ^= D[3]; state[24] ^= D[4];
+
+        /* Rho + Pi — fully unrolled with compile-time constant rotations.
+         * B[pi[i]] = rotl64(state[i], rho[i])
+         * pi = {0,10,20,5,15,16,1,11,21,6,7,17,2,12,22,23,8,18,3,13,14,24,9,19,4}
+         * rho = {0,1,62,28,27,36,44,6,55,20,3,10,43,25,39,41,45,15,21,8,18,2,61,56,14}
+         */
+        B[ 0] = rotl64(state[ 0],  0);
+        B[10] = rotl64(state[ 1],  1);
+        B[20] = rotl64(state[ 2], 62);
+        B[ 5] = rotl64(state[ 3], 28);
+        B[15] = rotl64(state[ 4], 27);
+        B[16] = rotl64(state[ 5], 36);
+        B[ 1] = rotl64(state[ 6], 44);
+        B[11] = rotl64(state[ 7],  6);
+        B[21] = rotl64(state[ 8], 55);
+        B[ 6] = rotl64(state[ 9], 20);
+        B[ 7] = rotl64(state[10],  3);
+        B[17] = rotl64(state[11], 10);
+        B[ 2] = rotl64(state[12], 43);
+        B[12] = rotl64(state[13], 25);
+        B[22] = rotl64(state[14], 39);
+        B[23] = rotl64(state[15], 41);
+        B[ 8] = rotl64(state[16], 45);
+        B[18] = rotl64(state[17], 15);
+        B[ 3] = rotl64(state[18], 21);
+        B[13] = rotl64(state[19],  8);
+        B[14] = rotl64(state[20], 18);
+        B[24] = rotl64(state[21],  2);
+        B[ 9] = rotl64(state[22], 61);
+        B[19] = rotl64(state[23], 56);
+        B[ 4] = rotl64(state[24], 14);
+
+        /* Chi step — unrolled to eliminate modulo in (x+1)%5 and (x+2)%5 */
+        state[ 0] = B[ 0] ^ ((~B[ 1]) & B[ 2]);
+        state[ 1] = B[ 1] ^ ((~B[ 2]) & B[ 3]);
+        state[ 2] = B[ 2] ^ ((~B[ 3]) & B[ 4]);
+        state[ 3] = B[ 3] ^ ((~B[ 4]) & B[ 0]);
+        state[ 4] = B[ 4] ^ ((~B[ 0]) & B[ 1]);
+
+        state[ 5] = B[ 5] ^ ((~B[ 6]) & B[ 7]);
+        state[ 6] = B[ 6] ^ ((~B[ 7]) & B[ 8]);
+        state[ 7] = B[ 7] ^ ((~B[ 8]) & B[ 9]);
+        state[ 8] = B[ 8] ^ ((~B[ 9]) & B[ 5]);
+        state[ 9] = B[ 9] ^ ((~B[ 5]) & B[ 6]);
+
+        state[10] = B[10] ^ ((~B[11]) & B[12]);
+        state[11] = B[11] ^ ((~B[12]) & B[13]);
+        state[12] = B[12] ^ ((~B[13]) & B[14]);
+        state[13] = B[13] ^ ((~B[14]) & B[10]);
+        state[14] = B[14] ^ ((~B[10]) & B[11]);
+
+        state[15] = B[15] ^ ((~B[16]) & B[17]);
+        state[16] = B[16] ^ ((~B[17]) & B[18]);
+        state[17] = B[17] ^ ((~B[18]) & B[19]);
+        state[18] = B[18] ^ ((~B[19]) & B[15]);
+        state[19] = B[19] ^ ((~B[15]) & B[16]);
+
+        state[20] = B[20] ^ ((~B[21]) & B[22]);
+        state[21] = B[21] ^ ((~B[22]) & B[23]);
+        state[22] = B[22] ^ ((~B[23]) & B[24]);
+        state[23] = B[23] ^ ((~B[24]) & B[20]);
+        state[24] = B[24] ^ ((~B[20]) & B[21]);
 
         /* Iota step */
         state[0] ^= keccak_rc[round];
@@ -194,7 +261,7 @@ ama_error_t ama_sha3_256(
     size_t input_len,
     uint8_t* output
 ) {
-    uint64_t state[KECCAK_STATE_SIZE];
+    _Alignas(64) uint64_t state[KECCAK_STATE_SIZE];
     uint8_t block[SHA3_256_RATE];
     size_t remaining, i;
 
@@ -257,7 +324,7 @@ ama_error_t ama_sha3_512(
     size_t input_len,
     uint8_t* output
 ) {
-    uint64_t state[KECCAK_STATE_SIZE];
+    _Alignas(64) uint64_t state[KECCAK_STATE_SIZE];
     uint8_t block[SHA3_512_RATE];
     size_t remaining, i;
 
@@ -320,7 +387,7 @@ ama_error_t ama_shake128(
     uint8_t* output,
     size_t output_len
 ) {
-    uint64_t state[KECCAK_STATE_SIZE];
+    _Alignas(64) uint64_t state[KECCAK_STATE_SIZE];
     uint8_t block[168];  /* SHAKE128 rate = 168 */
     size_t remaining, i, out_idx;
     const size_t rate = 168;
@@ -398,7 +465,7 @@ ama_error_t ama_shake256(
     uint8_t* output,
     size_t output_len
 ) {
-    uint64_t state[KECCAK_STATE_SIZE];
+    _Alignas(64) uint64_t state[KECCAK_STATE_SIZE];
     uint8_t block[136];  /* SHAKE256 rate = 136 */
     size_t remaining, i, out_idx;
     const size_t rate = 136;

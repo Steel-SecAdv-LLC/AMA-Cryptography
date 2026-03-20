@@ -124,6 +124,13 @@ def get_extension_modules():
         )
         extensions.append(math_ext)
 
+        # Platform-conditional rpath: $ORIGIN is ELF/Linux, @loader_path is Mach-O/macOS
+        rpath = []
+        if sys.platform.startswith("linux"):
+            rpath = ["$ORIGIN/../build/lib", "$ORIGIN/../../build/lib"]
+        elif sys.platform == "darwin":
+            rpath = ["@loader_path/../build/lib", "@loader_path/../../build/lib"]
+
         # Cython HMAC-SHA3-256 binding (calls ama_hmac_sha3_256 in libama_cryptography)
         hmac_ext = Extension(
             name="ama_cryptography.hmac_binding",
@@ -131,12 +138,26 @@ def get_extension_modules():
             include_dirs=["include"],
             library_dirs=["build/lib"],
             libraries=["ama_cryptography"],
-            runtime_library_dirs=["$ORIGIN/../build/lib", "$ORIGIN/../../build/lib"],
+            runtime_library_dirs=rpath,
             extra_compile_args=compiler_flags,
             extra_link_args=linker_flags,
             language="c",
         )
         extensions.append(hmac_ext)
+
+        # Cython SHA3-256 binding (calls ama_sha3_256 in libama_cryptography)
+        sha3_ext = Extension(
+            name="ama_cryptography.sha3_binding",
+            sources=["src/cython/sha3_binding.pyx"],
+            include_dirs=["include"],
+            library_dirs=["build/lib"],
+            libraries=["ama_cryptography"],
+            runtime_library_dirs=rpath,
+            extra_compile_args=compiler_flags,
+            extra_link_args=linker_flags,
+            language="c",
+        )
+        extensions.append(sha3_ext)
 
     return extensions
 
