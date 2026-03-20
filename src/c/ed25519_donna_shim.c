@@ -72,7 +72,10 @@ ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]) 
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    /* donna takes a 32-byte seed, produces public key */
+    /* Generate a 32-byte cryptographic random seed into the first half. */
+    ama_randombytes(secret_key, 32);
+
+    /* Derive the public key from the seed. */
     ed25519_publickey(secret_key, public_key);
 
     /* AMA convention: secret_key = seed[0..31] || public_key[32..63] */

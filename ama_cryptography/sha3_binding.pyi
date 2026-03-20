@@ -1,0 +1,3 @@
+# Stub for Cython extension — compiled at build time, not importable by mypy.
+
+def cy_sha3_256(data: bytes) -> bytes: ...

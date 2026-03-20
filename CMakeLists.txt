@@ -23,6 +23,15 @@ option(AMA_AES_CONSTTIME "Use constant-time bitsliced AES S-box (eliminates cach
 option(AMA_ED25519_ASSEMBLY "Enable ed25519-donna x86-64 assembly scalar mult" OFF)
 option(AMA_ENABLE_NATIVE_ARCH "Use -march=native for host-optimized builds" OFF)
 
+# MSVC lacks __uint128_t required by fe51 field arithmetic. Auto-enable the
+# donna shim (which provides its own field ops) so Windows builds compile.
+if(MSVC AND NOT AMA_ED25519_ASSEMBLY)
+    set(AMA_ED25519_ASSEMBLY ON CACHE BOOL
+        "Auto-enabled: MSVC lacks __uint128_t required by fe51" FORCE)
+    message(STATUS
+        "MSVC detected: AMA_ED25519_ASSEMBLY auto-enabled (fe51 requires __uint128_t)")
+endif()
+
 # C standard
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -300,7 +309,11 @@ message(STATUS "  Sanitizers:     ${AMA_ENABLE_SANITIZERS}")
 message(STATUS "  Fuzzing:        ${AMA_BUILD_FUZZ}")
 message(STATUS "  AES consttime:  ${AMA_AES_CONSTTIME}")
 message(STATUS "  LTO:            ${AMA_ENABLE_LTO}")
-message(STATUS "  Ed25519 donna:  ${AMA_ED25519_ASSEMBLY}")
+if(MSVC AND AMA_ED25519_ASSEMBLY)
+    message(STATUS "  Ed25519 donna:  Auto (MSVC — fe51 requires __uint128_t)")
+else()
+    message(STATUS "  Ed25519 donna:  ${AMA_ED25519_ASSEMBLY}")
+endif()
 message(STATUS "")
 message(STATUS "Post-Quantum Cryptography:")
 message(STATUS "  Native PQC:     ${AMA_USE_NATIVE_PQC}")
