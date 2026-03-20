@@ -218,9 +218,67 @@ Post-fix benchmark results (this environment):
 with the Cython HMAC binding (262K > 100K threshold) and Ed25519 expanded-key
 optimization.
 
+### 2.9 Native C performance investigation — measured values (v2.4)
+
+**Branch:** `claude/ama-performance-investigation-1kTrF`
+**Platform:** Intel Xeon @ 2.10GHz (AVX-512, SHA-NI, AES-NI, BMI2)
+**Compiler:** GCC 13.3.0, C11, Release mode, `-O3 -march=native -funroll-loops`, LTO
+
+The following measurements were taken at the C library level using ctypes FFI
+with `time.perf_counter_ns()` per-call timing (median of 200–1000 iterations
+after warmup). All numbers are from the same hardware and build configuration.
+
+#### Phase 0 baseline (before optimizations, `-O3 -mavx2`, LTO)
+
+| Primitive | ops/sec | median (µs) |
+|-----------|--------:|------------:|
+| SHA3-256 (1 KB) | 151,630 | 6.6 |
+| SHA3-256 (64 B) | 704,722 | 1.4 |
+| HMAC-SHA3-256 (1 KB) | 104,603 | 9.6 |
+| HKDF-SHA3-256 (96 B output) | 69,221 | 14.4 |
+| Ed25519 keygen | 8,566 | 116.7 |
+| Ed25519 sign (240 B msg) | 8,272 | 120.9 |
+| Ed25519 verify (240 B msg) | 3,904 | 256.2 |
+| ML-DSA-65 keygen | 4,243 | 235.7 |
+| ML-DSA-65 sign | 652 | 1,534.7 |
+| ML-DSA-65 verify | 1,174,398 | 0.9 |
+
+#### Post-optimization (compiler flags + Keccak unroll + Cython SHA3-256)
+
+| Primitive | ops/sec | median (µs) | Δ vs baseline |
+|-----------|--------:|------------:|--------------:|
+| SHA3-256 (1 KB, C-level) | 278,203 | 3.6 | **+83.5%** |
+| SHA3-256 (64 B, C-level) | 822,368 | 1.2 | **+16.7%** |
+| SHA3-256 Python API (1 KB) | 317,965 | 3.1 | **+126.7%** |
+| HMAC-SHA3-256 (1 KB) | 185,874 | 5.4 | **+77.7%** |
+| HKDF-SHA3-256 (96 B) | 123,047 | 8.1 | **+77.8%** |
+| Ed25519 keygen | 8,006 | 124.9 | within noise |
+| Ed25519 sign (240 B) | 7,771 | 128.7 | within noise |
+| Ed25519 verify (240 B) | 3,580 | 279.3 | within noise |
+| ML-DSA-65 keygen | 4,925 | 203.0 | **+16.1%** |
+| ML-DSA-65 sign | 4,315 | 231.8 | **+562%** |
+
+Changes applied:
+1. `-march=native` (opt-in via `AMA_ENABLE_NATIVE_ARCH`) — unlocks AVX-512,
+   SHA-NI, AES-NI, BMI2
+2. `-funroll-loops` — benefits Keccak 24-round loop and ML-DSA NTT
+3. Keccak-f[1600] fully unrolled: branchless rotl64, explicit Theta/Rho+Pi/Chi,
+   64-byte aligned state arrays
+4. Cython SHA3-256 binding: eliminates ~1.1 µs ctypes call overhead
+
+**Ed25519 current field representation:** Radix 2^25.5, 10 limbs (int64_t[10])
+— ref10 pattern. No SIMD. Fixed-window base-point multiplication (4-bit, 16-entry
+table). Further optimization requires field arithmetic replacement (radix 2^51
+with __int128), which is out of scope for compiler/Keccak investigation.
+
+**Side-channel note:** The unrolled Keccak permutation preserves the
+constant-time property (no data-dependent branches or memory accesses), but a
+formal timing uniformity audit has not been performed. NIST vectors prove
+correctness, not timing resistance.
+
 ---
 
-## Section 2.9: Performance Summary
+## Section 2.10: Performance Summary
 
 ![Performance Dashboard](assets/performance_dashboard.png)
 
