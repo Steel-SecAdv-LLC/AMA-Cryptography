@@ -1593,9 +1593,9 @@ def _probe_cython_sha3() -> "Optional[Callable[[bytes], bytes]]":
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            from ama_cryptography.sha3_binding import cy_sha3_256  # type: ignore[import-not-found]
+            from ama_cryptography.sha3_binding import cy_sha3_256
 
-        return cy_sha3_256  # type: ignore[no-any-return]
+        return cy_sha3_256
     except (ImportError, AttributeError):
         return None
 
