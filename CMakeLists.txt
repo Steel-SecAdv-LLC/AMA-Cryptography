@@ -25,11 +25,20 @@ option(AMA_ENABLE_NATIVE_ARCH "Use -march=native for host-optimized builds" OFF)
 
 # MSVC lacks __uint128_t required by fe51 field arithmetic. Auto-enable the
 # donna shim (which provides its own field ops) so Windows builds compile.
+# On MSVC ARM64, neither fe51 nor donna is available — fail at configure time.
 if(MSVC AND NOT AMA_ED25519_ASSEMBLY)
-    set(AMA_ED25519_ASSEMBLY ON CACHE BOOL
-        "Auto-enabled: MSVC lacks __uint128_t required by fe51" FORCE)
-    message(STATUS
-        "MSVC detected: AMA_ED25519_ASSEMBLY auto-enabled (fe51 requires __uint128_t)")
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64|X86_64")
+        set(AMA_ED25519_ASSEMBLY ON CACHE BOOL
+            "Auto-enabled: MSVC lacks __uint128_t required by fe51" FORCE)
+        message(STATUS
+            "MSVC x64 detected: AMA_ED25519_ASSEMBLY auto-enabled (fe51 requires __uint128_t)")
+    else()
+        message(FATAL_ERROR
+            "AMA Cryptography: MSVC on ${CMAKE_SYSTEM_PROCESSOR} is not supported. "
+            "Ed25519 requires either __uint128_t (GCC/Clang) or x86-64 assembly (donna). "
+            "Neither is available on this compiler/architecture combination. "
+            "Use GCC or Clang to build on non-x64 platforms.")
+    endif()
 endif()
 
 # C standard

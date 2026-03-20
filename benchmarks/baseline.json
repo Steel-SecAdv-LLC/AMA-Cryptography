@@ -3,8 +3,8 @@
     "version": "2.1.0",
     "created": "2026-03-19T00:00:00Z",
     "description": "AMA Cryptography performance baseline for regression detection",
-    "system": "Linux 6.18.5, Python 3.11.14, 4 cores",
-    "notes": "v2.1.0 baseline recalibrated post Ed25519 expanded-key fix. All benchmarks use native C implementations via ctypes — no stdlib/OpenSSL dependencies in the gate. Ed25519 sign baseline reflects expanded key storage (no re-expansion per sign). HMAC-SHA3-256 baseline reflects ctypes path to native C ama_hmac_sha3_256 on CI runner hardware (Cython binding is primary in production but not compiled in CI). ama_sha3_256_hash uses AMA native C SHA3-256 (FIPS 202) via ctypes — baseline 15K ops/sec measured on shared CI runners. PQC benchmarks use native C library."
+    "system": "GitHub Actions shared runner, Linux x86-64, Python 3.11",
+    "notes": "v2.1.0 baseline recalibrated for CI hardware. Ed25519 baselines set to 65% of CI-measured performance (16303/13119/5256 ops/sec) to provide 35% regression headroom matching tolerance_percent. SHA3/HMAC/HKDF baselines unchanged (pass with large margin). Ed25519 uses radix 2^51 field arithmetic (fe51.h). SHA3-256 uses fully unrolled Keccak-f[1600]. PQC benchmarks use native C library."
   },
   "thresholds": {
     "regression_threshold_percent": 10,
@@ -31,7 +31,7 @@
     "ed25519_keygen": {
       "description": "Ed25519 key pair generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 2700,
+      "baseline_value": 10600,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
@@ -39,7 +39,7 @@
     "ed25519_sign": {
       "description": "Ed25519 signature generation (native C, expanded key)",
       "metric": "operations_per_second",
-      "baseline_value": 2600,
+      "baseline_value": 8527,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
@@ -47,7 +47,7 @@
     "ed25519_verify": {
       "description": "Ed25519 signature verification (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 1400,
+      "baseline_value": 3416,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
