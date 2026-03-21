@@ -3,7 +3,7 @@
 Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the native C library.
 
 **Platform:** Linux-6.18.5-x86_64 | **CPU:** 4 cores | **Python:** 3.11.14
-**Date:** 2026-03-19 | **Dilithium Backend:** native C
+**Date:** 2026-03-21 | **Dilithium Backend:** native C
 
 ---
 
@@ -11,19 +11,19 @@ Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the
 
 | Operation | Mean (ms) | Ops/sec |
 |-----------|----------:|--------:|
-| SHA3-256 | 0.001 | 907,822 |
-| HMAC-SHA3-256 auth (Cython binding)* | 0.004 | 262,200 |
-| HMAC-SHA3-256 verify | 0.004 | 252,100 |
-| HKDF-SHA3-256 | 0.213 | 4,689 |
-| Ed25519 keygen | 0.294 | 3,407 |
-| Ed25519 sign | 0.298 | 3,361 |
-| Ed25519 verify | 0.540 | 1,851 |
-| ML-DSA-65 keygen | 1.554 | 644 |
-| ML-DSA-65 sign | 4.204 | 238 |
-| ML-DSA-65 verify | 1.602 | 624 |
-| KMS generation | 2.122 | 471 |
-| Package creation (6-layer) | 2.165 | 462 |
-| Package verification | 2.043 | 489 |
+| SHA3-256 | 0.001 | 1,109,669 |
+| HMAC-SHA3-256 auth | 0.005 | 206,010 |
+| HMAC-SHA3-256 verify | 0.005 | 186,782 |
+| HKDF-SHA3-256 | 0.038 | 26,529 |
+| Ed25519 keygen | 0.052 | 19,388 |
+| Ed25519 sign | 0.054 | 18,657 |
+| Ed25519 verify | 0.103 | 9,702 |
+| ML-DSA-65 keygen | 0.181 | 5,536 |
+| ML-DSA-65 sign | 0.275 | 3,639 |
+| ML-DSA-65 verify | 0.154 | 6,490 |
+| KMS generation | 0.285 | 3,509 |
+| Package creation (6-layer) | 0.789 | 1,268 |
+| Package verification | 0.332 | 3,009 |
 
 ---
 
@@ -31,11 +31,11 @@ Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the
 
 | Operation | Mean (ms) | Median (ms) | Std Dev (ms) | Ops/sec | Iterations |
 |-----------|----------:|------------:|-------------:|--------:|-----------:|
-| master_secret | 0.0008 | 0.0007 | 0.0006 | 1,322,495 | 10,000 |
-| hkdf_derivation | 0.2597 | 0.2525 | 0.0174 | 3,850 | 1,000 |
-| ed25519_keygen | 0.3694 | 0.3639 | 0.0176 | 2,707 | 1,000 |
-| dilithium_keygen | 1.9586 | 1.9524 | 0.0467 | 511 | 100 |
-| kms_generation | 2.9882 | 2.6285 | 0.6234 | 335 | 100 |
+| master_secret | 0.0005 | 0.0005 | 0.0004 | 1,880,164 | 10,000 |
+| hkdf_derivation | 0.0377 | 0.0359 | 0.0068 | 26,529 | 1,000 |
+| ed25519_keygen | 0.0516 | 0.0505 | 0.0045 | 19,388 | 1,000 |
+| dilithium_keygen | 0.1806 | 0.1774 | 0.0104 | 5,536 | 100 |
+| kms_generation | 0.2850 | 0.2830 | 0.0202 | 3,509 | 100 |
 
 ---
 
@@ -43,13 +43,13 @@ Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the
 
 | Operation | Mean (ms) | Median (ms) | Std Dev (ms) | Ops/sec | Iterations |
 |-----------|----------:|------------:|-------------:|--------:|-----------:|
-| sha3_256 | 0.0017 | 0.0018 | 0.0015 | 591,593 | 10,000 |
-| hmac_auth* | 0.0038 | 0.0036 | 0.0008 | 262,200 | 10,000 |
-| hmac_verify* | 0.0040 | 0.0038 | 0.0008 | 252,100 | 10,000 |
-| ed25519_sign | 0.3771 | 0.3722 | 0.0176 | 2,652 | 1,000 |
-| ed25519_verify | 0.6795 | 0.6720 | 0.0200 | 1,472 | 1,000 |
-| dilithium_sign | 2.3329 | 2.3200 | 0.0500 | 429 | 100 |
-| dilithium_verify | 1.8644 | 1.8500 | 0.0400 | 536 | 100 |
+| sha3_256 | 0.0009 | 0.0008 | 0.0006 | 1,109,669 | 10,000 |
+| hmac_auth | 0.0049 | 0.0039 | 0.0027 | 206,010 | 10,000 |
+| hmac_verify | 0.0054 | 0.0045 | 0.0026 | 186,782 | 10,000 |
+| ed25519_sign | 0.0536 | 0.0512 | 0.0066 | 18,657 | 1,000 |
+| ed25519_verify | 0.1031 | 0.1012 | 0.0084 | 9,702 | 1,000 |
+| dilithium_sign | 0.2748 | 0.2729 | 0.0122 | 3,639 | 100 |
+| dilithium_verify | 0.1541 | 0.1484 | 0.0169 | 6,490 | 100 |
 
 ---
 
@@ -57,10 +57,10 @@ Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the
 
 | Operation | Mean (ms) | Median (ms) | Std Dev (ms) | Ops/sec | Iterations |
 |-----------|----------:|------------:|-------------:|--------:|-----------:|
-| canonical_encoding | 0.0019 | 0.0019 | 0.0006 | 528,095 | 10,000 |
-| code_hash | 0.0132 | 0.0130 | 0.0025 | 75,505 | 10,000 |
-| package_creation | 3.3754 | 3.3500 | 0.0800 | 296 | 100 |
-| package_verification | 2.6225 | 2.6000 | 0.0700 | 381 | 100 |
+| canonical_encoding | 0.0014 | 0.0013 | 0.0007 | 716,826 | 10,000 |
+| code_hash | 0.0137 | 0.0132 | 0.0028 | 72,807 | 10,000 |
+| package_creation | 0.7886 | 0.7826 | 0.0370 | 1,268 | 100 |
+| package_verification | 0.3323 | 0.3151 | 0.0605 | 3,009 | 100 |
 
 ---
 
@@ -68,11 +68,11 @@ Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the
 
 | Operation | Mean (ms) | Ops/sec |
 |-----------|----------:|--------:|
-| ethical_context | 0.0051 | 194,982 |
-| hkdf_standard | 0.0779 | 12,839 |
-| hkdf_with_ethical | 0.0868 | 11,514 |
+| ethical_context | 0.0046 | 217,721 |
+| hkdf_standard | 0.0076 | 132,116 |
+| hkdf_with_ethical | 0.0150 | 66,489 |
 
-> Ethical context overhead: 0.0089 ms (11.42% over standard HKDF)
+> Ethical context overhead: 0.0074 ms (97.37% over standard HKDF)
 
 ---
 
@@ -80,10 +80,10 @@ Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the
 
 | Input Scale | Mean (ms) | Ops/sec | Iterations |
 |------------:|----------:|--------:|-----------:|
-| 1x baseline | 3.4140 | 293 | 50 |
-| 10x | 6.8212 | 147 | 50 |
-| 100x | 4.7049 | 213 | 50 |
-| 1000x | 187.2885 | 5.34 | 50 |
+| 1x baseline | 0.5478 | 1,825 | 50 |
+| 10x | 0.4995 | 2,002 | 50 |
+| 100x | 2.3768 | 421 | 50 |
+| 1000x | 81.1257 | 12 | 50 |
 
 ---
 

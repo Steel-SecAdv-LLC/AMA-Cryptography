@@ -570,8 +570,8 @@ class TestSLHDSA_SHA2_256f_KAT:
         sig = sphincs_provider.sign(b"original", kp.secret_key)
         assert not sphincs_provider.verify(b"modified", sig, kp.public_key)
 
-    def test_acvp_sigver_vectors(self, sphincs_provider: Any) -> None:
-        """Validate against NIST ACVP SLH-DSA-sigVer-FIPS205 vectors."""
+    def test_acvp_sigver_internal_vectors(self, sphincs_provider: Any) -> None:
+        """Validate against NIST ACVP SLH-DSA-sigVer-FIPS205 internal vectors."""
         vectors_path = Path(__file__).parent / "kat" / "fips205" / "SLH-DSA-sigVer-FIPS205.json"
         if not vectors_path.exists():
             pytest.skip("ACVP SLH-DSA vectors not available")
@@ -581,7 +581,6 @@ class TestSLHDSA_SHA2_256f_KAT:
 
         tested = 0
         for group in data["testGroups"]:
-            # Only test SLH-DSA-SHA2-256f with internal (pure) mode
             if group.get("parameterSet") != "SLH-DSA-SHA2-256f":
                 continue
             if group.get("signatureInterface") != "internal":
@@ -600,3 +599,38 @@ class TestSLHDSA_SHA2_256f_KAT:
                 tested += 1
 
         assert tested > 0, "No SLH-DSA-SHA2-256f internal vectors found"
+
+    def test_acvp_sigver_external_pure_vectors(self, sphincs_provider: Any) -> None:
+        """Validate against NIST ACVP SLH-DSA-sigVer-FIPS205 external pure vectors."""
+        from ama_cryptography.pqc_backends import sphincs_verify_ctx
+
+        vectors_path = Path(__file__).parent / "kat" / "fips205" / "SLH-DSA-sigVer-FIPS205.json"
+        if not vectors_path.exists():
+            pytest.skip("ACVP SLH-DSA vectors not available")
+
+        with open(vectors_path) as f:
+            data = json.load(f)
+
+        tested = 0
+        for group in data["testGroups"]:
+            if group.get("parameterSet") != "SLH-DSA-SHA2-256f":
+                continue
+            if group.get("signatureInterface") != "external":
+                continue
+            if group.get("preHash") != "pure":
+                continue
+
+            for tc in group["tests"]:
+                pk = bytes.fromhex(tc["pk"])
+                sig = bytes.fromhex(tc["signature"])
+                msg = bytes.fromhex(tc["message"])
+                ctx = bytes.fromhex(tc.get("context", ""))
+                expected = tc["testPassed"]
+
+                result = sphincs_verify_ctx(msg, sig, pk, ctx)
+                assert result == expected, (
+                    f"ACVP tcId={tc['tcId']}: expected {expected}, got {result}"
+                )
+                tested += 1
+
+        assert tested > 0, "No SLH-DSA-SHA2-256f external pure vectors found"

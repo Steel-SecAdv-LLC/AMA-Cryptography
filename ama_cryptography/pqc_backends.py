@@ -53,6 +53,8 @@ from ama_cryptography.exceptions import (
 __all__ = [
     "PQCUnavailableError",
     "QuantumSignatureUnavailableError",
+    "KyberUnavailableError",
+    "SphincsUnavailableError",
     "SecurityWarning",
 ]
 

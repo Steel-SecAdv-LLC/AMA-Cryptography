@@ -29,8 +29,12 @@ try:
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
     _PYCA_AVAILABLE = True
-except Exception:
+except BaseException:
+    # BaseException catches pyo3_runtime.PanicException from broken Rust bindings
     _PYCA_AVAILABLE = False
+    default_backend = None  # type: ignore[assignment]
+    hashes = None  # type: ignore[assignment]
+    HKDF = None  # type: ignore[assignment]
 
 
 class TestHKDFSHA3256:
