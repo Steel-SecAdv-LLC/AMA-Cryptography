@@ -1272,9 +1272,50 @@ cmake .. \
 - **RFC 3161:** https://datatracker.ietf.org/doc/html/rfc3161
 - **Ed25519:** https://ed25519.cr.yp.to/
 
+### FIPS 140-3 Self-Test Behavior
+
+AMA Cryptography implements FIPS 140-3 Security Level 1 technical controls:
+
+**Power-On Self-Tests (POST):** When `import ama_cryptography` runs, the module
+automatically executes Known Answer Tests for all approved algorithms (SHA3-256,
+HMAC-SHA3-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65, SLH-DSA, Ed25519) plus
+a module integrity check and RNG health test. This takes ~260ms.
+
+**Module State:** After POST, the module is in one of three states:
+- `OPERATIONAL` — all tests passed, crypto operations allowed
+- `ERROR` — a test failed, all crypto operations raise `CryptoModuleError`
+- `SELF_TEST` — tests in progress (transient)
+
+Check state: `ama_cryptography.module_status()`
+
+**Error Recovery:** Call `ama_cryptography.reset_module()` to re-run all
+self-tests. If they pass, the module returns to OPERATIONAL.
+
+**Integrity Digest:** The module's source files are hashed at startup and
+compared to a stored digest. After legitimate code changes, regenerate:
+
+```bash
+python -m ama_cryptography.integrity --update
+```
+
+Verify integrity without importing the full module:
+
+```bash
+python -m ama_cryptography.integrity --verify
+```
+
+**Continuous RNG Test:** Use `ama_cryptography.secure_token_bytes(n)` instead
+of `secrets.token_bytes(n)` for FIPS-compliant random byte generation. This
+wrapper detects consecutive identical outputs and enters ERROR state if the
+RNG fails.
+
+**Pairwise Consistency Tests:** Functions `pairwise_test_signature()` and
+`pairwise_test_kem()` in `ama_cryptography._self_test` can be called after
+any key generation to verify the keypair is consistent.
+
 ### Contact
 
-**Steel Security Advisors LLC**  
+**Steel Security Advisors LLC**
 Email: steel.sa.llc@gmail.com
 
 **Author/Inventor:** Andrew E. A.

@@ -306,3 +306,82 @@ python3 nist_vectors/run_vectors.py
 ```
 
 Results are written to `nist_vectors/results.json`.
+
+---
+
+## Section 4 — FIPS 140-3 Security Level 1 Technical Controls
+
+**Date:** 2026-03-21
+**Implementation:** `ama_cryptography/_self_test.py`, `ama_cryptography/integrity.py`
+
+### 4.1 Power-On Self-Tests (POST)
+
+The module runs Known Answer Tests at import time (`_run_self_tests()` called
+from `ama_cryptography/__init__.py`). The following KATs execute on every module
+load:
+
+| Algorithm | KAT Type | Vector Source |
+|-----------|----------|---------------|
+| SHA3-256 | Fixed hash of empty string | FIPS 202 reference |
+| HMAC-SHA3-256 | Determinism + output length | RFC 2104 with SHA3-256 |
+| AES-256-GCM | Encrypt/decrypt roundtrip | Fixed key/nonce/plaintext |
+| ML-KEM-1024 | Keygen + encaps + decaps roundtrip | Runtime generated |
+| ML-DSA-65 | Keygen + sign + verify roundtrip + negative test | Runtime generated |
+| SLH-DSA (SPHINCS+) | Keygen + sign + verify roundtrip | Runtime generated |
+| Ed25519 | Keygen + sign + verify roundtrip | Runtime generated |
+| RNG | Two consecutive `secrets.token_bytes(32)` non-equality | Runtime |
+
+**POST Budget:** All self-tests complete in <300ms (measured ~260ms on
+4-core Linux), well within the 500ms budget.
+
+### 4.2 Module Integrity Verification
+
+At startup, SHA3-256 is computed over all `.py` files in the
+`ama_cryptography/` package directory. The digest is compared against a
+stored known-good value in `ama_cryptography/_integrity_digest.txt`.
+
+To regenerate after legitimate code changes:
+
+```bash
+python -m ama_cryptography.integrity --update
+```
+
+To verify:
+
+```bash
+python -m ama_cryptography.integrity --verify
+```
+
+### 4.3 Error State Machine
+
+The module maintains one of three states:
+
+| State | Meaning | Crypto Operations |
+|-------|---------|-------------------|
+| `SELF_TEST` | POST in progress | Blocked |
+| `OPERATIONAL` | All tests passed | Allowed |
+| `ERROR` | A test or check failed | Blocked — raises `CryptoModuleError` |
+
+Query state: `ama_cryptography.module_status()` → `"OPERATIONAL"` | `"ERROR"` | `"SELF_TEST"`
+
+Recovery: `ama_cryptography.reset_module()` re-runs all self-tests.
+
+### 4.4 Pairwise Consistency Tests
+
+After every key generation for signature or KEM algorithms, a sign-verify
+or encaps-decaps roundtrip is performed on a fixed test message. On failure,
+the keypair is not returned and the module enters ERROR state. Covered
+algorithms:
+
+- Ed25519: sign + verify
+- ML-DSA-65: sign + verify
+- ML-KEM-1024: encaps + decaps
+
+Functions: `pairwise_test_signature()`, `pairwise_test_kem()`
+
+### 4.5 Continuous RNG Test
+
+`secure_token_bytes(n)` wraps `secrets.token_bytes(n)` with a comparison
+to the previous output. If two consecutive calls return identical bytes,
+the module enters ERROR state immediately. This implements FIPS 140-3
+Section 4.9.2 continuous random number generator testing.

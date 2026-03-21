@@ -1,21 +1,22 @@
 # FIPS 205 SLH-DSA (SPHINCS+) KAT Vectors
 
-## Status: Pending
+## Status: Available
 
-NIST FIPS 205 Known Answer Test vectors for SLH-DSA-SHA2-256f-simple have not yet been
-added to this test suite.
+NIST FIPS 205 Known Answer Test vectors for SLH-DSA-SHA2-256f-simple are sourced
+from the NIST ACVP-Server repository (SLH-DSA-sigVer-FIPS205).
 
-### Current Test Coverage
+### Vector File
+
+- `SLH-DSA-sigVer-FIPS205.json` — ACVP signature verification vectors
+  covering SLH-DSA-SHA2-256f with internal (pure) mode
+
+### Test Coverage
 
 The SPHINCS+ implementation in `src/c/ama_sphincs.c` is validated via:
+- NIST ACVP sigVer vectors in `tests/test_pqc_kat.py::TestSLHDSA_SHA2_256f_KAT`
 - Self-consistency roundtrip tests (sign/verify) in `tests/c/test_kat.c`
 - Tamper detection tests in `tests/c/test_kat.c`
-
-### TODO
-
-- Obtain official NIST FIPS 205 KAT vectors from NIST ACVP or CAVP
-- Add Python-level KAT validation in `tests/test_nist_kat.py`
-- Add C-level KAT matching in `tests/c/test_kat.c`
+- FIPS 140-3 POST KAT in `ama_cryptography/_self_test.py`
 
 ### Parameters (SLH-DSA-SHA2-256f-simple)
 
