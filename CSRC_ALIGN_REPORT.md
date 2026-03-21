@@ -1,7 +1,7 @@
 # CSRC Alignment Report — NIST ACVP Vector Validation
 
 **Version:** 2.2
-**Date:** 2026-03-18 (updated)
+**Date:** 2026-03-21 (updated)
 **Organization:** Steel Security Advisors LLC
 **Author:** Andrew E. A.
 
@@ -204,13 +204,14 @@ marshaling overhead. The Cython path compiles to C and calls
 expanded key (seed||pk) instead of discarding it. `ed25519_sign()` detects
 64-byte keys and skips redundant SHA-512 expansion + point multiplication.
 
-Post-fix benchmark results (this environment):
-- HMAC-SHA3-256: 262,200 ops/sec (0.004 ms) — Cython binding to native C
-- Ed25519 KeyGen: 3,407 ops/sec (0.29 ms)
-- Ed25519 Sign: 3,361 ops/sec (0.30 ms) — up from ~1,700 pre-fix
-- Ed25519 Verify: 1,851 ops/sec (0.54 ms)
-- ML-DSA-65 Sign: 238 ops/sec (4.20 ms)
-- ML-DSA-65 Verify: 624 ops/sec (1.60 ms)
+Post-fix benchmark results (2026-03-21, native C backend, 4-core Linux):
+- HMAC-SHA3-256: 206,010 ops/sec (0.005 ms) — native C via ctypes
+- Ed25519 KeyGen: 19,388 ops/sec (0.052 ms) — radix 2^51 field arithmetic
+- Ed25519 Sign: 18,657 ops/sec (0.054 ms) — expanded-key fast path
+- Ed25519 Verify: 9,702 ops/sec (0.103 ms)
+- ML-DSA-65 KeyGen: 5,536 ops/sec (0.181 ms)
+- ML-DSA-65 Sign: 3,639 ops/sec (0.275 ms)
+- ML-DSA-65 Verify: 6,490 ops/sec (0.154 ms)
 - SLH-DSA Sign: ~1.4 ops/sec (~741 ms) — consistent with SHA2-256f fast variant
 - SLH-DSA Verify: ~53 ops/sec (~19 ms)
 

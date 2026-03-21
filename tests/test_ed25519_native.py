@@ -47,9 +47,9 @@ def _pyca_available() -> bool:
         from cryptography.hazmat.primitives.asymmetric import ed25519  # noqa: F401
 
         return True
-    except Exception:
-        # Catches ImportError, pyo3 PanicException, missing _cffi_backend,
-        # broken Rust bindings, etc.
+    except BaseException:
+        # BaseException catches pyo3 PanicException from broken Rust bindings,
+        # ImportError, missing _cffi_backend, etc.
         return False
 
 
