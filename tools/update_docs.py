@@ -23,8 +23,7 @@ import argparse
 import json
 import re
 import subprocess
-import sys
-from datetime import date, timezone
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -110,15 +109,24 @@ def update_changelog(dry_run: bool = False) -> bool:
         print("  CHANGELOG: no new commits found")
         return False
 
+    # Parse existing SHA7s from CHANGELOG to avoid duplicates
+    existing_shas: set[str] = set()
+    if CHANGELOG.exists():
+        for m in re.finditer(r"\(([0-9a-f]{7})\)", CHANGELOG.read_text()):
+            existing_shas.add(m.group(1))
+
     commits: list[tuple[str, str]] = []
     for line in raw.splitlines():
         if "|" not in line:
             continue
         sha, subject = line.split("|", 1)
+        sha7 = sha[:7]
         # Skip auto-docs commits and commits already in changelog
         if "[auto-docs]" in subject:
             continue
-        commits.append((sha[:7], subject.strip()))
+        if sha7 in existing_shas:
+            continue
+        commits.append((sha7, subject.strip()))
 
     if not commits:
         print("  CHANGELOG: no classifiable commits")

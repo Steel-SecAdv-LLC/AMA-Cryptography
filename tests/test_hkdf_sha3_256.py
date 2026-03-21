@@ -29,8 +29,10 @@ try:
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
     _PYCA_AVAILABLE = True
-except BaseException:
+except BaseException as exc:
     # BaseException catches pyo3_runtime.PanicException from broken Rust bindings
+    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+        raise
     _PYCA_AVAILABLE = False
     default_backend = None  # type: ignore[assignment]
     hashes = None  # type: ignore[assignment]
