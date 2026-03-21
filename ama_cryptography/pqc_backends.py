@@ -582,9 +582,6 @@ KYBER_BACKEND: Optional[str] = _KYBER_BACKEND
 SPHINCS_AVAILABLE: bool = _SPHINCS_AVAILABLE
 SPHINCS_BACKEND: Optional[str] = _SPHINCS_BACKEND
 
-# SHA3-256 (raw hash) native availability
-SHA3_256_NATIVE_AVAILABLE: bool = _SHA3_256_NATIVE_AVAILABLE
-
 # HMAC-SHA3-256 availability — determined at import time.
 # Cython binding is probed later (after function definitions), so we
 # expose ctypes availability now and patch after the Cython probe.

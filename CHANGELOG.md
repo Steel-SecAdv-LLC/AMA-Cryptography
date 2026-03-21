@@ -17,6 +17,20 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ---
 
+## [2.1.0] - 2026-03-21
+
+### Added — Helix Geometric Invariant Integration
+
+- **HELIX_INVARIANT domain tag:** `canonical_hash_code()` now computes helix curvature (κ) and torsion (τ) from each (radius, pitch) pair and includes them in the SHA3-256 pre-hash encoding. This adds a redundant geometric binding so that any parameter perturbation is detectable in both raw values and derived invariants.
+- **New test:** `test_helix_param_perturbation_changes_invariant_and_hash` verifies that ±0.001 perturbations to any helix parameter change both the serialized value and the computed invariant.
+
+### Fixed — CodeQL Alerts
+
+- **Alert #193 / #192:** Removed unused `keccak_rho[25]` and `keccak_pi[25]` static arrays from `src/c/ama_sha3.c`. The rho+pi step is fully unrolled with hardcoded constants; a comment documents the inlining.
+- **Alert #191:** Removed unused public export `SHA3_256_NATIVE_AVAILABLE` from `ama_cryptography/pqc_backends.py`. The internal `_SHA3_256_NATIVE_AVAILABLE` flag remains in use.
+
+---
+
 ## [2.0.0] - 2026-03-07
 
 ### Changed - CI & Toolchain Overhaul (PR #116)

@@ -393,14 +393,19 @@ def canonical_hash_code(codes: str, helix_params: List[Tuple[float, float]]) -> 
     1. Omni-Codes encoded with "CODE" domain tag
     2. Helix parameters encoded with "HELIX" domain tag
     3. Each parameter tuple formatted as "radius:pitch"
-    4. Length-prefixed encoding prevents concatenation attacks
+    4. Computed helix geometric invariants encoded with "HELIX_INVARIANT" domain tag
+       - Curvature: κ = r / (r² + c²)
+       - Torsion:   τ = c / (r² + c²)
+       - Serialized as "κ:.10f:τ:.10f" per (r, c) pair
+    5. Length-prefixed encoding prevents concatenation attacks
 
     Security Proof:
     ---------------
     Given two distinct inputs (D₁, H₁) and (D₂, H₂):
 
     If D₁ ≠ D₂ or H₁ ≠ H₂, then:
-        - encode("CODE", D₁, "HELIX", ...) ≠ encode("CODE", D₂, "HELIX", ...)
+        - encode("CODE", D₁, "HELIX", ..., "HELIX_INVARIANT", ...) ≠
+          encode("CODE", D₂, "HELIX", ..., "HELIX_INVARIANT", ...)
         - By SHA3-256 collision resistance:
         - P(hash(input₁) = hash(input₂)) ≤ 2^-128
 
@@ -438,11 +443,24 @@ def canonical_hash_code(codes: str, helix_params: List[Tuple[float, float]]) -> 
                 f"{type(pitch).__name__})"
             )
 
-    # Convert helix parameters to canonical string format
-    helix_strs = [f"{r:.10f}:{p:.10f}" for r, p in helix_params]
+    # Convert helix parameters and compute geometric invariants in a single pass.
+    # Curvature κ = r / (r² + c²), Torsion τ = c / (r² + c²) — inline (zero-dependency)
+    helix_parts = []
+    invariant_parts = []
+    for r, c in helix_params:
+        helix_parts.append(f"{r:.10f}:{c:.10f}")
+        denom = r * r + c * c
+        if denom == 0.0:
+            invariant_parts.append("0.0000000000:0.0000000000")
+        else:
+            invariant_parts.append(f"{r / denom:.10f}:{c / denom:.10f}")
 
-    # Create length-prefixed encoding with domain tags
-    encoded = length_prefixed_encode("CODE", codes, "HELIX", *helix_strs)
+    # Create length-prefixed encoding with domain tags.
+    # Invariants are joined with '|' into a single field for encoding efficiency.
+    encoded = length_prefixed_encode(
+        "CODE", codes, "HELIX", *helix_parts,
+        "HELIX_INVARIANT", "|".join(invariant_parts),
+    )
 
     # Compute SHA3-256 hash
     return hashlib.sha3_256(encoded).digest()

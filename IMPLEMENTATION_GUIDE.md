@@ -39,6 +39,24 @@ if not (results["content_hash"] and results["hmac"] and results["ed25519"]
 
 ---
 
+## Domain Separation in `canonical_hash_code()`
+
+The `canonical_hash_code()` function uses length-prefixed encoding with domain tags to provide collision-resistant, concatenation-safe content hashing. The encoding includes these domain tags:
+
+| Domain Tag | Content | Purpose |
+|------------|---------|---------|
+| `CODE` | Omni-Code string | Identifies the code content |
+| `HELIX` | `"radius:pitch"` per (r, c) pair (10 decimal places) | Raw helix parameters |
+| `HELIX_INVARIANT` | `"κ:τ"` per (r, c) pair, joined by `\|` | Computed geometric invariants |
+
+**Helix Geometric Invariants:**
+- Curvature: κ = r / (r² + c²)
+- Torsion: τ = c / (r² + c²)
+
+These invariants add a redundant geometric binding so that any perturbation of helix parameters is detectable both in the raw values and the derived invariants, strengthening domain separation.
+
+---
+
 ## Quick Start (5 Minutes)
 
 ### 1. Install Dependencies
