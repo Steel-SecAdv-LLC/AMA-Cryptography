@@ -34,6 +34,22 @@ from typing import TYPE_CHECKING, Any
 __version__ = "2.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
+# FIPS 140-3 Power-On Self-Tests — run at module import time.
+# Sets module state to OPERATIONAL or ERROR.
+from ama_cryptography._self_test import (  # noqa: F401
+    CryptoModuleError,
+    check_operational,
+    module_error_reason,
+    module_self_test_results,
+    module_status,
+    post_duration_ms,
+    reset_module,
+    secure_token_bytes,
+)
+from ama_cryptography._self_test import _run_self_tests as _post
+
+_post()
+
 # Eagerly import math modules (double_helix_engine, equations) — they carry
 # no availability-check side effects and are the most frequently used exports.
 from .double_helix_engine import AmaEquationEngine
@@ -90,6 +106,14 @@ def __getattr__(name: str) -> Any:
 __all__ = [
     "__version__",
     "__author__",
+    "CryptoModuleError",
+    "check_operational",
+    "module_status",
+    "module_error_reason",
+    "module_self_test_results",
+    "post_duration_ms",
+    "reset_module",
+    "secure_token_bytes",
     "AlgorithmType",
     "AmaCryptography",
     "create_crypto_package",

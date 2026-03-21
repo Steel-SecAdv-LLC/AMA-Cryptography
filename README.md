@@ -776,6 +776,18 @@ These KAT tests validate the native C implementations against official NIST FIPS
 
 KAT vectors are sourced from NIST PQC standardization and validate that the native implementations produce bit-exact outputs for known inputs per the FIPS specifications.
 
+### FIPS 140-3 Security Level 1 Technical Controls
+
+The module implements FIPS 140-3 Security Level 1 technical requirements:
+
+- **Power-On Self-Tests (POST):** KATs for SHA3-256, HMAC-SHA3-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65, SLH-DSA, and Ed25519 run at module import (~260ms)
+- **Module Integrity Verification:** SHA3-256 digest of all source files checked at startup
+- **Error State Machine:** OPERATIONAL / ERROR / SELF_TEST with automatic lockout on failure
+- **Continuous RNG Test:** Detects consecutive identical random outputs
+- **Pairwise Consistency Tests:** Sign-verify / encaps-decaps after key generation
+
+> **Note:** This library meets FIPS 140-3 Security Level 1 technical requirements but is **NOT formally CAVP/CMVP validated**. See `CSRC_STANDARDS.md` for details.
+
 </details>
 
 ---

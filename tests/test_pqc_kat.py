@@ -4,20 +4,24 @@
 """
 NIST Known Answer Tests (KAT) for Post-Quantum Cryptography.
 
-Validates AMA Cryptography's PQC implementations against NIST FIPS 203/204 specifications.
+Validates AMA Cryptography's PQC implementations against NIST FIPS 203/204/205 specifications.
 These tests verify correct key sizes, signature sizes, and round-trip functionality
 to ensure cryptographic compliance.
 
 Standards:
 - NIST FIPS 203 (ML-KEM / Kyber)
 - NIST FIPS 204 (ML-DSA / Dilithium)
+- NIST FIPS 205 (SLH-DSA / SPHINCS+)
 
 References:
 - https://csrc.nist.gov/pubs/fips/203/final
 - https://csrc.nist.gov/pubs/fips/204/final
+- https://csrc.nist.gov/pubs/fips/205/final
 """
 
+import json
 import secrets
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -470,3 +474,129 @@ class TestPQCStress:
             ct, ss_enc = kyber_provider.encapsulate(keypair.public_key)
             ss_dec = kyber_provider.decapsulate(ct, keypair.secret_key)
             assert ss_enc == ss_dec
+
+
+# =============================================================================
+# NIST FIPS 205 (SLH-DSA / SPHINCS+) Constants
+# =============================================================================
+
+
+class SLHDSA_SHA2_256f_Spec:
+    """SLH-DSA-SHA2-256f-simple parameter set per NIST FIPS 205."""
+
+    PUBLIC_KEY_BYTES = 64
+    SECRET_KEY_BYTES = 128
+    SIGNATURE_BYTES = 49856
+    N = 32
+    H = 68
+    D = 17
+
+
+# =============================================================================
+# SLH-DSA Test Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def sphincs_provider() -> Any:
+    """Get SPHINCS+ provider if available."""
+    from ama_cryptography.pqc_backends import SPHINCS_AVAILABLE
+
+    if not SPHINCS_AVAILABLE:
+        pytest.skip("SPHINCS+ backend not available")
+
+    from ama_cryptography.pqc_backends import (
+        generate_sphincs_keypair,
+        sphincs_sign,
+        sphincs_verify,
+    )
+
+    class SphincsProvider:
+        def generate_keypair(self):
+            return generate_sphincs_keypair()
+
+        def sign(self, message, secret_key):
+            return sphincs_sign(message, secret_key)
+
+        def verify(self, message, signature, public_key):
+            return sphincs_verify(message, signature, public_key)
+
+    return SphincsProvider()
+
+
+# =============================================================================
+# SLH-DSA (SPHINCS+) KAT Tests — NIST FIPS 205
+# =============================================================================
+
+
+class TestSLHDSA_SHA2_256f_KAT:
+    """Known Answer Tests for SLH-DSA-SHA2-256f (SPHINCS+)."""
+
+    def test_public_key_size(self, sphincs_provider: Any) -> None:
+        """Public key size matches NIST FIPS 205 specification."""
+        kp = sphincs_provider.generate_keypair()
+        assert len(kp.public_key) == SLHDSA_SHA2_256f_Spec.PUBLIC_KEY_BYTES
+
+    def test_secret_key_size(self, sphincs_provider: Any) -> None:
+        """Secret key size matches NIST FIPS 205 specification."""
+        kp = sphincs_provider.generate_keypair()
+        assert len(kp.secret_key) == SLHDSA_SHA2_256f_Spec.SECRET_KEY_BYTES
+
+    def test_signature_size(self, sphincs_provider: Any) -> None:
+        """Signature size matches NIST FIPS 205 specification."""
+        kp = sphincs_provider.generate_keypair()
+        sig = sphincs_provider.sign(b"test message", kp.secret_key)
+        assert len(sig) == SLHDSA_SHA2_256f_Spec.SIGNATURE_BYTES
+
+    def test_sign_verify_roundtrip(self, sphincs_provider: Any) -> None:
+        """Sign/verify roundtrip succeeds."""
+        kp = sphincs_provider.generate_keypair()
+        msg = b"FIPS 205 roundtrip test"
+        sig = sphincs_provider.sign(msg, kp.secret_key)
+        assert sphincs_provider.verify(msg, sig, kp.public_key)
+
+    def test_invalid_signature_fails(self, sphincs_provider: Any) -> None:
+        """Tampered signature fails verification."""
+        kp = sphincs_provider.generate_keypair()
+        msg = b"tamper test"
+        sig = sphincs_provider.sign(msg, kp.secret_key)
+        tampered = bytearray(sig)
+        tampered[0] ^= 0xFF
+        assert not sphincs_provider.verify(msg, bytes(tampered), kp.public_key)
+
+    def test_wrong_message_fails(self, sphincs_provider: Any) -> None:
+        """Verification with wrong message fails."""
+        kp = sphincs_provider.generate_keypair()
+        sig = sphincs_provider.sign(b"original", kp.secret_key)
+        assert not sphincs_provider.verify(b"modified", sig, kp.public_key)
+
+    def test_acvp_sigver_vectors(self, sphincs_provider: Any) -> None:
+        """Validate against NIST ACVP SLH-DSA-sigVer-FIPS205 vectors."""
+        vectors_path = Path(__file__).parent / "kat" / "fips205" / "SLH-DSA-sigVer-FIPS205.json"
+        if not vectors_path.exists():
+            pytest.skip("ACVP SLH-DSA vectors not available")
+
+        with open(vectors_path) as f:
+            data = json.load(f)
+
+        tested = 0
+        for group in data["testGroups"]:
+            # Only test SLH-DSA-SHA2-256f with internal (pure) mode
+            if group.get("parameterSet") != "SLH-DSA-SHA2-256f":
+                continue
+            if group.get("signatureInterface") != "internal":
+                continue
+
+            for tc in group["tests"]:
+                pk = bytes.fromhex(tc["pk"])
+                sig = bytes.fromhex(tc["signature"])
+                msg = bytes.fromhex(tc["message"])
+                expected = tc["testPassed"]
+
+                result = sphincs_provider.verify(msg, sig, pk)
+                assert result == expected, (
+                    f"ACVP tcId={tc['tcId']}: expected {expected}, got {result}"
+                )
+                tested += 1
+
+        assert tested > 0, "No SLH-DSA-SHA2-256f internal vectors found"
