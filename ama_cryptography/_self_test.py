@@ -26,6 +26,8 @@ import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from ama_cryptography.exceptions import CryptoModuleError
+
 logger = logging.getLogger(__name__)
 
 # ============================================================================
@@ -36,11 +38,6 @@ _MODULE_STATE = "SELF_TEST"  # OPERATIONAL | ERROR | SELF_TEST
 _ERROR_REASON: Optional[str] = None
 _SELF_TEST_RESULTS: List[Tuple[str, bool, str]] = []  # (name, passed, detail)
 _POST_DURATION_MS: float = 0.0
-
-
-class CryptoModuleError(RuntimeError):
-    """Raised when the cryptographic module is in an error state."""
-    pass
 
 
 def module_status() -> str:
