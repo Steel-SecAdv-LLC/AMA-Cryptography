@@ -43,9 +43,11 @@ class TestModuleStateMachine:
         assert module_error_reason() is None
 
     def test_check_operational_does_not_raise_when_operational(self) -> None:
-        from ama_cryptography._self_test import check_operational
+        # Smoke test: verifies no exception raised when OPERATIONAL
+        from ama_cryptography._self_test import check_operational, module_status
 
-        check_operational()  # Should not raise
+        check_operational()
+        assert module_status() == "OPERATIONAL"
 
     def test_set_error_transitions_to_error_state(self) -> None:
         from ama_cryptography._self_test import (
@@ -92,15 +94,23 @@ class TestModuleStateMachine:
 
     def test_module_status_exported_from_package(self) -> None:
         """Public API should be accessible from ama_cryptography."""
-        import ama_cryptography
+        from ama_cryptography import (
+            CryptoModuleError,
+            check_operational,
+            module_error_reason,
+            module_status,
+            post_duration_ms,
+            reset_module,
+            secure_token_bytes,
+        )
 
-        assert hasattr(ama_cryptography, "module_status")
-        assert hasattr(ama_cryptography, "module_error_reason")
-        assert hasattr(ama_cryptography, "reset_module")
-        assert hasattr(ama_cryptography, "check_operational")
-        assert hasattr(ama_cryptography, "CryptoModuleError")
-        assert hasattr(ama_cryptography, "secure_token_bytes")
-        assert hasattr(ama_cryptography, "post_duration_ms")
+        assert callable(module_status)
+        assert callable(module_error_reason)
+        assert callable(reset_module)
+        assert callable(check_operational)
+        assert issubclass(CryptoModuleError, Exception)
+        assert callable(secure_token_bytes)
+        assert callable(post_duration_ms)
 
 
 # ============================================================================

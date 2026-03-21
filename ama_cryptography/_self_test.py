@@ -16,7 +16,7 @@ enters an ERROR state and all cryptographic operations are refused.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 2.0
+Version: 2.1
 """
 
 import hashlib
@@ -92,23 +92,31 @@ def reset_module() -> bool:
 # CONTINUOUS RNG TEST (FIPS 140-3 Section 4.9.2)
 # ============================================================================
 
-_previous_rng_output: Optional[bytes] = None
+_previous_rng_output: Optional[bytes] = None  # Mutated by secure_token_bytes() — continuous RNG test state
+
+
+_RNG_HEALTH_SIZE = 32  # Fixed size for continuous health comparison
 
 
 def secure_token_bytes(n: int = 32) -> bytes:
     """
     Wrapper around secrets.token_bytes with continuous RNG health test.
 
-    Compares each output to the previous; if identical, enters ERROR state.
+    Always draws a fixed-size (32-byte) sample for the health comparison so
+    that alternating request sizes cannot bypass the duplicate check.
     """
     check_operational()
     global _previous_rng_output
-    output = secrets.token_bytes(n)
-    if _previous_rng_output is not None and output == _previous_rng_output:
+    # Health check uses a fixed internal size, independent of caller's n
+    health_sample = secrets.token_bytes(_RNG_HEALTH_SIZE)
+    if _previous_rng_output is not None and health_sample == _previous_rng_output:
         _set_error("Continuous RNG test failed: consecutive identical outputs")
         raise CryptoModuleError("Module in error state: Continuous RNG test failed")
-    _previous_rng_output = output
-    return output
+    _previous_rng_output = health_sample
+    # Return the caller's requested number of bytes
+    if n == _RNG_HEALTH_SIZE:
+        return health_sample
+    return secrets.token_bytes(n)
 
 
 # ============================================================================
@@ -158,25 +166,32 @@ _INTEGRITY_DIGEST_FILE = Path(__file__).resolve().parent / "_integrity_digest.tx
 
 
 def _compute_module_digest() -> str:
-    """Compute SHA3-256 hash over all .py files in the ama_cryptography package."""
+    """Compute SHA3-256 hash over all .py files in the ama_cryptography package.
+
+    Line endings are normalized (CRLF → LF) before hashing so that the digest
+    is identical on Windows (autocrlf=true) and Linux/macOS.
+    """
     pkg_dir = Path(__file__).resolve().parent
     hasher = hashlib.sha3_256()
     py_files = sorted(pkg_dir.glob("*.py"))
     for py_file in py_files:
-        # Skip the digest file reference and __pycache__
-        if py_file.name == "_integrity_digest.txt":
-            continue
         hasher.update(py_file.name.encode("utf-8"))
-        hasher.update(py_file.read_bytes())
+        content = py_file.read_bytes().replace(b"\r\n", b"\n")
+        hasher.update(content)
     return hasher.hexdigest()
 
 
 def verify_module_integrity() -> bool:
     """Verify module source files against stored digest."""
     if not _INTEGRITY_DIGEST_FILE.exists():
-        logger.warning("Integrity digest file not found — skipping check")
-        return True  # First run: no digest yet
+        logger.error("Integrity digest file not found")
+        _set_error("Integrity digest file missing")
+        return False
     stored = _INTEGRITY_DIGEST_FILE.read_text().strip()
+    if not stored:
+        logger.error("Integrity digest file is empty")
+        _set_error("Integrity digest file empty")
+        return False
     current = _compute_module_digest()
     return stored == current
 
@@ -213,16 +228,21 @@ def _kat_hmac_sha3_256() -> Tuple[bool, str]:
         if not _HMAC_SHA3_256_NATIVE_AVAILABLE:
             return True, "HMAC-SHA3-256 KAT skipped (native unavailable)"
 
+        import hmac as hmac_module
+
         key = b"\x0b" * 20
         data = b"Hi There"
         result = native_hmac_sha3_256(key, data)
-        # Verify it returns 32 bytes and is deterministic
-        result2 = native_hmac_sha3_256(key, data)
-        if result != result2:
-            return False, "HMAC-SHA3-256 KAT: non-deterministic output"
+        # Cross-validate against Python stdlib HMAC-SHA3-256
+        expected = hmac_module.new(key, data, hashlib.sha3_256).digest()
+        if result != expected:
+            return False, (
+                f"HMAC-SHA3-256 KAT: native output {result.hex()} "
+                f"!= stdlib {expected.hex()}"
+            )
         if len(result) != 32:
             return False, f"HMAC-SHA3-256 KAT: expected 32 bytes, got {len(result)}"
-        return True, "HMAC-SHA3-256 KAT passed (determinism verified)"
+        return True, "HMAC-SHA3-256 KAT passed (cross-validated with stdlib)"
     except Exception as exc:
         return False, f"HMAC-SHA3-256 KAT exception: {exc}"
 
@@ -238,22 +258,38 @@ def _kat_aes_256_gcm() -> Tuple[bool, str]:
         if not _AES_GCM_NATIVE_AVAILABLE:
             return True, "AES-256-GCM KAT skipped (native unavailable)"
 
-        key = bytes(range(32))
-        nonce = bytes(range(12))
-        plaintext = b"FIPS 140-3 KAT test vector"
-        aad = b"additional data"
+        # NIST SP 800-38D Test Case 16 (AES-256, 96-bit IV, AAD)
+        key = bytes.fromhex(
+            "feffe9928665731c6d6a8f9467308308"
+            "feffe9928665731c6d6a8f9467308308"
+        )
+        nonce = bytes.fromhex("cafebabefacedbaddecaf888")
+        plaintext = bytes.fromhex(
+            "d9313225f88406e5a55909c5aff5269a"
+            "86a7a9531534f7da2e4c303d8a318a72"
+            "1c3c0c95956809532fcf0e2449a6b525"
+            "b16aedf5aa0de657ba637b391aafd255"
+        )
+        aad = bytes.fromhex("feedfacedeadbeeffeedfacedeadbeefabaddad2")
+        expected_ct = bytes.fromhex(
+            "522dc1f099567d07f47f37a32a84427d"
+            "643a8cdcbfe5c0c97598a2bd2555d1aa"
+            "8cb08e48590dbb3da7b08b1056828838"
+            "c5f61e6393ba7a0abcc9f662898015ad"
+        )
+        expected_tag = bytes.fromhex("2df7cd675b4f09163b41ebf980a7f638")
 
         ct, tag = native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
+        if ct != expected_ct:
+            return False, f"AES-256-GCM KAT: ciphertext mismatch (got {ct.hex()})"
+        if tag != expected_tag:
+            return False, f"AES-256-GCM KAT: tag mismatch (got {tag.hex()})"
+
         pt = native_aes256_gcm_decrypt(key, nonce, ct, tag, aad)
         if pt != plaintext:
             return False, "AES-256-GCM KAT: decrypt mismatch"
 
-        # Verify determinism
-        ct2, tag2 = native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
-        if ct != ct2 or tag != tag2:
-            return False, "AES-256-GCM KAT: non-deterministic"
-
-        return True, "AES-256-GCM KAT passed"
+        return True, "AES-256-GCM KAT passed (NIST SP 800-38D TC16)"
     except Exception as exc:
         return False, f"AES-256-GCM KAT exception: {exc}"
 

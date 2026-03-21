@@ -34,8 +34,10 @@ def _pyca_crypto_available() -> bool:
     """Check if PyCA cryptography is usable (may be broken if _cffi_backend missing)."""
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: F401
-    except BaseException:
+    except BaseException as exc:
         # BaseException catches pyo3_runtime.PanicException from broken Rust bindings
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
         return False
     return True
 

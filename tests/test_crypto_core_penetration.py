@@ -181,7 +181,7 @@ class TestCanonicalHashCode:
                 k_orig = r / denom_orig if denom_orig else 0.0
                 k_new = (r + delta) / denom_new if denom_new else 0.0
                 assert abs(k_orig - k_new) > 0, (
-                    f"Invariant κ must change with radius perturbation"
+                    "Invariant κ must change with radius perturbation"
                 )
 
                 # Perturb pitch
@@ -198,7 +198,7 @@ class TestCanonicalHashCode:
                 t_orig = c / denom_orig if denom_orig else 0.0
                 t_new = (c + delta) / denom_new_c if denom_new_c else 0.0
                 assert abs(t_orig - t_new) > 0, (
-                    f"Invariant τ must change with pitch perturbation"
+                    "Invariant τ must change with pitch perturbation"
                 )
 
 

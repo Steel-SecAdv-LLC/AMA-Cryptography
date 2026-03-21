@@ -36,7 +36,7 @@
 **Author/Inventor:** Andrew E. A.
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
-**Version:** 2.0
+**Version:** 2.1
 **AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
@@ -359,7 +359,7 @@ Future-proof cryptography:
 | Operation | AMA Cryptography (Native) | Performance |
 |-----------|----------------------|-------------|
 | **KeyGen** | 644 ops/sec (1.55ms) | Full native C implementation |
-| **Sign** | 238 ops/sec (4.20ms) | Full native C implementation |
+| **Sign** | 3,639 ops/sec (0.28ms) | Full native C implementation |
 | **Verify** | 624 ops/sec (1.60ms) | NIST KAT validated |
 
 ### Full 6-Layer Package Performance
@@ -668,7 +668,7 @@ GitHub Actions automatically tests:
 ### CI Matrix
 
 - **Python Versions**: 3.9, 3.10, 3.11, 3.12, 3.13
-- **Platforms**: Ubuntu Latest
+- **Platforms**: Ubuntu Latest, Windows Latest
 - **Jobs**: test, code-quality, security-checks
 
 ### CI Workflows
