@@ -148,4 +148,24 @@ Results are saved to `benchmark_results.json`, `BENCHMARKS.md`, and `benchmarks/
 > path (~12,000 ops/sec on GitHub Actions runners) since Cython extensions are
 > not compiled in CI.
 
+---
+
+## Regression Baselines (from `benchmarks/baseline.json`)
+
+<!-- AUTO-BENCHMARK-TABLE-START -->
+| Benchmark | Baseline (ops/sec) | Tolerance | Tier |
+|-----------|-------------------:|----------:|------|
+| Ama Sha3 256 Hash | 15,000 | ±30% | microbenchmark |
+| Hmac Sha3 256 | 12,000 | ±40% | microbenchmark |
+| Ed25519 Keygen | 10,600 | ±35% | microbenchmark |
+| Ed25519 Sign | 8,527 | ±35% | microbenchmark |
+| Ed25519 Verify | 3,416 | ±35% | microbenchmark |
+| Hkdf Derive | 6,500 | ±35% | microbenchmark |
+| Full Package Create | 280 | ±50% | complex_operation |
+| Full Package Verify | 380 | ±50% | complex_operation |
+| Dilithium Keygen *(optional)* | 500 | ±40% | microbenchmark |
+| Dilithium Sign *(optional)* | 140 | ±40% | microbenchmark |
+| Dilithium Verify *(optional)* | 530 | ±40% | microbenchmark |
+<!-- AUTO-BENCHMARK-TABLE-END -->
+
 *See [Cryptography Algorithms](Cryptography-Algorithms) for algorithm key sizes, or [Architecture](Architecture) for the multi-language performance architecture.*
