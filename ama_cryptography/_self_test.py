@@ -76,9 +76,7 @@ def _set_operational() -> None:
 def check_operational() -> None:
     """Raise CryptoModuleError if module is not OPERATIONAL."""
     if _MODULE_STATE != "OPERATIONAL":
-        raise CryptoModuleError(
-            f"Module in error state: {_ERROR_REASON or _MODULE_STATE}"
-        )
+        raise CryptoModuleError(f"Module in error state: {_ERROR_REASON or _MODULE_STATE}")
 
 
 def reset_module() -> bool:
@@ -92,7 +90,9 @@ def reset_module() -> bool:
 # CONTINUOUS RNG TEST (FIPS 140-3 Section 4.9.2)
 # ============================================================================
 
-_previous_rng_output: Optional[bytes] = None  # Mutated by secure_token_bytes() — continuous RNG test state
+_previous_rng_output: Optional[bytes] = (
+    None  # Mutated by secure_token_bytes() — continuous RNG test state
+)
 
 
 _RNG_HEALTH_SIZE = 32  # Fixed size for continuous health comparison
@@ -123,8 +123,8 @@ def secure_token_bytes(n: int = 32) -> bytes:
 # PAIRWISE CONSISTENCY TESTS (FIPS 140-3 Section 4.9.2)
 # ============================================================================
 
-def pairwise_test_signature(sign_fn, verify_fn, secret_key, public_key,
-                            algo_name: str) -> None:
+
+def pairwise_test_signature(sign_fn, verify_fn, secret_key, public_key, algo_name: str) -> None:
     """Sign a test message and verify — raise on failure."""
     test_msg = b"FIPS 140-3 pairwise consistency test"
     try:
@@ -143,8 +143,7 @@ def pairwise_test_signature(sign_fn, verify_fn, secret_key, public_key,
         ) from exc
 
 
-def pairwise_test_kem(encaps_fn, decaps_fn, public_key, secret_key,
-                      algo_name: str) -> None:
+def pairwise_test_kem(encaps_fn, decaps_fn, public_key, secret_key, algo_name: str) -> None:
     """Encapsulate + decapsulate roundtrip test — raise on failure."""
     try:
         encap = encaps_fn(public_key)
@@ -207,6 +206,7 @@ def update_integrity_digest() -> str:
 # KNOWN ANSWER TESTS (FIPS 140-3 Section 4.9.1)
 # ============================================================================
 
+
 def _kat_sha3_256() -> Tuple[bool, str]:
     """SHA3-256 KAT: hash empty string, compare to known digest."""
     known_input = b""
@@ -231,24 +231,17 @@ def _kat_hmac_sha3_256() -> Tuple[bool, str]:
             _HMAC_SHA3_256_NATIVE_AVAILABLE,
             native_hmac_sha3_256,
         )
+
         if not _HMAC_SHA3_256_NATIVE_AVAILABLE:
             return True, "HMAC-SHA3-256 KAT skipped (native unavailable)"
 
-        key = bytes.fromhex(
-            "000102030405060708090a0b0c0d0e0f"
-            "101112131415161718191a1b1c1d1e1f"
-        )
-        data = bytes.fromhex(
-            "53616d706c65206d65737361676520666f72206b65796c656e3d626c6f636b6c656e"
-        )
-        expected = bytes.fromhex(
-            "b83bfd563059c9f54e75cb509af83aa3db5b6eda4ce07afe03063998dac54f3b"
-        )
+        key = bytes.fromhex("000102030405060708090a0b0c0d0e0f" "101112131415161718191a1b1c1d1e1f")
+        data = bytes.fromhex("53616d706c65206d65737361676520666f72206b65796c656e3d626c6f636b6c656e")
+        expected = bytes.fromhex("b83bfd563059c9f54e75cb509af83aa3db5b6eda4ce07afe03063998dac54f3b")
         result = native_hmac_sha3_256(key, data)
         if result != expected:
             return False, (
-                f"HMAC-SHA3-256 KAT: native output {result.hex()} "
-                f"!= expected {expected.hex()}"
+                f"HMAC-SHA3-256 KAT: native output {result.hex()} " f"!= expected {expected.hex()}"
             )
         if len(result) != 32:
             return False, f"HMAC-SHA3-256 KAT: expected 32 bytes, got {len(result)}"
@@ -265,14 +258,12 @@ def _kat_aes_256_gcm() -> Tuple[bool, str]:
             native_aes256_gcm_decrypt,
             native_aes256_gcm_encrypt,
         )
+
         if not _AES_GCM_NATIVE_AVAILABLE:
             return True, "AES-256-GCM KAT skipped (native unavailable)"
 
         # NIST SP 800-38D Test Case 16 (AES-256, 96-bit IV, AAD)
-        key = bytes.fromhex(
-            "feffe9928665731c6d6a8f9467308308"
-            "feffe9928665731c6d6a8f9467308308"
-        )
+        key = bytes.fromhex("feffe9928665731c6d6a8f9467308308" "feffe9928665731c6d6a8f9467308308")
         nonce = bytes.fromhex("cafebabefacedbaddecaf888")
         plaintext = bytes.fromhex(
             "d9313225f88406e5a55909c5aff5269a"
@@ -313,6 +304,7 @@ def _kat_ml_kem_1024() -> Tuple[bool, str]:
             kyber_decapsulate,
             kyber_encapsulate,
         )
+
         if not KYBER_AVAILABLE:
             return True, "ML-KEM-1024 KAT skipped (backend unavailable)"
 
@@ -335,6 +327,7 @@ def _kat_ml_dsa_65() -> Tuple[bool, str]:
             dilithium_verify,
             generate_dilithium_keypair,
         )
+
         if not DILITHIUM_AVAILABLE:
             return True, "ML-DSA-65 KAT skipped (backend unavailable)"
 
@@ -362,6 +355,7 @@ def _kat_slh_dsa() -> Tuple[bool, str]:
             sphincs_sign,
             sphincs_verify,
         )
+
         if not SPHINCS_AVAILABLE:
             return True, "SLH-DSA KAT skipped (backend unavailable)"
 
@@ -385,6 +379,7 @@ def _kat_ed25519() -> Tuple[bool, str]:
             native_ed25519_sign,
             native_ed25519_verify,
         )
+
         if not _ED25519_NATIVE_AVAILABLE:
             return True, "Ed25519 KAT skipped (native unavailable)"
 
@@ -402,6 +397,7 @@ def _kat_ed25519() -> Tuple[bool, str]:
 # ============================================================================
 # MAIN SELF-TEST RUNNER
 # ============================================================================
+
 
 def _run_self_tests() -> bool:
     """
@@ -480,7 +476,8 @@ def _run_self_tests() -> bool:
         _set_operational()
         logger.info(
             "FIPS 140-3 POST completed successfully in %.1f ms (%d tests)",
-            _POST_DURATION_MS, len(_SELF_TEST_RESULTS),
+            _POST_DURATION_MS,
+            len(_SELF_TEST_RESULTS),
         )
 
     return all_passed

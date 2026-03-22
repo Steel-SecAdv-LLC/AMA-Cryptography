@@ -334,8 +334,11 @@ class TestPairwiseConsistency:
         kp = generate_dilithium_keypair()
         # Should not raise
         pairwise_test_signature(
-            dilithium_sign, dilithium_verify,
-            kp.secret_key, kp.public_key, "ML-DSA-65",
+            dilithium_sign,
+            dilithium_verify,
+            kp.secret_key,
+            kp.public_key,
+            "ML-DSA-65",
         )
 
     def test_pairwise_kem_passes_for_valid_keypair(self) -> None:
@@ -353,8 +356,11 @@ class TestPairwiseConsistency:
         kp = generate_kyber_keypair()
         # Should not raise
         pairwise_test_kem(
-            kyber_encapsulate, kyber_decapsulate,
-            kp.public_key, kp.secret_key, "ML-KEM-1024",
+            kyber_encapsulate,
+            kyber_decapsulate,
+            kp.public_key,
+            kp.secret_key,
+            "ML-KEM-1024",
         )
 
     def test_pairwise_signature_fails_with_wrong_key(self) -> None:
@@ -379,8 +385,10 @@ class TestPairwiseConsistency:
         try:
             with pytest.raises(CryptoModuleError, match="Pairwise test failed"):
                 pairwise_test_signature(
-                    dilithium_sign, dilithium_verify,
-                    kp1.secret_key, kp2.public_key,  # mismatched
+                    dilithium_sign,
+                    dilithium_verify,
+                    kp1.secret_key,
+                    kp2.public_key,  # mismatched
                     "ML-DSA-65",
                 )
         finally:

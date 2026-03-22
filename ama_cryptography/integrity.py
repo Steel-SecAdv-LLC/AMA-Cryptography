@@ -26,12 +26,13 @@ def main() -> None:
         description="AMA Cryptography module integrity digest management"
     )
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--update", action="store_true",
-                       help="Regenerate the integrity digest after code changes")
-    group.add_argument("--verify", action="store_true",
-                       help="Verify module integrity against stored digest")
-    group.add_argument("--show", action="store_true",
-                       help="Show the current computed digest")
+    group.add_argument(
+        "--update", action="store_true", help="Regenerate the integrity digest after code changes"
+    )
+    group.add_argument(
+        "--verify", action="store_true", help="Verify module integrity against stored digest"
+    )
+    group.add_argument("--show", action="store_true", help="Show the current computed digest")
     args = parser.parse_args()
 
     if args.update:

@@ -458,8 +458,12 @@ def canonical_hash_code(codes: str, helix_params: List[Tuple[float, float]]) -> 
     # Create length-prefixed encoding with domain tags.
     # Invariants are joined with '|' into a single field for encoding efficiency.
     encoded = length_prefixed_encode(
-        "CODE", codes, "HELIX", *helix_parts,
-        "HELIX_INVARIANT", "|".join(invariant_parts),
+        "CODE",
+        codes,
+        "HELIX",
+        *helix_parts,
+        "HELIX_INVARIANT",
+        "|".join(invariant_parts),
     )
 
     # Compute SHA3-256 hash
