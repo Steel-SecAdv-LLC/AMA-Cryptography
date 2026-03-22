@@ -1298,7 +1298,7 @@ compared to a stored digest. After legitimate code changes, regenerate:
 python -m ama_cryptography.integrity --update
 ```
 
-Verify integrity without importing the full module:
+Verify the module integrity digest (runs POST as part of normal import):
 
 ```bash
 python -m ama_cryptography.integrity --verify
