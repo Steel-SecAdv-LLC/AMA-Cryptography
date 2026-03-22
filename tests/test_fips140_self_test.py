@@ -283,7 +283,9 @@ class TestModuleIntegrity:
     def test_verify_module_integrity_passes(self) -> None:
         from ama_cryptography._self_test import verify_module_integrity
 
-        assert verify_module_integrity() is True
+        passed, detail = verify_module_integrity()
+        assert passed is True
+        assert detail == "Module integrity verified"
 
     def test_integrity_cli_verify(self) -> None:
         """Test `python -m ama_cryptography.integrity --verify` succeeds."""

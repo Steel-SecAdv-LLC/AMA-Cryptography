@@ -192,19 +192,26 @@ def _compute_module_digest() -> str:
     return hasher.hexdigest()
 
 
-def verify_module_integrity() -> bool:
-    """Verify module source files against stored digest."""
+def verify_module_integrity() -> tuple[bool, str]:
+    """Verify module source files against stored digest.
+
+    Returns:
+        Tuple of (passed, detail) where detail describes the specific
+        outcome — preserving the exact reason on failure.
+    """
     if not _INTEGRITY_DIGEST_FILE.exists():
         logger.error("Integrity digest file not found")
-        _set_error("Integrity digest file missing")
-        return False
+        return False, "Integrity digest file missing"
     stored = _INTEGRITY_DIGEST_FILE.read_text().strip()
     if not stored:
         logger.error("Integrity digest file is empty")
-        _set_error("Integrity digest file empty")
-        return False
+        return False, "Integrity digest file empty"
     current = _compute_module_digest()
-    return stored == current
+    if stored != current:
+        reason = f"Module digest mismatch: stored={stored[:16]}... computed={current[:16]}..."
+        logger.error(reason)
+        return False, reason
+    return True, "Module integrity verified"
 
 
 def update_integrity_digest() -> str:
@@ -425,12 +432,12 @@ def _run_self_tests() -> bool:
 
     # 1. Module integrity verification
     try:
-        if not verify_module_integrity():
-            _SELF_TEST_RESULTS.append(("integrity", False, "Module integrity check failed"))
-            _set_error("Module integrity verification failed")
+        integrity_passed, integrity_detail = verify_module_integrity()
+        _SELF_TEST_RESULTS.append(("integrity", integrity_passed, integrity_detail))
+        if not integrity_passed:
+            _set_error(integrity_detail)
             _POST_DURATION_MS = (time.monotonic() - start) * 1000
             return False
-        _SELF_TEST_RESULTS.append(("integrity", True, "Module integrity verified"))
     except Exception as exc:
         _SELF_TEST_RESULTS.append(("integrity", False, f"Exception: {exc}"))
         _set_error(f"Module integrity check exception: {exc}")

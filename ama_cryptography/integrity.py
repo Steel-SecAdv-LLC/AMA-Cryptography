@@ -39,10 +39,11 @@ def main() -> None:
         digest = update_integrity_digest()
         print(f"Integrity digest updated: {digest}")
     elif args.verify:
-        if verify_module_integrity():
+        passed, detail = verify_module_integrity()
+        if passed:
             print("Module integrity: OK")
         else:
-            print("Module integrity: FAILED", file=sys.stderr)
+            print(f"Module integrity: FAILED — {detail}", file=sys.stderr)
             sys.exit(1)
     elif args.show:
         print(_compute_module_digest())
