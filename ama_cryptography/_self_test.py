@@ -425,8 +425,9 @@ def _run_self_tests() -> bool:
     Returns True if all tests passed and module is OPERATIONAL.
     Returns False and sets ERROR state if any test failed.
     """
-    global _MODULE_STATE, _SELF_TEST_RESULTS, _POST_DURATION_MS
+    global _MODULE_STATE, _ERROR_REASON, _SELF_TEST_RESULTS, _POST_DURATION_MS
     _MODULE_STATE = "SELF_TEST"
+    _ERROR_REASON = None
     _SELF_TEST_RESULTS = []
     start = time.monotonic()
 
