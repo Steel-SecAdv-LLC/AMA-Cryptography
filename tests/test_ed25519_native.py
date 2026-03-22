@@ -47,8 +47,10 @@ def _pyca_available() -> bool:
         from cryptography.hazmat.primitives.asymmetric import ed25519  # noqa: F401
 
         return True
+    except Exception:
+        return False
     except BaseException as exc:
-        # BaseException needed: pyo3_runtime.PanicException inherits BaseException, not Exception
+        # pyo3_runtime.PanicException inherits BaseException, not Exception
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise
         return False
