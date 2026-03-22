@@ -102,21 +102,21 @@ def secure_token_bytes(n: int = 32) -> bytes:
     """
     Wrapper around secrets.token_bytes with continuous RNG health test.
 
-    Always draws a fixed-size (32-byte) sample for the health comparison so
-    that alternating request sizes cannot bypass the duplicate check.
+    Draws a single buffer of max(n, 32) bytes, uses the first 32 bytes for
+    the health comparison, and returns the first n bytes to the caller.
+    This avoids a second RNG call and ensures the health check covers
+    the same entropy that the caller receives.
     """
     check_operational()
     global _previous_rng_output
-    # Health check uses a fixed internal size, independent of caller's n
-    health_sample = secrets.token_bytes(_RNG_HEALTH_SIZE)
+    draw_size = max(n, _RNG_HEALTH_SIZE)
+    buf = secrets.token_bytes(draw_size)
+    health_sample = buf[:_RNG_HEALTH_SIZE]
     if _previous_rng_output is not None and health_sample == _previous_rng_output:
         _set_error("Continuous RNG test failed: consecutive identical outputs")
         raise CryptoModuleError("Module in error state: Continuous RNG test failed")
     _previous_rng_output = health_sample
-    # Return the caller's requested number of bytes
-    if n == _RNG_HEALTH_SIZE:
-        return health_sample
-    return secrets.token_bytes(n)
+    return buf[:n]
 
 
 # ============================================================================

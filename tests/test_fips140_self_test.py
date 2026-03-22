@@ -16,6 +16,7 @@ Tests for the FIPS 140-3 power-on self-test infrastructure:
 Run with:  pytest tests/test_fips140_self_test.py -v -m fips
 """
 
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -292,7 +293,7 @@ class TestModuleIntegrity:
         import subprocess
 
         result = subprocess.run(
-            ["python3", "-m", "ama_cryptography.integrity", "--verify"],
+            [sys.executable, "-m", "ama_cryptography.integrity", "--verify"],
             capture_output=True,
             text=True,
         )
@@ -304,7 +305,7 @@ class TestModuleIntegrity:
         import subprocess
 
         result = subprocess.run(
-            ["python3", "-m", "ama_cryptography.integrity", "--show"],
+            [sys.executable, "-m", "ama_cryptography.integrity", "--show"],
             capture_output=True,
             text=True,
         )
