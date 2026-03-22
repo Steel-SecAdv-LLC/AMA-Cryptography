@@ -371,16 +371,19 @@ Recovery: `ama_cryptography.reset_module()` re-runs all self-tests.
 
 ### 4.4 Pairwise Consistency Tests
 
-After every key generation for signature or KEM algorithms, a sign-verify
-or encaps-decaps roundtrip is performed on a fixed test message. On failure,
-the keypair is not returned and the module enters ERROR state. Covered
-algorithms:
+The library provides helper functions (`pairwise_test_signature()`,
+`pairwise_test_kem()`) that perform a sign-verify or encaps-decaps
+roundtrip on a fixed test message. Callers (e.g. key-generation wrappers)
+are responsible for invoking these helpers after generating a keypair.
+On failure, the module enters ERROR state and the caller should discard
+the keypair. Covered algorithms:
 
 - Ed25519: sign + verify
 - ML-DSA-65: sign + verify
 - ML-KEM-1024: encaps + decaps
 
-Functions: `pairwise_test_signature()`, `pairwise_test_kem()`
+These helpers do **not** automatically intercept every key generation;
+they must be called explicitly by application code or wrapper functions.
 
 ### 4.5 Continuous RNG Test
 

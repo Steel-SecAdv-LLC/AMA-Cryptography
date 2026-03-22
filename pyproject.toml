@@ -97,6 +97,9 @@ Documentation = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/
 Repository = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography"
 Issues = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/issues"
 
+[tool.setuptools.package-data]
+ama_cryptography = ["_integrity_digest.txt"]
+
 # Ruff configuration — replaces flake8, isort
 [tool.ruff]
 target-version = "py39"
