@@ -100,18 +100,7 @@ This document presents two measurement columns throughout:
 >
 > **AES-NI note:** This is a pure C table-based AES implementation. On x86_64 hardware with AES-NI, hardware-accelerated AES-GCM achieves ~1M+ ops/sec for 1KB payloads (~30x faster than this C implementation). The bitsliced constant-time variant (`-DAMA_AES_CONSTTIME=ON`) provides cache-timing hardening at equivalent throughput.
 >
-> **Recommendation:** For AEAD on platforms without AES-NI, use ChaCha20-Poly1305 (see below), which is ~5x faster than table-based AES-GCM in raw C.
-
----
-
-## Authenticated Encryption — ChaCha20-Poly1305 (RFC 8439)
-
-| Operation | Data Size | Raw C Latency | Raw C ops/sec | Python/ctypes Latency | Python/ctypes ops/sec | ctypes Δ |
-|-----------|----------|--------------|--------------|----------------------|----------------------|----------|
-| Encrypt | 1 KB | 0.006 ms | 166,667 | 0.006 ms | 155,725 | +7% |
-| Decrypt | 1 KB | 0.006 ms | 175,439 | 0.006 ms | 168,937 | +4% |
-
-> ChaCha20-Poly1305 significantly outperforms AES-256-GCM on this platform (no AES-NI). On hardware with AES-NI, AES-GCM may match or exceed ChaCha20 performance.
+> **Recommendation:** For AEAD on platforms without AES-NI, ChaCha20-Poly1305 is typically faster than table-based AES-GCM. The library provides `ama_chacha20poly1305_encrypt`/`_decrypt` (RFC 8439) but the C benchmark harness does not yet include ChaCha20-Poly1305 timing. A future release will add these benchmarks.
 
 ---
 
@@ -235,7 +224,7 @@ The following table compares AMA's raw C performance against published benchmark
 | Operation | AMA Raw C | libsodium (no AES-NI) | OpenSSL (AES-NI) | Notes |
 |-----------|----------|----------------------|-----------------|-------|
 | AES-256-GCM Enc | 33,333 ops/sec | ~35,000 ops/sec | ~1,200,000 ops/sec | AES-NI provides ~36x speedup |
-| ChaCha20-Poly1305 Enc | 166,667 ops/sec | ~180,000 ops/sec | ~350,000 ops/sec | ChaCha20 more consistent across platforms |
+| ChaCha20-Poly1305 Enc | *(not yet benchmarked)* | ~180,000 ops/sec | ~350,000 ops/sec | ChaCha20 more consistent across platforms |
 | X25519 DH | 13,514 ops/sec | ~55,000 ops/sec | ~45,000 ops/sec | libsodium uses x86-64 assembly |
 
 **Sources:** libsodium benchmarks from `crypto_aead` and `crypto_scalarmult` tests; OpenSSL `speed` command on comparable hardware.
@@ -316,7 +305,7 @@ The C harness uses `clock_gettime(CLOCK_MONOTONIC)` with 50 warmup iterations an
 - **KDF:** HKDF-SHA3-256 (96B output)
 - **Signatures:** Ed25519 (keygen/sign/verify), ML-DSA-65 (keygen/sign/verify)
 - **KEM:** ML-KEM-1024 (keygen/encaps/decaps)
-- **AEAD:** AES-256-GCM (1KB/4KB/64KB), ChaCha20-Poly1305 (1KB)
+- **AEAD:** AES-256-GCM (1KB/4KB/64KB)
 - **Key Exchange:** X25519 (keygen/DH)
 
 Output includes mean, median, stddev, min, max, and ops/sec for each operation. See `benchmarks/Makefile` for build details.
@@ -372,7 +361,7 @@ print(f'ML-DSA-65 Verify: {mean*1e6:.1f} us ({1/mean:.0f} ops/sec)')
 
 1. **Shared CI runners** — Throughput varies 20–40% run-to-run due to noisy neighbors. Regression baselines account for this.
 2. **ctypes overhead** — Python-to-C calls via ctypes add ~1–5 µs per call. For fast operations (SHA3, HMAC), this is a measurable fraction of total time. For slow operations (ML-DSA sign, Argon2id), it is negligible. The "Raw C" column shows true library performance.
-3. **AES-GCM without AES-NI** — The table-based AES implementation is ~30x slower than hardware-accelerated AES-NI. The raw C AES-GCM numbers (~33K ops/sec for 1KB) are expected for software AES. Use ChaCha20-Poly1305 on platforms without AES-NI.
+3. **AES-GCM without AES-NI** — The table-based AES implementation is ~30x slower than hardware-accelerated AES-NI. The raw C AES-GCM numbers (~33K ops/sec for 1KB) are expected for software AES. Consider ChaCha20-Poly1305 (`ama_chacha20poly1305_encrypt`) on platforms without AES-NI.
 4. **X25519 vs libsodium** — AMA's pure C Montgomery ladder runs ~4x slower than libsodium's hand-optimized x86-64 assembly. This is the expected cost of a portable C11 implementation.
 5. **SLH-DSA signing is slow by design** — SPHINCS+ trades signing speed for stateless hash-based security. This is a feature, not a bug.
 6. **Argon2id is slow by design** — Memory-hard password hashing should be slow. Fast Argon2id would indicate a security problem.

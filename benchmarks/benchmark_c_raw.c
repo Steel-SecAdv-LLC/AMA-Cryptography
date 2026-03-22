@@ -1,5 +1,9 @@
-/* POSIX feature test macro — must precede all #includes */
-#define _POSIX_C_SOURCE 199309L
+/* POSIX feature test macro — must precede all #includes.
+ * 200809L (POSIX.1-2008) covers clock_gettime, gmtime_r, ctime_r.
+ * The earlier 199309L only guaranteed clock_gettime and caused
+ * implicit-declaration errors on macOS/clang whose headers enforce
+ * feature-test macros strictly. */
+#define _POSIX_C_SOURCE 200809L
 
 /*
  * Copyright 2025-2026 Steel Security Advisors LLC
@@ -171,7 +175,7 @@ static bench_result_t bench_aes_gcm_encrypt(size_t data_size, int iters, int war
 
     uint8_t *pt = (uint8_t *)malloc(data_size);
     uint8_t *ct = (uint8_t *)malloc(data_size);
-    if (!pt || !ct) { free(pt); free(ct); bench_result_t r = {0}; return r; }
+    if (!pt || !ct) { free(pt); free(ct); bench_result_t r = {0}; r.name = "(alloc failed)"; return r; }
     fill_random(pt, data_size);
 
     for (int i = 0; i < warmup; i++)
@@ -205,7 +209,7 @@ static bench_result_t bench_aes_gcm_decrypt(size_t data_size, int iters, int war
     uint8_t *pt = (uint8_t *)malloc(data_size);
     uint8_t *ct = (uint8_t *)malloc(data_size);
     uint8_t *dec = (uint8_t *)malloc(data_size);
-    if (!pt || !ct || !dec) { free(pt); free(ct); free(dec); bench_result_t r = {0}; return r; }
+    if (!pt || !ct || !dec) { free(pt); free(ct); free(dec); bench_result_t r = {0}; r.name = "(alloc failed)"; return r; }
     fill_random(pt, data_size);
 
     ama_aes256_gcm_encrypt(key, nonce, pt, data_size, NULL, 0, ct, tag);
@@ -415,7 +419,7 @@ static bench_result_t bench_kyber_decaps(int iters, int warmup) {
 static bench_result_t bench_sha3_256(size_t data_size, int iters, int warmup) {
     uint8_t *data = (uint8_t *)malloc(data_size);
     uint8_t hash[32];
-    if (!data) { bench_result_t r = {0}; return r; }
+    if (!data) { bench_result_t r = {0}; r.name = "(alloc failed)"; return r; }
     fill_random(data, data_size);
 
     for (int i = 0; i < warmup; i++)
@@ -442,7 +446,7 @@ static bench_result_t bench_sha3_256(size_t data_size, int iters, int warmup) {
 static bench_result_t bench_sha3_512(size_t data_size, int iters, int warmup) {
     uint8_t *data = (uint8_t *)malloc(data_size);
     uint8_t hash[64];
-    if (!data) { bench_result_t r = {0}; return r; }
+    if (!data) { bench_result_t r = {0}; r.name = "(alloc failed)"; return r; }
     fill_random(data, data_size);
 
     for (int i = 0; i < warmup; i++)
@@ -471,7 +475,7 @@ static bench_result_t bench_hmac_sha3(size_t msg_size, int iters, int warmup) {
     uint8_t key[32], out[32];
     fill_random(key, 32);
     uint8_t *msg = (uint8_t *)malloc(msg_size);
-    if (!msg) { bench_result_t r = {0}; return r; }
+    if (!msg) { bench_result_t r = {0}; r.name = "(alloc failed)"; return r; }
     fill_random(msg, msg_size);
 
     for (int i = 0; i < warmup; i++)
