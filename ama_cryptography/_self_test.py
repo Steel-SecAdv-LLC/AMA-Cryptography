@@ -24,7 +24,7 @@ import logging
 import secrets
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from ama_cryptography.exceptions import CryptoModuleError
 
@@ -124,7 +124,13 @@ def secure_token_bytes(n: int = 32) -> bytes:
 # ============================================================================
 
 
-def pairwise_test_signature(sign_fn, verify_fn, secret_key, public_key, algo_name: str) -> None:
+def pairwise_test_signature(
+    sign_fn: Callable[..., Any],
+    verify_fn: Callable[..., Any],
+    secret_key: Any,
+    public_key: Any,
+    algo_name: str,
+) -> None:
     """Sign a test message and verify — raise on failure."""
     test_msg = b"FIPS 140-3 pairwise consistency test"
     try:
@@ -143,7 +149,13 @@ def pairwise_test_signature(sign_fn, verify_fn, secret_key, public_key, algo_nam
         ) from exc
 
 
-def pairwise_test_kem(encaps_fn, decaps_fn, public_key, secret_key, algo_name: str) -> None:
+def pairwise_test_kem(
+    encaps_fn: Callable[..., Any],
+    decaps_fn: Callable[..., Any],
+    public_key: Any,
+    secret_key: Any,
+    algo_name: str,
+) -> None:
     """Encapsulate + decapsulate roundtrip test — raise on failure."""
     try:
         encap = encaps_fn(public_key)

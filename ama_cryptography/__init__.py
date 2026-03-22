@@ -36,8 +36,8 @@ __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
 # FIPS 140-3 Power-On Self-Tests — run at module import time.
 # Sets module state to OPERATIONAL or ERROR.
+from ama_cryptography._self_test import _run_self_tests as _post
 from ama_cryptography._self_test import (  # noqa: F401
-    CryptoModuleError,
     check_operational,
     module_error_reason,
     module_self_test_results,
@@ -46,7 +46,7 @@ from ama_cryptography._self_test import (  # noqa: F401
     reset_module,
     secure_token_bytes,
 )
-from ama_cryptography._self_test import _run_self_tests as _post
+from ama_cryptography.exceptions import CryptoModuleError as CryptoModuleError  # noqa: F401
 
 _post()
 

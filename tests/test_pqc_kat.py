@@ -512,13 +512,13 @@ def sphincs_provider() -> Any:
     )
 
     class SphincsProvider:
-        def generate_keypair(self):
+        def generate_keypair(self) -> Any:
             return generate_sphincs_keypair()
 
-        def sign(self, message, secret_key):
+        def sign(self, message: bytes, secret_key: bytes) -> bytes:
             return sphincs_sign(message, secret_key)
 
-        def verify(self, message, signature, public_key):
+        def verify(self, message: bytes, signature: bytes, public_key: bytes) -> bool:
             return sphincs_verify(message, signature, public_key)
 
     return SphincsProvider()
