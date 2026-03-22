@@ -1,3 +1,6 @@
+/* POSIX feature test macro — must precede all #includes */
+#define _POSIX_C_SOURCE 199309L
+
 /*
  * Copyright 2025-2026 Steel Security Advisors LLC
  * Licensed under the Apache License, Version 2.0

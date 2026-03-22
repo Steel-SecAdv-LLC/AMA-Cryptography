@@ -197,6 +197,7 @@ class TestCanonicalHashCode:
                 t_new = (c + delta) / denom_new_c if denom_new_c else 0.0
                 assert abs(t_orig - t_new) > 0, "Invariant τ must change with pitch perturbation"
 
+
 class TestHMACAuthentication:
     """Penetration tests for HMAC authentication."""
 
