@@ -50,10 +50,11 @@ def _pyca_available() -> bool:
     except Exception:
         return False
     except BaseException as exc:
-        # pyo3_runtime.PanicException inherits BaseException, not Exception
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise
-        return False
+        if type(exc).__name__ == "PanicException":
+            return False
+        raise
 
 
 def _native_sign_and_verify(seed: bytes, message: bytes) -> tuple[Any, ...]:

@@ -35,13 +35,16 @@ except Exception:
     hashes = None
     HKDF = None
 except BaseException as exc:
-    # pyo3_runtime.PanicException inherits BaseException, not Exception
     if isinstance(exc, (KeyboardInterrupt, SystemExit)):
         raise
-    _PYCA_AVAILABLE = False
-    default_backend = None
-    hashes = None
-    HKDF = None
+    # pyo3_runtime.PanicException inherits BaseException, not Exception
+    if type(exc).__name__ == "PanicException":
+        _PYCA_AVAILABLE = False
+        default_backend = None
+        hashes = None
+        HKDF = None
+    else:
+        raise
 
 
 class TestHKDFSHA3256:
