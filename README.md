@@ -62,7 +62,7 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 > - Secure file permissions for key files and cryptographic packages (store on encrypted volumes with restricted access)
 >
 > **Status:** Community-tested | Not externally audited
-> **Last Updated:** 2026-03-20
+> **Last Updated:** 2026-03-22
 
 ---
 
@@ -354,13 +354,21 @@ Future-proof cryptography:
 
 *Comprehensive benchmark report with latency distribution, sign vs verify analysis, category performance, top/bottom operations, ethical overhead, regression improvement, NIST FIPS compliance, and summary statistics.*
 
-### ML-DSA-65 (Post-Quantum) Operations
+### ML-DSA-65 (Post-Quantum Digital Signatures — FIPS 204)
 
-| Operation | AMA Cryptography (Native) | Performance |
-|-----------|----------------------|-------------|
-| **KeyGen** | 644 ops/sec (1.55ms) | Full native C implementation |
-| **Sign** | 3,639 ops/sec (0.28ms) | Full native C implementation |
-| **Verify** | 624 ops/sec (1.60ms) | NIST KAT validated |
+| Operation | Throughput | Latency | Notes |
+|-----------|-----------|---------|-------|
+| **KeyGen** | 4,527 ops/sec | 0.22ms | Native C, NTT q=8380417 |
+| **Sign** | 1,027 ops/sec | 0.97ms | Rejection sampling, constant-time |
+| **Verify** | 5,067 ops/sec | 0.20ms | NIST ACVP validated |
+
+### ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)
+
+| Operation | Throughput | Latency | Notes |
+|-----------|-----------|---------|-------|
+| **KeyGen** | 9,798 ops/sec | 0.10ms | Native C, NTT q=3329 |
+| **Encapsulate** | 9,480 ops/sec | 0.11ms | IND-CCA2, Fujisaki-Okamoto |
+| **Decapsulate** | 8,913 ops/sec | 0.11ms | Implicit rejection |
 
 ### Full 6-Layer Package Performance
 
@@ -368,8 +376,8 @@ Complete security package with all defense layers:
 
 | Operation | Mean Time | Throughput |
 |-----------|-----------|------------|
-| Package Create (6 layers) | 2.17ms | 462 ops/sec |
-| Package Verify (6 layers) | 2.04ms | 489 ops/sec |
+| Package Create (6 layers) | 0.50ms | 1,983 ops/sec |
+| Package Verify (6 layers) | 0.42ms | 2,396 ops/sec |
 
 **6 Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65, HKDF, RFC 3161 (optional)
 
@@ -377,18 +385,20 @@ Complete security package with all defense layers:
 
 | Operation | Throughput | Latency |
 |-----------|-----------|---------|
-| SHA3-256 | 222,816 ops/sec | 0.005ms |
-| HMAC-SHA3-256 (Cython binding)* | 262,200 ops/sec | 0.004ms |
-| Ed25519 KeyGen | 21,299 ops/sec | 0.05ms |
-| Ed25519 Sign | 20,171 ops/sec | 0.05ms |
-| Ed25519 Verify | 10,067 ops/sec | 0.10ms |
-| HKDF-SHA3-256 | 4,689 ops/sec | 0.21ms |
+| SHA3-256 (32B) | 477,055 ops/sec | 0.002ms |
+| SHA3-256 (1KB) | 158,832 ops/sec | 0.006ms |
+| HMAC-SHA3-256 (1KB) | 114,278 ops/sec | 0.009ms |
+| HKDF-SHA3-256 (96B derive) | 73,318 ops/sec | 0.014ms |
+| Ed25519 KeyGen | 14,611 ops/sec | 0.07ms |
+| Ed25519 Sign | 14,976 ops/sec | 0.07ms |
+| Ed25519 Verify | 7,716 ops/sec | 0.13ms |
+| AES-256-GCM encrypt (1KB) | 1,087 ops/sec | 0.92ms |
+| ChaCha20-Poly1305 encrypt (1KB) | 155,725 ops/sec | 0.006ms |
+| X25519 DH Exchange | 1,280 ops/sec | 0.78ms |
 
-*HMAC-SHA3-256 via native C (Cython binding). Fallback ctypes path available (~182K ops/sec) when Cython extension is not built. stdlib hmac is not used — INVARIANT-1.
+**Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [BENCHMARKS.md](BENCHMARKS.md) for full performance data including all algorithms.
 
-**Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [BENCHMARKS.md](BENCHMARKS.md) for full performance data.
-
-*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, native C backend, 1,000 iterations per operation.*
+*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, native C backend via ctypes. Measured with `time.perf_counter()`, 200-5000 iterations per operation, 10-50 warmup iterations. Reproducible via `python benchmarks/benchmark_runner.py --verbose`.*
 
 </details>
 
@@ -1224,6 +1234,6 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 </div>
 
-*Last updated: 2026-03-20*
+*Last updated: 2026-03-22*
 
 </div>
