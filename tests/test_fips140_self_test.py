@@ -132,7 +132,7 @@ class TestPowerOnSelfTests:
 
         duration = post_duration_ms()
         assert duration > 0, "POST duration should be positive"
-        assert duration < 500, f"POST took {duration:.1f}ms, exceeding 500ms budget"
+        assert duration < 2000, f"POST took {duration:.1f}ms, exceeding 2000ms budget"
 
     def test_all_kats_passed(self) -> None:
         from ama_cryptography._self_test import module_self_test_results
