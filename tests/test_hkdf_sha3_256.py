@@ -34,9 +34,9 @@ except BaseException as exc:
     if isinstance(exc, (KeyboardInterrupt, SystemExit)):
         raise
     _PYCA_AVAILABLE = False
-    default_backend = None  # type: ignore[assignment]
-    hashes = None  # type: ignore[assignment]
-    HKDF = None  # type: ignore[assignment]
+    default_backend = None
+    hashes = None
+    HKDF = None
 
 
 class TestHKDFSHA3256:
