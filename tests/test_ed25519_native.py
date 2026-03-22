@@ -48,8 +48,7 @@ def _pyca_available() -> bool:
 
         return True
     except BaseException as exc:
-        # BaseException catches pyo3 PanicException from broken Rust bindings,
-        # ImportError, missing _cffi_backend, etc.
+        # BaseException needed: pyo3_runtime.PanicException inherits BaseException, not Exception
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise
         return False

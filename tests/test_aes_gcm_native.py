@@ -35,7 +35,7 @@ def _pyca_crypto_available() -> bool:
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: F401
     except BaseException as exc:
-        # BaseException catches pyo3_runtime.PanicException from broken Rust bindings
+        # BaseException needed: pyo3_runtime.PanicException inherits BaseException, not Exception
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise
         return False
