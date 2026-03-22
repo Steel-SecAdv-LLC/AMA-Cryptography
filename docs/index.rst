@@ -32,7 +32,7 @@ system featuring:
 - **Multi-Algorithm Support**: ML-DSA-65, Kyber-1024, SPHINCS+-256f
 - **Hybrid Architecture**: C core with Python/Cython optimizations
 - **Constant-Time Operations**: Timing-attack resistant implementations
-- **High Performance**: 10-50x speedup via Cython mathematical engine
+- **High Performance**: 18-37x speedup via Cython mathematical engine (vs pure Python baseline)
 - **Cross-Platform**: Linux, macOS, Windows, ARM support
 - **Security Hardened**: HSM/TPM integration, key rotation, TLS support
 
@@ -60,7 +60,7 @@ Security
 Performance
 ~~~~~~~~~~~
 
-- Cython mathematical engine (10-50x Python speedup)
+- Cython mathematical engine (18-37x vs pure Python mathematical baseline)
 - AVX2/SIMD optimizations
 - NTT-based polynomial multiplication (O(n log n))
 - Cache-friendly memory layouts

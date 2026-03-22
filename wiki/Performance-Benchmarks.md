@@ -1,6 +1,8 @@
 # Performance Benchmarks
 
-Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the native C library.
+> **Authoritative source:** [BENCHMARKS.md](/BENCHMARKS.md) in the repository root is the authoritative benchmark document. It includes raw C performance numbers (without ctypes overhead), three-column comparisons, and competitive context against libsodium/liboqs. This wiki page shows Python/ctypes measurements from a specific benchmark run.
+
+Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the native C library via Python/ctypes.
 
 **Platform:** Linux-6.18.5-x86_64 | **CPU:** 4 cores | **Python:** 3.11.14
 **Date:** 2026-03-21 | **Dilithium Backend:** native C
@@ -91,22 +93,22 @@ Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the
 
 ### Cython Acceleration
 
-When built with Cython (`python setup.py build_ext --inplace`), mathematical operations in the 3R engine (equations, double-helix computations) show:
-- **18-37x speedup** over pure Python baseline
+When built with Cython (`python setup.py build_ext --inplace`), mathematical operations in the 3R monitoring engine (Lyapunov stability, helical computations, NTT polynomial operations) show:
+- **18–37x speedup** over the pure Python mathematical baseline
 - NumPy-integrated batch operations
 
-Cython acceleration does **not** affect C-implemented cryptographic primitives (they are already native).
+Cython acceleration does **not** affect C-implemented cryptographic primitives (they are already native). The speedup comparison baseline is pure Python loops — not the native C library.
 
 ### Algorithm Comparison
 
 | Algorithm | Sign (ms) | Verify (ms) | Sig Size |
 |-----------|----------:|------------:|---------:|
-| Ed25519 | 0.377 | 0.680 | 64 bytes |
-| ML-DSA-65 | 2.333 | 1.864 | 3,309 bytes |
-| Hybrid (Ed25519 + ML-DSA-65) | ~2.710 | ~2.544 | 3,373 bytes |
-| SPHINCS+-SHA2-256f | ~741 | ~19 | 49,856 bytes |
+| Ed25519 | 0.07 | 0.13 | 64 bytes |
+| ML-DSA-65 | 0.97 | 0.20 | 3,309 bytes |
+| Hybrid (Ed25519 + ML-DSA-65) | ~1.04 | ~0.33 | 3,373 bytes |
+| SPHINCS+-SHA2-256f | ~237 | ~5.95 | 49,856 bytes |
 
-> ML-DSA-65 is ~6x slower to sign than Ed25519 but provides 192-bit quantum security.
+> ML-DSA-65 is ~14x slower to sign than Ed25519 but provides 192-bit quantum security. Numbers from BENCHMARKS.md authoritative benchmark run.
 
 ### 3R Monitoring Overhead
 
@@ -169,3 +171,9 @@ Results are saved to `benchmark_results.json`, `BENCHMARKS.md`, and `benchmarks/
 <!-- AUTO-BENCHMARK-TABLE-END -->
 
 *See [Cryptography Algorithms](Cryptography-Algorithms) for algorithm key sizes, or [Architecture](Architecture) for the multi-language performance architecture.*
+
+---
+
+## Standards Compliance Note
+
+This library implements algorithms specified in FIPS 203 (ML-KEM), FIPS 204 (ML-DSA), FIPS 205 (SLH-DSA), and FIPS 202 (SHA-3). This implementation has **NOT** been submitted for CMVP validation and is **NOT** FIPS 140-3 certified. See `CSRC_STANDARDS.md` for detailed compliance status.

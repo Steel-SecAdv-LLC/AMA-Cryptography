@@ -271,6 +271,17 @@ if(AMA_BUILD_TESTS)
     add_subdirectory(tests/c)
 endif()
 
+# Raw C benchmark harness
+add_executable(benchmark_c_raw benchmarks/benchmark_c_raw.c)
+target_link_libraries(benchmark_c_raw PRIVATE
+    $<IF:$<TARGET_EXISTS:ama_cryptography_static>,ama_cryptography_static,ama_cryptography_shared>
+    m)
+if(NOT WIN32)
+    target_link_libraries(benchmark_c_raw PRIVATE rt)
+endif()
+set_target_properties(benchmark_c_raw PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
 # Installation
 if(AMA_BUILD_SHARED)
     install(TARGETS ama_cryptography_shared

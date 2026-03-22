@@ -1272,9 +1272,9 @@ cmake .. \
 - **RFC 3161:** https://datatracker.ietf.org/doc/html/rfc3161
 - **Ed25519:** https://ed25519.cr.yp.to/
 
-### FIPS 140-3 Self-Test Behavior
+### Self-Test Behavior (Aligned with FIPS 140-3 Level 1 Requirements)
 
-AMA Cryptography implements FIPS 140-3 Security Level 1 technical controls:
+AMA Cryptography implements technical controls aligned with FIPS 140-3 Security Level 1 requirements (pending future CMVP validation):
 
 **Power-On Self-Tests (POST):** When `import ama_cryptography` runs, the module
 automatically executes Known Answer Tests for all approved algorithms (SHA3-256,
@@ -1305,9 +1305,11 @@ python -m ama_cryptography.integrity --verify
 ```
 
 **Continuous RNG Test:** Use `ama_cryptography.secure_token_bytes(n)` instead
-of `secrets.token_bytes(n)` for FIPS-compliant random byte generation. This
-wrapper detects consecutive identical outputs and enters ERROR state if the
-RNG fails.
+of `secrets.token_bytes(n)` for random byte generation with continuous health
+testing. This wrapper detects consecutive identical outputs and enters ERROR
+state if the RNG fails.
+
+> **Note:** This implementation has NOT been submitted for CMVP validation and is NOT FIPS 140-3 certified. These controls represent design alignment with FIPS 140-3 Level 1 technical requirements.
 
 **Pairwise Consistency Tests:** Functions `pairwise_test_signature()` and
 `pairwise_test_kem()` in `ama_cryptography._self_test` can be called after

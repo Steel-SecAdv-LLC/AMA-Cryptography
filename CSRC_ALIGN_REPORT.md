@@ -310,7 +310,9 @@ Results are written to `nist_vectors/results.json`.
 
 ---
 
-## Section 4 — FIPS 140-3 Security Level 1 Technical Controls
+## Section 4 — Design Alignment with FIPS 140-3 Level 1 Requirements (Pending Future CMVP Validation)
+
+> **Important:** The controls in this section represent design alignment with FIPS 140-3 Security Level 1 technical requirements. This implementation has **NOT** been submitted for CMVP validation and is **NOT** FIPS 140-3 certified. These controls are implemented as a step toward future formal validation.
 
 **Date:** 2026-03-21
 **Implementation:** `ama_cryptography/_self_test.py`, `ama_cryptography/integrity.py`
@@ -384,5 +386,8 @@ Functions: `pairwise_test_signature()`, `pairwise_test_kem()`
 
 `secure_token_bytes(n)` wraps `secrets.token_bytes(n)` with a comparison
 to the previous output. If two consecutive calls return identical bytes,
-the module enters ERROR state immediately. This implements FIPS 140-3
-Section 4.9.2 continuous random number generator testing.
+the module enters ERROR state immediately. This is aligned with the
+continuous random number generator testing described in FIPS 140-3
+Section 4.9.2.
+
+> **Note:** This is a design-aligned implementation, not a CMVP-validated module. See Section 3 of `CSRC_STANDARDS.md` for full compliance status.
