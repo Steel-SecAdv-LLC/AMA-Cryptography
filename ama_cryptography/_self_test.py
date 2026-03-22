@@ -192,7 +192,7 @@ def _compute_module_digest() -> str:
     return hasher.hexdigest()
 
 
-def verify_module_integrity() -> tuple[bool, str]:
+def verify_module_integrity() -> Tuple[bool, str]:
     """Verify module source files against stored digest.
 
     Returns:
