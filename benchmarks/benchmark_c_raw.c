@@ -562,9 +562,10 @@ static void print_json_start(void) {
            AMA_CRYPTOGRAPHY_VERSION_PATCH);
 
     time_t now = time(NULL);
-    struct tm *t = gmtime(&now);
+    struct tm t;
+    gmtime_r(&now, &t);
     char ts[64];
-    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", t);
+    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &t);
     printf("  \"timestamp\": \"%s\",\n", ts);
     printf("  \"results\": [\n");
 }
@@ -645,7 +646,12 @@ int main(int argc, char **argv) {
         printf("Timer: clock_gettime(CLOCK_MONOTONIC)\n");
 
         time_t now = time(NULL);
-        printf("Date: %s", ctime(&now));
+        char datebuf[32];
+        if (ctime_r(&now, datebuf) != NULL) {
+            printf("Date: %s", datebuf);
+        } else {
+            printf("Date: (unavailable)\n");
+        }
         printf("\nRunning benchmarks...\n");
     }
 
