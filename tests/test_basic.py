@@ -9,7 +9,7 @@ from ama_cryptography import __author__, __version__
 
 def test_version() -> None:
     """Test that version is correctly set"""
-    assert __version__ == "2.0"
+    assert __version__ == "2.1"
 
 
 def test_author() -> None:

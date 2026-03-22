@@ -30,7 +30,7 @@ try:
 
     _PYCA_AVAILABLE = True
 except BaseException as exc:
-    # BaseException catches pyo3_runtime.PanicException from broken Rust bindings
+    # BaseException needed: pyo3_runtime.PanicException inherits BaseException, not Exception
     if isinstance(exc, (KeyboardInterrupt, SystemExit)):
         raise
     _PYCA_AVAILABLE = False

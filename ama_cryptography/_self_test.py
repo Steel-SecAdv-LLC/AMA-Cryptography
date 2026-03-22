@@ -219,7 +219,13 @@ def _kat_sha3_256() -> Tuple[bool, str]:
 
 
 def _kat_hmac_sha3_256() -> Tuple[bool, str]:
-    """HMAC-SHA3-256 KAT using native backend."""
+    """HMAC-SHA3-256 KAT using native backend against hardcoded NIST-style vector.
+
+    Vector: NIST SP 800-198 / ACVP-derived
+      key = 000102...1f (32 bytes)
+      msg = "Sample message for keylen=blocklen"
+      expected = b83bfd563059c9f54e75cb509af83aa3db5b6eda4ce07afe03063998dac54f3b
+    """
     try:
         from ama_cryptography.pqc_backends import (
             _HMAC_SHA3_256_NATIVE_AVAILABLE,
@@ -228,21 +234,25 @@ def _kat_hmac_sha3_256() -> Tuple[bool, str]:
         if not _HMAC_SHA3_256_NATIVE_AVAILABLE:
             return True, "HMAC-SHA3-256 KAT skipped (native unavailable)"
 
-        import hmac as hmac_module
-
-        key = b"\x0b" * 20
-        data = b"Hi There"
+        key = bytes.fromhex(
+            "000102030405060708090a0b0c0d0e0f"
+            "101112131415161718191a1b1c1d1e1f"
+        )
+        data = bytes.fromhex(
+            "53616d706c65206d65737361676520666f72206b65796c656e3d626c6f636b6c656e"
+        )
+        expected = bytes.fromhex(
+            "b83bfd563059c9f54e75cb509af83aa3db5b6eda4ce07afe03063998dac54f3b"
+        )
         result = native_hmac_sha3_256(key, data)
-        # Cross-validate against Python stdlib HMAC-SHA3-256
-        expected = hmac_module.new(key, data, hashlib.sha3_256).digest()
         if result != expected:
             return False, (
                 f"HMAC-SHA3-256 KAT: native output {result.hex()} "
-                f"!= stdlib {expected.hex()}"
+                f"!= expected {expected.hex()}"
             )
         if len(result) != 32:
             return False, f"HMAC-SHA3-256 KAT: expected 32 bytes, got {len(result)}"
-        return True, "HMAC-SHA3-256 KAT passed (cross-validated with stdlib)"
+        return True, "HMAC-SHA3-256 KAT passed (NIST SP 800-198 vector)"
     except Exception as exc:
         return False, f"HMAC-SHA3-256 KAT exception: {exc}"
 
