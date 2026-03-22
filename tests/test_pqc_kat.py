@@ -593,9 +593,9 @@ class TestSLHDSA_SHA2_256f_KAT:
                 expected = tc["testPassed"]
 
                 result = sphincs_provider.verify(msg, sig, pk)
-                assert result == expected, (
-                    f"ACVP tcId={tc['tcId']}: expected {expected}, got {result}"
-                )
+                assert (
+                    result == expected
+                ), f"ACVP tcId={tc['tcId']}: expected {expected}, got {result}"
                 tested += 1
 
         assert tested > 0, "No SLH-DSA-SHA2-256f internal vectors found"
@@ -628,9 +628,9 @@ class TestSLHDSA_SHA2_256f_KAT:
                 expected = tc["testPassed"]
 
                 result = sphincs_verify_ctx(msg, sig, pk, ctx)
-                assert result == expected, (
-                    f"ACVP tcId={tc['tcId']}: expected {expected}, got {result}"
-                )
+                assert (
+                    result == expected
+                ), f"ACVP tcId={tc['tcId']}: expected {expected}, got {result}"
                 tested += 1
 
         assert tested > 0, "No SLH-DSA-SHA2-256f external pure vectors found"

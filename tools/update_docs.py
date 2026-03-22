@@ -164,9 +164,7 @@ def update_changelog(dry_run: bool = False) -> bool:
     # Insert after the "---" that follows "## Overview"
     text = CHANGELOG.read_text()
     # Find the insertion point: after "## Overview" block's "---"
-    insert_re = re.compile(
-        r"(## Overview.*?---\s*\n)", re.DOTALL
-    )
+    insert_re = re.compile(r"(## Overview.*?---\s*\n)", re.DOTALL)
     m = insert_re.search(text)
     if m:
         pos = m.end()
@@ -357,9 +355,7 @@ def update_wiki(dry_run: bool = False) -> bool:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="AMA Cryptography auto-documentation updater"
-    )
+    parser = argparse.ArgumentParser(description="AMA Cryptography auto-documentation updater")
     parser.add_argument(
         "--dry-run",
         action="store_true",
