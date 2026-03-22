@@ -19,9 +19,13 @@ INCLUDE_DIR  := $(ROOT_DIR)/include
 SRC_DIR      := $(ROOT_DIR)/src/c
 BUILD_DIR    := $(ROOT_DIR)/build
 
+UNAME_S      := $(shell uname -s)
 CC           ?= gcc
 CFLAGS       := -O3 -Wall -Wextra -std=c11 -I$(INCLUDE_DIR)
-LDFLAGS      := -lm -lrt
+LDFLAGS      := -lm
+ifeq ($(UNAME_S),Linux)
+LDFLAGS      += -lrt
+endif
 
 # If the shared library exists, link against it; otherwise compile sources directly
 LIB_SO       := $(BUILD_DIR)/lib/libama_cryptography.so

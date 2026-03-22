@@ -277,7 +277,7 @@ if(NOT WIN32)
     target_compile_definitions(benchmark_c_raw PRIVATE _POSIX_C_SOURCE=199309L)
     target_link_libraries(benchmark_c_raw PRIVATE
         $<IF:$<TARGET_EXISTS:ama_cryptography_static>,ama_cryptography_static,ama_cryptography_shared>
-        m rt)
+        m $<$<PLATFORM_ID:Linux>:rt>)
     set_target_properties(benchmark_c_raw PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 endif()
