@@ -219,7 +219,6 @@ comparative_benchmark_output.txt
 build_test/
 
 # Generated benchmark output reports (produced by benchmark scripts; not source files)
-BENCHMARKS.md
 benchmarks/regression_report.md
 benchmarks/validation_report.md
 benchmarks/regression_results.json
