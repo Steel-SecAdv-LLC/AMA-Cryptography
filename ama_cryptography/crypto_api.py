@@ -1472,11 +1472,10 @@ def create_crypto_package(
             )
             timestamp_token = timestamp_result.token
         except TimestampError as e:
-            warnings.warn(
-                f"Failed to obtain RFC 3161 timestamp: {str(e)}. " "Continuing without timestamp.",
-                category=UserWarning,
-            )
-            timestamp_token = None
+            raise TimestampError(
+                f"RFC 3161 timestamp is required when include_timestamp=True, "
+                f"but the timestamp request failed: {e}"
+            ) from e
 
     # Build metadata
     metadata: Dict[str, Any] = {
