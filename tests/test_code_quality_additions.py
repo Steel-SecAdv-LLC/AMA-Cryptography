@@ -246,7 +246,10 @@ class TestKeyManagementDecryptPaths:
         from ama_cryptography.key_management import SecureKeyStorage
 
         storage_path = tmp_path / "test_keys"
-        storage = SecureKeyStorage(storage_path, master_password="test_password_123")
+        try:
+            storage = SecureKeyStorage(storage_path, master_password="test_password_123")
+        except RuntimeError as exc:
+            pytest.skip(f"Native backend required: {exc}")
         return storage
 
     @skip_no_native_aes

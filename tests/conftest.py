@@ -207,7 +207,10 @@ def secure_storage(temp_storage_path: Path, test_password: str) -> Any:
     """Provide a SecureKeyStorage instance with password-derived key."""
     from ama_cryptography.key_management import SecureKeyStorage
 
-    return SecureKeyStorage(temp_storage_path, master_password=test_password)
+    try:
+        return SecureKeyStorage(temp_storage_path, master_password=test_password)
+    except RuntimeError as exc:
+        pytest.skip(f"Native backend required: {exc}")
 
 
 # =============================================================================

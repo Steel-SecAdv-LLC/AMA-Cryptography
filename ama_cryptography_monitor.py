@@ -802,11 +802,14 @@ class ResonanceTimingMonitor:
 
             self._ratio_samples[pair].append(ratio)
 
-            # Baseline ratios after 30 samples
+            # Baseline ratios: capture exactly once when we have enough samples
             samples = self._ratio_samples[pair]
-            if len(samples) == 30:
-                self._ratio_baselines[pair] = (_mean(samples), _std(samples))
-            elif len(samples) > 30 and pair in self._ratio_baselines:
+            if len(samples) >= 30 and pair not in self._ratio_baselines:
+                self._ratio_baselines[pair] = (
+                    _mean(list(samples)),
+                    _std(list(samples)),
+                )
+            elif len(samples) >= 30 and pair in self._ratio_baselines:
                 baseline_mean, baseline_std = self._ratio_baselines[pair]
                 if baseline_std > 0:
                     deviation = abs(ratio - baseline_mean) / baseline_std
@@ -1298,36 +1301,40 @@ class RefactoringAnalyzer:
 
     def verify_imports(self) -> List[ImportHijackViolation]:
         """
-        Priority 10: Re-resolve all imported crypto module paths and compare
-        against startup baselines.
+        Priority 10: Check currently loaded module paths against startup baselines.
+
+        Reads directly from sys.modules to get the actually loaded module's
+        file path, rather than using importlib.import_module() which returns
+        the cached module without re-resolving the path.
 
         Returns:
             List of ImportHijackViolation for any modules resolving to different paths
         """
-        import importlib
+        import sys as _sys
 
         violations: List[ImportHijackViolation] = []
         for mod_name, expected_path in self._import_baselines.items():
-            try:
-                # Force re-import to get current path
-                mod = importlib.import_module(mod_name)
-                mod_file = getattr(mod, "__file__", None)
-                if mod_file:
-                    actual_path = os.path.realpath(mod_file)
-                    if actual_path != expected_path:
-                        violations.append(
-                            ImportHijackViolation(
-                                module_name=mod_name,
-                                expected_path=expected_path,
-                                actual_path=actual_path,
-                            )
-                        )
-            except ImportError:
+            mod = _sys.modules.get(mod_name)
+            if mod is None:
+                # Module was unloaded — suspicious
                 violations.append(
                     ImportHijackViolation(
                         module_name=mod_name,
                         expected_path=expected_path,
-                        actual_path="IMPORT_FAILED",
+                        actual_path="<unloaded>",
+                    )
+                )
+                continue
+            mod_file = getattr(mod, "__file__", None)
+            if mod_file is None:
+                continue
+            actual_path = os.path.realpath(mod_file)
+            if actual_path != expected_path:
+                violations.append(
+                    ImportHijackViolation(
+                        module_name=mod_name,
+                        expected_path=expected_path,
+                        actual_path=actual_path,
                     )
                 )
         if violations:

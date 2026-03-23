@@ -59,6 +59,30 @@ def _hmac_sha512(key: bytes, data: bytes) -> bytes:
     return hashlib.sha512(opad + inner).digest()
 
 
+def _pbkdf2_hmac_sha512(password: bytes, salt: bytes, iterations: int, dklen: int) -> bytes:
+    """
+    PBKDF2-HMAC-SHA512 using AMA's own _hmac_sha512 (RFC 8018).
+
+    INVARIANT-1 compliant: does NOT use hashlib.pbkdf2_hmac or stdlib hmac.
+    Uses _hmac_sha512 which is backed by AMA's native C library (or the
+    pure-Python RFC 2104 fallback that uses only hashlib.sha512 for hashing).
+    """
+    import struct
+
+    hlen = 64  # SHA-512 output length
+    blocks_needed = (dklen + hlen - 1) // hlen
+    dk = b""
+    for block_num in range(1, blocks_needed + 1):
+        u = _hmac_sha512(password, salt + struct.pack(">I", block_num))
+        result = bytearray(u)
+        for _ in range(iterations - 1):
+            u = _hmac_sha512(password, u)
+            for j in range(hlen):
+                result[j] ^= u[j]
+        dk += bytes(result)
+    return dk[:dklen]
+
+
 # Configure module logger
 logger = logging.getLogger(__name__)
 
@@ -148,8 +172,8 @@ class HDKeyDerivation:
             # seed_phrase is guaranteed non-None here: seed is None (from elif)
             # and not both None (from first if).
             assert seed_phrase is not None  # nosec B101 — mypy narrowing; always True here
-            self.master_seed = hashlib.pbkdf2_hmac(
-                "sha512", seed_phrase.encode("utf-8"), b"mnemonic", 2048, 64
+            self.master_seed = _pbkdf2_hmac_sha512(
+                seed_phrase.encode("utf-8"), b"mnemonic", 2048, 64
             )
 
         # Generate master key
@@ -557,34 +581,19 @@ class SecureKeyStorage:
                 f.write(self.salt)
             os.chmod(self.salt_file, 0o600)
 
-            # Determine algorithm: prefer Argon2id, fall back to PBKDF2
-            try:
-                from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE
-
-                use_argon2 = _ARGON2_NATIVE_AVAILABLE
-            except ImportError:
-                use_argon2 = False
-
-            if use_argon2:
-                algorithm = "Argon2id"
-                version = 3
-            else:
-                algorithm = "PBKDF2-HMAC-SHA256"
-                version = 2
+            # Require Argon2id (INVARIANT-1: no stdlib HMAC/PBKDF2)
+            version = 3
 
             # Save KDF metadata
             metadata = {
                 "version": version,
-                "algorithm": algorithm,
+                "algorithm": "Argon2id",
                 "salt_bytes": self.KDF_SALT_BYTES,
                 "created_at": datetime.now(timezone.utc).isoformat(),
+                "t_cost": self.ARGON2_T_COST,
+                "m_cost": self.ARGON2_M_COST,
+                "parallelism": self.ARGON2_PARALLELISM,
             }
-            if algorithm == "PBKDF2-HMAC-SHA256":
-                metadata["iterations"] = self.KDF_ITERATIONS
-            else:
-                metadata["t_cost"] = self.ARGON2_T_COST
-                metadata["m_cost"] = self.ARGON2_M_COST
-                metadata["parallelism"] = self.ARGON2_PARALLELISM
             with open(self.metadata_file, "w") as f:
                 json.dump(metadata, f, indent=2)
             os.chmod(self.metadata_file, 0o600)
@@ -636,14 +645,15 @@ class SecureKeyStorage:
                     "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
                 ) from exc
         else:
-            self.encryption_key = bytearray(
-                hashlib.pbkdf2_hmac(
-                    "sha256",
-                    master_password.encode("utf-8"),
-                    self.salt,
-                    iterations,
-                    self.KDF_KEY_BYTES,
-                )
+            # Legacy v1/v2 stores used PBKDF2-HMAC-SHA256, which violates
+            # INVARIANT-1 (no stdlib HMAC).  We cannot open them without the
+            # original KDF.  Users must migrate: rebuild with native lib and
+            # re-create the key store.
+            raise RuntimeError(
+                f"Legacy KDF version {version} (PBKDF2-HMAC-SHA256) is no longer "
+                "supported (INVARIANT-1). Re-create the key store with the native "
+                "Argon2id backend: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
+                "&& cmake --build build"
             )
 
         # Warn if using legacy parameters
@@ -679,15 +689,10 @@ class SecureKeyStorage:
         # Generate new salt
         new_salt = secrets.token_bytes(self.KDF_SALT_BYTES)
 
-        # Derive new key — prefer Argon2id, fall back to PBKDF2
+        # Derive new key using Argon2id (INVARIANT-1: no stdlib HMAC/PBKDF2)
         try:
-            from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE, native_argon2id
+            from ama_cryptography.pqc_backends import native_argon2id
 
-            use_argon2 = _ARGON2_NATIVE_AVAILABLE
-        except ImportError:
-            use_argon2 = False
-
-        if use_argon2:
             new_encryption_key = bytearray(
                 native_argon2id(
                     master_password.encode("utf-8"),
@@ -698,16 +703,12 @@ class SecureKeyStorage:
                     out_len=self.KDF_KEY_BYTES,
                 )
             )
-        else:
-            new_encryption_key = bytearray(
-                hashlib.pbkdf2_hmac(
-                    "sha256",
-                    master_password.encode("utf-8"),
-                    new_salt,
-                    self.KDF_ITERATIONS,
-                    self.KDF_KEY_BYTES,
-                )
-            )
+        except (ImportError, RuntimeError) as exc:
+            raise RuntimeError(
+                "AMA native Argon2id backend required for KDF migration. "
+                "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
+                "&& cmake --build build"
+            ) from exc
 
         # Re-encrypt all keys
         old_key = self.encryption_key
@@ -723,19 +724,16 @@ class SecureKeyStorage:
                 f.write(new_salt)
             os.chmod(self.salt_file, 0o600)
 
-            # Update metadata
+            # Update metadata — always Argon2id (INVARIANT-1)
             metadata = {
-                "version": self.KDF_VERSION if use_argon2 else 2,
-                "algorithm": "Argon2id" if use_argon2 else "PBKDF2-HMAC-SHA256",
+                "version": self.KDF_VERSION,
+                "algorithm": "Argon2id",
                 "salt_bytes": self.KDF_SALT_BYTES,
                 "migrated_at": datetime.now(timezone.utc).isoformat(),
+                "t_cost": self.ARGON2_T_COST,
+                "m_cost": self.ARGON2_M_COST,
+                "parallelism": self.ARGON2_PARALLELISM,
             }
-            if use_argon2:
-                metadata["t_cost"] = self.ARGON2_T_COST
-                metadata["m_cost"] = self.ARGON2_M_COST
-                metadata["parallelism"] = self.ARGON2_PARALLELISM
-            else:
-                metadata["iterations"] = self.KDF_ITERATIONS
             with open(self.metadata_file, "w") as f:
                 json.dump(metadata, f, indent=2)
 
