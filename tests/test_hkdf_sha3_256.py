@@ -24,9 +24,10 @@ from typing import Any
 
 import pytest
 
-default_backend: Any
-hashes: Any
-HKDF: Any
+_PYCA_AVAILABLE: bool
+default_backend: Any = None
+hashes: Any = None
+HKDF: Any = None
 
 try:
     from cryptography.hazmat.backends import default_backend
@@ -36,9 +37,6 @@ try:
     _PYCA_AVAILABLE = True
 except Exception:
     _PYCA_AVAILABLE = False
-    default_backend = None
-    hashes = None
-    HKDF = None
 except:  # catches pyo3_runtime.PanicException (BaseException subclass)
     import sys
 
@@ -47,9 +45,6 @@ except:  # catches pyo3_runtime.PanicException (BaseException subclass)
         raise
     if _exc is not None and type(_exc).__name__ == "PanicException":
         _PYCA_AVAILABLE = False
-        default_backend = None
-        hashes = None
-        HKDF = None
     else:
         raise
 
