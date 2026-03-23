@@ -20,8 +20,13 @@ Test Vector Sources:
 
 import hashlib
 import json
+from typing import Any
 
 import pytest
+
+default_backend: Any
+hashes: Any
+HKDF: Any
 
 try:
     from cryptography.hazmat.backends import default_backend
