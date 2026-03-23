@@ -184,9 +184,13 @@ def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
 
         if _native_lib is not None and hasattr(_native_lib, "ama_secure_mlock"):
             _native_lib.ama_secure_mlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-            _native_lib.ama_secure_mlock(ctypes.c_void_p(addr), size)
+            _native_lib.ama_secure_mlock.restype = ctypes.c_int
+            ret = _native_lib.ama_secure_mlock(ctypes.c_void_p(addr), size)
+            if ret != 0:
+                raise SecureMemoryError(f"ama_secure_mlock failed with error code {ret}")
             return
     except (ImportError, AttributeError):
+        # Native backend unavailable or incomplete; fall through to POSIX fallback
         pass
 
     # POSIX fallback
@@ -206,8 +210,10 @@ def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
             return
     except SecureMemoryError:
         raise
-    except (OSError, AttributeError):
-        pass
+    except (OSError, AttributeError) as exc:
+        raise NotImplementedError(
+            "secure_mlock requires the AMA native C library or a POSIX system."
+        ) from exc
 
     raise NotImplementedError("secure_mlock requires the AMA native C library or a POSIX system.")
 
@@ -245,9 +251,13 @@ def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
 
         if _native_lib is not None and hasattr(_native_lib, "ama_secure_munlock"):
             _native_lib.ama_secure_munlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-            _native_lib.ama_secure_munlock(ctypes.c_void_p(addr), size)
+            _native_lib.ama_secure_munlock.restype = ctypes.c_int
+            ret = _native_lib.ama_secure_munlock(ctypes.c_void_p(addr), size)
+            if ret != 0:
+                raise SecureMemoryError(f"ama_secure_munlock failed with error code {ret}")
             return
     except (ImportError, AttributeError):
+        # Native backend unavailable or incomplete; fall through to POSIX fallback
         pass
 
     # POSIX fallback
@@ -267,8 +277,10 @@ def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
             return
     except SecureMemoryError:
         raise
-    except (OSError, AttributeError):
-        pass
+    except (OSError, AttributeError) as exc:
+        raise NotImplementedError(
+            "secure_munlock requires the AMA native C library or a POSIX system."
+        ) from exc
 
     raise NotImplementedError("secure_munlock requires the AMA native C library or a POSIX system.")
 

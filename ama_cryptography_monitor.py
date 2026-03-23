@@ -626,7 +626,7 @@ class ResonanceTimingMonitor:
         # Priority 6: Pairwise timing ratio matrix for cross-operation correlation
         # (mean_ratio, std_ratio) per operation pair
         self._ratio_baselines: Dict[Tuple[str, str], Tuple[float, float]] = {}
-        self._ratio_samples: Dict[Tuple[str, str], List[float]] = {}
+        self._ratio_samples: Dict[Tuple[str, str], Deque[float]] = {}
         # Priority 7: Frozen baselines for drift detection
         self._frozen_baselines: Dict[str, Tuple[float, float]] = {}  # (frozen_mean, frozen_std)
         # Priority 8: Operation-specific anomaly profiles
@@ -797,7 +797,7 @@ class ResonanceTimingMonitor:
             ratio = current_mean / other_mean if pair[0] == operation else other_mean / current_mean
 
             if pair not in self._ratio_samples:
-                self._ratio_samples[pair] = []
+                self._ratio_samples[pair] = deque(maxlen=self.window_size)
 
             self._ratio_samples[pair].append(ratio)
 
