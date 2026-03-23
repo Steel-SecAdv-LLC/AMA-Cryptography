@@ -450,7 +450,7 @@ class TestPackageSchema:
     """Tests for the formal CryptoPackage schema."""
 
     def test_schema_roundtrip(self):
-        from schemas.crypto_package_v1 import CryptoPackageSchemaV1
+        from ama_cryptography.schemas.crypto_package_v1 import CryptoPackageSchemaV1
 
         pkg = CryptoPackageSchemaV1(
             package_id="test-pkg-1",
@@ -465,14 +465,14 @@ class TestPackageSchema:
         assert restored.schema_version == "1.0"
 
     def test_schema_version_check(self):
-        from schemas.crypto_package_v1 import CryptoPackageSchemaV1
+        from ama_cryptography.schemas.crypto_package_v1 import CryptoPackageSchemaV1
 
         bad_json = '{"schema_version": "99.0", "package_id": "test"}'
         with pytest.raises(ValueError, match="Unsupported schema version"):
             CryptoPackageSchemaV1.from_json(bad_json)
 
     def test_integrity_hash(self):
-        from schemas.crypto_package_v1 import CryptoPackageSchemaV1
+        from ama_cryptography.schemas.crypto_package_v1 import CryptoPackageSchemaV1
 
         pkg = CryptoPackageSchemaV1(package_id="test-pkg-2")
         h = pkg.compute_integrity_hash()

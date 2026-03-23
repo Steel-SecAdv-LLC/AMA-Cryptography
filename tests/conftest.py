@@ -36,6 +36,27 @@ import pytest
 # legitimate skips are preserved.
 
 _CI = os.environ.get("AMA_CI_REQUIRE_BACKENDS", "").lower() in ("true", "1", "yes")
+
+# ---------------------------------------------------------------------------
+# Gracefully skip test modules that import code_guardian_secure at module level.
+# code_guardian_secure.py raises RuntimeError when the AMA native C library is
+# not built — correct fail-closed behaviour (INVARIANT-2).  In CI the native
+# library is always built, so these modules are collected and run normally.
+# Outside CI (or without the native lib), we add them to collect_ignore so
+# pytest can still run the remaining test suite.
+# ---------------------------------------------------------------------------
+_NATIVE_REQUIRED_TESTS = [
+    "test_comprehensive_system.py",
+    "test_crypto_core_penetration.py",
+    "test_crypto_import_paths.py",
+    "test_fuzzing.py",
+    "test_memory_security.py",
+    "test_performance.py",
+]
+try:
+    import code_guardian_secure  # noqa: F401
+except (RuntimeError, ImportError):
+    collect_ignore = _NATIVE_REQUIRED_TESTS
 _BACKEND_SKIP_REASONS = (
     "dilithium",
     "kyber",

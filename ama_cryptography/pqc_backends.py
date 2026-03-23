@@ -37,6 +37,7 @@ AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 """
 
 import ctypes
+import logging
 import os
 import platform
 from dataclasses import dataclass, field
@@ -49,6 +50,8 @@ from ama_cryptography.exceptions import (
     QuantumSignatureUnavailableError,
     SecurityWarning,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "PQCUnavailableError",
@@ -1700,14 +1703,10 @@ elif _HMAC_SHA3_256_NATIVE_AVAILABLE:
 else:
     HMAC_SHA3_256_AVAILABLE = False
     HMAC_SHA3_256_BACKEND = None
-    import warnings
-
-    warnings.warn(
+    logger.warning(
         "HMAC-SHA3-256 native backend not available. "
         "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
-        "&& cmake --build build  — or install the Cython extension.",
-        UserWarning,
-        stacklevel=1,
+        "&& cmake --build build  — or install the Cython extension."
     )
 
 

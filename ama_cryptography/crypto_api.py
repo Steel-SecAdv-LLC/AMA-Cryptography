@@ -26,7 +26,6 @@ PQC Backend:
 import hashlib
 import logging
 import secrets
-import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -70,14 +69,8 @@ try:
     HMAC_HKDF_AVAILABLE = True
 except (ImportError, RuntimeError):
     HMAC_HKDF_AVAILABLE = False
-    # Use catch_warnings to avoid triggering pytest's "warnings as errors"
-    with warnings.catch_warnings():
-        warnings.simplefilter("default", UserWarning)
-        warnings.warn(
-            "HMAC/HKDF functions not available. Build native C library first.",
-            category=UserWarning,
-            stacklevel=2,
-        )
+    logger_init: logging.Logger = logging.getLogger(__name__)
+    logger_init.warning("HMAC/HKDF functions not available. Build native C library first.")
 
 # Import RFC 3161 timestamping
 try:
@@ -98,15 +91,12 @@ logger: logging.Logger = logging.getLogger(__name__)
 # Runtime PQC availability check
 pqc_available = DILITHIUM_AVAILABLE or KYBER_AVAILABLE or SPHINCS_AVAILABLE
 if not pqc_available:
-    # Use catch_warnings to emit warning without triggering pytest's "warnings as errors"
-    with warnings.catch_warnings():
-        warnings.simplefilter("default", UserWarning)
-        warnings.warn(
-            "Quantum-resistant cryptography NOT available. "
-            "Build native C library for post-quantum protection: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build",
-            category=UserWarning,
-            stacklevel=2,
-        )
+    logger_init2: logging.Logger = logging.getLogger(__name__)
+    logger_init2.warning(
+        "Quantum-resistant cryptography NOT available. "
+        "Build native C library for post-quantum protection: "
+        "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+    )
 
 
 class AlgorithmType(Enum):

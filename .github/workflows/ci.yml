@@ -205,7 +205,7 @@ jobs:
 
     - name: Upload Bandit report
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
-      if: success()
+      if: always()
       with:
         name: bandit-security-report
         path: bandit-report.json
@@ -218,7 +218,7 @@ jobs:
 
     - name: Upload Semgrep report
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
-      if: success()
+      if: always()
       with:
         name: semgrep-security-report
         path: semgrep-report.json

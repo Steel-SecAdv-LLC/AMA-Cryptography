@@ -524,9 +524,10 @@ class CryptoPostureController:
         Returns:
             True if action was found and executed, False otherwise
         """
-        for pa in self._pending_actions:
+        for i, pa in enumerate(self._pending_actions):
             if pa.action_id == action_id and not pa.confirmed:
                 pa.confirmed = True
+                del self._pending_actions[i]
                 self._execute_action(pa.action)
                 logger.info("Confirmed and executed action %s (id=%s)", pa.action.name, action_id)
                 return True

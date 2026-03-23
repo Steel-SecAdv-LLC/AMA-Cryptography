@@ -156,8 +156,10 @@ class EncryptedKeyStore:
             logger.warning("Failed to load keystore: %s", e)
 
     def _save_store(self) -> None:
-        """Save the encrypted keystore to disk."""
+        """Save the encrypted keystore to disk using atomic write-rename."""
         import base64
+        import os
+        import tempfile
 
         keys: dict[str, dict[str, object]] = {}
         for key_id, entry in self._keys.items():
@@ -170,8 +172,21 @@ class EncryptedKeyStore:
                 "metadata": entry.get("metadata", {}),
             }
         data: dict[str, object] = {"version": 1, "keys": keys}
-        with open(self._store_path, "w") as f:
-            json.dump(data, f, indent=2)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(self._store_path.parent), suffix=".tmp", prefix=".keystore_"
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, str(self._store_path))
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def store_key(
         self,

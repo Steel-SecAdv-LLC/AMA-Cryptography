@@ -22,7 +22,7 @@ import hashlib
 import json
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 SCHEMA_VERSION = "1.0"
 
@@ -82,10 +82,23 @@ class CryptoPackageSchemaV1:
         """Create from dictionary."""
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
+    # Fields excluded from integrity hash: derived/authentication values and
+    # the schema version tag.  Including these would make the hash self-referential.
+    _INTEGRITY_EXCLUDE: ClassVar[frozenset[str]] = frozenset(
+        {
+            "schema_version",
+            "content_hash",
+            "hmac",
+            "classical_signature",
+            "pqc_signature",
+            "timestamp",
+        }
+    )
+
     def compute_integrity_hash(self) -> str:
         """Compute SHA3-256 over canonical serialization for integrity checking."""
         canonical = json.dumps(
-            {k: v for k, v in sorted(asdict(self).items()) if k != "schema_version"},
+            {k: v for k, v in sorted(asdict(self).items()) if k not in self._INTEGRITY_EXCLUDE},
             sort_keys=True,
             separators=(",", ":"),
         )
