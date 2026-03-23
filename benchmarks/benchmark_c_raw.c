@@ -3,7 +3,9 @@
  * The earlier 199309L only guaranteed clock_gettime and caused
  * implicit-declaration errors on macOS/clang whose headers enforce
  * feature-test macros strictly. */
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
 
 /*
  * Copyright 2025-2026 Steel Security Advisors LLC

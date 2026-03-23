@@ -1226,7 +1226,6 @@ class HSMKeyStorage:
             try:
                 self.session.logout()
             except Exception as e:
-                import logging
                 logging.getLogger(__name__).warning("HSM logout failed during cleanup: %s", e)
             self._logged_in = False
 
@@ -1234,8 +1233,9 @@ class HSMKeyStorage:
             try:
                 self.session.closeSession()
             except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning("HSM session close failed during cleanup: %s", e)
+                logging.getLogger(__name__).warning(
+                    "HSM session close failed during cleanup: %s", e
+                )
 
     def __enter__(self) -> "HSMKeyStorage":
         return self

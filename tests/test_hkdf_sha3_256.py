@@ -34,11 +34,13 @@ except Exception:
     default_backend = None
     hashes = None
     HKDF = None
-except BaseException as exc:
-    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+except:  # catches pyo3_runtime.PanicException (BaseException subclass)
+    import sys
+
+    _exc = sys.exc_info()[1]
+    if isinstance(_exc, (KeyboardInterrupt, SystemExit)):
         raise
-    # pyo3_runtime.PanicException inherits BaseException, not Exception
-    if type(exc).__name__ == "PanicException":
+    if _exc is not None and type(_exc).__name__ == "PanicException":
         _PYCA_AVAILABLE = False
         default_backend = None
         hashes = None

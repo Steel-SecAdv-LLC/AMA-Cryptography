@@ -259,10 +259,12 @@ class CMakeBuild(build_ext):
             super().run()
         except Exception as e:
             import logging
+
             logging.getLogger(__name__).warning(
                 "Cython extension build failed: %s. "
                 "Native C library was built successfully by CMake — "
-                "Cython math extensions are optional.", e
+                "Cython math extensions are optional.",
+                e,
             )
 
 

@@ -425,7 +425,7 @@ def _run_self_tests() -> bool:
     Returns True if all tests passed and module is OPERATIONAL.
     Returns False and sets ERROR state if any test failed.
     """
-    global _MODULE_STATE, _ERROR_REASON, _SELF_TEST_RESULTS, _POST_DURATION_MS
+    global _MODULE_STATE, _ERROR_REASON, _SELF_TEST_RESULTS, _POST_DURATION_MS, _previous_rng_output
     _MODULE_STATE = "SELF_TEST"
     _ERROR_REASON = None
     _SELF_TEST_RESULTS = []
@@ -475,7 +475,6 @@ def _run_self_tests() -> bool:
     # 3. Continuous RNG initial test
     if all_passed:
         try:
-            global _previous_rng_output
             out1 = secrets.token_bytes(32)
             out2 = secrets.token_bytes(32)
             if out1 == out2:
