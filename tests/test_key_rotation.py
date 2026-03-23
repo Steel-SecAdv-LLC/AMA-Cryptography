@@ -19,19 +19,6 @@ import pytest
 
 from ama_cryptography.key_management import KeyRotationManager, KeyStatus, SecureKeyStorage
 
-# Check for native Argon2id backend (required for SecureKeyStorage since INVARIANT-1)
-try:
-    from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE, _native_lib
-
-    _HAS_NATIVE_ARGON2 = _native_lib is not None and _ARGON2_NATIVE_AVAILABLE
-except ImportError:
-    _HAS_NATIVE_ARGON2 = False
-
-skip_no_native_argon2 = pytest.mark.skipif(
-    not _HAS_NATIVE_ARGON2,
-    reason="Native Argon2id backend not available (build with cmake)",
-)
-
 
 class TestKeyRotationLifecycle:
     """Tests for key rotation state transitions."""
@@ -122,7 +109,6 @@ class TestKeyRotationLifecycle:
         assert mgr.should_rotate("key-v1") is False
 
 
-@skip_no_native_argon2
 class TestSecureKeyStorageGCM:
     """Tests for SecureKeyStorage with AES-GCM encryption."""
 

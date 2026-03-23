@@ -35,19 +35,6 @@ from ama_cryptography.key_management import (
     SecurityWarning,
 )
 
-# Check for native Argon2id backend (required for SecureKeyStorage since INVARIANT-1)
-try:
-    from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE, _native_lib
-
-    _HAS_NATIVE_ARGON2 = _native_lib is not None and _ARGON2_NATIVE_AVAILABLE
-except ImportError:
-    _HAS_NATIVE_ARGON2 = False
-
-skip_no_native_argon2 = pytest.mark.skipif(
-    not _HAS_NATIVE_ARGON2,
-    reason="Native Argon2id backend not available (build with cmake)",
-)
-
 # =============================================================================
 # HD KEY DERIVATION TESTS
 # =============================================================================
@@ -427,7 +414,6 @@ class TestKeyRotationManagerComprehensive:
 # =============================================================================
 
 
-@skip_no_native_argon2
 class TestSecureKeyStorageComprehensive:
     """Comprehensive tests for SecureKeyStorage class."""
 
@@ -636,7 +622,6 @@ class TestSecureKeyStorageComprehensive:
         assert retrieved == large_key
 
 
-@skip_no_native_argon2
 class TestSecureKeyStorageMigration:
     """Tests for SecureKeyStorage KDF migration."""
 
@@ -672,7 +657,6 @@ class TestSecureKeyStorageMigration:
         assert new_storage.retrieve_key("key-1") == test_key_material
 
 
-@skip_no_native_argon2
 class TestSecureKeyStorageLegacy:
     """Tests for legacy AES-CFB format support."""
 
@@ -696,7 +680,6 @@ class TestSecureKeyStorageLegacy:
             storage.retrieve_key("unknown-key")
 
 
-@skip_no_native_argon2
 class TestSecureKeyStorageLegacyKDF:
     """Tests for legacy KDF parameter handling."""
 

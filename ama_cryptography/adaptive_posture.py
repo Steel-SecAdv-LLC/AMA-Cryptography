@@ -465,26 +465,21 @@ class CryptoPostureController:
 
         if evaluation.action in destructive_actions and not cooldown_active:
             if self.confirmation_mode:
-                # Only queue if no pending action of the same type already exists
-                already_pending = any(
-                    pa.action == evaluation.action and not pa.confirmed
-                    for pa in self._pending_actions
+                # Queue action for confirmation instead of immediate execution
+                pending = PendingAction(
+                    action_id=str(uuid.uuid4()),
+                    action=evaluation.action,
+                    reason=f"Threat level: {evaluation.threat_level.name}, "
+                    f"confidence: {evaluation.confidence:.2f}",
+                    timestamp=now,
                 )
-                if not already_pending:
-                    pending = PendingAction(
-                        action_id=str(uuid.uuid4()),
-                        action=evaluation.action,
-                        reason=f"Threat level: {evaluation.threat_level.name}, "
-                        f"confidence: {evaluation.confidence:.2f}",
-                        timestamp=now,
-                    )
-                    self._pending_actions.append(pending)
-                    logger.info(
-                        "Action %s queued for confirmation (id=%s, grace_period=%.0fs)",
-                        evaluation.action.name,
-                        pending.action_id,
-                        self.grace_period,
-                    )
+                self._pending_actions.append(pending)
+                logger.info(
+                    "Action %s queued for confirmation (id=%s, grace_period=%.0fs)",
+                    evaluation.action.name,
+                    pending.action_id,
+                    self.grace_period,
+                )
             else:
                 # Immediate execution (default behavior)
                 self._execute_action(evaluation.action)
