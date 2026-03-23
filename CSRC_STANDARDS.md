@@ -1,7 +1,7 @@
 # CSRC Standards Mapping — AMA Cryptography Library
 
-**Version:** 2.0
-**Date:** 2026-03-18
+**Version:** 2.1
+**Date:** 2026-03-21
 **Organization:** Steel Security Advisors LLC
 **Author:** Andrew E. A.
 
@@ -118,9 +118,10 @@ Validation Program validated algorithms list.
 **(c)** **No CMVP certificate has been issued.** This library has not been
 submitted to or evaluated by the Cryptographic Module Validation Program.
 
-**(d)** **No FIPS 140-3 compliance is claimed.** This library has not
-undergone FIPS 140-3 evaluation at any security level (Level 1 through
-Level 4).
+**(d)** Implements technical controls intended to align with FIPS 140-3
+Security Level 1 requirements (self-tests, integrity verification, error
+state machine). **NOT formally CAVP/CMVP validated.** This library has
+not undergone formal FIPS 140-3 evaluation by an accredited laboratory.
 
 **(e)** **What CAVP/CMVP validation would require:**
 

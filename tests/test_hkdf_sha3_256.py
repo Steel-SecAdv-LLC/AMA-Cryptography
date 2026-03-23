@@ -31,6 +31,20 @@ try:
     _PYCA_AVAILABLE = True
 except Exception:
     _PYCA_AVAILABLE = False
+    default_backend = None
+    hashes = None
+    HKDF = None
+except BaseException as exc:
+    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+        raise
+    # pyo3_runtime.PanicException inherits BaseException, not Exception
+    if type(exc).__name__ == "PanicException":
+        _PYCA_AVAILABLE = False
+        default_backend = None
+        hashes = None
+        HKDF = None
+    else:
+        raise
 
 
 class TestHKDFSHA3256:

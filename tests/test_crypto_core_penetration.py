@@ -156,6 +156,47 @@ class TestCanonicalHashCode:
         diff_bytes = sum(1 for a, b in zip(hash1, hash2) if a != b)
         assert diff_bytes > 10, "Avalanche effect not observed"
 
+    def test_helix_param_perturbation_changes_invariant_and_hash(self) -> None:
+        """Modifying any helix param by ±0.001 changes both serialized value and invariant."""
+        codes = "TESTCODES"
+        base_params = [(5.0, 3.0), (2.0, 7.0)]
+        base_hash = canonical_hash_code(codes, base_params)
+
+        for i, (r, c) in enumerate(base_params):
+            for delta in [0.001, -0.001]:
+                # Perturb radius
+                mod_r = list(base_params)
+                mod_r[i] = (r + delta, c)
+                hash_r = canonical_hash_code(codes, mod_r)
+                assert (
+                    hash_r != base_hash
+                ), f"Radius perturbation {delta} on pair {i} must change hash"
+                # Verify the raw serialization differs
+                orig_str = f"{r:.10f}:{c:.10f}"
+                new_str = f"{r + delta:.10f}:{c:.10f}"
+                assert orig_str != new_str
+                # Verify the invariant differs
+                denom_orig = r * r + c * c
+                denom_new = (r + delta) * (r + delta) + c * c
+                k_orig = r / denom_orig if denom_orig else 0.0
+                k_new = (r + delta) / denom_new if denom_new else 0.0
+                assert abs(k_orig - k_new) > 0, "Invariant κ must change with radius perturbation"
+
+                # Perturb pitch
+                mod_c = list(base_params)
+                mod_c[i] = (r, c + delta)
+                hash_c = canonical_hash_code(codes, mod_c)
+                assert (
+                    hash_c != base_hash
+                ), f"Pitch perturbation {delta} on pair {i} must change hash"
+                orig_str_c = f"{r:.10f}:{c:.10f}"
+                new_str_c = f"{r:.10f}:{c + delta:.10f}"
+                assert orig_str_c != new_str_c
+                denom_new_c = r * r + (c + delta) * (c + delta)
+                t_orig = c / denom_orig if denom_orig else 0.0
+                t_new = (c + delta) / denom_new_c if denom_new_c else 0.0
+                assert abs(t_orig - t_new) > 0, "Invariant τ must change with pitch perturbation"
+
 
 class TestHMACAuthentication:
     """Penetration tests for HMAC authentication."""

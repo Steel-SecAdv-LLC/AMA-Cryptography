@@ -306,6 +306,15 @@ def secure_wipe(data: Union[bytes, bytearray]) -> None:
 
 
 # ============================================================================
+# HASH FORMAT VERSIONING
+# ============================================================================
+# v1 (original): encode("CODE", codes, "HELIX", helix_parts...)
+# v2 (2.1+):     encode("CODE", codes, "HELIX", helix_parts...,
+#                       "HELIX_INVARIANT", invariants)
+HASH_FORMAT_V1 = "1"
+HASH_FORMAT_V2 = "2"
+
+# ============================================================================
 # CANONICAL ENCODING WITH LENGTH-PREFIXING
 # ============================================================================
 
@@ -374,7 +383,11 @@ def length_prefixed_encode(*fields: str) -> bytes:
     return encoded
 
 
-def canonical_hash_code(codes: str, helix_params: List[Tuple[float, float]]) -> bytes:
+def canonical_hash_code(
+    codes: str,
+    helix_params: List[Tuple[float, float]],
+    hash_version: str = HASH_FORMAT_V2,
+) -> bytes:
     """
     Compute collision-resistant hash with proper domain separation.
 
@@ -393,14 +406,19 @@ def canonical_hash_code(codes: str, helix_params: List[Tuple[float, float]]) -> 
     1. Omni-Codes encoded with "CODE" domain tag
     2. Helix parameters encoded with "HELIX" domain tag
     3. Each parameter tuple formatted as "radius:pitch"
-    4. Length-prefixed encoding prevents concatenation attacks
+    4. Computed helix geometric invariants encoded with "HELIX_INVARIANT" domain tag
+       - Curvature: κ = r / (r² + c²)
+       - Torsion:   τ = c / (r² + c²)
+       - Serialized as "κ:.10f:τ:.10f" per (r, c) pair
+    5. Length-prefixed encoding prevents concatenation attacks
 
     Security Proof:
     ---------------
     Given two distinct inputs (D₁, H₁) and (D₂, H₂):
 
     If D₁ ≠ D₂ or H₁ ≠ H₂, then:
-        - encode("CODE", D₁, "HELIX", ...) ≠ encode("CODE", D₂, "HELIX", ...)
+        - encode("CODE", D₁, "HELIX", ..., "HELIX_INVARIANT", ...) ≠
+          encode("CODE", D₂, "HELIX", ..., "HELIX_INVARIANT", ...)
         - By SHA3-256 collision resistance:
         - P(hash(input₁) = hash(input₂)) ≤ 2^-128
 
@@ -439,10 +457,31 @@ def canonical_hash_code(codes: str, helix_params: List[Tuple[float, float]]) -> 
             )
 
     # Convert helix parameters to canonical string format
-    helix_strs = [f"{r:.10f}:{p:.10f}" for r, p in helix_params]
+    helix_parts = [f"{r:.10f}:{c:.10f}" for r, c in helix_params]
 
-    # Create length-prefixed encoding with domain tags
-    encoded = length_prefixed_encode("CODE", codes, "HELIX", *helix_strs)
+    if hash_version == HASH_FORMAT_V1:
+        # v1 (original): no geometric invariants — backward-compatible with
+        # packages created before v2.1.
+        encoded = length_prefixed_encode("CODE", codes, "HELIX", *helix_parts)
+    else:
+        # v2 (current): include geometric invariants for stronger binding.
+        # Curvature κ = r / (r² + c²), Torsion τ = c / (r² + c²)
+        invariant_parts = []
+        for r, c in helix_params:
+            denom = r * r + c * c
+            if denom == 0.0:
+                invariant_parts.append("0.0000000000:0.0000000000")
+            else:
+                invariant_parts.append(f"{r / denom:.10f}:{c / denom:.10f}")
+
+        encoded = length_prefixed_encode(
+            "CODE",
+            codes,
+            "HELIX",
+            *helix_parts,
+            "HELIX_INVARIANT",
+            "|".join(invariant_parts),
+        )
 
     # Compute SHA3-256 hash
     return hashlib.sha3_256(encoded).digest()
@@ -1665,6 +1704,7 @@ class CryptoPackage:
     ethical_hash: str  # SHA3-256 hash of ethical vector (hex)
     quantum_signatures_enabled: bool = True  # False if Dilithium unavailable
     signature_format_version: str = SIGNATURE_FORMAT_V2  # Signature binding format
+    hash_format_version: str = HASH_FORMAT_V2  # Hash encoding version (v1: no invariants)
 
 
 def create_crypto_package(  # noqa: C901 - high-level orchestrator; refactor would be invasive
@@ -1819,6 +1859,7 @@ def create_crypto_package(  # noqa: C901 - high-level orchestrator; refactor wou
         ethical_hash=ethical_hash_hex,
         quantum_signatures_enabled=quantum_signatures_enabled,
         signature_format_version=SIGNATURE_FORMAT_V2,
+        hash_format_version=HASH_FORMAT_V2,
     )
 
 
@@ -1990,7 +2031,10 @@ def verify_crypto_package(
     }
 
     try:
-        computed_hash = canonical_hash_code(codes, helix_params)
+        # Use the hash version stored in the package; default to v1 for
+        # packages created before hash_format_version was introduced.
+        pkg_hash_ver = getattr(package, "hash_format_version", HASH_FORMAT_V1)
+        computed_hash = canonical_hash_code(codes, helix_params, hash_version=pkg_hash_ver)
         results["content_hash"] = computed_hash.hex() == package.content_hash
 
         start_time = time.time() if monitor else None

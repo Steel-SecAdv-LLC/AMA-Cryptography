@@ -48,9 +48,13 @@ def _pyca_available() -> bool:
 
         return True
     except Exception:
-        # Catches ImportError, pyo3 PanicException, missing _cffi_backend,
-        # broken Rust bindings, etc.
         return False
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        if type(exc).__name__ == "PanicException":
+            return False
+        raise
 
 
 def _native_sign_and_verify(seed: bytes, message: bytes) -> tuple[Any, ...]:

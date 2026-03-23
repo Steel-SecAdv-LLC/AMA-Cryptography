@@ -809,21 +809,23 @@ Cryptographic implementations are validated against:
 
 ### Cryptographic Standards
 
-| Standard | Description | Compliance Status | KAT Validation |
-|----------|-------------|-------------------|----------------|
-| NIST FIPS 202 | SHA-3 Standard (SHA3-256, SHAKE128, SHAKE256) | Full compliance | NIST test vectors |
-| NIST FIPS 203 | ML-KEM (Kyber) Standard | Full compliance | **10/10 KAT pass** |
-| NIST FIPS 204 | ML-DSA (Dilithium) Standard | Full compliance | **10/10 KAT pass** |
-| NIST FIPS 205 | SLH-DSA (SPHINCS+) Standard | Full compliance | Native implementation |
-| NIST SP 800-108 | Key Derivation Functions | Full compliance | — |
-| RFC 2104 | HMAC Specification | Full compliance | — |
-| RFC 5869 | HKDF Specification | Full compliance | — |
-| RFC 8032 | Ed25519 Specification | Full compliance | — |
-| NIST SP 800-38D | AES-GCM Authenticated Encryption | Full compliance | NIST test vectors |
-| RFC 7748 | X25519 Key Exchange | Full compliance | — |
-| RFC 8439 | ChaCha20-Poly1305 AEAD | Full compliance | — |
-| RFC 9106 | Argon2 Password Hashing | Full compliance | — |
-| RFC 3161 | Time-Stamp Protocol | Optional, full compliance when enabled | — |
+| Standard | Description | Implementation Status | KAT Validation |
+|----------|-------------|---------------------|----------------|
+| NIST FIPS 202 | SHA-3 Standard (SHA3-256, SHAKE128, SHAKE256) | Algorithm implemented | NIST test vectors |
+| NIST FIPS 203 | ML-KEM (Kyber) Standard | Algorithm implemented | **10/10 KAT pass** |
+| NIST FIPS 204 | ML-DSA (Dilithium) Standard | Algorithm implemented | **10/10 KAT pass** |
+| NIST FIPS 205 | SLH-DSA (SPHINCS+) Standard | Algorithm implemented | Native implementation |
+| NIST SP 800-108 | Key Derivation Functions | Algorithm implemented | — |
+| RFC 2104 | HMAC Specification | Algorithm implemented | — |
+| RFC 5869 | HKDF Specification | Algorithm implemented | — |
+| RFC 8032 | Ed25519 Specification | Algorithm implemented | — |
+| NIST SP 800-38D | AES-GCM Authenticated Encryption | Algorithm implemented | NIST test vectors |
+| RFC 7748 | X25519 Key Exchange | Algorithm implemented | — |
+| RFC 8439 | ChaCha20-Poly1305 AEAD | Algorithm implemented | — |
+| RFC 9106 | Argon2 Password Hashing | Algorithm implemented | — |
+| RFC 3161 | Time-Stamp Protocol | Optional, implemented when enabled | — |
+
+> **Note:** "Algorithm implemented" means the library implements the algorithms as specified in the referenced standards and passes Known Answer Tests (KATs) against official NIST test vectors. This is NOT a CAVP/CMVP validation claim. This implementation has not been submitted for CMVP validation and is not FIPS 140-3 certified.
 
 ### Code Quality Standards
 
@@ -875,7 +877,7 @@ Cryptographic implementations are validated against:
 |---------|------|--------|---------|
 | 1.0.0 | 2025-11-26 | Steel Security Advisors LLC | Initial professional release |
 | 1.1.0 | 2026-01-09 | Steel Security Advisors LLC | Version alignment |
-| 2.0.0 | 2026-03-08 | Steel Security Advisors LLC | Zero-dependency native C architecture, adaptive posture, hybrid KEM combiner, AES-256-GCM, FIPS 203/204/205 compliance, Phase 2 primitives, ethical pillar alignment, Mercury Agent integration |
+| 2.0.0 | 2026-03-08 | Steel Security Advisors LLC | Zero-dependency native C architecture, adaptive posture, hybrid KEM combiner, AES-256-GCM, FIPS 203/204/205 algorithm implementation, Phase 2 primitives, ethical pillar alignment, Mercury Agent integration |
 | 2.2.0 | 2026-03-16 | Steel Security Advisors LLC | HMAC-SHA3-256 Cython binding, CSRC alignment report, SHA-512 deduplication |
 | 2.3.0 | 2026-03-19 | Steel Security Advisors LLC | Comprehensive documentation update: Python package structure, Cython acceleration strategy, build system architecture, INVARIANTS reference, NIST ACVP validation (815 vectors), fuzz testing (12 targets), updated performance figures to match current benchmarks |
 

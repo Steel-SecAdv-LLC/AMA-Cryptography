@@ -22,7 +22,7 @@ Post-quantum cryptographic security system with rigorous mathematical foundation
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
-Version: 2.0
+Version: 2.1
 
 AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
@@ -31,8 +31,24 @@ AI Co-Architects:
 import importlib as _importlib
 from typing import TYPE_CHECKING, Any
 
-__version__ = "2.0"
+__version__ = "2.1"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
+
+# FIPS 140-3 Power-On Self-Tests — run at module import time.
+# Sets module state to OPERATIONAL or ERROR.
+from ama_cryptography._self_test import _run_self_tests as _post
+from ama_cryptography._self_test import (  # noqa: F401
+    check_operational,
+    module_error_reason,
+    module_self_test_results,
+    module_status,
+    post_duration_ms,
+    reset_module,
+    secure_token_bytes,
+)
+from ama_cryptography.exceptions import CryptoModuleError as CryptoModuleError  # noqa: F401
+
+_post()
 
 # Eagerly import math modules (double_helix_engine, equations) — they carry
 # no availability-check side effects and are the most frequently used exports.
@@ -90,6 +106,14 @@ def __getattr__(name: str) -> Any:
 __all__ = [
     "__version__",
     "__author__",
+    "CryptoModuleError",
+    "check_operational",
+    "module_status",
+    "module_error_reason",
+    "module_self_test_results",
+    "post_duration_ms",
+    "reset_module",
+    "secure_token_bytes",
     "AlgorithmType",
     "AmaCryptography",
     "create_crypto_package",

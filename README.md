@@ -24,7 +24,7 @@
               |                                                                              |
               |   C Layer (Native)     |   Cython Layer         |   Python API               |
               |   ─────────────────    |   ─────────────────    |   ─────────────────        |
-              |   SHA3/HKDF/Ed25519    |   18-37x Speedup       |   Algorithm Agnostic       |
+              |   SHA3/HKDF/Ed25519    |   18-37x Math Speedup  |   Algorithm Agnostic       |
               |   ML-DSA-65/Kyber      |   NumPy Integration    |   Key Management           |
               |   SPHINCS+/NTT Ops     |   Math Engine          |   3R Monitoring            |
               |                                                                              |
@@ -36,7 +36,7 @@
 **Author/Inventor:** Andrew E. A.
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
-**Version:** 2.0
+**Version:** 2.1
 **AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
@@ -45,7 +45,7 @@
 
 AMA Cryptography is a hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Community-tested, not externally audited. A secure, multi-language cryptographic security system designed to protect people, data, and networks against both classical and quantum threats. Built on a foundation of mathematically rigorous post-quantum cryptography (PQC), AMA Cryptography delivers security-hardened features with exceptional performance.
 
-Novel in assimilation, the system combines cutting-edge NIST-approved post-quantum algorithms with a unique 3R runtime security monitoring framework, creating a defense-in-depth architecture that provides unprecedented visibility into cryptographic operations while maintaining less than 2% performance overhead. The multi-language architecture (C + Cython + Python) enables both maximum security through constant-time implementations and optional Cython acceleration (18-37x speedup when built), making it suitable for environments ranging from high-security government applications to performance-critical enterprise systems.
+Novel in assimilation, the system combines cutting-edge NIST-approved post-quantum algorithms with a unique 3R runtime security monitoring framework, creating a defense-in-depth architecture that provides unprecedented visibility into cryptographic operations while maintaining less than 2% performance overhead. The multi-language architecture (C + Cython + Python) enables both maximum security through constant-time implementations and optional Cython acceleration (18–37x speedup over pure Python mathematical baseline for 3R monitoring computations), making it suitable for environments ranging from high-security government applications to performance-critical enterprise systems.
 
 **Protecting people, data, and networks with quantum-resistant cryptography**
 
@@ -62,7 +62,7 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 > - Secure file permissions for key files and cryptographic packages (store on encrypted volumes with restricted access)
 >
 > **Status:** Community-tested | Not externally audited
-> **Last Updated:** 2026-03-20
+> **Last Updated:** 2026-03-22
 
 ---
 
@@ -109,7 +109,7 @@ AMA Cryptography addresses all three challenges through:
 
 - **Quantum Resistance**: NIST-approved ML-DSA-65 (FIPS 204) and Kyber-1024 (FIPS 203) provide 50+ years of protection
 - **Transparent Security**: 3R monitoring (Resonance-Recursion-Refactoring) provides real-time cryptographic operation analysis
-- **Optimized Performance**: Cython acceleration available (manual build required); benchmarked at 18-37x speedup over pure Python baseline
+- **Optimized Performance**: Cython acceleration for 3R math engine (manual build required); benchmarked at 18–37x speedup over pure Python mathematical baseline
 
 ### Target Use Cases
 
@@ -164,7 +164,7 @@ The signature innovation providing real-time cryptographic operation analysis un
 Optimized for both security and performance:
 
 - **C Layer**: Native SHA3-256, HKDF-SHA3-256, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+-256f implementations — zero external dependencies (see [Implementation Status Matrix](#implementation-status-matrix))
-- **Cython Layer**: Optimized mathematical operations (benchmarked at 18-37x vs pure Python)
+- **Cython Layer**: Optimized 3R mathematical operations (benchmarked at 18–37x vs pure Python mathematical baseline)
 - **Python API**: High-level, user-friendly interface for rapid development (primary production API)
 
 ### Advanced Features
@@ -196,7 +196,7 @@ Future-proof cryptography:
 | Achievement | Description |
 |-------------|-------------|
 | Defense-in-Depth | 6 independent cryptographic layers |
-| Performance | Cython optimization (18-37x vs pure Python baseline) |
+| Performance | Cython math engine optimization (18–37x vs pure Python mathematical baseline) |
 | Quantum Resistance | NIST-approved PQC algorithms (ML-DSA-65, Kyber-1024) |
 | Mathematical Rigor | 5 proven frameworks with machine precision |
 | Cross-Platform | Linux, macOS, Windows, ARM64 |
@@ -228,7 +228,7 @@ Future-proof cryptography:
 - **Full (native)**: Complete native C implementation — no external PQC dependency required.
 - **Note**: Ed25519 C implementation uses radix 2^51 field arithmetic (fe51.h — 25 cross-products vs 100 in ref10). Optional ed25519-donna x86-64 assembly backend available via `AMA_ED25519_ASSEMBLY=ON` (auto-enabled on MSVC x64). Full RFC 8032 sign/verify roundtrip verified.
 
-**C Library Implementations (v2.0) — 22 source files in `src/c/`:**
+**C Library Implementations (v2.0) — 23 source files in `src/c/`:**
 - `ama_core.c`: Library initialization, version, feature detection, shared utilities
 - `ama_sha3.c`: SHA3-256, SHAKE128, SHAKE256 (Keccak-f[1600] sponge construction)
 - `ama_sha256.c`: Native SHA-256 (FIPS 180-4), used by SPHINCS+ internally
@@ -251,7 +251,7 @@ Future-proof cryptography:
 **Cython Acceleration Modules (`src/cython/`):**
 - `hmac_binding.pyx`: Direct Cython binding to `ama_hmac_sha3_256()` (~262K ops/sec)
 - `sha3_binding.pyx`: Direct Cython binding to `ama_sha3_256()` — zero call overhead; ctypes fallback when not built
-- `math_engine.pyx`: Optimized mathematical operations (Lyapunov, NTT, matrix-vector, helix evolution — 18-37x speedup)
+- `math_engine.pyx`: Optimized 3R mathematical operations (Lyapunov, NTT, matrix-vector, helix evolution — 18–37x speedup vs pure Python baseline)
 - `helix_engine_complete.pyx`: Complete helix engine with Cython optimization
 
 > **Note:** The Python API remains the recommended production interface. C implementations provide high-performance alternatives where applicable.
@@ -299,7 +299,7 @@ Future-proof cryptography:
 **Unique Value:** Transaction security with real-time anomaly detection
 
 - **Quantum-Resistant Signatures**: ML-DSA-65 signatures on transactions remain valid even after quantum computers exist.
-- **High-Frequency Trading**: Cython-optimized operations available (18-37x speedup when built) with sub-millisecond signature verification.
+- **High-Frequency Trading**: Cython-optimized 3R monitoring (18–37x speedup vs pure Python math baseline when built) with sub-millisecond signature verification.
 - **Anomaly Detection**: 3R timing analysis surfaces anomalous cryptographic behavior that may indicate potential attacks.
 - **Audit Compliance**: Complete cryptographic audit trail with ethical constraint enforcement.
 - **Long-term Archival**: Financial records with 50+ year security guarantees.
@@ -352,15 +352,23 @@ Future-proof cryptography:
 
 ![Benchmark Report](assets/benchmark_report.png)
 
-*Comprehensive benchmark report with latency distribution, sign vs verify analysis, category performance, top/bottom operations, ethical overhead, regression improvement, NIST FIPS compliance, and summary statistics.*
+*Comprehensive benchmark report with latency distribution, sign vs verify analysis, category performance, top/bottom operations, ethical overhead, regression improvement, NIST algorithm implementation status, and summary statistics.*
 
-### ML-DSA-65 (Post-Quantum) Operations
+### ML-DSA-65 (Post-Quantum Digital Signatures — FIPS 204)
 
-| Operation | AMA Cryptography (Native) | Performance |
-|-----------|----------------------|-------------|
-| **KeyGen** | 644 ops/sec (1.55ms) | Full native C implementation |
-| **Sign** | 238 ops/sec (4.20ms) | Full native C implementation |
-| **Verify** | 624 ops/sec (1.60ms) | NIST KAT validated |
+| Operation | Throughput | Latency | Notes |
+|-----------|-----------|---------|-------|
+| **KeyGen** | 4,527 ops/sec | 0.22ms | Native C, NTT q=8380417 |
+| **Sign** | 1,027 ops/sec | 0.97ms | Rejection sampling, constant-time |
+| **Verify** | 5,067 ops/sec | 0.20ms | NIST ACVP validated |
+
+### ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)
+
+| Operation | Throughput | Latency | Notes |
+|-----------|-----------|---------|-------|
+| **KeyGen** | 9,798 ops/sec | 0.10ms | Native C, NTT q=3329 |
+| **Encapsulate** | 9,480 ops/sec | 0.11ms | IND-CCA2, Fujisaki-Okamoto |
+| **Decapsulate** | 8,913 ops/sec | 0.11ms | Implicit rejection |
 
 ### Full 6-Layer Package Performance
 
@@ -368,8 +376,8 @@ Complete security package with all defense layers:
 
 | Operation | Mean Time | Throughput |
 |-----------|-----------|------------|
-| Package Create (6 layers) | 2.17ms | 462 ops/sec |
-| Package Verify (6 layers) | 2.04ms | 489 ops/sec |
+| Package Create (6 layers) | 0.48ms | 2,093 ops/sec |
+| Package Verify (6 layers) | 0.38ms | 2,607 ops/sec |
 
 **6 Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65, HKDF, RFC 3161 (optional)
 
@@ -377,18 +385,20 @@ Complete security package with all defense layers:
 
 | Operation | Throughput | Latency |
 |-----------|-----------|---------|
-| SHA3-256 | 222,816 ops/sec | 0.005ms |
-| HMAC-SHA3-256 (Cython binding)* | 262,200 ops/sec | 0.004ms |
-| Ed25519 KeyGen | 21,299 ops/sec | 0.05ms |
-| Ed25519 Sign | 20,171 ops/sec | 0.05ms |
-| Ed25519 Verify | 10,067 ops/sec | 0.10ms |
-| HKDF-SHA3-256 | 4,689 ops/sec | 0.21ms |
+| SHA3-256 (32B) | 477,055 ops/sec | 0.002ms |
+| SHA3-256 (1KB) | 158,832 ops/sec | 0.006ms |
+| HMAC-SHA3-256 (1KB) | 114,278 ops/sec | 0.009ms |
+| HKDF-SHA3-256 (96B derive) | 73,318 ops/sec | 0.014ms |
+| Ed25519 KeyGen | 14,611 ops/sec | 0.07ms |
+| Ed25519 Sign | 14,976 ops/sec | 0.07ms |
+| Ed25519 Verify | 7,716 ops/sec | 0.13ms |
+| AES-256-GCM encrypt (1KB) | 1,087 ops/sec | 0.92ms |
+| ChaCha20-Poly1305 encrypt (1KB) | 155,725 ops/sec | 0.006ms |
+| X25519 DH Exchange | 1,280 ops/sec | 0.78ms |
 
-*HMAC-SHA3-256 via native C (Cython binding). Fallback ctypes path available (~182K ops/sec) when Cython extension is not built. stdlib hmac is not used — INVARIANT-1.
+**Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [BENCHMARKS.md](BENCHMARKS.md) for full performance data including all algorithms.
 
-**Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [BENCHMARKS.md](BENCHMARKS.md) for full performance data.
-
-*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, native C backend, 1,000 iterations per operation.*
+*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, native C backend via ctypes. See [BENCHMARKS.md](BENCHMARKS.md) for raw C performance numbers (without ctypes overhead) and competitive comparisons against libsodium and liboqs. Reproducible via `python benchmarks/benchmark_runner.py --verbose` or `make -C benchmarks benchmark_c_raw`.*
 
 </details>
 
@@ -402,7 +412,7 @@ Complete security package with all defense layers:
 | NTT (degree 256) | 45.2ms | 1.2ms | **37.7x** |
 | Helix evolution | 3.4ms | 0.18ms | **18.9x** |
 
-**Cython optimization: 18-37x speedup vs pure Python baseline**
+**Cython optimization: 18–37x speedup vs pure Python mathematical baseline** (Lyapunov, NTT, helix computations — does not affect C-implemented cryptographic primitives)
 
 </details>
 
@@ -411,12 +421,12 @@ Complete security package with all defense layers:
 
 | Input Scale | Mean Time | Throughput |
 |-------------|-----------|------------|
-| 1x | 2.16ms | 464 ops/sec |
-| 10x | 2.29ms | 438 ops/sec |
-| 100x | 4.59ms | 218 ops/sec |
-| 1000x | 161.48ms | 6.19 ops/sec |
+| 1x (baseline) | 0.84ms | 1,188 ops/sec |
+| 10x | 0.58ms | 1,719 ops/sec |
+| 100x | 2.90ms | 344 ops/sec |
+| 1000x | 100.74ms | 9.9 ops/sec |
 
-*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 50 iterations per size.*
+*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 50 iterations per size. The 1x baseline measures the full scalability pipeline including data preparation, which is why it differs from the 0.48ms Package Create number. See [BENCHMARKS.md](BENCHMARKS.md) for details.*
 
 </details>
 
@@ -668,7 +678,7 @@ GitHub Actions automatically tests:
 ### CI Matrix
 
 - **Python Versions**: 3.9, 3.10, 3.11, 3.12, 3.13
-- **Platforms**: Ubuntu Latest
+- **Platforms**: Ubuntu Latest, Windows Latest
 - **Jobs**: test, code-quality, security-checks
 
 ### CI Workflows
@@ -775,6 +785,18 @@ These KAT tests validate the native C implementations against official NIST FIPS
 - **SHA3/SHAKE:** Incremental XOF (SHAKE128/SHAKE256) with proper multi-block squeeze for FIPS 203/204 compliance
 
 KAT vectors are sourced from NIST PQC standardization and validate that the native implementations produce bit-exact outputs for known inputs per the FIPS specifications.
+
+### Design Alignment with FIPS 140-3 Level 1 Requirements (Pending Future CMVP Validation)
+
+The module implements technical controls aligned with FIPS 140-3 Security Level 1 requirements:
+
+- **Power-On Self-Tests (POST):** KATs for SHA3-256, HMAC-SHA3-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65, SLH-DSA, and Ed25519 run at module import (~260ms)
+- **Module Integrity Verification:** SHA3-256 digest of all source files checked at startup
+- **Error State Machine:** OPERATIONAL / ERROR / SELF_TEST with automatic lockout on failure
+- **Continuous RNG Test:** Detects consecutive identical random outputs
+- **Pairwise Consistency Tests:** Sign-verify / encaps-decaps after key generation
+
+> **Important:** This library implements algorithms specified in FIPS 203, FIPS 204, and FIPS 205. This implementation has **NOT** been submitted for CMVP validation and is **NOT** FIPS 140-3 certified. The controls above represent design alignment with FIPS 140-3 Level 1 technical requirements as a step toward future CMVP validation. See `CSRC_STANDARDS.md` for details.
 
 </details>
 
@@ -1212,6 +1234,6 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 </div>
 
-*Last updated: 2026-03-20*
+*Last updated: 2026-03-22*
 
 </div>

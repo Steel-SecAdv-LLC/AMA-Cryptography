@@ -41,8 +41,12 @@ import ast
 import sys
 from typing import Any
 
-import numpy as np
 import pytest
+
+try:
+    import numpy as np
+except ImportError:
+    pytest.skip("numpy not installed", allow_module_level=True)
 
 from ama_cryptography_monitor import (
     AmaCryptographyMonitor,
