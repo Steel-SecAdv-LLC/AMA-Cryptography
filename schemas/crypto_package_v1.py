@@ -70,9 +70,7 @@ class CryptoPackageSchemaV1:
         d = json.loads(data)
         version = d.get("schema_version", "")
         if version != SCHEMA_VERSION:
-            raise ValueError(
-                f"Unsupported schema version: {version}. Expected {SCHEMA_VERSION}"
-            )
+            raise ValueError(f"Unsupported schema version: {version}. Expected {SCHEMA_VERSION}")
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
     def to_dict(self) -> dict[str, Any]:

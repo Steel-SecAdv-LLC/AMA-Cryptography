@@ -734,9 +734,11 @@ class ResonanceTimingMonitor:
 
         # Priority 7: Drift detection (does NOT preempt Z-score/MAD — both reported)
         drift_anomaly: Optional[TimingAnomaly] = None
-        if (sample_count > 30 and
-                sample_count % self.drift_check_interval == 0 and
-                operation in self._frozen_baselines):
+        if (
+            sample_count > 30
+            and sample_count % self.drift_check_interval == 0
+            and operation in self._frozen_baselines
+        ):
             frozen_mean, frozen_std = self._frozen_baselines[operation]
             if frozen_std > 0:
                 drift = abs(mean - frozen_mean) / frozen_std
@@ -1081,43 +1083,51 @@ class RecursionPatternMonitor:
         if max_usage is not None and max_usage > 0:
             usage_ratio = usage_count / max_usage
             if usage_ratio >= 0.90:
-                anomalies.append({
-                    "type": "key_usage_critical",
-                    "severity": "critical",
-                    "key_id": key_id,
-                    "usage_ratio": usage_ratio,
-                    "message": f"Key {key_id} at {usage_ratio:.0%} of max usage limit",
-                })
+                anomalies.append(
+                    {
+                        "type": "key_usage_critical",
+                        "severity": "critical",
+                        "key_id": key_id,
+                        "usage_ratio": usage_ratio,
+                        "message": f"Key {key_id} at {usage_ratio:.0%} of max usage limit",
+                    }
+                )
             elif usage_ratio >= 0.75:
-                anomalies.append({
-                    "type": "key_usage_warning",
-                    "severity": "warning",
-                    "key_id": key_id,
-                    "usage_ratio": usage_ratio,
-                    "message": f"Key {key_id} at {usage_ratio:.0%} of max usage limit",
-                })
+                anomalies.append(
+                    {
+                        "type": "key_usage_warning",
+                        "severity": "warning",
+                        "key_id": key_id,
+                        "usage_ratio": usage_ratio,
+                        "message": f"Key {key_id} at {usage_ratio:.0%} of max usage limit",
+                    }
+                )
 
         # Check expiration
         if expires_at is not None:
             now = time.time()
             if isinstance(expires_at, (int, float)) and now > expires_at:
-                anomalies.append({
-                    "type": "key_expired",
-                    "severity": "critical",
-                    "key_id": key_id,
-                    "expired_at": expires_at,
-                    "message": f"Key {key_id} expired at {expires_at} but still in use",
-                })
+                anomalies.append(
+                    {
+                        "type": "key_expired",
+                        "severity": "critical",
+                        "key_id": key_id,
+                        "expired_at": expires_at,
+                        "message": f"Key {key_id} expired at {expires_at} but still in use",
+                    }
+                )
 
         # Check for revoked/deprecated keys being used
         if status in ("DEPRECATED", "REVOKED", "COMPROMISED"):
-            anomalies.append({
-                "type": "key_status_violation",
-                "severity": "critical",
-                "key_id": key_id,
-                "status": status,
-                "message": f"Key {key_id} has status {status} but is being used",
-            })
+            anomalies.append(
+                {
+                    "type": "key_status_violation",
+                    "severity": "critical",
+                    "key_id": key_id,
+                    "status": status,
+                    "message": f"Key {key_id} has status {status} but is being used",
+                }
+            )
 
         # Check per-key signing rate anomaly
         rate_anomaly = self._check_key_rate_anomaly(key_id)
@@ -1152,7 +1162,7 @@ class RecursionPatternMonitor:
                     "expected_interval": mean_interval,
                     "observed_interval": recent_interval,
                     "message": f"Key {key_id} usage rate spike: "
-                               f"interval {recent_interval:.3f}s vs baseline {mean_interval:.3f}s",
+                    f"interval {recent_interval:.3f}s vs baseline {mean_interval:.3f}s",
                 }
         return None
 
@@ -1222,6 +1232,7 @@ class RefactoringAnalyzer:
         """Record resolved filesystem paths of all imported crypto modules."""
         try:
             import importlib
+
             crypto_modules = [
                 "ama_cryptography.crypto_api",
                 "ama_cryptography.key_management",
@@ -1260,19 +1271,23 @@ class RefactoringAnalyzer:
         for filepath_str, expected_hash in self._integrity_baselines.items():
             filepath = Path(filepath_str)
             if not filepath.exists():
-                violations.append(IntegrityViolation(
-                    file_path=filepath_str,
-                    expected_hash=expected_hash,
-                    actual_hash="FILE_MISSING",
-                ))
+                violations.append(
+                    IntegrityViolation(
+                        file_path=filepath_str,
+                        expected_hash=expected_hash,
+                        actual_hash="FILE_MISSING",
+                    )
+                )
                 continue
             actual_hash = self._hash_file(filepath)
             if actual_hash != expected_hash:
-                violations.append(IntegrityViolation(
-                    file_path=filepath_str,
-                    expected_hash=expected_hash,
-                    actual_hash=actual_hash,
-                ))
+                violations.append(
+                    IntegrityViolation(
+                        file_path=filepath_str,
+                        expected_hash=expected_hash,
+                        actual_hash=actual_hash,
+                    )
+                )
         if violations:
             logger.critical(
                 "CRITICAL: Runtime code integrity violation detected in %d file(s)",
@@ -1299,17 +1314,21 @@ class RefactoringAnalyzer:
                 if mod_file:
                     actual_path = os.path.realpath(mod_file)
                     if actual_path != expected_path:
-                        violations.append(ImportHijackViolation(
-                            module_name=mod_name,
-                            expected_path=expected_path,
-                            actual_path=actual_path,
-                        ))
+                        violations.append(
+                            ImportHijackViolation(
+                                module_name=mod_name,
+                                expected_path=expected_path,
+                                actual_path=actual_path,
+                            )
+                        )
             except ImportError:
-                violations.append(ImportHijackViolation(
-                    module_name=mod_name,
-                    expected_path=expected_path,
-                    actual_path="IMPORT_FAILED",
-                ))
+                violations.append(
+                    ImportHijackViolation(
+                        module_name=mod_name,
+                        expected_path=expected_path,
+                        actual_path="IMPORT_FAILED",
+                    )
+                )
         if violations:
             logger.critical(
                 "CRITICAL: Import chain hijack detected for %d module(s)",
@@ -1546,10 +1565,13 @@ class AmaCryptographyMonitor:
             return
         anomalies = self.patterns.monitor_key_usage(key_metadata)
         for anomaly in anomalies:
-            self.alerts.append({
-                "type": "key_lifecycle", "anomaly": anomaly,
-                "timestamp": time.time(),
-            })
+            self.alerts.append(
+                {
+                    "type": "key_lifecycle",
+                    "anomaly": anomaly,
+                    "timestamp": time.time(),
+                }
+            )
             self._prune_alerts()
 
     def verify_runtime_integrity(self) -> Dict[str, Any]:
@@ -1566,25 +1588,29 @@ class AmaCryptographyMonitor:
         import_violations = self.analyzer.verify_imports()
 
         for v in integrity_violations:
-            self.alerts.append({
-                "type": "integrity_violation",
-                "anomaly": {
-                    "file": v.file_path,
-                    "expected": v.expected_hash,
-                    "actual": v.actual_hash,
-                },
-                "timestamp": time.time(),
-            })
+            self.alerts.append(
+                {
+                    "type": "integrity_violation",
+                    "anomaly": {
+                        "file": v.file_path,
+                        "expected": v.expected_hash,
+                        "actual": v.actual_hash,
+                    },
+                    "timestamp": time.time(),
+                }
+            )
         for v in import_violations:
-            self.alerts.append({
-                "type": "import_hijack",
-                "anomaly": {
-                    "module": v.module_name,
-                    "expected": v.expected_path,
-                    "actual": v.actual_path,
-                },
-                "timestamp": time.time(),
-            })
+            self.alerts.append(
+                {
+                    "type": "import_hijack",
+                    "anomaly": {
+                        "module": v.module_name,
+                        "expected": v.expected_path,
+                        "actual": v.actual_path,
+                    },
+                    "timestamp": time.time(),
+                }
+            )
         self._prune_alerts()
 
         return {
