@@ -55,8 +55,10 @@ class TestPostureEvaluator:
 
     def test_elevated_threshold(self) -> None:
         """Score crossing elevated threshold triggers INCREASE_MONITORING."""
+        # escalation_count=1 to test threshold behavior without hysteresis delay
         evaluator = PostureEvaluator(
-            elevated_threshold=0.1, high_threshold=0.5, critical_threshold=0.9
+            elevated_threshold=0.1, high_threshold=0.5, critical_threshold=0.9,
+            escalation_count=1,
         )
         # Feed enough timing anomalies to cross elevated but not high
         anomaly = MagicMock()
@@ -189,7 +191,8 @@ class TestCryptoPostureController:
         """Rotation callback should fire when action is ROTATE_KEYS."""
         on_rotation = MagicMock()
         # Force a CRITICAL evaluation by pre-loading the evaluator
-        evaluator = PostureEvaluator(critical_threshold=0.01)
+        # escalation_count=1 to bypass hysteresis for this test
+        evaluator = PostureEvaluator(critical_threshold=0.01, escalation_count=1)
         anomaly = MagicMock()
         anomaly.severity = "critical"
         anomaly.deviation_sigma = 10.0
@@ -211,7 +214,8 @@ class TestCryptoPostureController:
         """Algorithm switch callback should fire on ROTATE_AND_SWITCH."""
         on_switch = MagicMock()
         on_rotation = MagicMock()
-        evaluator = PostureEvaluator(critical_threshold=0.01)
+        # escalation_count=1 to bypass hysteresis for this test
+        evaluator = PostureEvaluator(critical_threshold=0.01, escalation_count=1)
         anomaly = MagicMock()
         anomaly.severity = "critical"
         anomaly.deviation_sigma = 10.0

@@ -104,6 +104,16 @@ if(AMA_ENABLE_SIMD)
             message(STATUS "AVX2 requested but architecture is ${CMAKE_SYSTEM_PROCESSOR} — skipping")
         endif()
     endif()
+
+    # AES-NI + PCLMULQDQ flags for x86 (runtime dispatch via ama_cpuid.c)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86")
+        if(MSVC)
+            # MSVC doesn't need explicit flags for AES-NI intrinsics
+        else()
+            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -maes -mpclmul")
+        endif()
+        message(STATUS "AES-NI/PCLMULQDQ: enabled for runtime dispatch")
+    endif()
 endif()
 
 # LTO for release builds
@@ -119,6 +129,8 @@ set(AMA_SOURCES
     src/c/ama_hkdf.c
     src/c/ama_ed25519.c
     src/c/ama_aes_gcm.c
+    src/c/ama_cpuid.c
+    src/c/ama_secure_memory.c
 )
 
 # Add native PQC source files when enabled

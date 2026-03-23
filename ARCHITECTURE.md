@@ -120,6 +120,8 @@ The following constraints govern architectural decisions:
 
 ## Cryptographic Architecture
 
+AMA Cryptography is designed as a standalone cryptographic library for all AI agents and AI systems, not exclusively Mercury Agent. Any Python or C project can integrate these primitives independently. The library provides a complete, self-contained suite of quantum-resistant cryptographic operations suitable for any application requiring post-quantum security.
+
 ### Cryptographic Primitive Selection
 
 | Primitive | Algorithm | Standard | Security Level | C Implementation |
