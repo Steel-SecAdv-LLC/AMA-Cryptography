@@ -626,6 +626,8 @@ class AESGCMProvider:
 
     _NONCE_SAFETY_LIMIT: int = 2**32
     _encrypt_counters: ClassVar[Dict[bytes, int]] = {}
+    _counters_persist_path: ClassVar[Optional[str]] = None
+    _counters_loaded: ClassVar[bool] = False
 
     def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY) -> None:
         self.backend = backend
@@ -638,6 +640,51 @@ class AESGCMProvider:
                 "AES-256-GCM native C backend not available. "
                 "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
             )
+
+        # Load persisted counters on first instantiation
+        if not AESGCMProvider._counters_loaded:
+            AESGCMProvider._load_persisted_counters()
+            AESGCMProvider._counters_loaded = True
+
+    @classmethod
+    def _get_persist_path(cls) -> "Path":
+        """Get path for counter persistence file."""
+        import pathlib
+        if cls._counters_persist_path:
+            return pathlib.Path(cls._counters_persist_path)
+        data_dir = pathlib.Path.home() / ".ama_cryptography"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        return data_dir / "aes_gcm_counters.json"
+
+    @classmethod
+    def _load_persisted_counters(cls) -> None:
+        """Load persisted encrypt counters from disk."""
+        import json as _json
+        path = cls._get_persist_path()
+        if not path.exists():
+            return
+        try:
+            with open(path, "r") as f:
+                data = _json.load(f)
+            for key_hex, count in data.items():
+                key_id = bytes.fromhex(key_hex)
+                cls._encrypt_counters[key_id] = max(
+                    cls._encrypt_counters.get(key_id, 0), count
+                )
+        except Exception as e:
+            logger.warning("Failed to load persisted AES-GCM counters: %s", e)
+
+    @classmethod
+    def _persist_counters(cls) -> None:
+        """Persist encrypt counters to disk."""
+        import json as _json
+        path = cls._get_persist_path()
+        try:
+            data = {k.hex(): v for k, v in cls._encrypt_counters.items()}
+            with open(path, "w") as f:
+                _json.dump(data, f)
+        except Exception as e:
+            logger.warning("Failed to persist AES-GCM counters: %s", e)
 
     def encrypt(
         self,
@@ -675,6 +722,7 @@ class AESGCMProvider:
         if count >= int(self._NONCE_SAFETY_LIMIT * 0.75):
             logger.warning("AES-GCM nonce count approaching safety limit. Re-key recommended.")
         self._encrypt_counters[key_id] = count + 1
+        self._persist_counters()
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 

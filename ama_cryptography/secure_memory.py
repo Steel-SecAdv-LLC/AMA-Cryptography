@@ -147,33 +147,83 @@ def _memzero(data: Union[bytearray, memoryview]) -> None:
         data[i] = 0
 
 
-def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> NoReturn:
+def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
     """
     Lock memory region to prevent swapping to disk.
 
+    Uses ama_secure_mlock from the native C library if available.
+    Falls back to ctypes mlock on POSIX systems.
+
+    Args:
+        data: Memory region to lock
+
     Raises:
-        NotImplementedError: Always — memory locking requires libsodium,
-            which has been removed.  This function is retained for API
-            compatibility.
+        NotImplementedError: If no native backend available and not on POSIX
     """
+    try:
+        from ama_cryptography.pqc_backends import _native_lib
+        if _native_lib is not None and hasattr(_native_lib, "ama_secure_mlock"):
+            import ctypes
+            buf = (ctypes.c_char * len(data)).from_buffer_copy(data)
+            _native_lib.ama_secure_mlock(buf, len(data))
+            return
+    except (ImportError, AttributeError):
+        pass
+
+    # POSIX fallback via ctypes
+    import ctypes
+    import ctypes.util
+    try:
+        libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+        if hasattr(libc, "mlock"):
+            buf = ctypes.c_char_p(bytes(data))
+            libc.mlock(buf, len(data))
+            return
+    except (OSError, AttributeError):
+        pass
+
     raise NotImplementedError(
-        "secure_mlock requires libsodium (removed). "
-        "Memory locking is not available in the pure-Python implementation."
+        "secure_mlock requires the AMA native C library or a POSIX system."
     )
 
 
-def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> NoReturn:
+def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
     """
     Unlock previously locked memory region.
 
+    Uses ama_secure_munlock from the native C library if available.
+    Falls back to ctypes munlock on POSIX systems.
+
+    Args:
+        data: Memory region to unlock
+
     Raises:
-        NotImplementedError: Always — memory unlocking requires libsodium,
-            which has been removed.  This function is retained for API
-            compatibility.
+        NotImplementedError: If no native backend available and not on POSIX
     """
+    try:
+        from ama_cryptography.pqc_backends import _native_lib
+        if _native_lib is not None and hasattr(_native_lib, "ama_secure_munlock"):
+            import ctypes
+            buf = (ctypes.c_char * len(data)).from_buffer_copy(data)
+            _native_lib.ama_secure_munlock(buf, len(data))
+            return
+    except (ImportError, AttributeError):
+        pass
+
+    # POSIX fallback via ctypes
+    import ctypes
+    import ctypes.util
+    try:
+        libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+        if hasattr(libc, "munlock"):
+            buf = ctypes.c_char_p(bytes(data))
+            libc.munlock(buf, len(data))
+            return
+    except (OSError, AttributeError):
+        pass
+
     raise NotImplementedError(
-        "secure_munlock requires libsodium (removed). "
-        "Memory unlocking is not available in the pure-Python implementation."
+        "secure_munlock requires the AMA native C library or a POSIX system."
     )
 
 
