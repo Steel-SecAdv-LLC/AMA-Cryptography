@@ -204,7 +204,7 @@ jobs:
         bandit -r ama_cryptography/ -l
 
     - name: Upload Bandit report
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
       if: success()
       with:
         name: bandit-security-report
@@ -217,7 +217,7 @@ jobs:
         semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json
 
     - name: Upload Semgrep report
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
       if: success()
       with:
         name: semgrep-security-report
@@ -258,7 +258,7 @@ jobs:
         python benchmarks/benchmark_runner.py --verbose --output benchmark-results.json --markdown benchmark-report.md
 
     - name: Upload benchmark results
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
       if: success()
       with:
         name: benchmark-results
@@ -299,7 +299,7 @@ jobs:
         ./dudect_crypto 50000
 
     - name: Upload timing analysis results
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
       if: success()
       with:
         name: constant-time-results
