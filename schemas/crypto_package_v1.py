@@ -16,12 +16,13 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional
-
+from typing import Any
 
 SCHEMA_VERSION = "1.0"
 
@@ -52,19 +53,19 @@ class CryptoPackageSchemaV1:
     hmac: str = ""
     classical_signature: str = ""
     pqc_signature: str = ""
-    timestamp: Optional[str] = None
+    timestamp: str | None = None
     algorithm: str = ""
     signer_id: str = ""
     created_at: float = field(default_factory=time.time)
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    codes: List[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    codes: list[str] = field(default_factory=list)
 
     def to_json(self) -> str:
         """Serialize to JSON string."""
         return json.dumps(asdict(self), indent=2, sort_keys=True)
 
     @classmethod
-    def from_json(cls, data: str) -> "CryptoPackageSchemaV1":
+    def from_json(cls, data: str) -> CryptoPackageSchemaV1:
         """Deserialize from JSON string."""
         d = json.loads(data)
         version = d.get("schema_version", "")
@@ -74,12 +75,12 @@ class CryptoPackageSchemaV1:
             )
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "CryptoPackageSchemaV1":
+    def from_dict(cls, d: dict[str, Any]) -> CryptoPackageSchemaV1:
         """Create from dictionary."""
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 

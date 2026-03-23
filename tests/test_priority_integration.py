@@ -19,31 +19,26 @@ Covers:
 - Formal package schema
 """
 
-import os
-import tempfile
 import time
 
 import pytest
 
-from ama_cryptography_monitor import (
-    AmaCryptographyMonitor,
-    IntegrityViolation,
-    ImportHijackViolation,
-    NonceTracker,
-    ResonanceTimingMonitor,
-    RecursionPatternMonitor,
-    RefactoringAnalyzer,
-    TimingAnomaly,
-)
 from ama_cryptography.adaptive_posture import (
     CryptoPostureController,
     PendingAction,
     PostureAction,
     PostureEvaluator,
-    PostureEvaluation,
     ThreatLevel,
 )
-
+from ama_cryptography_monitor import (
+    AmaCryptographyMonitor,
+    ImportHijackViolation,
+    IntegrityViolation,
+    NonceTracker,
+    RecursionPatternMonitor,
+    RefactoringAnalyzer,
+    ResonanceTimingMonitor,
+)
 
 # ============================================================================
 # Priority 2: NonceTracker Tests
@@ -222,14 +217,14 @@ class TestResonanceTimingEnhancements:
         for i in range(30):
             monitor.record_timing("test_op", 1.0 + (i % 3) * 0.01)
         assert "test_op" in monitor._frozen_baselines
-        frozen_mean, frozen_std = monitor._frozen_baselines["test_op"]
+        frozen_mean, _frozen_std = monitor._frozen_baselines["test_op"]
         assert frozen_mean > 0
 
     def test_input_size_normalization(self):
         """Priority 8: Size-normalized anomaly detection."""
         monitor = ResonanceTimingMonitor()
         # Record with different sizes but consistent per-byte timing
-        for i in range(35):
+        for _i in range(35):
             monitor.record_timing("aes_gcm_encrypt", 10.0, input_size=1000)
         stats = monitor.baseline_stats.get("aes_gcm_encrypt", {})
         # The mean should be ~0.01 (10ms / 1000 bytes)
@@ -237,7 +232,7 @@ class TestResonanceTimingEnhancements:
 
     def test_ratio_tracking_initialized(self):
         monitor = ResonanceTimingMonitor()
-        for i in range(35):
+        for _i in range(35):
             monitor.record_timing("op_a", 1.0)
             monitor.record_timing("op_b", 2.0)
         # Ratio samples should be populated
@@ -404,6 +399,11 @@ class TestConfirmationGate:
         result = controller.reject_action("test-3")
         assert result is True
         assert len(controller._pending_actions) == 0
+
+    def test_reject_nonexistent_action_returns_false(self):
+        controller = CryptoPostureController(confirmation_mode=True)
+        result = controller.reject_action("nonexistent-id")
+        assert result is False
 
     def test_summary_includes_pending_actions(self):
         controller = CryptoPostureController(confirmation_mode=True)

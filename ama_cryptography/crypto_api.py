@@ -647,7 +647,7 @@ class AESGCMProvider:
             AESGCMProvider._counters_loaded = True
 
     @classmethod
-    def _get_persist_path(cls) -> "Path":
+    def _get_persist_path(cls) -> Any:
         """Get path for counter persistence file."""
         import pathlib
         if cls._counters_persist_path:
@@ -676,13 +676,35 @@ class AESGCMProvider:
 
     @classmethod
     def _persist_counters(cls) -> None:
-        """Persist encrypt counters to disk."""
+        """Persist encrypt counters to disk using atomic write-rename.
+
+        Writes to a temporary file first, then atomically renames to the
+        target path. This prevents counter loss on crash — either the old
+        file remains intact or the new file fully replaces it.
+        """
         import json as _json
+        import os as _os
+        import tempfile
         path = cls._get_persist_path()
         try:
             data = {k.hex(): v for k, v in cls._encrypt_counters.items()}
-            with open(path, "w") as f:
-                _json.dump(data, f)
+            # Write to temp file in same directory (same filesystem for atomic rename)
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(path.parent), suffix=".tmp", prefix=".counters_"
+            )
+            try:
+                with _os.fdopen(fd, "w") as f:
+                    _json.dump(data, f)
+                    f.flush()
+                    _os.fsync(f.fileno())
+                _os.replace(tmp_path, str(path))
+            except BaseException:
+                # Clean up temp file on any failure
+                try:
+                    _os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             logger.warning("Failed to persist AES-GCM counters: %s", e)
 
