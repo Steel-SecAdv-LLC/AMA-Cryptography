@@ -20,6 +20,7 @@ Covers:
 """
 
 import time
+from typing import Any
 
 import pytest
 
@@ -48,12 +49,12 @@ from ama_cryptography_monitor import (
 class TestNonceTracker:
     """Tests for nonce reuse detection and persistence."""
 
-    def test_no_reuse_returns_none(self, tmp_path):
+    def test_no_reuse_returns_none(self, tmp_path: Any) -> None:
         tracker = NonceTracker(persist_path=str(tmp_path / "nonces.dat"))
         result = tracker.check_and_record(b"key1", b"\x00" * 12)
         assert result is None
 
-    def test_reuse_detected(self, tmp_path):
+    def test_reuse_detected(self, tmp_path: Any) -> None:
         tracker = NonceTracker(persist_path=str(tmp_path / "nonces.dat"))
         tracker.check_and_record(b"key1", b"\x00" * 12)
         result = tracker.check_and_record(b"key1", b"\x00" * 12)
@@ -61,13 +62,13 @@ class TestNonceTracker:
         assert result["type"] == "nonce_reuse"
         assert result["severity"] == "critical"
 
-    def test_different_keys_same_nonce_ok(self, tmp_path):
+    def test_different_keys_same_nonce_ok(self, tmp_path: Any) -> None:
         tracker = NonceTracker(persist_path=str(tmp_path / "nonces.dat"))
         tracker.check_and_record(b"key1", b"\x00" * 12)
         result = tracker.check_and_record(b"key2", b"\x00" * 12)
         assert result is None
 
-    def test_persistence_survives_restart(self, tmp_path):
+    def test_persistence_survives_restart(self, tmp_path: Any) -> None:
         path = str(tmp_path / "nonces.dat")
         tracker1 = NonceTracker(persist_path=path)
         tracker1.check_and_record(b"key1", b"\x01" * 12)
@@ -78,13 +79,13 @@ class TestNonceTracker:
         assert result is not None
         assert result["type"] == "nonce_reuse"
 
-    def test_get_counter(self, tmp_path):
+    def test_get_counter(self, tmp_path: Any) -> None:
         tracker = NonceTracker(persist_path=str(tmp_path / "nonces.dat"))
         tracker.check_and_record(b"key1", b"\x01" * 12)
         tracker.check_and_record(b"key1", b"\x02" * 12)
         assert tracker.get_counter(b"key1") == 2
 
-    def test_get_all_counters(self, tmp_path):
+    def test_get_all_counters(self, tmp_path: Any) -> None:
         tracker = NonceTracker(persist_path=str(tmp_path / "nonces.dat"))
         tracker.check_and_record(b"key1", b"\x01" * 12)
         tracker.check_and_record(b"key2", b"\x02" * 12)
@@ -100,7 +101,7 @@ class TestNonceTracker:
 class TestKeyLifecycleEnforcement:
     """Tests for key lifecycle monitoring in RecursionPatternMonitor."""
 
-    def test_key_usage_warning_at_75_percent(self):
+    def test_key_usage_warning_at_75_percent(self) -> None:
         monitor = RecursionPatternMonitor()
         anomalies = monitor.monitor_key_usage(
             {
@@ -113,7 +114,7 @@ class TestKeyLifecycleEnforcement:
         )
         assert any(a["type"] == "key_usage_warning" for a in anomalies)
 
-    def test_key_usage_critical_at_90_percent(self):
+    def test_key_usage_critical_at_90_percent(self) -> None:
         monitor = RecursionPatternMonitor()
         anomalies = monitor.monitor_key_usage(
             {
@@ -126,7 +127,7 @@ class TestKeyLifecycleEnforcement:
         )
         assert any(a["type"] == "key_usage_critical" for a in anomalies)
 
-    def test_expired_key_detected(self):
+    def test_expired_key_detected(self) -> None:
         monitor = RecursionPatternMonitor()
         anomalies = monitor.monitor_key_usage(
             {
@@ -139,7 +140,7 @@ class TestKeyLifecycleEnforcement:
         )
         assert any(a["type"] == "key_expired" for a in anomalies)
 
-    def test_revoked_key_detected(self):
+    def test_revoked_key_detected(self) -> None:
         monitor = RecursionPatternMonitor()
         anomalies = monitor.monitor_key_usage(
             {
@@ -152,7 +153,7 @@ class TestKeyLifecycleEnforcement:
         )
         assert any(a["type"] == "key_status_violation" for a in anomalies)
 
-    def test_deprecated_key_detected(self):
+    def test_deprecated_key_detected(self) -> None:
         monitor = RecursionPatternMonitor()
         anomalies = monitor.monitor_key_usage(
             {
@@ -165,7 +166,7 @@ class TestKeyLifecycleEnforcement:
         )
         assert any(a["type"] == "key_status_violation" for a in anomalies)
 
-    def test_active_key_no_anomaly(self):
+    def test_active_key_no_anomaly(self) -> None:
         monitor = RecursionPatternMonitor()
         anomalies = monitor.monitor_key_usage(
             {
@@ -187,18 +188,18 @@ class TestKeyLifecycleEnforcement:
 class TestAlgorithmDowngradeDetection:
     """Tests for algorithm downgrade detection in CryptoPostureController."""
 
-    def test_highest_algorithm_tracked(self):
+    def test_highest_algorithm_tracked(self) -> None:
         controller = CryptoPostureController(current_algorithm="ML_DSA_65")
         assert controller._highest_algorithm_reached == 1
 
-    def test_downgrade_acknowledged(self):
+    def test_downgrade_acknowledged(self) -> None:
         controller = CryptoPostureController(current_algorithm="HYBRID_SIG")
         controller._highest_algorithm_reached = 3
         controller.current_algorithm = "ED25519"
         controller.acknowledge_downgrade("Testing downgrade")
         assert controller._highest_algorithm_reached == 0
 
-    def test_summary_includes_highest(self):
+    def test_summary_includes_highest(self) -> None:
         controller = CryptoPostureController(current_algorithm="SPHINCS_256F")
         summary = controller.get_posture_summary()
         assert "highest_algorithm_reached" in summary
@@ -213,18 +214,18 @@ class TestAlgorithmDowngradeDetection:
 class TestResonanceTimingEnhancements:
     """Tests for cross-op correlation, drift detection, and anomaly profiles."""
 
-    def test_anomaly_profiles_default(self):
+    def test_anomaly_profiles_default(self) -> None:
         monitor = ResonanceTimingMonitor()
         assert "ed25519_sign" in monitor.anomaly_profiles
         assert monitor.anomaly_profiles["ed25519_sign"]["threshold_sigma"] == 2.0
 
-    def test_anomaly_profiles_custom(self):
+    def test_anomaly_profiles_custom(self) -> None:
         custom = {"custom_op": {"threshold_sigma": 4.0, "normalize_by_size": True}}
         monitor = ResonanceTimingMonitor(anomaly_profiles=custom)
         assert "custom_op" in monitor.anomaly_profiles
         assert monitor.anomaly_profiles["custom_op"]["threshold_sigma"] == 4.0
 
-    def test_frozen_baseline_captured_at_30_samples(self):
+    def test_frozen_baseline_captured_at_30_samples(self) -> None:
         monitor = ResonanceTimingMonitor()
         for i in range(30):
             monitor.record_timing("test_op", 1.0 + (i % 3) * 0.01)
@@ -232,7 +233,7 @@ class TestResonanceTimingEnhancements:
         frozen_mean, _frozen_std = monitor._frozen_baselines["test_op"]
         assert frozen_mean > 0
 
-    def test_input_size_normalization(self):
+    def test_input_size_normalization(self) -> None:
         """Priority 8: Size-normalized anomaly detection."""
         monitor = ResonanceTimingMonitor()
         # Record with different sizes but consistent per-byte timing
@@ -242,7 +243,7 @@ class TestResonanceTimingEnhancements:
         # The mean should be ~0.01 (10ms / 1000 bytes)
         assert stats.get("mean", 0) < 0.1
 
-    def test_ratio_tracking_initialized(self):
+    def test_ratio_tracking_initialized(self) -> None:
         monitor = ResonanceTimingMonitor()
         for _i in range(35):
             monitor.record_timing("op_a", 1.0)
@@ -259,26 +260,26 @@ class TestResonanceTimingEnhancements:
 class TestRuntimeIntegrity:
     """Tests for code integrity and import chain monitoring."""
 
-    def test_integrity_baselines_populated(self):
+    def test_integrity_baselines_populated(self) -> None:
         analyzer = RefactoringAnalyzer()
         # Baselines may be empty if running outside the repo, but the dict exists
         assert isinstance(analyzer._integrity_baselines, dict)
 
-    def test_import_baselines_populated(self):
+    def test_import_baselines_populated(self) -> None:
         analyzer = RefactoringAnalyzer()
         assert isinstance(analyzer._import_baselines, dict)
 
-    def test_verify_integrity_returns_list(self):
+    def test_verify_integrity_returns_list(self) -> None:
         analyzer = RefactoringAnalyzer()
         violations = analyzer.verify_integrity()
         assert isinstance(violations, list)
 
-    def test_verify_imports_returns_list(self):
+    def test_verify_imports_returns_list(self) -> None:
         analyzer = RefactoringAnalyzer()
         violations = analyzer.verify_imports()
         assert isinstance(violations, list)
 
-    def test_monitor_verify_runtime_integrity(self, tmp_path):
+    def test_monitor_verify_runtime_integrity(self, tmp_path: Any) -> None:
         monitor = AmaCryptographyMonitor(
             enabled=True,
             nonce_persist_path=str(tmp_path / "nonces.dat"),
@@ -287,7 +288,7 @@ class TestRuntimeIntegrity:
         assert "integrity_violations" in result
         assert "import_violations" in result
 
-    def test_integrity_violation_dataclass(self):
+    def test_integrity_violation_dataclass(self) -> None:
         v = IntegrityViolation(
             file_path="/test/file.py",
             expected_hash="abc123",
@@ -295,7 +296,7 @@ class TestRuntimeIntegrity:
         )
         assert v.file_path == "/test/file.py"
 
-    def test_import_hijack_violation_dataclass(self):
+    def test_import_hijack_violation_dataclass(self) -> None:
         v = ImportHijackViolation(
             module_name="test_module",
             expected_path="/original/path.py",
@@ -312,7 +313,7 @@ class TestRuntimeIntegrity:
 class TestHysteresis:
     """Tests for hysteresis in threat classification."""
 
-    def test_escalation_requires_consecutive_evaluations(self):
+    def test_escalation_requires_consecutive_evaluations(self) -> None:
         evaluator = PostureEvaluator(
             elevated_threshold=0.3,
             escalation_count=3,
@@ -322,7 +323,7 @@ class TestHysteresis:
         result1 = evaluator._classify(0.5)
         assert result1[0] == ThreatLevel.NOMINAL  # Not yet escalated
 
-    def test_escalation_after_n_consecutive(self):
+    def test_escalation_after_n_consecutive(self) -> None:
         evaluator = PostureEvaluator(
             elevated_threshold=0.3,
             escalation_count=2,
@@ -331,7 +332,7 @@ class TestHysteresis:
         result = evaluator._classify(0.5)
         assert result[0] == ThreatLevel.ELEVATED
 
-    def test_deescalation_requires_hysteresis_band(self):
+    def test_deescalation_requires_hysteresis_band(self) -> None:
         evaluator = PostureEvaluator(
             elevated_threshold=0.3,
             hysteresis_band=0.05,
@@ -346,7 +347,7 @@ class TestHysteresis:
         result = evaluator._classify(0.2)
         assert result[0] == ThreatLevel.NOMINAL
 
-    def test_reset_clears_hysteresis_state(self):
+    def test_reset_clears_hysteresis_state(self) -> None:
         evaluator = PostureEvaluator(escalation_count=1)
         evaluator._classify(0.5)
         evaluator.reset()
@@ -362,7 +363,7 @@ class TestHysteresis:
 class TestConfirmationGate:
     """Tests for confirmation gate on destructive posture actions."""
 
-    def test_pending_action_dataclass(self):
+    def test_pending_action_dataclass(self) -> None:
         pa = PendingAction(
             action_id="test-123",
             action=PostureAction.ROTATE_KEYS,
@@ -372,7 +373,7 @@ class TestConfirmationGate:
         assert pa.confirmed is False
         assert pa.action == PostureAction.ROTATE_KEYS
 
-    def test_confirmation_mode_queues_actions(self):
+    def test_confirmation_mode_queues_actions(self) -> None:
         controller = CryptoPostureController(
             confirmation_mode=True,
             grace_period=300.0,
@@ -387,7 +388,7 @@ class TestConfirmationGate:
         controller._pending_actions.append(pa)
         assert len(controller._pending_actions) == 1
 
-    def test_confirm_action(self):
+    def test_confirm_action(self) -> None:
         controller = CryptoPostureController(confirmation_mode=True)
         pa = PendingAction(
             action_id="test-2",
@@ -399,7 +400,7 @@ class TestConfirmationGate:
         result = controller.confirm_action("test-2")
         assert result is True
 
-    def test_reject_action(self):
+    def test_reject_action(self) -> None:
         controller = CryptoPostureController(confirmation_mode=True)
         pa = PendingAction(
             action_id="test-3",
@@ -412,23 +413,23 @@ class TestConfirmationGate:
         assert result is True
         assert len(controller._pending_actions) == 0
 
-    def test_reject_nonexistent_action_returns_false(self):
+    def test_reject_nonexistent_action_returns_false(self) -> None:
         controller = CryptoPostureController(confirmation_mode=True)
         result = controller.reject_action("nonexistent-id")
         assert result is False
 
-    def test_summary_includes_pending_actions(self):
+    def test_summary_includes_pending_actions(self) -> None:
         controller = CryptoPostureController(confirmation_mode=True)
         summary = controller.get_posture_summary()
         assert "pending_actions" in summary
         assert "confirmation_mode" in summary
 
-    def test_immediate_mode_executes_directly(self):
+    def test_immediate_mode_executes_directly(self) -> None:
         """Default (confirmation_mode=False) executes immediately."""
         controller = CryptoPostureController(confirmation_mode=False)
         assert controller.confirmation_mode is False
 
-    def test_reset_clears_pending_actions(self):
+    def test_reset_clears_pending_actions(self) -> None:
         controller = CryptoPostureController(confirmation_mode=True)
         pa = PendingAction(
             action_id="test-4",
@@ -449,7 +450,7 @@ class TestConfirmationGate:
 class TestPackageSchema:
     """Tests for the formal CryptoPackage schema."""
 
-    def test_schema_roundtrip(self):
+    def test_schema_roundtrip(self) -> None:
         from ama_cryptography.schemas.crypto_package_v1 import CryptoPackageSchemaV1
 
         pkg = CryptoPackageSchemaV1(
@@ -464,14 +465,14 @@ class TestPackageSchema:
         assert restored.algorithm == "ML_DSA_65"
         assert restored.schema_version == "1.0"
 
-    def test_schema_version_check(self):
+    def test_schema_version_check(self) -> None:
         from ama_cryptography.schemas.crypto_package_v1 import CryptoPackageSchemaV1
 
         bad_json = '{"schema_version": "99.0", "package_id": "test"}'
         with pytest.raises(ValueError, match="Unsupported schema version"):
             CryptoPackageSchemaV1.from_json(bad_json)
 
-    def test_integrity_hash(self):
+    def test_integrity_hash(self) -> None:
         from ama_cryptography.schemas.crypto_package_v1 import CryptoPackageSchemaV1
 
         pkg = CryptoPackageSchemaV1(package_id="test-pkg-2")
@@ -487,7 +488,7 @@ class TestPackageSchema:
 class TestMonitorIntegration:
     """Integration tests for the unified monitor with all new features."""
 
-    def test_nonce_tracking_via_monitor(self, tmp_path):
+    def test_nonce_tracking_via_monitor(self, tmp_path: Any) -> None:
         monitor = AmaCryptographyMonitor(
             enabled=True,
             nonce_persist_path=str(tmp_path / "nonces.dat"),
@@ -496,7 +497,7 @@ class TestMonitorIntegration:
         monitor.check_nonce(b"key1", b"\x00" * 12)  # reuse
         assert any(a["type"] == "nonce" for a in monitor.alerts)
 
-    def test_key_lifecycle_via_monitor(self, tmp_path):
+    def test_key_lifecycle_via_monitor(self, tmp_path: Any) -> None:
         monitor = AmaCryptographyMonitor(
             enabled=True,
             nonce_persist_path=str(tmp_path / "nonces.dat"),
@@ -512,7 +513,7 @@ class TestMonitorIntegration:
         )
         assert any(a["type"] == "key_lifecycle" for a in monitor.alerts)
 
-    def test_disabled_monitor_skips_all(self, tmp_path):
+    def test_disabled_monitor_skips_all(self, tmp_path: Any) -> None:
         monitor = AmaCryptographyMonitor(
             enabled=False,
             nonce_persist_path=str(tmp_path / "nonces.dat"),
