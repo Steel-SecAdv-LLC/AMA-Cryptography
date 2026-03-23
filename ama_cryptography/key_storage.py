@@ -62,7 +62,9 @@ def _encrypt_data(key: bytes, plaintext: bytes, aad: bytes = b"") -> Dict[str, b
     )
 
 
-def _decrypt_data(key: bytes, ciphertext: bytes, nonce: bytes, tag: bytes, aad: bytes = b"") -> bytes:
+def _decrypt_data(
+    key: bytes, ciphertext: bytes, nonce: bytes, tag: bytes, aad: bytes = b""
+) -> bytes:
     """Decrypt data with AES-256-GCM."""
     if _HAS_NATIVE:
         return native_aes256_gcm_decrypt(key, nonce, ciphertext, tag, aad)
@@ -115,9 +117,7 @@ class EncryptedKeyStore:
         # Derive wrapping key
         if passphrase is not None:
             self._salt = self._load_or_create_salt()
-            self._wrapping_key = _pbkdf2_derive(
-                passphrase.encode("utf-8"), self._salt
-            )
+            self._wrapping_key = _pbkdf2_derive(passphrase.encode("utf-8"), self._salt)
         else:
             self._salt = secrets.token_bytes(32)
             self._wrapping_key = secrets.token_bytes(32)
@@ -140,6 +140,7 @@ class EncryptedKeyStore:
             return
         try:
             import base64
+
             with open(self._store_path, "r") as f:
                 data = json.load(f)
             for key_id, entry in data.get("keys", {}).items():
@@ -157,9 +158,10 @@ class EncryptedKeyStore:
     def _save_store(self) -> None:
         """Save the encrypted keystore to disk."""
         import base64
-        data = {"version": 1, "keys": {}}
+
+        keys: dict[str, dict[str, object]] = {}
         for key_id, entry in self._keys.items():
-            data["keys"][key_id] = {
+            keys[key_id] = {
                 "encrypted": base64.b64encode(entry["encrypted"]).decode(),
                 "nonce": base64.b64encode(entry["nonce"]).decode(),
                 "tag": base64.b64encode(entry["tag"]).decode(),
@@ -167,6 +169,7 @@ class EncryptedKeyStore:
                 "created_at": entry.get("created_at", 0.0),
                 "metadata": entry.get("metadata", {}),
             }
+        data: dict[str, object] = {"version": 1, "keys": keys}
         with open(self._store_path, "w") as f:
             json.dump(data, f, indent=2)
 

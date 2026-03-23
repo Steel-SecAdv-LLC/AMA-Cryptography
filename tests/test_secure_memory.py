@@ -124,23 +124,39 @@ class TestSecureMemzero:
 
 
 class TestSecureMlock:
-    """Tests for memory locking functionality (raises NotImplementedError)."""
+    """Tests for memory locking functionality."""
 
-    def test_mlock_raises_not_implemented(self) -> None:
-        """secure_mlock raises NotImplementedError (libsodium removed)."""
-        from ama_cryptography.secure_memory import secure_mlock
+    def test_mlock_works_or_raises(self) -> None:
+        """secure_mlock succeeds on POSIX or raises SecureMemoryError."""
+        import sys
 
-        data = bytearray(4096)
-        with pytest.raises(NotImplementedError):
-            secure_mlock(data)
-
-    def test_munlock_raises_not_implemented(self) -> None:
-        """secure_munlock raises NotImplementedError (libsodium removed)."""
-        from ama_cryptography.secure_memory import secure_munlock
+        from ama_cryptography.secure_memory import SecureMemoryError, secure_mlock
 
         data = bytearray(4096)
-        with pytest.raises(NotImplementedError):
-            secure_munlock(data)
+        if sys.platform == "win32":
+            with pytest.raises(NotImplementedError):
+                secure_mlock(data)
+        else:
+            try:
+                secure_mlock(data)
+            except SecureMemoryError:
+                pass  # Expected in restricted environments (e.g. containers)
+
+    def test_munlock_works_or_raises(self) -> None:
+        """secure_munlock succeeds on POSIX or raises SecureMemoryError."""
+        import sys
+
+        from ama_cryptography.secure_memory import SecureMemoryError, secure_munlock
+
+        data = bytearray(4096)
+        if sys.platform == "win32":
+            with pytest.raises(NotImplementedError):
+                secure_munlock(data)
+        else:
+            try:
+                secure_munlock(data)
+            except SecureMemoryError:
+                pass  # Expected in restricted environments (e.g. containers)
 
 
 class TestConstantTimeCompare:

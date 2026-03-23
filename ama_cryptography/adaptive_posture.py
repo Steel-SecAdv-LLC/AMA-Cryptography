@@ -151,9 +151,7 @@ class PostureEvaluator:
         self._accumulated_score: float = 0.0
         self._evaluation_count: int = 0
         # Hysteresis state: track consecutive evaluations at each candidate level
-        self._consecutive_counts: Dict[ThreatLevel, int] = dict.fromkeys(
-            ThreatLevel, 0
-        )
+        self._consecutive_counts: Dict[ThreatLevel, int] = dict.fromkeys(ThreatLevel, 0)
         self._current_level: ThreatLevel = ThreatLevel.NOMINAL
 
     def evaluate(self, monitor_report: Dict[str, Any]) -> PostureEvaluation:
@@ -408,9 +406,7 @@ class CryptoPostureController:
             self.ALGORITHM_STRENGTH.items(), key=lambda x: x[1]
         )
         # Priority 5: Algorithm downgrade detection
-        self._highest_algorithm_reached: int = self.ALGORITHM_STRENGTH.get(
-            current_algorithm, 0
-        )
+        self._highest_algorithm_reached: int = self.ALGORITHM_STRENGTH.get(current_algorithm, 0)
         # Priority 12: Pending actions for confirmation gate
         self._pending_actions: List[PendingAction] = []
 
@@ -439,14 +435,19 @@ class CryptoPostureController:
             self._highest_algorithm_reached = current_strength
         if current_strength < self._highest_algorithm_reached:
             highest_name = next(
-                (k for k, v in self.ALGORITHM_STRENGTH.items()
-                 if v == self._highest_algorithm_reached),
+                (
+                    k
+                    for k, v in self.ALGORITHM_STRENGTH.items()
+                    if v == self._highest_algorithm_reached
+                ),
                 "unknown",
             )
             logger.critical(
                 "Algorithm downgrade detected: %s (strength %d) -> %s (strength %d)",
-                highest_name, self._highest_algorithm_reached,
-                self.current_algorithm, current_strength,
+                highest_name,
+                self._highest_algorithm_reached,
+                self.current_algorithm,
+                current_strength,
             )
 
         # Auto-execute expired pending actions (fail-safe)
@@ -469,13 +470,15 @@ class CryptoPostureController:
                     action_id=str(uuid.uuid4()),
                     action=evaluation.action,
                     reason=f"Threat level: {evaluation.threat_level.name}, "
-                           f"confidence: {evaluation.confidence:.2f}",
+                    f"confidence: {evaluation.confidence:.2f}",
                     timestamp=now,
                 )
                 self._pending_actions.append(pending)
                 logger.info(
                     "Action %s queued for confirmation (id=%s, grace_period=%.0fs)",
-                    evaluation.action.name, pending.action_id, self.grace_period,
+                    evaluation.action.name,
+                    pending.action_id,
+                    self.grace_period,
                 )
             else:
                 # Immediate execution (default behavior)
@@ -503,7 +506,8 @@ class CryptoPostureController:
             if (now - pa.timestamp) >= self.grace_period:
                 logger.warning(
                     "Auto-executing pending action %s (id=%s) after grace period expiry",
-                    pa.action.name, pa.action_id,
+                    pa.action.name,
+                    pa.action_id,
                 )
                 self._execute_action(pa.action)
             else:
@@ -539,9 +543,7 @@ class CryptoPostureController:
             True if action was found and cancelled, False if not found
         """
         original_len = len(self._pending_actions)
-        self._pending_actions = [
-            pa for pa in self._pending_actions if pa.action_id != action_id
-        ]
+        self._pending_actions = [pa for pa in self._pending_actions if pa.action_id != action_id]
         found = len(self._pending_actions) < original_len
         if found:
             logger.info("Rejected pending action (id=%s)", action_id)
@@ -560,12 +562,12 @@ class CryptoPostureController:
             reason: Human-readable justification for the downgrade
         """
         old_highest = self._highest_algorithm_reached
-        self._highest_algorithm_reached = self.ALGORITHM_STRENGTH.get(
-            self.current_algorithm, 0
-        )
+        self._highest_algorithm_reached = self.ALGORITHM_STRENGTH.get(self.current_algorithm, 0)
         logger.info(
             "Algorithm downgrade acknowledged: strength %d -> %d, reason: %s",
-            old_highest, self._highest_algorithm_reached, reason,
+            old_highest,
+            self._highest_algorithm_reached,
+            reason,
         )
 
     def _trigger_rotation(self) -> None:
@@ -675,7 +677,5 @@ class CryptoPostureController:
         self._rotation_count = 0
         self._switch_count = 0
         self._history.clear()
-        self._highest_algorithm_reached = self.ALGORITHM_STRENGTH.get(
-            self.current_algorithm, 0
-        )
+        self._highest_algorithm_reached = self.ALGORITHM_STRENGTH.get(self.current_algorithm, 0)
         self._pending_actions.clear()
