@@ -45,6 +45,19 @@ jobs:
         python -m pip install --upgrade pip setuptools wheel
         pip install -e ".[dev]"
 
+    - name: Verify module integrity digest is current
+      run: |
+        python -c "
+        from ama_cryptography._self_test import verify_module_integrity
+        ok, detail = verify_module_integrity()
+        if not ok:
+            raise SystemExit(
+                f'FATAL: Module integrity digest is stale or tampered: {detail}\n'
+                'Run: python -m ama_cryptography.integrity --update'
+            )
+        print(f'Module integrity: OK ({detail})')
+        "
+
     - name: Verify crypto backends are available
       run: |
         python -c "
