@@ -290,7 +290,10 @@ def secure_wipe(data: Union[bytes, bytearray]) -> None:
         data: Mutable bytearray to wipe (bytes objects are immutable)
     """
     if not isinstance(data, bytearray):
-        return  # Cannot wipe immutable bytes
+        raise TypeError(
+            f"secure_wipe() requires a mutable bytearray, got {type(data).__name__}. "
+            "Convert keys to bytearray before use: bytearray(key_bytes)"
+        )
 
     # Overwrite with zeros
     for i in range(len(data)):
@@ -943,9 +946,11 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
         return cast(bytes, tsr)
 
     except Exception as e:
-        _logger.warning("RFC 3161 timestamp failed: %s", e)
-        _logger.warning("Falling back to self-asserted timestamp")
-        return None
+        _logger.error("RFC 3161 timestamp request failed: %s", e)
+        raise RuntimeError(
+            f"RFC 3161 timestamp request failed: {e}. "
+            "Cannot fall back silently — timestamps are a security layer."
+        ) from e
 
 
 def verify_rfc3161_timestamp(
@@ -1043,8 +1048,11 @@ def verify_rfc3161_timestamp(
             return False
 
     except Exception as e:
-        _logger.warning("RFC 3161 timestamp verification failed: %s", e)
-        return False
+        _logger.error("RFC 3161 timestamp verification error: %s", e)
+        raise RuntimeError(
+            f"RFC 3161 timestamp verification encountered an error: {e}. "
+            "Cannot distinguish 'verification failed' from 'verification never ran'."
+        ) from e
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -1067,9 +1075,11 @@ def _verify_rfc3161_token(
 
     try:
         timestamp_token = base64.b64decode(timestamp_token_b64)
-        return verify_rfc3161_timestamp(content_hash, timestamp_token)
-    except Exception:
-        return False
+    except Exception as e:
+        raise ValueError(
+            f"Failed to decode base64 timestamp token: {e}"
+        ) from e
+    return verify_rfc3161_timestamp(content_hash, timestamp_token)
 
 
 # ============================================================================
@@ -1867,10 +1877,12 @@ def _verify_timestamp_value(timestamp_str: str) -> bool:
     """Verify timestamp is reasonable (not future, not older than 10 years)."""
     try:
         ts = datetime.fromisoformat(timestamp_str)
-        now = datetime.now(timezone.utc)
-        return ts <= now and (now - ts).days < 3650
-    except Exception:
-        return False
+    except (ValueError, TypeError) as e:
+        raise ValueError(
+            f"Invalid timestamp format '{timestamp_str}': {e}"
+        ) from e
+    now = datetime.now(timezone.utc)
+    return ts <= now and (now - ts).days < 3650
 
 
 def _verify_dilithium_with_policy(
@@ -1924,11 +1936,11 @@ def _verify_dilithium_with_policy(
             bytes.fromhex(package.dilithium_signature),
             bytes.fromhex(package.dilithium_pubkey),
         )
-    except QuantumSignatureUnavailableError:
+    except QuantumSignatureUnavailableError as e:
         if require_quantum_signatures:
             raise QuantumSignatureRequiredError(
                 "Quantum signatures required but Dilithium libraries unavailable"
-            )
+            ) from e
         return None
 
     if monitor and start_time is not None:
@@ -2078,11 +2090,11 @@ def verify_crypto_package(
     except QuantumSignatureRequiredError:
         raise
     except Exception as e:
-        # Log unexpected errors but don't fail silently - mark affected checks as False
-        # This maintains fail-closed security while providing diagnostic information
-        logging.getLogger(__name__).warning(
+        # Propagate unexpected errors — crypto verification must not swallow failures
+        logging.getLogger(__name__).error(
             f"Unexpected error during crypto package verification: {e}"
         )
+        raise
 
     return results
 

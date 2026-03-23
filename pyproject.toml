@@ -135,9 +135,7 @@ ignore = []  # Do not add ignores without a comment explaining why.
 #   RUF001/RUF002/RUF003: Unicode symbols in docstrings/comments (σ, ✓, etc.)
 #   S101: assert used in internal validation
 #   S106/S107: hardcoded defaults for optional password parameters
-#   S110: bare except:pass in optional-feature fallback paths
 #   E501: long lines in crypto constant definitions
-#   B904: raise-without-from in chained exception handlers (existing pattern)
 #   B028: no-explicit-stacklevel in warnings (existing pattern)
 #   RUF012: mutable class defaults (dataclass pattern)
 #   N818: exception naming convention (existing names)
@@ -145,12 +143,14 @@ ignore = []  # Do not add ignores without a comment explaining why.
 #   RUF010: explicit f-string type conversion (existing pattern)
 #   RUF022: unsorted __all__ (existing order is logical, not alphabetical)
 #   RUF100: unused noqa directives (will be cleaned separately)
+# SECURITY: S110 (bare except:pass) and B904 (raise-without-from) are NOT
+# suppressed — crypto code must propagate exceptions with full context.
 "ama_cryptography/*" = [
     "N803", "N806", "N818",
     "RUF001", "RUF002", "RUF003", "RUF010", "RUF012", "RUF022", "RUF100",
-    "S101", "S106", "S107", "S110",
+    "S101", "S106", "S107",
     "E402", "E501",
-    "B028", "B904",
+    "B028",
     "UP006", "UP015", "UP035",  # UP006/UP035: deprecated typing imports (existing pattern)
 ]
 # code_guardian_secure.py — same crypto patterns as ama_cryptography/
@@ -158,12 +158,14 @@ ignore = []  # Do not add ignores without a comment explaining why.
 #   E402: module-level imports after sys.path manipulation
 #   S310/S603: URL open and subprocess calls in security tooling
 #   UP012: unnecessary UTF-8 encoding argument
+# SECURITY: S110 (bare except:pass) and B904 (raise-without-from) are NOT
+# suppressed — crypto code must propagate exceptions with full context.
 "code_guardian_secure.py" = [
     "N803", "N806", "N818",
     "RUF001", "RUF002", "RUF003", "RUF010", "RUF012", "RUF022", "RUF100",
-    "S101", "S106", "S107", "S110",
+    "S101", "S106", "S107",
     "E402", "E501",
-    "B028", "B904",
+    "B028",
     "S310", "S603",
     "UP006", "UP007", "UP012", "UP015", "UP035", "UP045",
 ]
@@ -255,11 +257,11 @@ follow_imports = "skip"
 module = "ama_cryptography.hmac_binding"
 ignore_missing_imports = true
 
-# ama_cryptography/ and ama_cryptography_monitor — cannot modify source;
-# relax generic-type-arg and untyped-decorator checks for existing code.
+# ama_cryptography_monitor — production monitoring, relax generic-type-arg.
+# NOTE: ama_cryptography.* is NOT relaxed — crypto modules must maintain
+# strict type safety. Fix type errors instead of suppressing them.
 [[tool.mypy.overrides]]
 module = [
-    "ama_cryptography.*",
     "ama_cryptography_monitor",
 ]
 disallow_any_generics = false
@@ -307,7 +309,9 @@ filterwarnings = [
     "error",
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",
-    "ignore::UserWarning",
+    # UserWarning is NOT suppressed — security warnings from crypto operations
+    # must surface during testing. If a test emits a UserWarning, it should
+    # either be fixed or explicitly expected via pytest.warns().
     "default::ama_cryptography.key_management.SecurityWarning",
 ]
 
@@ -328,7 +332,9 @@ exclude_lines = [
     "pragma: no cover",
     "def __repr__",
     "raise AssertionError",
-    "raise NotImplementedError",
+    # NOTE: raise NotImplementedError is NOT excluded — unimplemented code
+    # (e.g. secure_mlock, secure_munlock) must show as a coverage gap so
+    # it's visible, not hidden.
     "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",
     "if typing.TYPE_CHECKING:",

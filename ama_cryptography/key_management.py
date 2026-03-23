@@ -996,10 +996,10 @@ class HSMKeyStorage:
             import PyKCS11
 
             return PyKCS11
-        except ImportError:
+        except ImportError as e:
             raise ImportError(
                 "HSM support requires PyKCS11. Install with: pip install ama-cryptography[hsm]"
-            )
+            ) from e
 
     def _resolve_library_path(self, hsm_type: str, library_path: Optional[str]) -> str:
         """Resolve PKCS#11 library path for the given HSM type."""
@@ -1026,7 +1026,7 @@ class HSMKeyStorage:
             lib.load(self.library_path)
             return lib
         except self.pkcs11.PyKCS11Error as e:
-            raise RuntimeError(f"Failed to load PKCS#11 library: {e}")
+            raise RuntimeError(f"Failed to load PKCS#11 library: {e}") from e
 
     def _find_token_slot(self, token_label: str, slot_index: Optional[int]) -> Any:
         """Find the HSM token slot by label or index."""
@@ -1057,7 +1057,7 @@ class HSMKeyStorage:
                 self.slot, self.pkcs11.CKF_SERIAL_SESSION | self.pkcs11.CKF_RW_SESSION
             )
         except self.pkcs11.PyKCS11Error as e:
-            raise RuntimeError(f"Failed to open HSM session: {e}")
+            raise RuntimeError(f"Failed to open HSM session: {e}") from e
 
     def _login(self, pin: Optional[str], token_label: str) -> None:
         """Login to the HSM session."""
@@ -1071,8 +1071,8 @@ class HSMKeyStorage:
         except self.pkcs11.PyKCS11Error as e:
             self.session.closeSession()
             if "CKR_PIN_INCORRECT" in str(e):
-                raise RuntimeError("Invalid PIN")
-            raise RuntimeError(f"HSM login failed: {e}")
+                raise RuntimeError("Invalid PIN") from e
+            raise RuntimeError(f"HSM login failed: {e}") from e
 
     def generate_aes_key(
         self,
@@ -1120,7 +1120,7 @@ class HSMKeyStorage:
             handle = self.session.generateKey(self.pkcs11.Mechanism(CKM.AES_KEY_GEN), template)
             return cast(bytes, handle.to_bytes(8, "big"))
         except self.pkcs11.PyKCS11Error as e:
-            raise RuntimeError(f"Failed to generate AES key: {e}")
+            raise RuntimeError(f"Failed to generate AES key: {e}") from e
 
     def find_key(self, key_label: str) -> Optional[bytes]:
         """
@@ -1168,7 +1168,7 @@ class HSMKeyStorage:
 
             return nonce, ciphertext, tag
         except self.pkcs11.PyKCS11Error as e:
-            raise RuntimeError(f"HSM encryption failed: {e}")
+            raise RuntimeError(f"HSM encryption failed: {e}") from e
 
     def decrypt(
         self,
@@ -1200,8 +1200,10 @@ class HSMKeyStorage:
             return plaintext
         except self.pkcs11.PyKCS11Error as e:
             if "CKR_ENCRYPTED_DATA_INVALID" in str(e):
-                raise RuntimeError("Decryption failed: authentication tag mismatch (data tampered)")
-            raise RuntimeError(f"HSM decryption failed: {e}")
+                raise RuntimeError(
+                    "Decryption failed: authentication tag mismatch (data tampered)"
+                ) from e
+            raise RuntimeError(f"HSM decryption failed: {e}") from e
 
     def delete_key(self, key_handle: bytes) -> bool:
         """
@@ -1223,15 +1225,17 @@ class HSMKeyStorage:
         if hasattr(self, "_logged_in") and self._logged_in:
             try:
                 self.session.logout()
-            except Exception:  # nosec B110 — best-effort cleanup in __del__; no recovery possible
-                pass
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning("HSM logout failed during cleanup: %s", e)
             self._logged_in = False
 
         if hasattr(self, "session"):
             try:
                 self.session.closeSession()
-            except Exception:  # nosec B110 — best-effort cleanup in __del__; no recovery possible
-                pass
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning("HSM session close failed during cleanup: %s", e)
 
     def __enter__(self) -> "HSMKeyStorage":
         return self
