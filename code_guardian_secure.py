@@ -899,7 +899,16 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
         tsa_url: TSA server URL (default: FreeTSA)
 
     Returns:
-        RFC 3161 timestamp token (DER-encoded), or None if TSA unavailable
+        RFC 3161 timestamp token (DER-encoded).
+
+    Raises:
+        RuntimeError: If the TSA request fails (network error, timeout, TSA
+            rejection, etc.). Timestamps are a security boundary — failures
+            are never silently swallowed.
+
+    Note:
+        Returns None only for invalid URL schemes (non-http/https) or if
+        OpenSSL ts-query construction fails before the TSA request.
     """
     if tsa_url is None:
         tsa_url = "https://freetsa.org/tsr"
@@ -1076,9 +1085,7 @@ def _verify_rfc3161_token(
     try:
         timestamp_token = base64.b64decode(timestamp_token_b64)
     except Exception as e:
-        raise ValueError(
-            f"Failed to decode base64 timestamp token: {e}"
-        ) from e
+        raise ValueError(f"Failed to decode base64 timestamp token: {e}") from e
     return verify_rfc3161_timestamp(content_hash, timestamp_token)
 
 
@@ -1874,13 +1881,18 @@ def create_crypto_package(  # noqa: C901 - high-level orchestrator; refactor wou
 
 
 def _verify_timestamp_value(timestamp_str: str) -> bool:
-    """Verify timestamp is reasonable (not future, not older than 10 years)."""
+    """Verify timestamp is reasonable (not future, not older than 10 years).
+
+    Returns:
+        True if timestamp is within acceptable range.
+
+    Raises:
+        ValueError: If timestamp_str cannot be parsed as ISO 8601.
+    """
     try:
         ts = datetime.fromisoformat(timestamp_str)
     except (ValueError, TypeError) as e:
-        raise ValueError(
-            f"Invalid timestamp format '{timestamp_str}': {e}"
-        ) from e
+        raise ValueError(f"Invalid timestamp format '{timestamp_str}': {e}") from e
     now = datetime.now(timezone.utc)
     return ts <= now and (now - ts).days < 3650
 
@@ -2015,9 +2027,9 @@ def verify_crypto_package(
             is missing, invalid, or cannot be verified.
 
     Note:
-        This function catches all exceptions internally and returns False for
-        failed verifications rather than raising exceptions. This provides
-        clean failure semantics for security-critical code paths.
+        Expected verification failures are reflected in the returned results dict.
+        Unexpected errors are logged and re-raised — crypto verification must not
+        swallow exceptions that could indicate a corrupted or tampered state.
 
     .. deprecated::
         Use :func:`ama_cryptography.crypto_api.verify_crypto_package` instead.

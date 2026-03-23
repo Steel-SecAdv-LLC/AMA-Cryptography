@@ -49,10 +49,13 @@ def _pyca_available() -> bool:
         return True
     except Exception:
         return False
-    except BaseException as exc:
-        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+    except:  # catches pyo3_runtime.PanicException (BaseException subclass)
+        import sys
+
+        _exc = sys.exc_info()[1]
+        if isinstance(_exc, (KeyboardInterrupt, SystemExit)):
             raise
-        if type(exc).__name__ == "PanicException":
+        if _exc is not None and type(_exc).__name__ == "PanicException":
             return False
         raise
 

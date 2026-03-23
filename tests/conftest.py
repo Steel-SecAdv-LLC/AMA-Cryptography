@@ -35,8 +35,15 @@ import pytest
 
 _CI = os.environ.get("CI", "").lower() in ("true", "1", "yes")
 _BACKEND_SKIP_REASONS = (
-    "dilithium", "kyber", "sphincs", "backend", "native",
-    "aes", "ed25519", "x25519", "argon2",
+    "dilithium",
+    "kyber",
+    "sphincs",
+    "backend",
+    "native",
+    "aes",
+    "ed25519",
+    "x25519",
+    "argon2",
 )
 
 
@@ -45,36 +52,30 @@ def _is_backend_skip(marker: Any) -> bool:
     reason = ""
     if hasattr(marker, "kwargs"):
         reason = marker.kwargs.get("reason", "")
-    if hasattr(marker, "args") and len(marker.args) > 1:
-        reason = str(marker.args[1]) if not reason else reason
+    if hasattr(marker, "args") and len(marker.args) > 1 and not reason:
+        reason = str(marker.args[1])
     return any(kw in reason.lower() for kw in _BACKEND_SKIP_REASONS)
 
 
-def pytest_collection_modifyitems(config: Any, items: Any) -> None:
-    """In CI, convert crypto-backend skipif markers to hard failures."""
+@pytest.hookimpl(hookwrapper=True)  # type: ignore[misc]
+def pytest_runtest_makereport(item: Any, call: Any) -> Any:
+    """In CI, convert any backend-related skip into a hard failure."""
+    outcome = yield
     if not _CI:
         return
-    for item in items:
-        new_markers = []
+    rep = outcome.get_result()
+    if rep.skipped:
         for marker in item.iter_markers("skipif"):
             if _is_backend_skip(marker):
-                # The condition is True when the backend is NOT available.
-                # In CI, this must be a failure, not a silent skip.
-                condition = marker.args[0] if marker.args else False
-                if condition:
-                    reason = marker.kwargs.get("reason", "unknown backend")
-                    item.add_marker(
-                        pytest.mark.xfail(
-                            reason=f"CI FAILURE: {reason} — backends must be available in CI",
-                            strict=True,
-                            run=False,
-                        )
-                    )
-                    # Remove the skipif so it doesn't skip before xfail triggers
-                    continue
-            new_markers.append(marker)
-        # Re-apply non-backend markers (we can't remove markers directly,
-        # but xfail with strict=True + run=False will cause failure)
+                reason = marker.kwargs.get("reason", "backend unavailable")
+                rep.outcome = "failed"
+                rep.longrepr = (
+                    f"CI FAILURE: {reason} — "
+                    "all cryptographic backends must be available in CI. "
+                    "The C library must be built before running tests."
+                )
+                break
+
 
 # =============================================================================
 # TEMPORARY DIRECTORY FIXTURES
