@@ -16,13 +16,11 @@ Author/Inventor: Andrew E. A.
 """
 
 import hashlib
-import hmac
 import json
 import logging
-import os
 import secrets
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 

@@ -58,7 +58,7 @@ import ctypes
 import os
 from contextlib import contextmanager
 from types import TracebackType
-from typing import Any, Callable, Dict, Generator, NoReturn, Optional, Type, Union
+from typing import Any, Callable, Dict, Generator, Optional, Type, Union
 
 
 class SecureMemoryError(Exception):
@@ -151,33 +151,50 @@ def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
     """
     Lock memory region to prevent swapping to disk.
 
-    Uses ama_secure_mlock from the native C library if available.
-    Falls back to ctypes mlock on POSIX systems.
+    Uses the native C library or POSIX mlock on the caller's actual buffer.
+    For bytes objects (immutable), operates on the object's internal buffer
+    via ctypes address extraction — no copy is made.
 
     Args:
-        data: Memory region to lock
+        data: Memory region to lock (bytearray recommended for mutability)
 
     Raises:
         NotImplementedError: If no native backend available and not on POSIX
     """
+    import ctypes
+
+    size = len(data)
+    if size == 0:
+        return
+
+    # Get a ctypes pointer to the actual buffer (no copy)
+    if isinstance(data, bytearray):
+        ptr = (ctypes.c_char * size).from_buffer(data)
+        addr = ctypes.addressof(ptr)
+    elif isinstance(data, memoryview):
+        buf = (ctypes.c_char * size).from_buffer(data)
+        addr = ctypes.addressof(buf)
+    else:
+        # bytes: immutable, use id-based address (CPython implementation detail)
+        # offset past PyBytesObject header to the ob_sval buffer
+        addr = id(data) + bytes.__basicsize__ - 1  # noqa: E501 — CPython ob_sval offset
+
     try:
         from ama_cryptography.pqc_backends import _native_lib
         if _native_lib is not None and hasattr(_native_lib, "ama_secure_mlock"):
-            import ctypes
-            buf = (ctypes.c_char * len(data)).from_buffer_copy(data)
-            _native_lib.ama_secure_mlock(buf, len(data))
+            _native_lib.ama_secure_mlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+            _native_lib.ama_secure_mlock(ctypes.c_void_p(addr), size)
             return
     except (ImportError, AttributeError):
         pass
 
-    # POSIX fallback via ctypes
-    import ctypes
+    # POSIX fallback
     import ctypes.util
     try:
         libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
         if hasattr(libc, "mlock"):
-            buf = ctypes.c_char_p(bytes(data))
-            libc.mlock(buf, len(data))
+            libc.mlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+            libc.mlock(ctypes.c_void_p(addr), size)
             return
     except (OSError, AttributeError):
         pass
@@ -191,33 +208,46 @@ def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
     """
     Unlock previously locked memory region.
 
-    Uses ama_secure_munlock from the native C library if available.
-    Falls back to ctypes munlock on POSIX systems.
+    Uses the native C library or POSIX munlock on the caller's actual buffer.
 
     Args:
-        data: Memory region to unlock
+        data: Memory region to unlock (bytearray recommended for mutability)
 
     Raises:
         NotImplementedError: If no native backend available and not on POSIX
     """
+    import ctypes
+
+    size = len(data)
+    if size == 0:
+        return
+
+    # Get a ctypes pointer to the actual buffer (no copy)
+    if isinstance(data, bytearray):
+        ptr = (ctypes.c_char * size).from_buffer(data)
+        addr = ctypes.addressof(ptr)
+    elif isinstance(data, memoryview):
+        buf = (ctypes.c_char * size).from_buffer(data)
+        addr = ctypes.addressof(buf)
+    else:
+        addr = id(data) + bytes.__basicsize__ - 1
+
     try:
         from ama_cryptography.pqc_backends import _native_lib
         if _native_lib is not None and hasattr(_native_lib, "ama_secure_munlock"):
-            import ctypes
-            buf = (ctypes.c_char * len(data)).from_buffer_copy(data)
-            _native_lib.ama_secure_munlock(buf, len(data))
+            _native_lib.ama_secure_munlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+            _native_lib.ama_secure_munlock(ctypes.c_void_p(addr), size)
             return
     except (ImportError, AttributeError):
         pass
 
-    # POSIX fallback via ctypes
-    import ctypes
+    # POSIX fallback
     import ctypes.util
     try:
         libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
         if hasattr(libc, "munlock"):
-            buf = ctypes.c_char_p(bytes(data))
-            libc.munlock(buf, len(data))
+            libc.munlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+            libc.munlock(ctypes.c_void_p(addr), size)
             return
     except (OSError, AttributeError):
         pass

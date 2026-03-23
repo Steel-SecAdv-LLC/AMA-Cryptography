@@ -49,16 +49,14 @@ AI Co-Architects:
 import ast
 import cmath
 import hashlib
-import inspect
-import json
 import logging
 import math
 import os
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional, Set, Tuple
+from typing import Any, ClassVar, Deque, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -490,10 +488,12 @@ class NonceTracker:
             logger.warning("Failed to load nonce tracker persistence: %s", e)
 
     def _persist_entry(self, key_id_hash: str, nonce_hex: str) -> None:
-        """Append a single entry to the persistence file."""
+        """Append a single entry to the persistence file with fsync for durability."""
         try:
             with open(self._persist_path, "a") as f:
                 f.write(f"{key_id_hash},{nonce_hex}\n")
+                f.flush()
+                os.fsync(f.fileno())
         except Exception as e:
             logger.warning("Failed to persist nonce entry: %s", e)
 
@@ -569,7 +569,7 @@ class ResonanceTimingMonitor:
     """
 
     # Priority 8: Default operation-specific anomaly profiles
-    DEFAULT_ANOMALY_PROFILES: Dict[str, Dict[str, Any]] = {
+    DEFAULT_ANOMALY_PROFILES: ClassVar[Dict[str, Dict[str, Any]]] = {
         "ed25519_sign": {"threshold_sigma": 2.0, "normalize_by_size": False},
         "ed25519_verify": {"threshold_sigma": 2.0, "normalize_by_size": False},
         "dilithium_sign": {"threshold_sigma": 5.0, "normalize_by_size": False},
@@ -624,7 +624,8 @@ class ResonanceTimingMonitor:
         self._incremental_stats: Dict[str, IncrementalStats] = {}
         self._ewma_stats: Dict[str, EWMAStats] = {}
         # Priority 6: Pairwise timing ratio matrix for cross-operation correlation
-        self._ratio_baselines: Dict[Tuple[str, str], Tuple[float, float]] = {}  # (mean_ratio, std_ratio)
+        # (mean_ratio, std_ratio) per operation pair
+        self._ratio_baselines: Dict[Tuple[str, str], Tuple[float, float]] = {}
         self._ratio_samples: Dict[Tuple[str, str], List[float]] = {}
         # Priority 7: Frozen baselines for drift detection
         self._frozen_baselines: Dict[str, Tuple[float, float]] = {}  # (frozen_mean, frozen_std)
@@ -731,7 +732,8 @@ class ResonanceTimingMonitor:
         if self.use_ewma and self._ewma_stats[operation].is_anomaly_mad(effective_duration):
             is_anomaly = True
 
-        # Priority 7: Drift detection
+        # Priority 7: Drift detection (does NOT preempt Z-score/MAD — both reported)
+        drift_anomaly: Optional[TimingAnomaly] = None
         if (sample_count > 30 and
                 sample_count % self.drift_check_interval == 0 and
                 operation in self._frozen_baselines):
@@ -739,7 +741,7 @@ class ResonanceTimingMonitor:
             if frozen_std > 0:
                 drift = abs(mean - frozen_mean) / frozen_std
                 if drift > 2.0:
-                    return TimingAnomaly(
+                    drift_anomaly = TimingAnomaly(
                         operation=operation,
                         expected_ms=frozen_mean,
                         observed_ms=mean,
@@ -749,8 +751,9 @@ class ResonanceTimingMonitor:
                     )
 
         # Priority 6: Cross-operation timing correlation
-        self._update_timing_ratios(operation, mean)
+        cross_op_anomaly = self._update_timing_ratios(operation, mean)
 
+        # Return the most severe anomaly found (point > drift > cross-op)
         if is_anomaly:
             CRITICAL_THRESHOLD = 5.0
             severity = (
@@ -764,6 +767,12 @@ class ResonanceTimingMonitor:
                 severity=severity,
                 timestamp=time.time(),
             )
+
+        if drift_anomaly is not None:
+            return drift_anomaly
+
+        if cross_op_anomaly is not None:
+            return cross_op_anomaly
 
         return None
 
@@ -1169,13 +1178,13 @@ class RefactoringAnalyzer:
     """
 
     # Priority 9: Crypto module files to monitor for integrity
-    CRYPTO_MODULES = [
+    CRYPTO_MODULES: ClassVar[List[str]] = [
         "crypto_api.py",
         "key_management.py",
         "pqc_backends.py",
         "adaptive_posture.py",
     ]
-    MONITOR_MODULE = "ama_cryptography_monitor.py"
+    MONITOR_MODULE: ClassVar[str] = "ama_cryptography_monitor.py"
 
     def __init__(self) -> None:
         """Initialize analyzer with empty cache and integrity baselines."""
@@ -1537,7 +1546,10 @@ class AmaCryptographyMonitor:
             return
         anomalies = self.patterns.monitor_key_usage(key_metadata)
         for anomaly in anomalies:
-            self.alerts.append({"type": "key_lifecycle", "anomaly": anomaly, "timestamp": time.time()})
+            self.alerts.append({
+                "type": "key_lifecycle", "anomaly": anomaly,
+                "timestamp": time.time(),
+            })
             self._prune_alerts()
 
     def verify_runtime_integrity(self) -> Dict[str, Any]:
@@ -1556,13 +1568,21 @@ class AmaCryptographyMonitor:
         for v in integrity_violations:
             self.alerts.append({
                 "type": "integrity_violation",
-                "anomaly": {"file": v.file_path, "expected": v.expected_hash, "actual": v.actual_hash},
+                "anomaly": {
+                    "file": v.file_path,
+                    "expected": v.expected_hash,
+                    "actual": v.actual_hash,
+                },
                 "timestamp": time.time(),
             })
         for v in import_violations:
             self.alerts.append({
                 "type": "import_hijack",
-                "anomaly": {"module": v.module_name, "expected": v.expected_path, "actual": v.actual_path},
+                "anomaly": {
+                    "module": v.module_name,
+                    "expected": v.expected_path,
+                    "actual": v.actual_path,
+                },
                 "timestamp": time.time(),
             })
         self._prune_alerts()

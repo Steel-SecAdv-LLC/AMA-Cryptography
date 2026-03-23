@@ -151,9 +151,9 @@ class PostureEvaluator:
         self._accumulated_score: float = 0.0
         self._evaluation_count: int = 0
         # Hysteresis state: track consecutive evaluations at each candidate level
-        self._consecutive_counts: Dict[ThreatLevel, int] = {
-            level: 0 for level in ThreatLevel
-        }
+        self._consecutive_counts: Dict[ThreatLevel, int] = dict.fromkeys(
+            ThreatLevel, 0
+        )
         self._current_level: ThreatLevel = ThreatLevel.NOMINAL
 
     def evaluate(self, monitor_report: Dict[str, Any]) -> PostureEvaluation:
@@ -324,7 +324,7 @@ class PostureEvaluator:
         """Reset accumulated score state."""
         self._accumulated_score = 0.0
         self._evaluation_count = 0
-        self._consecutive_counts = {level: 0 for level in ThreatLevel}
+        self._consecutive_counts = dict.fromkeys(ThreatLevel, 0)
         self._current_level = ThreatLevel.NOMINAL
 
 
@@ -536,13 +536,18 @@ class CryptoPostureController:
             action_id: The ID of the pending action to reject
 
         Returns:
-            True if action was found and cancelled, False otherwise
+            True if action was found and cancelled, False if not found
         """
+        original_len = len(self._pending_actions)
         self._pending_actions = [
             pa for pa in self._pending_actions if pa.action_id != action_id
         ]
-        logger.info("Rejected pending action (id=%s)", action_id)
-        return True
+        found = len(self._pending_actions) < original_len
+        if found:
+            logger.info("Rejected pending action (id=%s)", action_id)
+        else:
+            logger.warning("Attempted to reject unknown action (id=%s)", action_id)
+        return found
 
     def acknowledge_downgrade(self, reason: str) -> None:
         """

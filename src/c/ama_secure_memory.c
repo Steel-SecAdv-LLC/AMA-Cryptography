@@ -11,7 +11,7 @@
  * Provides a C-backed SecureBuffer that:
  * - Uses mlock() to prevent paging to swap
  * - Uses madvise(MADV_DONTDUMP) to prevent core dump leakage
- * - Guarantees zeroization on deallocation via volatile memset
+ * - Guarantees zeroization on deallocation via ama_secure_memzero()
  *
  * AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
  */
@@ -28,17 +28,8 @@
 #include <unistd.h>
 #endif
 
-/**
- * @brief Guaranteed-zeroize memory (compiler cannot optimize away).
- *
- * Uses volatile function pointer to prevent dead-store elimination.
- */
-static void ama_secure_memzero(void *ptr, size_t len) {
-    volatile unsigned char *p = (volatile unsigned char *)ptr;
-    while (len--) {
-        *p++ = 0;
-    }
-}
+/* ama_secure_memzero() is declared in ama_cryptography.h and implemented
+ * in ama_consttime.c — we use it here, not redefine it. */
 
 /**
  * @brief Lock memory pages to prevent swapping.
@@ -100,7 +91,7 @@ AMA_API void *ama_secure_alloc(size_t size) {
     void *ptr = malloc(size);
     if (!ptr) return NULL;
 
-    /* Zero the buffer */
+    /* Zero the buffer using existing ama_secure_memzero */
     ama_secure_memzero(ptr, size);
 
     /* Lock in memory */

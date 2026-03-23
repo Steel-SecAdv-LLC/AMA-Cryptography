@@ -16,7 +16,6 @@ These tests are optional — they only run if the reference libraries
 are installed.
 """
 
-import os
 import secrets
 
 import pytest
@@ -33,8 +32,7 @@ except ImportError:
 
 # Check for pycryptodome
 try:
-    from Crypto.Cipher import AES as PyCryptoAES
-    from Crypto.Cipher import ChaCha20_Poly1305 as PyCryptoChaCha
+    from Crypto.Cipher import AES as PyCryptoAES  # noqa: N811
     HAS_PYCRYPTODOME = True
 except ImportError:
     HAS_PYCRYPTODOME = False
@@ -147,7 +145,7 @@ class TestAMASelfConsistency:
 
         ct, tag = native_aes256_gcm_encrypt(key1, nonce, plaintext, b"")
 
-        with pytest.raises(Exception):
+        with pytest.raises((ValueError, RuntimeError)):
             native_aes256_gcm_decrypt(key2, nonce, ct, tag, b"")
 
     def test_aes_gcm_tampered_ciphertext_fails(self):
@@ -165,5 +163,5 @@ class TestAMASelfConsistency:
         tampered = bytearray(ct)
         tampered[0] ^= 0xFF
 
-        with pytest.raises(Exception):
+        with pytest.raises((ValueError, RuntimeError)):
             native_aes256_gcm_decrypt(key, nonce, bytes(tampered), tag, b"")
