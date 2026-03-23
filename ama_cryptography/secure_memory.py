@@ -181,6 +181,7 @@ def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
 
     try:
         from ama_cryptography.pqc_backends import _native_lib
+
         if _native_lib is not None and hasattr(_native_lib, "ama_secure_mlock"):
             _native_lib.ama_secure_mlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
             _native_lib.ama_secure_mlock(ctypes.c_void_p(addr), size)
@@ -190,18 +191,25 @@ def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
 
     # POSIX fallback
     import ctypes.util
+
     try:
         libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
         if hasattr(libc, "mlock"):
             libc.mlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-            libc.mlock(ctypes.c_void_p(addr), size)
+            libc.mlock.restype = ctypes.c_int
+            ret = libc.mlock(ctypes.c_void_p(addr), size)
+            if ret != 0:
+                errno = ctypes.get_errno()
+                raise SecureMemoryError(
+                    f"mlock failed with errno {errno}: " f"{os.strerror(errno)}"
+                )
             return
+    except SecureMemoryError:
+        raise
     except (OSError, AttributeError):
         pass
 
-    raise NotImplementedError(
-        "secure_mlock requires the AMA native C library or a POSIX system."
-    )
+    raise NotImplementedError("secure_mlock requires the AMA native C library or a POSIX system.")
 
 
 def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
@@ -234,6 +242,7 @@ def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
 
     try:
         from ama_cryptography.pqc_backends import _native_lib
+
         if _native_lib is not None and hasattr(_native_lib, "ama_secure_munlock"):
             _native_lib.ama_secure_munlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
             _native_lib.ama_secure_munlock(ctypes.c_void_p(addr), size)
@@ -243,18 +252,25 @@ def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
 
     # POSIX fallback
     import ctypes.util
+
     try:
         libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
         if hasattr(libc, "munlock"):
             libc.munlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-            libc.munlock(ctypes.c_void_p(addr), size)
+            libc.munlock.restype = ctypes.c_int
+            ret = libc.munlock(ctypes.c_void_p(addr), size)
+            if ret != 0:
+                errno = ctypes.get_errno()
+                raise SecureMemoryError(
+                    f"munlock failed with errno {errno}: " f"{os.strerror(errno)}"
+                )
             return
+    except SecureMemoryError:
+        raise
     except (OSError, AttributeError):
         pass
 
-    raise NotImplementedError(
-        "secure_munlock requires the AMA native C library or a POSIX system."
-    )
+    raise NotImplementedError("secure_munlock requires the AMA native C library or a POSIX system.")
 
 
 def constant_time_compare(a: bytes, b: bytes) -> bool:

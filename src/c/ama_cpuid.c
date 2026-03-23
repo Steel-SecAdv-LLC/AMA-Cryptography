@@ -12,7 +12,8 @@
  * - x86: CPUID leaf 1 for AES-NI (ECX[25]) and PCLMULQDQ (ECX[1])
  * - ARM: getauxval(AT_HWCAP) on Linux, sysctlbyname on macOS
  *
- * All detection results are cached after first invocation.
+ * All detection results are cached after first invocation using atomic
+ * flag variables to prevent data races in multithreaded use.
  * The dispatch function ama_select_aead() logs the selection once at init.
  *
  * AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
@@ -20,6 +21,30 @@
 
 #include "../include/ama_cpuid.h"
 #include <stdio.h>
+
+/*
+ * Thread-safety: We use C11 stdatomic where available, falling back to
+ * compiler intrinsics on MSVC. The cached values themselves are written
+ * before the flag is set (release), and read after the flag is checked
+ * (acquire), establishing a happens-before relationship.
+ */
+#if !defined(_MSC_VER) && defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L \
+    && !defined(__STDC_NO_ATOMICS__)
+#include <stdatomic.h>
+#define AMA_ATOMIC_INT  _Atomic int
+#define AMA_ATOMIC_LOAD(p) atomic_load_explicit(&(p), memory_order_acquire)
+#define AMA_ATOMIC_STORE(p, v) atomic_store_explicit(&(p), (v), memory_order_release)
+#elif defined(_MSC_VER)
+#include <intrin.h>
+#define AMA_ATOMIC_INT  volatile long
+#define AMA_ATOMIC_LOAD(p) _InterlockedCompareExchange(&(p), 0, 0)
+#define AMA_ATOMIC_STORE(p, v) _InterlockedExchange(&(p), (v))
+#else
+/* Best-effort fallback: volatile prevents caching in registers */
+#define AMA_ATOMIC_INT  volatile int
+#define AMA_ATOMIC_LOAD(p) (p)
+#define AMA_ATOMIC_STORE(p, v) ((p) = (v))
+#endif
 
 /* ============================================================================
  * x86 CPUID Detection
@@ -33,13 +58,15 @@
 #include <cpuid.h>
 #endif
 
-static int cpuid_detected = 0;
+static AMA_ATOMIC_INT cpuid_detected = 0;
 static int has_aes_ni_cached = 0;
 static int has_pclmulqdq_cached = 0;
 
 static void detect_x86_features(void) {
-    if (cpuid_detected) return;
+    if (AMA_ATOMIC_LOAD(cpuid_detected)) return;
 
+    /* Cached values are set before the flag — benign if two threads
+     * both execute this block (idempotent CPUID reads). */
 #ifdef _MSC_VER
     int info[4];
     __cpuid(info, 1);
@@ -52,7 +79,7 @@ static void detect_x86_features(void) {
         has_pclmulqdq_cached = (ecx >> 1) & 1;
     }
 #endif
-    cpuid_detected = 1;
+    AMA_ATOMIC_STORE(cpuid_detected, 1);
 }
 
 int ama_has_aes_ni(void) {
@@ -74,7 +101,7 @@ int ama_has_arm_pmull(void) { return 0; }
 
 #elif defined(__aarch64__) || defined(_M_ARM64)
 
-static int arm_detected = 0;
+static AMA_ATOMIC_INT arm_detected = 0;
 static int has_arm_aes_cached = 0;
 static int has_arm_pmull_cached = 0;
 
@@ -88,11 +115,11 @@ static int has_arm_pmull_cached = 0;
 #endif
 
 static void detect_arm_features(void) {
-    if (arm_detected) return;
+    if (AMA_ATOMIC_LOAD(arm_detected)) return;
     unsigned long hwcap = getauxval(AT_HWCAP);
     has_arm_aes_cached = (hwcap & HWCAP_AES) ? 1 : 0;
     has_arm_pmull_cached = (hwcap & HWCAP_PMULL) ? 1 : 0;
-    arm_detected = 1;
+    AMA_ATOMIC_STORE(arm_detected, 1);
 }
 
 #elif defined(__APPLE__)
@@ -100,7 +127,7 @@ static void detect_arm_features(void) {
 #include <sys/sysctl.h>
 
 static void detect_arm_features(void) {
-    if (arm_detected) return;
+    if (AMA_ATOMIC_LOAD(arm_detected)) return;
     /* Apple Silicon (M1+) always has AES and PMULL */
     int val = 0;
     size_t len = sizeof(val);
@@ -117,15 +144,15 @@ static void detect_arm_features(void) {
     } else {
         has_arm_pmull_cached = 1;
     }
-    arm_detected = 1;
+    AMA_ATOMIC_STORE(arm_detected, 1);
 }
 
 #else
 static void detect_arm_features(void) {
-    if (arm_detected) return;
+    if (AMA_ATOMIC_LOAD(arm_detected)) return;
     has_arm_aes_cached = 0;
     has_arm_pmull_cached = 0;
-    arm_detected = 1;
+    AMA_ATOMIC_STORE(arm_detected, 1);
 }
 #endif
 
@@ -159,11 +186,11 @@ int ama_has_arm_pmull(void) { return 0; }
  * AEAD Backend Selection (Runtime Dispatch)
  * ============================================================================ */
 
-static int dispatch_done = 0;
+static AMA_ATOMIC_INT dispatch_done = 0;
 static ama_aead_backend_t selected_backend = AMA_AEAD_CHACHA20_POLY1305;
 
 ama_aead_backend_t ama_select_aead(void) {
-    if (dispatch_done) return selected_backend;
+    if (AMA_ATOMIC_LOAD(dispatch_done)) return selected_backend;
 
     if ((ama_has_aes_ni() && ama_has_pclmulqdq()) ||
         (ama_has_arm_aes() && ama_has_arm_pmull())) {
@@ -180,7 +207,7 @@ ama_aead_backend_t ama_select_aead(void) {
             ama_has_aes_ni(), ama_has_pclmulqdq(),
             ama_has_arm_aes(), ama_has_arm_pmull());
 
-    dispatch_done = 1;
+    AMA_ATOMIC_STORE(dispatch_done, 1);
     return selected_backend;
 }
 

@@ -93,21 +93,38 @@ class TestSecureMemoryImplementation:
         # All bytes should be zero
         assert all(b == 0 for b in data)
 
-    def test_mlock_raises_not_implemented(self) -> None:
-        """secure_mlock raises NotImplementedError (libsodium removed)."""
-        from ama_cryptography.secure_memory import secure_mlock
+    def test_mlock_works_or_raises(self) -> None:
+        """secure_mlock succeeds on POSIX or raises SecureMemoryError on permission error."""
+        import sys
+
+        from ama_cryptography.secure_memory import SecureMemoryError, secure_mlock
 
         data = bytearray(100)
-        with pytest.raises(NotImplementedError, match="libsodium"):
-            secure_mlock(data)
+        if sys.platform == "win32":
+            with pytest.raises(NotImplementedError):
+                secure_mlock(data)
+        else:
+            # On POSIX: succeeds or raises SecureMemoryError (e.g. EPERM in containers)
+            try:
+                secure_mlock(data)
+            except SecureMemoryError:
+                pass  # Expected in restricted environments
 
-    def test_munlock_raises_not_implemented(self) -> None:
-        """secure_munlock raises NotImplementedError (libsodium removed)."""
-        from ama_cryptography.secure_memory import secure_munlock
+    def test_munlock_works_or_raises(self) -> None:
+        """secure_munlock succeeds on POSIX or raises SecureMemoryError on permission error."""
+        import sys
+
+        from ama_cryptography.secure_memory import SecureMemoryError, secure_munlock
 
         data = bytearray(100)
-        with pytest.raises(NotImplementedError, match="libsodium"):
-            secure_munlock(data)
+        if sys.platform == "win32":
+            with pytest.raises(NotImplementedError):
+                secure_munlock(data)
+        else:
+            try:
+                secure_munlock(data)
+            except SecureMemoryError:
+                pass  # Expected in restricted environments
 
 
 class TestSecureMemoryGetStatus:

@@ -57,7 +57,9 @@ class TestPostureEvaluator:
         """Score crossing elevated threshold triggers INCREASE_MONITORING."""
         # escalation_count=1 to test threshold behavior without hysteresis delay
         evaluator = PostureEvaluator(
-            elevated_threshold=0.1, high_threshold=0.5, critical_threshold=0.9,
+            elevated_threshold=0.1,
+            high_threshold=0.5,
+            critical_threshold=0.9,
             escalation_count=1,
         )
         # Feed enough timing anomalies to cross elevated but not high

@@ -102,68 +102,80 @@ class TestKeyLifecycleEnforcement:
 
     def test_key_usage_warning_at_75_percent(self):
         monitor = RecursionPatternMonitor()
-        anomalies = monitor.monitor_key_usage({
-            "key_id": "test-key",
-            "status": "ACTIVE",
-            "usage_count": 750,
-            "max_usage": 1000,
-            "expires_at": None,
-        })
+        anomalies = monitor.monitor_key_usage(
+            {
+                "key_id": "test-key",
+                "status": "ACTIVE",
+                "usage_count": 750,
+                "max_usage": 1000,
+                "expires_at": None,
+            }
+        )
         assert any(a["type"] == "key_usage_warning" for a in anomalies)
 
     def test_key_usage_critical_at_90_percent(self):
         monitor = RecursionPatternMonitor()
-        anomalies = monitor.monitor_key_usage({
-            "key_id": "test-key",
-            "status": "ACTIVE",
-            "usage_count": 950,
-            "max_usage": 1000,
-            "expires_at": None,
-        })
+        anomalies = monitor.monitor_key_usage(
+            {
+                "key_id": "test-key",
+                "status": "ACTIVE",
+                "usage_count": 950,
+                "max_usage": 1000,
+                "expires_at": None,
+            }
+        )
         assert any(a["type"] == "key_usage_critical" for a in anomalies)
 
     def test_expired_key_detected(self):
         monitor = RecursionPatternMonitor()
-        anomalies = monitor.monitor_key_usage({
-            "key_id": "test-key",
-            "status": "ACTIVE",
-            "usage_count": 10,
-            "max_usage": 1000,
-            "expires_at": time.time() - 3600,  # expired 1 hour ago
-        })
+        anomalies = monitor.monitor_key_usage(
+            {
+                "key_id": "test-key",
+                "status": "ACTIVE",
+                "usage_count": 10,
+                "max_usage": 1000,
+                "expires_at": time.time() - 3600,  # expired 1 hour ago
+            }
+        )
         assert any(a["type"] == "key_expired" for a in anomalies)
 
     def test_revoked_key_detected(self):
         monitor = RecursionPatternMonitor()
-        anomalies = monitor.monitor_key_usage({
-            "key_id": "test-key",
-            "status": "REVOKED",
-            "usage_count": 10,
-            "max_usage": 1000,
-            "expires_at": None,
-        })
+        anomalies = monitor.monitor_key_usage(
+            {
+                "key_id": "test-key",
+                "status": "REVOKED",
+                "usage_count": 10,
+                "max_usage": 1000,
+                "expires_at": None,
+            }
+        )
         assert any(a["type"] == "key_status_violation" for a in anomalies)
 
     def test_deprecated_key_detected(self):
         monitor = RecursionPatternMonitor()
-        anomalies = monitor.monitor_key_usage({
-            "key_id": "test-key",
-            "status": "DEPRECATED",
-            "usage_count": 10,
-            "max_usage": None,
-            "expires_at": None,
-        })
+        anomalies = monitor.monitor_key_usage(
+            {
+                "key_id": "test-key",
+                "status": "DEPRECATED",
+                "usage_count": 10,
+                "max_usage": None,
+                "expires_at": None,
+            }
+        )
         assert any(a["type"] == "key_status_violation" for a in anomalies)
 
     def test_active_key_no_anomaly(self):
         monitor = RecursionPatternMonitor()
-        anomalies = monitor.monitor_key_usage({
-            "key_id": "test-key",
-            "status": "ACTIVE",
-            "usage_count": 10,
-            "max_usage": 1000,
-            "expires_at": time.time() + 86400,
-        })
+        anomalies = monitor.monitor_key_usage(
+            {
+                "key_id": "test-key",
+                "status": "ACTIVE",
+                "usage_count": 10,
+                "max_usage": 1000,
+                "expires_at": time.time() + 86400,
+            }
+        )
         assert len(anomalies) == 0
 
 
@@ -489,13 +501,15 @@ class TestMonitorIntegration:
             enabled=True,
             nonce_persist_path=str(tmp_path / "nonces.dat"),
         )
-        monitor.monitor_key_lifecycle({
-            "key_id": "test-key",
-            "status": "REVOKED",
-            "usage_count": 10,
-            "max_usage": 1000,
-            "expires_at": None,
-        })
+        monitor.monitor_key_lifecycle(
+            {
+                "key_id": "test-key",
+                "status": "REVOKED",
+                "usage_count": 10,
+                "max_usage": 1000,
+                "expires_at": None,
+            }
+        )
         assert any(a["type"] == "key_lifecycle" for a in monitor.alerts)
 
     def test_disabled_monitor_skips_all(self, tmp_path):

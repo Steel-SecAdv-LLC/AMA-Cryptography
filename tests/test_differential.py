@@ -26,6 +26,7 @@ try:
         _AES_GCM_NATIVE_AVAILABLE,
         _native_lib,
     )
+
     HAS_AMA_NATIVE = _native_lib is not None and _AES_GCM_NATIVE_AVAILABLE
 except ImportError:
     HAS_AMA_NATIVE = False
@@ -33,6 +34,7 @@ except ImportError:
 # Check for pycryptodome
 try:
     from Crypto.Cipher import AES as PyCryptoAES  # noqa: N811
+
     HAS_PYCRYPTODOME = True
 except ImportError:
     HAS_PYCRYPTODOME = False
@@ -41,6 +43,7 @@ except ImportError:
 try:
     import nacl.signing
     import nacl.utils
+
     HAS_PYNACL = True
 except ImportError:
     HAS_PYNACL = False
