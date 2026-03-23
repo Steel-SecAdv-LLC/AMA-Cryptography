@@ -1721,7 +1721,10 @@ class CryptoPackage:
     ethical_hash: str  # SHA3-256 hash of ethical vector (hex)
     quantum_signatures_enabled: bool = True  # False if Dilithium unavailable
     signature_format_version: str = SIGNATURE_FORMAT_V2  # Signature binding format
-    hash_format_version: str = HASH_FORMAT_V2  # Hash encoding version (v1: no invariants)
+    hash_format_version: str = (
+        HASH_FORMAT_V1  # Default to V1 for backward-compatible deserialization;
+    )
+    # new packages explicitly set V2 in create_crypto_package()
 
 
 def create_crypto_package(  # noqa: C901 - high-level orchestrator; refactor would be invasive
