@@ -1,7 +1,7 @@
 # CSRC Alignment Report — NIST ACVP Vector Validation
 
 **Version:** 2.2
-**Date:** 2026-03-18 (updated)
+**Date:** 2026-03-21 (updated)
 **Organization:** Steel Security Advisors LLC
 **Author:** Andrew E. A.
 
@@ -204,13 +204,14 @@ marshaling overhead. The Cython path compiles to C and calls
 expanded key (seed||pk) instead of discarding it. `ed25519_sign()` detects
 64-byte keys and skips redundant SHA-512 expansion + point multiplication.
 
-Post-fix benchmark results (this environment):
-- HMAC-SHA3-256: 262,200 ops/sec (0.004 ms) — Cython binding to native C
-- Ed25519 KeyGen: 3,407 ops/sec (0.29 ms)
-- Ed25519 Sign: 3,361 ops/sec (0.30 ms) — up from ~1,700 pre-fix
-- Ed25519 Verify: 1,851 ops/sec (0.54 ms)
-- ML-DSA-65 Sign: 238 ops/sec (4.20 ms)
-- ML-DSA-65 Verify: 624 ops/sec (1.60 ms)
+Post-fix benchmark results (2026-03-21, native C backend, 4-core Linux):
+- HMAC-SHA3-256: 206,010 ops/sec (0.005 ms) — native C via ctypes
+- Ed25519 KeyGen: 19,388 ops/sec (0.052 ms) — radix 2^51 field arithmetic
+- Ed25519 Sign: 18,657 ops/sec (0.054 ms) — expanded-key fast path
+- Ed25519 Verify: 9,702 ops/sec (0.103 ms)
+- ML-DSA-65 KeyGen: 5,536 ops/sec (0.181 ms)
+- ML-DSA-65 Sign: 3,639 ops/sec (0.275 ms)
+- ML-DSA-65 Verify: 6,490 ops/sec (0.154 ms)
 - SLH-DSA Sign: ~1.4 ops/sec (~741 ms) — consistent with SHA2-256f fast variant
 - SLH-DSA Verify: ~53 ops/sec (~19 ms)
 
@@ -306,3 +307,90 @@ python3 nist_vectors/run_vectors.py
 ```
 
 Results are written to `nist_vectors/results.json`.
+
+---
+
+## Section 4 — Design Alignment with FIPS 140-3 Level 1 Requirements (Pending Future CMVP Validation)
+
+> **Important:** The controls in this section represent design alignment with FIPS 140-3 Security Level 1 technical requirements. This implementation has **NOT** been submitted for CMVP validation and is **NOT** FIPS 140-3 certified. These controls are implemented as a step toward future formal validation.
+
+**Date:** 2026-03-21
+**Implementation:** `ama_cryptography/_self_test.py`, `ama_cryptography/integrity.py`
+
+### 4.1 Power-On Self-Tests (POST)
+
+The module runs Known Answer Tests at import time (`_run_self_tests()` called
+from `ama_cryptography/__init__.py`). The following KATs execute on every module
+load:
+
+| Algorithm | KAT Type | Vector Source |
+|-----------|----------|---------------|
+| SHA3-256 | Fixed hash of empty string | FIPS 202 reference |
+| HMAC-SHA3-256 | Determinism + output length | RFC 2104 with SHA3-256 |
+| AES-256-GCM | Encrypt/decrypt roundtrip | Fixed key/nonce/plaintext |
+| ML-KEM-1024 | Keygen + encaps + decaps roundtrip | Runtime generated |
+| ML-DSA-65 | Keygen + sign + verify roundtrip + negative test | Runtime generated |
+| SLH-DSA (SPHINCS+) | Keygen + sign + verify roundtrip | Runtime generated |
+| Ed25519 | Keygen + sign + verify roundtrip | Runtime generated |
+| RNG | Two consecutive `secrets.token_bytes(32)` non-equality | Runtime |
+
+**POST Budget:** All self-tests complete in <300ms (measured ~260ms on
+4-core Linux), well within the 500ms budget.
+
+### 4.2 Module Integrity Verification
+
+At startup, SHA3-256 is computed over all `.py` files in the
+`ama_cryptography/` package directory. The digest is compared against a
+stored known-good value in `ama_cryptography/_integrity_digest.txt`.
+
+To regenerate after legitimate code changes:
+
+```bash
+python -m ama_cryptography.integrity --update
+```
+
+To verify:
+
+```bash
+python -m ama_cryptography.integrity --verify
+```
+
+### 4.3 Error State Machine
+
+The module maintains one of three states:
+
+| State | Meaning | Crypto Operations |
+|-------|---------|-------------------|
+| `SELF_TEST` | POST in progress | Blocked |
+| `OPERATIONAL` | All tests passed | Allowed |
+| `ERROR` | A test or check failed | Blocked — raises `CryptoModuleError` |
+
+Query state: `ama_cryptography.module_status()` → `"OPERATIONAL"` | `"ERROR"` | `"SELF_TEST"`
+
+Recovery: `ama_cryptography.reset_module()` re-runs all self-tests.
+
+### 4.4 Pairwise Consistency Tests
+
+The library provides helper functions (`pairwise_test_signature()`,
+`pairwise_test_kem()`) that perform a sign-verify or encaps-decaps
+roundtrip on a fixed test message. Callers (e.g. key-generation wrappers)
+are responsible for invoking these helpers after generating a keypair.
+On failure, the module enters ERROR state and the caller should discard
+the keypair. Covered algorithms:
+
+- Ed25519: sign + verify
+- ML-DSA-65: sign + verify
+- ML-KEM-1024: encaps + decaps
+
+These helpers do **not** automatically intercept every key generation;
+they must be called explicitly by application code or wrapper functions.
+
+### 4.5 Continuous RNG Test
+
+`secure_token_bytes(n)` wraps `secrets.token_bytes(n)` with a comparison
+to the previous output. If two consecutive calls return identical bytes,
+the module enters ERROR state immediately. This is aligned with the
+continuous random number generator testing described in FIPS 140-3
+Section 4.9.2.
+
+> **Note:** This is a design-aligned implementation, not a CMVP-validated module. See Section 3 of `CSRC_STANDARDS.md` for full compliance status.

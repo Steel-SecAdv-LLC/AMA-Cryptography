@@ -45,7 +45,48 @@ jobs:
         python -m pip install --upgrade pip setuptools wheel
         pip install -e ".[dev]"
 
+    - name: Verify module integrity digest is current
+      run: |
+        python -c "
+        from ama_cryptography._self_test import verify_module_integrity
+        ok, detail = verify_module_integrity()
+        if not ok:
+            raise SystemExit(
+                f'FATAL: Module integrity digest is stale or tampered: {detail}\n'
+                'Run: python -m ama_cryptography.integrity --update'
+            )
+        print(f'Module integrity: OK ({detail})')
+        "
+
+    - name: Verify crypto backends are available
+      run: |
+        python -c "
+        from ama_cryptography.pqc_backends import (
+            DILITHIUM_AVAILABLE, KYBER_AVAILABLE, SPHINCS_AVAILABLE,
+            _ED25519_NATIVE_AVAILABLE, _AES_GCM_NATIVE_AVAILABLE,
+        )
+        backends = {
+            'Dilithium': DILITHIUM_AVAILABLE,
+            'Kyber': KYBER_AVAILABLE,
+            'SPHINCS+': SPHINCS_AVAILABLE,
+            'AES-GCM native': _AES_GCM_NATIVE_AVAILABLE,
+            'Ed25519 native': _ED25519_NATIVE_AVAILABLE,
+        }
+        missing = [name for name, avail in backends.items() if not avail]
+        for name, avail in backends.items():
+            status = 'OK' if avail else 'MISSING'
+            print(f'  {name}: {status}')
+        if missing:
+            raise SystemExit(
+                f'FATAL: Crypto backends not available in CI: {missing}. '
+                'The C library must be built before running tests.'
+            )
+        print('All crypto backends verified.')
+        "
+
     - name: Run pytest test suite
+      env:
+        AMA_CI_REQUIRE_BACKENDS: "1"
       run: |
         python -m pytest tests/ -v --tb=short --no-cov
 
@@ -164,13 +205,12 @@ jobs:
 
     - name: Upload Bandit report
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
-      if: always()
+      if: success()
       with:
         name: bandit-security-report
         path: bandit-report.json
 
     - name: Semgrep security scan
-      if: always()
       continue-on-error: false
       run: |
         python -m pip install semgrep==1.74.0
@@ -178,7 +218,7 @@ jobs:
 
     - name: Upload Semgrep report
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
-      if: always()
+      if: success()
       with:
         name: semgrep-security-report
         path: semgrep-report.json
@@ -219,7 +259,7 @@ jobs:
 
     - name: Upload benchmark results
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
-      if: always()
+      if: success()
       with:
         name: benchmark-results
         path: |
@@ -260,7 +300,7 @@ jobs:
 
     - name: Upload timing analysis results
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
-      if: always()
+      if: success()
       with:
         name: constant-time-results
         path: tools/constant_time/

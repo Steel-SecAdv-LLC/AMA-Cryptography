@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, ClassVar, Dict, List, Optional, Tuple, Union
 
+from ama_cryptography._self_test import check_operational as _check_operational
 from ama_cryptography.pqc_backends import (
     DILITHIUM_AVAILABLE,
     DILITHIUM_BACKEND,
@@ -1030,30 +1031,35 @@ class AmaCryptography:
 
     def generate_keypair(self) -> KeyPair:
         """Generate cryptographic keypair"""
+        _check_operational()
         if isinstance(self.provider, AESGCMProvider):
             raise TypeError("AES-256-GCM does not support keypair generation")
         return self.provider.generate_keypair()
 
     def sign(self, message: bytes, secret_key: bytes) -> Signature:
         """Sign a message"""
+        _check_operational()
         if not isinstance(self.provider, CryptoProvider):
             raise TypeError("Current algorithm does not support signing")
         return self.provider.sign(message, secret_key)
 
     def verify(self, message: bytes, signature: bytes, public_key: bytes) -> bool:
         """Verify a signature"""
+        _check_operational()
         if not isinstance(self.provider, CryptoProvider):
             raise TypeError("Current algorithm does not support verification")
         return self.provider.verify(message, signature, public_key)
 
     def encapsulate(self, public_key: bytes) -> EncapsulatedSecret:
         """Encapsulate a shared secret (KEM)"""
+        _check_operational()
         if not isinstance(self.provider, KEMProvider):
             raise TypeError("Current algorithm does not support KEM")
         return self.provider.encapsulate(public_key)
 
     def decapsulate(self, ciphertext: bytes, secret_key: bytes) -> bytes:
         """Decapsulate a shared secret (KEM)"""
+        _check_operational()
         if not isinstance(self.provider, KEMProvider):
             raise TypeError("Current algorithm does not support KEM")
         return self.provider.decapsulate(ciphertext, secret_key)
@@ -1356,7 +1362,9 @@ def create_crypto_package(
     Raises:
         TypeError: If content is not bytes
         ValueError: If content is empty
+        CryptoModuleError: If the module is not in OPERATIONAL state
     """
+    _check_operational()
     # Input validation
     if not isinstance(content, bytes):
         raise TypeError(f"content must be bytes, got {type(content).__name__}")
@@ -1464,11 +1472,10 @@ def create_crypto_package(
             )
             timestamp_token = timestamp_result.token
         except TimestampError as e:
-            warnings.warn(
-                f"Failed to obtain RFC 3161 timestamp: {str(e)}. " "Continuing without timestamp.",
-                category=UserWarning,
-            )
-            timestamp_token = None
+            raise TimestampError(
+                f"RFC 3161 timestamp is required when include_timestamp=True, "
+                f"but the timestamp request failed: {e}"
+            ) from e
 
     # Build metadata
     metadata: Dict[str, Any] = {
@@ -1515,6 +1522,7 @@ def verify_crypto_package(
         >>> verification = verify_crypto_package(b"Hello", result)
         >>> print(f"Primary valid: {verification['primary']}")
     """
+    _check_operational()
     results: Dict[str, bool] = {}
 
     # Verify content hash

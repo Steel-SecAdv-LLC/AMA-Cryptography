@@ -1272,9 +1272,52 @@ cmake .. \
 - **RFC 3161:** https://datatracker.ietf.org/doc/html/rfc3161
 - **Ed25519:** https://ed25519.cr.yp.to/
 
+### Self-Test Behavior (Aligned with FIPS 140-3 Level 1 Requirements)
+
+AMA Cryptography implements technical controls aligned with FIPS 140-3 Security Level 1 requirements (pending future CMVP validation):
+
+**Power-On Self-Tests (POST):** When `import ama_cryptography` runs, the module
+automatically executes Known Answer Tests for all approved algorithms (SHA3-256,
+HMAC-SHA3-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65, SLH-DSA, Ed25519) plus
+a module integrity check and RNG health test. This takes ~260ms.
+
+**Module State:** After POST, the module is in one of three states:
+- `OPERATIONAL` — all tests passed, crypto operations allowed
+- `ERROR` — a test failed, all crypto operations raise `CryptoModuleError`
+- `SELF_TEST` — tests in progress (transient)
+
+Check state: `ama_cryptography.module_status()`
+
+**Error Recovery:** Call `ama_cryptography.reset_module()` to re-run all
+self-tests. If they pass, the module returns to OPERATIONAL.
+
+**Integrity Digest:** The module's source files are hashed at startup and
+compared to a stored digest. After legitimate code changes, regenerate:
+
+```bash
+python -m ama_cryptography.integrity --update
+```
+
+Verify the module integrity digest (runs POST as part of normal import):
+
+```bash
+python -m ama_cryptography.integrity --verify
+```
+
+**Continuous RNG Test:** Use `ama_cryptography.secure_token_bytes(n)` instead
+of `secrets.token_bytes(n)` for random byte generation with continuous health
+testing. This wrapper detects consecutive identical outputs and enters ERROR
+state if the RNG fails.
+
+> **Note:** This implementation has NOT been submitted for CMVP validation and is NOT FIPS 140-3 certified. These controls represent design alignment with FIPS 140-3 Level 1 technical requirements.
+
+**Pairwise Consistency Tests:** Functions `pairwise_test_signature()` and
+`pairwise_test_kem()` in `ama_cryptography._self_test` can be called after
+any key generation to verify the keypair is consistent.
+
 ### Contact
 
-**Steel Security Advisors LLC**  
+**Steel Security Advisors LLC**
 Email: steel.sa.llc@gmail.com
 
 **Author/Inventor:** Andrew E. A.

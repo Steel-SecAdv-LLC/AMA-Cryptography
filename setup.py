@@ -51,7 +51,7 @@ except ImportError:
     np = None
 
 # Configuration
-VERSION = "2.0"
+VERSION = "2.1"
 USE_CYTHON = CYTHON_AVAILABLE and not os.getenv("AMA_NO_CYTHON")
 USE_C_EXTENSIONS = not os.getenv("AMA_NO_C_EXTENSIONS")
 DEBUG = bool(os.getenv("AMA_DEBUG"))
@@ -199,10 +199,14 @@ class CMakeBuild(build_ext):
         # Check if CMake is available
         try:
             subprocess.check_output(["cmake", "--version"])
-        except OSError:
-            print("WARNING: CMake not found. C library will not be built.")
-            print("         Python-only mode will be used.")
-            return
+        except OSError as e:
+            raise RuntimeError(
+                "FATAL: CMake not found. The native C library is required for "
+                "cryptographic operations. Install CMake before building:\n"
+                "  Ubuntu/Debian: sudo apt-get install cmake\n"
+                "  macOS:         brew install cmake\n"
+                "  Windows:       choco install cmake"
+            ) from e
 
         # Build C library with CMake
         build_directory = Path("build").absolute()
@@ -240,21 +244,28 @@ class CMakeBuild(build_ext):
             # Build
             subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=str(build_directory))
         except subprocess.CalledProcessError as e:
-            print(f"WARNING: CMake build failed: {e}")
-            print("         Continuing with Python-only installation.")
-            print("         C extensions will not be available.")
-            # Don't re-raise - allow installation to continue
-            return
+            raise RuntimeError(
+                f"FATAL: CMake build failed: {e}\n"
+                "The native C library is required for cryptographic operations. "
+                "A Python-only install would have no PQC crypto and no clear indication."
+            ) from e
 
         # Continue with Python extension build (Cython, if available).
         # Tolerate failure — the native C library (built above by cmake) is
         # the primary backend; Cython math extensions are optional.
+        # Build Python extensions (Cython bindings). These are optional —
+        # the native C library (built above by CMake) is the primary backend.
         try:
             super().run()
         except Exception as e:
-            print(f"WARNING: Python extension build failed: {e}")
-            print("         Cython math extensions will not be available.")
-            print("         Native C library was built successfully by CMake.")
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Cython extension build failed: %s. "
+                "Native C library was built successfully by CMake — "
+                "Cython math extensions are optional.",
+                e,
+            )
 
 
 # Package configuration

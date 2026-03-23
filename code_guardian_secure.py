@@ -290,7 +290,10 @@ def secure_wipe(data: Union[bytes, bytearray]) -> None:
         data: Mutable bytearray to wipe (bytes objects are immutable)
     """
     if not isinstance(data, bytearray):
-        return  # Cannot wipe immutable bytes
+        raise TypeError(
+            f"secure_wipe() requires a mutable bytearray, got {type(data).__name__}. "
+            "Convert keys to bytearray before use: bytearray(key_bytes)"
+        )
 
     # Overwrite with zeros
     for i in range(len(data)):
@@ -304,6 +307,15 @@ def secure_wipe(data: Union[bytes, bytearray]) -> None:
     for i in range(len(data)):
         data[i] = 0
 
+
+# ============================================================================
+# HASH FORMAT VERSIONING
+# ============================================================================
+# v1 (original): encode("CODE", codes, "HELIX", helix_parts...)
+# v2 (2.1+):     encode("CODE", codes, "HELIX", helix_parts...,
+#                       "HELIX_INVARIANT", invariants)
+HASH_FORMAT_V1 = "1"
+HASH_FORMAT_V2 = "2"
 
 # ============================================================================
 # CANONICAL ENCODING WITH LENGTH-PREFIXING
@@ -374,7 +386,11 @@ def length_prefixed_encode(*fields: str) -> bytes:
     return encoded
 
 
-def canonical_hash_code(codes: str, helix_params: List[Tuple[float, float]]) -> bytes:
+def canonical_hash_code(
+    codes: str,
+    helix_params: List[Tuple[float, float]],
+    hash_version: str = HASH_FORMAT_V2,
+) -> bytes:
     """
     Compute collision-resistant hash with proper domain separation.
 
@@ -393,14 +409,19 @@ def canonical_hash_code(codes: str, helix_params: List[Tuple[float, float]]) -> 
     1. Omni-Codes encoded with "CODE" domain tag
     2. Helix parameters encoded with "HELIX" domain tag
     3. Each parameter tuple formatted as "radius:pitch"
-    4. Length-prefixed encoding prevents concatenation attacks
+    4. Computed helix geometric invariants encoded with "HELIX_INVARIANT" domain tag
+       - Curvature: κ = r / (r² + c²)
+       - Torsion:   τ = c / (r² + c²)
+       - Serialized as "κ:.10f:τ:.10f" per (r, c) pair
+    5. Length-prefixed encoding prevents concatenation attacks
 
     Security Proof:
     ---------------
     Given two distinct inputs (D₁, H₁) and (D₂, H₂):
 
     If D₁ ≠ D₂ or H₁ ≠ H₂, then:
-        - encode("CODE", D₁, "HELIX", ...) ≠ encode("CODE", D₂, "HELIX", ...)
+        - encode("CODE", D₁, "HELIX", ..., "HELIX_INVARIANT", ...) ≠
+          encode("CODE", D₂, "HELIX", ..., "HELIX_INVARIANT", ...)
         - By SHA3-256 collision resistance:
         - P(hash(input₁) = hash(input₂)) ≤ 2^-128
 
@@ -439,10 +460,31 @@ def canonical_hash_code(codes: str, helix_params: List[Tuple[float, float]]) -> 
             )
 
     # Convert helix parameters to canonical string format
-    helix_strs = [f"{r:.10f}:{p:.10f}" for r, p in helix_params]
+    helix_parts = [f"{r:.10f}:{c:.10f}" for r, c in helix_params]
 
-    # Create length-prefixed encoding with domain tags
-    encoded = length_prefixed_encode("CODE", codes, "HELIX", *helix_strs)
+    if hash_version == HASH_FORMAT_V1:
+        # v1 (original): no geometric invariants — backward-compatible with
+        # packages created before v2.1.
+        encoded = length_prefixed_encode("CODE", codes, "HELIX", *helix_parts)
+    else:
+        # v2 (current): include geometric invariants for stronger binding.
+        # Curvature κ = r / (r² + c²), Torsion τ = c / (r² + c²)
+        invariant_parts = []
+        for r, c in helix_params:
+            denom = r * r + c * c
+            if denom == 0.0:
+                invariant_parts.append("0.0000000000:0.0000000000")
+            else:
+                invariant_parts.append(f"{r / denom:.10f}:{c / denom:.10f}")
+
+        encoded = length_prefixed_encode(
+            "CODE",
+            codes,
+            "HELIX",
+            *helix_parts,
+            "HELIX_INVARIANT",
+            "|".join(invariant_parts),
+        )
 
     # Compute SHA3-256 hash
     return hashlib.sha3_256(encoded).digest()
@@ -857,7 +899,16 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
         tsa_url: TSA server URL (default: FreeTSA)
 
     Returns:
-        RFC 3161 timestamp token (DER-encoded), or None if TSA unavailable
+        RFC 3161 timestamp token (DER-encoded).
+
+    Raises:
+        RuntimeError: If the TSA request fails (network error, timeout, TSA
+            rejection, etc.). Timestamps are a security boundary — failures
+            are never silently swallowed.
+
+    Note:
+        Returns None only for invalid URL schemes (non-http/https) or if
+        OpenSSL ts-query construction fails before the TSA request.
     """
     if tsa_url is None:
         tsa_url = "https://freetsa.org/tsr"
@@ -904,9 +955,11 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
         return cast(bytes, tsr)
 
     except Exception as e:
-        _logger.warning("RFC 3161 timestamp failed: %s", e)
-        _logger.warning("Falling back to self-asserted timestamp")
-        return None
+        _logger.error("RFC 3161 timestamp request failed: %s", e)
+        raise RuntimeError(
+            f"RFC 3161 timestamp request failed: {e}. "
+            "Cannot fall back silently — timestamps are a security layer."
+        ) from e
 
 
 def verify_rfc3161_timestamp(
@@ -1004,8 +1057,11 @@ def verify_rfc3161_timestamp(
             return False
 
     except Exception as e:
-        _logger.warning("RFC 3161 timestamp verification failed: %s", e)
-        return False
+        _logger.error("RFC 3161 timestamp verification error: %s", e)
+        raise RuntimeError(
+            f"RFC 3161 timestamp verification encountered an error: {e}. "
+            "Cannot distinguish 'verification failed' from 'verification never ran'."
+        ) from e
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -1028,9 +1084,9 @@ def _verify_rfc3161_token(
 
     try:
         timestamp_token = base64.b64decode(timestamp_token_b64)
-        return verify_rfc3161_timestamp(content_hash, timestamp_token)
-    except Exception:
-        return False
+    except Exception as e:
+        raise ValueError(f"Failed to decode base64 timestamp token: {e}") from e
+    return verify_rfc3161_timestamp(content_hash, timestamp_token)
 
 
 # ============================================================================
@@ -1665,6 +1721,10 @@ class CryptoPackage:
     ethical_hash: str  # SHA3-256 hash of ethical vector (hex)
     quantum_signatures_enabled: bool = True  # False if Dilithium unavailable
     signature_format_version: str = SIGNATURE_FORMAT_V2  # Signature binding format
+    hash_format_version: str = (
+        HASH_FORMAT_V1  # Default to V1 for backward-compatible deserialization;
+    )
+    # new packages explicitly set V2 in create_crypto_package()
 
 
 def create_crypto_package(  # noqa: C901 - high-level orchestrator; refactor would be invasive
@@ -1819,17 +1879,25 @@ def create_crypto_package(  # noqa: C901 - high-level orchestrator; refactor wou
         ethical_hash=ethical_hash_hex,
         quantum_signatures_enabled=quantum_signatures_enabled,
         signature_format_version=SIGNATURE_FORMAT_V2,
+        hash_format_version=HASH_FORMAT_V2,
     )
 
 
 def _verify_timestamp_value(timestamp_str: str) -> bool:
-    """Verify timestamp is reasonable (not future, not older than 10 years)."""
+    """Verify timestamp is reasonable (not future, not older than 10 years).
+
+    Returns:
+        True if timestamp is within acceptable range.
+
+    Raises:
+        ValueError: If timestamp_str cannot be parsed as ISO 8601.
+    """
     try:
         ts = datetime.fromisoformat(timestamp_str)
-        now = datetime.now(timezone.utc)
-        return ts <= now and (now - ts).days < 3650
-    except Exception:
-        return False
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Invalid timestamp format '{timestamp_str}': {e}") from e
+    now = datetime.now(timezone.utc)
+    return ts <= now and (now - ts).days < 3650
 
 
 def _verify_dilithium_with_policy(
@@ -1883,11 +1951,11 @@ def _verify_dilithium_with_policy(
             bytes.fromhex(package.dilithium_signature),
             bytes.fromhex(package.dilithium_pubkey),
         )
-    except QuantumSignatureUnavailableError:
+    except QuantumSignatureUnavailableError as e:
         if require_quantum_signatures:
             raise QuantumSignatureRequiredError(
                 "Quantum signatures required but Dilithium libraries unavailable"
-            )
+            ) from e
         return None
 
     if monitor and start_time is not None:
@@ -1962,9 +2030,9 @@ def verify_crypto_package(
             is missing, invalid, or cannot be verified.
 
     Note:
-        This function catches all exceptions internally and returns False for
-        failed verifications rather than raising exceptions. This provides
-        clean failure semantics for security-critical code paths.
+        Expected verification failures are reflected in the returned results dict.
+        Unexpected errors are logged and re-raised — crypto verification must not
+        swallow exceptions that could indicate a corrupted or tampered state.
 
     .. deprecated::
         Use :func:`ama_cryptography.crypto_api.verify_crypto_package` instead.
@@ -1990,7 +2058,10 @@ def verify_crypto_package(
     }
 
     try:
-        computed_hash = canonical_hash_code(codes, helix_params)
+        # Use the hash version stored in the package; default to v1 for
+        # packages created before hash_format_version was introduced.
+        pkg_hash_ver = getattr(package, "hash_format_version", HASH_FORMAT_V1)
+        computed_hash = canonical_hash_code(codes, helix_params, hash_version=pkg_hash_ver)
         results["content_hash"] = computed_hash.hex() == package.content_hash
 
         start_time = time.time() if monitor else None
@@ -2034,11 +2105,11 @@ def verify_crypto_package(
     except QuantumSignatureRequiredError:
         raise
     except Exception as e:
-        # Log unexpected errors but don't fail silently - mark affected checks as False
-        # This maintains fail-closed security while providing diagnostic information
-        logging.getLogger(__name__).warning(
+        # Propagate unexpected errors — crypto verification must not swallow failures
+        logging.getLogger(__name__).error(
             f"Unexpected error during crypto package verification: {e}"
         )
+        raise
 
     return results
 

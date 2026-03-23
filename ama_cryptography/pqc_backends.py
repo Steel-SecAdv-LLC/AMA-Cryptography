@@ -53,6 +53,8 @@ from ama_cryptography.exceptions import (
 __all__ = [
     "PQCUnavailableError",
     "QuantumSignatureUnavailableError",
+    "KyberUnavailableError",
+    "SphincsUnavailableError",
     "SecurityWarning",
 ]
 
@@ -1589,11 +1591,7 @@ def native_hkdf(
 def _probe_cython_sha3() -> "Optional[Callable[[bytes], bytes]]":
     """Detect Cython SHA3-256 binding at module load time."""
     try:
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            from ama_cryptography.sha3_binding import cy_sha3_256
+        from ama_cryptography.sha3_binding import cy_sha3_256
 
         return cy_sha3_256
     except (ImportError, AttributeError):

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ama-cryptography"
-version = "2.0"
+version = "2.1"
 description = "Quantum-resistant cryptographic protection system for helical mathematical Omni-Codes"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -97,6 +97,9 @@ Documentation = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/
 Repository = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography"
 Issues = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/issues"
 
+[tool.setuptools.package-data]
+ama_cryptography = ["_integrity_digest.txt"]
+
 # Ruff configuration — replaces flake8, isort
 [tool.ruff]
 target-version = "py39"
@@ -121,20 +124,20 @@ ignore = []  # Do not add ignores without a comment explaining why.
 [tool.ruff.lint.per-file-ignores]
 # assert is valid in pytest tests; hardcoded passwords are test fixtures;
 # subprocess calls are tested intentionally; Unicode in test docstrings is fine;
-# uppercase vars used for crypto constants in test data
+# uppercase vars used for crypto constants in test data;
+# E722: bare except required to catch pyo3_runtime.PanicException (BaseException subclass)
 "tests/*" = [
-    "S101", "S105", "S106", "S603",
+    "S101", "S105", "S106", "S603", "S607",
     "RUF001", "RUF002", "RUF003",
-    "N806",
+    "N801", "N806",
+    "E722",
 ]
 # ama_cryptography/ uses intentional patterns that must not be changed:
 #   N803/N806: uppercase variable names for crypto constants (e.g. R, S, A, K)
 #   RUF001/RUF002/RUF003: Unicode symbols in docstrings/comments (σ, ✓, etc.)
 #   S101: assert used in internal validation
 #   S106/S107: hardcoded defaults for optional password parameters
-#   S110: bare except:pass in optional-feature fallback paths
 #   E501: long lines in crypto constant definitions
-#   B904: raise-without-from in chained exception handlers (existing pattern)
 #   B028: no-explicit-stacklevel in warnings (existing pattern)
 #   RUF012: mutable class defaults (dataclass pattern)
 #   N818: exception naming convention (existing names)
@@ -142,12 +145,14 @@ ignore = []  # Do not add ignores without a comment explaining why.
 #   RUF010: explicit f-string type conversion (existing pattern)
 #   RUF022: unsorted __all__ (existing order is logical, not alphabetical)
 #   RUF100: unused noqa directives (will be cleaned separately)
+# SECURITY: S110 (bare except:pass) and B904 (raise-without-from) are NOT
+# suppressed — crypto code must propagate exceptions with full context.
 "ama_cryptography/*" = [
     "N803", "N806", "N818",
     "RUF001", "RUF002", "RUF003", "RUF010", "RUF012", "RUF022", "RUF100",
-    "S101", "S106", "S107", "S110",
-    "E501",
-    "B028", "B904",
+    "S101", "S106", "S107",
+    "E402", "E501",
+    "B028",
     "UP006", "UP015", "UP035",  # UP006/UP035: deprecated typing imports (existing pattern)
 ]
 # code_guardian_secure.py — same crypto patterns as ama_cryptography/
@@ -155,12 +160,14 @@ ignore = []  # Do not add ignores without a comment explaining why.
 #   E402: module-level imports after sys.path manipulation
 #   S310/S603: URL open and subprocess calls in security tooling
 #   UP012: unnecessary UTF-8 encoding argument
+# SECURITY: S110 (bare except:pass) and B904 (raise-without-from) are NOT
+# suppressed — crypto code must propagate exceptions with full context.
 "code_guardian_secure.py" = [
     "N803", "N806", "N818",
     "RUF001", "RUF002", "RUF003", "RUF010", "RUF012", "RUF022", "RUF100",
-    "S101", "S106", "S107", "S110",
+    "S101", "S106", "S107",
     "E402", "E501",
-    "B028", "B904",
+    "B028",
     "S310", "S603",
     "UP006", "UP007", "UP012", "UP015", "UP035", "UP045",
 ]
@@ -190,10 +197,11 @@ ignore = []  # Do not add ignores without a comment explaining why.
 ]
 "tools/*" = [
     "B007", "B904",
-    "C408",
+    "C408", "C901",
     "E501",
     "I001",
     "RUF059",
+    "S603", "S607",
 ]
 
 # mccabe complexity threshold (replaces flake8 --max-complexity=15)
@@ -251,12 +259,16 @@ follow_imports = "skip"
 module = "ama_cryptography.hmac_binding"
 ignore_missing_imports = true
 
-# ama_cryptography/ and ama_cryptography_monitor — cannot modify source;
-# relax generic-type-arg and untyped-decorator checks for existing code.
+# ama_cryptography_monitor — production monitoring, relax generic-type-arg.
+# NOTE: ama_cryptography.* is NOT blanket-relaxed. Only specific modules that
+# have pre-existing bare generic annotations (dict, list, tuple without type
+# params) are individually listed here. New modules must use strict generics.
 [[tool.mypy.overrides]]
 module = [
-    "ama_cryptography.*",
     "ama_cryptography_monitor",
+    "ama_cryptography.pqc_backends",
+    "ama_cryptography.crypto_api",
+    "ama_cryptography.adaptive_posture",
 ]
 disallow_any_generics = false
 
@@ -296,12 +308,16 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "quantum: marks tests that require quantum-resistant libraries",
     "integration: marks integration tests",
+    "fips: marks FIPS 140-3 self-test and compliance tests",
+    "smoke: marks smoke tests that verify no exception is raised",
 ]
 filterwarnings = [
     "error",
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",
-    "ignore::UserWarning",
+    # UserWarning is NOT suppressed — security warnings from crypto operations
+    # must surface during testing. If a test emits a UserWarning, it should
+    # either be fixed or explicitly expected via pytest.warns().
     "default::ama_cryptography.key_management.SecurityWarning",
 ]
 
@@ -322,7 +338,9 @@ exclude_lines = [
     "pragma: no cover",
     "def __repr__",
     "raise AssertionError",
-    "raise NotImplementedError",
+    # NOTE: raise NotImplementedError is NOT excluded — unimplemented code
+    # (e.g. secure_mlock, secure_munlock) must show as a coverage gap so
+    # it's visible, not hidden.
     "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",
     "if typing.TYPE_CHECKING:",

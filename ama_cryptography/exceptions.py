@@ -103,6 +103,17 @@ class IntegrityError(Exception):
     pass
 
 
+class CryptoModuleError(RuntimeError):
+    """
+    Raised when the cryptographic module is in a FIPS 140-3 error state.
+
+    All cryptographic operations are refused until the module is reset
+    via reset_module().
+    """
+
+    pass
+
+
 __all__ = [
     "SecurityWarning",
     "PQCUnavailableError",
@@ -111,4 +122,5 @@ __all__ = [
     "KeyManagementError",
     "SignatureVerificationError",
     "IntegrityError",
+    "CryptoModuleError",
 ]

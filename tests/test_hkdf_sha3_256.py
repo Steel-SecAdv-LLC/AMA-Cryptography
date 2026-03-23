@@ -23,14 +23,32 @@ import json
 
 import pytest
 
+_PYCA_AVAILABLE: bool
+
 try:
-    from cryptography.hazmat.backends import default_backend
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.hazmat.backends import default_backend as default_backend
+    from cryptography.hazmat.primitives import hashes as hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF as HKDF
 
     _PYCA_AVAILABLE = True
 except Exception:
+    default_backend = None
+    hashes = None
+    HKDF = None
     _PYCA_AVAILABLE = False
+except:  # catches pyo3_runtime.PanicException (BaseException subclass)
+    import sys
+
+    _exc = sys.exc_info()[1]
+    if isinstance(_exc, (KeyboardInterrupt, SystemExit)):
+        raise
+    if _exc is not None and type(_exc).__name__ == "PanicException":
+        default_backend = None
+        hashes = None
+        HKDF = None
+        _PYCA_AVAILABLE = False
+    else:
+        raise
 
 
 class TestHKDFSHA3256:

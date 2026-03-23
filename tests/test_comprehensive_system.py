@@ -104,21 +104,22 @@ class TestSecureWipe:
         secure_wipe(data)
         assert all(b == 0 for b in data)
 
-    def test_secure_wipe_immutable_bytes_no_op(self) -> None:
-        """Test that immutable bytes are not modified (no-op)."""
+    def test_secure_wipe_immutable_bytes_raises(self) -> None:
+        """Test that immutable bytes raises TypeError (fail-loud contract)."""
         data = b"immutable_data"
-        # Should not raise, just return
-        secure_wipe(data)
-        # Original bytes unchanged (immutable)
-        assert data == b"immutable_data"
+        with pytest.raises(TypeError, match="requires a mutable bytearray"):
+            secure_wipe(data)
 
-    def test_secure_wipe_non_bytes_no_op(self) -> None:
-        """Test that non-bytes types are handled gracefully."""
-        # Should not raise for non-bytearray types
-        secure_wipe("string")
-        secure_wipe(12345)
-        secure_wipe(None)
-        secure_wipe([1, 2, 3])
+    def test_secure_wipe_non_bytearray_raises(self) -> None:
+        """Test that non-bytearray types raise TypeError (fail-loud contract)."""
+        with pytest.raises(TypeError, match="requires a mutable bytearray"):
+            secure_wipe("string")
+        with pytest.raises(TypeError, match="requires a mutable bytearray"):
+            secure_wipe(12345)
+        with pytest.raises(TypeError, match="requires a mutable bytearray"):
+            secure_wipe(None)
+        with pytest.raises(TypeError, match="requires a mutable bytearray"):
+            secure_wipe([1, 2, 3])
 
 
 class TestLengthPrefixedEncodeEdgeCases:
@@ -232,16 +233,16 @@ class TestExportPublicKeys:
 class TestRFC3161Timestamp:
     """Tests for RFC 3161 timestamp functionality."""
 
-    def test_timestamp_returns_none_on_failure(self) -> None:
-        """Test that timestamp returns None when TSA is unavailable."""
-        # Use invalid URL to force failure
-        result = get_rfc3161_timestamp(b"test_data", "http://invalid.tsa.url/")
-        assert result is None
+    def test_timestamp_raises_on_tsa_failure(self) -> None:
+        """Test that timestamp raises RuntimeError when TSA is unavailable."""
+        # Use invalid URL to force failure — must not return None silently
+        with pytest.raises(RuntimeError, match="timestamps are a security layer"):
+            get_rfc3161_timestamp(b"test_data", "http://invalid.tsa.url/")
 
-    def test_timestamp_with_empty_data(self) -> None:
-        """Test timestamp with empty data."""
-        result = get_rfc3161_timestamp(b"", "http://invalid.tsa.url/")
-        assert result is None
+    def test_timestamp_raises_with_empty_data(self) -> None:
+        """Test timestamp with empty data raises when TSA is unreachable."""
+        with pytest.raises(RuntimeError, match="timestamps are a security layer"):
+            get_rfc3161_timestamp(b"", "http://invalid.tsa.url/")
 
     @patch("subprocess.run")
     def test_timestamp_openssl_failure(self, mock_run: Any) -> None:
@@ -252,12 +253,12 @@ class TestRFC3161Timestamp:
 
     @patch("subprocess.run")
     @patch("urllib.request.urlopen")
-    def test_timestamp_network_failure(self, mock_urlopen: Any, mock_run: Any) -> None:
-        """Test handling of network failure."""
+    def test_timestamp_network_failure_raises(self, mock_urlopen: Any, mock_run: Any) -> None:
+        """Test that network failure raises RuntimeError (fail-loud)."""
         mock_run.return_value = MagicMock(returncode=0, stdout=b"query_data")
         mock_urlopen.side_effect = Exception("Network error")
-        result = get_rfc3161_timestamp(b"test_data")
-        assert result is None
+        with pytest.raises(RuntimeError, match="timestamps are a security layer"):
+            get_rfc3161_timestamp(b"test_data")
 
 
 class TestTimestampValidation:
@@ -284,11 +285,14 @@ class TestTimestampValidation:
         old = datetime.now(timezone.utc) - timedelta(days=4000)
         assert _verify_timestamp_value(old.isoformat()) is False
 
-    def test_malformed_timestamp_invalid(self) -> None:
-        """Test that malformed timestamp is invalid."""
-        assert _verify_timestamp_value("not-a-timestamp") is False
-        assert _verify_timestamp_value("") is False
-        assert _verify_timestamp_value("2025-13-45T99:99:99") is False
+    def test_malformed_timestamp_raises(self) -> None:
+        """Test that malformed timestamp raises ValueError (fail-loud)."""
+        with pytest.raises(ValueError, match="Invalid timestamp format"):
+            _verify_timestamp_value("not-a-timestamp")
+        with pytest.raises(ValueError, match="Invalid timestamp format"):
+            _verify_timestamp_value("")
+        with pytest.raises(ValueError, match="Invalid timestamp format"):
+            _verify_timestamp_value("2025-13-45T99:99:99")
 
 
 class TestDilithiumPolicyEnforcement:
@@ -452,21 +456,18 @@ class TestCryptoPackageWithRFC3161:
         )
         assert pkg.timestamp_token is None
 
-    def test_package_with_rfc3161_failure_graceful(self, kms: Any) -> None:
-        """Test package creation with RFC 3161 failure is graceful."""
-        # Use invalid TSA URL to force failure
-        pkg = create_crypto_package(
-            MASTER_CODES,
-            MASTER_HELIX_PARAMS,
-            kms,
-            "test",
-            use_rfc3161=True,
-            tsa_url="http://invalid.tsa.url/",
-        )
-        # Should still create package, just without timestamp token
-        assert pkg.content_hash is not None
-        assert pkg.hmac_tag is not None
-        assert pkg.ed25519_signature is not None
+    def test_package_with_rfc3161_failure_raises(self, kms: Any) -> None:
+        """Test package creation with RFC 3161 failure raises (fail-loud)."""
+        # Use invalid TSA URL to force failure — must not silently succeed
+        with pytest.raises(RuntimeError, match="timestamps are a security layer"):
+            create_crypto_package(
+                MASTER_CODES,
+                MASTER_HELIX_PARAMS,
+                kms,
+                "test",
+                use_rfc3161=True,
+                tsa_url="http://invalid.tsa.url/",
+            )
 
     def test_verify_rfc3161_returns_none_when_no_token(self, kms: Any) -> None:
         """Test RFC 3161 verification returns None when no token present."""
@@ -865,8 +866,8 @@ class TestVerificationExceptionHandling:
         """Create KMS for testing."""
         return generate_key_management_system("test_author")
 
-    def test_verify_catches_general_exceptions(self, kms: Any) -> None:
-        """Test that verification catches general exceptions gracefully."""
+    def test_verify_propagates_general_exceptions(self, kms: Any) -> None:
+        """Test that verification propagates exceptions (fail-loud contract)."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
 
         # Corrupt the package in a way that causes exceptions
@@ -875,10 +876,9 @@ class TestVerificationExceptionHandling:
         pkg.ed25519_signature = "invalid"
         pkg.ed25519_pubkey = "invalid"
 
-        # Should not raise, should return False for failed verifications
-        results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
-        # At least content_hash should be False due to invalid hex
-        assert results["content_hash"] is False
+        # Unexpected errors must propagate, not be swallowed
+        with pytest.raises((ValueError, Exception)):
+            verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
 
 
 class TestCodeCodesAndHelixParams:
