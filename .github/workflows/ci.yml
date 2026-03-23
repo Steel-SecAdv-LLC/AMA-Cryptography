@@ -85,6 +85,8 @@ jobs:
         "
 
     - name: Run pytest test suite
+      env:
+        AMA_CI_REQUIRE_BACKENDS: "1"
       run: |
         python -m pytest tests/ -v --tb=short --no-cov
 

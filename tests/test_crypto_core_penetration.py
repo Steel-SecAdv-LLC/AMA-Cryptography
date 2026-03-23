@@ -736,12 +736,12 @@ class TestTimestampValidation:
         results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
         assert results["timestamp"] is False
 
-    def test_malformed_timestamp_fails(self, kms: Any) -> None:
-        """Malformed timestamp should fail gracefully."""
+    def test_malformed_timestamp_raises(self, kms: Any) -> None:
+        """Malformed timestamp raises ValueError (fail-loud contract)."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         pkg.timestamp = "not-a-valid-timestamp"
-        results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
-        assert results["timestamp"] is False
+        with pytest.raises(ValueError, match="Invalid timestamp format"):
+            verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
 
 
 class TestMalformedInputHandling:

@@ -29,11 +29,13 @@ import pytest
 # =============================================================================
 # CI ENFORCEMENT: Crypto backend skip → failure in CI
 # =============================================================================
-# In CI, all cryptographic backends MUST be available. Tests that skip due to
-# missing backends represent 0% tested cryptography with a 100% pass rate.
-# This hook converts backend-related skips into hard failures in CI.
+# When AMA_CI_REQUIRE_BACKENDS=1 is set (by our ci.yml after building the
+# C library), all cryptographic backends MUST be available. Tests that skip
+# due to missing backends become hard failures. This env var is NOT set by
+# other CI workflows that may not build the native library, so their
+# legitimate skips are preserved.
 
-_CI = os.environ.get("CI", "").lower() in ("true", "1", "yes")
+_CI = os.environ.get("AMA_CI_REQUIRE_BACKENDS", "").lower() in ("true", "1", "yes")
 _BACKEND_SKIP_REASONS = (
     "dilithium",
     "kyber",
@@ -57,7 +59,7 @@ def _is_backend_skip(marker: Any) -> bool:
     return any(kw in reason.lower() for kw in _BACKEND_SKIP_REASONS)
 
 
-@pytest.hookimpl(hookwrapper=True)  # type: ignore[misc]
+@pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item: Any, call: Any) -> Any:
     """In CI, convert any backend-related skip into a hard failure."""
     outcome = yield
