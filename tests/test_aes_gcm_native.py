@@ -30,12 +30,23 @@ skip_no_native = pytest.mark.skipif(
 )
 
 
+def _is_expected_base_exception(exc: BaseException) -> bool:
+    """Return True for pyo3_runtime.PanicException (inherits BaseException, not Exception)."""
+    return type(exc).__name__ == "PanicException"
+
+
 def _pyca_crypto_available() -> bool:
     """Check if PyCA cryptography is usable (may be broken if _cffi_backend missing)."""
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: F401
     except Exception:
         return False
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        if _is_expected_base_exception(exc):
+            return False
+        raise
     return True
 
 

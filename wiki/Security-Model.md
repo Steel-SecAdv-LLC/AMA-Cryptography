@@ -9,8 +9,8 @@ Documentation for AMA Cryptography's security properties, threat model, side-cha
 | Property | Value |
 |----------|-------|
 | Audit Status | Community-tested; **not externally audited** |
-| Version | 2.0 |
-| Last Updated | 2026-03-10 |
+| Version | 2.1 |
+| Last Updated | 2026-03-21 |
 | Responsible Disclosure | steel.sa.llc@gmail.com |
 
 > **Production Disclaimer:** This is a self-assessed cryptographic implementation without third-party audit. Production use **requires**:

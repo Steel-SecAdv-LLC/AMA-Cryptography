@@ -93,14 +93,6 @@ def hd_derivation(master_seed: bytes) -> Any:
     return HDKeyDerivation(seed=master_seed)
 
 
-@pytest.fixture
-def hd_derivation_random() -> Any:
-    """Provide an HDKeyDerivation instance with random seed."""
-    from ama_cryptography.key_management import HDKeyDerivation
-
-    return HDKeyDerivation()
-
-
 # =============================================================================
 # KEY ROTATION FIXTURES
 # =============================================================================
@@ -143,52 +135,9 @@ def secure_storage(temp_storage_path: Path, test_password: str) -> Any:
     return SecureKeyStorage(temp_storage_path, master_password=test_password)
 
 
-@pytest.fixture
-def secure_storage_no_password(temp_storage_path: Path) -> Any:
-    """Provide a SecureKeyStorage instance with random encryption key."""
-    from ama_cryptography.key_management import SecureKeyStorage
-
-    return SecureKeyStorage(temp_storage_path)
-
-
 # =============================================================================
 # CRYPTOGRAPHIC API FIXTURES
 # =============================================================================
-
-
-@pytest.fixture
-def crypto_ed25519() -> Any:
-    """Provide an AmaCryptography instance for Ed25519."""
-    from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
-
-    return AmaCryptography(algorithm=AlgorithmType.ED25519)
-
-
-@pytest.fixture
-def crypto_hybrid() -> Any:
-    """Provide an AmaCryptography instance for hybrid signatures."""
-    from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
-
-    return AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
-
-
-@pytest.fixture
-def ed25519_keypair(crypto_ed25519: Any) -> tuple[bytes, bytes]:
-    """Generate and return an Ed25519 keypair (public_key, secret_key)."""
-    keypair = crypto_ed25519.generate_keypair()
-    return keypair.public_key, keypair.secret_key
-
-
-@pytest.fixture
-def test_message() -> bytes:
-    """Provide a standard test message for signature tests."""
-    return b"Test message for AMA Cryptography cryptographic operations."
-
-
-@pytest.fixture
-def test_message_large() -> bytes:
-    """Provide a large test message for performance-related tests."""
-    return secrets.token_bytes(1024 * 100)  # 100 KB
 
 
 # =============================================================================
@@ -252,100 +201,6 @@ def initial_state() -> Any:
 # =============================================================================
 # MONITOR FIXTURES
 # =============================================================================
-
-
-@pytest.fixture
-def guardian_monitor() -> Any:
-    """Provide an AmaCryptographyMonitor instance."""
-    try:
-        from ama_cryptography_monitor import AmaCryptographyMonitor
-    except ImportError:
-        pytest.skip("ama_cryptography_monitor not available")
-        return None
-    return AmaCryptographyMonitor(enabled=True)
-
-
-@pytest.fixture
-def guardian_monitor_disabled() -> Any:
-    """Provide a disabled AmaCryptographyMonitor instance."""
-    try:
-        from ama_cryptography_monitor import AmaCryptographyMonitor
-    except ImportError:
-        pytest.skip("ama_cryptography_monitor not available")
-        return None
-    return AmaCryptographyMonitor(enabled=False)
-
-
-# =============================================================================
-# TEST DATA FIXTURES
-# =============================================================================
-
-
-@pytest.fixture
-def sample_omni_code() -> dict[str, Any]:
-    """Provide a sample Omni-Code structure for package tests."""
-    return {
-        "sequence_id": "test-sequence-001",
-        "data": {
-            "type": "test",
-            "content": "Sample Omni-Code for testing",
-            "metadata": {
-                "created_by": "test_suite",
-                "version": "2.0",
-            },
-        },
-    }
-
-
-@pytest.fixture
-def binary_data_small() -> bytes:
-    """Provide small binary data for quick tests."""
-    return secrets.token_bytes(32)
-
-
-@pytest.fixture
-def binary_data_medium() -> bytes:
-    """Provide medium binary data for standard tests."""
-    return secrets.token_bytes(1024)
-
-
-@pytest.fixture
-def binary_data_large() -> bytes:
-    """Provide large binary data for stress tests."""
-    return secrets.token_bytes(1024 * 1024)  # 1 MB
-
-
-# =============================================================================
-# SKIP MARKERS
-# =============================================================================
-
-
-@pytest.fixture
-def skip_if_no_pqc(pqc_backend_info: Any) -> None:
-    """Skip test if no PQC backend is available."""
-    if pqc_backend_info["status"] == "UNAVAILABLE":
-        pytest.skip("No PQC backend available")
-
-
-@pytest.fixture
-def skip_if_no_dilithium(dilithium_available: Any) -> None:
-    """Skip test if Dilithium is not available."""
-    if not dilithium_available:
-        pytest.skip("Dilithium backend not available")
-
-
-@pytest.fixture
-def skip_if_no_kyber(kyber_available: Any) -> None:
-    """Skip test if Kyber is not available."""
-    if not kyber_available:
-        pytest.skip("Kyber backend not available")
-
-
-@pytest.fixture
-def skip_if_no_sphincs(sphincs_available: Any) -> None:
-    """Skip test if SPHINCS+ is not available."""
-    if not sphincs_available:
-        pytest.skip("SPHINCS+ backend not available")
 
 
 # =============================================================================

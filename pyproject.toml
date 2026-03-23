@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ama-cryptography"
-version = "2.0"
+version = "2.1"
 description = "Quantum-resistant cryptographic protection system for helical mathematical Omni-Codes"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -97,6 +97,9 @@ Documentation = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/
 Repository = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography"
 Issues = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/issues"
 
+[tool.setuptools.package-data]
+ama_cryptography = ["_integrity_digest.txt"]
+
 # Ruff configuration — replaces flake8, isort
 [tool.ruff]
 target-version = "py39"
@@ -123,9 +126,9 @@ ignore = []  # Do not add ignores without a comment explaining why.
 # subprocess calls are tested intentionally; Unicode in test docstrings is fine;
 # uppercase vars used for crypto constants in test data
 "tests/*" = [
-    "S101", "S105", "S106", "S603",
+    "S101", "S105", "S106", "S603", "S607",
     "RUF001", "RUF002", "RUF003",
-    "N806",
+    "N801", "N806",
 ]
 # ama_cryptography/ uses intentional patterns that must not be changed:
 #   N803/N806: uppercase variable names for crypto constants (e.g. R, S, A, K)
@@ -146,7 +149,7 @@ ignore = []  # Do not add ignores without a comment explaining why.
     "N803", "N806", "N818",
     "RUF001", "RUF002", "RUF003", "RUF010", "RUF012", "RUF022", "RUF100",
     "S101", "S106", "S107", "S110",
-    "E501",
+    "E402", "E501",
     "B028", "B904",
     "UP006", "UP015", "UP035",  # UP006/UP035: deprecated typing imports (existing pattern)
 ]
@@ -190,10 +193,11 @@ ignore = []  # Do not add ignores without a comment explaining why.
 ]
 "tools/*" = [
     "B007", "B904",
-    "C408",
+    "C408", "C901",
     "E501",
     "I001",
     "RUF059",
+    "S603", "S607",
 ]
 
 # mccabe complexity threshold (replaces flake8 --max-complexity=15)
@@ -296,6 +300,8 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "quantum: marks tests that require quantum-resistant libraries",
     "integration: marks integration tests",
+    "fips: marks FIPS 140-3 self-test and compliance tests",
+    "smoke: marks smoke tests that verify no exception is raised",
 ]
 filterwarnings = [
     "error",
