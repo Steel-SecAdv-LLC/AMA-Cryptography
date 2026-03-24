@@ -42,7 +42,7 @@ classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 Security of individual cryptographic primitives (SHA3-256, Ed25519, ML-DSA-65, HMAC, HKDF) relies on published proofs and reduction arguments to well-studied cryptographic assumptions. The system's composition protocol and original components (key evolution, adaptive posture) have not undergone independent formal verification. No security-by-obscurity mechanisms are employed.
 
 ### Defense in Depth
-Six independent cryptographic layers ensure that compromise of any single layer does not compromise overall system security. Each layer provides distinct security properties from different mathematical foundations.
+Multiple independent cryptographic layers — four core operations (SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65) supported by key derivation and optional timestamping — ensure that compromise of any single layer does not compromise overall system security. Each layer provides distinct security properties from different mathematical foundations.
 
 ### Quantum Readiness
 Primary signature algorithms are selected for resistance to known quantum attacks. The system remains secure against adversaries with access to large-scale quantum computers for 50+ years.
