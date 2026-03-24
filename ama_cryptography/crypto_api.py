@@ -705,8 +705,8 @@ class AESGCMProvider:
                 import fcntl
 
                 fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            except (ImportError, OSError):
-                pass  # Windows or lock failure — proceed best-effort
+            except (ImportError, OSError) as _lock_err:
+                logger.debug("File locking unavailable: %s — proceeding without lock", _lock_err)
 
             # Merge with any counters persisted by another process
             try:
@@ -715,8 +715,10 @@ class AESGCMProvider:
                 for key_hex, count in on_disk.items():
                     key_id = bytes.fromhex(key_hex)
                     cls._encrypt_counters[key_id] = max(cls._encrypt_counters.get(key_id, 0), count)
-            except (FileNotFoundError, _json.JSONDecodeError, ValueError):
-                pass
+            except FileNotFoundError:
+                pass  # No existing counter file — first write
+            except (_json.JSONDecodeError, ValueError) as _merge_err:
+                logger.warning("Corrupt counter file, overwriting: %s", _merge_err)
 
             data = {k.hex(): v for k, v in cls._encrypt_counters.items()}
             # Write to temp file in same directory (same filesystem for atomic rename)
@@ -735,8 +737,8 @@ class AESGCMProvider:
                 if not _rename_ok:
                     try:
                         _os.unlink(tmp_path)
-                    except OSError:
-                        pass
+                    except OSError as _unlink_err:
+                        logger.debug("Failed to clean up temp file %s: %s", tmp_path, _unlink_err)
         except Exception as e:
             logger.warning("Failed to persist AES-GCM counters: %s", e)
         finally:

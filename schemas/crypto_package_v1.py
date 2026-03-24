@@ -82,17 +82,26 @@ class CryptoPackageSchemaV1:
         """Create from dictionary."""
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
-    # Fields excluded from integrity hash — these are populated AFTER the
-    # payload is constructed and would make the hash self-referential/unstable.
+    # Fields excluded from integrity hash — populated AFTER the payload is
+    # constructed.  Including them would make the hash self-referential
+    # (content_hash, hmac, signatures) or unstable across timestamping
+    # (timestamp is added by an RFC 3161 TSA after the hash is computed).
     _INTEGRITY_EXCLUDE: ClassVar[frozenset[str]] = frozenset(
-        {"schema_version", "content_hash", "hmac", "classical_signature", "pqc_signature"}
+        {
+            "schema_version",
+            "content_hash",
+            "hmac",
+            "classical_signature",
+            "pqc_signature",
+            "timestamp",
+        }
     )
 
     def compute_integrity_hash(self) -> str:
         """Compute SHA3-256 over the canonical payload (excluding derived fields).
 
-        Excludes schema_version, content_hash, hmac, and signature fields
-        so the hash remains stable after signing.
+        Excludes schema_version, content_hash, hmac, signature fields, and
+        timestamp so the hash remains stable after signing and timestamping.
         """
         canonical = json.dumps(
             {k: v for k, v in sorted(asdict(self).items()) if k not in self._INTEGRITY_EXCLUDE},

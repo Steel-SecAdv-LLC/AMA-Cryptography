@@ -468,7 +468,7 @@ def _detect_mlock_available() -> bool:
         if _native_lib is not None and hasattr(_native_lib, "ama_secure_mlock"):
             return True
     except (ImportError, AttributeError):
-        pass
+        logger.debug("Native backend unavailable for mlock detection")
     # POSIX fallback: mlock available on Linux/macOS (may still fail due to ulimits)
     if sys.platform != "win32":
         libc_name = ctypes.util.find_library("c")
@@ -477,8 +477,8 @@ def _detect_mlock_available() -> bool:
                 libc = ctypes.CDLL(libc_name)
                 if hasattr(libc, "mlock"):
                     return True
-            except OSError:
-                pass
+            except OSError as e:
+                logger.debug("POSIX libc mlock probe failed: %s", e)
     return False
 
 

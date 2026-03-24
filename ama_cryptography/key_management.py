@@ -46,7 +46,7 @@ def _hmac_sha512(key: bytes, data: bytes) -> bytes:
         result: bytes = native_hmac_sha512(key, data)
         return result
     except (RuntimeError, ImportError):
-        pass
+        pass  # Native HMAC-SHA512 unavailable — fall through to pure-Python below
 
     # Pure-Python HMAC-SHA512 (RFC 2104) — no stdlib hmac import.
     block_size = 128  # SHA-512 block size
