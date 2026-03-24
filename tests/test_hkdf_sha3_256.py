@@ -36,7 +36,7 @@ except Exception:
     hashes = None
     HKDF = None
     _PYCA_AVAILABLE = False
-except BaseException:  # catches pyo3_runtime.PanicException (BaseException subclass)
+except BaseException:  # PanicException (BaseException); re-raises all others
     import sys
 
     _exc = sys.exc_info()[1]

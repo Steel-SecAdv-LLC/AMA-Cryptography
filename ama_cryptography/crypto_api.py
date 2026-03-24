@@ -716,7 +716,7 @@ class AESGCMProvider:
                     key_id = bytes.fromhex(key_hex)
                     cls._encrypt_counters[key_id] = max(cls._encrypt_counters.get(key_id, 0), count)
             except FileNotFoundError:
-                pass  # No existing counter file — first write
+                logger.debug("No existing counter file at %s — first write", path)
             except (_json.JSONDecodeError, ValueError) as _merge_err:
                 logger.warning("Corrupt counter file, overwriting: %s", _merge_err)
 
