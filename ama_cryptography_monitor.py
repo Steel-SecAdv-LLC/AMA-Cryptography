@@ -497,7 +497,12 @@ class NonceTracker:
             ) from e
 
     def _persist_entry(self, key_id_hash: str, nonce_hex: str) -> None:
-        """Append a single entry to the persistence file with fsync for durability."""
+        """Append a single entry to the persistence file with fsync for durability.
+
+        Raises RuntimeError on write failure because an unpersisted nonce entry
+        means a process restart could allow nonce reuse — a catastrophic failure
+        for AES-GCM and other nonce-sensitive constructions.
+        """
         if self._ephemeral:
             return
         try:
@@ -506,7 +511,10 @@ class NonceTracker:
                 f.flush()
                 os.fsync(f.fileno())
         except Exception as e:
-            logger.warning("Failed to persist nonce entry: %s", e)
+            raise RuntimeError(
+                f"Failed to persist nonce entry to {self._persist_path}: {e}. "
+                "Nonce tracking cannot guarantee reuse prevention without durable persistence."
+            ) from e
 
     def check_and_record(self, key_id: bytes, nonce: bytes) -> Optional[Dict[str, Any]]:
         """

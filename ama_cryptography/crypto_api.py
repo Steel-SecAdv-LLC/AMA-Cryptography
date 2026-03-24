@@ -686,13 +686,20 @@ class AESGCMProvider:
             raise RuntimeError(f"Failed to load persisted AES-GCM counters from {path}: {e}") from e
 
     @classmethod
-    def _persist_counters(cls) -> None:
+    def _persist_counters(cls, *, _raising: bool = False) -> None:
         """Persist encrypt counters to disk using atomic write-rename with file locking.
 
         Acquires an exclusive lock on a .lock file to prevent inter-process
         races. Writes to a temporary file first, then atomically renames to the
         target path. This prevents counter loss on crash — either the old
         file remains intact or the new file fully replaces it.
+
+        Args:
+            _raising: If True, propagate write failures as RuntimeError instead
+                of logging a warning. Used when called from the encrypt path
+                where an unpersisted counter could allow nonce reuse after
+                restart. The atexit handler passes False (default) because
+                raising during interpreter shutdown is unsafe.
         """
         if cls._ephemeral:
             return
@@ -745,6 +752,11 @@ class AESGCMProvider:
                     except OSError as _unlink_err:
                         logger.debug("Failed to clean up temp file %s: %s", tmp_path, _unlink_err)
         except Exception as e:
+            if _raising:
+                raise RuntimeError(
+                    f"Failed to persist AES-GCM counters to {path}: {e}. "
+                    "Counter tracking cannot guarantee nonce safety without durable persistence."
+                ) from e
             logger.warning("Failed to persist AES-GCM counters: %s", e)
         finally:
             if lock_fd is not None:
@@ -788,7 +800,7 @@ class AESGCMProvider:
         self._encrypt_counters[key_id] = count + 1
         AESGCMProvider._counters_dirty += 1
         if AESGCMProvider._counters_dirty >= self._PERSIST_INTERVAL:
-            self._persist_counters()
+            self._persist_counters(_raising=True)
             AESGCMProvider._counters_dirty = 0
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
