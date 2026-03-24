@@ -56,7 +56,7 @@ except ImportError:
 class TestAESGCMDifferential:
     """Differential tests: AMA AES-GCM vs pycryptodome."""
 
-    def test_encrypt_decrypt_consistency(self):
+    def test_encrypt_decrypt_consistency(self) -> None:
         """Encrypt with pycryptodome, decrypt with AMA (and vice versa)."""
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
@@ -93,7 +93,7 @@ class TestAESGCMDifferential:
 class TestEd25519Differential:
     """Differential tests: AMA Ed25519 vs pynacl/libsodium."""
 
-    def test_signature_verification_cross_library(self):
+    def test_signature_verification_cross_library(self) -> None:
         """Sign with pynacl, verify with AMA (basic compatibility check)."""
         # This test verifies that our Ed25519 implementation produces
         # signatures compatible with libsodium's Ed25519
@@ -117,7 +117,7 @@ class TestEd25519Differential:
 class TestAMASelfConsistency:
     """Self-consistency tests for AMA crypto operations."""
 
-    def test_aes_gcm_roundtrip(self):
+    def test_aes_gcm_roundtrip(self) -> None:
         """AMA AES-GCM encrypt then decrypt produces original plaintext."""
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
@@ -134,7 +134,7 @@ class TestAMASelfConsistency:
             pt = native_aes256_gcm_decrypt(key, nonce, ct, tag, aad)
             assert pt == plaintext, f"Roundtrip failed for size={size}"
 
-    def test_aes_gcm_wrong_key_fails(self):
+    def test_aes_gcm_wrong_key_fails(self) -> None:
         """Decryption with wrong key must fail."""
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
@@ -151,7 +151,7 @@ class TestAMASelfConsistency:
         with pytest.raises((ValueError, RuntimeError)):
             native_aes256_gcm_decrypt(key2, nonce, ct, tag, b"")
 
-    def test_aes_gcm_tampered_ciphertext_fails(self):
+    def test_aes_gcm_tampered_ciphertext_fails(self) -> None:
         """Tampered ciphertext must fail authentication."""
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
