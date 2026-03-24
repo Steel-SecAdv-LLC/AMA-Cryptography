@@ -39,7 +39,7 @@ try:
     if _native_lib is not None and _AES_GCM_NATIVE_AVAILABLE:
         _HAS_NATIVE = True
 except ImportError:
-    pass
+    logger.debug("Native PQC backend unavailable — key storage will use fallback")
 
 
 def _pbkdf2_derive(passphrase: bytes, salt: bytes, iterations: int = 600_000) -> bytes:
@@ -188,8 +188,8 @@ class EncryptedKeyStore:
         except BaseException:
             try:
                 os.unlink(tmp_path)
-            except OSError:
-                pass
+            except OSError as unlink_err:
+                logger.debug("Failed to clean up temp keystore %s: %s", tmp_path, unlink_err)
             raise
 
     def store_key(

@@ -1247,7 +1247,7 @@ class RefactoringAnalyzer:
                     if mod_file:
                         self._import_baselines[mod_name] = os.path.realpath(mod_file)
                 except ImportError:
-                    pass
+                    logger.debug("Module %s not installed — skipping import baseline", mod_name)
         except Exception as e:
             logger.warning("Failed to initialize import baselines: %s", e)
 
