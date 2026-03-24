@@ -1536,7 +1536,7 @@ class AmaCryptographyMonitor:
         self.timing = ResonanceTimingMonitor()
         self.patterns = RecursionPatternMonitor()
         self.analyzer = RefactoringAnalyzer()
-        self.nonce_tracker = NonceTracker(persist_path=nonce_persist_path)
+        self.nonce_tracker = NonceTracker(persist_path=nonce_persist_path, ephemeral=not enabled)
         self.alerts: List[Dict] = []
 
     def monitor_crypto_operation(self, operation: str, duration_ms: float) -> None:
