@@ -49,7 +49,7 @@ class TestSecureMemoryAvailability:
         assert status["available"] is True
         assert status["backend"] == "stdlib"
         assert status["initialized"] is True
-        assert status["mlock_available"] is False
+        assert isinstance(status["mlock_available"], bool)
 
 
 class TestSecureMemzero:
@@ -127,36 +127,28 @@ class TestSecureMlock:
     """Tests for memory locking functionality."""
 
     def test_mlock_works_or_raises(self) -> None:
-        """secure_mlock succeeds on POSIX or raises SecureMemoryError."""
-        import sys
-
+        """secure_mlock succeeds (native/POSIX) or raises on unsupported platforms."""
         from ama_cryptography.secure_memory import SecureMemoryError, secure_mlock
 
         data = bytearray(4096)
-        if sys.platform == "win32":
-            with pytest.raises(NotImplementedError):
-                secure_mlock(data)
-        else:
-            try:
-                secure_mlock(data)
-            except SecureMemoryError:
-                pass  # Expected in restricted environments (e.g. containers)
+        try:
+            secure_mlock(data)
+        except SecureMemoryError:
+            pass  # Expected in restricted environments (e.g. containers, ulimit)
+        except NotImplementedError:
+            pass  # No native backend and not on POSIX
 
     def test_munlock_works_or_raises(self) -> None:
-        """secure_munlock succeeds on POSIX or raises SecureMemoryError."""
-        import sys
-
+        """secure_munlock succeeds (native/POSIX) or raises on unsupported platforms."""
         from ama_cryptography.secure_memory import SecureMemoryError, secure_munlock
 
         data = bytearray(4096)
-        if sys.platform == "win32":
-            with pytest.raises(NotImplementedError):
-                secure_munlock(data)
-        else:
-            try:
-                secure_munlock(data)
-            except SecureMemoryError:
-                pass  # Expected in restricted environments (e.g. containers)
+        try:
+            secure_munlock(data)
+        except SecureMemoryError:
+            pass  # Expected in restricted environments (e.g. containers, ulimit)
+        except NotImplementedError:
+            pass  # No native backend and not on POSIX
 
 
 class TestConstantTimeCompare:

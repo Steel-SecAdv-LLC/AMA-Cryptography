@@ -241,6 +241,7 @@ module = [
     "_pytest.*",
     "rfc3161ng.*",
     "nacl.*",
+    "Crypto.*",
     "PyKCS11.*",
     "oqs.*",
     "cryptography.*",

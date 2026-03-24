@@ -94,37 +94,28 @@ class TestSecureMemoryImplementation:
         assert all(b == 0 for b in data)
 
     def test_mlock_works_or_raises(self) -> None:
-        """secure_mlock succeeds on POSIX or raises SecureMemoryError on permission error."""
-        import sys
-
+        """secure_mlock succeeds (native/POSIX) or raises on unsupported platforms."""
         from ama_cryptography.secure_memory import SecureMemoryError, secure_mlock
 
         data = bytearray(100)
-        if sys.platform == "win32":
-            with pytest.raises(NotImplementedError):
-                secure_mlock(data)
-        else:
-            # On POSIX: succeeds or raises SecureMemoryError (e.g. EPERM in containers)
-            try:
-                secure_mlock(data)
-            except SecureMemoryError:
-                pass  # Expected in restricted environments
+        try:
+            secure_mlock(data)
+        except SecureMemoryError:
+            pass  # Expected in restricted environments (e.g. EPERM in containers)
+        except NotImplementedError:
+            pass  # No native backend and not on POSIX
 
     def test_munlock_works_or_raises(self) -> None:
-        """secure_munlock succeeds on POSIX or raises SecureMemoryError on permission error."""
-        import sys
-
+        """secure_munlock succeeds (native/POSIX) or raises on unsupported platforms."""
         from ama_cryptography.secure_memory import SecureMemoryError, secure_munlock
 
         data = bytearray(100)
-        if sys.platform == "win32":
-            with pytest.raises(NotImplementedError):
-                secure_munlock(data)
-        else:
-            try:
-                secure_munlock(data)
-            except SecureMemoryError:
-                pass  # Expected in restricted environments
+        try:
+            secure_munlock(data)
+        except SecureMemoryError:
+            pass  # Expected in restricted environments (e.g. EPERM in containers)
+        except NotImplementedError:
+            pass  # No native backend and not on POSIX
 
 
 class TestSecureMemoryGetStatus:

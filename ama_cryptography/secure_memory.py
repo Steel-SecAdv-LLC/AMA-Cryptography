@@ -56,6 +56,7 @@ Author/Inventor: Andrew E. A.
 
 import ctypes
 import os
+import sys
 from contextlib import contextmanager
 from types import TracebackType
 from typing import Any, Callable, Dict, Generator, Optional, Type, Union
@@ -459,6 +460,31 @@ def secure_buffer(size: int, lock: bool = True) -> Generator[bytearray, None, No
         secure_memzero(buf)
 
 
+def _detect_mlock_available() -> bool:
+    """Check whether secure_mlock() will succeed on this platform."""
+    try:
+        from ama_cryptography.pqc_backends import _native_lib
+
+        if _native_lib is not None and hasattr(_native_lib, "ama_secure_mlock"):
+            return True
+    except (ImportError, AttributeError):
+        pass
+    # POSIX fallback: mlock available on Linux/macOS (may still fail due to ulimits)
+    if sys.platform != "win32":
+        import ctypes
+        import ctypes.util
+
+        libc_name = ctypes.util.find_library("c")
+        if libc_name:
+            try:
+                libc = ctypes.CDLL(libc_name)
+                if hasattr(libc, "mlock"):
+                    return True
+            except OSError:
+                pass
+    return False
+
+
 def get_status() -> Dict[str, Union[bool, str]]:
     """
     Get secure memory module status.
@@ -468,13 +494,13 @@ def get_status() -> Dict[str, Union[bool, str]]:
             - available: Always True (stdlib-only implementation)
             - backend: Always "stdlib"
             - initialized: Always True
-            - mlock_available: Always False (requires libsodium)
+            - mlock_available: True if native C backend or POSIX mlock is available
     """
     return {
         "available": True,
         "backend": "stdlib",
         "initialized": True,
-        "mlock_available": False,
+        "mlock_available": _detect_mlock_available(),
     }
 
 

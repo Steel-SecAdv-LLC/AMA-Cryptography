@@ -56,7 +56,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Deque, Dict, List, Optional, Set, Tuple
+from typing import Any, ClassVar, Deque, Dict, List, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -72,14 +72,14 @@ def _median_sorted(values: List[float]) -> float:
     return (values[mid - 1] + values[mid]) / 2.0
 
 
-def _mean(values: List[float]) -> float:
+def _mean(values: "Sequence[float]") -> float:
     """Arithmetic mean."""
     if not values:
         return 0.0
     return sum(values) / len(values)
 
 
-def _std(values: List[float]) -> float:
+def _std(values: "Sequence[float]") -> float:
     """Population standard deviation."""
     if len(values) < 2:
         return 0.0
@@ -793,7 +793,8 @@ class ResonanceTimingMonitor:
             if other_mean <= 0:
                 continue
 
-            pair = tuple(sorted([operation, other_op]))
+            _sorted = sorted([operation, other_op])
+            pair: Tuple[str, str] = (_sorted[0], _sorted[1])
             ratio = current_mean / other_mean if pair[0] == operation else other_mean / current_mean
 
             if pair not in self._ratio_samples:
@@ -1599,14 +1600,14 @@ class AmaCryptographyMonitor:
                     "timestamp": time.time(),
                 }
             )
-        for v in import_violations:
+        for iv in import_violations:
             self.alerts.append(
                 {
                     "type": "import_hijack",
                     "anomaly": {
-                        "module": v.module_name,
-                        "expected": v.expected_path,
-                        "actual": v.actual_path,
+                        "module": iv.module_name,
+                        "expected": iv.expected_path,
+                        "actual": iv.actual_path,
                     },
                     "timestamp": time.time(),
                 }
