@@ -631,6 +631,7 @@ class AESGCMProvider:
     _counters_loaded: ClassVar[bool] = False
     _counters_dirty: ClassVar[int] = 0
     _atexit_registered: ClassVar[bool] = False
+    _ephemeral: ClassVar[bool] = False
 
     def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY) -> None:
         self.backend = backend
@@ -668,19 +669,23 @@ class AESGCMProvider:
     @classmethod
     def _load_persisted_counters(cls) -> None:
         """Load persisted encrypt counters from disk."""
+        if cls._ephemeral:
+            return
         import json as _json
 
         path = cls._get_persist_path()
-        if not path.exists():
-            return
         try:
             with open(path, "r") as f:
                 data = _json.load(f)
             for key_hex, count in data.items():
                 key_id = bytes.fromhex(key_hex)
                 cls._encrypt_counters[key_id] = max(cls._encrypt_counters.get(key_id, 0), count)
+        except FileNotFoundError:
+            return
         except Exception as e:
-            logger.warning("Failed to load persisted AES-GCM counters: %s", e)
+            raise RuntimeError(
+                f"Failed to load persisted AES-GCM counters from {path}: {e}"
+            ) from e
 
     @classmethod
     def _persist_counters(cls) -> None:
@@ -691,6 +696,8 @@ class AESGCMProvider:
         target path. This prevents counter loss on crash — either the old
         file remains intact or the new file fully replaces it.
         """
+        if cls._ephemeral:
+            return
         import json as _json
         import os as _os
         import tempfile
