@@ -204,7 +204,7 @@ Future-proof cryptography:
 
 | Achievement | Description |
 |-------------|-------------|
-| Defense-in-Depth | 6 independent cryptographic layers |
+| Defense-in-Depth | Multi-layer cryptographic protection (4 core + 2 supporting) |
 | Performance | Cython math engine optimization (18–37x vs pure Python mathematical baseline) |
 | Quantum Resistance | NIST-approved PQC algorithms (ML-DSA-65, Kyber-1024) |
 | Mathematical Rigor | 5 proven frameworks with machine precision |
@@ -385,10 +385,10 @@ Complete security package with all defense layers:
 
 | Operation | Mean Time | Throughput |
 |-----------|-----------|------------|
-| Package Create (6 layers) | 0.48ms | 2,093 ops/sec |
-| Package Verify (6 layers) | 0.38ms | 2,607 ops/sec |
+| Package Create (all layers) | 0.48ms | 2,093 ops/sec |
+| Package Verify (all layers) | 0.38ms | 2,607 ops/sec |
 
-**6 Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65, HKDF, RFC 3161 (optional)
+**All Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65 (core), HKDF, RFC 3161 (supporting)
 
 ### Core Cryptographic Primitives
 
@@ -708,7 +708,7 @@ GitHub Actions automatically tests:
 
 | Layer | Protection |
 |-------|------------|
-| Defense-in-Depth | 6 independent cryptographic layers |
+| Defense-in-Depth | Multi-layer cryptographic protection |
 | Quantum Resistance | NIST-approved ML-DSA-65 (FIPS 204), Kyber-1024 (FIPS 203), SPHINCS+ (FIPS 205) |
 | Side-Channel Protection | Constant-time operations, C11 atomics, data-independent control flow |
 | Memory Safety | Secure wiping, bounds checking, magic number validation |

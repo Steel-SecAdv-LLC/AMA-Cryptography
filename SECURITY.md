@@ -30,7 +30,7 @@ We actively maintain and provide security updates for the following versions:
 
 ## Security Features
 
-AMA Cryptography implements defense-in-depth with six independent security layers:
+AMA Cryptography implements defense-in-depth with multiple independent security layers — four core cryptographic operations supported by key derivation and timestamping:
 
 1. **SHA3-256 Content Hashing** (NIST FIPS 202)
 2. **HMAC-SHA3-256 Authentication** (RFC 2104)
@@ -183,7 +183,7 @@ Users deploying AMA Cryptography in production should:
 
 ### Cryptographic Operations
 - **REQUIRED:** Build native PQC C library (`cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build`)
-- **REQUIRED:** Enable all six cryptographic layers (no fallbacks in production)
+- **REQUIRED:** Enable all cryptographic layers (no fallbacks in production)
 - **REQUIRED:** Use RFC 3161 trusted timestamp authorities
 - **RECOMMENDED:** Use multiple TSAs for redundancy
 - **RECOMMENDED:** Verify all signatures before trusting package contents
