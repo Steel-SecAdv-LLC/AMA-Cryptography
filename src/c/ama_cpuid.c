@@ -187,28 +187,58 @@ int ama_has_arm_pmull(void) { return 0; }
  * ============================================================================ */
 
 static AMA_ATOMIC_INT dispatch_done = 0;
+static AMA_ATOMIC_INT dispatch_running = 0;
 static ama_aead_backend_t selected_backend = AMA_AEAD_CHACHA20_POLY1305;
 
 ama_aead_backend_t ama_select_aead(void) {
+    /* Fast path: already dispatched */
     if (AMA_ATOMIC_LOAD(dispatch_done)) return selected_backend;
 
+    /* Acquire: only one thread performs detection.
+     * Others spin on dispatch_done until the winner finishes. */
+    while (1) {
+        int expected = 0;
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+        if (atomic_compare_exchange_strong_explicit(
+                &dispatch_running, &expected, 1,
+                memory_order_acq_rel, memory_order_relaxed))
+            break;  /* We won the race — proceed with detection */
+#elif defined(_MSC_VER)
+        if (_InterlockedCompareExchange(&dispatch_running, 1, 0) == 0)
+            break;
+#else
+        /* Fallback: non-atomic — acceptable on single-threaded builds */
+        if (!dispatch_running) { dispatch_running = 1; break; }
+#endif
+        /* Another thread is detecting — wait for it */
+        if (AMA_ATOMIC_LOAD(dispatch_done)) return selected_backend;
+    }
+
+    /* Double-check after acquiring */
+    if (AMA_ATOMIC_LOAD(dispatch_done)) return selected_backend;
+
+    ama_aead_backend_t backend;
     if ((ama_has_aes_ni() && ama_has_pclmulqdq()) ||
         (ama_has_arm_aes() && ama_has_arm_pmull())) {
-        selected_backend = AMA_AEAD_HW_AES_GCM;
+        backend = AMA_AEAD_HW_AES_GCM;
     } else {
         /* No hardware AES — use ChaCha20-Poly1305 (constant-time by design).
          * Never use software table-based AES-GCM on secret data at runtime. */
-        selected_backend = AMA_AEAD_CHACHA20_POLY1305;
+        backend = AMA_AEAD_CHACHA20_POLY1305;
     }
+
+    /* Write to shared state BEFORE publishing dispatch_done */
+    selected_backend = backend;
 
     /* Log selection once */
     fprintf(stderr, "[AMA Cryptography] AEAD backend selected: %s (AES-NI=%d, PCLMULQDQ=%d, ARM-AES=%d, ARM-PMULL=%d)\n",
-            ama_aead_backend_name(selected_backend),
+            ama_aead_backend_name(backend),
             ama_has_aes_ni(), ama_has_pclmulqdq(),
             ama_has_arm_aes(), ama_has_arm_pmull());
 
+    /* Release fence: all prior writes (selected_backend) visible before done=1 */
     AMA_ATOMIC_STORE(dispatch_done, 1);
-    return selected_backend;
+    return backend;
 }
 
 const char *ama_aead_backend_name(ama_aead_backend_t backend) {

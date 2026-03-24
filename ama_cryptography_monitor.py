@@ -509,7 +509,7 @@ class NonceTracker:
         Returns:
             Dict with anomaly details if nonce reuse detected, None otherwise
         """
-        key_hash = hashlib.sha256(key_id).hexdigest()[:32]
+        key_hash = hashlib.sha256(key_id).hexdigest()
         nonce_hex = nonce.hex()
         entry = (key_hash, nonce_hex)
 
@@ -542,7 +542,7 @@ class NonceTracker:
 
     def get_counter(self, key_id: bytes) -> int:
         """Get current nonce count for a key."""
-        key_hash = hashlib.sha256(key_id).hexdigest()[:32]
+        key_hash = hashlib.sha256(key_id).hexdigest()
         return self._counters.get(key_hash, 0)
 
     def get_all_counters(self) -> Dict[str, int]:

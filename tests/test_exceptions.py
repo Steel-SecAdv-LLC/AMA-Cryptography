@@ -190,7 +190,7 @@ class TestModuleExports:
     """Verify __all__ is complete and accurate."""
 
     def test_all_exports(self) -> None:
-        import ama_cryptography.exceptions as mod
+        from ama_cryptography import exceptions as mod
 
         expected = {
             "SecurityWarning",
@@ -205,7 +205,7 @@ class TestModuleExports:
         assert set(mod.__all__) == expected
 
     def test_all_exports_are_classes(self) -> None:
-        import ama_cryptography.exceptions as mod
+        from ama_cryptography import exceptions as mod
 
         for name in mod.__all__:
             obj = getattr(mod, name)

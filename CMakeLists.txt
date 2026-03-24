@@ -105,14 +105,19 @@ if(AMA_ENABLE_SIMD)
         endif()
     endif()
 
-    # AES-NI + PCLMULQDQ flags for x86 (runtime dispatch via ama_cpuid.c)
+    # AES-NI + PCLMULQDQ flags for x86 — applied per-file (not globally)
+    # to prevent illegal instruction crashes on CPUs without AES-NI.
+    # Runtime dispatch via ama_cpuid.c selects the correct path.
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86")
-        if(MSVC)
-            # MSVC doesn't need explicit flags for AES-NI intrinsics
-        else()
-            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -maes -mpclmul")
+        if(NOT MSVC)
+            set_source_files_properties(src/c/ama_aes_gcm.c PROPERTIES
+                COMPILE_FLAGS "-maes -mpclmul")
+            if(AMA_AES_CONSTTIME)
+                set_source_files_properties(src/c/ama_aes_bitsliced.c PROPERTIES
+                    COMPILE_FLAGS "-maes -mpclmul")
+            endif()
         endif()
-        message(STATUS "AES-NI/PCLMULQDQ: enabled for runtime dispatch")
+        message(STATUS "AES-NI/PCLMULQDQ: enabled for AES translation units only")
     endif()
 endif()
 

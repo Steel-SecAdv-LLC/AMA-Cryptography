@@ -36,7 +36,7 @@ def _pyca_crypto_available() -> bool:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: F401
     except Exception:
         return False
-    except:  # catches pyo3_runtime.PanicException (BaseException subclass)
+    except BaseException:  # catches pyo3_runtime.PanicException (BaseException subclass)
         import sys
 
         _exc = sys.exc_info()[1]

@@ -51,7 +51,7 @@ except ImportError:
 
 @pytest.mark.skipif(
     not (HAS_AMA_NATIVE and HAS_PYCRYPTODOME),
-    reason="Requires AMA native backend and pycryptodome",
+    reason="Requires AMA C library and pycryptodome for cross-validation",
 )
 class TestAESGCMDifferential:
     """Differential tests: AMA AES-GCM vs pycryptodome."""
@@ -88,7 +88,7 @@ class TestAESGCMDifferential:
 
 @pytest.mark.skipif(
     not (HAS_AMA_NATIVE and HAS_PYNACL),
-    reason="Requires AMA native backend and pynacl",
+    reason="Requires AMA C library and pynacl for cross-validation",
 )
 class TestEd25519Differential:
     """Differential tests: AMA Ed25519 vs pynacl/libsodium."""
@@ -112,7 +112,7 @@ class TestEd25519Differential:
 
 @pytest.mark.skipif(
     not HAS_AMA_NATIVE,
-    reason="Requires AMA native backend",
+    reason="Requires AMA C library for self-consistency tests",
 )
 class TestAMASelfConsistency:
     """Self-consistency tests for AMA crypto operations."""

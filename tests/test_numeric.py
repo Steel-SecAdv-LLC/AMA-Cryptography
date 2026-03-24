@@ -791,7 +791,7 @@ class TestModuleExports:
     """Verify __all__ exports are accessible."""
 
     def test_all_exports_importable(self) -> None:
-        import ama_cryptography._numeric as mod
+        from ama_cryptography import _numeric as mod
 
         for name in mod.__all__:
             assert hasattr(mod, name), f"{name} listed in __all__ but not defined"

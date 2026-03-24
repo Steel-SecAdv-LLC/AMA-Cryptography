@@ -684,9 +684,10 @@ class AESGCMProvider:
 
     @classmethod
     def _persist_counters(cls) -> None:
-        """Persist encrypt counters to disk using atomic write-rename.
+        """Persist encrypt counters to disk using atomic write-rename with file locking.
 
-        Writes to a temporary file first, then atomically renames to the
+        Acquires an exclusive lock on a .lock file to prevent inter-process
+        races. Writes to a temporary file first, then atomically renames to the
         target path. This prevents counter loss on crash — either the old
         file remains intact or the new file fully replaces it.
         """
@@ -695,27 +696,52 @@ class AESGCMProvider:
         import tempfile
 
         path = cls._get_persist_path()
+        lock_path = path.parent / ".counters.lock"
+        lock_fd: Optional[int] = None
         try:
+            # Acquire inter-process lock
+            lock_fd = _os.open(str(lock_path), _os.O_CREAT | _os.O_RDWR, 0o600)
+            try:
+                import fcntl
+
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            except (ImportError, OSError):
+                pass  # Windows or lock failure — proceed best-effort
+
+            # Merge with any counters persisted by another process
+            try:
+                with open(path) as f:
+                    on_disk = _json.load(f)
+                for key_hex, count in on_disk.items():
+                    key_id = bytes.fromhex(key_hex)
+                    cls._encrypt_counters[key_id] = max(cls._encrypt_counters.get(key_id, 0), count)
+            except (FileNotFoundError, _json.JSONDecodeError, ValueError):
+                pass
+
             data = {k.hex(): v for k, v in cls._encrypt_counters.items()}
             # Write to temp file in same directory (same filesystem for atomic rename)
             fd, tmp_path = tempfile.mkstemp(
                 dir=str(path.parent), suffix=".tmp", prefix=".counters_"
             )
+            _rename_ok = False
             try:
                 with _os.fdopen(fd, "w") as f:
                     _json.dump(data, f)
                     f.flush()
                     _os.fsync(f.fileno())
                 _os.replace(tmp_path, str(path))
-            except BaseException:
-                # Clean up temp file on any failure
-                try:
-                    _os.unlink(tmp_path)
-                except OSError:
-                    pass
-                raise
+                _rename_ok = True
+            finally:
+                if not _rename_ok:
+                    try:
+                        _os.unlink(tmp_path)
+                    except OSError:
+                        pass
         except Exception as e:
             logger.warning("Failed to persist AES-GCM counters: %s", e)
+        finally:
+            if lock_fd is not None:
+                _os.close(lock_fd)
 
     def encrypt(
         self,
