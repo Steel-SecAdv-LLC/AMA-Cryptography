@@ -100,11 +100,11 @@ The AMA Cryptography architecture is built on the following foundational princip
 
 **Ethical Integration**: Ethical constraints are mathematically bound to cryptographic operations through the key derivation process, ensuring that ethical metadata cannot be separated from cryptographic proofs.
 
-**Standards Compliance**: Built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the 6-layer defense architecture, key evolution, and adaptive posture system) is an original design.
+**Standards Compliance**: Built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the multi-layer defense architecture, key evolution, and adaptive posture system) is an original design.
 
 **Zero External Crypto Dependencies (INVARIANT-1)**: All cryptographic primitives are implemented natively in C. No third-party crypto packages are permitted. See [`.github/INVARIANTS.md`](.github/INVARIANTS.md).
 
-**Performance Efficiency**: Cryptographic operations are optimized to maintain throughput exceeding 450 packages/second for full 6-layer operations.
+**Performance Efficiency**: Cryptographic operations are optimized to maintain throughput exceeding 450 packages/second for full multi-layer operations.
 
 ### Architectural Constraints
 
@@ -170,7 +170,7 @@ Encryption and KDF:
 
 ### Cryptographic Layer Stack
 
-The system implements six independent security layers, applied sequentially:
+The system implements multiple independent security layers, applied sequentially:
 
 ```
 Layer 6: RFC 3161 Trusted Timestamp (optional)
@@ -238,7 +238,7 @@ The system defines 4 ethical pillars, each governing a triad of three sub-proper
 - Real-time protection: >1,000 ops/sec with minimal latency
 
 **Pillar 3: Omnidirectional — Triad of Geography (Defense-in-Depth)**
-- Multi-layer defense: Security presence across all six cryptographic layers
+- Multi-layer defense: Security presence across all cryptographic layers
 - Temporal integrity: Trusted timestamping via RFC 3161
 - Attack surface coverage: Classical, quantum, concatenation, forgery defense
 
@@ -614,15 +614,15 @@ The security analysis assumes:
 | Operation | Target Latency | Measured Latency |
 |-----------|---------------|------------------|
 | KMS Generation | < 5 ms | ~2.12 ms |
-| Package Creation (6-layer) | < 5 ms | ~2.17 ms |
-| Package Verification (6-layer) | < 5 ms | ~2.04 ms |
+| Package Creation (multi-layer) | < 5 ms | ~2.17 ms |
+| Package Verification (multi-layer) | < 5 ms | ~2.04 ms |
 | HMAC Computation | < 1 ms | ~0.032 ms |
 | SHA3-256 Hash | < 1 ms | ~0.001 ms |
 
 ### Throughput Characteristics
 
-- **Signing Throughput**: ~462 packages/second (single core, full 6-layer)
-- **Verification Throughput**: ~489 packages/second (single core, full 6-layer)
+- **Signing Throughput**: ~462 packages/second (single core, full multi-layer)
+- **Verification Throughput**: ~489 packages/second (single core, full multi-layer)
 - **Bottleneck**: ML-DSA-65 signing (4.20 ms, dominant signing cost)
 
 ### Optimization Strategies

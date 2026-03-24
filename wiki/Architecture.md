@@ -6,7 +6,7 @@ This page describes the system architecture of AMA Cryptography, including the m
 
 ## System Overview
 
-AMA Cryptography is a **defense-in-depth** cryptographic protection system implementing six independent cryptographic layers. It serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent).
+AMA Cryptography is a **defense-in-depth** cryptographic protection system implementing multiple independent cryptographic layers. It serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent).
 
 ```mermaid
 flowchart TD
@@ -121,9 +121,12 @@ flowchart BT
     L1["Layer 1: SHA3-256 Content Hash (FIPS 202)"]:::gold --> L2
     L2["Layer 2: HMAC-SHA3-256 Authentication (RFC 2104)"]:::blue --> L3
     L3["Layer 3: Ed25519 Classical Signature (RFC 8032)"]:::black --> L4
-    L4["Layer 4: ML-DSA-65 Quantum-Resistant Signature (FIPS 204)"]:::gold --> S1
-    S1["Supporting: HKDF-SHA3-256 Key Derivation (RFC 5869)"]:::blue --> S2
+    L4["Layer 4: ML-DSA-65 Quantum-Resistant Signature (FIPS 204)"]:::gold --> S2
     S2["Supporting: RFC 3161 Trusted Timestamp (optional)"]:::blue
+
+    S1["Supporting: HKDF-SHA3-256 Key Derivation (RFC 5869)"]:::blue -.->|derives keys| L2
+    S1 -.->|derives keys| L3
+    S1 -.->|derives keys| L4
 
 classDef gold fill:#B4B124,stroke:#000000,color:#000000;
 classDef blue fill:#11AEED,stroke:#000000,color:#000000;

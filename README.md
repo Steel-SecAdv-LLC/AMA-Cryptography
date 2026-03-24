@@ -49,7 +49,7 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 
 **Protecting people, data, and networks with quantum-resistant cryptography**
 
-> **Design Philosophy:** Built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the 6-layer defense architecture, double-helix key evolution, and adaptive posture system) is an original design by Steel Security Advisors LLC.
+> **Design Philosophy:** Built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the multi-layer defense architecture, double-helix key evolution, and adaptive posture system) is an original design by Steel Security Advisors LLC.
 >
 > **Integration:** AMA Cryptography serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent), providing quantum-resistant security for Mercury Agent's services.
 
@@ -357,7 +357,7 @@ Future-proof cryptography:
 
 ![Performance Dashboard](assets/performance_dashboard.png)
 
-*Multi-panel performance dashboard showing cryptographic throughput, signature latency, scalability, key generation speed, 6-layer breakdown, regression analysis, validation claims, and hybrid performance — all from real benchmark data.*
+*Multi-panel performance dashboard showing cryptographic throughput, signature latency, scalability, key generation speed, multi-layer breakdown, regression analysis, validation claims, and hybrid performance — all from real benchmark data.*
 
 ![Benchmark Report](assets/benchmark_report.png)
 
@@ -379,7 +379,7 @@ Future-proof cryptography:
 | **Encapsulate** | 9,480 ops/sec | 0.11ms | IND-CCA2, Fujisaki-Okamoto |
 | **Decapsulate** | 8,913 ops/sec | 0.11ms | Implicit rejection |
 
-### Full 6-Layer Package Performance
+### Full Multi-Layer Package Performance
 
 Complete security package with all defense layers:
 
