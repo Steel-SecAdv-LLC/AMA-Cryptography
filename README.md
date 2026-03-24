@@ -18,7 +18,7 @@
               |                            AMA CRYPTOGRAPHY ♱                                |
               |                       Post-Quantum Security System                           |
               |                                                                              |
-              |   6-Layer Defense      |   Quantum-Resistant    |   Defense-in-Depth         |
+              |   Multi-Layer Defense  |   Quantum-Resistant    |   Defense-in-Depth         |
               |   Cython-Optimized     |   3R Anomaly Monitor   |   Cross-Platform           |
               |   HD Key Derivation    |   Algorithm-Agnostic   |   NIST PQC Standards       |
               |                                                                              |
@@ -127,24 +127,33 @@ See [Use Cases by Sector](#use-cases-by-sector-) for detailed scenarios.
 <details>
 <summary><strong>Unique Differentiators</strong></summary>
 
-### 6-Layer Defense-in-Depth Architecture
+### Multi-Layer Cryptographic Protection Architecture
 
-**Defense-in-depth security** with 6 independent cryptographic layers, compared to typical 1-2 layers in peer implementations:
+**Defense-in-depth security** with multiple independent cryptographic layers, compared to typical 1-2 layers in peer implementations:
+
+**Core Cryptographic Operations** (the defense layers an attacker must defeat):
 
 | Layer | Protection | Security Level |
 |-------|------------|----------------|
 | 1. SHA3-256 | Content integrity | 128-bit collision resistance |
-| 2. HMAC-SHA3-256 | Authentication | Keyed message authentication |
-| 3. Ed25519 | Classical signatures | 128-bit classical security |
-| 4. ML-DSA-65 | Quantum signatures | 192-bit quantum security |
-| 5. HKDF | Key derivation | Cryptographic key independence |
-| 6. RFC 3161 | Timestamping | Third-party proof of existence |
+| 2. HMAC-SHA3-256 | Keyed message authentication | Authenticated integrity |
+| 3. Ed25519 | Classical digital signature | 128-bit classical security |
+| 4. ML-DSA-65 | Quantum-resistant digital signature | 192-bit quantum security (FIPS 204) |
 
-**Why 6 layers matter:** Overall security is bounded by the weakest cryptographic layer (~128-bit classical, ~192-bit quantum). Defense-in-depth ensures continued protection if one layer is compromised. See [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) for detailed analysis.
+**Supporting Cryptographic Infrastructure:**
 
-![6-Layer Defense Architecture](assets/defense_layers.png)
+| Component | Purpose |
+|-----------|---------|
+| 5. HKDF-SHA3-256 | Key derivation ensuring cryptographic key independence |
+| 6. RFC 3161 Timestamping | Third-party temporal proof of existence (optional) |
 
-*An attacker must defeat ALL 6 independent cryptographic layers to forge a package. Most systems use only 1-2 layers.*
+Canonical encoding serves as the input normalization step, ensuring deterministic serialization before cryptographic operations.
+
+**Why defense-in-depth matters:** Overall security is bounded by the weakest cryptographic layer (~128-bit classical, ~192-bit quantum). Defense-in-depth ensures continued protection if one layer is compromised. See [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) for detailed analysis.
+
+![Defense Architecture](assets/defense_layers.png)
+
+*Package authenticity is protected by four independent cryptographic operations — content hashing, keyed authentication, classical signature, and quantum-resistant signature — supported by independent key derivation and optional third-party timestamping.*
 
 ### 3R Runtime Security Monitoring
 
@@ -360,7 +369,7 @@ Future-proof cryptography:
 |-----------|-----------|---------|-------|
 | **KeyGen** | 4,527 ops/sec | 0.22ms | Native C, NTT q=8380417 |
 | **Sign** | 1,027 ops/sec | 0.97ms | Rejection sampling, constant-time |
-| **Verify** | 5,067 ops/sec | 0.20ms | NIST ACVP validated |
+| **Verify** | 5,067 ops/sec | 0.20ms | Verified against NIST ACVP test vectors (self-attested) |
 
 ### ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)
 

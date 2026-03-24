@@ -13,7 +13,7 @@
 
 ## Executive Summary
 
-AMA Cryptography is a production-grade cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. It serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent). The architecture implements defense-in-depth security through six independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
+AMA Cryptography is a cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. It serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent). The architecture implements defense-in-depth security through six independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
 
 This document provides a comprehensive technical reference for system architects, security engineers, and developers working with or evaluating the AMA Cryptography system.
 
@@ -92,7 +92,7 @@ The following are explicitly not goals of this architecture:
 
 The AMA Cryptography architecture is built on the following foundational principles:
 
-**Security Through Mathematical Rigor**: All security claims are backed by formal proofs or reduction arguments to well-studied cryptographic assumptions. No security-by-obscurity mechanisms are employed.
+**Security Through Mathematical Rigor**: Security of individual cryptographic primitives (SHA3-256, Ed25519, ML-DSA-65, HMAC, HKDF) relies on published proofs and reduction arguments to well-studied cryptographic assumptions. The system's composition protocol and original components (key evolution, adaptive posture) have not undergone independent formal verification. No security-by-obscurity mechanisms are employed.
 
 **Defense in Depth**: Six independent cryptographic layers ensure that compromise of any single layer does not compromise the overall system security. Each layer provides distinct security properties.
 
@@ -590,7 +590,7 @@ The architecture supports optional HSM integration for master secret storage:
 
 **Security Bound:** Overall security is bounded by the weakest cryptographic layer, not the sum of all layers. The system provides approximately 128-bit classical security (from Ed25519/HMAC) and approximately 192-bit quantum security (from ML-DSA-65/Dilithium) when all layers are enforced.
 
-**Defense-in-Depth Benefit:** While security is bounded by the weakest layer, the defense-in-depth architecture ensures that even if one layer is compromised (e.g., a future break in Ed25519), other layers continue to provide protection. An attacker must defeat ALL layers to fully compromise the system.
+**Defense-in-Depth Benefit:** While security is bounded by the weakest layer, the defense-in-depth architecture ensures that even if one layer is compromised (e.g., a future break in Ed25519), other layers continue to provide protection. Package authenticity is protected by four independent cryptographic operations — content hashing, keyed authentication, classical signature, and quantum-resistant signature — supported by independent key derivation and optional third-party timestamping.
 
 See [SECURITY.md](SECURITY.md) for detailed security proofs and the formal security bound statement.
 
