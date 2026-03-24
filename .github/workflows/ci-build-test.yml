@@ -232,7 +232,10 @@ jobs:
           pip install pip-audit bandit
 
       - name: Audit dependencies
-        run: pip-audit
+        # CVE-2026-4539: ReDoS in pygments AdlLexer (local access only, no fix version yet).
+        # pygments is a transitive dev dependency (via rich/bandit) — not used at runtime.
+        # Re-evaluate when pygments >2.19.2 ships a fix.
+        run: pip-audit --ignore-vuln CVE-2026-4539
 
       - name: Security scan (bandit)
         run: bandit -r ama_cryptography/ -l
