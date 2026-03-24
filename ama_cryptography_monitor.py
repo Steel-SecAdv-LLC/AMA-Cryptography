@@ -449,30 +449,37 @@ class NonceTracker:
 
     _NONCE_SAFETY_LIMIT: int = 2**32
 
-    def __init__(self, persist_path: Optional[str] = None) -> None:
+    def __init__(
+        self, persist_path: Optional[str] = None, ephemeral: bool = False
+    ) -> None:
         """
         Args:
             persist_path: Path to append-only persistence file.
                 If None, uses ~/.ama_cryptography/nonce_tracker.dat
+            ephemeral: If True, skip all persistence (no file read/write).
         """
-        if persist_path is None:
-            data_dir = Path.home() / ".ama_cryptography"
-            data_dir.mkdir(parents=True, exist_ok=True)
-            self._persist_path = data_dir / "nonce_tracker.dat"
+        self._ephemeral = ephemeral
+
+        if not ephemeral:
+            if persist_path is None:
+                data_dir = Path.home() / ".ama_cryptography"
+                data_dir.mkdir(parents=True, exist_ok=True)
+                self._persist_path = data_dir / "nonce_tracker.dat"
+            else:
+                self._persist_path = Path(persist_path)
+                self._persist_path.parent.mkdir(parents=True, exist_ok=True)
         else:
-            self._persist_path = Path(persist_path)
-            self._persist_path.parent.mkdir(parents=True, exist_ok=True)
+            self._persist_path = Path(persist_path) if persist_path else Path("/dev/null")
 
         # Set of (key_id_hash_hex, nonce_hex) tuples
         self._seen: Set[Tuple[str, str]] = set()
         # Per-key counters for 2^32 safety limit
         self._counters: Dict[str, int] = {}
-        self._load_persisted()
+        if not ephemeral:
+            self._load_persisted()
 
     def _load_persisted(self) -> None:
         """Reload persisted nonce history from disk."""
-        if not self._persist_path.exists():
-            return
         try:
             with open(self._persist_path, "r") as f:
                 for line in f:
@@ -484,11 +491,17 @@ class NonceTracker:
                         key_hash, nonce_hex = parts
                         self._seen.add((key_hash, nonce_hex))
                         self._counters[key_hash] = self._counters.get(key_hash, 0) + 1
+        except FileNotFoundError:
+            return
         except Exception as e:
-            logger.warning("Failed to load nonce tracker persistence: %s", e)
+            raise RuntimeError(
+                f"Failed to load nonce tracker persistence from {self._persist_path}: {e}"
+            ) from e
 
     def _persist_entry(self, key_id_hash: str, nonce_hex: str) -> None:
         """Append a single entry to the persistence file with fsync for durability."""
+        if self._ephemeral:
+            return
         try:
             with open(self._persist_path, "a") as f:
                 f.write(f"{key_id_hash},{nonce_hex}\n")

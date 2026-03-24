@@ -36,19 +36,6 @@ except Exception:
     hashes = None
     HKDF = None
     _PYCA_AVAILABLE = False
-except BaseException:  # PanicException (BaseException); re-raises all others
-    import sys
-
-    _exc = sys.exc_info()[1]
-    if isinstance(_exc, (KeyboardInterrupt, SystemExit)):
-        raise
-    if _exc is not None and type(_exc).__name__ == "PanicException":
-        default_backend = None
-        hashes = None
-        HKDF = None
-        _PYCA_AVAILABLE = False
-    else:
-        raise
 
 
 class TestHKDFSHA3256:
