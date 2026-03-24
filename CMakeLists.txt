@@ -112,10 +112,8 @@ if(AMA_ENABLE_SIMD)
         if(NOT MSVC)
             set_source_files_properties(src/c/ama_aes_gcm.c PROPERTIES
                 COMPILE_FLAGS "-maes -mpclmul")
-            if(AMA_AES_CONSTTIME)
-                set_source_files_properties(src/c/ama_aes_bitsliced.c PROPERTIES
-                    COMPILE_FLAGS "-maes -mpclmul")
-            endif()
+            # Note: ama_aes_bitsliced.c intentionally does NOT get -maes/-mpclmul
+            # — it is the constant-time software fallback for CPUs without AES-NI.
         endif()
         message(STATUS "AES-NI/PCLMULQDQ: enabled for AES translation units only")
     endif()
