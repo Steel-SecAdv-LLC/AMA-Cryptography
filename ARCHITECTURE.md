@@ -198,7 +198,7 @@ The system implements multiple independent security layers, applied sequentially
 
 **Layer 3 - Classical Signature**: Ed25519 provides a compact (64-byte) digital signature with 128-bit classical security. This layer ensures compatibility with existing verification infrastructure.
 
-**Layer 4 - Quantum-Resistant Signature**: ML-DSA-65 (Dilithium Level 3) provides a lattice-based signature resistant to known quantum attacks. Signature size is approximately 3,293 bytes. 192-bit quantum security (NIST FIPS 204).
+**Layer 4 - Quantum-Resistant Signature**: ML-DSA-65 (Dilithium Level 3) provides a lattice-based signature resistant to known quantum attacks. Signature size is approximately 3,309 bytes. 192-bit quantum security (NIST FIPS 204).
 
 **Supporting Cryptographic Infrastructure:**
 
