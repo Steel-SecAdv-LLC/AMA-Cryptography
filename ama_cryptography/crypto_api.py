@@ -683,9 +683,7 @@ class AESGCMProvider:
         except FileNotFoundError:
             return
         except Exception as e:
-            raise RuntimeError(
-                f"Failed to load persisted AES-GCM counters from {path}: {e}"
-            ) from e
+            raise RuntimeError(f"Failed to load persisted AES-GCM counters from {path}: {e}") from e
 
     @classmethod
     def _persist_counters(cls) -> None:

@@ -449,9 +449,7 @@ class NonceTracker:
 
     _NONCE_SAFETY_LIMIT: int = 2**32
 
-    def __init__(
-        self, persist_path: Optional[str] = None, ephemeral: bool = False
-    ) -> None:
+    def __init__(self, persist_path: Optional[str] = None, ephemeral: bool = False) -> None:
         """
         Args:
             persist_path: Path to append-only persistence file.
