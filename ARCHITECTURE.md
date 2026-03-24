@@ -170,35 +170,41 @@ Encryption and KDF:
 
 ### Cryptographic Layer Stack
 
-The system implements multiple independent security layers, applied sequentially:
+The system implements multiple independent security layers, applied sequentially. Core cryptographic operations (the defense layers an attacker must defeat) are distinguished from supporting infrastructure:
 
 ```
-Layer 6: RFC 3161 Trusted Timestamp (optional)
-         |
-Layer 5: ML-DSA-65 Quantum-Resistant Signature
-         |
-Layer 4: Ed25519 Classical Digital Signature
-         |
-Layer 3: HMAC-SHA3-256 Message Authentication
-         |
-Layer 2: SHA3-256 Content Hash
-         |
-Layer 1: Canonical Length-Prefixed Encoding
-         |
-      [Input Data]
+  Supporting: RFC 3161 Trusted Timestamp (optional)
+              |
+    Layer 4: ML-DSA-65 Quantum-Resistant Signature
+              |
+    Layer 3: Ed25519 Classical Digital Signature
+              |                                       Supporting: HKDF-SHA3-256
+    Layer 2: HMAC-SHA3-256 Message Authentication  <-- derives keys for Layers 2-4
+              |
+    Layer 1: SHA3-256 Content Hash
+              |
+  Input Normalization: Canonical Length-Prefixed Encoding
+              |
+          [Input Data]
 ```
 
-**Layer 1 - Canonical Encoding**: Input data is encoded using a deterministic length-prefixed format that prevents concatenation attacks and ensures identical inputs always produce identical encoded outputs.
+**Core Cryptographic Operations:**
 
-**Layer 2 - Content Hashing**: SHA3-256 produces a 256-bit digest of the canonically encoded data. This digest serves as the binding commitment for all subsequent cryptographic operations.
+**Input Normalization - Canonical Encoding**: Input data is encoded using a deterministic length-prefixed format that prevents concatenation attacks and ensures identical inputs always produce identical encoded outputs. This is the input normalization step, not an independent defense layer.
 
-**Layer 3 - Message Authentication**: HMAC-SHA3-256 provides symmetric authentication using a derived key. This layer enables efficient verification when the HMAC key is available.
+**Layer 1 - Content Hashing**: SHA3-256 produces a 256-bit digest of the canonically encoded data. This digest serves as the binding commitment for all subsequent cryptographic operations. 128-bit collision resistance (NIST FIPS 202).
 
-**Layer 4 - Classical Signature**: Ed25519 provides a compact (64-byte) digital signature with 128-bit classical security. This layer ensures compatibility with existing verification infrastructure.
+**Layer 2 - Message Authentication**: HMAC-SHA3-256 provides keyed message authentication using a key derived via HKDF. This layer enables efficient verification when the HMAC key is available.
 
-**Layer 5 - Quantum-Resistant Signature**: ML-DSA-65 (Dilithium Level 3) provides a lattice-based signature resistant to known quantum attacks. Signature size is approximately 3,293 bytes.
+**Layer 3 - Classical Signature**: Ed25519 provides a compact (64-byte) digital signature with 128-bit classical security. This layer ensures compatibility with existing verification infrastructure.
 
-**Layer 6 - Trusted Timestamp**: Optional RFC 3161 timestamp from a trusted third-party authority provides non-repudiation and proof of existence at a specific time.
+**Layer 4 - Quantum-Resistant Signature**: ML-DSA-65 (Dilithium Level 3) provides a lattice-based signature resistant to known quantum attacks. Signature size is approximately 3,293 bytes. 192-bit quantum security (NIST FIPS 204).
+
+**Supporting Cryptographic Infrastructure:**
+
+**HKDF-SHA3-256 Key Derivation**: Derives independent cryptographic keys from a single master secret, ensuring key independence across Layers 2-4. A supporting primitive, not an independent defense layer.
+
+**RFC 3161 Trusted Timestamp**: Optional third-party timestamp providing temporal proof of existence at a specific time. Proves when a package was created, not who created it.
 
 ### Key Sizes and Parameters
 
