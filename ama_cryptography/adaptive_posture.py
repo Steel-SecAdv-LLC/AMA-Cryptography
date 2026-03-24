@@ -465,21 +465,32 @@ class CryptoPostureController:
 
         if evaluation.action in destructive_actions and not cooldown_active:
             if self.confirmation_mode:
-                # Queue action for confirmation instead of immediate execution
-                pending = PendingAction(
-                    action_id=str(uuid.uuid4()),
-                    action=evaluation.action,
-                    reason=f"Threat level: {evaluation.threat_level.name}, "
-                    f"confidence: {evaluation.confidence:.2f}",
-                    timestamp=now,
-                )
-                self._pending_actions.append(pending)
-                logger.info(
-                    "Action %s queued for confirmation (id=%s, grace_period=%.0fs)",
-                    evaluation.action.name,
-                    pending.action_id,
-                    self.grace_period,
-                )
+                # Cap pending actions — prevent unbounded queue growth
+                _MAX_PENDING = 10
+                if len(self._pending_actions) >= _MAX_PENDING:
+                    logger.warning(
+                        "Pending action queue full (%d). Dropping new %s action.",
+                        _MAX_PENDING,
+                        evaluation.action.name,
+                    )
+                else:
+                    # Queue action for confirmation instead of immediate execution
+                    pending = PendingAction(
+                        action_id=str(uuid.uuid4()),
+                        action=evaluation.action,
+                        reason=f"Threat level: {evaluation.threat_level.name}, "
+                        f"confidence: {evaluation.confidence:.2f}",
+                        timestamp=now,
+                    )
+                    self._pending_actions.append(pending)
+                    # Update cooldown so repeated evaluations don't bypass it
+                    self._last_rotation_time = now
+                    logger.info(
+                        "Action %s queued for confirmation (id=%s, grace_period=%.0fs)",
+                        evaluation.action.name,
+                        pending.action_id,
+                        self.grace_period,
+                    )
             else:
                 # Immediate execution (default behavior)
                 self._execute_action(evaluation.action)

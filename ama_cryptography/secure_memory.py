@@ -29,7 +29,7 @@ Features:
 
 Implementation Notes:
     - secure_memzero: Multi-pass byte-level overwrite
-    - secure_mlock/munlock: Not available without libsodium; raises NotImplementedError
+    - secure_mlock/munlock: Native C backend (VirtualLock/mlock) or POSIX fallback
     - constant_time_compare: ama_consttime_memcmp (C) or XOR accumulator (Python)
     - secure_random_bytes: Uses os.urandom (stdlib)
 
@@ -55,11 +55,15 @@ Author/Inventor: Andrew E. A.
 """
 
 import ctypes
+import ctypes.util
+import logging
 import os
 import sys
 from contextlib import contextmanager
 from types import TracebackType
 from typing import Any, Callable, Dict, Generator, Optional, Type, Union
+
+logger = logging.getLogger(__name__)
 
 
 class SecureMemoryError(Exception):
@@ -162,8 +166,6 @@ def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
     Raises:
         NotImplementedError: If no native backend available and not on POSIX
     """
-    import ctypes
-
     size = len(data)
     if size == 0:
         return
@@ -191,24 +193,24 @@ def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
                 raise SecureMemoryError(f"ama_secure_mlock failed with error code {ret}")
             return
     except (ImportError, AttributeError):
-        # Native backend unavailable or incomplete; fall through to POSIX fallback
-        pass
+        # Native backend unavailable — fall through to POSIX fallback
+        logger.debug("Native mlock unavailable, trying POSIX fallback")
 
     # POSIX fallback
-    import ctypes.util
-
     try:
-        libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
-        if hasattr(libc, "mlock"):
-            libc.mlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-            libc.mlock.restype = ctypes.c_int
-            ret = libc.mlock(ctypes.c_void_p(addr), size)
-            if ret != 0:
-                errno = ctypes.get_errno()
-                raise SecureMemoryError(
-                    f"mlock failed with errno {errno}: " f"{os.strerror(errno)}"
-                )
-            return
+        libc_name = ctypes.util.find_library("c")
+        if libc_name:
+            libc = ctypes.CDLL(libc_name, use_errno=True)
+            if hasattr(libc, "mlock"):
+                libc.mlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+                libc.mlock.restype = ctypes.c_int
+                ret = libc.mlock(ctypes.c_void_p(addr), size)
+                if ret != 0:
+                    errno = ctypes.get_errno()
+                    raise SecureMemoryError(
+                        f"mlock failed with errno {errno}: {os.strerror(errno)}"
+                    )
+                return
     except SecureMemoryError:
         raise
     except (OSError, AttributeError) as exc:
@@ -231,8 +233,6 @@ def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
     Raises:
         NotImplementedError: If no native backend available and not on POSIX
     """
-    import ctypes
-
     size = len(data)
     if size == 0:
         return
@@ -258,24 +258,24 @@ def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
                 raise SecureMemoryError(f"ama_secure_munlock failed with error code {ret}")
             return
     except (ImportError, AttributeError):
-        # Native backend unavailable or incomplete; fall through to POSIX fallback
-        pass
+        # Native backend unavailable — fall through to POSIX fallback
+        logger.debug("Native munlock unavailable, trying POSIX fallback")
 
     # POSIX fallback
-    import ctypes.util
-
     try:
-        libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
-        if hasattr(libc, "munlock"):
-            libc.munlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-            libc.munlock.restype = ctypes.c_int
-            ret = libc.munlock(ctypes.c_void_p(addr), size)
-            if ret != 0:
-                errno = ctypes.get_errno()
-                raise SecureMemoryError(
-                    f"munlock failed with errno {errno}: " f"{os.strerror(errno)}"
-                )
-            return
+        libc_name = ctypes.util.find_library("c")
+        if libc_name:
+            libc = ctypes.CDLL(libc_name, use_errno=True)
+            if hasattr(libc, "munlock"):
+                libc.munlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+                libc.munlock.restype = ctypes.c_int
+                ret = libc.munlock(ctypes.c_void_p(addr), size)
+                if ret != 0:
+                    errno = ctypes.get_errno()
+                    raise SecureMemoryError(
+                        f"munlock failed with errno {errno}: {os.strerror(errno)}"
+                    )
+                return
     except SecureMemoryError:
         raise
     except (OSError, AttributeError) as exc:
@@ -471,9 +471,6 @@ def _detect_mlock_available() -> bool:
         pass
     # POSIX fallback: mlock available on Linux/macOS (may still fail due to ulimits)
     if sys.platform != "win32":
-        import ctypes
-        import ctypes.util
-
         libc_name = ctypes.util.find_library("c")
         if libc_name:
             try:

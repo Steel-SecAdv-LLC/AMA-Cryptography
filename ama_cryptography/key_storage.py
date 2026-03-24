@@ -7,7 +7,7 @@ AMA Cryptography - Encrypted Key Storage
 ==========================================
 
 Provides encrypted-at-rest key storage using:
-- Argon2id (preferred) or PBKDF2-HMAC-SHA256 (fallback) for wrapping key derivation
+- PBKDF2-HMAC-SHA256 for wrapping key derivation
 - AES-256-GCM for encrypting stored keys
 - Integration with KeyMetadata and key lifecycle system
 
@@ -123,7 +123,10 @@ class EncryptedKeyStore:
             self._wrapping_key = secrets.token_bytes(32)
 
         self._keys: Dict[str, Dict[str, Any]] = {}
-        self._load_store()
+        # Only load persisted store when a passphrase was provided — ephemeral
+        # random keys cannot decrypt an existing store.
+        if passphrase is not None:
+            self._load_store()
 
     def _load_or_create_salt(self) -> bytes:
         """Load or create the salt file."""
@@ -156,8 +159,10 @@ class EncryptedKeyStore:
             logger.warning("Failed to load keystore: %s", e)
 
     def _save_store(self) -> None:
-        """Save the encrypted keystore to disk."""
+        """Save the encrypted keystore to disk using atomic write-rename."""
         import base64
+        import os
+        import tempfile
 
         keys: dict[str, dict[str, object]] = {}
         for key_id, entry in self._keys.items():
@@ -170,8 +175,22 @@ class EncryptedKeyStore:
                 "metadata": entry.get("metadata", {}),
             }
         data: dict[str, object] = {"version": 1, "keys": keys}
-        with open(self._store_path, "w") as f:
-            json.dump(data, f, indent=2)
+        # Atomic write: temp file + fsync + rename prevents data loss on crash
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(self._store_path.parent), suffix=".tmp", prefix=".keystore_"
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, str(self._store_path))
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def store_key(
         self,

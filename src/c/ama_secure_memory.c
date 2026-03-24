@@ -94,11 +94,9 @@ AMA_API void *ama_secure_alloc(size_t size) {
     /* Zero the buffer using existing ama_secure_memzero */
     ama_secure_memzero(ptr, size);
 
-    /* Lock in memory */
-    if (ama_secure_mlock(ptr, size) != AMA_SUCCESS) {
-        /* mlock failed — still return the buffer, but it may be swapped */
-        /* This is a best-effort approach; some systems limit mlock */
-    }
+    /* Lock in memory — best-effort; some systems limit mlock via ulimit.
+     * Failure is non-fatal: the buffer is usable but may be swapped. */
+    (void)ama_secure_mlock(ptr, size);
 
     return ptr;
 }
