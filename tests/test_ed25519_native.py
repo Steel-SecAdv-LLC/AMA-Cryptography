@@ -49,7 +49,7 @@ def _pyca_available() -> bool:
         return True
     except Exception:
         return False
-    except BaseException:  # catches pyo3_runtime.PanicException (BaseException subclass)
+    except BaseException:  # PanicException (BaseException); re-raises all others
         import sys
 
         _exc = sys.exc_info()[1]
