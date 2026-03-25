@@ -7,7 +7,7 @@ AMA Cryptography - Encrypted Key Storage
 ==========================================
 
 Provides encrypted-at-rest key storage using:
-- PBKDF2-HMAC-SHA256 for wrapping key derivation
+- Argon2id (RFC 9106) for wrapping key derivation via native C backend
 - AES-256-GCM for encrypting stored keys
 - Integration with KeyMetadata and key lifecycle system
 
@@ -15,7 +15,6 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 """
 
-import hashlib
 import json
 import logging
 import secrets
@@ -28,23 +27,44 @@ logger = logging.getLogger(__name__)
 
 # Try to import native C library for Argon2id and AES-GCM
 _HAS_NATIVE = False
+_HAS_ARGON2 = False
 try:
     from ama_cryptography.pqc_backends import (
         _AES_GCM_NATIVE_AVAILABLE,
+        _ARGON2_NATIVE_AVAILABLE,
         _native_lib,
         native_aes256_gcm_decrypt,
         native_aes256_gcm_encrypt,
+        native_argon2id,
     )
 
     if _native_lib is not None and _AES_GCM_NATIVE_AVAILABLE:
         _HAS_NATIVE = True
+    if _native_lib is not None and _ARGON2_NATIVE_AVAILABLE:
+        _HAS_ARGON2 = True
 except ImportError:
     logger.debug("Native PQC backend unavailable — key storage will use fallback")
 
 
-def _pbkdf2_derive(passphrase: bytes, salt: bytes, iterations: int = 600_000) -> bytes:
-    """Derive 32-byte key from passphrase using PBKDF2-HMAC-SHA256."""
-    return hashlib.pbkdf2_hmac("sha256", passphrase, salt, iterations, dklen=32)
+def _kdf_derive(passphrase: bytes, salt: bytes) -> bytes:
+    """Derive 32-byte wrapping key from passphrase using native Argon2id (RFC 9106).
+
+    INVARIANT-1 compliance: uses AMA's own native Argon2id implementation
+    instead of stdlib hashlib.pbkdf2_hmac (which internally uses OpenSSL HMAC).
+    """
+    if not _HAS_ARGON2:
+        raise RuntimeError(
+            "Argon2id native backend required for key storage KDF. "
+            "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
+    return native_argon2id(
+        password=passphrase,
+        salt=salt,
+        t_cost=3,
+        m_cost=65536,
+        parallelism=4,
+        out_len=32,
+    )
 
 
 def _encrypt_data(key: bytes, plaintext: bytes, aad: bytes = b"") -> Dict[str, bytes]:
@@ -89,7 +109,7 @@ class EncryptedKeyStore:
     Encrypted keystore on disk.
 
     Keys at rest are encrypted with AES-256-GCM using a wrapping key
-    derived from a passphrase via PBKDF2-HMAC-SHA256.
+    derived from a passphrase via Argon2id (RFC 9106).
 
     File format: JSON with base64-encoded encrypted fields.
     """
@@ -117,7 +137,7 @@ class EncryptedKeyStore:
         # Derive wrapping key
         if passphrase is not None:
             self._salt = self._load_or_create_salt()
-            self._wrapping_key = _pbkdf2_derive(passphrase.encode("utf-8"), self._salt)
+            self._wrapping_key = _kdf_derive(passphrase.encode("utf-8"), self._salt)
         else:
             self._salt = secrets.token_bytes(32)
             self._wrapping_key = secrets.token_bytes(32)
