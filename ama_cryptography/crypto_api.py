@@ -1588,6 +1588,55 @@ class CryptoPackageResult:
     metadata: Dict[str, Any]
 
 
+def _acquire_timestamp(
+    content: bytes,
+    config: CryptoPackageConfig,
+) -> Optional[bytes]:
+    """Acquire an RFC 3161 timestamp token according to *config*.
+
+    Returns the raw token bytes, or ``None`` when timestamping is disabled or
+    not requested.  Raises :class:`TimestampError` / :class:`TimestampUnavailableError`
+    on hard failures in online mode.
+    """
+    if not config.include_timestamp:
+        return None
+
+    tsa_mode = getattr(config, "tsa_mode", "online")
+    if tsa_mode == "disabled":
+        return None
+
+    if tsa_mode == "mock":
+        try:
+            result = get_timestamp(
+                data=content,
+                tsa_url=config.tsa_url,
+                hash_algorithm="sha3-256",
+                tsa_mode="mock",
+            )
+            return result.token if result is not None else None
+        except Exception:
+            return None
+
+    # Online mode
+    if not RFC3161_AVAILABLE:
+        raise TimestampUnavailableError(
+            "RFC3161_UNAVAILABLE: rfc3161ng library not installed. "
+            "Install with: pip install rfc3161ng"
+        )
+    try:
+        result = get_timestamp(
+            data=content,
+            tsa_url=config.tsa_url,
+            hash_algorithm="sha3-256",
+        )
+        return result.token if result is not None else None
+    except TimestampError as e:
+        raise TimestampError(
+            f"RFC 3161 timestamp is required when include_timestamp=True, "
+            f"but the timestamp request failed: {e}"
+        ) from e
+
+
 def create_crypto_package(
     content: bytes,
     config: Optional[CryptoPackageConfig] = None,
@@ -1713,42 +1762,7 @@ def create_crypto_package(
     # ========================================================================
     # OPTIONAL ADD-ON: RFC 3161 Timestamp
     # ========================================================================
-    timestamp_token: Optional[bytes] = None
-    if config.include_timestamp:
-        tsa_mode = getattr(config, "tsa_mode", "online")
-        if tsa_mode == "disabled":
-            timestamp_token = None
-        elif tsa_mode == "mock":
-            try:
-                timestamp_result = get_timestamp(
-                    data=content,
-                    tsa_url=config.tsa_url,
-                    hash_algorithm="sha3-256",
-                    tsa_mode="mock",
-                )
-                if timestamp_result is not None:
-                    timestamp_token = timestamp_result.token
-            except Exception:
-                timestamp_token = None
-        else:
-            if not RFC3161_AVAILABLE:
-                raise TimestampUnavailableError(
-                    "RFC3161_UNAVAILABLE: rfc3161ng library not installed. "
-                    "Install with: pip install rfc3161ng"
-                )
-            try:
-                timestamp_result = get_timestamp(
-                    data=content,
-                    tsa_url=config.tsa_url,
-                    hash_algorithm="sha3-256",
-                )
-                if timestamp_result is not None:
-                    timestamp_token = timestamp_result.token
-            except TimestampError as e:
-                raise TimestampError(
-                    f"RFC 3161 timestamp is required when include_timestamp=True, "
-                    f"but the timestamp request failed: {e}"
-                ) from e
+    timestamp_token = _acquire_timestamp(content, config)
 
     # Build metadata
     metadata: Dict[str, Any] = {
