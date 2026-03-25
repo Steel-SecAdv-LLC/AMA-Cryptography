@@ -529,16 +529,20 @@ class CryptoPostureController:
         """
         Confirm and execute a pending action.
 
+        The confirmed action is removed from _pending_actions immediately
+        after execution to prevent stale entries from accumulating.
+
         Args:
             action_id: The ID of the pending action to confirm
 
         Returns:
             True if action was found and executed, False otherwise
         """
-        for pa in self._pending_actions:
+        for i, pa in enumerate(self._pending_actions):
             if pa.action_id == action_id and not pa.confirmed:
                 pa.confirmed = True
                 self._execute_action(pa.action)
+                self._pending_actions.pop(i)
                 logger.info("Confirmed and executed action %s (id=%s)", pa.action.name, action_id)
                 return True
         return False
