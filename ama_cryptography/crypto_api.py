@@ -832,7 +832,18 @@ class AESGCMProvider:
         if AESGCMProvider._counters_dirty >= self._PERSIST_INTERVAL:
             try:
                 self._persist_counters(_raising=True)
-            finally:
+            except Exception:
+                # Persist failed — set dirty to interval-1 so the VERY NEXT
+                # encrypt retries persistence immediately, avoiding both:
+                # (a) 63 encrypts without persistence (finally-reset-to-0), and
+                # (b) permanent bricking (success-only reset where dirty stays
+                #     above the threshold forever after any transient I/O error).
+                # The RuntimeError still propagates (fail-closed — no ciphertext
+                # returned), but recovery is attempted on the next encrypt().
+                AESGCMProvider._counters_dirty = self._PERSIST_INTERVAL - 1
+                raise
+            else:
+                # Persist succeeded — reset to 0 for normal operation.
                 AESGCMProvider._counters_dirty = 0
 
         return {
