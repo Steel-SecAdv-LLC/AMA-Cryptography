@@ -843,11 +843,13 @@ class ResonanceTimingMonitor:
 
             self._ratio_samples[pair].append(ratio)
 
-            # Baseline ratios after 30 samples
+            # Capture baseline once we have enough samples.
+            # Use >= 30 (not == 30) so this works even when window_size < 30
+            # (the deque wraps before reaching 30, so == 30 would never fire).
             samples = self._ratio_samples[pair]
-            if len(samples) == 30:
+            if len(samples) >= 30 and pair not in self._ratio_baselines:
                 self._ratio_baselines[pair] = (_mean(samples), _std(samples))
-            elif len(samples) > 30 and pair in self._ratio_baselines:
+            elif pair in self._ratio_baselines:
                 baseline_mean, baseline_std = self._ratio_baselines[pair]
                 if baseline_std > 0:
                     deviation = abs(ratio - baseline_mean) / baseline_std
