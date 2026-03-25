@@ -105,19 +105,22 @@ if(AMA_ENABLE_SIMD)
         endif()
     endif()
 
-    # AES-NI + PCLMULQDQ flags for x86 — applied per-file (not globally)
-    # to prevent illegal instruction crashes on CPUs without AES-NI.
-    # Runtime dispatch via ama_cpuid.c selects the correct path.
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86")
-        if(NOT MSVC)
-            set_source_files_properties(src/c/ama_aes_gcm.c PROPERTIES
-                COMPILE_FLAGS "-maes -mpclmul")
-            # Note: ama_aes_bitsliced.c intentionally does NOT get -maes/-mpclmul
-            # — it is the constant-time software fallback for CPUs without AES-NI.
-            message(STATUS "AES-NI/PCLMULQDQ: per-file flags for ama_aes_gcm.c only")
-        else()
-            message(STATUS "AES-NI/PCLMULQDQ: MSVC detected — intrinsics available by default")
-        endif()
+endif()
+
+# AES-NI + PCLMULQDQ flags for x86 — applied per-file (not globally)
+# to prevent illegal instruction crashes on CPUs without AES-NI.
+# Runtime dispatch via ama_cpuid.c selects the correct path.
+# NOTE: Independent of AMA_ENABLE_SIMD — AES-NI is a distinct ISA extension
+# from AVX2/SSE. Disabling SIMD should not disable hardware AES acceleration.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86")
+    if(NOT MSVC)
+        set_source_files_properties(src/c/ama_aes_gcm.c PROPERTIES
+            COMPILE_FLAGS "-maes -mpclmul")
+        # Note: ama_aes_bitsliced.c intentionally does NOT get -maes/-mpclmul
+        # — it is the constant-time software fallback for CPUs without AES-NI.
+        message(STATUS "AES-NI/PCLMULQDQ: per-file flags for ama_aes_gcm.c only")
+    else()
+        message(STATUS "AES-NI/PCLMULQDQ: MSVC detected — intrinsics available by default")
     endif()
 endif()
 

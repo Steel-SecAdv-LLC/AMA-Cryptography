@@ -172,8 +172,20 @@ class EncryptedKeyStore:
                 os.close(fd)
             return salt
         except FileExistsError:
-            # Another process created the salt first — read it
-            return salt_path.read_bytes()
+            # Another process created the salt first — read it.
+            # Retry briefly in case the writer hasn't finished os.write() yet
+            # (the file exists but may be empty/truncated for a few microseconds).
+            import time as _time
+
+            for _attempt in range(50):
+                salt_data = salt_path.read_bytes()
+                if len(salt_data) == 32:
+                    return salt_data
+                _time.sleep(0.01)
+            raise RuntimeError(
+                f"Salt file {salt_path} exists but contains {len(salt_data)} bytes "
+                f"(expected 32). Another process may have crashed during creation."
+            ) from None
 
     def _load_store(self) -> None:
         """Load the encrypted keystore from disk."""
