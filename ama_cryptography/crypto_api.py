@@ -830,8 +830,10 @@ class AESGCMProvider:
         self._encrypt_counters[key_id] = count + 1
         AESGCMProvider._counters_dirty += 1
         if AESGCMProvider._counters_dirty >= self._PERSIST_INTERVAL:
-            self._persist_counters(_raising=True)
-            AESGCMProvider._counters_dirty = 0
+            try:
+                self._persist_counters(_raising=True)
+            finally:
+                AESGCMProvider._counters_dirty = 0
 
         return {
             "ciphertext": ct,
