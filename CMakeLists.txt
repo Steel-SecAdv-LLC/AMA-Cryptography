@@ -182,6 +182,13 @@ else()
     message(STATUS "AES backend: table-based S-box (fast, NOT cache-timing safe)")
 endif()
 
+# Threading: ama_cpuid.c uses pthread_once (POSIX) or InitOnceExecuteOnce
+# (Windows) for thread-safe one-time initialization (INVARIANT-2).
+# CMake's Threads package resolves to -lpthread on Linux, nothing extra on
+# macOS (pthreads are in libSystem), and is a no-op on Windows (MSVC path
+# uses InitOnceExecuteOnce from synchapi.h, linked automatically).
+find_package(Threads REQUIRED)
+
 # OpenSSL: no longer required — all cryptographic operations use native
 # implementations. Kept as optional for backward compatibility with
 # downstream builds that may pass -DOPENSSL_ROOT_DIR.
@@ -226,6 +233,9 @@ if(AMA_BUILD_SHARED)
     endif()
     ama_apply_donna_settings(ama_cryptography_shared)
 
+    # Threading (INVARIANT-2): pthread_once on POSIX, InitOnceExecuteOnce on Windows
+    target_link_libraries(ama_cryptography_shared PRIVATE Threads::Threads)
+
     # Windows: link bcrypt for BCryptGenRandom (used by ama_platform_rand.c)
     if(WIN32)
         target_link_libraries(ama_cryptography_shared PRIVATE bcrypt)
@@ -247,6 +257,8 @@ if(AMA_BUILD_STATIC)
         target_compile_definitions(ama_cryptography_static PRIVATE AMA_AES_CONSTTIME)
     endif()
     ama_apply_donna_settings(ama_cryptography_static)
+
+    target_link_libraries(ama_cryptography_static PRIVATE Threads::Threads)
 
     if(WIN32)
         target_link_libraries(ama_cryptography_static PRIVATE bcrypt)
@@ -283,6 +295,8 @@ if(AMA_BUILD_TESTS)
         target_compile_definitions(ama_cryptography_test PRIVATE AMA_AES_CONSTTIME)
     endif()
     ama_apply_donna_settings(ama_cryptography_test)
+
+    target_link_libraries(ama_cryptography_test PRIVATE Threads::Threads)
 
     if(WIN32)
         target_link_libraries(ama_cryptography_test PRIVATE bcrypt)
