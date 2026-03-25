@@ -498,7 +498,13 @@ class CryptoPostureController:
         return evaluation
 
     def _execute_action(self, action: PostureAction) -> None:
-        """Execute a posture action immediately."""
+        """Execute a posture action immediately.
+
+        Updates ``_last_rotation_time`` so the cooldown window applies
+        consistently regardless of whether the action was queued via
+        confirmation mode or executed immediately.
+        """
+        self._last_rotation_time = time.time()
         if action == PostureAction.ROTATE_AND_SWITCH:
             self._trigger_rotation()
             self._trigger_algorithm_switch()
