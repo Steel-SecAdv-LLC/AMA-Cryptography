@@ -114,10 +114,10 @@ if(AMA_ENABLE_SIMD)
                 COMPILE_FLAGS "-maes -mpclmul")
             # Note: ama_aes_bitsliced.c intentionally does NOT get -maes/-mpclmul
             # — it is the constant-time software fallback for CPUs without AES-NI.
+            message(STATUS "AES-NI/PCLMULQDQ: per-file flags for ama_aes_gcm.c only")
         else()
             message(STATUS "AES-NI/PCLMULQDQ: MSVC detected — intrinsics available by default")
         endif()
-        message(STATUS "AES-NI/PCLMULQDQ: per-file flags for ama_aes_gcm.c only (non-MSVC)")
     endif()
 endif()
 
