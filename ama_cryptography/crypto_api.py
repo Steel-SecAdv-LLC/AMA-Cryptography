@@ -717,8 +717,19 @@ class AESGCMProvider:
                 import fcntl
 
                 fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            except (ImportError, OSError) as _lock_err:
-                logger.debug("File locking unavailable: %s — proceeding without lock", _lock_err)
+            except ImportError:
+                # Windows: fcntl unavailable — try msvcrt.locking
+                try:
+                    import msvcrt  # Windows-only stdlib module
+
+                    msvcrt.locking(lock_fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+                except (ImportError, OSError) as _lock_err:
+                    logger.debug(
+                        "File locking unavailable (no fcntl or msvcrt): %s — proceeding without lock",
+                        _lock_err,
+                    )
+            except OSError as _lock_err:
+                logger.debug("File locking failed: %s — proceeding without lock", _lock_err)
 
             # Merge with any counters persisted by another process
             try:
