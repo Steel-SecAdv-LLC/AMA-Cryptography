@@ -28,7 +28,6 @@ Use Cases:
 """
 
 import hashlib
-import hmac as _hmac_mod
 import os as _os_mod
 import struct
 import time
@@ -89,6 +88,20 @@ _MOCK_MAGIC = b"AMA_MOCK_TSA\x00\x01\x00\x00"
 _MOCK_TSA_ALLOWED: bool = False
 
 
+def _hmac_sha256(key: bytes, msg: bytes) -> bytes:
+    """RFC 2104 HMAC-SHA-256 without importing stdlib hmac (INVARIANT-1).
+
+    Uses hashlib.sha256 directly.  Block size for SHA-256 is 64 bytes.
+    """
+    block_size = 64
+    if len(key) > block_size:
+        key = hashlib.sha256(key).digest()
+    key = key.ljust(block_size, b"\x00")
+    o_key_pad = bytes(k ^ 0x5C for k in key)
+    i_key_pad = bytes(k ^ 0x36 for k in key)
+    return hashlib.sha256(o_key_pad + hashlib.sha256(i_key_pad + msg).digest()).digest()
+
+
 class MockTSA:
     """
     Self-signed mock Time-Stamp Authority for testing purposes.
@@ -134,7 +147,7 @@ class MockTSA:
         payload = _MOCK_MAGIC + algo_len + algo_bytes + ts + data_hash
         # S3 fix: Use HMAC instead of raw SHA-256(nonce || payload) to
         # prevent length-extension attacks on the integrity tag.
-        mac = _hmac_mod.new(nonce, payload, hashlib.sha256).digest()
+        mac = _hmac_sha256(nonce, payload)
 
         return payload + mac + nonce
 
@@ -162,8 +175,8 @@ class MockTSA:
             payload = token[: -(32 + 32)]
 
             # S3 fix: Verify HMAC (not raw hash concatenation).
-            expected_mac = _hmac_mod.new(nonce, payload, hashlib.sha256).digest()
-            if not _hmac_mod.compare_digest(mac, expected_mac):
+            expected_mac = _hmac_sha256(nonce, payload)
+            if mac != expected_mac:
                 return False
 
             # Extract embedded data_hash from the payload and compare.
