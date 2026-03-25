@@ -19,6 +19,7 @@ from ama_cryptography.adaptive_posture import (
 
 # ---- helpers ----------------------------------------------------------------
 
+
 def _make_report(
     timing_alerts=None,
     pattern_alerts=None,
@@ -119,9 +120,7 @@ class TestEscalation:
             decay_rate=1.0,  # disable decay for determinism
         )
         # One high-scoring evaluation is not enough
-        report = _make_report(
-            timing_alerts=[_timing_alert("critical", 20.0)] * 5
-        )
+        report = _make_report(timing_alerts=[_timing_alert("critical", 20.0)] * 5)
         result = ev.evaluate(report)
         # Should still be NOMINAL after a single evaluation
         assert result.threat_level == ThreatLevel.NOMINAL

@@ -25,6 +25,7 @@ def combiner() -> HybridCombiner:
 
 # ---- helpers ----------------------------------------------------------------
 
+
 def _random(n: int) -> bytes:
     return os.urandom(n)
 
@@ -91,17 +92,11 @@ class TestHybridCombinerEdgeCases:
         classical_pk = _random(32)
         pqc_pk = _random(1184)
 
-        r1 = combiner.combine(
-            classical_ss, pqc_ss, classical_ct, pqc_ct, classical_pk, pqc_pk
-        )
-        r2 = combiner.combine(
-            classical_ss, pqc_ss, classical_ct, pqc_ct, classical_pk, pqc_pk
-        )
+        r1 = combiner.combine(classical_ss, pqc_ss, classical_ct, pqc_ct, classical_pk, pqc_pk)
+        r2 = combiner.combine(classical_ss, pqc_ss, classical_ct, pqc_ct, classical_pk, pqc_pk)
         assert r1 == r2
 
-    def test_different_inputs_produce_different_outputs(
-        self, combiner: HybridCombiner
-    ) -> None:
+    def test_different_inputs_produce_different_outputs(self, combiner: HybridCombiner) -> None:
         """Changing any single input must change the output."""
         base_args = {
             "classical_ss": _random(32),
@@ -117,9 +112,9 @@ class TestHybridCombinerEdgeCases:
         for key in ("classical_ss", "pqc_ss", "classical_ct", "pqc_ct"):
             modified = dict(base_args)
             modified[key] = _random(len(base_args[key]))
-            assert combiner.combine(**modified) != baseline, (
-                f"Changing {key} did not change the output"
-            )
+            assert (
+                combiner.combine(**modified) != baseline
+            ), f"Changing {key} did not change the output"
 
     def test_zero_length_additional_context(self, combiner: HybridCombiner) -> None:
         """Passing empty public keys (zero-length context) should work and
@@ -143,22 +138,16 @@ class TestHybridCombinerEdgeCases:
         classical_ct = bytearray(_random(32))
         pqc_ct = _random(1568)
 
-        original = combiner.combine(
-            classical_ss, pqc_ss, bytes(classical_ct), pqc_ct
-        )
+        original = combiner.combine(classical_ss, pqc_ss, bytes(classical_ct), pqc_ct)
 
         # Flip one bit in the classical ciphertext
         classical_ct[0] ^= 0x01
 
-        corrupted = combiner.combine(
-            classical_ss, pqc_ss, bytes(classical_ct), pqc_ct
-        )
+        corrupted = combiner.combine(classical_ss, pqc_ss, bytes(classical_ct), pqc_ct)
 
         assert original != corrupted
 
-    def test_encapsulate_hybrid_returns_dataclass(
-        self, combiner: HybridCombiner
-    ) -> None:
+    def test_encapsulate_hybrid_returns_dataclass(self, combiner: HybridCombiner) -> None:
         """encapsulate_hybrid() should return a properly populated
         HybridEncapsulation dataclass."""
 

@@ -215,8 +215,7 @@ def get_timestamp(
     """
     if tsa_mode not in ("online", "mock", "disabled"):
         raise ValueError(
-            f"Unsupported tsa_mode: {tsa_mode!r}. "
-            "Supported: 'online', 'mock', 'disabled'"
+            f"Unsupported tsa_mode: {tsa_mode!r}. " "Supported: 'online', 'mock', 'disabled'"
         )
 
     # ---- Compute data hash (needed for all modes) ----

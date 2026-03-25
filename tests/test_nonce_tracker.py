@@ -1,4 +1,5 @@
 """Tests for AES-GCM nonce counter safety and fork detection."""
+
 import os
 from unittest.mock import patch
 
@@ -74,6 +75,7 @@ class TestAESGCMNonceCounter:
         key = os.urandom(32)
 
         import hashlib
+
         key_id = hashlib.sha256(key).digest()
         initial = AESGCMProvider._encrypt_counters.get(key_id, 0)
 
@@ -117,9 +119,7 @@ class TestAESGCMNonceCounter:
         plaintext = b"Round trip test data"
 
         enc = provider.encrypt(plaintext, key)
-        dec = provider.decrypt(
-            enc["ciphertext"], key, enc["nonce"], enc["tag"], enc["aad"]
-        )
+        dec = provider.decrypt(enc["ciphertext"], key, enc["nonce"], enc["tag"], enc["aad"])
         assert dec == plaintext
 
     def test_tampered_ciphertext_fails(self):

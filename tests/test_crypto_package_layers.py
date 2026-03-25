@@ -1,4 +1,5 @@
 """Tests for 4-Layer Defense-in-Depth crypto package creation and verification."""
+
 import hashlib
 
 import pytest
@@ -8,6 +9,7 @@ def _skip_if_no_backends():
     """Skip test if native backends are not available."""
     try:
         from ama_cryptography.crypto_api import create_crypto_package
+
         create_crypto_package(b"test")
     except (RuntimeError, Exception) as e:
         if "native" in str(e).lower() or "unavailable" in str(e).lower():
@@ -19,6 +21,7 @@ class TestCreateCryptoPackage:
     def test_basic_creation(self):
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package
+
         result = create_crypto_package(b"Hello, World!")
         assert result.content_hash == hashlib.sha3_256(b"Hello, World!").hexdigest()
         assert len(result.hmac_key) == 32
@@ -30,22 +33,26 @@ class TestCreateCryptoPackage:
     def test_metadata_has_4_layers(self):
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package
+
         result = create_crypto_package(b"test")
         assert result.metadata["defense_layers"] == 4
 
     def test_rejects_empty_content(self):
         from ama_cryptography.crypto_api import create_crypto_package
+
         with pytest.raises(ValueError, match="empty"):
             create_crypto_package(b"")
 
     def test_rejects_non_bytes(self):
         from ama_cryptography.crypto_api import create_crypto_package
+
         with pytest.raises(TypeError, match="bytes"):
             create_crypto_package("string")  # type: ignore[arg-type]
 
     def test_hmac_key_preserved(self):
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package
+
         result = create_crypto_package(b"test")
         assert isinstance(result.hmac_key, bytes)
         assert len(result.hmac_key) == 32
@@ -53,6 +60,7 @@ class TestCreateCryptoPackage:
     def test_hkdf_master_secret_preserved(self):
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package
+
         result = create_crypto_package(b"test")
         assert isinstance(result.hkdf_master_secret, bytes)
         assert len(result.hkdf_master_secret) == 32
@@ -62,6 +70,7 @@ class TestVerifyCryptoPackage:
     def test_verify_all_layers_pass(self):
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package, verify_crypto_package
+
         result = create_crypto_package(b"Hello")
         v = verify_crypto_package(b"Hello", result)
         assert v["content_hash"] is True
@@ -73,6 +82,7 @@ class TestVerifyCryptoPackage:
     def test_tampered_content_fails_hash(self):
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package, verify_crypto_package
+
         result = create_crypto_package(b"original")
         v = verify_crypto_package(b"tampered", result)
         assert v["content_hash"] is False
@@ -81,6 +91,7 @@ class TestVerifyCryptoPackage:
     def test_tampered_content_fails_hmac(self):
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package, verify_crypto_package
+
         result = create_crypto_package(b"original")
         v = verify_crypto_package(b"tampered", result)
         assert v["hmac"] is False
@@ -88,6 +99,7 @@ class TestVerifyCryptoPackage:
     def test_tampered_content_fails_signature(self):
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package, verify_crypto_package
+
         result = create_crypto_package(b"original")
         v = verify_crypto_package(b"tampered", result)
         assert v["primary_signature"] is False
@@ -97,10 +109,12 @@ class TestVerifyCryptoPackage:
         import os
 
         from ama_cryptography.crypto_api import create_crypto_package, verify_crypto_package
+
         content = b"test data"
         result = create_crypto_package(content)
         # Tamper with HMAC key
         from dataclasses import replace
+
         tampered = replace(result, hmac_key=os.urandom(32))
         v = verify_crypto_package(content, tampered)
         assert v["hmac"] is False
@@ -109,6 +123,7 @@ class TestVerifyCryptoPackage:
     def test_verify_returns_all_valid_key(self):
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package, verify_crypto_package
+
         result = create_crypto_package(b"test")
         v = verify_crypto_package(b"test", result)
         assert "all_valid" in v

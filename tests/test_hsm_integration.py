@@ -26,6 +26,7 @@ from ama_cryptography.key_management import HSMKeyStorage
 # Helper: build a realistic mock PyKCS11 module
 # ---------------------------------------------------------------------------
 
+
 def _make_mock_pkcs11() -> MagicMock:
     """Return a MagicMock that mimics the PyKCS11 top-level module."""
     mock = MagicMock()
@@ -78,8 +79,10 @@ def _build_hsm(
     slot_index: Optional[int] = None,
 ) -> HSMKeyStorage:
     """Construct an HSMKeyStorage instance with all internals mocked."""
-    with patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock_pkcs11), \
-         patch("os.path.exists", return_value=True):
+    with (
+        patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock_pkcs11),
+        patch("os.path.exists", return_value=True),
+    ):
         return HSMKeyStorage(
             hsm_type=hsm_type,
             library_path=library_path,
@@ -144,16 +147,20 @@ class TestHSMInit:
     def test_init_auto_resolve_softhsm_path(self) -> None:
         """When no library_path is given, _resolve_library_path searches PKCS11_PATHS."""
         mock = _make_mock_pkcs11()
-        with patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock), \
-             patch("os.path.exists", side_effect=lambda p: p == "/usr/lib/softhsm/libsofthsm2.so"):
+        with (
+            patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock),
+            patch("os.path.exists", side_effect=lambda p: p == "/usr/lib/softhsm/libsofthsm2.so"),
+        ):
             hsm = HSMKeyStorage(hsm_type="softhsm", pin="1234")
             assert hsm.library_path == "/usr/lib/softhsm/libsofthsm2.so"
 
     def test_init_library_not_found_raises_runtime_error(self) -> None:
         """If no PKCS#11 library file exists on disk, RuntimeError is raised."""
         mock = _make_mock_pkcs11()
-        with patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock), \
-             patch("os.path.exists", return_value=False):
+        with (
+            patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock),
+            patch("os.path.exists", return_value=False),
+        ):
             with pytest.raises(RuntimeError, match="PKCS#11 library not found"):
                 HSMKeyStorage(hsm_type="softhsm", pin="1234")
 
@@ -172,8 +179,10 @@ class TestLibraryLoading:
         lib_instance = mock.PyKCS11Lib.return_value
         lib_instance.load.side_effect = mock.PyKCS11Error("lib not loadable")
 
-        with patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock), \
-             patch("os.path.exists", return_value=True):
+        with (
+            patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock),
+            patch("os.path.exists", return_value=True),
+        ):
             with pytest.raises(RuntimeError, match="Failed to load PKCS#11 library"):
                 HSMKeyStorage(library_path="/bad/lib.so", pin="1234")
 
@@ -212,8 +221,10 @@ class TestSlotSelection:
         lib_inst = mock.PyKCS11Lib.return_value
         lib_inst.getSlotList.return_value = [0]
 
-        with patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock), \
-             patch("os.path.exists", return_value=True):
+        with (
+            patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock),
+            patch("os.path.exists", return_value=True),
+        ):
             with pytest.raises(ValueError, match=r"Slot index .* out of range"):
                 HSMKeyStorage(library_path="/lib.so", pin="1234", slot_index=5)
 
@@ -223,8 +234,10 @@ class TestSlotSelection:
         lib_inst = mock.PyKCS11Lib.return_value
         lib_inst.getSlotList.return_value = []
 
-        with patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock), \
-             patch("os.path.exists", return_value=True):
+        with (
+            patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock),
+            patch("os.path.exists", return_value=True),
+        ):
             with pytest.raises(RuntimeError, match="No HSM tokens found"):
                 HSMKeyStorage(library_path="/lib.so", pin="1234")
 
@@ -238,8 +251,10 @@ class TestSlotSelection:
         other_token.label = "OtherToken               "
         lib_inst.getTokenInfo.return_value = other_token
 
-        with patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock), \
-             patch("os.path.exists", return_value=True):
+        with (
+            patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock),
+            patch("os.path.exists", return_value=True),
+        ):
             with pytest.raises(RuntimeError, match=r"Token .* not found"):
                 HSMKeyStorage(
                     library_path="/lib.so",
@@ -266,9 +281,11 @@ class TestPINHandling:
     def test_pin_prompt_via_getpass(self) -> None:
         """When pin=None, getpass is used to prompt for the PIN."""
         mock = _make_mock_pkcs11()
-        with patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock), \
-             patch("os.path.exists", return_value=True), \
-             patch("getpass.getpass", return_value="prompted_pin"):
+        with (
+            patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock),
+            patch("os.path.exists", return_value=True),
+            patch("getpass.getpass", return_value="prompted_pin"),
+        ):
             HSMKeyStorage(library_path="/lib.so", pin=None)
             session = mock.PyKCS11Lib.return_value.openSession.return_value
             session.login.assert_called_once_with("prompted_pin")
@@ -279,8 +296,10 @@ class TestPINHandling:
         session = mock.PyKCS11Lib.return_value.openSession.return_value
         session.login.side_effect = mock.PyKCS11Error("CKR_PIN_INCORRECT")
 
-        with patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock), \
-             patch("os.path.exists", return_value=True):
+        with (
+            patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock),
+            patch("os.path.exists", return_value=True),
+        ):
             with pytest.raises(RuntimeError, match="Invalid PIN"):
                 HSMKeyStorage(library_path="/lib.so", pin="wrong")
 
@@ -290,8 +309,10 @@ class TestPINHandling:
         session = mock.PyKCS11Lib.return_value.openSession.return_value
         session.login.side_effect = mock.PyKCS11Error("CKR_GENERAL_ERROR")
 
-        with patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock), \
-             patch("os.path.exists", return_value=True):
+        with (
+            patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock),
+            patch("os.path.exists", return_value=True),
+        ):
             with pytest.raises(RuntimeError, match="HSM login failed"):
                 HSMKeyStorage(library_path="/lib.so", pin="1234")
 
@@ -310,8 +331,10 @@ class TestSessionFailures:
         lib_inst = mock.PyKCS11Lib.return_value
         lib_inst.openSession.side_effect = mock.PyKCS11Error("CKR_SESSION_CLOSED")
 
-        with patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock), \
-             patch("os.path.exists", return_value=True):
+        with (
+            patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock),
+            patch("os.path.exists", return_value=True),
+        ):
             with pytest.raises(RuntimeError, match="Failed to open HSM session"):
                 HSMKeyStorage(library_path="/lib.so", pin="1234")
 
@@ -426,7 +449,7 @@ class TestEncryptDecrypt:
         session = mock.PyKCS11Lib.return_value.openSession.return_value
 
         plaintext = b"sensitive payload"
-        fake_ct_tag = b"\xAB" * len(plaintext) + b"\xCD" * 16
+        fake_ct_tag = b"\xab" * len(plaintext) + b"\xcd" * 16
         session.encrypt.return_value = list(fake_ct_tag)
         session.decrypt.return_value = list(plaintext)
 
@@ -726,10 +749,14 @@ class TestSoftHSMIntegration:
             [
                 "softhsm2-util",
                 "--init-token",
-                "--slot", "0",
-                "--label", "AmaTest",
-                "--so-pin", "12345678",
-                "--pin", "1234",
+                "--slot",
+                "0",
+                "--label",
+                "AmaTest",
+                "--so-pin",
+                "12345678",
+                "--pin",
+                "1234",
             ],
             env=env,
             check=True,

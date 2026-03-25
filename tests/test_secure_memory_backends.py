@@ -1,4 +1,5 @@
 """Tests for secure memory zeroing backends and SecureBuffer lifecycle."""
+
 import pytest
 
 from ama_cryptography.secure_memory import (
@@ -17,7 +18,10 @@ class TestSecureMemzeroBackend:
 
     def test_backend_is_known_value(self):
         assert SECURE_MEMZERO_BACKEND in {
-            "native_ama", "libc_explicit_bzero", "libc_memset_s", "python_fallback"
+            "native_ama",
+            "libc_explicit_bzero",
+            "libc_memset_s",
+            "python_fallback",
         }
 
     def test_get_status_includes_memzero_backend(self):
