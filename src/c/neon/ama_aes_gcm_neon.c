@@ -101,6 +101,113 @@ static inline uint8x16_t ghash_mul_neon(uint8x16_t a, uint8x16_t b) {
 #endif
 
 /* ============================================================================
+ * AES-256 key expansion for ARM NEON
+ *
+ * Expands a 32-byte key into 15 round keys (rk[0]..rk[14]).
+ * Uses vaeseq_u8 with a zero block to access the SubBytes look-up, which
+ * is equivalent to calling _mm_aeskeygenassist_si128 on x86.
+ * ============================================================================ */
+static inline uint8x16_t aes_key_assist_neon(uint8x16_t prev, uint8_t rcon) {
+    /* Use the AES encrypt instruction on a zero block with prev as the key
+     * to get SubBytes(prev).  vaeseq_u8 does AddRoundKey ^ SubBytes ^ ShiftRows,
+     * so encrypting zero gives SubBytes(ShiftRows(prev)). We work around
+     * ShiftRows by rotating the result. */
+    uint8x16_t zero = vdupq_n_u8(0);
+    /* SubBytes(ShiftRows(prev)) */
+    uint8x16_t sub = vaeseq_u8(prev, zero);
+    /* We only need the RotWord(SubWord(prev[3])) for the key schedule.
+     * Extract the last 4 bytes (word 3), apply RotWord, XOR with rcon. */
+    uint8_t tmp[16];
+    vst1q_u8(tmp, sub);
+    /* After ShiftRows, the bytes of word 3 (indices 12-15) get scattered.
+     * ShiftRows moves byte[i] to byte[(i - row) mod 4 + row*4] within the
+     * AES state matrix.  For the last column (bytes 3,7,11,15 in column-
+     * major AES state), after ShiftRows they end up at positions that we
+     * need to gather.  Instead, let's use a simpler portable approach. */
+    uint8_t w3[4];
+    /* Extract word 3 from the *original* prev key, apply SubBytes manually
+     * via the vaeseq trick, then RotWord + rcon. */
+    uint8_t prev_bytes[16];
+    vst1q_u8(prev_bytes, prev);
+    /* SubWord of word 3: we already have SubBytes in sub, but due to ShiftRows
+     * the mapping is complex. Use a cleaner approach: just re-derive. */
+    /* SubBytes of each byte in word 3: use aese(byte_in_specific_position, 0) */
+    /* Simpler: build a state where word 3 occupies a known position and extract */
+    uint8_t word3_input[16] = {0};
+    word3_input[0] = prev_bytes[12];
+    word3_input[5] = prev_bytes[13];
+    word3_input[10] = prev_bytes[14];
+    word3_input[15] = prev_bytes[15];
+    uint8x16_t w3_vec = vld1q_u8(word3_input);
+    uint8x16_t w3_sub = vaeseq_u8(w3_vec, zero); /* SubBytes + ShiftRows */
+    uint8_t w3_out[16];
+    vst1q_u8(w3_out, w3_sub);
+    /* After ShiftRows on our carefully placed bytes, they end up at:
+     * byte[0] stays at [0], byte[5] -> [1], byte[10] -> [2], byte[15] -> [3]
+     * (ShiftRows: row0 no shift, row1 shift 1, row2 shift 2, row3 shift 3) */
+    w3[0] = w3_out[1] ^ rcon; /* RotWord: [1,2,3,0] + rcon on first byte */
+    w3[1] = w3_out[2];
+    w3[2] = w3_out[3];
+    w3[3] = w3_out[0];
+
+    /* XOR cascade: each word XORs with the previous */
+    uint8_t out[16];
+    for (int i = 0; i < 4; i++) out[i] = prev_bytes[i] ^ w3[i];
+    for (int i = 4; i < 8; i++) out[i] = prev_bytes[i] ^ out[i-4];
+    for (int i = 8; i < 12; i++) out[i] = prev_bytes[i] ^ out[i-4];
+    for (int i = 12; i < 16; i++) out[i] = prev_bytes[i] ^ out[i-4];
+    return vld1q_u8(out);
+}
+
+static inline uint8x16_t aes_key_assist2_neon(uint8x16_t prev_even, uint8x16_t prev_odd) {
+    /* For AES-256 odd-numbered round keys (rk[3], rk[5], ...):
+     * SubWord(prev_even[3]) without RotWord, no rcon. */
+    uint8_t prev_bytes[16], even_bytes[16];
+    vst1q_u8(prev_bytes, prev_odd);
+    vst1q_u8(even_bytes, prev_even);
+
+    uint8x16_t zero = vdupq_n_u8(0);
+    uint8_t word3_input[16] = {0};
+    word3_input[0] = even_bytes[12];
+    word3_input[5] = even_bytes[13];
+    word3_input[10] = even_bytes[14];
+    word3_input[15] = even_bytes[15];
+    uint8x16_t w3_vec = vld1q_u8(word3_input);
+    uint8x16_t w3_sub = vaeseq_u8(w3_vec, zero);
+    uint8_t w3_out[16];
+    vst1q_u8(w3_out, w3_sub);
+    /* SubWord (no RotWord, no rcon) */
+    uint8_t w3[4] = { w3_out[0], w3_out[1], w3_out[2], w3_out[3] };
+
+    uint8_t out[16];
+    for (int i = 0; i < 4; i++) out[i] = prev_bytes[i] ^ w3[i];
+    for (int i = 4; i < 8; i++) out[i] = prev_bytes[i] ^ out[i-4];
+    for (int i = 8; i < 12; i++) out[i] = prev_bytes[i] ^ out[i-4];
+    for (int i = 12; i < 16; i++) out[i] = prev_bytes[i] ^ out[i-4];
+    return vld1q_u8(out);
+}
+
+static void ama_aes256_expand_key_neon(const uint8_t key[32], uint8x16_t rk[15]) {
+    rk[0] = vld1q_u8(key);
+    rk[1] = vld1q_u8(key + 16);
+    /* AES-256 key schedule: 7 even rounds with rcon, 6 odd rounds without */
+    static const uint8_t rcons[7] = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40};
+    rk[2]  = aes_key_assist_neon(rk[0],  rcons[0]);  /* Even: RotWord+SubWord+rcon */
+    rk[3]  = aes_key_assist2_neon(rk[2],  rk[1]);    /* Odd: SubWord only */
+    rk[4]  = aes_key_assist_neon(rk[2],  rcons[1]);
+    rk[5]  = aes_key_assist2_neon(rk[4],  rk[3]);
+    rk[6]  = aes_key_assist_neon(rk[4],  rcons[2]);
+    rk[7]  = aes_key_assist2_neon(rk[6],  rk[5]);
+    rk[8]  = aes_key_assist_neon(rk[6],  rcons[3]);
+    rk[9]  = aes_key_assist2_neon(rk[8],  rk[7]);
+    rk[10] = aes_key_assist_neon(rk[8],  rcons[4]);
+    rk[11] = aes_key_assist2_neon(rk[10], rk[9]);
+    rk[12] = aes_key_assist_neon(rk[10], rcons[5]);
+    rk[13] = aes_key_assist2_neon(rk[12], rk[11]);
+    rk[14] = aes_key_assist_neon(rk[12], rcons[6]);
+}
+
+/* ============================================================================
  * AES-256-GCM encryption using ARM Crypto Extensions
  *
  * 4-way pipelined AES-CTR + interleaved GHASH.
@@ -111,16 +218,9 @@ void ama_aes256_gcm_encrypt_neon(
     const uint8_t key[32], const uint8_t nonce[12],
     uint8_t *ciphertext, uint8_t tag[16])
 {
-    /* Key expansion would need to be done here or pre-computed.
-     * For this implementation, we assume round keys are derived
-     * from the 256-bit key. In practice, the key schedule uses
-     * the AES key expansion algorithm. */
+    /* Full AES-256 key expansion: derive all 15 round keys */
     uint8x16_t rk[15];
-    /* Simplified: load key as round keys placeholder.
-     * Full implementation would use AES key schedule. */
-    memset(rk, 0, sizeof(rk));
-    rk[0] = vld1q_u8(key);
-    rk[1] = vld1q_u8(key + 16);
+    ama_aes256_expand_key_neon(key, rk);
 
     /* Derive H = AES_K(0) */
     uint8x16_t H = aes256_encrypt_block_neon(vdupq_n_u8(0), rk);

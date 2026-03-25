@@ -187,14 +187,14 @@ void ama_poly1305_block_avx2(poly1305_state_avx2 *st,
     memcpy(&m0, msg, 8);
     memcpy(&m1, msg + 8, 8);
 
-    uint64_t h0 = st->h[0] + (m0 & 0xFFFFFFFFFFFFF);        /* 44 bits */
-    uint64_t h1 = st->h[1] + (((m0 >> 44) | (m1 << 20)) & 0xFFFFFFFFFFFFF);
+    uint64_t h0 = st->h[0] + (m0 & 0xFFFFFFFFFFF);        /* 44 bits */
+    uint64_t h1 = st->h[1] + (((m0 >> 44) | (m1 << 20)) & 0xFFFFFFFFFFF);
     uint64_t h2 = st->h[2] + ((m1 >> 24));
     if (!final_block) h2 += (1ULL << 40); /* hibit = 1 for non-final */
 
     /* Multiply h * r using 128-bit intermediates */
-    uint64_t r0 = st->r[0] & 0xFFFFFFFFFFFFF;     /* 44-bit limbs */
-    uint64_t r1 = ((st->r[0] >> 44) | (st->r[1] << 20)) & 0xFFFFFFFFFFFFF;
+    uint64_t r0 = st->r[0] & 0xFFFFFFFFFFF;     /* 44-bit limbs */
+    uint64_t r1 = ((st->r[0] >> 44) | (st->r[1] << 20)) & 0xFFFFFFFFFFF;
     uint64_t r2 = (st->r[1] >> 24) & 0x3FF;
 
     uint64_t s1 = r1 * 5; /* r1 * 5 for modular reduction */
@@ -206,13 +206,13 @@ void ama_poly1305_block_avx2(poly1305_state_avx2 *st,
 
     /* Carry propagation */
     uint64_t c;
-    st->h[0] = (uint64_t)d0 & 0xFFFFFFFFFFFFF; c = (uint64_t)(d0 >> 44);
+    st->h[0] = (uint64_t)d0 & 0xFFFFFFFFFFF; c = (uint64_t)(d0 >> 44);
     d1 += c;
-    st->h[1] = (uint64_t)d1 & 0xFFFFFFFFFFFFF; c = (uint64_t)(d1 >> 44);
+    st->h[1] = (uint64_t)d1 & 0xFFFFFFFFFFF; c = (uint64_t)(d1 >> 44);
     d2 += c;
     st->h[2] = (uint64_t)d2 & 0x3FFFFFFFFFF;   c = (uint64_t)(d2 >> 42);
     st->h[0] += c * 5;
-    c = st->h[0] >> 44; st->h[0] &= 0xFFFFFFFFFFFFF;
+    c = st->h[0] >> 44; st->h[0] &= 0xFFFFFFFFFFF;
     st->h[1] += c;
 }
 
@@ -220,15 +220,15 @@ void ama_poly1305_finish_avx2(poly1305_state_avx2 *st, uint8_t tag[16]) {
     /* Final reduction */
     uint64_t h0 = st->h[0], h1 = st->h[1], h2 = st->h[2];
     uint64_t c;
-    c = h1 >> 44; h1 &= 0xFFFFFFFFFFFFF;
+    c = h1 >> 44; h1 &= 0xFFFFFFFFFFF;
     h2 += c; c = h2 >> 42; h2 &= 0x3FFFFFFFFFF;
-    h0 += c * 5; c = h0 >> 44; h0 &= 0xFFFFFFFFFFFFF;
-    h1 += c; c = h1 >> 44; h1 &= 0xFFFFFFFFFFFFF;
+    h0 += c * 5; c = h0 >> 44; h0 &= 0xFFFFFFFFFFF;
+    h1 += c; c = h1 >> 44; h1 &= 0xFFFFFFFFFFF;
     h2 += c; c = h2 >> 42; h2 &= 0x3FFFFFFFFFF;
     h0 += c * 5;
 
     /* Recombine 44-bit limbs into 128-bit (two 64-bit words) FIRST */
-    uint64_t g0 = (h0 & 0xFFFFFFFFFFFFF) | (h1 << 44);
+    uint64_t g0 = (h0 & 0xFFFFFFFFFFF) | (h1 << 44);
     uint64_t g1 = (h1 >> 20) | (h2 << 24);
 
     /* Compute tag = (h + s) mod 2^128 */
