@@ -227,15 +227,15 @@ void ama_poly1305_finish_avx2(poly1305_state_avx2 *st, uint8_t tag[16]) {
     h2 += c; c = h2 >> 42; h2 &= 0x3FFFFFFFFFF;
     h0 += c * 5;
 
-    /* Compute h + s */
-    __uint128_t f = (__uint128_t)h0 + st->pad[0];
-    h0 = (uint64_t)f;
-    f = (__uint128_t)h1 + st->pad[1] + (uint64_t)(f >> 64);
-    h1 = (uint64_t)f;
+    /* Recombine 44-bit limbs into 128-bit (two 64-bit words) FIRST */
+    uint64_t g0 = (h0 & 0xFFFFFFFFFFFFF) | (h1 << 44);
+    uint64_t g1 = (h1 >> 20) | (h2 << 24);
 
-    /* Recombine into 128-bit tag */
-    uint64_t tag_lo = (h0 & 0xFFFFFFFFFFFFF) | (h1 << 44);
-    uint64_t tag_hi = (h1 >> 20) | (h2 << 24);
+    /* Compute tag = (h + s) mod 2^128 */
+    __uint128_t f = (__uint128_t)g0 + st->pad[0];
+    uint64_t tag_lo = (uint64_t)f;
+    f = (__uint128_t)g1 + st->pad[1] + (uint64_t)(f >> 64);
+    uint64_t tag_hi = (uint64_t)f;
     memcpy(tag, &tag_lo, 8);
     memcpy(tag + 8, &tag_hi, 8);
 }

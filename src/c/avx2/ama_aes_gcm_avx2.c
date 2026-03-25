@@ -105,20 +105,25 @@ static inline __m128i ghash_mul_pclmul(__m128i a, __m128i b) {
     lo = _mm_xor_si128(lo, _mm_slli_si128(mid, 8));
     hi = _mm_xor_si128(hi, _mm_srli_si128(mid, 8));
 
-    /* Modular reduction by x^128 + x^7 + x^2 + x + 1 */
-    /* Phase 1: reduce lo into hi */
-    __m128i t1 = _mm_slli_epi64(lo, 1);
-    __m128i t2 = _mm_slli_epi64(lo, 2);
-    __m128i t3 = _mm_slli_epi64(lo, 7);
-    lo = _mm_xor_si128(lo, _mm_xor_si128(t1, _mm_xor_si128(t2, t3)));
+    /* Modular reduction by x^128 + x^7 + x^2 + x + 1
+     * using PCLMULQDQ with the reduction constant, per Intel's
+     * "Carry-Less Multiplication and its Usage for Computing GCM Mode"
+     * whitepaper.  Two rounds of CLMUL-based reduction avoid the
+     * broken per-lane epi64 shifts that lose cross-lane carry bits. */
+    __m128i red_poly = _mm_set_epi64x(0, (long long)0xC200000000000000ULL);
 
-    /* Phase 2 */
-    __m128i r1 = _mm_srli_epi64(lo, 63);
-    __m128i r2 = _mm_srli_epi64(lo, 62);
-    __m128i r3 = _mm_srli_epi64(lo, 57);
-    lo = _mm_xor_si128(lo, _mm_xor_si128(r1, _mm_xor_si128(r2, r3)));
+    /* Phase 1: multiply low 64 bits of lo by the reduction polynomial */
+    __m128i t1 = _mm_clmulepi64_si128(lo, red_poly, 0x00);
+    /* Swap halves of lo and XOR with t1 */
+    __m128i lo_swap = _mm_shuffle_epi32(lo, 0x4E); /* swap 64-bit halves */
+    __m128i mid_red = _mm_xor_si128(lo_swap, t1);
 
-    return _mm_xor_si128(hi, lo);
+    /* Phase 2: multiply low 64 bits of mid_red by the reduction polynomial */
+    __m128i t2 = _mm_clmulepi64_si128(mid_red, red_poly, 0x00);
+    __m128i mid_swap = _mm_shuffle_epi32(mid_red, 0x4E);
+    __m128i lo_reduced = _mm_xor_si128(mid_swap, t2);
+
+    return _mm_xor_si128(hi, lo_reduced);
 }
 
 /* ============================================================================

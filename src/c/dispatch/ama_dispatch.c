@@ -22,6 +22,30 @@
 #include <string.h>
 
 /* ============================================================================
+ * Platform once-primitive (mirrors ama_cpuid.c — INVARIANT-2 compliant)
+ * ============================================================================ */
+#if defined(_MSC_VER)
+    #define WIN32_LEAN_AND_MEAN
+    #include <windows.h>
+    #define AMA_ONCE_FLAG          INIT_ONCE
+    #define AMA_ONCE_FLAG_INIT     INIT_ONCE_STATIC_INIT
+    typedef void (*ama_dispatch_once_fn)(void);
+    static BOOL CALLBACK ama_dispatch_once_trampoline(PINIT_ONCE once, PVOID param, PVOID *ctx) {
+        (void)once; (void)ctx;
+        ((ama_dispatch_once_fn)param)();
+        return TRUE;
+    }
+    #define AMA_DISPATCH_CALL_ONCE(flag, fn) \
+        InitOnceExecuteOnce(&(flag), ama_dispatch_once_trampoline, (PVOID)(fn), NULL)
+#else
+    #include <pthread.h>
+    #define AMA_ONCE_FLAG          pthread_once_t
+    #define AMA_ONCE_FLAG_INIT     PTHREAD_ONCE_INIT
+    #define AMA_DISPATCH_CALL_ONCE(flag, fn) \
+        pthread_once(&(flag), (fn))
+#endif
+
+/* ============================================================================
  * Dispatch info structure
  * ============================================================================ */
 
@@ -46,7 +70,7 @@ typedef struct {
 } ama_dispatch_info_t;
 
 static ama_dispatch_info_t dispatch_info;
-static int dispatch_initialized = 0;
+static AMA_ONCE_FLAG dispatch_once_flag = AMA_ONCE_FLAG_INIT;
 
 /* ============================================================================
  * CPU feature detection helpers
@@ -201,7 +225,6 @@ static void dispatch_init_internal(void) {
     fprintf(stderr, "[AMA Dispatch] Unknown architecture — using generic C\n");
 #endif
 
-    dispatch_initialized = 1;
 }
 
 /* ============================================================================
@@ -209,9 +232,7 @@ static void dispatch_init_internal(void) {
  * ============================================================================ */
 
 void ama_dispatch_init(void) {
-    if (!dispatch_initialized) {
-        dispatch_init_internal();
-    }
+    AMA_DISPATCH_CALL_ONCE(dispatch_once_flag, dispatch_init_internal);
 }
 
 const char *ama_impl_level_name(ama_impl_level_t level) {
@@ -230,9 +251,7 @@ const char *ama_impl_level_name(ama_impl_level_t level) {
  * Caller must call ama_dispatch_init() first (or this does it lazily).
  */
 const ama_dispatch_info_t *ama_get_dispatch_info(void) {
-    if (!dispatch_initialized) {
-        ama_dispatch_init();
-    }
+    ama_dispatch_init();
     return &dispatch_info;
 }
 
