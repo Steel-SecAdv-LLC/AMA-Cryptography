@@ -467,7 +467,7 @@ class NonceTracker:
                 self._persist_path = Path(persist_path)
                 self._persist_path.parent.mkdir(parents=True, exist_ok=True)
         else:
-            self._persist_path = Path(persist_path) if persist_path else Path("/dev/null")
+            self._persist_path = Path(persist_path) if persist_path else Path(os.devnull)
 
         # Set of (key_id_hash_hex, nonce_hex) tuples
         self._seen: Set[Tuple[str, str]] = set()
@@ -477,20 +477,42 @@ class NonceTracker:
             self._load_persisted()
 
     def _load_persisted(self) -> None:
-        """Reload persisted nonce history from disk."""
+        """Reload persisted nonce history from disk.
+
+        Raises RuntimeError on ANY malformed content — a silently skipped
+        line means a previously-used nonce is "forgotten," which could
+        allow nonce reuse (catastrophic for AES-GCM).  Only blank lines
+        are tolerated (trailing newline, etc.).
+        """
         try:
             with open(self._persist_path, "r") as f:
-                for line in f:
-                    line = line.strip()
+                for lineno, raw_line in enumerate(f, 1):
+                    line = raw_line.strip()
                     if not line:
                         continue
                     parts = line.split(",", 1)
-                    if len(parts) == 2:
-                        key_hash, nonce_hex = parts
-                        self._seen.add((key_hash, nonce_hex))
-                        self._counters[key_hash] = self._counters.get(key_hash, 0) + 1
+                    if len(parts) != 2 or not parts[0] or not parts[1]:
+                        raise RuntimeError(
+                            f"Malformed nonce tracker entry at {self._persist_path}:{lineno}: "
+                            f"{line!r}. File may be corrupt — refusing to load partial "
+                            "history because forgotten nonces could allow reuse."
+                        )
+                    key_hash, nonce_hex = parts
+                    # Validate hex format to catch binary corruption
+                    try:
+                        bytes.fromhex(key_hash)
+                        bytes.fromhex(nonce_hex)
+                    except ValueError as ve:
+                        raise RuntimeError(
+                            f"Invalid hex in nonce tracker at {self._persist_path}:{lineno}: "
+                            f"{line!r}. {ve}"
+                        ) from ve
+                    self._seen.add((key_hash, nonce_hex))
+                    self._counters[key_hash] = self._counters.get(key_hash, 0) + 1
         except FileNotFoundError:
             return
+        except RuntimeError:
+            raise
         except Exception as e:
             raise RuntimeError(
                 f"Failed to load nonce tracker persistence from {self._persist_path}: {e}"

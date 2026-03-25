@@ -752,7 +752,29 @@ class AESGCMProvider:
                         f"Corrupt AES-GCM counter file at {path}: {_merge_err}. "
                         "Cannot safely merge counters — manual inspection required."
                     ) from _merge_err
-                logger.warning("Corrupt counter file, overwriting: %s", _merge_err)
+                # Atexit path: cannot raise, but overwriting a corrupt file
+                # risks losing higher counter values from a concurrent process.
+                # Preserve the corrupt file for forensic analysis and log at
+                # CRITICAL severity — this is a potential nonce-safety event.
+                try:
+                    corrupt_bak = path.parent / (path.name + ".corrupt")
+                    _os.replace(str(path), str(corrupt_bak))
+                    logger.critical(
+                        "Corrupt counter file renamed to %s for forensic analysis. "
+                        "Overwriting with in-memory counters. If a concurrent process "
+                        "had higher counter values, nonce safety may be compromised. "
+                        "Original error: %s",
+                        corrupt_bak,
+                        _merge_err,
+                    )
+                except OSError as _bak_err:
+                    logger.critical(
+                        "Corrupt counter file at %s AND failed to preserve backup: %s. "
+                        "Overwriting with in-memory counters. Original error: %s",
+                        path,
+                        _bak_err,
+                        _merge_err,
+                    )
 
             data = {k.hex(): v for k, v in cls._encrypt_counters.items()}
             # Write to temp file in same directory (same filesystem for atomic rename)
