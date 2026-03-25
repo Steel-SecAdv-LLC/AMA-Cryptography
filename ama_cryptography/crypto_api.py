@@ -808,15 +808,20 @@ class AESGCMProvider:
             raise RuntimeError("AES-GCM nonce safety limit exceeded. Re-key required.")
         if count >= int(self._NONCE_SAFETY_LIMIT * 0.75):
             logger.warning("AES-GCM nonce count approaching safety limit. Re-key recommended.")
+
+        from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
+
+        ct, tag = native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
+
+        # Increment counter AFTER successful encryption so a persistence
+        # failure (disk full, permission error) does not inflate the count
+        # without an actual encryption having occurred.
         self._encrypt_counters[key_id] = count + 1
         AESGCMProvider._counters_dirty += 1
         if AESGCMProvider._counters_dirty >= self._PERSIST_INTERVAL:
             self._persist_counters(_raising=True)
             AESGCMProvider._counters_dirty = 0
 
-        from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
-
-        ct, tag = native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
         return {
             "ciphertext": ct,
             "nonce": nonce,
