@@ -150,13 +150,30 @@ class EncryptedKeyStore:
             self._load_store()
 
     def _load_or_create_salt(self) -> bytes:
-        """Load or create the salt file."""
+        """Load or create the salt file atomically.
+
+        Uses O_CREAT | O_EXCL to prevent TOCTOU races: if two processes
+        attempt to create the salt simultaneously, only one succeeds (the
+        exclusive-create winner writes the salt); the other receives
+        FileExistsError and reads the winner's salt.  This guarantees all
+        processes derive the same wrapping key for a given passphrase.
+        """
+        import os
+
         salt_path = self._store_path.parent / "keystore.salt"
-        if salt_path.exists():
+        try:
+            # Atomic exclusive create — fails if file already exists
+            fd = os.open(str(salt_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                salt = secrets.token_bytes(32)
+                os.write(fd, salt)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            return salt
+        except FileExistsError:
+            # Another process created the salt first — read it
             return salt_path.read_bytes()
-        salt = secrets.token_bytes(32)
-        salt_path.write_bytes(salt)
-        return salt
 
     def _load_store(self) -> None:
         """Load the encrypted keystore from disk."""
