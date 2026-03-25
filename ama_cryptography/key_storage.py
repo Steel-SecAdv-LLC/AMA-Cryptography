@@ -122,10 +122,11 @@ class EncryptedKeyStore:
             self._salt = secrets.token_bytes(32)
             self._wrapping_key = secrets.token_bytes(32)
 
+        self._ephemeral = passphrase is None
         self._keys: Dict[str, Dict[str, Any]] = {}
         # Only load persisted store when a passphrase was provided — ephemeral
         # random keys cannot decrypt an existing store.
-        if passphrase is not None:
+        if not self._ephemeral:
             self._load_store()
 
     def _load_or_create_salt(self) -> bytes:
@@ -155,11 +156,19 @@ class EncryptedKeyStore:
                     "created_at": entry.get("created_at", 0.0),
                     "metadata": entry.get("metadata", {}),
                 }
+        except FileNotFoundError:
+            return
         except Exception as e:
-            logger.warning("Failed to load keystore: %s", e)
+            raise RuntimeError(f"Failed to load keystore from {self._store_path}: {e}") from e
 
     def _save_store(self) -> None:
-        """Save the encrypted keystore to disk using atomic write-rename."""
+        """Save the encrypted keystore to disk using atomic write-rename.
+
+        Skipped in ephemeral mode to prevent overwriting a persistent keystore
+        with entries encrypted by a random (non-reproducible) wrapping key.
+        """
+        if self._ephemeral:
+            return
         import base64
         import os
         import tempfile
