@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.1 |
-| Last Updated | 2026-03-10 |
+| Document Version | 2.2 |
+| Last Updated | 2026-03-25 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -94,10 +94,45 @@ All cryptographic operations execute in constant time:
 
 ### SIMD Optimizations
 
-AVX2 support for polynomial operations:
-- 4x throughput on 64-bit operations
-- Vectorized modular arithmetic
-- Cache-friendly memory layouts
+Hand-written SIMD implementations for all 8 core cryptographic algorithms across 3 architectures:
+
+#### AVX2 (x86-64) — `src/c/avx2/`
+
+| Algorithm | File | Key Optimizations |
+|-----------|------|-------------------|
+| ML-KEM-1024 | `ama_kyber_avx2.c` | Vectorized NTT butterfly (16 coefficients/cycle), Barrett reduction, CBD sampling |
+| ML-DSA-65 | `ama_dilithium_avx2.c` | Vectorized NTT (q=8380417, 8 coefficients/YMM), rejection sampling, power2round |
+| SPHINCS+-256f | `ama_sphincs_avx2.c` | 4-way parallel SHA-256 compression, vectorized WOTS+ chains, Merkle tree hashing |
+| SHA3/Keccak | `ama_sha3_avx2.c` | Keccak-f[1600] with vectorized theta/rho/pi/chi/iota, 4-way parallel hashing |
+| AES-256-GCM | `ama_aes_gcm_avx2.c` | Pipelined AES-NI (8 blocks), PCLMULQDQ GHASH with Karatsuba, interleaved CTR+GHASH |
+| Ed25519 | `ama_ed25519_avx2.c` | Vectorized radix-2^51 field arithmetic, 4-way parallel scalar multiplication |
+| ChaCha20-Poly1305 | `ama_chacha20poly1305_avx2.c` | 8-way parallel quarter-rounds, vectorized Poly1305 with lazy reduction |
+| Argon2 | `ama_argon2_avx2.c` | Vectorized Blake2b compression, vectorized G function, parallel lane processing |
+
+#### ARM NEON (AArch64) — `src/c/neon/`
+
+128-bit vector equivalents using `<arm_neon.h>` intrinsics:
+- `uint32x4_t` / `uint64x2_t` vector types for polynomial and field arithmetic
+- ARM Crypto Extensions (`vaeseq_u8`, `vaesmcq_u8`) for AES operations
+- `vqtbl1q_u8` for efficient permutations
+- NEON-optimized NTT butterfly operations for lattice-based algorithms
+
+#### ARM SVE2 (AArch64) — `src/c/sve2/`
+
+Scalable Vector Extension 2 implementations (stretch goal):
+- Variable-length SIMD using SVE2 predicated operations
+- `svint32_t` / `svuint32_t` for hardware-adaptive vector widths
+- SVE2 polynomial multiply for GHASH acceleration
+- Scalable NTT implementations that adapt to available vector length
+
+#### Runtime Dispatch — `src/c/dispatch/ama_dispatch.c`
+
+Automatic best-implementation selection at initialization:
+- **x86-64**: CPUID leaf 7 detection → AVX-512 > AVX2 > generic
+- **AArch64**: `getauxval(AT_HWCAP2)` detection → SVE2 > NEON > generic
+- Function pointer dispatch set once at init time (zero per-call overhead)
+- `ama_get_dispatch_info()` API for querying active implementations
+- CPU feature detection via extended `ama_cpuid.c`
 
 ## Cryptographic Algorithms
 
@@ -253,7 +288,7 @@ cmake .. \
 
 Options:
 - Shared/static library builds
-- SIMD optimizations (AVX2, SSE4.2)
+- SIMD optimizations (AVX2, NEON, SVE2) with runtime dispatch
 - Sanitizers (ASan, UBSan, MSan)
 - Link-time optimization
 - Custom install prefix
@@ -578,6 +613,7 @@ python -c "from ama_cryptography.math_engine import benchmark_matrix_operations;
 | 1.0.0 | 2025-11-26 | Initial professional release |
 | 1.1.0 | 2026-01-09 | Version alignment |
 | 2.0.0 | 2026-03-08 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, FIPS 203/204/205, KAT validation, Phase 2 primitives, fuzzing harnesses, threat model, Mercury Agent integration |
+| 2.1.0 | 2026-03-25 | Hand-written AVX2/NEON/SVE2 SIMD for 8 algorithms, runtime dispatch, security fixes S1-S6, professional dashboard/chart overhaul |
 
 ---
 
