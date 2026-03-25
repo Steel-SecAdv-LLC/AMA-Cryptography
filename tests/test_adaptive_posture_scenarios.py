@@ -13,12 +13,9 @@ threshold-based escalation, default threat level, and score decay.
 import pytest
 
 from ama_cryptography.adaptive_posture import (
-    PostureAction,
-    PostureEvaluation,
     PostureEvaluator,
     ThreatLevel,
 )
-
 
 # ---- helpers ----------------------------------------------------------------
 

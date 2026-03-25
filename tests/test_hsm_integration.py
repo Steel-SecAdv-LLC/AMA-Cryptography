@@ -15,13 +15,12 @@ library is present on the system.
 
 import os
 import shutil
-from typing import Any, List, Optional, Tuple
-from unittest.mock import MagicMock, PropertyMock, call, patch
+from typing import Any, Optional
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from ama_cryptography.key_management import HSMKeyStorage
-
 
 # ---------------------------------------------------------------------------
 # Helper: build a realistic mock PyKCS11 module
@@ -74,7 +73,7 @@ def _build_hsm(
     mock_pkcs11: MagicMock,
     hsm_type: str = "softhsm",
     library_path: str = "/usr/lib/softhsm/libsofthsm2.so",
-    token_label: str = "AmaCryptography",
+    token_label: str = "AmaCryptography",  # noqa: S107
     pin: str = "1234",
     slot_index: Optional[int] = None,
 ) -> HSMKeyStorage:
@@ -215,7 +214,7 @@ class TestSlotSelection:
 
         with patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock), \
              patch("os.path.exists", return_value=True):
-            with pytest.raises(ValueError, match="Slot index .* out of range"):
+            with pytest.raises(ValueError, match=r"Slot index .* out of range"):
                 HSMKeyStorage(library_path="/lib.so", pin="1234", slot_index=5)
 
     def test_no_tokens_found_raises_runtime_error(self) -> None:
@@ -241,7 +240,7 @@ class TestSlotSelection:
 
         with patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock), \
              patch("os.path.exists", return_value=True):
-            with pytest.raises(RuntimeError, match="Token .* not found"):
+            with pytest.raises(RuntimeError, match=r"Token .* not found"):
                 HSMKeyStorage(
                     library_path="/lib.so",
                     token_label="NonExistent",
@@ -260,7 +259,7 @@ class TestPINHandling:
     def test_pin_provided_directly(self) -> None:
         """When a PIN is passed, login is called with that PIN."""
         mock = _make_mock_pkcs11()
-        hsm = _build_hsm(mock, pin="9999")
+        _build_hsm(mock, pin="9999")
         session = mock.PyKCS11Lib.return_value.openSession.return_value
         session.login.assert_called_once_with("9999")
 
@@ -270,7 +269,7 @@ class TestPINHandling:
         with patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock), \
              patch("os.path.exists", return_value=True), \
              patch("getpass.getpass", return_value="prompted_pin"):
-            hsm = HSMKeyStorage(library_path="/lib.so", pin=None)
+            HSMKeyStorage(library_path="/lib.so", pin=None)
             session = mock.PyKCS11Lib.return_value.openSession.return_value
             session.login.assert_called_once_with("prompted_pin")
 

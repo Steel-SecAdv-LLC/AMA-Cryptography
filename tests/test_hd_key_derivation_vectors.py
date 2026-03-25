@@ -19,7 +19,6 @@ import pytest
 
 from ama_cryptography.key_management import HDKeyDerivation
 
-
 # ---- helpers ----------------------------------------------------------------
 
 _FIXED_SEED = bytes(range(64))  # deterministic 64-byte seed
@@ -84,12 +83,12 @@ class TestDerivationPathParsing:
 
     def test_hardened_marker_parsed(self, hd: HDKeyDerivation) -> None:
         """A path with hardened markers (') should derive without error."""
-        key, chain = hd.derive_path("m/44'/0'")
+        key, _chain = hd.derive_path("m/44'/0'")
         assert len(key) == 32
 
     def test_single_level_path(self, hd: HDKeyDerivation) -> None:
         """A single-level hardened path should succeed."""
-        key, chain = hd.derive_path("m/0'")
+        key, _chain = hd.derive_path("m/0'")
         assert len(key) == 32
 
 

@@ -1,9 +1,9 @@
 """Tests for secure memory zeroing backends and SecureBuffer lifecycle."""
 import pytest
+
 from ama_cryptography.secure_memory import (
     SECURE_MEMZERO_BACKEND,
     SecureBuffer,
-    SecureMemoryError,
     constant_time_compare,
     get_status,
     secure_memzero,

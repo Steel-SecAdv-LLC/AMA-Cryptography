@@ -519,23 +519,28 @@ python setup.py install
 ### External Dependencies
 
 **RFC 3161 Timestamps (Optional)**:
-RFC 3161 trusted timestamping requires OpenSSL in PATH. If OpenSSL is not available, the system falls back to self-asserted timestamps with a warning logged.
+RFC 3161 trusted timestamping supports three operating modes via the `tsa_mode` parameter:
 
-```bash
-# Verify OpenSSL is available
-openssl version
+| Mode | Description | Network Required |
+|------|-------------|-----------------|
+| `"online"` | Contact a real TSA server (default) | Yes |
+| `"mock"` | Self-signed mock tokens for testing/offline use | No |
+| `"disabled"` | Skip timestamping, return empty token | No |
 
-# Linux (Ubuntu/Debian)
-sudo apt-get install openssl
+Online mode requires the `rfc3161ng` package (`pip install rfc3161ng`). If not installed, `TimestampUnavailableError` is raised.
 
-# macOS
-brew install openssl
+```python
+from ama_cryptography.rfc3161_timestamp import get_timestamp, verify_timestamp
 
-# Windows
-# Download from https://slproweb.com/products/Win32OpenSSL.html
+# Mock mode for testing (no network required)
+result = get_timestamp(b"document data", tsa_mode="mock")
+assert verify_timestamp(b"document data", result)
+
+# Disabled mode (skip timestamping)
+result = get_timestamp(b"document data", tsa_mode="disabled")
 ```
 
-The timestamp feature contacts external TSA (Time Stamping Authority) servers. Default: FreeTSA (https://freetsa.org/tsr). Commercial TSAs (DigiCert, GlobalSign) are recommended for production use.
+The online timestamp feature contacts external TSA (Time Stamping Authority) servers. Default: FreeTSA (https://freetsa.org/tsr). Commercial TSAs (DigiCert, GlobalSign) are recommended for production use.
 
 </details>
 

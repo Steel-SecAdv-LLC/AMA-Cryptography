@@ -1,7 +1,8 @@
 """Tests for AES-GCM nonce counter safety and fork detection."""
 import os
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 
 class TestAESGCMForkDetection:

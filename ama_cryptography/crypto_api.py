@@ -34,7 +34,11 @@ from enum import Enum, auto
 from typing import Any, ClassVar, Dict, List, Optional, Tuple, Union
 
 from ama_cryptography._self_test import check_operational as _check_operational
+
+# Import HMAC and HKDF from pqc_backends (native C) with pure-Python fallback
 from ama_cryptography.pqc_backends import (
+    _HKDF_NATIVE_AVAILABLE,
+    _HMAC_SHA3_256_NATIVE_AVAILABLE,
     DILITHIUM_AVAILABLE,
     DILITHIUM_BACKEND,
     KYBER_AVAILABLE,
@@ -64,17 +68,11 @@ from ama_cryptography.pqc_backends import (
     sphincs_verify,
 )
 
-# Import HMAC and HKDF from pqc_backends (native C) with pure-Python fallback
-from ama_cryptography.pqc_backends import (
-    _HKDF_NATIVE_AVAILABLE,
-    _HMAC_SHA3_256_NATIVE_AVAILABLE,
-)
-
 _HMAC_NATIVE = False
 _HKDF_NATIVE = False
 
 try:
-    from ama_cryptography.pqc_backends import native_hmac_sha3_256, native_hkdf
+    from ama_cryptography.pqc_backends import native_hkdf, native_hmac_sha3_256
 
     _HMAC_NATIVE = _HMAC_SHA3_256_NATIVE_AVAILABLE
     _HKDF_NATIVE = _HKDF_NATIVE_AVAILABLE

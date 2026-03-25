@@ -18,14 +18,11 @@ import pytest
 
 from ama_cryptography.rfc3161_timestamp import (
     RFC3161_AVAILABLE,
-    MockTSA,
-    TimestampError,
     TimestampResult,
     TimestampUnavailableError,
     get_timestamp,
     verify_timestamp,
 )
-
 
 # ---- tests ------------------------------------------------------------------
 
@@ -48,12 +45,12 @@ class TestTimestampResultDataclass:
 
     def test_equality(self) -> None:
         """Two TimestampResult instances with identical fields should be equal."""
-        kwargs = dict(
-            token=b"tok",
-            tsa_url="url",
-            hash_algorithm="sha256",
-            data_hash=b"h",
-        )
+        kwargs = {
+            "token": b"tok",
+            "tsa_url": "url",
+            "hash_algorithm": "sha256",
+            "data_hash": b"h",
+        }
         assert TimestampResult(**kwargs) == TimestampResult(**kwargs)
 
 
@@ -165,6 +162,7 @@ class TestDefaultTSAUrl:
         the warning that contains the URL is emitted.
         """
         import inspect
+
         import ama_cryptography.rfc3161_timestamp as mod
 
         source = inspect.getsource(mod.get_timestamp)

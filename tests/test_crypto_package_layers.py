@@ -1,5 +1,6 @@
 """Tests for 4-Layer Defense-in-Depth crypto package creation and verification."""
 import hashlib
+
 import pytest
 
 
@@ -93,8 +94,9 @@ class TestVerifyCryptoPackage:
 
     def test_tampered_hmac_key_fails(self):
         _skip_if_no_backends()
-        from ama_cryptography.crypto_api import create_crypto_package, verify_crypto_package
         import os
+
+        from ama_cryptography.crypto_api import create_crypto_package, verify_crypto_package
         content = b"test data"
         result = create_crypto_package(content)
         # Tamper with HMAC key

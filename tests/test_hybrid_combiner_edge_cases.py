@@ -103,14 +103,14 @@ class TestHybridCombinerEdgeCases:
         self, combiner: HybridCombiner
     ) -> None:
         """Changing any single input must change the output."""
-        base_args = dict(
-            classical_ss=_random(32),
-            pqc_ss=_random(32),
-            classical_ct=_random(32),
-            pqc_ct=_random(1568),
-            classical_pk=_random(32),
-            pqc_pk=_random(1184),
-        )
+        base_args = {
+            "classical_ss": _random(32),
+            "pqc_ss": _random(32),
+            "classical_ct": _random(32),
+            "pqc_ct": _random(1568),
+            "classical_pk": _random(32),
+            "pqc_pk": _random(1184),
+        }
 
         baseline = combiner.combine(**base_args)
 

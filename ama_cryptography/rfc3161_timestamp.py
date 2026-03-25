@@ -28,7 +28,6 @@ Use Cases:
 """
 
 import hashlib
-import hmac
 import struct
 import time
 import warnings
@@ -112,7 +111,7 @@ class MockTSA:
         nonce = _os.urandom(32)
 
         payload = _MOCK_MAGIC + algo_len + algo_bytes + ts + data_hash
-        mac = hmac.new(nonce, payload, "sha256").digest()
+        mac = hashlib.sha256(nonce + payload).digest()
 
         return payload + mac + nonce
 
@@ -141,14 +140,14 @@ class MockTSA:
             nonce = token[-32:]
             payload = token[: -(32 + 32)]
 
-            # Verify HMAC
-            expected_mac = hmac.new(nonce, payload, "sha256").digest()
-            if not hmac.compare_digest(mac, expected_mac):
+            # Verify keyed hash
+            expected_mac = hashlib.sha256(nonce + payload).digest()
+            if mac != expected_mac:
                 return False
 
             # Extract embedded data_hash from the payload and compare.
             embedded_hash = payload[payload_end:]
-            return hmac.compare_digest(embedded_hash, data_hash)
+            return embedded_hash == data_hash
         except Exception:
             return False
 
@@ -300,6 +299,23 @@ def get_timestamp(
         raise TimestampError(f"Timestamp request failed: {str(e)}") from e
 
 
+def _compute_data_hash(data: bytes, algorithm: str) -> Optional[bytes]:
+    """Compute a hash of *data* using the named *algorithm*.
+
+    Returns the digest bytes, or ``None`` if the algorithm is not supported.
+    """
+    _hash_funcs = {
+        "sha256": hashlib.sha256,
+        "sha3-256": hashlib.sha3_256,
+        "sha512": hashlib.sha512,
+        "sha3-512": hashlib.sha3_512,
+    }
+    func = _hash_funcs.get(algorithm)
+    if func is None:
+        return None
+    return func(data).digest()
+
+
 def verify_timestamp(
     data: bytes,
     timestamp_result: TimestampResult,
@@ -341,28 +357,15 @@ def verify_timestamp(
     if timestamp_result.tsa_url == "disabled" and timestamp_result.token == b"":
         return True
 
-    # ---- Recompute hash (common to all modes) ----
-    try:
-        if timestamp_result.hash_algorithm == "sha256":
-            computed_hash = hashlib.sha256(data).digest()
-        elif timestamp_result.hash_algorithm == "sha3-256":
-            computed_hash = hashlib.sha3_256(data).digest()
-        elif timestamp_result.hash_algorithm == "sha512":
-            computed_hash = hashlib.sha512(data).digest()
-        elif timestamp_result.hash_algorithm == "sha3-512":
-            computed_hash = hashlib.sha3_512(data).digest()
-        else:
-            return False
-
-        # Verify stored data_hash matches recomputed hash
-        if computed_hash != timestamp_result.data_hash:
-            return False
-    except Exception:
-        return False
-
-    # ---- Mock token verification ----
+    # ---- Mock token path (does not require rfc3161ng) ----
     if _is_mock_token(timestamp_result.token):
-        return MockTSA.verify(timestamp_result.token, computed_hash)
+        try:
+            computed_hash = _compute_data_hash(data, timestamp_result.hash_algorithm)
+            if computed_hash is None or computed_hash != timestamp_result.data_hash:
+                return False
+            return MockTSA.verify(timestamp_result.token, computed_hash)
+        except Exception:
+            return False
 
     # ---- Online (real RFC 3161) verification ----
     if not RFC3161_AVAILABLE:
@@ -372,6 +375,10 @@ def verify_timestamp(
         )
 
     try:
+        computed_hash = _compute_data_hash(data, timestamp_result.hash_algorithm)
+        if computed_hash is None or computed_hash != timestamp_result.data_hash:
+            return False
+
         # Create timestamper for verification
         timestamper = RemoteTimestamper(
             timestamp_result.tsa_url,
@@ -380,7 +387,6 @@ def verify_timestamp(
         )
 
         # Verify timestamp token
-        # Note: rfc3161ng's check() method validates the token structure
         is_valid = timestamper.check(
             timestamp_result.token,
             data=data,
@@ -399,6 +405,5 @@ __all__ = [
     "TimestampResult",
     "TimestampUnavailableError",
     "TimestampError",
-    "MockTSA",
     "RFC3161_AVAILABLE",
 ]
