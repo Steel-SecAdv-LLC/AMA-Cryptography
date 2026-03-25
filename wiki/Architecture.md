@@ -1,12 +1,12 @@
 # Architecture
 
-This page describes the system architecture of AMA Cryptography, including the 6-layer defense design, component interactions, data flow, and multi-language implementation.
+This page describes the system architecture of AMA Cryptography, including the multi-layer defense design, component interactions, data flow, and multi-language implementation.
 
 ---
 
 ## System Overview
 
-AMA Cryptography is a **defense-in-depth** cryptographic protection system implementing six independent cryptographic layers. It serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent).
+AMA Cryptography is a **defense-in-depth** cryptographic protection system implementing multiple independent cryptographic layers. It serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent).
 
 ```mermaid
 flowchart TD
@@ -39,10 +39,10 @@ classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 ## Architectural Principles
 
 ### Security Through Mathematical Rigor
-All security claims are backed by formal proofs or reduction arguments to well-studied cryptographic assumptions. No security-by-obscurity mechanisms are employed.
+Security of individual cryptographic primitives (SHA3-256, Ed25519, ML-DSA-65, HMAC, HKDF) relies on published proofs and reduction arguments to well-studied cryptographic assumptions. The system's composition protocol and original components (key evolution, adaptive posture) have not undergone independent formal verification. No security-by-obscurity mechanisms are employed.
 
 ### Defense in Depth
-Six independent cryptographic layers ensure that compromise of any single layer does not compromise overall system security. Each layer provides distinct security properties from different mathematical foundations.
+Multiple independent cryptographic layers — four core operations (SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65) supported by key derivation and optional timestamping — ensure that compromise of any single layer does not compromise overall system security. Each layer provides distinct security properties from different mathematical foundations.
 
 ### Quantum Readiness
 Primary signature algorithms are selected for resistance to known quantum attacks. The system remains secure against adversaries with access to large-scale quantum computers for 50+ years.
@@ -110,19 +110,23 @@ High-level, algorithm-agnostic interface. Primary production API for integration
 
 ---
 
-## The 6-Layer Cryptographic Stack
+## Multi-Layer Cryptographic Stack
 
-Layers are applied sequentially during package creation:
+Operations are applied sequentially during package creation. The architecture distinguishes core cryptographic operations (the defense layers an attacker must defeat) from supporting infrastructure:
 
 ```mermaid
 flowchart BT
-    input["Input Data"]:::gray --> L1
-    L1["Layer 1: Canonical Length-Prefixed Encoding"]:::gray --> L2
-    L2["Layer 2: SHA3-256 Content Hash (FIPS 202)"]:::gold --> L3
-    L3["Layer 3: HMAC-SHA3-256 Authentication (RFC 2104)"]:::blue --> L4
-    L4["Layer 4: Ed25519 Classical Signature (RFC 8032)"]:::black --> L5
-    L5["Layer 5: ML-DSA-65 Quantum-Resistant Signature (FIPS 204)"]:::gold --> L6
-    L6["Layer 6: RFC 3161 Trusted Timestamp (optional)"]:::blue
+    input["Input Data"]:::gray --> L0
+    L0["Input Normalization: Canonical Length-Prefixed Encoding"]:::gray --> L1
+    L1["Layer 1: SHA3-256 Content Hash (FIPS 202)"]:::gold --> L2
+    L2["Layer 2: HMAC-SHA3-256 Authentication (RFC 2104)"]:::blue --> L3
+    L3["Layer 3: Ed25519 Classical Signature (RFC 8032)"]:::black --> L4
+    L4["Layer 4: ML-DSA-65 Quantum-Resistant Signature (FIPS 204)"]:::gold --> S2
+    S2["Supporting: RFC 3161 Trusted Timestamp (optional)"]:::blue
+
+    S1["Supporting: HKDF-SHA3-256 Key Derivation (RFC 5869)"]:::blue -.->|derives keys| L2
+    S1 -.->|derives keys| L3
+    S1 -.->|derives keys| L4
 
 classDef gold fill:#B4B124,stroke:#000000,color:#000000;
 classDef blue fill:#11AEED,stroke:#000000,color:#000000;
@@ -130,25 +134,30 @@ classDef black fill:#000000,stroke:#B4B124,color:#f6f6f6;
 classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 ```
 
-### Layer-by-Layer Description
+### Core Cryptographic Operations
 
-**Layer 1 — Canonical Encoding:**
-Input data is encoded using a deterministic length-prefixed format. Prevents concatenation attacks and ensures identical inputs always produce identical encoded outputs.
+**Canonical Encoding (Input Normalization):**
+Input data is encoded using a deterministic length-prefixed format. Prevents concatenation attacks and ensures identical inputs always produce identical encoded outputs. This is the input normalization step, not an independent defense layer.
 
-**Layer 2 — SHA3-256 Content Hash:**
+**Layer 1 — SHA3-256 Content Hash:**
 Produces a 256-bit digest serving as the binding commitment for all subsequent layers. 128-bit collision resistance (NIST FIPS 202, Keccak sponge construction).
 
-**Layer 3 — HMAC-SHA3-256 Authentication:**
+**Layer 2 — HMAC-SHA3-256 Authentication:**
 Provides symmetric authentication using a key derived via HKDF. Enables efficient verification when the HMAC key is available without requiring asymmetric operations.
 
-**Layer 4 — Ed25519 Classical Signature:**
+**Layer 3 — Ed25519 Classical Signature:**
 Compact 64-byte digital signature with 128-bit classical security. Ensures compatibility with existing verification infrastructure.
 
-**Layer 5 — ML-DSA-65 Quantum-Resistant Signature:**
+**Layer 4 — ML-DSA-65 Quantum-Resistant Signature:**
 Lattice-based signature (≈3,309 bytes) resistant to all known quantum attacks. Provides 192-bit quantum security (NIST Level 3, FIPS 204).
 
-**Layer 6 — RFC 3161 Trusted Timestamp:**
-Optional third-party timestamp providing non-repudiation and cryptographic proof of existence at a specific time.
+### Supporting Cryptographic Infrastructure
+
+**HKDF-SHA3-256 Key Derivation:**
+Derives independent cryptographic keys from a single master secret, ensuring key independence across operations. A supporting primitive, not an independent defense layer.
+
+**RFC 3161 Trusted Timestamp:**
+Optional third-party timestamp providing temporal proof of existence at a specific time. Proves when a package was created, not who created it.
 
 ---
 

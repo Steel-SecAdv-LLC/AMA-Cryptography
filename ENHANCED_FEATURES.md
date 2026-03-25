@@ -107,7 +107,7 @@ AVX2 support for polynomial operations:
 
 - Public key: 1,952 bytes
 - Secret key: 4,032 bytes
-- Signature: ~3,293 bytes
+- Signature: ~3,309 bytes
 - Security: NIST Level 3 (~192-bit quantum)
 - Constant-time implementation
 - NIST KAT validated: **10/10 PASS**

@@ -13,7 +13,7 @@
 
 ## Executive Summary
 
-AMA Cryptography is a production-grade cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. It serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent). The architecture implements defense-in-depth security through six independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
+AMA Cryptography is a cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. It serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent). The architecture implements defense-in-depth security through multiple independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
 
 This document provides a comprehensive technical reference for system architects, security engineers, and developers working with or evaluating the AMA Cryptography system.
 
@@ -92,19 +92,19 @@ The following are explicitly not goals of this architecture:
 
 The AMA Cryptography architecture is built on the following foundational principles:
 
-**Security Through Mathematical Rigor**: All security claims are backed by formal proofs or reduction arguments to well-studied cryptographic assumptions. No security-by-obscurity mechanisms are employed.
+**Security Through Mathematical Rigor**: Security of individual cryptographic primitives (SHA3-256, Ed25519, ML-DSA-65, HMAC, HKDF) relies on published proofs and reduction arguments to well-studied cryptographic assumptions. The system's composition protocol and original components (key evolution, adaptive posture) have not undergone independent formal verification. No security-by-obscurity mechanisms are employed.
 
-**Defense in Depth**: Six independent cryptographic layers ensure that compromise of any single layer does not compromise the overall system security. Each layer provides distinct security properties.
+**Defense in Depth**: Multiple independent cryptographic layers — four core operations (SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65) supported by key derivation and optional timestamping — ensure that compromise of any single layer does not compromise the overall system security. Each layer provides distinct security properties.
 
 **Quantum Readiness**: Primary signature algorithms are selected for resistance to known quantum attacks. The system is designed to remain secure against adversaries with access to large-scale quantum computers.
 
 **Ethical Integration**: Ethical constraints are mathematically bound to cryptographic operations through the key derivation process, ensuring that ethical metadata cannot be separated from cryptographic proofs.
 
-**Standards Compliance**: Built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the 6-layer defense architecture, key evolution, and adaptive posture system) is an original design.
+**Standards Compliance**: Built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the multi-layer defense architecture, key evolution, and adaptive posture system) is an original design.
 
 **Zero External Crypto Dependencies (INVARIANT-1)**: All cryptographic primitives are implemented natively in C. No third-party crypto packages are permitted. See [`.github/INVARIANTS.md`](.github/INVARIANTS.md).
 
-**Performance Efficiency**: Cryptographic operations are optimized to maintain throughput exceeding 450 packages/second for full 6-layer operations.
+**Performance Efficiency**: Cryptographic operations are optimized to maintain throughput exceeding 450 packages/second for full multi-layer operations.
 
 ### Architectural Constraints
 
@@ -170,35 +170,41 @@ Encryption and KDF:
 
 ### Cryptographic Layer Stack
 
-The system implements six independent security layers, applied sequentially:
+The system implements multiple independent security layers, applied sequentially. Core cryptographic operations (the defense layers an attacker must defeat) are distinguished from supporting infrastructure:
 
 ```
-Layer 6: RFC 3161 Trusted Timestamp (optional)
-         |
-Layer 5: ML-DSA-65 Quantum-Resistant Signature
-         |
-Layer 4: Ed25519 Classical Digital Signature
-         |
-Layer 3: HMAC-SHA3-256 Message Authentication
-         |
-Layer 2: SHA3-256 Content Hash
-         |
-Layer 1: Canonical Length-Prefixed Encoding
-         |
-      [Input Data]
+  Supporting: RFC 3161 Trusted Timestamp (optional)
+              |
+    Layer 4: ML-DSA-65 Quantum-Resistant Signature
+              |
+    Layer 3: Ed25519 Classical Digital Signature
+              |                                       Supporting: HKDF-SHA3-256
+    Layer 2: HMAC-SHA3-256 Message Authentication  <-- derives keys for Layers 2-4
+              |
+    Layer 1: SHA3-256 Content Hash
+              |
+  Input Normalization: Canonical Length-Prefixed Encoding
+              |
+          [Input Data]
 ```
 
-**Layer 1 - Canonical Encoding**: Input data is encoded using a deterministic length-prefixed format that prevents concatenation attacks and ensures identical inputs always produce identical encoded outputs.
+**Core Cryptographic Operations:**
 
-**Layer 2 - Content Hashing**: SHA3-256 produces a 256-bit digest of the canonically encoded data. This digest serves as the binding commitment for all subsequent cryptographic operations.
+**Input Normalization - Canonical Encoding**: Input data is encoded using a deterministic length-prefixed format that prevents concatenation attacks and ensures identical inputs always produce identical encoded outputs. This is the input normalization step, not an independent defense layer.
 
-**Layer 3 - Message Authentication**: HMAC-SHA3-256 provides symmetric authentication using a derived key. This layer enables efficient verification when the HMAC key is available.
+**Layer 1 - Content Hashing**: SHA3-256 produces a 256-bit digest of the canonically encoded data. This digest serves as the binding commitment for all subsequent cryptographic operations. 128-bit collision resistance (NIST FIPS 202).
 
-**Layer 4 - Classical Signature**: Ed25519 provides a compact (64-byte) digital signature with 128-bit classical security. This layer ensures compatibility with existing verification infrastructure.
+**Layer 2 - Message Authentication**: HMAC-SHA3-256 provides keyed message authentication using a key derived via HKDF. This layer enables efficient verification when the HMAC key is available.
 
-**Layer 5 - Quantum-Resistant Signature**: ML-DSA-65 (Dilithium Level 3) provides a lattice-based signature resistant to known quantum attacks. Signature size is approximately 3,293 bytes.
+**Layer 3 - Classical Signature**: Ed25519 provides a compact (64-byte) digital signature with 128-bit classical security. This layer ensures compatibility with existing verification infrastructure.
 
-**Layer 6 - Trusted Timestamp**: Optional RFC 3161 timestamp from a trusted third-party authority provides non-repudiation and proof of existence at a specific time.
+**Layer 4 - Quantum-Resistant Signature**: ML-DSA-65 (Dilithium Level 3) provides a lattice-based signature resistant to known quantum attacks. Signature size is approximately 3,309 bytes. 192-bit quantum security (NIST FIPS 204).
+
+**Supporting Cryptographic Infrastructure:**
+
+**HKDF-SHA3-256 Key Derivation**: Derives independent cryptographic keys from a single master secret, ensuring key independence across Layers 2-4. A supporting primitive, not an independent defense layer.
+
+**RFC 3161 Trusted Timestamp**: Optional third-party timestamp providing temporal proof of existence at a specific time. Proves when a package was created, not who created it.
 
 ### Key Sizes and Parameters
 
@@ -238,7 +244,7 @@ The system defines 4 ethical pillars, each governing a triad of three sub-proper
 - Real-time protection: >1,000 ops/sec with minimal latency
 
 **Pillar 3: Omnidirectional — Triad of Geography (Defense-in-Depth)**
-- Multi-layer defense: Security presence across all six cryptographic layers
+- Multi-layer defense: Security presence across all cryptographic layers
 - Temporal integrity: Trusted timestamping via RFC 3161
 - Attack surface coverage: Classical, quantum, concatenation, forgery defense
 
@@ -590,7 +596,7 @@ The architecture supports optional HSM integration for master secret storage:
 
 **Security Bound:** Overall security is bounded by the weakest cryptographic layer, not the sum of all layers. The system provides approximately 128-bit classical security (from Ed25519/HMAC) and approximately 192-bit quantum security (from ML-DSA-65/Dilithium) when all layers are enforced.
 
-**Defense-in-Depth Benefit:** While security is bounded by the weakest layer, the defense-in-depth architecture ensures that even if one layer is compromised (e.g., a future break in Ed25519), other layers continue to provide protection. An attacker must defeat ALL layers to fully compromise the system.
+**Defense-in-Depth Benefit:** While security is bounded by the weakest layer, the defense-in-depth architecture ensures that even if one layer is compromised (e.g., a future break in Ed25519), other layers continue to provide protection. Package authenticity is protected by four independent cryptographic operations — content hashing, keyed authentication, classical signature, and quantum-resistant signature — supported by independent key derivation and optional third-party timestamping.
 
 See [SECURITY.md](SECURITY.md) for detailed security proofs and the formal security bound statement.
 
@@ -614,15 +620,15 @@ The security analysis assumes:
 | Operation | Target Latency | Measured Latency |
 |-----------|---------------|------------------|
 | KMS Generation | < 5 ms | ~2.12 ms |
-| Package Creation (6-layer) | < 5 ms | ~2.17 ms |
-| Package Verification (6-layer) | < 5 ms | ~2.04 ms |
+| Package Creation (multi-layer) | < 5 ms | ~2.17 ms |
+| Package Verification (multi-layer) | < 5 ms | ~2.04 ms |
 | HMAC Computation | < 1 ms | ~0.032 ms |
 | SHA3-256 Hash | < 1 ms | ~0.001 ms |
 
 ### Throughput Characteristics
 
-- **Signing Throughput**: ~462 packages/second (single core, full 6-layer)
-- **Verification Throughput**: ~489 packages/second (single core, full 6-layer)
+- **Signing Throughput**: ~462 packages/second (single core, full multi-layer)
+- **Verification Throughput**: ~489 packages/second (single core, full multi-layer)
 - **Bottleneck**: ML-DSA-65 signing (4.20 ms, dominant signing cost)
 
 ### Optimization Strategies

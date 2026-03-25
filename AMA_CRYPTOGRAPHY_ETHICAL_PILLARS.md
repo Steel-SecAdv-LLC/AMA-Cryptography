@@ -100,8 +100,11 @@ System security is bounded by the weakest layer:
 - Classical security: ~128-bit (Ed25519/HMAC)
 - Quantum security: ~192-bit (Dilithium)
 
-An attacker must defeat ALL layers to compromise the system.
-Defense-in-depth ensures continued protection even if one layer fails.
+Package authenticity is protected by four independent cryptographic
+operations — content hashing, keyed authentication, classical signature,
+and quantum-resistant signature — supported by independent key derivation
+and optional third-party timestamping. Defense-in-depth ensures continued
+protection even if one layer is compromised.
 ```
 
 **Citation:**
