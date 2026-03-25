@@ -171,6 +171,9 @@ jobs:
       - name: Build and install package
         run: pip install -e .
 
+      - name: Verify module integrity
+        run: python -m ama_cryptography.integrity --verify
+
       - name: Run tests
         env:
           # UTF-8 encoding for Windows to support Unicode symbols in output

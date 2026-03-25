@@ -13,7 +13,7 @@
 
 This document provides an overview of the cryptographic algorithms used in AMA Cryptography, their security properties, and references to official specifications.
 
-> **Design Note:** AMA Cryptography is built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the 6-layer defense architecture, double-helix key evolution, and adaptive posture system) is an original design by Steel Security Advisors LLC. AMA Cryptography is a standalone cryptographic library for any Python project, AI agent, or AI system requiring quantum-resistant security. [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent) is one consumer, but the library is designed for general-purpose independent use.
+> **Design Note:** AMA Cryptography is built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the 4-Layer defense architecture, double-helix key evolution, and adaptive posture system) is an original design by Steel Security Advisors LLC. AMA Cryptography is a standalone cryptographic library for any Python project, AI agent, or AI system requiring quantum-resistant security. [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent) is one consumer, but the library is designed for general-purpose independent use.
 
 ## Algorithm Summary
 
@@ -206,25 +206,25 @@ combined_ss = HKDF-SHA3-256(
 
 ## Defense-in-Depth Layers
 
-AMA Cryptography applies six independent cryptographic layers:
+AMA Cryptography applies four core cryptographic layers:
 
-1. **Canonical Encoding** - Length-prefixed encoding prevents concatenation attacks
-2. **SHA3-256 Hash** - Content integrity with collision resistance
-3. **HMAC-SHA3-256** - Symmetric authentication with shared key
-4. **Ed25519 Signature** - Classical asymmetric authentication
-5. **ML-DSA-65 Signature** - Quantum-resistant asymmetric authentication
-6. **RFC 3161 Timestamp** - Third-party proof of existence (optional)
+1. **Content Integrity** — SHA3-256 hash (NIST FIPS 202, 128-bit collision resistance)
+2. **Keyed Authentication** — HMAC-SHA3-256 (RFC 2104, 256-bit key)
+3. **Digital Signature** — Hybrid Ed25519 + ML-DSA-65 (RFC 8032 + NIST FIPS 204)
+4. **Key Independence** — HKDF-SHA3-256 key derivation (RFC 5869)
+
+**Optional add-ons (not core layers):** SPHINCS+-256f, ML-KEM-1024, RFC 3161 timestamping.
 
 **Security Bound:** Overall security is bounded by the weakest layer (~128-bit classical, ~192-bit quantum when Dilithium is enforced). Defense-in-depth ensures continued protection if any single layer is compromised. See [SECURITY.md](SECURITY.md) for detailed analysis.
 
 ### Hash Algorithm Note: RFC 3161 Timestamps
 
-The RFC 3161 timestamp layer uses **SHA-256** instead of SHA3-256 for the TSA request. This is a deliberate design choice for interoperability:
+The optional RFC 3161 timestamp add-on uses **SHA-256** instead of SHA3-256 for the TSA request. This is a deliberate design choice for interoperability:
 
 - Most RFC 3161 TSA services (FreeTSA, DigiCert, GlobalSign) do not support SHA3-256
 - The timestamp token provides proof-of-existence at a specific time
 - The SHA-256 hash is only used for the TSA request, not for package integrity
-- Package integrity is protected by SHA3-256 in layers 2-5
+- Package integrity is protected by SHA3-256 in the core 4-Layer defense
 
 This does not weaken security because:
 1. The timestamp proves when the package existed, not its integrity

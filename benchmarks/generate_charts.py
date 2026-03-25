@@ -130,7 +130,7 @@ def generate_charts(output_dir: str) -> None:
     plt.close()
     print(f"  Created {output_dir}/c_vs_python.svg")
 
-    # Chart 3: 6-Layer Package Breakdown
+    # Chart 3: 4-Layer Package Breakdown
     fig, ax = plt.subplots(figsize=(8, 6))
     labels = [name for name, ms in SIX_LAYER_BREAKDOWN if ms > 0]
     sizes = [ms for _, ms in SIX_LAYER_BREAKDOWN if ms > 0]
@@ -145,7 +145,7 @@ def generate_charts(output_dir: str) -> None:
         shadow=False,
         startangle=140,
     )
-    ax.set_title("6-Layer Package Creation Time Breakdown")
+    ax.set_title("4-Layer Package Creation Time Breakdown")
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "layer_breakdown.svg"), format="svg")
     plt.close()

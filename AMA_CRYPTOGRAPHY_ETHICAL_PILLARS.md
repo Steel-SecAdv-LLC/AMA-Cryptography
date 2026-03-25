@@ -13,7 +13,7 @@
 
 ## Executive Summary
 
-The 4 Omni-Code Ethical Pillars extend AMA Cryptography's six-layer cryptographic defense with a mathematically rigorous ethical constraint system. Each pillar maps to a triad of cryptographic operations, providing verifiable ethical boundaries without compromising security guarantees.
+The 4 Omni-Code Ethical Pillars extend AMA Cryptography's 4-Layer cryptographic defense with a mathematically rigorous ethical constraint system. Each pillar maps to a triad of cryptographic operations, providing verifiable ethical boundaries without compromising security guarantees.
 
 **Key Properties:**
 - **Balanced weighting:** Each pillar = 3.0 (3 sub-properties × 1.0), Σw = 12.0
@@ -161,12 +161,11 @@ Conclusion: Suitable for real-time cryptographic protection
 
 #### Sub-property 3.1: Multi-Layer Defense
 **Cryptographic Mapping:**
-- Layer 1: SHA3-256 (integrity)
-- Layer 2: HMAC (authentication)
-- Layer 3: Ed25519 (classical non-repudiation)
-- Layer 4: Dilithium (quantum non-repudiation)
-- Layer 5: HKDF (key management)
-- Layer 6: RFC 3161 (trusted timestamping)
+- Layer 1: SHA3-256 content hash (integrity) — NIST FIPS 202, 128-bit collision resistance
+- Layer 2: HMAC-SHA3-256 keyed authentication — RFC 2104, 256-bit key
+- Layer 3: Hybrid Ed25519 + ML-DSA-65 digital signature — RFC 8032 + NIST FIPS 204
+- Layer 4: HKDF-SHA3-256 key derivation (key independence) — RFC 5869
+- Optional add-ons (not core layers): SPHINCS+-256f, ML-KEM-1024, RFC 3161 timestamping
 
 **Defense-in-Depth Proof:**
 ```
@@ -175,7 +174,7 @@ Multi-layer failure requires ALL layers to fail:
 P(system_fail) = ∏P(failᵢ)
 
 With P(failᵢ) ≤ 2⁻¹²⁸ for each cryptographic layer:
-P(system_fail) ≤ (2⁻¹²⁸)⁶ = 2⁻⁷⁶⁸
+P(system_fail) ≤ (2⁻¹²⁸)⁴ = 2⁻⁵¹²
 
 Conclusion: Defense-in-depth provides exponential security improvement
 ```
