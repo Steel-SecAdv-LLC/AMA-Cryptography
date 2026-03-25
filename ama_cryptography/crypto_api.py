@@ -740,7 +740,18 @@ class AESGCMProvider:
                     cls._encrypt_counters[key_id] = max(cls._encrypt_counters.get(key_id, 0), count)
             except FileNotFoundError:
                 logger.debug("No existing counter file at %s — first write", path)
-            except (_json.JSONDecodeError, ValueError) as _merge_err:
+            except (_json.JSONDecodeError, ValueError, KeyError, TypeError) as _merge_err:
+                # Corrupt counter file during persist-merge.
+                # When called from the encrypt path (_raising=True), this is
+                # a safety-critical error: a corrupt file may contain stale
+                # counters that could allow nonce reuse after overwrite.
+                # Consistent with _load_persisted_counters which raises on
+                # any corruption.
+                if _raising:
+                    raise RuntimeError(
+                        f"Corrupt AES-GCM counter file at {path}: {_merge_err}. "
+                        "Cannot safely merge counters — manual inspection required."
+                    ) from _merge_err
                 logger.warning("Corrupt counter file, overwriting: %s", _merge_err)
 
             data = {k.hex(): v for k, v in cls._encrypt_counters.items()}
