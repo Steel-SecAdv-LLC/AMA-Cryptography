@@ -257,7 +257,7 @@ class TestCryptoPostureController:
     def test_cooldown_prevents_rapid_rotation(self) -> None:
         """Rotation within cooldown window should be suppressed."""
         on_rotation = MagicMock()
-        evaluator = PostureEvaluator(critical_threshold=0.01)
+        evaluator = PostureEvaluator(critical_threshold=0.01, escalation_count=1)
         anomaly = MagicMock()
         anomaly.severity = "critical"
         anomaly.deviation_sigma = 10.0
