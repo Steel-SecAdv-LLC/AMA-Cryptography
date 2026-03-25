@@ -5,7 +5,7 @@ import hashlib
 import pytest
 
 
-def _skip_if_no_backends():
+def _skip_if_no_backends() -> None:
     """Skip test if native backends are not available."""
     try:
         from ama_cryptography.crypto_api import create_crypto_package
@@ -18,7 +18,7 @@ def _skip_if_no_backends():
 
 
 class TestCreateCryptoPackage:
-    def test_basic_creation(self):
+    def test_basic_creation(self) -> None:
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package
 
@@ -30,26 +30,26 @@ class TestCreateCryptoPackage:
         assert len(result.derived_keys) == 3
         assert len(result.hkdf_salt) == 32
 
-    def test_metadata_has_4_layers(self):
+    def test_metadata_has_4_layers(self) -> None:
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package
 
         result = create_crypto_package(b"test")
         assert result.metadata["defense_layers"] == 4
 
-    def test_rejects_empty_content(self):
+    def test_rejects_empty_content(self) -> None:
         from ama_cryptography.crypto_api import create_crypto_package
 
         with pytest.raises(ValueError, match="empty"):
             create_crypto_package(b"")
 
-    def test_rejects_non_bytes(self):
+    def test_rejects_non_bytes(self) -> None:
         from ama_cryptography.crypto_api import create_crypto_package
 
         with pytest.raises(TypeError, match="bytes"):
             create_crypto_package("string")  # type: ignore[arg-type]
 
-    def test_hmac_key_preserved(self):
+    def test_hmac_key_preserved(self) -> None:
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package
 
@@ -57,7 +57,7 @@ class TestCreateCryptoPackage:
         assert isinstance(result.hmac_key, bytes)
         assert len(result.hmac_key) == 32
 
-    def test_hkdf_master_secret_preserved(self):
+    def test_hkdf_master_secret_preserved(self) -> None:
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package
 
@@ -67,7 +67,7 @@ class TestCreateCryptoPackage:
 
 
 class TestVerifyCryptoPackage:
-    def test_verify_all_layers_pass(self):
+    def test_verify_all_layers_pass(self) -> None:
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package, verify_crypto_package
 
@@ -79,7 +79,7 @@ class TestVerifyCryptoPackage:
         assert v["hkdf_keys"] is True
         assert v["all_valid"] is True
 
-    def test_tampered_content_fails_hash(self):
+    def test_tampered_content_fails_hash(self) -> None:
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package, verify_crypto_package
 
@@ -88,7 +88,7 @@ class TestVerifyCryptoPackage:
         assert v["content_hash"] is False
         assert v["all_valid"] is False
 
-    def test_tampered_content_fails_hmac(self):
+    def test_tampered_content_fails_hmac(self) -> None:
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package, verify_crypto_package
 
@@ -96,7 +96,7 @@ class TestVerifyCryptoPackage:
         v = verify_crypto_package(b"tampered", result)
         assert v["hmac"] is False
 
-    def test_tampered_content_fails_signature(self):
+    def test_tampered_content_fails_signature(self) -> None:
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package, verify_crypto_package
 
@@ -104,7 +104,7 @@ class TestVerifyCryptoPackage:
         v = verify_crypto_package(b"tampered", result)
         assert v["primary_signature"] is False
 
-    def test_tampered_hmac_key_fails(self):
+    def test_tampered_hmac_key_fails(self) -> None:
         _skip_if_no_backends()
         import os
 
@@ -120,7 +120,7 @@ class TestVerifyCryptoPackage:
         assert v["hmac"] is False
         assert v["all_valid"] is False
 
-    def test_verify_returns_all_valid_key(self):
+    def test_verify_returns_all_valid_key(self) -> None:
         _skip_if_no_backends()
         from ama_cryptography.crypto_api import create_crypto_package, verify_crypto_package
 

@@ -9,7 +9,7 @@ import pytest
 class TestAESGCMForkDetection:
     """Test that AESGCMProvider detects fork() and refuses to reuse nonce state."""
 
-    def test_encrypt_after_fork_raises(self):
+    def test_encrypt_after_fork_raises(self) -> None:
         """Simulate fork by changing os.getpid() return value."""
         try:
             from ama_cryptography.crypto_api import AESGCMProvider
@@ -36,7 +36,7 @@ class TestAESGCMForkDetection:
             with pytest.raises(RuntimeError, match="fork"):
                 provider.encrypt(b"test data", key)
 
-    def test_encrypt_same_pid_works(self):
+    def test_encrypt_same_pid_works(self) -> None:
         """Encrypt should work normally when PID matches."""
         try:
             from ama_cryptography.crypto_api import AESGCMProvider
@@ -50,7 +50,7 @@ class TestAESGCMForkDetection:
         assert result["tag"] is not None
         assert result["nonce"] is not None
 
-    def test_pid_at_init_is_set(self):
+    def test_pid_at_init_is_set(self) -> None:
         """Verify _pid_at_init is set during construction."""
         try:
             from ama_cryptography.crypto_api import AESGCMProvider
@@ -64,7 +64,7 @@ class TestAESGCMForkDetection:
 class TestAESGCMNonceCounter:
     """Test nonce counter tracking and safety limits."""
 
-    def test_nonce_counter_increments(self):
+    def test_nonce_counter_increments(self) -> None:
         try:
             from ama_cryptography.crypto_api import AESGCMProvider
         except RuntimeError:
@@ -87,7 +87,7 @@ class TestAESGCMNonceCounter:
 
         AESGCMProvider._ephemeral = False  # Restore
 
-    def test_key_validation(self):
+    def test_key_validation(self) -> None:
         try:
             from ama_cryptography.crypto_api import AESGCMProvider
         except RuntimeError:
@@ -97,7 +97,7 @@ class TestAESGCMNonceCounter:
         with pytest.raises(ValueError, match="32 bytes"):
             provider.encrypt(b"data", b"short_key")
 
-    def test_nonce_validation(self):
+    def test_nonce_validation(self) -> None:
         try:
             from ama_cryptography.crypto_api import AESGCMProvider
         except RuntimeError:
@@ -108,7 +108,7 @@ class TestAESGCMNonceCounter:
         with pytest.raises(ValueError, match="12 bytes"):
             provider.encrypt(b"data", key, nonce=b"short")
 
-    def test_decrypt_roundtrip(self):
+    def test_decrypt_roundtrip(self) -> None:
         try:
             from ama_cryptography.crypto_api import AESGCMProvider
         except RuntimeError:
@@ -122,7 +122,7 @@ class TestAESGCMNonceCounter:
         dec = provider.decrypt(enc["ciphertext"], key, enc["nonce"], enc["tag"], enc["aad"])
         assert dec == plaintext
 
-    def test_tampered_ciphertext_fails(self):
+    def test_tampered_ciphertext_fails(self) -> None:
         try:
             from ama_cryptography.crypto_api import AESGCMProvider
         except RuntimeError:

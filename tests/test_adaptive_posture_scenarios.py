@@ -10,6 +10,10 @@ threat level escalation and de-escalation, multiple anomaly signals,
 threshold-based escalation, default threat level, and score decay.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 import pytest
 
 from ama_cryptography.adaptive_posture import (
@@ -21,14 +25,14 @@ from ama_cryptography.adaptive_posture import (
 
 
 def _make_report(
-    timing_alerts=None,
-    pattern_alerts=None,
-    resonance_analysis=None,
-    total_alerts=50,
-    status="ok",
-):
+    timing_alerts: list[dict[str, Any]] | None = None,
+    pattern_alerts: list[dict[str, Any]] | None = None,
+    resonance_analysis: dict[str, Any] | None = None,
+    total_alerts: int = 50,
+    status: str = "ok",
+) -> dict[str, Any]:
     """Build a minimal monitor report dict."""
-    alerts = []
+    alerts: list[dict[str, Any]] = []
     if timing_alerts:
         alerts.extend(timing_alerts)
     if pattern_alerts:
@@ -41,18 +45,18 @@ def _make_report(
     }
 
 
-def _timing_alert(severity="critical", deviation=10.0):
+def _timing_alert(severity: str = "critical", deviation: float = 10.0) -> dict[str, Any]:
     """Create a fake timing alert entry."""
 
     class _FakeAnomaly:
-        def __init__(self, sev, dev):
+        def __init__(self, sev: str, dev: float) -> None:
             self.severity = sev
             self.deviation_sigma = dev
 
     return {"type": "timing", "anomaly": _FakeAnomaly(severity, deviation)}
 
 
-def _pattern_alert(severity="critical", z_score=10.0):
+def _pattern_alert(severity: str = "critical", z_score: float = 10.0) -> dict[str, Any]:
     """Create a fake pattern alert entry."""
     return {
         "type": "pattern",

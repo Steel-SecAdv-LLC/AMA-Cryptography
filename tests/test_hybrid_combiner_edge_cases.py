@@ -10,6 +10,8 @@ round-trip consistency, output uniqueness, zero-length context,
 and corrupted ciphertext binding.
 """
 
+from __future__ import annotations
+
 import os
 
 import pytest
@@ -107,14 +109,27 @@ class TestHybridCombinerEdgeCases:
             "pqc_pk": _random(1184),
         }
 
-        baseline = combiner.combine(**base_args)
+        baseline = combiner.combine(
+            classical_ss=base_args["classical_ss"],
+            pqc_ss=base_args["pqc_ss"],
+            classical_ct=base_args["classical_ct"],
+            pqc_ct=base_args["pqc_ct"],
+            classical_pk=base_args["classical_pk"],
+            pqc_pk=base_args["pqc_pk"],
+        )
 
         for key in ("classical_ss", "pqc_ss", "classical_ct", "pqc_ct"):
             modified = dict(base_args)
             modified[key] = _random(len(base_args[key]))
-            assert (
-                combiner.combine(**modified) != baseline
-            ), f"Changing {key} did not change the output"
+            result = combiner.combine(
+                classical_ss=modified["classical_ss"],
+                pqc_ss=modified["pqc_ss"],
+                classical_ct=modified["classical_ct"],
+                pqc_ct=modified["pqc_ct"],
+                classical_pk=modified["classical_pk"],
+                pqc_pk=modified["pqc_pk"],
+            )
+            assert result != baseline, f"Changing {key} did not change the output"
 
     def test_zero_length_additional_context(self, combiner: HybridCombiner) -> None:
         """Passing empty public keys (zero-length context) should work and
@@ -151,10 +166,10 @@ class TestHybridCombinerEdgeCases:
         """encapsulate_hybrid() should return a properly populated
         HybridEncapsulation dataclass."""
 
-        def fake_classical_encaps(pk: bytes):
+        def fake_classical_encaps(pk: bytes) -> tuple[bytes, bytes]:
             return (_random(32), _random(32))
 
-        def fake_pqc_encaps(pk: bytes):
+        def fake_pqc_encaps(pk: bytes) -> tuple[bytes, bytes]:
             return (_random(1568), _random(32))
 
         result = combiner.encapsulate_hybrid(

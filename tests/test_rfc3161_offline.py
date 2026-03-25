@@ -45,13 +45,19 @@ class TestTimestampResultDataclass:
 
     def test_equality(self) -> None:
         """Two TimestampResult instances with identical fields should be equal."""
-        kwargs = {
-            "token": b"tok",
-            "tsa_url": "url",
-            "hash_algorithm": "sha256",
-            "data_hash": b"h",
-        }
-        assert TimestampResult(**kwargs) == TimestampResult(**kwargs)
+        a = TimestampResult(
+            token=b"tok",
+            tsa_url="url",
+            hash_algorithm="sha256",
+            data_hash=b"h",
+        )
+        b = TimestampResult(
+            token=b"tok",
+            tsa_url="url",
+            hash_algorithm="sha256",
+            data_hash=b"h",
+        )
+        assert a == b
 
 
 class TestHashAlgorithmValidation:
@@ -82,6 +88,7 @@ class TestMockMode:
     def test_mock_tsa_url_is_mock(self) -> None:
         """Mock mode must set tsa_url to 'mock'."""
         result = get_timestamp(b"data", tsa_mode="mock")
+        assert result is not None
         assert result.tsa_url == "mock"
 
     def test_mock_data_hash_matches(self) -> None:
@@ -89,6 +96,7 @@ class TestMockMode:
         data = b"test document"
         result = get_timestamp(data, hash_algorithm="sha3-256", tsa_mode="mock")
         expected = hashlib.sha3_256(data).digest()
+        assert result is not None
         assert result.data_hash == expected
 
 
@@ -104,6 +112,7 @@ class TestDisabledMode:
     def test_disabled_tsa_url(self) -> None:
         """Disabled mode must set tsa_url to 'disabled'."""
         result = get_timestamp(b"data", tsa_mode="disabled")
+        assert result is not None
         assert result.tsa_url == "disabled"
 
 
@@ -130,12 +139,14 @@ class TestVerifyTimestamp:
         """verify_timestamp must return True for matching data."""
         data = b"important document"
         result = get_timestamp(data, tsa_mode="mock", hash_algorithm="sha3-256")
+        assert result is not None
         assert verify_timestamp(data, result) is True
 
     def test_verify_mismatched_data(self) -> None:
         """verify_timestamp must return False when data does not match."""
         data = b"important document"
         result = get_timestamp(data, tsa_mode="mock", hash_algorithm="sha3-256")
+        assert result is not None
         # Tamper with the stored data_hash so the recompute check fails
         tampered = TimestampResult(
             token=result.token,
@@ -148,6 +159,7 @@ class TestVerifyTimestamp:
     def test_verify_disabled_token_always_valid(self) -> None:
         """Disabled tokens should always verify as True."""
         result = get_timestamp(b"data", tsa_mode="disabled")
+        assert result is not None
         assert verify_timestamp(b"data", result) is True
 
 

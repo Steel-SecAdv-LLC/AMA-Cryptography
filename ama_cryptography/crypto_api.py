@@ -1726,7 +1726,8 @@ def create_crypto_package(
                     hash_algorithm="sha3-256",
                     tsa_mode="mock",
                 )
-                timestamp_token = timestamp_result.token
+                if timestamp_result is not None:
+                    timestamp_token = timestamp_result.token
             except Exception:
                 timestamp_token = None
         else:
@@ -1741,7 +1742,8 @@ def create_crypto_package(
                     tsa_url=config.tsa_url,
                     hash_algorithm="sha3-256",
                 )
-                timestamp_token = timestamp_result.token
+                if timestamp_result is not None:
+                    timestamp_token = timestamp_result.token
             except TimestampError as e:
                 raise TimestampError(
                     f"RFC 3161 timestamp is required when include_timestamp=True, "
