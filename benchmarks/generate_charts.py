@@ -146,12 +146,8 @@ def generate_charts(output_dir: str) -> None:
             sig_ops["ML-DSA-65 Sign"]["ops_sec"] = ops["dilithium_sign"]["ops_per_sec"]
             sig_ops["ML-DSA-65 Sign"]["latency_ms"] = ops["dilithium_sign"]["mean_ms"]
         if "dilithium_verify" in ops:
-            sig_ops["ML-DSA-65 Verify"]["ops_sec"] = ops["dilithium_verify"][
-                "ops_per_sec"
-            ]
-            sig_ops["ML-DSA-65 Verify"]["latency_ms"] = ops["dilithium_verify"][
-                "mean_ms"
-            ]
+            sig_ops["ML-DSA-65 Verify"]["ops_sec"] = ops["dilithium_verify"]["ops_per_sec"]
+            sig_ops["ML-DSA-65 Verify"]["latency_ms"] = ops["dilithium_verify"]["mean_ms"]
         if "sha3_256" in ops:
             c_vs_py["SHA3-256 (short)"]["c"] = ops["sha3_256"]["ops_per_sec"]
 
@@ -161,9 +157,7 @@ def generate_charts(output_dir: str) -> None:
     ops_vals = [sig_ops[n]["ops_sec"] for n in names]
     latencies = [sig_ops[n]["latency_ms"] for n in names]
     colors = ["#00d2ff", "#4d96ff", "#ff6b6b", "#ff922b", "#6bcb77", "#845ef7"]
-    bars = ax.barh(
-        names, ops_vals, color=colors[: len(names)], edgecolor="none", height=0.6
-    )
+    bars = ax.barh(names, ops_vals, color=colors[: len(names)], edgecolor="none", height=0.6)
     ax.set_xlabel("Operations/sec", fontsize=11)
     ax.set_title(
         "Signature Algorithm Performance",
@@ -171,15 +165,9 @@ def generate_charts(output_dir: str) -> None:
         fontweight="bold",
         pad=12,
     )
-    ax.xaxis.set_major_formatter(
-        ticker.FuncFormatter(lambda x, _: f"{x:,.0f}")
-    )
+    ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
     for bar, val, lat in zip(bars, ops_vals, latencies):
-        label = (
-            f"{val:,} ops/s ({lat:.3f} ms)"
-            if val > 10
-            else f"{val} ops/s ({lat:.1f} ms)"
-        )
+        label = f"{val:,} ops/s ({lat:.3f} ms)" if val > 10 else f"{val} ops/s ({lat:.1f} ms)"
         ax.text(
             bar.get_width() + max(ops_vals) * 0.01,
             bar.get_y() + bar.get_height() / 2,
@@ -189,9 +177,7 @@ def generate_charts(output_dir: str) -> None:
             color=TEXT_COLOR,
         )
     plt.tight_layout()
-    plt.savefig(
-        os.path.join(output_dir, "signature_performance.svg"), format="svg"
-    )
+    plt.savefig(os.path.join(output_dir, "signature_performance.svg"), format="svg")
     plt.close()
     print(f"  Created {output_dir}/signature_performance.svg")
 
@@ -228,9 +214,7 @@ def generate_charts(output_dir: str) -> None:
     ax.set_xticks(list(x))
     ax.set_xticklabels(ops_names, fontsize=10)
     ax.legend(fontsize=10)
-    ax.yaxis.set_major_formatter(
-        ticker.FuncFormatter(lambda x, _: f"{x:,.0f}")
-    )
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
     for i, (c, p) in enumerate(zip(c_vals, py_vals)):
         speedup = c_vs_py[ops_names[i]]["speedup"]
         ax.text(
@@ -285,9 +269,7 @@ def generate_charts(output_dir: str) -> None:
         style="italic",
     )
     plt.tight_layout()
-    plt.savefig(
-        os.path.join(output_dir, "layer_breakdown.svg"), format="svg"
-    )
+    plt.savefig(os.path.join(output_dir, "layer_breakdown.svg"), format="svg")
     plt.close()
     print(f"  Created {output_dir}/layer_breakdown.svg")
 
@@ -311,9 +293,7 @@ def generate_charts(output_dir: str) -> None:
         fontweight="bold",
         pad=12,
     )
-    ax.yaxis.set_major_formatter(
-        ticker.FuncFormatter(lambda x, _: f"{x:,.0f}")
-    )
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
     for bar, val, lat in zip(bars, kem_vals, kem_lats):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
@@ -334,9 +314,7 @@ def generate_charts(output_dir: str) -> None:
         style="italic",
     )
     plt.tight_layout()
-    plt.savefig(
-        os.path.join(output_dir, "kem_performance.svg"), format="svg"
-    )
+    plt.savefig(os.path.join(output_dir, "kem_performance.svg"), format="svg")
     plt.close()
     print(f"  Created {output_dir}/kem_performance.svg")
 
@@ -413,16 +391,11 @@ def generate_text_summary() -> None:
 
     print("\nML-KEM-1024:")
     for name, data in KEM_OPS.items():
-        print(
-            f"  {name:20s} {data['ops_sec']:>8,} ops/sec"
-            f" ({data['latency_ms']} ms)"
-        )
+        print(f"  {name:20s} {data['ops_sec']:>8,} ops/sec" f" ({data['latency_ms']} ms)")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Generate AMA Cryptography benchmark charts"
-    )
+    parser = argparse.ArgumentParser(description="Generate AMA Cryptography benchmark charts")
     parser.add_argument(
         "--output-dir",
         default="benchmarks/charts",

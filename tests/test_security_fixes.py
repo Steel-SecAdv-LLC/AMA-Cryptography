@@ -16,14 +16,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ama_cryptography.rfc3161_timestamp import (
-    MockTSA,
-    TimestampResult,
-    _MOCK_TSA_ALLOWED,
-    _compute_data_hash,
-    get_timestamp,
-    verify_timestamp,
-)
+from ama_cryptography.rfc3161_timestamp import (_MOCK_TSA_ALLOWED, MockTSA,
+                                                TimestampResult,
+                                                _compute_data_hash,
+                                                get_timestamp,
+                                                verify_timestamp)
 
 # ---------------------------------------------------------------------------
 # S1 — HKDF Layer 4 trivial bypass on empty derived_keys
@@ -37,14 +34,10 @@ class TestS1_HKDFEmptyDerivedKeys:
         """An empty derived_keys list must cause hkdf_keys to be False."""
         import secrets
 
-        from ama_cryptography.crypto_api import (
-            CryptoPackageResult,
-            Ed25519Provider,
-            KeyPair,
-            Signature,
-            _hmac_sha3_256,
-            verify_crypto_package,
-        )
+        from ama_cryptography.crypto_api import (CryptoPackageResult,
+                                                 Ed25519Provider, KeyPair,
+                                                 Signature, _hmac_sha3_256,
+                                                 verify_crypto_package)
 
         # Build a minimal valid-looking CryptoPackageResult by hand
         # so we don't depend on _check_operational / FIPS self-test.
@@ -81,9 +74,9 @@ class TestS1_HKDFEmptyDerivedKeys:
         # Bypass FIPS self-test check for unit test isolation
         with patch("ama_cryptography.crypto_api._check_operational"):
             verification = verify_crypto_package(content, package)
-        assert verification["hkdf_keys"] is False, (
-            "S1 REGRESSION: empty derived_keys must fail Layer 4 (HKDF)"
-        )
+        assert (
+            verification["hkdf_keys"] is False
+        ), "S1 REGRESSION: empty derived_keys must fail Layer 4 (HKDF)"
         assert verification["all_valid"] is False
 
 
@@ -104,9 +97,9 @@ class TestS2_DisabledTimestampIntegrity:
         assert ts_result is not None
 
         # Verify with the WRONG data — must return False
-        assert verify_timestamp(payload_b, ts_result) is False, (
-            "S2 REGRESSION: disabled timestamp validated wrong payload"
-        )
+        assert (
+            verify_timestamp(payload_b, ts_result) is False
+        ), "S2 REGRESSION: disabled timestamp validated wrong payload"
 
     def test_disabled_timestamp_correct_data_passes(self) -> None:
         """A disabled TimestampResult should still pass with correct data."""
@@ -127,6 +120,7 @@ class TestS3_MockTSAHMACAndGuard:
     def test_mock_tsa_uses_hmac(self) -> None:
         """MockTSA.timestamp() must produce tokens verifiable with HMAC."""
         import hmac as hmac_mod
+
         import ama_cryptography.rfc3161_timestamp as ts_mod
 
         # Enable MockTSA for this test
@@ -137,8 +131,8 @@ class TestS3_MockTSAHMACAndGuard:
 
             # Extract nonce and payload from token
             nonce = token[-32:]
-            mac = token[-(32 + 32):-32]
-            payload = token[:-(32 + 32)]
+            mac = token[-(32 + 32) : -32]
+            payload = token[: -(32 + 32)]
 
             # Verify it's an HMAC, not raw SHA-256(nonce || payload)
             expected_hmac = hmac_mod.new(nonce, payload, hashlib.sha256).digest()
@@ -185,10 +179,8 @@ class TestS4_MockTimestampExceptionNotSwallowed:
 
     def test_mock_mode_exception_propagates(self) -> None:
         """When get_timestamp raises in mock mode, _acquire_timestamp must re-raise."""
-        from ama_cryptography.crypto_api import (
-            CryptoPackageConfig,
-            _acquire_timestamp,
-        )
+        from ama_cryptography.crypto_api import (CryptoPackageConfig,
+                                                 _acquire_timestamp)
 
         config = CryptoPackageConfig(
             include_timestamp=True,
@@ -213,10 +205,8 @@ class TestS5_AcquireTimestampNoneGuard:
 
     def test_none_return_raises_in_mock_mode(self) -> None:
         """If get_timestamp() returns None in mock mode, raise RuntimeError."""
-        from ama_cryptography.crypto_api import (
-            CryptoPackageConfig,
-            _acquire_timestamp,
-        )
+        from ama_cryptography.crypto_api import (CryptoPackageConfig,
+                                                 _acquire_timestamp)
 
         config = CryptoPackageConfig(
             include_timestamp=True,
@@ -232,10 +222,8 @@ class TestS5_AcquireTimestampNoneGuard:
 
     def test_none_return_raises_in_online_mode(self) -> None:
         """If get_timestamp() returns None in online mode, raise RuntimeError."""
-        from ama_cryptography.crypto_api import (
-            CryptoPackageConfig,
-            _acquire_timestamp,
-        )
+        from ama_cryptography.crypto_api import (CryptoPackageConfig,
+                                                 _acquire_timestamp)
 
         config = CryptoPackageConfig(
             include_timestamp=True,
@@ -255,10 +243,8 @@ class TestS5_AcquireTimestampNoneGuard:
 
     def test_disabled_mode_returns_none_silently(self) -> None:
         """Disabled mode should still return None (no timestamp requested)."""
-        from ama_cryptography.crypto_api import (
-            CryptoPackageConfig,
-            _acquire_timestamp,
-        )
+        from ama_cryptography.crypto_api import (CryptoPackageConfig,
+                                                 _acquire_timestamp)
 
         config = CryptoPackageConfig(
             include_timestamp=True,

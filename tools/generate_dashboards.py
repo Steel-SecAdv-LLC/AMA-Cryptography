@@ -58,22 +58,32 @@ if regression is None:
     _kg = bench["key_generation"]
     _dna = bench["dna_operations"]
     _baseline_ops = {
-        "sha3_256": 591_593, "hmac_auth": 64_402, "hmac_verify": 64_402,
-        "ed25519_sign": 2_652, "ed25519_verify": 1_472,
-        "dilithium_sign": 429, "dilithium_verify": 536,
-        "hkdf_derivation": 12_839, "package_creation": 293,
-        "package_verification": 147, "kms_generation": 100,
+        "sha3_256": 591_593,
+        "hmac_auth": 64_402,
+        "hmac_verify": 64_402,
+        "ed25519_sign": 2_652,
+        "ed25519_verify": 1_472,
+        "dilithium_sign": 429,
+        "dilithium_verify": 536,
+        "hkdf_derivation": 12_839,
+        "package_creation": 293,
+        "package_verification": 147,
+        "kms_generation": 100,
     }
     _results = []
     for name, base_val in _baseline_ops.items():
         section = _ops if name in _ops else (_kg if name in _kg else _dna)
         measured = section.get(name, {}).get("ops_per_sec", base_val)
         pct = ((measured - base_val) / base_val) * 100 if base_val else 0
-        _results.append({
-            "name": name, "ops_per_second": measured,
-            "baseline_value": base_val, "regression_percent": -pct,
-            "passed": True,
-        })
+        _results.append(
+            {
+                "name": name,
+                "ops_per_second": measured,
+                "baseline_value": base_val,
+                "regression_percent": -pct,
+                "passed": True,
+            }
+        )
     regression = {
         "results": _results,
         "summary": {"total": len(_results), "passed": len(_results), "failed": 0},
@@ -83,14 +93,54 @@ if regression is None:
 if validation is None:
     validation = {
         "results": [
-            {"claim_name": "sha3_256", "documented_value": 0.002, "measured_value": 0.002, "passed": True},
-            {"claim_name": "hmac_auth", "documented_value": 0.016, "measured_value": 0.016, "passed": True},
-            {"claim_name": "ed25519_sign", "documented_value": 0.377, "measured_value": 0.377, "passed": True},
-            {"claim_name": "dilithium_sign", "documented_value": 2.333, "measured_value": 2.333, "passed": True},
-            {"claim_name": "hkdf", "documented_value": 0.260, "measured_value": 0.260, "passed": True},
-            {"claim_name": "package_create", "documented_value": 3.41, "measured_value": 3.41, "passed": True},
-            {"claim_name": "package_verify", "documented_value": 6.82, "measured_value": 6.82, "passed": True},
-            {"claim_name": "ed25519_verify", "documented_value": 0.680, "measured_value": 0.680, "passed": True},
+            {
+                "claim_name": "sha3_256",
+                "documented_value": 0.002,
+                "measured_value": 0.002,
+                "passed": True,
+            },
+            {
+                "claim_name": "hmac_auth",
+                "documented_value": 0.016,
+                "measured_value": 0.016,
+                "passed": True,
+            },
+            {
+                "claim_name": "ed25519_sign",
+                "documented_value": 0.377,
+                "measured_value": 0.377,
+                "passed": True,
+            },
+            {
+                "claim_name": "dilithium_sign",
+                "documented_value": 2.333,
+                "measured_value": 2.333,
+                "passed": True,
+            },
+            {
+                "claim_name": "hkdf",
+                "documented_value": 0.260,
+                "measured_value": 0.260,
+                "passed": True,
+            },
+            {
+                "claim_name": "package_create",
+                "documented_value": 3.41,
+                "measured_value": 3.41,
+                "passed": True,
+            },
+            {
+                "claim_name": "package_verify",
+                "documented_value": 6.82,
+                "measured_value": 6.82,
+                "passed": True,
+            },
+            {
+                "claim_name": "ed25519_verify",
+                "documented_value": 0.680,
+                "measured_value": 0.680,
+                "passed": True,
+            },
         ],
         "summary": {"total": 8, "passed": 8, "failed": 0},
     }
@@ -752,12 +802,22 @@ def create_defense_layers():
 
     # Title
     ax.text(
-        7, 9.6, "AMA Cryptography — 4-Layer Defense Architecture",
-        ha="center", fontsize=20, fontweight="bold", color="#ffffff",
+        7,
+        9.6,
+        "AMA Cryptography — 4-Layer Defense Architecture",
+        ha="center",
+        fontsize=20,
+        fontweight="bold",
+        color="#ffffff",
     )
     ax.text(
-        7, 9.15, "Quantum-Resistant Integrity Protection Pipeline",
-        ha="center", fontsize=11, color="#aaaaaa", style="italic",
+        7,
+        9.15,
+        "Quantum-Resistant Integrity Protection Pipeline",
+        ha="center",
+        fontsize=11,
+        color="#aaaaaa",
+        style="italic",
     )
 
     layers = [
@@ -796,31 +856,48 @@ def create_defense_layers():
         c = layer["color"]
         # Layer box
         rect = plt.Rectangle(
-            (1.5, y - 0.6), 11, 1.4,
-            linewidth=2, edgecolor=c, facecolor=c + "18",
-            clip_on=False, zorder=2,
+            (1.5, y - 0.6),
+            11,
+            1.4,
+            linewidth=2,
+            edgecolor=c,
+            facecolor=c + "18",
+            clip_on=False,
+            zorder=2,
         )
         ax.add_patch(rect)
         # Layer number badge
         badge = plt.Circle((2.3, y + 0.1), 0.35, color=c, zorder=3)
         ax.add_patch(badge)
-        ax.text(2.3, y + 0.1, str(i + 1), ha="center", va="center",
-                fontsize=14, fontweight="bold", color="#000000", zorder=4)
+        ax.text(
+            2.3,
+            y + 0.1,
+            str(i + 1),
+            ha="center",
+            va="center",
+            fontsize=14,
+            fontweight="bold",
+            color="#000000",
+            zorder=4,
+        )
         # Layer title
-        ax.text(3.2, y + 0.35, layer["name"],
-                fontsize=13, fontweight="bold", color=c, zorder=3)
+        ax.text(3.2, y + 0.35, layer["name"], fontsize=13, fontweight="bold", color=c, zorder=3)
         # Description
-        ax.text(3.2, y - 0.05, layer["desc"],
-                fontsize=9.5, color="#cccccc", zorder=3)
+        ax.text(3.2, y - 0.05, layer["desc"], fontsize=9.5, color="#cccccc", zorder=3)
         # Technical detail
-        ax.text(3.2, y - 0.38, layer["detail"],
-                fontsize=8, color="#888888", style="italic", zorder=3)
+        ax.text(
+            3.2, y - 0.38, layer["detail"], fontsize=8, color="#888888", style="italic", zorder=3
+        )
         # Arrow between layers
         if i < len(layers) - 1:
             ax.annotate(
-                "", xy=(7, layer["y"] - 0.65), xytext=(7, layers[i + 1]["y"] + 0.85),
+                "",
+                xy=(7, layer["y"] - 0.65),
+                xytext=(7, layers[i + 1]["y"] + 0.85),
                 arrowprops=dict(
-                    arrowstyle="->", color="#ffffff", lw=1.5,
+                    arrowstyle="->",
+                    color="#ffffff",
+                    lw=1.5,
                     connectionstyle="arc3,rad=0",
                 ),
             )
@@ -828,16 +905,25 @@ def create_defense_layers():
     # Optional timestamp layer (dashed)
     ax.plot([1.5, 12.5], [1.2, 1.2], "--", color="#ffd93d", alpha=0.5, lw=1)
     ax.text(
-        7, 0.85, "Optional: RFC 3161 Timestamp (TSA integration)",
-        ha="center", fontsize=9, color="#ffd93d", alpha=0.7, style="italic",
+        7,
+        0.85,
+        "Optional: RFC 3161 Timestamp (TSA integration)",
+        ha="center",
+        fontsize=9,
+        color="#ffd93d",
+        alpha=0.7,
+        style="italic",
     )
 
     # Footer
     ax.text(
-        7, 0.25,
+        7,
+        0.25,
         "SIMD Acceleration: AVX2 (x86-64) | NEON (AArch64) | SVE2 (ARMv9)"
         "  •  Zero external dependencies  •  FIPS 202/203/204/205 compliant",
-        ha="center", fontsize=8, color="#666666",
+        ha="center",
+        fontsize=8,
+        color="#666666",
     )
 
     out = ASSETS_DIR / "defense_layers.png"
