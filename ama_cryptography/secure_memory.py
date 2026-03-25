@@ -180,6 +180,11 @@ def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
     else:
         # bytes: immutable, use id-based address (CPython implementation detail)
         # offset past PyBytesObject header to the ob_sval buffer
+        if sys.implementation.name != "cpython":
+            raise NotImplementedError(
+                "secure_mlock on bytes objects requires CPython (id-based address layout). "
+                f"Current implementation: {sys.implementation.name}"
+            )
         addr = id(data) + bytes.__basicsize__ - 1  # noqa: E501 — CPython ob_sval offset
 
     try:
@@ -245,6 +250,12 @@ def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
         buf = (ctypes.c_char * size).from_buffer(data)
         addr = ctypes.addressof(buf)
     else:
+        # bytes: immutable, use id-based address (CPython implementation detail)
+        if sys.implementation.name != "cpython":
+            raise NotImplementedError(
+                "secure_munlock on bytes objects requires CPython (id-based address layout). "
+                f"Current implementation: {sys.implementation.name}"
+            )
         addr = id(data) + bytes.__basicsize__ - 1
 
     try:

@@ -622,6 +622,21 @@ class AESGCMProvider:
 
     Security: 256-bit key, 96-bit nonce, 128-bit auth tag
     Standard: NIST SP 800-38D
+
+    .. warning:: **Single-process nonce safety only.**
+
+       The counter persistence uses ``max()``-based merging: each process
+       loads the on-disk counter at startup and writes back the max of its
+       in-memory value and the on-disk value.  If two processes encrypt with
+       the **same key** concurrently, each increments independently from the
+       same loaded baseline — the persisted counter will undercount total
+       nonce usage (N+M instead of N+2M), risking birthday-bound violations
+       before the 2^32 safety limit triggers.
+
+       For multi-process deployments sharing the same AES-GCM key, use
+       external nonce coordination (e.g. per-process nonce partitioning,
+       a shared atomic counter, or the ``NonceTracker`` in the monitoring
+       framework which uses append-only per-entry persistence).
     """
 
     _NONCE_SAFETY_LIMIT: int = 2**32
