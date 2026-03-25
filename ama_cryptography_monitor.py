@@ -48,12 +48,17 @@ AI Co-Architects:
 
 import ast
 import cmath
+import hashlib
+import logging
 import math
+import os
 import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, ClassVar, Deque, Dict, List, Optional, Sequence, Set, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 def _median_sorted(values: List[float]) -> float:
@@ -67,14 +72,14 @@ def _median_sorted(values: List[float]) -> float:
     return (values[mid - 1] + values[mid]) / 2.0
 
 
-def _mean(values: List[float]) -> float:
+def _mean(values: "Sequence[float]") -> float:
     """Arithmetic mean."""
     if not values:
         return 0.0
     return sum(values) / len(values)
 
 
-def _std(values: List[float]) -> float:
+def _std(values: "Sequence[float]") -> float:
     """Population standard deviation."""
     if len(values) < 2:
         return 0.0
@@ -192,12 +197,15 @@ class IncrementalStats:
         self.M2 = 0.0
 
 
-__version__ = "2.0"
+__version__ = "2.1"
 __all__ = [
     "IncrementalStats",
     "EWMAStats",
     "TimingAnomaly",
     "PatternAnomaly",
+    "NonceTracker",
+    "IntegrityViolation",
+    "ImportHijackViolation",
     "ResonanceTimingMonitor",
     "RecursionPatternMonitor",
     "RefactoringAnalyzer",
@@ -409,6 +417,180 @@ class PatternAnomaly:
     severity: str
 
 
+@dataclass
+class IntegrityViolation:
+    """Runtime code integrity violation (Priority 9)."""
+
+    file_path: str
+    expected_hash: str
+    actual_hash: str
+
+
+@dataclass
+class ImportHijackViolation:
+    """Import chain integrity violation (Priority 10)."""
+
+    module_name: str
+    expected_path: str
+    actual_path: str
+
+
+class NonceTracker:
+    """
+    Tracks (key_id_hash, nonce) tuples to detect nonce reuse.
+
+    Uses a rolling hash set (NOT a bloom filter — false negatives are
+    dangerous for nonce reuse detection). Space is bounded by the 2^32
+    nonce safety limit per key.
+
+    Persists the nonce set to disk (append-only file) so it survives
+    process restarts.
+    """
+
+    _NONCE_SAFETY_LIMIT: int = 2**32
+
+    def __init__(self, persist_path: Optional[str] = None, ephemeral: bool = False) -> None:
+        """
+        Args:
+            persist_path: Path to append-only persistence file.
+                If None, uses ~/.ama_cryptography/nonce_tracker.dat
+            ephemeral: If True, skip all persistence (no file read/write).
+        """
+        self._ephemeral = ephemeral
+
+        if not ephemeral:
+            if persist_path is None:
+                data_dir = Path.home() / ".ama_cryptography"
+                data_dir.mkdir(parents=True, exist_ok=True)
+                self._persist_path = data_dir / "nonce_tracker.dat"
+            else:
+                self._persist_path = Path(persist_path)
+                self._persist_path.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            self._persist_path = Path(persist_path) if persist_path else Path(os.devnull)
+
+        # Set of (key_id_hash_hex, nonce_hex) tuples
+        self._seen: Set[Tuple[str, str]] = set()
+        # Per-key counters for 2^32 safety limit
+        self._counters: Dict[str, int] = {}
+        if not ephemeral:
+            self._load_persisted()
+
+    def _load_persisted(self) -> None:
+        """Reload persisted nonce history from disk.
+
+        Raises RuntimeError on ANY malformed content — a silently skipped
+        line means a previously-used nonce is "forgotten," which could
+        allow nonce reuse (catastrophic for AES-GCM).  Only blank lines
+        are tolerated (trailing newline, etc.).
+        """
+        try:
+            with open(self._persist_path, "r") as f:
+                for lineno, raw_line in enumerate(f, 1):
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    parts = line.split(",", 1)
+                    if len(parts) != 2 or not parts[0] or not parts[1]:
+                        raise RuntimeError(
+                            f"Malformed nonce tracker entry at {self._persist_path}:{lineno}: "
+                            f"{line!r}. File may be corrupt — refusing to load partial "
+                            "history because forgotten nonces could allow reuse."
+                        )
+                    key_hash, nonce_hex = parts
+                    # Validate hex format to catch binary corruption
+                    try:
+                        bytes.fromhex(key_hash)
+                        bytes.fromhex(nonce_hex)
+                    except ValueError as ve:
+                        raise RuntimeError(
+                            f"Invalid hex in nonce tracker at {self._persist_path}:{lineno}: "
+                            f"{line!r}. {ve}"
+                        ) from ve
+                    self._seen.add((key_hash, nonce_hex))
+                    self._counters[key_hash] = self._counters.get(key_hash, 0) + 1
+        except FileNotFoundError:
+            return
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to load nonce tracker persistence from {self._persist_path}: {e}"
+            ) from e
+
+    def _persist_entry(self, key_id_hash: str, nonce_hex: str) -> None:
+        """Append a single entry to the persistence file with fsync for durability.
+
+        Raises RuntimeError on write failure because an unpersisted nonce entry
+        means a process restart could allow nonce reuse — a catastrophic failure
+        for AES-GCM and other nonce-sensitive constructions.
+        """
+        if self._ephemeral:
+            return
+        try:
+            with open(self._persist_path, "a") as f:
+                f.write(f"{key_id_hash},{nonce_hex}\n")
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to persist nonce entry to {self._persist_path}: {e}. "
+                "Nonce tracking cannot guarantee reuse prevention without durable persistence."
+            ) from e
+
+    def check_and_record(self, key_id: bytes, nonce: bytes) -> Optional[Dict[str, Any]]:
+        """
+        Check if (key_id, nonce) has been seen before. If reuse is detected,
+        returns a CRITICAL anomaly dict. Otherwise records and returns None.
+
+        Args:
+            key_id: Key identifier (will be SHA-256 hashed)
+            nonce: The nonce/IV used for encryption
+
+        Returns:
+            Dict with anomaly details if nonce reuse detected, None otherwise
+        """
+        key_hash = hashlib.sha256(key_id).hexdigest()
+        nonce_hex = nonce.hex()
+        entry = (key_hash, nonce_hex)
+
+        if entry in self._seen:
+            return {
+                "type": "nonce_reuse",
+                "severity": "critical",
+                "key_id_hash": key_hash,
+                "nonce": nonce_hex,
+                "message": "CRITICAL: Nonce reuse detected! Same (key, nonce) pair used twice.",
+                "timestamp": time.time(),
+            }
+
+        # Check counter limit
+        count = self._counters.get(key_hash, 0)
+        if count >= self._NONCE_SAFETY_LIMIT:
+            return {
+                "type": "nonce_limit_exceeded",
+                "severity": "critical",
+                "key_id_hash": key_hash,
+                "count": count,
+                "message": "CRITICAL: Nonce safety limit (2^32) exceeded for key. Re-key required.",
+                "timestamp": time.time(),
+            }
+
+        self._seen.add(entry)
+        self._counters[key_hash] = count + 1
+        self._persist_entry(key_hash, nonce_hex)
+        return None
+
+    def get_counter(self, key_id: bytes) -> int:
+        """Get current nonce count for a key."""
+        key_hash = hashlib.sha256(key_id).hexdigest()
+        return self._counters.get(key_hash, 0)
+
+    def get_all_counters(self) -> Dict[str, int]:
+        """Get all persisted counters (key_hash -> count)."""
+        return dict(self._counters)
+
+
 class ResonanceTimingMonitor:
     """
     Detect timing anomalies via frequency-domain analysis.
@@ -427,6 +609,16 @@ class ResonanceTimingMonitor:
     - Sliding window FFT analysis for periodic pattern detection
     """
 
+    # Priority 8: Default operation-specific anomaly profiles
+    DEFAULT_ANOMALY_PROFILES: ClassVar[Dict[str, Dict[str, Any]]] = {
+        "ed25519_sign": {"threshold_sigma": 2.0, "normalize_by_size": False},
+        "ed25519_verify": {"threshold_sigma": 2.0, "normalize_by_size": False},
+        "dilithium_sign": {"threshold_sigma": 5.0, "normalize_by_size": False},
+        "dilithium_verify": {"threshold_sigma": 3.0, "normalize_by_size": False},
+        "aes_gcm_encrypt": {"threshold_sigma": 3.0, "normalize_by_size": True},
+        "aes_gcm_decrypt": {"threshold_sigma": 3.0, "normalize_by_size": True},
+    }
+
     def __init__(
         self,
         threshold_sigma: float = 3.0,
@@ -434,6 +626,8 @@ class ResonanceTimingMonitor:
         max_history: int = 10000,
         use_ewma: bool = True,
         ewma_alpha: float = 0.1,
+        anomaly_profiles: Optional[Dict[str, Dict[str, Any]]] = None,
+        drift_check_interval: int = 50,
     ) -> None:
         """
         Initialize timing monitor.
@@ -449,6 +643,10 @@ class ResonanceTimingMonitor:
                 EWMA is more responsive to changes in timing patterns.
             ewma_alpha: EWMA smoothing factor (0 < alpha <= 1).
                 Higher values = faster response, lower = more smoothing.
+            anomaly_profiles: Per-operation anomaly detection profiles (Priority 8).
+                Keys are operation names, values are dicts with threshold_sigma
+                and normalize_by_size.
+            drift_check_interval: Check for timing drift every N samples (Priority 7).
 
         Performance Optimization:
             Uses collections.deque with maxlen for O(1) append and automatic
@@ -459,14 +657,30 @@ class ResonanceTimingMonitor:
         self.max_history = max_history
         self.use_ewma = use_ewma
         self.ewma_alpha = ewma_alpha
+        self.drift_check_interval = drift_check_interval
         # Use deque with maxlen for O(1) append and automatic pruning
         self.timing_history: Dict[str, Deque[float]] = {}
         self.baseline_stats: Dict[str, Dict[str, float]] = {}
         # Per-operation statistics (separate baselines for each operation type)
         self._incremental_stats: Dict[str, IncrementalStats] = {}
         self._ewma_stats: Dict[str, EWMAStats] = {}
+        # Priority 6: Pairwise timing ratio matrix for cross-operation correlation
+        # (mean_ratio, std_ratio) per operation pair
+        self._ratio_baselines: Dict[Tuple[str, str], Tuple[float, float]] = {}
+        self._ratio_samples: Dict[Tuple[str, str], Deque[float]] = {}
+        # Priority 7: Frozen baselines for drift detection
+        self._frozen_baselines: Dict[str, Tuple[float, float]] = {}  # (frozen_mean, frozen_std)
+        # Priority 8: Operation-specific anomaly profiles
+        self.anomaly_profiles: Dict[str, Dict[str, Any]] = dict(self.DEFAULT_ANOMALY_PROFILES)
+        if anomaly_profiles:
+            self.anomaly_profiles.update(anomaly_profiles)
 
-    def record_timing(self, operation: str, duration_ms: float) -> Optional[TimingAnomaly]:
+    def record_timing(
+        self,
+        operation: str,
+        duration_ms: float,
+        input_size: Optional[int] = None,
+    ) -> Optional[TimingAnomaly]:
         """
         Record operation timing and detect anomalies.
 
@@ -477,6 +691,8 @@ class ResonanceTimingMonitor:
             operation: Name of cryptographic operation (e.g., 'ed25519_sign',
                 'dilithium_sign', 'kyber_encaps', etc.)
             duration_ms: Observed duration in milliseconds
+            input_size: Optional input size in bytes for size-normalized
+                anomaly detection (Priority 8)
 
         Returns:
             TimingAnomaly if statistical anomaly detected, None otherwise
@@ -497,15 +713,27 @@ class ResonanceTimingMonitor:
                 alpha=self.ewma_alpha, window_size=self.window_size
             )
 
+        # Priority 8: Normalize by input size if profile says so
+        profile = self.anomaly_profiles.get(operation, {})
+        normalize_by_size = profile.get("normalize_by_size", False)
+        effective_duration = duration_ms
+        if normalize_by_size and input_size and input_size > 0:
+            effective_duration = duration_ms / input_size
+
         # O(1) append with automatic pruning via deque maxlen
-        self.timing_history[operation].append(duration_ms)
+        self.timing_history[operation].append(effective_duration)
 
         # Update both stats (EWMA provides responsiveness, Welford provides accuracy)
-        self._incremental_stats[operation].update(duration_ms)
-        ewma_mean, ewma_std = self._ewma_stats[operation].update(duration_ms)
+        self._incremental_stats[operation].update(effective_duration)
+        ewma_mean, ewma_std = self._ewma_stats[operation].update(effective_duration)
 
         # Get sample count
         sample_count = self._incremental_stats[operation].n
+
+        # Priority 7: Capture frozen baseline after warmup
+        if sample_count == 30 and operation not in self._frozen_baselines:
+            welford_mean, welford_std = self._incremental_stats[operation].get_stats()
+            self._frozen_baselines[operation] = (welford_mean, welford_std)
 
         # Need baseline before detection
         if sample_count < 30:
@@ -525,28 +753,51 @@ class ResonanceTimingMonitor:
             "mad": self._ewma_stats[operation].get_mad(),
         }
 
+        # Priority 8: Use operation-specific threshold or global
+        op_threshold = profile.get("threshold_sigma", self.threshold)
+
         # Detect statistical anomaly using both Z-score and MAD
         is_anomaly = False
         deviation = 0.0
 
         # Numerical tolerance for floating-point threshold comparisons
-        # This prevents flaky behavior when deviation is very close to threshold
-        # (e.g., 2.9984 vs 3.0 due to EWMA variance calculation)
         THRESHOLD_EPSILON = 0.01
 
         # Primary: Z-score based detection
-        # Use >= with epsilon tolerance for numerical robustness
         if std > 0:
-            deviation = abs(duration_ms - mean) / std
-            if deviation >= self.threshold - THRESHOLD_EPSILON:
+            deviation = abs(effective_duration - mean) / std
+            if deviation >= op_threshold - THRESHOLD_EPSILON:
                 is_anomaly = True
 
         # Secondary: MAD-based detection (more robust to outliers)
-        if self.use_ewma and self._ewma_stats[operation].is_anomaly_mad(duration_ms):
+        if self.use_ewma and self._ewma_stats[operation].is_anomaly_mad(effective_duration):
             is_anomaly = True
 
+        # Priority 7: Drift detection (does NOT preempt Z-score/MAD — both reported)
+        drift_anomaly: Optional[TimingAnomaly] = None
+        if (
+            sample_count > 30
+            and sample_count % self.drift_check_interval == 0
+            and operation in self._frozen_baselines
+        ):
+            frozen_mean, frozen_std = self._frozen_baselines[operation]
+            if frozen_std > 0:
+                drift = abs(mean - frozen_mean) / frozen_std
+                if drift > 2.0:
+                    drift_anomaly = TimingAnomaly(
+                        operation=operation,
+                        expected_ms=frozen_mean,
+                        observed_ms=mean,
+                        deviation_sigma=drift,
+                        severity="warning",
+                        timestamp=time.time(),
+                    )
+
+        # Priority 6: Cross-operation timing correlation
+        cross_op_anomaly = self._update_timing_ratios(operation, mean)
+
+        # Return the most severe anomaly found (point > drift > cross-op)
         if is_anomaly:
-            # Critical threshold: 5.0σ with same epsilon tolerance
             CRITICAL_THRESHOLD = 5.0
             severity = (
                 "critical" if deviation >= CRITICAL_THRESHOLD - THRESHOLD_EPSILON else "warning"
@@ -554,12 +805,63 @@ class ResonanceTimingMonitor:
             return TimingAnomaly(
                 operation=operation,
                 expected_ms=mean,
-                observed_ms=duration_ms,
+                observed_ms=effective_duration,
                 deviation_sigma=deviation,
                 severity=severity,
                 timestamp=time.time(),
             )
 
+        if drift_anomaly is not None:
+            return drift_anomaly
+
+        if cross_op_anomaly is not None:
+            return cross_op_anomaly
+
+        return None
+
+    def _update_timing_ratios(self, operation: str, current_mean: float) -> Optional[TimingAnomaly]:
+        """
+        Priority 6: Update pairwise timing ratio matrix and detect
+        cross-operation correlation anomalies.
+        """
+        if current_mean <= 0:
+            return None
+
+        for other_op, other_stats in self.baseline_stats.items():
+            if other_op == operation:
+                continue
+            other_mean = other_stats.get("mean", 0.0)
+            if other_mean <= 0:
+                continue
+
+            _sorted = sorted([operation, other_op])
+            pair: Tuple[str, str] = (_sorted[0], _sorted[1])
+            ratio = current_mean / other_mean if pair[0] == operation else other_mean / current_mean
+
+            if pair not in self._ratio_samples:
+                self._ratio_samples[pair] = deque(maxlen=self.window_size)
+
+            self._ratio_samples[pair].append(ratio)
+
+            # Capture baseline once we have enough samples.
+            # Use >= 30 (not == 30) so this works even when window_size < 30
+            # (the deque wraps before reaching 30, so == 30 would never fire).
+            samples = self._ratio_samples[pair]
+            if len(samples) >= 30 and pair not in self._ratio_baselines:
+                self._ratio_baselines[pair] = (_mean(samples), _std(samples))
+            elif pair in self._ratio_baselines:
+                baseline_mean, baseline_std = self._ratio_baselines[pair]
+                if baseline_std > 0:
+                    deviation = abs(ratio - baseline_mean) / baseline_std
+                    if deviation > 3.0:
+                        return TimingAnomaly(
+                            operation=f"{pair[0]}/{pair[1]}",
+                            expected_ms=baseline_mean,
+                            observed_ms=ratio,
+                            deviation_sigma=deviation,
+                            severity="warning",
+                            timestamp=time.time(),
+                        )
         return None
 
     def detect_resonance(self, operation: str) -> Dict:
@@ -662,6 +964,9 @@ class RecursionPatternMonitor:
         self.max_history = max_history
         # Use deque with maxlen for O(1) append and automatic pruning
         self.package_history: Deque[Dict] = deque(maxlen=max_history)
+        # Priority 4: Key lifecycle monitoring
+        self._key_usage_rates: Dict[str, Deque[float]] = {}  # key_id -> recent usage timestamps
+        self._key_alerts: List[Dict[str, Any]] = []
 
     def record_package(self, package_metadata: Dict) -> None:
         """
@@ -789,6 +1094,122 @@ class RecursionPatternMonitor:
 
         return features
 
+    def monitor_key_usage(self, key_metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Priority 4: Monitor key lifecycle and detect anomalies.
+
+        Checks for:
+        - Keys approaching max_usage limit (warn at 75%, alert at 90%)
+        - Keys past expires_at still being used
+        - DEPRECATED or REVOKED keys being used
+        - Per-key signing rate anomalies
+
+        Args:
+            key_metadata: Dict with key_id, status, usage_count, max_usage,
+                expires_at (unix timestamp or None)
+
+        Returns:
+            List of anomaly dicts (empty if no anomalies)
+        """
+        anomalies: List[Dict[str, Any]] = []
+        key_id = key_metadata.get("key_id", "unknown")
+        status = key_metadata.get("status", "ACTIVE")
+        usage_count = key_metadata.get("usage_count", 0)
+        max_usage = key_metadata.get("max_usage")
+        expires_at = key_metadata.get("expires_at")
+
+        # Track usage rate per key
+        if key_id not in self._key_usage_rates:
+            self._key_usage_rates[key_id] = deque(maxlen=1000)
+        self._key_usage_rates[key_id].append(time.time())
+
+        # Check max_usage limits
+        if max_usage is not None and max_usage > 0:
+            usage_ratio = usage_count / max_usage
+            if usage_ratio >= 0.90:
+                anomalies.append(
+                    {
+                        "type": "key_usage_critical",
+                        "severity": "critical",
+                        "key_id": key_id,
+                        "usage_ratio": usage_ratio,
+                        "message": f"Key {key_id} at {usage_ratio:.0%} of max usage limit",
+                    }
+                )
+            elif usage_ratio >= 0.75:
+                anomalies.append(
+                    {
+                        "type": "key_usage_warning",
+                        "severity": "warning",
+                        "key_id": key_id,
+                        "usage_ratio": usage_ratio,
+                        "message": f"Key {key_id} at {usage_ratio:.0%} of max usage limit",
+                    }
+                )
+
+        # Check expiration
+        if expires_at is not None:
+            now = time.time()
+            if isinstance(expires_at, (int, float)) and now > expires_at:
+                anomalies.append(
+                    {
+                        "type": "key_expired",
+                        "severity": "critical",
+                        "key_id": key_id,
+                        "expired_at": expires_at,
+                        "message": f"Key {key_id} expired at {expires_at} but still in use",
+                    }
+                )
+
+        # Check for revoked/deprecated keys being used
+        if status in ("DEPRECATED", "REVOKED", "COMPROMISED"):
+            anomalies.append(
+                {
+                    "type": "key_status_violation",
+                    "severity": "critical",
+                    "key_id": key_id,
+                    "status": status,
+                    "message": f"Key {key_id} has status {status} but is being used",
+                }
+            )
+
+        # Check per-key signing rate anomaly
+        rate_anomaly = self._check_key_rate_anomaly(key_id)
+        if rate_anomaly:
+            anomalies.append(rate_anomaly)
+
+        self._key_alerts.extend(anomalies)
+        return anomalies
+
+    def _check_key_rate_anomaly(self, key_id: str) -> Optional[Dict[str, Any]]:
+        """Check if a single key's usage rate is anomalous compared to its history."""
+        timestamps = self._key_usage_rates.get(key_id)
+        if not timestamps or len(timestamps) < 20:
+            return None
+
+        ts_list = list(timestamps)
+        intervals = [ts_list[i + 1] - ts_list[i] for i in range(len(ts_list) - 1)]
+        if len(intervals) < 10:
+            return None
+
+        mean_interval = _mean(intervals)
+        std_interval = _std(intervals)
+        recent_interval = intervals[-1]
+
+        if std_interval > 0 and mean_interval > 0:
+            # Check if recent rate is 10x normal (interval is 1/10th)
+            if recent_interval < mean_interval / 10.0:
+                return {
+                    "type": "key_rate_anomaly",
+                    "severity": "warning",
+                    "key_id": key_id,
+                    "expected_interval": mean_interval,
+                    "observed_interval": recent_interval,
+                    "message": f"Key {key_id} usage rate spike: "
+                    f"interval {recent_interval:.3f}s vs baseline {mean_interval:.3f}s",
+                }
+        return None
+
 
 class RefactoringAnalyzer:
     """
@@ -810,9 +1231,154 @@ class RefactoringAnalyzer:
     qualified security engineers.
     """
 
+    # Priority 9: Crypto module files to monitor for integrity
+    CRYPTO_MODULES: ClassVar[List[str]] = [
+        "crypto_api.py",
+        "key_management.py",
+        "pqc_backends.py",
+        "adaptive_posture.py",
+    ]
+    MONITOR_MODULE: ClassVar[str] = "ama_cryptography_monitor.py"
+
     def __init__(self) -> None:
-        """Initialize analyzer with empty cache."""
+        """Initialize analyzer with empty cache and integrity baselines."""
         self.analysis_cache: Dict[str, Dict] = {}
+        # Priority 9: Runtime code integrity baselines
+        self._integrity_baselines: Dict[str, str] = {}
+        # Priority 10: Import chain baselines
+        self._import_baselines: Dict[str, str] = {}
+        self._initialize_integrity_baselines()
+        self._initialize_import_baselines()
+
+    def _initialize_integrity_baselines(self) -> None:
+        """Compute SHA3-256 hashes of all crypto module source files at startup."""
+        try:
+            # Find the ama_cryptography package directory
+            crypto_pkg = Path(__file__).parent / "ama_cryptography"
+            if not crypto_pkg.exists():
+                # Try relative to current file
+                crypto_pkg = Path(__file__).parent.parent / "ama_cryptography"
+
+            for module_name in self.CRYPTO_MODULES:
+                module_path = crypto_pkg / module_name
+                if module_path.exists():
+                    content_hash = self._hash_file(module_path)
+                    self._integrity_baselines[str(module_path)] = content_hash
+
+            # Also hash the monitor module itself
+            monitor_path = Path(__file__)
+            if monitor_path.exists():
+                self._integrity_baselines[str(monitor_path)] = self._hash_file(monitor_path)
+        except Exception as e:
+            logger.warning("Failed to initialize integrity baselines: %s", e)
+
+    def _initialize_import_baselines(self) -> None:
+        """Record resolved filesystem paths of all imported crypto modules."""
+        try:
+            import importlib
+
+            crypto_modules = [
+                "ama_cryptography.crypto_api",
+                "ama_cryptography.key_management",
+                "ama_cryptography.adaptive_posture",
+                "ama_cryptography.secure_memory",
+            ]
+            for mod_name in crypto_modules:
+                try:
+                    mod = importlib.import_module(mod_name)
+                    mod_file = getattr(mod, "__file__", None)
+                    if mod_file:
+                        self._import_baselines[mod_name] = os.path.realpath(mod_file)
+                except ImportError:
+                    logger.debug("Module %s not installed — skipping import baseline", mod_name)
+        except Exception as e:
+            logger.warning("Failed to initialize import baselines: %s", e)
+
+    @staticmethod
+    def _hash_file(filepath: Path) -> str:
+        """Compute SHA3-256 hash of a file's contents."""
+        h = hashlib.sha3_256()
+        with open(filepath, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    def verify_integrity(self) -> List[IntegrityViolation]:
+        """
+        Priority 9: Re-hash all crypto module source files and compare
+        against startup baselines.
+
+        Returns:
+            List of IntegrityViolation for any files whose hash has changed
+        """
+        violations: List[IntegrityViolation] = []
+        for filepath_str, expected_hash in self._integrity_baselines.items():
+            filepath = Path(filepath_str)
+            if not filepath.exists():
+                violations.append(
+                    IntegrityViolation(
+                        file_path=filepath_str,
+                        expected_hash=expected_hash,
+                        actual_hash="FILE_MISSING",
+                    )
+                )
+                continue
+            actual_hash = self._hash_file(filepath)
+            if actual_hash != expected_hash:
+                violations.append(
+                    IntegrityViolation(
+                        file_path=filepath_str,
+                        expected_hash=expected_hash,
+                        actual_hash=actual_hash,
+                    )
+                )
+        if violations:
+            logger.critical(
+                "CRITICAL: Runtime code integrity violation detected in %d file(s)",
+                len(violations),
+            )
+        return violations
+
+    def verify_imports(self) -> List[ImportHijackViolation]:
+        """
+        Priority 10: Re-resolve all imported crypto module paths and compare
+        against startup baselines.
+
+        Returns:
+            List of ImportHijackViolation for any modules resolving to different paths
+        """
+        import importlib
+
+        violations: List[ImportHijackViolation] = []
+        for mod_name, expected_path in self._import_baselines.items():
+            try:
+                # Force re-import to get current path
+                mod = importlib.import_module(mod_name)
+                mod_file = getattr(mod, "__file__", None)
+                if mod_file:
+                    actual_path = os.path.realpath(mod_file)
+                    if actual_path != expected_path:
+                        violations.append(
+                            ImportHijackViolation(
+                                module_name=mod_name,
+                                expected_path=expected_path,
+                                actual_path=actual_path,
+                            )
+                        )
+            except ImportError:
+                violations.append(
+                    ImportHijackViolation(
+                        module_name=mod_name,
+                        expected_path=expected_path,
+                        actual_path="IMPORT_FAILED",
+                    )
+                )
+        if violations:
+            logger.critical(
+                "CRITICAL: Import chain hijack detected for %d module(s)",
+                len(violations),
+            )
+        return violations
 
     def analyze_file(self, filepath: Path) -> Dict:
         """
@@ -883,6 +1449,11 @@ class RefactoringAnalyzer:
                     "max": max(complexity_values),
                     "high_complexity_functions": sum(1 for c in complexity_values if c > 10),
                 }
+
+            # Priority 9: Compute and cache content hash
+            content_hash = hashlib.sha3_256(source.encode("utf-8")).hexdigest()
+            metrics["content_hash"] = content_hash
+            self.analysis_cache[str(filepath)] = metrics
 
             return metrics
 
@@ -968,7 +1539,12 @@ class AmaCryptographyMonitor:
         >>> print(f"Alerts: {report['total_alerts']}")
     """
 
-    def __init__(self, enabled: bool = False, alert_retention: int = 1000) -> None:
+    def __init__(
+        self,
+        enabled: bool = False,
+        alert_retention: int = 1000,
+        nonce_persist_path: Optional[str] = None,
+    ) -> None:
         """
         Initialize monitor.
 
@@ -977,12 +1553,14 @@ class AmaCryptographyMonitor:
                 zero-overhead operation when not needed.
             alert_retention: Maximum alerts to retain in memory.
                 Prevents unbounded memory growth.
+            nonce_persist_path: Path for nonce tracker persistence file.
         """
         self.enabled = enabled
         self.alert_retention = alert_retention
         self.timing = ResonanceTimingMonitor()
         self.patterns = RecursionPatternMonitor()
         self.analyzer = RefactoringAnalyzer()
+        self.nonce_tracker = NonceTracker(persist_path=nonce_persist_path, ephemeral=not enabled)
         self.alerts: List[Dict] = []
 
     def monitor_crypto_operation(self, operation: str, duration_ms: float) -> None:
@@ -1004,6 +1582,91 @@ class AmaCryptographyMonitor:
         if anomaly:
             self.alerts.append({"type": "timing", "anomaly": anomaly, "timestamp": time.time()})
             self._prune_alerts()
+
+    def check_nonce(self, key_id: bytes, nonce: bytes) -> None:
+        """
+        Check for nonce reuse (Priority 2).
+
+        Args:
+            key_id: Key identifier
+            nonce: Nonce/IV being used
+        """
+        if not self.enabled:
+            return
+        anomaly = self.nonce_tracker.check_and_record(key_id, nonce)
+        if anomaly:
+            self.alerts.append({"type": "nonce", "anomaly": anomaly, "timestamp": time.time()})
+            self._prune_alerts()
+
+    def monitor_key_lifecycle(self, key_metadata: Dict[str, Any]) -> None:
+        """
+        Monitor key lifecycle (Priority 4).
+
+        Args:
+            key_metadata: Dict with key_id, status, usage_count, max_usage, expires_at
+        """
+        if not self.enabled:
+            return
+        anomalies = self.patterns.monitor_key_usage(key_metadata)
+        for anomaly in anomalies:
+            self.alerts.append(
+                {
+                    "type": "key_lifecycle",
+                    "anomaly": anomaly,
+                    "timestamp": time.time(),
+                }
+            )
+            self._prune_alerts()
+
+    def verify_runtime_integrity(self) -> Dict[str, Any]:
+        """
+        Verify runtime code integrity and import chains (Priorities 9-10).
+
+        Returns:
+            Dict with integrity and import verification results
+        """
+        if not self.enabled:
+            return {"status": "monitoring_disabled"}
+
+        integrity_violations = self.analyzer.verify_integrity()
+        import_violations = self.analyzer.verify_imports()
+
+        for v in integrity_violations:
+            self.alerts.append(
+                {
+                    "type": "integrity_violation",
+                    "anomaly": {
+                        "file": v.file_path,
+                        "expected": v.expected_hash,
+                        "actual": v.actual_hash,
+                    },
+                    "timestamp": time.time(),
+                }
+            )
+        for iv in import_violations:
+            self.alerts.append(
+                {
+                    "type": "import_hijack",
+                    "anomaly": {
+                        "module": iv.module_name,
+                        "expected": iv.expected_path,
+                        "actual": iv.actual_path,
+                    },
+                    "timestamp": time.time(),
+                }
+            )
+        self._prune_alerts()
+
+        return {
+            "integrity_violations": [
+                {"file": v.file_path, "expected": v.expected_hash, "actual": v.actual_hash}
+                for v in integrity_violations
+            ],
+            "import_violations": [
+                {"module": v.module_name, "expected": v.expected_path, "actual": v.actual_path}
+                for v in import_violations
+            ],
+        }
 
     def record_package_signing(self, metadata: Dict) -> None:
         """

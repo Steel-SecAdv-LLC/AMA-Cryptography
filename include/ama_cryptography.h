@@ -294,6 +294,36 @@ AMA_API int ama_consttime_memcmp(const void* a, const void* b, size_t len);
 AMA_API void ama_secure_memzero(void* ptr, size_t len);
 
 /**
+ * @brief Lock memory pages to prevent swapping to disk.
+ * @param ptr Pointer to memory region
+ * @param len Length of memory region
+ * @return AMA_SUCCESS or AMA_ERROR_MEMORY
+ */
+AMA_API ama_error_t ama_secure_mlock(void* ptr, size_t len);
+
+/**
+ * @brief Unlock previously locked memory pages.
+ * @param ptr Pointer to memory region
+ * @param len Length of memory region
+ * @return AMA_SUCCESS or AMA_ERROR_MEMORY
+ */
+AMA_API ama_error_t ama_secure_munlock(void* ptr, size_t len);
+
+/**
+ * @brief Allocate a secure buffer with mlock and DONTDUMP.
+ * @param size Number of bytes to allocate
+ * @return Pointer to locked, zeroed memory, or NULL on failure
+ */
+AMA_API void* ama_secure_alloc(size_t size);
+
+/**
+ * @brief Free a secure buffer with guaranteed zeroization and munlock.
+ * @param ptr Pointer from ama_secure_alloc
+ * @param size Size of the allocation
+ */
+AMA_API void ama_secure_free(void* ptr, size_t size);
+
+/**
  * @brief Constant-time conditional swap
  * @param condition Swap if non-zero
  * @param a First buffer

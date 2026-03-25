@@ -104,6 +104,24 @@ if(AMA_ENABLE_SIMD)
             message(STATUS "AVX2 requested but architecture is ${CMAKE_SYSTEM_PROCESSOR} — skipping")
         endif()
     endif()
+
+endif()
+
+# AES-NI + PCLMULQDQ flags for x86 — applied per-file (not globally)
+# to prevent illegal instruction crashes on CPUs without AES-NI.
+# Runtime dispatch via ama_cpuid.c selects the correct path.
+# NOTE: Independent of AMA_ENABLE_SIMD — AES-NI is a distinct ISA extension
+# from AVX2/SSE. Disabling SIMD should not disable hardware AES acceleration.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86")
+    if(NOT MSVC)
+        set_source_files_properties(src/c/ama_aes_gcm.c PROPERTIES
+            COMPILE_FLAGS "-maes -mpclmul")
+        # Note: ama_aes_bitsliced.c intentionally does NOT get -maes/-mpclmul
+        # — it is the constant-time software fallback for CPUs without AES-NI.
+        message(STATUS "AES-NI/PCLMULQDQ: per-file flags for ama_aes_gcm.c only")
+    else()
+        message(STATUS "AES-NI/PCLMULQDQ: MSVC detected — intrinsics available by default")
+    endif()
 endif()
 
 # LTO for release builds
@@ -119,6 +137,8 @@ set(AMA_SOURCES
     src/c/ama_hkdf.c
     src/c/ama_ed25519.c
     src/c/ama_aes_gcm.c
+    src/c/ama_cpuid.c
+    src/c/ama_secure_memory.c
 )
 
 # Add native PQC source files when enabled
@@ -161,6 +181,13 @@ if(AMA_AES_CONSTTIME)
 else()
     message(STATUS "AES backend: table-based S-box (fast, NOT cache-timing safe)")
 endif()
+
+# Threading: ama_cpuid.c uses pthread_once (POSIX) or InitOnceExecuteOnce
+# (Windows) for thread-safe one-time initialization (INVARIANT-2).
+# CMake's Threads package resolves to -lpthread on Linux, nothing extra on
+# macOS (pthreads are in libSystem), and is a no-op on Windows (MSVC path
+# uses InitOnceExecuteOnce from synchapi.h, linked automatically).
+find_package(Threads REQUIRED)
 
 # OpenSSL: no longer required — all cryptographic operations use native
 # implementations. Kept as optional for backward compatibility with
@@ -206,6 +233,9 @@ if(AMA_BUILD_SHARED)
     endif()
     ama_apply_donna_settings(ama_cryptography_shared)
 
+    # Threading (INVARIANT-2): pthread_once on POSIX, InitOnceExecuteOnce on Windows
+    target_link_libraries(ama_cryptography_shared PRIVATE Threads::Threads)
+
     # Windows: link bcrypt for BCryptGenRandom (used by ama_platform_rand.c)
     if(WIN32)
         target_link_libraries(ama_cryptography_shared PRIVATE bcrypt)
@@ -227,6 +257,8 @@ if(AMA_BUILD_STATIC)
         target_compile_definitions(ama_cryptography_static PRIVATE AMA_AES_CONSTTIME)
     endif()
     ama_apply_donna_settings(ama_cryptography_static)
+
+    target_link_libraries(ama_cryptography_static PRIVATE Threads::Threads)
 
     if(WIN32)
         target_link_libraries(ama_cryptography_static PRIVATE bcrypt)
@@ -263,6 +295,8 @@ if(AMA_BUILD_TESTS)
         target_compile_definitions(ama_cryptography_test PRIVATE AMA_AES_CONSTTIME)
     endif()
     ama_apply_donna_settings(ama_cryptography_test)
+
+    target_link_libraries(ama_cryptography_test PRIVATE Threads::Threads)
 
     if(WIN32)
         target_link_libraries(ama_cryptography_test PRIVATE bcrypt)

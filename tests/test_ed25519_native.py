@@ -45,19 +45,9 @@ def _pyca_available() -> bool:
     """Check if PyCA cryptography is installed and functional."""
     try:
         from cryptography.hazmat.primitives.asymmetric import ed25519  # noqa: F401
-
-        return True
     except Exception:
         return False
-    except:  # catches pyo3_runtime.PanicException (BaseException subclass)
-        import sys
-
-        _exc = sys.exc_info()[1]
-        if isinstance(_exc, (KeyboardInterrupt, SystemExit)):
-            raise
-        if _exc is not None and type(_exc).__name__ == "PanicException":
-            return False
-        raise
+    return True
 
 
 def _native_sign_and_verify(seed: bytes, message: bytes) -> tuple[Any, ...]:

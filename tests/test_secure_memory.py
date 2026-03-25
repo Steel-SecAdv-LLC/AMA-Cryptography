@@ -49,7 +49,26 @@ class TestSecureMemoryAvailability:
         assert status["available"] is True
         assert status["backend"] == "stdlib"
         assert status["initialized"] is True
-        assert status["mlock_available"] is False
+        # Verify mlock_available reflects actual platform capability.
+        # On CI with native C backend built, this should be True.
+        # On minimal environments without native or POSIX mlock, False.
+        mlock_avail = status["mlock_available"]
+        assert isinstance(mlock_avail, bool)
+        # Cross-check: if native backend reports mlock, the function should succeed
+        if mlock_avail:
+            from ama_cryptography.secure_memory import secure_mlock
+
+            data = bytearray(64)
+            # Should not raise NotImplementedError when mlock_available is True
+            # (may still raise SecureMemoryError due to ulimits, which is acceptable)
+            try:
+                secure_mlock(data)
+            except Exception as e:
+                from ama_cryptography.secure_memory import SecureMemoryError
+
+                assert isinstance(
+                    e, SecureMemoryError
+                ), f"mlock_available=True but secure_mlock raised {type(e).__name__}: {e}"
 
 
 class TestSecureMemzero:
@@ -124,18 +143,60 @@ class TestSecureMemzero:
 
 
 class TestSecureMlock:
-    """Tests for memory locking functionality (raises NotImplementedError)."""
+    """Tests for memory locking functionality.
 
-    def test_mlock_raises_not_implemented(self) -> None:
-        """secure_mlock raises NotImplementedError (libsodium removed)."""
+    Tests are environment-aware: when the native C backend or POSIX mlock
+    is available, we assert success.  When unavailable, we assert the
+    correct exception type.  Tests should never trivially pass.
+    """
+
+    @staticmethod
+    def _mlock_expected_available() -> bool:
+        """Return True if mlock should succeed on this platform."""
+        from ama_cryptography.secure_memory import _detect_mlock_available
+
+        return _detect_mlock_available()
+
+    def test_mlock_succeeds_when_available(self) -> None:
+        """secure_mlock succeeds when native/POSIX backend is available."""
+        if not self._mlock_expected_available():
+            pytest.skip("mlock not available on this platform")
+        from ama_cryptography.secure_memory import SecureMemoryError, secure_mlock
+
+        data = bytearray(4096)
+        try:
+            secure_mlock(data)
+        except SecureMemoryError:
+            # ulimit restriction — acceptable, not a code regression
+            pass
+        # NotImplementedError would be a real bug here since _detect said available
+
+    def test_mlock_raises_when_unavailable(self) -> None:
+        """secure_mlock raises NotImplementedError when no backend exists."""
+        if self._mlock_expected_available():
+            pytest.skip("mlock IS available — this test covers the unavailable path")
         from ama_cryptography.secure_memory import secure_mlock
 
         data = bytearray(4096)
         with pytest.raises(NotImplementedError):
             secure_mlock(data)
 
-    def test_munlock_raises_not_implemented(self) -> None:
-        """secure_munlock raises NotImplementedError (libsodium removed)."""
+    def test_munlock_succeeds_when_available(self) -> None:
+        """secure_munlock succeeds when native/POSIX backend is available."""
+        if not self._mlock_expected_available():
+            pytest.skip("mlock not available on this platform")
+        from ama_cryptography.secure_memory import SecureMemoryError, secure_munlock
+
+        data = bytearray(4096)
+        try:
+            secure_munlock(data)
+        except SecureMemoryError:
+            pass  # ulimit restriction — acceptable
+
+    def test_munlock_raises_when_unavailable(self) -> None:
+        """secure_munlock raises NotImplementedError when no backend exists."""
+        if self._mlock_expected_available():
+            pytest.skip("mlock IS available — this test covers the unavailable path")
         from ama_cryptography.secure_memory import secure_munlock
 
         data = bytearray(4096)

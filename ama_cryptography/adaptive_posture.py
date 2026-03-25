@@ -25,6 +25,7 @@ Version: 2.0
 
 import logging
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -81,6 +82,30 @@ class PostureEvaluation:
     timestamp: float = field(default_factory=time.time)
 
 
+@dataclass
+class PendingAction:
+    """
+    A destructive posture action awaiting confirmation.
+
+    When confirmation_mode is enabled on CryptoPostureController,
+    actions like ROTATE_KEYS, SWITCH_ALGORITHM, and ROTATE_AND_SWITCH
+    are queued as PendingActions instead of executing immediately.
+
+    Attributes:
+        action_id: Unique identifier for this pending action
+        action: The posture action to execute
+        reason: Why this action was triggered
+        timestamp: When the action was queued
+        confirmed: Whether the action has been confirmed
+    """
+
+    action_id: str
+    action: PostureAction
+    reason: str
+    timestamp: float
+    confirmed: bool = False
+
+
 class PostureEvaluator:
     """
     Evaluates cryptographic security posture from 3R monitor output.
@@ -103,6 +128,8 @@ class PostureEvaluator:
         critical_threshold: float = 0.85,
         decay_rate: float = 0.95,
         evaluation_window: int = 100,
+        escalation_count: int = 3,
+        hysteresis_band: float = 0.05,
     ) -> None:
         """
         Args:
@@ -111,14 +138,21 @@ class PostureEvaluator:
             critical_threshold: Score threshold for CRITICAL level
             decay_rate: Exponential decay factor for historical scores (0 < r < 1)
             evaluation_window: Number of recent alerts to consider
+            escalation_count: Consecutive evaluations required to escalate threat level
+            hysteresis_band: Score must drop below (threshold - band) to de-escalate
         """
         self.elevated_threshold = elevated_threshold
         self.high_threshold = high_threshold
         self.critical_threshold = critical_threshold
         self.decay_rate = decay_rate
         self.evaluation_window = evaluation_window
+        self.escalation_count = escalation_count
+        self.hysteresis_band = hysteresis_band
         self._accumulated_score: float = 0.0
         self._evaluation_count: int = 0
+        # Hysteresis state: track consecutive evaluations at each candidate level
+        self._consecutive_counts: Dict[ThreatLevel, int] = dict.fromkeys(ThreatLevel, 0)
+        self._current_level: ThreatLevel = ThreatLevel.NOMINAL
 
     def evaluate(self, monitor_report: Dict[str, Any]) -> PostureEvaluation:
         """
@@ -224,19 +258,72 @@ class PostureEvaluator:
         return min(1.0, max(0.0, (max_ratio - 3.0) / 7.0))
 
     def _classify(self, score: float) -> tuple:
-        """Classify threat level from effective score."""
+        """
+        Classify threat level from effective score with hysteresis.
+
+        Escalation requires N consecutive evaluations above a threshold.
+        De-escalation requires the score to drop below (threshold - hysteresis_band).
+        This prevents oscillation and reduces false-positive-driven actions.
+        """
+        # Determine raw candidate level from score
         if score >= self.critical_threshold:
-            return ThreatLevel.CRITICAL, PostureAction.ROTATE_AND_SWITCH
+            candidate = ThreatLevel.CRITICAL
         elif score >= self.high_threshold:
-            return ThreatLevel.HIGH, PostureAction.ROTATE_KEYS
+            candidate = ThreatLevel.HIGH
         elif score >= self.elevated_threshold:
-            return ThreatLevel.ELEVATED, PostureAction.INCREASE_MONITORING
-        return ThreatLevel.NOMINAL, PostureAction.NONE
+            candidate = ThreatLevel.ELEVATED
+        else:
+            candidate = ThreatLevel.NOMINAL
+
+        # Update consecutive counts
+        for level in ThreatLevel:
+            if level == candidate:
+                self._consecutive_counts[level] = self._consecutive_counts.get(level, 0) + 1
+            else:
+                self._consecutive_counts[level] = 0
+
+        # Level ordering for comparison
+        level_order = {
+            ThreatLevel.NOMINAL: 0,
+            ThreatLevel.ELEVATED: 1,
+            ThreatLevel.HIGH: 2,
+            ThreatLevel.CRITICAL: 3,
+        }
+
+        current_ord = level_order[self._current_level]
+        candidate_ord = level_order[candidate]
+
+        if candidate_ord > current_ord:
+            # Escalation: require N consecutive evaluations
+            if self._consecutive_counts[candidate] >= self.escalation_count:
+                self._current_level = candidate
+        elif candidate_ord < current_ord:
+            # De-escalation: require score below (threshold - hysteresis_band)
+            thresholds = {
+                ThreatLevel.ELEVATED: self.elevated_threshold,
+                ThreatLevel.HIGH: self.high_threshold,
+                ThreatLevel.CRITICAL: self.critical_threshold,
+            }
+            current_threshold = thresholds.get(self._current_level, 0.0)
+            if score < current_threshold - self.hysteresis_band:
+                self._current_level = candidate
+        # else: same level, no change needed
+
+        # Map current level to action
+        action_map = {
+            ThreatLevel.NOMINAL: PostureAction.NONE,
+            ThreatLevel.ELEVATED: PostureAction.INCREASE_MONITORING,
+            ThreatLevel.HIGH: PostureAction.ROTATE_KEYS,
+            ThreatLevel.CRITICAL: PostureAction.ROTATE_AND_SWITCH,
+        }
+        return self._current_level, action_map[self._current_level]
 
     def reset(self) -> None:
         """Reset accumulated score state."""
         self._accumulated_score = 0.0
         self._evaluation_count = 0
+        self._consecutive_counts = dict.fromkeys(ThreatLevel, 0)
+        self._current_level = ThreatLevel.NOMINAL
 
 
 class CryptoPostureController:
@@ -281,6 +368,8 @@ class CryptoPostureController:
         on_rotation: Optional[Callable[[], None]] = None,
         on_algorithm_switch: Optional[Callable[[str], None]] = None,
         max_history: int = 1000,
+        confirmation_mode: bool = False,
+        grace_period: float = 300.0,
     ) -> None:
         """
         Args:
@@ -293,6 +382,8 @@ class CryptoPostureController:
             on_rotation: Callback invoked when key rotation is triggered
             on_algorithm_switch: Callback invoked when algorithm is switched
             max_history: Maximum number of evaluations to retain in history
+            confirmation_mode: If True, destructive actions require explicit confirmation
+            grace_period: Seconds before auto-executing unconfirmed actions (fail-safe)
         """
         self.monitor = monitor
         self.evaluator = evaluator or PostureEvaluator()
@@ -302,6 +393,8 @@ class CryptoPostureController:
         self.rotation_cooldown = rotation_cooldown
         self.on_rotation = on_rotation
         self.on_algorithm_switch = on_algorithm_switch
+        self.confirmation_mode = confirmation_mode
+        self.grace_period = grace_period
 
         self._last_rotation_time: float = 0.0
         self._rotation_count: int = 0
@@ -312,6 +405,10 @@ class CryptoPostureController:
         self._sorted_algorithms: List[Tuple[str, int]] = sorted(
             self.ALGORITHM_STRENGTH.items(), key=lambda x: x[1]
         )
+        # Priority 5: Algorithm downgrade detection
+        self._highest_algorithm_reached: int = self.ALGORITHM_STRENGTH.get(current_algorithm, 0)
+        # Priority 12: Pending actions for confirmation gate
+        self._pending_actions: List[PendingAction] = []
 
     def evaluate_and_respond(self) -> PostureEvaluation:
         """
@@ -332,19 +429,175 @@ class CryptoPostureController:
         evaluation = self.evaluator.evaluate(report)
         self._history.append(evaluation)
 
+        # Priority 5: Algorithm downgrade detection
+        current_strength = self.ALGORITHM_STRENGTH.get(self.current_algorithm, 0)
+        if current_strength > self._highest_algorithm_reached:
+            self._highest_algorithm_reached = current_strength
+        if current_strength < self._highest_algorithm_reached:
+            highest_name = next(
+                (
+                    k
+                    for k, v in self.ALGORITHM_STRENGTH.items()
+                    if v == self._highest_algorithm_reached
+                ),
+                "unknown",
+            )
+            logger.critical(
+                "Algorithm downgrade detected: %s (strength %d) -> %s (strength %d)",
+                highest_name,
+                self._highest_algorithm_reached,
+                self.current_algorithm,
+                current_strength,
+            )
+
+        # Auto-execute expired pending actions (fail-safe)
+        self._process_expired_pending_actions()
+
         # Enforce cooldown
         now = time.time()
         cooldown_active = (now - self._last_rotation_time) < self.rotation_cooldown
 
-        if evaluation.action == PostureAction.ROTATE_AND_SWITCH and not cooldown_active:
-            self._trigger_rotation()
-            self._trigger_algorithm_switch()
-        elif evaluation.action == PostureAction.ROTATE_KEYS and not cooldown_active:
-            self._trigger_rotation()
-        elif evaluation.action == PostureAction.SWITCH_ALGORITHM and not cooldown_active:
-            self._trigger_algorithm_switch()
+        destructive_actions = {
+            PostureAction.ROTATE_KEYS,
+            PostureAction.SWITCH_ALGORITHM,
+            PostureAction.ROTATE_AND_SWITCH,
+        }
+
+        if evaluation.action in destructive_actions and not cooldown_active:
+            if self.confirmation_mode:
+                # Cap pending actions — prevent unbounded queue growth
+                _MAX_PENDING = 10
+                if len(self._pending_actions) >= _MAX_PENDING:
+                    logger.warning(
+                        "Pending action queue full (%d). Dropping new %s action.",
+                        _MAX_PENDING,
+                        evaluation.action.name,
+                    )
+                else:
+                    # Queue action for confirmation instead of immediate execution
+                    pending = PendingAction(
+                        action_id=str(uuid.uuid4()),
+                        action=evaluation.action,
+                        reason=f"Threat level: {evaluation.threat_level.name}, "
+                        f"confidence: {evaluation.confidence:.2f}",
+                        timestamp=now,
+                    )
+                    self._pending_actions.append(pending)
+                    # Update cooldown so repeated evaluations don't bypass it
+                    self._last_rotation_time = now
+                    logger.info(
+                        "Action %s queued for confirmation (id=%s, grace_period=%.0fs)",
+                        evaluation.action.name,
+                        pending.action_id,
+                        self.grace_period,
+                    )
+            else:
+                # Immediate execution (default behavior)
+                self._execute_action(evaluation.action)
 
         return evaluation
+
+    def _execute_action(self, action: PostureAction) -> None:
+        """Execute a posture action immediately.
+
+        Updates ``_last_rotation_time`` so the cooldown window applies
+        consistently regardless of whether the action was queued via
+        confirmation mode or executed immediately.
+        """
+        self._last_rotation_time = time.time()
+        if action == PostureAction.ROTATE_AND_SWITCH:
+            self._trigger_rotation()
+            self._trigger_algorithm_switch()
+        elif action == PostureAction.ROTATE_KEYS:
+            self._trigger_rotation()
+        elif action == PostureAction.SWITCH_ALGORITHM:
+            self._trigger_algorithm_switch()
+
+    def _process_expired_pending_actions(self) -> None:
+        """Auto-execute pending actions that have exceeded the grace period.
+
+        Respects ``rotation_cooldown`` between auto-executed actions so that
+        multiple simultaneously-expired actions do not bypass throttling.
+        """
+        now = time.time()
+        still_pending = []
+        for pa in self._pending_actions:
+            if pa.confirmed:
+                continue
+            if (now - pa.timestamp) >= self.grace_period:
+                # Respect cooldown between auto-executed actions
+                if (now - self._last_rotation_time) < self.rotation_cooldown:
+                    still_pending.append(pa)
+                    continue
+                logger.warning(
+                    "Auto-executing pending action %s (id=%s) after grace period expiry",
+                    pa.action.name,
+                    pa.action_id,
+                )
+                self._execute_action(pa.action)
+            else:
+                still_pending.append(pa)
+        self._pending_actions = still_pending
+
+    def confirm_action(self, action_id: str) -> bool:
+        """
+        Confirm and execute a pending action.
+
+        The confirmed action is removed from _pending_actions immediately
+        after execution to prevent stale entries from accumulating.
+
+        Args:
+            action_id: The ID of the pending action to confirm
+
+        Returns:
+            True if action was found and executed, False otherwise
+        """
+        for i, pa in enumerate(self._pending_actions):
+            if pa.action_id == action_id and not pa.confirmed:
+                pa.confirmed = True
+                self._execute_action(pa.action)
+                self._pending_actions.pop(i)
+                logger.info("Confirmed and executed action %s (id=%s)", pa.action.name, action_id)
+                return True
+        return False
+
+    def reject_action(self, action_id: str) -> bool:
+        """
+        Reject and cancel a pending action.
+
+        Args:
+            action_id: The ID of the pending action to reject
+
+        Returns:
+            True if action was found and cancelled, False if not found
+        """
+        original_len = len(self._pending_actions)
+        self._pending_actions = [pa for pa in self._pending_actions if pa.action_id != action_id]
+        found = len(self._pending_actions) < original_len
+        if found:
+            logger.info("Rejected pending action (id=%s)", action_id)
+        else:
+            logger.warning("Attempted to reject unknown action (id=%s)", action_id)
+        return found
+
+    def acknowledge_downgrade(self, reason: str) -> None:
+        """
+        Explicitly acknowledge and allow an algorithm downgrade.
+
+        Resets _highest_algorithm_reached to current algorithm strength,
+        allowing de-escalation. The reason is logged for audit.
+
+        Args:
+            reason: Human-readable justification for the downgrade
+        """
+        old_highest = self._highest_algorithm_reached
+        self._highest_algorithm_reached = self.ALGORITHM_STRENGTH.get(self.current_algorithm, 0)
+        logger.info(
+            "Algorithm downgrade acknowledged: strength %d -> %d, reason: %s",
+            old_highest,
+            self._highest_algorithm_reached,
+            reason,
+        )
 
     def _trigger_rotation(self) -> None:
         """Trigger key rotation through existing infrastructure."""
@@ -423,6 +676,18 @@ class CryptoPostureController:
             "rotation_count": self._rotation_count,
             "switch_count": self._switch_count,
             "evaluation_count": len(self._history),
+            "highest_algorithm_reached": self._highest_algorithm_reached,
+            "confirmation_mode": self.confirmation_mode,
+            "pending_actions": [
+                {
+                    "action_id": pa.action_id,
+                    "action": pa.action.name,
+                    "reason": pa.reason,
+                    "timestamp": pa.timestamp,
+                    "confirmed": pa.confirmed,
+                }
+                for pa in self._pending_actions
+            ],
             "recent_evaluations": [
                 {
                     "threat_level": e.threat_level.name,
@@ -441,3 +706,5 @@ class CryptoPostureController:
         self._rotation_count = 0
         self._switch_count = 0
         self._history.clear()
+        self._highest_algorithm_reached = self.ALGORITHM_STRENGTH.get(self.current_algorithm, 0)
+        self._pending_actions.clear()

@@ -341,7 +341,7 @@ class TestModuleAttributes:
         assert isinstance(RFC3161_AVAILABLE, bool)
 
     def test_all_exports(self) -> None:
-        import ama_cryptography.rfc3161_timestamp as mod
+        from ama_cryptography import rfc3161_timestamp as mod
 
         expected = {
             "get_timestamp",

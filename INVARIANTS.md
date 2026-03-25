@@ -21,6 +21,27 @@ code is merged.
 
 ---
 
+2. **INVARIANT-2: Thread-Safe CPU Dispatch via Platform Once-Primitive.** All
+   one-time initialization in `ama_cpuid.c` (CPU feature detection, AEAD
+   backend selection) must use a platform once-primitive that guarantees
+   exactly-once execution with full memory visibility across threads.  The
+   approved primitives are:
+   - **POSIX** (Linux, macOS, BSDs): `pthread_once` (IEEE Std 1003.1)
+   - **Windows** (MSVC): `InitOnceExecuteOnce` (synchapi.h, Vista+)
+
+   Lockless flag + plain-variable patterns (e.g., `volatile int done` guarding
+   a non-atomic shared variable) are **prohibited** — they constitute data
+   races on weakly-ordered architectures and are undefined behavior under the
+   C11 memory model.
+
+   C11 `<threads.h>` (`call_once`) is not used because it is unavailable on
+   macOS (Apple SDK has never shipped `<threads.h>`) and unreliable on MSVC
+   (partially shipped starting VS 17.8, still buggy).  CMakeLists.txt uses
+   `find_package(Threads REQUIRED)` and links `Threads::Threads` to all
+   library targets.
+
+---
+
 ## Vendored Dependencies
 
 ### ed25519-donna

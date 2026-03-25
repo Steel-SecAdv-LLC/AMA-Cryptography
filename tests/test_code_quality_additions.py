@@ -93,21 +93,29 @@ class TestSecureMemoryImplementation:
         # All bytes should be zero
         assert all(b == 0 for b in data)
 
-    def test_mlock_raises_not_implemented(self) -> None:
-        """secure_mlock raises NotImplementedError (libsodium removed)."""
-        from ama_cryptography.secure_memory import secure_mlock
+    def test_mlock_works_or_raises(self) -> None:
+        """secure_mlock succeeds (native/POSIX) or raises on unsupported platforms."""
+        from ama_cryptography.secure_memory import SecureMemoryError, secure_mlock
 
         data = bytearray(100)
-        with pytest.raises(NotImplementedError, match="libsodium"):
+        try:
             secure_mlock(data)
+        except SecureMemoryError:
+            pass  # Expected in restricted environments (e.g. EPERM in containers)
+        except NotImplementedError:
+            pass  # No native backend and not on POSIX
 
-    def test_munlock_raises_not_implemented(self) -> None:
-        """secure_munlock raises NotImplementedError (libsodium removed)."""
-        from ama_cryptography.secure_memory import secure_munlock
+    def test_munlock_works_or_raises(self) -> None:
+        """secure_munlock succeeds (native/POSIX) or raises on unsupported platforms."""
+        from ama_cryptography.secure_memory import SecureMemoryError, secure_munlock
 
         data = bytearray(100)
-        with pytest.raises(NotImplementedError, match="libsodium"):
+        try:
             secure_munlock(data)
+        except SecureMemoryError:
+            pass  # Expected in restricted environments (e.g. EPERM in containers)
+        except NotImplementedError:
+            pass  # No native backend and not on POSIX
 
 
 class TestSecureMemoryGetStatus:

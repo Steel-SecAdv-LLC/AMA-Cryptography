@@ -29,7 +29,7 @@ Features:
 
 Implementation Notes:
     - secure_memzero: Multi-pass byte-level overwrite
-    - secure_mlock/munlock: Not available without libsodium; raises NotImplementedError
+    - secure_mlock/munlock: Native C backend (VirtualLock/mlock) or POSIX fallback
     - constant_time_compare: ama_consttime_memcmp (C) or XOR accumulator (Python)
     - secure_random_bytes: Uses os.urandom (stdlib)
 
@@ -55,10 +55,15 @@ Author/Inventor: Andrew E. A.
 """
 
 import ctypes
+import ctypes.util
+import logging
 import os
+import sys
 from contextlib import contextmanager
 from types import TracebackType
-from typing import Any, Callable, Dict, Generator, NoReturn, Optional, Type, Union
+from typing import Any, Callable, Dict, Generator, Optional, Type, Union
+
+logger = logging.getLogger(__name__)
 
 
 class SecureMemoryError(Exception):
@@ -147,34 +152,149 @@ def _memzero(data: Union[bytearray, memoryview]) -> None:
         data[i] = 0
 
 
-def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> NoReturn:
+def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
     """
     Lock memory region to prevent swapping to disk.
 
+    Uses the native C library or POSIX mlock on the caller's actual buffer.
+    For bytes objects (immutable), operates on the object's internal buffer
+    via ctypes address extraction — no copy is made.
+
+    Args:
+        data: Memory region to lock (bytearray recommended for mutability)
+
     Raises:
-        NotImplementedError: Always — memory locking requires libsodium,
-            which has been removed.  This function is retained for API
-            compatibility.
+        NotImplementedError: If no native backend available and not on POSIX
     """
-    raise NotImplementedError(
-        "secure_mlock requires libsodium (removed). "
-        "Memory locking is not available in the pure-Python implementation."
-    )
+    size = len(data)
+    if size == 0:
+        return
+
+    # Get a ctypes pointer to the actual buffer (no copy)
+    if isinstance(data, bytearray):
+        ptr = (ctypes.c_char * size).from_buffer(data)
+        addr = ctypes.addressof(ptr)
+    elif isinstance(data, memoryview):
+        buf = (ctypes.c_char * size).from_buffer(data)
+        addr = ctypes.addressof(buf)
+    else:
+        # bytes: immutable, use id-based address (CPython implementation detail)
+        # offset past PyBytesObject header to the ob_sval buffer
+        if sys.implementation.name != "cpython":
+            raise NotImplementedError(
+                "secure_mlock on bytes objects requires CPython (id-based address layout). "
+                f"Current implementation: {sys.implementation.name}"
+            )
+        addr = id(data) + bytes.__basicsize__ - 1  # noqa: E501 — CPython ob_sval offset
+
+    try:
+        from ama_cryptography.pqc_backends import _native_lib
+
+        if _native_lib is not None and hasattr(_native_lib, "ama_secure_mlock"):
+            _native_lib.ama_secure_mlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+            _native_lib.ama_secure_mlock.restype = ctypes.c_int
+            ret = _native_lib.ama_secure_mlock(ctypes.c_void_p(addr), size)
+            if ret != 0:
+                raise SecureMemoryError(f"ama_secure_mlock failed with error code {ret}")
+            return
+    except (ImportError, AttributeError):
+        # Native backend unavailable — fall through to POSIX fallback
+        logger.debug("Native mlock unavailable, trying POSIX fallback")
+
+    # POSIX fallback
+    try:
+        libc_name = ctypes.util.find_library("c")
+        if libc_name:
+            libc = ctypes.CDLL(libc_name, use_errno=True)
+            if hasattr(libc, "mlock"):
+                libc.mlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+                libc.mlock.restype = ctypes.c_int
+                ret = libc.mlock(ctypes.c_void_p(addr), size)
+                if ret != 0:
+                    errno = ctypes.get_errno()
+                    raise SecureMemoryError(
+                        f"mlock failed with errno {errno}: {os.strerror(errno)}"
+                    )
+                return
+    except SecureMemoryError:
+        raise
+    except (OSError, AttributeError) as exc:
+        raise NotImplementedError(
+            "secure_mlock requires the AMA native C library or a POSIX system."
+        ) from exc
+
+    raise NotImplementedError("secure_mlock requires the AMA native C library or a POSIX system.")
 
 
-def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> NoReturn:
+def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
     """
     Unlock previously locked memory region.
 
+    Uses the native C library or POSIX munlock on the caller's actual buffer.
+
+    Args:
+        data: Memory region to unlock (bytearray recommended for mutability)
+
     Raises:
-        NotImplementedError: Always — memory unlocking requires libsodium,
-            which has been removed.  This function is retained for API
-            compatibility.
+        NotImplementedError: If no native backend available and not on POSIX
     """
-    raise NotImplementedError(
-        "secure_munlock requires libsodium (removed). "
-        "Memory unlocking is not available in the pure-Python implementation."
-    )
+    size = len(data)
+    if size == 0:
+        return
+
+    # Get a ctypes pointer to the actual buffer (no copy)
+    if isinstance(data, bytearray):
+        ptr = (ctypes.c_char * size).from_buffer(data)
+        addr = ctypes.addressof(ptr)
+    elif isinstance(data, memoryview):
+        buf = (ctypes.c_char * size).from_buffer(data)
+        addr = ctypes.addressof(buf)
+    else:
+        # bytes: immutable, use id-based address (CPython implementation detail)
+        if sys.implementation.name != "cpython":
+            raise NotImplementedError(
+                "secure_munlock on bytes objects requires CPython (id-based address layout). "
+                f"Current implementation: {sys.implementation.name}"
+            )
+        addr = id(data) + bytes.__basicsize__ - 1
+
+    try:
+        from ama_cryptography.pqc_backends import _native_lib
+
+        if _native_lib is not None and hasattr(_native_lib, "ama_secure_munlock"):
+            _native_lib.ama_secure_munlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+            _native_lib.ama_secure_munlock.restype = ctypes.c_int
+            ret = _native_lib.ama_secure_munlock(ctypes.c_void_p(addr), size)
+            if ret != 0:
+                raise SecureMemoryError(f"ama_secure_munlock failed with error code {ret}")
+            return
+    except (ImportError, AttributeError):
+        # Native backend unavailable — fall through to POSIX fallback
+        logger.debug("Native munlock unavailable, trying POSIX fallback")
+
+    # POSIX fallback
+    try:
+        libc_name = ctypes.util.find_library("c")
+        if libc_name:
+            libc = ctypes.CDLL(libc_name, use_errno=True)
+            if hasattr(libc, "munlock"):
+                libc.munlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+                libc.munlock.restype = ctypes.c_int
+                ret = libc.munlock(ctypes.c_void_p(addr), size)
+                if ret != 0:
+                    errno = ctypes.get_errno()
+                    raise SecureMemoryError(
+                        f"munlock failed with errno {errno}: {os.strerror(errno)}"
+                    )
+                return
+    except SecureMemoryError:
+        raise
+    except (OSError, AttributeError) as exc:
+        raise NotImplementedError(
+            "secure_munlock requires the AMA native C library or a POSIX system."
+        ) from exc
+
+    raise NotImplementedError("secure_munlock requires the AMA native C library or a POSIX system.")
 
 
 def constant_time_compare(a: bytes, b: bytes) -> bool:
@@ -351,6 +471,28 @@ def secure_buffer(size: int, lock: bool = True) -> Generator[bytearray, None, No
         secure_memzero(buf)
 
 
+def _detect_mlock_available() -> bool:
+    """Check whether secure_mlock() will succeed on this platform."""
+    try:
+        from ama_cryptography.pqc_backends import _native_lib
+
+        if _native_lib is not None and hasattr(_native_lib, "ama_secure_mlock"):
+            return True
+    except (ImportError, AttributeError):
+        logger.debug("Native backend unavailable for mlock detection")
+    # POSIX fallback: mlock available on Linux/macOS (may still fail due to ulimits)
+    if sys.platform != "win32":
+        libc_name = ctypes.util.find_library("c")
+        if libc_name:
+            try:
+                libc = ctypes.CDLL(libc_name)
+                if hasattr(libc, "mlock"):
+                    return True
+            except OSError as e:
+                logger.debug("POSIX libc mlock probe failed: %s", e)
+    return False
+
+
 def get_status() -> Dict[str, Union[bool, str]]:
     """
     Get secure memory module status.
@@ -360,13 +502,13 @@ def get_status() -> Dict[str, Union[bool, str]]:
             - available: Always True (stdlib-only implementation)
             - backend: Always "stdlib"
             - initialized: Always True
-            - mlock_available: Always False (requires libsodium)
+            - mlock_available: True if native C backend or POSIX mlock is available
     """
     return {
         "available": True,
         "backend": "stdlib",
         "initialized": True,
-        "mlock_available": False,
+        "mlock_available": _detect_mlock_available(),
     }
 
 
