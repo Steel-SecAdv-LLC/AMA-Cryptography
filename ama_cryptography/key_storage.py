@@ -188,7 +188,14 @@ class EncryptedKeyStore:
             ) from None
 
     def _load_store(self) -> None:
-        """Load the encrypted keystore from disk."""
+        """Load the encrypted keystore from disk.
+
+        After loading entries, validates the wrapping key by attempting to
+        decrypt the first entry.  If decryption fails (wrong passphrase),
+        clears the in-memory store and raises ``RuntimeError`` — preventing
+        subsequent ``store_key()`` calls from mixing entries encrypted with
+        different wrapping keys (which would silently corrupt the keystore).
+        """
         if not self._store_path.exists():
             return
         try:
@@ -209,6 +216,28 @@ class EncryptedKeyStore:
             return
         except Exception as e:
             raise RuntimeError(f"Failed to load keystore from {self._store_path}: {e}") from e
+
+        # Validate wrapping key against the first entry to detect wrong
+        # passphrase BEFORE any store_key() call can mix entries encrypted
+        # with different keys (silent corruption).
+        if self._keys:
+            first_key_id = next(iter(self._keys))
+            first_entry = self._keys[first_key_id]
+            aad = first_key_id.encode("utf-8")
+            try:
+                _decrypt_data(
+                    self._wrapping_key,
+                    first_entry["encrypted"],
+                    first_entry["nonce"],
+                    first_entry["tag"],
+                    aad,
+                )
+            except (ValueError, RuntimeError) as e:
+                self._keys.clear()
+                raise RuntimeError(
+                    f"Failed to validate wrapping key against existing keystore at "
+                    f"{self._store_path}. The passphrase may be incorrect."
+                ) from e
 
     def _save_store(self) -> None:
         """Save the encrypted keystore to disk using atomic write-rename.

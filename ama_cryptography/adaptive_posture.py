@@ -514,13 +514,21 @@ class CryptoPostureController:
             self._trigger_algorithm_switch()
 
     def _process_expired_pending_actions(self) -> None:
-        """Auto-execute pending actions that have exceeded the grace period."""
+        """Auto-execute pending actions that have exceeded the grace period.
+
+        Respects ``rotation_cooldown`` between auto-executed actions so that
+        multiple simultaneously-expired actions do not bypass throttling.
+        """
         now = time.time()
         still_pending = []
         for pa in self._pending_actions:
             if pa.confirmed:
                 continue
             if (now - pa.timestamp) >= self.grace_period:
+                # Respect cooldown between auto-executed actions
+                if (now - self._last_rotation_time) < self.rotation_cooldown:
+                    still_pending.append(pa)
+                    continue
                 logger.warning(
                     "Auto-executing pending action %s (id=%s) after grace period expiry",
                     pa.action.name,

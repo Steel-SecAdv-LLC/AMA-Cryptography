@@ -866,6 +866,15 @@ class AESGCMProvider:
         # without an actual encryption having occurred.
         self._encrypt_counters[key_id] = count + 1
         AESGCMProvider._counters_dirty += 1
+
+        result = {
+            "ciphertext": ct,
+            "nonce": nonce,
+            "tag": tag,
+            "aad": aad,
+            "backend": "native_c",
+        }
+
         if AESGCMProvider._counters_dirty >= self._PERSIST_INTERVAL:
             try:
                 self._persist_counters(_raising=True)
@@ -875,21 +884,22 @@ class AESGCMProvider:
                 # (a) 63 encrypts without persistence (finally-reset-to-0), and
                 # (b) permanent bricking (success-only reset where dirty stays
                 #     above the threshold forever after any transient I/O error).
-                # The RuntimeError still propagates (fail-closed — no ciphertext
-                # returned), but recovery is attempted on the next encrypt().
                 AESGCMProvider._counters_dirty = self._PERSIST_INTERVAL - 1
-                raise
+                # CRITICAL: The encryption already happened and the nonce is
+                # consumed.  We MUST return the ciphertext — raising here would
+                # discard valid ciphertext and mislead callers into retrying
+                # with the same nonce (catastrophic for AES-GCM).  The persist
+                # failure is logged at CRITICAL and retried on next encrypt().
+                logger.critical(
+                    "AES-GCM counter persistence failed — ciphertext returned "
+                    "but counter may not survive restart.  Will retry on next "
+                    "encrypt().  DO NOT re-encrypt with the same nonce."
+                )
             else:
                 # Persist succeeded — reset to 0 for normal operation.
                 AESGCMProvider._counters_dirty = 0
 
-        return {
-            "ciphertext": ct,
-            "nonce": nonce,
-            "tag": tag,
-            "aad": aad,
-            "backend": "native_c",
-        }
+        return result
 
     def decrypt(
         self,
