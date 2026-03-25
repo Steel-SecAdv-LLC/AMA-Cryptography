@@ -156,8 +156,8 @@ class TestVerifyTimestamp:
         )
         assert verify_timestamp(data, tampered) is False
 
-    def test_verify_disabled_token_always_valid(self) -> None:
-        """Disabled tokens should always verify as True."""
+    def test_verify_disabled_token_valid_with_matching_data(self) -> None:
+        """Disabled tokens should verify as True when data matches."""
         result = get_timestamp(b"data", tsa_mode="disabled")
         assert result is not None
         assert verify_timestamp(b"data", result) is True

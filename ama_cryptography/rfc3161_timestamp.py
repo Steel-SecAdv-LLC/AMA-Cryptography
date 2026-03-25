@@ -28,6 +28,8 @@ Use Cases:
 """
 
 import hashlib
+import hmac as _hmac_mod
+import os as _os_mod
 import struct
 import time
 import warnings
@@ -82,17 +84,26 @@ class TimestampResult:
 _MOCK_MAGIC = b"AMA_MOCK_TSA\x00\x01\x00\x00"
 
 
+# S3 fix: Guard flag — MockTSA is only available in testing contexts.
+# Set this to True in test fixtures / conftest.py before using MockTSA.
+_MOCK_TSA_ALLOWED: bool = False
+
+
 class MockTSA:
     """
     Self-signed mock Time-Stamp Authority for testing purposes.
+
+    .. warning:: **Testing only.**  MockTSA will raise ``RuntimeError`` if
+       ``_MOCK_TSA_ALLOWED`` is not set to ``True``.  Set it in your test
+       fixtures or via the ``allow_mock_tsa`` context manager.
 
     The token format (all big-endian) is:
         16 bytes  - magic header (_MOCK_MAGIC)
          4 bytes  - hash algorithm name length (N)
          N bytes  - hash algorithm name (utf-8)
          8 bytes  - Unix timestamp (double, seconds since epoch)
-        32 bytes  - HMAC-SHA256 of (magic || algo_len || algo || timestamp || data_hash)
-                    keyed with a per-token random nonce
+        32 bytes  - HMAC-SHA256(key=nonce, msg=payload)  [S3: uses HMAC,
+                    not raw SHA-256 concatenation, to avoid length-extension]
         32 bytes  - the random nonce used for the HMAC
 
     The HMAC lets ``verify_timestamp`` confirm that the token has not been
@@ -101,17 +112,29 @@ class MockTSA:
     """
 
     @staticmethod
+    def _check_allowed() -> None:
+        """Raise if MockTSA is used outside a testing context."""
+        if not _MOCK_TSA_ALLOWED:
+            raise RuntimeError(
+                "MockTSA is only available in testing contexts. "
+                "Set ama_cryptography.rfc3161_timestamp._MOCK_TSA_ALLOWED = True "
+                "in your test fixture before using MockTSA."
+            )
+
+    @staticmethod
     def timestamp(data_hash: bytes, hash_algorithm: str) -> bytes:
         """Create a mock timestamp token from *data_hash*."""
-        import os as _os
+        MockTSA._check_allowed()
 
         algo_bytes = hash_algorithm.encode("utf-8")
         algo_len = struct.pack(">I", len(algo_bytes))
         ts = struct.pack(">d", time.time())
-        nonce = _os.urandom(32)
+        nonce = _os_mod.urandom(32)
 
         payload = _MOCK_MAGIC + algo_len + algo_bytes + ts + data_hash
-        mac = hashlib.sha256(nonce + payload).digest()
+        # S3 fix: Use HMAC instead of raw SHA-256(nonce || payload) to
+        # prevent length-extension attacks on the integrity tag.
+        mac = _hmac_mod.new(nonce, payload, hashlib.sha256).digest()
 
         return payload + mac + nonce
 
@@ -132,17 +155,15 @@ class MockTSA:
 
             # The remaining bytes up to this point form the payload.
             payload_end = offset
-            # Next: data_hash occupies the rest of the payload section.
-            # We need to figure out where data_hash ends.
             # payload = _MOCK_MAGIC + algo_len(4) + algo(N) + ts(8) + data_hash
             # mac(32) + nonce(32) at the tail.
             mac = token[-(32 + 32) : -32]
             nonce = token[-32:]
             payload = token[: -(32 + 32)]
 
-            # Verify keyed hash
-            expected_mac = hashlib.sha256(nonce + payload).digest()
-            if mac != expected_mac:
+            # S3 fix: Verify HMAC (not raw hash concatenation).
+            expected_mac = _hmac_mod.new(nonce, payload, hashlib.sha256).digest()
+            if not _hmac_mod.compare_digest(mac, expected_mac):
                 return False
 
             # Extract embedded data_hash from the payload and compare.
@@ -244,7 +265,14 @@ def get_timestamp(
 
     # ---- Mock mode: generate a self-signed mock token ----
     if tsa_mode == "mock":
-        token = MockTSA.timestamp(data_hash, hash_algorithm)
+        # Temporarily allow MockTSA for this call (S3: production guard)
+        global _MOCK_TSA_ALLOWED
+        prev = _MOCK_TSA_ALLOWED
+        _MOCK_TSA_ALLOWED = True
+        try:
+            token = MockTSA.timestamp(data_hash, hash_algorithm)
+        finally:
+            _MOCK_TSA_ALLOWED = prev
         return TimestampResult(
             token=token,
             tsa_url="mock",
@@ -352,9 +380,15 @@ def verify_timestamp(
         >>> is_valid = verify_timestamp(b"Important document", result)
         >>> print(f"Timestamp valid: {is_valid}")
     """
-    # ---- Disabled tokens are trivially "valid" (no assertion to check) ----
+    # ---- Disabled tokens: still verify data integrity (S2 fix) ----
+    # Even when timestamping is disabled, the data_hash stored in the
+    # TimestampResult must match the actual data. Without this check,
+    # a TimestampResult from payload A would validate payload B.
     if timestamp_result.tsa_url == "disabled" and timestamp_result.token == b"":
-        return True
+        computed_hash = _compute_data_hash(data, timestamp_result.hash_algorithm)
+        if computed_hash is None:
+            return False
+        return computed_hash == timestamp_result.data_hash
 
     # ---- Mock token path (does not require rfc3161ng) ----
     if _is_mock_token(timestamp_result.token):
