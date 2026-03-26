@@ -206,7 +206,7 @@ static inline void fe51_carry(fe51 h) {
  * 25 multiplications (5x5 schoolbook) with reduction via 2^255 ≡ 19.
  * Products involving limbs that overflow 2^255 are multiplied by 19.
  */
-static inline __attribute__((hot)) void fe51_mul(fe51 h, const fe51 f, const fe51 g) {
+static inline __attribute__((hot, always_inline)) void fe51_mul(fe51 h, const fe51 f, const fe51 g) {
     typedef unsigned __int128 uint128_t;
 
     uint64_t f0 = f[0], f1 = f[1], f2 = f[2], f3 = f[3], f4 = f[4];
@@ -259,7 +259,7 @@ static inline __attribute__((hot)) void fe51_mul(fe51 h, const fe51 f, const fe5
  * Exploits symmetry: f[i]*f[j] = f[j]*f[i], so we compute once and double.
  * 15 multiplications (vs 25 for generic mul).
  */
-static inline __attribute__((hot)) void fe51_sq(fe51 h, const fe51 f) {
+static inline __attribute__((hot, always_inline)) void fe51_sq(fe51 h, const fe51 f) {
     typedef unsigned __int128 uint128_t;
 
     uint64_t f0 = f[0], f1 = f[1], f2 = f[2], f3 = f[3], f4 = f[4];
