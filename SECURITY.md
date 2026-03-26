@@ -176,10 +176,10 @@ Users deploying AMA Cryptography in production should:
 - **NEVER:** Store private keys in plain text or version control
 - **NEVER:** Reuse keys across different Omni-Code packages
 
-### Zero-Dependency Architecture (v2.0)
+### Zero-Dependency Architecture (v2.1)
 - **REQUIRED:** Build native C library (`cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build`)
 - All cryptographic primitives (SHA3, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+, X25519, ChaCha20-Poly1305, Argon2, secp256k1) are native C — no external cryptographic dependencies required
-- Optional: numpy/scipy for 3R monitoring, pynacl for libsodium secure memory, PyKCS11 for HSM
+- Optional: numpy/scipy for 3R monitoring, PyKCS11 for HSM
 
 ### Cryptographic Operations
 - **REQUIRED:** Build native PQC C library (`cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build`)

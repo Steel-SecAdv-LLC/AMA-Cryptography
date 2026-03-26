@@ -110,7 +110,7 @@ jobs:
             "component": {
               "type": "library",
               "name": "ama-cryptography",
-              "version": "2.0",
+              "version": "2.1",
               "description": "Quantum-resistant cryptographic protection system",
               "licenses": [{"license": {"id": "Apache-2.0"}}],
               "supplier": {"name": "Steel Security Advisors LLC"}
@@ -120,90 +120,90 @@ jobs:
             {
               "type": "library",
               "name": "ama_sha3",
-              "version": "2.0",
+              "version": "2.1",
               "description": "SHA3-256/512, SHAKE128/256 (NIST FIPS 202)",
               "scope": "required",
-              "purl": "pkg:generic/ama_sha3@2.0"
+              "purl": "pkg:generic/ama_sha3@2.1"
             },
             {
               "type": "library",
               "name": "ama_ed25519",
-              "version": "2.0",
+              "version": "2.1",
               "description": "Ed25519 digital signatures (RFC 8032)",
               "scope": "required",
-              "purl": "pkg:generic/ama_ed25519@2.0"
+              "purl": "pkg:generic/ama_ed25519@2.1"
             },
             {
               "type": "library",
               "name": "ama_dilithium",
-              "version": "2.0",
+              "version": "2.1",
               "description": "ML-DSA-65 post-quantum signatures (NIST FIPS 204)",
               "scope": "required",
-              "purl": "pkg:generic/ama_dilithium@2.0"
+              "purl": "pkg:generic/ama_dilithium@2.1"
             },
             {
               "type": "library",
               "name": "ama_kyber",
-              "version": "2.0",
+              "version": "2.1",
               "description": "Kyber-1024 ML-KEM (NIST FIPS 203)",
               "scope": "required",
-              "purl": "pkg:generic/ama_kyber@2.0"
+              "purl": "pkg:generic/ama_kyber@2.1"
             },
             {
               "type": "library",
               "name": "ama_sphincs",
-              "version": "2.0",
+              "version": "2.1",
               "description": "SPHINCS+-256f SLH-DSA (NIST FIPS 205)",
               "scope": "required",
-              "purl": "pkg:generic/ama_sphincs@2.0"
+              "purl": "pkg:generic/ama_sphincs@2.1"
             },
             {
               "type": "library",
               "name": "ama_aes_gcm",
-              "version": "2.0",
+              "version": "2.1",
               "description": "AES-256-GCM AEAD (NIST SP 800-38D)",
               "scope": "required",
-              "purl": "pkg:generic/ama_aes_gcm@2.0"
+              "purl": "pkg:generic/ama_aes_gcm@2.1"
             },
             {
               "type": "library",
               "name": "ama_chacha20poly1305",
-              "version": "2.0",
+              "version": "2.1",
               "description": "ChaCha20-Poly1305 AEAD (RFC 8439)",
               "scope": "required",
-              "purl": "pkg:generic/ama_chacha20poly1305@2.0"
+              "purl": "pkg:generic/ama_chacha20poly1305@2.1"
             },
             {
               "type": "library",
               "name": "ama_x25519",
-              "version": "2.0",
+              "version": "2.1",
               "description": "X25519 ECDH key exchange (RFC 7748)",
               "scope": "required",
-              "purl": "pkg:generic/ama_x25519@2.0"
+              "purl": "pkg:generic/ama_x25519@2.1"
             },
             {
               "type": "library",
               "name": "ama_argon2",
-              "version": "2.0",
+              "version": "2.1",
               "description": "Argon2id password hashing (RFC 9106)",
               "scope": "required",
-              "purl": "pkg:generic/ama_argon2@2.0"
+              "purl": "pkg:generic/ama_argon2@2.1"
             },
             {
               "type": "library",
               "name": "ama_hkdf",
-              "version": "2.0",
+              "version": "2.1",
               "description": "HKDF-SHA3-256 key derivation (RFC 5869)",
               "scope": "required",
-              "purl": "pkg:generic/ama_hkdf@2.0"
+              "purl": "pkg:generic/ama_hkdf@2.1"
             },
             {
               "type": "library",
               "name": "ama_secp256k1",
-              "version": "2.0",
+              "version": "2.1",
               "description": "secp256k1 elliptic curve operations",
               "scope": "required",
-              "purl": "pkg:generic/ama_secp256k1@2.0"
+              "purl": "pkg:generic/ama_secp256k1@2.1"
             }
           ],
           "dependencies": []

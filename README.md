@@ -1151,7 +1151,7 @@ AMA Cryptography v2.0 has **zero core dependencies** — all cryptographic primi
 - `[monitoring]`: numpy, scipy (3R engine)
 - `[legacy]`: cryptography (fallback)
 - `[hsm]`: PyKCS11 (HSM support)
-- `[secure-memory]`: pynacl (libsodium)
+- `[secure-memory]`: pynacl (reserved for future libsodium integration)
 
 ### Dependency Graph
 

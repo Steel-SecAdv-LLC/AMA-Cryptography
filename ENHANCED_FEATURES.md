@@ -13,7 +13,7 @@
 
 ## Overview
 
-AMA Cryptography v2.0 features a zero-dependency, multi-language architecture that combines the security of native C cryptographic primitives with the usability of Python. All cryptographic operations are implemented natively — no external cryptographic libraries required. This document describes the enhanced features available in the current release.
+AMA Cryptography v2.1 features a zero-dependency, multi-language architecture that combines the security of native C cryptographic primitives with the usability of Python. All cryptographic operations are implemented natively — no external cryptographic libraries required. This document describes the enhanced features available in the current release.
 
 ---
 

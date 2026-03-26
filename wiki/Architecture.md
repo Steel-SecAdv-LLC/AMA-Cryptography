@@ -306,7 +306,7 @@ See [Key Management](Key-Management) for full details.
 | Key Independence | HKDF domain-separated derivation |
 | Quantum Resistance | ML-DSA-65 (FIPS 204), ML-KEM-1024 (FIPS 203) |
 | Side-Channel | Constant-time comparisons, optional bitsliced AES |
-| Memory Safety | SecureBuffer, `secure_memzero()`, libsodium `mlock` |
+| Memory Safety | SecureBuffer, `secure_memzero()`, native C / POSIX `mlock` |
 
 ---
 

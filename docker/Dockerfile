@@ -47,7 +47,7 @@ FROM ubuntu:22.04
 
 LABEL maintainer="Steel Security Advisors LLC <steel.sa.llc@gmail.com>"
 LABEL description="AMA Cryptography - Quantum-Resistant Cryptographic Protection System"
-LABEL version="2.0"
+LABEL version="2.1"
 
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y \
@@ -67,10 +67,11 @@ COPY --from=builder /build/dist/*.whl /tmp/
 COPY --from=builder /build/requirements.txt /tmp/
 
 # Install Python package and runtime dependencies
-# numpy/scipy required by equations/double_helix modules imported at package init
+# The core library has zero runtime dependencies. numpy is installed only because
+# ama_cryptography_monitor_demo.py uses it to simulate CPU-intensive workloads.
 RUN pip3 install --no-cache-dir /tmp/*.whl && \
     pip3 install --no-cache-dir -r /tmp/requirements.txt && \
-    pip3 install --no-cache-dir numpy scipy && \
+    pip3 install --no-cache-dir numpy && \
     rm -rf /tmp/*.whl /tmp/requirements.txt && \
     ldconfig
 

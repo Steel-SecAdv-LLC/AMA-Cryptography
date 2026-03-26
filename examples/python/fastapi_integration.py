@@ -119,7 +119,7 @@ class HealthResponse(BaseModel):
 app = FastAPI(
     title="AMA Cryptography API",
     description="Quantum-resistant cryptographic protection API",
-    version="2.0",
+    version="2.1",
     docs_url="/docs",
     redoc_url="/redoc",
 )
