@@ -470,6 +470,4 @@ class TestAES256KeyExpansion:
         from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
 
         pt_out = native_aes256_gcm_decrypt(key, nonce, ct, tag, b"")
-        assert pt_out == plaintext, (
-            "AES-256-GCM roundtrip failed — key expansion may be incorrect"
-        )
+        assert pt_out == plaintext, "AES-256-GCM roundtrip failed — key expansion may be incorrect"
