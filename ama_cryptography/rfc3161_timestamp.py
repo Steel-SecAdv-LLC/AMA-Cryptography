@@ -30,6 +30,7 @@ Use Cases:
 import hashlib
 import os as _os_mod
 import struct
+import threading
 import time
 import warnings
 from dataclasses import dataclass
@@ -86,6 +87,7 @@ _MOCK_MAGIC = b"AMA_MOCK_TSA\x00\x01\x00\x00"
 # S3 fix: Guard flag — MockTSA is only available in testing contexts.
 # Set this to True in test fixtures / conftest.py before using MockTSA.
 _MOCK_TSA_ALLOWED: bool = False
+_MOCK_TSA_LOCK = threading.Lock()
 
 
 def _hmac_sha256(key: bytes, msg: bytes) -> bytes:
@@ -278,14 +280,17 @@ def get_timestamp(
 
     # ---- Mock mode: generate a self-signed mock token ----
     if tsa_mode == "mock":
-        # Temporarily allow MockTSA for this call (S3: production guard)
+        # Temporarily allow MockTSA for this call (S3: production guard).
+        # Use a lock to prevent a TOCTOU race where concurrent threads
+        # could leave _MOCK_TSA_ALLOWED permanently True.
         global _MOCK_TSA_ALLOWED
-        prev = _MOCK_TSA_ALLOWED
-        _MOCK_TSA_ALLOWED = True
-        try:
-            token = MockTSA.timestamp(data_hash, hash_algorithm)
-        finally:
-            _MOCK_TSA_ALLOWED = prev
+        with _MOCK_TSA_LOCK:
+            prev = _MOCK_TSA_ALLOWED
+            _MOCK_TSA_ALLOWED = True
+            try:
+                token = MockTSA.timestamp(data_hash, hash_algorithm)
+            finally:
+                _MOCK_TSA_ALLOWED = prev
         return TimestampResult(
             token=token,
             tsa_url="mock",
