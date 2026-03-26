@@ -306,6 +306,9 @@ if(AMA_BUILD_SHARED)
         PUBLIC_HEADER "include/ama_cryptography.h"
     )
     target_compile_definitions(ama_cryptography_shared PRIVATE AMA_BUILDING_SHARED)
+    target_compile_definitions(ama_cryptography_shared PRIVATE
+        $<$<CONFIG:Debug>:AMA_DISPATCH_DEBUG>
+    )
 
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_shared PRIVATE AMA_USE_NATIVE_PQC)
@@ -332,6 +335,9 @@ if(AMA_BUILD_STATIC)
         PUBLIC_HEADER "include/ama_cryptography.h"
     )
     target_compile_definitions(ama_cryptography_static PRIVATE AMA_BUILDING_STATIC)
+    target_compile_definitions(ama_cryptography_static PRIVATE
+        $<$<CONFIG:Debug>:AMA_DISPATCH_DEBUG>
+    )
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_static PRIVATE AMA_USE_NATIVE_PQC)
     endif()
@@ -370,6 +376,9 @@ if(AMA_BUILD_TESTS)
         OUTPUT_NAME "ama_cryptography_test"
     )
     target_compile_definitions(ama_cryptography_test PRIVATE AMA_TESTING_MODE)
+    target_compile_definitions(ama_cryptography_test PRIVATE
+        $<$<CONFIG:Debug>:AMA_DISPATCH_DEBUG>
+    )
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_test PRIVATE AMA_USE_NATIVE_PQC)
     endif()

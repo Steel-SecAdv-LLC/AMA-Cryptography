@@ -76,19 +76,42 @@ static inline __m256i rotl64_avx2(__m256i x, int n) {
  * the compiler auto-vectorizing where possible.
  * ============================================================================ */
 void ama_keccak_f1600_avx2(uint64_t state[25]) {
-    uint64_t C[5], D[5];
-    uint64_t B[25];
+    uint64_t C[5], D[5], T;
+
+    /* Rho-Pi cycle: the pi permutation visits 24 non-identity
+     * positions in a single cycle starting from index 1.
+     * Derived from FIPS 202 section 3.2.3: (x,y) -> (y, (2x+3y) mod 5). */
+    static const int RHO_PI_TARGETS[24] = {
+        10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4,
+        15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1
+    };
+    static const int RHO_PI_OFFSETS[24] = {
+         1,  3,  6, 10, 15, 21, 28, 36,
+        45, 55,  2, 14, 27, 41, 56,  8,
+        25, 43, 62, 18, 39, 61, 20, 44
+    };
 
     for (int round = 0; round < 24; round++) {
-        /* Theta: column parity */
-        C[0] = state[0] ^ state[5] ^ state[10] ^ state[15] ^ state[20];
-        C[1] = state[1] ^ state[6] ^ state[11] ^ state[16] ^ state[21];
-        C[2] = state[2] ^ state[7] ^ state[12] ^ state[17] ^ state[22];
-        C[3] = state[3] ^ state[8] ^ state[13] ^ state[18] ^ state[23];
+        /* ── Theta ── column parity, vectorized for C[0..3] via AVX2 */
+        __m256i c0123 = _mm256_xor_si256(
+            _mm256_xor_si256(
+                _mm256_loadu_si256((const __m256i *)(state +  0)),
+                _mm256_loadu_si256((const __m256i *)(state +  5))),
+            _mm256_xor_si256(
+                _mm256_loadu_si256((const __m256i *)(state + 10)),
+                _mm256_xor_si256(
+                    _mm256_loadu_si256((const __m256i *)(state + 15)),
+                    _mm256_loadu_si256((const __m256i *)(state + 20))))
+        );
+        {
+            uint64_t c_tmp[4];
+            _mm256_storeu_si256((__m256i *)c_tmp, c0123);
+            C[0] = c_tmp[0]; C[1] = c_tmp[1];
+            C[2] = c_tmp[2]; C[3] = c_tmp[3];
+        }
         C[4] = state[4] ^ state[9] ^ state[14] ^ state[19] ^ state[24];
 
-        /* Use AVX2 for the rotate-and-XOR in D computation:
-         * D[i] = C[(i+4)%5] ^ ROT(C[(i+1)%5], 1) */
+        /* D[i] = C[(i+4)%5] ^ ROT(C[(i+1)%5], 1) — vectorized for D[0..3] */
         {
             __m256i c1234 = _mm256_set_epi64x((int64_t)C[4], (int64_t)C[3],
                                                (int64_t)C[2], (int64_t)C[1]);
@@ -104,21 +127,32 @@ void ama_keccak_f1600_avx2(uint64_t state[25]) {
         for (int i = 0; i < 25; i++)
             state[i] ^= D[i % 5];
 
-        /* Rho and Pi */
-        for (int i = 0; i < 25; i++) {
-            int r = ROTC[i];
-            B[PI[i]] = (r == 0) ? state[i]
-                                : ((state[i] << r) | (state[i] >> (64 - r)));
+        /* ── Rho-Pi ── in-place using T per Keccak-f[1600] reference.
+         * state[0] is the identity under pi (ROTC[0]=0) — untouched.
+         * The remaining 24 positions form one cycle (FIPS 202 sec 3.2.4). */
+        T = state[1];
+        for (int t = 0; t < 24; t++) {
+            int j = RHO_PI_TARGETS[t];
+            int r = RHO_PI_OFFSETS[t];
+            uint64_t tmp = state[j];
+            state[j] = (T << r) | (T >> (64 - r));
+            T = tmp;
         }
 
-        /* Chi: non-linear step — vectorize groups of 4 lanes */
+        /* ── Chi ── non-linear step, AVX2 vectorized per row.
+         * After in-place Rho-Pi, state[] holds the B values.
+         * Save each row's originals before overwriting. */
         for (int y = 0; y < 25; y += 5) {
-            __m256i b0123 = _mm256_set_epi64x((int64_t)B[y+3], (int64_t)B[y+2],
-                                               (int64_t)B[y+1], (int64_t)B[y+0]);
-            __m256i b1234 = _mm256_set_epi64x((int64_t)B[y+4], (int64_t)B[y+3],
-                                               (int64_t)B[y+2], (int64_t)B[y+1]);
-            __m256i b2340 = _mm256_set_epi64x((int64_t)B[y+0], (int64_t)B[y+4],
-                                               (int64_t)B[y+3], (int64_t)B[y+2]);
+            uint64_t b0 = state[y+0], b1 = state[y+1];
+            __m256i b0123 = _mm256_set_epi64x(
+                (int64_t)state[y+3], (int64_t)state[y+2],
+                (int64_t)state[y+1], (int64_t)state[y+0]);
+            __m256i b1234 = _mm256_set_epi64x(
+                (int64_t)state[y+4], (int64_t)state[y+3],
+                (int64_t)state[y+2], (int64_t)state[y+1]);
+            __m256i b2340 = _mm256_set_epi64x(
+                (int64_t)state[y+0], (int64_t)state[y+4],
+                (int64_t)state[y+3], (int64_t)state[y+2]);
             /* state[y+i] = B[y+i] ^ (~B[y+(i+1)%5] & B[y+(i+2)%5]) */
             __m256i notb1 = _mm256_andnot_si256(b1234, b2340);
             __m256i res   = _mm256_xor_si256(b0123, notb1);
@@ -128,11 +162,11 @@ void ama_keccak_f1600_avx2(uint64_t state[25]) {
             state[y+1] = tmp[1];
             state[y+2] = tmp[2];
             state[y+3] = tmp[3];
-            /* Lane 4 done scalar */
-            state[y+4] = B[y+4] ^ (~B[y+0] & B[y+1]);
+            /* Lane 4 uses saved originals (state[y+4] is still untouched) */
+            state[y+4] = state[y+4] ^ (~b0 & b1);
         }
 
-        /* Iota */
+        /* ── Iota ── */
         state[0] ^= RC[round];
     }
 }

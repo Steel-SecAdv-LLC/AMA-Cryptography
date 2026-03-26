@@ -90,7 +90,8 @@ void ama_fe51_sub_x4_avx2(fe51 r[4], const fe51 a[4], const fe51 b[4]) {
  * Final carry from limb 4 is multiplied by 19 and added to limb 0
  * (because 2^255 = 19 mod p).
  * ============================================================================ */
-static inline void fe51_carry(fe51 *f) {
+static inline __attribute__((unused))
+void fe51_carry(fe51 *f) {
     const uint64_t mask51 = (1ULL << 51) - 1;
     uint64_t c;
 
@@ -259,7 +260,8 @@ void ama_fe51_sq_avx2(fe51 *r, const fe51 *a) {
     t4 += c;
     r->v[4] = (uint64_t)t4 & mask51; c = (uint64_t)(t4 >> 51);
     r->v[0] += c * 19;
-    fe51_carry(r);
+    c = r->v[0] >> 51; r->v[0] &= mask51;
+    r->v[1] += c;
 
     (void)a2[4]; /* used conceptually via a->v[4] terms */
 }

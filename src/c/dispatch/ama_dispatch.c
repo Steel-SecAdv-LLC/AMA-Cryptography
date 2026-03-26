@@ -19,7 +19,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 /* ============================================================================
@@ -193,10 +192,11 @@ static void dispatch_init_internal(void) {
     dispatch_info.chacha20poly1305 = effective;
     dispatch_info.argon2           = effective;
 
-    if (getenv("AMA_DISPATCH_VERBOSE"))
-        fprintf(stderr,
-            "[AMA Dispatch] x86-64: AVX2=%d AVX-512F=%d => level=%d\n",
-            has_avx2, has_avx512f, (int)effective);
+#ifdef AMA_DISPATCH_DEBUG
+    fprintf(stderr,
+        "[AMA Dispatch] x86-64: AVX2=%d AVX-512F=%d => level=%d\n",
+        has_avx2, has_avx512f, (int)effective);
+#endif
 
 #elif defined(__aarch64__) || defined(_M_ARM64)
     dispatch_info.arch_name = "AArch64";
@@ -217,15 +217,17 @@ static void dispatch_init_internal(void) {
     dispatch_info.chacha20poly1305 = best;
     dispatch_info.argon2           = best;
 
-    if (getenv("AMA_DISPATCH_VERBOSE"))
-        fprintf(stderr,
-            "[AMA Dispatch] AArch64: NEON=%d SVE2=%d => level=%d\n",
-            has_neon, has_sve2, (int)best);
+#ifdef AMA_DISPATCH_DEBUG
+    fprintf(stderr,
+        "[AMA Dispatch] AArch64: NEON=%d SVE2=%d => level=%d\n",
+        has_neon, has_sve2, (int)best);
+#endif
 
 #else
     dispatch_info.arch_name = "generic";
-    if (getenv("AMA_DISPATCH_VERBOSE"))
-        fprintf(stderr, "[AMA Dispatch] Unknown architecture — using generic C\n");
+#ifdef AMA_DISPATCH_DEBUG
+    fprintf(stderr, "[AMA Dispatch] Unknown architecture — using generic C\n");
+#endif
 #endif
 
 }
