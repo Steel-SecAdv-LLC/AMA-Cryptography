@@ -1009,21 +1009,13 @@ def verify_rfc3161_timestamp(
         # Write timestamp token to secure temporary directory for OpenSSL verification
         tsr_path = os.path.join(tmp_dir, "timestamp.tsr")
         fd = os.open(tsr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(timestamp_token)
-        except BaseException:
-            os.close(fd)
-            raise
+        with os.fdopen(fd, "wb") as f:
+            f.write(timestamp_token)
 
         data_path = os.path.join(tmp_dir, "data.dat")
         fd = os.open(data_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(data)
-        except BaseException:
-            os.close(fd)
-            raise
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
 
         # Build OpenSSL verification command
         # openssl ts -verify verifies:
