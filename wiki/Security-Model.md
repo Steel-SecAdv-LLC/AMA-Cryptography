@@ -94,7 +94,7 @@ The following operations are implemented in constant time:
 
 | Operation | Implementation | Status |
 |-----------|---------------|--------|
-| HMAC comparison | `hmac.compare_digest()` / `sodium_memcmp()` | ✓ Constant-time |
+| HMAC comparison | `ama_consttime_memcmp()` (C) / XOR accumulator (Python) | ✓ Constant-time |
 | Ed25519 signing | `ama_ed25519.c` with `fe25519_sq()` | ✓ Constant-time |
 | Ed25519 verification | Windowed scalar multiplication | ✓ Constant-time |
 | AES-256-GCM (default) | Table-based S-box | ⚠ NOT constant-time |
