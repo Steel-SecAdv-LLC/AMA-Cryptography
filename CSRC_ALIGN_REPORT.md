@@ -10,7 +10,7 @@
 ## Abstract
 
 This report documents the results of running official NIST test vectors against
-the AMA Cryptography library (version 2.0). The validation covers 12 algorithm
+the AMA Cryptography library (version 2.1). The validation covers 12 algorithm
 functions across 6 NIST standards (FIPS 180-4, FIPS 198-1, FIPS 202, FIPS 203,
 FIPS 204, FIPS 205) and 1 NIST Special Publication (SP 800-38D).
 

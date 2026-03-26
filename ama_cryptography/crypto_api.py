@@ -432,7 +432,7 @@ class KyberProvider(KEMProvider):
         KyberUnavailableError: If Kyber backend is not available
     """
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON) -> None:
+    def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY) -> None:
         self.backend = backend
         self.algorithm = AlgorithmType.KYBER_1024
 
@@ -532,7 +532,7 @@ class SphincsProvider(CryptoProvider):
         SphincsUnavailableError: If SPHINCS+ backend is not available
     """
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON) -> None:
+    def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY) -> None:
         self.backend = backend
         self.algorithm = AlgorithmType.SPHINCS_256F
 

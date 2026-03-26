@@ -70,7 +70,7 @@ from ama_cryptography._numeric import (
 # Configure module logger
 logger = logging.getLogger(__name__)
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 __all__ = [
     "PHI",
@@ -275,6 +275,10 @@ def convergence_time(
     """
     if V_initial <= 0:
         return 0.0
+    if lambda_decay <= 0:
+        raise ValueError(f"lambda_decay must be positive, got {lambda_decay}")
+    if threshold <= 0 or threshold > 1:
+        raise ValueError(f"threshold must be in (0, 1], got {threshold}")
     return float(-math.log(threshold) / (2 * lambda_decay))
 
 

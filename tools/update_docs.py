@@ -45,7 +45,7 @@ def _get_version() -> str:
     """Read __version__ from ama_cryptography/__init__.py."""
     text = INIT_PY.read_text()
     m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', text)
-    return m.group(1) if m else "2.0"
+    return m.group(1) if m else "2.1"
 
 
 def _today() -> str:
