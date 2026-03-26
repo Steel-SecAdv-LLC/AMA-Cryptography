@@ -301,7 +301,8 @@ make install      # System-wide installation
 Location: `tests/c/`
 
 Tests:
-- `test_consttime.c`: Constant-time operation validation
+- `test_consttime.c`: Constant-time operation validation (structural correctness)
+- `test_dudect.c`: Empirical constant-time verification via dudect (Welch's t-test)
 - `test_core.c`: Context and lifecycle management
 - `test_kyber.c`: Kyber-1024 algorithm tests
 - `test_ml_dsa.c`: ML-DSA-65 signature tests
@@ -310,7 +311,22 @@ Run with:
 ```bash
 cd build
 ctest --output-on-failure
+
+# Run dudect empirical timing tests
+cmake -B build -DAMA_ENABLE_DUDECT=ON && cmake --build build
+./build/bin/test_dudect --measurements 1000000
 ```
+
+### Fuzzing Infrastructure
+
+Location: `fuzz/`
+
+12 libFuzzer fuzz targets with seed corpora and dictionaries:
+- Core: SHA3, Ed25519, AES-GCM, HKDF, consttime
+- PQC: Dilithium, Kyber, SPHINCS+, ChaCha20-Poly1305, X25519, Argon2, secp256k1
+
+OSS-Fuzz onboarding prepared in `oss-fuzz/` for continuous 24/7 fuzzing.
+See [docs/oss-fuzz-onboarding.md](docs/oss-fuzz-onboarding.md) for details.
 
 ### Python Test Suite
 
@@ -522,6 +538,38 @@ All cryptographic comparisons and operations execute in constant time:
 ✓ Cache-timing attack mitigation
 ✓ Power analysis resistance (algorithmic level)
 ✓ Fault injection detection
+
+### Empirical Constant-Time Verification (dudect)
+
+All security-critical functions are empirically verified using the dudect methodology
+(Welch's t-test on execution times, |t| < 4.5 threshold):
+
+✓ `ama_consttime_memcmp` — memory comparison
+✓ `ama_consttime_swap` — conditional swap
+✓ `ama_consttime_copy` — conditional copy
+✓ `ama_consttime_lookup` — table lookup
+✓ `ama_secure_memzero` — memory zeroing
+✓ Ed25519 signing (key-independent timing)
+✓ AES-GCM tag verification
+✓ HKDF key derivation (IKM-independent)
+✓ HMAC-SHA256 verification comparison
+✓ Kyber-1024 decapsulation (constant-time implicit rejection)
+
+See [docs/constant-time-testing.md](docs/constant-time-testing.md) for methodology and usage.
+
+### Continuous Fuzzing (OSS-Fuzz)
+
+12 libFuzzer fuzz targets with seed corpora and fuzzing dictionaries, prepared
+for [OSS-Fuzz](https://github.com/google/oss-fuzz) onboarding:
+
+✓ All fuzz targets have `LLVMFuzzerTestOneInput` entry points
+✓ No hardcoded paths or environment dependencies
+✓ Seed corpora for improved fuzzing efficiency
+✓ Algorithm-specific fuzzing dictionaries
+✓ Multi-engine support (libFuzzer, AFL, Honggfuzz)
+✓ Multi-sanitizer support (ASan, MSan, UBSan)
+
+See [docs/oss-fuzz-onboarding.md](docs/oss-fuzz-onboarding.md) for onboarding details.
 
 ## Migration Guide
 

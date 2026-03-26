@@ -1,0 +1,10 @@
+# Argon2id fuzzing dictionary
+
+# Common password patterns
+kw_empty=""
+kw_short="pass"
+kw_common="password"
+
+# Salt patterns (minimum 8 bytes)
+kw_salt_min="\x00\x00\x00\x00\x00\x00\x00\x00"
+kw_salt_16="\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"

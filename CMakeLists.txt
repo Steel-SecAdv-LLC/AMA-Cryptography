@@ -22,6 +22,7 @@ option(AMA_USE_NATIVE_PQC "Enable native PQC implementations (ML-DSA-65, Kyber-1
 option(AMA_AES_CONSTTIME "Use constant-time bitsliced AES S-box (eliminates cache-timing)" ON)
 option(AMA_ED25519_ASSEMBLY "Enable ed25519-donna x86-64 assembly scalar mult" OFF)
 option(AMA_ENABLE_NATIVE_ARCH "Use -march=native for host-optimized builds" OFF)
+option(AMA_ENABLE_DUDECT "Build dudect constant-time verification tests" OFF)
 
 # MSVC lacks __uint128_t required by fe51 field arithmetic. Auto-enable the
 # donna shim (which provides its own field ops) so Windows builds compile.
@@ -362,6 +363,7 @@ message(STATUS "  SIMD:           ${AMA_ENABLE_SIMD}")
 message(STATUS "  AVX2:           ${AMA_ENABLE_AVX2}")
 message(STATUS "  Sanitizers:     ${AMA_ENABLE_SANITIZERS}")
 message(STATUS "  Fuzzing:        ${AMA_BUILD_FUZZ}")
+message(STATUS "  dudect:         ${AMA_ENABLE_DUDECT}")
 message(STATUS "  AES consttime:  ${AMA_AES_CONSTTIME}")
 message(STATUS "  LTO:            ${AMA_ENABLE_LTO}")
 if(MSVC AND AMA_ED25519_ASSEMBLY)

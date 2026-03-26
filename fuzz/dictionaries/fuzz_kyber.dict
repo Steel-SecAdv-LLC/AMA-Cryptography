@@ -1,0 +1,12 @@
+# Kyber-1024 fuzzing dictionary
+# Key encapsulation mechanism tokens
+
+# 32-byte seed patterns
+kw_zero_seed="\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+
+# Kyber polynomial coefficient bounds (q = 3329)
+kw_q_high="\x0d\x01"
+kw_q_low="\x00\x01"
+
+# Compression boundary values
+kw_boundary="\x80\x00"

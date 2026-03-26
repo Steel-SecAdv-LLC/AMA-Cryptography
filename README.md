@@ -665,6 +665,8 @@ The test suite includes:
 - Performance regression tests with tiered tolerances
 - NIST ACVP vector validation (815 vectors across 12 algorithm functions — see [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md))
 - Fuzz harnesses for 12 C targets (`fuzz/`): AES-GCM, Argon2, ChaCha20-Poly1305, consttime, Dilithium, Ed25519, HKDF, Kyber, secp256k1, SHA3, SPHINCS+, X25519
+- Empirical constant-time verification via [dudect](docs/constant-time-testing.md) (Welch's t-test on execution times)
+- [OSS-Fuzz](docs/oss-fuzz-onboarding.md) onboarding preparation for continuous 24/7 fuzzing
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
@@ -700,6 +702,7 @@ GitHub Actions automatically tests:
 | Security | `security.yml` | pip-audit, bandit, Semgrep, secret scanning |
 | Static Analysis | `static-analysis.yml` | CodeQL analysis |
 | Fuzzing | `fuzzing.yml` | C fuzz harnesses (12 targets) |
+| dudect | `dudect.yml` | Empirical constant-time verification |
 | Auto Docs | `auto-docs.yml` | Auto-generate and deploy documentation |
 | Wiki Sync | `wiki-sync.yml` | Auto-sync wiki/ to GitHub Wiki |
 

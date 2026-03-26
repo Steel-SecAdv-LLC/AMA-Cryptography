@@ -1,0 +1,14 @@
+# Constant-time operations fuzzing dictionary
+
+# Equal byte patterns
+kw_zeros="\x00\x00\x00\x00\x00\x00\x00\x00"
+kw_ones="\xff\xff\xff\xff\xff\xff\xff\xff"
+kw_pattern="\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa"
+
+# Single-bit differences
+kw_bit0="\x01"
+kw_bit7="\x80"
+
+# Boundary values
+kw_max="\xff"
+kw_min="\x00"
