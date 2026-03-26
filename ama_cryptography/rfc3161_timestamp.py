@@ -134,10 +134,15 @@ class MockTSA:
 
         Checks thread-local flag first (set by get_timestamp mock-mode),
         then falls back to the module-level global (set by test fixtures).
+        The global read is guarded by ``_MOCK_TSA_LOCK`` so that a
+        concurrent ``_MOCK_TSA_ALLOWED = True`` assignment in another
+        thread is observed atomically.
         """
         if getattr(_mock_tsa_local, "allowed", False):
             return
-        if not _MOCK_TSA_ALLOWED:
+        with _MOCK_TSA_LOCK:
+            allowed = _MOCK_TSA_ALLOWED
+        if not allowed:
             raise RuntimeError(
                 "MockTSA is only available in testing contexts. "
                 "Set ama_cryptography.rfc3161_timestamp._MOCK_TSA_ALLOWED = True "
