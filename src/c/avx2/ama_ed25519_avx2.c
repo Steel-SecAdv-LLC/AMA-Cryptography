@@ -23,6 +23,13 @@
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
 
+/* Portable "unused" annotation: GCC/Clang __attribute__, MSVC no-op. */
+#if defined(__GNUC__) || defined(__clang__)
+#define AMA_UNUSED __attribute__((unused))
+#else
+#define AMA_UNUSED
+#endif
+
 /* Ed25519 field prime: p = 2^255 - 19 */
 /* Radix-2^51 limbs: each limb fits in 64 bits with room for carries */
 
@@ -90,7 +97,7 @@ void ama_fe51_sub_x4_avx2(fe51 r[4], const fe51 a[4], const fe51 b[4]) {
  * Final carry from limb 4 is multiplied by 19 and added to limb 0
  * (because 2^255 = 19 mod p).
  * ============================================================================ */
-static inline __attribute__((unused))
+static inline AMA_UNUSED
 void fe51_carry(fe51 *f) {
     const uint64_t mask51 = (1ULL << 51) - 1;
     uint64_t c;

@@ -23,6 +23,13 @@
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
 
+/* Portable "unused" annotation: GCC/Clang __attribute__, MSVC no-op. */
+#if defined(__GNUC__) || defined(__clang__)
+#define AMA_UNUSED __attribute__((unused))
+#else
+#define AMA_UNUSED
+#endif
+
 /* ML-DSA-65 parameters */
 #define DILITHIUM_Q        8380417
 #define DILITHIUM_N        256
@@ -41,7 +48,7 @@
  *   t = (int32_t)(a * QINV)   (low 32 bits)
  *   r = (a - t * q) >> 32
  * ============================================================================ */
-static inline __attribute__((unused))
+static inline AMA_UNUSED
 __m256i montgomery_reduce_avx2(__m256i a_lo, __m256i a_hi) {
     const __m256i q    = _mm256_set1_epi32(DILITHIUM_Q);
     const __m256i qinv = _mm256_set1_epi32(DILITHIUM_QINV);
