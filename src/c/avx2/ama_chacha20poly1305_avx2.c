@@ -182,8 +182,13 @@ void ama_poly1305_init_avx2(poly1305_state_avx2 *st,
 }
 
 void ama_poly1305_block_avx2(poly1305_state_avx2 *st,
-                              const uint8_t msg[16], int final_block) {
-    /* Add message block to accumulator */
+                              const uint8_t msg[16], int partial_block) {
+    /* Add message block to accumulator.
+     * partial_block: set to 1 for the final block ONLY if it is shorter
+     * than 16 bytes (padded with zeros).  For all full 16-byte blocks
+     * (including a full-length final block), pass 0.
+     * Per RFC 8439, the high bit (2^128) is set for every full block
+     * and cleared only for the padded partial tail block. */
     uint64_t m0, m1;
     memcpy(&m0, msg, 8);
     memcpy(&m1, msg + 8, 8);
@@ -191,7 +196,7 @@ void ama_poly1305_block_avx2(poly1305_state_avx2 *st,
     uint64_t h0 = st->h[0] + (m0 & 0xFFFFFFFFFFF);        /* 44 bits */
     uint64_t h1 = st->h[1] + (((m0 >> 44) | (m1 << 20)) & 0xFFFFFFFFFFF);
     uint64_t h2 = st->h[2] + ((m1 >> 24));
-    if (!final_block) h2 += (1ULL << 40); /* hibit = 1 for non-final */
+    if (!partial_block) h2 += (1ULL << 40); /* hibit = 1 for full blocks */
 
     /* Multiply h * r using 128-bit intermediates */
     uint64_t r0 = st->r[0] & 0xFFFFFFFFFFF;     /* 44-bit limbs */
@@ -221,7 +226,7 @@ void ama_poly1305_block_avx2(poly1305_state_avx2 *st,
 }
 
 void ama_poly1305_finish_avx2(poly1305_state_avx2 *st, uint8_t tag[16]) {
-    /* Final reduction */
+    /* Final carry propagation */
     uint64_t h0 = st->h[0], h1 = st->h[1], h2 = st->h[2];
     uint64_t c;
     c = h1 >> 44; h1 &= 0xFFFFFFFFFFF;
@@ -230,15 +235,35 @@ void ama_poly1305_finish_avx2(poly1305_state_avx2 *st, uint8_t tag[16]) {
     h1 += c; c = h1 >> 44; h1 &= 0xFFFFFFFFFFF;
     h2 += c; c = h2 >> 42; h2 &= 0x3FFFFFFFFFF;
     h0 += c * 5;
+    c = h0 >> 44; h0 &= 0xFFFFFFFFFFF;
+    h1 += c;
 
-    /* Recombine 44-bit limbs into 128-bit (two 64-bit words) FIRST */
-    uint64_t g0 = (h0 & 0xFFFFFFFFFFF) | (h1 << 44);
-    uint64_t g1 = (h1 >> 20) | (h2 << 24);
+    /* Conditional subtraction of p = 2^130 - 5 (RFC 8439 Section 2.5.1).
+     * Compute g = h + 5. If g >= 2^130, then h >= p, so use g (mod 2^130).
+     * Otherwise keep h. This is the mandatory final reduction. */
+    uint64_t g0 = h0 + 5;
+    c = g0 >> 44; g0 &= 0xFFFFFFFFFFF;
+    uint64_t g1 = h1 + c;
+    c = g1 >> 44; g1 &= 0xFFFFFFFFFFF;
+    uint64_t g2 = h2 + c - (1ULL << 42); /* subtract 2^130 */
+
+    /* If g2 didn't underflow (bit 63 clear), h >= p, so select g.
+     * mask = 0 if h >= p (use g), ~0 if h < p (use h). */
+    uint64_t mask = (g2 >> 63) - 1; /* 0 if bit63 set (h<p), ~0 if clear (h>=p) */
+    /* Invert: mask = ~0 means h < p (keep h), 0 means h >= p (use g) */
+    mask = ~mask;
+    h0 = (h0 & mask) | (g0 & ~mask);
+    h1 = (h1 & mask) | (g1 & ~mask);
+    h2 = (h2 & mask) | (g2 & ~mask);
+
+    /* Recombine 44-bit limbs into 128-bit (two 64-bit words) */
+    uint64_t lo = (h0 & 0xFFFFFFFFFFF) | (h1 << 44);
+    uint64_t hi = (h1 >> 20) | (h2 << 24);
 
     /* Compute tag = (h + s) mod 2^128 */
-    ama_uint128 f = AMA_U128_ADD64(AMA_U128_FROM64(g0), st->pad[0]);
+    ama_uint128 f = AMA_U128_ADD64(AMA_U128_FROM64(lo), st->pad[0]);
     uint64_t tag_lo = AMA_U128_LO(f);
-    f = AMA_U128_ADD64(AMA_U128_ADD64(AMA_U128_FROM64(g1), st->pad[1]),
+    f = AMA_U128_ADD64(AMA_U128_ADD64(AMA_U128_FROM64(hi), st->pad[1]),
                        AMA_U128_HI(f));
     uint64_t tag_hi = AMA_U128_LO(f);
     memcpy(tag, &tag_lo, 8);

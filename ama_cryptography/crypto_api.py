@@ -2058,8 +2058,16 @@ def verify_crypto_package(
         except Exception:
             results["kem"] = False
 
-    # Aggregate
-    results["all_valid"] = all(results.values())
+    # Aggregate: separate core 4-layer validity from optional add-ons.
+    # Core layers: primary_signature, hmac, hkdf_keys (+ pqc_signature if present
+    # in core flow).  Optional add-ons: sphincs, kem.
+    _core_keys = {"primary_signature", "hmac", "hkdf_keys", "pqc_signature"}
+    _optional_keys = {"sphincs", "kem"}
+    core_results = {k: v for k, v in results.items() if k in _core_keys}
+    results["core_valid"] = all(core_results.values()) if core_results else False
+    results["all_valid"] = all(
+        v for k, v in results.items() if k not in ("core_valid", "all_valid")
+    )
 
     return results
 

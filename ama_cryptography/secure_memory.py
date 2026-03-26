@@ -150,10 +150,7 @@ def _try_native_ama_memzero() -> "Optional[Callable[[Union[bytearray, memoryview
 
         def _zero_via_native(data: Union[bytearray, memoryview]) -> None:
             length = len(data)
-            if isinstance(data, memoryview):
-                buf = (ctypes.c_char * length).from_buffer(data)
-            else:
-                buf = (ctypes.c_char * length).from_buffer(data)
+            buf = (ctypes.c_char * length).from_buffer(data)
             fn(ctypes.addressof(buf), length)
 
         return _zero_via_native
@@ -178,10 +175,7 @@ def _try_libc_explicit_bzero() -> "Optional[Callable[[Union[bytearray, memoryvie
 
         def _zero_via_bzero(data: Union[bytearray, memoryview]) -> None:
             length = len(data)
-            if isinstance(data, memoryview):
-                buf = (ctypes.c_char * length).from_buffer(data)
-            else:
-                buf = (ctypes.c_char * length).from_buffer(data)
+            buf = (ctypes.c_char * length).from_buffer(data)
             fn(ctypes.addressof(buf), length)
 
         return _zero_via_bzero
@@ -206,10 +200,7 @@ def _try_libc_memset_s() -> "Optional[Callable[[Union[bytearray, memoryview]], N
 
         def _zero_via_memset_s(data: Union[bytearray, memoryview]) -> None:
             length = len(data)
-            if isinstance(data, memoryview):
-                buf = (ctypes.c_char * length).from_buffer(data)
-            else:
-                buf = (ctypes.c_char * length).from_buffer(data)
+            buf = (ctypes.c_char * length).from_buffer(data)
             fn(ctypes.addressof(buf), length, 0, length)
 
         return _zero_via_memset_s

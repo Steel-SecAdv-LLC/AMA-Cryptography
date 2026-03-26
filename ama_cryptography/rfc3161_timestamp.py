@@ -28,6 +28,7 @@ Use Cases:
 """
 
 import hashlib
+import hmac as _hmac_mod
 import os as _os_mod
 import struct
 import threading
@@ -177,8 +178,10 @@ class MockTSA:
             payload = token[: -(32 + 32)]
 
             # S3 fix: Verify HMAC (not raw hash concatenation).
+            # Use constant-time comparison to be consistent with the
+            # project's security posture (CONTRIBUTING.md).
             expected_mac = _hmac_sha256(nonce, payload)
-            if mac != expected_mac:
+            if not _hmac_mod.compare_digest(mac, expected_mac):
                 return False
 
             # Extract embedded data_hash from the payload and compare.
@@ -251,7 +254,7 @@ def get_timestamp(
     """
     if tsa_mode not in ("online", "mock", "disabled"):
         raise ValueError(
-            f"Unsupported tsa_mode: {tsa_mode!r}. " "Supported: 'online', 'mock', 'disabled'"
+            f"Unsupported tsa_mode: {tsa_mode!r}. Supported: 'online', 'mock', 'disabled'"
         )
 
     # ---- Compute data hash (needed for all modes) ----
