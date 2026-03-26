@@ -22,6 +22,7 @@
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
+#include "ama_uint128.h"
 
 /* ChaCha20 constants: "expand 32-byte k" */
 #define CHACHA_C0 0x61707865
@@ -200,17 +201,20 @@ void ama_poly1305_block_avx2(poly1305_state_avx2 *st,
     uint64_t s1 = r1 * 5; /* r1 * 5 for modular reduction */
     uint64_t s2 = r2 * 5;
 
-    __uint128_t d0 = (__uint128_t)h0 * r0 + (__uint128_t)h1 * s2 + (__uint128_t)h2 * s1;
-    __uint128_t d1 = (__uint128_t)h0 * r1 + (__uint128_t)h1 * r0 + (__uint128_t)h2 * s2;
-    __uint128_t d2 = (__uint128_t)h0 * r2 + (__uint128_t)h1 * r1 + (__uint128_t)h2 * r0;
+    ama_uint128 d0 = AMA_U128_ADD(AMA_U128_ADD(
+                     AMA_MUL64(h0, r0), AMA_MUL64(h1, s2)), AMA_MUL64(h2, s1));
+    ama_uint128 d1 = AMA_U128_ADD(AMA_U128_ADD(
+                     AMA_MUL64(h0, r1), AMA_MUL64(h1, r0)), AMA_MUL64(h2, s2));
+    ama_uint128 d2 = AMA_U128_ADD(AMA_U128_ADD(
+                     AMA_MUL64(h0, r2), AMA_MUL64(h1, r1)), AMA_MUL64(h2, r0));
 
     /* Carry propagation */
     uint64_t c;
-    st->h[0] = (uint64_t)d0 & 0xFFFFFFFFFFF; c = (uint64_t)(d0 >> 44);
-    d1 += c;
-    st->h[1] = (uint64_t)d1 & 0xFFFFFFFFFFF; c = (uint64_t)(d1 >> 44);
-    d2 += c;
-    st->h[2] = (uint64_t)d2 & 0x3FFFFFFFFFF;   c = (uint64_t)(d2 >> 42);
+    st->h[0] = AMA_U128_LO(d0) & 0xFFFFFFFFFFF; c = AMA_U128_LO(AMA_U128_SHR(d0, 44));
+    d1 = AMA_U128_ADD64(d1, c);
+    st->h[1] = AMA_U128_LO(d1) & 0xFFFFFFFFFFF; c = AMA_U128_LO(AMA_U128_SHR(d1, 44));
+    d2 = AMA_U128_ADD64(d2, c);
+    st->h[2] = AMA_U128_LO(d2) & 0x3FFFFFFFFFF;   c = AMA_U128_LO(AMA_U128_SHR(d2, 42));
     st->h[0] += c * 5;
     c = st->h[0] >> 44; st->h[0] &= 0xFFFFFFFFFFF;
     st->h[1] += c;
@@ -232,10 +236,11 @@ void ama_poly1305_finish_avx2(poly1305_state_avx2 *st, uint8_t tag[16]) {
     uint64_t g1 = (h1 >> 20) | (h2 << 24);
 
     /* Compute tag = (h + s) mod 2^128 */
-    __uint128_t f = (__uint128_t)g0 + st->pad[0];
-    uint64_t tag_lo = (uint64_t)f;
-    f = (__uint128_t)g1 + st->pad[1] + (uint64_t)(f >> 64);
-    uint64_t tag_hi = (uint64_t)f;
+    ama_uint128 f = AMA_U128_ADD64(AMA_U128_FROM64(g0), st->pad[0]);
+    uint64_t tag_lo = AMA_U128_LO(f);
+    f = AMA_U128_ADD64(AMA_U128_ADD64(AMA_U128_FROM64(g1), st->pad[1]),
+                       AMA_U128_HI(f));
+    uint64_t tag_hi = AMA_U128_LO(f);
     memcpy(tag, &tag_lo, 8);
     memcpy(tag + 8, &tag_hi, 8);
 }

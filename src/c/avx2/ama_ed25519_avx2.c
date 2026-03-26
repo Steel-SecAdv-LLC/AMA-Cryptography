@@ -22,6 +22,7 @@
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
+#include "ama_uint128.h"
 
 /* Portable "unused" annotation: GCC/Clang __attribute__, MSVC no-op. */
 #if defined(__GNUC__) || defined(__clang__)
@@ -168,51 +169,56 @@ void ama_fe51_mul_avx2(fe51 *r, const fe51 *a, const fe51 *b) {
     b19[3] = b->v[3] * 19;
     b19[4] = b->v[4] * 19;
 
-    /* Accumulate products into 128-bit intermediates using __uint128_t
-     * (which benefits from AVX2 register pressure reduction) */
-    __uint128_t t0 = (__uint128_t)a->v[0] * b->v[0]
-                   + (__uint128_t)a->v[1] * b19[4]
-                   + (__uint128_t)a->v[2] * b19[3]
-                   + (__uint128_t)a->v[3] * b19[2]
-                   + (__uint128_t)a->v[4] * b19[1];
+    /* Accumulate products into 128-bit intermediates using portable
+     * ama_uint128 (GCC/Clang: native __uint128_t; MSVC: _umul128) */
+    ama_uint128 t0 = AMA_U128_ADD(AMA_U128_ADD(AMA_U128_ADD(AMA_U128_ADD(
+                     AMA_MUL64(a->v[0], b->v[0]),
+                     AMA_MUL64(a->v[1], b19[4])),
+                     AMA_MUL64(a->v[2], b19[3])),
+                     AMA_MUL64(a->v[3], b19[2])),
+                     AMA_MUL64(a->v[4], b19[1]));
 
-    __uint128_t t1 = (__uint128_t)a->v[0] * b->v[1]
-                   + (__uint128_t)a->v[1] * b->v[0]
-                   + (__uint128_t)a->v[2] * b19[4]
-                   + (__uint128_t)a->v[3] * b19[3]
-                   + (__uint128_t)a->v[4] * b19[2];
+    ama_uint128 t1 = AMA_U128_ADD(AMA_U128_ADD(AMA_U128_ADD(AMA_U128_ADD(
+                     AMA_MUL64(a->v[0], b->v[1]),
+                     AMA_MUL64(a->v[1], b->v[0])),
+                     AMA_MUL64(a->v[2], b19[4])),
+                     AMA_MUL64(a->v[3], b19[3])),
+                     AMA_MUL64(a->v[4], b19[2]));
 
-    __uint128_t t2 = (__uint128_t)a->v[0] * b->v[2]
-                   + (__uint128_t)a->v[1] * b->v[1]
-                   + (__uint128_t)a->v[2] * b->v[0]
-                   + (__uint128_t)a->v[3] * b19[4]
-                   + (__uint128_t)a->v[4] * b19[3];
+    ama_uint128 t2 = AMA_U128_ADD(AMA_U128_ADD(AMA_U128_ADD(AMA_U128_ADD(
+                     AMA_MUL64(a->v[0], b->v[2]),
+                     AMA_MUL64(a->v[1], b->v[1])),
+                     AMA_MUL64(a->v[2], b->v[0])),
+                     AMA_MUL64(a->v[3], b19[4])),
+                     AMA_MUL64(a->v[4], b19[3]));
 
-    __uint128_t t3 = (__uint128_t)a->v[0] * b->v[3]
-                   + (__uint128_t)a->v[1] * b->v[2]
-                   + (__uint128_t)a->v[2] * b->v[1]
-                   + (__uint128_t)a->v[3] * b->v[0]
-                   + (__uint128_t)a->v[4] * b19[4];
+    ama_uint128 t3 = AMA_U128_ADD(AMA_U128_ADD(AMA_U128_ADD(AMA_U128_ADD(
+                     AMA_MUL64(a->v[0], b->v[3]),
+                     AMA_MUL64(a->v[1], b->v[2])),
+                     AMA_MUL64(a->v[2], b->v[1])),
+                     AMA_MUL64(a->v[3], b->v[0])),
+                     AMA_MUL64(a->v[4], b19[4]));
 
-    __uint128_t t4 = (__uint128_t)a->v[0] * b->v[4]
-                   + (__uint128_t)a->v[1] * b->v[3]
-                   + (__uint128_t)a->v[2] * b->v[2]
-                   + (__uint128_t)a->v[3] * b->v[1]
-                   + (__uint128_t)a->v[4] * b->v[0];
+    ama_uint128 t4 = AMA_U128_ADD(AMA_U128_ADD(AMA_U128_ADD(AMA_U128_ADD(
+                     AMA_MUL64(a->v[0], b->v[4]),
+                     AMA_MUL64(a->v[1], b->v[3])),
+                     AMA_MUL64(a->v[2], b->v[2])),
+                     AMA_MUL64(a->v[3], b->v[1])),
+                     AMA_MUL64(a->v[4], b->v[0]));
 
     /* Carry propagation */
     const uint64_t mask51 = (1ULL << 51) - 1;
     uint64_t c;
 
-    r->v[0] = (uint64_t)t0 & mask51; c = (uint64_t)(t0 >> 51);
-    t1 += c;
-    r->v[1] = (uint64_t)t1 & mask51; c = (uint64_t)(t1 >> 51);
-    t2 += c;
-    r->v[2] = (uint64_t)t2 & mask51; c = (uint64_t)(t2 >> 51);
-    t3 += c;
-    r->v[3] = (uint64_t)t3 & mask51; c = (uint64_t)(t3 >> 51);
-    t4 += c;
-    r->v[4] = (uint64_t)t4 & mask51; c = (uint64_t)(t4 >> 51);
+    r->v[0] = AMA_U128_LO(t0) & mask51; c = AMA_U128_LO(AMA_U128_SHR(t0, 51));
+    t1 = AMA_U128_ADD64(t1, c);
+    r->v[1] = AMA_U128_LO(t1) & mask51; c = AMA_U128_LO(AMA_U128_SHR(t1, 51));
+    t2 = AMA_U128_ADD64(t2, c);
+    r->v[2] = AMA_U128_LO(t2) & mask51; c = AMA_U128_LO(AMA_U128_SHR(t2, 51));
+    t3 = AMA_U128_ADD64(t3, c);
+    r->v[3] = AMA_U128_LO(t3) & mask51; c = AMA_U128_LO(AMA_U128_SHR(t3, 51));
+    t4 = AMA_U128_ADD64(t4, c);
+    r->v[4] = AMA_U128_LO(t4) & mask51; c = AMA_U128_LO(AMA_U128_SHR(t4, 51));
     r->v[0] += c * 19;
     fe51_carry(r);
 }
@@ -235,37 +241,42 @@ void ama_fe51_sq_avx2(fe51 *r, const fe51 *a) {
     a19[3] = a->v[3] * 19;
     a19[4] = a->v[4] * 19;
 
-    __uint128_t t0 = (__uint128_t)a->v[0] * a->v[0]
-                   + (__uint128_t)a2[1] * a19[4]
-                   + (__uint128_t)a2[2] * a19[3];
+    ama_uint128 t0 = AMA_U128_ADD(AMA_U128_ADD(
+                     AMA_MUL64(a->v[0], a->v[0]),
+                     AMA_MUL64(a2[1], a19[4])),
+                     AMA_MUL64(a2[2], a19[3]));
 
-    __uint128_t t1 = (__uint128_t)a2[0] * a->v[1]
-                   + (__uint128_t)a2[2] * a19[4]
-                   + (__uint128_t)a->v[3] * a19[3];
+    ama_uint128 t1 = AMA_U128_ADD(AMA_U128_ADD(
+                     AMA_MUL64(a2[0], a->v[1]),
+                     AMA_MUL64(a2[2], a19[4])),
+                     AMA_MUL64(a->v[3], a19[3]));
 
-    __uint128_t t2 = (__uint128_t)a2[0] * a->v[2]
-                   + (__uint128_t)a->v[1] * a->v[1]
-                   + (__uint128_t)a2[3] * a19[4];
+    ama_uint128 t2 = AMA_U128_ADD(AMA_U128_ADD(
+                     AMA_MUL64(a2[0], a->v[2]),
+                     AMA_MUL64(a->v[1], a->v[1])),
+                     AMA_MUL64(a2[3], a19[4]));
 
-    __uint128_t t3 = (__uint128_t)a2[0] * a->v[3]
-                   + (__uint128_t)a2[1] * a->v[2]
-                   + (__uint128_t)a->v[4] * a19[4];
+    ama_uint128 t3 = AMA_U128_ADD(AMA_U128_ADD(
+                     AMA_MUL64(a2[0], a->v[3]),
+                     AMA_MUL64(a2[1], a->v[2])),
+                     AMA_MUL64(a->v[4], a19[4]));
 
-    __uint128_t t4 = (__uint128_t)a2[0] * a->v[4]
-                   + (__uint128_t)a2[1] * a->v[3]
-                   + (__uint128_t)a->v[2] * a->v[2];
+    ama_uint128 t4 = AMA_U128_ADD(AMA_U128_ADD(
+                     AMA_MUL64(a2[0], a->v[4]),
+                     AMA_MUL64(a2[1], a->v[3])),
+                     AMA_MUL64(a->v[2], a->v[2]));
 
     const uint64_t mask51 = (1ULL << 51) - 1;
     uint64_t c;
-    r->v[0] = (uint64_t)t0 & mask51; c = (uint64_t)(t0 >> 51);
-    t1 += c;
-    r->v[1] = (uint64_t)t1 & mask51; c = (uint64_t)(t1 >> 51);
-    t2 += c;
-    r->v[2] = (uint64_t)t2 & mask51; c = (uint64_t)(t2 >> 51);
-    t3 += c;
-    r->v[3] = (uint64_t)t3 & mask51; c = (uint64_t)(t3 >> 51);
-    t4 += c;
-    r->v[4] = (uint64_t)t4 & mask51; c = (uint64_t)(t4 >> 51);
+    r->v[0] = AMA_U128_LO(t0) & mask51; c = AMA_U128_LO(AMA_U128_SHR(t0, 51));
+    t1 = AMA_U128_ADD64(t1, c);
+    r->v[1] = AMA_U128_LO(t1) & mask51; c = AMA_U128_LO(AMA_U128_SHR(t1, 51));
+    t2 = AMA_U128_ADD64(t2, c);
+    r->v[2] = AMA_U128_LO(t2) & mask51; c = AMA_U128_LO(AMA_U128_SHR(t2, 51));
+    t3 = AMA_U128_ADD64(t3, c);
+    r->v[3] = AMA_U128_LO(t3) & mask51; c = AMA_U128_LO(AMA_U128_SHR(t3, 51));
+    t4 = AMA_U128_ADD64(t4, c);
+    r->v[4] = AMA_U128_LO(t4) & mask51; c = AMA_U128_LO(AMA_U128_SHR(t4, 51));
     r->v[0] += c * 19;
     c = r->v[0] >> 51; r->v[0] &= mask51;
     r->v[1] += c;
