@@ -28,7 +28,6 @@ Use Cases:
 """
 
 import hashlib
-import hmac as _hmac_mod
 import os as _os_mod
 import struct
 import threading
@@ -87,8 +86,10 @@ _MOCK_MAGIC = b"AMA_MOCK_TSA\x00\x01\x00\x00"
 
 # S3 fix: Guard flag — MockTSA is only available in testing contexts.
 # Set this to True in test fixtures / conftest.py before using MockTSA.
+# Thread-local storage so concurrent threads don't leak the allowed state.
 _MOCK_TSA_ALLOWED: bool = False
 _MOCK_TSA_LOCK = threading.Lock()
+_mock_tsa_local = threading.local()
 
 
 def _hmac_sha256(key: bytes, msg: bytes) -> bytes:
@@ -129,7 +130,13 @@ class MockTSA:
 
     @staticmethod
     def _check_allowed() -> None:
-        """Raise if MockTSA is used outside a testing context."""
+        """Raise if MockTSA is used outside a testing context.
+
+        Checks thread-local flag first (set by get_timestamp mock-mode),
+        then falls back to the module-level global (set by test fixtures).
+        """
+        if getattr(_mock_tsa_local, "allowed", False):
+            return
         if not _MOCK_TSA_ALLOWED:
             raise RuntimeError(
                 "MockTSA is only available in testing contexts. "
@@ -179,9 +186,11 @@ class MockTSA:
 
             # S3 fix: Verify HMAC (not raw hash concatenation).
             # Use constant-time comparison to be consistent with the
-            # project's security posture (CONTRIBUTING.md).
+            # project's security posture (CONTRIBUTING.md / INVARIANT-1).
+            from ama_cryptography.secure_memory import constant_time_compare
+
             expected_mac = _hmac_sha256(nonce, payload)
-            if not _hmac_mod.compare_digest(mac, expected_mac):
+            if not constant_time_compare(mac, expected_mac):
                 return False
 
             # Extract embedded data_hash from the payload and compare.
@@ -202,7 +211,7 @@ def get_timestamp(
     hash_algorithm: str = "sha3-256",
     certificate_file: Optional[str] = None,
     tsa_mode: str = "online",
-) -> Optional[TimestampResult]:
+) -> TimestampResult:
     """
     Obtain RFC 3161 timestamp for data from a Time-Stamp Authority.
 
@@ -224,12 +233,13 @@ def get_timestamp(
         tsa_mode: Operating mode for timestamping:
                   - "online" (default): contact a real TSA server
                   - "mock": use MockTSA for offline / testing purposes
-                  - "disabled": skip timestamping, return a TimestampResult
-                    with an empty token
+                  - "disabled": skip timestamping; returns a TimestampResult
+                    with tsa_url='disabled' and an empty token
 
     Returns:
-        TimestampResult with timestamp token and metadata, or None when
-        tsa_mode is "disabled".
+        TimestampResult with timestamp token and metadata.  When tsa_mode
+        is ``"disabled"``, returns a TimestampResult with ``tsa_url='disabled'``
+        and ``token=b""``.  Never returns ``None``.
 
     Raises:
         TimestampUnavailableError: If rfc3161ng library not installed (online mode)
@@ -284,16 +294,13 @@ def get_timestamp(
     # ---- Mock mode: generate a self-signed mock token ----
     if tsa_mode == "mock":
         # Temporarily allow MockTSA for this call (S3: production guard).
-        # Use a lock to prevent a TOCTOU race where concurrent threads
-        # could leave _MOCK_TSA_ALLOWED permanently True.
-        global _MOCK_TSA_ALLOWED
-        with _MOCK_TSA_LOCK:
-            prev = _MOCK_TSA_ALLOWED
-            _MOCK_TSA_ALLOWED = True
-            try:
-                token = MockTSA.timestamp(data_hash, hash_algorithm)
-            finally:
-                _MOCK_TSA_ALLOWED = prev
+        # Use thread-local flag so concurrent threads never observe each
+        # other's allowed state — eliminates the TOCTOU race entirely.
+        _mock_tsa_local.allowed = True
+        try:
+            token = MockTSA.timestamp(data_hash, hash_algorithm)
+        finally:
+            _mock_tsa_local.allowed = False
         return TimestampResult(
             token=token,
             tsa_url="mock",

@@ -70,7 +70,9 @@ class TestAESGCMNonceCounter:
         except RuntimeError:
             pytest.skip("AES-GCM native backend not available")
 
-        # S6 fix: Use configure_ephemeral() before instantiation
+        # S6 fix: Use configure_ephemeral() before instantiation.
+        # Clear any counters from prior tests before switching to ephemeral.
+        AESGCMProvider._encrypt_counters = {}
         AESGCMProvider.configure_ephemeral(True)
         provider = AESGCMProvider()
         key = os.urandom(32)

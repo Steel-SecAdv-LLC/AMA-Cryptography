@@ -74,13 +74,28 @@ __m256i montgomery_reduce_avx2(__m256i a_lo, __m256i a_hi) {
 /* ============================================================================
  * AVX2 Barrett reduction for Dilithium
  *
- * Reduces coefficient to range [0, q) using Barrett reduction.
- * Input range: [-2q, 2q)
+ * Reduces coefficient toward range [0, q) using Barrett reduction.
+ * For q = 8380417 (~2^23):
+ *   Barrett constant v = floor(2^23 / q) + 1 = 2  (since 2^23 / q ≈ 1.0)
+ *   More precisely: we use the approximation t = (a + 2^22) >> 23, then
+ *   result = a - t * q.  This yields a result in (-q, q).
+ *   Follow with caddq to bring negative values into [0, q).
+ *
+ * Input range: arbitrary int32 (up to ~2^31)
+ * Output range: (-q, q) — caller must apply caddq for [0, q).
+ *
+ * Barrett constant derivation:
+ *   v = floor(2^s / q) where s = 23
+ *   v = floor(8388608 / 8380417) = 1
+ *   Rounding: t = (a * v + 2^(s-1)) >> s = (a + 2^22) >> 23
+ *   result = a - t * q
  * ============================================================================ */
 static inline __m256i barrett_reduce_dilithium_avx2(__m256i a) {
     const __m256i q = _mm256_set1_epi32(DILITHIUM_Q);
-    /* Approximate: t = round(a * 2^{-23}) using arithmetic shift */
-    __m256i t = _mm256_srai_epi32(a, 23);
+    const __m256i half = _mm256_set1_epi32(1 << 22); /* 2^22 for rounding */
+    /* t = (a + 2^22) >> 23  — Barrett quotient approximation with rounding */
+    __m256i t = _mm256_add_epi32(a, half);
+    t = _mm256_srai_epi32(t, 23);
     t = _mm256_mullo_epi32(t, q);
     return _mm256_sub_epi32(a, t);
 }

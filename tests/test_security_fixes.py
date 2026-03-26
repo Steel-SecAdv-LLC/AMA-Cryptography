@@ -200,42 +200,50 @@ class TestS4_MockTimestampExceptionNotSwallowed:
 
 
 class TestS5_AcquireTimestampNoneGuard:
-    """S5: _acquire_timestamp must raise when get_timestamp returns None."""
+    """S5: _acquire_timestamp must raise when get_timestamp returns empty token."""
 
-    def test_none_return_raises_in_mock_mode(self) -> None:
-        """If get_timestamp() returns None in mock mode, raise RuntimeError."""
+    def test_empty_token_raises_in_mock_mode(self) -> None:
+        """If get_timestamp() returns empty token in mock mode, raise RuntimeError."""
         from ama_cryptography.crypto_api import CryptoPackageConfig, _acquire_timestamp
+        from ama_cryptography.rfc3161_timestamp import TimestampResult
 
         config = CryptoPackageConfig(
             include_timestamp=True,
             tsa_mode="mock",
         )
 
+        empty_result = TimestampResult(
+            token=b"", tsa_url="mock", hash_algorithm="sha3-256", data_hash=b""
+        )
         with patch(
             "ama_cryptography.crypto_api.get_timestamp",
-            return_value=None,
+            return_value=empty_result,
         ):
-            with pytest.raises(RuntimeError, match=r"get_timestamp.*returned None"):
+            with pytest.raises(RuntimeError, match=r"empty token"):
                 _acquire_timestamp(b"content", config)
 
-    def test_none_return_raises_in_online_mode(self) -> None:
-        """If get_timestamp() returns None in online mode, raise RuntimeError."""
+    def test_empty_token_raises_in_online_mode(self) -> None:
+        """If get_timestamp() returns empty token in online mode, raise RuntimeError."""
         from ama_cryptography.crypto_api import CryptoPackageConfig, _acquire_timestamp
+        from ama_cryptography.rfc3161_timestamp import TimestampResult
 
         config = CryptoPackageConfig(
             include_timestamp=True,
             tsa_mode="online",
         )
 
+        empty_result = TimestampResult(
+            token=b"", tsa_url="online", hash_algorithm="sha3-256", data_hash=b""
+        )
         with patch(
             "ama_cryptography.crypto_api.RFC3161_AVAILABLE",
             True,
         ):
             with patch(
                 "ama_cryptography.crypto_api.get_timestamp",
-                return_value=None,
+                return_value=empty_result,
             ):
-                with pytest.raises(RuntimeError, match=r"get_timestamp.*returned None"):
+                with pytest.raises(RuntimeError, match=r"empty token"):
                     _acquire_timestamp(b"content", config)
 
     def test_disabled_mode_returns_none_silently(self) -> None:
@@ -265,6 +273,8 @@ class TestS6_AESGCMEphemeralMode:
         except RuntimeError:
             pytest.skip("AES-GCM native backend not available")
 
+        # Reset to clean state first (clears any counters from prior tests)
+        AESGCMProvider._encrypt_counters = {}
         AESGCMProvider.configure_ephemeral(True)
         try:
             provider = AESGCMProvider()

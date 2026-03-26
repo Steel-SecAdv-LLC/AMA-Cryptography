@@ -265,13 +265,11 @@ def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
     if size == 0:
         return
 
-    # Get a ctypes pointer to the actual buffer (no copy)
-    if isinstance(data, bytearray):
+    # Get a ctypes pointer to the actual buffer (no copy).
+    # Both bytearray and writable memoryview support from_buffer directly.
+    if isinstance(data, (bytearray, memoryview)):
         ptr = (ctypes.c_char * size).from_buffer(data)
         addr = ctypes.addressof(ptr)
-    elif isinstance(data, memoryview):
-        buf = (ctypes.c_char * size).from_buffer(data)
-        addr = ctypes.addressof(buf)
     else:
         # bytes: immutable, use id-based address (CPython implementation detail)
         # offset past PyBytesObject header to the ob_sval buffer
@@ -337,13 +335,11 @@ def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
     if size == 0:
         return
 
-    # Get a ctypes pointer to the actual buffer (no copy)
-    if isinstance(data, bytearray):
+    # Get a ctypes pointer to the actual buffer (no copy).
+    # Both bytearray and writable memoryview support from_buffer directly.
+    if isinstance(data, (bytearray, memoryview)):
         ptr = (ctypes.c_char * size).from_buffer(data)
         addr = ctypes.addressof(ptr)
-    elif isinstance(data, memoryview):
-        buf = (ctypes.c_char * size).from_buffer(data)
-        addr = ctypes.addressof(buf)
     else:
         # bytes: immutable, use id-based address (CPython implementation detail)
         if sys.implementation.name != "cpython":

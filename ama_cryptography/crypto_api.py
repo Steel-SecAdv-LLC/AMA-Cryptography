@@ -81,11 +81,23 @@ except ImportError:
 
 
 def _hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
-    """HMAC-SHA3-256: native C backend or pure-Python fallback (RFC 2104)."""
+    """HMAC-SHA3-256: native C backend or pure-Python fallback (RFC 2104).
+
+    INVARIANT-1: This function MUST NOT use ``import hmac`` (the stdlib
+    module).  The project's INVARIANT-1 requires that all cryptographic
+    primitives in the core library are implemented using only ``hashlib``
+    and the native C backend — never via stdlib ``hmac``.  This ensures
+    the implementation is self-contained and the HMAC construction is
+    explicitly visible for audit.  See CONTRIBUTING.md for the full
+    invariant definition.
+
+    The implementation follows RFC 2104 with block_size=136 (the Keccak
+    sponge rate for SHA3-256, as specified in NIST FIPS 202).
+    """
     if _HMAC_NATIVE:
         return native_hmac_sha3_256(key, msg)
     # Pure-Python HMAC-SHA3-256 (RFC 2104) — stdlib only
-    block_size = 136  # SHA3-256 Keccak rate
+    block_size = 136  # SHA3-256 Keccak rate (NIST FIPS 202)
     if len(key) > block_size:
         key = hashlib.sha3_256(key).digest()
     key = key.ljust(block_size, b"\x00")
@@ -706,10 +718,21 @@ class AESGCMProvider:
         before ``__init__`` so that ``_load_persisted_counters()`` and
         ``atexit`` registration respect the flag.
 
-        Calling this method resets ``_counters_loaded`` and
-        ``_atexit_registered`` so the next instantiation picks up the
-        new mode cleanly.
+        .. warning::
+            Call this method **before** any encryption operations.
+            Switching to ephemeral mode while non-ephemeral counters exist
+            would clear accumulated counters, risking nonce reuse.
+
+        Raises:
+            RuntimeError: If switching to ephemeral mode while non-ephemeral
+                counters exist (counters non-empty and not already ephemeral).
         """
+        if enabled and not cls._ephemeral and cls._encrypt_counters:
+            raise RuntimeError(
+                "Cannot switch to ephemeral mode while non-ephemeral counters exist. "
+                "This would clear accumulated nonce counters and risk nonce reuse. "
+                "Call configure_ephemeral(True) BEFORE any encryption operations."
+            )
         cls._ephemeral = enabled
         cls._counters_loaded = False
         cls._atexit_registered = False
@@ -1593,6 +1616,11 @@ class CryptoPackageResult:
     """
     Result from create_crypto_package() containing all cryptographic artifacts.
 
+    .. warning::
+        This object contains **secret key material** (``hmac_key``,
+        ``hkdf_master_secret``).  Do not serialize or log without
+        stripping these fields.  Use :meth:`to_dict` for safe serialization.
+
     4-Layer Defense-in-Depth Architecture
     ======================================
     Layer 1 — Content Integrity (SHA3-256, NIST FIPS 202):
@@ -1653,6 +1681,43 @@ class CryptoPackageResult:
     keypairs: Dict[str, KeyPair]
     metadata: Dict[str, Any]
 
+    # Secret fields that must be stripped during serialization
+    _SECRET_FIELDS: ClassVar[frozenset] = frozenset({"hmac_key", "hkdf_master_secret"})  # type: ignore[type-arg]
+
+    def to_dict(self, include_secrets: bool = False) -> Dict[str, Any]:
+        """Serialize to a dictionary, stripping secret fields by default.
+
+        Args:
+            include_secrets: If True, include hmac_key and hkdf_master_secret.
+                Defaults to False for safe serialization.
+
+        Returns:
+            Dictionary representation with secret fields omitted unless
+            *include_secrets* is True.
+        """
+        from dataclasses import fields as _fields
+
+        result: Dict[str, Any] = {}
+        for f in _fields(self):
+            if not include_secrets and f.name in self._SECRET_FIELDS:
+                continue
+            result[f.name] = getattr(self, f.name)
+        return result
+
+    def __getstate__(self) -> Dict[str, Any]:
+        """Strip secret fields during pickling for safety."""
+        state = self.__dict__.copy()
+        for key in self._SECRET_FIELDS:
+            state.pop(key, None)
+        return state
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Restore state from pickle, using empty bytes for stripped secrets."""
+        for key in self._SECRET_FIELDS:
+            if key not in state:
+                state[key] = b""
+        self.__dict__.update(state)
+
 
 def _acquire_timestamp(
     content: bytes,
@@ -1680,12 +1745,13 @@ def _acquire_timestamp(
             hash_algorithm="sha3-256",
             tsa_mode="mock",
         )
-        # S5 fix: If get_timestamp() returns None, raise rather than
-        # silently producing an untimestamped package.
-        if result is None:
+        # get_timestamp() always returns a TimestampResult (never None).
+        # Check for an empty token which would indicate an unexpected failure.
+        if not result.token:
             raise RuntimeError(
-                "Timestamp acquisition failed: get_timestamp() returned None. "
-                "Cannot produce untimestamped package when timestamps are required."
+                "Timestamp acquisition failed: get_timestamp() returned empty token "
+                "in mock mode. Cannot produce untimestamped package when timestamps "
+                "are required."
             )
         return result.token
 
@@ -1701,10 +1767,11 @@ def _acquire_timestamp(
             tsa_url=config.tsa_url,
             hash_algorithm="sha3-256",
         )
-        # S5 fix: Fail loudly when get_timestamp() returns None.
-        if result is None:
+        # get_timestamp() always returns a TimestampResult (never None).
+        # Check for an empty token which would indicate an unexpected failure.
+        if not result.token:
             raise RuntimeError(
-                "Timestamp acquisition failed: get_timestamp() returned None. "
+                "Timestamp acquisition failed: get_timestamp() returned empty token. "
                 "Cannot produce untimestamped package when timestamps are required."
             )
         return result.token
@@ -1990,6 +2057,9 @@ def verify_crypto_package(
             results["primary_signature"] = False
     else:
         results["primary_signature"] = False
+    # Backward compatibility: the key was previously named 'primary'.
+    # Deprecated — will be removed in a future version.
+    results["primary"] = results["primary_signature"]
 
     # ========================================================================
     # LAYER 4: Key Independence — HKDF re-derivation
@@ -2059,14 +2129,15 @@ def verify_crypto_package(
             results["kem"] = False
 
     # Aggregate: separate core 4-layer validity from optional add-ons.
-    # Core layers: primary_signature, hmac, hkdf_keys (+ pqc_signature if present
-    # in core flow).  Optional add-ons: sphincs, kem.
-    _core_keys = {"primary_signature", "hmac", "hkdf_keys", "pqc_signature"}
-    _optional_keys = {"sphincs", "kem"}
+    # Core 4 layers: content_hash (L1), hmac (L2), primary_signature (L3),
+    # hkdf_keys (L4).  Optional add-ons: sphincs, kem.
+    # The 'primary' key is a backward-compat alias and excluded from aggregation.
+    _core_keys = {"content_hash", "hmac", "primary_signature", "hkdf_keys"}
+    _aggregate_exclude = {"core_valid", "all_valid", "primary"}
     core_results = {k: v for k, v in results.items() if k in _core_keys}
     results["core_valid"] = all(core_results.values()) if core_results else False
     results["all_valid"] = all(
-        v for k, v in results.items() if k not in ("core_valid", "all_valid")
+        v for k, v in results.items() if k not in _aggregate_exclude
     )
 
     return results

@@ -130,9 +130,15 @@ Scalable Vector Extension 2 implementations (stretch goal):
 Automatic best-implementation selection at initialization:
 - **x86-64**: CPUID leaf 7 detection → AVX-512 > AVX2 > generic
 - **AArch64**: `getauxval(AT_HWCAP2)` detection → SVE2 > NEON > generic
-- Function pointer dispatch set once at init time (zero per-call overhead)
 - `ama_get_dispatch_info()` API for querying active implementations
 - CPU feature detection via extended `ama_cpuid.c`
+- Set `AMA_DISPATCH_VERBOSE=1` to enable diagnostic output during init
+
+> **Note (Phase 1):** SIMD implementations are compiled and verified for
+> correctness via KAT tests, but the runtime dispatch function-pointer table
+> is not yet wired — all API calls currently use the generic C path.  Phase 2
+> will connect the function pointers so that API calls automatically route to
+> the optimal SIMD implementation based on detected CPU features.
 
 ## Cryptographic Algorithms
 

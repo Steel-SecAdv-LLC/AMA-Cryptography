@@ -6,13 +6,14 @@
  * @brief AVX2-optimized SPHINCS+-256f operations
  *
  * Hand-written AVX2 intrinsics for SPHINCS+ (FIPS 205):
- *   - 4-way parallel SHA-256 compression function using AVX2
+ *   - 8-way parallel SHA-256 compression function using AVX2
  *   - Vectorized WOTS+ chain computation
  *   - Parallel FORS tree leaf generation
  *   - Vectorized Merkle tree hash computation
  *
  * SPHINCS+-SHA2-256f uses SHA-256 as the underlying hash.
- * AVX2 enables 4-way parallel hashing for tree construction.
+ * AVX2 enables 8-way parallel hashing for tree construction by utilizing
+ * all 8 lanes of each YMM register.
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
@@ -61,27 +62,28 @@ static inline __m256i rotr32_avx2(__m256i x, int n) {
 }
 
 /* ============================================================================
- * 4-way parallel SHA-256 compression function
+ * 8-way parallel SHA-256 compression function
  *
- * Processes 4 independent 64-byte message blocks simultaneously.
- * Each lane of the YMM register holds one instance's state variable.
+ * Processes 8 independent 64-byte message blocks simultaneously,
+ * utilizing all 8 lanes of each YMM register.
  *
- * state[4][8]: four sets of 8 working variables (a..h)
- * blocks[4]:   four 64-byte message blocks
+ * state[8][8]: eight sets of 8 working variables (a..h)
+ * blocks[8]:   eight 64-byte message blocks
+ *
+ * When fewer than 8 instances are available, the caller should use
+ * ama_sha256_compress_x4_avx2 (below) which falls back to 4-way.
  * ============================================================================ */
-void ama_sha256_compress_x4_avx2(uint32_t state[4][8],
-                                  const uint8_t blocks[4][64]) {
+void ama_sha256_compress_x8_avx2(uint32_t state[8][8],
+                                  const uint8_t blocks[8][64]) {
     __m256i a, b, c, d, e, f, g, h;
     __m256i W[64];
 
-    /* Load initial state: lane i holds state[i][j] */
-    a = _mm256_set_epi32(
-        (int)state[3][0], (int)state[2][0], (int)state[1][0], (int)state[0][0],
-        (int)state[3][0], (int)state[2][0], (int)state[1][0], (int)state[0][0]);
-    /* Simplify: pack each state variable from all 4 instances */
+    /* Pack each state variable from all 8 instances across YMM lanes */
     __m256i sv[8];
     for (int j = 0; j < 8; j++) {
-        sv[j] = _mm256_set_epi32(0, 0, 0, 0,
+        sv[j] = _mm256_set_epi32(
+            (int)state[7][j], (int)state[6][j],
+            (int)state[5][j], (int)state[4][j],
             (int)state[3][j], (int)state[2][j],
             (int)state[1][j], (int)state[0][j]);
     }
@@ -92,18 +94,19 @@ void ama_sha256_compress_x4_avx2(uint32_t state[4][8],
     __m256i sa = a, sb = b, sc = c, sd = d;
     __m256i se = e, sf = f, sg = g, sh = h;
 
-    /* Message schedule: load and expand W[0..15] from 4 blocks */
+    /* Message schedule: load and expand W[0..15] from 8 blocks */
     for (int i = 0; i < 16; i++) {
-        /* Gather word i from each of the 4 blocks (big-endian) */
-        uint32_t w0 = ((uint32_t)blocks[0][i*4+0] << 24) | ((uint32_t)blocks[0][i*4+1] << 16) |
-                      ((uint32_t)blocks[0][i*4+2] << 8)  | ((uint32_t)blocks[0][i*4+3]);
-        uint32_t w1 = ((uint32_t)blocks[1][i*4+0] << 24) | ((uint32_t)blocks[1][i*4+1] << 16) |
-                      ((uint32_t)blocks[1][i*4+2] << 8)  | ((uint32_t)blocks[1][i*4+3]);
-        uint32_t w2 = ((uint32_t)blocks[2][i*4+0] << 24) | ((uint32_t)blocks[2][i*4+1] << 16) |
-                      ((uint32_t)blocks[2][i*4+2] << 8)  | ((uint32_t)blocks[2][i*4+3]);
-        uint32_t w3 = ((uint32_t)blocks[3][i*4+0] << 24) | ((uint32_t)blocks[3][i*4+1] << 16) |
-                      ((uint32_t)blocks[3][i*4+2] << 8)  | ((uint32_t)blocks[3][i*4+3]);
-        W[i] = _mm256_set_epi32(0, 0, 0, 0, (int)w3, (int)w2, (int)w1, (int)w0);
+        /* Gather word i from each of the 8 blocks (big-endian) */
+        uint32_t ww[8];
+        for (int inst = 0; inst < 8; inst++) {
+            ww[inst] = ((uint32_t)blocks[inst][i*4+0] << 24) |
+                       ((uint32_t)blocks[inst][i*4+1] << 16) |
+                       ((uint32_t)blocks[inst][i*4+2] << 8)  |
+                       ((uint32_t)blocks[inst][i*4+3]);
+        }
+        W[i] = _mm256_set_epi32(
+            (int)ww[7], (int)ww[6], (int)ww[5], (int)ww[4],
+            (int)ww[3], (int)ww[2], (int)ww[1], (int)ww[0]);
     }
 
     /* Message schedule expansion W[16..63] */
@@ -158,13 +161,45 @@ void ama_sha256_compress_x4_avx2(uint32_t state[4][8],
     e = _mm256_add_epi32(e, se); f = _mm256_add_epi32(f, sf);
     g = _mm256_add_epi32(g, sg); h = _mm256_add_epi32(h, sh);
 
-    /* Store back to state arrays */
+    /* Store back to all 8 state arrays */
     __m256i final_sv[8] = {a, b, c, d, e, f, g, h};
     for (int j = 0; j < 8; j++) {
         uint32_t tmp[8];
         _mm256_storeu_si256((__m256i *)tmp, final_sv[j]);
         state[0][j] = tmp[0]; state[1][j] = tmp[1];
         state[2][j] = tmp[2]; state[3][j] = tmp[3];
+        state[4][j] = tmp[4]; state[5][j] = tmp[5];
+        state[6][j] = tmp[6]; state[7][j] = tmp[7];
+    }
+}
+
+/* ============================================================================
+ * 4-way parallel SHA-256 compression function (fallback)
+ *
+ * For callers that have fewer than 8 hash instances to process.
+ * Delegates to the 8-way function with dummy padding for the upper lanes.
+ * ============================================================================ */
+void ama_sha256_compress_x4_avx2(uint32_t state[4][8],
+                                  const uint8_t blocks[4][64]) {
+    uint32_t state8[8][8];
+    uint8_t blocks8[8][64];
+
+    /* Copy the 4 real instances into the lower half */
+    for (int i = 0; i < 4; i++) {
+        memcpy(state8[i], state[i], sizeof(uint32_t) * 8);
+        memcpy(blocks8[i], blocks[i], 64);
+    }
+    /* Initialize upper 4 instances with SHA-256 IV and zero blocks */
+    for (int i = 4; i < 8; i++) {
+        memcpy(state8[i], H256, sizeof(H256));
+        memset(blocks8[i], 0, 64);
+    }
+
+    ama_sha256_compress_x8_avx2(state8, blocks8);
+
+    /* Copy back the 4 real results */
+    for (int i = 0; i < 4; i++) {
+        memcpy(state[i], state8[i], sizeof(uint32_t) * 8);
     }
 }
 

@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ============================================================================
@@ -158,6 +159,29 @@ static int detect_sve2(void) { return 0; }
 #endif /* __x86_64__ / __aarch64__ */
 
 /* ============================================================================
+ * Phase 1: CPU feature detection and level assignment.
+ *
+ * Phase 2 (TODO): Wire function pointers to route API calls through SIMD
+ * implementations based on detected level.  Currently, SIMD implementations
+ * are compiled and verified for correctness (via KAT tests) but runtime
+ * dispatch does not yet invoke them — all API calls still use the generic
+ * C path.  This is intentional (phased rollout).
+ *
+ * TODO: Add a dispatch table of function pointers, one per algorithm,
+ * initialized here to point to the optimal implementation.
+ * ============================================================================ */
+
+/* Check if AMA_DISPATCH_VERBOSE=1 is set at runtime. */
+static int dispatch_verbose(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *env = getenv("AMA_DISPATCH_VERBOSE");
+        v = (env && env[0] == '1') ? 1 : 0;
+    }
+    return v;
+}
+
+/* ============================================================================
  * Dispatch initialization
  *
  * Sets the implementation level for each algorithm based on detected
@@ -192,11 +216,10 @@ static void dispatch_init_internal(void) {
     dispatch_info.chacha20poly1305 = effective;
     dispatch_info.argon2           = effective;
 
-#ifdef AMA_DISPATCH_DEBUG
-    fprintf(stderr,
-        "[AMA Dispatch] x86-64: AVX2=%d AVX-512F=%d => level=%d\n",
-        has_avx2, has_avx512f, (int)effective);
-#endif
+    if (dispatch_verbose())
+        fprintf(stderr,
+            "[AMA Dispatch] x86-64: AVX2=%d AVX-512F=%d => level=%d\n",
+            has_avx2, has_avx512f, (int)effective);
 
 #elif defined(__aarch64__) || defined(_M_ARM64)
     dispatch_info.arch_name = "AArch64";
@@ -217,17 +240,15 @@ static void dispatch_init_internal(void) {
     dispatch_info.chacha20poly1305 = best;
     dispatch_info.argon2           = best;
 
-#ifdef AMA_DISPATCH_DEBUG
-    fprintf(stderr,
-        "[AMA Dispatch] AArch64: NEON=%d SVE2=%d => level=%d\n",
-        has_neon, has_sve2, (int)best);
-#endif
+    if (dispatch_verbose())
+        fprintf(stderr,
+            "[AMA Dispatch] AArch64: NEON=%d SVE2=%d => level=%d\n",
+            has_neon, has_sve2, (int)best);
 
 #else
     dispatch_info.arch_name = "generic";
-#ifdef AMA_DISPATCH_DEBUG
-    fprintf(stderr, "[AMA Dispatch] Unknown architecture — using generic C\n");
-#endif
+    if (dispatch_verbose())
+        fprintf(stderr, "[AMA Dispatch] Unknown architecture — using generic C\n");
 #endif
 
 }

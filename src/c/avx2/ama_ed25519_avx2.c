@@ -142,7 +142,12 @@ void ama_fe51_carry_x4_avx2(fe51 r[4]) {
     L[4] = _mm256_add_epi64(L[4], c);
 
     c = _mm256_srli_epi64(L[4], 51); L[4] = _mm256_and_si256(L[4], mask51);
-    /* Wrap: 2^255 mod p = 19 */
+    /* Wrap: 2^255 mod p = 19.
+     * Safe: carry c is at most 2^13-1 (13 bits from >>51 of a 64-bit lane).
+     * c * 19 <= 8191 * 19 = 155629, fits in 18 bits.
+     * _mm256_mullo_epi32 multiplies the low 32 bits of each 64-bit lane,
+     * which is correct because both c and nineteen fit in 32 bits and
+     * the product fits in 32 bits. */
     L[0] = _mm256_add_epi64(L[0], _mm256_mullo_epi32(c, nineteen));
 
     /* Store back */
