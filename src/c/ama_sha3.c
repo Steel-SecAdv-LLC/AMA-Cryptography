@@ -31,6 +31,7 @@
  */
 
 #include "../include/ama_cryptography.h"
+#include "../include/ama_dispatch.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -104,7 +105,10 @@ static inline uint64_t rotl64(uint64_t x, unsigned int n) {
  * - Chi step unrolled to eliminate (x+1)%5 and (x+2)%5 modulo
  * - Rho+Pi combined with direct constant rotation offsets
  */
-static void keccak_f1600(uint64_t state[KECCAK_STATE_SIZE]) {
+/**
+ * Generic (non-SIMD) Keccak-f[1600] — exported for dispatch table fallback.
+ */
+void ama_keccak_f1600_generic(uint64_t state[KECCAK_STATE_SIZE]) {
     uint64_t C[5], D[5], B[25];
     unsigned int round;
 
@@ -197,6 +201,16 @@ static void keccak_f1600(uint64_t state[KECCAK_STATE_SIZE]) {
         /* Iota step */
         state[0] ^= keccak_rc[round];
     }
+}
+
+/**
+ * Dispatch-aware Keccak-f[1600] wrapper.
+ * Routes to the best available implementation (AVX2/NEON/generic)
+ * via the dispatch table.  All internal callers use this wrapper.
+ */
+static void keccak_f1600(uint64_t state[KECCAK_STATE_SIZE]) {
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    dt->keccak_f1600(state);
 }
 
 /**

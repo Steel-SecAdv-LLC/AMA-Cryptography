@@ -205,23 +205,26 @@ paths for all 8 algorithm families, preparing for ARMv9 server adoption
 
 ## Performance Positioning
 
-Based on benchmarks on x86-64 (AVX2 enabled):
+Based on AMA measured benchmarks on x86-64 (CI shared runner, generic C path):
 
-| Operation | AMA-Cryptography | Estimated Competitor Best |
+| Operation | AMA-Cryptography (measured) | Competitor Reference |
 |---|---|---|
-| SHA3-256 (1KB) | ~2.1 us | OpenSSL ~1.8 us |
-| HMAC-SHA3-256 | ~4.5 us | OpenSSL ~4.0 us |
-| AES-256-GCM (1KB) | ~0.8 us | OpenSSL ~0.6 us |
-| Ed25519 sign | ~45 us | libsodium ~42 us |
-| Ed25519 verify | ~90 us | libsodium ~85 us |
-| ML-DSA-65 sign | ~1.2 ms | liboqs ~1.5 ms |
-| ML-DSA-65 verify | ~0.5 ms | liboqs ~0.6 ms |
-| ML-KEM-1024 encaps | ~0.8 ms | liboqs ~1.0 ms |
-| Argon2id (default) | ~250 ms | libsodium ~260 ms |
+| SHA3-256 (1KB) | ~3.4 us (298K ops/s) | OpenSSL: varies by hardware |
+| HMAC-SHA3-256 (1KB) | ~4.9 us (203K ops/s) | OpenSSL: varies by hardware |
+| Ed25519 sign | ~39 us (26K ops/s) | libsodium: ~20 us (50K ops/s) on optimized builds |
+| Ed25519 verify | ~78 us (13K ops/s) | libsodium: ~40 us (25K ops/s) on optimized builds |
+| ML-DSA-65 sign | ~0.19 ms (5.2K ops/s) | liboqs: ~0.2-0.5 ms (varies) |
+| ML-DSA-65 verify | ~0.11 ms (8.9K ops/s) | liboqs: ~0.1-0.3 ms (varies) |
+| ML-KEM-1024 keygen | ~0.07 ms (15.3K ops/s) | liboqs: varies |
+| Argon2id (default) | ~250 ms | libsodium: ~260 ms |
 
-**Note**: AMA-Cryptography is competitive with or faster than competitors for
-PQC operations due to hand-written AVX2 NTT vectorization. For classical
-operations, it is within 10-15% of the best-in-class implementations.
+**Note**: AMA numbers are measured from `phase0_baseline_results.json` and
+`benchmark_c_raw.c` on GitHub Actions CI runners (generic C path, no SIMD
+dispatch at time of measurement). Competitor numbers are published reference
+values and may differ across hardware. AMA-Cryptography is competitive for
+PQC operations. Classical Ed25519 is approximately 2x slower than libsodium
+due to libsodium's highly optimized assembly backends and extensive
+precomputed tables; narrowing this gap is an active development priority.
 
 ---
 

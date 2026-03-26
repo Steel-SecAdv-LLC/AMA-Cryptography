@@ -32,6 +32,7 @@
  */
 
 #include "../include/ama_cryptography.h"
+#include "../include/ama_dispatch.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -1646,6 +1647,14 @@ static const int16_t zetas[128] = {
  * Uses Cooley-Tukey butterfly with Montgomery reduction.
  */
 static void poly_ntt(poly* r) {
+    /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (dt->kyber_ntt) {
+        dt->kyber_ntt(r->coeffs, zetas);
+        return;
+    }
+
+    /* Generic C implementation */
     unsigned int len, start, j, k;
     int16_t t, zeta;
 
@@ -1668,6 +1677,14 @@ static void poly_ntt(poly* r) {
  * Uses Gentleman-Sande butterfly with Montgomery reduction.
  */
 static void poly_invntt(poly* r) {
+    /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (dt->kyber_invntt) {
+        dt->kyber_invntt(r->coeffs, zetas);
+        return;
+    }
+
+    /* Generic C implementation */
     unsigned int len, start, j, k;
     int16_t t, zeta;
     const int16_t f = 1441;  /* f = 128^{-1} mod q, in Montgomery form */
@@ -1707,6 +1724,14 @@ static void basemul(int16_t r[2], const int16_t a[2], const int16_t b[2], int16_
  * Pointwise multiplication of polynomials in NTT domain
  */
 static void poly_basemul(poly* r, const poly* a, const poly* b) {
+    /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (dt->kyber_pointwise) {
+        dt->kyber_pointwise(r->coeffs, a->coeffs, b->coeffs);
+        return;
+    }
+
+    /* Generic C implementation */
     unsigned int i;
     for (i = 0; i < KYBER_N / 4; i++) {
         basemul(&r->coeffs[4*i], &a->coeffs[4*i], &b->coeffs[4*i], zetas[64 + i]);
