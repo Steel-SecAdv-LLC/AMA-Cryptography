@@ -146,10 +146,6 @@ typedef struct {
     fe25519 X, Y, Z, T;
 } ge25519_p1p1;
 
-/* Precomputed point (y+x, y-x, 2dxy) */
-typedef struct {
-    fe25519 yplusx, yminusx, xy2d;
-} ge25519_precomp;
 
 /* d = -121665/121666 (named ed_d to avoid shadowing SHA-512 local 'd') */
 static const fe25519 ed_d = {
@@ -374,58 +370,6 @@ static inline void ge25519_p3_to_p2(ge25519_p2 *r, const ge25519_p3 *p) {
     fe25519_copy(r->X, p->X);
     fe25519_copy(r->Y, p->Y);
     fe25519_copy(r->Z, p->Z);
-}
-
-/* Identity in precomputed form: (y+x, y-x, 2dxy) = (1, 1, 0) */
-static void ge25519_precomp_0(ge25519_precomp *h) {
-    fe25519_1(h->yplusx);
-    fe25519_1(h->yminusx);
-    fe25519_0(h->xy2d);
-}
-
-/*
- * Mixed addition: p3 + precomp -> p1p1
- *
- * Uses the precomputed form (y+x, y-x, 2dxy) to save one field multiplication
- * compared to full ge25519_add. The Z coordinate of the precomp point is
- * implicitly 1, eliminating the Z*Z multiplication.
- *
- * Cost: 3 mul (vs 4 mul for full addition)
- * Based on the ref10 ge_madd formula.
- */
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((hot))
-#endif
-static void ge25519_madd(ge25519_p1p1 *r, const ge25519_p3 *p, const ge25519_precomp *q) {
-    fe25519 A, B, C, D;
-    fe25519_add(A, p->Y, p->X);     /* A = Y1 + X1 */
-    fe25519_sub(B, p->Y, p->X);     /* B = Y1 - X1 */
-    fe25519_mul(A, A, q->yplusx);   /* A = (Y1+X1)*(y2+x2) */
-    fe25519_mul(B, B, q->yminusx);  /* B = (Y1-X1)*(y2-x2) */
-    fe25519_mul(C, q->xy2d, p->T);  /* C = 2*d*T1*x2*y2 */
-    fe25519_add(D, p->Z, p->Z);     /* D = 2*Z1 (Z2=1) */
-    fe25519_sub(r->X, A, B);        /* E = A - B */
-    fe25519_sub(r->T, D, C);        /* F = D - C (stored in T for p1p1 convention) */
-    fe25519_add(r->Z, D, C);        /* G = D + C (stored in Z for p1p1 convention) */
-    fe25519_add(r->Y, A, B);        /* H = A + B */
-}
-
-/* Constant-time conditional move for precomp: r = (flag ? p : r) */
-static void ge25519_cmov_precomp(ge25519_precomp *r, const ge25519_precomp *p, int flag) {
-    uint64_t mask = (uint64_t)(-(int64_t)(flag));
-    for (int j = 0; j < 5; j++) {
-        r->yplusx[j]  ^= mask & (r->yplusx[j]  ^ p->yplusx[j]);
-        r->yminusx[j] ^= mask & (r->yminusx[j] ^ p->yminusx[j]);
-        r->xy2d[j]    ^= mask & (r->xy2d[j]    ^ p->xy2d[j]);
-    }
-}
-
-/* Convert p3 to precomp form: (y+x, y-x, 2*d*x*y)
- * Requires Z=1 (affine coordinates). */
-static void ge25519_p3_to_precomp(ge25519_precomp *r, const ge25519_p3 *p) {
-    fe25519_add(r->yplusx, p->Y, p->X);
-    fe25519_sub(r->yminusx, p->Y, p->X);
-    fe25519_mul(r->xy2d, p->T, ed_d2);
 }
 
 /* Scalar multiplication using double-and-add */
