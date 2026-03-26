@@ -107,37 +107,26 @@ static inline uint8x16_t ghash_mul_neon(uint8x16_t a, uint8x16_t b) {
  * Uses vaeseq_u8 with a zero block to access the SubBytes look-up, which
  * is equivalent to calling _mm_aeskeygenassist_si128 on x86.
  * ============================================================================ */
-static inline uint8x16_t aes_key_assist_neon(uint8x16_t prev, uint8_t rcon) {
-    /* Use the AES encrypt instruction on a zero block with prev as the key
-     * to get SubBytes(prev).  vaeseq_u8 does AddRoundKey ^ SubBytes ^ ShiftRows,
-     * so encrypting zero gives SubBytes(ShiftRows(prev)). We work around
-     * ShiftRows by rotating the result. */
+static inline uint8x16_t aes_key_assist_neon(uint8x16_t prev_even,
+                                               uint8x16_t prev_odd,
+                                               uint8_t rcon) {
+    /* AES-256 even round key derivation:
+     *   RotWord(SubWord(prev_odd[word3])) ^ rcon, cascaded into prev_even.
+     *
+     * CRITICAL: The SubWord+RotWord input comes from prev_odd (the OTHER
+     * key half), not prev_even.  This matches the x86 reference where
+     * _mm_aeskeygenassist_si128 operates on rk[odd] while the XOR cascade
+     * runs on rk[even]. */
     uint8x16_t zero = vdupq_n_u8(0);
-    /* SubBytes(ShiftRows(prev)) */
-    uint8x16_t sub = vaeseq_u8(prev, zero);
-    /* We only need the RotWord(SubWord(prev[3])) for the key schedule.
-     * Extract the last 4 bytes (word 3), apply RotWord, XOR with rcon. */
-    uint8_t tmp[16];
-    vst1q_u8(tmp, sub);
-    /* After ShiftRows, the bytes of word 3 (indices 12-15) get scattered.
-     * ShiftRows moves byte[i] to byte[(i - row) mod 4 + row*4] within the
-     * AES state matrix.  For the last column (bytes 3,7,11,15 in column-
-     * major AES state), after ShiftRows they end up at positions that we
-     * need to gather.  Instead, let's use a simpler portable approach. */
-    uint8_t w3[4];
-    /* Extract word 3 from the *original* prev key, apply SubBytes manually
-     * via the vaeseq trick, then RotWord + rcon. */
-    uint8_t prev_bytes[16];
-    vst1q_u8(prev_bytes, prev);
-    /* SubWord of word 3: we already have SubBytes in sub, but due to ShiftRows
-     * the mapping is complex. Use a cleaner approach: just re-derive. */
-    /* SubBytes of each byte in word 3: use aese(byte_in_specific_position, 0) */
-    /* Simpler: build a state where word 3 occupies a known position and extract */
+
+    /* Extract word 3 (bytes 12-15) from prev_odd for SubWord+RotWord */
+    uint8_t odd_bytes[16];
+    vst1q_u8(odd_bytes, prev_odd);
     uint8_t word3_input[16] = {0};
-    word3_input[0] = prev_bytes[12];
-    word3_input[5] = prev_bytes[13];
-    word3_input[10] = prev_bytes[14];
-    word3_input[15] = prev_bytes[15];
+    word3_input[0] = odd_bytes[12];
+    word3_input[5] = odd_bytes[13];
+    word3_input[10] = odd_bytes[14];
+    word3_input[15] = odd_bytes[15];
     uint8x16_t w3_vec = vld1q_u8(word3_input);
     uint8x16_t w3_sub = vaeseq_u8(w3_vec, zero); /* SubBytes + ShiftRows */
     uint8_t w3_out[16];
@@ -145,17 +134,20 @@ static inline uint8x16_t aes_key_assist_neon(uint8x16_t prev, uint8_t rcon) {
     /* After ShiftRows on our carefully placed bytes, they end up at:
      * byte[0] stays at [0], byte[5] -> [1], byte[10] -> [2], byte[15] -> [3]
      * (ShiftRows: row0 no shift, row1 shift 1, row2 shift 2, row3 shift 3) */
+    uint8_t w3[4];
     w3[0] = w3_out[1] ^ rcon; /* RotWord: [1,2,3,0] + rcon on first byte */
     w3[1] = w3_out[2];
     w3[2] = w3_out[3];
     w3[3] = w3_out[0];
 
-    /* XOR cascade: each word XORs with the previous */
+    /* XOR cascade into prev_even */
+    uint8_t even_bytes[16];
+    vst1q_u8(even_bytes, prev_even);
     uint8_t out[16];
-    for (int i = 0; i < 4; i++) out[i] = prev_bytes[i] ^ w3[i];
-    for (int i = 4; i < 8; i++) out[i] = prev_bytes[i] ^ out[i-4];
-    for (int i = 8; i < 12; i++) out[i] = prev_bytes[i] ^ out[i-4];
-    for (int i = 12; i < 16; i++) out[i] = prev_bytes[i] ^ out[i-4];
+    for (int i = 0; i < 4; i++) out[i] = even_bytes[i] ^ w3[i];
+    for (int i = 4; i < 8; i++) out[i] = even_bytes[i] ^ out[i-4];
+    for (int i = 8; i < 12; i++) out[i] = even_bytes[i] ^ out[i-4];
+    for (int i = 12; i < 16; i++) out[i] = even_bytes[i] ^ out[i-4];
     return vld1q_u8(out);
 }
 
@@ -192,19 +184,21 @@ static void ama_aes256_expand_key_neon(const uint8_t key[32], uint8x16_t rk[15])
     rk[1] = vld1q_u8(key + 16);
     /* AES-256 key schedule: 7 even rounds with rcon, 6 odd rounds without */
     static const uint8_t rcons[7] = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40};
-    rk[2]  = aes_key_assist_neon(rk[0],  rcons[0]);  /* Even: RotWord+SubWord+rcon */
-    rk[3]  = aes_key_assist2_neon(rk[2],  rk[1]);    /* Odd: SubWord only */
-    rk[4]  = aes_key_assist_neon(rk[2],  rcons[1]);
+    /* Even round keys: SubWord+RotWord from the ODD key, cascaded into EVEN key.
+     * Odd round keys:  SubWord (no RotWord, no rcon) from the EVEN key, cascaded into ODD key. */
+    rk[2]  = aes_key_assist_neon(rk[0],  rk[1],  rcons[0]);
+    rk[3]  = aes_key_assist2_neon(rk[2],  rk[1]);
+    rk[4]  = aes_key_assist_neon(rk[2],  rk[3],  rcons[1]);
     rk[5]  = aes_key_assist2_neon(rk[4],  rk[3]);
-    rk[6]  = aes_key_assist_neon(rk[4],  rcons[2]);
+    rk[6]  = aes_key_assist_neon(rk[4],  rk[5],  rcons[2]);
     rk[7]  = aes_key_assist2_neon(rk[6],  rk[5]);
-    rk[8]  = aes_key_assist_neon(rk[6],  rcons[3]);
+    rk[8]  = aes_key_assist_neon(rk[6],  rk[7],  rcons[3]);
     rk[9]  = aes_key_assist2_neon(rk[8],  rk[7]);
-    rk[10] = aes_key_assist_neon(rk[8],  rcons[4]);
+    rk[10] = aes_key_assist_neon(rk[8],  rk[9],  rcons[4]);
     rk[11] = aes_key_assist2_neon(rk[10], rk[9]);
-    rk[12] = aes_key_assist_neon(rk[10], rcons[5]);
+    rk[12] = aes_key_assist_neon(rk[10], rk[11], rcons[5]);
     rk[13] = aes_key_assist2_neon(rk[12], rk[11]);
-    rk[14] = aes_key_assist_neon(rk[12], rcons[6]);
+    rk[14] = aes_key_assist_neon(rk[12], rk[13], rcons[6]);
 }
 
 /* ============================================================================
