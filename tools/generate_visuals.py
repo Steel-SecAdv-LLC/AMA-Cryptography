@@ -3,7 +3,7 @@
 Generate visual diagrams for AMA Cryptography documentation.
 
 Creates:
-1. Multi-Layer Defense-in-Depth diagram
+1. 4-Layer Defense-in-Depth diagram
 2. Performance comparison bar charts
 3. Test coverage visualization
 4. Monitoring overhead pie chart
@@ -25,7 +25,7 @@ ASSETS_DIR.mkdir(exist_ok=True)
 
 
 def create_defense_layers_diagram():
-    """Create the multi-layer defense-in-depth visualization with data flow."""
+    """Create the 4-layer defense-in-depth visualization with data flow."""
     fig, ax = plt.subplots(figsize=(16, 10))
     ax.set_xlim(0, 16)
     ax.set_ylim(0, 12)
@@ -81,7 +81,7 @@ def create_defense_layers_diagram():
     ax.text(
         8,
         11.5,
-        "AMA Cryptography: Multi-Layer Defense-in-Depth Architecture",
+        "AMA Cryptography: 4-Layer Defense-in-Depth Architecture",
         ha="center",
         fontsize=18,
         fontweight="bold",
@@ -217,7 +217,7 @@ def create_defense_layers_diagram():
     )
     ax.text(5, 0.55, "(Hash + Signature)", ha="center", va="center", fontsize=9, color="white")
 
-    # AMA Cryptography (multi-layer)
+    # AMA Cryptography (4 layers)
     colors_mini = ["#22C55E", "#14B8A6", "#0EA5E9", "#3B82F6", "#6366F1", "#8B5CF6"]
     for j, c in enumerate(colors_mini):
         rect_ag = mpatches.FancyBboxPatch(
@@ -233,7 +233,7 @@ def create_defense_layers_diagram():
     ax.text(
         11.1,
         0.9,
-        "AMA Cryptography: 6 Layers",
+        "AMA Cryptography: 4 Layers",
         ha="center",
         va="center",
         fontsize=11,
@@ -497,7 +497,7 @@ def create_full_package_performance():
 
     # Overall figure title
     fig.suptitle(
-        "Full 6-Layer Package Performance Breakdown", fontsize=16, fontweight="bold", y=0.96
+        "Full 4-Layer Package Performance Breakdown", fontsize=16, fontweight="bold", y=0.96
     )
     fig.text(
         0.5,
@@ -574,7 +574,7 @@ def create_full_package_performance():
 
     ax_total.set_ylabel("Operations per Second", fontsize=10)
     ax_total.set_title(
-        "End-to-End Throughput\n(All 6 Layers Enabled)", fontsize=12, fontweight="bold", pad=15
+        "End-to-End Throughput\n(All 4 Layers Enabled)", fontsize=12, fontweight="bold", pad=15
     )
     ax_total.set_ylim(0, 6500)
 
@@ -595,7 +595,7 @@ def create_full_package_performance():
     ax_total.text(
         0.5,
         0.35,
-        "All layers:\n"
+        "All 4 layers:\n"
         "1. SHA3-256 Hash\n"
         "2. HMAC-SHA3-256\n"
         "3. Ed25519 Sig\n"

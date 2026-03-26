@@ -3,6 +3,9 @@
 Generate benchmark visualization charts for AMA Cryptography.
 
 Outputs SVG charts to benchmarks/charts/ for inclusion in documentation.
+Reads live benchmark data from JSON files when available, falls back to
+measured baseline data.
+
 Requires matplotlib: pip install matplotlib
 
 Usage:
@@ -14,9 +17,15 @@ Licensed under the Apache License, Version 2.0
 """
 
 import argparse
+import json
 import os
+from pathlib import Path
 
-# Benchmark data (measured 2026-03-19, Linux 6.18.5, native C backend)
+# -- Paths -------------------------------------------------------------------
+ROOT = Path(__file__).parent.parent
+BENCH_FILE = ROOT / "benchmark_results.json"
+
+# -- Baseline data (measured 2026-03-19, Linux 6.18.5, native C backend) -----
 CRYPTO_OPS = {
     "SHA3-256 (C)": {"ops_sec": 591_593, "category": "hash"},
     "HMAC-SHA3-256": {"ops_sec": 64_402, "category": "mac"},
@@ -52,14 +61,53 @@ SCALING = {
     7000: {"ms": 187.29, "ops_sec": 5.34},
 }
 
-SIX_LAYER_BREAKDOWN = [
+FOUR_LAYER_BREAKDOWN = [
     ("SHA3-256 Hash", 0.002),
     ("HMAC-SHA3-256", 0.016),
-    ("Ed25519 Sign", 0.377),
-    ("ML-DSA-65 Sign", 2.333),
+    ("Ed25519 + ML-DSA-65 Sign", 2.710),
     ("HKDF Derivation", 0.260),
-    ("RFC 3161 Timestamp", 0.0),  # optional
 ]
+
+
+def load_live_data():
+    """Load live benchmark data if available."""
+    if BENCH_FILE.exists():
+        try:
+            with open(BENCH_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, KeyError):
+            pass
+    return None
+
+
+# -- Professional dark theme -------------------------------------------------
+DARK_BG = "#1a1a2e"
+PANEL_BG = "#16213e"
+TEXT_COLOR = "#e0e0e0"
+GRID_COLOR = "#2a2a4a"
+
+
+def apply_theme(plt):
+    """Apply professional dark theme to all charts."""
+    plt.rcParams.update(
+        {
+            "figure.facecolor": DARK_BG,
+            "axes.facecolor": PANEL_BG,
+            "axes.edgecolor": GRID_COLOR,
+            "axes.labelcolor": TEXT_COLOR,
+            "axes.grid": True,
+            "grid.color": GRID_COLOR,
+            "grid.alpha": 0.3,
+            "text.color": TEXT_COLOR,
+            "xtick.color": TEXT_COLOR,
+            "ytick.color": TEXT_COLOR,
+            "font.family": "DejaVu Sans",
+            "font.size": 10,
+            "legend.facecolor": PANEL_BG,
+            "legend.edgecolor": GRID_COLOR,
+            "legend.labelcolor": TEXT_COLOR,
+        }
+    )
 
 
 def generate_charts(output_dir: str) -> None:
@@ -76,114 +124,245 @@ def generate_charts(output_dir: str) -> None:
         generate_text_summary()
         return
 
+    apply_theme(plt)
     os.makedirs(output_dir, exist_ok=True)
+    bench = load_live_data()
 
-    # Chart 1: Signature Operations Comparison
+    # Update data from live benchmarks if available
+    sig_ops = dict(SIGNATURE_OPS)
+    kem_ops = dict(KEM_OPS)
+    c_vs_py = dict(C_VS_PYTHON)
+    scaling = dict(SCALING)
+
+    if bench:
+        ops = bench.get("cryptographic_operations", {})
+        if "ed25519_sign" in ops:
+            sig_ops["Ed25519 Sign"]["ops_sec"] = ops["ed25519_sign"]["ops_per_sec"]
+            sig_ops["Ed25519 Sign"]["latency_ms"] = ops["ed25519_sign"]["mean_ms"]
+        if "ed25519_verify" in ops:
+            sig_ops["Ed25519 Verify"]["ops_sec"] = ops["ed25519_verify"]["ops_per_sec"]
+            sig_ops["Ed25519 Verify"]["latency_ms"] = ops["ed25519_verify"]["mean_ms"]
+        if "dilithium_sign" in ops:
+            sig_ops["ML-DSA-65 Sign"]["ops_sec"] = ops["dilithium_sign"]["ops_per_sec"]
+            sig_ops["ML-DSA-65 Sign"]["latency_ms"] = ops["dilithium_sign"]["mean_ms"]
+        if "dilithium_verify" in ops:
+            sig_ops["ML-DSA-65 Verify"]["ops_sec"] = ops["dilithium_verify"]["ops_per_sec"]
+            sig_ops["ML-DSA-65 Verify"]["latency_ms"] = ops["dilithium_verify"]["mean_ms"]
+        if "sha3_256" in ops:
+            c_vs_py["SHA3-256 (short)"]["c"] = ops["sha3_256"]["ops_per_sec"]
+
+    # -- Chart 1: Signature Performance --------------------------------------
     fig, ax = plt.subplots(figsize=(10, 6))
-    names = list(SIGNATURE_OPS.keys())
-    ops = [SIGNATURE_OPS[n]["ops_sec"] for n in names]
-    colors = ["#2196F3", "#2196F3", "#9C27B0", "#9C27B0", "#4CAF50", "#4CAF50"]
-    bars = ax.barh(names, ops, color=colors)
-    ax.set_xlabel("Operations/sec")
-    ax.set_title("Signature Performance (Higher = Better)")
+    names = list(sig_ops.keys())
+    ops_vals = [sig_ops[n]["ops_sec"] for n in names]
+    latencies = [sig_ops[n]["latency_ms"] for n in names]
+    colors = ["#00d2ff", "#4d96ff", "#ff6b6b", "#ff922b", "#6bcb77", "#845ef7"]
+    bars = ax.barh(names, ops_vals, color=colors[: len(names)], edgecolor="none", height=0.6)
+    ax.set_xlabel("Operations/sec", fontsize=11)
+    ax.set_title(
+        "Signature Algorithm Performance",
+        fontsize=14,
+        fontweight="bold",
+        pad=12,
+    )
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
-    for bar, val in zip(bars, ops):
+    for bar, val, lat in zip(bars, ops_vals, latencies):
+        label = f"{val:,} ops/s ({lat:.3f} ms)" if val > 10 else f"{val} ops/s ({lat:.1f} ms)"
         ax.text(
-            bar.get_width() + max(ops) * 0.01,
+            bar.get_width() + max(ops_vals) * 0.01,
             bar.get_y() + bar.get_height() / 2,
-            f"{val:,}",
+            label,
             va="center",
-            fontsize=9,
+            fontsize=8,
+            color=TEXT_COLOR,
         )
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "signature_performance.svg"), format="svg")
     plt.close()
     print(f"  Created {output_dir}/signature_performance.svg")
 
-    # Chart 2: C vs Python Performance
+    # -- Chart 2: C vs Python Performance ------------------------------------
     fig, ax = plt.subplots(figsize=(10, 5))
-    ops_names = list(C_VS_PYTHON.keys())
-    c_vals = [C_VS_PYTHON[n]["c"] for n in ops_names]
-    py_vals = [C_VS_PYTHON[n]["python"] for n in ops_names]
+    ops_names = list(c_vs_py.keys())
+    c_vals = [c_vs_py[n]["c"] for n in ops_names]
+    py_vals = [c_vs_py[n]["python"] for n in ops_names]
     x = range(len(ops_names))
     w = 0.35
-    ax.bar([i - w / 2 for i in x], c_vals, w, label="C Library", color="#1565C0")
-    ax.bar([i + w / 2 for i in x], py_vals, w, label="Python API", color="#FF8F00")
-    ax.set_ylabel("Operations/sec")
-    ax.set_title("C Library vs Python API Performance")
+    ax.bar(
+        [i - w / 2 for i in x],
+        c_vals,
+        w,
+        label="Native C Library",
+        color="#00d2ff",
+        edgecolor="none",
+    )
+    ax.bar(
+        [i + w / 2 for i in x],
+        py_vals,
+        w,
+        label="Python API",
+        color="#ff6b6b",
+        edgecolor="none",
+    )
+    ax.set_ylabel("Operations/sec", fontsize=11)
+    ax.set_title(
+        "C Library vs Python API Performance",
+        fontsize=14,
+        fontweight="bold",
+        pad=12,
+    )
     ax.set_xticks(list(x))
-    ax.set_xticklabels(ops_names)
-    ax.legend()
+    ax.set_xticklabels(ops_names, fontsize=10)
+    ax.legend(fontsize=10)
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
     for i, (c, p) in enumerate(zip(c_vals, py_vals)):
-        speedup = C_VS_PYTHON[ops_names[i]]["speedup"]
+        speedup = c_vs_py[ops_names[i]]["speedup"]
         ax.text(
             i,
-            max(c, p) + max(c_vals) * 0.02,
+            max(c, p) + max(c_vals) * 0.03,
             f"{speedup}x",
             ha="center",
-            fontsize=10,
+            fontsize=12,
             fontweight="bold",
+            color="#ffd93d",
         )
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "c_vs_python.svg"), format="svg")
     plt.close()
     print(f"  Created {output_dir}/c_vs_python.svg")
 
-    # Chart 3: 6-Layer Package Breakdown
-    fig, ax = plt.subplots(figsize=(8, 6))
-    labels = [name for name, ms in SIX_LAYER_BREAKDOWN if ms > 0]
-    sizes = [ms for _, ms in SIX_LAYER_BREAKDOWN if ms > 0]
-    colors_pie = ["#E3F2FD", "#BBDEFB", "#64B5F6", "#1565C0", "#0D47A1"]
-    explode = [0, 0, 0.05, 0.1, 0]
-    ax.pie(
+    # -- Chart 3: 4-Layer Package Breakdown ----------------------------------
+    fig, ax = plt.subplots(figsize=(9, 6))
+    labels = [name for name, ms in FOUR_LAYER_BREAKDOWN if ms > 0]
+    sizes = [ms for _, ms in FOUR_LAYER_BREAKDOWN if ms > 0]
+    colors_pie = ["#00d2ff", "#7b2ff7", "#ff6b6b", "#6bcb77"]
+    explode = [0, 0, 0.05, 0]
+    wedges, texts, autotexts = ax.pie(
         sizes,
         explode=explode,
         labels=labels,
         colors=colors_pie,
-        autopct="%1.1f%%",
+        autopct=lambda pct: f"{pct:.1f}%\n({pct * sum(sizes) / 100:.3f}ms)",
         shadow=False,
         startangle=140,
+        textprops={"fontsize": 9, "color": TEXT_COLOR},
+        pctdistance=0.72,
     )
-    ax.set_title("6-Layer Package Creation Time Breakdown")
+    for t in autotexts:
+        t.set_fontsize(8)
+        t.set_color("#ffffff")
+    ax.set_title(
+        "4-Layer Package Creation Time Breakdown",
+        fontsize=14,
+        fontweight="bold",
+        pad=12,
+    )
+    total_ms = sum(sizes)
+    ax.text(
+        0,
+        -1.35,
+        f"Total package creation: {total_ms:.3f} ms  |  "
+        f"Layers: SHA3 + HMAC + Signatures + HKDF",
+        ha="center",
+        fontsize=9,
+        color="#888888",
+        style="italic",
+    )
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "layer_breakdown.svg"), format="svg")
     plt.close()
     print(f"  Created {output_dir}/layer_breakdown.svg")
 
-    # Chart 4: ML-KEM-1024 Operations
-    fig, ax = plt.subplots(figsize=(8, 5))
-    kem_names = list(KEM_OPS.keys())
-    kem_ops = [KEM_OPS[n]["ops_sec"] for n in kem_names]
-    bars = ax.bar(kem_names, kem_ops, color=["#7B1FA2", "#9C27B0", "#CE93D8"])
-    ax.set_ylabel("Operations/sec")
-    ax.set_title("ML-KEM-1024 (FIPS 203) Performance")
+    # -- Chart 4: ML-KEM-1024 Performance ------------------------------------
+    fig, ax = plt.subplots(figsize=(9, 5))
+    kem_names = list(kem_ops.keys())
+    kem_vals = [kem_ops[n]["ops_sec"] for n in kem_names]
+    kem_lats = [kem_ops[n]["latency_ms"] for n in kem_names]
+    kem_colors = ["#7b2ff7", "#845ef7", "#ff6b6b"]
+    bars = ax.bar(
+        kem_names,
+        kem_vals,
+        color=kem_colors,
+        edgecolor="none",
+        width=0.5,
+    )
+    ax.set_ylabel("Operations/sec", fontsize=11)
+    ax.set_title(
+        "ML-KEM-1024 (FIPS 203) Performance",
+        fontsize=14,
+        fontweight="bold",
+        pad=12,
+    )
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
-    for bar, val in zip(bars, kem_ops):
+    for bar, val, lat in zip(bars, kem_vals, kem_lats):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + 100,
-            f"{val:,}",
+            bar.get_height() + max(kem_vals) * 0.02,
+            f"{val:,} ops/s\n({lat:.3f} ms)",
             ha="center",
-            fontsize=10,
+            fontsize=9,
+            color=TEXT_COLOR,
         )
+    ax.text(
+        0.98,
+        0.02,
+        "FIPS 203 compliant | Native C implementation",
+        transform=ax.transAxes,
+        ha="right",
+        fontsize=8,
+        color="#666666",
+        style="italic",
+    )
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "kem_performance.svg"), format="svg")
     plt.close()
     print(f"  Created {output_dir}/kem_performance.svg")
 
-    # Chart 5: Scalability
-    fig, ax = plt.subplots(figsize=(8, 5))
-    codes = list(SCALING.keys())
-    times = [SCALING[c]["ms"] for c in codes]
-    ax.plot(codes, times, "o-", color="#1565C0", linewidth=2, markersize=8)
-    ax.set_xlabel("Omni-Code Count")
-    ax.set_ylabel("Latency (ms)")
-    ax.set_title("Package Creation Scalability")
+    # -- Chart 5: Scalability ------------------------------------------------
+    fig, ax = plt.subplots(figsize=(9, 5))
+    codes = list(scaling.keys())
+    times = [scaling[c]["ms"] for c in codes]
+    ops_sec = [scaling[c]["ops_sec"] for c in codes]
+    ax.plot(
+        codes,
+        times,
+        "o-",
+        color="#ffd93d",
+        linewidth=2.5,
+        markersize=10,
+        markerfacecolor="#ffd93d",
+        markeredgecolor="#ffffff",
+        markeredgewidth=1.5,
+    )
+    ax.set_xlabel("Omni-Code Count", fontsize=11)
+    ax.set_ylabel("Latency (ms)", fontsize=11)
+    ax.set_title(
+        "Package Creation Scalability",
+        fontsize=14,
+        fontweight="bold",
+        pad=12,
+    )
     ax.set_xscale("log")
     ax.set_yscale("log")
-    for c, t in zip(codes, times):
-        ax.annotate(f"{t} ms", (c, t), textcoords="offset points", xytext=(10, 5), fontsize=9)
+    for c, t, o in zip(codes, times, ops_sec):
+        ax.annotate(
+            f"{t:.1f} ms\n({o:,.0f} ops/s)",
+            (c, t),
+            textcoords="offset points",
+            xytext=(12, -5),
+            fontsize=9,
+            color="#ffd93d",
+        )
+    ax.text(
+        0.98,
+        0.02,
+        "Log-log scale | 4-layer defense pipeline",
+        transform=ax.transAxes,
+        ha="right",
+        fontsize=8,
+        color="#666666",
+        style="italic",
+    )
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "scalability.svg"), format="svg")
     plt.close()
@@ -206,12 +385,13 @@ def generate_text_summary() -> None:
     print("\nC vs Python:")
     for name, data in C_VS_PYTHON.items():
         print(
-            f"  {name:20s} C: {data['c']:>10,}  Python: {data['python']:>10,}  ({data['speedup']}x)"
+            f"  {name:20s} C: {data['c']:>10,}  "
+            f"Python: {data['python']:>10,}  ({data['speedup']}x)"
         )
 
     print("\nML-KEM-1024:")
     for name, data in KEM_OPS.items():
-        print(f"  {name:20s} {data['ops_sec']:>8,} ops/sec ({data['latency_ms']} ms)")
+        print(f"  {name:20s} {data['ops_sec']:>8,} ops/sec" f" ({data['latency_ms']} ms)")
 
 
 if __name__ == "__main__":

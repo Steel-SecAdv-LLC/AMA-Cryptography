@@ -25,6 +25,7 @@ PQC Backend:
 
 import hashlib
 import logging
+import os
 import secrets
 import warnings
 from abc import ABC, abstractmethod
@@ -33,7 +34,11 @@ from enum import Enum, auto
 from typing import Any, ClassVar, Dict, List, Optional, Tuple, Union
 
 from ama_cryptography._self_test import check_operational as _check_operational
+
+# Import HMAC and HKDF from pqc_backends (native C) with pure-Python fallback
 from ama_cryptography.pqc_backends import (
+    _HKDF_NATIVE_AVAILABLE,
+    _HMAC_SHA3_256_NATIVE_AVAILABLE,
     DILITHIUM_AVAILABLE,
     DILITHIUM_BACKEND,
     KYBER_AVAILABLE,
@@ -63,21 +68,60 @@ from ama_cryptography.pqc_backends import (
     sphincs_verify,
 )
 
-# Import HMAC and HKDF from legacy module
-try:
-    from code_guardian_secure import derive_keys, hmac_authenticate
+_HMAC_NATIVE = False
+_HKDF_NATIVE = False
 
-    HMAC_HKDF_AVAILABLE = True
-except (ImportError, RuntimeError):
-    HMAC_HKDF_AVAILABLE = False
-    # Use catch_warnings to avoid triggering pytest's "warnings as errors"
-    with warnings.catch_warnings():
-        warnings.simplefilter("default", UserWarning)
-        warnings.warn(
-            "HMAC/HKDF functions not available. Build native C library first.",
-            category=UserWarning,
-            stacklevel=2,
-        )
+try:
+    from ama_cryptography.pqc_backends import native_hkdf, native_hmac_sha3_256
+
+    _HMAC_NATIVE = _HMAC_SHA3_256_NATIVE_AVAILABLE
+    _HKDF_NATIVE = _HKDF_NATIVE_AVAILABLE
+except ImportError:
+    pass
+
+
+def _hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
+    """HMAC-SHA3-256: native C backend or pure-Python fallback (RFC 2104)."""
+    if _HMAC_NATIVE:
+        return native_hmac_sha3_256(key, msg)
+    # Pure-Python HMAC-SHA3-256 (RFC 2104) — stdlib only
+    block_size = 136  # SHA3-256 Keccak rate
+    if len(key) > block_size:
+        key = hashlib.sha3_256(key).digest()
+    key = key.ljust(block_size, b"\x00")
+    ipad = bytes(k ^ 0x36 for k in key)
+    opad = bytes(k ^ 0x5C for k in key)
+    inner = hashlib.sha3_256(ipad + msg).digest()
+    return hashlib.sha3_256(opad + inner).digest()
+
+
+def _hkdf_sha3_256(
+    ikm: bytes,
+    length: int,
+    salt: "Optional[bytes]" = None,
+    info: bytes = b"",
+) -> bytes:
+    """HKDF-SHA3-256: native C backend or pure-Python fallback (RFC 5869)."""
+    if _HKDF_NATIVE:
+        return native_hkdf(ikm, length, salt=salt, info=info)
+    # Pure-Python HKDF (extract-then-expand) using HMAC-SHA3-256
+    hash_len = 32  # SHA3-256 output
+    if length > 255 * hash_len:
+        raise ValueError(f"HKDF output length must be <= {255 * hash_len}, got {length}")
+    # Extract
+    if salt is None:
+        salt = b"\x00" * hash_len
+    prk = _hmac_sha3_256(salt, ikm)
+    # Expand
+    okm = b""
+    t = b""
+    for i in range(1, (length + hash_len - 1) // hash_len + 1):
+        t = _hmac_sha3_256(prk, t + info + bytes([i]))
+        okm += t
+    return okm[:length]
+
+
+HMAC_HKDF_AVAILABLE = True  # Always available via native or pure-Python fallback
 
 # Import RFC 3161 timestamping
 try:
@@ -653,9 +697,39 @@ class AESGCMProvider:
     _atexit_registered: ClassVar[bool] = False
     _ephemeral: ClassVar[bool] = False
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY) -> None:
+    @classmethod
+    def configure_ephemeral(cls, enabled: bool = True) -> None:
+        """Configure ephemeral mode BEFORE any instantiation (S6 fix).
+
+        When ephemeral mode is enabled, no disk I/O occurs for counter
+        persistence — counters live only in memory.  This must be called
+        before ``__init__`` so that ``_load_persisted_counters()`` and
+        ``atexit`` registration respect the flag.
+
+        Calling this method resets ``_counters_loaded`` and
+        ``_atexit_registered`` so the next instantiation picks up the
+        new mode cleanly.
+        """
+        cls._ephemeral = enabled
+        cls._counters_loaded = False
+        cls._atexit_registered = False
+        cls._encrypt_counters = {}
+        cls._counters_dirty = 0
+
+    def __init__(
+        self,
+        backend: CryptoBackend = CryptoBackend.C_LIBRARY,
+        *,
+        ephemeral: bool = False,
+    ) -> None:
+        # S6 fix: If ephemeral=True is passed to the constructor, apply it
+        # BEFORE loading counters or registering atexit, so tests are hermetic.
+        if ephemeral and not AESGCMProvider._ephemeral:
+            AESGCMProvider.configure_ephemeral(True)
+
         self.backend = backend
         self.algorithm = AlgorithmType.AES_256_GCM
+        self._pid_at_init: int = os.getpid()
 
         from ama_cryptography.pqc_backends import _AES_GCM_NATIVE_AVAILABLE, _native_lib
 
@@ -669,7 +743,7 @@ class AESGCMProvider:
         if not AESGCMProvider._counters_loaded:
             AESGCMProvider._load_persisted_counters()
             AESGCMProvider._counters_loaded = True
-        if not AESGCMProvider._atexit_registered:
+        if not AESGCMProvider._atexit_registered and not AESGCMProvider._ephemeral:
             import atexit
 
             atexit.register(AESGCMProvider._persist_counters)
@@ -847,6 +921,14 @@ class AESGCMProvider:
             Dict with 'ciphertext', 'nonce', 'tag', 'aad' keys
         """
         import secrets as _secrets
+
+        # Fork detection: refuse to reuse nonce state after os.fork()
+        if os.getpid() != self._pid_at_init:
+            raise RuntimeError(
+                "AES-GCM nonce counter state was inherited across fork(). "
+                "Create a new AESGCMProvider in the child process to avoid nonce reuse. "
+                "For multi-process deployments, use per-process key partitioning."
+            )
 
         if len(key) != 32:
             raise ValueError(f"AES-256 key must be 32 bytes, got {len(key)}")
@@ -1475,20 +1557,24 @@ class CryptoPackageConfig:
     """
     Configuration for create_crypto_package() algorithm selection.
 
+    4-Layer Defense-in-Depth Architecture:
+        Layer 1 — Content Integrity:   SHA3-256 hash (NIST FIPS 202)
+        Layer 2 — Keyed Authentication: HMAC-SHA3-256 (RFC 2104)
+        Layer 3 — Digital Signature:    Hybrid Ed25519 + ML-DSA-65 (RFC 8032 + NIST FIPS 204)
+        Layer 4 — Key Independence:     HKDF-SHA3-256 key derivation (RFC 5869)
+
+    All 4 layers are always active. Optional add-ons (KEM, SPHINCS+, RFC 3161
+    timestamp) extend but do not replace the core layers.
+
     Attributes:
-        use_kyber: Enable Kyber-1024 for key encapsulation (default: False)
-        use_sphincs: Enable SPHINCS+-256f for signatures (default: False)
+        use_kyber: Enable Kyber-1024 KEM (optional add-on, default: False)
+        use_sphincs: Enable SPHINCS+-256f secondary signature (optional add-on)
         signature_algorithm: Primary signature algorithm (default: HYBRID_SIG)
         include_kem: Include KEM encapsulation in package (default: False)
-        include_timestamp: Include RFC 3161 timestamp (default: False, requires TSA server)
+        include_timestamp: Include RFC 3161 timestamp (optional add-on)
         num_derived_keys: Number of HKDF-derived keys to generate (default: 3)
         tsa_url: RFC 3161 Time Stamp Authority URL (default: None)
-
-    Note:
-        - Kyber-1024 requires native C backend (build with -DAMA_USE_NATIVE_PQC=ON)
-        - SPHINCS+-256f requires native C backend (build with -DAMA_USE_NATIVE_PQC=ON)
-        - When use_sphincs=True, SPHINCS+ signature is added alongside primary signature
-        - RFC 3161 timestamping requires network access to TSA server
+        tsa_mode: TSA mode — "online", "mock", or "disabled" (default: "online")
     """
 
     use_kyber: bool = False
@@ -1498,6 +1584,7 @@ class CryptoPackageConfig:
     include_timestamp: bool = False
     num_derived_keys: int = 3
     tsa_url: Optional[str] = None
+    tsa_mode: str = "online"
 
 
 @dataclass
@@ -1505,34 +1592,60 @@ class CryptoPackageResult:
     """
     Result from create_crypto_package() containing all cryptographic artifacts.
 
-    6-Layer Defense-in-Depth Architecture:
-    Layer 1: SHA3-256 content hash (128-bit collision resistance)
-    Layer 2: HMAC-SHA3-256 authentication (keyed authentication)
-    Layer 3: Ed25519 classical signature (128-bit security)
-    Layer 4: ML-DSA-65 quantum-resistant signature (192-bit security)
-    Layer 5: HKDF key derivation (key independence)
-    Layer 6: RFC 3161 timestamp (third-party attestation)
+    4-Layer Defense-in-Depth Architecture
+    ======================================
+    Layer 1 — Content Integrity (SHA3-256, NIST FIPS 202):
+        Tamper detection via cryptographic hash. Any modification to the
+        protected content produces a different hash.  128-bit collision
+        resistance.
+
+    Layer 2 — Keyed Authentication (HMAC-SHA3-256, RFC 2104):
+        Authenticates content with a 256-bit random key.  Prevents forgery
+        by parties who do not possess the HMAC key.  The key is stored in
+        ``hmac_key`` so that ``verify_crypto_package()`` can recompute and
+        compare the tag.
+
+    Layer 3 — Digital Signature (Ed25519 + ML-DSA-65, RFC 8032 + NIST FIPS 204):
+        Non-repudiation via hybrid classical + post-quantum dual signature.
+        Both signatures must verify.  Ed25519 provides 128-bit classical
+        security; ML-DSA-65 provides 192-bit quantum security (NIST Level 3).
+
+    Layer 4 — Key Independence (HKDF-SHA3-256, RFC 5869):
+        Derives cryptographically independent sub-keys from a 256-bit master
+        secret.  Each derived key serves a distinct purpose, preventing key
+        reuse across cryptographic boundaries.
+
+    Optional add-ons (not counted as core layers):
+        - SPHINCS+-256f secondary signature (NIST FIPS 205)
+        - ML-KEM-1024 key encapsulation (NIST FIPS 203)
+        - RFC 3161 trusted timestamping
 
     Attributes:
         content_hash: SHA3-256 hash of the content (hex) [Layer 1]
+        hmac_key: HMAC-SHA3-256 key used for authentication [Layer 2]
         hmac_tag: HMAC-SHA3-256 authentication tag [Layer 2]
-        primary_signature: Primary signature from selected algorithm [Layer 3/4]
-        sphincs_signature: Optional SPHINCS+-256f signature (if enabled)
-        derived_keys: HKDF-derived keys for key independence [Layer 5]
-        hkdf_salt: Salt used for HKDF derivation
-        timestamp: RFC 3161 timestamp token (if requested) [Layer 6]
-        kem_ciphertext: Optional Kyber-1024 ciphertext (if KEM enabled)
-        kem_shared_secret: Optional shared secret from KEM (if enabled)
+        primary_signature: Primary signature from selected algorithm [Layer 3]
+        sphincs_signature: Optional SPHINCS+-256f signature (add-on)
+        derived_keys: HKDF-derived keys for key independence [Layer 4]
+        hkdf_salt: Salt used for HKDF derivation [Layer 4]
+        hkdf_master_secret: Master secret used for HKDF [Layer 4]
+        hkdf_info: Info string used for HKDF derivation [Layer 4]
+        timestamp: RFC 3161 timestamp token (optional add-on)
+        kem_ciphertext: Optional Kyber-1024 ciphertext (add-on)
+        kem_shared_secret: Optional shared secret from KEM (add-on)
         keypairs: Dictionary of generated keypairs by algorithm
         metadata: Additional package metadata
     """
 
     content_hash: str
+    hmac_key: bytes = field(repr=False)
     hmac_tag: bytes
     primary_signature: Signature
     sphincs_signature: Optional[Signature]
     derived_keys: List[bytes]
     hkdf_salt: bytes
+    hkdf_master_secret: bytes = field(repr=False)
+    hkdf_info: bytes
     timestamp: Optional[bytes]
     kem_ciphertext: Optional[bytes]
     kem_shared_secret: Optional[bytes]
@@ -1540,41 +1653,106 @@ class CryptoPackageResult:
     metadata: Dict[str, Any]
 
 
+def _acquire_timestamp(
+    content: bytes,
+    config: CryptoPackageConfig,
+) -> Optional[bytes]:
+    """Acquire an RFC 3161 timestamp token according to *config*.
+
+    Returns the raw token bytes, or ``None`` when timestamping is disabled or
+    not requested.  Raises :class:`RuntimeError` if timestamps were requested
+    but acquisition failed (S4/S5 fixes: fail-loud philosophy).
+    """
+    if not config.include_timestamp:
+        return None
+
+    tsa_mode = getattr(config, "tsa_mode", "online")
+    if tsa_mode == "disabled":
+        return None
+
+    if tsa_mode == "mock":
+        # S4 fix: Do NOT silently swallow exceptions in mock mode.
+        # When include_timestamp=True, a failed timestamp must be loud.
+        result = get_timestamp(
+            data=content,
+            tsa_url=config.tsa_url,
+            hash_algorithm="sha3-256",
+            tsa_mode="mock",
+        )
+        # S5 fix: If get_timestamp() returns None, raise rather than
+        # silently producing an untimestamped package.
+        if result is None:
+            raise RuntimeError(
+                "Timestamp acquisition failed: get_timestamp() returned None. "
+                "Cannot produce untimestamped package when timestamps are required."
+            )
+        return result.token
+
+    # Online mode
+    if not RFC3161_AVAILABLE:
+        raise TimestampUnavailableError(
+            "RFC3161_UNAVAILABLE: rfc3161ng library not installed. "
+            "Install with: pip install rfc3161ng"
+        )
+    try:
+        result = get_timestamp(
+            data=content,
+            tsa_url=config.tsa_url,
+            hash_algorithm="sha3-256",
+        )
+        # S5 fix: Fail loudly when get_timestamp() returns None.
+        if result is None:
+            raise RuntimeError(
+                "Timestamp acquisition failed: get_timestamp() returned None. "
+                "Cannot produce untimestamped package when timestamps are required."
+            )
+        return result.token
+    except TimestampError as e:
+        raise TimestampError(
+            f"RFC 3161 timestamp is required when include_timestamp=True, "
+            f"but the timestamp request failed: {e}"
+        ) from e
+
+
 def create_crypto_package(
     content: bytes,
     config: Optional[CryptoPackageConfig] = None,
 ) -> CryptoPackageResult:
     """
-    Create a cryptographic package with 6-Layer Defense-in-Depth Architecture.
+    Create a cryptographic package with 4-Layer Defense-in-Depth Architecture.
 
-    6-Layer Defense Architecture:
-    ------------------------------
-    Layer 1: SHA3-256 content hash (128-bit collision resistance)
-    Layer 2: HMAC-SHA3-256 authentication (keyed authentication)
-    Layer 3: Ed25519 classical signature (128-bit security)
-    Layer 4: ML-DSA-65 quantum-resistant signature (192-bit security)
-    Layer 5: HKDF key derivation (key independence)
-    Layer 6: RFC 3161 timestamp (third-party attestation, optional)
+    4-Layer Defense Architecture
+    ============================
+    Layer 1 — Content Integrity (SHA3-256, NIST FIPS 202):
+        128-bit collision resistance.  Any content modification is detected.
 
-    This function provides a unified interface for creating cryptographic
-    packages with support for:
-    - ML-DSA-65 (Dilithium) signatures
-    - Ed25519 classical signatures
-    - Hybrid signatures (Ed25519 + ML-DSA-65)
-    - HMAC-SHA3-256 authentication (default)
-    - HKDF key derivation (default)
-    - Kyber-1024 key encapsulation (optional)
-    - SPHINCS+-256f signatures (optional)
-    - RFC 3161 timestamping (optional, requires TSA server)
+    Layer 2 — Keyed Authentication (HMAC-SHA3-256, RFC 2104):
+        256-bit random key; prevents forgery.  Key preserved in result for
+        verification.
+
+    Layer 3 — Digital Signature (Ed25519 + ML-DSA-65):
+        Hybrid classical + post-quantum non-repudiation.  128-bit classical
+        security (RFC 8032) + 192-bit quantum security (NIST FIPS 204).
+
+    Layer 4 — Key Independence (HKDF-SHA3-256, RFC 5869):
+        Derives N independent sub-keys from a 256-bit master secret,
+        preventing key reuse across cryptographic boundaries.
+
+    Optional add-ons (not core layers):
+        - SPHINCS+-256f secondary signature (NIST FIPS 205)
+        - ML-KEM-1024 key encapsulation (NIST FIPS 203)
+        - RFC 3161 trusted timestamping (online, mock, or disabled)
 
     Args:
         content: The content to sign/protect (bytes)
-        config: Algorithm configuration (default: hybrid signatures with all layers)
+        config: Algorithm configuration (default: hybrid signatures with 4 layers)
 
     Returns:
         CryptoPackageResult with all cryptographic artifacts
 
     Raises:
+        TypeError: If content is not bytes
+        ValueError: If content is empty
         PQCUnavailableError: If required PQC algorithm is not available
         KyberUnavailableError: If Kyber is requested but not available
         SphincsUnavailableError: If SPHINCS+ is requested but not available
@@ -1582,7 +1760,7 @@ def create_crypto_package(
         TimestampError: If timestamp request fails
 
     Example:
-        >>> # Basic usage with hybrid signatures and multi-layer defense
+        >>> # Basic usage with hybrid signatures and 4-layer defense
         >>> result = create_crypto_package(b"Hello, World!")
         >>> print(f"Hash: {result.content_hash}")
         >>> print(f"HMAC: {result.hmac_tag.hex()}")
@@ -1625,27 +1803,19 @@ def create_crypto_package(
         config = CryptoPackageConfig()
 
     # ========================================================================
-    # LAYER 1: SHA3-256 Content Hash (128-bit collision resistance)
+    # LAYER 1: Content Integrity — SHA3-256 (NIST FIPS 202)
     # ========================================================================
     content_hash = hashlib.sha3_256(content).hexdigest()
 
     # ========================================================================
-    # LAYER 2: HMAC-SHA3-256 Authentication (keyed authentication)
+    # LAYER 2: Keyed Authentication — HMAC-SHA3-256 (RFC 2104)
     # ========================================================================
-    # Generate HMAC key from content for authentication
-    if HMAC_HKDF_AVAILABLE:
-        hmac_key = secrets.token_bytes(32)  # 256-bit HMAC key
-        hmac_tag = hmac_authenticate(content, hmac_key)
-    else:
-        raise RuntimeError(
-            "Native library required. Build: "
-            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
-        )
+    hmac_key = secrets.token_bytes(32)  # 256-bit HMAC key
+    hmac_tag = _hmac_sha3_256(hmac_key, content)
 
     # ========================================================================
-    # LAYER 3 & 4: Cryptographic Signatures (Ed25519 + ML-DSA-65)
+    # LAYER 3: Digital Signature — Hybrid Ed25519 + ML-DSA-65
     # ========================================================================
-    # Initialize result containers
     keypairs: Dict[str, KeyPair] = {}
     sphincs_signature: Optional[Signature] = None
     kem_ciphertext: Optional[bytes] = None
@@ -1657,7 +1827,7 @@ def create_crypto_package(
     primary_signature = primary_crypto.sign(content, primary_keypair.secret_key)
     keypairs[config.signature_algorithm.name] = primary_keypair
 
-    # Generate SPHINCS+ signature if requested
+    # Optional add-on: SPHINCS+ secondary signature
     if config.use_sphincs:
         if not SPHINCS_AVAILABLE:
             raise SphincsUnavailableError(
@@ -1671,26 +1841,23 @@ def create_crypto_package(
         keypairs["SPHINCS_256F"] = sphincs_keypair
 
     # ========================================================================
-    # LAYER 5: HKDF Key Derivation (key independence)
+    # LAYER 4: Key Independence — HKDF-SHA3-256 (RFC 5869)
     # ========================================================================
-    # Derive independent keys from master secret for various purposes
-    if HMAC_HKDF_AVAILABLE:
-        master_secret = secrets.token_bytes(32)  # 256-bit master secret
-        derived_keys, hkdf_salt = derive_keys(
-            master_secret=master_secret,
-            info="ama_cryptography_crypto_package_v1",
-            num_keys=config.num_derived_keys,
-            ethical_vector=None,  # Use default ethical vector
-            salt=None,  # Generate random salt
+    master_secret = secrets.token_bytes(32)  # 256-bit master secret
+    hkdf_salt = secrets.token_bytes(32)
+    hkdf_info = b"ama_cryptography_crypto_package_v1"
+    derived_keys: List[bytes] = []
+    for i in range(config.num_derived_keys):
+        dk = _hkdf_sha3_256(
+            ikm=master_secret,
+            length=32,
+            salt=hkdf_salt,
+            info=hkdf_info + b":" + str(i).encode(),
         )
-    else:
-        raise RuntimeError(
-            "Native library required. Build: "
-            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
-        )
+        derived_keys.append(dk)
 
     # ========================================================================
-    # OPTIONAL: Kyber-1024 Key Encapsulation Mechanism
+    # OPTIONAL ADD-ON: Kyber-1024 Key Encapsulation Mechanism
     # ========================================================================
     if config.use_kyber and config.include_kem:
         if not KYBER_AVAILABLE:
@@ -1707,27 +1874,9 @@ def create_crypto_package(
         keypairs["KYBER_1024"] = kyber_keypair
 
     # ========================================================================
-    # LAYER 6: RFC 3161 Timestamp (third-party attestation)
+    # OPTIONAL ADD-ON: RFC 3161 Timestamp
     # ========================================================================
-    timestamp_token: Optional[bytes] = None
-    if config.include_timestamp:
-        if not RFC3161_AVAILABLE:
-            raise TimestampUnavailableError(
-                "RFC3161_UNAVAILABLE: rfc3161ng library not installed. "
-                "Install with: pip install rfc3161ng"
-            )
-        try:
-            timestamp_result = get_timestamp(
-                data=content,
-                tsa_url=config.tsa_url,
-                hash_algorithm="sha3-256",
-            )
-            timestamp_token = timestamp_result.token
-        except TimestampError as e:
-            raise TimestampError(
-                f"RFC 3161 timestamp is required when include_timestamp=True, "
-                f"but the timestamp request failed: {e}"
-            ) from e
+    timestamp_token = _acquire_timestamp(content, config)
 
     # Build metadata
     metadata: Dict[str, Any] = {
@@ -1737,16 +1886,19 @@ def create_crypto_package(
         "timestamp_enabled": config.include_timestamp and timestamp_token is not None,
         "num_derived_keys": len(derived_keys),
         "pqc_status": get_pqc_capabilities()["status"],
-        "multi_layer_defense": True,  # All layers implemented
+        "defense_layers": 4,
     }
 
     return CryptoPackageResult(
         content_hash=content_hash,
+        hmac_key=hmac_key,
         hmac_tag=hmac_tag,
         primary_signature=primary_signature,
         sphincs_signature=sphincs_signature,
         derived_keys=derived_keys,
         hkdf_salt=hkdf_salt,
+        hkdf_master_secret=master_secret,
+        hkdf_info=hkdf_info,
         timestamp=timestamp_token,
         kem_ciphertext=kem_ciphertext,
         kem_shared_secret=kem_shared_secret,
@@ -1760,28 +1912,65 @@ def verify_crypto_package(
     package: CryptoPackageResult,
 ) -> Dict[str, bool]:
     """
-    Verify all signatures in a crypto package.
+    Verify all 4 layers of a crypto package plus any optional add-ons.
+
+    4-Layer Verification
+    ====================
+    Layer 1 — Content Integrity:   Recompute SHA3-256 and compare to stored hash.
+    Layer 2 — Keyed Authentication: Recompute HMAC-SHA3-256 with stored key and
+              compare to stored tag.
+    Layer 3 — Digital Signature:   Verify primary signature (Ed25519 + ML-DSA-65)
+              against stored public key.
+    Layer 4 — Key Independence:    Re-derive keys from stored master secret, salt,
+              and info; compare to stored derived keys.
+
+    Optional add-on verification:
+        - SPHINCS+ secondary signature (if present)
+        - KEM shared secret (if present and keypair available)
 
     Args:
         content: Original content that was signed
         package: CryptoPackageResult to verify
 
     Returns:
-        Dictionary mapping signature type to verification result
+        Dictionary with a boolean for each layer plus ``all_valid`` (True only
+        if every layer passes):
+            - content_hash: Layer 1
+            - hmac: Layer 2
+            - primary_signature: Layer 3
+            - hkdf_keys: Layer 4
+            - sphincs: (if present)
+            - kem: (if present)
+            - all_valid: True iff all checks passed
 
     Example:
         >>> result = create_crypto_package(b"Hello")
-        >>> verification = verify_crypto_package(b"Hello", result)
-        >>> print(f"Primary valid: {verification['primary']}")
+        >>> v = verify_crypto_package(b"Hello", result)
+        >>> assert v["all_valid"]
     """
     _check_operational()
     results: Dict[str, bool] = {}
 
-    # Verify content hash
+    # ========================================================================
+    # LAYER 1: Content Integrity — SHA3-256
+    # ========================================================================
     computed_hash = hashlib.sha3_256(content).hexdigest()
     results["content_hash"] = computed_hash == package.content_hash
 
-    # Verify primary signature
+    # ========================================================================
+    # LAYER 2: Keyed Authentication — HMAC-SHA3-256
+    # ========================================================================
+    try:
+        recomputed_hmac = _hmac_sha3_256(package.hmac_key, content)
+        from ama_cryptography.secure_memory import constant_time_compare
+
+        results["hmac"] = constant_time_compare(recomputed_hmac, package.hmac_tag)
+    except Exception:
+        results["hmac"] = False
+
+    # ========================================================================
+    # LAYER 3: Digital Signature — primary algorithm
+    # ========================================================================
     sig_alg_name = package.metadata.get("signature_algorithm", "HYBRID_SIG")
     try:
         sig_alg = AlgorithmType[sig_alg_name]
@@ -1789,26 +1978,87 @@ def verify_crypto_package(
         sig_alg = AlgorithmType.HYBRID_SIG
 
     if sig_alg_name in package.keypairs:
-        primary_crypto = AmaCryptography(algorithm=sig_alg)
-        results["primary"] = primary_crypto.verify(
-            content,
-            package.primary_signature.signature,
-            package.keypairs[sig_alg_name].public_key,
-        )
+        try:
+            primary_crypto = AmaCryptography(algorithm=sig_alg)
+            results["primary_signature"] = primary_crypto.verify(
+                content,
+                package.primary_signature.signature,
+                package.keypairs[sig_alg_name].public_key,
+            )
+        except Exception:
+            results["primary_signature"] = False
     else:
-        results["primary"] = False
+        results["primary_signature"] = False
 
-    # Verify SPHINCS+ signature if present
+    # ========================================================================
+    # LAYER 4: Key Independence — HKDF re-derivation
+    # ========================================================================
+    try:
+        # S1 fix: Empty derived_keys must fail — the loop would iterate zero
+        # times and leave keys_match=True, trivially bypassing Layer 4.
+        if not package.derived_keys:
+            results["hkdf_keys"] = False
+        else:
+            hkdf_info = package.hkdf_info
+            recomputed_keys: List[bytes] = []
+            for i in range(len(package.derived_keys)):
+                dk = _hkdf_sha3_256(
+                    ikm=package.hkdf_master_secret,
+                    length=32,
+                    salt=package.hkdf_salt,
+                    info=hkdf_info + b":" + str(i).encode(),
+                )
+                recomputed_keys.append(dk)
+
+            from ama_cryptography.secure_memory import constant_time_compare as _ct
+
+            keys_match = len(recomputed_keys) == len(package.derived_keys)
+            for rk, sk in zip(recomputed_keys, package.derived_keys):
+                if not _ct(rk, sk):
+                    keys_match = False
+            results["hkdf_keys"] = keys_match
+    except Exception:
+        results["hkdf_keys"] = False
+
+    # ========================================================================
+    # OPTIONAL: Verify SPHINCS+ signature (add-on)
+    # ========================================================================
     if package.sphincs_signature is not None and "SPHINCS_256F" in package.keypairs:
         if SPHINCS_AVAILABLE:
-            sphincs_provider = SphincsProvider()
-            results["sphincs"] = sphincs_provider.verify(
-                content,
-                package.sphincs_signature.signature,
-                package.keypairs["SPHINCS_256F"].public_key,
-            )
+            try:
+                sphincs_provider = SphincsProvider()
+                results["sphincs"] = sphincs_provider.verify(
+                    content,
+                    package.sphincs_signature.signature,
+                    package.keypairs["SPHINCS_256F"].public_key,
+                )
+            except Exception:
+                results["sphincs"] = False
         else:
             results["sphincs"] = False
+
+    # ========================================================================
+    # OPTIONAL: Verify KEM shared secret (add-on)
+    # ========================================================================
+    if (
+        package.kem_ciphertext is not None
+        and package.kem_shared_secret is not None
+        and "KYBER_1024" in package.keypairs
+    ):
+        try:
+            kyber_provider = KyberProvider()
+            decapsulated_ss = kyber_provider.decapsulate(
+                package.kem_ciphertext,
+                package.keypairs["KYBER_1024"].secret_key,
+            )
+            from ama_cryptography.secure_memory import constant_time_compare as _ct2
+
+            results["kem"] = _ct2(decapsulated_ss, package.kem_shared_secret)
+        except Exception:
+            results["kem"] = False
+
+    # Aggregate
+    results["all_valid"] = all(results.values())
 
     return results
 

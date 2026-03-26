@@ -1,5 +1,8 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel", "Cython>=3.0.0", "numpy>=1.24.0,<3.0.0"]
+# NumPy and Cython are optional — needed only for the math_engine Cython extension.
+# The core cryptographic package installs and works without them.
+# Set AMA_NO_CYTHON=1 to skip Cython extensions entirely.
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -54,6 +57,13 @@ requires-python = ">=3.9"
 dependencies = []
 
 [project.optional-dependencies]
+math = [
+    # NumPy/Cython for the optional math_engine Cython extension.
+    # Not required for core cryptographic operations.
+    # Install with: pip install "ama-cryptography[math]"
+    "numpy>=1.24.0,<3.0.0",
+    "Cython>=3.0.0",
+]
 monitoring = [
     # NumPy/SciPy for mathematical monitoring (equations, double_helix_engine)
     # Install with: pip install "ama-cryptography[monitoring]"

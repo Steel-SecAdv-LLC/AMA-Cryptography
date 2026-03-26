@@ -52,7 +52,7 @@ The system is designed to be secure against:
 
 | Adversary | Capability | Protection |
 |-----------|-----------|-----------|
-| **Classical adversary** | Classical computing resources | Ed25519 + ML-DSA-65 + all layers |
+| **Classical adversary** | Classical computing resources | Ed25519 + ML-DSA-65 + all 4 layers |
 | **Quantum adversary** | Cryptographically-relevant quantum computer (CRQC) | ML-DSA-65 + ML-KEM-1024 |
 | **Network adversary** | Full network interception (MITM) | Signature verification, RFC 3161 timestamps |
 | **Offline dictionary attacker** | GPU/ASIC password cracking | Argon2id memory-hard KDF |
@@ -70,27 +70,20 @@ The following are **not** in scope for AMA Cryptography's security model:
 
 ---
 
-## Multi-Layer Security Analysis
+## 4-Layer Security Analysis
 
 Each layer provides independent protection from a different mathematical foundation:
 
-**Core Cryptographic Operations:**
-
 | Layer | Algorithm | Security Assumption | Failure Mode |
 |-------|-----------|--------------------|-----------|
-| 1 | SHA3-256 | Keccak collision resistance | Only if SHA3 is broken |
-| 2 | HMAC-SHA3-256 | PRF security, key secrecy | Only if HMAC key exposed |
-| 3 | Ed25519 | Discrete logarithm on Curve25519 | Quantum computer (Shor) |
-| 4 | ML-DSA-65 | Module-LWE lattice hardness | Unknown lattice breakthrough |
+| 1 | SHA3-256 | Keccak collision resistance (NIST FIPS 202) | Only if SHA3 is broken |
+| 2 | HMAC-SHA3-256 | PRF security, key secrecy (RFC 2104) | Only if HMAC key exposed |
+| 3 | Hybrid Ed25519 + ML-DSA-65 | Discrete log (Curve25519) + Module-LWE lattice hardness (RFC 8032 + NIST FIPS 204) | Quantum computer (Shor) for Ed25519; unknown lattice breakthrough for ML-DSA-65 |
+| 4 | HKDF-SHA3-256 | PRF security of HMAC-SHA3-256 (RFC 5869) | Only if underlying PRF is broken |
 
-**Supporting Infrastructure:**
+**Optional add-ons (not core layers):** SPHINCS+-256f, ML-KEM-1024, RFC 3161 timestamping.
 
-| Component | Purpose | Failure Mode |
-|-----------|---------|-------------|
-| HKDF-SHA3-256 | Key derivation, key independence | Only if HKDF is broken |
-| RFC 3161 | Temporal proof of existence (optional) | TSA compromise |
-
-**Combined security:** Package authenticity is protected by four independent cryptographic operations. An attacker must simultaneously break **all applicable layers**. No known attack accomplishes this.
+**Combined security:** An attacker must simultaneously break **all applicable layers**. No known attack accomplishes this.
 
 ---
 
@@ -102,7 +95,7 @@ The following operations are implemented in constant time:
 
 | Operation | Implementation | Status |
 |-----------|---------------|--------|
-| HMAC comparison | `ama_consttime_memcmp()` (C) / XOR accumulator (Python) | ✓ Constant-time |
+| HMAC comparison | `hmac.compare_digest()` / `sodium_memcmp()` | ✓ Constant-time |
 | Ed25519 signing | `ama_ed25519.c` with `fe25519_sq()` | ✓ Constant-time |
 | Ed25519 verification | Windowed scalar multiplication | ✓ Constant-time |
 | AES-256-GCM (default) | Table-based S-box | ⚠ NOT constant-time |
@@ -196,7 +189,7 @@ AMA Cryptography vs. peer implementations:
 | Quantum-resistant signatures | ✓ ML-DSA-65 (FIPS 204) | ✗ | ✗ (3.x preview) |
 | Hybrid classical+PQC | ✓ | ✗ | ✗ |
 | Runtime anomaly monitoring | ✓ 3R Framework | ✗ | ✗ |
-| Defense layers | 6 | 1-2 | 1-2 |
+| Defense layers | 4 | 1-2 | 1-2 |
 | RFC 3161 timestamps | ✓ | ✗ | ✗ |
 | Zero-downtime key rotation | ✓ | ✗ | ✗ |
 | NIST FIPS 203/204/205 | ✓ | ✗ | Partial |
