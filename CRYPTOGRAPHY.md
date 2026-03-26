@@ -206,16 +206,22 @@ combined_ss = HKDF-SHA3-256(
 
 ## Defense-in-Depth Layers
 
-AMA Cryptography applies six independent cryptographic layers:
+AMA Cryptography applies four core cryptographic operations supported by input normalization and timestamping infrastructure:
 
-1. **Canonical Encoding** - Length-prefixed encoding prevents concatenation attacks
-2. **SHA3-256 Hash** - Content integrity with collision resistance
-3. **HMAC-SHA3-256** - Symmetric authentication with shared key
-4. **Ed25519 Signature** - Classical asymmetric authentication
-5. **ML-DSA-65 Signature** - Quantum-resistant asymmetric authentication
-6. **RFC 3161 Timestamp** - Third-party proof of existence (optional)
+**Input Normalization:**
+- **Canonical Encoding** - Length-prefixed encoding prevents concatenation attacks
 
-**Security Bound:** Overall security is bounded by the weakest layer (~128-bit classical, ~192-bit quantum when Dilithium is enforced). Defense-in-depth ensures continued protection if any single layer is compromised. See [SECURITY.md](SECURITY.md) for detailed analysis.
+**Core Cryptographic Operations (4 defense layers):**
+1. **SHA3-256 Hash** - Content integrity with collision resistance
+2. **HMAC-SHA3-256** - Symmetric authentication with derived key
+3. **Ed25519 Signature** - Classical asymmetric authentication
+4. **ML-DSA-65 Signature** - Quantum-resistant asymmetric authentication
+
+**Supporting Infrastructure:**
+- **HKDF-SHA3-256** - Key derivation for layers 2–4
+- **RFC 3161 Timestamp** - Third-party proof of existence (optional)
+
+**Security Bound:** Overall security is bounded by the weakest core layer (~128-bit classical, ~192-bit quantum when ML-DSA-65 is enforced). Defense-in-depth ensures continued protection if any single layer is compromised. See [SECURITY.md](SECURITY.md) for detailed analysis.
 
 ### Hash Algorithm Note: RFC 3161 Timestamps
 

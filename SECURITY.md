@@ -23,7 +23,8 @@ We actively maintain and provide security updates for the following versions:
 
 | Version | Supported | Status |
 |---------|-----------|--------|
-| 2.0.x | Yes | Active development and security updates |
+| 2.1.x | Yes | Active development and security updates |
+| 2.0.x | No | Superseded by v2.1 |
 | 1.0.x | No | Superseded by v2.0 |
 
 ---
