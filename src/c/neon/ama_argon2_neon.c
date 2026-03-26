@@ -42,10 +42,10 @@ static const uint8_t SIGMA[12][16] = {
     {14,10, 4, 8, 9,15,13, 6, 1,12, 0, 2,11, 7, 5, 3},
 };
 
-/* NEON rotate right 64 */
-static inline uint64x2_t rotr64_neon(uint64x2_t x, int n) {
-    return vorrq_u64(vshrq_n_u64(x, n), vshlq_n_u64(x, 64 - n));
-}
+/* NEON rotate right by compile-time constants used in Blake2b G.
+ * vshrq_n_u64 / vshlq_n_u64 require compile-time constant shift amounts,
+ * so we define specialised macros instead of a variable-shift function. */
+#define ROTR64_NEON(x, n) vorrq_u64(vshrq_n_u64((x), (n)), vshlq_n_u64((x), 64 - (n)))
 
 /* ============================================================================
  * Blake2b G function (NEON vectorized, 2 pairs at a time)
@@ -54,13 +54,13 @@ static inline void blake2b_g_neon(uint64x2_t *a, uint64x2_t *b,
                                    uint64x2_t *c, uint64x2_t *d,
                                    uint64x2_t mx, uint64x2_t my) {
     *a = vaddq_u64(*a, vaddq_u64(*b, mx));
-    *d = rotr64_neon(veorq_u64(*d, *a), 32);
+    *d = ROTR64_NEON(veorq_u64(*d, *a), 32);
     *c = vaddq_u64(*c, *d);
-    *b = rotr64_neon(veorq_u64(*b, *c), 24);
+    *b = ROTR64_NEON(veorq_u64(*b, *c), 24);
     *a = vaddq_u64(*a, vaddq_u64(*b, my));
-    *d = rotr64_neon(veorq_u64(*d, *a), 16);
+    *d = ROTR64_NEON(veorq_u64(*d, *a), 16);
     *c = vaddq_u64(*c, *d);
-    *b = rotr64_neon(veorq_u64(*b, *c), 63);
+    *b = ROTR64_NEON(veorq_u64(*b, *c), 63);
 }
 
 /* ============================================================================
