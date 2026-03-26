@@ -29,7 +29,7 @@ security guarantees. The functions here implement mathematical frameworks for:
 
 These utilities support the overall system architecture but do not provide
 cryptographic protection. For cryptographic operations, use the dedicated
-modules: pqc_backends.py, crypto_api.py, and code_guardian_secure.py.
+modules: pqc_backends.py and crypto_api.py.
 
 Complete implementation of 5 proven mathematical frameworks with machine-precision verification.
 

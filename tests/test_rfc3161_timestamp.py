@@ -149,6 +149,7 @@ class TestGetTimestamp:
             patch("ama_cryptography.rfc3161_timestamp.RemoteTimestamper", mock_timestamper_cls),
         ):
             result = get_timestamp(data, tsa_url="http://tsa.example.com", hash_algorithm=algo)
+        assert result is not None
         assert result.data_hash == expected_hash
         assert result.hash_algorithm == algo
         assert result.tsa_url == "http://tsa.example.com"

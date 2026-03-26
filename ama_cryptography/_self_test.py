@@ -90,12 +90,12 @@ def reset_module() -> bool:
 # CONTINUOUS RNG TEST (FIPS 140-3 Section 4.9.2)
 # ============================================================================
 
-_previous_rng_output: Optional[bytes] = (
-    None  # Mutated by secure_token_bytes() — continuous RNG test state
-)
-
-
 _RNG_HEALTH_SIZE = 32  # Fixed size for continuous health comparison
+
+# Mutable container for continuous RNG health state (FIPS 140-3 Section 4.9.2).
+# Using a dict avoids the ``global`` keyword, which silences CodeQL's
+# "unused global variable" false-positive while preserving identical semantics.
+_rng_state: dict[str, Optional[bytes]] = {"previous": None}
 
 
 def secure_token_bytes(n: int = 32) -> bytes:
@@ -108,14 +108,13 @@ def secure_token_bytes(n: int = 32) -> bytes:
     the same entropy that the caller receives.
     """
     check_operational()
-    global _previous_rng_output
     draw_size = max(n, _RNG_HEALTH_SIZE)
     buf = secrets.token_bytes(draw_size)
     health_sample = buf[:_RNG_HEALTH_SIZE]
-    if _previous_rng_output is not None and health_sample == _previous_rng_output:
+    if _rng_state["previous"] is not None and health_sample == _rng_state["previous"]:
         _set_error("Continuous RNG test failed: consecutive identical outputs")
         raise CryptoModuleError("Module in error state: Continuous RNG test failed")
-    _previous_rng_output = health_sample
+    _rng_state["previous"] = health_sample
     return buf[:n]
 
 
@@ -425,7 +424,7 @@ def _run_self_tests() -> bool:
     Returns True if all tests passed and module is OPERATIONAL.
     Returns False and sets ERROR state if any test failed.
     """
-    global _MODULE_STATE, _ERROR_REASON, _SELF_TEST_RESULTS, _POST_DURATION_MS, _previous_rng_output
+    global _MODULE_STATE, _ERROR_REASON, _SELF_TEST_RESULTS, _POST_DURATION_MS
     _MODULE_STATE = "SELF_TEST"
     _ERROR_REASON = None
     _SELF_TEST_RESULTS = []
@@ -482,7 +481,7 @@ def _run_self_tests() -> bool:
                 _set_error("RNG health test failed at startup")
                 all_passed = False
             else:
-                _previous_rng_output = out2
+                _rng_state["previous"] = out2
                 _SELF_TEST_RESULTS.append(("RNG", True, "RNG health test passed"))
         except Exception as exc:
             _SELF_TEST_RESULTS.append(("RNG", False, f"Exception: {exc}"))

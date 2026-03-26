@@ -38,3 +38,17 @@ endif()
 # Performance benchmark (not added to ctest - run manually)
 add_executable(test_benchmark test_benchmark.c)
 target_link_libraries(test_benchmark ama_cryptography_test)
+
+# dudect constant-time verification tests
+if(AMA_ENABLE_DUDECT)
+    add_executable(test_dudect test_dudect.c)
+    target_include_directories(test_dudect PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_dudect ama_cryptography_test m)
+    if(AMA_USE_NATIVE_PQC)
+        target_compile_definitions(test_dudect PRIVATE AMA_USE_NATIVE_PQC)
+    endif()
+    set_target_properties(test_dudect PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+    message(STATUS "dudect: Empirical constant-time verification tests enabled")
+endif()

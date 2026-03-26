@@ -1,0 +1,16 @@
+# SHA3 fuzzing dictionary
+# Common input patterns for hash functions
+
+# Empty and single-byte inputs
+""
+"\x00"
+"\xff"
+
+# Block boundary sizes (SHA3-256 rate = 136 bytes)
+# Triggers: exact block, one less, one more
+kw_136="\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+kw_padding="\x06"
+kw_domain_sep="\x1f"
+
+# Keccak-specific tokens
+kw_rate_256="\x01\x00\x00\x00\x00\x00\x00\x88"

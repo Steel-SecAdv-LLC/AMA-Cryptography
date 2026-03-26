@@ -84,6 +84,8 @@
 static AMA_ONCE_FLAG cpuid_once = AMA_ONCE_FLAG_INIT;
 static int has_aes_ni_cached = 0;
 static int has_pclmulqdq_cached = 0;
+static int has_avx2_cached = 0;
+static int has_avx512f_cached = 0;
 
 static void detect_x86_features(void) {
 #ifdef _MSC_VER
@@ -91,11 +93,20 @@ static void detect_x86_features(void) {
     __cpuid(info, 1);
     has_aes_ni_cached = (info[2] >> 25) & 1;
     has_pclmulqdq_cached = (info[2] >> 1) & 1;
+    /* Leaf 7, sub-leaf 0: AVX2 (EBX[5]) and AVX-512F (EBX[16]) */
+    __cpuidex(info, 7, 0);
+    has_avx2_cached = (info[1] >> 5) & 1;
+    has_avx512f_cached = (info[1] >> 16) & 1;
 #else
     unsigned int eax, ebx, ecx, edx;
     if (__get_cpuid(1, &eax, &ebx, &ecx, &edx)) {
         has_aes_ni_cached = (ecx >> 25) & 1;
         has_pclmulqdq_cached = (ecx >> 1) & 1;
+    }
+    /* CPUID leaf 7, sub-leaf 0: AVX2 (EBX bit 5), AVX-512F (EBX bit 16) */
+    if (__get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx)) {
+        has_avx2_cached = (ebx >> 5) & 1;
+        has_avx512f_cached = (ebx >> 16) & 1;
     }
 #endif
 }
@@ -110,8 +121,20 @@ int ama_has_pclmulqdq(void) {
     return has_pclmulqdq_cached;
 }
 
+int ama_has_avx2(void) {
+    AMA_CALL_ONCE(cpuid_once, detect_x86_features);
+    return has_avx2_cached;
+}
+
+int ama_has_avx512f(void) {
+    AMA_CALL_ONCE(cpuid_once, detect_x86_features);
+    return has_avx512f_cached;
+}
+
 int ama_has_arm_aes(void) { return 0; }
 int ama_has_arm_pmull(void) { return 0; }
+int ama_has_arm_neon(void) { return 0; }
+int ama_has_arm_sve2(void) { return 0; }
 
 /* ============================================================================
  * ARM Crypto Extension Detection
@@ -122,6 +145,8 @@ int ama_has_arm_pmull(void) { return 0; }
 static AMA_ONCE_FLAG arm_once = AMA_ONCE_FLAG_INIT;
 static int has_arm_aes_cached = 0;
 static int has_arm_pmull_cached = 0;
+static int has_arm_neon_cached = 0;
+static int has_arm_sve2_cached = 0;
 
 #if defined(__linux__)
 #include <sys/auxv.h>
@@ -131,11 +156,22 @@ static int has_arm_pmull_cached = 0;
 #ifndef HWCAP_PMULL
 #define HWCAP_PMULL (1 << 4)
 #endif
+#ifndef AT_HWCAP2
+#define AT_HWCAP2 26
+#endif
+#ifndef HWCAP2_SVE2
+#define HWCAP2_SVE2 (1 << 1)
+#endif
 
 static void detect_arm_features(void) {
     unsigned long hwcap = getauxval(AT_HWCAP);
     has_arm_aes_cached = (hwcap & HWCAP_AES) ? 1 : 0;
     has_arm_pmull_cached = (hwcap & HWCAP_PMULL) ? 1 : 0;
+    /* NEON is mandatory on AArch64 */
+    has_arm_neon_cached = 1;
+    /* SVE2 detection via AT_HWCAP2 */
+    unsigned long hwcap2 = getauxval(AT_HWCAP2);
+    has_arm_sve2_cached = (hwcap2 & HWCAP2_SVE2) ? 1 : 0;
 }
 
 #elif defined(__APPLE__)
@@ -143,13 +179,12 @@ static void detect_arm_features(void) {
 #include <sys/sysctl.h>
 
 static void detect_arm_features(void) {
-    /* Apple Silicon (M1+) always has AES and PMULL */
+    /* Apple Silicon (M1+) always has AES, PMULL, and NEON */
     int val = 0;
     size_t len = sizeof(val);
     if (sysctlbyname("hw.optional.arm.FEAT_AES", &val, &len, NULL, 0) == 0) {
         has_arm_aes_cached = val;
     } else {
-        /* Apple Silicon fallback: assume available */
         has_arm_aes_cached = 1;
     }
     val = 0;
@@ -159,17 +194,24 @@ static void detect_arm_features(void) {
     } else {
         has_arm_pmull_cached = 1;
     }
+    has_arm_neon_cached = 1;
+    /* Apple Silicon does not support SVE2 as of M4 */
+    has_arm_sve2_cached = 0;
 }
 
 #else
 static void detect_arm_features(void) {
     has_arm_aes_cached = 0;
     has_arm_pmull_cached = 0;
+    has_arm_neon_cached = 0;
+    has_arm_sve2_cached = 0;
 }
 #endif
 
 int ama_has_aes_ni(void) { return 0; }
 int ama_has_pclmulqdq(void) { return 0; }
+int ama_has_avx2(void) { return 0; }
+int ama_has_avx512f(void) { return 0; }
 
 int ama_has_arm_aes(void) {
     AMA_CALL_ONCE(arm_once, detect_arm_features);
@@ -181,6 +223,16 @@ int ama_has_arm_pmull(void) {
     return has_arm_pmull_cached;
 }
 
+int ama_has_arm_neon(void) {
+    AMA_CALL_ONCE(arm_once, detect_arm_features);
+    return has_arm_neon_cached;
+}
+
+int ama_has_arm_sve2(void) {
+    AMA_CALL_ONCE(arm_once, detect_arm_features);
+    return has_arm_sve2_cached;
+}
+
 /* ============================================================================
  * Unsupported architecture — no hardware crypto
  * ============================================================================ */
@@ -189,8 +241,12 @@ int ama_has_arm_pmull(void) {
 
 int ama_has_aes_ni(void) { return 0; }
 int ama_has_pclmulqdq(void) { return 0; }
+int ama_has_avx2(void) { return 0; }
+int ama_has_avx512f(void) { return 0; }
 int ama_has_arm_aes(void) { return 0; }
 int ama_has_arm_pmull(void) { return 0; }
+int ama_has_arm_neon(void) { return 0; }
+int ama_has_arm_sve2(void) { return 0; }
 
 #endif
 

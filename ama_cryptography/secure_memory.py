@@ -131,25 +131,120 @@ def secure_memzero(data: Union[bytearray, memoryview]) -> None:
     _memzero(data)
 
 
-def _memzero(data: Union[bytearray, memoryview]) -> None:
-    """
-    Multi-pass memory zeroing implementation.
+# Module-level backend indicator for introspection and testing.
+# One of: "native_ama", "libc_explicit_bzero", "libc_memset_s", "python_fallback"
+SECURE_MEMZERO_BACKEND: str = "python_fallback"
 
-    Uses three passes to increase likelihood of actual overwrite.
-    """
+
+def _try_native_ama_memzero() -> "Optional[Callable[[Union[bytearray, memoryview]], None]]":
+    """Attempt to use ama_secure_memzero from AMA's native C library."""
+    try:
+        from ama_cryptography.pqc_backends import _find_native_library
+
+        lib = _find_native_library()
+        if lib is None:
+            return None
+        fn = lib.ama_secure_memzero
+        fn.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+        fn.restype = None
+
+        def _zero_via_native(data: Union[bytearray, memoryview]) -> None:
+            length = len(data)
+            buf = (ctypes.c_char * length).from_buffer(data)
+            fn(ctypes.addressof(buf), length)
+
+        return _zero_via_native
+    except (ImportError, OSError, AttributeError):
+        return None
+
+
+def _try_libc_explicit_bzero() -> "Optional[Callable[[Union[bytearray, memoryview]], None]]":
+    """Attempt to use explicit_bzero from libc (Linux/BSD)."""
+    if sys.platform == "win32":
+        return None
+    try:
+        libc_name = ctypes.util.find_library("c")
+        if not libc_name:
+            return None
+        libc = ctypes.CDLL(libc_name)
+        if not hasattr(libc, "explicit_bzero"):
+            return None
+        fn = libc.explicit_bzero
+        fn.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+        fn.restype = None
+
+        def _zero_via_bzero(data: Union[bytearray, memoryview]) -> None:
+            length = len(data)
+            buf = (ctypes.c_char * length).from_buffer(data)
+            fn(ctypes.addressof(buf), length)
+
+        return _zero_via_bzero
+    except (OSError, AttributeError):
+        return None
+
+
+def _try_libc_memset_s() -> "Optional[Callable[[Union[bytearray, memoryview]], None]]":
+    """Attempt to use memset_s (macOS / C11 Annex K)."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        libc_name = ctypes.util.find_library("c")
+        if not libc_name:
+            return None
+        libc = ctypes.CDLL(libc_name)
+        if not hasattr(libc, "memset_s"):
+            return None
+        fn = libc.memset_s
+        fn.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_size_t]
+        fn.restype = ctypes.c_int
+
+        def _zero_via_memset_s(data: Union[bytearray, memoryview]) -> None:
+            length = len(data)
+            buf = (ctypes.c_char * length).from_buffer(data)
+            fn(ctypes.addressof(buf), length, 0, length)
+
+        return _zero_via_memset_s
+    except (OSError, AttributeError):
+        return None
+
+
+def _python_fallback_memzero(data: Union[bytearray, memoryview]) -> None:
+    """Multi-pass byte-level overwrite.  Best-effort when no native backend is available."""
     length = len(data)
-
-    # Pass 1: Zero
     for i in range(length):
         data[i] = 0
-
-    # Pass 2: Ones (to ensure actual write)
     for i in range(length):
         data[i] = 0xFF
-
-    # Pass 3: Final zero
     for i in range(length):
         data[i] = 0
+
+
+# Select the best available backend at module load time
+_memzero_fn: Optional[Callable[[Union[bytearray, memoryview]], None]] = None
+
+_memzero_fn = _try_native_ama_memzero()
+if _memzero_fn is not None:
+    SECURE_MEMZERO_BACKEND = "native_ama"
+else:
+    _memzero_fn = _try_libc_explicit_bzero()
+    if _memzero_fn is not None:
+        SECURE_MEMZERO_BACKEND = "libc_explicit_bzero"
+    else:
+        _memzero_fn = _try_libc_memset_s()
+        if _memzero_fn is not None:
+            SECURE_MEMZERO_BACKEND = "libc_memset_s"
+        else:
+            _memzero_fn = _python_fallback_memzero
+            SECURE_MEMZERO_BACKEND = "python_fallback"
+            logger.warning(
+                "secure_memzero: using Python byte-by-byte fallback. "
+                "Build the native C library for guaranteed secure zeroing."
+            )
+
+
+def _memzero(data: Union[bytearray, memoryview]) -> None:
+    """Dispatch to the best available secure zeroing backend."""
+    _memzero_fn(data)  # type: ignore[misc]
 
 
 def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
@@ -170,13 +265,11 @@ def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
     if size == 0:
         return
 
-    # Get a ctypes pointer to the actual buffer (no copy)
-    if isinstance(data, bytearray):
+    # Get a ctypes pointer to the actual buffer (no copy).
+    # Both bytearray and writable memoryview support from_buffer directly.
+    if isinstance(data, (bytearray, memoryview)):
         ptr = (ctypes.c_char * size).from_buffer(data)
         addr = ctypes.addressof(ptr)
-    elif isinstance(data, memoryview):
-        buf = (ctypes.c_char * size).from_buffer(data)
-        addr = ctypes.addressof(buf)
     else:
         # bytes: immutable, use id-based address (CPython implementation detail)
         # offset past PyBytesObject header to the ob_sval buffer
@@ -242,13 +335,11 @@ def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
     if size == 0:
         return
 
-    # Get a ctypes pointer to the actual buffer (no copy)
-    if isinstance(data, bytearray):
+    # Get a ctypes pointer to the actual buffer (no copy).
+    # Both bytearray and writable memoryview support from_buffer directly.
+    if isinstance(data, (bytearray, memoryview)):
         ptr = (ctypes.c_char * size).from_buffer(data)
         addr = ctypes.addressof(ptr)
-    elif isinstance(data, memoryview):
-        buf = (ctypes.c_char * size).from_buffer(data)
-        addr = ctypes.addressof(buf)
     else:
         # bytes: immutable, use id-based address (CPython implementation detail)
         if sys.implementation.name != "cpython":
@@ -509,10 +600,12 @@ def get_status() -> Dict[str, Union[bool, str]]:
         "backend": "stdlib",
         "initialized": True,
         "mlock_available": _detect_mlock_available(),
+        "memzero_backend": SECURE_MEMZERO_BACKEND,
     }
 
 
 __all__ = [
+    "SECURE_MEMZERO_BACKEND",
     "SecureBuffer",
     "SecureMemoryError",
     "constant_time_compare",

@@ -1,0 +1,123 @@
+name: CI - dudect Constant-Time Verification
+
+on:
+  push:
+    branches: [ main, develop, 'claude/**' ]
+    paths:
+      - 'src/c/**'
+      - 'include/**'
+      - 'tests/c/test_dudect.c'
+      - 'tests/c/dudect/**'
+      - '.github/workflows/dudect.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'src/c/**'
+      - 'include/**'
+      - 'tests/c/test_dudect.c'
+      - 'tests/c/dudect/**'
+  schedule:
+    # Run weekly on Sundays at 02:00 UTC
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      measurements:
+        description: 'Number of measurements per test'
+        required: false
+        default: '100000'
+
+permissions:
+  contents: read
+
+jobs:
+  dudect-utility:
+    name: dudect - Utility Functions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake
+
+      - name: Build with dudect enabled
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DAMA_ENABLE_DUDECT=ON \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_ENABLE_LTO=OFF \
+            -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build -j$(nproc)
+
+      - name: Run dudect tests (utility functions)
+        env:
+          MEASUREMENTS: ${{ github.event.inputs.measurements || '100000' }}
+        run: |
+          # Pin to single core and elevate priority to reduce noise
+          taskset -c 0 nice -n -10 \
+            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 300
+
+  dudect-pqc:
+    name: dudect - PQC Primitives
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake
+
+      - name: Build with dudect and PQC enabled
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DAMA_ENABLE_DUDECT=ON \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_AES_CONSTTIME=ON \
+            -DAMA_ENABLE_LTO=OFF \
+            -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build -j$(nproc)
+
+      - name: Run dudect tests (all functions incl. PQC)
+        env:
+          MEASUREMENTS: ${{ github.event.inputs.measurements || '100000' }}
+        run: |
+          taskset -c 0 nice -n -10 \
+            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 600
+
+  dudect-legacy-harnesses:
+    name: dudect - Legacy Harnesses (tools/constant_time)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake
+
+      - name: Build C library
+        run: |
+          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DAMA_ENABLE_LTO=OFF
+          cmake --build build -j$(nproc)
+
+      - name: Build and run legacy dudect harnesses
+        run: |
+          cd tools/constant_time
+          make clean && make all
+          echo "=== Utility function timing analysis ==="
+          taskset -c 0 nice -n -10 ./dudect_harness 50000
+          echo "=== Crypto primitive timing analysis ==="
+          taskset -c 0 nice -n -10 ./dudect_crypto 50000

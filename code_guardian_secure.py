@@ -29,18 +29,12 @@ Project: Post-quantum cryptographic security system
 AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
-Security Layers (Multi-Layer Defense-in-Depth):
-------------------------------------------------
-Core Cryptographic Operations:
-1. SHA3-256 content hashing (NIST FIPS 202)
-2. HMAC-SHA3-256 authentication (RFC 2104)
-3. Ed25519 digital signatures (RFC 8032) — native C backend
-4. CRYSTALS-Dilithium quantum-resistant signatures (NIST FIPS 204) — native C backend, required
-
-Supporting Infrastructure:
-- Canonical encoding — deterministic length-prefixed input normalization
-- HKDF key derivation (RFC 5869, NIST SP 800-108) — native C backend
-- RFC 3161 trusted timestamps with cryptographic verification (optional)
+Security Layers (4-Layer Defense-in-Depth):
+-------------------------------------------
+1. SHA3-256 content integrity (NIST FIPS 202, 128-bit collision resistance)
+2. HMAC-SHA3-256 keyed authentication (RFC 2104, 256-bit key)
+3. Hybrid Ed25519 + ML-DSA-65 digital signature (RFC 8032 + NIST FIPS 204)
+4. HKDF-SHA3-256 key independence (RFC 5869, cryptographic key separation)
 
 Additional Features:
 --------------------

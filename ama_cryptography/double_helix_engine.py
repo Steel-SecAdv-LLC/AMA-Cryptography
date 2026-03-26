@@ -30,7 +30,7 @@ implements:
 
 These utilities support system analytics and modeling but do not provide
 cryptographic protection. For cryptographic operations, use the dedicated
-modules: pqc_backends.py, crypto_api.py, and code_guardian_secure.py.
+modules: pqc_backends.py and crypto_api.py.
 
 Implements 18+ AMA Equation variants with Double-Helix Evolution Architecture.
 

@@ -584,7 +584,8 @@ KYBER_BACKEND: Optional[str] = _KYBER_BACKEND
 SPHINCS_AVAILABLE: bool = _SPHINCS_AVAILABLE
 SPHINCS_BACKEND: Optional[str] = _SPHINCS_BACKEND
 
-# SHA3-256 (raw hash) native availability
+# SHA3-256 (raw hash) native availability — consumed by get_pqc_backend_info()
+# and exported for downstream callers that need to check native SHA3 support.
 SHA3_256_NATIVE_AVAILABLE: bool = _SHA3_256_NATIVE_AVAILABLE
 
 # HMAC-SHA3-256 availability — determined at import time.
@@ -736,6 +737,11 @@ def get_pqc_backend_info() -> dict:
                     else None
                 ),
             },
+        },
+        "SHA3-256": {
+            "available": SHA3_256_NATIVE_AVAILABLE,
+            "backend": "native" if SHA3_256_NATIVE_AVAILABLE else None,
+            "description": "FIPS 202 SHA3-256 (Keccak-f[1600])",
         },
         "HMAC-SHA3-256": {
             "available": HMAC_SHA3_256_AVAILABLE,

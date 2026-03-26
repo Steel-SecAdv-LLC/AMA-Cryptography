@@ -22,6 +22,10 @@ option(AMA_USE_NATIVE_PQC "Enable native PQC implementations (ML-DSA-65, Kyber-1
 option(AMA_AES_CONSTTIME "Use constant-time bitsliced AES S-box (eliminates cache-timing)" ON)
 option(AMA_ED25519_ASSEMBLY "Enable ed25519-donna x86-64 assembly scalar mult" OFF)
 option(AMA_ENABLE_NATIVE_ARCH "Use -march=native for host-optimized builds" OFF)
+option(AMA_ENABLE_DUDECT "Build dudect constant-time verification tests" OFF)
+option(AMA_ENABLE_AVX512 "Enable AVX-512 instructions (x86-64)" OFF)
+option(AMA_ENABLE_NEON "Enable ARM NEON optimizations (AArch64)" ON)
+option(AMA_ENABLE_SVE2 "Enable ARM SVE2 optimizations (ARMv9)" OFF)
 
 # MSVC lacks __uint128_t required by fe51 field arithmetic. Auto-enable the
 # donna shim (which provides its own field ops) so Windows builds compile.
@@ -107,6 +111,80 @@ if(AMA_ENABLE_SIMD)
 
 endif()
 
+# ============================================================================
+# Hand-written SIMD implementations (Phase 3)
+# Each architecture gets its own source set with per-file compiler flags.
+# The dispatch system selects the best implementation at runtime.
+# ============================================================================
+
+set(AMA_AVX2_SOURCES "")
+set(AMA_NEON_SOURCES "")
+set(AMA_SVE2_SOURCES "")
+set(AMA_DISPATCH_SOURCES src/c/dispatch/ama_dispatch.c)
+
+# AVX2 hand-written intrinsics (x86-64 only)
+if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+        set(AMA_AVX2_SOURCES
+            src/c/avx2/ama_sha3_avx2.c
+            src/c/avx2/ama_kyber_avx2.c
+            src/c/avx2/ama_dilithium_avx2.c
+            src/c/avx2/ama_sphincs_avx2.c
+            src/c/avx2/ama_aes_gcm_avx2.c
+            src/c/avx2/ama_ed25519_avx2.c
+            src/c/avx2/ama_chacha20poly1305_avx2.c
+            src/c/avx2/ama_argon2_avx2.c
+        )
+        if(NOT MSVC)
+            set_source_files_properties(${AMA_AVX2_SOURCES} PROPERTIES
+                COMPILE_FLAGS "-mavx2 -maes -mpclmul")
+        endif()
+        message(STATUS "SIMD: AVX2 hand-written intrinsics enabled (8 algorithms)")
+    endif()
+endif()
+
+# ARM NEON intrinsics (AArch64 only)
+if(AMA_ENABLE_SIMD AND AMA_ENABLE_NEON)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        set(AMA_NEON_SOURCES
+            src/c/neon/ama_sha3_neon.c
+            src/c/neon/ama_kyber_neon.c
+            src/c/neon/ama_dilithium_neon.c
+            src/c/neon/ama_sphincs_neon.c
+            src/c/neon/ama_aes_gcm_neon.c
+            src/c/neon/ama_ed25519_neon.c
+            src/c/neon/ama_chacha20poly1305_neon.c
+            src/c/neon/ama_argon2_neon.c
+        )
+        if(NOT MSVC)
+            set_source_files_properties(${AMA_NEON_SOURCES} PROPERTIES
+                COMPILE_FLAGS "-march=armv8-a+crypto")
+        endif()
+        message(STATUS "SIMD: ARM NEON hand-written intrinsics enabled (8 algorithms)")
+    endif()
+endif()
+
+# ARM SVE2 intrinsics (ARMv9 only — stretch goal)
+if(AMA_ENABLE_SIMD AND AMA_ENABLE_SVE2)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        set(AMA_SVE2_SOURCES
+            src/c/sve2/ama_sha3_sve2.c
+            src/c/sve2/ama_kyber_sve2.c
+            src/c/sve2/ama_dilithium_sve2.c
+            src/c/sve2/ama_sphincs_sve2.c
+            src/c/sve2/ama_aes_gcm_sve2.c
+            src/c/sve2/ama_ed25519_sve2.c
+            src/c/sve2/ama_chacha20poly1305_sve2.c
+            src/c/sve2/ama_argon2_sve2.c
+        )
+        if(NOT MSVC)
+            set_source_files_properties(${AMA_SVE2_SOURCES} PROPERTIES
+                COMPILE_FLAGS "-march=armv9-a+sve2")
+        endif()
+        message(STATUS "SIMD: ARM SVE2 hand-written intrinsics enabled (8 algorithms)")
+    endif()
+endif()
+
 # AES-NI + PCLMULQDQ flags for x86 — applied per-file (not globally)
 # to prevent illegal instruction crashes on CPUs without AES-NI.
 # Runtime dispatch via ama_cpuid.c selects the correct path.
@@ -139,6 +217,10 @@ set(AMA_SOURCES
     src/c/ama_aes_gcm.c
     src/c/ama_cpuid.c
     src/c/ama_secure_memory.c
+    ${AMA_DISPATCH_SOURCES}
+    ${AMA_AVX2_SOURCES}
+    ${AMA_NEON_SOURCES}
+    ${AMA_SVE2_SOURCES}
 )
 
 # Add native PQC source files when enabled
@@ -224,6 +306,9 @@ if(AMA_BUILD_SHARED)
         PUBLIC_HEADER "include/ama_cryptography.h"
     )
     target_compile_definitions(ama_cryptography_shared PRIVATE AMA_BUILDING_SHARED)
+    target_compile_definitions(ama_cryptography_shared PRIVATE
+        $<$<CONFIG:Debug>:AMA_DISPATCH_DEBUG>
+    )
 
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_shared PRIVATE AMA_USE_NATIVE_PQC)
@@ -250,6 +335,9 @@ if(AMA_BUILD_STATIC)
         PUBLIC_HEADER "include/ama_cryptography.h"
     )
     target_compile_definitions(ama_cryptography_static PRIVATE AMA_BUILDING_STATIC)
+    target_compile_definitions(ama_cryptography_static PRIVATE
+        $<$<CONFIG:Debug>:AMA_DISPATCH_DEBUG>
+    )
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_static PRIVATE AMA_USE_NATIVE_PQC)
     endif()
@@ -288,6 +376,9 @@ if(AMA_BUILD_TESTS)
         OUTPUT_NAME "ama_cryptography_test"
     )
     target_compile_definitions(ama_cryptography_test PRIVATE AMA_TESTING_MODE)
+    target_compile_definitions(ama_cryptography_test PRIVATE
+        $<$<CONFIG:Debug>:AMA_DISPATCH_DEBUG>
+    )
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_test PRIVATE AMA_USE_NATIVE_PQC)
     endif()
@@ -360,8 +451,12 @@ message(STATUS "  Tests:          ${AMA_BUILD_TESTS}")
 message(STATUS "  Examples:       ${AMA_BUILD_EXAMPLES}")
 message(STATUS "  SIMD:           ${AMA_ENABLE_SIMD}")
 message(STATUS "  AVX2:           ${AMA_ENABLE_AVX2}")
+message(STATUS "  AVX-512:        ${AMA_ENABLE_AVX512}")
+message(STATUS "  NEON:           ${AMA_ENABLE_NEON}")
+message(STATUS "  SVE2:           ${AMA_ENABLE_SVE2}")
 message(STATUS "  Sanitizers:     ${AMA_ENABLE_SANITIZERS}")
 message(STATUS "  Fuzzing:        ${AMA_BUILD_FUZZ}")
+message(STATUS "  dudect:         ${AMA_ENABLE_DUDECT}")
 message(STATUS "  AES consttime:  ${AMA_AES_CONSTTIME}")
 message(STATUS "  LTO:            ${AMA_ENABLE_LTO}")
 if(MSVC AND AMA_ED25519_ASSEMBLY)

@@ -1,6 +1,6 @@
 # Post-Quantum Cryptography
 
-In-depth documentation for the post-quantum cryptographic algorithms in AMA Cryptography, their NIST standardization, native implementations, and integration into the multi-layer defense architecture.
+In-depth documentation for the post-quantum cryptographic algorithms in AMA Cryptography, their NIST standardization, native implementations, and integration into the 4-Layer defense architecture.
 
 ---
 

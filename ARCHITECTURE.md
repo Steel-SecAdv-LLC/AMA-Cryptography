@@ -300,8 +300,8 @@ ama_cryptography/
 ├── double_helix_engine.py # Bio-inspired helical data architecture
 ├── equations.py           # Mathematical framework (Lyapunov, golden ratio, etc.)
 ├── _numeric.py            # Pure-Python numerical utilities (NumPy-free fallback)
-├── secure_memory.py       # Secure zeroing, SecureBytes context manager
-├── rfc3161_timestamp.py   # RFC 3161 TSA client
+├── secure_memory.py       # Secure zeroing (backend cascade), SecureBytes, mlock
+├── rfc3161_timestamp.py   # RFC 3161 TSA client (online/mock/disabled modes)
 ├── exceptions.py          # Custom exception hierarchy
 ├── hmac_binding.*.so      # Cython HMAC-SHA3-256 binding (compiled)
 └── math_engine.*.so       # Cython math acceleration (compiled)
