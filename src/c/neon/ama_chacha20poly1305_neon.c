@@ -108,13 +108,17 @@ void ama_chacha20_block_x4_neon(const uint8_t key[32],
     s12=vaddq_u32(s12,i12); s13=vaddq_u32(s13,i13);
     s14=vaddq_u32(s14,i14); s15=vaddq_u32(s15,i15);
 
-    /* Extract 4 instances */
+    /* Extract 4 instances — store each vector to a temp array and
+     * scatter-read from the correct lane. vgetq_lane_u32 requires a
+     * compile-time constant lane index, so we cannot use a variable. */
     uint32x4_t rows[16] = {s0,s1,s2,s3,s4,s5,s6,s7,
                            s8,s9,s10,s11,s12,s13,s14,s15};
+    uint32_t tmp[4];
     for (int inst = 0; inst < 4; inst++) {
         uint32_t block[16];
         for (int row = 0; row < 16; row++) {
-            block[row] = vgetq_lane_u32(rows[row], inst);
+            vst1q_u32(tmp, rows[row]);
+            block[row] = tmp[inst];
         }
         memcpy(out + inst * 64, block, 64);
     }

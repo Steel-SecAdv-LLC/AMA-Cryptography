@@ -69,7 +69,6 @@ void ama_fe51_sub_x2_neon(fe51_neon r[2],
  * ============================================================================ */
 void ama_fe51_carry_x2_neon(fe51_neon r[2]) {
     const uint64x2_t mask51 = vdupq_n_u64((1ULL << 51) - 1);
-    const uint64x2_t nineteen = vdupq_n_u64(19);
 
     uint64x2_t L[5];
     for (int i = 0; i < 5; i++) {
@@ -87,7 +86,12 @@ void ama_fe51_carry_x2_neon(fe51_neon r[2]) {
     c = vshrq_n_u64(L[3], 51); L[3] = vandq_u64(L[3], mask51);
     L[4] = vaddq_u64(L[4], c);
     c = vshrq_n_u64(L[4], 51); L[4] = vandq_u64(L[4], mask51);
-    L[0] = vaddq_u64(L[0], vmulq_u64(c, nineteen));
+    /* NEON has no vmulq_u64 — decompose: c*19 = c*16 + c*2 + c */
+    {
+        uint64x2_t c19 = vaddq_u64(vshlq_n_u64(c, 4),
+                                    vaddq_u64(vshlq_n_u64(c, 1), c));
+        L[0] = vaddq_u64(L[0], c19);
+    }
 
     for (int i = 0; i < 5; i++) {
         r[0].v[i] = vgetq_lane_u64(L[i], 0);
