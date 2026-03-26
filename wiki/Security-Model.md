@@ -52,7 +52,7 @@ The system is designed to be secure against:
 
 | Adversary | Capability | Protection |
 |-----------|-----------|-----------|
-| **Classical adversary** | Classical computing resources | Ed25519 + ML-DSA-65 + all 6 layers |
+| **Classical adversary** | Classical computing resources | Ed25519 + ML-DSA-65 + all layers |
 | **Quantum adversary** | Cryptographically-relevant quantum computer (CRQC) | ML-DSA-65 + ML-KEM-1024 |
 | **Network adversary** | Full network interception (MITM) | Signature verification, RFC 3161 timestamps |
 | **Offline dictionary attacker** | GPU/ASIC password cracking | Argon2id memory-hard KDF |
@@ -70,19 +70,27 @@ The following are **not** in scope for AMA Cryptography's security model:
 
 ---
 
-## 6-Layer Security Analysis
+## Multi-Layer Security Analysis
 
 Each layer provides independent protection from a different mathematical foundation:
 
-| Layer | Algorithm | Security Assumption | Failure Mode |
-|-------|-----------|--------------------|-----------| 
-| 2 | SHA3-256 | Keccak collision resistance | Only if SHA3 is broken |
-| 3 | HMAC-SHA3-256 | PRF security, key secrecy | Only if HMAC key exposed |
-| 4 | Ed25519 | Discrete logarithm on Curve25519 | Quantum computer (Shor) |
-| 5 | ML-DSA-65 | Module-LWE lattice hardness | Unknown lattice breakthrough |
-| 6 | RFC 3161 | TSA trustworthiness | TSA compromise |
+**Core Cryptographic Operations:**
 
-**Combined security:** An attacker must simultaneously break **all applicable layers**. No known attack accomplishes this.
+| Layer | Algorithm | Security Assumption | Failure Mode |
+|-------|-----------|--------------------|-----------|
+| 1 | SHA3-256 | Keccak collision resistance | Only if SHA3 is broken |
+| 2 | HMAC-SHA3-256 | PRF security, key secrecy | Only if HMAC key exposed |
+| 3 | Ed25519 | Discrete logarithm on Curve25519 | Quantum computer (Shor) |
+| 4 | ML-DSA-65 | Module-LWE lattice hardness | Unknown lattice breakthrough |
+
+**Supporting Infrastructure:**
+
+| Component | Purpose | Failure Mode |
+|-----------|---------|-------------|
+| HKDF-SHA3-256 | Key derivation, key independence | Only if HKDF is broken |
+| RFC 3161 | Temporal proof of existence (optional) | TSA compromise |
+
+**Combined security:** Package authenticity is protected by four independent cryptographic operations. An attacker must simultaneously break **all applicable layers**. No known attack accomplishes this.
 
 ---
 
@@ -94,7 +102,7 @@ The following operations are implemented in constant time:
 
 | Operation | Implementation | Status |
 |-----------|---------------|--------|
-| HMAC comparison | `hmac.compare_digest()` / `sodium_memcmp()` | ✓ Constant-time |
+| HMAC comparison | `ama_consttime_memcmp()` (C) / XOR accumulator (Python) | ✓ Constant-time |
 | Ed25519 signing | `ama_ed25519.c` with `fe25519_sq()` | ✓ Constant-time |
 | Ed25519 verification | Windowed scalar multiplication | ✓ Constant-time |
 | AES-256-GCM (default) | Table-based S-box | ⚠ NOT constant-time |

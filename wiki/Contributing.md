@@ -190,7 +190,7 @@ feat(pqc): add SPHINCS+-SHA2-192f variant
 fix(key_management): use timezone.utc in rotate_key()
 security(aes): document cache-timing limitation of default S-box
 test(hybrid_combiner): add property-based tests with Hypothesis
-docs(wiki): update performance benchmarks for v2.0
+docs(wiki): update performance benchmarks for v2.1
 ```
 
 ---

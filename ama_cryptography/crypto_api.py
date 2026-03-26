@@ -103,7 +103,9 @@ if not pqc_available:
         warnings.simplefilter("default", UserWarning)
         warnings.warn(
             "Quantum-resistant cryptography NOT available. "
-            "Build native C library for post-quantum protection: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build",
+            "Build native C library for post-quantum protection: "
+            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && "
+            "cmake --build build",
             category=UserWarning,
             stacklevel=2,
         )
@@ -251,7 +253,8 @@ class MLDSAProvider(CryptoProvider):
         if not self._available:
             raise PQCUnavailableError(
                 "PQC_UNAVAILABLE: ML-DSA-65 requires native C backend. "
-                "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+                "Build: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
+                "&& cmake --build build"
             )
 
         kp = generate_dilithium_keypair()
@@ -432,14 +435,15 @@ class KyberProvider(KEMProvider):
         KyberUnavailableError: If Kyber backend is not available
     """
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON) -> None:
+    def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY) -> None:
         self.backend = backend
         self.algorithm = AlgorithmType.KYBER_1024
 
         if not KYBER_AVAILABLE:
             raise KyberUnavailableError(
                 "KYBER_UNAVAILABLE: Kyber-1024 backend not available. "
-                "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+                "Build: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
+                "&& cmake --build build"
             )
 
     def generate_keypair(self) -> KeyPair:
@@ -532,14 +536,15 @@ class SphincsProvider(CryptoProvider):
         SphincsUnavailableError: If SPHINCS+ backend is not available
     """
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.PURE_PYTHON) -> None:
+    def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY) -> None:
         self.backend = backend
         self.algorithm = AlgorithmType.SPHINCS_256F
 
         if not SPHINCS_AVAILABLE:
             raise SphincsUnavailableError(
                 "SPHINCS_UNAVAILABLE: SPHINCS+-256f backend not available. "
-                "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+                "Build: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
+                "&& cmake --build build"
             )
 
     def generate_keypair(self) -> KeyPair:
@@ -740,7 +745,8 @@ class AESGCMProvider:
                     msvcrt.locking(lock_fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
                 except (ImportError, OSError) as _lock_err:
                     logger.debug(
-                        "File locking unavailable (no fcntl or msvcrt): %s — proceeding without lock",
+                        "File locking unavailable (no fcntl or msvcrt): "
+                        "%s — proceeding without lock",
                         _lock_err,
                     )
             except OSError as _lock_err:
@@ -983,10 +989,7 @@ class HybridKEMProvider(KEMProvider):
 
     def encapsulate(self, public_key: bytes) -> EncapsulatedSecret:
         """Perform X25519 ephemeral-static DH + Kyber encapsulation."""
-        from ama_cryptography.pqc_backends import (
-            native_x25519_key_exchange,
-            native_x25519_keypair,
-        )
+        from ama_cryptography.pqc_backends import native_x25519_key_exchange, native_x25519_keypair
 
         # Split recipient public key
         x25519_pub: bytes = public_key[: self._X25519_KEY_BYTES]
@@ -1093,7 +1096,8 @@ class HybridSignatureProvider(CryptoProvider):
         if not self._pqc_available:
             raise PQCUnavailableError(
                 "PQC_UNAVAILABLE: Hybrid signatures require ML-DSA-65. "
-                "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+                "Build: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
+                "&& cmake --build build"
             )
 
         classical_keys = self.classical_provider.generate_keypair()
@@ -1316,7 +1320,39 @@ class AmaCryptography:
         return _ct_compare(a, b)
 
 
-# Convenience functions
+# ---------------------------------------------------------------------------
+# Convenience functions for AI agents and programmatic consumers
+# ---------------------------------------------------------------------------
+# These one-call helpers reduce boilerplate for the most common operations.
+# An AI system can call quick_sign / quick_verify / quick_hash without
+# instantiating provider objects or managing algorithm selection.
+
+
+def quick_hash(
+    message: bytes,
+    algorithm: str = "sha3-256",
+) -> bytes:
+    """
+    Quick hash: Compute a cryptographic hash in one call.
+
+    Convenience wrapper for AI agents and automated systems
+    that need fast, single-call hashing.
+
+    Args:
+        message: Data to hash (arbitrary length)
+        algorithm: Hash algorithm ("sha3-256", "sha3-512", "shake256")
+
+    Returns:
+        Hash digest bytes
+
+    Example:
+        >>> digest = quick_hash(b"Hello from AI agent")
+        >>> assert len(digest) == 32  # SHA3-256
+    """
+    _check_operational()
+    return AmaCryptography.hash_message(message, algorithm)
+
+
 def quick_sign(
     message: bytes, algorithm: AlgorithmType = AlgorithmType.HYBRID_SIG
 ) -> Tuple[KeyPair, Signature]:
@@ -1533,7 +1569,7 @@ def create_crypto_package(
 
     Args:
         content: The content to sign/protect (bytes)
-        config: Algorithm configuration (default: hybrid signatures with all 6 layers)
+        config: Algorithm configuration (default: hybrid signatures with all layers)
 
     Returns:
         CryptoPackageResult with all cryptographic artifacts
@@ -1546,7 +1582,7 @@ def create_crypto_package(
         TimestampError: If timestamp request fails
 
     Example:
-        >>> # Basic usage with hybrid signatures and 6-layer defense
+        >>> # Basic usage with hybrid signatures and multi-layer defense
         >>> result = create_crypto_package(b"Hello, World!")
         >>> print(f"Hash: {result.content_hash}")
         >>> print(f"HMAC: {result.hmac_tag.hex()}")
@@ -1626,7 +1662,8 @@ def create_crypto_package(
         if not SPHINCS_AVAILABLE:
             raise SphincsUnavailableError(
                 "SPHINCS_UNAVAILABLE: SPHINCS+-256f backend not available. "
-                "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+                "Build: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
+                "&& cmake --build build"
             )
         sphincs_provider = SphincsProvider()
         sphincs_keypair = sphincs_provider.generate_keypair()
@@ -1659,7 +1696,8 @@ def create_crypto_package(
         if not KYBER_AVAILABLE:
             raise KyberUnavailableError(
                 "KYBER_UNAVAILABLE: Kyber-1024 backend not available. "
-                "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+                "Build: cmake -B build -DAMA_USE_NATIVE_PQC=ON "
+                "&& cmake --build build"
             )
         kyber_provider = KyberProvider()
         kyber_keypair = kyber_provider.generate_keypair()
@@ -1699,7 +1737,7 @@ def create_crypto_package(
         "timestamp_enabled": config.include_timestamp and timestamp_token is not None,
         "num_derived_keys": len(derived_keys),
         "pqc_status": get_pqc_capabilities()["status"],
-        "six_layer_defense": True,  # All 6 layers implemented
+        "multi_layer_defense": True,  # All layers implemented
     }
 
     return CryptoPackageResult(
@@ -1777,27 +1815,38 @@ def verify_crypto_package(
 
 # Re-export PQC types for convenience
 __all__ = [
+    # Enums and configuration
     "AlgorithmType",
     "CryptoBackend",
+    # Data containers
     "KeyPair",
     "Signature",
     "EncapsulatedSecret",
+    # Abstract base classes
     "CryptoProvider",
     "KEMProvider",
+    # Concrete providers
     "MLDSAProvider",
     "Ed25519Provider",
     "KyberProvider",
     "SphincsProvider",
+    "AESGCMProvider",
+    "HybridKEMProvider",
     "HybridSignatureProvider",
+    # Unified API
     "AmaCryptography",
+    # Convenience functions (AI-agent friendly)
+    "quick_hash",
     "quick_sign",
     "quick_verify",
     "quick_kem",
     "get_pqc_capabilities",
+    # Crypto package creation and verification
     "CryptoPackageConfig",
     "CryptoPackageResult",
     "create_crypto_package",
     "verify_crypto_package",
+    # Backend status and errors
     "PQCStatus",
     "PQCUnavailableError",
     "KyberUnavailableError",

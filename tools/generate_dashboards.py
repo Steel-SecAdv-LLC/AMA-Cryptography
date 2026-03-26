@@ -235,7 +235,7 @@ def create_performance_dashboard():
             color=TEXT_COLOR,
         )
 
-    # ── Panel 5: 6-Layer Breakdown (mid-center) ───────────────────────
+    # ── Panel 5: Multi-Layer Breakdown (mid-center) ───────────────────
     ax = axes[1, 1]
     layer_names = ["SHA3-256 Hash", "HMAC-SHA3", "Ed25519 Sign", "ML-DSA-65 Sign", "HKDF Derive"]
     layer_ms = [
@@ -258,7 +258,7 @@ def create_performance_dashboard():
     for t in autotexts:
         t.set_fontsize(6.5)
         t.set_color("#ffffff")
-    ax.set_title("6-Layer Package Time Breakdown", fontsize=10, fontweight="bold", pad=8)
+    ax.set_title("Multi-Layer Package Time Breakdown", fontsize=10, fontweight="bold", pad=8)
 
     # ── Panel 6: Regression vs Baseline (mid-right) ───────────────────
     ax = axes[1, 2]

@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.2 |
-| Last Updated | 2026-03-16 |
+| Document Version | 2.3 |
+| Last Updated | 2026-03-26 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -14,6 +14,33 @@
 ## Overview
 
 All notable changes to AMA Cryptography will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [2.1.1] - 2026-03-26
+
+### Security Fixes & SIMD Optimization (PR #145)
+
+- **Security fixes S1-S6:** Hand-written AVX2/NEON/SVE2 SIMD intrinsics for polynomial and NTT operations
+- **Dashboard & chart overhaul:** Updated performance visualization assets
+
+### Fixed - Code Correctness (PR #143)
+
+- **`_counters_dirty` immediate-retry:** Fixed race condition in counter dirty flag handling
+- **INVARIANT-2 compliance:** Ensured thread-safe CPU dispatch via platform once-primitive
+- **3 Devin review security fixes:** Addressed security issues identified during code review
+
+### Documentation Corrections (PR #142)
+
+- **C1-C5 documentation corrections:** Standardized "6-layer" terminology to "multi-layer" across README.md, ARCHITECTURE.md, SECURITY.md, wiki/Architecture.md, and ENHANCED_FEATURES.md
+- **Layer architecture clarification:** Distinguished 4 core cryptographic operations (SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65) from supporting infrastructure (HKDF, RFC 3161, canonical encoding)
+- **ML-DSA-65 signature size:** Corrected from 3,293 to 3,309 bytes per FIPS 204
+- **Removed "production-grade" claims:** Replaced with accurate "community-tested, not externally audited" language
+- **CI security audit fix:** Added CVE-2026-4539 (pygments ReDoS) exclusion to pip-audit across all CI workflows
+
+### Changed - Dependency Consolidation (PR #140)
+
+- Consolidated Dependabot PRs #130-#136 into a single CI/deps update
 
 ---
 

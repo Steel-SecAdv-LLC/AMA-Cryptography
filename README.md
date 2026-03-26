@@ -9,7 +9,7 @@
 [![Python](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org)
 [![C](https://img.shields.io/badge/C-C11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 [![Cython](https://img.shields.io/badge/Cython-3.0+-yellow.svg)](https://cython.org)
-[![PQC](https://img.shields.io/badge/PQC-ML--DSA--65%20%7C%20Kyber--1024-purple.svg)](CRYPTOGRAPHY.md)
+[![PQC](https://img.shields.io/badge/PQC-ML--DSA--65%20%7C%20Kyber--1024%20%7C%20SPHINCS%2B-purple.svg)](CRYPTOGRAPHY.md)
 [![3R Monitoring](https://img.shields.io/badge/3R-Runtime%20Security-orange.svg)](MONITORING.md)
 [![Architecture](https://img.shields.io/badge/architecture-C%20%2B%20Python%20%2B%20Cython-blue.svg)](ARCHITECTURE.md)
 
@@ -43,9 +43,9 @@
 
 ## Executive Summary 🌎 
 
-AMA Cryptography is a hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Community-tested, not externally audited. A secure, multi-language cryptographic security system designed to protect people, data, and networks against both classical and quantum threats. Built on a foundation of mathematically rigorous post-quantum cryptography (PQC), AMA Cryptography delivers security-hardened features with exceptional performance.
+AMA Cryptography is a hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Community-tested, not externally audited. A multi-language cryptographic security system designed to protect people, data, and networks against both classical and quantum threats. Built on NIST-standardized post-quantum cryptography (PQC), AMA Cryptography provides security-hardened features with measured performance (see [Performance Metrics](#performance-metrics)).
 
-Novel in assimilation, the system combines cutting-edge NIST-approved post-quantum algorithms with a unique 3R runtime security monitoring framework, creating a defense-in-depth architecture that provides unprecedented visibility into cryptographic operations while maintaining less than 2% performance overhead. The multi-language architecture (C + Cython + Python) enables both maximum security through constant-time implementations and optional Cython acceleration (18–37x speedup over pure Python mathematical baseline for 3R monitoring computations), making it suitable for environments ranging from high-security government applications to performance-critical enterprise systems.
+The system combines NIST-standardized post-quantum algorithms with a 3R runtime security monitoring framework, creating a defense-in-depth architecture that provides visibility into cryptographic operations while maintaining less than 2% monitoring overhead. The multi-language architecture (C + Cython + Python) pairs constant-time C implementations with optional Cython acceleration (18–37x speedup over pure Python mathematical baseline for 3R monitoring computations). Independent security review is recommended before deployment in high-security or regulated environments.
 
 **Protecting people, data, and networks with quantum-resistant cryptography**
 
@@ -62,7 +62,7 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 > - Secure file permissions for key files and cryptographic packages (store on encrypted volumes with restricted access)
 >
 > **Status:** Community-tested | Not externally audited
-> **Last Updated:** 2026-03-22
+> **Last Updated:** 2026-03-26
 
 ---
 
@@ -71,10 +71,10 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 <details>
 <summary><strong>Click to expand navigation</strong></summary>
 
-- [Executive Summary](#executive-summary)
-- [Key Capabilities](#key-capabilities-)
+- [Executive Summary](#executive-summary-)
+- [Key Capabilities](#key-capabilities)
 - [Use Cases by Sector](#use-cases-by-sector-)
-- [Performance Metrics](#performance-metrics-)
+- [Performance Metrics](#performance-metrics)
 - [Quick Start](#quick-start)
 - [Testing and Quality Assurance](#testing-and-quality-assurance)
 - [Documentation](#documentation)
@@ -82,9 +82,11 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 - [Build System](#build-system-)
 - [Mathematical Foundations](#mathematical-foundations-)
 - [Contributing](#contributing)
+- [Unique Features](#unique-features)
 - [License](#license)
 - [Contact and Support](#contact-and-support)
 - [Acknowledgments](#acknowledgments)
+- [Legal Disclaimer & Attribution](#steel-security-advisors-llc--legal-disclaimer--attribution)
 
 </details>
 
@@ -99,7 +101,7 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 
 Current cryptographic systems face three critical challenges:
 
-1. **Quantum Threat**: Traditional cryptography (RSA, ECDSA) will be broken by large-scale quantum computers within 5-15 years
+1. **Quantum Threat**: Traditional cryptography (RSA, ECDSA) is expected to be vulnerable to large-scale quantum computers, with timelines estimated at 5-15+ years (debated)
 2. **Black Box Security**: Most cryptographic libraries provide no runtime visibility into side-channel vulnerabilities or anomalous behavior
 3. **Performance vs Security Trade-off**: Quantum-resistant algorithms are significantly slower, creating adoption barriers
 
@@ -107,7 +109,7 @@ Current cryptographic systems face three critical challenges:
 
 AMA Cryptography addresses all three challenges through:
 
-- **Quantum Resistance**: NIST-approved ML-DSA-65 (FIPS 204) and Kyber-1024 (FIPS 203) provide 50+ years of protection
+- **Quantum Resistance**: NIST-standardized ML-DSA-65 (FIPS 204) and Kyber-1024 (FIPS 203) designed for long-term protection against quantum threats
 - **Transparent Security**: 3R monitoring (Resonance-Recursion-Refactoring) provides real-time cryptographic operation analysis
 - **Optimized Performance**: Cython acceleration for 3R math engine (manual build required); benchmarked at 18–37x speedup over pure Python mathematical baseline
 
@@ -117,7 +119,7 @@ AMA Cryptography addresses all three challenges through:
 - **Government and Defense**: Classified data protection with quantum resistance
 - **Financial Services**: Transaction security future-proofed against quantum threats
 - **Healthcare**: HIPAA-compliant data encryption with audit trails
-- **Critical Infrastructure**: SCADA systems requiring long-term security guarantees
+- **Critical Infrastructure**: SCADA systems requiring long-term quantum-resistant protection
 - **Blockchain and Crypto**: Post-quantum secure digital signatures
 
 See [Use Cases by Sector](#use-cases-by-sector-) for detailed scenarios.
@@ -129,7 +131,7 @@ See [Use Cases by Sector](#use-cases-by-sector-) for detailed scenarios.
 
 ### Multi-Layer Cryptographic Protection Architecture
 
-**Defense-in-depth security** with multiple independent cryptographic layers, compared to typical 1-2 layers in peer implementations:
+**Defense-in-depth security** with multiple independent cryptographic layers:
 
 **Core Cryptographic Operations** (the defense layers an attacker must defeat):
 
@@ -149,7 +151,7 @@ See [Use Cases by Sector](#use-cases-by-sector-) for detailed scenarios.
 
 Canonical encoding serves as the input normalization step, ensuring deterministic serialization before cryptographic operations.
 
-**Why defense-in-depth matters:** Overall security is bounded by the weakest cryptographic layer (~128-bit classical, ~192-bit quantum). Defense-in-depth ensures continued protection if one layer is compromised. See [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) for detailed analysis.
+**Why defense-in-depth matters:** Overall security is bounded by the weakest cryptographic layer (~128-bit classical, ~192-bit quantum). Defense-in-depth provides continued protection if one layer is compromised. See [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) for detailed analysis.
 
 ![Defense Architecture](assets/defense_layers.png)
 
@@ -157,28 +159,26 @@ Canonical encoding serves as the input normalization step, ensuring deterministi
 
 ### 3R Runtime Security Monitoring
 
-The signature innovation providing real-time cryptographic operation analysis unavailable in peer implementations:
+A runtime monitoring framework providing cryptographic operation analysis:
 
 - **Resonance Engine**: FFT-based anomaly detection with frequency-domain analysis (monitors for statistical anomalies, not a timing attack prevention system)
 - **Recursion Engine**: Multi-scale hierarchical pattern analysis for anomaly detection
 - **Refactoring Engine**: Code complexity metrics for security review
 
 - **Performance overhead**: Less than 2% with comprehensive monitoring
-- **Unique capability**: Real-time visibility into cryptographic operations that peer libraries treat as black boxes
+- **Visibility**: Runtime insight into cryptographic operation behavior
 
 > **Note:** The 3R system is a runtime anomaly monitoring framework. It surfaces statistical anomalies for security review but does not guarantee detection or prevention of timing attacks or other side-channel vulnerabilities.
 
 ### Multi-Language Architecture
 
-Optimized for both security and performance:
+Three-layer architecture balancing security and usability:
 
 - **C Layer**: Native SHA3-256, HKDF-SHA3-256, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+-256f implementations — zero external dependencies (see [Implementation Status Matrix](#implementation-status-matrix))
 - **Cython Layer**: Optimized 3R mathematical operations (benchmarked at 18–37x vs pure Python mathematical baseline)
 - **Python API**: High-level, user-friendly interface for rapid development (primary production API)
 
 ### Advanced Features
-
-Secure and tested:
 
 - Hierarchical Deterministic (HD) key derivation
 - Zero-downtime key rotation with lifecycle management
@@ -190,7 +190,7 @@ Secure and tested:
 
 ### Quantum-Resistant Algorithms
 
-Future-proof cryptography:
+NIST-standardized post-quantum algorithms:
 
 - ML-DSA-65 (NIST FIPS 204 - Dilithium)
 - Kyber-1024 (NIST FIPS 203 - ML-KEM)
@@ -206,11 +206,11 @@ Future-proof cryptography:
 |-------------|-------------|
 | Defense-in-Depth | Multi-layer cryptographic protection (4 core + 2 supporting) |
 | Performance | Cython math engine optimization (18–37x vs pure Python mathematical baseline) |
-| Quantum Resistance | NIST-approved PQC algorithms (ML-DSA-65, Kyber-1024) |
-| Mathematical Rigor | 5 proven frameworks with machine precision |
+| Quantum Resistance | NIST-standardized PQC algorithms (ML-DSA-65, Kyber-1024) |
+| Mathematical Foundations | 5 frameworks with machine-precision validation (self-assessed) |
 | Cross-Platform | Linux, macOS, Windows, ARM64 |
 | Production Infrastructure | Docker, CI/CD, comprehensive testing |
-| 3R Innovation | Unique runtime security monitoring (less than 2% overhead) |
+| 3R Monitoring | Runtime security anomaly monitoring (less than 2% overhead) |
 
 </details>
 
@@ -237,7 +237,7 @@ Future-proof cryptography:
 - **Full (native)**: Complete native C implementation — no external PQC dependency required.
 - **Note**: Ed25519 C implementation uses radix 2^51 field arithmetic (fe51.h — 25 cross-products vs 100 in ref10). Optional ed25519-donna x86-64 assembly backend available via `AMA_ED25519_ASSEMBLY=ON` (auto-enabled on MSVC x64). Full RFC 8032 sign/verify roundtrip verified.
 
-**C Library Implementations (v2.0) — 23 source files in `src/c/`:**
+**C Library Implementations (v2.1) — 20 source files in `src/c/`:**
 - `ama_core.c`: Library initialization, version, feature detection, shared utilities
 - `ama_sha3.c`: SHA3-256, SHAKE128, SHAKE256 (Keccak-f[1600] sponge construction)
 - `ama_sha256.c`: Native SHA-256 (FIPS 180-4), used by SPHINCS+ internally
@@ -249,6 +249,8 @@ Future-proof cryptography:
 - `ama_dilithium.c`: ML-DSA-65 full native (NTT q=8380417, rejection sampling, constant-time)
 - `ama_sphincs.c`: SPHINCS+-SHA2-256f-simple full native (WOTS+, FORS, hypertree d=17)
 - `ama_consttime.c`: Constant-time utilities (memcmp, memzero, swap, lookup, copy)
+- `ama_cpuid.c`: CPU feature detection (AVX2, SSE, NEON) for runtime dispatch
+- `ama_secure_memory.c`: Secure memory zeroing and page locking (mlock/munlock)
 - `ama_platform_rand.c`: Platform CSPRNG (getrandom/getentropy/BCryptGenRandom)
 - `ama_x25519.c`: X25519 Diffie-Hellman key exchange (RFC 7748)
 - `ama_chacha20poly1305.c`: ChaCha20-Poly1305 AEAD (RFC 8439)
@@ -290,60 +292,60 @@ Future-proof cryptography:
 
 - **Crisis Response**: GPS coordinates, victim data, and safe house locations protected with ML-DSA-65 quantum-resistant signatures. 3R monitoring surfaces timing anomalies that may indicate compromise in hostile environments.
 - **Conservation**: Wildlife tracking data, ranger locations, and anti-poaching intelligence with integrity verification using helical invariants. Detects if data has been tampered with.
-- **Whistleblower Protection**: Document signing and verification that remains secure for 50+ years under "harvest now, decrypt later" quantum threats.
-- **Sensitive Record Preservation**: Ethical framework ensures respectful handling of records for victims and individuals, with complete audit trails.
+- **Whistleblower Protection**: Document signing and verification designed to resist "harvest now, decrypt later" quantum threats.
+- **Sensitive Record Preservation**: Ethical framework promotes respectful handling of records for victims and individuals, with audit trails.
 
 ### Government and Defense
 
-**Unique Value:** Classified data with quantum resistance and side-channel attack detection
+**Unique Value:** Classified data with quantum resistance and runtime anomaly monitoring
 
-- **Long-term Classified Data**: Documents that must remain secret for decades protected against future quantum computers.
-- **Secure Communications**: TLS with Kyber-1024 key exchange resistant to "harvest now, decrypt later" attacks.
+- **Long-term Classified Data**: Documents requiring long-term secrecy protected with quantum-resistant algorithms.
+- **Secure Communications**: Kyber-1024 key exchange designed to resist "harvest now, decrypt later" attacks.
 - **Runtime Anomaly Monitoring**: 3R monitoring surfaces statistical anomalies in operation timing that may be consistent with cache-timing or power-analysis behavior, but does not guarantee detection or prevention of timing attacks or other side-channel vulnerabilities.
-- **Integrity Verification**: Mathematical invariant checking catches sophisticated tampering beyond standard checksums.
-- **Zero-Trust Environments**: Runtime monitoring provides continuous verification of cryptographic operations.
+- **Integrity Verification**: Mathematical invariant checking provides additional tampering detection beyond standard checksums.
+- **Zero-Trust Environments**: Runtime monitoring provides continuous observation of cryptographic operations.
 
 ### Financial Services 
 
 **Unique Value:** Transaction security with real-time anomaly detection
 
-- **Quantum-Resistant Signatures**: ML-DSA-65 signatures on transactions remain valid even after quantum computers exist.
-- **High-Frequency Trading**: Cython-optimized 3R monitoring (18–37x speedup vs pure Python math baseline when built) with sub-millisecond signature verification.
+- **Quantum-Resistant Signatures**: ML-DSA-65 signatures on transactions designed to remain valid against quantum attacks.
+- **Low-Latency Verification**: Cython-optimized 3R monitoring (18–37x speedup vs pure Python math baseline when built) with sub-millisecond signature verification.
 - **Anomaly Detection**: 3R timing analysis surfaces anomalous cryptographic behavior that may indicate potential attacks.
-- **Audit Compliance**: Complete cryptographic audit trail with ethical constraint enforcement.
-- **Long-term Archival**: Financial records with 50+ year security guarantees.
+- **Audit Compliance**: Cryptographic audit trail with ethical constraint enforcement.
+- **Long-term Archival**: Financial records with quantum-resistant protection for long-term security.
 
 ### Healthcare 
 
-**Unique Value:** HIPAA-compliant encryption with sophisticated integrity monitoring
+**Unique Value:** Quantum-resistant encryption with integrity monitoring (independent compliance validation required for HIPAA and other regulations)
 
-- **Patient Records**: Quantum-resistant encryption ensures medical records remain private for patient's lifetime.
-- **Prescription Signatures**: ML-DSA-65 digital signatures on prescriptions that cannot be forged.
-- **Medical Device Security**: Embedded systems with constant-time operations resistant to side-channel attacks.
+- **Patient Records**: Quantum-resistant encryption designed to protect medical records against long-term cryptanalytic threats.
+- **Prescription Signatures**: ML-DSA-65 digital signatures on prescriptions providing quantum-resistant authenticity.
+- **Medical Device Security**: Constant-time C implementations aim to reduce side-channel attack surface (requires independent verification).
 - **Data Integrity**: Helical invariant verification detects if medical records have been altered.
 - **Research Data**: Sensitive research data with ethical policy enforcement and audit trails.
 - **Telemedicine**: Secure video consultations with hybrid classical+quantum key exchange.
 
 ### Critical Infrastructure 
 
-**Unique Value:** SCADA/ICS security with active attack detection
+**Unique Value:** SCADA/ICS security with runtime anomaly monitoring
 
 - **Power Grid Control**: Quantum-resistant authentication for grid control systems.
-- **Water Treatment**: Signed commands with runtime verification. 3R surfaces timing anomalies that may indicate malware.
-- **Transportation**: Railway and air traffic control with 50+ year security guarantees (systems operate for decades).
-- **Nuclear Facilities**: Constant-time operations prevent side-channel leaks in high-security environments.
-- **Active Monitoring**: 3R system provides real-time alerts if cryptographic operations show attack patterns.
+- **Water Treatment**: Signed commands with runtime verification. 3R surfaces timing anomalies that may warrant investigation.
+- **Transportation**: Railway and air traffic control with quantum-resistant protection for long-lived systems.
+- **Nuclear Facilities**: Constant-time C implementations aim to reduce side-channel attack surface (requires independent verification for high-assurance environments).
+- **Anomaly Monitoring**: 3R system surfaces statistical anomalies in cryptographic operations for security review.
 - **Legacy System Protection**: Wrapper for older systems needing quantum resistance without full replacement.
 
 ### Blockchain and Cryptocurrency 
 
 **Unique Value:** Post-quantum secure signatures with high-performance verification
 
-- **Wallet Security**: ML-DSA-65 signatures protect private keys from future quantum attacks.
+- **Wallet Security**: ML-DSA-65 quantum-resistant signatures for wallet transaction authentication.
 - **Smart Contract Signing**: Quantum-resistant signatures for long-lived contracts.
-- **Transaction Throughput**: High-performance signature operations competitive with classical algorithms.
-- **Cross-Chain Bridges**: Hybrid signing (Ed25519 + ML-DSA-65) for compatibility and future-proofing.
-- **NFT Provenance**: Signatures that remain valid indefinitely.
+- **Transaction Throughput**: Sub-millisecond Ed25519 verification; ML-DSA-65 adds quantum resistance at low latency (~0.21ms sign, ~0.11ms verify).
+- **Cross-Chain Bridges**: Hybrid signing (Ed25519 + ML-DSA-65) for backward compatibility and quantum resistance.
+- **NFT Provenance**: Quantum-resistant signatures designed for long-term validity.
 - **Timestamp Verification**: RFC 3161 trusted timestamping with quantum resistance.
 
 </details>
@@ -367,17 +369,17 @@ Future-proof cryptography:
 
 | Operation | Throughput | Latency | Notes |
 |-----------|-----------|---------|-------|
-| **KeyGen** | 4,527 ops/sec | 0.22ms | Native C, NTT q=8380417 |
-| **Sign** | 1,027 ops/sec | 0.97ms | Rejection sampling, constant-time |
-| **Verify** | 5,067 ops/sec | 0.20ms | Verified against NIST ACVP test vectors (self-attested) |
+| **KeyGen** | 7,477 ops/sec | 0.13ms | Native C, NTT q=8380417 |
+| **Sign** | 4,774 ops/sec | 0.21ms | Rejection sampling, constant-time |
+| **Verify** | 8,859 ops/sec | 0.11ms | Verified against NIST ACVP test vectors (self-attested) |
 
 ### ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)
 
 | Operation | Throughput | Latency | Notes |
 |-----------|-----------|---------|-------|
-| **KeyGen** | 9,798 ops/sec | 0.10ms | Native C, NTT q=3329 |
-| **Encapsulate** | 9,480 ops/sec | 0.11ms | IND-CCA2, Fujisaki-Okamoto |
-| **Decapsulate** | 8,913 ops/sec | 0.11ms | Implicit rejection |
+| **KeyGen** | 15,347 ops/sec | 0.07ms | Native C, NTT q=3329 |
+| **Encapsulate** | 15,390 ops/sec | 0.07ms | IND-CCA2, Fujisaki-Okamoto |
+| **Decapsulate** | 14,852 ops/sec | 0.07ms | Implicit rejection |
 
 ### Full Multi-Layer Package Performance
 
@@ -385,8 +387,8 @@ Complete security package with all defense layers:
 
 | Operation | Mean Time | Throughput |
 |-----------|-----------|------------|
-| Package Create (all layers) | 0.48ms | 2,093 ops/sec |
-| Package Verify (all layers) | 0.38ms | 2,607 ops/sec |
+| Package Create (all layers) | 0.29ms | 3,457 ops/sec |
+| Package Verify (all layers) | 0.22ms | 4,477 ops/sec |
 
 **All Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65 (core), HKDF, RFC 3161 (supporting)
 
@@ -394,20 +396,19 @@ Complete security package with all defense layers:
 
 | Operation | Throughput | Latency |
 |-----------|-----------|---------|
-| SHA3-256 (32B) | 477,055 ops/sec | 0.002ms |
-| SHA3-256 (1KB) | 158,832 ops/sec | 0.006ms |
-| HMAC-SHA3-256 (1KB) | 114,278 ops/sec | 0.009ms |
-| HKDF-SHA3-256 (96B derive) | 73,318 ops/sec | 0.014ms |
-| Ed25519 KeyGen | 14,611 ops/sec | 0.07ms |
-| Ed25519 Sign | 14,976 ops/sec | 0.07ms |
-| Ed25519 Verify | 7,716 ops/sec | 0.13ms |
-| AES-256-GCM encrypt (1KB) | 1,087 ops/sec | 0.92ms |
-| ChaCha20-Poly1305 encrypt (1KB) | 155,725 ops/sec | 0.006ms |
-| X25519 DH Exchange | 1,280 ops/sec | 0.78ms |
+| SHA3-256 (32B) | 1,441,288 ops/sec | 0.001ms |
+| HMAC-SHA3-256 Auth | 517,834 ops/sec | 0.002ms |
+| HMAC-SHA3-256 Verify | 389,053 ops/sec | 0.003ms |
+| HKDF-SHA3-256 Derivation | 36,489 ops/sec | 0.027ms |
+| Ed25519 KeyGen | 24,622 ops/sec | 0.04ms |
+| Ed25519 Sign | 23,572 ops/sec | 0.04ms |
+| Ed25519 Verify | 11,144 ops/sec | 0.09ms |
+| ML-DSA-65 Sign | 4,774 ops/sec | 0.21ms |
+| ML-DSA-65 Verify | 8,859 ops/sec | 0.11ms |
 
-**Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [BENCHMARKS.md](BENCHMARKS.md) for full performance data including all algorithms.
+**Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [benchmarks/](benchmarks/) for full performance data including all algorithms.
 
-*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, native C backend via ctypes. See [BENCHMARKS.md](BENCHMARKS.md) for raw C performance numbers (without ctypes overhead) and competitive comparisons against libsodium and liboqs. Reproducible via `python benchmarks/benchmark_runner.py --verbose` or `make -C benchmarks benchmark_c_raw`.*
+*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, native C backend via ctypes. See [benchmarks/](benchmarks/) for raw C performance numbers (without ctypes overhead) and competitive comparisons against libsodium and liboqs. Reproducible via `python benchmarks/benchmark_runner.py --verbose` or `make -C benchmarks benchmark_c_raw`.*
 
 </details>
 
@@ -430,12 +431,12 @@ Complete security package with all defense layers:
 
 | Input Scale | Mean Time | Throughput |
 |-------------|-----------|------------|
-| 1x (baseline) | 0.84ms | 1,188 ops/sec |
-| 10x | 0.58ms | 1,719 ops/sec |
-| 100x | 2.90ms | 344 ops/sec |
-| 1000x | 100.74ms | 9.9 ops/sec |
+| 1x (baseline) | 0.92ms | 1,085 ops/sec |
+| 10x | 1.03ms | 971 ops/sec |
+| 100x | 1.85ms | 541 ops/sec |
+| 1000x | 58.50ms | 17.1 ops/sec |
 
-*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 50 iterations per size. The 1x baseline measures the full scalability pipeline including data preparation, which is why it differs from the 0.48ms Package Create number. See [BENCHMARKS.md](BENCHMARKS.md) for details.*
+*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 50 iterations per size. The 1x baseline measures the full scalability pipeline including data preparation, which is why it differs from the 0.29ms Package Create number. See [benchmarks/](benchmarks/) for details.*
 
 </details>
 
@@ -444,10 +445,10 @@ Complete security package with all defense layers:
 
 | Operation | Standard | With Ethics | Overhead |
 |-----------|----------|-------------|----------|
-| HKDF Derivation | 0.063ms | 0.072ms | 14.79% |
-| Context Creation | - | 0.005ms | - |
+| HKDF Derivation | 0.005ms | 0.010ms | 94.0% |
+| Context Creation | - | 0.003ms | - |
 
-The ethical integration adds cryptographic binding to the 4 Omni-Code Ethical Pillars. The overhead applies to HKDF derivation specifically; end-to-end package creation overhead remains under 2% of total time since HKDF is a small fraction of the pipeline (ML-DSA-65 signing dominates at ~4.2ms).
+The ethical integration adds cryptographic binding to the 4 Omni-Code Ethical Pillars. The overhead applies to HKDF derivation specifically (0.005ms absolute); end-to-end package creation overhead remains negligible since HKDF is a small fraction of the pipeline (ML-DSA-65 signing dominates at ~0.21ms).
 
 *Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 1,000 iterations.*
 
@@ -667,7 +668,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*866+ tests across 39 files (30 Python + 9 C) covering core crypto and NIST KATs, PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring.*
+*1,264 tests across 47 files (37 Python + 10 C) covering core crypto and NIST KATs, PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring.*
 
 </details>
 
@@ -687,7 +688,7 @@ GitHub Actions automatically tests:
 ### CI Matrix
 
 - **Python Versions**: 3.9, 3.10, 3.11, 3.12, 3.13
-- **Platforms**: Ubuntu Latest, Windows Latest
+- **Platforms**: Ubuntu Latest, macOS Latest, Windows Latest
 - **Jobs**: test, code-quality, security-checks
 
 ### CI Workflows
@@ -699,6 +700,7 @@ GitHub Actions automatically tests:
 | Security | `security.yml` | pip-audit, bandit, Semgrep, secret scanning |
 | Static Analysis | `static-analysis.yml` | CodeQL analysis |
 | Fuzzing | `fuzzing.yml` | C fuzz harnesses (12 targets) |
+| Auto Docs | `auto-docs.yml` | Auto-generate and deploy documentation |
 | Wiki Sync | `wiki-sync.yml` | Auto-sync wiki/ to GitHub Wiki |
 
 </details>
@@ -709,7 +711,7 @@ GitHub Actions automatically tests:
 | Layer | Protection |
 |-------|------------|
 | Defense-in-Depth | Multi-layer cryptographic protection |
-| Quantum Resistance | NIST-approved ML-DSA-65 (FIPS 204), Kyber-1024 (FIPS 203), SPHINCS+ (FIPS 205) |
+| Quantum Resistance | NIST-standardized ML-DSA-65 (FIPS 204), Kyber-1024 (FIPS 203), SPHINCS+ (FIPS 205) |
 | Side-Channel Protection | Constant-time operations, C11 atomics, data-independent control flow |
 | Memory Safety | Secure wiping, bounds checking, magic number validation |
 | 3R Monitoring | Runtime security analysis (less than 2% overhead) |
@@ -833,7 +835,7 @@ The module implements technical controls aligned with FIPS 140-3 Security Level 
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture and design |
 | [SECURITY.md](SECURITY.md) | Complete security analysis |
 | [THREAT_MODEL.md](THREAT_MODEL.md) | Threat model and risk assessment |
-| [BENCHMARKS.md](BENCHMARKS.md) | Performance measurements |
+| [benchmarks/](benchmarks/) | Performance measurements |
 | [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) | Cryptographic algorithm overview |
 | [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md) | NIST ACVP vector validation (815/815 pass) |
 | [CSRC_STANDARDS.md](CSRC_STANDARDS.md) | Governing standards registry |
@@ -972,13 +974,13 @@ make install      # Install system-wide
 <details>
 <summary><strong>Research and Innovation</strong></summary>
 
-### Proven Frameworks
+### Mathematical Frameworks (Self-Assessed)
 
 1. **Helical Geometric Invariants**
    - Curvature and torsion relationship verified to 10^-10 error
 
 2. **Lyapunov Stability Theory**
-   - Proven exponential convergence O(e^{-0.18t})
+   - Exponential convergence O(e^{-0.18t}) verified numerically
 
 3. **Golden Ratio Harmonics**
    - phi^3-amplification with Fibonacci convergence less than 10^-8
@@ -989,9 +991,9 @@ make install      # Install system-wide
 5. **Double-Helix Evolution**
    - 18+ equation variants for adaptive security
 
-### 3R Security Innovation
+### 3R Security Monitoring
 
-The **3R Mechanism** (Resonance-Recursion-Refactoring) is a novel security framework providing:
+The **3R Mechanism** (Resonance-Recursion-Refactoring) is a runtime monitoring framework providing:
 
 - **Runtime Timing Anomaly Monitoring** via FFT frequency-domain analysis (statistical anomaly detection, not guaranteed timing attack detection)
 - **Pattern Anomaly Detection** through multi-scale hierarchical analysis
@@ -1053,7 +1055,7 @@ make security-audit
 <details>
 <summary><strong>Ethical Cryptography</strong> - Mathematically-Bound Ethical Constraints</summary>
 
-AMA Cryptography pioneers the integration of ethical principles directly into cryptographic operations through mathematically rigorous constraints. Unlike traditional security systems that treat ethics as policy overlays, AMA Cryptography embeds ethical considerations into the cryptographic foundation itself.
+AMA Cryptography integrates ethical principles directly into cryptographic operations through mathematical constraints. Rather than treating ethics as policy overlays, AMA Cryptography embeds ethical considerations into key derivation and data integrity verification.
 
 **4 Omni-Code Ethical Pillars** are mathematically integrated into key derivation:
 
@@ -1079,7 +1081,7 @@ The ethical integration achieves:
 <details>
 <summary><strong>Bio-Inspired Security</strong> - Omni-Code Architecture for Data Structures</summary>
 
-AMA Cryptography employs a revolutionary bio-inspired approach where data structures mirror the elegance and resilience of biological DNA. This metaphor extends beyond naming conventions into the actual architecture of cryptographic packages.
+AMA Cryptography employs a bio-inspired approach where data structures draw from the structural properties of biological DNA. This metaphor extends beyond naming conventions into the architecture of cryptographic packages.
 
 **Master Omni-Codes** - Seven foundational codes govern the system:
 
@@ -1094,9 +1096,9 @@ AMA Cryptography employs a revolutionary bio-inspired approach where data struct
 | `Γ19L11ϖ_XΔHΛX_∞19A84♰` | Γϖ | Omni-Potent Lifeforce | r=19.0, p=1.1 |
 
 **Architectural Benefits**:
-- **Helical data encoding** mirrors DNA double-helix stability
-- **Self-healing properties** through redundant verification chains
-- **Evolutionary adaptability** for algorithm agility
+- **Helical data encoding** draws from DNA double-helix structure for key evolution
+- **Redundant verification** through multiple verification chains
+- **Algorithm agility** supports switching between cryptographic algorithms
 - **Canonical hashing** preserves data integrity across transformations
 
 </details>
@@ -1104,7 +1106,7 @@ AMA Cryptography employs a revolutionary bio-inspired approach where data struct
 <details>
 <summary><strong>Multi-Disciplinary Approach</strong> - Quantum-Cyber-Ancient Synergies</summary>
 
-AMA Cryptography transcends traditional computer science boundaries by synthesizing insights from quantum mechanics, ancient mathematics, philosophy, and biological systems into a unified security framework.
+AMA Cryptography draws from multiple disciplines — quantum mechanics, mathematics, philosophy, and biological systems — to inform its security framework design.
 
 **Cross-Domain Synergies**:
 
@@ -1117,7 +1119,7 @@ AMA Cryptography transcends traditional computer science boundaries by synthesiz
 | **Physics** | Resonance detection, timing analysis | 3R monitoring (Resonance-Recursion-Refactoring) |
 
 **Philosophical Foundation**:
-- **Epistemological rigor**: Every claim backed by mathematical proof
+- **Epistemological rigor**: Claims backed by mathematical derivation where possible (self-assessed)
 - **Ethical alignment**: Compassion, evidence, justice, altruism as core values
 - **Character-driven design**: Competence, commitment, control embedded in architecture
 - **Survivor-first principles**: Security designed to protect the vulnerable
@@ -1136,7 +1138,7 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) file for 
 
 ### Third-Party Dependencies
 
-AMA Cryptography v2.0 has **zero core dependencies** — all cryptographic primitives are implemented natively in C.
+AMA Cryptography v2.1 has **zero core cryptographic dependencies** — all cryptographic primitives are implemented natively in C.
 
 **Algorithm implementations (all native, public domain references):**
 - **ML-DSA-65** (Dilithium): Public domain (NIST FIPS 204)
@@ -1151,7 +1153,7 @@ AMA Cryptography v2.0 has **zero core dependencies** — all cryptographic primi
 - `[monitoring]`: numpy, scipy (3R engine)
 - `[legacy]`: cryptography (fallback)
 - `[hsm]`: PyKCS11 (HSM support)
-- `[secure-memory]`: pynacl (libsodium)
+- `[secure-memory]`: pynacl (reserved for future libsodium integration)
 
 ### Dependency Graph
 
@@ -1200,8 +1202,8 @@ The human architect does not hold formal credentials in cryptography. The AI con
 ### What We Did Right
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
-- **Quantified claims:** All performance metrics are measured and reproducible (see BENCHMARKS.md)
-- **Rigorous testing:** 866+ tests across 39 test files (30 Python + 9 C) with CI checks including security scanning
+- **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
+- **Rigorous testing:** 1,264 tests across 47 test files (37 Python + 10 C) with CI checks including security scanning
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims
@@ -1243,6 +1245,6 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 </div>
 
-*Last updated: 2026-03-22*
+*Last updated: 2026-03-26*
 
 </div>

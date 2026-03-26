@@ -336,7 +336,7 @@ def main():
     print("=" * 70)
     print("AMA CRYPTOGRAPHY COMPLETE FEATURE DEMONSTRATION")
     print("=" * 70)
-    print("\nDemonstrating all capabilities of AMA Cryptography 2.0")
+    print("\nDemonstrating all capabilities of AMA Cryptography 2.1")
     print("Production-grade multi-language PQC system")
     print()
 

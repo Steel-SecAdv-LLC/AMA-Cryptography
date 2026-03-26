@@ -11,7 +11,7 @@ Cryptographic key material must be handled with care:
 - **Locked** in RAM (prevent exposure via swap/hibernate)
 - **Compared** in constant time (prevent timing side-channel attacks)
 
-The `secure_memory` module provides these capabilities with optional libsodium integration (via PyNaCl).
+The `secure_memory` module provides these capabilities using only the standard library, with optional acceleration via the AMA native C backend.
 
 ---
 
@@ -25,20 +25,19 @@ import os
 
 # Allocate a 32-byte secure buffer
 with SecureBuffer(32) as buf:
-    # buf.data is a bytearray, initially zeroed
-    buf.data[:] = os.urandom(32)   # Load key material
-    
-    # Use buf.data for cryptographic operations...
-    key = bytes(buf.data)
-    
-# On context manager __exit__, buf.data is automatically zeroed
+    # buf is a bytearray, initially zeroed
+    buf[:] = os.urandom(32)   # Load key material
+
+    # Use buf for cryptographic operations...
+    key = bytes(buf)
+
+# On context manager __exit__, buf is automatically zeroed
 # (multi-pass overwrite, ensuring the key cannot be recovered)
-print(f"After context: {buf.data.hex()}")  # 0000...0000
 ```
 
 ### Internal Design
 
-`SecureBuffer.data` is a `bytearray` (not `bytes`) because `bytearray` supports in-place modification, allowing the buffer to be zeroed without creating new memory allocations. `bytes` objects in Python are immutable and cannot be zeroed in place.
+`SecureBuffer.__enter__()` returns a `bytearray` (not `bytes`) because `bytearray` supports in-place modification, allowing the buffer to be zeroed without creating new memory allocations. `bytes` objects in Python are immutable and cannot be zeroed in place.
 
 ---
 
@@ -67,8 +66,7 @@ secure_memzero(secret_key)
 `secure_memzero()` performs multiple overwrite passes:
 1. Fill with `0x00`
 2. Fill with `0xFF`
-3. Fill with `0xAA` (alternating bits)
-4. Final fill with `0x00`
+3. Final fill with `0x00`
 
 This protects against "compiler optimization" attacks where a naive `memset()` call to zero is optimized away because the buffer is not subsequently read.
 
@@ -84,10 +82,9 @@ from ama_cryptography.secure_memory import secure_mlock, secure_munlock
 secret = bytearray(os.urandom(32))
 
 # Lock the memory page containing `secret` into RAM
-# Returns True if successful, False if insufficient privileges or not supported
-locked = secure_mlock(secret)
-if locked:
-    print("Memory locked in RAM (will not swap)")
+# Raises NotImplementedError if native C or POSIX mlock unavailable
+secure_mlock(secret)
+print("Memory locked in RAM (will not swap)")
 
 # ... use secret ...
 
@@ -106,7 +103,7 @@ secure_memzero(secret)
 | macOS | `mlock()` | Requires entitlements in sandboxed environments |
 | Windows | `VirtualLock()` | Standard user processes have limits |
 
-> **libsodium:** If PyNaCl is installed (`pip install ".[secure-memory]"`), `secure_mlock()` delegates to `libsodium`'s `sodium_mlock()` which is more reliable across platforms.
+> **Native C backend:** If the AMA native C library is available, `secure_mlock()` delegates to `ama_secure_mlock()`. Otherwise falls back to POSIX `mlock()`.
 
 ---
 
@@ -136,7 +133,7 @@ A naive comparison (`expected == received`) returns `False` as soon as it finds 
 
 ### Implementation
 
-Uses `hmac.compare_digest()` from the Python standard library (which internally uses `_Py_bytes_cmp()`, a constant-time C implementation), with a fallback to a manual XOR-reduction approach.
+Uses `ama_consttime_memcmp()` from AMA's native C library when available, with a fallback to a pure-Python XOR accumulator that pads both inputs to equal length and never short-circuits.
 
 ---
 
@@ -184,9 +181,9 @@ key = os.urandom(32)   # bytes object
 ```python
 # ✓ Automatic zeroing even on exception
 with SecureBuffer(32) as buf:
-    buf.data[:] = get_key_from_hsm()
-    result = encrypt(plaintext, bytes(buf.data))
-# buf.data is zeroed here, even if encrypt() raised
+    buf[:] = get_key_from_hsm()
+    result = encrypt(plaintext, bytes(buf))
+# buf is zeroed here, even if encrypt() raised
 ```
 
 ### Do: Lock Sensitive Buffers in RAM
@@ -216,22 +213,13 @@ if expected_mac == received_mac:   # DO NOT USE for secrets
 
 ---
 
-## Optional: libsodium Integration
+## Native C Backend
 
-Install PyNaCl for enhanced secure memory operations:
+When the AMA native C library is available (built via CMake), the secure memory module uses it for:
+- `secure_mlock()` / `secure_munlock()` via `ama_secure_mlock()` / `ama_secure_munlock()`
+- `constant_time_compare()` via `ama_consttime_memcmp()`
 
-```bash
-pip install ".[secure-memory]"
-# or
-pip install PyNaCl>=1.5.0
-```
-
-When PyNaCl is available:
-- `secure_mlock()` delegates to `libsodium`'s `sodium_mlock()`
-- `secure_memzero()` delegates to `libsodium`'s `sodium_memzero()`
-- `constant_time_compare()` delegates to `libsodium`'s `sodium_memcmp()`
-
-These libsodium implementations provide stronger guarantees against compiler optimizations and are well-audited.
+Without the native C library, POSIX `mlock()`/`munlock()` and a pure-Python XOR accumulator are used as fallbacks.
 
 ---
 

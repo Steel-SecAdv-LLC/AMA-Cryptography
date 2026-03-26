@@ -187,7 +187,9 @@ def benchmark_helix_evolution():
     from ama_cryptography.double_helix_engine import AmaEquationEngine
 
     engine = AmaEquationEngine(state_dim=100, random_seed=42)
-    state = np.random.randn(100) * 0.5
+    from ama_cryptography._numeric import random as ama_random
+
+    state = ama_random.randn(100) * 0.5
 
     def run_step(eng, s):
         return eng.step(s, 0)

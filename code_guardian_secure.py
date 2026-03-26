@@ -23,20 +23,24 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2026-03-08
-Version: 2.0
+Version: 2.1
 Project: Post-quantum cryptographic security system
 
 AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
-Security Layers (6-Layer Defense-in-Depth):
--------------------------------------------
+Security Layers (Multi-Layer Defense-in-Depth):
+------------------------------------------------
+Core Cryptographic Operations:
 1. SHA3-256 content hashing (NIST FIPS 202)
 2. HMAC-SHA3-256 authentication (RFC 2104)
 3. Ed25519 digital signatures (RFC 8032) — native C backend
 4. CRYSTALS-Dilithium quantum-resistant signatures (NIST FIPS 204) — native C backend, required
-5. HKDF key derivation (RFC 5869, NIST SP 800-108) — native C backend
-6. RFC 3161 trusted timestamps with cryptographic verification (RFC 3161)
+
+Supporting Infrastructure:
+- Canonical encoding — deterministic length-prefixed input normalization
+- HKDF key derivation (RFC 5869, NIST SP 800-108) — native C backend
+- RFC 3161 trusted timestamps with cryptographic verification (optional)
 
 Additional Features:
 --------------------
@@ -59,8 +63,8 @@ Standards Compliance:
 - RFC 5869: HMAC-based Extract-and-Expand Key Derivation (HKDF)
 - RFC 3161: Internet X.509 Public Key Infrastructure Time-Stamp Protocol
 
-Version: 2.0
-Python: 3.8+
+Version: 2.1
+Python: 3.9+
 License: Apache License 2.0
 """
 
@@ -1532,7 +1536,7 @@ def generate_key_management_system(
         dilithium_keypair=dilithium_keypair,
         creation_date=datetime.now(timezone.utc).isoformat(),
         rotation_schedule="quarterly",
-        version="2.0",
+        version="2.1",
         ethical_vector=ethical_vector,
         quantum_signatures_enabled=quantum_signatures_enabled,
     )
@@ -1874,7 +1878,7 @@ def create_crypto_package(  # noqa: C901 - high-level orchestrator; refactor wou
         author=author,
         ed25519_pubkey=kms.ed25519_keypair.public_key.hex(),
         dilithium_pubkey=dilithium_pubkey,
-        version="2.0",
+        version="2.1",
         ethical_vector=ethical_vector,
         ethical_hash=ethical_hash_hex,
         quantum_signatures_enabled=quantum_signatures_enabled,

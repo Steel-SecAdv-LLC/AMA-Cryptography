@@ -13,7 +13,7 @@
 
 This document provides an overview of the cryptographic algorithms used in AMA Cryptography, their security properties, and references to official specifications.
 
-> **Design Note:** AMA Cryptography is built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the 6-layer defense architecture, double-helix key evolution, and adaptive posture system) is an original design by Steel Security Advisors LLC. AMA Cryptography is a standalone cryptographic library for any Python project, AI agent, or AI system requiring quantum-resistant security. [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent) is one consumer, but the library is designed for general-purpose independent use.
+> **Design Note:** AMA Cryptography is built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the multi-layer defense architecture, double-helix key evolution, and adaptive posture system) is an original design by Steel Security Advisors LLC. AMA Cryptography is a standalone cryptographic library for any Python project, AI agent, or AI system requiring quantum-resistant security. [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent) is one consumer, but the library is designed for general-purpose independent use.
 
 ## Algorithm Summary
 
@@ -206,16 +206,20 @@ combined_ss = HKDF-SHA3-256(
 
 ## Defense-in-Depth Layers
 
-AMA Cryptography applies six independent cryptographic layers:
+AMA Cryptography applies multiple independent cryptographic layers. Core cryptographic operations (the defense layers an attacker must defeat) are distinguished from supporting infrastructure:
 
-1. **Canonical Encoding** - Length-prefixed encoding prevents concatenation attacks
-2. **SHA3-256 Hash** - Content integrity with collision resistance
-3. **HMAC-SHA3-256** - Symmetric authentication with shared key
-4. **Ed25519 Signature** - Classical asymmetric authentication
-5. **ML-DSA-65 Signature** - Quantum-resistant asymmetric authentication
-6. **RFC 3161 Timestamp** - Third-party proof of existence (optional)
+**Core Cryptographic Operations:**
+1. **SHA3-256 Hash** - Content integrity with 128-bit collision resistance (FIPS 202)
+2. **HMAC-SHA3-256** - Keyed message authentication using HKDF-derived key
+3. **Ed25519 Signature** - Classical digital signature with 128-bit security (RFC 8032)
+4. **ML-DSA-65 Signature** - Quantum-resistant digital signature with 192-bit security (FIPS 204)
 
-**Security Bound:** Overall security is bounded by the weakest layer (~128-bit classical, ~192-bit quantum when Dilithium is enforced). Defense-in-depth ensures continued protection if any single layer is compromised. See [SECURITY.md](SECURITY.md) for detailed analysis.
+**Supporting Infrastructure:**
+- **Canonical Encoding** - Deterministic length-prefixed input normalization (prevents concatenation attacks)
+- **HKDF-SHA3-256** - Key derivation ensuring cryptographic key independence (RFC 5869)
+- **RFC 3161 Timestamp** - Third-party temporal proof of existence (optional)
+
+**Security Bound:** Overall security is bounded by the weakest core layer (~128-bit classical, ~192-bit quantum when ML-DSA-65 is enforced). Defense-in-depth ensures continued protection if any single layer is compromised. See [SECURITY.md](SECURITY.md) for detailed analysis.
 
 ### Hash Algorithm Note: RFC 3161 Timestamps
 
@@ -224,7 +228,7 @@ The RFC 3161 timestamp layer uses **SHA-256** instead of SHA3-256 for the TSA re
 - Most RFC 3161 TSA services (FreeTSA, DigiCert, GlobalSign) do not support SHA3-256
 - The timestamp token provides proof-of-existence at a specific time
 - The SHA-256 hash is only used for the TSA request, not for package integrity
-- Package integrity is protected by SHA3-256 in layers 2-5
+- Package integrity is protected by SHA3-256 in layers 1-4
 
 This does not weaken security because:
 1. The timestamp proves when the package existed, not its integrity

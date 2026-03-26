@@ -255,7 +255,7 @@ See inline documentation in `ama_cryptography_monitor.py` for complete API detai
 
 ---
 
-## Adaptive Posture Integration (v2.0)
+## Adaptive Posture Integration (v2.1)
 
 The 3R monitor feeds into the **Adaptive Cryptographic Posture System**, which evaluates anomaly scores and triggers automated responses:
 

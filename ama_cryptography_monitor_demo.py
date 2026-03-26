@@ -32,7 +32,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2026-03-08
-Version: 2.0
+Version: 2.1
 Project: AMA Cryptography 3R Runtime Monitoring
 
 AI Co-Architects:

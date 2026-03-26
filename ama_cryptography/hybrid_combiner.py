@@ -36,7 +36,7 @@ standard combiner only.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 2.0
+Version: 2.1
 """
 
 import ctypes

@@ -41,9 +41,9 @@ RUN adduser -D -u 1000 ava
 COPY --from=builder /build/build/lib/*.so* /usr/local/lib/
 COPY --from=builder /build/dist/*.whl /tmp/
 
-# Install Python package and numpy/scipy (required by equations/double_helix at import)
+# Install Python package (core has zero runtime dependencies;
+# numpy/scipy are only needed for the optional [monitoring] extra)
 RUN pip3 install --no-cache-dir /tmp/*.whl && \
-    pip3 install --no-cache-dir numpy scipy && \
     rm -rf /tmp/*.whl
 
 USER ava

@@ -338,7 +338,7 @@ setup(
         "legacy": ["cryptography>=41.0.0"],
         # PKCS#11 support for hardware security modules
         "hsm": ["PyKCS11>=1.5.0"],
-        # PyNaCl for enhanced secure memory operations (libsodium bindings)
+        # PyNaCl reserved for future libsodium integration; not currently used
         "secure-memory": ["pynacl>=1.5.0"],
         # NOTE: pyproject.toml [project.optional-dependencies.dev] is authoritative.
         "dev": [

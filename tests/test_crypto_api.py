@@ -36,6 +36,7 @@ from ama_cryptography.crypto_api import (
     SphincsProvider,
     SphincsUnavailableError,
     get_pqc_capabilities,
+    quick_hash,
     quick_kem,
     quick_sign,
     quick_verify,
@@ -437,6 +438,80 @@ class TestAmaCryptography:
         signature = crypto.sign(message, keypair.secret_key)
         is_valid = crypto.verify(message, signature.signature, keypair.public_key)
         assert is_valid is True
+
+
+class TestQuickHash:
+    """Test quick_hash convenience function including FIPS 140-3 gate."""
+
+    def test_sha3_256_default(self) -> None:
+        """Verify quick_hash defaults to SHA3-256 and returns 32 bytes."""
+        import hashlib
+
+        message = b"Hello from AI agent"
+        result = quick_hash(message)
+        expected = hashlib.sha3_256(message).digest()
+        assert result == expected
+        assert len(result) == 32
+
+    def test_sha3_512(self) -> None:
+        """Verify quick_hash supports SHA3-512 (64-byte digest)."""
+        import hashlib
+
+        message = b"SHA3-512 test"
+        result = quick_hash(message, algorithm="sha3-512")
+        expected = hashlib.sha3_512(message).digest()
+        assert result == expected
+        assert len(result) == 64
+
+    def test_shake256(self) -> None:
+        """Verify quick_hash supports SHAKE256 (32-byte digest)."""
+        import hashlib
+
+        message = b"SHAKE256 test"
+        result = quick_hash(message, algorithm="shake256")
+        expected = hashlib.shake_256(message).digest(32)
+        assert result == expected
+        assert len(result) == 32
+
+    def test_unsupported_algorithm_raises(self) -> None:
+        """Verify quick_hash raises ValueError for unsupported algorithm."""
+        with pytest.raises(ValueError, match="Unsupported hash algorithm"):
+            quick_hash(b"test", algorithm="md5")
+
+    def test_empty_message(self) -> None:
+        """Verify quick_hash handles empty input."""
+        import hashlib
+
+        result = quick_hash(b"")
+        expected = hashlib.sha3_256(b"").digest()
+        assert result == expected
+
+    def test_fips_gate_blocks_in_error_state(self) -> None:
+        """Verify quick_hash raises CryptoModuleError in ERROR state.
+
+        This proves the _check_operational() gate is enforced,
+        consistent with quick_sign / quick_verify / quick_kem.
+        """
+        from ama_cryptography._self_test import (
+            _set_error,
+            _set_operational,
+        )
+        from ama_cryptography.exceptions import CryptoModuleError
+
+        try:
+            _set_error("FIPS gate test")
+            with pytest.raises(CryptoModuleError, match="FIPS gate test"):
+                quick_hash(b"should not hash")
+        finally:
+            _set_operational()
+
+    def test_fips_gate_allows_in_operational_state(self) -> None:
+        """Verify quick_hash succeeds when module is OPERATIONAL."""
+        from ama_cryptography._self_test import module_status
+
+        assert module_status() == "OPERATIONAL"
+        result = quick_hash(b"operational test")
+        assert len(result) == 32
 
 
 class TestQuickFunctions:
