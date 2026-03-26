@@ -599,13 +599,16 @@ def min_(x: Vec) -> float:
 
 
 def dot(a: Vec, b: Vec) -> float:
-    if len(a._data) != len(b._data):
-        raise ValueError(f"Vec length mismatch in dot(): {len(a._data)} vs {len(b._data)}")
-    return sum(x * y for x, y in zip(a._data, b._data))
+    a_data = a._data if hasattr(a, "_data") else a
+    b_data = b._data if hasattr(b, "_data") else b
+    if len(a_data) != len(b_data):
+        raise ValueError(f"Vec length mismatch in dot(): {len(a_data)} vs {len(b_data)}")
+    return sum(x * y for x, y in zip(a_data, b_data))
 
 
 def norm(v: Vec) -> float:
-    return math.sqrt(sum(x * x for x in v._data))
+    data = v._data if hasattr(v, "_data") else v
+    return math.sqrt(sum(x * x for x in data))
 
 
 def eigvals(m: Mat) -> List[float]:

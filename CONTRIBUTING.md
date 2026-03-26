@@ -466,7 +466,7 @@ According to Bernstein et al. [1], Ed25519 provides 128-bit classical security..
 When citing standards:
 
 ```markdown
-SHA3-256 provides 256-bit collision resistance and 128-bit preimage resistance
+SHA3-256 provides 128-bit collision resistance and 256-bit preimage resistance
 as specified in NIST FIPS 202 Section 6.1.
 
 **Reference:** NIST FIPS 202 - SHA-3 Standard: Permutation-Based Hash and

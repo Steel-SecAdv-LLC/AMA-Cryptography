@@ -1533,7 +1533,7 @@ def create_crypto_package(
 
     Args:
         content: The content to sign/protect (bytes)
-        config: Algorithm configuration (default: hybrid signatures with all 6 layers)
+        config: Algorithm configuration (default: hybrid signatures with all layers)
 
     Returns:
         CryptoPackageResult with all cryptographic artifacts
@@ -1546,7 +1546,7 @@ def create_crypto_package(
         TimestampError: If timestamp request fails
 
     Example:
-        >>> # Basic usage with hybrid signatures and 6-layer defense
+        >>> # Basic usage with hybrid signatures and multi-layer defense
         >>> result = create_crypto_package(b"Hello, World!")
         >>> print(f"Hash: {result.content_hash}")
         >>> print(f"HMAC: {result.hmac_tag.hex()}")
@@ -1699,7 +1699,7 @@ def create_crypto_package(
         "timestamp_enabled": config.include_timestamp and timestamp_token is not None,
         "num_derived_keys": len(derived_keys),
         "pqc_status": get_pqc_capabilities()["status"],
-        "six_layer_defense": True,  # All 6 layers implemented
+        "six_layer_defense": True,  # All layers implemented
     }
 
     return CryptoPackageResult(
