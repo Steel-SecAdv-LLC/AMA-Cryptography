@@ -85,7 +85,7 @@ class HybridEncapsulation:
 
 ## Hybrid Signature Scheme
 
-AMA Cryptography's 6-layer defense architecture natively incorporates a hybrid signature in layers 4 and 5 (Ed25519 + ML-DSA-65). The `HybridSigner` class provides direct access to this scheme.
+AMA Cryptography's multi-layer defense architecture natively incorporates a hybrid signature in layers 3 and 4 (Ed25519 + ML-DSA-65). The `HybridSigner` class provides direct access to this scheme.
 
 ### Security Guarantee
 
@@ -122,9 +122,9 @@ print(f"Hybrid signature valid: {is_valid}")
 
 ---
 
-## Using the 6-Layer Package (Full Hybrid)
+## Using the Multi-Layer Package (Full Hybrid)
 
-The highest-level API (`code_guardian_secure.py`) automatically uses hybrid signatures (Ed25519 + ML-DSA-65) as layers 4 and 5:
+The highest-level API (`code_guardian_secure.py`) automatically uses hybrid signatures (Ed25519 + ML-DSA-65) as layers 3 and 4:
 
 ```python
 from code_guardian_secure import (

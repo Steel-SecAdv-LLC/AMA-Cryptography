@@ -1,5 +1,10 @@
 # AMA Cryptography — Library Invariants
 
+> **See also:** [`.github/INVARIANTS.md`](.github/INVARIANTS.md) for the
+> complete set of architectural invariants (INVARIANT-1 through INVARIANT-4)
+> enforced on every PR. This document provides detailed rationale and vendoring
+> policy for the invariants defined there.
+
 This document defines invariants that must hold true across all changes to the
 AMA Cryptography library. Violations of any invariant must be resolved before
 code is merged.
