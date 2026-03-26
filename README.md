@@ -9,7 +9,7 @@
 [![Python](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org)
 [![C](https://img.shields.io/badge/C-C11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 [![Cython](https://img.shields.io/badge/Cython-3.0+-yellow.svg)](https://cython.org)
-[![PQC](https://img.shields.io/badge/PQC-ML--DSA--65%20%7C%20Kyber--1024-purple.svg)](CRYPTOGRAPHY.md)
+[![PQC](https://img.shields.io/badge/PQC-ML--DSA--65%20%7C%20Kyber--1024%20%7C%20SPHINCS%2B-purple.svg)](CRYPTOGRAPHY.md)
 [![3R Monitoring](https://img.shields.io/badge/3R-Runtime%20Security-orange.svg)](MONITORING.md)
 [![Architecture](https://img.shields.io/badge/architecture-C%20%2B%20Python%20%2B%20Cython-blue.svg)](ARCHITECTURE.md)
 
@@ -62,7 +62,7 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 > - Secure file permissions for key files and cryptographic packages (store on encrypted volumes with restricted access)
 >
 > **Status:** Community-tested | Not externally audited
-> **Last Updated:** 2026-03-22
+> **Last Updated:** 2026-03-26
 
 ---
 
@@ -71,10 +71,10 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 <details>
 <summary><strong>Click to expand navigation</strong></summary>
 
-- [Executive Summary](#executive-summary)
-- [Key Capabilities](#key-capabilities-)
+- [Executive Summary](#executive-summary-)
+- [Key Capabilities](#key-capabilities)
 - [Use Cases by Sector](#use-cases-by-sector-)
-- [Performance Metrics](#performance-metrics-)
+- [Performance Metrics](#performance-metrics)
 - [Quick Start](#quick-start)
 - [Testing and Quality Assurance](#testing-and-quality-assurance)
 - [Documentation](#documentation)
@@ -82,9 +82,11 @@ Novel in assimilation, the system combines cutting-edge NIST-approved post-quant
 - [Build System](#build-system-)
 - [Mathematical Foundations](#mathematical-foundations-)
 - [Contributing](#contributing)
+- [Unique Features](#unique-features)
 - [License](#license)
 - [Contact and Support](#contact-and-support)
 - [Acknowledgments](#acknowledgments)
+- [Legal Disclaimer & Attribution](#steel-security-advisors-llc--legal-disclaimer--attribution)
 
 </details>
 
@@ -237,7 +239,7 @@ Future-proof cryptography:
 - **Full (native)**: Complete native C implementation — no external PQC dependency required.
 - **Note**: Ed25519 C implementation uses radix 2^51 field arithmetic (fe51.h — 25 cross-products vs 100 in ref10). Optional ed25519-donna x86-64 assembly backend available via `AMA_ED25519_ASSEMBLY=ON` (auto-enabled on MSVC x64). Full RFC 8032 sign/verify roundtrip verified.
 
-**C Library Implementations (v2.0) — 23 source files in `src/c/`:**
+**C Library Implementations (v2.1) — 20 source files in `src/c/`:**
 - `ama_core.c`: Library initialization, version, feature detection, shared utilities
 - `ama_sha3.c`: SHA3-256, SHAKE128, SHAKE256 (Keccak-f[1600] sponge construction)
 - `ama_sha256.c`: Native SHA-256 (FIPS 180-4), used by SPHINCS+ internally
@@ -249,6 +251,8 @@ Future-proof cryptography:
 - `ama_dilithium.c`: ML-DSA-65 full native (NTT q=8380417, rejection sampling, constant-time)
 - `ama_sphincs.c`: SPHINCS+-SHA2-256f-simple full native (WOTS+, FORS, hypertree d=17)
 - `ama_consttime.c`: Constant-time utilities (memcmp, memzero, swap, lookup, copy)
+- `ama_cpuid.c`: CPU feature detection (AVX2, SSE, NEON) for runtime dispatch
+- `ama_secure_memory.c`: Secure memory zeroing and page locking (mlock/munlock)
 - `ama_platform_rand.c`: Platform CSPRNG (getrandom/getentropy/BCryptGenRandom)
 - `ama_x25519.c`: X25519 Diffie-Hellman key exchange (RFC 7748)
 - `ama_chacha20poly1305.c`: ChaCha20-Poly1305 AEAD (RFC 8439)
@@ -405,9 +409,9 @@ Complete security package with all defense layers:
 | ChaCha20-Poly1305 encrypt (1KB) | 155,725 ops/sec | 0.006ms |
 | X25519 DH Exchange | 1,280 ops/sec | 0.78ms |
 
-**Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [BENCHMARKS.md](BENCHMARKS.md) for full performance data including all algorithms.
+**Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [benchmarks/](benchmarks/) for full performance data including all algorithms.
 
-*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, native C backend via ctypes. See [BENCHMARKS.md](BENCHMARKS.md) for raw C performance numbers (without ctypes overhead) and competitive comparisons against libsodium and liboqs. Reproducible via `python benchmarks/benchmark_runner.py --verbose` or `make -C benchmarks benchmark_c_raw`.*
+*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, native C backend via ctypes. See [benchmarks/](benchmarks/) for raw C performance numbers (without ctypes overhead) and competitive comparisons against libsodium and liboqs. Reproducible via `python benchmarks/benchmark_runner.py --verbose` or `make -C benchmarks benchmark_c_raw`.*
 
 </details>
 
@@ -435,7 +439,7 @@ Complete security package with all defense layers:
 | 100x | 2.90ms | 344 ops/sec |
 | 1000x | 100.74ms | 9.9 ops/sec |
 
-*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 50 iterations per size. The 1x baseline measures the full scalability pipeline including data preparation, which is why it differs from the 0.48ms Package Create number. See [BENCHMARKS.md](BENCHMARKS.md) for details.*
+*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 50 iterations per size. The 1x baseline measures the full scalability pipeline including data preparation, which is why it differs from the 0.48ms Package Create number. See [benchmarks/](benchmarks/) for details.*
 
 </details>
 
@@ -667,7 +671,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*866+ tests across 39 files (30 Python + 9 C) covering core crypto and NIST KATs, PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring.*
+*1,264 tests across 47 files (37 Python + 10 C) covering core crypto and NIST KATs, PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring.*
 
 </details>
 
@@ -687,7 +691,7 @@ GitHub Actions automatically tests:
 ### CI Matrix
 
 - **Python Versions**: 3.9, 3.10, 3.11, 3.12, 3.13
-- **Platforms**: Ubuntu Latest, Windows Latest
+- **Platforms**: Ubuntu Latest, macOS Latest, Windows Latest
 - **Jobs**: test, code-quality, security-checks
 
 ### CI Workflows
@@ -699,6 +703,7 @@ GitHub Actions automatically tests:
 | Security | `security.yml` | pip-audit, bandit, Semgrep, secret scanning |
 | Static Analysis | `static-analysis.yml` | CodeQL analysis |
 | Fuzzing | `fuzzing.yml` | C fuzz harnesses (12 targets) |
+| Auto Docs | `auto-docs.yml` | Auto-generate and deploy documentation |
 | Wiki Sync | `wiki-sync.yml` | Auto-sync wiki/ to GitHub Wiki |
 
 </details>
@@ -833,7 +838,7 @@ The module implements technical controls aligned with FIPS 140-3 Security Level 
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture and design |
 | [SECURITY.md](SECURITY.md) | Complete security analysis |
 | [THREAT_MODEL.md](THREAT_MODEL.md) | Threat model and risk assessment |
-| [BENCHMARKS.md](BENCHMARKS.md) | Performance measurements |
+| [benchmarks/](benchmarks/) | Performance measurements |
 | [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) | Cryptographic algorithm overview |
 | [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md) | NIST ACVP vector validation (815/815 pass) |
 | [CSRC_STANDARDS.md](CSRC_STANDARDS.md) | Governing standards registry |
@@ -1200,8 +1205,8 @@ The human architect does not hold formal credentials in cryptography. The AI con
 ### What We Did Right
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
-- **Quantified claims:** All performance metrics are measured and reproducible (see BENCHMARKS.md)
-- **Rigorous testing:** 866+ tests across 39 test files (30 Python + 9 C) with CI checks including security scanning
+- **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
+- **Rigorous testing:** 1,264 tests across 47 test files (37 Python + 10 C) with CI checks including security scanning
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims
@@ -1243,6 +1248,6 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 </div>
 
-*Last updated: 2026-03-22*
+*Last updated: 2026-03-26*
 
 </div>
