@@ -10,17 +10,15 @@ Each test class covers exactly one security issue and proves the fix.
 
 import hashlib
 import os
-import pathlib
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from ama_cryptography.rfc3161_timestamp import (_MOCK_TSA_ALLOWED, MockTSA,
-                                                TimestampResult,
-                                                _compute_data_hash,
-                                                get_timestamp,
-                                                verify_timestamp)
+from ama_cryptography.rfc3161_timestamp import (
+    MockTSA,
+    get_timestamp,
+    verify_timestamp,
+)
 
 # ---------------------------------------------------------------------------
 # S1 — HKDF Layer 4 trivial bypass on empty derived_keys
@@ -34,10 +32,12 @@ class TestS1_HKDFEmptyDerivedKeys:
         """An empty derived_keys list must cause hkdf_keys to be False."""
         import secrets
 
-        from ama_cryptography.crypto_api import (CryptoPackageResult,
-                                                 Ed25519Provider, KeyPair,
-                                                 Signature, _hmac_sha3_256,
-                                                 verify_crypto_package)
+        from ama_cryptography.crypto_api import (
+            CryptoPackageResult,
+            Ed25519Provider,
+            _hmac_sha3_256,
+            verify_crypto_package,
+        )
 
         # Build a minimal valid-looking CryptoPackageResult by hand
         # so we don't depend on _check_operational / FIPS self-test.
@@ -179,8 +179,7 @@ class TestS4_MockTimestampExceptionNotSwallowed:
 
     def test_mock_mode_exception_propagates(self) -> None:
         """When get_timestamp raises in mock mode, _acquire_timestamp must re-raise."""
-        from ama_cryptography.crypto_api import (CryptoPackageConfig,
-                                                 _acquire_timestamp)
+        from ama_cryptography.crypto_api import CryptoPackageConfig, _acquire_timestamp
 
         config = CryptoPackageConfig(
             include_timestamp=True,
@@ -205,8 +204,7 @@ class TestS5_AcquireTimestampNoneGuard:
 
     def test_none_return_raises_in_mock_mode(self) -> None:
         """If get_timestamp() returns None in mock mode, raise RuntimeError."""
-        from ama_cryptography.crypto_api import (CryptoPackageConfig,
-                                                 _acquire_timestamp)
+        from ama_cryptography.crypto_api import CryptoPackageConfig, _acquire_timestamp
 
         config = CryptoPackageConfig(
             include_timestamp=True,
@@ -217,13 +215,12 @@ class TestS5_AcquireTimestampNoneGuard:
             "ama_cryptography.crypto_api.get_timestamp",
             return_value=None,
         ):
-            with pytest.raises(RuntimeError, match="get_timestamp.*returned None"):
+            with pytest.raises(RuntimeError, match=r"get_timestamp.*returned None"):
                 _acquire_timestamp(b"content", config)
 
     def test_none_return_raises_in_online_mode(self) -> None:
         """If get_timestamp() returns None in online mode, raise RuntimeError."""
-        from ama_cryptography.crypto_api import (CryptoPackageConfig,
-                                                 _acquire_timestamp)
+        from ama_cryptography.crypto_api import CryptoPackageConfig, _acquire_timestamp
 
         config = CryptoPackageConfig(
             include_timestamp=True,
@@ -238,13 +235,12 @@ class TestS5_AcquireTimestampNoneGuard:
                 "ama_cryptography.crypto_api.get_timestamp",
                 return_value=None,
             ):
-                with pytest.raises(RuntimeError, match="get_timestamp.*returned None"):
+                with pytest.raises(RuntimeError, match=r"get_timestamp.*returned None"):
                     _acquire_timestamp(b"content", config)
 
     def test_disabled_mode_returns_none_silently(self) -> None:
         """Disabled mode should still return None (no timestamp requested)."""
-        from ama_cryptography.crypto_api import (CryptoPackageConfig,
-                                                 _acquire_timestamp)
+        from ama_cryptography.crypto_api import CryptoPackageConfig, _acquire_timestamp
 
         config = CryptoPackageConfig(
             include_timestamp=True,
@@ -278,8 +274,6 @@ class TestS6_AESGCMEphemeralMode:
             result = provider.encrypt(b"ephemeral test data", key)
             assert result["ciphertext"] is not None
 
-            # Verify no file was written
-            persist_path = pathlib.Path.home() / ".ama_cryptography" / "aes_gcm_counters.json"
             # In ephemeral mode, _persist_counters should be a no-op,
             # so even if the file exists from prior runs, the provider
             # should not have loaded or written to it during this test.

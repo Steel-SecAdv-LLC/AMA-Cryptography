@@ -47,12 +47,8 @@ static const int PI[25] = {
     14, 24,  9, 19,  4,
 };
 
-/* NEON rotate left for 64-bit lanes */
-static inline uint64x2_t rotl64_neon(uint64x2_t x, int n) {
-    return vorrq_u64(vshlq_n_u64(x, n), vshrq_n_u64(x, 64 - n));
-}
-
-/* Workaround: NEON doesn't have variable shift for 64-bit, use scalar */
+/* NEON shift intrinsics require compile-time constants, so we use scalar
+ * rotation for variable shifts in the Keccak permutation. */
 static inline uint64_t rotl64(uint64_t x, int n) {
     if (n == 0) return x;
     return (x << n) | (x >> (64 - n));

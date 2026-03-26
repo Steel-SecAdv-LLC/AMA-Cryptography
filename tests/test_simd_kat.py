@@ -26,7 +26,6 @@ AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
 from __future__ import annotations
 
 import hashlib
-from typing import Optional
 
 import pytest
 
@@ -36,9 +35,13 @@ import pytest
 
 try:
     from ama_cryptography.pqc_backends import (
-        _AES_GCM_NATIVE_AVAILABLE, _CHACHA20_POLY1305_NATIVE_AVAILABLE,
-        _ED25519_NATIVE_AVAILABLE, _HMAC_SHA3_256_NATIVE_AVAILABLE,
-        _SHA3_256_NATIVE_AVAILABLE, _native_lib)
+        _AES_GCM_NATIVE_AVAILABLE,
+        _CHACHA20_POLY1305_NATIVE_AVAILABLE,
+        _ED25519_NATIVE_AVAILABLE,
+        _HMAC_SHA3_256_NATIVE_AVAILABLE,
+        _SHA3_256_NATIVE_AVAILABLE,
+        _native_lib,
+    )
 
     NATIVE_LIB = _native_lib
 except ImportError:
@@ -88,8 +91,8 @@ class TestSHA3_256_SIMD_KAT:
         )
         native = self._native_sha3_256(data)
         ref = self._reference_sha3_256(data)
-        assert native == expected, f"Native SHA3-256 mismatch on empty input"
-        assert native == ref, f"Native vs reference mismatch on empty input"
+        assert native == expected, "Native SHA3-256 mismatch on empty input"
+        assert native == ref, "Native vs reference mismatch on empty input"
 
     def test_abc(self) -> None:
         """FIPS 202 'abc' vector."""
@@ -145,8 +148,10 @@ class TestAES256GCM_SIMD_KAT:
 
     def test_nist_gcm_roundtrip(self) -> None:
         """Verify native encrypt -> native decrypt produces original plaintext."""
-        from ama_cryptography.pqc_backends import (native_aes256_gcm_decrypt,
-                                                   native_aes256_gcm_encrypt)
+        from ama_cryptography.pqc_backends import (
+            native_aes256_gcm_decrypt,
+            native_aes256_gcm_encrypt,
+        )
 
         key = bytes.fromhex("feffe9928665731c6d6a8f9467308308" "feffe9928665731c6d6a8f9467308308")
         nonce = bytes.fromhex("cafebabefacedbaddecaf888")
@@ -178,8 +183,10 @@ class TestAES256GCM_SIMD_KAT:
 
     def test_authentication_tag_verification(self) -> None:
         """Tampered ciphertext must fail authentication."""
-        from ama_cryptography.pqc_backends import (native_aes256_gcm_decrypt,
-                                                   native_aes256_gcm_encrypt)
+        from ama_cryptography.pqc_backends import (
+            native_aes256_gcm_decrypt,
+            native_aes256_gcm_encrypt,
+        )
 
         key = b"\x01" * 32
         nonce = b"\x02" * 12
@@ -208,8 +215,10 @@ class TestEd25519_SIMD_KAT:
     def test_sign_verify_roundtrip_empty_message(self) -> None:
         """Sign/verify roundtrip with empty message — exercises SIMD field arithmetic."""
         from ama_cryptography.pqc_backends import (
-            native_ed25519_keypair_from_seed, native_ed25519_sign,
-            native_ed25519_verify)
+            native_ed25519_keypair_from_seed,
+            native_ed25519_sign,
+            native_ed25519_verify,
+        )
 
         seed = bytes.fromhex("9d61b19deffd5a60ba844af492ec2cc4" "4449c5697b326919703bac031cae7f60")
         message = b""
@@ -231,8 +240,10 @@ class TestEd25519_SIMD_KAT:
     def test_sign_verify_roundtrip_short_message(self) -> None:
         """Sign/verify roundtrip with a short message and wrong-message rejection."""
         from ama_cryptography.pqc_backends import (
-            native_ed25519_keypair_from_seed, native_ed25519_sign,
-            native_ed25519_verify)
+            native_ed25519_keypair_from_seed,
+            native_ed25519_sign,
+            native_ed25519_verify,
+        )
 
         seed = bytes.fromhex("4ccd089b28ff96da9db6c346ec114e0f" "5b8a319f35aba624da8cf6ed4fb8a6fb")
         message = bytes.fromhex("72")
@@ -321,7 +332,9 @@ class TestChaCha20Poly1305_SIMD_KAT:
 
     def test_roundtrip(self) -> None:
         from ama_cryptography.pqc_backends import (
-            native_chacha20poly1305_decrypt, native_chacha20poly1305_encrypt)
+            native_chacha20poly1305_decrypt,
+            native_chacha20poly1305_encrypt,
+        )
 
         key = b"\x00" * 32
         nonce = b"\x00" * 12
@@ -333,8 +346,7 @@ class TestChaCha20Poly1305_SIMD_KAT:
         assert recovered == pt, "ChaCha20-Poly1305 roundtrip failed"
 
     def test_deterministic(self) -> None:
-        from ama_cryptography.pqc_backends import \
-            native_chacha20poly1305_encrypt
+        from ama_cryptography.pqc_backends import native_chacha20poly1305_encrypt
 
         key = b"\x01" * 32
         nonce = b"\x02" * 12
@@ -347,7 +359,9 @@ class TestChaCha20Poly1305_SIMD_KAT:
 
     def test_authentication_rejects_tampered(self) -> None:
         from ama_cryptography.pqc_backends import (
-            native_chacha20poly1305_decrypt, native_chacha20poly1305_encrypt)
+            native_chacha20poly1305_decrypt,
+            native_chacha20poly1305_encrypt,
+        )
 
         key = b"\x03" * 32
         nonce = b"\x04" * 12
