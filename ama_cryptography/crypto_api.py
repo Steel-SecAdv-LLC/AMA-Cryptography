@@ -1349,6 +1349,7 @@ def quick_hash(
         >>> digest = quick_hash(b"Hello from AI agent")
         >>> assert len(digest) == 32  # SHA3-256
     """
+    _check_operational()
     return AmaCryptography.hash_message(message, algorithm)
 
 
