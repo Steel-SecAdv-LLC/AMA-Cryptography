@@ -177,10 +177,10 @@ all 8 algorithm families on all 3 architectures (x86-64, AArch64, ARMv9).
 
 ### 1. 4-Layer Defense Architecture
 No competitor implements a multi-layer verification pipeline:
-- **Layer 1**: Quantum-resistant signatures (Ed25519 + ML-DSA-65)
-- **Layer 2**: HMAC-SHA3-256 integrity binding
-- **Layer 3**: RFC 3161 timestamp verification
-- **Layer 4**: HKDF-SHA3-256 key derivation verification
+- **Layer 1**: SHA3-256 content integrity (NIST FIPS 202)
+- **Layer 2**: HMAC-SHA3-256 keyed authentication (RFC 2104)
+- **Layer 3**: Hybrid Ed25519 + ML-DSA-65 digital signatures (RFC 8032 + NIST FIPS 204)
+- **Layer 4**: HKDF-SHA3-256 key derivation verification (RFC 5869)
 
 ### 2. Adaptive Security Posture
 AMA-Cryptography dynamically escalates cryptographic strength based on threat
