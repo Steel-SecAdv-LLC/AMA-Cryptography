@@ -206,8 +206,7 @@ void ama_fe51_mul_avx2(fe51 *r, const fe51 *a, const fe51 *b) {
     t4 += c;
     r->v[4] = (uint64_t)t4 & mask51; c = (uint64_t)(t4 >> 51);
     r->v[0] += c * 19;
-    c = r->v[0] >> 51; r->v[0] &= mask51;
-    r->v[1] += c;
+    fe51_carry(r);
 }
 
 /* ============================================================================
@@ -260,8 +259,7 @@ void ama_fe51_sq_avx2(fe51 *r, const fe51 *a) {
     t4 += c;
     r->v[4] = (uint64_t)t4 & mask51; c = (uint64_t)(t4 >> 51);
     r->v[0] += c * 19;
-    c = r->v[0] >> 51; r->v[0] &= mask51;
-    r->v[1] += c;
+    fe51_carry(r);
 
     (void)a2[4]; /* used conceptually via a->v[4] terms */
 }

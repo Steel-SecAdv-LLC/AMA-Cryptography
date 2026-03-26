@@ -35,35 +35,6 @@
 #define DILITHIUM_QINV     58728449 /* q^{-1} mod 2^32 */
 
 /* ============================================================================
- * AVX2 Montgomery reduction for Dilithium (q = 8380417)
- *
- * For 32-bit input a:
- *   t = (int32_t)(a * QINV)   (low 32 bits)
- *   r = (a - t * q) >> 32
- * ============================================================================ */
-static inline __m256i montgomery_reduce_avx2(__m256i a_lo, __m256i a_hi) {
-    const __m256i q    = _mm256_set1_epi32(DILITHIUM_Q);
-    const __m256i qinv = _mm256_set1_epi32(DILITHIUM_QINV);
-
-    /* t = a_lo * qinv (low 32 bits) */
-    __m256i t = _mm256_mullo_epi32(a_lo, qinv);
-    /* t * q (need high 32 bits of 32x32->64 multiply) */
-    /* Use _mm256_mul_epi32 for signed 32->64 on even lanes,
-     * then shuffle and repeat for odd lanes */
-    __m256i tq_even = _mm256_mul_epi32(t, q);
-    __m256i t_odd   = _mm256_srli_epi64(t, 32);
-    __m256i q_odd   = _mm256_srli_epi64(q, 0); /* q broadcast, odd lanes */
-    __m256i tq_odd  = _mm256_mul_epi32(t_odd, q_odd);
-
-    /* Extract high 32 bits */
-    __m256i tq_hi_even = _mm256_srli_epi64(tq_even, 32);
-    __m256i tq_hi_odd  = _mm256_and_si256(tq_odd, _mm256_set1_epi64x(0xFFFFFFFF00000000LL));
-    __m256i tq_hi = _mm256_or_si256(tq_hi_even, tq_hi_odd);
-
-    return _mm256_sub_epi32(a_hi, tq_hi);
-}
-
-/* ============================================================================
  * AVX2 Barrett reduction for Dilithium
  *
  * Reduces coefficient to range [0, q) using Barrett reduction.

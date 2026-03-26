@@ -76,7 +76,7 @@ static inline __m256i rotl64_avx2(__m256i x, int n) {
  * the compiler auto-vectorizing where possible.
  * ============================================================================ */
 void ama_keccak_f1600_avx2(uint64_t state[25]) {
-    uint64_t C[5], D[5], T;
+    uint64_t C[5], D[5];
     uint64_t B[25];
 
     for (int round = 0; round < 24; round++) {
@@ -90,8 +90,6 @@ void ama_keccak_f1600_avx2(uint64_t state[25]) {
         /* Use AVX2 for the rotate-and-XOR in D computation:
          * D[i] = C[(i+4)%5] ^ ROT(C[(i+1)%5], 1) */
         {
-            __m256i c0123 = _mm256_set_epi64x((int64_t)C[3], (int64_t)C[2],
-                                               (int64_t)C[1], (int64_t)C[0]);
             __m256i c1234 = _mm256_set_epi64x((int64_t)C[4], (int64_t)C[3],
                                                (int64_t)C[2], (int64_t)C[1]);
             __m256i c4012 = _mm256_set_epi64x((int64_t)C[2], (int64_t)C[1],
