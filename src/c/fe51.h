@@ -42,7 +42,7 @@ static inline void fe51_copy(fe51 h, const fe51 f) {
  * Bits: [0..50] [51..101] [102..152] [153..203] [204..254]
  * Bit 255 is cleared (high bit of byte 31).
  */
-static void fe51_frombytes(fe51 h, const uint8_t *s) {
+static inline void fe51_frombytes(fe51 h, const uint8_t *s) {
     uint64_t lo0, lo1, lo2, lo3;
     lo0  = (uint64_t)s[ 0]       | ((uint64_t)s[ 1] << 8)
          | ((uint64_t)s[ 2] << 16) | ((uint64_t)s[ 3] << 24)
@@ -71,7 +71,7 @@ static void fe51_frombytes(fe51 h, const uint8_t *s) {
 /**
  * Reduce and store field element to 32 bytes (little-endian).
  */
-static void fe51_tobytes(uint8_t *s, const fe51 h) {
+static inline void fe51_tobytes(uint8_t *s, const fe51 h) {
     uint64_t t[5];
     uint64_t c;
 
@@ -206,7 +206,7 @@ static inline void fe51_carry(fe51 h) {
  * 25 multiplications (5x5 schoolbook) with reduction via 2^255 ≡ 19.
  * Products involving limbs that overflow 2^255 are multiplied by 19.
  */
-static void fe51_mul(fe51 h, const fe51 f, const fe51 g) {
+static inline __attribute__((hot)) void fe51_mul(fe51 h, const fe51 f, const fe51 g) {
     typedef unsigned __int128 uint128_t;
 
     uint64_t f0 = f[0], f1 = f[1], f2 = f[2], f3 = f[3], f4 = f[4];
@@ -259,7 +259,7 @@ static void fe51_mul(fe51 h, const fe51 f, const fe51 g) {
  * Exploits symmetry: f[i]*f[j] = f[j]*f[i], so we compute once and double.
  * 15 multiplications (vs 25 for generic mul).
  */
-static void fe51_sq(fe51 h, const fe51 f) {
+static inline __attribute__((hot)) void fe51_sq(fe51 h, const fe51 f) {
     typedef unsigned __int128 uint128_t;
 
     uint64_t f0 = f[0], f1 = f[1], f2 = f[2], f3 = f[3], f4 = f[4];
@@ -302,7 +302,7 @@ static void fe51_sq(fe51 h, const fe51 f) {
 }
 
 /** Inversion via Fermat's little theorem: a^(-1) = a^(p-2) mod p */
-static void fe51_invert(fe51 out, const fe51 z) {
+static __attribute__((hot)) void fe51_invert(fe51 out, const fe51 z) {
     fe51 t0, t1, t2, t3;
     int i;
 
@@ -340,7 +340,7 @@ static void fe51_invert(fe51 out, const fe51 z) {
 }
 
 /** Compute z^(2^252 - 3), used for point decompression (sqrt of u/v). */
-static void fe51_pow22523(fe51 out, const fe51 z) {
+static __attribute__((hot)) void fe51_pow22523(fe51 out, const fe51 z) {
     fe51 t0, t1, t2, t3;
     int i;
 
