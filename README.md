@@ -237,7 +237,7 @@ Future-proof cryptography:
 - **Full (native)**: Complete native C implementation — no external PQC dependency required.
 - **Note**: Ed25519 C implementation uses radix 2^51 field arithmetic (fe51.h — 25 cross-products vs 100 in ref10). Optional ed25519-donna x86-64 assembly backend available via `AMA_ED25519_ASSEMBLY=ON` (auto-enabled on MSVC x64). Full RFC 8032 sign/verify roundtrip verified.
 
-**C Library Implementations (v2.0) — 23 source files in `src/c/`:**
+**C Library Implementations (v2.1) — 23 core + 25 SIMD source files in `src/c/`:**
 - `ama_core.c`: Library initialization, version, feature detection, shared utilities
 - `ama_sha3.c`: SHA3-256, SHAKE128, SHAKE256 (Keccak-f[1600] sponge construction)
 - `ama_sha256.c`: Native SHA-256 (FIPS 180-4), used by SPHINCS+ internally
@@ -256,6 +256,13 @@ Future-proof cryptography:
 - `ama_secp256k1.c`: secp256k1 elliptic curve operations (HD key derivation)
 - `ama_aes_bitsliced.c`: Bitsliced AES S-box (cache-timing hardened, optional via `-DAMA_AES_CONSTTIME=ON`)
 - `internal/ama_sha2.h`: Extracted SHA-512 header-only implementation (deduplication for Ed25519/SPHINCS+)
+
+**Hand-Written SIMD Implementations (`src/c/avx2/`, `src/c/neon/`, `src/c/sve2/`):**
+- 8 algorithms × 3 architectures = 24 optimized SIMD source files
+- `avx2/`: ML-KEM (vectorized NTT/Barrett), ML-DSA (vectorized NTT q=8380417), SPHINCS+ (4-way SHA-256), SHA3 (Keccak-f[1600] AVX2), AES-GCM (pipelined AES-NI + PCLMULQDQ GHASH), Ed25519 (vectorized field arithmetic), ChaCha20-Poly1305 (8-way parallel quarter-rounds), Argon2 (vectorized Blake2b)
+- `neon/`: ARM NEON 128-bit vector equivalents using `<arm_neon.h>` intrinsics + ARM Crypto Extensions
+- `sve2/`: ARM SVE2 scalable vector implementations for variable-length SIMD
+- `dispatch/ama_dispatch.c`: Runtime CPU feature detection and function pointer dispatch (AVX2 > generic on x86; SVE2 > NEON > generic on ARM)
 
 **Cython Acceleration Modules (`src/cython/`):**
 - `hmac_binding.pyx`: Direct Cython binding to `ama_hmac_sha3_256()` (~262K ops/sec)
@@ -408,6 +415,18 @@ Complete security package with all defense layers:
 **Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [BENCHMARKS.md](BENCHMARKS.md) for full performance data including all algorithms.
 
 *Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, native C backend via ctypes. See [BENCHMARKS.md](BENCHMARKS.md) for raw C performance numbers (without ctypes overhead) and competitive comparisons against libsodium and liboqs. Reproducible via `python benchmarks/benchmark_runner.py --verbose` or `make -C benchmarks benchmark_c_raw`.*
+
+### Benchmark Charts
+
+| Chart | Description |
+|-------|-------------|
+| ![Signature Performance](benchmarks/charts/signature_performance.svg) | Signature algorithm throughput and latency |
+| ![C vs Python](benchmarks/charts/c_vs_python.svg) | Native C vs Python performance comparison |
+| ![Layer Breakdown](benchmarks/charts/layer_breakdown.svg) | Per-layer timing breakdown of the 4-layer defense |
+| ![KEM Performance](benchmarks/charts/kem_performance.svg) | ML-KEM-1024 key encapsulation benchmarks |
+| ![Scalability](benchmarks/charts/scalability.svg) | Package creation scalability across data sizes |
+
+*All charts generated from live benchmark data with professional dark theme. Regenerate with `python benchmarks/generate_charts.py`.*
 
 </details>
 
@@ -917,7 +936,9 @@ sudo cmake --install .
 - `AMA_BUILD_TESTS` - Build test suite including NIST KAT tests (default: ON)
 - `AMA_BUILD_EXAMPLES` - Build C example programs (default: ON)
 - `AMA_ED25519_ASSEMBLY` - Enable ed25519-donna x86-64 assembly scalar mult (default: OFF; auto-ON on MSVC x64)
-- `AMA_ENABLE_AVX2` - Enable AVX2 SIMD optimizations
+- `AMA_ENABLE_AVX2` - Enable AVX2 SIMD optimizations (x86-64)
+- `AMA_ENABLE_NEON` - Enable ARM NEON SIMD optimizations (AArch64)
+- `AMA_ENABLE_SVE2` - Enable ARM SVE2 SIMD optimizations (AArch64, stretch)
 - `AMA_ENABLE_SANITIZERS` - Enable AddressSanitizer/UBSan
 - `AMA_ENABLE_LTO` - Link-time optimization
 - `AMA_ENABLE_NATIVE_ARCH` - Enable `-march=native` for host-optimized builds (default: OFF)
@@ -1248,6 +1269,6 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 </div>
 
-*Last updated: 2026-03-22*
+*Last updated: 2026-03-25*
 
 </div>

@@ -692,7 +692,36 @@ class AESGCMProvider:
     _atexit_registered: ClassVar[bool] = False
     _ephemeral: ClassVar[bool] = False
 
-    def __init__(self, backend: CryptoBackend = CryptoBackend.C_LIBRARY) -> None:
+    @classmethod
+    def configure_ephemeral(cls, enabled: bool = True) -> None:
+        """Configure ephemeral mode BEFORE any instantiation (S6 fix).
+
+        When ephemeral mode is enabled, no disk I/O occurs for counter
+        persistence — counters live only in memory.  This must be called
+        before ``__init__`` so that ``_load_persisted_counters()`` and
+        ``atexit`` registration respect the flag.
+
+        Calling this method resets ``_counters_loaded`` and
+        ``_atexit_registered`` so the next instantiation picks up the
+        new mode cleanly.
+        """
+        cls._ephemeral = enabled
+        cls._counters_loaded = False
+        cls._atexit_registered = False
+        cls._encrypt_counters = {}
+        cls._counters_dirty = 0
+
+    def __init__(
+        self,
+        backend: CryptoBackend = CryptoBackend.C_LIBRARY,
+        *,
+        ephemeral: bool = False,
+    ) -> None:
+        # S6 fix: If ephemeral=True is passed to the constructor, apply it
+        # BEFORE loading counters or registering atexit, so tests are hermetic.
+        if ephemeral and not AESGCMProvider._ephemeral:
+            AESGCMProvider.configure_ephemeral(True)
+
         self.backend = backend
         self.algorithm = AlgorithmType.AES_256_GCM
         self._pid_at_init: int = os.getpid()
@@ -709,7 +738,7 @@ class AESGCMProvider:
         if not AESGCMProvider._counters_loaded:
             AESGCMProvider._load_persisted_counters()
             AESGCMProvider._counters_loaded = True
-        if not AESGCMProvider._atexit_registered:
+        if not AESGCMProvider._atexit_registered and not AESGCMProvider._ephemeral:
             import atexit
 
             atexit.register(AESGCMProvider._persist_counters)
@@ -1595,8 +1624,8 @@ def _acquire_timestamp(
     """Acquire an RFC 3161 timestamp token according to *config*.
 
     Returns the raw token bytes, or ``None`` when timestamping is disabled or
-    not requested.  Raises :class:`TimestampError` / :class:`TimestampUnavailableError`
-    on hard failures in online mode.
+    not requested.  Raises :class:`RuntimeError` if timestamps were requested
+    but acquisition failed (S4/S5 fixes: fail-loud philosophy).
     """
     if not config.include_timestamp:
         return None
@@ -1606,16 +1635,22 @@ def _acquire_timestamp(
         return None
 
     if tsa_mode == "mock":
-        try:
-            result = get_timestamp(
-                data=content,
-                tsa_url=config.tsa_url,
-                hash_algorithm="sha3-256",
-                tsa_mode="mock",
+        # S4 fix: Do NOT silently swallow exceptions in mock mode.
+        # When include_timestamp=True, a failed timestamp must be loud.
+        result = get_timestamp(
+            data=content,
+            tsa_url=config.tsa_url,
+            hash_algorithm="sha3-256",
+            tsa_mode="mock",
+        )
+        # S5 fix: If get_timestamp() returns None, raise rather than
+        # silently producing an untimestamped package.
+        if result is None:
+            raise RuntimeError(
+                "Timestamp acquisition failed: get_timestamp() returned None. "
+                "Cannot produce untimestamped package when timestamps are required."
             )
-            return result.token if result is not None else None
-        except Exception:
-            return None
+        return result.token
 
     # Online mode
     if not RFC3161_AVAILABLE:
@@ -1629,7 +1664,13 @@ def _acquire_timestamp(
             tsa_url=config.tsa_url,
             hash_algorithm="sha3-256",
         )
-        return result.token if result is not None else None
+        # S5 fix: Fail loudly when get_timestamp() returns None.
+        if result is None:
+            raise RuntimeError(
+                "Timestamp acquisition failed: get_timestamp() returned None. "
+                "Cannot produce untimestamped package when timestamps are required."
+            )
+        return result.token
     except TimestampError as e:
         raise TimestampError(
             f"RFC 3161 timestamp is required when include_timestamp=True, "
@@ -1880,24 +1921,29 @@ def verify_crypto_package(
     # LAYER 4: Key Independence — HKDF re-derivation
     # ========================================================================
     try:
-        hkdf_info = package.hkdf_info
-        recomputed_keys: List[bytes] = []
-        for i in range(len(package.derived_keys)):
-            dk = _hkdf_sha3_256(
-                ikm=package.hkdf_master_secret,
-                length=32,
-                salt=package.hkdf_salt,
-                info=hkdf_info + b":" + str(i).encode(),
-            )
-            recomputed_keys.append(dk)
+        # S1 fix: Empty derived_keys must fail — the loop would iterate zero
+        # times and leave keys_match=True, trivially bypassing Layer 4.
+        if not package.derived_keys:
+            results["hkdf_keys"] = False
+        else:
+            hkdf_info = package.hkdf_info
+            recomputed_keys: List[bytes] = []
+            for i in range(len(package.derived_keys)):
+                dk = _hkdf_sha3_256(
+                    ikm=package.hkdf_master_secret,
+                    length=32,
+                    salt=package.hkdf_salt,
+                    info=hkdf_info + b":" + str(i).encode(),
+                )
+                recomputed_keys.append(dk)
 
-        from ama_cryptography.secure_memory import constant_time_compare as _ct
+            from ama_cryptography.secure_memory import constant_time_compare as _ct
 
-        keys_match = len(recomputed_keys) == len(package.derived_keys)
-        for rk, sk in zip(recomputed_keys, package.derived_keys):
-            if not _ct(rk, sk):
-                keys_match = False
-        results["hkdf_keys"] = keys_match
+            keys_match = len(recomputed_keys) == len(package.derived_keys)
+            for rk, sk in zip(recomputed_keys, package.derived_keys):
+                if not _ct(rk, sk):
+                    keys_match = False
+            results["hkdf_keys"] = keys_match
     except Exception:
         results["hkdf_keys"] = False
 

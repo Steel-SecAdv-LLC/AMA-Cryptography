@@ -63,23 +63,27 @@ static const uint64_t keccak_rc[KECCAK_ROUNDS] = {
     0x0000000080000001ULL, 0x8000000080008008ULL
 };
 
-/* Rotation offsets for rho step */
-static const unsigned int keccak_rho[25] = {
-     0,  1, 62, 28, 27,
-    36, 44,  6, 55, 20,
-     3, 10, 43, 25, 39,
-    41, 45, 15, 21,  8,
-    18,  2, 61, 56, 14
-};
-
-/* Pi step permutation indices */
-static const unsigned int keccak_pi[25] = {
-     0, 10, 20,  5, 15,
-    16,  1, 11, 21,  6,
-     7, 17,  2, 12, 22,
-    23,  8, 18,  3, 13,
-    14, 24,  9, 19,  4
-};
+/*
+ * Reference tables for Keccak rho and pi steps.
+ * The optimized keccak_f1600() below fully unrolls rho+pi with compile-time
+ * constant rotations (lines 136-160), so these arrays are not referenced at
+ * runtime.  They are kept here as authoritative documentation of the
+ * permutation constants defined in FIPS 202 Section 3.2.2 / 3.2.3.
+ *
+ * Rotation offsets for rho step:
+ *   { 0,  1, 62, 28, 27,
+ *    36, 44,  6, 55, 20,
+ *     3, 10, 43, 25, 39,
+ *    41, 45, 15, 21,  8,
+ *    18,  2, 61, 56, 14 }
+ *
+ * Pi step permutation indices:
+ *   { 0, 10, 20,  5, 15,
+ *    16,  1, 11, 21,  6,
+ *     7, 17,  2, 12, 22,
+ *    23,  8, 18,  3, 13,
+ *    14, 24,  9, 19,  4 }
+ */
 
 /**
  * Rotate left operation (constant-time, branchless)

@@ -43,6 +43,10 @@ pathspec==1.0.4
 platformdirs==4.9.4
 pluggy==1.6.0
 py-cpuinfo==9.0.0
+# CVE-2026-4539: ReDoS in Pygments AdlLexer GUID regex (local-access only).
+# Pygments is a transitive dev dependency (via rich/bandit) — not used at runtime.
+# No fixed version available as of 2026-03-26; pinned to latest.
+# CI ignores this vuln via: pip-audit --ignore-vuln CVE-2026-4539
 Pygments==2.19.2
 python-dateutil==2.9.0.post0
 pytokens==0.4.1
