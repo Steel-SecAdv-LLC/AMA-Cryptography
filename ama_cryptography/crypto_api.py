@@ -34,31 +34,39 @@ from enum import Enum, auto
 from typing import Any, ClassVar, Dict, List, Optional, Tuple, Union
 
 from ama_cryptography._self_test import check_operational as _check_operational
+
 # Import HMAC and HKDF from pqc_backends (native C) with pure-Python fallback
-from ama_cryptography.pqc_backends import (_HKDF_NATIVE_AVAILABLE,
-                                           _HMAC_SHA3_256_NATIVE_AVAILABLE,
-                                           DILITHIUM_AVAILABLE,
-                                           DILITHIUM_BACKEND, KYBER_AVAILABLE,
-                                           KYBER_BACKEND,
-                                           KYBER_CIPHERTEXT_BYTES,
-                                           KYBER_PUBLIC_KEY_BYTES,
-                                           KYBER_SECRET_KEY_BYTES,
-                                           KYBER_SHARED_SECRET_BYTES,
-                                           SPHINCS_AVAILABLE, SPHINCS_BACKEND,
-                                           SPHINCS_PUBLIC_KEY_BYTES,
-                                           SPHINCS_SECRET_KEY_BYTES,
-                                           SPHINCS_SIGNATURE_BYTES,
-                                           KyberUnavailableError, PQCStatus,
-                                           PQCUnavailableError,
-                                           SphincsUnavailableError,
-                                           dilithium_sign, dilithium_verify,
-                                           generate_dilithium_keypair,
-                                           generate_kyber_keypair,
-                                           generate_sphincs_keypair,
-                                           get_pqc_backend_info,
-                                           kyber_decapsulate,
-                                           kyber_encapsulate, sphincs_sign,
-                                           sphincs_verify)
+from ama_cryptography.pqc_backends import (
+    _HKDF_NATIVE_AVAILABLE,
+    _HMAC_SHA3_256_NATIVE_AVAILABLE,
+    DILITHIUM_AVAILABLE,
+    DILITHIUM_BACKEND,
+    KYBER_AVAILABLE,
+    KYBER_BACKEND,
+    KYBER_CIPHERTEXT_BYTES,
+    KYBER_PUBLIC_KEY_BYTES,
+    KYBER_SECRET_KEY_BYTES,
+    KYBER_SHARED_SECRET_BYTES,
+    SPHINCS_AVAILABLE,
+    SPHINCS_BACKEND,
+    SPHINCS_PUBLIC_KEY_BYTES,
+    SPHINCS_SECRET_KEY_BYTES,
+    SPHINCS_SIGNATURE_BYTES,
+    KyberUnavailableError,
+    PQCStatus,
+    PQCUnavailableError,
+    SphincsUnavailableError,
+    dilithium_sign,
+    dilithium_verify,
+    generate_dilithium_keypair,
+    generate_kyber_keypair,
+    generate_sphincs_keypair,
+    get_pqc_backend_info,
+    kyber_decapsulate,
+    kyber_encapsulate,
+    sphincs_sign,
+    sphincs_verify,
+)
 
 _HMAC_NATIVE = False
 _HKDF_NATIVE = False
@@ -117,10 +125,12 @@ HMAC_HKDF_AVAILABLE = True  # Always available via native or pure-Python fallbac
 
 # Import RFC 3161 timestamping
 try:
-    from ama_cryptography.rfc3161_timestamp import (RFC3161_AVAILABLE,
-                                                    TimestampError,
-                                                    TimestampUnavailableError,
-                                                    get_timestamp)
+    from ama_cryptography.rfc3161_timestamp import (
+        RFC3161_AVAILABLE,
+        TimestampError,
+        TimestampUnavailableError,
+        get_timestamp,
+    )
 except ImportError:
     RFC3161_AVAILABLE = False
     TimestampUnavailableError = Exception  # type: ignore[misc,assignment]
@@ -372,8 +382,7 @@ class Ed25519Provider(CryptoProvider):
         self.backend = backend
         self.algorithm = AlgorithmType.ED25519
 
-        from ama_cryptography.pqc_backends import (_ED25519_NATIVE_AVAILABLE,
-                                                   _native_lib)
+        from ama_cryptography.pqc_backends import _ED25519_NATIVE_AVAILABLE, _native_lib
 
         if not (_native_lib is not None and _ED25519_NATIVE_AVAILABLE):
             raise RuntimeError(
@@ -407,7 +416,9 @@ class Ed25519Provider(CryptoProvider):
             Signature object with Ed25519 signature
         """
         from ama_cryptography.pqc_backends import (
-            native_ed25519_keypair_from_seed, native_ed25519_sign)
+            native_ed25519_keypair_from_seed,
+            native_ed25519_sign,
+        )
 
         # Handle 32-byte seed: expand to 64-byte native format
         if len(secret_key) == 32:
@@ -720,8 +731,7 @@ class AESGCMProvider:
         self.algorithm = AlgorithmType.AES_256_GCM
         self._pid_at_init: int = os.getpid()
 
-        from ama_cryptography.pqc_backends import (_AES_GCM_NATIVE_AVAILABLE,
-                                                   _native_lib)
+        from ama_cryptography.pqc_backends import _AES_GCM_NATIVE_AVAILABLE, _native_lib
 
         if not (_native_lib is not None and _AES_GCM_NATIVE_AVAILABLE):
             raise RuntimeError(
@@ -1061,8 +1071,7 @@ class HybridKEMProvider(KEMProvider):
 
     def encapsulate(self, public_key: bytes) -> EncapsulatedSecret:
         """Perform X25519 ephemeral-static DH + Kyber encapsulation."""
-        from ama_cryptography.pqc_backends import (native_x25519_key_exchange,
-                                                   native_x25519_keypair)
+        from ama_cryptography.pqc_backends import native_x25519_key_exchange, native_x25519_keypair
 
         # Split recipient public key
         x25519_pub: bytes = public_key[: self._X25519_KEY_BYTES]
@@ -1388,8 +1397,7 @@ class AmaCryptography:
         Returns:
             True if equal, False otherwise (constant time)
         """
-        from ama_cryptography.secure_memory import \
-            constant_time_compare as _ct_compare
+        from ama_cryptography.secure_memory import constant_time_compare as _ct_compare
 
         return _ct_compare(a, b)
 
@@ -1510,8 +1518,7 @@ def get_pqc_capabilities() -> Dict[str, Any]:
         ... else:
         ...     print(caps["install_instructions"])
     """
-    from ama_cryptography.pqc_backends import (_ED25519_NATIVE_AVAILABLE,
-                                               _native_lib)
+    from ama_cryptography.pqc_backends import _ED25519_NATIVE_AVAILABLE, _native_lib
 
     info = get_pqc_backend_info()
     ed25519_available = _native_lib is not None and _ED25519_NATIVE_AVAILABLE
@@ -2004,8 +2011,7 @@ def verify_crypto_package(
                 )
                 recomputed_keys.append(dk)
 
-            from ama_cryptography.secure_memory import \
-                constant_time_compare as _ct
+            from ama_cryptography.secure_memory import constant_time_compare as _ct
 
             keys_match = len(recomputed_keys) == len(package.derived_keys)
             for rk, sk in zip(recomputed_keys, package.derived_keys):
@@ -2046,8 +2052,7 @@ def verify_crypto_package(
                 package.kem_ciphertext,
                 package.keypairs["KYBER_1024"].secret_key,
             )
-            from ama_cryptography.secure_memory import \
-                constant_time_compare as _ct2
+            from ama_cryptography.secure_memory import constant_time_compare as _ct2
 
             results["kem"] = _ct2(decapsulated_ss, package.kem_shared_secret)
         except Exception:
