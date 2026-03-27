@@ -209,22 +209,20 @@ Based on AMA measured benchmarks on x86-64 (CI shared runner, generic C path):
 
 | Operation | AMA-Cryptography (measured) | Competitor Reference |
 |---|---|---|
-| SHA3-256 (1KB) | ~3.4 us (298K ops/s) | OpenSSL: varies by hardware |
-| HMAC-SHA3-256 (1KB) | ~4.9 us (203K ops/s) | OpenSSL: varies by hardware |
-| Ed25519 sign | ~39 us (26K ops/s) | libsodium: ~20 us (50K ops/s) on optimized builds |
-| Ed25519 verify | ~78 us (13K ops/s) | libsodium: ~40 us (25K ops/s) on optimized builds |
-| ML-DSA-65 sign | ~0.19 ms (5.2K ops/s) | liboqs: ~0.2-0.5 ms (varies) |
-| ML-DSA-65 verify | ~0.11 ms (8.9K ops/s) | liboqs: ~0.1-0.3 ms (varies) |
-| ML-KEM-1024 keygen | ~0.07 ms (15.3K ops/s) | liboqs: varies |
-| Argon2id (default) | ~250 ms | libsodium: ~260 ms |
+| SHA3-256 (1KB) | ~10.3 us (98K ops/s) | OpenSSL: varies by hardware |
+| HMAC-SHA3-256 (1KB) | ~14.4 us (69K ops/s) | OpenSSL: varies by hardware |
+| Ed25519 sign | ~53 us (19K ops/s) | libsodium: ~20 us (50K ops/s) on optimized builds |
+| Ed25519 verify | ~108 us (9.3K ops/s) | libsodium: ~40 us (25K ops/s) on optimized builds |
+| ML-DSA-65 sign | ~0.86 ms (1.2K ops/s) | liboqs: ~0.2-0.5 ms (varies) |
+| ML-DSA-65 verify | ~0.28 ms (3.5K ops/s) | liboqs: ~0.1-0.3 ms (varies) |
 
-**Note**: AMA numbers are measured from `phase0_baseline_results.json` and
-`benchmark_c_raw.c` on GitHub Actions CI runners (generic C path, no SIMD
-dispatch at time of measurement). Competitor numbers are published reference
-values and may differ across hardware. AMA-Cryptography is competitive for
-PQC operations. Classical Ed25519 is approximately 2x slower than libsodium
-due to libsodium's highly optimized assembly backends and extensive
-precomputed tables; narrowing this gap is an active development priority.
+**Note**: AMA numbers are median values from `phase0_baseline_results.json`,
+measured on GitHub Actions CI shared runners (generic C path, no SIMD dispatch).
+Competitor numbers are published reference values and may differ across
+hardware. Ed25519 is approximately 2.5x slower than libsodium due to
+libsodium's hand-optimized assembly backends and extensive precomputed tables.
+PQC operations are slower than liboqs reference implementations that use
+AVX2/NEON-optimized NTT; SIMD dispatch wiring is in progress.
 
 ---
 
