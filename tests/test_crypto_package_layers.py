@@ -35,7 +35,7 @@ class TestCreateCryptoPackage:
         from ama_cryptography.crypto_api import create_crypto_package
 
         result = create_crypto_package(b"test")
-        assert result.metadata["defense_layers"] == 4
+        assert result.metadata["multi_layer_defense"] is True
 
     def test_rejects_empty_content(self) -> None:
         from ama_cryptography.crypto_api import create_crypto_package

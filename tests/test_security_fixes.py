@@ -68,7 +68,7 @@ class TestS1_HKDFEmptyDerivedKeys:
             kem_ciphertext=None,
             kem_shared_secret=None,
             keypairs={"ED25519": kp},
-            metadata={"signature_algorithm": "ED25519", "defense_layers": 4},
+            metadata={"signature_algorithm": "ED25519", "multi_layer_defense": True},
         )
 
         # Bypass FIPS self-test check for unit test isolation

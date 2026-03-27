@@ -350,7 +350,7 @@ NIST-standardized post-quantum algorithms:
 
 - **Wallet Security**: ML-DSA-65 quantum-resistant signatures for wallet transaction authentication.
 - **Smart Contract Signing**: Quantum-resistant signatures for long-lived contracts.
-- **Transaction Throughput**: Sub-millisecond Ed25519 verification; ML-DSA-65 adds quantum resistance at low latency (~0.21ms sign, ~0.11ms verify).
+- **Transaction Throughput**: Sub-millisecond Ed25519 verification; ML-DSA-65 adds quantum resistance at higher latency (~0.97ms sign, ~0.20ms verify).
 - **Cross-Chain Bridges**: Hybrid signing (Ed25519 + ML-DSA-65) for backward compatibility and quantum resistance.
 - **NFT Provenance**: Quantum-resistant signatures designed for long-term validity.
 - **Timestamp Verification**: RFC 3161 trusted timestamping with quantum resistance.
@@ -376,17 +376,17 @@ NIST-standardized post-quantum algorithms:
 
 | Operation | Throughput | Latency | Notes |
 |-----------|-----------|---------|-------|
-| **KeyGen** | 7,477 ops/sec | 0.13ms | Native C, NTT q=8380417 |
-| **Sign** | 4,774 ops/sec | 0.21ms | Rejection sampling, constant-time |
-| **Verify** | 8,859 ops/sec | 0.11ms | Verified against NIST ACVP test vectors (self-attested) |
+| **KeyGen** | 4,527 ops/sec | 0.22ms | Native C, NTT q=8380417 |
+| **Sign** | 1,027 ops/sec | 0.97ms | Rejection sampling, constant-time |
+| **Verify** | 5,067 ops/sec | 0.20ms | Verified against NIST ACVP test vectors (self-attested) |
 
 ### ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)
 
 | Operation | Throughput | Latency | Notes |
 |-----------|-----------|---------|-------|
-| **KeyGen** | 15,347 ops/sec | 0.07ms | Native C, NTT q=3329 |
-| **Encapsulate** | 15,390 ops/sec | 0.07ms | IND-CCA2, Fujisaki-Okamoto |
-| **Decapsulate** | 14,852 ops/sec | 0.07ms | Implicit rejection |
+| **KeyGen** | 9,798 ops/sec | 0.10ms | Native C, NTT q=3329 |
+| **Encapsulate** | 9,480 ops/sec | 0.11ms | IND-CCA2, Fujisaki-Okamoto |
+| **Decapsulate** | 8,913 ops/sec | 0.11ms | Implicit rejection |
 
 ### Full Multi-Layer Package Performance
 
@@ -394,8 +394,8 @@ Complete security package with all defense layers:
 
 | Operation | Mean Time | Throughput |
 |-----------|-----------|------------|
-| Package Create (all layers) | 0.29ms | 3,457 ops/sec |
-| Package Verify (all layers) | 0.22ms | 4,477 ops/sec |
+| Package Create (all layers) | 0.48ms | 2,093 ops/sec |
+| Package Verify (all layers) | 0.38ms | 2,607 ops/sec |
 
 **All Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65 (core), HKDF, RFC 3161 (supporting)
 
@@ -403,15 +403,16 @@ Complete security package with all defense layers:
 
 | Operation | Throughput | Latency |
 |-----------|-----------|---------|
-| SHA3-256 (32B) | 1,441,288 ops/sec | 0.001ms |
-| HMAC-SHA3-256 Auth | 517,834 ops/sec | 0.002ms |
-| HMAC-SHA3-256 Verify | 389,053 ops/sec | 0.003ms |
-| HKDF-SHA3-256 Derivation | 36,489 ops/sec | 0.027ms |
-| Ed25519 KeyGen | 24,622 ops/sec | 0.04ms |
-| Ed25519 Sign | 23,572 ops/sec | 0.04ms |
-| Ed25519 Verify | 11,144 ops/sec | 0.09ms |
-| ML-DSA-65 Sign | 4,774 ops/sec | 0.21ms |
-| ML-DSA-65 Verify | 8,859 ops/sec | 0.11ms |
+| SHA3-256 (32B) | 477,055 ops/sec | 0.002ms |
+| SHA3-256 (1KB) | 158,832 ops/sec | 0.006ms |
+| HMAC-SHA3-256 (1KB) | 114,278 ops/sec | 0.009ms |
+| HKDF-SHA3-256 (96B derive) | 73,318 ops/sec | 0.014ms |
+| Ed25519 KeyGen | 14,611 ops/sec | 0.07ms |
+| Ed25519 Sign | 14,976 ops/sec | 0.07ms |
+| Ed25519 Verify | 7,716 ops/sec | 0.13ms |
+| AES-256-GCM encrypt (1KB) | 1,087 ops/sec | 0.92ms |
+| ChaCha20-Poly1305 encrypt (1KB) | 155,725 ops/sec | 0.006ms |
+| X25519 DH Exchange | 1,280 ops/sec | 0.78ms |
 
 **Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [benchmarks/](benchmarks/) for full performance data including all algorithms.
 
@@ -451,12 +452,12 @@ Complete security package with all defense layers:
 
 | Input Scale | Mean Time | Throughput |
 |-------------|-----------|------------|
-| 1x (baseline) | 0.92ms | 1,085 ops/sec |
-| 10x | 1.03ms | 971 ops/sec |
-| 100x | 1.85ms | 541 ops/sec |
-| 1000x | 58.50ms | 17.1 ops/sec |
+| 1x (baseline) | 0.84ms | 1,188 ops/sec |
+| 10x | 0.58ms | 1,719 ops/sec |
+| 100x | 2.90ms | 344 ops/sec |
+| 1000x | 100.74ms | 9.9 ops/sec |
 
-*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 50 iterations per size. The 1x baseline measures the full scalability pipeline including data preparation, which is why it differs from the 0.29ms Package Create number. See [benchmarks/](benchmarks/) for details.*
+*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 50 iterations per size. The 1x baseline measures the full scalability pipeline including data preparation, which is why it differs from the 0.48ms Package Create number. See [benchmarks/](benchmarks/) for details.*
 
 </details>
 
@@ -465,10 +466,10 @@ Complete security package with all defense layers:
 
 | Operation | Standard | With Ethics | Overhead |
 |-----------|----------|-------------|----------|
-| HKDF Derivation | 0.005ms | 0.010ms | 94.0% |
-| Context Creation | - | 0.003ms | - |
+| HKDF Derivation | 0.063ms | 0.072ms | 14.79% |
+| Context Creation | - | 0.005ms | - |
 
-The ethical integration adds cryptographic binding to the 4 Omni-Code Ethical Pillars. The overhead applies to HKDF derivation specifically (0.005ms absolute); end-to-end package creation overhead remains negligible since HKDF is a small fraction of the pipeline (ML-DSA-65 signing dominates at ~0.21ms).
+The ethical integration adds cryptographic binding to the 4 Omni-Code Ethical Pillars. The overhead applies to HKDF derivation specifically; end-to-end package creation overhead remains under 2% of total time since HKDF is a small fraction of the pipeline (ML-DSA-65 signing dominates at ~0.97ms).
 
 *Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 1,000 iterations.*
 
@@ -1183,7 +1184,7 @@ AMA Cryptography v2.1 has **zero core cryptographic dependencies** — all crypt
 - `[monitoring]`: numpy, scipy (3R engine)
 - `[legacy]`: cryptography (fallback)
 - `[hsm]`: PyKCS11 (HSM support)
-- `[secure-memory]`: pynacl (reserved for future libsodium integration)
+- `[secure-memory]`: pynacl (libsodium)
 
 ### Dependency Graph
 

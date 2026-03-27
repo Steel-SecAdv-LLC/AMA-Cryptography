@@ -8,16 +8,19 @@
 
 ## INVARIANT-1 — Zero External Crypto Dependencies
 
-AMA Cryptography owns all cryptographic primitives natively.
+**NEVER:** Introduce ad-hoc or unreviewed cryptographic constructions. All primitives must follow published NIST/IETF specifications and pass KAT validation.
+
 **Do NOT introduce or depend on third-party cryptographic packages**
 (`libsodium`, `pynacl`, `cryptography`, OpenSSL bindings, etc.).
 
 Python stdlib modules (`hashlib`, `os`, `secrets`) are permitted for
 non-primitive operations (OS entropy, hashing). They **must NOT** be used as a
-substitute for AMA's own implementations of HMAC, constant-time comparison,
-memory zeroing, or core cipher operations. In particular, `hmac` from stdlib is
-**not permitted** — HMAC-SHA512 is provided by `_hmac_sha512()` in
-`key_management.py`.
+substitute for AMA's own implementations of HMAC, memory zeroing, or core
+cipher operations.
+
+**`hmac` module policy:** `hmac.compare_digest()` is permitted for constant-time
+comparison. `hmac.new()` / `hmac.HMAC()` are not permitted — use AMA's own HMAC
+implementations.
 
 ## INVARIANT-2 — Fail-Closed CI
 
@@ -40,4 +43,4 @@ to a full commit SHA, not a mutable tag (`@main`, `@v1`, etc.).
 ---
 
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-03-16_
+_Last updated: 2026-03-27_
