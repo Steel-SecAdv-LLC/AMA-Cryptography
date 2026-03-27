@@ -13,7 +13,7 @@
 
 ## Executive Summary
 
-The 4 Omni-Code Ethical Pillars extend AMA Cryptography's 4-Layer cryptographic defense with a mathematically rigorous ethical constraint system. Each pillar maps to a triad of cryptographic operations, providing verifiable ethical boundaries without compromising security guarantees.
+The 4 Omni-Code Ethical Pillars extend AMA Cryptography's multi-layer cryptographic defense with a mathematically rigorous ethical constraint system. Each pillar maps to a triad of cryptographic operations, providing verifiable ethical boundaries without compromising security guarantees.
 
 **Key Properties:**
 - **Balanced weighting:** Each pillar = 3.0 (3 sub-properties × 1.0), Σw = 12.0

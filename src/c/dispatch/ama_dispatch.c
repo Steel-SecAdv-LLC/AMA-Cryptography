@@ -179,6 +179,7 @@ extern void ama_dilithium_poly_pointwise_neon(int32_t r[256],
                                                const int32_t b[256]);
 #endif
 
+
 /* Check if AMA_DISPATCH_VERBOSE=1 is set at runtime. */
 static int dispatch_verbose(void) {
     static int v = -1;
@@ -354,13 +355,17 @@ const ama_dispatch_info_t *ama_get_dispatch_info(void) {
 }
 
 /**
- * Prints dispatch info to stderr (for diagnostics / benchmark output).
+ * Returns the dispatch function pointer table.
+ * Calls ama_dispatch_init() internally if not already initialized.
  */
 const ama_dispatch_table_t *ama_get_dispatch_table(void) {
     ama_dispatch_init();
     return &dispatch_table;
 }
 
+/**
+ * Prints dispatch info to stderr (for diagnostics / benchmark output).
+ */
 void ama_print_dispatch_info(void) {
     const ama_dispatch_info_t *info = ama_get_dispatch_info();
 

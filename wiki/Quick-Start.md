@@ -36,18 +36,10 @@ print(status)
 
 ## 3. Create and Verify a Crypto Package
 
-The main high-level API uses `code_guardian_secure.py` which orchestrates all 4 layers:
+The main high-level API uses `ama_cryptography.crypto_api` which orchestrates all cryptographic layers. (`code_guardian_secure.py` is a legacy wrapper and is deprecated.)
 
 ```python
-# Run the complete demo
-import subprocess
-subprocess.run(["python3", "code_guardian_secure.py"])
-```
-
-Or use the Python API directly:
-
-```python
-from code_guardian_secure import (
+from ama_cryptography.crypto_api import (
     generate_key_management_system,
     create_crypto_package,
     verify_crypto_package,
@@ -66,7 +58,7 @@ codes = """
 
 helix_params = [(20.0, 0.7), (15.0, 1.0)]
 
-# Step 3: Create the 4-Layer crypto package
+# Step 3: Create the multi-layer crypto package
 package = create_crypto_package(codes, helix_params, kms)
 print(f"Package created: {package['package_id']}")
 
@@ -243,7 +235,7 @@ if not (results["content_hash"] and results["hmac"]
 
 ## Next Steps
 
-- [Architecture](Architecture) — Understand the 4-Layer defense design
+- [Architecture](Architecture) — Understand the multi-layer defense design
 - [API Reference](API-Reference) — Complete Python API documentation
 - [Key Management](Key-Management) — HD key derivation and lifecycle management
 - [Post-Quantum Cryptography](Post-Quantum-Cryptography) — Deep dive into PQC algorithms

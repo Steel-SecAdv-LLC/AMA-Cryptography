@@ -64,7 +64,7 @@ typedef void (*ama_kyber_pointwise_fn)(int16_t r[256],
 
 /** Dilithium NTT forward transform */
 typedef void (*ama_dilithium_ntt_fn)(int32_t poly[256],
-                                     const int32_t zetas[256]);
+                                     const int32_t zetas[128]);
 
 /** Dilithium polynomial pointwise multiply */
 typedef void (*ama_dilithium_pointwise_fn)(int32_t r[256],

@@ -9,7 +9,7 @@
 
 ## 1. System Overview
 
-AMA Cryptography is a zero-dependency native C cryptographic library providing quantum-resistant protection for Omni-Code data structures. The system uses a 4-Layer defense-in-depth architecture with NIST-approved algorithms.
+AMA Cryptography is a zero-dependency native C cryptographic library providing quantum-resistant protection for Omni-Code data structures. The system uses a 4-layer defense-in-depth architecture with NIST-approved algorithms: (1) SHA3-256 content hash, (2) HMAC-SHA3-256 authentication, (3) hybrid Ed25519 + ML-DSA-65 signature, and (4) HKDF-SHA3-256 key independence — with optional RFC 3161 timestamping.
 
 ### Assets Under Protection
 
@@ -144,7 +144,7 @@ AMA Cryptography is a zero-dependency native C cryptographic library providing q
 | T3.2 | 96-bit random nonce from OS CSPRNG | **IMPLEMENTED** | `ama_platform_rand.c` (getrandom/BCrypt) |
 | T3.3 | Platform CSPRNG (getrandom, getentropy, BCryptGenRandom) | **IMPLEMENTED** | `ama_platform_rand.c`, no userspace PRNG |
 | T3.4 | RFC 3161 TSA with independent verification | **IMPLEMENTED** | `rfc3161_timestamp.py`, multiple TSA support |
-| T3.5 | Defense-in-depth requires all layers by default | **IMPLEMENTED** | `code_guardian_secure.py` enforces 4 layers |
+| T3.5 | Defense-in-depth requires all layers by default | **IMPLEMENTED** | `ama_cryptography.crypto_api.create_crypto_package()` / `verify_crypto_package()` enforce 4-layer verification (legacy wrapper: `code_guardian_secure.py`) |
 
 ### M4: Supply Chain Mitigations
 
