@@ -5,7 +5,7 @@
 
 CC = gcc
 CFLAGS = -O2 -Wall -Wextra -I../../include
-LDFLAGS = -lm
+LDFLAGS = -lm -lpthread
 
 # Source directories
 SRC_DIR = ../../src/c
@@ -19,12 +19,14 @@ DUDECT_CRYPTO  = dudect_crypto
 CONSTTIME_SRC = $(SRC_DIR)/ama_consttime.c
 
 # All sources needed for the crypto-primitive harness
+DISPATCH_DIR = ../../src/c/dispatch
 CRYPTO_SRCS = $(SRC_DIR)/ama_consttime.c \
               $(SRC_DIR)/ama_core.c \
               $(SRC_DIR)/ama_sha3.c \
               $(SRC_DIR)/ama_ed25519.c \
               $(SRC_DIR)/ama_aes_gcm.c \
-              $(SRC_DIR)/ama_hkdf.c
+              $(SRC_DIR)/ama_hkdf.c \
+              $(DISPATCH_DIR)/ama_dispatch.c
 
 .PHONY: all clean test test-full test-crypto test-crypto-full help
 

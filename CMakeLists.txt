@@ -140,6 +140,8 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
                 COMPILE_FLAGS "-mavx2 -maes -mpclmul")
         endif()
         message(STATUS "SIMD: AVX2 hand-written intrinsics enabled (8 algorithms)")
+        # Tell dispatch code that AVX2 implementations are linked in
+        add_compile_definitions(AMA_HAVE_AVX2_IMPL)
     endif()
 endif()
 
@@ -161,6 +163,8 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_NEON)
                 COMPILE_FLAGS "-march=armv8-a+crypto")
         endif()
         message(STATUS "SIMD: ARM NEON hand-written intrinsics enabled (8 algorithms)")
+        # Tell dispatch code that NEON implementations are linked in
+        add_compile_definitions(AMA_HAVE_NEON_IMPL)
     endif()
 endif()
 
