@@ -36,18 +36,10 @@ print(status)
 
 ## 3. Create and Verify a Crypto Package
 
-The main high-level API uses `code_guardian_secure.py` which orchestrates all cryptographic layers:
+The main high-level API uses `ama_cryptography.crypto_api` which orchestrates all cryptographic layers. (`code_guardian_secure.py` is a legacy wrapper and is deprecated.)
 
 ```python
-# Run the complete demo
-import subprocess
-subprocess.run(["python3", "code_guardian_secure.py"])
-```
-
-Or use the Python API directly:
-
-```python
-from code_guardian_secure import (
+from ama_cryptography.crypto_api import (
     generate_key_management_system,
     create_crypto_package,
     verify_crypto_package,

@@ -124,10 +124,10 @@ print(f"Hybrid signature valid: {is_valid}")
 
 ## Using the Multi-Layer Package (Full Hybrid)
 
-The highest-level API (`code_guardian_secure.py`) automatically uses hybrid signatures (Ed25519 + ML-DSA-65) as layers 3 and 4:
+The highest-level API (`ama_cryptography.crypto_api`) automatically uses hybrid signatures (Ed25519 + ML-DSA-65) as layer 3:
 
 ```python
-from code_guardian_secure import (
+from ama_cryptography.crypto_api import (
     generate_key_management_system,
     create_crypto_package,
     verify_crypto_package,

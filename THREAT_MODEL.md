@@ -144,7 +144,7 @@ AMA Cryptography is a zero-dependency native C cryptographic library providing q
 | T3.2 | 96-bit random nonce from OS CSPRNG | **IMPLEMENTED** | `ama_platform_rand.c` (getrandom/BCrypt) |
 | T3.3 | Platform CSPRNG (getrandom, getentropy, BCryptGenRandom) | **IMPLEMENTED** | `ama_platform_rand.c`, no userspace PRNG |
 | T3.4 | RFC 3161 TSA with independent verification | **IMPLEMENTED** | `rfc3161_timestamp.py`, multiple TSA support |
-| T3.5 | Defense-in-depth requires all layers by default | **IMPLEMENTED** | `code_guardian_secure.py` enforces all layers |
+| T3.5 | Defense-in-depth requires all layers by default | **IMPLEMENTED** | `ama_cryptography.crypto_api.create_crypto_package()` / `verify_crypto_package()` enforce 4-layer verification (legacy wrapper: `code_guardian_secure.py`) |
 
 ### M4: Supply Chain Mitigations
 

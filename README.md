@@ -424,7 +424,7 @@ Complete security package with all defense layers:
 |-------|-------------|
 | ![Signature Performance](benchmarks/charts/signature_performance.svg) | Signature algorithm throughput and latency |
 | ![C vs Python](benchmarks/charts/c_vs_python.svg) | Native C vs Python performance comparison |
-| ![Layer Breakdown](benchmarks/charts/layer_breakdown.svg) | Per-layer timing breakdown of the multi-layer defense |
+| ![Layer Breakdown](benchmarks/charts/layer_breakdown.svg) | Per-layer timing breakdown of the 4-layer defense |
 | ![KEM Performance](benchmarks/charts/kem_performance.svg) | ML-KEM-1024 key encapsulation benchmarks |
 | ![Scalability](benchmarks/charts/scalability.svg) | Package creation scalability across data sizes |
 

@@ -1682,7 +1682,7 @@ class CryptoPackageResult:
     metadata: Dict[str, Any]
 
     # Secret fields that must be stripped during serialization
-    _SECRET_FIELDS: ClassVar[frozenset] = frozenset({"hmac_key", "hkdf_master_secret"})  # type: ignore[type-arg]
+    _SECRET_FIELDS: ClassVar[frozenset[str]] = frozenset({"hmac_key", "hkdf_master_secret"})
 
     def to_dict(self, include_secrets: bool = False) -> Dict[str, Any]:
         """Serialize to a dictionary, stripping secret fields by default.
@@ -2136,9 +2136,7 @@ def verify_crypto_package(
     _aggregate_exclude = {"core_valid", "all_valid", "primary"}
     core_results = {k: v for k, v in results.items() if k in _core_keys}
     results["core_valid"] = all(core_results.values()) if core_results else False
-    results["all_valid"] = all(
-        v for k, v in results.items() if k not in _aggregate_exclude
-    )
+    results["all_valid"] = all(v for k, v in results.items() if k not in _aggregate_exclude)
 
     return results
 

@@ -77,18 +77,13 @@ Each layer provides independent protection from a different mathematical foundat
 **Core Cryptographic Operations:**
 
 | Layer | Algorithm | Security Assumption | Failure Mode |
-|-------|-----------|--------------------|-----------|
-| 1 | SHA3-256 | Keccak collision resistance | Only if SHA3 is broken |
-| 2 | HMAC-SHA3-256 | PRF security, key secrecy | Only if HMAC key exposed |
-| 3 | Ed25519 | Discrete logarithm on Curve25519 | Quantum computer (Shor) |
-| 4 | ML-DSA-65 | Module-LWE lattice hardness | Unknown lattice breakthrough |
+|-------|-----------|--------------------|----|
+| 1 | SHA3-256 | Keccak collision resistance (NIST FIPS 202) | Only if SHA3 is broken |
+| 2 | HMAC-SHA3-256 | PRF security, key secrecy (RFC 2104) | Only if HMAC key exposed |
+| 3 | Hybrid Ed25519 + ML-DSA-65 | Discrete log (Curve25519) + Module-LWE lattice hardness (RFC 8032 + NIST FIPS 204) | Quantum computer (Shor) for Ed25519; unknown lattice breakthrough for ML-DSA-65 |
+| 4 | HKDF-SHA3-256 | PRF security of HMAC-SHA3-256 (RFC 5869) | Only if underlying PRF is broken |
 
-**Supporting Infrastructure:**
-
-| Component | Purpose | Failure Mode |
-|-----------|---------|-------------|
-| HKDF-SHA3-256 | Key derivation, key independence | Only if HKDF is broken |
-| RFC 3161 | Temporal proof of existence (optional) | TSA compromise |
+**Optional add-ons (not core layers):** SPHINCS+-256f, ML-KEM-1024, RFC 3161 timestamping.
 
 **Combined security:** Package authenticity is protected by four independent cryptographic operations. An attacker must simultaneously break **all applicable layers**. No known attack accomplishes this.
 
@@ -196,7 +191,7 @@ AMA Cryptography vs. peer implementations:
 | Quantum-resistant signatures | ✓ ML-DSA-65 (FIPS 204) | ✗ | ✗ (3.x preview) |
 | Hybrid classical+PQC | ✓ | ✗ | ✗ |
 | Runtime anomaly monitoring | ✓ 3R Framework | ✗ | ✗ |
-| Defense layers | 6 | 1-2 | 1-2 |
+| Defense layers | 4 core + 2 supporting | 1-2 | 1-2 |
 | RFC 3161 timestamps | ✓ | ✗ | ✗ |
 | Zero-downtime key rotation | ✓ | ✗ | ✗ |
 | NIST FIPS 203/204/205 | ✓ | ✗ | Partial |
