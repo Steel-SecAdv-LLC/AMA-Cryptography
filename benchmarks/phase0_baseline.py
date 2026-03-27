@@ -224,7 +224,7 @@ def bench_dilithium_verify():
     lib.ama_dilithium_sign(sig, ctypes.byref(siglen), msg, len(msg), sk)
 
     def op():
-        lib.ama_dilithium_verify(sig, siglen.value, msg, len(msg), pk)
+        lib.ama_dilithium_verify(msg, len(msg), sig, siglen.value, pk)
 
     return benchmark(op, iterations=100, warmup=10)
 

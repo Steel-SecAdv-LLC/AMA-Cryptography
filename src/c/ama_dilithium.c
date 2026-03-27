@@ -43,6 +43,7 @@
  */
 
 #include "../include/ama_cryptography.h"
+#include "../include/ama_dispatch.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -202,6 +203,14 @@ static int32_t dil_freeze(int32_t a) {
  * Forward NTT (Number Theoretic Transform) for Dilithium
  */
 static void dil_ntt(int32_t a[DIL_N]) {
+    /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (dt->dilithium_ntt) {
+        dt->dilithium_ntt(a, dil_zetas);
+        return;
+    }
+
+    /* Generic C implementation */
     unsigned int len, start, j, k;
     int32_t zeta, t;
 
@@ -253,6 +262,14 @@ static void dil_invntt(int32_t a[DIL_N]) {
  */
 static void dil_poly_pointwise_montgomery(dil_poly *c, const dil_poly *a,
                                            const dil_poly *b) {
+    /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (dt->dilithium_pointwise) {
+        dt->dilithium_pointwise(c->coeffs, a->coeffs, b->coeffs);
+        return;
+    }
+
+    /* Generic C implementation */
     unsigned int i;
     for (i = 0; i < DIL_N; ++i) {
         c->coeffs[i] = dil_montgomery_reduce((int64_t)a->coeffs[i] * b->coeffs[i]);

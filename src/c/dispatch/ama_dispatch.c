@@ -16,6 +16,7 @@
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 
+#include "ama_dispatch.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -47,30 +48,11 @@
 #endif
 
 /* ============================================================================
- * Dispatch info structure
+ * Static dispatch state
  * ============================================================================ */
 
-typedef enum {
-    AMA_IMPL_GENERIC = 0,
-    AMA_IMPL_AVX2    = 1,
-    AMA_IMPL_AVX512  = 2,
-    AMA_IMPL_NEON    = 3,
-    AMA_IMPL_SVE2    = 4,
-} ama_impl_level_t;
-
-typedef struct {
-    ama_impl_level_t sha3;
-    ama_impl_level_t kyber;
-    ama_impl_level_t dilithium;
-    ama_impl_level_t sphincs;
-    ama_impl_level_t aes_gcm;
-    ama_impl_level_t ed25519;
-    ama_impl_level_t chacha20poly1305;
-    ama_impl_level_t argon2;
-    const char *arch_name;
-} ama_dispatch_info_t;
-
 static ama_dispatch_info_t dispatch_info;
+static ama_dispatch_table_t dispatch_table;
 static AMA_ONCE_FLAG dispatch_once_flag = AMA_ONCE_FLAG_INIT;
 
 /* ============================================================================
@@ -159,17 +141,43 @@ static int detect_sve2(void) { return 0; }
 #endif /* __x86_64__ / __aarch64__ */
 
 /* ============================================================================
- * Phase 1: CPU feature detection and level assignment.
- *
- * Phase 2 (TODO): Wire function pointers to route API calls through SIMD
- * implementations based on detected level.  Currently, SIMD implementations
- * are compiled and verified for correctness (via KAT tests) but runtime
- * dispatch does not yet invoke them — all API calls still use the generic
- * C path.  This is intentional (phased rollout).
- *
- * TODO: Add a dispatch table of function pointers, one per algorithm,
- * initialized here to point to the optimal implementation.
+ * Generic fallback implementations (always available)
  * ============================================================================ */
+
+/* Forward declaration: generic keccak_f1600 from ama_sha3.c */
+extern void ama_keccak_f1600_generic(uint64_t state[25]);
+
+/* ============================================================================
+ * SIMD implementations (conditionally available at link time)
+ * ============================================================================ */
+
+#ifdef AMA_HAVE_AVX2_IMPL
+extern void ama_keccak_f1600_avx2(uint64_t state[25]);
+extern ama_error_t ama_sha3_256_avx2(const uint8_t *input, size_t input_len,
+                                      uint8_t output[32]);
+extern void ama_kyber_ntt_avx2(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_kyber_invntt_avx2(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_kyber_poly_pointwise_avx2(int16_t r[256],
+                                           const int16_t a[256],
+                                           const int16_t b[256]);
+extern void ama_dilithium_ntt_avx2(int32_t poly[256],
+                                    const int32_t zetas[128]);
+extern void ama_dilithium_poly_pointwise_avx2(int32_t r[256],
+                                               const int32_t a[256],
+                                               const int32_t b[256]);
+#endif
+
+#ifdef AMA_HAVE_NEON_IMPL
+extern void ama_keccak_f1600_neon(uint64_t state[25]);
+extern ama_error_t ama_sha3_256_neon(const uint8_t *input, size_t input_len,
+                                      uint8_t output[32]);
+extern void ama_kyber_ntt_neon(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_dilithium_ntt_neon(int32_t poly[256],
+                                    const int32_t zetas[128]);
+extern void ama_dilithium_poly_pointwise_neon(int32_t r[256],
+                                               const int32_t a[256],
+                                               const int32_t b[256]);
+#endif
 
 /* Check if AMA_DISPATCH_VERBOSE=1 is set at runtime. */
 static int dispatch_verbose(void) {
@@ -251,6 +259,70 @@ static void dispatch_init_internal(void) {
         fprintf(stderr, "[AMA Dispatch] Unknown architecture — using generic C\n");
 #endif
 
+    /* ====================================================================
+     * Phase 2: Wire function pointers to optimal implementations.
+     *
+     * Start with generic fallbacks, then override with SIMD where
+     * detected.  NULL entries mean "caller uses its own inline generic"
+     * (used for Kyber/Dilithium NTT where the generic path uses a
+     * different internal zetas layout).
+     * ==================================================================== */
+
+    dispatch_table.keccak_f1600      = ama_keccak_f1600_generic;
+    dispatch_table.sha3_256          = NULL;  /* dispatched via keccak_f1600 */
+    dispatch_table.kyber_ntt         = NULL;  /* NULL = caller uses inline generic */
+    dispatch_table.kyber_invntt      = NULL;
+    dispatch_table.kyber_pointwise   = NULL;
+    dispatch_table.dilithium_ntt     = NULL;
+    dispatch_table.dilithium_pointwise = NULL;
+
+#ifdef AMA_HAVE_AVX2_IMPL
+    if (dispatch_info.sha3 >= AMA_IMPL_AVX2) {
+        dispatch_table.keccak_f1600 = ama_keccak_f1600_avx2;
+    }
+    /* Kyber NTT SIMD wiring: DEFERRED — three verified incompatibilities:
+     *
+     * 1. Forward NTT zeta offset: generic starts k=1 (zetas[k++]),
+     *    SIMD starts k=0 (zetas[k++]).  SIMD reads zetas[0]=2285
+     *    (Montgomery constant R mod q), not a valid twiddle factor.
+     *    Fix: change SIMD to start at k=1, or pass &zetas[1].
+     *
+     * 2. Inverse NTT sign convention: generic computes zeta*(b-a)
+     *    matching pqcrystals reference (-zetas[k])*(a-b).  SIMD
+     *    computes zeta*(a-b) WITHOUT negation — opposite sign.
+     *    Fix: add negation to SIMD GS butterfly.
+     *
+     * 3. Pointwise multiply: generic uses basemul with zetas[64+i]
+     *    for degree-2 polynomial components.  SIMD does simple
+     *    element-wise Montgomery multiply — different algorithm.
+     *
+     * The SIMD forward+inverse pair is self-consistent (roundtrip
+     * KAT tests pass because errors cancel), but CANNOT be mixed
+     * with generic code.  Wiring would silently produce incorrect
+     * cryptographic results.
+     * (INVARIANT-4: graceful fallback to generic C when NULL.) */
+#endif
+
+#ifdef AMA_HAVE_NEON_IMPL
+    if (dispatch_info.sha3 >= AMA_IMPL_NEON) {
+        dispatch_table.keccak_f1600 = ama_keccak_f1600_neon;
+    }
+    /* Kyber/Dilithium NEON NTT: same incompatibilities as AVX2
+     * (zeta offset, sign convention, pointwise algorithm).
+     * Additionally, Dilithium SIMD NTT does 7 layers (len>=2)
+     * while generic does 8 layers (len>0) — fundamentally
+     * different NTT representations.  Deferred. */
+#endif
+
+    if (dispatch_verbose()) {
+        fprintf(stderr, "[AMA Dispatch] keccak_f1600 -> %s\n",
+                dispatch_table.keccak_f1600 == ama_keccak_f1600_generic
+                    ? "generic" : "SIMD");
+        fprintf(stderr, "[AMA Dispatch] kyber_ntt    -> %s\n",
+                dispatch_table.kyber_ntt ? "SIMD" : "generic (inline)");
+        fprintf(stderr, "[AMA Dispatch] dil_ntt      -> %s\n",
+                dispatch_table.dilithium_ntt ? "SIMD" : "generic (inline)");
+    }
 }
 
 /* ============================================================================
@@ -284,6 +356,11 @@ const ama_dispatch_info_t *ama_get_dispatch_info(void) {
 /**
  * Prints dispatch info to stderr (for diagnostics / benchmark output).
  */
+const ama_dispatch_table_t *ama_get_dispatch_table(void) {
+    ama_dispatch_init();
+    return &dispatch_table;
+}
+
 void ama_print_dispatch_info(void) {
     const ama_dispatch_info_t *info = ama_get_dispatch_info();
 

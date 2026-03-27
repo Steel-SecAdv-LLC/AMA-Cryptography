@@ -146,10 +146,6 @@ typedef struct {
     fe25519 X, Y, Z, T;
 } ge25519_p1p1;
 
-/* Precomputed point (y+x, y-x, 2dxy) */
-typedef struct {
-    fe25519 yplusx, yminusx, xy2d;
-} ge25519_precomp;
 
 /* d = -121665/121666 (named ed_d to avoid shadowing SHA-512 local 'd') */
 static const fe25519 ed_d = {
@@ -295,7 +291,10 @@ static int ge25519_frombytes(ge25519_p3 *h, const uint8_t *s) {
     return 0;
 }
 
-/* p1p1 -> p3 */
+/* p1p1 -> p3 (4 field multiplications) */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((hot))
+#endif
 static void ge25519_p1p1_to_p3(ge25519_p3 *r, const ge25519_p1p1 *p) {
     fe25519_mul(r->X, p->X, p->T);
     fe25519_mul(r->Y, p->Y, p->Z);
@@ -303,7 +302,20 @@ static void ge25519_p1p1_to_p3(ge25519_p3 *r, const ge25519_p1p1 *p) {
     fe25519_mul(r->T, p->X, p->Y);
 }
 
+/* p1p1 -> p2 (3 field multiplications — skips T for doubling chains) */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((hot))
+#endif
+static void ge25519_p1p1_to_p2(ge25519_p2 *r, const ge25519_p1p1 *p) {
+    fe25519_mul(r->X, p->X, p->T);
+    fe25519_mul(r->Y, p->Y, p->Z);
+    fe25519_mul(r->Z, p->Z, p->T);
+}
+
 /* Double: p2 -> p1p1 */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((hot))
+#endif
 static void ge25519_p2_dbl(ge25519_p1p1 *r, const ge25519_p2 *p) {
     fe25519 t0;
     fe25519_sq(r->X, p->X);
@@ -330,8 +342,11 @@ static void ge25519_p2_dbl(ge25519_p1p1 *r, const ge25519_p2 *p) {
  *
  * Based on the SUPERCOP ref10 unified addition formula.
  */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((hot))
+#endif
 static void ge25519_add(ge25519_p1p1 *r, const ge25519_p3 *p, const ge25519_p3 *q) {
-    fe25519 A, B, C, D, E, F, G, H;
+    fe25519 A, B, C, D;
     fe25519_sub(A, p->Y, p->X);
     fe25519_sub(B, q->Y, q->X);
     fe25519_mul(A, A, B);
@@ -342,15 +357,12 @@ static void ge25519_add(ge25519_p1p1 *r, const ge25519_p3 *p, const ge25519_p3 *
     fe25519_mul(C, C, ed_d2);
     fe25519_mul(D, p->Z, q->Z);
     fe25519_add(D, D, D);
-    fe25519_sub(E, B, A);
-    fe25519_sub(F, D, C);
-    fe25519_add(G, D, C);
-    fe25519_add(H, B, A);
-    /* Output completed form: (E, H, G, F) — NOT the multiplied-out form */
-    fe25519_copy(r->X, E);
-    fe25519_copy(r->Y, H);
-    fe25519_copy(r->Z, G);
-    fe25519_copy(r->T, F);
+    /* Write completed form (E, H, G, F) directly — eliminates 4 fe25519_copy.
+     * No aliasing: r is ge25519_p1p1*, p/q are ge25519_p3* (different types). */
+    fe25519_sub(r->X, B, A);    /* E */
+    fe25519_add(r->Y, B, A);    /* H */
+    fe25519_add(r->Z, D, C);    /* G */
+    fe25519_sub(r->T, D, C);    /* F */
 }
 
 /* Helper: p3 -> p2 projection (drops T coordinate) */
@@ -462,6 +474,9 @@ static void ge25519_cmov(ge25519_p3 *r, const ge25519_p3 *p, int flag) {
  *
  * This reduces 256 doublings + ~128 additions to 252 doublings + 64 additions
  */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((hot))
+#endif
 static void ge25519_scalarmult_base_windowed(ge25519_p3 *r, const uint8_t *scalar) {
     ge25519_p3 Q, P, Q_after_add;
     ge25519_p1p1 t;
@@ -476,12 +491,20 @@ static void ge25519_scalarmult_base_windowed(ge25519_p3 *r, const uint8_t *scala
 
     /* Process from most significant nibble */
     for (i = 63; i >= 0; i--) {
-        /* Q = 16*Q (4 doublings) */
-        for (int j = 0; j < 4; j++) {
-            ge25519_p3_to_p2(&p2, &Q);
-            ge25519_p2_dbl(&t, &p2);
-            ge25519_p1p1_to_p3(&Q, &t);
-        }
+        /* Q = 16*Q (4 doublings)
+         * Optimization: first 3 doublings convert to p2 (3 muls, skip T)
+         * instead of p3 (4 muls). Only the final doubling needs p3 output
+         * for the subsequent addition which uses T. Saves 3 field
+         * multiplications per iteration (192 total across 64 iterations). */
+        ge25519_p3_to_p2(&p2, &Q);       /* p3 -> p2 (free: drop T) */
+        ge25519_p2_dbl(&t, &p2);          /* dbl #1 */
+        ge25519_p1p1_to_p2(&p2, &t);     /* -> p2 (3 muls, skip T) */
+        ge25519_p2_dbl(&t, &p2);          /* dbl #2 */
+        ge25519_p1p1_to_p2(&p2, &t);     /* -> p2 (3 muls, skip T) */
+        ge25519_p2_dbl(&t, &p2);          /* dbl #3 */
+        ge25519_p1p1_to_p2(&p2, &t);     /* -> p2 (3 muls, skip T) */
+        ge25519_p2_dbl(&t, &p2);          /* dbl #4 */
+        ge25519_p1p1_to_p3(&Q, &t);      /* -> p3 (4 muls, need T for add) */
 
         /* Get 4-bit nibble (big-endian nibble order) */
         int byte_idx = i / 2;
