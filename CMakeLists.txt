@@ -307,7 +307,7 @@ if(AMA_BUILD_SHARED)
         OUTPUT_NAME "ama_cryptography"
         VERSION ${PROJECT_VERSION}
         SOVERSION ${PROJECT_VERSION_MAJOR}
-        PUBLIC_HEADER "include/ama_cryptography.h"
+        PUBLIC_HEADER "include/ama_cryptography.h;include/ama_dispatch.h"
     )
     target_compile_definitions(ama_cryptography_shared PRIVATE AMA_BUILDING_SHARED)
     target_compile_definitions(ama_cryptography_shared PRIVATE
@@ -336,7 +336,7 @@ if(AMA_BUILD_STATIC)
     add_library(ama_cryptography_static STATIC ${AMA_SOURCES})
     set_target_properties(ama_cryptography_static PROPERTIES
         OUTPUT_NAME "ama_cryptography_static"
-        PUBLIC_HEADER "include/ama_cryptography.h"
+        PUBLIC_HEADER "include/ama_cryptography.h;include/ama_dispatch.h"
     )
     target_compile_definitions(ama_cryptography_static PRIVATE AMA_BUILDING_STATIC)
     target_compile_definitions(ama_cryptography_static PRIVATE

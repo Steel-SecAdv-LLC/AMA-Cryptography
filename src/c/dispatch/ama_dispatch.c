@@ -153,8 +153,8 @@ extern void ama_keccak_f1600_generic(uint64_t state[25]);
 
 #ifdef AMA_HAVE_AVX2_IMPL
 extern void ama_keccak_f1600_avx2(uint64_t state[25]);
-extern int  ama_sha3_256_avx2(const uint8_t *input, size_t input_len,
-                               uint8_t output[32]);
+extern ama_error_t ama_sha3_256_avx2(const uint8_t *input, size_t input_len,
+                                      uint8_t output[32]);
 extern void ama_kyber_ntt_avx2(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_kyber_invntt_avx2(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_kyber_poly_pointwise_avx2(int16_t r[256],
@@ -169,8 +169,8 @@ extern void ama_dilithium_poly_pointwise_avx2(int32_t r[256],
 
 #ifdef AMA_HAVE_NEON_IMPL
 extern void ama_keccak_f1600_neon(uint64_t state[25]);
-extern int  ama_sha3_256_neon(const uint8_t *input, size_t input_len,
-                               uint8_t output[32]);
+extern ama_error_t ama_sha3_256_neon(const uint8_t *input, size_t input_len,
+                                      uint8_t output[32]);
 extern void ama_kyber_ntt_neon(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_dilithium_ntt_neon(int32_t poly[256],
                                     const int32_t zetas[128]);
@@ -280,11 +280,26 @@ static void dispatch_init_internal(void) {
     if (dispatch_info.sha3 >= AMA_IMPL_AVX2) {
         dispatch_table.keccak_f1600 = ama_keccak_f1600_avx2;
     }
-    /* Kyber/Dilithium AVX2 NTT implementations use vectorized zetas
-     * layouts (swizzled for SIMD lane access) that differ from the generic
-     * scalar zetas array.  Dispatch pointers remain NULL until a zetas-
-     * swizzle adapter is integrated.  This ensures correctness while the
-     * dispatch infrastructure is ready for future wiring.
+    /* Kyber NTT SIMD wiring: DEFERRED — three verified incompatibilities:
+     *
+     * 1. Forward NTT zeta offset: generic starts k=1 (zetas[k++]),
+     *    SIMD starts k=0 (zetas[k++]).  SIMD reads zetas[0]=2285
+     *    (Montgomery constant R mod q), not a valid twiddle factor.
+     *    Fix: change SIMD to start at k=1, or pass &zetas[1].
+     *
+     * 2. Inverse NTT sign convention: generic computes zeta*(b-a)
+     *    matching pqcrystals reference (-zetas[k])*(a-b).  SIMD
+     *    computes zeta*(a-b) WITHOUT negation — opposite sign.
+     *    Fix: add negation to SIMD GS butterfly.
+     *
+     * 3. Pointwise multiply: generic uses basemul with zetas[64+i]
+     *    for degree-2 polynomial components.  SIMD does simple
+     *    element-wise Montgomery multiply — different algorithm.
+     *
+     * The SIMD forward+inverse pair is self-consistent (roundtrip
+     * KAT tests pass because errors cancel), but CANNOT be mixed
+     * with generic code.  Wiring would silently produce incorrect
+     * cryptographic results.
      * (INVARIANT-4: graceful fallback to generic C when NULL.) */
 #endif
 
@@ -292,7 +307,11 @@ static void dispatch_init_internal(void) {
     if (dispatch_info.sha3 >= AMA_IMPL_NEON) {
         dispatch_table.keccak_f1600 = ama_keccak_f1600_neon;
     }
-    /* Kyber/Dilithium NEON NTT: same zetas layout issue — deferred. */
+    /* Kyber/Dilithium NEON NTT: same incompatibilities as AVX2
+     * (zeta offset, sign convention, pointwise algorithm).
+     * Additionally, Dilithium SIMD NTT does 7 layers (len>=2)
+     * while generic does 8 layers (len>0) — fundamentally
+     * different NTT representations.  Deferred. */
 #endif
 
     if (dispatch_verbose()) {

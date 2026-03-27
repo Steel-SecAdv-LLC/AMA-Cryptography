@@ -15,6 +15,7 @@
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 
+#include "ama_cryptography.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -245,8 +246,8 @@ void ama_keccak_f1600_x4_avx2(uint64_t states[4][25]) {
 /* ============================================================================
  * AVX2-accelerated SHA3-256 (single message)
  * ============================================================================ */
-int ama_sha3_256_avx2(const uint8_t *input, size_t input_len, uint8_t output[32]) {
-    if (!input || !output) return -1;
+ama_error_t ama_sha3_256_avx2(const uint8_t *input, size_t input_len, uint8_t output[32]) {
+    if (!input || !output) return AMA_ERROR_INVALID_PARAM;
 
     uint64_t state[25];
     memset(state, 0, sizeof(state));
@@ -284,7 +285,7 @@ int ama_sha3_256_avx2(const uint8_t *input, size_t input_len, uint8_t output[32]
 
     /* Squeeze 32 bytes */
     memcpy(output, state, 32);
-    return 0;
+    return AMA_SUCCESS;
 }
 
 #else

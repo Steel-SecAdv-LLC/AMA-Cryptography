@@ -13,6 +13,7 @@
 #ifndef AMA_DISPATCH_H
 #define AMA_DISPATCH_H
 
+#include "ama_cryptography.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -50,8 +51,8 @@ typedef struct {
 typedef void (*ama_keccak_f1600_fn)(uint64_t state[25]);
 
 /** SHA3-256: full hash (input, len) -> output[32] */
-typedef int (*ama_sha3_256_fn)(const uint8_t *input, size_t input_len,
-                                uint8_t output[32]);
+typedef ama_error_t (*ama_sha3_256_fn)(const uint8_t *input, size_t input_len,
+                                        uint8_t output[32]);
 
 /** Kyber NTT forward transform */
 typedef void (*ama_kyber_ntt_fn)(int16_t poly[256], const int16_t zetas[128]);
@@ -63,7 +64,7 @@ typedef void (*ama_kyber_pointwise_fn)(int16_t r[256],
 
 /** Dilithium NTT forward transform */
 typedef void (*ama_dilithium_ntt_fn)(int32_t poly[256],
-                                     const int32_t zetas[128]);
+                                     const int32_t zetas[256]);
 
 /** Dilithium polynomial pointwise multiply */
 typedef void (*ama_dilithium_pointwise_fn)(int32_t r[256],
@@ -89,19 +90,19 @@ typedef struct {
  * ============================================================================ */
 
 /** Initialize dispatch (thread-safe, idempotent). */
-void ama_dispatch_init(void);
+AMA_API void ama_dispatch_init(void);
 
 /** Get dispatch info (detection results). */
-const ama_dispatch_info_t *ama_get_dispatch_info(void);
+AMA_API const ama_dispatch_info_t *ama_get_dispatch_info(void);
 
 /** Get the dispatch function table. Calls ama_dispatch_init() if needed. */
-const ama_dispatch_table_t *ama_get_dispatch_table(void);
+AMA_API const ama_dispatch_table_t *ama_get_dispatch_table(void);
 
 /** Print dispatch info to stderr (diagnostics). */
-void ama_print_dispatch_info(void);
+AMA_API void ama_print_dispatch_info(void);
 
 /** Implementation level name string. */
-const char *ama_impl_level_name(ama_impl_level_t level);
+AMA_API const char *ama_impl_level_name(ama_impl_level_t level);
 
 #ifdef __cplusplus
 }

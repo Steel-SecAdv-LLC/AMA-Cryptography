@@ -48,6 +48,9 @@
 #define SHA3_512_RATE 72      /* (1600 - 2*512) / 8 = 72 bytes */
 #define SHA3_512_DIGEST_SIZE 64
 
+/* Forward declaration: generic Keccak-f[1600] exported for dispatch table */
+void ama_keccak_f1600_generic(uint64_t state[KECCAK_STATE_SIZE]);
+
 /* Round constants for Keccak-f[1600] */
 static const uint64_t keccak_rc[KECCAK_ROUNDS] = {
     0x0000000000000001ULL, 0x0000000000008082ULL,
@@ -204,13 +207,18 @@ void ama_keccak_f1600_generic(uint64_t state[KECCAK_STATE_SIZE]) {
 }
 
 /**
- * Dispatch-aware Keccak-f[1600] wrapper.
- * Routes to the best available implementation (AVX2/NEON/generic)
- * via the dispatch table.  All internal callers use this wrapper.
+ * Cached Keccak-f[1600] function pointer — resolved once from the dispatch
+ * table on first use, then called directly on every subsequent permutation
+ * block (avoids ama_get_dispatch_table() overhead per block).
  */
+static ama_keccak_f1600_fn cached_keccak_f1600 = NULL;
+
 static void keccak_f1600(uint64_t state[KECCAK_STATE_SIZE]) {
-    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
-    dt->keccak_f1600(state);
+    if (!cached_keccak_f1600) {
+        const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+        cached_keccak_f1600 = dt->keccak_f1600;
+    }
+    cached_keccak_f1600(state);
 }
 
 /**
