@@ -151,7 +151,7 @@ extern void ama_keccak_f1600_generic(uint64_t state[25]);
  * SIMD implementations (conditionally available at link time)
  * ============================================================================ */
 
-#if defined(__x86_64__) || defined(_M_X64)
+#ifdef AMA_HAVE_AVX2_IMPL
 extern void ama_keccak_f1600_avx2(uint64_t state[25]);
 extern int  ama_sha3_256_avx2(const uint8_t *input, size_t input_len,
                                uint8_t output[32]);
@@ -167,7 +167,7 @@ extern void ama_dilithium_poly_pointwise_avx2(int32_t r[256],
                                                const int32_t b[256]);
 #endif
 
-#if defined(__aarch64__) || defined(_M_ARM64)
+#ifdef AMA_HAVE_NEON_IMPL
 extern void ama_keccak_f1600_neon(uint64_t state[25]);
 extern int  ama_sha3_256_neon(const uint8_t *input, size_t input_len,
                                uint8_t output[32]);
@@ -276,7 +276,7 @@ static void dispatch_init_internal(void) {
     dispatch_table.dilithium_ntt     = NULL;
     dispatch_table.dilithium_pointwise = NULL;
 
-#if defined(__x86_64__) || defined(_M_X64)
+#ifdef AMA_HAVE_AVX2_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_AVX2) {
         dispatch_table.keccak_f1600 = ama_keccak_f1600_avx2;
     }
@@ -288,7 +288,7 @@ static void dispatch_init_internal(void) {
      * (INVARIANT-4: graceful fallback to generic C when NULL.) */
 #endif
 
-#if defined(__aarch64__) || defined(_M_ARM64)
+#ifdef AMA_HAVE_NEON_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_NEON) {
         dispatch_table.keccak_f1600 = ama_keccak_f1600_neon;
     }
