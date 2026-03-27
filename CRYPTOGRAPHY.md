@@ -206,18 +206,18 @@ combined_ss = HKDF-SHA3-256(
 
 ## Defense-in-Depth Layers
 
-AMA Cryptography applies multiple independent cryptographic layers. Core cryptographic operations (the defense layers an attacker must defeat) are distinguished from supporting infrastructure:
+AMA Cryptography applies four independent cryptographic layers, matching the `ama_cryptography.crypto_api` package model (`create_crypto_package()` / `verify_crypto_package()`):
 
-**Core Cryptographic Operations:**
-1. **SHA3-256 Hash** - Content integrity with 128-bit collision resistance (FIPS 202)
-2. **HMAC-SHA3-256** - Keyed message authentication using HKDF-derived key
-3. **Ed25519 Signature** - Classical digital signature with 128-bit security (RFC 8032)
-4. **ML-DSA-65 Signature** - Quantum-resistant digital signature with 192-bit security (FIPS 204)
+**4-Layer Defense (as implemented in `crypto_api`):**
+1. **SHA3-256 Hash** — Content integrity with 128-bit collision resistance (FIPS 202)
+2. **HMAC-SHA3-256** — Keyed message authentication (RFC 2104)
+3. **Hybrid Ed25519 + ML-DSA-65 Signature** — Combined classical (128-bit, RFC 8032) and quantum-resistant (192-bit, FIPS 204) digital signature
+4. **HKDF-SHA3-256 Key Independence** — Key re-derivation and verification ensuring cryptographic key independence (RFC 5869)
 
-**Supporting Infrastructure:**
-- **Canonical Encoding** - Deterministic length-prefixed input normalization (prevents concatenation attacks)
-- **HKDF-SHA3-256** - Key derivation ensuring cryptographic key independence (RFC 5869)
-- **RFC 3161 Timestamp** - Third-party temporal proof of existence (optional)
+**Optional Add-ons (not core layers):**
+- **Canonical Encoding** — Deterministic length-prefixed input normalization (prevents concatenation attacks)
+- **SPHINCS+-256f / ML-KEM-1024** — Additional post-quantum signature and KEM schemes
+- **RFC 3161 Timestamp** — Third-party temporal proof of existence
 
 **Security Bound:** Overall security is bounded by the weakest core layer (~128-bit classical, ~192-bit quantum when ML-DSA-65 is enforced). Defense-in-depth ensures continued protection if any single layer is compromised. See [SECURITY.md](SECURITY.md) for detailed analysis.
 
@@ -228,7 +228,7 @@ The optional RFC 3161 timestamp add-on uses **SHA-256** instead of SHA3-256 for 
 - Most RFC 3161 TSA services (FreeTSA, DigiCert, GlobalSign) do not support SHA3-256
 - The timestamp token provides proof-of-existence at a specific time
 - The SHA-256 hash is only used for the TSA request, not for package integrity
-- Package integrity is protected by SHA3-256 in layers 1-4
+- Package integrity is protected by SHA3-256 across all 4 core layers
 
 This does not weaken security because:
 1. The timestamp proves when the package existed, not its integrity

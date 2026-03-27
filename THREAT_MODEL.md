@@ -9,7 +9,7 @@
 
 ## 1. System Overview
 
-AMA Cryptography is a zero-dependency native C cryptographic library providing quantum-resistant protection for Omni-Code data structures. The system uses a multi-layer defense-in-depth architecture with NIST-approved algorithms — four core cryptographic operations supported by key derivation and optional timestamping.
+AMA Cryptography is a zero-dependency native C cryptographic library providing quantum-resistant protection for Omni-Code data structures. The system uses a 4-layer defense-in-depth architecture with NIST-approved algorithms: (1) SHA3-256 content hash, (2) HMAC-SHA3-256 authentication, (3) hybrid Ed25519 + ML-DSA-65 signature, and (4) HKDF-SHA3-256 key independence — with optional RFC 3161 timestamping.
 
 ### Assets Under Protection
 

@@ -356,7 +356,7 @@ const ama_dispatch_info_t *ama_get_dispatch_info(void) {
 
 /**
  * Returns the dispatch function pointer table.
- * Caller must call ama_dispatch_init() first (or this does it lazily).
+ * Calls ama_dispatch_init() internally if not already initialized.
  */
 const ama_dispatch_table_t *ama_get_dispatch_table(void) {
     ama_dispatch_init();

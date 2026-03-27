@@ -85,7 +85,7 @@ class HybridEncapsulation:
 
 ## Hybrid Signature Scheme
 
-AMA Cryptography's multi-layer defense architecture natively incorporates a hybrid signature in layers 3 and 4 (Ed25519 + ML-DSA-65). The `HybridSigner` class provides direct access to this scheme.
+In the `ama_cryptography.crypto_api` 4-layer model, the Ed25519 + ML-DSA-65 hybrid signature is implemented at Layer 3, with Layer 4 providing HKDF-based key independence. The `HybridSigner` class provides direct access to the hybrid signature scheme.
 
 ### Security Guarantee
 

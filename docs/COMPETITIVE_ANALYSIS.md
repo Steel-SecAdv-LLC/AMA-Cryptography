@@ -219,7 +219,7 @@ Based on AMA measured benchmarks on x86-64 (CI shared runner, generic C path):
 | Argon2id (default) | ~250 ms | libsodium: ~260 ms |
 
 **Note**: AMA numbers are measured from `phase0_baseline_results.json` and
-`benchmark_c_raw.c` on GitHub Actions CI runners (generic C path, no SIMD
+`benchmarks/benchmark_c_raw.c` on GitHub Actions CI runners (generic C path, no SIMD
 dispatch at time of measurement). Competitor numbers are published reference
 values and may differ across hardware. AMA-Cryptography is competitive for
 PQC operations. Classical Ed25519 is approximately 2x slower than libsodium
