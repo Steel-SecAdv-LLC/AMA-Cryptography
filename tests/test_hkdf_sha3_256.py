@@ -31,7 +31,7 @@ try:
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF as HKDF
 
     _PYCA_AVAILABLE = True
-except Exception:
+except BaseException:
     default_backend = None
     hashes = None
     HKDF = None

@@ -24,7 +24,7 @@ Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the
 | ML-DSA-65 sign | 0.275 | 3,639 |
 | ML-DSA-65 verify | 0.154 | 6,490 |
 | KMS generation | 0.285 | 3,509 |
-| Package creation (4-Layer) | 0.789 | 1,268 |
+| Package creation (multi-layer) | 0.789 | 1,268 |
 | Package verification | 0.332 | 3,009 |
 
 ---
@@ -55,7 +55,7 @@ Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the
 
 ---
 
-## Package Operations (4-Layer)
+## Package Operations (Multi-Layer)
 
 | Operation | Mean (ms) | Median (ms) | Std Dev (ms) | Ops/sec | Iterations |
 |-----------|----------:|------------:|-------------:|--------:|-----------:|
