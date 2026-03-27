@@ -293,11 +293,13 @@ jobs:
             benchmarks/regression_results.json
             benchmarks/regression_report.md
 
-  # Docker Build
+  # Docker Build — non-blocking: transient Docker Hub auth/rate-limit
+  # failures must not gate PRs.
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    continue-on-error: true
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
@@ -319,6 +321,13 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4
+
+      - name: Log in to Docker Hub (optional, avoids rate limits)
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build Ubuntu image
         uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294  # v7
