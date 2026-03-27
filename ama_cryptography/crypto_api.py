@@ -1954,6 +1954,7 @@ def create_crypto_package(
         "timestamp_enabled": config.include_timestamp and timestamp_token is not None,
         "num_derived_keys": len(derived_keys),
         "pqc_status": get_pqc_capabilities()["status"],
+        "defense_layers": 4,
         "multi_layer_defense": True,
     }
 

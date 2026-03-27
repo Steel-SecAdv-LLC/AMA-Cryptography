@@ -466,7 +466,7 @@ Complete security package with all defense layers:
 
 | Operation | Standard | With Ethics | Overhead |
 |-----------|----------|-------------|----------|
-| HKDF Derivation | 0.063ms | 0.072ms | 14.79% |
+| HKDF Derivation | 0.063ms | 0.072ms | 14.29% |
 | Context Creation | - | 0.005ms | - |
 
 The ethical integration adds cryptographic binding to the 4 Omni-Code Ethical Pillars. The overhead applies to HKDF derivation specifically; end-to-end package creation overhead remains under 2% of total time since HKDF is a small fraction of the pipeline (ML-DSA-65 signing dominates at ~0.97ms).
@@ -1184,7 +1184,7 @@ AMA Cryptography v2.1 has **zero core cryptographic dependencies** — all crypt
 - `[monitoring]`: numpy, scipy (3R engine)
 - `[legacy]`: cryptography (fallback)
 - `[hsm]`: PyKCS11 (HSM support)
-- `[secure-memory]`: pynacl (libsodium)
+- `[secure-memory]`: pynacl (reserved; not currently used — `ama_cryptography.secure_memory` is dependency-free)
 
 ### Dependency Graph
 
