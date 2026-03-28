@@ -791,7 +791,7 @@ class DilithiumKeyPair:
     def __del__(self) -> None:
         try:
             self.wipe()
-        except Exception:  # noqa: S110 — __del__ must not raise
+        except Exception:  # noqa: S110  # nosec B110 — __del__ must not raise
             pass
 
 
@@ -828,7 +828,7 @@ class KyberKeyPair:
     def __del__(self) -> None:
         try:
             self.wipe()
-        except Exception:  # noqa: S110 — __del__ must not raise
+        except Exception:  # noqa: S110  # nosec B110 — __del__ must not raise
             pass
 
 
@@ -879,7 +879,7 @@ class SphincsKeyPair:
     def __del__(self) -> None:
         try:
             self.wipe()
-        except Exception:  # noqa: S110 — __del__ must not raise
+        except Exception:  # noqa: S110  # nosec B110 — __del__ must not raise
             pass
 
 
@@ -904,7 +904,7 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
             raise QuantumSignatureUnavailableError(
                 f"Native dilithium_keypair failed with error code {rc}"
             )
-        return DilithiumKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
+        return DilithiumKeyPair(secret_key=bytes(sk_buf), public_key=bytes(pk_buf))
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -935,12 +935,14 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(DILITHIUM_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(DILITHIUM_SIGNATURE_BYTES)
+        # Convert bytearray to bytes for ctypes c_char_p compatibility
+        sk_bytes = bytes(secret_key) if isinstance(secret_key, bytearray) else secret_key
         rc = _native_lib.ama_dilithium_sign(
             sig_buf,
             ctypes.byref(sig_len),
             message,
             ctypes.c_size_t(len(message)),
-            secret_key,
+            sk_bytes,
         )
         if rc != 0:
             raise QuantumSignatureUnavailableError(
@@ -1069,7 +1071,7 @@ def generate_kyber_keypair() -> KyberKeyPair:
         )
         if rc != 0:
             raise KyberUnavailableError(f"Native kyber_keypair failed with error code {rc}")
-        return KyberKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
+        return KyberKeyPair(secret_key=bytes(sk_buf), public_key=bytes(pk_buf))
 
     raise KyberUnavailableError(_KYBER_UNKNOWN_STATE)
 
@@ -1173,10 +1175,12 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) ->
 
     if KYBER_BACKEND == "native" and _native_lib is not None:
         ss_buf = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
+        # Convert bytearray to bytes for ctypes c_char_p compatibility
+        sk_bytes = bytes(secret_key) if isinstance(secret_key, bytearray) else secret_key
         rc = _native_lib.ama_kyber_decapsulate(
             ciphertext,
             ctypes.c_size_t(len(ciphertext)),
-            secret_key,
+            sk_bytes,
             ctypes.c_size_t(len(secret_key)),
             ss_buf,
             ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
@@ -1223,7 +1227,7 @@ def generate_sphincs_keypair() -> SphincsKeyPair:
         rc = _native_lib.ama_sphincs_keypair(pk_buf, sk_buf)
         if rc != 0:
             raise SphincsUnavailableError(f"Native sphincs_keypair failed with error code {rc}")
-        return SphincsKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
+        return SphincsKeyPair(secret_key=bytes(sk_buf), public_key=bytes(pk_buf))
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
 
@@ -1264,12 +1268,14 @@ def sphincs_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     if SPHINCS_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(SPHINCS_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(SPHINCS_SIGNATURE_BYTES)
+        # Convert bytearray to bytes for ctypes c_char_p compatibility
+        sk_bytes = bytes(secret_key) if isinstance(secret_key, bytearray) else secret_key
         rc = _native_lib.ama_sphincs_sign(
             sig_buf,
             ctypes.byref(sig_len),
             message,
             ctypes.c_size_t(len(message)),
-            secret_key,
+            sk_bytes,
         )
         if rc != 0:
             raise SphincsUnavailableError(f"Native sphincs_sign failed with error code {rc}")
