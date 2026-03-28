@@ -60,7 +60,7 @@ body:
       description: Provide a minimal code example that reproduces the issue
       placeholder: |
         ```python
-        from code_guardian_secure import *
+        from ama_cryptography.legacy_compat import *
 
         # Your code here
         ```

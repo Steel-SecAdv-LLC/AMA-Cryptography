@@ -52,15 +52,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from code_guardian_secure import (
-    DILITHIUM_AVAILABLE,
-    ETHICAL_VECTOR,
-    MASTER_CODES,
-    MASTER_HELIX_PARAMS,
-    SIGNATURE_FORMAT_V1,
-    SIGNATURE_FORMAT_V2,
+from ama_cryptography.equations import ETHICAL_VECTOR, MASTER_CODES, MASTER_HELIX_PARAMS
+from ama_cryptography.exceptions import (
     QuantumSignatureRequiredError,
     QuantumSignatureUnavailableError,
+)
+from ama_cryptography.legacy_compat import (
+    SIGNATURE_FORMAT_V1,
+    SIGNATURE_FORMAT_V2,
     _verify_dilithium_with_policy,
     _verify_rfc3161_token,
     _verify_timestamp_value,
@@ -78,6 +77,7 @@ from code_guardian_secure import (
     verify_crypto_package,
     verify_rfc3161_timestamp,
 )
+from ama_cryptography.pqc_backends import DILITHIUM_AVAILABLE
 
 
 class TestSecureWipe:
@@ -113,13 +113,13 @@ class TestSecureWipe:
     def test_secure_wipe_non_bytearray_raises(self) -> None:
         """Test that non-bytearray types raise TypeError (fail-loud contract)."""
         with pytest.raises(TypeError, match="requires a mutable bytearray"):
-            secure_wipe("string")
+            secure_wipe("string")  # type: ignore[arg-type]
         with pytest.raises(TypeError, match="requires a mutable bytearray"):
-            secure_wipe(12345)
+            secure_wipe(12345)  # type: ignore[arg-type]
         with pytest.raises(TypeError, match="requires a mutable bytearray"):
-            secure_wipe(None)
+            secure_wipe(None)  # type: ignore[arg-type]
         with pytest.raises(TypeError, match="requires a mutable bytearray"):
-            secure_wipe([1, 2, 3])
+            secure_wipe([1, 2, 3])  # type: ignore[arg-type]
 
 
 class TestLengthPrefixedEncodeEdgeCases:
@@ -546,9 +546,8 @@ class TestMainFunction:
 
     def test_main_runs_successfully(self) -> None:
         """Test that main function runs without errors."""
-        script_path = Path(__file__).parent.parent / "code_guardian_secure.py"
         result = subprocess.run(
-            [sys.executable, str(script_path)],
+            [sys.executable, "-m", "ama_cryptography"],
             capture_output=True,
             text=True,
             timeout=120,
@@ -557,9 +556,8 @@ class TestMainFunction:
 
     def test_main_produces_expected_output(self) -> None:
         """Test that main function produces expected output."""
-        script_path = Path(__file__).parent.parent / "code_guardian_secure.py"
         result = subprocess.run(
-            [sys.executable, str(script_path)],
+            [sys.executable, "-m", "ama_cryptography"],
             capture_output=True,
             text=True,
             timeout=120,
@@ -573,22 +571,15 @@ class TestMainFunction:
 
     def test_main_creates_output_files(self) -> None:
         """Test that main function creates expected output files."""
-        script_path = Path(__file__).parent.parent / "code_guardian_secure.py"
         repo_root = Path(__file__).parent.parent
         # Run from temp directory to avoid polluting repo
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Copy script to temp dir
-            import shutil
-
-            temp_script = Path(tmpdir) / "code_guardian_secure.py"
-            shutil.copy(script_path, temp_script)
-
             # Set PYTHONPATH to include repo root so ama_cryptography can be imported
             env = os.environ.copy()
             env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
 
             result = subprocess.run(
-                [sys.executable, str(temp_script)],
+                [sys.executable, "-m", "ama_cryptography"],
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -604,20 +595,14 @@ class TestMainFunction:
 
     def test_main_output_package_is_valid_json(self) -> None:
         """Test that output package is valid JSON."""
-        script_path = Path(__file__).parent.parent / "code_guardian_secure.py"
         repo_root = Path(__file__).parent.parent
         with tempfile.TemporaryDirectory() as tmpdir:
-            import shutil
-
-            temp_script = Path(tmpdir) / "code_guardian_secure.py"
-            shutil.copy(script_path, temp_script)
-
             # Set PYTHONPATH to include repo root so ama_cryptography can be imported
             env = os.environ.copy()
             env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
 
             subprocess.run(
-                [sys.executable, str(temp_script)],
+                [sys.executable, "-m", "ama_cryptography"],
                 capture_output=True,
                 timeout=120,
                 cwd=tmpdir,
@@ -832,14 +817,14 @@ class TestEd25519ErrorPaths:
 
     def test_ed25519_sign_wrong_key_length(self) -> None:
         """Test that signing with wrong key length raises ValueError."""
-        from code_guardian_secure import ed25519_sign
+        from ama_cryptography.legacy_compat import ed25519_sign
 
         with pytest.raises(ValueError, match="32 bytes"):
             ed25519_sign(b"test", b"short_key")
 
     def test_ed25519_verify_wrong_signature_length(self) -> None:
         """Test that verifying with wrong signature length raises ValueError."""
-        from code_guardian_secure import ed25519_verify
+        from ama_cryptography.legacy_compat import ed25519_verify
 
         keypair = generate_ed25519_keypair()
         with pytest.raises(ValueError, match="64 bytes"):
@@ -847,7 +832,7 @@ class TestEd25519ErrorPaths:
 
     def test_ed25519_verify_wrong_pubkey_length(self) -> None:
         """Test that verifying with wrong public key length raises ValueError."""
-        from code_guardian_secure import ed25519_verify
+        from ama_cryptography.legacy_compat import ed25519_verify
 
         with pytest.raises(ValueError, match="32 bytes"):
             ed25519_verify(b"test", b"x" * 64, b"short_pubkey")
@@ -993,7 +978,7 @@ class TestHMACEdgeCases:
 
     def test_hmac_with_empty_message(self) -> None:
         """Test HMAC with empty message."""
-        from code_guardian_secure import hmac_authenticate, hmac_verify
+        from ama_cryptography.legacy_compat import hmac_authenticate, hmac_verify
 
         key = secrets.token_bytes(32)
         tag = hmac_authenticate(b"", key)
@@ -1002,7 +987,7 @@ class TestHMACEdgeCases:
 
     def test_hmac_with_large_message(self) -> None:
         """Test HMAC with large message."""
-        from code_guardian_secure import hmac_authenticate, hmac_verify
+        from ama_cryptography.legacy_compat import hmac_authenticate, hmac_verify
 
         key = secrets.token_bytes(32)
         large_message = secrets.token_bytes(1000000)  # 1MB
@@ -1011,7 +996,7 @@ class TestHMACEdgeCases:
 
     def test_hmac_with_64_byte_key(self) -> None:
         """Test HMAC with 64-byte key (recommended size)."""
-        from code_guardian_secure import hmac_authenticate, hmac_verify
+        from ama_cryptography.legacy_compat import hmac_authenticate, hmac_verify
 
         key = secrets.token_bytes(64)
         message = b"test message"
@@ -1030,7 +1015,7 @@ class TestQuantumSignatureAvailability:
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
     def test_dilithium_operations_work_when_available(self) -> None:
         """Test that Dilithium operations work when available."""
-        from code_guardian_secure import (
+        from ama_cryptography.pqc_backends import (
             dilithium_sign,
             dilithium_verify,
             generate_dilithium_keypair,

@@ -117,7 +117,7 @@ body:
       placeholder: |
         ```python
         # Example of how the feature would work
-        from code_guardian_secure import new_feature
+        from ama_cryptography import new_feature
 
         result = new_feature(params)
         ```

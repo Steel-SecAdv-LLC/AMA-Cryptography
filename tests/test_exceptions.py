@@ -196,6 +196,7 @@ class TestModuleExports:
             "SecurityWarning",
             "PQCUnavailableError",
             "QuantumSignatureUnavailableError",
+            "QuantumSignatureRequiredError",
             "CryptoConfigError",
             "KeyManagementError",
             "SignatureVerificationError",

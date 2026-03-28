@@ -60,6 +60,13 @@ class QuantumSignatureUnavailableError(PQCUnavailableError):
     pass
 
 
+class QuantumSignatureRequiredError(Exception):
+    """Raised when quantum-resistant signatures are required by policy but
+    Dilithium is not available or the package lacks quantum signatures."""
+
+    pass
+
+
 class CryptoConfigError(Exception):
     """
     Raised when cryptographic configuration is invalid.
@@ -118,6 +125,7 @@ __all__ = [
     "SecurityWarning",
     "PQCUnavailableError",
     "QuantumSignatureUnavailableError",
+    "QuantumSignatureRequiredError",
     "CryptoConfigError",
     "KeyManagementError",
     "SignatureVerificationError",

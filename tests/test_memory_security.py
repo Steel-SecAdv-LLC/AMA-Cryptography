@@ -14,7 +14,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from code_guardian_secure import secure_wipe
+from ama_cryptography.legacy_compat import secure_wipe
 
 
 class TestSecureWipe:
@@ -76,7 +76,7 @@ class TestMemoryGrowth:
 
     def test_hash_no_memory_growth(self) -> None:
         """Repeated hashing doesn't leak memory."""
-        from code_guardian_secure import canonical_hash_code
+        from ama_cryptography.legacy_compat import canonical_hash_code
 
         gc.collect()
         baseline = self._get_memory_usage()
@@ -95,7 +95,7 @@ class TestMemoryGrowth:
 
     def test_hmac_no_memory_growth(self) -> None:
         """Repeated HMAC operations don't leak memory."""
-        from code_guardian_secure import hmac_authenticate
+        from ama_cryptography.legacy_compat import hmac_authenticate
 
         gc.collect()
         baseline = self._get_memory_usage()
@@ -113,7 +113,7 @@ class TestMemoryGrowth:
 
     def test_keygen_no_memory_growth(self) -> None:
         """Repeated key generation doesn't leak memory."""
-        from code_guardian_secure import generate_ed25519_keypair
+        from ama_cryptography.legacy_compat import generate_ed25519_keypair
 
         gc.collect()
         baseline = self._get_memory_usage()

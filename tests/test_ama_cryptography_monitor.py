@@ -847,7 +847,7 @@ class TestMonitorIntegration:
         sys.path.insert(0, str(Path(__file__).parent.parent))
 
         try:
-            from code_guardian_secure import (
+            from ama_cryptography.legacy_compat import (
                 MASTER_CODES_STR,
                 MASTER_HELIX_PARAMS,
                 create_crypto_package,
@@ -855,7 +855,7 @@ class TestMonitorIntegration:
                 verify_crypto_package,
             )
         except RuntimeError:
-            pytest.skip("Native C library required for code_guardian_secure")
+            pytest.skip("Native C library required for ama_cryptography.legacy_compat")
             return  # pragma: no cover — unreachable; tells static analysis skip() diverges
 
         # Setup

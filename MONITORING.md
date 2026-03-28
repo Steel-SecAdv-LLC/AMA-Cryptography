@@ -135,7 +135,7 @@ AMA Cryptography includes optional runtime security monitoring using the 3R Mech
 
 ```python
 from ama_cryptography_monitor import AmaCryptographyMonitor
-from code_guardian_secure import *
+from ama_cryptography.legacy_compat import *
 
 # Enable monitoring
 monitor = AmaCryptographyMonitor(enabled=True)

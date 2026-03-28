@@ -49,8 +49,7 @@ except ImportError:
     psutil = None  # type: ignore[assignment]
     _HAS_PSUTIL = False
 
-from ama_cryptography.pqc_backends import DILITHIUM_BACKEND
-from code_guardian_secure import (
+from ama_cryptography.legacy_compat import (
     DILITHIUM_AVAILABLE,
     ETHICAL_VECTOR,
     MASTER_CODES,
@@ -72,6 +71,7 @@ from code_guardian_secure import (
     native_hkdf,
     verify_crypto_package,
 )
+from ama_cryptography.pqc_backends import DILITHIUM_BACKEND
 
 
 class BenchmarkSuite:

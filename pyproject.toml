@@ -170,14 +170,11 @@ ignore = []  # Do not add ignores without a comment explaining why.
     "B028",
     "UP006", "UP015", "UP035",  # UP006/UP035: deprecated typing imports (existing pattern)
 ]
-# code_guardian_secure.py — same crypto patterns as ama_cryptography/
+# ama_cryptography/legacy_compat.py — ported from code_guardian_secure.py
 #   UP007/UP045: PEP 604 union syntax (existing pattern)
-#   E402: module-level imports after sys.path manipulation
 #   S310/S603: URL open and subprocess calls in security tooling
 #   UP012: unnecessary UTF-8 encoding argument
-# SECURITY: S110 (bare except:pass) and B904 (raise-without-from) are NOT
-# suppressed — crypto code must propagate exceptions with full context.
-"code_guardian_secure.py" = [
+"ama_cryptography/legacy_compat.py" = [
     "N803", "N806", "N818",
     "RUF001", "RUF002", "RUF003", "RUF010", "RUF012", "RUF022", "RUF100",
     "S101", "S106", "S107",
@@ -263,12 +260,6 @@ module = [
 ]
 ignore_missing_imports = true
 
-# code_guardian_secure — not a PEP 561 typed package; suppress attr-defined
-# for dynamically-exported symbols (e.g. QuantumSignatureUnavailableError).
-[[tool.mypy.overrides]]
-module = "code_guardian_secure"
-ignore_missing_imports = true
-follow_imports = "skip"
 
 # Cython extension modules — no .py source or PEP 561 stubs.
 [[tool.mypy.overrides]]

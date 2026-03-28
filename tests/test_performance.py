@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 import pytest
 
-from code_guardian_secure import (
+from ama_cryptography.legacy_compat import (
     canonical_hash_code,
     create_crypto_package,
     generate_ed25519_keypair,
@@ -123,7 +123,7 @@ class TestEd25519Performance:
 
     def test_sign_throughput(self) -> None:
         """Ed25519 signing throughput (>4,000 ops/sec)."""
-        from code_guardian_secure import ed25519_sign
+        from ama_cryptography.legacy_compat import ed25519_sign
 
         kp = generate_ed25519_keypair()
         message = b"test message for signing"
@@ -135,7 +135,7 @@ class TestEd25519Performance:
 
     def test_verify_throughput(self) -> None:
         """Ed25519 verification throughput (>4,000 ops/sec)."""
-        from code_guardian_secure import ed25519_sign, ed25519_verify
+        from ama_cryptography.legacy_compat import ed25519_sign, ed25519_verify
 
         kp = generate_ed25519_keypair()
         message = b"test message for verification"

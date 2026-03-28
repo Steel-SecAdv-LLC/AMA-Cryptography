@@ -207,7 +207,7 @@ class BenchmarkValidator:
 
         # HKDF derivation (native C backend)
         try:
-            from code_guardian_secure import native_hkdf
+            from ama_cryptography.legacy_compat import native_hkdf
 
             master = secrets.token_bytes(32)
             salt = secrets.token_bytes(32)
@@ -223,7 +223,7 @@ class BenchmarkValidator:
 
         # Ed25519 key generation (native C backend)
         try:
-            from code_guardian_secure import generate_ed25519_keypair
+            from ama_cryptography.legacy_compat import generate_ed25519_keypair
 
             def ed25519_keygen():
                 return generate_ed25519_keypair()
@@ -272,7 +272,7 @@ class BenchmarkValidator:
 
         # HMAC-SHA3-256 (INVARIANT-1: use project's own implementation)
         try:
-            from code_guardian_secure import hmac_authenticate
+            from ama_cryptography.legacy_compat import hmac_authenticate
 
             key = secrets.token_bytes(32)
 
@@ -287,7 +287,7 @@ class BenchmarkValidator:
 
         # Ed25519 sign/verify (native C backend)
         try:
-            from code_guardian_secure import (
+            from ama_cryptography.legacy_compat import (
                 ed25519_sign as native_ed25519_sign,
                 ed25519_verify as native_ed25519_verify,
                 generate_ed25519_keypair,

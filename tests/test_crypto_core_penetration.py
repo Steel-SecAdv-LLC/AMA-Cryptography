@@ -50,7 +50,7 @@ from unittest.mock import patch
 
 import pytest
 
-from code_guardian_secure import (
+from ama_cryptography.legacy_compat import (
     DILITHIUM_AVAILABLE,
     ETHICAL_VECTOR,
     MASTER_CODES,

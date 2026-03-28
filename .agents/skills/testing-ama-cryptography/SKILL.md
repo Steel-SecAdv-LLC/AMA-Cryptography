@@ -55,7 +55,7 @@ via `_check_operational()`.
 ## Cryptographic Demo
 
 ```bash
-python3 code_guardian_secure.py
+python3 -m ama_cryptography
 ```
 
 Expected output includes "ALL VERIFICATIONS PASSED". Verify no legacy terminology
