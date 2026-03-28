@@ -77,6 +77,10 @@ try:
     _HMAC_NATIVE = _HMAC_SHA3_256_NATIVE_AVAILABLE
     _HKDF_NATIVE = _HKDF_NATIVE_AVAILABLE
 except ImportError:
+    pass  # Should not happen — functions always exist in pqc_backends
+
+# INVARIANT-7: warn when falling back to pure-Python (non-constant-time) HMAC/HKDF
+if not _HMAC_NATIVE or not _HKDF_NATIVE:
     logging.getLogger(__name__).warning(
         "native HMAC/HKDF C accelerators unavailable, using pure-Python "
         "fallback without constant-time guarantees. Production deployments "
@@ -440,7 +444,7 @@ class Ed25519Provider(CryptoProvider):
         if len(secret_key) == 32:
             _, full_sk = native_ed25519_keypair_from_seed(bytes(secret_key))
         elif len(secret_key) == 64:
-            full_sk = secret_key
+            full_sk = bytes(secret_key) if isinstance(secret_key, bytearray) else secret_key
         else:
             raise ValueError(f"Ed25519 secret key must be 32 or 64 bytes, got {len(secret_key)}")
 

@@ -971,11 +971,6 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
     if not DILITHIUM_AVAILABLE:
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
 
-    if len(signature) != DILITHIUM_SIGNATURE_BYTES:
-        raise ValueError(
-            f"Invalid signature length: expected {DILITHIUM_SIGNATURE_BYTES}, "
-            f"got {len(signature)}"
-        )
     if len(public_key) != DILITHIUM_PUBLIC_KEY_BYTES:
         raise ValueError(
             f"Invalid public key length: expected {DILITHIUM_PUBLIC_KEY_BYTES}, "

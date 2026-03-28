@@ -157,44 +157,9 @@ rules:
   # Exceptions that explicitly transition to FIPS ERROR state (e.g.,
   # _self_test.py POST failure tuples) are acceptable and should be
   # annotated with a comment explaining the rationale.
-  - id: broad-exception-in-crypto
-    pattern: |
-      except Exception as $E:
-          ...
-    paths:
-      include:
-        - "ama_cryptography/**"
-      exclude:
-        - "ama_cryptography/_self_test.py"
-    message: >
-      INVARIANT-9: Broad 'except Exception' in crypto path. Prefer narrow
-      exception types (ValueError, RuntimeError, OSError) unless this handler
-      explicitly transitions to FIPS ERROR state. If intentional, add a
-      comment explaining the rationale.
-    languages: [python]
-    severity: WARNING
-    metadata:
-      category: security
-      subcategory: exception-scope
-      invariant: INVARIANT-9
-
-  # INVARIANT-9: Also catch bare 'except Exception:' without 'as' binding.
-  - id: broad-exception-in-crypto-bare
-    pattern: |
-      except Exception:
-          ...
-    paths:
-      include:
-        - "ama_cryptography/**"
-      exclude:
-        - "ama_cryptography/_self_test.py"
-    message: >
-      INVARIANT-9: Broad 'except Exception' in crypto path. Prefer narrow
-      exception types (ValueError, RuntimeError, OSError) unless this handler
-      explicitly transitions to FIPS ERROR state.
-    languages: [python]
-    severity: WARNING
-    metadata:
-      category: security
-      subcategory: exception-scope
-      invariant: INVARIANT-9
+  #
+  # NOTE: Semgrep pattern-based rules for 'except Exception' are deferred.
+  # Semgrep 1.74.0 does not support 'except Exception as $E: ...' or
+  # 'except Exception: ...' as valid Python pattern syntax (parse error).
+  # Use 'semgrep --validate' when upgrading to re-enable these rules.
+  # See: INVARIANT-9 in .github/INVARIANTS.md
