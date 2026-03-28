@@ -37,7 +37,6 @@ AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 """
 
 import ctypes
-import logging
 import os
 import platform
 from dataclasses import dataclass, field
@@ -50,9 +49,6 @@ from ama_cryptography.exceptions import (
     QuantumSignatureUnavailableError,
     SecurityWarning,
 )
-from ama_cryptography.secure_memory import secure_memzero
-
-_logger = logging.getLogger(__name__)
 
 __all__ = [
     "PQCUnavailableError",
@@ -786,6 +782,8 @@ class DilithiumKeyPair:
     def wipe(self) -> None:
         """Securely zero secret key material."""
         if isinstance(self.secret_key, bytearray):
+            from ama_cryptography.secure_memory import secure_memzero
+
             secure_memzero(self.secret_key)
 
     def __del__(self) -> None:
@@ -823,6 +821,8 @@ class KyberKeyPair:
     def wipe(self) -> None:
         """Securely zero secret key material."""
         if isinstance(self.secret_key, bytearray):
+            from ama_cryptography.secure_memory import secure_memzero
+
             secure_memzero(self.secret_key)
 
     def __del__(self) -> None:
@@ -874,6 +874,8 @@ class SphincsKeyPair:
     def wipe(self) -> None:
         """Securely zero secret key material."""
         if isinstance(self.secret_key, bytearray):
+            from ama_cryptography.secure_memory import secure_memzero
+
             secure_memzero(self.secret_key)
 
     def __del__(self) -> None:
