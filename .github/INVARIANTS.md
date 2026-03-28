@@ -52,9 +52,10 @@ to a full commit SHA, not a mutable tag (`@main`, `@v1`, etc.).
 ## INVARIANT-5 — Input Size Validation at Python/C Boundary
 
 All Python functions that dispatch to the native C library via `ctypes` **must**
-validate the byte-length of every buffer argument **before** the `ctypes` call.
-This prevents malformed inputs from reaching C code before bounds checking.
-A Semgrep rule (`ctypes-missing-length-check`) enforces this at CI time.
+validate the byte-length of every fixed-size buffer argument **before** the
+`ctypes` call. This prevents malformed inputs from reaching C code before bounds
+checking. Variable-length parameters (messages, plaintext, AAD) whose length is
+passed alongside via `c_size_t(len(...))` are safe and do not require pre-checks.
 
 ## INVARIANT-6 — Secret Key Zeroing on All Exit Paths
 
@@ -85,7 +86,8 @@ Code under `ama_cryptography/` **should** use narrow exception types
 (`ValueError`, `RuntimeError`, `OSError`) rather than broad `except Exception`
 where possible. Exceptions: handlers that explicitly transition to FIPS ERROR
 state (e.g., `_self_test.py` POST failure tuples) may catch `Exception`.
-A Semgrep rule (`broad-exception-in-crypto`) flags new broad catches for review.
+A Semgrep rule for flagging new broad catches is deferred pending Semgrep
+pattern syntax support (see `.semgrep.yml` for details).
 
 ## INVARIANT-10 — Signed Commits on Protected Branches
 
@@ -93,11 +95,20 @@ All commits merged to `main` and `develop` **must** be GPG- or SSH-signed.
 This is **REQUIRED** (not merely recommended) per the supply-chain threat
 model (T4.3). Branch protection rules should enforce this.
 
+> **Enforcement gap:** This invariant requires enabling "Require signed commits"
+> in GitHub branch protection settings for `main` and `develop`. This cannot be
+> configured via PR — a repository administrator must enable it.
+
 ## INVARIANT-11 — SBOM as Release Gate
 
 CycloneDX SBOM generation (Python + C library) **must** succeed as a required
 check on release tags. The C library SBOM should be generated from build-system
 metadata rather than a static placeholder when build tooling supports it.
+
+> **Enforcement gap:** Making the SBOM job a required status check on release
+> tags requires configuring GitHub branch protection rules or tag protection
+> rules. This cannot be configured via PR — a repository administrator must
+> add the check to the required status checks list.
 
 ---
 

@@ -904,7 +904,7 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
             raise QuantumSignatureUnavailableError(
                 f"Native dilithium_keypair failed with error code {rc}"
             )
-        return DilithiumKeyPair(secret_key=bytes(sk_buf), public_key=bytes(pk_buf))
+        return DilithiumKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -1013,6 +1013,11 @@ def dilithium_verify_ctx(message: bytes, signature: bytes, public_key: bytes, ct
         raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
     if not DILITHIUM_AVAILABLE:
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
+    if len(public_key) != DILITHIUM_PUBLIC_KEY_BYTES:
+        raise ValueError(
+            f"Invalid public key length: expected {DILITHIUM_PUBLIC_KEY_BYTES}, "
+            f"got {len(public_key)}"
+        )
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ama_dilithium_verify_ctx(
             message,
@@ -1066,7 +1071,7 @@ def generate_kyber_keypair() -> KyberKeyPair:
         )
         if rc != 0:
             raise KyberUnavailableError(f"Native kyber_keypair failed with error code {rc}")
-        return KyberKeyPair(secret_key=bytes(sk_buf), public_key=bytes(pk_buf))
+        return KyberKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
 
     raise KyberUnavailableError(_KYBER_UNKNOWN_STATE)
 
@@ -1222,7 +1227,7 @@ def generate_sphincs_keypair() -> SphincsKeyPair:
         rc = _native_lib.ama_sphincs_keypair(pk_buf, sk_buf)
         if rc != 0:
             raise SphincsUnavailableError(f"Native sphincs_keypair failed with error code {rc}")
-        return SphincsKeyPair(secret_key=bytes(sk_buf), public_key=bytes(pk_buf))
+        return SphincsKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
 
@@ -1348,6 +1353,11 @@ def sphincs_verify_ctx(message: bytes, signature: bytes, public_key: bytes, ctx:
         raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
     if not SPHINCS_AVAILABLE:
         raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
+    if len(public_key) != SPHINCS_PUBLIC_KEY_BYTES:
+        raise ValueError(
+            f"Invalid public key length: expected {SPHINCS_PUBLIC_KEY_BYTES}, "
+            f"got {len(public_key)}"
+        )
     if SPHINCS_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ama_sphincs_verify_ctx(
             message,
@@ -1432,7 +1442,7 @@ def native_ed25519_keypair_from_seed(seed: bytes) -> tuple:
     return bytes(pk_buf), bytes(sk_buf)
 
 
-def native_ed25519_sign(message: bytes, secret_key: bytes) -> bytes:
+def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """
     Sign message with Ed25519 using native C backend.
 
@@ -1457,7 +1467,9 @@ def native_ed25519_sign(message: bytes, secret_key: bytes) -> bytes:
         )
 
     sig_buf = ctypes.create_string_buffer(ED25519_SIGNATURE_BYTES)
-    rc = _native_lib.ama_ed25519_sign(sig_buf, message, ctypes.c_size_t(len(message)), secret_key)
+    # Convert bytearray to bytes for ctypes c_char_p compatibility
+    sk_bytes = bytes(secret_key) if isinstance(secret_key, bytearray) else secret_key
+    rc = _native_lib.ama_ed25519_sign(sig_buf, message, ctypes.c_size_t(len(message)), sk_bytes)
     if rc != 0:
         raise RuntimeError(f"Ed25519 signing failed (rc={rc})")
 
@@ -1850,7 +1862,9 @@ class DilithiumProvider:
             _DilithiumKATKeyPair with public_key and secret_key attributes
         """
         kp = generate_dilithium_keypair()
-        return _DilithiumKATKeyPair(public_key=kp.public_key, secret_key=kp.secret_key)
+        # Copy secret_key to detach from DilithiumKeyPair's bytearray;
+        # DilithiumKeyPair.__del__ wipes its own copy on scope exit.
+        return _DilithiumKATKeyPair(public_key=kp.public_key, secret_key=bytearray(kp.secret_key))
 
     def sign(self, message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
         """
@@ -1912,7 +1926,9 @@ class KyberProvider:
             _KyberKATKeyPair with public_key and secret_key attributes
         """
         kp = generate_kyber_keypair()
-        return _KyberKATKeyPair(public_key=kp.public_key, secret_key=kp.secret_key)
+        # Copy secret_key to detach from KyberKeyPair's bytearray;
+        # KyberKeyPair.__del__ wipes its own copy on scope exit.
+        return _KyberKATKeyPair(public_key=kp.public_key, secret_key=bytearray(kp.secret_key))
 
     def encapsulate(self, public_key: bytes) -> tuple:
         """
@@ -2069,6 +2085,12 @@ def native_argon2id(
         raise ValueError(f"Argon2id salt must be >= 8 bytes, got {len(salt)}")
     if out_len <= 0:
         raise ValueError(f"Argon2id output length must be > 0, got {out_len}")
+    if t_cost < 1:
+        raise ValueError(f"Argon2id t_cost must be >= 1, got {t_cost}")
+    if m_cost < 8:
+        raise ValueError(f"Argon2id m_cost must be >= 8 KiB, got {m_cost}")
+    if parallelism < 1:
+        raise ValueError(f"Argon2id parallelism must be >= 1, got {parallelism}")
 
     out_buf = ctypes.create_string_buffer(out_len)
     rc = _native_lib.ama_argon2id(
