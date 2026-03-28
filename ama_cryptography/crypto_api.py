@@ -322,9 +322,11 @@ class MLDSAProvider(CryptoProvider):
             )
 
         kp = generate_dilithium_keypair()
+        # Copy secret_key to detach from DilithiumKeyPair's bytearray;
+        # DilithiumKeyPair.__del__ wipes its own copy on scope exit.
         return KeyPair(
             public_key=kp.public_key,
-            secret_key=kp.secret_key,
+            secret_key=bytearray(kp.secret_key),
             algorithm=self.algorithm,
             metadata={
                 "backend": self._backend_name,
@@ -522,9 +524,11 @@ class KyberProvider(KEMProvider):
         """
         keypair = generate_kyber_keypair()
 
+        # Copy secret_key to detach from KyberKeyPair's bytearray;
+        # KyberKeyPair.__del__ wipes its own copy on scope exit.
         return KeyPair(
             public_key=keypair.public_key,
-            secret_key=keypair.secret_key,
+            secret_key=bytearray(keypair.secret_key),
             algorithm=self.algorithm,
             metadata={
                 "backend": KYBER_BACKEND,
@@ -623,9 +627,11 @@ class SphincsProvider(CryptoProvider):
         """
         keypair = generate_sphincs_keypair()
 
+        # Copy secret_key to detach from SphincsKeyPair's bytearray;
+        # SphincsKeyPair.__del__ wipes its own copy on scope exit.
         return KeyPair(
             public_key=keypair.public_key,
-            secret_key=keypair.secret_key,
+            secret_key=bytearray(keypair.secret_key),
             algorithm=self.algorithm,
             metadata={
                 "backend": SPHINCS_BACKEND,
