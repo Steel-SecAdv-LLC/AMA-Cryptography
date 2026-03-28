@@ -204,7 +204,7 @@ class KeyPair:
     """
 
     public_key: bytes
-    secret_key: bytes = field(repr=False)  # SENSITIVE - excluded from repr to prevent exposure
+    secret_key: Union[bytes, bytearray] = field(repr=False)  # SENSITIVE - excluded from repr
     algorithm: AlgorithmType
     metadata: Dict[str, Any]
 
@@ -254,7 +254,7 @@ class CryptoProvider(ABC):
         pass
 
     @abstractmethod
-    def sign(self, message: bytes, secret_key: bytes) -> Signature:
+    def sign(self, message: bytes, secret_key: Union[bytes, bytearray]) -> Signature:
         """Sign a message"""
         pass
 
@@ -278,7 +278,7 @@ class KEMProvider(ABC):
         pass
 
     @abstractmethod
-    def decapsulate(self, ciphertext: bytes, secret_key: bytes) -> bytes:
+    def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
         """Decapsulate a shared secret"""
         pass
 
@@ -330,7 +330,7 @@ class MLDSAProvider(CryptoProvider):
             },
         )
 
-    def sign(self, message: bytes, secret_key: bytes) -> Signature:
+    def sign(self, message: bytes, secret_key: Union[bytes, bytearray]) -> Signature:
         """
         Sign message with ML-DSA-65.
 
@@ -420,7 +420,7 @@ class Ed25519Provider(CryptoProvider):
             metadata={"backend": "native_c", "key_size": 32},
         )
 
-    def sign(self, message: bytes, secret_key: bytes) -> Signature:
+    def sign(self, message: bytes, secret_key: Union[bytes, bytearray]) -> Signature:
         """
         Sign message with Ed25519 using native C backend.
 
@@ -438,7 +438,7 @@ class Ed25519Provider(CryptoProvider):
 
         # Handle 32-byte seed: expand to 64-byte native format
         if len(secret_key) == 32:
-            _, full_sk = native_ed25519_keypair_from_seed(secret_key)
+            _, full_sk = native_ed25519_keypair_from_seed(bytes(secret_key))
         elif len(secret_key) == 64:
             full_sk = secret_key
         else:
@@ -555,7 +555,7 @@ class KyberProvider(KEMProvider):
             },
         )
 
-    def decapsulate(self, ciphertext: bytes, secret_key: bytes) -> bytes:
+    def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
         """
         Decapsulate a shared secret using Kyber-1024.
 
@@ -630,7 +630,7 @@ class SphincsProvider(CryptoProvider):
             },
         )
 
-    def sign(self, message: bytes, secret_key: bytes) -> Signature:
+    def sign(self, message: bytes, secret_key: Union[bytes, bytearray]) -> Signature:
         """
         Sign message with SPHINCS+-256f.
 
@@ -1130,7 +1130,7 @@ class HybridKEMProvider(KEMProvider):
             metadata={"backend": "hybrid_kem"},
         )
 
-    def decapsulate(self, ciphertext: bytes, secret_key: bytes) -> bytes:
+    def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
         """Split ciphertext and secret key, recover both shared secrets, combine."""
         from ama_cryptography.pqc_backends import native_x25519_key_exchange
 
@@ -1139,12 +1139,13 @@ class HybridKEMProvider(KEMProvider):
         kyber_ct: bytes = ciphertext[self._X25519_KEY_BYTES :]
 
         # Split secret key: x25519_sk (32) || x25519_pk (32) || kyber_sk || kyber_pub
-        x25519_sk: bytes = secret_key[: self._X25519_KEY_BYTES]
-        x25519_pub: bytes = secret_key[self._X25519_KEY_BYTES : 2 * self._X25519_KEY_BYTES]
-        kyber_sk: bytes = secret_key[
+        sk_bytes = bytes(secret_key)
+        x25519_sk: bytes = sk_bytes[: self._X25519_KEY_BYTES]
+        x25519_pub: bytes = sk_bytes[self._X25519_KEY_BYTES : 2 * self._X25519_KEY_BYTES]
+        kyber_sk: bytes = sk_bytes[
             2 * self._X25519_KEY_BYTES : 2 * self._X25519_KEY_BYTES + KYBER_SECRET_KEY_BYTES
         ]
-        kyber_pub: bytes = secret_key[2 * self._X25519_KEY_BYTES + KYBER_SECRET_KEY_BYTES :]
+        kyber_pub: bytes = sk_bytes[2 * self._X25519_KEY_BYTES + KYBER_SECRET_KEY_BYTES :]
 
         # Recover shared secrets
         x25519_ss: bytes = native_x25519_key_exchange(x25519_sk, x25519_eph_pub)
@@ -1228,7 +1229,7 @@ class HybridSignatureProvider(CryptoProvider):
             },
         )
 
-    def sign(self, message: bytes, secret_key: bytes) -> Signature:
+    def sign(self, message: bytes, secret_key: Union[bytes, bytearray]) -> Signature:
         """
         Create hybrid signature (Ed25519 + ML-DSA-65).
 
@@ -1363,7 +1364,7 @@ class AmaCryptography:
             raise TypeError("AES-256-GCM does not support keypair generation")
         return self.provider.generate_keypair()
 
-    def sign(self, message: bytes, secret_key: bytes) -> Signature:
+    def sign(self, message: bytes, secret_key: Union[bytes, bytearray]) -> Signature:
         """Sign a message"""
         _check_operational()
         if not isinstance(self.provider, CryptoProvider):
@@ -1384,7 +1385,7 @@ class AmaCryptography:
             raise TypeError("Current algorithm does not support KEM")
         return self.provider.encapsulate(public_key)
 
-    def decapsulate(self, ciphertext: bytes, secret_key: bytes) -> bytes:
+    def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
         """Decapsulate a shared secret (KEM)"""
         _check_operational()
         if not isinstance(self.provider, KEMProvider):

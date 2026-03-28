@@ -1,7 +1,7 @@
 # AMA Cryptography — Architectural Invariants
 
 > **Policy document.** Every PR that touches `ama_cryptography/`, `.github/workflows/`,
-> or `tests/` **must** satisfy all four invariants below.
+> or `tests/` **must** satisfy all invariants below.
 > Reviewers: reject any PR that violates them.
 
 ---

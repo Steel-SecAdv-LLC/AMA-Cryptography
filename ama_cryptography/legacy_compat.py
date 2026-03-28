@@ -143,7 +143,7 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
     return _pqc_generate_dilithium_keypair()
 
 
-def dilithium_sign(message: bytes, secret_key: bytes) -> bytes:
+def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """Sign message with CRYSTALS-Dilithium (ML-DSA-65)."""
     import sys
 

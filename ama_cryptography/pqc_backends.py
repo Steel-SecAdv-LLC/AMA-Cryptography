@@ -43,7 +43,7 @@ import platform
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
 
 from ama_cryptography.exceptions import (
     PQCUnavailableError,
@@ -776,16 +776,16 @@ class DilithiumKeyPair:
     securely zeroed via ``wipe()`` or the ``__del__`` destructor.
     """
 
-    secret_key: bytearray = field(repr=False)  # 4032 bytes for ML-DSA-65
+    secret_key: Union[bytes, bytearray] = field(repr=False)  # 4032 bytes for ML-DSA-65
     public_key: bytes  # 1952 bytes for ML-DSA-65
 
     def __post_init__(self) -> None:
         if isinstance(self.secret_key, bytes):
-            self.secret_key = bytearray(self.secret_key)
+            object.__setattr__(self, "secret_key", bytearray(self.secret_key))
 
     def wipe(self) -> None:
         """Securely zero secret key material."""
-        if self.secret_key:
+        if isinstance(self.secret_key, bytearray):
             secure_memzero(self.secret_key)
 
     def __del__(self) -> None:
@@ -813,16 +813,16 @@ class KyberKeyPair:
     securely zeroed via ``wipe()`` or the ``__del__`` destructor.
     """
 
-    secret_key: bytearray = field(repr=False)  # 3168 bytes for Kyber-1024
+    secret_key: Union[bytes, bytearray] = field(repr=False)  # 3168 bytes for Kyber-1024
     public_key: bytes  # 1568 bytes for Kyber-1024
 
     def __post_init__(self) -> None:
         if isinstance(self.secret_key, bytes):
-            self.secret_key = bytearray(self.secret_key)
+            object.__setattr__(self, "secret_key", bytearray(self.secret_key))
 
     def wipe(self) -> None:
         """Securely zero secret key material."""
-        if self.secret_key:
+        if isinstance(self.secret_key, bytearray):
             secure_memzero(self.secret_key)
 
     def __del__(self) -> None:
@@ -864,16 +864,16 @@ class SphincsKeyPair:
     securely zeroed via ``wipe()`` or the ``__del__`` destructor.
     """
 
-    secret_key: bytearray = field(repr=False)  # 128 bytes for SPHINCS+-256f
+    secret_key: Union[bytes, bytearray] = field(repr=False)  # 128 bytes for SPHINCS+-256f
     public_key: bytes  # 64 bytes for SPHINCS+-256f
 
     def __post_init__(self) -> None:
         if isinstance(self.secret_key, bytes):
-            self.secret_key = bytearray(self.secret_key)
+            object.__setattr__(self, "secret_key", bytearray(self.secret_key))
 
     def wipe(self) -> None:
         """Securely zero secret key material."""
-        if self.secret_key:
+        if isinstance(self.secret_key, bytearray):
             secure_memzero(self.secret_key)
 
     def __del__(self) -> None:
@@ -904,12 +904,12 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
             raise QuantumSignatureUnavailableError(
                 f"Native dilithium_keypair failed with error code {rc}"
             )
-        return DilithiumKeyPair(secret_key=bytes(sk_buf), public_key=bytes(pk_buf))
+        return DilithiumKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
 
-def dilithium_sign(message: bytes, secret_key: bytes) -> bytes:
+def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """
     Sign message with CRYSTALS-Dilithium (ML-DSA-65).
 
@@ -1069,7 +1069,7 @@ def generate_kyber_keypair() -> KyberKeyPair:
         )
         if rc != 0:
             raise KyberUnavailableError(f"Native kyber_keypair failed with error code {rc}")
-        return KyberKeyPair(secret_key=bytes(sk_buf), public_key=bytes(pk_buf))
+        return KyberKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
 
     raise KyberUnavailableError(_KYBER_UNKNOWN_STATE)
 
@@ -1131,7 +1131,7 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
     raise KyberUnavailableError(_KYBER_UNKNOWN_STATE)
 
 
-def kyber_decapsulate(ciphertext: bytes, secret_key: bytes) -> bytes:
+def kyber_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """
     Decapsulate a shared secret using Kyber-1024.
 
@@ -1223,12 +1223,12 @@ def generate_sphincs_keypair() -> SphincsKeyPair:
         rc = _native_lib.ama_sphincs_keypair(pk_buf, sk_buf)
         if rc != 0:
             raise SphincsUnavailableError(f"Native sphincs_keypair failed with error code {rc}")
-        return SphincsKeyPair(secret_key=bytes(sk_buf), public_key=bytes(pk_buf))
+        return SphincsKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
 
 
-def sphincs_sign(message: bytes, secret_key: bytes) -> bytes:
+def sphincs_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """
     Sign message with SPHINCS+-SHA2-256f-simple.
 
@@ -1823,7 +1823,7 @@ class _DilithiumKATKeyPair:
     """Internal keypair structure for KAT test compatibility."""
 
     public_key: bytes
-    secret_key: bytes
+    secret_key: Union[bytes, bytearray]
 
 
 class DilithiumProvider:
@@ -1851,7 +1851,7 @@ class DilithiumProvider:
         kp = generate_dilithium_keypair()
         return _DilithiumKATKeyPair(public_key=kp.public_key, secret_key=kp.secret_key)
 
-    def sign(self, message: bytes, secret_key: bytes) -> bytes:
+    def sign(self, message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
         """
         Sign a message with Dilithium.
 
@@ -1884,7 +1884,7 @@ class _KyberKATKeyPair:
     """Internal keypair structure for KAT test compatibility."""
 
     public_key: bytes
-    secret_key: bytes
+    secret_key: Union[bytes, bytearray]
 
 
 class KyberProvider:
@@ -1926,7 +1926,7 @@ class KyberProvider:
         result = kyber_encapsulate(public_key)
         return (result.ciphertext, result.shared_secret)
 
-    def decapsulate(self, ciphertext: bytes, secret_key: bytes) -> bytes:
+    def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
         """
         Decapsulate a shared secret.
 
