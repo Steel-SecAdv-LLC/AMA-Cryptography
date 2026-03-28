@@ -52,6 +52,11 @@ jobs:
           bandit-report.json
         retention-days: 90
 
+  # INVARIANT-11: SBOM generation is required for release tags.
+  # TODO: Add this job to the required status checks for release tag pushes
+  # once GitHub branch protection rules for tags are configured.
+  # The C library SBOM below is a static placeholder — replace with
+  # build-system-generated metadata when CMake emits component info.
   sbom:
     name: SBOM Generation (CycloneDX)
     runs-on: ubuntu-latest

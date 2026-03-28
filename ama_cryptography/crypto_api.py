@@ -77,7 +77,11 @@ try:
     _HMAC_NATIVE = _HMAC_SHA3_256_NATIVE_AVAILABLE
     _HKDF_NATIVE = _HKDF_NATIVE_AVAILABLE
 except ImportError:
-    pass  # native C accelerators are optional; pure-Python HMAC/HKDF fallback is used
+    logging.getLogger(__name__).warning(
+        "native HMAC/HKDF C accelerators unavailable, using pure-Python "
+        "fallback without constant-time guarantees. Production deployments "
+        "MUST set AMA_REQUIRE_CONSTANT_TIME=true."
+    )
 
 
 def _hmac_sha3_256(key: bytes, msg: bytes) -> bytes:

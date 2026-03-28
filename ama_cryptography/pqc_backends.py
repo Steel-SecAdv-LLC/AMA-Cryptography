@@ -37,6 +37,7 @@ AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 """
 
 import ctypes
+import logging
 import os
 import platform
 from dataclasses import dataclass, field
@@ -49,6 +50,9 @@ from ama_cryptography.exceptions import (
     QuantumSignatureUnavailableError,
     SecurityWarning,
 )
+from ama_cryptography.secure_memory import secure_memzero
+
+_logger = logging.getLogger(__name__)
 
 __all__ = [
     "PQCUnavailableError",
@@ -767,10 +771,28 @@ class DilithiumKeyPair:
 
     Security: 192-bit quantum security (NIST Security Level 3)
     Standard: NIST FIPS 204 (ML-DSA)
+
+    INVARIANT-6: secret_key is stored as a mutable bytearray so it can be
+    securely zeroed via ``wipe()`` or the ``__del__`` destructor.
     """
 
-    secret_key: bytes = field(repr=False)  # 4032 bytes for ML-DSA-65 (excluded from repr)
+    secret_key: bytearray = field(repr=False)  # 4032 bytes for ML-DSA-65
     public_key: bytes  # 1952 bytes for ML-DSA-65
+
+    def __post_init__(self) -> None:
+        if isinstance(self.secret_key, bytes):
+            self.secret_key = bytearray(self.secret_key)
+
+    def wipe(self) -> None:
+        """Securely zero secret key material."""
+        if self.secret_key:
+            secure_memzero(self.secret_key)
+
+    def __del__(self) -> None:
+        try:
+            self.wipe()
+        except Exception:  # noqa: S110 — __del__ must not raise
+            pass
 
 
 @dataclass
@@ -786,10 +808,28 @@ class KyberKeyPair:
 
     Security: 256-bit classical / 128-bit quantum security (NIST Security Level 5)
     Standard: NIST FIPS 203 (ML-KEM)
+
+    INVARIANT-6: secret_key is stored as a mutable bytearray so it can be
+    securely zeroed via ``wipe()`` or the ``__del__`` destructor.
     """
 
-    secret_key: bytes = field(repr=False)  # 3168 bytes for Kyber-1024 (excluded from repr)
+    secret_key: bytearray = field(repr=False)  # 3168 bytes for Kyber-1024
     public_key: bytes  # 1568 bytes for Kyber-1024
+
+    def __post_init__(self) -> None:
+        if isinstance(self.secret_key, bytes):
+            self.secret_key = bytearray(self.secret_key)
+
+    def wipe(self) -> None:
+        """Securely zero secret key material."""
+        if self.secret_key:
+            secure_memzero(self.secret_key)
+
+    def __del__(self) -> None:
+        try:
+            self.wipe()
+        except Exception:  # noqa: S110 — __del__ must not raise
+            pass
 
 
 @dataclass
@@ -819,10 +859,28 @@ class SphincsKeyPair:
 
     Note: SPHINCS+ signatures are large (~49KB) but provide stateless
     hash-based security with no risk of key reuse vulnerabilities.
+
+    INVARIANT-6: secret_key is stored as a mutable bytearray so it can be
+    securely zeroed via ``wipe()`` or the ``__del__`` destructor.
     """
 
-    secret_key: bytes = field(repr=False)  # 128 bytes for SPHINCS+-256f (excluded from repr)
+    secret_key: bytearray = field(repr=False)  # 128 bytes for SPHINCS+-256f
     public_key: bytes  # 64 bytes for SPHINCS+-256f
+
+    def __post_init__(self) -> None:
+        if isinstance(self.secret_key, bytes):
+            self.secret_key = bytearray(self.secret_key)
+
+    def wipe(self) -> None:
+        """Securely zero secret key material."""
+        if self.secret_key:
+            secure_memzero(self.secret_key)
+
+    def __del__(self) -> None:
+        try:
+            self.wipe()
+        except Exception:  # noqa: S110 — __del__ must not raise
+            pass
 
 
 def generate_dilithium_keypair() -> DilithiumKeyPair:
@@ -868,6 +926,12 @@ def dilithium_sign(message: bytes, secret_key: bytes) -> bytes:
     if not DILITHIUM_AVAILABLE:
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
 
+    if len(secret_key) != DILITHIUM_SECRET_KEY_BYTES:
+        raise ValueError(
+            f"Invalid secret key length: expected {DILITHIUM_SECRET_KEY_BYTES}, "
+            f"got {len(secret_key)}"
+        )
+
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(DILITHIUM_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(DILITHIUM_SIGNATURE_BYTES)
@@ -904,6 +968,17 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
     """
     if not DILITHIUM_AVAILABLE:
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
+
+    if len(signature) != DILITHIUM_SIGNATURE_BYTES:
+        raise ValueError(
+            f"Invalid signature length: expected {DILITHIUM_SIGNATURE_BYTES}, "
+            f"got {len(signature)}"
+        )
+    if len(public_key) != DILITHIUM_PUBLIC_KEY_BYTES:
+        raise ValueError(
+            f"Invalid public key length: expected {DILITHIUM_PUBLIC_KEY_BYTES}, "
+            f"got {len(public_key)}"
+        )
 
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ama_dilithium_verify(
@@ -1988,6 +2063,11 @@ def native_argon2id(
     """
     if _native_lib is None or not _ARGON2_NATIVE_AVAILABLE:
         raise RuntimeError("Argon2id native backend not available. " + _INSTALL_HINT)
+
+    if len(salt) < 8:
+        raise ValueError(f"Argon2id salt must be >= 8 bytes, got {len(salt)}")
+    if out_len <= 0:
+        raise ValueError(f"Argon2id output length must be > 0, got {out_len}")
 
     out_buf = ctypes.create_string_buffer(out_len)
     rc = _native_lib.ama_argon2id(

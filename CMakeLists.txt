@@ -45,6 +45,30 @@ if(MSVC AND NOT AMA_ED25519_ASSEMBLY)
     endif()
 endif()
 
+# INVARIANT-8: Minimum compiler versions for correct constant-time code
+# generation and SIMD intrinsics.  Reference build: ubuntu:22.04 + GCC 12.
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    if(CMAKE_C_COMPILER_VERSION VERSION_LESS "12")
+        message(WARNING
+            "GCC ${CMAKE_C_COMPILER_VERSION} detected. "
+            "GCC >= 12 is required for reliable constant-time code generation "
+            "and full AVX2/NEON intrinsic support. Build may succeed but is "
+            "not part of the verified reference environment (INVARIANT-8).")
+    endif()
+elseif(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang")
+    if(CMAKE_C_COMPILER_VERSION VERSION_LESS "15")
+        message(WARNING
+            "Clang ${CMAKE_C_COMPILER_VERSION} detected. "
+            "Clang >= 15 is required for reliable constant-time code generation. "
+            "Build may succeed but is not part of the verified reference "
+            "environment (INVARIANT-8).")
+    endif()
+elseif(NOT MSVC)
+    message(WARNING
+        "Unknown compiler ${CMAKE_C_COMPILER_ID}. "
+        "Only GCC >= 12, Clang >= 15, and MSVC are tested (INVARIANT-8).")
+endif()
+
 # C standard
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
