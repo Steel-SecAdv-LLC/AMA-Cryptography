@@ -139,7 +139,7 @@ Example:
 - [ ] No security warnings from linters (Bandit, etc.)
 - [ ] Black formatting applied (`black .`)
 - [ ] Ruff linting passed (`ruff check .`)
-- [ ] Type checking passed (`mypy code_guardian_secure.py`)
+- [ ] Type checking passed (`mypy ama_cryptography/`)
 
 ### Documentation Updates
 <!-- Mark all documentation that was updated -->

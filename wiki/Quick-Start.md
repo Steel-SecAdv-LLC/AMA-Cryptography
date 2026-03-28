@@ -36,7 +36,7 @@ print(status)
 
 ## 3. Create and Verify a Crypto Package
 
-The main high-level API uses `ama_cryptography.crypto_api` which orchestrates all cryptographic layers. (`code_guardian_secure.py` is a legacy wrapper and is deprecated.)
+The main high-level API uses `ama_cryptography.crypto_api` which orchestrates all cryptographic layers. (legacy functions are available via `ama_cryptography.legacy_compat`)
 
 ```python
 from ama_cryptography.crypto_api import (

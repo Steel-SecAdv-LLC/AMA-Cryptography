@@ -43,7 +43,7 @@ class TestHKDFSHA3256:
 
     def test_hkdf_sha3_256_deterministic(self) -> None:
         """Test that HKDF-SHA3-256 produces deterministic outputs with same salt."""
-        from code_guardian_secure import derive_keys
+        from ama_cryptography.legacy_compat import derive_keys
 
         master_secret = b"test_master_secret_32_bytes_long"
         info = "test_context"
@@ -61,7 +61,7 @@ class TestHKDFSHA3256:
 
     def test_hkdf_sha3_256_different_info_produces_different_keys(self) -> None:
         """Test that different info parameters produce different keys."""
-        from code_guardian_secure import derive_keys
+        from ama_cryptography.legacy_compat import derive_keys
 
         master_secret = b"test_master_secret_32_bytes_long"
         fixed_salt = b"fixed_salt_for_testing_32_bytes!"
@@ -74,7 +74,7 @@ class TestHKDFSHA3256:
 
     def test_hkdf_sha3_256_different_master_produces_different_keys(self) -> None:
         """Test that different master secrets produce different keys."""
-        from code_guardian_secure import derive_keys
+        from ama_cryptography.legacy_compat import derive_keys
 
         master1 = b"master_secret_one_32_bytes_long!"
         master2 = b"master_secret_two_32_bytes_long!"
@@ -89,7 +89,7 @@ class TestHKDFSHA3256:
 
     def test_hkdf_sha3_256_key_independence(self) -> None:
         """Test that derived keys are independent of each other."""
-        from code_guardian_secure import derive_keys
+        from ama_cryptography.legacy_compat import derive_keys
 
         master_secret = b"test_master_secret_32_bytes_long"
         info = "test_context"
@@ -110,7 +110,7 @@ class TestHKDFSHA3256:
 
     def test_hkdf_sha3_256_minimum_master_secret_length(self) -> None:
         """Test that master secret must be at least 32 bytes."""
-        from code_guardian_secure import derive_keys
+        from ama_cryptography.legacy_compat import derive_keys
 
         # Should raise ValueError for short master secret
         with pytest.raises(ValueError, match="at least 32 bytes"):
@@ -126,7 +126,7 @@ class TestEthicalHKDFContext:
 
     def test_ethical_context_creation(self) -> None:
         """Test that ethical context is properly created."""
-        from code_guardian_secure import create_ethical_hkdf_context
+        from ama_cryptography.legacy_compat import create_ethical_hkdf_context
 
         base_context = b"base_context"
         enhanced = create_ethical_hkdf_context(base_context)
@@ -138,7 +138,7 @@ class TestEthicalHKDFContext:
 
     def test_ethical_context_deterministic(self) -> None:
         """Test that ethical context creation is deterministic."""
-        from code_guardian_secure import create_ethical_hkdf_context
+        from ama_cryptography.legacy_compat import create_ethical_hkdf_context
 
         base_context = b"base_context"
 
@@ -149,7 +149,7 @@ class TestEthicalHKDFContext:
 
     def test_ethical_context_different_vectors_produce_different_contexts(self) -> None:
         """Test that different ethical vectors produce different contexts."""
-        from code_guardian_secure import create_ethical_hkdf_context
+        from ama_cryptography.legacy_compat import create_ethical_hkdf_context
 
         base_context = b"base_context"
 
@@ -170,7 +170,7 @@ class TestEthicalHKDFContext:
 
     def test_ethical_vector_affects_derived_keys(self) -> None:
         """Test that ethical vector changes affect derived keys."""
-        from code_guardian_secure import derive_keys
+        from ama_cryptography.legacy_compat import derive_keys
 
         master_secret = b"test_master_secret_32_bytes_long"
         info = "test_context"
@@ -199,7 +199,7 @@ class TestHMACSHA3256:
 
     def test_hmac_sha3_256_deterministic(self) -> None:
         """Test that HMAC-SHA3-256 produces deterministic outputs."""
-        from code_guardian_secure import hmac_authenticate
+        from ama_cryptography.legacy_compat import hmac_authenticate
 
         key = b"x" * 32
         message = b"test message"
@@ -212,7 +212,7 @@ class TestHMACSHA3256:
 
     def test_hmac_sha3_256_verification(self) -> None:
         """Test HMAC-SHA3-256 verification."""
-        from code_guardian_secure import hmac_authenticate, hmac_verify
+        from ama_cryptography.legacy_compat import hmac_authenticate, hmac_verify
 
         key = b"x" * 32
         message = b"test message"
@@ -231,7 +231,7 @@ class TestHMACSHA3256:
 
     def test_hmac_sha3_256_minimum_key_length(self) -> None:
         """Test that HMAC key must be at least 32 bytes."""
-        from code_guardian_secure import hmac_authenticate
+        from ama_cryptography.legacy_compat import hmac_authenticate
 
         # Should raise ValueError for short key
         with pytest.raises(ValueError, match="at least 32 bytes"):
@@ -420,7 +420,7 @@ class TestProjectSpecificVectors:
         The ethical signature is SHA3-256(JSON(ETHICAL_VECTOR))[:16].
         This test validates the ethical vector constraints and signature.
         """
-        from code_guardian_secure import ETHICAL_VECTOR
+        from ama_cryptography.equations import ETHICAL_VECTOR
 
         # Verify the ethical vector constraint
         assert sum(ETHICAL_VECTOR.values()) == 12.0, "Ethical vector sum != 12.0"
@@ -445,7 +445,7 @@ class TestKeyManagementSystem:
 
     def test_kms_generation_uses_hkdf_sha3_256(self) -> None:
         """Test that KMS generation uses HKDF-SHA3-256."""
-        from code_guardian_secure import generate_key_management_system
+        from ama_cryptography.legacy_compat import generate_key_management_system
 
         kms = generate_key_management_system("test_author")
 
@@ -459,7 +459,7 @@ class TestKeyManagementSystem:
 
     def test_kms_deterministic_with_same_master_secret(self) -> None:
         """Test that KMS derivation is deterministic given same master secret and salt."""
-        from code_guardian_secure import derive_keys
+        from ama_cryptography.legacy_compat import derive_keys
 
         # Fixed master secret and salt for testing
         master_secret = b"fixed_master_secret_32_bytes_lo!"

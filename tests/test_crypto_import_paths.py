@@ -38,7 +38,7 @@ from urllib.parse import urlparse
 
 import pytest
 
-import code_guardian_secure as dgs
+import ama_cryptography.legacy_compat as dgs
 
 # ============================================================================
 # CRYPTO_AVAILABLE=False TESTS
@@ -149,7 +149,10 @@ class TestRFC3161SuccessPath:
         """Test package creation with successful RFC 3161 timestamp."""
         kms = dgs.generate_key_management_system("test_author")
 
-        with patch("code_guardian_secure.get_rfc3161_timestamp", return_value=b"TSR") as mock_tsa:
+        with patch(
+            "ama_cryptography.legacy_compat.get_rfc3161_timestamp",
+            return_value=b"TSR",
+        ) as mock_tsa:
             pkg = dgs.create_crypto_package(
                 dgs.MASTER_CODES,
                 dgs.MASTER_HELIX_PARAMS,
@@ -204,7 +207,7 @@ class TestDilithiumUnavailablePaths:
         monkeypatch.setattr(dgs, "DILITHIUM_AVAILABLE", True)
         monkeypatch.setattr(dgs, "generate_dilithium_keypair", boom)
 
-        with caplog.at_level(logging.WARNING, logger="code_guardian_secure"):
+        with caplog.at_level(logging.WARNING, logger="ama_cryptography.legacy_compat"):
             kms = dgs.generate_key_management_system("author")
         assert "Quantum-resistant signatures disabled" in caplog.text
         assert kms.quantum_signatures_enabled is False
@@ -216,7 +219,7 @@ class TestDilithiumUnavailablePaths:
 
         monkeypatch.setattr(dgs, "DILITHIUM_AVAILABLE", False)
 
-        with caplog.at_level(logging.WARNING, logger="code_guardian_secure"):
+        with caplog.at_level(logging.WARNING, logger="ama_cryptography.legacy_compat"):
             kms = dgs.generate_key_management_system("author")
         assert "Quantum-resistant signatures disabled" in caplog.text
         assert "native C library" in caplog.text
@@ -236,7 +239,7 @@ class TestDilithiumUnavailablePaths:
         kms.dilithium_keypair = None
 
         out_dir = tmp_path / "keys"
-        with caplog.at_level(logging.WARNING, logger="code_guardian_secure"):
+        with caplog.at_level(logging.WARNING, logger="ama_cryptography.legacy_compat"):
             dgs.export_public_keys(kms, out_dir)
         readme = (out_dir / "README.txt").read_text()
         assert "Dilithium Public Key: NOT AVAILABLE" in readme

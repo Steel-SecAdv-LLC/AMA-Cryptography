@@ -158,7 +158,7 @@ Expected output:
 ### Run the Demo
 
 ```bash
-python3 code_guardian_secure.py
+python3 -m ama_cryptography
 ```
 
 Expected:

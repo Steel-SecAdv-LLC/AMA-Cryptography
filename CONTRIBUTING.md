@@ -101,7 +101,7 @@ pip install -e ".[dev]"  # Installs pytest, ruff, mypy, bandit (and black on Pyt
 
 ```bash
 # Run the demonstration
-python code_guardian_secure.py
+python -m ama_cryptography
 
 # Expected output should include "ALL VERIFICATIONS PASSED"
 ```

@@ -255,7 +255,7 @@ def bench_sha3_python_api():
 
 # Package create/verify
 def bench_package_create():
-    from code_guardian_secure import (
+    from ama_cryptography.legacy_compat import (
         create_crypto_package,
         generate_key_management_system,
     )
@@ -277,7 +277,7 @@ def bench_package_create():
 
 
 def bench_package_verify():
-    from code_guardian_secure import (
+    from ama_cryptography.legacy_compat import (
         create_crypto_package,
         generate_key_management_system,
         verify_crypto_package,

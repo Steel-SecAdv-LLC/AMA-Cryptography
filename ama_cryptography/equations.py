@@ -80,6 +80,12 @@ __all__ = [
     "LAMBDA_DECAY",
     "OMNI_CODES",
     "HELIX_PARAMS",
+    "CODES_INDIVIDUAL",
+    "MASTER_HELIX_PARAMS",
+    "MASTER_CODES",
+    "CODE_NAMES",
+    "MASTER_CODES_STR",
+    "ETHICAL_VECTOR",
     "helix_curvature",
     "helix_torsion",
     "verify_fundamental_relation",
@@ -126,6 +132,39 @@ HELIX_PARAMS = [
     (25.0, 0.1),  # Θ25M01ϵ
     (19.0, 1.1),  # Γ19L11ϖ
 ]
+
+# Backward-compatible aliases (formerly in code_guardian_secure.py)
+CODES_INDIVIDUAL = OMNI_CODES
+MASTER_HELIX_PARAMS = HELIX_PARAMS
+MASTER_CODES = "".join(OMNI_CODES)
+CODE_NAMES = [
+    "Omni-Directional System",
+    "Omni-Percipient Future",
+    "Omni-Indivisible Guardian",
+    "Omni-Benevolent Stone",
+    "Omni-Scient Curiosity",
+    "Omni-Universal Discipline",
+    "Omni-Potent Lifeforce",
+]
+MASTER_CODES_STR = "\n".join(OMNI_CODES)
+
+# 4 Ethical Pillars as balanced vector (Σw = 12.0, each pillar = 3.0)
+ETHICAL_VECTOR: Dict[str, float] = {
+    # Pillar 1: Omniscient — Triad of Wisdom (Verification Layer)
+    "omniscient": 3.0,
+    # Pillar 2: Omnipotent — Triad of Agency (Cryptographic Generation)
+    "omnipotent": 3.0,
+    # Pillar 3: Omnidirectional — Triad of Geography (Defense-in-Depth)
+    "omnidirectional": 3.0,
+    # Pillar 4: Omnibenevolent — Triad of Integrity (Ethical Constraints)
+    "omnibenevolent": 3.0,
+}
+
+# Verify balanced weighting - runtime check for fail-closed security
+if sum(ETHICAL_VECTOR.values()) != 12.0 or not all(w == 3.0 for w in ETHICAL_VECTOR.values()):
+    raise RuntimeError(
+        "ETHICAL_VECTOR configuration error: must have 4 weights of 3.0 each (Σw = 12.0)"
+    )
 
 
 # ============================================================================

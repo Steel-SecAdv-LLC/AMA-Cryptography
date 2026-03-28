@@ -36,7 +36,7 @@ class TestFullCryptoPackageLifecycle:
 
     def test_complete_sign_verify_workflow(self) -> None:
         """Test complete workflow: generate keys -> create package -> verify."""
-        from code_guardian_secure import (
+        from ama_cryptography.legacy_compat import (
             MASTER_CODES,
             MASTER_HELIX_PARAMS,
             create_crypto_package,
@@ -78,7 +78,7 @@ class TestFullCryptoPackageLifecycle:
 
     def test_package_serialization_roundtrip(self) -> None:
         """Test that packages can be serialized and deserialized correctly."""
-        from code_guardian_secure import (
+        from ama_cryptography.legacy_compat import (
             MASTER_CODES,
             MASTER_HELIX_PARAMS,
             CryptoPackage,
@@ -119,7 +119,7 @@ class TestFullCryptoPackageLifecycle:
 
     def test_tamper_detection(self) -> None:
         """Test that tampering with package data is detected."""
-        from code_guardian_secure import (
+        from ama_cryptography.legacy_compat import (
             MASTER_CODES,
             MASTER_HELIX_PARAMS,
             create_crypto_package,
@@ -375,7 +375,7 @@ class TestPerformanceRegression:
         """Test that hashing operations meet performance targets."""
         import sys
 
-        from code_guardian_secure import canonical_hash_code
+        from ama_cryptography.legacy_compat import canonical_hash_code
 
         # Large input
         large_codes = "A" * 10000
@@ -406,7 +406,7 @@ class TestHumanitarianUseCases:
 
     def test_crisis_data_protection(self) -> None:
         """Test protecting sensitive crisis response data."""
-        from code_guardian_secure import (
+        from ama_cryptography.legacy_compat import (
             create_crypto_package,
             generate_key_management_system,
             verify_crypto_package,
@@ -442,7 +442,7 @@ class TestHumanitarianUseCases:
 
     def test_whistleblower_document_signing(self) -> None:
         """Test document signing for whistleblower protection."""
-        from code_guardian_secure import (
+        from ama_cryptography.legacy_compat import (
             create_crypto_package,
             generate_key_management_system,
             verify_crypto_package,
@@ -475,7 +475,7 @@ class TestHumanitarianUseCases:
 
     def test_medical_record_integrity(self) -> None:
         """Test medical record integrity verification."""
-        from code_guardian_secure import (
+        from ama_cryptography.legacy_compat import (
             create_crypto_package,
             generate_key_management_system,
             verify_crypto_package,
@@ -520,7 +520,8 @@ class TestEthicalIntegration:
 
     def test_ethical_vector_in_key_derivation(self) -> None:
         """Test that ethical vector is properly integrated."""
-        from code_guardian_secure import ETHICAL_VECTOR, create_ethical_hkdf_context
+        from ama_cryptography.equations import ETHICAL_VECTOR
+        from ama_cryptography.legacy_compat import create_ethical_hkdf_context
 
         # Verify ethical vector structure
         assert len(ETHICAL_VECTOR) == 4
@@ -534,7 +535,7 @@ class TestEthicalIntegration:
 
     def test_ethical_pillars_coverage(self) -> None:
         """Test that all 4 Omni-Code ethical pillars are present."""
-        from code_guardian_secure import ETHICAL_VECTOR
+        from ama_cryptography.equations import ETHICAL_VECTOR
 
         # The 4 Omni-Code Ethical Pillars, each governing a triad
         expected_pillars = [

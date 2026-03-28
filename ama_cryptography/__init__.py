@@ -54,8 +54,14 @@ _post()
 # no availability-check side effects and are the most frequently used exports.
 from .double_helix_engine import AmaEquationEngine
 from .equations import (
+    CODE_NAMES,
+    CODES_INDIVIDUAL,
+    ETHICAL_VECTOR,
     HELIX_PARAMS,
     LAMBDA_DECAY,
+    MASTER_CODES,
+    MASTER_CODES_STR,
+    MASTER_HELIX_PARAMS,
     OMNI_CODES,
     PHI,
     PHI_CUBED,
@@ -72,6 +78,7 @@ from .equations import (
     verify_all_codes,
     verify_mathematical_foundations,
 )
+from .exceptions import QuantumSignatureRequiredError  # noqa: F401
 
 # crypto_api exports are lazy-loaded to avoid side-effect warnings at
 # import time (PQC availability checks, HMAC/HKDF warnings, etc.).
@@ -125,6 +132,13 @@ __all__ = [
     "LAMBDA_DECAY",
     "OMNI_CODES",
     "HELIX_PARAMS",
+    "CODES_INDIVIDUAL",
+    "MASTER_HELIX_PARAMS",
+    "MASTER_CODES",
+    "CODE_NAMES",
+    "MASTER_CODES_STR",
+    "ETHICAL_VECTOR",
+    "QuantumSignatureRequiredError",
     "helix_curvature",
     "helix_torsion",
     "verify_all_codes",

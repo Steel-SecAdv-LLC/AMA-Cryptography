@@ -33,7 +33,6 @@ AI Co-Architects:
 
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -50,13 +49,9 @@ class TestDemonstration:
         - No errors are raised during execution
         - All cryptographic operations complete
         """
-        # Get the path to the main script
-        script_path = Path(__file__).parent.parent / "code_guardian_secure.py"
-        assert script_path.exists(), f"Script not found: {script_path}"
-
-        # Run the demonstration
+        # Run the demonstration via package entry point
         result = subprocess.run(
-            [sys.executable, str(script_path)],
+            [sys.executable, "-m", "ama_cryptography"],
             capture_output=True,
             text=True,
             timeout=60,  # 60 second timeout
@@ -82,12 +77,9 @@ class TestDemonstration:
         - Verification succeeds
         - Final success message is displayed
         """
-        # Get the path to the main script
-        script_path = Path(__file__).parent.parent / "code_guardian_secure.py"
-
-        # Run the demonstration
+        # Run the demonstration via package entry point
         result = subprocess.run(
-            [sys.executable, str(script_path)],
+            [sys.executable, "-m", "ama_cryptography"],
             capture_output=True,
             text=True,
             timeout=60,
@@ -127,12 +119,9 @@ class TestDemonstration:
         Note: Stderr output is not checked as it may contain non-error messages
         from external processes.
         """
-        # Get the path to the main script
-        script_path = Path(__file__).parent.parent / "code_guardian_secure.py"
-
-        # Run the demonstration
+        # Run the demonstration via package entry point
         result = subprocess.run(
-            [sys.executable, str(script_path)],
+            [sys.executable, "-m", "ama_cryptography"],
             capture_output=True,
             text=True,
             timeout=60,
@@ -179,8 +168,6 @@ class TestDemonstration:
 
         Note: This test may be skipped if native C library is not built.
         """
-        script_path = Path(__file__).parent.parent / "code_guardian_secure.py"
-
         # Check if native PQC backend is available
         test_script = """
 import sys
@@ -207,7 +194,7 @@ except Exception:
 
         # Run the demonstration
         result = subprocess.run(
-            [sys.executable, str(script_path)],
+            [sys.executable, "-m", "ama_cryptography"],
             capture_output=True,
             text=True,
             timeout=60,
@@ -242,9 +229,9 @@ class TestErrorHandling:
         """
         from unittest.mock import patch
 
-        from code_guardian_secure import generate_ed25519_keypair
+        from ama_cryptography.legacy_compat import generate_ed25519_keypair
 
-        with patch("code_guardian_secure.CRYPTO_AVAILABLE", False):
+        with patch("ama_cryptography.legacy_compat.CRYPTO_AVAILABLE", False):
             with pytest.raises(RuntimeError, match="AMA native C library required"):
                 generate_ed25519_keypair()
 
@@ -257,10 +244,8 @@ class TestErrorHandling:
         - Quantum-resistant signatures are generated
         - All verifications pass
         """
-        script_path = Path(__file__).parent.parent / "code_guardian_secure.py"
-
         result = subprocess.run(
-            [sys.executable, str(script_path)],
+            [sys.executable, "-m", "ama_cryptography"],
             capture_output=True,
             text=True,
             timeout=60,

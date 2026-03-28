@@ -41,14 +41,14 @@ AI Co-Architects:
 
 import time
 
-from ama_cryptography_monitor import AmaCryptographyMonitor
-from code_guardian_secure import (
+from ama_cryptography.legacy_compat import (
     MASTER_CODES_STR,
     MASTER_HELIX_PARAMS,
     create_crypto_package,
     generate_key_management_system,
     verify_crypto_package,
 )
+from ama_cryptography_monitor import AmaCryptographyMonitor
 
 
 def print_section(title: str) -> None:

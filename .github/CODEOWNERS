@@ -11,7 +11,6 @@
 * @Steel-SecAdv-LLC
 
 # Core cryptographic implementation - requires security review
-/code_guardian_secure.py @Steel-SecAdv-LLC
 /ama_cryptography/ @Steel-SecAdv-LLC
 /src/ @Steel-SecAdv-LLC
 /include/ @Steel-SecAdv-LLC

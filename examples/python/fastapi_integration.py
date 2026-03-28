@@ -53,7 +53,7 @@ from ama_cryptography.crypto_api import (  # noqa: E402
     AmaCryptography,
     get_pqc_capabilities,
 )
-from code_guardian_secure import (  # noqa: E402
+from ama_cryptography.legacy_compat import (  # noqa: E402
     create_crypto_package,
     generate_key_management_system,
 )
@@ -167,8 +167,8 @@ async def verify_hmac_auth(
             detail="Missing X-HMAC-Signature header",
         )
 
+    from ama_cryptography.legacy_compat import hmac_authenticate
     from ama_cryptography.secure_memory import constant_time_compare
-    from code_guardian_secure import hmac_authenticate
 
     body = await request.body()
     expected_sig = hmac_authenticate(body, KMS.hmac_key).hex()

@@ -96,7 +96,7 @@ def run_sha3_256_benchmark(iterations: int = 100) -> float:
 
 def run_hmac_sha3_256_benchmark(iterations: int = 100) -> float:
     """Benchmark HMAC-SHA3-256 using project's own implementation."""
-    from code_guardian_secure import hmac_authenticate
+    from ama_cryptography.legacy_compat import hmac_authenticate
 
     key = secrets.token_bytes(32)
     data = b"A" * 1024
@@ -109,7 +109,7 @@ def run_hmac_sha3_256_benchmark(iterations: int = 100) -> float:
 
 def run_ed25519_keygen_benchmark(iterations: int = 50) -> float:
     """Benchmark Ed25519 key generation using native C backend."""
-    from code_guardian_secure import generate_ed25519_keypair
+    from ama_cryptography.legacy_compat import generate_ed25519_keypair
 
     def operation():
         generate_ed25519_keypair()
@@ -119,7 +119,7 @@ def run_ed25519_keygen_benchmark(iterations: int = 50) -> float:
 
 def run_ed25519_sign_benchmark(iterations: int = 50) -> float:
     """Benchmark Ed25519 signing using native C backend."""
-    from code_guardian_secure import ed25519_sign, generate_ed25519_keypair
+    from ama_cryptography.legacy_compat import ed25519_sign, generate_ed25519_keypair
 
     keypair = generate_ed25519_keypair()
     message = b"Test message for signing" * 10
@@ -132,7 +132,7 @@ def run_ed25519_sign_benchmark(iterations: int = 50) -> float:
 
 def run_ed25519_verify_benchmark(iterations: int = 50) -> float:
     """Benchmark Ed25519 verification using native C backend."""
-    from code_guardian_secure import (
+    from ama_cryptography.legacy_compat import (
         ed25519_sign,
         ed25519_verify,
         generate_ed25519_keypair,
@@ -150,7 +150,7 @@ def run_ed25519_verify_benchmark(iterations: int = 50) -> float:
 
 def run_hkdf_derive_benchmark(iterations: int = 100) -> float:
     """Benchmark HKDF key derivation using native C backend."""
-    from code_guardian_secure import native_hkdf
+    from ama_cryptography.legacy_compat import native_hkdf
 
     master_secret = secrets.token_bytes(32)
     salt = secrets.token_bytes(32)
@@ -164,7 +164,7 @@ def run_hkdf_derive_benchmark(iterations: int = 100) -> float:
 
 def run_full_package_create_benchmark(iterations: int = 20) -> float:
     """Benchmark complete crypto package creation."""
-    from code_guardian_secure import (
+    from ama_cryptography.legacy_compat import (
         create_crypto_package,
         generate_key_management_system,
     )
@@ -187,7 +187,7 @@ def run_full_package_create_benchmark(iterations: int = 20) -> float:
 
 def run_full_package_verify_benchmark(iterations: int = 20) -> float:
     """Benchmark complete crypto package verification."""
-    from code_guardian_secure import (
+    from ama_cryptography.legacy_compat import (
         create_crypto_package,
         generate_key_management_system,
         verify_crypto_package,

@@ -98,11 +98,11 @@ class TestNativeHmacSha3256Correctness:
 
 
 class TestHmacSha3256Integration:
-    """Tests that code_guardian_secure.hmac_authenticate uses the native C path."""
+    """Tests that ama_cryptography.legacy_compat.hmac_authenticate uses the native C path."""
 
     def test_hmac_authenticate_matches_native(self) -> None:
         """hmac_authenticate must produce same output as native_hmac_sha3_256."""
-        from code_guardian_secure import hmac_authenticate
+        from ama_cryptography.legacy_compat import hmac_authenticate
 
         key = secrets.token_bytes(32)
         msg = b"integration-test-message"
@@ -111,7 +111,7 @@ class TestHmacSha3256Integration:
         assert result == expected
 
     def test_hmac_verify_accepts_correct_mac(self) -> None:
-        from code_guardian_secure import hmac_authenticate, hmac_verify
+        from ama_cryptography.legacy_compat import hmac_authenticate, hmac_verify
 
         key = secrets.token_bytes(32)
         msg = b"verify-message"
@@ -119,7 +119,7 @@ class TestHmacSha3256Integration:
         assert hmac_verify(msg, mac, key) is True
 
     def test_hmac_verify_rejects_tampered_mac(self) -> None:
-        from code_guardian_secure import hmac_authenticate, hmac_verify
+        from ama_cryptography.legacy_compat import hmac_authenticate, hmac_verify
 
         key = secrets.token_bytes(32)
         msg = b"verify-message"
@@ -128,7 +128,7 @@ class TestHmacSha3256Integration:
         assert hmac_verify(msg, tampered, key) is False
 
     def test_hmac_verify_rejects_tampered_message(self) -> None:
-        from code_guardian_secure import hmac_authenticate, hmac_verify
+        from ama_cryptography.legacy_compat import hmac_authenticate, hmac_verify
 
         key = secrets.token_bytes(32)
         msg = b"verify-message"
@@ -136,7 +136,7 @@ class TestHmacSha3256Integration:
         assert hmac_verify(b"tampered-message", mac, key) is False
 
     def test_hmac_verify_rejects_wrong_key(self) -> None:
-        from code_guardian_secure import hmac_authenticate, hmac_verify
+        from ama_cryptography.legacy_compat import hmac_authenticate, hmac_verify
 
         key = secrets.token_bytes(32)
         wrong_key = secrets.token_bytes(32)
@@ -154,7 +154,7 @@ class TestEd25519ExpandedKeyFastPath:
     """Verify the 64-byte expanded key optimization."""
 
     def test_keypair_private_key_is_64_bytes(self) -> None:
-        from code_guardian_secure import generate_ed25519_keypair
+        from ama_cryptography.legacy_compat import generate_ed25519_keypair
 
         kp = generate_ed25519_keypair()
         assert len(kp.private_key) == 64, (
@@ -163,13 +163,13 @@ class TestEd25519ExpandedKeyFastPath:
         )
 
     def test_keypair_public_key_is_32_bytes(self) -> None:
-        from code_guardian_secure import generate_ed25519_keypair
+        from ama_cryptography.legacy_compat import generate_ed25519_keypair
 
         kp = generate_ed25519_keypair()
         assert len(kp.public_key) == 32
 
     def test_sign_with_64_byte_key_produces_valid_signature(self) -> None:
-        from code_guardian_secure import (
+        from ama_cryptography.legacy_compat import (
             ed25519_sign,
             ed25519_verify,
             generate_ed25519_keypair,
@@ -181,7 +181,7 @@ class TestEd25519ExpandedKeyFastPath:
         assert ed25519_verify(msg, sig, kp.public_key)
 
     def test_sign_verify_roundtrip_multiple_messages(self) -> None:
-        from code_guardian_secure import (
+        from ama_cryptography.legacy_compat import (
             ed25519_sign,
             ed25519_verify,
             generate_ed25519_keypair,
@@ -194,7 +194,7 @@ class TestEd25519ExpandedKeyFastPath:
             assert ed25519_verify(msg, sig, kp.public_key), f"Failed on message {i}"
 
     def test_sign_is_deterministic(self) -> None:
-        from code_guardian_secure import ed25519_sign, generate_ed25519_keypair
+        from ama_cryptography.legacy_compat import ed25519_sign, generate_ed25519_keypair
 
         kp = generate_ed25519_keypair()
         msg = b"determinism check"
@@ -203,7 +203,7 @@ class TestEd25519ExpandedKeyFastPath:
         assert sig1 == sig2
 
     def test_sign_rejects_tampered_message(self) -> None:
-        from code_guardian_secure import (
+        from ama_cryptography.legacy_compat import (
             ed25519_sign,
             ed25519_verify,
             generate_ed25519_keypair,
@@ -215,7 +215,7 @@ class TestEd25519ExpandedKeyFastPath:
         assert not ed25519_verify(b"tampered", sig, kp.public_key)
 
     def test_sign_rejects_tampered_signature(self) -> None:
-        from code_guardian_secure import (
+        from ama_cryptography.legacy_compat import (
             ed25519_sign,
             ed25519_verify,
             generate_ed25519_keypair,
@@ -229,7 +229,7 @@ class TestEd25519ExpandedKeyFastPath:
 
     def test_32_byte_seed_backward_compat(self) -> None:
         """ed25519_sign must still accept 32-byte seeds for backward compatibility."""
-        from code_guardian_secure import (
+        from ama_cryptography.legacy_compat import (
             ed25519_sign,
             ed25519_verify,
             generate_ed25519_keypair,
@@ -243,14 +243,14 @@ class TestEd25519ExpandedKeyFastPath:
 
     def test_seeded_keypair_produces_64_bytes(self) -> None:
         """Deterministic keypair from seed also stores 64-byte expanded key."""
-        from code_guardian_secure import generate_ed25519_keypair
+        from ama_cryptography.legacy_compat import generate_ed25519_keypair
 
         seed = secrets.token_bytes(32)
         kp = generate_ed25519_keypair(seed=seed)
         assert len(kp.private_key) == 64
 
     def test_seeded_keypair_is_deterministic(self) -> None:
-        from code_guardian_secure import generate_ed25519_keypair
+        from ama_cryptography.legacy_compat import generate_ed25519_keypair
 
         seed = secrets.token_bytes(32)
         kp1 = generate_ed25519_keypair(seed=seed)
@@ -289,22 +289,22 @@ class TestInvariant1NoStdlibHmac:
                         violations.append(f"{py_file}:{node.lineno}")
         assert not violations, f"INVARIANT-1 violation: stdlib hmac imported in: {violations}"
 
-    def test_no_stdlib_hmac_in_code_guardian_secure(self) -> None:
+    def test_no_stdlib_hmac_in_legacy_compat(self) -> None:
         import ast
         from pathlib import Path
 
-        source = Path("code_guardian_secure.py").read_text()
+        source = Path("ama_cryptography/legacy_compat.py").read_text()
         tree = ast.parse(source)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     assert (
                         alias.name != "hmac"
-                    ), f"code_guardian_secure.py:{node.lineno} imports stdlib hmac"
+                    ), f"ama_cryptography/legacy_compat.py:{node.lineno} imports stdlib hmac"
             elif isinstance(node, ast.ImportFrom):
                 assert (
                     node.module != "hmac"
-                ), f"code_guardian_secure.py:{node.lineno} imports from stdlib hmac"
+                ), f"ama_cryptography/legacy_compat.py:{node.lineno} imports from stdlib hmac"
 
 
 # ============================================================================
@@ -318,7 +318,7 @@ class TestNosecJustifications:
     @pytest.mark.parametrize(
         "filepath",
         [
-            "code_guardian_secure.py",
+            "ama_cryptography/legacy_compat.py",
             "ama_cryptography/key_management.py",
             "ama_cryptography/_numeric.py",
             "tests/conftest.py",

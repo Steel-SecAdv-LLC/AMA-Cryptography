@@ -57,7 +57,7 @@ pip install -e .
 ### 2. Run Demo
 
 ```bash
-python3 code_guardian_secure.py
+python3 -m ama_cryptography
 ```
 
 Expected output:
@@ -136,7 +136,7 @@ print(get_pqc_status())
 #### Generate Keys
 
 ```python
-from code_guardian_secure import *
+from ama_cryptography.legacy_compat import *
 
 # Generate key management system
 kms = generate_key_management_system("YourOrganization")
@@ -882,7 +882,7 @@ class CryptoPackage:
 **Best for:** New deployments, systems with few existing packages
 
 ```python
-from code_guardian_secure import *
+from ama_cryptography.legacy_compat import *
 
 # Load your Omni-Codes and helix parameters
 codes = "..."  # Your Omni-Codes

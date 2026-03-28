@@ -121,10 +121,10 @@ security-audit:
 security-scan:
 	@echo "Running comprehensive security scan..."
 	@echo "[1/3] Running bandit for Python security issues..."
-	@bandit -r ama_cryptography/ code_guardian_secure.py -ll -f json -o bandit-report.json || true
-	@bandit -r ama_cryptography/ code_guardian_secure.py -ll
+	@bandit -r ama_cryptography/ -ll -f json -o bandit-report.json || true
+	@bandit -r ama_cryptography/ -ll
 	@echo "[2/3] Running semgrep for cryptographic rules..."
-	@semgrep --config .semgrep.yml ama_cryptography/ code_guardian_secure.py --json -o semgrep-report.json || echo "  (semgrep not installed or no rules matched)"
+	@semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json || echo "  (semgrep not installed or no rules matched)"
 	@echo "[3/3] Running pip-audit for dependency vulnerabilities..."
 	@pip-audit --format json -o pip-audit-report.json || pip-audit || echo "  (pip-audit completed)"
 	@echo "✓ Comprehensive security scan complete"

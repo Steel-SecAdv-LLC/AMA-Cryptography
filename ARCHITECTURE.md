@@ -307,14 +307,14 @@ ama_cryptography/
 └── math_engine.*.so       # Cython math acceleration (compiled)
 
 Root-level modules:
-├── code_guardian_secure.py # Standalone demonstration and package creation
+├── ama_cryptography/legacy_compat.py  # Legacy API compat (ported from code_guardian_secure.py)
 ├── ama_cryptography_monitor.py      # 3R runtime security monitor
 └── ama_cryptography_monitor_demo.py # Monitor demonstration
 ```
 
 ### Core Components
 
-#### code_guardian_secure
+#### ama_cryptography.legacy_compat
 
 The primary cryptographic module implementing the complete security framework
 via standalone functions (not a class).
@@ -383,7 +383,7 @@ class CryptoPackage:
 ```
 +-------------------+     +-------------------+     +-------------------+
 |                   |     |                   |     |                   |
-|  Application      |---->|  code_guardian_secure|---->|  CryptoPackage    |
+|  Application      |---->| ama_cryptography    |---->|  CryptoPackage    |
 |  Interface        |     |                   |     |  (Output)         |
 |                   |     +--------+----------+     |                   |
 +-------------------+              |                +-------------------+

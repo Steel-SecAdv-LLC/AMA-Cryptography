@@ -147,7 +147,7 @@ def example_3_data_protection():
     print("Example 3: Complete Data Protection")
     print("=" * 60)
 
-    from code_guardian_secure import (
+    from ama_cryptography.legacy_compat import (
         create_crypto_package,
         generate_key_management_system,
         verify_crypto_package,
@@ -202,7 +202,7 @@ def example_4_humanitarian_use_case():
     print("Example 4: Humanitarian Use Case")
     print("=" * 60)
 
-    from code_guardian_secure import (
+    from ama_cryptography.legacy_compat import (
         create_crypto_package,
         generate_key_management_system,
         verify_crypto_package,
