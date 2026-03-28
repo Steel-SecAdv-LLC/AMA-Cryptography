@@ -68,7 +68,7 @@ Please **DO NOT** submit pull requests that:
 - Break standards compliance (NIST FIPS 202, 203, 204, 205, SP 800-38D, RFC 2104, 5869, 8032, 3161)
 - Add unnecessary dependencies
 - Include proprietary or non-Apache 2.0 compatible code
-- Lack mathematical justification for cryptographic changes
+- Lack specification references (NIST FIPS, RFC, or peer-reviewed paper) for cryptographic changes
 
 ## Development Setup
 
@@ -121,7 +121,7 @@ git checkout -b fix/issue-number-description
 
 1. **Security First:** Never compromise security for convenience or performance
 2. **Standards Compliance:** Adhere strictly to NIST and IETF specifications
-3. **Mathematical Rigor:** All cryptographic claims must be provable
+3. **Standards Rigor:** All cryptographic claims must reference the relevant standard's security analysis
 4. **Code Quality:** Follow PEP 8 and maintain type hints throughout
 5. **Documentation:** Every change must be documented with academic citations where applicable
 6. **Backwards Compatibility:** Maintain compatibility unless security requires breaking changes
@@ -133,17 +133,18 @@ git checkout -b fix/issue-number-description
 - Validate all inputs to cryptographic functions
 - Use constant-time operations for security-critical comparisons
 - Follow NIST recommendations for key sizes and algorithm parameters
-- Cite academic papers or standards for algorithm choices
-- Include mathematical proofs for security claims
+- Cite the specification being implemented (NIST FIPS, RFC, or peer-reviewed paper)
+- Provide KAT validation against published test vectors
+- Security claims must reference the relevant standard's security analysis, not original proofs
 - Test against known test vectors from standards documents
 
 **NEVER:**
-- Implement your own cryptographic primitives
+- Introduce ad-hoc or unreviewed cryptographic constructions — all primitives must follow published NIST/IETF specifications and pass KAT validation
 - Use deprecated algorithms (MD5, SHA-1, RSA < 2048 bits)
 - Store secrets in logs, error messages, or debug output
 - Use non-constant-time string comparisons for authentication
 - Ignore error conditions in cryptographic operations
-- Make security claims without mathematical backing
+- Make security claims without referencing the relevant standard's security analysis
 - Copy-paste cryptographic code without understanding it
 
 ## Cryptographic Standards
@@ -427,11 +428,12 @@ Maintainers will:
 
 Changes affecting cryptographic operations require:
 
-1. **Mathematical Proof:** Formal proof of security properties
-2. **Academic Citations:** References to peer-reviewed papers
-3. **Standards References:** Cite NIST/IETF specifications
+1. **Specification Citation:** Cite the specification being implemented (NIST FIPS, RFC, or peer-reviewed paper)
+2. **KAT Validation:** Provide Known Answer Test validation against published test vectors from the cited specification
+3. **Standards References:** Cite NIST/IETF specifications for all algorithm choices and parameter selections
 4. **Threat Analysis:** Consider attack vectors
 5. **Performance Analysis:** Ensure constant-time operations where required
+6. **Security Claims:** Must reference the relevant standard's security analysis, not original proofs
 
 ### Common Security Pitfalls
 

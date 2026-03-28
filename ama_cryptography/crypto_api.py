@@ -1955,6 +1955,7 @@ def create_crypto_package(
         "num_derived_keys": len(derived_keys),
         "pqc_status": get_pqc_capabilities()["status"],
         "defense_layers": 4,
+        "multi_layer_defense": True,
     }
 
     return CryptoPackageResult(
