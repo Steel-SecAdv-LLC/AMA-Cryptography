@@ -748,9 +748,7 @@ class CryptoPackage:
     ethical_hash: str
     quantum_signatures_enabled: bool = True
     signature_format_version: str = SIGNATURE_FORMAT_V2
-    hash_format_version: str = (
-        HASH_FORMAT_V1
-    )
+    hash_format_version: str = HASH_FORMAT_V1
 
 
 def create_crypto_package(  # noqa: C901
