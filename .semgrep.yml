@@ -152,3 +152,14 @@ rules:
     metadata:
       category: security
       subcategory: timing-attack
+
+  # INVARIANT-9: Flag broad except Exception in crypto paths for review.
+  # Exceptions that explicitly transition to FIPS ERROR state (e.g.,
+  # _self_test.py POST failure tuples) are acceptable and should be
+  # annotated with a comment explaining the rationale.
+  #
+  # NOTE: Semgrep pattern-based rules for 'except Exception' are deferred.
+  # Semgrep 1.74.0 does not support 'except Exception as $E: ...' or
+  # 'except Exception: ...' as valid Python pattern syntax (parse error).
+  # Use 'semgrep --validate' when upgrading to re-enable these rules.
+  # See: INVARIANT-9 in .github/INVARIANTS.md

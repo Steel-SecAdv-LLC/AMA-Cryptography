@@ -868,6 +868,12 @@ def dilithium_sign(message: bytes, secret_key: bytes) -> bytes:
     if not DILITHIUM_AVAILABLE:
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
 
+    if len(secret_key) != DILITHIUM_SECRET_KEY_BYTES:
+        raise ValueError(
+            f"Invalid secret key length: expected {DILITHIUM_SECRET_KEY_BYTES}, "
+            f"got {len(secret_key)}"
+        )
+
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(DILITHIUM_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(DILITHIUM_SIGNATURE_BYTES)
@@ -905,6 +911,12 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
     if not DILITHIUM_AVAILABLE:
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
 
+    if len(public_key) != DILITHIUM_PUBLIC_KEY_BYTES:
+        raise ValueError(
+            f"Invalid public key length: expected {DILITHIUM_PUBLIC_KEY_BYTES}, "
+            f"got {len(public_key)}"
+        )
+
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ama_dilithium_verify(
             message,
@@ -941,6 +953,11 @@ def dilithium_verify_ctx(message: bytes, signature: bytes, public_key: bytes, ct
         raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
     if not DILITHIUM_AVAILABLE:
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
+    if len(public_key) != DILITHIUM_PUBLIC_KEY_BYTES:
+        raise ValueError(
+            f"Invalid public key length: expected {DILITHIUM_PUBLIC_KEY_BYTES}, "
+            f"got {len(public_key)}"
+        )
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ama_dilithium_verify_ctx(
             message,
@@ -1272,6 +1289,11 @@ def sphincs_verify_ctx(message: bytes, signature: bytes, public_key: bytes, ctx:
         raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
     if not SPHINCS_AVAILABLE:
         raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
+    if len(public_key) != SPHINCS_PUBLIC_KEY_BYTES:
+        raise ValueError(
+            f"Invalid public key length: expected {SPHINCS_PUBLIC_KEY_BYTES}, "
+            f"got {len(public_key)}"
+        )
     if SPHINCS_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ama_sphincs_verify_ctx(
             message,
@@ -1988,6 +2010,17 @@ def native_argon2id(
     """
     if _native_lib is None or not _ARGON2_NATIVE_AVAILABLE:
         raise RuntimeError("Argon2id native backend not available. " + _INSTALL_HINT)
+
+    if len(salt) < 8:
+        raise ValueError(f"Argon2id salt must be >= 8 bytes, got {len(salt)}")
+    if out_len <= 0:
+        raise ValueError(f"Argon2id output length must be > 0, got {out_len}")
+    if t_cost < 1:
+        raise ValueError(f"Argon2id t_cost must be >= 1, got {t_cost}")
+    if m_cost < 8:
+        raise ValueError(f"Argon2id m_cost must be >= 8 KiB, got {m_cost}")
+    if parallelism < 1:
+        raise ValueError(f"Argon2id parallelism must be >= 1, got {parallelism}")
 
     out_buf = ctypes.create_string_buffer(out_len)
     rc = _native_lib.ama_argon2id(
