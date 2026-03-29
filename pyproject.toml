@@ -298,6 +298,13 @@ disable_error_code = ["override"]
 module = "tests.test_key_management_comprehensive"
 disable_error_code = ["attr-defined"]
 
+# test_hkdf_sha3_256 uses a try/except pattern for optional cryptography imports.
+# When cryptography IS installed (CI), the type: ignore comments are unused;
+# when it is NOT installed (local dev), mypy needs them.  Suppress the clash.
+[[tool.mypy.overrides]]
+module = "tests.test_hkdf_sha3_256"
+warn_unused_ignores = false
+
 # Pytest configuration (consolidated from pytest.ini)
 [tool.pytest.ini_options]
 minversion = "7.0"
