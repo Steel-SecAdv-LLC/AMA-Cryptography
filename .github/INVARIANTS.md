@@ -49,13 +49,23 @@ in the test matrix.
 All third-party GitHub Actions used in security workflows **must** be pinned
 to a full commit SHA, not a mutable tag (`@main`, `@v1`, etc.).
 
-## INVARIANT-5 — Input Size Validation at Python/C Boundary
+## INVARIANT-5 — Input Validation at Python/C Boundary
 
 All Python functions that dispatch to the native C library via `ctypes` **must**
-validate the byte-length of every fixed-size buffer argument **before** the
-`ctypes` call. This prevents malformed inputs from reaching C code before bounds
-checking. Variable-length parameters (messages, plaintext, AAD) whose length is
-passed alongside via `c_size_t(len(...))` are safe and do not require pre-checks.
+validate inputs **before** the `ctypes` call:
+
+- **Fixed-size buffers:** Validate the byte-length of every fixed-size buffer
+  argument (keys, public keys, nonces, tags). Variable-length parameters
+  (messages, plaintext, AAD) whose length is passed alongside via
+  `c_size_t(len(...))` are safe and do not require pre-checks.
+
+- **Fixed-width integer parameters:** Python integers passed to C functions
+  expecting fixed-width types (`c_uint32`, `c_int32`, etc.) **must** be
+  range-checked against the target type's bounds before dispatch. Python's
+  arbitrary-precision `int` can silently overflow/wrap when ctypes converts
+  to a fixed-width C integer, causing the native function to operate with
+  incorrect parameter values. Example: Argon2id `t_cost`, `m_cost`, and
+  `parallelism` are `c_uint32` — values above `2^32 - 1` must be rejected.
 
 ## INVARIANT-6 — Secret Key Zeroing on All Exit Paths *(aspirational)*
 
