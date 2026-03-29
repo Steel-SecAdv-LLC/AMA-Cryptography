@@ -82,9 +82,10 @@ except ImportError:
 # INVARIANT-7: warn when falling back to pure-Python (non-constant-time) HMAC/HKDF
 if not _HMAC_NATIVE or not _HKDF_NATIVE:
     logging.getLogger(__name__).warning(
-        "native HMAC/HKDF C accelerators unavailable, using pure-Python "
-        "fallback without constant-time guarantees. Production deployments "
-        "MUST set AMA_REQUIRE_CONSTANT_TIME=true."
+        "native HMAC/HKDF C accelerators unavailable; using pure-Python "
+        "fallback without constant-time guarantees. For production deployments "
+        "that require constant-time behavior, ensure native accelerators are "
+        "available and set AMA_REQUIRE_CONSTANT_TIME=true at the process level."
     )
 
 

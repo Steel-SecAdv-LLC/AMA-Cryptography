@@ -31,6 +31,23 @@ from typing import Any, Dict, List, Optional, Tuple, Type, cast
 from ama_cryptography.exceptions import SecurityWarning  # noqa: F401 — re-exported for public API
 from ama_cryptography.secure_memory import secure_memzero
 
+# INVARIANT-7: Detect native HMAC-SHA512 availability once at module level.
+# native_hmac_sha512 does not currently exist in pqc_backends, so the fallback
+# to pure-Python HMAC-SHA512 is unconditional.  Warn once, not per-call.
+_HMAC_SHA512_NATIVE = False
+try:
+    from ama_cryptography.pqc_backends import native_hmac_sha512  # type: ignore[attr-defined]
+
+    _HMAC_SHA512_NATIVE = True
+except ImportError:
+    pass
+
+if not _HMAC_SHA512_NATIVE:
+    logging.getLogger(__name__).warning(
+        "native HMAC-SHA512 C backend unavailable; using pure-Python fallback "
+        "for BIP32 key derivation without constant-time guarantees."
+    )
+
 
 def _hmac_sha512(key: bytes, data: bytes) -> bytes:
     """
@@ -40,15 +57,11 @@ def _hmac_sha512(key: bytes, data: bytes) -> bytes:
     Fallback: pure-Python implementation using hashlib.sha512.
     Does NOT use the stdlib ``hmac`` module (INVARIANT-1).
     """
-    try:
-        from ama_cryptography.pqc_backends import native_hmac_sha512  # type: ignore[attr-defined]
-
-        result: bytes = native_hmac_sha512(key, data)
-        return result
-    except (RuntimeError, ImportError):
-        logging.getLogger(__name__).debug(
-            "native HMAC-SHA512 unavailable, using pure-Python fallback"
-        )
+    if _HMAC_SHA512_NATIVE:
+        try:
+            return native_hmac_sha512(key, data)
+        except RuntimeError:
+            pass
 
     # Pure-Python HMAC-SHA512 (RFC 2104) — no stdlib hmac import.
     block_size = 128  # SHA-512 block size

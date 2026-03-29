@@ -93,7 +93,7 @@ fi
 
 # Try to pin to single core for less noise (non-fatal if taskset unavailable)
 TASKSET=""
-if command -v taskset &>/dev/null; then
+if command -v taskset >/dev/null; then
     TASKSET="taskset -c 0"
 fi
 
