@@ -58,6 +58,12 @@ validate inputs **before** the `ctypes` call:
   argument (keys, public keys, nonces, tags). Variable-length parameters
   (messages, plaintext, AAD) whose length is passed alongside via
   `c_size_t(len(...))` are safe and do not require pre-checks.
+  **Signature exemption:** ML-DSA-65 and SPHINCS+ signatures are
+  variable-length (the `*_SIGNATURE_BYTES` constants are maximum buffer
+  sizes, not exact output lengths). Their actual length is passed via
+  `c_size_t(len(signature))`, so they fall under the variable-length
+  exemption. A strict equality check was tried in PR #158 and reverted
+  because it broke FIPS 204 KAT tests.
 
 - **Fixed-width integer parameters:** Python integers passed to C functions
   expecting fixed-width types (`c_uint32`, `c_int32`, etc.) **must** be
@@ -97,6 +103,11 @@ The C build system **must** document and enforce minimum compiler versions
 (GCC >= 12, Clang >= 15) required for correct constant-time code generation
 and SIMD intrinsics. The reference build environment is the pinned Docker
 image (`ubuntu:22.04`) with the documented compiler toolchain.
+
+**Enforcement:** By default, CMake will `FATAL_ERROR` if the detected compiler
+does not meet the minimum version. To build on an unverified toolchain (e.g.,
+for development or CI on older hosts), pass `-DAMA_ALLOW_UNVERIFIED_TOOLCHAIN=ON`
+to downgrade to a `WARNING`.
 
 ## INVARIANT-9 — Maximum Exception Scope in Crypto Paths
 

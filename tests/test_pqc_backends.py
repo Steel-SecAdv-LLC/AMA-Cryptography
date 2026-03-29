@@ -17,6 +17,7 @@ from unittest.mock import patch
 import pytest
 
 from ama_cryptography.pqc_backends import (
+    _ARGON2_NATIVE_AVAILABLE,
     DILITHIUM_AVAILABLE,
     DILITHIUM_BACKEND,
     DILITHIUM_PUBLIC_KEY_BYTES,
@@ -40,14 +41,19 @@ from ama_cryptography.pqc_backends import (
     PQCUnavailableError,
     SphincsKeyPair,
     SphincsUnavailableError,
+    dilithium_sign,
+    dilithium_verify,
+    dilithium_verify_ctx,
     generate_dilithium_keypair,
     generate_kyber_keypair,
     generate_sphincs_keypair,
     get_pqc_backend_info,
     kyber_decapsulate,
     kyber_encapsulate,
+    native_argon2id,
     sphincs_sign,
     sphincs_verify,
+    sphincs_verify_ctx,
 )
 
 
@@ -485,3 +491,204 @@ class TestExceptionClasses:
 
         sphincs_err = SphincsUnavailableError("SPHINCS test")
         assert "SPHINCS test" in str(sphincs_err)
+
+
+# ============================================================================
+# INVARIANT-5: Negative-path tests for input size validation
+# ============================================================================
+
+
+@pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
+class TestInvariant5DilithiumNegativePaths:
+    """Negative-path tests for INVARIANT-5 Dilithium input validation.
+
+    These verify that malformed fixed-size buffer arguments are rejected
+    with ValueError *before* reaching the ctypes boundary.
+    """
+
+    def test_sign_rejects_short_secret_key(self) -> None:
+        """dilithium_sign must reject a secret key shorter than DILITHIUM_SECRET_KEY_BYTES."""
+        short_sk = b"\x00" * (DILITHIUM_SECRET_KEY_BYTES - 1)
+        with pytest.raises(ValueError, match="Invalid secret key length"):
+            dilithium_sign(b"msg", short_sk)
+
+    def test_sign_rejects_long_secret_key(self) -> None:
+        """dilithium_sign must reject a secret key longer than DILITHIUM_SECRET_KEY_BYTES."""
+        long_sk = b"\x00" * (DILITHIUM_SECRET_KEY_BYTES + 1)
+        with pytest.raises(ValueError, match="Invalid secret key length"):
+            dilithium_sign(b"msg", long_sk)
+
+    def test_sign_rejects_empty_secret_key(self) -> None:
+        """dilithium_sign must reject an empty secret key."""
+        with pytest.raises(ValueError, match="Invalid secret key length"):
+            dilithium_sign(b"msg", b"")
+
+    def test_verify_rejects_short_public_key(self) -> None:
+        """dilithium_verify must reject a public key shorter than DILITHIUM_PUBLIC_KEY_BYTES."""
+        short_pk = b"\x00" * (DILITHIUM_PUBLIC_KEY_BYTES - 1)
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            dilithium_verify(b"msg", b"\x00" * DILITHIUM_SIGNATURE_BYTES, short_pk)
+
+    def test_verify_rejects_long_public_key(self) -> None:
+        """dilithium_verify must reject a public key longer than DILITHIUM_PUBLIC_KEY_BYTES."""
+        long_pk = b"\x00" * (DILITHIUM_PUBLIC_KEY_BYTES + 1)
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            dilithium_verify(b"msg", b"\x00" * DILITHIUM_SIGNATURE_BYTES, long_pk)
+
+    def test_verify_ctx_rejects_short_public_key(self) -> None:
+        """dilithium_verify_ctx must reject a short public key."""
+        short_pk = b"\x00" * (DILITHIUM_PUBLIC_KEY_BYTES - 1)
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            dilithium_verify_ctx(b"msg", b"\x00" * DILITHIUM_SIGNATURE_BYTES, short_pk, b"ctx")
+
+    def test_verify_ctx_rejects_oversized_context(self) -> None:
+        """dilithium_verify_ctx must reject context > 255 bytes."""
+        pk = b"\x00" * DILITHIUM_PUBLIC_KEY_BYTES
+        with pytest.raises(ValueError, match="Context must be at most 255 bytes"):
+            dilithium_verify_ctx(b"msg", b"\x00" * DILITHIUM_SIGNATURE_BYTES, pk, b"\x00" * 256)
+
+
+@pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber backend not available")
+class TestInvariant5KyberNegativePaths:
+    """Negative-path tests for INVARIANT-5 Kyber input validation."""
+
+    def test_encapsulate_rejects_short_public_key(self) -> None:
+        """kyber_encapsulate must reject a public key shorter than KYBER_PUBLIC_KEY_BYTES."""
+        short_pk = b"\x00" * (KYBER_PUBLIC_KEY_BYTES - 1)
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            kyber_encapsulate(short_pk)
+
+    def test_encapsulate_rejects_long_public_key(self) -> None:
+        """kyber_encapsulate must reject a public key longer than KYBER_PUBLIC_KEY_BYTES."""
+        long_pk = b"\x00" * (KYBER_PUBLIC_KEY_BYTES + 1)
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            kyber_encapsulate(long_pk)
+
+    def test_decapsulate_rejects_short_ciphertext(self) -> None:
+        """kyber_decapsulate must reject short ciphertext."""
+        short_ct = b"\x00" * (KYBER_CIPHERTEXT_BYTES - 1)
+        sk = b"\x00" * KYBER_SECRET_KEY_BYTES
+        with pytest.raises(ValueError, match="Invalid ciphertext length"):
+            kyber_decapsulate(short_ct, sk)
+
+    def test_decapsulate_rejects_short_secret_key(self) -> None:
+        """kyber_decapsulate must reject short secret key."""
+        ct = b"\x00" * KYBER_CIPHERTEXT_BYTES
+        short_sk = b"\x00" * (KYBER_SECRET_KEY_BYTES - 1)
+        with pytest.raises(ValueError, match="Invalid secret key length"):
+            kyber_decapsulate(ct, short_sk)
+
+    def test_encapsulate_rejects_empty_public_key(self) -> None:
+        """kyber_encapsulate must reject an empty public key."""
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            kyber_encapsulate(b"")
+
+
+@pytest.mark.skipif(not SPHINCS_AVAILABLE, reason="SPHINCS+ backend not available")
+class TestInvariant5SphincsNegativePaths:
+    """Negative-path tests for INVARIANT-5 SPHINCS+ input validation."""
+
+    def test_sign_rejects_short_secret_key(self) -> None:
+        """sphincs_sign must reject a secret key shorter than SPHINCS_SECRET_KEY_BYTES."""
+        short_sk = b"\x00" * (SPHINCS_SECRET_KEY_BYTES - 1)
+        with pytest.raises(ValueError, match="Invalid secret key length"):
+            sphincs_sign(b"msg", short_sk)
+
+    def test_sign_rejects_long_secret_key(self) -> None:
+        """sphincs_sign must reject a secret key longer than SPHINCS_SECRET_KEY_BYTES."""
+        long_sk = b"\x00" * (SPHINCS_SECRET_KEY_BYTES + 1)
+        with pytest.raises(ValueError, match="Invalid secret key length"):
+            sphincs_sign(b"msg", long_sk)
+
+    def test_verify_rejects_short_public_key(self) -> None:
+        """sphincs_verify must reject a short public key."""
+        short_pk = b"\x00" * (SPHINCS_PUBLIC_KEY_BYTES - 1)
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            sphincs_verify(b"msg", b"\x00" * 100, short_pk)
+
+    def test_verify_rejects_long_public_key(self) -> None:
+        """sphincs_verify must reject a long public key."""
+        long_pk = b"\x00" * (SPHINCS_PUBLIC_KEY_BYTES + 1)
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            sphincs_verify(b"msg", b"\x00" * 100, long_pk)
+
+    def test_verify_ctx_rejects_short_public_key(self) -> None:
+        """sphincs_verify_ctx must reject a short public key."""
+        short_pk = b"\x00" * (SPHINCS_PUBLIC_KEY_BYTES - 1)
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            sphincs_verify_ctx(b"msg", b"\x00" * 100, short_pk, b"ctx")
+
+    def test_verify_ctx_rejects_oversized_context(self) -> None:
+        """sphincs_verify_ctx must reject context > 255 bytes."""
+        pk = b"\x00" * SPHINCS_PUBLIC_KEY_BYTES
+        with pytest.raises(ValueError, match="Context must be at most 255 bytes"):
+            sphincs_verify_ctx(b"msg", b"\x00" * 100, pk, b"\x00" * 256)
+
+
+@pytest.mark.skipif(
+    not _ARGON2_NATIVE_AVAILABLE,
+    reason="Argon2id native backend not available (validation runs after availability check)",
+)
+class TestInvariant5Argon2idNegativePaths:
+    """Negative-path tests for INVARIANT-5 Argon2id parameter validation.
+
+    These test the ValueError guards on salt length, output length,
+    t_cost, parallelism, and m_cost that protect the c_uint32 ctypes
+    boundary from overflow or invalid values.
+    """
+
+    def test_rejects_short_salt(self) -> None:
+        """native_argon2id must reject salt < 8 bytes."""
+        with pytest.raises(ValueError, match="salt must be >= 8 bytes"):
+            native_argon2id(b"password", b"\x00" * 7)
+
+    def test_rejects_empty_salt(self) -> None:
+        """native_argon2id must reject empty salt."""
+        with pytest.raises(ValueError, match="salt must be >= 8 bytes"):
+            native_argon2id(b"password", b"")
+
+    def test_rejects_out_len_below_minimum(self) -> None:
+        """native_argon2id must reject out_len < 4."""
+        with pytest.raises(ValueError, match="output length must be >= 4"):
+            native_argon2id(b"password", b"\x00" * 16, out_len=3)
+
+    def test_rejects_zero_out_len(self) -> None:
+        """native_argon2id must reject out_len=0."""
+        with pytest.raises(ValueError, match="output length must be >= 4"):
+            native_argon2id(b"password", b"\x00" * 16, out_len=0)
+
+    def test_rejects_t_cost_zero(self) -> None:
+        """native_argon2id must reject t_cost=0."""
+        with pytest.raises(ValueError, match="t_cost must be in"):
+            native_argon2id(b"password", b"\x00" * 16, t_cost=0)
+
+    def test_rejects_t_cost_negative(self) -> None:
+        """native_argon2id must reject negative t_cost."""
+        with pytest.raises(ValueError, match="t_cost must be in"):
+            native_argon2id(b"password", b"\x00" * 16, t_cost=-1)
+
+    def test_rejects_t_cost_exceeds_uint32(self) -> None:
+        """native_argon2id must reject t_cost > UINT32_MAX."""
+        with pytest.raises(ValueError, match="t_cost must be in"):
+            native_argon2id(b"password", b"\x00" * 16, t_cost=0xFFFFFFFF + 1)
+
+    def test_rejects_parallelism_zero(self) -> None:
+        """native_argon2id must reject parallelism=0."""
+        with pytest.raises(ValueError, match="parallelism must be in"):
+            native_argon2id(b"password", b"\x00" * 16, parallelism=0)
+
+    def test_rejects_parallelism_negative(self) -> None:
+        """native_argon2id must reject negative parallelism."""
+        with pytest.raises(ValueError, match="parallelism must be in"):
+            native_argon2id(b"password", b"\x00" * 16, parallelism=-1)
+
+    def test_rejects_m_cost_below_minimum(self) -> None:
+        """native_argon2id must reject m_cost < 8 * parallelism."""
+        # With default parallelism=4, minimum m_cost = 32
+        with pytest.raises(ValueError, match="m_cost must be in"):
+            native_argon2id(b"password", b"\x00" * 16, m_cost=31, parallelism=4)
+
+    def test_rejects_m_cost_exceeds_uint32(self) -> None:
+        """native_argon2id must reject m_cost > UINT32_MAX."""
+        with pytest.raises(ValueError, match="m_cost must be in"):
+            native_argon2id(b"password", b"\x00" * 16, m_cost=0xFFFFFFFF + 1)

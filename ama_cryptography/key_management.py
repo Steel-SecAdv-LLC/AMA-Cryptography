@@ -40,12 +40,19 @@ try:
 
     _HMAC_SHA512_NATIVE = True
 except ImportError:
-    pass
+    pass  # native_hmac_sha512 does not exist in pqc_backends yet; fallback is expected
 
 if not _HMAC_SHA512_NATIVE:
+    if os.environ.get("AMA_REQUIRE_CONSTANT_TIME", "").lower() in ("1", "true", "yes"):
+        raise RuntimeError(
+            "AMA_REQUIRE_CONSTANT_TIME is set but native HMAC-SHA512 C backend "
+            "is unavailable. Cannot guarantee constant-time BIP32 key derivation. "
+            "Either build the native C library or unset AMA_REQUIRE_CONSTANT_TIME."
+        )
     logging.getLogger(__name__).warning(
         "native HMAC-SHA512 C backend unavailable; using pure-Python fallback "
-        "for BIP32 key derivation without constant-time guarantees."
+        "for BIP32 key derivation without constant-time guarantees. Set "
+        "AMA_REQUIRE_CONSTANT_TIME=true to enforce native-only execution."
     )
 
 
@@ -59,9 +66,10 @@ def _hmac_sha512(key: bytes, data: bytes) -> bytes:
     """
     if _HMAC_SHA512_NATIVE:
         try:
-            return native_hmac_sha512(key, data)
+            result: bytes = native_hmac_sha512(key, data)
+            return result
         except RuntimeError:
-            pass
+            pass  # native call failed at runtime; fall through to pure-Python below
 
     # Pure-Python HMAC-SHA512 (RFC 2104) — no stdlib hmac import.
     block_size = 128  # SHA-512 block size

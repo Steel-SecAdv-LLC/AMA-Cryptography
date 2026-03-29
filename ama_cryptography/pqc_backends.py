@@ -917,6 +917,11 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
             f"got {len(public_key)}"
         )
 
+    # INVARIANT-5 note: signature length is NOT validated here because ML-DSA-65
+    # signatures are variable-length (up to DILITHIUM_SIGNATURE_BYTES=3309).
+    # The actual length is passed via c_size_t(len(signature)), which is the
+    # INVARIANT-5 exemption for variable-length parameters.  A strict equality
+    # check was tried in PR #158 and reverted — it broke FIPS 204 KAT tests.
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ama_dilithium_verify(
             message,
@@ -958,6 +963,7 @@ def dilithium_verify_ctx(message: bytes, signature: bytes, public_key: bytes, ct
             f"Invalid public key length: expected {DILITHIUM_PUBLIC_KEY_BYTES}, "
             f"got {len(public_key)}"
         )
+    # INVARIANT-5 note: signature is variable-length (see dilithium_verify comment).
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ama_dilithium_verify_ctx(
             message,
@@ -1294,6 +1300,8 @@ def sphincs_verify_ctx(message: bytes, signature: bytes, public_key: bytes, ctx:
             f"Invalid public key length: expected {SPHINCS_PUBLIC_KEY_BYTES}, "
             f"got {len(public_key)}"
         )
+    # INVARIANT-5 note: SPHINCS+ signatures are variable-length (up to
+    # SPHINCS_SIGNATURE_BYTES=49856).  Actual length passed via c_size_t.
     if SPHINCS_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ama_sphincs_verify_ctx(
             message,
