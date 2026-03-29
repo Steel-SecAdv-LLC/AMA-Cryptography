@@ -2011,18 +2011,19 @@ def native_argon2id(
     if _native_lib is None or not _ARGON2_NATIVE_AVAILABLE:
         raise RuntimeError("Argon2id native backend not available. " + _INSTALL_HINT)
 
+    _UINT32_MAX = 0xFFFFFFFF  # ctypes c_uint32 upper bound
     if len(salt) < 8:
         raise ValueError(f"Argon2id salt must be >= 8 bytes, got {len(salt)}")
     if out_len < 4:
         raise ValueError(f"Argon2id output length must be >= 4, got {out_len}")
-    if t_cost < 1:
-        raise ValueError(f"Argon2id t_cost must be >= 1, got {t_cost}")
-    if parallelism < 1:
-        raise ValueError(f"Argon2id parallelism must be >= 1, got {parallelism}")
-    if m_cost < 8 * parallelism:
+    if t_cost < 1 or t_cost > _UINT32_MAX:
+        raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
+    if parallelism < 1 or parallelism > _UINT32_MAX:
+        raise ValueError(f"Argon2id parallelism must be in [1, {_UINT32_MAX}], got {parallelism}")
+    if m_cost < 8 * parallelism or m_cost > _UINT32_MAX:
         raise ValueError(
-            f"Argon2id m_cost must be >= 8 * parallelism KiB "
-            f"(min {8 * parallelism} for parallelism={parallelism}), got {m_cost}"
+            f"Argon2id m_cost must be in [{8 * parallelism}, {_UINT32_MAX}] KiB "
+            f"(min 8 * parallelism for parallelism={parallelism}), got {m_cost}"
         )
 
     out_buf = ctypes.create_string_buffer(out_len)
