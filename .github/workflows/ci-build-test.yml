@@ -324,7 +324,7 @@ jobs:
 
       - name: Log in to Docker Hub (optional, avoids rate limits)
         if: ${{ secrets.DOCKERHUB_USERNAME != '' }}
-        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2  # v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
