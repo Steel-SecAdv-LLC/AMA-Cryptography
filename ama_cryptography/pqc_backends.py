@@ -42,7 +42,7 @@ import platform
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
 
 from ama_cryptography.exceptions import (
     PQCUnavailableError,
@@ -767,10 +767,30 @@ class DilithiumKeyPair:
 
     Security: 192-bit quantum security (NIST Security Level 3)
     Standard: NIST FIPS 204 (ML-DSA)
+
+    INVARIANT-6: secret_key is stored as mutable bytearray and securely
+    zeroed via wipe() / __del__.
     """
 
-    secret_key: bytes = field(repr=False)  # 4032 bytes for ML-DSA-65 (excluded from repr)
+    secret_key: Union[bytes, bytearray] = field(repr=False)  # 4032 bytes for ML-DSA-65
     public_key: bytes  # 1952 bytes for ML-DSA-65
+
+    def __post_init__(self) -> None:
+        if isinstance(self.secret_key, bytes):
+            object.__setattr__(self, "secret_key", bytearray(self.secret_key))
+
+    def wipe(self) -> None:
+        """Securely zero secret key material."""
+        if isinstance(self.secret_key, bytearray) and len(self.secret_key) > 0:
+            from ama_cryptography.secure_memory import secure_memzero
+
+            secure_memzero(self.secret_key)
+
+    def __del__(self) -> None:
+        try:
+            self.wipe()
+        except Exception:  # noqa: S110  # nosec B110
+            pass  # __del__ must never raise; secure_memzero may be gc'd at shutdown
 
 
 @dataclass
@@ -786,10 +806,30 @@ class KyberKeyPair:
 
     Security: 256-bit classical / 128-bit quantum security (NIST Security Level 5)
     Standard: NIST FIPS 203 (ML-KEM)
+
+    INVARIANT-6: secret_key is stored as mutable bytearray and securely
+    zeroed via wipe() / __del__.
     """
 
-    secret_key: bytes = field(repr=False)  # 3168 bytes for Kyber-1024 (excluded from repr)
+    secret_key: Union[bytes, bytearray] = field(repr=False)  # 3168 bytes for Kyber-1024
     public_key: bytes  # 1568 bytes for Kyber-1024
+
+    def __post_init__(self) -> None:
+        if isinstance(self.secret_key, bytes):
+            object.__setattr__(self, "secret_key", bytearray(self.secret_key))
+
+    def wipe(self) -> None:
+        """Securely zero secret key material."""
+        if isinstance(self.secret_key, bytearray) and len(self.secret_key) > 0:
+            from ama_cryptography.secure_memory import secure_memzero
+
+            secure_memzero(self.secret_key)
+
+    def __del__(self) -> None:
+        try:
+            self.wipe()
+        except Exception:  # noqa: S110  # nosec B110
+            pass  # __del__ must never raise; secure_memzero may be gc'd at shutdown
 
 
 @dataclass
@@ -819,10 +859,30 @@ class SphincsKeyPair:
 
     Note: SPHINCS+ signatures are large (~49KB) but provide stateless
     hash-based security with no risk of key reuse vulnerabilities.
+
+    INVARIANT-6: secret_key is stored as mutable bytearray and securely
+    zeroed via wipe() / __del__.
     """
 
-    secret_key: bytes = field(repr=False)  # 128 bytes for SPHINCS+-256f (excluded from repr)
+    secret_key: Union[bytes, bytearray] = field(repr=False)  # 128 bytes for SPHINCS+-256f
     public_key: bytes  # 64 bytes for SPHINCS+-256f
+
+    def __post_init__(self) -> None:
+        if isinstance(self.secret_key, bytes):
+            object.__setattr__(self, "secret_key", bytearray(self.secret_key))
+
+    def wipe(self) -> None:
+        """Securely zero secret key material."""
+        if isinstance(self.secret_key, bytearray) and len(self.secret_key) > 0:
+            from ama_cryptography.secure_memory import secure_memzero
+
+            secure_memzero(self.secret_key)
+
+    def __del__(self) -> None:
+        try:
+            self.wipe()
+        except Exception:  # noqa: S110  # nosec B110
+            pass  # __del__ must never raise; secure_memzero may be gc'd at shutdown
 
 
 def generate_dilithium_keypair() -> DilithiumKeyPair:
@@ -846,12 +906,12 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
             raise QuantumSignatureUnavailableError(
                 f"Native dilithium_keypair failed with error code {rc}"
             )
-        return DilithiumKeyPair(secret_key=bytes(sk_buf), public_key=bytes(pk_buf))
+        return DilithiumKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
 
-def dilithium_sign(message: bytes, secret_key: bytes) -> bytes:
+def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """
     Sign message with CRYSTALS-Dilithium (ML-DSA-65).
 
@@ -868,15 +928,22 @@ def dilithium_sign(message: bytes, secret_key: bytes) -> bytes:
     if not DILITHIUM_AVAILABLE:
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
 
+    if len(secret_key) != DILITHIUM_SECRET_KEY_BYTES:
+        raise ValueError(
+            f"Invalid secret key length: expected {DILITHIUM_SECRET_KEY_BYTES}, "
+            f"got {len(secret_key)}"
+        )
+
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(DILITHIUM_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(DILITHIUM_SIGNATURE_BYTES)
+        sk_bytes = bytes(secret_key) if isinstance(secret_key, bytearray) else secret_key
         rc = _native_lib.ama_dilithium_sign(
             sig_buf,
             ctypes.byref(sig_len),
             message,
             ctypes.c_size_t(len(message)),
-            secret_key,
+            sk_bytes,
         )
         if rc != 0:
             raise QuantumSignatureUnavailableError(
@@ -904,6 +971,12 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
     """
     if not DILITHIUM_AVAILABLE:
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
+
+    if len(public_key) != DILITHIUM_PUBLIC_KEY_BYTES:
+        raise ValueError(
+            f"Invalid public key length: expected {DILITHIUM_PUBLIC_KEY_BYTES}, "
+            f"got {len(public_key)}"
+        )
 
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ama_dilithium_verify(
@@ -941,6 +1014,11 @@ def dilithium_verify_ctx(message: bytes, signature: bytes, public_key: bytes, ct
         raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
     if not DILITHIUM_AVAILABLE:
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
+    if len(public_key) != DILITHIUM_PUBLIC_KEY_BYTES:
+        raise ValueError(
+            f"Invalid public key length: expected {DILITHIUM_PUBLIC_KEY_BYTES}, "
+            f"got {len(public_key)}"
+        )
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ama_dilithium_verify_ctx(
             message,
@@ -994,7 +1072,7 @@ def generate_kyber_keypair() -> KyberKeyPair:
         )
         if rc != 0:
             raise KyberUnavailableError(f"Native kyber_keypair failed with error code {rc}")
-        return KyberKeyPair(secret_key=bytes(sk_buf), public_key=bytes(pk_buf))
+        return KyberKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
 
     raise KyberUnavailableError(_KYBER_UNKNOWN_STATE)
 
@@ -1056,7 +1134,7 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
     raise KyberUnavailableError(_KYBER_UNKNOWN_STATE)
 
 
-def kyber_decapsulate(ciphertext: bytes, secret_key: bytes) -> bytes:
+def kyber_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """
     Decapsulate a shared secret using Kyber-1024.
 
@@ -1098,10 +1176,11 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: bytes) -> bytes:
 
     if KYBER_BACKEND == "native" and _native_lib is not None:
         ss_buf = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
+        sk_bytes = bytes(secret_key) if isinstance(secret_key, bytearray) else secret_key
         rc = _native_lib.ama_kyber_decapsulate(
             ciphertext,
             ctypes.c_size_t(len(ciphertext)),
-            secret_key,
+            sk_bytes,
             ctypes.c_size_t(len(secret_key)),
             ss_buf,
             ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
@@ -1148,12 +1227,12 @@ def generate_sphincs_keypair() -> SphincsKeyPair:
         rc = _native_lib.ama_sphincs_keypair(pk_buf, sk_buf)
         if rc != 0:
             raise SphincsUnavailableError(f"Native sphincs_keypair failed with error code {rc}")
-        return SphincsKeyPair(secret_key=bytes(sk_buf), public_key=bytes(pk_buf))
+        return SphincsKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
 
 
-def sphincs_sign(message: bytes, secret_key: bytes) -> bytes:
+def sphincs_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """
     Sign message with SPHINCS+-SHA2-256f-simple.
 
@@ -1189,12 +1268,13 @@ def sphincs_sign(message: bytes, secret_key: bytes) -> bytes:
     if SPHINCS_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(SPHINCS_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(SPHINCS_SIGNATURE_BYTES)
+        sk_bytes = bytes(secret_key) if isinstance(secret_key, bytearray) else secret_key
         rc = _native_lib.ama_sphincs_sign(
             sig_buf,
             ctypes.byref(sig_len),
             message,
             ctypes.c_size_t(len(message)),
-            secret_key,
+            sk_bytes,
         )
         if rc != 0:
             raise SphincsUnavailableError(f"Native sphincs_sign failed with error code {rc}")
@@ -1272,6 +1352,11 @@ def sphincs_verify_ctx(message: bytes, signature: bytes, public_key: bytes, ctx:
         raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
     if not SPHINCS_AVAILABLE:
         raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
+    if len(public_key) != SPHINCS_PUBLIC_KEY_BYTES:
+        raise ValueError(
+            f"Invalid public key length: expected {SPHINCS_PUBLIC_KEY_BYTES}, "
+            f"got {len(public_key)}"
+        )
     if SPHINCS_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ama_sphincs_verify_ctx(
             message,
@@ -1356,7 +1441,7 @@ def native_ed25519_keypair_from_seed(seed: bytes) -> tuple:
     return bytes(pk_buf), bytes(sk_buf)
 
 
-def native_ed25519_sign(message: bytes, secret_key: bytes) -> bytes:
+def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """
     Sign message with Ed25519 using native C backend.
 
@@ -1381,7 +1466,8 @@ def native_ed25519_sign(message: bytes, secret_key: bytes) -> bytes:
         )
 
     sig_buf = ctypes.create_string_buffer(ED25519_SIGNATURE_BYTES)
-    rc = _native_lib.ama_ed25519_sign(sig_buf, message, ctypes.c_size_t(len(message)), secret_key)
+    sk_bytes = bytes(secret_key) if isinstance(secret_key, bytearray) else secret_key
+    rc = _native_lib.ama_ed25519_sign(sig_buf, message, ctypes.c_size_t(len(message)), sk_bytes)
     if rc != 0:
         raise RuntimeError(f"Ed25519 signing failed (rc={rc})")
 
@@ -1748,7 +1834,7 @@ class _DilithiumKATKeyPair:
     """Internal keypair structure for KAT test compatibility."""
 
     public_key: bytes
-    secret_key: bytes
+    secret_key: Union[bytes, bytearray]
 
 
 class DilithiumProvider:
@@ -1774,9 +1860,11 @@ class DilithiumProvider:
             _DilithiumKATKeyPair with public_key and secret_key attributes
         """
         kp = generate_dilithium_keypair()
-        return _DilithiumKATKeyPair(public_key=kp.public_key, secret_key=kp.secret_key)
+        # Copy secret_key to detach from DilithiumKeyPair's bytearray;
+        # DilithiumKeyPair.__del__ wipes its own copy on scope exit.
+        return _DilithiumKATKeyPair(public_key=kp.public_key, secret_key=bytearray(kp.secret_key))
 
-    def sign(self, message: bytes, secret_key: bytes) -> bytes:
+    def sign(self, message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
         """
         Sign a message with Dilithium.
 
@@ -1809,7 +1897,7 @@ class _KyberKATKeyPair:
     """Internal keypair structure for KAT test compatibility."""
 
     public_key: bytes
-    secret_key: bytes
+    secret_key: Union[bytes, bytearray]
 
 
 class KyberProvider:
@@ -1836,7 +1924,9 @@ class KyberProvider:
             _KyberKATKeyPair with public_key and secret_key attributes
         """
         kp = generate_kyber_keypair()
-        return _KyberKATKeyPair(public_key=kp.public_key, secret_key=kp.secret_key)
+        # Copy secret_key to detach from KyberKeyPair's bytearray;
+        # KyberKeyPair.__del__ wipes its own copy on scope exit.
+        return _KyberKATKeyPair(public_key=kp.public_key, secret_key=bytearray(kp.secret_key))
 
     def encapsulate(self, public_key: bytes) -> tuple:
         """
@@ -1851,7 +1941,7 @@ class KyberProvider:
         result = kyber_encapsulate(public_key)
         return (result.ciphertext, result.shared_secret)
 
-    def decapsulate(self, ciphertext: bytes, secret_key: bytes) -> bytes:
+    def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
         """
         Decapsulate a shared secret.
 
@@ -1988,6 +2078,21 @@ def native_argon2id(
     """
     if _native_lib is None or not _ARGON2_NATIVE_AVAILABLE:
         raise RuntimeError("Argon2id native backend not available. " + _INSTALL_HINT)
+
+    _UINT32_MAX = 0xFFFFFFFF
+    if len(salt) < 8:
+        raise ValueError(f"Argon2id salt must be >= 8 bytes, got {len(salt)}")
+    if out_len < 4:
+        raise ValueError(f"Argon2id output length must be >= 4, got {out_len}")
+    if t_cost < 1 or t_cost > _UINT32_MAX:
+        raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
+    if parallelism < 1 or parallelism > _UINT32_MAX:
+        raise ValueError(f"Argon2id parallelism must be in [1, {_UINT32_MAX}], got {parallelism}")
+    if m_cost < 8 * parallelism or m_cost > _UINT32_MAX:
+        raise ValueError(
+            f"Argon2id m_cost must be in [{8 * parallelism}, {_UINT32_MAX}] KiB "
+            f"(min 8 * parallelism for parallelism={parallelism}), got {m_cost}"
+        )
 
     out_buf = ctypes.create_string_buffer(out_len)
     rc = _native_lib.ama_argon2id(

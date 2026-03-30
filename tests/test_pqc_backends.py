@@ -17,6 +17,7 @@ from unittest.mock import patch
 import pytest
 
 from ama_cryptography.pqc_backends import (
+    _ARGON2_NATIVE_AVAILABLE,
     DILITHIUM_AVAILABLE,
     DILITHIUM_BACKEND,
     DILITHIUM_PUBLIC_KEY_BYTES,
@@ -40,14 +41,19 @@ from ama_cryptography.pqc_backends import (
     PQCUnavailableError,
     SphincsKeyPair,
     SphincsUnavailableError,
+    dilithium_sign,
+    dilithium_verify,
+    dilithium_verify_ctx,
     generate_dilithium_keypair,
     generate_kyber_keypair,
     generate_sphincs_keypair,
     get_pqc_backend_info,
     kyber_decapsulate,
     kyber_encapsulate,
+    native_argon2id,
     sphincs_sign,
     sphincs_verify,
+    sphincs_verify_ctx,
 )
 
 
@@ -485,3 +491,223 @@ class TestExceptionClasses:
 
         sphincs_err = SphincsUnavailableError("SPHINCS test")
         assert "SPHINCS test" in str(sphincs_err)
+
+
+# ============================================================================
+# INVARIANT-5: Negative-path tests for input size validation
+# ============================================================================
+
+
+@pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
+class TestInvariant5DilithiumNegativePaths:
+    """Verify malformed fixed-size buffers are rejected before ctypes dispatch."""
+
+    def test_sign_rejects_short_secret_key(self) -> None:
+        short_sk = b"\x00" * (DILITHIUM_SECRET_KEY_BYTES - 1)
+        with pytest.raises(ValueError, match="Invalid secret key length"):
+            dilithium_sign(b"msg", short_sk)
+
+    def test_sign_rejects_long_secret_key(self) -> None:
+        long_sk = b"\x00" * (DILITHIUM_SECRET_KEY_BYTES + 1)
+        with pytest.raises(ValueError, match="Invalid secret key length"):
+            dilithium_sign(b"msg", long_sk)
+
+    def test_sign_rejects_empty_secret_key(self) -> None:
+        with pytest.raises(ValueError, match="Invalid secret key length"):
+            dilithium_sign(b"msg", b"")
+
+    def test_verify_rejects_short_public_key(self) -> None:
+        short_pk = b"\x00" * (DILITHIUM_PUBLIC_KEY_BYTES - 1)
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            dilithium_verify(b"msg", b"\x00" * DILITHIUM_SIGNATURE_BYTES, short_pk)
+
+    def test_verify_rejects_long_public_key(self) -> None:
+        long_pk = b"\x00" * (DILITHIUM_PUBLIC_KEY_BYTES + 1)
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            dilithium_verify(b"msg", b"\x00" * DILITHIUM_SIGNATURE_BYTES, long_pk)
+
+    def test_verify_ctx_rejects_short_public_key(self) -> None:
+        short_pk = b"\x00" * (DILITHIUM_PUBLIC_KEY_BYTES - 1)
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            dilithium_verify_ctx(b"msg", b"\x00" * DILITHIUM_SIGNATURE_BYTES, short_pk, b"ctx")
+
+    def test_verify_ctx_rejects_oversized_context(self) -> None:
+        pk = b"\x00" * DILITHIUM_PUBLIC_KEY_BYTES
+        with pytest.raises(ValueError, match="Context must be at most 255 bytes"):
+            dilithium_verify_ctx(b"msg", b"\x00" * DILITHIUM_SIGNATURE_BYTES, pk, b"\x00" * 256)
+
+
+@pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber backend not available")
+class TestInvariant5KyberNegativePaths:
+    """Verify malformed Kyber inputs are rejected before ctypes dispatch."""
+
+    def test_encapsulate_rejects_short_public_key(self) -> None:
+        short_pk = b"\x00" * (KYBER_PUBLIC_KEY_BYTES - 1)
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            kyber_encapsulate(short_pk)
+
+    def test_encapsulate_rejects_long_public_key(self) -> None:
+        long_pk = b"\x00" * (KYBER_PUBLIC_KEY_BYTES + 1)
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            kyber_encapsulate(long_pk)
+
+    def test_decapsulate_rejects_short_ciphertext(self) -> None:
+        short_ct = b"\x00" * (KYBER_CIPHERTEXT_BYTES - 1)
+        sk = b"\x00" * KYBER_SECRET_KEY_BYTES
+        with pytest.raises(ValueError, match="Invalid ciphertext length"):
+            kyber_decapsulate(short_ct, sk)
+
+    def test_decapsulate_rejects_short_secret_key(self) -> None:
+        ct = b"\x00" * KYBER_CIPHERTEXT_BYTES
+        short_sk = b"\x00" * (KYBER_SECRET_KEY_BYTES - 1)
+        with pytest.raises(ValueError, match="Invalid secret key length"):
+            kyber_decapsulate(ct, short_sk)
+
+    def test_encapsulate_rejects_empty_public_key(self) -> None:
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            kyber_encapsulate(b"")
+
+
+@pytest.mark.skipif(not SPHINCS_AVAILABLE, reason="SPHINCS+ backend not available")
+class TestInvariant5SphincsNegativePaths:
+    """Verify malformed SPHINCS+ inputs are rejected before ctypes dispatch."""
+
+    def test_sign_rejects_short_secret_key(self) -> None:
+        short_sk = b"\x00" * (SPHINCS_SECRET_KEY_BYTES - 1)
+        with pytest.raises(ValueError, match="Invalid secret key length"):
+            sphincs_sign(b"msg", short_sk)
+
+    def test_sign_rejects_long_secret_key(self) -> None:
+        long_sk = b"\x00" * (SPHINCS_SECRET_KEY_BYTES + 1)
+        with pytest.raises(ValueError, match="Invalid secret key length"):
+            sphincs_sign(b"msg", long_sk)
+
+    def test_verify_rejects_short_public_key(self) -> None:
+        short_pk = b"\x00" * (SPHINCS_PUBLIC_KEY_BYTES - 1)
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            sphincs_verify(b"msg", b"\x00" * 100, short_pk)
+
+    def test_verify_rejects_long_public_key(self) -> None:
+        long_pk = b"\x00" * (SPHINCS_PUBLIC_KEY_BYTES + 1)
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            sphincs_verify(b"msg", b"\x00" * 100, long_pk)
+
+    def test_verify_ctx_rejects_short_public_key(self) -> None:
+        short_pk = b"\x00" * (SPHINCS_PUBLIC_KEY_BYTES - 1)
+        with pytest.raises(ValueError, match="Invalid public key length"):
+            sphincs_verify_ctx(b"msg", b"\x00" * 100, short_pk, b"ctx")
+
+    def test_verify_ctx_rejects_oversized_context(self) -> None:
+        pk = b"\x00" * SPHINCS_PUBLIC_KEY_BYTES
+        with pytest.raises(ValueError, match="Context must be at most 255 bytes"):
+            sphincs_verify_ctx(b"msg", b"\x00" * 100, pk, b"\x00" * 256)
+
+
+@pytest.mark.skipif(
+    not _ARGON2_NATIVE_AVAILABLE,
+    reason="Argon2id native backend not available",
+)
+class TestInvariant5Argon2idNegativePaths:
+    """Verify Argon2id parameter validation guards the c_uint32 ctypes boundary."""
+
+    def test_rejects_short_salt(self) -> None:
+        with pytest.raises(ValueError, match="salt must be >= 8 bytes"):
+            native_argon2id(b"password", b"\x00" * 7)
+
+    def test_rejects_empty_salt(self) -> None:
+        with pytest.raises(ValueError, match="salt must be >= 8 bytes"):
+            native_argon2id(b"password", b"")
+
+    def test_rejects_out_len_below_minimum(self) -> None:
+        with pytest.raises(ValueError, match="output length must be >= 4"):
+            native_argon2id(b"password", b"\x00" * 16, out_len=3)
+
+    def test_rejects_zero_out_len(self) -> None:
+        with pytest.raises(ValueError, match="output length must be >= 4"):
+            native_argon2id(b"password", b"\x00" * 16, out_len=0)
+
+    def test_rejects_t_cost_zero(self) -> None:
+        with pytest.raises(ValueError, match="t_cost must be in"):
+            native_argon2id(b"password", b"\x00" * 16, t_cost=0)
+
+    def test_rejects_t_cost_negative(self) -> None:
+        with pytest.raises(ValueError, match="t_cost must be in"):
+            native_argon2id(b"password", b"\x00" * 16, t_cost=-1)
+
+    def test_rejects_t_cost_exceeds_uint32(self) -> None:
+        with pytest.raises(ValueError, match="t_cost must be in"):
+            native_argon2id(b"password", b"\x00" * 16, t_cost=0xFFFFFFFF + 1)
+
+    def test_rejects_parallelism_zero(self) -> None:
+        with pytest.raises(ValueError, match="parallelism must be in"):
+            native_argon2id(b"password", b"\x00" * 16, parallelism=0)
+
+    def test_rejects_parallelism_negative(self) -> None:
+        with pytest.raises(ValueError, match="parallelism must be in"):
+            native_argon2id(b"password", b"\x00" * 16, parallelism=-1)
+
+    def test_rejects_m_cost_below_minimum(self) -> None:
+        with pytest.raises(ValueError, match="m_cost must be in"):
+            native_argon2id(b"password", b"\x00" * 16, m_cost=31, parallelism=4)
+
+    def test_rejects_m_cost_exceeds_uint32(self) -> None:
+        with pytest.raises(ValueError, match="m_cost must be in"):
+            native_argon2id(b"password", b"\x00" * 16, m_cost=0xFFFFFFFF + 1)
+
+
+# ============================================================================
+# INVARIANT-6: Secret key zeroing tests
+# ============================================================================
+
+
+@pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
+class TestInvariant6SecretKeyZeroing:
+    """Verify that PQC KeyPair dataclasses store bytearray and support wipe()."""
+
+    def test_dilithium_keypair_stores_bytearray(self) -> None:
+        kp = generate_dilithium_keypair()
+        assert isinstance(kp.secret_key, bytearray)
+        assert len(kp.secret_key) == DILITHIUM_SECRET_KEY_BYTES
+
+    def test_dilithium_keypair_wipe_zeros_key(self) -> None:
+        kp = generate_dilithium_keypair()
+        assert any(b != 0 for b in kp.secret_key)
+        kp.wipe()
+        assert all(b == 0 for b in kp.secret_key)
+
+    def test_dilithium_keypair_bytes_input_converted(self) -> None:
+        """Passing bytes to DilithiumKeyPair converts to bytearray."""
+        kp = DilithiumKeyPair(secret_key=b"\x01" * DILITHIUM_SECRET_KEY_BYTES, public_key=b"\x02" * DILITHIUM_PUBLIC_KEY_BYTES)
+        assert isinstance(kp.secret_key, bytearray)
+
+    @pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber backend not available")
+    def test_kyber_keypair_stores_bytearray(self) -> None:
+        kp = generate_kyber_keypair()
+        assert isinstance(kp.secret_key, bytearray)
+        assert len(kp.secret_key) == KYBER_SECRET_KEY_BYTES
+
+    @pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber backend not available")
+    def test_kyber_keypair_wipe_zeros_key(self) -> None:
+        kp = generate_kyber_keypair()
+        assert any(b != 0 for b in kp.secret_key)
+        kp.wipe()
+        assert all(b == 0 for b in kp.secret_key)
+
+    @pytest.mark.skipif(not SPHINCS_AVAILABLE, reason="SPHINCS+ backend not available")
+    def test_sphincs_keypair_stores_bytearray(self) -> None:
+        kp = generate_sphincs_keypair()
+        assert isinstance(kp.secret_key, bytearray)
+        assert len(kp.secret_key) == SPHINCS_SECRET_KEY_BYTES
+
+    @pytest.mark.skipif(not SPHINCS_AVAILABLE, reason="SPHINCS+ backend not available")
+    def test_sphincs_keypair_wipe_zeros_key(self) -> None:
+        kp = generate_sphincs_keypair()
+        assert any(b != 0 for b in kp.secret_key)
+        kp.wipe()
+        assert all(b == 0 for b in kp.secret_key)
+
+    def test_sign_works_with_bytearray_key(self) -> None:
+        """dilithium_sign accepts bytearray secret keys (INVARIANT-6 compat)."""
+        kp = generate_dilithium_keypair()
+        sig = dilithium_sign(b"test message", kp.secret_key)
+        assert dilithium_verify(b"test message", sig, kp.public_key)

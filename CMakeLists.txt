@@ -45,6 +45,42 @@ if(MSVC AND NOT AMA_ED25519_ASSEMBLY)
     endif()
 endif()
 
+# INVARIANT-8: Minimum compiler versions for correct constant-time code
+# generation and SIMD intrinsics.  Reference build: ubuntu:22.04 + GCC 12.
+# Default: FATAL_ERROR on non-compliant toolchains.
+# Opt-out: -DAMA_ALLOW_UNVERIFIED_TOOLCHAIN=ON to downgrade to WARNING.
+option(AMA_ALLOW_UNVERIFIED_TOOLCHAIN
+    "Allow builds with unverified compiler versions (overrides INVARIANT-8 FATAL_ERROR)" OFF)
+
+if(AMA_ALLOW_UNVERIFIED_TOOLCHAIN)
+    set(_AMA_INV8_SEVERITY WARNING)
+else()
+    set(_AMA_INV8_SEVERITY FATAL_ERROR)
+endif()
+
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    if(CMAKE_C_COMPILER_VERSION VERSION_LESS "12")
+        message(${_AMA_INV8_SEVERITY}
+            "GCC ${CMAKE_C_COMPILER_VERSION} detected. "
+            "GCC >= 12 is required for reliable constant-time code generation "
+            "and full AVX2/NEON intrinsic support (INVARIANT-8). "
+            "Set -DAMA_ALLOW_UNVERIFIED_TOOLCHAIN=ON to override.")
+    endif()
+elseif(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang")
+    if(CMAKE_C_COMPILER_VERSION VERSION_LESS "15")
+        message(${_AMA_INV8_SEVERITY}
+            "Clang ${CMAKE_C_COMPILER_VERSION} detected. "
+            "Clang >= 15 is required for reliable constant-time code generation "
+            "(INVARIANT-8). "
+            "Set -DAMA_ALLOW_UNVERIFIED_TOOLCHAIN=ON to override.")
+    endif()
+elseif(NOT MSVC)
+    message(${_AMA_INV8_SEVERITY}
+        "Unknown compiler ${CMAKE_C_COMPILER_ID}. "
+        "Only GCC >= 12, Clang >= 15, and MSVC are tested (INVARIANT-8). "
+        "Set -DAMA_ALLOW_UNVERIFIED_TOOLCHAIN=ON to override.")
+endif()
+
 # C standard
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)

@@ -154,7 +154,7 @@ AMA Cryptography is a zero-dependency native C cryptographic library providing q
 | T4.1 | Dependency pinning and SBOM generation | **IMPLEMENTED** | `requirements-lock.txt`, SBOM workflow |
 | T4.2 | Multi-platform CI with security scanning | **IMPLEMENTED** | `ci.yml`, `security.yml`, `fuzzing.yml` |
 | T4.2 | Secret scanning (TruffleHog) | **IMPLEMENTED** | `.github/workflows/security.yml` |
-| T4.3 | Signed commits (recommended) | **RECOMMENDED** | GPG/SSH signing on main branch |
+| T4.3 | Signed commits (required) | **REQUIRED** | GPG/SSH signing on main and develop branches (INVARIANT-10) |
 
 ---
 
