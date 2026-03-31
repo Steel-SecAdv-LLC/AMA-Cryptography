@@ -1009,7 +1009,8 @@ class AESGCMProvider:
         if AESGCMProvider._counters_dirty >= self._PERSIST_INTERVAL:
             try:
                 self._persist_counters(_raising=True)
-            except Exception:
+            except Exception as exc:
+                logger.warning("AES-GCM counter persist failed (will retry next encrypt): %s", exc)
                 # Persist failed — set dirty to interval-1 so the VERY NEXT
                 # encrypt retries persistence immediately, avoiding both:
                 # (a) 63 encrypts without persistence (finally-reset-to-0), and
@@ -2055,7 +2056,8 @@ def verify_crypto_package(
         from ama_cryptography.secure_memory import constant_time_compare
 
         results["hmac"] = constant_time_compare(recomputed_hmac, package.hmac_tag)
-    except Exception:
+    except Exception as exc:
+        logger.error("Layer 2 HMAC verification error: %s", exc)
         results["hmac"] = False
 
     # ========================================================================
@@ -2075,7 +2077,8 @@ def verify_crypto_package(
                 package.primary_signature.signature,
                 package.keypairs[sig_alg_name].public_key,
             )
-        except Exception:
+        except Exception as exc:
+            logger.error("Layer 3 signature verification error: %s", exc)
             results["primary_signature"] = False
     else:
         results["primary_signature"] = False
@@ -2110,7 +2113,8 @@ def verify_crypto_package(
                 if not _ct(rk, sk):
                     keys_match = False
             results["hkdf_keys"] = keys_match
-    except Exception:
+    except Exception as exc:
+        logger.error("Layer 4 HKDF key verification error: %s", exc)
         results["hkdf_keys"] = False
 
     # ========================================================================
@@ -2125,7 +2129,8 @@ def verify_crypto_package(
                     package.sphincs_signature.signature,
                     package.keypairs["SPHINCS_256F"].public_key,
                 )
-            except Exception:
+            except Exception as exc:
+                logger.error("SPHINCS+ signature verification error: %s", exc)
                 results["sphincs"] = False
         else:
             results["sphincs"] = False
@@ -2147,7 +2152,8 @@ def verify_crypto_package(
             from ama_cryptography.secure_memory import constant_time_compare as _ct2
 
             results["kem"] = _ct2(decapsulated_ss, package.kem_shared_secret)
-        except Exception:
+        except Exception as exc:
+            logger.error("KEM decapsulation verification error: %s", exc)
             results["kem"] = False
 
     # Aggregate: separate core 4-layer validity from optional add-ons.

@@ -28,6 +28,7 @@ Use Cases:
 """
 
 import hashlib
+import logging
 import os as _os_mod
 import struct
 import threading
@@ -35,6 +36,8 @@ import time
 import warnings
 from dataclasses import dataclass
 from typing import Optional
+
+_logger = logging.getLogger(__name__)
 
 # Try to import rfc3161ng for RFC 3161 timestamp support
 try:
@@ -201,7 +204,8 @@ class MockTSA:
             # Extract embedded data_hash from the payload and compare.
             embedded_hash = payload[payload_end:]
             return embedded_hash == data_hash
-        except Exception:
+        except Exception as exc:
+            _logger.error("MockTSA.verify failed: %s", exc)
             return False
 
 
@@ -430,7 +434,8 @@ def verify_timestamp(
             if computed_hash is None or computed_hash != timestamp_result.data_hash:
                 return False
             return MockTSA.verify(timestamp_result.token, computed_hash)
-        except Exception:
+        except Exception as exc:
+            _logger.error("Mock timestamp verification failed: %s", exc)
             return False
 
     # ---- Online (real RFC 3161) verification ----
@@ -460,7 +465,8 @@ def verify_timestamp(
 
         return bool(is_valid)
 
-    except Exception:
+    except Exception as exc:
+        _logger.error("RFC 3161 timestamp verification failed: %s", exc)
         return False
 
 
