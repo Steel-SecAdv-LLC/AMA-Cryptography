@@ -677,7 +677,10 @@ class TestInvariant6SecretKeyZeroing:
 
     def test_dilithium_keypair_bytes_input_converted(self) -> None:
         """Passing bytes to DilithiumKeyPair converts to bytearray."""
-        kp = DilithiumKeyPair(secret_key=b"\x01" * DILITHIUM_SECRET_KEY_BYTES, public_key=b"\x02" * DILITHIUM_PUBLIC_KEY_BYTES)
+        kp = DilithiumKeyPair(
+            secret_key=b"\x01" * DILITHIUM_SECRET_KEY_BYTES,
+            public_key=b"\x02" * DILITHIUM_PUBLIC_KEY_BYTES,
+        )
         assert isinstance(kp.secret_key, bytearray)
 
     @pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber backend not available")

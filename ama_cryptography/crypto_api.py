@@ -1098,7 +1098,9 @@ class HybridKEMProvider(KEMProvider):
 
         combined_pk: bytes = x25519_pk + kyber_kp.public_key
         # Copy kyber secret_key to bytes to detach from KyberKeyPair's bytearray
-        combined_sk: bytes = x25519_sk + x25519_pk + bytes(kyber_kp.secret_key) + kyber_kp.public_key
+        combined_sk: bytes = (
+            x25519_sk + x25519_pk + bytes(kyber_kp.secret_key) + kyber_kp.public_key
+        )
 
         return KeyPair(
             public_key=combined_pk,
@@ -1154,12 +1156,14 @@ class HybridKEMProvider(KEMProvider):
         kyber_ct: bytes = ciphertext[self._X25519_KEY_BYTES :]
 
         # Split secret key: x25519_sk (32) || x25519_pk (32) || kyber_sk || kyber_pub
-        x25519_sk: bytes = secret_key[: self._X25519_KEY_BYTES]
-        x25519_pub: bytes = secret_key[self._X25519_KEY_BYTES : 2 * self._X25519_KEY_BYTES]
-        kyber_sk: bytes = secret_key[
+        # Convert to bytes once — secret_key may be bytearray (INVARIANT-6)
+        sk_bytes = bytes(secret_key)
+        x25519_sk: bytes = sk_bytes[: self._X25519_KEY_BYTES]
+        x25519_pub: bytes = sk_bytes[self._X25519_KEY_BYTES : 2 * self._X25519_KEY_BYTES]
+        kyber_sk: bytes = sk_bytes[
             2 * self._X25519_KEY_BYTES : 2 * self._X25519_KEY_BYTES + KYBER_SECRET_KEY_BYTES
         ]
-        kyber_pub: bytes = secret_key[2 * self._X25519_KEY_BYTES + KYBER_SECRET_KEY_BYTES :]
+        kyber_pub: bytes = sk_bytes[2 * self._X25519_KEY_BYTES + KYBER_SECRET_KEY_BYTES :]
 
         # Recover shared secrets
         x25519_ss: bytes = native_x25519_key_exchange(x25519_sk, x25519_eph_pub)

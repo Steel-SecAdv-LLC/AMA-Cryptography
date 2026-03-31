@@ -26,14 +26,13 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum, auto
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Dict, List, Optional, Tuple, Type, cast
+from typing import Any, Dict, List, Optional, Tuple, Type
 
 from ama_cryptography.exceptions import SecurityWarning  # noqa: F401 — re-exported for public API
+from ama_cryptography.pqc_backends import _HMAC_SHA512_NATIVE_AVAILABLE, native_hmac_sha512
 from ama_cryptography.secure_memory import secure_memzero
 
 # INVARIANT-7: Detect native HMAC-SHA512 availability at module level.
-from ama_cryptography.pqc_backends import _HMAC_SHA512_NATIVE_AVAILABLE, native_hmac_sha512
-
 _HMAC_SHA512_NATIVE = _HMAC_SHA512_NATIVE_AVAILABLE
 
 if not _HMAC_SHA512_NATIVE:
