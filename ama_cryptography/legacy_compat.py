@@ -455,13 +455,21 @@ def verify_rfc3161_timestamp(
     try:
         tsr_path = os.path.join(tmp_dir, "timestamp.tsr")
         fd = os.open(tsr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as f:
-            f.write(timestamp_token)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(timestamp_token)
+        except BaseException:
+            os.close(fd)
+            raise
 
         data_path = os.path.join(tmp_dir, "data.dat")
         fd = os.open(data_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+        except BaseException:
+            os.close(fd)
+            raise
 
         cmd_verify = [
             "openssl",
@@ -833,7 +841,7 @@ def create_crypto_package(  # noqa: C901
             dilithium_pubkey = kms.dilithium_keypair.public_key.hex()
             quantum_signatures_enabled = True
         except QuantumSignatureUnavailableError:
-            pass
+            _logger.debug("Dilithium signing unavailable; skipping quantum signature")
         if monitor and dilithium_sig is not None:
             duration_ms = (time.time() - start_time) * 1000
             monitor.monitor_crypto_operation("dilithium_sign", duration_ms)

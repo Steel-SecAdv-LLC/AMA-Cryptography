@@ -175,8 +175,6 @@ class TestDefaultTSAUrl:
         """
         import inspect
 
-        import ama_cryptography.rfc3161_timestamp as mod
-
-        source = inspect.getsource(mod.get_timestamp)
+        source = inspect.getsource(get_timestamp)
         # The default URL assigned when tsa_url is None should be HTTPS
         assert "https://" in source, "Expected the default TSA URL in get_timestamp() to use HTTPS"

@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
+import ama_cryptography.rfc3161_timestamp as ts_mod
 from ama_cryptography.rfc3161_timestamp import (
     MockTSA,
     get_timestamp,
@@ -125,8 +126,6 @@ class TestS3_MockTSAHMACAndGuard:
         """MockTSA.timestamp() must produce tokens verifiable with HMAC."""
         import hmac as hmac_mod
 
-        import ama_cryptography.rfc3161_timestamp as ts_mod
-
         # Enable MockTSA for this test
         ts_mod._MOCK_TSA_ALLOWED = True
         try:
@@ -145,8 +144,7 @@ class TestS3_MockTSAHMACAndGuard:
             # Verify the old vulnerable construction does NOT match
             old_vulnerable = hashlib.sha256(nonce + payload).digest()
             # They should differ (HMAC != raw hash concatenation)
-            # Note: they COULD theoretically match by coincidence, but practically won't
-            assert mac != old_vulnerable or mac == expected_hmac
+            assert mac != old_vulnerable, "HMAC output must differ from raw hash concatenation"
 
             # Verify roundtrip works
             assert MockTSA.verify(token, data_hash) is True
@@ -155,16 +153,12 @@ class TestS3_MockTSAHMACAndGuard:
 
     def test_mock_tsa_blocked_outside_testing(self) -> None:
         """MockTSA.timestamp() must raise RuntimeError when _MOCK_TSA_ALLOWED is False."""
-        import ama_cryptography.rfc3161_timestamp as ts_mod
-
         ts_mod._MOCK_TSA_ALLOWED = False
         with pytest.raises(RuntimeError, match="testing context"):
             MockTSA.timestamp(b"\x00" * 32, "sha256")
 
     def test_get_timestamp_mock_mode_still_works(self) -> None:
         """get_timestamp(tsa_mode='mock') must work (it enables the guard internally)."""
-        import ama_cryptography.rfc3161_timestamp as ts_mod
-
         ts_mod._MOCK_TSA_ALLOWED = False  # Ensure it's off
         result = get_timestamp(b"data", tsa_mode="mock")
         assert result is not None

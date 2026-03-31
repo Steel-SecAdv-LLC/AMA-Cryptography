@@ -625,7 +625,7 @@ class TestContextManager:
         hsm = _build_hsm(mock)
         session = mock.PyKCS11Lib.return_value.openSession.return_value
 
-        hsm.__del__()
+        del hsm
         session.logout.assert_called()
 
 

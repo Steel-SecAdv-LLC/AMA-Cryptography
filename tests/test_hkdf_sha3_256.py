@@ -31,7 +31,8 @@ try:
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF as HKDF
 
     _PYCA_AVAILABLE = True
-except Exception:
+except BaseException:
+    # PanicException (pyo3) inherits BaseException, not Exception
     default_backend = None  # type: ignore[assignment]
     hashes = None  # type: ignore[assignment]
     HKDF = None  # type: ignore[assignment,misc]
