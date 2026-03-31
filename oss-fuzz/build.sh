@@ -79,7 +79,7 @@ for target in "${FUZZ_TARGETS[@]}"; do
 
     # Copy seed corpus if it exists
     corpus_dir="fuzz/seed_corpus/${target}"
-    if [ -d "$corpus_dir" ] && [ -n "$(ls -A "$corpus_dir")" ]; then
+    if [ -d "$corpus_dir" ] && compgen -G "$corpus_dir"/* > /dev/null 2>&1; then
         zip -j "$OUT/${target}_seed_corpus.zip" "$corpus_dir"/*
     fi
 

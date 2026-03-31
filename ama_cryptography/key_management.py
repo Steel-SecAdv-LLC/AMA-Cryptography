@@ -36,7 +36,7 @@ from ama_cryptography.secure_memory import secure_memzero
 _HMAC_SHA512_NATIVE = _HMAC_SHA512_NATIVE_AVAILABLE
 
 if not _HMAC_SHA512_NATIVE:
-    if os.environ.get("AMA_REQUIRE_CONSTANT_TIME", "").lower() in ("1", "true", "yes"):
+    if os.environ.get("AMA_REQUIRE_CONSTANT_TIME", "").lower() in ("1", "true", "yes", "on"):
         raise RuntimeError(
             "AMA_REQUIRE_CONSTANT_TIME is set but native HMAC-SHA512 C backend "
             "is unavailable. Cannot guarantee constant-time BIP32 key derivation. "

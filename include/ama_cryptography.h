@@ -524,7 +524,9 @@ AMA_API ama_error_t ama_hmac_sha3_256(
  * @param msg       Message to authenticate
  * @param msg_len   Length of message in bytes
  * @param out       Output buffer (must be at least 64 bytes)
- * @return          AMA_SUCCESS on success, AMA_ERROR_MEMORY on allocation failure
+ * @return          AMA_SUCCESS on success, AMA_ERROR_INVALID_PARAM if key or out
+ *                  is NULL (or msg is NULL with msg_len > 0),
+ *                  AMA_ERROR_MEMORY on allocation failure
  *
  * INVARIANT-1 compliant: uses only ama_sha2.h — zero external crypto dependencies.
  */

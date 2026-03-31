@@ -775,6 +775,12 @@ def get_pqc_backend_info() -> dict:
     }
 
 
+def _secure_memzero(buf: bytearray) -> None:
+    """Zero a bytearray in-place without importing secure_memory (avoids cyclic import)."""
+    for i in range(len(buf)):
+        buf[i] = 0
+
+
 @dataclass
 class DilithiumKeyPair:
     """
@@ -802,9 +808,7 @@ class DilithiumKeyPair:
     def wipe(self) -> None:
         """Securely zero secret key material."""
         if isinstance(self.secret_key, bytearray) and len(self.secret_key) > 0:
-            from ama_cryptography.secure_memory import secure_memzero
-
-            secure_memzero(self.secret_key)
+            _secure_memzero(self.secret_key)
 
     def __del__(self) -> None:
         try:
@@ -841,9 +845,7 @@ class KyberKeyPair:
     def wipe(self) -> None:
         """Securely zero secret key material."""
         if isinstance(self.secret_key, bytearray) and len(self.secret_key) > 0:
-            from ama_cryptography.secure_memory import secure_memzero
-
-            secure_memzero(self.secret_key)
+            _secure_memzero(self.secret_key)
 
     def __del__(self) -> None:
         try:
@@ -894,9 +896,7 @@ class SphincsKeyPair:
     def wipe(self) -> None:
         """Securely zero secret key material."""
         if isinstance(self.secret_key, bytearray) and len(self.secret_key) > 0:
-            from ama_cryptography.secure_memory import secure_memzero
-
-            secure_memzero(self.secret_key)
+            _secure_memzero(self.secret_key)
 
     def __del__(self) -> None:
         try:
@@ -923,10 +923,13 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
         sk_buf = ctypes.create_string_buffer(DILITHIUM_SECRET_KEY_BYTES)
         rc = _native_lib.ama_dilithium_keypair(pk_buf, sk_buf)
         if rc != 0:
+            ctypes.memset(sk_buf, 0, DILITHIUM_SECRET_KEY_BYTES)
             raise QuantumSignatureUnavailableError(
                 f"Native dilithium_keypair failed with error code {rc}"
             )
-        return DilithiumKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
+        result = DilithiumKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
+        ctypes.memset(sk_buf, 0, DILITHIUM_SECRET_KEY_BYTES)
+        return result
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -957,19 +960,23 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(DILITHIUM_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(DILITHIUM_SIGNATURE_BYTES)
-        sk_bytes = bytes(secret_key) if isinstance(secret_key, bytearray) else secret_key
-        rc = _native_lib.ama_dilithium_sign(
-            sig_buf,
-            ctypes.byref(sig_len),
-            message,
-            ctypes.c_size_t(len(message)),
-            sk_bytes,
-        )
-        if rc != 0:
-            raise QuantumSignatureUnavailableError(
-                f"Native dilithium_sign failed with error code {rc}"
+        # INVARIANT-6: use mutable ctypes buffer to avoid non-wipeable bytes() copy
+        sk_buf = ctypes.create_string_buffer(bytes(secret_key), len(secret_key))
+        try:
+            rc = _native_lib.ama_dilithium_sign(
+                sig_buf,
+                ctypes.byref(sig_len),
+                message,
+                ctypes.c_size_t(len(message)),
+                sk_buf,
             )
-        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]
+            if rc != 0:
+                raise QuantumSignatureUnavailableError(
+                    f"Native dilithium_sign failed with error code {rc}"
+                )
+            return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]
+        finally:
+            ctypes.memset(sk_buf, 0, len(secret_key))
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -1091,8 +1098,11 @@ def generate_kyber_keypair() -> KyberKeyPair:
             ctypes.c_size_t(KYBER_SECRET_KEY_BYTES),
         )
         if rc != 0:
+            ctypes.memset(sk_buf, 0, KYBER_SECRET_KEY_BYTES)
             raise KyberUnavailableError(f"Native kyber_keypair failed with error code {rc}")
-        return KyberKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
+        result = KyberKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
+        ctypes.memset(sk_buf, 0, KYBER_SECRET_KEY_BYTES)
+        return result
 
     raise KyberUnavailableError(_KYBER_UNKNOWN_STATE)
 
@@ -1196,18 +1206,22 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) ->
 
     if KYBER_BACKEND == "native" and _native_lib is not None:
         ss_buf = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
-        sk_bytes = bytes(secret_key) if isinstance(secret_key, bytearray) else secret_key
-        rc = _native_lib.ama_kyber_decapsulate(
-            ciphertext,
-            ctypes.c_size_t(len(ciphertext)),
-            sk_bytes,
-            ctypes.c_size_t(len(secret_key)),
-            ss_buf,
-            ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
-        )
-        if rc != 0:
-            raise KyberUnavailableError(f"Native kyber_decapsulate failed with error code {rc}")
-        return bytes(ss_buf)
+        # INVARIANT-6: use mutable ctypes buffer to avoid non-wipeable bytes() copy
+        sk_buf = ctypes.create_string_buffer(bytes(secret_key), len(secret_key))
+        try:
+            rc = _native_lib.ama_kyber_decapsulate(
+                ciphertext,
+                ctypes.c_size_t(len(ciphertext)),
+                sk_buf,
+                ctypes.c_size_t(len(secret_key)),
+                ss_buf,
+                ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
+            )
+            if rc != 0:
+                raise KyberUnavailableError(f"Native kyber_decapsulate failed with error code {rc}")
+            return bytes(ss_buf)
+        finally:
+            ctypes.memset(sk_buf, 0, len(secret_key))
 
     raise KyberUnavailableError(_KYBER_UNKNOWN_STATE)
 
@@ -1246,8 +1260,11 @@ def generate_sphincs_keypair() -> SphincsKeyPair:
         sk_buf = ctypes.create_string_buffer(SPHINCS_SECRET_KEY_BYTES)
         rc = _native_lib.ama_sphincs_keypair(pk_buf, sk_buf)
         if rc != 0:
+            ctypes.memset(sk_buf, 0, SPHINCS_SECRET_KEY_BYTES)
             raise SphincsUnavailableError(f"Native sphincs_keypair failed with error code {rc}")
-        return SphincsKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
+        result = SphincsKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
+        ctypes.memset(sk_buf, 0, SPHINCS_SECRET_KEY_BYTES)
+        return result
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
 
@@ -1288,17 +1305,21 @@ def sphincs_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     if SPHINCS_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(SPHINCS_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(SPHINCS_SIGNATURE_BYTES)
-        sk_bytes = bytes(secret_key) if isinstance(secret_key, bytearray) else secret_key
-        rc = _native_lib.ama_sphincs_sign(
-            sig_buf,
-            ctypes.byref(sig_len),
-            message,
-            ctypes.c_size_t(len(message)),
-            sk_bytes,
-        )
-        if rc != 0:
-            raise SphincsUnavailableError(f"Native sphincs_sign failed with error code {rc}")
-        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]
+        # INVARIANT-6: use mutable ctypes buffer to avoid non-wipeable bytes() copy
+        sk_buf = ctypes.create_string_buffer(bytes(secret_key), len(secret_key))
+        try:
+            rc = _native_lib.ama_sphincs_sign(
+                sig_buf,
+                ctypes.byref(sig_len),
+                message,
+                ctypes.c_size_t(len(message)),
+                sk_buf,
+            )
+            if rc != 0:
+                raise SphincsUnavailableError(f"Native sphincs_sign failed with error code {rc}")
+            return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]
+        finally:
+            ctypes.memset(sk_buf, 0, len(secret_key))
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
 
@@ -1486,12 +1507,15 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
         )
 
     sig_buf = ctypes.create_string_buffer(ED25519_SIGNATURE_BYTES)
-    sk_bytes = bytes(secret_key) if isinstance(secret_key, bytearray) else secret_key
-    rc = _native_lib.ama_ed25519_sign(sig_buf, message, ctypes.c_size_t(len(message)), sk_bytes)
-    if rc != 0:
-        raise RuntimeError(f"Ed25519 signing failed (rc={rc})")
-
-    return bytes(sig_buf)
+    # INVARIANT-6: use mutable ctypes buffer to avoid non-wipeable bytes() copy
+    sk_buf = ctypes.create_string_buffer(bytes(secret_key), len(secret_key))
+    try:
+        rc = _native_lib.ama_ed25519_sign(sig_buf, message, ctypes.c_size_t(len(message)), sk_buf)
+        if rc != 0:
+            raise RuntimeError(f"Ed25519 signing failed (rc={rc})")
+        return bytes(sig_buf)
+    finally:
+        ctypes.memset(sk_buf, 0, len(secret_key))
 
 
 def native_ed25519_verify(signature: bytes, message: bytes, public_key: bytes) -> bool:

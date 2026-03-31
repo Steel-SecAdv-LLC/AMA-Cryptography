@@ -78,7 +78,7 @@ _HKDF_NATIVE = _HKDF_NATIVE_AVAILABLE
 
 # INVARIANT-7: warn when falling back to pure-Python (non-constant-time) HMAC/HKDF
 if not _HMAC_NATIVE or not _HKDF_NATIVE:
-    if os.environ.get("AMA_REQUIRE_CONSTANT_TIME", "").lower() in ("1", "true", "yes"):
+    if os.environ.get("AMA_REQUIRE_CONSTANT_TIME", "").lower() in ("1", "true", "yes", "on"):
         raise RuntimeError(
             "AMA_REQUIRE_CONSTANT_TIME is set but native HMAC/HKDF C accelerators "
             "are unavailable. Cannot guarantee constant-time execution. Either "
