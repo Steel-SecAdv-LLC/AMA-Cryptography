@@ -26,10 +26,27 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum, auto
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Dict, List, Optional, Tuple, Type, cast
+from typing import Any, Dict, List, Optional, Tuple, Type
 
 from ama_cryptography.exceptions import SecurityWarning  # noqa: F401 — re-exported for public API
+from ama_cryptography.pqc_backends import _HMAC_SHA512_NATIVE_AVAILABLE, native_hmac_sha512
 from ama_cryptography.secure_memory import secure_memzero
+
+# INVARIANT-7: Detect native HMAC-SHA512 availability at module level.
+_HMAC_SHA512_NATIVE = _HMAC_SHA512_NATIVE_AVAILABLE
+
+if not _HMAC_SHA512_NATIVE:
+    if os.environ.get("AMA_REQUIRE_CONSTANT_TIME", "").lower() in ("1", "true", "yes", "on"):
+        raise RuntimeError(
+            "AMA_REQUIRE_CONSTANT_TIME is set but native HMAC-SHA512 C backend "
+            "is unavailable. Cannot guarantee constant-time BIP32 key derivation. "
+            "Either build the native C library or unset AMA_REQUIRE_CONSTANT_TIME."
+        )
+    logging.getLogger(__name__).warning(
+        "native HMAC-SHA512 C backend unavailable; using pure-Python fallback "
+        "for BIP32 key derivation without constant-time guarantees. Set "
+        "AMA_REQUIRE_CONSTANT_TIME=true to enforce native-only execution."
+    )
 
 
 def _hmac_sha512(key: bytes, data: bytes) -> bytes:
@@ -40,13 +57,12 @@ def _hmac_sha512(key: bytes, data: bytes) -> bytes:
     Fallback: pure-Python implementation using hashlib.sha512.
     Does NOT use the stdlib ``hmac`` module (INVARIANT-1).
     """
-    try:
-        from ama_cryptography.pqc_backends import native_hmac_sha512  # type: ignore[attr-defined]
-
-        result: bytes = native_hmac_sha512(key, data)
-        return result
-    except (RuntimeError, ImportError):
-        pass  # Native HMAC-SHA512 unavailable — fall through to pure-Python below
+    if _HMAC_SHA512_NATIVE:
+        try:
+            result: bytes = native_hmac_sha512(key, data)
+            return result
+        except RuntimeError:
+            pass  # native call failed at runtime; fall through to pure-Python below
 
     # Pure-Python HMAC-SHA512 (RFC 2104) — no stdlib hmac import.
     block_size = 128  # SHA-512 block size
@@ -558,12 +574,9 @@ class SecureKeyStorage:
             os.chmod(self.salt_file, 0o600)
 
             # Determine algorithm: prefer Argon2id, fall back to PBKDF2
-            try:
-                from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE
+            from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE
 
-                use_argon2 = _ARGON2_NATIVE_AVAILABLE
-            except ImportError:
-                use_argon2 = False
+            use_argon2 = _ARGON2_NATIVE_AVAILABLE
 
             if use_argon2:
                 algorithm = "Argon2id"
@@ -680,12 +693,9 @@ class SecureKeyStorage:
         new_salt = secrets.token_bytes(self.KDF_SALT_BYTES)
 
         # Derive new key — prefer Argon2id, fall back to PBKDF2
-        try:
-            from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE, native_argon2id
+        from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE, native_argon2id
 
-            use_argon2 = _ARGON2_NATIVE_AVAILABLE
-        except ImportError:
-            use_argon2 = False
+        use_argon2 = _ARGON2_NATIVE_AVAILABLE
 
         if use_argon2:
             new_encryption_key = bytearray(
@@ -983,6 +993,7 @@ class HSMKeyStorage:
             RuntimeError: If token not found or login fails
         """
         self.pkcs11 = self._import_pykcs11()
+        self._handle_map: Dict[bytes, Any] = {}  # bytes key -> PKCS11 handle object
         self.library_path = self._resolve_library_path(hsm_type, library_path)
         self.lib = self._load_pkcs11_library()
         self.slot = self._find_token_slot(token_label, slot_index)
@@ -1098,27 +1109,29 @@ class HSMKeyStorage:
         if key_size not in (128, 192, 256):
             raise ValueError(f"Invalid key size: {key_size}. Must be 128, 192, or 256.")
 
-        CKA = self.pkcs11.CKA
-        CKM = self.pkcs11.CKM
+        pk = self.pkcs11
 
         template = [
-            (CKA.CLASS, self.pkcs11.CKO_SECRET_KEY),
-            (CKA.KEY_TYPE, self.pkcs11.CKK_AES),
-            (CKA.VALUE_LEN, key_size // 8),
-            (CKA.LABEL, key_label),
-            (CKA.TOKEN, True),  # Persist on token
-            (CKA.PRIVATE, True),  # Require login
-            (CKA.SENSITIVE, True),  # Never reveal in plaintext
-            (CKA.EXTRACTABLE, extractable),
-            (CKA.ENCRYPT, True),
-            (CKA.DECRYPT, True),
-            (CKA.WRAP, True),  # Can wrap other keys
-            (CKA.UNWRAP, True),  # Can unwrap other keys
+            (pk.CKA_CLASS, pk.CKO_SECRET_KEY),
+            (pk.CKA_KEY_TYPE, pk.CKK_AES),
+            (pk.CKA_VALUE_LEN, key_size // 8),
+            (pk.CKA_LABEL, key_label),
+            (pk.CKA_TOKEN, True),  # Persist on token
+            (pk.CKA_PRIVATE, True),  # Require login
+            (pk.CKA_SENSITIVE, True),  # Never reveal in plaintext
+            (pk.CKA_EXTRACTABLE, extractable),
+            (pk.CKA_ENCRYPT, True),
+            (pk.CKA_DECRYPT, True),
+            (pk.CKA_WRAP, True),  # Can wrap other keys
+            (pk.CKA_UNWRAP, True),  # Can unwrap other keys
         ]
 
         try:
-            handle = self.session.generateKey(self.pkcs11.Mechanism(CKM.AES_KEY_GEN), template)
-            return cast(bytes, handle.to_bytes(8, "big"))
+            handle = self.session.generateKey(template, pk.Mechanism(pk.CKM_AES_KEY_GEN))
+            handle_int = handle.value() if hasattr(handle, "value") else int(handle)
+            key_ref = handle_int.to_bytes(8, "big")
+            self._handle_map[key_ref] = handle
+            return key_ref
         except self.pkcs11.PyKCS11Error as e:
             raise RuntimeError(f"Failed to generate AES key: {e}") from e
 
@@ -1129,17 +1142,21 @@ class HSMKeyStorage:
         Returns:
             Key handle (8 bytes) or None if not found
         """
-        CKA = self.pkcs11.CKA
+        pk = self.pkcs11
 
         template = [
-            (CKA.CLASS, self.pkcs11.CKO_SECRET_KEY),
-            (CKA.LABEL, key_label),
+            (pk.CKA_CLASS, pk.CKO_SECRET_KEY),
+            (pk.CKA_LABEL, key_label),
         ]
 
         try:
             objects = self.session.findObjects(template)
             if objects:
-                return cast(bytes, objects[0].to_bytes(8, "big"))
+                obj = objects[0]
+                handle_int = obj.value() if hasattr(obj, "value") else int(obj)
+                key_ref = handle_int.to_bytes(8, "big")
+                self._handle_map[key_ref] = obj
+                return key_ref
             return None
         except self.pkcs11.PyKCS11Error:
             return None
@@ -1156,10 +1173,10 @@ class HSMKeyStorage:
             Tuple of (nonce, ciphertext, tag)
         """
         nonce = secrets.token_bytes(12)
-        handle = int.from_bytes(key_handle, "big")
+        handle = self._handle_map.get(key_handle, int.from_bytes(key_handle, "big"))
 
         try:
-            mechanism = self.pkcs11.AES_GCM_Mechanism(nonce=nonce, tagBits=128)
+            mechanism = self.pkcs11.AES_GCM_Mechanism(nonce, b"", 128)
             ciphertext_with_tag = bytes(self.session.encrypt(handle, plaintext, mechanism))
 
             # GCM appends the tag to ciphertext
@@ -1192,10 +1209,10 @@ class HSMKeyStorage:
         Raises:
             RuntimeError: If decryption or authentication fails
         """
-        handle = int.from_bytes(key_handle, "big")
+        handle = self._handle_map.get(key_handle, int.from_bytes(key_handle, "big"))
 
         try:
-            mechanism = self.pkcs11.AES_GCM_Mechanism(nonce=nonce, tagBits=128)
+            mechanism = self.pkcs11.AES_GCM_Mechanism(nonce, b"", 128)
             plaintext = bytes(self.session.decrypt(handle, ciphertext + tag, mechanism))
             return plaintext
         except self.pkcs11.PyKCS11Error as e:
@@ -1212,7 +1229,7 @@ class HSMKeyStorage:
         Returns:
             True if deleted, False if not found
         """
-        handle = int.from_bytes(key_handle, "big")
+        handle = self._handle_map.pop(key_handle, int.from_bytes(key_handle, "big"))
 
         try:
             self.session.destroyObject(handle)

@@ -13,6 +13,7 @@ Verifies:
 
 import secrets
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -173,13 +174,14 @@ class TestSecureMlock:
 
     def test_mlock_raises_when_unavailable(self) -> None:
         """secure_mlock raises NotImplementedError when no backend exists."""
-        if self._mlock_expected_available():
-            pytest.skip("mlock IS available — this test covers the unavailable path")
         from ama_cryptography.secure_memory import secure_mlock
 
-        data = bytearray(4096)
-        with pytest.raises(NotImplementedError):
-            secure_mlock(data)
+        # Disable both native C and POSIX mlock paths
+        with patch("ama_cryptography.pqc_backends._native_lib", None):
+            with patch("ctypes.util.find_library", return_value=None):
+                data = bytearray(4096)
+                with pytest.raises(NotImplementedError):
+                    secure_mlock(data)
 
     def test_munlock_succeeds_when_available(self) -> None:
         """secure_munlock succeeds when native/POSIX backend is available."""
@@ -195,13 +197,14 @@ class TestSecureMlock:
 
     def test_munlock_raises_when_unavailable(self) -> None:
         """secure_munlock raises NotImplementedError when no backend exists."""
-        if self._mlock_expected_available():
-            pytest.skip("mlock IS available — this test covers the unavailable path")
         from ama_cryptography.secure_memory import secure_munlock
 
-        data = bytearray(4096)
-        with pytest.raises(NotImplementedError):
-            secure_munlock(data)
+        # Disable both native C and POSIX munlock paths
+        with patch("ama_cryptography.pqc_backends._native_lib", None):
+            with patch("ctypes.util.find_library", return_value=None):
+                data = bytearray(4096)
+                with pytest.raises(NotImplementedError):
+                    secure_munlock(data)
 
 
 class TestConstantTimeCompare:

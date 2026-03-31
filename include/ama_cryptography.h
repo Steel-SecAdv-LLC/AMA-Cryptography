@@ -514,6 +514,29 @@ AMA_API ama_error_t ama_hmac_sha3_256(
 );
 
 /**
+ * @brief HMAC-SHA-512 (RFC 2104)
+ *
+ * Computes HMAC using SHA-512 for BIP32 key derivation and general-purpose
+ * keyed authentication.
+ *
+ * @param key       HMAC key
+ * @param key_len   Length of key in bytes
+ * @param msg       Message to authenticate
+ * @param msg_len   Length of message in bytes
+ * @param out       Output buffer (must be at least 64 bytes)
+ * @return          AMA_SUCCESS on success, AMA_ERROR_INVALID_PARAM if key or out
+ *                  is NULL (or msg is NULL with msg_len > 0),
+ *                  AMA_ERROR_MEMORY on allocation failure
+ *
+ * INVARIANT-1 compliant: uses only ama_sha2.h — zero external crypto dependencies.
+ */
+AMA_API ama_error_t ama_hmac_sha512(
+    const uint8_t *key, size_t key_len,
+    const uint8_t *msg, size_t msg_len,
+    uint8_t out[64]
+);
+
+/**
  * @brief HKDF key derivation (RFC 5869)
  *
  * Derives key material using HKDF with HMAC-SHA3-256.

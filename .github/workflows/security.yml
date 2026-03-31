@@ -22,7 +22,7 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
     - name: Set up Python
-      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
       with:
         python-version: "3.11"
 
@@ -52,6 +52,8 @@ jobs:
           bandit-report.json
         retention-days: 90
 
+  # INVARIANT-11: SBOM generation is required for release tags.
+  # Requires adding this job to required status checks via branch/tag protection rules.
   sbom:
     name: SBOM Generation (CycloneDX)
     runs-on: ubuntu-latest
@@ -61,7 +63,7 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
     - name: Set up Python
-      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
       with:
         python-version: "3.11"
 
@@ -94,9 +96,9 @@ jobs:
         name: pip-audit-results
         path: pip-audit.json
 
-    - name: Annotate SBOM as placeholder
+    - name: Annotate SBOM status
       run: |
-        echo "::warning::SBOM C-library component is a static placeholder — update version and purl fields when the build system emits real metadata"
+        echo "::warning::SBOM C-library component uses static metadata — version and purl fields must be updated on each release"
 
     - name: Create C library SBOM component
       run: |
@@ -232,7 +234,7 @@ jobs:
         fetch-depth: 0
 
     - name: TruffleHog Secret Scanning
-      uses: trufflesecurity/trufflehog@6c64db94d5b2e09d7e0948fb6bd3166cc6fffbc7  # pin: main 2026-03-13
+      uses: trufflesecurity/trufflehog@586f66d7886cd0b037c7c245d4a6e34ef357ab10  # pin: main 2026-03-13
       with:
         path: ./
         extra_args: --debug --only-verified

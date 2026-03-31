@@ -93,7 +93,7 @@ fi
 
 # Try to pin to single core for less noise (non-fatal if taskset unavailable)
 TASKSET=""
-if command -v taskset &>/dev/null; then
+if command -v taskset >/dev/null; then
     TASKSET="taskset -c 0"
 fi
 
@@ -106,7 +106,9 @@ echo ""
 echo "=== Running legacy dudect harnesses ==="
 LEGACY_DIR="$REPO_ROOT/tools/constant_time"
 if [ -f "$LEGACY_DIR/Makefile" ]; then
-    (cd "$LEGACY_DIR" && make -s all 2>/dev/null)
+    if ! (cd "$LEGACY_DIR" && make -s all); then
+        echo "WARNING: legacy dudect build failed" >&2
+    fi
 
     if [ -f "$LEGACY_DIR/dudect_harness" ]; then
         echo "--- Utility function harness ---"

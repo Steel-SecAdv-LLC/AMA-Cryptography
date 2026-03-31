@@ -32,9 +32,9 @@ try:
 
     _PYCA_AVAILABLE = True
 except Exception:
-    default_backend = None
-    hashes = None
-    HKDF = None
+    default_backend = None  # type: ignore[assignment]
+    hashes = None  # type: ignore[assignment]
+    HKDF = None  # type: ignore[assignment,misc]
     _PYCA_AVAILABLE = False
 
 
