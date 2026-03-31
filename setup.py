@@ -272,7 +272,7 @@ class CMakeBuild(build_ext):
 setup(
     name="ama-cryptography",
     version=VERSION,
-    description="Quantum-Resistant Cryptographic Protection System",
+    description="Quantum-resistant cryptographic protection system for helical mathematical Omni-Codes",
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Andrew E. A.",
