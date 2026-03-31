@@ -85,7 +85,8 @@ jobs:
         pip list --format=json > pip-list.json
 
     - name: Run dependency audit
-      # CVE-2026-4539: ReDoS in pygments AdlLexer — see INVARIANT-12 for tracking.
+      # CVE-2026-4539: ReDoS in pygments AdlLexer (dev-only, local access, not used at runtime).
+      # pygments is a transitive dev dependency (via rich/bandit) — see INVARIANT-12.
       # Remove ignore when Pygments >2.20.0 ships a fix.
       run: |
         pip-audit --format=json --output pip-audit.json --ignore-vuln CVE-2026-4539
