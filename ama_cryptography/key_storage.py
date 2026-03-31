@@ -28,22 +28,20 @@ logger = logging.getLogger(__name__)
 # Try to import native C library for Argon2id and AES-GCM
 _HAS_NATIVE = False
 _HAS_ARGON2 = False
-try:
-    from ama_cryptography.pqc_backends import (
-        _AES_GCM_NATIVE_AVAILABLE,
-        _ARGON2_NATIVE_AVAILABLE,
-        _native_lib,
-        native_aes256_gcm_decrypt,
-        native_aes256_gcm_encrypt,
-        native_argon2id,
-    )
 
-    if _native_lib is not None and _AES_GCM_NATIVE_AVAILABLE:
-        _HAS_NATIVE = True
-    if _native_lib is not None and _ARGON2_NATIVE_AVAILABLE:
-        _HAS_ARGON2 = True
-except ImportError:
-    logger.debug("Native PQC backend unavailable — key storage will use fallback")
+from ama_cryptography.pqc_backends import (
+    _AES_GCM_NATIVE_AVAILABLE,
+    _ARGON2_NATIVE_AVAILABLE,
+    _native_lib,
+    native_aes256_gcm_decrypt,
+    native_aes256_gcm_encrypt,
+    native_argon2id,
+)
+
+if _native_lib is not None and _AES_GCM_NATIVE_AVAILABLE:
+    _HAS_NATIVE = True
+if _native_lib is not None and _ARGON2_NATIVE_AVAILABLE:
+    _HAS_ARGON2 = True
 
 
 def _kdf_derive(passphrase: bytes, salt: bytes) -> bytes:

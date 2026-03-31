@@ -31,14 +31,10 @@ from typing import Any, Dict, List, Optional, Tuple, Type, cast
 from ama_cryptography.exceptions import SecurityWarning  # noqa: F401 — re-exported for public API
 from ama_cryptography.secure_memory import secure_memzero
 
-# INVARIANT-7: Detect native HMAC-SHA512 availability once at module level.
-_HMAC_SHA512_NATIVE = False
-try:
-    from ama_cryptography.pqc_backends import native_hmac_sha512  # type: ignore[attr-defined]
+# INVARIANT-7: Detect native HMAC-SHA512 availability at module level.
+from ama_cryptography.pqc_backends import _HMAC_SHA512_NATIVE_AVAILABLE, native_hmac_sha512
 
-    _HMAC_SHA512_NATIVE = True
-except ImportError:
-    pass  # native_hmac_sha512 does not exist in pqc_backends yet; fallback is expected
+_HMAC_SHA512_NATIVE = _HMAC_SHA512_NATIVE_AVAILABLE
 
 if not _HMAC_SHA512_NATIVE:
     if os.environ.get("AMA_REQUIRE_CONSTANT_TIME", "").lower() in ("1", "true", "yes"):
@@ -579,12 +575,9 @@ class SecureKeyStorage:
             os.chmod(self.salt_file, 0o600)
 
             # Determine algorithm: prefer Argon2id, fall back to PBKDF2
-            try:
-                from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE
+            from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE
 
-                use_argon2 = _ARGON2_NATIVE_AVAILABLE
-            except ImportError:
-                use_argon2 = False
+            use_argon2 = _ARGON2_NATIVE_AVAILABLE
 
             if use_argon2:
                 algorithm = "Argon2id"
@@ -701,12 +694,9 @@ class SecureKeyStorage:
         new_salt = secrets.token_bytes(self.KDF_SALT_BYTES)
 
         # Derive new key — prefer Argon2id, fall back to PBKDF2
-        try:
-            from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE, native_argon2id
+        from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE, native_argon2id
 
-            use_argon2 = _ARGON2_NATIVE_AVAILABLE
-        except ImportError:
-            use_argon2 = False
+        use_argon2 = _ARGON2_NATIVE_AVAILABLE
 
         if use_argon2:
             new_encryption_key = bytearray(

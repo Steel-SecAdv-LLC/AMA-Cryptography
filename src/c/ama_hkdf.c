@@ -30,9 +30,30 @@
  */
 
 #include "../include/ama_cryptography.h"
+#include "internal/ama_sha2.h"
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
+
+/* ========================================================================== */
+/* HMAC-SHA-512 (RFC 2104) — public API for BIP32 key derivation             */
+/* ========================================================================== */
+
+AMA_API ama_error_t ama_hmac_sha512(
+    const uint8_t *key, size_t key_len,
+    const uint8_t *msg, size_t msg_len,
+    uint8_t out[64]
+) {
+    if (!key || !out) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (!msg && msg_len > 0) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    /* Delegate to the 3-part internal HMAC with msg as part1, empty part2/part3 */
+    int rc = ama_hmac_sha512_3(key, key_len, msg, msg_len, NULL, 0, NULL, 0, out);
+    return (rc == 0) ? AMA_SUCCESS : AMA_ERROR_MEMORY;
+}
 
 /* SHA3-256 constants */
 #define SHA3_256_BLOCK_SIZE 136  /* Rate for SHA3-256 */

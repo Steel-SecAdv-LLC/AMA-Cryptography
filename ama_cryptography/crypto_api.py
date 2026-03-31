@@ -71,13 +71,10 @@ from ama_cryptography.pqc_backends import (
 _HMAC_NATIVE = False
 _HKDF_NATIVE = False
 
-try:
-    from ama_cryptography.pqc_backends import native_hkdf, native_hmac_sha3_256
+from ama_cryptography.pqc_backends import native_hkdf, native_hmac_sha3_256
 
-    _HMAC_NATIVE = _HMAC_SHA3_256_NATIVE_AVAILABLE
-    _HKDF_NATIVE = _HKDF_NATIVE_AVAILABLE
-except ImportError:
-    pass  # Should not happen — functions always exist in pqc_backends
+_HMAC_NATIVE = _HMAC_SHA3_256_NATIVE_AVAILABLE
+_HKDF_NATIVE = _HKDF_NATIVE_AVAILABLE
 
 # INVARIANT-7: warn when falling back to pure-Python (non-constant-time) HMAC/HKDF
 if not _HMAC_NATIVE or not _HKDF_NATIVE:
