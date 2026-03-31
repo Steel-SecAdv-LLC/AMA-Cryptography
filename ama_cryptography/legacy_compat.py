@@ -54,7 +54,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, cast
+from typing import IO, TYPE_CHECKING, Dict, Generator, List, Optional, Tuple, Union, cast
 
 if TYPE_CHECKING:
     from ama_cryptography_monitor import AmaCryptographyMonitor
@@ -63,7 +63,7 @@ _logger = logging.getLogger(__name__)
 
 
 @contextmanager
-def _open_fd(fd: int, mode: str):
+def _open_fd(fd: int, mode: str) -> Generator[IO[bytes], None, None]:
     """Yield a file object; close raw fd only if fdopen itself fails."""
     import os
 

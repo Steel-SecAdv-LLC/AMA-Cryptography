@@ -198,14 +198,13 @@ class TestS5_AcquireTimestampNoneGuard:
     def test_empty_token_raises_in_mock_mode(self) -> None:
         """If get_timestamp() returns empty token in mock mode, raise RuntimeError."""
         from ama_cryptography.crypto_api import CryptoPackageConfig, _acquire_timestamp
-        from ama_cryptography.rfc3161_timestamp import TimestampResult
 
         config = CryptoPackageConfig(
             include_timestamp=True,
             tsa_mode="mock",
         )
 
-        empty_result = TimestampResult(
+        empty_result = ts_mod.TimestampResult(
             token=b"", tsa_url="mock", hash_algorithm="sha3-256", data_hash=b""
         )
         with patch(
@@ -218,14 +217,13 @@ class TestS5_AcquireTimestampNoneGuard:
     def test_empty_token_raises_in_online_mode(self) -> None:
         """If get_timestamp() returns empty token in online mode, raise RuntimeError."""
         from ama_cryptography.crypto_api import CryptoPackageConfig, _acquire_timestamp
-        from ama_cryptography.rfc3161_timestamp import TimestampResult
 
         config = CryptoPackageConfig(
             include_timestamp=True,
             tsa_mode="online",
         )
 
-        empty_result = TimestampResult(
+        empty_result = ts_mod.TimestampResult(
             token=b"", tsa_url="online", hash_algorithm="sha3-256", data_hash=b""
         )
         with patch(

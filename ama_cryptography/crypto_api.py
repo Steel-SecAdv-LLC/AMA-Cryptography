@@ -386,7 +386,7 @@ class MLDSAProvider(CryptoProvider):
 
         Args:
             message: Original data
-            signature: Dilithium signature
+            signature: Dilithium signature bytes or Signature object
             public_key: Dilithium public key (1952 bytes)
 
         Returns:
@@ -483,7 +483,7 @@ class Ed25519Provider(CryptoProvider):
 
         Args:
             message: Original data that was signed
-            signature: 64-byte Ed25519 signature
+            signature: 64-byte Ed25519 signature bytes or Signature object
             public_key: 32-byte Ed25519 public key
 
         Returns:
@@ -694,7 +694,7 @@ class SphincsProvider(CryptoProvider):
 
         Args:
             message: Original data
-            signature: SPHINCS+ signature (49856 bytes)
+            signature: SPHINCS+ signature bytes (49856 bytes) or Signature object
             public_key: SPHINCS+-256f public key (64 bytes)
 
         Returns:
@@ -1321,7 +1321,7 @@ class HybridSignatureProvider(CryptoProvider):
 
         Args:
             message: Original data
-            signature: Combined signature (Ed25519 + Dilithium)
+            signature: Combined signature bytes (Ed25519 + Dilithium) or Signature object
             public_key: Combined public key (Ed25519 + Dilithium)
 
         Returns:

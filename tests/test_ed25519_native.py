@@ -45,9 +45,7 @@ def _pyca_available() -> bool:
     """Check if PyCA cryptography is installed and functional."""
     try:
         from cryptography.hazmat.primitives.asymmetric import ed25519  # noqa: F401
-    except BaseException as exc:
-        if isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit)):
-            raise
+    except Exception:
         return False
     return True
 
