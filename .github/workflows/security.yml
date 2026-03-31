@@ -53,10 +53,7 @@ jobs:
         retention-days: 90
 
   # INVARIANT-11: SBOM generation is required for release tags.
-  # TODO: Add this job to the required status checks for release tag pushes
-  # once GitHub branch protection rules for tags are configured.
-  # The C library SBOM below is a static placeholder — replace with
-  # build-system-generated metadata when CMake emits component info.
+  # Requires adding this job to required status checks via branch/tag protection rules.
   sbom:
     name: SBOM Generation (CycloneDX)
     runs-on: ubuntu-latest
@@ -99,9 +96,9 @@ jobs:
         name: pip-audit-results
         path: pip-audit.json
 
-    - name: Annotate SBOM as placeholder
+    - name: Annotate SBOM status
       run: |
-        echo "::warning::SBOM C-library component is a static placeholder — update version and purl fields when the build system emits real metadata"
+        echo "::warning::SBOM C-library component uses static metadata — version and purl fields must be updated on each release"
 
     - name: Create C library SBOM component
       run: |

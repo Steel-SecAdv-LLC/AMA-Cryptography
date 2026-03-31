@@ -109,8 +109,8 @@ Code under `ama_cryptography/` **should** use narrow exception types
 where possible. Exceptions: handlers that explicitly transition to FIPS ERROR
 state (e.g., `_self_test.py` POST failure tuples) and `__del__` destructors
 (which must never raise) may catch `Exception`.
-A Semgrep rule for flagging new broad catches is deferred pending Semgrep
-pattern syntax support (see `.semgrep.yml` for details).
+Semgrep 1.74.0 does not support `except Exception` pattern syntax; manual
+review is required until Semgrep adds support.
 
 ## INVARIANT-10 — Signed Commits on Protected Branches
 
@@ -125,8 +125,7 @@ model (T4.3). Branch protection rules should enforce this.
 ## INVARIANT-11 — SBOM as Release Gate
 
 CycloneDX SBOM generation (Python + C library) **must** succeed as a required
-check on release tags. The C library SBOM should be generated from build-system
-metadata rather than a static placeholder when build tooling supports it.
+check on release tags.
 
 > **Enforcement gap:** Making the SBOM job a required status check on release
 > tags requires configuring GitHub branch protection rules or tag protection

@@ -158,8 +158,7 @@ rules:
   # _self_test.py POST failure tuples) and __del__ destructors are acceptable
   # and should be annotated with a comment explaining the rationale.
   #
-  # NOTE: Semgrep pattern-based rules for 'except Exception' are deferred.
   # Semgrep 1.74.0 does not support 'except Exception as $E: ...' or
   # 'except Exception: ...' as valid Python pattern syntax (parse error).
-  # Use 'semgrep --validate' when upgrading to re-enable these rules.
+  # Manual review is required. Re-test with 'semgrep --validate' on upgrade.
   # See: INVARIANT-9 in .github/INVARIANTS.md
