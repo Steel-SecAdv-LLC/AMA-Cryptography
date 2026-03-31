@@ -118,21 +118,35 @@ All commits merged to `main` and `develop` **must** be GPG- or SSH-signed.
 This is **REQUIRED** (not merely recommended) per the supply-chain threat
 model (T4.3). Branch protection rules should enforce this.
 
-> **Enforcement gap:** This invariant requires enabling "Require signed commits"
-> in GitHub branch protection settings for `main` and `develop`. This cannot be
-> configured via PR — a repository administrator must enable it.
+> **Status:** Signed commits are enabled via branch protection on `main` and
+> `develop`.
 
 ## INVARIANT-11 — SBOM as Release Gate
 
 CycloneDX SBOM generation (Python + C library) **must** succeed as a required
 check on release tags.
 
-> **Enforcement gap:** Making the SBOM job a required status check on release
-> tags requires configuring GitHub branch protection rules or tag protection
-> rules. This cannot be configured via PR — a repository administrator must
-> add the check to the required status checks list.
+The `security.yml` workflow triggers on `v*` tags so the SBOM job executes
+automatically on every release. A repository administrator should add the
+`SBOM Generation (CycloneDX)` job as a required status check on tag protection
+rules to enforce the gate.
+
+## INVARIANT-12 — CVE Ignore-List Hygiene
+
+Every `--ignore-vuln` flag in CI workflows **must** have an accompanying comment
+that states: (a) the CVE ID, (b) why the vulnerability is not exploitable in
+this context, and (c) the condition under which the ignore should be removed.
+
+Tracked ignores:
+
+| CVE | Package | Reason | Remove when |
+|-----|---------|--------|-------------|
+| CVE-2026-4539 | Pygments (transitive via rich/bandit) | ReDoS in AdlLexer — dev-only, local access, not used at runtime | Pygments ships a fix (>2.20.0) or the transitive dependency is dropped |
+
+> **Review cadence:** Re-evaluate all tracked CVE ignores on the first of each
+> quarter or when Dependabot bumps the affected package, whichever comes first.
 
 ---
 
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-03-30_
+_Last updated: 2026-03-31_

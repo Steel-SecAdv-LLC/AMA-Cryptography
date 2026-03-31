@@ -3,6 +3,7 @@ name: Security Scanning
 on:
   push:
     branches: [ main, develop ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main, develop ]
   schedule:
@@ -34,7 +35,7 @@ jobs:
     - name: Run pip-audit
       # CVE-2026-4539: ReDoS in pygments AdlLexer (local access only, no fix version yet).
       # pygments is a transitive dev dependency (via rich/bandit) — not used at runtime.
-      # Re-evaluate when pygments >2.19.2 ships a fix.
+      # See INVARIANT-12 for review cadence.  Remove ignore when Pygments >2.20.0 ships a fix.
       run: |
         pip-audit --desc --ignore-vuln CVE-2026-4539
 
@@ -84,8 +85,8 @@ jobs:
         pip list --format=json > pip-list.json
 
     - name: Run dependency audit
-      # CVE-2026-4539: ReDoS in pygments AdlLexer (local access only, no fix version yet).
-      # Re-evaluate when pygments >2.19.2 ships a fix.
+      # CVE-2026-4539: ReDoS in pygments AdlLexer — see INVARIANT-12 for tracking.
+      # Remove ignore when Pygments >2.20.0 ships a fix.
       run: |
         pip-audit --format=json --output pip-audit.json --ignore-vuln CVE-2026-4539
 
