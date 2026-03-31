@@ -266,7 +266,9 @@ class CryptoProvider(ABC):
         pass
 
     @abstractmethod
-    def verify(self, message: bytes, signature: Union[bytes, "Signature"], public_key: bytes) -> bool:
+    def verify(
+        self, message: bytes, signature: Union[bytes, "Signature"], public_key: bytes
+    ) -> bool:
         """Verify a signature"""
         pass
 
@@ -376,7 +378,9 @@ class MLDSAProvider(CryptoProvider):
             },
         )
 
-    def verify(self, message: bytes, signature: Union[bytes, "Signature"], public_key: bytes) -> bool:
+    def verify(
+        self, message: bytes, signature: Union[bytes, "Signature"], public_key: bytes
+    ) -> bool:
         """
         Verify ML-DSA-65 signature.
 
@@ -471,7 +475,9 @@ class Ed25519Provider(CryptoProvider):
             metadata={"signature_size": len(sig_bytes), "backend": "native_c"},
         )
 
-    def verify(self, message: bytes, signature: Union[bytes, "Signature"], public_key: bytes) -> bool:
+    def verify(
+        self, message: bytes, signature: Union[bytes, "Signature"], public_key: bytes
+    ) -> bool:
         """
         Verify Ed25519 signature using native C backend.
 
@@ -680,7 +686,9 @@ class SphincsProvider(CryptoProvider):
             },
         )
 
-    def verify(self, message: bytes, signature: Union[bytes, "Signature"], public_key: bytes) -> bool:
+    def verify(
+        self, message: bytes, signature: Union[bytes, "Signature"], public_key: bytes
+    ) -> bool:
         """
         Verify SPHINCS+-256f signature.
 
@@ -1300,7 +1308,9 @@ class HybridSignatureProvider(CryptoProvider):
             },
         )
 
-    def verify(self, message: bytes, signature: Union[bytes, "Signature"], public_key: bytes) -> bool:
+    def verify(
+        self, message: bytes, signature: Union[bytes, "Signature"], public_key: bytes
+    ) -> bool:
         """
         Verify hybrid signature (both must verify).
 

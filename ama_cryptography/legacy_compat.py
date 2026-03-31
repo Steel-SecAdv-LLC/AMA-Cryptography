@@ -50,6 +50,7 @@ import secrets
 import struct
 import subprocess  # nosec B404 - subprocess used only with fixed OpenSSL commands for RFC 3161
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,6 +60,21 @@ if TYPE_CHECKING:
     from ama_cryptography_monitor import AmaCryptographyMonitor
 
 _logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _open_fd(fd: int, mode: str):
+    """Yield a file object; close raw fd only if fdopen itself fails."""
+    import os
+
+    try:
+        f = os.fdopen(fd, mode)
+    except BaseException:
+        os.close(fd)
+        raise
+    with f:
+        yield f
+
 
 # ---------------------------------------------------------------------------
 # Re-imports from ama_cryptography sub-modules so that monkeypatch targets
@@ -455,21 +471,13 @@ def verify_rfc3161_timestamp(
     try:
         tsr_path = os.path.join(tmp_dir, "timestamp.tsr")
         fd = os.open(tsr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(timestamp_token)
-        except BaseException:
-            os.close(fd)
-            raise
+        with _open_fd(fd, "wb") as f:
+            f.write(timestamp_token)
 
         data_path = os.path.join(tmp_dir, "data.dat")
         fd = os.open(data_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(data)
-        except BaseException:
-            os.close(fd)
-            raise
+        with _open_fd(fd, "wb") as f:
+            f.write(data)
 
         cmd_verify = [
             "openssl",

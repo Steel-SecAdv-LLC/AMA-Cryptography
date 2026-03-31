@@ -657,3 +657,43 @@ class TestEd25519NativeBackendConsistency:
             sig = provider.sign(msg, keypair.secret_key)
             is_valid = provider.verify(msg, sig.signature, keypair.public_key)
             assert is_valid is True, f"Failed for message: {msg!r}"
+
+
+# ---------------------------------------------------------------------------
+# Signature object coercion — verify() accepts both bytes and Signature
+# ---------------------------------------------------------------------------
+
+
+class TestSignatureCoercion:
+    """verify() must accept a Signature object (from sign()) as well as raw bytes."""
+
+    def test_ed25519_verify_accepts_signature_object(self) -> None:
+        ed = Ed25519Provider()
+        kp = ed.generate_keypair()
+        sig = ed.sign(b"coercion test", kp.secret_key)
+        assert isinstance(sig, Signature)
+        assert ed.verify(b"coercion test", sig, kp.public_key) is True
+
+    @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="ML-DSA-65 not available")
+    def test_mldsa_verify_accepts_signature_object(self) -> None:
+        mldsa = MLDSAProvider()
+        kp = mldsa.generate_keypair()
+        sig = mldsa.sign(b"coercion test", kp.secret_key)
+        assert isinstance(sig, Signature)
+        assert mldsa.verify(b"coercion test", sig, kp.public_key) is True
+
+    @pytest.mark.skipif(not SPHINCS_AVAILABLE, reason="SPHINCS+ not available")
+    def test_sphincs_verify_accepts_signature_object(self) -> None:
+        sp = SphincsProvider()
+        kp = sp.generate_keypair()
+        sig = sp.sign(b"coercion test", kp.secret_key)
+        assert isinstance(sig, Signature)
+        assert sp.verify(b"coercion test", sig, kp.public_key) is True
+
+    @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="ML-DSA-65 not available")
+    def test_hybrid_verify_accepts_signature_object(self) -> None:
+        hybrid = HybridSignatureProvider()
+        kp = hybrid.generate_keypair()
+        sig = hybrid.sign(b"coercion test", kp.secret_key)
+        assert isinstance(sig, Signature)
+        assert hybrid.verify(b"coercion test", sig, kp.public_key) is True
