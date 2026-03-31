@@ -329,10 +329,13 @@ filterwarnings = [
     "error",
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",
+    # Allow native-backend-unavailable warnings during import (expected in CI
+    # when the C library is not built).
+    "default:.*native.*backend.*not available:UserWarning",
     # UserWarning is NOT suppressed — security warnings from crypto operations
     # must surface during testing. If a test emits a UserWarning, it should
     # either be fixed or explicitly expected via pytest.warns().
-    "default::ama_cryptography.key_management.SecurityWarning",
+    "default::ama_cryptography.exceptions.SecurityWarning",
 ]
 
 # Coverage configuration
