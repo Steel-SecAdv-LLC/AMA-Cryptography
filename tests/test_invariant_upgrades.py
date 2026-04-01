@@ -11,16 +11,12 @@ INVARIANT-3 (addendum): Finalizer Failures Must Be Observable
 
 from __future__ import annotations
 
-import importlib
 import re
 import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import List
 from unittest import mock
-
-import pytest
 
 # ---------------------------------------------------------------------------
 # Upgrade D — INVARIANT-3 Addendum: Finalizer Failures Must Be Observable
@@ -34,12 +30,9 @@ class TestFinalizerHealth:
         """Health check reports clean state before any failures."""
         # Module-level state may have been modified by other tests; just
         # verify the API returns consistent types.
-        from ama_cryptography._finalizer_health import (_error_count,
-                                                        _error_flag,
-                                                        _last_error,
-                                                        finalizer_health_check)
+        from ama_cryptography._finalizer_health import finalizer_health_check
 
-        ok, count, last = finalizer_health_check()
+        ok, count, _last = finalizer_health_check()
         assert isinstance(ok, bool)
         assert isinstance(count, int)
         assert count >= 0
@@ -267,7 +260,7 @@ class TestConstantTimeRequirements:
         repo_root = Path(__file__).resolve().parent.parent
         crypto_dir = repo_root / "ama_cryptography"
 
-        violations: List[str] = []
+        violations: list[str] = []
         for py_file in sorted(crypto_dir.rglob("*.py")):
             try:
                 tree = ast.parse(py_file.read_text(encoding="utf-8"))
@@ -304,10 +297,10 @@ class TestSuppressionHygiene:
         "include/",
     )
 
-    def _scan_violations(self, directory: str) -> List[str]:
+    def _scan_violations(self, directory: str) -> list[str]:
         repo_root = Path(__file__).resolve().parent.parent
         target = repo_root / directory
-        violations: List[str] = []
+        violations: list[str] = []
         for py_file in sorted(target.rglob("*.py")):
             rel = str(py_file.relative_to(repo_root))
             try:
@@ -333,7 +326,7 @@ class TestSuppressionHygiene:
 
     def test_ama_cryptography_suppressions_justified(self) -> None:
         violations = self._scan_violations("ama_cryptography")
-        assert not violations, f"INVARIANT-13 violations in ama_cryptography/:\n" + "\n".join(
+        assert not violations, "INVARIANT-13 violations in ama_cryptography/:\n" + "\n".join(
             f"  {v}" for v in violations
         )
 

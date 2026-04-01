@@ -34,8 +34,8 @@ except ImportError:
 # Check for pycryptodome
 try:
     from Crypto.Cipher import (
-        AES as PyCryptoAES,
-    )  # noqa: N811 — pycryptodome uses uppercase module name (TD-001)
+        AES as PyCryptoAES,  # noqa: N811 — pycryptodome uses uppercase module name (TD-001)
+    )
 
     HAS_PYCRYPTODOME = True
 except ImportError:

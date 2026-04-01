@@ -313,7 +313,7 @@ class TestInvariant1NoStdlibHmac:
 
 
 class TestNosecJustifications:
-    """All # nosec annotations must have inline justification per INVARIANTS.md."""  # noqa: E501 — docstring matches invariant name verbatim (TPC-001)
+    """All # nosec annotations must have inline justification per INVARIANTS.md."""
 
     @pytest.mark.parametrize(
         "filepath",
@@ -327,15 +327,11 @@ class TestNosecJustifications:
     def test_nosec_suppressions_have_justifications(self, filepath: str) -> None:
         import re
 
-        bare_nosec = re.compile(
-            r"#\s*nosec\s+B\d+\s*$"
-        )  # noqa: E501 — regex pattern for bare nosec detection (TPC-002)
+        bare_nosec = re.compile(r"#\s*nosec\s+B\d+\s*$")
         with open(filepath) as f:
             for lineno, line in enumerate(f, 1):
                 if "# nosec" in line:
-                    assert not bare_nosec.search(
-                        line.rstrip()
-                    ), (  # noqa: E501 — assertion message includes file path and line (TPC-003)
+                    assert not bare_nosec.search(line.rstrip()), (
                         f"{filepath}:{lineno} has bare # nosec without justification: "
                         f"{line.rstrip()}"
                     )

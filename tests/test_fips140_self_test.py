@@ -418,6 +418,6 @@ class TestCryptoModuleError:
             raise CryptoModuleError("test message")
 
     def test_importable_from_package(self) -> None:
-        from ama_cryptography import (
-            CryptoModuleError,
-        )  # noqa: F401 — verifying re-export from package (TF-001)
+        from ama_cryptography import CryptoModuleError
+
+        assert CryptoModuleError is not None  # verify re-export exists

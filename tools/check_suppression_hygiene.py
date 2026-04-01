@@ -17,7 +17,6 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import List, Tuple
 
 # Suppression tokens to scan for
 _SUPPRESSION_RE = re.compile(r"#\s*(noqa|nosec|pylint:\s*disable|type:\s*ignore)")
@@ -26,10 +25,10 @@ _SUPPRESSION_RE = re.compile(r"#\s*(noqa|nosec|pylint:\s*disable|type:\s*ignore)
 _TRACKING_ID_RE = re.compile(r"\([A-Z]+-\d+\)")
 
 # Justification: an em-dash or double-hyphen followed by text
-_JUSTIFICATION_RE = re.compile(r"[—–]|--")
+_JUSTIFICATION_RE = re.compile(r"[\u2014\u2013]|--")
 
 # Forbidden directories: suppressions are absolutely prohibited here
-_FORBIDDEN_DIRS: Tuple[str, ...] = (
+_FORBIDDEN_DIRS: tuple[str, ...] = (
     "src/c/",
     "ama_cryptography/_primitive",
     "ama_cryptography/backend",
@@ -63,9 +62,9 @@ def _is_in_string(line: str, match_start: int) -> bool:
     return in_single or in_double
 
 
-def _scan_file(filepath: str) -> List[str]:
+def _scan_file(filepath: str) -> list[str]:
     """Return a list of violation messages for the given file."""
-    violations: List[str] = []
+    violations: list[str] = []
     try:
         with open(filepath, encoding="utf-8", errors="replace") as fh:
             for lineno, line in enumerate(fh, 1):
@@ -110,7 +109,7 @@ def main() -> int:
     # Collect all Python files under ama_cryptography/ and tests/
     targets = list(Path("ama_cryptography").rglob("*.py")) + list(Path("tests").rglob("*.py"))
 
-    all_violations: List[str] = []
+    all_violations: list[str] = []
     for path in sorted(targets):
         filepath = str(path)
         all_violations.extend(_scan_file(filepath))

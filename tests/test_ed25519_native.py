@@ -44,9 +44,9 @@ pytestmark = pytest.mark.skipif(
 def _pyca_available() -> bool:
     """Check if PyCA cryptography is installed and functional."""
     try:
-        from cryptography.hazmat.primitives.asymmetric import (
-            ed25519,
-        )  # noqa: F401 — import probe for availability check (TE-001)
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+
+        _ = ed25519  # import probe for availability check
     except Exception:
         return False
     return True
