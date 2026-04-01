@@ -26,6 +26,7 @@ PQC Backend:
 import hashlib
 import logging
 import os
+import pathlib
 import secrets
 import warnings
 from abc import ABC, abstractmethod
@@ -690,6 +691,42 @@ class SphincsProvider(CryptoProvider):
         return sphincs_verify(message, signature, public_key)
 
 
+def _atomic_write_json(
+    data: Dict[str, object],
+    target: pathlib.Path,
+) -> None:
+    """Atomically write *data* as JSON to *target* via temp-file + rename.
+
+    Guards the ``os.fdopen`` call so the raw file descriptor is closed if
+    ``fdopen`` itself fails, preventing fd leaks.
+    """
+    import json as _json
+    import tempfile
+
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(target.parent), suffix=".tmp", prefix=".counters_"
+    )
+    try:
+        f = os.fdopen(fd, "w")
+    except BaseException:
+        os.close(fd)
+        raise
+    _rename_ok = False
+    try:
+        with f:
+            _json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, str(target))
+        _rename_ok = True
+    finally:
+        if not _rename_ok:
+            try:
+                os.unlink(tmp_path)
+            except OSError as _unlink_err:
+                logger.debug("Failed to clean up temp file %s: %s", tmp_path, _unlink_err)
+
+
 class AESGCMProvider:
     """
     AES-256-GCM authenticated encryption provider.
@@ -839,7 +876,6 @@ class AESGCMProvider:
             return
         import json as _json
         import os as _os
-        import tempfile
 
         path = cls._get_persist_path()
         lock_path = path.parent / ".counters.lock"
@@ -912,24 +948,7 @@ class AESGCMProvider:
                     )
 
             data = {k.hex(): v for k, v in cls._encrypt_counters.items()}
-            # Write to temp file in same directory (same filesystem for atomic rename)
-            fd, tmp_path = tempfile.mkstemp(
-                dir=str(path.parent), suffix=".tmp", prefix=".counters_"
-            )
-            _rename_ok = False
-            try:
-                with _os.fdopen(fd, "w") as f:
-                    _json.dump(data, f)
-                    f.flush()
-                    _os.fsync(f.fileno())
-                _os.replace(tmp_path, str(path))
-                _rename_ok = True
-            finally:
-                if not _rename_ok:
-                    try:
-                        _os.unlink(tmp_path)
-                    except OSError as _unlink_err:
-                        logger.debug("Failed to clean up temp file %s: %s", tmp_path, _unlink_err)
+            _atomic_write_json(data, path)
         except Exception as e:
             if _raising:
                 raise RuntimeError(
