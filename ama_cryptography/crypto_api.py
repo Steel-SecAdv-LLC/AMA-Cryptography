@@ -703,9 +703,7 @@ def _atomic_write_json(
     import json as _json
     import tempfile
 
-    fd, tmp_path = tempfile.mkstemp(
-        dir=str(target.parent), suffix=".tmp", prefix=".counters_"
-    )
+    fd, tmp_path = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp", prefix=".counters_")
     try:
         f = os.fdopen(fd, "w")
     except BaseException:
