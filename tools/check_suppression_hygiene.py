@@ -24,8 +24,10 @@ _SUPPRESSION_RE = re.compile(r"#\s*(noqa|nosec|pylint:\s*disable|type:\s*ignore)
 # Tracking ID pattern: parenthesised alphanumeric tag, e.g. (KM-001), (FIN-002)
 _TRACKING_ID_RE = re.compile(r"\([A-Z]+-\d+\)")
 
-# Justification: an em-dash or double-hyphen followed by text
-_JUSTIFICATION_RE = re.compile(r"[\u2014\u2013]|--")
+# Justification: an em-dash, double-hyphen, or inline comment (# ...) followed by text.
+# The inline-comment form is required for ``type: ignore`` because mypy >=1.20
+# rejects em-dashes inside the ``# type: ignore[code]`` directive.
+_JUSTIFICATION_RE = re.compile(r"[\u2014\u2013]|--|#\s*\S")
 
 # Forbidden directories: suppressions are absolutely prohibited here
 _FORBIDDEN_DIRS: tuple[str, ...] = (

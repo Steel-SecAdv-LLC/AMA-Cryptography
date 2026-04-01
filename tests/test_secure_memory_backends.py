@@ -54,11 +54,11 @@ class TestSecureMemzero:
 
     def test_rejects_bytes(self) -> None:
         with pytest.raises(TypeError):
-            secure_memzero(b"immutable")  # type: ignore[arg-type] — intentional bad type for test (TB-001)
+            secure_memzero(b"immutable")  # type: ignore[arg-type]  # intentional bad type for test (TB-001)
 
     def test_rejects_string(self) -> None:
         with pytest.raises(TypeError):
-            secure_memzero("string")  # type: ignore[arg-type] — intentional bad type for test (TB-002)
+            secure_memzero("string")  # type: ignore[arg-type]  # intentional bad type for test (TB-002)
 
     def test_single_byte(self) -> None:
         data = bytearray(b"\xff")

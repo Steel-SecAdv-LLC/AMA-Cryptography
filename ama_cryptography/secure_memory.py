@@ -244,7 +244,7 @@ else:
 
 def _memzero(data: Union[bytearray, memoryview]) -> None:
     """Dispatch to the best available secure zeroing backend."""
-    _memzero_fn(data)  # type: ignore[misc] — callable union; dispatch set at module init (SM-001)
+    _memzero_fn(data)  # type: ignore[misc]  # callable union; dispatch set at module init (SM-001)
 
 
 def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:

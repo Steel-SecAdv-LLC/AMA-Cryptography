@@ -978,7 +978,7 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
                 raise QuantumSignatureUnavailableError(
                     f"Native dilithium_sign failed with error code {rc}"
                 )
-            return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type] — ctypes slice is bytes-compatible (PQC-001)
+            return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes slice is bytes-compatible (PQC-001)
         finally:
             ctypes.memset(sk_buf, 0, len(secret_key))
 
@@ -1161,7 +1161,7 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
         if rc != 0:
             raise KyberUnavailableError(f"Native kyber_encapsulate failed with error code {rc}")
         return KyberEncapsulation(
-            ciphertext=bytes(ct_buf[: ct_len.value]),  # type: ignore[arg-type] — ctypes slice is bytes-compatible (PQC-002)
+            ciphertext=bytes(ct_buf[: ct_len.value]),  # type: ignore[arg-type]  # ctypes slice is bytes-compatible (PQC-002)
             shared_secret=bytes(ss_buf),
         )
 
@@ -1321,7 +1321,7 @@ def sphincs_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
             )
             if rc != 0:
                 raise SphincsUnavailableError(f"Native sphincs_sign failed with error code {rc}")
-            return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type] — ctypes slice is bytes-compatible (PQC-003)
+            return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes slice is bytes-compatible (PQC-003)
         finally:
             ctypes.memset(sk_buf, 0, len(secret_key))
 
@@ -1858,7 +1858,7 @@ def _probe_cython_hmac() -> "Optional[Callable[[bytes, bytes], bytes]]":
     try:
         from ama_cryptography.hmac_binding import cy_hmac_sha3_256
 
-        return cy_hmac_sha3_256  # type: ignore[no-any-return] — Cython binding; return type opaque to mypy (PQC-004)
+        return cy_hmac_sha3_256  # type: ignore[no-any-return]  # Cython binding; return type opaque to mypy (PQC-004)
     except ImportError:
         return None
 

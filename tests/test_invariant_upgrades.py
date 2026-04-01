@@ -288,7 +288,7 @@ class TestSuppressionHygiene:
 
     _SUPPRESSION_RE = re.compile(r"#\s*(noqa|nosec|pylint:\s*disable|type:\s*ignore)")
     _TRACKING_ID_RE = re.compile(r"\([A-Z]+-\d+\)")
-    _JUSTIFICATION_RE = re.compile(r"[—–]|--")
+    _JUSTIFICATION_RE = re.compile(r"[—–]|--|#\s*\S")
 
     _FORBIDDEN_DIRS = (
         "src/c/",
