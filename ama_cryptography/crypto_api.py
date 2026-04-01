@@ -32,7 +32,7 @@ import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, ClassVar, Dict, List, Optional, Tuple, Union
+from typing import Any, ClassVar, Dict, List, Mapping, Optional, Tuple, Union
 
 from ama_cryptography._self_test import check_operational as _check_operational
 
@@ -692,7 +692,7 @@ class SphincsProvider(CryptoProvider):
 
 
 def _atomic_write_json(
-    data: Dict[str, object],
+    data: Mapping[str, object],
     target: pathlib.Path,
 ) -> None:
     """Atomically write *data* as JSON to *target* via temp-file + rename.
