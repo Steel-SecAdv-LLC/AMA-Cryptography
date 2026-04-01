@@ -48,8 +48,8 @@ def record_finalizer_error(source: str, detail: str) -> None:
             _error_count += 1
             _error_flag = True
             _last_error = (source, detail)
-    except Exception:
-        pass  # Lock may be None during interpreter shutdown
+    except Exception:  # noqa: S110  # nosec B110 — __del__ must not raise; lock may be None during shutdown (FH-001)
+        pass
 
 
 def finalizer_error_count() -> int:
