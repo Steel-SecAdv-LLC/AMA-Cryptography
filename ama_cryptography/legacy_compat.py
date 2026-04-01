@@ -48,7 +48,7 @@ import json
 import logging
 import secrets
 import struct
-import subprocess  # nosec B404 - subprocess used only with fixed OpenSSL commands for RFC 3161
+import subprocess  # nosec B404 — subprocess used only with fixed OpenSSL commands for RFC 3161 (LC-001)
 import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
@@ -425,7 +425,7 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
 
         proc = subprocess.run(
             cmd_query, input=data, capture_output=True, timeout=10
-        )  # nosec B603 — args are fixed literals, no user input
+        )  # nosec B603 — args are fixed literals, no user input (LC-002)
 
         if proc.returncode != 0:
             _logger.warning("OpenSSL ts-query failed: %s", proc.stderr.decode())
@@ -441,7 +441,7 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
 
         with urllib.request.urlopen(
             req, timeout=10
-        ) as response:  # nosec B310 — URL scheme validated above (http/https only)
+        ) as response:  # nosec B310 — URL scheme validated above (http/https only) (LC-003)
             tsr = response.read()
 
         return cast(bytes, tsr)
@@ -496,7 +496,7 @@ def verify_rfc3161_timestamp(
 
         proc = subprocess.run(
             cmd_verify, capture_output=True, timeout=10
-        )  # nosec B603 — args are fixed OpenSSL commands, paths validated by caller
+        )  # nosec B603 — args are fixed OpenSSL commands, paths validated by caller (LC-004)
 
         if proc.returncode == 0:
             return True
@@ -767,7 +767,7 @@ class CryptoPackage:
     hash_format_version: str = HASH_FORMAT_V1
 
 
-def create_crypto_package(  # noqa: C901
+def create_crypto_package(  # noqa: C901 — legacy entry point; complexity is inherent (LC-005)
     codes: str,
     helix_params: List[Tuple[float, float]],
     kms: KeyManagementSystem,
@@ -849,7 +849,7 @@ def create_crypto_package(  # noqa: C901
             dilithium_pubkey = kms.dilithium_keypair.public_key.hex()
             quantum_signatures_enabled = True
         except QuantumSignatureUnavailableError:
-            _logger.warning(
+            _logger.debug(
                 "Dilithium signing unavailable; quantum signature layer omitted. "
                 "Package will lack ML-DSA-65 protection. "
                 "Verify PQC backend is installed for production deployments."

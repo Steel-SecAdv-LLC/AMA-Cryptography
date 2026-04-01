@@ -44,6 +44,25 @@ in the test matrix.
 - No `2>/dev/null` or other stderr suppression in workflow scripts.
 - Mock assertions must verify **call signatures**, not just call occurrence.
 
+### INVARIANT-3 Addendum — Finalizer Failures Must Be Observable
+
+Finalizers and destructors **may** catch broad exceptions to prevent
+propagation.  However, silence must **never** be the only outcome.  Each
+finalizer that catches an exception **must** produce an observable failure
+state by **one** of the following means:
+
+1. Incrementing a thread-safe internal error counter.
+2. Setting an internal "finalizer error" flag.
+3. Recording a last-error code retrievable via a health or self-test call.
+
+Logging is optional.  It is sometimes unsafe during interpreter shutdown and
+**must not** be relied upon as the sole observable artifact.
+
+**Implementation:** `ama_cryptography/_finalizer_health.py` provides the
+canonical `record_finalizer_error()` function and `finalizer_health_check()`
+query API.  All `__del__` methods in cryptographic classes must call
+`record_finalizer_error()` on exception.
+
 ## INVARIANT-4 — Pinned Action References
 
 All third-party GitHub Actions used in security workflows **must** be pinned
@@ -81,14 +100,29 @@ secret key material. Consumers that extract secret keys from these objects
 **must** copy the key via `bytes(kp.secret_key)` or `bytearray(kp.secret_key)`
 to avoid use-after-wipe when the source KeyPair is garbage collected.
 
-## INVARIANT-7 — No Silent Cryptographic Fallbacks
+## INVARIANT-7 — No Cryptographic Fallbacks, Ever
 
-When a native constant-time C backend is unavailable and the library falls back
-to a pure-Python implementation, it **must** emit a `logger.warning()` (or at
-minimum `logger.debug()` for non-crypto-critical paths) so that the fallback is
-observable in logs. Production deployments requiring constant-time guarantees
-**must** set `AMA_REQUIRE_CONSTANT_TIME=true`, which raises `RuntimeError` at
-module load if native backends are unavailable.
+When the native constant-time C backend is unavailable, the library **must**
+refuse to operate.  It **must** raise at import time, load time, or during
+initialization.
+
+The following are **not** acceptable substitutes:
+
+- A pure-Python fallback for any cryptographic primitive or secret-dependent
+  operation.
+- A warning without a hard stop.
+- A runtime flag that defers the safety decision.
+
+If portability requires a fallback path, that path **must** be non-cryptographic
+— for example, the monitoring math engine — and **must not** touch secrets under
+any circumstances.
+
+There is **no** development escape hatch.  The failure mode for a missing
+backend is always a hard refusal to operate.
+
+**Enforcement:** Module-level guards in `crypto_api.py`, `key_management.py`,
+and `pqc_backends.py` raise `RuntimeError` at import time when the native C
+backend is unavailable.
 
 ## INVARIANT-8 — Deterministic Reproducible Builds
 
@@ -131,7 +165,70 @@ automatically on every release. A repository administrator should add the
 `SBOM Generation (CycloneDX)` job as a required status check on tag protection
 rules to enforce the gate.
 
-## INVARIANT-12 — CVE Ignore-List Hygiene
+## INVARIANT-12 — Constant-Time Required for All Secret-Dependent Operations
+
+All code paths that process secret material **must** be constant-time with
+respect to that secret.
+
+**Secret material** includes: private keys, seeds, shared secrets, symmetric
+keys, MAC keys, intermediate values derived from those secrets, the presence
+or absence of any of the above, and pre-verification MAC/tag comparisons.
+The length or mere presence of a secret is itself secret when it is
+attacker-observable.
+
+### Rules
+
+1. **Python delegation:** Python code **must not** implement secret-dependent
+   cryptographic primitives (HMAC, KDFs, signature math, KEM decapsulation,
+   AEAD tag verification).  Python handles non-secret orchestration only and
+   delegates all secret operations to the native constant-time backend.
+
+2. **No Python MAC/tag verification:** Python code **must not** perform MAC
+   or tag verification logic, including partial parsing, other than passing
+   data to the native backend and checking a boolean result.
+
+3. **Constant-time comparison:** Must use `hmac.compare_digest()` or the
+   project's constant-time C helpers (`ama_consttime_memcmp`).  Ordinary
+   `==`, `memcmp`, or early-exit comparisons are **prohibited** in all
+   secret verification paths.
+
+4. **No secret-dependent branching:** Branching, table indexing, loop counts,
+   and memory access patterns dependent on secret data are **prohibited** in
+   both C and Python cryptographic paths.
+
+**Enforcement:** CI runs constant-time verification checks (dudect, ctgrind,
+custom timing harnesses, static structural scans) and **must** fail on
+detection of secret-dependent variable-time constructs.  The project's
+`CONSTANT_TIME_VERIFICATION.md` is the authoritative artifact for
+verification methodology.
+
+## INVARIANT-13 — No Unjustified Static-Analysis Suppressions
+
+Use of `# noqa`, `# nosec`, `# pylint: disable`, `# type: ignore`, or any
+equivalent suppression marker is **prohibited** unless **all three** of the
+following conditions are met:
+
+1. The suppression is **line-scoped**, not file-scoped.
+2. It includes a **human-readable justification** and a **tracking reference**,
+   for example: `# nosec B110: __del__ must not raise (FIN-001)`.
+3. The suppressed line is **covered by tests** or a deterministic runtime check.
+
+The **only** permitted exception is finalizers and destructors that must not
+raise, provided the reason is explicitly documented inline.
+
+Suppressions are **absolutely forbidden** in the following locations regardless
+of justification:
+
+- `src/c/` (core cryptographic C primitives)
+- `ama_cryptography/_primitive` (if present)
+- `ama_cryptography/backend` (if present)
+- `include/ama_*.h` (C header files)
+
+**Enforcement:** CI scans the repository for suppression tokens and **must**
+fail if a suppression is missing a justification, missing a tracking ID, or
+appears in a forbidden directory.
+
+## INVARIANT-14 — CVE Ignore-List Hygiene
 
 Every `--ignore-vuln` flag in CI workflows **must** have an accompanying comment
 that states: (a) the CVE ID, (b) why the vulnerability is not exploitable in
@@ -149,4 +246,4 @@ Tracked ignores:
 ---
 
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-03-31_
+_Last updated: 2026-04-01_

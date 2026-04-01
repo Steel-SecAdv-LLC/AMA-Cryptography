@@ -77,46 +77,29 @@ from ama_cryptography.pqc_backends import native_hkdf, native_hmac_sha3_256
 _HMAC_NATIVE = _HMAC_SHA3_256_NATIVE_AVAILABLE
 _HKDF_NATIVE = _HKDF_NATIVE_AVAILABLE
 
-# INVARIANT-7: warn when falling back to pure-Python (non-constant-time) HMAC/HKDF
+# INVARIANT-7 (revised): No cryptographic fallbacks, ever.
+# When native constant-time backend is unavailable the library MUST refuse to
+# operate.  Pure-Python fallback for any cryptographic primitive is prohibited.
 if not _HMAC_NATIVE or not _HKDF_NATIVE:
-    if os.environ.get("AMA_REQUIRE_CONSTANT_TIME", "").lower() in ("1", "true", "yes", "on"):
-        raise RuntimeError(
-            "AMA_REQUIRE_CONSTANT_TIME is set but native HMAC/HKDF C accelerators "
-            "are unavailable. Cannot guarantee constant-time execution. Either "
-            "build the native C library or unset AMA_REQUIRE_CONSTANT_TIME."
-        )
-    logging.getLogger(__name__).warning(
-        "native HMAC/HKDF C accelerators unavailable; using pure-Python "
-        "fallback without constant-time guarantees. Set "
-        "AMA_REQUIRE_CONSTANT_TIME=true to enforce native-only execution."
+    raise RuntimeError(
+        "INVARIANT-7: Native HMAC/HKDF C accelerators are unavailable. "
+        "The library refuses to operate without a constant-time backend. "
+        "Build the native C library: "
+        "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
     )
 
 
 def _hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
-    """HMAC-SHA3-256: native C backend or pure-Python fallback (RFC 2104).
+    """HMAC-SHA3-256 via native C backend (RFC 2104).
 
     INVARIANT-1: This function MUST NOT use ``import hmac`` (the stdlib
-    module).  The project's INVARIANT-1 requires that all cryptographic
-    primitives in the core library are implemented using only ``hashlib``
-    and the native C backend — never via stdlib ``hmac``.  This ensures
-    the implementation is self-contained and the HMAC construction is
-    explicitly visible for audit.  See CONTRIBUTING.md for the full
-    invariant definition.
+    module).  All cryptographic primitives delegate to the native C
+    backend (INVARIANT-7 revised: no pure-Python fallbacks).
 
-    The implementation follows RFC 2104 with block_size=136 (the Keccak
-    sponge rate for SHA3-256, as specified in NIST FIPS 202).
+    INVARIANT-12: This is a secret-dependent operation; the native
+    backend provides constant-time guarantees.
     """
-    if _HMAC_NATIVE:
-        return native_hmac_sha3_256(key, msg)
-    # Pure-Python HMAC-SHA3-256 (RFC 2104) — stdlib only
-    block_size = 136  # SHA3-256 Keccak rate (NIST FIPS 202)
-    if len(key) > block_size:
-        key = hashlib.sha3_256(key).digest()
-    key = key.ljust(block_size, b"\x00")
-    ipad = bytes(k ^ 0x36 for k in key)
-    opad = bytes(k ^ 0x5C for k in key)
-    inner = hashlib.sha3_256(ipad + msg).digest()
-    return hashlib.sha3_256(opad + inner).digest()
+    return native_hmac_sha3_256(key, msg)
 
 
 def _hkdf_sha3_256(
@@ -125,27 +108,15 @@ def _hkdf_sha3_256(
     salt: "Optional[bytes]" = None,
     info: bytes = b"",
 ) -> bytes:
-    """HKDF-SHA3-256: native C backend or pure-Python fallback (RFC 5869)."""
-    if _HKDF_NATIVE:
-        return native_hkdf(ikm, length, salt=salt, info=info)
-    # Pure-Python HKDF (extract-then-expand) using HMAC-SHA3-256
-    hash_len = 32  # SHA3-256 output
-    if length > 255 * hash_len:
-        raise ValueError(f"HKDF output length must be <= {255 * hash_len}, got {length}")
-    # Extract
-    if salt is None:
-        salt = b"\x00" * hash_len
-    prk = _hmac_sha3_256(salt, ikm)
-    # Expand
-    okm = b""
-    t = b""
-    for i in range(1, (length + hash_len - 1) // hash_len + 1):
-        t = _hmac_sha3_256(prk, t + info + bytes([i]))
-        okm += t
-    return okm[:length]
+    """HKDF-SHA3-256 via native C backend (RFC 5869).
+
+    INVARIANT-7 revised: no pure-Python fallback.  The import-time
+    guard above ensures the native backend is always available.
+    """
+    return native_hkdf(ikm, length, salt=salt, info=info)
 
 
-HMAC_HKDF_AVAILABLE = True  # Always available via native or pure-Python fallback
+HMAC_HKDF_AVAILABLE = True  # Guaranteed by INVARIANT-7 import-time check
 
 # Import RFC 3161 timestamping
 try:
@@ -157,9 +128,9 @@ try:
     )
 except ImportError:
     RFC3161_AVAILABLE = False
-    TimestampUnavailableError = Exception  # type: ignore[misc,assignment]
-    TimestampError = Exception  # type: ignore[misc,assignment]
-    get_timestamp = None  # type: ignore[assignment]
+    TimestampUnavailableError = Exception  # type: ignore[misc,assignment] — fallback when rfc3161_timestamp unavailable (CA-001)
+    TimestampError = Exception  # type: ignore[misc,assignment] — fallback when rfc3161_timestamp unavailable (CA-002)
+    get_timestamp = None  # type: ignore[assignment] — sentinel for optional RFC 3161 support (CA-003)
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -894,7 +865,7 @@ class AESGCMProvider:
                 try:
                     import msvcrt  # Windows-only stdlib module
 
-                    msvcrt.locking(lock_fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+                    msvcrt.locking(lock_fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined] — Windows-only module; attr exists at runtime (CA-004)
                 except (ImportError, OSError) as _lock_err:
                     logger.debug(
                         "File locking unavailable (no fcntl or msvcrt): "

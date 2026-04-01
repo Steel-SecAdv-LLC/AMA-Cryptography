@@ -28,51 +28,38 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Dict, List, Optional, Tuple, Type
 
-from ama_cryptography.exceptions import SecurityWarning  # noqa: F401 — re-exported for public API
+from ama_cryptography._finalizer_health import record_finalizer_error
+from ama_cryptography.exceptions import (
+    SecurityWarning,
+)  # noqa: F401 — re-exported for public API (KM-001)
 from ama_cryptography.pqc_backends import _HMAC_SHA512_NATIVE_AVAILABLE, native_hmac_sha512
 from ama_cryptography.secure_memory import secure_memzero
 
-# INVARIANT-7: Detect native HMAC-SHA512 availability at module level.
+# INVARIANT-7 (revised): No cryptographic fallbacks, ever.
+# When native constant-time backend is unavailable the library MUST refuse to
+# operate.  Pure-Python fallback for any cryptographic primitive is prohibited.
 _HMAC_SHA512_NATIVE = _HMAC_SHA512_NATIVE_AVAILABLE
 
 if not _HMAC_SHA512_NATIVE:
-    if os.environ.get("AMA_REQUIRE_CONSTANT_TIME", "").lower() in ("1", "true", "yes", "on"):
-        raise RuntimeError(
-            "AMA_REQUIRE_CONSTANT_TIME is set but native HMAC-SHA512 C backend "
-            "is unavailable. Cannot guarantee constant-time BIP32 key derivation. "
-            "Either build the native C library or unset AMA_REQUIRE_CONSTANT_TIME."
-        )
-    logging.getLogger(__name__).warning(
-        "native HMAC-SHA512 C backend unavailable; using pure-Python fallback "
-        "for BIP32 key derivation without constant-time guarantees. Set "
-        "AMA_REQUIRE_CONSTANT_TIME=true to enforce native-only execution."
+    raise RuntimeError(
+        "INVARIANT-7: Native HMAC-SHA512 C backend is unavailable. "
+        "The library refuses to operate without a constant-time backend "
+        "for BIP32 key derivation. Build the native C library: "
+        "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
     )
 
 
 def _hmac_sha512(key: bytes, data: bytes) -> bytes:
-    """
-    HMAC-SHA-512 per RFC 2104.
+    """HMAC-SHA-512 via native C backend (RFC 2104).
 
-    Primary: AMA native C library (ama_hmac_sha512).
-    Fallback: pure-Python implementation using hashlib.sha512.
+    INVARIANT-7 revised: no pure-Python fallback.  The import-time
+    guard above ensures the native backend is always available.
+    INVARIANT-12: Secret-dependent operation delegated to native
+    constant-time backend.
     Does NOT use the stdlib ``hmac`` module (INVARIANT-1).
     """
-    if _HMAC_SHA512_NATIVE:
-        try:
-            result: bytes = native_hmac_sha512(key, data)
-            return result
-        except RuntimeError:
-            pass  # native call failed at runtime; fall through to pure-Python below
-
-    # Pure-Python HMAC-SHA512 (RFC 2104) — no stdlib hmac import.
-    block_size = 128  # SHA-512 block size
-    if len(key) > block_size:
-        key = hashlib.sha512(key).digest()
-    key = key.ljust(block_size, b"\x00")
-    ipad = bytes(k ^ 0x36 for k in key)
-    opad = bytes(k ^ 0x5C for k in key)
-    inner = hashlib.sha512(ipad + data).digest()
-    return hashlib.sha512(opad + inner).digest()
+    result: bytes = native_hmac_sha512(key, data)
+    return result
 
 
 # Configure module logger
@@ -163,7 +150,7 @@ class HDKeyDerivation:
             # Derive seed from phrase (simplified BIP39)
             # seed_phrase is guaranteed non-None here: seed is None (from elif)
             # and not both None (from first if).
-            assert seed_phrase is not None  # nosec B101 — mypy narrowing; always True here
+            assert seed_phrase is not None  # nosec B101 — mypy narrowing; always True here (KM-002)
             self.master_seed = hashlib.pbkdf2_hmac(
                 "sha512", seed_phrase.encode("utf-8"), b"mnemonic", 2048, 64
             )
@@ -974,7 +961,9 @@ class HSMKeyStorage:
         hsm_type: str = "softhsm",
         library_path: Optional[str] = None,
         token_label: str = "AmaCryptography",
-        pin: Optional[str] = None,  # nosec B107 — PIN is a parameter, not a hardcoded credential
+        pin: Optional[
+            str
+        ] = None,  # nosec B107 — PIN is a parameter, not a hardcoded credential (KM-003)
         slot_index: Optional[int] = None,
     ) -> None:
         """
@@ -1261,7 +1250,11 @@ class HSMKeyStorage:
         self.close()
 
     def __del__(self) -> None:
-        self.close()
+        try:
+            self.close()
+        except Exception as exc:  # noqa: S110 — INVARIANT-3/9: __del__ must not raise (FIN-004)
+            # INVARIANT-3 addendum: silence is never the only outcome.
+            record_finalizer_error("HSMKeyStorage", f"close() failed: {exc}")
 
 
 # Example usage
@@ -1309,7 +1302,7 @@ if __name__ == "__main__":
     demo_storage_path = Path(tempfile.gettempdir()) / "ama_keys_demo"
     storage = SecureKeyStorage(
         demo_storage_path, master_password="test_password_123"
-    )  # nosec B106 — demo-only hardcoded password, not used in production
+    )  # nosec B106 — demo-only hardcoded password, not used in production (KM-004)
 
     # Store a key
     test_key = secrets.token_bytes(32)

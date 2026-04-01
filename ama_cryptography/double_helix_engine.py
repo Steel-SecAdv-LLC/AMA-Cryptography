@@ -423,7 +423,9 @@ class AmaEquationEngine:
     # DOUBLE-HELIX EVOLUTION STEP
     # ========================================================================
 
-    def step(self, state: Vec, t: int = 0) -> Vec:  # noqa: C901
+    def step(
+        self, state: Vec, t: int = 0
+    ) -> Vec:  # noqa: C901 — multi-term evolution; complexity is inherent (DHE-001)
         """
         Execute one Double-Helix evolution step.
 

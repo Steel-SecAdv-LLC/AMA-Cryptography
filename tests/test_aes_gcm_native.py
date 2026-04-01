@@ -33,7 +33,9 @@ skip_no_native = pytest.mark.skipif(
 def _pyca_crypto_available() -> bool:
     """Check if PyCA cryptography is usable (may be broken if _cffi_backend missing)."""
     try:
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: F401
+        from cryptography.hazmat.primitives.ciphers.aead import (
+            AESGCM,
+        )  # noqa: F401 — import probe for availability check (TA-001)
     except Exception:
         return False
     return True
