@@ -266,18 +266,9 @@ class CryptoProvider(ABC):
         pass
 
     @abstractmethod
-    def verify(
-        self, message: bytes, signature: Union[bytes, "Signature"], public_key: bytes
-    ) -> bool:
+    def verify(self, message: bytes, signature: bytes, public_key: bytes) -> bool:
         """Verify a signature"""
         pass
-
-    @staticmethod
-    def _coerce_signature(signature: Union[bytes, "Signature"]) -> bytes:
-        """Extract raw bytes from a Signature object or pass through bytes."""
-        if isinstance(signature, Signature):
-            return signature.signature
-        return signature
 
 
 class KEMProvider(ABC):
@@ -378,15 +369,13 @@ class MLDSAProvider(CryptoProvider):
             },
         )
 
-    def verify(
-        self, message: bytes, signature: Union[bytes, "Signature"], public_key: bytes
-    ) -> bool:
+    def verify(self, message: bytes, signature: bytes, public_key: bytes) -> bool:
         """
         Verify ML-DSA-65 signature.
 
         Args:
             message: Original data
-            signature: Dilithium signature bytes or Signature object
+            signature: Dilithium signature
             public_key: Dilithium public key (1952 bytes)
 
         Returns:
@@ -398,7 +387,6 @@ class MLDSAProvider(CryptoProvider):
         if not self._available:
             raise PQCUnavailableError("PQC_UNAVAILABLE: ML-DSA-65 requires native C backend.")
 
-        signature = self._coerce_signature(signature)
         return dilithium_verify(message, signature, public_key)
 
 
@@ -475,15 +463,13 @@ class Ed25519Provider(CryptoProvider):
             metadata={"signature_size": len(sig_bytes), "backend": "native_c"},
         )
 
-    def verify(
-        self, message: bytes, signature: Union[bytes, "Signature"], public_key: bytes
-    ) -> bool:
+    def verify(self, message: bytes, signature: bytes, public_key: bytes) -> bool:
         """
         Verify Ed25519 signature using native C backend.
 
         Args:
             message: Original data that was signed
-            signature: 64-byte Ed25519 signature bytes or Signature object
+            signature: 64-byte Ed25519 signature
             public_key: 32-byte Ed25519 public key
 
         Returns:
@@ -491,7 +477,6 @@ class Ed25519Provider(CryptoProvider):
         """
         from ama_cryptography.pqc_backends import native_ed25519_verify
 
-        signature = self._coerce_signature(signature)
         try:
             return native_ed25519_verify(signature, message, public_key)
         except ValueError:
@@ -686,15 +671,13 @@ class SphincsProvider(CryptoProvider):
             },
         )
 
-    def verify(
-        self, message: bytes, signature: Union[bytes, "Signature"], public_key: bytes
-    ) -> bool:
+    def verify(self, message: bytes, signature: bytes, public_key: bytes) -> bool:
         """
         Verify SPHINCS+-256f signature.
 
         Args:
             message: Original data
-            signature: SPHINCS+ signature bytes (49856 bytes) or Signature object
+            signature: SPHINCS+ signature (49856 bytes)
             public_key: SPHINCS+-256f public key (64 bytes)
 
         Returns:
@@ -704,7 +687,6 @@ class SphincsProvider(CryptoProvider):
             SphincsUnavailableError: If SPHINCS+ backend is not available
             ValueError: If public_key has incorrect length
         """
-        signature = self._coerce_signature(signature)
         return sphincs_verify(message, signature, public_key)
 
 
@@ -1308,9 +1290,7 @@ class HybridSignatureProvider(CryptoProvider):
             },
         )
 
-    def verify(
-        self, message: bytes, signature: Union[bytes, "Signature"], public_key: bytes
-    ) -> bool:
+    def verify(self, message: bytes, signature: bytes, public_key: bytes) -> bool:
         """
         Verify hybrid signature (both must verify).
 
@@ -1321,7 +1301,7 @@ class HybridSignatureProvider(CryptoProvider):
 
         Args:
             message: Original data
-            signature: Combined signature bytes (Ed25519 + Dilithium) or Signature object
+            signature: Combined signature (Ed25519 + Dilithium)
             public_key: Combined public key (Ed25519 + Dilithium)
 
         Returns:
@@ -1333,7 +1313,6 @@ class HybridSignatureProvider(CryptoProvider):
         if not self._pqc_available:
             raise PQCUnavailableError("PQC_UNAVAILABLE: Hybrid signatures require ML-DSA-65.")
 
-        signature = self._coerce_signature(signature)
         # Split keys and signatures
         classical_pk_bytes = public_key[: self.ED25519_PK_SIZE]
         pqc_pk = public_key[self.ED25519_PK_SIZE :]
@@ -1358,7 +1337,7 @@ class AmaCryptography:
         >>> crypto = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
         >>> keypair = crypto.generate_keypair()
         >>> signature = crypto.sign(b"Hello, World!", keypair.secret_key)
-        >>> valid = crypto.verify(b"Hello, World!", signature.signature, keypair.public_key)
+        >>> valid = crypto.verify(b"Hello, World!", signature, keypair.public_key)
     """
 
     def __init__(
@@ -1410,12 +1389,27 @@ class AmaCryptography:
             raise TypeError("Current algorithm does not support signing")
         return self.provider.sign(message, secret_key)
 
-    def verify(self, message: bytes, signature: Union[bytes, Signature], public_key: bytes) -> bool:
-        """Verify a signature"""
+    def verify(
+        self,
+        message: bytes,
+        signature: Union[bytes, Signature],
+        public_key: bytes,
+    ) -> bool:
+        """Verify a signature.
+
+        Args:
+            message: Message that was signed.
+            signature: Raw signature bytes or a :class:`Signature` object.
+            public_key: Public key used for verification.
+
+        Returns:
+            True if valid, False otherwise.
+        """
         _check_operational()
         if not isinstance(self.provider, CryptoProvider):
             raise TypeError("Current algorithm does not support verification")
-        return self.provider.verify(message, signature, public_key)
+        sig_bytes = signature.signature if isinstance(signature, Signature) else signature
+        return self.provider.verify(message, sig_bytes, public_key)
 
     def encapsulate(self, public_key: bytes) -> EncapsulatedSecret:
         """Encapsulate a shared secret (KEM)"""
@@ -1523,7 +1517,7 @@ def quick_sign(
 
 def quick_verify(
     message: bytes,
-    signature: bytes,
+    signature: Union[bytes, Signature],
     public_key: bytes,
     algorithm: AlgorithmType = AlgorithmType.HYBRID_SIG,
 ) -> bool:
@@ -1532,7 +1526,7 @@ def quick_verify(
 
     Args:
         message: Message that was signed
-        signature: Signature to verify
+        signature: Raw signature bytes or a :class:`Signature` object
         public_key: Public key
         algorithm: Algorithm used
 

@@ -665,35 +665,57 @@ class TestEd25519NativeBackendConsistency:
 
 
 class TestSignatureCoercion:
-    """verify() must accept a Signature object (from sign()) as well as raw bytes."""
+    """Verify that verify() and quick_verify() accept both bytes and Signature objects."""
 
     def test_ed25519_verify_accepts_signature_object(self) -> None:
-        ed = Ed25519Provider()
-        kp = ed.generate_keypair()
-        sig = ed.sign(b"coercion test", kp.secret_key)
+        """AmaCryptography.verify() accepts a Signature object (Ed25519)."""
+        crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
+        keypair = crypto.generate_keypair()
+        sig = crypto.sign(b"hello", keypair.secret_key)
         assert isinstance(sig, Signature)
-        assert ed.verify(b"coercion test", sig, kp.public_key) is True
+        assert crypto.verify(b"hello", sig, keypair.public_key) is True
 
-    @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="ML-DSA-65 not available")
-    def test_mldsa_verify_accepts_signature_object(self) -> None:
-        mldsa = MLDSAProvider()
-        kp = mldsa.generate_keypair()
-        sig = mldsa.sign(b"coercion test", kp.secret_key)
-        assert isinstance(sig, Signature)
-        assert mldsa.verify(b"coercion test", sig, kp.public_key) is True
+    def test_ed25519_verify_accepts_raw_bytes(self) -> None:
+        """AmaCryptography.verify() still accepts raw bytes (Ed25519)."""
+        crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
+        keypair = crypto.generate_keypair()
+        sig = crypto.sign(b"hello", keypair.secret_key)
+        assert crypto.verify(b"hello", sig.signature, keypair.public_key) is True
 
-    @pytest.mark.skipif(not SPHINCS_AVAILABLE, reason="SPHINCS+ not available")
-    def test_sphincs_verify_accepts_signature_object(self) -> None:
-        sp = SphincsProvider()
-        kp = sp.generate_keypair()
-        sig = sp.sign(b"coercion test", kp.secret_key)
-        assert isinstance(sig, Signature)
-        assert sp.verify(b"coercion test", sig, kp.public_key) is True
-
-    @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="ML-DSA-65 not available")
+    @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
     def test_hybrid_verify_accepts_signature_object(self) -> None:
-        hybrid = HybridSignatureProvider()
-        kp = hybrid.generate_keypair()
-        sig = hybrid.sign(b"coercion test", kp.secret_key)
+        """AmaCryptography.verify() accepts a Signature object (Hybrid)."""
+        crypto = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
+        keypair = crypto.generate_keypair()
+        sig = crypto.sign(b"hybrid test", keypair.secret_key)
         assert isinstance(sig, Signature)
-        assert hybrid.verify(b"coercion test", sig, kp.public_key) is True
+        assert crypto.verify(b"hybrid test", sig, keypair.public_key) is True
+
+    @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
+    def test_quick_verify_accepts_signature_object(self) -> None:
+        """quick_verify() accepts a Signature object."""
+        crypto = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
+        keypair = crypto.generate_keypair()
+        sig = crypto.sign(b"quick test", keypair.secret_key)
+        assert (
+            quick_verify(b"quick test", sig, keypair.public_key, algorithm=AlgorithmType.HYBRID_SIG)
+            is True
+        )
+
+    def test_quick_verify_accepts_raw_bytes(self) -> None:
+        """quick_verify() still accepts raw bytes (Ed25519)."""
+        crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
+        keypair = crypto.generate_keypair()
+        sig = crypto.sign(b"bytes test", keypair.secret_key)
+        assert (
+            quick_verify(
+                b"bytes test", sig.signature, keypair.public_key, algorithm=AlgorithmType.ED25519
+            )
+            is True
+        )
+
+    def test_verify_wrong_signature_returns_false(self) -> None:
+        """Verify returns False for wrong signature bytes."""
+        crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
+        keypair = crypto.generate_keypair()
+        assert crypto.verify(b"hello", b"\x00" * 64, keypair.public_key) is False

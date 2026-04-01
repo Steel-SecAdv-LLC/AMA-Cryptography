@@ -43,7 +43,6 @@ jobs:
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip setuptools wheel
-        pip install "Cython>=3.0.0" "numpy>=1.24.0,<3.0.0"
         pip install -e ".[dev]"
 
     - name: Verify module integrity digest is current
@@ -220,6 +219,18 @@ jobs:
         python -m pip install semgrep==1.74.0
         semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json
 
+    - name: Enforce safe os.fdopen usage
+      run: |
+        # All os.fdopen calls must be wrapped in try/except to prevent fd leaks.
+        # Approved call sites: key_storage.py, legacy_compat.py, crypto_api.py
+        if grep -rn 'os\.fdopen\|_os\.fdopen' ama_cryptography/ \
+            | grep -v 'key_storage\.py' \
+            | grep -v 'legacy_compat\.py' \
+            | grep -v 'crypto_api\.py'; then
+          echo "::error::Direct os.fdopen call found outside approved modules — wrap in try/except BaseException to guard the fd"
+          exit 1
+        fi
+
     - name: Upload Semgrep report
       uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
       if: success()
@@ -254,7 +265,8 @@ jobs:
 
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
+        python -m pip install --upgrade pip setuptools wheel
+        pip install "Cython>=3.0.0" "numpy>=1.24.0,<3.0.0"
         pip install -e ".[dev]"
 
     - name: Run benchmark regression tests

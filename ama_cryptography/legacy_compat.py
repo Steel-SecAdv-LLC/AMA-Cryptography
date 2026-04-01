@@ -849,7 +849,11 @@ def create_crypto_package(  # noqa: C901
             dilithium_pubkey = kms.dilithium_keypair.public_key.hex()
             quantum_signatures_enabled = True
         except QuantumSignatureUnavailableError:
-            _logger.debug("Dilithium signing unavailable; skipping quantum signature")
+            _logger.warning(
+                "Dilithium signing unavailable; quantum signature layer omitted. "
+                "Package will lack ML-DSA-65 protection. "
+                "Verify PQC backend is installed for production deployments."
+            )
         if monitor and dilithium_sig is not None:
             duration_ms = (time.time() - start_time) * 1000
             monitor.monitor_crypto_operation("dilithium_sign", duration_ms)

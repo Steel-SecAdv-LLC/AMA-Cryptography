@@ -9,7 +9,16 @@ from ama_cryptography import __author__, __version__
 
 def test_version() -> None:
     """Test that version is correctly set"""
-    assert __version__ == "2.1"
+    assert __version__ == "2.1.0"
+
+
+def test_version_consistency() -> None:
+    """Version in __init__.py matches importlib.metadata (pyproject.toml)."""
+    import importlib.metadata
+
+    import ama_cryptography
+
+    assert ama_cryptography.__version__ == importlib.metadata.version("ama-cryptography")
 
 
 def test_author() -> None:
