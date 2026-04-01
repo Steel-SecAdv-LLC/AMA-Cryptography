@@ -219,6 +219,13 @@ jobs:
         python -m pip install semgrep==1.74.0
         semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json
 
+    - name: Upload Semgrep report
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+      if: success()
+      with:
+        name: semgrep-security-report
+        path: semgrep-report.json
+
     - name: Enforce safe os.fdopen usage
       run: |
         # All os.fdopen calls must be wrapped in try/except to prevent fd leaks.
@@ -230,13 +237,6 @@ jobs:
           echo "::error::Direct os.fdopen call found outside approved modules — wrap in try/except BaseException to guard the fd"
           exit 1
         fi
-
-    - name: Upload Semgrep report
-      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
-      if: success()
-      with:
-        name: semgrep-security-report
-        path: semgrep-report.json
 
   benchmark-regression:
     name: Benchmark Regression Detection
