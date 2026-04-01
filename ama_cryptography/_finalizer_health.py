@@ -32,8 +32,9 @@ _last_error: Optional[Tuple[str, str]] = None  # (source_class, detail)
 def record_finalizer_error(source: str, detail: str) -> None:
     """Record a finalizer failure in the global health state.
 
-    This function is safe to call during interpreter shutdown because it
-    uses only primitive operations on built-in types.
+    This function is safe to call during interpreter shutdown.  The
+    ``with _lock`` block is guarded by ``try/except`` so that a
+    ``None``-ified module global does not escape ``__del__``.
 
     Args:
         source: The class or component whose finalizer failed
@@ -42,10 +43,13 @@ def record_finalizer_error(source: str, detail: str) -> None:
                 (e.g. "wipe() raised RuntimeError: ...").
     """
     global _error_count, _error_flag, _last_error
-    with _lock:
-        _error_count += 1
-        _error_flag = True
-        _last_error = (source, detail)
+    try:
+        with _lock:
+            _error_count += 1
+            _error_flag = True
+            _last_error = (source, detail)
+    except Exception:
+        pass  # Lock may be None during interpreter shutdown
 
 
 def finalizer_error_count() -> int:
