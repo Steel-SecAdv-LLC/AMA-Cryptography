@@ -268,6 +268,10 @@ class EncryptedKeyStore:
             f = os.fdopen(fd, "w")
         except BaseException:
             os.close(fd)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
             raise
         try:
             with f:

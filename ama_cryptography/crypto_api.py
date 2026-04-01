@@ -708,6 +708,10 @@ def _atomic_write_json(
         f = os.fdopen(fd, "w")
     except BaseException:
         os.close(fd)
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
         raise
     _rename_ok = False
     try:
