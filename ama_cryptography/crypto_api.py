@@ -711,7 +711,7 @@ def _atomic_write_json(
         try:
             os.unlink(tmp_path)
         except OSError:
-            pass
+            pass  # best-effort cleanup; don't mask the original fdopen error
         raise
     _rename_ok = False
     try:
