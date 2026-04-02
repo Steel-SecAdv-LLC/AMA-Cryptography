@@ -14,11 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-from ama_cryptography.rfc3161_timestamp import (
-    MockTSA,
-    get_timestamp,
-    verify_timestamp,
-)
+import ama_cryptography.rfc3161_timestamp as ts_mod
 
 # ---------------------------------------------------------------------------
 # S1 — HKDF Layer 4 trivial bypass on empty derived_keys
@@ -97,20 +93,20 @@ class TestS2_DisabledTimestampIntegrity:
         payload_a = b"payload A for S2 test"
         payload_b = b"payload B for S2 test"
 
-        ts_result = get_timestamp(payload_a, tsa_mode="disabled")
+        ts_result = ts_mod.get_timestamp(payload_a, tsa_mode="disabled")
         assert ts_result is not None
 
         # Verify with the WRONG data — must return False
         assert (
-            verify_timestamp(payload_b, ts_result) is False
+            ts_mod.verify_timestamp(payload_b, ts_result) is False
         ), "S2 REGRESSION: disabled timestamp validated wrong payload"
 
     def test_disabled_timestamp_correct_data_passes(self) -> None:
         """A disabled TimestampResult should still pass with correct data."""
         data = b"correct data for S2"
-        ts_result = get_timestamp(data, tsa_mode="disabled")
+        ts_result = ts_mod.get_timestamp(data, tsa_mode="disabled")
         assert ts_result is not None
-        assert verify_timestamp(data, ts_result) is True
+        assert ts_mod.verify_timestamp(data, ts_result) is True
 
 
 # ---------------------------------------------------------------------------
@@ -125,13 +121,11 @@ class TestS3_MockTSAHMACAndGuard:
         """MockTSA.timestamp() must produce tokens verifiable with HMAC."""
         import hmac as hmac_mod
 
-        import ama_cryptography.rfc3161_timestamp as ts_mod
-
         # Enable MockTSA for this test
         ts_mod._MOCK_TSA_ALLOWED = True
         try:
             data_hash = hashlib.sha256(b"test data").digest()
-            token = MockTSA.timestamp(data_hash, "sha256")
+            token = ts_mod.MockTSA.timestamp(data_hash, "sha256")
 
             # Extract nonce and payload from token
             nonce = token[-32:]
@@ -145,28 +139,23 @@ class TestS3_MockTSAHMACAndGuard:
             # Verify the old vulnerable construction does NOT match
             old_vulnerable = hashlib.sha256(nonce + payload).digest()
             # They should differ (HMAC != raw hash concatenation)
-            # Note: they COULD theoretically match by coincidence, but practically won't
-            assert mac != old_vulnerable or mac == expected_hmac
+            assert mac != old_vulnerable, "HMAC output must differ from raw hash concatenation"
 
             # Verify roundtrip works
-            assert MockTSA.verify(token, data_hash) is True
+            assert ts_mod.MockTSA.verify(token, data_hash) is True
         finally:
             ts_mod._MOCK_TSA_ALLOWED = False
 
     def test_mock_tsa_blocked_outside_testing(self) -> None:
         """MockTSA.timestamp() must raise RuntimeError when _MOCK_TSA_ALLOWED is False."""
-        import ama_cryptography.rfc3161_timestamp as ts_mod
-
         ts_mod._MOCK_TSA_ALLOWED = False
         with pytest.raises(RuntimeError, match="testing context"):
-            MockTSA.timestamp(b"\x00" * 32, "sha256")
+            ts_mod.MockTSA.timestamp(b"\x00" * 32, "sha256")
 
     def test_get_timestamp_mock_mode_still_works(self) -> None:
         """get_timestamp(tsa_mode='mock') must work (it enables the guard internally)."""
-        import ama_cryptography.rfc3161_timestamp as ts_mod
-
         ts_mod._MOCK_TSA_ALLOWED = False  # Ensure it's off
-        result = get_timestamp(b"data", tsa_mode="mock")
+        result = ts_mod.get_timestamp(b"data", tsa_mode="mock")
         assert result is not None
         assert result.tsa_url == "mock"
         # Flag should be restored to False after the call
@@ -209,14 +198,13 @@ class TestS5_AcquireTimestampNoneGuard:
     def test_empty_token_raises_in_mock_mode(self) -> None:
         """If get_timestamp() returns empty token in mock mode, raise RuntimeError."""
         from ama_cryptography.crypto_api import CryptoPackageConfig, _acquire_timestamp
-        from ama_cryptography.rfc3161_timestamp import TimestampResult
 
         config = CryptoPackageConfig(
             include_timestamp=True,
             tsa_mode="mock",
         )
 
-        empty_result = TimestampResult(
+        empty_result = ts_mod.TimestampResult(
             token=b"", tsa_url="mock", hash_algorithm="sha3-256", data_hash=b""
         )
         with patch(
@@ -229,14 +217,13 @@ class TestS5_AcquireTimestampNoneGuard:
     def test_empty_token_raises_in_online_mode(self) -> None:
         """If get_timestamp() returns empty token in online mode, raise RuntimeError."""
         from ama_cryptography.crypto_api import CryptoPackageConfig, _acquire_timestamp
-        from ama_cryptography.rfc3161_timestamp import TimestampResult
 
         config = CryptoPackageConfig(
             include_timestamp=True,
             tsa_mode="online",
         )
 
-        empty_result = TimestampResult(
+        empty_result = ts_mod.TimestampResult(
             token=b"", tsa_url="online", hash_algorithm="sha3-256", data_hash=b""
         )
         with patch(

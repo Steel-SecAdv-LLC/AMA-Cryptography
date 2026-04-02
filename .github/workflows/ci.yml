@@ -43,6 +43,7 @@ jobs:
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip setuptools wheel
+        pip install "Cython>=3.0.0" "numpy>=1.24.0,<3.0.0"
         pip install -e ".[dev]"
 
     - name: Verify module integrity digest is current
@@ -196,9 +197,9 @@ jobs:
         pip install pip-audit bandit
 
     - name: Audit dependencies
-      # CVE-2026-4539: ReDoS in pygments AdlLexer (local access only, no fix version yet).
-      # pygments is a transitive dev dependency (via rich/bandit) — not used at runtime.
-      # Re-evaluate when pygments >2.19.2 ships a fix.
+      # CVE-2026-4539: ReDoS in pygments AdlLexer (dev-only, local access, not used at runtime).
+      # pygments is a transitive dev dependency (via rich/bandit) — see INVARIANT-14.
+      # Remove ignore when Pygments >2.20.0 ships a fix.
       run: pip-audit --ignore-vuln CVE-2026-4539
 
     - name: Security linting with Bandit
@@ -225,6 +226,22 @@ jobs:
       with:
         name: semgrep-security-report
         path: semgrep-report.json
+
+    - name: "INVARIANT-13: Suppression hygiene check"
+      run: |
+        python tools/check_suppression_hygiene.py
+
+    - name: Enforce safe os.fdopen usage
+      run: |
+        # All os.fdopen calls must be wrapped in try/except to prevent fd leaks.
+        # Approved call sites: key_storage.py, legacy_compat.py, crypto_api.py
+        if grep -rn 'os\.fdopen\|_os\.fdopen' ama_cryptography/ \
+            | grep -v 'key_storage\.py' \
+            | grep -v 'legacy_compat\.py' \
+            | grep -v 'crypto_api\.py'; then
+          echo "::error::Direct os.fdopen call found outside approved modules — wrap in try/except BaseException to guard the fd"
+          exit 1
+        fi
 
   benchmark-regression:
     name: Benchmark Regression Detection
@@ -253,7 +270,8 @@ jobs:
 
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
+        python -m pip install --upgrade pip setuptools wheel
+        pip install "Cython>=3.0.0" "numpy>=1.24.0,<3.0.0"
         pip install -e ".[dev]"
 
     - name: Run benchmark regression tests

@@ -46,7 +46,7 @@ settings.register_profile(
 settings.load_profile("ci" if _in_ci else os.environ.get("HYPOTHESIS_PROFILE", "default"))
 
 # Late imports required - Hypothesis settings must be configured before importing test subjects
-from ama_cryptography.legacy_compat import (  # noqa: E402
+from ama_cryptography.legacy_compat import (  # noqa: E402 — must load after Hypothesis settings configuration (TZ-001)
     DILITHIUM_AVAILABLE,
     SIGNATURE_FORMAT_V2,
     build_signature_message,

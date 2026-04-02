@@ -192,6 +192,16 @@ static int ama_hmac_sha512_3(
 
     /* Build inner message: k_pad || part1 || part2 || part3 */
     {
+        /* Overflow guard: ensure sum does not wrap size_t.
+         * Returns internal sentinel -2; ama_hkdf.c maps -2 → AMA_ERROR_OVERFLOW (-8).
+         * Do NOT compare this return value directly to AMA_ERROR_OVERFLOW. */
+        if (part1_len > SIZE_MAX - AMA_SHA512_BLOCK_SIZE ||
+            part2_len > SIZE_MAX - AMA_SHA512_BLOCK_SIZE - part1_len ||
+            part3_len > SIZE_MAX - AMA_SHA512_BLOCK_SIZE - part1_len - part2_len) {
+            ama_secure_memzero(k_pad, sizeof(k_pad));
+            ama_secure_memzero(key_hash, sizeof(key_hash));
+            return -2;
+        }
         size_t inner_len = AMA_SHA512_BLOCK_SIZE + part1_len + part2_len + part3_len;
         uint8_t *inner_buf = (uint8_t *)calloc((size_t)1, inner_len);
         if (!inner_buf) {

@@ -265,7 +265,16 @@ class EncryptedKeyStore:
             dir=str(self._store_path.parent), suffix=".tmp", prefix=".keystore_"
         )
         try:
-            with os.fdopen(fd, "w") as f:
+            f = os.fdopen(fd, "w")
+        except BaseException:
+            os.close(fd)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass  # best-effort cleanup; don't mask the original fdopen error
+            raise
+        try:
+            with f:
                 json.dump(data, f, indent=2)
                 f.flush()
                 os.fsync(f.fileno())

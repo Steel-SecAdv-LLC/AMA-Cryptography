@@ -51,7 +51,7 @@ except ImportError:
     np = None
 
 # Configuration
-VERSION = "2.1"
+VERSION = "2.1.0"
 USE_CYTHON = CYTHON_AVAILABLE and not os.getenv("AMA_NO_CYTHON")
 USE_C_EXTENSIONS = not os.getenv("AMA_NO_C_EXTENSIONS")
 DEBUG = bool(os.getenv("AMA_DEBUG"))
@@ -272,7 +272,7 @@ class CMakeBuild(build_ext):
 setup(
     name="ama-cryptography",
     version=VERSION,
-    description="Quantum-Resistant Cryptographic Protection System",
+    description="Quantum-resistant cryptographic protection system for helical mathematical Omni-Codes",
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Andrew E. A.",

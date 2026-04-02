@@ -32,9 +32,9 @@ try:
 
     _PYCA_AVAILABLE = True
 except Exception:
-    default_backend = None  # type: ignore[assignment]
-    hashes = None  # type: ignore[assignment]
-    HKDF = None  # type: ignore[assignment,misc]
+    default_backend = None  # type: ignore[assignment]  # fallback when pyca unavailable (TH-001)
+    hashes = None  # type: ignore[assignment]  # fallback when pyca unavailable (TH-002)
+    HKDF = None  # type: ignore[assignment,misc]  # fallback when pyca unavailable (TH-003)
     _PYCA_AVAILABLE = False
 
 

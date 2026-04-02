@@ -37,7 +37,7 @@ symbols — they are intentionally excluded to prevent name collisions.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 2.1
+Version: 2.1.0
 """
 
 from __future__ import annotations
@@ -48,17 +48,33 @@ import json
 import logging
 import secrets
 import struct
-import subprocess  # nosec B404 - subprocess used only with fixed OpenSSL commands for RFC 3161
+import subprocess  # nosec B404 — subprocess used only with fixed OpenSSL commands for RFC 3161 (LC-001)
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, cast
+from typing import IO, TYPE_CHECKING, Dict, Generator, List, Optional, Tuple, Union, cast
 
 if TYPE_CHECKING:
     from ama_cryptography_monitor import AmaCryptographyMonitor
 
 _logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _open_fd(fd: int, mode: str) -> Generator[IO[bytes], None, None]:
+    """Yield a file object; close raw fd only if fdopen itself fails."""
+    import os
+
+    try:
+        f = os.fdopen(fd, mode)
+    except BaseException:
+        os.close(fd)
+        raise
+    with f:
+        yield f
+
 
 # ---------------------------------------------------------------------------
 # Re-imports from ama_cryptography sub-modules so that monkeypatch targets
@@ -409,7 +425,7 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
 
         proc = subprocess.run(
             cmd_query, input=data, capture_output=True, timeout=10
-        )  # nosec B603 — args are fixed literals, no user input
+        )  # nosec B603 — args are fixed literals, no user input (LC-002)
 
         if proc.returncode != 0:
             _logger.warning("OpenSSL ts-query failed: %s", proc.stderr.decode())
@@ -425,7 +441,7 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
 
         with urllib.request.urlopen(
             req, timeout=10
-        ) as response:  # nosec B310 — URL scheme validated above (http/https only)
+        ) as response:  # nosec B310 — URL scheme validated above (http/https only) (LC-003)
             tsr = response.read()
 
         return cast(bytes, tsr)
@@ -455,12 +471,12 @@ def verify_rfc3161_timestamp(
     try:
         tsr_path = os.path.join(tmp_dir, "timestamp.tsr")
         fd = os.open(tsr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as f:
+        with _open_fd(fd, "wb") as f:
             f.write(timestamp_token)
 
         data_path = os.path.join(tmp_dir, "data.dat")
         fd = os.open(data_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as f:
+        with _open_fd(fd, "wb") as f:
             f.write(data)
 
         cmd_verify = [
@@ -480,7 +496,7 @@ def verify_rfc3161_timestamp(
 
         proc = subprocess.run(
             cmd_verify, capture_output=True, timeout=10
-        )  # nosec B603 — args are fixed OpenSSL commands, paths validated by caller
+        )  # nosec B603 — args are fixed OpenSSL commands, paths validated by caller (LC-004)
 
         if proc.returncode == 0:
             return True
@@ -696,7 +712,7 @@ def export_public_keys(kms: KeyManagementSystem, output_dir: Path) -> None:
     if kms.quantum_signatures_enabled and kms.dilithium_keypair:
         _logger.info("Dilithium: %d bytes", len(kms.dilithium_keypair.public_key))
     else:
-        _logger.warning("Dilithium: NOT AVAILABLE (quantum signatures disabled)")
+        _logger.debug("Dilithium: NOT AVAILABLE (quantum signatures disabled)")
 
 
 # ============================================================================
@@ -751,7 +767,7 @@ class CryptoPackage:
     hash_format_version: str = HASH_FORMAT_V1
 
 
-def create_crypto_package(  # noqa: C901
+def create_crypto_package(  # noqa: C901 — legacy entry point; complexity is inherent (LC-005)
     codes: str,
     helix_params: List[Tuple[float, float]],
     kms: KeyManagementSystem,
@@ -833,7 +849,11 @@ def create_crypto_package(  # noqa: C901
             dilithium_pubkey = kms.dilithium_keypair.public_key.hex()
             quantum_signatures_enabled = True
         except QuantumSignatureUnavailableError:
-            pass
+            _logger.debug(
+                "Dilithium signing unavailable; quantum signature layer omitted. "
+                "Package will lack ML-DSA-65 protection. "
+                "Verify PQC backend is installed for production deployments."
+            )
         if monitor and dilithium_sig is not None:
             duration_ms = (time.time() - start_time) * 1000
             monitor.monitor_crypto_operation("dilithium_sign", duration_ms)

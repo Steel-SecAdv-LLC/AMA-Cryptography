@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.15)
 
 project(AmaCryptography
-    VERSION 2.1
+    VERSION 2.1.0
     DESCRIPTION "Quantum-Resistant Cryptographic Protection System"
     LANGUAGES C CXX
 )
@@ -98,6 +98,10 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 if(MSVC)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /W4")
     set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /O2 /DNDEBUG")
+    # Control Flow Guard + ASLR + DEP hardening (Windows)
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /guard:cf")
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /guard:cf /DYNAMICBASE /NXCOMPAT")
+    set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} /guard:cf /DYNAMICBASE /NXCOMPAT")
     set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /Od /Zi /DDEBUG")
 else()
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Wpedantic -Wvla")
@@ -105,8 +109,11 @@ else()
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wstrict-prototypes -Wmissing-prototypes")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fstack-protector-strong")
 
+    # Position-independent code (required for ctypes shared-library loading)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
+
     # Release optimizations
-    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -DNDEBUG")
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -DNDEBUG -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2")
     set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -fomit-frame-pointer")
 
     # -march=native enables the full ISA of the build host (AVX2, SHA-NI,

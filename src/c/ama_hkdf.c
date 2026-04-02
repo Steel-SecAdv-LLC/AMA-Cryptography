@@ -52,7 +52,9 @@ AMA_API ama_error_t ama_hmac_sha512(
     }
     /* Delegate to the 3-part internal HMAC with msg as part1, empty part2/part3 */
     int rc = ama_hmac_sha512_3(key, key_len, msg, msg_len, NULL, 0, NULL, 0, out);
-    return (rc == 0) ? AMA_SUCCESS : AMA_ERROR_MEMORY;
+    if (rc == 0)  return AMA_SUCCESS;
+    if (rc == -2) return AMA_ERROR_OVERFLOW;
+    return AMA_ERROR_MEMORY;
 }
 
 /* SHA3-256 constants */
