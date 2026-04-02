@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.15)
 
 project(AmaCryptography
-    VERSION 2.1
+    VERSION 2.1.0
     DESCRIPTION "Quantum-Resistant Cryptographic Protection System"
     LANGUAGES C CXX
 )
@@ -113,7 +113,7 @@ else()
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
 
     # Release optimizations
-    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -DNDEBUG -D_FORTIFY_SOURCE=2")
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -DNDEBUG -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2")
     set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -fomit-frame-pointer")
 
     # -march=native enables the full ISA of the build host (AVX2, SHA-NI,

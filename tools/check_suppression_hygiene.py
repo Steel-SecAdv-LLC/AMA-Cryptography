@@ -70,35 +70,24 @@ def _scan_file(filepath: str) -> list[str]:
     try:
         with open(filepath, encoding="utf-8", errors="replace") as fh:
             for lineno, line in enumerate(fh, 1):
-                m = _SUPPRESSION_RE.search(line)
-                if m is None:
-                    continue
-
-                # Skip suppression tokens that appear inside string literals
-                if _is_in_string(line, m.start()):
-                    continue
-
-                tag = f"{filepath}:{lineno}"
-
-                # Check forbidden directories
-                if _is_forbidden(filepath):
-                    violations.append(f"{tag}: suppression in forbidden directory")
-                    continue
-
-                # Check for justification text
-                rest = line[m.end() :]
-                if not _JUSTIFICATION_RE.search(rest):
-                    violations.append(
-                        f"{tag}: suppression missing justification "
-                        f"(expected em-dash/-- followed by reason)"
-                    )
-                    continue
-
-                # Check for tracking ID
-                if not _TRACKING_ID_RE.search(rest):
-                    violations.append(
-                        f"{tag}: suppression missing tracking ID " f"(expected e.g. (KM-001))"
-                    )
+                for m in _SUPPRESSION_RE.finditer(line):
+                    if _is_in_string(line, m.start()):
+                        continue
+                    tag = f"{filepath}:{lineno}"
+                    if _is_forbidden(filepath):
+                        violations.append(f"{tag}: suppression in forbidden directory")
+                        break
+                    rest = line[m.end() :]
+                    if not _JUSTIFICATION_RE.search(rest):
+                        violations.append(
+                            f"{tag}: suppression '{m.group()}' missing justification "
+                            f"(expected em-dash, --, or # followed by reason and tracking ID)"
+                        )
+                    elif not _TRACKING_ID_RE.search(rest):
+                        violations.append(
+                            f"{tag}: suppression '{m.group()}' missing tracking ID "
+                            f"(expected e.g. (KM-001))"
+                        )
     except (OSError, UnicodeDecodeError):
         pass  # skip unreadable files
     return violations
