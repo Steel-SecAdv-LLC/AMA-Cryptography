@@ -8,7 +8,7 @@
 **AI Co-Architects:**  
 Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
-**Version:** 2.1
+**Version:** 2.1.0
 **Date:** 2026-03-10
 
 ---
@@ -53,6 +53,17 @@ pip install -e .
 ```
 
 **Note:** As of v2.0, all cryptographic primitives (SHA3-256, HKDF-SHA3-256, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+) are implemented natively in C. No external cryptographic libraries are required.
+
+> **INVARIANT-7 Deployment Constraint:** The native C library **must** be built
+> and available for `ama_cryptography` to import. INVARIANT-7 (revised) enforces
+> native-only operation unconditionally — the library raises `RuntimeError` at
+> import time if the C backend is missing. This means documentation-generation
+> builds (e.g., ReadTheDocs), pure-Python CI environments, and any environment
+> without a C toolchain **cannot import the package** unless the C library is
+> built first. Non-cryptographic submodules (`AmaEquationEngine`,
+> `DoubleHelixEngine`) are also gated by this check. If your use case requires
+> math-engine-only access without the C backend, please open an issue to discuss
+> a carved-out exception.
 
 ### 2. Run Demo
 

@@ -49,6 +49,11 @@ def record_finalizer_error(source: str, detail: str) -> None:
             _error_flag = True
             _last_error = (source, detail)
     except Exception:  # noqa: S110  # nosec B110  # shutdown safety (FH-001)
+        # KNOWN TRADEOFF (INVARIANT-3 addendum): This except-pass is required
+        # to survive interpreter shutdown when _lock is None.  It also silently
+        # swallows bugs inside the with body during normal operation.  In
+        # practice _lock is only None during shutdown.  Accepted per INVARIANT-3
+        # addendum design review.
         pass
 
 

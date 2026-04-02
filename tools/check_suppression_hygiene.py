@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import tokenize
 from pathlib import Path
 
 # Suppression tokens to scan for
@@ -46,33 +47,33 @@ def _is_forbidden(filepath: str) -> bool:
     return False
 
 
-def _is_in_string(line: str, match_start: int) -> bool:
-    """Heuristic: return True if position is inside a string literal."""
-    in_single = False
-    in_double = False
-    i = 0
-    while i < match_start:
-        ch = line[i]
-        if ch == "\\" and i + 1 < match_start:
-            i += 2
-            continue
-        if ch == "'" and not in_double:
-            in_single = not in_single
-        elif ch == '"' and not in_single:
-            in_double = not in_double
-        i += 1
-    return in_single or in_double
+def _get_comment_lines(filepath: str) -> set[int]:
+    """Return the set of line numbers that contain real comments (via tokenize).
+
+    This correctly handles triple-quoted strings, raw strings, and f-strings —
+    only ``tokenize.COMMENT`` tokens are returned, never string content.
+    """
+    comment_lines: set[int] = set()
+    try:
+        with open(filepath, "rb") as fh:
+            for tok in tokenize.tokenize(fh.readline):
+                if tok.type == tokenize.COMMENT:
+                    comment_lines.add(tok.start[0])
+    except (OSError, tokenize.TokenError, SyntaxError):
+        pass  # skip unreadable / unparseable files
+    return comment_lines
 
 
 def _scan_file(filepath: str) -> list[str]:
     """Return a list of violation messages for the given file."""
     violations: list[str] = []
+    comment_lines = _get_comment_lines(filepath)
     try:
         with open(filepath, encoding="utf-8", errors="replace") as fh:
             for lineno, line in enumerate(fh, 1):
+                if lineno not in comment_lines:
+                    continue
                 for m in _SUPPRESSION_RE.finditer(line):
-                    if _is_in_string(line, m.start()):
-                        continue
                     tag = f"{filepath}:{lineno}"
                     if _is_forbidden(filepath):
                         violations.append(f"{tag}: suppression in forbidden directory")

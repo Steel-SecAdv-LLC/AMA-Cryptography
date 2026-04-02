@@ -109,8 +109,8 @@ else()
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wstrict-prototypes -Wmissing-prototypes")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fstack-protector-strong")
 
-    # Position-independent code (required for ctypes shared-library loading)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
+    # Position-independent code: scoped to shared library target only
+    # (see set_target_properties on ama_cryptography_shared below)
 
     # Release optimizations
     set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -DNDEBUG -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2")
@@ -351,6 +351,7 @@ if(AMA_BUILD_SHARED)
         VERSION ${PROJECT_VERSION}
         SOVERSION ${PROJECT_VERSION_MAJOR}
         PUBLIC_HEADER "include/ama_cryptography.h;include/ama_dispatch.h"
+        POSITION_INDEPENDENT_CODE ON
     )
     target_compile_definitions(ama_cryptography_shared PRIVATE AMA_BUILDING_SHARED)
     target_compile_definitions(ama_cryptography_shared PRIVATE
