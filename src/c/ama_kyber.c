@@ -1617,7 +1617,8 @@ static int16_t csubq(int16_t a) {
 }
 
 /* NTT twiddle factors (zetas) - primitive 256th root of unity in Montgomery form */
-static const int16_t zetas[128] = {
+/* Exported as ama_kyber_zetas for SIMD basemul dispatch. */
+const int16_t ama_kyber_zetas[128] = {
     2285, 2571, 2970, 1812, 1493, 1422, 287, 202,
     3158, 622, 1577, 182, 962, 2127, 1855, 1468,
     573, 2004, 264, 383, 2500, 1458, 1727, 3199,
@@ -1650,7 +1651,7 @@ static void poly_ntt(poly* r) {
     /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
     const ama_dispatch_table_t *dt = ama_get_dispatch_table();
     if (dt->kyber_ntt) {
-        dt->kyber_ntt(r->coeffs, zetas);
+        dt->kyber_ntt(r->coeffs, ama_kyber_zetas);
         return;
     }
 
@@ -1661,7 +1662,7 @@ static void poly_ntt(poly* r) {
     k = 1;
     for (len = 128; len >= 2; len >>= 1) {
         for (start = 0; start < KYBER_N; start = j + len) {
-            zeta = zetas[k++];
+            zeta = ama_kyber_zetas[k++];
             for (j = start; j < start + len; j++) {
                 t = montgomery_reduce((int32_t)zeta * r->coeffs[j + len]);
                 r->coeffs[j + len] = r->coeffs[j] - t;
@@ -1680,7 +1681,7 @@ static void poly_invntt(poly* r) {
     /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
     const ama_dispatch_table_t *dt = ama_get_dispatch_table();
     if (dt->kyber_invntt) {
-        dt->kyber_invntt(r->coeffs, zetas);
+        dt->kyber_invntt(r->coeffs, ama_kyber_zetas);
         return;
     }
 
@@ -1692,7 +1693,7 @@ static void poly_invntt(poly* r) {
     k = 127;
     for (len = 2; len <= 128; len <<= 1) {
         for (start = 0; start < KYBER_N; start = j + len) {
-            zeta = zetas[k--];
+            zeta = ama_kyber_zetas[k--];
             for (j = start; j < start + len; j++) {
                 t = r->coeffs[j];
                 r->coeffs[j] = barrett_reduce(t + r->coeffs[j + len]);
@@ -1734,8 +1735,8 @@ static void poly_basemul(poly* r, const poly* a, const poly* b) {
     /* Generic C implementation */
     unsigned int i;
     for (i = 0; i < KYBER_N / 4; i++) {
-        basemul(&r->coeffs[4*i], &a->coeffs[4*i], &b->coeffs[4*i], zetas[64 + i]);
-        basemul(&r->coeffs[4*i + 2], &a->coeffs[4*i + 2], &b->coeffs[4*i + 2], -zetas[64 + i]);
+        basemul(&r->coeffs[4*i], &a->coeffs[4*i], &b->coeffs[4*i], ama_kyber_zetas[64 + i]);
+        basemul(&r->coeffs[4*i + 2], &a->coeffs[4*i + 2], &b->coeffs[4*i + 2], -ama_kyber_zetas[64 + i]);
     }
 }
 

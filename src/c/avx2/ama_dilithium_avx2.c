@@ -145,6 +145,10 @@ void ama_dilithium_ntt_avx2(int32_t poly[DILITHIUM_N],
         f[i] = _mm256_loadu_si256((const __m256i *)(poly + i * 8));
     }
 
+    /* NOTE: This AVX2 NTT uses mullo_epi32 (32-bit truncation) which is
+     * incorrect for Dilithium's q=8380417 where zeta*coeff can exceed 2^32.
+     * NOT wired into dispatch — kept for future implementation with proper
+     * 64-bit Montgomery reduction.  See dispatch INVARIANT-4 comment. */
     int k = 0;
     for (int len = 128; len >= 2; len >>= 1) {
         for (int start = 0; start < DILITHIUM_N; start += 2 * len) {

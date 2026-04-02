@@ -55,6 +55,14 @@ static inline __m256i barrett_reduce_avx2(__m256i a) {
 }
 
 /* ============================================================================
+ * Scalar Montgomery reduction (for sub-register NTT layers)
+ * ============================================================================ */
+static inline int16_t montgomery_reduce_scalar(int32_t a) {
+    int16_t t = (int16_t)((int16_t)a * (int16_t)62209);
+    return (int16_t)((a - (int32_t)t * KYBER_Q) >> 16);
+}
+
+/* ============================================================================
  * AVX2 Montgomery reduction for Kyber NTT
  *
  * Computes a * b * R^{-1} mod q where R = 2^16.
@@ -107,29 +115,36 @@ void ama_kyber_ntt_avx2(int16_t poly[KYBER_N], const int16_t zetas[128]) {
         f[i] = _mm256_loadu_si256((const __m256i *)(poly + i * 16));
     }
 
-    /* NTT layers: 7 layers for N=256 */
-    int k = 0;
-    for (int len = 128; len >= 2; len >>= 1) {
+    /* NTT layers where len >= 16: butterfly pairs span different registers.
+     * k starts at 1 to match generic C (zetas[0] is unused). */
+    int k = 1;
+    for (int len = 128; len >= 16; len >>= 1) {
         for (int start = 0; start < KYBER_N; start += 2 * len) {
             __m256i zeta = _mm256_set1_epi16(zetas[k++]);
             for (int j = start; j < start + len; j += 16) {
                 int idx_a = j / 16;
                 int idx_b = (j + len) / 16;
-                if (idx_a < 16 && idx_b < 16) {
-                    ntt_butterfly_avx2(&f[idx_a], &f[idx_b], zeta);
-                }
+                ntt_butterfly_avx2(&f[idx_a], &f[idx_b], zeta);
             }
         }
     }
 
-    /* Barrett reduce all coefficients */
-    for (int i = 0; i < 16; i++) {
-        f[i] = barrett_reduce_avx2(f[i]);
-    }
-
-    /* Store back */
+    /* Store back for scalar sub-register layers */
     for (int i = 0; i < 16; i++) {
         _mm256_storeu_si256((__m256i *)(poly + i * 16), f[i]);
+    }
+
+    /* NTT layers where len < 16: butterfly pairs are within the same register.
+     * Fall back to scalar Montgomery multiply for correctness. */
+    for (int len = 8; len >= 2; len >>= 1) {
+        for (int start = 0; start < KYBER_N; start += 2 * len) {
+            int16_t zeta = zetas[k++];
+            for (int j = start; j < start + len; j++) {
+                int16_t t = montgomery_reduce_scalar((int32_t)zeta * poly[j + len]);
+                poly[j + len] = poly[j] - t;
+                poly[j] = poly[j] + t;
+            }
+        }
     }
 }
 
@@ -137,53 +152,101 @@ void ama_kyber_ntt_avx2(int16_t poly[KYBER_N], const int16_t zetas[128]) {
  * Inverse NTT (Gentleman-Sande butterflies)
  * ============================================================================ */
 void ama_kyber_invntt_avx2(int16_t poly[KYBER_N], const int16_t zetas[128]) {
-    __m256i f[16];
+    /* Fully scalar inverse NTT matching generic C exactly.
+     * The forward NTT uses AVX2 for len>=16 layers; the inverse NTT
+     * uses scalar code for all layers to ensure bit-exact correctness.
+     * Performance: invNTT is not the bottleneck (NTT + basemul dominate). */
+    unsigned int len, start, j;
+    int k;
+    int16_t t, zeta;
+    const int16_t f = 1441;  /* 128^{-1} mod q, Montgomery form */
 
-    for (int i = 0; i < 16; i++) {
-        f[i] = _mm256_loadu_si256((const __m256i *)(poly + i * 16));
-    }
-
-    int k = 127;
-    for (int len = 2; len <= 128; len <<= 1) {
-        for (int start = 0; start < KYBER_N; start += 2 * len) {
-            __m256i zeta = _mm256_set1_epi16(zetas[k--]);
-            for (int j = start; j < start + len; j += 16) {
-                int idx_a = j / 16;
-                int idx_b = (j + len) / 16;
-                if (idx_a < 16 && idx_b < 16) {
-                    /* GS butterfly: t = a - b, a = a + b, b = zeta * t */
-                    __m256i t = _mm256_sub_epi16(f[idx_a], f[idx_b]);
-                    f[idx_a] = _mm256_add_epi16(f[idx_a], f[idx_b]);
-                    f[idx_b] = montgomery_mul_avx2(zeta, t);
+    k = 127;
+    for (len = 2; len <= 128; len <<= 1) {
+        for (start = 0; start < KYBER_N; start = j + len) {
+            zeta = zetas[k--];
+            for (j = start; j < start + len; j++) {
+                t = poly[j];
+                /* Barrett reduce the sum */
+                {
+                    int16_t sum = t + poly[j + len];
+                    int16_t bv = (int16_t)(((int32_t)sum * 20159 + (1 << 25)) >> 26);
+                    poly[j] = sum - bv * KYBER_Q;
                 }
+                poly[j + len] = montgomery_reduce_scalar(
+                    (int32_t)zeta * (poly[j + len] - t));
             }
         }
     }
 
-    /* Multiply by N^{-1} mod q and reduce */
-    const __m256i ninv = _mm256_set1_epi16(3303); /* 256^{-1} mod 3329 */
-    for (int i = 0; i < 16; i++) {
-        f[i] = montgomery_mul_avx2(f[i], ninv);
-        f[i] = barrett_reduce_avx2(f[i]);
-    }
-
-    for (int i = 0; i < 16; i++) {
-        _mm256_storeu_si256((__m256i *)(poly + i * 16), f[i]);
+    for (j = 0; j < KYBER_N; j++) {
+        poly[j] = montgomery_reduce_scalar((int32_t)f * poly[j]);
     }
 }
 
 /* ============================================================================
- * Pointwise multiplication of two NTT-domain polynomials
+ * Basemul: multiplication in Z_q[X]/(X^2 - zeta) for degree-2 components.
+ *
+ * For each pair (a[0],a[1]) * (b[0],b[1]) mod (X^2 - zeta):
+ *   r[0] = a[1]*b[1]*zeta + a[0]*b[0]
+ *   r[1] = a[0]*b[1] + a[1]*b[0]
+ *
+ * Matches generic C basemul() exactly (pqcrystals reference).
  * ============================================================================ */
+
+/* Extern: zetas table from ama_kyber.c (needed for basemul twiddles) */
+extern const int16_t ama_kyber_zetas[128];
+
 void ama_kyber_poly_pointwise_avx2(int16_t r[KYBER_N],
                                     const int16_t a[KYBER_N],
                                     const int16_t b[KYBER_N]) {
-    for (int i = 0; i < 16; i++) {
-        __m256i va = _mm256_loadu_si256((const __m256i *)(a + i * 16));
-        __m256i vb = _mm256_loadu_si256((const __m256i *)(b + i * 16));
-        __m256i vr = montgomery_mul_avx2(va, vb);
-        vr = barrett_reduce_avx2(vr);
-        _mm256_storeu_si256((__m256i *)(r + i * 16), vr);
+    /* Process 4 coefficients at a time (2 basemul pairs) using scalar
+     * Montgomery reduction for correctness.  AVX2 is used for the
+     * surrounding polynomial add/sub operations; basemul is inherently
+     * sequential per-pair due to the zeta-dependent structure. */
+    for (int i = 0; i < KYBER_N / 4; i++) {
+        const int16_t *ap = a + 4 * i;
+        const int16_t *bp = b + 4 * i;
+        int16_t *rp = r + 4 * i;
+        int16_t zeta = ama_kyber_zetas[64 + i];
+
+        /* basemul(rp, ap, bp, zeta) */
+        int32_t t;
+        t = (int32_t)ap[1] * bp[1];
+        /* Montgomery reduce: t * QINV mod 2^16, then (t - u*q) >> 16 */
+        int32_t u = (int16_t)((int16_t)t * (int16_t)KYBER_QINV);
+        rp[0] = (int16_t)((t - (int32_t)u * KYBER_Q) >> 16);
+        t = (int32_t)rp[0] * zeta;
+        u = (int16_t)((int16_t)t * (int16_t)KYBER_QINV);
+        rp[0] = (int16_t)((t - (int32_t)u * KYBER_Q) >> 16);
+        t = (int32_t)ap[0] * bp[0];
+        u = (int16_t)((int16_t)t * (int16_t)KYBER_QINV);
+        rp[0] += (int16_t)((t - (int32_t)u * KYBER_Q) >> 16);
+
+        t = (int32_t)ap[0] * bp[1];
+        u = (int16_t)((int16_t)t * (int16_t)KYBER_QINV);
+        rp[1] = (int16_t)((t - (int32_t)u * KYBER_Q) >> 16);
+        t = (int32_t)ap[1] * bp[0];
+        u = (int16_t)((int16_t)t * (int16_t)KYBER_QINV);
+        rp[1] += (int16_t)((t - (int32_t)u * KYBER_Q) >> 16);
+
+        /* basemul(rp+2, ap+2, bp+2, -zeta) */
+        t = (int32_t)ap[3] * bp[3];
+        u = (int16_t)((int16_t)t * (int16_t)KYBER_QINV);
+        rp[2] = (int16_t)((t - (int32_t)u * KYBER_Q) >> 16);
+        t = (int32_t)rp[2] * (-zeta);
+        u = (int16_t)((int16_t)t * (int16_t)KYBER_QINV);
+        rp[2] = (int16_t)((t - (int32_t)u * KYBER_Q) >> 16);
+        t = (int32_t)ap[2] * bp[2];
+        u = (int16_t)((int16_t)t * (int16_t)KYBER_QINV);
+        rp[2] += (int16_t)((t - (int32_t)u * KYBER_Q) >> 16);
+
+        t = (int32_t)ap[2] * bp[3];
+        u = (int16_t)((int16_t)t * (int16_t)KYBER_QINV);
+        rp[3] = (int16_t)((t - (int32_t)u * KYBER_Q) >> 16);
+        t = (int32_t)ap[3] * bp[2];
+        u = (int16_t)((int16_t)t * (int16_t)KYBER_QINV);
+        rp[3] += (int16_t)((t - (int32_t)u * KYBER_Q) >> 16);
     }
 }
 
