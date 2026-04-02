@@ -260,6 +260,12 @@ module = [
 ]
 ignore_missing_imports = true
 
+# _pytest uses Python 3.10+ syntax (match statements); skip to avoid
+# false syntax errors when python_version = "3.9".
+[[tool.mypy.overrides]]
+module = "_pytest.*"
+follow_imports = "skip"
+
 
 # Cython extension modules — no .py source or PEP 561 stubs.
 [[tool.mypy.overrides]]

@@ -47,7 +47,7 @@ def _pyca_available() -> bool:
         from cryptography.hazmat.primitives.asymmetric import ed25519
 
         _ = ed25519  # import probe for availability check
-    except Exception:
+    except BaseException:
         return False
     return True
 

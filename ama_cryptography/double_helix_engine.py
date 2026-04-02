@@ -430,12 +430,15 @@ class AmaEquationEngine:
         ℵ(𝔄_{t+1}) = Helix_1(𝔄_t) ⊗ Helix_2(𝔄_t)
 
         Args:
-            state: Current state 𝔄_t
+            state: Current state 𝔄_t (Vec or array-like)
             t: Time step
 
         Returns:
             Updated state 𝔄_{t+1}
         """
+        # Coerce non-Vec inputs (e.g. numpy arrays) to Vec
+        if not isinstance(state, Vec):
+            state = Vec(list(state))
         # Helix 1: Discovery/Exploration Strand
         helix1 = state.copy()
 
@@ -537,8 +540,11 @@ class AmaEquationEngine:
         """
         if initial_state is None:
             state = random.randn(self.state_dim) * (0.1 * PHI_CUBED)
-        else:
+        elif isinstance(initial_state, Vec):
             state = initial_state.copy()
+        else:
+            # Coerce numpy arrays or other sequences to Vec
+            state = Vec(list(initial_state))
 
         history: List[float] = []
 

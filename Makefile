@@ -71,7 +71,7 @@ install: all
 # Development install
 dev-install:
 	@echo "Installing development dependencies..."
-	@pip3 install -e ".[dev,all]"
+	@pip3 install -e ".[dev]"
 	@echo "✓ Development environment ready"
 
 # Format code

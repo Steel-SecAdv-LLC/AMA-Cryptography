@@ -164,7 +164,7 @@ def example_3_data_protection():
     # Create protected package
     print("Creating protected package...")
     package = create_crypto_package(
-        dna_codes=sensitive_data,
+        codes=sensitive_data,
         helix_params=data_params,
         kms=kms,
         author="Data Owner",
@@ -180,9 +180,9 @@ def example_3_data_protection():
     # Verify the package
     print("\nVerifying package...")
     results = verify_crypto_package(
-        dna_codes=sensitive_data,
+        codes=sensitive_data,
         helix_params=data_params,
-        pkg=package,
+        package=package,
         hmac_key=kms.hmac_key,
     )
 
@@ -224,7 +224,7 @@ def example_4_humanitarian_use_case():
     # Protect the data
     kms = generate_key_management_system("Crisis Response Unit")
     package = create_crypto_package(
-        dna_codes=crisis_data,
+        codes=crisis_data,
         helix_params=helix_params,
         kms=kms,
         author="Field Operator",
@@ -244,9 +244,9 @@ def example_4_humanitarian_use_case():
 
     # Verify integrity
     results = verify_crypto_package(
-        dna_codes=crisis_data,
+        codes=crisis_data,
         helix_params=helix_params,
-        pkg=package,
+        package=package,
         hmac_key=kms.hmac_key,
     )
 

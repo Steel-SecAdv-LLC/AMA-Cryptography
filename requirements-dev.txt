@@ -1,4 +1,4 @@
-# Development and Testing Dependencies for AMA Cryptography 2.0
+# Development and Testing Dependencies for AMA Cryptography 2.1
 # Install with: pip install -r requirements-dev.txt
 #
 # ALL cryptographic operations provided natively by the C library (ZERO external deps).
@@ -6,16 +6,13 @@
 # Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
 
 # Build dependencies (required for Cython extensions)
-Cython>=3.0.0,<3.1.0; python_version < "3.9"
-Cython>=3.0.0; python_version >= "3.9"
+Cython>=3.0.0
 
-# NumPy: 1.24.x is last version supporting Python 3.8
-numpy>=1.24.0,<2.0.0; python_version < "3.9"
-numpy>=1.24.0; python_version >= "3.9"
+# NumPy: required for monitoring/equations modules
+numpy>=1.24.0
 
-# SciPy: 1.10.x is last version supporting Python 3.8, 1.11+ requires Python 3.9+
-scipy>=1.10.0,<1.11.0; python_version < "3.9"
-scipy>=1.11.0; python_version >= "3.9"
+# SciPy: required for monitoring/equations modules (1.11+ requires Python 3.9+)
+scipy>=1.11.0
 
 # Testing
 pytest>=7.0.0
