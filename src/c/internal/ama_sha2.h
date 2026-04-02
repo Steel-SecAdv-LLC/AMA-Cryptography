@@ -193,7 +193,8 @@ static int ama_hmac_sha512_3(
     /* Build inner message: k_pad || part1 || part2 || part3 */
     {
         /* Overflow guard: ensure sum does not wrap size_t.
-         * Returns -2 (AMA_ERROR_OVERFLOW) to distinguish from -1 (alloc failure). */
+         * Returns internal sentinel -2; ama_hkdf.c maps -2 → AMA_ERROR_OVERFLOW (-8).
+         * Do NOT compare this return value directly to AMA_ERROR_OVERFLOW. */
         if (part1_len > SIZE_MAX - AMA_SHA512_BLOCK_SIZE ||
             part2_len > SIZE_MAX - AMA_SHA512_BLOCK_SIZE - part1_len ||
             part3_len > SIZE_MAX - AMA_SHA512_BLOCK_SIZE - part1_len - part2_len) {
