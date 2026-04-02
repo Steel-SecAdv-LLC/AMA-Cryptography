@@ -712,7 +712,7 @@ def export_public_keys(kms: KeyManagementSystem, output_dir: Path) -> None:
     if kms.quantum_signatures_enabled and kms.dilithium_keypair:
         _logger.info("Dilithium: %d bytes", len(kms.dilithium_keypair.public_key))
     else:
-        _logger.warning("Dilithium: NOT AVAILABLE (quantum signatures disabled)")
+        _logger.debug("Dilithium: NOT AVAILABLE (quantum signatures disabled)")
 
 
 # ============================================================================

@@ -11,6 +11,7 @@ INVARIANT-3 (addendum): Finalizer Failures Must Be Observable
 
 from __future__ import annotations
 
+import gc
 import re
 import subprocess
 import sys
@@ -103,9 +104,10 @@ class TestFinalizerHealth:
             secret_key=bytearray(b"\x00" * 4032),
         )
         before = fh.finalizer_error_count()
-        # Force wipe() to raise
-        with mock.patch.object(kp, "wipe", side_effect=RuntimeError("mock")):
-            kp.__del__()
+        # Patch at class level so the GC-triggered __del__ sees the mock
+        with mock.patch.object(DilithiumKeyPair, "wipe", side_effect=RuntimeError("mock")):
+            del kp
+            gc.collect()
         after = fh.finalizer_error_count()
         assert after == before + 1
         last = fh.last_finalizer_error()
@@ -122,8 +124,9 @@ class TestFinalizerHealth:
             secret_key=bytearray(b"\x00" * 3168),
         )
         before = fh.finalizer_error_count()
-        with mock.patch.object(kp, "wipe", side_effect=RuntimeError("mock")):
-            kp.__del__()
+        with mock.patch.object(KyberKeyPair, "wipe", side_effect=RuntimeError("mock")):
+            del kp
+            gc.collect()
         after = fh.finalizer_error_count()
         assert after == before + 1
         last = fh.last_finalizer_error()
@@ -140,8 +143,9 @@ class TestFinalizerHealth:
             secret_key=bytearray(b"\x00" * 128),
         )
         before = fh.finalizer_error_count()
-        with mock.patch.object(kp, "wipe", side_effect=RuntimeError("mock")):
-            kp.__del__()
+        with mock.patch.object(SphincsKeyPair, "wipe", side_effect=RuntimeError("mock")):
+            del kp
+            gc.collect()
         after = fh.finalizer_error_count()
         assert after == before + 1
         last = fh.last_finalizer_error()

@@ -84,7 +84,8 @@ typedef enum {
     AMA_ERROR_VERIFY_FAILED = -4,
     AMA_ERROR_NOT_IMPLEMENTED = -5,
     AMA_ERROR_TIMING_ATTACK = -6,
-    AMA_ERROR_SIDE_CHANNEL = -7
+    AMA_ERROR_SIDE_CHANNEL = -7,
+    AMA_ERROR_OVERFLOW = -8
 } ama_error_t;
 
 /* ============================================================================
