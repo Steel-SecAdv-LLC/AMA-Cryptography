@@ -36,9 +36,7 @@ def _pyca_crypto_available() -> bool:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         _ = AESGCM  # import probe for availability check
-    except BaseException as exc:
-        if isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit)):
-            raise
+    except Exception:
         return False
     return True
 
