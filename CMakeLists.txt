@@ -308,7 +308,7 @@ if(AMA_AES_CONSTTIME)
     list(APPEND AMA_SOURCES src/c/ama_aes_bitsliced.c)
     message(STATUS "AES backend: constant-time bitsliced S-box (cache-timing safe)")
 else()
-    message(STATUS "AES backend: table-based S-box (fast, NOT cache-timing safe)")
+    message(WARNING "AES backend: table-based S-box — VULNERABLE to cache-timing attacks (Bernstein 2005). Set AMA_AES_CONSTTIME=ON for production use.")
 endif()
 
 # Threading: ama_cpuid.c uses pthread_once (POSIX) or InitOnceExecuteOnce

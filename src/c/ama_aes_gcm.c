@@ -360,6 +360,13 @@ ama_error_t ama_aes256_gcm_encrypt(
     if (pt_len > 0 && (!plaintext || !ciphertext)) return AMA_ERROR_INVALID_PARAM;
     if (aad_len > 0 && !aad) return AMA_ERROR_INVALID_PARAM;
 
+    /* NIST SP 800-38D length limits: plaintext <= 2^39 - 256 bits (~64 GB),
+     * AAD <= 2^64 - 1 bits.  We enforce a tighter 2^36 byte (64 GB) limit
+     * to prevent integer overflow in the GHASH length block (len * 8). */
+    #define AMA_AES_GCM_MAX_BYTES ((size_t)1 << 36)
+    if (pt_len > AMA_AES_GCM_MAX_BYTES || aad_len > AMA_AES_GCM_MAX_BYTES)
+        return AMA_ERROR_INVALID_PARAM;
+
     /* Key expansion */
     aes256_key_expansion(key, round_keys);
 
@@ -450,6 +457,13 @@ ama_error_t ama_aes256_gcm_decrypt(
     if (!key || !nonce || !tag) return AMA_ERROR_INVALID_PARAM;
     if (ct_len > 0 && (!ciphertext || !plaintext)) return AMA_ERROR_INVALID_PARAM;
     if (aad_len > 0 && !aad) return AMA_ERROR_INVALID_PARAM;
+
+    /* Integer overflow protection for GHASH length block (len * 8) */
+    #ifndef AMA_AES_GCM_MAX_BYTES
+    #define AMA_AES_GCM_MAX_BYTES ((size_t)1 << 36)
+    #endif
+    if (ct_len > AMA_AES_GCM_MAX_BYTES || aad_len > AMA_AES_GCM_MAX_BYTES)
+        return AMA_ERROR_INVALID_PARAM;
 
     /* Key expansion */
     aes256_key_expansion(key, round_keys);
