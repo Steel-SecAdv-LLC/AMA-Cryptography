@@ -23,11 +23,11 @@ import time
 import pytest
 
 from ama_cryptography.pqc_backends import (
+    _AES_GCM_NATIVE_AVAILABLE,
+    _ED25519_NATIVE_AVAILABLE,
     DILITHIUM_AVAILABLE,
     KYBER_AVAILABLE,
     SPHINCS_AVAILABLE,
-    _AES_GCM_NATIVE_AVAILABLE,
-    _ED25519_NATIVE_AVAILABLE,
     _native_lib,
 )
 
@@ -342,7 +342,7 @@ class TestOracleResistance:
     @skip_no_kyber
     def test_kyber_implicit_rejection(self):
         pk, sk = _kyber_keygen()
-        ct, ss_enc = _kyber_encap(pk)
+        _ct, ss_enc = _kyber_encap(pk)
         random_ct = secrets.token_bytes(KYBER_CT)
         ss_rand = _kyber_decap(random_ct, sk)
         assert ss_rand != ss_enc
@@ -400,14 +400,14 @@ class TestKeyMisuse:
 
     @skip_no_dilithium
     def test_dilithium_wrong_key_verify(self):
-        pk1, sk1 = _dilithium_keygen()
+        _pk1, sk1 = _dilithium_keygen()
         pk2, _ = _dilithium_keygen()
         sig = _dilithium_sign(sk1, b"wrong key test")
         assert not _dilithium_verify(pk2, b"wrong key test", sig)
 
     @skip_no_kyber
     def test_kyber_wrong_sk_decap(self):
-        pk1, sk1 = _kyber_keygen()
+        pk1, _sk1 = _kyber_keygen()
         _, sk2 = _kyber_keygen()
         ct, ss_enc = _kyber_encap(pk1)
         ss_dec = _kyber_decap(ct, sk2)
@@ -468,7 +468,7 @@ class TestCrossAlgorithm:
             from ama_cryptography.pqc_backends import kyber_encapsulate
             result = kyber_encapsulate(fake_pk)
             assert isinstance(result.ciphertext, bytes)
-        except Exception:
+        except Exception:  # noqa: S110
             pass  # Any exception is acceptable, crash is not
 
 
@@ -551,5 +551,5 @@ class TestSecurityEdgeCases:
         try:
             ss = _kyber_decap(ct, zero_sk)
             assert isinstance(ss, bytes)
-        except Exception:
+        except Exception:  # noqa: S110
             pass  # Exception is acceptable, crash is not
