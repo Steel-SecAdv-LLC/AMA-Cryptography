@@ -360,6 +360,16 @@ ama_error_t ama_aes256_gcm_encrypt(
     if (pt_len > 0 && (!plaintext || !ciphertext)) return AMA_ERROR_INVALID_PARAM;
     if (aad_len > 0 && !aad) return AMA_ERROR_INVALID_PARAM;
 
+    /* NIST SP 800-38D length limits (uint64_t to avoid 32-bit UB):
+     *   Plaintext: at most (2^32 - 2) * 128 bits = (2^32 - 2) * 16 bytes
+     *   AAD:       at most 2^61 - 1 bytes                                */
+#define AMA_AES_GCM_MAX_PLAINTEXT_BYTES (((uint64_t)UINT32_MAX - 1) * 16ULL)
+#define AMA_AES_GCM_MAX_AAD_BYTES       ((uint64_t)(((uint64_t)1 << 61) - 1))
+    if ((uint64_t)pt_len > AMA_AES_GCM_MAX_PLAINTEXT_BYTES)
+        return AMA_ERROR_INVALID_PARAM;
+    if ((uint64_t)aad_len > AMA_AES_GCM_MAX_AAD_BYTES)
+        return AMA_ERROR_INVALID_PARAM;
+
     /* Key expansion */
     aes256_key_expansion(key, round_keys);
 
@@ -450,6 +460,18 @@ ama_error_t ama_aes256_gcm_decrypt(
     if (!key || !nonce || !tag) return AMA_ERROR_INVALID_PARAM;
     if (ct_len > 0 && (!ciphertext || !plaintext)) return AMA_ERROR_INVALID_PARAM;
     if (aad_len > 0 && !aad) return AMA_ERROR_INVALID_PARAM;
+
+    /* NIST SP 800-38D length limits (same as encrypt path) */
+#ifndef AMA_AES_GCM_MAX_PLAINTEXT_BYTES
+#define AMA_AES_GCM_MAX_PLAINTEXT_BYTES (((uint64_t)UINT32_MAX - 1) * 16ULL)
+#endif
+#ifndef AMA_AES_GCM_MAX_AAD_BYTES
+#define AMA_AES_GCM_MAX_AAD_BYTES       ((uint64_t)(((uint64_t)1 << 61) - 1))
+#endif
+    if ((uint64_t)ct_len > AMA_AES_GCM_MAX_PLAINTEXT_BYTES)
+        return AMA_ERROR_INVALID_PARAM;
+    if ((uint64_t)aad_len > AMA_AES_GCM_MAX_AAD_BYTES)
+        return AMA_ERROR_INVALID_PARAM;
 
     /* Key expansion */
     aes256_key_expansion(key, round_keys);
