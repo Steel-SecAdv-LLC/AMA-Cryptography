@@ -49,7 +49,7 @@ RUN pip3 install --no-cache-dir /tmp/*.whl && \
 USER ava
 WORKDIR /app
 
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD python3 -c "import ama_cryptography" || exit 1
 
 CMD ["python3", "-c", "import ama_cryptography; print(f'AMA Cryptography v{ama_cryptography.__version__} (Alpine)')"]

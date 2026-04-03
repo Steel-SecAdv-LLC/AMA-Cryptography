@@ -1,0 +1,121 @@
+{
+  "timestamp": "2026-04-03T00:02:24.882001+00:00",
+  "summary": {
+    "total": 11,
+    "passed": 9,
+    "failed": 2,
+    "warnings": 0
+  },
+  "results": [
+    {
+      "name": "ama_sha3_256_hash",
+      "description": "AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes)",
+      "ops_per_second": 18204.53,
+      "baseline_value": 15000,
+      "regression_percent": -21.36,
+      "tolerance_percent": 30,
+      "passed": true,
+      "optional": false
+    },
+    {
+      "name": "hmac_sha3_256",
+      "description": "HMAC-SHA3-256 authentication (native C via ctypes)",
+      "ops_per_second": 12127.01,
+      "baseline_value": 12000,
+      "regression_percent": -1.06,
+      "tolerance_percent": 40,
+      "passed": true,
+      "optional": false
+    },
+    {
+      "name": "ed25519_keygen",
+      "description": "Ed25519 key pair generation (native C)",
+      "ops_per_second": 5167.01,
+      "baseline_value": 10600,
+      "regression_percent": 51.25,
+      "tolerance_percent": 35,
+      "passed": false,
+      "optional": false
+    },
+    {
+      "name": "ed25519_sign",
+      "description": "Ed25519 signature generation (native C, expanded key)",
+      "ops_per_second": 5069.15,
+      "baseline_value": 8527,
+      "regression_percent": 40.55,
+      "tolerance_percent": 35,
+      "passed": false,
+      "optional": false
+    },
+    {
+      "name": "ed25519_verify",
+      "description": "Ed25519 signature verification (native C)",
+      "ops_per_second": 2795.58,
+      "baseline_value": 3416,
+      "regression_percent": 18.16,
+      "tolerance_percent": 35,
+      "passed": true,
+      "optional": false
+    },
+    {
+      "name": "hkdf_derive",
+      "description": "HKDF-SHA3-256 key derivation (3 keys)",
+      "ops_per_second": 8508.94,
+      "baseline_value": 6500,
+      "regression_percent": -30.91,
+      "tolerance_percent": 35,
+      "passed": true,
+      "optional": false
+    },
+    {
+      "name": "full_package_create",
+      "description": "Complete crypto package creation (with PQC)",
+      "ops_per_second": 184.13,
+      "baseline_value": 280,
+      "regression_percent": 34.24,
+      "tolerance_percent": 50,
+      "passed": true,
+      "optional": false
+    },
+    {
+      "name": "full_package_verify",
+      "description": "Complete crypto package verification (with PQC)",
+      "ops_per_second": 560.64,
+      "baseline_value": 380,
+      "regression_percent": -47.54,
+      "tolerance_percent": 50,
+      "passed": true,
+      "optional": false
+    },
+    {
+      "name": "dilithium_keygen",
+      "description": "ML-DSA-65 (Dilithium) key pair generation (native C)",
+      "ops_per_second": 594.53,
+      "baseline_value": 500,
+      "regression_percent": -18.91,
+      "tolerance_percent": 40,
+      "passed": true,
+      "optional": true
+    },
+    {
+      "name": "dilithium_sign",
+      "description": "ML-DSA-65 (Dilithium) signature generation (native C)",
+      "ops_per_second": 566.78,
+      "baseline_value": 140,
+      "regression_percent": -304.84,
+      "tolerance_percent": 40,
+      "passed": true,
+      "optional": true
+    },
+    {
+      "name": "dilithium_verify",
+      "description": "ML-DSA-65 (Dilithium) signature verification (native C)",
+      "ops_per_second": 696.51,
+      "baseline_value": 530,
+      "regression_percent": -31.42,
+      "tolerance_percent": 40,
+      "passed": true,
+      "optional": true
+    }
+  ]
+}
