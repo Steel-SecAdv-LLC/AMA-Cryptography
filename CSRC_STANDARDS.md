@@ -1,6 +1,6 @@
 # CSRC Standards Mapping — AMA Cryptography Library
 
-**Version:** 2.1
+**Version:** 2.1.0
 **Date:** 2026-03-21
 **Organization:** Steel Security Advisors LLC
 **Author:** Andrew E. A.

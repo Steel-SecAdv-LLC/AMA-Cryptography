@@ -4,7 +4,7 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.3 |
+| Document Version | 2.1.0 |
 | Last Updated | 2026-03-19 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |

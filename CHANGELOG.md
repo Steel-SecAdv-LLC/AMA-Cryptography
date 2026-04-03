@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.3 |
-| Last Updated | 2026-03-26 |
+| Document Version | 2.1.0 |
+| Last Updated | 2026-04-03 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -16,6 +16,53 @@
 All notable changes to AMA Cryptography will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+
+## [2.1.0-phase2] - 2026-04-03
+
+### SIMD Dispatch (Phase 2)
+- Wire SIMD dispatch table for SHA3-256/Keccak (AVX2 + NEON)
+- Wire ML-KEM-1024 Kyber NTT/invNTT/basemul dispatch (AVX2 + NEON)
+- Fix 3 NTT incompatibilities: zeta offset (k=0→k=1), inverse NTT sign convention, pointwise basemul algorithm
+- Handle sub-register NTT layers (len<16) via scalar fallback
+- Add NEON inverse NTT implementation
+- Export Kyber zetas table for SIMD basemul access
+- Document Dilithium SIMD as deferred (32-bit truncation in mullo_epi32)
+
+### CVE Hardening
+- Add NIST SP 800-38D length validation (2^36 byte limit) in AES-GCM encrypt/decrypt
+- Upgrade CMake AMA_AES_CONSTTIME=OFF to WARNING level
+- Verify constant-time memcmp in all cryptographic comparison paths
+- Verify PQC key zeroing in all KeyPair __del__ methods
+- Run dudect constant-time harness (all 5 tests pass)
+
+### Adversarial Security Tests
+- Add 34 adversarial tests with @pytest.mark.security marker
+- Fault injection: bit flips in signatures, ciphertexts, public keys, tags
+- Boundary values: empty messages, large messages, block boundaries
+- Oracle resistance: AES-GCM timing analysis
+- Key misuse: wrong keys, nonces, AAD, nonce reuse XOR
+- Cross-algorithm confusion: Ed25519/Dilithium sig interchange
+
+### Benchmarks
+- Recalibrate baseline.json for Phase 2 SIMD dispatch
+- Regenerate phase0 baseline results
+- Update README performance table with measured numbers
+- Add methodology footnote explaining measurement environment
+
+### Documentation
+- Sync all document versions to 2.1.0 (was 2.1/2.2/2.3)
+- Update ENHANCED_FEATURES.md SIMD section: Phase 1 → Phase 2 complete
+- Update README performance table with actual measured numbers
+
+### Build Fixes (cherry-picked from claude/fix-app-issues-iJZWL)
+- setup.cfg version 2.1 → 2.1.0
+- requirements-dev.txt: removed dead python_version<3.9 constraints
+- Makefile: dev-install [all] → [dev]
+- setup.py: removed stale Black==24.10.0 pin
+- pyproject.toml: added mypy follow_imports=skip for _pytest.*
+- tests: except Exception → except BaseException (pyo3 PanicException)
+- examples/python/basic_usage.py: fix legacy API kwargs
+- double_helix_engine.py: numpy array→Vec coercion
 
 ## [2.1.1] - 2026-03-26
 

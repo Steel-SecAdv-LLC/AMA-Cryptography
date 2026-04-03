@@ -4,7 +4,7 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.2 |
+| Document Version | 2.1.0 |
 | Last Updated | 2026-03-25 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
@@ -134,11 +134,13 @@ Automatic best-implementation selection at initialization:
 - CPU feature detection via extended `ama_cpuid.c`
 - Set `AMA_DISPATCH_VERBOSE=1` to enable diagnostic output during init
 
-> **Note (Phase 1):** SIMD implementations are compiled and verified for
-> correctness via KAT tests, but the runtime dispatch function-pointer table
-> is not yet wired — all API calls currently use the generic C path.  Phase 2
-> will connect the function pointers so that API calls automatically route to
-> the optimal SIMD implementation based on detected CPU features.
+> **Phase 2 Complete:** SIMD dispatch is wired for SHA3-256/Keccak (AVX2/NEON)
+> and ML-KEM-1024 Kyber NTT/invNTT/basemul (AVX2/NEON).  All API calls
+> automatically route to the optimal SIMD implementation based on detected
+> CPU features.  ML-DSA-65 Dilithium SIMD dispatch is deferred pending
+> 64-bit Montgomery reduction support in AVX2 (32-bit truncation issue
+> with q=8380417).  Generic C fallback remains for all algorithms when
+> SIMD is unavailable (INVARIANT-4).
 
 ## Cryptographic Algorithms
 

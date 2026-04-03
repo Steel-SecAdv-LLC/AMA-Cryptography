@@ -36,7 +36,7 @@
 **Author/Inventor:** Andrew E. A.
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
-**Version:** 2.1
+**Version:** 2.1.0
 **AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
@@ -376,17 +376,17 @@ NIST-standardized post-quantum algorithms:
 
 | Operation | Throughput | Latency | Notes |
 |-----------|-----------|---------|-------|
-| **KeyGen** | 4,527 ops/sec | 0.22ms | Native C, NTT q=8380417 |
-| **Sign** | 1,027 ops/sec | 0.97ms | Rejection sampling, constant-time |
-| **Verify** | 5,067 ops/sec | 0.20ms | Verified against NIST ACVP test vectors (self-attested) |
+| **KeyGen** | 654 ops/sec | 1.53ms | Native C, NTT q=8380417 |
+| **Sign** | 373 ops/sec | 2.68ms | Rejection sampling, constant-time |
+| **Verify** | 633 ops/sec | 1.58ms | Verified against NIST ACVP test vectors (self-attested) |
 
 ### ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)
 
 | Operation | Throughput | Latency | Notes |
 |-----------|-----------|---------|-------|
-| **KeyGen** | 9,798 ops/sec | 0.10ms | Native C, NTT q=3329 |
-| **Encapsulate** | 9,480 ops/sec | 0.11ms | IND-CCA2, Fujisaki-Okamoto |
-| **Decapsulate** | 8,913 ops/sec | 0.11ms | Implicit rejection |
+| **KeyGen** | ~600 ops/sec | ~1.7ms | Native C, NTT q=3329, AVX2 dispatch |
+| **Encapsulate** | ~580 ops/sec | ~1.7ms | IND-CCA2, Fujisaki-Okamoto |
+| **Decapsulate** | ~550 ops/sec | ~1.8ms | Implicit rejection |
 
 ### Full Multi-Layer Package Performance
 
@@ -394,8 +394,8 @@ Complete security package with all defense layers:
 
 | Operation | Mean Time | Throughput |
 |-----------|-----------|------------|
-| Package Create (all layers) | 0.48ms | 2,093 ops/sec |
-| Package Verify (all layers) | 0.38ms | 2,607 ops/sec |
+| Package Create (all layers) | 2.04ms | 491 ops/sec |
+| Package Verify (all layers) | 2.03ms | 492 ops/sec |
 
 **All Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65 (core), HKDF, RFC 3161 (supporting)
 
@@ -403,20 +403,19 @@ Complete security package with all defense layers:
 
 | Operation | Throughput | Latency |
 |-----------|-----------|---------|
-| SHA3-256 (32B) | 477,055 ops/sec | 0.002ms |
-| SHA3-256 (1KB) | 158,832 ops/sec | 0.006ms |
-| HMAC-SHA3-256 (1KB) | 114,278 ops/sec | 0.009ms |
-| HKDF-SHA3-256 (96B derive) | 73,318 ops/sec | 0.014ms |
-| Ed25519 KeyGen | 14,611 ops/sec | 0.07ms |
-| Ed25519 Sign | 14,976 ops/sec | 0.07ms |
-| Ed25519 Verify | 7,716 ops/sec | 0.13ms |
-| AES-256-GCM encrypt (1KB) | 1,087 ops/sec | 0.92ms |
-| ChaCha20-Poly1305 encrypt (1KB) | 155,725 ops/sec | 0.006ms |
-| X25519 DH Exchange | 1,280 ops/sec | 0.78ms |
+| SHA3-256 (1KB) | 19,159 ops/sec | 0.052ms |
+| SHA3-256 (64B) | 121,855 ops/sec | 0.008ms |
+| HMAC-SHA3-256 (1KB) | 12,873 ops/sec | 0.078ms |
+| HKDF-SHA3-256 (96B derive) | 8,013 ops/sec | 0.125ms |
+| Ed25519 KeyGen | 5,620 ops/sec | 0.18ms |
+| Ed25519 Sign | 5,335 ops/sec | 0.19ms |
+| Ed25519 Verify | 2,785 ops/sec | 0.36ms |
 
 **Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [benchmarks/](benchmarks/) for full performance data including all algorithms.
 
-*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, native C backend via ctypes. See [benchmarks/](benchmarks/) for raw C performance numbers (without ctypes overhead) and competitive comparisons against libsodium and liboqs. Reproducible via `python benchmarks/benchmark_runner.py --verbose` or `make -C benchmarks benchmark_c_raw`.*
+**Methodology:** Numbers measured via `python benchmarks/phase0_baseline.py` on a Linux x86-64 shared CI runner (4 CPU cores, Python 3.11, ctypes FFI). Throughput values include Python-to-C ctypes overhead (~1-5 microseconds per call). Raw C performance (without FFI) is higher — see `build/bin/benchmark_c_raw` for native measurements. Median of 50-1000 iterations after warmup.
+
+*Reproducible via `python benchmarks/benchmark_runner.py --verbose` or `python benchmarks/phase0_baseline.py`.*
 
 
 ### Benchmark Charts
