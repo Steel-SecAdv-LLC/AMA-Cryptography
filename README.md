@@ -366,7 +366,11 @@ NIST-standardized post-quantum algorithms:
 
 ![Performance Dashboard](assets/performance_dashboard.png)
 
-*Performance dashboard: algorithm throughput (log-scale), operation latency, SIMD dispatch status, package scalability, and quality metrics. All numbers from measured benchmarks on Linux x86-64 with AVX2 SIMD dispatch.*
+*Multi-panel performance dashboard showing cryptographic throughput, signature latency, scalability, key generation speed, multi-layer breakdown, regression analysis, validation claims, and hybrid performance — all from real benchmark data.*
+
+![Benchmark Report](assets/benchmark_report.png)
+
+*Comprehensive benchmark report with latency distribution, sign vs verify analysis, category performance, top/bottom operations, ethical overhead, regression improvement, NIST algorithm implementation status, and summary statistics.*
 
 ### ML-DSA-65 (Post-Quantum Digital Signatures — FIPS 204)
 
@@ -445,14 +449,14 @@ Complete security package with all defense layers:
 <details>
 <summary><strong>Scalability Analysis</strong></summary>
 
-| Omni-Code Count | Mean Time | Throughput |
-|-----------------|-----------|------------|
-| 7 (baseline) | 2.04ms | 491 ops/sec |
-| 70 | 4.10ms | 244 ops/sec |
-| 700 | 5.50ms | 182 ops/sec |
-| 7,000 | 120.0ms | 8 ops/sec |
+| Input Scale | Mean Time | Throughput |
+|-------------|-----------|------------|
+| 1x (baseline) | 0.84ms | 1,188 ops/sec |
+| 10x | 0.58ms | 1,719 ops/sec |
+| 100x | 2.90ms | 344 ops/sec |
+| 1000x | 100.74ms | 9.9 ops/sec |
 
-*Benchmarks: Linux 6.18.5 x86_64, Python 3.11, 4 CPU cores, native C backend via ctypes. See [benchmarks/](benchmarks/) for details.*
+*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 50 iterations per size. The 1x baseline measures the full scalability pipeline including data preparation, which is why it differs from the 0.48ms Package Create number. See [benchmarks/](benchmarks/) for details.*
 
 </details>
 
