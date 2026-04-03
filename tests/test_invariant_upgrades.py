@@ -16,10 +16,9 @@ import re
 import subprocess
 import sys
 import threading
+from collections.abc import Generator
 from pathlib import Path
 from unittest import mock
-
-from typing import Generator
 
 import pytest
 
