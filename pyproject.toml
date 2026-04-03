@@ -330,6 +330,7 @@ markers = [
     "integration: marks integration tests",
     "fips: marks FIPS 140-3 self-test and compliance tests",
     "smoke: marks smoke tests that verify no exception is raised",
+    "security: marks adversarial security tests (fault injection, boundary, oracle)",
 ]
 filterwarnings = [
     "error",
