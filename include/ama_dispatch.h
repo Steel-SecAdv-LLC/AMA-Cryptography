@@ -77,21 +77,23 @@ typedef void (*ama_dilithium_pointwise_fn)(int32_t r[256],
  * After ama_dispatch_init(), function pointers are either:
  *   - Non-NULL: points to the optimal implementation (SIMD or generic).
  *     Guaranteed non-NULL: keccak_f1600.
+ *     Wired when SIMD detected: sha3_256, kyber_ntt, kyber_invntt,
+ *     kyber_pointwise (Phase 2 — AVX2 and NEON).
  *   - NULL: no dispatch available; caller must use its own inline generic
- *     implementation.  Currently NULL: sha3_256, kyber_ntt, kyber_invntt,
- *     kyber_pointwise, dilithium_ntt, dilithium_pointwise.
+ *     implementation.  Currently NULL: dilithium_ntt, dilithium_pointwise
+ *     (Dilithium SIMD requires 64-bit Montgomery — not yet implemented).
  *
  * Callers MUST NULL-check before calling any field except keccak_f1600.
  * ============================================================================ */
 
 typedef struct {
     ama_keccak_f1600_fn       keccak_f1600;        /**< Always non-NULL after init */
-    ama_sha3_256_fn           sha3_256;             /**< NULL until SIMD init; callers MUST NULL-check */
-    ama_kyber_ntt_fn          kyber_ntt;            /**< NULL until SIMD init; callers MUST NULL-check */
-    ama_kyber_ntt_fn          kyber_invntt;         /**< NULL until SIMD init; callers MUST NULL-check */
-    ama_kyber_pointwise_fn    kyber_pointwise;      /**< NULL until SIMD init; callers MUST NULL-check */
-    ama_dilithium_ntt_fn      dilithium_ntt;        /**< NULL until SIMD init; callers MUST NULL-check */
-    ama_dilithium_pointwise_fn dilithium_pointwise; /**< NULL until SIMD init; callers MUST NULL-check */
+    ama_sha3_256_fn           sha3_256;             /**< Non-NULL when SIMD detected; callers MUST NULL-check */
+    ama_kyber_ntt_fn          kyber_ntt;            /**< Non-NULL when SIMD detected; callers MUST NULL-check */
+    ama_kyber_ntt_fn          kyber_invntt;         /**< Non-NULL when SIMD detected; callers MUST NULL-check */
+    ama_kyber_pointwise_fn    kyber_pointwise;      /**< Non-NULL when SIMD detected; callers MUST NULL-check */
+    ama_dilithium_ntt_fn      dilithium_ntt;        /**< NULL (Dilithium SIMD not wired); callers MUST NULL-check */
+    ama_dilithium_pointwise_fn dilithium_pointwise; /**< NULL (Dilithium SIMD not wired); callers MUST NULL-check */
 } ama_dispatch_table_t;
 
 /* ============================================================================
