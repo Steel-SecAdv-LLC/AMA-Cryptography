@@ -56,65 +56,65 @@ ED25519_SIG = 64
 # ---------------------------------------------------------------------------
 
 
-def _dilithium_keygen():
+def _dilithium_keygen() -> tuple[bytes, bytes]:
     from ama_cryptography.pqc_backends import generate_dilithium_keypair
 
     kp = generate_dilithium_keypair()
     return kp.public_key, bytes(kp.secret_key)
 
 
-def _dilithium_sign(sk, msg):
+def _dilithium_sign(sk: bytes, msg: bytes) -> bytes:
     from ama_cryptography.pqc_backends import dilithium_sign
 
     return dilithium_sign(msg, sk)
 
 
-def _dilithium_verify(pk, msg, sig):
+def _dilithium_verify(pk: bytes, msg: bytes, sig: bytes) -> bool:
     from ama_cryptography.pqc_backends import dilithium_verify
 
     return dilithium_verify(msg, sig, pk)
 
 
-def _kyber_keygen():
+def _kyber_keygen() -> tuple[bytes, bytes]:
     from ama_cryptography.pqc_backends import generate_kyber_keypair
 
     kp = generate_kyber_keypair()
     return kp.public_key, bytes(kp.secret_key)
 
 
-def _kyber_encap(pk):
+def _kyber_encap(pk: bytes) -> tuple[bytes, bytes]:
     from ama_cryptography.pqc_backends import kyber_encapsulate
 
     result = kyber_encapsulate(pk)
     return result.ciphertext, result.shared_secret
 
 
-def _kyber_decap(ct, sk):
+def _kyber_decap(ct: bytes, sk: bytes) -> bytes:
     from ama_cryptography.pqc_backends import kyber_decapsulate
 
     return kyber_decapsulate(ct, sk)
 
 
-def _ed25519_keygen():
+def _ed25519_keygen() -> tuple[bytes, bytes]:
     from ama_cryptography.pqc_backends import native_ed25519_keypair
 
     return native_ed25519_keypair()
 
 
-def _ed25519_sign(sk, msg):
+def _ed25519_sign(sk: bytes, msg: bytes) -> bytes:
     from ama_cryptography.pqc_backends import native_ed25519_sign
 
     return native_ed25519_sign(msg, sk)
 
 
-def _ed25519_verify(pk, msg, sig):
+def _ed25519_verify(pk: bytes, msg: bytes, sig: bytes) -> int:
     """Returns 0 on success, nonzero on failure."""
     from ama_cryptography.pqc_backends import native_ed25519_verify
 
     return 0 if native_ed25519_verify(sig, msg, pk) else 1
 
 
-def _aes_gcm_encrypt(key, nonce, pt, aad=b""):
+def _aes_gcm_encrypt(key: bytes, nonce: bytes, pt: bytes, aad: bytes = b"") -> tuple[bytes, bytes]:
     ct = ctypes.create_string_buffer(len(pt))
     tag = ctypes.create_string_buffer(16)
     rc = _native_lib.ama_aes256_gcm_encrypt(
@@ -124,7 +124,9 @@ def _aes_gcm_encrypt(key, nonce, pt, aad=b""):
     return bytes(ct), bytes(tag)
 
 
-def _aes_gcm_decrypt(key, nonce, ct, tag, aad=b""):
+def _aes_gcm_decrypt(
+    key: bytes, nonce: bytes, ct: bytes, tag: bytes, aad: bytes = b""
+) -> tuple[int, bytes]:
     pt = ctypes.create_string_buffer(len(ct))
     rc = _native_lib.ama_aes256_gcm_decrypt(
         key, nonce, ct, ctypes.c_size_t(len(ct)), aad, ctypes.c_size_t(len(aad)), tag, pt
@@ -132,7 +134,7 @@ def _aes_gcm_decrypt(key, nonce, ct, tag, aad=b""):
     return rc, bytes(pt)
 
 
-def _flip_bit(data, byte_idx, bit_idx=0):
+def _flip_bit(data: bytes, byte_idx: int, bit_idx: int = 0) -> bytes:
     """Return a copy of data with one bit flipped."""
     ba = bytearray(data)
     ba[byte_idx] ^= 1 << bit_idx
@@ -149,7 +151,7 @@ class TestFaultInjection:
     """Verify that single-bit faults cause rejection."""
 
     @skip_no_dilithium
-    def test_dilithium_sig_bit_flip(self):
+    def test_dilithium_sig_bit_flip(self) -> None:
         pk, sk = _dilithium_keygen()
         msg = b"test message for fault injection"
         sig = _dilithium_sign(sk, msg)
@@ -161,7 +163,7 @@ class TestFaultInjection:
             ), f"Sig should be rejected after bit flip at byte {pos}"
 
     @skip_no_dilithium
-    def test_dilithium_pk_bit_flip(self):
+    def test_dilithium_pk_bit_flip(self) -> None:
         pk, sk = _dilithium_keygen()
         msg = b"pk fault injection test"
         sig = _dilithium_sign(sk, msg)
@@ -173,7 +175,7 @@ class TestFaultInjection:
             ), f"Should reject with corrupted pk at byte {pos}"
 
     @skip_no_dilithium
-    def test_dilithium_msg_bit_flip(self):
+    def test_dilithium_msg_bit_flip(self) -> None:
         pk, sk = _dilithium_keygen()
         msg = b"message integrity test"
         sig = _dilithium_sign(sk, msg)
@@ -181,7 +183,7 @@ class TestFaultInjection:
         assert not _dilithium_verify(pk, bad_msg, sig)
 
     @skip_no_kyber
-    def test_kyber_ct_bit_flip(self):
+    def test_kyber_ct_bit_flip(self) -> None:
         pk, sk = _kyber_keygen()
         ct, ss_enc = _kyber_encap(pk)
 
@@ -191,7 +193,7 @@ class TestFaultInjection:
             assert ss_dec != ss_enc, f"Shared secret should differ with corrupted ct at byte {pos}"
 
     @skip_no_ed25519
-    def test_ed25519_sig_bit_flip(self):
+    def test_ed25519_sig_bit_flip(self) -> None:
         pk, sk = _ed25519_keygen()
         msg = b"ed25519 fault injection"
         sig = _ed25519_sign(sk, msg)
@@ -202,7 +204,7 @@ class TestFaultInjection:
             assert rc != 0, f"Ed25519 should reject bit flip at byte {pos}"
 
     @skip_no_aes_gcm
-    def test_aes_gcm_ct_bit_flip(self):
+    def test_aes_gcm_ct_bit_flip(self) -> None:
         key = secrets.token_bytes(32)
         nonce = secrets.token_bytes(12)
         pt = b"plaintext for fault injection test"
@@ -212,7 +214,7 @@ class TestFaultInjection:
         assert rc != 0, "AES-GCM should reject corrupted ciphertext"
 
     @skip_no_aes_gcm
-    def test_aes_gcm_tag_bit_flip(self):
+    def test_aes_gcm_tag_bit_flip(self) -> None:
         key = secrets.token_bytes(32)
         nonce = secrets.token_bytes(12)
         pt = b"tag integrity test"
@@ -233,20 +235,20 @@ class TestFaultInjection:
 class TestBoundaryValues:
 
     @skip_no_dilithium
-    def test_dilithium_empty_message(self):
+    def test_dilithium_empty_message(self) -> None:
         pk, sk = _dilithium_keygen()
         sig = _dilithium_sign(sk, b"")
         assert _dilithium_verify(pk, b"", sig)
 
     @skip_no_dilithium
-    def test_dilithium_large_message(self):
+    def test_dilithium_large_message(self) -> None:
         pk, sk = _dilithium_keygen()
         msg = secrets.token_bytes(1024 * 1024)
         sig = _dilithium_sign(sk, msg)
         assert _dilithium_verify(pk, msg, sig)
 
     @skip_no_dilithium
-    def test_dilithium_single_byte_messages(self):
+    def test_dilithium_single_byte_messages(self) -> None:
         pk, sk = _dilithium_keygen()
         for byte_val in [0x00, 0xFF, 0x42]:
             msg = bytes([byte_val])
@@ -254,13 +256,13 @@ class TestBoundaryValues:
             assert _dilithium_verify(pk, msg, sig)
 
     @skip_no_ed25519
-    def test_ed25519_empty_message(self):
+    def test_ed25519_empty_message(self) -> None:
         pk, sk = _ed25519_keygen()
         sig = _ed25519_sign(sk, b"")
         assert _ed25519_verify(pk, b"", sig) == 0
 
     @skip_no_aes_gcm
-    def test_aes_gcm_empty_plaintext(self):
+    def test_aes_gcm_empty_plaintext(self) -> None:
         key = secrets.token_bytes(32)
         nonce = secrets.token_bytes(12)
         ct, tag = _aes_gcm_encrypt(key, nonce, b"", aad=b"authenticate this")
@@ -269,7 +271,7 @@ class TestBoundaryValues:
         assert rc == 0
 
     @skip_no_aes_gcm
-    def test_aes_gcm_block_boundaries(self):
+    def test_aes_gcm_block_boundaries(self) -> None:
         key = secrets.token_bytes(32)
         nonce = secrets.token_bytes(12)
         for size in [1, 15, 16, 17, 31, 32, 33, 48]:
@@ -280,7 +282,7 @@ class TestBoundaryValues:
             assert dec == pt
 
     @skip_no_kyber
-    def test_kyber_roundtrip_stress(self):
+    def test_kyber_roundtrip_stress(self) -> None:
         for _ in range(10):
             pk, sk = _kyber_keygen()
             ct, ss_enc = _kyber_encap(pk)
@@ -297,7 +299,7 @@ class TestBoundaryValues:
 class TestOracleResistance:
 
     @skip_no_aes_gcm
-    def test_aes_gcm_tag_mismatch_no_timing(self):
+    def test_aes_gcm_tag_mismatch_no_timing(self) -> None:
         """AES-GCM decryption timing: valid vs invalid tags should be comparable."""
         key = secrets.token_bytes(32)
         nonce = secrets.token_bytes(12)
@@ -348,7 +350,7 @@ class TestOracleResistance:
             )
 
     @skip_no_kyber
-    def test_kyber_implicit_rejection(self):
+    def test_kyber_implicit_rejection(self) -> None:
         pk, sk = _kyber_keygen()
         _ct, ss_enc = _kyber_encap(pk)
         random_ct = secrets.token_bytes(KYBER_CT)
@@ -369,7 +371,7 @@ class TestOracleResistance:
 class TestKeyMisuse:
 
     @skip_no_aes_gcm
-    def test_aes_gcm_wrong_key(self):
+    def test_aes_gcm_wrong_key(self) -> None:
         key1 = secrets.token_bytes(32)
         key2 = secrets.token_bytes(32)
         nonce = secrets.token_bytes(12)
@@ -378,7 +380,7 @@ class TestKeyMisuse:
         assert rc != 0
 
     @skip_no_aes_gcm
-    def test_aes_gcm_wrong_nonce(self):
+    def test_aes_gcm_wrong_nonce(self) -> None:
         key = secrets.token_bytes(32)
         nonce1 = secrets.token_bytes(12)
         nonce2 = secrets.token_bytes(12)
@@ -387,7 +389,7 @@ class TestKeyMisuse:
         assert rc != 0
 
     @skip_no_aes_gcm
-    def test_aes_gcm_wrong_aad(self):
+    def test_aes_gcm_wrong_aad(self) -> None:
         key = secrets.token_bytes(32)
         nonce = secrets.token_bytes(12)
         ct, tag = _aes_gcm_encrypt(key, nonce, b"aad test", aad=b"correct")
@@ -395,7 +397,7 @@ class TestKeyMisuse:
         assert rc != 0
 
     @skip_no_aes_gcm
-    def test_aes_gcm_nonce_reuse_xor(self):
+    def test_aes_gcm_nonce_reuse_xor(self) -> None:
         """Nonce reuse leaks XOR of plaintexts (verifying the danger is real)."""
         key = secrets.token_bytes(32)
         nonce = secrets.token_bytes(12)
@@ -408,14 +410,14 @@ class TestKeyMisuse:
         assert xor_ct == xor_pt
 
     @skip_no_dilithium
-    def test_dilithium_wrong_key_verify(self):
+    def test_dilithium_wrong_key_verify(self) -> None:
         _pk1, sk1 = _dilithium_keygen()
         pk2, _ = _dilithium_keygen()
         sig = _dilithium_sign(sk1, b"wrong key test")
         assert not _dilithium_verify(pk2, b"wrong key test", sig)
 
     @skip_no_kyber
-    def test_kyber_wrong_sk_decap(self):
+    def test_kyber_wrong_sk_decap(self) -> None:
         pk1, _sk1 = _kyber_keygen()
         _, sk2 = _kyber_keygen()
         ct, ss_enc = _kyber_encap(pk1)
@@ -433,7 +435,7 @@ class TestCrossAlgorithm:
 
     @skip_no_dilithium
     @skip_no_ed25519
-    def test_ed25519_sig_as_dilithium(self):
+    def test_ed25519_sig_as_dilithium(self) -> None:
         """Ed25519 signature verified as Dilithium must fail, not crash."""
         _, ed_sk = _ed25519_keygen()
         dil_pk, _ = _dilithium_keygen()
@@ -444,7 +446,7 @@ class TestCrossAlgorithm:
 
     @skip_no_dilithium
     @skip_no_ed25519
-    def test_dilithium_sig_as_ed25519(self):
+    def test_dilithium_sig_as_ed25519(self) -> None:
         """Dilithium signature verified as Ed25519 must fail, not crash."""
         _, dil_sk = _dilithium_keygen()
         ed_pk, _ = _ed25519_keygen()
@@ -455,13 +457,13 @@ class TestCrossAlgorithm:
         assert rc != 0
 
     @skip_no_dilithium
-    def test_random_bytes_as_dilithium_sig(self):
+    def test_random_bytes_as_dilithium_sig(self) -> None:
         pk, _ = _dilithium_keygen()
         random_sig = secrets.token_bytes(DIL_SIG)
         assert not _dilithium_verify(pk, b"random sig test", random_sig)
 
     @skip_no_ed25519
-    def test_random_bytes_as_ed25519_sig(self):
+    def test_random_bytes_as_ed25519_sig(self) -> None:
         pk, _ = _ed25519_keygen()
         random_sig = secrets.token_bytes(ED25519_SIG)
         rc = _ed25519_verify(pk, b"random ed25519 sig", random_sig)
@@ -469,7 +471,7 @@ class TestCrossAlgorithm:
 
     @skip_no_kyber
     @skip_no_dilithium
-    def test_dilithium_pk_as_kyber(self):
+    def test_dilithium_pk_as_kyber(self) -> None:
         """Using Dilithium pk for Kyber encap should not crash."""
         dil_pk, _ = _dilithium_keygen()
         fake_pk = (dil_pk + b"\x00" * KYBER_PK)[:KYBER_PK]
@@ -492,7 +494,7 @@ class TestCrossAlgorithm:
 class TestSecurityEdgeCases:
 
     @skip_no_aes_gcm
-    def test_aes_gcm_all_zero_inputs(self):
+    def test_aes_gcm_all_zero_inputs(self) -> None:
         key = b"\x00" * 32
         nonce = b"\x00" * 12
         pt = b"\x00" * 32
@@ -503,7 +505,7 @@ class TestSecurityEdgeCases:
         assert ct != pt, "Encryption of zeros should not produce zeros"
 
     @skip_no_aes_gcm
-    def test_aes_gcm_large_aad(self):
+    def test_aes_gcm_large_aad(self) -> None:
         key = secrets.token_bytes(32)
         nonce = secrets.token_bytes(12)
         aad = secrets.token_bytes(65536)
@@ -513,7 +515,7 @@ class TestSecurityEdgeCases:
         assert rc == 0 and dec == pt
 
     @skip_no_dilithium
-    def test_dilithium_sig_both_verify(self):
+    def test_dilithium_sig_both_verify(self) -> None:
         """Two signatures from same key/msg should both verify."""
         pk, sk = _dilithium_keygen()
         msg = b"determinism test"
@@ -523,7 +525,7 @@ class TestSecurityEdgeCases:
         assert _dilithium_verify(pk, msg, sig2)
 
     @skip_no_kyber
-    def test_kyber_encap_different_each_time(self):
+    def test_kyber_encap_different_each_time(self) -> None:
         pk, _ = _kyber_keygen()
         ct1, ss1 = _kyber_encap(pk)
         ct2, ss2 = _kyber_encap(pk)
@@ -531,7 +533,7 @@ class TestSecurityEdgeCases:
         assert ss1 != ss2
 
     @skip_no_aes_gcm
-    def test_aes_gcm_truncated_ciphertext(self):
+    def test_aes_gcm_truncated_ciphertext(self) -> None:
         key = secrets.token_bytes(32)
         nonce = secrets.token_bytes(12)
         pt = secrets.token_bytes(64)
@@ -553,7 +555,7 @@ class TestSecurityEdgeCases:
             assert rc != 0, f"Truncated CT (len={trunc_len}) must fail"
 
     @skip_no_ed25519
-    def test_ed25519_various_msg_sizes(self):
+    def test_ed25519_various_msg_sizes(self) -> None:
         pk, sk = _ed25519_keygen()
         for size in [0, 1, 32, 64, 256, 1024]:
             msg = b"\x00" * size
@@ -561,7 +563,7 @@ class TestSecurityEdgeCases:
             assert _ed25519_verify(pk, msg, sig) == 0, f"Failed for size {size}"
 
     @skip_no_kyber
-    def test_kyber_all_zero_sk(self):
+    def test_kyber_all_zero_sk(self) -> None:
         """Kyber decapsulation with all-zero SK should not crash."""
         pk, _ = _kyber_keygen()
         ct, _ = _kyber_encap(pk)

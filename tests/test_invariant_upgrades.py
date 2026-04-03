@@ -19,6 +19,8 @@ import threading
 from pathlib import Path
 from unittest import mock
 
+from typing import Generator
+
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -30,11 +32,11 @@ class TestFinalizerHealth:
     """INVARIANT-3 addendum: finalizer failures must be observable."""
 
     @pytest.fixture(autouse=True)
-    def _reset(self) -> None:
+    def _reset(self) -> Generator[None, None, None]:
         from ama_cryptography import _finalizer_health as _fh
 
         _fh.reset_finalizer_health()
-        yield  # type: ignore[misc]  # -- pytest fixture yield (TFH-001)
+        yield
         _fh.reset_finalizer_health()
 
     def test_initial_state_no_errors(self) -> None:
