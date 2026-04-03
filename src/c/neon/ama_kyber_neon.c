@@ -43,6 +43,20 @@ static inline int16_t montgomery_reduce_scalar(int32_t a) {
 }
 
 /* ============================================================================
+ * Scalar Barrett reduction (for sub-register fallback paths)
+ *
+ * Reduces a mod q for values up to 2^26.
+ * Matches the generic C implementation in ama_kyber.c.
+ * ============================================================================ */
+static inline int16_t barrett_reduce_scalar(int16_t a) {
+    int16_t t;
+    const int16_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
+    t = ((int32_t)v * a) >> 26;
+    t *= KYBER_Q;
+    return a - t;
+}
+
+/* ============================================================================
  * NEON Barrett reduction for Kyber (q = 3329)
  * ============================================================================ */
 static inline int16x8_t barrett_reduce_neon(int16x8_t a) {
@@ -157,7 +171,7 @@ void ama_kyber_invntt_neon(int16_t poly[KYBER_N], const int16_t zetas[128]) {
             int16_t zeta = zetas[k--];
             for (int j = start; j < start + len; j++) {
                 int16_t t = poly[j];
-                poly[j] = t + poly[j + len];
+                poly[j] = barrett_reduce_scalar(t + poly[j + len]);
                 poly[j + len] = montgomery_reduce_scalar(
                     (int32_t)zeta * (poly[j + len] - t)
                 );

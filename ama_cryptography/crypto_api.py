@@ -77,13 +77,8 @@ from ama_cryptography.pqc_backends import native_hkdf, native_hmac_sha3_256
 _HMAC_NATIVE = _HMAC_SHA3_256_NATIVE_AVAILABLE
 _HKDF_NATIVE = _HKDF_NATIVE_AVAILABLE
 
-# Deprecation warning for AMA_REQUIRE_CONSTANT_TIME (superseded by INVARIANT-7 revised)
-if os.environ.get("AMA_REQUIRE_CONSTANT_TIME"):
-    logging.getLogger(__name__).warning(
-        "AMA_REQUIRE_CONSTANT_TIME is set but no longer needed: "
-        "INVARIANT-7 (revised) enforces native-only operation unconditionally. "
-        "This env var has no effect and should be removed from your configuration."
-    )
+# Deprecation warning for AMA_REQUIRE_CONSTANT_TIME is emitted by
+# pqc_backends.py at import time; no need to duplicate it here.
 
 # INVARIANT-7 (revised): No cryptographic fallbacks, ever.
 # When native constant-time backend is unavailable the library MUST refuse to
