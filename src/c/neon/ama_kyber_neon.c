@@ -186,8 +186,8 @@ void ama_kyber_invntt_neon(int16_t poly[KYBER_N], const int16_t zetas[128]) {
             for (int j = start; j < start + len; j += 8) {
                 int16x8_t a = vld1q_s16(poly + j);
                 int16x8_t b = vld1q_s16(poly + j + len);
-                /* GS butterfly: a' = a + b, b' = zeta * (a - b) */
-                int16x8_t t = vsubq_s16(a, b);
+                /* GS butterfly: a' = a + b, b' = zeta * (b - a) */
+                int16x8_t t = vsubq_s16(b, a);
                 int16x8_t sum = vaddq_s16(a, b);
                 sum = barrett_reduce_neon(sum);
                 vst1q_s16(poly + j, sum);
