@@ -420,15 +420,9 @@ Complete security package with all defense layers:
 
 ### Benchmark Charts
 
-| Chart | Description |
-|-------|-------------|
-| ![Signature Performance](benchmarks/charts/signature_performance.svg) | Signature algorithm throughput and latency |
-| ![C vs Python](benchmarks/charts/c_vs_python.svg) | Native C vs Python performance comparison |
-| ![Layer Breakdown](benchmarks/charts/layer_breakdown.svg) | Per-layer timing breakdown of the 4-layer defense |
-| ![KEM Performance](benchmarks/charts/kem_performance.svg) | ML-KEM-1024 key encapsulation benchmarks |
-| ![Scalability](benchmarks/charts/scalability.svg) | Package creation scalability across data sizes |
+![Algorithm Performance Detail](benchmarks/charts/algorithm_performance.svg)
 
-*All charts generated from live benchmark data with professional dark theme. Regenerate with `python benchmarks/generate_charts.py`.*
+*Signature throughput, ML-KEM-1024 operations, and Raw C vs Python API comparison. Regenerate with `python benchmarks/generate_charts.py`.*
 
 </details>
 
