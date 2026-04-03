@@ -17,7 +17,7 @@
 /**
  * @file ama_cryptography.h
  * @brief AMA Cryptography - Core C API for Post-Quantum Cryptography
- * @version 2.1
+ * @version 2.1.0
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2026-03-08
  *

@@ -214,8 +214,10 @@ public_keys/
 DNA_CRYPTO_PACKAGE.json
 CRYPTO_PACKAGE.json
 benchmark_results.json
+benchmark-results.json
 benchmark_suite_results.txt
 comparative_benchmark_output.txt
+benchmark-report.md
 build_test/
 
 # Generated benchmark output reports (produced by benchmark scripts; not source files)

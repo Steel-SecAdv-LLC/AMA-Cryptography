@@ -86,12 +86,12 @@ typedef void (*ama_dilithium_pointwise_fn)(int32_t r[256],
 
 typedef struct {
     ama_keccak_f1600_fn       keccak_f1600;        /**< Always non-NULL after init */
-    ama_sha3_256_fn           sha3_256;             /**< May be NULL */
-    ama_kyber_ntt_fn          kyber_ntt;            /**< May be NULL */
-    ama_kyber_ntt_fn          kyber_invntt;         /**< May be NULL */
-    ama_kyber_pointwise_fn    kyber_pointwise;      /**< May be NULL */
-    ama_dilithium_ntt_fn      dilithium_ntt;        /**< May be NULL */
-    ama_dilithium_pointwise_fn dilithium_pointwise; /**< May be NULL */
+    ama_sha3_256_fn           sha3_256;             /**< NULL until SIMD init; callers MUST NULL-check */
+    ama_kyber_ntt_fn          kyber_ntt;            /**< NULL until SIMD init; callers MUST NULL-check */
+    ama_kyber_ntt_fn          kyber_invntt;         /**< NULL until SIMD init; callers MUST NULL-check */
+    ama_kyber_pointwise_fn    kyber_pointwise;      /**< NULL until SIMD init; callers MUST NULL-check */
+    ama_dilithium_ntt_fn      dilithium_ntt;        /**< NULL until SIMD init; callers MUST NULL-check */
+    ama_dilithium_pointwise_fn dilithium_pointwise; /**< NULL until SIMD init; callers MUST NULL-check */
 } ama_dispatch_table_t;
 
 /* ============================================================================

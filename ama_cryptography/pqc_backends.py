@@ -37,6 +37,7 @@ AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 """
 
 import ctypes
+import logging
 import os
 import platform
 from dataclasses import dataclass, field
@@ -624,6 +625,14 @@ _INSTALL_HINT = (
     "Build native C library: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
 )
 
+# Deprecation warning for AMA_REQUIRE_CONSTANT_TIME (superseded by INVARIANT-7 revised)
+if os.environ.get("AMA_REQUIRE_CONSTANT_TIME"):
+    logging.getLogger(__name__).warning(
+        "AMA_REQUIRE_CONSTANT_TIME is set but no longer needed: "
+        "INVARIANT-7 (revised) enforces native-only operation unconditionally. "
+        "This env var has no effect and should be removed from your configuration."
+    )
+
 # Enforce constant-time requirement if AMA_REQUIRE_CONSTANT_TIME is set
 if AMA_REQUIRE_CONSTANT_TIME:
     if not _DILITHIUM_AVAILABLE:
@@ -814,7 +823,7 @@ class DilithiumKeyPair:
     def __del__(self) -> None:
         try:
             self.wipe()
-        except Exception as exc:  # noqa: S110 — INVARIANT-3/9: __del__ must not raise (FIN-001)
+        except Exception as exc:  # — INVARIANT-3/9: __del__ must not raise (FIN-001)
             # INVARIANT-3 addendum: silence is never the only outcome.
             record_finalizer_error("DilithiumKeyPair", f"wipe() failed: {exc}")
 
@@ -852,7 +861,7 @@ class KyberKeyPair:
     def __del__(self) -> None:
         try:
             self.wipe()
-        except Exception as exc:  # noqa: S110 — INVARIANT-3/9: __del__ must not raise (FIN-002)
+        except Exception as exc:  # — INVARIANT-3/9: __del__ must not raise (FIN-002)
             # INVARIANT-3 addendum: silence is never the only outcome.
             record_finalizer_error("KyberKeyPair", f"wipe() failed: {exc}")
 
@@ -904,7 +913,7 @@ class SphincsKeyPair:
     def __del__(self) -> None:
         try:
             self.wipe()
-        except Exception as exc:  # noqa: S110 — INVARIANT-3/9: __del__ must not raise (FIN-003)
+        except Exception as exc:  # — INVARIANT-3/9: __del__ must not raise (FIN-003)
             # INVARIANT-3 addendum: silence is never the only outcome.
             record_finalizer_error("SphincsKeyPair", f"wipe() failed: {exc}")
 
