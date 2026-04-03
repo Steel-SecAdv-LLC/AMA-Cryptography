@@ -56,17 +56,33 @@ static inline int16_t barrett_reduce_scalar(int16_t a) {
     return a - t;
 }
 
+/* Barrett constant: floor(2^26 / q) + 1 */
+#define KYBER_BARRETT_V  20159
+
 /* ============================================================================
  * NEON Barrett reduction for Kyber (q = 3329)
+ *
+ * Uses the NEON equivalent of the pqcrystals Barrett approach:
+ *   t = (a * v) >> 26
+ * computed as vqdmulhq_s16(a, v) >> 11.
+ *
+ * vqdmulhq_s16 computes 2*high16(a*v), i.e. (a*v) >> 15 (doubled high).
+ * An additional arithmetic right shift by 11 gives total >> 26.
+ *
+ * The previous vqrdmulhq_s16 computed round(a*v/2^15) which only
+ * shifts by 15, giving wildly wrong Barrett reduction results.
  * ============================================================================ */
 static inline int16x8_t barrett_reduce_neon(int16x8_t a) {
-    const int16x8_t v = vdupq_n_s16(20159);
+    const int16x8_t v = vdupq_n_s16(KYBER_BARRETT_V);
     const int16x8_t q = vdupq_n_s16(KYBER_Q);
 
-    /* t = round(a * v / 2^26) approximated via vqrdmulhq */
-    int16x8_t t = vqrdmulhq_s16(a, v);
-    t = vmulq_s16(t, q);
-    return vsubq_s16(a, t);
+    /* t = (a * v) >> 26
+     * vqdmulhq gives 2 * high16(a*v) = (a*v) >> 15
+     * then >> 11 more => total >> 26 */
+    int16x8_t t = vqdmulhq_s16(a, v);   /* (a*v) >> 15 */
+    t = vshrq_n_s16(t, 11);             /* >> 11 more => total >> 26 */
+    t = vmulq_s16(t, q);                /* t * q */
+    return vsubq_s16(a, t);             /* a - t*q */
 }
 
 /* ============================================================================

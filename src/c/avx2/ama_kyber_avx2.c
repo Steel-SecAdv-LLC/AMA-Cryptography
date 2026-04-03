@@ -51,24 +51,40 @@ static inline int16_t montgomery_reduce_scalar(int32_t a) {
 }
 
 /* ============================================================================
+ * Scalar Barrett reduction (for sub-register fallback paths)
+ *
+ * Reduces a mod q for values in [-q, 2q).
+ * Matches the generic C implementation in ama_kyber.c.
+ * ============================================================================ */
+static inline int16_t barrett_reduce_scalar(int16_t a) {
+    int16_t t;
+    const int16_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
+    t = ((int32_t)v * a) >> 26;
+    t *= KYBER_Q;
+    return a - t;
+}
+
+/* ============================================================================
  * AVX2 Barrett reduction for Kyber (q = 3329)
  *
  * For each 16-bit coefficient x in [-q, 2q):
  *   t = floor(x * v / 2^26)
  *   r = x - t * q
  * where v = 20159.
+ *
+ * Uses mulhi_epi16 (arithmetic >>16) followed by srai_epi16(..., 10)
+ * for a total >>26 shift, matching the pqcrystals-kyber AVX2 approach.
+ * The previous mulhrs_epi16 only shifted by 15, giving wildly wrong results.
  * ============================================================================ */
 static inline __m256i barrett_reduce_avx2(__m256i a) {
     const __m256i v   = _mm256_set1_epi16(KYBER_BARRETT_V);
     const __m256i q   = _mm256_set1_epi16(KYBER_Q);
 
-    /* t = (a * v + 2^25) >> 26, but we approximate with mulhrs:
-     * mulhrs(a, v') computes round(a * v' / 2^15) which gives us
-     * a close approximation.  We use the standard Kyber approach:
-     * t = ((int32_t)a * 20159 + (1<<25)) >> 26  */
-    __m256i t = _mm256_mulhrs_epi16(a, v);
-    t = _mm256_mullo_epi16(t, q);
-    return _mm256_sub_epi16(a, t);
+    /* t = (a * v) >> 26, computed as mulhi(a, v) >> 10 */
+    __m256i t = _mm256_mulhi_epi16(a, v);     /* (a * v) >> 16 */
+    t = _mm256_srai_epi16(t, 10);             /* >> 10 more => total >> 26 */
+    t = _mm256_mullo_epi16(t, q);             /* t * q */
+    return _mm256_sub_epi16(a, t);            /* a - t*q */
 }
 
 /* ============================================================================
@@ -93,20 +109,6 @@ static inline __m256i montgomery_mul_avx2(__m256i a, __m256i b) {
     t = _mm256_mulhi_epi16(t, q);
     /* result = hi - t */
     return _mm256_sub_epi16(hi, t);
-}
-
-/* ============================================================================
- * NTT butterfly: Cooley-Tukey butterfly on 16 coefficients
- *
- * Given vectors a and b and a twiddle factor zeta (broadcast):
- *   a' = a + zeta * b
- *   b' = a - zeta * b
- * All arithmetic mod q via Montgomery multiplication.
- * ============================================================================ */
-static inline void ntt_butterfly_avx2(__m256i *a, __m256i *b, __m256i zeta) {
-    __m256i t = montgomery_mul_avx2(zeta, *b);
-    *b = _mm256_sub_epi16(*a, t);
-    *a = _mm256_add_epi16(*a, t);
 }
 
 /* ============================================================================
@@ -171,7 +173,7 @@ void ama_kyber_invntt_avx2(int16_t poly[KYBER_N], const int16_t zetas[128]) {
             int16_t zeta = zetas[k--];
             for (int j = start; j < start + len; j++) {
                 int16_t t = poly[j];
-                poly[j] = (int16_t)(t + poly[j + len]);
+                poly[j] = barrett_reduce_scalar(t + poly[j + len]);
                 poly[j + len] = montgomery_reduce_scalar(
                     (int32_t)zeta * (poly[j + len] - t)
                 );
