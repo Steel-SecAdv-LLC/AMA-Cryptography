@@ -30,9 +30,11 @@ Construction:
 The ciphertext binding in the salt prevents mix-and-match attacks
 where an attacker substitutes one component's ciphertext.
 
-Note: Double-Helix KDF integration is explicitly deferred to a
-research track — this module implements the established, auditable
-standard combiner only.
+Design decision: This module uses the established HKDF-SHA3-256 combiner
+(RFC 5869) rather than the experimental Double-Helix KDF. The standard
+combiner has formal IND-CCA2 security proofs and is auditable against
+published specifications. Double-Helix KDF may be evaluated in a
+dedicated research module once peer-reviewed analysis is available.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.

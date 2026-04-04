@@ -3,8 +3,6 @@
 #
 # Docker Compose configuration for AMA Cryptography
 
-version: '3.8'
-
 services:
   # Main AMA Cryptography service
   ama-cryptography:
@@ -14,12 +12,21 @@ services:
     image: ama-cryptography:latest
     container_name: ama-cryptography-main
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64m
+      - /app/__pycache__:size=16m
     volumes:
       - ../data:/data
       - ../logs:/var/log/ama-cryptography
     environment:
       - AMA_LOG_LEVEL=INFO
       - AMA_DATA_DIR=/data
+      - PYTHONDONTWRITEBYTECODE=1
     networks:
       - ama-net
     healthcheck:
@@ -33,6 +40,13 @@ services:
     image: ama-cryptography:latest
     container_name: ama-cryptography-monitor
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64m
     command: python3 /app/ama_cryptography_monitor_demo.py
     volumes:
       - ../data:/data
@@ -46,6 +60,13 @@ services:
   ama-benchmark:
     image: ama-cryptography:latest
     container_name: ama-cryptography-benchmark
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64m
     command: python3 /app/benchmark_suite.py
     volumes:
       - ../data:/data

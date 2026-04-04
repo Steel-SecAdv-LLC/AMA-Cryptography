@@ -134,11 +134,10 @@ Automatic best-implementation selection at initialization:
 - CPU feature detection via extended `ama_cpuid.c`
 - Set `AMA_DISPATCH_VERBOSE=1` to enable diagnostic output during init
 
-> **Note (Phase 1):** SIMD implementations are compiled and verified for
-> correctness via KAT tests, but the runtime dispatch function-pointer table
-> is not yet wired — all API calls currently use the generic C path.  Phase 2
-> will connect the function pointers so that API calls automatically route to
-> the optimal SIMD implementation based on detected CPU features.
+> **Phase 2 Complete:** SIMD implementations are compiled, verified via KAT
+> tests, and wired into the runtime dispatch table.  API calls automatically
+> route to the optimal SIMD implementation (AVX2, NEON, or SVE2) based on
+> detected CPU features, with graceful fallback to generic C (INVARIANT-4).
 
 ## Cryptographic Algorithms
 

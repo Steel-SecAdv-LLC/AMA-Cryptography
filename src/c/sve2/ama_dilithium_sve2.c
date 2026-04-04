@@ -16,9 +16,10 @@
 #if defined(__ARM_FEATURE_SVE2)
 #include <arm_sve.h>
 
-#define DILITHIUM_Q  8380417
-#define DILITHIUM_N  256
-#define DILITHIUM_D  13
+#define DILITHIUM_Q     8380417
+#define DILITHIUM_N     256
+#define DILITHIUM_D     13
+#define DILITHIUM_QINV  58728449  /* q^{-1} mod 2^32 */
 
 /* ============================================================================
  * SVE2 Barrett reduction for Dilithium
@@ -63,20 +64,27 @@ void ama_dilithium_poly_sub_sve2(int32_t r[DILITHIUM_N],
 }
 
 /* ============================================================================
- * SVE2 polynomial pointwise multiply with Barrett reduction
+ * Scalar 64-bit Montgomery reduction for Dilithium
+ * Used for pointwise multiply where products exceed 32 bits.
+ * ============================================================================ */
+static inline int32_t dil_montgomery_reduce_scalar_sve2(int64_t a) {
+    int32_t t = (int32_t)((int64_t)(int32_t)a * DILITHIUM_QINV);
+    return (int32_t)((a - (int64_t)t * DILITHIUM_Q) >> 32);
+}
+
+/* ============================================================================
+ * SVE2 polynomial pointwise multiply with 64-bit Montgomery reduction
+ *
+ * Uses scalar Montgomery reduction to correctly handle 64-bit products.
+ * svmul_s32 truncates to 32 bits which is catastrophically wrong for
+ * q=8380417 (products up to ~46 bits). Full SVE2 vectorized Montgomery
+ * using svmullt_s64/svmullb_s64 is a known future optimization.
  * ============================================================================ */
 void ama_dilithium_poly_pointwise_sve2(int32_t r[DILITHIUM_N],
                                         const int32_t a[DILITHIUM_N],
                                         const int32_t b[DILITHIUM_N]) {
-    size_t i = 0;
-    while (i < DILITHIUM_N) {
-        svbool_t pg = svwhilelt_b32((int64_t)i, (int64_t)DILITHIUM_N);
-        svint32_t va = svld1_s32(pg, a + i);
-        svint32_t vb = svld1_s32(pg, b + i);
-        svint32_t vr = svmul_s32_x(pg, va, vb);
-        vr = barrett_reduce_dil_sve2(pg, vr);
-        svst1_s32(pg, r + i, vr);
-        i += svcntw();
+    for (int i = 0; i < DILITHIUM_N; i++) {
+        r[i] = dil_montgomery_reduce_scalar_sve2((int64_t)a[i] * b[i]);
     }
 }
 

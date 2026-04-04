@@ -38,9 +38,9 @@ RUN mkdir -p build && cd build && \
         -DAMA_ENABLE_LTO=ON && \
     cmake --build . --config Release -j$(nproc)
 
-# Build Python package
-RUN python3 setup.py build_ext --inplace && \
-    python3 setup.py bdist_wheel
+# Build Python package (modern PEP 517 build)
+RUN pip3 install --no-cache-dir build && \
+    python3 -m build --wheel
 
 # Stage 2: Runtime
 FROM ubuntu:22.04
@@ -77,6 +77,11 @@ RUN pip3 install --no-cache-dir /tmp/*.whl && \
 
 # Switch to non-root user
 USER ava
+
+# Prevent .pyc file creation and enable unbuffered output
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 # Copy examples and documentation

@@ -159,9 +159,12 @@ extern void ama_kyber_ntt_avx2(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_kyber_invntt_avx2(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_kyber_poly_pointwise_avx2(int16_t r[256],
                                            const int16_t a[256],
-                                           const int16_t b[256]);
+                                           const int16_t b[256],
+                                           const int16_t zetas[128]);
 extern void ama_dilithium_ntt_avx2(int32_t poly[256],
-                                    const int32_t zetas[128]);
+                                    const int32_t zetas[256]);
+extern void ama_dilithium_invntt_avx2(int32_t poly[256],
+                                       const int32_t zetas[256]);
 extern void ama_dilithium_poly_pointwise_avx2(int32_t r[256],
                                                const int32_t a[256],
                                                const int32_t b[256]);
@@ -172,8 +175,15 @@ extern void ama_keccak_f1600_neon(uint64_t state[25]);
 extern ama_error_t ama_sha3_256_neon(const uint8_t *input, size_t input_len,
                                       uint8_t output[32]);
 extern void ama_kyber_ntt_neon(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_kyber_invntt_neon(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_kyber_poly_pointwise_neon(int16_t r[256],
+                                           const int16_t a[256],
+                                           const int16_t b[256],
+                                           const int16_t zetas[128]);
 extern void ama_dilithium_ntt_neon(int32_t poly[256],
-                                    const int32_t zetas[128]);
+                                    const int32_t zetas[256]);
+extern void ama_dilithium_invntt_neon(int32_t poly[256],
+                                       const int32_t zetas[256]);
 extern void ama_dilithium_poly_pointwise_neon(int32_t r[256],
                                                const int32_t a[256],
                                                const int32_t b[256]);
@@ -275,44 +285,41 @@ static void dispatch_init_internal(void) {
     dispatch_table.kyber_invntt      = NULL;
     dispatch_table.kyber_pointwise   = NULL;
     dispatch_table.dilithium_ntt     = NULL;
+    dispatch_table.dilithium_invntt  = NULL;
     dispatch_table.dilithium_pointwise = NULL;
 
 #ifdef AMA_HAVE_AVX2_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_AVX2) {
         dispatch_table.keccak_f1600 = ama_keccak_f1600_avx2;
+        dispatch_table.sha3_256     = ama_sha3_256_avx2;
     }
-    /* Kyber NTT SIMD wiring: DEFERRED — three verified incompatibilities:
-     *
-     * 1. Forward NTT zeta offset: generic starts k=1 (zetas[k++]),
-     *    SIMD starts k=0 (zetas[k++]).  SIMD reads zetas[0]=2285
-     *    (Montgomery constant R mod q), not a valid twiddle factor.
-     *    Fix: change SIMD to start at k=1, or pass &zetas[1].
-     *
-     * 2. Inverse NTT sign convention: generic computes zeta*(b-a)
-     *    matching pqcrystals reference (-zetas[k])*(a-b).  SIMD
-     *    computes zeta*(a-b) WITHOUT negation — opposite sign.
-     *    Fix: add negation to SIMD GS butterfly.
-     *
-     * 3. Pointwise multiply: generic uses basemul with zetas[64+i]
-     *    for degree-2 polynomial components.  SIMD does simple
-     *    element-wise Montgomery multiply — different algorithm.
-     *
-     * The SIMD forward+inverse pair is self-consistent (roundtrip
-     * KAT tests pass because errors cancel), but CANNOT be mixed
-     * with generic code.  Wiring would silently produce incorrect
-     * cryptographic results.
-     * (INVARIANT-4: graceful fallback to generic C when NULL.) */
+    if (dispatch_info.kyber >= AMA_IMPL_AVX2) {
+        dispatch_table.kyber_ntt       = ama_kyber_ntt_avx2;
+        dispatch_table.kyber_invntt    = ama_kyber_invntt_avx2;
+        dispatch_table.kyber_pointwise = ama_kyber_poly_pointwise_avx2;
+    }
+    if (dispatch_info.dilithium >= AMA_IMPL_AVX2) {
+        dispatch_table.dilithium_ntt       = ama_dilithium_ntt_avx2;
+        dispatch_table.dilithium_invntt    = ama_dilithium_invntt_avx2;
+        dispatch_table.dilithium_pointwise = ama_dilithium_poly_pointwise_avx2;
+    }
 #endif
 
 #ifdef AMA_HAVE_NEON_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_NEON) {
         dispatch_table.keccak_f1600 = ama_keccak_f1600_neon;
+        dispatch_table.sha3_256     = ama_sha3_256_neon;
     }
-    /* Kyber/Dilithium NEON NTT: same incompatibilities as AVX2
-     * (zeta offset, sign convention, pointwise algorithm).
-     * Additionally, Dilithium SIMD NTT does 7 layers (len>=2)
-     * while generic does 8 layers (len>0) — fundamentally
-     * different NTT representations.  Deferred. */
+    if (dispatch_info.kyber >= AMA_IMPL_NEON) {
+        dispatch_table.kyber_ntt       = ama_kyber_ntt_neon;
+        dispatch_table.kyber_invntt    = ama_kyber_invntt_neon;
+        dispatch_table.kyber_pointwise = ama_kyber_poly_pointwise_neon;
+    }
+    if (dispatch_info.dilithium >= AMA_IMPL_NEON) {
+        dispatch_table.dilithium_ntt       = ama_dilithium_ntt_neon;
+        dispatch_table.dilithium_invntt    = ama_dilithium_invntt_neon;
+        dispatch_table.dilithium_pointwise = ama_dilithium_poly_pointwise_neon;
+    }
 #endif
 
     if (dispatch_verbose()) {

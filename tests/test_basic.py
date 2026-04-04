@@ -4,6 +4,8 @@
 
 """Basic tests for AMA Cryptography"""
 
+import pytest
+
 import ama_cryptography
 
 
@@ -13,10 +15,15 @@ def test_version() -> None:
 
 
 def test_version_consistency() -> None:
-    """Version in __init__.py matches importlib.metadata (pyproject.toml)."""
+    """Version in __init__.py matches package metadata."""
     import importlib.metadata
 
-    assert ama_cryptography.__version__ == importlib.metadata.version("ama-cryptography")
+    try:
+        meta_version = importlib.metadata.version("ama-cryptography")
+    except importlib.metadata.PackageNotFoundError:
+        pytest.skip("package not pip-installed; metadata unavailable")
+    else:
+        assert ama_cryptography.__version__ == meta_version
 
 
 def test_author() -> None:

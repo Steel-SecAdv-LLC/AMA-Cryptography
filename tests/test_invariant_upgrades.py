@@ -16,8 +16,11 @@ import re
 import subprocess
 import sys
 import threading
+from collections.abc import Generator
 from pathlib import Path
 from unittest import mock
+
+import pytest
 
 # ---------------------------------------------------------------------------
 # Upgrade D — INVARIANT-3 Addendum: Finalizer Failures Must Be Observable
@@ -27,16 +30,22 @@ from unittest import mock
 class TestFinalizerHealth:
     """INVARIANT-3 addendum: finalizer failures must be observable."""
 
+    @pytest.fixture(autouse=True)
+    def _reset(self) -> Generator[None, None, None]:
+        from ama_cryptography import _finalizer_health as _fh
+
+        _fh.reset_finalizer_health()
+        yield
+        _fh.reset_finalizer_health()
+
     def test_initial_state_no_errors(self) -> None:
         """Health check reports clean state before any failures."""
-        # Module-level state may have been modified by other tests; just
-        # verify the API returns consistent types.
         from ama_cryptography._finalizer_health import finalizer_health_check
 
-        ok, count, _last = finalizer_health_check()
-        assert isinstance(ok, bool)
-        assert isinstance(count, int)
-        assert count >= 0
+        ok, count, last = finalizer_health_check()
+        assert ok is True
+        assert count == 0
+        assert last is None
 
     def test_record_finalizer_error_increments_counter(self) -> None:
         from ama_cryptography import _finalizer_health as fh

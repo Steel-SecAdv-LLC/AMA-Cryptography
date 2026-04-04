@@ -33,6 +33,37 @@
 /* Barrett constant: floor(2^26 / q) + 1 */
 #define KYBER_BARRETT_V  20159
 
+/* q^{-1} mod 2^16 — used by both AVX2 Montgomery and scalar fallback */
+#define KYBER_QINV_VAL  62209
+
+/* ============================================================================
+ * Scalar Montgomery reduction (for sub-register fallback paths)
+ *
+ * Computes a * R^{-1} mod q where R = 2^16.
+ * Matches the generic C implementation in ama_kyber.c.
+ * ============================================================================ */
+static inline int16_t montgomery_reduce_scalar(int32_t a) {
+    int16_t u = (int16_t)((int64_t)a * KYBER_QINV_VAL);
+    int32_t t = (int32_t)u * KYBER_Q;
+    t = a - t;
+    t >>= 16;
+    return (int16_t)t;
+}
+
+/* ============================================================================
+ * Scalar Barrett reduction (for sub-register fallback paths)
+ *
+ * Reduces a mod q for values in [-q, 2q).
+ * Matches the generic C implementation in ama_kyber.c.
+ * ============================================================================ */
+static inline int16_t barrett_reduce_scalar(int16_t a) {
+    int16_t t;
+    const int16_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
+    t = ((int32_t)v * a) >> 26;
+    t *= KYBER_Q;
+    return a - t;
+}
+
 /* ============================================================================
  * AVX2 Barrett reduction for Kyber (q = 3329)
  *
@@ -40,18 +71,20 @@
  *   t = floor(x * v / 2^26)
  *   r = x - t * q
  * where v = 20159.
+ *
+ * Uses mulhi_epi16 (arithmetic >>16) followed by srai_epi16(..., 10)
+ * for a total >>26 shift, matching the pqcrystals-kyber AVX2 approach.
+ * The previous mulhrs_epi16 only shifted by 15, giving wildly wrong results.
  * ============================================================================ */
 static inline __m256i barrett_reduce_avx2(__m256i a) {
     const __m256i v   = _mm256_set1_epi16(KYBER_BARRETT_V);
     const __m256i q   = _mm256_set1_epi16(KYBER_Q);
 
-    /* t = (a * v + 2^25) >> 26, but we approximate with mulhrs:
-     * mulhrs(a, v') computes round(a * v' / 2^15) which gives us
-     * a close approximation.  We use the standard Kyber approach:
-     * t = ((int32_t)a * 20159 + (1<<25)) >> 26  */
-    __m256i t = _mm256_mulhrs_epi16(a, v);
-    t = _mm256_mullo_epi16(t, q);
-    return _mm256_sub_epi16(a, t);
+    /* t = (a * v) >> 26, computed as mulhi(a, v) >> 10 */
+    __m256i t = _mm256_mulhi_epi16(a, v);     /* (a * v) >> 16 */
+    t = _mm256_srai_epi16(t, 10);             /* >> 10 more => total >> 26 */
+    t = _mm256_mullo_epi16(t, q);             /* t * q */
+    return _mm256_sub_epi16(a, t);            /* a - t*q */
 }
 
 /* ============================================================================
@@ -60,7 +93,7 @@ static inline __m256i barrett_reduce_avx2(__m256i a) {
  * Computes a * b * R^{-1} mod q where R = 2^16.
  * Uses Montgomery multiplication with QINV = q^{-1} mod R.
  * ============================================================================ */
-#define KYBER_QINV  62209  /* q^{-1} mod 2^16 */
+#define KYBER_QINV  KYBER_QINV_VAL  /* q^{-1} mod 2^16 */
 
 static inline __m256i montgomery_mul_avx2(__m256i a, __m256i b) {
     const __m256i q    = _mm256_set1_epi16(KYBER_Q);
@@ -79,20 +112,6 @@ static inline __m256i montgomery_mul_avx2(__m256i a, __m256i b) {
 }
 
 /* ============================================================================
- * NTT butterfly: Cooley-Tukey butterfly on 16 coefficients
- *
- * Given vectors a and b and a twiddle factor zeta (broadcast):
- *   a' = a + zeta * b
- *   b' = a - zeta * b
- * All arithmetic mod q via Montgomery multiplication.
- * ============================================================================ */
-static inline void ntt_butterfly_avx2(__m256i *a, __m256i *b, __m256i zeta) {
-    __m256i t = montgomery_mul_avx2(zeta, *b);
-    *b = _mm256_sub_epi16(*a, t);
-    *a = _mm256_add_epi16(*a, t);
-}
-
-/* ============================================================================
  * Forward NTT on a polynomial (256 coefficients)
  *
  * Processes 16 coefficients at a time using AVX2.
@@ -100,36 +119,44 @@ static inline void ntt_butterfly_avx2(__m256i *a, __m256i *b, __m256i zeta) {
  * Twiddle factors (zetas) must be precomputed in Montgomery form.
  * ============================================================================ */
 void ama_kyber_ntt_avx2(int16_t poly[KYBER_N], const int16_t zetas[128]) {
-    __m256i f[16]; /* 16 vectors of 16 coefficients = 256 total */
+    int k = 1;  /* Start at k=1, matching generic C (zetas[0] is unused R mod q) */
 
-    /* Load polynomial into AVX2 registers */
-    for (int i = 0; i < 16; i++) {
-        f[i] = _mm256_loadu_si256((const __m256i *)(poly + i * 16));
-    }
-
-    /* NTT layers: 7 layers for N=256 */
-    int k = 0;
-    for (int len = 128; len >= 2; len >>= 1) {
+    /* Layers with len >= 16: use AVX2 vectorized path */
+    for (int len = 128; len >= 16; len >>= 1) {
         for (int start = 0; start < KYBER_N; start += 2 * len) {
             __m256i zeta = _mm256_set1_epi16(zetas[k++]);
             for (int j = start; j < start + len; j += 16) {
-                int idx_a = j / 16;
-                int idx_b = (j + len) / 16;
-                if (idx_a < 16 && idx_b < 16) {
-                    ntt_butterfly_avx2(&f[idx_a], &f[idx_b], zeta);
-                }
+                __m256i a = _mm256_loadu_si256((const __m256i *)(poly + j));
+                __m256i b = _mm256_loadu_si256((const __m256i *)(poly + j + len));
+                __m256i t = montgomery_mul_avx2(zeta, b);
+                _mm256_storeu_si256((__m256i *)(poly + j + len),
+                                    _mm256_sub_epi16(a, t));
+                _mm256_storeu_si256((__m256i *)(poly + j),
+                                    _mm256_add_epi16(a, t));
             }
         }
     }
 
-    /* Barrett reduce all coefficients */
-    for (int i = 0; i < 16; i++) {
-        f[i] = barrett_reduce_avx2(f[i]);
+    /* Layers with len < 16 (len=8, 4, 2): scalar fallback
+     * These layers operate within a single 16-element AVX2 register,
+     * so we must use scalar code to avoid the aliasing bug where
+     * idx_a == idx_b causes the butterfly to be a no-op. */
+    for (int len = 8; len >= 2; len >>= 1) {
+        for (int start = 0; start < KYBER_N; start += 2 * len) {
+            int16_t zeta = zetas[k++];
+            for (int j = start; j < start + len; j++) {
+                int16_t t = montgomery_reduce_scalar((int32_t)zeta * poly[j + len]);
+                poly[j + len] = poly[j] - t;
+                poly[j] = poly[j] + t;
+            }
+        }
     }
 
-    /* Store back */
-    for (int i = 0; i < 16; i++) {
-        _mm256_storeu_si256((__m256i *)(poly + i * 16), f[i]);
+    /* Barrett reduce all coefficients (vectorized) */
+    for (int i = 0; i < KYBER_N; i += 16) {
+        __m256i v = _mm256_loadu_si256((const __m256i *)(poly + i));
+        v = barrett_reduce_avx2(v);
+        _mm256_storeu_si256((__m256i *)(poly + i), v);
     }
 }
 
@@ -137,53 +164,82 @@ void ama_kyber_ntt_avx2(int16_t poly[KYBER_N], const int16_t zetas[128]) {
  * Inverse NTT (Gentleman-Sande butterflies)
  * ============================================================================ */
 void ama_kyber_invntt_avx2(int16_t poly[KYBER_N], const int16_t zetas[128]) {
-    __m256i f[16];
-
-    for (int i = 0; i < 16; i++) {
-        f[i] = _mm256_loadu_si256((const __m256i *)(poly + i * 16));
-    }
-
     int k = 127;
-    for (int len = 2; len <= 128; len <<= 1) {
+    const int16_t f = 1441;  /* mont^2/128: R^2 * 128^{-1} mod q, matching pqcrystals */
+
+    /* Layers with len < 16 (len=2, 4, 8): scalar path first */
+    for (int len = 2; len < 16; len <<= 1) {
         for (int start = 0; start < KYBER_N; start += 2 * len) {
-            __m256i zeta = _mm256_set1_epi16(zetas[k--]);
-            for (int j = start; j < start + len; j += 16) {
-                int idx_a = j / 16;
-                int idx_b = (j + len) / 16;
-                if (idx_a < 16 && idx_b < 16) {
-                    /* GS butterfly: t = a - b, a = a + b, b = zeta * t */
-                    __m256i t = _mm256_sub_epi16(f[idx_a], f[idx_b]);
-                    f[idx_a] = _mm256_add_epi16(f[idx_a], f[idx_b]);
-                    f[idx_b] = montgomery_mul_avx2(zeta, t);
-                }
+            int16_t zeta = zetas[k--];
+            for (int j = start; j < start + len; j++) {
+                int16_t t = poly[j];
+                poly[j] = barrett_reduce_scalar(t + poly[j + len]);
+                poly[j + len] = montgomery_reduce_scalar(
+                    (int32_t)zeta * (poly[j + len] - t)
+                );
             }
         }
     }
 
-    /* Multiply by N^{-1} mod q and reduce */
-    const __m256i ninv = _mm256_set1_epi16(3303); /* 256^{-1} mod 3329 */
-    for (int i = 0; i < 16; i++) {
-        f[i] = montgomery_mul_avx2(f[i], ninv);
-        f[i] = barrett_reduce_avx2(f[i]);
+    /* Layers with len >= 16: AVX2 vectorized path */
+    for (int len = 16; len <= 128; len <<= 1) {
+        for (int start = 0; start < KYBER_N; start += 2 * len) {
+            __m256i zeta = _mm256_set1_epi16(zetas[k--]);
+            for (int j = start; j < start + len; j += 16) {
+                __m256i a = _mm256_loadu_si256((const __m256i *)(poly + j));
+                __m256i b = _mm256_loadu_si256((const __m256i *)(poly + j + len));
+                /* GS butterfly: a' = a + b, b' = zeta * (b - a) */
+                __m256i t = _mm256_sub_epi16(b, a);
+                __m256i sum = _mm256_add_epi16(a, b);
+                sum = barrett_reduce_avx2(sum);
+                _mm256_storeu_si256((__m256i *)(poly + j), sum);
+                _mm256_storeu_si256((__m256i *)(poly + j + len),
+                                    montgomery_mul_avx2(zeta, t));
+            }
+        }
     }
 
-    for (int i = 0; i < 16; i++) {
-        _mm256_storeu_si256((__m256i *)(poly + i * 16), f[i]);
+    /* Multiply by f = R^2 * 128^{-1} mod q and reduce */
+    __m256i finv = _mm256_set1_epi16(f);
+    for (int i = 0; i < KYBER_N; i += 16) {
+        __m256i v = _mm256_loadu_si256((const __m256i *)(poly + i));
+        v = montgomery_mul_avx2(v, finv);
+        v = barrett_reduce_avx2(v);
+        _mm256_storeu_si256((__m256i *)(poly + i), v);
     }
 }
 
 /* ============================================================================
- * Pointwise multiplication of two NTT-domain polynomials
+ * Scalar basemul helper for AVX2 fallback
+ *
+ * Multiplication in Z_q[X]/(X^2 - zeta):
+ *   r[0] = mont(mont(a[1]*b[1]) * zeta) + mont(a[0]*b[0])
+ *   r[1] = mont(a[0]*b[1]) + mont(a[1]*b[0])
+ * Two Montgomery reductions on the a[1]*b[1]*zeta path (matching generic).
+ * ============================================================================ */
+static inline void basemul_avx2_scalar(int16_t r[2], const int16_t a[2],
+                                        const int16_t b[2], int16_t zeta) {
+    int16_t tmp = montgomery_reduce_scalar((int32_t)a[1] * b[1]);
+    r[0] = montgomery_reduce_scalar((int32_t)tmp * zeta);
+    r[0] += montgomery_reduce_scalar((int32_t)a[0] * b[0]);
+    r[1] = montgomery_reduce_scalar((int32_t)a[0] * b[1]);
+    r[1] += montgomery_reduce_scalar((int32_t)a[1] * b[0]);
+}
+
+/* ============================================================================
+ * Pointwise multiplication of two NTT-domain polynomials (basemul)
+ *
+ * Implements polynomial multiplication in Z_q[X]/(X^2 - zeta) for each
+ * of the 64 degree-2 components, matching the generic C basemul exactly.
+ * Uses zetas[64+i] for the i-th component pair.
  * ============================================================================ */
 void ama_kyber_poly_pointwise_avx2(int16_t r[KYBER_N],
                                     const int16_t a[KYBER_N],
-                                    const int16_t b[KYBER_N]) {
-    for (int i = 0; i < 16; i++) {
-        __m256i va = _mm256_loadu_si256((const __m256i *)(a + i * 16));
-        __m256i vb = _mm256_loadu_si256((const __m256i *)(b + i * 16));
-        __m256i vr = montgomery_mul_avx2(va, vb);
-        vr = barrett_reduce_avx2(vr);
-        _mm256_storeu_si256((__m256i *)(r + i * 16), vr);
+                                    const int16_t b[KYBER_N],
+                                    const int16_t zetas[128]) {
+    for (int i = 0; i < 64; i++) {
+        basemul_avx2_scalar(&r[4*i],     &a[4*i],     &b[4*i],      zetas[64 + i]);
+        basemul_avx2_scalar(&r[4*i + 2], &a[4*i + 2], &b[4*i + 2], -zetas[64 + i]);
     }
 }
 

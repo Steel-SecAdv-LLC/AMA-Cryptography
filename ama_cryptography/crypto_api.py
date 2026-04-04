@@ -77,6 +77,9 @@ from ama_cryptography.pqc_backends import native_hkdf, native_hmac_sha3_256
 _HMAC_NATIVE = _HMAC_SHA3_256_NATIVE_AVAILABLE
 _HKDF_NATIVE = _HKDF_NATIVE_AVAILABLE
 
+# Deprecation warning for AMA_REQUIRE_CONSTANT_TIME is emitted by
+# pqc_backends.py at import time; no need to duplicate it here.
+
 # INVARIANT-7 (revised): No cryptographic fallbacks, ever.
 # When native constant-time backend is unavailable the library MUST refuse to
 # operate.  Pure-Python fallback for any cryptographic primitive is prohibited.
@@ -665,6 +668,8 @@ class SphincsProvider(CryptoProvider):
 def _atomic_write_json(
     data: Mapping[str, object],
     target: pathlib.Path,
+    *,
+    tmp_prefix: str = ".counters_",
 ) -> None:
     """Atomically write *data* as JSON to *target* via temp-file + rename.
 
@@ -674,7 +679,7 @@ def _atomic_write_json(
     import json as _json
     import tempfile
 
-    fd, tmp_path = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp", prefix=".counters_")
+    fd, tmp_path = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp", prefix=tmp_prefix)
     try:
         f = os.fdopen(fd, "w")
     except BaseException:

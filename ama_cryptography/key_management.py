@@ -1252,7 +1252,7 @@ class HSMKeyStorage:
     def __del__(self) -> None:
         try:
             self.close()
-        except Exception as exc:  # noqa: S110 — INVARIANT-3/9: __del__ must not raise (FIN-004)
+        except Exception as exc:  # — INVARIANT-3/9: __del__ must not raise (FIN-004)
             # INVARIANT-3 addendum: silence is never the only outcome.
             record_finalizer_error("HSMKeyStorage", f"close() failed: {exc}")
 

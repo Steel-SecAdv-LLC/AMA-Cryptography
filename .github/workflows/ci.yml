@@ -236,9 +236,9 @@ jobs:
         # All os.fdopen calls must be wrapped in try/except to prevent fd leaks.
         # Approved call sites: key_storage.py, legacy_compat.py, crypto_api.py
         if grep -rn 'os\.fdopen\|_os\.fdopen' ama_cryptography/ \
-            | grep -v 'key_storage\.py' \
-            | grep -v 'legacy_compat\.py' \
-            | grep -v 'crypto_api\.py'; then
+            | grep -v 'ama_cryptography/key_storage\.py:' \
+            | grep -v 'ama_cryptography/legacy_compat\.py:' \
+            | grep -v 'ama_cryptography/crypto_api\.py:'; then
           echo "::error::Direct os.fdopen call found outside approved modules — wrap in try/except BaseException to guard the fd"
           exit 1
         fi
