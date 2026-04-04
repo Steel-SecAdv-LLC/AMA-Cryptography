@@ -231,6 +231,14 @@ static void dil_ntt(int32_t a[DIL_N]) {
  * Inverse NTT for Dilithium
  */
 static void dil_invntt(int32_t a[DIL_N]) {
+    /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
+    const ama_dispatch_table_t *dt2 = ama_get_dispatch_table();
+    if (dt2->dilithium_invntt) {
+        dt2->dilithium_invntt(a, dil_zetas);
+        return;
+    }
+
+    /* Generic C implementation */
     unsigned int start, len, j, k;
     int32_t t, zeta;
     const int32_t f = 41978;  /* Mont^(-1) * N^(-1) mod q */

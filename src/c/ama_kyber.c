@@ -1727,7 +1727,7 @@ static void poly_basemul(poly* r, const poly* a, const poly* b) {
     /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
     const ama_dispatch_table_t *dt = ama_get_dispatch_table();
     if (dt->kyber_pointwise) {
-        dt->kyber_pointwise(r->coeffs, a->coeffs, b->coeffs);
+        dt->kyber_pointwise(r->coeffs, a->coeffs, b->coeffs, zetas);
         return;
     }
 

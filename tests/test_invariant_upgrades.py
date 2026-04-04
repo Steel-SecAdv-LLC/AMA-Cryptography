@@ -40,14 +40,12 @@ class TestFinalizerHealth:
 
     def test_initial_state_no_errors(self) -> None:
         """Health check reports clean state before any failures."""
-        # Module-level state may have been modified by other tests; just
-        # verify the API returns consistent types.
         from ama_cryptography._finalizer_health import finalizer_health_check
 
-        ok, count, _last = finalizer_health_check()
-        assert isinstance(ok, bool)
-        assert isinstance(count, int)
-        assert count >= 0
+        ok, count, last = finalizer_health_check()
+        assert ok is True
+        assert count == 0
+        assert last is None
 
     def test_record_finalizer_error_increments_counter(self) -> None:
         from ama_cryptography import _finalizer_health as fh

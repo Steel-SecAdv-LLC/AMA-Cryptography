@@ -159,9 +159,12 @@ extern void ama_kyber_ntt_avx2(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_kyber_invntt_avx2(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_kyber_poly_pointwise_avx2(int16_t r[256],
                                            const int16_t a[256],
-                                           const int16_t b[256]);
+                                           const int16_t b[256],
+                                           const int16_t zetas[128]);
 extern void ama_dilithium_ntt_avx2(int32_t poly[256],
-                                    const int32_t zetas[128]);
+                                    const int32_t zetas[256]);
+extern void ama_dilithium_invntt_avx2(int32_t poly[256],
+                                       const int32_t zetas[256]);
 extern void ama_dilithium_poly_pointwise_avx2(int32_t r[256],
                                                const int32_t a[256],
                                                const int32_t b[256]);
@@ -175,9 +178,12 @@ extern void ama_kyber_ntt_neon(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_kyber_invntt_neon(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_kyber_poly_pointwise_neon(int16_t r[256],
                                            const int16_t a[256],
-                                           const int16_t b[256]);
+                                           const int16_t b[256],
+                                           const int16_t zetas[128]);
 extern void ama_dilithium_ntt_neon(int32_t poly[256],
-                                    const int32_t zetas[128]);
+                                    const int32_t zetas[256]);
+extern void ama_dilithium_invntt_neon(int32_t poly[256],
+                                       const int32_t zetas[256]);
 extern void ama_dilithium_poly_pointwise_neon(int32_t r[256],
                                                const int32_t a[256],
                                                const int32_t b[256]);
@@ -279,6 +285,7 @@ static void dispatch_init_internal(void) {
     dispatch_table.kyber_invntt      = NULL;
     dispatch_table.kyber_pointwise   = NULL;
     dispatch_table.dilithium_ntt     = NULL;
+    dispatch_table.dilithium_invntt  = NULL;
     dispatch_table.dilithium_pointwise = NULL;
 
 #ifdef AMA_HAVE_AVX2_IMPL
@@ -286,28 +293,15 @@ static void dispatch_init_internal(void) {
         dispatch_table.keccak_f1600 = ama_keccak_f1600_avx2;
         dispatch_table.sha3_256     = ama_sha3_256_avx2;
     }
-    /* Kyber NTT SIMD wiring — NTT/invNTT incompatibilities fixed:
-     *
-     * 1. Forward NTT zeta offset: SIMD now starts k=1 (matching generic C).
-     * 2. Inverse NTT sign convention: SIMD GS butterfly now computes
-     *    zeta*(b-a), matching pqcrystals reference.
-     * 3. Sub-register aliasing: scalar fallback for len < 16 (AVX2)
-     *    and len < 8 (NEON) prevents no-op butterflies.
-     * 4. Barrett reduction: fixed to use mulhi+shift (total >>26),
-     *    not mulhrs (>>15) which gave wildly wrong results.
-     *
-     * kyber_pointwise intentionally left NULL — SIMD pointwise does
-     * element-wise Montgomery multiply, but poly_basemul() needs the
-     * basemul algorithm: polynomial multiply in Z_q[X]/(X^2 - zeta)
-     * with cross-terms and zetas[64+i].  Generic C basemul is used.
-     *
-     * Dilithium SIMD: NOT wired — mullo_epi32 truncation makes the AVX2
-     * butterfly incorrect for q=8380417 (products exceed 32 bits).
-     * Requires proper 64-bit Montgomery reduction for future wiring. */
     if (dispatch_info.kyber >= AMA_IMPL_AVX2) {
         dispatch_table.kyber_ntt       = ama_kyber_ntt_avx2;
         dispatch_table.kyber_invntt    = ama_kyber_invntt_avx2;
-        /* kyber_pointwise stays NULL — see comment above */
+        dispatch_table.kyber_pointwise = ama_kyber_poly_pointwise_avx2;
+    }
+    if (dispatch_info.dilithium >= AMA_IMPL_AVX2) {
+        dispatch_table.dilithium_ntt       = ama_dilithium_ntt_avx2;
+        dispatch_table.dilithium_invntt    = ama_dilithium_invntt_avx2;
+        dispatch_table.dilithium_pointwise = ama_dilithium_poly_pointwise_avx2;
     }
 #endif
 
@@ -316,14 +310,15 @@ static void dispatch_init_internal(void) {
         dispatch_table.keccak_f1600 = ama_keccak_f1600_neon;
         dispatch_table.sha3_256     = ama_sha3_256_neon;
     }
-    /* Kyber NEON NTT — same fixes as AVX2 (Montgomery mul, scalar
-     * fallback for len < 8, correct GS sign, Barrett >>26 fix).
-     * kyber_pointwise intentionally left NULL — same basemul mismatch.
-     * Dilithium NEON: NOT wired — same mullo 32-bit truncation issue. */
     if (dispatch_info.kyber >= AMA_IMPL_NEON) {
         dispatch_table.kyber_ntt       = ama_kyber_ntt_neon;
         dispatch_table.kyber_invntt    = ama_kyber_invntt_neon;
-        /* kyber_pointwise stays NULL — see AVX2 comment above */
+        dispatch_table.kyber_pointwise = ama_kyber_poly_pointwise_neon;
+    }
+    if (dispatch_info.dilithium >= AMA_IMPL_NEON) {
+        dispatch_table.dilithium_ntt       = ama_dilithium_ntt_neon;
+        dispatch_table.dilithium_invntt    = ama_dilithium_invntt_neon;
+        dispatch_table.dilithium_pointwise = ama_dilithium_poly_pointwise_neon;
     }
 #endif
 

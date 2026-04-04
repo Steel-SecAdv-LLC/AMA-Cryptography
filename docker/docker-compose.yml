@@ -3,8 +3,6 @@
 #
 # Docker Compose configuration for AMA Cryptography
 
-version: '3.8'
-
 services:
   # Main AMA Cryptography service
   ama-cryptography:
@@ -21,12 +19,14 @@ services:
     read_only: true
     tmpfs:
       - /tmp:noexec,nosuid,size=64m
+      - /app/__pycache__:size=16m
     volumes:
       - ../data:/data
       - ../logs:/var/log/ama-cryptography
     environment:
       - AMA_LOG_LEVEL=INFO
       - AMA_DATA_DIR=/data
+      - PYTHONDONTWRITEBYTECODE=1
     networks:
       - ama-net
     healthcheck:

@@ -113,32 +113,67 @@ static inline __m256i caddq_avx2(__m256i a) {
 }
 
 /* ============================================================================
+ * 64-bit Montgomery multiply helper for AVX2
+ *
+ * Computes montgomery_reduce(zeta * b) using 64-bit intermediates:
+ *   - Even lanes: _mm256_mul_epi32 gives 64-bit signed products
+ *   - Odd lanes: shift to even position, multiply, recombine
+ * This avoids the catastrophic 32-bit truncation of _mm256_mullo_epi32
+ * which loses high bits for q=8380417 (products up to ~46 bits).
+ * ============================================================================ */
+static inline __m256i montgomery_mul_dil_avx2(__m256i a, __m256i b) {
+    /* 64-bit products via even/odd lane split */
+    __m256i prod_lo_even = _mm256_mul_epi32(a, b);
+    __m256i a_odd = _mm256_srli_epi64(a, 32);
+    __m256i b_odd = _mm256_srli_epi64(b, 32);
+    __m256i prod_lo_odd = _mm256_mul_epi32(a_odd, b_odd);
+
+    /* Recombine low/high 32-bit halves for Montgomery reduction */
+    __m256i lo_even = _mm256_and_si256(prod_lo_even, _mm256_set1_epi64x(0xFFFFFFFF));
+    __m256i hi_even = _mm256_srli_epi64(prod_lo_even, 32);
+    __m256i lo_odd = _mm256_slli_epi64(
+        _mm256_and_si256(prod_lo_odd, _mm256_set1_epi64x(0xFFFFFFFF)), 32);
+    __m256i hi_odd = _mm256_and_si256(prod_lo_odd,
+        _mm256_set1_epi64x((int64_t)0xFFFFFFFF00000000LL));
+
+    __m256i lo = _mm256_or_si256(lo_even, lo_odd);
+    __m256i hi = _mm256_or_si256(hi_even, hi_odd);
+
+    return montgomery_reduce_avx2(lo, hi);
+}
+
+/* ============================================================================
  * NTT butterfly for Dilithium (32-bit coefficients)
+ *
+ * Uses proper 64-bit Montgomery multiply to avoid truncation.
+ * t = montgomery_reduce_64(zeta * b)
+ * a' = a + t,  b' = a - t
  * ============================================================================ */
 static inline void ntt_butterfly_dil_avx2(__m256i *a, __m256i *b, int32_t zeta) {
     __m256i z = _mm256_set1_epi32(zeta);
-    /* t = zeta * b (need to handle 32-bit Montgomery multiply) */
-    __m256i b_even = *b;
-    __m256i prod_even = _mm256_mul_epi32(z, b_even);
-    __m256i z_odd = _mm256_srli_epi64(z, 0);
-    __m256i b_odd = _mm256_srli_epi64(*b, 32);
-    __m256i prod_odd = _mm256_mul_epi32(z_odd, b_odd);
-
-    /* Simple 32-bit multiply and reduce */
-    __m256i t = _mm256_mullo_epi32(z, *b);
-    t = barrett_reduce_dilithium_avx2(t);
-
+    __m256i t = montgomery_mul_dil_avx2(z, *b);
     *b = _mm256_sub_epi32(*a, t);
     *a = _mm256_add_epi32(*a, t);
-    (void)prod_even;
-    (void)prod_odd;
+}
+
+/* ============================================================================
+ * Scalar 64-bit Montgomery reduction for Dilithium
+ * Used for len=1 scalar fallback in NTT/invNTT.
+ * ============================================================================ */
+static inline int32_t dil_montgomery_reduce_scalar(int64_t a) {
+    int32_t t = (int32_t)((int64_t)(int32_t)a * DILITHIUM_QINV);
+    return (int32_t)((a - (int64_t)t * DILITHIUM_Q) >> 32);
 }
 
 /* ============================================================================
  * Forward NTT for Dilithium polynomial (256 int32 coefficients)
+ *
+ * 8-layer NTT matching generic: len from 128 down to 1.
+ * Uses ++k (pre-increment) zeta indexing: first zeta is zetas[1].
+ * len=1 layer uses scalar fallback (intra-register butterfly).
  * ============================================================================ */
 void ama_dilithium_ntt_avx2(int32_t poly[DILITHIUM_N],
-                             const int32_t zetas[128]) {
+                             const int32_t zetas[256]) {
     __m256i f[32]; /* 32 vectors of 8 int32 = 256 coefficients */
 
     for (int i = 0; i < 32; i++) {
@@ -146,23 +181,88 @@ void ama_dilithium_ntt_avx2(int32_t poly[DILITHIUM_N],
     }
 
     int k = 0;
-    for (int len = 128; len >= 2; len >>= 1) {
+    /* Layers len=128 down to len=8: butterfly pairs span different registers */
+    for (int len = 128; len >= 8; len >>= 1) {
         for (int start = 0; start < DILITHIUM_N; start += 2 * len) {
-            int32_t zeta = zetas[k++];
+            int32_t zeta = zetas[++k];
             for (int j = start; j < start + len; j += 8) {
                 int idx_a = j / 8;
                 int idx_b = (j + len) / 8;
-                if (idx_a < 32 && idx_b < 32) {
-                    ntt_butterfly_dil_avx2(&f[idx_a], &f[idx_b], zeta);
-                }
+                ntt_butterfly_dil_avx2(&f[idx_a], &f[idx_b], zeta);
             }
         }
     }
 
-    /* Reduce all coefficients */
+    /* Layers len=4, len=2, len=1: butterfly pairs within same register.
+     * Fall back to scalar for correctness. */
     for (int i = 0; i < 32; i++) {
-        f[i] = barrett_reduce_dilithium_avx2(f[i]);
-        f[i] = caddq_avx2(f[i]);
+        _mm256_storeu_si256((__m256i *)(poly + i * 8), f[i]);
+    }
+    for (int len = 4; len > 0; len >>= 1) {
+        for (int start = 0; start < DILITHIUM_N; start += 2 * len) {
+            int32_t zeta = zetas[++k];
+            for (int j = start; j < start + len; ++j) {
+                int32_t t = dil_montgomery_reduce_scalar(
+                    (int64_t)zeta * poly[j + len]);
+                poly[j + len] = poly[j] - t;
+                poly[j] = poly[j] + t;
+            }
+        }
+    }
+}
+
+/* ============================================================================
+ * Inverse NTT for Dilithium polynomial (256 int32 coefficients)
+ *
+ * 8-layer inverse NTT matching generic dil_invntt():
+ * - k=256, iterate len from 1 to 128
+ * - GS butterfly: t=a[j], a[j]=t+a[j+len], a[j+len]=mont(-zeta*(t-a[j+len]))
+ * - Final multiply by f=41978 (Mont^{-1} * N^{-1} mod q)
+ * - len=1,2,4 use scalar fallback (intra-register butterfly)
+ * ============================================================================ */
+void ama_dilithium_invntt_avx2(int32_t poly[DILITHIUM_N],
+                                const int32_t zetas[256]) {
+    int k = 256;
+
+    /* Layers len=1,2,4: intra-register, use scalar */
+    for (int len = 1; len <= 4; len <<= 1) {
+        for (int start = 0; start < DILITHIUM_N; start += 2 * len) {
+            int32_t zeta = -zetas[--k];
+            for (int j = start; j < start + len; ++j) {
+                int32_t t = poly[j];
+                poly[j] = t + poly[j + len];
+                poly[j + len] = t - poly[j + len];
+                poly[j + len] = dil_montgomery_reduce_scalar(
+                    (int64_t)zeta * poly[j + len]);
+            }
+        }
+    }
+
+    /* Layers len=8 to len=128: inter-register, use AVX2 */
+    __m256i f[32];
+    for (int i = 0; i < 32; i++) {
+        f[i] = _mm256_loadu_si256((const __m256i *)(poly + i * 8));
+    }
+
+    for (int len = 8; len < DILITHIUM_N; len <<= 1) {
+        for (int start = 0; start < DILITHIUM_N; start += 2 * len) {
+            int32_t zeta = -zetas[--k];
+            __m256i z = _mm256_set1_epi32(zeta);
+            for (int j = start; j < start + len; j += 8) {
+                int idx_a = j / 8;
+                int idx_b = (j + len) / 8;
+                __m256i t = f[idx_a];
+                f[idx_a] = _mm256_add_epi32(t, f[idx_b]);
+                f[idx_b] = _mm256_sub_epi32(t, f[idx_b]);
+                f[idx_b] = montgomery_mul_dil_avx2(z, f[idx_b]);
+            }
+        }
+    }
+
+    /* Final multiply by f = 41978 (Mont^{-1} * N^{-1} mod q) */
+    __m256i finv = _mm256_set1_epi32(41978);
+    for (int i = 0; i < 32; i++) {
+        f[i] = montgomery_mul_dil_avx2(finv, f[i]);
     }
 
     for (int i = 0; i < 32; i++) {
@@ -172,6 +272,8 @@ void ama_dilithium_ntt_avx2(int32_t poly[DILITHIUM_N],
 
 /* ============================================================================
  * Polynomial pointwise multiplication (NTT domain)
+ *
+ * Uses proper 64-bit Montgomery multiply via even/odd lane split.
  * ============================================================================ */
 void ama_dilithium_poly_pointwise_avx2(int32_t r[DILITHIUM_N],
                                         const int32_t a[DILITHIUM_N],
@@ -179,9 +281,7 @@ void ama_dilithium_poly_pointwise_avx2(int32_t r[DILITHIUM_N],
     for (int i = 0; i < 32; i++) {
         __m256i va = _mm256_loadu_si256((const __m256i *)(a + i * 8));
         __m256i vb = _mm256_loadu_si256((const __m256i *)(b + i * 8));
-        /* 32-bit multiply (low 32 bits) */
-        __m256i vr = _mm256_mullo_epi32(va, vb);
-        vr = barrett_reduce_dilithium_avx2(vr);
+        __m256i vr = montgomery_mul_dil_avx2(va, vb);
         vr = caddq_avx2(vr);
         _mm256_storeu_si256((__m256i *)(r + i * 8), vr);
     }

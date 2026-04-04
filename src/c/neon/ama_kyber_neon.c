@@ -223,20 +223,36 @@ void ama_kyber_invntt_neon(int16_t poly[KYBER_N], const int16_t zetas[128]) {
 }
 
 /* ============================================================================
- * Polynomial pointwise multiplication (NEON)
+ * Scalar basemul helper for NEON fallback
  *
- * Uses Montgomery multiplication for correct modular arithmetic.
- * Previous code used vmulq_s16 which silently truncated products.
+ * Multiplication in Z_q[X]/(X^2 - zeta):
+ *   r[0] = mont(mont(a[1]*b[1]) * zeta) + mont(a[0]*b[0])
+ *   r[1] = mont(a[0]*b[1]) + mont(a[1]*b[0])
+ * Two Montgomery reductions on the a[1]*b[1]*zeta path (matching generic).
+ * ============================================================================ */
+static inline void basemul_neon_scalar(int16_t r[2], const int16_t a[2],
+                                        const int16_t b[2], int16_t zeta) {
+    int16_t tmp = montgomery_reduce_scalar((int32_t)a[1] * b[1]);
+    r[0] = montgomery_reduce_scalar((int32_t)tmp * zeta);
+    r[0] += montgomery_reduce_scalar((int32_t)a[0] * b[0]);
+    r[1] = montgomery_reduce_scalar((int32_t)a[0] * b[1]);
+    r[1] += montgomery_reduce_scalar((int32_t)a[1] * b[0]);
+}
+
+/* ============================================================================
+ * Pointwise multiplication of two NTT-domain polynomials (basemul, NEON)
+ *
+ * Implements polynomial multiplication in Z_q[X]/(X^2 - zeta) for each
+ * of the 64 degree-2 components, matching the generic C basemul exactly.
+ * Uses zetas[64+i] for the i-th component pair.
  * ============================================================================ */
 void ama_kyber_poly_pointwise_neon(int16_t r[KYBER_N],
                                     const int16_t a[KYBER_N],
-                                    const int16_t b[KYBER_N]) {
-    for (int i = 0; i < 32; i++) {
-        int16x8_t va = vld1q_s16(a + i * 8);
-        int16x8_t vb = vld1q_s16(b + i * 8);
-        int16x8_t vr = montgomery_mul_neon(va, vb);
-        vr = barrett_reduce_neon(vr);
-        vst1q_s16(r + i * 8, vr);
+                                    const int16_t b[KYBER_N],
+                                    const int16_t zetas[128]) {
+    for (int i = 0; i < 64; i++) {
+        basemul_neon_scalar(&r[4*i],     &a[4*i],     &b[4*i],      zetas[64 + i]);
+        basemul_neon_scalar(&r[4*i + 2], &a[4*i + 2], &b[4*i + 2], -zetas[64 + i]);
     }
 }
 

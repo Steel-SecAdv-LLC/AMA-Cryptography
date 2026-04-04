@@ -57,14 +57,19 @@ typedef ama_error_t (*ama_sha3_256_fn)(const uint8_t *input, size_t input_len,
 /** Kyber NTT forward transform */
 typedef void (*ama_kyber_ntt_fn)(int16_t poly[256], const int16_t zetas[128]);
 
-/** Kyber polynomial pointwise multiply */
+/** Kyber polynomial pointwise multiply (basemul in Z_q[X]/(X^2-zeta)) */
 typedef void (*ama_kyber_pointwise_fn)(int16_t r[256],
                                        const int16_t a[256],
-                                       const int16_t b[256]);
+                                       const int16_t b[256],
+                                       const int16_t zetas[128]);
 
 /** Dilithium NTT forward transform */
 typedef void (*ama_dilithium_ntt_fn)(int32_t poly[256],
-                                     const int32_t zetas[128]);
+                                     const int32_t zetas[256]);
+
+/** Dilithium inverse NTT */
+typedef void (*ama_dilithium_invntt_fn)(int32_t poly[256],
+                                        const int32_t zetas[256]);
 
 /** Dilithium polynomial pointwise multiply */
 typedef void (*ama_dilithium_pointwise_fn)(int32_t r[256],
@@ -78,10 +83,10 @@ typedef void (*ama_dilithium_pointwise_fn)(int32_t r[256],
  *   - Non-NULL: points to the optimal implementation (SIMD or generic).
  *     Guaranteed non-NULL: keccak_f1600.
  *     Wired when SIMD detected: sha3_256, kyber_ntt, kyber_invntt,
- *     kyber_pointwise (Phase 2 — AVX2 and NEON).
+ *     kyber_pointwise, dilithium_ntt, dilithium_invntt,
+ *     dilithium_pointwise (AVX2 and NEON).
  *   - NULL: no dispatch available; caller must use its own inline generic
- *     implementation.  Currently NULL: dilithium_ntt, dilithium_pointwise
- *     (Dilithium SIMD requires 64-bit Montgomery — not yet implemented).
+ *     implementation.  SVE2 NTT is a known gap (variable VL complexity).
  *
  * Callers MUST NULL-check before calling any field except keccak_f1600.
  * ============================================================================ */
@@ -92,8 +97,9 @@ typedef struct {
     ama_kyber_ntt_fn          kyber_ntt;            /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_ntt_fn          kyber_invntt;         /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_pointwise_fn    kyber_pointwise;      /**< Non-NULL when SIMD detected; callers MUST NULL-check */
-    ama_dilithium_ntt_fn      dilithium_ntt;        /**< NULL (Dilithium SIMD not wired); callers MUST NULL-check */
-    ama_dilithium_pointwise_fn dilithium_pointwise; /**< NULL (Dilithium SIMD not wired); callers MUST NULL-check */
+    ama_dilithium_ntt_fn      dilithium_ntt;        /**< Non-NULL when SIMD detected; callers MUST NULL-check */
+    ama_dilithium_invntt_fn   dilithium_invntt;     /**< Non-NULL when SIMD detected; callers MUST NULL-check */
+    ama_dilithium_pointwise_fn dilithium_pointwise; /**< Non-NULL when SIMD detected; callers MUST NULL-check */
 } ama_dispatch_table_t;
 
 /* ============================================================================
