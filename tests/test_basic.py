@@ -22,8 +22,8 @@ def test_version_consistency() -> None:
         meta_version = importlib.metadata.version("ama-cryptography")
     except importlib.metadata.PackageNotFoundError:
         pytest.skip("package not pip-installed; metadata unavailable")
-
-    assert ama_cryptography.__version__ == meta_version
+    else:
+        assert ama_cryptography.__version__ == meta_version
 
 
 def test_author() -> None:
