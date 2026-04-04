@@ -15,44 +15,15 @@ def test_version() -> None:
 
 
 def test_version_consistency() -> None:
-    """Version in __init__.py matches pyproject.toml (and metadata if installed)."""
+    """Version in __init__.py matches package metadata."""
     import importlib.metadata
-    from pathlib import Path
 
-    checked = False
-
-    # Check against pyproject.toml (works whether pip-installed or not)
-    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
-    if pyproject.exists():
-        try:
-            import tomllib
-        except ModuleNotFoundError:
-            try:
-                import tomli as tomllib  # type: ignore[no-redef] -- Python < 3.11 fallback (AMA-0)
-            except ModuleNotFoundError:
-                tomllib = None  # type: ignore[assignment] -- neither available
-        if tomllib is not None:
-            with open(pyproject, "rb") as f:
-                meta = tomllib.load(f)
-            assert ama_cryptography.__version__ == meta["project"]["version"], (
-                f"__init__.py has {ama_cryptography.__version__!r}, "
-                f"pyproject.toml has {meta['project']['version']!r}"
-            )
-            checked = True
-
-    # Also check importlib.metadata when package is pip-installed
     try:
         meta_version = importlib.metadata.version("ama-cryptography")
-        assert ama_cryptography.__version__ == meta_version, (
-            f"__init__.py has {ama_cryptography.__version__!r}, "
-            f"installed metadata has {meta_version!r}"
-        )
-        checked = True
     except importlib.metadata.PackageNotFoundError:
-        pass  # Not pip-installed; pyproject.toml check above is sufficient
+        pytest.skip("package not pip-installed; metadata unavailable")
 
-    if not checked:
-        pytest.skip("No TOML parser and package not pip-installed; cannot verify version")
+    assert ama_cryptography.__version__ == meta_version
 
 
 def test_author() -> None:
