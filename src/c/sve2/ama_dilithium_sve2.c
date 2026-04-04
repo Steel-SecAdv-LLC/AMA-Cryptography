@@ -85,8 +85,6 @@ void ama_dilithium_poly_pointwise_sve2(int32_t r[DILITHIUM_N],
                                         const int32_t b[DILITHIUM_N]) {
     for (int i = 0; i < DILITHIUM_N; i++) {
         r[i] = dil_montgomery_reduce_scalar_sve2((int64_t)a[i] * b[i]);
-        /* Conditional add q for [0, q) range */
-        if (r[i] < 0) r[i] += DILITHIUM_Q;
     }
 }
 

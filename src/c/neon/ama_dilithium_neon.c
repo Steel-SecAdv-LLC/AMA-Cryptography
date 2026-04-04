@@ -244,7 +244,6 @@ void ama_dilithium_poly_pointwise_neon(int32_t r[DILITHIUM_N],
         int32x4_t va = vld1q_s32(a + i * 4);
         int32x4_t vb = vld1q_s32(b + i * 4);
         int32x4_t vr = montgomery_mul_dil_neon(va, vb);
-        vr = caddq_neon(vr);
         vst1q_s32(r + i * 4, vr);
     }
 }
