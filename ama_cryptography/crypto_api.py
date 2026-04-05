@@ -148,6 +148,7 @@ def _enforce_invariant7() -> None:
             "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
         )
 
+
 # Import RFC 3161 timestamping
 try:
     from ama_cryptography.rfc3161_timestamp import (
