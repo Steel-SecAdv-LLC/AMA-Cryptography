@@ -107,6 +107,7 @@ def _hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
     INVARIANT-12: This is a secret-dependent operation; the native
     backend provides constant-time guarantees.
     """
+    _enforce_invariant7()
     return native_hmac_sha3_256(key, msg)
 
 
@@ -121,10 +122,31 @@ def _hkdf_sha3_256(
     INVARIANT-7 revised: no pure-Python fallback.  The import-time
     guard above ensures the native backend is always available.
     """
+    _enforce_invariant7()
     return native_hkdf(ikm, length, salt=salt, info=info)
 
 
 HMAC_HKDF_AVAILABLE = True  # Guaranteed by INVARIANT-7 import-time check
+
+
+def _enforce_invariant7() -> None:
+    """INVARIANT-7 call-time enforcement: refuse to operate if native backends
+    are no longer reachable.
+
+    Import-time guards catch the common case (library not built), but they
+    cannot detect a library that was unloaded, corrupted on disk, or had its
+    symbol table invalidated after the process started.  This function is
+    called at every cryptographic entry-point to provide defense-in-depth.
+    """
+    from ama_cryptography.pqc_backends import _native_lib
+
+    if _native_lib is None:
+        raise RuntimeError(
+            "INVARIANT-7 (call-time): Native C cryptographic library is not loaded. "
+            "The library refuses to operate without a constant-time backend. "
+            "Build the native C library: "
+            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
 
 # Import RFC 3161 timestamping
 try:
