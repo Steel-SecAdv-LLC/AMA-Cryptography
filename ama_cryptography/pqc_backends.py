@@ -1773,6 +1773,8 @@ def native_sha3_256(data: bytes) -> bytes:
             return _cy_sha3_fn(data)
         except Exception:
             raise
+        except (KeyboardInterrupt, SystemExit, GeneratorExit):
+            raise
         except BaseException as exc:
             raise RuntimeError(f"Cython SHA3-256 panic: {exc}") from exc
 
@@ -1920,6 +1922,8 @@ def hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
         try:
             return _cy_hmac_fn(key, msg)
         except Exception:
+            raise
+        except (KeyboardInterrupt, SystemExit, GeneratorExit):
             raise
         except BaseException as exc:
             raise RuntimeError(f"Cython HMAC-SHA3-256 panic: {exc}") from exc
