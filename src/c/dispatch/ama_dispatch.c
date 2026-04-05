@@ -16,6 +16,13 @@
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 
+/* Expose POSIX clock_gettime / CLOCK_MONOTONIC on glibc.
+ * Must precede all system headers.  Harmless on non-glibc platforms. */
+#if !defined(_POSIX_C_SOURCE) || _POSIX_C_SOURCE < 199309L
+#undef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 199309L
+#endif
+
 #include "ama_dispatch.h"
 #include <stdint.h>
 #include <stddef.h>

@@ -505,7 +505,8 @@ class SecureChannelInitiator:
             raise HandshakeError("Responder signature verification failed")
 
         # Derive session keys from shared secret
-        assert self._shared_secret is not None
+        if self._shared_secret is None:
+            raise HandshakeError("Shared secret not established during handshake")
         session = self._derive_session(response.session_id, self._shared_secret)
 
         # Clear handshake state
