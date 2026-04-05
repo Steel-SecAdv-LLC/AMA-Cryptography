@@ -1041,7 +1041,10 @@ def main() -> None:
     """Demonstrate complete AMA Cryptography system with all Omni-Codes."""
     # Ensure UTF-8 stdout on Windows so Unicode symbols render correctly
     if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]  # Python 3.7+ TextIOWrapper (LC-002)
+        import io
+
+        if isinstance(sys.stdout, io.TextIOWrapper):
+            sys.stdout.reconfigure(encoding="utf-8")
     print("\n" + "=" * 70)
     print("AMA Cryptography: SHA3-256 Security Hash")
     print("=" * 70)
