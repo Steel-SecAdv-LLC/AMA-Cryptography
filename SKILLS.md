@@ -72,7 +72,7 @@ python -m ama_cryptography            # Runs demo/POST
 
 The CI pipeline (`.github/workflows/ci.yml`) runs a cross-platform matrix:
 
-### Test Matrix (3 OS × 5 Python versions = 12 configurations)
+### Test Matrix (12 configurations: 2 OS × 5 Python + ARM64 × 2 Python)
 
 | OS | Python Versions | Notes |
 |----|----------------|-------|
