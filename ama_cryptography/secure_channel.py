@@ -133,9 +133,7 @@ class ChannelMessage:
         # Minimum: session_id(32) + seq(8) + nonce(12) + ct_len(4) + tag(16) = 72
         min_len = SESSION_ID_BYTES + 8 + NONCE_BYTES + 4 + TAG_BYTES
         if len(data) < min_len:
-            raise ChannelError(
-                f"Truncated ChannelMessage: {len(data)} bytes < minimum {min_len}"
-            )
+            raise ChannelError(f"Truncated ChannelMessage: {len(data)} bytes < minimum {min_len}")
 
         offset = 0
         session_id = data[offset : offset + SESSION_ID_BYTES]
