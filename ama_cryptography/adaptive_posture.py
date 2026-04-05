@@ -321,8 +321,11 @@ class PostureEvaluator:
         # Target state: zero deviations (stable cryptographic timing)
         target = zeros(n)
 
-        # Compute Lyapunov value V(x) = ||x - x*||^2
-        V = lyapunov_function(state, target)
+        # Compute Lyapunov value V(x) = ||x - x*||^2, normalized by
+        # dimension so the score is the mean squared deviation.  Without
+        # this normalization the value would grow as the deque fills from
+        # 5 to 50 elements, producing false instability signals.
+        V = lyapunov_function(state, target) / n
 
         # Establish baseline on first evaluation with enough data
         if self._lyapunov_baseline is None:

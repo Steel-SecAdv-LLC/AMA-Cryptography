@@ -398,11 +398,16 @@ class SecureSession:
         Uses HKDF-SHA3-256 to derive fresh send/recv keys from the
         current keys, ensuring that compromise of current keys does
         not reveal past plaintext (forward secrecy).
+
+        The info string is the same for both directions because the
+        Initiator's send_key equals the Responder's recv_key (and
+        vice versa).  Using a single info tag keeps the two sides
+        in sync after rekey.
         """
         from ama_cryptography.pqc_backends import native_hkdf
 
-        self.send_key = native_hkdf(self.send_key, KEY_BYTES, salt=None, info=b"ama-rekey-send")
-        self.recv_key = native_hkdf(self.recv_key, KEY_BYTES, salt=None, info=b"ama-rekey-recv")
+        self.send_key = native_hkdf(self.send_key, KEY_BYTES, salt=None, info=b"ama-rekey")
+        self.recv_key = native_hkdf(self.recv_key, KEY_BYTES, salt=None, info=b"ama-rekey")
         self.messages_since_rekey = 0
         logger.debug("Session %s re-keyed", self.session_id.hex()[:16])
 
