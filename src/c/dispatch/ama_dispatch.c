@@ -413,15 +413,23 @@ static void dispatch_init_internal(void) {
                      + (t1.tv_nsec - t0.tv_nsec);
 
         if (simd_ns > generic_ns) {
-            /* SIMD path is slower — revert to the best prior tier
-             * (NEON on AArch64, generic elsewhere) rather than always
-             * falling back to generic C. */
-            dispatch_table.keccak_f1600 = pre_sve2_keccak;
+            /* SIMD path is slower — revert to the best available
+             * fallback.  If SVE2 overrode a lower tier (e.g. NEON),
+             * revert to that tier.  Otherwise the current pointer IS
+             * pre_sve2_keccak (no SVE2 override happened), so fall
+             * back to generic C. */
+            if (pre_sve2_keccak != dispatch_table.keccak_f1600) {
+                dispatch_table.keccak_f1600 = pre_sve2_keccak;
+            } else {
+                dispatch_table.keccak_f1600 = ama_keccak_f1600_generic;
+            }
             if (dispatch_verbose())
                 fprintf(stderr,
                     "[AMA Dispatch] Auto-tune: SIMD keccak slower "
-                    "(%ld ns vs %ld ns generic) — reverted to generic\n",
-                    simd_ns, generic_ns);
+                    "(%ld ns vs %ld ns generic) — reverted to %s\n",
+                    simd_ns, generic_ns,
+                    dispatch_table.keccak_f1600 == ama_keccak_f1600_generic
+                        ? "generic" : "previous tier");
         } else {
             if (dispatch_verbose())
                 fprintf(stderr,
