@@ -274,7 +274,7 @@ class TestInvariant1NoStdlibHmac:
         ama_dir = Path("ama_cryptography")
         violations = []
         for py_file in ama_dir.glob("**/*.py"):
-            source = py_file.read_text()
+            source = py_file.read_text(encoding="utf-8")
             try:
                 tree = ast.parse(source)
             except SyntaxError:
@@ -293,7 +293,7 @@ class TestInvariant1NoStdlibHmac:
         import ast
         from pathlib import Path
 
-        source = Path("ama_cryptography/legacy_compat.py").read_text()
+        source = Path("ama_cryptography/legacy_compat.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -328,7 +328,7 @@ class TestNosecJustifications:
         import re
 
         bare_nosec = re.compile(r"#\s*nosec\s+B\d+\s*$")
-        with open(filepath) as f:
+        with open(filepath, encoding="utf-8") as f:
             for lineno, line in enumerate(f, 1):
                 if "# nosec" in line:
                     assert not bare_nosec.search(line.rstrip()), (

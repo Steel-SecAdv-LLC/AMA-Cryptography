@@ -49,6 +49,7 @@ import logging
 import secrets
 import struct
 import subprocess  # nosec B404 — subprocess used only with fixed OpenSSL commands for RFC 3161 (LC-001)
+import sys
 import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
@@ -1038,6 +1039,9 @@ def verify_crypto_package(
 
 def main() -> None:
     """Demonstrate complete AMA Cryptography system with all Omni-Codes."""
+    # Ensure UTF-8 stdout on Windows so Unicode symbols render correctly
+    if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]  # Python 3.7+ TextIOWrapper (LC-002)
     print("\n" + "=" * 70)
     print("AMA Cryptography: SHA3-256 Security Hash")
     print("=" * 70)
