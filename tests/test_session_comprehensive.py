@@ -452,7 +452,7 @@ class TestSessionStoreThreadSafety:
         sessions = [store.create() for _ in range(20)]
         errors = []
 
-        def getter(session_ids: list) -> None:
+        def getter(session_ids: "list[bytes]") -> None:
             for sid in session_ids:
                 try:
                     store.get(sid)
@@ -461,7 +461,7 @@ class TestSessionStoreThreadSafety:
                 except Exception as e:
                     errors.append(e)
 
-        def closer(session_ids: list) -> None:
+        def closer(session_ids: "list[bytes]") -> None:
             for sid in session_ids:
                 try:
                     store.close(sid)
