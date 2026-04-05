@@ -386,6 +386,10 @@ class SecureSession:
         self._replay_window.add(seq)
         # Slide window forward if needed
         while len(self._replay_window) > self.REPLAY_WINDOW_SIZE:
+            # Jump past gaps to avoid O(gap) iteration when sequence
+            # numbers are sparse (e.g. due to packet loss).
+            if self._replay_window_base not in self._replay_window:
+                self._replay_window_base = min(self._replay_window)
             self._replay_window.discard(self._replay_window_base)
             self._replay_window_base += 1
 

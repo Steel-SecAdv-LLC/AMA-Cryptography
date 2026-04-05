@@ -107,8 +107,12 @@ class ReplayWindow:
 
         self._seen.add(seq)
 
-        # Slide window forward when it exceeds capacity
+        # Slide window forward when it exceeds capacity.
+        # Jump past gaps to avoid O(gap) iteration when sequence
+        # numbers are sparse (e.g. due to packet loss).
         while len(self._seen) > self.window_size:
+            if self.base not in self._seen:
+                self.base = min(self._seen)
             self._seen.discard(self.base)
             self.base += 1
 

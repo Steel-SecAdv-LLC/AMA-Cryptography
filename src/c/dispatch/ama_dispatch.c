@@ -347,6 +347,11 @@ static void dispatch_init_internal(void) {
     }
 #endif
 
+    /* Save the pre-SVE2 keccak pointer (could be NEON or generic) so
+     * the auto-tuning fallback reverts to this rather than always
+     * falling back to generic C — which would skip the NEON tier. */
+    ama_keccak_f1600_fn pre_sve2_keccak = dispatch_table.keccak_f1600;
+
 #ifdef AMA_HAVE_SVE2_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_SVE2) {
         dispatch_table.keccak_f1600 = ama_keccak_f1600_sve2;
@@ -408,8 +413,10 @@ static void dispatch_init_internal(void) {
                      + (t1.tv_nsec - t0.tv_nsec);
 
         if (simd_ns > generic_ns) {
-            /* SIMD path is slower — revert to generic */
-            dispatch_table.keccak_f1600 = ama_keccak_f1600_generic;
+            /* SIMD path is slower — revert to the best prior tier
+             * (NEON on AArch64, generic elsewhere) rather than always
+             * falling back to generic C. */
+            dispatch_table.keccak_f1600 = pre_sve2_keccak;
             if (dispatch_verbose())
                 fprintf(stderr,
                     "[AMA Dispatch] Auto-tune: SIMD keccak slower "
