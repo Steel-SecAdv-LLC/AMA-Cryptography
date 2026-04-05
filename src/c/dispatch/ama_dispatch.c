@@ -370,7 +370,11 @@ static void dispatch_init_internal(void) {
      * implementation against generic.  If the SIMD path is slower (possible
      * for very small inputs due to dispatch overhead or unfavorable
      * microarchitecture), revert to the generic path.
+     *
+     * Note: Uses POSIX clock_gettime(); skipped on MSVC where it is
+     * unavailable.  On Windows the SIMD path is kept unconditionally.
      * ==================================================================== */
+#if !defined(_MSC_VER)
     if (dispatch_table.keccak_f1600 != ama_keccak_f1600_generic) {
         uint64_t state[25];
         memset(state, 0x42, sizeof(state));
@@ -419,6 +423,7 @@ static void dispatch_init_internal(void) {
                     simd_ns, generic_ns);
         }
     }
+#endif /* !_MSC_VER */
 
     if (dispatch_verbose()) {
         fprintf(stderr, "[AMA Dispatch] keccak_f1600 -> %s\n",

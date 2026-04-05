@@ -84,7 +84,8 @@ typedef void (*ama_dilithium_pointwise_fn)(int32_t r[256],
  *     Guaranteed non-NULL: keccak_f1600.
  *     Wired when SIMD detected: sha3_256, kyber_ntt, kyber_invntt,
  *     kyber_pointwise, dilithium_ntt, dilithium_invntt,
- *     dilithium_pointwise (AVX2, NEON, and SVE2).
+ *     dilithium_pointwise (AVX2 and NEON; SVE2 wires keccak_f1600,
+ *     kyber_*, and dilithium_* but not sha3_256).
  *   - NULL: no dispatch available; caller must use its own inline generic
  *     implementation.
  *

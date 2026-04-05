@@ -32,7 +32,7 @@ from datetime import timedelta
 from enum import Enum, auto
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
-from ama_cryptography.equations import lyapunov_derivative, lyapunov_function
+from ama_cryptography.equations import lyapunov_function
 
 logger = logging.getLogger(__name__)
 
@@ -330,7 +330,7 @@ class PostureEvaluator:
             return 0.0
 
         # Compute derivative proxy: V_dot ~ V_current - V_previous
-        V_dot = lyapunov_derivative(V)
+        V_dot = V - self._lyapunov_baseline
 
         # If Lyapunov derivative is positive, system is diverging (unstable)
         if V_dot > 0:
