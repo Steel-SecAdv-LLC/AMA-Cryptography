@@ -326,6 +326,7 @@ class TestHysteresis:
     def test_escalation_after_n_consecutive(self) -> None:
         evaluator = PostureEvaluator(
             elevated_threshold=0.3,
+            high_threshold=0.6,
             escalation_count=2,
         )
         evaluator._classify(0.5)
@@ -335,6 +336,7 @@ class TestHysteresis:
     def test_deescalation_requires_hysteresis_band(self) -> None:
         evaluator = PostureEvaluator(
             elevated_threshold=0.3,
+            high_threshold=0.6,
             hysteresis_band=0.05,
             escalation_count=1,
         )
