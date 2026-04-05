@@ -288,7 +288,7 @@ class SecureSession:
     created_at: float = field(default_factory=time.monotonic)
     ttl_seconds: float = SESSION_TTL_SECONDS
     messages_since_rekey: int = 0
-    _replay_window: set = field(default_factory=set)  # type: ignore[type-arg]
+    _replay_window: set = field(default_factory=set)  # type: ignore[type-arg]  # generic set used for seq-number tracking; parameterising adds no safety (SC-001)
     _replay_window_base: int = 0
     _state: ChannelState = ChannelState.ESTABLISHED
 
@@ -500,7 +500,7 @@ class SecureChannelInitiator:
         sig_provider = HybridSignatureProvider()
 
         # Verify responder's hybrid signature over the handshake transcript
-        transcript = self._handshake_hash + response.session_id  # type: ignore[operator]
+        transcript = self._handshake_hash + response.session_id  # type: ignore[operator]  # both operands are bytes at runtime; mypy cannot narrow Optional (SC-002)
         if not sig_provider.verify(transcript, response.signature, response.responder_public_key):
             raise HandshakeError("Responder signature verification failed")
 
