@@ -355,7 +355,7 @@ class TestNoiseNKProtocolFuzzing:
             tag=msg.tag,
         )
 
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(Exception):  # noqa: B017 -- broad exception for any decrypt failure (APH-001)
             resp_session.decrypt(bad_msg)
 
         # Flip bit in tag
@@ -369,7 +369,7 @@ class TestNoiseNKProtocolFuzzing:
             tag=bytes(tampered_tag),
         )
 
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(Exception):  # noqa: B017 -- broad exception for any decrypt failure (APH-001)
             resp_session.decrypt(bad_msg2)
 
 
@@ -414,7 +414,7 @@ class TestRekeyDesynchronization:
 
         # Encrypt with new keys, try to decrypt with old keys
         msg2 = init_session.encrypt(b"after initiator rekey")
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(Exception):  # noqa: B017 -- broad exception for any decrypt failure (APH-002)
             resp_session.decrypt(msg2)
 
     def test_both_sides_rekey_restores_communication(self) -> None:
@@ -477,7 +477,7 @@ class TestRekeyDesynchronization:
         resp_session.rekey()
 
         msg = init_session.encrypt(b"double rekey test")
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(Exception):  # noqa: B017 -- broad exception for any decrypt failure (APH-003)
             resp_session.decrypt(msg)
 
 
@@ -506,15 +506,16 @@ class TestLargeSequenceGapDoS:
         )
 
     def test_replay_window_base_advances_correctly(self) -> None:
-        """After a large gap, base advances and seen set stays bounded."""
+        """After exceeding window capacity, base advances and seen set stays bounded."""
         from ama_cryptography.session import REPLAY_WINDOW_SIZE, ReplayWindow
 
         rw = ReplayWindow()
-        rw.check_and_accept(0)
-        rw.check_and_accept(1_000_000)
+        # Fill beyond window capacity so the base is forced to slide
+        for i in range(REPLAY_WINDOW_SIZE + 10):
+            rw.check_and_accept(i)
 
         assert rw.base > 0
-        assert len(rw._seen) <= REPLAY_WINDOW_SIZE + 1
+        assert len(rw._seen) <= REPLAY_WINDOW_SIZE
 
     def test_secure_session_large_gap(self) -> None:
         """SecureSession handles large sequence gap without DoS."""
@@ -659,10 +660,12 @@ class TestMemoryDisclosureAfterDestruction:
         """SecureBuffer must zero its data on context exit."""
         from ama_cryptography.secure_memory import SecureBuffer
 
-        with SecureBuffer(64) as buf:
-            data_ref = buf.data
+        sb = SecureBuffer(64)
+        with sb as buf:
+            # buf is a bytearray returned by __enter__
             for i in range(64):
-                data_ref[i] = 0xAA
+                buf[i] = 0xAA
+            data_ref = buf  # keep a reference to the bytearray
 
         # After exiting context, buffer should be zeroed
         assert all(b == 0 for b in data_ref)

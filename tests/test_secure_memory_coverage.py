@@ -65,7 +65,7 @@ class TestSecureMemzero:
         from ama_cryptography.secure_memory import secure_memzero
 
         with pytest.raises(TypeError):
-            secure_memzero("not a buffer")  # type: ignore[arg-type]
+            secure_memzero("not a buffer")  # type: ignore[arg-type] -- intentional wrong type for test (SMC-001)
 
     def test_large_buffer(self) -> None:
         """secure_memzero works with large buffers."""
@@ -149,22 +149,25 @@ class TestSecureBuffer:
     """Test SecureBuffer context manager."""
 
     def test_basic_usage(self) -> None:
-        """SecureBuffer provides a writable buffer inside context."""
+        """SecureBuffer provides a writable bytearray inside context."""
         from ama_cryptography.secure_memory import SecureBuffer
 
-        with SecureBuffer(64) as buf:
-            assert buf.size == 64
-            data = buf.data
+        sb = SecureBuffer(64)
+        assert sb.size == 64
+        with sb as buf:
+            assert isinstance(buf, bytearray)
+            assert len(buf) == 64
             for i in range(64):
-                data[i] = 0xAA
-            assert data[0] == 0xAA
+                buf[i] = 0xAA
+            assert buf[0] == 0xAA
 
     def test_zeroed_on_exit(self) -> None:
         """SecureBuffer is zeroed when exiting context."""
         from ama_cryptography.secure_memory import SecureBuffer
 
-        with SecureBuffer(32) as buf:
-            data_ref = buf.data
+        sb = SecureBuffer(32)
+        with sb as buf:
+            data_ref = buf
             for i in range(32):
                 data_ref[i] = 0xFF
 
@@ -189,15 +192,19 @@ class TestSecureBuffer:
         """Zero-size buffer is valid."""
         from ama_cryptography.secure_memory import SecureBuffer
 
-        with SecureBuffer(0) as buf:
-            assert buf.size == 0
+        sb = SecureBuffer(0)
+        assert sb.size == 0
+        with sb as buf:
+            assert len(buf) == 0
 
     def test_size_property(self) -> None:
         """size property returns correct value."""
         from ama_cryptography.secure_memory import SecureBuffer
 
-        with SecureBuffer(128) as buf:
-            assert buf.size == 128
+        sb = SecureBuffer(128)
+        assert sb.size == 128
+        with sb as buf:
+            assert len(buf) == 128
 
 
 # ===========================================================================

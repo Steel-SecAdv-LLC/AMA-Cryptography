@@ -540,7 +540,7 @@ class TestAESGCMFunctions:
         aad = b"associated data"
 
         ct, tag = native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
-        pt = native_aes256_gcm_decrypt(key, nonce, ct, aad, tag)
+        pt = native_aes256_gcm_decrypt(key, nonce, ct, tag, aad)
         assert pt == plaintext
 
     def test_decrypt_tampered_tag(self) -> None:
@@ -558,7 +558,7 @@ class TestAESGCMFunctions:
         bad_tag = bytearray(tag)
         bad_tag[0] ^= 0xFF
         with pytest.raises((ValueError, RuntimeError)):
-            native_aes256_gcm_decrypt(key, nonce, ct, b"", bytes(bad_tag))
+            native_aes256_gcm_decrypt(key, nonce, ct, bytes(bad_tag), b"")
 
 
 # ===========================================================================
@@ -754,7 +754,7 @@ class TestAdditionalNativeFunctions:
         aad = b"additional"
 
         ct, tag = native_chacha20poly1305_encrypt(key, nonce, pt, aad)
-        result = native_chacha20poly1305_decrypt(key, nonce, ct, aad, tag)
+        result = native_chacha20poly1305_decrypt(key, nonce, ct, tag, aad)
         assert result == pt
 
     def test_ed25519_keypair_from_seed(self) -> None:

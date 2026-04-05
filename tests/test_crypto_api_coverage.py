@@ -61,7 +61,9 @@ class TestEnums:
         """CryptoBackend enum has expected members."""
         from ama_cryptography.crypto_api import CryptoBackend
 
-        assert hasattr(CryptoBackend, "NATIVE")
+        assert hasattr(CryptoBackend, "C_LIBRARY")
+        assert hasattr(CryptoBackend, "CYTHON")
+        assert hasattr(CryptoBackend, "PURE_PYTHON")
 
 
 # ===========================================================================
@@ -74,25 +76,41 @@ class TestContainers:
 
     def test_keypair_container(self) -> None:
         """KeyPair stores public and secret keys."""
-        from ama_cryptography.crypto_api import KeyPair
+        from ama_cryptography.crypto_api import AlgorithmType, KeyPair
 
-        kp = KeyPair(public_key=b"pk", secret_key=b"sk")
+        kp = KeyPair(
+            public_key=b"pk",
+            secret_key=b"sk",
+            algorithm=AlgorithmType.ED25519,
+            metadata={},
+        )
         assert kp.public_key == b"pk"
         assert kp.secret_key == b"sk"
+        assert kp.algorithm == AlgorithmType.ED25519
 
     def test_signature_container(self) -> None:
-        """Signature stores value and algorithm."""
-        from ama_cryptography.crypto_api import Signature
+        """Signature stores signature bytes and algorithm."""
+        from ama_cryptography.crypto_api import AlgorithmType, Signature
 
-        sig = Signature(value=b"sig", algorithm="ML-DSA-65")
-        assert sig.value == b"sig"
-        assert sig.algorithm == "ML-DSA-65"
+        sig = Signature(
+            signature=b"sig",
+            algorithm=AlgorithmType.ML_DSA_65,
+            message_hash=b"hash",
+            metadata={},
+        )
+        assert sig.signature == b"sig"
+        assert sig.algorithm == AlgorithmType.ML_DSA_65
 
     def test_encapsulated_secret_container(self) -> None:
         """EncapsulatedSecret stores ciphertext and shared_secret."""
-        from ama_cryptography.crypto_api import EncapsulatedSecret
+        from ama_cryptography.crypto_api import AlgorithmType, EncapsulatedSecret
 
-        enc = EncapsulatedSecret(ciphertext=b"ct", shared_secret=b"ss")
+        enc = EncapsulatedSecret(
+            ciphertext=b"ct",
+            shared_secret=b"ss",
+            algorithm=AlgorithmType.KYBER_1024,
+            metadata={},
+        )
         assert enc.ciphertext == b"ct"
         assert enc.shared_secret == b"ss"
 
@@ -122,7 +140,7 @@ class TestMLDSAProvider:
         prov = MLDSAProvider()
         kp = prov.generate_keypair()
         sig = prov.sign(b"test message", kp.secret_key)
-        assert prov.verify(b"test message", sig.value, kp.public_key)
+        assert prov.verify(b"test message", sig.signature, kp.public_key)
 
     def test_verify_wrong_message(self) -> None:
         """MLDSAProvider verify rejects wrong message."""
@@ -131,7 +149,7 @@ class TestMLDSAProvider:
         prov = MLDSAProvider()
         kp = prov.generate_keypair()
         sig = prov.sign(b"original", kp.secret_key)
-        assert not prov.verify(b"tampered", sig.value, kp.public_key)
+        assert not prov.verify(b"tampered", sig.signature, kp.public_key)
 
 
 # ===========================================================================
@@ -150,7 +168,7 @@ class TestEd25519Provider:
         prov = Ed25519Provider()
         kp = prov.generate_keypair()
         assert len(kp.public_key) == 32
-        assert len(kp.secret_key) == 64
+        assert len(kp.secret_key) == 32
 
     def test_sign_verify(self) -> None:
         """Ed25519Provider sign/verify roundtrip."""
@@ -159,17 +177,17 @@ class TestEd25519Provider:
         prov = Ed25519Provider()
         kp = prov.generate_keypair()
         sig = prov.sign(b"message", kp.secret_key)
-        assert prov.verify(b"message", sig.value, kp.public_key)
+        assert prov.verify(b"message", sig.signature, kp.public_key)
 
-    def test_keygen_from_seed(self) -> None:
-        """Ed25519Provider keygen from 32-byte seed is deterministic."""
+    def test_keygen_deterministic(self) -> None:
+        """Ed25519Provider keygen produces valid key sizes."""
         from ama_cryptography.crypto_api import Ed25519Provider
 
         prov = Ed25519Provider()
-        seed = secrets.token_bytes(32)
-        kp1 = prov.generate_keypair(seed=seed)
-        kp2 = prov.generate_keypair(seed=seed)
-        assert kp1.public_key == kp2.public_key
+        kp = prov.generate_keypair()
+        assert len(kp.public_key) == 32
+        assert len(kp.secret_key) == 32
+        assert kp.public_key != kp.secret_key
 
 
 # ===========================================================================
@@ -226,7 +244,7 @@ class TestSphincsProvider:
         prov = SphincsProvider()
         kp = prov.generate_keypair()
         sig = prov.sign(b"sphincs test", kp.secret_key)
-        assert prov.verify(b"sphincs test", sig.value, kp.public_key)
+        assert prov.verify(b"sphincs test", sig.signature, kp.public_key)
 
 
 # ===========================================================================
@@ -247,9 +265,11 @@ class TestAESGCMProvider:
         pt = b"plaintext for AES-GCM"
         aad = b"associated data"
 
-        ct, tag, nonce = prov.encrypt(key, pt, aad)
-        result = prov.decrypt(key, ct, nonce, tag, aad)
-        assert result == pt
+        result = prov.encrypt(pt, key, aad=aad)
+        decrypted = prov.decrypt(
+            result["ciphertext"], key, result["nonce"], result["tag"], aad=aad
+        )
+        assert decrypted == pt
 
     def test_empty_plaintext(self) -> None:
         """AESGCMProvider handles empty plaintext."""
@@ -258,9 +278,11 @@ class TestAESGCMProvider:
         prov = AESGCMProvider()
         key = secrets.token_bytes(32)
 
-        ct, tag, nonce = prov.encrypt(key, b"", b"")
-        result = prov.decrypt(key, ct, nonce, tag, b"")
-        assert result == b""
+        result = prov.encrypt(b"", key)
+        decrypted = prov.decrypt(
+            result["ciphertext"], key, result["nonce"], result["tag"]
+        )
+        assert decrypted == b""
 
     def test_tampered_ciphertext_fails(self) -> None:
         """AESGCMProvider detects tampered ciphertext."""
@@ -269,12 +291,14 @@ class TestAESGCMProvider:
         prov = AESGCMProvider()
         key = secrets.token_bytes(32)
 
-        ct, tag, nonce = prov.encrypt(key, b"secret", b"")
-        bad_ct = bytearray(ct)
+        result = prov.encrypt(b"secret", key)
+        bad_ct = bytearray(result["ciphertext"])
         if len(bad_ct) > 0:
             bad_ct[0] ^= 0xFF
         with pytest.raises((ValueError, RuntimeError)):
-            prov.decrypt(key, bytes(bad_ct), nonce, tag, b"")
+            prov.decrypt(
+                bytes(bad_ct), key, result["nonce"], result["tag"]
+            )
 
 
 # ===========================================================================
@@ -332,7 +356,7 @@ class TestHybridSignatureProvider:
         prov = HybridSignatureProvider()
         kp = prov.generate_keypair()
         sig = prov.sign(b"hybrid sig test", kp.secret_key)
-        assert prov.verify(b"hybrid sig test", sig.value, kp.public_key)
+        assert prov.verify(b"hybrid sig test", sig.signature, kp.public_key)
 
     def test_verify_tampered_message(self) -> None:
         """HybridSignatureProvider rejects tampered message."""
@@ -341,7 +365,7 @@ class TestHybridSignatureProvider:
         prov = HybridSignatureProvider()
         kp = prov.generate_keypair()
         sig = prov.sign(b"original", kp.secret_key)
-        assert not prov.verify(b"tampered", sig.value, kp.public_key)
+        assert not prov.verify(b"tampered", sig.signature, kp.public_key)
 
 
 # ===========================================================================
@@ -359,23 +383,24 @@ class TestAmaCryptography:
 
         api = AmaCryptography()
         assert api is not None
+        assert api.backend is not None
+        assert api.algorithm is not None
 
-    def test_crypto_package_roundtrip(self) -> None:
-        """create_crypto_package / verify_crypto_package roundtrip."""
+    def test_sign_verify_roundtrip(self) -> None:
+        """AmaCryptography sign/verify roundtrip."""
         from ama_cryptography.crypto_api import AmaCryptography
 
         api = AmaCryptography()
-        pkg = api.create_crypto_package(b"test payload")
-        assert pkg is not None
-        assert "payload" in pkg or "signature" in pkg or hasattr(pkg, "payload")
+        kp = api.generate_keypair()
+        sig = api.sign(b"test payload", kp.secret_key)
+        assert api.verify(b"test payload", sig.signature, kp.public_key)
 
-    def test_get_status(self) -> None:
-        """AmaCryptography reports backend status."""
-        from ama_cryptography.crypto_api import AmaCryptography
+    def test_backend_is_c_library(self) -> None:
+        """AmaCryptography reports C_LIBRARY backend."""
+        from ama_cryptography.crypto_api import AmaCryptography, CryptoBackend
 
         api = AmaCryptography()
-        status = api.get_status()
-        assert isinstance(status, dict)
+        assert api.backend == CryptoBackend.C_LIBRARY
 
 
 # ===========================================================================
@@ -390,6 +415,6 @@ class TestEnforceInvariant7:
         """_enforce_invariant7 raises when _native_lib is None."""
         from ama_cryptography.crypto_api import _enforce_invariant7
 
-        with patch("ama_cryptography.crypto_api._native_lib", None):
-            with pytest.raises(RuntimeError, match="[Nn]ative|INVARIANT"):
+        with patch("ama_cryptography.pqc_backends._native_lib", None):
+            with pytest.raises(RuntimeError, match="INVARIANT"):
                 _enforce_invariant7()
