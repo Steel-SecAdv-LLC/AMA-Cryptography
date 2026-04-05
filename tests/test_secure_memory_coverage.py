@@ -265,7 +265,7 @@ class TestSecureMlockMunlock:
         try:
             secure_mlock(buf)
         except (NotImplementedError, OSError, SecureMemoryError):
-            pass  # May not be available on all platforms
+            pass  # mlock may be unavailable or denied by OS (SMC-002)
 
     def test_munlock_bytearray(self) -> None:
         """secure_munlock on a bytearray does not crash."""
@@ -275,7 +275,7 @@ class TestSecureMlockMunlock:
         try:
             secure_munlock(buf)
         except (NotImplementedError, OSError, SecureMemoryError):
-            pass
+            pass  # munlock may be unavailable or denied by OS (SMC-003)
 
     def test_mlock_empty(self) -> None:
         """secure_mlock with empty data does not crash."""
@@ -284,7 +284,7 @@ class TestSecureMlockMunlock:
         try:
             secure_mlock(bytearray())
         except (NotImplementedError, OSError, SecureMemoryError):
-            pass
+            pass  # mlock on empty buffer — platform-dependent (SMC-004)
 
     def test_munlock_empty(self) -> None:
         """secure_munlock with empty data does not crash."""
@@ -293,7 +293,7 @@ class TestSecureMlockMunlock:
         try:
             secure_munlock(bytearray())
         except (NotImplementedError, OSError, SecureMemoryError):
-            pass
+            pass  # munlock on empty buffer — platform-dependent (SMC-005)
 
 
 # ===========================================================================
