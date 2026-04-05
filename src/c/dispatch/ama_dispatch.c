@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* ============================================================================
  * Platform once-primitive (mirrors ama_cpuid.c — INVARIANT-2 compliant)
@@ -354,6 +355,63 @@ static void dispatch_init_internal(void) {
         dispatch_table.dilithium_pointwise = ama_dilithium_poly_pointwise_sve2;
     }
 #endif
+
+    /* ====================================================================
+     * Phase 3: SIMD auto-tuning microbenchmark.
+     *
+     * Run a quick ~10ms benchmark comparing the selected SIMD Keccak-f1600
+     * implementation against generic.  If the SIMD path is slower (possible
+     * for very small inputs due to dispatch overhead or unfavorable
+     * microarchitecture), revert to the generic path.
+     * ==================================================================== */
+    if (dispatch_table.keccak_f1600 != ama_keccak_f1600_generic) {
+        uint64_t state[25];
+        memset(state, 0x42, sizeof(state));
+
+        /* Warm-up: 100 iterations each to fill caches / branch predictors */
+        for (int w = 0; w < 100; w++) {
+            ama_keccak_f1600_generic(state);
+        }
+        for (int w = 0; w < 100; w++) {
+            dispatch_table.keccak_f1600(state);
+        }
+
+        /* Benchmark generic: ~2000 iterations */
+        struct timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int i = 0; i < 2000; i++) {
+            ama_keccak_f1600_generic(state);
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        long generic_ns = (t1.tv_sec - t0.tv_sec) * 1000000000L
+                        + (t1.tv_nsec - t0.tv_nsec);
+
+        /* Benchmark SIMD: ~2000 iterations */
+        ama_keccak_f1600_fn simd_fn = dispatch_table.keccak_f1600;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int i = 0; i < 2000; i++) {
+            simd_fn(state);
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        long simd_ns = (t1.tv_sec - t0.tv_sec) * 1000000000L
+                     + (t1.tv_nsec - t0.tv_nsec);
+
+        if (simd_ns > generic_ns) {
+            /* SIMD path is slower — revert to generic */
+            dispatch_table.keccak_f1600 = ama_keccak_f1600_generic;
+            if (dispatch_verbose())
+                fprintf(stderr,
+                    "[AMA Dispatch] Auto-tune: SIMD keccak slower "
+                    "(%ld ns vs %ld ns generic) — reverted to generic\n",
+                    simd_ns, generic_ns);
+        } else {
+            if (dispatch_verbose())
+                fprintf(stderr,
+                    "[AMA Dispatch] Auto-tune: SIMD keccak OK "
+                    "(%ld ns vs %ld ns generic)\n",
+                    simd_ns, generic_ns);
+        }
+    }
 
     if (dispatch_verbose()) {
         fprintf(stderr, "[AMA Dispatch] keccak_f1600 -> %s\n",
