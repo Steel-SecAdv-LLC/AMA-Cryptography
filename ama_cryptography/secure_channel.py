@@ -378,7 +378,9 @@ class SecureSession:
         from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
 
         aad = self.session_id + struct.pack(">Q", seq)
-        plaintext = native_aes256_gcm_decrypt(self.recv_key, msg.nonce, msg.ciphertext, msg.tag, aad)
+        plaintext = native_aes256_gcm_decrypt(
+            self.recv_key, msg.nonce, msg.ciphertext, msg.tag, aad
+        )
 
         # Update replay window after successful decryption
         self._replay_window.add(seq)
@@ -399,12 +401,8 @@ class SecureSession:
         """
         from ama_cryptography.pqc_backends import native_hkdf
 
-        self.send_key = native_hkdf(
-            self.send_key, KEY_BYTES, salt=None, info=b"ama-rekey-send"
-        )
-        self.recv_key = native_hkdf(
-            self.recv_key, KEY_BYTES, salt=None, info=b"ama-rekey-recv"
-        )
+        self.send_key = native_hkdf(self.send_key, KEY_BYTES, salt=None, info=b"ama-rekey-send")
+        self.recv_key = native_hkdf(self.recv_key, KEY_BYTES, salt=None, info=b"ama-rekey-recv")
         self.messages_since_rekey = 0
         logger.debug("Session %s re-keyed", self.session_id.hex()[:16])
 
@@ -569,9 +567,7 @@ class SecureChannelResponder:
         self._kem = HybridKEMProvider()
         self._sig = HybridSignatureProvider()
 
-    def handle_handshake(
-        self, msg: HandshakeMessage
-    ) -> Tuple[HandshakeResponse, SecureSession]:
+    def handle_handshake(self, msg: HandshakeMessage) -> Tuple[HandshakeResponse, SecureSession]:
         """Process an incoming handshake and produce an authenticated response.
 
         Args:

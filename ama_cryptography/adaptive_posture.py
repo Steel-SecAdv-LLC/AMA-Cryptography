@@ -24,7 +24,6 @@ Version: 2.1
 """
 
 import logging
-import math
 import time
 import uuid
 from collections import deque
@@ -143,9 +142,9 @@ class PostureEvaluator:
     # false-positive rates: 1-in-750 (ELEVATED), 1-in-3.5M (HIGH),
     # 1-in-780B (CRITICAL).  The values below were calibrated against
     # the AMA benchmark suite (benchmark_suite.py) timing distributions.
-    DEFAULT_ELEVATED_THRESHOLD = 0.15   # 3-sigma: mild concern
-    DEFAULT_HIGH_THRESHOLD = 0.45       # 5-sigma: probable attack
-    DEFAULT_CRITICAL_THRESHOLD = 0.80   # 7-sigma: active side-channel
+    DEFAULT_ELEVATED_THRESHOLD = 0.15  # 3-sigma: mild concern
+    DEFAULT_HIGH_THRESHOLD = 0.45  # 5-sigma: probable attack
+    DEFAULT_CRITICAL_THRESHOLD = 0.80  # 7-sigma: active side-channel
 
     def __init__(
         self,
@@ -315,7 +314,7 @@ class PostureEvaluator:
             return 0.0
 
         # Build state vector from recent deviation history
-        from ama_cryptography._numeric import Vec, ones, zeros
+        from ama_cryptography._numeric import Vec, zeros
 
         n = len(self._timing_deviation_history)
         state = Vec(list(self._timing_deviation_history))

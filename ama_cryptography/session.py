@@ -101,13 +101,9 @@ class ReplayWindow:
             ReplayDetectedError: If sequence is replayed or below window
         """
         if seq < self.base:
-            raise ReplayDetectedError(
-                f"Sequence {seq} below window base {self.base} (too old)"
-            )
+            raise ReplayDetectedError(f"Sequence {seq} below window base {self.base} (too old)")
         if seq in self._seen:
-            raise ReplayDetectedError(
-                f"Sequence {seq} already received (replay)"
-            )
+            raise ReplayDetectedError(f"Sequence {seq} already received (replay)")
 
         self._seen.add(seq)
 
@@ -193,9 +189,7 @@ class SessionState:
             ReplayDetectedError: If sequence is replayed
         """
         if self.is_expired:
-            raise SessionExpiredError(
-                f"Session {self.session_id.hex()[:16]} expired"
-            )
+            raise SessionExpiredError(f"Session {self.session_id.hex()[:16]} expired")
         if self._closed:
             raise SessionError("Session is closed")
 
@@ -277,9 +271,7 @@ class SessionStore:
             self._cleanup_expired()
 
             if len(self._sessions) >= self.max_sessions:
-                raise SessionLimitError(
-                    f"Maximum sessions ({self.max_sessions}) reached"
-                )
+                raise SessionLimitError(f"Maximum sessions ({self.max_sessions}) reached")
 
             session_id = secrets.token_bytes(SESSION_ID_BYTES)
             session = SessionState(
@@ -307,14 +299,10 @@ class SessionStore:
         with self._lock:
             session = self._sessions.get(session_id)
             if session is None:
-                raise SessionNotFoundError(
-                    f"Session {session_id.hex()[:16]} not found"
-                )
+                raise SessionNotFoundError(f"Session {session_id.hex()[:16]} not found")
             if session.is_expired:
                 del self._sessions[session_id]
-                raise SessionExpiredError(
-                    f"Session {session_id.hex()[:16]} expired"
-                )
+                raise SessionExpiredError(f"Session {session_id.hex()[:16]} expired")
             return session
 
     def close(self, session_id: bytes) -> None:
@@ -329,9 +317,7 @@ class SessionStore:
         with self._lock:
             session = self._sessions.pop(session_id, None)
             if session is None:
-                raise SessionNotFoundError(
-                    f"Session {session_id.hex()[:16]} not found"
-                )
+                raise SessionNotFoundError(f"Session {session_id.hex()[:16]} not found")
             session.close()
             logger.debug("Closed session %s", session_id.hex()[:16])
 
@@ -359,9 +345,7 @@ class SessionStore:
 
     def _cleanup_expired(self) -> None:
         """Remove all expired sessions. Must be called with lock held."""
-        expired = [
-            sid for sid, s in self._sessions.items() if s.is_expired
-        ]
+        expired = [sid for sid, s in self._sessions.items() if s.is_expired]
         for sid in expired:
             self._sessions[sid].close()
             del self._sessions[sid]
