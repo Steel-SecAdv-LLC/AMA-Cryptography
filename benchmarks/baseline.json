@@ -1,10 +1,10 @@
 {
   "metadata": {
     "version": "2.1.0",
-    "created": "2026-04-03T00:00:00Z",
+    "created": "2026-04-05T00:00:00Z",
     "description": "AMA Cryptography performance baseline for regression detection",
     "system": "GitHub Actions shared runner, Linux x86-64, Python 3.11",
-    "notes": "v2.1.0 baseline recalibrated after Phase 2 SIMD dispatch wiring. All baselines set to 65% of measured performance to provide 35% regression headroom. SHA3-256 dispatches through AVX2 Keccak. Kyber NTT uses AVX2 for len>=16 layers. Ed25519 uses radix 2^51 field arithmetic (fe51.h). PQC benchmarks use native C library."
+    "notes": "v2.1.0 baseline recalibrated after INVARIANT-7 call-time enforcement and CI matrix expansion (Windows + ARM64). All baselines set to 65% of measured performance to provide 35% regression headroom. SHA3-256 dispatches through AVX2 Keccak. Kyber NTT uses AVX2 for len>=16 layers. Ed25519 uses radix 2^51 field arithmetic (fe51.h). PQC benchmarks use native C library."
   },
   "thresholds": {
     "regression_threshold_percent": 10,
@@ -15,7 +15,7 @@
     "ama_sha3_256_hash": {
       "description": "AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes)",
       "metric": "operations_per_second",
-      "baseline_value": 12450,
+      "baseline_value": 113388,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
@@ -23,7 +23,7 @@
     "hmac_sha3_256": {
       "description": "HMAC-SHA3-256 authentication (native C via ctypes)",
       "metric": "operations_per_second",
-      "baseline_value": 8370,
+      "baseline_value": 76215,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "tier": "microbenchmark"
@@ -31,7 +31,7 @@
     "ed25519_keygen": {
       "description": "Ed25519 key pair generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 3650,
+      "baseline_value": 10560,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
@@ -39,7 +39,7 @@
     "ed25519_sign": {
       "description": "Ed25519 signature generation (native C, expanded key)",
       "metric": "operations_per_second",
-      "baseline_value": 3470,
+      "baseline_value": 10430,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
@@ -47,7 +47,7 @@
     "ed25519_verify": {
       "description": "Ed25519 signature verification (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 1810,
+      "baseline_value": 5113,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
@@ -55,7 +55,7 @@
     "hkdf_derive": {
       "description": "HKDF-SHA3-256 key derivation (3 keys)",
       "metric": "operations_per_second",
-      "baseline_value": 5210,
+      "baseline_value": 53193,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
@@ -63,7 +63,7 @@
     "full_package_create": {
       "description": "Complete crypto package creation (with PQC)",
       "metric": "operations_per_second",
-      "baseline_value": 180,
+      "baseline_value": 746,
       "unit": "ops/sec",
       "tolerance_percent": 50,
       "tier": "complex_operation"
@@ -71,7 +71,7 @@
     "full_package_verify": {
       "description": "Complete crypto package verification (with PQC)",
       "metric": "operations_per_second",
-      "baseline_value": 320,
+      "baseline_value": 2044,
       "unit": "ops/sec",
       "tolerance_percent": 50,
       "tier": "complex_operation"
@@ -81,7 +81,7 @@
     "dilithium_keygen": {
       "description": "ML-DSA-65 (Dilithium) key pair generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 425,
+      "baseline_value": 1943,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true
@@ -89,7 +89,7 @@
     "dilithium_sign": {
       "description": "ML-DSA-65 (Dilithium) signature generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 240,
+      "baseline_value": 1918,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true
@@ -97,7 +97,7 @@
     "dilithium_verify": {
       "description": "ML-DSA-65 (Dilithium) signature verification (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 410,
+      "baseline_value": 4303,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true

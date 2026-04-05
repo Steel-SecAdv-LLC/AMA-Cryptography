@@ -87,9 +87,9 @@ class TestPostureEvaluatorInit:
     def test_default_initialization(self) -> None:
         """PostureEvaluator() should succeed with sensible defaults."""
         ev = PostureEvaluator()
-        assert ev.elevated_threshold == 0.3
-        assert ev.high_threshold == 0.6
-        assert ev.critical_threshold == 0.85
+        assert ev.elevated_threshold == 0.15  # 3-sigma calibrated
+        assert ev.high_threshold == 0.45  # 5-sigma calibrated
+        assert ev.critical_threshold == 0.80  # 7-sigma calibrated
         assert ev.decay_rate == 0.95
 
     def test_default_threat_level_is_nominal(self) -> None:

@@ -192,9 +192,10 @@ class CMakeBuild(build_ext):
     """Custom build_ext command that builds CMake projects."""
 
     def run(self):
-        # Skip if no extensions to build
-        if not self.extensions:
-            return
+        # Always run CMake to build the native C library, even when there
+        # are no Cython extensions.  The native C library is the primary
+        # cryptographic backend (INVARIANT-7) and must be built for the
+        # package to function.  Cython extensions are optional.
 
         # Check if CMake is available
         try:

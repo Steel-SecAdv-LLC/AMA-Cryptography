@@ -28,6 +28,7 @@ import logging
 import os
 import pathlib
 import secrets
+import time
 import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -35,6 +36,10 @@ from enum import Enum, auto
 from typing import Any, ClassVar, Dict, List, Mapping, Optional, Tuple, Union
 
 from ama_cryptography._self_test import check_operational as _check_operational
+from ama_cryptography_monitor import AmaCryptographyMonitor, create_monitor
+
+# Module-level 3R monitor instance — feeds timing data to anomaly detection
+_monitor: AmaCryptographyMonitor = create_monitor(enabled=True)
 
 # Import HMAC and HKDF from pqc_backends (native C) with pure-Python fallback
 from ama_cryptography.pqc_backends import (
@@ -102,6 +107,7 @@ def _hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
     INVARIANT-12: This is a secret-dependent operation; the native
     backend provides constant-time guarantees.
     """
+    _enforce_invariant7()
     return native_hmac_sha3_256(key, msg)
 
 
@@ -116,10 +122,32 @@ def _hkdf_sha3_256(
     INVARIANT-7 revised: no pure-Python fallback.  The import-time
     guard above ensures the native backend is always available.
     """
+    _enforce_invariant7()
     return native_hkdf(ikm, length, salt=salt, info=info)
 
 
 HMAC_HKDF_AVAILABLE = True  # Guaranteed by INVARIANT-7 import-time check
+
+
+def _enforce_invariant7() -> None:
+    """INVARIANT-7 call-time enforcement: refuse to operate if native backends
+    are no longer reachable.
+
+    Import-time guards catch the common case (library not built), but they
+    cannot detect a library that was unloaded, corrupted on disk, or had its
+    symbol table invalidated after the process started.  This function is
+    called at every cryptographic entry-point to provide defense-in-depth.
+    """
+    from ama_cryptography.pqc_backends import _native_lib
+
+    if _native_lib is None:
+        raise RuntimeError(
+            "INVARIANT-7 (call-time): Native C cryptographic library is not loaded. "
+            "The library refuses to operate without a constant-time backend. "
+            "Build the native C library: "
+            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
+
 
 # Import RFC 3161 timestamping
 try:
@@ -1924,10 +1952,13 @@ def create_crypto_package(
     kem_ciphertext: Optional[bytes] = None
     kem_shared_secret: Optional[bytes] = None
 
-    # Generate primary signature
+    # Generate primary signature (with 3R timing instrumentation)
     primary_crypto = AmaCryptography(algorithm=config.signature_algorithm)
     primary_keypair = primary_crypto.generate_keypair()
+    _t0 = time.perf_counter_ns()
     primary_signature = primary_crypto.sign(content, primary_keypair.secret_key)
+    _sign_ns = time.perf_counter_ns() - _t0
+    _monitor.monitor_crypto_operation("sign", _sign_ns / 1_000_000)
     keypairs[config.signature_algorithm.name] = primary_keypair
 
     # Optional add-on: SPHINCS+ secondary signature
@@ -1940,7 +1971,10 @@ def create_crypto_package(
             )
         sphincs_provider = SphincsProvider()
         sphincs_keypair = sphincs_provider.generate_keypair()
+        _t0 = time.perf_counter_ns()
         sphincs_signature = sphincs_provider.sign(content, sphincs_keypair.secret_key)
+        _sphincs_ns = time.perf_counter_ns() - _t0
+        _monitor.monitor_crypto_operation("sphincs_sign", _sphincs_ns / 1_000_000)
         keypairs["SPHINCS_256F"] = sphincs_keypair
 
     # ========================================================================
@@ -1971,7 +2005,10 @@ def create_crypto_package(
             )
         kyber_provider = KyberProvider()
         kyber_keypair = kyber_provider.generate_keypair()
+        _t0 = time.perf_counter_ns()
         encapsulated = kyber_provider.encapsulate(kyber_keypair.public_key)
+        _encaps_ns = time.perf_counter_ns() - _t0
+        _monitor.monitor_crypto_operation("encrypt", _encaps_ns / 1_000_000)
         kem_ciphertext = encapsulated.ciphertext
         kem_shared_secret = encapsulated.shared_secret
         keypairs["KYBER_1024"] = kyber_keypair
@@ -2085,11 +2122,14 @@ def verify_crypto_package(
     if sig_alg_name in package.keypairs:
         try:
             primary_crypto = AmaCryptography(algorithm=sig_alg)
+            _t0 = time.perf_counter_ns()
             results["primary_signature"] = primary_crypto.verify(
                 content,
                 package.primary_signature.signature,
                 package.keypairs[sig_alg_name].public_key,
             )
+            _verify_ns = time.perf_counter_ns() - _t0
+            _monitor.monitor_crypto_operation("verify", _verify_ns / 1_000_000)
         except Exception as exc:
             logger.error("Layer 3 signature verification error: %s", exc)
             results["primary_signature"] = False
@@ -2158,10 +2198,13 @@ def verify_crypto_package(
     ):
         try:
             kyber_provider = KyberProvider()
+            _t0 = time.perf_counter_ns()
             decapsulated_ss = kyber_provider.decapsulate(
                 package.kem_ciphertext,
                 package.keypairs["KYBER_1024"].secret_key,
             )
+            _decaps_ns = time.perf_counter_ns() - _t0
+            _monitor.monitor_crypto_operation("decrypt", _decaps_ns / 1_000_000)
             from ama_cryptography.secure_memory import constant_time_compare as _ct2
 
             results["kem"] = _ct2(decapsulated_ss, package.kem_shared_secret)

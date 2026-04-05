@@ -16,12 +16,20 @@
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 
+/* Expose POSIX clock_gettime / CLOCK_MONOTONIC on glibc.
+ * Must precede all system headers.  Harmless on non-glibc platforms. */
+#if !defined(_POSIX_C_SOURCE) || _POSIX_C_SOURCE < 199309L
+#undef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 199309L
+#endif
+
 #include "ama_dispatch.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* ============================================================================
  * Platform once-primitive (mirrors ama_cpuid.c — INVARIANT-2 compliant)
@@ -189,6 +197,23 @@ extern void ama_dilithium_poly_pointwise_neon(int32_t r[256],
                                                const int32_t b[256]);
 #endif
 
+#ifdef AMA_HAVE_SVE2_IMPL
+extern void ama_keccak_f1600_sve2(uint64_t state[25]);
+extern void ama_kyber_ntt_sve2(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_kyber_invntt_sve2(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_kyber_poly_pointwise_sve2(int16_t r[256],
+                                           const int16_t a[256],
+                                           const int16_t b[256],
+                                           const int16_t zetas[128]);
+extern void ama_dilithium_ntt_sve2(int32_t poly[256],
+                                    const int32_t zetas[256]);
+extern void ama_dilithium_invntt_sve2(int32_t poly[256],
+                                       const int32_t zetas[256]);
+extern void ama_dilithium_poly_pointwise_sve2(int32_t r[256],
+                                               const int32_t a[256],
+                                               const int32_t b[256]);
+#endif
+
 
 /* Check if AMA_DISPATCH_VERBOSE=1 is set at runtime. */
 static int dispatch_verbose(void) {
@@ -321,6 +346,99 @@ static void dispatch_init_internal(void) {
         dispatch_table.dilithium_pointwise = ama_dilithium_poly_pointwise_neon;
     }
 #endif
+
+    /* Save the pre-SVE2 keccak pointer (could be NEON or generic) so
+     * the auto-tuning fallback reverts to this rather than always
+     * falling back to generic C — which would skip the NEON tier. */
+    ama_keccak_f1600_fn pre_sve2_keccak = dispatch_table.keccak_f1600;
+
+#ifdef AMA_HAVE_SVE2_IMPL
+    if (dispatch_info.sha3 >= AMA_IMPL_SVE2) {
+        dispatch_table.keccak_f1600 = ama_keccak_f1600_sve2;
+    }
+    if (dispatch_info.kyber >= AMA_IMPL_SVE2) {
+        dispatch_table.kyber_ntt       = ama_kyber_ntt_sve2;
+        dispatch_table.kyber_invntt    = ama_kyber_invntt_sve2;
+        dispatch_table.kyber_pointwise = ama_kyber_poly_pointwise_sve2;
+    }
+    if (dispatch_info.dilithium >= AMA_IMPL_SVE2) {
+        dispatch_table.dilithium_ntt       = ama_dilithium_ntt_sve2;
+        dispatch_table.dilithium_invntt    = ama_dilithium_invntt_sve2;
+        dispatch_table.dilithium_pointwise = ama_dilithium_poly_pointwise_sve2;
+    }
+#endif
+
+    /* ====================================================================
+     * Phase 3: SIMD auto-tuning microbenchmark.
+     *
+     * Run a quick ~10ms benchmark comparing the selected SIMD Keccak-f1600
+     * implementation against generic.  If the SIMD path is slower (possible
+     * for very small inputs due to dispatch overhead or unfavorable
+     * microarchitecture), revert to the generic path.
+     *
+     * Note: Uses POSIX clock_gettime(); skipped on MSVC where it is
+     * unavailable.  On Windows the SIMD path is kept unconditionally.
+     * ==================================================================== */
+#if !defined(_MSC_VER)
+    if (dispatch_table.keccak_f1600 != ama_keccak_f1600_generic) {
+        uint64_t state[25];
+        memset(state, 0x42, sizeof(state));
+
+        /* Warm-up: 100 iterations each to fill caches / branch predictors */
+        for (int w = 0; w < 100; w++) {
+            ama_keccak_f1600_generic(state);
+        }
+        for (int w = 0; w < 100; w++) {
+            dispatch_table.keccak_f1600(state);
+        }
+
+        /* Benchmark generic: ~2000 iterations */
+        struct timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int i = 0; i < 2000; i++) {
+            ama_keccak_f1600_generic(state);
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        long generic_ns = (t1.tv_sec - t0.tv_sec) * 1000000000L
+                        + (t1.tv_nsec - t0.tv_nsec);
+
+        /* Benchmark SIMD: ~2000 iterations */
+        ama_keccak_f1600_fn simd_fn = dispatch_table.keccak_f1600;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int i = 0; i < 2000; i++) {
+            simd_fn(state);
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        long simd_ns = (t1.tv_sec - t0.tv_sec) * 1000000000L
+                     + (t1.tv_nsec - t0.tv_nsec);
+
+        if (simd_ns > generic_ns) {
+            /* SIMD path is slower — revert to the best available
+             * fallback.  If SVE2 overrode a lower tier (e.g. NEON),
+             * revert to that tier.  Otherwise the current pointer IS
+             * pre_sve2_keccak (no SVE2 override happened), so fall
+             * back to generic C. */
+            if (pre_sve2_keccak != dispatch_table.keccak_f1600) {
+                dispatch_table.keccak_f1600 = pre_sve2_keccak;
+            } else {
+                dispatch_table.keccak_f1600 = ama_keccak_f1600_generic;
+            }
+            if (dispatch_verbose())
+                fprintf(stderr,
+                    "[AMA Dispatch] Auto-tune: SIMD keccak slower "
+                    "(%ld ns vs %ld ns generic) — reverted to %s\n",
+                    simd_ns, generic_ns,
+                    dispatch_table.keccak_f1600 == ama_keccak_f1600_generic
+                        ? "generic" : "previous tier");
+        } else {
+            if (dispatch_verbose())
+                fprintf(stderr,
+                    "[AMA Dispatch] Auto-tune: SIMD keccak OK "
+                    "(%ld ns vs %ld ns generic)\n",
+                    simd_ns, generic_ns);
+        }
+    }
+#endif /* !_MSC_VER */
 
     if (dispatch_verbose()) {
         fprintf(stderr, "[AMA Dispatch] keccak_f1600 -> %s\n",

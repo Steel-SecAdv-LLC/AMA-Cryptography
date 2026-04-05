@@ -546,23 +546,33 @@ class TestMainFunction:
 
     def test_main_runs_successfully(self) -> None:
         """Test that main function runs without errors."""
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
         result = subprocess.run(
             [sys.executable, "-m", "ama_cryptography"],
             capture_output=True,
             text=True,
             timeout=120,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
         assert result.returncode == 0
 
     def test_main_produces_expected_output(self) -> None:
         """Test that main function produces expected output."""
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
         result = subprocess.run(
             [sys.executable, "-m", "ama_cryptography"],
             capture_output=True,
             text=True,
             timeout=120,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
-        output = result.stdout
+        output = result.stdout or ""
         assert "AMA Cryptography" in output
         assert "Generating key management system" in output
         assert "Creating Omni-Code cryptographic package" in output
@@ -578,6 +588,7 @@ class TestMainFunction:
             env = os.environ.copy()
             env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
 
+            env["PYTHONUTF8"] = "1"
             result = subprocess.run(
                 [sys.executable, "-m", "ama_cryptography"],
                 capture_output=True,
@@ -585,6 +596,8 @@ class TestMainFunction:
                 timeout=120,
                 cwd=tmpdir,
                 env=env,
+                encoding="utf-8",
+                errors="replace",
             )
             assert result.returncode == 0
 
@@ -601,6 +614,7 @@ class TestMainFunction:
             env = os.environ.copy()
             env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
 
+            env["PYTHONUTF8"] = "1"
             subprocess.run(
                 [sys.executable, "-m", "ama_cryptography"],
                 capture_output=True,

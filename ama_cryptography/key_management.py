@@ -49,6 +49,23 @@ if not _HMAC_SHA512_NATIVE:
     )
 
 
+def _enforce_invariant7_km() -> None:
+    """INVARIANT-7 call-time enforcement for key_management module.
+
+    Mirrors crypto_api._enforce_invariant7() — verifies the native C
+    library is still loaded before every cryptographic operation.
+    """
+    from ama_cryptography.pqc_backends import _native_lib
+
+    if _native_lib is None:
+        raise RuntimeError(
+            "INVARIANT-7 (call-time): Native C cryptographic library is not loaded. "
+            "The library refuses to operate without a constant-time backend. "
+            "Build the native C library: "
+            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
+
+
 def _hmac_sha512(key: bytes, data: bytes) -> bytes:
     """HMAC-SHA-512 via native C backend (RFC 2104).
 
@@ -58,6 +75,7 @@ def _hmac_sha512(key: bytes, data: bytes) -> bytes:
     constant-time backend.
     Does NOT use the stdlib ``hmac`` module (INVARIANT-1).
     """
+    _enforce_invariant7_km()
     result: bytes = native_hmac_sha512(key, data)
     return result
 

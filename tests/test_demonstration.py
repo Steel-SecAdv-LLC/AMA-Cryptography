@@ -31,6 +31,7 @@ AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 """
 
+import os
 import subprocess
 import sys
 
@@ -50,11 +51,16 @@ class TestDemonstration:
         - All cryptographic operations complete
         """
         # Run the demonstration via package entry point
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
         result = subprocess.run(
             [sys.executable, "-m", "ama_cryptography"],
             capture_output=True,
             text=True,
             timeout=60,  # 60 second timeout
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
 
         # Check exit code
@@ -78,14 +84,19 @@ class TestDemonstration:
         - Final success message is displayed
         """
         # Run the demonstration via package entry point
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
         result = subprocess.run(
             [sys.executable, "-m", "ama_cryptography"],
             capture_output=True,
             text=True,
             timeout=60,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
 
-        output = result.stdout
+        output = result.stdout or ""
 
         # Critical output checks
         required_outputs = [
@@ -120,11 +131,16 @@ class TestDemonstration:
         from external processes.
         """
         # Run the demonstration via package entry point
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
         result = subprocess.run(
             [sys.executable, "-m", "ama_cryptography"],
             capture_output=True,
             text=True,
             timeout=60,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
 
         # First, verify the script completed successfully
@@ -183,11 +199,16 @@ except Exception:
     sys.exit(0)
 """
 
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
         quantum_check = subprocess.run(
             [sys.executable, "-c", test_script],
             capture_output=True,
             text=True,
             timeout=30,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
 
         quantum_available = "native_available" in quantum_check.stdout
@@ -198,6 +219,9 @@ except Exception:
             capture_output=True,
             text=True,
             timeout=60,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
 
         # Test should pass regardless of quantum library availability
@@ -244,11 +268,16 @@ class TestErrorHandling:
         - Quantum-resistant signatures are generated
         - All verifications pass
         """
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
         result = subprocess.run(
             [sys.executable, "-m", "ama_cryptography"],
             capture_output=True,
             text=True,
             timeout=60,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
 
         # Should complete successfully

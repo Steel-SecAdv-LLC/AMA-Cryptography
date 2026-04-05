@@ -12,13 +12,20 @@ permissions:
 
 jobs:
   test:
-    name: Test on Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    name: Test ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        include:
+          # ARM64 (AArch64) runners — GitHub-hosted ubuntu arm64
+          - os: ubuntu-24.04-arm
+            python-version: "3.11"
+          - os: ubuntu-24.04-arm
+            python-version: "3.13"
 
     steps:
     - name: Checkout code
@@ -30,15 +37,28 @@ jobs:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
 
-    - name: Install system dependencies
+    - name: Install system dependencies (Linux)
+      if: runner.os == 'Linux'
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential cmake
 
-    - name: Build native C library
+    - name: Install system dependencies (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+
+    - name: Build native C library (Linux)
+      if: runner.os == 'Linux'
       run: |
         cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
         cmake --build build -j$(nproc)
+
+    - name: Build native C library (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+        cmake --build build --config Release --parallel
 
     - name: Install Python dependencies
       run: |
@@ -47,6 +67,7 @@ jobs:
         pip install -e ".[dev]"
 
     - name: Verify module integrity digest is current
+      shell: bash
       run: |
         python -c "
         from ama_cryptography._self_test import verify_module_integrity
@@ -60,6 +81,7 @@ jobs:
         "
 
     - name: Verify crypto backends are available
+      shell: bash
       run: |
         python -c "
         from ama_cryptography.pqc_backends import (
@@ -92,6 +114,7 @@ jobs:
         python -m pytest tests/ -v --tb=short --no-cov
 
     - name: Run NIST KAT tests (if oqs available)
+      if: runner.os == 'Linux'
       run: |
         if python -c "import oqs"; then
           echo "oqs available — running KAT tests (hard-fail)"
@@ -101,17 +124,24 @@ jobs:
         fi
 
     - name: Run demonstration
+      env:
+        PYTHONUTF8: "1"
       run: |
         python -m ama_cryptography
 
     - name: Verify demonstration output
+      shell: bash
       run: |
         python -c "
+        import os
         import subprocess
         import sys
 
-        result = subprocess.run(['python', '-m', 'ama_cryptography'],
-                              capture_output=True, text=True, timeout=60)
+        env = os.environ.copy()
+        env['PYTHONUTF8'] = '1'
+        result = subprocess.run([sys.executable, '-m', 'ama_cryptography'],
+                              capture_output=True, text=True, timeout=60,
+                              encoding='utf-8', errors='replace', env=env)
 
         if result.returncode != 0:
             print('ERROR: Demonstration failed')

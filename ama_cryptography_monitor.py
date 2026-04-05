@@ -1527,7 +1527,9 @@ class AmaCryptographyMonitor:
     integrity or performance.
 
     Design Principles:
-    - Opt-in: Disabled by default for zero overhead
+    - Enabled by default: Production-ready anomaly detection out of the
+      box (per engineering brief Task 2).  Callers who need zero-overhead
+      operation should pass ``enabled=False`` explicitly.
     - Non-invasive: Read-only analysis, never modifies crypto code
     - Lightweight: <2% performance overhead when enabled
     - Observable: Comprehensive reporting for security teams
@@ -1541,7 +1543,7 @@ class AmaCryptographyMonitor:
 
     def __init__(
         self,
-        enabled: bool = False,
+        enabled: bool = True,
         alert_retention: int = 1000,
         nonce_persist_path: Optional[str] = None,
     ) -> None:
@@ -1549,8 +1551,8 @@ class AmaCryptographyMonitor:
         Initialize monitor.
 
         Args:
-            enabled: Whether monitoring is active. Default False for
-                zero-overhead operation when not needed.
+            enabled: Whether monitoring is active. Default True for
+                production-ready anomaly detection out of the box.
             alert_retention: Maximum alerts to retain in memory.
                 Prevents unbounded memory growth.
             nonce_persist_path: Path for nonce tracker persistence file.
@@ -1800,12 +1802,14 @@ class AmaCryptographyMonitor:
 # Module-level convenience functions
 
 
-def create_monitor(enabled: bool = False, alert_retention: int = 1000) -> AmaCryptographyMonitor:
+def create_monitor(enabled: bool = True, alert_retention: int = 1000) -> AmaCryptographyMonitor:
     """
     Factory function for creating monitor instances.
 
     Args:
-        enabled: Whether monitoring is active
+        enabled: Whether monitoring is active.  Default ``True`` for
+            production-ready anomaly detection.  Pass ``False`` for
+            zero-overhead operation when monitoring is not needed.
         alert_retention: Maximum alerts to retain
 
     Returns:

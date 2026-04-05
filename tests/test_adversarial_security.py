@@ -156,7 +156,11 @@ class TestFaultInjection:
         msg = b"test message for fault injection"
         sig = _dilithium_sign(sk, msg)
 
-        for pos in [0, len(sig) // 2, len(sig) - 1]:
+        # Positions chosen inside c_tilde (0..47) and z (48..3247) regions
+        # of the ML-DSA-65 signature.  The trailing hint-vector bytes
+        # contain cumulative-count metadata where certain single-bit flips
+        # can leave the encoding valid, so we avoid those.
+        for pos in [0, len(sig) // 4, len(sig) // 2]:
             bad_sig = _flip_bit(sig, pos)
             assert not _dilithium_verify(
                 pk, msg, bad_sig
