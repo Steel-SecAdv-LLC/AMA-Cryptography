@@ -602,8 +602,10 @@ class SecureChannelResponder:
             static_sig_pk: Responder's hybrid signature public key
                 (Ed25519 pk || ML-DSA-65 pk)
         """
-        from ama_cryptography.crypto_api import (HybridKEMProvider,
-                                                 HybridSignatureProvider)
+        from ama_cryptography.crypto_api import (
+            HybridKEMProvider,
+            HybridSignatureProvider,
+        )
 
         self._kem_sk = static_kem_sk
         self._sig_sk = static_sig_sk
