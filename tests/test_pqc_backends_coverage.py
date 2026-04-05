@@ -13,6 +13,7 @@ all public cryptographic functions.
 AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
 """
 
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -89,6 +90,7 @@ class TestPlatformDetection:
         dir_strs = [str(d) for d in dirs]
         assert any("build" in s for s in dir_strs)
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="LD_LIBRARY_PATH is Unix-only")
     def test_get_search_dirs_with_ld_library_path(self) -> None:
         """LD_LIBRARY_PATH entries are included in search dirs."""
         with patch.dict("os.environ", {"LD_LIBRARY_PATH": "/custom/lib:/another/lib"}):
@@ -96,6 +98,7 @@ class TestPlatformDetection:
             dir_strs = [str(d) for d in dirs]
             assert any("/custom/lib" in s for s in dir_strs)
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="DYLD_LIBRARY_PATH is Unix-only")
     def test_get_search_dirs_with_dyld_library_path(self) -> None:
         """DYLD_LIBRARY_PATH entries are included in search dirs."""
         with patch.dict("os.environ", {"DYLD_LIBRARY_PATH": "/dyld/path"}):
