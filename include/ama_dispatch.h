@@ -84,9 +84,9 @@ typedef void (*ama_dilithium_pointwise_fn)(int32_t r[256],
  *     Guaranteed non-NULL: keccak_f1600.
  *     Wired when SIMD detected: sha3_256, kyber_ntt, kyber_invntt,
  *     kyber_pointwise, dilithium_ntt, dilithium_invntt,
- *     dilithium_pointwise (AVX2 and NEON).
+ *     dilithium_pointwise (AVX2, NEON, and SVE2).
  *   - NULL: no dispatch available; caller must use its own inline generic
- *     implementation.  SVE2 NTT is a known gap (variable VL complexity).
+ *     implementation.
  *
  * Callers MUST NULL-check before calling any field except keccak_f1600.
  * ============================================================================ */

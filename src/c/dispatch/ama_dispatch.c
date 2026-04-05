@@ -189,6 +189,23 @@ extern void ama_dilithium_poly_pointwise_neon(int32_t r[256],
                                                const int32_t b[256]);
 #endif
 
+#ifdef AMA_HAVE_SVE2_IMPL
+extern void ama_keccak_f1600_sve2(uint64_t state[25]);
+extern void ama_kyber_ntt_sve2(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_kyber_invntt_sve2(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_kyber_poly_pointwise_sve2(int16_t r[256],
+                                           const int16_t a[256],
+                                           const int16_t b[256],
+                                           const int16_t zetas[128]);
+extern void ama_dilithium_ntt_sve2(int32_t poly[256],
+                                    const int32_t zetas[256]);
+extern void ama_dilithium_invntt_sve2(int32_t poly[256],
+                                       const int32_t zetas[256]);
+extern void ama_dilithium_poly_pointwise_sve2(int32_t r[256],
+                                               const int32_t a[256],
+                                               const int32_t b[256]);
+#endif
+
 
 /* Check if AMA_DISPATCH_VERBOSE=1 is set at runtime. */
 static int dispatch_verbose(void) {
@@ -319,6 +336,22 @@ static void dispatch_init_internal(void) {
         dispatch_table.dilithium_ntt       = ama_dilithium_ntt_neon;
         dispatch_table.dilithium_invntt    = ama_dilithium_invntt_neon;
         dispatch_table.dilithium_pointwise = ama_dilithium_poly_pointwise_neon;
+    }
+#endif
+
+#ifdef AMA_HAVE_SVE2_IMPL
+    if (dispatch_info.sha3 >= AMA_IMPL_SVE2) {
+        dispatch_table.keccak_f1600 = ama_keccak_f1600_sve2;
+    }
+    if (dispatch_info.kyber >= AMA_IMPL_SVE2) {
+        dispatch_table.kyber_ntt       = ama_kyber_ntt_sve2;
+        dispatch_table.kyber_invntt    = ama_kyber_invntt_sve2;
+        dispatch_table.kyber_pointwise = ama_kyber_poly_pointwise_sve2;
+    }
+    if (dispatch_info.dilithium >= AMA_IMPL_SVE2) {
+        dispatch_table.dilithium_ntt       = ama_dilithium_ntt_sve2;
+        dispatch_table.dilithium_invntt    = ama_dilithium_invntt_sve2;
+        dispatch_table.dilithium_pointwise = ama_dilithium_poly_pointwise_sve2;
     }
 #endif
 

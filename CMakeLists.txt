@@ -228,6 +228,7 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_SVE2)
             set_source_files_properties(${AMA_SVE2_SOURCES} PROPERTIES
                 COMPILE_FLAGS "-march=armv9-a+sve2")
         endif()
+        add_compile_definitions(AMA_HAVE_SVE2_IMPL)
         message(STATUS "SIMD: ARM SVE2 hand-written intrinsics enabled (8 algorithms)")
     endif()
 endif()
