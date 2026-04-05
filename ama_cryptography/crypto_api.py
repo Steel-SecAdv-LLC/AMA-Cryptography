@@ -28,6 +28,7 @@ import logging
 import os
 import pathlib
 import secrets
+import time
 import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -35,6 +36,10 @@ from enum import Enum, auto
 from typing import Any, ClassVar, Dict, List, Mapping, Optional, Tuple, Union
 
 from ama_cryptography._self_test import check_operational as _check_operational
+from ama_cryptography_monitor import AmaCryptographyMonitor, create_monitor
+
+# Module-level 3R monitor instance — feeds timing data to anomaly detection
+_monitor: AmaCryptographyMonitor = create_monitor(enabled=True)
 
 # Import HMAC and HKDF from pqc_backends (native C) with pure-Python fallback
 from ama_cryptography.pqc_backends import (
@@ -1924,10 +1929,13 @@ def create_crypto_package(
     kem_ciphertext: Optional[bytes] = None
     kem_shared_secret: Optional[bytes] = None
 
-    # Generate primary signature
+    # Generate primary signature (with 3R timing instrumentation)
     primary_crypto = AmaCryptography(algorithm=config.signature_algorithm)
     primary_keypair = primary_crypto.generate_keypair()
+    _t0 = time.perf_counter_ns()
     primary_signature = primary_crypto.sign(content, primary_keypair.secret_key)
+    _sign_ns = time.perf_counter_ns() - _t0
+    _monitor.monitor_crypto_operation("sign", _sign_ns / 1_000_000)
     keypairs[config.signature_algorithm.name] = primary_keypair
 
     # Optional add-on: SPHINCS+ secondary signature
@@ -1940,7 +1948,10 @@ def create_crypto_package(
             )
         sphincs_provider = SphincsProvider()
         sphincs_keypair = sphincs_provider.generate_keypair()
+        _t0 = time.perf_counter_ns()
         sphincs_signature = sphincs_provider.sign(content, sphincs_keypair.secret_key)
+        _sphincs_ns = time.perf_counter_ns() - _t0
+        _monitor.monitor_crypto_operation("sphincs_sign", _sphincs_ns / 1_000_000)
         keypairs["SPHINCS_256F"] = sphincs_keypair
 
     # ========================================================================
@@ -1971,7 +1982,10 @@ def create_crypto_package(
             )
         kyber_provider = KyberProvider()
         kyber_keypair = kyber_provider.generate_keypair()
+        _t0 = time.perf_counter_ns()
         encapsulated = kyber_provider.encapsulate(kyber_keypair.public_key)
+        _encaps_ns = time.perf_counter_ns() - _t0
+        _monitor.monitor_crypto_operation("encrypt", _encaps_ns / 1_000_000)
         kem_ciphertext = encapsulated.ciphertext
         kem_shared_secret = encapsulated.shared_secret
         keypairs["KYBER_1024"] = kyber_keypair
@@ -2085,11 +2099,14 @@ def verify_crypto_package(
     if sig_alg_name in package.keypairs:
         try:
             primary_crypto = AmaCryptography(algorithm=sig_alg)
+            _t0 = time.perf_counter_ns()
             results["primary_signature"] = primary_crypto.verify(
                 content,
                 package.primary_signature.signature,
                 package.keypairs[sig_alg_name].public_key,
             )
+            _verify_ns = time.perf_counter_ns() - _t0
+            _monitor.monitor_crypto_operation("verify", _verify_ns / 1_000_000)
         except Exception as exc:
             logger.error("Layer 3 signature verification error: %s", exc)
             results["primary_signature"] = False
@@ -2158,10 +2175,13 @@ def verify_crypto_package(
     ):
         try:
             kyber_provider = KyberProvider()
+            _t0 = time.perf_counter_ns()
             decapsulated_ss = kyber_provider.decapsulate(
                 package.kem_ciphertext,
                 package.keypairs["KYBER_1024"].secret_key,
             )
+            _decaps_ns = time.perf_counter_ns() - _t0
+            _monitor.monitor_crypto_operation("decrypt", _decaps_ns / 1_000_000)
             from ama_cryptography.secure_memory import constant_time_compare as _ct2
 
             results["kem"] = _ct2(decapsulated_ss, package.kem_shared_secret)

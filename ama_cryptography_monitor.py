@@ -1541,7 +1541,7 @@ class AmaCryptographyMonitor:
 
     def __init__(
         self,
-        enabled: bool = False,
+        enabled: bool = True,
         alert_retention: int = 1000,
         nonce_persist_path: Optional[str] = None,
     ) -> None:
@@ -1549,8 +1549,8 @@ class AmaCryptographyMonitor:
         Initialize monitor.
 
         Args:
-            enabled: Whether monitoring is active. Default False for
-                zero-overhead operation when not needed.
+            enabled: Whether monitoring is active. Default True for
+                production-ready anomaly detection out of the box.
             alert_retention: Maximum alerts to retain in memory.
                 Prevents unbounded memory growth.
             nonce_persist_path: Path for nonce tracker persistence file.
@@ -1800,7 +1800,7 @@ class AmaCryptographyMonitor:
 # Module-level convenience functions
 
 
-def create_monitor(enabled: bool = False, alert_retention: int = 1000) -> AmaCryptographyMonitor:
+def create_monitor(enabled: bool = True, alert_retention: int = 1000) -> AmaCryptographyMonitor:
     """
     Factory function for creating monitor instances.
 
