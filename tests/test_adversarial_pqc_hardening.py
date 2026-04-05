@@ -24,28 +24,20 @@ import time
 import pytest
 
 from ama_cryptography.pqc_backends import (
+    _HKDF_NATIVE_AVAILABLE,
     DILITHIUM_AVAILABLE,
     KYBER_AVAILABLE,
     SPHINCS_AVAILABLE,
-    _HKDF_NATIVE_AVAILABLE,
     _native_lib,
 )
 
 NATIVE_AVAILABLE = _native_lib is not None
 
-skip_no_native = pytest.mark.skipif(
-    not NATIVE_AVAILABLE, reason="Native C library not available"
-)
+skip_no_native = pytest.mark.skipif(not NATIVE_AVAILABLE, reason="Native C library not available")
 skip_no_kyber = pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber not available")
-skip_no_sphincs = pytest.mark.skipif(
-    not SPHINCS_AVAILABLE, reason="SPHINCS+ not available"
-)
-skip_no_dilithium = pytest.mark.skipif(
-    not DILITHIUM_AVAILABLE, reason="Dilithium not available"
-)
-skip_no_hkdf = pytest.mark.skipif(
-    not _HKDF_NATIVE_AVAILABLE, reason="Native HKDF not available"
-)
+skip_no_sphincs = pytest.mark.skipif(not SPHINCS_AVAILABLE, reason="SPHINCS+ not available")
+skip_no_dilithium = pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
+skip_no_hkdf = pytest.mark.skipif(not _HKDF_NATIVE_AVAILABLE, reason="Native HKDF not available")
 
 # Key/signature sizes
 KYBER_CT = 1568
@@ -198,9 +190,7 @@ class TestNoiseNKProtocolFuzzing:
         sig_kp = sig_prov.generate_keypair()
 
         initiator = SecureChannelInitiator(kem_kp.public_key)
-        responder = SecureChannelResponder(
-            kem_kp.secret_key, sig_kp.secret_key, sig_kp.public_key
-        )
+        SecureChannelResponder(kem_kp.secret_key, sig_kp.secret_key, sig_kp.public_key)
 
         msg = initiator.create_handshake()
         wire = msg.serialize()
@@ -238,9 +228,7 @@ class TestNoiseNKProtocolFuzzing:
         sig_kp = sig_prov.generate_keypair()
 
         initiator = SecureChannelInitiator(kem_kp.public_key)
-        responder = SecureChannelResponder(
-            kem_kp.secret_key, sig_kp.secret_key, sig_kp.public_key
-        )
+        responder = SecureChannelResponder(kem_kp.secret_key, sig_kp.secret_key, sig_kp.public_key)
 
         msg = initiator.create_handshake()
         bad_msg = HandshakeMessage(
@@ -269,9 +257,7 @@ class TestNoiseNKProtocolFuzzing:
         sig_kp = sig_prov.generate_keypair()
 
         initiator = SecureChannelInitiator(kem_kp.public_key)
-        responder = SecureChannelResponder(
-            kem_kp.secret_key, sig_kp.secret_key, sig_kp.public_key
-        )
+        responder = SecureChannelResponder(kem_kp.secret_key, sig_kp.secret_key, sig_kp.public_key)
 
         msg = initiator.create_handshake()
         bad_msg = HandshakeMessage(
@@ -300,9 +286,7 @@ class TestNoiseNKProtocolFuzzing:
         sig_kp = sig_prov.generate_keypair()
 
         initiator = SecureChannelInitiator(kem_kp.public_key)
-        responder = SecureChannelResponder(
-            kem_kp.secret_key, sig_kp.secret_key, sig_kp.public_key
-        )
+        responder = SecureChannelResponder(kem_kp.secret_key, sig_kp.secret_key, sig_kp.public_key)
 
         handshake_msg = initiator.create_handshake()
         response, _ = responder.handle_handshake(handshake_msg)
@@ -334,9 +318,7 @@ class TestNoiseNKProtocolFuzzing:
         sig_kp = sig_prov.generate_keypair()
 
         initiator = SecureChannelInitiator(kem_kp.public_key)
-        responder = SecureChannelResponder(
-            kem_kp.secret_key, sig_kp.secret_key, sig_kp.public_key
-        )
+        responder = SecureChannelResponder(kem_kp.secret_key, sig_kp.secret_key, sig_kp.public_key)
 
         handshake_msg = initiator.create_handshake()
         response, resp_session = responder.handle_handshake(handshake_msg)
@@ -355,7 +337,7 @@ class TestNoiseNKProtocolFuzzing:
             tag=msg.tag,
         )
 
-        with pytest.raises(Exception):  # noqa: B017 -- broad exception for any decrypt failure (APH-001)
+        with pytest.raises(Exception):  # noqa: B017 -- decrypt failure (APH-001)
             resp_session.decrypt(bad_msg)
 
         # Flip bit in tag
@@ -369,7 +351,7 @@ class TestNoiseNKProtocolFuzzing:
             tag=bytes(tampered_tag),
         )
 
-        with pytest.raises(Exception):  # noqa: B017 -- broad exception for any decrypt failure (APH-001)
+        with pytest.raises(Exception):  # noqa: B017 -- decrypt failure (APH-001)
             resp_session.decrypt(bad_msg2)
 
 
@@ -397,9 +379,7 @@ class TestRekeyDesynchronization:
         sig_kp = sig_prov.generate_keypair()
 
         initiator = SecureChannelInitiator(kem_kp.public_key)
-        responder = SecureChannelResponder(
-            kem_kp.secret_key, sig_kp.secret_key, sig_kp.public_key
-        )
+        responder = SecureChannelResponder(kem_kp.secret_key, sig_kp.secret_key, sig_kp.public_key)
 
         handshake_msg = initiator.create_handshake()
         response, resp_session = responder.handle_handshake(handshake_msg)
@@ -414,7 +394,7 @@ class TestRekeyDesynchronization:
 
         # Encrypt with new keys, try to decrypt with old keys
         msg2 = init_session.encrypt(b"after initiator rekey")
-        with pytest.raises(Exception):  # noqa: B017 -- broad exception for any decrypt failure (APH-002)
+        with pytest.raises(Exception):  # noqa: B017 -- decrypt failure (APH-002)
             resp_session.decrypt(msg2)
 
     def test_both_sides_rekey_restores_communication(self) -> None:
@@ -431,9 +411,7 @@ class TestRekeyDesynchronization:
         sig_kp = sig_prov.generate_keypair()
 
         initiator = SecureChannelInitiator(kem_kp.public_key)
-        responder = SecureChannelResponder(
-            kem_kp.secret_key, sig_kp.secret_key, sig_kp.public_key
-        )
+        responder = SecureChannelResponder(kem_kp.secret_key, sig_kp.secret_key, sig_kp.public_key)
 
         handshake_msg = initiator.create_handshake()
         response, resp_session = responder.handle_handshake(handshake_msg)
@@ -461,9 +439,7 @@ class TestRekeyDesynchronization:
         sig_kp = sig_prov.generate_keypair()
 
         initiator = SecureChannelInitiator(kem_kp.public_key)
-        responder = SecureChannelResponder(
-            kem_kp.secret_key, sig_kp.secret_key, sig_kp.public_key
-        )
+        responder = SecureChannelResponder(kem_kp.secret_key, sig_kp.secret_key, sig_kp.public_key)
 
         handshake_msg = initiator.create_handshake()
         response, resp_session = responder.handle_handshake(handshake_msg)
@@ -477,7 +453,7 @@ class TestRekeyDesynchronization:
         resp_session.rekey()
 
         msg = init_session.encrypt(b"double rekey test")
-        with pytest.raises(Exception):  # noqa: B017 -- broad exception for any decrypt failure (APH-003)
+        with pytest.raises(Exception):  # noqa: B017 -- decrypt failure (APH-003)
             resp_session.decrypt(msg)
 
 
@@ -501,9 +477,7 @@ class TestLargeSequenceGapDoS:
         rw.check_and_accept(1_000_000)
         elapsed = time.perf_counter() - start
 
-        assert elapsed < 0.01, (
-            f"Large gap took {elapsed:.4f}s — should be <10ms (O(1))"
-        )
+        assert elapsed < 0.01, f"Large gap took {elapsed:.4f}s — should be <10ms (O(1))"
 
     def test_replay_window_base_advances_correctly(self) -> None:
         """After exceeding window capacity, base advances and seen set stays bounded."""
@@ -696,9 +670,9 @@ class TestSPHINCSForgeryAttempts:
 
         for pos in range(100):
             bad_sig = _flip_bit(sig, pos)
-            assert not sphincs_verify(msg, bad_sig, kp.public_key), (
-                f"Forgery accepted at byte {pos}"
-            )
+            assert not sphincs_verify(
+                msg, bad_sig, kp.public_key
+            ), f"Forgery accepted at byte {pos}"
 
     def test_flip_last_byte(self) -> None:
         """Flipping the last byte of the signature must fail verification."""

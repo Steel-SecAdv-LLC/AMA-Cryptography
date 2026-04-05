@@ -13,18 +13,13 @@ SecureBuffer, and edge cases.
 AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
 """
 
-import sys
-from unittest.mock import MagicMock, patch
-
 import pytest
 
 from ama_cryptography.pqc_backends import _native_lib
 
 NATIVE_AVAILABLE = _native_lib is not None
 
-skip_no_native = pytest.mark.skipif(
-    not NATIVE_AVAILABLE, reason="Native C library not available"
-)
+skip_no_native = pytest.mark.skipif(not NATIVE_AVAILABLE, reason="Native C library not available")
 
 
 # ===========================================================================
@@ -39,7 +34,7 @@ class TestSecureMemzero:
         """secure_memzero fills bytearray with zeros."""
         from ama_cryptography.secure_memory import secure_memzero
 
-        buf = bytearray(b"\xAA\xBB\xCC\xDD" * 16)
+        buf = bytearray(b"\xaa\xbb\xcc\xdd" * 16)
         secure_memzero(buf)
         assert all(b == 0 for b in buf)
 
@@ -55,7 +50,7 @@ class TestSecureMemzero:
         """secure_memzero works with memoryview."""
         from ama_cryptography.secure_memory import secure_memzero
 
-        buf = bytearray(b"\xFF" * 32)
+        buf = bytearray(b"\xff" * 32)
         mv = memoryview(buf)
         secure_memzero(mv)
         assert all(b == 0 for b in buf)
@@ -71,7 +66,7 @@ class TestSecureMemzero:
         """secure_memzero works with large buffers."""
         from ama_cryptography.secure_memory import secure_memzero
 
-        buf = bytearray(b"\xAA" * 100000)
+        buf = bytearray(b"\xaa" * 100000)
         secure_memzero(buf)
         assert all(b == 0 for b in buf)
 
@@ -88,7 +83,7 @@ class TestPythonFallbackMemzero:
         """_python_fallback_memzero correctly zeroes a bytearray."""
         from ama_cryptography.secure_memory import _python_fallback_memzero
 
-        buf = bytearray(b"\xAA\xBB\xCC" * 10)
+        buf = bytearray(b"\xaa\xbb\xcc" * 10)
         _python_fallback_memzero(buf)
         assert all(b == 0 for b in buf)
 
@@ -329,7 +324,7 @@ class TestBackendSelection:
         from ama_cryptography.secure_memory import _try_native_ama_memzero
 
         # This returns a callable or None
-        result = _try_native_ama_memzero()
+        _try_native_ama_memzero()
         # On Linux with native lib, should return callable
         # Without native lib, should return None
 
@@ -337,12 +332,12 @@ class TestBackendSelection:
         """_try_libc_explicit_bzero probing does not crash."""
         from ama_cryptography.secure_memory import _try_libc_explicit_bzero
 
-        result = _try_libc_explicit_bzero()
+        _try_libc_explicit_bzero()
         # Returns callable or None depending on platform
 
     def test_libc_memset_s_probe(self) -> None:
         """_try_libc_memset_s probing does not crash."""
         from ama_cryptography.secure_memory import _try_libc_memset_s
 
-        result = _try_libc_memset_s()
+        _try_libc_memset_s()
         # Returns callable or None depending on platform

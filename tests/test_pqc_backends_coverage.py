@@ -13,7 +13,6 @@ all public cryptographic functions.
 AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
 """
 
-import ctypes
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -50,16 +49,10 @@ from ama_cryptography.pqc_backends import (
 
 NATIVE_AVAILABLE = _native_lib is not None
 
-skip_no_native = pytest.mark.skipif(
-    not NATIVE_AVAILABLE, reason="Native C library not available"
-)
-skip_no_dilithium = pytest.mark.skipif(
-    not DILITHIUM_AVAILABLE, reason="Dilithium not available"
-)
+skip_no_native = pytest.mark.skipif(not NATIVE_AVAILABLE, reason="Native C library not available")
+skip_no_dilithium = pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
 skip_no_kyber = pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber not available")
-skip_no_sphincs = pytest.mark.skipif(
-    not SPHINCS_AVAILABLE, reason="SPHINCS+ not available"
-)
+skip_no_sphincs = pytest.mark.skipif(not SPHINCS_AVAILABLE, reason="SPHINCS+ not available")
 
 
 # ===========================================================================
@@ -144,9 +137,7 @@ class TestLibraryLoading:
 
         with patch.dict("os.environ", {"AMA_CRYPTO_LIB_PATH": "/fake/path/lib.so"}):
             with patch("ama_cryptography.pqc_backends.Path.is_file", return_value=True):
-                with patch(
-                    "ama_cryptography.pqc_backends._try_load_library", return_value=None
-                ):
+                with patch("ama_cryptography.pqc_backends._try_load_library", return_value=None):
                     # Should not crash even if loading fails
                     _find_native_library()
 
@@ -157,7 +148,7 @@ class TestLibraryLoading:
         with patch.dict("os.environ", {"AMA_CRYPTO_LIB_PATH": "/fake/dir"}):
             with patch("ama_cryptography.pqc_backends.Path.is_file", return_value=False):
                 with patch("ama_cryptography.pqc_backends.Path.is_dir", return_value=True):
-                    result = _find_native_library()
+                    _find_native_library()
                     # Returns None because no real library at /fake/dir
                     # but shouldn't crash
 
@@ -172,7 +163,7 @@ class TestSecureMemzero:
 
     def test_zeroes_bytearray(self) -> None:
         """_secure_memzero fills bytearray with zeros."""
-        buf = bytearray(b"\xAA\xBB\xCC\xDD")
+        buf = bytearray(b"\xaa\xbb\xcc\xdd")
         _secure_memzero(buf)
         assert all(b == 0 for b in buf)
 
@@ -215,7 +206,7 @@ class TestKeyPairLifecycle:
     def test_dilithium_keypair_wipe(self) -> None:
         """DilithiumKeyPair.wipe() zeroes the secret key."""
         kp = DilithiumKeyPair(
-            secret_key=bytearray(b"\xAA" * DILITHIUM_SECRET_KEY_BYTES),
+            secret_key=bytearray(b"\xaa" * DILITHIUM_SECRET_KEY_BYTES),
             public_key=b"\x00" * DILITHIUM_PUBLIC_KEY_BYTES,
         )
         kp.wipe()
@@ -224,7 +215,7 @@ class TestKeyPairLifecycle:
     def test_kyber_keypair_wipe(self) -> None:
         """KyberKeyPair.wipe() zeroes the secret key."""
         kp = KyberKeyPair(
-            secret_key=bytearray(b"\xAA" * KYBER_SECRET_KEY_BYTES),
+            secret_key=bytearray(b"\xaa" * KYBER_SECRET_KEY_BYTES),
             public_key=b"\x00" * KYBER_PUBLIC_KEY_BYTES,
         )
         kp.wipe()
@@ -233,7 +224,7 @@ class TestKeyPairLifecycle:
     def test_sphincs_keypair_wipe(self) -> None:
         """SphincsKeyPair.wipe() zeroes the secret key."""
         kp = SphincsKeyPair(
-            secret_key=bytearray(b"\xAA" * SPHINCS_SECRET_KEY_BYTES),
+            secret_key=bytearray(b"\xaa" * SPHINCS_SECRET_KEY_BYTES),
             public_key=b"\x00" * SPHINCS_PUBLIC_KEY_BYTES,
         )
         kp.wipe()
@@ -259,7 +250,7 @@ class TestKeyPairLifecycle:
     def test_keypair_del_calls_wipe(self) -> None:
         """__del__ calls wipe without raising."""
         kp = DilithiumKeyPair(
-            secret_key=bytearray(b"\xAA" * DILITHIUM_SECRET_KEY_BYTES),
+            secret_key=bytearray(b"\xaa" * DILITHIUM_SECRET_KEY_BYTES),
             public_key=b"\x00" * DILITHIUM_PUBLIC_KEY_BYTES,
         )
         kp.__del__()  # Should not raise
@@ -361,14 +352,14 @@ class TestDilithiumFunctions:
         """Sign with wrong-size key raises ValueError."""
         from ama_cryptography.pqc_backends import dilithium_sign
 
-        with pytest.raises(ValueError, match="[Ss]ecret.key"):
+        with pytest.raises(ValueError, match=r"[Ss]ecret.key"):
             dilithium_sign(b"msg", b"\x00" * 10)
 
     def test_verify_wrong_key_size(self) -> None:
         """Verify with wrong-size public key raises ValueError."""
         from ama_cryptography.pqc_backends import dilithium_verify
 
-        with pytest.raises(ValueError, match="[Pp]ublic.key"):
+        with pytest.raises(ValueError, match=r"[Pp]ublic.key"):
             dilithium_verify(b"msg", b"\x00" * DILITHIUM_SIGNATURE_BYTES, b"\x00" * 10)
 
 
@@ -409,21 +400,21 @@ class TestKyberFunctions:
         """Encapsulate with wrong-size public key raises ValueError."""
         from ama_cryptography.pqc_backends import kyber_encapsulate
 
-        with pytest.raises(ValueError, match="[Pp]ublic.key"):
+        with pytest.raises(ValueError, match=r"[Pp]ublic.key"):
             kyber_encapsulate(b"\x00" * 10)
 
     def test_decapsulate_wrong_sk_size(self) -> None:
         """Decapsulate with wrong-size secret key raises ValueError."""
         from ama_cryptography.pqc_backends import kyber_decapsulate
 
-        with pytest.raises(ValueError, match="[Ss]ecret.key"):
+        with pytest.raises(ValueError, match=r"[Ss]ecret.key"):
             kyber_decapsulate(b"\x00" * KYBER_CIPHERTEXT_BYTES, b"\x00" * 10)
 
     def test_decapsulate_wrong_ct_size(self) -> None:
         """Decapsulate with wrong-size ciphertext raises ValueError."""
         from ama_cryptography.pqc_backends import kyber_decapsulate
 
-        with pytest.raises(ValueError, match="[Cc]iphertext"):
+        with pytest.raises(ValueError, match=r"[Cc]iphertext"):
             kyber_decapsulate(b"\x00" * 10, b"\x00" * KYBER_SECRET_KEY_BYTES)
 
 
@@ -461,14 +452,14 @@ class TestSphincsFunctions:
         """Sign with wrong-size key raises ValueError."""
         from ama_cryptography.pqc_backends import sphincs_sign
 
-        with pytest.raises(ValueError, match="[Ss]ecret.key"):
+        with pytest.raises(ValueError, match=r"[Ss]ecret.key"):
             sphincs_sign(b"msg", b"\x00" * 10)
 
     def test_verify_wrong_key_size(self) -> None:
         """Verify with wrong-size public key raises ValueError."""
         from ama_cryptography.pqc_backends import sphincs_verify
 
-        with pytest.raises(ValueError, match="[Pp]ublic.key"):
+        with pytest.raises(ValueError, match=r"[Pp]ublic.key"):
             sphincs_verify(b"msg", b"\x00" * SPHINCS_SIGNATURE_BYTES, b"\x00" * 10)
 
 
@@ -528,11 +519,12 @@ class TestAESGCMFunctions:
 
     def test_encrypt_decrypt_roundtrip(self) -> None:
         """AES-256-GCM encrypt then decrypt recovers plaintext."""
+        import secrets
+
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
             native_aes256_gcm_encrypt,
         )
-        import secrets
 
         key = secrets.token_bytes(32)
         nonce = secrets.token_bytes(12)
@@ -545,11 +537,12 @@ class TestAESGCMFunctions:
 
     def test_decrypt_tampered_tag(self) -> None:
         """Tampered tag causes decryption failure."""
+        import secrets
+
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,
             native_aes256_gcm_encrypt,
         )
-        import secrets
 
         key = secrets.token_bytes(32)
         nonce = secrets.token_bytes(12)
@@ -599,7 +592,7 @@ class TestUnavailableBackends:
         from ama_cryptography.pqc_backends import generate_dilithium_keypair
 
         with patch("ama_cryptography.pqc_backends.DILITHIUM_AVAILABLE", False):
-            with pytest.raises(Exception, match="[Uu]navailable|PQC"):
+            with pytest.raises(Exception, match=r"[Uu]navailable|PQC"):
                 generate_dilithium_keypair()
 
     def test_kyber_unavailable(self) -> None:
@@ -607,7 +600,7 @@ class TestUnavailableBackends:
         from ama_cryptography.pqc_backends import generate_kyber_keypair
 
         with patch("ama_cryptography.pqc_backends.KYBER_AVAILABLE", False):
-            with pytest.raises(Exception, match="[Uu]navailable|KYBER"):
+            with pytest.raises(Exception, match=r"[Uu]navailable|KYBER"):
                 generate_kyber_keypair()
 
     def test_sphincs_unavailable(self) -> None:
@@ -615,7 +608,7 @@ class TestUnavailableBackends:
         from ama_cryptography.pqc_backends import generate_sphincs_keypair
 
         with patch("ama_cryptography.pqc_backends.SPHINCS_AVAILABLE", False):
-            with pytest.raises(Exception, match="[Uu]navailable|SPHINCS"):
+            with pytest.raises(Exception, match=r"[Uu]navailable|SPHINCS"):
                 generate_sphincs_keypair()
 
 
@@ -738,12 +731,13 @@ class TestAdditionalNativeFunctions:
 
     def test_chacha20poly1305_roundtrip(self) -> None:
         """ChaCha20-Poly1305 encrypt/decrypt roundtrip."""
+        import secrets
+
         from ama_cryptography.pqc_backends import (
             _CHACHA20_POLY1305_NATIVE_AVAILABLE,
             native_chacha20poly1305_decrypt,
             native_chacha20poly1305_encrypt,
         )
-        import secrets
 
         if not _CHACHA20_POLY1305_NATIVE_AVAILABLE:
             pytest.skip("ChaCha20-Poly1305 not available")

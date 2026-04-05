@@ -13,25 +13,20 @@ timing oracle, and the main POST runner.
 AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from ama_cryptography.pqc_backends import (
     DILITHIUM_AVAILABLE,
     KYBER_AVAILABLE,
-    SPHINCS_AVAILABLE,
     _native_lib,
 )
 
 NATIVE_AVAILABLE = _native_lib is not None
 
-skip_no_native = pytest.mark.skipif(
-    not NATIVE_AVAILABLE, reason="Native C library not available"
-)
-skip_no_dilithium = pytest.mark.skipif(
-    not DILITHIUM_AVAILABLE, reason="Dilithium not available"
-)
+skip_no_native = pytest.mark.skipif(not NATIVE_AVAILABLE, reason="Native C library not available")
+skip_no_dilithium = pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
 skip_no_kyber = pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber not available")
 
 
@@ -126,9 +121,7 @@ class TestModuleIntegrity:
         """Missing digest file returns (False, ...)."""
         from ama_cryptography._self_test import verify_module_integrity
 
-        with patch(
-            "ama_cryptography._self_test._INTEGRITY_DIGEST_FILE"
-        ) as mock_path:
+        with patch("ama_cryptography._self_test._INTEGRITY_DIGEST_FILE") as mock_path:
             mock_path.exists.return_value = False
             passed, detail = verify_module_integrity()
             assert not passed
@@ -138,9 +131,7 @@ class TestModuleIntegrity:
         """Empty digest file returns (False, ...)."""
         from ama_cryptography._self_test import verify_module_integrity
 
-        with patch(
-            "ama_cryptography._self_test._INTEGRITY_DIGEST_FILE"
-        ) as mock_path:
+        with patch("ama_cryptography._self_test._INTEGRITY_DIGEST_FILE") as mock_path:
             mock_path.exists.return_value = True
             mock_path.read_text.return_value = ""
             passed, detail = verify_module_integrity()
@@ -151,9 +142,7 @@ class TestModuleIntegrity:
         """Mismatched digest returns (False, ...)."""
         from ama_cryptography._self_test import verify_module_integrity
 
-        with patch(
-            "ama_cryptography._self_test._INTEGRITY_DIGEST_FILE"
-        ) as mock_path:
+        with patch("ama_cryptography._self_test._INTEGRITY_DIGEST_FILE") as mock_path:
             mock_path.exists.return_value = True
             mock_path.read_text.return_value = "deadbeef" * 8
             passed, detail = verify_module_integrity()
@@ -199,7 +188,7 @@ class TestKATs:
         """HMAC-SHA3-256 KAT passes or skips."""
         from ama_cryptography._self_test import _kat_hmac_sha3_256
 
-        passed, detail = _kat_hmac_sha3_256()
+        passed, _detail = _kat_hmac_sha3_256()
         assert passed
 
     @skip_no_native
@@ -207,7 +196,7 @@ class TestKATs:
         """AES-256-GCM KAT passes or skips."""
         from ama_cryptography._self_test import _kat_aes_256_gcm
 
-        passed, detail = _kat_aes_256_gcm()
+        passed, _detail = _kat_aes_256_gcm()
         assert passed
 
     @skip_no_kyber
@@ -215,7 +204,7 @@ class TestKATs:
         """ML-KEM-1024 KAT passes."""
         from ama_cryptography._self_test import _kat_ml_kem_1024
 
-        passed, detail = _kat_ml_kem_1024()
+        passed, _detail = _kat_ml_kem_1024()
         assert passed
 
     @skip_no_dilithium
@@ -223,21 +212,21 @@ class TestKATs:
         """ML-DSA-65 KAT passes."""
         from ama_cryptography._self_test import _kat_ml_dsa_65
 
-        passed, detail = _kat_ml_dsa_65()
+        passed, _detail = _kat_ml_dsa_65()
         assert passed
 
     def test_kat_slh_dsa(self) -> None:
         """SLH-DSA KAT passes or skips."""
         from ama_cryptography._self_test import _kat_slh_dsa
 
-        passed, detail = _kat_slh_dsa()
+        passed, _detail = _kat_slh_dsa()
         assert passed
 
     def test_kat_ed25519(self) -> None:
         """Ed25519 KAT passes or skips."""
         from ama_cryptography._self_test import _kat_ed25519
 
-        passed, detail = _kat_ed25519()
+        passed, _detail = _kat_ed25519()
         assert passed
 
 
@@ -278,7 +267,7 @@ class TestPairwiseTests:
         def mock_verify(msg: bytes, sig: bytes, pk: bytes) -> bool:
             return False
 
-        with pytest.raises(CryptoModuleError, match="[Pp]airwise"):
+        with pytest.raises(CryptoModuleError, match=r"[Pp]airwise"):
             pairwise_test_signature(mock_sign, mock_verify, b"sk", b"pk", "mock-algo")
         _set_operational()
 
@@ -315,7 +304,7 @@ class TestPairwiseTests:
         def mock_decaps(ct: bytes, sk: bytes) -> bytes:
             return b"ss2"  # Different from shared_secret
 
-        with pytest.raises(CryptoModuleError, match="[Pp]airwise"):
+        with pytest.raises(CryptoModuleError, match=r"[Pp]airwise"):
             pairwise_test_kem(mock_encaps, mock_decaps, b"pk", b"sk", "mock-kem")
         _set_operational()
 

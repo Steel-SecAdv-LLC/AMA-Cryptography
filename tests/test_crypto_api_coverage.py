@@ -18,28 +18,20 @@ from unittest.mock import patch
 import pytest
 
 from ama_cryptography.pqc_backends import (
+    _ED25519_NATIVE_AVAILABLE,
     DILITHIUM_AVAILABLE,
     KYBER_AVAILABLE,
     SPHINCS_AVAILABLE,
-    _ED25519_NATIVE_AVAILABLE,
     _native_lib,
 )
 
 NATIVE_AVAILABLE = _native_lib is not None
 
-skip_no_native = pytest.mark.skipif(
-    not NATIVE_AVAILABLE, reason="Native C library not available"
-)
-skip_no_dilithium = pytest.mark.skipif(
-    not DILITHIUM_AVAILABLE, reason="Dilithium not available"
-)
+skip_no_native = pytest.mark.skipif(not NATIVE_AVAILABLE, reason="Native C library not available")
+skip_no_dilithium = pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
 skip_no_kyber = pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber not available")
-skip_no_sphincs = pytest.mark.skipif(
-    not SPHINCS_AVAILABLE, reason="SPHINCS+ not available"
-)
-skip_no_ed25519 = pytest.mark.skipif(
-    not _ED25519_NATIVE_AVAILABLE, reason="Ed25519 not available"
-)
+skip_no_sphincs = pytest.mark.skipif(not SPHINCS_AVAILABLE, reason="SPHINCS+ not available")
+skip_no_ed25519 = pytest.mark.skipif(not _ED25519_NATIVE_AVAILABLE, reason="Ed25519 not available")
 
 
 # ===========================================================================
@@ -266,9 +258,7 @@ class TestAESGCMProvider:
         aad = b"associated data"
 
         result = prov.encrypt(pt, key, aad=aad)
-        decrypted = prov.decrypt(
-            result["ciphertext"], key, result["nonce"], result["tag"], aad=aad
-        )
+        decrypted = prov.decrypt(result["ciphertext"], key, result["nonce"], result["tag"], aad=aad)
         assert decrypted == pt
 
     def test_empty_plaintext(self) -> None:
@@ -279,9 +269,7 @@ class TestAESGCMProvider:
         key = secrets.token_bytes(32)
 
         result = prov.encrypt(b"", key)
-        decrypted = prov.decrypt(
-            result["ciphertext"], key, result["nonce"], result["tag"]
-        )
+        decrypted = prov.decrypt(result["ciphertext"], key, result["nonce"], result["tag"])
         assert decrypted == b""
 
     def test_tampered_ciphertext_fails(self) -> None:
@@ -296,9 +284,7 @@ class TestAESGCMProvider:
         if len(bad_ct) > 0:
             bad_ct[0] ^= 0xFF
         with pytest.raises((ValueError, RuntimeError)):
-            prov.decrypt(
-                bytes(bad_ct), key, result["nonce"], result["tag"]
-            )
+            prov.decrypt(bytes(bad_ct), key, result["nonce"], result["tag"])
 
 
 # ===========================================================================

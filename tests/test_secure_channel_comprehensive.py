@@ -762,7 +762,7 @@ class TestMaxMessageSize:
         from ama_cryptography.secure_channel import MAX_MESSAGE_SIZE
 
         init_sess, resp_sess = established_session
-        data = b"\xAA" * MAX_MESSAGE_SIZE
+        data = b"\xaa" * MAX_MESSAGE_SIZE
         msg = init_sess.encrypt(data)
         assert resp_sess.decrypt(msg) == data
 
@@ -771,8 +771,8 @@ class TestMaxMessageSize:
         from ama_cryptography.secure_channel import MAX_MESSAGE_SIZE
 
         init_sess, _ = established_session
-        data = b"\xAA" * (MAX_MESSAGE_SIZE + 1)
-        with pytest.raises(ValueError, match="[Mm]essage too large"):
+        data = b"\xaa" * (MAX_MESSAGE_SIZE + 1)
+        with pytest.raises(ValueError, match=r"[Mm]essage too large"):
             init_sess.encrypt(data)
 
 

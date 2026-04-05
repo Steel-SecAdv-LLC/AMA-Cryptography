@@ -22,28 +22,20 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from ama_cryptography.pqc_backends import (
-    DILITHIUM_AVAILABLE,
-    KYBER_AVAILABLE,
     _ED25519_NATIVE_AVAILABLE,
     _HKDF_NATIVE_AVAILABLE,
+    DILITHIUM_AVAILABLE,
+    KYBER_AVAILABLE,
     _native_lib,
 )
 
 NATIVE_AVAILABLE = _native_lib is not None
 
-skip_no_native = pytest.mark.skipif(
-    not NATIVE_AVAILABLE, reason="Native C library not available"
-)
+skip_no_native = pytest.mark.skipif(not NATIVE_AVAILABLE, reason="Native C library not available")
 skip_no_kyber = pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber not available")
-skip_no_ed25519 = pytest.mark.skipif(
-    not _ED25519_NATIVE_AVAILABLE, reason="Ed25519 not available"
-)
-skip_no_hkdf = pytest.mark.skipif(
-    not _HKDF_NATIVE_AVAILABLE, reason="Native HKDF not available"
-)
-skip_no_dilithium = pytest.mark.skipif(
-    not DILITHIUM_AVAILABLE, reason="Dilithium not available"
-)
+skip_no_ed25519 = pytest.mark.skipif(not _ED25519_NATIVE_AVAILABLE, reason="Ed25519 not available")
+skip_no_hkdf = pytest.mark.skipif(not _HKDF_NATIVE_AVAILABLE, reason="Native HKDF not available")
+skip_no_dilithium = pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
 
 
 # ===========================================================================
@@ -119,15 +111,13 @@ class TestGoldenRatioConvergence:
         seq = fibonacci_sequence(n)
         if len(seq) >= 2 and seq[-2] > 0:
             ratio = seq[-1] / seq[-2]
-            assert abs(ratio - PHI) < 0.01, (
-                f"Ratio {ratio} not close to PHI={PHI} for n={n}"
-            )
+            assert abs(ratio - PHI) < 0.01, f"Ratio {ratio} not close to PHI={PHI} for n={n}"
 
     def test_golden_ratio_convergence_proof(self) -> None:
         """The built-in golden ratio convergence proof must pass."""
         from ama_cryptography.equations import golden_ratio_convergence_proof
 
-        passed, final_ratio, details = golden_ratio_convergence_proof(iterations=30)
+        passed, final_ratio, _details = golden_ratio_convergence_proof(iterations=30)
         assert passed, f"Golden ratio convergence failed: ratio={final_ratio}"
 
 
@@ -146,9 +136,7 @@ class TestNTTRoundtripSubstitute:
         info=st.binary(min_size=0, max_size=64),
     )
     @settings(max_examples=50)
-    def test_hkdf_roundtrip_determinism(
-        self, ikm: bytes, salt: bytes, info: bytes
-    ) -> None:
+    def test_hkdf_roundtrip_determinism(self, ikm: bytes, salt: bytes, info: bytes) -> None:
         """HKDF must produce identical output for identical inputs."""
         from ama_cryptography.pqc_backends import native_hkdf
 
@@ -172,9 +160,7 @@ class TestHKDFDeterminism:
         info=st.binary(min_size=0, max_size=128),
     )
     @settings(max_examples=100)
-    def test_hkdf_deterministic(
-        self, ikm: bytes, salt: bytes, info: bytes
-    ) -> None:
+    def test_hkdf_deterministic(self, ikm: bytes, salt: bytes, info: bytes) -> None:
         """Identical (ikm, salt, info) triple must produce identical output."""
         from ama_cryptography.pqc_backends import native_hkdf
 
@@ -201,7 +187,7 @@ class TestEd25519SignatureDeterminism:
             native_ed25519_sign,
         )
 
-        pk, sk = native_ed25519_keypair()
+        _pk, sk = native_ed25519_keypair()
         sig1 = native_ed25519_sign(msg, sk)
         sig2 = native_ed25519_sign(msg, sk)
         assert sig1 == sig2, "Ed25519 produced non-deterministic signatures"
