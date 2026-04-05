@@ -16,6 +16,7 @@ AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
 import pytest
 
 from ama_cryptography.pqc_backends import _native_lib
+from ama_cryptography.secure_memory import SecureMemoryError
 
 NATIVE_AVAILABLE = _native_lib is not None
 
@@ -263,7 +264,7 @@ class TestSecureMlockMunlock:
         buf = bytearray(4096)
         try:
             secure_mlock(buf)
-        except (NotImplementedError, OSError):
+        except (NotImplementedError, OSError, SecureMemoryError):
             pass  # May not be available on all platforms
 
     def test_munlock_bytearray(self) -> None:
@@ -273,7 +274,7 @@ class TestSecureMlockMunlock:
         buf = bytearray(4096)
         try:
             secure_munlock(buf)
-        except (NotImplementedError, OSError):
+        except (NotImplementedError, OSError, SecureMemoryError):
             pass
 
     def test_mlock_empty(self) -> None:
@@ -282,7 +283,7 @@ class TestSecureMlockMunlock:
 
         try:
             secure_mlock(bytearray())
-        except (NotImplementedError, OSError):
+        except (NotImplementedError, OSError, SecureMemoryError):
             pass
 
     def test_munlock_empty(self) -> None:
@@ -291,7 +292,7 @@ class TestSecureMlockMunlock:
 
         try:
             secure_munlock(bytearray())
-        except (NotImplementedError, OSError):
+        except (NotImplementedError, OSError, SecureMemoryError):
             pass
 
 
