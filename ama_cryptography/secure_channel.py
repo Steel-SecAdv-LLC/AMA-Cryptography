@@ -125,7 +125,18 @@ class ChannelMessage:
 
     @classmethod
     def deserialize(cls, data: bytes) -> "ChannelMessage":
-        """Deserialize from wire format."""
+        """Deserialize from wire format.
+
+        Raises:
+            ChannelError: If data is truncated or malformed
+        """
+        # Minimum: session_id(32) + seq(8) + nonce(12) + ct_len(4) + tag(16) = 72
+        min_len = SESSION_ID_BYTES + 8 + NONCE_BYTES + 4 + TAG_BYTES
+        if len(data) < min_len:
+            raise ChannelError(
+                f"Truncated ChannelMessage: {len(data)} bytes < minimum {min_len}"
+            )
+
         offset = 0
         session_id = data[offset : offset + SESSION_ID_BYTES]
         offset += SESSION_ID_BYTES
@@ -138,6 +149,12 @@ class ChannelMessage:
 
         (ct_len,) = struct.unpack(">I", data[offset : offset + 4])
         offset += 4
+
+        if offset + ct_len + TAG_BYTES > len(data):
+            raise ChannelError(
+                f"Truncated ChannelMessage: declared ct_len={ct_len} "
+                f"but only {len(data) - offset - TAG_BYTES} bytes available"
+            )
 
         ciphertext = data[offset : offset + ct_len]
         offset += ct_len

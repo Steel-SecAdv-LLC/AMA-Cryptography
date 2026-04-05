@@ -131,9 +131,9 @@ void ama_dilithium_ntt_sve2(int32_t poly[DILITHIUM_N],
                     svint32_t hi = svld1_s32(pg, poly + start + len + i);
 
                     /* Perform Montgomery reduction element-wise.
-                     * Extract to memory, reduce, re-load. */
-                    int32_t lo_buf[64], hi_buf[64], t_buf[64];
-                    svst1_s32(pg, lo_buf, lo);
+                     * Extract hi to memory, reduce, re-load.  lo is
+                     * used directly as an SVE register for butterfly. */
+                    int32_t hi_buf[64], t_buf[64];
                     svst1_s32(pg, hi_buf, hi);
 
                     for (uint64_t e = 0; e < active; e++) {

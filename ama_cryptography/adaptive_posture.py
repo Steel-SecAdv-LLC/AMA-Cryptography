@@ -181,6 +181,9 @@ class PostureEvaluator:
         # Lyapunov stability tracking — rolling window of timing deviations
         self._timing_deviation_history: Deque[float] = deque(maxlen=50)
         self._lyapunov_baseline: Optional[float] = None
+        # Track the number of alerts already processed so we don't
+        # re-append deviations from the monitor's sliding window.
+        self._last_processed_alert_count: int = 0
 
     def evaluate(self, monitor_report: Dict[str, Any]) -> PostureEvaluation:
         """
@@ -303,12 +306,18 @@ class PostureEvaluator:
         Lyapunov function V(x) = ||x - x*||^2 measures distance from
         equilibrium. If V_dot > 0 (instability), the score increases.
         """
-        # Collect deviation magnitudes from timing alerts
-        for alert in timing_alerts:
+        # Collect deviation magnitudes from NEW timing alerts only.
+        # timing_alerts comes from the monitor's recent_alerts sliding
+        # window (last ~10 alerts).  Between evaluations, most alerts
+        # have already been processed.  We track how many we've seen
+        # so far and only append the truly new ones.
+        new_alerts = timing_alerts[self._last_processed_alert_count :]
+        for alert in new_alerts:
             anomaly = alert.get("anomaly")
             if anomaly is not None:
                 deviation = getattr(anomaly, "deviation_sigma", 0.0)
                 self._timing_deviation_history.append(deviation)
+        self._last_processed_alert_count = len(timing_alerts)
 
         if len(self._timing_deviation_history) < 5:
             return 0.0
@@ -343,8 +352,12 @@ class PostureEvaluator:
             # System is stable or converging — low score
             instability = 0.0
 
-        # Update baseline with exponential moving average
-        self._lyapunov_baseline = self._lyapunov_baseline * 0.9 + V * 0.1
+        # Update baseline with exponential moving average, but only when
+        # the system is stable.  Updating during instability would cause the
+        # baseline to track the attack, making the score converge to zero
+        # ("boiling frog" problem).
+        if V_dot <= 0:
+            self._lyapunov_baseline = self._lyapunov_baseline * 0.9 + V * 0.1
 
         return instability
 
@@ -417,6 +430,7 @@ class PostureEvaluator:
         self._current_level = ThreatLevel.NOMINAL
         self._timing_deviation_history.clear()
         self._lyapunov_baseline = None
+        self._last_processed_alert_count = 0
 
 
 class CryptoPostureController:
