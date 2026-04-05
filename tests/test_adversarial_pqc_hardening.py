@@ -345,7 +345,7 @@ class TestNoiseNKProtocolFuzzing:
         tampered_tag[0] ^= 0xFF
         bad_msg2 = ChannelMessage(
             session_id=msg.session_id,
-            sequence_number=msg.sequence_number + 1,
+            sequence_number=msg.sequence_number,
             nonce=msg.nonce,
             ciphertext=msg.ciphertext,
             tag=bytes(tampered_tag),
