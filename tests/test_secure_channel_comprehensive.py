@@ -670,3 +670,161 @@ class TestSessionClose:
 
         with pytest.raises(ChannelError, match="Cannot decrypt"):
             resp_sess.decrypt(msg)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4A: Additional Adversarial Test Classes
+# ---------------------------------------------------------------------------
+
+
+@skip_no_native
+class TestRekeyDesync:
+    """Test rekey desynchronization and recovery."""
+
+    def test_rekey_one_side_only_fails(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+        """Rekeying only one side causes decryption failure."""
+        init_sess, resp_sess = established_session
+
+        # Rekey initiator only
+        init_sess.rekey()
+
+        # Encrypt with new keys
+        msg = init_sess.encrypt(b"after one-sided rekey")
+
+        # Decrypt with old keys should fail (tag mismatch)
+        with pytest.raises((ValueError, RuntimeError)):
+            resp_sess.decrypt(msg)
+
+    def test_rekey_desync_recovery(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+        """After desync, rekeying both sides restores communication."""
+        init_sess, resp_sess = established_session
+
+        # Desync: rekey initiator only
+        init_sess.rekey()
+
+        # Now rekey responder to resync
+        resp_sess.rekey()
+
+        # Communication should work again
+        msg = init_sess.encrypt(b"resynced")
+        assert resp_sess.decrypt(msg) == b"resynced"
+
+    def test_double_rekey_one_side(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+        """Double-rekeying one side diverges further."""
+        init_sess, resp_sess = established_session
+
+        init_sess.rekey()
+        init_sess.rekey()
+
+        msg = init_sess.encrypt(b"double rekey")
+
+        # Single rekey on responder should still fail
+        resp_sess.rekey()
+        with pytest.raises((ValueError, RuntimeError)):
+            resp_sess.decrypt(msg)
+
+        # Second rekey on responder to match
+        resp_sess.rekey()
+        msg2 = init_sess.encrypt(b"now synced")
+        assert resp_sess.decrypt(msg2) == b"now synced"
+
+
+@skip_no_native
+class TestSessionTTLEdgeCases:
+    """Test TTL edge cases."""
+
+    def test_ttl_zero_immediately_expired(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+        """TTL=0 means session is immediately expired."""
+        from ama_cryptography.secure_channel import SessionExpiredError
+
+        init_sess, _ = established_session
+        init_sess.ttl_seconds = 0.0
+
+        with pytest.raises(SessionExpiredError):
+            init_sess.encrypt(b"expired")
+
+    def test_ttl_very_large_not_expired(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+        """Very large TTL does not expire."""
+        init_sess, resp_sess = established_session
+        init_sess.ttl_seconds = 999999.0
+        resp_sess.ttl_seconds = 999999.0
+
+        msg = init_sess.encrypt(b"long lived")
+        assert resp_sess.decrypt(msg) == b"long lived"
+
+
+@skip_no_native
+class TestMaxMessageSize:
+    """Test message size limits."""
+
+    def test_encrypt_max_size(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+        """Encrypting exactly MAX_MESSAGE_SIZE bytes succeeds."""
+        from ama_cryptography.secure_channel import MAX_MESSAGE_SIZE
+
+        init_sess, resp_sess = established_session
+        data = b"\xAA" * MAX_MESSAGE_SIZE
+        msg = init_sess.encrypt(data)
+        assert resp_sess.decrypt(msg) == data
+
+    def test_encrypt_over_max_size_rejected(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+        """Encrypting MAX_MESSAGE_SIZE + 1 bytes raises ValueError."""
+        from ama_cryptography.secure_channel import MAX_MESSAGE_SIZE
+
+        init_sess, _ = established_session
+        data = b"\xAA" * (MAX_MESSAGE_SIZE + 1)
+        with pytest.raises(ValueError, match="[Mm]essage too large"):
+            init_sess.encrypt(data)
+
+
+@skip_no_native
+class TestReplayWindowExhaustion:
+    """Test replay window behavior under heavy message load."""
+
+    def test_window_exhaustion_rejects_old(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+        """After 257+ messages, old sequence numbers are rejected."""
+        from ama_cryptography.secure_channel import ReplayError
+
+        init_sess, resp_sess = established_session
+
+        # Send 257 messages (window size is 256)
+        msgs = []
+        for _ in range(257):
+            m = init_sess.encrypt(b"x")
+            msgs.append(m)
+            resp_sess.decrypt(m)
+
+        # First message (seq=0) should now be below window base
+        with pytest.raises(ReplayError):
+            resp_sess.decrypt(msgs[0])
+
+    def test_replay_within_window_detected(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+        """Replaying a recent message within window is detected."""
+        from ama_cryptography.secure_channel import ReplayError
+
+        init_sess, resp_sess = established_session
+
+        msg = init_sess.encrypt(b"once")
+        resp_sess.decrypt(msg)
+
+        with pytest.raises(ReplayError):
+            resp_sess.decrypt(msg)
+
+
+@skip_no_native
+class TestConcurrentEncryptDecrypt:
+    """Test concurrent encrypt/decrypt on a session."""
+
+    def test_concurrent_encrypt(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+        """Multiple encrypts produce unique messages."""
+        init_sess, resp_sess = established_session
+
+        msgs = [init_sess.encrypt(f"msg-{i}".encode()) for i in range(10)]
+
+        # Each message should have a unique sequence number
+        seqs = [m.sequence_number for m in msgs]
+        assert len(set(seqs)) == 10
+
+        # All should decrypt successfully
+        for i, m in enumerate(msgs):
+            pt = resp_sess.decrypt(m)
+            assert pt == f"msg-{i}".encode()
