@@ -24,6 +24,7 @@ Version: 2.1
 """
 
 import logging
+import math
 import time
 import uuid
 from collections import deque
@@ -31,6 +32,8 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum, auto
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
+
+from ama_cryptography.equations import lyapunov_derivative, lyapunov_function
 
 logger = logging.getLogger(__name__)
 
@@ -110,15 +113,16 @@ class PostureEvaluator:
     """
     Evaluates cryptographic security posture from 3R monitor output.
 
-    Consumes timing anomalies, pattern anomalies, and resonance analysis
-    from AmaCryptographyMonitor to derive a threat level and recommended
-    action. Thresholds are configurable for different deployment contexts.
+    Consumes timing anomalies, pattern anomalies, resonance analysis, and
+    Lyapunov stability signals from AmaCryptographyMonitor to derive a threat
+    level and recommended action. Thresholds are configurable for different
+    deployment contexts.
 
     The evaluator uses a weighted scoring model:
-        - Timing anomalies (critical/warning) contribute severity-weighted scores
-        - Pattern anomalies contribute based on z-score magnitude
-        - Resonance detection contributes based on resonance ratio
-        - Scores are normalized against configurable thresholds
+        - Timing anomalies (45%) — severity-weighted scores
+        - Pattern anomalies (25%) — z-score magnitude
+        - Resonance detection (15%) — resonance ratio
+        - Lyapunov stability (15%) — double-helix engine divergence detection
     """
 
     def __init__(
@@ -153,6 +157,9 @@ class PostureEvaluator:
         # Hysteresis state: track consecutive evaluations at each candidate level
         self._consecutive_counts: Dict[ThreatLevel, int] = dict.fromkeys(ThreatLevel, 0)
         self._current_level: ThreatLevel = ThreatLevel.NOMINAL
+        # Lyapunov stability tracking — rolling window of timing deviations
+        self._timing_deviation_history: Deque[float] = deque(maxlen=50)
+        self._lyapunov_baseline: Optional[float] = None
 
     def evaluate(self, monitor_report: Dict[str, Any]) -> PostureEvaluation:
         """
@@ -182,11 +189,18 @@ class PostureEvaluator:
         timing_score = self._score_timing_alerts(timing_alerts)
         pattern_score = self._score_pattern_alerts(pattern_alerts)
         resonance_score = self._score_resonance(monitor_report.get("resonance_analysis", {}))
+        lyapunov_score = self._score_lyapunov_stability(timing_alerts)
 
-        score = timing_score * 0.5 + pattern_score * 0.3 + resonance_score * 0.2
+        score = (
+            timing_score * 0.45
+            + pattern_score * 0.25
+            + resonance_score * 0.15
+            + lyapunov_score * 0.15
+        )
         signals["timing_score"] = timing_score
         signals["pattern_score"] = pattern_score
         signals["resonance_score"] = resonance_score
+        signals["lyapunov_score"] = lyapunov_score
         signals["raw_score"] = score
         signals["timing_alert_count"] = len(timing_alerts)
         signals["pattern_alert_count"] = len(pattern_alerts)
@@ -257,6 +271,59 @@ class PostureEvaluator:
         # Normalize: ratio of 3.0 is threshold, 10.0 is alarming
         return min(1.0, max(0.0, (max_ratio - 3.0) / 7.0))
 
+    def _score_lyapunov_stability(self, timing_alerts: List[Dict]) -> float:
+        """Score timing distribution stability using Lyapunov analysis.
+
+        Uses the double-helix engine's Lyapunov function to detect when
+        timing distributions diverge from stable basins, indicating
+        potential side-channel attack or environmental degradation.
+
+        The timing deviation history is treated as a state vector; the
+        Lyapunov function V(x) = ||x - x*||^2 measures distance from
+        equilibrium. If V_dot > 0 (instability), the score increases.
+        """
+        # Collect deviation magnitudes from timing alerts
+        for alert in timing_alerts:
+            anomaly = alert.get("anomaly")
+            if anomaly is not None:
+                deviation = getattr(anomaly, "deviation_sigma", 0.0)
+                self._timing_deviation_history.append(deviation)
+
+        if len(self._timing_deviation_history) < 5:
+            return 0.0
+
+        # Build state vector from recent deviation history
+        from ama_cryptography._numeric import Vec, ones, zeros
+
+        n = len(self._timing_deviation_history)
+        state = Vec(list(self._timing_deviation_history))
+        # Target state: zero deviations (stable cryptographic timing)
+        target = zeros(n)
+
+        # Compute Lyapunov value V(x) = ||x - x*||^2
+        V = lyapunov_function(state, target)
+
+        # Establish baseline on first evaluation with enough data
+        if self._lyapunov_baseline is None:
+            self._lyapunov_baseline = V
+            return 0.0
+
+        # Compute derivative proxy: V_dot ~ V_current - V_previous
+        V_dot = lyapunov_derivative(V)
+
+        # If Lyapunov derivative is positive, system is diverging (unstable)
+        if V_dot > 0:
+            # Normalize: V growing indicates instability
+            instability = min(1.0, V / max(self._lyapunov_baseline * 10.0, 1e-6))
+        else:
+            # System is stable or converging — low score
+            instability = 0.0
+
+        # Update baseline with exponential moving average
+        self._lyapunov_baseline = self._lyapunov_baseline * 0.9 + V * 0.1
+
+        return instability
+
     def _classify(self, score: float) -> tuple:
         """
         Classify threat level from effective score with hysteresis.
@@ -324,6 +391,8 @@ class PostureEvaluator:
         self._evaluation_count = 0
         self._consecutive_counts = dict.fromkeys(ThreatLevel, 0)
         self._current_level = ThreatLevel.NOMINAL
+        self._timing_deviation_history.clear()
+        self._lyapunov_baseline = None
 
 
 class CryptoPostureController:
