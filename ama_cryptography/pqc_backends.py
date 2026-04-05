@@ -1769,7 +1769,12 @@ def native_sha3_256(data: bytes) -> bytes:
         RuntimeError: If native library is not available
     """
     if _cy_sha3_fn is not None:
-        return _cy_sha3_fn(data)
+        try:
+            return _cy_sha3_fn(data)
+        except Exception:
+            raise
+        except BaseException as exc:
+            raise RuntimeError(f"Cython SHA3-256 panic: {exc}") from exc
 
     if _native_lib is None or not _SHA3_256_NATIVE_AVAILABLE:
         raise RuntimeError("SHA3-256 native backend not available. " + _INSTALL_HINT)
@@ -1868,7 +1873,7 @@ def _probe_cython_hmac() -> "Optional[Callable[[bytes, bytes], bytes]]":
         from ama_cryptography.hmac_binding import cy_hmac_sha3_256
 
         return cy_hmac_sha3_256  # type: ignore[no-any-return]  # Cython binding; return type opaque to mypy (PQC-004)
-    except ImportError:
+    except (ImportError, AttributeError):
         return None
 
 
@@ -1912,7 +1917,12 @@ def hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
     if not HMAC_SHA3_256_AVAILABLE:
         raise RuntimeError("HMAC-SHA3-256 backend not available. " + _INSTALL_HINT)
     if _cy_hmac_fn is not None:
-        return _cy_hmac_fn(key, msg)
+        try:
+            return _cy_hmac_fn(key, msg)
+        except Exception:
+            raise
+        except BaseException as exc:
+            raise RuntimeError(f"Cython HMAC-SHA3-256 panic: {exc}") from exc
     return native_hmac_sha3_256(key, msg)
 
 
