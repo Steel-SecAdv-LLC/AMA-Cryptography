@@ -70,15 +70,27 @@ python -m ama_cryptography            # Runs demo/POST
 
 ## CI Matrix
 
-The CI pipeline (`.github/workflows/ci.yml`) runs 5 parallel jobs:
+The CI pipeline (`.github/workflows/ci.yml`) runs a cross-platform matrix:
 
-| Job | Python Versions | Description |
-|-----|----------------|-------------|
-| `test` | 3.9, 3.10, 3.11, 3.12, 3.13 | Full test suite + demo verification |
+### Test Matrix (3 OS × 5 Python versions = 12 configurations)
+
+| OS | Python Versions | Notes |
+|----|----------------|-------|
+| `ubuntu-latest` (x86-64) | 3.9, 3.10, 3.11, 3.12, 3.13 | Primary platform, full test suite |
+| `windows-latest` | 3.9, 3.10, 3.11, 3.12, 3.13 | Windows compatibility (CMake via choco) |
+| `ubuntu-24.04-arm` (AArch64) | 3.11, 3.13 | ARM64 with NEON/SVE2 dispatch testing |
+
+### Quality & Security Jobs
+
+| Job | Python | Description |
+|-----|--------|-------------|
 | `code-quality` | 3.11 | ruff + black + mypy --strict |
 | `security-checks` | 3.11 | bandit + semgrep + pip-audit + invariant checks |
-| `benchmark-regression` | 3.11 | Performance regression detection |
+| `benchmark-regression` | 3.11 | Performance regression detection vs baseline.json |
 | `constant-time-check` | N/A (C only) | dudect timing analysis (50K iterations) |
+| `fuzz-*` | N/A (C only) | libFuzzer + ASan harnesses for core primitives |
+| `cppcheck` / `scan-build` | N/A (C only) | Static analysis (gcc + clang) |
+| `CodeQL` | N/A | GitHub security analysis |
 
 ## SIMD Tier Explanation
 
