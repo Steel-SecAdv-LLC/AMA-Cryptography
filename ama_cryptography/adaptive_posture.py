@@ -186,7 +186,7 @@ class PostureEvaluator:
         # Using timestamps instead of positional index because the
         # window slides (old alerts drop off the front), which would
         # invalidate a count-based offset.
-        self._last_processed_alert_ts: float = 0.0
+        self._last_processed_alert_ts: float = -1.0
 
     def evaluate(self, monitor_report: Dict[str, Any]) -> PostureEvaluation:
         """
@@ -436,7 +436,7 @@ class PostureEvaluator:
         self._current_level = ThreatLevel.NOMINAL
         self._timing_deviation_history.clear()
         self._lyapunov_baseline = None
-        self._last_processed_alert_ts = 0.0
+        self._last_processed_alert_ts = -1.0
 
 
 class CryptoPostureController:
