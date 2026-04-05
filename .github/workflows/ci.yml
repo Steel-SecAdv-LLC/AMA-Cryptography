@@ -67,6 +67,7 @@ jobs:
         pip install -e ".[dev]"
 
     - name: Verify module integrity digest is current
+      shell: bash
       run: |
         python -c "
         from ama_cryptography._self_test import verify_module_integrity
@@ -80,6 +81,7 @@ jobs:
         "
 
     - name: Verify crypto backends are available
+      shell: bash
       run: |
         python -c "
         from ama_cryptography.pqc_backends import (
@@ -122,17 +124,24 @@ jobs:
         fi
 
     - name: Run demonstration
+      env:
+        PYTHONUTF8: "1"
       run: |
         python -m ama_cryptography
 
     - name: Verify demonstration output
+      shell: bash
       run: |
         python -c "
+        import os
         import subprocess
         import sys
 
-        result = subprocess.run(['python', '-m', 'ama_cryptography'],
-                              capture_output=True, text=True, timeout=60)
+        env = os.environ.copy()
+        env['PYTHONUTF8'] = '1'
+        result = subprocess.run([sys.executable, '-m', 'ama_cryptography'],
+                              capture_output=True, text=True, timeout=60,
+                              encoding='utf-8', errors='replace', env=env)
 
         if result.returncode != 0:
             print('ERROR: Demonstration failed')
