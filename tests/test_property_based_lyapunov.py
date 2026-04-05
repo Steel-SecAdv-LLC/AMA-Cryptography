@@ -56,21 +56,24 @@ class TestLyapunovStability:
     @settings(max_examples=100)
     def test_lyapunov_nonnegative(self, state: "list[float]") -> None:
         """Lyapunov function value must be non-negative for any state."""
-        from ama_cryptography._numeric import array
+        from ama_cryptography._numeric import Vec, array
         from ama_cryptography.equations import lyapunov_function
 
         x = array(state)
         target = array([0.0] * len(state))
+        assert isinstance(x, Vec)
+        assert isinstance(target, Vec)
         v = lyapunov_function(x, target)
         assert v >= 0.0, f"V(x) = {v} < 0 for state {state}"
 
     def test_lyapunov_zero_at_equilibrium(self) -> None:
         """Lyapunov function must be zero at the equilibrium point."""
-        from ama_cryptography._numeric import array
+        from ama_cryptography._numeric import Vec, array
         from ama_cryptography.equations import lyapunov_function
 
         for n in [3, 5, 10]:
             zero = array([0.0] * n)
+            assert isinstance(zero, Vec)
             v = lyapunov_function(zero, zero)
             assert abs(v) < 1e-10, f"V(0) = {v} != 0 for dim {n}"
 
@@ -84,11 +87,13 @@ class TestLyapunovStability:
     @settings(max_examples=50)
     def test_lyapunov_derivative_negative(self, state: "list[float]") -> None:
         """Lyapunov derivative must be <= 0 (stability)."""
-        from ama_cryptography._numeric import array
+        from ama_cryptography._numeric import Vec, array
         from ama_cryptography.equations import lyapunov_derivative, lyapunov_function
 
         x = array(state)
         target = array([0.0] * len(state))
+        assert isinstance(x, Vec)
+        assert isinstance(target, Vec)
         v = lyapunov_function(x, target)
         v_dot = lyapunov_derivative(v)
         assert v_dot <= 0.0, f"V_dot = {v_dot} > 0 for V = {v}"
