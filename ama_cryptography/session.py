@@ -154,7 +154,7 @@ class SessionState:
     @property
     def is_expired(self) -> bool:
         """Check if session has exceeded its TTL."""
-        return (time.monotonic() - self.created_at) > self.ttl_seconds
+        return (time.monotonic() - self.created_at) >= self.ttl_seconds
 
     @property
     def is_closed(self) -> bool:

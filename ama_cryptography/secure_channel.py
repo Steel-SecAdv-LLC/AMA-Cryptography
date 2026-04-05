@@ -328,7 +328,7 @@ class SecureSession:
 
     def is_expired(self) -> bool:
         """Check if session has exceeded its TTL."""
-        return (time.monotonic() - self.created_at) > self.ttl_seconds
+        return (time.monotonic() - self.created_at) >= self.ttl_seconds
 
     def needs_rekey(self) -> bool:
         """Check if session should be re-keyed based on message count."""
