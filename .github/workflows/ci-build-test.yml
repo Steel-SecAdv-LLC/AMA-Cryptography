@@ -147,18 +147,6 @@ jobs:
             refreshenv
           }
 
-      - name: Build native C library (Ubuntu/macOS)
-        if: matrix.os != 'windows-latest'
-        run: |
-          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
-          cmake --build build -j4
-
-      - name: Build native C library (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
-          cmake --build build --config Release -j4
-
       - name: Install Python build dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
@@ -168,8 +156,8 @@ jobs:
         run: |
           pip install -r requirements-dev.txt
 
-      - name: Build and install package
-        run: pip install -e .
+      - name: Build and install package (CMake auto-build via setup.py)
+        run: pip install -e . --no-build-isolation
 
       - name: Verify module integrity
         run: python -m ama_cryptography.integrity --verify

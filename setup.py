@@ -58,7 +58,7 @@ DEBUG = bool(os.getenv("AMA_DEBUG"))
 COVERAGE = bool(os.getenv("AMA_COVERAGE"))
 
 # Read long description
-long_description = Path("README.md").read_text(encoding="utf-8")
+long_description = (Path(__file__).resolve().parent / "README.md").read_text(encoding="utf-8")
 
 
 def get_compiler_flags():
@@ -197,6 +197,29 @@ class CMakeBuild(build_ext):
         # cryptographic backend (INVARIANT-7) and must be built for the
         # package to function.  Cython extensions are optional.
 
+        self._build_cmake()
+
+        # Build Cython extensions if present, skipping the sentinel.
+        real_extensions = [
+            ext for ext in self.extensions
+            if ext.name != "_ama_cmake_sentinel"
+        ]
+        if real_extensions:
+            self.extensions = real_extensions
+            try:
+                super().run()
+            except Exception as e:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "Cython extension build failed: %s. "
+                    "Native C library was built successfully by CMake — "
+                    "Cython math extensions are optional.",
+                    e,
+                )
+
+    def _build_cmake(self):
+        """Build libama_cryptography via CMake."""
         # Check if CMake is available
         try:
             subprocess.check_output(["cmake", "--version"])
