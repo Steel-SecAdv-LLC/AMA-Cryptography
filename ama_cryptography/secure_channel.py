@@ -7,8 +7,24 @@ AMA Cryptography - Post-Quantum Noise-NK Secure Channel
 ========================================================
 
 Implements a Noise-NK variant using AMA's hybrid post-quantum primitives.
-This is genuinely original: no open-source library combines PQ Noise with
-Kyber-1024 + Ed25519/ML-DSA-65 hybrid authentication.
+
+This protocol composes well-established building blocks from published
+specifications into a PQ-hybrid Noise-NK channel.  The individual
+primitives follow NIST/IETF standards; the protocol pattern follows
+the Noise Protocol Framework.  The specific PQ-hybrid composition
+(Kyber-1024 + Ed25519/ML-DSA-65) is novel and has not undergone
+independent security review -- it should be treated as experimental
+until a formal security analysis is published.
+
+References:
+    - Noise Protocol Framework, rev 34 (Perrin, 2018):
+      https://noiseprotocol.org/noise.html
+    - NIST FIPS 203 (ML-KEM / Kyber-1024): key encapsulation
+    - NIST FIPS 204 (ML-DSA-65 / Dilithium): digital signatures
+    - RFC 7748 (X25519): classical key agreement
+    - RFC 8032 (Ed25519): classical digital signatures
+    - RFC 5869 (HKDF): key derivation
+    - NIST SP 800-38D (AES-GCM): authenticated encryption
 
 Protocol:
     Key agreement:  HybridKEM (X25519 + Kyber-1024) via HybridCombiner

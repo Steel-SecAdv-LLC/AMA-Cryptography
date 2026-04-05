@@ -181,9 +181,12 @@ class PostureEvaluator:
         # Lyapunov stability tracking — rolling window of timing deviations
         self._timing_deviation_history: Deque[float] = deque(maxlen=50)
         self._lyapunov_baseline: Optional[float] = None
-        # Track the number of alerts already processed so we don't
+        # Track the timestamp of the last processed alert so we don't
         # re-append deviations from the monitor's sliding window.
-        self._last_processed_alert_count: int = 0
+        # Using timestamps instead of positional index because the
+        # window slides (old alerts drop off the front), which would
+        # invalidate a count-based offset.
+        self._last_processed_alert_ts: float = 0.0
 
     def evaluate(self, monitor_report: Dict[str, Any]) -> PostureEvaluation:
         """
@@ -308,16 +311,19 @@ class PostureEvaluator:
         """
         # Collect deviation magnitudes from NEW timing alerts only.
         # timing_alerts comes from the monitor's recent_alerts sliding
-        # window (last ~10 alerts).  Between evaluations, most alerts
-        # have already been processed.  We track how many we've seen
-        # so far and only append the truly new ones.
-        new_alerts = timing_alerts[self._last_processed_alert_count :]
-        for alert in new_alerts:
+        # window (last ~10 alerts).  The window slides — old alerts
+        # drop off the front — so a positional index would become
+        # stale.  Instead we compare each alert's timestamp against
+        # the last one we processed.
+        for alert in timing_alerts:
+            ts = alert.get("timestamp", 0.0)
+            if ts <= self._last_processed_alert_ts:
+                continue
             anomaly = alert.get("anomaly")
             if anomaly is not None:
                 deviation = getattr(anomaly, "deviation_sigma", 0.0)
                 self._timing_deviation_history.append(deviation)
-        self._last_processed_alert_count = len(timing_alerts)
+            self._last_processed_alert_ts = ts
 
         if len(self._timing_deviation_history) < 5:
             return 0.0
@@ -430,7 +436,7 @@ class PostureEvaluator:
         self._current_level = ThreatLevel.NOMINAL
         self._timing_deviation_history.clear()
         self._lyapunov_baseline = None
-        self._last_processed_alert_count = 0
+        self._last_processed_alert_ts = 0.0
 
 
 class CryptoPostureController:
