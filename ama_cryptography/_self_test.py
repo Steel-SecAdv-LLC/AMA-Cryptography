@@ -554,8 +554,20 @@ def _run_self_tests() -> bool:
             break
 
     # 3. Constant-time timing oracle (dudect-inspired)
-    # Retry up to 3 times — this is a probabilistic test and transient
-    # environmental noise (GC, scheduling, thermals) can inflate |t|.
+    # Retry up to 3 times before declaring failure.  Unlike the KATs above,
+    # this test is inherently probabilistic (Welch's t-test on wall-clock
+    # nanosecond measurements).  Transient environmental noise — GC pauses,
+    # CPU throttling, context switches, container scheduling — can inflate
+    # |t| above the 4.5 threshold even when the implementation is correct.
+    # Retrying is acceptable for FIPS POST here because:
+    #   (a) A *real* constant-time violation produces |t| >> 4.5 on every
+    #       attempt (the signal is structural, not transient).
+    #   (b) With 3 independent attempts the false-positive rate drops from
+    #       ~6.8e-6 per-import to ~3.1e-16 (assuming independence), making
+    #       spurious module shutdowns effectively impossible.
+    #   (c) The underlying KATs (deterministic, no retry) still gate all
+    #       algorithm correctness; the timing oracle is an *additional*
+    #       defence-in-depth layer, not the sole correctness check.
     if all_passed:
         oracle_passed = False
         oracle_detail = ""
