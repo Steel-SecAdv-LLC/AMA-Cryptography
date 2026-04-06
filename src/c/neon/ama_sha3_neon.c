@@ -114,18 +114,13 @@ void ama_keccak_f1600_neon(uint64_t state[25]) {
             B[PI[i]] = rotl64(state[i], ROTC[i]);
         }
 
-        /* Chi: use NEON for groups of 2 lanes at a time */
+        /* Chi: state[y+i] = B[y+i] ^ (~B[y+(i+1)%5] & B[y+(i+2)%5]) */
         for (int y = 0; y < 25; y += 5) {
-            uint64x2_t b01 = vld1q_u64(&B[y]);
-            uint64x2_t b12 = vld1q_u64(&B[y + 1]);
-            uint64x2_t b23 = vld1q_u64(&B[y + 2]);
-            /* state[y+i] = B[y+i] ^ (~B[y+(i+1)%5] & B[y+(i+2)%5]) */
             state[y + 0] = B[y + 0] ^ (~B[y + 1] & B[y + 2]);
             state[y + 1] = B[y + 1] ^ (~B[y + 2] & B[y + 3]);
             state[y + 2] = B[y + 2] ^ (~B[y + 3] & B[y + 4]);
             state[y + 3] = B[y + 3] ^ (~B[y + 4] & B[y + 0]);
             state[y + 4] = B[y + 4] ^ (~B[y + 0] & B[y + 1]);
-            (void)b01; (void)b12; (void)b23;
         }
 
         /* Iota */

@@ -17,6 +17,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 /* Forward declaration — provided by the including translation unit */
 extern void ama_secure_memzero(void *ptr, size_t len);

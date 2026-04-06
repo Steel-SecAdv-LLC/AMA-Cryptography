@@ -15,6 +15,11 @@ Contact:
   Steel Security Advisors LLC
   steel.sa.llc@gmail.com
 
+Third-Party Software:
+  ed25519-donna — Public domain by Andrew M. <liquidsun@gmail.com>
+  Source: https://github.com/floodyberry/ed25519-donna
+  Location: src/c/vendor/ed25519-donna/
+
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
