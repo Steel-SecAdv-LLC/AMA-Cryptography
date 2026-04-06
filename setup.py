@@ -325,6 +325,7 @@ setup(
     ],
     python_requires=">=3.9",
     packages=find_packages(exclude=["tests", "tests.*", "examples", "examples.*", "src", "src.*"]),
+    py_modules=["ama_cryptography_monitor"],
     # Note: pyproject.toml is the authoritative source for dependencies.
     # This section is kept in sync for compatibility with older tools.
     install_requires=[],
