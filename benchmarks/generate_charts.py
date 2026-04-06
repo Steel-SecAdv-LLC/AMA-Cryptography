@@ -25,51 +25,51 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 BENCH_FILE = ROOT / "benchmark_results.json"
 
-# -- Baseline data (measured 2026-04-03, Linux 6.18.5, native C backend) ------
-# Raw C numbers from benchmark_c_raw; Python numbers from phase0_baseline.py.
+# -- Baseline data (measured 2026-04-06, Linux 5.15.200, native C backend) ----
+# Raw C numbers from benchmark_c_raw; Python numbers from benchmark_suite.py.
 CRYPTO_OPS = {
-    "SHA3-256 (C, 32B)": {"ops_sec": 136_593, "category": "hash"},
-    "SHA3-256 (C, 1KB)": {"ops_sec": 18_840, "category": "hash"},
-    "SHA3-256 (Py, 1KB)": {"ops_sec": 19_159, "category": "hash"},
-    "HMAC-SHA3-256 (C)": {"ops_sec": 13_160, "category": "mac"},
-    "HKDF-SHA3-256 (C)": {"ops_sec": 8_464, "category": "kdf"},
+    "SHA3-256 (C, 32B)": {"ops_sec": 1_256_226, "category": "hash"},
+    "SHA3-256 (C, 1KB)": {"ops_sec": 237_907, "category": "hash"},
+    "SHA3-256 (Py, 1KB)": {"ops_sec": 598_091, "category": "hash"},
+    "HMAC-SHA3-256 (C)": {"ops_sec": 420_887, "category": "mac"},
+    "HKDF-SHA3-256 (C)": {"ops_sec": 99_305, "category": "kdf"},
 }
 
 SIGNATURE_OPS = {
-    "Ed25519 Sign": {"ops_sec": 5_211, "latency_ms": 0.192},
-    "Ed25519 Verify": {"ops_sec": 2_715, "latency_ms": 0.368},
-    "ML-DSA-65 Sign": {"ops_sec": 463, "latency_ms": 2.162},
-    "ML-DSA-65 Verify": {"ops_sec": 706, "latency_ms": 1.416},
+    "Ed25519 Sign": {"ops_sec": 8_923, "latency_ms": 0.112},
+    "Ed25519 Verify": {"ops_sec": 4_748, "latency_ms": 0.211},
+    "ML-DSA-65 Sign": {"ops_sec": 2_514, "latency_ms": 0.398},
+    "ML-DSA-65 Verify": {"ops_sec": 4_137, "latency_ms": 0.242},
     "SLH-DSA Sign": {"ops_sec": 1, "latency_ms": 741.0},
     "SLH-DSA Verify": {"ops_sec": 53, "latency_ms": 19.0},
 }
 
 KEM_OPS = {
-    "ML-KEM KeyGen": {"ops_sec": 1_463, "latency_ms": 0.683},
-    "ML-KEM Encap": {"ops_sec": 1_408, "latency_ms": 0.710},
-    "ML-KEM Decap": {"ops_sec": 1_372, "latency_ms": 0.729},
+    "ML-KEM KeyGen": {"ops_sec": 11_829, "latency_ms": 0.085},
+    "ML-KEM Encap": {"ops_sec": 11_905, "latency_ms": 0.084},
+    "ML-KEM Decap": {"ops_sec": 10_579, "latency_ms": 0.095},
 }
 
 C_VS_PYTHON = {
-    "SHA3-256 (1KB)": {"c": 18_840, "python": 19_159, "speedup": 1.0},
-    "HKDF (96B)": {"c": 8_464, "python": 8_013, "speedup": 1.1},
-    "Ed25519 Sign": {"c": 5_211, "python": 5_335, "speedup": 1.0},
-    "ML-DSA-65 Sign": {"c": 463, "python": 373, "speedup": 1.2},
-    "ML-KEM Encap": {"c": 1_408, "python": 580, "speedup": 2.4},
+    "SHA3-256 (1KB)": {"c": 237_907, "python": 598_091, "speedup": 1.0},
+    "HKDF (96B)": {"c": 99_305, "python": 73_245, "speedup": 1.4},
+    "Ed25519 Sign": {"c": 13_100, "python": 8_923, "speedup": 1.5},
+    "ML-DSA-65 Sign": {"c": 1_510, "python": 2_514, "speedup": 1.0},
+    "ML-KEM Encap": {"c": 11_905, "python": 1_408, "speedup": 8.5},
 }
 
 SCALING = {
-    7: {"ms": 2.04, "ops_sec": 491},
-    70: {"ms": 4.10, "ops_sec": 244},
-    700: {"ms": 5.50, "ops_sec": 182},
-    7000: {"ms": 120.00, "ops_sec": 8},
+    1: {"ms": 0.574, "ops_sec": 1_742},
+    10: {"ms": 1.046, "ops_sec": 956},
+    100: {"ms": 5.600, "ops_sec": 179},
+    1000: {"ms": 140.725, "ops_sec": 7},
 }
 
 FOUR_LAYER_BREAKDOWN = [
-    ("SHA3-256 Hash", 0.052),
-    ("HMAC-SHA3-256", 0.078),
-    ("Ed25519 + ML-DSA-65 Sign", 2.354),
-    ("HKDF Derivation", 0.125),
+    ("SHA3-256 Hash", 0.002),
+    ("HMAC-SHA3-256", 0.009),
+    ("Ed25519 + ML-DSA-65 Sign", 0.510),
+    ("HKDF Derivation", 0.032),
 ]
 
 
@@ -153,7 +153,7 @@ def generate_charts(output_dir: str) -> None:
             sig_ops["ML-DSA-65 Verify"]["ops_sec"] = ops["dilithium_verify"]["ops_per_sec"]
             sig_ops["ML-DSA-65 Verify"]["latency_ms"] = ops["dilithium_verify"]["mean_ms"]
         if "sha3_256" in ops:
-            c_vs_py["SHA3-256 (short)"]["c"] = ops["sha3_256"]["ops_per_sec"]
+            c_vs_py["SHA3-256 (1KB)"]["python"] = ops["sha3_256"]["ops_per_sec"]
 
     # -- Chart 1: Signature Performance --------------------------------------
     fig, ax = plt.subplots(figsize=(10, 6))

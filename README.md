@@ -376,17 +376,17 @@ NIST-standardized post-quantum algorithms:
 
 | Operation | Throughput | Latency | Notes |
 |-----------|-----------|---------|-------|
-| **KeyGen** | 4,527 ops/sec | 0.22ms | Native C, NTT q=8380417 |
-| **Sign** | 1,027 ops/sec | 0.97ms | Rejection sampling, constant-time |
-| **Verify** | 5,067 ops/sec | 0.20ms | Verified against NIST ACVP test vectors (self-attested) |
+| **KeyGen** | 5,958 ops/sec (C) / 1,687 ops/sec (Py) | 0.168ms | Native C, NTT q=8380417 |
+| **Sign** | 1,510 ops/sec (C) / 2,514 ops/sec (Py) | 0.398ms | Rejection sampling, constant-time |
+| **Verify** | 6,855 ops/sec (C) / 4,137 ops/sec (Py) | 0.146ms | Verified against NIST ACVP test vectors (self-attested) |
 
 ### ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)
 
 | Operation | Throughput | Latency | Notes |
 |-----------|-----------|---------|-------|
-| **KeyGen** | 9,798 ops/sec | 0.10ms | Native C, NTT q=3329 |
-| **Encapsulate** | 9,480 ops/sec | 0.11ms | IND-CCA2, Fujisaki-Okamoto |
-| **Decapsulate** | 8,913 ops/sec | 0.11ms | Implicit rejection |
+| **KeyGen** | 11,829 ops/sec (C) | 0.085ms | Native C, NTT q=3329 |
+| **Encapsulate** | 11,905 ops/sec (C) | 0.084ms | IND-CCA2, Fujisaki-Okamoto |
+| **Decapsulate** | 10,579 ops/sec (C) | 0.095ms | Implicit rejection |
 
 ### Full Multi-Layer Package Performance
 
@@ -394,8 +394,8 @@ Complete security package with all defense layers:
 
 | Operation | Mean Time | Throughput |
 |-----------|-----------|------------|
-| Package Create (all layers) | 0.48ms | 2,093 ops/sec |
-| Package Verify (all layers) | 0.38ms | 2,607 ops/sec |
+| Package Create (all layers) | 1.07ms | 937 ops/sec |
+| Package Verify (all layers) | 0.55ms | 1,822 ops/sec |
 
 **All Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65 (core), HKDF, RFC 3161 (supporting)
 
@@ -403,20 +403,19 @@ Complete security package with all defense layers:
 
 | Operation | Throughput | Latency |
 |-----------|-----------|---------|
-| SHA3-256 (32B) | 477,055 ops/sec | 0.002ms |
-| SHA3-256 (1KB) | 158,832 ops/sec | 0.006ms |
-| HMAC-SHA3-256 (1KB) | 114,278 ops/sec | 0.009ms |
-| HKDF-SHA3-256 (96B derive) | 73,318 ops/sec | 0.014ms |
-| Ed25519 KeyGen | 14,611 ops/sec | 0.07ms |
-| Ed25519 Sign | 14,976 ops/sec | 0.07ms |
-| Ed25519 Verify | 7,716 ops/sec | 0.13ms |
-| AES-256-GCM encrypt (1KB) | 1,087 ops/sec | 0.92ms |
-| ChaCha20-Poly1305 encrypt (1KB) | 155,725 ops/sec | 0.006ms |
-| X25519 DH Exchange | 1,280 ops/sec | 0.78ms |
+| SHA3-256 (32B) | 1,256,226 ops/sec (C) / 585,873 ops/sec (Py) | 0.001ms |
+| SHA3-256 (1KB) | 237,907 ops/sec (C) / 598,091 ops/sec (Py) | 0.004ms |
+| HMAC-SHA3-256 (32B) | 420,887 ops/sec (C) / 114,581 ops/sec (Py) | 0.002ms |
+| HKDF-SHA3-256 (96B derive) | 99,305 ops/sec (C) / 73,245 ops/sec (Py) | 0.010ms |
+| Ed25519 KeyGen | 13,615 ops/sec (C) / 8,770 ops/sec (Py) | 0.073ms |
+| Ed25519 Sign | 13,100 ops/sec (C) / 8,923 ops/sec (Py) | 0.076ms |
+| Ed25519 Verify | 6,635 ops/sec (C) / 4,748 ops/sec (Py) | 0.151ms |
+| AES-256-GCM encrypt (1KB) | 1,018 ops/sec (C) | 0.983ms |
+| X25519 DH Exchange | 1,181 ops/sec (C) | 0.847ms |
 
 **Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [benchmarks/](benchmarks/) for full performance data including all algorithms.
 
-*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, native C backend via ctypes. See [benchmarks/](benchmarks/) for raw C performance numbers (without ctypes overhead) and competitive comparisons against libsodium and liboqs. Reproducible via `python benchmarks/benchmark_runner.py --verbose` or `make -C benchmarks benchmark_c_raw`.*
+*Benchmarks: Linux 5.15.200 x86_64, Python 3.12.8, 8 CPU cores, native C backend via ctypes. Raw C numbers from `build/bin/benchmark_c_raw`; Python API numbers from `python benchmark_suite.py`. See [benchmarks/](benchmarks/) for full details. Reproducible via `python benchmark_suite.py` or `build/bin/benchmark_c_raw`.*
 
 
 ### Benchmark Charts
@@ -452,12 +451,12 @@ Complete security package with all defense layers:
 
 | Input Scale | Mean Time | Throughput |
 |-------------|-----------|------------|
-| 1x (baseline) | 0.84ms | 1,188 ops/sec |
-| 10x | 0.58ms | 1,719 ops/sec |
-| 100x | 2.90ms | 344 ops/sec |
-| 1000x | 100.74ms | 9.9 ops/sec |
+| 1x (baseline) | 0.57ms | 1,742 ops/sec |
+| 10x | 1.05ms | 956 ops/sec |
+| 100x | 5.60ms | 179 ops/sec |
+| 1000x | 140.73ms | 7.1 ops/sec |
 
-*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 50 iterations per size. The 1x baseline measures the full scalability pipeline including data preparation, which is why it differs from the 0.48ms Package Create number. See [benchmarks/](benchmarks/) for details.*
+*Benchmarks: Linux 5.15.200 x86_64, Python 3.12.8, 8 CPU cores, 50 iterations per size. See [benchmarks/](benchmarks/) for details.*
 
 </details>
 
@@ -466,12 +465,12 @@ Complete security package with all defense layers:
 
 | Operation | Standard | With Ethics | Overhead |
 |-----------|----------|-------------|----------|
-| HKDF Derivation | 0.063ms | 0.072ms | 14.29% |
-| Context Creation | - | 0.005ms | - |
+| HKDF Derivation | 0.014ms | 0.032ms | 134.31% |
+| Context Creation | - | 0.011ms | - |
 
 The ethical integration adds cryptographic binding to the 4 Omni-Code Ethical Pillars. The overhead applies to HKDF derivation specifically; end-to-end package creation overhead remains under 2% of total time since HKDF is a small fraction of the pipeline (ML-DSA-65 signing dominates at ~0.97ms).
 
-*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 1,000 iterations.*
+*Benchmarks: Linux 5.15.200 x86_64, Python 3.12.8, 8 CPU cores, 1,000 iterations.*
 
 </details>
 
