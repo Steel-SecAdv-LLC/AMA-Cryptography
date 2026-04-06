@@ -1107,10 +1107,15 @@ ama_error_t ama_ed25519_sign(
     hash[31] &= 127;
     hash[31] |= 64;
 
-    /* Determine buffer allocation: use stack for small messages */
-    if (64 + message_len <= sizeof(stack_buf)) {
+    /* Determine buffer allocation: use stack for small messages.
+     * Compare against the threshold directly to avoid size_t overflow
+     * in (64 + message_len) when message_len is near SIZE_MAX. */
+    if (message_len <= ED25519_STACK_THRESHOLD) {
         buf = stack_buf;
     } else {
+        if (message_len > SIZE_MAX - 64) {
+            return AMA_ERROR_INVALID_PARAM;
+        }
         buf = (uint8_t *)malloc(64 + message_len);
         if (!buf) {
             return AMA_ERROR_MEMORY;
@@ -1193,10 +1198,15 @@ ama_error_t ama_ed25519_verify(
     fe25519_neg(A.X, A.X);
     fe25519_neg(A.T, A.T);
 
-    /* H(R || A || message) — stack allocation for small messages */
-    if (64 + message_len <= sizeof(stack_buf)) {
+    /* H(R || A || message) — stack allocation for small messages.
+     * Compare against the threshold directly to avoid size_t overflow
+     * in (64 + message_len) when message_len is near SIZE_MAX. */
+    if (message_len <= ED25519_STACK_THRESHOLD) {
         buf = stack_buf;
     } else {
+        if (message_len > SIZE_MAX - 64) {
+            return AMA_ERROR_INVALID_PARAM;
+        }
         buf = (uint8_t *)malloc(64 + message_len);
         if (!buf) {
             return AMA_ERROR_MEMORY;
