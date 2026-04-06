@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 2.3 |
-| Last Updated | 2026-03-26 |
+| Last Updated | 2026-04-06 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -14,6 +14,20 @@
 ## Overview
 
 All notable changes to AMA Cryptography will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [2.1.2] - 2026-04-06
+
+### Changed - CI Workflow
+
+- **Auto-docs workflow:** Replaced direct commit-and-push to `main` with PR-based flow using `peter-evans/create-pull-request@v6`, avoiding direct writes to protected branches
+- **Workflow permissions:** Added `pull-requests: write` permission to `auto-docs.yml`
+
+### Fixed - CodeQL Alerts
+
+- **Alert #318 (legacy_compat.py:474):** Fixed file descriptor not always closed — restructured `os.open()` to pass fd directly into `_open_fd` context manager, eliminating the gap where an exception could leak the descriptor
+- **Alert #333 (ama_dilithium_avx2.c:77):** Resolved unused static function warning — added `AMA_UNUSED` annotation to `caddq_avx2` (retained for future NTT post-processing use)
 
 ---
 

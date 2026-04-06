@@ -729,7 +729,7 @@ GitHub Actions automatically tests:
 | Static Analysis | `static-analysis.yml` | CodeQL analysis |
 | Fuzzing | `fuzzing.yml` | C fuzz harnesses (12 targets) |
 | dudect | `dudect.yml` | Empirical constant-time verification |
-| Auto Docs | `auto-docs.yml` | Auto-generate and deploy documentation |
+| Auto Docs | `auto-docs.yml` | Auto-generate documentation via PR |
 | Wiki Sync | `wiki-sync.yml` | Auto-sync wiki/ to GitHub Wiki |
 
 </details>

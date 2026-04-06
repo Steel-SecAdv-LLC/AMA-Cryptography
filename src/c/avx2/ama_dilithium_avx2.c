@@ -74,7 +74,7 @@ __m256i montgomery_reduce_avx2(__m256i a_lo, __m256i a_hi) {
 /* ============================================================================
  * Conditional addition of q (reduce to [0, q))
  * ============================================================================ */
-static inline __m256i caddq_avx2(__m256i a) {
+static inline AMA_UNUSED __m256i caddq_avx2(__m256i a) {
     const __m256i q    = _mm256_set1_epi32(DILITHIUM_Q);
     const __m256i zero = _mm256_setzero_si256();
     /* mask = (a < 0) ? 0xFFFFFFFF : 0 */
