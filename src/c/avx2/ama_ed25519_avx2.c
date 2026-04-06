@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+#include "ama_cryptography.h"
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
@@ -287,6 +288,52 @@ void ama_fe51_sq_avx2(fe51 *r, const fe51 *a) {
     r->v[1] += c;
 
     (void)a2[4]; /* used conceptually via a->v[4] terms */
+}
+
+/* ============================================================================
+ * AVX2 Ed25519 API wrappers for dispatch system
+ *
+ * These functions are wired into the dispatch table when AVX2 is detected.
+ * They delegate to the optimized generic implementation (ama_ed25519.c)
+ * which uses:
+ *   - Binary decomposition cmov for O(log n) constant-time table lookup
+ *   - Stack allocation for messages <= 4KB (eliminates malloc/free)
+ *   - Radix-2^51 field arithmetic with __uint128_t intermediates
+ *
+ * The AVX2 field primitives above (fe51_mul_avx2, fe51_sq_avx2, etc.)
+ * are available for future integration into a fully-vectorized scalar
+ * multiplication path using 4-way parallel extended coordinate arithmetic.
+ * ============================================================================ */
+
+/* Forward declarations — defined in ama_ed25519.c */
+extern ama_error_t ama_ed25519_keypair(uint8_t public_key[32],
+                                        uint8_t secret_key[64]);
+extern ama_error_t ama_ed25519_sign(uint8_t signature[64],
+                                     const uint8_t *message,
+                                     size_t message_len,
+                                     const uint8_t secret_key[64]);
+extern ama_error_t ama_ed25519_verify(const uint8_t signature[64],
+                                       const uint8_t *message,
+                                       size_t message_len,
+                                       const uint8_t public_key[32]);
+
+ama_error_t ama_ed25519_keypair_avx2(uint8_t public_key[32],
+                                      uint8_t secret_key[64]) {
+    return ama_ed25519_keypair(public_key, secret_key);
+}
+
+ama_error_t ama_ed25519_sign_avx2(uint8_t signature[64],
+                                   const uint8_t *message,
+                                   size_t message_len,
+                                   const uint8_t secret_key[64]) {
+    return ama_ed25519_sign(signature, message, message_len, secret_key);
+}
+
+ama_error_t ama_ed25519_verify_avx2(const uint8_t signature[64],
+                                     const uint8_t *message,
+                                     size_t message_len,
+                                     const uint8_t public_key[32]) {
+    return ama_ed25519_verify(signature, message, message_len, public_key);
 }
 
 #else

@@ -76,6 +76,22 @@ typedef void (*ama_dilithium_pointwise_fn)(int32_t r[256],
                                            const int32_t a[256],
                                            const int32_t b[256]);
 
+/** Ed25519 keypair generation */
+typedef ama_error_t (*ama_ed25519_keypair_fn)(uint8_t public_key[32],
+                                              uint8_t secret_key[64]);
+
+/** Ed25519 signing */
+typedef ama_error_t (*ama_ed25519_sign_fn)(uint8_t signature[64],
+                                            const uint8_t *message,
+                                            size_t message_len,
+                                            const uint8_t secret_key[64]);
+
+/** Ed25519 signature verification */
+typedef ama_error_t (*ama_ed25519_verify_fn)(const uint8_t signature[64],
+                                              const uint8_t *message,
+                                              size_t message_len,
+                                              const uint8_t public_key[32]);
+
 /* ============================================================================
  * Dispatch function table (global, set once at init)
  *
@@ -101,6 +117,9 @@ typedef struct {
     ama_dilithium_ntt_fn      dilithium_ntt;        /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_dilithium_invntt_fn   dilithium_invntt;     /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_dilithium_pointwise_fn dilithium_pointwise; /**< Non-NULL when SIMD detected; callers MUST NULL-check */
+    ama_ed25519_keypair_fn    ed25519_keypair;      /**< Non-NULL when AVX2 detected; callers MUST NULL-check */
+    ama_ed25519_sign_fn       ed25519_sign;          /**< Non-NULL when AVX2 detected; callers MUST NULL-check */
+    ama_ed25519_verify_fn     ed25519_verify;        /**< Non-NULL when AVX2 detected; callers MUST NULL-check */
 } ama_dispatch_table_t;
 
 /* ============================================================================
