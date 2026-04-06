@@ -1,0 +1,8 @@
+Public domain by Andrew M. <liquidsun@gmail.com>
+
+Ed25519 reference implementation using Ed25519-donna.
+Original source: https://github.com/floodyberry/ed25519-donna
+
+This software is in the public domain. Where that dedication is not
+recognised, you are granted a perpetual, irrevocable license to copy
+and modify this software however you want.

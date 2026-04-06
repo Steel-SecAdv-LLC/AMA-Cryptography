@@ -176,6 +176,16 @@ extern void ama_dilithium_invntt_avx2(int32_t poly[256],
 extern void ama_dilithium_poly_pointwise_avx2(int32_t r[256],
                                                const int32_t a[256],
                                                const int32_t b[256]);
+extern ama_error_t ama_ed25519_keypair_avx2(uint8_t public_key[32],
+                                             uint8_t secret_key[64]);
+extern ama_error_t ama_ed25519_sign_avx2(uint8_t signature[64],
+                                          const uint8_t *message,
+                                          size_t message_len,
+                                          const uint8_t secret_key[64]);
+extern ama_error_t ama_ed25519_verify_avx2(const uint8_t signature[64],
+                                            const uint8_t *message,
+                                            size_t message_len,
+                                            const uint8_t public_key[32]);
 #endif
 
 #ifdef AMA_HAVE_NEON_IMPL
@@ -312,6 +322,9 @@ static void dispatch_init_internal(void) {
     dispatch_table.dilithium_ntt     = NULL;
     dispatch_table.dilithium_invntt  = NULL;
     dispatch_table.dilithium_pointwise = NULL;
+    dispatch_table.ed25519_keypair     = NULL;  /* NULL = caller uses generic scalar path */
+    dispatch_table.ed25519_sign        = NULL;
+    dispatch_table.ed25519_verify      = NULL;
 
 #ifdef AMA_HAVE_AVX2_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_AVX2) {
@@ -327,6 +340,11 @@ static void dispatch_init_internal(void) {
         dispatch_table.dilithium_ntt       = ama_dilithium_ntt_avx2;
         dispatch_table.dilithium_invntt    = ama_dilithium_invntt_avx2;
         dispatch_table.dilithium_pointwise = ama_dilithium_poly_pointwise_avx2;
+    }
+    if (dispatch_info.ed25519 >= AMA_IMPL_AVX2) {
+        dispatch_table.ed25519_keypair = ama_ed25519_keypair_avx2;
+        dispatch_table.ed25519_sign    = ama_ed25519_sign_avx2;
+        dispatch_table.ed25519_verify  = ama_ed25519_verify_avx2;
     }
 #endif
 
@@ -448,6 +466,8 @@ static void dispatch_init_internal(void) {
                 dispatch_table.kyber_ntt ? "SIMD" : "generic (inline)");
         fprintf(stderr, "[AMA Dispatch] dil_ntt      -> %s\n",
                 dispatch_table.dilithium_ntt ? "SIMD" : "generic (inline)");
+        fprintf(stderr, "[AMA Dispatch] ed25519      -> %s\n",
+                dispatch_table.ed25519_keypair ? "SIMD" : "generic (inline)");
     }
 }
 

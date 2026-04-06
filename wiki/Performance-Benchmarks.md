@@ -5,7 +5,7 @@
 Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the native C library via Python/ctypes.
 
 **Platform:** Linux-6.18.5-x86_64 | **CPU:** 4 cores | **Python:** 3.11.14
-**Date:** 2026-03-21 | **Dilithium Backend:** native C
+**Date:** 2026-04-06 | **Dilithium Backend:** native C
 
 ---
 

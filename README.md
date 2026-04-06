@@ -36,7 +36,7 @@
 **Author/Inventor:** Andrew E. A.
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
-**Version:** 2.1
+**Version:** 2.1.2
 **AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
@@ -62,7 +62,7 @@ The system combines NIST-standardized post-quantum algorithms with a 3R runtime 
 > - Secure file permissions for key files and cryptographic packages (store on encrypted volumes with restricted access)
 >
 > **Status:** Community-tested | Not externally audited
-> **Last Updated:** 2026-03-26
+> **Last Updated:** 2026-04-06
 
 ---
 
@@ -350,7 +350,7 @@ NIST-standardized post-quantum algorithms:
 
 - **Wallet Security**: ML-DSA-65 quantum-resistant signatures for wallet transaction authentication.
 - **Smart Contract Signing**: Quantum-resistant signatures for long-lived contracts.
-- **Transaction Throughput**: Sub-millisecond Ed25519 verification; ML-DSA-65 adds quantum resistance at higher latency (~0.97ms sign, ~0.20ms verify).
+- **Transaction Throughput**: Sub-millisecond Ed25519 verification; ML-DSA-65 adds quantum resistance at higher latency (~1.76ms sign, ~1.43ms verify — Python API via ctypes, per `benchmark-results.json`).
 - **Cross-Chain Bridges**: Hybrid signing (Ed25519 + ML-DSA-65) for backward compatibility and quantum resistance.
 - **NFT Provenance**: Quantum-resistant signatures designed for long-term validity.
 - **Timestamp Verification**: RFC 3161 trusted timestamping with quantum resistance.
@@ -374,49 +374,47 @@ NIST-standardized post-quantum algorithms:
 
 ### ML-DSA-65 (Post-Quantum Digital Signatures — FIPS 204)
 
-| Operation | Throughput | Latency | Notes |
+| Operation | Throughput (Python API via ctypes) | Latency | Notes |
 |-----------|-----------|---------|-------|
-| **KeyGen** | 4,527 ops/sec | 0.22ms | Native C, NTT q=8380417 |
-| **Sign** | 1,027 ops/sec | 0.97ms | Rejection sampling, constant-time |
-| **Verify** | 5,067 ops/sec | 0.20ms | Verified against NIST ACVP test vectors (self-attested) |
+| **KeyGen** | 595 ops/sec | ~1.68ms | Native C, NTT q=8380417 |
+| **Sign** | 567 ops/sec | ~1.76ms | Rejection sampling, constant-time |
+| **Verify** | 697 ops/sec | ~1.43ms | Verified against NIST ACVP test vectors (self-attested) |
+
+*Source: `benchmark-results.json` (CI regression suite). Run `build/bin/benchmark_c_raw` for raw C throughput without ctypes overhead.*
 
 ### ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)
 
-| Operation | Throughput | Latency | Notes |
-|-----------|-----------|---------|-------|
-| **KeyGen** | 9,798 ops/sec | 0.10ms | Native C, NTT q=3329 |
-| **Encapsulate** | 9,480 ops/sec | 0.11ms | IND-CCA2, Fujisaki-Okamoto |
-| **Decapsulate** | 8,913 ops/sec | 0.11ms | Implicit rejection |
+ML-KEM-1024 throughput is not yet tracked in the CI regression suite. Run `build/bin/benchmark_c_raw` locally for measured numbers.
 
 ### Full Multi-Layer Package Performance
 
-Complete security package with all defense layers:
+Complete security package with all defense layers (Python API via ctypes):
 
-| Operation | Mean Time | Throughput |
-|-----------|-----------|------------|
-| Package Create (all layers) | 0.48ms | 2,093 ops/sec |
-| Package Verify (all layers) | 0.38ms | 2,607 ops/sec |
+| Operation | Throughput | Latency |
+|-----------|-----------|----------|
+| Package Create (all layers) | 184 ops/sec | ~5.43ms |
+| Package Verify (all layers) | 561 ops/sec | ~1.78ms |
+
+*Source: `benchmark-results.json` (CI regression suite).*
 
 **All Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65 (core), HKDF, RFC 3161 (supporting)
 
-### Core Cryptographic Primitives
+### Core Cryptographic Primitives (Python API via ctypes)
 
-| Operation | Throughput | Latency |
-|-----------|-----------|---------|
-| SHA3-256 (32B) | 477,055 ops/sec | 0.002ms |
-| SHA3-256 (1KB) | 158,832 ops/sec | 0.006ms |
-| HMAC-SHA3-256 (1KB) | 114,278 ops/sec | 0.009ms |
-| HKDF-SHA3-256 (96B derive) | 73,318 ops/sec | 0.014ms |
-| Ed25519 KeyGen | 14,611 ops/sec | 0.07ms |
-| Ed25519 Sign | 14,976 ops/sec | 0.07ms |
-| Ed25519 Verify | 7,716 ops/sec | 0.13ms |
-| AES-256-GCM encrypt (1KB) | 1,087 ops/sec | 0.92ms |
-| ChaCha20-Poly1305 encrypt (1KB) | 155,725 ops/sec | 0.006ms |
-| X25519 DH Exchange | 1,280 ops/sec | 0.78ms |
+| Operation | Throughput | Source |
+|-----------|-----------|--------|
+| SHA3-256 (1KB) | 18,205 ops/sec | `benchmark-results.json` |
+| HMAC-SHA3-256 (1KB) | 12,127 ops/sec | `benchmark-results.json` |
+| HKDF-SHA3-256 (3-key derive) | 8,509 ops/sec | `benchmark-results.json` |
+| Ed25519 KeyGen | 5,167 ops/sec | `benchmark-results.json` |
+| Ed25519 Sign | 5,069 ops/sec | `benchmark-results.json` |
+| Ed25519 Verify | 2,796 ops/sec | `benchmark-results.json` |
+
+AES-256-GCM, ChaCha20-Poly1305, and X25519 are not yet tracked in the CI regression suite. Run `build/bin/benchmark_c_raw` for raw C throughput without ctypes overhead.
 
 **Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [benchmarks/](benchmarks/) for full performance data including all algorithms.
 
-*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, native C backend via ctypes. See [benchmarks/](benchmarks/) for raw C performance numbers (without ctypes overhead) and competitive comparisons against libsodium and liboqs. Reproducible via `python benchmarks/benchmark_runner.py --verbose` or `make -C benchmarks benchmark_c_raw`.*
+*Benchmarks: Linux 5.15.200 x86_64, Python 3.12.8, 8 CPU cores, native C backend via ctypes. Reproducible via `python benchmark_suite.py` (Python API) or `build/bin/benchmark_c_raw` (raw C).*
 
 
 ### Benchmark Charts
@@ -450,28 +448,22 @@ Complete security package with all defense layers:
 <details>
 <summary><strong>Scalability Analysis</strong></summary>
 
-| Input Scale | Mean Time | Throughput |
-|-------------|-----------|------------|
-| 1x (baseline) | 0.84ms | 1,188 ops/sec |
-| 10x | 0.58ms | 1,719 ops/sec |
-| 100x | 2.90ms | 344 ops/sec |
-| 1000x | 100.74ms | 9.9 ops/sec |
+Scalability across input sizes is not yet tracked in the CI regression suite. Measure locally:
 
-*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 50 iterations per size. The 1x baseline measures the full scalability pipeline including data preparation, which is why it differs from the 0.48ms Package Create number. See [benchmarks/](benchmarks/) for details.*
+```bash
+python benchmark_suite.py   # varies message size automatically
+```
 
 </details>
 
 <details>
 <summary><strong>Ethical Integration Overhead</strong></summary>
 
-| Operation | Standard | With Ethics | Overhead |
-|-----------|----------|-------------|----------|
-| HKDF Derivation | 0.063ms | 0.072ms | 14.29% |
-| Context Creation | - | 0.005ms | - |
+Ethical integration overhead is not yet tracked in the CI regression suite. The ethical layer adds cryptographic binding to the 4 Omni-Code Ethical Pillars via HKDF context. End-to-end package creation overhead remains under 2% of total time since HKDF is a small fraction of the pipeline (ML-DSA-65 signing dominates at ~1.76ms). Measure locally:
 
-The ethical integration adds cryptographic binding to the 4 Omni-Code Ethical Pillars. The overhead applies to HKDF derivation specifically; end-to-end package creation overhead remains under 2% of total time since HKDF is a small fraction of the pipeline (ML-DSA-65 signing dominates at ~0.97ms).
-
-*Benchmarks: Linux 6.18.5 x86_64, Python 3.11.14, 4 CPU cores, 1,000 iterations.*
+```bash
+python benchmark_suite.py   # includes ethical overhead breakdown
+```
 
 </details>
 
@@ -489,8 +481,8 @@ The ethical integration adds cryptographic binding to the 4 Omni-Code Ethical Pi
 git clone https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git
 cd AMA-Cryptography
 
-# Install dependencies
-pip install -r requirements.txt -r requirements-dev.txt
+# Install in editable mode with dev dependencies
+pip install -e ".[dev]"
 
 # Build native PQC C library (ML-DSA-65, Kyber-1024, SPHINCS+-256f)
 cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
@@ -696,7 +688,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*1,264 tests across 47 files (37 Python + 10 C) covering core crypto and NIST KATs, PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring.*
+*1,855+ tests across 47 files (37 Python + 10 C) covering core crypto and NIST KATs, PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. Run `pytest --co -q` for the current count.*
 
 </details>
 
@@ -729,7 +721,7 @@ GitHub Actions automatically tests:
 | Static Analysis | `static-analysis.yml` | CodeQL analysis |
 | Fuzzing | `fuzzing.yml` | C fuzz harnesses (12 targets) |
 | dudect | `dudect.yml` | Empirical constant-time verification |
-| Auto Docs | `auto-docs.yml` | Auto-generate and deploy documentation |
+| Auto Docs | `auto-docs.yml` | Auto-generate documentation via PR |
 | Wiki Sync | `wiki-sync.yml` | Auto-sync wiki/ to GitHub Wiki |
 
 </details>
@@ -1169,7 +1161,7 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) file for 
 
 ### Third-Party Dependencies
 
-AMA Cryptography v2.1 has **zero core cryptographic dependencies** — all cryptographic primitives are implemented natively in C.
+AMA Cryptography v2.1.2 has **zero core cryptographic dependencies** — all cryptographic primitives are implemented natively in C.
 
 **Algorithm implementations (all native, public domain references):**
 - **ML-DSA-65** (Dilithium): Public domain (NIST FIPS 204)
@@ -1230,11 +1222,11 @@ This project represents a human/AI collaborative construct—a new development p
 
 The human architect does not hold formal credentials in cryptography. The AI contributors, while trained on cryptographic literature, are tools without professional accountability.
 
-### What We Did Right
+### Design Principles
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
-- **Rigorous testing:** 1,264 tests across 47 test files (37 Python + 10 C) with CI checks including security scanning
+- **Rigorous testing:** 1,855+ tests across 47 test files (37 Python + 10 C) with CI checks including security scanning
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims
@@ -1276,6 +1268,6 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 </div>
 
-*Last updated: 2026-03-26*
+*Last updated: 2026-04-06*
 
 </div>

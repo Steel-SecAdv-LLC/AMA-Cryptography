@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 2.3 |
-| Last Updated | 2026-03-26 |
+| Last Updated | 2026-04-06 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -14,6 +14,36 @@
 ## Overview
 
 All notable changes to AMA Cryptography will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [2.1.2] - 2026-04-06
+
+### Fixed - Critical Bug Fixes
+
+- **SVE2 NTT correctness:** Fixed missing `lo_buf` store in `ama_dilithium_ntt_sve2` — butterfly low-half was never extracted to memory before Montgomery reduction, causing silent data corruption on AArch64 SVE2 platforms
+- **NEON SHA3 Chi step:** Removed unused NEON vector variables in `ama_keccak_f1600_neon` Chi computation; replaced with correct scalar implementation
+- **SHA2 header:** Added missing `<limits.h>` include to `ama_sha2.h` for portable `UINT_MAX`/`INT_MAX` usage
+- **AVX2 Dilithium:** Added `AMA_UNUSED` annotation to `caddq_avx2` to resolve compiler warnings (function retained for future NTT post-processing)
+- **Alert #318 (legacy_compat.py:474):** Fixed file descriptor not always closed — replaced `_open_fd` context manager with inline `os.fdopen()` try/with pattern that CodeQL traces natively
+- **Alert #333 (ama_dilithium_avx2.c:77):** Resolved unused static function CodeQL alert
+
+### Changed - CI/CD Improvements
+
+- **Auto-docs workflow:** Replaced direct commit-and-push to `main` with PR-based flow using `peter-evans/create-pull-request` (SHA-pinned per INVARIANT-4), avoiding direct writes to protected branches
+- **Workflow permissions:** Added `pull-requests: write` permission to `auto-docs.yml`
+- **CI build matrix:** Added Windows MSVC to `ci-build-test.yml`; dropped `--no-build-isolation` from pip install
+- **setup.py:** Added `ama_cryptography_monitor` as `py_module`; refactored `CMakeBuild.run()` to separate Cython extension builds from CMake library build; removed duplicate `super().run()` in `_build_cmake()` and unnecessary sentinel filtering
+
+### Added - Compliance & Licensing
+
+- **ed25519-donna LICENSE:** Added public domain license file for vendored ed25519-donna library
+- **NOTICE:** Added third-party software attribution for ed25519-donna
+
+### Changed - Documentation
+
+- Synchronized all documentation dates to 2026-04-06 across 20+ files (README, ARCHITECTURE, SECURITY, CONTRIBUTING, wiki, and all standards/compliance documents)
+- Updated version references to consistent `2.1.2` format across wiki and README
 
 ---
 

@@ -45,7 +45,7 @@ class TestImportWithoutExternalDeps:
         assert (
             result.returncode == 0
         ), f"Import failed with numpy blocked.\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        assert result.stdout.strip() == "2.1.0"
+        assert result.stdout.strip() == "2.1.2"
 
     def test_phi_accessible_without_numpy(self) -> None:
         """PHI is accessible without numpy (uses pure-Python _numeric)."""

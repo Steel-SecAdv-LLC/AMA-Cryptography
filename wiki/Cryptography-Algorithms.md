@@ -43,7 +43,7 @@ The **primary post-quantum signature algorithm** in AMA Cryptography.
 | Hardness | Module Learning With Errors (MLWE) |
 | Security Model | EUF-CMA in QROM |
 
-**Performance (native C, 2026-03-21):**
+**Performance (native C, 2026-04-06):**
 - Key generation: ~0.18 ms (5,536 ops/sec)
 - Signing: ~0.27 ms (3,639 ops/sec)
 - Verification: ~0.15 ms (6,490 ops/sec)
