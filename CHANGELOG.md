@@ -43,7 +43,7 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 ### Changed - Documentation
 
 - Synchronized all documentation dates to 2026-04-06 across 20+ files (README, ARCHITECTURE, SECURITY, CONTRIBUTING, wiki, and all standards/compliance documents)
-- Updated version references to consistent `2.1.0` format across wiki and README
+- Updated version references to consistent `2.1.2` format across wiki and README
 
 ---
 
