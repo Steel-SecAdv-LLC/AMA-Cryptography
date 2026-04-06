@@ -9,7 +9,7 @@
 Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 **Version:** 2.1
-**Date:** 2026-03-10
+**Date:** 2026-04-06
 
 ---
 
@@ -1328,5 +1328,5 @@ Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 ---
 
 **Document Version:** 2.1
-**Last Updated:** 2026-03-10
+**Last Updated:** 2026-04-06
 **Copyright (C) 2025-2026 Steel Security Advisors LLC**

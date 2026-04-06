@@ -36,7 +36,7 @@
 **Author/Inventor:** Andrew E. A.
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
-**Version:** 2.1
+**Version:** 2.1.0
 **AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
@@ -62,7 +62,7 @@ The system combines NIST-standardized post-quantum algorithms with a 3R runtime 
 > - Secure file permissions for key files and cryptographic packages (store on encrypted volumes with restricted access)
 >
 > **Status:** Community-tested | Not externally audited
-> **Last Updated:** 2026-03-26
+> **Last Updated:** 2026-04-06
 
 ---
 
@@ -1276,6 +1276,6 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 </div>
 
-*Last updated: 2026-03-26*
+*Last updated: 2026-04-06*
 
 </div>
