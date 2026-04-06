@@ -37,17 +37,32 @@ jobs:
       - name: Run auto-documentation updater
         run: python tools/update_docs.py
 
-      - name: Check for changes
-        id: changes
-        run: |
-          git diff --quiet && echo "changed=false" >> "$GITHUB_OUTPUT" || echo "changed=true" >> "$GITHUB_OUTPUT"
-
       - name: Create PR for doc updates
-        if: steps.changes.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0  # v8.1.0
-        with:
-          commit-message: "[auto-docs] Update documentation"
-          title: "[auto-docs] Update documentation"
-          body: "Automated documentation updates."
-          branch: auto-docs/update
-          delete-branch: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Exit early if nothing changed
+          if git diff --quiet; then
+            echo "No documentation changes detected."
+            exit 0
+          fi
+
+          BRANCH="auto-docs/update"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Create or reset the auto-docs branch
+          git checkout -B "$BRANCH"
+          git add -A
+          git commit -m "[auto-docs] Update documentation"
+          git push -u origin "$BRANCH" --force
+
+          # Create PR only if one doesn't already exist for this branch
+          if ! gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' | grep -q .; then
+            gh pr create \
+              --title "[auto-docs] Update documentation" \
+              --body "Automated documentation updates." \
+              --base main \
+              --head "$BRANCH"
+          fi
