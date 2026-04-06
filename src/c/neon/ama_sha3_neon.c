@@ -6,7 +6,8 @@
  * @brief ARM NEON-optimized Keccak-f[1600] permutation and SHA-3 functions
  *
  * Hand-written ARM NEON intrinsics for the Keccak-f[1600] permutation.
- * Uses 128-bit NEON vectors (uint64x2_t) to process pairs of state lanes.
+ * Uses 128-bit NEON vectors (uint64x2_t) to process pairs of state lanes
+ * for theta/rho steps.  Chi uses scalar operations (see note below).
  * Provides both single-state and 2-way parallel Keccak implementations.
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
@@ -58,7 +59,9 @@ static inline uint64_t rotl64(uint64_t x, int n) {
 /* ============================================================================
  * NEON-accelerated Keccak-f[1600] permutation
  *
- * Uses NEON for column-parity computation and chi step vectorization.
+ * Uses NEON for column-parity (theta) computation.  Chi step uses
+ * scalar operations — NEON vectorisation of chi was not beneficial
+ * for the 5-wide row structure of Keccak and is omitted.
  * ============================================================================ */
 void ama_keccak_f1600_neon(uint64_t state[25]) {
     uint64_t C[5], D[5], B[25];
@@ -114,7 +117,9 @@ void ama_keccak_f1600_neon(uint64_t state[25]) {
             B[PI[i]] = rotl64(state[i], ROTC[i]);
         }
 
-        /* Chi: state[y+i] = B[y+i] ^ (~B[y+(i+1)%5] & B[y+(i+2)%5]) */
+        /* Chi (scalar): state[y+i] = B[y+i] ^ (~B[y+(i+1)%5] & B[y+(i+2)%5])
+         * The 5-wide row structure does not map cleanly to 2-lane NEON
+         * vectors, so plain scalar C is used here. */
         for (int y = 0; y < 25; y += 5) {
             state[y + 0] = B[y + 0] ^ (~B[y + 1] & B[y + 2]);
             state[y + 1] = B[y + 1] ^ (~B[y + 2] & B[y + 3]);

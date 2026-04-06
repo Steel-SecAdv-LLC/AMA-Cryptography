@@ -36,7 +36,7 @@
 **Author/Inventor:** Andrew E. A.
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
-**Version:** 2.1.0
+**Version:** 2.1.2
 **AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---

@@ -37,7 +37,7 @@ symbols — they are intentionally excluded to prevent name collisions.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 2.1.0
+Version: 2.1.2
 """
 
 from __future__ import annotations
@@ -51,11 +51,10 @@ import struct
 import subprocess  # nosec B404 — subprocess used only with fixed OpenSSL commands for RFC 3161 (LC-001)
 import sys
 import time
-from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Any, Dict, Generator, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 if TYPE_CHECKING:
     from ama_cryptography_monitor import AmaCryptographyMonitor
@@ -63,18 +62,8 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
-@contextmanager
-def _open_fd(fd: int, mode: str) -> Generator[IO[Any], None, None]:
-    """Yield a file object; close raw fd only if fdopen itself fails."""
-    import os
-
-    try:
-        f = os.fdopen(fd, mode)
-    except BaseException:
-        os.close(fd)
-        raise
-    with f:
-        yield f
+# _open_fd helper removed — callers now use bare os.fdopen() in a
+# try/with pattern that static analysers (CodeQL, Semgrep) can trace.
 
 
 # ---------------------------------------------------------------------------
@@ -471,15 +460,23 @@ def verify_rfc3161_timestamp(
     os.chmod(tmp_dir, 0o700)
     try:
         tsr_path = os.path.join(tmp_dir, "timestamp.tsr")
-        with _open_fd(
-            os.open(tsr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb"
-        ) as f:
+        fd = os.open(tsr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            f = os.fdopen(fd, "wb")
+        except BaseException:
+            os.close(fd)
+            raise
+        with f:
             f.write(timestamp_token)
 
         data_path = os.path.join(tmp_dir, "data.dat")
-        with _open_fd(
-            os.open(data_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb"
-        ) as f:
+        fd = os.open(data_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            f = os.fdopen(fd, "wb")
+        except BaseException:
+            os.close(fd)
+            raise
+        with f:
             f.write(data)
 
         cmd_verify = [

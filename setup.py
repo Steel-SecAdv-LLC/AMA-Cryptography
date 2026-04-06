@@ -51,7 +51,7 @@ except ImportError:
     np = None
 
 # Configuration
-VERSION = "2.1.0"
+VERSION = "2.1.2"
 USE_CYTHON = CYTHON_AVAILABLE and not os.getenv("AMA_NO_CYTHON")
 USE_C_EXTENSIONS = not os.getenv("AMA_NO_C_EXTENSIONS")
 DEBUG = bool(os.getenv("AMA_DEBUG"))
@@ -199,13 +199,9 @@ class CMakeBuild(build_ext):
 
         self._build_cmake()
 
-        # Build Cython extensions if present, skipping the sentinel.
-        real_extensions = [
-            ext for ext in self.extensions
-            if ext.name != "_ama_cmake_sentinel"
-        ]
-        if real_extensions:
-            self.extensions = real_extensions
+        # Build Cython extensions if present.  CMake is already invoked
+        # above; super().run() handles only the Cython/setuptools pieces.
+        if self.extensions:
             try:
                 super().run()
             except Exception as e:
@@ -274,22 +270,8 @@ class CMakeBuild(build_ext):
                 "A Python-only install would have no PQC crypto and no clear indication."
             ) from e
 
-        # Continue with Python extension build (Cython, if available).
-        # Tolerate failure — the native C library (built above by cmake) is
-        # the primary backend; Cython math extensions are optional.
-        # Build Python extensions (Cython bindings). These are optional —
-        # the native C library (built above by CMake) is the primary backend.
-        try:
-            super().run()
-        except Exception as e:
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "Cython extension build failed: %s. "
-                "Native C library was built successfully by CMake — "
-                "Cython math extensions are optional.",
-                e,
-            )
+        # Cython extension build is handled by run() after _build_cmake()
+        # returns — do NOT call super().run() here to avoid double-building.
 
 
 # Package configuration
