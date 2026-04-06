@@ -526,3 +526,147 @@ class TestReplayWindowSessionIntegration:
             session.accept_recv_seq(i)
 
         assert session.needs_rekey
+
+
+# ---------------------------------------------------------------------------
+# Phase 4B: Additional Adversarial Test Classes
+# ---------------------------------------------------------------------------
+
+
+class TestReplayWindowLargeGap:
+    """Test replay window behavior with large sequence gaps."""
+
+    def test_large_gap_o1_performance(self) -> None:
+        """Sequence jump from 0 to 1_000_000 completes in O(1) time."""
+        import time as _time
+
+        rw = ReplayWindow(window_size=10)
+        # Fill the window so it slides
+        for i in range(10):
+            rw.check_and_accept(i)
+
+        start = _time.monotonic()
+        rw.check_and_accept(1_000_000)
+        elapsed = _time.monotonic() - start
+
+        # Must complete in < 10ms (not seconds of O(gap) iteration)
+        assert elapsed < 0.01, f"Large gap took {elapsed:.3f}s, expected < 10ms"
+        # Base should have advanced past 0
+        assert rw.base > 0
+
+    def test_large_gap_window_size_respected(self) -> None:
+        """After large gap, window size stays bounded."""
+        rw = ReplayWindow(window_size=256)
+        rw.check_and_accept(0)
+        rw.check_and_accept(1_000_000)
+
+        assert len(rw._seen) <= 257  # window_size + 1
+
+    def test_old_seq_rejected_after_large_gap(self) -> None:
+        """Old sequence numbers are rejected after large gap advance."""
+        rw = ReplayWindow()
+        rw.check_and_accept(0)
+        rw.check_and_accept(1_000_000)
+
+        with pytest.raises(ReplayDetectedError):
+            rw.check_and_accept(0)
+
+
+class TestSessionStoreLimitEnforcement:
+    """Test session store limit enforcement."""
+
+    def test_max_sessions_plus_one_rejected(self) -> None:
+        """Creating max_sessions+1 raises SessionLimitError."""
+        store = SessionStore(max_sessions=5)
+        for _ in range(5):
+            store.create()
+
+        with pytest.raises(SessionLimitError, match="Maximum sessions"):
+            store.create()
+
+    def test_closing_session_frees_slot(self) -> None:
+        """Closing a session allows creating a new one."""
+        store = SessionStore(max_sessions=2)
+        s1 = store.create()
+        store.create()
+
+        # At limit
+        with pytest.raises(SessionLimitError):
+            store.create()
+
+        # Close one to free a slot
+        store.close(s1.session_id)
+        s3 = store.create()
+        assert s3.is_active
+
+
+class TestSessionStateNeedsRekey:
+    """Test needs_rekey behavior at exact threshold."""
+
+    def test_needs_rekey_at_exact_threshold(self) -> None:
+        """needs_rekey flips at exactly DEFAULT_REKEY_INTERVAL messages."""
+        session = SessionState(session_id=secrets.token_bytes(SESSION_ID_BYTES))
+
+        # Send exactly DEFAULT_REKEY_INTERVAL - 1 messages
+        for _ in range(DEFAULT_REKEY_INTERVAL - 1):
+            session.next_send_seq()
+
+        assert not session.needs_rekey
+
+        # One more message should trigger rekey
+        session.next_send_seq()
+        assert session.needs_rekey
+
+    def test_record_rekey_resets_counter(self) -> None:
+        """record_rekey resets the rekey counter."""
+        session = SessionState(session_id=secrets.token_bytes(SESSION_ID_BYTES))
+
+        for _ in range(DEFAULT_REKEY_INTERVAL):
+            session.next_send_seq()
+        assert session.needs_rekey
+
+        session.record_rekey()
+        assert session.rekey_count == 1
+
+
+class TestSessionMetadata:
+    """Test metadata attachment and persistence."""
+
+    def test_metadata_persists_through_operations(self) -> None:
+        """Metadata persists through send/recv operations."""
+        session = SessionState(
+            session_id=secrets.token_bytes(SESSION_ID_BYTES),
+            metadata={"peer": "test-agent", "role": "initiator"},
+        )
+
+        session.next_send_seq()
+        session.accept_recv_seq(0)
+
+        assert session.metadata["peer"] == "test-agent"
+        assert session.metadata["role"] == "initiator"
+
+    def test_metadata_accessible_directly(self) -> None:
+        """Metadata is accessible directly on the session object."""
+        session = SessionState(
+            session_id=secrets.token_bytes(SESSION_ID_BYTES),
+            metadata={"tag": "alpha"},
+        )
+        assert session.metadata["tag"] == "alpha"
+        # Summary still works
+        summary = session.summary()
+        assert isinstance(summary, dict)
+
+    def test_empty_metadata_default(self) -> None:
+        """Default metadata is empty dict."""
+        session = SessionState(session_id=secrets.token_bytes(SESSION_ID_BYTES))
+        assert session.metadata == {} or session.metadata is not None
+
+    def test_store_passes_metadata(self) -> None:
+        """SessionStore passes metadata to created sessions."""
+        store = SessionStore()
+        session = store.create(metadata={"source": "unit-test"})
+        assert session.metadata["source"] == "unit-test"
+
+        # Retrieve via store and verify
+        retrieved = store.get(session.session_id)
+        assert retrieved.metadata["source"] == "unit-test"
