@@ -304,6 +304,17 @@ def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
 _ED25519_NATIVE_AVAILABLE = False
 
 
+class _Ed25519BatchEntry(ctypes.Structure):
+    """ctypes mirror of ama_ed25519_batch_entry from ama_cryptography.h."""
+
+    _fields_ = [
+        ("message", ctypes.c_char_p),
+        ("message_len", ctypes.c_size_t),
+        ("signature", ctypes.c_char_p),
+        ("public_key", ctypes.c_char_p),
+    ]
+
+
 def _setup_ed25519_ctypes(lib: ctypes.CDLL) -> bool:
     """Configure ctypes for Ed25519 functions. Separate from PQC setup."""
     try:
@@ -325,6 +336,14 @@ def _setup_ed25519_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_char_p,  # public_key[32]
         ]
         lib.ama_ed25519_verify.restype = ctypes.c_int
+
+        # Batch verify: ama_ed25519_batch_verify(entries, count, results)
+        lib.ama_ed25519_batch_verify.argtypes = [
+            ctypes.POINTER(_Ed25519BatchEntry),  # entries
+            ctypes.c_size_t,  # count
+            ctypes.POINTER(ctypes.c_int),  # results
+        ]
+        lib.ama_ed25519_batch_verify.restype = ctypes.c_int
 
         return True
     except AttributeError:
@@ -970,6 +989,10 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
             f"got {len(secret_key)}"
         )
 
+    # Primary path: Cython binding (zero marshaling overhead)
+    if _cy_dilithium_sign_fn is not None:
+        return _cy_dilithium_sign_fn(message, bytes(secret_key))
+
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(DILITHIUM_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(DILITHIUM_SIGNATURE_BYTES)
@@ -1017,6 +1040,10 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
             f"Invalid public key length: expected {DILITHIUM_PUBLIC_KEY_BYTES}, "
             f"got {len(public_key)}"
         )
+
+    # Primary path: Cython binding (zero marshaling overhead)
+    if _cy_dilithium_verify_fn is not None:
+        return _cy_dilithium_verify_fn(signature, message, public_key)
 
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ama_dilithium_verify(
@@ -1499,6 +1526,9 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
     """
     Sign message with Ed25519 using native C backend.
 
+    Primary path: Cython binding (zero marshaling overhead).
+    Fallback: ctypes binding.
+
     Args:
         message: Data to sign (arbitrary length)
         secret_key: 64-byte secret key (seed || public_key)
@@ -1510,6 +1540,9 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
         RuntimeError: If native library is not available or signing fails
         ValueError: If secret_key has incorrect length
     """
+    if _cy_ed25519_sign_fn is not None:
+        return _cy_ed25519_sign_fn(message, bytes(secret_key))
+
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
         raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
 
@@ -1531,9 +1564,50 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
         ctypes.memset(sk_buf, 0, len(secret_key))
 
 
+def _probe_cython_ed25519():
+    """Detect Cython Ed25519 bindings at module load time."""
+    try:
+        from ama_cryptography.ed25519_binding import cy_ed25519_sign, cy_ed25519_verify
+
+        return cy_ed25519_sign, cy_ed25519_verify
+    except (ImportError, AttributeError):
+        return None, None
+
+
+def _probe_cython_dilithium():
+    """Detect Cython Dilithium bindings at module load time."""
+    try:
+        from ama_cryptography.dilithium_binding import (
+            cy_dilithium_sign,
+            cy_dilithium_verify,
+        )
+
+        return cy_dilithium_sign, cy_dilithium_verify
+    except (ImportError, AttributeError):
+        return None, None
+
+
+def _probe_cython_hkdf():
+    """Detect Cython HKDF binding at module load time."""
+    try:
+        from ama_cryptography.hkdf_binding import cy_hkdf
+
+        return cy_hkdf
+    except (ImportError, AttributeError):
+        return None
+
+
+_cy_ed25519_sign_fn, _cy_ed25519_verify_fn = _probe_cython_ed25519()
+_cy_dilithium_sign_fn, _cy_dilithium_verify_fn = _probe_cython_dilithium()
+_cy_hkdf_fn = _probe_cython_hkdf()
+
+
 def native_ed25519_verify(signature: bytes, message: bytes, public_key: bytes) -> bool:
     """
     Verify Ed25519 signature using native C backend.
+
+    Primary path: Cython binding (zero marshaling overhead).
+    Fallback: ctypes binding.
 
     Args:
         signature: 64-byte Ed25519 signature
@@ -1547,6 +1621,9 @@ def native_ed25519_verify(signature: bytes, message: bytes, public_key: bytes) -
         RuntimeError: If native library is not available
         ValueError: If signature or public_key has incorrect length
     """
+    if _cy_ed25519_verify_fn is not None:
+        return _cy_ed25519_verify_fn(signature, message, public_key)
+
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
         raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
 
@@ -1564,6 +1641,60 @@ def native_ed25519_verify(signature: bytes, message: bytes, public_key: bytes) -
         signature, message, ctypes.c_size_t(len(message)), public_key
     )
     return rc == 0
+
+
+def native_ed25519_batch_verify(
+    entries: list,
+) -> list:
+    """
+    Batch verify multiple Ed25519 signatures using native C backend.
+
+    This is intentionally non-constant-time (vartime) because verification
+    scalars are public. This is safe and documented in the donna header.
+
+    Args:
+        entries: List of (message, signature, public_key) tuples.
+            - message: bytes — data that was signed
+            - signature: 64-byte Ed25519 signature
+            - public_key: 32-byte Ed25519 public key
+
+    Returns:
+        List of bools — True if corresponding signature is valid, False otherwise.
+
+    Raises:
+        RuntimeError: If native library is not available
+        ValueError: If any entry has invalid lengths
+    """
+    if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
+        raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
+
+    count = len(entries)
+    if count == 0:
+        return []
+
+    # Build ctypes array of batch entries
+    EntryArray = _Ed25519BatchEntry * count
+    c_entries = EntryArray()
+    for i, (msg, sig, pk) in enumerate(entries):
+        if len(sig) != ED25519_SIGNATURE_BYTES:
+            raise ValueError(
+                f"Entry {i}: Ed25519 signature must be {ED25519_SIGNATURE_BYTES} bytes, "
+                f"got {len(sig)}"
+            )
+        if len(pk) != ED25519_PUBLIC_KEY_BYTES:
+            raise ValueError(
+                f"Entry {i}: Ed25519 public key must be {ED25519_PUBLIC_KEY_BYTES} bytes, "
+                f"got {len(pk)}"
+            )
+        c_entries[i].message = msg
+        c_entries[i].message_len = len(msg)
+        c_entries[i].signature = sig
+        c_entries[i].public_key = pk
+
+    results = (ctypes.c_int * count)()
+    _native_lib.ama_ed25519_batch_verify(c_entries, ctypes.c_size_t(count), results)
+
+    return [bool(results[i]) for i in range(count)]
 
 
 # ============================================================================
@@ -1693,6 +1824,9 @@ def native_hkdf(
     """
     HKDF key derivation using native C backend (HMAC-SHA3-256).
 
+    Primary path: Cython binding (zero marshaling overhead).
+    Fallback: ctypes binding.
+
     Args:
         ikm: Input key material
         length: Desired output length in bytes (max 8160 = 255*32)
@@ -1706,6 +1840,10 @@ def native_hkdf(
         RuntimeError: If native library is not available
         ValueError: If length exceeds maximum
     """
+    # Primary path: Cython binding (zero marshaling overhead)
+    if _cy_hkdf_fn is not None:
+        return _cy_hkdf_fn(ikm, length, salt=salt, info=info if info else None)
+
     if _native_lib is None or not _HKDF_NATIVE_AVAILABLE:
         raise RuntimeError("HKDF native backend not available. " + _INSTALL_HINT)
 

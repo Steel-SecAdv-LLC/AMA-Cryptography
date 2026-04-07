@@ -186,6 +186,14 @@ extern ama_error_t ama_ed25519_verify_avx2(const uint8_t signature[64],
                                             const uint8_t *message,
                                             size_t message_len,
                                             const uint8_t public_key[32]);
+extern void ama_aes256_gcm_encrypt_avx2(const uint8_t *plaintext, size_t plaintext_len,
+                                         const uint8_t *aad, size_t aad_len,
+                                         const uint8_t key[32], const uint8_t nonce[12],
+                                         uint8_t *ciphertext, uint8_t tag[16]);
+extern ama_error_t ama_aes256_gcm_decrypt_avx2(const uint8_t *ciphertext, size_t ciphertext_len,
+                                                const uint8_t *aad, size_t aad_len,
+                                                const uint8_t key[32], const uint8_t nonce[12],
+                                                const uint8_t tag[16], uint8_t *plaintext);
 #endif
 
 #ifdef AMA_HAVE_NEON_IMPL
@@ -325,6 +333,8 @@ static void dispatch_init_internal(void) {
     dispatch_table.ed25519_keypair     = NULL;  /* NULL = caller uses generic scalar path */
     dispatch_table.ed25519_sign        = NULL;
     dispatch_table.ed25519_verify      = NULL;
+    dispatch_table.aes_gcm_encrypt     = NULL;  /* NULL = caller uses schoolbook GHASH */
+    dispatch_table.aes_gcm_decrypt     = NULL;
 
 #ifdef AMA_HAVE_AVX2_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_AVX2) {
@@ -345,6 +355,10 @@ static void dispatch_init_internal(void) {
         dispatch_table.ed25519_keypair = ama_ed25519_keypair_avx2;
         dispatch_table.ed25519_sign    = ama_ed25519_sign_avx2;
         dispatch_table.ed25519_verify  = ama_ed25519_verify_avx2;
+    }
+    if (dispatch_info.aes_gcm >= AMA_IMPL_AVX2) {
+        dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_avx2;
+        dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_avx2;
     }
 #endif
 

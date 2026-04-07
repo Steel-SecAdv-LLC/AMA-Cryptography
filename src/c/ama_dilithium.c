@@ -200,11 +200,11 @@ static int32_t dil_freeze(int32_t a) {
  * ============================================================================ */
 
 /**
- * Forward NTT (Number Theoretic Transform) for Dilithium
+ * Forward NTT (Number Theoretic Transform) for Dilithium.
+ * Accepts a cached dispatch table pointer to avoid repeated ama_get_dispatch_table() calls.
  */
-static void dil_ntt(int32_t a[DIL_N]) {
+static void dil_ntt_cached(int32_t a[DIL_N], const ama_dispatch_table_t *dt) {
     /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
-    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
     if (dt->dilithium_ntt) {
         dt->dilithium_ntt(a, dil_zetas);
         return;
@@ -228,13 +228,13 @@ static void dil_ntt(int32_t a[DIL_N]) {
 }
 
 /**
- * Inverse NTT for Dilithium
+ * Inverse NTT for Dilithium.
+ * Accepts a cached dispatch table pointer to avoid repeated ama_get_dispatch_table() calls.
  */
-static void dil_invntt(int32_t a[DIL_N]) {
+static void dil_invntt_cached(int32_t a[DIL_N], const ama_dispatch_table_t *dt) {
     /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
-    const ama_dispatch_table_t *dt2 = ama_get_dispatch_table();
-    if (dt2->dilithium_invntt) {
-        dt2->dilithium_invntt(a, dil_zetas);
+    if (dt->dilithium_invntt) {
+        dt->dilithium_invntt(a, dil_zetas);
         return;
     }
 
@@ -266,12 +266,13 @@ static void dil_invntt(int32_t a[DIL_N]) {
  * ============================================================================ */
 
 /**
- * Pointwise multiplication in NTT domain with Montgomery reduction
+ * Pointwise multiplication in NTT domain with Montgomery reduction.
+ * Accepts a cached dispatch table pointer to avoid repeated ama_get_dispatch_table() calls.
  */
-static void dil_poly_pointwise_montgomery(dil_poly *c, const dil_poly *a,
-                                           const dil_poly *b) {
+static void dil_poly_pointwise_montgomery_cached(dil_poly *c, const dil_poly *a,
+                                                  const dil_poly *b,
+                                                  const ama_dispatch_table_t *dt) {
     /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
-    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
     if (dt->dilithium_pointwise) {
         dt->dilithium_pointwise(c->coeffs, a->coeffs, b->coeffs);
         return;
@@ -322,6 +323,21 @@ static void dil_poly_caddq(dil_poly *a) {
     for (i = 0; i < DIL_N; ++i) {
         a->coeffs[i] = dil_caddq(a->coeffs[i]);
     }
+}
+
+/* Cached dispatch table pointer, set once per top-level API call */
+static _Thread_local const ama_dispatch_table_t *dil_cached_dt = NULL;
+
+static void dil_ntt(int32_t a[DIL_N]) {
+    dil_ntt_cached(a, dil_cached_dt ? dil_cached_dt : ama_get_dispatch_table());
+}
+static void dil_invntt(int32_t a[DIL_N]) {
+    dil_invntt_cached(a, dil_cached_dt ? dil_cached_dt : ama_get_dispatch_table());
+}
+static void dil_poly_pointwise_montgomery(dil_poly *c, const dil_poly *a,
+                                           const dil_poly *b) {
+    dil_poly_pointwise_montgomery_cached(c, a, b,
+        dil_cached_dt ? dil_cached_dt : ama_get_dispatch_table());
 }
 
 /**
@@ -1015,6 +1031,9 @@ AMA_API ama_error_t ama_dilithium_keypair(uint8_t *public_key, uint8_t *secret_k
         return AMA_ERROR_INVALID_PARAM;
     }
 
+    /* Cache dispatch table pointer for all NTT calls in this function */
+    dil_cached_dt = ama_get_dispatch_table();
+
     /* Generate random seed xi */
     rc = dil_randombytes(seedbuf, DIL_SEEDBYTES);
     if (rc != AMA_SUCCESS) {
@@ -1124,6 +1143,9 @@ AMA_API ama_error_t ama_dilithium_keypair_from_seed(
         return AMA_ERROR_INVALID_PARAM;
     }
 
+    /* Cache dispatch table pointer for all NTT calls in this function */
+    dil_cached_dt = ama_get_dispatch_table();
+
     /* (rho, rho', K) = H(xi || k || l) per FIPS 204 Algorithm 1 */
     {
         uint8_t h_input[DIL_SEEDBYTES + 2];
@@ -1232,6 +1254,9 @@ AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len
     if (!signature || !signature_len || !message || !secret_key) {
         return AMA_ERROR_INVALID_PARAM;
     }
+
+    /* Cache dispatch table pointer for all NTT calls in this function */
+    dil_cached_dt = ama_get_dispatch_table();
 
     if (*signature_len < AMA_ML_DSA_65_SIGNATURE_BYTES) {
         *signature_len = AMA_ML_DSA_65_SIGNATURE_BYTES;
@@ -1446,6 +1471,9 @@ AMA_API ama_error_t ama_dilithium_verify(const uint8_t *message, size_t message_
     if (!message || !signature || !public_key) {
         return AMA_ERROR_INVALID_PARAM;
     }
+
+    /* Cache dispatch table pointer for all NTT calls in this function */
+    dil_cached_dt = ama_get_dispatch_table();
 
     if (signature_len != AMA_ML_DSA_65_SIGNATURE_BYTES) {
         return AMA_ERROR_VERIFY_FAILED;

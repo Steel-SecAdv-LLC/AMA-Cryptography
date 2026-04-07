@@ -159,6 +159,48 @@ def get_extension_modules():
         )
         extensions.append(sha3_ext)
 
+        # Cython Ed25519 binding (calls ama_ed25519_* in libama_cryptography)
+        ed25519_ext = Extension(
+            name="ama_cryptography.ed25519_binding",
+            sources=["src/cython/ed25519_binding.pyx"],
+            include_dirs=["include"],
+            library_dirs=["build/lib"],
+            libraries=["ama_cryptography"],
+            runtime_library_dirs=rpath,
+            extra_compile_args=compiler_flags,
+            extra_link_args=linker_flags,
+            language="c",
+        )
+        extensions.append(ed25519_ext)
+
+        # Cython Dilithium binding (calls ama_dilithium_* in libama_cryptography)
+        dilithium_ext = Extension(
+            name="ama_cryptography.dilithium_binding",
+            sources=["src/cython/dilithium_binding.pyx"],
+            include_dirs=["include"],
+            library_dirs=["build/lib"],
+            libraries=["ama_cryptography"],
+            runtime_library_dirs=rpath,
+            extra_compile_args=compiler_flags,
+            extra_link_args=linker_flags,
+            language="c",
+        )
+        extensions.append(dilithium_ext)
+
+        # Cython HKDF binding (calls ama_hkdf in libama_cryptography)
+        hkdf_ext = Extension(
+            name="ama_cryptography.hkdf_binding",
+            sources=["src/cython/hkdf_binding.pyx"],
+            include_dirs=["include"],
+            library_dirs=["build/lib"],
+            libraries=["ama_cryptography"],
+            runtime_library_dirs=rpath,
+            extra_compile_args=compiler_flags,
+            extra_link_args=linker_flags,
+            language="c",
+        )
+        extensions.append(hkdf_ext)
+
     return extensions
 
 

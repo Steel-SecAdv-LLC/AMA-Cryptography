@@ -48,6 +48,7 @@
  */
 
 #include "../include/ama_cryptography.h"
+#include "../include/ama_dispatch.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -370,6 +371,14 @@ ama_error_t ama_aes256_gcm_encrypt(
     if ((uint64_t)aad_len > AMA_AES_GCM_MAX_AAD_BYTES)
         return AMA_ERROR_INVALID_PARAM;
 
+    /* Dispatch to AVX2/AES-NI implementation when available */
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (dt->aes_gcm_encrypt) {
+        dt->aes_gcm_encrypt(plaintext, pt_len, aad, aad_len, key, nonce,
+                            ciphertext, tag);
+        return AMA_SUCCESS;
+    }
+
     /* Key expansion */
     aes256_key_expansion(key, round_keys);
 
@@ -472,6 +481,13 @@ ama_error_t ama_aes256_gcm_decrypt(
         return AMA_ERROR_INVALID_PARAM;
     if ((uint64_t)aad_len > AMA_AES_GCM_MAX_AAD_BYTES)
         return AMA_ERROR_INVALID_PARAM;
+
+    /* Dispatch to AVX2/AES-NI implementation when available */
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (dt->aes_gcm_decrypt) {
+        return dt->aes_gcm_decrypt(ciphertext, ct_len, aad, aad_len, key, nonce,
+                                   tag, plaintext);
+    }
 
     /* Key expansion */
     aes256_key_expansion(key, round_keys);

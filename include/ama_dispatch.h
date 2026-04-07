@@ -92,6 +92,18 @@ typedef ama_error_t (*ama_ed25519_verify_fn)(const uint8_t signature[64],
                                               size_t message_len,
                                               const uint8_t public_key[32]);
 
+/** AES-256-GCM encrypt (AVX2/AES-NI accelerated) */
+typedef void (*ama_aes_gcm_encrypt_fn)(const uint8_t *plaintext, size_t plaintext_len,
+                                        const uint8_t *aad, size_t aad_len,
+                                        const uint8_t key[32], const uint8_t nonce[12],
+                                        uint8_t *ciphertext, uint8_t tag[16]);
+
+/** AES-256-GCM decrypt (AVX2/AES-NI accelerated) */
+typedef ama_error_t (*ama_aes_gcm_decrypt_fn)(const uint8_t *ciphertext, size_t ciphertext_len,
+                                               const uint8_t *aad, size_t aad_len,
+                                               const uint8_t key[32], const uint8_t nonce[12],
+                                               const uint8_t tag[16], uint8_t *plaintext);
+
 /* ============================================================================
  * Dispatch function table (global, set once at init)
  *
@@ -120,6 +132,8 @@ typedef struct {
     ama_ed25519_keypair_fn    ed25519_keypair;      /**< Non-NULL when AVX2 detected; callers MUST NULL-check */
     ama_ed25519_sign_fn       ed25519_sign;          /**< Non-NULL when AVX2 detected; callers MUST NULL-check */
     ama_ed25519_verify_fn     ed25519_verify;        /**< Non-NULL when AVX2 detected; callers MUST NULL-check */
+    ama_aes_gcm_encrypt_fn    aes_gcm_encrypt;       /**< Non-NULL when AES-NI+PCLMULQDQ detected; callers MUST NULL-check */
+    ama_aes_gcm_decrypt_fn    aes_gcm_decrypt;       /**< Non-NULL when AES-NI+PCLMULQDQ detected; callers MUST NULL-check */
 } ama_dispatch_table_t;
 
 /* ============================================================================
