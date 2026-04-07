@@ -1546,18 +1546,18 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
         RuntimeError: If native library is not available or signing fails
         ValueError: If secret_key has incorrect length
     """
+    if len(secret_key) != ED25519_SECRET_KEY_BYTES:
+        raise ValueError(
+            f"Ed25519 secret key must be {ED25519_SECRET_KEY_BYTES} bytes, "
+            f"got {len(secret_key)}"
+        )
+
     if _cy_ed25519_sign_fn is not None:
         sig_result: bytes = _cy_ed25519_sign_fn(message, bytes(secret_key))
         return sig_result
 
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
         raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
-
-    if len(secret_key) != ED25519_SECRET_KEY_BYTES:
-        raise ValueError(
-            f"Ed25519 secret key must be {ED25519_SECRET_KEY_BYTES} bytes, "
-            f"got {len(secret_key)}"
-        )
 
     sig_buf = ctypes.create_string_buffer(ED25519_SIGNATURE_BYTES)
     # INVARIANT-6: use mutable ctypes buffer to avoid non-wipeable bytes() copy
@@ -1633,13 +1633,6 @@ def native_ed25519_verify(signature: bytes, message: bytes, public_key: bytes) -
         RuntimeError: If native library is not available
         ValueError: If signature or public_key has incorrect length
     """
-    if _cy_ed25519_verify_fn is not None:
-        verify_result: bool = _cy_ed25519_verify_fn(signature, message, public_key)
-        return verify_result
-
-    if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
-        raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
-
     if len(signature) != ED25519_SIGNATURE_BYTES:
         raise ValueError(
             f"Ed25519 signature must be {ED25519_SIGNATURE_BYTES} bytes, " f"got {len(signature)}"
@@ -1649,6 +1642,13 @@ def native_ed25519_verify(signature: bytes, message: bytes, public_key: bytes) -
             f"Ed25519 public key must be {ED25519_PUBLIC_KEY_BYTES} bytes, "
             f"got {len(public_key)}"
         )
+
+    if _cy_ed25519_verify_fn is not None:
+        verify_result: bool = _cy_ed25519_verify_fn(signature, message, public_key)
+        return verify_result
+
+    if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
+        raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
 
     rc: int = _native_lib.ama_ed25519_verify(
         signature, message, ctypes.c_size_t(len(message)), public_key
@@ -1714,14 +1714,16 @@ def native_ed25519_batch_verify(
             c_entries[i].public_key = pk
 
         results_arr = (ctypes.c_int * count)()
-        _native_lib.ama_ed25519_batch_verify(c_entries, ctypes.c_size_t(count), results_arr)
+        rc = _native_lib.ama_ed25519_batch_verify(c_entries, ctypes.c_size_t(count), results_arr)
+        if rc != 0 and rc != 1:  # 0=AMA_SUCCESS, 1=AMA_ERROR_VERIFY_FAILED (some invalid)
+            raise RuntimeError(f"Ed25519 batch verify failed (rc={rc})")
         return [bool(results_arr[i]) for i in range(count)]
 
     # Fallback: verify each signature individually
     out: list[bool] = []
     for msg, sig, pk in entries:
-        rc: int = _native_lib.ama_ed25519_verify(sig, msg, len(msg), pk)
-        out.append(rc == 0)
+        verify_rc: int = _native_lib.ama_ed25519_verify(sig, msg, len(msg), pk)
+        out.append(verify_rc == 0)
     return out
 
 
@@ -1868,6 +1870,11 @@ def native_hkdf(
         RuntimeError: If native library is not available
         ValueError: If length exceeds maximum
     """
+    if length > 8160:
+        raise ValueError(f"HKDF output length must be <= 8160, got {length}")
+    if length <= 0:
+        raise ValueError(f"HKDF output length must be > 0, got {length}")
+
     # Primary path: Cython binding (zero marshaling overhead)
     if _cy_hkdf_fn is not None:
         hkdf_result: bytes = _cy_hkdf_fn(ikm, length, salt=salt, info=info if info else None)
@@ -1875,11 +1882,6 @@ def native_hkdf(
 
     if _native_lib is None or not _HKDF_NATIVE_AVAILABLE:
         raise RuntimeError("HKDF native backend not available. " + _INSTALL_HINT)
-
-    if length > 8160:
-        raise ValueError(f"HKDF output length must be <= 8160, got {length}")
-    if length <= 0:
-        raise ValueError(f"HKDF output length must be > 0, got {length}")
 
     okm_buf = ctypes.create_string_buffer(length)
 

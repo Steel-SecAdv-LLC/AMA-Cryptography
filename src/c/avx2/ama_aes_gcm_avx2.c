@@ -319,6 +319,9 @@ void ama_aes256_gcm_encrypt_avx2(
     __m128i enc_j0 = aes256_encrypt_block(J0, rk);
     __m128i tag_val = _mm_xor_si128(ghash_acc, enc_j0);
     _mm_storeu_si128((__m128i *)tag, tag_val);
+
+    /* Scrub sensitive key material from stack (matching generic C path) */
+    ama_secure_memzero(rk, sizeof(rk));
 }
 
 /**
@@ -397,6 +400,8 @@ ama_error_t ama_aes256_gcm_decrypt_avx2(
     uint8_t computed_tag_bytes[16];
     _mm_storeu_si128((__m128i *)computed_tag_bytes, computed_tag);
     if (ama_consttime_memcmp(computed_tag_bytes, tag, 16) != 0) {
+        ama_secure_memzero(rk, sizeof(rk));
+        ama_secure_memzero(computed_tag_bytes, sizeof(computed_tag_bytes));
         return AMA_ERROR_VERIFY_FAILED;
     }
 
@@ -463,6 +468,10 @@ ama_error_t ama_aes256_gcm_decrypt_avx2(
         _mm_storeu_si128((__m128i *)pad_pt, pt_block);
         memcpy(plaintext + full_blocks * 16, pad_pt, remaining);
     }
+
+    /* Scrub sensitive key material from stack */
+    ama_secure_memzero(rk, sizeof(rk));
+    ama_secure_memzero(computed_tag_bytes, sizeof(computed_tag_bytes));
 
     return AMA_SUCCESS;
 }

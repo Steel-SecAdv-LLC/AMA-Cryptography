@@ -22,6 +22,8 @@ AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 try:
@@ -161,9 +163,9 @@ class TestNISTAES256Vectors:
     @pytest.mark.parametrize(
         "vector",
         [v for v in NIST_AES256_VECTORS if "ciphertext" in v],
-        ids=[v["name"] for v in NIST_AES256_VECTORS if "ciphertext" in v],
+        ids=[str(v["name"]) for v in NIST_AES256_VECTORS if "ciphertext" in v],
     )
-    def test_encrypt_matches_nist(self, vector: dict) -> None:
+    def test_encrypt_matches_nist(self, vector: dict[str, Any]) -> None:
         """Encryption produces expected ciphertext and tag."""
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
@@ -189,9 +191,9 @@ class TestNISTAES256Vectors:
     @pytest.mark.parametrize(
         "vector",
         [v for v in NIST_AES256_VECTORS if "ciphertext" in v],
-        ids=[v["name"] for v in NIST_AES256_VECTORS if "ciphertext" in v],
+        ids=[str(v["name"]) for v in NIST_AES256_VECTORS if "ciphertext" in v],
     )
-    def test_decrypt_matches_nist(self, vector: dict) -> None:
+    def test_decrypt_matches_nist(self, vector: dict[str, Any]) -> None:
         """Decryption produces expected plaintext."""
         from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
 
@@ -219,9 +221,9 @@ class TestGHASHEdgeCases:
     @pytest.mark.parametrize(
         "vector",
         ADDITIONAL_VECTORS,
-        ids=[v["name"] for v in ADDITIONAL_VECTORS],
+        ids=[str(v["name"]) for v in ADDITIONAL_VECTORS],
     )
-    def test_encrypt_decrypt_roundtrip(self, vector: dict) -> None:
+    def test_encrypt_decrypt_roundtrip(self, vector: dict[str, Any]) -> None:
         """Encrypt then decrypt roundtrip for GHASH edge cases."""
         from ama_cryptography.pqc_backends import (
             native_aes256_gcm_decrypt,

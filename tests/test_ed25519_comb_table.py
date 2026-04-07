@@ -21,6 +21,8 @@ AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from ama_cryptography.pqc_backends import _native_lib
@@ -93,7 +95,7 @@ class TestCombTableKeygen:
         RFC8032_VECTORS,
         ids=[str(v["name"]) for v in RFC8032_VECTORS],
     )
-    def test_keygen_matches_rfc8032(self, vector: dict) -> None:
+    def test_keygen_matches_rfc8032(self, vector: dict[str, Any]) -> None:
         """Comb table basepoint multiplication: seed → correct public key."""
         from ama_cryptography.pqc_backends import native_ed25519_keypair_from_seed
 
@@ -129,7 +131,7 @@ class TestCombTableSign:
         RFC8032_VECTORS,
         ids=[str(v["name"]) for v in RFC8032_VECTORS],
     )
-    def test_sign_matches_rfc8032(self, vector: dict) -> None:
+    def test_sign_matches_rfc8032(self, vector: dict[str, Any]) -> None:
         """Comb table path produces byte-identical signatures to RFC 8032."""
         from ama_cryptography.pqc_backends import (
             native_ed25519_keypair_from_seed,
@@ -154,7 +156,7 @@ class TestCombTableVerify:
         RFC8032_VECTORS,
         ids=[str(v["name"]) for v in RFC8032_VECTORS],
     )
-    def test_verify_rfc8032(self, vector: dict) -> None:
+    def test_verify_rfc8032(self, vector: dict[str, Any]) -> None:
         """RFC 8032 signatures verify against their public keys."""
         from ama_cryptography.pqc_backends import native_ed25519_verify
 
