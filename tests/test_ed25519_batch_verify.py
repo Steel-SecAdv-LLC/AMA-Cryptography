@@ -18,8 +18,6 @@ AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 from __future__ import annotations
 
-from typing import ClassVar
-
 import pytest
 
 from ama_cryptography.pqc_backends import _native_lib
@@ -333,10 +331,10 @@ class TestBatchVerifyRFC8032:
 
         entries = []
         for vec in RFC8032_VECTORS:
-            pk, sk = native_ed25519_keypair_from_seed(vec["secret_key_seed"])  # type: ignore[arg-type] -- dict value is bytes but typed as object (TV-001)
+            pk, sk = native_ed25519_keypair_from_seed(vec["secret_key_seed"])  # type: ignore[arg-type]  # dict value is bytes but typed as object (TV-001)
             assert pk == vec["public_key"], f"Keygen mismatch for {vec['name']}"
 
-            sig = native_ed25519_sign(vec["message"], sk)  # type: ignore[arg-type] -- dict value is bytes but typed as object (TV-001)
+            sig = native_ed25519_sign(vec["message"], sk)  # type: ignore[arg-type]  # dict value is bytes but typed as object (TV-001)
             assert sig == vec["signature"], f"Sign mismatch for {vec['name']}"
 
             entries.append((vec["message"], sig, pk))
@@ -354,7 +352,7 @@ class TestBatchVerifyRFC8032:
 
         # Corrupt the second entry's signature
         msg1, sig1, pk1 = entries[1]
-        bad_sig = bytearray(sig1)  # type: ignore[arg-type] -- sig1 is bytes from dict but typed as object (TV-001)
+        bad_sig = bytearray(sig1)  # type: ignore[arg-type]  # sig1 is bytes from dict but typed as object (TV-001)
         bad_sig[0] ^= 0xFF
         entries[1] = (msg1, bytes(bad_sig), pk1)
 
@@ -384,64 +382,5 @@ class TestBatchVerifyCtypes:
         assert all(results)
 
 
-class TestBatchVerifyCython:
-    """Explicitly test the Cython batch verify path if available."""
-
-    # Override module-level pytestmark — Cython extensions are optional,
-    # so skips here must NOT be caught by the CI backend enforcement hook.
-    pytestmark: ClassVar[list[pytest.MarkDecorator]] = []
-
-    def test_cython_path(self) -> None:
-        """Verify Cython cy_ed25519_batch_verify works if compiled."""
-        cy_batch = pytest.importorskip(
-            "src.cython.ed25519_binding",
-            reason="Cython ed25519_binding not compiled",
-        ).cy_ed25519_batch_verify
-
-        entries = [_generate_random_entry(i) for i in range(5)]
-        results = cy_batch(entries)
-
-        assert len(results) == 5
-        assert all(results)
-
-    def test_cython_empty(self) -> None:
-        """Cython batch verify with empty input."""
-        cy_batch = pytest.importorskip(
-            "src.cython.ed25519_binding",
-            reason="Cython ed25519_binding not compiled",
-        ).cy_ed25519_batch_verify
-
-        assert cy_batch([]) == []
-
-    def test_cython_over_max_raises(self) -> None:
-        """Cython batch verify raises ValueError for >64 entries."""
-        cy_batch = pytest.importorskip(
-            "src.cython.ed25519_binding",
-            reason="Cython ed25519_binding not compiled",
-        ).cy_ed25519_batch_verify
-
-        # Create 65 dummy entries (won't actually be verified)
-        dummy = [(b"m", b"\x00" * 64, b"\x00" * 32)] * 65
-        with pytest.raises(ValueError, match="64"):
-            cy_batch(dummy)
-
-    def test_cython_mixed(self) -> None:
-        """Cython batch verify with mixed valid/invalid entries."""
-        cy_batch = pytest.importorskip(
-            "src.cython.ed25519_binding",
-            reason="Cython ed25519_binding not compiled",
-        ).cy_ed25519_batch_verify
-
-        entries = [_generate_random_entry(i) for i in range(3)]
-
-        # Corrupt entry 1
-        msg1, sig1, pk1 = entries[1]
-        bad_sig = bytearray(sig1)
-        bad_sig[0] ^= 0xFF
-        entries[1] = (msg1, bytes(bad_sig), pk1)
-
-        results = cy_batch(entries)
-
-        assert results[0] is True
-        assert results[1] is False
-        assert results[2] is True
+# NOTE: Cython batch verify tests live in tests/test_ed25519_batch_verify_cython.py
+# to avoid the module-level pytestmark skip (which triggers CI backend enforcement).
