@@ -27,7 +27,7 @@ DEF DILITHIUM_SIG_BYTES = 3309
 cdef extern from "ama_cryptography.h":
     ctypedef int ama_error_t
 
-    ama_error_t ama_dilithium_keygen(
+    ama_error_t ama_dilithium_keypair(
         uint8_t *public_key, uint8_t *secret_key
     )
 
@@ -63,9 +63,9 @@ def cy_dilithium_keygen():
 
     cdef int ret
     try:
-        ret = ama_dilithium_keygen(pk, sk)
+        ret = ama_dilithium_keypair(pk, sk)
         if ret != 0:
-            raise RuntimeError(f"ama_dilithium_keygen failed (rc={ret})")
+            raise RuntimeError(f"ama_dilithium_keypair failed (rc={ret})")
         return (bytes(pk[:DILITHIUM_PK_BYTES]), bytes(sk[:DILITHIUM_SK_BYTES]))
     finally:
         ama_secure_memzero(sk, DILITHIUM_SK_BYTES)
@@ -125,8 +125,8 @@ def cy_dilithium_verify(bytes signature, bytes message, bytes public_key):
         )
 
     cdef int ret = ama_dilithium_verify(
-        <const uint8_t*>signature, len(signature),
         <const uint8_t*>message, len(message),
+        <const uint8_t*>signature, len(signature),
         <const uint8_t*>public_key
     )
     return ret == 0
