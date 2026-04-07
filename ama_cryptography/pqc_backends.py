@@ -991,7 +991,8 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
 
     # Primary path: Cython binding (zero marshaling overhead)
     if _cy_dilithium_sign_fn is not None:
-        return _cy_dilithium_sign_fn(message, bytes(secret_key))
+        result: bytes = _cy_dilithium_sign_fn(message, bytes(secret_key))
+        return result
 
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(DILITHIUM_SIGNATURE_BYTES)
@@ -1043,7 +1044,8 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
 
     # Primary path: Cython binding (zero marshaling overhead)
     if _cy_dilithium_verify_fn is not None:
-        return _cy_dilithium_verify_fn(signature, message, public_key)
+        valid: bool = _cy_dilithium_verify_fn(signature, message, public_key)
+        return valid
 
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         rc = _native_lib.ama_dilithium_verify(
@@ -1541,7 +1543,8 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
         ValueError: If secret_key has incorrect length
     """
     if _cy_ed25519_sign_fn is not None:
-        return _cy_ed25519_sign_fn(message, bytes(secret_key))
+        sig_result: bytes = _cy_ed25519_sign_fn(message, bytes(secret_key))
+        return sig_result
 
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
         raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
@@ -1564,7 +1567,7 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
         ctypes.memset(sk_buf, 0, len(secret_key))
 
 
-def _probe_cython_ed25519():
+def _probe_cython_ed25519() -> "tuple[Any, Any]":
     """Detect Cython Ed25519 bindings at module load time."""
     try:
         from ama_cryptography.ed25519_binding import cy_ed25519_sign, cy_ed25519_verify
@@ -1574,7 +1577,7 @@ def _probe_cython_ed25519():
         return None, None
 
 
-def _probe_cython_dilithium():
+def _probe_cython_dilithium() -> "tuple[Any, Any]":
     """Detect Cython Dilithium bindings at module load time."""
     try:
         from ama_cryptography.dilithium_binding import (
@@ -1587,7 +1590,7 @@ def _probe_cython_dilithium():
         return None, None
 
 
-def _probe_cython_hkdf():
+def _probe_cython_hkdf() -> "Any":
     """Detect Cython HKDF binding at module load time."""
     try:
         from ama_cryptography.hkdf_binding import cy_hkdf
@@ -1622,7 +1625,8 @@ def native_ed25519_verify(signature: bytes, message: bytes, public_key: bytes) -
         ValueError: If signature or public_key has incorrect length
     """
     if _cy_ed25519_verify_fn is not None:
-        return _cy_ed25519_verify_fn(signature, message, public_key)
+        verify_result: bool = _cy_ed25519_verify_fn(signature, message, public_key)
+        return verify_result
 
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
         raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
@@ -1842,7 +1846,8 @@ def native_hkdf(
     """
     # Primary path: Cython binding (zero marshaling overhead)
     if _cy_hkdf_fn is not None:
-        return _cy_hkdf_fn(ikm, length, salt=salt, info=info if info else None)
+        hkdf_result: bytes = _cy_hkdf_fn(ikm, length, salt=salt, info=info if info else None)
+        return hkdf_result
 
     if _native_lib is None or not _HKDF_NATIVE_AVAILABLE:
         raise RuntimeError("HKDF native backend not available. " + _INSTALL_HINT)

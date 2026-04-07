@@ -38,8 +38,8 @@ cdef extern from "ama_cryptography.h":
     )
 
     ama_error_t ama_dilithium_verify(
-        const uint8_t *signature, size_t sig_len,
         const uint8_t *message, size_t message_len,
+        const uint8_t *signature, size_t sig_len,
         const uint8_t *public_key
     )
 
@@ -94,7 +94,7 @@ def cy_dilithium_sign(bytes message, bytes secret_key):
             free(sk_buf)
         raise MemoryError("Failed to allocate Dilithium sign buffers")
 
-    cdef size_t sig_len = 0
+    cdef size_t sig_len = DILITHIUM_SIG_BYTES
     cdef int ret
     try:
         memcpy(sk_buf, <const unsigned char*>secret_key, DILITHIUM_SK_BYTES)

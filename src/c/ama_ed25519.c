@@ -667,13 +667,18 @@ static void ge25519_scalarmult_base_windowed(ge25519_p3 *r, const uint8_t *scala
             ge25519_p1p1_to_p3(&Q, &t);
         }
 
-        /* For each comb table, extract bit j and conditionally add */
+        /* For each comb table, extract bit j and conditionally add.
+         * Uses ge25519_comb_lookup for constant-time table access. */
         for (int tt = 0; tt < COMB_TABLES; tt++) {
             int bit = (comb[tt] >> j) & 1;
 
-            /* Constant-time: always look up, always compute addition,
-             * but conditionally keep result based on bit value. */
-            ge25519_add(&t, &Q, &ge_comb_table[tt][0]); /* table[t][0] = 1 * base_t */
+            /* Constant-time lookup: returns identity when bit==0,
+             * or table entry when bit==1.  ge25519_comb_lookup uses
+             * linear-scan cmov over all 32 entries. */
+            ge25519_comb_lookup(&P, tt, bit);
+
+            /* Always compute addition, conditionally keep result */
+            ge25519_add(&t, &Q, &P);
             ge25519_p1p1_to_p3(&Q_after_add, &t);
 
             /* Q = bit ? Q_after_add : Q (constant-time) */

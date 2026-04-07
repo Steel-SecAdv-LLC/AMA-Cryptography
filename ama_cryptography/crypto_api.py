@@ -29,6 +29,7 @@ import logging
 import os
 import pathlib
 import secrets
+import sys
 import time
 import warnings
 from abc import ABC, abstractmethod
@@ -149,15 +150,14 @@ def _enforce_invariant7() -> None:
 
     Uses a module-level boolean flag set during import to avoid per-call
     import machinery overhead (~200-500ns savings per call).  Also checks
-    ``pqc_backends._native_lib`` through the module reference so that
-    runtime patches (e.g. in tests via ``unittest.mock.patch``) are
-    respected—patching the attribute on the *module* object changes
+    ``pqc_backends._native_lib`` through ``sys.modules`` so that runtime
+    patches (e.g. in tests via ``unittest.mock.patch``) are respected—
+    patching the attribute on the *module* object changes
     ``pqc_backends._native_lib`` but not the local binding imported at
     the top of this file.
     """
-    import ama_cryptography.pqc_backends as _pb
-
-    if not _INVARIANT7_OK or _pb._native_lib is None:
+    _pb = sys.modules["ama_cryptography.pqc_backends"]
+    if not _INVARIANT7_OK or getattr(_pb, "_native_lib", None) is None:
         raise RuntimeError(
             "INVARIANT-7 (call-time): Native C cryptographic library is not loaded. "
             "The library refuses to operate without a constant-time backend. "
