@@ -117,3 +117,56 @@ def cy_ed25519_verify(bytes signature, bytes message, bytes public_key):
         <const uint8_t*>public_key
     )
     return ret == 0
+
+
+def cy_ed25519_batch_verify(list entries):
+    """
+    Batch verify Ed25519 signatures using Bos-Carter multi-scalar multiplication.
+
+    Args:
+        entries: list of (message: bytes, signature: bytes, public_key: bytes) tuples
+
+    Returns:
+        list of bool, one per entry (True = valid)
+
+    Raises:
+        ValueError: If batch size exceeds 64 or entries have wrong lengths
+        MemoryError: If allocation fails
+    """
+    cdef size_t count = len(entries)
+    if count == 0:
+        return []
+    if count > 64:
+        raise ValueError("Maximum batch size is 64")
+
+    cdef ama_ed25519_batch_entry *c_entries = NULL
+    cdef int *results = NULL
+
+    c_entries = <ama_ed25519_batch_entry *>malloc(count * sizeof(ama_ed25519_batch_entry))
+    results = <int *>malloc(count * sizeof(int))
+
+    if c_entries == NULL or results == NULL:
+        free(c_entries)
+        free(results)
+        raise MemoryError("Failed to allocate batch verify buffers")
+
+    try:
+        for i in range(count):
+            msg, sig, pk = entries[i]
+            if not isinstance(msg, bytes):
+                raise TypeError(f"Entry {i}: message must be bytes")
+            if not isinstance(sig, bytes) or len(sig) != 64:
+                raise ValueError(f"Entry {i}: signature must be 64 bytes")
+            if not isinstance(pk, bytes) or len(pk) != 32:
+                raise ValueError(f"Entry {i}: public key must be 32 bytes")
+            c_entries[i].message = <const uint8_t *>(<bytes>msg)
+            c_entries[i].message_len = len(msg)
+            c_entries[i].signature = <const uint8_t *>(<bytes>sig)
+            c_entries[i].public_key = <const uint8_t *>(<bytes>pk)
+
+        cdef int rc = ama_ed25519_batch_verify(c_entries, count, results)
+
+        return [bool(results[i]) for i in range(count)]
+    finally:
+        free(c_entries)
+        free(results)

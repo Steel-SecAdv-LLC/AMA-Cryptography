@@ -121,3 +121,68 @@ ama_error_t ama_ed25519_verify(
 
     return (result == 0) ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
 }
+
+/* ============================================================================
+ * BATCH VERIFICATION — donna Bos-Carter multi-scalar multiplication
+ *
+ * donna's ed25519_sign_open_batch() uses a binary heap for multi-scalar
+ * multiplication (Bos-Carter method), supporting up to 64 signatures per
+ * batch for ~2.5x throughput vs sequential verify.
+ *
+ * donna's API expects separate arrays of pointers:
+ *   const unsigned char **m     — messages
+ *   size_t              *mlen   — message lengths
+ *   const unsigned char **pk    — 32-byte public keys
+ *   const unsigned char **RS    — 64-byte signatures (R || S)
+ *   size_t               num    — number of entries
+ *   int                 *valid  — per-entry result (1=valid, 0=invalid)
+ *
+ * We convert from AMA's ama_ed25519_batch_entry struct array.
+ * ============================================================================ */
+
+ama_error_t ama_ed25519_batch_verify(
+    const ama_ed25519_batch_entry *entries,
+    size_t count,
+    int *results
+) {
+    if (!entries || !results) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (count == 0) {
+        return AMA_SUCCESS;
+    }
+
+    /* Allocate pointer arrays for donna's batch verify interface */
+    const unsigned char **msgs = (const unsigned char **)malloc(count * sizeof(const unsigned char *));
+    size_t *mlens = (size_t *)malloc(count * sizeof(size_t));
+    const unsigned char **pks = (const unsigned char **)malloc(count * sizeof(const unsigned char *));
+    const unsigned char **sigs = (const unsigned char **)malloc(count * sizeof(const unsigned char *));
+
+    if (!msgs || !mlens || !pks || !sigs) {
+        free(msgs);
+        free(mlens);
+        free(pks);
+        free(sigs);
+        return AMA_ERROR_MEMORY;
+    }
+
+    /* Convert ama_ed25519_batch_entry structs to donna's separate arrays */
+    for (size_t i = 0; i < count; i++) {
+        msgs[i] = entries[i].message;
+        mlens[i] = entries[i].message_len;
+        pks[i] = entries[i].public_key;
+        sigs[i] = entries[i].signature;
+    }
+
+    /* donna's batch verify: returns 0 if all valid, nonzero otherwise.
+     * Per-entry results are written to the valid[] array (1=valid, 0=invalid). */
+    int ret = ed25519_sign_open_batch(msgs, mlens, pks, sigs, count, results);
+
+    free(msgs);
+    free(mlens);
+    free(pks);
+    free(sigs);
+
+    /* Map donna's return: 0 = all valid, nonzero = at least one invalid */
+    return (ret == 0) ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
+}
