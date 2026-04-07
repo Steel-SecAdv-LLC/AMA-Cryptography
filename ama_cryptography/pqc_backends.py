@@ -1714,9 +1714,7 @@ def native_ed25519_batch_verify(
             c_entries[i].public_key = pk
 
         results_arr = (ctypes.c_int * count)()
-        _native_lib.ama_ed25519_batch_verify(
-            c_entries, ctypes.c_size_t(count), results_arr
-        )
+        _native_lib.ama_ed25519_batch_verify(c_entries, ctypes.c_size_t(count), results_arr)
         return [bool(results_arr[i]) for i in range(count)]
 
     # Fallback: verify each signature individually
