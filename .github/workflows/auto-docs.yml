@@ -28,6 +28,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           fetch-depth: 50  # enough history for changelog generation
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
@@ -49,20 +50,26 @@ jobs:
 
           BRANCH="auto-docs/update"
 
+          # Configure git with token-authenticated remote (checkout@v6
+          # credential persistence is unreliable for push operations)
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
 
           # Create or reset the auto-docs branch
           git checkout -B "$BRANCH"
           git add -A
           git commit -m "[auto-docs] Update documentation"
-          git push -u origin "$BRANCH" --force
+          git push origin "$BRANCH" --force
 
           # Create PR only if one doesn't already exist for this branch
-          if ! gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' | grep -q .; then
+          EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -z "$EXISTING_PR" ]; then
             gh pr create \
               --title "[auto-docs] Update documentation" \
               --body "Automated documentation updates." \
               --base main \
               --head "$BRANCH"
+          else
+            echo "PR #${EXISTING_PR} already open for ${BRANCH}, skipping creation."
           fi
