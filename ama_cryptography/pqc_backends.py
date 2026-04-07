@@ -337,17 +337,21 @@ def _setup_ed25519_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_ed25519_verify.restype = ctypes.c_int
 
-        # Batch verify: ama_ed25519_batch_verify(entries, count, results)
+    except AttributeError:
+        return False
+
+    # Batch verify is optional (may be unavailable on some platforms)
+    try:
         lib.ama_ed25519_batch_verify.argtypes = [
             ctypes.POINTER(_Ed25519BatchEntry),  # entries
             ctypes.c_size_t,  # count
             ctypes.POINTER(ctypes.c_int),  # results
         ]
         lib.ama_ed25519_batch_verify.restype = ctypes.c_int
-
-        return True
     except AttributeError:
-        return False
+        pass  # batch verify unavailable; single-verify still works
+
+    return True
 
 
 # AES-256-GCM native availability (separate from PQC)
@@ -1681,10 +1685,13 @@ def native_ed25519_batch_verify(
     if count == 0:
         return []
 
-    # Build ctypes array of batch entries
-    EntryArray = _Ed25519BatchEntry * count
-    c_entries = EntryArray()
-    for i, (msg, sig, pk) in enumerate(entries):
+    # Check if batch verify C function is available; fall back to single verify
+    has_batch = hasattr(_native_lib, "ama_ed25519_batch_verify") and (
+        getattr(_native_lib.ama_ed25519_batch_verify, "argtypes", None) is not None
+    )
+
+    # Validate all entries first
+    for i, (_msg, sig, pk) in enumerate(entries):
         if len(sig) != ED25519_SIGNATURE_BYTES:
             raise ValueError(
                 f"Entry {i}: Ed25519 signature must be {ED25519_SIGNATURE_BYTES} bytes, "
@@ -1695,15 +1702,29 @@ def native_ed25519_batch_verify(
                 f"Entry {i}: Ed25519 public key must be {ED25519_PUBLIC_KEY_BYTES} bytes, "
                 f"got {len(pk)}"
             )
-        c_entries[i].message = msg
-        c_entries[i].message_len = len(msg)
-        c_entries[i].signature = sig
-        c_entries[i].public_key = pk
 
-    results = (ctypes.c_int * count)()
-    _native_lib.ama_ed25519_batch_verify(c_entries, ctypes.c_size_t(count), results)
+    if has_batch:
+        # Use native batch verify
+        EntryArray = _Ed25519BatchEntry * count
+        c_entries = EntryArray()
+        for i, (msg, sig, pk) in enumerate(entries):
+            c_entries[i].message = msg
+            c_entries[i].message_len = len(msg)
+            c_entries[i].signature = sig
+            c_entries[i].public_key = pk
 
-    return [bool(results[i]) for i in range(count)]
+        results_arr = (ctypes.c_int * count)()
+        _native_lib.ama_ed25519_batch_verify(
+            c_entries, ctypes.c_size_t(count), results_arr
+        )
+        return [bool(results_arr[i]) for i in range(count)]
+
+    # Fallback: verify each signature individually
+    out: list[bool] = []
+    for msg, sig, pk in entries:
+        rc: int = _native_lib.ama_ed25519_verify(sig, msg, len(msg), pk)
+        out.append(rc == 0)
+    return out
 
 
 # ============================================================================
