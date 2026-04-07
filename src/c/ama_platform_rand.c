@@ -5,7 +5,7 @@
  * @file ama_platform_rand.c
  * @brief Platform-native cryptographic random number generation
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-03-08
+ * @date 2026-04-06
  *
  * Zero-dependency CSPRNG access. Replaces OpenSSL RAND_bytes() for
  * Kyber, Dilithium, and SPHINCS+ random byte generation.

@@ -18,7 +18,7 @@
  * @file ama_secp256k1.c
  * @brief secp256k1 scalar multiplication for BIP32 non-hardened derivation
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-03-09
+ * @date 2026-04-06
  *
  * Implements constant-time scalar multiplication on the secp256k1 curve:
  *   y^2 = x^3 + 7  (mod p)

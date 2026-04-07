@@ -5,7 +5,7 @@
  * @file ama_hmac_sha256.h
  * @brief Native HMAC-SHA-256 implementation (RFC 2104 / FIPS 198-1)
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-03-08
+ * @date 2026-04-06
  *
  * Provides HMAC-SHA-256 without OpenSSL dependency.
  * Used by SPHINCS+ spx_prf_msg() (FIPS 205 Section 11.1).

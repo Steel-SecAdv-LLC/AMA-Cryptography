@@ -10,8 +10,8 @@ All modules should import exceptions from this module to ensure consistency.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Date: 2026-03-08
-Version: 2.1
+Date: 2026-04-06
+Version: 2.1.2
 """
 
 

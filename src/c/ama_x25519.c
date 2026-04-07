@@ -18,7 +18,7 @@
  * @file ama_x25519.c
  * @brief X25519 Diffie-Hellman key exchange (RFC 7748)
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-03-09
+ * @date 2026-04-06
  *
  * Implements X25519 Diffie-Hellman key exchange per RFC 7748 using the
  * Montgomery curve Curve25519: y^2 = x^3 + 486662*x^2 + x  over GF(2^255-19).

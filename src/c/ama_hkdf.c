@@ -18,7 +18,7 @@
  * @file ama_hkdf.c
  * @brief HKDF (RFC 5869) key derivation using HMAC-SHA3-256
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-03-08
+ * @date 2026-04-06
  *
  * Implements HKDF (HMAC-based Key Derivation Function) per RFC 5869,
  * using HMAC-SHA3-256 as the underlying PRF.

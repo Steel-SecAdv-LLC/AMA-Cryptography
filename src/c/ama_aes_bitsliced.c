@@ -18,7 +18,7 @@
  * @file ama_aes_bitsliced.c
  * @brief Constant-time AES-256 S-box and block cipher implementation
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-03-10
+ * @date 2026-04-06
  *
  * Provides a constant-time AES SubBytes implementation that eliminates
  * the cache-timing vulnerability present in the standard 256-byte lookup

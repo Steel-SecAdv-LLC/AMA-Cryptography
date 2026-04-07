@@ -47,7 +47,7 @@ FROM ubuntu:22.04
 
 LABEL maintainer="Steel Security Advisors LLC <steel.sa.llc@gmail.com>"
 LABEL description="AMA Cryptography - Quantum-Resistant Cryptographic Protection System"
-LABEL version="2.1"
+LABEL version="2.1.2"
 
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y \
