@@ -1715,7 +1715,8 @@ def native_ed25519_batch_verify(
 
         results_arr = (ctypes.c_int * count)()
         rc = _native_lib.ama_ed25519_batch_verify(c_entries, ctypes.c_size_t(count), results_arr)
-        if rc != 0 and rc != 1:  # 0=AMA_SUCCESS, 1=AMA_ERROR_VERIFY_FAILED (some invalid)
+        # 0=AMA_SUCCESS (all valid), -4=AMA_ERROR_VERIFY_FAILED (some invalid, results populated)
+        if rc != 0 and rc != -4:
             raise RuntimeError(f"Ed25519 batch verify failed (rc={rc})")
         return [bool(results_arr[i]) for i in range(count)]
 
