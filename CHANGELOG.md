@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 2.3 |
-| Last Updated | 2026-04-06 |
+| Last Updated | 2026-04-07 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -17,6 +17,20 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ---
 
+
+## [2.1.2] - 2026-04-07
+
+
+### Changed
+
+- v2.1.2: SIMD/SHA3 fixes, Ed25519 AVX2 dispatch & optimization, benchmarks (#176) (293f6a1)
+
+### Fixed
+
+- fix(ci): resolve auto-docs credential persistence for checkout@v6 (#184) (02f6e4a)
+- fix(ci): resolve auto-docs workflow failure — remove third-party dependency (#183) (325e90c)
+
+---
 ## [2.1.2] - 2026-04-06
 
 ### Fixed - Critical Bug Fixes
