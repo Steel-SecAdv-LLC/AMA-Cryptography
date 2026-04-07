@@ -1,6 +1,6 @@
 # Performance Benchmarks
 
-> **Authoritative source:** [BENCHMARKS.md](/BENCHMARKS.md) in the repository root is the authoritative benchmark document. It includes raw C performance numbers (without ctypes overhead), three-column comparisons, and competitive context against libsodium/liboqs. This wiki page shows Python/ctypes measurements from a specific benchmark run.
+> **Authoritative source:** `BENCHMARKS.md` (generated locally by running `python benchmark_suite.py`; not checked into version control) is the authoritative benchmark document. It includes raw C performance numbers (without ctypes overhead), three-column comparisons, and competitive context against libsodium/liboqs. This wiki page shows Python/ctypes measurements from a specific benchmark run.
 
 Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the native C library via Python/ctypes.
 

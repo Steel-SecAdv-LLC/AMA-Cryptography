@@ -38,8 +38,8 @@ security review - it does not guarantee side-channel resistance.
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
-Date: 2026-03-08
-Version: 2.0
+Date: 2026-04-06
+Version: 2.1.2
 Project: AMA Cryptography 3R Runtime Monitoring
 
 AI Co-Architects:
@@ -197,7 +197,7 @@ class IncrementalStats:
         self.M2 = 0.0
 
 
-__version__ = "2.1"
+__version__ = "2.1.2"
 __all__ = [
     "IncrementalStats",
     "EWMAStats",

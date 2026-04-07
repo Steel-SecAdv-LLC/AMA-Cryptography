@@ -43,8 +43,8 @@ Frameworks:
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
-Date: 2025-12-06
-Version: 2.1
+Date: 2026-04-06
+Version: 2.1.2
 
 AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
@@ -70,7 +70,7 @@ from ama_cryptography._numeric import (
 # Configure module logger
 logger = logging.getLogger(__name__)
 
-__version__ = "2.1.0"
+__version__ = "2.1.2"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 __all__ = [
     "PHI",
@@ -133,7 +133,7 @@ HELIX_PARAMS = [
     (19.0, 1.1),  # Γ19L11ϖ
 ]
 
-# Backward-compatible aliases (formerly in code_guardian_secure.py)
+# Backward-compatible aliases
 CODES_INDIVIDUAL = OMNI_CODES
 MASTER_HELIX_PARAMS = HELIX_PARAMS
 MASTER_CODES = "".join(OMNI_CODES)

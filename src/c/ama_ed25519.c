@@ -18,7 +18,7 @@
  * @file ama_ed25519.c
  * @brief Ed25519 digital signature implementation (RFC 8032)
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-03-08
+ * @date 2026-04-06
  *
  * Implements Ed25519 signatures per RFC 8032 using the twisted Edwards curve:
  *   -x^2 + y^2 = 1 + d*x^2*y^2  where d = -121665/121666 (mod p)

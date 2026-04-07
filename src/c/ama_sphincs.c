@@ -18,7 +18,7 @@
  * @file ama_sphincs.c
  * @brief SPHINCS+-SHA2-256f-simple Hash-Based Signatures - Native C Implementation
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-03-08
+ * @date 2026-04-06
  *
  * Full native implementation of SPHINCS+-SHA2-256f-simple (NIST FIPS 205).
  * Implements stateless hash-based signatures using the SPHINCS+ framework

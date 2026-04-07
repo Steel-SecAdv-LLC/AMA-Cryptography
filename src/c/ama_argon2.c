@@ -18,7 +18,7 @@
  * @file ama_argon2.c
  * @brief Argon2id key derivation function (RFC 9106)
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-03-09
+ * @date 2026-04-06
  *
  * Implements Argon2id (type 2) per RFC 9106 with an inline BLAKE2b
  * implementation (RFC 7693). Zero external dependencies.

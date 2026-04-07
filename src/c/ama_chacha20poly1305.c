@@ -18,7 +18,7 @@
  * @file ama_chacha20poly1305.c
  * @brief ChaCha20-Poly1305 AEAD (RFC 8439)
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-03-09
+ * @date 2026-04-06
  *
  * Implements ChaCha20-Poly1305 authenticated encryption with associated data.
  *

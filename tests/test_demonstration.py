@@ -24,8 +24,8 @@ and produces correct output, verifying all six cryptographic layers.
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
-Date: 2026-03-08
-Version: 2.0
+Date: 2026-04-06
+Version: 2.1.2
 
 AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
