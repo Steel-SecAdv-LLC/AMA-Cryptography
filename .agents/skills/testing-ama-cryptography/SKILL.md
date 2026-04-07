@@ -1,13 +1,13 @@
 # Testing AMA Cryptography
 
 ## Overview
-Procedures for testing the AMA Cryptography system (formerly Ava Guardian),
+Procedures for testing the AMA Cryptography system,
 a hybrid post-quantum security framework with FIPS 140-3 compliance.
 
 ## Environment Setup
 
 ```bash
-cd ~/repos/Ava-Guardian
+cd ~/repos/AMA-Cryptography
 # Python 3.12+ required; native C library pre-built in build/lib/
 ```
 
