@@ -30,7 +30,7 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ### Changed - CI/CD Improvements
 
-- **Auto-docs workflow:** Replaced direct commit-and-push to `main` with PR-based flow using `peter-evans/create-pull-request` (SHA-pinned per INVARIANT-4), avoiding direct writes to protected branches
+- **Auto-docs workflow:** Replaced direct commit-and-push to `main` with PR-based flow using `gh pr create`, avoiding direct writes to protected branches
 - **Workflow permissions:** Added `pull-requests: write` permission to `auto-docs.yml`
 - **CI build matrix:** Added Windows MSVC to `ci-build-test.yml`; dropped `--no-build-isolation` from pip install
 - **setup.py:** Added `ama_cryptography_monitor` as `py_module`; refactored `CMakeBuild.run()` to separate Cython extension builds from CMake library build; removed duplicate `super().run()` in `_build_cmake()` and unnecessary sentinel filtering
@@ -182,7 +182,7 @@ Implemented native C cryptographic primitives for high-performance operations:
 - 12-dimensional ethical vector (4 triads x 3 pillars) cryptographically bound via SHA3-256
 - `create_ethical_hkdf_context()`: integrates ethical vector into HKDF context parameter
 - CryptoPackage schema extended with `ethical_vector` and `ethical_hash` fields
-- Mathematical proof in SECURITY_ANALYSIS.md Section 5.1
+- Mathematical proof in SECURITY.md
 
 ### Changed - HKDF Algorithm Unification
 

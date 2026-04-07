@@ -86,7 +86,7 @@ python benchmark_suite.py --markdown BENCHMARKS.md --json benchmark_results.json
 
 ## Interpreting Results
 
-See [BENCHMARKS.md](/BENCHMARKS.md) in the repository root for the authoritative performance document, including:
+See `BENCHMARKS.md` (generated locally by running `python benchmark_suite.py`; not checked into version control) for the authoritative performance document, including:
 
 - Three-column comparison (Raw C | Python/ctypes | ctypes overhead)
 - Competitive context against libsodium, liboqs, and OpenSSL
