@@ -32,6 +32,7 @@ try:
         SPAKE2_MSG_BYTES,
         _native_lib,
     )
+
     NATIVE_AVAILABLE = _native_lib is not None
 except ImportError:
     NATIVE_AVAILABLE = False
@@ -88,16 +89,12 @@ class TestFalcon512:
         sig = ctypes.create_string_buffer(FALCON_SIGNATURE_MAX_BYTES)
         sig_len = ctypes.c_size_t(0)
 
-        rc = _native_lib.ama_falcon512_sign(
-            sig, ctypes.byref(sig_len), message, len(message), sk
-        )
+        rc = _native_lib.ama_falcon512_sign(sig, ctypes.byref(sig_len), message, len(message), sk)
         assert rc == 0, f"Signing failed: {rc}"
         assert sig_len.value > 0
         assert sig_len.value <= FALCON_SIGNATURE_MAX_BYTES
 
-        rc = _native_lib.ama_falcon512_verify(
-            message, len(message), sig, sig_len, pk
-        )
+        rc = _native_lib.ama_falcon512_verify(message, len(message), sig, sig_len, pk)
         assert rc == 0, f"Verification failed: {rc}"
 
     def test_verify_wrong_message_fails(self) -> None:
@@ -109,14 +106,10 @@ class TestFalcon512:
         message = b"Original message"
         sig = ctypes.create_string_buffer(FALCON_SIGNATURE_MAX_BYTES)
         sig_len = ctypes.c_size_t(0)
-        _native_lib.ama_falcon512_sign(
-            sig, ctypes.byref(sig_len), message, len(message), sk
-        )
+        _native_lib.ama_falcon512_sign(sig, ctypes.byref(sig_len), message, len(message), sk)
 
         wrong_message = b"Tampered message"
-        rc = _native_lib.ama_falcon512_verify(
-            wrong_message, len(wrong_message), sig, sig_len, pk
-        )
+        rc = _native_lib.ama_falcon512_verify(wrong_message, len(wrong_message), sig, sig_len, pk)
         assert rc != 0, "Verification should fail with wrong message"
 
     def test_verify_wrong_key_fails(self) -> None:
@@ -132,13 +125,9 @@ class TestFalcon512:
         message = b"Message signed with key 1"
         sig = ctypes.create_string_buffer(FALCON_SIGNATURE_MAX_BYTES)
         sig_len = ctypes.c_size_t(0)
-        _native_lib.ama_falcon512_sign(
-            sig, ctypes.byref(sig_len), message, len(message), sk1
-        )
+        _native_lib.ama_falcon512_sign(sig, ctypes.byref(sig_len), message, len(message), sk1)
 
-        rc = _native_lib.ama_falcon512_verify(
-            message, len(message), sig, sig_len, pk2
-        )
+        rc = _native_lib.ama_falcon512_verify(message, len(message), sig, sig_len, pk2)
         assert rc != 0, "Verification should fail with wrong key"
 
     def test_sign_empty_message(self) -> None:
@@ -150,9 +139,7 @@ class TestFalcon512:
         message = b""
         sig = ctypes.create_string_buffer(FALCON_SIGNATURE_MAX_BYTES)
         sig_len = ctypes.c_size_t(0)
-        rc = _native_lib.ama_falcon512_sign(
-            sig, ctypes.byref(sig_len), message, 0, sk
-        )
+        rc = _native_lib.ama_falcon512_sign(sig, ctypes.byref(sig_len), message, 0, sk)
         assert rc == 0
 
         rc = _native_lib.ama_falcon512_verify(message, 0, sig, sig_len, pk)
@@ -170,12 +157,8 @@ class TestFalcon512:
         sig_len1 = ctypes.c_size_t(0)
         sig_len2 = ctypes.c_size_t(0)
 
-        _native_lib.ama_falcon512_sign(
-            sig1, ctypes.byref(sig_len1), message, len(message), sk
-        )
-        _native_lib.ama_falcon512_sign(
-            sig2, ctypes.byref(sig_len2), message, len(message), sk
-        )
+        _native_lib.ama_falcon512_sign(sig1, ctypes.byref(sig_len1), message, len(message), sk)
+        _native_lib.ama_falcon512_sign(sig2, ctypes.byref(sig_len2), message, len(message), sk)
 
         assert sig1.raw[: sig_len1.value] != sig2.raw[: sig_len2.value]
 
@@ -233,9 +216,7 @@ class TestFrostThreshold:
         nonce = ctypes.create_string_buffer(FROST_NONCE_BYTES)
         commitment = ctypes.create_string_buffer(FROST_COMMITMENT_BYTES)
 
-        rc = _native_lib.ama_frost_round1_commit(
-            nonce, commitment, shares
-        )
+        rc = _native_lib.ama_frost_round1_commit(nonce, commitment, shares)
         assert rc == 0
         assert nonce.raw != b"\x00" * FROST_NONCE_BYTES
         assert commitment.raw != b"\x00" * FROST_COMMITMENT_BYTES
@@ -258,16 +239,14 @@ class TestFrostThreshold:
         nonce1 = ctypes.create_string_buffer(FROST_NONCE_BYTES)
         commit1 = ctypes.create_string_buffer(FROST_COMMITMENT_BYTES)
         rc = _native_lib.ama_frost_round1_commit(
-            nonce1, commit1,
-            ctypes.c_char_p(shares.raw[0:FROST_SHARE_BYTES])
+            nonce1, commit1, ctypes.c_char_p(shares.raw[0:FROST_SHARE_BYTES])
         )
         assert rc == 0
 
         nonce2 = ctypes.create_string_buffer(FROST_NONCE_BYTES)
         commit2 = ctypes.create_string_buffer(FROST_COMMITMENT_BYTES)
         rc = _native_lib.ama_frost_round1_commit(
-            nonce2, commit2,
-            ctypes.c_char_p(shares.raw[FROST_SHARE_BYTES:2 * FROST_SHARE_BYTES])
+            nonce2, commit2, ctypes.c_char_p(shares.raw[FROST_SHARE_BYTES : 2 * FROST_SHARE_BYTES])
         )
         assert rc == 0
 
@@ -280,11 +259,13 @@ class TestFrostThreshold:
         sig_share1 = ctypes.create_string_buffer(FROST_SIG_SHARE_BYTES)
         rc = _native_lib.ama_frost_round2_sign(
             sig_share1,
-            message, len(message),
+            message,
+            len(message),
             ctypes.c_char_p(shares.raw[0:FROST_SHARE_BYTES]),
             ctypes.c_uint8(1),
             nonce1,
-            all_commitments, signer_indices,
+            all_commitments,
+            signer_indices,
             ctypes.c_uint8(num_signers),
             group_pk,
         )
@@ -293,11 +274,13 @@ class TestFrostThreshold:
         sig_share2 = ctypes.create_string_buffer(FROST_SIG_SHARE_BYTES)
         rc = _native_lib.ama_frost_round2_sign(
             sig_share2,
-            message, len(message),
-            ctypes.c_char_p(shares.raw[FROST_SHARE_BYTES:2 * FROST_SHARE_BYTES]),
+            message,
+            len(message),
+            ctypes.c_char_p(shares.raw[FROST_SHARE_BYTES : 2 * FROST_SHARE_BYTES]),
             ctypes.c_uint8(2),
             nonce2,
-            all_commitments, signer_indices,
+            all_commitments,
+            signer_indices,
             ctypes.c_uint8(num_signers),
             group_pk,
         )
@@ -308,9 +291,12 @@ class TestFrostThreshold:
         signature = ctypes.create_string_buffer(64)
         rc = _native_lib.ama_frost_aggregate(
             signature,
-            all_shares, all_commitments,
-            signer_indices, ctypes.c_uint8(num_signers),
-            message, len(message),
+            all_shares,
+            all_commitments,
+            signer_indices,
+            ctypes.c_uint8(num_signers),
+            message,
+            len(message),
             group_pk,
         )
         assert rc == 0
@@ -323,8 +309,11 @@ class TestFrostThreshold:
         shares = ctypes.create_string_buffer(5 * FROST_SHARE_BYTES)
 
         rc = _native_lib.ama_frost_keygen_trusted_dealer(
-            ctypes.c_uint8(3), ctypes.c_uint8(5),
-            group_pk, shares, secret,
+            ctypes.c_uint8(3),
+            ctypes.c_uint8(5),
+            group_pk,
+            shares,
+            secret,
         )
         assert rc == 0
 
@@ -339,8 +328,10 @@ class TestSpake2:
     """SPAKE2 password-authenticated key exchange tests (RFC 9382)."""
 
     def _run_spake2_handshake(
-        self, password: bytes,
-        id_a: bytes = b"client", id_b: bytes = b"server",
+        self,
+        password: bytes,
+        id_a: bytes = b"client",
+        id_b: bytes = b"server",
     ) -> tuple:
         """Run a complete SPAKE2 handshake, return (key_a, key_b)."""
         # Create client and server contexts
@@ -352,30 +343,38 @@ class TestSpake2:
         try:
             # Initialize both sides with same password
             rc = _native_lib.ama_spake2_init(
-                ctx_a, 0, id_a, len(id_a), id_b, len(id_b),
-                password, len(password),
+                ctx_a,
+                0,
+                id_a,
+                len(id_a),
+                id_b,
+                len(id_b),
+                password,
+                len(password),
             )
             assert rc == 0, f"Client init failed: {rc}"
 
             rc = _native_lib.ama_spake2_init(
-                ctx_b, 1, id_a, len(id_a), id_b, len(id_b),
-                password, len(password),
+                ctx_b,
+                1,
+                id_a,
+                len(id_a),
+                id_b,
+                len(id_b),
+                password,
+                len(password),
             )
             assert rc == 0, f"Server init failed: {rc}"
 
             # Generate messages
             msg_a = ctypes.create_string_buffer(SPAKE2_MSG_BYTES)
             msg_a_len = ctypes.c_size_t(0)
-            rc = _native_lib.ama_spake2_generate_msg(
-                ctx_a, msg_a, ctypes.byref(msg_a_len)
-            )
+            rc = _native_lib.ama_spake2_generate_msg(ctx_a, msg_a, ctypes.byref(msg_a_len))
             assert rc == 0
 
             msg_b = ctypes.create_string_buffer(SPAKE2_MSG_BYTES)
             msg_b_len = ctypes.c_size_t(0)
-            rc = _native_lib.ama_spake2_generate_msg(
-                ctx_b, msg_b, ctypes.byref(msg_b_len)
-            )
+            rc = _native_lib.ama_spake2_generate_msg(ctx_b, msg_b, ctypes.byref(msg_b_len))
             assert rc == 0
 
             # Process peer messages
@@ -383,8 +382,12 @@ class TestSpake2:
             confirm_a = ctypes.create_string_buffer(SPAKE2_CONFIRM_BYTES)
             expect_a = ctypes.create_string_buffer(SPAKE2_CONFIRM_BYTES)
             rc = _native_lib.ama_spake2_process_msg(
-                ctx_a, msg_b, SPAKE2_MSG_BYTES,
-                key_a, confirm_a, expect_a,
+                ctx_a,
+                msg_b,
+                SPAKE2_MSG_BYTES,
+                key_a,
+                confirm_a,
+                expect_a,
             )
             assert rc == 0
 
@@ -392,8 +395,12 @@ class TestSpake2:
             confirm_b = ctypes.create_string_buffer(SPAKE2_CONFIRM_BYTES)
             expect_b = ctypes.create_string_buffer(SPAKE2_CONFIRM_BYTES)
             rc = _native_lib.ama_spake2_process_msg(
-                ctx_b, msg_a, SPAKE2_MSG_BYTES,
-                key_b, confirm_b, expect_b,
+                ctx_b,
+                msg_a,
+                SPAKE2_MSG_BYTES,
+                key_b,
+                confirm_b,
+                expect_b,
             )
             assert rc == 0
 
@@ -417,12 +424,8 @@ class TestSpake2:
 
     def test_different_passwords_derive_different_keys(self) -> None:
         """Different passwords produce different shared keys."""
-        key_a1, _, ctx_a1, ctx_b1, _, _ = self._run_spake2_handshake(
-            b"password1"
-        )
-        key_a2, _, ctx_a2, ctx_b2, _, _ = self._run_spake2_handshake(
-            b"password2"
-        )
+        key_a1, _, ctx_a1, ctx_b1, _, _ = self._run_spake2_handshake(b"password1")
+        key_a2, _, ctx_a2, ctx_b2, _, _ = self._run_spake2_handshake(b"password2")
         try:
             assert key_a1 != key_a2, "Different passwords should give different keys"
         finally:
@@ -433,20 +436,16 @@ class TestSpake2:
 
     def test_confirmation_verification(self) -> None:
         """Confirmation MACs verify correctly."""
-        _key_a, _key_b, ctx_a, ctx_b, confirm_a, confirm_b = (
-            self._run_spake2_handshake(b"test-password")
+        _key_a, _key_b, ctx_a, ctx_b, confirm_a, confirm_b = self._run_spake2_handshake(
+            b"test-password"
         )
         try:
             # Client verifies server's confirmation
-            rc = _native_lib.ama_spake2_verify_confirm(
-                ctx_a, confirm_b, SPAKE2_CONFIRM_BYTES
-            )
+            rc = _native_lib.ama_spake2_verify_confirm(ctx_a, confirm_b, SPAKE2_CONFIRM_BYTES)
             assert rc == 0, "Client should verify server's confirmation"
 
             # Server verifies client's confirmation
-            rc = _native_lib.ama_spake2_verify_confirm(
-                ctx_b, confirm_a, SPAKE2_CONFIRM_BYTES
-            )
+            rc = _native_lib.ama_spake2_verify_confirm(ctx_b, confirm_a, SPAKE2_CONFIRM_BYTES)
             assert rc == 0, "Server should verify client's confirmation"
         finally:
             _native_lib.ama_spake2_free(ctx_a)
@@ -454,9 +453,7 @@ class TestSpake2:
 
     def test_wrong_confirmation_rejected(self) -> None:
         """Wrong confirmation MAC is rejected."""
-        _, _, ctx_a, ctx_b, _, confirm_b = self._run_spake2_handshake(
-            b"test-password"
-        )
+        _, _, ctx_a, ctx_b, _, confirm_b = self._run_spake2_handshake(b"test-password")
         try:
             # Tamper with confirmation
             bad_confirm = bytearray(confirm_b.raw)
@@ -472,7 +469,9 @@ class TestSpake2:
     def test_empty_identities(self) -> None:
         """SPAKE2 works with empty identities."""
         key_a, key_b, ctx_a, ctx_b, _, _ = self._run_spake2_handshake(
-            b"password", id_a=b"", id_b=b"",
+            b"password",
+            id_a=b"",
+            id_b=b"",
         )
         try:
             assert key_a == key_b
@@ -489,9 +488,7 @@ class TestSpake2:
         ctx = _native_lib.ama_spake2_new()
         assert ctx is not None
         try:
-            rc = _native_lib.ama_spake2_init(
-                ctx, 2, b"a", 1, b"b", 1, b"pw", 2
-            )
+            rc = _native_lib.ama_spake2_init(ctx, 2, b"a", 1, b"b", 1, b"pw", 2)
             assert rc != 0
         finally:
             _native_lib.ama_spake2_free(ctx)

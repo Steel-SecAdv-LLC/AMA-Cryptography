@@ -58,6 +58,25 @@ __all__ = [
     "KyberUnavailableError",
     "SphincsUnavailableError",
     "SecurityWarning",
+    # FALCON-512 (FN-DSA, FIPS 206 draft)
+    "FALCON_AVAILABLE",
+    "FALCON_BACKEND",
+    "FALCON_PUBLIC_KEY_BYTES",
+    "FALCON_SECRET_KEY_BYTES",
+    "FALCON_SIGNATURE_MAX_BYTES",
+    # FROST threshold Ed25519 (RFC 9591)
+    "FROST_AVAILABLE",
+    "FROST_BACKEND",
+    "FROST_SHARE_BYTES",
+    "FROST_NONCE_BYTES",
+    "FROST_COMMITMENT_BYTES",
+    "FROST_SIG_SHARE_BYTES",
+    # SPAKE2 PAKE (RFC 9382)
+    "SPAKE2_AVAILABLE",
+    "SPAKE2_BACKEND",
+    "SPAKE2_MSG_BYTES",
+    "SPAKE2_KEY_BYTES",
+    "SPAKE2_CONFIRM_BYTES",
 ]
 
 
@@ -611,20 +630,20 @@ def _setup_falcon_ctypes(lib: ctypes.CDLL) -> bool:
         lib.ama_falcon512_keypair.restype = ctypes.c_int
 
         lib.ama_falcon512_sign.argtypes = [
-            ctypes.c_char_p,                   # signature
-            ctypes.POINTER(ctypes.c_size_t),   # signature_len
-            ctypes.c_char_p,                   # message
-            ctypes.c_size_t,                   # message_len
-            ctypes.c_char_p,                   # secret_key
+            ctypes.c_char_p,  # signature
+            ctypes.POINTER(ctypes.c_size_t),  # signature_len
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # secret_key
         ]
         lib.ama_falcon512_sign.restype = ctypes.c_int
 
         lib.ama_falcon512_verify.argtypes = [
-            ctypes.c_char_p,   # message
-            ctypes.c_size_t,   # message_len
-            ctypes.c_char_p,   # signature
-            ctypes.c_size_t,   # signature_len
-            ctypes.c_char_p,   # public_key
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # signature
+            ctypes.c_size_t,  # signature_len
+            ctypes.c_char_p,  # public_key
         ]
         lib.ama_falcon512_verify.restype = ctypes.c_int
         return True
@@ -641,44 +660,44 @@ def _setup_frost_ctypes(lib: ctypes.CDLL) -> bool:
     """Configure ctypes for FROST threshold Ed25519 functions."""
     try:
         lib.ama_frost_keygen_trusted_dealer.argtypes = [
-            ctypes.c_uint8,    # threshold
-            ctypes.c_uint8,    # num_participants
-            ctypes.c_char_p,   # group_public_key
-            ctypes.c_char_p,   # participant_shares
-            ctypes.c_char_p,   # secret_key (nullable)
+            ctypes.c_uint8,  # threshold
+            ctypes.c_uint8,  # num_participants
+            ctypes.c_char_p,  # group_public_key
+            ctypes.c_char_p,  # participant_shares
+            ctypes.c_char_p,  # secret_key (nullable)
         ]
         lib.ama_frost_keygen_trusted_dealer.restype = ctypes.c_int
 
         lib.ama_frost_round1_commit.argtypes = [
-            ctypes.c_char_p,   # nonce_pair
-            ctypes.c_char_p,   # commitment
-            ctypes.c_char_p,   # participant_share
+            ctypes.c_char_p,  # nonce_pair
+            ctypes.c_char_p,  # commitment
+            ctypes.c_char_p,  # participant_share
         ]
         lib.ama_frost_round1_commit.restype = ctypes.c_int
 
         lib.ama_frost_round2_sign.argtypes = [
-            ctypes.c_char_p,   # sig_share
-            ctypes.c_char_p,   # message
-            ctypes.c_size_t,   # message_len
-            ctypes.c_char_p,   # participant_share
-            ctypes.c_uint8,    # participant_index
-            ctypes.c_char_p,   # nonce_pair
-            ctypes.c_char_p,   # commitments
-            ctypes.c_char_p,   # signer_indices
-            ctypes.c_uint8,    # num_signers
-            ctypes.c_char_p,   # group_public_key
+            ctypes.c_char_p,  # sig_share
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # participant_share
+            ctypes.c_uint8,  # participant_index
+            ctypes.c_char_p,  # nonce_pair
+            ctypes.c_char_p,  # commitments
+            ctypes.c_char_p,  # signer_indices
+            ctypes.c_uint8,  # num_signers
+            ctypes.c_char_p,  # group_public_key
         ]
         lib.ama_frost_round2_sign.restype = ctypes.c_int
 
         lib.ama_frost_aggregate.argtypes = [
-            ctypes.c_char_p,   # signature
-            ctypes.c_char_p,   # sig_shares
-            ctypes.c_char_p,   # commitments
-            ctypes.c_char_p,   # signer_indices
-            ctypes.c_uint8,    # num_signers
-            ctypes.c_char_p,   # message
-            ctypes.c_size_t,   # message_len
-            ctypes.c_char_p,   # group_public_key
+            ctypes.c_char_p,  # signature
+            ctypes.c_char_p,  # sig_shares
+            ctypes.c_char_p,  # commitments
+            ctypes.c_char_p,  # signer_indices
+            ctypes.c_uint8,  # num_signers
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # group_public_key
         ]
         lib.ama_frost_aggregate.restype = ctypes.c_int
         return True
@@ -698,38 +717,38 @@ def _setup_spake2_ctypes(lib: ctypes.CDLL) -> bool:
         lib.ama_spake2_new.restype = ctypes.c_void_p
 
         lib.ama_spake2_init.argtypes = [
-            ctypes.c_void_p,   # ctx
-            ctypes.c_int,      # role
-            ctypes.c_char_p,   # identity_a
-            ctypes.c_size_t,   # identity_a_len
-            ctypes.c_char_p,   # identity_b
-            ctypes.c_size_t,   # identity_b_len
-            ctypes.c_char_p,   # password
-            ctypes.c_size_t,   # password_len
+            ctypes.c_void_p,  # ctx
+            ctypes.c_int,  # role
+            ctypes.c_char_p,  # identity_a
+            ctypes.c_size_t,  # identity_a_len
+            ctypes.c_char_p,  # identity_b
+            ctypes.c_size_t,  # identity_b_len
+            ctypes.c_char_p,  # password
+            ctypes.c_size_t,  # password_len
         ]
         lib.ama_spake2_init.restype = ctypes.c_int
 
         lib.ama_spake2_generate_msg.argtypes = [
-            ctypes.c_void_p,                   # ctx
-            ctypes.c_char_p,                   # out_msg
-            ctypes.POINTER(ctypes.c_size_t),   # out_msg_len
+            ctypes.c_void_p,  # ctx
+            ctypes.c_char_p,  # out_msg
+            ctypes.POINTER(ctypes.c_size_t),  # out_msg_len
         ]
         lib.ama_spake2_generate_msg.restype = ctypes.c_int
 
         lib.ama_spake2_process_msg.argtypes = [
-            ctypes.c_void_p,   # ctx
-            ctypes.c_char_p,   # peer_msg
-            ctypes.c_size_t,   # peer_msg_len
-            ctypes.c_char_p,   # shared_key
-            ctypes.c_char_p,   # my_confirm
-            ctypes.c_char_p,   # expected_confirm
+            ctypes.c_void_p,  # ctx
+            ctypes.c_char_p,  # peer_msg
+            ctypes.c_size_t,  # peer_msg_len
+            ctypes.c_char_p,  # shared_key
+            ctypes.c_char_p,  # my_confirm
+            ctypes.c_char_p,  # expected_confirm
         ]
         lib.ama_spake2_process_msg.restype = ctypes.c_int
 
         lib.ama_spake2_verify_confirm.argtypes = [
-            ctypes.c_void_p,   # ctx
-            ctypes.c_char_p,   # peer_confirm
-            ctypes.c_size_t,   # confirm_len
+            ctypes.c_void_p,  # ctx
+            ctypes.c_char_p,  # peer_confirm
+            ctypes.c_size_t,  # confirm_len
         ]
         lib.ama_spake2_verify_confirm.restype = ctypes.c_int
 
