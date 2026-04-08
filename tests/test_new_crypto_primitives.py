@@ -17,25 +17,25 @@ import pytest
 
 # Determine if the native C library is available
 try:
-                from ama_cryptography.pqc_backends import (
-                    FALCON_AVAILABLE,
-                    FALCON_PUBLIC_KEY_BYTES,
-                    FALCON_SECRET_KEY_BYTES,
-                    FALCON_SIGNATURE_MAX_BYTES,
-                    FROST_AVAILABLE,
-                    FROST_COMMITMENT_BYTES,
-                    FROST_NONCE_BYTES,
-                    FROST_SHARE_BYTES,
-                    FROST_SIG_SHARE_BYTES,
-                    SPAKE2_AVAILABLE,
-                    SPAKE2_CONFIRM_BYTES,
-                    SPAKE2_KEY_BYTES,
-                    SPAKE2_MSG_BYTES,
-                    _native_lib,
-                    falcon512_complete_keypair,
-                    falcon512_sign,
-                    falcon512_verify,
-                )
+    from ama_cryptography.pqc_backends import (
+        FALCON_AVAILABLE,
+        FALCON_PUBLIC_KEY_BYTES,
+        FALCON_SECRET_KEY_BYTES,
+        FALCON_SIGNATURE_MAX_BYTES,
+        FROST_AVAILABLE,
+        FROST_COMMITMENT_BYTES,
+        FROST_NONCE_BYTES,
+        FROST_SHARE_BYTES,
+        FROST_SIG_SHARE_BYTES,
+        SPAKE2_AVAILABLE,
+        SPAKE2_CONFIRM_BYTES,
+        SPAKE2_KEY_BYTES,
+        SPAKE2_MSG_BYTES,
+        _native_lib,
+        falcon512_complete_keypair,
+        falcon512_sign,
+        falcon512_verify,
+    )
 
 except ImportError:
     FALCON_AVAILABLE = False

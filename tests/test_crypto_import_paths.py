@@ -476,9 +476,7 @@ class TestTSAIntegration:
                 last_err = exc
                 continue
 
-        pytest.skip(
-            f"All TSA endpoints unreachable (last error: {last_err})"
-        )
+        pytest.skip(f"All TSA endpoints unreachable (last error: {last_err})")
 
 
 if __name__ == "__main__":

@@ -32,9 +32,9 @@ FALCON_N = 512
 # in Z_q[x]/(x^n+1).  q-1 = 12288 = 2^12 * 3, so Z_q has primitive
 # 2^12-th roots of unity.
 # ---------------------------------------------------------------------------
-_NTT_PSI = 10302          # primitive 2n-th root: psi^(2n) = 1, psi^n = -1
+_NTT_PSI = 10302  # primitive 2n-th root: psi^(2n) = 1, psi^n = -1
 _NTT_PSI_INV = pow(_NTT_PSI, FALCON_Q - 2, FALCON_Q)
-_NTT_OMEGA = pow(_NTT_PSI, 2, FALCON_Q)          # primitive n-th root
+_NTT_OMEGA = pow(_NTT_PSI, 2, FALCON_Q)  # primitive n-th root
 _NTT_OMEGA_INV = pow(_NTT_OMEGA, FALCON_Q - 2, FALCON_Q)
 _NTT_N_INV = pow(FALCON_N, FALCON_Q - 2, FALCON_Q)
 _NTT_LOGN = 9  # log2(512)
@@ -180,8 +180,7 @@ def _ifft(f_fft: list[complex], n: int) -> list:
     f1_fft = [complex(0)] * (n // 2)
     for i in range(n // 2):
         f0_fft[i] = 0.5 * (f_fft[2 * i] + f_fft[2 * i + 1])
-        f1_fft[i] = (0.5 * (f_fft[2 * i] - f_fft[2 * i + 1])
-                      * w[2 * i].conjugate())
+        f1_fft[i] = 0.5 * (f_fft[2 * i] - f_fft[2 * i + 1]) * w[2 * i].conjugate()
     f0 = _ifft(f0_fft, n // 2)
     f1 = _ifft(f1_fft, n // 2)
     return _merge(f0, f1)
@@ -206,6 +205,7 @@ def _div_fft(a: list[complex], b: list[complex]) -> list[complex]:
 # ---------------------------------------------------------------------------
 # Polynomial arithmetic in Z[x]/(x^n + 1)
 # ---------------------------------------------------------------------------
+
 
 def _xgcd(a: int, b: int) -> tuple[int, int, int]:
     """Extended GCD (iterative): returns (g, u, v) such that a*u + b*v = g."""
@@ -233,7 +233,7 @@ def _karatsuba(a: list[int], b: list[int], n: int) -> list[int]:
     a1b1 = _karatsuba(a1, b1, n2)
     axbx = _karatsuba(ax, bx, n2)
     for i in range(n):
-        axbx[i] -= (a0b0[i] + a1b1[i])
+        axbx[i] -= a0b0[i] + a1b1[i]
     ab = [0] * (2 * n)
     for i in range(n):
         ab[i] += a0b0[i]
@@ -287,16 +287,13 @@ def _bitsize(a: int) -> int:
     return res
 
 
-def _reduce(f: list[int], g: list[int],
-            F: list[int], G: list[int]) -> tuple[list[int], list[int]]:
+def _reduce(f: list[int], g: list[int], F: list[int], G: list[int]) -> tuple[list[int], list[int]]:
     """Babai reduction of (F, G) w.r.t. (f, g) in Z[x]/(x^n+1).
 
     Algorithm 7 (Reduce) from Falcon's specification.
     """
     n = len(f)
-    size = max(53,
-               max(_bitsize(c) for c in f),
-               max(_bitsize(c) for c in g))
+    size = max(53, max(_bitsize(c) for c in f), max(_bitsize(c) for c in g))
 
     f_adjust = [c >> (size - 53) for c in f]
     g_adjust = [c >> (size - 53) for c in g]
@@ -304,9 +301,7 @@ def _reduce(f: list[int], g: list[int],
     ga_fft = _fft(g_adjust, n)
 
     for _ in range(100):
-        Size = max(53,
-                   max(_bitsize(c) for c in F),
-                   max(_bitsize(c) for c in G))
+        Size = max(53, max(_bitsize(c) for c in F), max(_bitsize(c) for c in G))
         if Size < size:
             break
 
@@ -315,10 +310,8 @@ def _reduce(f: list[int], g: list[int],
         Fa_fft = _fft(F_adjust, n)
         Ga_fft = _fft(G_adjust, n)
 
-        den_fft = _add_fft(_mul_fft(fa_fft, _adj_fft(fa_fft)),
-                           _mul_fft(ga_fft, _adj_fft(ga_fft)))
-        num_fft = _add_fft(_mul_fft(Fa_fft, _adj_fft(fa_fft)),
-                           _mul_fft(Ga_fft, _adj_fft(ga_fft)))
+        den_fft = _add_fft(_mul_fft(fa_fft, _adj_fft(fa_fft)), _mul_fft(ga_fft, _adj_fft(ga_fft)))
+        num_fft = _add_fft(_mul_fft(Fa_fft, _adj_fft(fa_fft)), _mul_fft(Ga_fft, _adj_fft(ga_fft)))
         k_fft = _div_fft(num_fft, den_fft)
         k = _ifft(k_fft, n)
         k = [round(c) for c in k]
@@ -340,8 +333,10 @@ def _reduce(f: list[int], g: list[int],
 # Main solver
 # ---------------------------------------------------------------------------
 
-def ntru_solve(f: list[int], g: list[int], n: int = FALCON_N,
-               q: int = FALCON_Q) -> tuple[list[int], list[int]]:
+
+def ntru_solve(
+    f: list[int], g: list[int], n: int = FALCON_N, q: int = FALCON_Q
+) -> tuple[list[int], list[int]]:
     """Solve the NTRU equation: find F, G such that f*G - g*F = q mod (x^n+1).
 
     Uses the recursive field-norm tower algorithm (NTRUSolve).
@@ -362,8 +357,7 @@ def ntru_solve(f: list[int], g: list[int], n: int = FALCON_N,
         f0, g0 = f[0], g[0]
         d, u, v = _xgcd(f0, g0)
         if d != 1:
-            raise ValueError(
-                f"NTRU equation has no solution: gcd({f0}, {g0}) = {d} != 1")
+            raise ValueError(f"NTRU equation has no solution: gcd({f0}, {g0}) = {d} != 1")
         return [-q * v], [q * u]
 
     half = n // 2
@@ -379,9 +373,9 @@ def ntru_solve(f: list[int], g: list[int], n: int = FALCON_N,
     return F, G
 
 
-def verify_ntru(f: list[int], g: list[int],
-                F: list[int], G: list[int],
-                n: int = FALCON_N, q: int = FALCON_Q) -> bool:
+def verify_ntru(
+    f: list[int], g: list[int], F: list[int], G: list[int], n: int = FALCON_N, q: int = FALCON_Q
+) -> bool:
     """Verify that f*G - g*F = q mod (x^n+1)."""
     fG = _karamul(f, G)
     gF = _karamul(g, F)
@@ -399,8 +393,7 @@ FALCON_NONCE_LEN = 40
 FALCON_SIG_BOUND = 350000000
 
 
-def _hash_to_point(nonce: bytes, message: bytes,
-                   n: int = FALCON_N, q: int = FALCON_Q) -> list[int]:
+def _hash_to_point(nonce: bytes, message: bytes, n: int = FALCON_N, q: int = FALCON_Q) -> list[int]:
     """Hash (nonce || message) to a polynomial in Z_q^n using SHAKE-256.
 
     Matches the C ``hash_to_point`` exactly: incremental SHAKE-256
@@ -426,9 +419,12 @@ def _hash_to_point(nonce: bytes, message: bytes,
 
 
 def babai_sign(
-    f: list[int], g: list[int],
-    F: list[int], G: list[int],
-    c: list[int], n: int = FALCON_N,
+    f: list[int],
+    g: list[int],
+    F: list[int],
+    G: list[int],
+    c: list[int],
+    n: int = FALCON_N,
 ) -> tuple[list[int], list[int]]:
     """Babai nearest-plane reduction using the full NTRU basis.
 
@@ -526,17 +522,19 @@ def babai_sign(
     return s1, s2
 
 
-def _poly_mul_mod_q(a: list[int], b: list[int],
-                    n: int = FALCON_N, q: int = FALCON_Q) -> list[int]:
+def _poly_mul_mod_q(a: list[int], b: list[int], n: int = FALCON_N, q: int = FALCON_Q) -> list[int]:
     """Multiply polynomials mod (x^n+1) mod q using negacyclic NTT."""
     return _poly_mul_ntt(a, b)
 
 
 def falcon_sign(
-    f: list[int], g: list[int],
-    F: list[int], G: list[int],
+    f: list[int],
+    g: list[int],
+    F: list[int],
+    G: list[int],
     h: list[int],
-    message: bytes, n: int = FALCON_N,
+    message: bytes,
+    n: int = FALCON_N,
     max_attempts: int = 100,
 ) -> tuple[bytes, list[int], list[int]] | None:
     """Sign a message using the full NTRU basis with Babai reduction.
@@ -574,8 +572,12 @@ def falcon_sign(
 
 
 def falcon_verify(
-    h: list[int], nonce: bytes, s2: list[int],
-    message: bytes, n: int = FALCON_N, q: int = FALCON_Q,
+    h: list[int],
+    nonce: bytes,
+    s2: list[int],
+    message: bytes,
+    n: int = FALCON_N,
+    q: int = FALCON_Q,
 ) -> bool:
     """Verify a FALCON-512 signature given the public key polynomial h.
 

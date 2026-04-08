@@ -821,9 +821,7 @@ def _decode_signed_byte(b: int) -> int:
 # retrieve the full-size F, G coefficients (which do NOT fit in 1 byte
 # and therefore cannot be round-tripped through the C SK buffer).
 # Also caches h (public key polynomial) needed for deriving s1 = c - s2*h.
-_falcon_key_cache: dict[
-    int, tuple[list[int], list[int], list[int], list[int], list[int]]
-] = {}
+_falcon_key_cache: dict[int, tuple[list[int], list[int], list[int], list[int], list[int]]] = {}
 
 
 def falcon512_complete_keypair(
@@ -863,23 +861,28 @@ def falcon512_complete_keypair(
         # SK layout: header(1) | f(512×1B) | g(512×1B) | F(512×1B) | G(512×1B)
         sk_bytes = bytes(sk)
         f_coeffs = [_decode_signed_byte(sk_bytes[1 + i]) for i in range(FALCON_N)]
-        g_coeffs = [
-            _decode_signed_byte(sk_bytes[1 + FALCON_N + i])
-            for i in range(FALCON_N)
-        ]
+        g_coeffs = [_decode_signed_byte(sk_bytes[1 + FALCON_N + i]) for i in range(FALCON_N)]
 
         # Solve NTRU equation: find F, G with fG - gF = q mod (x^n+1)
         # Not all (f, g) pairs admit a solution (gcd requirement at base
         # case), so we retry with a fresh keygen on failure.
         try:
             F_coeffs, G_coeffs = ntru_solve(
-                f_coeffs, g_coeffs, FALCON_N, FALCON_Q,
+                f_coeffs,
+                g_coeffs,
+                FALCON_N,
+                FALCON_Q,
             )
         except ValueError:
             continue  # GCD ≠ 1 at base case → regenerate f, g
 
         if not verify_ntru(
-            f_coeffs, g_coeffs, F_coeffs, G_coeffs, FALCON_N, FALCON_Q,
+            f_coeffs,
+            g_coeffs,
+            F_coeffs,
+            G_coeffs,
+            FALCON_N,
+            FALCON_Q,
         ):
             continue
 
@@ -899,7 +902,11 @@ def falcon512_complete_keypair(
 
         # Cache full key material keyed by sk buffer identity
         _falcon_key_cache[id(sk)] = (
-            f_coeffs, g_coeffs, F_coeffs, G_coeffs, h_coeffs,
+            f_coeffs,
+            g_coeffs,
+            F_coeffs,
+            G_coeffs,
+            h_coeffs,
         )
         return 0
 
