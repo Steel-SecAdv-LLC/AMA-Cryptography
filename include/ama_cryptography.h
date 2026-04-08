@@ -1140,7 +1140,7 @@ AMA_API void ama_aes256_encrypt_block_consttime(
  * ============================================================================ */
 
 #define AMA_FALCON512_PUBLIC_KEY_BYTES   897
-#define AMA_FALCON512_SECRET_KEY_BYTES   1281
+#define AMA_FALCON512_SECRET_KEY_BYTES   2049
 #define AMA_FALCON512_SIGNATURE_MAX_BYTES 809
 
 /**
@@ -1150,7 +1150,7 @@ AMA_API void ama_aes256_encrypt_block_consttime(
  * NIST FIPS 206 draft, Level 1 security.
  *
  * @param public_key Output: public key (897 bytes)
- * @param secret_key Output: secret key (1281 bytes)
+ * @param secret_key Output: secret key (2049 bytes)
  * @return AMA_SUCCESS or error code
  */
 AMA_API ama_error_t ama_falcon512_keypair(
@@ -1164,7 +1164,7 @@ AMA_API ama_error_t ama_falcon512_keypair(
  * @param signature_len Output: actual signature length
  * @param message       Message to sign
  * @param message_len   Length of message
- * @param secret_key    Secret key (1281 bytes)
+ * @param secret_key    Secret key (2049 bytes)
  * @return AMA_SUCCESS or error code
  */
 AMA_API ama_error_t ama_falcon512_sign(

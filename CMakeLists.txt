@@ -375,6 +375,11 @@ if(AMA_BUILD_SHARED)
     # Threading (INVARIANT-2): pthread_once on POSIX, InitOnceExecuteOnce on Windows
     target_link_libraries(ama_cryptography_shared PRIVATE Threads::Threads)
 
+    # Math library for FALCON-512 FFT-based Babai signing (cos/sin/round)
+    if(NOT WIN32)
+        target_link_libraries(ama_cryptography_shared PRIVATE m)
+    endif()
+
     # Windows: link bcrypt for BCryptGenRandom (used by ama_platform_rand.c)
     if(WIN32)
         target_link_libraries(ama_cryptography_shared PRIVATE bcrypt)
@@ -401,6 +406,10 @@ if(AMA_BUILD_STATIC)
     ama_apply_donna_settings(ama_cryptography_static)
 
     target_link_libraries(ama_cryptography_static PRIVATE Threads::Threads)
+
+    if(NOT WIN32)
+        target_link_libraries(ama_cryptography_static PRIVATE m)
+    endif()
 
     if(WIN32)
         target_link_libraries(ama_cryptography_static PRIVATE bcrypt)
@@ -442,6 +451,10 @@ if(AMA_BUILD_TESTS)
     ama_apply_donna_settings(ama_cryptography_test)
 
     target_link_libraries(ama_cryptography_test PRIVATE Threads::Threads)
+
+    if(NOT WIN32)
+        target_link_libraries(ama_cryptography_test PRIVATE m)
+    endif()
 
     if(WIN32)
         target_link_libraries(ama_cryptography_test PRIVATE bcrypt)

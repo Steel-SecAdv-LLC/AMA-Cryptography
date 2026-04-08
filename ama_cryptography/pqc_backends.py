@@ -64,6 +64,9 @@ __all__ = [
     "FALCON_PUBLIC_KEY_BYTES",
     "FALCON_SECRET_KEY_BYTES",
     "FALCON_SIGNATURE_MAX_BYTES",
+    "falcon512_complete_keypair",
+    "falcon512_sign",
+    "falcon512_verify",
     # FROST threshold Ed25519 (RFC 9591)
     "FROST_AVAILABLE",
     "FROST_BACKEND",
@@ -802,8 +805,246 @@ SPHINCS_BACKEND: Optional[str] = _SPHINCS_BACKEND
 FALCON_AVAILABLE: bool = _FALCON_AVAILABLE
 FALCON_BACKEND: Optional[str] = _FALCON_BACKEND
 FALCON_PUBLIC_KEY_BYTES = 897
-FALCON_SECRET_KEY_BYTES = 1281
+FALCON_SECRET_KEY_BYTES = 2049
 FALCON_SIGNATURE_MAX_BYTES = 809
+FALCON_N = 512
+FALCON_Q = 12289
+
+
+def _decode_signed_byte(b: int) -> int:
+    """Interpret a byte as a signed 8-bit integer (-128..127)."""
+    return b if b < 128 else b - 256
+
+
+# Module-level cache: maps id(sk_buffer) → (f, g, F, G, h) lists.
+# Populated by falcon512_complete_keypair so that falcon512_sign can
+# retrieve the full-size F, G coefficients (which do NOT fit in 1 byte
+# and therefore cannot be round-tripped through the C SK buffer).
+# Also caches h (public key polynomial) needed for deriving s1 = c - s2*h.
+_falcon_key_cache: dict[
+    int, tuple[list[int], list[int], list[int], list[int], list[int]]
+] = {}
+
+
+def falcon512_complete_keypair(
+    pk: ctypes.Array,  # type: ignore[type-arg] -- ctypes.Array generic unsupported at runtime (PQC-001)
+    sk: ctypes.Array,  # type: ignore[type-arg] -- ctypes.Array generic unsupported at runtime (PQC-001)
+) -> int:
+    """Generate a FALCON-512 keypair with complete NTRU basis.
+
+    Calls the C keygen to produce (f, g), then uses the Python NTRU
+    tower solver to compute the complement polynomials (F, G) so that
+    f*G - g*F = q mod (x^n+1).
+
+    The full basis (f, g, F, G) is cached in-process for signing, since
+    F and G have coefficients that exceed 8-bit range and cannot be
+    stored in the C secret-key layout.
+
+    Args:
+        pk: ctypes buffer of size FALCON_PUBLIC_KEY_BYTES (897).
+        sk: ctypes buffer of size FALCON_SECRET_KEY_BYTES (2049).
+
+    Returns:
+        0 on success, non-zero on error.
+    """
+    if _native_lib is None:
+        raise PQCUnavailableError("Native library not loaded")
+
+    from ama_cryptography._falcon_ntru import ntru_solve, verify_ntru
+
+    max_keygen_attempts = 20
+    for _attempt in range(max_keygen_attempts):
+        # C keygen produces f, g (invertible f mod q guaranteed)
+        rc: int = _native_lib.ama_falcon512_keypair(pk, sk)
+        if rc != 0:
+            continue
+
+        # Decode f, g as signed bytes from SK buffer
+        # SK layout: header(1) | f(512×1B) | g(512×1B) | F(512×1B) | G(512×1B)
+        sk_bytes = bytes(sk)
+        f_coeffs = [_decode_signed_byte(sk_bytes[1 + i]) for i in range(FALCON_N)]
+        g_coeffs = [
+            _decode_signed_byte(sk_bytes[1 + FALCON_N + i])
+            for i in range(FALCON_N)
+        ]
+
+        # Solve NTRU equation: find F, G with fG - gF = q mod (x^n+1)
+        # Not all (f, g) pairs admit a solution (gcd requirement at base
+        # case), so we retry with a fresh keygen on failure.
+        try:
+            F_coeffs, G_coeffs = ntru_solve(
+                f_coeffs, g_coeffs, FALCON_N, FALCON_Q,
+            )
+        except ValueError:
+            continue  # GCD ≠ 1 at base case → regenerate f, g
+
+        if not verify_ntru(
+            f_coeffs, g_coeffs, F_coeffs, G_coeffs, FALCON_N, FALCON_Q,
+        ):
+            continue
+
+        # Decode h from the public key buffer (14-bit packed coefficients)
+        pk_bytes = bytes(pk)
+        h_coeffs: list[int] = []
+        pk_bitpos = 0
+        for _i in range(FALCON_N):
+            bx = 1 + (pk_bitpos >> 3)
+            bo = pk_bitpos & 7
+            v = pk_bytes[bx] >> bo
+            v |= pk_bytes[bx + 1] << (8 - bo)
+            if bo + 14 > 16 and bx + 2 < len(pk_bytes):
+                v |= pk_bytes[bx + 2] << (16 - bo)
+            h_coeffs.append(v & 0x3FFF)
+            pk_bitpos += 14
+
+        # Cache full key material keyed by sk buffer identity
+        _falcon_key_cache[id(sk)] = (
+            f_coeffs, g_coeffs, F_coeffs, G_coeffs, h_coeffs,
+        )
+        return 0
+
+    return -1  # All keygen attempts exhausted
+
+
+def falcon512_sign(
+    signature: ctypes.Array,  # type: ignore[type-arg] -- ctypes.Array generic unsupported at runtime (PQC-001)
+    sig_len_out: ctypes.c_size_t,
+    message: bytes,
+    message_len: int,
+    sk: ctypes.Array,  # type: ignore[type-arg] -- ctypes.Array generic unsupported at runtime (PQC-001)
+) -> int:
+    """Sign a message with FALCON-512 using Python Babai reduction.
+
+    The secret key must have been produced by ``falcon512_complete_keypair``
+    in this process (the full NTRU basis is retrieved from the in-process
+    cache rather than the SK buffer, since F and G exceed 8-bit range).
+
+    Signature format matches the C encoder exactly:
+      header(1) || nonce(40) || compressed_s2 (sign-magnitude 12-bit)
+
+    Returns:
+        0 on success, non-zero on error.
+    """
+    from ama_cryptography._falcon_ntru import falcon_sign as _py_sign
+
+    cached = _falcon_key_cache.get(id(sk))
+    if cached is None:
+        return -1  # SK not from falcon512_complete_keypair
+    f, g, F, G, h = cached
+
+    result = _py_sign(f, g, F, G, h, message[:message_len], FALCON_N)
+    if result is None:
+        return -3  # norm bound exceeded after max attempts
+
+    nonce, _s1, s2 = result
+
+    # Encode signature: header(1) || nonce(40) || compressed_s2
+    sig_buf = bytearray(FALCON_SIGNATURE_MAX_BYTES)
+    sig_buf[0] = 0x29  # header: 0x20 | logn=9
+    sig_buf[1:41] = nonce
+
+    # Encode s2 as sign-magnitude 12-bit values (matching C encoder)
+    pos = 41
+    bitpos = 0
+    for i in range(FALCON_N):
+        v = s2[i]
+        sign_bit = 1 if v < 0 else 0
+        mag = abs(v) & 0x7FF
+        encoded = (sign_bit << 11) | mag
+
+        byte_idx = pos + (bitpos >> 3)
+        bit_off = bitpos & 7
+        if byte_idx + 1 >= FALCON_SIGNATURE_MAX_BYTES:
+            break
+        sig_buf[byte_idx] |= (encoded << bit_off) & 0xFF
+        sig_buf[byte_idx + 1] |= (encoded >> (8 - bit_off)) & 0xFF
+        if bit_off + 12 > 16 and byte_idx + 2 < FALCON_SIGNATURE_MAX_BYTES:
+            sig_buf[byte_idx + 2] |= (encoded >> (16 - bit_off)) & 0xFF
+        bitpos += 12
+
+    total_len = pos + ((bitpos + 7) >> 3)
+
+    # Copy into output buffer
+    for i in range(total_len):
+        signature[i] = sig_buf[i]
+    sig_len_out.value = total_len
+    return 0
+
+
+def falcon512_verify(
+    message: bytes,
+    message_len: int,
+    signature: bytes | ctypes.Array,  # type: ignore[type-arg] -- ctypes.Array generic unsupported at runtime (PQC-001)
+    sig_len: int,
+    pk: bytes | ctypes.Array,  # type: ignore[type-arg] -- ctypes.Array generic unsupported at runtime (PQC-001)
+) -> int:
+    """Verify a FALCON-512 signature using the Python verifier.
+
+    Decodes the public key polynomial h from the PK buffer, extracts
+    the nonce and s2 from the signature, then recomputes
+    s1 = c - s2*h mod q and checks ||(s1, s2)||^2 <= bound.
+
+    Uses the same hash_to_point as ``falcon512_sign`` to ensure
+    consistency.
+
+    Returns:
+        0 on success (valid signature), non-zero on failure.
+    """
+    from ama_cryptography._falcon_ntru import falcon_verify as _py_verify
+
+    sig_bytes = bytes(signature)[:sig_len]
+    pk_bytes = bytes(pk)
+
+    # Validate header bytes
+    if len(sig_bytes) < 42 or (sig_bytes[0] & 0xF0) != 0x20:
+        return -2  # invalid signature format
+    if pk_bytes[0] != 0x09:
+        return -2  # invalid public key format
+
+    # Decode public key: 14-bit packed coefficients
+    h: list[int] = []
+    bitpos = 0
+    for _i in range(FALCON_N):
+        byte_idx = 1 + (bitpos >> 3)
+        bit_off = bitpos & 7
+        val = pk_bytes[byte_idx] >> bit_off
+        val |= pk_bytes[byte_idx + 1] << (8 - bit_off)
+        if bit_off + 14 > 16 and byte_idx + 2 < len(pk_bytes):
+            val |= pk_bytes[byte_idx + 2] << (16 - bit_off)
+        val &= 0x3FFF
+        if val >= FALCON_Q:
+            return -2
+        h.append(val)
+        bitpos += 14
+
+    # Extract nonce from signature
+    nonce = sig_bytes[1:41]
+
+    # Decode s2 from sign-magnitude 12-bit encoding
+    s2: list[int] = []
+    sig_data_offset = 41
+    bitpos = 0
+    for _i in range(FALCON_N):
+        byte_idx = sig_data_offset + (bitpos >> 3)
+        bit_off = bitpos & 7
+        if byte_idx + 1 >= sig_len:
+            s2.append(0)
+            bitpos += 12
+            continue
+        val = sig_bytes[byte_idx] >> bit_off
+        val |= sig_bytes[byte_idx + 1] << (8 - bit_off)
+        if byte_idx + 2 < sig_len:
+            val |= sig_bytes[byte_idx + 2] << (16 - bit_off)
+        val &= 0xFFF
+        sign = (val >> 11) & 1
+        mag = val & 0x7FF
+        s2.append(-mag if sign else mag)
+        bitpos += 12
+
+    if _py_verify(h, nonce, s2, message[:message_len], FALCON_N, FALCON_Q):
+        return 0
+    return -4  # verification failed
+
 
 # FROST threshold Ed25519 (RFC 9591)
 FROST_AVAILABLE: bool = _FROST_AVAILABLE

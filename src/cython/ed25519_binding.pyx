@@ -141,6 +141,7 @@ def cy_ed25519_batch_verify(list entries):
 
     cdef ama_ed25519_batch_entry *c_entries = NULL
     cdef int *results = NULL
+    cdef int rc = 0
 
     c_entries = <ama_ed25519_batch_entry *>malloc(count * sizeof(ama_ed25519_batch_entry))
     results = <int *>malloc(count * sizeof(int))
@@ -164,7 +165,7 @@ def cy_ed25519_batch_verify(list entries):
             c_entries[i].signature = <const uint8_t *>(<bytes>sig)
             c_entries[i].public_key = <const uint8_t *>(<bytes>pk)
 
-        cdef int rc = ama_ed25519_batch_verify(c_entries, count, results)
+        rc = ama_ed25519_batch_verify(c_entries, count, results)
 
         return [bool(results[i]) for i in range(count)]
     finally:

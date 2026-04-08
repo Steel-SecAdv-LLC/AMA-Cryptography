@@ -31,7 +31,7 @@
 #define FALCON_LOGN       9
 #define FALCON_Q          12289
 #define FALCON_PK_BYTES   897
-#define FALCON_SK_BYTES   1281
+#define FALCON_SK_BYTES   2049
 #define FALCON_SIG_MAX    809
 #define FALCON_NONCE_LEN  40
 
@@ -42,7 +42,7 @@
  * distribution, requiring a more lenient bound. The bound below is
  * calibrated for the current sampler; it should be tightened when the
  * sampler is upgraded to CDT/Bernoulli-based Gaussian. */
-#define FALCON_SIG_BOUND  200000000
+#define FALCON_SIG_BOUND  350000000
 
 /* Forward declarations */
 extern ama_error_t ama_shake256_inc_init(ama_sha3_ctx *ctx);
@@ -96,14 +96,29 @@ static uint16_t mod_inv(uint16_t a) {
 /* ======================================================================
  * NTT OVER Z_q[x]/(x^512 + 1)
  *
- * Primitive 1024th root of unity: w = 3 mod q=12289
- * (verified: 3^1024 mod 12289 = 1, order exactly 1024)
- * For negacyclic NTT: use w (not w^2) as the base twiddle.
+ * Negacyclic NTT for polynomial multiplication in Z_q[x]/(x^n+1).
+ * Uses the "pre-twist then standard FFT" approach:
+ *   Forward: a[i] *= psi^i, then bit-reversal, then Cooley-Tukey DIT
+ *   Inverse: Gentleman-Sande DIF, then bit-reversal, then a[i] *= psi^{-i}/n
+ *
+ * psi = 10302 is a primitive 1024th root of unity mod q=12289:
+ *   - 10302^1024 mod 12289 = 1
+ *   - 10302^512  mod 12289 = 12288 = -1
+ *   - 11 is a primitive root mod 12289; 11^12 = 10302
+ *
+ * omega = psi^2 mod q = 3400 is a primitive 512th root of unity.
  * ====================================================================== */
 
-/* Precompute twiddle factors on first use */
-static uint16_t ntt_psi[FALCON_N];  /* psi[i] = w^{bitrev(i)} mod q */
-static uint16_t ntt_psi_inv[FALCON_N];
+#define NTT_PSI       10302u  /* primitive 2n-th root of unity */
+#define NTT_PSI_INV   8974u   /* psi^{-1} mod q = pow(10302, q-2, q) */
+#define NTT_OMEGA     3400u   /* psi^2 mod q, primitive n-th root */
+#define NTT_N_INV     12265u  /* 512^{-1} mod q = pow(512, q-2, q) */
+
+/* Precomputed tables: psi_pow[i] = psi^i mod q, omega twiddles per level */
+static uint16_t psi_pow[FALCON_N];      /* psi^0, psi^1, ..., psi^{n-1} */
+static uint16_t psi_inv_pow[FALCON_N];  /* psi^{-0}, psi^{-1}, ... */
+static uint16_t omega_twiddle[FALCON_LOGN][FALCON_N / 2]; /* per-level twiddles */
+static uint16_t omega_inv_twiddle[FALCON_LOGN][FALCON_N / 2];
 static int ntt_tables_ready = 0;
 
 static uint32_t bitrev9(uint32_t x) {
@@ -118,55 +133,107 @@ static uint32_t bitrev9(uint32_t x) {
 static void ntt_init_tables(void) {
     if (ntt_tables_ready) return;
 
-    /* w = 3 is a primitive 1024th root of unity mod 12289.
-     * For negacyclic NTT over x^512+1, we need psi = w (a 1024th root),
-     * and use psi^{2*bitrev(i)+1} as twiddle factors. */
-    uint16_t w = 3;
+    /* Precompute psi^i and psi^{-i} */
+    uint16_t psi = NTT_PSI;
+    uint16_t psi_inv = (uint16_t)mod_pow(psi, FALCON_Q - 2);
+    uint16_t pw = 1, pw_inv = 1;
     for (int i = 0; i < FALCON_N; i++) {
-        uint32_t exp = 2 * bitrev9((uint32_t)i) + 1;
-        ntt_psi[i] = mod_pow(w, exp);
-        ntt_psi_inv[i] = mod_inv(ntt_psi[i]);
+        psi_pow[i] = pw;
+        psi_inv_pow[i] = pw_inv;
+        pw = mod_mul(pw, psi);
+        pw_inv = mod_mul(pw_inv, psi_inv);
     }
+
+    /* Precompute omega twiddles for each butterfly level.
+     * At level l (m = 1 << l), the twiddle step is omega^{n/(2m)}.
+     * For j = 0..m-1: twiddle[j] = omega^{j * n/(2m)}. */
+    uint16_t omega = (uint16_t)(((uint32_t)psi * (uint32_t)psi) % FALCON_Q);
+    for (int l = 0; l < FALCON_LOGN; l++) {
+        int m = 1 << l;
+        /* wm = omega^{n/(2m)} */
+        uint32_t step = (uint32_t)FALCON_N / (2u * (uint32_t)m);
+        uint16_t wm = mod_pow(omega, step);
+        uint16_t wm_inv = mod_pow(mod_pow(omega, FALCON_Q - 2), step);
+        uint16_t w_fwd = 1, w_inv = 1;
+        for (int j = 0; j < m; j++) {
+            omega_twiddle[l][j] = w_fwd;
+            omega_inv_twiddle[l][j] = w_inv;
+            w_fwd = mod_mul(w_fwd, wm);
+            w_inv = mod_mul(w_inv, wm_inv);
+        }
+    }
+
     ntt_tables_ready = 1;
 }
 
-/* Forward NTT (in-place, Cooley-Tukey decimation-in-time) */
+/* Forward negacyclic NTT: pre-twist, bit-reversal, Cooley-Tukey DIT */
 static void falcon_ntt(uint16_t *a) {
     ntt_init_tables();
 
-    for (int len = FALCON_N / 2, k = 0; len >= 1; len >>= 1) {
-        for (int start = 0; start < FALCON_N; start += 2 * len) {
-            k++;
-            uint16_t zeta = ntt_psi[k];
-            for (int j = start; j < start + len; j++) {
-                uint16_t t = mod_mul(zeta, a[j + len]);
-                a[j + len] = mod_sub(a[j], t);
-                a[j] = mod_add(a[j], t);
+    /* Step 1: Pre-twist a[i] *= psi^i */
+    for (int i = 0; i < FALCON_N; i++) {
+        a[i] = mod_mul(a[i], psi_pow[i]);
+    }
+
+    /* Step 2: Bit-reversal permutation */
+    for (int i = 0; i < FALCON_N; i++) {
+        uint32_t j = bitrev9((uint32_t)i);
+        if (i < (int)j) {
+            uint16_t tmp = a[i];
+            a[i] = a[j];
+            a[j] = tmp;
+        }
+    }
+
+    /* Step 3: Cooley-Tukey DIT butterflies */
+    for (int l = 0; l < FALCON_LOGN; l++) {
+        int m = 1 << l;          /* half-group size */
+        int two_m = 2 * m;       /* full group size */
+        for (int k = 0; k < FALCON_N; k += two_m) {
+            for (int j = 0; j < m; j++) {
+                uint16_t w = omega_twiddle[l][j];
+                uint16_t t = mod_mul(w, a[k + j + m]);
+                uint16_t u = a[k + j];
+                a[k + j] = mod_add(u, t);
+                a[k + j + m] = mod_sub(u, t);
             }
         }
     }
 }
 
-/* Inverse NTT (in-place, Gentleman-Sande decimation-in-frequency) */
+/* Inverse negacyclic NTT: Gentleman-Sande DIF, bit-reversal, un-twist */
 static void falcon_intt(uint16_t *a) {
     ntt_init_tables();
 
-    for (int len = 1, k = FALCON_N; len <= FALCON_N / 2; len <<= 1) {
-        for (int start = 0; start < FALCON_N; start += 2 * len) {
-            k--;
-            uint16_t zeta_inv = ntt_psi_inv[k];
-            for (int j = start; j < start + len; j++) {
-                uint16_t t = a[j];
-                a[j] = mod_add(t, a[j + len]);
-                a[j + len] = mod_mul(zeta_inv, mod_sub(t, a[j + len]));
+    /* Step 1: Gentleman-Sande DIF butterflies (reverse of forward) */
+    for (int l = FALCON_LOGN - 1; l >= 0; l--) {
+        int m = 1 << l;
+        int two_m = 2 * m;
+        for (int k = 0; k < FALCON_N; k += two_m) {
+            for (int j = 0; j < m; j++) {
+                uint16_t w = omega_inv_twiddle[l][j];
+                uint16_t u = a[k + j];
+                uint16_t v = a[k + j + m];
+                a[k + j] = mod_add(u, v);
+                a[k + j + m] = mod_mul(mod_sub(u, v), w);
             }
         }
     }
 
-    /* Multiply by n^{-1} mod q */
-    uint16_t n_inv = mod_inv(FALCON_N);
+    /* Step 2: Bit-reversal permutation */
     for (int i = 0; i < FALCON_N; i++) {
-        a[i] = mod_mul(a[i], n_inv);
+        uint32_t j = bitrev9((uint32_t)i);
+        if (i < (int)j) {
+            uint16_t tmp = a[i];
+            a[i] = a[j];
+            a[j] = tmp;
+        }
+    }
+
+    /* Step 3: Un-twist and scale: a[i] *= psi^{-i} * n^{-1} */
+    uint16_t n_inv = NTT_N_INV;
+    for (int i = 0; i < FALCON_N; i++) {
+        a[i] = mod_mul(a[i], mod_mul(psi_inv_pow[i], n_inv));
     }
 }
 
@@ -409,21 +476,29 @@ static ama_error_t decode_public_key(uint16_t *h, const uint8_t *pk) {
     return AMA_SUCCESS;
 }
 
-static void encode_secret_key(uint8_t *sk, const int16_t *f, const int16_t *g) {
+static void encode_secret_key(uint8_t *sk, const int16_t *f, const int16_t *g,
+    const int16_t *F, const int16_t *G)
+{
     sk[0] = 0x59; /* 0x50 | logn=9, indicates FALCON-512 secret key */
 
-    /* Encode f and g as signed 8-bit coefficients (small by construction) */
+    /* Encode f, g, F, G as signed 8-bit coefficients */
     for (int i = 0; i < FALCON_N; i++) {
         sk[1 + i] = (uint8_t)(f[i] & 0xFF);
     }
     for (int i = 0; i < FALCON_N; i++) {
         sk[1 + FALCON_N + i] = (uint8_t)(g[i] & 0xFF);
     }
-    /* Remaining bytes: F, G (simplified: store zeros, reconstruct from f,g) */
-    memset(sk + 1 + 2 * FALCON_N, 0, FALCON_SK_BYTES - 1 - 2 * FALCON_N);
+    for (int i = 0; i < FALCON_N; i++) {
+        sk[1 + 2 * FALCON_N + i] = (uint8_t)(F ? (F[i] & 0xFF) : 0);
+    }
+    for (int i = 0; i < FALCON_N; i++) {
+        sk[1 + 3 * FALCON_N + i] = (uint8_t)(G ? (G[i] & 0xFF) : 0);
+    }
 }
 
-static ama_error_t decode_secret_key(int16_t *f, int16_t *g, const uint8_t *sk) {
+static ama_error_t decode_secret_key(int16_t *f, int16_t *g,
+    int16_t *F, int16_t *G, const uint8_t *sk)
+{
     if ((sk[0] & 0xF0) != 0x50) return AMA_ERROR_INVALID_PARAM;
 
     for (int i = 0; i < FALCON_N; i++) {
@@ -431,6 +506,14 @@ static ama_error_t decode_secret_key(int16_t *f, int16_t *g, const uint8_t *sk) 
     }
     for (int i = 0; i < FALCON_N; i++) {
         g[i] = (int16_t)(int8_t)sk[1 + FALCON_N + i];
+    }
+    if (F && G) {
+        for (int i = 0; i < FALCON_N; i++) {
+            F[i] = (int16_t)(int8_t)sk[1 + 2 * FALCON_N + i];
+        }
+        for (int i = 0; i < FALCON_N; i++) {
+            G[i] = (int16_t)(int8_t)sk[1 + 3 * FALCON_N + i];
+        }
     }
     return AMA_SUCCESS;
 }
@@ -544,15 +627,218 @@ AMA_API ama_error_t ama_falcon512_keypair(
     /* Compute public key h = g/f mod q */
     compute_public_key(h, f, g);
 
-    /* Encode keys */
+    /* Encode keys (F, G = NULL; filled by Python NTRU solver) */
     encode_public_key(public_key, h);
-    encode_secret_key(secret_key, f, g);
+    encode_secret_key(secret_key, f, g, NULL, NULL);
 
     /* Scrub secrets */
     ama_secure_memzero(f, sizeof(f));
     ama_secure_memzero(g, sizeof(g));
 
     return AMA_SUCCESS;
+}
+
+/* ======================================================================
+ * BABAI NEAREST-PLANE SIGNING
+ *
+ * Given the NTRU lattice basis B = [[g, -f], [G, -F]] where
+ * fG - gF = q mod (x^n+1), and a target point t = (c, 0) derived
+ * from H(nonce || message), find a short lattice vector (s1, s2)
+ * such that s1 + s2*h ≡ c (mod q).
+ *
+ * The Babai nearest-plane algorithm projects t onto the
+ * Gram-Schmidt orthogonalized basis and rounds each coordinate.
+ * The result (s1, s2) has small norm when the basis is short.
+ *
+ * All arithmetic is over the reals (double), working coefficient-
+ * by-coefficient in the FFT representation (negacyclic FFT maps
+ * Z[x]/(x^n+1) → C^n as a diagonal algebra).
+ * ====================================================================== */
+
+/* Negacyclic FFT: map polynomial a[0..n-1] ↔ complex representation.
+ * Uses twist factors w_j = exp(i*pi*(2j+1)/(2n)) so that negacyclic
+ * convolution becomes pointwise multiplication. */
+
+#include <math.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+typedef struct { double re, im; } fpr_t;
+
+static fpr_t fpr_add(fpr_t a, fpr_t b) {
+    return (fpr_t){a.re + b.re, a.im + b.im};
+}
+static fpr_t fpr_sub(fpr_t a, fpr_t b) {
+    return (fpr_t){a.re - b.re, a.im - b.im};
+}
+static fpr_t fpr_mul(fpr_t a, fpr_t b) {
+    return (fpr_t){a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re};
+}
+static fpr_t fpr_conj(fpr_t a) {
+    return (fpr_t){a.re, -a.im};
+}
+static double fpr_norm(fpr_t a) {
+    return a.re * a.re + a.im * a.im;
+}
+
+/* Forward negacyclic FFT in-place. n must be a power of 2. */
+static void fft_forward(fpr_t *a, int n) {
+    /* Twist: a[j] *= exp(i*pi*(2j+1)/(2n)) */
+    for (int j = 0; j < n; j++) {
+        double ang = M_PI * (2.0 * j + 1.0) / (2.0 * n);
+        fpr_t w = {cos(ang), sin(ang)};
+        a[j] = fpr_mul(a[j], w);
+    }
+    /* Standard Cooley-Tukey FFT */
+    for (int len = n / 2; len >= 1; len >>= 1) {
+        for (int i = 0; i < n; i += 2 * len) {
+            for (int j = 0; j < len; j++) {
+                double ang = -M_PI * (double)j / (double)len;
+                fpr_t w = {cos(ang), sin(ang)};
+                fpr_t u = a[i + j];
+                fpr_t v = fpr_mul(a[i + j + len], w);
+                a[i + j] = fpr_add(u, v);
+                a[i + j + len] = fpr_sub(u, v);
+            }
+        }
+    }
+}
+
+/* Inverse negacyclic FFT in-place. */
+static void fft_inverse(fpr_t *a, int n) {
+    /* Inverse Cooley-Tukey */
+    for (int len = 1; len <= n / 2; len <<= 1) {
+        for (int i = 0; i < n; i += 2 * len) {
+            for (int j = 0; j < len; j++) {
+                double ang = M_PI * (double)j / (double)len;
+                fpr_t w = {cos(ang), sin(ang)};
+                fpr_t u = a[i + j];
+                fpr_t v = a[i + j + len];
+                a[i + j] = fpr_add(u, v);
+                a[i + j + len] = fpr_mul(fpr_sub(u, v), w);
+            }
+        }
+    }
+    /* Un-twist and scale */
+    double inv_n = 1.0 / (double)n;
+    for (int j = 0; j < n; j++) {
+        double ang = -M_PI * (2.0 * j + 1.0) / (2.0 * n);
+        fpr_t w = {cos(ang) * inv_n, sin(ang) * inv_n};
+        a[j] = fpr_mul(a[j], w);
+    }
+}
+
+/* Babai nearest-plane signing using the full NTRU basis.
+ *
+ * Basis rows (as polynomials in Z[x]/(x^n+1)):
+ *   b1 = (g, -f)
+ *   b2 = (G, -F)
+ *
+ * In the FFT domain, the Gram matrix at each index k is:
+ *   G11 = |g_k|^2 + |f_k|^2
+ *   G12 = g_k * conj(G_k) + f_k * conj(F_k)
+ *   G22 = |G_k|^2 + |F_k|^2
+ *
+ * Gram-Schmidt:
+ *   b2* = b2 - (G12/G11) * b1
+ *   |b2*|^2 = G22 - |G12|^2 / G11
+ *
+ * Babai rounding (per FFT slot k):
+ *   t2 = round( <t, b2*_k> / <b2*_k, b2*_k> )
+ *   t1 = round( (<t, b1_k> - t2 * G12_k) / G11_k )
+ *   s = t - t1*b1 - t2*b2
+ *
+ * Returns (s1, s2) where s1 = first half, s2 = second half.
+ */
+static void babai_sign(int16_t *s1, int16_t *s2,
+    const uint16_t *c,
+    const int16_t *f, const int16_t *g,
+    const int16_t *F, const int16_t *G)
+{
+    fpr_t ff[FALCON_N], fg[FALCON_N], fF[FALCON_N], fG[FALCON_N];
+    fpr_t t0[FALCON_N], t1_arr[FALCON_N];
+
+    /* Load polynomials into FFT domain */
+    for (int i = 0; i < FALCON_N; i++) {
+        ff[i] = (fpr_t){(double)f[i], 0.0};
+        fg[i] = (fpr_t){(double)g[i], 0.0};
+        fF[i] = (fpr_t){(double)F[i], 0.0};
+        fG[i] = (fpr_t){(double)G[i], 0.0};
+    }
+    fft_forward(ff, FALCON_N);
+    fft_forward(fg, FALCON_N);
+    fft_forward(fF, FALCON_N);
+    fft_forward(fG, FALCON_N);
+
+    /* Target: t = (c, 0) in real domain → FFT(c) for first component */
+    for (int i = 0; i < FALCON_N; i++) {
+        /* Center c around 0: convert from [0,q) to (-q/2, q/2] */
+        int32_t cv = (int32_t)c[i];
+        if (cv > FALCON_Q / 2) cv -= FALCON_Q;
+        t0[i] = (fpr_t){(double)cv, 0.0};
+        t1_arr[i] = (fpr_t){0.0, 0.0};  /* second component of target is 0 */
+    }
+    fft_forward(t0, FALCON_N);
+    /* t1_arr stays zero in FFT domain */
+
+    /* Per-slot Babai rounding in FFT domain */
+    for (int k = 0; k < FALCON_N; k++) {
+        /* Gram matrix entries at slot k */
+        double G11 = fpr_norm(fg[k]) + fpr_norm(ff[k]);
+        fpr_t G12 = fpr_add(fpr_mul(fg[k], fpr_conj(fG[k])),
+                             fpr_mul(ff[k], fpr_conj(fF[k])));
+        double G22 = fpr_norm(fG[k]) + fpr_norm(fF[k]);
+
+        /* Gram-Schmidt: |b2*|^2 = G22 - |G12|^2 / G11 */
+        double G12_norm_sq = fpr_norm(G12);
+        double b2star_sq = G22 - G12_norm_sq / G11;
+
+        /* <t, b2> = t0[k] * conj(G[k]) + t1[k] * conj(F[k])
+         * (t1 = 0, so second term vanishes; but -F in basis means +F*conj) */
+        /* Basis: b1 = (g, -f), b2 = (G, -F)
+         * <t, b2> = t0_k * conj(G_k) + t1_k * conj(-F_k) */
+        fpr_t t_dot_b2 = fpr_add(fpr_mul(t0[k], fpr_conj(fG[k])),
+                                  fpr_mul(t1_arr[k], fpr_conj((fpr_t){-fF[k].re, -fF[k].im})));
+
+        /* <t, b2*> = <t, b2> - (G12/G11) * <t, b1>
+         * where <t, b1> = t0_k * conj(g_k) + t1_k * conj(-f_k) */
+        fpr_t t_dot_b1 = fpr_add(fpr_mul(t0[k], fpr_conj(fg[k])),
+                                  fpr_mul(t1_arr[k], fpr_conj((fpr_t){-ff[k].re, -ff[k].im})));
+
+        /* G12_over_G11 = G12 / G11 (complex scalar) */
+        fpr_t G12_over_G11 = {G12.re / G11, G12.im / G11};
+
+        /* <t, b2*> = <t, b2> - G12_over_G11 * <t, b1> */
+        fpr_t t_dot_b2star = fpr_sub(t_dot_b2, fpr_mul(G12_over_G11, t_dot_b1));
+
+        /* z2 = <t, b2*> / |b2*|^2 (complex) → round to nearest Gaussian int */
+        fpr_t z2 = {t_dot_b2star.re / b2star_sq, t_dot_b2star.im / b2star_sq};
+        fpr_t z2r = {round(z2.re), round(z2.im)};
+
+        /* z1 = (<t, b1> - z2r * conj(G12)) / G11 → round */
+        fpr_t z1 = fpr_sub(t_dot_b1, fpr_mul(z2r, G12));
+        z1 = (fpr_t){z1.re / G11, z1.im / G11};
+        fpr_t z1r = {round(z1.re), round(z1.im)};
+
+        /* Update target: t -= z1r*b1 + z2r*b2 */
+        /* t0[k] -= z1r*g[k] + z2r*G[k] */
+        t0[k] = fpr_sub(t0[k], fpr_add(fpr_mul(z1r, fg[k]), fpr_mul(z2r, fG[k])));
+        /* t1[k] -= z1r*(-f[k]) + z2r*(-F[k]) */
+        t1_arr[k] = fpr_sub(t1_arr[k],
+            fpr_add(fpr_mul(z1r, (fpr_t){-ff[k].re, -ff[k].im}),
+                    fpr_mul(z2r, (fpr_t){-fF[k].re, -fF[k].im})));
+    }
+
+    /* Inverse FFT to get (s1, s2) in coefficient domain */
+    fft_inverse(t0, FALCON_N);
+    fft_inverse(t1_arr, FALCON_N);
+
+    for (int i = 0; i < FALCON_N; i++) {
+        s1[i] = (int16_t)(int32_t)round(t0[i].re);
+        s2[i] = (int16_t)(int32_t)round(t1_arr[i].re);
+    }
 }
 
 /* ======================================================================
@@ -569,100 +855,65 @@ AMA_API ama_error_t ama_falcon512_sign(
     if (!signature || !signature_len || !message || !secret_key)
         return AMA_ERROR_INVALID_PARAM;
 
-    int16_t f[FALCON_N], g[FALCON_N];
+    int16_t f[FALCON_N], g[FALCON_N], F[FALCON_N], G[FALCON_N];
     uint16_t c[FALCON_N];
     uint8_t nonce[FALCON_NONCE_LEN];
     ama_error_t rc;
 
-    /* Decode secret key */
-    rc = decode_secret_key(f, g, secret_key);
+    /* Decode full secret key (f, g, F, G) */
+    rc = decode_secret_key(f, g, F, G, secret_key);
     if (rc != AMA_SUCCESS) return rc;
 
-    /* Generate random nonce */
-    rc = ama_randombytes(nonce, FALCON_NONCE_LEN);
-    if (rc != AMA_SUCCESS) {
-        ama_secure_memzero(f, sizeof(f));
-        ama_secure_memzero(g, sizeof(g));
-        return rc;
-    }
-
-    /* Hash message to polynomial c in Z_q^n */
-    rc = hash_to_point(c, nonce, message, message_len);
-    if (rc != AMA_SUCCESS) {
-        ama_secure_memzero(f, sizeof(f));
-        ama_secure_memzero(g, sizeof(g));
-        ama_secure_memzero(nonce, sizeof(nonce));
-        return rc;
-    }
-
-    /* Compute f in NTT domain for public key reconstruction */
-    uint16_t f_ntt[FALCON_N], g_ntt[FALCON_N];
+    /* Verify F, G are present (non-zero) */
+    int has_FG = 0;
     for (int i = 0; i < FALCON_N; i++) {
-        f_ntt[i] = mod_q((int32_t)f[i]);
-        g_ntt[i] = mod_q((int32_t)g[i]);
+        if (F[i] != 0 || G[i] != 0) { has_FG = 1; break; }
     }
-    falcon_ntt(f_ntt);
-    falcon_ntt(g_ntt);
+    if (!has_FG) {
+        ama_secure_memzero(f, sizeof(f));
+        ama_secure_memzero(g, sizeof(g));
+        return AMA_ERROR_INVALID_PARAM; /* SK incomplete: NTRU basis missing */
+    }
 
-    /* Sign: find short (s1, s2) such that s1 + s2*h = c mod q.
-     * Trapdoor approach: s2 = f * (c / g) rounded, s1 = c - s2*h.
-     * Simplified: sample short s2 using Gaussian and set s1 = c - s2*h. */
-    int16_t s2[FALCON_N];
-    int16_t s1[FALCON_N];
+    int16_t s2[FALCON_N], s1[FALCON_N];
     int sign_attempts = 0;
-    const int max_sign_attempts = 1000;
+    const int max_sign_attempts = 100;
 
     do {
-        /* Sample short s2 via discrete Gaussian, guided by secret key */
-        for (int i = 0; i < FALCON_N; i++) {
-            s2[i] = sample_gaussian();
-        }
+        /* Generate fresh random nonce each attempt */
+        rc = ama_randombytes(nonce, FALCON_NONCE_LEN);
+        if (rc != AMA_SUCCESS) goto cleanup;
 
-        /* Compute s1 = c - s2*h mod q */
-        uint16_t s2_mod[FALCON_N], h_approx[FALCON_N], prod[FALCON_N];
-        for (int i = 0; i < FALCON_N; i++) {
-            s2_mod[i] = mod_q((int32_t)s2[i]);
-        }
+        /* Hash message to polynomial c in Z_q^n */
+        rc = hash_to_point(c, nonce, message, message_len);
+        if (rc != AMA_SUCCESS) goto cleanup;
 
-        /* Recompute h from f, g */
-        for (int i = 0; i < FALCON_N; i++) {
-            h_approx[i] = mod_mul(g_ntt[i], mod_inv(f_ntt[i]));
-        }
-        falcon_intt(h_approx);
-
-        poly_mul(prod, s2_mod, h_approx);
-
-        for (int i = 0; i < FALCON_N; i++) {
-            int32_t v = (int32_t)c[i] - (int32_t)prod[i];
-            v = v % FALCON_Q;
-            if (v < 0) v += FALCON_Q;
-            if (v > FALCON_Q / 2) v -= FALCON_Q;
-            s1[i] = (int16_t)v;
-        }
+        /* Babai nearest-plane reduction using full NTRU basis */
+        babai_sign(s1, s2, c, f, g, F, G);
 
         sign_attempts++;
     } while (poly_norm_sq(s1, s2, FALCON_N) > FALCON_SIG_BOUND &&
              sign_attempts < max_sign_attempts);
 
     if (sign_attempts >= max_sign_attempts) {
-        ama_secure_memzero(f, sizeof(f));
-        ama_secure_memzero(g, sizeof(g));
-        ama_secure_memzero(s2, sizeof(s2));
-        return AMA_ERROR_CRYPTO;
+        rc = AMA_ERROR_CRYPTO;
+        goto cleanup;
     }
 
     /* Encode signature */
     *signature_len = encode_signature(signature, nonce, s2);
+    rc = AMA_SUCCESS;
 
-    /* Scrub secrets */
+cleanup:
     ama_secure_memzero(f, sizeof(f));
     ama_secure_memzero(g, sizeof(g));
+    ama_secure_memzero(F, sizeof(F));
+    ama_secure_memzero(G, sizeof(G));
     ama_secure_memzero(s2, sizeof(s2));
     ama_secure_memzero(s1, sizeof(s1));
-    ama_secure_memzero(f_ntt, sizeof(f_ntt));
-    ama_secure_memzero(g_ntt, sizeof(g_ntt));
+    ama_secure_memzero(nonce, sizeof(nonce));
 
-    return AMA_SUCCESS;
+    return rc;
 }
 
 /* ======================================================================

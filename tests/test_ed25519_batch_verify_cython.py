@@ -40,7 +40,7 @@ class TestBatchVerifyCython:
     def test_cython_path(self) -> None:
         """Verify Cython cy_ed25519_batch_verify works if compiled."""
         cy_batch = pytest.importorskip(
-            "src.cython.ed25519_binding",
+            "ama_cryptography.ed25519_binding",
             reason="Cython ed25519_binding not compiled",
         ).cy_ed25519_batch_verify
 
@@ -53,7 +53,7 @@ class TestBatchVerifyCython:
     def test_cython_empty(self) -> None:
         """Cython batch verify with empty input."""
         cy_batch = pytest.importorskip(
-            "src.cython.ed25519_binding",
+            "ama_cryptography.ed25519_binding",
             reason="Cython ed25519_binding not compiled",
         ).cy_ed25519_batch_verify
 
@@ -62,7 +62,7 @@ class TestBatchVerifyCython:
     def test_cython_over_max_raises(self) -> None:
         """Cython batch verify raises ValueError for >64 entries."""
         cy_batch = pytest.importorskip(
-            "src.cython.ed25519_binding",
+            "ama_cryptography.ed25519_binding",
             reason="Cython ed25519_binding not compiled",
         ).cy_ed25519_batch_verify
 
@@ -74,7 +74,7 @@ class TestBatchVerifyCython:
     def test_cython_mixed(self) -> None:
         """Cython batch verify with mixed valid/invalid entries."""
         cy_batch = pytest.importorskip(
-            "src.cython.ed25519_binding",
+            "ama_cryptography.ed25519_binding",
             reason="Cython ed25519_binding not compiled",
         ).cy_ed25519_batch_verify
 

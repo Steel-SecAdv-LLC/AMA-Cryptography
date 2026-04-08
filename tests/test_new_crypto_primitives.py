@@ -17,22 +17,25 @@ import pytest
 
 # Determine if the native C library is available
 try:
-    from ama_cryptography.pqc_backends import (
-        FALCON_AVAILABLE,
-        FALCON_PUBLIC_KEY_BYTES,
-        FALCON_SECRET_KEY_BYTES,
-        FALCON_SIGNATURE_MAX_BYTES,
-        FROST_AVAILABLE,
-        FROST_COMMITMENT_BYTES,
-        FROST_NONCE_BYTES,
-        FROST_SHARE_BYTES,
-        FROST_SIG_SHARE_BYTES,
-        SPAKE2_AVAILABLE,
-        SPAKE2_CONFIRM_BYTES,
-        SPAKE2_KEY_BYTES,
-        SPAKE2_MSG_BYTES,
-        _native_lib,
-    )
+                from ama_cryptography.pqc_backends import (
+                    FALCON_AVAILABLE,
+                    FALCON_PUBLIC_KEY_BYTES,
+                    FALCON_SECRET_KEY_BYTES,
+                    FALCON_SIGNATURE_MAX_BYTES,
+                    FROST_AVAILABLE,
+                    FROST_COMMITMENT_BYTES,
+                    FROST_NONCE_BYTES,
+                    FROST_SHARE_BYTES,
+                    FROST_SIG_SHARE_BYTES,
+                    SPAKE2_AVAILABLE,
+                    SPAKE2_CONFIRM_BYTES,
+                    SPAKE2_KEY_BYTES,
+                    SPAKE2_MSG_BYTES,
+                    _native_lib,
+                    falcon512_complete_keypair,
+                    falcon512_sign,
+                    falcon512_verify,
+                )
 
 except ImportError:
     FALCON_AVAILABLE = False
@@ -67,91 +70,88 @@ class TestFalcon512:
     """FALCON-512 digital signature tests (FIPS 206 draft)."""
 
     def test_keypair_generation(self) -> None:
-        """Generate FALCON-512 keypair successfully."""
+        """Generate FALCON-512 keypair with complete NTRU basis."""
         pk = ctypes.create_string_buffer(FALCON_PUBLIC_KEY_BYTES)
         sk = ctypes.create_string_buffer(FALCON_SECRET_KEY_BYTES)
-        rc = _native_lib.ama_falcon512_keypair(pk, sk)
+        rc = falcon512_complete_keypair(pk, sk)
         assert rc == 0, f"Keypair generation failed: {rc}"
         # Public key should be non-zero
         assert pk.raw != b"\x00" * FALCON_PUBLIC_KEY_BYTES
         # Secret key should be non-zero
         assert sk.raw != b"\x00" * FALCON_SECRET_KEY_BYTES
 
-    @pytest.mark.xfail(reason="FALCON signing needs NTRU trapdoor sampling")
     def test_sign_verify_roundtrip(self) -> None:
         """Sign a message and verify the signature."""
         pk = ctypes.create_string_buffer(FALCON_PUBLIC_KEY_BYTES)
         sk = ctypes.create_string_buffer(FALCON_SECRET_KEY_BYTES)
-        rc = _native_lib.ama_falcon512_keypair(pk, sk)
+        rc = falcon512_complete_keypair(pk, sk)
         assert rc == 0
 
         message = b"FALCON-512 test message for FIPS 206 draft compliance"
         sig = ctypes.create_string_buffer(FALCON_SIGNATURE_MAX_BYTES)
         sig_len = ctypes.c_size_t(0)
 
-        rc = _native_lib.ama_falcon512_sign(sig, ctypes.byref(sig_len), message, len(message), sk)
+        rc = falcon512_sign(sig, sig_len, message, len(message), sk)
         assert rc == 0, f"Signing failed: {rc}"
         assert sig_len.value > 0
         assert sig_len.value <= FALCON_SIGNATURE_MAX_BYTES
 
-        rc = _native_lib.ama_falcon512_verify(message, len(message), sig, sig_len, pk)
+        rc = falcon512_verify(message, len(message), sig, sig_len.value, pk)
         assert rc == 0, f"Verification failed: {rc}"
 
     def test_verify_wrong_message_fails(self) -> None:
         """Verification fails with wrong message."""
         pk = ctypes.create_string_buffer(FALCON_PUBLIC_KEY_BYTES)
         sk = ctypes.create_string_buffer(FALCON_SECRET_KEY_BYTES)
-        _native_lib.ama_falcon512_keypair(pk, sk)
+        falcon512_complete_keypair(pk, sk)
 
         message = b"Original message"
         sig = ctypes.create_string_buffer(FALCON_SIGNATURE_MAX_BYTES)
         sig_len = ctypes.c_size_t(0)
-        _native_lib.ama_falcon512_sign(sig, ctypes.byref(sig_len), message, len(message), sk)
+        falcon512_sign(sig, sig_len, message, len(message), sk)
 
         wrong_message = b"Tampered message"
-        rc = _native_lib.ama_falcon512_verify(wrong_message, len(wrong_message), sig, sig_len, pk)
+        rc = falcon512_verify(wrong_message, len(wrong_message), sig, sig_len.value, pk)
         assert rc != 0, "Verification should fail with wrong message"
 
     def test_verify_wrong_key_fails(self) -> None:
         """Verification fails with wrong public key."""
         pk1 = ctypes.create_string_buffer(FALCON_PUBLIC_KEY_BYTES)
         sk1 = ctypes.create_string_buffer(FALCON_SECRET_KEY_BYTES)
-        _native_lib.ama_falcon512_keypair(pk1, sk1)
+        falcon512_complete_keypair(pk1, sk1)
 
         pk2 = ctypes.create_string_buffer(FALCON_PUBLIC_KEY_BYTES)
         sk2 = ctypes.create_string_buffer(FALCON_SECRET_KEY_BYTES)
-        _native_lib.ama_falcon512_keypair(pk2, sk2)
+        falcon512_complete_keypair(pk2, sk2)
 
         message = b"Message signed with key 1"
         sig = ctypes.create_string_buffer(FALCON_SIGNATURE_MAX_BYTES)
         sig_len = ctypes.c_size_t(0)
-        _native_lib.ama_falcon512_sign(sig, ctypes.byref(sig_len), message, len(message), sk1)
+        falcon512_sign(sig, sig_len, message, len(message), sk1)
 
-        rc = _native_lib.ama_falcon512_verify(message, len(message), sig, sig_len, pk2)
+        rc = falcon512_verify(message, len(message), sig, sig_len.value, pk2)
         assert rc != 0, "Verification should fail with wrong key"
 
-    @pytest.mark.xfail(reason="FALCON signing needs NTRU trapdoor sampling")
     def test_sign_empty_message(self) -> None:
         """Sign and verify an empty message."""
         pk = ctypes.create_string_buffer(FALCON_PUBLIC_KEY_BYTES)
         sk = ctypes.create_string_buffer(FALCON_SECRET_KEY_BYTES)
-        _native_lib.ama_falcon512_keypair(pk, sk)
+        falcon512_complete_keypair(pk, sk)
 
         message = b""
         sig = ctypes.create_string_buffer(FALCON_SIGNATURE_MAX_BYTES)
         sig_len = ctypes.c_size_t(0)
-        rc = _native_lib.ama_falcon512_sign(sig, ctypes.byref(sig_len), message, 0, sk)
+        rc = falcon512_sign(sig, sig_len, message, 0, sk)
         assert rc == 0
 
-        rc = _native_lib.ama_falcon512_verify(message, 0, sig, sig_len, pk)
+        rc = falcon512_verify(message, 0, sig, sig_len.value, pk)
         assert rc == 0
 
-    @pytest.mark.xfail(reason="FALCON signing needs NTRU trapdoor sampling")
     def test_multiple_signatures_unique(self) -> None:
         """Each signature should be unique (randomized nonce)."""
         pk = ctypes.create_string_buffer(FALCON_PUBLIC_KEY_BYTES)
         sk = ctypes.create_string_buffer(FALCON_SECRET_KEY_BYTES)
-        _native_lib.ama_falcon512_keypair(pk, sk)
+        falcon512_complete_keypair(pk, sk)
 
         message = b"Same message, different signatures"
         sig1 = ctypes.create_string_buffer(FALCON_SIGNATURE_MAX_BYTES)
@@ -159,8 +159,8 @@ class TestFalcon512:
         sig_len1 = ctypes.c_size_t(0)
         sig_len2 = ctypes.c_size_t(0)
 
-        _native_lib.ama_falcon512_sign(sig1, ctypes.byref(sig_len1), message, len(message), sk)
-        _native_lib.ama_falcon512_sign(sig2, ctypes.byref(sig_len2), message, len(message), sk)
+        falcon512_sign(sig1, sig_len1, message, len(message), sk)
+        falcon512_sign(sig2, sig_len2, message, len(message), sk)
 
         assert sig1.raw[: sig_len1.value] != sig2.raw[: sig_len2.value]
 
