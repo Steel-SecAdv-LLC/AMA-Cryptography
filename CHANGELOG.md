@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 2.3 |
-| Last Updated | 2026-04-06 |
+| Last Updated | 2026-04-08 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -39,6 +39,31 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 - **ed25519-donna LICENSE:** Added public domain license file for vendored ed25519-donna library
 - **NOTICE:** Added third-party software attribution for ed25519-donna
+
+### Added - Performance Engineering Overhaul (PR #188)
+
+- **AES-NI + PCLMULQDQ AVX2 dispatch:** Wired AES-NI hardware acceleration into runtime dispatch table for AES-256-GCM encrypt/decrypt, replacing software-only path. Fixed GHASH PCLMULQDQ reduction (Intel Algorithm 5 with reflected-bit left-shift correction)
+- **Ed25519 batch verification:** Added `ama_ed25519_batch_verify()` C function via ed25519-donna Bos-Carter implementation, Cython binding, and `batch_verify_ed25519()` Python API for throughput-optimized anomaly result verification
+- **Ed25519 comb tables:** 8×32 basepoint precomputed comb tables (~20KB) reducing ~252 doublings to ~32 doublings + 32 additions with constant-time table lookups via conditional move
+- **Ed25519 wNAF verification:** Width-4 windowed Non-Adjacent Form for variable-base scalar multiplication, reducing additions from ~128 to ~64 (vartime, safe for verification)
+- **Cython bindings for hot-path operations:** Added `ed25519_binding.pyx`, `dilithium_binding.pyx`, `hkdf_binding.pyx` with automatic Cython-over-ctypes dispatch and fallback
+- **Precomputed hash passthrough:** `create_crypto_package()` now passes Layer 1 SHA3-256 hash to all sign() methods, eliminating redundant hash computations
+- **Parallel hybrid verification:** Thread-pool `ThreadPoolExecutor(max_workers=2)` for concurrent Ed25519 + ML-DSA-65 verification with `parallel=True` parameter
+- **Module-level imports:** Replaced per-call lazy imports with module-level imports; `_INVARIANT7_OK` boolean flag eliminates import machinery overhead
+
+### Changed - Performance Engineering (PR #188)
+
+- **HKDF stack allocation:** 256-byte stack buffer with heap fallback for HKDF expand, `ama_secure_memzero` on cleanup path
+- **Dilithium NTT dispatch caching:** Single `ama_get_dispatch_table()` call per top-level function, passed to internal NTT/invNTT functions
+- **AVX2 AES-GCM stack scrubbing:** Added `ama_secure_memzero()` for expanded round keys and computed tag in encrypt/decrypt paths
+
+### Fixed - Cython Binding Correctness (PR #188)
+
+- **dilithium_binding.pyx:97:** `sig_len` initialized to `DILITHIUM_SIG_BYTES` instead of 0 (prevented all Cython signing)
+- **dilithium_binding.pyx:40-44:** `verify()` extern parameter order corrected to match C header (message, message_len, signature, sig_len, public_key)
+- **dilithium_binding.pyx:** Renamed `ama_dilithium_keygen` to `ama_dilithium_keypair` in cdef extern to match C header
+- **INVARIANT-5 enforcement:** Input validation moved before Cython dispatch in `native_ed25519_sign`, `native_ed25519_verify`, and `native_hkdf`
+- **Batch verify error handling:** `rc=-4` (AMA_ERROR_VERIFY_FAILED) correctly handled as valid when some signatures are invalid
 
 ### Changed - Documentation
 
@@ -241,6 +266,8 @@ After upgrading to v2.0:
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 2.1.2 | 2026-04-06 | SIMD correctness fixes, 10-item performance engineering overhaul (AES-NI, batch verify, comb tables, wNAF, Cython bindings, parallel hybrid verify), metadata sync |
+| 2.1.1 | 2026-03-26 | SIMD optimization, dashboard overhaul, code correctness fixes, documentation corrections |
 | 2.0.0 | 2026-03-07 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, Phase 2 primitives, CI hardening (PR #116: ruff, Semgrep, HMAC-SHA512, mypy --strict, CVE-2026-26007), FIPS 203/204/205 |
 | 1.0.0 | 2025-11-22 | First public open-source release (Apache 2.0) |
 
