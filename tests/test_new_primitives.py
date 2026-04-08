@@ -25,18 +25,12 @@ from ama_cryptography.pqc_backends import (
     _X25519_NATIVE_AVAILABLE,
 )
 
-# Skip entire module if native library is not built
-pytestmark = pytest.mark.skipif(
-    not _SECP256K1_NATIVE_AVAILABLE,
-    reason="Native library not built with new primitives",
-)
-
-
 # =============================================================================
 # SECP256K1 TESTS
 # =============================================================================
 
 
+@pytest.mark.skipif(not _SECP256K1_NATIVE_AVAILABLE, reason="secp256k1 not available")
 class TestSecp256k1:
     """Tests for secp256k1 compressed public key derivation."""
 
@@ -155,6 +149,47 @@ class TestX25519:
         ss_ac = native_x25519_key_exchange(sk_a, pk_c)
         assert ss_ab != ss_ac
 
+    def test_rfc7748_vector_1(self) -> None:
+        """RFC 7748 Section 5.2 — Test Vector 1 (Alice's side)."""
+        from ama_cryptography.pqc_backends import native_x25519_key_exchange
+
+        # RFC 7748 Section 5.2 test vectors
+        alice_sk = bytes.fromhex("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a")
+        bob_pk = bytes.fromhex("de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f")
+        expected_shared = bytes.fromhex(
+            "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742"
+        )
+
+        shared = native_x25519_key_exchange(alice_sk, bob_pk)
+        assert shared == expected_shared
+
+    def test_rfc7748_vector_2(self) -> None:
+        """RFC 7748 Section 5.2 — Test Vector 2 (Bob's side)."""
+        from ama_cryptography.pqc_backends import native_x25519_key_exchange
+
+        bob_sk = bytes.fromhex("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb")
+        alice_pk = bytes.fromhex("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a")
+        expected_shared = bytes.fromhex(
+            "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742"
+        )
+
+        shared = native_x25519_key_exchange(bob_sk, alice_pk)
+        assert shared == expected_shared
+
+    def test_rfc7748_basepoint(self) -> None:
+        """RFC 7748 Section 6.1 — scalar mult with known scalar and u-coordinate."""
+        from ama_cryptography.pqc_backends import native_x25519_key_exchange
+
+        # RFC 7748 Section 6.1, first iteration input pair
+        scalar = bytes.fromhex("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4")
+        basepoint = bytes.fromhex(
+            "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c"
+        )
+        expected = bytes.fromhex("c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552")
+
+        result = native_x25519_key_exchange(scalar, basepoint)
+        assert result == expected
+
 
 # =============================================================================
 # ARGON2ID TESTS
@@ -240,6 +275,36 @@ class TestArgon2id:
         r64 = native_argon2id(out_len=64, **common)
         assert len(r32) == 32
         assert len(r64) == 64
+
+    def test_rfc9106_argon2id_deterministic_vector(self) -> None:
+        """Argon2id deterministic regression vector (RFC 9106 parameters).
+
+        Uses RFC 9106-style parameters (t_cost=3, m_cost=32 KiB, parallelism=4)
+        with 32-byte password and 16-byte salt.  The expected output is a
+        regression anchor — any change indicates an algorithm break.
+
+        Note: RFC 9106 Section 5.4 test vector includes secret/associated-data
+        parameters not exposed by our C API, so the output differs from the
+        reference.  This test validates determinism and algorithm stability.
+        """
+        from ama_cryptography.pqc_backends import native_argon2id
+
+        password = bytes([0x01] * 32)
+        salt = bytes([0x02] * 16)
+
+        result = native_argon2id(
+            password=password,
+            salt=salt,
+            t_cost=3,
+            m_cost=32,
+            parallelism=4,
+            out_len=32,
+        )
+
+        expected = bytes.fromhex("107ef258c89eebc34d910bada639360cd98cac51079cdae54ea411d824af04c3")
+        assert (
+            result == expected
+        ), f"Argon2id regression vector mismatch: got {result.hex()}, expected {expected.hex()}"
 
 
 # =============================================================================
@@ -449,6 +514,7 @@ class TestDeterministicKeygen:
 # =============================================================================
 
 
+@pytest.mark.skipif(not _SECP256K1_NATIVE_AVAILABLE, reason="secp256k1 not available")
 class TestBIP32NonHardened:
     """Tests for BIP32 non-hardened derivation with native secp256k1."""
 

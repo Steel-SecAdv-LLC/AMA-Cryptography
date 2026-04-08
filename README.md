@@ -62,7 +62,7 @@ The system combines NIST-standardized post-quantum algorithms with a 3R runtime 
 > - Secure file permissions for key files and cryptographic packages (store on encrypted volumes with restricted access)
 >
 > **Status:** Community-tested | Not externally audited
-> **Last Updated:** 2026-04-06
+> **Last Updated:** 2026-04-08
 
 ---
 
@@ -376,26 +376,18 @@ NIST-standardized post-quantum algorithms:
 
 | Operation | Throughput (Python API via ctypes) | Latency | Notes |
 |-----------|-----------|---------|-------|
-| **KeyGen** | 595 ops/sec | ~1.68ms | Native C, NTT q=8380417 |
-| **Sign** | 567 ops/sec | ~1.76ms | Rejection sampling, constant-time |
-| **Verify** | 697 ops/sec | ~1.43ms | Verified against NIST ACVP test vectors (self-attested) |
-
-*Source: `benchmark-results.json` (CI regression suite). Run `build/bin/benchmark_c_raw` for raw C throughput without ctypes overhead.*
-
-### ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)
-
-ML-KEM-1024 throughput is not yet tracked in the CI regression suite. Run `build/bin/benchmark_c_raw` locally for measured numbers.
+| **KeyGen** | 3,921 ops/sec | ~0.26ms | Native C, NTT q=8380417, cached dispatch |
+| **Sign** | 2,249 ops/sec | ~0.44ms | Rejection sampling, constant-time |
+| **Verify** | 7,424 ops/sec | ~0.13ms | NIST ACVP vectors validated (self-attested) |
 
 ### Full Multi-Layer Package Performance
 
 Complete security package with all defense layers (Python API via ctypes):
 
-| Operation | Throughput | Latency |
-|-----------|-----------|----------|
-| Package Create (all layers) | 184 ops/sec | ~5.43ms |
-| Package Verify (all layers) | 561 ops/sec | ~1.78ms |
-
-*Source: `benchmark-results.json` (CI regression suite).*
+| Operation | Throughput | Latency | Notes |
+|-----------|-----------|----------|-------|
+| Package Create (all layers) | 1,148 ops/sec | ~0.87ms | Precomputed hash passthrough |
+| Package Verify (all layers) | 3,348 ops/sec | ~0.30ms | Parallel hybrid verify (2 threads) |
 
 **All Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65 (core), HKDF, RFC 3161 (supporting)
 

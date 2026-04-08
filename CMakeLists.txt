@@ -262,6 +262,7 @@ set(AMA_SOURCES
     src/c/ama_sha3.c
     src/c/ama_hkdf.c
     src/c/ama_ed25519.c
+    src/c/ama_frost.c
     src/c/ama_aes_gcm.c
     src/c/ama_cpuid.c
     src/c/ama_secure_memory.c

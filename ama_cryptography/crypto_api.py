@@ -30,6 +30,7 @@ import os
 import pathlib
 import secrets
 import sys
+import threading
 import time
 import warnings
 from abc import ABC, abstractmethod
@@ -554,6 +555,78 @@ def batch_verify_ed25519(
     """
     _enforce_invariant7()
     return native_ed25519_batch_verify(entries)
+
+
+def _kc_secure_memzero(buf: bytearray) -> None:
+    """Zero a bytearray in-place (mirrors pqc_backends._secure_memzero)."""
+    for i in range(len(buf)):
+        buf[i] = 0
+
+
+class KeypairCache:
+    """Thread-safe cache for signing keypairs within a session.
+
+    Useful for agents (e.g. Mercury Agent) that sign many results with
+    the same identity, avoiding the ~1-2ms keypair generation cost per call.
+
+    INVARIANT-6: secret key stored as mutable ``bytearray`` and securely
+    zeroed on ``rotate()`` and ``__del__``.
+
+    Usage::
+
+        cache = KeypairCache()  # default: HYBRID_SIG
+        pk, sk = cache.get_or_generate()
+
+        config = CryptoPackageConfig(signing_keypair=(pk, sk))
+        result = create_crypto_package(content, config)
+
+        # Rotate when identity changes or on schedule
+        cache.rotate()
+    """
+
+    def __init__(self, algorithm: AlgorithmType = AlgorithmType.HYBRID_SIG) -> None:
+        self._algorithm = algorithm
+        self._lock = threading.Lock()
+        self._pk: Optional[bytes] = None
+        self._sk: Optional[bytearray] = None
+
+    def _wipe_sk(self) -> None:
+        """Zero secret key material in-place via _kc_secure_memzero."""
+        if self._sk is not None and len(self._sk) > 0:
+            _kc_secure_memzero(self._sk)
+            self._sk = None
+
+    def get_or_generate(self) -> Tuple[bytes, bytes]:
+        """Return cached keypair, generating one if needed.
+
+        Returns an immutable ``bytes`` copy of the secret key.  The caller's
+        copy cannot be securely wiped by ``rotate()``/``__del__``; the cache
+        controls the only wipeable ``bytearray`` reference internally.
+        """
+        with self._lock:
+            if self._pk is None or self._sk is None:
+                crypto = AmaCryptography(algorithm=self._algorithm)
+                kp = crypto.generate_keypair()
+                self._pk = kp.public_key
+                self._sk = bytearray(kp.secret_key)
+            return (self._pk, bytes(self._sk))
+
+    def rotate(self) -> None:
+        """Securely zero and discard cached keypair."""
+        with self._lock:
+            self._wipe_sk()
+            self._pk = None
+
+    def __del__(self) -> None:
+        try:
+            self._wipe_sk()
+        except Exception as exc:  # — INVARIANT-3: __del__ must not raise (FIN-005)
+            try:
+                from ama_cryptography._finalizer_health import record_finalizer_error
+
+                record_finalizer_error("KeypairCache", f"_wipe_sk() failed: {exc}")
+            except Exception:  # noqa: S110  # nosec B110  # shutdown safety (FIN-005)
+                pass
 
 
 class KyberProvider(KEMProvider):
@@ -1800,6 +1873,19 @@ class CryptoPackageConfig:
     num_derived_keys: int = 3
     tsa_url: Optional[str] = None
     tsa_mode: str = "online"
+    signing_keypair: Optional[Tuple[bytes, bytes]] = None
+    """Pre-generated signing keypair (public_key, secret_key) to reuse.
+
+    When provided, ``create_crypto_package()`` skips keypair generation and
+    uses the supplied keys for the primary signature.  This is useful for
+    agents (e.g. Mercury Agent) that sign many results with the same identity.
+
+    The supplied keys are checked to ensure they are non-empty and not
+    composed entirely of zero bytes.  No algorithm-specific key length
+    validation is performed at this layer; invalid keys will surface as
+    errors from the underlying signing call.
+    When ``None`` (default), a fresh keypair is generated per call.
+    """
 
 
 @dataclass
@@ -2087,7 +2173,31 @@ def create_crypto_package(
 
     # Generate primary signature (with 3R timing instrumentation)
     primary_crypto = AmaCryptography(algorithm=config.signature_algorithm)
-    primary_keypair = primary_crypto.generate_keypair()
+    if config.signing_keypair is not None:
+        if (
+            not isinstance(config.signing_keypair, (tuple, list))
+            or len(config.signing_keypair) != 2
+        ):
+            raise TypeError("signing_keypair must be a (bytes, bytes) tuple of length 2")
+        _pk, _sk = config.signing_keypair
+        if not isinstance(_pk, bytes) or not isinstance(_sk, bytes):
+            raise TypeError("signing_keypair must be a tuple of (bytes, bytes)")
+        if len(_pk) == 0 or len(_sk) == 0:
+            raise ValueError("signing_keypair keys must be non-empty")
+        from ama_cryptography.secure_memory import constant_time_compare
+
+        if constant_time_compare(_pk, b"\x00" * len(_pk)) or constant_time_compare(
+            _sk, b"\x00" * len(_sk)
+        ):
+            raise ValueError("signing_keypair keys must not be all-zero")
+        primary_keypair = KeyPair(
+            public_key=_pk,
+            secret_key=_sk,
+            algorithm=config.signature_algorithm,
+            metadata={"source": "pre-generated"},
+        )
+    else:
+        primary_keypair = primary_crypto.generate_keypair()
     _t0 = time.perf_counter_ns()
     primary_signature = primary_crypto.sign(content, primary_keypair.secret_key)
     _sign_ns = time.perf_counter_ns() - _t0
