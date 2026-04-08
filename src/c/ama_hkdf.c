@@ -240,7 +240,9 @@ static ama_error_t hkdf_expand(
     size_t okm_len
 ) {
     uint8_t T[SHA3_256_DIGEST_SIZE];
-    uint8_t* expand_data = NULL;
+    uint8_t stack_buf[256];   /* Stack buffer for typical expand_len values */
+    uint8_t *expand_data = NULL;
+    int expand_on_heap = 0;
     size_t expand_len;
     size_t done = 0;
     size_t todo;
@@ -252,11 +254,18 @@ static ama_error_t hkdf_expand(
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    /* Allocate buffer for T_prev || info || counter */
+    /* Allocate buffer for T_prev || info || counter.
+     * Use stack buffer when small enough to eliminate malloc/free overhead
+     * in the common case (SHA3_256_DIGEST_SIZE + info_len + 1 <= 256). */
     expand_len = SHA3_256_DIGEST_SIZE + info_len + 1;
-    expand_data = (uint8_t*)malloc(expand_len);
-    if (!expand_data) {
-        return AMA_ERROR_MEMORY;
+    if (expand_len <= sizeof(stack_buf)) {
+        expand_data = stack_buf;
+    } else {
+        expand_data = (uint8_t *)malloc(expand_len);
+        if (!expand_data) {
+            return AMA_ERROR_MEMORY;
+        }
+        expand_on_heap = 1;
     }
 
     memset(T, 0, sizeof(T));
@@ -294,8 +303,8 @@ static ama_error_t hkdf_expand(
 
 cleanup:
     ama_secure_memzero(T, sizeof(T));
-    if (expand_data) {
-        ama_secure_memzero(expand_data, expand_len);
+    ama_secure_memzero(expand_data, expand_len);
+    if (expand_on_heap) {
         free(expand_data);
     }
 

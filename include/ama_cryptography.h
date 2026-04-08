@@ -620,6 +620,39 @@ AMA_API ama_error_t ama_ed25519_verify(
     const uint8_t public_key[32]
 );
 
+/**
+ * @brief Entry for Ed25519 batch verification
+ *
+ * Each entry contains a message, signature, and public key to verify.
+ */
+typedef struct {
+    const uint8_t *message;     /**< Message bytes */
+    size_t         message_len; /**< Length of message */
+    const uint8_t *signature;   /**< 64-byte Ed25519 signature */
+    const uint8_t *public_key;  /**< 32-byte Ed25519 public key */
+} ama_ed25519_batch_entry;
+
+/**
+ * @brief Batch verify multiple Ed25519 signatures
+ *
+ * Verifies multiple Ed25519 signatures independently. Each entry's result
+ * is written to the results array: 1 if valid, 0 if invalid.
+ *
+ * This is intentionally non-constant-time (vartime) because verification
+ * scalars are public. This is safe and documented.
+ *
+ * @param entries   Array of batch entries to verify
+ * @param count     Number of entries
+ * @param results   Output: array of int (1=valid, 0=invalid), must be >= count
+ * @return AMA_SUCCESS if all verified, AMA_ERROR_VERIFY_FAILED if any failed,
+ *         AMA_ERROR_INVALID_PARAM if entries or results is NULL
+ */
+AMA_API ama_error_t ama_ed25519_batch_verify(
+    const ama_ed25519_batch_entry *entries,
+    size_t count,
+    int *results
+);
+
 /* ============================================================================
  * AES-256-GCM AUTHENTICATED ENCRYPTION (NIST SP 800-38D)
  * ============================================================================ */
