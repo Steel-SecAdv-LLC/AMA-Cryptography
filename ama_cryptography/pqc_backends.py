@@ -821,12 +821,12 @@ def _decode_signed_byte(b: int) -> int:
 # retrieve the full-size F, G coefficients (which do NOT fit in 1 byte
 # and therefore cannot be round-tripped through the C SK buffer).
 # Also caches h (public key polynomial) needed for deriving s1 = c - s2*h.
-_falcon_key_cache: dict[int, tuple[list[int], list[int], list[int], list[int], list[int]]] = {}
+_falcon_key_cache: dict[bytes, tuple[list[int], list[int], list[int], list[int], list[int]]] = {}
 
 
 def falcon512_complete_keypair(
-    pk: ctypes.Array,  # type: ignore[type-arg] -- ctypes.Array generic unsupported at runtime (PQC-001)
-    sk: ctypes.Array,  # type: ignore[type-arg] -- ctypes.Array generic unsupported at runtime (PQC-001)
+    pk: "ctypes.Array[ctypes.c_char]",
+    sk: "ctypes.Array[ctypes.c_char]",
 ) -> int:
     """Generate a FALCON-512 keypair with complete NTRU basis.
 
@@ -900,8 +900,9 @@ def falcon512_complete_keypair(
             h_coeffs.append(v & 0x3FFF)
             pk_bitpos += 14
 
-        # Cache full key material keyed by sk buffer identity
-        _falcon_key_cache[id(sk)] = (
+        # Cache full key material keyed by sk bytes (not id()) to avoid
+        # GC-reuse bugs where a freed buffer's id is recycled.
+        _falcon_key_cache[bytes(sk)] = (
             f_coeffs,
             g_coeffs,
             F_coeffs,
@@ -914,11 +915,11 @@ def falcon512_complete_keypair(
 
 
 def falcon512_sign(
-    signature: ctypes.Array,  # type: ignore[type-arg] -- ctypes.Array generic unsupported at runtime (PQC-001)
+    signature: "ctypes.Array[ctypes.c_char]",
     sig_len_out: ctypes.c_size_t,
     message: bytes,
     message_len: int,
-    sk: ctypes.Array,  # type: ignore[type-arg] -- ctypes.Array generic unsupported at runtime (PQC-001)
+    sk: "ctypes.Array[ctypes.c_char]",
 ) -> int:
     """Sign a message with FALCON-512 using Python Babai reduction.
 
@@ -934,7 +935,7 @@ def falcon512_sign(
     """
     from ama_cryptography._falcon_ntru import falcon_sign as _py_sign
 
-    cached = _falcon_key_cache.get(id(sk))
+    cached = _falcon_key_cache.get(bytes(sk))
     if cached is None:
         return -1  # SK not from falcon512_complete_keypair
     f, g, F, G, h = cached
@@ -973,7 +974,7 @@ def falcon512_sign(
 
     # Copy into output buffer
     for i in range(total_len):
-        signature[i] = sig_buf[i]
+        signature[i] = bytes([sig_buf[i]])
     sig_len_out.value = total_len
     return 0
 
@@ -981,9 +982,9 @@ def falcon512_sign(
 def falcon512_verify(
     message: bytes,
     message_len: int,
-    signature: Union[bytes, ctypes.Array],  # type: ignore[type-arg] -- ctypes.Array generic unsupported at runtime (PQC-001)
+    signature: "Union[bytes, ctypes.Array[ctypes.c_char]]",
     sig_len: int,
-    pk: Union[bytes, ctypes.Array],  # type: ignore[type-arg] -- ctypes.Array generic unsupported at runtime (PQC-001)
+    pk: "Union[bytes, ctypes.Array[ctypes.c_char]]",
 ) -> int:
     """Verify a FALCON-512 signature using the Python verifier.
 
@@ -2039,9 +2040,9 @@ def _probe_cython_dilithium() -> "tuple[Any, Any]":
 def _probe_cython_hkdf() -> "Any":
     """Detect Cython HKDF binding at module load time."""
     try:
-        from ama_cryptography.hkdf_binding import (  # type: ignore[import-not-found]  # Cython extension; compiled at install time (PQC-007)
+        from ama_cryptography.hkdf_binding import (
             cy_hkdf,
-        )
+        )  # type: ignore[import-not-found]  # Cython extension; compiled at install time (PQC-007)
 
         return cy_hkdf
     except (ImportError, AttributeError):

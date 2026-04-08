@@ -23,6 +23,7 @@ from __future__ import annotations
 import cmath
 import hashlib
 import os
+from typing import Any
 
 FALCON_Q = 12289
 FALCON_N = 512
@@ -142,12 +143,12 @@ def _gen_roots(n: int) -> list[complex]:
     return roots
 
 
-def _split(f: list) -> tuple[list, list]:
+def _split(f: list[Any]) -> tuple[list[Any], list[Any]]:
     n = len(f)
     return [f[2 * i] for i in range(n // 2)], [f[2 * i + 1] for i in range(n // 2)]
 
 
-def _merge(f0: list, f1: list) -> list:
+def _merge(f0: list[Any], f1: list[Any]) -> list[Any]:
     n = 2 * len(f0)
     f = [None] * n
     for i in range(n // 2):
@@ -156,7 +157,7 @@ def _merge(f0: list, f1: list) -> list:
     return f
 
 
-def _fft(f: list, n: int) -> list[complex]:
+def _fft(f: list[Any], n: int) -> list[complex]:
     """FFT: coefficient representation -> FFT representation."""
     if n == 2:
         return [complex(f[0], f[1]), complex(f[0], -f[1])]
@@ -171,7 +172,7 @@ def _fft(f: list, n: int) -> list[complex]:
     return result
 
 
-def _ifft(f_fft: list[complex], n: int) -> list:
+def _ifft(f_fft: list[complex], n: int) -> list[Any]:
     """Inverse FFT: FFT representation -> coefficient representation."""
     if n == 2:
         return [f_fft[0].real, f_fft[0].imag]

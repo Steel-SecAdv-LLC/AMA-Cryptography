@@ -23,6 +23,28 @@
 #include <string.h>
 #include <stdint.h>
 
+/* Platform once-primitive (INVARIANT-2: thread-safe one-time init) */
+#if defined(_MSC_VER)
+    #define WIN32_LEAN_AND_MEAN
+    #include <windows.h>
+    #define FALCON_ONCE_FLAG          INIT_ONCE
+    #define FALCON_ONCE_FLAG_INIT     INIT_ONCE_STATIC_INIT
+    typedef void (*falcon_once_fn)(void);
+    static BOOL CALLBACK falcon_once_trampoline(PINIT_ONCE once, PVOID param, PVOID *ctx) {
+        (void)once; (void)ctx;
+        ((falcon_once_fn)param)();
+        return TRUE;
+    }
+    #define FALCON_CALL_ONCE(flag, fn) \
+        InitOnceExecuteOnce(&(flag), falcon_once_trampoline, (PVOID)(fn), NULL)
+#else
+    #include <pthread.h>
+    #define FALCON_ONCE_FLAG          pthread_once_t
+    #define FALCON_ONCE_FLAG_INIT     PTHREAD_ONCE_INIT
+    #define FALCON_CALL_ONCE(flag, fn) \
+        pthread_once(&(flag), (fn))
+#endif
+
 /* ======================================================================
  * FALCON-512 PARAMETERS
  * ====================================================================== */
@@ -119,7 +141,7 @@ static uint16_t psi_pow[FALCON_N];      /* psi^0, psi^1, ..., psi^{n-1} */
 static uint16_t psi_inv_pow[FALCON_N];  /* psi^{-0}, psi^{-1}, ... */
 static uint16_t omega_twiddle[FALCON_LOGN][FALCON_N / 2]; /* per-level twiddles */
 static uint16_t omega_inv_twiddle[FALCON_LOGN][FALCON_N / 2];
-static int ntt_tables_ready = 0;
+static FALCON_ONCE_FLAG ntt_once = FALCON_ONCE_FLAG_INIT;
 
 static uint32_t bitrev9(uint32_t x) {
     uint32_t r = 0;
@@ -130,9 +152,7 @@ static uint32_t bitrev9(uint32_t x) {
     return r;
 }
 
-static void ntt_init_tables(void) {
-    if (ntt_tables_ready) return;
-
+static void ntt_init_tables_impl(void) {
     /* Precompute psi^i and psi^{-i} */
     uint16_t psi = NTT_PSI;
     uint16_t psi_inv = (uint16_t)mod_pow(psi, FALCON_Q - 2);
@@ -163,7 +183,10 @@ static void ntt_init_tables(void) {
         }
     }
 
-    ntt_tables_ready = 1;
+}
+
+static void ntt_init_tables(void) {
+    FALCON_CALL_ONCE(ntt_once, ntt_init_tables_impl);
 }
 
 /* Forward negacyclic NTT: pre-twist, bit-reversal, Cooley-Tukey DIT */
@@ -319,7 +342,14 @@ static ama_error_t hash_to_point(uint16_t *c, const uint8_t *nonce,
 /* Sample from discrete Gaussian D_{Z,sigma} using rejection sampling.
  * Returns a signed value. This sampler is variable-time: runtime depends
  * on the number of rejections. The variation is driven by internal
- * randomness, not by secret inputs. */
+ * randomness, not by secret inputs.
+ *
+ * NOTE: Currently unused — signing is performed via the Python Babai
+ * nearest-plane path (pqc_backends.falcon512_sign).  Retained under
+ * AMA_FALCON_USE_C_SAMPLER so a future pure-C signing path can enable it
+ * without re-implementing.  CodeQL: intentionally guarded to avoid
+ * "unreachable static function" alert. */
+#ifdef AMA_FALCON_USE_C_SAMPLER
 static int16_t sample_gaussian(void) {
     /* Simple Box-Muller-like rejection sampling over integers.
      * Sample candidate z uniformly from [-6*sigma, 6*sigma],
@@ -356,6 +386,7 @@ static int16_t sample_gaussian(void) {
         }
     }
 }
+#endif /* AMA_FALCON_USE_C_SAMPLER */
 
 /* ======================================================================
  * KEY GENERATION

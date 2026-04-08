@@ -49,6 +49,8 @@ extern ama_error_t ama_ed25519_verify(const uint8_t sig[64], const uint8_t *msg,
 extern ama_error_t ama_sha3_256(const uint8_t *input, size_t input_len,
     uint8_t *output);
 extern void ama_secure_memzero(void *ptr, size_t len);
+extern void ama_ed25519_point_from_scalar(uint8_t point[32],
+                                          const uint8_t scalar[32]);
 
 /* ======================================================================
  * 256-BIT SCALAR ARITHMETIC (mod l)
@@ -187,21 +189,19 @@ static void scalar_random(uint8_t *s) {
  * are linear in the Schnorr sense.
  * ====================================================================== */
 
-/* Compute point = scalar * G (basepoint multiplication) via Ed25519 keypair.
- * We construct a "seed" from the scalar to get the keypair. */
+/* Compute point = scalar * G (basepoint multiplication).
+ *
+ * Calls the raw scalar-basepoint multiply exposed by ama_ed25519.c,
+ * which does NOT hash or clamp the scalar.  This preserves algebraic
+ * linearity required by FROST (RFC 9591):
+ *   point_from_scalar(a) + point_from_scalar(b) == point_from_scalar(a+b)
+ *
+ * The previous implementation hashed through SHA3-256 and then fed the
+ * result into ama_ed25519_keypair (which applies SHA-512 + clamping),
+ * breaking the linearity property and producing incorrect threshold
+ * signatures. */
 static void point_from_scalar(uint8_t point[32], const uint8_t scalar[32]) {
-    /* Create an Ed25519 secret key from the scalar.
-     * Ed25519 keypair takes seed[0..31] and computes pk.
-     * The actual scalar is SHA-512(seed)[0..31] with clamping.
-     * We need to reverse this: given our scalar, create a seed.
-     * Simplification: use SHA3-256(scalar) as seed, then keypair. */
-    uint8_t seed[32], pk[32], sk[64];
-    ama_sha3_256(scalar, 32, seed);
-    memcpy(sk, seed, 32);
-    ama_ed25519_keypair(pk, sk);
-    memcpy(point, pk, 32);
-    ama_secure_memzero(sk, 64);
-    ama_secure_memzero(seed, 32);
+    ama_ed25519_point_from_scalar(point, scalar);
 }
 
 /* ======================================================================

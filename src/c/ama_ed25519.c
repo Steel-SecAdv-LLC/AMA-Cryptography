@@ -1416,3 +1416,22 @@ ama_error_t ama_ed25519_batch_verify(
 
     return all_valid ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
 }
+
+/**
+ * Raw scalar-basepoint multiplication: point = scalar * G.
+ *
+ * Unlike ama_ed25519_keypair() this does NOT hash or clamp the scalar;
+ * the 32-byte little-endian scalar is used verbatim.  This is the
+ * primitive required by FROST (RFC 9591) and any other Schnorr-like
+ * protocol that needs algebraic linearity:
+ *   point_from_scalar(a) + point_from_scalar(b) == point_from_scalar(a+b)
+ *
+ * @param point   Output: 32-byte compressed Ed25519 point
+ * @param scalar  Input:  32-byte little-endian scalar
+ */
+void ama_ed25519_point_from_scalar(uint8_t point[32],
+                                   const uint8_t scalar[32]) {
+    ge25519_p3 R;
+    ge25519_scalarmult_base(&R, scalar);
+    ge25519_p3_tobytes(point, &R);
+}
