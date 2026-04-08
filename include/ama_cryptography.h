@@ -69,7 +69,10 @@ typedef enum {
     AMA_ALG_KYBER_1024 = 1,   /**< CRYSTALS-Kyber (Kyber-1024) */
     AMA_ALG_SPHINCS_256F = 2, /**< SPHINCS+-256f */
     AMA_ALG_ED25519 = 3,      /**< Ed25519 (classical) */
-    AMA_ALG_HYBRID = 4        /**< Hybrid mode (classical + PQC) */
+    AMA_ALG_HYBRID = 4,       /**< Hybrid mode (classical + PQC) */
+    AMA_ALG_FALCON_512 = 5,   /**< FALCON-512 (FN-DSA, FIPS 206 draft) */
+    AMA_ALG_FROST_ED25519 = 6,/**< FROST threshold Ed25519 (RFC 9591) */
+    AMA_ALG_SPAKE2 = 7        /**< SPAKE2 PAKE (RFC 9382) */
 } ama_algorithm_t;
 
 /* ============================================================================
@@ -1131,6 +1134,246 @@ AMA_API void ama_aes256_key_expansion_consttime(
  */
 AMA_API void ama_aes256_encrypt_block_consttime(
     const uint8_t round_keys[240], const uint8_t in[16], uint8_t out[16]);
+
+/* ============================================================================
+ * FALCON-512 (FN-DSA) DIGITAL SIGNATURES - NIST FIPS 206 DRAFT
+ * ============================================================================ */
+
+#define AMA_FALCON512_PUBLIC_KEY_BYTES   897
+#define AMA_FALCON512_SECRET_KEY_BYTES   1281
+#define AMA_FALCON512_SIGNATURE_MAX_BYTES 809
+
+/**
+ * @brief Generate FALCON-512 keypair
+ *
+ * Generates a FALCON-512 (FN-DSA) keypair based on NTRU lattices.
+ * NIST FIPS 206 draft, Level 1 security.
+ *
+ * @param public_key Output: public key (897 bytes)
+ * @param secret_key Output: secret key (1281 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_falcon512_keypair(
+    uint8_t *public_key, uint8_t *secret_key
+);
+
+/**
+ * @brief Sign message with FALCON-512
+ *
+ * @param signature     Output: signature buffer (max 809 bytes)
+ * @param signature_len Output: actual signature length
+ * @param message       Message to sign
+ * @param message_len   Length of message
+ * @param secret_key    Secret key (1281 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_falcon512_sign(
+    uint8_t *signature, size_t *signature_len,
+    const uint8_t *message, size_t message_len,
+    const uint8_t *secret_key
+);
+
+/**
+ * @brief Verify FALCON-512 signature
+ *
+ * @param message       Message to verify
+ * @param message_len   Length of message
+ * @param signature     Signature to verify
+ * @param signature_len Length of signature
+ * @param public_key    Public key (897 bytes)
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
+ */
+AMA_API ama_error_t ama_falcon512_verify(
+    const uint8_t *message, size_t message_len,
+    const uint8_t *signature, size_t signature_len,
+    const uint8_t *public_key
+);
+
+/* ============================================================================
+ * FROST THRESHOLD ED25519 SIGNATURES - RFC 9591
+ * ============================================================================ */
+
+#define AMA_FROST_SHARE_BYTES     64  /* 32 secret + 32 public per participant */
+#define AMA_FROST_NONCE_BYTES     64  /* 32 hiding + 32 binding */
+#define AMA_FROST_COMMITMENT_BYTES 64 /* 32 hiding_point + 32 binding_point */
+#define AMA_FROST_SIG_SHARE_BYTES  32
+#define AMA_FROST_MAX_PARTICIPANTS 255
+
+/**
+ * @brief FROST trusted dealer key generation (Shamir secret sharing)
+ *
+ * Splits a group secret key into t-of-n threshold shares.
+ *
+ * @param threshold          Minimum signers required (t >= 2)
+ * @param num_participants   Total participants (n >= t)
+ * @param group_public_key   Output: 32-byte group public key
+ * @param participant_shares Output: n * 64 bytes (secret || public per share)
+ * @param secret_key         Optional: 32-byte group secret (NULL = random)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
+    uint8_t threshold,
+    uint8_t num_participants,
+    uint8_t *group_public_key,
+    uint8_t *participant_shares,
+    const uint8_t *secret_key
+);
+
+/**
+ * @brief FROST Round 1: Generate nonce commitments
+ *
+ * @param nonce_pair         Output: 64 bytes (hiding || binding nonces) SECRET
+ * @param commitment         Output: 64 bytes (hiding || binding points) PUBLIC
+ * @param participant_share  Input: 64-byte participant share
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_frost_round1_commit(
+    uint8_t *nonce_pair,
+    uint8_t *commitment,
+    const uint8_t *participant_share
+);
+
+/**
+ * @brief FROST Round 2: Generate signature share
+ *
+ * @param sig_share          Output: 32-byte partial signature scalar
+ * @param message            Message to sign
+ * @param message_len        Length of message
+ * @param participant_share  64-byte share (secret || public)
+ * @param participant_index  1-based participant index
+ * @param nonce_pair         64-byte nonce pair from round1
+ * @param commitments        num_signers * 64 bytes (all commitments)
+ * @param signer_indices     num_signers participant indices
+ * @param num_signers        Number of participating signers
+ * @param group_public_key   32-byte group public key
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_frost_round2_sign(
+    uint8_t *sig_share,
+    const uint8_t *message, size_t message_len,
+    const uint8_t *participant_share,
+    uint8_t participant_index,
+    const uint8_t *nonce_pair,
+    const uint8_t *commitments,
+    const uint8_t *signer_indices,
+    uint8_t num_signers,
+    const uint8_t *group_public_key
+);
+
+/**
+ * @brief FROST: Aggregate signature shares into final signature
+ *
+ * Produces a standard 64-byte signature compatible with Ed25519 verify.
+ *
+ * @param signature          Output: 64-byte aggregated signature
+ * @param sig_shares         num_signers * 32 bytes (partial signatures)
+ * @param commitments        num_signers * 64 bytes
+ * @param signer_indices     num_signers indices
+ * @param num_signers        Number of participating signers
+ * @param message            Message that was signed
+ * @param message_len        Length of message
+ * @param group_public_key   32-byte group public key
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_frost_aggregate(
+    uint8_t *signature,
+    const uint8_t *sig_shares,
+    const uint8_t *commitments,
+    const uint8_t *signer_indices,
+    uint8_t num_signers,
+    const uint8_t *message, size_t message_len,
+    const uint8_t *group_public_key
+);
+
+/* ============================================================================
+ * SPAKE2 PASSWORD-AUTHENTICATED KEY EXCHANGE - RFC 9382
+ * ============================================================================ */
+
+#define AMA_SPAKE2_MSG_BYTES      32
+#define AMA_SPAKE2_KEY_BYTES      32
+#define AMA_SPAKE2_CONFIRM_BYTES  32
+#define AMA_SPAKE2_ROLE_CLIENT    0
+#define AMA_SPAKE2_ROLE_SERVER    1
+
+typedef struct ama_spake2_ctx ama_spake2_ctx;
+
+/**
+ * @brief Allocate a new SPAKE2 context
+ * @return Heap-allocated context, or NULL on failure
+ */
+AMA_API ama_spake2_ctx* ama_spake2_new(void);
+
+/**
+ * @brief Initialize SPAKE2 context
+ *
+ * @param ctx            Context to initialize
+ * @param role           0 = client, 1 = server
+ * @param identity_a     Client identity (can be NULL)
+ * @param identity_a_len Length of client identity (max 64)
+ * @param identity_b     Server identity (can be NULL)
+ * @param identity_b_len Length of server identity (max 64)
+ * @param password        Password bytes
+ * @param password_len    Length of password
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_spake2_init(
+    ama_spake2_ctx *ctx,
+    int role,
+    const uint8_t *identity_a, size_t identity_a_len,
+    const uint8_t *identity_b, size_t identity_b_len,
+    const uint8_t *password, size_t password_len
+);
+
+/**
+ * @brief Generate SPAKE2 message (public share) to send to peer
+ *
+ * @param ctx         Initialized context
+ * @param out_msg     Output: 32-byte public share
+ * @param out_msg_len Output: message length (always 32)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_spake2_generate_msg(
+    ama_spake2_ctx *ctx,
+    uint8_t *out_msg, size_t *out_msg_len
+);
+
+/**
+ * @brief Process peer's SPAKE2 message and derive shared key
+ *
+ * @param ctx              Context with message already generated
+ * @param peer_msg         32-byte peer's public share
+ * @param peer_msg_len     Length of peer message (must be 32)
+ * @param shared_key       Output: 32-byte shared key
+ * @param my_confirm       Output: 32-byte our confirmation MAC
+ * @param expected_confirm Output: 32-byte expected peer confirmation
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_spake2_process_msg(
+    ama_spake2_ctx *ctx,
+    const uint8_t *peer_msg, size_t peer_msg_len,
+    uint8_t *shared_key,
+    uint8_t *my_confirm,
+    uint8_t *expected_confirm
+);
+
+/**
+ * @brief Verify peer's confirmation MAC (constant-time)
+ *
+ * @param ctx          Context with key already derived
+ * @param peer_confirm 32-byte confirmation from peer
+ * @param confirm_len  Length (must be 32)
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if mismatch
+ */
+AMA_API ama_error_t ama_spake2_verify_confirm(
+    ama_spake2_ctx *ctx,
+    const uint8_t *peer_confirm, size_t confirm_len
+);
+
+/**
+ * @brief Free SPAKE2 context and scrub all secrets
+ * @param ctx Context to free (NULL-safe)
+ */
+AMA_API void ama_spake2_free(ama_spake2_ctx *ctx);
 
 /* ============================================================================
  * VERSIONING

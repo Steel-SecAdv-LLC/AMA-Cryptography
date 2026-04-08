@@ -209,6 +209,9 @@ class AlgorithmType(Enum):
     AES_256_GCM = auto()  # AES-256-GCM (authenticated encryption)
     HYBRID_SIG = auto()  # Hybrid: Ed25519 + ML-DSA-65
     HYBRID_KEM = auto()  # Hybrid: X25519 + Kyber-1024
+    FALCON_512 = auto()  # FALCON-512 (FN-DSA, FIPS 206 draft)
+    FROST_ED25519 = auto()  # FROST threshold Ed25519 (RFC 9591)
+    SPAKE2 = auto()  # SPAKE2 PAKE (RFC 9382)
 
 
 class CryptoBackend(Enum):

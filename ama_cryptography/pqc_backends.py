@@ -599,6 +599,147 @@ def _setup_deterministic_keygen_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
+# FALCON-512 (FN-DSA, FIPS 206 draft) native availability
+_FALCON_AVAILABLE = False
+_FALCON_BACKEND: Optional[str] = None
+
+
+def _setup_falcon_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for FALCON-512 functions."""
+    try:
+        lib.ama_falcon512_keypair.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+        lib.ama_falcon512_keypair.restype = ctypes.c_int
+
+        lib.ama_falcon512_sign.argtypes = [
+            ctypes.c_char_p,                   # signature
+            ctypes.POINTER(ctypes.c_size_t),   # signature_len
+            ctypes.c_char_p,                   # message
+            ctypes.c_size_t,                   # message_len
+            ctypes.c_char_p,                   # secret_key
+        ]
+        lib.ama_falcon512_sign.restype = ctypes.c_int
+
+        lib.ama_falcon512_verify.argtypes = [
+            ctypes.c_char_p,   # message
+            ctypes.c_size_t,   # message_len
+            ctypes.c_char_p,   # signature
+            ctypes.c_size_t,   # signature_len
+            ctypes.c_char_p,   # public_key
+        ]
+        lib.ama_falcon512_verify.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
+# FROST threshold Ed25519 (RFC 9591) native availability
+_FROST_AVAILABLE = False
+_FROST_BACKEND: Optional[str] = None
+
+
+def _setup_frost_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for FROST threshold Ed25519 functions."""
+    try:
+        lib.ama_frost_keygen_trusted_dealer.argtypes = [
+            ctypes.c_uint8,    # threshold
+            ctypes.c_uint8,    # num_participants
+            ctypes.c_char_p,   # group_public_key
+            ctypes.c_char_p,   # participant_shares
+            ctypes.c_char_p,   # secret_key (nullable)
+        ]
+        lib.ama_frost_keygen_trusted_dealer.restype = ctypes.c_int
+
+        lib.ama_frost_round1_commit.argtypes = [
+            ctypes.c_char_p,   # nonce_pair
+            ctypes.c_char_p,   # commitment
+            ctypes.c_char_p,   # participant_share
+        ]
+        lib.ama_frost_round1_commit.restype = ctypes.c_int
+
+        lib.ama_frost_round2_sign.argtypes = [
+            ctypes.c_char_p,   # sig_share
+            ctypes.c_char_p,   # message
+            ctypes.c_size_t,   # message_len
+            ctypes.c_char_p,   # participant_share
+            ctypes.c_uint8,    # participant_index
+            ctypes.c_char_p,   # nonce_pair
+            ctypes.c_char_p,   # commitments
+            ctypes.c_char_p,   # signer_indices
+            ctypes.c_uint8,    # num_signers
+            ctypes.c_char_p,   # group_public_key
+        ]
+        lib.ama_frost_round2_sign.restype = ctypes.c_int
+
+        lib.ama_frost_aggregate.argtypes = [
+            ctypes.c_char_p,   # signature
+            ctypes.c_char_p,   # sig_shares
+            ctypes.c_char_p,   # commitments
+            ctypes.c_char_p,   # signer_indices
+            ctypes.c_uint8,    # num_signers
+            ctypes.c_char_p,   # message
+            ctypes.c_size_t,   # message_len
+            ctypes.c_char_p,   # group_public_key
+        ]
+        lib.ama_frost_aggregate.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
+# SPAKE2 PAKE (RFC 9382) native availability
+_SPAKE2_AVAILABLE = False
+_SPAKE2_BACKEND: Optional[str] = None
+
+
+def _setup_spake2_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for SPAKE2 PAKE functions."""
+    try:
+        lib.ama_spake2_new.argtypes = []
+        lib.ama_spake2_new.restype = ctypes.c_void_p
+
+        lib.ama_spake2_init.argtypes = [
+            ctypes.c_void_p,   # ctx
+            ctypes.c_int,      # role
+            ctypes.c_char_p,   # identity_a
+            ctypes.c_size_t,   # identity_a_len
+            ctypes.c_char_p,   # identity_b
+            ctypes.c_size_t,   # identity_b_len
+            ctypes.c_char_p,   # password
+            ctypes.c_size_t,   # password_len
+        ]
+        lib.ama_spake2_init.restype = ctypes.c_int
+
+        lib.ama_spake2_generate_msg.argtypes = [
+            ctypes.c_void_p,                   # ctx
+            ctypes.c_char_p,                   # out_msg
+            ctypes.POINTER(ctypes.c_size_t),   # out_msg_len
+        ]
+        lib.ama_spake2_generate_msg.restype = ctypes.c_int
+
+        lib.ama_spake2_process_msg.argtypes = [
+            ctypes.c_void_p,   # ctx
+            ctypes.c_char_p,   # peer_msg
+            ctypes.c_size_t,   # peer_msg_len
+            ctypes.c_char_p,   # shared_key
+            ctypes.c_char_p,   # my_confirm
+            ctypes.c_char_p,   # expected_confirm
+        ]
+        lib.ama_spake2_process_msg.restype = ctypes.c_int
+
+        lib.ama_spake2_verify_confirm.argtypes = [
+            ctypes.c_void_p,   # ctx
+            ctypes.c_char_p,   # peer_confirm
+            ctypes.c_size_t,   # confirm_len
+        ]
+        lib.ama_spake2_verify_confirm.restype = ctypes.c_int
+
+        lib.ama_spake2_free.argtypes = [ctypes.c_void_p]
+        lib.ama_spake2_free.restype = None
+        return True
+    except AttributeError:
+        return False
+
+
 _native_lib = _find_native_library()
 if _native_lib is not None:
     if _setup_native_ctypes(_native_lib):
@@ -619,6 +760,15 @@ if _native_lib is not None:
     _ARGON2_NATIVE_AVAILABLE = _setup_argon2_ctypes(_native_lib)
     _CHACHA20_POLY1305_NATIVE_AVAILABLE = _setup_chacha20poly1305_ctypes(_native_lib)
     _DETERMINISTIC_KEYGEN_AVAILABLE = _setup_deterministic_keygen_ctypes(_native_lib)
+    if _setup_falcon_ctypes(_native_lib):
+        _FALCON_AVAILABLE = True
+        _FALCON_BACKEND = "native"
+    if _setup_frost_ctypes(_native_lib):
+        _FROST_AVAILABLE = True
+        _FROST_BACKEND = "native"
+    if _setup_spake2_ctypes(_native_lib):
+        _SPAKE2_AVAILABLE = True
+        _SPAKE2_BACKEND = "native"
 
 
 # Public API for checking availability
@@ -628,6 +778,28 @@ KYBER_AVAILABLE: bool = _KYBER_AVAILABLE
 KYBER_BACKEND: Optional[str] = _KYBER_BACKEND
 SPHINCS_AVAILABLE: bool = _SPHINCS_AVAILABLE
 SPHINCS_BACKEND: Optional[str] = _SPHINCS_BACKEND
+
+# FALCON-512 (FN-DSA, FIPS 206 draft)
+FALCON_AVAILABLE: bool = _FALCON_AVAILABLE
+FALCON_BACKEND: Optional[str] = _FALCON_BACKEND
+FALCON_PUBLIC_KEY_BYTES = 897
+FALCON_SECRET_KEY_BYTES = 1281
+FALCON_SIGNATURE_MAX_BYTES = 809
+
+# FROST threshold Ed25519 (RFC 9591)
+FROST_AVAILABLE: bool = _FROST_AVAILABLE
+FROST_BACKEND: Optional[str] = _FROST_BACKEND
+FROST_SHARE_BYTES = 64
+FROST_NONCE_BYTES = 64
+FROST_COMMITMENT_BYTES = 64
+FROST_SIG_SHARE_BYTES = 32
+
+# SPAKE2 PAKE (RFC 9382)
+SPAKE2_AVAILABLE: bool = _SPAKE2_AVAILABLE
+SPAKE2_BACKEND: Optional[str] = _SPAKE2_BACKEND
+SPAKE2_MSG_BYTES = 32
+SPAKE2_KEY_BYTES = 32
+SPAKE2_CONFIRM_BYTES = 32
 
 # SHA3-256 (raw hash) native availability — consumed by get_pqc_backend_info()
 # and exported for downstream callers that need to check native SHA3 support.

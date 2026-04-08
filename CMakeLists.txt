@@ -284,8 +284,11 @@ if(AMA_USE_NATIVE_PQC)
         src/c/ama_x25519.c
         src/c/ama_argon2.c
         src/c/ama_chacha20poly1305.c
+        src/c/ama_falcon.c
+        src/c/ama_frost.c
+        src/c/ama_spake2.c
     )
-    message(STATUS "Native PQC enabled: ML-DSA-65, Kyber-1024, SPHINCS+-256f (zero OpenSSL dependency)")
+    message(STATUS "Native PQC enabled: ML-DSA-65, Kyber-1024, SPHINCS+-256f, FALCON-512, FROST, SPAKE2 (zero OpenSSL dependency)")
 endif()
 
 # ed25519-donna assembly path (x86-64 only)
@@ -518,8 +521,9 @@ message(STATUS "Post-Quantum Cryptography:")
 message(STATUS "  Native PQC:     ${AMA_USE_NATIVE_PQC}")
 if(AMA_USE_NATIVE_PQC)
     message(STATUS "  PQC backend:    NATIVE")
-    message(STATUS "  PQC algorithms: ML-DSA-65 (ama_dilithium.c), Kyber-1024 (ama_kyber.c), SPHINCS+-256f (ama_sphincs.c)")
-    message(STATUS "  FIPS compliance: FIPS 203 (ML-KEM), FIPS 204 (ML-DSA), FIPS 205 (SLH-DSA)")
+    message(STATUS "  PQC algorithms: ML-DSA-65 (ama_dilithium.c), Kyber-1024 (ama_kyber.c), SPHINCS+-256f (ama_sphincs.c), FALCON-512 (ama_falcon.c)")
+    message(STATUS "  FIPS compliance: FIPS 203 (ML-KEM), FIPS 204 (ML-DSA), FIPS 205 (SLH-DSA), FIPS 206 draft (FN-DSA)")
+    message(STATUS "  Protocols:      FROST threshold Ed25519 (RFC 9591), SPAKE2 PAKE (RFC 9382)")
 else()
     message(STATUS "  PQC backend:    NONE (use -DAMA_USE_NATIVE_PQC=ON)")
 endif()
