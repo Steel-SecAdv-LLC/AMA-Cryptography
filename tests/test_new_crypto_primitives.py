@@ -34,9 +34,7 @@ try:
         _native_lib,
     )
 
-    NATIVE_AVAILABLE = _native_lib is not None
 except ImportError:
-    NATIVE_AVAILABLE = False
     FALCON_AVAILABLE = False
     FROST_AVAILABLE = False
     SPAKE2_AVAILABLE = False
@@ -51,7 +49,11 @@ skip_no_frost = pytest.mark.skipif(
 )
 skip_no_spake2 = pytest.mark.skipif(
     not SPAKE2_AVAILABLE,
-    reason="SPAKE2 not available in native library",
+    reason=(
+        "SPAKE2 not built on Windows (requires __uint128_t)"
+        if os.name == "nt"
+        else "SPAKE2 not available in native library"
+    ),
 )
 
 

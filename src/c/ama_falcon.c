@@ -305,7 +305,7 @@ static ama_error_t falcon_gen_fg(int16_t *f, int16_t *g) {
     /* Generate short polynomials f, g with coefficients in {-1, 0, 1}.
      * Coefficients drawn from a discrete Gaussian with small sigma. */
     uint8_t rbuf[FALCON_N * 2];
-    ama_randombytes(rbuf, sizeof(rbuf));
+    if (ama_randombytes(rbuf, sizeof(rbuf)) != AMA_SUCCESS) return AMA_ERROR_CRYPTO;
 
     for (int i = 0; i < FALCON_N; i++) {
         /* Map random byte to {-1, 0, 0, 0, 0, 0, 0, 1} distribution
@@ -587,7 +587,13 @@ AMA_API ama_error_t ama_falcon512_sign(
     }
 
     /* Hash message to polynomial c in Z_q^n */
-    hash_to_point(c, nonce, message, message_len);
+    rc = hash_to_point(c, nonce, message, message_len);
+    if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(f, sizeof(f));
+        ama_secure_memzero(g, sizeof(g));
+        ama_secure_memzero(nonce, sizeof(nonce));
+        return rc;
+    }
 
     /* Compute f in NTT domain for public key reconstruction */
     uint16_t f_ntt[FALCON_N], g_ntt[FALCON_N];
@@ -690,7 +696,8 @@ AMA_API ama_error_t ama_falcon512_verify(
     if (rc != AMA_SUCCESS) return rc;
 
     /* Recompute hash c = H(nonce || message) */
-    hash_to_point(c, nonce, message, message_len);
+    rc = hash_to_point(c, nonce, message, message_len);
+    if (rc != AMA_SUCCESS) return rc;
 
     /* Compute s1 = c - s2*h mod q */
     uint16_t s2_mod[FALCON_N], prod[FALCON_N];
