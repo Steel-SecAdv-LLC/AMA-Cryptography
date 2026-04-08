@@ -319,7 +319,7 @@ static void compute_lagrange_coeff(uint8_t *lambda, uint8_t participant_idx,
  * preventing rogue-key attacks.
  * ====================================================================== */
 
-static void compute_binding_factor(uint8_t *rho,
+static ama_error_t compute_binding_factor(uint8_t *rho,
     uint8_t participant_index,
     const uint8_t *message, size_t message_len,
     const uint8_t *commitments, uint8_t num_signers,
@@ -330,7 +330,7 @@ static void compute_binding_factor(uint8_t *rho,
     uint8_t *buf = (uint8_t *)calloc(total, 1);
     if (!buf) {
         memset(rho, 0, 32);
-        return;
+        return AMA_ERROR_MEMORY;
     }
 
     size_t pos = 0;
@@ -352,6 +352,7 @@ static void compute_binding_factor(uint8_t *rho,
 
     ama_secure_memzero(buf, total);
     free(buf);
+    return AMA_SUCCESS;
 }
 
 /* ======================================================================
@@ -362,13 +363,13 @@ static void compute_binding_factor(uint8_t *rho,
  * Simplified: use SHA3-256 and reduce mod l.
  * ====================================================================== */
 
-static void compute_challenge(uint8_t *challenge,
+static ama_error_t compute_challenge(uint8_t *challenge,
     const uint8_t R[32], const uint8_t *group_pk,
     const uint8_t *message, size_t message_len)
 {
     size_t total = 32 + 32 + message_len;
     uint8_t *buf = (uint8_t *)calloc(total, 1);
-    if (!buf) { memset(challenge, 0, 32); return; }
+    if (!buf) { memset(challenge, 0, 32); return AMA_ERROR_MEMORY; }
 
     memcpy(buf, R, 32);
     memcpy(buf + 32, group_pk, 32);
@@ -379,6 +380,7 @@ static void compute_challenge(uint8_t *challenge,
     scalar_reduce(challenge);
 
     free(buf);
+    return AMA_SUCCESS;
 }
 
 /* ======================================================================
@@ -392,7 +394,7 @@ AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
     uint8_t *participant_shares,
     const uint8_t *secret_key)
 {
-    if (threshold < 2 || threshold > num_participants || num_participants < 2)
+    if (num_participants < 2 || threshold < 2 || threshold > num_participants)
         return AMA_ERROR_INVALID_PARAM;
     if (!group_public_key || !participant_shares)
         return AMA_ERROR_INVALID_PARAM;
@@ -501,8 +503,9 @@ AMA_API ama_error_t ama_frost_round2_sign(
 
     /* Compute binding factor rho_i */
     uint8_t rho[32];
-    compute_binding_factor(rho, participant_index, message, message_len,
-        commitments, num_signers, group_public_key);
+    ama_error_t rc = compute_binding_factor(rho, participant_index, message,
+        message_len, commitments, num_signers, group_public_key);
+    if (rc != AMA_SUCCESS) return rc;
 
     /* Compute group commitment R = sum(D_j + rho_j * E_j) for all signers.
      * Since we can't easily add compressed Ed25519 points without full
@@ -523,7 +526,9 @@ AMA_API ama_error_t ama_frost_round2_sign(
 
     /* Compute challenge c = H(R || group_pk || msg) */
     uint8_t challenge[32];
-    compute_challenge(challenge, R_hash, group_public_key, message, message_len);
+    rc = compute_challenge(challenge, R_hash, group_public_key, message,
+        message_len);
+    if (rc != AMA_SUCCESS) return rc;
 
     /* Compute Lagrange coefficient lambda_i */
     uint8_t lambda[32];

@@ -348,7 +348,28 @@ static int64_t sp_load_4(const uint8_t *in) {
            ((int64_t)in[2] << 16) | ((int64_t)in[3] << 24);
 }
 
-/* Reduce 64-byte scalar mod L (ref10 sc_reduce). */
+/**
+ * Reduce a 64-byte scalar modulo the Ed25519 group order L.
+ *
+ * Uses the ref10 sc_reduce algorithm with 21-bit limb decomposition.
+ * L = 2^252 + 27742317777372353535851937790883648493.
+ *
+ * Algorithm:
+ *   1. Decompose 64-byte input into 24 limbs of 21 bits each (s0..s23)
+ *   2. Reduce s23..s12 into s0..s11 using L's small cofactor
+ *   3. Carry-propagate and normalize to produce a 32-byte result in [0, L)
+ *
+ * The reduction leverages that L ≈ 2^252, so high limbs can be folded
+ * back into low limbs by subtracting multiples of L's low-order bits.
+ * Each reduction step multiplies the high limb by the negated cofactor
+ * constants and accumulates into the corresponding low limb.
+ *
+ * Input:  s[0..63]  — 512-bit scalar (e.g. from SHA-512 output)
+ * Output: s[0..31]  — 256-bit scalar in [0, L), s[32..63] zeroed
+ *
+ * This is a constant-time operation (no secret-dependent branches).
+ * Reference: SUPERCOP ref10 implementation (public domain).
+ */
 static void sp_sc_reduce(uint8_t s[64]) {
     int64_t s0  = 2097151 & sp_load_3(s + 0);
     int64_t s1  = 2097151 & (sp_load_4(s + 2) >> 5);
