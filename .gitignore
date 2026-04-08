@@ -242,3 +242,6 @@ build-scan/
 build-strict/
 build-verify/
 build-verify2/
+build-clang/
+build-test/
+build-werror/
