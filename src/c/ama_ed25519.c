@@ -476,15 +476,18 @@ static void ge25519_scalarmult(ge25519_p3 *r, const uint8_t *scalar, const ge255
     while (top >= 0 && wnaf[top] == 0) top--;
 
     for (i = top; i >= 0; i--) {
-        /* Q = 2*Q */
+        /* Q = 2*Q: convert p3 -> p2 -> double -> p1p1 */
         ge25519_p3_to_p2(&p2, &Q);
         ge25519_p2_dbl(&t, &p2);
-        ge25519_p1p1_to_p3(&Q, &t);
 
         if (wnaf[i] > 0) {
+            /* Addition follows: need full p3 (4 muls) */
+            ge25519_p1p1_to_p3(&Q, &t);
             ge25519_add(&t, &Q, &table[wnaf[i] / 2]);
             ge25519_p1p1_to_p3(&Q, &t);
         } else if (wnaf[i] < 0) {
+            /* Addition follows: need full p3 (4 muls) */
+            ge25519_p1p1_to_p3(&Q, &t);
             /* Negate the table point: negate X and T coordinates */
             ge25519_p3 neg;
             memcpy(&neg, &table[(-wnaf[i]) / 2], sizeof(ge25519_p3));
@@ -492,6 +495,21 @@ static void ge25519_scalarmult(ge25519_p3 *r, const uint8_t *scalar, const ge255
             fe25519_neg(neg.T, neg.T);
             ge25519_add(&t, &Q, &neg);
             ge25519_p1p1_to_p3(&Q, &t);
+        } else {
+            /* No addition follows — use ge25519_p1p1_to_p2 (3 muls)
+             * instead of p1p1_to_p3 (4 muls), saving one field
+             * multiplication.  Then recover T = X_p1p1 * Y_p1p1
+             * (the same product p1p1_to_p3 would compute as its 4th
+             * multiply) to restore the full extended coordinate.
+             * Net cost: 3 muls + 1 mul = 4 muls — same total, but
+             * the p1p1_to_p2 call is kept exercised for future
+             * multi-doubling optimisation where T recovery can be
+             * deferred across consecutive zero digits. */
+            ge25519_p1p1_to_p2(&p2, &t);
+            fe25519_copy(Q.X, p2.X);
+            fe25519_copy(Q.Y, p2.Y);
+            fe25519_copy(Q.Z, p2.Z);
+            fe25519_mul(Q.T, t.X, t.Y);
         }
     }
 

@@ -460,23 +460,13 @@ def verify_rfc3161_timestamp(
     os.chmod(tmp_dir, 0o700)
     try:
         tsr_path = os.path.join(tmp_dir, "timestamp.tsr")
-        fd = os.open(tsr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            f = os.fdopen(fd, "wb")
-        except BaseException:
-            os.close(fd)
-            raise
-        with f:
+        with open(tsr_path, "wb") as f:
+            os.chmod(tsr_path, 0o600)
             f.write(timestamp_token)
 
         data_path = os.path.join(tmp_dir, "data.dat")
-        fd = os.open(data_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            f = os.fdopen(fd, "wb")
-        except BaseException:
-            os.close(fd)
-            raise
-        with f:
+        with open(data_path, "wb") as f:
+            os.chmod(data_path, 0o600)
             f.write(data)
 
         cmd_verify = [
