@@ -218,7 +218,7 @@ def generate_charts(output_dir: str) -> None:
     ax.legend(fontsize=10)
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
     for i, (c, p) in enumerate(zip(c_vals, py_vals)):
-        speedup = c_vs_py[ops_names[i]]["speedup"]
+        speedup = c / p if p > 0 else 0.0
         ax.text(
             i,
             max(c, p) + max(c_vals) * 0.03,

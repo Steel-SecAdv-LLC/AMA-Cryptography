@@ -25,18 +25,12 @@ from ama_cryptography.pqc_backends import (
     _X25519_NATIVE_AVAILABLE,
 )
 
-# Skip entire module if native library is not built
-pytestmark = pytest.mark.skipif(
-    not _SECP256K1_NATIVE_AVAILABLE,
-    reason="Native library not built with new primitives",
-)
-
-
 # =============================================================================
 # SECP256K1 TESTS
 # =============================================================================
 
 
+@pytest.mark.skipif(not _SECP256K1_NATIVE_AVAILABLE, reason="secp256k1 not available")
 class TestSecp256k1:
     """Tests for secp256k1 compressed public key derivation."""
 
