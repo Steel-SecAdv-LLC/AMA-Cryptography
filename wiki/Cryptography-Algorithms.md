@@ -22,6 +22,9 @@ Complete reference for all cryptographic algorithms used in AMA Cryptography, th
 | X25519 | Key Exchange | 128-bit classical | RFC 7748 | `ama_x25519.c` | Full |
 | Argon2id | Password Hashing | Memory-hard KDF | RFC 9106 | `ama_argon2.c` | Full |
 | secp256k1 | Elliptic Curve Ops | 128-bit classical | SEC 2 | `ama_secp256k1.c` | HD key derivation |
+| FALCON-512 (FN-DSA) | Digital Signature | NIST Level 1 (128-bit quantum) | FIPS 206 draft | `ama_falcon.c` | PQC Signature |
+| FROST Ed25519 | Threshold Signature | t-of-n threshold | RFC 9591 | `ama_frost.c` | Threshold Signing |
+| SPAKE2 | Password-Authenticated KE | Balanced PAKE | RFC 9382 | `ama_spake2.c` | PAKE |
 
 ---
 
@@ -334,6 +337,63 @@ See [Hybrid Cryptography](Hybrid-Cryptography) for implementation details.
 
 ---
 
+## FALCON-512 (FN-DSA)
+
+**Lattice-based digital signature** — compact signatures based on NTRU lattices.
+
+| Property | Value |
+|----------|-------|
+| Standard | NIST FIPS 206 (draft) |
+| Security Level | NIST Level 1 |
+| Quantum Security | ~2^128 operations |
+| Public Key | 897 bytes |
+| Secret Key | 1,281 bytes |
+| Signature | up to 809 bytes (variable) |
+| Hardness | Short Integer Solution (SIS) over NTRU lattices |
+
+> **Compact signatures:** FALCON-512 signatures (~809 bytes) are significantly smaller than ML-DSA-65 (3,309 bytes), making it suitable for bandwidth-constrained applications.
+
+---
+
+## FROST Ed25519 (Threshold Signatures)
+
+**t-of-n threshold signing** — any t participants out of n can collaboratively produce a valid Ed25519 signature.
+
+| Property | Value |
+|----------|-------|
+| Standard | RFC 9591 |
+| Base Curve | Ed25519 |
+| Share Size | 64 bytes (32 secret + 32 public) |
+| Commitment | 64 bytes (hiding + binding) |
+| Signature Share | 32 bytes |
+| Final Signature | 64 bytes (Ed25519-compatible) |
+| Max Participants | 255 |
+
+**Protocol:**
+1. **Key Generation** — Trusted dealer splits group secret via Shamir secret sharing
+2. **Round 1 (Commit)** — Each signer generates nonce commitments
+3. **Round 2 (Sign)** — Each signer produces a partial signature share
+4. **Aggregate** — Combiner produces standard 64-byte Ed25519 signature
+
+---
+
+## SPAKE2 (Password-Authenticated Key Exchange)
+
+**Balanced PAKE** — two parties sharing a password establish a shared key without offline dictionary attack exposure.
+
+| Property | Value |
+|----------|-------|
+| Standard | RFC 9382 |
+| Curve | Ed25519 |
+| Public Share | 32 bytes |
+| Shared Key | 32 bytes |
+| Confirmation MAC | 32 bytes |
+| Roles | Client (0) / Server (1) |
+
+**Security:** Resistant to offline dictionary attacks. Constant-time confirmation verification.
+
+---
+
 ## Key Sizes Reference
 
 | Component | Size |
@@ -356,6 +416,14 @@ See [Hybrid Cryptography](Hybrid-Cryptography) for implementation details.
 | AES-256-GCM Key | 32 bytes |
 | AES-256-GCM Nonce | 12 bytes |
 | AES-256-GCM Tag | 16 bytes |
+| FALCON-512 Public Key | 897 bytes |
+| FALCON-512 Secret Key | 1,281 bytes |
+| FALCON-512 Signature | up to 809 bytes |
+| FROST Share | 64 bytes |
+| FROST Signature Share | 32 bytes |
+| SPAKE2 Public Share | 32 bytes |
+| SPAKE2 Shared Key | 32 bytes |
+| SPAKE2 Confirmation | 32 bytes |
 
 ---
 

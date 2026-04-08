@@ -17,7 +17,29 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ---
 
-## [2.1.2] - 2026-04-06
+## [2.1.2] - 2026-04-08
+
+### Added - Phase 3 Cryptographic Primitives (PR #190 → PR #189)
+
+Expanded the native C cryptographic library with three new primitives:
+
+- **`ama_falcon.c`**: FALCON-512 (FN-DSA) lattice-based digital signatures (NIST FIPS 206 draft) — NTRU-lattice-based, compact signatures (~809 bytes), NIST Level 1 quantum security
+- **`ama_frost.c`**: FROST threshold Ed25519 signatures (RFC 9591) — t-of-n Shamir secret sharing, two-round signing protocol, produces standard 64-byte Ed25519-compatible signatures
+- **`ama_spake2.c`**: SPAKE2 password-authenticated key exchange (RFC 9382) — balanced PAKE on Ed25519 curve, constant-time confirmation verification, resistant to offline dictionary attacks
+
+### Fixed - CodeQL Alerts (PR #189)
+
+- **Alert #343 / #272** (`tests/test_pqc_backends_coverage.py:264`, `tests/test_hsm_integration.py:628`): Replaced explicit `__del__()` calls with `del` statements to trigger GC finalizer path correctly
+- **Alert #345** (`ama_cryptography/legacy_compat.py:463`): Refactored `os.open(O_EXCL)` + `os.fdopen()` to `with open()` context managers ensuring files are always closed
+- **Alert #20** (`src/c/ama_ed25519.c:314`): Wired unused `ge25519_p1p1_to_p2` into wNAF scalarmult zero-digit doubling path, verified by RFC 8032 KAT + ASan + UBSan
+
+### Changed - Documentation Polish (PR #189)
+
+- Added FALCON-512, FROST, SPAKE2 to all documentation: README, ARCHITECTURE, CRYPTOGRAPHY, SECURITY, CHANGELOG, wiki pages, and C API reference
+- Updated PQC badge to include FALCON-512
+- Fixed ARCHITECTURE.md C file count from "20" to "23" to reflect new primitives
+- Added `falcon`, `frost`, `spake2`, `pake`, `threshold-signatures` keywords to pyproject.toml
+- Regenerated `_integrity_digest.txt` for FIPS 140-3 POST compliance after C code changes
 
 ### Fixed - Critical Bug Fixes
 

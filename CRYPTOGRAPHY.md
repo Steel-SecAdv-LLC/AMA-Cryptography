@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 2.1 |
-| Last Updated | 2026-04-06 |
+| Last Updated | 2026-04-08 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -31,6 +31,9 @@ This document provides an overview of the cryptographic algorithms used in AMA C
 | ChaCha20-Poly1305 | Authenticated Encryption | 256-bit | RFC 8439 | Native C (`ama_chacha20poly1305.c`) | Alternative AEAD |
 | Argon2id | Password Hashing | Memory-hard | RFC 9106 | Native C (`ama_argon2.c`) | Key Derivation |
 | secp256k1 | Elliptic Curve | 128-bit classical | SEC 2 | Native C (`ama_secp256k1.c`) | HD Key Derivation |
+| FALCON-512 (FN-DSA) | Digital Signature | NIST Level 1 (128-bit quantum) | FIPS 206 draft | Native C (`ama_falcon.c`) | PQC Signature |
+| FROST Ed25519 | Threshold Signature | t-of-n threshold | RFC 9591 | Native C (`ama_frost.c`) | Threshold Signing |
+| SPAKE2 | Password-Authenticated KE | Balanced PAKE | RFC 9382 | Native C (`ama_spake2.c`) | PAKE |
 
 ## Post-Quantum Cryptography (PQC)
 
@@ -89,6 +92,74 @@ SPHINCS+ provides stateless hash-based signatures with security based only on ha
 **Standard:** NIST FIPS 205 (2024)
 
 **Integration Status:** Backend implemented in `ama_cryptography/pqc_backends.py`. Integration into main signing workflow pending.
+
+### FALCON-512 (FN-DSA)
+
+FALCON-512 is a lattice-based digital signature scheme based on NTRU lattices, selected by NIST as an additional PQC signature standard (FIPS 206 draft). It offers compact signatures compared to ML-DSA-65.
+
+**Key Sizes (FIPS 206 draft):**
+- Public Key: 897 bytes
+- Secret Key: 1,281 bytes
+- Signature: up to 809 bytes (variable length)
+
+**Security Properties:**
+- EUF-CMA secure based on the Short Integer Solution (SIS) problem over NTRU lattices
+- NIST Level 1 security (128-bit quantum)
+- Compact signatures (~809 bytes vs 3,309 bytes for ML-DSA-65)
+
+**Standard:** NIST FIPS 206 (draft)
+
+**Reference:**
+> Fouque, P.-A., et al. (2020). "FALCON: Fast-Fourier Lattice-based Compact Signatures over NTRU." NIST PQC Round 3 Submission.
+
+**Implementation:** Native C (`ama_falcon.c`)
+
+### FROST Ed25519 (Threshold Signatures)
+
+FROST (Flexible Round-Optimized Schnorr Threshold) enables t-of-n threshold signing where any t participants out of n total can collaboratively produce a valid Ed25519 signature, without any single participant holding the full secret key.
+
+**Parameters:**
+- Share: 64 bytes (32 secret + 32 public per participant)
+- Nonce Commitment: 64 bytes (32 hiding + 32 binding points)
+- Signature Share: 32 bytes
+- Final Signature: 64 bytes (standard Ed25519-compatible)
+- Maximum Participants: 255
+
+**Protocol:**
+1. **Key Generation:** Trusted dealer splits group secret via Shamir secret sharing (t-of-n)
+2. **Round 1 (Commit):** Each signer generates nonce commitments
+3. **Round 2 (Sign):** Each signer produces a partial signature share
+4. **Aggregate:** Combiner aggregates shares into a standard 64-byte Ed25519 signature
+
+**Standard:** RFC 9591
+
+**Reference:**
+> Komlo, C. and Goldberg, I. (2020). "FROST: Flexible Round-Optimized Schnorr Threshold Signatures."
+
+**Implementation:** Native C (`ama_frost.c`)
+
+### SPAKE2 (Password-Authenticated Key Exchange)
+
+SPAKE2 is a balanced password-authenticated key exchange (PAKE) protocol that allows two parties sharing a password to establish a shared secret key without exposing the password to offline dictionary attacks.
+
+**Parameters:**
+- Public Share: 32 bytes
+- Shared Key: 32 bytes
+- Confirmation MAC: 32 bytes
+- Roles: Client (0) / Server (1)
+
+**Security Properties:**
+- Balanced PAKE: both parties contribute equally
+- Resistant to offline dictionary attacks
+- Forward secrecy: compromise of long-term password does not compromise past sessions
+- Constant-time confirmation verification
+
+**Standard:** RFC 9382
+
+**Reference:**
+> Abdalla, M. and Pointcheval, D. (2005). "Simple Password-Based Encrypted Key Exchange Protocols."
+
+**Implementation:** Native C (`ama_spake2.c`)
 
 ## Classical Cryptography
 
@@ -257,6 +328,9 @@ All cryptographic primitives are implemented natively in C with zero external de
 | `ama_argon2.c` | Argon2id password hashing | RFC 9106 |
 | `ama_secp256k1.c` | secp256k1 curve operations | SEC 2 |
 | `ama_aes_bitsliced.c` | Bitsliced AES S-box | — (optional) |
+| `ama_falcon.c` | FALCON-512 (FN-DSA) | FIPS 206 draft |
+| `ama_frost.c` | FROST threshold Ed25519 | RFC 9591 |
+| `ama_spake2.c` | SPAKE2 PAKE | RFC 9382 |
 
 ### Constant-Time Operations
 
@@ -387,13 +461,16 @@ secp256k1 provides elliptic curve operations supporting BIP32-compliant hierarch
 2. NIST FIPS 203 (2024). "Module-Lattice-Based Key-Encapsulation Mechanism Standard."
 3. NIST FIPS 204 (2024). "Module-Lattice-Based Digital Signature Standard."
 4. NIST FIPS 205 (2024). "Stateless Hash-Based Digital Signature Standard."
-5. RFC 2104 (1997). "HMAC: Keyed-Hashing for Message Authentication."
-6. RFC 5869 (2010). "HMAC-based Extract-and-Expand Key Derivation Function (HKDF)."
-7. RFC 8032 (2017). "Edwards-Curve Digital Signature Algorithm (EdDSA)."
-8. RFC 3161 (2001). "Internet X.509 Public Key Infrastructure Time-Stamp Protocol (TSP)."
-9. RFC 7748 (2016). "Elliptic Curves for Security."
-10. RFC 8439 (2018). "ChaCha20 and Poly1305 for IETF Protocols."
-11. RFC 9106 (2021). "Argon2 Memory-Hard Function for Password Hashing and Proof-of-Work Applications."
+5. NIST FIPS 206 (draft). "FFI-Based Digital Signature Standard (FN-DSA / FALCON)."
+6. RFC 2104 (1997). "HMAC: Keyed-Hashing for Message Authentication."
+7. RFC 5869 (2010). "HMAC-based Extract-and-Expand Key Derivation Function (HKDF)."
+8. RFC 8032 (2017). "Edwards-Curve Digital Signature Algorithm (EdDSA)."
+9. RFC 3161 (2001). "Internet X.509 Public Key Infrastructure Time-Stamp Protocol (TSP)."
+10. RFC 7748 (2016). "Elliptic Curves for Security."
+11. RFC 8439 (2018). "ChaCha20 and Poly1305 for IETF Protocols."
+12. RFC 9106 (2021). "Argon2 Memory-Hard Function for Password Hashing and Proof-of-Work Applications."
+13. RFC 9591 (2024). "The Flexible Round-Optimized Schnorr Threshold (FROST) Protocol for Two-Round Schnorr Signatures."
+14. RFC 9382 (2023). "SPAKE2, a PAKE."
 
 ## See Also
 

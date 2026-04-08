@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 2.1 |
-| Last Updated | 2026-04-06 |
+| Last Updated | 2026-04-08 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -45,6 +45,9 @@ AMA Cryptography implements defense-in-depth with multiple independent security 
 - **AES-256-GCM Authenticated Encryption** (NIST SP 800-38D)
 - **ML-KEM-1024 Key Encapsulation** (NIST FIPS 203)
 - **SPHINCS+-SHA2-256f Hash-Based Signatures** (NIST FIPS 205)
+- **FALCON-512 Lattice-Based Signatures** (NIST FIPS 206 draft)
+- **FROST Threshold Ed25519 Signatures** (RFC 9591)
+- **SPAKE2 Password-Authenticated Key Exchange** (RFC 9382)
 - **Adaptive Cryptographic Posture System** (runtime threat-level response)
 - **Hybrid KEM Combiner** (IND-CCA2 binding construction per Bindel et al.)
 
@@ -179,7 +182,7 @@ Users deploying AMA Cryptography in production should:
 
 ### Zero-Dependency Architecture (v2.1)
 - **REQUIRED:** Build native C library (`cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build`)
-- All cryptographic primitives (SHA3, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+, X25519, ChaCha20-Poly1305, Argon2, secp256k1) are native C — no external cryptographic dependencies required
+- All cryptographic primitives (SHA3, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+, FALCON-512, X25519, ChaCha20-Poly1305, Argon2, secp256k1, FROST, SPAKE2) are native C — no external cryptographic dependencies required
 - Optional: numpy/scipy for 3R monitoring, PyKCS11 for HSM
 
 ### Cryptographic Operations
@@ -220,8 +223,11 @@ Users deploying AMA Cryptography in production should:
 | X25519 | 2^128 | ~10^7 gates* | ⚠ Quantum-vulnerable |
 | ChaCha20-Poly1305 | 2^256 | 2^128 | ✓ Quantum-secure |
 | Argon2id | Memory-hard | Memory-hard | ✓ Secure |
+| FALCON-512 (FN-DSA) | 2^256 | 2^128 | ✓ Quantum-secure |
+| FROST Ed25519 | 2^126 | ~10^7 gates* | ⚠ Quantum-vulnerable |
+| SPAKE2 (Ed25519) | 2^128 | ~10^7 gates* | ⚠ Quantum-vulnerable |
 
-*Ed25519 and X25519 are vulnerable to sufficiently large quantum computers, but ML-DSA-65 provides quantum-resistant backup.
+*Ed25519, X25519, FROST, and SPAKE2 are vulnerable to sufficiently large quantum computers, but ML-DSA-65 and FALCON-512 provide quantum-resistant alternatives.
 
 ### Cryptographic Deprecation Policy
 
@@ -259,6 +265,9 @@ AMA Cryptography is designed to comply with:
 - **RFC 5869** - HMAC-based Extract-and-Expand Key Derivation Function (HKDF)
 - **RFC 8032** - Edwards-Curve Digital Signature Algorithm (EdDSA)
 - **RFC 3161** - Internet X.509 Public Key Infrastructure Time-Stamp Protocol
+- **NIST FIPS 206 (draft)** - FFI-Based Digital Signature Standard (FN-DSA / FALCON)
+- **RFC 9591** - The Flexible Round-Optimized Schnorr Threshold (FROST) Protocol
+- **RFC 9382** - SPAKE2, a Password-Authenticated Key Exchange
 
 Non-compliance with these standards should be reported as a high-severity security issue.
 
@@ -277,6 +286,7 @@ Non-compliance with these standards should be reported as a high-severity securi
 |---------|------|---------|
 | 1.0.0 | 2025-11-26 | Initial professional release |
 | 1.1.0 | 2026-01-09 | Version alignment, terminology updates |
+| 2.1.2 | 2026-04-08 | Added FALCON-512 (FIPS 206 draft), FROST threshold Ed25519 (RFC 9591), SPAKE2 PAKE (RFC 9382) |
 | 2.0.0 | 2026-03-08 | Zero-dependency native C architecture, FIPS 203/204/205 compliance, AES-256-GCM, adaptive posture system, hybrid KEM combiner, Ed25519 atomics hardening, Phase 2 primitives, fuzzing harnesses, threat model documentation |
 
 ---

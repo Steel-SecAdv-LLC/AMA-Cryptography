@@ -91,10 +91,10 @@ classDef gray fill:#1f1f1f,stroke:#11AEED,color:#f6f6f6;
 | Property | Value |
 |----------|-------|
 | Version | 2.1.2 |
-| Algorithms | ML-DSA-65, Kyber-1024, SPHINCS+, Ed25519, AES-256-GCM, Argon2id |
+| Algorithms | ML-DSA-65, Kyber-1024, SPHINCS+, FALCON-512, Ed25519, AES-256-GCM, Argon2id, FROST, SPAKE2 |
 | Platforms | Linux, macOS, Windows |
 | Python | 3.9 – 3.13 |
-| Audit | Community-tested · Not externally audited |
+| Audit | Community-tested |
 | License | Apache 2.0 |
 
 > **Production guardrails:** Use a FIPS 140-2 Level 3+ HSM for master secrets, enforce constant-time verification, and perform independent cryptographic review before deployment. See [Security-Model](Security-Model) for requirements.
@@ -102,4 +102,4 @@ classDef gray fill:#1f1f1f,stroke:#11AEED,color:#f6f6f6;
 ---
 
 **Contact:** steel.sa.llc@gmail.com — [Report a vulnerability](Security-Model#reporting-vulnerabilities) — [Contribute](Contributing)  
-*Built by Steel Security Advisors LLC. Last updated: 2026-04-06.*
+*Built by Steel Security Advisors LLC. Last updated: 2026-04-08.*

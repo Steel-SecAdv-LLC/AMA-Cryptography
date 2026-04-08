@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 2.3 |
-| Last Updated | 2026-04-06 |
+| Last Updated | 2026-04-08 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -139,10 +139,13 @@ AMA Cryptography is designed as a standalone cryptographic library for all AI ag
 | Alternative AEAD | ChaCha20-Poly1305 | RFC 8439 | 256-bit key, 128-bit security | **Full** (ama_chacha20poly1305.c) |
 | Password Hashing | Argon2id | RFC 9106 | Memory-hard KDF | **Full** (ama_argon2.c) |
 | EC Operations | secp256k1 | SEC 2 | HD key derivation support | **Full** (ama_secp256k1.c) |
+| PQC Signature (Lattice) | FALCON-512 (FN-DSA) | NIST FIPS 206 draft | NIST Level 1 quantum security | **Full** (ama_falcon.c) |
+| Threshold Signatures | FROST Ed25519 | RFC 9591 | t-of-n threshold signing | **Full** (ama_frost.c) |
+| Password-Authenticated KE | SPAKE2 | RFC 9382 | Balanced PAKE | **Full** (ama_spake2.c) |
 | Constant-Time Utilities | memcmp, memzero, swap, lookup, copy | — | Side-channel resistance | **Full** (ama_consttime.c) |
 | Platform CSPRNG | getrandom/getentropy/BCryptGenRandom | — | Entropy source | **Full** (ama_platform_rand.c) |
 
-**C Library Source Files — 20 .c files + 1 internal header in `src/c/`:**
+**C Library Source Files — 23 .c files + 1 internal header in `src/c/`:**
 
 Core primitives:
 - `src/c/ama_core.c` - Library initialization, version info, feature detection, shared utilities
@@ -161,6 +164,9 @@ Signature and key exchange:
 - `src/c/ama_sphincs.c` - SPHINCS+-SHA2-256f-simple full native implementation (WOTS+, FORS, hypertree)
 - `src/c/ama_x25519.c` - X25519 Diffie-Hellman key exchange (RFC 7748)
 - `src/c/ama_secp256k1.c` - secp256k1 elliptic curve operations (HD key derivation)
+- `src/c/ama_falcon.c` - FALCON-512 (FN-DSA) lattice-based digital signatures (NIST FIPS 206 draft)
+- `src/c/ama_frost.c` - FROST threshold Ed25519 signatures (RFC 9591, t-of-n Shamir sharing)
+- `src/c/ama_spake2.c` - SPAKE2 password-authenticated key exchange (RFC 9382)
 
 Encryption and KDF:
 - `src/c/ama_aes_gcm.c` - AES-256-GCM authenticated encryption (NIST SP 800-38D)
@@ -173,7 +179,7 @@ Infrastructure:
 - `src/c/ama_secure_memory.c` - Secure memory operations (mlock/munlock) via native platform APIs
 - `src/c/ed25519_donna_shim.c` - Ed25519-donna assembly variant shim (optional via `-DAMA_ED25519_ASSEMBLY=ON`)
 
-**Zero-Dependency PQC:** All three PQC algorithms (Kyber, Dilithium, SPHINCS+) operate without OpenSSL. SHA-256, HMAC-SHA-256, and random byte generation are provided by native implementations (`ama_sha256.c`, `ama_hmac_sha256.c`, `ama_platform_rand.c`), validated against NIST KAT vectors.
+**Zero-Dependency PQC:** All four PQC algorithms (Kyber, Dilithium, SPHINCS+, FALCON-512) operate without OpenSSL. FROST and SPAKE2 also operate without external dependencies. SHA-256, HMAC-SHA-256, and random byte generation are provided by native implementations (`ama_sha256.c`, `ama_hmac_sha256.c`, `ama_platform_rand.c`), validated against NIST KAT vectors.
 
 ### Cryptographic Layer Stack
 

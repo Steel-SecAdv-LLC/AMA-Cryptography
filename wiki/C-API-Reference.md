@@ -384,6 +384,162 @@ void ama_consttime_copy(void *dst, const void *src, size_t len, int condition);
 
 ---
 
+## FALCON-512 (FN-DSA — FIPS 206 draft)
+
+```c
+// Key sizes
+#define AMA_FALCON512_PUBLIC_KEY_BYTES   897
+#define AMA_FALCON512_SECRET_KEY_BYTES   1281
+#define AMA_FALCON512_SIGNATURE_MAX_BYTES 809
+
+// Generate key pair
+int ama_falcon512_keypair(
+    uint8_t *public_key,    // Output: 897 bytes
+    uint8_t *secret_key     // Output: 1281 bytes
+);
+
+// Sign a message
+int ama_falcon512_sign(
+    uint8_t *signature, size_t *signature_len,  // Output: up to 809 bytes
+    const uint8_t *message, size_t message_len,
+    const uint8_t *secret_key                   // 1281 bytes
+);
+
+// Verify a signature
+// Returns: AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
+int ama_falcon512_verify(
+    const uint8_t *message, size_t message_len,
+    const uint8_t *signature, size_t signature_len,
+    const uint8_t *public_key                   // 897 bytes
+);
+```
+
+---
+
+## FROST Threshold Ed25519 (RFC 9591)
+
+```c
+// Constants
+#define AMA_FROST_SHARE_BYTES       64  // 32 secret + 32 public
+#define AMA_FROST_NONCE_BYTES       64  // 32 hiding + 32 binding
+#define AMA_FROST_COMMITMENT_BYTES  64  // 32 hiding_point + 32 binding_point
+#define AMA_FROST_SIG_SHARE_BYTES   32
+#define AMA_FROST_MAX_PARTICIPANTS  255
+
+// Trusted dealer key generation (Shamir secret sharing)
+int ama_frost_keygen_trusted_dealer(
+    uint8_t threshold,          // Minimum signers (t >= 2)
+    uint8_t num_participants,   // Total participants (n >= t)
+    uint8_t *group_public_key,  // Output: 32 bytes
+    uint8_t *participant_shares, // Output: n * 64 bytes
+    const uint8_t *secret_key   // Optional: 32 bytes (NULL = random)
+);
+
+// Round 1: Generate nonce commitments
+int ama_frost_round1_commit(
+    uint8_t *nonce_pair,        // Output: 64 bytes (SECRET)
+    uint8_t *commitment,        // Output: 64 bytes (PUBLIC)
+    const uint8_t *participant_share  // 64 bytes
+);
+
+// Round 2: Generate signature share
+int ama_frost_round2_sign(
+    uint8_t *sig_share,         // Output: 32 bytes
+    const uint8_t *message, size_t message_len,
+    const uint8_t *participant_share,
+    uint8_t participant_index,  // 1-based
+    const uint8_t *nonce_pair,
+    const uint8_t *commitments, // num_signers * 64 bytes
+    const uint8_t *signer_indices,
+    uint8_t num_signers,
+    const uint8_t *group_public_key
+);
+
+// Aggregate signature shares into final Ed25519-compatible signature
+int ama_frost_aggregate(
+    uint8_t *signature,         // Output: 64 bytes
+    const uint8_t *sig_shares,  // num_signers * 32 bytes
+    const uint8_t *commitments,
+    const uint8_t *signer_indices,
+    uint8_t num_signers,
+    const uint8_t *message, size_t message_len,
+    const uint8_t *group_public_key
+);
+```
+
+---
+
+## SPAKE2 Password-Authenticated Key Exchange (RFC 9382)
+
+```c
+// Constants
+#define AMA_SPAKE2_MSG_BYTES      32
+#define AMA_SPAKE2_KEY_BYTES      32
+#define AMA_SPAKE2_CONFIRM_BYTES  32
+#define AMA_SPAKE2_ROLE_CLIENT    0
+#define AMA_SPAKE2_ROLE_SERVER    1
+
+// Allocate context
+ama_spake2_ctx* ama_spake2_new(void);
+
+// Initialize with role, identities, and password
+int ama_spake2_init(
+    ama_spake2_ctx *ctx,
+    int role,                   // 0 = client, 1 = server
+    const uint8_t *identity_a, size_t identity_a_len,
+    const uint8_t *identity_b, size_t identity_b_len,
+    const uint8_t *password, size_t password_len
+);
+
+// Generate public share to send to peer
+int ama_spake2_generate_msg(
+    ama_spake2_ctx *ctx,
+    uint8_t *out_msg, size_t *out_msg_len  // Output: 32 bytes
+);
+
+// Process peer's share and derive shared key + confirmation MACs
+int ama_spake2_process_msg(
+    ama_spake2_ctx *ctx,
+    const uint8_t *peer_msg, size_t peer_msg_len,
+    uint8_t *shared_key,        // Output: 32 bytes
+    uint8_t *my_confirm,        // Output: 32 bytes
+    uint8_t *expected_confirm   // Output: 32 bytes
+);
+
+// Verify peer's confirmation MAC (constant-time)
+int ama_spake2_verify_confirm(
+    ama_spake2_ctx *ctx,
+    const uint8_t *peer_confirm, size_t confirm_len
+);
+
+// Free context and scrub secrets
+void ama_spake2_free(ama_spake2_ctx *ctx);
+```
+
+**Example (client-server key agreement):**
+```c
+// Client side
+ama_spake2_ctx *client = ama_spake2_new();
+ama_spake2_init(client, AMA_SPAKE2_ROLE_CLIENT,
+    (uint8_t*)"alice", 5, (uint8_t*)"bob", 3,
+    (uint8_t*)"password", 8);
+uint8_t client_msg[32];
+size_t client_msg_len;
+ama_spake2_generate_msg(client, client_msg, &client_msg_len);
+
+// Server side (similar, with ROLE_SERVER)
+// ... exchange messages ...
+
+// Both sides process peer message to derive shared key
+uint8_t shared_key[32], my_confirm[32], expected_confirm[32];
+ama_spake2_process_msg(client, server_msg, 32,
+    shared_key, my_confirm, expected_confirm);
+
+ama_spake2_free(client);
+```
+
+---
+
 ## Error Codes
 
 ```c

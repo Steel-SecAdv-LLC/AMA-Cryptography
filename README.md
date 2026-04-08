@@ -9,7 +9,7 @@
 [![Python](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org)
 [![C](https://img.shields.io/badge/C-C11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 [![Cython](https://img.shields.io/badge/Cython-3.0+-yellow.svg)](https://cython.org)
-[![PQC](https://img.shields.io/badge/PQC-ML--DSA--65%20%7C%20Kyber--1024%20%7C%20SPHINCS%2B-purple.svg)](CRYPTOGRAPHY.md)
+[![PQC](https://img.shields.io/badge/PQC-ML--DSA--65%20%7C%20Kyber--1024%20%7C%20SPHINCS%2B%20%7C%20FALCON--512-purple.svg)](CRYPTOGRAPHY.md)
 [![3R Monitoring](https://img.shields.io/badge/3R-Runtime%20Security-orange.svg)](MONITORING.md)
 [![Architecture](https://img.shields.io/badge/architecture-C%20%2B%20Python%20%2B%20Cython-blue.svg)](ARCHITECTURE.md)
 
@@ -43,7 +43,7 @@
 
 ## Executive Summary 🌎 
 
-AMA Cryptography is a hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Community-tested, not externally audited. A multi-language cryptographic security system designed to protect people, data, and networks against both classical and quantum threats. Built on NIST-standardized post-quantum cryptography (PQC), AMA Cryptography provides security-hardened features with measured performance (see [Performance Metrics](#performance-metrics)).
+AMA Cryptography is a hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. A multi-language cryptographic security system designed to protect people, data, and networks against both classical and quantum threats. Built on NIST-standardized post-quantum cryptography (PQC), AMA Cryptography provides security-hardened features with measured performance (see [Performance Metrics](#performance-metrics)).
 
 The system combines NIST-standardized post-quantum algorithms with a 3R runtime security monitoring framework, creating a defense-in-depth architecture that provides visibility into cryptographic operations while maintaining less than 2% monitoring overhead. The multi-language architecture (C + Cython + Python) pairs constant-time C implementations with optional Cython acceleration (18–37x speedup over pure Python mathematical baseline for 3R monitoring computations). Independent security review is recommended before deployment in high-security or regulated environments.
 
@@ -62,7 +62,7 @@ The system combines NIST-standardized post-quantum algorithms with a 3R runtime 
 > - Secure file permissions for key files and cryptographic packages (store on encrypted volumes with restricted access)
 >
 > **Status:** Community-tested | Not externally audited
-> **Last Updated:** 2026-04-06
+> **Last Updated:** 2026-04-08
 
 ---
 
@@ -195,6 +195,9 @@ NIST-standardized post-quantum algorithms:
 - ML-DSA-65 (NIST FIPS 204 - Dilithium)
 - Kyber-1024 (NIST FIPS 203 - ML-KEM)
 - SPHINCS+-SHA2-256f (NIST FIPS 205 - SLH-DSA)
+- FALCON-512 (NIST FIPS 206 draft - FN-DSA)
+- FROST threshold Ed25519 signatures (RFC 9591)
+- SPAKE2 password-authenticated key exchange (RFC 9382)
 - Hybrid classical+PQC modes with binding combiner
 
 </details>
@@ -230,6 +233,9 @@ NIST-standardized post-quantum algorithms:
 | ChaCha20-Poly1305 | **Full** | Full | Alternative AEAD |
 | Argon2 | **Full** | Full | Password hashing |
 | secp256k1 | **Full** | Full | HD key derivation |
+| FALCON-512 (FN-DSA) | **Full** (native) | C API | PQC Signature |
+| FROST Ed25519 | **Full** (native) | C API | Threshold Signatures |
+| SPAKE2 | **Full** (native) | C API | PAKE |
 | Hybrid (Ed25519 + ML-DSA-65) | N/A | Full | Integrated |
 
 **Legend:**
@@ -257,6 +263,9 @@ NIST-standardized post-quantum algorithms:
 - `ama_argon2.c`: Argon2id password hashing (RFC 9106)
 - `ama_secp256k1.c`: secp256k1 elliptic curve operations (HD key derivation)
 - `ama_aes_bitsliced.c`: Bitsliced AES S-box (cache-timing hardened, optional via `-DAMA_AES_CONSTTIME=ON`)
+- `ama_falcon.c`: FALCON-512 (FN-DSA) lattice-based signatures (NIST FIPS 206 draft, NTRU lattices)
+- `ama_frost.c`: FROST threshold Ed25519 signatures (RFC 9591, Shamir secret sharing, t-of-n)
+- `ama_spake2.c`: SPAKE2 password-authenticated key exchange (RFC 9382, Ed25519 curve)
 - `internal/ama_sha2.h`: Extracted SHA-512 header-only implementation (deduplication for Ed25519/SPHINCS+)
 
 **Hand-Written SIMD Implementations (`src/c/avx2/`, `src/c/neon/`, `src/c/sve2/`):**
@@ -1200,6 +1209,9 @@ AMA Cryptography v2.1.2 has **zero core cryptographic dependencies** — all cry
 - **ML-KEM-1024** (Kyber): Public domain (NIST FIPS 203)
 - **SPHINCS+-SHA2-256f**: Public domain (NIST FIPS 205)
 - **Ed25519**: Public domain (ref10 implementation, RFC 8032)
+- **FALCON-512**: Public domain (NIST FIPS 206 draft, FN-DSA)
+- **FROST Ed25519**: Public domain (RFC 9591, threshold signatures)
+- **SPAKE2**: Public domain (RFC 9382, PAKE)
 - **ed25519-donna** (optional assembly backend): Public domain (Andrew Moon) — vendored in `src/c/vendor/ed25519-donna/`, compiled in-tree, enabled via `AMA_ED25519_ASSEMBLY=ON`
 - **AES-256-GCM**: Public domain (NIST SP 800-38D)
 - **SHA3-256/SHAKE**: Public domain (NIST FIPS 202)
@@ -1300,6 +1312,6 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 </div>
 
-*Last updated: 2026-04-06*
+*Last updated: 2026-04-08*
 
 </div>

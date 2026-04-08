@@ -26,6 +26,12 @@ The U.S. National Institute of Standards and Technology (NIST) finalized three P
 
 All three are fully implemented natively in AMA Cryptography's C library.
 
+Additionally, NIST has selected a fourth PQC signature standard:
+
+| Standard | Algorithm | Basis | Type |
+|----------|-----------|-------|------|
+| FIPS 206 (draft) | FN-DSA (FALCON) | NTRU lattice | Digital Signature |
+
 ---
 
 ## ML-DSA-65 (CRYSTALS-Dilithium) — Primary PQC Signature
@@ -230,6 +236,58 @@ print(f"Signature size: {len(sig)} bytes")  # 49856
 
 ---
 
+## FALCON-512 (FN-DSA) — Compact Lattice-Based Signature
+
+### Overview
+
+FALCON-512 implements NIST FIPS 206 (draft) at security Level 1. It is based on NTRU lattices and offers significantly more compact signatures than ML-DSA-65, making it suitable for bandwidth-constrained applications.
+
+### Security Properties
+
+| Property | Value |
+|----------|-------|
+| Standard | NIST FIPS 206 (draft) |
+| Security Level | NIST Level 1 |
+| Classical Security | ~2^256 operations |
+| Quantum Security | ~2^128 operations |
+| Hardness Assumption | Short Integer Solution (SIS) over NTRU lattices |
+| Security Model | EUF-CMA |
+
+### Key and Signature Sizes
+
+| Component | Size |
+|-----------|------|
+| Public Key | 897 bytes |
+| Secret Key | 1,281 bytes |
+| Signature | up to 809 bytes (variable) |
+
+> **Compact Signatures:** FALCON-512 signatures (~809 bytes) are approximately 4× smaller than ML-DSA-65 (3,309 bytes). Use FALCON-512 where signature size matters; use ML-DSA-65 for higher security level (Level 3 vs Level 1).
+
+### Native C Implementation
+
+**File:** `src/c/ama_falcon.c`
+
+Features:
+- Fast Fourier sampling over NTRU lattices
+- Compact signature encoding
+- Zero external dependencies
+
+### C API
+
+```c
+#define AMA_FALCON512_PUBLIC_KEY_BYTES   897
+#define AMA_FALCON512_SECRET_KEY_BYTES   1281
+#define AMA_FALCON512_SIGNATURE_MAX_BYTES 809
+
+int ama_falcon512_keypair(uint8_t *pk, uint8_t *sk);
+int ama_falcon512_sign(uint8_t *sig, size_t *sig_len,
+    const uint8_t *msg, size_t msg_len, const uint8_t *sk);
+int ama_falcon512_verify(const uint8_t *msg, size_t msg_len,
+    const uint8_t *sig, size_t sig_len, const uint8_t *pk);
+```
+
+---
+
 ## Checking PQC Availability
 
 ```python
@@ -309,8 +367,11 @@ Test vectors are located in `tests/test_pqc_kat.py` and `tests/test_nist_kat.py`
 | Scenario | Recommended Algorithm | Rationale |
 |----------|----------------------|-----------|
 | Primary signatures | ML-DSA-65 | Best performance at NIST Level 3 |
+| Compact PQC signatures | FALCON-512 | ~4× smaller signatures than ML-DSA-65 |
 | Key exchange | ML-KEM-1024 + X25519 hybrid | Strongest hybrid security |
 | Conservative fallback | SPHINCS+-SHA2-256f | No lattice assumptions |
+| Threshold signing | FROST Ed25519 | t-of-n distributed key custody |
+| Password-based key exchange | SPAKE2 | Offline dictionary attack resistant |
 | Short-term classical-only | Ed25519 | Compatible with legacy verifiers |
 
 ---
