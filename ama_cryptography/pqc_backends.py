@@ -2040,8 +2040,8 @@ def _probe_cython_dilithium() -> "tuple[Any, Any]":
 def _probe_cython_hkdf() -> "Any":
     """Detect Cython HKDF binding at module load time."""
     try:
-        from ama_cryptography.hkdf_binding import (
-            cy_hkdf,  # type: ignore[import-not-found]  # PQC-007
+        from ama_cryptography.hkdf_binding import (  # type: ignore[import-not-found]  # Cython extension; compiled at install time (PQC-007)
+            cy_hkdf,
         )
 
         return cy_hkdf
