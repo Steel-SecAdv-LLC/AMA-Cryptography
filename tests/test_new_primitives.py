@@ -514,6 +514,7 @@ class TestDeterministicKeygen:
 # =============================================================================
 
 
+@pytest.mark.skipif(not _SECP256K1_NATIVE_AVAILABLE, reason="secp256k1 not available")
 class TestBIP32NonHardened:
     """Tests for BIP32 non-hardened derivation with native secp256k1."""
 
