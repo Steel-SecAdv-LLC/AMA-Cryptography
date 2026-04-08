@@ -23,7 +23,6 @@ from __future__ import annotations
 import cmath
 import hashlib
 import os
-import struct
 
 FALCON_Q = 12289
 FALCON_N = 512
@@ -322,7 +321,7 @@ def _reduce(f: list[int], g: list[int],
                            _mul_fft(Ga_fft, _adj_fft(ga_fft)))
         k_fft = _div_fft(num_fft, den_fft)
         k = _ifft(k_fft, n)
-        k = [int(round(c)) for c in k]
+        k = [round(c) for c in k]
 
         if all(c == 0 for c in k):
             break
@@ -503,8 +502,8 @@ def babai_sign(
     # polynomials, so we must round after IFFT to get true integers.
     z1_real = _ifft(z1_fft, n)
     z2_real = _ifft(z2_fft, n)
-    z1_int = [int(round(x)) for x in z1_real]
-    z2_int = [int(round(x)) for x in z2_real]
+    z1_int = [round(x) for x in z1_real]
+    z2_int = [round(x) for x in z2_real]
 
     # Compute the lattice point v = z1*b1 + z2*b2 using exact NTT mul.
     # b1 = (g, -f), b2 = (G, -F)

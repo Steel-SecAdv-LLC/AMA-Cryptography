@@ -32,7 +32,7 @@ AI Co-Architects:
 """
 
 import base64
-from typing import Any
+from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 from urllib.parse import urlparse
 
@@ -465,7 +465,7 @@ class TestTSAIntegration:
         tsa_candidates = [u for u in tsa_candidates if u]
 
         payload = b"AMA Cryptography TSA integration test payload"
-        last_err: Exception | None = None
+        last_err: Optional[Exception] = None
         for tsa_url in tsa_candidates:
             try:
                 tsr = dgs.get_rfc3161_timestamp(payload, tsa_url)

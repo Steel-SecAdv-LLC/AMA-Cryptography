@@ -974,9 +974,9 @@ def falcon512_sign(
 def falcon512_verify(
     message: bytes,
     message_len: int,
-    signature: bytes | ctypes.Array,  # type: ignore[type-arg] -- ctypes.Array generic unsupported at runtime (PQC-001)
+    signature: Union[bytes, ctypes.Array],  # type: ignore[type-arg] -- ctypes.Array generic unsupported at runtime (PQC-001)
     sig_len: int,
-    pk: bytes | ctypes.Array,  # type: ignore[type-arg] -- ctypes.Array generic unsupported at runtime (PQC-001)
+    pk: Union[bytes, ctypes.Array],  # type: ignore[type-arg] -- ctypes.Array generic unsupported at runtime (PQC-001)
 ) -> int:
     """Verify a FALCON-512 signature using the Python verifier.
 
