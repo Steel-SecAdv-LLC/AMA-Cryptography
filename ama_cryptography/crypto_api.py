@@ -597,7 +597,12 @@ class KeypairCache:
             self._sk = None
 
     def get_or_generate(self) -> Tuple[bytes, bytes]:
-        """Return cached keypair, generating one if needed."""
+        """Return cached keypair, generating one if needed.
+
+        Returns an immutable ``bytes`` copy of the secret key.  The caller's
+        copy cannot be securely wiped by ``rotate()``/``__del__``; the cache
+        controls the only wipeable ``bytearray`` reference internally.
+        """
         with self._lock:
             if self._pk is None or self._sk is None:
                 crypto = AmaCryptography(algorithm=self._algorithm)
@@ -616,9 +621,12 @@ class KeypairCache:
         try:
             self._wipe_sk()
         except Exception as exc:  # — INVARIANT-3: __del__ must not raise (FIN-005)
-            from ama_cryptography._finalizer_health import record_finalizer_error
+            try:
+                from ama_cryptography._finalizer_health import record_finalizer_error
 
-            record_finalizer_error("KeypairCache", f"_wipe_sk() failed: {exc}")
+                record_finalizer_error("KeypairCache", f"_wipe_sk() failed: {exc}")
+            except Exception:  # noqa: S110  # nosec B110  # shutdown safety (FIN-005)
+                pass
 
 
 class KyberProvider(KEMProvider):

@@ -34,7 +34,7 @@ Benchmark results for AMA Cryptography on Linux x86_64. All measurements use the
 | Operation | Mean (ms) | Ops/sec | Iterations |
 |-----------|----------:|--------:|-----------:|
 | master_secret | 0.0005 | 2,088,993 | 10,000 |
-| hkdf_derivation | 0.0340 | 29,431 | 1,000 |
+| hkdf_derivation (3-key via KMS) | 0.0340 | 29,431 | 1,000 |
 | ed25519_keygen | 0.0830 | 12,052 | 1,000 |
 | dilithium_keygen | 0.2550 | 3,921 | 100 |
 | kms_generation | 0.4072 | 2,456 | 100 |

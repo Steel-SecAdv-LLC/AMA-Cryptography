@@ -31,7 +31,7 @@ Optional add-ons: AES-256-GCM (SP 800-38D), ML-KEM-1024 (FIPS 203), SPHINCS+-256
 | Algorithm | Standard | Key/Sig Sizes | Security Level | Implementation |
 |-----------|----------|---------------|----------------|----------------|
 | SHA3-256 | FIPS 202 | 256-bit digest | 128-bit collision | `src/c/ama_sha3.c` |
-| HMAC-SHA3-256 | RFC 2104 | 256-bit key | 128-bit forgery | `src/c/ama_sha3.c` (via HMAC construction) |
+| HMAC-SHA3-256 | RFC 2104 | 256-bit key | 128-bit forgery | `src/c/ama_hkdf.c` (HMAC-SHA3-256 + HKDF) |
 | Ed25519 | RFC 8032 | 32B pub / 64B sec / 64B sig | 128-bit classical | `src/c/ama_ed25519.c` |
 | ML-DSA-65 | FIPS 204 | 1952B pub / 4032B sec / 3309B sig | 192-bit quantum | `src/c/ama_dilithium.c` |
 | ML-KEM-1024 | FIPS 203 | 1568B pub / 3168B sec / 1568B ct | 256-bit classical | `src/c/ama_kyber.c` |
