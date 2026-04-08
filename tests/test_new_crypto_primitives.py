@@ -11,28 +11,26 @@ Tests for new cryptographic primitives:
 
 import ctypes
 import os
-import sys
-from pathlib import Path
 
 import pytest
 
 # Determine if the native C library is available
 try:
     from ama_cryptography.pqc_backends import (
-        _native_lib,
         FALCON_AVAILABLE,
-        FROST_AVAILABLE,
-        SPAKE2_AVAILABLE,
         FALCON_PUBLIC_KEY_BYTES,
         FALCON_SECRET_KEY_BYTES,
         FALCON_SIGNATURE_MAX_BYTES,
-        FROST_SHARE_BYTES,
-        FROST_NONCE_BYTES,
+        FROST_AVAILABLE,
         FROST_COMMITMENT_BYTES,
+        FROST_NONCE_BYTES,
+        FROST_SHARE_BYTES,
         FROST_SIG_SHARE_BYTES,
-        SPAKE2_MSG_BYTES,
-        SPAKE2_KEY_BYTES,
+        SPAKE2_AVAILABLE,
         SPAKE2_CONFIRM_BYTES,
+        SPAKE2_KEY_BYTES,
+        SPAKE2_MSG_BYTES,
+        _native_lib,
     )
     NATIVE_AVAILABLE = _native_lib is not None
 except ImportError:
@@ -435,7 +433,7 @@ class TestSpake2:
 
     def test_confirmation_verification(self) -> None:
         """Confirmation MACs verify correctly."""
-        key_a, key_b, ctx_a, ctx_b, confirm_a, confirm_b = (
+        _key_a, _key_b, ctx_a, ctx_b, confirm_a, confirm_b = (
             self._run_spake2_handshake(b"test-password")
         )
         try:

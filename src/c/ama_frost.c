@@ -169,7 +169,7 @@ static void scalar_mul(uint8_t *c, const uint8_t *a, const uint8_t *b) {
 /* Generate random scalar in [1, l-1] */
 static void scalar_random(uint8_t *s) {
     do {
-        ama_getrandom(s, 32);
+        ama_randombytes(s, 32);
         s[31] &= 0x0F; /* Ensure < 2^252 */
         scalar_reduce(s);
     } while (s[0] == 0 && s[1] == 0 && s[2] == 0 && s[3] == 0 &&
@@ -578,15 +578,16 @@ AMA_API ama_error_t ama_frost_aggregate(
     if (num_signers < 2)
         return AMA_ERROR_INVALID_PARAM;
 
-    /* Compute group commitment R from all commitments (same as in round2) */
+    /* Compute group commitment R from all commitments + message (same as in round2) */
     uint8_t R[32];
     {
-        size_t buf_len = 32 + (size_t)num_signers * 64;
+        size_t buf_len = 32 + (size_t)num_signers * 64 + message_len;
         uint8_t *buf = (uint8_t *)calloc(buf_len, 1);
         if (!buf) return AMA_ERROR_MEMORY;
 
         memcpy(buf, group_public_key, 32);
         memcpy(buf + 32, commitments, (size_t)num_signers * 64);
+        memcpy(buf + 32 + (size_t)num_signers * 64, message, message_len);
         ama_sha3_256(buf, buf_len, R);
         free(buf);
     }
