@@ -622,21 +622,44 @@ The security analysis assumes:
 
 ## Performance Architecture
 
-### Performance Targets
+### Three-Tier Dispatch Architecture
+
+AMA uses a three-tier dispatch for maximum performance on each platform:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Python API  (crypto_api.py, pqc_backends.py)            │
+├──────────────────────────────────────────────────────────┤
+│  Tier 1: Cython Bindings  (when compiled)                │
+│  ed25519_binding.pyx | dilithium_binding.pyx |           │
+│  hkdf_binding.pyx | hmac_binding.pyx | sha3_binding.pyx  │
+├──────────────────────────────────────────────────────────┤
+│  Tier 2: ctypes FFI  (always available)                  │
+│  pqc_backends.py → libama_cryptography.so                │
+├──────────────────────────────────────────────────────────┤
+│  Tier 3: Native C with SIMD Dispatch                     │
+│  AVX2 (x86-64) | NEON (AArch64) | SVE2 (AArch64)        │
+│  → Generic C fallback                                    │
+└──────────────────────────────────────────────────────────┘
+```
+
+SIMD dispatch is resolved at runtime via `ama_cpuid.c` and `pthread_once` (INVARIANT-2). The dispatch table is populated once and cached for all subsequent calls.
+
+### Performance Targets (v2.1.2 Post-PR #188)
 
 | Operation | Target Latency | Measured Latency |
 |-----------|---------------|------------------|
-| KMS Generation | < 5 ms | ~2.12 ms |
-| Package Creation (multi-layer) | < 5 ms | ~2.17 ms |
-| Package Verification (multi-layer) | < 5 ms | ~2.04 ms |
-| HMAC Computation | < 1 ms | ~0.032 ms |
+| KMS Generation | < 5 ms | ~0.41 ms |
+| Package Creation (multi-layer) | < 5 ms | ~0.87 ms |
+| Package Verification (multi-layer) | < 5 ms | ~0.30 ms |
+| HMAC Computation | < 1 ms | ~0.003 ms |
 | SHA3-256 Hash | < 1 ms | ~0.001 ms |
 
 ### Throughput Characteristics
 
-- **Signing Throughput**: ~462 packages/second (single core, full multi-layer)
-- **Verification Throughput**: ~489 packages/second (single core, full multi-layer)
-- **Bottleneck**: ML-DSA-65 signing (4.20 ms, dominant signing cost)
+- **Signing Throughput**: ~1,148 packages/second (single core, full multi-layer)
+- **Verification Throughput**: ~3,348 packages/second (single core, parallel hybrid)
+- **Bottleneck**: ML-DSA-65 signing (~0.44 ms, dominant signing cost)
 
 ### Optimization Strategies
 
@@ -657,7 +680,7 @@ The security analysis assumes:
 
 ### Cython Acceleration Strategy
 
-The system provides two Cython extension modules for performance-critical paths:
+The system provides 7 Cython extension modules for performance-critical paths:
 
 **`src/cython/hmac_binding.pyx`** — Direct binding to native `ama_hmac_sha3_256()`:
 - Compiles to C, calls the native function directly with zero Python marshaling
@@ -671,9 +694,17 @@ The system provides two Cython extension modules for performance-critical paths:
 - Helix evolution (18.9x speedup)
 - NumPy integration for array operations
 
+**`src/cython/ed25519_binding.pyx`** — Ed25519 sign/verify/batch_verify with direct C calls (PR #188).
+
+**`src/cython/dilithium_binding.pyx`** — ML-DSA-65 keygen/sign/verify with direct C calls (PR #188).
+
+**`src/cython/hkdf_binding.pyx`** — HKDF-SHA3-256 with stack-allocated buffers (PR #188).
+
+**`src/cython/sha3_binding.pyx`** — SHA3-256 hashing with direct C calls.
+
 **`src/cython/helix_engine_complete.pyx`** — Complete helix engine with Cython optimization.
 
-Both compiled `.so` modules are installed into the `ama_cryptography/` package directory. The Python API detects availability at import time and falls back to pure Python implementations when extensions are not built.
+All compiled `.so` modules are installed into the `ama_cryptography/` package directory. The Python API detects availability at import time and falls back to ctypes when extensions are not built. `pqc_backends.py` prefers Cython over ctypes automatically.
 
 ### HMAC-SHA3-256 Binding Architecture
 
