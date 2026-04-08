@@ -556,6 +556,47 @@ def batch_verify_ed25519(
     return native_ed25519_batch_verify(entries)
 
 
+import threading
+
+
+class KeypairCache:
+    """Thread-safe cache for signing keypairs within a session.
+
+    Useful for agents (e.g. Mercury Agent) that sign many results with
+    the same identity, avoiding the ~1-2ms keypair generation cost per call.
+
+    Usage::
+
+        cache = KeypairCache(algorithm="hybrid")
+        pk, sk = cache.get_or_generate()
+
+        config = CryptoPackageConfig(signing_keypair=(pk, sk))
+        result = create_crypto_package(content, config)
+
+        # Rotate when identity changes or on schedule
+        cache.rotate()
+    """
+
+    def __init__(self, algorithm: str = "hybrid") -> None:
+        self._algorithm = algorithm
+        self._lock = threading.Lock()
+        self._keypair: Optional[Tuple[bytes, bytes]] = None
+
+    def get_or_generate(self) -> Tuple[bytes, bytes]:
+        """Return cached keypair, generating one if needed."""
+        with self._lock:
+            if self._keypair is None:
+                crypto = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
+                kp = crypto.generate_keypair()
+                self._keypair = (kp.public_key, kp.secret_key)
+            return self._keypair
+
+    def rotate(self) -> None:
+        """Discard cached keypair; next call to get_or_generate() creates a new one."""
+        with self._lock:
+            self._keypair = None
+
+
 class KyberProvider(KEMProvider):
     """
     Kyber-1024 (ML-KEM) provider - Real quantum-resistant implementation.
@@ -1800,6 +1841,16 @@ class CryptoPackageConfig:
     num_derived_keys: int = 3
     tsa_url: Optional[str] = None
     tsa_mode: str = "online"
+    signing_keypair: Optional[Tuple[bytes, bytes]] = None
+    """Pre-generated signing keypair (public_key, secret_key) to reuse.
+
+    When provided, ``create_crypto_package()`` skips keypair generation and
+    uses the supplied keys for the primary signature.  This is useful for
+    agents (e.g. Mercury Agent) that sign many results with the same identity.
+
+    The keypair is validated for correct sizes and non-zero content.
+    When ``None`` (default), a fresh keypair is generated per call.
+    """
 
 
 @dataclass
@@ -2087,7 +2138,22 @@ def create_crypto_package(
 
     # Generate primary signature (with 3R timing instrumentation)
     primary_crypto = AmaCryptography(algorithm=config.signature_algorithm)
-    primary_keypair = primary_crypto.generate_keypair()
+    if config.signing_keypair is not None:
+        _pk, _sk = config.signing_keypair
+        if not isinstance(_pk, bytes) or not isinstance(_sk, bytes):
+            raise TypeError("signing_keypair must be a tuple of (bytes, bytes)")
+        if len(_pk) == 0 or len(_sk) == 0:
+            raise ValueError("signing_keypair keys must be non-empty")
+        if _pk == b"\x00" * len(_pk) or _sk == b"\x00" * len(_sk):
+            raise ValueError("signing_keypair keys must not be all-zero")
+        primary_keypair = KeyPair(
+            public_key=_pk,
+            secret_key=_sk,
+            algorithm=config.signature_algorithm,
+            metadata={"source": "pre-generated"},
+        )
+    else:
+        primary_keypair = primary_crypto.generate_keypair()
     _t0 = time.perf_counter_ns()
     primary_signature = primary_crypto.sign(content, primary_keypair.secret_key)
     _sign_ns = time.perf_counter_ns() - _t0
