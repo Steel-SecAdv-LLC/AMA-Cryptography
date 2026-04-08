@@ -247,7 +247,7 @@ static int16_t sample_gaussian(void) {
     uint8_t rbuf[4];
 
     for (;;) {
-        ama_getrandom(rbuf, 4);
+        ama_randombytes(rbuf, 4);
         /* Map to range [-6*sigma, 6*sigma] = [-990, 990] */
         uint16_t raw = ((uint16_t)rbuf[0] | ((uint16_t)rbuf[1] << 8));
         z = (int16_t)(raw % 1981) - 990;
@@ -291,7 +291,7 @@ static ama_error_t falcon_gen_fg(int16_t *f, int16_t *g) {
     /* Generate short polynomials f, g with coefficients in {-1, 0, 1}.
      * Coefficients drawn from a discrete Gaussian with small sigma. */
     uint8_t rbuf[FALCON_N * 2];
-    ama_getrandom(rbuf, sizeof(rbuf));
+    ama_randombytes(rbuf, sizeof(rbuf));
 
     for (int i = 0; i < FALCON_N; i++) {
         /* Map random byte to {-1, 0, 0, 0, 0, 0, 0, 1} distribution
@@ -565,7 +565,7 @@ AMA_API ama_error_t ama_falcon512_sign(
     if (rc != AMA_SUCCESS) return rc;
 
     /* Generate random nonce */
-    ama_getrandom(nonce, FALCON_NONCE_LEN);
+    ama_randombytes(nonce, FALCON_NONCE_LEN);
 
     /* Hash message to polynomial c in Z_q^n */
     hash_to_point(c, nonce, message, message_len);
