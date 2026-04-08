@@ -2041,8 +2041,8 @@ def _probe_cython_hkdf() -> "Any":
     """Detect Cython HKDF binding at module load time."""
     try:
         from ama_cryptography.hkdf_binding import (
-            cy_hkdf,
-        )  # type: ignore[import-not-found]  # Cython extension; compiled at install time (PQC-007)
+            cy_hkdf,  # type: ignore[import-not-found]  # PQC-007
+        )
 
         return cy_hkdf
     except (ImportError, AttributeError):
