@@ -11,6 +11,7 @@ Tests for new cryptographic primitives:
 
 import ctypes
 import os
+from typing import Any
 
 import pytest
 
@@ -332,7 +333,7 @@ class TestSpake2:
         password: bytes,
         id_a: bytes = b"client",
         id_b: bytes = b"server",
-    ) -> tuple:
+    ) -> "tuple[Any, Any, Any, Any, Any, Any]":
         """Run a complete SPAKE2 handshake, return (key_a, key_b)."""
         # Create client and server contexts
         ctx_a = _native_lib.ama_spake2_new()
