@@ -575,9 +575,7 @@ class KeypairCache:
         cache.rotate()
     """
 
-    def __init__(
-        self, algorithm: AlgorithmType = AlgorithmType.HYBRID_SIG
-    ) -> None:
+    def __init__(self, algorithm: AlgorithmType = AlgorithmType.HYBRID_SIG) -> None:
         self._algorithm = algorithm
         self._lock = threading.Lock()
         self._keypair: Optional[Tuple[bytes, bytes]] = None
