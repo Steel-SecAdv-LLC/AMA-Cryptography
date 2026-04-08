@@ -191,10 +191,10 @@ class TestX25519:
         assert shared == expected_shared
 
     def test_rfc7748_basepoint(self) -> None:
-        """RFC 7748 Section 6.1 — scalar mult with known scalar and basepoint."""
+        """RFC 7748 Section 6.1 — scalar mult with known scalar and u-coordinate."""
         from ama_cryptography.pqc_backends import native_x25519_key_exchange
 
-        # Scalar = 1 iteration: X25519(scalar, 9)
+        # RFC 7748 Section 6.1, first iteration input pair
         scalar = bytes.fromhex(
             "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4"
         )

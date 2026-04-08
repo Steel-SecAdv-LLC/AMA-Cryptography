@@ -30,6 +30,7 @@ import os
 import pathlib
 import secrets
 import sys
+import threading
 import time
 import warnings
 from abc import ABC, abstractmethod
@@ -556,9 +557,6 @@ def batch_verify_ed25519(
     return native_ed25519_batch_verify(entries)
 
 
-import threading
-
-
 class KeypairCache:
     """Thread-safe cache for signing keypairs within a session.
 
@@ -567,7 +565,7 @@ class KeypairCache:
 
     Usage::
 
-        cache = KeypairCache(algorithm="hybrid")
+        cache = KeypairCache()  # default: HYBRID_SIG
         pk, sk = cache.get_or_generate()
 
         config = CryptoPackageConfig(signing_keypair=(pk, sk))
@@ -577,7 +575,9 @@ class KeypairCache:
         cache.rotate()
     """
 
-    def __init__(self, algorithm: str = "hybrid") -> None:
+    def __init__(
+        self, algorithm: AlgorithmType = AlgorithmType.HYBRID_SIG
+    ) -> None:
         self._algorithm = algorithm
         self._lock = threading.Lock()
         self._keypair: Optional[Tuple[bytes, bytes]] = None
@@ -586,7 +586,7 @@ class KeypairCache:
         """Return cached keypair, generating one if needed."""
         with self._lock:
             if self._keypair is None:
-                crypto = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
+                crypto = AmaCryptography(algorithm=self._algorithm)
                 kp = crypto.generate_keypair()
                 self._keypair = (kp.public_key, kp.secret_key)
             return self._keypair
@@ -1848,7 +1848,10 @@ class CryptoPackageConfig:
     uses the supplied keys for the primary signature.  This is useful for
     agents (e.g. Mercury Agent) that sign many results with the same identity.
 
-    The keypair is validated for correct sizes and non-zero content.
+    The supplied keys are checked to ensure they are non-empty and not
+    composed entirely of zero bytes.  No algorithm-specific key length
+    validation is performed at this layer; invalid keys will surface as
+    errors from the underlying signing call.
     When ``None`` (default), a fresh keypair is generated per call.
     """
 
@@ -2139,6 +2142,11 @@ def create_crypto_package(
     # Generate primary signature (with 3R timing instrumentation)
     primary_crypto = AmaCryptography(algorithm=config.signature_algorithm)
     if config.signing_keypair is not None:
+        if (
+            not isinstance(config.signing_keypair, (tuple, list))
+            or len(config.signing_keypair) != 2
+        ):
+            raise TypeError("signing_keypair must be a (bytes, bytes) tuple of length 2")
         _pk, _sk = config.signing_keypair
         if not isinstance(_pk, bytes) or not isinstance(_sk, bytes):
             raise TypeError("signing_keypair must be a tuple of (bytes, bytes)")
