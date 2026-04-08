@@ -207,21 +207,28 @@ static ama_error_t hash_to_point(uint16_t *c, const uint8_t *nonce,
     const uint8_t *message, size_t message_len)
 {
     ama_sha3_ctx ctx;
-    ama_shake256_inc_init(&ctx);
-    ama_shake256_inc_absorb(&ctx, nonce, FALCON_NONCE_LEN);
-    ama_shake256_inc_absorb(&ctx, message, message_len);
-    ama_shake256_inc_finalize(&ctx);
+    ama_error_t err;
+    err = ama_shake256_inc_init(&ctx);
+    if (err != AMA_SUCCESS) { ama_secure_memzero(&ctx, sizeof(ctx)); return err; }
+    err = ama_shake256_inc_absorb(&ctx, nonce, FALCON_NONCE_LEN);
+    if (err != AMA_SUCCESS) { ama_secure_memzero(&ctx, sizeof(ctx)); return err; }
+    err = ama_shake256_inc_absorb(&ctx, message, message_len);
+    if (err != AMA_SUCCESS) { ama_secure_memzero(&ctx, sizeof(ctx)); return err; }
+    err = ama_shake256_inc_finalize(&ctx);
+    if (err != AMA_SUCCESS) { ama_secure_memzero(&ctx, sizeof(ctx)); return err; }
 
     /* Rejection-sample n coefficients in [0, q) from SHAKE256 stream */
     int count = 0;
     while (count < FALCON_N) {
         uint8_t buf[2];
-        ama_shake256_inc_squeeze(&ctx, buf, 2);
+        err = ama_shake256_inc_squeeze(&ctx, buf, 2);
+        if (err != AMA_SUCCESS) { ama_secure_memzero(&ctx, sizeof(ctx)); return err; }
         uint16_t val = (uint16_t)(buf[0]) | ((uint16_t)(buf[1] & 0x3F) << 8);
         if (val < FALCON_Q) {
             c[count++] = val;
         }
     }
+    ama_secure_memzero(&ctx, sizeof(ctx));
     return AMA_SUCCESS;
 }
 
@@ -237,8 +244,9 @@ static ama_error_t hash_to_point(uint16_t *c, const uint8_t *nonce,
 #define FALCON_SIGMA_SIGN  165
 
 /* Sample from discrete Gaussian D_{Z,sigma} using rejection sampling.
- * Returns a signed value. Uses constant-time rejection to avoid
- * timing leaks on the number of rejections. */
+ * Returns a signed value. This sampler is variable-time: runtime depends
+ * on the number of rejections. The variation is driven by internal
+ * randomness, not by secret inputs. */
 static int16_t sample_gaussian(void) {
     /* Simple Box-Muller-like rejection sampling over integers.
      * Sample candidate z uniformly from [-6*sigma, 6*sigma],
@@ -565,7 +573,12 @@ AMA_API ama_error_t ama_falcon512_sign(
     if (rc != AMA_SUCCESS) return rc;
 
     /* Generate random nonce */
-    ama_randombytes(nonce, FALCON_NONCE_LEN);
+    rc = ama_randombytes(nonce, FALCON_NONCE_LEN);
+    if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(f, sizeof(f));
+        ama_secure_memzero(g, sizeof(g));
+        return rc;
+    }
 
     /* Hash message to polynomial c in Z_q^n */
     hash_to_point(c, nonce, message, message_len);

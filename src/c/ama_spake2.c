@@ -693,11 +693,9 @@ static void sp_hash_to_point(ge25519_p3 *out, const uint8_t hash[32]) {
      * This is extremely unlikely from a hash but we handle it. */
     fe25519_carry(u_p1);
     int u_p1_zero = fe25519_iszero(u_p1);
-    {
-        uint64_t mask = (uint64_t)(-(int64_t)u_p1_zero);
-        for (int j = 0; j < 5; j++) {
-            u_p1[j] ^= mask & (u_p1[j] ^ one[j]);
-        }
+    if (u_p1_zero) {
+        sp_ge_p3_0(out);
+        return;
     }
 
     fe25519_invert(u_p1_inv, u_p1);
@@ -732,14 +730,20 @@ static void sp_hash_to_point(ge25519_p3 *out, const uint8_t hash[32]) {
 static void sp_derive_M(ge25519_p3 *M) {
     uint8_t hash[32];
     const uint8_t domain[] = "SPAKE2-Ed25519-M";
-    ama_sha3_256(domain, sizeof(domain) - 1, hash);
+    if (ama_sha3_256(domain, sizeof(domain) - 1, hash) != AMA_SUCCESS) {
+        sp_ge_p3_0(M);
+        return;
+    }
     sp_hash_to_point(M, hash);
 }
 
 static void sp_derive_N(ge25519_p3 *N) {
     uint8_t hash[32];
     const uint8_t domain[] = "SPAKE2-Ed25519-N";
-    ama_sha3_256(domain, sizeof(domain) - 1, hash);
+    if (ama_sha3_256(domain, sizeof(domain) - 1, hash) != AMA_SUCCESS) {
+        sp_ge_p3_0(N);
+        return;
+    }
     sp_hash_to_point(N, hash);
 }
 

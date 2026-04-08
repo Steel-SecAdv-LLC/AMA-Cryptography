@@ -41,10 +41,6 @@ except ImportError:
     FROST_AVAILABLE = False
     SPAKE2_AVAILABLE = False
 
-skip_no_native = pytest.mark.skipif(
-    not NATIVE_AVAILABLE,
-    reason="Native C library not available (build with cmake)",
-)
 skip_no_falcon = pytest.mark.skipif(
     not FALCON_AVAILABLE,
     reason="FALCON-512 not available in native library",
