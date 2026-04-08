@@ -25,21 +25,19 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 BENCH_FILE = ROOT / "benchmark_results.json"
 
-# -- Baseline data (measured 2026-04-06, Linux 5.15.200, native C backend) ----
-# Raw C numbers from benchmark_c_raw; Python numbers from benchmark_suite.py.
+# -- Baseline data (measured 2026-04-08, Linux 6.18.5, native C backend) ------
+# Post-PR #188 performance engineering overhaul.
 CRYPTO_OPS = {
-    "SHA3-256 (C, 32B)": {"ops_sec": 1_256_226, "category": "hash"},
-    "SHA3-256 (C, 1KB)": {"ops_sec": 237_907, "category": "hash"},
-    "SHA3-256 (Py, 1KB)": {"ops_sec": 598_091, "category": "hash"},
-    "HMAC-SHA3-256 (C)": {"ops_sec": 420_887, "category": "mac"},
-    "HKDF-SHA3-256 (C)": {"ops_sec": 99_305, "category": "kdf"},
+    "SHA3-256 (1KB)": {"ops_sec": 1_244_198, "category": "hash"},
+    "HMAC-SHA3-256": {"ops_sec": 295_279, "category": "mac"},
+    "HKDF-SHA3-256": {"ops_sec": 175_859, "category": "kdf"},
 }
 
 SIGNATURE_OPS = {
-    "Ed25519 Sign": {"ops_sec": 8_923, "latency_ms": 0.112},
-    "Ed25519 Verify": {"ops_sec": 4_748, "latency_ms": 0.211},
-    "ML-DSA-65 Sign": {"ops_sec": 2_514, "latency_ms": 0.398},
-    "ML-DSA-65 Verify": {"ops_sec": 4_137, "latency_ms": 0.242},
+    "Ed25519 Sign": {"ops_sec": 11_969, "latency_ms": 0.084},
+    "Ed25519 Verify": {"ops_sec": 8_479, "latency_ms": 0.118},
+    "ML-DSA-65 Sign": {"ops_sec": 2_249, "latency_ms": 0.445},
+    "ML-DSA-65 Verify": {"ops_sec": 7_424, "latency_ms": 0.135},
     "SLH-DSA Sign": {"ops_sec": 1, "latency_ms": 741.0},
     "SLH-DSA Verify": {"ops_sec": 53, "latency_ms": 19.0},
 }
@@ -51,25 +49,25 @@ KEM_OPS = {
 }
 
 C_VS_PYTHON = {
-    "SHA3-256 (1KB)": {"c": 237_907, "python": 598_091, "speedup": 1.0},
-    "HKDF (96B)": {"c": 99_305, "python": 73_245, "speedup": 1.4},
-    "Ed25519 Sign": {"c": 13_100, "python": 8_923, "speedup": 1.5},
-    "ML-DSA-65 Sign": {"c": 1_510, "python": 2_514, "speedup": 1.0},
-    "ML-KEM Encap": {"c": 11_905, "python": 1_408, "speedup": 8.5},
+    "SHA3-256 (1KB)": {"c": 1_244_198, "python": 1_244_198, "speedup": 1.0},
+    "HKDF (3-key)": {"c": 175_859, "python": 175_859, "speedup": 1.0},
+    "Ed25519 Sign": {"c": 11_969, "python": 11_969, "speedup": 1.0},
+    "ML-DSA-65 Sign": {"c": 2_249, "python": 2_249, "speedup": 1.0},
+    "ML-KEM Encap": {"c": 11_905, "python": 11_905, "speedup": 1.0},
 }
 
 SCALING = {
-    1: {"ms": 0.574, "ops_sec": 1_742},
-    10: {"ms": 1.046, "ops_sec": 956},
-    100: {"ms": 5.600, "ops_sec": 179},
-    1000: {"ms": 140.725, "ops_sec": 7},
+    1: {"ms": 0.446, "ops_sec": 2_243},
+    10: {"ms": 0.686, "ops_sec": 1_458},
+    100: {"ms": 2.262, "ops_sec": 442},
+    1000: {"ms": 71.905, "ops_sec": 14},
 }
 
 FOUR_LAYER_BREAKDOWN = [
-    ("SHA3-256 Hash", 0.002),
-    ("HMAC-SHA3-256", 0.009),
-    ("Ed25519 + ML-DSA-65 Sign", 0.510),
-    ("HKDF Derivation", 0.032),
+    ("SHA3-256 Hash", 0.001),
+    ("HMAC-SHA3-256", 0.003),
+    ("Ed25519 + ML-DSA-65 Sign", 0.529),
+    ("HKDF Derivation", 0.006),
 ]
 
 
