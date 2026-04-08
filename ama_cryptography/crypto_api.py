@@ -557,6 +557,12 @@ def batch_verify_ed25519(
     return native_ed25519_batch_verify(entries)
 
 
+def _kc_secure_memzero(buf: bytearray) -> None:
+    """Zero a bytearray in-place (mirrors pqc_backends._secure_memzero)."""
+    for i in range(len(buf)):
+        buf[i] = 0
+
+
 class KeypairCache:
     """Thread-safe cache for signing keypairs within a session.
 
@@ -585,10 +591,9 @@ class KeypairCache:
         self._sk: Optional[bytearray] = None
 
     def _wipe_sk(self) -> None:
-        """Zero secret key material in-place."""
+        """Zero secret key material in-place via _kc_secure_memzero."""
         if self._sk is not None and len(self._sk) > 0:
-            for i in range(len(self._sk)):
-                self._sk[i] = 0
+            _kc_secure_memzero(self._sk)
             self._sk = None
 
     def get_or_generate(self) -> Tuple[bytes, bytes]:
@@ -610,8 +615,10 @@ class KeypairCache:
     def __del__(self) -> None:
         try:
             self._wipe_sk()
-        except Exception:  # noqa: S110  # nosec B110  # __del__ must not raise (FIN-002)
-            pass
+        except Exception as exc:  # — INVARIANT-3: __del__ must not raise (FIN-005)
+            from ama_cryptography._finalizer_health import record_finalizer_error
+
+            record_finalizer_error("KeypairCache", f"_wipe_sk() failed: {exc}")
 
 
 class KyberProvider(KEMProvider):
@@ -2169,7 +2176,11 @@ def create_crypto_package(
             raise TypeError("signing_keypair must be a tuple of (bytes, bytes)")
         if len(_pk) == 0 or len(_sk) == 0:
             raise ValueError("signing_keypair keys must be non-empty")
-        if _pk == b"\x00" * len(_pk) or _sk == b"\x00" * len(_sk):
+        from ama_cryptography.secure_memory import constant_time_compare
+
+        if constant_time_compare(_pk, b"\x00" * len(_pk)) or constant_time_compare(
+            _sk, b"\x00" * len(_sk)
+        ):
             raise ValueError("signing_keypair keys must not be all-zero")
         primary_keypair = KeyPair(
             public_key=_pk,
