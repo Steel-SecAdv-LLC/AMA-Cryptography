@@ -563,6 +563,9 @@ class KeypairCache:
     Useful for agents (e.g. Mercury Agent) that sign many results with
     the same identity, avoiding the ~1-2ms keypair generation cost per call.
 
+    INVARIANT-6: secret key stored as mutable ``bytearray`` and securely
+    zeroed on ``rotate()`` and ``__del__``.
+
     Usage::
 
         cache = KeypairCache()  # default: HYBRID_SIG
@@ -578,21 +581,37 @@ class KeypairCache:
     def __init__(self, algorithm: AlgorithmType = AlgorithmType.HYBRID_SIG) -> None:
         self._algorithm = algorithm
         self._lock = threading.Lock()
-        self._keypair: Optional[Tuple[bytes, bytes]] = None
+        self._pk: Optional[bytes] = None
+        self._sk: Optional[bytearray] = None
+
+    def _wipe_sk(self) -> None:
+        """Zero secret key material in-place."""
+        if self._sk is not None and len(self._sk) > 0:
+            for i in range(len(self._sk)):
+                self._sk[i] = 0
+            self._sk = None
 
     def get_or_generate(self) -> Tuple[bytes, bytes]:
         """Return cached keypair, generating one if needed."""
         with self._lock:
-            if self._keypair is None:
+            if self._pk is None or self._sk is None:
                 crypto = AmaCryptography(algorithm=self._algorithm)
                 kp = crypto.generate_keypair()
-                self._keypair = (kp.public_key, kp.secret_key)
-            return self._keypair
+                self._pk = kp.public_key
+                self._sk = bytearray(kp.secret_key)
+            return (self._pk, bytes(self._sk))
 
     def rotate(self) -> None:
-        """Discard cached keypair; next call to get_or_generate() creates a new one."""
+        """Securely zero and discard cached keypair."""
         with self._lock:
-            self._keypair = None
+            self._wipe_sk()
+            self._pk = None
+
+    def __del__(self) -> None:
+        try:
+            self._wipe_sk()
+        except Exception:  # noqa: S110 — __del__ must not raise (FIN-002)
+            pass
 
 
 class KyberProvider(KEMProvider):
