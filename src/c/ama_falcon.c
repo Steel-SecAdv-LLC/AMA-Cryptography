@@ -452,7 +452,7 @@ static size_t encode_signature(uint8_t *sig, const uint8_t *nonce,
         int byte_idx = (int)pos + (bitpos >> 3);
         int bit_off = bitpos & 7;
 
-        if (byte_idx + 2 >= FALCON_SIG_MAX) break;
+        if (byte_idx + 1 >= FALCON_SIG_MAX) break;
 
         sig[byte_idx] |= (uint8_t)(encoded << bit_off);
         sig[byte_idx + 1] |= (uint8_t)(encoded >> (8 - bit_off));
