@@ -286,8 +286,10 @@ if(AMA_USE_NATIVE_PQC)
         src/c/ama_chacha20poly1305.c
         src/c/ama_falcon.c
         src/c/ama_frost.c
-        src/c/ama_spake2.c
     )
+    if(NOT MSVC)
+        list(APPEND AMA_SOURCES src/c/ama_spake2.c)
+    endif()
     message(STATUS "Native PQC enabled: ML-DSA-65, Kyber-1024, SPHINCS+-256f, FALCON-512, FROST, SPAKE2 (zero OpenSSL dependency)")
 endif()
 
