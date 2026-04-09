@@ -464,7 +464,7 @@ def verify_rfc3161_timestamp(
         try:
             f = os.fdopen(fd, "wb")
         except BaseException:
-            os.close(fd)
+            os.close(fd)  # fdopen failed — fd still open, must close
             raise
         with f:
             f.write(timestamp_token)
@@ -474,7 +474,7 @@ def verify_rfc3161_timestamp(
         try:
             f = os.fdopen(fd, "wb")
         except BaseException:
-            os.close(fd)
+            os.close(fd)  # fdopen failed — fd still open, must close
             raise
         with f:
             f.write(data)
