@@ -2174,9 +2174,7 @@ def create_crypto_package(
             not isinstance(config.signing_keypair, (tuple, list))
             or len(config.signing_keypair) != 2
         ):
-            raise TypeError(
-                "signing_keypair must be a (bytes, bytes) tuple or list of length 2"
-            )
+            raise TypeError("signing_keypair must be a (bytes, bytes) tuple or list of length 2")
         _pk, _sk = config.signing_keypair
         if not isinstance(_pk, bytes) or not isinstance(_sk, bytes):
             raise TypeError("signing_keypair must be a tuple or list of (bytes, bytes)")
