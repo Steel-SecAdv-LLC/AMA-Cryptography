@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 2.3 |
-| Last Updated | 2026-04-06 |
+| Last Updated | 2026-04-08 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -622,21 +622,44 @@ The security analysis assumes:
 
 ## Performance Architecture
 
-### Performance Targets
+### Three-Tier Dispatch Architecture
+
+AMA uses a three-tier dispatch for maximum performance on each platform:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Python API  (crypto_api.py, pqc_backends.py)            │
+├──────────────────────────────────────────────────────────┤
+│  Tier 1: Cython Bindings  (when compiled)                │
+│  ed25519_binding.pyx | dilithium_binding.pyx |           │
+│  hkdf_binding.pyx | hmac_binding.pyx | sha3_binding.pyx  │
+├──────────────────────────────────────────────────────────┤
+│  Tier 2: ctypes FFI  (always available)                  │
+│  pqc_backends.py → libama_cryptography.so                │
+├──────────────────────────────────────────────────────────┤
+│  Tier 3: Native C with SIMD Dispatch                     │
+│  AVX2 (x86-64) | NEON (AArch64) | SVE2 (AArch64)        │
+│  → Generic C fallback                                    │
+└──────────────────────────────────────────────────────────┘
+```
+
+SIMD dispatch is resolved at runtime via `ama_cpuid.c` and `pthread_once` (INVARIANT-2). The dispatch table is populated once and cached for all subsequent calls.
+
+### Performance Targets (v2.1.2 Post-PR #188)
 
 | Operation | Target Latency | Measured Latency |
 |-----------|---------------|------------------|
-| KMS Generation | < 5 ms | ~2.12 ms |
-| Package Creation (multi-layer) | < 5 ms | ~2.17 ms |
-| Package Verification (multi-layer) | < 5 ms | ~2.04 ms |
-| HMAC Computation | < 1 ms | ~0.032 ms |
+| KMS Generation | < 5 ms | ~0.41 ms |
+| Package Creation (multi-layer) | < 5 ms | ~0.87 ms |
+| Package Verification (multi-layer) | < 5 ms | ~0.30 ms |
+| HMAC Computation | < 1 ms | ~0.003 ms |
 | SHA3-256 Hash | < 1 ms | ~0.001 ms |
 
 ### Throughput Characteristics
 
-- **Signing Throughput**: ~462 packages/second (single core, full multi-layer)
-- **Verification Throughput**: ~489 packages/second (single core, full multi-layer)
-- **Bottleneck**: ML-DSA-65 signing (4.20 ms, dominant signing cost)
+- **Signing Throughput**: ~1,148 packages/second (single core, full multi-layer)
+- **Verification Throughput**: ~3,348 packages/second (single core, parallel hybrid)
+- **Bottleneck**: ML-DSA-65 signing (~0.44 ms, dominant signing cost)
 
 ### Optimization Strategies
 
