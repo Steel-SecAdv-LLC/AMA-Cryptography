@@ -209,10 +209,10 @@ AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
                                           const uint8_t q[32]) {
     ge25519 ALIGN(16) P, Q, R;
     /* donna's unpack negates Y; we negate back */
-    if (ge25519_unpack_negative_vartime(&P, p)) return AMA_ERROR_INVALID_PARAM;
+    if (!ge25519_unpack_negative_vartime(&P, p)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(P.x, P.x);
     curve25519_neg(P.t, P.t);
-    if (ge25519_unpack_negative_vartime(&Q, q)) return AMA_ERROR_INVALID_PARAM;
+    if (!ge25519_unpack_negative_vartime(&Q, q)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(Q.x, Q.x);
     curve25519_neg(Q.t, Q.t);
 
