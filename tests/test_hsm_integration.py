@@ -621,14 +621,11 @@ class TestContextManager:
 
     def test_del_calls_close(self) -> None:
         """__del__ triggers close() for cleanup."""
-        import gc
-
         mock = _make_mock_pkcs11()
         hsm = _build_hsm(mock)
         session = mock.PyKCS11Lib.return_value.openSession.return_value
 
-        del hsm  # Trigger GC finalizer instead of explicit __del__() call
-        gc.collect()  # Force collection for non-refcount GC implementations
+        hsm.__del__()  # Direct call — del+gc.collect() unreliable under pytest
         session.logout.assert_called()
 
 
