@@ -452,6 +452,9 @@ class TestTSAIntegration:
         import os
         import shutil
 
+        if not os.environ.get("AMA_RUN_INTEGRATION"):
+            pytest.skip("Live TSA test requires AMA_RUN_INTEGRATION=1")
+
         if not shutil.which("openssl"):
             pytest.skip("openssl not found on PATH")
 

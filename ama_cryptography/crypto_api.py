@@ -620,9 +620,15 @@ class KeypairCache:
     def __del__(self) -> None:
         try:
             self._wipe_sk()
-        except Exception:  # noqa: S110 — INVARIANT-3 (KC-001)
-            # nosec B110 — shutdown safety (KC-001)
-            pass
+        except Exception as exc:  # noqa: S110 — INVARIANT-3 (KC-001)
+            try:
+                from ama_cryptography._finalizer_health import (  # nosec B110 — shutdown safety (KC-001)
+                    record_finalizer_error,
+                )
+
+                record_finalizer_error("KeypairCache", f"wipe failed: {exc}")
+            except Exception:  # noqa: S110 — interpreter shutdown (KC-002)
+                pass  # nosec B110 — shutdown safety (KC-002)
 
 
 class KyberProvider(KEMProvider):

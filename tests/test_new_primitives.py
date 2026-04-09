@@ -30,7 +30,9 @@ from ama_cryptography.pqc_backends import (
 # =============================================================================
 
 
-@pytest.mark.skipif(not _SECP256K1_NATIVE_AVAILABLE, reason="secp256k1 not available")
+@pytest.mark.skipif(
+    not _SECP256K1_NATIVE_AVAILABLE, reason="secp256k1 native backend not available"
+)
 class TestSecp256k1:
     """Tests for secp256k1 compressed public key derivation."""
 
@@ -514,7 +516,9 @@ class TestDeterministicKeygen:
 # =============================================================================
 
 
-@pytest.mark.skipif(not _SECP256K1_NATIVE_AVAILABLE, reason="secp256k1 not available")
+@pytest.mark.skipif(
+    not _SECP256K1_NATIVE_AVAILABLE, reason="secp256k1 native backend not available"
+)
 class TestBIP32NonHardened:
     """Tests for BIP32 non-hardened derivation with native secp256k1."""
 

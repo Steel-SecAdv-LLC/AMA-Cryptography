@@ -1496,3 +1496,14 @@ AMA_API void ama_ed25519_sc_muladd(uint8_t s[32],
                            const uint8_t c[32]) {
     sc25519_muladd(s, a, b, c);
 }
+
+/**
+ * SHA-512 hash (exposed for FROST challenge computation).
+ * Wraps the internal ama_sha512 from internal/ama_sha2.h so that
+ * other TUs (ama_frost.c) don't need to include the header-only
+ * implementation (which pulls in unused static functions).
+ */
+AMA_API void ama_ed25519_sha512(const uint8_t *data, size_t len,
+                                uint8_t out[64]) {
+    sha512(data, len, out);
+}

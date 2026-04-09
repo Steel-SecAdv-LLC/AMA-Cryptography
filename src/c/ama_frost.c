@@ -23,14 +23,14 @@
  */
 
 #include "../include/ama_cryptography.h"
-#include "internal/ama_sha2.h"   /* ama_sha512 — same hash used by ama_ed25519.c */
 #include "ama_platform_rand.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 
-/* SHA-512 alias matching ama_ed25519.c convention */
-#define sha512 ama_sha512
+/* SHA-512 via the wrapper in ama_ed25519.c (avoids pulling in header-only
+ * internal/ama_sha2.h which triggers -Werror=unused-function). */
+#define sha512 ama_ed25519_sha512
 
 /* ======================================================================
  * SCALAR ARITHMETIC (mod l)
@@ -88,16 +88,18 @@ static void scalar_sub(uint8_t c[32], const uint8_t a[32], const uint8_t b[32]) 
  * Uses constant-time OR-accumulate zero check (no data-dependent branch). */
 static void scalar_random(uint8_t s[32]) {
     uint8_t buf[64];
-    uint8_t acc;
-    do {
-        ama_randombytes(buf, 64);
-        ama_ed25519_sc_reduce(buf);
-        memcpy(s, buf, 32);
-        /* Constant-time zero check: OR all bytes */
-        acc = 0;
-        for (int i = 0; i < 32; i++) acc |= s[i];
-    } while (acc == 0);
+    uint8_t acc = 0;
+    uint8_t is_zero_mask;
+
+    ama_randombytes(buf, 64);
+    ama_ed25519_sc_reduce(buf);
+    memcpy(s, buf, 32);
     ama_secure_memzero(buf, 64);
+
+    /* Constant-time zero check + remap: no data-dependent branch */
+    for (int i = 0; i < 32; i++) acc |= s[i];
+    is_zero_mask = (uint8_t)((((uint32_t)acc) - 1U) >> 8);
+    s[0] |= (uint8_t)(is_zero_mask & 1U);  /* map 0 → 1 */
 }
 
 /* Scalar inverse via Fermat's little theorem: s^{l-2} mod l */

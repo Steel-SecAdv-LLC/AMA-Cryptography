@@ -678,6 +678,9 @@ AMA_API ama_error_t ama_ed25519_scalar_mult(uint8_t result[32],
 /** Reduce 64-byte scalar mod l (Ed25519 group order). Result in s[0..31]. */
 AMA_API void ama_ed25519_sc_reduce(uint8_t s[64]);
 
+/** SHA-512 hash (for FROST challenge computation, matching Ed25519 verify). */
+AMA_API void ama_ed25519_sha512(const uint8_t *data, size_t len, uint8_t out[64]);
+
 /** Scalar multiply-add: s = (a + b * c) mod l. All 32-byte LE scalars. */
 AMA_API void ama_ed25519_sc_muladd(uint8_t s[32], const uint8_t a[32],
     const uint8_t b[32], const uint8_t c[32]);
