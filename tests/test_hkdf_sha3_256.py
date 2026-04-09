@@ -31,7 +31,7 @@ try:
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF as HKDF
 
     _PYCA_AVAILABLE = True
-except KeyboardInterrupt:
+except (KeyboardInterrupt, SystemExit, GeneratorExit):
     raise
 except BaseException:  # pyo3_runtime.PanicException inherits BaseException, not Exception
     default_backend = None  # type: ignore[assignment]  # fallback when pyca unavailable (TH-001)

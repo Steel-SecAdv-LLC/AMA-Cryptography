@@ -2646,6 +2646,10 @@ def frost_keygen_trusted_dealer(
     if num_participants > 255:
         raise ValueError("num_participants must be <= 255")
 
+    if secret_key is not None:
+        if not isinstance(secret_key, bytes) or len(secret_key) != 32:
+            raise ValueError("secret_key must be exactly 32 bytes")
+
     gpk_buf = ctypes.create_string_buffer(32)
     shares_buf = ctypes.create_string_buffer(num_participants * FROST_SHARE_BYTES)
     sk_ptr = secret_key if secret_key is not None else None

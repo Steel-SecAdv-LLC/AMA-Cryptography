@@ -1434,9 +1434,9 @@ AMA_API void ama_ed25519_point_from_scalar(uint8_t point[32],
  * @param q       Input:  32-byte compressed point Q
  * @return AMA_SUCCESS on success, error if decompression fails
  */
-ama_error_t ama_ed25519_point_add(uint8_t result[32],
-                                  const uint8_t p[32],
-                                  const uint8_t q[32]) {
+AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
+                                          const uint8_t p[32],
+                                          const uint8_t q[32]) {
     ge25519_p3 P, Q;
     ge25519_p1p1 R_p1p1;
     ge25519_p3 R;
@@ -1459,9 +1459,9 @@ ama_error_t ama_ed25519_point_add(uint8_t result[32],
  * @param point   Input:  32-byte compressed point P
  * @return AMA_SUCCESS on success, error if decompression fails
  */
-ama_error_t ama_ed25519_scalar_mult(uint8_t result[32],
-                                    const uint8_t scalar[32],
-                                    const uint8_t point[32]) {
+AMA_API ama_error_t ama_ed25519_scalar_mult(uint8_t result[32],
+                                            const uint8_t scalar[32],
+                                            const uint8_t point[32]) {
     ge25519_p3 P, R;
 
     if (ge25519_frombytes(&P, point) != 0) return AMA_ERROR_INVALID_PARAM;

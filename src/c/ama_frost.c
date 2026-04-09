@@ -32,10 +32,6 @@
 /* SHA-512 alias matching ama_ed25519.c convention */
 #define sha512 ama_sha512
 
-/* Forward declaration for internal primitive not in public header */
-extern void ama_ed25519_point_from_scalar(uint8_t point[32],
-                                          const uint8_t scalar[32]);
-
 /* ======================================================================
  * SCALAR ARITHMETIC (mod l)
  *
@@ -211,28 +207,26 @@ static ama_error_t compute_binding_factor(uint8_t rho[32],
     const uint8_t *group_public_key)
 {
     /* rho_i = H(i || msg || commitments || group_pk)
-     * H = SHA3-256, internal to FROST (not checked by Ed25519 verifier) */
-    size_t buf_len = 1 + message_len + (size_t)num_signers * 64 + 32;
+     * H = SHA-512 per RFC 9591 FROST(Ed25519, SHA-512) ciphersuite */
+    size_t commit_len = (size_t)num_signers * 64;
+    if (message_len > SIZE_MAX - 1 - commit_len - 32)
+        return AMA_ERROR_INVALID_PARAM;
+    size_t buf_len = 1 + message_len + commit_len + 32;
     uint8_t *buf = (uint8_t *)calloc(buf_len, 1);
     if (!buf) return AMA_ERROR_MEMORY;
 
     size_t off = 0;
     buf[off++] = participant_index;
     memcpy(buf + off, message, message_len); off += message_len;
-    memcpy(buf + off, commitments, (size_t)num_signers * 64); off += (size_t)num_signers * 64;
+    memcpy(buf + off, commitments, commit_len); off += commit_len;
     memcpy(buf + off, group_public_key, 32);
 
-    uint8_t hash[32];
-    ama_error_t rc = ama_sha3_256(buf, buf_len, hash);
+    uint8_t hash[64];
+    sha512(buf, buf_len, hash);
     free(buf);
-    if (rc != AMA_SUCCESS) return rc;
 
-    /* Reduce hash to scalar mod l */
-    uint8_t wide[64];
-    memcpy(wide, hash, 32);
-    memset(wide + 32, 0, 32);
-    ama_ed25519_sc_reduce(wide);
-    memcpy(rho, wide, 32);
+    ama_ed25519_sc_reduce(hash);
+    memcpy(rho, hash, 32);
 
     return AMA_SUCCESS;
 }
@@ -288,7 +282,9 @@ static ama_error_t compute_challenge(uint8_t c[32],
     const uint8_t R[32], const uint8_t group_pk[32],
     const uint8_t *message, size_t message_len)
 {
-    size_t buf_len = 32 + 32 + message_len;
+    if (message_len > SIZE_MAX - 64)
+        return AMA_ERROR_INVALID_PARAM;
+    size_t buf_len = 64 + message_len;
     uint8_t *buf = (uint8_t *)calloc(buf_len, 1);
     if (!buf) return AMA_ERROR_MEMORY;
 
@@ -347,11 +343,17 @@ AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
     uint8_t group_secret[32];
     if (secret_key) {
         uint8_t wide[64];
+        uint8_t nonzero = 0;
         memcpy(wide, secret_key, 32);
         memset(wide + 32, 0, 32);
         ama_ed25519_sc_reduce(wide);
         memcpy(group_secret, wide, 32);
         ama_secure_memzero(wide, 64);
+        for (int i = 0; i < 32; i++) nonzero |= group_secret[i];
+        if (nonzero == 0) {
+            ama_secure_memzero(group_secret, 32);
+            return AMA_ERROR_INVALID_PARAM;  /* zero scalar = identity pk */
+        }
     } else {
         scalar_random(group_secret);
     }

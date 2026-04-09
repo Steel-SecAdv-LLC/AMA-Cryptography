@@ -47,7 +47,7 @@ def _pyca_available() -> bool:
         from cryptography.hazmat.primitives.asymmetric import ed25519
 
         _ = ed25519  # import probe for availability check
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, SystemExit, GeneratorExit):
         raise
     except BaseException:  # pyo3_runtime.PanicException inherits BaseException, not Exception
         return False

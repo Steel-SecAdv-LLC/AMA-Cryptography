@@ -160,10 +160,16 @@ class TestFROSTSigning:
         assert native_ed25519_verify(sig, msg, gpk) is True
 
     def test_different_messages_different_sigs(self) -> None:
-        """Different messages produce different signatures."""
-        _gpk1, sig1 = _full_frost_sign(2, 3, b"message A")
-        _gpk2, sig2 = _full_frost_sign(2, 3, b"message B")
-        assert sig1 != sig2
+        """A signature is message-dependent under a fixed group public key."""
+        from ama_cryptography.pqc_backends import native_ed25519_verify
+
+        msg_a = b"message A"
+        msg_b = b"message B"
+
+        gpk, sig = _full_frost_sign(2, 3, msg_a)
+
+        assert native_ed25519_verify(sig, msg_a, gpk) is True
+        assert native_ed25519_verify(sig, msg_b, gpk) is False
 
     def test_empty_message(self) -> None:
         """FROST works with empty message."""

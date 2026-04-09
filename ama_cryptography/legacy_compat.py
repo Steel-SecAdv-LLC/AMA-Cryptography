@@ -462,20 +462,22 @@ def verify_rfc3161_timestamp(
         tsr_path = os.path.join(tmp_dir, "timestamp.tsr")
         fd = os.open(tsr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(timestamp_token)
+            f = os.fdopen(fd, "wb")
         except BaseException:
-            os.close(fd)
+            os.close(fd)  # fdopen failed — fd still open, must close
             raise
+        with f:
+            f.write(timestamp_token)
 
         data_path = os.path.join(tmp_dir, "data.dat")
         fd = os.open(data_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(data)
+            f = os.fdopen(fd, "wb")
         except BaseException:
-            os.close(fd)
+            os.close(fd)  # fdopen failed — fd still open, must close
             raise
+        with f:
+            f.write(data)
 
         cmd_verify = [
             "openssl",
