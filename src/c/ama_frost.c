@@ -320,7 +320,7 @@ static int validate_signer_indices(const uint8_t *signer_indices,
     int found_self = 0;
     for (int i = 0; i < num_signers; i++) {
         uint8_t idx = signer_indices[i];
-        if (idx == 0 || idx > AMA_FROST_MAX_PARTICIPANTS) return 0;
+        if (idx == 0) return 0;  /* indices are 1-based */
         if (seen[idx]) return 0;  /* duplicate */
         seen[idx] = 1;
         if (idx == participant_index) found_self = 1;
