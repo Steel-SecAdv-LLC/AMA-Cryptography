@@ -262,7 +262,6 @@ set(AMA_SOURCES
     src/c/ama_sha3.c
     src/c/ama_hkdf.c
     src/c/ama_ed25519.c
-    src/c/ama_frost.c
     src/c/ama_aes_gcm.c
     src/c/ama_cpuid.c
     src/c/ama_secure_memory.c
@@ -282,6 +281,7 @@ if(AMA_USE_NATIVE_PQC)
         src/c/ama_dilithium.c
         src/c/ama_sphincs.c
         src/c/ama_secp256k1.c
+        src/c/ama_frost.c
         src/c/ama_x25519.c
         src/c/ama_argon2.c
         src/c/ama_chacha20poly1305.c

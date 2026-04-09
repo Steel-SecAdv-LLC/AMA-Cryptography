@@ -658,21 +658,28 @@ AMA_API ama_error_t ama_ed25519_batch_verify(
  * ---------------------------------------------------------------------------- */
 
 /** Raw scalar-basepoint multiply: point = scalar * G (no hash/clamp). */
-void ama_ed25519_point_from_scalar(uint8_t point[32], const uint8_t scalar[32]);
+AMA_API void ama_ed25519_point_from_scalar(uint8_t point[32], const uint8_t scalar[32]);
 
 /** Point addition: result = P + Q (compressed Ed25519 points). */
 AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
     const uint8_t p[32], const uint8_t q[32]);
 
-/** Scalar-point multiplication: result = scalar * P. */
+/**
+ * Scalar-point multiplication: result = scalar * P.
+ *
+ * SECURITY NOTE: The underlying ge25519_scalarmult is NOT constant-time.
+ * Only safe when the scalar is PUBLIC (e.g., FROST binding factors).
+ * Do NOT use with secret scalars — use ama_ed25519_point_from_scalar
+ * for secret-scalar × basepoint operations.
+ */
 AMA_API ama_error_t ama_ed25519_scalar_mult(uint8_t result[32],
     const uint8_t scalar[32], const uint8_t point[32]);
 
 /** Reduce 64-byte scalar mod l (Ed25519 group order). Result in s[0..31]. */
-void ama_ed25519_sc_reduce(uint8_t s[64]);
+AMA_API void ama_ed25519_sc_reduce(uint8_t s[64]);
 
-/** Scalar multiply-add: s = (a * b + c) mod l. All 32-byte LE scalars. */
-void ama_ed25519_sc_muladd(uint8_t s[32], const uint8_t a[32],
+/** Scalar multiply-add: s = (a + b * c) mod l. All 32-byte LE scalars. */
+AMA_API void ama_ed25519_sc_muladd(uint8_t s[32], const uint8_t a[32],
     const uint8_t b[32], const uint8_t c[32]);
 
 /* ============================================================================

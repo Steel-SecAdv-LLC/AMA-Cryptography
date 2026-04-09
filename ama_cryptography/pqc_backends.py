@@ -2720,6 +2720,18 @@ def frost_round2_sign(
     """
     if not _FROST_AVAILABLE or _native_lib is None:
         raise RuntimeError("FROST native library not available")
+    if len(participant_share) != FROST_SHARE_BYTES:
+        raise ValueError(f"participant_share must be {FROST_SHARE_BYTES} bytes")
+    if not (1 <= participant_index <= 255):
+        raise ValueError("participant_index must be in [1, 255]")
+    if len(nonce_pair) != FROST_NONCE_BYTES:
+        raise ValueError(f"nonce_pair must be {FROST_NONCE_BYTES} bytes")
+    if len(commitments) != num_signers * FROST_COMMITMENT_BYTES:
+        raise ValueError(f"commitments must be {num_signers * FROST_COMMITMENT_BYTES} bytes")
+    if len(signer_indices) != num_signers:
+        raise ValueError(f"signer_indices must be {num_signers} bytes")
+    if len(group_public_key) != 32:
+        raise ValueError("group_public_key must be 32 bytes")
 
     sig_share_buf = ctypes.create_string_buffer(FROST_SIG_SHARE_BYTES)
 
@@ -2764,6 +2776,14 @@ def frost_aggregate(
     """
     if not _FROST_AVAILABLE or _native_lib is None:
         raise RuntimeError("FROST native library not available")
+    if len(sig_shares) != num_signers * FROST_SIG_SHARE_BYTES:
+        raise ValueError(f"sig_shares must be {num_signers * FROST_SIG_SHARE_BYTES} bytes")
+    if len(commitments) != num_signers * FROST_COMMITMENT_BYTES:
+        raise ValueError(f"commitments must be {num_signers * FROST_COMMITMENT_BYTES} bytes")
+    if len(signer_indices) != num_signers:
+        raise ValueError(f"signer_indices must be {num_signers} bytes")
+    if len(group_public_key) != 32:
+        raise ValueError("group_public_key must be 32 bytes")
 
     sig_buf = ctypes.create_string_buffer(64)
 

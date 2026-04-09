@@ -41,6 +41,7 @@ FIPS or SP publications. They are included for completeness.
 | Argon2id | RFC 9106 | Configurable: t_cost, m_cost, parallelism, tag length | Memory-hard KDF; not a NIST publication |
 | HKDF (with SHA3-256) | RFC 5869 | Extract-then-Expand with HMAC-SHA3-256, max output 8160 B | KDF construction; not a NIST publication. Uses SHA3-256 as the underlying hash |
 | secp256k1 | SEC 2 v2 / BIP-32 | 256-bit prime field, compressed SEC1 public keys (33 B) | Certicom/Bitcoin curve; not a NIST publication. Used for BIP-32 HD key derivation |
+| FROST(Ed25519, SHA-512) | RFC 9591 | t-of-n threshold Ed25519 signatures, Shamir secret sharing, 2-round signing | IETF threshold signature standard; [https://www.rfc-editor.org/rfc/rfc9591](https://www.rfc-editor.org/rfc/rfc9591) |
 
 ---
 

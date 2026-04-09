@@ -1419,8 +1419,8 @@ ama_error_t ama_ed25519_batch_verify(
  * @param point   Output: 32-byte compressed Ed25519 point
  * @param scalar  Input:  32-byte little-endian scalar
  */
-void ama_ed25519_point_from_scalar(uint8_t point[32],
-                                   const uint8_t scalar[32]) {
+AMA_API void ama_ed25519_point_from_scalar(uint8_t point[32],
+                                          const uint8_t scalar[32]) {
     ge25519_p3 R;
     ge25519_scalarmult_base(&R, scalar);
     ge25519_p3_tobytes(point, &R);
@@ -1477,12 +1477,12 @@ ama_error_t ama_ed25519_scalar_mult(uint8_t result[32],
  *
  * @param s  In/out: 64-byte buffer, reduced result in s[0..31]
  */
-void ama_ed25519_sc_reduce(uint8_t s[64]) {
+AMA_API void ama_ed25519_sc_reduce(uint8_t s[64]) {
     sc25519_reduce(s);
 }
 
 /**
- * Scalar multiply-add: s = (a * b + c) mod l.
+ * Scalar multiply-add: s = (a + b * c) mod l.
  * All inputs/output are 32-byte little-endian scalars.
  *
  * @param s  Output: 32-byte scalar
@@ -1490,7 +1490,7 @@ void ama_ed25519_sc_reduce(uint8_t s[64]) {
  * @param b  Input:  32-byte scalar
  * @param c  Input:  32-byte scalar
  */
-void ama_ed25519_sc_muladd(uint8_t s[32],
+AMA_API void ama_ed25519_sc_muladd(uint8_t s[32],
                            const uint8_t a[32],
                            const uint8_t b[32],
                            const uint8_t c[32]) {

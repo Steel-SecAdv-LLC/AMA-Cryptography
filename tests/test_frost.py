@@ -12,7 +12,7 @@ proper Ed25519 scalar and point arithmetic from ama_ed25519.c.
 import pytest
 
 from ama_cryptography.pqc_backends import (
-    _FROST_AVAILABLE,
+    FROST_AVAILABLE,
     FROST_SHARE_BYTES,
     FROST_NONCE_BYTES,
     FROST_COMMITMENT_BYTES,
@@ -20,7 +20,7 @@ from ama_cryptography.pqc_backends import (
 )
 
 pytestmark = pytest.mark.skipif(
-    not _FROST_AVAILABLE,
+    not FROST_AVAILABLE,
     reason="FROST native library not available",
 )
 
@@ -136,17 +136,26 @@ class TestFROSTSigning:
     """Test the full FROST signing protocol."""
 
     def test_2_of_3_basic(self) -> None:
-        """2-of-3 FROST produces a 64-byte signature."""
-        gpk, sig = _full_frost_sign(2, 3, b"hello FROST")
+        """2-of-3 FROST produces a valid Ed25519 signature."""
+        from ama_cryptography.pqc_backends import native_ed25519_verify
+
+        msg = b"hello FROST"
+        gpk, sig = _full_frost_sign(2, 3, msg)
         assert len(sig) == 64
         # R and z components should be non-zero
         assert sig[:32] != b"\x00" * 32
         assert sig[32:] != b"\x00" * 32
+        # CRITICAL: verify with standard Ed25519
+        assert native_ed25519_verify(sig, msg, gpk) is True
 
     def test_3_of_5_basic(self) -> None:
-        """3-of-5 FROST produces a valid signature."""
-        gpk, sig = _full_frost_sign(3, 5, b"threshold signatures")
+        """3-of-5 FROST produces a valid Ed25519 signature."""
+        from ama_cryptography.pqc_backends import native_ed25519_verify
+
+        msg = b"threshold signatures"
+        gpk, sig = _full_frost_sign(3, 5, msg)
         assert len(sig) == 64
+        assert native_ed25519_verify(sig, msg, gpk) is True
 
     def test_different_messages_different_sigs(self) -> None:
         """Different messages produce different signatures."""
