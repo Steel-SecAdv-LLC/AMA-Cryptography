@@ -131,12 +131,16 @@ def get_extension_modules():
         elif sys.platform == "darwin":
             rpath = ["@loader_path/../build/lib", "@loader_path/../../build/lib"]
 
+        # Library search dirs: MSVC outputs DLLs to build/ root or build/Release,
+        # while Unix/GCC outputs to build/lib. Include all possible locations.
+        cython_lib_dirs = ["build/lib", "build", "build/Release", "build/lib/Release"]
+
         # Cython HMAC-SHA3-256 binding (calls ama_hmac_sha3_256 in libama_cryptography)
         hmac_ext = Extension(
             name="ama_cryptography.hmac_binding",
             sources=["src/cython/hmac_binding.pyx"],
             include_dirs=["include"],
-            library_dirs=["build/lib"],
+            library_dirs=cython_lib_dirs,
             libraries=["ama_cryptography"],
             runtime_library_dirs=rpath,
             extra_compile_args=compiler_flags,
@@ -150,7 +154,7 @@ def get_extension_modules():
             name="ama_cryptography.sha3_binding",
             sources=["src/cython/sha3_binding.pyx"],
             include_dirs=["include"],
-            library_dirs=["build/lib"],
+            library_dirs=cython_lib_dirs,
             libraries=["ama_cryptography"],
             runtime_library_dirs=rpath,
             extra_compile_args=compiler_flags,
@@ -164,7 +168,7 @@ def get_extension_modules():
             name="ama_cryptography.ed25519_binding",
             sources=["src/cython/ed25519_binding.pyx"],
             include_dirs=["include"],
-            library_dirs=["build/lib"],
+            library_dirs=cython_lib_dirs,
             libraries=["ama_cryptography"],
             runtime_library_dirs=rpath,
             extra_compile_args=compiler_flags,
@@ -178,7 +182,7 @@ def get_extension_modules():
             name="ama_cryptography.dilithium_binding",
             sources=["src/cython/dilithium_binding.pyx"],
             include_dirs=["include"],
-            library_dirs=["build/lib"],
+            library_dirs=cython_lib_dirs,
             libraries=["ama_cryptography"],
             runtime_library_dirs=rpath,
             extra_compile_args=compiler_flags,
@@ -192,7 +196,7 @@ def get_extension_modules():
             name="ama_cryptography.hkdf_binding",
             sources=["src/cython/hkdf_binding.pyx"],
             include_dirs=["include"],
-            library_dirs=["build/lib"],
+            library_dirs=cython_lib_dirs,
             libraries=["ama_cryptography"],
             runtime_library_dirs=rpath,
             extra_compile_args=compiler_flags,
