@@ -2174,10 +2174,12 @@ def create_crypto_package(
             not isinstance(config.signing_keypair, (tuple, list))
             or len(config.signing_keypair) != 2
         ):
-            raise TypeError("signing_keypair must be a (bytes, bytes) tuple of length 2")
+            raise TypeError(
+                "signing_keypair must be a (bytes, bytes) tuple or list of length 2"
+            )
         _pk, _sk = config.signing_keypair
         if not isinstance(_pk, bytes) or not isinstance(_sk, bytes):
-            raise TypeError("signing_keypair must be a tuple of (bytes, bytes)")
+            raise TypeError("signing_keypair must be a tuple or list of (bytes, bytes)")
         if len(_pk) == 0 or len(_sk) == 0:
             raise ValueError("signing_keypair keys must be non-empty")
         from ama_cryptography.secure_memory import constant_time_compare

@@ -817,7 +817,7 @@ class TestSigningKeypairConfig:
                 CryptoPackageConfig(signing_keypair="not a tuple"),  # type: ignore[arg-type]  # deliberate wrong type for test (TC-001)
             )
 
-        with pytest.raises(TypeError, match="signing_keypair must be a tuple of"):
+        with pytest.raises(TypeError, match="signing_keypair must be a tuple or list of"):
             create_crypto_package(
                 b"test",
                 CryptoPackageConfig(signing_keypair=(123, 456)),  # type: ignore[arg-type]  # deliberate wrong type for test (TC-002)
