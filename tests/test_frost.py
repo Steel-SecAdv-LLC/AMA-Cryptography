@@ -186,20 +186,21 @@ class TestFROSTSigning:
 class TestFROSTConsistency:
     """Test FROST signing consistency and correctness properties."""
 
-    def test_same_signers_same_nonces_deterministic(self) -> None:
-        """Verify keygen + signing runs without errors for multiple rounds."""
+    def test_multiple_signing_rounds_succeed(self) -> None:
+        """Verify repeated full signing rounds complete and return valid-length signatures."""
         # Run multiple full signing rounds — no crashes, valid output
         for _ in range(3):
             _gpk, sig = _full_frost_sign(2, 3, b"consistency test")
             assert len(sig) == 64
 
     def test_different_signer_subsets(self) -> None:
-        """Different t-sized subsets of n participants can all sign."""
+        """Different t-sized subsets of n participants can all sign and verify."""
         from ama_cryptography.pqc_backends import (
             frost_aggregate,
             frost_keygen_trusted_dealer,
             frost_round1_commit,
             frost_round2_sign,
+            native_ed25519_verify,
         )
 
         threshold = 2
@@ -247,6 +248,7 @@ class TestFROSTConsistency:
                 gpk,
             )
             assert len(sig) == 64
+            assert native_ed25519_verify(sig, msg, gpk) is True
 
     def test_round1_produces_different_nonces(self) -> None:
         """Each round 1 call produces unique nonces and commitments."""
