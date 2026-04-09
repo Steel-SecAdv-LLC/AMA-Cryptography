@@ -203,17 +203,33 @@ class TestFROSTConsistency:
             msg = b"subset signing test"
 
             share_a = frost_round2_sign(
-                msg, shares[s_a], s_a + 1, nonce_a,
-                all_commitments, signer_indices, 2, gpk,
+                msg,
+                shares[s_a],
+                s_a + 1,
+                nonce_a,
+                all_commitments,
+                signer_indices,
+                2,
+                gpk,
             )
             share_b = frost_round2_sign(
-                msg, shares[s_b], s_b + 1, nonce_b,
-                all_commitments, signer_indices, 2, gpk,
+                msg,
+                shares[s_b],
+                s_b + 1,
+                nonce_b,
+                all_commitments,
+                signer_indices,
+                2,
+                gpk,
             )
 
             sig = frost_aggregate(
-                share_a + share_b, all_commitments,
-                signer_indices, 2, msg, gpk,
+                share_a + share_b,
+                all_commitments,
+                signer_indices,
+                2,
+                msg,
+                gpk,
             )
             assert len(sig) == 64
 
