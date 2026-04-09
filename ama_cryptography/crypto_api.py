@@ -559,9 +559,10 @@ def batch_verify_ed25519(
 
 
 def _kc_secure_memzero(buf: bytearray) -> None:
-    """Zero a bytearray in-place (mirrors pqc_backends._secure_memzero)."""
-    for i in range(len(buf)):
-        buf[i] = 0
+    """Zero a bytearray in-place using the project's hardened wipe."""
+    from ama_cryptography.secure_memory import secure_memzero
+
+    secure_memzero(buf)
 
 
 class KeypairCache:
