@@ -2661,9 +2661,9 @@ def frost_keygen_trusted_dealer(
         raise RuntimeError(f"FROST keygen failed (rc={rc})")
 
     gpk = bytes(gpk_buf)
+    raw = shares_buf.raw
     shares = [
-        bytes(shares_buf[i * FROST_SHARE_BYTES : (i + 1) * FROST_SHARE_BYTES])
-        for i in range(num_participants)
+        raw[i * FROST_SHARE_BYTES : (i + 1) * FROST_SHARE_BYTES] for i in range(num_participants)
     ]
     return gpk, shares
 

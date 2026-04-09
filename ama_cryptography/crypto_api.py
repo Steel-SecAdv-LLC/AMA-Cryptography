@@ -620,8 +620,8 @@ class KeypairCache:
     def __del__(self) -> None:
         try:
             self._wipe_sk()
-        except Exception:  # noqa: S110  # nosec B110  # INVARIANT-3: __del__ must not raise (FIN-005)
-            pass
+        except Exception:  # noqa: S110  # nosec B110
+            pass  # INVARIANT-3: __del__ must not raise (FIN-005)
 
 
 class KyberProvider(KEMProvider):

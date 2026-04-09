@@ -9,13 +9,15 @@ Tests the production-ready FROST implementation using
 proper Ed25519 scalar and point arithmetic from ama_ed25519.c.
 """
 
+from __future__ import annotations
+
 import pytest
 
 from ama_cryptography.pqc_backends import (
     FROST_AVAILABLE,
-    FROST_SHARE_BYTES,
-    FROST_NONCE_BYTES,
     FROST_COMMITMENT_BYTES,
+    FROST_NONCE_BYTES,
+    FROST_SHARE_BYTES,
     FROST_SIG_SHARE_BYTES,
 )
 
@@ -25,16 +27,16 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _full_frost_sign(threshold: int, num_participants: int, message: bytes) -> tuple:
+def _full_frost_sign(threshold: int, num_participants: int, message: bytes) -> tuple[bytes, bytes]:
     """Helper: Run full FROST keygen + 2-round signing protocol.
 
     Returns (group_public_key, signature).
     """
     from ama_cryptography.pqc_backends import (
+        frost_aggregate,
         frost_keygen_trusted_dealer,
         frost_round1_commit,
         frost_round2_sign,
-        frost_aggregate,
     )
 
     # Keygen
@@ -159,19 +161,19 @@ class TestFROSTSigning:
 
     def test_different_messages_different_sigs(self) -> None:
         """Different messages produce different signatures."""
-        gpk1, sig1 = _full_frost_sign(2, 3, b"message A")
-        gpk2, sig2 = _full_frost_sign(2, 3, b"message B")
+        _gpk1, sig1 = _full_frost_sign(2, 3, b"message A")
+        _gpk2, sig2 = _full_frost_sign(2, 3, b"message B")
         assert sig1 != sig2
 
     def test_empty_message(self) -> None:
         """FROST works with empty message."""
-        gpk, sig = _full_frost_sign(2, 3, b"")
+        _gpk, sig = _full_frost_sign(2, 3, b"")
         assert len(sig) == 64
 
     def test_large_message(self) -> None:
         """FROST works with large messages."""
         msg = b"x" * 10000
-        gpk, sig = _full_frost_sign(2, 3, msg)
+        _gpk, sig = _full_frost_sign(2, 3, msg)
         assert len(sig) == 64
 
 
@@ -180,20 +182,18 @@ class TestFROSTConsistency:
 
     def test_same_signers_same_nonces_deterministic(self) -> None:
         """Verify keygen + signing runs without errors for multiple rounds."""
-        from ama_cryptography.pqc_backends import frost_keygen_trusted_dealer
-
         # Run multiple full signing rounds — no crashes, valid output
         for _ in range(3):
-            gpk, sig = _full_frost_sign(2, 3, b"consistency test")
+            _gpk, sig = _full_frost_sign(2, 3, b"consistency test")
             assert len(sig) == 64
 
     def test_different_signer_subsets(self) -> None:
         """Different t-sized subsets of n participants can all sign."""
         from ama_cryptography.pqc_backends import (
+            frost_aggregate,
             frost_keygen_trusted_dealer,
             frost_round1_commit,
             frost_round2_sign,
-            frost_aggregate,
         )
 
         threshold = 2
@@ -262,7 +262,7 @@ class TestFROSTEdgeCases:
 
     def test_min_threshold(self) -> None:
         """Minimum threshold (2-of-2) works."""
-        gpk, sig = _full_frost_sign(2, 2, b"min threshold")
+        _gpk, sig = _full_frost_sign(2, 2, b"min threshold")
         assert len(sig) == 64
 
     def test_round1_invalid_share_length(self) -> None:
