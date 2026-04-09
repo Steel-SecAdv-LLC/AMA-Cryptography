@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, ClassVar, Dict, List, Mapping, Optional, Tuple, Union
 
+from ama_cryptography._finalizer_health import record_finalizer_error as _record_finalizer_error
 from ama_cryptography._self_test import check_operational as _check_operational
 from ama_cryptography_monitor import AmaCryptographyMonitor, create_monitor
 
@@ -621,14 +622,7 @@ class KeypairCache:
         try:
             self._wipe_sk()
         except Exception as exc:  # noqa: S110 — INVARIANT-3 (KC-001)
-            try:
-                from ama_cryptography._finalizer_health import (  # nosec B110 — shutdown safety (KC-001)
-                    record_finalizer_error,
-                )
-
-                record_finalizer_error("KeypairCache", f"wipe failed: {exc}")
-            except Exception:  # noqa: S110 — interpreter shutdown (KC-002)
-                pass  # nosec B110 — shutdown safety (KC-002)
+            _record_finalizer_error("KeypairCache", f"wipe failed: {exc}")
 
 
 class KyberProvider(KEMProvider):
