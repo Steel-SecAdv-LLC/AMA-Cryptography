@@ -228,7 +228,7 @@ AMA_API ama_error_t ama_ed25519_scalar_mult(uint8_t result[32],
                                             const uint8_t point[32]) {
     ge25519 ALIGN(16) P, R;
     bignum256modm s1, s2_zero = {0};
-    if (ge25519_unpack_negative_vartime(&P, point)) return AMA_ERROR_INVALID_PARAM;
+    if (!ge25519_unpack_negative_vartime(&P, point)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(P.x, P.x);
     curve25519_neg(P.t, P.t);
     expand256_modm(s1, scalar, 32);
