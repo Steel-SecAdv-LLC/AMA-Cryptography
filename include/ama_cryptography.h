@@ -729,8 +729,11 @@ AMA_API ama_error_t ama_frost_round1_commit(
  * @param participant_share  64-byte participant share
  * @param participant_index  1-based participant index
  * @param nonce_pair         64-byte nonce pair from round 1
- * @param commitments        num_signers * 64 bytes of commitments
- * @param signer_indices     num_signers participant indices (1-based)
+ * @param commitments        num_signers * 64 bytes of commitments.
+ *                           MUST be ordered to match signer_indices:
+ *                           commitments[i*64..(i+1)*64] is the commitment
+ *                           from participant signer_indices[i].
+ * @param signer_indices     num_signers participant indices (1-based, unique)
  * @param num_signers        Number of signers in this session
  * @param group_public_key   32-byte group public key
  */

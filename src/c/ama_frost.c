@@ -513,6 +513,15 @@ AMA_API ama_error_t ama_frost_aggregate(
         return AMA_ERROR_INVALID_PARAM;
     if (num_signers < 2)
         return AMA_ERROR_INVALID_PARAM;
+    /* Validate signer_indices: unique, non-zero (reuses round2 helper) */
+    {
+        uint8_t seen[256] = {0};
+        for (int i = 0; i < num_signers; i++) {
+            uint8_t idx = signer_indices[i];
+            if (idx == 0 || seen[idx]) return AMA_ERROR_INVALID_PARAM;
+            seen[idx] = 1;
+        }
+    }
 
     uint8_t R[32];
     ama_error_t rc = compute_group_commitment(R, commitments, signer_indices,

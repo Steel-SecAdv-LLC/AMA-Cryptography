@@ -2790,6 +2790,10 @@ def frost_aggregate(
         raise ValueError(f"commitments must be {num_signers * FROST_COMMITMENT_BYTES} bytes")
     if len(signer_indices) != num_signers:
         raise ValueError(f"signer_indices must be {num_signers} bytes")
+    if any(idx == 0 for idx in signer_indices):
+        raise ValueError("signer_indices must contain only 1-based indices in [1, 255]")
+    if len(set(signer_indices)) != num_signers:
+        raise ValueError("signer_indices must contain unique signer indices")
     if len(group_public_key) != 32:
         raise ValueError("group_public_key must be 32 bytes")
 
