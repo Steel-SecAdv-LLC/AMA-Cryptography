@@ -781,6 +781,28 @@ class TestKeypairCache:
         # Note: GC may or may not have run __del__; we verify defensively
         # The key invariant is that rotate() explicitly zeroes, tested above
 
+    def test_concurrent_get_or_generate(self) -> None:
+        """Concurrent calls to get_or_generate() all return the same keypair."""
+        import concurrent.futures
+
+        from ama_cryptography.crypto_api import KeypairCache
+
+        cache = KeypairCache(algorithm=AlgorithmType.ED25519)
+        results: list[tuple[bytes, bytes]] = []
+
+        def _get() -> tuple[bytes, bytes]:
+            return cache.get_or_generate()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(_get) for _ in range(16)]
+            results = [f.result() for f in futures]
+
+        # All threads must see the same cached keypair
+        pks = {r[0] for r in results}
+        sks = {r[1] for r in results}
+        assert len(pks) == 1
+        assert len(sks) == 1
+
 
 class TestSigningKeypairConfig:
     """Test CryptoPackageConfig.signing_keypair in create_crypto_package()."""
@@ -847,4 +869,20 @@ class TestSigningKeypairConfig:
             create_crypto_package(
                 b"test",
                 CryptoPackageConfig(signing_keypair=(b"\x00" * 32, b"\x00" * 64)),
+            )
+
+    def test_signing_keypair_wrong_length_rejected(self) -> None:
+        """Wrong-length public key in signing_keypair raises ValueError."""
+        from ama_cryptography.crypto_api import (
+            CryptoPackageConfig,
+            create_crypto_package,
+        )
+
+        with pytest.raises(ValueError, match="does not match"):
+            create_crypto_package(
+                b"test",
+                CryptoPackageConfig(
+                    signature_algorithm=AlgorithmType.ED25519,
+                    signing_keypair=(b"\x01" * 16, b"\x01" * 32),  # pk should be 32 bytes
+                ),
             )

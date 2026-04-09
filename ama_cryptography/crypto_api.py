@@ -559,9 +559,10 @@ def batch_verify_ed25519(
 
 
 def _kc_secure_memzero(buf: bytearray) -> None:
-    """Zero a bytearray in-place."""
-    for i in range(len(buf)):
-        buf[i] = 0
+    """Zero a bytearray in-place using the library's secure memzero."""
+    from ama_cryptography.secure_memory import secure_memzero
+
+    secure_memzero(buf)
 
 
 class KeypairCache:
@@ -2180,6 +2181,17 @@ def create_crypto_package(
             raise TypeError("signing_keypair must be a tuple or list of (bytes, bytes)")
         if len(_pk) == 0 or len(_sk) == 0:
             raise ValueError("signing_keypair keys must be non-empty")
+        # Validate key lengths match the selected algorithm
+        _expected_pk: dict[AlgorithmType, int] = {
+            AlgorithmType.ED25519: 32,
+            AlgorithmType.HYBRID_SIG: 32,  # classical pk component
+        }
+        _exp = _expected_pk.get(config.signature_algorithm)
+        if _exp is not None and len(_pk) != _exp:
+            raise ValueError(
+                f"signing_keypair public key length {len(_pk)} does not match "
+                f"{config.signature_algorithm.name} (expected {_exp})"
+            )
         from ama_cryptography.secure_memory import constant_time_compare
 
         if constant_time_compare(_pk, b"\x00" * len(_pk)) or constant_time_compare(

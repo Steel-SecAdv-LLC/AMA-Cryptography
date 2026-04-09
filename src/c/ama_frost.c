@@ -148,6 +148,7 @@ static void scalar_inv(uint8_t result[32], const uint8_t s[32]) {
 static void poly_eval(uint8_t *result, const uint8_t coeffs[][32],
     int degree, uint8_t x)
 {
+    if (degree < 0) { memset(result, 0, 32); return; }
     memcpy(result, coeffs[degree], 32);
     uint8_t x_scalar[32];
     memset(x_scalar, 0, 32);
@@ -157,7 +158,9 @@ static void poly_eval(uint8_t *result, const uint8_t coeffs[][32],
         uint8_t tmp[32];
         scalar_mul(tmp, result, x_scalar);
         scalar_add(result, tmp, coeffs[i]);
+        ama_secure_memzero(tmp, 32);
     }
+    ama_secure_memzero(x_scalar, 32);
 }
 
 /* ======================================================================
@@ -210,6 +213,8 @@ static ama_error_t compute_binding_factor(uint8_t rho[32],
 {
     /* rho_i = H(i || msg || commitments || group_pk)
      * H = SHA-512 per RFC 9591 FROST(Ed25519, SHA-512) ciphersuite */
+    if ((message == NULL && message_len > 0) || commitments == NULL || group_public_key == NULL)
+        return AMA_ERROR_INVALID_PARAM;
     size_t commit_len = (size_t)num_signers * 64;
     if (message_len > SIZE_MAX - 1 - commit_len - 32)
         return AMA_ERROR_INVALID_PARAM;
@@ -272,6 +277,9 @@ static ama_error_t compute_group_commitment(uint8_t R[32],
         memcpy(accum, new_accum, 32);
 
         ama_secure_memzero(rho_i, 32);
+        ama_secure_memzero(rho_E, 32);
+        ama_secure_memzero(term, 32);
+        ama_secure_memzero(new_accum, 32);
     }
 
     memcpy(R, accum, 32);
