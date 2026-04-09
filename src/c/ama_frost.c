@@ -399,9 +399,9 @@ AMA_API ama_error_t ama_frost_round1_commit(
     if (!nonce_pair || !commitment || !participant_share)
         return AMA_ERROR_INVALID_PARAM;
 
-    /* participant_share is validated but not used in nonce generation.
-     * Kept in API for forward compatibility with RFC 9591 hedged nonces
-     * where nonce = H(share_secret || random). */
+    /* participant_share is checked for non-NULL but not otherwise used in
+     * nonce generation. Kept in API for forward compatibility with
+     * RFC 9591 hedged nonces where nonce = H(share_secret || random). */
     (void)participant_share;
 
     scalar_random(nonce_pair);
