@@ -796,12 +796,13 @@ class TestSigningKeypairConfig:
         crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
         kp = crypto.generate_keypair()
         config = CryptoPackageConfig(
+            signature_algorithm=AlgorithmType.ED25519,
             signing_keypair=(kp.public_key, kp.secret_key),
         )
         content = b"test content for signing keypair"
         pkg = create_crypto_package(content, config)
         result = verify_crypto_package(content, pkg)
-        assert result.valid is True
+        assert result["all_valid"] is True
 
     def test_signing_keypair_type_validation(self) -> None:
         """Invalid signing_keypair types raise TypeError."""
@@ -813,13 +814,13 @@ class TestSigningKeypairConfig:
         with pytest.raises(TypeError, match=r"signing_keypair must be a.*tuple"):
             create_crypto_package(
                 b"test",
-                CryptoPackageConfig(signing_keypair="not a tuple"),  # type: ignore[arg-type]
+                CryptoPackageConfig(signing_keypair="not a tuple"),  # type: ignore[arg-type]  # deliberate wrong type for test (TC-001)
             )
 
         with pytest.raises(TypeError, match="signing_keypair must be a tuple of"):
             create_crypto_package(
                 b"test",
-                CryptoPackageConfig(signing_keypair=(123, 456)),  # type: ignore[arg-type]
+                CryptoPackageConfig(signing_keypair=(123, 456)),  # type: ignore[arg-type]  # deliberate wrong type for test (TC-002)
             )
 
     def test_signing_keypair_empty_keys_rejected(self) -> None:
