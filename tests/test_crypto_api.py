@@ -748,9 +748,9 @@ class TestKeypairCache:
         from ama_cryptography.crypto_api import KeypairCache
 
         cache = KeypairCache(algorithm=AlgorithmType.ED25519)
-        pk1, sk1 = cache.get_or_generate()
+        pk1, _sk1 = cache.get_or_generate()
         cache.rotate()
-        pk2, sk2 = cache.get_or_generate()
+        pk2, _sk2 = cache.get_or_generate()
         # New keypair after rotation
         assert pk1 != pk2
 
@@ -810,7 +810,7 @@ class TestSigningKeypairConfig:
             create_crypto_package,
         )
 
-        with pytest.raises(TypeError, match="signing_keypair must be a.*tuple"):
+        with pytest.raises(TypeError, match=r"signing_keypair must be a.*tuple"):
             create_crypto_package(
                 b"test",
                 CryptoPackageConfig(signing_keypair="not a tuple"),  # type: ignore[arg-type]
