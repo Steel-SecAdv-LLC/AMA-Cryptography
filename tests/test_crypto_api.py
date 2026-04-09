@@ -826,6 +826,26 @@ class TestSigningKeypairConfig:
         result = verify_crypto_package(content, pkg)
         assert result["all_valid"] is True
 
+    @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
+    def test_signing_keypair_hybrid_sig_creates_valid_package(self) -> None:
+        """Hybrid signature keypair produces a verifiable crypto package."""
+        from ama_cryptography.crypto_api import (
+            CryptoPackageConfig,
+            create_crypto_package,
+            verify_crypto_package,
+        )
+
+        crypto = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
+        kp = crypto.generate_keypair()
+        config = CryptoPackageConfig(
+            signature_algorithm=AlgorithmType.HYBRID_SIG,
+            signing_keypair=(kp.public_key, kp.secret_key),
+        )
+        content = b"test content for hybrid signing keypair"
+        pkg = create_crypto_package(content, config)
+        result = verify_crypto_package(content, pkg)
+        assert result["all_valid"] is True
+
     def test_signing_keypair_type_validation(self) -> None:
         """Invalid signing_keypair types raise TypeError."""
         from ama_cryptography.crypto_api import (
@@ -868,7 +888,10 @@ class TestSigningKeypairConfig:
         with pytest.raises(ValueError, match="all-zero"):
             create_crypto_package(
                 b"test",
-                CryptoPackageConfig(signing_keypair=(b"\x00" * 32, b"\x00" * 64)),
+                CryptoPackageConfig(
+                    signature_algorithm=AlgorithmType.ED25519,
+                    signing_keypair=(b"\x00" * 32, b"\x00" * 32),
+                ),
             )
 
     def test_signing_keypair_wrong_length_rejected(self) -> None:

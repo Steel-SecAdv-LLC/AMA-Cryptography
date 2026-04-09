@@ -2643,6 +2643,8 @@ def frost_keygen_trusted_dealer(
         raise RuntimeError("FROST native library not available")
     if threshold < 2 or num_participants < threshold:
         raise ValueError("Require threshold >= 2 and num_participants >= threshold")
+    if threshold > 255:
+        raise ValueError("threshold must be <= 255")
     if num_participants > 255:
         raise ValueError("num_participants must be <= 255")
 

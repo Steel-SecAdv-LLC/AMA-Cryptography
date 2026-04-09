@@ -1878,9 +1878,10 @@ class CryptoPackageConfig:
     agents (e.g. Mercury Agent) that sign many results with the same identity.
 
     The supplied keys are checked to ensure they are non-empty and not
-    composed entirely of zero bytes.  No algorithm-specific key length
-    validation is performed at this layer; invalid keys will surface as
-    errors from the underlying signing call.
+    composed entirely of zero bytes.  ``create_crypto_package()`` also
+    validates that key lengths match the selected signing algorithm
+    (e.g. 32-byte Ed25519 pk, 1984-byte HYBRID_SIG pk).  Invalid keys
+    are rejected before the signing call.
     When ``None`` (default), a fresh keypair is generated per call.
     """
 
@@ -2056,6 +2057,49 @@ def _acquire_timestamp(
         ) from e
 
 
+def _validate_signing_keypair(
+    keypair: object,
+    algorithm: AlgorithmType,
+) -> Tuple[bytes, bytes]:
+    """Validate a user-supplied signing keypair. Returns (pk, sk)."""
+    if not isinstance(keypair, (tuple, list)) or len(keypair) != 2:
+        raise TypeError("signing_keypair must be a (bytes, bytes) tuple or list of length 2")
+    _pk, _sk = keypair
+    if not isinstance(_pk, bytes) or not isinstance(_sk, bytes):
+        raise TypeError("signing_keypair must be a tuple or list of (bytes, bytes)")
+    if len(_pk) == 0 or len(_sk) == 0:
+        raise ValueError("signing_keypair keys must be non-empty")
+    # Validate key lengths match the selected algorithm.
+    # Hybrid keys are the concatenation of classical + PQC components.
+    _expected_pk: dict[AlgorithmType, int] = {
+        AlgorithmType.ED25519: 32,
+        AlgorithmType.HYBRID_SIG: 32 + 1952,  # Ed25519 pk + ML-DSA-65 pk
+    }
+    _expected_sk: dict[AlgorithmType, int] = {
+        AlgorithmType.ED25519: 32,
+        AlgorithmType.HYBRID_SIG: 32 + 4032,  # Ed25519 sk + ML-DSA-65 sk
+    }
+    _exp_pk = _expected_pk.get(algorithm)
+    if _exp_pk is not None and len(_pk) != _exp_pk:
+        raise ValueError(
+            f"signing_keypair public key length {len(_pk)} does not match "
+            f"{algorithm.name} (expected {_exp_pk})"
+        )
+    _exp_sk = _expected_sk.get(algorithm)
+    if _exp_sk is not None and len(_sk) != _exp_sk:
+        raise ValueError(
+            f"signing_keypair secret key length {len(_sk)} does not match "
+            f"{algorithm.name} (expected {_exp_sk})"
+        )
+    from ama_cryptography.secure_memory import constant_time_compare
+
+    if constant_time_compare(_pk, b"\x00" * len(_pk)) or constant_time_compare(
+        _sk, b"\x00" * len(_sk)
+    ):
+        raise ValueError("signing_keypair keys must not be all-zero")
+    return _pk, _sk
+
+
 def create_crypto_package(
     content: bytes,
     config: Optional[CryptoPackageConfig] = None,
@@ -2171,33 +2215,7 @@ def create_crypto_package(
     # Generate primary signature (with 3R timing instrumentation)
     primary_crypto = AmaCryptography(algorithm=config.signature_algorithm)
     if config.signing_keypair is not None:
-        if (
-            not isinstance(config.signing_keypair, (tuple, list))
-            or len(config.signing_keypair) != 2
-        ):
-            raise TypeError("signing_keypair must be a (bytes, bytes) tuple or list of length 2")
-        _pk, _sk = config.signing_keypair
-        if not isinstance(_pk, bytes) or not isinstance(_sk, bytes):
-            raise TypeError("signing_keypair must be a tuple or list of (bytes, bytes)")
-        if len(_pk) == 0 or len(_sk) == 0:
-            raise ValueError("signing_keypair keys must be non-empty")
-        # Validate key lengths match the selected algorithm
-        _expected_pk: dict[AlgorithmType, int] = {
-            AlgorithmType.ED25519: 32,
-            AlgorithmType.HYBRID_SIG: 32,  # classical pk component
-        }
-        _exp = _expected_pk.get(config.signature_algorithm)
-        if _exp is not None and len(_pk) != _exp:
-            raise ValueError(
-                f"signing_keypair public key length {len(_pk)} does not match "
-                f"{config.signature_algorithm.name} (expected {_exp})"
-            )
-        from ama_cryptography.secure_memory import constant_time_compare
-
-        if constant_time_compare(_pk, b"\x00" * len(_pk)) or constant_time_compare(
-            _sk, b"\x00" * len(_sk)
-        ):
-            raise ValueError("signing_keypair keys must not be all-zero")
+        _pk, _sk = _validate_signing_keypair(config.signing_keypair, config.signature_algorithm)
         primary_keypair = KeyPair(
             public_key=_pk,
             secret_key=_sk,
