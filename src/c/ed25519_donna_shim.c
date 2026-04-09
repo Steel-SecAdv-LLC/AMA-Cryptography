@@ -186,3 +186,79 @@ ama_error_t ama_ed25519_batch_verify(
     /* Map donna's return: 0 = all valid, nonzero = at least one invalid */
     return (ret == 0) ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
 }
+
+/* ============================================================================
+ * FROST PRIMITIVES — Ed25519 group operations via donna internals
+ *
+ * donna provides: ge25519_scalarmult_base_niels, ge25519_pack,
+ * ge25519_unpack_negative_vartime, expand256_modm, contract256_modm,
+ * mul256_modm, add256_modm, ed25519_hash (SHA-512).
+ * ============================================================================ */
+
+AMA_API void ama_ed25519_point_from_scalar(uint8_t point[32],
+                                           const uint8_t scalar[32]) {
+    bignum256modm s;
+    ge25519 ALIGN(16) R;
+    expand256_modm(s, scalar, 32);
+    ge25519_scalarmult_base_niels(&R, ge25519_niels_base_multiples, s);
+    ge25519_pack(point, &R);
+}
+
+AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
+                                          const uint8_t p[32],
+                                          const uint8_t q[32]) {
+    ge25519 ALIGN(16) P, Q, R;
+    /* donna's unpack negates Y; we negate back */
+    if (ge25519_unpack_negative_vartime(&P, p)) return AMA_ERROR_INVALID_PARAM;
+    curve25519_neg(P.x, P.x);
+    curve25519_neg(P.t, P.t);
+    if (ge25519_unpack_negative_vartime(&Q, q)) return AMA_ERROR_INVALID_PARAM;
+    curve25519_neg(Q.x, Q.x);
+    curve25519_neg(Q.t, Q.t);
+
+    ge25519_p1p1 ALIGN(16) r_p1p1;
+    ge25519_add_p1p1(&r_p1p1, &P, &Q);
+    ge25519_p1p1_to_full(&R, &r_p1p1);
+    ge25519_pack(result, &R);
+    return AMA_SUCCESS;
+}
+
+AMA_API ama_error_t ama_ed25519_scalar_mult(uint8_t result[32],
+                                            const uint8_t scalar[32],
+                                            const uint8_t point[32]) {
+    ge25519 ALIGN(16) P, R;
+    bignum256modm s1, s2_zero = {0};
+    if (ge25519_unpack_negative_vartime(&P, point)) return AMA_ERROR_INVALID_PARAM;
+    curve25519_neg(P.x, P.x);
+    curve25519_neg(P.t, P.t);
+    expand256_modm(s1, scalar, 32);
+    /* r = s1*P + 0*G via donna's double-scalar mult */
+    ge25519_double_scalarmult_vartime(&R, &P, s1, s2_zero);
+    ge25519_pack(result, &R);
+    return AMA_SUCCESS;
+}
+
+AMA_API void ama_ed25519_sc_reduce(uint8_t s[64]) {
+    bignum256modm m;
+    expand256_modm(m, s, 64);
+    contract256_modm(s, m);
+}
+
+AMA_API void ama_ed25519_sc_muladd(uint8_t out[32],
+                                   const uint8_t a[32],
+                                   const uint8_t b[32],
+                                   const uint8_t c[32]) {
+    /* out = a + b*c mod l */
+    bignum256modm ma, mb, mc, mr;
+    expand256_modm(ma, a, 32);
+    expand256_modm(mb, b, 32);
+    expand256_modm(mc, c, 32);
+    mul256_modm(mr, mb, mc);     /* mr = b*c */
+    add256_modm(mr, ma, mr);     /* mr = a + b*c */
+    contract256_modm(out, mr);
+}
+
+AMA_API void ama_ed25519_sha512(const uint8_t *data, size_t len,
+                                uint8_t out[64]) {
+    ed25519_hash(out, data, len);
+}
