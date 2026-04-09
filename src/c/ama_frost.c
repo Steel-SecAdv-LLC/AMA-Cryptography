@@ -224,7 +224,7 @@ static ama_error_t compute_binding_factor(uint8_t rho[32],
 
     size_t off = 0;
     buf[off++] = participant_index;
-    memcpy(buf + off, message, message_len); off += message_len;
+    if (message_len > 0) memcpy(buf + off, message, message_len); off += message_len;
     memcpy(buf + off, commitments, commit_len); off += commit_len;
     memcpy(buf + off, group_public_key, 32);
 
@@ -300,7 +300,7 @@ static ama_error_t compute_challenge(uint8_t c[32],
 
     memcpy(buf, R, 32);
     memcpy(buf + 32, group_pk, 32);
-    memcpy(buf + 64, message, message_len);
+    if (message_len > 0) memcpy(buf + 64, message, message_len);
 
     /* SHA-512 produces 64 bytes — sc_reduce takes 64 bytes directly */
     uint8_t hash[64];
