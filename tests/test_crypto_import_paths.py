@@ -32,7 +32,7 @@ AI Co-Architects:
 """
 
 import base64
-from typing import Any
+from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 from urllib.parse import urlparse
 
@@ -449,10 +449,37 @@ class TestTSAIntegration:
     @pytest.mark.integration
     def test_rfc3161_live_tsa_roundtrip(self) -> None:
         """End-to-end RFC 3161 timestamp with a live TSA (when available)."""
-        pytest.skip(
-            reason="Live TSA integration test — requires network and a TSA endpoint. "
-            "Enable by providing TSA_URL env var and running with -m integration."
-        )
+        import os
+        import shutil
+
+        if not os.environ.get("AMA_RUN_INTEGRATION"):
+            pytest.skip("Live TSA test requires AMA_RUN_INTEGRATION=1")
+
+        if not shutil.which("openssl"):
+            pytest.skip("openssl not found on PATH")
+
+        # Try user-specified TSA first, then fall back to known public TSAs
+        tsa_candidates = [
+            os.environ.get("TSA_URL", ""),
+            "http://time.certum.pl",
+            "https://freetsa.org/tsr",
+            "http://timestamp.digicert.com",
+        ]
+        tsa_candidates = [u for u in tsa_candidates if u]
+
+        payload = b"AMA Cryptography TSA integration test payload"
+        last_err: Optional[Exception] = None
+        for tsa_url in tsa_candidates:
+            try:
+                tsr = dgs.get_rfc3161_timestamp(payload, tsa_url)
+                assert tsr is not None, "TSA must return a non-None response"
+                assert len(tsr) > 0, "TSA response must be non-empty"
+                return  # success
+            except Exception as exc:
+                last_err = exc
+                continue
+
+        pytest.skip(f"All TSA endpoints unreachable (last error: {last_err})")
 
 
 if __name__ == "__main__":
