@@ -2073,10 +2073,12 @@ def _validate_signing_keypair(
     # Hybrid keys are the concatenation of classical + PQC components.
     _expected_pk: dict[AlgorithmType, int] = {
         AlgorithmType.ED25519: 32,
+        AlgorithmType.ML_DSA_65: 1952,
         AlgorithmType.HYBRID_SIG: 32 + 1952,  # Ed25519 pk + ML-DSA-65 pk
     }
     _expected_sk: dict[AlgorithmType, int] = {
         AlgorithmType.ED25519: 32,
+        AlgorithmType.ML_DSA_65: 4032,
         AlgorithmType.HYBRID_SIG: 32 + 4032,  # Ed25519 sk + ML-DSA-65 sk
     }
     _exp_pk = _expected_pk.get(algorithm)
