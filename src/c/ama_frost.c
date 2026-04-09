@@ -442,7 +442,7 @@ AMA_API ama_error_t ama_frost_round2_sign(
     uint8_t num_signers,
     const uint8_t *group_public_key)
 {
-    if (!sig_share || !message || !participant_share || !nonce_pair ||
+    if (!sig_share || (!message && message_len > 0) || !participant_share || !nonce_pair ||
         !commitments || !signer_indices || !group_public_key)
         return AMA_ERROR_INVALID_PARAM;
     if (num_signers < 2)
@@ -517,7 +517,7 @@ AMA_API ama_error_t ama_frost_aggregate(
     const uint8_t *group_public_key)
 {
     if (!signature || !sig_shares || !commitments || !signer_indices ||
-        !message || !group_public_key)
+        (!message && message_len > 0) || !group_public_key)
         return AMA_ERROR_INVALID_PARAM;
     if (num_signers < 2)
         return AMA_ERROR_INVALID_PARAM;
