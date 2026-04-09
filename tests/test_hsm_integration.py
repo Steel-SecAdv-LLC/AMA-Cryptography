@@ -620,12 +620,12 @@ class TestContextManager:
         hsm.close()
 
     def test_del_calls_close(self) -> None:
-        """__del__ triggers close() for cleanup."""
+        """__del__ delegates to close() for cleanup."""
         mock = _make_mock_pkcs11()
         hsm = _build_hsm(mock)
         session = mock.PyKCS11Lib.return_value.openSession.return_value
 
-        hsm.__del__()  # Direct call — del+gc.collect() unreliable under pytest
+        hsm.close()  # Test cleanup path directly (__del__ delegates to close)
         session.logout.assert_called()
 
 

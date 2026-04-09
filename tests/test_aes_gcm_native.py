@@ -36,12 +36,9 @@ def _pyca_crypto_available() -> bool:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         _ = AESGCM  # import probe for availability check
-    except ImportError:
-        return False
-    except BaseException as exc:
-        # pyo3_runtime.PanicException inherits BaseException, not Exception
-        if "PanicException" not in type(exc).__name__:
-            raise
+    except (KeyboardInterrupt, SystemExit, GeneratorExit):
+        raise
+    except BaseException:  # pyo3_runtime.PanicException inherits BaseException, not Exception
         return False
     return True
 

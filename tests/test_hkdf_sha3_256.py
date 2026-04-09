@@ -31,18 +31,12 @@ try:
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF as HKDF
 
     _PYCA_AVAILABLE = True
-except ImportError:
+except (KeyboardInterrupt, SystemExit, GeneratorExit):
+    raise
+except BaseException:  # pyo3_runtime.PanicException inherits BaseException, not Exception
     default_backend = None  # type: ignore[assignment]  # fallback when pyca unavailable (TH-001)
     hashes = None  # type: ignore[assignment]  # fallback when pyca unavailable (TH-002)
     HKDF = None  # type: ignore[assignment,misc]  # fallback when pyca unavailable (TH-003)
-    _PYCA_AVAILABLE = False
-except BaseException as _exc:
-    # pyo3_runtime.PanicException inherits BaseException, not Exception
-    if "PanicException" not in type(_exc).__name__:
-        raise
-    default_backend = None  # type: ignore[assignment]  # pyo3 panic fallback (TH-001)
-    hashes = None  # type: ignore[assignment]  # pyo3 panic fallback (TH-002)
-    HKDF = None  # type: ignore[assignment,misc]  # pyo3 panic fallback (TH-003)
     _PYCA_AVAILABLE = False
 
 
