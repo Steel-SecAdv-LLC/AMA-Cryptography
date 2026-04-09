@@ -619,13 +619,13 @@ class TestContextManager:
         # Should not raise
         hsm.close()
 
-    def test_del_calls_close(self) -> None:
-        """__del__ delegates to close() for cleanup."""
+    def test_close_triggers_logout(self) -> None:
+        """close() logs out and cleans up the PKCS#11 session."""
         mock = _make_mock_pkcs11()
         hsm = _build_hsm(mock)
         session = mock.PyKCS11Lib.return_value.openSession.return_value
 
-        hsm.close()  # Test cleanup path directly (__del__ delegates to close)
+        hsm.close()
         session.logout.assert_called()
 
 

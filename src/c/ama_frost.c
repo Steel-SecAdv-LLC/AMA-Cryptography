@@ -10,8 +10,8 @@
  * Production-ready implementation of FROST (Flexible Round-Optimized
  * Schnorr Threshold) signatures over the Ed25519 group.
  *
- * Uses the verified scalar and point arithmetic from ama_ed25519.c
- * (ref10-derived sc25519_muladd, ge25519_add, etc.) for correctness.
+ * Uses the exported ama_ed25519_* scalar, point, and hash primitives
+ * provided by the active Ed25519 backend for correctness and consistency.
  *
  * Protocol: t-of-n threshold Schnorr signatures
  * - Trusted dealer key generation (Shamir secret sharing)
