@@ -1398,3 +1398,112 @@ ama_error_t ama_ed25519_batch_verify(
 
     return all_valid ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
 }
+
+/* ======================================================================
+ * EXPOSED PRIMITIVES FOR FROST / THRESHOLD SIGNATURES
+ *
+ * These functions expose the internal Ed25519 group operations to
+ * ama_frost.c without breaking encapsulation of the internal types.
+ * All compressed points are 32-byte little-endian Y||sign(X).
+ * ====================================================================== */
+
+/**
+ * Raw scalar-basepoint multiplication: point = scalar * G.
+ *
+ * Unlike ama_ed25519_keypair() this does NOT hash or clamp the scalar;
+ * the 32-byte little-endian scalar is used verbatim.  This is the
+ * primitive required by FROST (RFC 9591) and any other Schnorr-like
+ * protocol that needs algebraic linearity:
+ *   point_from_scalar(a) + point_from_scalar(b) == point_from_scalar(a+b)
+ *
+ * @param point   Output: 32-byte compressed Ed25519 point
+ * @param scalar  Input:  32-byte little-endian scalar
+ */
+AMA_API void ama_ed25519_point_from_scalar(uint8_t point[32],
+                                          const uint8_t scalar[32]) {
+    ge25519_p3 R;
+    ge25519_scalarmult_base(&R, scalar);
+    ge25519_p3_tobytes(point, &R);
+}
+
+/**
+ * Point addition: result = P + Q (compressed Ed25519 points).
+ *
+ * @param result  Output: 32-byte compressed point
+ * @param p       Input:  32-byte compressed point P
+ * @param q       Input:  32-byte compressed point Q
+ * @return AMA_SUCCESS on success, error if decompression fails
+ */
+AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
+                                          const uint8_t p[32],
+                                          const uint8_t q[32]) {
+    ge25519_p3 P, Q;
+    ge25519_p1p1 R_p1p1;
+    ge25519_p3 R;
+
+    if (ge25519_frombytes(&P, p) != 0) return AMA_ERROR_INVALID_PARAM;
+    if (ge25519_frombytes(&Q, q) != 0) return AMA_ERROR_INVALID_PARAM;
+
+    ge25519_add(&R_p1p1, &P, &Q);
+    ge25519_p1p1_to_p3(&R, &R_p1p1);
+    ge25519_p3_tobytes(result, &R);
+
+    return AMA_SUCCESS;
+}
+
+/**
+ * Scalar-point multiplication: result = scalar * P.
+ *
+ * @param result  Output: 32-byte compressed point
+ * @param scalar  Input:  32-byte little-endian scalar
+ * @param point   Input:  32-byte compressed point P
+ * @return AMA_SUCCESS on success, error if decompression fails
+ */
+AMA_API ama_error_t ama_ed25519_scalar_mult(uint8_t result[32],
+                                            const uint8_t scalar[32],
+                                            const uint8_t point[32]) {
+    ge25519_p3 P, R;
+
+    if (ge25519_frombytes(&P, point) != 0) return AMA_ERROR_INVALID_PARAM;
+    ge25519_scalarmult(&R, scalar, &P);
+    ge25519_p3_tobytes(result, &R);
+
+    return AMA_SUCCESS;
+}
+
+/**
+ * Reduce a 64-byte scalar modulo the Ed25519 group order l.
+ * Input: 64-byte little-endian integer. Output written to first 32 bytes.
+ *
+ * @param s  In/out: 64-byte buffer, reduced result in s[0..31]
+ */
+AMA_API void ama_ed25519_sc_reduce(uint8_t s[64]) {
+    sc25519_reduce(s);
+}
+
+/**
+ * Scalar multiply-add: s = (a + b * c) mod l.
+ * All inputs/output are 32-byte little-endian scalars.
+ *
+ * @param s  Output: 32-byte scalar
+ * @param a  Input:  32-byte scalar
+ * @param b  Input:  32-byte scalar
+ * @param c  Input:  32-byte scalar
+ */
+AMA_API void ama_ed25519_sc_muladd(uint8_t s[32],
+                           const uint8_t a[32],
+                           const uint8_t b[32],
+                           const uint8_t c[32]) {
+    sc25519_muladd(s, a, b, c);
+}
+
+/**
+ * SHA-512 hash (exposed for FROST challenge computation).
+ * Wraps the internal ama_sha512 from internal/ama_sha2.h so that
+ * other TUs (ama_frost.c) don't need to include the header-only
+ * implementation (which pulls in unused static functions).
+ */
+AMA_API void ama_ed25519_sha512(const uint8_t *data, size_t len,
+                                uint8_t out[64]) {
+    sha512(data, len, out);
+}
