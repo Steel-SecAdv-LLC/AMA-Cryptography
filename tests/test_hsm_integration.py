@@ -622,13 +622,22 @@ class TestContextManager:
     def test_del_calls_close(self) -> None:
         """__del__ triggers close() for cleanup."""
         import gc
+        import weakref
 
         mock = _make_mock_pkcs11()
         hsm = _build_hsm(mock)
         session = mock.PyKCS11Lib.return_value.openSession.return_value
 
+        ref = weakref.ref(hsm)
         del hsm
         gc.collect()
+
+        # Ensure the object was actually collected before asserting
+        if ref() is not None:
+            # Force a second collection cycle for CPython 3.9 where
+            # the first gc.collect() may not finalize objects with __del__
+            gc.collect()
+
         session.logout.assert_called()
 
 
