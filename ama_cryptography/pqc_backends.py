@@ -58,6 +58,13 @@ __all__ = [
     "KyberUnavailableError",
     "SphincsUnavailableError",
     "SecurityWarning",
+    # FROST threshold Ed25519 (RFC 9591)
+    "FROST_AVAILABLE",
+    "FROST_BACKEND",
+    "FROST_SHARE_BYTES",
+    "FROST_NONCE_BYTES",
+    "FROST_COMMITMENT_BYTES",
+    "FROST_SIG_SHARE_BYTES",
 ]
 
 
@@ -599,6 +606,64 @@ def _setup_deterministic_keygen_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
+# FROST threshold Ed25519 (RFC 9591) availability
+_FROST_AVAILABLE = False
+_FROST_BACKEND: Optional[str] = None
+FROST_SHARE_BYTES = 64  # 32 secret + 32 public
+FROST_NONCE_BYTES = 64  # 32 hiding + 32 binding
+FROST_COMMITMENT_BYTES = 64  # 32 hiding_point + 32 binding_point
+FROST_SIG_SHARE_BYTES = 32
+
+
+def _setup_frost_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for FROST threshold Ed25519 functions."""
+    try:
+        lib.ama_frost_keygen_trusted_dealer.argtypes = [
+            ctypes.c_uint8,  # threshold
+            ctypes.c_uint8,  # num_participants
+            ctypes.c_char_p,  # group_public_key
+            ctypes.c_char_p,  # participant_shares
+            ctypes.c_char_p,  # secret_key (nullable)
+        ]
+        lib.ama_frost_keygen_trusted_dealer.restype = ctypes.c_int
+
+        lib.ama_frost_round1_commit.argtypes = [
+            ctypes.c_char_p,  # nonce_pair
+            ctypes.c_char_p,  # commitment
+            ctypes.c_char_p,  # participant_share
+        ]
+        lib.ama_frost_round1_commit.restype = ctypes.c_int
+
+        lib.ama_frost_round2_sign.argtypes = [
+            ctypes.c_char_p,  # sig_share
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # participant_share
+            ctypes.c_uint8,  # participant_index
+            ctypes.c_char_p,  # nonce_pair
+            ctypes.c_char_p,  # commitments
+            ctypes.c_char_p,  # signer_indices
+            ctypes.c_uint8,  # num_signers
+            ctypes.c_char_p,  # group_public_key
+        ]
+        lib.ama_frost_round2_sign.restype = ctypes.c_int
+
+        lib.ama_frost_aggregate.argtypes = [
+            ctypes.c_char_p,  # signature
+            ctypes.c_char_p,  # sig_shares
+            ctypes.c_char_p,  # commitments
+            ctypes.c_char_p,  # signer_indices
+            ctypes.c_uint8,  # num_signers
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # group_public_key
+        ]
+        lib.ama_frost_aggregate.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
 _native_lib = _find_native_library()
 if _native_lib is not None:
     if _setup_native_ctypes(_native_lib):
@@ -619,6 +684,9 @@ if _native_lib is not None:
     _ARGON2_NATIVE_AVAILABLE = _setup_argon2_ctypes(_native_lib)
     _CHACHA20_POLY1305_NATIVE_AVAILABLE = _setup_chacha20poly1305_ctypes(_native_lib)
     _DETERMINISTIC_KEYGEN_AVAILABLE = _setup_deterministic_keygen_ctypes(_native_lib)
+    _FROST_AVAILABLE = _setup_frost_ctypes(_native_lib)
+    if _FROST_AVAILABLE:
+        _FROST_BACKEND = "native"
 
 
 # Public API for checking availability
@@ -1574,7 +1642,7 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
 def _probe_cython_ed25519() -> "tuple[Any, Any]":
     """Detect Cython Ed25519 bindings at module load time."""
     try:
-        from ama_cryptography.ed25519_binding import (  # type: ignore[import-not-found]  # Cython extension; compiled at install time (PQC-005)
+        from ama_cryptography.ed25519_binding import (  # Cython extension; compiled at install time (PQC-005)
             cy_ed25519_sign,
             cy_ed25519_verify,
         )
@@ -1587,7 +1655,7 @@ def _probe_cython_ed25519() -> "tuple[Any, Any]":
 def _probe_cython_dilithium() -> "tuple[Any, Any]":
     """Detect Cython Dilithium bindings at module load time."""
     try:
-        from ama_cryptography.dilithium_binding import (  # type: ignore[import-not-found]  # Cython extension; compiled at install time (PQC-006)
+        from ama_cryptography.dilithium_binding import (  # Cython extension; compiled at install time (PQC-006)
             cy_dilithium_sign,
             cy_dilithium_verify,
         )
@@ -1600,7 +1668,7 @@ def _probe_cython_dilithium() -> "tuple[Any, Any]":
 def _probe_cython_hkdf() -> "Any":
     """Detect Cython HKDF binding at module load time."""
     try:
-        from ama_cryptography.hkdf_binding import (  # type: ignore[import-not-found]  # Cython extension; compiled at install time (PQC-007)
+        from ama_cryptography.hkdf_binding import (  # Cython extension; compiled at install time (PQC-007)
             cy_hkdf,
         )
 
@@ -2544,3 +2612,204 @@ def native_dilithium_keypair_from_seed(xi: bytes) -> tuple:
         raise RuntimeError(f"Dilithium deterministic keygen failed (rc={rc})")
 
     return bytes(pk_buf), bytes(sk_buf)
+
+
+# ============================================================================
+# FROST THRESHOLD ED25519 (RFC 9591) — NATIVE WRAPPERS
+# ============================================================================
+
+# Module-level availability aliases
+FROST_AVAILABLE = _FROST_AVAILABLE
+FROST_BACKEND = _FROST_BACKEND
+
+
+def frost_keygen_trusted_dealer(
+    threshold: int,
+    num_participants: int,
+    secret_key: Optional[bytes] = None,
+) -> tuple:
+    """Generate FROST key shares via trusted dealer (Shamir secret sharing).
+
+    Args:
+        threshold: Minimum number of signers (t >= 2)
+        num_participants: Total participants (n >= t)
+        secret_key: Optional 32-byte group secret key (None = random)
+
+    Returns:
+        Tuple of (group_public_key, list_of_participant_shares)
+        where each share is 64 bytes (32 secret + 32 public).
+    """
+    if not _FROST_AVAILABLE or _native_lib is None:
+        raise RuntimeError("FROST native library not available")
+    if threshold < 2 or num_participants < threshold:
+        raise ValueError("Require threshold >= 2 and num_participants >= threshold")
+    if num_participants > 255:
+        raise ValueError("num_participants must be <= 255")
+
+    if secret_key is not None:
+        if not isinstance(secret_key, bytes) or len(secret_key) != 32:
+            raise ValueError("secret_key must be exactly 32 bytes")
+
+    gpk_buf = ctypes.create_string_buffer(32)
+    shares_buf = ctypes.create_string_buffer(num_participants * FROST_SHARE_BYTES)
+    sk_ptr = secret_key if secret_key is not None else None
+
+    rc = _native_lib.ama_frost_keygen_trusted_dealer(
+        ctypes.c_uint8(threshold),
+        ctypes.c_uint8(num_participants),
+        gpk_buf,
+        shares_buf,
+        sk_ptr,
+    )
+    if rc != 0:
+        raise RuntimeError(f"FROST keygen failed (rc={rc})")
+
+    gpk = bytes(gpk_buf)
+    raw = shares_buf.raw
+    shares = [
+        raw[i * FROST_SHARE_BYTES : (i + 1) * FROST_SHARE_BYTES] for i in range(num_participants)
+    ]
+    return gpk, shares
+
+
+def frost_round1_commit(participant_share: bytes) -> tuple:
+    """FROST Round 1: Generate nonce commitment.
+
+    Args:
+        participant_share: 64-byte participant share from keygen.
+
+    Returns:
+        Tuple of (nonce_pair, commitment) — nonce_pair is SECRET (64 bytes),
+        commitment is PUBLIC (64 bytes).
+    """
+    if not _FROST_AVAILABLE or _native_lib is None:
+        raise RuntimeError("FROST native library not available")
+    if len(participant_share) != FROST_SHARE_BYTES:
+        raise ValueError(f"participant_share must be {FROST_SHARE_BYTES} bytes")
+
+    nonce_buf = ctypes.create_string_buffer(FROST_NONCE_BYTES)
+    commit_buf = ctypes.create_string_buffer(FROST_COMMITMENT_BYTES)
+
+    rc = _native_lib.ama_frost_round1_commit(nonce_buf, commit_buf, participant_share)
+    if rc != 0:
+        raise RuntimeError(f"FROST round1 commit failed (rc={rc})")
+
+    return bytes(nonce_buf), bytes(commit_buf)
+
+
+def frost_round2_sign(
+    message: bytes,
+    participant_share: bytes,
+    participant_index: int,
+    nonce_pair: bytes,
+    commitments: bytes,
+    signer_indices: bytes,
+    num_signers: int,
+    group_public_key: bytes,
+) -> bytes:
+    """FROST Round 2: Generate signature share.
+
+    Args:
+        message: Message to sign.
+        participant_share: 64-byte share.
+        participant_index: 1-based participant index.
+        nonce_pair: 64-byte nonce pair from round 1 (SECRET).
+        commitments: Concatenated commitments (num_signers * 64 bytes).
+        signer_indices: Byte array of 1-based signer indices.
+        num_signers: Number of signers in this session.
+        group_public_key: 32-byte group public key.
+
+    Returns:
+        32-byte signature share.
+    """
+    if not _FROST_AVAILABLE or _native_lib is None:
+        raise RuntimeError("FROST native library not available")
+    if not (2 <= num_signers <= 255):
+        raise ValueError("num_signers must be in [2, 255]")
+    if len(participant_share) != FROST_SHARE_BYTES:
+        raise ValueError(f"participant_share must be {FROST_SHARE_BYTES} bytes")
+    if not (1 <= participant_index <= 255):
+        raise ValueError("participant_index must be in [1, 255]")
+    if len(nonce_pair) != FROST_NONCE_BYTES:
+        raise ValueError(f"nonce_pair must be {FROST_NONCE_BYTES} bytes")
+    if len(commitments) != num_signers * FROST_COMMITMENT_BYTES:
+        raise ValueError(f"commitments must be {num_signers * FROST_COMMITMENT_BYTES} bytes")
+    if len(signer_indices) != num_signers:
+        raise ValueError(f"signer_indices must be {num_signers} bytes")
+    if len(group_public_key) != 32:
+        raise ValueError("group_public_key must be 32 bytes")
+
+    sig_share_buf = ctypes.create_string_buffer(FROST_SIG_SHARE_BYTES)
+
+    rc = _native_lib.ama_frost_round2_sign(
+        sig_share_buf,
+        message,
+        ctypes.c_size_t(len(message)),
+        participant_share,
+        ctypes.c_uint8(participant_index),
+        nonce_pair,
+        commitments,
+        signer_indices,
+        ctypes.c_uint8(num_signers),
+        group_public_key,
+    )
+    if rc != 0:
+        raise RuntimeError(f"FROST round2 sign failed (rc={rc})")
+
+    return bytes(sig_share_buf)
+
+
+def frost_aggregate(
+    sig_shares: bytes,
+    commitments: bytes,
+    signer_indices: bytes,
+    num_signers: int,
+    message: bytes,
+    group_public_key: bytes,
+) -> bytes:
+    """Aggregate FROST signature shares into an Ed25519-compatible signature.
+
+    Args:
+        sig_shares: Concatenated signature shares (num_signers * 32 bytes).
+        commitments: Concatenated commitments (num_signers * 64 bytes).
+        signer_indices: Byte array of 1-based signer indices.
+        num_signers: Number of signers.
+        message: Original message.
+        group_public_key: 32-byte group public key.
+
+    Returns:
+        64-byte Ed25519-format signature (R || z).
+    """
+    if not _FROST_AVAILABLE or _native_lib is None:
+        raise RuntimeError("FROST native library not available")
+    if not (2 <= num_signers <= 255):
+        raise ValueError("num_signers must be in [2, 255]")
+    if len(sig_shares) != num_signers * FROST_SIG_SHARE_BYTES:
+        raise ValueError(f"sig_shares must be {num_signers * FROST_SIG_SHARE_BYTES} bytes")
+    if len(commitments) != num_signers * FROST_COMMITMENT_BYTES:
+        raise ValueError(f"commitments must be {num_signers * FROST_COMMITMENT_BYTES} bytes")
+    if len(signer_indices) != num_signers:
+        raise ValueError(f"signer_indices must be {num_signers} bytes")
+    if any(idx == 0 for idx in signer_indices):
+        raise ValueError("signer_indices must contain only 1-based indices in [1, 255]")
+    if len(set(signer_indices)) != num_signers:
+        raise ValueError("signer_indices must contain unique signer indices")
+    if len(group_public_key) != 32:
+        raise ValueError("group_public_key must be 32 bytes")
+
+    sig_buf = ctypes.create_string_buffer(64)
+
+    rc = _native_lib.ama_frost_aggregate(
+        sig_buf,
+        sig_shares,
+        commitments,
+        signer_indices,
+        ctypes.c_uint8(num_signers),
+        message,
+        ctypes.c_size_t(len(message)),
+        group_public_key,
+    )
+    if rc != 0:
+        raise RuntimeError(f"FROST aggregate failed (rc={rc})")
+
+    return bytes(sig_buf)

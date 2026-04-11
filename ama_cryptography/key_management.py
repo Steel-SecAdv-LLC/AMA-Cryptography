@@ -1136,7 +1136,7 @@ class HSMKeyStorage:
         try:
             handle = self.session.generateKey(template, pk.Mechanism(pk.CKM_AES_KEY_GEN))
             handle_int = handle.value() if hasattr(handle, "value") else int(handle)
-            key_ref = handle_int.to_bytes(8, "big")
+            key_ref: bytes = handle_int.to_bytes(8, "big")
             self._handle_map[key_ref] = handle
             return key_ref
         except self.pkcs11.PyKCS11Error as e:
@@ -1161,7 +1161,7 @@ class HSMKeyStorage:
             if objects:
                 obj = objects[0]
                 handle_int = obj.value() if hasattr(obj, "value") else int(obj)
-                key_ref = handle_int.to_bytes(8, "big")
+                key_ref: bytes = handle_int.to_bytes(8, "big")
                 self._handle_map[key_ref] = obj
                 return key_ref
             return None

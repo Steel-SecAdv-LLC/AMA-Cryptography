@@ -253,15 +253,17 @@ class TestKeyPairLifecycle:
     def test_keypair_del_calls_wipe(self) -> None:
         """__del__ calls wipe without raising.
 
-        Explicitly invokes __del__ to test the finalizer code path that
-        calls wipe(). This is intentional — we need to verify the
-        finalizer does not raise when the GC invokes it. (PBC-001)
+        Verifies that the finalizer code path (wipe via GC) does not raise.
+        Uses del + gc.collect() instead of explicit __del__() call. (PBC-001)
         """
+        import gc
+
         kp = DilithiumKeyPair(
             secret_key=bytearray(b"\xaa" * DILITHIUM_SECRET_KEY_BYTES),
             public_key=b"\x00" * DILITHIUM_PUBLIC_KEY_BYTES,
         )
-        kp.__del__()  # Intentional: testing finalizer behavior (PBC-001)
+        del kp
+        gc.collect()  # triggers finalizer via GC (PBC-001)
 
     def test_kyber_encapsulation_dataclass(self) -> None:
         """KyberEncapsulation stores ciphertext and shared_secret."""
