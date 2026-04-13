@@ -90,7 +90,7 @@ secure-memory = [
 docs = [
     "sphinx>=6.0.0",
     "sphinx-rtd-theme>=1.2.0",
-    "sphinx-autodoc-typehints>=1.22.0",
+    "sphinx-autodoc-typehints>=2.3.0",
 ]
 dev = [
     "pytest>=7.0.0",
