@@ -22,7 +22,7 @@ References:
 import json
 import secrets
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -436,14 +436,14 @@ class TestMLKEM512KAT:
         """Public key size matches NIST FIPS 203 ML-KEM-512 specification."""
         from ama_cryptography.pqc_backends import generate_kyber512_keypair
 
-        pk, sk = generate_kyber512_keypair()
+        pk, _sk = generate_kyber512_keypair()
         assert len(pk) == MLKEM512Spec.PUBLIC_KEY_BYTES
 
     def test_secret_key_size(self) -> None:
         """Secret key size matches NIST FIPS 203 ML-KEM-512 specification."""
         from ama_cryptography.pqc_backends import generate_kyber512_keypair
 
-        pk, sk = generate_kyber512_keypair()
+        _pk, sk = generate_kyber512_keypair()
         assert len(sk) == MLKEM512Spec.SECRET_KEY_BYTES
 
     def test_ciphertext_size(self) -> None:
@@ -453,8 +453,8 @@ class TestMLKEM512KAT:
             kyber512_encapsulate,
         )
 
-        pk, sk = generate_kyber512_keypair()
-        ct, ss = kyber512_encapsulate(pk)
+        pk, _sk = generate_kyber512_keypair()
+        ct, _ss = kyber512_encapsulate(pk)
         assert len(ct) == MLKEM512Spec.CIPHERTEXT_BYTES
 
     def test_shared_secret_size(self) -> None:
@@ -464,8 +464,8 @@ class TestMLKEM512KAT:
             kyber512_encapsulate,
         )
 
-        pk, sk = generate_kyber512_keypair()
-        ct, ss = kyber512_encapsulate(pk)
+        pk, _sk = generate_kyber512_keypair()
+        _ct, ss = kyber512_encapsulate(pk)
         assert len(ss) == MLKEM512Spec.SHARED_SECRET_BYTES
 
     def test_encapsulate_decapsulate_roundtrip(self) -> None:
@@ -489,7 +489,7 @@ class TestMLKEM512KAT:
             kyber512_encapsulate,
         )
 
-        pk1, sk1 = generate_kyber512_keypair()
+        pk1, _sk1 = generate_kyber512_keypair()
         _pk2, sk2 = generate_kyber512_keypair()
         ct, ss_enc = kyber512_encapsulate(pk1)
         ss_wrong = kyber512_decapsulate(ct, sk2)
@@ -502,7 +502,7 @@ class TestMLKEM512KAT:
             kyber512_encapsulate,
         )
 
-        pk, sk = generate_kyber512_keypair()
+        pk, _sk = generate_kyber512_keypair()
         ct1, _ = kyber512_encapsulate(pk)
         ct2, _ = kyber512_encapsulate(pk)
         assert ct1 != ct2
@@ -540,14 +540,14 @@ class TestMLKEM768KAT:
         """Public key size matches NIST FIPS 203 ML-KEM-768 specification."""
         from ama_cryptography.pqc_backends import generate_kyber768_keypair
 
-        pk, sk = generate_kyber768_keypair()
+        pk, _sk = generate_kyber768_keypair()
         assert len(pk) == MLKEM768Spec.PUBLIC_KEY_BYTES
 
     def test_secret_key_size(self) -> None:
         """Secret key size matches NIST FIPS 203 ML-KEM-768 specification."""
         from ama_cryptography.pqc_backends import generate_kyber768_keypair
 
-        pk, sk = generate_kyber768_keypair()
+        _pk, sk = generate_kyber768_keypair()
         assert len(sk) == MLKEM768Spec.SECRET_KEY_BYTES
 
     def test_ciphertext_size(self) -> None:
@@ -557,8 +557,8 @@ class TestMLKEM768KAT:
             kyber768_encapsulate,
         )
 
-        pk, sk = generate_kyber768_keypair()
-        ct, ss = kyber768_encapsulate(pk)
+        pk, _sk = generate_kyber768_keypair()
+        ct, _ss = kyber768_encapsulate(pk)
         assert len(ct) == MLKEM768Spec.CIPHERTEXT_BYTES
 
     def test_shared_secret_size(self) -> None:
@@ -568,8 +568,8 @@ class TestMLKEM768KAT:
             kyber768_encapsulate,
         )
 
-        pk, sk = generate_kyber768_keypair()
-        ct, ss = kyber768_encapsulate(pk)
+        pk, _sk = generate_kyber768_keypair()
+        _ct, ss = kyber768_encapsulate(pk)
         assert len(ss) == MLKEM768Spec.SHARED_SECRET_BYTES
 
     def test_encapsulate_decapsulate_roundtrip(self) -> None:
@@ -593,7 +593,7 @@ class TestMLKEM768KAT:
             kyber768_encapsulate,
         )
 
-        pk1, sk1 = generate_kyber768_keypair()
+        pk1, _sk1 = generate_kyber768_keypair()
         _pk2, sk2 = generate_kyber768_keypair()
         ct, ss_enc = kyber768_encapsulate(pk1)
         ss_wrong = kyber768_decapsulate(ct, sk2)
@@ -606,7 +606,7 @@ class TestMLKEM768KAT:
             kyber768_encapsulate,
         )
 
-        pk, sk = generate_kyber768_keypair()
+        pk, _sk = generate_kyber768_keypair()
         ct1, _ = kyber768_encapsulate(pk)
         ct2, _ = kyber768_encapsulate(pk)
         assert ct1 != ct2
@@ -644,14 +644,14 @@ class TestMLDSA44KAT:
         """Public key size matches NIST FIPS 204 ML-DSA-44 specification."""
         from ama_cryptography.pqc_backends import generate_dilithium44_keypair
 
-        pk, sk = generate_dilithium44_keypair()
+        pk, _sk = generate_dilithium44_keypair()
         assert len(pk) == MLDSA44Spec.PUBLIC_KEY_BYTES
 
     def test_secret_key_size(self) -> None:
         """Secret key size matches NIST FIPS 204 ML-DSA-44 specification."""
         from ama_cryptography.pqc_backends import generate_dilithium44_keypair
 
-        pk, sk = generate_dilithium44_keypair()
+        _pk, sk = generate_dilithium44_keypair()
         assert len(sk) == MLDSA44Spec.SECRET_KEY_BYTES
 
     def test_signature_size(self) -> None:
@@ -661,7 +661,7 @@ class TestMLDSA44KAT:
             generate_dilithium44_keypair,
         )
 
-        pk, sk = generate_dilithium44_keypair()
+        _pk, sk = generate_dilithium44_keypair()
         sig = dilithium44_sign(b"FIPS 204 KAT test", sk)
         assert len(sig) == MLDSA44Spec.SIGNATURE_BYTES
 
@@ -711,7 +711,7 @@ class TestMLDSA44KAT:
             generate_dilithium44_keypair,
         )
 
-        pk1, sk1 = generate_dilithium44_keypair()
+        _pk1, sk1 = generate_dilithium44_keypair()
         pk2, _sk2 = generate_dilithium44_keypair()
         sig = dilithium44_sign(b"test", sk1)
         assert not dilithium44_verify(b"test", sig, pk2)
@@ -746,14 +746,14 @@ class TestMLDSA87KAT:
         """Public key size matches NIST FIPS 204 ML-DSA-87 specification."""
         from ama_cryptography.pqc_backends import generate_dilithium87_keypair
 
-        pk, sk = generate_dilithium87_keypair()
+        pk, _sk = generate_dilithium87_keypair()
         assert len(pk) == MLDSA87Spec.PUBLIC_KEY_BYTES
 
     def test_secret_key_size(self) -> None:
         """Secret key size matches NIST FIPS 204 ML-DSA-87 specification."""
         from ama_cryptography.pqc_backends import generate_dilithium87_keypair
 
-        pk, sk = generate_dilithium87_keypair()
+        _pk, sk = generate_dilithium87_keypair()
         assert len(sk) == MLDSA87Spec.SECRET_KEY_BYTES
 
     def test_signature_size(self) -> None:
@@ -763,7 +763,7 @@ class TestMLDSA87KAT:
             generate_dilithium87_keypair,
         )
 
-        pk, sk = generate_dilithium87_keypair()
+        _pk, sk = generate_dilithium87_keypair()
         sig = dilithium87_sign(b"FIPS 204 KAT test", sk)
         assert len(sig) == MLDSA87Spec.SIGNATURE_BYTES
 
@@ -813,7 +813,7 @@ class TestMLDSA87KAT:
             generate_dilithium87_keypair,
         )
 
-        pk1, sk1 = generate_dilithium87_keypair()
+        _pk1, sk1 = generate_dilithium87_keypair()
         pk2, _sk2 = generate_dilithium87_keypair()
         sig = dilithium87_sign(b"test", sk1)
         assert not dilithium87_verify(b"test", sig, pk2)
@@ -837,7 +837,7 @@ class TestMLDSA87KAT:
 class TestSLHDSAAllVariantsKAT:
     """NIST KAT tests for all 6 SLH-DSA parameter sets per FIPS 205."""
 
-    SLH_VARIANTS = [
+    SLH_VARIANTS: ClassVar[list[tuple[str, int, int, int]]] = [
         ("128s", 32, 64, 7856),
         ("128f", 32, 64, 17088),
         ("192s", 48, 96, 16224),
@@ -897,9 +897,7 @@ class TestSLHDSAAllVariantsKAT:
         SLH_VARIANTS,
         ids=[v[0] for v in SLH_VARIANTS],
     )
-    def test_wrong_message_fails(
-        self, variant: str, n: int, sk_bytes: int, sig_bytes: int
-    ) -> None:
+    def test_wrong_message_fails(self, variant: str, n: int, sk_bytes: int, sig_bytes: int) -> None:
         """All SLH-DSA variants reject wrong message."""
         import importlib
 
@@ -948,9 +946,9 @@ class TestSLHDSAAllVariantsKAT:
                 msg = bytes.fromhex(tc["message"])
                 expected = tc["testPassed"]
                 result = verify_fn(msg, sig, pk)
-                assert result == expected, (
-                    f"ACVP {param_set} tcId={tc['tcId']}: expected {expected}, got {result}"
-                )
+                assert (
+                    result == expected
+                ), f"ACVP {param_set} tcId={tc['tcId']}: expected {expected}, got {result}"
                 tested_variants.add(param_set)
 
         # We should have tested at least the default variant
