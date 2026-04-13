@@ -85,7 +85,7 @@ hsm = [
 secure-memory = [
     # PyNaCl reserved for future libsodium integration; not currently used.
     # The secure_memory module uses AMA native C backend or POSIX fallbacks.
-    "pynacl>=1.5.0",
+    "pynacl>=1.6.2",
 ]
 docs = [
     "sphinx>=6.0.0",
