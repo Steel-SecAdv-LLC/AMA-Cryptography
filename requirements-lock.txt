@@ -10,7 +10,7 @@
 # These are development/testing/CI dependencies only.
 
 # --- Core test framework ---
-pytest==9.0.2
+pytest==9.0.3
 pytest-benchmark==5.2.3
 pytest-cov==7.1.0
 pytest-timeout==2.4.0
