@@ -7,7 +7,7 @@
 
 # Build dependencies (required for Cython extensions)
 Cython>=3.0.0,<3.1.0; python_version < "3.9"
-Cython>=3.0.0; python_version >= "3.9"
+Cython>=3.2.4; python_version >= "3.9"
 
 # NumPy: 1.24.x is last version supporting Python 3.8
 numpy>=1.24.0,<2.0.0; python_version < "3.9"
