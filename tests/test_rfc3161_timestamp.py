@@ -365,38 +365,32 @@ class TestNetworkErrorPaths:
 
     @patch("ama_cryptography.rfc3161_timestamp._RFC3161_AVAILABLE", True)
     @patch("ama_cryptography.rfc3161_timestamp.rfc3161ng")
-    def test_connection_timeout_raises_timestamp_error(
-        self, mock_rfc: MagicMock
-    ) -> None:
+    def test_connection_timeout_raises_timestamp_error(self, mock_rfc: MagicMock) -> None:
         """Connection timeout is surfaced as TimestampError."""
         import socket
 
-        mock_rfc.RemoteTimestamper.return_value.timestamp.side_effect = (
-            socket.timeout("Connection timed out")
+        mock_rfc.RemoteTimestamper.return_value.timestamp.side_effect = socket.timeout(
+            "Connection timed out"
         )
         with pytest.raises(TimestampError):
             get_timestamp(b"test data", tsa_url="http://example.com/tsa")
 
     @patch("ama_cryptography.rfc3161_timestamp._RFC3161_AVAILABLE", True)
     @patch("ama_cryptography.rfc3161_timestamp.rfc3161ng")
-    def test_connection_refused_raises_timestamp_error(
-        self, mock_rfc: MagicMock
-    ) -> None:
+    def test_connection_refused_raises_timestamp_error(self, mock_rfc: MagicMock) -> None:
         """Connection refused is surfaced as TimestampError."""
-        mock_rfc.RemoteTimestamper.return_value.timestamp.side_effect = (
-            ConnectionRefusedError("Connection refused")
+        mock_rfc.RemoteTimestamper.return_value.timestamp.side_effect = ConnectionRefusedError(
+            "Connection refused"
         )
         with pytest.raises(TimestampError):
             get_timestamp(b"test data", tsa_url="http://example.com/tsa")
 
     @patch("ama_cryptography.rfc3161_timestamp._RFC3161_AVAILABLE", True)
     @patch("ama_cryptography.rfc3161_timestamp.rfc3161ng")
-    def test_generic_os_error_raises_timestamp_error(
-        self, mock_rfc: MagicMock
-    ) -> None:
+    def test_generic_os_error_raises_timestamp_error(self, mock_rfc: MagicMock) -> None:
         """Generic OSError during timestamping raises TimestampError."""
-        mock_rfc.RemoteTimestamper.return_value.timestamp.side_effect = (
-            OSError("Network unreachable")
+        mock_rfc.RemoteTimestamper.return_value.timestamp.side_effect = OSError(
+            "Network unreachable"
         )
         with pytest.raises(TimestampError):
             get_timestamp(b"test data", tsa_url="http://example.com/tsa")
@@ -494,8 +488,8 @@ class TestCertificateChainErrors:
     @patch("ama_cryptography.rfc3161_timestamp.rfc3161ng")
     def test_tsa_certificate_expired(self, mock_rfc: MagicMock) -> None:
         """Expired TSA certificate raises TimestampError."""
-        mock_rfc.RemoteTimestamper.return_value.timestamp.side_effect = (
-            Exception("certificate has expired")
+        mock_rfc.RemoteTimestamper.return_value.timestamp.side_effect = Exception(
+            "certificate has expired"
         )
         with pytest.raises(TimestampError):
             get_timestamp(b"test data", tsa_url="http://example.com/tsa")
@@ -504,8 +498,8 @@ class TestCertificateChainErrors:
     @patch("ama_cryptography.rfc3161_timestamp.rfc3161ng")
     def test_tsa_certificate_untrusted(self, mock_rfc: MagicMock) -> None:
         """Untrusted TSA certificate raises TimestampError."""
-        mock_rfc.RemoteTimestamper.return_value.timestamp.side_effect = (
-            Exception("unable to get local issuer certificate")
+        mock_rfc.RemoteTimestamper.return_value.timestamp.side_effect = Exception(
+            "unable to get local issuer certificate"
         )
         with pytest.raises(TimestampError):
             get_timestamp(b"test data", tsa_url="http://example.com/tsa")

@@ -14,23 +14,25 @@ Copyright 2025-2026 Steel Security Advisors LLC
 Licensed under the Apache License, Version 2.0
 """
 
+import os
+
 import pytest
 
 from ama_cryptography.pqc_backends import (
-    KYBER_AVAILABLE,
     DILITHIUM_AVAILABLE,
+    KYBER_AVAILABLE,
     SPHINCS_AVAILABLE,
-    _get_native_lib,
+    _native_lib,
 )
-
 
 # ============================================================================
 # Helper: check if new parameter set functions exist in the native library
 # ============================================================================
 
+
 def _has_native_func(name: str) -> bool:
     """Check if a specific function exists in the native C library."""
-    lib = _get_native_lib()
+    lib = _native_lib
     if lib is None:
         return False
     return hasattr(lib, name)
@@ -59,8 +61,8 @@ class TestMLKEM512:
         """ML-KEM-512 encaps/decaps produce matching shared secrets."""
         from ama_cryptography.pqc_backends import (
             generate_kyber512_keypair,
-            kyber512_encapsulate,
             kyber512_decapsulate,
+            kyber512_encapsulate,
         )
 
         pk, sk = generate_kyber512_keypair()
@@ -75,11 +77,11 @@ class TestMLKEM512:
         """ML-KEM-512 decaps with wrong sk produces different shared secret."""
         from ama_cryptography.pqc_backends import (
             generate_kyber512_keypair,
-            kyber512_encapsulate,
             kyber512_decapsulate,
+            kyber512_encapsulate,
         )
 
-        pk1, sk1 = generate_kyber512_keypair()
+        pk1, _sk1 = generate_kyber512_keypair()
         _pk2, sk2 = generate_kyber512_keypair()
 
         ct, ss_enc = kyber512_encapsulate(pk1)
@@ -120,8 +122,8 @@ class TestMLKEM768:
         """ML-KEM-768 encaps/decaps produce matching shared secrets."""
         from ama_cryptography.pqc_backends import (
             generate_kyber768_keypair,
-            kyber768_encapsulate,
             kyber768_decapsulate,
+            kyber768_encapsulate,
         )
 
         pk, sk = generate_kyber768_keypair()
@@ -136,11 +138,11 @@ class TestMLKEM768:
         """ML-KEM-768 decaps with wrong sk produces different shared secret."""
         from ama_cryptography.pqc_backends import (
             generate_kyber768_keypair,
-            kyber768_encapsulate,
             kyber768_decapsulate,
+            kyber768_encapsulate,
         )
 
-        pk1, sk1 = generate_kyber768_keypair()
+        pk1, _sk1 = generate_kyber768_keypair()
         _pk2, sk2 = generate_kyber768_keypair()
 
         ct, ss_enc = kyber768_encapsulate(pk1)
@@ -185,9 +187,7 @@ class TestSLHDSAParameterSets:
         [v for v in _SLH_DSA_VARIANTS if _slh_dsa_available(v[0])],
         ids=[v[0] for v in _SLH_DSA_VARIANTS if _slh_dsa_available(v[0])],
     )
-    def test_keypair_sizes(
-        self, variant: str, pk_size: int, sk_size: int, sig_size: int
-    ) -> None:
+    def test_keypair_sizes(self, variant: str, pk_size: int, sk_size: int, sig_size: int) -> None:
         """SLH-DSA keypair produces correct-size keys."""
         from ama_cryptography.pqc_backends import _slh_dsa_keypair
 
@@ -271,9 +271,9 @@ class TestMLDSA44:
     def test_sign_verify(self) -> None:
         """ML-DSA-44 sign/verify roundtrip succeeds."""
         from ama_cryptography.pqc_backends import (
-            generate_dilithium44_keypair,
             dilithium44_sign,
             dilithium44_verify,
+            generate_dilithium44_keypair,
         )
 
         pk, sk = generate_dilithium44_keypair()
@@ -286,9 +286,9 @@ class TestMLDSA44:
     def test_wrong_message_fails(self) -> None:
         """ML-DSA-44 verify with wrong message returns False."""
         from ama_cryptography.pqc_backends import (
-            generate_dilithium44_keypair,
             dilithium44_sign,
             dilithium44_verify,
+            generate_dilithium44_keypair,
         )
 
         pk, sk = generate_dilithium44_keypair()
@@ -298,12 +298,12 @@ class TestMLDSA44:
     def test_wrong_key_fails(self) -> None:
         """ML-DSA-44 verify with wrong pk returns False."""
         from ama_cryptography.pqc_backends import (
-            generate_dilithium44_keypair,
             dilithium44_sign,
             dilithium44_verify,
+            generate_dilithium44_keypair,
         )
 
-        pk1, sk1 = generate_dilithium44_keypair()
+        _pk1, sk1 = generate_dilithium44_keypair()
         pk2, _sk2 = generate_dilithium44_keypair()
         sig = dilithium44_sign(b"test", sk1)
         assert dilithium44_verify(b"test", sig, pk2) is False
@@ -362,9 +362,9 @@ class TestMLDSA87:
     def test_sign_verify(self) -> None:
         """ML-DSA-87 sign/verify roundtrip succeeds."""
         from ama_cryptography.pqc_backends import (
-            generate_dilithium87_keypair,
             dilithium87_sign,
             dilithium87_verify,
+            generate_dilithium87_keypair,
         )
 
         pk, sk = generate_dilithium87_keypair()
@@ -377,9 +377,9 @@ class TestMLDSA87:
     def test_wrong_message_fails(self) -> None:
         """ML-DSA-87 verify with wrong message returns False."""
         from ama_cryptography.pqc_backends import (
-            generate_dilithium87_keypair,
             dilithium87_sign,
             dilithium87_verify,
+            generate_dilithium87_keypair,
         )
 
         pk, sk = generate_dilithium87_keypair()
@@ -389,12 +389,12 @@ class TestMLDSA87:
     def test_wrong_key_fails(self) -> None:
         """ML-DSA-87 verify with wrong pk returns False."""
         from ama_cryptography.pqc_backends import (
-            generate_dilithium87_keypair,
             dilithium87_sign,
             dilithium87_verify,
+            generate_dilithium87_keypair,
         )
 
-        pk1, sk1 = generate_dilithium87_keypair()
+        _pk1, sk1 = generate_dilithium87_keypair()
         pk2, _sk2 = generate_dilithium87_keypair()
         sig = dilithium87_sign(b"test", sk1)
         assert dilithium87_verify(b"test", sig, pk2) is False
@@ -416,9 +416,9 @@ class TestMLDSA87:
     def test_empty_message(self) -> None:
         """ML-DSA-87 can sign and verify empty messages."""
         from ama_cryptography.pqc_backends import (
-            generate_dilithium87_keypair,
             dilithium87_sign,
             dilithium87_verify,
+            generate_dilithium87_keypair,
         )
 
         pk, sk = generate_dilithium87_keypair()
@@ -455,7 +455,7 @@ class TestCythonBindingAvailability:
     def test_aes_gcm_binding_probe(self) -> None:
         """aes_gcm_binding module can be probed."""
         try:
-            from ama_cryptography import aes_gcm_binding  # type: ignore[attr-defined]
+            from ama_cryptography import aes_gcm_binding  # type: ignore[attr-defined]  # noqa: F401
 
             assert True
         except ImportError:
@@ -464,7 +464,9 @@ class TestCythonBindingAvailability:
     def test_chacha20poly1305_binding_probe(self) -> None:
         """chacha20poly1305_binding module can be probed."""
         try:
-            from ama_cryptography import chacha20poly1305_binding  # type: ignore[attr-defined]
+            from ama_cryptography import (
+                chacha20poly1305_binding,  # type: ignore[attr-defined]  # noqa: F401
+            )
 
             assert True
         except ImportError:
@@ -473,7 +475,7 @@ class TestCythonBindingAvailability:
     def test_x25519_binding_probe(self) -> None:
         """x25519_binding module can be probed."""
         try:
-            from ama_cryptography import x25519_binding  # type: ignore[attr-defined]
+            from ama_cryptography import x25519_binding  # type: ignore[attr-defined]  # noqa: F401
 
             assert True
         except ImportError:
@@ -516,8 +518,8 @@ class TestParameterSetConsistency:
         """Existing Kyber-1024 is not broken by new parameter sets."""
         from ama_cryptography.pqc_backends import (
             generate_kyber_keypair,
-            kyber_encapsulate,
             kyber_decapsulate,
+            kyber_encapsulate,
         )
 
         kp = generate_kyber_keypair()
@@ -529,9 +531,9 @@ class TestParameterSetConsistency:
     def test_dilithium_65_still_works(self) -> None:
         """Existing ML-DSA-65 is not broken by new parameter sets."""
         from ama_cryptography.pqc_backends import (
-            generate_dilithium_keypair,
             dilithium_sign,
             dilithium_verify,
+            generate_dilithium_keypair,
         )
 
         kp = generate_dilithium_keypair()
@@ -555,8 +557,6 @@ class TestParameterSetConsistency:
 # ============================================================================
 # Performance Baseline Tests (Phase 10c addendum)
 # ============================================================================
-
-import os
 
 _CI_PERF = os.environ.get("CI_PERF", "0") == "1"
 
@@ -597,11 +597,11 @@ class TestNewAlgorithmPerformance:
         import time
 
         from ama_cryptography.pqc_backends import (
-            generate_dilithium44_keypair,
             dilithium44_sign,
+            generate_dilithium44_keypair,
         )
 
-        pk, sk = generate_dilithium44_keypair()
+        _pk, sk = generate_dilithium44_keypair()
         msg = b"performance test message"
         start = time.monotonic()
         for _ in range(5):
@@ -615,11 +615,11 @@ class TestNewAlgorithmPerformance:
         import time
 
         from ama_cryptography.pqc_backends import (
-            generate_dilithium87_keypair,
             dilithium87_sign,
+            generate_dilithium87_keypair,
         )
 
-        pk, sk = generate_dilithium87_keypair()
+        _pk, sk = generate_dilithium87_keypair()
         msg = b"performance test message"
         start = time.monotonic()
         for _ in range(5):
