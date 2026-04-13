@@ -653,6 +653,117 @@ AMA_API ama_error_t ama_ed25519_batch_verify(
     int *results
 );
 
+/* ----------------------------------------------------------------------------
+ * Ed25519 Group Primitives (for FROST / Threshold Signatures)
+ * ---------------------------------------------------------------------------- */
+
+/** Raw scalar-basepoint multiply: point = scalar * G (no hash/clamp). */
+AMA_API void ama_ed25519_point_from_scalar(uint8_t point[32], const uint8_t scalar[32]);
+
+/** Point addition: result = P + Q (compressed Ed25519 points). */
+AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
+    const uint8_t p[32], const uint8_t q[32]);
+
+/**
+ * Scalar-point multiplication: result = scalar * P.
+ *
+ * SECURITY NOTE: The underlying ge25519_scalarmult is NOT constant-time.
+ * Only safe when the scalar is PUBLIC (e.g., FROST binding factors).
+ * Do NOT use with secret scalars — use ama_ed25519_point_from_scalar
+ * for secret-scalar × basepoint operations.
+ */
+AMA_API ama_error_t ama_ed25519_scalar_mult(uint8_t result[32],
+    const uint8_t scalar[32], const uint8_t point[32]);
+
+/** Reduce 64-byte scalar mod l (Ed25519 group order). Result in s[0..31]. */
+AMA_API void ama_ed25519_sc_reduce(uint8_t s[64]);
+
+/** SHA-512 hash (for FROST challenge computation, matching Ed25519 verify). */
+AMA_API void ama_ed25519_sha512(const uint8_t *data, size_t len, uint8_t out[64]);
+
+/** Scalar multiply-add: s = (a + b * c) mod l. All 32-byte LE scalars. */
+AMA_API void ama_ed25519_sc_muladd(uint8_t s[32], const uint8_t a[32],
+    const uint8_t b[32], const uint8_t c[32]);
+
+/* ============================================================================
+ * FROST THRESHOLD ED25519 SIGNATURES (RFC 9591)
+ * ============================================================================ */
+
+#define AMA_FROST_SHARE_BYTES       64  /* 32 secret + 32 public */
+#define AMA_FROST_NONCE_BYTES       64  /* 32 hiding + 32 binding */
+#define AMA_FROST_COMMITMENT_BYTES  64  /* 32 hiding_point + 32 binding_point */
+#define AMA_FROST_SIG_SHARE_BYTES   32
+#define AMA_FROST_MAX_PARTICIPANTS  255
+
+/**
+ * @brief Trusted dealer key generation via Shamir secret sharing.
+ *
+ * @param threshold         Minimum signers required (t >= 2)
+ * @param num_participants  Total participants (n >= t)
+ * @param group_public_key  Output: 32 bytes
+ * @param participant_shares Output: n * 64 bytes (secret || public)
+ * @param secret_key        Optional input: 32-byte secret (NULL = random)
+ */
+AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
+    uint8_t threshold, uint8_t num_participants,
+    uint8_t *group_public_key, uint8_t *participant_shares,
+    const uint8_t *secret_key);
+
+/**
+ * @brief Round 1: Generate nonce commitment.
+ *
+ * @param nonce_pair         Output: 64 bytes (SECRET — must be kept until round 2)
+ * @param commitment         Output: 64 bytes (PUBLIC — sent to coordinator)
+ * @param participant_share  Input:  64-byte participant share
+ */
+AMA_API ama_error_t ama_frost_round1_commit(
+    uint8_t *nonce_pair, uint8_t *commitment,
+    const uint8_t *participant_share);
+
+/**
+ * @brief Round 2: Generate signature share.
+ *
+ * @param sig_share          Output: 32 bytes
+ * @param message            Message to sign
+ * @param message_len        Message length
+ * @param participant_share  64-byte participant share
+ * @param participant_index  1-based participant index
+ * @param nonce_pair         64-byte nonce pair from round 1
+ * @param commitments        num_signers * 64 bytes of commitments.
+ *                           MUST be ordered to match signer_indices:
+ *                           commitments[i*64..(i+1)*64] is the commitment
+ *                           from participant signer_indices[i].
+ * @param signer_indices     num_signers participant indices (1-based, unique)
+ * @param num_signers        Number of signers in this session
+ * @param group_public_key   32-byte group public key
+ */
+AMA_API ama_error_t ama_frost_round2_sign(
+    uint8_t *sig_share,
+    const uint8_t *message, size_t message_len,
+    const uint8_t *participant_share, uint8_t participant_index,
+    const uint8_t *nonce_pair,
+    const uint8_t *commitments, const uint8_t *signer_indices,
+    uint8_t num_signers, const uint8_t *group_public_key);
+
+/**
+ * @brief Aggregate signature shares into a standard Ed25519 signature.
+ *
+ * @param signature         Output: 64-byte Ed25519-compatible signature
+ * @param sig_shares        num_signers * 32 bytes
+ * @param commitments       num_signers * 64 bytes
+ * @param signer_indices    num_signers participant indices (1-based)
+ * @param num_signers       Number of signers
+ * @param message           Message that was signed
+ * @param message_len       Message length
+ * @param group_public_key  32-byte group public key
+ */
+AMA_API ama_error_t ama_frost_aggregate(
+    uint8_t *signature,
+    const uint8_t *sig_shares, const uint8_t *commitments,
+    const uint8_t *signer_indices, uint8_t num_signers,
+    const uint8_t *message, size_t message_len,
+    const uint8_t *group_public_key);
+
 /* ============================================================================
  * AES-256-GCM AUTHENTICATED ENCRYPTION (NIST SP 800-38D)
  * ============================================================================ */

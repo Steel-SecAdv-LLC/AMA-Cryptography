@@ -621,11 +621,18 @@ class TestContextManager:
 
     def test_del_calls_close(self) -> None:
         """__del__ triggers close() for cleanup."""
+        import gc
+
+        # Flush any lingering HSMKeyStorage objects from earlier tests so
+        # their deferred __del__ calls do not run inside *our* gc.collect().
+        gc.collect()
+
         mock = _make_mock_pkcs11()
         hsm = _build_hsm(mock)
         session = mock.PyKCS11Lib.return_value.openSession.return_value
 
-        hsm.__del__()
+        del hsm
+        gc.collect()
         session.logout.assert_called()
 
 

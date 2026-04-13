@@ -90,6 +90,9 @@ _CRYPTO_API_EXPORTS = frozenset(
     {
         "AlgorithmType",
         "AmaCryptography",
+        "CryptoPackageConfig",
+        "KeypairCache",
+        "batch_verify_ed25519",
         "create_crypto_package",
         "verify_crypto_package",
     }
@@ -99,6 +102,9 @@ if TYPE_CHECKING:
     from .crypto_api import (  # noqa: F401 — TYPE_CHECKING re-exports for static analysis (INIT-004)
         AlgorithmType,
         AmaCryptography,
+        CryptoPackageConfig,
+        KeypairCache,
+        batch_verify_ed25519,
         create_crypto_package,
         verify_crypto_package,
     )
@@ -127,6 +133,9 @@ __all__ = [
     "secure_token_bytes",
     "AlgorithmType",
     "AmaCryptography",
+    "CryptoPackageConfig",
+    "KeypairCache",
+    "batch_verify_ed25519",
     "create_crypto_package",
     "verify_crypto_package",
     "PHI",

@@ -62,8 +62,8 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
-# _open_fd helper removed — callers now use bare os.fdopen() in a
-# try/with pattern that static analysers (CodeQL, Semgrep) can trace.
+# _open_fd helper removed — callers now use `with os.fdopen(fd, "wb")`
+# directly, the pattern CodeQL traces natively.
 
 
 # ---------------------------------------------------------------------------
@@ -461,22 +461,12 @@ def verify_rfc3161_timestamp(
     try:
         tsr_path = os.path.join(tmp_dir, "timestamp.tsr")
         fd = os.open(tsr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            f = os.fdopen(fd, "wb")
-        except BaseException:
-            os.close(fd)
-            raise
-        with f:
+        with os.fdopen(fd, "wb") as f:
             f.write(timestamp_token)
 
         data_path = os.path.join(tmp_dir, "data.dat")
         fd = os.open(data_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            f = os.fdopen(fd, "wb")
-        except BaseException:
-            os.close(fd)
-            raise
-        with f:
+        with os.fdopen(fd, "wb") as f:
             f.write(data)
 
         cmd_verify = [

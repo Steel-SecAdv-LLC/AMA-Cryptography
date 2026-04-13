@@ -35,7 +35,7 @@ import threading
 import time
 import warnings
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Dict, Optional
 
 _logger = logging.getLogger(__name__)
 
@@ -368,7 +368,7 @@ def _compute_data_hash(data: bytes, algorithm: str) -> Optional[bytes]:
 
     Returns the digest bytes, or ``None`` if the algorithm is not supported.
     """
-    _hash_funcs = {
+    _hash_funcs: Dict[str, Callable[[bytes], hashlib._Hash]] = {
         "sha256": hashlib.sha256,
         "sha3-256": hashlib.sha3_256,
         "sha512": hashlib.sha512,
