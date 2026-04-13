@@ -388,7 +388,7 @@ setup(
         # PKCS#11 support for hardware security modules
         "hsm": ["PyKCS11>=1.5.0"],
         # PyNaCl reserved for future libsodium integration; not currently used
-        "secure-memory": ["pynacl>=1.5.0"],
+        "secure-memory": ["pynacl>=1.6.2"],
         # NOTE: pyproject.toml [project.optional-dependencies.dev] is authoritative.
         "dev": [
             "pytest>=7.0.0",
@@ -413,7 +413,7 @@ setup(
             "sphinx-autodoc-typehints>=2.3.0",
         ],
         "all": [
-            "pynacl>=1.5.0",
+            "pynacl>=1.6.2",
             "PyKCS11>=1.5.0",
             "pytest>=7.0.0",
             "pytest-cov>=4.0.0",
