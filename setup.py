@@ -408,9 +408,9 @@ setup(
             "scipy>=1.11.0",
         ],
         "docs": [
-            "sphinx>=6.0.0",
+            "sphinx>=7.4.7",
             "sphinx-rtd-theme>=1.2.0",
-            "sphinx-autodoc-typehints>=1.22.0",
+            "sphinx-autodoc-typehints>=2.3.0",
         ],
         "all": [
             "pynacl>=1.5.0",
@@ -428,9 +428,9 @@ setup(
             "bandit>=1.7.0",
             "safety>=2.3.0",
             "Cython>=3.2.4",
-            "sphinx>=6.0.0",
+            "sphinx>=7.4.7",
             "sphinx-rtd-theme>=1.2.0",
-            "sphinx-autodoc-typehints>=1.22.0",
+            "sphinx-autodoc-typehints>=2.3.0",
             "numpy>=1.24.0",
             "scipy>=1.11.0",
         ],
