@@ -205,9 +205,9 @@ class TestSLHDSAParameterSets:
         """SLH-DSA keypair produces correct-size keys."""
         from ama_cryptography.pqc_backends import _slh_dsa_keypair
 
-        pk, sk = _slh_dsa_keypair(variant, pk_size, sk_size)
-        assert len(pk) == pk_size
-        assert len(sk) == sk_size
+        kp = _slh_dsa_keypair(variant, pk_size, sk_size)
+        assert len(kp.public_key) == pk_size
+        assert len(kp.secret_key) == sk_size
 
     @pytest.mark.parametrize(
         "variant,pk_size,sk_size,sig_size",
@@ -224,12 +224,12 @@ class TestSLHDSAParameterSets:
             _slh_dsa_verify,
         )
 
-        pk, sk = _slh_dsa_keypair(variant, pk_size, sk_size)
+        kp = _slh_dsa_keypair(variant, pk_size, sk_size)
         msg = b"AMA Cryptography SLH-DSA test message"
-        sig = _slh_dsa_sign(variant, sig_size, msg, sk)
+        sig = _slh_dsa_sign(variant, sig_size, msg, kp.secret_key)
 
         assert len(sig) <= sig_size
-        assert _slh_dsa_verify(variant, msg, sig, pk) is True
+        assert _slh_dsa_verify(variant, msg, sig, kp.public_key) is True
 
     @pytest.mark.parametrize(
         "variant,pk_size,sk_size,sig_size",
@@ -246,11 +246,11 @@ class TestSLHDSAParameterSets:
             _slh_dsa_verify,
         )
 
-        pk, sk = _slh_dsa_keypair(variant, pk_size, sk_size)
+        kp = _slh_dsa_keypair(variant, pk_size, sk_size)
         msg = b"correct message"
-        sig = _slh_dsa_sign(variant, sig_size, msg, sk)
+        sig = _slh_dsa_sign(variant, sig_size, msg, kp.secret_key)
 
-        assert _slh_dsa_verify(variant, b"wrong message", sig, pk) is False
+        assert _slh_dsa_verify(variant, b"wrong message", sig, kp.public_key) is False
 
     def test_keypair_uniqueness(self) -> None:
         """SLH-DSA keypairs are unique."""
@@ -258,9 +258,9 @@ class TestSLHDSAParameterSets:
             pytest.skip("SLH-DSA-128f not available")
         from ama_cryptography.pqc_backends import _slh_dsa_keypair
 
-        pk1, _sk1 = _slh_dsa_keypair("128f", 32, 64)
-        pk2, _sk2 = _slh_dsa_keypair("128f", 32, 64)
-        assert pk1 != pk2
+        kp1 = _slh_dsa_keypair("128f", 32, 64)
+        kp2 = _slh_dsa_keypair("128f", 32, 64)
+        assert kp1.public_key != kp2.public_key
 
 
 # ============================================================================
@@ -452,7 +452,7 @@ class TestCythonBindingAvailability:
         """kyber_binding module can be probed."""
         try:
             from ama_cryptography import (
-                kyber_binding,  # type: ignore[attr-defined]  # Cython extension; compiled at install time (CY-001)
+                kyber_binding,  # type: ignore[attr-defined]  # Cython .so; built at install time (CY-001)
             )
 
             assert hasattr(kyber_binding, "kyber_keypair") or True
@@ -463,7 +463,7 @@ class TestCythonBindingAvailability:
         """sphincs_binding module can be probed."""
         try:
             from ama_cryptography import (
-                sphincs_binding,  # type: ignore[attr-defined]  # Cython extension; compiled at install time (CY-001)
+                sphincs_binding,  # type: ignore[attr-defined]  # Cython .so; built at install time (CY-001)
             )
 
             assert hasattr(sphincs_binding, "sphincs_keypair") or True
@@ -474,7 +474,7 @@ class TestCythonBindingAvailability:
         """aes_gcm_binding module can be probed."""
         try:
             from ama_cryptography import (
-                aes_gcm_binding,  # type: ignore[attr-defined]  # Cython extension; compiled at install time (CY-001)  # noqa: F401
+                aes_gcm_binding,  # type: ignore[attr-defined]  # Cython .so; built at install time (CY-001)  # noqa: F401 -- unused import for probe (CY-001)
             )
 
             assert True
@@ -485,7 +485,7 @@ class TestCythonBindingAvailability:
         """chacha20poly1305_binding module can be probed."""
         try:
             from ama_cryptography import (
-                chacha20poly1305_binding,  # type: ignore[attr-defined]  # Cython extension; compiled at install time (CY-001)  # noqa: F401
+                chacha20poly1305_binding,  # type: ignore[attr-defined]  # Cython .so; built at install time (CY-001)  # noqa: F401 -- unused import for probe (CY-001)
             )
 
             assert True
@@ -496,7 +496,7 @@ class TestCythonBindingAvailability:
         """x25519_binding module can be probed."""
         try:
             from ama_cryptography import (
-                x25519_binding,  # type: ignore[attr-defined]  # Cython extension; compiled at install time (CY-001)  # noqa: F401
+                x25519_binding,  # type: ignore[attr-defined]  # Cython .so; built at install time (CY-001)  # noqa: F401 -- unused import for probe (CY-001)
             )
 
             assert True

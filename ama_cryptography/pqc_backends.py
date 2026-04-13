@@ -1805,7 +1805,7 @@ SLH_DSA_256S_SK = 128
 SLH_DSA_256S_SIG = 29792
 
 
-def _slh_dsa_keypair(variant: str, pk_size: int, sk_size: int) -> tuple:
+def _slh_dsa_keypair(variant: str, pk_size: int, sk_size: int) -> SphincsKeyPair:
     """Generate SLH-DSA keypair for given variant."""
     lib = _native_lib
     if lib is None:
@@ -1818,12 +1818,14 @@ def _slh_dsa_keypair(variant: str, pk_size: int, sk_size: int) -> tuple:
     rc = fn(pk_buf, sk_buf)
     if rc != 0:
         raise RuntimeError(f"SLH-DSA-{variant} keypair failed (rc={rc})")
-    result = (bytes(pk_buf), bytes(sk_buf))
+    result = SphincsKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
     ctypes.memset(sk_buf, 0, sk_size)
     return result
 
 
-def _slh_dsa_sign(variant: str, sig_size: int, message: bytes, secret_key: bytes) -> bytes:
+def _slh_dsa_sign(
+    variant: str, sig_size: int, message: bytes, secret_key: Union[bytes, bytearray]
+) -> bytes:
     """Sign with SLH-DSA for given variant."""
     if not isinstance(message, (bytes, bytearray)):
         raise TypeError("message must be bytes")
@@ -1874,7 +1876,7 @@ def _slh_dsa_verify(variant: str, message: bytes, signature: bytes, public_key: 
 
 
 # SLH-DSA-128s
-def generate_slh_dsa_128s_keypair() -> tuple:
+def generate_slh_dsa_128s_keypair() -> SphincsKeyPair:
     """Generate SLH-DSA-SHA2-128s keypair (FIPS 205, Level 1, small sigs)."""
     return _slh_dsa_keypair("128s", SLH_DSA_128S_PK, SLH_DSA_128S_SK)
 
@@ -1890,7 +1892,7 @@ def slh_dsa_128s_verify(message: bytes, signature: bytes, public_key: bytes) -> 
 
 
 # SLH-DSA-128f
-def generate_slh_dsa_128f_keypair() -> tuple:
+def generate_slh_dsa_128f_keypair() -> SphincsKeyPair:
     """Generate SLH-DSA-SHA2-128f keypair (FIPS 205, Level 1, fast)."""
     return _slh_dsa_keypair("128f", SLH_DSA_128F_PK, SLH_DSA_128F_SK)
 
@@ -1906,7 +1908,7 @@ def slh_dsa_128f_verify(message: bytes, signature: bytes, public_key: bytes) -> 
 
 
 # SLH-DSA-192s
-def generate_slh_dsa_192s_keypair() -> tuple:
+def generate_slh_dsa_192s_keypair() -> SphincsKeyPair:
     """Generate SLH-DSA-SHA2-192s keypair (FIPS 205, Level 3, small sigs)."""
     return _slh_dsa_keypair("192s", SLH_DSA_192S_PK, SLH_DSA_192S_SK)
 
@@ -1922,7 +1924,7 @@ def slh_dsa_192s_verify(message: bytes, signature: bytes, public_key: bytes) -> 
 
 
 # SLH-DSA-192f
-def generate_slh_dsa_192f_keypair() -> tuple:
+def generate_slh_dsa_192f_keypair() -> SphincsKeyPair:
     """Generate SLH-DSA-SHA2-192f keypair (FIPS 205, Level 3, fast)."""
     return _slh_dsa_keypair("192f", SLH_DSA_192F_PK, SLH_DSA_192F_SK)
 
@@ -1938,7 +1940,7 @@ def slh_dsa_192f_verify(message: bytes, signature: bytes, public_key: bytes) -> 
 
 
 # SLH-DSA-256s
-def generate_slh_dsa_256s_keypair() -> tuple:
+def generate_slh_dsa_256s_keypair() -> SphincsKeyPair:
     """Generate SLH-DSA-SHA2-256s keypair (FIPS 205, Level 5, small sigs)."""
     return _slh_dsa_keypair("256s", SLH_DSA_256S_PK, SLH_DSA_256S_SK)
 
@@ -1966,12 +1968,12 @@ ML_DSA_87_SK = 4896
 ML_DSA_87_SIG = 4627
 
 
-def generate_dilithium44_keypair() -> tuple:
+def generate_dilithium44_keypair() -> DilithiumKeyPair:
     """
     Generate ML-DSA-44 keypair (FIPS 204, Level 2).
 
     Returns:
-        (public_key, secret_key) tuple
+        DilithiumKeyPair with public_key and secret_key attributes
     """
     lib = _native_lib
     if lib is None:
@@ -1981,12 +1983,12 @@ def generate_dilithium44_keypair() -> tuple:
     rc = lib.ama_dilithium44_keypair(pk_buf, sk_buf)
     if rc != 0:
         raise RuntimeError(f"ML-DSA-44 keypair failed (rc={rc})")
-    result = (bytes(pk_buf), bytes(sk_buf))
+    result = DilithiumKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
     ctypes.memset(sk_buf, 0, ML_DSA_44_SK)
     return result
 
 
-def dilithium44_sign(message: bytes, secret_key: bytes) -> bytes:
+def dilithium44_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """
     Sign message with ML-DSA-44 (FIPS 204, Level 2).
 
@@ -2057,12 +2059,12 @@ def dilithium44_verify(message: bytes, signature: bytes, public_key: bytes) -> b
     return bool(rc == 0)
 
 
-def generate_dilithium87_keypair() -> tuple:
+def generate_dilithium87_keypair() -> DilithiumKeyPair:
     """
     Generate ML-DSA-87 keypair (FIPS 204, Level 5).
 
     Returns:
-        (public_key, secret_key) tuple
+        DilithiumKeyPair with public_key and secret_key attributes
     """
     lib = _native_lib
     if lib is None:
@@ -2072,12 +2074,12 @@ def generate_dilithium87_keypair() -> tuple:
     rc = lib.ama_dilithium87_keypair(pk_buf, sk_buf)
     if rc != 0:
         raise RuntimeError(f"ML-DSA-87 keypair failed (rc={rc})")
-    result = (bytes(pk_buf), bytes(sk_buf))
+    result = DilithiumKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
     ctypes.memset(sk_buf, 0, ML_DSA_87_SK)
     return result
 
 
-def dilithium87_sign(message: bytes, secret_key: bytes) -> bytes:
+def dilithium87_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """
     Sign message with ML-DSA-87 (FIPS 204, Level 5).
 

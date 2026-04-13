@@ -307,6 +307,16 @@ disable_error_code = ["attr-defined"]
 module = "tests.test_hkdf_sha3_256"
 warn_unused_ignores = false
 
+# test_new_pqc_parameter_sets and test_pqc_kat probe Cython .so bindings that
+# may or may not be installed.  type: ignore[attr-defined] is needed when the
+# .so is absent (CI) but unused when present (local dev with editable install).
+[[tool.mypy.overrides]]
+module = [
+    "tests.test_new_pqc_parameter_sets",
+    "tests.test_pqc_kat",
+]
+warn_unused_ignores = false
+
 # Pytest configuration (consolidated from pytest.ini)
 [tool.pytest.ini_options]
 minversion = "7.0"

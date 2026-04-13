@@ -207,8 +207,7 @@ extern void ama_kyber_ntt_avx512(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_kyber_invntt_avx512(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_kyber_poly_pointwise_avx512(int16_t r[256],
                                              const int16_t a[256],
-                                             const int16_t b[256],
-                                             const int16_t zetas[128]);
+                                             const int16_t b[256]);
 extern void ama_aes256_gcm_encrypt_avx512(const uint8_t *plaintext, size_t plaintext_len,
                                            const uint8_t *aad, size_t aad_len,
                                            const uint8_t key[32], const uint8_t nonce[12],

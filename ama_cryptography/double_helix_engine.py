@@ -643,4 +643,7 @@ def get_optimized_engine(state_dim: int = 212, random_seed: int = -1) -> "AmaEqu
     """
     if _CY_HELIX_AVAILABLE and AmaEngineOptimized is not None:
         return AmaEngineOptimized(state_dim=state_dim, random_seed=random_seed)
-    return AmaEquationEngine(state_dim=state_dim)
+    return AmaEquationEngine(
+        state_dim=state_dim,
+        random_seed=random_seed if random_seed != -1 else None,
+    )

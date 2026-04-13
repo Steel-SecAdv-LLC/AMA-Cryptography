@@ -434,7 +434,7 @@ class TestNonceMismatch:
         result = TimestampResult(
             token=b"\x30\x82\x01\x00",
             hash_algorithm="sha256",
-            data_hash=digest,
+            data_hash=digest.encode(),
             tsa_url="http://example.com/tsa",
         )
 
@@ -448,7 +448,7 @@ class TestNonceMismatch:
         result = TimestampResult(
             token=b"\x30\x82\x01\x00",
             hash_algorithm="sha256",
-            data_hash="0" * 64,  # All zeros — won't match any real data
+            data_hash=b"0" * 64,  # All zeros — won't match any real data
             tsa_url="http://example.com/tsa",
         )
         assert verify_timestamp(b"any data", result) is False
@@ -467,13 +467,13 @@ class TestReplayProtection:
         result1 = TimestampResult(
             token=b"\x30\x82\x01\x01",
             hash_algorithm="sha256",
-            data_hash=digest,
+            data_hash=digest.encode(),
             tsa_url="http://example.com/tsa",
         )
         result2 = TimestampResult(
             token=b"\x30\x82\x01\x02",
             hash_algorithm="sha256",
-            data_hash=digest,
+            data_hash=digest.encode(),
             tsa_url="http://example.com/tsa",
         )
         assert result1.data_hash == result2.data_hash

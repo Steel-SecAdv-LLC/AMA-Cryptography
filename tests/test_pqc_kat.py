@@ -22,9 +22,20 @@ References:
 import json
 import secrets
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, Callable, ClassVar, Optional
 
 import pytest
+
+from ama_cryptography.pqc_backends import _native_lib
+
+
+def _has_native_func(name: str) -> bool:
+    """Check if a specific function exists in the native C library."""
+    lib = _native_lib
+    if lib is None:
+        return False
+    return hasattr(lib, name)
+
 
 # =============================================================================
 # NIST FIPS 204 (ML-DSA / Dilithium) Constants
@@ -427,11 +438,7 @@ class TestMLKEM512KAT:
 
     @pytest.fixture(autouse=True)
     def _check_available(self) -> None:
-        from ama_cryptography.pqc_backends import (
-            _has_native_func,  # type: ignore[attr-defined]  # private API for test discovery (KAT-001)
-        )
-
-        if not _has_native_func("ama_kyber512_keypair"):  # type: ignore[operator]  # callable check on dynamic symbol (KAT-001)
+        if not _has_native_func("ama_kyber512_keypair"):
             pytest.skip("ML-KEM-512 not available in native library")
 
     def test_public_key_size(self) -> None:
@@ -533,11 +540,7 @@ class TestMLKEM768KAT:
 
     @pytest.fixture(autouse=True)
     def _check_available(self) -> None:
-        from ama_cryptography.pqc_backends import (
-            _has_native_func,  # type: ignore[attr-defined]  # private API for test discovery (KAT-001)
-        )
-
-        if not _has_native_func("ama_kyber768_keypair"):  # type: ignore[operator]  # callable check on dynamic symbol (KAT-001)
+        if not _has_native_func("ama_kyber768_keypair"):
             pytest.skip("ML-KEM-768 not available in native library")
 
     def test_public_key_size(self) -> None:
@@ -639,11 +642,7 @@ class TestMLDSA44KAT:
 
     @pytest.fixture(autouse=True)
     def _check_available(self) -> None:
-        from ama_cryptography.pqc_backends import (
-            _has_native_func,  # type: ignore[attr-defined]  # private API for test discovery (KAT-001)
-        )
-
-        if not _has_native_func("ama_dilithium44_keypair"):  # type: ignore[operator]  # callable check on dynamic symbol (KAT-001)
+        if not _has_native_func("ama_dilithium44_keypair"):
             pytest.skip("ML-DSA-44 not available in native library")
 
     def test_public_key_size(self) -> None:
@@ -743,11 +742,7 @@ class TestMLDSA87KAT:
 
     @pytest.fixture(autouse=True)
     def _check_available(self) -> None:
-        from ama_cryptography.pqc_backends import (
-            _has_native_func,  # type: ignore[attr-defined]  # private API for test discovery (KAT-001)
-        )
-
-        if not _has_native_func("ama_dilithium87_keypair"):  # type: ignore[operator]  # callable check on dynamic symbol (KAT-001)
+        if not _has_native_func("ama_dilithium87_keypair"):
             pytest.skip("ML-DSA-87 not available in native library")
 
     def test_public_key_size(self) -> None:
@@ -871,7 +866,9 @@ class TestSLHDSAAllVariantsKAT:
         import importlib
 
         mod = importlib.import_module("ama_cryptography.pqc_backends")
-        keygen_fn = getattr(mod, f"generate_slh_dsa_{variant}_keypair", None)
+        keygen_fn: Optional[Callable[[], Any]] = getattr(
+            mod, f"generate_slh_dsa_{variant}_keypair", None
+        )
         if keygen_fn is None:
             pytest.skip(f"SLH-DSA-{variant} keygen not available")
         kp = keygen_fn()
@@ -890,11 +887,14 @@ class TestSLHDSAAllVariantsKAT:
         import importlib
 
         mod = importlib.import_module("ama_cryptography.pqc_backends")
-        keygen_fn = getattr(mod, f"generate_slh_dsa_{variant}_keypair", None)
-        sign_fn = getattr(mod, f"slh_dsa_{variant}_sign", None)
-        verify_fn = getattr(mod, f"slh_dsa_{variant}_verify", None)
+        keygen_fn: Optional[Callable[[], Any]] = getattr(
+            mod, f"generate_slh_dsa_{variant}_keypair", None
+        )
+        sign_fn: Optional[Callable[..., Any]] = getattr(mod, f"slh_dsa_{variant}_sign", None)
+        verify_fn: Optional[Callable[..., Any]] = getattr(mod, f"slh_dsa_{variant}_verify", None)
         if not all([keygen_fn, sign_fn, verify_fn]):
             pytest.skip(f"SLH-DSA-{variant} not fully available")
+        assert keygen_fn is not None and sign_fn is not None and verify_fn is not None
         kp = keygen_fn()
         msg = f"FIPS 205 SLH-DSA-{variant} test".encode()
         sig = sign_fn(msg, kp.secret_key)
@@ -910,11 +910,14 @@ class TestSLHDSAAllVariantsKAT:
         import importlib
 
         mod = importlib.import_module("ama_cryptography.pqc_backends")
-        keygen_fn = getattr(mod, f"generate_slh_dsa_{variant}_keypair", None)
-        sign_fn = getattr(mod, f"slh_dsa_{variant}_sign", None)
-        verify_fn = getattr(mod, f"slh_dsa_{variant}_verify", None)
+        keygen_fn: Optional[Callable[[], Any]] = getattr(
+            mod, f"generate_slh_dsa_{variant}_keypair", None
+        )
+        sign_fn: Optional[Callable[..., Any]] = getattr(mod, f"slh_dsa_{variant}_sign", None)
+        verify_fn: Optional[Callable[..., Any]] = getattr(mod, f"slh_dsa_{variant}_verify", None)
         if not all([keygen_fn, sign_fn, verify_fn]):
             pytest.skip(f"SLH-DSA-{variant} not fully available")
+        assert keygen_fn is not None and sign_fn is not None and verify_fn is not None
         kp = keygen_fn()
         sig = sign_fn(b"original", kp.secret_key)
         assert not verify_fn(b"modified", sig, kp.public_key)
