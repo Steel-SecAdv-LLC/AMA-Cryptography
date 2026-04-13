@@ -1739,6 +1739,357 @@ def sphincs_verify_ctx(message: bytes, signature: bytes, public_key: bytes, ctx:
 
 
 # ============================================================================
+# SLH-DSA ADDITIONAL PARAMETER SETS (FIPS 205)
+# ============================================================================
+
+# Size constants per FIPS 205 Table 1
+SLH_DSA_128S_PK = 32
+SLH_DSA_128S_SK = 64
+SLH_DSA_128S_SIG = 7856
+
+SLH_DSA_128F_PK = 32
+SLH_DSA_128F_SK = 64
+SLH_DSA_128F_SIG = 17088
+
+SLH_DSA_192S_PK = 48
+SLH_DSA_192S_SK = 96
+SLH_DSA_192S_SIG = 16224
+
+SLH_DSA_192F_PK = 48
+SLH_DSA_192F_SK = 96
+SLH_DSA_192F_SIG = 35664
+
+SLH_DSA_256S_PK = 64
+SLH_DSA_256S_SK = 128
+SLH_DSA_256S_SIG = 29792
+
+
+def _slh_dsa_keypair(variant: str, pk_size: int, sk_size: int) -> tuple:
+    """Generate SLH-DSA keypair for given variant."""
+    lib = _get_native_lib()
+    if lib is None:
+        raise RuntimeError(f"SLH-DSA-{variant}: native library unavailable")
+    fn = getattr(lib, f"ama_slh_dsa_{variant}_keypair", None)
+    if fn is None:
+        raise RuntimeError(f"SLH-DSA-{variant}: function not found in native library")
+    pk_buf = ctypes.create_string_buffer(pk_size)
+    sk_buf = ctypes.create_string_buffer(sk_size)
+    rc = fn(pk_buf, sk_buf)
+    if rc != 0:
+        raise RuntimeError(f"SLH-DSA-{variant} keypair failed (rc={rc})")
+    result = (bytes(pk_buf), bytes(sk_buf))
+    ctypes.memset(sk_buf, 0, sk_size)
+    return result
+
+
+def _slh_dsa_sign(variant: str, sig_size: int,
+                  message: bytes, secret_key: bytes) -> bytes:
+    """Sign with SLH-DSA for given variant."""
+    if not isinstance(message, (bytes, bytearray)):
+        raise TypeError("message must be bytes")
+    if not isinstance(secret_key, (bytes, bytearray)):
+        raise TypeError("secret_key must be bytes")
+    lib = _get_native_lib()
+    if lib is None:
+        raise RuntimeError(f"SLH-DSA-{variant}: native library unavailable")
+    fn = getattr(lib, f"ama_slh_dsa_{variant}_sign", None)
+    if fn is None:
+        raise RuntimeError(f"SLH-DSA-{variant}: sign function not found")
+    sig_buf = ctypes.create_string_buffer(sig_size)
+    sig_len = ctypes.c_size_t(sig_size)
+    rc = fn(
+        sig_buf, ctypes.byref(sig_len),
+        message, ctypes.c_size_t(len(message)),
+        secret_key,
+    )
+    if rc != 0:
+        raise RuntimeError(f"SLH-DSA-{variant} sign failed (rc={rc})")
+    return bytes(sig_buf)[: sig_len.value]
+
+
+def _slh_dsa_verify(variant: str, message: bytes,
+                    signature: bytes, public_key: bytes) -> bool:
+    """Verify SLH-DSA signature for given variant."""
+    if not isinstance(message, (bytes, bytearray)):
+        raise TypeError("message must be bytes")
+    if not isinstance(signature, (bytes, bytearray)):
+        raise TypeError("signature must be bytes")
+    if not isinstance(public_key, (bytes, bytearray)):
+        raise TypeError("public_key must be bytes")
+    lib = _get_native_lib()
+    if lib is None:
+        raise RuntimeError(f"SLH-DSA-{variant}: native library unavailable")
+    fn = getattr(lib, f"ama_slh_dsa_{variant}_verify", None)
+    if fn is None:
+        raise RuntimeError(f"SLH-DSA-{variant}: verify function not found")
+    rc = fn(
+        message, ctypes.c_size_t(len(message)),
+        signature, ctypes.c_size_t(len(signature)),
+        public_key,
+    )
+    return bool(rc == 0)
+
+
+# SLH-DSA-128s
+def generate_slh_dsa_128s_keypair() -> tuple:
+    """Generate SLH-DSA-SHA2-128s keypair (FIPS 205, Level 1, small sigs)."""
+    return _slh_dsa_keypair("128s", SLH_DSA_128S_PK, SLH_DSA_128S_SK)
+
+def slh_dsa_128s_sign(message: bytes, secret_key: bytes) -> bytes:
+    """Sign with SLH-DSA-SHA2-128s."""
+    return _slh_dsa_sign("128s", SLH_DSA_128S_SIG, message, secret_key)
+
+def slh_dsa_128s_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
+    """Verify SLH-DSA-SHA2-128s signature."""
+    return _slh_dsa_verify("128s", message, signature, public_key)
+
+
+# SLH-DSA-128f
+def generate_slh_dsa_128f_keypair() -> tuple:
+    """Generate SLH-DSA-SHA2-128f keypair (FIPS 205, Level 1, fast)."""
+    return _slh_dsa_keypair("128f", SLH_DSA_128F_PK, SLH_DSA_128F_SK)
+
+def slh_dsa_128f_sign(message: bytes, secret_key: bytes) -> bytes:
+    """Sign with SLH-DSA-SHA2-128f."""
+    return _slh_dsa_sign("128f", SLH_DSA_128F_SIG, message, secret_key)
+
+def slh_dsa_128f_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
+    """Verify SLH-DSA-SHA2-128f signature."""
+    return _slh_dsa_verify("128f", message, signature, public_key)
+
+
+# SLH-DSA-192s
+def generate_slh_dsa_192s_keypair() -> tuple:
+    """Generate SLH-DSA-SHA2-192s keypair (FIPS 205, Level 3, small sigs)."""
+    return _slh_dsa_keypair("192s", SLH_DSA_192S_PK, SLH_DSA_192S_SK)
+
+def slh_dsa_192s_sign(message: bytes, secret_key: bytes) -> bytes:
+    """Sign with SLH-DSA-SHA2-192s."""
+    return _slh_dsa_sign("192s", SLH_DSA_192S_SIG, message, secret_key)
+
+def slh_dsa_192s_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
+    """Verify SLH-DSA-SHA2-192s signature."""
+    return _slh_dsa_verify("192s", message, signature, public_key)
+
+
+# SLH-DSA-192f
+def generate_slh_dsa_192f_keypair() -> tuple:
+    """Generate SLH-DSA-SHA2-192f keypair (FIPS 205, Level 3, fast)."""
+    return _slh_dsa_keypair("192f", SLH_DSA_192F_PK, SLH_DSA_192F_SK)
+
+def slh_dsa_192f_sign(message: bytes, secret_key: bytes) -> bytes:
+    """Sign with SLH-DSA-SHA2-192f."""
+    return _slh_dsa_sign("192f", SLH_DSA_192F_SIG, message, secret_key)
+
+def slh_dsa_192f_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
+    """Verify SLH-DSA-SHA2-192f signature."""
+    return _slh_dsa_verify("192f", message, signature, public_key)
+
+
+# SLH-DSA-256s
+def generate_slh_dsa_256s_keypair() -> tuple:
+    """Generate SLH-DSA-SHA2-256s keypair (FIPS 205, Level 5, small sigs)."""
+    return _slh_dsa_keypair("256s", SLH_DSA_256S_PK, SLH_DSA_256S_SK)
+
+def slh_dsa_256s_sign(message: bytes, secret_key: bytes) -> bytes:
+    """Sign with SLH-DSA-SHA2-256s."""
+    return _slh_dsa_sign("256s", SLH_DSA_256S_SIG, message, secret_key)
+
+def slh_dsa_256s_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
+    """Verify SLH-DSA-SHA2-256s signature."""
+    return _slh_dsa_verify("256s", message, signature, public_key)
+
+
+# ============================================================================
+# ML-DSA-44 / ML-DSA-87 ADDITIONAL PARAMETER SETS (FIPS 204)
+# ============================================================================
+
+ML_DSA_44_PK = 1312
+ML_DSA_44_SK = 2560
+ML_DSA_44_SIG = 2420
+
+ML_DSA_87_PK = 2592
+ML_DSA_87_SK = 4896
+ML_DSA_87_SIG = 4627
+
+
+def generate_dilithium44_keypair() -> tuple:
+    """
+    Generate ML-DSA-44 keypair (FIPS 204, Level 2).
+
+    Returns:
+        (public_key, secret_key) tuple
+    """
+    lib = _get_native_lib()
+    if lib is None:
+        raise RuntimeError("ML-DSA-44: native library unavailable")
+    pk_buf = ctypes.create_string_buffer(ML_DSA_44_PK)
+    sk_buf = ctypes.create_string_buffer(ML_DSA_44_SK)
+    rc = lib.ama_dilithium44_keypair(pk_buf, sk_buf)
+    if rc != 0:
+        raise RuntimeError(f"ML-DSA-44 keypair failed (rc={rc})")
+    result = (bytes(pk_buf), bytes(sk_buf))
+    ctypes.memset(sk_buf, 0, ML_DSA_44_SK)
+    return result
+
+
+def dilithium44_sign(message: bytes, secret_key: bytes) -> bytes:
+    """
+    Sign message with ML-DSA-44 (FIPS 204, Level 2).
+
+    Args:
+        message: Message bytes to sign
+        secret_key: ML-DSA-44 secret key (2560 bytes)
+
+    Returns:
+        Signature bytes (up to 2420 bytes)
+    """
+    if not isinstance(message, (bytes, bytearray)):
+        raise TypeError("message must be bytes")
+    if not isinstance(secret_key, (bytes, bytearray)):
+        raise TypeError("secret_key must be bytes")
+    if len(secret_key) != ML_DSA_44_SK:
+        raise ValueError(f"secret_key must be {ML_DSA_44_SK} bytes, got {len(secret_key)}")
+    lib = _get_native_lib()
+    if lib is None:
+        raise RuntimeError("ML-DSA-44: native library unavailable")
+    sig_buf = ctypes.create_string_buffer(ML_DSA_44_SIG)
+    sig_len = ctypes.c_size_t(ML_DSA_44_SIG)
+    sk_buf = ctypes.create_string_buffer(bytes(secret_key), len(secret_key))
+    try:
+        rc = lib.ama_dilithium44_sign(
+            sig_buf, ctypes.byref(sig_len),
+            message, ctypes.c_size_t(len(message)),
+            sk_buf,
+        )
+        if rc != 0:
+            raise RuntimeError(f"ML-DSA-44 sign failed (rc={rc})")
+        return bytes(sig_buf)[: sig_len.value]
+    finally:
+        ctypes.memset(sk_buf, 0, len(secret_key))
+
+
+def dilithium44_verify(message: bytes, signature: bytes,
+                       public_key: bytes) -> bool:
+    """
+    Verify ML-DSA-44 signature (FIPS 204, Level 2).
+
+    Args:
+        message: Original message bytes
+        signature: Signature to verify
+        public_key: ML-DSA-44 public key (1312 bytes)
+
+    Returns:
+        True if valid, False otherwise
+    """
+    if not isinstance(message, (bytes, bytearray)):
+        raise TypeError("message must be bytes")
+    if not isinstance(signature, (bytes, bytearray)):
+        raise TypeError("signature must be bytes")
+    if not isinstance(public_key, (bytes, bytearray)):
+        raise TypeError("public_key must be bytes")
+    if len(public_key) != ML_DSA_44_PK:
+        raise ValueError(f"public_key must be {ML_DSA_44_PK} bytes, got {len(public_key)}")
+    lib = _get_native_lib()
+    if lib is None:
+        raise RuntimeError("ML-DSA-44: native library unavailable")
+    rc = lib.ama_dilithium44_verify(
+        message, ctypes.c_size_t(len(message)),
+        signature, ctypes.c_size_t(len(signature)),
+        public_key,
+    )
+    return bool(rc == 0)
+
+
+def generate_dilithium87_keypair() -> tuple:
+    """
+    Generate ML-DSA-87 keypair (FIPS 204, Level 5).
+
+    Returns:
+        (public_key, secret_key) tuple
+    """
+    lib = _get_native_lib()
+    if lib is None:
+        raise RuntimeError("ML-DSA-87: native library unavailable")
+    pk_buf = ctypes.create_string_buffer(ML_DSA_87_PK)
+    sk_buf = ctypes.create_string_buffer(ML_DSA_87_SK)
+    rc = lib.ama_dilithium87_keypair(pk_buf, sk_buf)
+    if rc != 0:
+        raise RuntimeError(f"ML-DSA-87 keypair failed (rc={rc})")
+    result = (bytes(pk_buf), bytes(sk_buf))
+    ctypes.memset(sk_buf, 0, ML_DSA_87_SK)
+    return result
+
+
+def dilithium87_sign(message: bytes, secret_key: bytes) -> bytes:
+    """
+    Sign message with ML-DSA-87 (FIPS 204, Level 5).
+
+    Args:
+        message: Message bytes to sign
+        secret_key: ML-DSA-87 secret key (4896 bytes)
+
+    Returns:
+        Signature bytes (up to 4627 bytes)
+    """
+    if not isinstance(message, (bytes, bytearray)):
+        raise TypeError("message must be bytes")
+    if not isinstance(secret_key, (bytes, bytearray)):
+        raise TypeError("secret_key must be bytes")
+    if len(secret_key) != ML_DSA_87_SK:
+        raise ValueError(f"secret_key must be {ML_DSA_87_SK} bytes, got {len(secret_key)}")
+    lib = _get_native_lib()
+    if lib is None:
+        raise RuntimeError("ML-DSA-87: native library unavailable")
+    sig_buf = ctypes.create_string_buffer(ML_DSA_87_SIG)
+    sig_len = ctypes.c_size_t(ML_DSA_87_SIG)
+    sk_buf = ctypes.create_string_buffer(bytes(secret_key), len(secret_key))
+    try:
+        rc = lib.ama_dilithium87_sign(
+            sig_buf, ctypes.byref(sig_len),
+            message, ctypes.c_size_t(len(message)),
+            sk_buf,
+        )
+        if rc != 0:
+            raise RuntimeError(f"ML-DSA-87 sign failed (rc={rc})")
+        return bytes(sig_buf)[: sig_len.value]
+    finally:
+        ctypes.memset(sk_buf, 0, len(secret_key))
+
+
+def dilithium87_verify(message: bytes, signature: bytes,
+                       public_key: bytes) -> bool:
+    """
+    Verify ML-DSA-87 signature (FIPS 204, Level 5).
+
+    Args:
+        message: Original message bytes
+        signature: Signature to verify
+        public_key: ML-DSA-87 public key (2592 bytes)
+
+    Returns:
+        True if valid, False otherwise
+    """
+    if not isinstance(message, (bytes, bytearray)):
+        raise TypeError("message must be bytes")
+    if not isinstance(signature, (bytes, bytearray)):
+        raise TypeError("signature must be bytes")
+    if not isinstance(public_key, (bytes, bytearray)):
+        raise TypeError("public_key must be bytes")
+    if len(public_key) != ML_DSA_87_PK:
+        raise ValueError(f"public_key must be {ML_DSA_87_PK} bytes, got {len(public_key)}")
+    lib = _get_native_lib()
+    if lib is None:
+        raise RuntimeError("ML-DSA-87: native library unavailable")
+    rc = lib.ama_dilithium87_verify(
+        message, ctypes.c_size_t(len(message)),
+        signature, ctypes.c_size_t(len(signature)),
+        public_key,
+    )
+    return bool(rc == 0)
+
+
+# ============================================================================
 # ED25519 NATIVE C BACKEND (RFC 8032)
 # ============================================================================
 

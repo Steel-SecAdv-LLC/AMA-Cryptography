@@ -308,6 +308,8 @@ if(AMA_USE_NATIVE_PQC)
         src/c/ama_kyber.c
         src/c/ama_dilithium.c
         src/c/ama_sphincs.c
+        src/c/ama_slh_dsa_params.c
+        src/c/ama_dilithium_params.c
         src/c/ama_secp256k1.c
         src/c/ama_frost.c
         src/c/ama_x25519.c
