@@ -76,7 +76,7 @@ legacy = [
     # PyCA cryptography — only needed as fallback when native C library is not
     # available. Ed25519 and AES-256-GCM are now provided natively.
     # Install with: pip install "ama-cryptography[legacy]"
-    "cryptography>=41.0.0",
+    "cryptography>=41.0.7",
 ]
 hsm = [
     # PKCS#11 support for hardware security modules
