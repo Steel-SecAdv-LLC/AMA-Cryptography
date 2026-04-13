@@ -271,6 +271,20 @@ def get_extension_modules():
         )
         extensions.append(x25519_ext)
 
+        # Cython Double-Helix Complete Engine (all 18+ AMA equation variants)
+        helix_include_dirs = ["include"]
+        if NUMPY_AVAILABLE:
+            helix_include_dirs.append(np.get_include())
+        helix_ext = Extension(
+            name="ama_cryptography.helix_engine_complete",
+            sources=["src/cython/helix_engine_complete.pyx"],
+            include_dirs=helix_include_dirs,
+            extra_compile_args=compiler_flags,
+            extra_link_args=linker_flags,
+            language="c",
+        )
+        extensions.append(helix_ext)
+
     return extensions
 
 
