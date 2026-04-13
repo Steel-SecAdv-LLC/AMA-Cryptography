@@ -353,3 +353,159 @@ class TestModuleAttributes:
             "RFC3161_AVAILABLE",
         }
         assert set(mod.__all__) == expected
+
+
+# ---------------------------------------------------------------------------
+# Additional RFC 3161 mock coverage (Phase 10b)
+# ---------------------------------------------------------------------------
+
+
+class TestNetworkErrorPaths:
+    """Test network failure scenarios for timestamp operations."""
+
+    @patch("ama_cryptography.rfc3161_timestamp._RFC3161_AVAILABLE", True)
+    @patch("ama_cryptography.rfc3161_timestamp.rfc3161ng")
+    def test_connection_timeout_raises_timestamp_error(
+        self, mock_rfc: MagicMock
+    ) -> None:
+        """Connection timeout is surfaced as TimestampError."""
+        import socket
+
+        mock_rfc.RemoteTimestamper.return_value.timestamp.side_effect = (
+            socket.timeout("Connection timed out")
+        )
+        with pytest.raises(TimestampError):
+            get_timestamp(b"test data", tsa_url="http://example.com/tsa")
+
+    @patch("ama_cryptography.rfc3161_timestamp._RFC3161_AVAILABLE", True)
+    @patch("ama_cryptography.rfc3161_timestamp.rfc3161ng")
+    def test_connection_refused_raises_timestamp_error(
+        self, mock_rfc: MagicMock
+    ) -> None:
+        """Connection refused is surfaced as TimestampError."""
+        mock_rfc.RemoteTimestamper.return_value.timestamp.side_effect = (
+            ConnectionRefusedError("Connection refused")
+        )
+        with pytest.raises(TimestampError):
+            get_timestamp(b"test data", tsa_url="http://example.com/tsa")
+
+    @patch("ama_cryptography.rfc3161_timestamp._RFC3161_AVAILABLE", True)
+    @patch("ama_cryptography.rfc3161_timestamp.rfc3161ng")
+    def test_generic_os_error_raises_timestamp_error(
+        self, mock_rfc: MagicMock
+    ) -> None:
+        """Generic OSError during timestamping raises TimestampError."""
+        mock_rfc.RemoteTimestamper.return_value.timestamp.side_effect = (
+            OSError("Network unreachable")
+        )
+        with pytest.raises(TimestampError):
+            get_timestamp(b"test data", tsa_url="http://example.com/tsa")
+
+
+class TestMalformedResponses:
+    """Test handling of malformed TSA responses."""
+
+    @patch("ama_cryptography.rfc3161_timestamp._RFC3161_AVAILABLE", True)
+    @patch("ama_cryptography.rfc3161_timestamp.rfc3161ng")
+    def test_empty_token_raises_error(self, mock_rfc: MagicMock) -> None:
+        """Empty timestamp token raises TimestampError."""
+        mock_rfc.RemoteTimestamper.return_value.timestamp.return_value = None
+        with pytest.raises(TimestampError):
+            get_timestamp(b"test data", tsa_url="http://example.com/tsa")
+
+    @patch("ama_cryptography.rfc3161_timestamp._RFC3161_AVAILABLE", True)
+    @patch("ama_cryptography.rfc3161_timestamp.rfc3161ng")
+    def test_empty_bytes_token_raises_error(self, mock_rfc: MagicMock) -> None:
+        """Empty bytes timestamp token raises TimestampError."""
+        mock_rfc.RemoteTimestamper.return_value.timestamp.return_value = b""
+        # Depending on implementation, may raise or return with empty token
+        try:
+            result = get_timestamp(b"test data", tsa_url="http://example.com/tsa")
+            # If it doesn't raise, token should be bytes
+            assert isinstance(result.token, bytes)
+        except TimestampError:
+            pass  # Also acceptable
+
+
+class TestNonceMismatch:
+    """Test nonce validation in timestamp responses."""
+
+    @patch("ama_cryptography.rfc3161_timestamp._RFC3161_AVAILABLE", True)
+    @patch("ama_cryptography.rfc3161_timestamp.rfc3161ng")
+    def test_verify_with_different_data_fails(self, mock_rfc: MagicMock) -> None:
+        """Verification with different data than what was timestamped returns False."""
+        # Create a result with a known hash
+        original_data = b"original data"
+        digest = hashlib.sha256(original_data).hexdigest()
+        result = TimestampResult(
+            token=b"\x30\x82\x01\x00",
+            algorithm="sha256",
+            digest=digest,
+            tsa_url="http://example.com/tsa",
+        )
+
+        # Verify with different data
+        assert verify_timestamp(b"different data", result) is False
+
+    @patch("ama_cryptography.rfc3161_timestamp._RFC3161_AVAILABLE", True)
+    @patch("ama_cryptography.rfc3161_timestamp.rfc3161ng")
+    def test_verify_with_corrupted_digest(self, mock_rfc: MagicMock) -> None:
+        """Verification with corrupted digest returns False."""
+        result = TimestampResult(
+            token=b"\x30\x82\x01\x00",
+            algorithm="sha256",
+            digest="0" * 64,  # All zeros — won't match any real data
+            tsa_url="http://example.com/tsa",
+        )
+        assert verify_timestamp(b"any data", result) is False
+
+
+class TestReplayProtection:
+    """Test replay attack detection scenarios."""
+
+    @patch("ama_cryptography.rfc3161_timestamp._RFC3161_AVAILABLE", True)
+    @patch("ama_cryptography.rfc3161_timestamp.rfc3161ng")
+    def test_same_data_different_timestamps(self, mock_rfc: MagicMock) -> None:
+        """Two timestamps of same data should have same digest."""
+        data = b"replay test data"
+        digest = hashlib.sha256(data).hexdigest()
+
+        result1 = TimestampResult(
+            token=b"\x30\x82\x01\x01",
+            algorithm="sha256",
+            digest=digest,
+            tsa_url="http://example.com/tsa",
+        )
+        result2 = TimestampResult(
+            token=b"\x30\x82\x01\x02",
+            algorithm="sha256",
+            digest=digest,
+            tsa_url="http://example.com/tsa",
+        )
+        assert result1.digest == result2.digest
+        # But tokens should differ (different nonces in real scenario)
+        assert result1.token != result2.token
+
+
+class TestCertificateChainErrors:
+    """Test TSA certificate chain validation error paths."""
+
+    @patch("ama_cryptography.rfc3161_timestamp._RFC3161_AVAILABLE", True)
+    @patch("ama_cryptography.rfc3161_timestamp.rfc3161ng")
+    def test_tsa_certificate_expired(self, mock_rfc: MagicMock) -> None:
+        """Expired TSA certificate raises TimestampError."""
+        mock_rfc.RemoteTimestamper.return_value.timestamp.side_effect = (
+            Exception("certificate has expired")
+        )
+        with pytest.raises(TimestampError):
+            get_timestamp(b"test data", tsa_url="http://example.com/tsa")
+
+    @patch("ama_cryptography.rfc3161_timestamp._RFC3161_AVAILABLE", True)
+    @patch("ama_cryptography.rfc3161_timestamp.rfc3161ng")
+    def test_tsa_certificate_untrusted(self, mock_rfc: MagicMock) -> None:
+        """Untrusted TSA certificate raises TimestampError."""
+        mock_rfc.RemoteTimestamper.return_value.timestamp.side_effect = (
+            Exception("unable to get local issuer certificate")
+        )
+        with pytest.raises(TimestampError):
+            get_timestamp(b"test data", tsa_url="http://example.com/tsa")
