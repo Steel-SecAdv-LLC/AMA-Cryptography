@@ -196,6 +196,42 @@ extern ama_error_t ama_aes256_gcm_decrypt_avx2(const uint8_t *ciphertext, size_t
                                                 const uint8_t tag[16], uint8_t *plaintext);
 #endif
 
+#ifdef AMA_HAVE_AVX512_IMPL
+extern void ama_keccak_f1600_avx512(uint64_t state[25]);
+extern ama_error_t ama_sha3_256_avx512(const uint8_t *input, size_t input_len,
+                                        uint8_t output[32]);
+extern void ama_kyber_ntt_avx512(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_kyber_invntt_avx512(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_kyber_poly_pointwise_avx512(int16_t r[256],
+                                             const int16_t a[256],
+                                             const int16_t b[256]);
+extern void ama_dilithium_ntt_avx512(int32_t poly[256],
+                                      const int32_t zetas[256]);
+extern void ama_dilithium_invntt_avx512(int32_t poly[256],
+                                         const int32_t zetas[256]);
+extern void ama_dilithium_poly_pointwise_avx512(int32_t r[256],
+                                                 const int32_t a[256],
+                                                 const int32_t b[256]);
+extern ama_error_t ama_ed25519_keypair_avx512(uint8_t public_key[32],
+                                               uint8_t secret_key[64]);
+extern ama_error_t ama_ed25519_sign_avx512(uint8_t signature[64],
+                                            const uint8_t *message,
+                                            size_t message_len,
+                                            const uint8_t secret_key[64]);
+extern ama_error_t ama_ed25519_verify_avx512(const uint8_t signature[64],
+                                              const uint8_t *message,
+                                              size_t message_len,
+                                              const uint8_t public_key[32]);
+extern void ama_aes256_gcm_encrypt_avx512(const uint8_t *plaintext, size_t plaintext_len,
+                                           const uint8_t *aad, size_t aad_len,
+                                           const uint8_t key[32], const uint8_t nonce[12],
+                                           uint8_t *ciphertext, uint8_t tag[16]);
+extern ama_error_t ama_aes256_gcm_decrypt_avx512(const uint8_t *ciphertext, size_t ciphertext_len,
+                                                  const uint8_t *aad, size_t aad_len,
+                                                  const uint8_t key[32], const uint8_t nonce[12],
+                                                  const uint8_t tag[16], uint8_t *plaintext);
+#endif
+
 #ifdef AMA_HAVE_NEON_IMPL
 extern void ama_keccak_f1600_neon(uint64_t state[25]);
 extern ama_error_t ama_sha3_256_neon(const uint8_t *input, size_t input_len,
@@ -263,11 +299,16 @@ static void dispatch_init_internal(void) {
     if (has_avx512f) best = AMA_IMPL_AVX512;
 
     /* All algorithms use the best available level.
-     * AVX-512 implementations fall back to AVX2 where AVX-512
-     * specific code isn't yet available. */
-    ama_impl_level_t effective = (best == AMA_IMPL_AVX512 && 1)
-                                 ? AMA_IMPL_AVX2  /* AVX-512 files are stretch */
+     * When AMA_HAVE_AVX512_IMPL is defined, AVX-512 implementations
+     * are linked in and will be selected via function pointers below.
+     * Otherwise, fall back to AVX2 even if AVX-512F is detected. */
+#ifdef AMA_HAVE_AVX512_IMPL
+    ama_impl_level_t effective = best;
+#else
+    ama_impl_level_t effective = (best == AMA_IMPL_AVX512)
+                                 ? AMA_IMPL_AVX2
                                  : best;
+#endif
 
     dispatch_info.sha3             = effective;
     dispatch_info.kyber            = effective;
@@ -359,6 +400,34 @@ static void dispatch_init_internal(void) {
     if (dispatch_info.aes_gcm >= AMA_IMPL_AVX2) {
         dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_avx2;
         dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_avx2;
+    }
+#endif
+
+#ifdef AMA_HAVE_AVX512_IMPL
+    /* AVX-512 overrides AVX2 where available.
+     * These are set AFTER AVX2 so they take precedence on AVX-512 capable CPUs. */
+    if (dispatch_info.sha3 >= AMA_IMPL_AVX512) {
+        dispatch_table.keccak_f1600 = ama_keccak_f1600_avx512;
+        dispatch_table.sha3_256     = ama_sha3_256_avx512;
+    }
+    if (dispatch_info.kyber >= AMA_IMPL_AVX512) {
+        dispatch_table.kyber_ntt       = ama_kyber_ntt_avx512;
+        dispatch_table.kyber_invntt    = ama_kyber_invntt_avx512;
+        dispatch_table.kyber_pointwise = ama_kyber_poly_pointwise_avx512;
+    }
+    if (dispatch_info.dilithium >= AMA_IMPL_AVX512) {
+        dispatch_table.dilithium_ntt       = ama_dilithium_ntt_avx512;
+        dispatch_table.dilithium_invntt    = ama_dilithium_invntt_avx512;
+        dispatch_table.dilithium_pointwise = ama_dilithium_poly_pointwise_avx512;
+    }
+    if (dispatch_info.ed25519 >= AMA_IMPL_AVX512) {
+        dispatch_table.ed25519_keypair = ama_ed25519_keypair_avx512;
+        dispatch_table.ed25519_sign    = ama_ed25519_sign_avx512;
+        dispatch_table.ed25519_verify  = ama_ed25519_verify_avx512;
+    }
+    if (dispatch_info.aes_gcm >= AMA_IMPL_AVX512) {
+        dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_avx512;
+        dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_avx512;
     }
 #endif
 

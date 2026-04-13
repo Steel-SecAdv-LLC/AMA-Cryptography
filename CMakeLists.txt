@@ -188,6 +188,33 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
     endif()
 endif()
 
+# AVX-512 hand-written intrinsics (x86-64 only)
+set(AMA_AVX512_SOURCES "")
+if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX512)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+        set(AMA_AVX512_SOURCES
+            src/c/avx512/ama_sha3_avx512.c
+            src/c/avx512/ama_kyber_avx512.c
+            src/c/avx512/ama_dilithium_avx512.c
+            src/c/avx512/ama_sphincs_avx512.c
+            src/c/avx512/ama_aes_gcm_avx512.c
+            src/c/avx512/ama_ed25519_avx512.c
+            src/c/avx512/ama_chacha20poly1305_avx512.c
+            src/c/avx512/ama_argon2_avx512.c
+        )
+        if(NOT MSVC)
+            # Base AVX-512F flags for all files
+            set_source_files_properties(${AMA_AVX512_SOURCES} PROPERTIES
+                COMPILE_FLAGS "-mavx512f -mavx512bw -mavx512vl -maes -mpclmul")
+            # AES-GCM additionally needs VAES and VPCLMULQDQ
+            set_source_files_properties(src/c/avx512/ama_aes_gcm_avx512.c PROPERTIES
+                COMPILE_FLAGS "-mavx512f -mavx512bw -mavx512vl -maes -mpclmul -mvaes -mvpclmulqdq")
+        endif()
+        message(STATUS "SIMD: AVX-512 hand-written intrinsics enabled (8 algorithms)")
+        add_compile_definitions(AMA_HAVE_AVX512_IMPL)
+    endif()
+endif()
+
 # ARM NEON intrinsics (AArch64 only)
 if(AMA_ENABLE_SIMD AND AMA_ENABLE_NEON)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
@@ -267,6 +294,7 @@ set(AMA_SOURCES
     src/c/ama_secure_memory.c
     ${AMA_DISPATCH_SOURCES}
     ${AMA_AVX2_SOURCES}
+    ${AMA_AVX512_SOURCES}
     ${AMA_NEON_SOURCES}
     ${AMA_SVE2_SOURCES}
 )
