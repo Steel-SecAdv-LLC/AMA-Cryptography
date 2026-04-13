@@ -201,6 +201,76 @@ def get_extension_modules():
         )
         extensions.append(hkdf_ext)
 
+        # Cython AES-256-GCM binding (calls ama_aes256_gcm_* in libama_cryptography)
+        aes_gcm_ext = Extension(
+            name="ama_cryptography.aes_gcm_binding",
+            sources=["src/cython/aes_gcm_binding.pyx"],
+            include_dirs=["include"],
+            library_dirs=["build/lib"],
+            libraries=["ama_cryptography"],
+            runtime_library_dirs=rpath,
+            extra_compile_args=compiler_flags,
+            extra_link_args=linker_flags,
+            language="c",
+        )
+        extensions.append(aes_gcm_ext)
+
+        # Cython ChaCha20-Poly1305 binding (calls ama_chacha20poly1305_* in libama_cryptography)
+        chacha_ext = Extension(
+            name="ama_cryptography.chacha20poly1305_binding",
+            sources=["src/cython/chacha20poly1305_binding.pyx"],
+            include_dirs=["include"],
+            library_dirs=["build/lib"],
+            libraries=["ama_cryptography"],
+            runtime_library_dirs=rpath,
+            extra_compile_args=compiler_flags,
+            extra_link_args=linker_flags,
+            language="c",
+        )
+        extensions.append(chacha_ext)
+
+        # Cython Kyber (ML-KEM-1024) binding (calls ama_kyber_* in libama_cryptography)
+        kyber_ext = Extension(
+            name="ama_cryptography.kyber_binding",
+            sources=["src/cython/kyber_binding.pyx"],
+            include_dirs=["include"],
+            library_dirs=["build/lib"],
+            libraries=["ama_cryptography"],
+            runtime_library_dirs=rpath,
+            extra_compile_args=compiler_flags,
+            extra_link_args=linker_flags,
+            language="c",
+        )
+        extensions.append(kyber_ext)
+
+        # Cython SPHINCS+ (SLH-DSA) binding (calls ama_sphincs_* in libama_cryptography)
+        sphincs_ext = Extension(
+            name="ama_cryptography.sphincs_binding",
+            sources=["src/cython/sphincs_binding.pyx"],
+            include_dirs=["include"],
+            library_dirs=["build/lib"],
+            libraries=["ama_cryptography"],
+            runtime_library_dirs=rpath,
+            extra_compile_args=compiler_flags,
+            extra_link_args=linker_flags,
+            language="c",
+        )
+        extensions.append(sphincs_ext)
+
+        # Cython X25519 binding (calls ama_x25519_* in libama_cryptography)
+        x25519_ext = Extension(
+            name="ama_cryptography.x25519_binding",
+            sources=["src/cython/x25519_binding.pyx"],
+            include_dirs=["include"],
+            library_dirs=["build/lib"],
+            libraries=["ama_cryptography"],
+            runtime_library_dirs=rpath,
+            extra_compile_args=compiler_flags,
+            extra_link_args=linker_flags,
+            language="c",
+        )
+        extensions.append(x25519_ext)
+
     return extensions
 
 
