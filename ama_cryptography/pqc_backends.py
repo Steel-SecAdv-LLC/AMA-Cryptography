@@ -43,7 +43,7 @@ import platform
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional, Union, cast
 
 from ama_cryptography._finalizer_health import record_finalizer_error
 from ama_cryptography.exceptions import (
@@ -2307,7 +2307,7 @@ _cy_hkdf_fn = _probe_cython_hkdf()
 def _probe_cython_aes_gcm() -> "tuple[Any, Any]":
     """Detect Cython AES-256-GCM bindings at module load time."""
     try:
-        from ama_cryptography.aes_gcm_binding import (  # type: ignore[import-not-found]  # Cython extension; compiled at install time
+        from ama_cryptography.aes_gcm_binding import (  # type: ignore[import-not-found]  # Cython extension; compiled at install time (CY-001)
             cy_aes256_gcm_decrypt,
             cy_aes256_gcm_encrypt,
         )
@@ -2320,7 +2320,7 @@ def _probe_cython_aes_gcm() -> "tuple[Any, Any]":
 def _probe_cython_chacha20poly1305() -> "tuple[Any, Any]":
     """Detect Cython ChaCha20-Poly1305 bindings at module load time."""
     try:
-        from ama_cryptography.chacha20poly1305_binding import (  # type: ignore[import-not-found]  # Cython extension; compiled at install time
+        from ama_cryptography.chacha20poly1305_binding import (  # type: ignore[import-not-found]  # Cython extension; compiled at install time (CY-001)
             cy_chacha20poly1305_decrypt,
             cy_chacha20poly1305_encrypt,
         )
@@ -2333,7 +2333,7 @@ def _probe_cython_chacha20poly1305() -> "tuple[Any, Any]":
 def _probe_cython_kyber() -> "tuple[Any, Any, Any]":
     """Detect Cython Kyber (ML-KEM-1024) bindings at module load time."""
     try:
-        from ama_cryptography.kyber_binding import (  # type: ignore[import-not-found]  # Cython extension; compiled at install time
+        from ama_cryptography.kyber_binding import (  # type: ignore[import-not-found]  # Cython extension; compiled at install time (CY-001)
             cy_kyber_decapsulate,
             cy_kyber_encapsulate,
             cy_kyber_keypair,
@@ -2347,7 +2347,7 @@ def _probe_cython_kyber() -> "tuple[Any, Any, Any]":
 def _probe_cython_sphincs() -> "tuple[Any, Any, Any]":
     """Detect Cython SPHINCS+ (SLH-DSA) bindings at module load time."""
     try:
-        from ama_cryptography.sphincs_binding import (  # type: ignore[import-not-found]  # Cython extension; compiled at install time
+        from ama_cryptography.sphincs_binding import (  # type: ignore[import-not-found]  # Cython extension; compiled at install time (CY-001)
             cy_sphincs_keypair,
             cy_sphincs_sign,
             cy_sphincs_verify,
@@ -2361,7 +2361,7 @@ def _probe_cython_sphincs() -> "tuple[Any, Any, Any]":
 def _probe_cython_x25519() -> "tuple[Any, Any]":
     """Detect Cython X25519 bindings at module load time."""
     try:
-        from ama_cryptography.x25519_binding import (  # type: ignore[import-not-found]  # Cython extension; compiled at install time
+        from ama_cryptography.x25519_binding import (  # type: ignore[import-not-found]  # Cython extension; compiled at install time (CY-001)
             cy_x25519_key_exchange,
             cy_x25519_keypair,
         )
@@ -2523,7 +2523,9 @@ def native_aes256_gcm_encrypt(
         ValueError: If key or nonce has incorrect length
     """
     if _cy_aes_gcm_encrypt_fn is not None:
-        return _cy_aes_gcm_encrypt_fn(key, nonce, plaintext, aad)
+        return cast(
+            tuple, _cy_aes_gcm_encrypt_fn(key, nonce, plaintext, aad)
+        )  # -- Cython returns Any (CY-002)
 
     if _native_lib is None or not _AES_GCM_NATIVE_AVAILABLE:
         raise RuntimeError("AES-256-GCM native backend not available. " + _INSTALL_HINT)
@@ -2583,7 +2585,9 @@ def native_aes256_gcm_decrypt(
             authentication tag verification fails
     """
     if _cy_aes_gcm_decrypt_fn is not None:
-        return _cy_aes_gcm_decrypt_fn(key, nonce, ciphertext, tag, aad)
+        return cast(
+            bytes, _cy_aes_gcm_decrypt_fn(key, nonce, ciphertext, tag, aad)
+        )  # -- Cython returns Any (CY-002)
 
     if _native_lib is None or not _AES_GCM_NATIVE_AVAILABLE:
         raise RuntimeError("AES-256-GCM native backend not available. " + _INSTALL_HINT)
@@ -3059,7 +3063,7 @@ def native_x25519_keypair() -> tuple:
         RuntimeError: If native library is not available
     """
     if _cy_x25519_keypair_fn is not None:
-        return _cy_x25519_keypair_fn()
+        return cast(tuple, _cy_x25519_keypair_fn())  # -- Cython returns Any (CY-002)
 
     if _native_lib is None or not _X25519_NATIVE_AVAILABLE:
         raise RuntimeError("X25519 native backend not available. " + _INSTALL_HINT)
@@ -3092,7 +3096,9 @@ def native_x25519_key_exchange(our_secret_key: bytes, their_public_key: bytes) -
         RuntimeError: On low-order point or native library unavailable
     """
     if _cy_x25519_exchange_fn is not None:
-        return _cy_x25519_exchange_fn(our_secret_key, their_public_key)
+        return cast(
+            bytes, _cy_x25519_exchange_fn(our_secret_key, their_public_key)
+        )  # -- Cython returns Any (CY-002)
 
     if _native_lib is None or not _X25519_NATIVE_AVAILABLE:
         raise RuntimeError("X25519 native backend not available. " + _INSTALL_HINT)
@@ -3197,7 +3203,9 @@ def native_chacha20poly1305_encrypt(
         (ciphertext, tag) — ciphertext same length as plaintext, 16-byte tag
     """
     if _cy_chacha_encrypt_fn is not None:
-        return _cy_chacha_encrypt_fn(key, nonce, plaintext, aad)
+        return cast(
+            tuple, _cy_chacha_encrypt_fn(key, nonce, plaintext, aad)
+        )  # -- Cython returns Any (CY-002)
 
     if _native_lib is None or not _CHACHA20_POLY1305_NATIVE_AVAILABLE:
         raise RuntimeError("ChaCha20-Poly1305 native backend not available. " + _INSTALL_HINT)
@@ -3251,7 +3259,9 @@ def native_chacha20poly1305_decrypt(
         RuntimeError: On tag verification failure
     """
     if _cy_chacha_decrypt_fn is not None:
-        return _cy_chacha_decrypt_fn(key, nonce, ciphertext, tag, aad)
+        return cast(
+            bytes, _cy_chacha_decrypt_fn(key, nonce, ciphertext, tag, aad)
+        )  # -- Cython returns Any (CY-002)
 
     if _native_lib is None or not _CHACHA20_POLY1305_NATIVE_AVAILABLE:
         raise RuntimeError("ChaCha20-Poly1305 native backend not available. " + _INSTALL_HINT)

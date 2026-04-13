@@ -433,8 +433,8 @@ class TestNonceMismatch:
         digest = hashlib.sha256(original_data).hexdigest()
         result = TimestampResult(
             token=b"\x30\x82\x01\x00",
-            algorithm="sha256",
-            digest=digest,
+            hash_algorithm="sha256",
+            data_hash=digest,
             tsa_url="http://example.com/tsa",
         )
 
@@ -447,8 +447,8 @@ class TestNonceMismatch:
         """Verification with corrupted digest returns False."""
         result = TimestampResult(
             token=b"\x30\x82\x01\x00",
-            algorithm="sha256",
-            digest="0" * 64,  # All zeros — won't match any real data
+            hash_algorithm="sha256",
+            data_hash="0" * 64,  # All zeros — won't match any real data
             tsa_url="http://example.com/tsa",
         )
         assert verify_timestamp(b"any data", result) is False
@@ -466,17 +466,17 @@ class TestReplayProtection:
 
         result1 = TimestampResult(
             token=b"\x30\x82\x01\x01",
-            algorithm="sha256",
-            digest=digest,
+            hash_algorithm="sha256",
+            data_hash=digest,
             tsa_url="http://example.com/tsa",
         )
         result2 = TimestampResult(
             token=b"\x30\x82\x01\x02",
-            algorithm="sha256",
-            digest=digest,
+            hash_algorithm="sha256",
+            data_hash=digest,
             tsa_url="http://example.com/tsa",
         )
-        assert result1.digest == result2.digest
+        assert result1.data_hash == result2.data_hash
         # But tokens should differ (different nonces in real scenario)
         assert result1.token != result2.token
 

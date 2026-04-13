@@ -612,10 +612,10 @@ if __name__ == "__main__":
 # ============================================================================
 
 _CY_HELIX_AVAILABLE = False
-AmaEngineOptimized = None  # type: ignore[assignment]
+AmaEngineOptimized = None  # fallback when Cython ext not compiled (DHE-001)
 
 try:
-    from ama_cryptography.helix_engine_complete import (  # type: ignore[import-not-found]  # Cython extension; compiled at install time (DHE-002)
+    from ama_cryptography.helix_engine_complete import (  # type: ignore[import-not-found,no-redef]  # Cython extension; compiled at install time (DHE-002)
         AmaEngineOptimized,
     )
 

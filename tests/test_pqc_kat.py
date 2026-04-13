@@ -427,24 +427,26 @@ class TestMLKEM512KAT:
 
     @pytest.fixture(autouse=True)
     def _check_available(self) -> None:
-        from ama_cryptography.pqc_backends import _has_native_func  # type: ignore[attr-defined]
+        from ama_cryptography.pqc_backends import (
+            _has_native_func,  # type: ignore[attr-defined]  # private API for test discovery (KAT-001)
+        )
 
-        if not _has_native_func("ama_kyber512_keypair"):  # type: ignore[operator]
+        if not _has_native_func("ama_kyber512_keypair"):  # type: ignore[operator]  # callable check on dynamic symbol (KAT-001)
             pytest.skip("ML-KEM-512 not available in native library")
 
     def test_public_key_size(self) -> None:
         """Public key size matches NIST FIPS 203 ML-KEM-512 specification."""
         from ama_cryptography.pqc_backends import generate_kyber512_keypair
 
-        pk, _sk = generate_kyber512_keypair()
-        assert len(pk) == MLKEM512Spec.PUBLIC_KEY_BYTES
+        keypair = generate_kyber512_keypair()
+        assert len(keypair.public_key) == MLKEM512Spec.PUBLIC_KEY_BYTES
 
     def test_secret_key_size(self) -> None:
         """Secret key size matches NIST FIPS 203 ML-KEM-512 specification."""
         from ama_cryptography.pqc_backends import generate_kyber512_keypair
 
-        _pk, sk = generate_kyber512_keypair()
-        assert len(sk) == MLKEM512Spec.SECRET_KEY_BYTES
+        keypair = generate_kyber512_keypair()
+        assert len(keypair.secret_key) == MLKEM512Spec.SECRET_KEY_BYTES
 
     def test_ciphertext_size(self) -> None:
         """Ciphertext size matches NIST FIPS 203 ML-KEM-512 specification."""
@@ -453,9 +455,9 @@ class TestMLKEM512KAT:
             kyber512_encapsulate,
         )
 
-        pk, _sk = generate_kyber512_keypair()
-        ct, _ss = kyber512_encapsulate(pk)
-        assert len(ct) == MLKEM512Spec.CIPHERTEXT_BYTES
+        keypair = generate_kyber512_keypair()
+        encaps = kyber512_encapsulate(keypair.public_key)
+        assert len(encaps.ciphertext) == MLKEM512Spec.CIPHERTEXT_BYTES
 
     def test_shared_secret_size(self) -> None:
         """Shared secret size matches NIST FIPS 203 specification (32 bytes)."""
@@ -464,9 +466,9 @@ class TestMLKEM512KAT:
             kyber512_encapsulate,
         )
 
-        pk, _sk = generate_kyber512_keypair()
-        _ct, ss = kyber512_encapsulate(pk)
-        assert len(ss) == MLKEM512Spec.SHARED_SECRET_BYTES
+        keypair = generate_kyber512_keypair()
+        encaps = kyber512_encapsulate(keypair.public_key)
+        assert len(encaps.shared_secret) == MLKEM512Spec.SHARED_SECRET_BYTES
 
     def test_encapsulate_decapsulate_roundtrip(self) -> None:
         """ML-KEM-512 encaps/decaps round-trip produces matching shared secrets."""
@@ -476,10 +478,10 @@ class TestMLKEM512KAT:
             kyber512_encapsulate,
         )
 
-        pk, sk = generate_kyber512_keypair()
-        ct, ss_enc = kyber512_encapsulate(pk)
-        ss_dec = kyber512_decapsulate(ct, sk)
-        assert ss_enc == ss_dec, "Shared secrets must match"
+        keypair = generate_kyber512_keypair()
+        encaps = kyber512_encapsulate(keypair.public_key)
+        ss_dec = kyber512_decapsulate(encaps.ciphertext, keypair.secret_key)
+        assert encaps.shared_secret == ss_dec, "Shared secrets must match"
 
     def test_wrong_sk_implicit_rejection(self) -> None:
         """Decaps with wrong sk uses implicit rejection (different shared secret)."""
@@ -489,11 +491,11 @@ class TestMLKEM512KAT:
             kyber512_encapsulate,
         )
 
-        pk1, _sk1 = generate_kyber512_keypair()
-        _pk2, sk2 = generate_kyber512_keypair()
-        ct, ss_enc = kyber512_encapsulate(pk1)
-        ss_wrong = kyber512_decapsulate(ct, sk2)
-        assert ss_enc != ss_wrong
+        kp1 = generate_kyber512_keypair()
+        kp2 = generate_kyber512_keypair()
+        encaps = kyber512_encapsulate(kp1.public_key)
+        ss_wrong = kyber512_decapsulate(encaps.ciphertext, kp2.secret_key)
+        assert encaps.shared_secret != ss_wrong
 
     def test_encapsulation_randomness(self) -> None:
         """Multiple encapsulations produce different ciphertexts."""
@@ -502,10 +504,10 @@ class TestMLKEM512KAT:
             kyber512_encapsulate,
         )
 
-        pk, _sk = generate_kyber512_keypair()
-        ct1, _ = kyber512_encapsulate(pk)
-        ct2, _ = kyber512_encapsulate(pk)
-        assert ct1 != ct2
+        keypair = generate_kyber512_keypair()
+        encaps1 = kyber512_encapsulate(keypair.public_key)
+        encaps2 = kyber512_encapsulate(keypair.public_key)
+        assert encaps1.ciphertext != encaps2.ciphertext
 
     def test_kat_vector_sizes(self) -> None:
         """Validate ML-KEM-512 KAT vector sizes match FIPS 203."""
@@ -531,24 +533,26 @@ class TestMLKEM768KAT:
 
     @pytest.fixture(autouse=True)
     def _check_available(self) -> None:
-        from ama_cryptography.pqc_backends import _has_native_func  # type: ignore[attr-defined]
+        from ama_cryptography.pqc_backends import (
+            _has_native_func,  # type: ignore[attr-defined]  # private API for test discovery (KAT-001)
+        )
 
-        if not _has_native_func("ama_kyber768_keypair"):  # type: ignore[operator]
+        if not _has_native_func("ama_kyber768_keypair"):  # type: ignore[operator]  # callable check on dynamic symbol (KAT-001)
             pytest.skip("ML-KEM-768 not available in native library")
 
     def test_public_key_size(self) -> None:
         """Public key size matches NIST FIPS 203 ML-KEM-768 specification."""
         from ama_cryptography.pqc_backends import generate_kyber768_keypair
 
-        pk, _sk = generate_kyber768_keypair()
-        assert len(pk) == MLKEM768Spec.PUBLIC_KEY_BYTES
+        keypair = generate_kyber768_keypair()
+        assert len(keypair.public_key) == MLKEM768Spec.PUBLIC_KEY_BYTES
 
     def test_secret_key_size(self) -> None:
         """Secret key size matches NIST FIPS 203 ML-KEM-768 specification."""
         from ama_cryptography.pqc_backends import generate_kyber768_keypair
 
-        _pk, sk = generate_kyber768_keypair()
-        assert len(sk) == MLKEM768Spec.SECRET_KEY_BYTES
+        keypair = generate_kyber768_keypair()
+        assert len(keypair.secret_key) == MLKEM768Spec.SECRET_KEY_BYTES
 
     def test_ciphertext_size(self) -> None:
         """Ciphertext size matches NIST FIPS 203 ML-KEM-768 specification."""
@@ -557,9 +561,9 @@ class TestMLKEM768KAT:
             kyber768_encapsulate,
         )
 
-        pk, _sk = generate_kyber768_keypair()
-        ct, _ss = kyber768_encapsulate(pk)
-        assert len(ct) == MLKEM768Spec.CIPHERTEXT_BYTES
+        keypair = generate_kyber768_keypair()
+        encaps = kyber768_encapsulate(keypair.public_key)
+        assert len(encaps.ciphertext) == MLKEM768Spec.CIPHERTEXT_BYTES
 
     def test_shared_secret_size(self) -> None:
         """Shared secret size matches NIST FIPS 203 specification (32 bytes)."""
@@ -568,9 +572,9 @@ class TestMLKEM768KAT:
             kyber768_encapsulate,
         )
 
-        pk, _sk = generate_kyber768_keypair()
-        _ct, ss = kyber768_encapsulate(pk)
-        assert len(ss) == MLKEM768Spec.SHARED_SECRET_BYTES
+        keypair = generate_kyber768_keypair()
+        encaps = kyber768_encapsulate(keypair.public_key)
+        assert len(encaps.shared_secret) == MLKEM768Spec.SHARED_SECRET_BYTES
 
     def test_encapsulate_decapsulate_roundtrip(self) -> None:
         """ML-KEM-768 encaps/decaps round-trip produces matching shared secrets."""
@@ -580,10 +584,10 @@ class TestMLKEM768KAT:
             kyber768_encapsulate,
         )
 
-        pk, sk = generate_kyber768_keypair()
-        ct, ss_enc = kyber768_encapsulate(pk)
-        ss_dec = kyber768_decapsulate(ct, sk)
-        assert ss_enc == ss_dec, "Shared secrets must match"
+        keypair = generate_kyber768_keypair()
+        encaps = kyber768_encapsulate(keypair.public_key)
+        ss_dec = kyber768_decapsulate(encaps.ciphertext, keypair.secret_key)
+        assert encaps.shared_secret == ss_dec, "Shared secrets must match"
 
     def test_wrong_sk_implicit_rejection(self) -> None:
         """Decaps with wrong sk uses implicit rejection (different shared secret)."""
@@ -593,11 +597,11 @@ class TestMLKEM768KAT:
             kyber768_encapsulate,
         )
 
-        pk1, _sk1 = generate_kyber768_keypair()
-        _pk2, sk2 = generate_kyber768_keypair()
-        ct, ss_enc = kyber768_encapsulate(pk1)
-        ss_wrong = kyber768_decapsulate(ct, sk2)
-        assert ss_enc != ss_wrong
+        kp1 = generate_kyber768_keypair()
+        kp2 = generate_kyber768_keypair()
+        encaps = kyber768_encapsulate(kp1.public_key)
+        ss_wrong = kyber768_decapsulate(encaps.ciphertext, kp2.secret_key)
+        assert encaps.shared_secret != ss_wrong
 
     def test_encapsulation_randomness(self) -> None:
         """Multiple encapsulations produce different ciphertexts."""
@@ -606,10 +610,10 @@ class TestMLKEM768KAT:
             kyber768_encapsulate,
         )
 
-        pk, _sk = generate_kyber768_keypair()
-        ct1, _ = kyber768_encapsulate(pk)
-        ct2, _ = kyber768_encapsulate(pk)
-        assert ct1 != ct2
+        keypair = generate_kyber768_keypair()
+        encaps1 = kyber768_encapsulate(keypair.public_key)
+        encaps2 = kyber768_encapsulate(keypair.public_key)
+        assert encaps1.ciphertext != encaps2.ciphertext
 
     def test_kat_vector_sizes(self) -> None:
         """Validate ML-KEM-768 KAT vector sizes match FIPS 203."""
@@ -635,24 +639,26 @@ class TestMLDSA44KAT:
 
     @pytest.fixture(autouse=True)
     def _check_available(self) -> None:
-        from ama_cryptography.pqc_backends import _has_native_func  # type: ignore[attr-defined]
+        from ama_cryptography.pqc_backends import (
+            _has_native_func,  # type: ignore[attr-defined]  # private API for test discovery (KAT-001)
+        )
 
-        if not _has_native_func("ama_dilithium44_keypair"):  # type: ignore[operator]
+        if not _has_native_func("ama_dilithium44_keypair"):  # type: ignore[operator]  # callable check on dynamic symbol (KAT-001)
             pytest.skip("ML-DSA-44 not available in native library")
 
     def test_public_key_size(self) -> None:
         """Public key size matches NIST FIPS 204 ML-DSA-44 specification."""
         from ama_cryptography.pqc_backends import generate_dilithium44_keypair
 
-        pk, _sk = generate_dilithium44_keypair()
-        assert len(pk) == MLDSA44Spec.PUBLIC_KEY_BYTES
+        keypair = generate_dilithium44_keypair()
+        assert len(keypair.public_key) == MLDSA44Spec.PUBLIC_KEY_BYTES
 
     def test_secret_key_size(self) -> None:
         """Secret key size matches NIST FIPS 204 ML-DSA-44 specification."""
         from ama_cryptography.pqc_backends import generate_dilithium44_keypair
 
-        _pk, sk = generate_dilithium44_keypair()
-        assert len(sk) == MLDSA44Spec.SECRET_KEY_BYTES
+        keypair = generate_dilithium44_keypair()
+        assert len(keypair.secret_key) == MLDSA44Spec.SECRET_KEY_BYTES
 
     def test_signature_size(self) -> None:
         """Signature size matches NIST FIPS 204 ML-DSA-44 specification."""
@@ -661,8 +667,8 @@ class TestMLDSA44KAT:
             generate_dilithium44_keypair,
         )
 
-        _pk, sk = generate_dilithium44_keypair()
-        sig = dilithium44_sign(b"FIPS 204 KAT test", sk)
+        keypair = generate_dilithium44_keypair()
+        sig = dilithium44_sign(b"FIPS 204 KAT test", keypair.secret_key)
         assert len(sig) == MLDSA44Spec.SIGNATURE_BYTES
 
     def test_sign_verify_roundtrip(self) -> None:
@@ -673,10 +679,10 @@ class TestMLDSA44KAT:
             generate_dilithium44_keypair,
         )
 
-        pk, sk = generate_dilithium44_keypair()
+        keypair = generate_dilithium44_keypair()
         msg = b"ML-DSA-44 roundtrip test"
-        sig = dilithium44_sign(msg, sk)
-        assert dilithium44_verify(msg, sig, pk)
+        sig = dilithium44_sign(msg, keypair.secret_key)
+        assert dilithium44_verify(msg, sig, keypair.public_key)
 
     def test_invalid_signature_fails(self) -> None:
         """Tampered ML-DSA-44 signature fails verification."""
@@ -686,10 +692,10 @@ class TestMLDSA44KAT:
             generate_dilithium44_keypair,
         )
 
-        pk, sk = generate_dilithium44_keypair()
-        sig = bytearray(dilithium44_sign(b"test", sk))
+        keypair = generate_dilithium44_keypair()
+        sig = bytearray(dilithium44_sign(b"test", keypair.secret_key))
         sig[0] ^= 0xFF
-        assert not dilithium44_verify(b"test", bytes(sig), pk)
+        assert not dilithium44_verify(b"test", bytes(sig), keypair.public_key)
 
     def test_wrong_message_fails(self) -> None:
         """ML-DSA-44 verification with wrong message fails."""
@@ -699,9 +705,9 @@ class TestMLDSA44KAT:
             generate_dilithium44_keypair,
         )
 
-        pk, sk = generate_dilithium44_keypair()
-        sig = dilithium44_sign(b"original", sk)
-        assert not dilithium44_verify(b"modified", sig, pk)
+        keypair = generate_dilithium44_keypair()
+        sig = dilithium44_sign(b"original", keypair.secret_key)
+        assert not dilithium44_verify(b"modified", sig, keypair.public_key)
 
     def test_wrong_pk_fails(self) -> None:
         """ML-DSA-44 verification with wrong public key fails."""
@@ -711,10 +717,10 @@ class TestMLDSA44KAT:
             generate_dilithium44_keypair,
         )
 
-        _pk1, sk1 = generate_dilithium44_keypair()
-        pk2, _sk2 = generate_dilithium44_keypair()
-        sig = dilithium44_sign(b"test", sk1)
-        assert not dilithium44_verify(b"test", sig, pk2)
+        kp1 = generate_dilithium44_keypair()
+        kp2 = generate_dilithium44_keypair()
+        sig = dilithium44_sign(b"test", kp1.secret_key)
+        assert not dilithium44_verify(b"test", sig, kp2.public_key)
 
     def test_kat_vector_sizes(self) -> None:
         """Validate ML-DSA-44 KAT vector sizes match FIPS 204."""
@@ -737,24 +743,26 @@ class TestMLDSA87KAT:
 
     @pytest.fixture(autouse=True)
     def _check_available(self) -> None:
-        from ama_cryptography.pqc_backends import _has_native_func  # type: ignore[attr-defined]
+        from ama_cryptography.pqc_backends import (
+            _has_native_func,  # type: ignore[attr-defined]  # private API for test discovery (KAT-001)
+        )
 
-        if not _has_native_func("ama_dilithium87_keypair"):  # type: ignore[operator]
+        if not _has_native_func("ama_dilithium87_keypair"):  # type: ignore[operator]  # callable check on dynamic symbol (KAT-001)
             pytest.skip("ML-DSA-87 not available in native library")
 
     def test_public_key_size(self) -> None:
         """Public key size matches NIST FIPS 204 ML-DSA-87 specification."""
         from ama_cryptography.pqc_backends import generate_dilithium87_keypair
 
-        pk, _sk = generate_dilithium87_keypair()
-        assert len(pk) == MLDSA87Spec.PUBLIC_KEY_BYTES
+        keypair = generate_dilithium87_keypair()
+        assert len(keypair.public_key) == MLDSA87Spec.PUBLIC_KEY_BYTES
 
     def test_secret_key_size(self) -> None:
         """Secret key size matches NIST FIPS 204 ML-DSA-87 specification."""
         from ama_cryptography.pqc_backends import generate_dilithium87_keypair
 
-        _pk, sk = generate_dilithium87_keypair()
-        assert len(sk) == MLDSA87Spec.SECRET_KEY_BYTES
+        keypair = generate_dilithium87_keypair()
+        assert len(keypair.secret_key) == MLDSA87Spec.SECRET_KEY_BYTES
 
     def test_signature_size(self) -> None:
         """Signature size matches NIST FIPS 204 ML-DSA-87 specification."""
@@ -763,8 +771,8 @@ class TestMLDSA87KAT:
             generate_dilithium87_keypair,
         )
 
-        _pk, sk = generate_dilithium87_keypair()
-        sig = dilithium87_sign(b"FIPS 204 KAT test", sk)
+        keypair = generate_dilithium87_keypair()
+        sig = dilithium87_sign(b"FIPS 204 KAT test", keypair.secret_key)
         assert len(sig) == MLDSA87Spec.SIGNATURE_BYTES
 
     def test_sign_verify_roundtrip(self) -> None:
@@ -775,10 +783,10 @@ class TestMLDSA87KAT:
             generate_dilithium87_keypair,
         )
 
-        pk, sk = generate_dilithium87_keypair()
+        keypair = generate_dilithium87_keypair()
         msg = b"ML-DSA-87 roundtrip test"
-        sig = dilithium87_sign(msg, sk)
-        assert dilithium87_verify(msg, sig, pk)
+        sig = dilithium87_sign(msg, keypair.secret_key)
+        assert dilithium87_verify(msg, sig, keypair.public_key)
 
     def test_invalid_signature_fails(self) -> None:
         """Tampered ML-DSA-87 signature fails verification."""
@@ -788,10 +796,10 @@ class TestMLDSA87KAT:
             generate_dilithium87_keypair,
         )
 
-        pk, sk = generate_dilithium87_keypair()
-        sig = bytearray(dilithium87_sign(b"test", sk))
+        keypair = generate_dilithium87_keypair()
+        sig = bytearray(dilithium87_sign(b"test", keypair.secret_key))
         sig[0] ^= 0xFF
-        assert not dilithium87_verify(b"test", bytes(sig), pk)
+        assert not dilithium87_verify(b"test", bytes(sig), keypair.public_key)
 
     def test_wrong_message_fails(self) -> None:
         """ML-DSA-87 verification with wrong message fails."""
@@ -801,9 +809,9 @@ class TestMLDSA87KAT:
             generate_dilithium87_keypair,
         )
 
-        pk, sk = generate_dilithium87_keypair()
-        sig = dilithium87_sign(b"original", sk)
-        assert not dilithium87_verify(b"modified", sig, pk)
+        keypair = generate_dilithium87_keypair()
+        sig = dilithium87_sign(b"original", keypair.secret_key)
+        assert not dilithium87_verify(b"modified", sig, keypair.public_key)
 
     def test_wrong_pk_fails(self) -> None:
         """ML-DSA-87 verification with wrong public key fails."""
@@ -813,10 +821,10 @@ class TestMLDSA87KAT:
             generate_dilithium87_keypair,
         )
 
-        _pk1, sk1 = generate_dilithium87_keypair()
-        pk2, _sk2 = generate_dilithium87_keypair()
-        sig = dilithium87_sign(b"test", sk1)
-        assert not dilithium87_verify(b"test", sig, pk2)
+        kp1 = generate_dilithium87_keypair()
+        kp2 = generate_dilithium87_keypair()
+        sig = dilithium87_sign(b"test", kp1.secret_key)
+        assert not dilithium87_verify(b"test", sig, kp2.public_key)
 
     def test_kat_vector_sizes(self) -> None:
         """Validate ML-DSA-87 KAT vector sizes match FIPS 204."""

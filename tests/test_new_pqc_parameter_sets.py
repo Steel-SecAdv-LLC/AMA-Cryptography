@@ -53,9 +53,13 @@ class TestMLKEM512:
         """ML-KEM-512 keypair generates correct-size keys."""
         from ama_cryptography.pqc_backends import generate_kyber512_keypair
 
-        pk, sk = generate_kyber512_keypair()
-        assert len(pk) == 800, f"Expected pk=800 bytes, got {len(pk)}"
-        assert len(sk) == 1632, f"Expected sk=1632 bytes, got {len(sk)}"
+        keypair = generate_kyber512_keypair()
+        assert (
+            len(keypair.public_key) == 800
+        ), f"Expected pk=800 bytes, got {len(keypair.public_key)}"
+        assert (
+            len(keypair.secret_key) == 1632
+        ), f"Expected sk=1632 bytes, got {len(keypair.secret_key)}"
 
     def test_encapsulate_decapsulate(self) -> None:
         """ML-KEM-512 encaps/decaps produce matching shared secrets."""
@@ -65,13 +69,15 @@ class TestMLKEM512:
             kyber512_encapsulate,
         )
 
-        pk, sk = generate_kyber512_keypair()
-        ct, ss_enc = kyber512_encapsulate(pk)
-        ss_dec = kyber512_decapsulate(ct, sk)
+        keypair = generate_kyber512_keypair()
+        encaps = kyber512_encapsulate(keypair.public_key)
+        ss_dec = kyber512_decapsulate(encaps.ciphertext, keypair.secret_key)
 
-        assert len(ct) == 768, f"Expected ct=768 bytes, got {len(ct)}"
-        assert len(ss_enc) == 32, f"Expected ss=32 bytes, got {len(ss_enc)}"
-        assert ss_enc == ss_dec, "Shared secrets must match"
+        assert len(encaps.ciphertext) == 768, f"Expected ct=768 bytes, got {len(encaps.ciphertext)}"
+        assert (
+            len(encaps.shared_secret) == 32
+        ), f"Expected ss=32 bytes, got {len(encaps.shared_secret)}"
+        assert encaps.shared_secret == ss_dec, "Shared secrets must match"
 
     def test_wrong_sk_produces_different_ss(self) -> None:
         """ML-KEM-512 decaps with wrong sk produces different shared secret."""
@@ -81,22 +87,22 @@ class TestMLKEM512:
             kyber512_encapsulate,
         )
 
-        pk1, _sk1 = generate_kyber512_keypair()
-        _pk2, sk2 = generate_kyber512_keypair()
+        kp1 = generate_kyber512_keypair()
+        kp2 = generate_kyber512_keypair()
 
-        ct, ss_enc = kyber512_encapsulate(pk1)
-        ss_wrong = kyber512_decapsulate(ct, sk2)
+        encaps = kyber512_encapsulate(kp1.public_key)
+        ss_wrong = kyber512_decapsulate(encaps.ciphertext, kp2.secret_key)
         # FO transform: implicit rejection means different ss, not error
-        assert ss_wrong != ss_enc, "Wrong SK should produce different shared secret"
+        assert ss_wrong != encaps.shared_secret, "Wrong SK should produce different shared secret"
 
     def test_keypair_uniqueness(self) -> None:
         """Each ML-KEM-512 keypair is unique."""
         from ama_cryptography.pqc_backends import generate_kyber512_keypair
 
-        pk1, sk1 = generate_kyber512_keypair()
-        pk2, sk2 = generate_kyber512_keypair()
-        assert pk1 != pk2, "Public keys must be unique"
-        assert sk1 != sk2, "Secret keys must be unique"
+        kp1 = generate_kyber512_keypair()
+        kp2 = generate_kyber512_keypair()
+        assert kp1.public_key != kp2.public_key, "Public keys must be unique"
+        assert kp1.secret_key != kp2.secret_key, "Secret keys must be unique"
 
 
 # ============================================================================
@@ -114,9 +120,13 @@ class TestMLKEM768:
         """ML-KEM-768 keypair generates correct-size keys."""
         from ama_cryptography.pqc_backends import generate_kyber768_keypair
 
-        pk, sk = generate_kyber768_keypair()
-        assert len(pk) == 1184, f"Expected pk=1184 bytes, got {len(pk)}"
-        assert len(sk) == 2400, f"Expected sk=2400 bytes, got {len(sk)}"
+        keypair = generate_kyber768_keypair()
+        assert (
+            len(keypair.public_key) == 1184
+        ), f"Expected pk=1184 bytes, got {len(keypair.public_key)}"
+        assert (
+            len(keypair.secret_key) == 2400
+        ), f"Expected sk=2400 bytes, got {len(keypair.secret_key)}"
 
     def test_encapsulate_decapsulate(self) -> None:
         """ML-KEM-768 encaps/decaps produce matching shared secrets."""
@@ -126,13 +136,17 @@ class TestMLKEM768:
             kyber768_encapsulate,
         )
 
-        pk, sk = generate_kyber768_keypair()
-        ct, ss_enc = kyber768_encapsulate(pk)
-        ss_dec = kyber768_decapsulate(ct, sk)
+        keypair = generate_kyber768_keypair()
+        encaps = kyber768_encapsulate(keypair.public_key)
+        ss_dec = kyber768_decapsulate(encaps.ciphertext, keypair.secret_key)
 
-        assert len(ct) == 1088, f"Expected ct=1088 bytes, got {len(ct)}"
-        assert len(ss_enc) == 32, f"Expected ss=32 bytes, got {len(ss_enc)}"
-        assert ss_enc == ss_dec, "Shared secrets must match"
+        assert (
+            len(encaps.ciphertext) == 1088
+        ), f"Expected ct=1088 bytes, got {len(encaps.ciphertext)}"
+        assert (
+            len(encaps.shared_secret) == 32
+        ), f"Expected ss=32 bytes, got {len(encaps.shared_secret)}"
+        assert encaps.shared_secret == ss_dec, "Shared secrets must match"
 
     def test_wrong_sk_produces_different_ss(self) -> None:
         """ML-KEM-768 decaps with wrong sk produces different shared secret."""
@@ -142,20 +156,20 @@ class TestMLKEM768:
             kyber768_encapsulate,
         )
 
-        pk1, _sk1 = generate_kyber768_keypair()
-        _pk2, sk2 = generate_kyber768_keypair()
+        kp1 = generate_kyber768_keypair()
+        kp2 = generate_kyber768_keypair()
 
-        ct, ss_enc = kyber768_encapsulate(pk1)
-        ss_wrong = kyber768_decapsulate(ct, sk2)
-        assert ss_wrong != ss_enc, "Wrong SK should produce different shared secret"
+        encaps = kyber768_encapsulate(kp1.public_key)
+        ss_wrong = kyber768_decapsulate(encaps.ciphertext, kp2.secret_key)
+        assert ss_wrong != encaps.shared_secret, "Wrong SK should produce different shared secret"
 
     def test_keypair_uniqueness(self) -> None:
         """Each ML-KEM-768 keypair is unique."""
         from ama_cryptography.pqc_backends import generate_kyber768_keypair
 
-        pk1, _sk1 = generate_kyber768_keypair()
-        pk2, _sk2 = generate_kyber768_keypair()
-        assert pk1 != pk2, "Public keys must be unique"
+        kp1 = generate_kyber768_keypair()
+        kp2 = generate_kyber768_keypair()
+        assert kp1.public_key != kp2.public_key, "Public keys must be unique"
 
 
 # ============================================================================
@@ -264,9 +278,9 @@ class TestMLDSA44:
         """ML-DSA-44 keypair generates correct-size keys."""
         from ama_cryptography.pqc_backends import generate_dilithium44_keypair
 
-        pk, sk = generate_dilithium44_keypair()
-        assert len(pk) == 1312, f"Expected pk=1312, got {len(pk)}"
-        assert len(sk) == 2560, f"Expected sk=2560, got {len(sk)}"
+        keypair = generate_dilithium44_keypair()
+        assert len(keypair.public_key) == 1312, f"Expected pk=1312, got {len(keypair.public_key)}"
+        assert len(keypair.secret_key) == 2560, f"Expected sk=2560, got {len(keypair.secret_key)}"
 
     def test_sign_verify(self) -> None:
         """ML-DSA-44 sign/verify roundtrip succeeds."""
@@ -276,12 +290,12 @@ class TestMLDSA44:
             generate_dilithium44_keypair,
         )
 
-        pk, sk = generate_dilithium44_keypair()
+        keypair = generate_dilithium44_keypair()
         msg = b"AMA Cryptography ML-DSA-44 test"
-        sig = dilithium44_sign(msg, sk)
+        sig = dilithium44_sign(msg, keypair.secret_key)
 
         assert len(sig) <= 2420
-        assert dilithium44_verify(msg, sig, pk) is True
+        assert dilithium44_verify(msg, sig, keypair.public_key) is True
 
     def test_wrong_message_fails(self) -> None:
         """ML-DSA-44 verify with wrong message returns False."""
@@ -291,9 +305,9 @@ class TestMLDSA44:
             generate_dilithium44_keypair,
         )
 
-        pk, sk = generate_dilithium44_keypair()
-        sig = dilithium44_sign(b"correct", sk)
-        assert dilithium44_verify(b"wrong", sig, pk) is False
+        keypair = generate_dilithium44_keypair()
+        sig = dilithium44_sign(b"correct", keypair.secret_key)
+        assert dilithium44_verify(b"wrong", sig, keypair.public_key) is False
 
     def test_wrong_key_fails(self) -> None:
         """ML-DSA-44 verify with wrong pk returns False."""
@@ -303,10 +317,10 @@ class TestMLDSA44:
             generate_dilithium44_keypair,
         )
 
-        _pk1, sk1 = generate_dilithium44_keypair()
-        pk2, _sk2 = generate_dilithium44_keypair()
-        sig = dilithium44_sign(b"test", sk1)
-        assert dilithium44_verify(b"test", sig, pk2) is False
+        kp1 = generate_dilithium44_keypair()
+        kp2 = generate_dilithium44_keypair()
+        sig = dilithium44_sign(b"test", kp1.secret_key)
+        assert dilithium44_verify(b"test", sig, kp2.public_key) is False
 
     def test_invalid_sk_size(self) -> None:
         """ML-DSA-44 sign rejects wrong-size secret key."""
@@ -327,17 +341,17 @@ class TestMLDSA44:
         from ama_cryptography.pqc_backends import dilithium44_sign, dilithium44_verify
 
         with pytest.raises(TypeError):
-            dilithium44_sign("not bytes", b"\x00" * 2560)  # type: ignore[arg-type]
+            dilithium44_sign("not bytes", b"\x00" * 2560)  # type: ignore[arg-type]  # deliberate type mismatch for test (PQC-003)
         with pytest.raises(TypeError):
-            dilithium44_verify("not bytes", b"\x00" * 2420, b"\x00" * 1312)  # type: ignore[arg-type]
+            dilithium44_verify("not bytes", b"\x00" * 2420, b"\x00" * 1312)  # type: ignore[arg-type]  # deliberate type mismatch for test (PQC-003)
 
     def test_keypair_uniqueness(self) -> None:
         """Each ML-DSA-44 keypair is unique."""
         from ama_cryptography.pqc_backends import generate_dilithium44_keypair
 
-        pk1, _sk1 = generate_dilithium44_keypair()
-        pk2, _sk2 = generate_dilithium44_keypair()
-        assert pk1 != pk2
+        kp1 = generate_dilithium44_keypair()
+        kp2 = generate_dilithium44_keypair()
+        assert kp1.public_key != kp2.public_key
 
 
 # ============================================================================
@@ -355,9 +369,9 @@ class TestMLDSA87:
         """ML-DSA-87 keypair generates correct-size keys."""
         from ama_cryptography.pqc_backends import generate_dilithium87_keypair
 
-        pk, sk = generate_dilithium87_keypair()
-        assert len(pk) == 2592, f"Expected pk=2592, got {len(pk)}"
-        assert len(sk) == 4896, f"Expected sk=4896, got {len(sk)}"
+        keypair = generate_dilithium87_keypair()
+        assert len(keypair.public_key) == 2592, f"Expected pk=2592, got {len(keypair.public_key)}"
+        assert len(keypair.secret_key) == 4896, f"Expected sk=4896, got {len(keypair.secret_key)}"
 
     def test_sign_verify(self) -> None:
         """ML-DSA-87 sign/verify roundtrip succeeds."""
@@ -367,12 +381,12 @@ class TestMLDSA87:
             generate_dilithium87_keypair,
         )
 
-        pk, sk = generate_dilithium87_keypair()
+        keypair = generate_dilithium87_keypair()
         msg = b"AMA Cryptography ML-DSA-87 test"
-        sig = dilithium87_sign(msg, sk)
+        sig = dilithium87_sign(msg, keypair.secret_key)
 
         assert len(sig) <= 4627
-        assert dilithium87_verify(msg, sig, pk) is True
+        assert dilithium87_verify(msg, sig, keypair.public_key) is True
 
     def test_wrong_message_fails(self) -> None:
         """ML-DSA-87 verify with wrong message returns False."""
@@ -382,9 +396,9 @@ class TestMLDSA87:
             generate_dilithium87_keypair,
         )
 
-        pk, sk = generate_dilithium87_keypair()
-        sig = dilithium87_sign(b"correct", sk)
-        assert dilithium87_verify(b"wrong", sig, pk) is False
+        keypair = generate_dilithium87_keypair()
+        sig = dilithium87_sign(b"correct", keypair.secret_key)
+        assert dilithium87_verify(b"wrong", sig, keypair.public_key) is False
 
     def test_wrong_key_fails(self) -> None:
         """ML-DSA-87 verify with wrong pk returns False."""
@@ -394,10 +408,10 @@ class TestMLDSA87:
             generate_dilithium87_keypair,
         )
 
-        _pk1, sk1 = generate_dilithium87_keypair()
-        pk2, _sk2 = generate_dilithium87_keypair()
-        sig = dilithium87_sign(b"test", sk1)
-        assert dilithium87_verify(b"test", sig, pk2) is False
+        kp1 = generate_dilithium87_keypair()
+        kp2 = generate_dilithium87_keypair()
+        sig = dilithium87_sign(b"test", kp1.secret_key)
+        assert dilithium87_verify(b"test", sig, kp2.public_key) is False
 
     def test_invalid_sk_size(self) -> None:
         """ML-DSA-87 sign rejects wrong-size secret key."""
@@ -421,9 +435,9 @@ class TestMLDSA87:
             generate_dilithium87_keypair,
         )
 
-        pk, sk = generate_dilithium87_keypair()
-        sig = dilithium87_sign(b"", sk)
-        assert dilithium87_verify(b"", sig, pk) is True
+        keypair = generate_dilithium87_keypair()
+        sig = dilithium87_sign(b"", keypair.secret_key)
+        assert dilithium87_verify(b"", sig, keypair.public_key) is True
 
 
 # ============================================================================
@@ -437,7 +451,9 @@ class TestCythonBindingAvailability:
     def test_kyber_binding_probe(self) -> None:
         """kyber_binding module can be probed."""
         try:
-            from ama_cryptography import kyber_binding  # type: ignore[attr-defined]
+            from ama_cryptography import (
+                kyber_binding,  # type: ignore[attr-defined]  # Cython extension; compiled at install time (CY-001)
+            )
 
             assert hasattr(kyber_binding, "kyber_keypair") or True
         except ImportError:
@@ -446,7 +462,9 @@ class TestCythonBindingAvailability:
     def test_sphincs_binding_probe(self) -> None:
         """sphincs_binding module can be probed."""
         try:
-            from ama_cryptography import sphincs_binding  # type: ignore[attr-defined]
+            from ama_cryptography import (
+                sphincs_binding,  # type: ignore[attr-defined]  # Cython extension; compiled at install time (CY-001)
+            )
 
             assert hasattr(sphincs_binding, "sphincs_keypair") or True
         except ImportError:
@@ -455,7 +473,9 @@ class TestCythonBindingAvailability:
     def test_aes_gcm_binding_probe(self) -> None:
         """aes_gcm_binding module can be probed."""
         try:
-            from ama_cryptography import aes_gcm_binding  # type: ignore[attr-defined]  # noqa: F401
+            from ama_cryptography import (
+                aes_gcm_binding,  # type: ignore[attr-defined]  # Cython extension; compiled at install time (CY-001)  # noqa: F401
+            )
 
             assert True
         except ImportError:
@@ -465,7 +485,7 @@ class TestCythonBindingAvailability:
         """chacha20poly1305_binding module can be probed."""
         try:
             from ama_cryptography import (
-                chacha20poly1305_binding,  # type: ignore[attr-defined]  # noqa: F401
+                chacha20poly1305_binding,  # type: ignore[attr-defined]  # Cython extension; compiled at install time (CY-001)  # noqa: F401
             )
 
             assert True
@@ -475,7 +495,9 @@ class TestCythonBindingAvailability:
     def test_x25519_binding_probe(self) -> None:
         """x25519_binding module can be probed."""
         try:
-            from ama_cryptography import x25519_binding  # type: ignore[attr-defined]  # noqa: F401
+            from ama_cryptography import (
+                x25519_binding,  # type: ignore[attr-defined]  # Cython extension; compiled at install time (CY-001)  # noqa: F401
+            )
 
             assert True
         except ImportError:
@@ -601,11 +623,11 @@ class TestNewAlgorithmPerformance:
             generate_dilithium44_keypair,
         )
 
-        _pk, sk = generate_dilithium44_keypair()
+        keypair = generate_dilithium44_keypair()
         msg = b"performance test message"
         start = time.monotonic()
         for _ in range(5):
-            dilithium44_sign(msg, sk)
+            dilithium44_sign(msg, keypair.secret_key)
         elapsed = time.monotonic() - start
         assert elapsed < 10.0, f"ML-DSA-44 sign too slow: {elapsed:.2f}s for 5 iters"
 
@@ -619,10 +641,10 @@ class TestNewAlgorithmPerformance:
             generate_dilithium87_keypair,
         )
 
-        _pk, sk = generate_dilithium87_keypair()
+        keypair = generate_dilithium87_keypair()
         msg = b"performance test message"
         start = time.monotonic()
         for _ in range(5):
-            dilithium87_sign(msg, sk)
+            dilithium87_sign(msg, keypair.secret_key)
         elapsed = time.monotonic() - start
         assert elapsed < 10.0, f"ML-DSA-87 sign too slow: {elapsed:.2f}s for 5 iters"
