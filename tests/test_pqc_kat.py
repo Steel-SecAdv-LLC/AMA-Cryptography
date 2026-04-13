@@ -422,6 +422,541 @@ class TestMLKEM1024KAT:
 # =============================================================================
 
 
+class TestMLKEM512KAT:
+    """Known Answer Tests for ML-KEM-512 (Kyber-512) per NIST FIPS 203."""
+
+    @pytest.fixture(autouse=True)
+    def _check_available(self) -> None:
+        from ama_cryptography.pqc_backends import _has_native_func  # type: ignore[attr-defined]
+
+        if not _has_native_func("ama_kyber512_keypair"):  # type: ignore[operator]
+            pytest.skip("ML-KEM-512 not available in native library")
+
+    def test_public_key_size(self) -> None:
+        """Public key size matches NIST FIPS 203 ML-KEM-512 specification."""
+        from ama_cryptography.pqc_backends import generate_kyber512_keypair
+
+        pk, sk = generate_kyber512_keypair()
+        assert len(pk) == MLKEM512Spec.PUBLIC_KEY_BYTES
+
+    def test_secret_key_size(self) -> None:
+        """Secret key size matches NIST FIPS 203 ML-KEM-512 specification."""
+        from ama_cryptography.pqc_backends import generate_kyber512_keypair
+
+        pk, sk = generate_kyber512_keypair()
+        assert len(sk) == MLKEM512Spec.SECRET_KEY_BYTES
+
+    def test_ciphertext_size(self) -> None:
+        """Ciphertext size matches NIST FIPS 203 ML-KEM-512 specification."""
+        from ama_cryptography.pqc_backends import (
+            generate_kyber512_keypair,
+            kyber512_encapsulate,
+        )
+
+        pk, sk = generate_kyber512_keypair()
+        ct, ss = kyber512_encapsulate(pk)
+        assert len(ct) == MLKEM512Spec.CIPHERTEXT_BYTES
+
+    def test_shared_secret_size(self) -> None:
+        """Shared secret size matches NIST FIPS 203 specification (32 bytes)."""
+        from ama_cryptography.pqc_backends import (
+            generate_kyber512_keypair,
+            kyber512_encapsulate,
+        )
+
+        pk, sk = generate_kyber512_keypair()
+        ct, ss = kyber512_encapsulate(pk)
+        assert len(ss) == MLKEM512Spec.SHARED_SECRET_BYTES
+
+    def test_encapsulate_decapsulate_roundtrip(self) -> None:
+        """ML-KEM-512 encaps/decaps round-trip produces matching shared secrets."""
+        from ama_cryptography.pqc_backends import (
+            generate_kyber512_keypair,
+            kyber512_decapsulate,
+            kyber512_encapsulate,
+        )
+
+        pk, sk = generate_kyber512_keypair()
+        ct, ss_enc = kyber512_encapsulate(pk)
+        ss_dec = kyber512_decapsulate(ct, sk)
+        assert ss_enc == ss_dec, "Shared secrets must match"
+
+    def test_wrong_sk_implicit_rejection(self) -> None:
+        """Decaps with wrong sk uses implicit rejection (different shared secret)."""
+        from ama_cryptography.pqc_backends import (
+            generate_kyber512_keypair,
+            kyber512_decapsulate,
+            kyber512_encapsulate,
+        )
+
+        pk1, sk1 = generate_kyber512_keypair()
+        _pk2, sk2 = generate_kyber512_keypair()
+        ct, ss_enc = kyber512_encapsulate(pk1)
+        ss_wrong = kyber512_decapsulate(ct, sk2)
+        assert ss_enc != ss_wrong
+
+    def test_encapsulation_randomness(self) -> None:
+        """Multiple encapsulations produce different ciphertexts."""
+        from ama_cryptography.pqc_backends import (
+            generate_kyber512_keypair,
+            kyber512_encapsulate,
+        )
+
+        pk, sk = generate_kyber512_keypair()
+        ct1, _ = kyber512_encapsulate(pk)
+        ct2, _ = kyber512_encapsulate(pk)
+        assert ct1 != ct2
+
+    def test_kat_vector_sizes(self) -> None:
+        """Validate ML-KEM-512 KAT vector sizes match FIPS 203."""
+        from tests.test_nist_kat import (
+            ML_KEM_DIR,
+            kyber_kat_available,
+            load_kyber_kat_vectors,
+        )
+
+        if not kyber_kat_available("kyber512"):
+            pytest.skip("Kyber-512 KAT vectors not available")
+        vectors = load_kyber_kat_vectors(ML_KEM_DIR / "kyber512.rsp", max_vectors=5)
+        assert len(vectors) > 0
+        for v in vectors:
+            assert len(v.pk) == MLKEM512Spec.PUBLIC_KEY_BYTES
+            assert len(v.sk) == MLKEM512Spec.SECRET_KEY_BYTES
+            assert len(v.ct) == MLKEM512Spec.CIPHERTEXT_BYTES
+            assert len(v.ss) == MLKEM512Spec.SHARED_SECRET_BYTES
+
+
+class TestMLKEM768KAT:
+    """Known Answer Tests for ML-KEM-768 (Kyber-768) per NIST FIPS 203."""
+
+    @pytest.fixture(autouse=True)
+    def _check_available(self) -> None:
+        from ama_cryptography.pqc_backends import _has_native_func  # type: ignore[attr-defined]
+
+        if not _has_native_func("ama_kyber768_keypair"):  # type: ignore[operator]
+            pytest.skip("ML-KEM-768 not available in native library")
+
+    def test_public_key_size(self) -> None:
+        """Public key size matches NIST FIPS 203 ML-KEM-768 specification."""
+        from ama_cryptography.pqc_backends import generate_kyber768_keypair
+
+        pk, sk = generate_kyber768_keypair()
+        assert len(pk) == MLKEM768Spec.PUBLIC_KEY_BYTES
+
+    def test_secret_key_size(self) -> None:
+        """Secret key size matches NIST FIPS 203 ML-KEM-768 specification."""
+        from ama_cryptography.pqc_backends import generate_kyber768_keypair
+
+        pk, sk = generate_kyber768_keypair()
+        assert len(sk) == MLKEM768Spec.SECRET_KEY_BYTES
+
+    def test_ciphertext_size(self) -> None:
+        """Ciphertext size matches NIST FIPS 203 ML-KEM-768 specification."""
+        from ama_cryptography.pqc_backends import (
+            generate_kyber768_keypair,
+            kyber768_encapsulate,
+        )
+
+        pk, sk = generate_kyber768_keypair()
+        ct, ss = kyber768_encapsulate(pk)
+        assert len(ct) == MLKEM768Spec.CIPHERTEXT_BYTES
+
+    def test_shared_secret_size(self) -> None:
+        """Shared secret size matches NIST FIPS 203 specification (32 bytes)."""
+        from ama_cryptography.pqc_backends import (
+            generate_kyber768_keypair,
+            kyber768_encapsulate,
+        )
+
+        pk, sk = generate_kyber768_keypair()
+        ct, ss = kyber768_encapsulate(pk)
+        assert len(ss) == MLKEM768Spec.SHARED_SECRET_BYTES
+
+    def test_encapsulate_decapsulate_roundtrip(self) -> None:
+        """ML-KEM-768 encaps/decaps round-trip produces matching shared secrets."""
+        from ama_cryptography.pqc_backends import (
+            generate_kyber768_keypair,
+            kyber768_decapsulate,
+            kyber768_encapsulate,
+        )
+
+        pk, sk = generate_kyber768_keypair()
+        ct, ss_enc = kyber768_encapsulate(pk)
+        ss_dec = kyber768_decapsulate(ct, sk)
+        assert ss_enc == ss_dec, "Shared secrets must match"
+
+    def test_wrong_sk_implicit_rejection(self) -> None:
+        """Decaps with wrong sk uses implicit rejection (different shared secret)."""
+        from ama_cryptography.pqc_backends import (
+            generate_kyber768_keypair,
+            kyber768_decapsulate,
+            kyber768_encapsulate,
+        )
+
+        pk1, sk1 = generate_kyber768_keypair()
+        _pk2, sk2 = generate_kyber768_keypair()
+        ct, ss_enc = kyber768_encapsulate(pk1)
+        ss_wrong = kyber768_decapsulate(ct, sk2)
+        assert ss_enc != ss_wrong
+
+    def test_encapsulation_randomness(self) -> None:
+        """Multiple encapsulations produce different ciphertexts."""
+        from ama_cryptography.pqc_backends import (
+            generate_kyber768_keypair,
+            kyber768_encapsulate,
+        )
+
+        pk, sk = generate_kyber768_keypair()
+        ct1, _ = kyber768_encapsulate(pk)
+        ct2, _ = kyber768_encapsulate(pk)
+        assert ct1 != ct2
+
+    def test_kat_vector_sizes(self) -> None:
+        """Validate ML-KEM-768 KAT vector sizes match FIPS 203."""
+        from tests.test_nist_kat import (
+            ML_KEM_DIR,
+            kyber_kat_available,
+            load_kyber_kat_vectors,
+        )
+
+        if not kyber_kat_available("kyber768"):
+            pytest.skip("Kyber-768 KAT vectors not available")
+        vectors = load_kyber_kat_vectors(ML_KEM_DIR / "kyber768.rsp", max_vectors=5)
+        assert len(vectors) > 0
+        for v in vectors:
+            assert len(v.pk) == MLKEM768Spec.PUBLIC_KEY_BYTES
+            assert len(v.sk) == MLKEM768Spec.SECRET_KEY_BYTES
+            assert len(v.ct) == MLKEM768Spec.CIPHERTEXT_BYTES
+            assert len(v.ss) == MLKEM768Spec.SHARED_SECRET_BYTES
+
+
+class TestMLDSA44KAT:
+    """Known Answer Tests for ML-DSA-44 (Dilithium2) per NIST FIPS 204."""
+
+    @pytest.fixture(autouse=True)
+    def _check_available(self) -> None:
+        from ama_cryptography.pqc_backends import _has_native_func  # type: ignore[attr-defined]
+
+        if not _has_native_func("ama_dilithium44_keypair"):  # type: ignore[operator]
+            pytest.skip("ML-DSA-44 not available in native library")
+
+    def test_public_key_size(self) -> None:
+        """Public key size matches NIST FIPS 204 ML-DSA-44 specification."""
+        from ama_cryptography.pqc_backends import generate_dilithium44_keypair
+
+        pk, sk = generate_dilithium44_keypair()
+        assert len(pk) == MLDSA44Spec.PUBLIC_KEY_BYTES
+
+    def test_secret_key_size(self) -> None:
+        """Secret key size matches NIST FIPS 204 ML-DSA-44 specification."""
+        from ama_cryptography.pqc_backends import generate_dilithium44_keypair
+
+        pk, sk = generate_dilithium44_keypair()
+        assert len(sk) == MLDSA44Spec.SECRET_KEY_BYTES
+
+    def test_signature_size(self) -> None:
+        """Signature size matches NIST FIPS 204 ML-DSA-44 specification."""
+        from ama_cryptography.pqc_backends import (
+            dilithium44_sign,
+            generate_dilithium44_keypair,
+        )
+
+        pk, sk = generate_dilithium44_keypair()
+        sig = dilithium44_sign(b"FIPS 204 KAT test", sk)
+        assert len(sig) == MLDSA44Spec.SIGNATURE_BYTES
+
+    def test_sign_verify_roundtrip(self) -> None:
+        """ML-DSA-44 sign/verify round-trip succeeds."""
+        from ama_cryptography.pqc_backends import (
+            dilithium44_sign,
+            dilithium44_verify,
+            generate_dilithium44_keypair,
+        )
+
+        pk, sk = generate_dilithium44_keypair()
+        msg = b"ML-DSA-44 roundtrip test"
+        sig = dilithium44_sign(msg, sk)
+        assert dilithium44_verify(msg, sig, pk)
+
+    def test_invalid_signature_fails(self) -> None:
+        """Tampered ML-DSA-44 signature fails verification."""
+        from ama_cryptography.pqc_backends import (
+            dilithium44_sign,
+            dilithium44_verify,
+            generate_dilithium44_keypair,
+        )
+
+        pk, sk = generate_dilithium44_keypair()
+        sig = bytearray(dilithium44_sign(b"test", sk))
+        sig[0] ^= 0xFF
+        assert not dilithium44_verify(b"test", bytes(sig), pk)
+
+    def test_wrong_message_fails(self) -> None:
+        """ML-DSA-44 verification with wrong message fails."""
+        from ama_cryptography.pqc_backends import (
+            dilithium44_sign,
+            dilithium44_verify,
+            generate_dilithium44_keypair,
+        )
+
+        pk, sk = generate_dilithium44_keypair()
+        sig = dilithium44_sign(b"original", sk)
+        assert not dilithium44_verify(b"modified", sig, pk)
+
+    def test_wrong_pk_fails(self) -> None:
+        """ML-DSA-44 verification with wrong public key fails."""
+        from ama_cryptography.pqc_backends import (
+            dilithium44_sign,
+            dilithium44_verify,
+            generate_dilithium44_keypair,
+        )
+
+        pk1, sk1 = generate_dilithium44_keypair()
+        pk2, _sk2 = generate_dilithium44_keypair()
+        sig = dilithium44_sign(b"test", sk1)
+        assert not dilithium44_verify(b"test", sig, pk2)
+
+    def test_kat_vector_sizes(self) -> None:
+        """Validate ML-DSA-44 KAT vector sizes match FIPS 204."""
+        from tests.test_nist_kat import (
+            ML_DSA_DIR,
+            dilithium_kat_available,
+            load_dilithium_kat_vectors,
+        )
+
+        if not dilithium_kat_available("dilithium2"):
+            pytest.skip("Dilithium2 (ML-DSA-44) KAT vectors not available")
+        vectors = load_dilithium_kat_vectors(ML_DSA_DIR / "dilithium2.rsp", max_vectors=5)
+        assert len(vectors) > 0
+        for v in vectors:
+            assert len(v.pk) == MLDSA44Spec.PUBLIC_KEY_BYTES
+
+
+class TestMLDSA87KAT:
+    """Known Answer Tests for ML-DSA-87 (Dilithium5) per NIST FIPS 204."""
+
+    @pytest.fixture(autouse=True)
+    def _check_available(self) -> None:
+        from ama_cryptography.pqc_backends import _has_native_func  # type: ignore[attr-defined]
+
+        if not _has_native_func("ama_dilithium87_keypair"):  # type: ignore[operator]
+            pytest.skip("ML-DSA-87 not available in native library")
+
+    def test_public_key_size(self) -> None:
+        """Public key size matches NIST FIPS 204 ML-DSA-87 specification."""
+        from ama_cryptography.pqc_backends import generate_dilithium87_keypair
+
+        pk, sk = generate_dilithium87_keypair()
+        assert len(pk) == MLDSA87Spec.PUBLIC_KEY_BYTES
+
+    def test_secret_key_size(self) -> None:
+        """Secret key size matches NIST FIPS 204 ML-DSA-87 specification."""
+        from ama_cryptography.pqc_backends import generate_dilithium87_keypair
+
+        pk, sk = generate_dilithium87_keypair()
+        assert len(sk) == MLDSA87Spec.SECRET_KEY_BYTES
+
+    def test_signature_size(self) -> None:
+        """Signature size matches NIST FIPS 204 ML-DSA-87 specification."""
+        from ama_cryptography.pqc_backends import (
+            dilithium87_sign,
+            generate_dilithium87_keypair,
+        )
+
+        pk, sk = generate_dilithium87_keypair()
+        sig = dilithium87_sign(b"FIPS 204 KAT test", sk)
+        assert len(sig) == MLDSA87Spec.SIGNATURE_BYTES
+
+    def test_sign_verify_roundtrip(self) -> None:
+        """ML-DSA-87 sign/verify round-trip succeeds."""
+        from ama_cryptography.pqc_backends import (
+            dilithium87_sign,
+            dilithium87_verify,
+            generate_dilithium87_keypair,
+        )
+
+        pk, sk = generate_dilithium87_keypair()
+        msg = b"ML-DSA-87 roundtrip test"
+        sig = dilithium87_sign(msg, sk)
+        assert dilithium87_verify(msg, sig, pk)
+
+    def test_invalid_signature_fails(self) -> None:
+        """Tampered ML-DSA-87 signature fails verification."""
+        from ama_cryptography.pqc_backends import (
+            dilithium87_sign,
+            dilithium87_verify,
+            generate_dilithium87_keypair,
+        )
+
+        pk, sk = generate_dilithium87_keypair()
+        sig = bytearray(dilithium87_sign(b"test", sk))
+        sig[0] ^= 0xFF
+        assert not dilithium87_verify(b"test", bytes(sig), pk)
+
+    def test_wrong_message_fails(self) -> None:
+        """ML-DSA-87 verification with wrong message fails."""
+        from ama_cryptography.pqc_backends import (
+            dilithium87_sign,
+            dilithium87_verify,
+            generate_dilithium87_keypair,
+        )
+
+        pk, sk = generate_dilithium87_keypair()
+        sig = dilithium87_sign(b"original", sk)
+        assert not dilithium87_verify(b"modified", sig, pk)
+
+    def test_wrong_pk_fails(self) -> None:
+        """ML-DSA-87 verification with wrong public key fails."""
+        from ama_cryptography.pqc_backends import (
+            dilithium87_sign,
+            dilithium87_verify,
+            generate_dilithium87_keypair,
+        )
+
+        pk1, sk1 = generate_dilithium87_keypair()
+        pk2, _sk2 = generate_dilithium87_keypair()
+        sig = dilithium87_sign(b"test", sk1)
+        assert not dilithium87_verify(b"test", sig, pk2)
+
+    def test_kat_vector_sizes(self) -> None:
+        """Validate ML-DSA-87 KAT vector sizes match FIPS 204."""
+        from tests.test_nist_kat import (
+            ML_DSA_DIR,
+            dilithium_kat_available,
+            load_dilithium_kat_vectors,
+        )
+
+        if not dilithium_kat_available("dilithium5"):
+            pytest.skip("Dilithium5 (ML-DSA-87) KAT vectors not available")
+        vectors = load_dilithium_kat_vectors(ML_DSA_DIR / "dilithium5.rsp", max_vectors=5)
+        assert len(vectors) > 0
+        for v in vectors:
+            assert len(v.pk) == MLDSA87Spec.PUBLIC_KEY_BYTES
+
+
+class TestSLHDSAAllVariantsKAT:
+    """NIST KAT tests for all 6 SLH-DSA parameter sets per FIPS 205."""
+
+    SLH_VARIANTS = [
+        ("128s", 32, 64, 7856),
+        ("128f", 32, 64, 17088),
+        ("192s", 48, 96, 16224),
+        ("192f", 48, 96, 35664),
+        ("256s", 64, 128, 29792),
+        ("256f", 64, 128, 49856),
+    ]
+
+    @pytest.fixture(autouse=True)
+    def _check_sphincs(self) -> None:
+        from ama_cryptography.pqc_backends import SPHINCS_AVAILABLE
+
+        if not SPHINCS_AVAILABLE:
+            pytest.skip("SPHINCS+ backend not available")
+
+    @pytest.mark.parametrize(
+        "variant,n,sk_bytes,sig_bytes",
+        SLH_VARIANTS,
+        ids=[v[0] for v in SLH_VARIANTS],
+    )
+    def test_key_sizes(self, variant: str, n: int, sk_bytes: int, sig_bytes: int) -> None:
+        """All SLH-DSA variants produce correct key sizes per FIPS 205."""
+        import importlib
+
+        mod = importlib.import_module("ama_cryptography.pqc_backends")
+        keygen_fn = getattr(mod, f"generate_slh_dsa_{variant}_keypair", None)
+        if keygen_fn is None:
+            pytest.skip(f"SLH-DSA-{variant} keygen not available")
+        kp = keygen_fn()
+        assert len(kp.public_key) == 2 * n, f"SLH-DSA-{variant} pk should be {2 * n} bytes"
+        assert len(kp.secret_key) == 2 * 2 * n, f"SLH-DSA-{variant} sk should be {4 * n} bytes"
+
+    @pytest.mark.parametrize(
+        "variant,n,sk_bytes,sig_bytes",
+        SLH_VARIANTS,
+        ids=[v[0] for v in SLH_VARIANTS],
+    )
+    def test_sign_verify_roundtrip(
+        self, variant: str, n: int, sk_bytes: int, sig_bytes: int
+    ) -> None:
+        """All SLH-DSA variants sign/verify round-trip succeeds."""
+        import importlib
+
+        mod = importlib.import_module("ama_cryptography.pqc_backends")
+        keygen_fn = getattr(mod, f"generate_slh_dsa_{variant}_keypair", None)
+        sign_fn = getattr(mod, f"slh_dsa_{variant}_sign", None)
+        verify_fn = getattr(mod, f"slh_dsa_{variant}_verify", None)
+        if not all([keygen_fn, sign_fn, verify_fn]):
+            pytest.skip(f"SLH-DSA-{variant} not fully available")
+        kp = keygen_fn()
+        msg = f"FIPS 205 SLH-DSA-{variant} test".encode()
+        sig = sign_fn(msg, kp.secret_key)
+        assert verify_fn(msg, sig, kp.public_key)
+
+    @pytest.mark.parametrize(
+        "variant,n,sk_bytes,sig_bytes",
+        SLH_VARIANTS,
+        ids=[v[0] for v in SLH_VARIANTS],
+    )
+    def test_wrong_message_fails(
+        self, variant: str, n: int, sk_bytes: int, sig_bytes: int
+    ) -> None:
+        """All SLH-DSA variants reject wrong message."""
+        import importlib
+
+        mod = importlib.import_module("ama_cryptography.pqc_backends")
+        keygen_fn = getattr(mod, f"generate_slh_dsa_{variant}_keypair", None)
+        sign_fn = getattr(mod, f"slh_dsa_{variant}_sign", None)
+        verify_fn = getattr(mod, f"slh_dsa_{variant}_verify", None)
+        if not all([keygen_fn, sign_fn, verify_fn]):
+            pytest.skip(f"SLH-DSA-{variant} not fully available")
+        kp = keygen_fn()
+        sig = sign_fn(b"original", kp.secret_key)
+        assert not verify_fn(b"modified", sig, kp.public_key)
+
+    def test_acvp_sigver_all_variants(self) -> None:
+        """Validate all SLH-DSA parameter sets against ACVP vectors."""
+        vectors_path = Path(__file__).parent / "kat" / "fips205" / "SLH-DSA-sigVer-FIPS205.json"
+        if not vectors_path.exists():
+            pytest.skip("ACVP SLH-DSA vectors not available")
+
+        import importlib
+
+        mod = importlib.import_module("ama_cryptography.pqc_backends")
+
+        with open(vectors_path) as f:
+            data = json.load(f)
+
+        tested_variants: set[str] = set()
+        for group in data["testGroups"]:
+            param_set = group.get("parameterSet", "")
+            if group.get("signatureInterface") != "internal":
+                continue
+
+            # Map ACVP param set name to our function names
+            # e.g. "SLH-DSA-SHA2-128s" -> "128s"
+            variant = param_set.replace("SLH-DSA-SHA2-", "").replace("SLH-DSA-SHAKE-", "")
+            variant = variant.lower().rstrip("-simple")
+            verify_fn = getattr(mod, f"slh_dsa_{variant}_verify", None)
+            if verify_fn is None:
+                verify_fn = getattr(mod, "sphincs_verify", None)
+            if verify_fn is None:
+                continue
+
+            for tc in group["tests"][:3]:  # Test first 3 per group for speed
+                pk = bytes.fromhex(tc["pk"])
+                sig = bytes.fromhex(tc["signature"])
+                msg = bytes.fromhex(tc["message"])
+                expected = tc["testPassed"]
+                result = verify_fn(msg, sig, pk)
+                assert result == expected, (
+                    f"ACVP {param_set} tcId={tc['tcId']}: expected {expected}, got {result}"
+                )
+                tested_variants.add(param_set)
+
+        # We should have tested at least the default variant
+        assert len(tested_variants) > 0, "No SLH-DSA ACVP vectors were tested"
+
+
 class TestPQCInteroperability:
     """Tests for PQC algorithm interoperability and consistency."""
 
