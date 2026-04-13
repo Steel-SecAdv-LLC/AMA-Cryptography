@@ -6,8 +6,8 @@
 # Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
 
 # Build dependencies (required for Cython extensions)
-Cython>=3.0.0,<3.1.0; python_version < "3.9"
-Cython>=3.0.0; python_version >= "3.9"
+Cython>=3.2.4,<3.3.0; python_version < "3.9"
+Cython>=3.2.4; python_version >= "3.9"
 
 # NumPy: 1.24.x is last version supporting Python 3.8
 numpy>=1.24.0,<2.0.0; python_version < "3.9"
@@ -27,7 +27,7 @@ hypothesis>=6.0.0
 
 # Code Quality
 black>=26.3.1; python_version >= "3.10"
-ruff>=0.4.0
+ruff>=0.15.10
 mypy>=1.9.0
 
 # Security Scanning
@@ -38,6 +38,6 @@ bandit>=1.7.0
 # psutil>=5.9.0
 
 # Build and packaging
-setuptools>=61.0
+setuptools>=82.0.1
 wheel>=0.40.0
 build>=0.10.0

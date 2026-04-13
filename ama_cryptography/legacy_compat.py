@@ -62,8 +62,9 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
-# _open_fd helper removed — callers now use `with os.fdopen(fd, "wb")`
-# directly, the pattern CodeQL traces natively.
+# _open_fd helper removed — callers now guard os.fdopen() with
+# try/except BaseException to close the raw fd on fdopen failure,
+# matching the pattern in crypto_api._atomic_write_json().
 
 
 # ---------------------------------------------------------------------------
@@ -461,13 +462,23 @@ def verify_rfc3161_timestamp(
     try:
         tsr_path = os.path.join(tmp_dir, "timestamp.tsr")
         fd = os.open(tsr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as f:
-            f.write(timestamp_token)
+        try:
+            f_tsr = os.fdopen(fd, "wb")
+        except BaseException:
+            os.close(fd)
+            raise
+        with f_tsr:
+            f_tsr.write(timestamp_token)
 
         data_path = os.path.join(tmp_dir, "data.dat")
         fd = os.open(data_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
+        try:
+            f_dat = os.fdopen(fd, "wb")
+        except BaseException:
+            os.close(fd)
+            raise
+        with f_dat:
+            f_dat.write(data)
 
         cmd_verify = [
             "openssl",
