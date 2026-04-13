@@ -871,6 +871,7 @@ class TestSLHDSAAllVariantsKAT:
         )
         if keygen_fn is None:
             pytest.skip(f"SLH-DSA-{variant} keygen not available")
+        assert keygen_fn is not None
         kp = keygen_fn()
         assert len(kp.public_key) == 2 * n, f"SLH-DSA-{variant} pk should be {2 * n} bytes"
         assert len(kp.secret_key) == 2 * 2 * n, f"SLH-DSA-{variant} sk should be {4 * n} bytes"
