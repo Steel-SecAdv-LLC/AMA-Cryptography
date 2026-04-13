@@ -48,6 +48,13 @@
 #include "fe51.h"
 #endif
 
+/* Portable "unused" annotation: GCC/Clang __attribute__, MSVC no-op. */
+#if defined(__GNUC__) || defined(__clang__)
+#define AMA_UNUSED __attribute__((unused))
+#else
+#define AMA_UNUSED
+#endif
+
 /* C11 atomics for thread-safe lazy initialization of base point tables.
  * Uses a tri-state CAS protocol: 0 = uninitialized, 1 = initializing, 2 = ready.
  * Falls back to volatile on pre-C11 compilers (MSVC, older GCC). */
@@ -307,11 +314,9 @@ static void ge25519_p1p1_to_p3(ge25519_p3 *r, const ge25519_p1p1 *p) {
     fe25519_mul(r->T, p->X, p->Y);
 }
 
-/* p1p1 -> p2 (3 field multiplications — skips T for doubling chains) */
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((hot))
-#endif
-static void ge25519_p1p1_to_p2(ge25519_p2 *r, const ge25519_p1p1 *p) {
+/* Retained for future variable-base scalar multiplication —
+   AMA_UNUSED resolves CodeQL alert #20. */
+static AMA_UNUSED void ge25519_p1p1_to_p2(ge25519_p2 *r, const ge25519_p1p1 *p) {
     fe25519_mul(r->X, p->X, p->T);
     fe25519_mul(r->Y, p->Y, p->Z);
     fe25519_mul(r->Z, p->Z, p->T);

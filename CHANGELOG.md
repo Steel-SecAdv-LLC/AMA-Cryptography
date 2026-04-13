@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.3 |
-| Last Updated | 2026-04-06 |
+| Document Version | 2.4 |
+| Last Updated | 2026-04-13 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -14,6 +14,17 @@
 ## Overview
 
 All notable changes to AMA Cryptography will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [2.1.3] - 2026-04-13
+
+### Fixed — CodeQL Alert Resolution
+
+- **Alert #343 (test_pqc_backends_coverage.py:264):** Replaced explicit `__del__()` call with `del`/`gc.collect()` pattern; finalizer verified via `finalizer_error_count()` before/after (INVARIANT-3 compliant)
+- **Alert #272 (test_hsm_integration.py:628):** Replaced explicit `__del__()` call with `del`/`gc.collect()` pattern; mock assertions preserved
+- **Alert #345 (legacy_compat.py:463, 473):** Replaced `try/except BaseException` fd wrapper with flat `with os.fdopen(fd, "wb")` pattern CodeQL traces natively — both occurrences fixed
+- **Alert #20 (ama_ed25519.c:314):** Removed contradictory `__attribute__((hot))`, added `AMA_UNUSED` annotation to `ge25519_p1p1_to_p2` (function retained for future scalar multiplication)
 
 ---
 

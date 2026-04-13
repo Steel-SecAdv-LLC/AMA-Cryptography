@@ -251,19 +251,19 @@ class TestKeyPairLifecycle:
         kp.wipe()  # len == 0, should be no-op
 
     def test_keypair_del_calls_wipe(self) -> None:
-        """__del__ calls wipe without raising.
-
-        Verifies that the finalizer code path (wipe via GC) does not raise.
-        Uses del + gc.collect() instead of explicit __del__() call. (PBC-001)
-        """
+        """Verify __del__ finalizer runs without error via del/gc.collect() (PBC-001)."""
         import gc
+
+        from ama_cryptography._finalizer_health import finalizer_error_count
 
         kp = DilithiumKeyPair(
             secret_key=bytearray(b"\xaa" * DILITHIUM_SECRET_KEY_BYTES),
             public_key=b"\x00" * DILITHIUM_PUBLIC_KEY_BYTES,
         )
+        before = finalizer_error_count()
         del kp
-        gc.collect()  # triggers finalizer via GC (PBC-001)
+        gc.collect()
+        assert finalizer_error_count() == before, "finalizer raised during __del__"
 
     def test_kyber_encapsulation_dataclass(self) -> None:
         """KyberEncapsulation stores ciphertext and shared_secret."""
