@@ -1341,6 +1341,218 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) ->
 
 
 # ============================================================================
+# ML-KEM-512 / ML-KEM-768 ADDITIONAL PARAMETER SETS (FIPS 203)
+# ============================================================================
+
+# ML-KEM-512 sizes (FIPS 203, Level 1)
+KYBER_512_PUBLIC_KEY_BYTES = 800
+KYBER_512_SECRET_KEY_BYTES = 1632
+KYBER_512_CIPHERTEXT_BYTES = 768
+KYBER_512_SHARED_SECRET_BYTES = 32
+
+# ML-KEM-768 sizes (FIPS 203, Level 3)
+KYBER_768_PUBLIC_KEY_BYTES = 1184
+KYBER_768_SECRET_KEY_BYTES = 2400
+KYBER_768_CIPHERTEXT_BYTES = 1088
+KYBER_768_SHARED_SECRET_BYTES = 32
+
+
+def generate_kyber512_keypair() -> KyberKeyPair:
+    """
+    Generate ML-KEM-512 key pair (FIPS 203, Level 1).
+
+    ML-KEM-512 provides IND-CCA2 secure key encapsulation at NIST Level 1
+    (~128-bit classical security).
+
+    Returns:
+        KyberKeyPair with ML-KEM-512 keys
+
+    Raises:
+        KyberUnavailableError: If native backend is not available
+    """
+    if _native_lib is None:
+        raise KyberUnavailableError("ML-KEM-512 native backend not available. " + _INSTALL_HINT)
+
+    pk_buf = ctypes.create_string_buffer(KYBER_512_PUBLIC_KEY_BYTES)
+    sk_buf = ctypes.create_string_buffer(KYBER_512_SECRET_KEY_BYTES)
+    rc = _native_lib.ama_kyber512_keypair(
+        pk_buf, ctypes.c_size_t(KYBER_512_PUBLIC_KEY_BYTES),
+        sk_buf, ctypes.c_size_t(KYBER_512_SECRET_KEY_BYTES),
+    )
+    if rc != 0:
+        ctypes.memset(sk_buf, 0, KYBER_512_SECRET_KEY_BYTES)
+        raise KyberUnavailableError(f"ML-KEM-512 keypair failed (rc={rc})")
+    result = KyberKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
+    ctypes.memset(sk_buf, 0, KYBER_512_SECRET_KEY_BYTES)
+    return result
+
+
+def kyber512_encapsulate(public_key: bytes) -> KyberEncapsulation:
+    """
+    Encapsulate a shared secret using ML-KEM-512 (FIPS 203, Level 1).
+
+    Args:
+        public_key: ML-KEM-512 public key (800 bytes)
+
+    Returns:
+        KyberEncapsulation with ciphertext and shared secret
+
+    Raises:
+        KyberUnavailableError: If native backend is not available
+        ValueError: If public_key has incorrect length
+    """
+    if _native_lib is None:
+        raise KyberUnavailableError("ML-KEM-512 native backend not available. " + _INSTALL_HINT)
+    if len(public_key) != KYBER_512_PUBLIC_KEY_BYTES:
+        raise ValueError(
+            f"ML-KEM-512 public key must be {KYBER_512_PUBLIC_KEY_BYTES} bytes, "
+            f"got {len(public_key)}"
+        )
+
+    ct_buf = ctypes.create_string_buffer(KYBER_512_CIPHERTEXT_BYTES)
+    ct_len = ctypes.c_size_t(KYBER_512_CIPHERTEXT_BYTES)
+    ss_buf = ctypes.create_string_buffer(KYBER_512_SHARED_SECRET_BYTES)
+    rc = _native_lib.ama_kyber512_encapsulate(
+        public_key, ctypes.c_size_t(len(public_key)),
+        ct_buf, ctypes.byref(ct_len),
+        ss_buf, ctypes.c_size_t(KYBER_512_SHARED_SECRET_BYTES),
+    )
+    if rc != 0:
+        raise KyberUnavailableError(f"ML-KEM-512 encapsulate failed (rc={rc})")
+    return KyberEncapsulation(ciphertext=bytes(ct_buf), shared_secret=bytes(ss_buf))
+
+
+def kyber512_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
+    """
+    Decapsulate shared secret using ML-KEM-512 (FIPS 203, Level 1).
+
+    Args:
+        ciphertext: ML-KEM-512 ciphertext (768 bytes)
+        secret_key: ML-KEM-512 secret key (1632 bytes)
+
+    Returns:
+        32-byte shared secret
+
+    Raises:
+        KyberUnavailableError: If native backend is not available
+        ValueError: If inputs have incorrect lengths
+    """
+    if _native_lib is None:
+        raise KyberUnavailableError("ML-KEM-512 native backend not available. " + _INSTALL_HINT)
+
+    sk_buf = ctypes.create_string_buffer(bytes(secret_key), len(secret_key))
+    ss_buf = ctypes.create_string_buffer(KYBER_512_SHARED_SECRET_BYTES)
+    try:
+        rc = _native_lib.ama_kyber512_decapsulate(
+            ciphertext, ctypes.c_size_t(len(ciphertext)),
+            sk_buf, ctypes.c_size_t(len(secret_key)),
+            ss_buf, ctypes.c_size_t(KYBER_512_SHARED_SECRET_BYTES),
+        )
+        if rc != 0:
+            raise KyberUnavailableError(f"ML-KEM-512 decapsulate failed (rc={rc})")
+        return bytes(ss_buf)
+    finally:
+        ctypes.memset(sk_buf, 0, len(secret_key))
+
+
+def generate_kyber768_keypair() -> KyberKeyPair:
+    """
+    Generate ML-KEM-768 key pair (FIPS 203, Level 3).
+
+    ML-KEM-768 provides IND-CCA2 secure key encapsulation at NIST Level 3
+    (~192-bit classical security).
+
+    Returns:
+        KyberKeyPair with ML-KEM-768 keys
+
+    Raises:
+        KyberUnavailableError: If native backend is not available
+    """
+    if _native_lib is None:
+        raise KyberUnavailableError("ML-KEM-768 native backend not available. " + _INSTALL_HINT)
+
+    pk_buf = ctypes.create_string_buffer(KYBER_768_PUBLIC_KEY_BYTES)
+    sk_buf = ctypes.create_string_buffer(KYBER_768_SECRET_KEY_BYTES)
+    rc = _native_lib.ama_kyber768_keypair(
+        pk_buf, ctypes.c_size_t(KYBER_768_PUBLIC_KEY_BYTES),
+        sk_buf, ctypes.c_size_t(KYBER_768_SECRET_KEY_BYTES),
+    )
+    if rc != 0:
+        ctypes.memset(sk_buf, 0, KYBER_768_SECRET_KEY_BYTES)
+        raise KyberUnavailableError(f"ML-KEM-768 keypair failed (rc={rc})")
+    result = KyberKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
+    ctypes.memset(sk_buf, 0, KYBER_768_SECRET_KEY_BYTES)
+    return result
+
+
+def kyber768_encapsulate(public_key: bytes) -> KyberEncapsulation:
+    """
+    Encapsulate a shared secret using ML-KEM-768 (FIPS 203, Level 3).
+
+    Args:
+        public_key: ML-KEM-768 public key (1184 bytes)
+
+    Returns:
+        KyberEncapsulation with ciphertext and shared secret
+
+    Raises:
+        KyberUnavailableError: If native backend is not available
+        ValueError: If public_key has incorrect length
+    """
+    if _native_lib is None:
+        raise KyberUnavailableError("ML-KEM-768 native backend not available. " + _INSTALL_HINT)
+    if len(public_key) != KYBER_768_PUBLIC_KEY_BYTES:
+        raise ValueError(
+            f"ML-KEM-768 public key must be {KYBER_768_PUBLIC_KEY_BYTES} bytes, "
+            f"got {len(public_key)}"
+        )
+
+    ct_buf = ctypes.create_string_buffer(KYBER_768_CIPHERTEXT_BYTES)
+    ct_len = ctypes.c_size_t(KYBER_768_CIPHERTEXT_BYTES)
+    ss_buf = ctypes.create_string_buffer(KYBER_768_SHARED_SECRET_BYTES)
+    rc = _native_lib.ama_kyber768_encapsulate(
+        public_key, ctypes.c_size_t(len(public_key)),
+        ct_buf, ctypes.byref(ct_len),
+        ss_buf, ctypes.c_size_t(KYBER_768_SHARED_SECRET_BYTES),
+    )
+    if rc != 0:
+        raise KyberUnavailableError(f"ML-KEM-768 encapsulate failed (rc={rc})")
+    return KyberEncapsulation(ciphertext=bytes(ct_buf), shared_secret=bytes(ss_buf))
+
+
+def kyber768_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
+    """
+    Decapsulate shared secret using ML-KEM-768 (FIPS 203, Level 3).
+
+    Args:
+        ciphertext: ML-KEM-768 ciphertext (1088 bytes)
+        secret_key: ML-KEM-768 secret key (2400 bytes)
+
+    Returns:
+        32-byte shared secret
+
+    Raises:
+        KyberUnavailableError: If native backend is not available
+    """
+    if _native_lib is None:
+        raise KyberUnavailableError("ML-KEM-768 native backend not available. " + _INSTALL_HINT)
+
+    sk_buf = ctypes.create_string_buffer(bytes(secret_key), len(secret_key))
+    ss_buf = ctypes.create_string_buffer(KYBER_768_SHARED_SECRET_BYTES)
+    try:
+        rc = _native_lib.ama_kyber768_decapsulate(
+            ciphertext, ctypes.c_size_t(len(ciphertext)),
+            sk_buf, ctypes.c_size_t(len(secret_key)),
+            ss_buf, ctypes.c_size_t(KYBER_768_SHARED_SECRET_BYTES),
+        )
+        if rc != 0:
+            raise KyberUnavailableError(f"ML-KEM-768 decapsulate failed (rc={rc})")
+        return bytes(ss_buf)
+    finally:
+        ctypes.memset(sk_buf, 0, len(secret_key))
+
+
+# ============================================================================
 # SPHINCS+-SHA2-256f-simple HASH-BASED SIGNATURES
 # ============================================================================
 

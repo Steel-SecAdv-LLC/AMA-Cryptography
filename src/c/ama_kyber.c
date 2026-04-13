@@ -1572,6 +1572,497 @@ AMA_API ama_error_t ama_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
 }
 
 /* ============================================================================
+ * ML-KEM-512 / ML-KEM-768 PARAMETERIZED IMPLEMENTATIONS (FIPS 203)
+ * ============================================================================
+ * These reuse the same polynomial arithmetic (N=256, Q=3329, NTT, basemul,
+ * compress/decompress) as Kyber-1024 but with different K, eta1, du, dv.
+ *
+ * ML-KEM-512:  K=2, eta1=3, eta2=2, du=10, dv=4
+ * ML-KEM-768:  K=3, eta1=2, eta2=2, du=10, dv=4
+ * ML-KEM-1024: K=4, eta1=2, eta2=2, du=11, dv=5  (existing)
+ * ============================================================================ */
+#ifdef AMA_USE_NATIVE_PQC
+
+/* Maximum K across all parameter sets */
+#define KYBER_K_MAX 4
+
+/**
+ * Parameter set descriptor for parameterized ML-KEM
+ */
+typedef struct {
+    unsigned int k;
+    unsigned int eta1;
+    unsigned int eta2;
+    unsigned int du;
+    unsigned int dv;
+    size_t pk_bytes;
+    size_t sk_bytes;
+    size_t ct_bytes;
+} kyber_params_t;
+
+static const kyber_params_t MLKEM_512 = {
+    .k = 2, .eta1 = 3, .eta2 = 2, .du = 10, .dv = 4,
+    .pk_bytes = AMA_KYBER_512_PUBLIC_KEY_BYTES,
+    .sk_bytes = AMA_KYBER_512_SECRET_KEY_BYTES,
+    .ct_bytes = AMA_KYBER_512_CIPHERTEXT_BYTES,
+};
+
+static const kyber_params_t MLKEM_768 = {
+    .k = 3, .eta1 = 2, .eta2 = 2, .du = 10, .dv = 4,
+    .pk_bytes = AMA_KYBER_768_PUBLIC_KEY_BYTES,
+    .sk_bytes = AMA_KYBER_768_SECRET_KEY_BYTES,
+    .ct_bytes = AMA_KYBER_768_CIPHERTEXT_BYTES,
+};
+
+/**
+ * CBD with eta=3 (for ML-KEM-512 secret key sampling)
+ * Needs 3*N/4 = 192 bytes of input
+ */
+static void kyber_poly_cbd_eta3(poly* r, const uint8_t* buf) {
+    unsigned int i, j;
+    uint32_t t, d;
+    int16_t a, b;
+
+    for (i = 0; i < KYBER_N / 4; i++) {
+        /* Read 3 bytes = 24 bits for 4 coefficients */
+        t = (uint32_t)buf[3*i] | ((uint32_t)buf[3*i + 1] << 8) |
+            ((uint32_t)buf[3*i + 2] << 16);
+
+        d = t & 0x00249249;
+        d += (t >> 1) & 0x00249249;
+        d += (t >> 2) & 0x00249249;
+
+        for (j = 0; j < 4; j++) {
+            a = (int16_t)((d >> (6*j + 0)) & 0x7);
+            b = (int16_t)((d >> (6*j + 3)) & 0x7);
+            r->coeffs[4*i + j] = a - b;
+        }
+    }
+}
+
+/**
+ * Sample noise with parameterized eta
+ */
+static void kyber_gennoise_eta(poly* r, const uint8_t seed[32],
+                                uint8_t nonce, unsigned int eta) {
+    uint8_t buf[33];
+    uint8_t stream[3 * KYBER_N / 4]; /* max for eta=3: 192 bytes */
+
+    size_t stream_len = eta * KYBER_N / 4;
+    memcpy(buf, seed, 32);
+    buf[32] = nonce;
+    ama_shake256(buf, 33, stream, stream_len);
+
+    if (eta == 3) {
+        kyber_poly_cbd_eta3(r, stream);
+    } else {
+        /* eta == 2 */
+        kyber_poly_cbd_eta(r, stream);
+    }
+    ama_secure_memzero(stream, sizeof(stream));
+}
+
+/**
+ * Sample noise vector with parameterized eta
+ */
+static void kyber_gennoise_vec(poly* vec, unsigned int k,
+                                const uint8_t seed[32], uint8_t nonce,
+                                unsigned int eta) {
+    unsigned int i;
+    for (i = 0; i < k; i++) {
+        kyber_gennoise_eta(&vec[i], seed, nonce + (uint8_t)i, eta);
+    }
+}
+
+/* Polyvec operations parameterized by k */
+static void polyvec_ntt_k(poly* vec, unsigned int k) {
+    unsigned int i;
+    for (i = 0; i < k; i++) poly_ntt(&vec[i]);
+}
+
+static void polyvec_invntt_k(poly* vec, unsigned int k) {
+    unsigned int i;
+    for (i = 0; i < k; i++) poly_invntt(&vec[i]);
+}
+
+static void polyvec_add_k(poly* r, const poly* a, const poly* b, unsigned int k) {
+    unsigned int i;
+    for (i = 0; i < k; i++) poly_add(&r[i], &a[i], &b[i]);
+}
+
+static void polyvec_reduce_k(poly* vec, unsigned int k) {
+    unsigned int i;
+    for (i = 0; i < k; i++) poly_reduce(&vec[i]);
+}
+
+static void polyvec_tobytes_k(uint8_t* r, const poly* a, unsigned int k) {
+    unsigned int i;
+    for (i = 0; i < k; i++) poly_tobytes(r + i * 384, &a[i]);
+}
+
+static void polyvec_frombytes_k(poly* r, const uint8_t* a, unsigned int k) {
+    unsigned int i;
+    for (i = 0; i < k; i++) poly_frombytes(&r[i], a + i * 384);
+}
+
+static void polyvec_basemul_acc_k(poly* r, const poly* a_row, const poly* b,
+                                   unsigned int k) {
+    unsigned int i;
+    poly t;
+    poly_basemul(r, &a_row[0], &b[0]);
+    for (i = 1; i < k; i++) {
+        poly_basemul(&t, &a_row[i], &b[i]);
+        poly_add(r, r, &t);
+    }
+    poly_reduce(r);
+}
+
+static void polyvec_compress_k(uint8_t* r, const poly* a, unsigned int k,
+                                unsigned int du) {
+    unsigned int i;
+    for (i = 0; i < k; i++) {
+        poly_compress(r + i * (KYBER_N * du / 8), &a[i], (int)du);
+    }
+}
+
+static void polyvec_decompress_k(poly* r, const uint8_t* a, unsigned int k,
+                                  unsigned int du) {
+    unsigned int i;
+    for (i = 0; i < k; i++) {
+        poly_decompress(&r[i], a + i * (KYBER_N * du / 8), (int)du);
+    }
+}
+
+/**
+ * Generate matrix A from seed (k x k matrix in NTT domain), parameterized
+ */
+static void kyber_gen_matrix_k(poly mat[][KYBER_K_MAX], const uint8_t seed[32],
+                                unsigned int k, int transposed) {
+    unsigned int i, j;
+    for (i = 0; i < k; i++) {
+        for (j = 0; j < k; j++) {
+            if (transposed) {
+                kyber_poly_uniform(&mat[i][j], seed, (uint8_t)i, (uint8_t)j);
+            } else {
+                kyber_poly_uniform(&mat[i][j], seed, (uint8_t)j, (uint8_t)i);
+            }
+        }
+    }
+}
+
+/**
+ * Parameterized CPA encryption (CPAPKE.Enc)
+ */
+static void kyber_cpapke_enc_param(uint8_t *ct, const uint8_t *m,
+                                    const uint8_t *pk, const uint8_t *coins,
+                                    const kyber_params_t *p) {
+    poly a[KYBER_K_MAX][KYBER_K_MAX], sp[KYBER_K_MAX], ep[KYBER_K_MAX];
+    poly pkpv[KYBER_K_MAX], bp[KYBER_K_MAX];
+    poly v, epp, mp_poly;
+    unsigned int i;
+    const uint8_t *rho;
+
+    rho = pk + p->k * 384;
+    polyvec_frombytes_k(pkpv, pk, p->k);
+
+    kyber_gen_matrix_k(a, rho, p->k, 1);
+
+    /* Sample r (eta1), e1 (eta2), e2 (eta2) */
+    kyber_gennoise_vec(sp, p->k, coins, 0, p->eta1);
+    kyber_gennoise_vec(ep, p->k, coins, (uint8_t)p->k, p->eta2);
+    kyber_gennoise_eta(&epp, coins, 2 * (uint8_t)p->k, p->eta2);
+
+    polyvec_ntt_k(sp, p->k);
+
+    /* u = A^T * r + e1 */
+    for (i = 0; i < p->k; i++) {
+        polyvec_basemul_acc_k(&bp[i], a[i], sp, p->k);
+    }
+    polyvec_invntt_k(bp, p->k);
+    polyvec_add_k(bp, bp, ep, p->k);
+    polyvec_reduce_k(bp, p->k);
+
+    /* v = t^T * r + e2 + Decompress(m, 1) */
+    polyvec_basemul_acc_k(&v, pkpv, sp, p->k);
+    poly_invntt(&v);
+    poly_add(&v, &v, &epp);
+
+    memset(&mp_poly, 0, sizeof(mp_poly));
+    for (i = 0; i < 32; i++) {
+        unsigned int j;
+        for (j = 0; j < 8; j++) {
+            mp_poly.coeffs[8*i + j] = (int16_t)(((m[i] >> j) & 1) *
+                                                  ((KYBER_Q + 1) / 2));
+        }
+    }
+    poly_add(&v, &v, &mp_poly);
+    poly_reduce(&v);
+
+    polyvec_compress_k(ct, bp, p->k, p->du);
+    poly_compress(ct + p->k * (KYBER_N * p->du / 8), &v, (int)p->dv);
+}
+
+/**
+ * Parameterized keypair generation (Algorithm 15)
+ */
+static ama_error_t kyber_keypair_param(uint8_t* pk, size_t pk_len,
+                                        uint8_t* sk, size_t sk_len,
+                                        const kyber_params_t *p) {
+    if (pk_len < p->pk_bytes || sk_len < p->sk_bytes) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    uint8_t d[32], buf[64];
+    uint8_t *rho, *sigma;
+    poly a[KYBER_K_MAX][KYBER_K_MAX], s[KYBER_K_MAX], e[KYBER_K_MAX];
+    poly pkpv[KYBER_K_MAX];
+    unsigned int i;
+    ama_error_t err;
+
+    err = kyber_randombytes(d, 32);
+    if (err != AMA_SUCCESS) return err;
+
+    {
+        uint8_t g_input[33];
+        memcpy(g_input, d, 32);
+        g_input[32] = (uint8_t)p->k;
+        ama_sha3_512(g_input, 33, buf);
+        ama_secure_memzero(g_input, sizeof(g_input));
+    }
+    rho = buf;
+    sigma = buf + 32;
+
+    kyber_gen_matrix_k(a, rho, p->k, 0);
+    kyber_gennoise_vec(s, p->k, sigma, 0, p->eta1);
+    kyber_gennoise_vec(e, p->k, sigma, (uint8_t)p->k, p->eta1);
+
+    polyvec_ntt_k(s, p->k);
+    polyvec_ntt_k(e, p->k);
+
+    for (i = 0; i < p->k; i++) {
+        polyvec_basemul_acc_k(&pkpv[i], a[i], s, p->k);
+        poly_tomont(&pkpv[i]);
+        poly_add(&pkpv[i], &pkpv[i], &e[i]);
+    }
+    polyvec_reduce_k(pkpv, p->k);
+
+    polyvec_tobytes_k(pk, pkpv, p->k);
+    memcpy(pk + p->k * 384, rho, 32);
+
+    polyvec_reduce_k(s, p->k);
+    polyvec_tobytes_k(sk, s, p->k);
+    memcpy(sk + p->k * 384, pk, p->pk_bytes);
+
+    ama_sha3_256(pk, p->pk_bytes, sk + p->k * 384 + p->pk_bytes);
+
+    err = kyber_randombytes(sk + p->k * 384 + p->pk_bytes + 32, 32);
+    if (err != AMA_SUCCESS) return err;
+
+    ama_secure_memzero(d, sizeof(d));
+    ama_secure_memzero(buf, sizeof(buf));
+    ama_secure_memzero(s, sizeof(s));
+    ama_secure_memzero(e, sizeof(e));
+
+    return AMA_SUCCESS;
+}
+
+/**
+ * Parameterized encapsulation (Algorithm 17)
+ */
+static ama_error_t kyber_encapsulate_param(const uint8_t* pk, size_t pk_len,
+                                            uint8_t* ct, size_t* ct_len,
+                                            uint8_t* ss, size_t ss_len,
+                                            const kyber_params_t *p) {
+    if (pk_len != p->pk_bytes || ss_len != 32) return AMA_ERROR_INVALID_PARAM;
+    if (*ct_len < p->ct_bytes) {
+        *ct_len = p->ct_bytes;
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    uint8_t m[32], kr[64];
+    ama_error_t err;
+
+    err = kyber_randombytes(m, 32);
+    if (err != AMA_SUCCESS) return err;
+
+    {
+        uint8_t pk_hash[32], g_input[64];
+        ama_sha3_256(pk, p->pk_bytes, pk_hash);
+        memcpy(g_input, m, 32);
+        memcpy(g_input + 32, pk_hash, 32);
+        ama_sha3_512(g_input, 64, kr);
+        ama_secure_memzero(g_input, sizeof(g_input));
+    }
+
+    kyber_cpapke_enc_param(ct, m, pk, kr + 32, p);
+    memcpy(ss, kr, 32);
+    *ct_len = p->ct_bytes;
+
+    ama_secure_memzero(m, sizeof(m));
+    ama_secure_memzero(kr, sizeof(kr));
+
+    return AMA_SUCCESS;
+}
+
+/**
+ * Parameterized decapsulation (Algorithm 18)
+ */
+static ama_error_t kyber_decapsulate_param(const uint8_t* ct, size_t ct_len,
+                                            const uint8_t* sk, size_t sk_len,
+                                            uint8_t* ss, size_t ss_len,
+                                            const kyber_params_t *p) {
+    if (ct_len != p->ct_bytes || sk_len != p->sk_bytes || ss_len != 32)
+        return AMA_ERROR_INVALID_PARAM;
+
+    poly skpv[KYBER_K_MAX], bp[KYBER_K_MAX];
+    poly v, mp;
+    uint8_t m[32], kr[64];
+    const uint8_t *pk, *h_pk, *z;
+    unsigned int i;
+    int fail;
+
+    polyvec_frombytes_k(skpv, sk, p->k);
+    pk = sk + p->k * 384;
+    h_pk = pk + p->pk_bytes;
+    z = h_pk + 32;
+
+    polyvec_decompress_k(bp, ct, p->k, p->du);
+    poly_decompress(&v, ct + p->k * (KYBER_N * p->du / 8), (int)p->dv);
+
+    polyvec_ntt_k(bp, p->k);
+    polyvec_basemul_acc_k(&mp, skpv, bp, p->k);
+    poly_invntt(&mp);
+
+    poly_sub(&mp, &v, &mp);
+    poly_reduce(&mp);
+
+    for (i = 0; i < 32; i++) {
+        m[i] = 0;
+        unsigned int j;
+        for (j = 0; j < 8; j++) {
+            int16_t t = coeff_normalize(mp.coeffs[8*i + j]);
+            t = (int16_t)((((uint32_t)t << 1) + KYBER_Q / 2) / KYBER_Q);
+            m[i] |= (uint8_t)((t & 1) << j);
+        }
+    }
+
+    {
+        uint8_t g_input[64];
+        memcpy(g_input, m, 32);
+        memcpy(g_input + 32, h_pk, 32);
+        ama_sha3_512(g_input, 64, kr);
+        ama_secure_memzero(g_input, sizeof(g_input));
+    }
+
+    /* Re-encrypt and compare (FO transform) */
+    {
+        uint8_t *ct_cmp = (uint8_t *)malloc(p->ct_bytes);
+        if (!ct_cmp) {
+            ama_secure_memzero(m, sizeof(m));
+            ama_secure_memzero(kr, sizeof(kr));
+            return AMA_ERROR_MEMORY;
+        }
+        kyber_cpapke_enc_param(ct_cmp, m, pk, kr + 32, p);
+        fail = ama_consttime_memcmp(ct, ct_cmp, p->ct_bytes);
+        ama_secure_memzero(ct_cmp, p->ct_bytes);
+        free(ct_cmp);
+    }
+
+    /* Implicit rejection: H(z || ct) */
+    {
+        uint8_t ss_reject[32];
+        uint8_t *rej_input = (uint8_t *)malloc(32 + p->ct_bytes);
+        if (!rej_input) {
+            ama_secure_memzero(m, sizeof(m));
+            ama_secure_memzero(kr, sizeof(kr));
+            return AMA_ERROR_MEMORY;
+        }
+        memcpy(rej_input, z, 32);
+        memcpy(rej_input + 32, ct, p->ct_bytes);
+        ama_shake256(rej_input, 32 + p->ct_bytes, ss_reject, 32);
+        ama_secure_memzero(rej_input, 32 + p->ct_bytes);
+        free(rej_input);
+
+        memcpy(ss, kr, 32);
+        ama_consttime_copy(fail, ss, ss_reject, 32);
+        ama_secure_memzero(ss_reject, sizeof(ss_reject));
+    }
+
+    ama_secure_memzero(m, sizeof(m));
+    ama_secure_memzero(kr, sizeof(kr));
+
+    return AMA_SUCCESS;
+}
+
+#endif /* AMA_USE_NATIVE_PQC */
+
+/* ML-KEM-512 public API */
+AMA_API ama_error_t ama_kyber512_keypair(uint8_t *pk, size_t pk_len,
+                                          uint8_t *sk, size_t sk_len) {
+#ifdef AMA_USE_NATIVE_PQC
+    return kyber_keypair_param(pk, pk_len, sk, sk_len, &MLKEM_512);
+#else
+    (void)pk; (void)pk_len; (void)sk; (void)sk_len;
+    return AMA_ERROR_NOT_IMPLEMENTED;
+#endif
+}
+
+AMA_API ama_error_t ama_kyber512_encapsulate(const uint8_t *pk, size_t pk_len,
+                                              uint8_t *ct, size_t *ct_len,
+                                              uint8_t *ss, size_t ss_len) {
+#ifdef AMA_USE_NATIVE_PQC
+    return kyber_encapsulate_param(pk, pk_len, ct, ct_len, ss, ss_len, &MLKEM_512);
+#else
+    (void)pk; (void)pk_len; (void)ct; (void)ct_len; (void)ss; (void)ss_len;
+    return AMA_ERROR_NOT_IMPLEMENTED;
+#endif
+}
+
+AMA_API ama_error_t ama_kyber512_decapsulate(const uint8_t *ct, size_t ct_len,
+                                              const uint8_t *sk, size_t sk_len,
+                                              uint8_t *ss, size_t ss_len) {
+#ifdef AMA_USE_NATIVE_PQC
+    return kyber_decapsulate_param(ct, ct_len, sk, sk_len, ss, ss_len, &MLKEM_512);
+#else
+    (void)ct; (void)ct_len; (void)sk; (void)sk_len; (void)ss; (void)ss_len;
+    return AMA_ERROR_NOT_IMPLEMENTED;
+#endif
+}
+
+/* ML-KEM-768 public API */
+AMA_API ama_error_t ama_kyber768_keypair(uint8_t *pk, size_t pk_len,
+                                          uint8_t *sk, size_t sk_len) {
+#ifdef AMA_USE_NATIVE_PQC
+    return kyber_keypair_param(pk, pk_len, sk, sk_len, &MLKEM_768);
+#else
+    (void)pk; (void)pk_len; (void)sk; (void)sk_len;
+    return AMA_ERROR_NOT_IMPLEMENTED;
+#endif
+}
+
+AMA_API ama_error_t ama_kyber768_encapsulate(const uint8_t *pk, size_t pk_len,
+                                              uint8_t *ct, size_t *ct_len,
+                                              uint8_t *ss, size_t ss_len) {
+#ifdef AMA_USE_NATIVE_PQC
+    return kyber_encapsulate_param(pk, pk_len, ct, ct_len, ss, ss_len, &MLKEM_768);
+#else
+    (void)pk; (void)pk_len; (void)ct; (void)ct_len; (void)ss; (void)ss_len;
+    return AMA_ERROR_NOT_IMPLEMENTED;
+#endif
+}
+
+AMA_API ama_error_t ama_kyber768_decapsulate(const uint8_t *ct, size_t ct_len,
+                                              const uint8_t *sk, size_t sk_len,
+                                              uint8_t *ss, size_t ss_len) {
+#ifdef AMA_USE_NATIVE_PQC
+    return kyber_decapsulate_param(ct, ct_len, sk, sk_len, ss, ss_len, &MLKEM_768);
+#else
+    (void)ct; (void)ct_len; (void)sk; (void)sk_len; (void)ss; (void)ss_len;
+    return AMA_ERROR_NOT_IMPLEMENTED;
+#endif
+}
+
+/* ============================================================================
  * POLYNOMIAL ARITHMETIC - COMPLETE IMPLEMENTATION
  * ============================================================================
  * Full implementation of Kyber polynomial operations including NTT,

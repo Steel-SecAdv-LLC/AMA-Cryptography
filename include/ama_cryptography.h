@@ -69,7 +69,16 @@ typedef enum {
     AMA_ALG_KYBER_1024 = 1,   /**< CRYSTALS-Kyber (Kyber-1024) */
     AMA_ALG_SPHINCS_256F = 2, /**< SPHINCS+-256f */
     AMA_ALG_ED25519 = 3,      /**< Ed25519 (classical) */
-    AMA_ALG_HYBRID = 4        /**< Hybrid mode (classical + PQC) */
+    AMA_ALG_HYBRID = 4,       /**< Hybrid mode (classical + PQC) */
+    AMA_ALG_KYBER_512 = 5,    /**< ML-KEM-512 (FIPS 203, Level 1) */
+    AMA_ALG_KYBER_768 = 6,    /**< ML-KEM-768 (FIPS 203, Level 3) */
+    AMA_ALG_ML_DSA_44 = 7,    /**< ML-DSA-44 (FIPS 204, Level 2) */
+    AMA_ALG_ML_DSA_87 = 8,    /**< ML-DSA-87 (FIPS 204, Level 5) */
+    AMA_ALG_SLH_DSA_128S = 9, /**< SLH-DSA-SHA2-128s (FIPS 205) */
+    AMA_ALG_SLH_DSA_128F = 10,/**< SLH-DSA-SHA2-128f (FIPS 205) */
+    AMA_ALG_SLH_DSA_192S = 11,/**< SLH-DSA-SHA2-192s (FIPS 205) */
+    AMA_ALG_SLH_DSA_192F = 12,/**< SLH-DSA-SHA2-192f (FIPS 205) */
+    AMA_ALG_SLH_DSA_256S = 13 /**< SLH-DSA-SHA2-256s (FIPS 205) */
 } ama_algorithm_t;
 
 /* ============================================================================
@@ -97,11 +106,23 @@ typedef enum {
 #define AMA_ML_DSA_65_SECRET_KEY_BYTES 4032
 #define AMA_ML_DSA_65_SIGNATURE_BYTES 3309
 
-/* Kyber-1024 */
+/* Kyber-1024 / ML-KEM-1024 (FIPS 203, Level 5) */
 #define AMA_KYBER_1024_PUBLIC_KEY_BYTES 1568
 #define AMA_KYBER_1024_SECRET_KEY_BYTES 3168
 #define AMA_KYBER_1024_CIPHERTEXT_BYTES 1568
 #define AMA_KYBER_1024_SHARED_SECRET_BYTES 32
+
+/* ML-KEM-512 (FIPS 203, Level 1) */
+#define AMA_KYBER_512_PUBLIC_KEY_BYTES  800
+#define AMA_KYBER_512_SECRET_KEY_BYTES  1632
+#define AMA_KYBER_512_CIPHERTEXT_BYTES  768
+#define AMA_KYBER_512_SHARED_SECRET_BYTES 32
+
+/* ML-KEM-768 (FIPS 203, Level 3) */
+#define AMA_KYBER_768_PUBLIC_KEY_BYTES  1184
+#define AMA_KYBER_768_SECRET_KEY_BYTES  2400
+#define AMA_KYBER_768_CIPHERTEXT_BYTES  1088
+#define AMA_KYBER_768_SHARED_SECRET_BYTES 32
 
 /* SPHINCS+-256f */
 #define AMA_SPHINCS_256F_PUBLIC_KEY_BYTES 64
@@ -1173,6 +1194,106 @@ AMA_API ama_error_t ama_sphincs_verify_ctx(
     const uint8_t *ctx, size_t ctx_len,
     const uint8_t *signature, size_t signature_len,
     const uint8_t *public_key
+);
+
+/* ============================================================================
+ * ML-KEM-512 / ML-KEM-768 ADDITIONAL PARAMETER SETS (FIPS 203)
+ * ============================================================================ */
+
+/**
+ * @brief Generate ML-KEM-512 keypair (FIPS 203, Level 1)
+ *
+ * @param pk     Output: public key buffer (800 bytes)
+ * @param pk_len Public key buffer length
+ * @param sk     Output: secret key buffer (1632 bytes)
+ * @param sk_len Secret key buffer length
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_kyber512_keypair(
+    uint8_t *pk, size_t pk_len,
+    uint8_t *sk, size_t sk_len
+);
+
+/**
+ * @brief ML-KEM-512 key encapsulation (FIPS 203, Level 1)
+ *
+ * @param pk     Public key (800 bytes)
+ * @param pk_len Public key length
+ * @param ct     Output: ciphertext buffer (768 bytes)
+ * @param ct_len Output: ciphertext length
+ * @param ss     Output: shared secret buffer (32 bytes)
+ * @param ss_len Shared secret buffer length
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_kyber512_encapsulate(
+    const uint8_t *pk, size_t pk_len,
+    uint8_t *ct, size_t *ct_len,
+    uint8_t *ss, size_t ss_len
+);
+
+/**
+ * @brief ML-KEM-512 key decapsulation (FIPS 203, Level 1)
+ *
+ * @param ct     Ciphertext (768 bytes)
+ * @param ct_len Ciphertext length
+ * @param sk     Secret key (1632 bytes)
+ * @param sk_len Secret key length
+ * @param ss     Output: shared secret buffer (32 bytes)
+ * @param ss_len Shared secret buffer length
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_kyber512_decapsulate(
+    const uint8_t *ct, size_t ct_len,
+    const uint8_t *sk, size_t sk_len,
+    uint8_t *ss, size_t ss_len
+);
+
+/**
+ * @brief Generate ML-KEM-768 keypair (FIPS 203, Level 3)
+ *
+ * @param pk     Output: public key buffer (1184 bytes)
+ * @param pk_len Public key buffer length
+ * @param sk     Output: secret key buffer (2400 bytes)
+ * @param sk_len Secret key buffer length
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_kyber768_keypair(
+    uint8_t *pk, size_t pk_len,
+    uint8_t *sk, size_t sk_len
+);
+
+/**
+ * @brief ML-KEM-768 key encapsulation (FIPS 203, Level 3)
+ *
+ * @param pk     Public key (1184 bytes)
+ * @param pk_len Public key length
+ * @param ct     Output: ciphertext buffer (1088 bytes)
+ * @param ct_len Output: ciphertext length
+ * @param ss     Output: shared secret buffer (32 bytes)
+ * @param ss_len Shared secret buffer length
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_kyber768_encapsulate(
+    const uint8_t *pk, size_t pk_len,
+    uint8_t *ct, size_t *ct_len,
+    uint8_t *ss, size_t ss_len
+);
+
+/**
+ * @brief ML-KEM-768 key decapsulation (FIPS 203, Level 3)
+ *
+ * @param ct     Ciphertext (1088 bytes)
+ * @param ct_len Ciphertext length
+ * @param sk     Secret key (2400 bytes)
+ * @param sk_len Secret key length
+ * @param ss     Output: shared secret buffer (32 bytes)
+ * @param ss_len Shared secret buffer length
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_kyber768_decapsulate(
+    const uint8_t *ct, size_t ct_len,
+    const uint8_t *sk, size_t sk_len,
+    uint8_t *ss, size_t ss_len
 );
 
 /* ============================================================================
