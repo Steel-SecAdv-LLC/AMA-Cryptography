@@ -4,7 +4,7 @@
 # NumPy and Cython are optional — needed only for the math_engine Cython extension.
 # The core cryptographic package installs and works without them.
 # Set AMA_NO_CYTHON=1 to skip Cython extensions entirely.
-requires = ["setuptools>=61.0", "wheel", "cmake>=3.16"]
+requires = ["setuptools>=82.0.1", "wheel", "cmake>=3.16"]
 build-backend = "setuptools.build_meta"
 
 [project]
