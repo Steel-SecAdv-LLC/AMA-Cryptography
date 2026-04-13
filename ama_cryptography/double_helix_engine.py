@@ -605,3 +605,42 @@ if __name__ == "__main__":
     logger.info("\n" + "=" * 70)
     logger.info("✓ Double-Helix Evolution Engine operational")
     logger.info("=" * 70)
+
+
+# ============================================================================
+# CYTHON OPTIMIZED ENGINE (30-100x speedup when available)
+# ============================================================================
+
+_CY_HELIX_AVAILABLE = False
+AmaEngineOptimized = None  # type: ignore[assignment]
+
+try:
+    from ama_cryptography.helix_engine_complete import (  # type: ignore[import-not-found]  # Cython extension; compiled at install time (DHE-002)
+        AmaEngineOptimized,
+    )
+
+    _CY_HELIX_AVAILABLE = True
+    logger.debug("Cython Double-Helix engine loaded (helix_engine_complete)")
+except (ImportError, AttributeError):
+    _CY_HELIX_AVAILABLE = False
+    logger.debug("Cython Double-Helix engine not available; using pure-Python engine")
+
+
+def get_optimized_engine(state_dim: int = 212, random_seed: int = -1) -> "AmaEquationEngine":
+    """
+    Return the best available AMA Equation Engine.
+
+    When the Cython helix_engine_complete extension is compiled and available,
+    returns AmaEngineOptimized (30-100x faster). Otherwise returns the
+    pure-Python AmaEquationEngine.
+
+    Args:
+        state_dim: Dimensionality of the state vector (default: 212)
+        random_seed: Random seed (-1 for non-deterministic)
+
+    Returns:
+        Engine instance (Cython-optimized or pure-Python)
+    """
+    if _CY_HELIX_AVAILABLE and AmaEngineOptimized is not None:
+        return AmaEngineOptimized(state_dim=state_dim, random_seed=random_seed)
+    return AmaEquationEngine(state_dim=state_dim)

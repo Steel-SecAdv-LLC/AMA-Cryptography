@@ -196,6 +196,29 @@ extern ama_error_t ama_aes256_gcm_decrypt_avx2(const uint8_t *ciphertext, size_t
                                                 const uint8_t tag[16], uint8_t *plaintext);
 #endif
 
+#ifdef AMA_HAVE_AVX512_IMPL
+/* AVX-512: only AES-GCM, Kyber NTT, and 8-way Keccak are real AVX-512.
+ * Dilithium, Ed25519, Argon2, ChaCha20, SPHINCS+ AVX-512 were rejected
+ * as fake/incomplete implementations. */
+extern void ama_keccak_f1600_x8_avx512(uint64_t states[8][25]);
+extern ama_error_t ama_sha3_256_avx512(const uint8_t *input, size_t input_len,
+                                        uint8_t output[32]);
+extern void ama_kyber_ntt_avx512(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_kyber_invntt_avx512(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_kyber_poly_pointwise_avx512(int16_t r[256],
+                                             const int16_t a[256],
+                                             const int16_t b[256],
+                                             const int16_t zetas[128]);
+extern void ama_aes256_gcm_encrypt_avx512(const uint8_t *plaintext, size_t plaintext_len,
+                                           const uint8_t *aad, size_t aad_len,
+                                           const uint8_t key[32], const uint8_t nonce[12],
+                                           uint8_t *ciphertext, uint8_t tag[16]);
+extern ama_error_t ama_aes256_gcm_decrypt_avx512(const uint8_t *ciphertext, size_t ciphertext_len,
+                                                  const uint8_t *aad, size_t aad_len,
+                                                  const uint8_t key[32], const uint8_t nonce[12],
+                                                  const uint8_t tag[16], uint8_t *plaintext);
+#endif
+
 #ifdef AMA_HAVE_NEON_IMPL
 extern void ama_keccak_f1600_neon(uint64_t state[25]);
 extern ama_error_t ama_sha3_256_neon(const uint8_t *input, size_t input_len,
@@ -359,6 +382,31 @@ static void dispatch_init_internal(void) {
     if (dispatch_info.aes_gcm >= AMA_IMPL_AVX2) {
         dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_avx2;
         dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_avx2;
+    }
+#endif
+
+#ifdef AMA_HAVE_AVX512_IMPL
+    /* AVX-512 overrides AVX2 where available.
+     * Only 3 algorithms have genuine AVX-512 implementations:
+     *   - AES-GCM (VAES + VPCLMULQDQ 16-way pipelined)
+     *   - Kyber NTT (AVX-512BW 32-coeff butterflies)
+     *   - 8-way Keccak (AVX-512F for SPHINCS+ tree hashing)
+     * Dilithium, Ed25519, Argon2, ChaCha20, SPHINCS+ single-state
+     * remain at AVX2 tier — their AVX-512 versions were rejected. */
+    if (dispatch_info.kyber >= AMA_IMPL_AVX512) {
+        dispatch_table.kyber_ntt       = ama_kyber_ntt_avx512;
+        dispatch_table.kyber_invntt    = ama_kyber_invntt_avx512;
+        dispatch_table.kyber_pointwise = ama_kyber_poly_pointwise_avx512;
+    }
+    if (dispatch_info.aes_gcm >= AMA_IMPL_AVX512) {
+        dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_avx512;
+        dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_avx512;
+    }
+    if (dispatch_info.sha3 >= AMA_IMPL_AVX512) {
+        dispatch_table.sha3_256 = ama_sha3_256_avx512;
+        /* Note: single-state keccak_f1600 stays at AVX2/generic tier.
+         * The AVX-512 SHA3 path uses the 8-way parallel Keccak
+         * (ama_keccak_f1600_x8_avx512) internally for tree hashing. */
     }
 #endif
 

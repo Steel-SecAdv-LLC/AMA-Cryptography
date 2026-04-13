@@ -69,7 +69,16 @@ typedef enum {
     AMA_ALG_KYBER_1024 = 1,   /**< CRYSTALS-Kyber (Kyber-1024) */
     AMA_ALG_SPHINCS_256F = 2, /**< SPHINCS+-256f */
     AMA_ALG_ED25519 = 3,      /**< Ed25519 (classical) */
-    AMA_ALG_HYBRID = 4        /**< Hybrid mode (classical + PQC) */
+    AMA_ALG_HYBRID = 4,       /**< Hybrid mode (classical + PQC) */
+    AMA_ALG_KYBER_512 = 5,    /**< ML-KEM-512 (FIPS 203, Level 1) */
+    AMA_ALG_KYBER_768 = 6,    /**< ML-KEM-768 (FIPS 203, Level 3) */
+    AMA_ALG_ML_DSA_44 = 7,    /**< ML-DSA-44 (FIPS 204, Level 2) */
+    AMA_ALG_ML_DSA_87 = 8,    /**< ML-DSA-87 (FIPS 204, Level 5) */
+    AMA_ALG_SLH_DSA_128S = 9, /**< SLH-DSA-SHA2-128s (FIPS 205) */
+    AMA_ALG_SLH_DSA_128F = 10,/**< SLH-DSA-SHA2-128f (FIPS 205) */
+    AMA_ALG_SLH_DSA_192S = 11,/**< SLH-DSA-SHA2-192s (FIPS 205) */
+    AMA_ALG_SLH_DSA_192F = 12,/**< SLH-DSA-SHA2-192f (FIPS 205) */
+    AMA_ALG_SLH_DSA_256S = 13 /**< SLH-DSA-SHA2-256s (FIPS 205) */
 } ama_algorithm_t;
 
 /* ============================================================================
@@ -97,16 +106,63 @@ typedef enum {
 #define AMA_ML_DSA_65_SECRET_KEY_BYTES 4032
 #define AMA_ML_DSA_65_SIGNATURE_BYTES 3309
 
-/* Kyber-1024 */
+/* Kyber-1024 / ML-KEM-1024 (FIPS 203, Level 5) */
 #define AMA_KYBER_1024_PUBLIC_KEY_BYTES 1568
 #define AMA_KYBER_1024_SECRET_KEY_BYTES 3168
 #define AMA_KYBER_1024_CIPHERTEXT_BYTES 1568
 #define AMA_KYBER_1024_SHARED_SECRET_BYTES 32
 
-/* SPHINCS+-256f */
+/* ML-KEM-512 (FIPS 203, Level 1) */
+#define AMA_KYBER_512_PUBLIC_KEY_BYTES  800
+#define AMA_KYBER_512_SECRET_KEY_BYTES  1632
+#define AMA_KYBER_512_CIPHERTEXT_BYTES  768
+#define AMA_KYBER_512_SHARED_SECRET_BYTES 32
+
+/* ML-KEM-768 (FIPS 203, Level 3) */
+#define AMA_KYBER_768_PUBLIC_KEY_BYTES  1184
+#define AMA_KYBER_768_SECRET_KEY_BYTES  2400
+#define AMA_KYBER_768_CIPHERTEXT_BYTES  1088
+#define AMA_KYBER_768_SHARED_SECRET_BYTES 32
+
+/* SPHINCS+-256f / SLH-DSA-SHA2-256f (FIPS 205, Level 5) */
 #define AMA_SPHINCS_256F_PUBLIC_KEY_BYTES 64
 #define AMA_SPHINCS_256F_SECRET_KEY_BYTES 128
 #define AMA_SPHINCS_256F_SIGNATURE_BYTES 49856
+
+/* SLH-DSA-SHA2-128s (FIPS 205, Level 1, small signatures) */
+#define AMA_SLH_DSA_128S_PUBLIC_KEY_BYTES 32
+#define AMA_SLH_DSA_128S_SECRET_KEY_BYTES 64
+#define AMA_SLH_DSA_128S_SIGNATURE_BYTES 7856
+
+/* SLH-DSA-SHA2-128f (FIPS 205, Level 1, fast signing) */
+#define AMA_SLH_DSA_128F_PUBLIC_KEY_BYTES 32
+#define AMA_SLH_DSA_128F_SECRET_KEY_BYTES 64
+#define AMA_SLH_DSA_128F_SIGNATURE_BYTES 17088
+
+/* SLH-DSA-SHA2-192s (FIPS 205, Level 3, small signatures) */
+#define AMA_SLH_DSA_192S_PUBLIC_KEY_BYTES 48
+#define AMA_SLH_DSA_192S_SECRET_KEY_BYTES 96
+#define AMA_SLH_DSA_192S_SIGNATURE_BYTES 16224
+
+/* SLH-DSA-SHA2-192f (FIPS 205, Level 3, fast signing) */
+#define AMA_SLH_DSA_192F_PUBLIC_KEY_BYTES 48
+#define AMA_SLH_DSA_192F_SECRET_KEY_BYTES 96
+#define AMA_SLH_DSA_192F_SIGNATURE_BYTES 35664
+
+/* SLH-DSA-SHA2-256s (FIPS 205, Level 5, small signatures) */
+#define AMA_SLH_DSA_256S_PUBLIC_KEY_BYTES 64
+#define AMA_SLH_DSA_256S_SECRET_KEY_BYTES 128
+#define AMA_SLH_DSA_256S_SIGNATURE_BYTES 29792
+
+/* ML-DSA-44 (FIPS 204, Level 2) */
+#define AMA_ML_DSA_44_PUBLIC_KEY_BYTES 1312
+#define AMA_ML_DSA_44_SECRET_KEY_BYTES 2560
+#define AMA_ML_DSA_44_SIGNATURE_BYTES 2420
+
+/* ML-DSA-87 (FIPS 204, Level 5) */
+#define AMA_ML_DSA_87_PUBLIC_KEY_BYTES 2592
+#define AMA_ML_DSA_87_SECRET_KEY_BYTES 4896
+#define AMA_ML_DSA_87_SIGNATURE_BYTES 4627
 
 /* Ed25519 */
 #define AMA_ED25519_PUBLIC_KEY_BYTES 32
@@ -1173,6 +1229,205 @@ AMA_API ama_error_t ama_sphincs_verify_ctx(
     const uint8_t *ctx, size_t ctx_len,
     const uint8_t *signature, size_t signature_len,
     const uint8_t *public_key
+);
+
+/* ============================================================================
+ * ML-KEM-512 / ML-KEM-768 ADDITIONAL PARAMETER SETS (FIPS 203)
+ * ============================================================================ */
+
+/**
+ * @brief Generate ML-KEM-512 keypair (FIPS 203, Level 1)
+ *
+ * @param pk     Output: public key buffer (800 bytes)
+ * @param pk_len Public key buffer length
+ * @param sk     Output: secret key buffer (1632 bytes)
+ * @param sk_len Secret key buffer length
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_kyber512_keypair(
+    uint8_t *pk, size_t pk_len,
+    uint8_t *sk, size_t sk_len
+);
+
+/**
+ * @brief ML-KEM-512 key encapsulation (FIPS 203, Level 1)
+ *
+ * @param pk     Public key (800 bytes)
+ * @param pk_len Public key length
+ * @param ct     Output: ciphertext buffer (768 bytes)
+ * @param ct_len Output: ciphertext length
+ * @param ss     Output: shared secret buffer (32 bytes)
+ * @param ss_len Shared secret buffer length
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_kyber512_encapsulate(
+    const uint8_t *pk, size_t pk_len,
+    uint8_t *ct, size_t *ct_len,
+    uint8_t *ss, size_t ss_len
+);
+
+/**
+ * @brief ML-KEM-512 key decapsulation (FIPS 203, Level 1)
+ *
+ * @param ct     Ciphertext (768 bytes)
+ * @param ct_len Ciphertext length
+ * @param sk     Secret key (1632 bytes)
+ * @param sk_len Secret key length
+ * @param ss     Output: shared secret buffer (32 bytes)
+ * @param ss_len Shared secret buffer length
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_kyber512_decapsulate(
+    const uint8_t *ct, size_t ct_len,
+    const uint8_t *sk, size_t sk_len,
+    uint8_t *ss, size_t ss_len
+);
+
+/**
+ * @brief Generate ML-KEM-768 keypair (FIPS 203, Level 3)
+ *
+ * @param pk     Output: public key buffer (1184 bytes)
+ * @param pk_len Public key buffer length
+ * @param sk     Output: secret key buffer (2400 bytes)
+ * @param sk_len Secret key buffer length
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_kyber768_keypair(
+    uint8_t *pk, size_t pk_len,
+    uint8_t *sk, size_t sk_len
+);
+
+/**
+ * @brief ML-KEM-768 key encapsulation (FIPS 203, Level 3)
+ *
+ * @param pk     Public key (1184 bytes)
+ * @param pk_len Public key length
+ * @param ct     Output: ciphertext buffer (1088 bytes)
+ * @param ct_len Output: ciphertext length
+ * @param ss     Output: shared secret buffer (32 bytes)
+ * @param ss_len Shared secret buffer length
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_kyber768_encapsulate(
+    const uint8_t *pk, size_t pk_len,
+    uint8_t *ct, size_t *ct_len,
+    uint8_t *ss, size_t ss_len
+);
+
+/**
+ * @brief ML-KEM-768 key decapsulation (FIPS 203, Level 3)
+ *
+ * @param ct     Ciphertext (1088 bytes)
+ * @param ct_len Ciphertext length
+ * @param sk     Secret key (2400 bytes)
+ * @param sk_len Secret key length
+ * @param ss     Output: shared secret buffer (32 bytes)
+ * @param ss_len Shared secret buffer length
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_kyber768_decapsulate(
+    const uint8_t *ct, size_t ct_len,
+    const uint8_t *sk, size_t sk_len,
+    uint8_t *ss, size_t ss_len
+);
+
+/* ============================================================================
+ * SLH-DSA ADDITIONAL PARAMETER SETS (FIPS 205)
+ * ============================================================================ */
+
+/** @brief SLH-DSA-SHA2-128s keypair (FIPS 205, Level 1, small sigs) */
+AMA_API ama_error_t ama_slh_dsa_128s_keypair(uint8_t *pk, uint8_t *sk);
+/** @brief SLH-DSA-SHA2-128s sign */
+AMA_API ama_error_t ama_slh_dsa_128s_sign(
+    uint8_t *sig, size_t *sig_len,
+    const uint8_t *msg, size_t msg_len, const uint8_t *sk
+);
+/** @brief SLH-DSA-SHA2-128s verify */
+AMA_API ama_error_t ama_slh_dsa_128s_verify(
+    const uint8_t *msg, size_t msg_len,
+    const uint8_t *sig, size_t sig_len, const uint8_t *pk
+);
+
+/** @brief SLH-DSA-SHA2-128f keypair (FIPS 205, Level 1, fast) */
+AMA_API ama_error_t ama_slh_dsa_128f_keypair(uint8_t *pk, uint8_t *sk);
+/** @brief SLH-DSA-SHA2-128f sign */
+AMA_API ama_error_t ama_slh_dsa_128f_sign(
+    uint8_t *sig, size_t *sig_len,
+    const uint8_t *msg, size_t msg_len, const uint8_t *sk
+);
+/** @brief SLH-DSA-SHA2-128f verify */
+AMA_API ama_error_t ama_slh_dsa_128f_verify(
+    const uint8_t *msg, size_t msg_len,
+    const uint8_t *sig, size_t sig_len, const uint8_t *pk
+);
+
+/** @brief SLH-DSA-SHA2-192s keypair (FIPS 205, Level 3, small sigs) */
+AMA_API ama_error_t ama_slh_dsa_192s_keypair(uint8_t *pk, uint8_t *sk);
+/** @brief SLH-DSA-SHA2-192s sign */
+AMA_API ama_error_t ama_slh_dsa_192s_sign(
+    uint8_t *sig, size_t *sig_len,
+    const uint8_t *msg, size_t msg_len, const uint8_t *sk
+);
+/** @brief SLH-DSA-SHA2-192s verify */
+AMA_API ama_error_t ama_slh_dsa_192s_verify(
+    const uint8_t *msg, size_t msg_len,
+    const uint8_t *sig, size_t sig_len, const uint8_t *pk
+);
+
+/** @brief SLH-DSA-SHA2-192f keypair (FIPS 205, Level 3, fast) */
+AMA_API ama_error_t ama_slh_dsa_192f_keypair(uint8_t *pk, uint8_t *sk);
+/** @brief SLH-DSA-SHA2-192f sign */
+AMA_API ama_error_t ama_slh_dsa_192f_sign(
+    uint8_t *sig, size_t *sig_len,
+    const uint8_t *msg, size_t msg_len, const uint8_t *sk
+);
+/** @brief SLH-DSA-SHA2-192f verify */
+AMA_API ama_error_t ama_slh_dsa_192f_verify(
+    const uint8_t *msg, size_t msg_len,
+    const uint8_t *sig, size_t sig_len, const uint8_t *pk
+);
+
+/** @brief SLH-DSA-SHA2-256s keypair (FIPS 205, Level 5, small sigs) */
+AMA_API ama_error_t ama_slh_dsa_256s_keypair(uint8_t *pk, uint8_t *sk);
+/** @brief SLH-DSA-SHA2-256s sign */
+AMA_API ama_error_t ama_slh_dsa_256s_sign(
+    uint8_t *sig, size_t *sig_len,
+    const uint8_t *msg, size_t msg_len, const uint8_t *sk
+);
+/** @brief SLH-DSA-SHA2-256s verify */
+AMA_API ama_error_t ama_slh_dsa_256s_verify(
+    const uint8_t *msg, size_t msg_len,
+    const uint8_t *sig, size_t sig_len, const uint8_t *pk
+);
+
+/* ============================================================================
+ * ML-DSA-44 / ML-DSA-87 ADDITIONAL PARAMETER SETS (FIPS 204)
+ * ============================================================================ */
+
+/** @brief ML-DSA-44 keypair (FIPS 204, Level 2) */
+AMA_API ama_error_t ama_dilithium44_keypair(uint8_t *pk, uint8_t *sk);
+/** @brief ML-DSA-44 sign */
+AMA_API ama_error_t ama_dilithium44_sign(
+    uint8_t *sig, size_t *sig_len,
+    const uint8_t *msg, size_t msg_len, const uint8_t *sk
+);
+/** @brief ML-DSA-44 verify */
+AMA_API ama_error_t ama_dilithium44_verify(
+    const uint8_t *msg, size_t msg_len,
+    const uint8_t *sig, size_t sig_len, const uint8_t *pk
+);
+
+/** @brief ML-DSA-87 keypair (FIPS 204, Level 5) */
+AMA_API ama_error_t ama_dilithium87_keypair(uint8_t *pk, uint8_t *sk);
+/** @brief ML-DSA-87 sign */
+AMA_API ama_error_t ama_dilithium87_sign(
+    uint8_t *sig, size_t *sig_len,
+    const uint8_t *msg, size_t msg_len, const uint8_t *sk
+);
+/** @brief ML-DSA-87 verify */
+AMA_API ama_error_t ama_dilithium87_verify(
+    const uint8_t *msg, size_t msg_len,
+    const uint8_t *sig, size_t sig_len, const uint8_t *pk
 );
 
 /* ============================================================================
