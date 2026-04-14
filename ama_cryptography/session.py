@@ -91,8 +91,13 @@ class ReplayWindow:
     base: int = 0
     _seen: set = field(default_factory=set)  # type: ignore[type-arg]  # generic set used for seq-number tracking; parameterising adds no safety (SS-001)
 
-    def check_and_accept(self, seq: int) -> None:
-        """Check a sequence number and accept it if valid.
+    def check(self, seq: int) -> None:
+        """Check a sequence number without accepting it.
+
+        Use this before AEAD decryption to reject replayed messages cheaply
+        (O(1) set lookup) without wasting CPU on decryption.  Call
+        :meth:`accept` after successful AEAD decryption to record the
+        sequence number in the window.
 
         Args:
             seq: Sequence number to check
@@ -105,6 +110,16 @@ class ReplayWindow:
         if seq in self._seen:
             raise ReplayDetectedError(f"Sequence {seq} already received (replay)")
 
+    def accept(self, seq: int) -> None:
+        """Record a sequence number after successful AEAD decryption.
+
+        Must only be called after :meth:`check` succeeded **and** the
+        ciphertext authenticated.  This ensures the replay window is
+        never polluted by forged or malformed messages.
+
+        Args:
+            seq: Sequence number to accept
+        """
         self._seen.add(seq)
 
         # Slide window forward when it exceeds capacity.
@@ -115,6 +130,20 @@ class ReplayWindow:
                 self.base = min(self._seen)
             self._seen.discard(self.base)
             self.base += 1
+
+    def check_and_accept(self, seq: int) -> None:
+        """Check a sequence number and accept it if valid.
+
+        Convenience method combining :meth:`check` and :meth:`accept`.
+
+        Args:
+            seq: Sequence number to check
+
+        Raises:
+            ReplayDetectedError: If sequence is replayed or below window
+        """
+        self.check(seq)
+        self.accept(seq)
 
     def reset(self) -> None:
         """Reset the replay window to initial state."""

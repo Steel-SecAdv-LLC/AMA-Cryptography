@@ -402,6 +402,14 @@ class SecureSession:
 
         seq = msg.sequence_number
 
+        # Replay detection via session.ReplayWindow (sliding-window, SC-002).
+        # Phase 1: cheap O(1) check BEFORE AEAD decryption to reject known
+        # replays without wasting CPU on decryption (DoS mitigation).
+        try:
+            self._replay_window.check(seq)
+        except _ReplayDetectedError as exc:
+            raise ReplayError(str(exc)) from exc
+
         from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
 
         aad = self.session_id + struct.pack(">Q", seq)
@@ -409,13 +417,9 @@ class SecureSession:
             self.recv_key, msg.nonce, msg.ciphertext, msg.tag, aad
         )
 
-        # Replay detection via session.ReplayWindow (sliding-window, SC-002).
-        # Checked AFTER successful AEAD decryption so that malformed/truncated
-        # ciphertext is rejected by AEAD before touching window state.
-        try:
-            self._replay_window.check_and_accept(seq)
-        except _ReplayDetectedError as exc:
-            raise ReplayError(str(exc)) from exc
+        # Phase 2: accept AFTER successful AEAD decryption so forged or
+        # malformed ciphertext never pollutes the replay window state.
+        self._replay_window.accept(seq)
 
         self.messages_since_rekey += 1
         return plaintext
