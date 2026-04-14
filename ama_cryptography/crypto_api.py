@@ -60,21 +60,40 @@ AMA_ADAPTIVE_POSTURE_ENABLED: bool = os.getenv("AMA_DISABLE_ADAPTIVE_POSTURE", "
 )
 
 _posture_controller: Optional[Any] = None  # CryptoPostureController (lazy init)
+_POSTURE_INIT_FAILED: Any = object()  # Sentinel: init attempted and failed (CP-002)
+_posture_lock: threading.Lock = threading.Lock()
 
 
 def _get_posture_controller() -> Optional[Any]:
-    """Lazily instantiate CryptoPostureController on first use."""
+    """Lazily instantiate CryptoPostureController on first use.
+
+    Thread-safe via double-checked locking.  If initialisation fails the
+    sentinel ``_POSTURE_INIT_FAILED`` is cached so subsequent calls return
+    ``None`` immediately without retrying (CP-002).
+    """
     global _posture_controller
     if not AMA_ADAPTIVE_POSTURE_ENABLED:
         return None
-    if _posture_controller is None:
+    # Fast path: already initialised or permanently failed.
+    ctrl = _posture_controller
+    if ctrl is _POSTURE_INIT_FAILED:
+        return None
+    if ctrl is not None:
+        return ctrl
+    # Slow path: first call — acquire lock for thread-safe init.
+    with _posture_lock:
+        # Re-check after acquiring lock (double-checked locking).
+        ctrl = _posture_controller
+        if ctrl is not None:
+            return None if ctrl is _POSTURE_INIT_FAILED else ctrl
         try:
             from ama_cryptography.adaptive_posture import CryptoPostureController
 
             _posture_controller = CryptoPostureController(monitor=_monitor)
         except Exception as _err:
             logger.debug("Adaptive posture controller unavailable: %s", _err)
-    return _posture_controller
+            _posture_controller = _POSTURE_INIT_FAILED
+    return None if _posture_controller is _POSTURE_INIT_FAILED else _posture_controller
 
 
 def _maybe_evaluate_posture() -> None:
