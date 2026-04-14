@@ -40,6 +40,7 @@
 
 #include "../include/ama_cryptography.h"
 #include "internal/ama_sha2.h"
+#include "ama_platform_rand.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -1160,9 +1161,11 @@ ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]) 
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    /* Generate random seed (first 32 bytes of secret_key) */
-    /* NOTE: In production, use a cryptographic RNG */
-    /* For now, we require the caller to provide entropy in secret_key[0..31] */
+    /* Generate a random 32-byte seed into the first half of secret_key */
+    ama_error_t rand_err = ama_randombytes(secret_key, 32);
+    if (rand_err != AMA_SUCCESS) {
+        return rand_err;
+    }
 
     /* Hash the seed */
     sha512(secret_key, 32, hash);
