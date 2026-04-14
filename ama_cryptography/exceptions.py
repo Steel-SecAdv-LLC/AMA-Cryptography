@@ -121,6 +121,20 @@ class CryptoModuleError(RuntimeError):
     pass
 
 
+class AmaHSMUnavailableError(RuntimeError):
+    """Raised when an HSM operation is requested but PyKCS11 is not installed.
+
+    PyKCS11 is an optional dependency for hardware security module support.
+    Install it with: pip install ama-cryptography[hsm]
+
+    Note: This exception class lives in ``ama_cryptography.exceptions`` so
+    that it is always importable, even in environments where the native C
+    library or PyKCS11 is absent.
+    """
+
+    pass
+
+
 __all__ = [
     "SecurityWarning",
     "PQCUnavailableError",
@@ -131,4 +145,5 @@ __all__ = [
     "SignatureVerificationError",
     "IntegrityError",
     "CryptoModuleError",
+    "AmaHSMUnavailableError",
 ]

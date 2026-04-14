@@ -30,6 +30,9 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 
 from ama_cryptography._finalizer_health import record_finalizer_error
 from ama_cryptography.exceptions import (
+    AmaHSMUnavailableError as AmaHSMUnavailableError,
+)
+from ama_cryptography.exceptions import (
     SecurityWarning,
 )  # noqa: F401 — re-exported for public API (KM-001)
 from ama_cryptography.pqc_backends import _HMAC_SHA512_NATIVE_AVAILABLE, native_hmac_sha512
@@ -82,6 +85,18 @@ def _hmac_sha512(key: bytes, data: bytes) -> bytes:
 
 # Configure module logger
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Optional HSM dependency (PKCS#11 via PyKCS11).
+# PyKCS11 is an interface library, NOT a cryptographic primitive, and does
+# not violate INVARIANT-1.  All actual crypto is performed inside the HSM
+# hardware using its own FIPS-validated implementation.
+# Use find_spec() rather than a probe import to avoid an unused-import
+# binding that CodeQL and ruff would flag.
+# ---------------------------------------------------------------------------
+import importlib.util
+
+HSM_AVAILABLE: bool = importlib.util.find_spec("PyKCS11") is not None
 
 
 class KeyStatus(Enum):
@@ -995,10 +1010,14 @@ class HSMKeyStorage:
             slot_index: Specific slot index to use (auto-detect if None)
 
         Raises:
-            ImportError: If PyKCS11 is not installed
+            AmaHSMUnavailableError: If PyKCS11 is not installed
             ValueError: If HSM type is unknown
             RuntimeError: If token not found or login fails
         """
+        if not HSM_AVAILABLE:
+            raise AmaHSMUnavailableError(
+                "HSM support requires PyKCS11. Install with: pip install ama-cryptography[hsm]"
+            )
         self.pkcs11 = self._import_pykcs11()
         self._handle_map: Dict[bytes, Any] = {}  # bytes key -> PKCS11 handle object
         self.library_path = self._resolve_library_path(hsm_type, library_path)
@@ -1015,7 +1034,7 @@ class HSMKeyStorage:
 
             return PyKCS11
         except ImportError as e:
-            raise ImportError(
+            raise AmaHSMUnavailableError(
                 "HSM support requires PyKCS11. Install with: pip install ama-cryptography[hsm]"
             ) from e
 
@@ -1243,6 +1262,14 @@ class HSMKeyStorage:
             return True
         except self.pkcs11.PyKCS11Error:
             return False
+
+    def destroy_key(self, key_handle: bytes) -> bool:
+        """Alias for delete_key — permanently destroys key inside HSM.
+
+        Returns:
+            True if destroyed, False if not found.
+        """
+        return self.delete_key(key_handle)
 
     def close(self) -> None:
         """Close HSM session and logout."""
