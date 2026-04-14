@@ -12,6 +12,8 @@ Covers:
 - Session integration with session.ReplayWindow
 """
 
+from typing import Any
+
 import pytest
 
 try:
@@ -33,7 +35,7 @@ skip_no_native = pytest.mark.skipif(
 
 
 @pytest.fixture()
-def responder_keypairs():
+def responder_keypairs() -> tuple[bytes, bytes, bytes, bytes]:
     """Generate Responder's KEM and signature keypairs."""
     from ama_cryptography.crypto_api import HybridKEMProvider, HybridSignatureProvider
 
@@ -43,7 +45,7 @@ def responder_keypairs():
 
 
 @pytest.fixture()
-def completed_provider_pair(responder_keypairs):
+def completed_provider_pair(responder_keypairs: tuple[bytes, bytes, bytes, bytes]) -> Any:
     """Perform a full handshake through SecureChannelProvider + Responder."""
     from ama_cryptography.crypto_api import SecureChannelProvider
     from ama_cryptography.secure_channel import SecureChannelResponder
@@ -75,7 +77,9 @@ def completed_provider_pair(responder_keypairs):
 
 @skip_no_native
 class TestSecureChannelProvider:
-    def test_create_secure_channel_returns_bytes(self, responder_keypairs):
+    def test_create_secure_channel_returns_bytes(
+        self, responder_keypairs: tuple[bytes, bytes, bytes, bytes]
+    ) -> None:
         """create_secure_channel() returns non-empty bytes (handshake wire format)."""
         from ama_cryptography.crypto_api import SecureChannelProvider
 
@@ -85,7 +89,9 @@ class TestSecureChannelProvider:
         assert isinstance(hs_bytes, bytes)
         assert len(hs_bytes) > 0
 
-    def test_session_is_none_before_handshake(self, responder_keypairs):
+    def test_session_is_none_before_handshake(
+        self, responder_keypairs: tuple[bytes, bytes, bytes, bytes]
+    ) -> None:
         """session property is None until handshake completes."""
         from ama_cryptography.crypto_api import SecureChannelProvider
 
@@ -95,19 +101,19 @@ class TestSecureChannelProvider:
         provider.create_secure_channel(kem_pk)
         assert provider.session is None  # still None until complete_handshake
 
-    def test_session_set_after_handshake(self, completed_provider_pair):
+    def test_session_set_after_handshake(self, completed_provider_pair: Any) -> None:
         """session is set after complete_handshake."""
         provider, _ = completed_provider_pair
         assert provider.session is not None
 
-    def test_channel_send_returns_bytes(self, completed_provider_pair):
+    def test_channel_send_returns_bytes(self, completed_provider_pair: Any) -> None:
         """channel_send() returns serialized ChannelMessage bytes."""
         provider, _ = completed_provider_pair
         encrypted = provider.channel_send(b"hello world")
         assert isinstance(encrypted, bytes)
         assert len(encrypted) > 0
 
-    def test_full_round_trip(self, completed_provider_pair):
+    def test_full_round_trip(self, completed_provider_pair: Any) -> None:
         """Provider send → responder session decrypt round-trip."""
         from ama_cryptography.secure_channel import ChannelMessage
 
@@ -118,7 +124,7 @@ class TestSecureChannelProvider:
         recovered = resp_session.decrypt(msg)
         assert recovered == plaintext
 
-    def test_reverse_round_trip(self, completed_provider_pair):
+    def test_reverse_round_trip(self, completed_provider_pair: Any) -> None:
         """Responder session encrypt → provider channel_receive round-trip."""
         provider, resp_session = completed_provider_pair
         plaintext = b"Response from responder"
@@ -126,7 +132,7 @@ class TestSecureChannelProvider:
         recovered = provider.channel_receive(msg.serialize())
         assert recovered == plaintext
 
-    def test_multiple_messages(self, completed_provider_pair):
+    def test_multiple_messages(self, completed_provider_pair: Any) -> None:
         """Multiple sequential messages are all decrypted correctly."""
         from ama_cryptography.secure_channel import ChannelMessage
 
@@ -137,7 +143,9 @@ class TestSecureChannelProvider:
             got = resp_session.decrypt(ChannelMessage.deserialize(enc))
             assert got == m
 
-    def test_channel_send_before_handshake_raises(self, responder_keypairs):
+    def test_channel_send_before_handshake_raises(
+        self, responder_keypairs: tuple[bytes, bytes, bytes, bytes]
+    ) -> None:
         """channel_send() before complete_handshake() raises RuntimeError."""
         from ama_cryptography.crypto_api import SecureChannelProvider
 
@@ -145,7 +153,9 @@ class TestSecureChannelProvider:
         with pytest.raises(RuntimeError, match="not established"):
             provider.channel_send(b"data")
 
-    def test_channel_receive_before_handshake_raises(self, responder_keypairs):
+    def test_channel_receive_before_handshake_raises(
+        self, responder_keypairs: tuple[bytes, bytes, bytes, bytes]
+    ) -> None:
         """channel_receive() before handshake raises RuntimeError."""
         from ama_cryptography.crypto_api import SecureChannelProvider
 
@@ -153,7 +163,7 @@ class TestSecureChannelProvider:
         with pytest.raises(RuntimeError, match="not established"):
             provider.channel_receive(b"\x00" * 100)
 
-    def test_complete_handshake_without_create_raises(self):
+    def test_complete_handshake_without_create_raises(self) -> None:
         """complete_handshake() without prior create_secure_channel() raises."""
         from ama_cryptography.crypto_api import SecureChannelProvider
 
@@ -161,7 +171,7 @@ class TestSecureChannelProvider:
         with pytest.raises(RuntimeError):
             provider.complete_handshake(b"\x00" * 100)
 
-    def test_replay_detection_through_provider(self, completed_provider_pair):
+    def test_replay_detection_through_provider(self, completed_provider_pair: Any) -> None:
         """Replaying a ChannelMessage is rejected at the responder session layer."""
         from ama_cryptography.secure_channel import ChannelMessage, ReplayError
 
@@ -172,7 +182,7 @@ class TestSecureChannelProvider:
         with pytest.raises(ReplayError):
             resp_session.decrypt(msg)  # replay: must fail
 
-    def test_tamper_detection(self, completed_provider_pair):
+    def test_tamper_detection(self, completed_provider_pair: Any) -> None:
         """Modifying ciphertext raises ValueError (AEAD tag mismatch)."""
         from ama_cryptography.secure_channel import ChannelMessage
 
@@ -196,14 +206,14 @@ class TestSecureChannelProvider:
 class TestSecureSessionReplayWindow:
     """Verify SecureSession uses session.ReplayWindow correctly."""
 
-    def test_replay_window_type(self, completed_provider_pair):
+    def test_replay_window_type(self, completed_provider_pair: Any) -> None:
         """SecureSession._replay_window is a session.ReplayWindow instance."""
         from ama_cryptography.session import ReplayWindow
 
         _, resp_session = completed_provider_pair
         assert isinstance(resp_session._replay_window, ReplayWindow)
 
-    def test_window_base_advances(self, completed_provider_pair):
+    def test_window_base_advances(self, completed_provider_pair: Any) -> None:
         """ReplayWindow.base advances as messages fill the window."""
         from ama_cryptography.secure_channel import ChannelMessage
 
@@ -215,7 +225,7 @@ class TestSecureSessionReplayWindow:
         # Window base should still be 0 (5 messages, window size 256)
         assert resp_session._replay_window.base == 0
 
-    def test_rekey_resets_replay_window(self, completed_provider_pair):
+    def test_rekey_resets_replay_window(self, completed_provider_pair: Any) -> None:
         """rekey() resets the replay window base."""
         _provider, resp_session = completed_provider_pair
         # Manually set window state before rekey

@@ -12,6 +12,7 @@ Covers:
 - No false positives under normal (empty report) operation
 """
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -33,17 +34,17 @@ skip_no_native = pytest.mark.skipif(
 
 
 class TestPostureActionHalt:
-    def test_halt_exists_in_enum(self):
+    def test_halt_exists_in_enum(self) -> None:
         """PostureAction.HALT is a member of the PostureAction enum."""
         assert hasattr(PostureAction, "HALT")
         assert PostureAction.HALT in PostureAction
 
-    def test_halt_is_distinct_from_other_actions(self):
+    def test_halt_is_distinct_from_other_actions(self) -> None:
         """HALT is not equal to any other PostureAction value."""
         other = [a for a in PostureAction if a != PostureAction.HALT]
         assert PostureAction.HALT not in other
 
-    def test_halt_has_unique_value(self):
+    def test_halt_has_unique_value(self) -> None:
         """All PostureAction members have unique values."""
         values = [a.value for a in PostureAction]
         assert len(values) == len(set(values))
@@ -53,14 +54,14 @@ class TestPostureActionHalt:
 class TestMaybeEvaluatePosture:
     """Tests for crypto_api._maybe_evaluate_posture()."""
 
-    def test_does_nothing_when_disabled(self):
+    def test_does_nothing_when_disabled(self) -> None:
         """No error raised when AMA_ADAPTIVE_POSTURE_ENABLED=False."""
         with patch("ama_cryptography.crypto_api.AMA_ADAPTIVE_POSTURE_ENABLED", False):
             from ama_cryptography.crypto_api import _maybe_evaluate_posture
 
             _maybe_evaluate_posture()  # must not raise
 
-    def test_does_nothing_when_controller_none(self):
+    def test_does_nothing_when_controller_none(self) -> None:
         """No error raised when _posture_controller is None."""
         with (
             patch("ama_cryptography.crypto_api.AMA_ADAPTIVE_POSTURE_ENABLED", True),
@@ -70,7 +71,7 @@ class TestMaybeEvaluatePosture:
 
             _maybe_evaluate_posture()  # must not raise
 
-    def test_raises_crypto_module_error_on_halt(self):
+    def test_raises_crypto_module_error_on_halt(self) -> None:
         """_maybe_evaluate_posture raises CryptoModuleError when action is HALT."""
         from ama_cryptography.exceptions import CryptoModuleError
 
@@ -92,7 +93,7 @@ class TestMaybeEvaluatePosture:
             with pytest.raises(CryptoModuleError, match="critical anomaly"):
                 _maybe_evaluate_posture()
 
-    def test_no_error_on_none_action(self):
+    def test_no_error_on_none_action(self) -> None:
         """_maybe_evaluate_posture does NOT raise for PostureAction.NONE."""
         nominal_eval = PostureEvaluation(
             threat_level=ThreatLevel.NOMINAL,
@@ -111,10 +112,8 @@ class TestMaybeEvaluatePosture:
 
             _maybe_evaluate_posture()  # must not raise
 
-    def test_logs_warning_on_rotate_keys(self, caplog):
+    def test_logs_warning_on_rotate_keys(self, caplog: pytest.LogCaptureFixture) -> None:
         """_maybe_evaluate_posture logs a warning for ROTATE_KEYS action."""
-        import logging
-
         rotate_eval = PostureEvaluation(
             threat_level=ThreatLevel.HIGH,
             action=PostureAction.ROTATE_KEYS,
@@ -138,13 +137,13 @@ class TestMaybeEvaluatePosture:
 
 @skip_no_native
 class TestAmaAdaptivePostureEnabled:
-    def test_flag_exists_in_crypto_api(self):
+    def test_flag_exists_in_crypto_api(self) -> None:
         """AMA_ADAPTIVE_POSTURE_ENABLED is a bool in crypto_api."""
         from ama_cryptography.crypto_api import AMA_ADAPTIVE_POSTURE_ENABLED
 
         assert isinstance(AMA_ADAPTIVE_POSTURE_ENABLED, bool)
 
-    def test_env_var_disables_posture(self, monkeypatch):
+    def test_env_var_disables_posture(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """AMA_DISABLE_ADAPTIVE_POSTURE=1 sets AMA_ADAPTIVE_POSTURE_ENABLED=False."""
 
         monkeypatch.setenv("AMA_DISABLE_ADAPTIVE_POSTURE", "1")
@@ -160,7 +159,7 @@ class TestAmaAdaptivePostureEnabled:
         )
         assert flag is False
 
-    def test_env_var_true_disables_posture(self, monkeypatch):
+    def test_env_var_true_disables_posture(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """AMA_DISABLE_ADAPTIVE_POSTURE=true also disables posture."""
         import os
 

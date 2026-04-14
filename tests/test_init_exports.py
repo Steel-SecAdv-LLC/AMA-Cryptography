@@ -16,148 +16,148 @@ it only checks that the names exist in __all__ and are importable.
 class TestInitAllContents:
     """Verify __all__ contains expected integration symbols."""
 
-    def _get_all(self):
+    def _get_all(self) -> list[str]:
         import ama_cryptography
 
         return ama_cryptography.__all__
 
     # --- Secure Channel ---
-    def test_secure_channel_provider_in_all(self):
+    def test_secure_channel_provider_in_all(self) -> None:
         assert "SecureChannelProvider" in self._get_all()
 
-    def test_secure_session_in_all(self):
+    def test_secure_session_in_all(self) -> None:
         assert "SecureSession" in self._get_all()
 
-    def test_secure_channel_initiator_in_all(self):
+    def test_secure_channel_initiator_in_all(self) -> None:
         assert "SecureChannelInitiator" in self._get_all()
 
-    def test_secure_channel_responder_in_all(self):
+    def test_secure_channel_responder_in_all(self) -> None:
         assert "SecureChannelResponder" in self._get_all()
 
-    def test_channel_error_in_all(self):
+    def test_channel_error_in_all(self) -> None:
         assert "ChannelError" in self._get_all()
 
-    def test_handshake_error_in_all(self):
+    def test_handshake_error_in_all(self) -> None:
         assert "HandshakeError" in self._get_all()
 
-    def test_replay_error_in_all(self):
+    def test_replay_error_in_all(self) -> None:
         assert "ReplayError" in self._get_all()
 
     # --- Session Management ---
-    def test_session_store_in_all(self):
+    def test_session_store_in_all(self) -> None:
         assert "SessionStore" in self._get_all()
 
-    def test_session_state_in_all(self):
+    def test_session_state_in_all(self) -> None:
         assert "SessionState" in self._get_all()
 
-    def test_replay_window_in_all(self):
+    def test_replay_window_in_all(self) -> None:
         assert "ReplayWindow" in self._get_all()
 
-    def test_replay_detected_error_in_all(self):
+    def test_replay_detected_error_in_all(self) -> None:
         assert "ReplayDetectedError" in self._get_all()
 
     # --- Adaptive Posture ---
-    def test_crypto_posture_controller_in_all(self):
+    def test_crypto_posture_controller_in_all(self) -> None:
         assert "CryptoPostureController" in self._get_all()
 
-    def test_posture_evaluator_in_all(self):
+    def test_posture_evaluator_in_all(self) -> None:
         assert "PostureEvaluator" in self._get_all()
 
-    def test_posture_action_in_all(self):
+    def test_posture_action_in_all(self) -> None:
         assert "PostureAction" in self._get_all()
 
-    def test_threat_level_in_all(self):
+    def test_threat_level_in_all(self) -> None:
         assert "ThreatLevel" in self._get_all()
 
     # --- FROST ---
-    def test_frost_provider_in_all(self):
+    def test_frost_provider_in_all(self) -> None:
         assert "FROSTProvider" in self._get_all()
 
     # --- HSM ---
-    def test_hsm_available_in_all(self):
+    def test_hsm_available_in_all(self) -> None:
         assert "HSM_AVAILABLE" in self._get_all()
 
-    def test_hsm_key_storage_in_all(self):
+    def test_hsm_key_storage_in_all(self) -> None:
         assert "HSMKeyStorage" in self._get_all()
 
-    def test_ama_hsm_unavailable_error_in_all(self):
+    def test_ama_hsm_unavailable_error_in_all(self) -> None:
         assert "AmaHSMUnavailableError" in self._get_all()
 
     # --- Key Management ---
-    def test_hd_key_derivation_in_all(self):
+    def test_hd_key_derivation_in_all(self) -> None:
         assert "HDKeyDerivation" in self._get_all()
 
-    def test_key_rotation_manager_in_all(self):
+    def test_key_rotation_manager_in_all(self) -> None:
         assert "KeyRotationManager" in self._get_all()
 
     # --- RFC 3161 ---
-    def test_rfc3161_available_in_all(self):
+    def test_rfc3161_available_in_all(self) -> None:
         assert "RFC3161_AVAILABLE" in self._get_all()
 
     # --- Adaptive posture env flag ---
-    def test_ama_adaptive_posture_enabled_in_all(self):
+    def test_ama_adaptive_posture_enabled_in_all(self) -> None:
         assert "AMA_ADAPTIVE_POSTURE_ENABLED" in self._get_all()
 
 
 class TestInitImports:
     """Verify actual importability of key new symbols."""
 
-    def test_import_session_store(self):
+    def test_import_session_store(self) -> None:
         from ama_cryptography import SessionStore
 
         assert SessionStore is not None
 
-    def test_import_session_state(self):
+    def test_import_session_state(self) -> None:
         from ama_cryptography import SessionState
 
         assert SessionState is not None
 
-    def test_import_replay_window(self):
+    def test_import_replay_window(self) -> None:
         from ama_cryptography import ReplayWindow
 
         assert ReplayWindow is not None
 
-    def test_import_crypto_posture_controller(self):
+    def test_import_crypto_posture_controller(self) -> None:
         from ama_cryptography import CryptoPostureController
 
         assert CryptoPostureController is not None
 
-    def test_import_posture_action(self):
+    def test_import_posture_action(self) -> None:
         from ama_cryptography import PostureAction
 
         assert PostureAction is not None
 
-    def test_import_posture_action_halt(self):
+    def test_import_posture_action_halt(self) -> None:
         from ama_cryptography import PostureAction
 
         assert hasattr(PostureAction, "HALT")
 
-    def test_import_hsm_available(self):
+    def test_import_hsm_available(self) -> None:
         from ama_cryptography import HSM_AVAILABLE
 
         assert isinstance(HSM_AVAILABLE, bool)
 
-    def test_import_ama_hsm_unavailable_error(self):
+    def test_import_ama_hsm_unavailable_error(self) -> None:
         from ama_cryptography import AmaHSMUnavailableError
 
         assert issubclass(AmaHSMUnavailableError, RuntimeError)
 
-    def test_import_rfc3161_available(self):
+    def test_import_rfc3161_available(self) -> None:
         from ama_cryptography import RFC3161_AVAILABLE
 
         assert isinstance(RFC3161_AVAILABLE, bool)
 
-    def test_import_secure_session(self):
+    def test_import_secure_session(self) -> None:
         from ama_cryptography import SecureSession
 
         assert SecureSession is not None
 
-    def test_import_replay_error(self):
+    def test_import_replay_error(self) -> None:
         from ama_cryptography import ReplayError
 
         assert ReplayError is not None
 
-    def test_import_replay_detected_error(self):
+    def test_import_replay_detected_error(self) -> None:
         from ama_cryptography import ReplayDetectedError
 
         assert ReplayDetectedError is not None
@@ -166,13 +166,13 @@ class TestInitImports:
 class TestSecureChannelDocstring:
     """Verify the docstring update in secure_channel.py (task A)."""
 
-    def test_docstring_no_experimental(self):
+    def test_docstring_no_experimental(self) -> None:
         """The phrase 'should be treated as experimental' must not appear."""
         import ama_cryptography.secure_channel as sc
 
         assert "experimental" not in (sc.__doc__ or "")
 
-    def test_docstring_contains_required_text(self):
+    def test_docstring_contains_required_text(self) -> None:
         """Docstring mentions formal security review and Noise Protocol Framework."""
         import ama_cryptography.secure_channel as ama_sc
 
@@ -181,7 +181,7 @@ class TestSecureChannelDocstring:
         assert "formal security review" in doc
         assert "Noise Protocol Framework" in doc
 
-    def test_docstring_mentions_ml_kem(self):
+    def test_docstring_mentions_ml_kem(self) -> None:
         """Docstring mentions ML-KEM-1024."""
         import ama_cryptography.secure_channel as ama_sc
 
@@ -192,7 +192,7 @@ class TestSecureChannelDocstring:
 class TestRfc3161Comment:
     """Verify the INVARIANT-1 clarifying comment in rfc3161_timestamp.py."""
 
-    def test_comment_exists_in_source(self):
+    def test_comment_exists_in_source(self) -> None:
         """rfc3161_timestamp.py source contains the INVARIANT-1 comment."""
         import inspect
 

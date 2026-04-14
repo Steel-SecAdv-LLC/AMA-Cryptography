@@ -41,7 +41,7 @@ skip_no_native = pytest.mark.skipif(
 
 
 class TestHSMAvailableFlag:
-    def test_hsm_available_is_bool(self):
+    def test_hsm_available_is_bool(self) -> None:
         """HSM_AVAILABLE is exported from ama_cryptography and is a bool."""
         import ama_cryptography
 
@@ -49,14 +49,14 @@ class TestHSMAvailableFlag:
         # When native lib is absent __init__.py sets HSM_AVAILABLE=False explicitly.
         assert isinstance(hsm_avail, bool)
 
-    def test_ama_hsm_unavailable_error_is_runtime_error(self):
+    def test_ama_hsm_unavailable_error_is_runtime_error(self) -> None:
         """AmaHSMUnavailableError (from exceptions.py) is a RuntimeError subclass."""
         from ama_cryptography.exceptions import AmaHSMUnavailableError
 
         assert issubclass(AmaHSMUnavailableError, RuntimeError)
 
     @skip_no_native
-    def test_init_raises_when_hsm_unavailable(self):
+    def test_init_raises_when_hsm_unavailable(self) -> None:
         """HSMKeyStorage.__init__ raises AmaHSMUnavailableError when HSM_AVAILABLE=False."""
         from ama_cryptography.key_management import AmaHSMUnavailableError, HSMKeyStorage
 
@@ -116,12 +116,7 @@ def _build_mock_pkcs11() -> MagicMock:
     # Slot / token
     lib.getSlotList.return_value = [0]
     ti = MagicMock()
-
-    class _Label(str):
-        def strip(self):
-            return "AmaCryptography"
-
-    ti.label = _Label("AmaCryptography")
+    ti.label = MagicMock(strip=MagicMock(return_value="AmaCryptography"))
     lib.getTokenInfo.return_value = ti
     lib.openSession.return_value = MagicMock()
 
@@ -160,7 +155,7 @@ def _make_hsm(mock_pkcs11: MagicMock) -> Any:
 
 @skip_no_native
 class TestHSMGenerateEcKeypair:
-    def test_returns_two_handles(self):
+    def test_returns_two_handles(self) -> None:
         """generate_ec_keypair() returns (pub_handle, prv_handle) both 8 bytes."""
         pk = _build_mock_pkcs11()
 
@@ -176,14 +171,14 @@ class TestHSMGenerateEcKeypair:
         assert len(pub_h) == 8
         assert len(prv_h) == 8
 
-    def test_invalid_curve_raises(self):
+    def test_invalid_curve_raises(self) -> None:
         """Unsupported curve name raises ValueError."""
         pk = _build_mock_pkcs11()
         hsm = _make_hsm(pk)
         with pytest.raises(ValueError, match="Unsupported curve"):
             hsm.generate_ec_keypair("bad", curve="secp999k1")
 
-    def test_p384_accepted(self):
+    def test_p384_accepted(self) -> None:
         """P-384 curve is accepted without error."""
         pk = _build_mock_pkcs11()
         pub_obj = MagicMock()
@@ -203,7 +198,7 @@ class TestHSMGenerateEcKeypair:
 
 @skip_no_native
 class TestHSMSignVerify:
-    def test_sign_returns_bytes(self):
+    def test_sign_returns_bytes(self) -> None:
         """sign() returns bytes from HSM session.sign."""
         pk = _build_mock_pkcs11()
         fake_sig = b"\xde\xad\xbe\xef" * 16
@@ -216,7 +211,7 @@ class TestHSMSignVerify:
         sig = hsm.sign(handle, b"data to sign")
         assert sig == fake_sig
 
-    def test_verify_returns_true_on_success(self):
+    def test_verify_returns_true_on_success(self) -> None:
         """verify() returns True when session.verify does not raise."""
         pk = _build_mock_pkcs11()
         pk.PyKCS11Lib().verify.return_value = None  # no exception = valid
@@ -228,7 +223,7 @@ class TestHSMSignVerify:
         result = hsm.verify(handle, b"data", b"\x00" * 64)
         assert result is True
 
-    def test_verify_returns_false_on_pykcs11_error(self):
+    def test_verify_returns_false_on_pykcs11_error(self) -> None:
         """verify() returns False when PyKCS11Error is raised."""
         pk = _build_mock_pkcs11()
         pk.PyKCS11Lib().verify.side_effect = pk.PyKCS11Error("invalid")
@@ -248,7 +243,7 @@ class TestHSMSignVerify:
 
 @skip_no_native
 class TestHSMDestroyKey:
-    def test_destroy_key_delegates_to_delete_key(self):
+    def test_destroy_key_delegates_to_delete_key(self) -> None:
         """destroy_key() calls destroyObject and returns True on success."""
         pk = _build_mock_pkcs11()
         pk.PyKCS11Lib().destroyObject.return_value = None
@@ -262,7 +257,7 @@ class TestHSMDestroyKey:
         result = hsm.destroy_key(handle)
         assert result is True
 
-    def test_destroy_key_returns_false_on_error(self):
+    def test_destroy_key_returns_false_on_error(self) -> None:
         """destroy_key() returns False when PyKCS11Error is raised."""
         pk = _build_mock_pkcs11()
         pk.PyKCS11Lib().destroyObject.side_effect = pk.PyKCS11Error("fail")
@@ -280,7 +275,7 @@ class TestHSMDestroyKey:
 
 @skip_no_native
 class TestHSMListKeys:
-    def test_list_keys_returns_list(self):
+    def test_list_keys_returns_list(self) -> None:
         """list_keys() returns a list."""
         pk = _build_mock_pkcs11()
         pk.PyKCS11Lib().findObjects.return_value = []
@@ -288,7 +283,7 @@ class TestHSMListKeys:
         result = hsm.list_keys()
         assert isinstance(result, list)
 
-    def test_list_keys_with_objects(self):
+    def test_list_keys_with_objects(self) -> None:
         """list_keys() maps found objects to dicts with expected keys."""
         pk = _build_mock_pkcs11()
 
@@ -302,7 +297,7 @@ class TestHSMListKeys:
         ]
 
         hsm = _make_hsm(pk)
-        result = hsm.list_keys()
+        result: list[Any] = hsm.list_keys()
         assert len(result) == 1
         assert "label" in result[0]
         assert "class" in result[0]

@@ -34,7 +34,9 @@ skip_no_native = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 
-def _do_frost_signing(threshold: int, num_participants: int, signer_count: int):
+def _do_frost_signing(
+    threshold: int, num_participants: int, signer_count: int
+) -> tuple[bytes, bytes, bytes]:
     """Run a complete FROST signing session and return (signature, gpk, message)."""
     from ama_cryptography.crypto_api import FROSTProvider
 
@@ -86,14 +88,14 @@ def _do_frost_signing(threshold: int, num_participants: int, signer_count: int):
 
 @skip_no_frost
 class TestFROSTProvider:
-    def test_instantiation(self):
+    def test_instantiation(self) -> None:
         """FROSTProvider can be instantiated when FROST is available."""
         from ama_cryptography.crypto_api import FROSTProvider
 
         provider = FROSTProvider()
         assert provider is not None
 
-    def test_2_of_3_round_trip(self):
+    def test_2_of_3_round_trip(self) -> None:
         """2-of-3 threshold: signing with 2 participants produces valid signature."""
         sig, gpk, msg = _do_frost_signing(threshold=2, num_participants=3, signer_count=2)
         from ama_cryptography.crypto_api import FROSTProvider
@@ -101,7 +103,7 @@ class TestFROSTProvider:
         provider = FROSTProvider()
         assert provider.verify(msg, sig, gpk)
 
-    def test_3_of_5_round_trip(self):
+    def test_3_of_5_round_trip(self) -> None:
         """3-of-5 threshold: signing with exactly 3 participants produces valid signature."""
         sig, gpk, msg = _do_frost_signing(threshold=3, num_participants=5, signer_count=3)
         from ama_cryptography.crypto_api import FROSTProvider
@@ -109,7 +111,7 @@ class TestFROSTProvider:
         provider = FROSTProvider()
         assert provider.verify(msg, sig, gpk)
 
-    def test_all_participants_sign(self):
+    def test_all_participants_sign(self) -> None:
         """Threshold = n: all participants must sign."""
         sig, gpk, msg = _do_frost_signing(threshold=3, num_participants=3, signer_count=3)
         from ama_cryptography.crypto_api import FROSTProvider
@@ -117,7 +119,7 @@ class TestFROSTProvider:
         provider = FROSTProvider()
         assert provider.verify(msg, sig, gpk)
 
-    def test_verify_rejects_wrong_message(self):
+    def test_verify_rejects_wrong_message(self) -> None:
         """verify() returns False for a signature over a different message."""
         sig, gpk, _msg = _do_frost_signing(threshold=2, num_participants=3, signer_count=2)
         from ama_cryptography.crypto_api import FROSTProvider
@@ -126,7 +128,7 @@ class TestFROSTProvider:
         wrong_msg = b"Not the signed message"
         assert not provider.verify(wrong_msg, sig, gpk)
 
-    def test_verify_rejects_wrong_key(self):
+    def test_verify_rejects_wrong_key(self) -> None:
         """verify() returns False when group public key doesn't match."""
         import secrets
 
@@ -137,7 +139,7 @@ class TestFROSTProvider:
         wrong_gpk = secrets.token_bytes(32)
         assert not provider.verify(msg, sig, wrong_gpk)
 
-    def test_keygen_invalid_threshold(self):
+    def test_keygen_invalid_threshold(self) -> None:
         """threshold < 2 raises ValueError."""
         from ama_cryptography.crypto_api import FROSTProvider
 
@@ -145,7 +147,7 @@ class TestFROSTProvider:
         with pytest.raises(ValueError):
             provider.keygen(threshold=1, num_participants=3)
 
-    def test_keygen_threshold_exceeds_participants(self):
+    def test_keygen_threshold_exceeds_participants(self) -> None:
         """threshold > num_participants raises ValueError."""
         from ama_cryptography.crypto_api import FROSTProvider
 
@@ -153,7 +155,7 @@ class TestFROSTProvider:
         with pytest.raises(ValueError):
             provider.keygen(threshold=5, num_participants=3)
 
-    def test_keygen_with_secret_key(self):
+    def test_keygen_with_secret_key(self) -> None:
         """Providing a 32-byte secret produces valid keypair."""
         import secrets
 
@@ -165,7 +167,7 @@ class TestFROSTProvider:
         assert len(gpk) == 32
         assert len(shares) == 3
 
-    def test_keygen_deterministic(self):
+    def test_keygen_deterministic(self) -> None:
         """Same secret key → same group public key."""
         from ama_cryptography.crypto_api import FROSTProvider
 
@@ -175,7 +177,7 @@ class TestFROSTProvider:
         gpk2, _ = provider.keygen(2, 3, secret_key=sk)
         assert gpk1 == gpk2
 
-    def test_frost_aggregate_signature_is_standard_ed25519(self):
+    def test_frost_aggregate_signature_is_standard_ed25519(self) -> None:
         """FROST aggregate signature is 64 bytes (standard Ed25519 format)."""
         sig, _gpk, _msg = _do_frost_signing(threshold=2, num_participants=3, signer_count=2)
         assert len(sig) == 64  # R (32 bytes) || s (32 bytes)
@@ -187,7 +189,7 @@ class TestFROSTProvider:
     reason="FROST IS available — testing unavailability path requires no FROST",
 )
 class TestFROSTProviderUnavailable:
-    def test_instantiation_raises_when_unavailable(self):
+    def test_instantiation_raises_when_unavailable(self) -> None:
         """FROSTProvider raises RuntimeError when FROST backend is missing."""
         from ama_cryptography.crypto_api import FROSTProvider
 
