@@ -264,6 +264,7 @@ NIST-standardized post-quantum algorithms:
 - `avx2/`: ML-KEM (vectorized NTT/Barrett), ML-DSA (vectorized NTT q=8380417), SPHINCS+ (4-way SHA-256), SHA3 (Keccak-f[1600] AVX2), AES-GCM (pipelined AES-NI + PCLMULQDQ GHASH), Ed25519 (vectorized field arithmetic), ChaCha20-Poly1305 (8-way parallel quarter-rounds), Argon2 (vectorized Blake2b)
 - `neon/`: ARM NEON 128-bit vector equivalents using `<arm_neon.h>` intrinsics + ARM Crypto Extensions
 - `sve2/`: ARM SVE2 scalable vector implementations for variable-length SIMD
+- `avx512/`: AVX-512 (x86-64) — **planned future feature**, not yet implemented; the CMake option `AMA_ENABLE_AVX512` is reserved for this release
 - `dispatch/ama_dispatch.c`: Runtime CPU feature detection and function pointer dispatch (AVX2 > generic on x86; SVE2 > NEON > generic on ARM)
 
 **Cython Acceleration Modules (`src/cython/`):**
@@ -938,6 +939,7 @@ sudo cmake --install .
 - `AMA_ENABLE_AVX2` - Enable AVX2 SIMD optimizations (x86-64)
 - `AMA_ENABLE_NEON` - Enable ARM NEON SIMD optimizations (AArch64)
 - `AMA_ENABLE_SVE2` - Enable ARM SVE2 SIMD optimizations (AArch64, stretch)
+- `AMA_ENABLE_AVX512` - Enable AVX-512 SIMD optimizations (x86-64) — **future/planned**, currently has no effect
 - `AMA_ENABLE_SANITIZERS` - Enable AddressSanitizer/UBSan
 - `AMA_ENABLE_LTO` - Link-time optimization
 - `AMA_ENABLE_NATIVE_ARCH` - Enable `-march=native` for host-optimized builds (default: OFF)

@@ -58,6 +58,8 @@ __all__ = [
     "KyberUnavailableError",
     "SphincsUnavailableError",
     "SecurityWarning",
+    # Context-based API
+    "AmaContext",
     # FROST threshold Ed25519 (RFC 9591)
     "FROST_AVAILABLE",
     "FROST_BACKEND",
@@ -664,6 +666,84 @@ def _setup_frost_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
+# Context-based API availability (ama_context_init / ama_context_free etc.)
+_CONTEXT_API_AVAILABLE = False
+
+
+def _setup_context_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for the opaque-context C API (ama_context_init et al.)."""
+    try:
+        # ama_context_t* ama_context_init(ama_algorithm_t algorithm)
+        lib.ama_context_init.argtypes = [ctypes.c_int]
+        lib.ama_context_init.restype = ctypes.c_void_p
+
+        # void ama_context_free(ama_context_t* ctx)
+        lib.ama_context_free.argtypes = [ctypes.c_void_p]
+        lib.ama_context_free.restype = None
+
+        # ama_error_t ama_keypair_generate(ctx, pubkey, pubkey_len, seckey, seckey_len)
+        lib.ama_keypair_generate.argtypes = [
+            ctypes.c_void_p,  # ctx
+            ctypes.c_char_p,  # public_key
+            ctypes.c_size_t,  # public_key_len
+            ctypes.c_char_p,  # secret_key
+            ctypes.c_size_t,  # secret_key_len
+        ]
+        lib.ama_keypair_generate.restype = ctypes.c_int
+
+        # ama_error_t ama_sign(ctx, msg, msg_len, sk, sk_len, sig, sig_len*)
+        lib.ama_sign.argtypes = [
+            ctypes.c_void_p,  # ctx
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # secret_key
+            ctypes.c_size_t,  # secret_key_len
+            ctypes.c_char_p,  # signature
+            ctypes.POINTER(ctypes.c_size_t),  # signature_len (in/out)
+        ]
+        lib.ama_sign.restype = ctypes.c_int
+
+        # ama_error_t ama_verify(ctx, msg, msg_len, sig, sig_len, pk, pk_len)
+        lib.ama_verify.argtypes = [
+            ctypes.c_void_p,  # ctx
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # signature
+            ctypes.c_size_t,  # signature_len
+            ctypes.c_char_p,  # public_key
+            ctypes.c_size_t,  # public_key_len
+        ]
+        lib.ama_verify.restype = ctypes.c_int
+
+        # ama_error_t ama_kem_encapsulate(ctx, pk, pk_len, ct, ct_len*, ss, ss_len)
+        lib.ama_kem_encapsulate.argtypes = [
+            ctypes.c_void_p,  # ctx
+            ctypes.c_char_p,  # public_key
+            ctypes.c_size_t,  # public_key_len
+            ctypes.c_char_p,  # ciphertext
+            ctypes.POINTER(ctypes.c_size_t),  # ciphertext_len (in/out)
+            ctypes.c_char_p,  # shared_secret
+            ctypes.c_size_t,  # shared_secret_len
+        ]
+        lib.ama_kem_encapsulate.restype = ctypes.c_int
+
+        # ama_error_t ama_kem_decapsulate(ctx, ct, ct_len, sk, sk_len, ss, ss_len)
+        lib.ama_kem_decapsulate.argtypes = [
+            ctypes.c_void_p,  # ctx
+            ctypes.c_char_p,  # ciphertext
+            ctypes.c_size_t,  # ciphertext_len
+            ctypes.c_char_p,  # secret_key
+            ctypes.c_size_t,  # secret_key_len
+            ctypes.c_char_p,  # shared_secret
+            ctypes.c_size_t,  # shared_secret_len
+        ]
+        lib.ama_kem_decapsulate.restype = ctypes.c_int
+
+        return True
+    except AttributeError:
+        return False
+
+
 _native_lib = _find_native_library()
 if _native_lib is not None:
     if _setup_native_ctypes(_native_lib):
@@ -687,6 +767,7 @@ if _native_lib is not None:
     _FROST_AVAILABLE = _setup_frost_ctypes(_native_lib)
     if _FROST_AVAILABLE:
         _FROST_BACKEND = "native"
+    _CONTEXT_API_AVAILABLE = _setup_context_ctypes(_native_lib)
 
 
 # Public API for checking availability
@@ -784,6 +865,200 @@ _KYBER_UNAVAILABLE_MSG = f"KYBER_UNAVAILABLE: Kyber-1024 backend not available. 
 _SPHINCS_UNAVAILABLE_MSG = (
     f"SPHINCS_UNAVAILABLE: SPHINCS+-256f backend not available. {_INSTALL_HINT}"
 )
+
+
+class AmaContext:
+    """
+    Python wrapper around the opaque ``ama_context_t`` C context.
+
+    Provides a context-manager interface so the underlying C context is always
+    freed (and key material scrubbed) when the ``with`` block exits — even on
+    exceptions.
+
+    Algorithm constants (``ama_algorithm_t`` enum values from the C header):
+
+    ==============================  ======
+    Name                            Value
+    ==============================  ======
+    ``AmaContext.ALG_ML_DSA_65``       0
+    ``AmaContext.ALG_KYBER_1024``      1
+    ``AmaContext.ALG_SPHINCS_256F``    2
+    ``AmaContext.ALG_ED25519``         3
+    ``AmaContext.ALG_HYBRID``          4
+    ==============================  ======
+
+    Example::
+
+        with AmaContext(AmaContext.ALG_ML_DSA_65) as ctx:
+            rc = ctx.keypair_generate(pub_buf, len(pub_buf), sec_buf, len(sec_buf))
+    """
+
+    # ama_algorithm_t enum values
+    ALG_ML_DSA_65 = 0
+    ALG_KYBER_1024 = 1
+    ALG_SPHINCS_256F = 2
+    ALG_ED25519 = 3
+    ALG_HYBRID = 4
+
+    def __init__(self, algorithm: int) -> None:
+        if not _CONTEXT_API_AVAILABLE or _native_lib is None:
+            raise PQCUnavailableError(
+                "Context-based C API is not available. "
+                "Build native C library with AMA_USE_NATIVE_PQC=ON."
+            )
+        self._ctx = _native_lib.ama_context_init(algorithm)
+        if not self._ctx:
+            raise RuntimeError(
+                f"ama_context_init failed for algorithm={algorithm}. "
+                "Ensure the native library is built correctly."
+            )
+
+    # ------------------------------------------------------------------
+    # Context-manager support
+    # ------------------------------------------------------------------
+
+    def __enter__(self) -> "AmaContext":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Free the underlying C context and scrub key material."""
+        # Atomic swap: prevents double-free if close() is called more than once.
+        ctx, self._ctx = self._ctx, None
+        if ctx is not None and _native_lib is not None:
+            _native_lib.ama_context_free(ctx)
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception as exc:  # — INVARIANT-3/9: __del__ must not raise (FIN-AMA-001)
+            record_finalizer_error("AmaContext", f"close() failed: {exc}")
+
+    # ------------------------------------------------------------------
+    # Key generation
+    # ------------------------------------------------------------------
+
+    def keypair_generate(
+        self,
+        public_key: ctypes.Array,
+        public_key_len: int,
+        secret_key: ctypes.Array,
+        secret_key_len: int,
+    ) -> int:
+        """Call ``ama_keypair_generate``. Returns ``AMA_SUCCESS`` (0) on success."""
+        self._require_open()
+        return int(
+            _native_lib.ama_keypair_generate(
+                self._ctx, public_key, public_key_len, secret_key, secret_key_len
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # Signature operations
+    # ------------------------------------------------------------------
+
+    def sign(
+        self,
+        message: bytes,
+        secret_key: bytes,
+        signature: ctypes.Array,
+        signature_len: "ctypes._Pointer[ctypes.c_size_t]",
+    ) -> int:
+        """Call ``ama_sign``. Returns ``AMA_SUCCESS`` (0) on success."""
+        self._require_open()
+        return int(
+            _native_lib.ama_sign(
+                self._ctx,
+                message,
+                len(message),
+                secret_key,
+                len(secret_key),
+                signature,
+                signature_len,
+            )
+        )
+
+    def verify(
+        self,
+        message: bytes,
+        signature: bytes,
+        public_key: bytes,
+    ) -> int:
+        """
+        Call ``ama_verify``.
+
+        Returns ``AMA_SUCCESS`` (0) if the signature is valid,
+        ``AMA_ERROR_VERIFY_FAILED`` (-4) if it is not.
+        """
+        self._require_open()
+        return int(
+            _native_lib.ama_verify(
+                self._ctx,
+                message,
+                len(message),
+                signature,
+                len(signature),
+                public_key,
+                len(public_key),
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # KEM operations (Kyber-1024 context)
+    # ------------------------------------------------------------------
+
+    def kem_encapsulate(
+        self,
+        public_key: bytes,
+        ciphertext: ctypes.Array,
+        ciphertext_len: "ctypes._Pointer[ctypes.c_size_t]",
+        shared_secret: ctypes.Array,
+        shared_secret_len: int,
+    ) -> int:
+        """Call ``ama_kem_encapsulate``. Returns ``AMA_SUCCESS`` (0) on success."""
+        self._require_open()
+        return int(
+            _native_lib.ama_kem_encapsulate(
+                self._ctx,
+                public_key,
+                len(public_key),
+                ciphertext,
+                ciphertext_len,
+                shared_secret,
+                shared_secret_len,
+            )
+        )
+
+    def kem_decapsulate(
+        self,
+        ciphertext: bytes,
+        secret_key: bytes,
+        shared_secret: ctypes.Array,
+        shared_secret_len: int,
+    ) -> int:
+        """Call ``ama_kem_decapsulate``. Returns ``AMA_SUCCESS`` (0) on success."""
+        self._require_open()
+        return int(
+            _native_lib.ama_kem_decapsulate(
+                self._ctx,
+                ciphertext,
+                len(ciphertext),
+                secret_key,
+                len(secret_key),
+                shared_secret,
+                shared_secret_len,
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _require_open(self) -> None:
+        if self._ctx is None:
+            raise RuntimeError("AmaContext has already been closed.")
 
 
 def get_pqc_status() -> PQCStatus:

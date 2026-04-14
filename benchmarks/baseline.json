@@ -101,6 +101,46 @@
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true
+    },
+    "kyber_keygen": {
+      "description": "ML-KEM-1024 (Kyber) key pair generation (native C)",
+      "metric": "operations_per_second",
+      "baseline_value": 2200,
+      "unit": "ops/sec",
+      "tolerance_percent": 40,
+      "optional": true
+    },
+    "kyber_encapsulate": {
+      "description": "ML-KEM-1024 (Kyber) encapsulation (native C)",
+      "metric": "operations_per_second",
+      "baseline_value": 2400,
+      "unit": "ops/sec",
+      "tolerance_percent": 40,
+      "optional": true
+    },
+    "aes_256_gcm_encrypt": {
+      "description": "AES-256-GCM encryption of 1KB data (native C)",
+      "metric": "operations_per_second",
+      "baseline_value": 150000,
+      "unit": "ops/sec",
+      "tolerance_percent": 40,
+      "optional": true
+    },
+    "chacha20poly1305_encrypt": {
+      "description": "ChaCha20-Poly1305 encryption of 1KB data (native C)",
+      "metric": "operations_per_second",
+      "baseline_value": 130000,
+      "unit": "ops/sec",
+      "tolerance_percent": 40,
+      "optional": true
+    },
+    "x25519_scalarmult": {
+      "description": "X25519 key exchange scalar multiplication (native C)",
+      "metric": "operations_per_second",
+      "baseline_value": 25000,
+      "unit": "ops/sec",
+      "tolerance_percent": 40,
+      "optional": true
     }
   }
 }

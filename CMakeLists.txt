@@ -23,6 +23,8 @@ option(AMA_AES_CONSTTIME "Use constant-time bitsliced AES S-box (eliminates cach
 option(AMA_ED25519_ASSEMBLY "Enable ed25519-donna x86-64 assembly scalar mult" OFF)
 option(AMA_ENABLE_NATIVE_ARCH "Use -march=native for host-optimized builds" OFF)
 option(AMA_ENABLE_DUDECT "Build dudect constant-time verification tests" OFF)
+# NOTE: AVX-512 is declared for future use but not yet implemented.
+# Enabling this option currently has no effect — no AVX-512 source files exist.
 option(AMA_ENABLE_AVX512 "Enable AVX-512 instructions (x86-64)" OFF)
 option(AMA_ENABLE_NEON "Enable ARM NEON optimizations (AArch64)" ON)
 option(AMA_ENABLE_SVE2 "Enable ARM SVE2 optimizations (ARMv9)" OFF)
@@ -231,6 +233,16 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_SVE2)
         add_compile_definitions(AMA_HAVE_SVE2_IMPL)
         message(STATUS "SIMD: ARM SVE2 hand-written intrinsics enabled (8 algorithms)")
     endif()
+endif()
+
+# AVX-512 intrinsics (x86-64 only — FUTURE)
+# The option is declared above for forward-compatibility, but no AVX-512
+# source files have been written yet.  Enabling the option is a no-op.
+if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX512)
+    message(WARNING
+        "AVX-512 is declared but not yet implemented. "
+        "No AVX-512 code paths will be compiled. "
+        "This option is reserved for a future release.")
 endif()
 
 # AES-NI + PCLMULQDQ flags for x86 — applied per-file (not globally)
