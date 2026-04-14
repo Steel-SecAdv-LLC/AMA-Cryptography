@@ -81,7 +81,6 @@ def _build_hsm(
 ) -> HSMKeyStorage:
     """Construct an HSMKeyStorage instance with all internals mocked."""
     with (
-        patch("ama_cryptography.key_management.HSM_AVAILABLE", True),
         patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock_pkcs11),
         patch("os.path.exists", return_value=True),
     ):
@@ -92,6 +91,26 @@ def _build_hsm(
             pin=pin,
             slot_index=slot_index,
         )
+
+
+# ===========================================================================
+# Module-level autouse fixture
+# ===========================================================================
+
+
+@pytest.fixture(autouse=True)
+def _hsm_available(monkeypatch: Any) -> None:
+    """Patch HSM_AVAILABLE=True for every test in this module.
+
+    Without this, HSMKeyStorage.__init__ raises AmaHSMUnavailableError before
+    _import_pykcs11() is ever called, breaking all mock-based tests in
+    environments where PyKCS11 is not installed (standard CI).
+
+    Tests that specifically verify the HSM_AVAILABLE=False path (e.g.
+    test_init_raises_hsm_unavailable_when_pykcs11_missing) override this
+    within their own body via patch().
+    """
+    monkeypatch.setattr("ama_cryptography.key_management.HSM_AVAILABLE", True)
 
 
 # ===========================================================================
@@ -142,10 +161,7 @@ class TestHSMInit:
     def test_init_unknown_hsm_type_raises_valueerror(self) -> None:
         """An unknown hsm_type without a library_path raises ValueError."""
         mock = _make_mock_pkcs11()
-        with (
-            patch("ama_cryptography.key_management.HSM_AVAILABLE", True),
-            patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock),
-        ):
+        with patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock):
             with pytest.raises(ValueError, match="Unknown HSM type"):
                 HSMKeyStorage(hsm_type="unknown-vendor", pin="0000")
 
@@ -153,7 +169,6 @@ class TestHSMInit:
         """When no library_path is given, _resolve_library_path searches PKCS11_PATHS."""
         mock = _make_mock_pkcs11()
         with (
-            patch("ama_cryptography.key_management.HSM_AVAILABLE", True),
             patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock),
             patch("os.path.exists", side_effect=lambda p: p == "/usr/lib/softhsm/libsofthsm2.so"),
         ):
@@ -164,7 +179,6 @@ class TestHSMInit:
         """If no PKCS#11 library file exists on disk, RuntimeError is raised."""
         mock = _make_mock_pkcs11()
         with (
-            patch("ama_cryptography.key_management.HSM_AVAILABLE", True),
             patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock),
             patch("os.path.exists", return_value=False),
         ):
@@ -199,11 +213,11 @@ class TestLibraryLoading:
             with pytest.raises(RuntimeError, match="Failed to load PKCS#11 library"):
                 HSMKeyStorage(library_path="/bad/lib.so", pin="1234")
 
-    def test_import_pykcs11_not_installed_raises_import_error(self) -> None:
-        """When PyKCS11 is not installed, ImportError with helpful message is raised."""
+    def test_import_pykcs11_not_installed_raises_hsm_unavailable(self) -> None:
+        """When PyKCS11 is not installed, AmaHSMUnavailableError is raised."""
         hsm = object.__new__(HSMKeyStorage)
         with patch.dict("sys.modules", {"PyKCS11": None}):
-            with pytest.raises(ImportError, match="HSM support requires PyKCS11"):
+            with pytest.raises(AmaHSMUnavailableError, match="HSM support requires PyKCS11"):
                 hsm._import_pykcs11()
 
 
