@@ -225,11 +225,14 @@ class TestSecureSessionReplayWindow:
         # Window base should still be 0 (5 messages, window size 256)
         assert resp_session._replay_window.base == 0
 
-    def test_rekey_resets_replay_window(self, completed_provider_pair: Any) -> None:
-        """rekey() resets the replay window base."""
+    def test_rekey_preserves_replay_window(self, completed_provider_pair: Any) -> None:
+        """rekey() preserves the replay window (sequence numbers are monotonic)."""
         _provider, resp_session = completed_provider_pair
         # Manually set window state before rekey
         resp_session._replay_window._seen.add(999)
+        old_base = resp_session._replay_window.base
         resp_session.rekey()
-        assert len(resp_session._replay_window._seen) == 0
-        assert resp_session._replay_window.base == 0
+        # Window must NOT be reset — monotonic sequence numbers mean old
+        # ciphertexts should still be cheaply rejected by the O(1) check.
+        assert 999 in resp_session._replay_window._seen
+        assert resp_session._replay_window.base == old_base

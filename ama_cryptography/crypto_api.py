@@ -2567,7 +2567,7 @@ class SecureChannelProvider:
 
     Initiator (client) usage::
 
-        provider = SecureChannelProvider(remote_static_kem_pk=responder_kem_pk)
+        provider = SecureChannelProvider()
         handshake_bytes = provider.create_secure_channel(responder_kem_pk)
         # ... send handshake_bytes to responder, receive response_bytes ...
         provider.complete_handshake(response_bytes)

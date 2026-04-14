@@ -441,7 +441,11 @@ class SecureSession:
         self.send_key = native_hkdf(self.send_key, KEY_BYTES, salt=None, info=b"ama-rekey")
         self.recv_key = native_hkdf(self.recv_key, KEY_BYTES, salt=None, info=b"ama-rekey")
         self.messages_since_rekey = 0
-        self._replay_window.reset()
+        # NOTE: The replay window is intentionally NOT reset here.
+        # Sequence numbers are monotonic across rekeys, so resetting the
+        # window to base=0 would allow old captured ciphertexts (with
+        # sequence numbers < current send_seq) to bypass the cheap O(1)
+        # replay check, forcing unnecessary AEAD decryption (DoS window).
         logger.debug("Session %s re-keyed", self.session_id.hex()[:16])
 
     def close(self) -> None:
