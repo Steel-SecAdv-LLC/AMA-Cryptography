@@ -178,9 +178,9 @@ try:
     )
 except ImportError:
     RFC3161_AVAILABLE = False
-    TimestampUnavailableError = Exception  # type: ignore[misc,assignment]  # fallback when rfc3161_timestamp unavailable (CA-001)
-    TimestampError = Exception  # type: ignore[misc,assignment]  # fallback when rfc3161_timestamp unavailable (CA-002)
-    get_timestamp = None  # type: ignore[assignment]  # sentinel for optional RFC 3161 support (CA-003)
+    TimestampUnavailableError = Exception  # type: ignore[misc,assignment]
+    TimestampError = Exception  # type: ignore[misc,assignment]
+    get_timestamp = None  # type: ignore[assignment]
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -621,7 +621,7 @@ class KeypairCache:
     def __del__(self) -> None:
         try:
             self._wipe_sk()
-        except Exception as exc:  # noqa: S110 — INVARIANT-3 (KC-001)
+        except Exception as exc:  # noqa: S110
             _record_finalizer_error("KeypairCache", f"wipe failed: {exc}")
 
 
@@ -1046,7 +1046,7 @@ class AESGCMProvider:
                 try:
                     import msvcrt  # Windows-only stdlib module
 
-                    msvcrt.locking(lock_fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]  # Windows-only module; attr exists at runtime (CA-004)
+                    msvcrt.locking(lock_fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
                 except (ImportError, OSError) as _lock_err:
                     logger.debug(
                         "File locking unavailable (no fcntl or msvcrt): "

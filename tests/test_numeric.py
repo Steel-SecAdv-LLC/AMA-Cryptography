@@ -394,7 +394,7 @@ class TestMatArithmetic:
         assert result[1] == 39.0  # 3*5 + 4*6
 
     def test_matmul_unsupported(self) -> None:
-        result: object = Mat([[1]]).__matmul__("x")  # type: ignore[operator]  # intentional bad type for test (TN-001)
+        result: object = Mat([[1]]).__matmul__("x")  # type: ignore[operator]
         assert result is NotImplemented
 
     def test_vec_matmul_mat(self) -> None:
@@ -729,7 +729,7 @@ class TestRandom:
 
     def test_randn_invalid_dims(self) -> None:
         with pytest.raises(ValueError, match="up to 2-D"):
-            random.randn(2, 3, 4)  # type: ignore[call-overload]  # intentional bad call for test (TN-002)
+            random.randn(2, 3, 4)  # type: ignore[call-overload]
 
     def test_rand_scalar(self) -> None:
         random.seed(0)
@@ -751,7 +751,7 @@ class TestRandom:
 
     def test_rand_invalid_dims(self) -> None:
         with pytest.raises(ValueError, match="up to 2-D"):
-            random.rand(2, 3, 4)  # type: ignore[call-overload]  # intentional bad call for test (TN-003)
+            random.rand(2, 3, 4)  # type: ignore[call-overload]
 
     def test_uniform_scalar(self) -> None:
         random.seed(0)

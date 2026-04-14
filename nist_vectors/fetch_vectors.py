@@ -41,7 +41,7 @@ def fetch_acvp_file(algo_dir: str, filename: str) -> dict:  # type: ignore[type-
     """Download a JSON file from the ACVP-Server repository."""
     url = f"{ACVP_BASE}/{algo_dir}/{filename}"
     print(f"  Fetching {url}")
-    req = urllib.request.Request(  # noqa: S310 — URL is always HTTPS to github.com
+    req = urllib.request.Request(  # noqa: S310
         url, headers={"User-Agent": "AMA-Crypto-Vectors/1.0"}
     )
     with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310

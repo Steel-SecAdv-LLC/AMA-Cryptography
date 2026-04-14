@@ -131,7 +131,7 @@ def test_key_material() -> bytes:
 @pytest.fixture
 def test_password() -> str:
     """Provide a standard test password."""
-    return "test-password-secure-123"  # nosec B105 — test-only fixture password, not used in production (TC-001)
+    return "test-password-secure-123"  # nosec B105
 
 
 # =============================================================================

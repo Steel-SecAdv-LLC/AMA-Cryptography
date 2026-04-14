@@ -48,7 +48,7 @@ class TestCreateCryptoPackage:
         from ama_cryptography.crypto_api import create_crypto_package
 
         with pytest.raises(TypeError, match="bytes"):
-            create_crypto_package("string")  # type: ignore[arg-type]  # intentional bad type for test (TP-001)
+            create_crypto_package("string")  # type: ignore[arg-type]
 
     def test_hmac_key_preserved(self) -> None:
         _skip_if_no_backends()

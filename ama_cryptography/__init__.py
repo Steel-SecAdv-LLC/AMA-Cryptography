@@ -37,7 +37,7 @@ __author__ = "Andrew E. A., Steel Security Advisors LLC"
 # FIPS 140-3 Power-On Self-Tests — run at module import time.
 # Sets module state to OPERATIONAL or ERROR.
 from ama_cryptography._self_test import _run_self_tests as _post
-from ama_cryptography._self_test import (  # noqa: F401 — re-exported public API symbols (INIT-001)
+from ama_cryptography._self_test import (  # noqa: F401
     check_operational,
     module_error_reason,
     module_self_test_results,
@@ -48,7 +48,7 @@ from ama_cryptography._self_test import (  # noqa: F401 — re-exported public A
 )
 from ama_cryptography.exceptions import (
     CryptoModuleError as CryptoModuleError,
-)  # noqa: F401 — re-exported for public API (INIT-002)
+)  # noqa: F401
 
 _post()
 
@@ -82,7 +82,7 @@ from .equations import (
 )
 from .exceptions import (
     QuantumSignatureRequiredError,
-)  # noqa: F401 — re-exported for public API (INIT-003)
+)  # noqa: F401
 
 # crypto_api exports are lazy-loaded to avoid side-effect warnings at
 # import time (PQC availability checks, HMAC/HKDF warnings, etc.).
@@ -99,7 +99,7 @@ _CRYPTO_API_EXPORTS = frozenset(
 )
 
 if TYPE_CHECKING:
-    from .crypto_api import (  # noqa: F401 — TYPE_CHECKING re-exports for static analysis (INIT-004)
+    from .crypto_api import (  # noqa: F401
         AlgorithmType,
         AmaCryptography,
         CryptoPackageConfig,

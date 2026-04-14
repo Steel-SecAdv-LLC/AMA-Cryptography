@@ -34,7 +34,7 @@ from ama_cryptography.exceptions import (
 )
 from ama_cryptography.exceptions import (
     SecurityWarning,
-)  # noqa: F401 — re-exported for public API (KM-001)
+)  # noqa: F401
 from ama_cryptography.pqc_backends import _HMAC_SHA512_NATIVE_AVAILABLE, native_hmac_sha512
 from ama_cryptography.secure_memory import secure_memzero
 
@@ -183,7 +183,7 @@ class HDKeyDerivation:
             # Derive seed from phrase (simplified BIP39)
             # seed_phrase is guaranteed non-None here: seed is None (from elif)
             # and not both None (from first if).
-            assert seed_phrase is not None  # nosec B101 — mypy narrowing; always True here (KM-002)
+            assert seed_phrase is not None  # nosec B101
             self.master_seed = hashlib.pbkdf2_hmac(
                 "sha512", seed_phrase.encode("utf-8"), b"mnemonic", 2048, 64
             )
@@ -996,7 +996,7 @@ class HSMKeyStorage:
         token_label: str = "AmaCryptography",
         pin: Optional[
             str
-        ] = None,  # nosec B107 — PIN is a parameter, not a hardcoded credential (KM-003)
+        ] = None,  # nosec B107
         slot_index: Optional[int] = None,
     ) -> None:
         """
@@ -1347,7 +1347,7 @@ if __name__ == "__main__":
     demo_storage_path = Path(tempfile.gettempdir()) / "ama_keys_demo"
     storage = SecureKeyStorage(
         demo_storage_path, master_password="test_password_123"
-    )  # nosec B106 — demo-only hardcoded password, not used in production (KM-004)
+    )  # nosec B106
 
     # Store a key
     test_key = secrets.token_bytes(32)

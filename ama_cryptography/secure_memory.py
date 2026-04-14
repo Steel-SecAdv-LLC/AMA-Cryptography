@@ -244,7 +244,7 @@ else:
 
 def _memzero(data: Union[bytearray, memoryview]) -> None:
     """Dispatch to the best available secure zeroing backend."""
-    _memzero_fn(data)  # type: ignore[misc]  # callable union; dispatch set at module init (SM-001)
+    _memzero_fn(data)  # type: ignore[misc]
 
 
 def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
@@ -278,7 +278,7 @@ def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
                 "secure_mlock on bytes objects requires CPython (id-based address layout). "
                 f"Current implementation: {sys.implementation.name}"
             )
-        addr = id(data) + bytes.__basicsize__ - 1  # noqa: E501 — CPython ob_sval offset (SM-002)
+        addr = id(data) + bytes.__basicsize__ - 1  # noqa: E501
 
     try:
         from ama_cryptography.pqc_backends import _native_lib

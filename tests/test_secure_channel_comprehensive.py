@@ -46,7 +46,7 @@ skip_no_native = pytest.mark.skipif(
 
 
 @pytest.fixture()
-def kem_keypair():  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+def kem_keypair():  # type: ignore[no-untyped-def]
     """Generate a hybrid KEM keypair for Responder."""
     from ama_cryptography.crypto_api import HybridKEMProvider
 
@@ -56,7 +56,7 @@ def kem_keypair():  # type: ignore[no-untyped-def]  # pytest fixture injection (
 
 
 @pytest.fixture()
-def sig_keypair():  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+def sig_keypair():  # type: ignore[no-untyped-def]
     """Generate a hybrid signature keypair for Responder."""
     from ama_cryptography.crypto_api import HybridSignatureProvider
 
@@ -66,7 +66,7 @@ def sig_keypair():  # type: ignore[no-untyped-def]  # pytest fixture injection (
 
 
 @pytest.fixture()
-def established_session(kem_keypair, sig_keypair):  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+def established_session(kem_keypair, sig_keypair):  # type: ignore[no-untyped-def]
     """Perform a full handshake and return (initiator_session, responder_session)."""
     from ama_cryptography.secure_channel import (
         SecureChannelInitiator,
@@ -95,7 +95,7 @@ def established_session(kem_keypair, sig_keypair):  # type: ignore[no-untyped-de
 class TestNoiseNKHandshake:
     """Test the Noise-NK handshake protocol."""
 
-    def test_full_handshake_roundtrip(self, kem_keypair, sig_keypair) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_full_handshake_roundtrip(self, kem_keypair, sig_keypair) -> None:  # type: ignore[no-untyped-def]
         """Complete handshake produces valid sessions on both sides."""
         from ama_cryptography.secure_channel import (
             ChannelState,
@@ -124,7 +124,7 @@ class TestNoiseNKHandshake:
         assert init_session.send_key == resp_session.recv_key
         assert init_session.recv_key == resp_session.send_key
 
-    def test_handshake_message_serialization(self, kem_keypair) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_handshake_message_serialization(self, kem_keypair) -> None:  # type: ignore[no-untyped-def]
         """HandshakeMessage survives serialize/deserialize roundtrip."""
         from ama_cryptography.secure_channel import (
             HandshakeMessage,
@@ -143,7 +143,7 @@ class TestNoiseNKHandshake:
         assert restored.ephemeral_public_key == msg.ephemeral_public_key
         assert restored.kem_ciphertext == msg.kem_ciphertext
 
-    def test_handshake_response_serialization(self, kem_keypair, sig_keypair) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_handshake_response_serialization(self, kem_keypair, sig_keypair) -> None:  # type: ignore[no-untyped-def]
         """HandshakeResponse survives serialize/deserialize roundtrip."""
         from ama_cryptography.secure_channel import (
             HandshakeResponse,
@@ -167,7 +167,7 @@ class TestNoiseNKHandshake:
         assert restored.signature == response.signature
         assert restored.responder_public_key == response.responder_public_key
 
-    def test_protocol_name_mismatch_rejected(self, kem_keypair, sig_keypair) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_protocol_name_mismatch_rejected(self, kem_keypair, sig_keypair) -> None:  # type: ignore[no-untyped-def]
         """Responder rejects handshake with wrong protocol name."""
         from ama_cryptography.secure_channel import (
             HandshakeError,
@@ -193,7 +193,7 @@ class TestNoiseNKHandshake:
         with pytest.raises(HandshakeError, match="Protocol mismatch"):
             responder.handle_handshake(bad_msg)
 
-    def test_protocol_version_mismatch_rejected(self, kem_keypair, sig_keypair) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_protocol_version_mismatch_rejected(self, kem_keypair, sig_keypair) -> None:  # type: ignore[no-untyped-def]
         """Responder rejects handshake with wrong protocol version."""
         from ama_cryptography.secure_channel import (
             HandshakeError,
@@ -219,7 +219,7 @@ class TestNoiseNKHandshake:
         with pytest.raises(HandshakeError, match="Version mismatch"):
             responder.handle_handshake(bad_msg)
 
-    def test_tampered_signature_rejected(self, kem_keypair, sig_keypair) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_tampered_signature_rejected(self, kem_keypair, sig_keypair) -> None:  # type: ignore[no-untyped-def]
         """Initiator rejects a response with a tampered signature."""
         from ama_cryptography.secure_channel import (
             HandshakeError,
@@ -249,7 +249,7 @@ class TestNoiseNKHandshake:
         with pytest.raises(HandshakeError, match="signature verification failed"):
             initiator.complete_handshake(bad_response)
 
-    def test_double_handshake_rejected(self, kem_keypair) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_double_handshake_rejected(self, kem_keypair) -> None:  # type: ignore[no-untyped-def]
         """Initiator rejects creating a second handshake."""
         from ama_cryptography.secure_channel import (
             ChannelError,
@@ -273,7 +273,7 @@ class TestNoiseNKHandshake:
 class TestSecureSessionEncryption:
     """Test SecureSession encrypt/decrypt operations."""
 
-    def test_encrypt_decrypt_roundtrip(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_encrypt_decrypt_roundtrip(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Message encrypted by initiator can be decrypted by responder."""
         init_sess, resp_sess = established_session
         plaintext = b"Hello, Post-Quantum World!"
@@ -282,7 +282,7 @@ class TestSecureSessionEncryption:
         decrypted = resp_sess.decrypt(msg)
         assert decrypted == plaintext
 
-    def test_bidirectional_communication(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_bidirectional_communication(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Both sides can send and receive messages."""
         init_sess, resp_sess = established_session
 
@@ -294,7 +294,7 @@ class TestSecureSessionEncryption:
         msg2 = resp_sess.encrypt(b"from responder")
         assert init_sess.decrypt(msg2) == b"from responder"
 
-    def test_multiple_messages(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_multiple_messages(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Multiple messages can be sent in sequence."""
         init_sess, resp_sess = established_session
 
@@ -303,14 +303,14 @@ class TestSecureSessionEncryption:
             msg = init_sess.encrypt(plaintext)
             assert resp_sess.decrypt(msg) == plaintext
 
-    def test_empty_plaintext(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_empty_plaintext(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Empty plaintext can be encrypted/decrypted (valid for AES-GCM)."""
         init_sess, resp_sess = established_session
 
         msg = init_sess.encrypt(b"")
         assert resp_sess.decrypt(msg) == b""
 
-    def test_large_plaintext(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_large_plaintext(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Large plaintext (up to MAX_MESSAGE_SIZE) works correctly."""
         init_sess, resp_sess = established_session
         plaintext = secrets.token_bytes(60000)
@@ -318,7 +318,7 @@ class TestSecureSessionEncryption:
         msg = init_sess.encrypt(plaintext)
         assert resp_sess.decrypt(msg) == plaintext
 
-    def test_max_message_size_exceeded(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_max_message_size_exceeded(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Messages exceeding MAX_MESSAGE_SIZE are rejected."""
         init_sess, _ = established_session
 
@@ -327,7 +327,7 @@ class TestSecureSessionEncryption:
         with pytest.raises(ValueError, match="Message too large"):
             init_sess.encrypt(b"\x00" * (MAX_MESSAGE_SIZE + 1))
 
-    def test_sequence_numbers_increment(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_sequence_numbers_increment(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Sequence numbers increment with each message."""
         init_sess, _ = established_session
 
@@ -349,7 +349,7 @@ class TestSecureSessionEncryption:
 class TestChannelMessageSerialization:
     """Test ChannelMessage serialize/deserialize."""
 
-    def test_roundtrip(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_roundtrip(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """ChannelMessage survives serialize/deserialize roundtrip."""
         from ama_cryptography.secure_channel import ChannelMessage
 
@@ -407,7 +407,7 @@ class TestChannelMessageSerialization:
 class TestReplayDetection:
     """Test replay attack detection in SecureSession."""
 
-    def test_replay_same_message_rejected(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_replay_same_message_rejected(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Replaying the same ChannelMessage is rejected."""
         from ama_cryptography.secure_channel import ReplayError
 
@@ -421,7 +421,7 @@ class TestReplayDetection:
         with pytest.raises(ReplayError, match="already received"):
             resp_sess.decrypt(msg)
 
-    def test_out_of_order_within_window_accepted(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_out_of_order_within_window_accepted(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Out-of-order messages within the replay window are accepted."""
         init_sess, resp_sess = established_session
 
@@ -434,7 +434,7 @@ class TestReplayDetection:
         assert resp_sess.decrypt(msg0) == b"msg0"
         assert resp_sess.decrypt(msg1) == b"msg1"
 
-    def test_below_window_base_rejected(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_below_window_base_rejected(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Messages below the window base are rejected as too old."""
         from ama_cryptography.secure_channel import ReplayError
 
@@ -463,7 +463,7 @@ class TestReplayDetection:
 class TestTamperingDetection:
     """Test that tampered messages are detected via AES-GCM authentication."""
 
-    def test_tampered_ciphertext(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_tampered_ciphertext(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Flipping a bit in the ciphertext is detected."""
         from ama_cryptography.secure_channel import ChannelMessage
 
@@ -480,10 +480,10 @@ class TestTamperingDetection:
             tag=msg.tag,
         )
 
-        with pytest.raises(Exception):  # noqa: B017  # AES-GCM auth failure (SC-002)
+        with pytest.raises(Exception):  # noqa: B017
             resp_sess.decrypt(bad_msg)
 
-    def test_tampered_tag(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_tampered_tag(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Flipping a bit in the tag is detected."""
         from ama_cryptography.secure_channel import ChannelMessage
 
@@ -500,10 +500,10 @@ class TestTamperingDetection:
             tag=bytes(tampered_tag),
         )
 
-        with pytest.raises(Exception):  # noqa: B017  # AES-GCM auth failure (SC-002)
+        with pytest.raises(Exception):  # noqa: B017
             resp_sess.decrypt(bad_msg)
 
-    def test_wrong_session_id(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_wrong_session_id(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Message with wrong session_id is rejected."""
         from ama_cryptography.secure_channel import ChannelError, ChannelMessage
 
@@ -531,7 +531,7 @@ class TestTamperingDetection:
 class TestSessionExpiration:
     """Test session time-to-live enforcement."""
 
-    def test_expired_session_encrypt_rejected(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_expired_session_encrypt_rejected(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Encrypting on an expired session raises SessionExpiredError."""
         from ama_cryptography.secure_channel import SessionExpiredError
 
@@ -542,7 +542,7 @@ class TestSessionExpiration:
         with pytest.raises(SessionExpiredError, match="TTL expired"):
             init_sess.encrypt(b"too late")
 
-    def test_expired_session_decrypt_rejected(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_expired_session_decrypt_rejected(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Decrypting on an expired session raises SessionExpiredError."""
         from ama_cryptography.secure_channel import SessionExpiredError
 
@@ -565,7 +565,7 @@ class TestSessionExpiration:
 class TestRekey:
     """Test session re-keying for forward secrecy."""
 
-    def test_rekey_changes_keys(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_rekey_changes_keys(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """After rekey, session keys are different from before."""
         init_sess, resp_sess = established_session
 
@@ -578,7 +578,7 @@ class TestRekey:
         assert init_sess.send_key != old_send
         assert init_sess.recv_key != old_recv
 
-    def test_rekey_preserves_communication(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_rekey_preserves_communication(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """After synchronized rekey, communication still works."""
         init_sess, resp_sess = established_session
 
@@ -594,7 +594,7 @@ class TestRekey:
         msg2 = init_sess.encrypt(b"after rekey")
         assert resp_sess.decrypt(msg2) == b"after rekey"
 
-    def test_needs_rekey_threshold(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_needs_rekey_threshold(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """needs_rekey returns True after REKEY_INTERVAL messages."""
         from ama_cryptography.secure_channel import REKEY_INTERVAL
 
@@ -605,14 +605,14 @@ class TestRekey:
         init_sess.messages_since_rekey = REKEY_INTERVAL
         assert init_sess.needs_rekey()
 
-    def test_rekey_resets_counter(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_rekey_resets_counter(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Rekey resets the messages_since_rekey counter."""
         init_sess, _ = established_session
         init_sess.messages_since_rekey = 500
         init_sess.rekey()
         assert init_sess.messages_since_rekey == 0
 
-    def test_multiple_rekeys_preserve_communication(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_multiple_rekeys_preserve_communication(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Communication survives multiple consecutive rekeys."""
         init_sess, resp_sess = established_session
 
@@ -638,7 +638,7 @@ class TestRekey:
 class TestSessionClose:
     """Test session close behavior."""
 
-    def test_close_zeroes_keys(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_close_zeroes_keys(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Closing a session zeroes the key material."""
         from ama_cryptography.secure_channel import KEY_BYTES, ChannelState
 
@@ -649,7 +649,7 @@ class TestSessionClose:
         assert init_sess.send_key == b"\x00" * KEY_BYTES
         assert init_sess.recv_key == b"\x00" * KEY_BYTES
 
-    def test_encrypt_after_close_rejected(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_encrypt_after_close_rejected(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Encrypting after close raises ChannelError."""
         from ama_cryptography.secure_channel import ChannelError
 
@@ -659,7 +659,7 @@ class TestSessionClose:
         with pytest.raises(ChannelError, match="Cannot encrypt"):
             init_sess.encrypt(b"too late")
 
-    def test_decrypt_after_close_rejected(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_decrypt_after_close_rejected(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Decrypting after close raises ChannelError."""
         from ama_cryptography.secure_channel import ChannelError
 
@@ -681,7 +681,7 @@ class TestSessionClose:
 class TestRekeyDesync:
     """Test rekey desynchronization and recovery."""
 
-    def test_rekey_one_side_only_fails(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_rekey_one_side_only_fails(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Rekeying only one side causes decryption failure."""
         init_sess, resp_sess = established_session
 
@@ -695,7 +695,7 @@ class TestRekeyDesync:
         with pytest.raises((ValueError, RuntimeError)):
             resp_sess.decrypt(msg)
 
-    def test_rekey_desync_recovery(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_rekey_desync_recovery(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """After desync, rekeying both sides restores communication."""
         init_sess, resp_sess = established_session
 
@@ -709,7 +709,7 @@ class TestRekeyDesync:
         msg = init_sess.encrypt(b"resynced")
         assert resp_sess.decrypt(msg) == b"resynced"
 
-    def test_double_rekey_one_side(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_double_rekey_one_side(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Double-rekeying one side diverges further."""
         init_sess, resp_sess = established_session
 
@@ -733,7 +733,7 @@ class TestRekeyDesync:
 class TestSessionTTLEdgeCases:
     """Test TTL edge cases."""
 
-    def test_ttl_zero_immediately_expired(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_ttl_zero_immediately_expired(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """TTL=0 means session is immediately expired."""
         from ama_cryptography.secure_channel import SessionExpiredError
 
@@ -743,7 +743,7 @@ class TestSessionTTLEdgeCases:
         with pytest.raises(SessionExpiredError):
             init_sess.encrypt(b"expired")
 
-    def test_ttl_very_large_not_expired(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_ttl_very_large_not_expired(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Very large TTL does not expire."""
         init_sess, resp_sess = established_session
         init_sess.ttl_seconds = 999999.0
@@ -757,7 +757,7 @@ class TestSessionTTLEdgeCases:
 class TestMaxMessageSize:
     """Test message size limits."""
 
-    def test_encrypt_max_size(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_encrypt_max_size(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Encrypting exactly MAX_MESSAGE_SIZE bytes succeeds."""
         from ama_cryptography.secure_channel import MAX_MESSAGE_SIZE
 
@@ -766,7 +766,7 @@ class TestMaxMessageSize:
         msg = init_sess.encrypt(data)
         assert resp_sess.decrypt(msg) == data
 
-    def test_encrypt_over_max_size_rejected(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_encrypt_over_max_size_rejected(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Encrypting MAX_MESSAGE_SIZE + 1 bytes raises ValueError."""
         from ama_cryptography.secure_channel import MAX_MESSAGE_SIZE
 
@@ -780,7 +780,7 @@ class TestMaxMessageSize:
 class TestReplayWindowExhaustion:
     """Test replay window behavior under heavy message load."""
 
-    def test_window_exhaustion_rejects_old(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_window_exhaustion_rejects_old(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """After 257+ messages, old sequence numbers are rejected."""
         from ama_cryptography.secure_channel import ReplayError
 
@@ -797,7 +797,7 @@ class TestReplayWindowExhaustion:
         with pytest.raises(ReplayError):
             resp_sess.decrypt(msgs[0])
 
-    def test_replay_within_window_detected(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_replay_within_window_detected(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Replaying a recent message within window is detected."""
         from ama_cryptography.secure_channel import ReplayError
 
@@ -814,7 +814,7 @@ class TestReplayWindowExhaustion:
 class TestConcurrentEncryptDecrypt:
     """Test concurrent encrypt/decrypt on a session."""
 
-    def test_concurrent_encrypt(self, established_session) -> None:  # type: ignore[no-untyped-def]  # pytest fixture injection (SC-001)
+    def test_concurrent_encrypt(self, established_session) -> None:  # type: ignore[no-untyped-def]
         """Multiple encrypts produce unique messages."""
         init_sess, resp_sess = established_session
 

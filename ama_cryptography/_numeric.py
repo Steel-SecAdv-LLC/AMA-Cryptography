@@ -105,9 +105,9 @@ class Vec:
             if isinstance(value, Vec):
                 self._data[idx] = value._data
             else:
-                self._data[idx] = list(value)  # type: ignore[arg-type]  # Sequence[float] is list-compatible (NUM-001)
+                self._data[idx] = list(value)  # type: ignore[arg-type]
         else:
-            self._data[idx] = float(value)  # type: ignore[arg-type]  # scalar coercion from union (NUM-002)
+            self._data[idx] = float(value)  # type: ignore[arg-type]
 
     def __iter__(self) -> Iterator[float]:
         return iter(self._data)
@@ -221,7 +221,7 @@ class Vec:
                 for k in range(n):
                     s += self._data[k] * other._data[k][j]
                 out[j] = s
-            return Vec._wrap(out)  # type: ignore[return-value]  # Vec @ Mat -> Vec (NUM-003)
+            return Vec._wrap(out)  # type: ignore[return-value]
         return NotImplemented
 
     # -- comparison helpers --------------------------------------------------
@@ -291,7 +291,7 @@ class Mat:
     def __setitem__(self, idx: int | Tuple[int, int], value: float | List[float]) -> None:
         if isinstance(idx, tuple):
             r, c = idx
-            self._data[r][c] = float(value)  # type: ignore[arg-type]  # scalar coercion from union (NUM-004)
+            self._data[r][c] = float(value)  # type: ignore[arg-type]
         else:
             if isinstance(value, list):
                 self._data[idx] = [float(x) for x in value]
@@ -308,7 +308,7 @@ class Mat:
     # -- transpose -----------------------------------------------------------
 
     @property
-    def T(self) -> Mat:  # noqa: N802 — mathematical convention for transpose (NUM-005)
+    def T(self) -> Mat:  # noqa: N802
         t = [[self._data[r][c] for r in range(self.rows)] for c in range(self.cols)]
         return Mat._wrap(t, self.cols, self.rows)
 
@@ -409,8 +409,8 @@ def array(data: Sequence[float] | Sequence[Sequence[float]]) -> Vec | Mat:
         return Vec._wrap([])
     first = data[0]
     if isinstance(first, (list, tuple)):
-        return Mat(data)  # type: ignore[arg-type]  # nested sequence is Mat-compatible (NUM-006)
-    return Vec(data)  # type: ignore[arg-type]  # flat sequence is Vec-compatible (NUM-007)
+        return Mat(data)  # type: ignore[arg-type]
+    return Vec(data)  # type: ignore[arg-type]
 
 
 def zeros(n: int) -> Vec:
@@ -679,7 +679,7 @@ def _qr_tridiagonal_eigvals(A: List[List[float]], n: int, max_iter: int = 30) ->
     e = [A[i + 1][i] for i in range(n - 1)]
     e.append(0.0)
 
-    for l_idx in range(n):  # noqa: E741 — l_idx mirrors QL algorithm literature naming (NUM-008)
+    for l_idx in range(n):  # noqa: E741
         itr = 0
         while True:
             # Find small sub-diagonal element
@@ -827,7 +827,7 @@ def fft(v: Vec) -> Vec:
         result = _bluestein_fft(x, n, inverse=False)
 
     out = Vec.__new__(Vec)
-    out._data = result  # type: ignore[assignment]  # complex list stored in Vec for FFT output (NUM-009)
+    out._data = result  # type: ignore[assignment]
     return out
 
 
@@ -847,7 +847,7 @@ def ifft(v: Vec) -> Vec:
         result = _bluestein_fft(x, n, inverse=True)
 
     out = Vec.__new__(Vec)
-    out._data = result  # type: ignore[assignment]  # complex list stored in Vec for IFFT output (NUM-010)
+    out._data = result  # type: ignore[assignment]
     return out
 
 
@@ -860,7 +860,7 @@ class _Random:
     """Numpy-compatible random interface backed by stdlib random."""
 
     def __init__(self) -> None:
-        self._rng = _stdlib_random.Random()  # fmt: skip  # noqa: S311 # nosec B311 — non-crypto PRNG for math engine only (NUM-011)
+        self._rng = _stdlib_random.Random()  # fmt: skip  # noqa: S311 # nosec B311
 
     def seed(self, s: int) -> None:
         self._rng.seed(s)

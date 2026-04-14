@@ -485,7 +485,7 @@ class TestCrossAlgorithm:
 
             result = kyber_encapsulate(fake_pk)
             assert isinstance(result.ciphertext, bytes)
-        except Exception:  # noqa: S110 -- intentional crash-safety test (ADV-001)
+        except Exception:  # noqa: S110
             pass  # Any exception is acceptable, crash is not
 
 
@@ -575,5 +575,5 @@ class TestSecurityEdgeCases:
         try:
             ss = _kyber_decap(ct, zero_sk)
             assert isinstance(ss, bytes)
-        except Exception:  # noqa: S110 -- intentional crash-safety test (ADV-001)
+        except Exception:  # noqa: S110
             pass  # Exception is acceptable, crash is not
