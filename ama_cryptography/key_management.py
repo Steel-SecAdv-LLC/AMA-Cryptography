@@ -1034,7 +1034,7 @@ class HSMKeyStorage:
 
             return PyKCS11
         except ImportError as e:
-            raise ImportError(
+            raise AmaHSMUnavailableError(
                 "HSM support requires PyKCS11. Install with: pip install ama-cryptography[hsm]"
             ) from e
 

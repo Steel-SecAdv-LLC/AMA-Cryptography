@@ -720,9 +720,9 @@ class TestHSMKeyStorageErrors:
     """Tests for HSMKeyStorage error handling (without actual HSM)."""
 
     def test_import_error_without_pykcs11(self) -> None:
-        """HSMKeyStorage raises ImportError without PyKCS11."""
+        """HSMKeyStorage raises AmaHSMUnavailableError without PyKCS11."""
         with patch.dict("sys.modules", {"PyKCS11": None}):
-            with pytest.raises(ImportError, match="HSM support requires PyKCS11"):
+            with pytest.raises(Exception, match="HSM support requires PyKCS11"):
                 # Force re-import to trigger the check
                 storage = HSMKeyStorage.__new__(HSMKeyStorage)
                 storage._import_pykcs11()

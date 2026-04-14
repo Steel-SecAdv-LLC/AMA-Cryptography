@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from ama_cryptography.exceptions import AmaHSMUnavailableError
 from ama_cryptography.key_management import HSMKeyStorage
 
 # ---------------------------------------------------------------------------
@@ -80,6 +81,7 @@ def _build_hsm(
 ) -> HSMKeyStorage:
     """Construct an HSMKeyStorage instance with all internals mocked."""
     with (
+        patch("ama_cryptography.key_management.HSM_AVAILABLE", True),
         patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock_pkcs11),
         patch("os.path.exists", return_value=True),
     ):
@@ -140,7 +142,10 @@ class TestHSMInit:
     def test_init_unknown_hsm_type_raises_valueerror(self) -> None:
         """An unknown hsm_type without a library_path raises ValueError."""
         mock = _make_mock_pkcs11()
-        with patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock):
+        with (
+            patch("ama_cryptography.key_management.HSM_AVAILABLE", True),
+            patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock),
+        ):
             with pytest.raises(ValueError, match="Unknown HSM type"):
                 HSMKeyStorage(hsm_type="unknown-vendor", pin="0000")
 
@@ -148,6 +153,7 @@ class TestHSMInit:
         """When no library_path is given, _resolve_library_path searches PKCS11_PATHS."""
         mock = _make_mock_pkcs11()
         with (
+            patch("ama_cryptography.key_management.HSM_AVAILABLE", True),
             patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock),
             patch("os.path.exists", side_effect=lambda p: p == "/usr/lib/softhsm/libsofthsm2.so"),
         ):
@@ -158,11 +164,18 @@ class TestHSMInit:
         """If no PKCS#11 library file exists on disk, RuntimeError is raised."""
         mock = _make_mock_pkcs11()
         with (
+            patch("ama_cryptography.key_management.HSM_AVAILABLE", True),
             patch.object(HSMKeyStorage, "_import_pykcs11", return_value=mock),
             patch("os.path.exists", return_value=False),
         ):
             with pytest.raises(RuntimeError, match="PKCS#11 library not found"):
                 HSMKeyStorage(hsm_type="softhsm", pin="1234")
+
+    def test_init_raises_hsm_unavailable_when_pykcs11_missing(self) -> None:
+        """When HSM_AVAILABLE is False, __init__ raises AmaHSMUnavailableError."""
+        with patch("ama_cryptography.key_management.HSM_AVAILABLE", False):
+            with pytest.raises(AmaHSMUnavailableError, match="PyKCS11"):
+                HSMKeyStorage()
 
 
 # ===========================================================================
