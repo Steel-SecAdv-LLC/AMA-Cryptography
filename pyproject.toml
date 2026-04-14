@@ -149,6 +149,11 @@ ignore = []  # Do not add ignores without a comment explaining why.
     "N801", "N806",
     "E722",
 ]
+# test_fuzzing.py: E402 is architecturally required — Hypothesis settings profiles
+# must be registered and loaded BEFORE importing the test subjects, or the @given
+# decorator picks up the wrong profile.  Moving these imports to the top of the
+# file would break profile selection in CI vs local development.
+"tests/test_fuzzing.py" = ["E402"]
 # ama_cryptography/ uses intentional patterns that must not be changed:
 #   N803/N806: uppercase variable names for crypto constants (e.g. R, S, A, K)
 #   RUF001/RUF002/RUF003: Unicode symbols in docstrings/comments (σ, ✓, etc.)

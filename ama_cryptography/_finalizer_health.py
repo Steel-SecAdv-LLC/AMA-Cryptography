@@ -19,6 +19,7 @@ Observable states (any one suffices):
 Logging is optional and must NOT be relied upon as the sole artifact.
 """
 
+import contextlib
 import threading
 from typing import Optional, Tuple
 
@@ -43,18 +44,14 @@ def record_finalizer_error(source: str, detail: str) -> None:
                 (e.g. "wipe() raised RuntimeError: ...").
     """
     global _error_count, _error_flag, _last_error
-    try:
+    # KNOWN TRADEOFF (INVARIANT-3 addendum): Suppress all exceptions to
+    # survive interpreter shutdown when _lock is None.  In practice _lock
+    # is only None during shutdown.  Accepted per INVARIANT-3 addendum.
+    with contextlib.suppress(Exception):
         with _lock:
             _error_count += 1
             _error_flag = True
             _last_error = (source, detail)
-    except Exception:  # noqa: S110  # nosec B110
-        # KNOWN TRADEOFF (INVARIANT-3 addendum): This except-pass is required
-        # to survive interpreter shutdown when _lock is None.  It also silently
-        # swallows bugs inside the with body during normal operation.  In
-        # practice _lock is only None during shutdown.  Accepted per INVARIANT-3
-        # addendum design review.
-        pass
 
 
 def finalizer_error_count() -> int:

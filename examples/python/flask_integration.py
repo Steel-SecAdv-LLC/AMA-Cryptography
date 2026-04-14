@@ -42,12 +42,12 @@ except ImportError:
     print("This example demonstrates Flask integration patterns.")
     sys.exit(1)
 
-from ama_cryptography.crypto_api import (  # noqa: E402
+from ama_cryptography.crypto_api import (
     AlgorithmType,
     AmaCryptography,
     get_pqc_capabilities,
 )
-from ama_cryptography.legacy_compat import (  # noqa: E402
+from ama_cryptography.legacy_compat import (
     create_crypto_package,
     generate_key_management_system,
 )

@@ -319,7 +319,7 @@ class SecureSession:
     created_at: float = field(default_factory=time.monotonic)
     ttl_seconds: float = SESSION_TTL_SECONDS
     messages_since_rekey: int = 0
-    _replay_window: set = field(default_factory=set)  # type: ignore[type-arg]
+    _replay_window: set[int] = field(default_factory=set)
     _replay_window_base: int = 0
     _state: ChannelState = ChannelState.ESTABLISHED
 

@@ -679,35 +679,35 @@ def _qr_tridiagonal_eigvals(A: List[List[float]], n: int, max_iter: int = 30) ->
     e = [A[i + 1][i] for i in range(n - 1)]
     e.append(0.0)
 
-    for l_idx in range(n):  # noqa: E741
+    for left in range(n):
         itr = 0
         while True:
             # Find small sub-diagonal element
-            m = l_idx
+            m = left
             while m < n - 1:
                 dd = abs(d[m]) + abs(d[m + 1])
                 if abs(e[m]) <= 1e-15 * dd:
                     break
                 m += 1
-            if m == l_idx:
+            if m == left:
                 break
             if itr >= max_iter:
                 break
             itr += 1
 
-            # Wilkinson shift: eigenvalue of trailing 2x2 closer to d[l_idx]
-            g = (d[l_idx + 1] - d[l_idx]) / (2.0 * e[l_idx])
+            # Wilkinson shift: eigenvalue of trailing 2x2 closer to d[left]
+            g = (d[left + 1] - d[left]) / (2.0 * e[left])
             r = math.hypot(g, 1.0)
             if g >= 0:
-                g = d[m] - d[l_idx] + e[l_idx] / (g + r)
+                g = d[m] - d[left] + e[left] / (g + r)
             else:
-                g = d[m] - d[l_idx] + e[l_idx] / (g - r)
+                g = d[m] - d[left] + e[left] / (g - r)
 
             s = 1.0
             c = 1.0
             p = 0.0
 
-            for i in range(m - 1, l_idx - 1, -1):
+            for i in range(m - 1, left - 1, -1):
                 f = s * e[i]
                 b = c * e[i]
                 r = math.hypot(f, g)
@@ -726,8 +726,8 @@ def _qr_tridiagonal_eigvals(A: List[List[float]], n: int, max_iter: int = 30) ->
                 g = c * r - b
             else:
                 # Loop completed without break
-                d[l_idx] -= p
-                e[l_idx] = g
+                d[left] -= p
+                e[left] = g
                 e[m] = 0.0
 
     return d

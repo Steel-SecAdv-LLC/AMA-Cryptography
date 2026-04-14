@@ -16,6 +16,7 @@ import json
 import sys
 import urllib.request
 from pathlib import Path
+from typing import Any, cast
 
 VECTORS_DIR = Path(__file__).parent
 
@@ -37,7 +38,7 @@ ACVP_FETCH_LIST: list[tuple[str, str]] = [
 ]
 
 
-def fetch_acvp_file(algo_dir: str, filename: str) -> dict:  # type: ignore[type-arg]
+def fetch_acvp_file(algo_dir: str, filename: str) -> dict[str, Any]:
     """Download a JSON file from the ACVP-Server repository."""
     url = f"{ACVP_BASE}/{algo_dir}/{filename}"
     print(f"  Fetching {url}")
@@ -46,7 +47,7 @@ def fetch_acvp_file(algo_dir: str, filename: str) -> dict:  # type: ignore[type-
     )
     with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
         data = resp.read()
-    return json.loads(data)  # type: ignore[no-any-return]
+    return cast(dict[str, Any], json.loads(data))
 
 
 def fetch_acvp_vectors() -> None:

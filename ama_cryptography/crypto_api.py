@@ -621,7 +621,7 @@ class KeypairCache:
     def __del__(self) -> None:
         try:
             self._wipe_sk()
-        except Exception as exc:  # noqa: S110
+        except Exception as exc:
             _record_finalizer_error("KeypairCache", f"wipe failed: {exc}")
 
 

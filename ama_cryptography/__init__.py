@@ -37,18 +37,18 @@ __author__ = "Andrew E. A., Steel Security Advisors LLC"
 # FIPS 140-3 Power-On Self-Tests — run at module import time.
 # Sets module state to OPERATIONAL or ERROR.
 from ama_cryptography._self_test import _run_self_tests as _post
-from ama_cryptography._self_test import (  # noqa: F401
-    check_operational,
-    module_error_reason,
-    module_self_test_results,
-    module_status,
-    post_duration_ms,
-    reset_module,
-    secure_token_bytes,
+from ama_cryptography._self_test import (
+    check_operational as check_operational,
+    module_error_reason as module_error_reason,
+    module_self_test_results as module_self_test_results,
+    module_status as module_status,
+    post_duration_ms as post_duration_ms,
+    reset_module as reset_module,
+    secure_token_bytes as secure_token_bytes,
 )
 from ama_cryptography.exceptions import (
     CryptoModuleError as CryptoModuleError,
-)  # noqa: F401
+)
 
 _post()
 
@@ -81,8 +81,8 @@ from .equations import (
     verify_mathematical_foundations,
 )
 from .exceptions import (
-    QuantumSignatureRequiredError,
-)  # noqa: F401
+    QuantumSignatureRequiredError as QuantumSignatureRequiredError,
+)
 
 # crypto_api exports are lazy-loaded to avoid side-effect warnings at
 # import time (PQC availability checks, HMAC/HKDF warnings, etc.).
@@ -99,14 +99,14 @@ _CRYPTO_API_EXPORTS = frozenset(
 )
 
 if TYPE_CHECKING:
-    from .crypto_api import (  # noqa: F401
-        AlgorithmType,
-        AmaCryptography,
-        CryptoPackageConfig,
-        KeypairCache,
-        batch_verify_ed25519,
-        create_crypto_package,
-        verify_crypto_package,
+    from .crypto_api import (
+        AlgorithmType as AlgorithmType,
+        AmaCryptography as AmaCryptography,
+        CryptoPackageConfig as CryptoPackageConfig,
+        KeypairCache as KeypairCache,
+        batch_verify_ed25519 as batch_verify_ed25519,
+        create_crypto_package as create_crypto_package,
+        verify_crypto_package as verify_crypto_package,
     )
 
 

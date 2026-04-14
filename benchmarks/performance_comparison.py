@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from ama_cryptography.legacy_compat import (  # noqa: E402
+from ama_cryptography.legacy_compat import (
     ed25519_sign,
     ed25519_verify,
     generate_ed25519_keypair,

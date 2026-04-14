@@ -33,8 +33,8 @@ from ama_cryptography.exceptions import (
     AmaHSMUnavailableError as AmaHSMUnavailableError,
 )
 from ama_cryptography.exceptions import (
-    SecurityWarning,
-)  # noqa: F401
+    SecurityWarning as SecurityWarning,
+)
 from ama_cryptography.pqc_backends import _HMAC_SHA512_NATIVE_AVAILABLE, native_hmac_sha512
 from ama_cryptography.secure_memory import secure_memzero
 
@@ -183,7 +183,8 @@ class HDKeyDerivation:
             # Derive seed from phrase (simplified BIP39)
             # seed_phrase is guaranteed non-None here: seed is None (from elif)
             # and not both None (from first if).
-            assert seed_phrase is not None  # nosec B101
+            if seed_phrase is None:
+                raise TypeError("seed_phrase must not be None when seed is not provided")
             self.master_seed = hashlib.pbkdf2_hmac(
                 "sha512", seed_phrase.encode("utf-8"), b"mnemonic", 2048, 64
             )

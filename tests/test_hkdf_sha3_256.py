@@ -20,10 +20,14 @@ Test Vector Sources:
 
 import hashlib
 import json
+from typing import Any
 
 import pytest
 
 _PYCA_AVAILABLE: bool
+default_backend: Any
+hashes: Any
+HKDF: Any
 
 try:
     from cryptography.hazmat.backends import default_backend as default_backend
@@ -32,9 +36,9 @@ try:
 
     _PYCA_AVAILABLE = True
 except ImportError:
-    default_backend = None  # type: ignore[assignment]  # fallback when pyca unavailable (TH-001)
-    hashes = None  # type: ignore[assignment]  # fallback when pyca unavailable (TH-002)
-    HKDF = None  # type: ignore[assignment,misc]  # fallback when pyca unavailable (TH-003)
+    default_backend = None  # fallback when pyca unavailable
+    hashes = None  # fallback when pyca unavailable
+    HKDF = None  # fallback when pyca unavailable
     _PYCA_AVAILABLE = False
 
 

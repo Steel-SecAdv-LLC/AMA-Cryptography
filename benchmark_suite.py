@@ -38,15 +38,16 @@ import secrets
 import statistics
 import time
 from datetime import datetime, timezone
-from typing import Dict
+from typing import Any, Dict
 
 # psutil is optional — used for richer system info when available
+psutil: Any
 try:
     import psutil
 
     _HAS_PSUTIL = True
 except ImportError:
-    psutil = None  # type: ignore[assignment]
+    psutil = None
     _HAS_PSUTIL = False
 
 from ama_cryptography.legacy_compat import (

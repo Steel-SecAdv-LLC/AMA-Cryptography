@@ -43,7 +43,7 @@ import platform
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional, Union, cast
 
 from ama_cryptography._finalizer_health import record_finalizer_error
 from ama_cryptography.exceptions import (
@@ -2387,7 +2387,7 @@ def _probe_cython_hmac() -> "Optional[Callable[[bytes, bytes], bytes]]":
     try:
         from ama_cryptography.hmac_binding import cy_hmac_sha3_256
 
-        return cy_hmac_sha3_256  # type: ignore[no-any-return]
+        return cast(Callable[[bytes, bytes], bytes], cy_hmac_sha3_256)
     except (ImportError, AttributeError):
         return None
 
