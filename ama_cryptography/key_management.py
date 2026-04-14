@@ -91,13 +91,12 @@ logger = logging.getLogger(__name__)
 # PyKCS11 is an interface library, NOT a cryptographic primitive, and does
 # not violate INVARIANT-1.  All actual crypto is performed inside the HSM
 # hardware using its own FIPS-validated implementation.
+# Use find_spec() rather than a probe import to avoid an unused-import
+# binding that CodeQL and ruff would flag.
 # ---------------------------------------------------------------------------
-try:
-    import PyKCS11  # noqa: F401 — availability probe; not used at module scope (KM-002)
+import importlib.util
 
-    HSM_AVAILABLE: bool = True
-except ImportError:
-    HSM_AVAILABLE = False
+HSM_AVAILABLE: bool = importlib.util.find_spec("PyKCS11") is not None
 
 
 class KeyStatus(Enum):
