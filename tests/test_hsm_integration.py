@@ -23,6 +23,21 @@ import pytest
 from ama_cryptography.key_management import HSMKeyStorage
 
 # ---------------------------------------------------------------------------
+# Auto-patch HSM_AVAILABLE for all tests in this module.
+# When PyKCS11 is not installed, HSM_AVAILABLE is False and __init__ raises
+# AmaHSMUnavailableError before any mock can take effect.  Patching the
+# module-level flag lets the mocked tests exercise the full __init__ path.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _patch_hsm_available() -> Any:
+    """Ensure HSM_AVAILABLE is True so mocked tests bypass the availability guard."""
+    with patch("ama_cryptography.key_management.HSM_AVAILABLE", True):
+        yield
+
+
+# ---------------------------------------------------------------------------
 # Helper: build a realistic mock PyKCS11 module
 # ---------------------------------------------------------------------------
 

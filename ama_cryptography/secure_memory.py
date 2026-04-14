@@ -278,7 +278,7 @@ def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
                 "secure_mlock on bytes objects requires CPython (id-based address layout). "
                 f"Current implementation: {sys.implementation.name}"
             )
-        addr = id(data) + bytes.__basicsize__ - 1  # noqa: E501 — CPython ob_sval offset (SM-002)
+        addr = id(data) + bytes.__basicsize__ - 1  # CPython ob_sval offset
 
     try:
         from ama_cryptography.pqc_backends import _native_lib

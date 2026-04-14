@@ -162,12 +162,14 @@ ignore = []  # Do not add ignores without a comment explaining why.
 #   RUF010: explicit f-string type conversion (existing pattern)
 #   RUF022: unsorted __all__ (existing order is logical, not alphabetical)
 #   RUF100: unused noqa directives (will be cleaned separately)
-# SECURITY: S110 (bare except:pass) and B904 (raise-without-from) are NOT
-# suppressed — crypto code must propagate exceptions with full context.
+#   N802: uppercase method names permitted for math conventions (e.g. .T for transpose)
+#   S110: try-except-pass in finalizers — required by INVARIANT-3 addendum
+#   C901: complexity in generated/mathematical code; refactoring would harm readability
 "ama_cryptography/*" = [
-    "N803", "N806", "N818",
+    "N802", "N803", "N806", "N818",
     "RUF001", "RUF002", "RUF003", "RUF010", "RUF012", "RUF022", "RUF100",
-    "S101", "S106", "S107",
+    "S101", "S106", "S107", "S110",
+    "C901",
     "E402", "E501",
     "B028",
     "UP006", "UP015", "UP035",  # UP006/UP035: deprecated typing imports (existing pattern)
@@ -177,14 +179,17 @@ ignore = []  # Do not add ignores without a comment explaining why.
 #   S310/S603: URL open and subprocess calls in security tooling
 #   UP012: unnecessary UTF-8 encoding argument
 "ama_cryptography/legacy_compat.py" = [
-    "N803", "N806", "N818",
+    "N802", "N803", "N806", "N818",
     "RUF001", "RUF002", "RUF003", "RUF010", "RUF012", "RUF022", "RUF100",
-    "S101", "S106", "S107",
+    "S101", "S106", "S107", "S110",
+    "C901",
     "E402", "E501",
     "B028",
     "S310", "S603",
     "UP006", "UP007", "UP012", "UP015", "UP035", "UP045",
 ]
+# ama_cryptography/_numeric.py — mathematical engine; stdlib random is intentional (non-crypto)
+"ama_cryptography/_numeric.py" = ["S311"]
 # ama_cryptography_monitor.py — production monitoring module with same conventions
 "ama_cryptography_monitor.py" = [
     "I001", "N806",

@@ -308,7 +308,7 @@ class Mat:
     # -- transpose -----------------------------------------------------------
 
     @property
-    def T(self) -> Mat:  # noqa: N802 — mathematical convention for transpose (NUM-005)
+    def T(self) -> Mat:
         t = [[self._data[r][c] for r in range(self.rows)] for c in range(self.cols)]
         return Mat._wrap(t, self.cols, self.rows)
 
@@ -679,35 +679,35 @@ def _qr_tridiagonal_eigvals(A: List[List[float]], n: int, max_iter: int = 30) ->
     e = [A[i + 1][i] for i in range(n - 1)]
     e.append(0.0)
 
-    for l_idx in range(n):  # noqa: E741 — l_idx mirrors QL algorithm literature naming (NUM-008)
+    for lam in range(n):  # QL algorithm loop variable (lambda index)
         itr = 0
         while True:
             # Find small sub-diagonal element
-            m = l_idx
+            m = lam
             while m < n - 1:
                 dd = abs(d[m]) + abs(d[m + 1])
                 if abs(e[m]) <= 1e-15 * dd:
                     break
                 m += 1
-            if m == l_idx:
+            if m == lam:
                 break
             if itr >= max_iter:
                 break
             itr += 1
 
-            # Wilkinson shift: eigenvalue of trailing 2x2 closer to d[l_idx]
-            g = (d[l_idx + 1] - d[l_idx]) / (2.0 * e[l_idx])
+            # Wilkinson shift: eigenvalue of trailing 2x2 closer to d[lam]
+            g = (d[lam + 1] - d[lam]) / (2.0 * e[lam])
             r = math.hypot(g, 1.0)
             if g >= 0:
-                g = d[m] - d[l_idx] + e[l_idx] / (g + r)
+                g = d[m] - d[lam] + e[lam] / (g + r)
             else:
-                g = d[m] - d[l_idx] + e[l_idx] / (g - r)
+                g = d[m] - d[lam] + e[lam] / (g - r)
 
             s = 1.0
             c = 1.0
             p = 0.0
 
-            for i in range(m - 1, l_idx - 1, -1):
+            for i in range(m - 1, lam - 1, -1):
                 f = s * e[i]
                 b = c * e[i]
                 r = math.hypot(f, g)
@@ -726,8 +726,8 @@ def _qr_tridiagonal_eigvals(A: List[List[float]], n: int, max_iter: int = 30) ->
                 g = c * r - b
             else:
                 # Loop completed without break
-                d[l_idx] -= p
-                e[l_idx] = g
+                d[lam] -= p
+                e[lam] = g
                 e[m] = 0.0
 
     return d
@@ -860,7 +860,7 @@ class _Random:
     """Numpy-compatible random interface backed by stdlib random."""
 
     def __init__(self) -> None:
-        self._rng = _stdlib_random.Random()  # fmt: skip  # noqa: S311 # nosec B311 — non-crypto PRNG for math engine only (NUM-011)
+        self._rng = _stdlib_random.Random()  # fmt: skip  # nosec B311 — non-crypto PRNG for math engine only
 
     def seed(self, s: int) -> None:
         self._rng.seed(s)

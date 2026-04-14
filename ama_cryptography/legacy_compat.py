@@ -757,7 +757,7 @@ class CryptoPackage:
     hash_format_version: str = HASH_FORMAT_V1
 
 
-def create_crypto_package(  # noqa: C901 — legacy entry point; complexity is inherent (LC-005)
+def create_crypto_package(
     codes: str,
     helix_params: List[Tuple[float, float]],
     kms: KeyManagementSystem,

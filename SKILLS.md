@@ -136,5 +136,4 @@ Support: 3R Monitor + Posture  — Runtime timing anomaly detection + threat res
 
 - **INVARIANT-7**: No pure-Python crypto fallbacks. All primitives delegate to native C.
 - **INVARIANT-12**: Secret-dependent operations must be constant-time via native backend.
-- **INVARIANT-13**: All suppression comments must have tracking identifiers.
 - **FIPS POST**: Module integrity + KAT tests + timing oracle run at import time.

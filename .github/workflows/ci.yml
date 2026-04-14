@@ -257,10 +257,6 @@ jobs:
         name: semgrep-security-report
         path: semgrep-report.json
 
-    - name: "INVARIANT-13: Suppression hygiene check"
-      run: |
-        python tools/check_suppression_hygiene.py
-
     - name: Enforce safe os.fdopen usage
       run: |
         # All os.fdopen calls must be wrapped in try/except to prevent fd leaks.

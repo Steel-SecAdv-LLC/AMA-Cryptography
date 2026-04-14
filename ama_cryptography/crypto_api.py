@@ -621,7 +621,7 @@ class KeypairCache:
     def __del__(self) -> None:
         try:
             self._wipe_sk()
-        except Exception as exc:  # noqa: S110 — INVARIANT-3 (KC-001)
+        except Exception as exc:  # nosec B110 — finalizer must not propagate (INVARIANT-3)
             _record_finalizer_error("KeypairCache", f"wipe failed: {exc}")
 
 
