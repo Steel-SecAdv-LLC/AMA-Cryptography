@@ -284,6 +284,117 @@ def run_dilithium_verify_benchmark(iterations: int = 20) -> Optional[float]:
         return None
 
 
+def run_kyber_keygen_benchmark(iterations: int = 20) -> Optional[float]:
+    """Benchmark ML-KEM-1024 key pair generation via native C library."""
+    try:
+        from ama_cryptography.pqc_backends import (
+            KYBER_AVAILABLE,
+            generate_kyber_keypair,
+        )
+
+        if not KYBER_AVAILABLE:
+            return None
+
+        def operation():
+            generate_kyber_keypair()
+
+        return benchmark_operation(operation, iterations, warmup=2)
+    except (ImportError, Exception):
+        return None
+
+
+def run_kyber_encapsulate_benchmark(iterations: int = 20) -> Optional[float]:
+    """Benchmark ML-KEM-1024 encapsulation via native C library."""
+    try:
+        from ama_cryptography.pqc_backends import (
+            KYBER_AVAILABLE,
+            generate_kyber_keypair,
+            kyber_encapsulate,
+        )
+
+        if not KYBER_AVAILABLE:
+            return None
+
+        kp = generate_kyber_keypair()
+
+        def operation():
+            kyber_encapsulate(kp.public_key)
+
+        return benchmark_operation(operation, iterations, warmup=2)
+    except (ImportError, Exception):
+        return None
+
+
+def run_aes_gcm_benchmark(iterations: int = 100) -> Optional[float]:
+    """Benchmark AES-256-GCM encryption of 1KB data via native C library."""
+    try:
+        from ama_cryptography.pqc_backends import (
+            _AES_GCM_NATIVE_AVAILABLE,
+            native_aes256_gcm_encrypt,
+        )
+
+        if not _AES_GCM_NATIVE_AVAILABLE:
+            return None
+
+        key = secrets.token_bytes(32)
+        nonce = secrets.token_bytes(12)
+        plaintext = secrets.token_bytes(1024)
+        aad = b"benchmark-aad"
+
+        def operation():
+            native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
+
+        return benchmark_operation(operation, iterations, warmup=5)
+    except (ImportError, Exception):
+        return None
+
+
+def run_chacha20poly1305_benchmark(iterations: int = 100) -> Optional[float]:
+    """Benchmark ChaCha20-Poly1305 encryption of 1KB data via native C library."""
+    try:
+        from ama_cryptography.pqc_backends import (
+            _CHACHA20_POLY1305_NATIVE_AVAILABLE,
+            native_chacha20poly1305_encrypt,
+        )
+
+        if not _CHACHA20_POLY1305_NATIVE_AVAILABLE:
+            return None
+
+        key = secrets.token_bytes(32)
+        nonce = secrets.token_bytes(12)
+        plaintext = secrets.token_bytes(1024)
+        aad = b"benchmark-aad"
+
+        def operation():
+            native_chacha20poly1305_encrypt(key, nonce, plaintext, aad)
+
+        return benchmark_operation(operation, iterations, warmup=5)
+    except (ImportError, Exception):
+        return None
+
+
+def run_x25519_benchmark(iterations: int = 100) -> Optional[float]:
+    """Benchmark X25519 key exchange (scalar mult) via native C library."""
+    try:
+        from ama_cryptography.pqc_backends import (
+            _X25519_NATIVE_AVAILABLE,
+            native_x25519_key_exchange,
+        )
+
+        if not _X25519_NATIVE_AVAILABLE:
+            return None
+
+        scalar = secrets.token_bytes(32)
+        point = secrets.token_bytes(32)
+
+        def operation():
+            native_x25519_key_exchange(scalar, point)
+
+        return benchmark_operation(operation, iterations, warmup=5)
+    except (ImportError, Exception):
+        return None
+
+
 def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[BenchmarkResult]:
     """Run all benchmarks and compare against baseline."""
     results = []
@@ -304,6 +415,11 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
         "dilithium_keygen": run_dilithium_keygen_benchmark,
         "dilithium_sign": run_dilithium_sign_benchmark,
         "dilithium_verify": run_dilithium_verify_benchmark,
+        "kyber_keygen": run_kyber_keygen_benchmark,
+        "kyber_encapsulate": run_kyber_encapsulate_benchmark,
+        "aes_256_gcm_encrypt": run_aes_gcm_benchmark,
+        "chacha20poly1305_encrypt": run_chacha20poly1305_benchmark,
+        "x25519_scalarmult": run_x25519_benchmark,
     }
 
     # Run standard benchmarks
