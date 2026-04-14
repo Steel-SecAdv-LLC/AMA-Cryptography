@@ -93,11 +93,11 @@ logger = logging.getLogger(__name__)
 # hardware using its own FIPS-validated implementation.
 # ---------------------------------------------------------------------------
 try:
-    import PyKCS11 as _PyKCS11_module  # type: ignore[import-untyped]
+    import PyKCS11 as _PyKCS11_module
 
     HSM_AVAILABLE: bool = True
 except ImportError:
-    _PyKCS11_module = None  # type: ignore[assignment]
+    _PyKCS11_module = None  # PyKCS11 unavailable (KM-003)
     HSM_AVAILABLE = False
 
 
@@ -1299,12 +1299,8 @@ class HSMKeyStorage:
             "P-256": bytes(
                 [0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07]
             ),  # OID 1.2.840.10045.3.1.7
-            "P-384": bytes(
-                [0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x22]
-            ),  # OID 1.3.132.0.34
-            "P-521": bytes(
-                [0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x23]
-            ),  # OID 1.3.132.0.35
+            "P-384": bytes([0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x22]),  # OID 1.3.132.0.34
+            "P-521": bytes([0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x23]),  # OID 1.3.132.0.35
         }
         oid = curve_oid_map.get(curve)
         if oid is None:

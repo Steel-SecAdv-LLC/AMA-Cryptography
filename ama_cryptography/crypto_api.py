@@ -36,7 +36,10 @@ import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, ClassVar, Dict, List, Mapping, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Mapping, Optional, Tuple, Union
+
+if TYPE_CHECKING:
+    from ama_cryptography.secure_channel import SecureSession
 
 from ama_cryptography._finalizer_health import record_finalizer_error as _record_finalizer_error
 from ama_cryptography._self_test import check_operational as _check_operational
@@ -49,8 +52,11 @@ _monitor: AmaCryptographyMonitor = create_monitor(enabled=True)
 # Adaptive posture: auto-wired at module level alongside the 3R monitor.
 # Set AMA_DISABLE_ADAPTIVE_POSTURE=1 to disable in latency-sensitive envs.
 # ---------------------------------------------------------------------------
-AMA_ADAPTIVE_POSTURE_ENABLED: bool = (
-    os.getenv("AMA_DISABLE_ADAPTIVE_POSTURE", "0").lower() not in ("1", "true", "yes", "on")
+AMA_ADAPTIVE_POSTURE_ENABLED: bool = os.getenv("AMA_DISABLE_ADAPTIVE_POSTURE", "0").lower() not in (
+    "1",
+    "true",
+    "yes",
+    "on",
 )
 
 _posture_controller: Optional[Any] = None  # CryptoPostureController (lazy init)
@@ -2551,8 +2557,13 @@ class SecureChannelProvider:
     """
 
     def __init__(self) -> None:
-        self._session: Optional[Any] = None  # SecureSession after handshake
-        self._initiator: Optional[Any] = None  # SecureChannelInitiator in flight
+        from ama_cryptography.secure_channel import (  # noqa: F811 — runtime import for annotation eval (CA-005)
+            SecureChannelInitiator,
+            SecureSession,
+        )
+
+        self._session: Optional[SecureSession] = None
+        self._initiator: Optional[SecureChannelInitiator] = None
 
     def create_secure_channel(self, remote_static_kem_pk: bytes) -> bytes:
         """Start client-side Noise-NK handshake.
@@ -2604,7 +2615,7 @@ class SecureChannelProvider:
         if self._session is None:
             raise RuntimeError("Session not established — complete handshake first.")
         msg = self._session.encrypt(data)
-        return msg.serialize()
+        return bytes(msg.serialize())
 
     def channel_receive(self, data: bytes) -> bytes:
         """Decrypt a received serialized ChannelMessage.
@@ -2625,10 +2636,10 @@ class SecureChannelProvider:
         if self._session is None:
             raise RuntimeError("Session not established — complete handshake first.")
         msg = ChannelMessage.deserialize(data)
-        return self._session.decrypt(msg)
+        return bytes(self._session.decrypt(msg))
 
     @property
-    def session(self) -> Optional[Any]:
+    def session(self) -> Optional["SecureSession"]:
         """The established SecureSession, or None if handshake not complete."""
         return self._session
 
@@ -2788,7 +2799,7 @@ class FROSTProvider:
             True if signature is valid.
         """
         _enforce_invariant7()
-        return bool(native_ed25519_verify(message, signature, group_public_key))
+        return bool(native_ed25519_verify(signature, message, group_public_key))
 
 
 # Re-export PQC types for convenience

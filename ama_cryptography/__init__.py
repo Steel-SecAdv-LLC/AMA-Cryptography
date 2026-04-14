@@ -94,7 +94,7 @@ from .exceptions import (
 
 # === Secure Channel ===
 try:
-    from .secure_channel import (  # noqa: F401
+    from .secure_channel import (  # noqa: F401 — re-exported for public API (INIT-008)
         ChannelError,
         ChannelState,
         HandshakeError,
@@ -113,7 +113,7 @@ except ImportError:
 
 # === Session Management ===
 try:
-    from .session import (  # noqa: F401
+    from .session import (  # noqa: F401 — re-exported for public API (INIT-009)
         ReplayDetectedError,
         ReplayWindow,
         SessionExpiredError,
@@ -129,7 +129,7 @@ except ImportError:
 
 # === Adaptive Security Posture ===
 try:
-    from .adaptive_posture import (  # noqa: F401
+    from .adaptive_posture import (  # noqa: F401 — re-exported for public API (INIT-010)
         CryptoPostureController,
         PendingAction,
         PostureAction,
@@ -144,7 +144,7 @@ except ImportError:
 
 # === Key Management ===
 try:
-    from .key_management import (  # noqa: F401
+    from .key_management import (  # noqa: F401 — re-exported for public API (INIT-011)
         HSM_AVAILABLE,
         HDKeyDerivation,
         HSMKeyStorage,
@@ -157,11 +157,11 @@ except (ImportError, RuntimeError):
     # RuntimeError: INVARIANT-7 fires if native C library isn't built.
     # In that scenario the module is already in ERROR state (POST failed).
     _KEY_MANAGEMENT_AVAILABLE = False
-    HSM_AVAILABLE = False  # type: ignore[assignment]
+    HSM_AVAILABLE = False  # fallback when key_management unavailable (INIT-006)
 
 # === RFC 3161 Timestamping ===
 try:
-    from .rfc3161_timestamp import (  # noqa: F401
+    from .rfc3161_timestamp import (  # noqa: F401 — re-exported for public API (INIT-012)
         RFC3161_AVAILABLE,
         TimestampError,
         TimestampResult,
@@ -171,12 +171,14 @@ try:
 
     _RFC3161_AVAILABLE = RFC3161_AVAILABLE
 except ImportError:
-    RFC3161_AVAILABLE = False  # type: ignore[assignment]
+    RFC3161_AVAILABLE = False  # fallback when rfc3161_timestamp unavailable (INIT-007)
     _RFC3161_AVAILABLE = False
 
 # === Hybrid Combiner ===
 try:
-    from .hybrid_combiner import HybridCombiner  # noqa: F401
+    from .hybrid_combiner import (
+        HybridCombiner,  # noqa: F401 — re-exported for public API (INIT-013)
+    )
 
     _HYBRID_COMBINER_AVAILABLE = True
 except ImportError:
@@ -184,7 +186,7 @@ except ImportError:
 
 # === Secure Memory ===
 try:
-    from .secure_memory import (  # noqa: F401
+    from .secure_memory import (  # noqa: F401 — re-exported for public API (INIT-014)
         SecureBuffer,
         constant_time_compare,
         secure_memzero,

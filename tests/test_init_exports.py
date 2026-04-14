@@ -13,7 +13,6 @@ it only checks that the names exist in __all__ and are importable.
 """
 
 
-
 class TestInitAllContents:
     """Verify __all__ contains expected integration symbols."""
 
