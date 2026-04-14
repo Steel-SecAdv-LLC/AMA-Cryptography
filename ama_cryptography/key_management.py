@@ -93,7 +93,7 @@ logger = logging.getLogger(__name__)
 # hardware using its own FIPS-validated implementation.
 # ---------------------------------------------------------------------------
 try:
-    import PyKCS11  # noqa: F401 — availability probe only
+    import PyKCS11  # noqa: F401 — availability probe; not used at module scope (KM-002)
 
     HSM_AVAILABLE: bool = True
 except ImportError:
