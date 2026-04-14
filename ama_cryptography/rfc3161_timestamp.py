@@ -39,7 +39,14 @@ from typing import Callable, Dict, Optional
 
 _logger = logging.getLogger(__name__)
 
-# Try to import rfc3161ng for RFC 3161 timestamp support
+# rfc3161ng is an ASN.1/protocol library for communicating with RFC 3161
+# Time Stamping Authorities.  It is NOT a cryptographic primitive and does
+# NOT violate INVARIANT-1 (zero external crypto dependencies).  The actual
+# cryptographic operations (hashing, signature verification) use AMA's
+# native C implementations via pqc_backends.py.  Protocol libraries
+# (ASN.1 encoding, network communication) and interface libraries
+# (PKCS#11) are explicitly permitted as optional dependencies per the
+# INVARIANT-1 clarification in .github/INVARIANTS.md.
 try:
     from rfc3161ng import RemoteTimestamper
 

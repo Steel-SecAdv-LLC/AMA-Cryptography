@@ -67,6 +67,38 @@ __all__ = [
     "FROST_NONCE_BYTES",
     "FROST_COMMITMENT_BYTES",
     "FROST_SIG_SHARE_BYTES",
+    # FROST function bindings
+    "frost_keygen_trusted_dealer",
+    "frost_round1_commit",
+    "frost_round2_sign",
+    "frost_aggregate",
+    # Native Ed25519 / HMAC / HKDF wrappers (Cython-wire candidates)
+    "native_ed25519_keypair",
+    "native_ed25519_sign",
+    "native_ed25519_verify",
+    "native_ed25519_batch_verify",
+    "native_hkdf",
+    "native_hmac_sha3_256",
+    # Dilithium wrappers
+    "generate_dilithium_keypair",
+    "dilithium_sign",
+    "dilithium_verify",
+    # Kyber wrappers
+    "generate_kyber_keypair",
+    "kyber_encapsulate",
+    "kyber_decapsulate",
+    # SPHINCS+ wrappers
+    "generate_sphincs_keypair",
+    "sphincs_sign",
+    "sphincs_verify",
+    # Availability flags
+    "DILITHIUM_AVAILABLE",
+    "DILITHIUM_BACKEND",
+    "KYBER_AVAILABLE",
+    "KYBER_BACKEND",
+    "SPHINCS_AVAILABLE",
+    "SPHINCS_BACKEND",
+    "PQCStatus",
 ]
 
 

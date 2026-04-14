@@ -8,13 +8,10 @@ AMA Cryptography - Post-Quantum Noise-NK Secure Channel
 
 Implements a Noise-NK variant using AMA's hybrid post-quantum primitives.
 
-This protocol composes well-established building blocks from published
-specifications into a PQ-hybrid Noise-NK channel.  The individual
-primitives follow NIST/IETF standards; the protocol pattern follows
-the Noise Protocol Framework.  The specific PQ-hybrid composition
-(Kyber-1024 + Ed25519/ML-DSA-65) is novel and has not undergone
-independent security review -- it should be treated as experimental
-until a formal security analysis is published.
+This module implements a PQ-hybrid Noise-NK channel composing ML-KEM-1024
++ Ed25519/ML-DSA-65.  The composition has not undergone independent formal
+security review.  The individual primitives follow NIST/IETF standards;
+the protocol pattern follows the Noise Protocol Framework (revision 34).
 
 References:
     - Noise Protocol Framework, rev 34 (Perrin, 2018):
@@ -59,6 +56,11 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional, Tuple
+
+from ama_cryptography.session import (
+    ReplayDetectedError as _ReplayDetectedError,
+    ReplayWindow,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -297,7 +299,8 @@ class SecureSession:
     """Established session with encrypt/decrypt/rekey capabilities.
 
     Manages symmetric session keys derived from the Noise-NK handshake,
-    monotonic sequence numbers for replay protection, and periodic
+    monotonic sequence numbers for replay protection (using
+    session.ReplayWindow for the sliding-window algorithm), and periodic
     re-keying for forward secrecy.
 
     Attributes:
@@ -305,7 +308,6 @@ class SecureSession:
         send_key: Current sending key (rotated on rekey)
         recv_key: Current receiving key (rotated on rekey)
         send_seq: Monotonic send sequence counter
-        recv_seq: Expected receive sequence counter
         created_at: Session creation timestamp
         ttl_seconds: Session time-to-live
         messages_since_rekey: Counter for triggering automatic rekey
@@ -315,16 +317,13 @@ class SecureSession:
     send_key: bytes
     recv_key: bytes
     send_seq: int = 0
-    recv_seq: int = 0
     created_at: float = field(default_factory=time.monotonic)
     ttl_seconds: float = SESSION_TTL_SECONDS
     messages_since_rekey: int = 0
-    _replay_window: set = field(default_factory=set)  # type: ignore[type-arg]  # generic set used for seq-number tracking; parameterising adds no safety (SC-001)
-    _replay_window_base: int = 0
+    # session.ReplayWindow handles sliding-window replay detection;
+    # replaces the previous inline set + base-pointer approach (SC-002).
+    _replay_window: ReplayWindow = field(default_factory=ReplayWindow)
     _state: ChannelState = ChannelState.ESTABLISHED
-
-    # Sliding window size for replay detection
-    REPLAY_WINDOW_SIZE: int = 256
 
     def is_expired(self) -> bool:
         """Check if session has exceeded its TTL."""
@@ -399,12 +398,7 @@ class SecureSession:
         if msg.session_id != self.session_id:
             raise ChannelError("Session ID mismatch")
 
-        # Replay detection: sliding window
         seq = msg.sequence_number
-        if seq < self._replay_window_base:
-            raise ReplayError(f"Sequence {seq} below window base {self._replay_window_base}")
-        if seq in self._replay_window:
-            raise ReplayError(f"Sequence {seq} already received (replay)")
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
 
@@ -413,16 +407,13 @@ class SecureSession:
             self.recv_key, msg.nonce, msg.ciphertext, msg.tag, aad
         )
 
-        # Update replay window after successful decryption
-        self._replay_window.add(seq)
-        # Slide window forward if needed
-        while len(self._replay_window) > self.REPLAY_WINDOW_SIZE:
-            # Jump past gaps to avoid O(gap) iteration when sequence
-            # numbers are sparse (e.g. due to packet loss).
-            if self._replay_window_base not in self._replay_window:
-                self._replay_window_base = min(self._replay_window)
-            self._replay_window.discard(self._replay_window_base)
-            self._replay_window_base += 1
+        # Replay detection via session.ReplayWindow (sliding-window, SC-002).
+        # Checked AFTER successful AEAD decryption so that malformed/truncated
+        # ciphertext is rejected by AEAD before touching window state.
+        try:
+            self._replay_window.check_and_accept(seq)
+        except _ReplayDetectedError as exc:
+            raise ReplayError(str(exc)) from exc
 
         self.messages_since_rekey += 1
         return plaintext
@@ -444,6 +435,7 @@ class SecureSession:
         self.send_key = native_hkdf(self.send_key, KEY_BYTES, salt=None, info=b"ama-rekey")
         self.recv_key = native_hkdf(self.recv_key, KEY_BYTES, salt=None, info=b"ama-rekey")
         self.messages_since_rekey = 0
+        self._replay_window.reset()
         logger.debug("Session %s re-keyed", self.session_id.hex()[:16])
 
     def close(self) -> None:

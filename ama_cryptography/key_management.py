@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 
 from ama_cryptography._finalizer_health import record_finalizer_error
 from ama_cryptography.exceptions import (
+    AmaHSMUnavailableError as AmaHSMUnavailableError,  # noqa: F401 — re-exported for public API (KM-002)
     SecurityWarning,
 )  # noqa: F401 — re-exported for public API (KM-001)
 from ama_cryptography.pqc_backends import _HMAC_SHA512_NATIVE_AVAILABLE, native_hmac_sha512
@@ -82,6 +83,20 @@ def _hmac_sha512(key: bytes, data: bytes) -> bytes:
 
 # Configure module logger
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Optional HSM dependency (PKCS#11 via PyKCS11).
+# PyKCS11 is an interface library, NOT a cryptographic primitive, and does
+# not violate INVARIANT-1.  All actual crypto is performed inside the HSM
+# hardware using its own FIPS-validated implementation.
+# ---------------------------------------------------------------------------
+try:
+    import PyKCS11 as _PyKCS11_module  # type: ignore[import-untyped]
+
+    HSM_AVAILABLE: bool = True
+except ImportError:
+    _PyKCS11_module = None  # type: ignore[assignment]
+    HSM_AVAILABLE = False
 
 
 class KeyStatus(Enum):
@@ -995,10 +1010,14 @@ class HSMKeyStorage:
             slot_index: Specific slot index to use (auto-detect if None)
 
         Raises:
-            ImportError: If PyKCS11 is not installed
+            AmaHSMUnavailableError: If PyKCS11 is not installed
             ValueError: If HSM type is unknown
             RuntimeError: If token not found or login fails
         """
+        if not HSM_AVAILABLE:
+            raise AmaHSMUnavailableError(
+                "HSM support requires PyKCS11. Install with: pip install ama-cryptography[hsm]"
+            )
         self.pkcs11 = self._import_pykcs11()
         self._handle_map: Dict[bytes, Any] = {}  # bytes key -> PKCS11 handle object
         self.library_path = self._resolve_library_path(hsm_type, library_path)
@@ -1243,6 +1262,176 @@ class HSMKeyStorage:
             return True
         except self.pkcs11.PyKCS11Error:
             return False
+
+    def destroy_key(self, key_handle: bytes) -> bool:
+        """Alias for delete_key — permanently destroys key inside HSM.
+
+        Returns:
+            True if destroyed, False if not found.
+        """
+        return self.delete_key(key_handle)
+
+    def generate_ec_keypair(
+        self,
+        label: str,
+        curve: str = "P-256",
+        extractable: bool = False,
+    ) -> Tuple[bytes, bytes]:
+        """Generate an EC keypair inside the HSM.
+
+        Args:
+            label: Label for the keypair (must be unique on token).
+            curve: Named curve — "P-256", "P-384", or "P-521".
+            extractable: Whether the private key can be exported.
+
+        Returns:
+            (public_key_handle, private_key_handle) — 8-byte handles.
+
+        Raises:
+            ValueError: If the curve name is unrecognised.
+            RuntimeError: If keypair generation fails.
+        """
+        pk = self.pkcs11
+
+        curve_oid_map = {
+            "P-256": bytes(
+                [0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07]
+            ),  # OID 1.2.840.10045.3.1.7
+            "P-384": bytes(
+                [0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x22]
+            ),  # OID 1.3.132.0.34
+            "P-521": bytes(
+                [0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x23]
+            ),  # OID 1.3.132.0.35
+        }
+        oid = curve_oid_map.get(curve)
+        if oid is None:
+            raise ValueError(
+                f"Unsupported curve: {curve!r}. Supported: {list(curve_oid_map.keys())}"
+            )
+
+        pub_template = [
+            (pk.CKA_CLASS, pk.CKO_PUBLIC_KEY),
+            (pk.CKA_KEY_TYPE, pk.CKK_EC),
+            (pk.CKA_LABEL, f"{label}-pub"),
+            (pk.CKA_TOKEN, True),
+            (pk.CKA_VERIFY, True),
+            (pk.CKA_EC_PARAMS, oid),
+        ]
+        prv_template = [
+            (pk.CKA_CLASS, pk.CKO_PRIVATE_KEY),
+            (pk.CKA_KEY_TYPE, pk.CKK_EC),
+            (pk.CKA_LABEL, f"{label}-prv"),
+            (pk.CKA_TOKEN, True),
+            (pk.CKA_PRIVATE, True),
+            (pk.CKA_SENSITIVE, True),
+            (pk.CKA_EXTRACTABLE, extractable),
+            (pk.CKA_SIGN, True),
+        ]
+
+        try:
+            pub_obj, prv_obj = self.session.generateKeyPair(
+                pub_template,
+                prv_template,
+                pk.Mechanism(pk.CKM_EC_KEY_PAIR_GEN),
+            )
+            pub_int = pub_obj.value() if hasattr(pub_obj, "value") else int(pub_obj)
+            prv_int = prv_obj.value() if hasattr(prv_obj, "value") else int(prv_obj)
+            pub_ref: bytes = pub_int.to_bytes(8, "big")
+            prv_ref: bytes = prv_int.to_bytes(8, "big")
+            self._handle_map[pub_ref] = pub_obj
+            self._handle_map[prv_ref] = prv_obj
+            return pub_ref, prv_ref
+        except self.pkcs11.PyKCS11Error as e:
+            raise RuntimeError(f"Failed to generate EC keypair: {e}") from e
+
+    def sign(self, key_handle: bytes, data: bytes) -> bytes:
+        """Sign *data* using the HSM-resident private key (ECDSA or RSA).
+
+        Args:
+            key_handle: Handle of the signing private key.
+            data: Data to sign (hashed by HSM if mechanism is hash-then-sign).
+
+        Returns:
+            Signature bytes (DER-encoded ECDSA or PKCS#1 RSA).
+
+        Raises:
+            RuntimeError: If signing fails.
+        """
+        handle = self._handle_map.get(key_handle, int.from_bytes(key_handle, "big"))
+
+        try:
+            mechanism = self.pkcs11.Mechanism(self.pkcs11.CKM_ECDSA_SHA256)
+            sig = bytes(self.session.sign(handle, data, mechanism))
+            return sig
+        except self.pkcs11.PyKCS11Error as e:
+            raise RuntimeError(f"HSM sign failed: {e}") from e
+
+    def verify(self, key_handle: bytes, data: bytes, signature: bytes) -> bool:
+        """Verify *signature* over *data* using the HSM-resident public key.
+
+        Args:
+            key_handle: Handle of the verification public key.
+            data: Original data.
+            signature: Signature to verify.
+
+        Returns:
+            True if signature is valid, False otherwise.
+        """
+        handle = self._handle_map.get(key_handle, int.from_bytes(key_handle, "big"))
+
+        try:
+            mechanism = self.pkcs11.Mechanism(self.pkcs11.CKM_ECDSA_SHA256)
+            self.session.verify(handle, data, signature, mechanism)
+            return True
+        except self.pkcs11.PyKCS11Error:
+            return False
+
+    def list_keys(self) -> List[Dict[str, Any]]:
+        """List all key objects on the HSM token.
+
+        Returns:
+            List of dicts with keys: 'label', 'class', 'key_type', 'handle'.
+        """
+        pk = self.pkcs11
+
+        class_names = {
+            pk.CKO_SECRET_KEY: "SECRET_KEY",
+            pk.CKO_PUBLIC_KEY: "PUBLIC_KEY",
+            pk.CKO_PRIVATE_KEY: "PRIVATE_KEY",
+        }
+        key_type_names = {
+            pk.CKK_AES: "AES",
+            pk.CKK_EC: "EC",
+            pk.CKK_RSA: "RSA",
+        }
+
+        results: List[Dict[str, Any]] = []
+        try:
+            objects = self.session.findObjects()
+            for obj in objects:
+                try:
+                    attrs = self.session.getAttributeValue(
+                        obj, [pk.CKA_CLASS, pk.CKA_KEY_TYPE, pk.CKA_LABEL]
+                    )
+                    obj_class = attrs[0]
+                    key_type = attrs[1]
+                    label = bytes(attrs[2]).decode("utf-8", errors="replace").rstrip("\x00")
+                    obj_int = obj.value() if hasattr(obj, "value") else int(obj)
+                    results.append(
+                        {
+                            "label": label,
+                            "class": class_names.get(obj_class, str(obj_class)),
+                            "key_type": key_type_names.get(key_type, str(key_type)),
+                            "handle": obj_int,
+                        }
+                    )
+                except self.pkcs11.PyKCS11Error:
+                    continue
+        except self.pkcs11.PyKCS11Error as e:
+            raise RuntimeError(f"Failed to list HSM keys: {e}") from e
+
+        return results
 
     def close(self) -> None:
         """Close HSM session and logout."""

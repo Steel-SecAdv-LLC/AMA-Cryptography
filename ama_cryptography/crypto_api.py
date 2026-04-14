@@ -45,6 +45,68 @@ from ama_cryptography_monitor import AmaCryptographyMonitor, create_monitor
 # Module-level 3R monitor instance — feeds timing data to anomaly detection
 _monitor: AmaCryptographyMonitor = create_monitor(enabled=True)
 
+# ---------------------------------------------------------------------------
+# Adaptive posture: auto-wired at module level alongside the 3R monitor.
+# Set AMA_DISABLE_ADAPTIVE_POSTURE=1 to disable in latency-sensitive envs.
+# ---------------------------------------------------------------------------
+AMA_ADAPTIVE_POSTURE_ENABLED: bool = (
+    os.getenv("AMA_DISABLE_ADAPTIVE_POSTURE", "0").lower() not in ("1", "true", "yes", "on")
+)
+
+_posture_controller: Optional[Any] = None  # CryptoPostureController (lazy init)
+
+
+def _get_posture_controller() -> Optional[Any]:
+    """Lazily instantiate CryptoPostureController on first use."""
+    global _posture_controller
+    if not AMA_ADAPTIVE_POSTURE_ENABLED:
+        return None
+    if _posture_controller is None:
+        try:
+            from ama_cryptography.adaptive_posture import CryptoPostureController
+
+            _posture_controller = CryptoPostureController(monitor=_monitor)
+        except Exception as _err:
+            logger.debug("Adaptive posture controller unavailable: %s", _err)
+    return _posture_controller
+
+
+def _maybe_evaluate_posture() -> None:
+    """Run one posture evaluation cycle after a crypto operation.
+
+    Raises:
+        CryptoModuleError: If the posture system returns PostureAction.HALT,
+            indicating a critical anomaly.  The module must be reset via
+            reset_module() before further operations are permitted.
+    """
+    controller = _get_posture_controller()
+    if controller is None:
+        return
+    _halt_error: Optional[Exception] = None
+    try:
+        from ama_cryptography.adaptive_posture import PostureAction
+
+        evaluation = controller.evaluate_and_respond()
+        if evaluation.action == PostureAction.HALT:
+            from ama_cryptography.exceptions import CryptoModuleError as _CME
+
+            _halt_error = _CME(
+                "Adaptive posture system detected a critical anomaly and is refusing "
+                "further crypto operations.  Call reset_module() after investigating."
+            )
+        elif evaluation.action != PostureAction.NONE:
+            logger.warning(
+                "Adaptive posture action: %s (threat=%s, confidence=%.2f)",
+                evaluation.action.name,
+                evaluation.threat_level.name,
+                evaluation.confidence,
+            )
+    except Exception as _err:
+        logger.debug("Posture evaluation non-fatal error: %s", _err)
+    if _halt_error is not None:
+        raise _halt_error
+
+
 # Import HMAC and HKDF from pqc_backends (native C) with pure-Python fallback
 from ama_cryptography.pqc_backends import (
     _HKDF_NATIVE_AVAILABLE,
@@ -2466,6 +2528,270 @@ def verify_crypto_package(
     return results
 
 
+# ============================================================================
+# SECURE CHANNEL PROVIDER — high-level Noise-NK wrapper
+# ============================================================================
+
+
+class SecureChannelProvider:
+    """High-level provider wrapping the Noise-NK secure channel protocol.
+
+    Provides a simple send/receive API over the PQ-hybrid Noise-NK
+    implementation in secure_channel.py.  The provider manages the
+    handshake state machine and the established session transparently.
+
+    Initiator (client) usage::
+
+        provider = SecureChannelProvider(remote_static_kem_pk=responder_kem_pk)
+        handshake_bytes = provider.create_secure_channel(responder_kem_pk)
+        # ... send handshake_bytes to responder, receive response_bytes ...
+        provider.complete_handshake(response_bytes)
+        encrypted = provider.channel_send(b"hello")
+        plaintext = provider.channel_receive(encrypted_from_responder)
+    """
+
+    def __init__(self) -> None:
+        self._session: Optional[Any] = None  # SecureSession after handshake
+        self._initiator: Optional[Any] = None  # SecureChannelInitiator in flight
+
+    def create_secure_channel(self, remote_static_kem_pk: bytes) -> bytes:
+        """Start client-side Noise-NK handshake.
+
+        Args:
+            remote_static_kem_pk: Responder's hybrid KEM public key.
+
+        Returns:
+            Serialized HandshakeMessage to send to the Responder.
+        """
+        from ama_cryptography.secure_channel import SecureChannelInitiator
+
+        self._initiator = SecureChannelInitiator(remote_static_kem_pk)
+        msg = self._initiator.create_handshake()
+        return msg.serialize()
+
+    def complete_handshake(self, response_bytes: bytes) -> None:
+        """Complete the Noise-NK handshake from the Responder's response.
+
+        Args:
+            response_bytes: Serialized HandshakeResponse from the Responder.
+
+        Raises:
+            RuntimeError: If create_secure_channel() was not called first.
+            HandshakeError: If the Responder's signature fails verification.
+        """
+        from ama_cryptography.secure_channel import (
+            ChannelError,
+            HandshakeResponse,
+        )
+
+        if self._initiator is None:
+            raise RuntimeError("Call create_secure_channel() before complete_handshake()")
+        response = HandshakeResponse.deserialize(response_bytes)
+        self._session = self._initiator.complete_handshake(response)
+        self._initiator = None
+
+    def channel_send(self, data: bytes) -> bytes:
+        """Encrypt *data* and return the serialized ChannelMessage.
+
+        Args:
+            data: Plaintext to encrypt (max 65535 bytes).
+
+        Returns:
+            Wire-format ChannelMessage bytes.
+
+        Raises:
+            RuntimeError: If the session is not established.
+        """
+        if self._session is None:
+            raise RuntimeError("Session not established — complete handshake first.")
+        msg = self._session.encrypt(data)
+        return msg.serialize()
+
+    def channel_receive(self, data: bytes) -> bytes:
+        """Decrypt a received serialized ChannelMessage.
+
+        Args:
+            data: Wire-format ChannelMessage bytes.
+
+        Returns:
+            Decrypted plaintext.
+
+        Raises:
+            RuntimeError: If the session is not established.
+            ReplayError: If the sequence number has been seen before.
+            ValueError: If AEAD authentication fails.
+        """
+        from ama_cryptography.secure_channel import ChannelMessage
+
+        if self._session is None:
+            raise RuntimeError("Session not established — complete handshake first.")
+        msg = ChannelMessage.deserialize(data)
+        return self._session.decrypt(msg)
+
+    @property
+    def session(self) -> Optional[Any]:
+        """The established SecureSession, or None if handshake not complete."""
+        return self._session
+
+
+# ============================================================================
+# FROST THRESHOLD SIGNATURE PROVIDER — RFC 9591 Ed25519 threshold signing
+# ============================================================================
+
+
+class FROSTProvider:
+    """High-level FROST threshold Ed25519 signing provider (RFC 9591).
+
+    Wraps the native FROST implementation in pqc_backends.py with a clean
+    Python interface following the same provider pattern as MLDSAProvider.
+
+    2-of-3 round-trip example::
+
+        provider = FROSTProvider()
+        gpk, shares = provider.keygen(threshold=2, num_participants=3)
+        # Round 1 — each signer commits
+        nonce0, commit0 = provider.round1_commit(shares[0])
+        nonce1, commit1 = provider.round1_commit(shares[1])
+        # Round 2 — each signer produces a share
+        msg = b"vote:accept"
+        signer_indices = bytes([1, 2])
+        all_commits = commit0 + commit1
+        share0 = provider.round2_sign(msg, shares[0], 1, nonce0, all_commits, signer_indices, gpk)
+        share1 = provider.round2_sign(msg, shares[1], 2, nonce1, all_commits, signer_indices, gpk)
+        # Aggregation
+        sig = provider.aggregate([share0, share1], [commit0, commit1], signer_indices, msg, gpk)
+        assert provider.verify(msg, sig, gpk)
+    """
+
+    def __init__(self) -> None:
+        from ama_cryptography.pqc_backends import FROST_AVAILABLE
+
+        if not FROST_AVAILABLE:
+            raise RuntimeError(
+                "FROST native library not available. "
+                "Build: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+            )
+
+    def keygen(
+        self,
+        threshold: int,
+        num_participants: int,
+        secret_key: Optional[bytes] = None,
+    ) -> Tuple[bytes, List[bytes]]:
+        """Generate FROST key shares via trusted dealer.
+
+        Args:
+            threshold: Minimum signers required (t >= 2).
+            num_participants: Total participants (n >= t).
+            secret_key: Optional 32-byte group secret (None = random).
+
+        Returns:
+            (group_public_key, [participant_share, ...])
+        """
+        from ama_cryptography.pqc_backends import frost_keygen_trusted_dealer
+
+        return frost_keygen_trusted_dealer(threshold, num_participants, secret_key)
+
+    def round1_commit(self, participant_share: bytes) -> Tuple[bytes, bytes]:
+        """FROST Round 1: generate a nonce commitment.
+
+        Args:
+            participant_share: 64-byte share from keygen.
+
+        Returns:
+            (nonce_pair, commitment) — nonce_pair is SECRET (64 bytes),
+            commitment is PUBLIC (64 bytes).
+        """
+        from ama_cryptography.pqc_backends import frost_round1_commit
+
+        return frost_round1_commit(participant_share)
+
+    def round2_sign(
+        self,
+        message: bytes,
+        participant_share: bytes,
+        participant_index: int,
+        nonce_pair: bytes,
+        all_commitments: bytes,
+        signer_indices: bytes,
+        group_public_key: bytes,
+    ) -> bytes:
+        """FROST Round 2: produce a signature share.
+
+        Args:
+            message: Message to sign.
+            participant_share: 64-byte share from keygen.
+            participant_index: 1-based index of this participant.
+            nonce_pair: 64-byte nonce from round1_commit (SECRET).
+            all_commitments: Concatenated commitments from all signers.
+            signer_indices: Byte array of 1-based signer indices.
+            group_public_key: 32-byte group public key.
+
+        Returns:
+            32-byte signature share.
+        """
+        from ama_cryptography.pqc_backends import frost_round2_sign
+
+        return frost_round2_sign(
+            message,
+            participant_share,
+            participant_index,
+            nonce_pair,
+            all_commitments,
+            signer_indices,
+            len(signer_indices),
+            group_public_key,
+        )
+
+    def aggregate(
+        self,
+        sig_shares: List[bytes],
+        commitments: List[bytes],
+        signer_indices: bytes,
+        message: bytes,
+        group_public_key: bytes,
+    ) -> bytes:
+        """Aggregate FROST signature shares into an Ed25519-format signature.
+
+        Args:
+            sig_shares: List of 32-byte signature shares.
+            commitments: List of 64-byte commitments (matching signer order).
+            signer_indices: Byte array of 1-based signer indices.
+            message: Original signed message.
+            group_public_key: 32-byte group public key.
+
+        Returns:
+            64-byte Ed25519-format signature (R || s).
+        """
+        from ama_cryptography.pqc_backends import frost_aggregate
+
+        return frost_aggregate(
+            b"".join(sig_shares),
+            b"".join(commitments),
+            signer_indices,
+            len(signer_indices),
+            message,
+            group_public_key,
+        )
+
+    def verify(self, message: bytes, signature: bytes, group_public_key: bytes) -> bool:
+        """Verify a FROST aggregate signature using standard Ed25519 verify.
+
+        FROST produces a standard Ed25519 signature, so this delegates to
+        the native Ed25519 verify primitive.
+
+        Args:
+            message: Original signed message.
+            signature: 64-byte FROST aggregate (or Ed25519) signature.
+            group_public_key: 32-byte group public key.
+
+        Returns:
+            True if signature is valid.
+        """
+        _enforce_invariant7()
+        return bool(native_ed25519_verify(message, signature, group_public_key))
+
+
 # Re-export PQC types for convenience
 __all__ = [
     # Enums and configuration
@@ -2486,6 +2812,12 @@ __all__ = [
     "AESGCMProvider",
     "HybridKEMProvider",
     "HybridSignatureProvider",
+    # Secure channel
+    "SecureChannelProvider",
+    # FROST threshold signatures
+    "FROSTProvider",
+    # Adaptive posture
+    "AMA_ADAPTIVE_POSTURE_ENABLED",
     # Unified API
     "AmaCryptography",
     # Convenience functions (AI-agent friendly)
