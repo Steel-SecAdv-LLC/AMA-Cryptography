@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from ama_cryptography.exceptions import AmaHSMUnavailableError
 from ama_cryptography.key_management import (
     HDKeyDerivation,
     HSMKeyStorage,
@@ -722,7 +723,7 @@ class TestHSMKeyStorageErrors:
     def test_import_error_without_pykcs11(self) -> None:
         """HSMKeyStorage raises AmaHSMUnavailableError without PyKCS11."""
         with patch.dict("sys.modules", {"PyKCS11": None}):
-            with pytest.raises(Exception, match="HSM support requires PyKCS11"):
+            with pytest.raises(AmaHSMUnavailableError, match="HSM support requires PyKCS11"):
                 # Force re-import to trigger the check
                 storage = HSMKeyStorage.__new__(HSMKeyStorage)
                 storage._import_pykcs11()

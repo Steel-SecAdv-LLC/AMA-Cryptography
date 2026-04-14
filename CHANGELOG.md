@@ -20,13 +20,21 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [2.1.4] - 2026-04-14
 
+### Security
+
+- **CodeQL #297 (File is not always closed):** Guarded `os.fdopen()` calls in `legacy_compat.py` with explicit `os.close(fd)` on failure, matching the pattern used in `crypto_api.py`
 
 ### Added
 
+- `AmaHSMUnavailableError` exception class in `ama_cryptography.exceptions` — always importable without PyKCS11 or native C library; raised instead of bare `ImportError` for missing HSM dependency
+- `HSMKeyStorage.destroy_key()` alias for `delete_key()` for API symmetry
 - feat(frost): add FROST threshold Ed25519 signing (RFC 9591) with KeypairCache (#193) (a8b23fa)
 
 ### Changed
 
+- `HSM_AVAILABLE` module-level flag via `importlib.util.find_spec("PyKCS11")` — no import binding, no unused-import CodeQL alert
+- `HSMKeyStorage._import_pykcs11()` now raises `AmaHSMUnavailableError` instead of `ImportError` for consistent exception contract
+- Removed `PostureAction.HALT` enum value (unwired: no evaluator path produced it, `_execute_action` had no handler)
 - feat: Cherry-pick audit fixes — AVX-512 stub, context API, benchmarks, ruff S110 hardening (#213) (caaedd0)
 - chore: Consolidate completed dependency updates from Dependabot PRs #200-#208 (#212) (eee1e72)
 - ci: Bump actions/upload-artifact from 7.0.0 to 7.0.1 (#196) (359d364)
