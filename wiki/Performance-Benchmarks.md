@@ -168,6 +168,11 @@ Results are saved to `benchmark_results.json`, `BENCHMARKS.md`, and `benchmarks/
 | Dilithium Keygen *(optional)* | 1,943 | ±40% | microbenchmark |
 | Dilithium Sign *(optional)* | 1,918 | ±40% | microbenchmark |
 | Dilithium Verify *(optional)* | 4,303 | ±40% | microbenchmark |
+| Kyber Keygen *(optional)* | 2,200 | ±40% | microbenchmark |
+| Kyber Encapsulate *(optional)* | 2,400 | ±40% | microbenchmark |
+| Aes 256 Gcm Encrypt *(optional)* | 150,000 | ±40% | microbenchmark |
+| Chacha20Poly1305 Encrypt *(optional)* | 130,000 | ±40% | microbenchmark |
+| X25519 Scalarmult *(optional)* | 25,000 | ±40% | microbenchmark |
 <!-- AUTO-BENCHMARK-TABLE-END -->
 
 *See [Cryptography Algorithms](Cryptography-Algorithms) for algorithm key sizes, or [Architecture](Architecture) for the multi-language performance architecture.*

@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 2.4 |
-| Last Updated | 2026-04-13 |
+| Last Updated | 2026-04-14 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -17,6 +17,23 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ---
 
+
+## [2.1.2] - 2026-04-14
+
+
+### Added
+
+- feat(frost): add FROST threshold Ed25519 signing (RFC 9591) with KeypairCache (#193) (a8b23fa)
+
+### Changed
+
+- feat: Cherry-pick audit fixes — AVX-512 stub, context API, benchmarks, ruff S110 hardening (#213) (caaedd0)
+- chore: Consolidate completed dependency updates from Dependabot PRs #200-#208 (#212) (eee1e72)
+- ci: Bump actions/upload-artifact from 7.0.0 to 7.0.1 (#196) (359d364)
+- ci: Bump docker/build-push-action from 7.0.0 to 7.1.0 (#198) (5d8075e)
+- ci: Bump trufflesecurity/trufflehog from 3.94.2 to 3.94.3 (#197) (fcf9f51)
+
+---
 ## [2.1.3] - 2026-04-13
 
 ### Fixed — CodeQL Alert Resolution
