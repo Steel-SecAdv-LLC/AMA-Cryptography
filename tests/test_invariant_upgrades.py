@@ -11,7 +11,6 @@ INVARIANT-3 (addendum): Finalizer Failures Must Be Observable
 from __future__ import annotations
 
 import gc
-import re
 import threading
 from collections.abc import Generator
 from pathlib import Path
