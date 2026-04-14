@@ -62,6 +62,7 @@ class PostureAction(Enum):
     ROTATE_KEYS = auto()
     SWITCH_ALGORITHM = auto()
     ROTATE_AND_SWITCH = auto()
+    HALT = auto()  # Critical anomaly: refuse further operations until reset
 
 
 @dataclass
