@@ -184,14 +184,13 @@ class TestFROSTProvider:
 
 
 @skip_no_native
-@pytest.mark.skipif(
-    FROST_AVAILABLE,
-    reason="FROST IS available — testing unavailability path requires no FROST",
-)
 class TestFROSTProviderUnavailable:
     def test_instantiation_raises_when_unavailable(self) -> None:
         """FROSTProvider raises RuntimeError when FROST backend is missing."""
+        from unittest.mock import patch as _patch
+
         from ama_cryptography.crypto_api import FROSTProvider
 
-        with pytest.raises(RuntimeError, match="FROST"):
-            FROSTProvider()
+        with _patch("ama_cryptography.pqc_backends.FROST_AVAILABLE", False):
+            with pytest.raises(RuntimeError, match="FROST"):
+                FROSTProvider()
