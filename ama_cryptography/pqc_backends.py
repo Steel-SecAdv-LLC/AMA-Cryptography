@@ -683,59 +683,59 @@ def _setup_context_ctypes(lib: ctypes.CDLL) -> bool:
 
         # ama_error_t ama_keypair_generate(ctx, pubkey, pubkey_len, seckey, seckey_len)
         lib.ama_keypair_generate.argtypes = [
-            ctypes.c_void_p,   # ctx
-            ctypes.c_char_p,   # public_key
-            ctypes.c_size_t,   # public_key_len
-            ctypes.c_char_p,   # secret_key
-            ctypes.c_size_t,   # secret_key_len
+            ctypes.c_void_p,  # ctx
+            ctypes.c_char_p,  # public_key
+            ctypes.c_size_t,  # public_key_len
+            ctypes.c_char_p,  # secret_key
+            ctypes.c_size_t,  # secret_key_len
         ]
         lib.ama_keypair_generate.restype = ctypes.c_int
 
         # ama_error_t ama_sign(ctx, msg, msg_len, sk, sk_len, sig, sig_len*)
         lib.ama_sign.argtypes = [
-            ctypes.c_void_p,                    # ctx
-            ctypes.c_char_p,                    # message
-            ctypes.c_size_t,                    # message_len
-            ctypes.c_char_p,                    # secret_key
-            ctypes.c_size_t,                    # secret_key_len
-            ctypes.c_char_p,                    # signature
-            ctypes.POINTER(ctypes.c_size_t),    # signature_len (in/out)
+            ctypes.c_void_p,  # ctx
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # secret_key
+            ctypes.c_size_t,  # secret_key_len
+            ctypes.c_char_p,  # signature
+            ctypes.POINTER(ctypes.c_size_t),  # signature_len (in/out)
         ]
         lib.ama_sign.restype = ctypes.c_int
 
         # ama_error_t ama_verify(ctx, msg, msg_len, sig, sig_len, pk, pk_len)
         lib.ama_verify.argtypes = [
-            ctypes.c_void_p,   # ctx
-            ctypes.c_char_p,   # message
-            ctypes.c_size_t,   # message_len
-            ctypes.c_char_p,   # signature
-            ctypes.c_size_t,   # signature_len
-            ctypes.c_char_p,   # public_key
-            ctypes.c_size_t,   # public_key_len
+            ctypes.c_void_p,  # ctx
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # signature
+            ctypes.c_size_t,  # signature_len
+            ctypes.c_char_p,  # public_key
+            ctypes.c_size_t,  # public_key_len
         ]
         lib.ama_verify.restype = ctypes.c_int
 
         # ama_error_t ama_kem_encapsulate(ctx, pk, pk_len, ct, ct_len*, ss, ss_len)
         lib.ama_kem_encapsulate.argtypes = [
-            ctypes.c_void_p,                    # ctx
-            ctypes.c_char_p,                    # public_key
-            ctypes.c_size_t,                    # public_key_len
-            ctypes.c_char_p,                    # ciphertext
-            ctypes.POINTER(ctypes.c_size_t),    # ciphertext_len (in/out)
-            ctypes.c_char_p,                    # shared_secret
-            ctypes.c_size_t,                    # shared_secret_len
+            ctypes.c_void_p,  # ctx
+            ctypes.c_char_p,  # public_key
+            ctypes.c_size_t,  # public_key_len
+            ctypes.c_char_p,  # ciphertext
+            ctypes.POINTER(ctypes.c_size_t),  # ciphertext_len (in/out)
+            ctypes.c_char_p,  # shared_secret
+            ctypes.c_size_t,  # shared_secret_len
         ]
         lib.ama_kem_encapsulate.restype = ctypes.c_int
 
         # ama_error_t ama_kem_decapsulate(ctx, ct, ct_len, sk, sk_len, ss, ss_len)
         lib.ama_kem_decapsulate.argtypes = [
-            ctypes.c_void_p,   # ctx
-            ctypes.c_char_p,   # ciphertext
-            ctypes.c_size_t,   # ciphertext_len
-            ctypes.c_char_p,   # secret_key
-            ctypes.c_size_t,   # secret_key_len
-            ctypes.c_char_p,   # shared_secret
-            ctypes.c_size_t,   # shared_secret_len
+            ctypes.c_void_p,  # ctx
+            ctypes.c_char_p,  # ciphertext
+            ctypes.c_size_t,  # ciphertext_len
+            ctypes.c_char_p,  # secret_key
+            ctypes.c_size_t,  # secret_key_len
+            ctypes.c_char_p,  # shared_secret
+            ctypes.c_size_t,  # shared_secret_len
         ]
         lib.ama_kem_decapsulate.restype = ctypes.c_int
 
@@ -949,8 +949,10 @@ class AmaContext:
     ) -> int:
         """Call ``ama_keypair_generate``. Returns ``AMA_SUCCESS`` (0) on success."""
         self._require_open()
-        return _native_lib.ama_keypair_generate(
-            self._ctx, public_key, public_key_len, secret_key, secret_key_len
+        return int(
+            _native_lib.ama_keypair_generate(
+                self._ctx, public_key, public_key_len, secret_key, secret_key_len
+            )
         )
 
     # ------------------------------------------------------------------
@@ -966,14 +968,16 @@ class AmaContext:
     ) -> int:
         """Call ``ama_sign``. Returns ``AMA_SUCCESS`` (0) on success."""
         self._require_open()
-        return _native_lib.ama_sign(
-            self._ctx,
-            message,
-            len(message),
-            secret_key,
-            len(secret_key),
-            signature,
-            signature_len,
+        return int(
+            _native_lib.ama_sign(
+                self._ctx,
+                message,
+                len(message),
+                secret_key,
+                len(secret_key),
+                signature,
+                signature_len,
+            )
         )
 
     def verify(
@@ -989,14 +993,16 @@ class AmaContext:
         ``AMA_ERROR_VERIFY_FAILED`` (-4) if it is not.
         """
         self._require_open()
-        return _native_lib.ama_verify(
-            self._ctx,
-            message,
-            len(message),
-            signature,
-            len(signature),
-            public_key,
-            len(public_key),
+        return int(
+            _native_lib.ama_verify(
+                self._ctx,
+                message,
+                len(message),
+                signature,
+                len(signature),
+                public_key,
+                len(public_key),
+            )
         )
 
     # ------------------------------------------------------------------
@@ -1013,14 +1019,16 @@ class AmaContext:
     ) -> int:
         """Call ``ama_kem_encapsulate``. Returns ``AMA_SUCCESS`` (0) on success."""
         self._require_open()
-        return _native_lib.ama_kem_encapsulate(
-            self._ctx,
-            public_key,
-            len(public_key),
-            ciphertext,
-            ciphertext_len,
-            shared_secret,
-            shared_secret_len,
+        return int(
+            _native_lib.ama_kem_encapsulate(
+                self._ctx,
+                public_key,
+                len(public_key),
+                ciphertext,
+                ciphertext_len,
+                shared_secret,
+                shared_secret_len,
+            )
         )
 
     def kem_decapsulate(
@@ -1032,14 +1040,16 @@ class AmaContext:
     ) -> int:
         """Call ``ama_kem_decapsulate``. Returns ``AMA_SUCCESS`` (0) on success."""
         self._require_open()
-        return _native_lib.ama_kem_decapsulate(
-            self._ctx,
-            ciphertext,
-            len(ciphertext),
-            secret_key,
-            len(secret_key),
-            shared_secret,
-            shared_secret_len,
+        return int(
+            _native_lib.ama_kem_decapsulate(
+                self._ctx,
+                ciphertext,
+                len(ciphertext),
+                secret_key,
+                len(secret_key),
+                shared_secret,
+                shared_secret_len,
+            )
         )
 
     # ------------------------------------------------------------------
