@@ -15,11 +15,17 @@ Covers:
 
 import pytest
 
-from ama_cryptography.pqc_backends import FROST_AVAILABLE
+from ama_cryptography.pqc_backends import FROST_AVAILABLE, _native_lib
 
 skip_no_frost = pytest.mark.skipif(
     not FROST_AVAILABLE,
     reason="FROST native library not available",
+)
+
+# crypto_api.py raises INVARIANT-7 at import time without the native C library.
+skip_no_native = pytest.mark.skipif(
+    _native_lib is None,
+    reason="Native C library not available (build with cmake)",
 )
 
 
@@ -171,10 +177,11 @@ class TestFROSTProvider:
 
     def test_frost_aggregate_signature_is_standard_ed25519(self):
         """FROST aggregate signature is 64 bytes (standard Ed25519 format)."""
-        sig, gpk, msg = _do_frost_signing(threshold=2, num_participants=3, signer_count=2)
+        sig, _gpk, _msg = _do_frost_signing(threshold=2, num_participants=3, signer_count=2)
         assert len(sig) == 64  # R (32 bytes) || s (32 bytes)
 
 
+@skip_no_native
 @pytest.mark.skipif(
     FROST_AVAILABLE,
     reason="FROST IS available — testing unavailability path requires no FROST",

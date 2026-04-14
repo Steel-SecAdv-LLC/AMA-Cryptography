@@ -88,9 +88,9 @@ def _maybe_evaluate_posture() -> None:
 
         evaluation = controller.evaluate_and_respond()
         if evaluation.action == PostureAction.HALT:
-            from ama_cryptography.exceptions import CryptoModuleError as _CME
+            from ama_cryptography.exceptions import CryptoModuleError as _CryptoModuleError
 
-            _halt_error = _CME(
+            _halt_error = _CryptoModuleError(
                 "Adaptive posture system detected a critical anomaly and is refusing "
                 "further crypto operations.  Call reset_module() after investigating."
             )
@@ -2580,7 +2580,6 @@ class SecureChannelProvider:
             HandshakeError: If the Responder's signature fails verification.
         """
         from ama_cryptography.secure_channel import (
-            ChannelError,
             HandshakeResponse,
         )
 

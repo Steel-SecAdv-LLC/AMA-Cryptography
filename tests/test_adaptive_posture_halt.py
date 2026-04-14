@@ -146,7 +146,6 @@ class TestAmaAdaptivePostureEnabled:
 
     def test_env_var_disables_posture(self, monkeypatch):
         """AMA_DISABLE_ADAPTIVE_POSTURE=1 sets AMA_ADAPTIVE_POSTURE_ENABLED=False."""
-        import importlib
 
         monkeypatch.setenv("AMA_DISABLE_ADAPTIVE_POSTURE", "1")
         # Re-evaluate the flag (it's set at module import time, so we check

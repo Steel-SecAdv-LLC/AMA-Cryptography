@@ -12,7 +12,6 @@ This test does NOT require the native C library for most assertions —
 it only checks that the names exist in __all__ and are importable.
 """
 
-import pytest
 
 
 class TestInitAllContents:

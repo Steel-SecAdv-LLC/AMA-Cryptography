@@ -31,8 +31,10 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 from ama_cryptography._finalizer_health import record_finalizer_error
 from ama_cryptography.exceptions import (
     AmaHSMUnavailableError as AmaHSMUnavailableError,  # noqa: F401 — re-exported for public API (KM-002)
-    SecurityWarning,
 )  # noqa: F401 — re-exported for public API (KM-001)
+from ama_cryptography.exceptions import (
+    SecurityWarning,
+)
 from ama_cryptography.pqc_backends import _HMAC_SHA512_NATIVE_AVAILABLE, native_hmac_sha512
 from ama_cryptography.secure_memory import secure_memzero
 

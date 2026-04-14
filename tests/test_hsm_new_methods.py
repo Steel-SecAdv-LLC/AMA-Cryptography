@@ -74,10 +74,10 @@ def _build_mock_pkcs11() -> MagicMock:
     """Return a mock PyKCS11 module with all constants needed by HSMKeyStorage."""
     m = MagicMock()
 
-    class _Err(Exception):
+    class _StubError(Exception):
         pass
 
-    m.PyKCS11Error = _Err
+    m.PyKCS11Error = _StubError
 
     # Constants
     m.CKF_SERIAL_SESSION = 0x04
@@ -192,7 +192,7 @@ class TestHSMGenerateEcKeypair:
         prv_obj.value.return_value = 201
         pk.PyKCS11Lib().generateKeyPair.return_value = (pub_obj, prv_obj)
         hsm = _make_hsm(pk)
-        pub_h, prv_h = hsm.generate_ec_keypair("p384-key", curve="P-384")
+        pub_h, _prv_h = hsm.generate_ec_keypair("p384-key", curve="P-384")
         assert len(pub_h) == 8
 
 

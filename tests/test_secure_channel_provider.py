@@ -217,7 +217,7 @@ class TestSecureSessionReplayWindow:
 
     def test_rekey_resets_replay_window(self, completed_provider_pair):
         """rekey() resets the replay window base."""
-        provider, resp_session = completed_provider_pair
+        _provider, resp_session = completed_provider_pair
         # Manually set window state before rekey
         resp_session._replay_window._seen.add(999)
         resp_session.rekey()

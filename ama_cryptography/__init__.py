@@ -48,8 +48,10 @@ from ama_cryptography._self_test import (  # noqa: F401 — re-exported public A
 )
 from ama_cryptography.exceptions import (
     AmaHSMUnavailableError as AmaHSMUnavailableError,  # noqa: F401 — re-exported for public API (INIT-005)
-    CryptoModuleError as CryptoModuleError,
 )  # noqa: F401 — re-exported for public API (INIT-002)
+from ama_cryptography.exceptions import (
+    CryptoModuleError as CryptoModuleError,
+)
 
 _post()
 
@@ -100,6 +102,8 @@ try:
         SecureChannelInitiator,
         SecureChannelResponder,
         SecureSession,
+    )
+    from .secure_channel import (
         SessionExpiredError as ChannelSessionExpiredError,
     )
 
@@ -141,8 +145,8 @@ except ImportError:
 # === Key Management ===
 try:
     from .key_management import (  # noqa: F401
-        HDKeyDerivation,
         HSM_AVAILABLE,
+        HDKeyDerivation,
         HSMKeyStorage,
         KeyRotationManager,
         SecureKeyStorage,
