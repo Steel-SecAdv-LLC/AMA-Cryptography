@@ -933,7 +933,7 @@ class AmaContext:
     def __del__(self) -> None:
         try:
             self.close()
-        except Exception as exc:  # — INVARIANT-4: __del__ must not raise (FIN-AMA-001)
+        except Exception as exc:  # — INVARIANT-3/9: __del__ must not raise (FIN-AMA-001)
             record_finalizer_error("AmaContext", f"close() failed: {exc}")
 
     # ------------------------------------------------------------------
