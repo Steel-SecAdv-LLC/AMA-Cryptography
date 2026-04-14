@@ -925,17 +925,16 @@ class AmaContext:
 
     def close(self) -> None:
         """Free the underlying C context and scrub key material."""
-        if self._ctx is not None:
-            _native_lib.ama_context_free(self._ctx)
-            self._ctx = None
+        # Atomic swap: prevents double-free if close() is called more than once.
+        ctx, self._ctx = self._ctx, None
+        if ctx is not None and _native_lib is not None:
+            _native_lib.ama_context_free(ctx)
 
     def __del__(self) -> None:
-        if self._ctx is not None:
-            try:
-                _native_lib.ama_context_free(self._ctx)
-            except Exception:  # noqa: BLE001 — best-effort in __del__
-                pass
-            self._ctx = None
+        try:
+            self.close()
+        except Exception as exc:  # — INVARIANT-4: __del__ must not raise (FIN-AMA-001)
+            record_finalizer_error("AmaContext", f"close() failed: {exc}")
 
     # ------------------------------------------------------------------
     # Key generation

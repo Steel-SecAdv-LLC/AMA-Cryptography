@@ -299,7 +299,7 @@ def run_kyber_keygen_benchmark(iterations: int = 20) -> Optional[float]:
             generate_kyber_keypair()
 
         return benchmark_operation(operation, iterations, warmup=2)
-    except (ImportError, Exception):
+    except Exception:
         return None
 
 
@@ -321,77 +321,68 @@ def run_kyber_encapsulate_benchmark(iterations: int = 20) -> Optional[float]:
             kyber_encapsulate(kp.public_key)
 
         return benchmark_operation(operation, iterations, warmup=2)
-    except (ImportError, Exception):
+    except Exception:
         return None
 
 
 def run_aes_gcm_benchmark(iterations: int = 100) -> Optional[float]:
     """Benchmark AES-256-GCM encryption of 1KB data via native C library."""
     try:
-        from ama_cryptography.pqc_backends import (
-            _AES_GCM_NATIVE_AVAILABLE,
-            native_aes256_gcm_encrypt,
-        )
-
-        if not _AES_GCM_NATIVE_AVAILABLE:
-            return None
+        from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
         key = secrets.token_bytes(32)
         nonce = secrets.token_bytes(12)
         plaintext = secrets.token_bytes(1024)
         aad = b"benchmark-aad"
 
+        # Probe once — native_aes256_gcm_encrypt raises RuntimeError if unavailable.
+        native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
+
         def operation():
             native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
 
         return benchmark_operation(operation, iterations, warmup=5)
-    except (ImportError, Exception):
+    except Exception:
         return None
 
 
 def run_chacha20poly1305_benchmark(iterations: int = 100) -> Optional[float]:
     """Benchmark ChaCha20-Poly1305 encryption of 1KB data via native C library."""
     try:
-        from ama_cryptography.pqc_backends import (
-            _CHACHA20_POLY1305_NATIVE_AVAILABLE,
-            native_chacha20poly1305_encrypt,
-        )
-
-        if not _CHACHA20_POLY1305_NATIVE_AVAILABLE:
-            return None
+        from ama_cryptography.pqc_backends import native_chacha20poly1305_encrypt
 
         key = secrets.token_bytes(32)
         nonce = secrets.token_bytes(12)
         plaintext = secrets.token_bytes(1024)
         aad = b"benchmark-aad"
 
+        # Probe once — native_chacha20poly1305_encrypt raises RuntimeError if unavailable.
+        native_chacha20poly1305_encrypt(key, nonce, plaintext, aad)
+
         def operation():
             native_chacha20poly1305_encrypt(key, nonce, plaintext, aad)
 
         return benchmark_operation(operation, iterations, warmup=5)
-    except (ImportError, Exception):
+    except Exception:
         return None
 
 
 def run_x25519_benchmark(iterations: int = 100) -> Optional[float]:
     """Benchmark X25519 key exchange (scalar mult) via native C library."""
     try:
-        from ama_cryptography.pqc_backends import (
-            _X25519_NATIVE_AVAILABLE,
-            native_x25519_key_exchange,
-        )
-
-        if not _X25519_NATIVE_AVAILABLE:
-            return None
+        from ama_cryptography.pqc_backends import native_x25519_key_exchange
 
         scalar = secrets.token_bytes(32)
         point = secrets.token_bytes(32)
+
+        # Probe once — native_x25519_key_exchange raises RuntimeError if unavailable.
+        native_x25519_key_exchange(scalar, point)
 
         def operation():
             native_x25519_key_exchange(scalar, point)
 
         return benchmark_operation(operation, iterations, warmup=5)
-    except (ImportError, Exception):
+    except Exception:
         return None
 
 
