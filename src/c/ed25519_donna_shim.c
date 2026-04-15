@@ -68,15 +68,35 @@ ed25519_randombytes_unsafe(void *p, size_t len) {
  * ============================================================================ */
 
 ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]) {
+    ama_error_t rc;
+
     if (!public_key || !secret_key) {
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    /* AMA convention: caller provides the 32-byte seed in secret_key[0..31].
-     * The Python wrapper (native_ed25519_keypair) fills these bytes with
-     * cryptographic randomness before calling us, and
-     * native_ed25519_keypair_from_seed loads a deterministic seed.
-     * We must NOT overwrite secret_key[0..31] here. */
+    /* Generate 32 bytes of cryptographic randomness for the seed */
+    rc = ama_randombytes(secret_key, 32);
+    if (rc != AMA_SUCCESS) {
+        return rc;
+    }
+
+    /* Derive the public key from the seed. */
+    ed25519_publickey(secret_key, public_key);
+
+    /* AMA convention: secret_key = seed[0..31] || public_key[32..63] */
+    memcpy(secret_key + 32, public_key, 32);
+
+    return AMA_SUCCESS;
+}
+
+ama_error_t ama_ed25519_keypair_from_seed(
+    const uint8_t seed[32], uint8_t public_key[32], uint8_t secret_key[64]) {
+    if (!seed || !public_key || !secret_key) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    /* Copy seed into the first 32 bytes of secret_key */
+    memcpy(secret_key, seed, 32);
 
     /* Derive the public key from the seed. */
     ed25519_publickey(secret_key, public_key);

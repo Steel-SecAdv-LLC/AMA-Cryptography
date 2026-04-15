@@ -1869,10 +1869,12 @@ def native_ed25519_keypair_from_seed(seed: bytes) -> tuple:
     # Prefer the dedicated C function; fall back to pre-filling sk_buf
     if hasattr(_native_lib, "ama_ed25519_keypair_from_seed"):
         seed_buf = ctypes.create_string_buffer(seed)
-        rc = _native_lib.ama_ed25519_keypair_from_seed(seed_buf, pk_buf, sk_buf)
-        if rc != 0:
-            raise RuntimeError(f"Ed25519 keypair generation from seed failed (rc={rc})")
-        del seed_buf
+        try:
+            rc = _native_lib.ama_ed25519_keypair_from_seed(seed_buf, pk_buf, sk_buf)
+            if rc != 0:
+                raise RuntimeError(f"Ed25519 keypair generation from seed failed (rc={rc})")
+        finally:
+            ctypes.memset(seed_buf, 0, 32)
     else:
         # Legacy path: pre-fill seed into sk_buf[0..31] for older library builds
         ctypes.memmove(sk_buf, seed, 32)
