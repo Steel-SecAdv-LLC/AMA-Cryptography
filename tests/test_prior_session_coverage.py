@@ -13,7 +13,14 @@ import hashlib
 import hmac as stdlib_hmac
 import secrets
 
-from ama_cryptography.pqc_backends import native_hmac_sha3_256
+import pytest
+
+from ama_cryptography.pqc_backends import (
+    _ED25519_NATIVE_AVAILABLE,
+    _HKDF_NATIVE_AVAILABLE,
+    _HMAC_SHA3_256_NATIVE_AVAILABLE,
+    native_hmac_sha3_256,
+)
 from ama_cryptography.secure_memory import constant_time_compare
 
 # ============================================================================
@@ -21,6 +28,10 @@ from ama_cryptography.secure_memory import constant_time_compare
 # ============================================================================
 
 
+@pytest.mark.skipif(
+    not _HMAC_SHA3_256_NATIVE_AVAILABLE,
+    reason="Native HMAC-SHA3-256 backend required",
+)
 class TestNativeHmacSha3256Correctness:
     """RFC 2104 correctness against stdlib reference."""
 
@@ -94,6 +105,10 @@ class TestNativeHmacSha3256Correctness:
 # ============================================================================
 
 
+@pytest.mark.skipif(
+    not (_ED25519_NATIVE_AVAILABLE and _HKDF_NATIVE_AVAILABLE),
+    reason="Native C library required — legacy_compat enforces CRYPTO_AVAILABLE",
+)
 class TestHmacSha3256Integration:
     """Tests that ama_cryptography.legacy_compat.hmac_authenticate uses the native C path."""
 
@@ -147,6 +162,10 @@ class TestHmacSha3256Integration:
 # ============================================================================
 
 
+@pytest.mark.skipif(
+    not (_ED25519_NATIVE_AVAILABLE and _HKDF_NATIVE_AVAILABLE),
+    reason="Native C library required — legacy_compat enforces CRYPTO_AVAILABLE",
+)
 class TestEd25519ExpandedKeyFastPath:
     """Verify the 64-byte expanded key optimization."""
 

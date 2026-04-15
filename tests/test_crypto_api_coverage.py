@@ -19,6 +19,8 @@ import pytest
 
 from ama_cryptography.pqc_backends import (
     _ED25519_NATIVE_AVAILABLE,
+    _HKDF_NATIVE_AVAILABLE,
+    _HMAC_SHA3_256_NATIVE_AVAILABLE,
     DILITHIUM_AVAILABLE,
     KYBER_AVAILABLE,
     SPHINCS_AVAILABLE,
@@ -26,6 +28,12 @@ from ama_cryptography.pqc_backends import (
 )
 
 NATIVE_AVAILABLE = _native_lib is not None
+
+if not (_HKDF_NATIVE_AVAILABLE and _HMAC_SHA3_256_NATIVE_AVAILABLE):
+    pytest.skip(
+        "Native HMAC/HKDF required — crypto_api enforces INVARIANT-7",
+        allow_module_level=True,
+    )
 
 skip_no_native = pytest.mark.skipif(not NATIVE_AVAILABLE, reason="Native C library not available")
 skip_no_dilithium = pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")

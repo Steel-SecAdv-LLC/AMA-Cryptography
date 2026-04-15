@@ -36,7 +36,9 @@ def _pyca_crypto_available() -> bool:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         _ = AESGCM  # import probe for availability check
-    except Exception:
+    except BaseException:
+        # pyo3_runtime.PanicException (from broken Rust backend) is a
+        # BaseException, not Exception — catch broadly in this probe.
         return False
     return True
 

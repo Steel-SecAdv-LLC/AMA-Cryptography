@@ -19,6 +19,10 @@ import textwrap
 
 import pytest
 
+from ama_cryptography.pqc_backends import _HKDF_NATIVE_AVAILABLE, _HMAC_SHA3_256_NATIVE_AVAILABLE
+
+_CRYPTO_API_AVAILABLE = _HKDF_NATIVE_AVAILABLE and _HMAC_SHA3_256_NATIVE_AVAILABLE
+
 
 def _run_script(script: str) -> subprocess.CompletedProcess[str]:
     """Run a Python script in a subprocess, return the result."""
@@ -77,6 +81,10 @@ class TestImportWithoutExternalDeps:
         assert "dim=10" in result.stdout
 
 
+@pytest.mark.skipif(
+    not _CRYPTO_API_AVAILABLE,
+    reason="Some __all__ symbols trigger crypto_api import which requires native HMAC/HKDF",
+)
 class TestAllSymbolsLoad:
     """Tests that all symbols load correctly."""
 

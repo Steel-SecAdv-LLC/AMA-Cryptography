@@ -16,6 +16,14 @@ from unittest.mock import patch
 
 import pytest
 
+from ama_cryptography.pqc_backends import _HKDF_NATIVE_AVAILABLE, _HMAC_SHA3_256_NATIVE_AVAILABLE
+
+if not (_HKDF_NATIVE_AVAILABLE and _HMAC_SHA3_256_NATIVE_AVAILABLE):
+    pytest.skip(
+        "Native HMAC/HKDF required — crypto_api enforces INVARIANT-7",
+        allow_module_level=True,
+    )
+
 from ama_cryptography.crypto_api import (
     DILITHIUM_AVAILABLE,
     KYBER_AVAILABLE,

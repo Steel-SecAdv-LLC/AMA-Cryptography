@@ -30,6 +30,15 @@ from pathlib import Path
 
 import pytest
 
+from ama_cryptography.pqc_backends import _ED25519_NATIVE_AVAILABLE, _HKDF_NATIVE_AVAILABLE
+
+_NATIVE_AVAILABLE = _ED25519_NATIVE_AVAILABLE and _HKDF_NATIVE_AVAILABLE
+
+pytestmark = pytest.mark.skipif(
+    not _NATIVE_AVAILABLE,
+    reason="Native C library required — legacy_compat enforces CRYPTO_AVAILABLE at import",
+)
+
 
 class TestFullCryptoPackageLifecycle:
     """End-to-end tests for complete cryptographic package workflows."""

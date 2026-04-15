@@ -35,6 +35,13 @@ except ImportError:
     _NATIVE_AES_GCM = False
     _NATIVE_SECP256K1 = False
 
+from ama_cryptography.pqc_backends import _HMAC_SHA512_NATIVE_AVAILABLE
+
+skip_no_key_mgmt = pytest.mark.skipif(
+    not _HMAC_SHA512_NATIVE_AVAILABLE,
+    reason="Native HMAC-SHA512 required — key_management enforces INVARIANT-7",
+)
+
 skip_no_native_aes = pytest.mark.skipif(
     not _NATIVE_AES_GCM,
     reason="Native AES-256-GCM backend not available (build with cmake)",
@@ -175,6 +182,7 @@ class TestLoggingInfrastructure:
         assert isinstance(double_helix_engine.logger, logging.Logger)
         assert double_helix_engine.logger.name == "ama_cryptography.double_helix_engine"
 
+    @skip_no_key_mgmt
     def test_key_management_has_logger(self) -> None:
         """key_management module has logger configured."""
         from ama_cryptography import key_management
@@ -183,6 +191,7 @@ class TestLoggingInfrastructure:
         assert isinstance(key_management.logger, logging.Logger)
         assert key_management.logger.name == "ama_cryptography.key_management"
 
+    @skip_no_key_mgmt
     def test_logger_hierarchy(self) -> None:
         """All loggers are under ama_cryptography namespace."""
         from ama_cryptography import double_helix_engine, equations, key_management
@@ -228,6 +237,7 @@ class TestLoggingLevels:
 # =============================================================================
 
 
+@skip_no_key_mgmt
 class TestKeyManagementDecryptPaths:
     """Tests for key_management.py decrypt functionality."""
 
@@ -331,6 +341,7 @@ class TestKeyManagementDecryptPaths:
             assert key_id in listed
 
 
+@skip_no_key_mgmt
 class TestKeyManagementContextManager:
     """Tests for SecureKeyStorage context manager."""
 
@@ -348,6 +359,7 @@ class TestKeyManagementContextManager:
         # (Implementation detail - just verify no crash)
 
 
+@skip_no_key_mgmt
 class TestHDKeyDerivation:
     """Tests for HD key derivation."""
 
@@ -396,6 +408,7 @@ class TestHDKeyDerivation:
         assert key1 == key2
 
 
+@skip_no_key_mgmt
 class TestKeyRotationManager:
     """Tests for key rotation manager."""
 
@@ -564,6 +577,7 @@ class TestModuleExports:
         for name in expected_exports:
             assert hasattr(secure_memory, name), f"Missing export: {name}"
 
+    @skip_no_key_mgmt
     def test_key_management_exports(self) -> None:
         """key_management exports expected classes."""
         from ama_cryptography import key_management

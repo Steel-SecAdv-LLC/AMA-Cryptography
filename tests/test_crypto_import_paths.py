@@ -38,6 +38,14 @@ from urllib.parse import urlparse
 
 import pytest
 
+from ama_cryptography.pqc_backends import _ED25519_NATIVE_AVAILABLE, _HKDF_NATIVE_AVAILABLE
+
+if not (_ED25519_NATIVE_AVAILABLE and _HKDF_NATIVE_AVAILABLE):
+    pytest.skip(
+        "Native C library required — legacy_compat enforces CRYPTO_AVAILABLE",
+        allow_module_level=True,
+    )
+
 import ama_cryptography.legacy_compat as dgs
 
 # ============================================================================

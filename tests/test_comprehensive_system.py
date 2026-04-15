@@ -52,6 +52,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from ama_cryptography.pqc_backends import _ED25519_NATIVE_AVAILABLE, _HKDF_NATIVE_AVAILABLE
+
+if not (_ED25519_NATIVE_AVAILABLE and _HKDF_NATIVE_AVAILABLE):
+    pytest.skip(
+        "Native C library required — legacy_compat enforces CRYPTO_AVAILABLE",
+        allow_module_level=True,
+    )
+
 from ama_cryptography.equations import ETHICAL_VECTOR, MASTER_CODES, MASTER_HELIX_PARAMS
 from ama_cryptography.exceptions import (
     QuantumSignatureRequiredError,

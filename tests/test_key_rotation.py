@@ -17,6 +17,14 @@ from pathlib import Path
 
 import pytest
 
+from ama_cryptography.pqc_backends import _HMAC_SHA512_NATIVE_AVAILABLE
+
+if not _HMAC_SHA512_NATIVE_AVAILABLE:
+    pytest.skip(
+        "Native HMAC-SHA512 required — key_management enforces INVARIANT-7",
+        allow_module_level=True,
+    )
+
 from ama_cryptography.key_management import KeyRotationManager, KeyStatus, SecureKeyStorage
 
 

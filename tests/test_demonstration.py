@@ -37,6 +37,13 @@ import sys
 
 import pytest
 
+from ama_cryptography.pqc_backends import _ED25519_NATIVE_AVAILABLE, _HKDF_NATIVE_AVAILABLE
+
+pytestmark = pytest.mark.skipif(
+    not (_ED25519_NATIVE_AVAILABLE and _HKDF_NATIVE_AVAILABLE),
+    reason="Native C library required — demonstration uses legacy_compat",
+)
+
 
 class TestDemonstration:
     """Test the main demonstration function."""

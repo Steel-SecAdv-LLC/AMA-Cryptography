@@ -24,6 +24,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from ama_cryptography.hybrid_combiner import _HYBRID_LABEL, HybridCombiner
+from ama_cryptography.pqc_backends import _HKDF_NATIVE_AVAILABLE
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -112,6 +113,7 @@ class TestHybridCombinerNoNativeRaises:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(not _HKDF_NATIVE_AVAILABLE, reason="Native HKDF required for round-trip")
 class TestHybridRoundTrip:
     """Encapsulate + decapsulate must produce identical combined secrets."""
 

@@ -15,12 +15,16 @@ from unittest.mock import patch
 import pytest
 
 import ama_cryptography.rfc3161_timestamp as ts_mod
+from ama_cryptography.pqc_backends import _HKDF_NATIVE_AVAILABLE, _HMAC_SHA3_256_NATIVE_AVAILABLE
+
+_CRYPTO_API_AVAILABLE = _HKDF_NATIVE_AVAILABLE and _HMAC_SHA3_256_NATIVE_AVAILABLE
 
 # ---------------------------------------------------------------------------
 # S1 — HKDF Layer 4 trivial bypass on empty derived_keys
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(not _CRYPTO_API_AVAILABLE, reason="Native HMAC/HKDF required for crypto_api")
 class TestS1_HKDFEmptyDerivedKeys:
     """S1: verify_crypto_package must fail when derived_keys is empty."""
 
@@ -164,6 +168,7 @@ class TestS3_MockTSAHMACAndGuard:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(not _CRYPTO_API_AVAILABLE, reason="Native HMAC/HKDF required for crypto_api")
 class TestS4_MockTimestampExceptionNotSwallowed:
     """S4: _acquire_timestamp must not silently swallow mock-mode exceptions."""
 
@@ -189,6 +194,7 @@ class TestS4_MockTimestampExceptionNotSwallowed:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(not _CRYPTO_API_AVAILABLE, reason="Native HMAC/HKDF required for crypto_api")
 class TestS5_AcquireTimestampNoneGuard:
     """S5: _acquire_timestamp must raise when get_timestamp returns empty token."""
 

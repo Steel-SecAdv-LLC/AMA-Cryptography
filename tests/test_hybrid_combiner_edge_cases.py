@@ -17,6 +17,12 @@ import os
 import pytest
 
 from ama_cryptography.hybrid_combiner import HybridCombiner, HybridEncapsulation
+from ama_cryptography.pqc_backends import _HKDF_NATIVE_AVAILABLE
+
+pytestmark = pytest.mark.skipif(
+    not _HKDF_NATIVE_AVAILABLE,
+    reason="Native HKDF required — INVARIANT-7 refuses Python fallback",
+)
 
 
 @pytest.fixture

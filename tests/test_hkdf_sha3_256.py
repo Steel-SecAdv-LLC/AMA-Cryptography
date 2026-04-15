@@ -23,6 +23,14 @@ import json
 
 import pytest
 
+from ama_cryptography.pqc_backends import _ED25519_NATIVE_AVAILABLE, _HKDF_NATIVE_AVAILABLE
+
+if not (_ED25519_NATIVE_AVAILABLE and _HKDF_NATIVE_AVAILABLE):
+    pytest.skip(
+        "Native C library required — tests import from legacy_compat and key_management",
+        allow_module_level=True,
+    )
+
 _PYCA_AVAILABLE: bool
 
 try:
@@ -31,7 +39,9 @@ try:
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF as HKDF
 
     _PYCA_AVAILABLE = True
-except ImportError:
+except BaseException:
+    # pyo3_runtime.PanicException (from broken Rust backend) is a
+    # BaseException, not Exception — catch broadly in this probe.
     default_backend = None  # type: ignore[assignment]  # fallback when pyca unavailable (HKDF-001)
     hashes = None  # type: ignore[assignment]  # fallback when pyca unavailable (HKDF-002)
     HKDF = None  # type: ignore[assignment,misc]  # fallback when pyca unavailable (HKDF-003)

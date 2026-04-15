@@ -4,6 +4,14 @@ import hashlib
 
 import pytest
 
+from ama_cryptography.pqc_backends import _HKDF_NATIVE_AVAILABLE, _HMAC_SHA3_256_NATIVE_AVAILABLE
+
+if not (_HKDF_NATIVE_AVAILABLE and _HMAC_SHA3_256_NATIVE_AVAILABLE):
+    pytest.skip(
+        "Native HMAC/HKDF required — crypto_api enforces INVARIANT-7",
+        allow_module_level=True,
+    )
+
 
 def _skip_if_no_backends() -> None:
     """Skip test if native backends are not available."""

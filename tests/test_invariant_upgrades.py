@@ -22,6 +22,10 @@ from unittest import mock
 
 import pytest
 
+from ama_cryptography.pqc_backends import _HKDF_NATIVE_AVAILABLE, _HMAC_SHA3_256_NATIVE_AVAILABLE
+
+_CRYPTO_API_AVAILABLE = _HKDF_NATIVE_AVAILABLE and _HMAC_SHA3_256_NATIVE_AVAILABLE
+
 # ---------------------------------------------------------------------------
 # Upgrade D — INVARIANT-3 Addendum: Finalizer Failures Must Be Observable
 # ---------------------------------------------------------------------------
@@ -167,6 +171,9 @@ class TestFinalizerHealth:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    not _CRYPTO_API_AVAILABLE, reason="Native HMAC/HKDF required to import crypto_api"
+)
 class TestNoCryptographicFallbacks:
     """INVARIANT-7 revised: library must refuse when native backend unavailable."""
 
@@ -227,6 +234,9 @@ class TestNoCryptographicFallbacks:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    not _CRYPTO_API_AVAILABLE, reason="Native HMAC/HKDF required to import crypto_api"
+)
 class TestConstantTimeRequirements:
     """INVARIANT-12: all secret-dependent operations must be constant-time."""
 
