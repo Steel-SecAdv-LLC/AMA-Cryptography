@@ -199,7 +199,8 @@ ignore = []  # Do not add ignores without a comment explaining why.
 # Demo script for the monitoring module
 "ama_cryptography_monitor_demo.py" = ["B007", "RUF001"]
 # Benchmark and tooling scripts — not part of the core library
-"benchmark_suite.py" = ["C901", "UP006", "UP035", "E501"]  # C901: generate_markdown complexity
+# benchmark_suite.py: E402 because psutil optional-import block precedes ama_cryptography imports
+"benchmark_suite.py" = ["C901", "UP006", "UP035", "E501", "E402"]  # C901: generate_markdown complexity
 "setup.py" = ["E501", "RUF005", "S603", "S607"]
 "benchmarks/*" = [
     "E402", "E501", "F541", "I001",

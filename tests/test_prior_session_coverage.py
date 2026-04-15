@@ -13,8 +13,6 @@ import hashlib
 import hmac as stdlib_hmac
 import secrets
 
-import pytest
-
 from ama_cryptography.pqc_backends import native_hmac_sha3_256
 from ama_cryptography.secure_memory import constant_time_compare
 

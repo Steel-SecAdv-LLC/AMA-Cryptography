@@ -40,7 +40,6 @@
 
 #include "../include/ama_cryptography.h"
 #include "internal/ama_sha2.h"
-#include "ama_platform_rand.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>

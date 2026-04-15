@@ -39,11 +39,23 @@ __author__ = "Andrew E. A., Steel Security Advisors LLC"
 from ama_cryptography._self_test import _run_self_tests as _post
 from ama_cryptography._self_test import (
     check_operational as check_operational,
+)
+from ama_cryptography._self_test import (
     module_error_reason as module_error_reason,
+)
+from ama_cryptography._self_test import (
     module_self_test_results as module_self_test_results,
+)
+from ama_cryptography._self_test import (
     module_status as module_status,
+)
+from ama_cryptography._self_test import (
     post_duration_ms as post_duration_ms,
+)
+from ama_cryptography._self_test import (
     reset_module as reset_module,
+)
+from ama_cryptography._self_test import (
     secure_token_bytes as secure_token_bytes,
 )
 from ama_cryptography.exceptions import (
@@ -101,11 +113,23 @@ _CRYPTO_API_EXPORTS = frozenset(
 if TYPE_CHECKING:
     from .crypto_api import (
         AlgorithmType as AlgorithmType,
+    )
+    from .crypto_api import (
         AmaCryptography as AmaCryptography,
+    )
+    from .crypto_api import (
         CryptoPackageConfig as CryptoPackageConfig,
+    )
+    from .crypto_api import (
         KeypairCache as KeypairCache,
+    )
+    from .crypto_api import (
         batch_verify_ed25519 as batch_verify_ed25519,
+    )
+    from .crypto_api import (
         create_crypto_package as create_crypto_package,
+    )
+    from .crypto_api import (
         verify_crypto_package as verify_crypto_package,
     )
 
