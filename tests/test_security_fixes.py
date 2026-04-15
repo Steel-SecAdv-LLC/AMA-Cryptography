@@ -121,9 +121,8 @@ class TestS3_MockTSAHMACAndGuard:
         """MockTSA.timestamp() must produce tokens verifiable with HMAC."""
         import hmac as hmac_mod
 
-        # Enable MockTSA for this test
-        ts_mod._MOCK_TSA_ALLOWED = True
-        try:
+        # Use context manager (audit finding C8) instead of bare flag
+        with ts_mod.allow_mock_tsa():
             data_hash = hashlib.sha256(b"test data").digest()
             token = ts_mod.MockTSA.timestamp(data_hash, "sha256")
 
@@ -143,8 +142,6 @@ class TestS3_MockTSAHMACAndGuard:
 
             # Verify roundtrip works
             assert ts_mod.MockTSA.verify(token, data_hash) is True
-        finally:
-            ts_mod._MOCK_TSA_ALLOWED = False
 
     def test_mock_tsa_blocked_outside_testing(self) -> None:
         """MockTSA.timestamp() must raise RuntimeError when _MOCK_TSA_ALLOWED is False."""

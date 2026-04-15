@@ -665,15 +665,22 @@ AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
     const uint8_t p[32], const uint8_t q[32]);
 
 /**
- * Scalar-point multiplication: result = scalar * P.
+ * Variable-time scalar-point multiplication: result = scalar * P.
  *
- * SECURITY NOTE: The underlying ge25519_scalarmult is NOT constant-time.
- * Only safe when the scalar is PUBLIC (e.g., FROST binding factors).
- * Do NOT use with secret scalars — use ama_ed25519_point_from_scalar
- * for secret-scalar × basepoint operations.
+ * SECURITY: This function is NOT constant-time.  The scalar MUST be
+ * PUBLIC data (e.g., FROST binding factors, verification challenges).
+ * Using a secret scalar leaks it via timing side-channels.
+ *
+ * For secret-scalar × basepoint, use ama_ed25519_point_from_scalar().
+ *
+ * Renamed from ama_ed25519_scalar_mult (audit finding C7) to make the
+ * public-only constraint impossible to miss.
  */
-AMA_API ama_error_t ama_ed25519_scalar_mult(uint8_t result[32],
-    const uint8_t scalar[32], const uint8_t point[32]);
+AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
+    const uint8_t public_scalar[32], const uint8_t point[32]);
+
+/* Backwards-compatible macro — deprecated, use ama_ed25519_scalarmult_public */
+#define ama_ed25519_scalar_mult(r, s, p) ama_ed25519_scalarmult_public((r), (s), (p))
 
 /** Reduce 64-byte scalar mod l (Ed25519 group order). Result in s[0..31]. */
 AMA_API void ama_ed25519_sc_reduce(uint8_t s[64]);

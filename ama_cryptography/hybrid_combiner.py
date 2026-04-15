@@ -44,6 +44,7 @@ Version: 2.1.2
 import ctypes
 import hashlib
 import logging
+import struct
 from dataclasses import dataclass
 from typing import Any, List
 
@@ -160,22 +161,38 @@ class HybridCombiner:
             pqc_ss: PQC KEM shared secret
             classical_ct: Classical KEM ciphertext (bound in salt)
             pqc_ct: PQC KEM ciphertext (bound in salt)
-            classical_pk: Classical public key (bound in info, optional)
-            pqc_pk: PQC public key (bound in info, optional)
+            classical_pk: Classical public key (bound in info)
+            pqc_pk: PQC public key (bound in info)
             output_len: Desired output length (default 32)
 
         Returns:
             Combined shared secret of output_len bytes
 
-        The construction:
-            salt = classical_ct || pqc_ct
+        The construction uses length-prefixed encoding to provide
+        unambiguous domain separation and prevent component stripping:
+
+            salt = len(classical_ct) || classical_ct || len(pqc_ct) || pqc_ct
             ikm  = classical_ss || pqc_ss
-            info = label || classical_pk || pqc_pk
+            info = label || component_count(2) || len(classical_pk) || classical_pk
+                        || len(pqc_pk) || pqc_pk
             output = HKDF(salt, ikm, info, output_len)
         """
-        salt = classical_ct + pqc_ct
+        # SECURITY FIX (audit finding C6): Use length-prefixed encoding
+        # for all variable-length components.  This prevents component
+        # stripping / substitution attacks where an attacker manipulates
+        # boundaries between classical and PQC ciphertexts or public keys.
+        salt = (
+            struct.pack(">I", len(classical_ct)) + classical_ct
+            + struct.pack(">I", len(pqc_ct)) + pqc_ct
+        )
         ikm = classical_ss + pqc_ss
-        info = self.label + classical_pk + pqc_pk
+        # Component count (2) is bound to prevent downgrade to single-component
+        info = (
+            self.label
+            + struct.pack(">B", 2)  # component_count: always 2 for hybrid
+            + struct.pack(">I", len(classical_pk)) + classical_pk
+            + struct.pack(">I", len(pqc_pk)) + pqc_pk
+        )
 
         if self._has_native:
             return self._hkdf_native(salt, ikm, info, output_len)

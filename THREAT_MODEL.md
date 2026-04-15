@@ -164,7 +164,7 @@ These risks are accepted or require external mitigation:
 
 | Risk | Severity | Rationale |
 |------|----------|-----------|
-| Table-based AES S-box (default build) | **MEDIUM** | Constant-time backend available via `AMA_AES_CONSTTIME`. Default uses fast table-based for non-shared environments. |
+| Table-based AES S-box (opt-in) | **LOW** | Constant-time bitsliced AES is the **default** build (`AMA_AES_CONSTTIME=ON`). Disabling it emits a compile-time warning. |
 | No third-party security audit | **MEDIUM** | Self-assessed. Recommended before high-value production deployment. |
 | PQC algorithm maturity | **LOW** | ML-DSA-65 and Kyber-1024 are NIST-standardized (FIPS 203/204) but have limited deployment history. |
 | Ed25519 quantum vulnerability | **LOW** | Mitigated by ML-DSA-65 quantum-resistant layer. Ed25519 provides classical defense only. |

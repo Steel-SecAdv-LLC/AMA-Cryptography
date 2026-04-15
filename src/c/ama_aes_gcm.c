@@ -65,6 +65,16 @@
 #define aes256_key_expansion(key, rk) ama_aes256_key_expansion_consttime(key, rk)
 #define aes256_encrypt_block(rk, in, out) ama_aes256_encrypt_block_consttime(rk, in, out)
 #else
+/* SECURITY FIX (audit finding C5): Emit a compile-time warning when the
+ * table-based AES S-box is selected.  AMA_AES_CONSTTIME=ON is the default
+ * in CMakeLists.txt; if you see this warning, your build configuration has
+ * explicitly disabled it.  Table-based AES is NOT safe in shared-tenant
+ * environments (Bernstein 2005, Osvik-Shamir-Tromer 2006). */
+#if defined(__GNUC__) || defined(__clang__)
+#warning "AMA_AES_CONSTTIME is NOT defined — using table-based AES S-box (NOT constant-time). This is unsafe in shared-tenant environments. Rebuild with -DAMA_AES_CONSTTIME=ON."
+#elif defined(_MSC_VER)
+#pragma message("WARNING: AMA_AES_CONSTTIME is NOT defined — using table-based AES S-box (NOT constant-time). Rebuild with -DAMA_AES_CONSTTIME=ON.")
+#endif
 /* AES S-box (standard 256-byte lookup table).
  * WARNING: The lookup index is state[i] = plaintext[i] XOR round_key[i],
  * which is key-dependent. This table-based approach is NOT constant-time
