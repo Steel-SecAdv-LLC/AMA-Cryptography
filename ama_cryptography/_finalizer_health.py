@@ -34,8 +34,8 @@ def record_finalizer_error(source: str, detail: str) -> None:
     """Record a finalizer failure in the global health state.
 
     This function is safe to call during interpreter shutdown.  The
-    ``with _lock`` block is guarded by ``try/except`` so that a
-    ``None``-ified module global does not escape ``__del__``.
+    ``with _lock`` block is guarded by ``contextlib.suppress(Exception)``
+    so that a ``None``-ified module global does not escape ``__del__``.
 
     Args:
         source: The class or component whose finalizer failed

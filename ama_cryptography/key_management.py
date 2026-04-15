@@ -180,11 +180,10 @@ class HDKeyDerivation:
         elif seed is not None:
             self.master_seed = seed
         else:
-            # Derive seed from phrase (simplified BIP39)
-            # seed_phrase is guaranteed non-None here: seed is None (from elif)
-            # and not both None (from first if).
-            if seed_phrase is None:
-                raise TypeError("seed_phrase must not be None when seed is not provided")
+            # Derive seed from phrase (simplified BIP39).
+            # seed_phrase is guaranteed non-None here: the first `if` excluded
+            # the (seed is None AND seed_phrase is None) case, and the `elif`
+            # excluded seed is not None, so seed is None and seed_phrase is not None.
             self.master_seed = hashlib.pbkdf2_hmac(
                 "sha512", seed_phrase.encode("utf-8"), b"mnemonic", 2048, 64
             )

@@ -1161,13 +1161,7 @@ ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]) 
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    /* Generate a random 32-byte seed into the first half of secret_key */
-    ama_error_t rand_err = ama_randombytes(secret_key, 32);
-    if (rand_err != AMA_SUCCESS) {
-        return rand_err;
-    }
-
-    /* Hash the seed */
+    /* Hash the seed (caller must provide seed in secret_key[0..31]) */
     sha512(secret_key, 32, hash);
 
     /* Clamp the scalar */

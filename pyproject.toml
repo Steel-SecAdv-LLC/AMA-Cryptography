@@ -207,7 +207,8 @@ ignore = []  # Do not add ignores without a comment explaining why.
     "S603",
     "UP006", "UP035",
 ]
-"examples/*" = [
+# examples/**  (double-star) is required — scripts live in examples/python/
+"examples/**" = [
     "B007", "B904",
     "E402",
     "RUF001", "RUF059", "RUF100",
