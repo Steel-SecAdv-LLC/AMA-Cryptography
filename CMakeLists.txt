@@ -277,6 +277,7 @@ set(AMA_SOURCES
     src/c/ama_aes_gcm.c
     src/c/ama_cpuid.c
     src/c/ama_secure_memory.c
+    src/c/ama_platform_rand.c
     ${AMA_DISPATCH_SOURCES}
     ${AMA_AVX2_SOURCES}
     ${AMA_NEON_SOURCES}
@@ -286,7 +287,6 @@ set(AMA_SOURCES
 # Add native PQC source files when enabled
 if(AMA_USE_NATIVE_PQC)
     list(APPEND AMA_SOURCES
-        src/c/ama_platform_rand.c
         src/c/ama_sha256.c
         src/c/ama_hmac_sha256.c
         src/c/ama_kyber.c
@@ -306,10 +306,6 @@ if(AMA_ED25519_ASSEMBLY)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
         list(REMOVE_ITEM AMA_SOURCES src/c/ama_ed25519.c)
         list(APPEND AMA_SOURCES src/c/ed25519_donna_shim.c)
-        # donna needs platform_rand even without native PQC
-        if(NOT AMA_USE_NATIVE_PQC)
-            list(APPEND AMA_SOURCES src/c/ama_platform_rand.c)
-        endif()
         message(STATUS "Ed25519: donna x86-64 assembly scalar mult (vendored, public domain)")
     else()
         message(WARNING "AMA_ED25519_ASSEMBLY requires x86-64 — falling back to fe51")

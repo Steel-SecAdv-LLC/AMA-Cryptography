@@ -572,15 +572,30 @@ AMA_API ama_error_t ama_hkdf(
 /**
  * @brief Generate Ed25519 keypair
  *
- * Generates an Ed25519 keypair. The caller must provide 32 bytes of random
- * seed data in secret_key[0..31] before calling. The function will compute
- * the public key and store it in both public_key and secret_key[32..63].
+ * Generates 32 bytes of cryptographic randomness internally for the seed,
+ * then computes the public key and stores it in both public_key and
+ * secret_key[32..63]. The seed occupies secret_key[0..31].
  *
  * @param public_key Output: 32-byte public key
- * @param secret_key Input/Output: 64-byte buffer (seed in, seed||pk out)
+ * @param secret_key Output: 64-byte secret key (seed || public_key)
  * @return AMA_SUCCESS or error code
  */
 AMA_API ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]);
+
+/**
+ * @brief Deterministic Ed25519 keypair from a 32-byte seed (for KAT testing)
+ *
+ * Derives the keypair from the caller-provided seed without generating
+ * any randomness. This mirrors the pattern used by ama_kyber_keypair_from_seed
+ * and ama_dilithium_keypair_from_seed.
+ *
+ * @param seed   Input: 32-byte seed (RFC 8032 private key)
+ * @param public_key Output: 32-byte public key
+ * @param secret_key Output: 64-byte secret key (seed || public_key)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_ed25519_keypair_from_seed(
+    const uint8_t seed[32], uint8_t public_key[32], uint8_t secret_key[64]);
 
 /**
  * @brief Sign a message with Ed25519

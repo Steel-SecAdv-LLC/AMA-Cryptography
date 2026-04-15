@@ -349,6 +349,17 @@ def _setup_ed25519_ctypes(lib: ctypes.CDLL) -> bool:
     except AttributeError:
         return False
 
+    # keypair_from_seed is optional (may be unavailable on older library builds)
+    try:
+        lib.ama_ed25519_keypair_from_seed.argtypes = [
+            ctypes.c_char_p,  # seed[32]
+            ctypes.c_char_p,  # public_key[32]
+            ctypes.c_char_p,  # secret_key[64]
+        ]
+        lib.ama_ed25519_keypair_from_seed.restype = ctypes.c_int
+    except AttributeError:
+        pass  # deterministic keypair unavailable; randomized path still works
+
     # Batch verify is optional (may be unavailable on some platforms)
     try:
         lib.ama_ed25519_batch_verify.argtypes = [
@@ -1816,17 +1827,11 @@ def native_ed25519_keypair() -> tuple:
     Raises:
         RuntimeError: If native library is not available or keypair generation fails
     """
-    import secrets as _secrets
-
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
         raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
 
     pk_buf = ctypes.create_string_buffer(ED25519_PUBLIC_KEY_BYTES)
     sk_buf = ctypes.create_string_buffer(ED25519_SECRET_KEY_BYTES)
-
-    # Seed the first 32 bytes — the C function expects caller-provided entropy
-    seed = _secrets.token_bytes(32)
-    ctypes.memmove(sk_buf, seed, 32)
 
     rc = _native_lib.ama_ed25519_keypair(pk_buf, sk_buf)
     if rc != 0:
@@ -1861,12 +1866,35 @@ def native_ed25519_keypair_from_seed(seed: bytes) -> tuple:
     pk_buf = ctypes.create_string_buffer(ED25519_PUBLIC_KEY_BYTES)
     sk_buf = ctypes.create_string_buffer(ED25519_SECRET_KEY_BYTES)
 
-    # Load seed into first 32 bytes of sk_buf
-    ctypes.memmove(sk_buf, seed, 32)
+    # Prefer the dedicated C function; fall back to pre-filling sk_buf
+    if hasattr(_native_lib, "ama_ed25519_keypair_from_seed"):
+        seed_buf = ctypes.create_string_buffer(seed)
+        try:
+            rc = _native_lib.ama_ed25519_keypair_from_seed(seed_buf, pk_buf, sk_buf)
+            if rc != 0:
+                raise RuntimeError(f"Ed25519 keypair generation from seed failed (rc={rc})")
+        finally:
+            ctypes.memset(seed_buf, 0, 32)
+    else:
+        # Legacy path: pre-fill seed into sk_buf[0..31] for older library builds
+        # whose ama_ed25519_keypair still uses the caller-provided seed.
+        # WARNING: If the linked library has the NEW ama_ed25519_keypair
+        # (which generates its own randomness), the seed is silently
+        # discarded.  This fallback is kept only for truly old DLLs.
+        import warnings
 
-    rc = _native_lib.ama_ed25519_keypair(pk_buf, sk_buf)
-    if rc != 0:
-        raise RuntimeError(f"Ed25519 keypair generation failed (rc={rc})")
+        warnings.warn(
+            "ama_ed25519_keypair_from_seed symbol not found; "
+            "falling back to legacy seed pre-fill. "
+            "Deterministic keypair generation is NOT guaranteed "
+            "if the library was built with internal-randomness support.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        ctypes.memmove(sk_buf, seed, 32)
+        rc = _native_lib.ama_ed25519_keypair(pk_buf, sk_buf)
+        if rc != 0:
+            raise RuntimeError(f"Ed25519 keypair generation failed (rc={rc})")
 
     return bytes(pk_buf), bytes(sk_buf)
 

@@ -65,14 +65,13 @@ int main(void) {
     printf("Ed25519 Test Suite (RFC 8032)\n");
     printf("===========================================\n\n");
 
-    /* Test 1: Keypair generation with known seed */
-    memcpy(secret_key, rfc8032_sk_seed, 32);
-    rc = ama_ed25519_keypair(public_key, secret_key);
-    TEST_ASSERT(rc == AMA_SUCCESS, "ed25519_keypair: should succeed");
+    /* Test 1: Deterministic keypair from known seed (KAT) */
+    rc = ama_ed25519_keypair_from_seed(rfc8032_sk_seed, public_key, secret_key);
+    TEST_ASSERT(rc == AMA_SUCCESS, "ed25519_keypair_from_seed: should succeed");
 
     /* Test 2: Public key matches RFC 8032 test vector */
     TEST_ASSERT(memcmp(public_key, rfc8032_pk_expected, 32) == 0,
-                "ed25519_keypair: public key matches RFC 8032 vector 1");
+                "ed25519_keypair_from_seed: public key matches RFC 8032 vector 1");
 
     /* Test 3: Sign empty message */
     rc = ama_ed25519_sign(signature, NULL, 0, secret_key);
@@ -123,6 +122,19 @@ int main(void) {
     rc2 = ama_ed25519_sign(sig2, message, sizeof(message) - 1, secret_key);
     TEST_ASSERT(rc2 == AMA_SUCCESS, "ed25519_sign: second deterministic sign should succeed");
     TEST_ASSERT(memcmp(sig1, sig2, 64) == 0, "ed25519_sign: deterministic signatures");
+
+    /* Test 11: Randomized keypair generates valid sign/verify roundtrip */
+    {
+        uint8_t rand_pk[32], rand_sk[64], rand_sig[64];
+        const uint8_t rand_msg[] = "randomized keypair test";
+        rc = ama_ed25519_keypair(rand_pk, rand_sk);
+        TEST_ASSERT(rc == AMA_SUCCESS, "ed25519_keypair: randomized generation should succeed");
+        rc = ama_ed25519_sign(rand_sig, rand_msg, sizeof(rand_msg) - 1, rand_sk);
+        TEST_ASSERT(rc == AMA_SUCCESS, "ed25519_sign: sign with randomized key should succeed");
+        rc = ama_ed25519_verify(rand_sig, rand_msg, sizeof(rand_msg) - 1, rand_pk);
+        TEST_ASSERT(rc == AMA_SUCCESS,
+                    "ed25519_verify: randomized keypair roundtrip OK");
+    }
 
     printf("\n===========================================\n");
     printf("All Ed25519 tests passed (including RFC 8032 KAT + roundtrip)!\n");
