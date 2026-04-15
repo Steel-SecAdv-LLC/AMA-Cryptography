@@ -4,6 +4,7 @@
 """Tests for Invariant Upgrades A-D.
 
 INVARIANT-12: Constant-Time Required for All Secret-Dependent Operations
+INVARIANT-13: No Unjustified Static-Analysis Suppressions
 INVARIANT-7 (revised): No Cryptographic Fallbacks, Ever
 INVARIANT-3 (addendum): Finalizer Failures Must Be Observable
 """
@@ -11,6 +12,9 @@ INVARIANT-3 (addendum): Finalizer Failures Must Be Observable
 from __future__ import annotations
 
 import gc
+import re
+import subprocess
+import sys
 import threading
 from collections.abc import Generator
 from pathlib import Path
@@ -288,6 +292,92 @@ class TestConstantTimeRequirements:
 
 
 # ---------------------------------------------------------------------------
+# Upgrade C — INVARIANT-13: No Unjustified Static-Analysis Suppressions
+# ---------------------------------------------------------------------------
+
+
+class TestSuppressionHygiene:
+    """INVARIANT-13: all suppressions must have justification + tracking ID."""
+
+    _SUPPRESSION_RE = re.compile(r"#\s*(noqa|nosec|pylint:\s*disable|type:\s*ignore)")
+    _TRACKING_ID_RE = re.compile(r"\([A-Z]+-\d+\)")
+    _JUSTIFICATION_RE = re.compile(r"[—–]|--|#\s*\S")
+
+    _FORBIDDEN_DIRS = (
+        "src/c/",
+        "ama_cryptography/_primitive",
+        "ama_cryptography/backend",
+        "include/",
+    )
+
+    def _scan_violations(self, directory: str) -> list[str]:
+        repo_root = Path(__file__).resolve().parent.parent
+        target = repo_root / directory
+        violations: list[str] = []
+        for py_file in sorted(target.rglob("*.py")):
+            rel = str(py_file.relative_to(repo_root))
+            try:
+                lines = py_file.read_text(encoding="utf-8").splitlines()
+            except (OSError, UnicodeDecodeError):
+                continue
+            for lineno, line in enumerate(lines, 1):
+                m = self._SUPPRESSION_RE.search(line)
+                if m is None:
+                    continue
+                # Check forbidden
+                for fd in self._FORBIDDEN_DIRS:
+                    if rel.startswith(fd):
+                        violations.append(f"{rel}:{lineno}: forbidden directory")
+                        break
+                else:
+                    rest = line[m.end() :]
+                    if not self._JUSTIFICATION_RE.search(rest):
+                        violations.append(f"{rel}:{lineno}: missing justification")
+                    elif not self._TRACKING_ID_RE.search(rest):
+                        violations.append(f"{rel}:{lineno}: missing tracking ID")
+        return violations
+
+    def test_ama_cryptography_suppressions_justified(self) -> None:
+        violations = self._scan_violations("ama_cryptography")
+        assert not violations, "INVARIANT-13 violations in ama_cryptography/:\n" + "\n".join(
+            f"  {v}" for v in violations
+        )
+
+    def test_no_suppressions_in_forbidden_dirs(self) -> None:
+        """Suppressions absolutely forbidden in src/c/, _primitive, backend, include/."""
+        repo_root = Path(__file__).resolve().parent.parent
+        for fd in self._FORBIDDEN_DIRS:
+            target = repo_root / fd
+            if not target.exists():
+                continue
+            for py_file in target.rglob("*.py"):
+                content = py_file.read_text(encoding="utf-8", errors="replace")
+                assert not self._SUPPRESSION_RE.search(
+                    content
+                ), f"INVARIANT-13: suppression found in forbidden dir: {py_file}"
+
+    def test_ci_enforcement_script_exists(self) -> None:
+        """The CI suppression hygiene script must exist."""
+        repo_root = Path(__file__).resolve().parent.parent
+        script = repo_root / "tools" / "check_suppression_hygiene.py"
+        assert script.exists(), "tools/check_suppression_hygiene.py must exist"
+
+    def test_ci_enforcement_script_passes(self) -> None:
+        """The CI suppression hygiene script must pass on the current codebase."""
+        repo_root = Path(__file__).resolve().parent.parent
+        result = subprocess.run(
+            [sys.executable, str(repo_root / "tools" / "check_suppression_hygiene.py")],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(repo_root),
+        )
+        assert (
+            result.returncode == 0
+        ), f"check_suppression_hygiene.py failed:\n{result.stdout}\n{result.stderr}"
+
+
+# ---------------------------------------------------------------------------
 # Cross-cutting: INVARIANTS.md documentation
 # ---------------------------------------------------------------------------
 
@@ -310,6 +400,10 @@ class TestInvariantsDocumentation:
     def test_invariant_12_documented(self) -> None:
         content = self._read_invariants_md()
         assert "Constant-Time Required" in content
+
+    def test_invariant_13_documented(self) -> None:
+        content = self._read_invariants_md()
+        assert "INVARIANT-13" in content
 
     def test_invariant_14_cve_hygiene_documented(self) -> None:
         content = self._read_invariants_md()

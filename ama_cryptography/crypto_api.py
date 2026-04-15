@@ -178,9 +178,9 @@ try:
     )
 except ImportError:
     RFC3161_AVAILABLE = False
-    TimestampUnavailableError = Exception  # type: ignore[misc,assignment]
-    TimestampError = Exception  # type: ignore[misc,assignment]
-    get_timestamp = None  # type: ignore[assignment]
+    TimestampUnavailableError = Exception  # type: ignore[misc,assignment]  # optional RFC3161 not installed, Exception fallback (CA-001)
+    TimestampError = Exception  # type: ignore[misc,assignment]  # optional RFC3161 not installed, Exception fallback (CA-002)
+    get_timestamp = None  # type: ignore[assignment]  # optional RFC3161 not installed, None stub (CA-003)
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -1046,7 +1046,7 @@ class AESGCMProvider:
                 try:
                     import msvcrt  # Windows-only stdlib module
 
-                    msvcrt.locking(lock_fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+                    msvcrt.locking(lock_fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]  # Windows-only attr, absent from mypy stubs (CA-004)
                 except (ImportError, OSError) as _lock_err:
                     logger.debug(
                         "File locking unavailable (no fcntl or msvcrt): "

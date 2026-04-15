@@ -994,7 +994,7 @@ class HSMKeyStorage:
         hsm_type: str = "softhsm",
         library_path: Optional[str] = None,
         token_label: str = "AmaCryptography",
-        pin: Optional[str] = None,  # nosec B107
+        pin: Optional[str] = None,  # nosec B107 -- default None, not a hardcoded secret; PIN is caller-provided at runtime (KM-001)
         slot_index: Optional[int] = None,
     ) -> None:
         """
@@ -1343,7 +1343,7 @@ if __name__ == "__main__":
     import tempfile
 
     demo_storage_path = Path(tempfile.gettempdir()) / "ama_keys_demo"
-    storage = SecureKeyStorage(demo_storage_path, master_password="test_password_123")  # nosec B106
+    storage = SecureKeyStorage(demo_storage_path, master_password="test_password_123")  # nosec B106 -- intentional demo password in __main__ example block (KM-002)
 
     # Store a key
     test_key = secrets.token_bytes(32)

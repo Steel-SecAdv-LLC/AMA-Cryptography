@@ -113,13 +113,13 @@ class TestSecureWipe:
     def test_secure_wipe_non_bytearray_raises(self) -> None:
         """Test that non-bytearray types raise TypeError (fail-loud contract)."""
         with pytest.raises(TypeError, match="requires a mutable bytearray"):
-            secure_wipe("string")  # type: ignore[arg-type]
+            secure_wipe("string")  # type: ignore[arg-type]  # wrong type to verify TypeError rejection (TCS-001)
         with pytest.raises(TypeError, match="requires a mutable bytearray"):
-            secure_wipe(12345)  # type: ignore[arg-type]
+            secure_wipe(12345)  # type: ignore[arg-type]  # wrong type to verify TypeError rejection (TCS-002)
         with pytest.raises(TypeError, match="requires a mutable bytearray"):
-            secure_wipe(None)  # type: ignore[arg-type]
+            secure_wipe(None)  # type: ignore[arg-type]  # wrong type to verify TypeError rejection (TCS-003)
         with pytest.raises(TypeError, match="requires a mutable bytearray"):
-            secure_wipe([1, 2, 3])  # type: ignore[arg-type]
+            secure_wipe([1, 2, 3])  # type: ignore[arg-type]  # wrong type to verify TypeError rejection (TCS-004)
 
 
 class TestLengthPrefixedEncodeEdgeCases:

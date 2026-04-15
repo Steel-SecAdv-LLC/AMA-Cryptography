@@ -207,6 +207,10 @@ jobs:
       run: |
         mypy --strict ama_cryptography/ tests/
 
+    - name: "INVARIANT-13: Suppression hygiene check"
+      run: |
+        python tools/check_suppression_hygiene.py
+
   security-checks:
     name: Security Checks
     runs-on: ubuntu-latest

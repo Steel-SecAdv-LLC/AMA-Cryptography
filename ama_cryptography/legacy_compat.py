@@ -48,7 +48,7 @@ import json
 import logging
 import secrets
 import struct
-import subprocess  # nosec B404
+import subprocess  # nosec B404 -- only wraps trusted external tools (openssl, rfc3161); no user-controlled args (LC-001)
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -415,7 +415,7 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
     try:
         cmd_query = ["openssl", "ts", "-query", "-data", "-", "-sha256", "-no_nonce"]
 
-        proc = subprocess.run(cmd_query, input=data, capture_output=True, timeout=10)  # nosec B603
+        proc = subprocess.run(cmd_query, input=data, capture_output=True, timeout=10)  # nosec B603 -- hardcoded cmd, no shell=True, timeout set (LC-002)
 
         if proc.returncode != 0:
             _logger.warning("OpenSSL ts-query failed: %s", proc.stderr.decode())
@@ -429,7 +429,7 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
             tsa_url, data=tsq, headers={"Content-Type": "application/timestamp-query"}
         )
 
-        with urllib.request.urlopen(req, timeout=10) as response:  # nosec B310
+        with urllib.request.urlopen(req, timeout=10) as response:  # nosec B310 -- TSA URL is app-configured, HTTPS enforced (LC-003)
             tsr = response.read()
 
         return cast(bytes, tsr)
@@ -492,7 +492,7 @@ def verify_rfc3161_timestamp(
         else:
             cmd_verify.append("-no_check_time")
 
-        proc = subprocess.run(cmd_verify, capture_output=True, timeout=10)  # nosec B603
+        proc = subprocess.run(cmd_verify, capture_output=True, timeout=10)  # nosec B603 -- hardcoded cmd, no shell=True, timeout set (LC-004)
 
         if proc.returncode == 0:
             return True
@@ -763,7 +763,7 @@ class CryptoPackage:
     hash_format_version: str = HASH_FORMAT_V1
 
 
-def create_crypto_package(  # noqa: C901
+def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordinating all crypto/KMS/RFC3161 operations (LC-005)
     codes: str,
     helix_params: List[Tuple[float, float]],
     kms: KeyManagementSystem,

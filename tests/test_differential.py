@@ -34,7 +34,7 @@ except ImportError:
 # Check for pycryptodome
 try:
     from Crypto.Cipher import (
-        AES as PyCryptoAES,  # noqa: N811
+        AES as PyCryptoAES,  # noqa: N811 -- alias distinguishes Pycryptodome AES from other backends in scope (DIFF-001)
     )
 
     HAS_PYCRYPTODOME = True

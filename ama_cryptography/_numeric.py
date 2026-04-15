@@ -105,9 +105,9 @@ class Vec:
             if isinstance(value, Vec):
                 self._data[idx] = value._data
             else:
-                self._data[idx] = list(value)  # type: ignore[arg-type]
+                self._data[idx] = list(value)  # type: ignore[arg-type]  # nested generic variance in List[float|Vec] (NM-001)
         else:
-            self._data[idx] = float(value)  # type: ignore[arg-type]
+            self._data[idx] = float(value)  # type: ignore[arg-type]  # scalar float narrowing in Vec.__setitem__ (NM-002)
 
     def __iter__(self) -> Iterator[float]:
         return iter(self._data)
@@ -221,7 +221,7 @@ class Vec:
                 for k in range(n):
                     s += self._data[k] * other._data[k][j]
                 out[j] = s
-            return Vec._wrap(out)  # type: ignore[return-value]
+            return Vec._wrap(out)  # type: ignore[return-value]  # List[float]->Vec transformation unverifiable (NM-003)
         return NotImplemented
 
     # -- comparison helpers --------------------------------------------------
@@ -291,7 +291,7 @@ class Mat:
     def __setitem__(self, idx: int | Tuple[int, int], value: float | List[float]) -> None:
         if isinstance(idx, tuple):
             r, c = idx
-            self._data[r][c] = float(value)  # type: ignore[arg-type]
+            self._data[r][c] = float(value)  # type: ignore[arg-type]  # nested List generic in Mat.__setitem__ (NM-004)
         else:
             if isinstance(value, list):
                 self._data[idx] = [float(x) for x in value]
@@ -308,7 +308,7 @@ class Mat:
     # -- transpose -----------------------------------------------------------
 
     @property
-    def T(self) -> Mat:  # noqa: N802
+    def T(self) -> Mat:  # noqa: N802 -- uppercase T matches numpy matrix-transpose convention (NM-005)
         t = [[self._data[r][c] for r in range(self.rows)] for c in range(self.cols)]
         return Mat._wrap(t, self.cols, self.rows)
 
@@ -409,8 +409,8 @@ def array(data: Sequence[float] | Sequence[Sequence[float]]) -> Vec | Mat:
         return Vec._wrap([])
     first = data[0]
     if isinstance(first, (list, tuple)):
-        return Mat(data)  # type: ignore[arg-type]
-    return Vec(data)  # type: ignore[arg-type]
+        return Mat(data)  # type: ignore[arg-type]  # discriminated union not statically resolvable at runtime (NM-006)
+    return Vec(data)  # type: ignore[arg-type]  # fallback Vec branch in array(), same runtime pattern (NM-007)
 
 
 def zeros(n: int) -> Vec:
@@ -827,7 +827,7 @@ def fft(v: Vec) -> Vec:
         result = _bluestein_fft(x, n, inverse=False)
 
     out = Vec.__new__(Vec)
-    out._data = result  # type: ignore[assignment]
+    out._data = result  # type: ignore[assignment]  # fft returns List[complex], field typed List[float|complex] (NM-008)
     return out
 
 
@@ -847,7 +847,7 @@ def ifft(v: Vec) -> Vec:
         result = _bluestein_fft(x, n, inverse=True)
 
     out = Vec.__new__(Vec)
-    out._data = result  # type: ignore[assignment]
+    out._data = result  # type: ignore[assignment]  # ifft same complex-result pattern as fft (NM-009)
     return out
 
 
@@ -860,7 +860,7 @@ class _Random:
     """Numpy-compatible random interface backed by stdlib random."""
 
     def __init__(self) -> None:
-        self._rng = _stdlib_random.Random()  # fmt: skip  # noqa: S311 # nosec B311
+        self._rng = _stdlib_random.Random()  # fmt: skip  # noqa: S311 # nosec B311 -- stdlib Random intentional for non-crypto math only (NM-010)
 
     def seed(self, s: int) -> None:
         self._rng.seed(s)

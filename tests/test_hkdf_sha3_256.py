@@ -32,9 +32,9 @@ try:
 
     _PYCA_AVAILABLE = True
 except ImportError:
-    default_backend = None  # type: ignore[assignment]  # fallback when pyca unavailable
-    hashes = None  # type: ignore[assignment]  # fallback when pyca unavailable
-    HKDF = None  # type: ignore[assignment,misc]  # fallback when pyca unavailable
+    default_backend = None  # type: ignore[assignment]  # fallback when pyca unavailable (HKDF-001)
+    hashes = None  # type: ignore[assignment]  # fallback when pyca unavailable (HKDF-002)
+    HKDF = None  # type: ignore[assignment,misc]  # fallback when pyca unavailable (HKDF-003)
     _PYCA_AVAILABLE = False
 
 

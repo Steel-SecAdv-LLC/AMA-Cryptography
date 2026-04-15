@@ -1358,7 +1358,7 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
                 raise QuantumSignatureUnavailableError(
                     f"Native dilithium_sign failed with error code {rc}"
                 )
-            return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]
+            return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-001)
         finally:
             ctypes.memset(sk_buf, 0, len(secret_key))
 
@@ -1546,7 +1546,7 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
         if rc != 0:
             raise KyberUnavailableError(f"Native kyber_encapsulate failed with error code {rc}")
         return KyberEncapsulation(
-            ciphertext=bytes(ct_buf[: ct_len.value]),  # type: ignore[arg-type]
+            ciphertext=bytes(ct_buf[: ct_len.value]),  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-002)
             shared_secret=bytes(ss_buf),
         )
 
@@ -1706,7 +1706,7 @@ def sphincs_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
             )
             if rc != 0:
                 raise SphincsUnavailableError(f"Native sphincs_sign failed with error code {rc}")
-            return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]
+            return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-003)
         finally:
             ctypes.memset(sk_buf, 0, len(secret_key))
 
@@ -1917,7 +1917,7 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
 def _probe_cython_ed25519() -> "tuple[Any, Any]":
     """Detect Cython Ed25519 bindings at module load time."""
     try:
-        from ama_cryptography.ed25519_binding import (  # type: ignore[import-not-found]
+        from ama_cryptography.ed25519_binding import (  # type: ignore[import-not-found]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-004)
             cy_ed25519_sign,
             cy_ed25519_verify,
         )
@@ -1930,7 +1930,7 @@ def _probe_cython_ed25519() -> "tuple[Any, Any]":
 def _probe_cython_dilithium() -> "tuple[Any, Any]":
     """Detect Cython Dilithium bindings at module load time."""
     try:
-        from ama_cryptography.dilithium_binding import (  # type: ignore[import-not-found]
+        from ama_cryptography.dilithium_binding import (  # type: ignore[import-not-found]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-005)
             cy_dilithium_sign,
             cy_dilithium_verify,
         )
@@ -1943,7 +1943,7 @@ def _probe_cython_dilithium() -> "tuple[Any, Any]":
 def _probe_cython_hkdf() -> "Any":
     """Detect Cython HKDF binding at module load time."""
     try:
-        from ama_cryptography.hkdf_binding import (  # type: ignore[import-not-found]
+        from ama_cryptography.hkdf_binding import (  # type: ignore[import-not-found]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-006)
             cy_hkdf,
         )
 
