@@ -1453,25 +1453,28 @@ AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
 }
 
 /**
- * Scalar-point multiplication: result = scalar * P.
+ * Variable-time scalar-point multiplication: result = public_scalar * P.
  *
- * SECURITY NOTE: The underlying ge25519_scalarmult is NOT constant-time.
- * Only safe when the scalar is PUBLIC (e.g., FROST binding factors).
+ * SECURITY: NOT constant-time.  The scalar MUST be PUBLIC data
+ * (e.g., FROST binding factors, verification challenges).
  * Do NOT use with secret scalars — use ama_ed25519_point_from_scalar
- * for secret-scalar x basepoint operations.
+ * for secret-scalar × basepoint operations.
  *
- * @param result  Output: 32-byte compressed point
- * @param scalar  Input:  32-byte little-endian scalar
- * @param point   Input:  32-byte compressed point P
+ * Renamed from ama_ed25519_scalar_mult (audit finding C7) to make the
+ * public-only constraint impossible to miss.
+ *
+ * @param result        Output: 32-byte compressed point
+ * @param public_scalar Input:  32-byte little-endian PUBLIC scalar
+ * @param point         Input:  32-byte compressed point P
  * @return AMA_SUCCESS on success, error if decompression fails
  */
-AMA_API ama_error_t ama_ed25519_scalar_mult(uint8_t result[32],
-                                            const uint8_t scalar[32],
-                                            const uint8_t point[32]) {
+AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
+                                                  const uint8_t public_scalar[32],
+                                                  const uint8_t point[32]) {
     ge25519_p3 P, R;
 
     if (ge25519_frombytes(&P, point) != 0) return AMA_ERROR_INVALID_PARAM;
-    ge25519_scalarmult(&R, scalar, &P);
+    ge25519_scalarmult(&R, public_scalar, &P);
     ge25519_p3_tobytes(result, &R);
 
     return AMA_SUCCESS;

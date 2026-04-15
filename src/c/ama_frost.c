@@ -264,7 +264,7 @@ static ama_error_t compute_group_commitment(uint8_t R[32],
 
         /* rho_E = rho_i * E_i */
         uint8_t rho_E[32];
-        rc = ama_ed25519_scalar_mult(rho_E, rho_i, E_i);
+        rc = ama_ed25519_scalarmult_public(rho_E, rho_i, E_i);
         if (rc != AMA_SUCCESS) return rc;
 
         /* term = D_i + rho_i * E_i */

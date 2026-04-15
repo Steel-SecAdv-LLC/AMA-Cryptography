@@ -118,6 +118,14 @@ static ama_error_t hmac_sha3_256(
         k_opad[i] ^= actual_key[i];
     }
 
+    /* SECURITY FIX: Guard against integer overflow in allocation size.
+     * SHA3_256_BLOCK_SIZE + data_len could wrap on 32-bit platforms if
+     * data_len is near SIZE_MAX (audit finding HKDF-OVF-1). */
+    if (data_len > SIZE_MAX - SHA3_256_BLOCK_SIZE) {
+        rc = AMA_ERROR_MEMORY;
+        goto cleanup;
+    }
+
     /* Inner hash: H(K XOR ipad || data) */
     inner_data = (uint8_t*)malloc(SHA3_256_BLOCK_SIZE + data_len);
     if (!inner_data) {

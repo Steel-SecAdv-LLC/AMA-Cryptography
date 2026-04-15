@@ -12,6 +12,7 @@
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 
+#include "ama_cryptography.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -147,6 +148,13 @@ int ama_sha3_256_sve2(const uint8_t *input, size_t input_len, uint8_t output[32]
     ama_keccak_f1600_sve2(state);
 
     memcpy(output, state, 32);
+
+    /* SECURITY FIX: Scrub Keccak state and padding block after use.
+     * Plain memset() can be optimized away by the compiler; use
+     * ama_secure_memzero() to guarantee zeroization (audit finding MEM-1). */
+    ama_secure_memzero(state, sizeof(state));
+    ama_secure_memzero(block, sizeof(block));
+
     return 0;
 }
 

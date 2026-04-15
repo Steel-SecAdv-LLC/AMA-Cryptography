@@ -164,7 +164,7 @@ Signature and key exchange:
 
 Encryption and KDF:
 - `src/c/ama_aes_gcm.c` - AES-256-GCM authenticated encryption (NIST SP 800-38D)
-- `src/c/ama_aes_bitsliced.c` - Bitsliced AES S-box (cache-timing hardened, optional via `-DAMA_AES_CONSTTIME=ON`). Augments `ama_aes_gcm.c` with constant-time S-box when enabled.
+- `src/c/ama_aes_bitsliced.c` - Bitsliced AES S-box (cache-timing hardened, **default**: `-DAMA_AES_CONSTTIME=ON`). Replaces `ama_aes_gcm.c` table-based S-box with constant-time algebraic decomposition.
 - `src/c/ama_chacha20poly1305.c` - ChaCha20-Poly1305 AEAD (RFC 8439)
 - `src/c/ama_argon2.c` - Argon2id password hashing (RFC 9106)
 

@@ -285,6 +285,13 @@ ama_error_t ama_sha3_256_avx2(const uint8_t *input, size_t input_len, uint8_t ou
 
     /* Squeeze 32 bytes */
     memcpy(output, state, 32);
+
+    /* SECURITY FIX: Scrub Keccak state and padding block after use.
+     * Plain memset() can be optimized away by the compiler; use
+     * ama_secure_memzero() to guarantee zeroization (audit finding MEM-1). */
+    ama_secure_memzero(state, sizeof(state));
+    ama_secure_memzero(block, sizeof(block));
+
     return AMA_SUCCESS;
 }
 

@@ -179,7 +179,7 @@ assert algo.verify(b"message", sig, pk)
 | Security | 256-bit key, 128-bit quantum (Grover) |
 | Forgery Probability | ≤ 2^-128 |
 
-> **Side-Channel Note:** The default implementation uses a 256-byte lookup table S-box. This is **not** constant-time with respect to cache-timing in shared-tenant environments (cloud VMs, containers). For such deployments, use the bitsliced implementation: `-DAMA_AES_CONSTTIME=ON`.
+> **Side-Channel Note:** The default build uses the constant-time bitsliced AES S-box (`AMA_AES_CONSTTIME=ON`). Disabling it (e.g., `-DAMA_AES_CONSTTIME=OFF`) reverts to a 256-byte lookup table S-box that is **not** constant-time with respect to cache-timing and is unsafe in shared-tenant environments (cloud VMs, containers).
 
 **Usage:**
 ```python
@@ -207,7 +207,7 @@ plaintext = algo.decrypt(ciphertext, key)
 | Security | 256-bit key, 128-bit security |
 | Timing | Constant-time (no table lookups) |
 
-ChaCha20-Poly1305 is preferred over AES-GCM in environments without hardware AES-NI or when constant-time guarantees are required without building with `AMA_AES_CONSTTIME=ON`.
+ChaCha20-Poly1305 is preferred over AES-GCM in environments without hardware AES-NI, or when `AMA_AES_CONSTTIME` has been explicitly disabled.
 
 ---
 

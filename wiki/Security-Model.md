@@ -39,7 +39,7 @@ Documentation for AMA Cryptography's security properties, threat model, side-cha
 - Not a general-purpose TLS/transport security library
 - Not a replacement for HSM in high-security environments
 - 3R monitoring flags statistical anomalies but does not prevent attacks
-- AES-GCM default build is not constant-time with respect to cache (use `-DAMA_AES_CONSTTIME=ON` for shared-tenant environments)
+- AES-GCM default build uses constant-time bitsliced S-box (`AMA_AES_CONSTTIME=ON`); explicitly disabling it reverts to table-based AES which is cache-timing vulnerable
 - Not certified under FIPS 140-2/3
 
 ---
@@ -108,15 +108,14 @@ The following operations are implemented in constant time:
 
 ### AES Cache-Timing Warning
 
-The default AES-256-GCM implementation uses a 256-byte lookup table S-box. In **shared-tenant environments** (cloud VMs, containers with shared L1/L2 caches), this can leak information through cache-timing side-channels.
+The default AES-256-GCM build uses the constant-time bitsliced AES S-box (`AMA_AES_CONSTTIME=ON` since v2.1.2). If you explicitly disable it (`-DAMA_AES_CONSTTIME=OFF`), the build falls back to a 256-byte lookup table S-box that leaks information through cache-timing side-channels in **shared-tenant environments** (cloud VMs, containers with shared L1/L2 caches). A compile-time warning is emitted when the table-based path is selected.
 
-**Remediation for shared-tenant environments:**
+**Verify constant-time AES is enabled (default):**
 ```bash
-cmake -B build -DAMA_AES_CONSTTIME=ON -DCMAKE_BUILD_TYPE=Release
+cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
+# Look for: "AES consttime: ON" in CMake output
 ```
-
-This enables the bitsliced AES implementation (`ama_aes_bitsliced.c`) that eliminates table lookups.
 
 ### Memory Safety
 
@@ -171,7 +170,7 @@ Before deploying AMA Cryptography in production:
 
 - [ ] Master secrets stored in FIPS 140-2 Level 3+ HSM
 - [ ] Independent security review by qualified cryptographers
-- [ ] Constant-time AES enabled (`-DAMA_AES_CONSTTIME=ON`) if using shared-tenant infrastructure
+- [ ] Constant-time AES confirmed enabled (default `AMA_AES_CONSTTIME=ON`; verify in CMake output)
 - [ ] Key file permissions restricted (mode 0600, encrypted volume)
 - [ ] RFC 3161 timestamp configured with a trusted TSA
 - [ ] Key rotation policy documented and automated
