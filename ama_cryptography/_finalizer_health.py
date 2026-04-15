@@ -19,7 +19,6 @@ Observable states (any one suffices):
 Logging is optional and must NOT be relied upon as the sole artifact.
 """
 
-import contextlib
 import threading
 from typing import Optional, Tuple
 
@@ -34,8 +33,8 @@ def record_finalizer_error(source: str, detail: str) -> None:
     """Record a finalizer failure in the global health state.
 
     This function is safe to call during interpreter shutdown.  The
-    ``with _lock`` block is guarded by ``contextlib.suppress(Exception)``
-    so that a ``None``-ified module global does not escape ``__del__``.
+    lock acquisition is wrapped in ``try/except Exception: pass`` so
+    that a ``None``-ified ``_lock`` global does not escape ``__del__``.
 
     Args:
         source: The class or component whose finalizer failed
@@ -47,11 +46,16 @@ def record_finalizer_error(source: str, detail: str) -> None:
     # KNOWN TRADEOFF (INVARIANT-3 addendum): Suppress all exceptions to
     # survive interpreter shutdown when _lock is None.  In practice _lock
     # is only None during shutdown.  Accepted per INVARIANT-3 addendum.
-    with contextlib.suppress(Exception):
+    # contextlib.suppress() is NOT used here because contextlib itself may
+    # be None during shutdown, causing AttributeError before the context
+    # manager is established.  try/except uses only language keywords.
+    try:
         with _lock:
             _error_count += 1
             _error_flag = True
             _last_error = (source, detail)
+    except Exception:  # nosec B110 # noqa: S110 -- _lock may be None at shutdown (FH-001)
+        pass
 
 
 def finalizer_error_count() -> int:
