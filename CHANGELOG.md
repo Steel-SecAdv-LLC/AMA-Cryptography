@@ -19,7 +19,7 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 
 
-## [2.1.2] - 2026-04-15
+## [2.1.5] - 2026-04-15
 
 
 ### Added
