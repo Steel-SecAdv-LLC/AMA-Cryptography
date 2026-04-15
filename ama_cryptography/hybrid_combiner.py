@@ -179,7 +179,15 @@ class HybridCombiner:
 
         if self._has_native:
             return self._hkdf_native(salt, ikm, info, output_len)
-        return self._hkdf_python(salt, ikm, info, output_len)
+        # SECURITY FIX (INVARIANT-7): The Python HKDF fallback is NOT
+        # constant-time and violates the project invariant "no cryptographic
+        # fallbacks, ever."  Raise instead of silently degrading to a
+        # timing-vulnerable implementation (audit finding HC-001).
+        raise RuntimeError(
+            "INVARIANT-7: Native HKDF-SHA3-256 (ama_hkdf) is unavailable. "
+            "The Python fallback is not constant-time and MUST NOT be used "
+            "for cryptographic key combination.  Build the native C library."
+        )
 
     def _hkdf_native(self, salt: bytes, ikm: bytes, info: bytes, okm_len: int) -> bytes:
         """HKDF via native C ama_hkdf (HMAC-SHA3-256)."""
@@ -270,6 +278,30 @@ class HybridCombiner:
         """
         classical_ct, classical_ss = classical_encapsulate(classical_pk)
         pqc_ct, pqc_ss = pqc_encapsulate(pqc_pk)
+
+        # SECURITY FIX: Validate encapsulation outputs to prevent injection
+        # of zero-length secrets, oversized ciphertexts, or non-bytes types
+        # that could cause downstream key compromise or DoS (audit finding H4).
+        _MAX_CT_BYTES = 8192  # generous upper bound for any KEM ciphertext
+        _MAX_SS_BYTES = 256   # generous upper bound for any shared secret
+        for label, ct, ss in [
+            ("Classical", classical_ct, classical_ss),
+            ("PQC", pqc_ct, pqc_ss),
+        ]:
+            if not isinstance(ct, bytes) or not isinstance(ss, bytes):
+                raise TypeError(f"{label} encapsulate must return (bytes, bytes)")
+            if len(ss) == 0:
+                raise ValueError(f"{label} shared secret is empty")
+            if len(ct) == 0:
+                raise ValueError(f"{label} ciphertext is empty")
+            if len(ct) > _MAX_CT_BYTES:
+                raise ValueError(
+                    f"{label} ciphertext too large ({len(ct)} > {_MAX_CT_BYTES})"
+                )
+            if len(ss) > _MAX_SS_BYTES:
+                raise ValueError(
+                    f"{label} shared secret too large ({len(ss)} > {_MAX_SS_BYTES})"
+                )
 
         combined = self.combine(
             classical_ss=classical_ss,

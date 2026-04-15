@@ -319,6 +319,11 @@ class SecureSession:
     created_at: float = field(default_factory=time.monotonic)
     ttl_seconds: float = SESSION_TTL_SECONDS
     messages_since_rekey: int = 0
+    # SECURITY FIX: Track key generation/epoch to bind AAD to the current
+    # key material.  Without this, a silent rekey failure could leave the
+    # same key active across two epochs with overlapping sequence numbers,
+    # enabling tag forgery via multi-target attacks (audit finding H2).
+    rekey_epoch: int = 0
     _replay_window: set[int] = field(default_factory=set)
     _replay_window_base: int = 0
     _state: ChannelState = ChannelState.ESTABLISHED
@@ -359,8 +364,15 @@ class SecureSession:
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
         nonce = secrets.token_bytes(NONCE_BYTES)
-        # AAD binds ciphertext to session_id and sequence number
-        aad = self.session_id + struct.pack(">Q", self.send_seq)
+        # AAD binds ciphertext to session_id, rekey epoch, and sequence
+        # number.  Including the epoch ensures that a silent rekey failure
+        # (same key across two epochs) produces distinct AAD, preventing
+        # multi-target tag forgery (audit finding H2).
+        aad = (
+            self.session_id
+            + struct.pack(">I", self.rekey_epoch)
+            + struct.pack(">Q", self.send_seq)
+        )
 
         ct, tag = native_aes256_gcm_encrypt(self.send_key, nonce, plaintext, aad)
 
@@ -408,7 +420,11 @@ class SecureSession:
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
 
-        aad = self.session_id + struct.pack(">Q", seq)
+        aad = (
+            self.session_id
+            + struct.pack(">I", self.rekey_epoch)
+            + struct.pack(">Q", seq)
+        )
         plaintext = native_aes256_gcm_decrypt(
             self.recv_key, msg.nonce, msg.ciphertext, msg.tag, aad
         )
@@ -444,7 +460,8 @@ class SecureSession:
         self.send_key = native_hkdf(self.send_key, KEY_BYTES, salt=None, info=b"ama-rekey")
         self.recv_key = native_hkdf(self.recv_key, KEY_BYTES, salt=None, info=b"ama-rekey")
         self.messages_since_rekey = 0
-        logger.debug("Session %s re-keyed", self.session_id.hex()[:16])
+        self.rekey_epoch += 1
+        logger.debug("Session %s re-keyed (epoch %d)", self.session_id.hex()[:16], self.rekey_epoch)
 
     def close(self) -> None:
         """Close the session, zeroing key material."""
@@ -505,6 +522,22 @@ class SecureChannelInitiator:
 
         # Encapsulate against responder's static KEM public key
         encap_result = self._kem.encapsulate(self._responder_kem_pk)
+
+        # SECURITY FIX: Validate encapsulation result before using the
+        # shared secret.  A corrupted or attacker-controlled encapsulation
+        # result could compromise forward secrecy (audit finding C1).
+        if (
+            not encap_result.shared_secret
+            or len(encap_result.shared_secret) != KEY_BYTES
+        ):
+            raise HandshakeError(
+                "KEM encapsulation returned invalid shared secret "
+                f"(expected {KEY_BYTES} bytes, got "
+                f"{len(encap_result.shared_secret) if encap_result.shared_secret else 0})"
+            )
+        if not encap_result.ciphertext:
+            raise HandshakeError("KEM encapsulation returned empty ciphertext")
+
         self._shared_secret = encap_result.shared_secret
 
         msg = HandshakeMessage(

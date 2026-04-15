@@ -152,6 +152,13 @@ ama_error_t ama_ed25519_batch_verify(
         return AMA_SUCCESS;
     }
 
+    /* SECURITY FIX: Guard against integer overflow in allocation sizes.
+     * If count is very large, count * sizeof(ptr) can silently wrap to a
+     * small value, leading to heap buffer overflow (audit finding C-MEM-1). */
+    if (count > SIZE_MAX / sizeof(const unsigned char *)) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
     /* Allocate pointer arrays for donna's batch verify interface */
     const unsigned char **msgs = (const unsigned char **)malloc(count * sizeof(const unsigned char *));
     size_t *mlens = (size_t *)malloc(count * sizeof(size_t));

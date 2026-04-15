@@ -300,13 +300,18 @@ def _kat_aes_256_gcm() -> Tuple[bool, str]:
         expected_tag = bytes.fromhex("2df7cd675b4f09163b41ebf980a7f638")
 
         ct, tag = native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
-        if ct != expected_ct:
-            return False, f"AES-256-GCM KAT: ciphertext mismatch (got {ct.hex()})"
-        if tag != expected_tag:
-            return False, f"AES-256-GCM KAT: tag mismatch (got {tag.hex()})"
+        # SECURITY FIX: Use constant-time comparison for KAT validation
+        # to avoid establishing variable-time patterns that could be
+        # cargo-culted into production code (audit finding ST-001).
+        from ama_cryptography.secure_memory import constant_time_compare
+
+        if not constant_time_compare(ct, expected_ct):
+            return False, "AES-256-GCM KAT: ciphertext mismatch"
+        if not constant_time_compare(tag, expected_tag):
+            return False, "AES-256-GCM KAT: tag mismatch"
 
         pt = native_aes256_gcm_decrypt(key, nonce, ct, tag, aad)
-        if pt != plaintext:
+        if not constant_time_compare(pt, plaintext):
             return False, "AES-256-GCM KAT: decrypt mismatch"
 
         return True, "AES-256-GCM KAT passed (NIST SP 800-38D TC16)"

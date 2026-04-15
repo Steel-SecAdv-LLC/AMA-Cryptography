@@ -202,8 +202,10 @@ class MockTSA:
                 return False
 
             # Extract embedded data_hash from the payload and compare.
+            # SECURITY FIX: Use constant-time comparison to prevent
+            # timing oracle attacks on hash values (audit finding S3b).
             embedded_hash = payload[payload_end:]
-            return embedded_hash == data_hash
+            return constant_time_compare(embedded_hash, data_hash)
         except Exception as exc:
             _logger.error("MockTSA.verify failed: %s", exc)
             return False
