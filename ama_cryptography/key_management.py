@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum, auto
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
 from ama_cryptography._finalizer_health import record_finalizer_error
 from ama_cryptography.exceptions import (
@@ -185,7 +185,7 @@ class HDKeyDerivation:
             # the (seed is None AND seed_phrase is None) case, and the `elif`
             # excluded seed is not None, so seed is None and seed_phrase is not None.
             self.master_seed = hashlib.pbkdf2_hmac(
-                "sha512", seed_phrase.encode("utf-8"), b"mnemonic", 2048, 64
+                "sha512", cast(str, seed_phrase).encode("utf-8"), b"mnemonic", 2048, 64
             )
 
         # Generate master key
