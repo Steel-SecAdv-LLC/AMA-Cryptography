@@ -26,6 +26,10 @@ cdef extern from "ama_cryptography.h":
         uint8_t *public_key, uint8_t *secret_key
     )
 
+    ama_error_t ama_ed25519_keypair_from_seed(
+        const uint8_t *seed, uint8_t *public_key, uint8_t *secret_key
+    )
+
     ama_error_t ama_ed25519_sign(
         uint8_t *signature,
         const uint8_t *message, size_t message_len,
@@ -66,10 +70,9 @@ def cy_ed25519_keypair(bytes seed):
     cdef unsigned char sk[64]
     cdef int ret
 
-    memcpy(sk, <const unsigned char*>seed, 32)
-    ret = ama_ed25519_keypair(pk, sk)
+    ret = ama_ed25519_keypair_from_seed(<const unsigned char*>seed, pk, sk)
     if ret != 0:
-        raise RuntimeError(f"ama_ed25519_keypair failed (rc={ret})")
+        raise RuntimeError(f"ama_ed25519_keypair_from_seed failed (rc={ret})")
 
     result = (bytes(pk[:32]), bytes(sk[:64]))
     ama_secure_memzero(sk, 64)

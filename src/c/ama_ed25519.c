@@ -40,6 +40,7 @@
 
 #include "../include/ama_cryptography.h"
 #include "internal/ama_sha2.h"
+#include "ama_platform_rand.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -1155,12 +1156,64 @@ static void sc25519_muladd(uint8_t *s, const uint8_t *a, const uint8_t *b, const
 ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]) {
     uint8_t hash[64];
     ge25519_p3 A;
+    ama_error_t rc;
 
     if (!public_key || !secret_key) {
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    /* Hash the seed (caller must provide seed in secret_key[0..31]) */
+    /* Generate 32 bytes of cryptographic randomness for the seed */
+    rc = ama_randombytes(secret_key, 32);
+    if (rc != AMA_SUCCESS) {
+        return rc;
+    }
+
+    /* Hash the seed to derive the scalar and nonce prefix */
+    sha512(secret_key, 32, hash);
+
+    /* Clamp the scalar */
+    hash[0] &= 248;
+    hash[31] &= 127;
+    hash[31] |= 64;
+
+    /* Compute public key: A = s*B */
+    ge25519_scalarmult_base(&A, hash);
+    ge25519_p3_tobytes(public_key, &A);
+
+    /* Store public key in secret_key[32..63] */
+    memcpy(secret_key + 32, public_key, 32);
+
+    /* Scrub intermediate values */
+    ama_secure_memzero(hash, sizeof(hash));
+
+    return AMA_SUCCESS;
+}
+
+/**
+ * Deterministic Ed25519 keypair from a caller-provided 32-byte seed.
+ *
+ * Bypasses the RNG so that Known-Answer Tests (KAT) can reproduce
+ * RFC 8032 test vectors deterministically. Mirrors the pattern used
+ * by ama_kyber_keypair_from_seed and ama_dilithium_keypair_from_seed.
+ *
+ * @param seed       Input:  32-byte seed (RFC 8032 private key)
+ * @param public_key Output: 32-byte public key
+ * @param secret_key Output: 64-byte secret key (seed || public_key)
+ * @return AMA_SUCCESS or error code
+ */
+ama_error_t ama_ed25519_keypair_from_seed(
+    const uint8_t seed[32], uint8_t public_key[32], uint8_t secret_key[64]) {
+    uint8_t hash[64];
+    ge25519_p3 A;
+
+    if (!seed || !public_key || !secret_key) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    /* Copy seed into the first 32 bytes of secret_key */
+    memcpy(secret_key, seed, 32);
+
+    /* Hash the seed to derive the scalar and nonce prefix */
     sha512(secret_key, 32, hash);
 
     /* Clamp the scalar */
