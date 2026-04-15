@@ -88,12 +88,13 @@ static double test_ed25519_sign(int iterations) {
     uint8_t pk0[32], sk0[64], pk1[32], sk1[64];
     uint8_t sig[64];
 
-    /* Prepare two distinct keypairs */
-    memset(sk0, 0x00, 32);
-    ama_ed25519_keypair(pk0, sk0);
+    /* Prepare two distinct keypairs from fixed seeds */
+    uint8_t seed0[32], seed1[32];
+    memset(seed0, 0x00, 32);
+    ama_ed25519_keypair_from_seed(seed0, pk0, sk0);
 
-    memset(sk1, 0xFF, 32);
-    ama_ed25519_keypair(pk1, sk1);
+    memset(seed1, 0xFF, 32);
+    ama_ed25519_keypair_from_seed(seed1, pk1, sk1);
 
     uint8_t msg[64];
 
