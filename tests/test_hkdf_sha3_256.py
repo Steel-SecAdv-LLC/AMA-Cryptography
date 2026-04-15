@@ -39,9 +39,7 @@ try:
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF as HKDF
 
     _PYCA_AVAILABLE = True
-except BaseException:
-    # pyo3_runtime.PanicException (from broken Rust backend) is a
-    # BaseException, not Exception — catch broadly in this probe.
+except Exception:
     default_backend = None  # type: ignore[assignment]  # fallback when pyca unavailable (HKDF-001)
     hashes = None  # type: ignore[assignment]  # fallback when pyca unavailable (HKDF-002)
     HKDF = None  # type: ignore[assignment,misc]  # fallback when pyca unavailable (HKDF-003)

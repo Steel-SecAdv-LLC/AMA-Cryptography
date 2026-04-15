@@ -36,15 +36,13 @@ def _pyca_crypto_available() -> bool:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         _ = AESGCM  # import probe for availability check
-    except BaseException:
-        # pyo3_runtime.PanicException (from broken Rust backend) is a
-        # BaseException, not Exception — catch broadly in this probe.
+    except Exception:
         return False
     return True
 
 
 skip_no_pyca = pytest.mark.skipif(
-    not _pyca_crypto_available(),
+    not NATIVE_AVAILABLE or not _pyca_crypto_available(),
     reason="PyCA cryptography not available",
 )
 
