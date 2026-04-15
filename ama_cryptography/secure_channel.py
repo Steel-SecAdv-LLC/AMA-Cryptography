@@ -369,9 +369,7 @@ class SecureSession:
         # (same key across two epochs) produces distinct AAD, preventing
         # multi-target tag forgery (audit finding H2).
         aad = (
-            self.session_id
-            + struct.pack(">I", self.rekey_epoch)
-            + struct.pack(">Q", self.send_seq)
+            self.session_id + struct.pack(">I", self.rekey_epoch) + struct.pack(">Q", self.send_seq)
         )
 
         ct, tag = native_aes256_gcm_encrypt(self.send_key, nonce, plaintext, aad)
@@ -420,11 +418,7 @@ class SecureSession:
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
 
-        aad = (
-            self.session_id
-            + struct.pack(">I", self.rekey_epoch)
-            + struct.pack(">Q", seq)
-        )
+        aad = self.session_id + struct.pack(">I", self.rekey_epoch) + struct.pack(">Q", seq)
         plaintext = native_aes256_gcm_decrypt(
             self.recv_key, msg.nonce, msg.ciphertext, msg.tag, aad
         )
@@ -526,10 +520,7 @@ class SecureChannelInitiator:
         # SECURITY FIX: Validate encapsulation result before using the
         # shared secret.  A corrupted or attacker-controlled encapsulation
         # result could compromise forward secrecy (audit finding C1).
-        if (
-            not encap_result.shared_secret
-            or len(encap_result.shared_secret) != KEY_BYTES
-        ):
+        if not encap_result.shared_secret or len(encap_result.shared_secret) != KEY_BYTES:
             raise HandshakeError(
                 "KEM encapsulation returned invalid shared secret "
                 f"(expected {KEY_BYTES} bytes, got "
