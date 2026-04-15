@@ -13,7 +13,8 @@
  * Build (standalone):
  *   clang -fsanitize=fuzzer,address -O1 -g -I../include \
  *         fuzz_ed25519.c ../src/c/ama_ed25519.c ../src/c/ama_sha3.c \
- *         ../src/c/ama_consttime.c ../src/c/ama_core.c -o fuzz_ed25519
+ *         ../src/c/ama_consttime.c ../src/c/ama_core.c \
+ *         ../src/c/ama_platform_rand.c -o fuzz_ed25519
  */
 
 #include "ama_cryptography.h"
@@ -36,9 +37,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         uint8_t pk[32], sk[64];
         uint8_t sig[64];
 
-        /* Use first 32 bytes as seed */
-        memcpy(sk, payload, 32);
-        ama_ed25519_keypair(pk, sk);
+        /* Use first 32 bytes as deterministic seed */
+        ama_ed25519_keypair_from_seed(payload, pk, sk);
 
         const uint8_t *msg = payload + 32;
         size_t msg_len = payload_len - 32;
@@ -81,8 +81,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         if (payload_len < 32) break;
 
         uint8_t pk[32], sk[64];
-        memcpy(sk, payload, 32);
-        ama_ed25519_keypair(pk, sk);
+        ama_ed25519_keypair_from_seed(payload, pk, sk);
 
         /* Verify pk is stored in sk[32..63] */
         if (memcmp(pk, sk + 32, 32) != 0) {

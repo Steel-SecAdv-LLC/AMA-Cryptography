@@ -1877,6 +1877,20 @@ def native_ed25519_keypair_from_seed(seed: bytes) -> tuple:
             ctypes.memset(seed_buf, 0, 32)
     else:
         # Legacy path: pre-fill seed into sk_buf[0..31] for older library builds
+        # whose ama_ed25519_keypair still uses the caller-provided seed.
+        # WARNING: If the linked library has the NEW ama_ed25519_keypair
+        # (which generates its own randomness), the seed is silently
+        # discarded.  This fallback is kept only for truly old DLLs.
+        import warnings
+
+        warnings.warn(
+            "ama_ed25519_keypair_from_seed symbol not found; "
+            "falling back to legacy seed pre-fill. "
+            "Deterministic keypair generation is NOT guaranteed "
+            "if the library was built with internal-randomness support.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         ctypes.memmove(sk_buf, seed, 32)
         rc = _native_lib.ama_ed25519_keypair(pk_buf, sk_buf)
         if rc != 0:
