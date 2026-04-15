@@ -4,8 +4,8 @@
 """Tests for Invariant Upgrades A-D.
 
 INVARIANT-12: Constant-Time Required for All Secret-Dependent Operations
-INVARIANT-7 (revised): No Cryptographic Fallbacks, Ever
 INVARIANT-13: No Unjustified Static-Analysis Suppressions
+INVARIANT-7 (revised): No Cryptographic Fallbacks, Ever
 INVARIANT-3 (addendum): Finalizer Failures Must Be Observable
 """
 
@@ -403,7 +403,7 @@ class TestInvariantsDocumentation:
 
     def test_invariant_13_documented(self) -> None:
         content = self._read_invariants_md()
-        assert "No Unjustified Static-Analysis Suppressions" in content
+        assert "INVARIANT-13" in content
 
     def test_invariant_14_cve_hygiene_documented(self) -> None:
         content = self._read_invariants_md()

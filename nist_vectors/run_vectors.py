@@ -20,6 +20,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, cast
 
 VECTORS_DIR = Path(__file__).parent
 REPO_ROOT = VECTORS_DIR.parent
@@ -160,11 +161,11 @@ def _setup_ctypes(lib: ctypes.CDLL) -> None:
 # ---------------------------------------------------------------------------
 # Test functions
 # ---------------------------------------------------------------------------
-def _load_vector_file(path: Path) -> dict | None:
+def _load_vector_file(path: Path) -> dict[str, Any] | None:
     """Load a vector JSON file, returning None if it does not exist."""
     if not path.is_file():
         return None
-    return json.loads(path.read_text())  # type: ignore[no-any-return]
+    return cast(dict[str, Any], json.loads(path.read_text()))
 
 
 def test_sha3_256(lib: ctypes.CDLL) -> AlgorithmResult:

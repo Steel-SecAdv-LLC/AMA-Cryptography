@@ -149,6 +149,11 @@ ignore = []  # Do not add ignores without a comment explaining why.
     "N801", "N806",
     "E722",
 ]
+# test_fuzzing.py: E402 is architecturally required — Hypothesis settings profiles
+# must be registered and loaded BEFORE importing the test subjects, or the @given
+# decorator picks up the wrong profile.  Moving these imports to the top of the
+# file would break profile selection in CI vs local development.
+"tests/test_fuzzing.py" = ["E402"]
 # ama_cryptography/ uses intentional patterns that must not be changed:
 #   N803/N806: uppercase variable names for crypto constants (e.g. R, S, A, K)
 #   RUF001/RUF002/RUF003: Unicode symbols in docstrings/comments (σ, ✓, etc.)
@@ -194,7 +199,8 @@ ignore = []  # Do not add ignores without a comment explaining why.
 # Demo script for the monitoring module
 "ama_cryptography_monitor_demo.py" = ["B007", "RUF001"]
 # Benchmark and tooling scripts — not part of the core library
-"benchmark_suite.py" = ["C901", "UP006", "UP035", "E501"]  # C901: generate_markdown complexity
+# benchmark_suite.py: E402 because psutil optional-import block precedes ama_cryptography imports
+"benchmark_suite.py" = ["C901", "UP006", "UP035", "E501", "E402"]  # C901: generate_markdown complexity
 "setup.py" = ["E501", "RUF005", "S603", "S607"]
 "benchmarks/*" = [
     "E402", "E501", "F541", "I001",
@@ -202,7 +208,8 @@ ignore = []  # Do not add ignores without a comment explaining why.
     "S603",
     "UP006", "UP035",
 ]
-"examples/*" = [
+# examples/**  (double-star) is required — scripts live in examples/python/
+"examples/**" = [
     "B007", "B904",
     "E402",
     "RUF001", "RUF059", "RUF100",

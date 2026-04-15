@@ -199,12 +199,6 @@ For each invariant in `.github/INVARIANTS.md` (INVARIANT-1 through INVARIANT-14)
 8. **INVARIANT-12 (Constant-Time):** Verify no Python-level MAC/tag
    verification, no `==` comparisons on secret data.
 
-9. **INVARIANT-13 (Suppression Hygiene):** Verify all `# noqa`, `# nosec`,
-   `# type: ignore` have justification and tracking ID.
-   ```bash
-   python tools/check_suppression_hygiene.py
-   ```
-
 ### 3.3 CSRC_STANDARDS.md Consistency
 
 Verify every algorithm listed in `CSRC_STANDARDS.md` has:
@@ -415,7 +409,6 @@ update it causes the Power-On Self-Test (POST) to fail, setting
 ### C
 
 - **C11 standard** (`-std=c11`)
-- **No suppressions** in `src/c/`, `include/ama_*.h` (INVARIANT-13)
 - **Constant-time** for all secret-dependent operations
 - **Memory safety** — validate all buffer sizes, use `secure_memzero`
 - **No external crypto deps** — all primitives implemented in-tree
@@ -459,7 +452,6 @@ PRs must target `main` or `develop` for CI to trigger.
 | Update integrity digest | `python -m ama_cryptography.integrity --update` |
 | Verify integrity | `python -m ama_cryptography.integrity --verify` |
 | Run demo | `python -m ama_cryptography` |
-| Suppression hygiene | `python tools/check_suppression_hygiene.py` |
 | Benchmark regression | `python benchmarks/benchmark_runner.py --verbose` |
 
 ### Architecture Quick Reference

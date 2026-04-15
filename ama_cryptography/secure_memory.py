@@ -219,23 +219,27 @@ def _python_fallback_memzero(data: Union[bytearray, memoryview]) -> None:
         data[i] = 0
 
 
-# Select the best available backend at module load time
-_memzero_fn: Optional[Callable[[Union[bytearray, memoryview]], None]] = None
+# Select the best available backend at module load time.
+# Start with the pure-Python fallback so the type is always a concrete callable,
+# then upgrade to a faster/more-secure backend if one is available.
+_memzero_fn: Callable[[Union[bytearray, memoryview]], None] = _python_fallback_memzero
+SECURE_MEMZERO_BACKEND = "python_fallback"
 
-_memzero_fn = _try_native_ama_memzero()
-if _memzero_fn is not None:
+_native_fn = _try_native_ama_memzero()
+if _native_fn is not None:
+    _memzero_fn = _native_fn
     SECURE_MEMZERO_BACKEND = "native_ama"
 else:
-    _memzero_fn = _try_libc_explicit_bzero()
-    if _memzero_fn is not None:
+    _bzero_fn = _try_libc_explicit_bzero()
+    if _bzero_fn is not None:
+        _memzero_fn = _bzero_fn
         SECURE_MEMZERO_BACKEND = "libc_explicit_bzero"
     else:
-        _memzero_fn = _try_libc_memset_s()
-        if _memzero_fn is not None:
+        _memset_fn = _try_libc_memset_s()
+        if _memset_fn is not None:
+            _memzero_fn = _memset_fn
             SECURE_MEMZERO_BACKEND = "libc_memset_s"
         else:
-            _memzero_fn = _python_fallback_memzero
-            SECURE_MEMZERO_BACKEND = "python_fallback"
             logger.warning(
                 "secure_memzero: using Python byte-by-byte fallback. "
                 "Build the native C library for guaranteed secure zeroing."
@@ -244,7 +248,7 @@ else:
 
 def _memzero(data: Union[bytearray, memoryview]) -> None:
     """Dispatch to the best available secure zeroing backend."""
-    _memzero_fn(data)  # type: ignore[misc]  # callable union; dispatch set at module init (SM-001)
+    _memzero_fn(data)
 
 
 def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
@@ -278,7 +282,7 @@ def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
                 "secure_mlock on bytes objects requires CPython (id-based address layout). "
                 f"Current implementation: {sys.implementation.name}"
             )
-        addr = id(data) + bytes.__basicsize__ - 1  # noqa: E501 — CPython ob_sval offset (SM-002)
+        addr = id(data) + bytes.__basicsize__ - 1
 
     try:
         from ama_cryptography.pqc_backends import _native_lib

@@ -75,7 +75,7 @@ def _build_hsm(
     mock_pkcs11: MagicMock,
     hsm_type: str = "softhsm",
     library_path: str = "/usr/lib/softhsm/libsofthsm2.so",
-    token_label: str = "AmaCryptography",  # noqa: S107 — test default, not a real credential (TI-001)
+    token_label: str = "AmaCryptography",  # noqa: S107 -- test fixture label, not a production secret (HSM-001)
     pin: str = "1234",
     slot_index: Optional[int] = None,
 ) -> HSMKeyStorage:

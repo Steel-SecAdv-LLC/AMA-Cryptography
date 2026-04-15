@@ -16,6 +16,7 @@ import json
 import sys
 import urllib.request
 from pathlib import Path
+from typing import Any, cast
 
 VECTORS_DIR = Path(__file__).parent
 
@@ -37,16 +38,16 @@ ACVP_FETCH_LIST: list[tuple[str, str]] = [
 ]
 
 
-def fetch_acvp_file(algo_dir: str, filename: str) -> dict:  # type: ignore[type-arg]
+def fetch_acvp_file(algo_dir: str, filename: str) -> dict[str, Any]:
     """Download a JSON file from the ACVP-Server repository."""
     url = f"{ACVP_BASE}/{algo_dir}/{filename}"
     print(f"  Fetching {url}")
-    req = urllib.request.Request(  # noqa: S310 — URL is always HTTPS to github.com
+    req = urllib.request.Request(  # noqa: S310
         url, headers={"User-Agent": "AMA-Crypto-Vectors/1.0"}
     )
     with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
         data = resp.read()
-    return json.loads(data)  # type: ignore[no-any-return]
+    return cast(dict[str, Any], json.loads(data))
 
 
 def fetch_acvp_vectors() -> None:

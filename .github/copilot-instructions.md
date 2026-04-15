@@ -21,10 +21,6 @@ in-house — zero external crypto dependencies.
    Never use `==` to compare MACs, tags, or secret data. Python code must
    delegate all crypto to the native C backend.
 
-4. **INVARIANT-13:** All `# noqa`, `# nosec`, `# type: ignore` suppressions
-   must include a justification and tracking ID. No suppressions in `src/c/`
-   or `include/ama_*.h`.
-
 ## Standards Compliance
 
 All cryptographic implementations must reference their governing standard:

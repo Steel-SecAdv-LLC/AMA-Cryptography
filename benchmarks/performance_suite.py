@@ -119,8 +119,6 @@ class PerformanceBenchmark:
 
 def benchmark_lyapunov_functions():
     """Benchmark Lyapunov function implementations"""
-    from ama_cryptography.equations import lyapunov_function  # noqa: F401
-
     state = np.random.randn(1000)
     target = np.ones(1000)
 

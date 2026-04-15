@@ -652,20 +652,16 @@ static ama_error_t kyber_decapsulate(
          * This prevents timing side-channels from leaking whether
          * decapsulation succeeded or triggered implicit rejection. */
         {
-            /* Always compute the implicit rejection value: H(z || ct) */
+            /* Always compute the implicit rejection value: H(z || ct).
+             * Stack-allocated to avoid a malloc failure path that would
+             * leak the decapsulation outcome (IND-CCA2 side-channel). */
             uint8_t ss_reject[32];
-            uint8_t *rej_input = (uint8_t *)malloc(32 + AMA_KYBER_1024_CIPHERTEXT_BYTES);
-            if (!rej_input) {
-                ama_secure_memzero(m, sizeof(m));
-                ama_secure_memzero(kr, sizeof(kr));
-                return AMA_ERROR_MEMORY;
-            }
+            uint8_t rej_input[32 + AMA_KYBER_1024_CIPHERTEXT_BYTES];
             memcpy(rej_input, z, 32);
             memcpy(rej_input + 32, ciphertext, AMA_KYBER_1024_CIPHERTEXT_BYTES);
             ama_shake256(rej_input, 32 + AMA_KYBER_1024_CIPHERTEXT_BYTES,
                         ss_reject, 32);
             ama_secure_memzero(rej_input, 32 + AMA_KYBER_1024_CIPHERTEXT_BYTES);
-            free(rej_input);
 
             /* Start with the valid shared secret (kr), then conditionally
              * overwrite with the rejection value if ciphertexts didn't match.

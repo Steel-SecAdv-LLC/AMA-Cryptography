@@ -337,7 +337,7 @@ class TestNoiseNKProtocolFuzzing:
             tag=msg.tag,
         )
 
-        with pytest.raises(Exception):  # noqa: B017 -- decrypt failure (APH-001)
+        with pytest.raises(ValueError):
             resp_session.decrypt(bad_msg)
 
         # Flip bit in tag
@@ -351,7 +351,7 @@ class TestNoiseNKProtocolFuzzing:
             tag=bytes(tampered_tag),
         )
 
-        with pytest.raises(Exception):  # noqa: B017 -- decrypt failure (APH-001)
+        with pytest.raises(ValueError):
             resp_session.decrypt(bad_msg2)
 
 
@@ -394,7 +394,7 @@ class TestRekeyDesynchronization:
 
         # Encrypt with new keys, try to decrypt with old keys
         msg2 = init_session.encrypt(b"after initiator rekey")
-        with pytest.raises(Exception):  # noqa: B017 -- decrypt failure (APH-002)
+        with pytest.raises(ValueError):
             resp_session.decrypt(msg2)
 
     def test_both_sides_rekey_restores_communication(self) -> None:
@@ -453,7 +453,7 @@ class TestRekeyDesynchronization:
         resp_session.rekey()
 
         msg = init_session.encrypt(b"double rekey test")
-        with pytest.raises(Exception):  # noqa: B017 -- decrypt failure (APH-003)
+        with pytest.raises(ValueError):
             resp_session.decrypt(msg)
 
 

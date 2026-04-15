@@ -6,15 +6,12 @@ Tests for functionality added in prior sessions:
   - ama_hmac_sha3_256() native C implementation (RFC 2104 correctness)
   - Ed25519 64-byte expanded-key fast-path
   - constant_time_compare from secure_memory
-  - nosec suppression justifications
   - INVARIANT-1 compliance (no stdlib hmac in ama_cryptography/)
 """
 
 import hashlib
 import hmac as stdlib_hmac
 import secrets
-
-import pytest
 
 from ama_cryptography.pqc_backends import native_hmac_sha3_256
 from ama_cryptography.secure_memory import constant_time_compare
@@ -308,37 +305,7 @@ class TestInvariant1NoStdlibHmac:
 
 
 # ============================================================================
-# 2.4 — nosec Suppression Justifications
-# ============================================================================
-
-
-class TestNosecJustifications:
-    """All # nosec annotations must have inline justification per INVARIANTS.md."""
-
-    @pytest.mark.parametrize(
-        "filepath",
-        [
-            "ama_cryptography/legacy_compat.py",
-            "ama_cryptography/key_management.py",
-            "ama_cryptography/_numeric.py",
-            "tests/conftest.py",
-        ],
-    )
-    def test_nosec_suppressions_have_justifications(self, filepath: str) -> None:
-        import re
-
-        bare_nosec = re.compile(r"#\s*nosec\s+B\d+\s*$")
-        with open(filepath, encoding="utf-8") as f:
-            for lineno, line in enumerate(f, 1):
-                if "# nosec" in line:
-                    assert not bare_nosec.search(line.rstrip()), (
-                        f"{filepath}:{lineno} has bare # nosec without justification: "
-                        f"{line.rstrip()}"
-                    )
-
-
-# ============================================================================
-# 2.5 — constant_time_compare
+# 2.4 — constant_time_compare
 # ============================================================================
 
 

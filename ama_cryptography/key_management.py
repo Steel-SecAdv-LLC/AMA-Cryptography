@@ -26,15 +26,15 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum, auto
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
 from ama_cryptography._finalizer_health import record_finalizer_error
 from ama_cryptography.exceptions import (
     AmaHSMUnavailableError as AmaHSMUnavailableError,
 )
 from ama_cryptography.exceptions import (
-    SecurityWarning,
-)  # noqa: F401 — re-exported for public API (KM-001)
+    SecurityWarning as SecurityWarning,
+)
 from ama_cryptography.pqc_backends import _HMAC_SHA512_NATIVE_AVAILABLE, native_hmac_sha512
 from ama_cryptography.secure_memory import secure_memzero
 
@@ -180,12 +180,12 @@ class HDKeyDerivation:
         elif seed is not None:
             self.master_seed = seed
         else:
-            # Derive seed from phrase (simplified BIP39)
-            # seed_phrase is guaranteed non-None here: seed is None (from elif)
-            # and not both None (from first if).
-            assert seed_phrase is not None  # nosec B101 — mypy narrowing; always True here (KM-002)
+            # Derive seed from phrase (simplified BIP39).
+            # seed_phrase is guaranteed non-None here: the first `if` excluded
+            # the (seed is None AND seed_phrase is None) case, and the `elif`
+            # excluded seed is not None, so seed is None and seed_phrase is not None.
             self.master_seed = hashlib.pbkdf2_hmac(
-                "sha512", seed_phrase.encode("utf-8"), b"mnemonic", 2048, 64
+                "sha512", cast(str, seed_phrase).encode("utf-8"), b"mnemonic", 2048, 64
             )
 
         # Generate master key
@@ -996,7 +996,7 @@ class HSMKeyStorage:
         token_label: str = "AmaCryptography",
         pin: Optional[
             str
-        ] = None,  # nosec B107 — PIN is a parameter, not a hardcoded credential (KM-003)
+        ] = None,  # nosec B107 -- default None, not a hardcoded secret; PIN is caller-provided at runtime (KM-001)
         slot_index: Optional[int] = None,
     ) -> None:
         """
@@ -1347,7 +1347,7 @@ if __name__ == "__main__":
     demo_storage_path = Path(tempfile.gettempdir()) / "ama_keys_demo"
     storage = SecureKeyStorage(
         demo_storage_path, master_password="test_password_123"
-    )  # nosec B106 — demo-only hardcoded password, not used in production (KM-004)
+    )  # nosec B106 -- intentional demo password in __main__ example block (KM-002)
 
     # Store a key
     test_key = secrets.token_bytes(32)

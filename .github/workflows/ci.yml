@@ -207,6 +207,10 @@ jobs:
       run: |
         mypy --strict ama_cryptography/ tests/
 
+    - name: "INVARIANT-13: Suppression hygiene check"
+      run: |
+        python tools/check_suppression_hygiene.py
+
   security-checks:
     name: Security Checks
     runs-on: ubuntu-latest
@@ -256,10 +260,6 @@ jobs:
       with:
         name: semgrep-security-report
         path: semgrep-report.json
-
-    - name: "INVARIANT-13: Suppression hygiene check"
-      run: |
-        python tools/check_suppression_hygiene.py
 
     - name: Enforce safe os.fdopen usage
       run: |

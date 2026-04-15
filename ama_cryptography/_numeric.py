@@ -105,9 +105,9 @@ class Vec:
             if isinstance(value, Vec):
                 self._data[idx] = value._data
             else:
-                self._data[idx] = list(value)  # type: ignore[arg-type]  # Sequence[float] is list-compatible (NUM-001)
+                self._data[idx] = list(value)  # type: ignore[arg-type]  # nested generic variance in List[float|Vec] (NM-001)
         else:
-            self._data[idx] = float(value)  # type: ignore[arg-type]  # scalar coercion from union (NUM-002)
+            self._data[idx] = float(value)  # type: ignore[arg-type]  # scalar float narrowing in Vec.__setitem__ (NM-002)
 
     def __iter__(self) -> Iterator[float]:
         return iter(self._data)
@@ -221,7 +221,7 @@ class Vec:
                 for k in range(n):
                     s += self._data[k] * other._data[k][j]
                 out[j] = s
-            return Vec._wrap(out)  # type: ignore[return-value]  # Vec @ Mat -> Vec (NUM-003)
+            return Vec._wrap(out)  # type: ignore[return-value]  # List[float]->Vec transformation unverifiable (NM-003)
         return NotImplemented
 
     # -- comparison helpers --------------------------------------------------
@@ -291,7 +291,7 @@ class Mat:
     def __setitem__(self, idx: int | Tuple[int, int], value: float | List[float]) -> None:
         if isinstance(idx, tuple):
             r, c = idx
-            self._data[r][c] = float(value)  # type: ignore[arg-type]  # scalar coercion from union (NUM-004)
+            self._data[r][c] = float(value)  # type: ignore[arg-type]  # nested List generic in Mat.__setitem__ (NM-004)
         else:
             if isinstance(value, list):
                 self._data[idx] = [float(x) for x in value]
@@ -308,7 +308,7 @@ class Mat:
     # -- transpose -----------------------------------------------------------
 
     @property
-    def T(self) -> Mat:  # noqa: N802 — mathematical convention for transpose (NUM-005)
+    def T(self) -> Mat:  # noqa: N802 -- uppercase T, numpy matrix-transpose convention (NM-005)
         t = [[self._data[r][c] for r in range(self.rows)] for c in range(self.cols)]
         return Mat._wrap(t, self.cols, self.rows)
 
@@ -409,8 +409,8 @@ def array(data: Sequence[float] | Sequence[Sequence[float]]) -> Vec | Mat:
         return Vec._wrap([])
     first = data[0]
     if isinstance(first, (list, tuple)):
-        return Mat(data)  # type: ignore[arg-type]  # nested sequence is Mat-compatible (NUM-006)
-    return Vec(data)  # type: ignore[arg-type]  # flat sequence is Vec-compatible (NUM-007)
+        return Mat(data)  # type: ignore[arg-type]  # discriminated union not statically resolvable at runtime (NM-006)
+    return Vec(data)  # type: ignore[arg-type]  # fallback Vec branch in array(), same runtime pattern (NM-007)
 
 
 def zeros(n: int) -> Vec:
@@ -679,35 +679,35 @@ def _qr_tridiagonal_eigvals(A: List[List[float]], n: int, max_iter: int = 30) ->
     e = [A[i + 1][i] for i in range(n - 1)]
     e.append(0.0)
 
-    for l_idx in range(n):  # noqa: E741 — l_idx mirrors QL algorithm literature naming (NUM-008)
+    for left in range(n):
         itr = 0
         while True:
             # Find small sub-diagonal element
-            m = l_idx
+            m = left
             while m < n - 1:
                 dd = abs(d[m]) + abs(d[m + 1])
                 if abs(e[m]) <= 1e-15 * dd:
                     break
                 m += 1
-            if m == l_idx:
+            if m == left:
                 break
             if itr >= max_iter:
                 break
             itr += 1
 
-            # Wilkinson shift: eigenvalue of trailing 2x2 closer to d[l_idx]
-            g = (d[l_idx + 1] - d[l_idx]) / (2.0 * e[l_idx])
+            # Wilkinson shift: eigenvalue of trailing 2x2 closer to d[left]
+            g = (d[left + 1] - d[left]) / (2.0 * e[left])
             r = math.hypot(g, 1.0)
             if g >= 0:
-                g = d[m] - d[l_idx] + e[l_idx] / (g + r)
+                g = d[m] - d[left] + e[left] / (g + r)
             else:
-                g = d[m] - d[l_idx] + e[l_idx] / (g - r)
+                g = d[m] - d[left] + e[left] / (g - r)
 
             s = 1.0
             c = 1.0
             p = 0.0
 
-            for i in range(m - 1, l_idx - 1, -1):
+            for i in range(m - 1, left - 1, -1):
                 f = s * e[i]
                 b = c * e[i]
                 r = math.hypot(f, g)
@@ -726,8 +726,8 @@ def _qr_tridiagonal_eigvals(A: List[List[float]], n: int, max_iter: int = 30) ->
                 g = c * r - b
             else:
                 # Loop completed without break
-                d[l_idx] -= p
-                e[l_idx] = g
+                d[left] -= p
+                e[left] = g
                 e[m] = 0.0
 
     return d
@@ -827,7 +827,7 @@ def fft(v: Vec) -> Vec:
         result = _bluestein_fft(x, n, inverse=False)
 
     out = Vec.__new__(Vec)
-    out._data = result  # type: ignore[assignment]  # complex list stored in Vec for FFT output (NUM-009)
+    out._data = result  # type: ignore[assignment]  # fft returns List[complex], field typed List[float|complex] (NM-008)
     return out
 
 
@@ -847,7 +847,7 @@ def ifft(v: Vec) -> Vec:
         result = _bluestein_fft(x, n, inverse=True)
 
     out = Vec.__new__(Vec)
-    out._data = result  # type: ignore[assignment]  # complex list stored in Vec for IFFT output (NUM-010)
+    out._data = result  # type: ignore[assignment]  # ifft same complex-result pattern as fft (NM-009)
     return out
 
 
@@ -860,7 +860,7 @@ class _Random:
     """Numpy-compatible random interface backed by stdlib random."""
 
     def __init__(self) -> None:
-        self._rng = _stdlib_random.Random()  # fmt: skip  # noqa: S311 # nosec B311 — non-crypto PRNG for math engine only (NUM-011)
+        self._rng = _stdlib_random.Random()  # fmt: skip  # noqa: S311 # nosec B311 -- stdlib Random intentional for non-crypto math only (NM-010)
 
     def seed(self, s: int) -> None:
         self._rng.seed(s)

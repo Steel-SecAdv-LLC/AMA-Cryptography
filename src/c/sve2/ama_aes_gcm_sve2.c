@@ -39,26 +39,57 @@ void ama_bulk_xor_sve2(uint8_t *dst, const uint8_t *src,
 }
 
 /* ============================================================================
+ * GF(2^128) multiplication for GHASH
+ *
+ * Schoolbook carry-less multiplication with reduction modulo the GCM
+ * irreducible polynomial x^128 + x^7 + x^2 + x + 1 (R = 0xe1 || 0^120
+ * in the bit-reflected representation used by GCM).
+ *
+ * Constant-time with respect to operand values: the mask trick ensures
+ * no secret-dependent branches or memory accesses.
+ * ============================================================================ */
+static void ghash_mul_gf128(const uint8_t X[16], const uint8_t Y[16],
+                             uint8_t out[16]) {
+    uint8_t V[16];
+    uint8_t Z[16];
+
+    memcpy(V, Y, 16);
+    memset(Z, 0, 16);
+
+    for (int i = 0; i < 16; i++) {
+        for (int j = 7; j >= 0; j--) {
+            /* If bit (i*8 + (7-j)) of X is set, Z ^= V */
+            uint8_t mask = (uint8_t)(-(int8_t)((X[i] >> j) & 1));
+            for (int k = 0; k < 16; k++)
+                Z[k] ^= V[k] & mask;
+
+            /* V >>= 1 in GF(2^128); if old LSB was 1, XOR R = 0xe1 || 0^120 */
+            uint8_t lsb = V[15] & 1;
+            for (int k = 15; k > 0; k--)
+                V[k] = (uint8_t)((V[k] >> 1) | (V[k-1] << 7));
+            V[0] >>= 1;
+            V[0] ^= (uint8_t)(0xe1 & (-(int)lsb));
+        }
+    }
+
+    memcpy(out, Z, 16);
+}
+
+/* ============================================================================
  * SVE2-accelerated GHASH precomputation
  *
  * Precomputes H^1, H^2, H^3, H^4 powers for 4-way Karatsuba GHASH.
- * The actual GHASH multiplication uses PMULL from Crypto Extensions.
+ * Uses the schoolbook GF(2^128) multiply above; a future optimisation may
+ * replace this with PMULL/PMULL2 from the ARMv8 Crypto Extensions.
  * ============================================================================ */
 void ama_ghash_precompute_sve2(const uint8_t H[16],
                                 uint8_t H_powers[4][16]) {
     /* H^1 = H */
     memcpy(H_powers[0], H, 16);
 
-    /* H^2, H^3, H^4 computed via GF(2^128) multiplication.
-     * This is a placeholder; real implementation would use
-     * PMULL instructions for the polynomial multiply. */
+    /* H^2 = H*H, H^3 = H^2*H, H^4 = H^3*H */
     for (int i = 1; i < 4; i++) {
-        /* Simplified: in production this would be proper GF mul */
-        memcpy(H_powers[i], H_powers[i-1], 16);
-        /* XOR with reduction polynomial for each squaring step */
-        for (int j = 0; j < 16; j++) {
-            H_powers[i][j] ^= H_powers[0][j];
-        }
+        ghash_mul_gf128(H_powers[i-1], H, H_powers[i]);
     }
 }
 

@@ -16,6 +16,7 @@ Production-grade adversarial tests covering:
 AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
 """
 
+import contextlib
 import ctypes
 import secrets
 import time
@@ -480,13 +481,11 @@ class TestCrossAlgorithm:
         dil_pk, _ = _dilithium_keygen()
         fake_pk = (dil_pk + b"\x00" * KYBER_PK)[:KYBER_PK]
         # Should not crash — may succeed with unusable keys
-        try:
+        with contextlib.suppress(Exception):
             from ama_cryptography.pqc_backends import kyber_encapsulate
 
             result = kyber_encapsulate(fake_pk)
             assert isinstance(result.ciphertext, bytes)
-        except Exception:  # noqa: S110 -- intentional crash-safety test (ADV-001)
-            pass  # Any exception is acceptable, crash is not
 
 
 # ===========================================================================
@@ -572,8 +571,6 @@ class TestSecurityEdgeCases:
         pk, _ = _kyber_keygen()
         ct, _ = _kyber_encap(pk)
         zero_sk = b"\x00" * KYBER_SK
-        try:
+        with contextlib.suppress(Exception):
             ss = _kyber_decap(ct, zero_sk)
             assert isinstance(ss, bytes)
-        except Exception:  # noqa: S110 -- intentional crash-safety test (ADV-001)
-            pass  # Exception is acceptable, crash is not

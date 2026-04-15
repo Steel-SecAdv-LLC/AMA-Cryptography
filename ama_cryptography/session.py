@@ -89,7 +89,7 @@ class ReplayWindow:
 
     window_size: int = REPLAY_WINDOW_SIZE
     base: int = 0
-    _seen: set = field(default_factory=set)  # type: ignore[type-arg]  # generic set used for seq-number tracking; parameterising adds no safety (SS-001)
+    _seen: set[int] = field(default_factory=set)
 
     def check_and_accept(self, seq: int) -> None:
         """Check a sequence number and accept it if valid.
