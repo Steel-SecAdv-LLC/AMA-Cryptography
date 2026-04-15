@@ -308,7 +308,7 @@ class Mat:
     # -- transpose -----------------------------------------------------------
 
     @property
-    def T(self) -> Mat:  # noqa: N802 -- uppercase T matches numpy matrix-transpose convention (NM-005)
+    def T(self) -> Mat:  # noqa: N802 -- uppercase T, numpy matrix-transpose convention (NM-005)
         t = [[self._data[r][c] for r in range(self.rows)] for c in range(self.cols)]
         return Mat._wrap(t, self.cols, self.rows)
 
