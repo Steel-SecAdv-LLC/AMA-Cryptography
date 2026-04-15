@@ -62,12 +62,6 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
-# os.fdopen guard: when os.open() returns an fd and os.fdopen() is called
-# immediately after, an exception inside os.fdopen() (before the with-block
-# takes over) would leak the raw fd.  Guard with try/except BaseException and
-# close the fd explicitly on failure — matching the pattern in crypto_api.py.
-
-
 # ---------------------------------------------------------------------------
 # Re-imports from ama_cryptography sub-modules so that monkeypatch targets
 # (e.g. ``monkeypatch.setattr(dgs, "DILITHIUM_AVAILABLE", False)``) land
@@ -461,24 +455,16 @@ def verify_rfc3161_timestamp(
     tmp_dir = tempfile.mkdtemp(prefix="ama_rfc3161_")
     os.chmod(tmp_dir, 0o700)
     try:
+
+        def _open_0600(path: str, flags: int) -> int:
+            return os.open(path, flags, 0o600)
+
         tsr_path = os.path.join(tmp_dir, "timestamp.tsr")
-        fd = os.open(tsr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            tsr_f = os.fdopen(fd, "wb")
-        except BaseException:
-            os.close(fd)
-            raise
-        with tsr_f:
+        with open(tsr_path, "xb", opener=_open_0600) as tsr_f:
             tsr_f.write(timestamp_token)
 
         data_path = os.path.join(tmp_dir, "data.dat")
-        fd = os.open(data_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            dat_f = os.fdopen(fd, "wb")
-        except BaseException:
-            os.close(fd)
-            raise
-        with dat_f:
+        with open(data_path, "xb", opener=_open_0600) as dat_f:
             dat_f.write(data)
 
         cmd_verify = [

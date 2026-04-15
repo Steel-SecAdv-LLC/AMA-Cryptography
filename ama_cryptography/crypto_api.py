@@ -856,6 +856,8 @@ def _atomic_write_json(
     import tempfile
 
     fd, tmp_path = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp", prefix=tmp_prefix)
+    # Guard: if os.fdopen() itself fails (extremely rare — e.g. ENOMEM),
+    # the raw fd is not consumed and must be closed explicitly.
     try:
         f = os.fdopen(fd, "w")
     except BaseException:
@@ -867,7 +869,7 @@ def _atomic_write_json(
         raise
     _rename_ok = False
     try:
-        with f:
+        with f:  # ensures f is always closed, even on write/flush failure
             _json.dump(data, f)
             f.flush()
             os.fsync(f.fileno())
