@@ -44,11 +44,10 @@ Version: 2.1.2
 """
 
 import ctypes
-import hashlib
 import logging
 import struct
 from dataclasses import dataclass
-from typing import Any, List
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -229,54 +228,6 @@ class HybridCombiner:
         if rc != 0:
             raise RuntimeError(f"Native HKDF failed with error code {rc}")
         return bytes(okm_buf)
-
-    @staticmethod
-    def _hkdf_python(salt: bytes, ikm: bytes, info: bytes, okm_len: int) -> bytes:
-        """
-        HKDF-SHA3-256 fallback (Python, RFC 5869 construction with SHA3-256).
-
-        Matches the native C ama_hkdf which uses HMAC-SHA3-256.
-        Both paths MUST use the same hash to produce identical output —
-        otherwise encapsulate/decapsulate across native/fallback would silently
-        produce mismatched secrets.
-
-        SHA3-256 block size (rate) = 136 bytes, digest size = 32 bytes.
-        """
-        hash_len = 32  # SHA3-256 digest size
-        block_size = 136  # SHA3-256 rate (Keccak sponge rate for SHA3-256)
-
-        def _hmac_sha3_256(key: bytes, data: bytes) -> bytes:
-            """HMAC-SHA3-256 per RFC 2104, using SHA3-256 as H."""
-            # If key > block_size, hash it first
-            if len(key) > block_size:
-                key = hashlib.sha3_256(key).digest()
-            # Pad key to block_size
-            key_padded = key + b"\x00" * (block_size - len(key))
-            # ipad / opad
-            ipad = bytes(b ^ 0x36 for b in key_padded)
-            opad = bytes(b ^ 0x5C for b in key_padded)
-            # inner = SHA3-256(ipad || data)
-            inner = hashlib.sha3_256(ipad + data).digest()
-            # outer = SHA3-256(opad || inner)
-            return hashlib.sha3_256(opad + inner).digest()
-
-        # Extract: PRK = HMAC-SHA3-256(salt, IKM)
-        if not salt:
-            salt = b"\x00" * hash_len
-        prk = _hmac_sha3_256(salt, ikm)
-
-        # Expand: OKM = T(1) || T(2) || ... truncated to okm_len
-        n = (okm_len + hash_len - 1) // hash_len
-        if n > 255:
-            raise ValueError("HKDF output length exceeds maximum (255 * hash_len)")
-
-        okm_parts: List[bytes] = []
-        t_prev = b""
-        for i in range(1, n + 1):
-            t_prev = _hmac_sha3_256(prk, t_prev + info + bytes([i]))
-            okm_parts.append(t_prev)
-
-        return b"".join(okm_parts)[:okm_len]
 
     def encapsulate_hybrid(
         self,

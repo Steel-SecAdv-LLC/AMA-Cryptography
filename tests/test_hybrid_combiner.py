@@ -273,14 +273,42 @@ class TestHybridCombinerNativePath:
 # ---------------------------------------------------------------------------
 
 
+def _hkdf_sha3_256_reference(salt: bytes, ikm: bytes, info: bytes, okm_len: int) -> bytes:
+    """Test-only HKDF-SHA3-256 reference implementation (RFC 5869)."""
+    import hashlib
+
+    hash_len = 32
+    block_size = 136  # SHA3-256 Keccak rate
+
+    def _hmac(key: bytes, data: bytes) -> bytes:
+        if len(key) > block_size:
+            key = hashlib.sha3_256(key).digest()
+        key_padded = key + b"\x00" * (block_size - len(key))
+        ipad = bytes(b ^ 0x36 for b in key_padded)
+        opad = bytes(b ^ 0x5C for b in key_padded)
+        return hashlib.sha3_256(opad + hashlib.sha3_256(ipad + data).digest()).digest()
+
+    if not salt:
+        salt = b"\x00" * hash_len
+    prk = _hmac(salt, ikm)
+    n = (okm_len + hash_len - 1) // hash_len
+    if n > 255:
+        raise ValueError("HKDF output length exceeds maximum (255 * hash_len)")
+    okm_parts = []
+    t_prev = b""
+    for i in range(1, n + 1):
+        t_prev = _hmac(prk, t_prev + info + bytes([i]))
+        okm_parts.append(t_prev)
+    return b"".join(okm_parts)[:okm_len]
+
+
 class TestHKDFEdgeCases:
-    """Edge case tests for the Python HKDF-SHA3-256 implementation."""
+    """Edge case tests for the HKDF-SHA3-256 reference implementation."""
 
     def test_large_key_hashed(self) -> None:
         """HMAC key longer than block_size should be hashed before use."""
-        # Test _hkdf_python directly since combine() enforces INVARIANT-7
         large_ss = _random_bytes(256)
-        result = HybridCombiner._hkdf_python(
+        result = _hkdf_sha3_256_reference(
             salt=_random_bytes(32),
             ikm=large_ss + large_ss,
             info=b"test",
@@ -291,7 +319,7 @@ class TestHKDFEdgeCases:
     def test_hkdf_output_exceeding_max_raises(self) -> None:
         """Output length > 255 * 32 should raise ValueError."""
         with pytest.raises(ValueError, match="exceeds maximum"):
-            HybridCombiner._hkdf_python(b"salt", b"ikm", b"info", 255 * 32 + 1)
+            _hkdf_sha3_256_reference(b"salt", b"ikm", b"info", 255 * 32 + 1)
 
     def test_default_label(self) -> None:
         """Default label should match module constant."""
