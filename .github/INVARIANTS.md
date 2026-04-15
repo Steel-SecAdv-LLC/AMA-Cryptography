@@ -202,6 +202,32 @@ detection of secret-dependent variable-time constructs.  The project's
 `CONSTANT_TIME_VERIFICATION.md` is the authoritative artifact for
 verification methodology.
 
+## INVARIANT-13 — No Unjustified Static-Analysis Suppressions
+
+Use of `# noqa`, `# nosec`, `# pylint: disable`, `# type: ignore`, or any
+equivalent suppression marker is **prohibited** unless **all three** of the
+following conditions are met:
+
+1. The suppression is **line-scoped**, not file-scoped.
+2. It includes a **human-readable justification** and a **tracking reference**,
+   for example: `# nosec B110: __del__ must not raise (FIN-001)`.
+3. The suppressed line is **covered by tests** or a deterministic runtime check.
+
+The **only** permitted exception is finalizers and destructors that must not
+raise, provided the reason is explicitly documented inline.
+
+Suppressions are **absolutely forbidden** in the following locations regardless
+of justification:
+
+- `src/c/` (core cryptographic C primitives)
+- `ama_cryptography/_primitive` (if present)
+- `ama_cryptography/backend` (if present)
+- `include/ama_*.h` (C header files)
+
+**Enforcement:** CI scans the repository for suppression tokens and **must**
+fail if a suppression is missing a justification, missing a tracking ID, or
+appears in a forbidden directory.
+
 ## INVARIANT-14 — CVE Ignore-List Hygiene
 
 Every `--ignore-vuln` flag in CI workflows **must** have an accompanying comment
