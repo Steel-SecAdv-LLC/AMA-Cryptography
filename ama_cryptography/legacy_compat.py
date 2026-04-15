@@ -455,14 +455,16 @@ def verify_rfc3161_timestamp(
     tmp_dir = tempfile.mkdtemp(prefix="ama_rfc3161_")
     os.chmod(tmp_dir, 0o700)
     try:
+
+        def _open_0600(path: str, flags: int) -> int:
+            return os.open(path, flags, 0o600)
+
         tsr_path = os.path.join(tmp_dir, "timestamp.tsr")
-        with open(tsr_path, "xb") as tsr_f:
-            os.chmod(tsr_path, 0o600)
+        with open(tsr_path, "xb", opener=_open_0600) as tsr_f:
             tsr_f.write(timestamp_token)
 
         data_path = os.path.join(tmp_dir, "data.dat")
-        with open(data_path, "xb") as dat_f:
-            os.chmod(data_path, 0o600)
+        with open(data_path, "xb", opener=_open_0600) as dat_f:
             dat_f.write(data)
 
         cmd_verify = [
