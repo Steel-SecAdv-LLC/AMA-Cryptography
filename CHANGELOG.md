@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 2.4 |
-| Last Updated | 2026-04-14 |
+| Last Updated | 2026-04-15 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -18,6 +18,19 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 ---
 
 
+
+## [2.1.5] - 2026-04-15
+
+
+### Added
+
+- Add HSM support with PyKCS11 and improve fd leak protection (#217) (679f69b)
+
+### Fixed
+
+- Fix three cryptographic audit findings; restore INVARIANT-13 with 52 tracked suppressions (#218) (2fa49e8)
+
+---
 ## [2.1.4] - 2026-04-14
 
 ### Security
