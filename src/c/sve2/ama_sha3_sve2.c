@@ -12,6 +12,7 @@
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 
+#include "ama_cryptography.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>

@@ -113,11 +113,12 @@ def allow_mock_tsa() -> Generator[None, None, None]:
             token = MockTSA.timestamp(data_hash, "sha256")
             assert MockTSA.verify(token, data_hash)
     """
+    previous = getattr(_mock_tsa_local, "allowed", False)
     _mock_tsa_local.allowed = True
     try:
         yield
     finally:
-        _mock_tsa_local.allowed = False
+        _mock_tsa_local.allowed = previous
 
 
 def _hmac_sha256(key: bytes, msg: bytes) -> bytes:

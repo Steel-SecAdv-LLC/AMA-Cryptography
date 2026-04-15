@@ -19,16 +19,18 @@ secure if EITHER the classical or PQC component remains unbroken.
 This is the standard IND-CCA2 secure combiner used in TLS 1.3
 hybrid key agreement drafts.
 
-Construction:
+Construction (length-prefixed encoding for domain separation):
     combined_ss = HKDF-SHA3-256(
-        salt = classical_ct || pqc_ct,
+        salt = len(classical_ct) || classical_ct || len(pqc_ct) || pqc_ct,
         ikm  = classical_ss || pqc_ss,
-        info = label || classical_pk || pqc_pk,
+        info = label || component_count(2)
+                     || len(classical_pk) || classical_pk
+                     || len(pqc_pk) || pqc_pk,
         len  = 32
     )
 
-The ciphertext binding in the salt prevents mix-and-match attacks
-where an attacker substitutes one component's ciphertext.
+The length-prefixed ciphertext binding in the salt prevents
+mix-and-match and component stripping attacks.
 
 Design decision: This module uses the established HKDF-SHA3-256 combiner
 (RFC 5869) rather than the experimental Double-Helix KDF. The standard
@@ -80,8 +82,9 @@ class HybridCombiner:
     """
     Combines classical and PQC shared secrets via binding HKDF construction.
 
-    Uses the native C HKDF-SHA3-256 (ama_hkdf) when available, falling
-    back to Python HKDF-SHA3-256 via hashlib when the C library is not built.
+    Requires the native C HKDF-SHA3-256 (ama_hkdf) backend.  If the native
+    library is unavailable, combine() raises RuntimeError (INVARIANT-7:
+    no cryptographic fallbacks).
 
     The combiner is algorithm-agnostic: it accepts raw shared secrets and
     ciphertexts from any classical + PQC KEM pair.
@@ -161,8 +164,8 @@ class HybridCombiner:
             pqc_ss: PQC KEM shared secret
             classical_ct: Classical KEM ciphertext (bound in salt)
             pqc_ct: PQC KEM ciphertext (bound in salt)
-            classical_pk: Classical public key (bound in info)
-            pqc_pk: PQC public key (bound in info)
+            classical_pk: Classical public key (bound in info, optional)
+            pqc_pk: PQC public key (bound in info, optional)
             output_len: Desired output length (default 32)
 
         Returns:
@@ -182,16 +185,20 @@ class HybridCombiner:
         # stripping / substitution attacks where an attacker manipulates
         # boundaries between classical and PQC ciphertexts or public keys.
         salt = (
-            struct.pack(">I", len(classical_ct)) + classical_ct
-            + struct.pack(">I", len(pqc_ct)) + pqc_ct
+            struct.pack(">I", len(classical_ct))
+            + classical_ct
+            + struct.pack(">I", len(pqc_ct))
+            + pqc_ct
         )
         ikm = classical_ss + pqc_ss
         # Component count (2) is bound to prevent downgrade to single-component
         info = (
             self.label
             + struct.pack(">B", 2)  # component_count: always 2 for hybrid
-            + struct.pack(">I", len(classical_pk)) + classical_pk
-            + struct.pack(">I", len(pqc_pk)) + pqc_pk
+            + struct.pack(">I", len(classical_pk))
+            + classical_pk
+            + struct.pack(">I", len(pqc_pk))
+            + pqc_pk
         )
 
         if self._has_native:
@@ -300,7 +307,7 @@ class HybridCombiner:
         # of zero-length secrets, oversized ciphertexts, or non-bytes types
         # that could cause downstream key compromise or DoS (audit finding H4).
         _MAX_CT_BYTES = 8192  # generous upper bound for any KEM ciphertext
-        _MAX_SS_BYTES = 256   # generous upper bound for any shared secret
+        _MAX_SS_BYTES = 256  # generous upper bound for any shared secret
         for label, ct, ss in [
             ("Classical", classical_ct, classical_ss),
             ("PQC", pqc_ct, pqc_ss),
@@ -312,13 +319,9 @@ class HybridCombiner:
             if len(ct) == 0:
                 raise ValueError(f"{label} ciphertext is empty")
             if len(ct) > _MAX_CT_BYTES:
-                raise ValueError(
-                    f"{label} ciphertext too large ({len(ct)} > {_MAX_CT_BYTES})"
-                )
+                raise ValueError(f"{label} ciphertext too large ({len(ct)} > {_MAX_CT_BYTES})")
             if len(ss) > _MAX_SS_BYTES:
-                raise ValueError(
-                    f"{label} shared secret too large ({len(ss)} > {_MAX_SS_BYTES})"
-                )
+                raise ValueError(f"{label} shared secret too large ({len(ss)} > {_MAX_SS_BYTES})")
 
         combined = self.combine(
             classical_ss=classical_ss,
