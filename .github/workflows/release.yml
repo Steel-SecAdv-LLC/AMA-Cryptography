@@ -43,7 +43,18 @@ jobs:
         env:
           RAW_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
+          # Normalise: workflow_dispatch input may be pasted as `refs/tags/vX.Y.Z`
+          # (e.g. copied from the GitHub UI). Strip the prefix if present, then
+          # require the leading `v` so `${TAG#v}` produces a clean version.
           TAG="${RAW_TAG}"
+          TAG="${TAG#refs/tags/}"
+          case "$TAG" in
+            v*) ;;
+            *)
+              echo "::error::Tag must start with 'v' (for example: v2.1.5); got '${RAW_TAG}'"
+              exit 1
+              ;;
+          esac
           VERSION="${TAG#v}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
