@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 2.4 |
-| Last Updated | 2026-04-15 |
+| Last Updated | 2026-04-16 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -19,6 +19,16 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 
 
+
+## [2.1.5] - 2026-04-16
+
+
+### Security
+
+- PR #224 Follow-up: Add comprehensive test coverage for security audit fixes (#226) (ca8f357)
+- Security audit fixes: length-prefixed encoding, constant-time ops, and validation (#224) (b700050)
+
+---
 ## [2.1.5] - 2026-04-15
 
 
