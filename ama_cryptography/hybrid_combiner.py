@@ -82,10 +82,10 @@ class HybridCombiner:
     """
     Combines classical and PQC shared secrets via binding HKDF construction.
 
-    Uses the native C HKDF-SHA3-256 (ama_hkdf) when available.  Falls back
-    to Python HKDF-SHA3-256 via hashlib with a security warning when the
-    C library is not built.  The Python fallback is NOT constant-time and
-    MUST NOT be used in production.
+    Requires the native C HKDF-SHA3-256 (ama_hkdf) backend.  If the native
+    library is unavailable, combine() raises RuntimeError per INVARIANT-7
+    (no cryptographic fallbacks).  The _hkdf_python static method remains
+    available for direct unit testing of the HKDF construction only.
 
     The combiner is algorithm-agnostic: it accepts raw shared secrets and
     ciphertexts from any classical + PQC KEM pair.
@@ -204,18 +204,17 @@ class HybridCombiner:
 
         if self._has_native:
             return self._hkdf_native(salt, ikm, info, output_len)
-        # WARNING: The Python HKDF fallback is NOT constant-time.
-        # In production, build the native C library for timing-safe HKDF.
-        # We keep the fallback for development/testing but log a loud warning.
-        import warnings
-
-        warnings.warn(
-            "SECURITY: Using Python HKDF-SHA3-256 fallback (NOT constant-time). "
-            "Build the native C library for production use: "
-            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build",
-            stacklevel=2,
+        # INVARIANT-7: No cryptographic fallbacks, ever.
+        # The Python HKDF is NOT constant-time and MUST NOT be used for
+        # secret-dependent key combination.  The _hkdf_python static method
+        # remains in the class for direct unit testing of the HKDF construction
+        # (see TestHKDFEdgeCases), but combine() refuses to use it.
+        raise RuntimeError(
+            "INVARIANT-7: Native HKDF-SHA3-256 (ama_hkdf) is unavailable. "
+            "The Python fallback is not constant-time and MUST NOT be used "
+            "for cryptographic key combination.  Build the native C library: "
+            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
         )
-        return self._hkdf_python(salt, ikm, info, output_len)
 
     def _hkdf_native(self, salt: bytes, ikm: bytes, info: bytes, okm_len: int) -> bytes:
         """HKDF via native C ama_hkdf (HMAC-SHA3-256)."""

@@ -12,6 +12,7 @@ Validates:
     - Public key binding: different PKs produce different outputs
     - INVARIANT-7: combine() raises RuntimeError when native HKDF is unavailable
     - Native HKDF path selection and error handling
+    - HKDF-SHA3-256 construction correctness (via _hkdf_python direct calls)
     - Edge cases: empty inputs, large inputs
 """
 
@@ -49,130 +50,67 @@ def _mock_pqc_encapsulate(pk: bytes) -> tuple[bytes, bytes]:
 
 
 # ---------------------------------------------------------------------------
-# Python HKDF fallback tests (warns but still functions for dev/testing)
+# INVARIANT-7: combine() must raise when native HKDF is unavailable
 # ---------------------------------------------------------------------------
 
 
-class TestHybridCombinerPythonHKDF:
-    """Tests using the Python HKDF-SHA3-256 fallback (no native lib).
+class TestHybridCombinerInvariant7:
+    """Verify INVARIANT-7: combine() raises RuntimeError without native lib.
 
-    The fallback emits a security warning but must still produce correct
-    output for development and testing environments.
+    The _hkdf_python static method is still tested directly in
+    TestHKDFEdgeCases for construction correctness, but combine()
+    must refuse to use it.
     """
 
     def setup_method(self) -> None:
-        """Create a combiner forced to Python fallback."""
+        """Create a combiner without native HKDF."""
         self.combiner = HybridCombiner(native_lib=MagicMock(spec=[]))
         assert not self.combiner._has_native
 
-    def test_combine_warns_without_native(self) -> None:
-        """combine() must emit a security warning when using Python fallback."""
-        import warnings
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            result = self.combiner.combine(
+    def test_combine_raises_without_native(self) -> None:
+        """combine() must raise RuntimeError when native HKDF is unavailable."""
+        with pytest.raises(RuntimeError, match="INVARIANT-7"):
+            self.combiner.combine(
                 classical_ss=_random_bytes(32),
                 pqc_ss=_random_bytes(32),
                 classical_ct=_random_bytes(32),
                 pqc_ct=_random_bytes(1568),
             )
-            assert len(result) == 32
-            assert any("NOT constant-time" in str(warning.message) for warning in w)
 
-    def test_combine_produces_32_bytes(self) -> None:
-        """Default output should be 32 bytes."""
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            result = self.combiner.combine(
+    def test_combine_raises_with_custom_output_length(self) -> None:
+        """RuntimeError is raised regardless of output_len."""
+        with pytest.raises(RuntimeError, match="INVARIANT-7"):
+            self.combiner.combine(
                 classical_ss=_random_bytes(32),
                 pqc_ss=_random_bytes(32),
                 classical_ct=_random_bytes(32),
                 pqc_ct=_random_bytes(1568),
+                output_len=64,
             )
-        assert len(result) == 32
 
-    def test_combine_custom_output_length(self) -> None:
-        """Custom output lengths should work."""
-        import warnings
+    def test_combine_raises_with_public_keys(self) -> None:
+        """RuntimeError is raised even when public keys are provided."""
+        with pytest.raises(RuntimeError, match="INVARIANT-7"):
+            self.combiner.combine(
+                classical_ss=_random_bytes(32),
+                pqc_ss=_random_bytes(32),
+                classical_ct=_random_bytes(32),
+                pqc_ct=_random_bytes(1568),
+                classical_pk=_random_bytes(32),
+                pqc_pk=_random_bytes(1184),
+            )
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            for length in [16, 48, 64]:
-                result = self.combiner.combine(
-                    classical_ss=_random_bytes(32),
-                    pqc_ss=_random_bytes(32),
-                    classical_ct=_random_bytes(32),
-                    pqc_ct=_random_bytes(1568),
-                    output_len=length,
-                )
-                assert len(result) == length
-
-    def test_deterministic_with_same_inputs(self) -> None:
-        """Same inputs must produce same output."""
-        import warnings
-
-        css = _random_bytes(32)
-        pss = _random_bytes(32)
-        cct = _random_bytes(32)
-        pct = _random_bytes(1568)
-        cpk = _random_bytes(32)
-        ppk = _random_bytes(1184)
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            r1 = self.combiner.combine(css, pss, cct, pct, cpk, ppk)
-            r2 = self.combiner.combine(css, pss, cct, pct, cpk, ppk)
-        assert r1 == r2
-
-    def test_different_secrets_produce_different_output(self) -> None:
-        """Changing shared secrets must change the combined secret."""
-        import warnings
-
-        cct = _random_bytes(32)
-        pct = _random_bytes(1568)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            r1 = self.combiner.combine(_random_bytes(32), _random_bytes(32), cct, pct)
-            r2 = self.combiner.combine(_random_bytes(32), _random_bytes(32), cct, pct)
-        assert r1 != r2
-
-    def test_ciphertext_binding(self) -> None:
-        """Swapping ciphertexts must change the combined secret (anti-substitution)."""
-        import warnings
-
-        css = _random_bytes(32)
-        pss = _random_bytes(32)
-        cct_a = _random_bytes(32)
-        cct_b = _random_bytes(32)
-        pct = _random_bytes(1568)
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            r1 = self.combiner.combine(css, pss, cct_a, pct)
-            r2 = self.combiner.combine(css, pss, cct_b, pct)
-        assert r1 != r2
-
-    def test_label_domain_separation(self) -> None:
-        """Different labels must produce different output."""
-        import warnings
-
+    def test_different_labels_still_raise(self) -> None:
+        """Different labels still raise when native is unavailable."""
         no_native = MagicMock(spec=[])
-        combiner_a = HybridCombiner(native_lib=no_native, label=b"label-a")
-        combiner_b = HybridCombiner(native_lib=no_native, label=b"label-b")
-
-        css = _random_bytes(32)
-        pss = _random_bytes(32)
-        cct = _random_bytes(32)
-        pct = _random_bytes(1568)
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            r1 = combiner_a.combine(css, pss, cct, pct)
-            r2 = combiner_b.combine(css, pss, cct, pct)
-        assert r1 != r2
+        combiner = HybridCombiner(native_lib=no_native, label=b"custom-label")
+        with pytest.raises(RuntimeError, match="INVARIANT-7"):
+            combiner.combine(
+                classical_ss=_random_bytes(32),
+                pqc_ss=_random_bytes(32),
+                classical_ct=_random_bytes(32),
+                pqc_ct=_random_bytes(1568),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +118,6 @@ class TestHybridCombinerPythonHKDF:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.filterwarnings("ignore:SECURITY.*NOT constant-time:UserWarning")
 class TestHybridRoundTrip:
     """Encapsulate + decapsulate must produce identical combined secrets."""
 
@@ -321,23 +258,18 @@ class TestHybridCombinerNativePath:
                 pqc_ct=b"\x00" * 1568,
             )
 
-    def test_no_ama_hkdf_warns_and_falls_back(self) -> None:
-        """Lib without ama_hkdf must warn and fall back to Python HKDF."""
-        import warnings
-
+    def test_no_ama_hkdf_raises_invariant7(self) -> None:
+        """Lib without ama_hkdf must raise RuntimeError (INVARIANT-7)."""
         mock_lib = MagicMock(spec=[])  # No attributes
         combiner = HybridCombiner(native_lib=mock_lib)
         assert not combiner._has_native
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            result = combiner.combine(
+        with pytest.raises(RuntimeError, match="INVARIANT-7"):
+            combiner.combine(
                 classical_ss=_random_bytes(32),
                 pqc_ss=_random_bytes(32),
                 classical_ct=_random_bytes(32),
                 pqc_ct=_random_bytes(1568),
             )
-        assert len(result) == 32
-        assert any("NOT constant-time" in str(warning.message) for warning in w)
 
 
 # ---------------------------------------------------------------------------

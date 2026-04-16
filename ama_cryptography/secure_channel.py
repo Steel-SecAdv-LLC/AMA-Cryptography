@@ -311,6 +311,12 @@ class HandshakeResponse:
                 f"but only {len(data) - offset} bytes remaining"
             )
         responder_public_key = data[offset : offset + pk_len]
+        offset += pk_len
+
+        if offset != len(data):
+            raise ChannelError(
+                f"Malformed HandshakeResponse: {len(data) - offset} trailing bytes"
+            )
 
         return cls(
             session_id=session_id,

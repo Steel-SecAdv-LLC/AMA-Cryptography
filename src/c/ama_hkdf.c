@@ -122,7 +122,7 @@ static ama_error_t hmac_sha3_256(
      * SHA3_256_BLOCK_SIZE + data_len could wrap on 32-bit platforms if
      * data_len is near SIZE_MAX (audit finding HKDF-OVF-1). */
     if (data_len > SIZE_MAX - SHA3_256_BLOCK_SIZE) {
-        rc = AMA_ERROR_MEMORY;
+        rc = AMA_ERROR_OVERFLOW;
         goto cleanup;
     }
 
