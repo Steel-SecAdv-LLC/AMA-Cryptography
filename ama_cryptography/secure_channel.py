@@ -314,9 +314,7 @@ class HandshakeResponse:
         offset += pk_len
 
         if offset != len(data):
-            raise ChannelError(
-                f"Malformed HandshakeResponse: {len(data) - offset} trailing bytes"
-            )
+            raise ChannelError(f"Malformed HandshakeResponse: {len(data) - offset} trailing bytes")
 
         return cls(
             session_id=session_id,
