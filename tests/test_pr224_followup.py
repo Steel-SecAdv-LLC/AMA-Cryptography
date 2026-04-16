@@ -214,8 +214,13 @@ class TestCreateHandshakeKEMValidation:
     def _make_initiator(self) -> Any:
         # The skip_no_native gate checks _native_lib is non-None, but the
         # library may be loaded without Kyber/X25519/HKDF backends actually
-        # available (e.g., built without AMA_USE_NATIVE_PQC).  Skip cleanly
-        # if HybridKEMProvider construction or keygen fails for that reason.
+        # available (e.g., built without AMA_USE_NATIVE_PQC).  In local/dev
+        # environments, skip cleanly; in CI with AMA_CI_REQUIRE_BACKENDS=1,
+        # the conftest skip-to-fail hook matches on the class-level skipif
+        # reason, which would mask the real backend error — so fail directly
+        # with the underlying exception instead.
+        import os
+
         from ama_cryptography.crypto_api import HybridKEMProvider
         from ama_cryptography.secure_channel import SecureChannelInitiator
 
@@ -224,6 +229,8 @@ class TestCreateHandshakeKEMValidation:
             kp = provider.generate_keypair()
             return SecureChannelInitiator(kp.public_key)
         except (RuntimeError, ImportError, AttributeError) as exc:
+            if os.environ.get("AMA_CI_REQUIRE_BACKENDS", "").lower() in ("true", "1", "yes"):
+                pytest.fail(f"Hybrid KEM backend unavailable in CI: {exc}")
             pytest.skip(f"Hybrid KEM backend unavailable: {exc}")
             return None  # pragma: no cover — unreachable; tells static analysis skip() diverges
 

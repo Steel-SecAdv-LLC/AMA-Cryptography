@@ -248,7 +248,9 @@ class HybridCombiner:
         it exists solely for direct unit testing of the HKDF construction
         (see TestHKDFEdgeCases).
 
-        NOT constant-time — MUST NOT process secret material.
+        NOT constant-time. This helper may process controlled test inputs,
+        including test IKM/secret vectors, but it MUST NOT be used for
+        production secret handling or any live cryptographic code path.
 
         Matches the native C ama_hkdf (HMAC-SHA3-256, RFC 5869).
         SHA3-256 block size (rate) = 136 bytes, digest size = 32 bytes.
