@@ -58,8 +58,8 @@ _HYBRID_LABEL = b"ama-hybrid-kem-v2"
 # Upper bounds for KEM encapsulation/decapsulation output validation.
 # These are generous limits — any legitimate KEM produces much smaller
 # outputs — but prevent multi-GB allocation from attacker-controlled input.
-_MAX_CT_BYTES = 8192   # generous upper bound for any KEM ciphertext
-_MAX_SS_BYTES = 256    # generous upper bound for any shared secret
+_MAX_CT_BYTES = 8192  # generous upper bound for any KEM ciphertext
+_MAX_SS_BYTES = 256  # generous upper bound for any shared secret
 
 
 @dataclass

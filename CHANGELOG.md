@@ -37,9 +37,11 @@ prior versions.  They address security audit findings and MUST NOT be reverted
 for backward compatibility.
 
 - **Hybrid combiner HKDF construction (audit finding C6):** Salt and info fields
-  now use length-prefixed encoding (`len(field) || field`) to prevent ambiguous
-  concatenation and component stripping attacks.  Keys derived with the v2.1.4
-  construction will differ from v2.1.5+.
+  now use fixed-size length-prefixed encoding to prevent ambiguous
+  concatenation and component stripping attacks: component counts are encoded
+  as `u8(count)`, and ciphertext/public-key fields are encoded as
+  `u32be(len(field)) || field`.  Keys derived with the v2.1.4 construction
+  will differ from v2.1.5+.
 - **Secure channel protocol version bump (v1 → v2):** AAD now includes
   `rekey_epoch` to prevent multi-target tag forgery across key epochs (audit
   finding H2).  `PROTOCOL_VERSION` changed from `\x01` to `\x02`.

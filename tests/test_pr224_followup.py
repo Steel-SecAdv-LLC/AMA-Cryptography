@@ -68,14 +68,7 @@ def _build_handshake_response_wire(
     sig_len = sig_len_override if sig_len_override is not None else len(sig)
     pk_len = pk_len_override if pk_len_override is not None else len(pk)
 
-    return (
-        session_id
-        + struct.pack(">I", sig_len)
-        + sig
-        + struct.pack(">I", pk_len)
-        + pk
-        + trailing
-    )
+    return session_id + struct.pack(">I", sig_len) + sig + struct.pack(">I", pk_len) + pk + trailing
 
 
 # ===========================================================================
@@ -219,11 +212,18 @@ class TestCreateHandshakeKEMValidation:
     """Verify create_handshake() rejects invalid KEM encapsulation results."""
 
     def _make_initiator(self) -> Any:
+        # The skip_no_native gate checks _native_lib is non-None, but the
+        # library may be loaded without Kyber/X25519/HKDF backends actually
+        # available (e.g., built without AMA_USE_NATIVE_PQC).  Skip cleanly
+        # if HybridKEMProvider construction or keygen fails for that reason.
         from ama_cryptography.crypto_api import HybridKEMProvider
         from ama_cryptography.secure_channel import SecureChannelInitiator
 
-        provider = HybridKEMProvider()
-        kp = provider.generate_keypair()
+        try:
+            provider = HybridKEMProvider()
+            kp = provider.generate_keypair()
+        except (RuntimeError, ImportError, AttributeError) as exc:
+            pytest.skip(f"Hybrid KEM backend unavailable: {exc}")
         return SecureChannelInitiator(kp.public_key)
 
     def test_empty_shared_secret_rejected(self) -> None:
@@ -308,17 +308,10 @@ class TestLengthPrefixedEncodingPreventsAmbiguousConcatenation:
     @staticmethod
     def _build_salt(ct1: bytes, ct2: bytes) -> bytes:
         """Build the length-prefixed salt as combine() does."""
-        return (
-            struct.pack(">I", len(ct1))
-            + ct1
-            + struct.pack(">I", len(ct2))
-            + ct2
-        )
+        return struct.pack(">I", len(ct1)) + ct1 + struct.pack(">I", len(ct2)) + ct2
 
     @staticmethod
-    def _build_info(
-        label: bytes, pk1: bytes = b"", pk2: bytes = b""
-    ) -> bytes:
+    def _build_info(label: bytes, pk1: bytes = b"", pk2: bytes = b"") -> bytes:
         """Build the length-prefixed info as combine() does."""
         return (
             label
@@ -372,16 +365,22 @@ class TestLengthPrefixedEncodingPreventsAmbiguousConcatenation:
         salt = self._build_salt(ct1, ct2)
         info = self._build_info(label)
 
-        ss1_a = b"\xAA" * 48
-        ss2_a = b"\xBB" * 16
-        ss1_b = b"\xAA" * 16
-        ss2_b = b"\xBB" * 48
+        ss1_a = b"\xaa" * 48
+        ss2_a = b"\xbb" * 16
+        ss1_b = b"\xaa" * 16
+        ss2_b = b"\xbb" * 48
 
         result_a = HybridCombiner._hkdf_python(
-            salt=salt, ikm=ss1_a + ss2_a, info=info, okm_len=32,
+            salt=salt,
+            ikm=ss1_a + ss2_a,
+            info=info,
+            okm_len=32,
         )
         result_b = HybridCombiner._hkdf_python(
-            salt=salt, ikm=ss1_b + ss2_b, info=info, okm_len=32,
+            salt=salt,
+            ikm=ss1_b + ss2_b,
+            info=info,
+            okm_len=32,
         )
 
         assert result_a != result_b, (
@@ -406,12 +405,14 @@ class TestLengthPrefixedEncodingPreventsAmbiguousConcatenation:
         pk2_b = b"YYZZ"
 
         result_a = HybridCombiner._hkdf_python(
-            salt=salt, ikm=ikm,
+            salt=salt,
+            ikm=ikm,
             info=self._build_info(label, pk1_a, pk2_a),
             okm_len=32,
         )
         result_b = HybridCombiner._hkdf_python(
-            salt=salt, ikm=ikm,
+            salt=salt,
+            ikm=ikm,
             info=self._build_info(label, pk1_b, pk2_b),
             okm_len=32,
         )
