@@ -21,6 +21,38 @@ from unittest import mock
 
 import pytest
 
+# Backend-availability flags resolved at import time so they can be used as
+# `@pytest.mark.skipif` arguments. The repo's conftest converts skipif-marked
+# backend skips into hard failures when AMA_CI_REQUIRE_BACKENDS=1; in-body
+# pytest.skip() calls would silently bypass that enforcement, so we use markers.
+try:
+    from ama_cryptography.pqc_backends import (
+        _AES_GCM_NATIVE_AVAILABLE,
+        DILITHIUM_AVAILABLE,
+        KYBER_AVAILABLE,
+        SPHINCS_AVAILABLE,
+        _native_lib,
+    )
+
+    AES_GCM_NATIVE_AVAILABLE = _native_lib is not None and _AES_GCM_NATIVE_AVAILABLE
+except ImportError:
+    DILITHIUM_AVAILABLE = False
+    KYBER_AVAILABLE = False
+    SPHINCS_AVAILABLE = False
+    AES_GCM_NATIVE_AVAILABLE = False
+
+skip_no_dilithium = pytest.mark.skipif(
+    not DILITHIUM_AVAILABLE, reason="Dilithium native backend not available"
+)
+skip_no_kyber = pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber native backend not available")
+skip_no_sphincs = pytest.mark.skipif(
+    not SPHINCS_AVAILABLE, reason="SPHINCS+ native backend not available"
+)
+skip_no_aes_gcm_native = pytest.mark.skipif(
+    not AES_GCM_NATIVE_AVAILABLE,
+    reason="Native AES-256-GCM backend not available (build with cmake)",
+)
+
 
 class TestAtomicWriteJson:
     def test_atomic_write_json_writes_data(self, tmp_path: Path) -> None:
@@ -35,9 +67,7 @@ class TestAtomicWriteJson:
         from ama_cryptography import crypto_api
 
         target = tmp_path / "out.json"
-        with mock.patch.object(
-            crypto_api.os, "fdopen", side_effect=OSError("simulated fdopen failure")
-        ):
+        with mock.patch("os.fdopen", side_effect=OSError("simulated fdopen failure")):
             with pytest.raises(OSError, match="simulated fdopen failure"):
                 crypto_api._atomic_write_json({"x": 1}, target)
 
@@ -45,6 +75,7 @@ class TestAtomicWriteJson:
         assert not any(p.suffix == ".tmp" for p in tmp_path.iterdir())
 
 
+@skip_no_aes_gcm_native
 class TestAESGCMCounterPersistence:
     def _fresh_provider_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
         from ama_cryptography import crypto_api
@@ -175,7 +206,7 @@ class TestCryptoPackageConfigValidation:
 
         cfg = CryptoPackageConfig(
             signature_algorithm=AlgorithmType.ED25519,
-            signing_keypair="not-a-tuple",  # type: ignore[arg-type]  -- intentional wrong type to exercise TypeError guard (COV-001)
+            signing_keypair="not-a-tuple",  # type: ignore[arg-type]  # intentional wrong type to exercise TypeError guard (COV-001)
         )
         with pytest.raises(TypeError, match="tuple"):
             create_crypto_package(b"content", cfg)
@@ -189,7 +220,7 @@ class TestCryptoPackageConfigValidation:
 
         cfg = CryptoPackageConfig(
             signature_algorithm=AlgorithmType.ED25519,
-            signing_keypair=(b"a", b"b", b"c"),  # type: ignore[arg-type]  -- intentional wrong tuple length to exercise TypeError guard (COV-002)
+            signing_keypair=(b"a", b"b", b"c"),  # type: ignore[arg-type]  # intentional wrong tuple length to exercise TypeError guard (COV-002)
         )
         with pytest.raises(TypeError, match="tuple"):
             create_crypto_package(b"content", cfg)
@@ -203,7 +234,7 @@ class TestCryptoPackageConfigValidation:
 
         cfg = CryptoPackageConfig(
             signature_algorithm=AlgorithmType.ED25519,
-            signing_keypair=("pk", "sk"),  # type: ignore[arg-type]  -- intentional str instead of bytes to exercise TypeError guard (COV-003)
+            signing_keypair=("pk", "sk"),  # type: ignore[arg-type]  # intentional str instead of bytes to exercise TypeError guard (COV-003)
         )
         with pytest.raises(TypeError, match="bytes"):
             create_crypto_package(b"content", cfg)
@@ -396,108 +427,92 @@ class TestPqcBackendsEdgeCases:
         assert isinstance(info, dict)
         assert "backend" in info
 
+    @skip_no_dilithium
     def test_dilithium_sign_rejects_non_bytes_message(self) -> None:
         import ctypes
 
         from ama_cryptography.pqc_backends import (
-            DILITHIUM_AVAILABLE,
             dilithium_sign,
             generate_dilithium_keypair,
         )
 
-        if not DILITHIUM_AVAILABLE:
-            pytest.skip("Dilithium backend not available")
         kp = generate_dilithium_keypair()
         with pytest.raises((TypeError, ValueError, ctypes.ArgumentError)):
-            dilithium_sign("not bytes", kp.secret_key)  # type: ignore[arg-type]  -- intentional str to exercise ctypes type rejection (COV-004)
+            dilithium_sign("not bytes", kp.secret_key)  # type: ignore[arg-type]  # intentional str to exercise ctypes type rejection (COV-004)
 
+    @skip_no_kyber
     def test_kyber_encapsulate_rejects_wrong_key_size(self) -> None:
-        from ama_cryptography.pqc_backends import (
-            KYBER_AVAILABLE,
-            kyber_encapsulate,
-        )
+        from ama_cryptography.pqc_backends import kyber_encapsulate
 
-        if not KYBER_AVAILABLE:
-            pytest.skip("Kyber backend not available")
         with pytest.raises((ValueError, TypeError)):
             kyber_encapsulate(b"wrong size public key")
 
+    @skip_no_dilithium
     def test_dilithium_verify_wrong_signature_returns_false(self) -> None:
         from ama_cryptography.pqc_backends import (
-            DILITHIUM_AVAILABLE,
             dilithium_sign,
             dilithium_verify,
             generate_dilithium_keypair,
         )
 
-        if not DILITHIUM_AVAILABLE:
-            pytest.skip("Dilithium backend not available")
         kp = generate_dilithium_keypair()
         sig = dilithium_sign(b"original msg", kp.secret_key)
         # Tamper signature
         bad_sig = bytes(b ^ 0x01 for b in sig)
         assert dilithium_verify(b"original msg", bad_sig, kp.public_key) is False
 
+    @skip_no_dilithium
     def test_dilithium_verify_wrong_message_returns_false(self) -> None:
         from ama_cryptography.pqc_backends import (
-            DILITHIUM_AVAILABLE,
             dilithium_sign,
             dilithium_verify,
             generate_dilithium_keypair,
         )
 
-        if not DILITHIUM_AVAILABLE:
-            pytest.skip("Dilithium backend not available")
         kp = generate_dilithium_keypair()
         sig = dilithium_sign(b"message A", kp.secret_key)
         assert dilithium_verify(b"message B", sig, kp.public_key) is False
 
+    @skip_no_sphincs
     def test_sphincs_verify_wrong_key_returns_false(self) -> None:
         from ama_cryptography.pqc_backends import (
-            SPHINCS_AVAILABLE,
             generate_sphincs_keypair,
             sphincs_sign,
             sphincs_verify,
         )
 
-        if not SPHINCS_AVAILABLE:
-            pytest.skip("SPHINCS+ backend not available")
         kp1 = generate_sphincs_keypair()
         kp2 = generate_sphincs_keypair()
         sig = sphincs_sign(b"msg", kp1.secret_key)
         assert sphincs_verify(b"msg", sig, kp2.public_key) is False
 
+    @skip_no_kyber
     def test_kyber_decapsulate_rejects_wrong_ciphertext_size(self) -> None:
         from ama_cryptography.pqc_backends import (
-            KYBER_AVAILABLE,
             generate_kyber_keypair,
             kyber_decapsulate,
         )
 
-        if not KYBER_AVAILABLE:
-            pytest.skip("Kyber backend not available")
         kp = generate_kyber_keypair()
         with pytest.raises((ValueError, TypeError)):
             kyber_decapsulate(b"too short", kp.secret_key)
 
-    def test_keypair_classes_repr_do_not_leak_secrets(self) -> None:
-        from ama_cryptography.pqc_backends import (
-            DILITHIUM_AVAILABLE,
-            KYBER_AVAILABLE,
-            generate_dilithium_keypair,
-            generate_kyber_keypair,
-        )
+    @skip_no_dilithium
+    def test_dilithium_keypair_repr_does_not_leak_secret(self) -> None:
+        from ama_cryptography.pqc_backends import generate_dilithium_keypair
 
-        if DILITHIUM_AVAILABLE:
-            kp = generate_dilithium_keypair()
-            r = repr(kp)
-            # Secret key should not appear as raw hex in repr
-            assert kp.secret_key.hex() not in r
+        kp = generate_dilithium_keypair()
+        r = repr(kp)
+        # Secret key should not appear as raw hex in repr
+        assert kp.secret_key.hex() not in r
 
-        if KYBER_AVAILABLE:
-            kk = generate_kyber_keypair()
-            r = repr(kk)
-            assert kk.secret_key.hex() not in r
+    @skip_no_kyber
+    def test_kyber_keypair_repr_does_not_leak_secret(self) -> None:
+        from ama_cryptography.pqc_backends import generate_kyber_keypair
+
+        kk = generate_kyber_keypair()
+        r = repr(kk)
+        assert kk.secret_key.hex() not in r
 
 
 class TestKeypairCache:
@@ -539,6 +554,7 @@ class TestKeypairCache:
         assert cache._sk is None
 
 
+@skip_no_aes_gcm_native
 class TestAESGCMProviderValidation:
     def test_decrypt_rejects_wrong_key_length(self) -> None:
         from ama_cryptography.crypto_api import AESGCMProvider
@@ -563,16 +579,14 @@ class TestAESGCMProviderValidation:
 
 
 class TestCreatePackageOptionalFeatures:
+    @skip_no_sphincs
     def test_package_with_sphincs_addon(self) -> None:
         from ama_cryptography.crypto_api import (
             AlgorithmType,
             CryptoPackageConfig,
             create_crypto_package,
         )
-        from ama_cryptography.pqc_backends import SPHINCS_AVAILABLE
 
-        if not SPHINCS_AVAILABLE:
-            pytest.skip("SPHINCS+ backend not available")
         cfg = CryptoPackageConfig(
             signature_algorithm=AlgorithmType.ED25519,
             use_sphincs=True,
@@ -582,16 +596,14 @@ class TestCreatePackageOptionalFeatures:
         assert pkg.sphincs_signature is not None
         assert "SPHINCS_256F" in pkg.keypairs
 
+    @skip_no_kyber
     def test_package_with_kyber_kem_addon(self) -> None:
         from ama_cryptography.crypto_api import (
             AlgorithmType,
             CryptoPackageConfig,
             create_crypto_package,
         )
-        from ama_cryptography.pqc_backends import KYBER_AVAILABLE
 
-        if not KYBER_AVAILABLE:
-            pytest.skip("Kyber backend not available")
         cfg = CryptoPackageConfig(
             signature_algorithm=AlgorithmType.ED25519,
             use_kyber=True,
@@ -609,10 +621,6 @@ class TestCreatePackageOptionalFeatures:
             CryptoPackageConfig,
             create_crypto_package,
             verify_crypto_package,
-        )
-        from ama_cryptography.pqc_backends import (
-            KYBER_AVAILABLE,
-            SPHINCS_AVAILABLE,
         )
 
         cfg = CryptoPackageConfig(

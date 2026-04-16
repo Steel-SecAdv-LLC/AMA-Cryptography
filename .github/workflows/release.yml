@@ -26,26 +26,44 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-depth: 0
 
+      - name: Set up Python
+        # tomllib is stdlib in Python 3.11+; pin runner Python to 3.11 so the
+        # pyproject.toml version check below always succeeds regardless of
+        # ubuntu-latest's default Python version.
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: '3.11'
+
       - name: Resolve tag and version
         id: meta
+        # SECURITY: never interpolate user-controlled inputs into shell `run:`
+        # blocks via `${{ ... }}` — that runs at expression time, before the
+        # shell tokenises the command, allowing injection. Always pass through
+        # `env:` and reference as `"${VAR}"` so the shell sees a single token.
+        env:
+          RAW_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="${RAW_TAG}"
           VERSION="${TAG#v}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Verify tag matches pyproject.toml version
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          PY_VERSION=$(python3 -c "import tomllib,sys; print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
-          if [ "$PY_VERSION" != "${{ steps.meta.outputs.version }}" ]; then
-            echo "::error::Tag ${{ steps.meta.outputs.tag }} does not match pyproject.toml version $PY_VERSION"
+          PY_VERSION=$(python3 -c "import tomllib; print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
+          if [ "$PY_VERSION" != "$VERSION" ]; then
+            echo "::error::Tag ${TAG} does not match pyproject.toml version $PY_VERSION"
             exit 1
           fi
 
       - name: Extract CHANGELOG section
         id: changelog
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          VERSION="${{ steps.meta.outputs.version }}"
           NOTES_FILE="$(mktemp)"
           awk -v ver="$VERSION" '
             $0 ~ "^## \\[" ver "\\]" { capture=1; next }
@@ -63,13 +81,15 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          NOTES_FOUND: ${{ steps.changelog.outputs.found }}
+          NOTES_PATH: ${{ steps.changelog.outputs.path }}
         run: |
-          TAG="${{ steps.meta.outputs.tag }}"
           TITLE="AMA Cryptography ${TAG}"
-          if [ "${{ steps.changelog.outputs.found }}" = "true" ]; then
+          if [ "$NOTES_FOUND" = "true" ]; then
             gh release create "$TAG" \
               --title "$TITLE" \
-              --notes-file "${{ steps.changelog.outputs.path }}" \
+              --notes-file "$NOTES_PATH" \
               --verify-tag
           else
             gh release create "$TAG" \
