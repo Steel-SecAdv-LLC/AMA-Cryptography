@@ -376,6 +376,18 @@ class HybridCombiner:
         classical_ss = classical_decapsulate(classical_ct, classical_sk)
         pqc_ss = pqc_decapsulate(pqc_ct, pqc_sk)
 
+        # SECURITY FIX: Validate decapsulation outputs (audit finding H4).
+        # Same validation as encapsulate_hybrid — a buggy or attacker-controlled
+        # decapsulate callable could return empty, non-bytes, or oversized values.
+        _MAX_SS_BYTES = 256
+        for label, ss in [("Classical", classical_ss), ("PQC", pqc_ss)]:
+            if not isinstance(ss, bytes):
+                raise TypeError(f"{label} decapsulate must return bytes")
+            if len(ss) == 0:
+                raise ValueError(f"{label} shared secret is empty")
+            if len(ss) > _MAX_SS_BYTES:
+                raise ValueError(f"{label} shared secret too large ({len(ss)} > {_MAX_SS_BYTES})")
+
         return self.combine(
             classical_ss=classical_ss,
             pqc_ss=pqc_ss,
