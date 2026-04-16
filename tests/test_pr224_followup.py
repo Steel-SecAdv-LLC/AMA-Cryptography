@@ -222,9 +222,9 @@ class TestCreateHandshakeKEMValidation:
         try:
             provider = HybridKEMProvider()
             kp = provider.generate_keypair()
+            return SecureChannelInitiator(kp.public_key)
         except (RuntimeError, ImportError, AttributeError) as exc:
             pytest.skip(f"Hybrid KEM backend unavailable: {exc}")
-        return SecureChannelInitiator(kp.public_key)
 
     def test_empty_shared_secret_rejected(self) -> None:
         """KEM returning empty shared secret raises HandshakeError."""
@@ -499,7 +499,9 @@ class TestEncapsulateHybridValidation:
     def test_non_bytes_return_rejected(self) -> None:
         with pytest.raises(TypeError, match=r"must return.*bytes"):
             self.combiner.encapsulate_hybrid(
-                lambda pk: ("not_bytes", _random(32)),  # type: ignore[return-value]  # wrong type to verify TypeError rejection (PR224-001)
+                # Intentionally wrong return type to verify TypeError rejection;
+                # parameter is typed Any, so no type: ignore is required.
+                lambda pk: ("not_bytes", _random(32)),
                 self._good_pqc,
                 self.pk_c,
                 self.pk_p,
@@ -576,7 +578,9 @@ class TestDecapsulateHybridValidation:
     def test_non_bytes_return_rejected(self) -> None:
         with pytest.raises(TypeError, match="must return bytes"):
             self.combiner.decapsulate_hybrid(
-                lambda ct, sk: "not_bytes",  # type: ignore[return-value]  # wrong type to verify TypeError rejection (PR224-002)
+                # Intentionally wrong return type to verify TypeError rejection;
+                # parameter is typed Any, so no type: ignore is required.
+                lambda ct, sk: "not_bytes",
                 lambda ct, sk: _random(32),
                 _random(32),
                 _random(1568),
