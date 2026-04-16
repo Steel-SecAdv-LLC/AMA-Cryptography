@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 
 # Protocol constants
 PROTOCOL_NAME = b"Noise_NK_HybridKEM_AESGCM_SHA3256"
-PROTOCOL_VERSION = b"\x01"
+PROTOCOL_VERSION = b"\x02"  # Bumped: AAD now includes rekey_epoch (v1 incompatible)
 SESSION_ID_BYTES = 32
 NONCE_BYTES = 12
 KEY_BYTES = 32
