@@ -13,7 +13,6 @@ happy paths (which are covered elsewhere).
 from __future__ import annotations
 
 import json
-import os
 import pickle
 import sys
 from pathlib import Path
@@ -50,20 +49,14 @@ class TestAESGCMCounterPersistence:
     def _fresh_provider_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
         from ama_cryptography import crypto_api
 
-        monkeypatch.setattr(
-            crypto_api.AESGCMProvider, "_ephemeral", False, raising=False
-        )
+        monkeypatch.setattr(crypto_api.AESGCMProvider, "_ephemeral", False, raising=False)
         monkeypatch.setattr(
             crypto_api.AESGCMProvider,
             "_get_persist_path",
             classmethod(lambda cls: tmp_path / "counters.json"),
         )
-        monkeypatch.setattr(
-            crypto_api.AESGCMProvider, "_encrypt_counters", {}, raising=False
-        )
-        monkeypatch.setattr(
-            crypto_api.AESGCMProvider, "_counters_dirty", 0, raising=False
-        )
+        monkeypatch.setattr(crypto_api.AESGCMProvider, "_encrypt_counters", {}, raising=False)
+        monkeypatch.setattr(crypto_api.AESGCMProvider, "_counters_dirty", 0, raising=False)
         return crypto_api.AESGCMProvider
 
     def test_persist_counters_writes_file(
@@ -97,7 +90,7 @@ class TestAESGCMCounterPersistence:
         Prov = self._fresh_provider_path(tmp_path, monkeypatch)
         (tmp_path / "counters.json").write_text("{not valid json")
         provider = Prov()
-        with pytest.raises(RuntimeError, match="[Cc]orrupt"):
+        with pytest.raises(RuntimeError, match=r"[Cc]orrupt"):
             provider._persist_counters(_raising=True)
 
     def test_persist_counters_corrupt_file_quarantines_when_not_raising(
@@ -119,9 +112,7 @@ class TestAESGCMCounterPersistence:
     ) -> None:
         from ama_cryptography import crypto_api
 
-        monkeypatch.setattr(
-            crypto_api.AESGCMProvider, "_ephemeral", True, raising=False
-        )
+        monkeypatch.setattr(crypto_api.AESGCMProvider, "_ephemeral", True, raising=False)
         monkeypatch.setattr(
             crypto_api.AESGCMProvider,
             "_get_persist_path",
@@ -161,7 +152,11 @@ class TestCryptoPackageSecretStripping:
 
     def test_pickle_round_trip_strips_secrets(self) -> None:
         pkg = self._make_package()
-        restored = pickle.loads(pickle.dumps(pkg))
+        # Round-trip our own dataclass to verify __setstate__ secret-stripping.
+        # The bytes deserialised here are produced by pickle.dumps() in the
+        # same statement; no untrusted input is involved.
+        blob = pickle.dumps(pkg)
+        restored = pickle.loads(blob)  # noqa: S301  -- self-pickled trusted bytes (COV-005)
         # Secrets reset to b"" by __setstate__
         assert restored.hmac_key == b""
         assert restored.hkdf_master_secret == b""
@@ -532,13 +527,16 @@ class TestKeypairCache:
         pk2, _ = cache.get_or_generate()
         assert pk1 != pk2
 
-    def test_del_wipes_without_raising(self) -> None:
+    def test_finalizer_wipes_without_raising(self) -> None:
         from ama_cryptography.crypto_api import AlgorithmType, KeypairCache
 
         cache = KeypairCache(algorithm=AlgorithmType.ED25519)
         cache.get_or_generate()
-        # __del__ is best-effort; just ensure explicit call does not raise
-        cache.__del__()
+        # The finalizer path delegates to _wipe_sk(); call that directly
+        # rather than __del__ to avoid CodeQL Python/ExplicitCallToDel
+        # while still exercising the secret-zeroing branch.
+        cache._wipe_sk()
+        assert cache._sk is None
 
 
 class TestAESGCMProviderValidation:
@@ -634,14 +632,14 @@ class TestCreatePackageOptionalFeatures:
 
 class TestSelfTestEdgeCases:
     def test_verify_module_integrity_returns_tuple(self) -> None:
-        from ama_cryptography._self_test import verify_module_integrity
+        from ama_cryptography import _self_test as st
 
-        passed, detail = verify_module_integrity()
+        passed, detail = st.verify_module_integrity()
         assert isinstance(passed, bool)
         assert isinstance(detail, str)
 
     def test_self_test_results_accessible(self) -> None:
-        import ama_cryptography._self_test as st
+        from ama_cryptography import _self_test as st
 
         # Module-level result list exists and is iterable
         assert hasattr(st, "_SELF_TEST_RESULTS")
@@ -650,12 +648,12 @@ class TestSelfTestEdgeCases:
             assert len(item) == 3
 
     def test_run_self_tests_returns_bool(self) -> None:
-        from ama_cryptography._self_test import _run_self_tests
+        from ama_cryptography import _self_test as st
 
-        assert isinstance(_run_self_tests(), bool)
+        assert isinstance(st._run_self_tests(), bool)
 
     def test_kat_functions_return_tuples(self) -> None:
-        import ama_cryptography._self_test as st
+        from ama_cryptography import _self_test as st
 
         # These kat functions are module-private. Exercise them directly to
         # cover the success paths.
