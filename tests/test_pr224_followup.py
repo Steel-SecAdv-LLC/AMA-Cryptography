@@ -225,6 +225,7 @@ class TestCreateHandshakeKEMValidation:
             return SecureChannelInitiator(kp.public_key)
         except (RuntimeError, ImportError, AttributeError) as exc:
             pytest.skip(f"Hybrid KEM backend unavailable: {exc}")
+            return None  # pragma: no cover — unreachable; tells static analysis skip() diverges
 
     def test_empty_shared_secret_rejected(self) -> None:
         """KEM returning empty shared secret raises HandshakeError."""
