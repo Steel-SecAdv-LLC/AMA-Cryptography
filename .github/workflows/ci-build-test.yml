@@ -167,7 +167,14 @@ jobs:
           # UTF-8 encoding for Windows to support Unicode symbols in output
           PYTHONIOENCODING: ${{ matrix.os == 'windows-latest' && 'utf-8' || '' }}
           PYTHONUTF8: ${{ matrix.os == 'windows-latest' && '1' || '' }}
-        run: pytest tests/ -v --cov=ama_cryptography --cov-report=xml
+        # Use `coverage run -m pytest` rather than `pytest --cov=`: pytest-cov
+        # imports the target package before starting coverage, so module-init
+        # statements (class defs, ctypes signature setup, __all__) are not
+        # traced. `coverage run` starts tracking before any import.
+        run: |
+          coverage run --source=ama_cryptography -m pytest tests/ -v
+          coverage xml -o coverage.xml
+          coverage report
 
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
