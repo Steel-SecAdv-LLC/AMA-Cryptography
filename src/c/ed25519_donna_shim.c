@@ -152,10 +152,11 @@ ama_error_t ama_ed25519_batch_verify(
         return AMA_SUCCESS;
     }
 
-    /* SECURITY FIX: Guard against integer overflow in allocation sizes.
-     * If count is very large, count * sizeof(ptr) can silently wrap to a
-     * small value, leading to heap buffer overflow (audit finding C-MEM-1). */
-    if (count > SIZE_MAX / sizeof(const unsigned char *)) {
+    /* SECURITY FIX: Guard against integer overflow in ALL allocation sizes.
+     * Each malloc below uses count * sizeof(...); validate each size so no
+     * allocation can wrap to a smaller-than-expected buffer (audit C-MEM-1). */
+    if (count > SIZE_MAX / sizeof(const unsigned char *) ||
+        count > SIZE_MAX / sizeof(size_t)) {
         return AMA_ERROR_INVALID_PARAM;
     }
 

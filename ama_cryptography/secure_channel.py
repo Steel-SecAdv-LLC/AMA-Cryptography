@@ -291,6 +291,13 @@ class HandshakeResponse:
             raise ChannelError("Truncated HandshakeResponse: missing signature length")
         (sig_len,) = struct.unpack(">I", data[offset : offset + 4])
         offset += 4
+        # DoS resistance: hybrid signature (Ed25519 + ML-DSA-65) is ~2500 bytes;
+        # 64 KiB cap is generous but prevents multi-GB allocation from attacker input.
+        _MAX_FIELD_BYTES = 65536
+        if sig_len > _MAX_FIELD_BYTES:
+            raise ChannelError(
+                f"HandshakeResponse: sig_len={sig_len} exceeds maximum {_MAX_FIELD_BYTES}"
+            )
 
         if offset + sig_len > len(data):
             raise ChannelError(
@@ -304,6 +311,10 @@ class HandshakeResponse:
             raise ChannelError("Truncated HandshakeResponse: missing public key length")
         (pk_len,) = struct.unpack(">I", data[offset : offset + 4])
         offset += 4
+        if pk_len > _MAX_FIELD_BYTES:
+            raise ChannelError(
+                f"HandshakeResponse: pk_len={pk_len} exceeds maximum {_MAX_FIELD_BYTES}"
+            )
 
         if offset + pk_len > len(data):
             raise ChannelError(
