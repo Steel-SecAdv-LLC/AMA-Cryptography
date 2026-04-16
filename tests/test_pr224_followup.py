@@ -27,15 +27,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ama_cryptography.hybrid_combiner import (
-    HybridCombiner,
     _MAX_CT_BYTES,
     _MAX_SS_BYTES,
+    HybridCombiner,
 )
 from ama_cryptography.secure_channel import (
+    _MAX_FIELD_BYTES,
     SESSION_ID_BYTES,
     ChannelError,
     HandshakeResponse,
-    _MAX_FIELD_BYTES,
 )
 
 
@@ -112,7 +112,7 @@ class TestHandshakeResponseDeserializeValidation:
         """sig_len exceeding _MAX_FIELD_BYTES is rejected as oversized."""
         session_id = _random(SESSION_ID_BYTES)
         data = session_id + struct.pack(">I", _MAX_FIELD_BYTES + 1) + b"\x00" * 100
-        with pytest.raises(ChannelError, match="sig_len=.*exceeds maximum"):
+        with pytest.raises(ChannelError, match=r"sig_len=.*exceeds maximum"):
             HandshakeResponse.deserialize(data)
 
     def test_sig_len_exceeds_available_data(self) -> None:
@@ -120,7 +120,7 @@ class TestHandshakeResponseDeserializeValidation:
         session_id = _random(SESSION_ID_BYTES)
         sig_len = 1000
         data = session_id + struct.pack(">I", sig_len) + b"\x00" * 10  # only 10 bytes of sig
-        with pytest.raises(ChannelError, match="Truncated HandshakeResponse.*sig_len"):
+        with pytest.raises(ChannelError, match=r"Truncated HandshakeResponse.*sig_len"):
             HandshakeResponse.deserialize(data)
 
     def test_missing_public_key_length_field(self) -> None:
@@ -143,7 +143,7 @@ class TestHandshakeResponseDeserializeValidation:
             + struct.pack(">I", _MAX_FIELD_BYTES + 1)
             + b"\x00" * 100
         )
-        with pytest.raises(ChannelError, match="pk_len=.*exceeds maximum"):
+        with pytest.raises(ChannelError, match=r"pk_len=.*exceeds maximum"):
             HandshakeResponse.deserialize(data)
 
     def test_pk_len_exceeds_available_data(self) -> None:
@@ -158,7 +158,7 @@ class TestHandshakeResponseDeserializeValidation:
             + struct.pack(">I", pk_len)
             + b"\x00" * 10
         )
-        with pytest.raises(ChannelError, match="Truncated HandshakeResponse.*pk_len"):
+        with pytest.raises(ChannelError, match=r"Truncated HandshakeResponse.*pk_len"):
             HandshakeResponse.deserialize(data)
 
     def test_trailing_bytes_rejected(self) -> None:
@@ -256,7 +256,7 @@ class TestCreateHandshakeKEMValidation:
 
     def test_wrong_size_shared_secret_rejected(self) -> None:
         """KEM returning wrong-size shared secret raises HandshakeError."""
-        from ama_cryptography.secure_channel import HandshakeError, KEY_BYTES
+        from ama_cryptography.secure_channel import KEY_BYTES, HandshakeError
 
         initiator = self._make_initiator()
 
@@ -270,7 +270,7 @@ class TestCreateHandshakeKEMValidation:
 
     def test_empty_ciphertext_rejected(self) -> None:
         """KEM returning empty ciphertext raises HandshakeError."""
-        from ama_cryptography.secure_channel import HandshakeError, KEY_BYTES
+        from ama_cryptography.secure_channel import KEY_BYTES, HandshakeError
 
         initiator = self._make_initiator()
 
@@ -496,9 +496,9 @@ class TestEncapsulateHybridValidation:
             )
 
     def test_non_bytes_return_rejected(self) -> None:
-        with pytest.raises(TypeError, match="must return.*bytes"):
+        with pytest.raises(TypeError, match=r"must return.*bytes"):
             self.combiner.encapsulate_hybrid(
-                lambda pk: ("not_bytes", _random(32)),  # type: ignore[return-value]
+                lambda pk: ("not_bytes", _random(32)),  # type: ignore[return-value]  # wrong type to verify TypeError rejection (PR224-001)
                 self._good_pqc,
                 self.pk_c,
                 self.pk_p,
@@ -575,7 +575,7 @@ class TestDecapsulateHybridValidation:
     def test_non_bytes_return_rejected(self) -> None:
         with pytest.raises(TypeError, match="must return bytes"):
             self.combiner.decapsulate_hybrid(
-                lambda ct, sk: "not_bytes",  # type: ignore[return-value]
+                lambda ct, sk: "not_bytes",  # type: ignore[return-value]  # wrong type to verify TypeError rejection (PR224-002)
                 lambda ct, sk: _random(32),
                 _random(32),
                 _random(1568),
