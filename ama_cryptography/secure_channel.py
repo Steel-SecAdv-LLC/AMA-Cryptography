@@ -72,6 +72,10 @@ TAG_BYTES = 16
 REKEY_INTERVAL = 1000  # Messages before mandatory rekey
 MAX_MESSAGE_SIZE = 65535
 SESSION_TTL_SECONDS = 3600  # 1 hour default
+# DoS resistance cap for deserialized field lengths (signature, public key).
+# Hybrid signature (Ed25519 + ML-DSA-65) is ~2500 bytes; 64 KiB is generous
+# but prevents multi-GB allocation from attacker input.
+_MAX_FIELD_BYTES = 65536
 
 
 class ChannelState(Enum):
@@ -291,9 +295,6 @@ class HandshakeResponse:
             raise ChannelError("Truncated HandshakeResponse: missing signature length")
         (sig_len,) = struct.unpack(">I", data[offset : offset + 4])
         offset += 4
-        # DoS resistance: hybrid signature (Ed25519 + ML-DSA-65) is ~2500 bytes;
-        # 64 KiB cap is generous but prevents multi-GB allocation from attacker input.
-        _MAX_FIELD_BYTES = 65536
         if sig_len > _MAX_FIELD_BYTES:
             raise ChannelError(
                 f"HandshakeResponse: sig_len={sig_len} exceeds maximum {_MAX_FIELD_BYTES}"
@@ -562,13 +563,13 @@ class SecureChannelInitiator:
         # SECURITY FIX: Validate encapsulation result before using the
         # shared secret.  A corrupted or attacker-controlled encapsulation
         # result could compromise forward secrecy (audit finding C1).
-        if not encap_result.shared_secret or len(encap_result.shared_secret) != KEY_BYTES:
+        if encap_result.shared_secret is None or len(encap_result.shared_secret) != KEY_BYTES:
             raise HandshakeError(
                 "KEM encapsulation returned invalid shared secret "
                 f"(expected {KEY_BYTES} bytes, got "
                 f"{len(encap_result.shared_secret) if encap_result.shared_secret else 0})"
             )
-        if not encap_result.ciphertext:
+        if encap_result.ciphertext is None or len(encap_result.ciphertext) == 0:
             raise HandshakeError("KEM encapsulation returned empty ciphertext")
 
         self._shared_secret = encap_result.shared_secret
