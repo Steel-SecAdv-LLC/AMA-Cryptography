@@ -38,6 +38,10 @@ from ama_cryptography.secure_channel import (
     HandshakeResponse,
 )
 
+# NOTE: These tests intentionally access private internals (_native_lib, _kem)
+# for white-box validation. If these internal names are renamed, these tests
+# will need corresponding updates.
+
 
 def _random(n: int) -> bytes:
     return os.urandom(n)
@@ -219,8 +223,6 @@ class TestCreateHandshakeKEMValidation:
         # the conftest skip-to-fail hook matches on the class-level skipif
         # reason, which would mask the real backend error — so fail directly
         # with the underlying exception instead.
-        import os
-
         from ama_cryptography.crypto_api import HybridKEMProvider
         from ama_cryptography.secure_channel import SecureChannelInitiator
 
@@ -518,7 +520,7 @@ class TestEncapsulateHybridValidation:
     def test_boundary_max_ct_accepted(self) -> None:
         """Ciphertext at exactly _MAX_CT_BYTES passes validation
         (does not raise ValueError)."""
-        mock_lib = MagicMock()
+        mock_lib = MagicMock(spec_set=["ama_hkdf"])
         mock_lib.ama_hkdf = MagicMock(return_value=0)
         combiner = HybridCombiner(native_lib=mock_lib)
         result = combiner.encapsulate_hybrid(
@@ -532,7 +534,7 @@ class TestEncapsulateHybridValidation:
     def test_boundary_max_ss_accepted(self) -> None:
         """Shared secret at exactly _MAX_SS_BYTES passes validation
         (does not raise ValueError)."""
-        mock_lib = MagicMock()
+        mock_lib = MagicMock(spec_set=["ama_hkdf"])
         mock_lib.ama_hkdf = MagicMock(return_value=0)
         combiner = HybridCombiner(native_lib=mock_lib)
         result = combiner.encapsulate_hybrid(
@@ -656,3 +658,78 @@ class TestModuleLevelConstants:
                 _random(32),
                 _random(1184),
             )
+
+
+# ===========================================================================
+# HKDF Python-vs-Native Parity Test
+# ===========================================================================
+
+
+@pytest.mark.skipif(not NATIVE_AVAILABLE, reason="Native C library not available")
+class TestHKDFPythonNativeParity:
+    """Verify that _hkdf_python produces byte-identical output to the
+    native C ama_hkdf for the same inputs.
+
+    The _hkdf_python docstring claims equivalence with the native
+    implementation; this test enforces that claim.
+    """
+
+    @staticmethod
+    def _make_native_combiner() -> HybridCombiner:
+        """Build a HybridCombiner with the real native library."""
+        from ama_cryptography.pqc_backends import _native_lib
+
+        combiner = HybridCombiner(native_lib=_native_lib)
+        if not combiner._has_native:
+            pytest.skip("Native HKDF (ama_hkdf) not available in loaded library")
+        return combiner
+
+    def test_hkdf_python_native_parity(self) -> None:
+        """Known inputs must produce byte-identical output from both paths."""
+        combiner = self._make_native_combiner()
+
+        # Deterministic test vectors
+        ikm = b"test-input-keying-material-32by"  # 30 bytes
+        salt = b"test-salt-value-for-hkdf-parity"  # 31 bytes
+        info = b"ama-hybrid-kem-v2-parity-check"  # 30 bytes
+        length = 32
+
+        python_result = HybridCombiner._hkdf_python(salt=salt, ikm=ikm, info=info, okm_len=length)
+        native_result = combiner._hkdf_native(salt=salt, ikm=ikm, info=info, okm_len=length)
+
+        assert python_result == native_result, (
+            f"HKDF parity FAILED: Python and native produced different output.\n"
+            f"  Python: {python_result.hex()}\n"
+            f"  Native: {native_result.hex()}"
+        )
+
+    def test_hkdf_parity_multiple_lengths(self) -> None:
+        """Parity holds across different output lengths."""
+        combiner = self._make_native_combiner()
+
+        ikm = bytes(range(64))
+        salt = bytes(range(32))
+        info = b"multi-length-parity"
+
+        for length in (16, 32, 48, 64, 128):
+            python_result = HybridCombiner._hkdf_python(
+                salt=salt, ikm=ikm, info=info, okm_len=length
+            )
+            native_result = combiner._hkdf_native(salt=salt, ikm=ikm, info=info, okm_len=length)
+            assert python_result == native_result, (
+                f"HKDF parity FAILED for length={length}.\n"
+                f"  Python: {python_result.hex()}\n"
+                f"  Native: {native_result.hex()}"
+            )
+
+    def test_hkdf_parity_empty_salt(self) -> None:
+        """Parity holds with an empty salt (edge case)."""
+        combiner = self._make_native_combiner()
+
+        python_result = HybridCombiner._hkdf_python(
+            salt=b"", ikm=b"some-key-material", info=b"info", okm_len=32
+        )
+        native_result = combiner._hkdf_native(
+            salt=b"", ikm=b"some-key-material", info=b"info", okm_len=32
+        )
+        assert python_result == native_result

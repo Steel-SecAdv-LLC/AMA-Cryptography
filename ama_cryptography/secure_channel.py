@@ -563,13 +563,13 @@ class SecureChannelInitiator:
         # SECURITY FIX: Validate encapsulation result before using the
         # shared secret.  A corrupted or attacker-controlled encapsulation
         # result could compromise forward secrecy (audit finding C1).
-        if not encap_result.shared_secret or len(encap_result.shared_secret) != KEY_BYTES:
+        if encap_result.shared_secret is None or len(encap_result.shared_secret) != KEY_BYTES:
             raise HandshakeError(
                 "KEM encapsulation returned invalid shared secret "
                 f"(expected {KEY_BYTES} bytes, got "
                 f"{len(encap_result.shared_secret) if encap_result.shared_secret else 0})"
             )
-        if not encap_result.ciphertext:
+        if encap_result.ciphertext is None or len(encap_result.ciphertext) == 0:
             raise HandshakeError("KEM encapsulation returned empty ciphertext")
 
         self._shared_secret = encap_result.shared_secret
