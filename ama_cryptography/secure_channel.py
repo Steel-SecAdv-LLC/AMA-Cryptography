@@ -72,6 +72,10 @@ TAG_BYTES = 16
 REKEY_INTERVAL = 1000  # Messages before mandatory rekey
 MAX_MESSAGE_SIZE = 65535
 SESSION_TTL_SECONDS = 3600  # 1 hour default
+# DoS resistance cap for deserialized field lengths (signature, public key).
+# Hybrid signature (Ed25519 + ML-DSA-65) is ~2500 bytes; 64 KiB is generous
+# but prevents multi-GB allocation from attacker input.
+_MAX_FIELD_BYTES = 65536
 
 
 class ChannelState(Enum):
@@ -291,9 +295,6 @@ class HandshakeResponse:
             raise ChannelError("Truncated HandshakeResponse: missing signature length")
         (sig_len,) = struct.unpack(">I", data[offset : offset + 4])
         offset += 4
-        # DoS resistance: hybrid signature (Ed25519 + ML-DSA-65) is ~2500 bytes;
-        # 64 KiB cap is generous but prevents multi-GB allocation from attacker input.
-        _MAX_FIELD_BYTES = 65536
         if sig_len > _MAX_FIELD_BYTES:
             raise ChannelError(
                 f"HandshakeResponse: sig_len={sig_len} exceeds maximum {_MAX_FIELD_BYTES}"

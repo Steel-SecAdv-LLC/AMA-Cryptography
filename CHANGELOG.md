@@ -30,6 +30,43 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 - Fix three cryptographic audit findings; restore INVARIANT-13 with 52 tracked suppressions (#218) (2fa49e8)
 
+### Security — PR #224 Follow-up (Wire-Incompatible Changes)
+
+The following changes from PR #224 are **deliberately wire-incompatible** with
+prior versions.  They address security audit findings and MUST NOT be reverted
+for backward compatibility.
+
+- **Hybrid combiner HKDF construction (audit finding C6):** Salt and info fields
+  now use length-prefixed encoding (`len(field) || field`) to prevent ambiguous
+  concatenation and component stripping attacks.  Keys derived with the v2.1.4
+  construction will differ from v2.1.5+.
+- **Secure channel protocol version bump (v1 → v2):** AAD now includes
+  `rekey_epoch` to prevent multi-target tag forgery across key epochs (audit
+  finding H2).  `PROTOCOL_VERSION` changed from `\x01` to `\x02`.
+- **`ama_ed25519_scalar_mult` → `ama_ed25519_scalarmult_public` rename (audit
+  finding C7):** A `#define` macro provides **source compatibility only** (not
+  ABI).  Downstream C consumers linking against the shared library must
+  recompile.
+- **INVARIANT-7 enforcement in `HybridCombiner.combine()`:** Now raises
+  `RuntimeError` instead of falling through to the Python HKDF fallback when the
+  native C backend is unavailable.
+
+### Changed — Code Hygiene (PR #224 Follow-up)
+
+- Promoted inline magic numbers `_MAX_CT_BYTES`, `_MAX_SS_BYTES` (hybrid
+  combiner) and `_MAX_FIELD_BYTES` (secure channel) to module-level named
+  constants
+- Added safety docstring to `HybridCombiner._hkdf_python()` marking it as
+  internal test-only fallback (not constant-time, must not process secrets)
+- Added comprehensive test coverage for `HandshakeResponse.deserialize()`
+  validation paths (truncated, malformed, oversized inputs)
+- Added test coverage for `create_handshake()` KEM encapsulation result
+  validation (empty/invalid shared secret, empty ciphertext)
+- Added regression test proving length-prefixed HKDF encoding prevents
+  ambiguous concatenation attacks
+- Added test coverage for `encapsulate_hybrid()` / `decapsulate_hybrid()`
+  input validation (empty, oversized, non-bytes)
+
 ---
 ## [2.1.4] - 2026-04-14
 

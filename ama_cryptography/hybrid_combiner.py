@@ -55,6 +55,12 @@ logger = logging.getLogger(__name__)
 # Default label for domain separation in hybrid HKDF
 _HYBRID_LABEL = b"ama-hybrid-kem-v2"
 
+# Upper bounds for KEM encapsulation/decapsulation output validation.
+# These are generous limits — any legitimate KEM produces much smaller
+# outputs — but prevent multi-GB allocation from attacker-controlled input.
+_MAX_CT_BYTES = 8192   # generous upper bound for any KEM ciphertext
+_MAX_SS_BYTES = 256    # generous upper bound for any shared secret
+
 
 @dataclass
 class HybridEncapsulation:
@@ -235,14 +241,16 @@ class HybridCombiner:
 
     @staticmethod
     def _hkdf_python(salt: bytes, ikm: bytes, info: bytes, okm_len: int) -> bytes:
-        """
-        HKDF-SHA3-256 fallback (Python, RFC 5869 construction with SHA3-256).
+        """Internal test-only fallback. Do NOT call from production code paths.
 
-        Matches the native C ama_hkdf which uses HMAC-SHA3-256.
-        Both paths MUST use the same hash to produce identical output —
-        otherwise encapsulate/decapsulate across native/fallback would silently
-        produce mismatched secrets.
+        Use the C-backed HKDF implementation (ama_hkdf) instead.
+        combine() enforces INVARIANT-7 by refusing to call this method;
+        it exists solely for direct unit testing of the HKDF construction
+        (see TestHKDFEdgeCases).
 
+        NOT constant-time — MUST NOT process secret material.
+
+        Matches the native C ama_hkdf (HMAC-SHA3-256, RFC 5869).
         SHA3-256 block size (rate) = 136 bytes, digest size = 32 bytes.
         """
         hash_len = 32  # SHA3-256 digest size
@@ -309,8 +317,6 @@ class HybridCombiner:
         # SECURITY FIX: Validate encapsulation outputs to prevent injection
         # of zero-length secrets, oversized ciphertexts, or non-bytes types
         # that could cause downstream key compromise or DoS (audit finding H4).
-        _MAX_CT_BYTES = 8192  # generous upper bound for any KEM ciphertext
-        _MAX_SS_BYTES = 256  # generous upper bound for any shared secret
         for label, ct, ss in [
             ("Classical", classical_ct, classical_ss),
             ("PQC", pqc_ct, pqc_ss),
@@ -379,7 +385,6 @@ class HybridCombiner:
         # SECURITY FIX: Validate decapsulation outputs (audit finding H4).
         # Same validation as encapsulate_hybrid — a buggy or attacker-controlled
         # decapsulate callable could return empty, non-bytes, or oversized values.
-        _MAX_SS_BYTES = 256
         for label, ss in [("Classical", classical_ss), ("PQC", pqc_ss)]:
             if not isinstance(ss, bytes):
                 raise TypeError(f"{label} decapsulate must return bytes")
