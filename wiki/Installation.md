@@ -87,11 +87,11 @@ cmake --build build
 | `AMA_USE_NATIVE_PQC` | `ON` | Enable ML-DSA-65, Kyber-1024, SPHINCS+ |
 | `AMA_ENABLE_SIMD` | `ON` | SIMD optimizations |
 | `AMA_ENABLE_AVX2` | `ON` | AVX2 acceleration (x86_64 only) |
-| `AMA_AES_CONSTTIME` | `OFF` | Bitsliced AES (cache-timing safe mode) |
+| `AMA_AES_CONSTTIME` | `ON` | Bitsliced AES (cache-timing safe, **default since v2.1.2**) |
 | `AMA_ENABLE_LTO` | `ON` | Link-time optimization |
 | `AMA_BUILD_FUZZ` | `OFF` | Build libFuzzer harnesses |
 
-> **Constant-Time AES:** For deployments in shared-tenant environments (cloud VMs, containers), enable `-DAMA_AES_CONSTTIME=ON` to use the bitsliced AES implementation that is hardened against cache-timing side-channels.
+> **Constant-Time AES:** The bitsliced AES S-box is enabled **by default** to eliminate cache-timing side-channel attacks. Disabling it (e.g., `-DAMA_AES_CONSTTIME=OFF`) will emit a compile-time warning and is NOT recommended for shared-tenant environments (cloud VMs, containers).
 
 ---
 

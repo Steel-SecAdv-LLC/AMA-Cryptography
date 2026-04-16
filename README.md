@@ -256,7 +256,7 @@ NIST-standardized post-quantum algorithms:
 - `ama_chacha20poly1305.c`: ChaCha20-Poly1305 AEAD (RFC 8439)
 - `ama_argon2.c`: Argon2id password hashing (RFC 9106)
 - `ama_secp256k1.c`: secp256k1 elliptic curve operations (HD key derivation)
-- `ama_aes_bitsliced.c`: Bitsliced AES S-box (cache-timing hardened, optional via `-DAMA_AES_CONSTTIME=ON`)
+- `ama_aes_bitsliced.c`: Bitsliced AES S-box (cache-timing hardened, **default**: `AMA_AES_CONSTTIME=ON`)
 - `internal/ama_sha2.h`: Extracted SHA-512 header-only implementation (deduplication for Ed25519/SPHINCS+)
 
 **Hand-Written SIMD Implementations (`src/c/avx2/`, `src/c/neon/`, `src/c/sve2/`):**

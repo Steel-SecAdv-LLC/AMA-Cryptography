@@ -17,7 +17,7 @@ RFC 8032 compliant: Ed25519 (pure EdDSA).
 from libc.stdint cimport uint8_t
 from libc.stddef cimport size_t
 from libc.stdlib cimport malloc, free
-from libc.string cimport memcpy
+from libc.string cimport memcpy, memset
 
 cdef extern from "ama_cryptography.h":
     ctypedef int ama_error_t
@@ -149,6 +149,11 @@ def cy_ed25519_batch_verify(list entries):
         free(c_entries)
         free(results)
         raise MemoryError("Failed to allocate batch verify buffers")
+
+    # SECURITY FIX: Zero-initialize results array so that partially-completed
+    # batch verification returns 'invalid' (0) for unprocessed entries rather
+    # than undefined memory (audit finding CYT-1).
+    memset(results, 0, count * sizeof(int))
 
     try:
         for i in range(count):

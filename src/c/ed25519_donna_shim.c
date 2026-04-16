@@ -152,6 +152,14 @@ ama_error_t ama_ed25519_batch_verify(
         return AMA_SUCCESS;
     }
 
+    /* SECURITY FIX: Guard against integer overflow in ALL allocation sizes.
+     * Each malloc below uses count * sizeof(...); validate each size so no
+     * allocation can wrap to a smaller-than-expected buffer (audit C-MEM-1). */
+    if (count > SIZE_MAX / sizeof(const unsigned char *) ||
+        count > SIZE_MAX / sizeof(size_t)) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
     /* Allocate pointer arrays for donna's batch verify interface */
     const unsigned char **msgs = (const unsigned char **)malloc(count * sizeof(const unsigned char *));
     size_t *mlens = (size_t *)malloc(count * sizeof(size_t));
@@ -223,15 +231,17 @@ AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
     return AMA_SUCCESS;
 }
 
-AMA_API ama_error_t ama_ed25519_scalar_mult(uint8_t result[32],
-                                            const uint8_t scalar[32],
-                                            const uint8_t point[32]) {
+/* Renamed from ama_ed25519_scalar_mult (audit finding C7).
+ * NOT constant-time — public_scalar MUST be non-secret. */
+AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
+                                                  const uint8_t public_scalar[32],
+                                                  const uint8_t point[32]) {
     ge25519 ALIGN(16) P, R;
     bignum256modm s1, s2_zero = {0};
     if (!ge25519_unpack_negative_vartime(&P, point)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(P.x, P.x);
     curve25519_neg(P.t, P.t);
-    expand256_modm(s1, scalar, 32);
+    expand256_modm(s1, public_scalar, 32);
     /* r = s1*P + 0*G via donna's double-scalar mult */
     ge25519_double_scalarmult_vartime(&R, &P, s1, s2_zero);
     ge25519_pack(result, &R);

@@ -118,6 +118,14 @@ static ama_error_t hmac_sha3_256(
         k_opad[i] ^= actual_key[i];
     }
 
+    /* SECURITY FIX: Guard against integer overflow in allocation size.
+     * SHA3_256_BLOCK_SIZE + data_len could wrap on 32-bit platforms if
+     * data_len is near SIZE_MAX (audit finding HKDF-OVF-1). */
+    if (data_len > SIZE_MAX - SHA3_256_BLOCK_SIZE) {
+        rc = AMA_ERROR_OVERFLOW;
+        goto cleanup;
+    }
+
     /* Inner hash: H(K XOR ipad || data) */
     inner_data = (uint8_t*)malloc(SHA3_256_BLOCK_SIZE + data_len);
     if (!inner_data) {
@@ -257,6 +265,13 @@ static ama_error_t hkdf_expand(
     /* Allocate buffer for T_prev || info || counter.
      * Use stack buffer when small enough to eliminate malloc/free overhead
      * in the common case (SHA3_256_DIGEST_SIZE + info_len + 1 <= 256). */
+
+    /* SECURITY FIX: Guard against integer overflow in expand_len.
+     * SHA3_256_DIGEST_SIZE + info_len + 1 can wrap on 32-bit platforms
+     * if info_len is near SIZE_MAX, causing stack buffer overflow. */
+    if (info_len > SIZE_MAX - SHA3_256_DIGEST_SIZE - 1) {
+        return AMA_ERROR_OVERFLOW;
+    }
     expand_len = SHA3_256_DIGEST_SIZE + info_len + 1;
     if (expand_len <= sizeof(stack_buf)) {
         expand_data = stack_buf;

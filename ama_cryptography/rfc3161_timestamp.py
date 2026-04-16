@@ -34,8 +34,9 @@ import struct
 import threading
 import time
 import warnings
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Generator, Optional
 
 _logger = logging.getLogger(__name__)
 
@@ -93,6 +94,31 @@ _MOCK_MAGIC = b"AMA_MOCK_TSA\x00\x01\x00\x00"
 _MOCK_TSA_ALLOWED: bool = False
 _MOCK_TSA_LOCK = threading.Lock()
 _mock_tsa_local = threading.local()
+
+
+@contextmanager
+def allow_mock_tsa() -> Generator[None, None, None]:
+    """Context manager that enables MockTSA for the calling thread.
+
+    SECURITY FIX (audit finding C8): Replaces bare try/finally flag
+    manipulation with a context manager that guarantees atomic
+    enable/disable semantics.  The thread-local flag is set on entry
+    and unconditionally cleared on exit, eliminating the TOCTOU race
+    where a concurrent finalizer or signal handler could observe the
+    flag in an inconsistent state.
+
+    Usage::
+
+        with allow_mock_tsa():
+            token = MockTSA.timestamp(data_hash, "sha256")
+            assert MockTSA.verify(token, data_hash)
+    """
+    previous = getattr(_mock_tsa_local, "allowed", False)
+    _mock_tsa_local.allowed = True
+    try:
+        yield
+    finally:
+        _mock_tsa_local.allowed = previous
 
 
 def _hmac_sha256(key: bytes, msg: bytes) -> bytes:
@@ -202,8 +228,10 @@ class MockTSA:
                 return False
 
             # Extract embedded data_hash from the payload and compare.
+            # SECURITY FIX: Use constant-time comparison to prevent
+            # timing oracle attacks on hash values (audit finding S3b).
             embedded_hash = payload[payload_end:]
-            return embedded_hash == data_hash
+            return constant_time_compare(embedded_hash, data_hash)
         except Exception as exc:
             _logger.error("MockTSA.verify failed: %s", exc)
             return False
@@ -302,14 +330,11 @@ def get_timestamp(
 
     # ---- Mock mode: generate a self-signed mock token ----
     if tsa_mode == "mock":
-        # Temporarily allow MockTSA for this call (S3: production guard).
-        # Use thread-local flag so concurrent threads never observe each
-        # other's allowed state — eliminates the TOCTOU race entirely.
-        _mock_tsa_local.allowed = True
-        try:
+        # SECURITY FIX (audit finding C8): Use the allow_mock_tsa()
+        # context manager instead of bare flag manipulation to guarantee
+        # atomic enable/disable semantics.
+        with allow_mock_tsa():
             token = MockTSA.timestamp(data_hash, hash_algorithm)
-        finally:
-            _mock_tsa_local.allowed = False
         return TimestampResult(
             token=token,
             tsa_url="mock",

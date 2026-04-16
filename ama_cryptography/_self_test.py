@@ -300,6 +300,9 @@ def _kat_aes_256_gcm() -> Tuple[bool, str]:
         expected_tag = bytes.fromhex("2df7cd675b4f09163b41ebf980a7f638")
 
         ct, tag = native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
+        # KAT validation: these are public test vectors, not secrets.
+        # Plain equality is correct here — constant-time comparison
+        # provides no security benefit when both sides are public.
         if ct != expected_ct:
             return False, f"AES-256-GCM KAT: ciphertext mismatch (got {ct.hex()})"
         if tag != expected_tag:

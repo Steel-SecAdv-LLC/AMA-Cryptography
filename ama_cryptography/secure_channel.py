@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 
 # Protocol constants
 PROTOCOL_NAME = b"Noise_NK_HybridKEM_AESGCM_SHA3256"
-PROTOCOL_VERSION = b"\x01"
+PROTOCOL_VERSION = b"\x02"  # Bumped: AAD now includes rekey_epoch (v1 incompatible)
 SESSION_ID_BYTES = 32
 NONCE_BYTES = 12
 KEY_BYTES = 32
@@ -271,19 +271,61 @@ class HandshakeResponse:
 
     @classmethod
     def deserialize(cls, data: bytes) -> "HandshakeResponse":
-        """Deserialize response from wire format."""
+        """Deserialize response from wire format.
+
+        Raises:
+            ChannelError: If data is truncated or malformed
+        """
+        # Minimum: session_id(32) + sig_len(4) + pk_len(4) = 40
+        min_len = SESSION_ID_BYTES + 4 + 4
+        if len(data) < min_len:
+            raise ChannelError(
+                f"Truncated HandshakeResponse: {len(data)} bytes < minimum {min_len}"
+            )
+
         offset = 0
         session_id = data[offset : offset + SESSION_ID_BYTES]
         offset += SESSION_ID_BYTES
 
+        if offset + 4 > len(data):
+            raise ChannelError("Truncated HandshakeResponse: missing signature length")
         (sig_len,) = struct.unpack(">I", data[offset : offset + 4])
         offset += 4
+        # DoS resistance: hybrid signature (Ed25519 + ML-DSA-65) is ~2500 bytes;
+        # 64 KiB cap is generous but prevents multi-GB allocation from attacker input.
+        _MAX_FIELD_BYTES = 65536
+        if sig_len > _MAX_FIELD_BYTES:
+            raise ChannelError(
+                f"HandshakeResponse: sig_len={sig_len} exceeds maximum {_MAX_FIELD_BYTES}"
+            )
+
+        if offset + sig_len > len(data):
+            raise ChannelError(
+                f"Truncated HandshakeResponse: sig_len={sig_len} "
+                f"but only {len(data) - offset} bytes remaining"
+            )
         signature = data[offset : offset + sig_len]
         offset += sig_len
 
+        if offset + 4 > len(data):
+            raise ChannelError("Truncated HandshakeResponse: missing public key length")
         (pk_len,) = struct.unpack(">I", data[offset : offset + 4])
         offset += 4
+        if pk_len > _MAX_FIELD_BYTES:
+            raise ChannelError(
+                f"HandshakeResponse: pk_len={pk_len} exceeds maximum {_MAX_FIELD_BYTES}"
+            )
+
+        if offset + pk_len > len(data):
+            raise ChannelError(
+                f"Truncated HandshakeResponse: pk_len={pk_len} "
+                f"but only {len(data) - offset} bytes remaining"
+            )
         responder_public_key = data[offset : offset + pk_len]
+        offset += pk_len
+
+        if offset != len(data):
+            raise ChannelError(f"Malformed HandshakeResponse: {len(data) - offset} trailing bytes")
 
         return cls(
             session_id=session_id,
@@ -319,6 +361,11 @@ class SecureSession:
     created_at: float = field(default_factory=time.monotonic)
     ttl_seconds: float = SESSION_TTL_SECONDS
     messages_since_rekey: int = 0
+    # SECURITY FIX: Track key generation/epoch to bind AAD to the current
+    # key material.  Without this, a silent rekey failure could leave the
+    # same key active across two epochs with overlapping sequence numbers,
+    # enabling tag forgery via multi-target attacks (audit finding H2).
+    rekey_epoch: int = 0
     _replay_window: set[int] = field(default_factory=set)
     _replay_window_base: int = 0
     _state: ChannelState = ChannelState.ESTABLISHED
@@ -359,8 +406,13 @@ class SecureSession:
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
         nonce = secrets.token_bytes(NONCE_BYTES)
-        # AAD binds ciphertext to session_id and sequence number
-        aad = self.session_id + struct.pack(">Q", self.send_seq)
+        # AAD binds ciphertext to session_id, rekey epoch, and sequence
+        # number.  Including the epoch ensures that a silent rekey failure
+        # (same key across two epochs) produces distinct AAD, preventing
+        # multi-target tag forgery (audit finding H2).
+        aad = (
+            self.session_id + struct.pack(">I", self.rekey_epoch) + struct.pack(">Q", self.send_seq)
+        )
 
         ct, tag = native_aes256_gcm_encrypt(self.send_key, nonce, plaintext, aad)
 
@@ -408,7 +460,7 @@ class SecureSession:
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
 
-        aad = self.session_id + struct.pack(">Q", seq)
+        aad = self.session_id + struct.pack(">I", self.rekey_epoch) + struct.pack(">Q", seq)
         plaintext = native_aes256_gcm_decrypt(
             self.recv_key, msg.nonce, msg.ciphertext, msg.tag, aad
         )
@@ -444,7 +496,8 @@ class SecureSession:
         self.send_key = native_hkdf(self.send_key, KEY_BYTES, salt=None, info=b"ama-rekey")
         self.recv_key = native_hkdf(self.recv_key, KEY_BYTES, salt=None, info=b"ama-rekey")
         self.messages_since_rekey = 0
-        logger.debug("Session %s re-keyed", self.session_id.hex()[:16])
+        self.rekey_epoch += 1
+        logger.debug("Session %s re-keyed (epoch %d)", self.session_id.hex()[:16], self.rekey_epoch)
 
     def close(self) -> None:
         """Close the session, zeroing key material."""
@@ -505,6 +558,19 @@ class SecureChannelInitiator:
 
         # Encapsulate against responder's static KEM public key
         encap_result = self._kem.encapsulate(self._responder_kem_pk)
+
+        # SECURITY FIX: Validate encapsulation result before using the
+        # shared secret.  A corrupted or attacker-controlled encapsulation
+        # result could compromise forward secrecy (audit finding C1).
+        if not encap_result.shared_secret or len(encap_result.shared_secret) != KEY_BYTES:
+            raise HandshakeError(
+                "KEM encapsulation returned invalid shared secret "
+                f"(expected {KEY_BYTES} bytes, got "
+                f"{len(encap_result.shared_secret) if encap_result.shared_secret else 0})"
+            )
+        if not encap_result.ciphertext:
+            raise HandshakeError("KEM encapsulation returned empty ciphertext")
+
         self._shared_secret = encap_result.shared_secret
 
         msg = HandshakeMessage(

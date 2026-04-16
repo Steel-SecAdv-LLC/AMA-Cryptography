@@ -19,16 +19,18 @@ secure if EITHER the classical or PQC component remains unbroken.
 This is the standard IND-CCA2 secure combiner used in TLS 1.3
 hybrid key agreement drafts.
 
-Construction:
+Construction (length-prefixed encoding for domain separation):
     combined_ss = HKDF-SHA3-256(
-        salt = classical_ct || pqc_ct,
+        salt = len(classical_ct) || classical_ct || len(pqc_ct) || pqc_ct,
         ikm  = classical_ss || pqc_ss,
-        info = label || classical_pk || pqc_pk,
+        info = label || component_count(2)
+                     || len(classical_pk) || classical_pk
+                     || len(pqc_pk) || pqc_pk,
         len  = 32
     )
 
-The ciphertext binding in the salt prevents mix-and-match attacks
-where an attacker substitutes one component's ciphertext.
+The length-prefixed ciphertext binding in the salt prevents
+mix-and-match and component stripping attacks.
 
 Design decision: This module uses the established HKDF-SHA3-256 combiner
 (RFC 5869) rather than the experimental Double-Helix KDF. The standard
@@ -44,6 +46,7 @@ Version: 2.1.2
 import ctypes
 import hashlib
 import logging
+import struct
 from dataclasses import dataclass
 from typing import Any, List
 
@@ -79,8 +82,10 @@ class HybridCombiner:
     """
     Combines classical and PQC shared secrets via binding HKDF construction.
 
-    Uses the native C HKDF-SHA3-256 (ama_hkdf) when available, falling
-    back to Python HKDF-SHA3-256 via hashlib when the C library is not built.
+    Requires the native C HKDF-SHA3-256 (ama_hkdf) backend.  If the native
+    library is unavailable, combine() raises RuntimeError per INVARIANT-7
+    (no cryptographic fallbacks).  The _hkdf_python static method remains
+    available for direct unit testing of the HKDF construction only.
 
     The combiner is algorithm-agnostic: it accepts raw shared secrets and
     ciphertexts from any classical + PQC KEM pair.
@@ -167,19 +172,49 @@ class HybridCombiner:
         Returns:
             Combined shared secret of output_len bytes
 
-        The construction:
-            salt = classical_ct || pqc_ct
+        The construction uses length-prefixed encoding to provide
+        unambiguous domain separation and prevent component stripping:
+
+            salt = len(classical_ct) || classical_ct || len(pqc_ct) || pqc_ct
             ikm  = classical_ss || pqc_ss
-            info = label || classical_pk || pqc_pk
+            info = label || component_count(2) || len(classical_pk) || classical_pk
+                        || len(pqc_pk) || pqc_pk
             output = HKDF(salt, ikm, info, output_len)
         """
-        salt = classical_ct + pqc_ct
+        # SECURITY FIX (audit finding C6): Use length-prefixed encoding
+        # for all variable-length components.  This prevents component
+        # stripping / substitution attacks where an attacker manipulates
+        # boundaries between classical and PQC ciphertexts or public keys.
+        salt = (
+            struct.pack(">I", len(classical_ct))
+            + classical_ct
+            + struct.pack(">I", len(pqc_ct))
+            + pqc_ct
+        )
         ikm = classical_ss + pqc_ss
-        info = self.label + classical_pk + pqc_pk
+        # Component count (2) is bound to prevent downgrade to single-component
+        info = (
+            self.label
+            + struct.pack(">B", 2)  # component_count: always 2 for hybrid
+            + struct.pack(">I", len(classical_pk))
+            + classical_pk
+            + struct.pack(">I", len(pqc_pk))
+            + pqc_pk
+        )
 
         if self._has_native:
             return self._hkdf_native(salt, ikm, info, output_len)
-        return self._hkdf_python(salt, ikm, info, output_len)
+        # INVARIANT-7: No cryptographic fallbacks, ever.
+        # The Python HKDF is NOT constant-time and MUST NOT be used for
+        # secret-dependent key combination.  The _hkdf_python static method
+        # remains in the class for direct unit testing of the HKDF construction
+        # (see TestHKDFEdgeCases), but combine() refuses to use it.
+        raise RuntimeError(
+            "INVARIANT-7: Native HKDF-SHA3-256 (ama_hkdf) is unavailable. "
+            "The Python fallback is not constant-time and MUST NOT be used "
+            "for cryptographic key combination.  Build the native C library: "
+            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
 
     def _hkdf_native(self, salt: bytes, ikm: bytes, info: bytes, okm_len: int) -> bytes:
         """HKDF via native C ama_hkdf (HMAC-SHA3-256)."""
@@ -271,6 +306,26 @@ class HybridCombiner:
         classical_ct, classical_ss = classical_encapsulate(classical_pk)
         pqc_ct, pqc_ss = pqc_encapsulate(pqc_pk)
 
+        # SECURITY FIX: Validate encapsulation outputs to prevent injection
+        # of zero-length secrets, oversized ciphertexts, or non-bytes types
+        # that could cause downstream key compromise or DoS (audit finding H4).
+        _MAX_CT_BYTES = 8192  # generous upper bound for any KEM ciphertext
+        _MAX_SS_BYTES = 256  # generous upper bound for any shared secret
+        for label, ct, ss in [
+            ("Classical", classical_ct, classical_ss),
+            ("PQC", pqc_ct, pqc_ss),
+        ]:
+            if not isinstance(ct, bytes) or not isinstance(ss, bytes):
+                raise TypeError(f"{label} encapsulate must return (bytes, bytes)")
+            if len(ss) == 0:
+                raise ValueError(f"{label} shared secret is empty")
+            if len(ct) == 0:
+                raise ValueError(f"{label} ciphertext is empty")
+            if len(ct) > _MAX_CT_BYTES:
+                raise ValueError(f"{label} ciphertext too large ({len(ct)} > {_MAX_CT_BYTES})")
+            if len(ss) > _MAX_SS_BYTES:
+                raise ValueError(f"{label} shared secret too large ({len(ss)} > {_MAX_SS_BYTES})")
+
         combined = self.combine(
             classical_ss=classical_ss,
             pqc_ss=pqc_ss,
@@ -320,6 +375,18 @@ class HybridCombiner:
         """
         classical_ss = classical_decapsulate(classical_ct, classical_sk)
         pqc_ss = pqc_decapsulate(pqc_ct, pqc_sk)
+
+        # SECURITY FIX: Validate decapsulation outputs (audit finding H4).
+        # Same validation as encapsulate_hybrid — a buggy or attacker-controlled
+        # decapsulate callable could return empty, non-bytes, or oversized values.
+        _MAX_SS_BYTES = 256
+        for label, ss in [("Classical", classical_ss), ("PQC", pqc_ss)]:
+            if not isinstance(ss, bytes):
+                raise TypeError(f"{label} decapsulate must return bytes")
+            if len(ss) == 0:
+                raise ValueError(f"{label} shared secret is empty")
+            if len(ss) > _MAX_SS_BYTES:
+                raise ValueError(f"{label} shared secret too large ({len(ss)} > {_MAX_SS_BYTES})")
 
         return self.combine(
             classical_ss=classical_ss,
