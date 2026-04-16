@@ -665,7 +665,7 @@ AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
     const uint8_t p[32], const uint8_t q[32]);
 
 /**
- * Variable-time scalar-point multiplication: result = scalar * P.
+ * Variable-time scalar-point multiplication: result = public_scalar * P.
  *
  * SECURITY: This function is NOT constant-time.  The scalar MUST be
  * PUBLIC data (e.g., FROST binding factors, verification challenges).

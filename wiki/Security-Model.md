@@ -100,8 +100,8 @@ The following operations are implemented in constant time:
 | HMAC comparison | `ama_consttime_memcmp()` (C) / XOR accumulator (Python) | ✓ Constant-time |
 | Ed25519 signing | `ama_ed25519.c` with `fe25519_sq()` | ✓ Constant-time |
 | Ed25519 verification | Windowed scalar multiplication | ✓ Constant-time |
-| AES-256-GCM (default) | Table-based S-box | ⚠ NOT constant-time |
-| AES-256-GCM (consttime) | Bitsliced (`-DAMA_AES_CONSTTIME=ON`) | ✓ Constant-time |
+| AES-256-GCM (default) | Bitsliced S-box (`AMA_AES_CONSTTIME=ON`) | ✓ Constant-time |
+| AES-256-GCM (opt-out) | Table-based S-box (`-DAMA_AES_CONSTTIME=OFF`) | ⚠ NOT constant-time |
 | ML-DSA-65 | NTT operations | ✓ Constant-time |
 | ML-KEM-1024 | NTT + Fujisaki-Okamoto | ✓ Constant-time |
 | Key zeroing | `secure_memzero()` multi-pass | ✓ Compiler-resistant |
