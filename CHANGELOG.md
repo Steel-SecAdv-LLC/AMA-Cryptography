@@ -59,7 +59,9 @@ for backward compatibility.
   combiner) and `_MAX_FIELD_BYTES` (secure channel) to module-level named
   constants
 - Added safety docstring to `HybridCombiner._hkdf_python()` marking it as
-  internal test-only fallback (not constant-time, must not process secrets)
+  internal test-only fallback (not constant-time; may only be used with
+  controlled test inputs such as test vectors, never for production/live
+  secret handling)
 - Added comprehensive test coverage for `HandshakeResponse.deserialize()`
   validation paths (truncated, malformed, oversized inputs)
 - Added test coverage for `create_handshake()` KEM encapsulation result
