@@ -171,10 +171,20 @@ jobs:
         # imports the target package before starting coverage, so module-init
         # statements (class defs, ctypes signature setup, __all__) are not
         # traced. `coverage run` starts tracking before any import.
+        #
+        # `shell: bash` on every runner (including windows-latest) so exit-code
+        # propagation is uniform. Capture pytest's exit code before running
+        # `coverage xml`/`coverage report` so we still publish coverage
+        # artifacts on test failure, then surface the pytest exit code.
+        # Without this, PowerShell (the default Windows shell) would mask a
+        # pytest failure behind `coverage report`'s exit 0.
+        shell: bash
         run: |
           coverage run --source=ama_cryptography -m pytest tests/ -v
+          pytest_exit=$?
           coverage xml -o coverage.xml
           coverage report
+          exit $pytest_exit
 
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
