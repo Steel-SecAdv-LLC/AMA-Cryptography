@@ -19,10 +19,7 @@ import pytest
 
 from ama_cryptography import pqc_backends as pq
 
-
-skip_no_native = pytest.mark.skipif(
-    pq._native_lib is None, reason="Native C library not built"
-)
+skip_no_native = pytest.mark.skipif(pq._native_lib is None, reason="Native C library not built")
 
 
 # ---------------------------------------------------------------------------
@@ -31,9 +28,7 @@ skip_no_native = pytest.mark.skipif(
 
 
 @skip_no_native
-@pytest.mark.skipif(
-    not pq._X25519_NATIVE_AVAILABLE, reason="X25519 backend not built"
-)
+@pytest.mark.skipif(not pq._X25519_NATIVE_AVAILABLE, reason="X25519 backend not built")
 class TestX25519Validation:
     def test_keypair_generates_32_bytes(self) -> None:
         pk, sk = pq.native_x25519_keypair()
@@ -64,9 +59,7 @@ class TestX25519Validation:
 
 
 @skip_no_native
-@pytest.mark.skipif(
-    not pq._ARGON2_NATIVE_AVAILABLE, reason="Argon2id backend not built"
-)
+@pytest.mark.skipif(not pq._ARGON2_NATIVE_AVAILABLE, reason="Argon2id backend not built")
 class TestArgon2idValidation:
     _GOOD_SALT = b"0" * 16
 
@@ -111,13 +104,9 @@ class TestChaCha20Poly1305Validation:
     _NONCE = b"\x02" * 12
 
     def test_round_trip(self) -> None:
-        ct, tag = pq.native_chacha20poly1305_encrypt(
-            self._KEY, self._NONCE, b"hello", b"aad"
-        )
+        ct, tag = pq.native_chacha20poly1305_encrypt(self._KEY, self._NONCE, b"hello", b"aad")
         assert len(ct) == 5 and len(tag) == 16
-        pt = pq.native_chacha20poly1305_decrypt(
-            self._KEY, self._NONCE, ct, tag, b"aad"
-        )
+        pt = pq.native_chacha20poly1305_decrypt(self._KEY, self._NONCE, ct, tag, b"aad")
         assert pt == b"hello"
 
     def test_round_trip_empty_plaintext(self) -> None:
@@ -152,9 +141,7 @@ class TestChaCha20Poly1305Validation:
     def test_decrypt_bad_tag_raises_runtime(self) -> None:
         ct, _tag = pq.native_chacha20poly1305_encrypt(self._KEY, self._NONCE, b"x")
         with pytest.raises(RuntimeError):
-            pq.native_chacha20poly1305_decrypt(
-                self._KEY, self._NONCE, ct, b"\x00" * 16
-            )
+            pq.native_chacha20poly1305_decrypt(self._KEY, self._NONCE, ct, b"\x00" * 16)
 
 
 # ---------------------------------------------------------------------------
@@ -163,9 +150,7 @@ class TestChaCha20Poly1305Validation:
 
 
 @skip_no_native
-@pytest.mark.skipif(
-    not pq._SECP256K1_NATIVE_AVAILABLE, reason="secp256k1 backend not built"
-)
+@pytest.mark.skipif(not pq._SECP256K1_NATIVE_AVAILABLE, reason="secp256k1 backend not built")
 class TestSecp256k1Validation:
     def test_wrong_privkey_length(self) -> None:
         with pytest.raises(ValueError, match="32 bytes"):
@@ -236,9 +221,7 @@ class TestFrostValidation:
 
     def test_keygen_secret_key_wrong_length(self) -> None:
         with pytest.raises(ValueError, match="secret_key"):
-            pq.frost_keygen_trusted_dealer(
-                threshold=2, num_participants=3, secret_key=b"\x00" * 16
-            )
+            pq.frost_keygen_trusted_dealer(threshold=2, num_participants=3, secret_key=b"\x00" * 16)
 
     def test_round1_commit_wrong_share_length(self) -> None:
         with pytest.raises(ValueError, match="participant_share"):
@@ -310,9 +293,7 @@ class TestFrostValidation:
 
 
 class TestHmacSha3256Dispatcher:
-    @pytest.mark.skipif(
-        not pq.HMAC_SHA3_256_AVAILABLE, reason="HMAC-SHA3-256 backend unavailable"
-    )
+    @pytest.mark.skipif(not pq.HMAC_SHA3_256_AVAILABLE, reason="HMAC-SHA3-256 backend unavailable")
     def test_basic_output(self) -> None:
         out = pq.hmac_sha3_256(b"\x01" * 32, b"msg")
         assert len(out) == 32

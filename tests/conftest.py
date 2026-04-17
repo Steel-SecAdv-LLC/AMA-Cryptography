@@ -274,11 +274,22 @@ def pytest_configure(config: Any) -> None:
     config.addinivalue_line("markers", "security: marks security-related tests")
     config.addinivalue_line("markers", "performance: marks performance-related tests")
 
-    # Register ``default::SecurityWarning`` filter here (rather than in
-    # pyproject.toml's ``filterwarnings``) so that coverage instrumentation
-    # starts before ``ama_cryptography.exceptions`` is imported.
-    import warnings as _warnings
-
+    # Register the SecurityWarning filter via the ini mechanism rather than
+    # a direct ``warnings.filterwarnings()`` call.  Pytest wraps every test
+    # in ``warnings.catch_warnings()`` and re-applies ini ``filterwarnings``
+    # entries in order — a module-level filter set here would be discarded
+    # on entry to each test's context. Appending the filter to the ini list
+    # ensures it lands at the correct position (before ``error``) in the
+    # filter chain.
+    #
+    # The filter is registered here (rather than in pyproject.toml) so that
+    # pytest-cov has already enabled coverage instrumentation by the time
+    # ``ama_cryptography.exceptions`` is imported below, which avoids the
+    # 0 %-coverage measurement artefact caused by pytest importing the
+    # module during initial filter-string parsing.
     from ama_cryptography.exceptions import SecurityWarning as _SecurityWarning
 
-    _warnings.filterwarnings("default", category=_SecurityWarning)
+    config.addinivalue_line(
+        "filterwarnings",
+        f"default::{_SecurityWarning.__module__}.{_SecurityWarning.__qualname__}",
+    )

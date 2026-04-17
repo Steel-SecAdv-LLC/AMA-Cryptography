@@ -34,7 +34,6 @@ from ama_cryptography.crypto_api import (
     verify_crypto_package,
 )
 
-
 pytestmark = pytest.mark.skipif(
     not DILITHIUM_AVAILABLE,
     reason="Requires native Dilithium backend for HYBRID_SIG signatures",
@@ -300,7 +299,10 @@ class TestCryptoPackageSerialization:
 
         pkg = create_crypto_package(b"data")
         blob = pickle.dumps(pkg)
-        restored = pickle.loads(blob)
+        # Round-tripping a blob we just produced ourselves to verify
+        # __getstate__/__setstate__ secret-stripping; no untrusted input
+        # is deserialised here.
+        restored = pickle.loads(blob)  # noqa: S301  --  self-produced blob, secret-stripping verification only (CAP-005)  # fmt: skip
         assert restored.hmac_key == b""
         assert restored.hkdf_master_secret == b""
         # Non-secret fields preserved

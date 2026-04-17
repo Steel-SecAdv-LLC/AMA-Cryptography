@@ -29,13 +29,16 @@ _PYCA_AVAILABLE: bool
 # (a BaseException subclass, not Exception) when the environment is broken
 # — e.g. when _cffi_backend is missing or incompatible with openssl. Falling
 # back to the pure-Python path is safe and preserves test coverage.
+# Interpreter-control exceptions are re-raised so they are never swallowed.
 try:
     from cryptography.hazmat.backends import default_backend as default_backend
     from cryptography.hazmat.primitives import hashes as hashes
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF as HKDF
 
     _PYCA_AVAILABLE = True
-except BaseException:
+except BaseException as _pyca_err:
+    if isinstance(_pyca_err, (KeyboardInterrupt, SystemExit, GeneratorExit)):
+        raise
     default_backend = None  # type: ignore[assignment]  # fallback when pyca unavailable (HKDF-001)
     hashes = None  # type: ignore[assignment]  # fallback when pyca unavailable (HKDF-002)
     HKDF = None  # type: ignore[assignment,misc]  # fallback when pyca unavailable (HKDF-003)

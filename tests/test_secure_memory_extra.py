@@ -18,11 +18,23 @@ Exercises the less-trivial branches:
 
 from __future__ import annotations
 
+import contextlib
+import ctypes
+import ctypes.util
 import sys
+import typing
+from typing import Any, Callable
 
 import pytest
 
 from ama_cryptography import secure_memory as sm
+
+# ``mlock``/``munlock`` may be legitimately unavailable on the runner (no
+# native backend, no POSIX libc, or the OS refuses the privileged syscall).
+# We deliberately suppress the documented set of exceptions so the happy
+# path and the fallback path both get exercised for coverage without
+# failing the test when the runner's environment can't provide mlock.
+_MLOCK_OPTIONAL = (NotImplementedError, OSError, sm.SecureMemoryError)
 
 
 class TestGetStatus:
@@ -79,34 +91,26 @@ class TestMlockMunlockBytes:
         # (mlock refused), or NotImplementedError (no native/POSIX). All are
         # acceptable — we just exercise the code path so branches get
         # covered.
-        try:
+        with contextlib.suppress(*_MLOCK_OPTIONAL):
             sm.secure_mlock(b"x" * 64)
-        except (NotImplementedError, OSError, sm.SecureMemoryError):
-            pass
 
     @pytest.mark.skipif(
         sys.implementation.name != "cpython",
         reason="id-based address layout is a CPython implementation detail",
     )
     def test_munlock_bytes_does_not_crash(self) -> None:
-        try:
+        with contextlib.suppress(*_MLOCK_OPTIONAL):
             sm.secure_munlock(b"y" * 64)
-        except (NotImplementedError, OSError, sm.SecureMemoryError):
-            pass
 
     def test_mlock_memoryview(self) -> None:
         buf = bytearray(64)
-        try:
+        with contextlib.suppress(*_MLOCK_OPTIONAL):
             sm.secure_mlock(memoryview(buf))
-        except (NotImplementedError, OSError, sm.SecureMemoryError):
-            pass
 
     def test_munlock_memoryview(self) -> None:
         buf = bytearray(64)
-        try:
+        with contextlib.suppress(*_MLOCK_OPTIONAL):
             sm.secure_munlock(memoryview(buf))
-        except (NotImplementedError, OSError, sm.SecureMemoryError):
-            pass
 
 
 class TestConstantTimePurePython:
@@ -154,9 +158,7 @@ class TestNativeLoadFailures:
         monkeypatch.setattr(pq, "_find_native_library", boom)
         assert sm._load_native_consttime() is None
 
-    def test_try_native_memzero_on_exception(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_try_native_memzero_on_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import ama_cryptography.pqc_backends as pq
 
         def boom() -> None:
@@ -165,17 +167,13 @@ class TestNativeLoadFailures:
         monkeypatch.setattr(pq, "_find_native_library", boom)
         assert sm._try_native_ama_memzero() is None
 
-    def test_load_consttime_when_lib_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_load_consttime_when_lib_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import ama_cryptography.pqc_backends as pq
 
         monkeypatch.setattr(pq, "_find_native_library", lambda: None)
         assert sm._load_native_consttime() is None
 
-    def test_try_native_memzero_when_lib_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_try_native_memzero_when_lib_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import ama_cryptography.pqc_backends as pq
 
         monkeypatch.setattr(pq, "_find_native_library", lambda: None)
@@ -192,61 +190,50 @@ class TestLibcProbes:
         assert result is None or callable(result)
 
     def test_explicit_bzero_zeros_bytearray(self) -> None:
-        fn = sm._try_libc_explicit_bzero()
+        fn: Callable[[bytearray], None] | None = sm._try_libc_explicit_bzero()
         if fn is None:
             pytest.skip("explicit_bzero not available on this platform")
         buf = bytearray(b"\xff" * 32)
+        assert fn is not None  # narrow for mypy; pytest.skip already handles None
         fn(buf)
         assert all(b == 0 for b in buf)
 
-    def test_explicit_bzero_win32_short_circuit(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(sm.sys, "platform", "win32")
+    def test_explicit_bzero_win32_short_circuit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "win32")
         assert sm._try_libc_explicit_bzero() is None
 
-    def test_explicit_bzero_missing_libc(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_explicit_bzero_missing_libc(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Force find_library to return None → probe returns None via line 168.
-        monkeypatch.setattr(sm.ctypes.util, "find_library", lambda name: None)
-        monkeypatch.setattr(sm.sys, "platform", "linux")
+        monkeypatch.setattr(ctypes.util, "find_library", lambda name: None)
+        monkeypatch.setattr(sys, "platform", "linux")
         assert sm._try_libc_explicit_bzero() is None
 
-    def test_explicit_bzero_osreror_branch(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(sm.sys, "platform", "linux")
+    def test_explicit_bzero_oserror_branch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "linux")
 
         def _fake_find(_name: str) -> str:
             return "libc_not_a_real_path.so.6"
 
-        monkeypatch.setattr(sm.ctypes.util, "find_library", _fake_find)
+        monkeypatch.setattr(ctypes.util, "find_library", _fake_find)
 
         class _BadCDLL:
             def __init__(self, _path: str) -> None:
                 raise OSError("simulated dlopen failure")
 
-        monkeypatch.setattr(sm.ctypes, "CDLL", _BadCDLL)
+        monkeypatch.setattr(ctypes, "CDLL", _BadCDLL)
         assert sm._try_libc_explicit_bzero() is None
 
-    def test_memset_s_not_on_darwin_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(sm.sys, "platform", "linux")
+    def test_memset_s_not_on_darwin_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "linux")
         assert sm._try_libc_memset_s() is None
 
-    def test_memset_s_darwin_path_no_libc(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(sm.sys, "platform", "darwin")
-        monkeypatch.setattr(sm.ctypes.util, "find_library", lambda name: None)
+    def test_memset_s_darwin_path_no_libc(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setattr(ctypes.util, "find_library", lambda name: None)
         assert sm._try_libc_memset_s() is None
 
-    def test_memset_s_darwin_missing_symbol(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(sm.sys, "platform", "darwin")
+    def test_memset_s_darwin_missing_symbol(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "darwin")
 
         class _StubLib:
             pass
@@ -254,8 +241,8 @@ class TestLibcProbes:
         def _fake_cdll(_path: str) -> _StubLib:
             return _StubLib()
 
-        monkeypatch.setattr(sm.ctypes.util, "find_library", lambda name: "libc")
-        monkeypatch.setattr(sm.ctypes, "CDLL", _fake_cdll)
+        monkeypatch.setattr(ctypes.util, "find_library", lambda name: "libc")
+        monkeypatch.setattr(ctypes, "CDLL", _fake_cdll)
         # _StubLib has no memset_s attribute → falls into the hasattr branch.
         assert sm._try_libc_memset_s() is None
 
@@ -265,7 +252,7 @@ class TestDetectMlockFallbacks:
         # Simulate Windows: native backend missing & sys.platform == "win32".
         import ama_cryptography.pqc_backends as pq
 
-        monkeypatch.setattr(sm.sys, "platform", "win32")
+        monkeypatch.setattr(sys, "platform", "win32")
 
         class _NoMlock:
             pass
@@ -278,31 +265,31 @@ class TestDetectMlockFallbacks:
     def test_detect_mlock_no_libc(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import ama_cryptography.pqc_backends as pq
 
-        monkeypatch.setattr(sm.sys, "platform", "linux")
+        monkeypatch.setattr(sys, "platform", "linux")
 
         class _NoMlock:
             pass
 
         monkeypatch.setattr(pq, "_native_lib", _NoMlock())
-        monkeypatch.setattr(sm.ctypes.util, "find_library", lambda _name: None)
+        monkeypatch.setattr(ctypes.util, "find_library", lambda _name: None)
         assert sm._detect_mlock_available() is False
 
     def test_detect_mlock_libc_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import ama_cryptography.pqc_backends as pq
 
-        monkeypatch.setattr(sm.sys, "platform", "linux")
+        monkeypatch.setattr(sys, "platform", "linux")
 
         class _NoMlock:
             pass
 
         monkeypatch.setattr(pq, "_native_lib", _NoMlock())
-        monkeypatch.setattr(sm.ctypes.util, "find_library", lambda _name: "libc")
+        monkeypatch.setattr(ctypes.util, "find_library", lambda _name: "libc")
 
         class _BadCDLL:
             def __init__(self, _path: str) -> None:
                 raise OSError("probe denied")
 
-        monkeypatch.setattr(sm.ctypes, "CDLL", _BadCDLL)
+        monkeypatch.setattr(ctypes, "CDLL", _BadCDLL)
         # OSError in libc probe → returns False (logs debug and falls
         # through).
         assert sm._detect_mlock_available() is False
@@ -319,7 +306,7 @@ class TestMlockNativeBranches:
             pytest.skip("Native mlock unavailable")
 
         class _FakeFn:
-            argtypes: list = []
+            argtypes: typing.ClassVar[list[Any]] = []
             restype = None
 
             def __call__(self, *args: object) -> int:
@@ -338,7 +325,7 @@ class TestMlockNativeBranches:
             pytest.skip("Native munlock unavailable")
 
         class _FakeFn:
-            argtypes: list = []
+            argtypes: typing.ClassVar[list[Any]] = []
             restype = None
 
             def __call__(self, *args: object) -> int:

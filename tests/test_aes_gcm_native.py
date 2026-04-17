@@ -33,15 +33,20 @@ skip_no_native = pytest.mark.skipif(
 def _pyca_crypto_available() -> bool:
     """Check if PyCA cryptography is usable (may be broken if _cffi_backend missing).
 
-    Catches BaseException because PyCA's Rust bindings can raise pyo3's
-    PanicException (a direct BaseException subclass) when the environment
-    is broken — e.g. missing _cffi_backend or incompatible openssl.
+    PyCA's Rust bindings raise ``pyo3_runtime.PanicException`` (a direct
+    ``BaseException`` subclass) when the environment is broken — e.g.
+    missing ``_cffi_backend`` or incompatible openssl — so the probe must
+    catch ``BaseException``. Interpreter-control exceptions
+    (``KeyboardInterrupt``, ``SystemExit``) are re-raised so that we never
+    swallow them here.
     """
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         _ = AESGCM  # import probe for availability check
-    except BaseException:
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit)):
+            raise
         return False
     return True
 

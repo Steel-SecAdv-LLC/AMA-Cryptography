@@ -17,16 +17,23 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 
 
-def test_main_module_subprocess() -> None:
-    """``python -m ama_cryptography`` exits 0 and prints the banner."""
+def test_main_module_subprocess(tmp_path: Path) -> None:
+    """``python -m ama_cryptography`` exits 0 and prints the banner.
+
+    Invoked with ``cwd=tmp_path`` so the demonstration routine's
+    artefacts (``public_keys/``, ``CRYPTO_PACKAGE.json``) stay inside
+    pytest's temp dir and do not pollute the working tree.
+    """
     proc = subprocess.run(
         [sys.executable, "-m", "ama_cryptography"],
         capture_output=True,
         text=True,
         timeout=120,
         check=False,
+        cwd=str(tmp_path),
     )
     assert proc.returncode == 0, (
         f"python -m ama_cryptography failed with rc={proc.returncode}\n"

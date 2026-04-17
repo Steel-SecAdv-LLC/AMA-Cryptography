@@ -21,13 +21,14 @@ non-ephemeral code paths, and verify:
 from __future__ import annotations
 
 import json
+from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from ama_cryptography.crypto_api import AESGCMProvider
 from ama_cryptography.pqc_backends import _AES_GCM_NATIVE_AVAILABLE, _native_lib
-
 
 pytestmark = pytest.mark.skipif(
     _native_lib is None or not _AES_GCM_NATIVE_AVAILABLE,
@@ -36,12 +37,13 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
-def persist_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def persist_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Path, None, None]:
     """Point AESGCMProvider at a throwaway directory for this test."""
     target = tmp_path / "aes_gcm_counters.json"
     # Save + restore module-level persistence state so concurrent tests stay
-    # hermetic.
-    saved = {
+    # hermetic. ``Dict[str, Any]`` because the saved fields span bool / int /
+    # dict / str types and mypy --strict rejects per-field inference here.
+    saved: dict[str, Any] = {
         "persist_path": AESGCMProvider._counters_persist_path,
         "ephemeral": AESGCMProvider._ephemeral,
         "loaded": AESGCMProvider._counters_loaded,
@@ -102,7 +104,10 @@ class TestPersistenceErrorPaths:
     def test_load_bad_json_raises(self, persist_dir: Path) -> None:
         persist_dir.write_text("{ not valid json")
         AESGCMProvider._encrypt_counters = {}
-        with pytest.raises(Exception):  # RuntimeError from legacy load
+        # Catches both RuntimeError (from the legacy corrupt-file path) and
+        # json.JSONDecodeError depending on where the parse happens; pin the
+        # match on the common exception ancestor.
+        with pytest.raises((RuntimeError, ValueError, OSError)):
             AESGCMProvider._load_persisted_counters()
 
     def test_persist_raising_on_corrupt_file(self, persist_dir: Path) -> None:
@@ -111,9 +116,7 @@ class TestPersistenceErrorPaths:
         with pytest.raises(RuntimeError):
             AESGCMProvider._persist_counters(_raising=True)
 
-    def test_persist_nonraising_on_corrupt_file(
-        self, persist_dir: Path
-    ) -> None:
+    def test_persist_nonraising_on_corrupt_file(self, persist_dir: Path) -> None:
         persist_dir.write_text("still corrupt")
         AESGCMProvider._encrypt_counters = {b"\x01" * 32: 1}
         # With _raising=False the corrupt file is renamed to .corrupt and
@@ -128,12 +131,22 @@ class TestGetPersistPath:
         path = AESGCMProvider._get_persist_path()
         assert str(path) == str(persist_dir)
 
-    def test_get_persist_path_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Clearing the override returns the default ~/.ama_cryptography path.
+    def test_get_persist_path_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Clearing the override returns the default ``~/.ama_cryptography``
+        # path. Redirect HOME/USERPROFILE (and ``pathlib.Path.home``) into
+        # ``tmp_path`` first so the mkdir side effect inside
+        # ``_get_persist_path`` stays entirely inside pytest's temp dir and
+        # cannot touch the developer's real HOME.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
         saved = AESGCMProvider._counters_persist_path
         AESGCMProvider._counters_persist_path = None
         try:
             p = AESGCMProvider._get_persist_path()
             assert p.name == "aes_gcm_counters.json"
+            assert tmp_path in p.parents
         finally:
             AESGCMProvider._counters_persist_path = saved
