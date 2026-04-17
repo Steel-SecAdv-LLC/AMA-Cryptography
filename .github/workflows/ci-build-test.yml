@@ -180,8 +180,16 @@ jobs:
         # pytest failure behind `coverage report`'s exit 0.
         shell: bash
         run: |
-          coverage run --source=ama_cryptography -m pytest tests/ -v
-          pytest_exit=$?
+          # GitHub Actions runs `shell: bash` with `-eo pipefail`, so a bare
+          # `pytest_exit=$?` after a failing pytest never executes — `set -e`
+          # aborts the script first. Use `|| pytest_exit=$?` so the shell
+          # continues on failure, and fall back to 0 on success (the variable
+          # would be unset otherwise). `coverage xml`/`report` then run
+          # unconditionally so the Codecov upload step still has an artifact
+          # even when tests fail, and `exit $pytest_exit` surfaces the real
+          # outcome.
+          coverage run --source=ama_cryptography -m pytest tests/ -v || pytest_exit=$?
+          pytest_exit=${pytest_exit:-0}
           coverage xml -o coverage.xml
           coverage report
           exit $pytest_exit
