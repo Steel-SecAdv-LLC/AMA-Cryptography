@@ -337,17 +337,20 @@ class TestVerifyCryptoPackageErrorPaths:
         results = verify_crypto_package(b"content for verification", pkg)
         assert results["hkdf_keys"] is False
 
-    def test_unknown_sig_algorithm_falls_back_to_hybrid(self) -> None:
+    def test_unknown_sig_algorithm_returns_result_without_crashing(self) -> None:
         from ama_cryptography.crypto_api import verify_crypto_package
 
         pkg = self._make_valid_package()
-        # Inject a bogus algorithm name — should fall back to HYBRID_SIG lookup
+        # Inject a bogus algorithm name. verify_crypto_package falls back to
+        # HYBRID_SIG for the AlgorithmType enum lookup, but still looks up
+        # package.keypairs[sig_alg_name] with the original (bogus) name, so
+        # the signature check will fail — the important contract is that the
+        # function returns a results mapping and does not crash.
         pkg.metadata = dict(pkg.metadata)
         pkg.metadata["signature_algorithm"] = "NONEXISTENT_ALG"
         results = verify_crypto_package(b"content for verification", pkg)
-        # primary_signature may be False because HYBRID_SIG keypair is not in
-        # package.keypairs under that name, but the call should not crash.
         assert "primary_signature" in results
+        assert results["primary_signature"] is False
 
     def test_hmac_tag_tamper_fails_layer2(self) -> None:
         from ama_cryptography.crypto_api import verify_crypto_package
