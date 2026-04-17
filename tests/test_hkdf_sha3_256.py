@@ -39,15 +39,14 @@ def _probe_pyca_in_subprocess() -> bool:
     while still falling back to the pure-Python path when PyCA is
     unavailable or broken.
     """
+    probe_script = (
+        "from cryptography.hazmat.backends import default_backend; "
+        + "from cryptography.hazmat.primitives import hashes; "
+        + "from cryptography.hazmat.primitives.kdf.hkdf import HKDF; "
+        + "_ = (default_backend, hashes, HKDF)"
+    )
     result = subprocess.run(
-        [
-            _sys.executable,
-            "-c",
-            "from cryptography.hazmat.backends import default_backend; "
-            "from cryptography.hazmat.primitives import hashes; "
-            "from cryptography.hazmat.primitives.kdf.hkdf import HKDF; "
-            "_ = (default_backend, hashes, HKDF)",
-        ],
+        [_sys.executable, "-c", probe_script],
         capture_output=True,
         timeout=30,
         check=False,

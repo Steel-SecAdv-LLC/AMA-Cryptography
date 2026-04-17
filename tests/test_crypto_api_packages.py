@@ -235,11 +235,12 @@ class TestSphincsAddOn:
         Simulated by monkeypatching ``crypto_api.SPHINCS_AVAILABLE`` to
         ``False`` so the test exercises the error branch unconditionally,
         without relying on a platform skip that would be misclassified by
-        ``AMA_CI_REQUIRE_BACKENDS``.
+        ``AMA_CI_REQUIRE_BACKENDS``.  The string-path form of
+        ``monkeypatch.setattr`` avoids an ``import ama_cryptography.crypto_api``
+        that would duplicate the existing ``from ama_cryptography.crypto_api
+        import ...`` at the top of this module.
         """
-        import ama_cryptography.crypto_api as _capi
-
-        monkeypatch.setattr(_capi, "SPHINCS_AVAILABLE", False)
+        monkeypatch.setattr("ama_cryptography.crypto_api.SPHINCS_AVAILABLE", False)
         cfg = CryptoPackageConfig(use_sphincs=True)
         with pytest.raises(SphincsUnavailableError):
             create_crypto_package(b"data", cfg)
@@ -263,10 +264,11 @@ class TestKyberAddOn:
         Simulated by monkeypatching ``crypto_api.KYBER_AVAILABLE`` to
         ``False`` so the test exercises the error branch unconditionally,
         regardless of whether the real backend is present on the runner.
+        The string-path form of ``monkeypatch.setattr`` avoids an
+        ``import ama_cryptography.crypto_api`` that would duplicate the
+        existing ``from`` import at the top of this module.
         """
-        import ama_cryptography.crypto_api as _capi
-
-        monkeypatch.setattr(_capi, "KYBER_AVAILABLE", False)
+        monkeypatch.setattr("ama_cryptography.crypto_api.KYBER_AVAILABLE", False)
         cfg = CryptoPackageConfig(use_kyber=True, include_kem=True)
         with pytest.raises(KyberUnavailableError):
             create_crypto_package(b"data", cfg)
