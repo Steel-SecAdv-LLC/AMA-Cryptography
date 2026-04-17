@@ -76,8 +76,14 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
           NOTES_FILE="$(mktemp)"
-          awk -v ver="$VERSION" '
-            $0 ~ "^## \\[" ver "\\]" { capture=1; next }
+          # Use `index($0, header) == 1` rather than a regex match on
+          # ver: dots in semver strings are regex metacharacters, so a
+          # regex of `^## \[2.1.5\]` would also match `2X1Y5`, etc. The
+          # header variable is treated as a literal string; the remaining
+          # `^## \[` and `^---` exit patterns are regex literals under
+          # our control with no interpolation.
+          awk -v header="## [${VERSION}]" '
+            index($0, header) == 1 { capture=1; next }
             capture && /^## \[/ { exit }
             capture && /^---[[:space:]]*$/ { exit }
             capture { print }
