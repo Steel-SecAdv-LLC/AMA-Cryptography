@@ -167,7 +167,38 @@ jobs:
           # UTF-8 encoding for Windows to support Unicode symbols in output
           PYTHONIOENCODING: ${{ matrix.os == 'windows-latest' && 'utf-8' || '' }}
           PYTHONUTF8: ${{ matrix.os == 'windows-latest' && '1' || '' }}
-        run: pytest tests/ -v --cov=ama_cryptography --cov-report=xml
+        # Use `coverage run -m pytest` rather than `pytest --cov=`: this
+        # project does non-trivial work at module import time (ctypes
+        # signature setup in pqc_backends, native-library discovery via
+        # `_find_native_library()`, module-level class/enum construction).
+        # Starting the coverage tracer in the Python process before pytest
+        # loads guarantees those import-time statements are recorded;
+        # pytest-cov installs its tracer in a `pytest_configure` plugin
+        # hook, which runs after conftest imports and therefore misses
+        # statements executed during the conftest/plugin import stage.
+        #
+        # `shell: bash` on every runner (including windows-latest) so
+        # exit-code propagation is uniform. Capture pytest's exit code
+        # before running `coverage xml`/`coverage report` so we still
+        # publish coverage artifacts on test failure, then surface the
+        # pytest exit code. Without this, PowerShell (the default Windows
+        # shell) would mask a pytest failure behind `coverage report`'s
+        # exit 0.
+        shell: bash
+        run: |
+          # GitHub Actions runs `shell: bash` with `-eo pipefail`, so a bare
+          # `pytest_exit=$?` after a failing pytest never executes — `set -e`
+          # aborts the script first. Use `|| pytest_exit=$?` so the shell
+          # continues on failure, and fall back to 0 on success (the variable
+          # would be unset otherwise). `coverage xml`/`report` then run
+          # unconditionally so the Codecov upload step still has an artifact
+          # even when tests fail, and `exit $pytest_exit` surfaces the real
+          # outcome.
+          coverage run --source=ama_cryptography -m pytest tests/ -v || pytest_exit=$?
+          pytest_exit=${pytest_exit:-0}
+          coverage xml -o coverage.xml
+          coverage report
+          exit $pytest_exit
 
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'

@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v2.1.5)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        # tomllib is stdlib in Python 3.11+; pin runner Python to 3.11 so the
+        # pyproject.toml version check below always succeeds regardless of
+        # ubuntu-latest's default Python version.
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: '3.11'
+
+      - name: Resolve tag and version
+        id: meta
+        # SECURITY: never interpolate user-controlled inputs into shell `run:`
+        # blocks via `${{ ... }}` — that runs at expression time, before the
+        # shell tokenises the command, allowing injection. Always pass through
+        # `env:` and reference as `"${VAR}"` so the shell sees a single token.
+        env:
+          RAW_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          # Normalise: workflow_dispatch input may be pasted as `refs/tags/vX.Y.Z`
+          # (e.g. copied from the GitHub UI). Strip the prefix if present, then
+          # require the leading `v` so `${TAG#v}` produces a clean version.
+          TAG="${RAW_TAG}"
+          TAG="${TAG#refs/tags/}"
+          case "$TAG" in
+            v*) ;;
+            *)
+              echo "::error::Tag must start with 'v' (for example: v2.1.5); got '${RAW_TAG}'"
+              exit 1
+              ;;
+          esac
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches pyproject.toml version
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        shell: bash
+        run: |
+          PY_VERSION=$(python3 -c "import tomllib; print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
+          if [ "$PY_VERSION" != "$VERSION" ]; then
+            echo "::error::Tag ${TAG} does not match pyproject.toml version $PY_VERSION"
+            exit 1
+          fi
+
+      - name: Extract CHANGELOG section
+        id: changelog
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        shell: bash
+        run: |
+          NOTES_FILE="$(mktemp)"
+          # Use `index($0, header) == 1` rather than a regex match on the
+          # version string: dots in semver are regex metacharacters, so a
+          # regex like `^## \[2.1.5\]` would also match `2X1Y5`. Treating
+          # the header as a literal string avoids the class of escape bugs
+          # that semver-in-regex invites. The remaining `^## \[` and `^---`
+          # exit patterns are regex literals under our control with no
+          # interpolation, so they are safe.
+          awk -v header="## [${VERSION}]" '
+            index($0, header) == 1 { capture=1; next }
+            capture && /^## \[/ { exit }
+            capture && /^---[[:space:]]*$/ { exit }
+            capture { print }
+          ' CHANGELOG.md > "$NOTES_FILE"
+          if [ -s "$NOTES_FILE" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "path=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          NOTES_FOUND: ${{ steps.changelog.outputs.found }}
+          NOTES_PATH: ${{ steps.changelog.outputs.path }}
+        shell: bash
+        run: |
+          TITLE="AMA Cryptography ${TAG}"
+          if [ "$NOTES_FOUND" = "true" ]; then
+            gh release create "$TAG" \
+              --title "$TITLE" \
+              --notes-file "$NOTES_PATH" \
+              --verify-tag
+          else
+            gh release create "$TAG" \
+              --title "$TITLE" \
+              --generate-notes \
+              --verify-tag
+          fi
