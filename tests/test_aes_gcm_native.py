@@ -31,14 +31,30 @@ skip_no_native = pytest.mark.skipif(
 
 
 def _pyca_crypto_available() -> bool:
-    """Check if PyCA cryptography is usable (may be broken if _cffi_backend missing)."""
-    try:
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    """Check if PyCA cryptography is usable (may be broken if _cffi_backend missing).
 
-        _ = AESGCM  # import probe for availability check
-    except Exception:
-        return False
-    return True
+    The import is run in a subprocess so that any failure — including the
+    ``pyo3_runtime.PanicException`` (a direct ``BaseException`` subclass)
+    that PyCA's Rust bindings raise on broken environments — surfaces as
+    a non-zero exit code instead of forcing us to catch
+    ``BaseException`` in-process. This keeps the probe compliant with
+    CodeQL's ``py/catch-base-exception`` rule while still tolerating a
+    broken pyca install.
+    """
+    import subprocess
+    import sys as _sys
+
+    result = subprocess.run(
+        [
+            _sys.executable,
+            "-c",
+            "from cryptography.hazmat.primitives.ciphers.aead import AESGCM; _ = AESGCM",
+        ],
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    return result.returncode == 0
 
 
 skip_no_pyca = pytest.mark.skipif(

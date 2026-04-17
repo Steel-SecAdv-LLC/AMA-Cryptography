@@ -263,7 +263,7 @@ def initial_state() -> Any:
 
 
 def pytest_configure(config: Any) -> None:
-    """Configure custom pytest markers."""
+    """Configure custom pytest markers and deferred warning filters."""
     config.addinivalue_line(
         "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
     )
@@ -273,3 +273,28 @@ def pytest_configure(config: Any) -> None:
     config.addinivalue_line("markers", "integration: marks integration tests")
     config.addinivalue_line("markers", "security: marks security-related tests")
     config.addinivalue_line("markers", "performance: marks performance-related tests")
+
+    # Register the SecurityWarning filter via the ini mechanism rather than
+    # a direct ``warnings.filterwarnings()`` call.  Pytest wraps every test
+    # in ``warnings.catch_warnings()`` and re-applies the configured ini
+    # ``filterwarnings`` entries at the start of each test — a direct
+    # ``warnings.filterwarnings()`` call here would be discarded on entry
+    # to that context. Appending the filter here adds it to pytest's
+    # ini-managed warning filters so it participates in that normal
+    # per-test filter processing, without relying on a module-level
+    # filter. (Pytest iterates the ini entries in order and prepends each
+    # to the runtime filter stack via ``warnings.filterwarnings``; the
+    # last ini entry therefore ends up at stack position 0, i.e. matched
+    # before ``error`` — which is what we want for ``SecurityWarning``.)
+    #
+    # The filter is registered here (rather than in pyproject.toml) so that
+    # pytest-cov has already enabled coverage instrumentation by the time
+    # ``ama_cryptography.exceptions`` is imported below, which avoids the
+    # 0 %-coverage measurement artefact caused by pytest importing the
+    # module during initial filter-string parsing.
+    from ama_cryptography.exceptions import SecurityWarning as _SecurityWarning
+
+    config.addinivalue_line(
+        "filterwarnings",
+        f"default::{_SecurityWarning.__module__}.{_SecurityWarning.__qualname__}",
+    )
