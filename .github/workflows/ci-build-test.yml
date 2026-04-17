@@ -167,17 +167,24 @@ jobs:
           # UTF-8 encoding for Windows to support Unicode symbols in output
           PYTHONIOENCODING: ${{ matrix.os == 'windows-latest' && 'utf-8' || '' }}
           PYTHONUTF8: ${{ matrix.os == 'windows-latest' && '1' || '' }}
-        # Use `coverage run -m pytest` rather than `pytest --cov=`: pytest-cov
-        # imports the target package before starting coverage, so module-init
-        # statements (class defs, ctypes signature setup, __all__) are not
-        # traced. `coverage run` starts tracking before any import.
+        # Use `coverage run -m pytest` rather than `pytest --cov=`: this
+        # project does non-trivial work at module import time (ctypes
+        # signature setup in pqc_backends, native-library discovery via
+        # `_find_native_library()`, module-level class/enum construction).
+        # Starting the coverage tracer in the Python process before pytest
+        # loads guarantees those import-time statements are recorded;
+        # relying on pytest-cov's plugin hook can miss statements executed
+        # during conftest/pytest_plugins import, because editable installs
+        # with ctypes-level side effects execute before the plugin's
+        # `pytest_configure` hook in some setups.
         #
-        # `shell: bash` on every runner (including windows-latest) so exit-code
-        # propagation is uniform. Capture pytest's exit code before running
-        # `coverage xml`/`coverage report` so we still publish coverage
-        # artifacts on test failure, then surface the pytest exit code.
-        # Without this, PowerShell (the default Windows shell) would mask a
-        # pytest failure behind `coverage report`'s exit 0.
+        # `shell: bash` on every runner (including windows-latest) so
+        # exit-code propagation is uniform. Capture pytest's exit code
+        # before running `coverage xml`/`coverage report` so we still
+        # publish coverage artifacts on test failure, then surface the
+        # pytest exit code. Without this, PowerShell (the default Windows
+        # shell) would mask a pytest failure behind `coverage report`'s
+        # exit 0.
         shell: bash
         run: |
           # GitHub Actions runs `shell: bash` with `-eo pipefail`, so a bare
@@ -305,6 +312,46 @@ jobs:
           path: |
             benchmarks/regression_results.json
             benchmarks/regression_report.md
+
+  # Performance threshold enforcement — runs tests/test_performance.py with
+  # AMA_RUN_PERF=1 on a single reference configuration (ubuntu-latest,
+  # Python 3.11). Without this job, the opt-in gating in test_performance.py
+  # would make every CI run skip the thresholds, turning them into dead code.
+  # Local developer runs still execute the thresholds by default.
+  perf-thresholds:
+    name: Performance Thresholds (reference runner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [c-library]
+    env:
+      AMA_RUN_PERF: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libssl-dev
+
+      - name: Build native C library
+        run: |
+          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build -j4
+
+      - name: Install Python package
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install "Cython>=3.0.0" "numpy>=1.24.0,<3.0.0"
+          pip install -r requirements-dev.txt
+          pip install -e .
+
+      - name: Run performance threshold tests
+        run: pytest tests/test_performance.py -v --tb=short
 
   # Docker Build — non-blocking: transient Docker Hub auth/rate-limit
   # failures must not gate PRs.
