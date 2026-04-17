@@ -44,22 +44,28 @@ pytestmark = pytest.mark.skipif(
 def _pyca_available() -> bool:
     """Check if PyCA cryptography is installed and functional.
 
-    PyCA's Rust bindings raise ``pyo3_runtime.PanicException`` (a direct
-    ``BaseException`` subclass) when the environment is broken — e.g.
-    missing ``_cffi_backend`` or incompatible openssl — so the probe must
-    catch ``BaseException``. Interpreter-control exceptions
-    (``KeyboardInterrupt``, ``SystemExit``) are re-raised so that we never
-    swallow them here.
+    The import is run in a subprocess so that any failure — including the
+    ``pyo3_runtime.PanicException`` (a direct ``BaseException`` subclass)
+    that PyCA's Rust bindings raise on broken environments — surfaces as
+    a non-zero exit code instead of forcing us to catch
+    ``BaseException`` in-process. This keeps the probe compliant with
+    CodeQL's ``py/catch-base-exception`` rule while still tolerating a
+    broken pyca install.
     """
-    try:
-        from cryptography.hazmat.primitives.asymmetric import ed25519
+    import subprocess
+    import sys as _sys
 
-        _ = ed25519  # import probe for availability check
-    except BaseException as exc:
-        if isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit)):
-            raise
-        return False
-    return True
+    result = subprocess.run(
+        [
+            _sys.executable,
+            "-c",
+            "from cryptography.hazmat.primitives.asymmetric import ed25519; _ = ed25519",
+        ],
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    return result.returncode == 0
 
 
 def _native_sign_and_verify(seed: bytes, message: bytes) -> tuple[Any, ...]:

@@ -227,8 +227,19 @@ class TestSphincsAddOn:
         assert v.get("sphincs") is True
         assert v["all_valid"] is True
 
-    @pytest.mark.skipif(SPHINCS_AVAILABLE, reason="Only meaningful when SPHINCS+ missing")
-    def test_sphincs_requested_but_unavailable_raises(self) -> None:
+    def test_sphincs_requested_but_unavailable_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When SPHINCS+ is unavailable, requesting it raises fail-closed.
+
+        Simulated by monkeypatching ``crypto_api.SPHINCS_AVAILABLE`` to
+        ``False`` so the test exercises the error branch unconditionally,
+        without relying on a platform skip that would be misclassified by
+        ``AMA_CI_REQUIRE_BACKENDS``.
+        """
+        import ama_cryptography.crypto_api as _capi
+
+        monkeypatch.setattr(_capi, "SPHINCS_AVAILABLE", False)
         cfg = CryptoPackageConfig(use_sphincs=True)
         with pytest.raises(SphincsUnavailableError):
             create_crypto_package(b"data", cfg)
@@ -246,8 +257,16 @@ class TestKyberAddOn:
         assert v.get("kem") is True
         assert v["all_valid"] is True
 
-    @pytest.mark.skipif(KYBER_AVAILABLE, reason="Only meaningful when Kyber missing")
-    def test_kyber_requested_but_unavailable_raises(self) -> None:
+    def test_kyber_requested_but_unavailable_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When Kyber is unavailable, requesting it raises fail-closed.
+
+        Simulated by monkeypatching ``crypto_api.KYBER_AVAILABLE`` to
+        ``False`` so the test exercises the error branch unconditionally,
+        regardless of whether the real backend is present on the runner.
+        """
+        import ama_cryptography.crypto_api as _capi
+
+        monkeypatch.setattr(_capi, "KYBER_AVAILABLE", False)
         cfg = CryptoPackageConfig(use_kyber=True, include_kem=True)
         with pytest.raises(KyberUnavailableError):
             create_crypto_package(b"data", cfg)

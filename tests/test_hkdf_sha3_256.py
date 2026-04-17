@@ -20,25 +20,50 @@ Test Vector Sources:
 
 import hashlib
 import json
+import subprocess
+import sys as _sys
 
 import pytest
 
 _PYCA_AVAILABLE: bool
 
-# Catch BaseException: PyCA's Rust bindings can raise pyo3.PanicException
-# (a BaseException subclass, not Exception) when the environment is broken
-# — e.g. when _cffi_backend is missing or incompatible with openssl. Falling
-# back to the pure-Python path is safe and preserves test coverage.
-# Interpreter-control exceptions are re-raised so they are never swallowed.
-try:
+
+def _probe_pyca_in_subprocess() -> bool:
+    """Probe PyCA availability in a subprocess.
+
+    Running the import in an isolated interpreter lets any failure —
+    including the ``pyo3_runtime.PanicException`` (a direct
+    ``BaseException`` subclass) that PyCA's Rust bindings raise on
+    broken environments — surface as a non-zero exit code. This keeps
+    the probe compliant with CodeQL's ``py/catch-base-exception`` rule
+    while still falling back to the pure-Python path when PyCA is
+    unavailable or broken.
+    """
+    result = subprocess.run(
+        [
+            _sys.executable,
+            "-c",
+            "from cryptography.hazmat.backends import default_backend; "
+            "from cryptography.hazmat.primitives import hashes; "
+            "from cryptography.hazmat.primitives.kdf.hkdf import HKDF; "
+            "_ = (default_backend, hashes, HKDF)",
+        ],
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+if _probe_pyca_in_subprocess():
+    # The subprocess probe succeeded, so the in-process import is safe
+    # and will not trigger the pyo3 panic.
     from cryptography.hazmat.backends import default_backend as default_backend
     from cryptography.hazmat.primitives import hashes as hashes
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF as HKDF
 
     _PYCA_AVAILABLE = True
-except BaseException as _pyca_err:
-    if isinstance(_pyca_err, (KeyboardInterrupt, SystemExit, GeneratorExit)):
-        raise
+else:
     default_backend = None  # type: ignore[assignment]  # fallback when pyca unavailable (HKDF-001)
     hashes = None  # type: ignore[assignment]  # fallback when pyca unavailable (HKDF-002)
     HKDF = None  # type: ignore[assignment,misc]  # fallback when pyca unavailable (HKDF-003)
