@@ -263,7 +263,7 @@ def initial_state() -> Any:
 
 
 def pytest_configure(config: Any) -> None:
-    """Configure custom pytest markers."""
+    """Configure custom pytest markers and deferred warning filters."""
     config.addinivalue_line(
         "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
     )
@@ -273,3 +273,12 @@ def pytest_configure(config: Any) -> None:
     config.addinivalue_line("markers", "integration: marks integration tests")
     config.addinivalue_line("markers", "security: marks security-related tests")
     config.addinivalue_line("markers", "performance: marks performance-related tests")
+
+    # Register ``default::SecurityWarning`` filter here (rather than in
+    # pyproject.toml's ``filterwarnings``) so that coverage instrumentation
+    # starts before ``ama_cryptography.exceptions`` is imported.
+    import warnings as _warnings
+
+    from ama_cryptography.exceptions import SecurityWarning as _SecurityWarning
+
+    _warnings.filterwarnings("default", category=_SecurityWarning)

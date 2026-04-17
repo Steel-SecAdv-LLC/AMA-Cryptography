@@ -341,10 +341,11 @@ filterwarnings = [
     # Allow native-backend-unavailable warnings during import (expected in CI
     # when the C library is not built).
     "default:.*native.*backend.*not available:UserWarning",
-    # UserWarning is NOT suppressed — security warnings from crypto operations
-    # must surface during testing. If a test emits a UserWarning, it should
-    # either be fixed or explicitly expected via pytest.warns().
-    "default::ama_cryptography.exceptions.SecurityWarning",
+    # NOTE: the SecurityWarning filter is registered programmatically in
+    # tests/conftest.py via pytest_configure(). Registering it here would
+    # import ``ama_cryptography.exceptions`` during pytest's initial
+    # conftest loading — before coverage starts — artificially dropping
+    # exceptions.py coverage to 0%.
 ]
 
 # Coverage configuration

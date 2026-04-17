@@ -25,13 +25,17 @@ import pytest
 
 _PYCA_AVAILABLE: bool
 
+# Catch BaseException: PyCA's Rust bindings can raise pyo3.PanicException
+# (a BaseException subclass, not Exception) when the environment is broken
+# — e.g. when _cffi_backend is missing or incompatible with openssl. Falling
+# back to the pure-Python path is safe and preserves test coverage.
 try:
     from cryptography.hazmat.backends import default_backend as default_backend
     from cryptography.hazmat.primitives import hashes as hashes
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF as HKDF
 
     _PYCA_AVAILABLE = True
-except ImportError:
+except BaseException:
     default_backend = None  # type: ignore[assignment]  # fallback when pyca unavailable (HKDF-001)
     hashes = None  # type: ignore[assignment]  # fallback when pyca unavailable (HKDF-002)
     HKDF = None  # type: ignore[assignment,misc]  # fallback when pyca unavailable (HKDF-003)
