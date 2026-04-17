@@ -5,12 +5,17 @@
 Performance regression tests.
 
 These tests establish baseline performance expectations with absolute
-ops/sec thresholds and are hardware-sensitive. They are opt-in:
+ops/sec thresholds and are hardware-sensitive.
 
-    AMA_RUN_PERF=1 pytest tests/test_performance.py -v --tb=short
+Gating policy:
 
-Without AMA_RUN_PERF, they are skipped to avoid false failures on
-slow/shared runners and local dev machines.
+- Local developer runs: tests RUN by default, so threshold regressions
+  surface during development. Override with AMA_RUN_PERF=0.
+- Shared CI runners: tests SKIP by default (CI / GITHUB_ACTIONS env
+  detected) to avoid false failures from noisy neighbours. A dedicated
+  CI job sets AMA_RUN_PERF=1 on one reference configuration
+  (ubuntu-latest, Python 3.11) so thresholds are still enforced in at
+  least one CI run — without that job, the thresholds are dead code.
 """
 
 import os
@@ -28,13 +33,19 @@ from ama_cryptography.legacy_compat import (
     hmac_authenticate,
 )
 
-# Performance tests use absolute ops/sec thresholds and are hardware-sensitive.
-# They are opt-in: set AMA_RUN_PERF=1 (or legacy CI_PERF=1) to run. Default is
-# skip, so local dev runs and CI do not fail due to slow shared runners.
-_run_perf = os.environ.get("AMA_RUN_PERF", "").lower() in ("1", "true", "yes") or (
+# Perf tests are hardware-sensitive. Skip on shared CI runners by default
+# (override with AMA_RUN_PERF=1), but run by default on developer machines
+# so threshold regressions surface during local development. A single
+# dedicated CI job sets AMA_RUN_PERF=1 so the thresholds still run in CI
+# under controlled conditions.
+_force_run = os.environ.get("AMA_RUN_PERF", "").lower() in ("1", "true", "yes") or (
     os.environ.get("CI_PERF", "").lower() in ("1", "true", "yes")
 )
-SKIP_PERF = not _run_perf
+_force_skip = os.environ.get("AMA_RUN_PERF", "").lower() in ("0", "false", "no")
+_in_ci = os.environ.get("CI", "").lower() in ("1", "true", "yes") or os.environ.get(
+    "GITHUB_ACTIONS", ""
+).lower() in ("1", "true", "yes")
+SKIP_PERF = _force_skip or (_in_ci and not _force_run)
 
 
 def benchmark(func: Callable[..., Any], iterations: int = 1000) -> float:
@@ -61,7 +72,9 @@ def benchmark(func: Callable[..., Any], iterations: int = 1000) -> float:
     return iterations / elapsed
 
 
-@pytest.mark.skipif(SKIP_PERF, reason="Performance tests opt-in: set AMA_RUN_PERF=1 to run")
+@pytest.mark.skipif(
+    SKIP_PERF, reason="Performance tests skipped on CI runners; set AMA_RUN_PERF=1 to force"
+)
 class TestSHA3Performance:
     """SHA3-256 hashing performance tests."""
 
@@ -84,7 +97,9 @@ class TestSHA3Performance:
         assert ops_per_sec > 10000, f"SHA3 throughput {ops_per_sec:.0f} ops/sec below 10,000"
 
 
-@pytest.mark.skipif(SKIP_PERF, reason="Performance tests opt-in: set AMA_RUN_PERF=1 to run")
+@pytest.mark.skipif(
+    SKIP_PERF, reason="Performance tests skipped on CI runners; set AMA_RUN_PERF=1 to force"
+)
 class TestHMACPerformance:
     """HMAC-SHA256 performance tests."""
 
@@ -109,7 +124,9 @@ class TestHMACPerformance:
         assert ops_per_sec > 1500, f"HMAC throughput {ops_per_sec:.0f} ops/sec below 1,500"
 
 
-@pytest.mark.skipif(SKIP_PERF, reason="Performance tests opt-in: set AMA_RUN_PERF=1 to run")
+@pytest.mark.skipif(
+    SKIP_PERF, reason="Performance tests skipped on CI runners; set AMA_RUN_PERF=1 to force"
+)
 class TestEd25519Performance:
     """Ed25519 signature performance tests."""
 
@@ -147,7 +164,9 @@ class TestEd25519Performance:
         assert ops_per_sec > 1400, f"Ed25519 verify {ops_per_sec:.0f} ops/sec below 1,400"
 
 
-@pytest.mark.skipif(SKIP_PERF, reason="Performance tests opt-in: set AMA_RUN_PERF=1 to run")
+@pytest.mark.skipif(
+    SKIP_PERF, reason="Performance tests skipped on CI runners; set AMA_RUN_PERF=1 to force"
+)
 class TestPackageCreationPerformance:
     """Full cryptographic package creation performance tests."""
 
@@ -177,7 +196,9 @@ class TestPackageCreationPerformance:
         assert ops_per_sec > 10, f"Package creation {ops_per_sec:.1f} ops/sec below 10"
 
 
-@pytest.mark.skipif(SKIP_PERF, reason="Performance tests opt-in: set AMA_RUN_PERF=1 to run")
+@pytest.mark.skipif(
+    SKIP_PERF, reason="Performance tests skipped on CI runners; set AMA_RUN_PERF=1 to force"
+)
 class TestMemoryEfficiency:
     """Memory efficiency tests."""
 
