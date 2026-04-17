@@ -276,11 +276,16 @@ def pytest_configure(config: Any) -> None:
 
     # Register the SecurityWarning filter via the ini mechanism rather than
     # a direct ``warnings.filterwarnings()`` call.  Pytest wraps every test
-    # in ``warnings.catch_warnings()`` and re-applies ini ``filterwarnings``
-    # entries in order — a module-level filter set here would be discarded
-    # on entry to each test's context. Appending the filter to the ini list
-    # ensures it lands at the correct position (before ``error``) in the
-    # filter chain.
+    # in ``warnings.catch_warnings()`` and re-applies the configured ini
+    # ``filterwarnings`` entries at the start of each test — a direct
+    # ``warnings.filterwarnings()`` call here would be discarded on entry
+    # to that context. Appending the filter here adds it to pytest's
+    # ini-managed warning filters so it participates in that normal
+    # per-test filter processing, without relying on a module-level
+    # filter. (Pytest iterates the ini entries in order and prepends each
+    # to the runtime filter stack via ``warnings.filterwarnings``; the
+    # last ini entry therefore ends up at stack position 0, i.e. matched
+    # before ``error`` — which is what we want for ``SecurityWarning``.)
     #
     # The filter is registered here (rather than in pyproject.toml) so that
     # pytest-cov has already enabled coverage instrumentation by the time

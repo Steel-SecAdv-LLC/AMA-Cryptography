@@ -17,10 +17,9 @@ These tests deliberately force ``_run_self_tests()`` into the ERROR
 state. Earlier versions of this file called ``update_integrity_digest()``
 in each ``finally`` block to restore ``OPERATIONAL`` for the next test,
 which mutated the real ``_integrity_digest.txt`` on disk. We instead
-redirect ``_INTEGRITY_DIGEST_FILE`` to a tmp-path for the duration of
-each test (via the ``isolated_integrity_file`` autouse fixture), so the
-runner is free to write / refresh the digest without touching the real
-package baseline.
+redirect ``_INTEGRITY_DIGEST_FILE`` to a tmp-path in tests that request
+the ``isolated_integrity_file`` fixture, so the runner is free to write
+/ refresh the digest without touching the real package baseline.
 """
 
 from __future__ import annotations

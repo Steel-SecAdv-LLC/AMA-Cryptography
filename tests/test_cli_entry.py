@@ -108,6 +108,9 @@ def test_main_module_imports_legacy_main() -> None:
 
     # Force a fresh import so coverage counts the module-body statements
     # even when the interpreter has previously loaded it (e.g. via a
-    # subprocess test before this one).
+    # subprocess test before this one). ``importlib.import_module`` is a
+    # no-op when the module is already in ``sys.modules``, so we evict
+    # the cached entry first to guarantee the fresh load.
+    sys.modules.pop("ama_cryptography.__main__", None)
     module = importlib.import_module("ama_cryptography.__main__")
     assert callable(module.main)
