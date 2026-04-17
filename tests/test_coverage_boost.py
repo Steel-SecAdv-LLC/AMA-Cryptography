@@ -88,6 +88,11 @@ class TestAESGCMCounterPersistence:
         )
         monkeypatch.setattr(crypto_api.AESGCMProvider, "_encrypt_counters", {}, raising=False)
         monkeypatch.setattr(crypto_api.AESGCMProvider, "_counters_dirty", 0, raising=False)
+        # Prevent AESGCMProvider.__init__ from registering its atexit handler.
+        # Without this guard the handler would survive monkeypatch teardown and
+        # try to write counters at interpreter shutdown using the real
+        # HOME-based persist path, bleeding state outside the temp dir.
+        monkeypatch.setattr(crypto_api.AESGCMProvider, "_atexit_registered", True, raising=False)
         return crypto_api.AESGCMProvider
 
     def test_persist_counters_writes_file(
