@@ -24,7 +24,7 @@
 #include <stdio.h>
 
 /* ============================================================================
- * Platform once-primitive abstraction (INVARIANT-2)
+ * Platform once-primitive abstraction (INVARIANT-15)
  *
  * C11 <threads.h> (call_once) is NOT reliably available:
  *   - macOS: Apple SDK has never shipped <threads.h>

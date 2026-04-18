@@ -700,7 +700,7 @@ The C library uses CMake (`CMakeLists.txt`, ~270 lines) with the following key c
 |--------|---------|--------|
 | `AMA_USE_NATIVE_PQC` | ON | Compile ML-DSA-65, ML-KEM-1024, SPHINCS+ from source |
 | `AMA_AES_CONSTTIME` | ON | Add bitsliced AES S-box (`ama_aes_bitsliced.c`) for cache-timing hardening |
-| `AMA_BUILD_TESTS` | ON | Build C test suite (12 test files in `tests/c/`) |
+| `AMA_BUILD_TESTS` | ON | Build C test suite (`tests/c/`) |
 | `AMA_BUILD_EXAMPLES` | ON | Build C examples (`examples/c/`) |
 | `AMA_TESTING_MODE` | OFF | Build test-only library with internal symbol visibility |
 | `AMA_ENABLE_AVX2` | OFF | Auto-detect and enable AVX2 SIMD optimizations |
@@ -768,7 +768,7 @@ docker run ama-cryptography:latest
 | Category | Purpose | Coverage Target | Files |
 |----------|---------|-----------------|-------|
 | Unit Tests | Individual function validation | 80% line coverage | 70 Python test files |
-| C Unit Tests | Native library validation | All C functions | 12 C test files (`tests/c/`) |
+| C Unit Tests | Native library validation | All C functions | 11 `test_*.c` registered via ctest in `tests/c/` (+ 1 standalone `bench_*.c`) |
 | Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
 | Performance Tests | Benchmark regression detection | All critical paths | `test_performance.py`, `benchmarks/` |
 | Security Tests | Cryptographic correctness | 100% crypto functions | `test_crypto_core_penetration.py`, `test_memory_security.py` |
@@ -776,8 +776,9 @@ docker run ama-cryptography:latest
 | Fuzz Tests | Input mutation testing | 12 C targets | `fuzz/fuzz_*.c` |
 | NIST ACVP Vectors | Official vector validation | 815 vectors, 12 algorithms | `nist_vectors/` |
 
-**Total:** 2,028 Python test functions across 70 test files, plus 12 C test
-files. See [`docs/METRICS_REPORT.md`](docs/METRICS_REPORT.md) for reproduction
+**Total:** 2,028 Python test functions across 70 test files, plus 11
+ctest-registered C tests and 1 standalone C benchmark under `tests/c/`.
+See [`docs/METRICS_REPORT.md`](docs/METRICS_REPORT.md) for reproduction
 instructions.
 
 ### Continuous Integration Pipeline

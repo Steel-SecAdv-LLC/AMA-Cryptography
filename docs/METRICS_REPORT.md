@@ -57,6 +57,16 @@ find src/c include -type f \( -name '*.c' -o -name '*.h' \) | xargs wc -l | tail
 find ama_cryptography src/c include -type f \
     \( -name '*.py' -o -name '*.c' -o -name '*.h' -o -name '*.pyx' -o -name '*.pxd' \) \
     -print0 | xargs -0 wc -l | tail -1
+
+# Top-level Python (repo-root scripts — monitors, benchmarks, demos)
+find . -maxdepth 1 -name '*.py' -type f -print0 | xargs -0 wc -l | tail -1
+
+# Tests
+find tests -name '*.py' -type f -print0 | xargs -0 wc -l | tail -1
+
+# Cython
+find . -type f \( -name '*.pyx' -o -name '*.pxd' \) ! -path './.git/*' -print0 \
+    | xargs -0 wc -l | tail -1
 ```
 
 ---
@@ -70,7 +80,8 @@ find ama_cryptography src/c include -type f \
 |-------|------:|
 | Python test files under `tests/` | 70 |
 | Python test function definitions | **2,028** |
-| C test files under `tests/c/` | 12 |
+| `test_*.c` files under `tests/c/` (ctest-registered) | 11 |
+| `bench_*.c` files under `tests/c/` (standalone, not in ctest) | 1 |
 | Fuzz harnesses under `fuzz/` | 12 C targets |
 
 **Collected-via-pytest count** is higher than the static function count
@@ -101,8 +112,11 @@ grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l
 # Static file count
 grep -rlE "^\s*def test_" tests/ --include='*.py' | wc -l
 
-# C test files
-find tests/c -maxdepth 1 -name 'test_*.c' | wc -l
+# C test files registered in ctest (test_*.c)
+find tests/c -maxdepth 1 -name 'test_*.c' -type f | wc -l
+
+# Standalone C benchmark sources (bench_*.c, not registered in ctest)
+find tests/c -maxdepth 1 -name 'bench_*.c' -type f | wc -l
 
 # Fuzz harnesses
 find fuzz -name 'fuzz_*.c' | wc -l
