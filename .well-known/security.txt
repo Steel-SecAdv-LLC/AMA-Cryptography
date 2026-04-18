@@ -1,0 +1,16 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Contact: mailto:steel.sa.llc@gmail.com
+Encryption: https://raw.githubusercontent.com/Steel-SecAdv-LLC/AMA-Cryptography/main/pgp-key.asc
+Preferred-Languages: en
+Canonical: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/.well-known/security.txt
+Policy: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/SECURITY.md
+Expires: 2027-04-18T00:00:00.000Z
+-----BEGIN PGP SIGNATURE-----
+
+iHUEARYKAB0WIQSBuZtN9G1QvtfYT1lNfIPAYHtqmwUCaePYygAKCRBNfIPAYHtq
+my0vAQDYVb4C9KZFBviU0aPhpL2Lc77WIDGRXGxm6SeOrexEkQEAj9fIZ7lsIh6m
+CtufnIFetH1ARDMIoKhOlsTZQsaLGw8=
+=biga
+-----END PGP SIGNATURE-----

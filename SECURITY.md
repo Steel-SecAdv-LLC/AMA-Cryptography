@@ -265,7 +265,9 @@ Non-compliance with these standards should be reported as a high-severity securi
 ## Contact
 
 **Security Team:** steel.sa.llc@gmail.com
-**PGP Key:** Available upon request
+**PGP Key:** [`pgp-key.asc`](pgp-key.asc)
+**PGP Fingerprint:** `81B9 9B4D F46D 50BE D7D8  4F59 4D7C 83C0 607B 6A9B`
+**security.txt:** [`.well-known/security.txt`](.well-known/security.txt) (RFC 9116)
 **Response Time:** 24-48 hours for critical issues
 **Organization:** Steel Security Advisors LLC
 
