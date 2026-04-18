@@ -239,18 +239,6 @@ All 64 CI jobs passing after Phase 2 integration.
 - **Ed25519 test suite:** Expanded from 6 tests (sign-only) to 12 tests including RFC 8032 KAT vector matching, full sign/verify roundtrip, tamper detection (modified signature and message rejection), and deterministic signature verification.
 - **Ed25519 code cleanup:** Replaced verbose element-by-element `p3->p2` coordinate copying with `ge25519_p3_to_p2()` helper using `fe25519_copy()`.
 
-### Changed - Full Project Rename
-
-**Breaking:** Renamed project from Ava Guardian to AMA Cryptography.
-
-Complete rename of all 450+ references across the codebase. This is a breaking change for all downstream consumers (including Mercury Agent).
-
-- **Package:** `ava-guardian` -> `ama-cryptography`, `ava_guardian` -> `ama_cryptography`
-- **Classes:** `AvaGuardianCrypto` -> `AmaCryptography`, `AvaGuardianMonitor` -> `AmaCryptographyMonitor`
-- **C API:** All `ava_*` functions renamed to `ama_*`
-- **Constants:** `AVA_GUARDIAN_*` -> `AMA_CRYPTOGRAPHY_*`/`AMA_CRYPTO_*`
-- **Library:** `libava_guardian.so` -> `libama_cryptography.so`
-
 ### Added - Native C Cryptographic Library
 
 Implemented native C cryptographic primitives for high-performance operations:
@@ -298,10 +286,8 @@ Implemented native C cryptographic primitives for high-performance operations:
 ### Migration Guide
 
 After upgrading to v2.0:
-1. Rename all imports: `ava_guardian` -> `ama_cryptography`
-2. Rename environment variables: `AVA_REQUIRE_REAL_PQC` -> `AMA_REQUIRE_REAL_PQC`
-3. Regenerate all derived keys (HKDF algorithm changed)
-4. Update CryptoPackage consumers for new `ethical_vector`/`ethical_hash` fields
+1. Regenerate all derived keys (HKDF algorithm changed)
+2. Update CryptoPackage consumers for new `ethical_vector`/`ethical_hash` fields
 
 ---
 

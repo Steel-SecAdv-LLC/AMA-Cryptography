@@ -95,6 +95,17 @@ def _last_changelog_date() -> str | None:
     return None
 
 
+def _latest_changelog_version() -> str | None:
+    """Extract the version from the first ## [x.y.z] - YYYY-MM-DD line."""
+    if not CHANGELOG.exists():
+        return None
+    for line in CHANGELOG.read_text().splitlines():
+        m = re.match(r"^##\s+\[([^\]]+)\]\s+-\s+\d{4}-\d{2}-\d{2}", line)
+        if m:
+            return m.group(1)
+    return None
+
+
 def update_changelog(dry_run: bool = False) -> bool:
     last_date = _last_changelog_date()
 
@@ -130,6 +141,17 @@ def update_changelog(dry_run: bool = False) -> bool:
 
     if not commits:
         print("  CHANGELOG: no classifiable commits")
+        return False
+
+    # Skip adding a duplicate section when the current project version already
+    # has a section at the top of the CHANGELOG. Commits landing after the
+    # version bump (e.g. docs, dependabot merges) should not spawn a second
+    # "## [X.Y.Z] - <today>" header for the same release.
+    if _latest_changelog_version() == _get_version():
+        print(
+            "  CHANGELOG: latest section already at current project version;"
+            " skipping new section creation"
+        )
         return False
 
     # Group by category
