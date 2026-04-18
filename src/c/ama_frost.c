@@ -4,8 +4,8 @@
  *
  * @file ama_frost.c
  * @brief FROST Threshold Ed25519 Signatures — RFC 9591
- * @version 2.1.0
- * @date 2026-04-09
+ * @version 2.1.5
+ * @date 2026-04-17
  *
  * Production-ready implementation of FROST (Flexible Round-Optimized
  * Schnorr Threshold) signatures over the Ed25519 group.

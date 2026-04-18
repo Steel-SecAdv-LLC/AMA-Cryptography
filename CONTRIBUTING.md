@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.2 |
-| Last Updated | 2026-04-06 |
+| Document Version | 2.1.5 |
+| Last Updated | 2026-04-17 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -518,7 +518,8 @@ If you have questions about contributing:
 | 1.0.0 | 2025-11-26 | Initial professional release |
 | 1.1.0 | 2026-01-09 | Version alignment, terminology updates |
 | 2.0.0 | 2026-03-08 | Zero-dependency architecture, FIPS 203/204/205, updated module references |
-| 2.0.0 | 2026-03-16 | Replace flake8/isort references with ruff, toolchain documentation update |
+| 2.1.0 | 2026-03-16 | Replace flake8/isort references with ruff, toolchain documentation update |
+| 2.1.5 | 2026-04-17 | Documentation version alignment across repository |
 
 ---
 

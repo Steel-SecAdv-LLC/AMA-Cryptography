@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.1 |
-| Last Updated | 2026-04-06 |
+| Document Version | 2.1.5 |
+| Last Updated | 2026-04-17 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -302,6 +302,8 @@ controller.respond()  # Key rotation, algorithm switching based on level
 | 1.0.0 | 2025-11-26 | Initial professional release |
 | 1.1.0 | 2026-01-09 | Version alignment |
 | 2.0.0 | 2026-03-08 | Adaptive posture integration, weighted scoring model, Phase 2 primitives support |
+| 2.1.0 | 2026-03-25 | Hand-written SIMD dispatch coverage, dashboard/chart overhaul |
+| 2.1.5 | 2026-04-17 | Documentation version alignment, comprehensive monitoring test coverage |
 
 ---
 

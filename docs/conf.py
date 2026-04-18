@@ -14,8 +14,8 @@ sys.path.insert(0, os.path.abspath(".."))
 project = "AMA Cryptography"
 copyright = "2025-2026, Steel Security Advisors LLC"
 author = "Andrew E. A."
-version = "2.1.2"
-release = "2.1.2"
+version = "2.1.5"
+release = "2.1.5"
 
 # General configuration
 extensions = [

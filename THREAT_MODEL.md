@@ -1,8 +1,8 @@
 # AMA Cryptography: Threat Model
 
 **Copyright (C) 2025-2026 Steel Security Advisors LLC**
-**Version:** 1.0
-**Date:** 2026-04-06
+**Version:** 2.1.5
+**Date:** 2026-04-17
 **Classification:** Public
 
 ---

@@ -132,7 +132,8 @@ Sensitive material handling:
 
 | Version | Security Support |
 |---------|-----------------|
-| 2.0.x | ✓ Active (security updates provided) |
+| 2.1.x | ✓ Active (security updates provided) |
+| 2.0.x | ✗ End-of-life (superseded by 2.1) |
 | 1.0.x | ✗ End-of-life (superseded by 2.0) |
 
 ---

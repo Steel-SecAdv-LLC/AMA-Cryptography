@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.2 |
-| Last Updated | 2026-04-06 |
+| Document Version | 2.1.5 |
+| Last Updated | 2026-04-17 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -667,6 +667,7 @@ python -c "from ama_cryptography.math_engine import benchmark_matrix_operations;
 | 1.1.0 | 2026-01-09 | Version alignment |
 | 2.0.0 | 2026-03-08 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, FIPS 203/204/205, KAT validation, Phase 2 primitives, fuzzing harnesses, threat model, Mercury Agent integration |
 | 2.1.0 | 2026-03-25 | Hand-written AVX2/NEON/SVE2 SIMD for 8 algorithms, runtime dispatch, security fixes S1-S6, professional dashboard/chart overhaul |
+| 2.1.5 | 2026-04-17 | HSM support via PyKCS11, security audit fixes (length-prefixed HKDF encoding, constant-time ops), secure channel protocol v2, comprehensive test coverage expansion |
 
 ---
 

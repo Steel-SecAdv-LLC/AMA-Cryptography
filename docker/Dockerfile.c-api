@@ -69,6 +69,6 @@ CMD ["sh", "-c", "mkdir -p /output/lib /output/include && \
 # Labels
 LABEL org.opencontainers.image.title="AMA Cryptography C API"
 LABEL org.opencontainers.image.description="Reproducible C library build with native PQC (FIPS 203/204/205)"
-LABEL org.opencontainers.image.version="2.1.2"
+LABEL org.opencontainers.image.version="2.1.5"
 LABEL org.opencontainers.image.vendor="Steel Security Advisors LLC"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
