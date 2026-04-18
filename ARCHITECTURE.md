@@ -92,7 +92,7 @@ The following are explicitly not goals of this architecture:
 
 The AMA Cryptography architecture is built on the following foundational principles:
 
-**Security Through Mathematical Rigor**: Security of individual cryptographic primitives (SHA3-256, Ed25519, ML-DSA-65, HMAC, HKDF) relies on published proofs and reduction arguments to well-studied cryptographic assumptions. The system's composition protocol and original components (key evolution, adaptive posture) have not undergone independent formal verification. No security-by-obscurity mechanisms are employed.
+**Security Through Mathematical Rigor**: Security of individual cryptographic primitives (SHA3-256, Ed25519, ML-DSA-65, HMAC, HKDF) relies on published proofs and reduction arguments to well-studied cryptographic assumptions. The system's composition protocol and original components (key evolution, adaptive posture) have not undergone independent formal verification. Written security arguments for the original constructions are provided in [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md). No security-by-obscurity mechanisms are employed.
 
 **Defense in Depth**: Multiple independent cryptographic layers — four core operations (SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65) supported by key derivation and optional timestamping — ensure that compromise of any single layer does not compromise the overall system security. Each layer provides distinct security properties.
 

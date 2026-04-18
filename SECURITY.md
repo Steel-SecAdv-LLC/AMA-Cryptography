@@ -271,6 +271,15 @@ Non-compliance with these standards should be reported as a high-severity securi
 **Response Time:** 24-48 hours for critical issues
 **Organization:** Steel Security Advisors LLC
 
+## See Also
+
+- [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md) — Security arguments for original constructions (double-helix engine, adaptive posture, composition protocol)
+- [`THREAT_MODEL.md`](THREAT_MODEL.md) — System threat model and risk assessment
+- [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) — Cryptographic algorithm overview
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — System architecture and invariants
+- [`CONSTANT_TIME_VERIFICATION.md`](CONSTANT_TIME_VERIFICATION.md) — Timing-side-channel validation
+- [`.github/INVARIANTS.md`](.github/INVARIANTS.md) — Library invariants (canonical)
+
 ---
 
 ## Document History
