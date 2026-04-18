@@ -40,7 +40,7 @@ dedicated research module once peer-reviewed analysis is available.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 2.1.2
+Version: 2.1.5
 """
 
 import ctypes

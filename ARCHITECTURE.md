@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.3 |
-| Last Updated | 2026-04-06 |
+| Document Version | 2.1.5 |
+| Last Updated | 2026-04-17 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -891,8 +891,8 @@ Cryptographic implementations are validated against:
 | 1.0.0 | 2025-11-26 | Steel Security Advisors LLC | Initial professional release |
 | 1.1.0 | 2026-01-09 | Steel Security Advisors LLC | Version alignment |
 | 2.0.0 | 2026-03-08 | Steel Security Advisors LLC | Zero-dependency native C architecture, adaptive posture, hybrid KEM combiner, AES-256-GCM, FIPS 203/204/205 algorithm implementation, Phase 2 primitives, ethical pillar alignment, Mercury Agent integration |
-| 2.2.0 | 2026-03-16 | Steel Security Advisors LLC | HMAC-SHA3-256 Cython binding, CSRC alignment report, SHA-512 deduplication |
-| 2.3.0 | 2026-03-19 | Steel Security Advisors LLC | Comprehensive documentation update: Python package structure, Cython acceleration strategy, build system architecture, INVARIANTS reference, NIST ACVP validation (815 vectors), fuzz testing (12 targets), updated performance figures to match current benchmarks |
+| 2.1.0 | 2026-03-25 | Steel Security Advisors LLC | Hand-written AVX2/NEON/SVE2 SIMD for 8 algorithms, runtime dispatch, security fixes S1-S6, HMAC-SHA3-256 Cython binding, CSRC alignment report, SHA-512 deduplication, Python package structure, Cython acceleration strategy, build system architecture, INVARIANTS reference, NIST ACVP validation (815 vectors), fuzz testing (12 targets) |
+| 2.1.5 | 2026-04-17 | Steel Security Advisors LLC | Security audit fixes (length-prefixed HKDF encoding, constant-time ops), HSM support via PyKCS11, fd leak protection, INVARIANT-13 restoration with 52 tracked suppressions, comprehensive test coverage for secure_memory/crypto_api/PQC backends, documentation version alignment |
 
 ---
 

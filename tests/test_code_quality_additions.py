@@ -12,8 +12,8 @@ Tests covering the code quality improvements made to ensure:
 4. All error paths are tested
 
 Organization: Steel Security Advisors LLC
-Date: 2026-04-06
-Version: 2.1.2
+Date: 2026-04-17
+Version: 2.1.5
 """
 
 import logging

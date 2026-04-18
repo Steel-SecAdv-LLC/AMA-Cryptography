@@ -1,10 +1,11 @@
 {
   "metadata": {
-    "version": "2.1.2",
+    "baseline_source_release": "2.1.2",
+    "applies_through_release": "2.1.5",
     "created": "2026-04-05T00:00:00Z",
     "description": "AMA Cryptography performance baseline for regression detection",
     "system": "GitHub Actions shared runner, Linux x86-64, Python 3.11",
-    "notes": "v2.1.2 baseline recalibrated after INVARIANT-7 call-time enforcement, SVE2 NTT fixes, and CI matrix expansion (Windows + ARM64). All baselines set to 65% of measured performance to provide 35% regression headroom. SHA3-256 dispatches through AVX2 Keccak. Kyber NTT uses AVX2 for len>=16 layers. Ed25519 uses radix 2^51 field arithmetic (fe51.h). PQC benchmarks use native C library."
+    "notes": "Baseline measured against v2.1.2 (see `baseline_source_release`) and remains valid through v2.1.5 — no performance-affecting changes landed between these releases. Recalibrated after INVARIANT-7 call-time enforcement, SVE2 NTT fixes, and CI matrix expansion (Windows + ARM64). All baselines set to 65% of measured performance to provide 35% regression headroom. SHA3-256 dispatches through AVX2 Keccak. Kyber NTT uses AVX2 for len>=16 layers. Ed25519 uses radix 2^51 field arithmetic (fe51.h). PQC benchmarks use native C library."
   },
   "thresholds": {
     "regression_threshold_percent": 10,

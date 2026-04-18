@@ -13,8 +13,8 @@ for each documented claim.
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
-Date: 2026-04-06
-Version: 2.1.2
+Date: 2026-04-17
+Version: 2.1.5
 Project: AMA Cryptography Performance Validation
 """
 

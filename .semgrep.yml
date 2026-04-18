@@ -1,7 +1,7 @@
 # Semgrep Configuration for AMA Cryptography
 # Custom cryptographic security rules
-# Version: 2.1.2
-# Last Updated: 2026-04-06
+# Version: 2.1.5
+# Last Updated: 2026-04-17
 
 rules:
   # Cryptographic Security Rules

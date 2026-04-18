@@ -16,7 +16,7 @@ enters an ERROR state and all cryptographic operations are refused.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 2.1.2
+Version: 2.1.5
 """
 
 import hashlib

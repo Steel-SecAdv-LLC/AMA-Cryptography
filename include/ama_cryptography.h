@@ -17,9 +17,9 @@
 /**
  * @file ama_cryptography.h
  * @brief AMA Cryptography - Core C API for Post-Quantum Cryptography
- * @version 2.1.2
+ * @version 2.1.5
  * @author Andrew E. A., Steel Security Advisors LLC
- * @date 2026-04-06
+ * @date 2026-04-17
  *
  * High-performance C implementation of quantum-resistant cryptographic primitives.
  */
@@ -57,8 +57,8 @@ extern "C" {
 
 #define AMA_CRYPTOGRAPHY_VERSION_MAJOR 2
 #define AMA_CRYPTOGRAPHY_VERSION_MINOR 1
-#define AMA_CRYPTOGRAPHY_VERSION_PATCH 2
-#define AMA_CRYPTOGRAPHY_VERSION_STRING "2.1.2"
+#define AMA_CRYPTOGRAPHY_VERSION_PATCH 5
+#define AMA_CRYPTOGRAPHY_VERSION_STRING "2.1.5"
 
 /* ============================================================================
  * ALGORITHM IDENTIFIERS

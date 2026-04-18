@@ -198,7 +198,7 @@ plt.rcParams.update(
 def create_performance_dashboard():
     fig, axes = plt.subplots(3, 3, figsize=(18, 13))
     fig.suptitle(
-        "AMA Cryptography v2.1.2 \u2014 Performance Dashboard",
+        "AMA Cryptography v2.1.5 \u2014 Performance Dashboard",
         fontsize=18,
         fontweight="bold",
         color="#ffffff",
@@ -499,7 +499,7 @@ def create_performance_dashboard():
 def create_benchmark_report():
     fig, axes = plt.subplots(3, 3, figsize=(18, 13))
     fig.suptitle(
-        "AMA Cryptography v2.1.2 \u2014 Cryptographic Benchmark Report",
+        "AMA Cryptography v2.1.5 \u2014 Cryptographic Benchmark Report",
         fontsize=18,
         fontweight="bold",
         color="#ffffff",
