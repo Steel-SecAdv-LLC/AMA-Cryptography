@@ -199,4 +199,5 @@ All reports will be handled with discretion and confidentiality.
 
 **Copyright (C) 2025-2026 Steel Security Advisors LLC**
 **Last Updated:** 2026-04-17
-**Version:** 2.1.5
+**Contributor Covenant Version:** 2.1
+**Project Release:** 2.1.5
