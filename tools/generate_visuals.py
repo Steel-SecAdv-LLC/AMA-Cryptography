@@ -755,8 +755,10 @@ def create_test_coverage():
     ax2.grid(True, alpha=0.3)
 
     # Overall title
+    # Note: figures reflect a v2.0 historical snapshot of the test tree.
+    # For current counts, see docs/METRICS_REPORT.md.
     fig.suptitle(
-        f"Test Suite Coverage: {total_tests} Tests Across 32 Files (~11,000 Lines)",
+        f"Test Suite Coverage (v2.0 snapshot): {total_tests} Tests Across 32 Files",
         fontsize=14,
         fontweight="bold",
         y=1.02,
@@ -766,8 +768,9 @@ def create_test_coverage():
     fig.text(
         0.5,
         -0.06,
-        f"Total: {total_tests} tests | 32 test files | ~11,000 LOC | "
-        "Categories: NIST KATs, PQC, Key Mgmt, Memory Security, Performance",
+        f"v2.0 snapshot: {total_tests} tests | 32 test files | "
+        "Categories: NIST KATs, PQC, Key Mgmt, Memory Security, Performance | "
+        "Current: see docs/METRICS_REPORT.md",
         ha="center",
         fontsize=9,
         color="#6B7280",

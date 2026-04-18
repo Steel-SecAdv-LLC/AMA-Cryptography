@@ -66,10 +66,10 @@ Possible failure modes and their blast radius:
 
 | Failure | Direct Effect | Blast Radius |
 |---------|---------------|--------------|
-| Numerical instability / NaN propagation | Invalid score returned to posture system | Availability only — posture system defaults to `NOMINAL` on invalid input |
+| Numerical instability / NaN propagation | Invalid score returned to posture system | Availability only — invalid values may propagate into posture evaluation and disrupt monitoring-driven posture updates unless handled by the caller |
 | Incorrect score (too high) | Spurious escalation signal | Unnecessary key rotation / algorithm switch (availability / operational cost) |
 | Incorrect score (too low) | Missed escalation signal | Delayed response to a *monitoring* anomaly; no reduction in baseline cryptographic strength |
-| Exception during evaluation | Posture evaluator logs and continues | Availability only |
+| Exception during evaluation | Exception propagates out of posture evaluation | Availability only — may interrupt the evaluation loop rather than logging and continuing; callers should wrap in their own fault handler |
 
 Crucially, none of these failures can weaken the confidentiality or integrity
 of cryptographic operations performed by `crypto_api.py`, because those
@@ -120,11 +120,16 @@ standards-based primitives via `crypto_api.py` (algorithm selection) and
 The posture system is designed so that its behavior is **monotonic with
 respect to cryptographic strength**:
 
-1. **Escalation-only action set.** The action enumeration contains no
-   "downgrade" operation. The system cannot move from a post-quantum algorithm
-   to a classical one, or drop a cryptographic layer, or shorten a key.
-   Algorithm switches select from a policy-defined set of equal-or-stronger
-   primitives.
+1. **Escalation by default; downgrade requires explicit acknowledgement.**
+   The `PostureAction` enumeration contains no automatic "downgrade"
+   operation. The system cannot autonomously move from a post-quantum
+   algorithm to a classical one, or drop a cryptographic layer, or shorten a
+   key. Algorithm switches select from a policy-defined set of
+   equal-or-stronger primitives. A human-in-the-loop de-escalation path
+   exists via `CryptoPostureController.acknowledge_downgrade(reason)`, which
+   resets `_highest_algorithm_reached` to the current algorithm strength and
+   logs the reason for audit. Downgrades therefore require an operator
+   action; they never happen as an automatic response to monitoring signals.
 2. **Delegated security.** Every action invokes a vetted primitive
    (Ed25519, ML-DSA-65, ML-KEM-1024, HKDF-SHA3-256, AES-256-GCM, etc.). The
    posture system's security therefore reduces to the security of those
@@ -136,9 +141,14 @@ respect to cryptographic strength**:
 4. **Optional confirmation mode.** Destructive actions may be queued as
    `PendingAction` objects requiring explicit operator acknowledgement,
    providing a human-in-the-loop checkpoint in high-assurance deployments.
-5. **Stateless evaluation.** Each `PostureEvaluation` is a pure function of
-   the current signal window; there is no hidden mutable state that an
-   attacker could poison over time.
+5. **Bounded operational state only.** `PostureEvaluator` retains limited
+   cross-call state — an exponentially decayed `_accumulated_score` and a
+   `_consecutive_counts` tally per threat level — used to debounce noisy
+   inputs and prevent oscillation near decision thresholds. This state is
+   bounded in size, decays over time, contains no secrets or key material,
+   and does not create unbounded mutable state an attacker could poison
+   indefinitely. At worst, sustained signal manipulation can influence
+   posture transitions within the threat boundaries described in §2.3.
 
 ### 2.3 Threat Boundaries
 

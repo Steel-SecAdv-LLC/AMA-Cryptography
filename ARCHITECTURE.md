@@ -700,7 +700,7 @@ The C library uses CMake (`CMakeLists.txt`, ~270 lines) with the following key c
 |--------|---------|--------|
 | `AMA_USE_NATIVE_PQC` | ON | Compile ML-DSA-65, ML-KEM-1024, SPHINCS+ from source |
 | `AMA_AES_CONSTTIME` | ON | Add bitsliced AES S-box (`ama_aes_bitsliced.c`) for cache-timing hardening |
-| `AMA_BUILD_TESTS` | ON | Build C test suite (9 test files in `tests/c/`) |
+| `AMA_BUILD_TESTS` | ON | Build C test suite (12 test files in `tests/c/`) |
 | `AMA_BUILD_EXAMPLES` | ON | Build C examples (`examples/c/`) |
 | `AMA_TESTING_MODE` | OFF | Build test-only library with internal symbol visibility |
 | `AMA_ENABLE_AVX2` | OFF | Auto-detect and enable AVX2 SIMD optimizations |
