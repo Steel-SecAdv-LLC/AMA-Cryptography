@@ -23,26 +23,19 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 ## [2.1.5] - 2026-04-17
 
 
-### Security
-
-- PR #224 Follow-up: Add comprehensive test coverage for security audit fixes (#226) (ca8f357)
-- Security audit fixes: length-prefixed encoding, constant-time ops, and validation (#224) (b700050)
-
-### Added
-
-- Add comprehensive test coverage for secure_memory, crypto_api, and PQC backends (#230) (6deb1be)
-
----
-## [2.1.5] - 2026-04-15
-
-
 ### Added
 
 - Add HSM support with PyKCS11 and improve fd leak protection (#217) (679f69b)
+- Add comprehensive test coverage for secure_memory, crypto_api, and PQC backends (#230) (6deb1be)
 
 ### Fixed
 
 - Fix three cryptographic audit findings; restore INVARIANT-13 with 52 tracked suppressions (#218) (2fa49e8)
+
+### Security
+
+- Security audit fixes: length-prefixed encoding, constant-time ops, and validation (#224) (b700050)
+- PR #224 Follow-up: Add comprehensive test coverage for security audit fixes (#226) (ca8f357)
 
 ### Security — PR #224 Follow-up (Wire-Incompatible Changes)
 
