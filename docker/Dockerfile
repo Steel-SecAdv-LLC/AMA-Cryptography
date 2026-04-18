@@ -57,9 +57,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
-RUN useradd -m -u 1000 ava && \
+RUN useradd -m -u 1000 ama && \
     mkdir -p /app /data && \
-    chown -R ava:ava /app /data
+    chown -R ama:ama /app /data
 
 # Copy built artifacts from builder
 COPY --from=builder /build/build/lib/*.so* /usr/local/lib/
@@ -76,7 +76,7 @@ RUN pip3 install --no-cache-dir /tmp/*.whl && \
     ldconfig
 
 # Switch to non-root user
-USER ava
+USER ama
 
 # Prevent .pyc file creation and enable unbuffered output
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -85,10 +85,10 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 # Copy examples and documentation
-COPY --chown=ava:ava examples/ /app/examples/
-COPY --chown=ava:ava README.md LICENSE /app/
+COPY --chown=ama:ama examples/ /app/examples/
+COPY --chown=ama:ama README.md LICENSE /app/
 # Copy monitor and benchmark scripts to /app for docker-compose services
-COPY --chown=ava:ava ama_cryptography_monitor_demo.py benchmark_suite.py /app/
+COPY --chown=ama:ama ama_cryptography_monitor_demo.py benchmark_suite.py /app/
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \

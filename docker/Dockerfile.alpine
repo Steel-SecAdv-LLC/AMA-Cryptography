@@ -36,7 +36,7 @@ RUN apk add --no-cache \
     python3 \
     py3-pip
 
-RUN adduser -D -u 1000 ava
+RUN adduser -D -u 1000 ama
 
 COPY --from=builder /build/build/lib/*.so* /usr/local/lib/
 COPY --from=builder /build/dist/*.whl /tmp/
@@ -46,7 +46,7 @@ COPY --from=builder /build/dist/*.whl /tmp/
 RUN pip3 install --no-cache-dir /tmp/*.whl && \
     rm -rf /tmp/*.whl
 
-USER ava
+USER ama
 WORKDIR /app
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
