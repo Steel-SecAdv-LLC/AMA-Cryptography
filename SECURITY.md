@@ -56,11 +56,15 @@ If you discover a security vulnerability in AMA Cryptography, please report it r
 
 **DO NOT** open a public GitHub issue for security vulnerabilities.
 
-**Instead, please:**
+**Instead, please use one of the following private channels:**
 
-1. **Email:** steel.sa.llc@gmail.com
-2. **Subject:** [SECURITY] AMA Cryptography  Vulnerability Report
-3. **Include:**
+1. **Preferred — GitHub Private Vulnerability Reporting:**
+   [Open a private advisory](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/security/advisories/new).
+   GitHub encrypts the report in transit and storage; no PGP key management
+   is required on either side.
+2. **Email fallback:** steel.sa.llc@gmail.com with subject `[SECURITY] AMA Cryptography Vulnerability Report`.
+
+**Include in your report:**
    - Detailed description of the vulnerability
    - Steps to reproduce the issue
    - Potential impact assessment
@@ -264,9 +268,8 @@ Non-compliance with these standards should be reported as a high-severity securi
 
 ## Contact
 
-**Security Team:** steel.sa.llc@gmail.com
-**PGP Key:** [`pgp-key.asc`](pgp-key.asc)
-**PGP Fingerprint:** `81B9 9B4D F46D 50BE D7D8  4F59 4D7C 83C0 607B 6A9B`
+**Preferred channel:** [GitHub Private Vulnerability Reporting](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/security/advisories/new)
+**Email fallback:** steel.sa.llc@gmail.com
 **security.txt:** [`.well-known/security.txt`](.well-known/security.txt) (RFC 9116)
 **Response Time:** 24-48 hours for critical issues
 **Organization:** Steel Security Advisors LLC
