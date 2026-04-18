@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 2.1.5 |
-| Last Updated | 2026-04-17 |
+| Last Updated | 2026-04-18 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -20,6 +20,15 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 
 
+
+## [2.1.5] - 2026-04-18
+
+
+### Changed
+
+- chore: bump version to 2.1.5 and update documentation (#232) (ef148e3)
+
+---
 ## [2.1.5] - 2026-04-17
 
 
