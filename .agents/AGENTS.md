@@ -26,8 +26,7 @@ Before making any change, read and internalize these documents in order:
 
 | Document | Purpose | Authority |
 |----------|---------|-----------|
-| `INVARIANTS.md` | Library-wide invariants and vendoring policy | **Binding** |
-| `.github/INVARIANTS.md` | Architectural invariants enforced on every PR (INVARIANT-1 through INVARIANT-14) | **Binding** |
+| `.github/INVARIANTS.md` | Canonical architectural invariants (INVARIANT-1 through INVARIANT-15) and vendoring policy; enforced on every PR | **Binding** |
 | `CONTRIBUTING.md` | Contribution guidelines, code quality, PR process | **Binding** |
 | `CSRC_STANDARDS.md` | Algorithm-to-standard mapping — only algorithms with shipping code | **Binding** |
 | `SECURITY.md` | Security policy and vulnerability reporting | **Binding** |
@@ -164,7 +163,7 @@ For each marker found:
 
 ### 3.2 Invariant Compliance Audit
 
-For each invariant in `.github/INVARIANTS.md` (INVARIANT-1 through INVARIANT-14):
+For each invariant in `.github/INVARIANTS.md` (INVARIANT-1 through INVARIANT-15):
 
 1. **INVARIANT-1 (Zero External Crypto Dependencies):** Verify no imports of
    `cryptography`, `pynacl`, `libsodium`, OpenSSL bindings, etc. in
@@ -256,7 +255,7 @@ All items must be verified before declaring the repository production-ready.
 
 - [ ] No open PRs or stale branches remaining
 - [ ] No unresolved TODO/FIXME/HACK/XXX comments (or all tracked in Issues)
-- [ ] All invariants (INVARIANT-1 through INVARIANT-14) satisfied
+- [ ] All invariants (INVARIANT-1 through INVARIANT-15) satisfied
 - [ ] CSRC_STANDARDS.md matches implemented algorithms
 
 ### Documentation
@@ -289,8 +288,9 @@ All items must be verified before declaring the repository production-ready.
 
 ## Inviolable Constraints
 
-These constraints derive from `INVARIANTS.md` and `.github/INVARIANTS.md`.
-Violation of any constraint is a hard stop — do not proceed.
+These constraints derive from `.github/INVARIANTS.md` (canonical, INVARIANT-1
+through INVARIANT-15). Violation of any constraint is a hard stop — do not
+proceed.
 
 ### INVARIANT-1: Zero External Crypto Dependencies
 
@@ -303,7 +303,7 @@ AMA's build system is permitted.
 Python stdlib `hashlib`, `os`, `secrets` are permitted for non-primitive
 operations. `hmac.compare_digest()` is the only permitted `hmac` function.
 
-### INVARIANT-2: Thread-Safe CPU Dispatch
+### INVARIANT-15: Thread-Safe CPU Dispatch
 
 All one-time initialization in `ama_cpuid.c` must use platform once-primitives:
 - **POSIX:** `pthread_once`

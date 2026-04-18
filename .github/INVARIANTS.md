@@ -16,6 +16,9 @@ Optional extras declared in `pyproject.toml` (e.g., `[secure-memory]`) may list
 such packages for future or interop use, but the core `ama_cryptography` package
 **must not** import or call them at runtime.
 
+No pre-built external cryptographic libraries (libsodium, OpenSSL, liboqs,
+etc.) may be linked.
+
 Python stdlib modules (`hashlib`, `os`, `secrets`) are permitted for
 non-primitive operations (OS entropy, hashing). They **must NOT** be used as a
 substitute for AMA's own implementations of HMAC, memory zeroing, or core
@@ -24,6 +27,27 @@ cipher operations.
 **`hmac` module policy:** `hmac.compare_digest()` is permitted for constant-time
 comparison. `hmac.new()` / `hmac.HMAC()` are not permitted — use AMA's own HMAC
 implementations.
+
+### INVARIANT-1 Addendum — Algorithm Registry
+
+All cryptographic primitives implemented in this library **must** map to a
+non-deprecated entry in [`CSRC_STANDARDS.md`](../CSRC_STANDARDS.md). Adding any
+new algorithm requires updating `CSRC_STANDARDS.md` with its governing
+standard, parameter set, status, and source URL **before** implementation is
+permitted. Algorithms whose governing standard has been deprecated or
+withdrawn must be removed from the library or explicitly documented with a
+migration timeline.
+
+### INVARIANT-1 Addendum — Vendoring Policy
+
+Vendoring public-domain source into `src/c/vendor/` and compiling it as part
+of AMA's own build system is permitted. Vendored source is included in-tree
+and compiled from source as part of AMA's build system; its original license
+(documented per component) is unaffected by vendoring. Vendored source
+**must not** be linked as a pre-built binary.
+
+See the **Vendored Dependencies** appendix at the end of this document for
+the current inventory.
 
 ## INVARIANT-2 — Fail-Closed CI
 
@@ -243,7 +267,56 @@ Tracked ignores:
 > **Review cadence:** Re-evaluate all tracked CVE ignores on the first of each
 > quarter or when Dependabot bumps the affected package, whichever comes first.
 
+## INVARIANT-15 — Thread-Safe CPU Dispatch via Platform Once-Primitive
+
+All one-time initialization in `ama_cpuid.c` (CPU feature detection, AEAD
+backend selection) **must** use a platform once-primitive that guarantees
+exactly-once execution with full memory visibility across threads. The
+approved primitives are:
+
+- **POSIX** (Linux, macOS, BSDs): `pthread_once` (IEEE Std 1003.1)
+- **Windows** (MSVC): `InitOnceExecuteOnce` (`synchapi.h`, Vista+)
+
+Lockless flag + plain-variable patterns (e.g., `volatile int done` guarding a
+non-atomic shared variable) are **prohibited** — they constitute data races
+on weakly-ordered architectures and are undefined behavior under the C11
+memory model.
+
+C11 `<threads.h>` (`call_once`) is **not** used because it is unavailable on
+macOS (Apple SDK has never shipped `<threads.h>`) and unreliable on MSVC
+(partially shipped starting VS 17.8, still buggy). `CMakeLists.txt` uses
+`find_package(Threads REQUIRED)` and links `Threads::Threads` to all library
+targets.
+
+---
+
+## Vendored Dependencies
+
+### ed25519-donna
+
+- **Source:** https://github.com/floodyberry/ed25519-donna
+- **License:** Public domain (Andrew Moon)
+- **Location:** `src/c/vendor/ed25519-donna/`
+- **CMake flag:** `AMA_ED25519_ASSEMBLY` (default OFF)
+- **Purpose:** Optimized x86-64 Ed25519 scalar multiplication with inline
+  assembly for constant-time Niels basepoint table selection. Provides ~3x
+  keygen/sign speedup and ~2.5x verify speedup over AMA's fe51 C
+  implementation on x86-64.
+- **INVARIANT-1 compliance:** The vendored source is public domain, compiled
+  from source as part of AMA's build system, and never linked as a pre-built
+  binary. It satisfies INVARIANT-1 under the vendoring policy: vendored
+  public-domain source is included in-tree and compiled as part of AMA's
+  build system; its original public-domain license is unaffected by
+  vendoring.
+- **MSVC ARM64 limitation:** The donna backend provides x86-64 assembly
+  only. The fe51 backend requires `__uint128_t`, which MSVC does not provide
+  on any architecture. Therefore MSVC on ARM64 (Windows on ARM) has no
+  working Ed25519 path. `CMakeLists.txt` emits `FATAL_ERROR` at configure
+  time for this combination. To build on ARM64 Windows, use GCC or Clang
+  (e.g., via MSYS2 or clang-cl) which provide `__uint128_t` and enable the
+  fe51 backend.
+
 ---
 
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-04-06_
+_Last updated: 2026-04-18_

@@ -711,14 +711,15 @@ Fuzz harnesses are built separately via `fuzz/CMakeLists.txt` (12 targets coveri
 
 ### Architectural Invariants
 
-All PRs touching `ama_cryptography/`, `.github/workflows/`, or `tests/` must satisfy the four invariants defined in [`.github/INVARIANTS.md`](.github/INVARIANTS.md):
+All PRs touching `ama_cryptography/`, `.github/workflows/`, or `tests/` must satisfy the architectural invariants defined in [`.github/INVARIANTS.md`](.github/INVARIANTS.md) (canonical, INVARIANT-1 through INVARIANT-15). Highlights:
 
-1. **INVARIANT-1 — Zero External Crypto Dependencies**: All cryptographic primitives are owned natively. No third-party crypto packages (`libsodium`, `pynacl`, `cryptography`, etc.). Python stdlib modules (`hashlib`, `os`, `secrets`) permitted for non-primitive operations only.
+1. **INVARIANT-1 — Zero External Crypto Dependencies**: All cryptographic primitives are owned natively. No third-party crypto packages (`libsodium`, `pynacl`, `cryptography`, etc.). Python stdlib modules (`hashlib`, `os`, `secrets`) permitted for non-primitive operations only. All primitives must map to a non-deprecated entry in [`CSRC_STANDARDS.md`](CSRC_STANDARDS.md); vendored public-domain source compiled in-tree is permitted.
 2. **INVARIANT-2 — Fail-Closed CI**: Security-critical CI steps must not use `continue-on-error: true`.
 3. **INVARIANT-3 — Observable Failure States**: No bare `except: pass`, no silent `return`, no stderr suppression.
 4. **INVARIANT-4 — Pinned Action References**: All third-party GitHub Actions pinned to full commit SHA.
+5. **INVARIANT-15 — Thread-Safe CPU Dispatch**: `ama_cpuid.c` one-time init must use `pthread_once` (POSIX) or `InitOnceExecuteOnce` (MSVC); lockless flag + plain-variable patterns are prohibited.
 
-Additionally, [`INVARIANTS.md`](INVARIANTS.md) (root) requires that all cryptographic primitives map to a non-deprecated entry in [`CSRC_STANDARDS.md`](CSRC_STANDARDS.md).
+See [`.github/INVARIANTS.md`](.github/INVARIANTS.md) for the complete set (INVARIANT-1 through INVARIANT-15) and vendoring policy.
 
 ---
 
@@ -879,8 +880,7 @@ Cryptographic implementations are validated against:
 - `CSRC_ALIGN_REPORT.md`: NIST ACVP vector validation results (815/815 pass)
 - `CSRC_STANDARDS.md`: Governing standards registry
 - `IMPLEMENTATION_GUIDE.md`: Deployment and integration guide
-- `.github/INVARIANTS.md`: PR-level architectural invariants
-- `INVARIANTS.md`: Library-level invariants (CSRC_STANDARDS.md mapping)
+- `.github/INVARIANTS.md`: Canonical architectural invariants (INVARIANT-1 through INVARIANT-15), including vendoring policy and CSRC_STANDARDS.md mapping
 
 ---
 

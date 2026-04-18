@@ -873,8 +873,7 @@ The module implements technical controls aligned with FIPS 140-3 Security Level 
 |----------|-------------|
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
-| [INVARIANTS.md](INVARIANTS.md) | Library-level invariants (CSRC_STANDARDS.md mapping) |
-| [.github/INVARIANTS.md](.github/INVARIANTS.md) | PR-level architectural invariants (INVARIANT-1 through INVARIANT-4) |
+| [.github/INVARIANTS.md](.github/INVARIANTS.md) | Canonical architectural invariants (INVARIANT-1 through INVARIANT-15) and vendoring policy |
 | [AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md](AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md) | Ethical pillar specification |
 
 </details>
