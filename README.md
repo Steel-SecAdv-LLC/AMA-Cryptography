@@ -863,6 +863,7 @@ The module implements technical controls aligned with FIPS 140-3 Security Level 
 | [CSRC_STANDARDS.md](CSRC_STANDARDS.md) | Governing standards registry |
 | [CONSTANT_TIME_VERIFICATION.md](CONSTANT_TIME_VERIFICATION.md) | dudect-style timing analysis |
 | [docs/DESIGN_NOTES.md](docs/DESIGN_NOTES.md) | Security arguments for original constructions |
+| [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) | Verified project counts (LoC, tests, NIST vectors) with reproduction commands |
 
 </details>
 

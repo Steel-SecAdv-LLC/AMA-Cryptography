@@ -690,8 +690,9 @@ def create_test_coverage():
         "Memory Security\n& Fuzzing",
         "Performance\n& Monitoring",
     ]
-    # Approximate distribution based on test file analysis (866 tests collected)
-    test_counts = [225, 186, 148, 166, 141]  # Total = 866
+    # Approximate historical distribution (snapshot from v2.0 test tree;
+    # current totals: see docs/METRICS_REPORT.md, ~2,028 test functions).
+    test_counts = [225, 186, 148, 166, 141]  # snapshot total = 866
     total_tests = sum(test_counts)
     percentages = [100 * c / total_tests for c in test_counts]
     colors = ["#22C55E", "#3B82F6", "#8B5CF6", "#F59E0B", "#EF4444"]

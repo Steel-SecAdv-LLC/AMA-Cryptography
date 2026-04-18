@@ -767,8 +767,8 @@ docker run ama-cryptography:latest
 
 | Category | Purpose | Coverage Target | Files |
 |----------|---------|-----------------|-------|
-| Unit Tests | Individual function validation | 80% line coverage | 30 Python test files |
-| C Unit Tests | Native library validation | All C functions | 9 C test files (`tests/c/`) |
+| Unit Tests | Individual function validation | 80% line coverage | 70 Python test files |
+| C Unit Tests | Native library validation | All C functions | 12 C test files (`tests/c/`) |
 | Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
 | Performance Tests | Benchmark regression detection | All critical paths | `test_performance.py`, `benchmarks/` |
 | Security Tests | Cryptographic correctness | 100% crypto functions | `test_crypto_core_penetration.py`, `test_memory_security.py` |
@@ -776,7 +776,9 @@ docker run ama-cryptography:latest
 | Fuzz Tests | Input mutation testing | 12 C targets | `fuzz/fuzz_*.c` |
 | NIST ACVP Vectors | Official vector validation | 815 vectors, 12 algorithms | `nist_vectors/` |
 
-**Total:** 866+ tests collected across 39 files (30 Python + 9 C).
+**Total:** 2,028 Python test functions across 70 test files, plus 12 C test
+files. See [`docs/METRICS_REPORT.md`](docs/METRICS_REPORT.md) for reproduction
+instructions.
 
 ### Continuous Integration Pipeline
 
