@@ -264,9 +264,11 @@ static void dispatch_init_internal(void) {
     dispatch_info.dilithium        = effective;
     dispatch_info.sphincs          = effective;
     dispatch_info.aes_gcm          = effective;
-    /* Ed25519: no vector-wide AVX2 path is wired; the scalar radix-2^51
-     * (fe51) implementation is used on all x86-64 builds. Report as
-     * GENERIC so the log reflects what actually runs. */
+    /* Ed25519: no vector-wide AVX2/AVX-512 path is wired in this
+     * dispatcher. Report as GENERIC; the concrete non-vector backend
+     * (fe51 scalar, or the donna shim when AMA_ED25519_ASSEMBLY is
+     * enabled) is selected by the build configuration, not at
+     * runtime. */
     dispatch_info.ed25519          = AMA_IMPL_GENERIC;
     dispatch_info.chacha20poly1305 = effective;
     dispatch_info.argon2           = effective;
@@ -291,8 +293,9 @@ static void dispatch_init_internal(void) {
     dispatch_info.dilithium        = best;
     dispatch_info.sphincs          = best;
     dispatch_info.aes_gcm          = has_neon ? AMA_IMPL_NEON : AMA_IMPL_GENERIC;
-    /* Ed25519: no vector-wide NEON/SVE2 path is wired; the scalar
-     * radix-2^51 (fe51) implementation is used on all AArch64 builds. */
+    /* Ed25519: no vector-wide NEON/SVE2 path is wired in this
+     * dispatcher. Report as GENERIC; the concrete backend (fe51
+     * scalar) is selected at build time. */
     dispatch_info.ed25519          = AMA_IMPL_GENERIC;
     dispatch_info.chacha20poly1305 = best;
     dispatch_info.argon2           = best;
@@ -467,7 +470,7 @@ static void dispatch_init_internal(void) {
                 dispatch_table.kyber_ntt ? "SIMD" : "generic (inline)");
         fprintf(stderr, "[AMA Dispatch] dil_ntt      -> %s\n",
                 dispatch_table.dilithium_ntt ? "SIMD" : "generic (inline)");
-        fprintf(stderr, "[AMA Dispatch] ed25519      -> scalar fe51 (no SIMD wired)\n");
+        fprintf(stderr, "[AMA Dispatch] ed25519      -> scalar (no SIMD wired; backend chosen at build time)\n");
     }
 }
 
