@@ -10,6 +10,24 @@
  *   - NEON-accelerated G mixing function
  *   - Parallel memory operations
  *
+ * -------------------------------------------------------------------
+ * STATUS: NOT WIRED INTO DISPATCH.
+ *
+ * The `ama_argon2_g_neon` permutation below uses the plain Blake2b G
+ * round (a += b; d = rotr(d^a, 32); c += d; ...) — NOT the RFC 9106
+ * §3.5 BlaMka G (a = a + b + 2·(a mod 2^32)·(b mod 2^32); ...). Wiring
+ * it as-is into `ama_dispatch_table_t::argon2_g` would produce
+ * incorrect Argon2id tags and fail RFC 9106 KATs.
+ *
+ * Before wiring this path: port the AVX2 fix in
+ * `src/c/avx2/ama_argon2_avx2.c` (which correctly uses the
+ * multiplication-hardened add with `_mm256_mul_epu32`) to NEON using
+ * `vmull_u32` / `vshlq_n_u64(x, 1)` and verify byte-identity against
+ * the scalar path via `tests/c/test_argon2id.c` (re-run under qemu-
+ * aarch64 or an ARM CI runner). See PR #239 for the AVX2 reference
+ * implementation and cross-check methodology.
+ * -------------------------------------------------------------------
+ *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 

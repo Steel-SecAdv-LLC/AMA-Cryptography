@@ -9,6 +9,16 @@
  *   - Vectorized Blake2b G function
  *   - SVE2-accelerated memory XOR operations
  *
+ * -------------------------------------------------------------------
+ * STATUS: NOT WIRED INTO DISPATCH.
+ *
+ * Same caveat as `src/c/neon/ama_argon2_neon.c`: the G round below
+ * implements plain Blake2b G, not RFC 9106 §3.5 BlaMka G. Wiring it
+ * would break Argon2id tags. Before wiring, port the AVX2 correction
+ * in `src/c/avx2/ama_argon2_avx2.c` — PR #239 — and verify against
+ * the scalar path on SVE2 hardware (or qemu-aarch64 --cpu max,sve2=on).
+ * -------------------------------------------------------------------
+ *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 
