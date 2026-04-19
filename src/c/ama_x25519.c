@@ -24,11 +24,12 @@
  * Montgomery curve Curve25519: y^2 = x^3 + 486662*x^2 + x over GF(2^255-19).
  *
  * Field arithmetic:
- *   - On GCC/Clang (64-bit): radix 2^51 (5 limbs of uint64_t with
- *     __uint128_t intermediates), via fe51.h. This is the donna64 layout
- *     — 25 cross-products per multiplication vs. 256 for radix-2^16.
- *   - On MSVC / platforms without __uint128_t: radix 2^16 (16 limbs of
- *     int64_t), TweetNaCl-style.
+ *   - On toolchains with native `__int128` (GCC/Clang on 64-bit targets,
+ *     detected via `__SIZEOF_INT128__`): radix 2^51 (5 limbs of uint64_t
+ *     with __uint128_t intermediates) via fe51.h. This is the donna64
+ *     layout — 25 cross-products per multiplication vs. 256 for radix-2^16.
+ *   - On every other platform (MSVC, clang-cl, 32-bit targets, etc.):
+ *     radix 2^16 (16 limbs of int64_t), TweetNaCl-style.
  *
  * The Montgomery ladder operates on x-coordinates only, processing scalar
  * bits from bit 254 down to 0 with constant-time conditional swaps.
@@ -47,14 +48,13 @@
 #include <string.h>
 #include <stdint.h>
 
-#if defined(__GNUC__) || defined(__clang__)
 #include "fe51.h"
-#define AMA_X25519_USE_FE51 1
-#else
-#define AMA_X25519_USE_FE51 0
-#endif
 
-#if AMA_X25519_USE_FE51
+/* The fe51 (radix-2^51) field requires a native 128-bit integer type.
+ * fe51.h defines `AMA_FE51_AVAILABLE` when the host compiler provides
+ * `__int128` (GCC/Clang on 64-bit targets). Otherwise we fall through
+ * to the portable radix-2^16 implementation below. */
+#if defined(AMA_FE51_AVAILABLE)
 
 /* ============================================================================
  * X25519 SCALAR MULTIPLICATION  (radix-2^51, RFC 7748 Section 5 / Appendix A)
@@ -144,14 +144,15 @@ static void x25519_scalarmult(uint8_t q[32], const uint8_t n[32],
     ama_secure_memzero(t1, sizeof(fe51));
 }
 
-#else  /* !AMA_X25519_USE_FE51 — portable radix-2^16 fallback */
+#else  /* !AMA_FE51_AVAILABLE — portable radix-2^16 fallback */
 
 /* ============================================================================
  * FIELD ELEMENT TYPE: 16 limbs of ~16 bits each, stored in int64_t
  *
  * TweetNaCl-inspired radix-2^16 representation. Slower but portable
- * (no __uint128_t required). Used on MSVC and other compilers where
- * the fe51 path cannot compile.
+ * (no __uint128_t required). Selected whenever fe51.h is not available
+ * — MSVC, clang-cl, 32-bit targets, and any other toolchain where
+ * __SIZEOF_INT128__ is undefined.
  * ============================================================================ */
 
 typedef int64_t gf[16];
@@ -328,7 +329,7 @@ static void x25519_scalarmult(uint8_t q[32], const uint8_t n[32],
     ama_secure_memzero(f, sizeof(gf));
 }
 
-#endif  /* AMA_X25519_USE_FE51 */
+#endif  /* AMA_FE51_AVAILABLE */
 
 /* ============================================================================
  * PUBLIC API

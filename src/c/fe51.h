@@ -16,7 +16,13 @@
 #ifndef AMA_FE51_H
 #define AMA_FE51_H
 
-#if defined(__GNUC__) || defined(__clang__)
+/* fe51 requires a native 128-bit integer type. GCC/Clang on 64-bit
+ * targets define `__SIZEOF_INT128__ == 16`; MSVC (including clang-cl)
+ * and 32-bit targets typically do not. Callers should check
+ * `AMA_FE51_AVAILABLE` before referencing any fe51_* symbol. */
+#if defined(__SIZEOF_INT128__)
+
+#define AMA_FE51_AVAILABLE 1
 
 #include <stdint.h>
 #include <string.h>
@@ -434,6 +440,6 @@ static __attribute__((unused)) int fe51_iszero(const fe51 f) {
     return ret == 0;
 }
 
-#endif /* defined(__GNUC__) || defined(__clang__) */
+#endif /* defined(__SIZEOF_INT128__) */
 
 #endif /* AMA_FE51_H */

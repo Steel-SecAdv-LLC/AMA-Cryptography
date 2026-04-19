@@ -44,9 +44,7 @@
 #include <string.h>
 #include <stdint.h>
 
-#if defined(__GNUC__) || defined(__clang__)
 #include "fe51.h"
-#endif
 
 /* Portable "unused" annotation: GCC/Clang __attribute__, MSVC no-op. */
 #if defined(__GNUC__) || defined(__clang__)
@@ -116,7 +114,7 @@ static int64_t load_4(const uint8_t *in) {
     return (int64_t)in[0] | ((int64_t)in[1] << 8) | ((int64_t)in[2] << 16) | ((int64_t)in[3] << 24);
 }
 
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(AMA_FE51_AVAILABLE)
 /* Thin wrappers: fe25519_* delegate to fe51_* (requires __uint128_t) */
 static inline void fe25519_frombytes(fe25519 h, const uint8_t *s) { fe51_frombytes(h, s); }
 static inline void fe25519_tobytes(uint8_t *s, const fe25519 h)   { fe51_tobytes(s, h); }
@@ -134,9 +132,10 @@ static inline void fe25519_pow22523(fe25519 out, const fe25519 z) { fe51_pow2252
 static inline int  fe25519_isnegative(const fe25519 f)             { return fe51_isnegative(f); }
 static inline int  fe25519_iszero(const fe25519 f)                 { return fe51_iszero(f); }
 #else
-/* MSVC: fe51 requires __uint128_t which MSVC lacks.
- * On Windows builds, use AMA_ED25519_ASSEMBLY=ON (donna shim) instead. */
-#error "ama_ed25519.c requires GCC/Clang for __uint128_t (fe51). On MSVC, enable AMA_ED25519_ASSEMBLY to use the donna shim."
+/* fe51 requires a native __int128 (__SIZEOF_INT128__ defined), which
+ * MSVC and clang-cl do not provide. On those toolchains, build with
+ * AMA_ED25519_ASSEMBLY=ON to use the donna shim instead. */
+#error "ama_ed25519.c requires __int128 (fe51). On MSVC/clang-cl, enable AMA_ED25519_ASSEMBLY to use the donna shim."
 #endif
 
 /* ============================================================================
