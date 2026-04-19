@@ -176,7 +176,6 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
             src/c/avx2/ama_dilithium_avx2.c
             src/c/avx2/ama_sphincs_avx2.c
             src/c/avx2/ama_aes_gcm_avx2.c
-            src/c/avx2/ama_ed25519_avx2.c
             src/c/avx2/ama_chacha20poly1305_avx2.c
             src/c/avx2/ama_argon2_avx2.c
         )
@@ -184,7 +183,7 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
             set_source_files_properties(${AMA_AVX2_SOURCES} PROPERTIES
                 COMPILE_FLAGS "-mavx2 -maes -mpclmul")
         endif()
-        message(STATUS "SIMD: AVX2 hand-written intrinsics enabled (8 algorithms)")
+        message(STATUS "SIMD: AVX2 hand-written intrinsics enabled (7 algorithms)")
         # Tell dispatch code that AVX2 implementations are linked in
         add_compile_definitions(AMA_HAVE_AVX2_IMPL)
     endif()
