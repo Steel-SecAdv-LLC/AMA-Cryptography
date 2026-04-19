@@ -30,16 +30,18 @@ BENCH_FILE = ROOT / "benchmark_results.json"
 # to the artifacts checked into the repository so they can be re-derived
 # without running a suite from scratch:
 #
-#   SIGNATURE_OPS / KEM_OPS : benchmarks/phase0_baseline_results.json
+#   SIGNATURE_OPS           : benchmarks/phase0_baseline_results.json
 #                             (Python/ctypes path; median latencies)
+#   KEM_OPS                 : `build/bin/benchmark_c_raw --json`
+#                             (raw C path; phase0 has no KEM entries)
 #   CRYPTO_OPS / C_VS_PYTHON: ctypes values from phase0_baseline_results.json;
 #                             raw-C values from `build/bin/benchmark_c_raw`
 #                             (rerun after a cmake -B build build)
 #   FOUR_LAYER_BREAKDOWN    : derived from SIGNATURE_OPS + SHA3 + HMAC + HKDF
 #                             ctypes medians (pipeline latency, serial add)
 #
-# Re-derive whenever phase0_baseline_results.json changes. Do not edit these
-# without updating the source JSON; the live-data branch below will override
+# Re-derive whenever the source artifacts change. Do not edit these without
+# updating the source JSON; the live-data branch below will override
 # individual entries when benchmark_results.json exists.
 CRYPTO_OPS = {
     "SHA3-256 (C, 32B)": {"ops_sec": 1_540_955, "category": "hash"},
@@ -56,10 +58,13 @@ SIGNATURE_OPS = {
     "ML-DSA-65 Verify": {"ops_sec": 633, "latency_ms": 1.581},
 }
 
+# Raw C medians from `build/bin/benchmark_c_raw --json`. Latency = median_us /
+# 1000. (phase0_baseline_results.json does not exercise ML-KEM, so the raw C
+# harness is the correct anchor for KEM numbers.)
 KEM_OPS = {
-    "ML-KEM KeyGen": {"ops_sec": 7_244, "latency_ms": 0.138},
-    "ML-KEM Encap": {"ops_sec": 7_925, "latency_ms": 0.126},
-    "ML-KEM Decap": {"ops_sec": 8_742, "latency_ms": 0.114},
+    "ML-KEM-1024 KeyGen": {"ops_sec": 7_244, "latency_ms": 0.105},
+    "ML-KEM-1024 Encap": {"ops_sec": 7_925, "latency_ms": 0.104},
+    "ML-KEM-1024 Decap": {"ops_sec": 8_742, "latency_ms": 0.085},
 }
 
 # Raw C values: build/bin/benchmark_c_raw (AVX2 on x86_64).
@@ -329,7 +334,7 @@ def generate_charts(output_dir: str) -> None:
     ax.text(
         0.98,
         0.02,
-        "FIPS 203 compliant | Native C implementation",
+        "FIPS 203 | Raw C harness (build/bin/benchmark_c_raw --json)",
         transform=ax.transAxes,
         ha="right",
         fontsize=8,

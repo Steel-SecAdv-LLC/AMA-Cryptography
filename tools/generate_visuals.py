@@ -228,8 +228,7 @@ def create_performance_comparison():
 
     # Overall title and footer
     fig.suptitle(
-        "Hybrid Signature Performance: Raw C vs Python ctypes "
-        "(Ed25519 + ML-DSA-65)",
+        "Hybrid Signature Performance: Raw C vs Python ctypes " "(Ed25519 + ML-DSA-65)",
         fontsize=14,
         fontweight="bold",
         y=1.02,
