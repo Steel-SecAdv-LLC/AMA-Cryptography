@@ -82,7 +82,7 @@ find src/c include -type f \( -name '*.c' -o -name '*.h' \) -print0 | xargs -0 w
 
 # Library total
 find ama_cryptography src/c include -type f \
-    \( -name '*.py' -o -name '*.c' -o -name '*.h' -o -name '*.pyx' -o -name '*.pxd' \) \
+    \( -name '*.py' -o -name '*.c' -o -name '*.h' \) \
     -print0 | xargs -0 wc -l | tail -1
 
 # Top-level Python (repo-root scripts — monitors, benchmarks, demos)
@@ -115,7 +115,7 @@ find . -type f \
 | Scope | Count |
 |-------|------:|
 | Python test files under `tests/` (69 `test_*.py` + 1 `conftest.py`) | 70 |
-| Python test function definitions (2,026 in `test_*.py` + 2 in `conftest.py`) | **2,028** |
+| Syntactic `def test_` matches (2,026 test functions in `test_*.py` + 2 `@pytest.fixture` definitions in `conftest.py` that happen to match the regex) | **2,028** |
 | `test_*.c` files under `tests/c/` (ctest-registered) | 11 |
 | `bench_*.c` files under `tests/c/` (standalone, not in ctest) | 1 |
 | Fuzz harnesses under `fuzz/` | 12 C targets |

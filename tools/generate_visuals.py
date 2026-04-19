@@ -693,10 +693,12 @@ def create_test_coverage():
     # Test distribution by category, derived from the current tree by
     # filename pattern-matching 69 `test_*.py` files and counting
     # `def test_` occurrences per file. This chart intentionally EXCLUDES
-    # `conftest.py` (2 additional def test_ helpers) — the headline figure
-    # in docs/METRICS_REPORT.md is 2,028 tests across 70 files (69 +
-    # conftest); this chart reports the 2,026-across-69 subset that can be
-    # cleanly bucketed into the 5 categories below.
+    # `conftest.py`: its two `def test_key_material` / `def test_password`
+    # entries are `@pytest.fixture`s, not tests, and only appear in
+    # docs/METRICS_REPORT.md's headline 2,028-across-70 figure because
+    # that report counts syntactic `def test_` regex matches. This chart
+    # reports the 2,026-across-69 subset of actual test functions that
+    # can be cleanly bucketed into the 5 categories below.
     # Recount + reclassify any time tests are added:
     #
     #   Core Crypto & NIST KATs: NIST KAT, AES-GCM, SHA-3, HKDF, Ed25519,
