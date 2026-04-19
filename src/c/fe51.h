@@ -16,7 +16,13 @@
 #ifndef AMA_FE51_H
 #define AMA_FE51_H
 
-#if defined(__GNUC__) || defined(__clang__)
+/* fe51 requires a native 128-bit integer type. GCC/Clang on 64-bit
+ * targets define `__SIZEOF_INT128__ == 16`; MSVC (including clang-cl)
+ * and 32-bit targets typically do not. Callers should check
+ * `AMA_FE51_AVAILABLE` before referencing any fe51_* symbol. */
+#if defined(__SIZEOF_INT128__)
+
+#define AMA_FE51_AVAILABLE 1
 
 #include <stdint.h>
 #include <string.h>
@@ -156,6 +162,49 @@ static inline void fe51_add(fe51 h, const fe51 f, const fe51 g) {
     h[2] = f[2] + g[2];
     h[3] = f[3] + g[3];
     h[4] = f[4] + g[4];
+}
+
+/**
+ * Constant-time conditional swap: if b != 0, swap p and q.
+ * b must be 0 or 1.
+ */
+static inline void fe51_cswap(fe51 p, fe51 q, uint64_t b) {
+    uint64_t mask = 0 - b; /* 0 if b==0, all-ones if b==1 */
+    uint64_t t;
+    t = mask & (p[0] ^ q[0]); p[0] ^= t; q[0] ^= t;
+    t = mask & (p[1] ^ q[1]); p[1] ^= t; q[1] ^= t;
+    t = mask & (p[2] ^ q[2]); p[2] ^= t; q[2] ^= t;
+    t = mask & (p[3] ^ q[3]); p[3] ^= t; q[3] ^= t;
+    t = mask & (p[4] ^ q[4]); p[4] ^= t; q[4] ^= t;
+}
+
+/**
+ * h = f * 121665 mod (2^255 - 19).
+ *
+ * Specialized scalar-product for the Curve25519 constant a24 = (A-2)/4
+ * = 121665. Accepts inputs with limbs up to ~2^53 (e.g. post-add) by
+ * using 128-bit intermediates before reducing.
+ */
+static inline void fe51_mul_121665(fe51 h, const fe51 f) {
+    typedef unsigned __int128 uint128_t;
+    uint128_t c;
+    uint64_t carry;
+
+    c = (uint128_t)f[0] * 121665;
+    uint64_t r0 = (uint64_t)c & FE51_MASK51; carry = (uint64_t)(c >> 51);
+    c = (uint128_t)f[1] * 121665 + carry;
+    uint64_t r1 = (uint64_t)c & FE51_MASK51; carry = (uint64_t)(c >> 51);
+    c = (uint128_t)f[2] * 121665 + carry;
+    uint64_t r2 = (uint64_t)c & FE51_MASK51; carry = (uint64_t)(c >> 51);
+    c = (uint128_t)f[3] * 121665 + carry;
+    uint64_t r3 = (uint64_t)c & FE51_MASK51; carry = (uint64_t)(c >> 51);
+    c = (uint128_t)f[4] * 121665 + carry;
+    uint64_t r4 = (uint64_t)c & FE51_MASK51; carry = (uint64_t)(c >> 51);
+
+    r0 += carry * 19;
+    carry = r0 >> 51; r0 &= FE51_MASK51; r1 += carry;
+
+    h[0] = r0; h[1] = r1; h[2] = r2; h[3] = r3; h[4] = r4;
 }
 
 static inline void fe51_sub(fe51 h, const fe51 f, const fe51 g) {
@@ -302,7 +351,7 @@ static inline __attribute__((hot, always_inline)) void fe51_sq(fe51 h, const fe5
 }
 
 /** Inversion via Fermat's little theorem: a^(-1) = a^(p-2) mod p */
-static __attribute__((hot)) void fe51_invert(fe51 out, const fe51 z) {
+static __attribute__((hot, unused)) void fe51_invert(fe51 out, const fe51 z) {
     fe51 t0, t1, t2, t3;
     int i;
 
@@ -340,7 +389,7 @@ static __attribute__((hot)) void fe51_invert(fe51 out, const fe51 z) {
 }
 
 /** Compute z^(2^252 - 3), used for point decompression (sqrt of u/v). */
-static __attribute__((hot)) void fe51_pow22523(fe51 out, const fe51 z) {
+static __attribute__((hot, unused)) void fe51_pow22523(fe51 out, const fe51 z) {
     fe51 t0, t1, t2, t3;
     int i;
 
@@ -377,13 +426,13 @@ static __attribute__((hot)) void fe51_pow22523(fe51 out, const fe51 z) {
     fe51_mul(out, t1, z);   /* z^(2^252-3) */
 }
 
-static int fe51_isnegative(const fe51 f) {
+static __attribute__((unused)) int fe51_isnegative(const fe51 f) {
     uint8_t s[32];
     fe51_tobytes(s, f);
     return s[0] & 1;
 }
 
-static int fe51_iszero(const fe51 f) {
+static __attribute__((unused)) int fe51_iszero(const fe51 f) {
     uint8_t s[32];
     fe51_tobytes(s, f);
     int ret = 0;
@@ -391,6 +440,6 @@ static int fe51_iszero(const fe51 f) {
     return ret == 0;
 }
 
-#endif /* defined(__GNUC__) || defined(__clang__) */
+#endif /* defined(__SIZEOF_INT128__) */
 
 #endif /* AMA_FE51_H */

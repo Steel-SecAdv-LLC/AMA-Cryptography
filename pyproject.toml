@@ -205,7 +205,7 @@ ignore = []  # Do not add ignores without a comment explaining why.
 "benchmarks/*" = [
     "E402", "E501", "F541", "I001",
     "RUF059", "RUF100",
-    "S603",
+    "S603", "S607",  # subprocess calls with bare executable name (git, cmake, ...) are intentional in benchmark tooling
     "UP006", "UP035",
 ]
 # examples/**  (double-star) is required — scripts live in examples/python/

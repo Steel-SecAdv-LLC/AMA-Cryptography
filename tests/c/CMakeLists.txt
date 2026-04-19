@@ -18,6 +18,13 @@ add_ama_test(test_sha3 test_sha3.c)
 add_ama_test(test_hkdf test_hkdf.c)
 add_ama_test(test_ed25519 test_ed25519.c)
 
+# X25519 lives under AMA_USE_NATIVE_PQC (see top-level CMakeLists.txt),
+# so its test is only built when that option is enabled — otherwise the
+# ama_x25519_* symbols aren't in the library and linking would fail.
+if(AMA_USE_NATIVE_PQC)
+    add_ama_test(test_x25519 test_x25519.c)
+endif()
+
 # PQC Known Answer Tests (KAT) and debug tests
 if(AMA_USE_NATIVE_PQC)
     # test_kat uses OpenSSL EVP for NIST AES-256-CTR DRBG to reproduce KAT vectors

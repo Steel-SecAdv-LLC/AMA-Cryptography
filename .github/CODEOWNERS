@@ -46,3 +46,13 @@
 /benchmarks/ @Steel-SecAdv-LLC
 /benchmark_suite.py @Steel-SecAdv-LLC
 
+# Benchmark regression baselines — highest review bar.
+# Silent adjustments to these values mask real regressions; see
+# docs/BENCHMARK_HISTORY.md. The CI workflow
+# .github/workflows/baseline-guard.yml also enforces that every diff
+# carries a line-item justification plus a measured ops/sec reading
+# from a named CI runner.
+/benchmarks/baseline.json @Steel-SecAdv-LLC
+/benchmarks/check_baseline_justification.py @Steel-SecAdv-LLC
+/.github/workflows/baseline-guard.yml @Steel-SecAdv-LLC
+
