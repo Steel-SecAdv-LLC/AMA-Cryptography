@@ -94,8 +94,11 @@ fallback) at import time. On a build-complete environment, record the
 count from:
 
 ```bash
-pytest --collect-only -q 2>/dev/null | tail -1
+pytest --collect-only -q | tail -1
 ```
+
+Stderr is intentionally left unsuppressed so collection/import errors
+remain visible during reproduction.
 
 The static count (2,028) and the dynamic collection count will differ.
 Any external claim ("N tests") must state which count it is reporting.

@@ -252,9 +252,10 @@ original constructions described above. It is explicitly **not** an
 independent audit, formal verification, or peer-reviewed proof.
 
 Independent review by qualified cryptographers is recommended before
-relying on AMA Cryptography for high-assurance use cases. Please contact
-`steel.sa.llc@gmail.com` to coordinate audit efforts (PGP key:
-[`pgp-key.asc`](../pgp-key.asc)).
+relying on AMA Cryptography for high-assurance use cases. To coordinate
+audit efforts, use [GitHub Private Vulnerability Reporting](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/security/advisories/new)
+(preferred) or email `steel.sa.llc@gmail.com` as a fallback. See
+[`../SECURITY.md`](../SECURITY.md) for the full reporting policy.
 
 ---
 
