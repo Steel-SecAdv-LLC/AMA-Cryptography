@@ -1,6 +1,27 @@
 # AMA Cryptography — Benchmarks
 
-This directory contains benchmarking tools for measuring the performance of the AMA Cryptography library.
+This directory contains the benchmarking, regression-detection, and
+validation tools for measuring the performance of the AMA Cryptography
+library.
+
+## Provenance Policy
+
+Every number quoted in a chart, README, or dashboard must be traceable to
+one of the artifacts below (or to live output regenerated from them):
+
+| Artifact | Scope | Produced by |
+|----------|-------|-------------|
+| [`baseline.json`](baseline.json) | CI regression tolerances (65% of measured performance) | Edited manually when primitives land/change |
+| [`phase0_baseline_results.json`](phase0_baseline_results.json) | Python/ctypes-path per-op medians | `python benchmarks/phase0_baseline.py` |
+| `../benchmark_results.json` (runtime-only) | Suite output consumed by dashboards | `python benchmark_suite.py --json benchmark_results.json` |
+| `../build/bin/benchmark_c_raw` (runtime-only) | Raw C per-op medians (no ctypes overhead) | `make -C benchmarks benchmark_c_raw && build/bin/benchmark_c_raw --json` |
+| [`../CSRC_ALIGN_REPORT.md`](../CSRC_ALIGN_REPORT.md) | NIST ACVP vector counts (815/815/0) | Updated with each alignment run |
+
+If a chart cannot cite one of these, it should not be in the repository.
+The fallback tables in [`generate_charts.py`](generate_charts.py) are
+anchored to `phase0_baseline_results.json` and `benchmark_c_raw`; they
+are overridden by live data from `benchmark_results.json` when available.
+
 
 ## Raw C Benchmark (`benchmark_c_raw.c`)
 
