@@ -690,8 +690,32 @@ def create_test_coverage():
         "Memory Security\n& Fuzzing",
         "Performance\n& Monitoring",
     ]
-    # Approximate distribution based on test file analysis (866 tests collected)
-    test_counts = [225, 186, 148, 166, 141]  # Total = 866
+    # Test distribution by category, derived from the current tree by
+    # filename pattern-matching 69 `test_*.py` files and counting
+    # `def test_` occurrences per file. This chart intentionally EXCLUDES
+    # `conftest.py`: its two `def test_key_material` / `def test_password`
+    # entries are `@pytest.fixture`s, not tests, and only appear in
+    # docs/METRICS_REPORT.md's headline 2,028-across-70 figure because
+    # that report counts syntactic `def test_` regex matches. This chart
+    # reports the 2,026-across-69 subset of actual test functions that
+    # can be cleanly bucketed into the 5 categories below.
+    # Recount + reclassify any time tests are added:
+    #
+    #   Core Crypto & NIST KATs: NIST KAT, AES-GCM, SHA-3, HKDF, Ed25519,
+    #     hybrid combiner, secure channel, crypto_api, RFC 3161, SIMD,
+    #     integrity, FROST, differential, monitor
+    #   PQC Backends & Integration: PQC backends, adversarial PQC, end-to-end
+    #     integration, comprehensive system, CLI/import/smoke, lazy imports
+    #   Key Management & Rotation: BIP32 HD derivation, rotation, HSM,
+    #     nonce tracker, session
+    #   Memory Security & Fuzzing: memory security, fuzz harness, penetration,
+    #     adversarial security, FIPS 140 self-test, audit regressions
+    #   Performance & Monitoring: benchmarks, adaptive posture, double-helix,
+    #     property-based Lyapunov, equations, numeric primitives
+    #
+    # Totals reconcile with docs/METRICS_REPORT.md (run reproduction commands
+    # there to re-verify before regenerating this chart).
+    test_counts = [518, 513, 268, 439, 288]  # sum = 2,026 (69 files)
     total_tests = sum(test_counts)
     percentages = [100 * c / total_tests for c in test_counts]
     colors = ["#22C55E", "#3B82F6", "#8B5CF6", "#F59E0B", "#EF4444"]
@@ -701,7 +725,7 @@ def create_test_coverage():
 
     ax1.set_xlabel("Number of Tests", fontsize=11)
     ax1.set_title("Test Distribution by Category", fontsize=12, fontweight="bold")
-    ax1.set_xlim(0, 270)
+    ax1.set_xlim(0, max(test_counts) * 1.25)
 
     # Add count and percentage labels
     for bar, val, pct in zip(bars, test_counts, percentages):
@@ -755,7 +779,7 @@ def create_test_coverage():
 
     # Overall title
     fig.suptitle(
-        f"Test Suite Coverage: {total_tests} Tests Across 32 Files (~11,000 Lines)",
+        f"Test Suite Coverage: {total_tests} Tests Across 69 `test_*.py` Files",
         fontsize=14,
         fontweight="bold",
         y=1.02,
@@ -765,8 +789,10 @@ def create_test_coverage():
     fig.text(
         0.5,
         -0.06,
-        f"Total: {total_tests} tests | 32 test files | ~11,000 LOC | "
-        "Categories: NIST KATs, PQC, Key Mgmt, Memory Security, Performance",
+        f"Chart: {total_tests} test functions across 69 test_*.py files "
+        "(excludes conftest.py; full headline is 2,028 across 70) | "
+        "Categories: NIST KATs, PQC, Key Mgmt, Memory Security, Performance | "
+        "Reproduction: docs/METRICS_REPORT.md",
         ha="center",
         fontsize=9,
         color="#6B7280",

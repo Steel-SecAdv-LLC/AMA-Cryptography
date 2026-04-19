@@ -12,10 +12,10 @@
  * - x86: CPUID leaf 1 for AES-NI (ECX[25]) and PCLMULQDQ (ECX[1])
  * - ARM: getauxval(AT_HWCAP) on Linux, sysctlbyname on macOS
  *
- * Thread safety (INVARIANT-2):
+ * Thread safety (INVARIANT-15):
  *   All one-time initialization is performed via a platform once-primitive
  *   (pthread_once on POSIX, InitOnceExecuteOnce on Windows).  No lockless
- *   flag + plain-variable patterns are used.  See INVARIANTS.md.
+ *   flag + plain-variable patterns are used.  See .github/INVARIANTS.md.
  *
  * AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
  */
@@ -24,7 +24,7 @@
 #include <stdio.h>
 
 /* ============================================================================
- * Platform once-primitive abstraction (INVARIANT-2)
+ * Platform once-primitive abstraction (INVARIANT-15)
  *
  * C11 <threads.h> (call_once) is NOT reliably available:
  *   - macOS: Apple SDK has never shipped <threads.h>

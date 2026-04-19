@@ -7,7 +7,7 @@
  *
  * Function pointer table for routing cryptographic inner loops to
  * SIMD-optimized implementations based on CPU feature detection.
- * Thread-safe initialization via platform once-primitives (INVARIANT-2).
+ * Thread-safe initialization via platform once-primitives (INVARIANT-15).
  */
 
 #ifndef AMA_DISPATCH_H

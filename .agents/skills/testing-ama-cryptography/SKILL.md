@@ -101,7 +101,7 @@ PRs must target `main` or `develop` for CI to run. PRs targeting other branches
 ## Key Invariants
 
 1. **INVARIANT-1:** Zero external crypto dependencies (no OpenSSL, no libsodium)
-2. **INVARIANT-2:** Thread-safe CPU dispatch for SIMD operations
+2. **INVARIANT-15:** Thread-safe CPU dispatch for SIMD operations
 3. **FIPS 140-3:** All crypto ops gated by `_check_operational()`
 4. **Terminology:** Use "Multi-Layer Defense-in-Depth" (not "6-Layer")
 5. **Metadata key:** `multi_layer_defense` (not `six_layer_defense`)

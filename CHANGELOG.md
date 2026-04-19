@@ -154,7 +154,7 @@ for backward compatibility.
 ### Fixed - Code Correctness (PR #143)
 
 - **`_counters_dirty` immediate-retry:** Fixed race condition in counter dirty flag handling
-- **INVARIANT-2 compliance:** Ensured thread-safe CPU dispatch via platform once-primitive
+- **INVARIANT-2 compliance:** Ensured thread-safe CPU dispatch via platform once-primitive (renumbered to INVARIANT-15 in a later docs-consolidation PR)
 - **3 Devin review security fixes:** Addressed security issues identified during code review
 
 ### Documentation Corrections (PR #142)

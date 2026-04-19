@@ -92,7 +92,7 @@ The following are explicitly not goals of this architecture:
 
 The AMA Cryptography architecture is built on the following foundational principles:
 
-**Security Through Mathematical Rigor**: Security of individual cryptographic primitives (SHA3-256, Ed25519, ML-DSA-65, HMAC, HKDF) relies on published proofs and reduction arguments to well-studied cryptographic assumptions. The system's composition protocol and original components (key evolution, adaptive posture) have not undergone independent formal verification. No security-by-obscurity mechanisms are employed.
+**Security Through Mathematical Rigor**: Security of individual cryptographic primitives (SHA3-256, Ed25519, ML-DSA-65, HMAC, HKDF) relies on published proofs and reduction arguments to well-studied cryptographic assumptions. The system's composition protocol and original components (key evolution, adaptive posture) have not undergone independent formal verification. Written security arguments for the original constructions are provided in [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md). No security-by-obscurity mechanisms are employed.
 
 **Defense in Depth**: Multiple independent cryptographic layers — four core operations (SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65) supported by key derivation and optional timestamping — ensure that compromise of any single layer does not compromise the overall system security. Each layer provides distinct security properties.
 
@@ -700,7 +700,7 @@ The C library uses CMake (`CMakeLists.txt`, ~270 lines) with the following key c
 |--------|---------|--------|
 | `AMA_USE_NATIVE_PQC` | ON | Compile ML-DSA-65, ML-KEM-1024, SPHINCS+ from source |
 | `AMA_AES_CONSTTIME` | ON | Add bitsliced AES S-box (`ama_aes_bitsliced.c`) for cache-timing hardening |
-| `AMA_BUILD_TESTS` | ON | Build C test suite (9 test files in `tests/c/`) |
+| `AMA_BUILD_TESTS` | ON | Build C test suite (`tests/c/`) |
 | `AMA_BUILD_EXAMPLES` | ON | Build C examples (`examples/c/`) |
 | `AMA_TESTING_MODE` | OFF | Build test-only library with internal symbol visibility |
 | `AMA_ENABLE_AVX2` | OFF | Auto-detect and enable AVX2 SIMD optimizations |
@@ -711,14 +711,15 @@ Fuzz harnesses are built separately via `fuzz/CMakeLists.txt` (12 targets coveri
 
 ### Architectural Invariants
 
-All PRs touching `ama_cryptography/`, `.github/workflows/`, or `tests/` must satisfy the four invariants defined in [`.github/INVARIANTS.md`](.github/INVARIANTS.md):
+All PRs touching `ama_cryptography/`, `.github/workflows/`, or `tests/` must satisfy the architectural invariants defined in [`.github/INVARIANTS.md`](.github/INVARIANTS.md) (canonical, INVARIANT-1 through INVARIANT-15). Highlights:
 
-1. **INVARIANT-1 — Zero External Crypto Dependencies**: All cryptographic primitives are owned natively. No third-party crypto packages (`libsodium`, `pynacl`, `cryptography`, etc.). Python stdlib modules (`hashlib`, `os`, `secrets`) permitted for non-primitive operations only.
+1. **INVARIANT-1 — Zero External Crypto Dependencies**: All cryptographic primitives are owned natively. No third-party crypto packages (`libsodium`, `pynacl`, `cryptography`, etc.). Python stdlib modules (`hashlib`, `os`, `secrets`) permitted for non-primitive operations only. All primitives must map to a non-deprecated entry in [`CSRC_STANDARDS.md`](CSRC_STANDARDS.md); vendored public-domain source compiled in-tree is permitted.
 2. **INVARIANT-2 — Fail-Closed CI**: Security-critical CI steps must not use `continue-on-error: true`.
 3. **INVARIANT-3 — Observable Failure States**: No bare `except: pass`, no silent `return`, no stderr suppression.
 4. **INVARIANT-4 — Pinned Action References**: All third-party GitHub Actions pinned to full commit SHA.
+5. **INVARIANT-15 — Thread-Safe CPU Dispatch**: `ama_cpuid.c` one-time init must use `pthread_once` (POSIX) or `InitOnceExecuteOnce` (MSVC); lockless flag + plain-variable patterns are prohibited.
 
-Additionally, [`INVARIANTS.md`](INVARIANTS.md) (root) requires that all cryptographic primitives map to a non-deprecated entry in [`CSRC_STANDARDS.md`](CSRC_STANDARDS.md).
+See [`.github/INVARIANTS.md`](.github/INVARIANTS.md) for the complete set (INVARIANT-1 through INVARIANT-15) and vendoring policy.
 
 ---
 
@@ -766,8 +767,8 @@ docker run ama-cryptography:latest
 
 | Category | Purpose | Coverage Target | Files |
 |----------|---------|-----------------|-------|
-| Unit Tests | Individual function validation | 80% line coverage | 30 Python test files |
-| C Unit Tests | Native library validation | All C functions | 9 C test files (`tests/c/`) |
+| Unit Tests | Individual function validation | 80% line coverage | 70 Python test files |
+| C Unit Tests | Native library validation | All C functions | 11 `test_*.c` registered via ctest in `tests/c/` (+ 1 standalone `bench_*.c`) |
 | Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
 | Performance Tests | Benchmark regression detection | All critical paths | `test_performance.py`, `benchmarks/` |
 | Security Tests | Cryptographic correctness | 100% crypto functions | `test_crypto_core_penetration.py`, `test_memory_security.py` |
@@ -775,7 +776,10 @@ docker run ama-cryptography:latest
 | Fuzz Tests | Input mutation testing | 12 C targets | `fuzz/fuzz_*.c` |
 | NIST ACVP Vectors | Official vector validation | 815 vectors, 12 algorithms | `nist_vectors/` |
 
-**Total:** 866+ tests collected across 39 files (30 Python + 9 C).
+**Total:** 2,028 Python test functions across 70 test files, plus 11
+ctest-registered C tests and 1 standalone C benchmark under `tests/c/`.
+See [`docs/METRICS_REPORT.md`](docs/METRICS_REPORT.md) for reproduction
+instructions.
 
 ### Continuous Integration Pipeline
 
@@ -879,8 +883,7 @@ Cryptographic implementations are validated against:
 - `CSRC_ALIGN_REPORT.md`: NIST ACVP vector validation results (815/815 pass)
 - `CSRC_STANDARDS.md`: Governing standards registry
 - `IMPLEMENTATION_GUIDE.md`: Deployment and integration guide
-- `.github/INVARIANTS.md`: PR-level architectural invariants
-- `INVARIANTS.md`: Library-level invariants (CSRC_STANDARDS.md mapping)
+- `.github/INVARIANTS.md`: Canonical architectural invariants (INVARIANT-1 through INVARIANT-15), including vendoring policy and CSRC_STANDARDS.md mapping
 
 ---
 
