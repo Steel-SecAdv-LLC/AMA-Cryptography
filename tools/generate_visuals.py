@@ -691,8 +691,13 @@ def create_test_coverage():
         "Performance\n& Monitoring",
     ]
     # Test distribution by category, derived from the current tree by
-    # filename pattern-matching 69 test files and counting `def test_`
-    # occurrences per file. Recount + reclassify any time tests are added:
+    # filename pattern-matching 69 `test_*.py` files and counting
+    # `def test_` occurrences per file. This chart intentionally EXCLUDES
+    # `conftest.py` (2 additional def test_ helpers) — the headline figure
+    # in docs/METRICS_REPORT.md is 2,028 tests across 70 files (69 +
+    # conftest); this chart reports the 2,026-across-69 subset that can be
+    # cleanly bucketed into the 5 categories below.
+    # Recount + reclassify any time tests are added:
     #
     #   Core Crypto & NIST KATs: NIST KAT, AES-GCM, SHA-3, HKDF, Ed25519,
     #     hybrid combiner, secure channel, crypto_api, RFC 3161, SIMD,
@@ -772,7 +777,7 @@ def create_test_coverage():
 
     # Overall title
     fig.suptitle(
-        f"Test Suite Coverage: {total_tests} Tests Across 69 Files",
+        f"Test Suite Coverage: {total_tests} Tests Across 69 `test_*.py` Files",
         fontsize=14,
         fontweight="bold",
         y=1.02,
@@ -782,7 +787,8 @@ def create_test_coverage():
     fig.text(
         0.5,
         -0.06,
-        f"Total: {total_tests} test functions | 69 test files | "
+        f"Chart: {total_tests} test functions across 69 test_*.py files "
+        "(excludes conftest.py; full headline is 2,028 across 70) | "
         "Categories: NIST KATs, PQC, Key Mgmt, Memory Security, Performance | "
         "Reproduction: docs/METRICS_REPORT.md",
         ha="center",
