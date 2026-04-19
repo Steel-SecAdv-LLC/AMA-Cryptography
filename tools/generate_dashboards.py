@@ -919,6 +919,7 @@ def create_defense_layers():
     ax.text(
         7,
         0.25,
+        "v2.1.5  •  "
         "SIMD Acceleration: AVX2 (x86-64) | NEON (AArch64) | SVE2 (ARMv9)"
         "  •  Zero external dependencies  •  FIPS 202/203/204/205 compliant",
         ha="center",
