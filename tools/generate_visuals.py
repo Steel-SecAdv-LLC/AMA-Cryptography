@@ -227,18 +227,19 @@ def create_performance_comparison():
     raw_sign_us = RAW_C_MEDIANS_US["ed25519_sign"] + RAW_C_MEDIANS_US["mldsa65_sign"]
     raw_verify_us = RAW_C_MEDIANS_US["ed25519_verify"] + RAW_C_MEDIANS_US["mldsa65_verify"]
 
+    # Derive overhead directly from the microsecond medians — rounding
+    # throughputs to integers first (see ops/sec plots) can skew the
+    # percentage and, for close values, even flip its sign. We only
+    # round at display time.
+    sign_overhead = (ctypes_sign_us / raw_sign_us - 1) * 100
+    verify_overhead = (ctypes_verify_us / raw_verify_us - 1) * 100
+
     sign_throughput = [round(1_000_000 / raw_sign_us), round(1_000_000 / ctypes_sign_us)]
     verify_throughput = [round(1_000_000 / raw_verify_us), round(1_000_000 / ctypes_verify_us)]
 
     # Derived latency data (ms = 1000 / ops_per_sec)
     sign_latency = [1000 / v for v in sign_throughput]
     verify_latency = [1000 / v for v in verify_throughput]
-
-    # ctypes overhead (%) = (raw_C_throughput / ctypes_throughput - 1) * 100
-    # i.e. how much extra time the Python ctypes path takes per operation
-    # relative to the raw C path. Positive values mean ctypes is slower.
-    sign_overhead = (sign_throughput[0] / sign_throughput[1] - 1) * 100
-    verify_overhead = (verify_throughput[0] / verify_throughput[1] - 1) * 100
 
     # === Panel 1: Throughput Line Chart ===
     ax1 = axes[0]
@@ -364,13 +365,21 @@ def create_performance_comparison():
         linewidth=1.5,
         width=0.5,
     )
+    # Axis range and label placement handle both positive (ctypes slower,
+    # expected case) and hypothetical non-positive (ctypes as fast or
+    # faster than raw C) values. `{:+.0f}%` always shows the sign so a
+    # regression into negative territory is obvious.
+    lo, hi = min([*overhead, 0.0]), max([*overhead, 0.0])
+    span = max(hi - lo, 1.0)  # avoid zero-height axis if every bar is 0
+    pad = span * 0.15
     for bar, val in zip(bars3, overhead):
+        offset = span * 0.02
         ax3.text(
             bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + max(overhead) * 0.02,
-            f"+{val:.0f}%",
+            val + (offset if val >= 0 else -offset),
+            f"{val:+.0f}%",
             ha="center",
-            va="bottom",
+            va="bottom" if val >= 0 else "top",
             fontsize=10,
             fontweight="bold",
             color="#1F2937",
@@ -381,7 +390,8 @@ def create_performance_comparison():
         fontsize=12,
         fontweight="bold",
     )
-    ax3.set_ylim(0, max(overhead) * 1.25)
+    ax3.axhline(0, color="#9CA3AF", linewidth=0.8)
+    ax3.set_ylim(lo - pad, hi + pad)
     ax3.grid(True, alpha=0.3, axis="y")
 
     # Overall title and footer
