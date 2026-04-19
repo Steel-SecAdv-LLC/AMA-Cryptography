@@ -38,6 +38,7 @@ Exit codes
 * 1 — baseline.json changed but at least one requirement is unmet.
 * 2 — internal error (bad refs, JSON parse failure, git unavailable).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -183,7 +184,7 @@ def _check_justification(
             "not mentioned by name in any commit message or the PR body:\n"
             + "\n".join(f"  - {n}" for n in unmentioned)
             + "\nAdd a line-item entry for each in the commit message or "
-              "PR body so a reviewer can audit the new number."
+            "PR body so a reviewer can audit the new number."
         )
 
     return failures
@@ -205,22 +206,21 @@ def main(argv: List[str]) -> int:
         "--pr-body",
         default="",
         help="Optional PR body text, appended to the commit log for "
-             "justification scanning. Mutually exclusive with "
-             "--pr-body-file.",
+        "justification scanning. Mutually exclusive with "
+        "--pr-body-file.",
     )
     parser.add_argument(
         "--pr-body-file",
         default=None,
         help="Path to a file containing the PR body. Preferred over "
-             "--pr-body in CI because it avoids shell-quoting hazards "
-             "when the body contains $, \", backticks, or backslashes.",
+        "--pr-body in CI because it avoids shell-quoting hazards "
+        'when the body contains $, ", backticks, or backslashes.',
     )
     args = parser.parse_args(argv)
 
     if args.pr_body_file:
         if args.pr_body:
-            print("ERROR: --pr-body and --pr-body-file are mutually exclusive.",
-                  file=sys.stderr)
+            print("ERROR: --pr-body and --pr-body-file are mutually exclusive.", file=sys.stderr)
             return 2
         try:
             args.pr_body = Path(args.pr_body_file).read_text(encoding="utf-8")
@@ -237,8 +237,10 @@ def main(argv: List[str]) -> int:
 
     changes = _changed_baseline_values(before, after)
     if not changes:
-        print(f"OK: {BASELINE_PATH} has no baseline_value changes in "
-              f"{args.base_ref}..{args.head_ref}.")
+        print(
+            f"OK: {BASELINE_PATH} has no baseline_value changes in "
+            f"{args.base_ref}..{args.head_ref}."
+        )
         return 0
 
     print(f"Detected {len(changes)} baseline_value change(s):")
@@ -251,8 +253,7 @@ def main(argv: List[str]) -> int:
     failures = _check_justification(changes, combined_text)
     if failures:
         print("\n" + "=" * 72, file=sys.stderr)
-        print("FAIL: baseline.json changes are missing required justification.",
-              file=sys.stderr)
+        print("FAIL: baseline.json changes are missing required justification.", file=sys.stderr)
         print("=" * 72, file=sys.stderr)
         for msg in failures:
             print("\n" + msg, file=sys.stderr)
@@ -264,8 +265,10 @@ def main(argv: List[str]) -> int:
         )
         return 1
 
-    print("\nOK: every changed baseline is named, a measurement value is "
-          "cited, and a CI runner is identified.")
+    print(
+        "\nOK: every changed baseline is named, a measurement value is "
+        "cited, and a CI runner is identified."
+    )
     return 0
 
 
