@@ -220,7 +220,7 @@ pytest-collection count you must first build the native C library:
 ```bash
 cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
 pip install -e ".[dev]"
-pytest --collect-only -q 2>/dev/null | tail -1
+pytest --collect-only -q | tail -1
 ```
 
 Commit your reproduction output alongside this report when material

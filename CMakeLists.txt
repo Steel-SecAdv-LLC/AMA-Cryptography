@@ -326,7 +326,7 @@ else()
 endif()
 
 # Threading: ama_cpuid.c uses pthread_once (POSIX) or InitOnceExecuteOnce
-# (Windows) for thread-safe one-time initialization (INVARIANT-2).
+# (Windows) for thread-safe one-time initialization (INVARIANT-15).
 # CMake's Threads package resolves to -lpthread on Linux, nothing extra on
 # macOS (pthreads are in libSystem), and is a no-op on Windows (MSVC path
 # uses InitOnceExecuteOnce from synchapi.h, linked automatically).
@@ -380,7 +380,7 @@ if(AMA_BUILD_SHARED)
     endif()
     ama_apply_donna_settings(ama_cryptography_shared)
 
-    # Threading (INVARIANT-2): pthread_once on POSIX, InitOnceExecuteOnce on Windows
+    # Threading (INVARIANT-15): pthread_once on POSIX, InitOnceExecuteOnce on Windows
     target_link_libraries(ama_cryptography_shared PRIVATE Threads::Threads)
 
     # Windows: link bcrypt for BCryptGenRandom (used by ama_platform_rand.c)

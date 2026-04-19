@@ -210,7 +210,7 @@ void ama_keccak_f1600_generic(uint64_t state[KECCAK_STATE_SIZE]) {
  * Dispatch-aware Keccak-f[1600] wrapper.
  * Routes to the best available implementation (AVX2/NEON/generic)
  * via the dispatch table.  ama_get_dispatch_table() uses pthread_once
- * internally (INVARIANT-2 compliant), so the once-flag check is a
+ * internally (INVARIANT-15 compliant), so the once-flag check is a
  * single branch on an already-initialized flag — no caching needed.
  */
 static void keccak_f1600(uint64_t state[KECCAK_STATE_SIZE]) {

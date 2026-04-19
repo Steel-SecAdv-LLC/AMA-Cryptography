@@ -11,7 +11,7 @@
  *   AArch64: SVE2 > NEON > generic
  *
  * Function pointers are set once at init time via pthread_once /
- * InitOnceExecuteOnce (thread-safe, INVARIANT-2 compliant).
+ * InitOnceExecuteOnce (thread-safe, INVARIANT-15 compliant).
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
@@ -32,7 +32,7 @@
 #include <time.h>
 
 /* ============================================================================
- * Platform once-primitive (mirrors ama_cpuid.c — INVARIANT-2 compliant)
+ * Platform once-primitive (mirrors ama_cpuid.c — INVARIANT-15 compliant)
  * ============================================================================ */
 #if defined(_MSC_VER)
     #define WIN32_LEAN_AND_MEAN
