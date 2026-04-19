@@ -17,6 +17,7 @@ add_ama_test(test_core test_core.c)
 add_ama_test(test_sha3 test_sha3.c)
 add_ama_test(test_hkdf test_hkdf.c)
 add_ama_test(test_ed25519 test_ed25519.c)
+add_ama_test(test_x25519 test_x25519.c)
 
 # PQC Known Answer Tests (KAT) and debug tests
 if(AMA_USE_NATIVE_PQC)
