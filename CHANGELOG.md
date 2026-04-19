@@ -20,6 +20,38 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 
 
+## [Unreleased]
+
+
+### Performance
+
+- X25519 scalar multiplication: rewrite `ama_x25519.c` onto the radix-2^51
+  (`fe51.h`) field arithmetic already used by Ed25519. The portable
+  radix-2^16 (TweetNaCl-style) path is retained as an MSVC fallback since
+  `fe51` requires `__uint128_t`. Measured on x86-64 sandbox (median-of-5
+  via `build/bin/benchmark_c_raw --json`):
+  X25519 DH ~45 µs / ~19.5K ops/s, X25519 KeyGen ~62 µs / ~13K ops/s —
+  roughly 15–20× the pre-change scalar path. Reproduce with
+  `cmake --build build && ./build/bin/benchmark_c_raw --json`.
+
+### Changed
+
+- Remove dead `ama_ed25519_*_avx2` trampolines and associated dispatch
+  wiring: the "AVX2" Ed25519 entry points forwarded directly to the scalar
+  path (which already uses the fast `fe51` field), and the dispatch log
+  claimed `Ed25519: AVX2` when no SIMD path executed. `ama_dispatch_info_t`
+  now reports `AMA_IMPL_GENERIC` for `ed25519`, reflecting what actually
+  runs. No runtime behavior change.
+
+### Added
+
+- `tests/c/test_x25519.c`: RFC 7748 §5.2 TV1/TV2, §6.1 Alice/Bob KATs
+  (both directions), random DH symmetry, low-order point (`u = 0`)
+  rejection, and NULL parameter validation.
+
+---
+
+
 ## [2.1.5] - 2026-04-17
 
 
