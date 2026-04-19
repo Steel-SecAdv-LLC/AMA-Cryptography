@@ -23,6 +23,8 @@ add_ama_test(test_ed25519 test_ed25519.c)
 # ama_x25519_* symbols aren't in the library and linking would fail.
 if(AMA_USE_NATIVE_PQC)
     add_ama_test(test_x25519 test_x25519.c)
+    add_ama_test(test_chacha20poly1305 test_chacha20poly1305.c)
+    add_ama_test(test_argon2id test_argon2id.c)
 endif()
 
 # PQC Known Answer Tests (KAT) and debug tests

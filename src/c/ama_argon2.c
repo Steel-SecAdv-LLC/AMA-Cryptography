@@ -34,6 +34,7 @@
  */
 
 #include "../include/ama_cryptography.h"
+#include "../include/ama_dispatch.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -395,7 +396,7 @@ static void blamka_round(
 }
 
 /**
- * G compression function.
+ * G compression function (scalar fallback).
  *
  * Takes two 1024-byte blocks X, Y and produces result R.
  * R = X XOR Y
@@ -403,7 +404,7 @@ static void blamka_round(
  * an 8x16 matrix of uint64_t values.
  * Finally XOR the result with R (pre-round) again.
  */
-static void argon2_G(argon2_block *result, const argon2_block *X, const argon2_block *Y)
+static void argon2_G_scalar(argon2_block *result, const argon2_block *X, const argon2_block *Y)
 {
     argon2_block R;
     argon2_block Z;
@@ -438,6 +439,26 @@ static void argon2_G(argon2_block *result, const argon2_block *X, const argon2_b
     /* Final XOR: result = R XOR Z */
     for (int i = 0; i < ARGON2_QWORDS_IN_BLOCK; i++) {
         result->v[i] = R.v[i] ^ Z.v[i];
+    }
+}
+
+/* Dispatched G: reads the dispatch table on each invocation. After the
+ * pthread_once-guarded ama_dispatch_init, ama_get_dispatch_table() is
+ * a trivial pointer return, so the per-call overhead is a single branch
+ * and an indirect call — negligible against the ~500 64-bit multiplies
+ * in one BlaMka compression. INVARIANT-15 compliant (the dispatch
+ * initialization is itself once-guarded; no mutable state here).
+ *
+ * argon2_block is a struct wrapping uint64_t v[128] exactly, so taking
+ * ->v is ABI-stable and aliases the backing storage. */
+static void argon2_G(argon2_block *result, const argon2_block *X,
+                      const argon2_block *Y)
+{
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (dt->argon2_g) {
+        dt->argon2_g(result->v, X->v, Y->v);
+    } else {
+        argon2_G_scalar(result, X, Y);
     }
 }
 

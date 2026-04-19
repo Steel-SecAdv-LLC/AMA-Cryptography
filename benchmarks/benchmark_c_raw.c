@@ -501,6 +501,73 @@ static bench_result_t bench_hmac_sha3(size_t msg_size, int iters, int warmup) {
     return compute_stats(labels[li], g_samples, iters);
 }
 
+/* --- ChaCha20-Poly1305 AEAD (exercises AVX2 8-way for >= 512 B) --- */
+static bench_result_t bench_chacha20poly1305_encrypt(size_t data_size, int iters, int warmup) {
+    uint8_t key[32], nonce[12], tag[16];
+    fill_random(key, 32);
+    fill_random(nonce, 12);
+
+    uint8_t *pt = (uint8_t *)malloc(data_size);
+    uint8_t *ct = (uint8_t *)malloc(data_size);
+    if (!pt || !ct) { free(pt); free(ct); bench_result_t r = {0}; r.name = "(alloc failed)"; return r; }
+    fill_random(pt, data_size);
+
+    for (int i = 0; i < warmup; i++)
+        ama_chacha20poly1305_encrypt(key, nonce, pt, data_size, NULL, 0, ct, tag);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        ama_chacha20poly1305_encrypt(key, nonce, pt, data_size, NULL, 0, ct, tag);
+        g_samples[i] = now_ns() - t0;
+    }
+
+    char label[64];
+    if (data_size >= 1024)
+        snprintf(label, sizeof(label), "ChaCha20-Poly1305 Enc %zuKB", data_size / 1024);
+    else
+        snprintf(label, sizeof(label), "ChaCha20-Poly1305 Enc %zuB", data_size);
+    static char labels[8][64];
+    static int label_idx = 0;
+    int li = label_idx++ % 8;
+    strncpy(labels[li], label, 63);
+    labels[li][63] = '\0';
+
+    free(pt);
+    free(ct);
+    return compute_stats(labels[li], g_samples, iters);
+}
+
+/* --- Argon2id (exercises AVX2 BlaMka G) --- */
+static bench_result_t bench_argon2id(uint32_t m_cost, int iters, int warmup) {
+    const uint8_t password[] = "benchmark-password-argon2-avx2";
+    const uint8_t salt[16]   = "SIXTEEN-BYTE-SLT";
+    uint8_t tag[32];
+
+    for (int i = 0; i < warmup; i++)
+        ama_argon2id(password, sizeof(password) - 1, salt, 16,
+                     1, m_cost, 1, tag, 32);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        ama_argon2id(password, sizeof(password) - 1, salt, 16,
+                     1, m_cost, 1, tag, 32);
+        g_samples[i] = now_ns() - t0;
+    }
+
+    char label[64];
+    if (m_cost >= 1024)
+        snprintf(label, sizeof(label), "Argon2id (m=%uMiB,t=1)", m_cost / 1024);
+    else
+        snprintf(label, sizeof(label), "Argon2id (m=%uKiB,t=1)", m_cost);
+    static char labels[4][64];
+    static int label_idx = 0;
+    int li = label_idx++ % 4;
+    strncpy(labels[li], label, 63);
+    labels[li][63] = '\0';
+
+    return compute_stats(labels[li], g_samples, iters);
+}
+
 /* --- HKDF --- */
 static bench_result_t bench_hkdf(int iters, int warmup) {
     uint8_t salt[32], ikm[32], info[] = "benchmark-hkdf";
@@ -642,7 +709,7 @@ int main(int argc, char **argv) {
     const int iters_vslow = 50;     /* 1ms+ ops */
 
     /* Collect all results */
-    #define MAX_RESULTS 32
+    #define MAX_RESULTS 40
     bench_result_t results[MAX_RESULTS];
     int n = 0;
 
@@ -691,6 +758,16 @@ int main(int argc, char **argv) {
     results[n++] = bench_aes_gcm_decrypt(4096, iters_slow, warmup);
     results[n++] = bench_aes_gcm_encrypt(65536, iters_vslow, warmup);
     results[n++] = bench_aes_gcm_decrypt(65536, iters_vslow, warmup);
+
+    /* --- ChaCha20-Poly1305 (AVX2 8-way kicks in at >=512 B) --- */
+    results[n++] = bench_chacha20poly1305_encrypt(256,   iters_med,   warmup);
+    results[n++] = bench_chacha20poly1305_encrypt(1024,  iters_med,   warmup);
+    results[n++] = bench_chacha20poly1305_encrypt(4096,  iters_slow,  warmup);
+    results[n++] = bench_chacha20poly1305_encrypt(65536, iters_vslow, warmup);
+
+    /* --- Argon2id (exercises AVX2 BlaMka G) --- */
+    results[n++] = bench_argon2id(64,   iters_slow,  warmup);  /*  64 KiB */
+    results[n++] = bench_argon2id(1024, iters_vslow, warmup);  /*   1 MiB */
 
     /* --- ML-DSA-65 --- */
     results[n++] = bench_dilithium_keygen(iters_slow, warmup);

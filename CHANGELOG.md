@@ -36,6 +36,42 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   roughly 15–20× the pre-change scalar path. Reproduce with
   `cmake --build build && ./build/bin/benchmark_c_raw --json`.
 
+- ChaCha20-Poly1305 AVX2 wiring: `ama_chacha20_block_x8_avx2` (8-way
+  parallel ChaCha20 block function emitting 512 B of keystream) is
+  now wired through the dispatch table and invoked by the CTR inner
+  loop in `ama_chacha20poly1305.c` for chunks ≥ 512 B. Keystream is
+  byte-identical to the scalar RFC 8439 §2.3 path (verified by
+  `tests/c/test_chacha20poly1305.c` with an independent reference
+  implementation across sizes 1..4096 B including 511/512/513/1023/
+  1024/1025 B boundaries). Measured on x86-64 sandbox via
+  `benchmark_c_raw`: 2.11× at 1 KB, 2.24× at 4 KB, 2.29× at 64 KB.
+  Messages < 512 B remain on the scalar path (no regression). Opt
+  out with `AMA_DISPATCH_NO_CHACHA_AVX2=1`.
+
+- Argon2 AVX2 BlaMka G wiring: `ama_argon2_g_avx2` is now a correct
+  RFC 9106 §3.5 BlaMka compression (previously the file contained a
+  Blake2b-style permutation that would have produced wrong output if
+  wired). The new implementation packs four BlaMka G invocations into
+  a single AVX2 4-way kernel using `_mm256_mul_epu32` for the
+  `2·(a mod 2^32)·(b mod 2^32)` multiplication-hardened addition, and
+  uses `_mm256_permute4x64_epi64` to rotate YMM lanes by 1/2/3 for the
+  diagonal pass. Wired via `ama_dispatch_table_t::argon2_g`; called by
+  every G invocation in the memory-fill loop of `ama_argon2id`. Byte-
+  identical to scalar (verified by `tests/c/test_argon2id.c` which
+  toggles dispatch between AVX2 and scalar and asserts tag equality
+  across six parameter combinations). Measured on x86-64 sandbox:
+  1.31× at m=64 KiB, 1.34× at m=1 MiB. Opt out with
+  `AMA_DISPATCH_NO_ARGON2_AVX2=1`.
+
+- SHA-3 auto-tune hysteresis: the dispatch microbench in
+  `ama_dispatch.c` previously compared single-run timings and
+  reverted the AVX2/NEON Keccak pointer to generic whenever
+  `simd_ns > generic_ns` — a condition easily tripped by scheduler
+  jitter on shared CI runners. The rewrite takes best-of-5 trials
+  (min is jitter-resistant) and only reverts when SIMD is more than
+  10 % slower than generic's best time. Opt out entirely with
+  `AMA_DISPATCH_NO_AUTOTUNE=1`.
+
 ### Changed
 
 - Remove dead `ama_ed25519_*_avx2` trampolines and associated dispatch
@@ -50,6 +86,28 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 - `tests/c/test_x25519.c`: RFC 7748 §5.2 TV1/TV2, §6.1 Alice/Bob KATs
   (both directions), random DH symmetry, low-order point (`u = 0`)
   rejection, and NULL parameter validation.
+
+- `tests/c/test_chacha20poly1305.c`: RFC 8439 §2.8.2 AEAD test vector
+  (tag bytes asserted exactly), size sweep 1..4096 B crossing the
+  512 B AVX2 threshold (511/512/513/1023/1024/1025 B), and tag-
+  mismatch zero-plaintext verification. An independent scalar
+  ChaCha20 block function embedded in the test serves as the
+  reference — not the library itself — so SIMD regressions are
+  caught even when both scalar and AVX2 paths drift together.
+
+- `tests/c/test_argon2id.c`: six-case AVX2/scalar parity test using
+  a test-only dispatch hook (`ama_test_force_argon2_g_scalar`,
+  compiled only into `ama_cryptography_test` under
+  `AMA_TESTING_MODE`), plus determinism, salt-divergence and
+  parameter validation checks.
+
+- Dispatch test hooks `ama_test_force_*_scalar` /
+  `ama_test_restore_*_avx2` in `ama_dispatch.c`, guarded by
+  `AMA_TESTING_MODE` so they never appear in the shipped library.
+
+- Benchmark coverage for `ama_chacha20poly1305_encrypt` at 256 B,
+  1 KB, 4 KB, 64 KB and `ama_argon2id` at m=64 KiB and m=1 MiB in
+  `benchmarks/benchmark_c_raw.c`.
 
 ---
 

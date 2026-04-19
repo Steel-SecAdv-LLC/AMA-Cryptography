@@ -184,6 +184,13 @@ extern ama_error_t ama_aes256_gcm_decrypt_avx2(const uint8_t *ciphertext, size_t
                                                 const uint8_t *aad, size_t aad_len,
                                                 const uint8_t key[32], const uint8_t nonce[12],
                                                 const uint8_t tag[16], uint8_t *plaintext);
+extern void ama_chacha20_block_x8_avx2(const uint8_t key[32],
+                                        const uint8_t nonce[12],
+                                        uint32_t counter,
+                                        uint8_t out[512]);
+extern void ama_argon2_g_avx2(uint64_t out[128],
+                               const uint64_t x[128],
+                               const uint64_t y[128]);
 #endif
 
 #ifdef AMA_HAVE_NEON_IMPL
@@ -330,6 +337,8 @@ static void dispatch_init_internal(void) {
     dispatch_table.dilithium_pointwise = NULL;
     dispatch_table.aes_gcm_encrypt     = NULL;  /* NULL = caller uses schoolbook GHASH */
     dispatch_table.aes_gcm_decrypt     = NULL;
+    dispatch_table.chacha20_block_x8   = NULL;  /* NULL = caller uses scalar 1-block loop */
+    dispatch_table.argon2_g            = NULL;  /* NULL = caller uses scalar BlaMka G */
 
 #ifdef AMA_HAVE_AVX2_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_AVX2) {
@@ -349,6 +358,18 @@ static void dispatch_init_internal(void) {
     if (dispatch_info.aes_gcm >= AMA_IMPL_AVX2) {
         dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_avx2;
         dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_avx2;
+    }
+    if (dispatch_info.chacha20poly1305 >= AMA_IMPL_AVX2) {
+        /* Env override honored for A/B benchmarking and smoke-testing
+         * the scalar fallback in production builds without a rebuild. */
+        const char *no_chacha = getenv("AMA_DISPATCH_NO_CHACHA_AVX2");
+        if (!(no_chacha && no_chacha[0] == '1'))
+            dispatch_table.chacha20_block_x8 = ama_chacha20_block_x8_avx2;
+    }
+    if (dispatch_info.argon2 >= AMA_IMPL_AVX2) {
+        const char *no_argon = getenv("AMA_DISPATCH_NO_ARGON2_AVX2");
+        if (!(no_argon && no_argon[0] == '1'))
+            dispatch_table.argon2_g = ama_argon2_g_avx2;
     }
 #endif
 
@@ -391,55 +412,79 @@ static void dispatch_init_internal(void) {
 #endif
 
     /* ====================================================================
-     * Phase 3: SIMD auto-tuning microbenchmark.
+     * Phase 3: SIMD auto-tuning microbenchmark — hysteresis variant.
      *
-     * Run a quick ~10ms benchmark comparing the selected SIMD Keccak-f1600
-     * implementation against generic.  If the SIMD path is slower (possible
-     * for very small inputs due to dispatch overhead or unfavorable
-     * microarchitecture), revert to the generic path.
+     * Prior versions compared a ~10 ms SIMD vs generic run and reverted
+     * the pointer whenever `simd_ns > generic_ns`. On noisy shared CI
+     * runners that comparison is within timing jitter of equality, so
+     * the hand-tuned AVX2 / NEON Keccak paths were being demoted to the
+     * scalar tier despite being structurally faster.
      *
-     * Note: Uses POSIX clock_gettime(); skipped on MSVC where it is
-     * unavailable.  On Windows the SIMD path is kept unconditionally.
+     * Fix: apply a 10 % hysteresis band and take the *best-of-N* trial
+     * (min_ns) rather than the total, which is dominated by stalls on
+     * contended hosts. The SIMD pointer is only reverted when the SIMD
+     * tier is clearly slower — more than 10 % over generic's best time
+     * — which is well outside the jitter of a modern clock_gettime()
+     * microbench. Set AMA_DISPATCH_NO_AUTOTUNE=1 in the environment to
+     * bypass entirely.
+     *
+     * Opt-out is respected on all platforms; the microbench itself is
+     * still skipped on MSVC (no POSIX clock_gettime).
      * ==================================================================== */
 #if !defined(_MSC_VER)
-    if (dispatch_table.keccak_f1600 != ama_keccak_f1600_generic) {
+    const char *no_autotune = getenv("AMA_DISPATCH_NO_AUTOTUNE");
+    int autotune_disabled = (no_autotune && no_autotune[0] == '1');
+
+    if (!autotune_disabled &&
+        dispatch_table.keccak_f1600 != ama_keccak_f1600_generic) {
         uint64_t state[25];
         memset(state, 0x42, sizeof(state));
 
-        /* Warm-up: 100 iterations each to fill caches / branch predictors */
-        for (int w = 0; w < 100; w++) {
+        /* Warm-up: 200 iterations each to fill caches / branch predictors */
+        for (int w = 0; w < 200; w++) {
             ama_keccak_f1600_generic(state);
         }
-        for (int w = 0; w < 100; w++) {
+        for (int w = 0; w < 200; w++) {
             dispatch_table.keccak_f1600(state);
         }
 
-        /* Benchmark generic: ~2000 iterations */
-        struct timespec t0, t1;
-        clock_gettime(CLOCK_MONOTONIC, &t0);
-        for (int i = 0; i < 2000; i++) {
-            ama_keccak_f1600_generic(state);
-        }
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        long generic_ns = (t1.tv_sec - t0.tv_sec) * 1000000000L
-                        + (t1.tv_nsec - t0.tv_nsec);
-
-        /* Benchmark SIMD: ~2000 iterations */
+        /* Run 5 trials of 2000 iterations each; take the minimum (best
+         * run) which is the most resistant to scheduling jitter. */
+        const int TRIALS = 5;
+        const int ITERS  = 2000;
+        long generic_best = -1;
+        long simd_best    = -1;
         ama_keccak_f1600_fn simd_fn = dispatch_table.keccak_f1600;
-        clock_gettime(CLOCK_MONOTONIC, &t0);
-        for (int i = 0; i < 2000; i++) {
-            simd_fn(state);
-        }
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        long simd_ns = (t1.tv_sec - t0.tv_sec) * 1000000000L
-                     + (t1.tv_nsec - t0.tv_nsec);
 
-        if (simd_ns > generic_ns) {
-            /* SIMD path is slower — revert to the best available
-             * fallback.  If SVE2 overrode a lower tier (e.g. NEON),
-             * revert to that tier.  Otherwise the current pointer IS
-             * pre_sve2_keccak (no SVE2 override happened), so fall
-             * back to generic C. */
+        for (int trial = 0; trial < TRIALS; trial++) {
+            struct timespec t0, t1;
+
+            clock_gettime(CLOCK_MONOTONIC, &t0);
+            for (int i = 0; i < ITERS; i++) {
+                ama_keccak_f1600_generic(state);
+            }
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            long g = (t1.tv_sec - t0.tv_sec) * 1000000000L
+                   + (t1.tv_nsec - t0.tv_nsec);
+            if (generic_best < 0 || g < generic_best) generic_best = g;
+
+            clock_gettime(CLOCK_MONOTONIC, &t0);
+            for (int i = 0; i < ITERS; i++) {
+                simd_fn(state);
+            }
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            long s = (t1.tv_sec - t0.tv_sec) * 1000000000L
+                   + (t1.tv_nsec - t0.tv_nsec);
+            if (simd_best < 0 || s < simd_best) simd_best = s;
+        }
+
+        /* Revert only if SIMD is more than 10 % slower than generic's
+         * best — i.e., clearly and repeatably regressed. Within-band
+         * results are treated as "SIMD wins" since SIMD has lower peak
+         * latency even when averages overlap on noisy hosts. */
+        int simd_regressed = (simd_best > (generic_best + generic_best / 10));
+
+        if (simd_regressed) {
             if (pre_sve2_keccak != dispatch_table.keccak_f1600) {
                 dispatch_table.keccak_f1600 = pre_sve2_keccak;
             } else {
@@ -447,18 +492,20 @@ static void dispatch_init_internal(void) {
             }
             if (dispatch_verbose())
                 fprintf(stderr,
-                    "[AMA Dispatch] Auto-tune: SIMD keccak slower "
-                    "(%ld ns vs %ld ns generic) — reverted to %s\n",
-                    simd_ns, generic_ns,
+                    "[AMA Dispatch] Auto-tune: SIMD keccak regressed >10%% "
+                    "(best %ld ns vs %ld ns generic) — reverted to %s\n",
+                    simd_best, generic_best,
                     dispatch_table.keccak_f1600 == ama_keccak_f1600_generic
                         ? "generic" : "previous tier");
-        } else {
-            if (dispatch_verbose())
-                fprintf(stderr,
-                    "[AMA Dispatch] Auto-tune: SIMD keccak OK "
-                    "(%ld ns vs %ld ns generic)\n",
-                    simd_ns, generic_ns);
+        } else if (dispatch_verbose()) {
+            fprintf(stderr,
+                "[AMA Dispatch] Auto-tune: SIMD keccak kept "
+                "(best %ld ns vs %ld ns generic, within 10%% band)\n",
+                simd_best, generic_best);
         }
+    } else if (autotune_disabled && dispatch_verbose()) {
+        fprintf(stderr,
+            "[AMA Dispatch] Auto-tune: disabled via AMA_DISPATCH_NO_AUTOTUNE=1\n");
     }
 #endif /* !_MSC_VER */
 
@@ -470,6 +517,10 @@ static void dispatch_init_internal(void) {
                 dispatch_table.kyber_ntt ? "SIMD" : "generic (inline)");
         fprintf(stderr, "[AMA Dispatch] dil_ntt      -> %s\n",
                 dispatch_table.dilithium_ntt ? "SIMD" : "generic (inline)");
+        fprintf(stderr, "[AMA Dispatch] chacha20_x8 -> %s\n",
+                dispatch_table.chacha20_block_x8 ? "SIMD" : "scalar");
+        fprintf(stderr, "[AMA Dispatch] argon2_g     -> %s\n",
+                dispatch_table.argon2_g ? "SIMD" : "scalar");
         fprintf(stderr, "[AMA Dispatch] ed25519      -> scalar (no SIMD wired; backend chosen at build time)\n");
     }
 }
@@ -510,6 +561,49 @@ const ama_dispatch_table_t *ama_get_dispatch_table(void) {
     ama_dispatch_init();
     return &dispatch_table;
 }
+
+#ifdef AMA_TESTING_MODE
+/* ============================================================================
+ * Test-only dispatch overrides.
+ *
+ * These symbols are compiled ONLY for the ama_cryptography_test library
+ * (see CMakeLists.txt). They allow the C test harness to force the
+ * scalar fallback path for a specific algorithm, enabling byte-for-byte
+ * cross-verification between the SIMD and scalar implementations in a
+ * single test process.
+ *
+ * NEVER expose these in the installable shared/static library — they
+ * would be a dispatch-correctness footgun in production.
+ * ============================================================================ */
+
+void ama_test_force_argon2_g_scalar(void) {
+    ama_dispatch_init();
+    dispatch_table.argon2_g = NULL;
+}
+
+void ama_test_force_chacha20_block_x8_scalar(void) {
+    ama_dispatch_init();
+    dispatch_table.chacha20_block_x8 = NULL;
+}
+
+void ama_test_restore_argon2_g_avx2(void) {
+    ama_dispatch_init();
+#ifdef AMA_HAVE_AVX2_IMPL
+    if (dispatch_info.argon2 >= AMA_IMPL_AVX2) {
+        dispatch_table.argon2_g = ama_argon2_g_avx2;
+    }
+#endif
+}
+
+void ama_test_restore_chacha20_block_x8_avx2(void) {
+    ama_dispatch_init();
+#ifdef AMA_HAVE_AVX2_IMPL
+    if (dispatch_info.chacha20poly1305 >= AMA_IMPL_AVX2) {
+        dispatch_table.chacha20_block_x8 = ama_chacha20_block_x8_avx2;
+    }
+#endif
+}
+#endif /* AMA_TESTING_MODE */
 
 /**
  * Prints dispatch info to stderr (for diagnostics / benchmark output).
