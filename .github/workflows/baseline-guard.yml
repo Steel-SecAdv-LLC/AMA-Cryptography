@@ -1,0 +1,61 @@
+# Copyright 2025-2026 Steel Security Advisors LLC
+# Licensed under the Apache License, Version 2.0
+#
+# Baseline.json change guard.
+#
+# Any PR that modifies `benchmarks/baseline.json` must carry, in the PR
+# body and/or the commits touching the file, a line-item justification
+# per primitive, at least one measured ops/sec (or latency) reading, and
+# an identifier for the CI runner on which the measurement was taken.
+# See benchmarks/check_baseline_justification.py for the full contract
+# and docs/BENCHMARK_HISTORY.md for the motivating history.
+
+name: Baseline.json Change Guard
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/baseline.json"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  baseline-justification:
+    name: Enforce baseline.json justification
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          # We need the full history so `git show <base>:<path>` and
+          # `git log <base>..HEAD -- <path>` both work inside the checker.
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Resolve base ref
+        id: base
+        run: |
+          # For a PR, github.event.pull_request.base.sha is the merge-base
+          # commit on the target branch. We use that rather than
+          # origin/main because the PR may target a non-main branch.
+          echo "sha=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Run baseline justification guard
+        env:
+          # Write the PR body to a file first; passing it via the shell
+          # would be unsafe for bodies containing quotes, backticks, $,
+          # or backslashes. The script reads the file verbatim.
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s' "$PR_BODY" > /tmp/pr-body.txt
+          python benchmarks/check_baseline_justification.py \
+            --base-ref "${{ steps.base.outputs.sha }}" \
+            --head-ref HEAD \
+            --pr-body-file /tmp/pr-body.txt
