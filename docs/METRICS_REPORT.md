@@ -48,10 +48,10 @@ appeared externally.
 
 ```bash
 # Library Python
-find ama_cryptography -name '*.py' -type f | xargs wc -l | tail -1
+find ama_cryptography -name '*.py' -type f -print0 | xargs -0 wc -l | tail -1
 
 # Native C + headers
-find src/c include -type f \( -name '*.c' -o -name '*.h' \) | xargs wc -l | tail -1
+find src/c include -type f \( -name '*.c' -o -name '*.h' \) -print0 | xargs -0 wc -l | tail -1
 
 # Library total
 find ama_cryptography src/c include -type f \

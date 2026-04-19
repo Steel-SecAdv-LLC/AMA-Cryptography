@@ -192,8 +192,8 @@ protected package:
 3. **Ed25519** classical signature (RFC 8032)
 4. **ML-DSA-65** post-quantum signature (FIPS 204)
 
-Plus supporting operations: HKDF-SHA3-256 key derivation (RFC 5869,
-NIST SP 800-108) and RFC 3161 trusted timestamping.
+Plus supporting operations: HKDF-SHA3-256 key derivation (RFC 5869)
+and RFC 3161 trusted timestamping.
 
 The overall security argument is:
 
@@ -213,7 +213,8 @@ The overall security argument is:
 All layer keys are derived from a master secret via HKDF-SHA3-256 using
 distinct `info` strings for domain separation (RFC 5869 §3.3). Per RFC 5869
 §3, when `info` strings are distinct, derived keys are cryptographically
-independent under the assumption that SHA3-256 is a PRF.
+independent under the assumption that HKDF's underlying PRF, here
+HMAC-SHA3-256, behaves as a PRF.
 
 Domain-separation strings are fixed, versioned, and length-prefixed per the
 v2.1.5 security audit (see commit `b700050`, "Security audit fixes:
