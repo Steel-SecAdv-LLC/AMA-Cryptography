@@ -38,17 +38,38 @@ Measured as non-empty-allowed `wc -l` over source files in each scope.
 | Top-level Python (monitors, benchmarks, demos) | — | 3,094 |
 | Tests (`tests/**/*.py`) | 70 | 29,399 |
 | Cython (`*.pyx`, `*.pxd`) | — | 1,503 |
-| **Whole project** (source + docs + config) | — | **121,888** |
+| **Whole project** (source + docs + config) | — | **121,909** |
 
 **Library total (the figure that most closely tracks "library size"):
 46,235 lines** across 104 files under `ama_cryptography/`, `src/c/`,
 and `include/`. This supersedes any "11,246 LoC" claim that may have
 appeared externally.
 
-**Whole-project total** (`121,888` lines across Python, C, headers,
+**Whole-project total** (`121,909` lines across Python, C, headers,
 Cython, Markdown, YAML/TOML/JSON config, CMake) is the broader figure
 some external claims may have been referencing. Report whichever scope
 is relevant; always state which scope you mean.
+
+### Scope Composition
+
+The gap between "library" and "whole project" is informative: only
+**38%** of the repository is library code. The rest is tests, docs,
+config, and scaffolding — which is a healthy ratio for a security
+library that takes verification seriously.
+
+| Scope                                | Lines    | % of whole | Paths                                                   |
+|--------------------------------------|---------:|-----------:|---------------------------------------------------------|
+| Library (Python + C + headers)       | 46,235   | 37.9%      | `ama_cryptography/` + `src/c/` + `include/`             |
+| Tests                                | 29,399   | 24.1%      | `tests/**/*.py`                                         |
+| Top-level Python                     | 3,094    | 2.5%       | `*.py` at repo root                                     |
+| Cython                               | 1,503    | 1.2%       | `*.pyx` + `*.pxd`                                       |
+| Docs + config + build (remainder)    | 41,678   | 34.2%      | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile    |
+| **Whole-project total**              | **121,909** | **100%** | sum of the scopes above                                 |
+
+Test code (24.1%) is over half the size of the library (37.9%) —
+i.e. the test-to-library ratio is roughly **0.64**. Combined with
+docs+config (34.2%), non-library artifacts make up nearly two-thirds
+of the repo.
 
 ### Reproduction
 
