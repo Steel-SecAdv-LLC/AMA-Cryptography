@@ -690,9 +690,25 @@ def create_test_coverage():
         "Memory Security\n& Fuzzing",
         "Performance\n& Monitoring",
     ]
-    # Approximate historical distribution (snapshot from v2.0 test tree;
-    # current totals: see docs/METRICS_REPORT.md, ~2,028 test functions).
-    test_counts = [225, 186, 148, 166, 141]  # snapshot total = 866
+    # Test distribution by category, derived from the current tree by
+    # filename pattern-matching 69 test files and counting `def test_`
+    # occurrences per file. Recount + reclassify any time tests are added:
+    #
+    #   Core Crypto & NIST KATs: NIST KAT, AES-GCM, SHA-3, HKDF, Ed25519,
+    #     hybrid combiner, secure channel, crypto_api, RFC 3161, SIMD,
+    #     integrity, FROST, differential, monitor
+    #   PQC Backends & Integration: PQC backends, adversarial PQC, end-to-end
+    #     integration, comprehensive system, CLI/import/smoke, lazy imports
+    #   Key Management & Rotation: BIP32 HD derivation, rotation, HSM,
+    #     nonce tracker, session
+    #   Memory Security & Fuzzing: memory security, fuzz harness, penetration,
+    #     adversarial security, FIPS 140 self-test, audit regressions
+    #   Performance & Monitoring: benchmarks, adaptive posture, double-helix,
+    #     property-based Lyapunov, equations, numeric primitives
+    #
+    # Totals reconcile with docs/METRICS_REPORT.md (run reproduction commands
+    # there to re-verify before regenerating this chart).
+    test_counts = [518, 513, 268, 439, 288]  # sum = 2,026 (69 files)
     total_tests = sum(test_counts)
     percentages = [100 * c / total_tests for c in test_counts]
     colors = ["#22C55E", "#3B82F6", "#8B5CF6", "#F59E0B", "#EF4444"]
@@ -702,7 +718,7 @@ def create_test_coverage():
 
     ax1.set_xlabel("Number of Tests", fontsize=11)
     ax1.set_title("Test Distribution by Category", fontsize=12, fontweight="bold")
-    ax1.set_xlim(0, 270)
+    ax1.set_xlim(0, max(test_counts) * 1.25)
 
     # Add count and percentage labels
     for bar, val, pct in zip(bars, test_counts, percentages):
@@ -755,10 +771,8 @@ def create_test_coverage():
     ax2.grid(True, alpha=0.3)
 
     # Overall title
-    # Note: figures reflect a v2.0 historical snapshot of the test tree.
-    # For current counts, see docs/METRICS_REPORT.md.
     fig.suptitle(
-        f"Test Suite Coverage (v2.0 snapshot): {total_tests} Tests Across 32 Files",
+        f"Test Suite Coverage: {total_tests} Tests Across 69 Files",
         fontsize=14,
         fontweight="bold",
         y=1.02,
@@ -768,9 +782,9 @@ def create_test_coverage():
     fig.text(
         0.5,
         -0.06,
-        f"v2.0 snapshot: {total_tests} tests | 32 test files | "
+        f"Total: {total_tests} test functions | 69 test files | "
         "Categories: NIST KATs, PQC, Key Mgmt, Memory Security, Performance | "
-        "Current: see docs/METRICS_REPORT.md",
+        "Reproduction: docs/METRICS_REPORT.md",
         ha="center",
         fontsize=9,
         color="#6B7280",

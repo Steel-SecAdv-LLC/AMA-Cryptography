@@ -38,11 +38,17 @@ Measured as non-empty-allowed `wc -l` over source files in each scope.
 | Top-level Python (monitors, benchmarks, demos) | — | 3,094 |
 | Tests (`tests/**/*.py`) | 70 | 29,399 |
 | Cython (`*.pyx`, `*.pxd`) | — | 1,503 |
+| **Whole project** (source + docs + config) | — | **121,888** |
 
 **Library total (the figure that most closely tracks "library size"):
 46,235 lines** across 104 files under `ama_cryptography/`, `src/c/`,
 and `include/`. This supersedes any "11,246 LoC" claim that may have
 appeared externally.
+
+**Whole-project total** (`121,888` lines across Python, C, headers,
+Cython, Markdown, YAML/TOML/JSON config, CMake) is the broader figure
+some external claims may have been referencing. Report whichever scope
+is relevant; always state which scope you mean.
 
 ### Reproduction
 
@@ -67,6 +73,15 @@ find tests -name '*.py' -type f -print0 | xargs -0 wc -l | tail -1
 # Cython
 find . -type f \( -name '*.pyx' -o -name '*.pxd' \) ! -path './.git/*' -print0 \
     | xargs -0 wc -l | tail -1
+
+# Whole project (source + docs + config)
+find . -type f \
+    \( -name '*.py' -o -name '*.c' -o -name '*.h' -o -name '*.pyx' \
+    -o -name '*.pxd' -o -name '*.md' -o -name '*.yml' -o -name '*.yaml' \
+    -o -name '*.toml' -o -name '*.json' -o -name '*.cmake' \
+    -o -name 'CMakeLists.txt' -o -name 'Makefile' \) \
+    ! -path './.git/*' ! -path './build/*' -print0 \
+    | xargs -0 wc -l | tail -1
 ```
 
 ---
@@ -78,8 +93,8 @@ find . -type f \( -name '*.pyx' -o -name '*.pxd' \) ! -path './.git/*' -print0 \
 
 | Scope | Count |
 |-------|------:|
-| Python test files under `tests/` | 70 |
-| Python test function definitions | **2,028** |
+| Python test files under `tests/` (69 `test_*.py` + 1 `conftest.py`) | 70 |
+| Python test function definitions (2,026 in `test_*.py` + 2 in `conftest.py`) | **2,028** |
 | `test_*.c` files under `tests/c/` (ctest-registered) | 11 |
 | `bench_*.c` files under `tests/c/` (standalone, not in ctest) | 1 |
 | Fuzz harnesses under `fuzz/` | 12 C targets |
