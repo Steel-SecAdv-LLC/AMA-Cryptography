@@ -558,7 +558,7 @@ def create_test_coverage():
     fig.text(
         0.5,
         -0.06,
-        f"Chart: {total_tests} test functions across 69 test_*.py files "
+        f"v2.1.5 | Chart: {total_tests} test functions across 69 test_*.py files "
         "(excludes conftest.py; full headline is 2,028 across 70) | "
         "Categories: NIST KATs, PQC, Key Mgmt, Memory Security, Performance | "
         "Reproduction: docs/METRICS_REPORT.md",
