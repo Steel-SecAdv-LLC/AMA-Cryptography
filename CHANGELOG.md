@@ -27,9 +27,11 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 - X25519 scalar multiplication: rewrite `ama_x25519.c` onto the radix-2^51
   (`fe51.h`) field arithmetic already used by Ed25519. The portable
-  radix-2^16 (TweetNaCl-style) path is retained as an MSVC fallback since
-  `fe51` requires `__uint128_t`. Measured on x86-64 sandbox (median-of-5
-  via `build/bin/benchmark_c_raw --json`):
+  radix-2^16 (TweetNaCl-style) path is retained as a fallback for
+  toolchains that lack native `__int128` (MSVC and clang-cl on x86-64,
+  any 32-bit target); the fast path is gated on `AMA_FE51_AVAILABLE`,
+  which `fe51.h` defines when `__SIZEOF_INT128__` is set. Measured on
+  x86-64 sandbox (median-of-5 via `build/bin/benchmark_c_raw --json`):
   X25519 DH ~45 µs / ~19.5K ops/s, X25519 KeyGen ~62 µs / ~13K ops/s —
   roughly 15–20× the pre-change scalar path. Reproduce with
   `cmake --build build && ./build/bin/benchmark_c_raw --json`.

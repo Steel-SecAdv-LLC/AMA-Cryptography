@@ -68,8 +68,13 @@ RAW_C_MEDIANS_US = {
 # Category buckets for the test-coverage chart. Each entry is
 # (display_label, list_of_filename_substring_predicates). A test file
 # (basename) is assigned to the FIRST category whose predicate matches.
-# Files that match no predicate are bucketed into a fall-through
-# category so the chart cannot silently drop tests.
+# Files that match no predicate are tracked separately as uncategorized
+# (returned from `_count_test_functions_by_category()` as the third
+# tuple element) and are NOT included in the bucketed counts or the
+# chart's `total_tests`. `create_test_coverage()` surfaces any such
+# files to the build log so a new `test_*.py` added without a matching
+# rule is visible at chart-generation time instead of silently dropping
+# off the chart.
 _TEST_CATEGORY_RULES = [
     (
         "Core Crypto\n& NIST KATs",
@@ -628,6 +633,10 @@ def create_test_coverage():
     # entries are pytest fixtures, not tests).
     categories = [label for label, _ in _TEST_CATEGORY_RULES]
     test_counts, total_tests, unbucketed = _count_test_functions_by_category()
+    # File count is derived once here and reused in both the suptitle
+    # and the footer so they cannot disagree if tests are added or
+    # removed. It matches the set walked by `_count_test_functions_by_category()`.
+    n_files = len(list(TESTS_DIR.glob("test_*.py")))
     if unbucketed:
         # Surface in the build log so a new test file added without a
         # matching rule is noticed instead of silently dropped.
@@ -698,7 +707,7 @@ def create_test_coverage():
 
     # Overall title
     fig.suptitle(
-        f"Test Suite Coverage: {total_tests} Tests Across 69 `test_*.py` Files",
+        f"Test Suite Coverage: {total_tests} Tests Across {n_files} `test_*.py` Files",
         fontsize=14,
         fontweight="bold",
         y=1.02,
@@ -709,7 +718,7 @@ def create_test_coverage():
         0.5,
         -0.06,
         f"v2.1.5 | Chart: {total_tests} test functions across "
-        f"{len(list(TESTS_DIR.glob('test_*.py')))} test_*.py files "
+        f"{n_files} test_*.py files "
         "(scanned live at chart-generation time by "
         "_count_test_functions_by_category(); excludes conftest.py). "
         "Independent reproduction: docs/METRICS_REPORT.md.",
