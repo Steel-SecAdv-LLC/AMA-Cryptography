@@ -23,6 +23,41 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 ## [Unreleased]
 
 
+### BREAKING
+
+- **Argon2id output bit-space change (RFC 9106 conformance fix).** AMA's
+  scalar Argon2id implementation contained a pre-existing bug in
+  `blake2b_long` (H' / variable-output BLAKE2b, RFC 9106 §3.2): the loop
+  ran one iteration too far and re-hashed `V_{r+1}` to produce the tail
+  bytes instead of writing `V_{r+1}`'s output verbatim. Every memory
+  block produced during the fill, plus the final tag, had its trailing
+  32 bytes set to `BLAKE2b-32(V_{r+1})` rather than `V_{r+1}[32..63]`,
+  so AMA's Argon2id output diverged from the spec for every parameter
+  combination (verified against `argon2-cffi` 25.1.0 / phc-winner-argon2
+  master). This affects AMA versions ≤ 2.1.5 (the bug is reachable in
+  every prior release of `ama_argon2.c`'s scalar path). The fix in this
+  release brings AMA byte-for-byte in line with RFC 9106 across an
+  11-case parameter sweep including `t ∈ {1,2,3,4}`,
+  `m ∈ {8,32,64,128,1024} KiB`, `p ∈ {1,2,4}`, and
+  `out_len ∈ {16,32,64,128}`.
+
+  **Migration required for any system storing AMA-derived Argon2id
+  hashes.** Hashes produced by AMA ≤ 2.1.5 sit in the prior non-spec
+  bit-space and will not verify against post-fix AMA — or against any
+  other RFC 9106 implementation. Recommended migration:
+    1. Keep the AMA ≤ 2.1.5 derivation accessible for verification only
+       (e.g. behind a `legacy_argon2id_verify(...)` shim that retains
+       the pre-fix `blake2b_long` loop).
+    2. On the next successful login, verify against the legacy path; if
+       it succeeds, immediately re-derive with the post-fix
+       `ama_argon2id` and overwrite the stored hash.
+    3. After a deprecation window appropriate for the deployment's
+       login frequency, remove the legacy path.
+
+  No other public API or output format changes; ChaCha20-Poly1305,
+  Ed25519, X25519, AES-256-GCM, SHA-3, ML-KEM, ML-DSA, and SPHINCS+
+  outputs are unaffected.
+
 ### Performance
 
 - X25519 scalar multiplication: rewrite `ama_x25519.c` onto the radix-2^51
