@@ -103,3 +103,37 @@ The 10× jump is therefore not explained by code.
 
 The goal of this document plus the guard is therefore not to roll back
 history but to stop the pattern from recurring.
+
+## ChaCha20-Poly1305 / Argon2id AVX2 wiring (`perf: wire chacha20poly1305 + argon2 AVX2`)
+
+Landed with `tests/c/test_chacha20poly1305.c`, `tests/c/test_argon2id.c`,
+the dispatch hook in `ama_dispatch.c`, the `benchmark_c_raw` coverage
+for both primitives, and the scalar-vs-AVX2 A/B harness that can be
+toggled without a rebuild (`AMA_DISPATCH_NO_CHACHA_AVX2=1` and
+`AMA_DISPATCH_NO_ARGON2_AVX2=1`).
+
+Measured on x86-64 sandbox (median-of-N from `benchmark_c_raw`):
+
+| Primitive                            | Scalar (µs) | AVX2 (µs) | Speedup |
+| --- | ---: | ---: | ---: |
+| ChaCha20-Poly1305 encrypt 256 B *    | 1.19        | 1.15      | 1.03×   |
+| ChaCha20-Poly1305 encrypt 1 KB       | 3.59        | 1.70      | **2.11×** |
+| ChaCha20-Poly1305 encrypt 4 KB       | 13.23       | 5.91      | **2.24×** |
+| ChaCha20-Poly1305 encrypt 64 KB      | 208.2       | 90.8      | **2.29×** |
+| Argon2id m=64 KiB, t=1, p=1          | 73.0        | 55.7      | **1.31×** |
+| Argon2id m=1 MiB, t=1, p=1           | 755         | 562       | **1.34×** |
+
+\* 256 B is below the 512 B 8-way threshold — AVX2 path is not
+entered, and the matching latency is expected.
+
+Correctness of the AVX2 paths is asserted byte-for-byte:
+- ChaCha20 — against an independent RFC 8439 §2.3 reference block
+  function embedded in `tests/c/test_chacha20poly1305.c`.
+- Argon2 — against the scalar `argon2_G` via the
+  `ama_test_force_argon2_g_scalar()` dispatch hook across six
+  parameter combinations.
+
+No baseline values in `benchmarks/baseline.json` were changed by the
+wiring work; the entries above are new benchmark columns in the
+`benchmark_c_raw` output, not entries the CI regression gate
+currently tracks.

@@ -260,8 +260,8 @@ NIST-standardized post-quantum algorithms:
 - `internal/ama_sha2.h`: Extracted SHA-512 header-only implementation (deduplication for Ed25519/SPHINCS+)
 
 **Hand-Written SIMD Implementations (`src/c/avx2/`, `src/c/neon/`, `src/c/sve2/`):**
-- 8 algorithms × 3 architectures = 24 optimized SIMD source files
-- `avx2/`: ML-KEM (vectorized NTT/Barrett), ML-DSA (vectorized NTT q=8380417), SPHINCS+ (4-way SHA-256), SHA3 (Keccak-f[1600] AVX2), AES-GCM (pipelined AES-NI + PCLMULQDQ GHASH), Ed25519 (vectorized field arithmetic), ChaCha20-Poly1305 (8-way parallel quarter-rounds), Argon2 (vectorized Blake2b)
+- 23 optimized SIMD source files (7 AVX2 + 8 NEON + 8 SVE2). The Ed25519 AVX2 path was removed in PR #238 because the scalar `fe51` field-arithmetic backend was already faster than the vector trampoline; NEON and SVE2 retain their Ed25519 entries.
+- `avx2/`: ML-KEM (vectorized NTT/Barrett), ML-DSA (vectorized NTT q=8380417), SPHINCS+ (4-way SHA-256), SHA3 (Keccak-f[1600] AVX2), AES-GCM (pipelined AES-NI + PCLMULQDQ GHASH), ChaCha20-Poly1305 (8-way parallel block function, ≥512 B ≈ 2.1–2.3×), Argon2 (4-way BlaMka G over AVX2 YMM, ≈1.3×)
 - `neon/`: ARM NEON 128-bit vector equivalents using `<arm_neon.h>` intrinsics + ARM Crypto Extensions
 - `sve2/`: ARM SVE2 scalable vector implementations for variable-length SIMD
 - `avx512/`: AVX-512 (x86-64) — **planned future feature**, not yet implemented; the CMake option `AMA_ENABLE_AVX512` is reserved for this release

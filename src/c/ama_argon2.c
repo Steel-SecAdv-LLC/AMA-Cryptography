@@ -34,6 +34,7 @@
  */
 
 #include "../include/ama_cryptography.h"
+#include "../include/ama_dispatch.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -287,55 +288,63 @@ static void blake2b_long(uint8_t *out, size_t outlen, const uint8_t *in, size_t 
     uint8_t outlen_le[4];
     store32_le(outlen_le, (uint32_t)outlen);
 
-    if (outlen <= 64) {
+    if (outlen <= BLAKE2B_OUTBYTES) {
         blake2b_state S;
         blake2b_init_param(&S, outlen, NULL, 0);
         blake2b_update(&S, outlen_le, 4);
         blake2b_update(&S, in, inlen);
         blake2b_final(&S, out);
         ama_secure_memzero(&S, sizeof(S));
-    } else {
-        /* First block: V1 = BLAKE2b-64(outlen || X) */
-        uint8_t V_curr[BLAKE2B_OUTBYTES];
-        uint8_t V_prev[BLAKE2B_OUTBYTES];
+        return;
+    }
 
+    /* RFC 9106 §3.2 H' for outlen > 64 (all sizes are in bytes):
+     *   V_1        = BLAKE2b-64( LE32(outlen) || X )
+     *   V_i        = BLAKE2b-64( V_{i-1} )           for i = 2 .. r
+     *   V_{r+1}    = BLAKE2b-(outlen - 32*r)( V_r )
+     *   H'(outlen, X) = V_1[0..31] || V_2[0..31] || ... || V_r[0..31] || V_{r+1}
+     *
+     * Equivalent PHC "toproduce" control-flow (blake2b.c blake2b_long):
+     *   write V_1[0..31];          toproduce  = outlen - 32
+     *   while (toproduce > 64)     write V_i[0..31];   toproduce -= 32
+     *   write V_{r+1} (exactly toproduce bytes — could be 33..64 at termination)
+     *
+     * A prior implementation ran one extra loop iteration and then called
+     * BLAKE2b-(outlen-32*(r+1)) against V_{r+1}, producing a non-RFC tail
+     * (~32 bytes wrong at the end of every block, which silently corrupted
+     * every Argon2 block after the memory fill started). Fixed to mirror
+     * PHC's termination exactly.
+     */
+    uint8_t V_curr[BLAKE2B_OUTBYTES];
+    uint8_t V_prev[BLAKE2B_OUTBYTES];
+
+    {
         blake2b_state S;
-        blake2b_init_param(&S, 64, NULL, 0);
+        blake2b_init_param(&S, BLAKE2B_OUTBYTES, NULL, 0);
         blake2b_update(&S, outlen_le, 4);
         blake2b_update(&S, in, inlen);
         blake2b_final(&S, V_prev);
         ama_secure_memzero(&S, sizeof(S));
-
-        /* Copy first 32 bytes of V1 to output */
-        memcpy(out, V_prev, 32);
-        size_t pos = 32;
-
-        /* How many full 32-byte chunks remain? */
-        /* Total 32-byte chunks = ceil(outlen/32)
-         * We already output one chunk from V1.
-         * We need (ceil(outlen/32) - 1) more chunks.
-         * Of those, (ceil(outlen/32) - 2) come from full 64-byte hashes,
-         * and the last one might be shorter.
-         */
-        size_t total_chunks = (outlen + 31) / 32;
-        /* total_chunks - 1 more to produce (we already did chunk 0) */
-
-        for (size_t i = 1; i < total_chunks - 1; i++) {
-            /* Vi = BLAKE2b-64(V_{i-1}) */
-            blake2b(V_prev, 64, V_curr, 64);
-            memcpy(out + pos, V_curr, 32);
-            pos += 32;
-            memcpy(V_prev, V_curr, 64);
-        }
-
-        /* Last block: remaining bytes */
-        size_t remaining = outlen - pos;
-        blake2b(V_prev, 64, V_curr, remaining);
-        memcpy(out + pos, V_curr, remaining);
-
-        ama_secure_memzero(V_curr, sizeof(V_curr));
-        ama_secure_memzero(V_prev, sizeof(V_prev));
     }
+
+    memcpy(out, V_prev, BLAKE2B_OUTBYTES / 2);
+    out += BLAKE2B_OUTBYTES / 2;
+    size_t toproduce = outlen - BLAKE2B_OUTBYTES / 2;
+
+    while (toproduce > BLAKE2B_OUTBYTES) {
+        blake2b(V_prev, BLAKE2B_OUTBYTES, V_curr, BLAKE2B_OUTBYTES);
+        memcpy(out, V_curr, BLAKE2B_OUTBYTES / 2);
+        memcpy(V_prev, V_curr, BLAKE2B_OUTBYTES);
+        out += BLAKE2B_OUTBYTES / 2;
+        toproduce -= BLAKE2B_OUTBYTES / 2;
+    }
+
+    /* V_{r+1}: output exactly `toproduce` bytes (toproduce ∈ [33, 64]). */
+    blake2b(V_prev, BLAKE2B_OUTBYTES, V_curr, toproduce);
+    memcpy(out, V_curr, toproduce);
+
+    ama_secure_memzero(V_curr, sizeof(V_curr));
+    ama_secure_memzero(V_prev, sizeof(V_prev));
 }
 
 /* ============================================================================
@@ -395,7 +404,7 @@ static void blamka_round(
 }
 
 /**
- * G compression function.
+ * G compression function (scalar fallback).
  *
  * Takes two 1024-byte blocks X, Y and produces result R.
  * R = X XOR Y
@@ -403,7 +412,7 @@ static void blamka_round(
  * an 8x16 matrix of uint64_t values.
  * Finally XOR the result with R (pre-round) again.
  */
-static void argon2_G(argon2_block *result, const argon2_block *X, const argon2_block *Y)
+static void argon2_G_scalar(argon2_block *result, const argon2_block *X, const argon2_block *Y)
 {
     argon2_block R;
     argon2_block Z;
@@ -441,14 +450,39 @@ static void argon2_G(argon2_block *result, const argon2_block *X, const argon2_b
     }
 }
 
+/* Dispatched G: the caller caches the AVX2 function pointer (or NULL for
+ * the scalar fallback) once per ama_argon2id() invocation via
+ * ama_get_dispatch_table() and threads it through the fill loops.
+ *
+ * Caching avoids ~(m_cost × t_cost) repeated ama_dispatch_init() /
+ * pthread_once checks inside the innermost Argon2id hot path. After the
+ * pthread_once-guarded init, ama_get_dispatch_table() is a trivial pointer
+ * return — but "trivial" across a few million BlaMka compressions at
+ * m=1 GiB, t=3 is still a measurable branch + load that buys nothing.
+ *
+ * argon2_block is a struct wrapping uint64_t v[128] exactly, so taking
+ * ->v is ABI-stable and aliases the backing storage. */
+static void argon2_G(ama_argon2_g_fn g_fn,
+                      argon2_block *result, const argon2_block *X,
+                      const argon2_block *Y)
+{
+    if (g_fn) {
+        g_fn(result->v, X->v, Y->v);
+    } else {
+        argon2_G_scalar(result, X, Y);
+    }
+}
+
 /**
  * G' compression: like G but XOR result with existing block content.
  * Used in passes > 0 (XOR mode per Argon2 spec).
  */
-static void argon2_G_xor(argon2_block *result, const argon2_block *X, const argon2_block *Y)
+static void argon2_G_xor(ama_argon2_g_fn g_fn,
+                          argon2_block *result, const argon2_block *X,
+                          const argon2_block *Y)
 {
     argon2_block tmp;
-    argon2_G(&tmp, X, Y);
+    argon2_G(g_fn, &tmp, X, Y);
     for (int i = 0; i < ARGON2_QWORDS_IN_BLOCK; i++) {
         result->v[i] ^= tmp.v[i];
     }
@@ -647,6 +681,14 @@ AMA_API ama_error_t ama_argon2id(
 
     ama_secure_memzero(H0, sizeof(H0));
 
+    /* Cache the dispatch G function pointer once for the whole fill.
+     * Hoists the pthread_once check and the struct field load out of
+     * the (pass × slice × lane × segment_length) hot loop — where a
+     * single branch + indirect call per iteration costs materially
+     * more than the memory-latency-bound BlaMka body at large m_cost. */
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    ama_argon2_g_fn g_fn = dt->argon2_g;
+
     /* ----------------------------------------------------------------
      * Step 4: Fill remaining blocks
      *
@@ -681,8 +723,8 @@ AMA_API ama_error_t ama_argon2id(
                      * (e.g., 2 for pass 0, slice 0), so the in-loop
                      * generation at idx%128==0 would be skipped. */
                     input_block.v[6] = 1;
-                    argon2_G(&address_block, &zero_block, &input_block);
-                    argon2_G(&address_block, &zero_block, &address_block);
+                    argon2_G(g_fn, &address_block, &zero_block, &input_block);
+                    argon2_G(g_fn, &address_block, &zero_block, &address_block);
                 }
 
                 uint32_t start_index = 0;
@@ -712,8 +754,8 @@ AMA_API ama_error_t ama_argon2id(
                          * Skip for idx==0 since we pre-generated with counter=1. */
                         if (idx > 0 && idx % ARGON2_QWORDS_IN_BLOCK == 0) {
                             input_block.v[6]++;
-                            argon2_G(&address_block, &zero_block, &input_block);
-                            argon2_G(&address_block, &zero_block, &address_block);
+                            argon2_G(g_fn, &address_block, &zero_block, &input_block);
+                            argon2_G(g_fn, &address_block, &zero_block, &address_block);
                         }
                         pseudo_rand = address_block.v[idx % ARGON2_QWORDS_IN_BLOCK];
                     } else {
@@ -727,11 +769,11 @@ AMA_API ama_error_t ama_argon2id(
 
                     /* Apply compression function */
                     if (pass == 0) {
-                        argon2_G(&memory[curr_offset],
+                        argon2_G(g_fn, &memory[curr_offset],
                                  &memory[prev_offset],
                                  &memory[ref_index]);
                     } else {
-                        argon2_G_xor(&memory[curr_offset],
+                        argon2_G_xor(g_fn, &memory[curr_offset],
                                      &memory[prev_offset],
                                      &memory[ref_index]);
                     }

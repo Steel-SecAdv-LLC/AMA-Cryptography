@@ -88,6 +88,21 @@ typedef ama_error_t (*ama_aes_gcm_decrypt_fn)(const uint8_t *ciphertext, size_t 
                                                const uint8_t key[32], const uint8_t nonce[12],
                                                const uint8_t tag[16], uint8_t *plaintext);
 
+/** ChaCha20 8-way block function: emits 8 * 64 = 512 bytes of keystream
+ * for blocks [counter, counter+7]. Byte-identical to scalar chacha20_block
+ * on little-endian hosts (x86-64 is always LE). */
+typedef void (*ama_chacha20_block_x8_fn)(const uint8_t key[32],
+                                          const uint8_t nonce[12],
+                                          uint32_t counter,
+                                          uint8_t out[512]);
+
+/** Argon2 G compression on a 1024-byte block (128 uint64_t).
+ * out = R XOR Z where R = X XOR Y and Z = P-permutation(R).
+ * Must be byte-identical to the scalar argon2_G (RFC 9106 Section 3.5). */
+typedef void (*ama_argon2_g_fn)(uint64_t out[128],
+                                const uint64_t x[128],
+                                const uint64_t y[128]);
+
 /* ============================================================================
  * Dispatch function table (global, set once at init)
  *
@@ -115,6 +130,8 @@ typedef struct {
     ama_dilithium_pointwise_fn dilithium_pointwise; /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_aes_gcm_encrypt_fn    aes_gcm_encrypt;       /**< Non-NULL when AES-NI+PCLMULQDQ detected; callers MUST NULL-check */
     ama_aes_gcm_decrypt_fn    aes_gcm_decrypt;       /**< Non-NULL when AES-NI+PCLMULQDQ detected; callers MUST NULL-check */
+    ama_chacha20_block_x8_fn  chacha20_block_x8;     /**< Non-NULL when AVX2 ChaCha20 detected; emits 8 blocks / 512 B */
+    ama_argon2_g_fn           argon2_g;              /**< Non-NULL when AVX2 Argon2 G detected; 1024 B compression */
 } ama_dispatch_table_t;
 
 /* ============================================================================

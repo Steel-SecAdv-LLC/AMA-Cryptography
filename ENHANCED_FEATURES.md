@@ -133,6 +133,15 @@ Automatic best-implementation selection at initialization:
 - `ama_get_dispatch_info()` API for querying active implementations
 - CPU feature detection via extended `ama_cpuid.c`
 - Set `AMA_DISPATCH_VERBOSE=1` to enable diagnostic output during init
+- Set `AMA_DISPATCH_NO_AUTOTUNE=1` to skip the Keccak-f[1600]
+  SIMD-vs-scalar microbench at init (the auto-tune is already
+  best-of-5 with a 10 % hysteresis band, so opting out is only
+  needed when init latency itself matters more than Keccak
+  throughput selection)
+- Set `AMA_DISPATCH_NO_CHACHA_AVX2=1` or `AMA_DISPATCH_NO_ARGON2_AVX2=1`
+  to force the scalar path for ChaCha20-Poly1305 or Argon2id
+  without a rebuild — useful for A/B benchmarking and for
+  smoke-testing the scalar fallback in a production binary
 
 > **Phase 2 Complete:** SIMD implementations are compiled, verified via KAT
 > tests, and wired into the runtime dispatch table.  API calls automatically

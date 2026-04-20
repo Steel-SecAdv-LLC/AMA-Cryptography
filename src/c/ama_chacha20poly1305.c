@@ -31,6 +31,7 @@
  */
 
 #include "../include/ama_cryptography.h"
+#include "../include/ama_dispatch.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -59,12 +60,21 @@ static inline void chacha20_quarter_round(uint32_t *a, uint32_t *b,
 
 /**
  * Load a 32-bit little-endian word from a byte buffer.
+ *
+ * memcpy with an explicit 4-byte length is the idiomatic bounds-safe
+ * form: compilers lower it to a single unaligned load on x86-64 /
+ * AArch64 (same codegen as a per-byte accumulator), and static
+ * analyzers trust the length parameter — avoiding interprocedural
+ * false positives when callers hand in pointers that originate from
+ * heap allocations elsewhere in the call graph.
  */
 static inline uint32_t load32_le(const uint8_t *p) {
-    return (uint32_t)p[0]
-         | ((uint32_t)p[1] << 8)
-         | ((uint32_t)p[2] << 16)
-         | ((uint32_t)p[3] << 24);
+    uint32_t v;
+    memcpy(&v, p, sizeof(v));
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    v = __builtin_bswap32(v);
+#endif
+    return v;
 }
 
 /**
@@ -150,18 +160,39 @@ static void chacha20_block(const uint8_t key[32], uint32_t counter,
 /**
  * ChaCha20 encryption/decryption (symmetric, XOR with keystream).
  * Counter starts at the specified value.
+ *
+ * Fast path: When the runtime dispatcher has selected an 8-way block
+ * function (currently AVX2 on x86-64), messages of >= 512 bytes are
+ * processed in 512-byte chunks, generating eight keystream blocks per
+ * call. The AVX2 keystream is byte-identical to the scalar path, so
+ * RFC 8439 KATs apply unchanged. Remaining bytes fall through to the
+ * scalar single-block loop.
  */
 static void chacha20_xor(const uint8_t key[32], uint32_t initial_counter,
                          const uint8_t nonce[12],
                          const uint8_t *input, uint8_t *output, size_t len) {
-    uint8_t keystream[64];
+    /* 512-byte keystream buffer covers both the 8-way AVX2 path and
+     * any trailing scalar blocks. Zeroed at the end regardless. */
+    uint8_t keystream[512];
     uint32_t counter = initial_counter;
-    size_t i;
+
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (dt->chacha20_block_x8) {
+        while (len >= 512) {
+            dt->chacha20_block_x8(key, nonce, counter, keystream);
+            for (size_t i = 0; i < 512; i++)
+                output[i] = input[i] ^ keystream[i];
+            input  += 512;
+            output += 512;
+            len    -= 512;
+            counter += 8;
+        }
+    }
 
     while (len > 0) {
         chacha20_block(key, counter, nonce, keystream);
         size_t block_len = (len < 64) ? len : 64;
-        for (i = 0; i < block_len; i++)
+        for (size_t i = 0; i < block_len; i++)
             output[i] = input[i] ^ keystream[i];
         input += block_len;
         output += block_len;
