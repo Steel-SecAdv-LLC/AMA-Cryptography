@@ -170,7 +170,9 @@ static void test_avx2_scalar_parity(void) {
  * ---------------------------------------------------------------- */
 static void test_drift_detection_anchor(void) {
     const uint8_t password[] = "password";
-    const uint8_t salt[16]   = "saltsaltsaltsalt";
+    const uint8_t salt[16]   = {
+        's','a','l','t','s','a','l','t','s','a','l','t','s','a','l','t'
+    };
     const uint32_t t_cost    = 2;
     const uint32_t m_cost    = 64;
     const uint32_t parallelism = 1;
@@ -207,7 +209,9 @@ static void test_drift_detection_anchor(void) {
                 "drift-anchor: same inputs produce same tag (determinism)");
 
     /* Soundness: different salt produces different tag. */
-    uint8_t alt_salt[16] = "DIFFSALTDIFFSALT";
+    uint8_t alt_salt[16] = {
+        'D','I','F','F','S','A','L','T','D','I','F','F','S','A','L','T'
+    };
     uint8_t alt_tag[32];
     rc = ama_argon2id(password, sizeof(password) - 1,
                       alt_salt, sizeof(alt_salt),

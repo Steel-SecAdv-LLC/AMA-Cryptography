@@ -540,7 +540,12 @@ static bench_result_t bench_chacha20poly1305_encrypt(size_t data_size, int iters
 /* --- Argon2id (exercises AVX2 BlaMka G) --- */
 static bench_result_t bench_argon2id(uint32_t m_cost, int iters, int warmup) {
     const uint8_t password[] = "benchmark-password-argon2-avx2";
-    const uint8_t salt[16]   = "SIXTEEN-BYTE-SLT";
+    /* Explicit 16-byte salt (no string literal → no dependence on the
+     * "trailing NUL dropped when array size matches char count" corner
+     * of C11 §6.7.9 ¶14, which some toolchains warn or error on). */
+    const uint8_t salt[16]   = {
+        'S','I','X','T','E','E','N','-','B','Y','T','E','-','S','L','T'
+    };
     uint8_t tag[32];
 
     for (int i = 0; i < warmup; i++)
