@@ -386,7 +386,7 @@ setup(
         # PyCA cryptography — only needed as fallback when native C library is not available
         "legacy": ["cryptography>=41.0.7"],
         # PKCS#11 support for hardware security modules
-        "hsm": ["PyKCS11>=1.5.0"],
+        "hsm": ["PyKCS11>=1.5.18"],
         # PyNaCl reserved for future libsodium integration; not currently used
         "secure-memory": ["pynacl>=1.6.2"],
         # NOTE: pyproject.toml [project.optional-dependencies.dev] is authoritative.
@@ -399,7 +399,7 @@ setup(
             "hypothesis>=6.0.0",
             "black==24.10.0; python_version=='3.9'",
             "black>=26.3.1; python_version>='3.10'",
-            "ruff>=0.4.0",
+            "ruff>=0.15.11",
             "mypy>=1.9.0",
             "bandit>=1.7.0",
             "safety>=2.3.0",
@@ -409,12 +409,12 @@ setup(
         ],
         "docs": [
             "sphinx>=7.4.7",
-            "sphinx-rtd-theme>=1.2.0",
+            "sphinx-rtd-theme>=3.1.0",
             "sphinx-autodoc-typehints>=2.3.0",
         ],
         "all": [
             "pynacl>=1.6.2",
-            "PyKCS11>=1.5.0",
+            "PyKCS11>=1.5.18",
             "pytest>=7.0.0",
             "pytest-cov>=4.0.0",
             "pytest-timeout>=2.1.0",
@@ -423,13 +423,13 @@ setup(
             "hypothesis>=6.0.0",
             "black==24.10.0; python_version=='3.9'",
             "black>=26.3.1; python_version>='3.10'",
-            "ruff>=0.4.0",
+            "ruff>=0.15.11",
             "mypy>=1.9.0",
             "bandit>=1.7.0",
             "safety>=2.3.0",
             "Cython>=3.2.4",
             "sphinx>=7.4.7",
-            "sphinx-rtd-theme>=1.2.0",
+            "sphinx-rtd-theme>=3.1.0",
             "sphinx-autodoc-typehints>=2.3.0",
             "numpy>=1.24.0",
             "scipy>=1.11.0",

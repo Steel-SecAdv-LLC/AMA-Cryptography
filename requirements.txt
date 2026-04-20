@@ -33,7 +33,7 @@
 # HSM integration (OPTIONAL)
 # PKCS#11 support for hardware security modules
 # Install with: pip install "ama-cryptography[hsm]"
-# PyKCS11>=1.5.0
+# PyKCS11>=1.5.18
 
 # Mathematical monitoring dependencies (OPTIONAL)
 # The core cryptographic operations work without numpy/scipy.

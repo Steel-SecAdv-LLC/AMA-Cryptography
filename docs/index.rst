@@ -1,5 +1,5 @@
 AMA Cryptography Documentation
-============================
+==============================
 
 Welcome to the AMA Cryptography documentation. This system provides quantum-resistant
 cryptographic protection with a multi-language architecture optimized for both
