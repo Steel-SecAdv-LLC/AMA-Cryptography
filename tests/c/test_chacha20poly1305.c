@@ -262,6 +262,10 @@ static void test_tag_mismatch(void) {
     TEST_ASSERT(rc == AMA_SUCCESS, "tag-mismatch setup encrypt SUCCESS");
 
     tag[0] ^= 0x01; /* Flip one bit */
+    /* Pre-fill dec with a non-zero canary so the "zeroed on failure"
+     * assertion below genuinely tests the implementation's zeroing
+     * behaviour, not whatever happened to be on the stack. */
+    memset(dec, 0xA5, sizeof(dec));
     rc = ama_chacha20poly1305_decrypt(
         key, nonce, ct, sizeof(pt), NULL, 0, tag, dec);
     TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,

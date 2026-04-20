@@ -450,21 +450,24 @@ static void argon2_G_scalar(argon2_block *result, const argon2_block *X, const a
     }
 }
 
-/* Dispatched G: reads the dispatch table on each invocation. After the
- * pthread_once-guarded ama_dispatch_init, ama_get_dispatch_table() is
- * a trivial pointer return, so the per-call overhead is a single branch
- * and an indirect call — negligible against the ~500 64-bit multiplies
- * in one BlaMka compression. INVARIANT-15 compliant (the dispatch
- * initialization is itself once-guarded; no mutable state here).
+/* Dispatched G: the caller caches the AVX2 function pointer (or NULL for
+ * the scalar fallback) once per ama_argon2id() invocation via
+ * ama_get_dispatch_table() and threads it through the fill loops.
+ *
+ * Caching avoids ~(m_cost × t_cost) repeated ama_dispatch_init() /
+ * pthread_once checks inside the innermost Argon2id hot path. After the
+ * pthread_once-guarded init, ama_get_dispatch_table() is a trivial pointer
+ * return — but "trivial" across a few million BlaMka compressions at
+ * m=1 GiB, t=3 is still a measurable branch + load that buys nothing.
  *
  * argon2_block is a struct wrapping uint64_t v[128] exactly, so taking
  * ->v is ABI-stable and aliases the backing storage. */
-static void argon2_G(argon2_block *result, const argon2_block *X,
+static void argon2_G(ama_argon2_g_fn g_fn,
+                      argon2_block *result, const argon2_block *X,
                       const argon2_block *Y)
 {
-    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
-    if (dt->argon2_g) {
-        dt->argon2_g(result->v, X->v, Y->v);
+    if (g_fn) {
+        g_fn(result->v, X->v, Y->v);
     } else {
         argon2_G_scalar(result, X, Y);
     }
@@ -474,10 +477,12 @@ static void argon2_G(argon2_block *result, const argon2_block *X,
  * G' compression: like G but XOR result with existing block content.
  * Used in passes > 0 (XOR mode per Argon2 spec).
  */
-static void argon2_G_xor(argon2_block *result, const argon2_block *X, const argon2_block *Y)
+static void argon2_G_xor(ama_argon2_g_fn g_fn,
+                          argon2_block *result, const argon2_block *X,
+                          const argon2_block *Y)
 {
     argon2_block tmp;
-    argon2_G(&tmp, X, Y);
+    argon2_G(g_fn, &tmp, X, Y);
     for (int i = 0; i < ARGON2_QWORDS_IN_BLOCK; i++) {
         result->v[i] ^= tmp.v[i];
     }
@@ -676,6 +681,14 @@ AMA_API ama_error_t ama_argon2id(
 
     ama_secure_memzero(H0, sizeof(H0));
 
+    /* Cache the dispatch G function pointer once for the whole fill.
+     * Hoists the pthread_once check and the struct field load out of
+     * the (pass × slice × lane × segment_length) hot loop — where a
+     * single branch + indirect call per iteration costs materially
+     * more than the memory-latency-bound BlaMka body at large m_cost. */
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    ama_argon2_g_fn g_fn = dt->argon2_g;
+
     /* ----------------------------------------------------------------
      * Step 4: Fill remaining blocks
      *
@@ -710,8 +723,8 @@ AMA_API ama_error_t ama_argon2id(
                      * (e.g., 2 for pass 0, slice 0), so the in-loop
                      * generation at idx%128==0 would be skipped. */
                     input_block.v[6] = 1;
-                    argon2_G(&address_block, &zero_block, &input_block);
-                    argon2_G(&address_block, &zero_block, &address_block);
+                    argon2_G(g_fn, &address_block, &zero_block, &input_block);
+                    argon2_G(g_fn, &address_block, &zero_block, &address_block);
                 }
 
                 uint32_t start_index = 0;
@@ -741,8 +754,8 @@ AMA_API ama_error_t ama_argon2id(
                          * Skip for idx==0 since we pre-generated with counter=1. */
                         if (idx > 0 && idx % ARGON2_QWORDS_IN_BLOCK == 0) {
                             input_block.v[6]++;
-                            argon2_G(&address_block, &zero_block, &input_block);
-                            argon2_G(&address_block, &zero_block, &address_block);
+                            argon2_G(g_fn, &address_block, &zero_block, &input_block);
+                            argon2_G(g_fn, &address_block, &zero_block, &address_block);
                         }
                         pseudo_rand = address_block.v[idx % ARGON2_QWORDS_IN_BLOCK];
                     } else {
@@ -756,11 +769,11 @@ AMA_API ama_error_t ama_argon2id(
 
                     /* Apply compression function */
                     if (pass == 0) {
-                        argon2_G(&memory[curr_offset],
+                        argon2_G(g_fn, &memory[curr_offset],
                                  &memory[prev_offset],
                                  &memory[ref_index]);
                     } else {
-                        argon2_G_xor(&memory[curr_offset],
+                        argon2_G_xor(g_fn, &memory[curr_offset],
                                      &memory[prev_offset],
                                      &memory[ref_index]);
                     }
