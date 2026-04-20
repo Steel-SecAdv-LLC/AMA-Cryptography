@@ -90,11 +90,10 @@ todo_include_todos = True
 
 # HTML output options
 html_theme = "sphinx_rtd_theme"
+# sphinx-rtd-theme >=3.0.0 removed canonical_url, analytics_id, logo_only, and
+# display_version; the project version is now rendered automatically via the
+# Sphinx `version` variable defined above.
 html_theme_options = {
-    "canonical_url": "",
-    "analytics_id": "",
-    "logo_only": False,
-    "display_version": True,
     "prev_next_buttons_location": "bottom",
     "style_external_links": False,
     "style_nav_header_background": "#2980B9",

@@ -1,5 +1,5 @@
 # AMA-Cryptography pinned development dependencies
-# Generated: 2026-03-31
+# Generated: 2026-04-20
 # Python: 3.11.14
 # Platform: linux (x86_64)
 #
@@ -22,7 +22,7 @@ coverage==7.13.5
 black==26.3.1
 mypy==1.19.1
 mypy_extensions==1.1.0
-ruff==0.15.10
+ruff==0.15.11
 
 # --- Security scanning ---
 bandit==1.9.4
@@ -54,8 +54,8 @@ pathspec==1.0.4
 platformdirs==4.9.4
 pluggy==1.6.0
 py-cpuinfo==9.0.0
-pydantic==2.12.5
-pydantic_core==2.41.5
+pydantic==2.13.2
+pydantic_core==2.46.2
 # CVE-2026-4539: ReDoS in Pygments AdlLexer GUID regex (local-access only).
 # Pygments is a transitive dev dependency (via rich/bandit) — not used at runtime.
 # No fixed version available as of 2026-03-26; pinned to latest.
