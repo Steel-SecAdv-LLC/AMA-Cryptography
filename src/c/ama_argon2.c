@@ -288,55 +288,63 @@ static void blake2b_long(uint8_t *out, size_t outlen, const uint8_t *in, size_t 
     uint8_t outlen_le[4];
     store32_le(outlen_le, (uint32_t)outlen);
 
-    if (outlen <= 64) {
+    if (outlen <= BLAKE2B_OUTBYTES) {
         blake2b_state S;
         blake2b_init_param(&S, outlen, NULL, 0);
         blake2b_update(&S, outlen_le, 4);
         blake2b_update(&S, in, inlen);
         blake2b_final(&S, out);
         ama_secure_memzero(&S, sizeof(S));
-    } else {
-        /* First block: V1 = BLAKE2b-64(outlen || X) */
-        uint8_t V_curr[BLAKE2B_OUTBYTES];
-        uint8_t V_prev[BLAKE2B_OUTBYTES];
+        return;
+    }
 
+    /* RFC 9106 §3.2 H' for outlen > 64 (all sizes are in bytes):
+     *   V_1        = BLAKE2b-64( LE32(outlen) || X )
+     *   V_i        = BLAKE2b-64( V_{i-1} )           for i = 2 .. r
+     *   V_{r+1}    = BLAKE2b-(outlen - 32*r)( V_r )
+     *   H'(outlen, X) = V_1[0..31] || V_2[0..31] || ... || V_r[0..31] || V_{r+1}
+     *
+     * Equivalent PHC "toproduce" control-flow (blake2b.c blake2b_long):
+     *   write V_1[0..31];          toproduce  = outlen - 32
+     *   while (toproduce > 64)     write V_i[0..31];   toproduce -= 32
+     *   write V_{r+1} (exactly toproduce bytes — could be 33..64 at termination)
+     *
+     * A prior implementation ran one extra loop iteration and then called
+     * BLAKE2b-(outlen-32*(r+1)) against V_{r+1}, producing a non-RFC tail
+     * (~32 bytes wrong at the end of every block, which silently corrupted
+     * every Argon2 block after the memory fill started). Fixed to mirror
+     * PHC's termination exactly.
+     */
+    uint8_t V_curr[BLAKE2B_OUTBYTES];
+    uint8_t V_prev[BLAKE2B_OUTBYTES];
+
+    {
         blake2b_state S;
-        blake2b_init_param(&S, 64, NULL, 0);
+        blake2b_init_param(&S, BLAKE2B_OUTBYTES, NULL, 0);
         blake2b_update(&S, outlen_le, 4);
         blake2b_update(&S, in, inlen);
         blake2b_final(&S, V_prev);
         ama_secure_memzero(&S, sizeof(S));
-
-        /* Copy first 32 bytes of V1 to output */
-        memcpy(out, V_prev, 32);
-        size_t pos = 32;
-
-        /* How many full 32-byte chunks remain? */
-        /* Total 32-byte chunks = ceil(outlen/32)
-         * We already output one chunk from V1.
-         * We need (ceil(outlen/32) - 1) more chunks.
-         * Of those, (ceil(outlen/32) - 2) come from full 64-byte hashes,
-         * and the last one might be shorter.
-         */
-        size_t total_chunks = (outlen + 31) / 32;
-        /* total_chunks - 1 more to produce (we already did chunk 0) */
-
-        for (size_t i = 1; i < total_chunks - 1; i++) {
-            /* Vi = BLAKE2b-64(V_{i-1}) */
-            blake2b(V_prev, 64, V_curr, 64);
-            memcpy(out + pos, V_curr, 32);
-            pos += 32;
-            memcpy(V_prev, V_curr, 64);
-        }
-
-        /* Last block: remaining bytes */
-        size_t remaining = outlen - pos;
-        blake2b(V_prev, 64, V_curr, remaining);
-        memcpy(out + pos, V_curr, remaining);
-
-        ama_secure_memzero(V_curr, sizeof(V_curr));
-        ama_secure_memzero(V_prev, sizeof(V_prev));
     }
+
+    memcpy(out, V_prev, BLAKE2B_OUTBYTES / 2);
+    out += BLAKE2B_OUTBYTES / 2;
+    size_t toproduce = outlen - BLAKE2B_OUTBYTES / 2;
+
+    while (toproduce > BLAKE2B_OUTBYTES) {
+        blake2b(V_prev, BLAKE2B_OUTBYTES, V_curr, BLAKE2B_OUTBYTES);
+        memcpy(out, V_curr, BLAKE2B_OUTBYTES / 2);
+        memcpy(V_prev, V_curr, BLAKE2B_OUTBYTES);
+        out += BLAKE2B_OUTBYTES / 2;
+        toproduce -= BLAKE2B_OUTBYTES / 2;
+    }
+
+    /* V_{r+1}: output exactly `toproduce` bytes (toproduce ∈ [33, 64]). */
+    blake2b(V_prev, BLAKE2B_OUTBYTES, V_curr, toproduce);
+    memcpy(out, V_curr, toproduce);
+
+    ama_secure_memzero(V_curr, sizeof(V_curr));
+    ama_secure_memzero(V_prev, sizeof(V_prev));
 }
 
 /* ============================================================================

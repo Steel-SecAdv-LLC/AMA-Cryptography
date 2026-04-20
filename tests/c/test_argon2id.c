@@ -142,33 +142,19 @@ static void test_avx2_scalar_parity(void) {
 }
 
 /* ----------------------------------------------------------------
- * 2. Drift-detection anchor (NOT an RFC 9106 KAT).
+ * 2. RFC 9106 / P-H-C argon2-cffi cross-check KAT.
  *
- * The expected_tag bytes below are a snapshot of the AMA scalar
- * Argon2id output for these exact parameters, captured with the
- * implementation as it stands at this commit. They exist to detect
- * future drift in either the BlaMka constants, the address-block
- * pipeline, the H0 input encoding, or the BLAKE2b-long finaliser —
- * anything that would change tag bytes for a fixed input.
+ * The expected_tag bytes below are the P-H-C reference output for
+ * these exact parameters, cross-verified against argon2-cffi 25.1.0
+ * (which bundles the upstream phc-winner-argon2 C code). AMA must
+ * match byte-for-byte.
  *
- * NOTE — known divergence from the argon2-cffi reference library:
- *   AMA's Argon2id output does NOT match the canonical reference
- *   implementation (P-H-C / argon2-cffi 25.1.0) for these same
- *   inputs. The reference produces 8b a3 fa 70 2b d2 c0 8f ...,
- *   whereas AMA produces 80 d1 4b 9e d6 be 4f 9f .... This
- *   pre-dates the AVX2 wiring of PR #239 (verified against
- *   commit b37c0f4 with both AVX2 and scalar paths) and is
- *   therefore tracked separately as a latent spec-conformance
- *   issue, not a regression of this PR. The AVX2 wiring is byte-
- *   for-byte equivalent to the existing scalar path (verified by
- *   test_avx2_scalar_parity above) — both produce the same drift
- *   from the spec.
- *
- * The expected_tag below is therefore a self-consistency anchor:
- *   it asserts that the AVX2 path matches the SCALAR path matches
- *   the recorded snapshot. It does NOT claim spec compliance.
+ * Also catches future drift in any of: BlaMka constants, H0 input
+ * encoding, address-block pipeline, index_alpha reference-area
+ * arithmetic, or the BLAKE2b-long finaliser. Any one of those
+ * regressing breaks this assertion immediately.
  * ---------------------------------------------------------------- */
-static void test_drift_detection_anchor(void) {
+static void test_rfc9106_kat(void) {
     const uint8_t password[] = "password";
     const uint8_t salt[16]   = {
         's','a','l','t','s','a','l','t','s','a','l','t','s','a','l','t'
@@ -178,13 +164,14 @@ static void test_drift_detection_anchor(void) {
     const uint32_t parallelism = 1;
     const size_t out_len     = 32;
 
-    /* Snapshot from AMA scalar path (commits up to and including
-     * PR #239). DOES NOT match argon2-cffi reference output. */
+    /* P-H-C argon2id reference output for the above parameters,
+     * verified independently with argon2-cffi 25.1.0 and the upstream
+     * `argon2` CLI (phc-winner-argon2 master). */
     const uint8_t expected_tag[32] = {
-        0x80,0xd1,0x4b,0x9e,0xd6,0xbe,0x4f,0x9f,
-        0x22,0x3b,0x22,0x14,0xbb,0x36,0xab,0xc0,
-        0xa0,0x99,0x9a,0x3d,0x3f,0x28,0x16,0x20,
-        0xb8,0x7f,0x4a,0x76,0x22,0xfd,0xa3,0xa8,
+        0x8b,0xa3,0xfa,0x70,0x2b,0xd2,0xc0,0x8f,
+        0xc6,0xa7,0x83,0x0e,0xde,0x5f,0x30,0xbe,
+        0x3a,0x17,0x51,0xed,0x49,0x2f,0x31,0xcd,
+        0x7d,0x76,0xa0,0xa4,0x80,0x72,0x5b,0x5a,
     };
 
     uint8_t tag[32];
@@ -193,20 +180,19 @@ static void test_drift_detection_anchor(void) {
                                    t_cost, m_cost, parallelism,
                                    tag, out_len);
     TEST_ASSERT(rc == AMA_SUCCESS,
-                "drift-anchor: derivation SUCCESS");
+                "rfc9106-kat: derivation SUCCESS");
     TEST_ASSERT(memcmp(tag, expected_tag, 32) == 0,
-                "drift-anchor: tag matches recorded AMA snapshot "
-                "(NOT a spec-KAT — see header comment)");
+                "rfc9106-kat: tag matches P-H-C argon2-cffi reference "
+                "(byte-for-byte RFC 9106 conformance)");
 
-    /* Self-consistency anchor: rerun same inputs and verify stability.
-     * (Determinism + fixed params + fixed version = stable bytes.) */
+    /* Determinism: rerun same inputs must give identical tag. */
     uint8_t tag2[32];
     rc = ama_argon2id(password, sizeof(password) - 1,
                       salt, sizeof(salt),
                       t_cost, m_cost, parallelism,
                       tag2, out_len);
     TEST_ASSERT(rc == AMA_SUCCESS && memcmp(tag, tag2, 32) == 0,
-                "drift-anchor: same inputs produce same tag (determinism)");
+                "rfc9106-kat: same inputs produce same tag (determinism)");
 
     /* Soundness: different salt produces different tag. */
     uint8_t alt_salt[16] = {
@@ -218,7 +204,7 @@ static void test_drift_detection_anchor(void) {
                       t_cost, m_cost, parallelism,
                       alt_tag, out_len);
     TEST_ASSERT(rc == AMA_SUCCESS && memcmp(tag, alt_tag, 32) != 0,
-                "drift-anchor: different salt produces different tag");
+                "rfc9106-kat: different salt produces different tag");
 }
 
 /* ----------------------------------------------------------------
@@ -248,7 +234,7 @@ int main(void) {
     printf("===========================================\n\n");
 
     test_avx2_scalar_parity();
-    test_drift_detection_anchor();
+    test_rfc9106_kat();
     test_parameter_validation();
 
     printf("\n%d checks, %d failures\n", checks, failures);
