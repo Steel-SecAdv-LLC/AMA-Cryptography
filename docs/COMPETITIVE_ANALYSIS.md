@@ -1,10 +1,10 @@
-# AMA-Cryptography: Competitive Analysis
+# AMA Cryptography: Competitive Analysis
 
 > Generated 2026-04-20 | Covers AMA Cryptography post-Phase 3 (SIMD + PQC)
 
 ## Executive Summary
 
-AMA-Cryptography occupies a unique position in the cryptographic landscape: it is
+AMA Cryptography occupies a unique position in the cryptographic landscape: it is
 the only open-source framework that ships **post-quantum signatures (ML-DSA-65,
 ML-KEM-1024, SLH-DSA-256f), classical Ed25519, HMAC-SHA3-256, HKDF-SHA3-256,
 AES-256-GCM, ChaCha20-Poly1305, and Argon2id** in a single, zero-dependency
@@ -25,7 +25,7 @@ No competing library offers the same combination of:
 
 ## Detailed Comparison Matrix
 
-| Feature | AMA-Cryptography | libsodium 1.0.20 | OpenSSL 3.3 | liboqs 0.10 | Bouncy Castle 1.78 | AWS-LC 1.24 |
+| Feature | AMA Cryptography | libsodium 1.0.20 | OpenSSL 3.3 | liboqs 0.10 | Bouncy Castle 1.78 | AWS-LC 1.24 |
 |---|---|---|---|---|---|---|
 | **License** | Apache-2.0 | ISC | Apache-2.0 | MIT | MIT | Apache-2.0 |
 | **Language** | C + Python | C | C | C | Java/C# | C |
@@ -67,7 +67,7 @@ Widely deployed (Signal, Wireguard, age).
 (by design). No HKDF-SHA3. No hybrid PQC combiner. SIMD is limited to
 Ed25519 and ChaCha20 (no Argon2, no SHA3, no NTT vectorization).
 
-**AMA-Cryptography advantage**: Full PQC suite, SHA3-256 throughout, 8-algorithm
+**AMA Cryptography advantage**: Full PQC suite, SHA3-256 throughout, 8-algorithm
 SIMD vs 2-algorithm, adaptive posture, 4-layer defense, RFC 3161 timestamping.
 
 **libsodium advantage**: Battle-tested in production for 10+ years. Smaller
@@ -87,7 +87,7 @@ PQC only available via third-party providers. No SHA3-based HMAC/HKDF
 natively. No Argon2. No adaptive security posture. No SVE2 SIMD paths.
 No ethical constraint binding.
 
-**AMA-Cryptography advantage**: SHA3-256 as default hash (vs SHA-256),
+**AMA Cryptography advantage**: SHA3-256 as default hash (vs SHA-256),
 integrated PQC (not a plugin), Argon2id, ethical HKDF context,
 SVE2 SIMD paths, smaller attack surface, zero external dependencies.
 
@@ -107,7 +107,7 @@ No SIMD optimizations for most algorithms. No HMAC, HKDF, or key derivation.
 Not designed for standalone use — requires pairing with OpenSSL or libsodium.
 No constant-time verification (dudect). No runtime dispatch.
 
-**AMA-Cryptography advantage**: Complete standalone stack (PQC + classical),
+**AMA Cryptography advantage**: Complete standalone stack (PQC + classical),
 hand-written SIMD for all PQC algorithms, runtime dispatch, FIPS self-test,
 4-layer defense architecture, Python API.
 
@@ -126,7 +126,7 @@ Mature (~20 years).
 than C for NTT operations. No constant-time guarantees (JVM JIT unpredictable).
 No Python support. No adaptive posture. Large JAR size.
 
-**AMA-Cryptography advantage**: Native C performance with SIMD (10-50x faster
+**AMA Cryptography advantage**: Native C performance with SIMD (10-50x faster
 for PQC operations), constant-time guarantees, Python API, smaller footprint,
 adaptive posture.
 
@@ -145,7 +145,7 @@ Used in AWS SDK, s2n-tls.
 (uses SHA-256 throughout). No Argon2. No Python API. No adaptive posture.
 AWS-centric ecosystem.
 
-**AMA-Cryptography advantage**: Full PQC suite (ML-DSA + SPHINCS+ + ML-KEM),
+**AMA Cryptography advantage**: Full PQC suite (ML-DSA + SPHINCS+ + ML-KEM),
 SHA3-256 default, Argon2id, Python API, SVE2 SIMD, adaptive posture,
 ethical constraint binding.
 
@@ -168,7 +168,7 @@ integration, battle-tested in AWS infrastructure.
 | Poly1305 | Vectorized | Vectorized | Scalable | Yes | Yes | Yes |
 | Argon2 Blake2b | Vectorized | Vectorized | Scalable | Partial | N/A | N/A |
 
-**Key insight**: AMA-Cryptography is the only library with SIMD coverage across
+**Key insight**: AMA Cryptography is the only library with SIMD coverage across
 all 8 algorithm families on all 3 architectures (x86-64, AArch64, ARMv9).
 
 ---
@@ -183,7 +183,7 @@ No competitor implements a multi-layer verification pipeline:
 - **Layer 4**: HKDF-SHA3-256 key derivation verification (RFC 5869)
 
 ### 2. Adaptive Security Posture
-AMA-Cryptography dynamically escalates cryptographic strength based on threat
+AMA Cryptography dynamically escalates cryptographic strength based on threat
 telemetry (via the 3R monitoring system). No other library adjusts algorithm
 selection at runtime in response to detected anomalies.
 
@@ -192,12 +192,12 @@ HKDF key derivation contexts include ethical pillar weights, cryptographically
 binding derived keys to governance constraints. This is novel in the field.
 
 ### 4. SHA3-256 as Default
-While most libraries default to SHA-256, AMA-Cryptography uses SHA3-256
+While most libraries default to SHA-256, AMA Cryptography uses SHA3-256
 (Keccak) throughout, providing resistance against length-extension attacks
 and future-proofing against potential SHA-2 weaknesses.
 
 ### 5. SVE2 SIMD (Scalable Vector Extension 2)
-AMA-Cryptography is the first open-source crypto library to ship SVE2-optimized
+AMA Cryptography is the first open-source crypto library to ship SVE2-optimized
 paths for all 8 algorithm families, preparing for ARMv9 server adoption
 (AWS Graviton4, Ampere Altra Max, etc.).
 
@@ -207,7 +207,7 @@ paths for all 8 algorithm families, preparing for ARMv9 server adoption
 
 Based on AMA measured benchmarks on x86-64 (CI shared runner, generic C path):
 
-| Operation | AMA-Cryptography (measured) | Competitor Reference |
+| Operation | AMA Cryptography (measured) | Competitor Reference |
 |---|---|---|
 | SHA3-256 (1KB) | ~3.4 us (298K ops/s) | OpenSSL: varies by hardware |
 | HMAC-SHA3-256 (1KB) | ~4.9 us (203K ops/s) | OpenSSL: varies by hardware |
@@ -221,7 +221,7 @@ Based on AMA measured benchmarks on x86-64 (CI shared runner, generic C path):
 **Note**: AMA numbers are measured from `phase0_baseline_results.json` and
 `benchmarks/benchmark_c_raw.c` on GitHub Actions CI runners (generic C path, no SIMD
 dispatch at time of measurement). Competitor numbers are published reference
-values and may differ across hardware. AMA-Cryptography is competitive for
+values and may differ across hardware. AMA Cryptography is competitive for
 PQC operations. Classical Ed25519 is approximately 2x slower than libsodium
 due to libsodium's highly optimized assembly backends and extensive
 precomputed tables; narrowing this gap is an active development priority.
@@ -242,7 +242,7 @@ precomputed tables; narrowing this gap is an active development priority.
 
 ## Conclusion
 
-AMA-Cryptography is the most **comprehensive** single-library cryptographic
+AMA Cryptography is the most **comprehensive** single-library cryptographic
 framework available, combining post-quantum and classical algorithms with
 SIMD optimization, adaptive security, and ethical governance — all in a
 zero-dependency package. While individual competitors may outperform AMA
