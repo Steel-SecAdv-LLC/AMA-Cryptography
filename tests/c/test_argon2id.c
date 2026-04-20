@@ -61,25 +61,39 @@ static void hex_dump(const char *label, const uint8_t *buf, size_t n) {
  * rotation constants.
  * ---------------------------------------------------------------- */
 
+/* Salt is a fixed 16-byte array (not a NUL-terminated string) so the
+ * test vector bytes are explicit and never accidentally include a
+ * trailing '\0'. salt_len is derived from sizeof(c->salt) at the call
+ * site. */
 typedef struct {
     const char *name;
     const char *password;
-    const char *salt;
-    size_t salt_len;
-    uint32_t t_cost;
-    uint32_t m_cost;
-    uint32_t parallelism;
-    size_t out_len;
+    uint8_t     salt[16];
+    uint32_t    t_cost;
+    uint32_t    m_cost;
+    uint32_t    parallelism;
+    size_t      out_len;
 } argon2_case_t;
 
 static const argon2_case_t cases[] = {
-    { "minimum",          "password",   "saltsaltsaltsalt", 16, 1, 8,   1, 32 },
-    { "standard-1KiB",    "password",   "saltsaltsaltsalt", 16, 1, 64,  1, 32 },
-    { "two-pass-64KiB",   "correct horse battery staple",
-                                        "NaCl-16-byte-sa",  16, 2, 64,  1, 32 },
-    { "4-lanes",          "parallelism", "1234567812345678", 16, 1, 64,  4, 32 },
-    { "64-byte-tag",      "longertag",   "sixteenbytesalt",  16, 1, 64,  1, 64 },
-    { "empty-password",   "",            "emptypassword16",  16, 1, 64,  1, 32 },
+    { "minimum",        "password",
+      {'s','a','l','t','s','a','l','t','s','a','l','t','s','a','l','t'},
+      1, 8,  1, 32 },
+    { "standard-1KiB",  "password",
+      {'s','a','l','t','s','a','l','t','s','a','l','t','s','a','l','t'},
+      1, 64, 1, 32 },
+    { "two-pass-64KiB", "correct horse battery staple",
+      {'N','a','C','l','-','1','6','-','b','y','t','e','-','s','l','t'},
+      2, 64, 1, 32 },
+    { "4-lanes",        "parallelism",
+      {'1','2','3','4','5','6','7','8','1','2','3','4','5','6','7','8'},
+      1, 64, 4, 32 },
+    { "64-byte-tag",    "longertag",
+      {'s','i','x','t','e','e','n','-','b','y','t','e','s','a','l','t'},
+      1, 64, 1, 64 },
+    { "empty-password", "",
+      {'e','m','p','t','y','p','a','s','s','w','o','r','d','1','6','!'},
+      1, 64, 1, 32 },
 };
 
 static void test_avx2_scalar_parity(void) {
@@ -96,7 +110,7 @@ static void test_avx2_scalar_parity(void) {
         ama_test_restore_argon2_g_avx2();
         ama_error_t rc1 = ama_argon2id(
             (const uint8_t *)c->password, strlen(c->password),
-            (const uint8_t *)c->salt, c->salt_len,
+            c->salt, sizeof(c->salt),
             c->t_cost, c->m_cost, c->parallelism,
             tag_avx2, c->out_len);
 
@@ -104,7 +118,7 @@ static void test_avx2_scalar_parity(void) {
         ama_test_force_argon2_g_scalar();
         ama_error_t rc2 = ama_argon2id(
             (const uint8_t *)c->password, strlen(c->password),
-            (const uint8_t *)c->salt, c->salt_len,
+            c->salt, sizeof(c->salt),
             c->t_cost, c->m_cost, c->parallelism,
             tag_scalar, c->out_len);
 

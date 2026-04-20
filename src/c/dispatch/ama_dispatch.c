@@ -63,6 +63,16 @@ static ama_dispatch_info_t dispatch_info;
 static ama_dispatch_table_t dispatch_table;
 static AMA_ONCE_FLAG dispatch_once_flag = AMA_ONCE_FLAG_INIT;
 
+#ifdef AMA_TESTING_MODE
+/* Snapshot of dispatch_table immediately after dispatch_init_internal
+ * completes. Used by ama_test_restore_*_avx2() so "restore" returns to
+ * the dispatcher's actual post-init choice — including any opt-outs
+ * applied via AMA_DISPATCH_NO_*_AVX2 env vars — rather than blindly
+ * re-enabling the AVX2 pointer.  Test-only.
+ */
+static ama_dispatch_table_t dispatch_table_post_init;
+#endif
+
 /* ============================================================================
  * CPU feature detection helpers
  * ============================================================================ */
@@ -449,11 +459,16 @@ static void dispatch_init_internal(void) {
         }
 
         /* Run 5 trials of 2000 iterations each; take the minimum (best
-         * run) which is the most resistant to scheduling jitter. */
+         * run) which is the most resistant to scheduling jitter.
+         *
+         * Use int64_t (not long) for nanosecond accumulators: on ILP32
+         * platforms long is 32-bit, and (tv_sec * 1000000000) overflows
+         * after ~2.1 s — easily reachable on a contended CI runner —
+         * which would silently flip the regression decision. */
         const int TRIALS = 5;
         const int ITERS  = 2000;
-        long generic_best = -1;
-        long simd_best    = -1;
+        int64_t generic_best = -1;
+        int64_t simd_best    = -1;
         ama_keccak_f1600_fn simd_fn = dispatch_table.keccak_f1600;
 
         for (int trial = 0; trial < TRIALS; trial++) {
@@ -464,8 +479,8 @@ static void dispatch_init_internal(void) {
                 ama_keccak_f1600_generic(state);
             }
             clock_gettime(CLOCK_MONOTONIC, &t1);
-            long g = (t1.tv_sec - t0.tv_sec) * 1000000000L
-                   + (t1.tv_nsec - t0.tv_nsec);
+            int64_t g = (int64_t)(t1.tv_sec - t0.tv_sec) * INT64_C(1000000000)
+                      + (int64_t)(t1.tv_nsec - t0.tv_nsec);
             if (generic_best < 0 || g < generic_best) generic_best = g;
 
             clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -473,8 +488,8 @@ static void dispatch_init_internal(void) {
                 simd_fn(state);
             }
             clock_gettime(CLOCK_MONOTONIC, &t1);
-            long s = (t1.tv_sec - t0.tv_sec) * 1000000000L
-                   + (t1.tv_nsec - t0.tv_nsec);
+            int64_t s = (int64_t)(t1.tv_sec - t0.tv_sec) * INT64_C(1000000000)
+                      + (int64_t)(t1.tv_nsec - t0.tv_nsec);
             if (simd_best < 0 || s < simd_best) simd_best = s;
         }
 
@@ -493,15 +508,15 @@ static void dispatch_init_internal(void) {
             if (dispatch_verbose())
                 fprintf(stderr,
                     "[AMA Dispatch] Auto-tune: SIMD keccak regressed >10%% "
-                    "(best %ld ns vs %ld ns generic) — reverted to %s\n",
-                    simd_best, generic_best,
+                    "(best %lld ns vs %lld ns generic) — reverted to %s\n",
+                    (long long)simd_best, (long long)generic_best,
                     dispatch_table.keccak_f1600 == ama_keccak_f1600_generic
                         ? "generic" : "previous tier");
         } else if (dispatch_verbose()) {
             fprintf(stderr,
                 "[AMA Dispatch] Auto-tune: SIMD keccak kept "
-                "(best %ld ns vs %ld ns generic, within 10%% band)\n",
-                simd_best, generic_best);
+                "(best %lld ns vs %lld ns generic, within 10%% band)\n",
+                (long long)simd_best, (long long)generic_best);
         }
     } else if (autotune_disabled && dispatch_verbose()) {
         fprintf(stderr,
@@ -523,6 +538,15 @@ static void dispatch_init_internal(void) {
                 dispatch_table.argon2_g ? "SIMD" : "scalar");
         fprintf(stderr, "[AMA Dispatch] ed25519      -> scalar (no SIMD wired; backend chosen at build time)\n");
     }
+
+#ifdef AMA_TESTING_MODE
+    /* Snapshot post-init dispatch state for ama_test_restore_*_avx2().
+     * Captures the actual choices the dispatcher made — including any
+     * env-var opt-outs (AMA_DISPATCH_NO_*_AVX2) and the auto-tune
+     * verdict — so that "restore" returns to that state rather than
+     * blindly re-enabling AVX2. */
+    dispatch_table_post_init = dispatch_table;
+#endif
 }
 
 /* ============================================================================
@@ -574,7 +598,16 @@ const ama_dispatch_table_t *ama_get_dispatch_table(void) {
  *
  * NEVER expose these in the installable shared/static library — they
  * would be a dispatch-correctness footgun in production.
+ *
+ * Prototypes declared here (rather than in a public header) so the
+ * symbols are visible only to the AMA_TESTING_MODE compilation unit
+ * and to test C files that forward-declare them inline.
  * ============================================================================ */
+
+void ama_test_force_argon2_g_scalar(void);
+void ama_test_force_chacha20_block_x8_scalar(void);
+void ama_test_restore_argon2_g_avx2(void);
+void ama_test_restore_chacha20_block_x8_avx2(void);
 
 void ama_test_force_argon2_g_scalar(void) {
     ama_dispatch_init();
@@ -586,22 +619,29 @@ void ama_test_force_chacha20_block_x8_scalar(void) {
     dispatch_table.chacha20_block_x8 = NULL;
 }
 
+/* Restore the function pointer to its post-dispatch_init value (which
+ * reflects: detected ISA support, AMA_DISPATCH_NO_*_AVX2 env opt-outs,
+ * and the SHA-3 auto-tune verdict). This makes the test hooks
+ * round-trip cleanly with the env opt-outs the production library
+ * already exposes — a test that does:
+ *
+ *     setenv("AMA_DISPATCH_NO_ARGON2_AVX2", "1", 1);
+ *     ama_argon2id(...);            // scalar (env opt-out)
+ *     ama_test_force_argon2_g_scalar();
+ *     ama_argon2id(...);            // scalar (test hook)
+ *     ama_test_restore_argon2_g_avx2();
+ *     ama_argon2id(...);            // STILL scalar (env opt-out
+ *                                   // remembered from init snapshot)
+ *
+ * gets predictable behavior, which is what the reviewer asked for. */
 void ama_test_restore_argon2_g_avx2(void) {
     ama_dispatch_init();
-#ifdef AMA_HAVE_AVX2_IMPL
-    if (dispatch_info.argon2 >= AMA_IMPL_AVX2) {
-        dispatch_table.argon2_g = ama_argon2_g_avx2;
-    }
-#endif
+    dispatch_table.argon2_g = dispatch_table_post_init.argon2_g;
 }
 
 void ama_test_restore_chacha20_block_x8_avx2(void) {
     ama_dispatch_init();
-#ifdef AMA_HAVE_AVX2_IMPL
-    if (dispatch_info.chacha20poly1305 >= AMA_IMPL_AVX2) {
-        dispatch_table.chacha20_block_x8 = ama_chacha20_block_x8_avx2;
-    }
-#endif
+    dispatch_table.chacha20_block_x8 = dispatch_table_post_init.chacha20_block_x8;
 }
 #endif /* AMA_TESTING_MODE */
 
