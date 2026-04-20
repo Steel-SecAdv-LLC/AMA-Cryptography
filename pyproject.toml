@@ -80,7 +80,7 @@ legacy = [
 ]
 hsm = [
     # PKCS#11 support for hardware security modules
-    "PyKCS11>=1.5.0",
+    "PyKCS11>=1.5.18",
 ]
 secure-memory = [
     # PyNaCl reserved for future libsodium integration; not currently used.
