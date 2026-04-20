@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 2.1.5 |
-| Last Updated | 2026-04-17 |
+| Last Updated | 2026-04-20 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -143,6 +143,22 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 - Benchmark coverage for `ama_chacha20poly1305_encrypt` at 256 B,
   1 KB, 4 KB, 64 KB and `ama_argon2id` at m=64 KiB and m=1 MiB in
   `benchmarks/benchmark_c_raw.c`.
+
+### Documentation
+
+- Repository-wide documentation alignment sweep (2026-04-20): refreshed
+  "Last Updated" headers across `README.md`, `ARCHITECTURE.md`,
+  `SECURITY.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
+  `CRYPTOGRAPHY.md`, `CONSTANT_TIME_VERIFICATION.md`, `MONITORING.md`,
+  `ENHANCED_FEATURES.md`, `IMPLEMENTATION_GUIDE.md`, `THREAT_MODEL.md`,
+  `CSRC_STANDARDS.md`, `CSRC_ALIGN_REPORT.md`,
+  `AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md`, `.github/INVARIANTS.md`,
+  `docs/DESIGN_NOTES.md`, `docs/METRICS_REPORT.md`,
+  `docs/COMPETITIVE_ANALYSIS.md`, `wiki/Home.md`, and
+  `wiki/Security-Model.md` to a consistent 2026-04-20 timestamp to
+  restore cross-document date alignment. No functional or technical
+  content was modified; historical release-history rows and
+  benchmark-measurement dates were preserved.
 
 ---
 
