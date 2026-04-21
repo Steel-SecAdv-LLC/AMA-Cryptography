@@ -95,24 +95,35 @@ with reproduction commands.
 | SLH-DSA SigVer | FIPS 205 | ACVP SLH-DSA-sigVer-FIPS205 | SLH-DSA-SHA2-256f (external/pure, TG 5) | 14 | 14 | 100% |
 | **TOTAL** | | | | **815** | **815** | **100%** |
 
-**5,793 vectors were skipped total**, split as:
+**5,793 vectors were skipped total**, split into two buckets by the kind
+of thing that was skipped:
 
-- **4,757 non-MCT skips** — LDT, VOT, non-byte-aligned inputs, non-target
-  parameter sets (ML-KEM-512/768, ML-DSA-44/87, SLH-DSA non-SHA2-256f),
-  ML-KEM encapsulation (randomness parameter `m` not exposed by the AMA
-  API), and ML-DSA / SLH-DSA internal and pre-hash test groups. This is
-  the number reported by `nist_vectors/results.json::summary.total_skipped`
-  and surfaced as `total_skipped_non_mct` in the CI
-  `validation_summary.json`.
-- **1,036 MCT skips** — Monte Carlo Test groups across all algorithms;
-  MCT requires iterative state not exposed by the one-shot AMA FFI.
-  Tracked by the harness as per-algorithm `mct_skipped` and surfaced as
-  `total_mct_skipped` in `validation_summary.json`.
+- **4,757 AFT-filtered skips** — individual vectors filtered out *within*
+  AFT (Algorithm Functional Test) groups: non-byte-aligned inputs,
+  non-target parameter sets (ML-KEM-512/768, ML-DSA-44/87, SLH-DSA
+  non-SHA2-256f), ML-KEM encapsulation (randomness parameter `m` not
+  exposed by the AMA API), and ML-DSA / SLH-DSA internal and pre-hash
+  test groups. This is the number reported by
+  `nist_vectors/results.json::summary.total_skipped`, aggregated from
+  each algorithm's `vectors_skipped`, and surfaced as
+  `total_skipped_aft_filtered` in the CI `validation_summary.json`.
+- **1,036 non-AFT skips** — entire test groups with `testType != "AFT"`
+  that the AMA harness does not exercise: Monte Carlo Test (MCT) groups
+  (iterative state not exposed by the one-shot AMA FFI), Large Data
+  Test (LDT) groups (multi-gigabyte inputs outside the CI harness
+  scope), Variable Output Test (VOT) groups (harness supports
+  fixed-length outputs only), and any future non-AFT type upstream
+  introduces. Tracked per-algorithm in `nist_vectors/run_vectors.py`
+  under the legacy field name `mct_skipped` — which despite the name
+  counts *all* non-AFT test groups, not just MCT (see `run_vectors.py`
+  lines 186, 233, 280, 337, 394, 440, 479, 548, 617, 687). Surfaced as
+  `total_non_aft_skipped` in `validation_summary.json`, with the raw
+  `mct_skipped` kept alongside as a backwards-compatible alias.
 
 The total (5,793) and the split match
 [`docs/compliance/acvp_attestation.json`](acvp_attestation.json) fields
-`total_vectors_skipped`, `total_vectors_skipped_non_mct`, and
-`total_vectors_skipped_mct`. Skip rationale is documented in §4.
+`total_vectors_skipped`, `total_vectors_skipped_aft_filtered`, and
+`total_vectors_skipped_non_aft`. Skip rationale is documented in §4.
 
 ---
 
