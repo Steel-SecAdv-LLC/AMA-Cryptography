@@ -84,7 +84,7 @@
       "vectors_failed": 0
     },
     {
-      "name": "ML-KEM KeyGen",
+      "name": "ML-KEM-1024 KeyGen",
       "standard": "FIPS 203",
       "parameter_set": "ML-KEM-1024",
       "source": "ACVP-Server ML-KEM-keyGen-FIPS203",
@@ -94,7 +94,7 @@
       "vectors_failed": 0
     },
     {
-      "name": "ML-KEM EncapDecap",
+      "name": "ML-KEM-1024 EncapDecap",
       "standard": "FIPS 203",
       "parameter_set": "ML-KEM-1024 (decapsulation only)",
       "source": "ACVP-Server ML-KEM-encapDecap-FIPS203",
@@ -104,7 +104,7 @@
       "vectors_failed": 0
     },
     {
-      "name": "ML-DSA KeyGen",
+      "name": "ML-DSA-65 KeyGen",
       "standard": "FIPS 204",
       "parameter_set": "ML-DSA-65",
       "source": "ACVP-Server ML-DSA-keyGen-FIPS204",
@@ -114,7 +114,7 @@
       "vectors_failed": 0
     },
     {
-      "name": "ML-DSA SigVer",
+      "name": "ML-DSA-65 SigVer",
       "standard": "FIPS 204",
       "parameter_set": "ML-DSA-65 (external/pure, TG 3)",
       "source": "ACVP-Server ML-DSA-sigVer-FIPS204",
@@ -124,7 +124,7 @@
       "vectors_failed": 0
     },
     {
-      "name": "SLH-DSA SigVer",
+      "name": "SLH-DSA-SHA2-256f SigVer",
       "standard": "FIPS 205",
       "parameter_set": "SLH-DSA-SHA2-256f (external/pure, TG 5)",
       "source": "ACVP-Server SLH-DSA-sigVer-FIPS205",

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 import urllib.request
 from pathlib import Path
@@ -20,7 +21,20 @@ from typing import Any, cast
 
 VECTORS_DIR = Path(__file__).parent
 
-ACVP_BASE = "https://raw.githubusercontent.com/usnistgov/ACVP-Server/" "master/gen-val/json-files"
+# The upstream ACVP-Server ref. Defaults to "master" (the upstream default)
+# for backward compatibility with existing local runs; CI and auditors can
+# pin a specific commit SHA or tag via the ACVP_REF environment variable
+# so that a reproduced attestation references the exact upstream snapshot.
+# The resolved ref is returned by `_acvp_ref()` and recorded in the
+# validation_summary.json emitted by .github/workflows/acvp_validation.yml.
+def _acvp_ref() -> str:
+    return os.environ.get("ACVP_REF", "master").strip() or "master"
+
+
+ACVP_BASE = (
+    "https://raw.githubusercontent.com/usnistgov/ACVP-Server/"
+    f"{_acvp_ref()}/gen-val/json-files"
+)
 
 # Algorithm directory names on ACVP-Server (actual paths verified)
 # Each entry: output_filename -> ACVP-Server directory name

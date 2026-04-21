@@ -844,10 +844,14 @@ The module implements technical controls aligned with FIPS 140-3 Security Level 
 
 ## NIST Algorithm Compliance
 
-AMA Cryptography is continuously validated against the official
-[NIST ACVP](https://github.com/usnistgov/ACVP-Server) test vectors. The
-current attestation is **815 / 815 AFT vectors passing** across 12 algorithm
-functions and 7 NIST standards.
+AMA Cryptography is continuously validated against official
+[NIST ACVP](https://github.com/usnistgov/ACVP-Server) Algorithm Functional
+Test (AFT) vectors plus NIST reference vectors from the applicable
+FIPS/SP publications (FIPS 180-4 §B.1 reference vectors for SHA-256,
+and SP 800-38D Appendix B test cases TC13–TC16 for AES-256-GCM, since
+those two are not sourced from ACVP-Server). The current attestation is
+**815 / 815 vectors passing** across 12 algorithm functions and 7 NIST
+standards.
 
 - **Formal attestation:** [`docs/compliance/ACVP_SELF_ATTESTATION.md`](docs/compliance/ACVP_SELF_ATTESTATION.md)
 - **Machine-readable:** [`docs/compliance/acvp_attestation.json`](docs/compliance/acvp_attestation.json)

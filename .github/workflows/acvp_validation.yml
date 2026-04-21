@@ -27,10 +27,19 @@ concurrency:
   group: acvp-validation-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}
 
-# The attestation floor. When additional ACVP coverage is added, bump this
-# number and CSRC_ALIGN_REPORT.md / docs/compliance in the same commit.
+# The attestation floor. Validation asserts `total_tested >= EXPECTED_VECTORS`
+# so that adding new ACVP coverage never silently reduces reporting — if the
+# harness exercises more vectors, the job still passes as long as every vector
+# passes. When intentionally adding new coverage, bump this number and
+# CSRC_ALIGN_REPORT.md / docs/compliance in the same commit so the floor
+# tracks the attested minimum.
 env:
   EXPECTED_VECTORS: '815'
+  # Pin the ACVP-Server ref used by nist_vectors/fetch_vectors.py. Defaults
+  # to master (upstream default) for backward compatibility; pin to a commit
+  # SHA or tag here to make an attested run reproducible against a specific
+  # upstream snapshot. The resolved ref is recorded in validation_summary.json.
+  ACVP_REF: master
 
 jobs:
   acvp-vectors:
@@ -59,6 +68,8 @@ jobs:
           cmake --build build -j"$(nproc)"
 
       - name: Fetch NIST ACVP vectors
+        env:
+          ACVP_REF: ${{ env.ACVP_REF }}
         run: python3 nist_vectors/fetch_vectors.py
 
       - name: Run ACVP vector validation
@@ -67,7 +78,7 @@ jobs:
           python3 nist_vectors/run_vectors.py
           test -f nist_vectors/results.json
 
-      - name: Assert 815/815 pass and emit validation_summary.json
+      - name: Assert vector floor, cross-check attestation.json, emit validation_summary.json
         id: summary
         run: |
           python3 <<'PY'
@@ -79,6 +90,7 @@ jobs:
           from pathlib import Path
 
           expected = int(os.environ["EXPECTED_VECTORS"])
+          acvp_ref = os.environ.get("ACVP_REF", "master")
           results_path = Path("nist_vectors/results.json")
           data = json.loads(results_path.read_text())
           summary = data.get("summary", {})
@@ -87,13 +99,30 @@ jobs:
           failed = int(summary.get("total_fail", 0))
           skipped = int(summary.get("total_skipped", 0))
 
+          # An algorithm is "failing" if it reports any failed vector, has
+          # zero vectors tested (vector fetch likely missed it), or emits a
+          # `notes` field (harness surfaced a non-fatal issue).
           failing_algos = []
           for algo in data.get("algorithms", []):
-              if int(algo.get("fail_count", 0)) > 0:
+              fail_count = int(algo.get("fail_count", 0))
+              vectors_tested = int(algo.get("vectors_tested", 0))
+              notes = algo.get("notes", "")
+              notes_list = (
+                  [notes] if isinstance(notes, str) and notes.strip()
+                  else list(notes) if isinstance(notes, list)
+                  else []
+              )
+              # `notes` on its own is informational in the harness (e.g.,
+              # "External/pure TG 5 only"); only flag when combined with zero
+              # vectors OR an explicit failure count.
+              flag = fail_count > 0 or vectors_tested == 0
+              if flag:
                   failing_algos.append({
                       "algorithm": algo.get("algorithm"),
                       "standard": algo.get("standard"),
-                      "fail_count": int(algo.get("fail_count", 0)),
+                      "fail_count": fail_count,
+                      "vectors_tested": vectors_tested,
+                      "notes": notes_list,
                       "failures": algo.get("failures", []),
                   })
 
@@ -102,14 +131,20 @@ jobs:
           ).strip()
           ref = os.environ.get("GITHUB_REF", "")
           run_id = os.environ.get("GITHUB_RUN_ID", "")
-          status = "pass" if (failed == 0 and tested == expected) else "fail"
+
+          # Floor semantics: `tested >= expected`. Expanding coverage does
+          # not break the build; losing coverage does.
+          status = "pass" if (
+              failed == 0 and tested >= expected and not failing_algos
+          ) else "fail"
 
           validation_summary = {
               "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
               "git_sha": git_sha,
               "git_ref": ref,
               "github_run_id": run_id,
-              "expected_vectors": expected,
+              "acvp_ref": acvp_ref,
+              "expected_vectors_floor": expected,
               "total_tested": tested,
               "total_passed": passed,
               "total_failed": failed,
@@ -131,6 +166,76 @@ jobs:
           out = Path("nist_vectors/validation_summary.json")
           out.write_text(json.dumps(validation_summary, indent=2))
           print(f"Wrote {out}")
+
+          # Cross-check docs/compliance/acvp_attestation.json against the
+          # authoritative results.json so published attestation numbers
+          # can't silently drift from what CI just measured. Names and
+          # per-algorithm counts must match.
+          att_path = Path("docs/compliance/acvp_attestation.json")
+          if att_path.is_file():
+              att = json.loads(att_path.read_text())
+              att_total = int(att.get("total_vectors_tested", -1))
+              att_pass = int(att.get("total_vectors_passed", -1))
+              att_fail = int(att.get("total_vectors_failed", -1))
+              mismatches = []
+              if att_total != tested:
+                  mismatches.append(
+                      f"total_vectors_tested: attestation={att_total} "
+                      f"vs results={tested}"
+                  )
+              if att_pass != passed:
+                  mismatches.append(
+                      f"total_vectors_passed: attestation={att_pass} "
+                      f"vs results={passed}"
+                  )
+              if att_fail != failed:
+                  mismatches.append(
+                      f"total_vectors_failed: attestation={att_fail} "
+                      f"vs results={failed}"
+                  )
+              # Per-algorithm: names must match canonical harness names,
+              # and vectors_tested / vectors_passed must agree.
+              by_name = {
+                  a.get("algorithm"): a for a in data.get("algorithms", [])
+              }
+              for entry in att.get("algorithms", []):
+                  name = entry.get("name")
+                  res = by_name.get(name)
+                  if res is None:
+                      mismatches.append(
+                          f"attestation algorithm '{name}' not found in "
+                          f"results.json (canonical harness names only)"
+                      )
+                      continue
+                  if int(entry.get("vectors_tested", 0)) != int(
+                      res.get("vectors_tested", 0)
+                  ):
+                      mismatches.append(
+                          f"{name}: vectors_tested attestation="
+                          f"{entry.get('vectors_tested')} vs results="
+                          f"{res.get('vectors_tested')}"
+                      )
+                  if int(entry.get("vectors_passed", 0)) != int(
+                      res.get("pass_count", 0)
+                  ):
+                      mismatches.append(
+                          f"{name}: vectors_passed attestation="
+                          f"{entry.get('vectors_passed')} vs results="
+                          f"{res.get('pass_count')}"
+                      )
+              if mismatches:
+                  status = "fail"
+                  print(
+                      "::error::docs/compliance/acvp_attestation.json "
+                      "disagrees with nist_vectors/results.json:"
+                  )
+                  for m in mismatches:
+                      print(f"    {m}")
+          else:
+              print(
+                  "::warning::docs/compliance/acvp_attestation.json missing; "
+                  "skipping attestation cross-check."
+              )
 
           # Update a simple status file that can back a shields.io endpoint.
           badge = {
@@ -155,20 +260,26 @@ jobs:
 
           if status != "pass":
               print("::error::ACVP validation failed:")
-              print(f"  expected {expected} vectors, got {tested} tested")
-              print(f"  passed={passed} failed={failed} skipped={skipped}")
+              print(
+                  f"  floor={expected} tested={tested} passed={passed} "
+                  f"failed={failed} skipped={skipped}"
+              )
               for fa in failing_algos:
-                  print(
+                  msg = (
                       f"::error::{fa['algorithm']} ({fa['standard']}): "
-                      f"{fa['fail_count']} failure(s)"
+                      f"fail={fa['fail_count']} tested={fa['vectors_tested']}"
                   )
+                  if fa["notes"]:
+                      msg += f" notes={fa['notes']}"
+                  print(msg)
                   for f in fa["failures"][:10]:
                       print(f"    {f}")
               sys.exit(1)
 
           print(
               f"ACVP validation OK: {passed}/{tested} pass, "
-              f"{skipped} skipped, git_sha={git_sha}"
+              f"floor={expected}, {skipped} skipped, acvp_ref={acvp_ref}, "
+              f"git_sha={git_sha}"
           )
           PY
 
