@@ -808,7 +808,7 @@ instructions.
 
 Cryptographic implementations are validated against:
 
-- **NIST ACVP vectors** (`nist_vectors/`): 1,215 vectors tested, 1,215 passed across 12 algorithm functions and 7 NIST standards (815 AFT + 400 SHA-3 MCT added in v2.1.6). See [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md) for full breakdown.
+- **NIST ACVP vectors** (`nist_vectors/`): 1,215 vectors tested, 1,215 passed across 12 algorithm functions and 7 NIST standards (815 AFT + 400 SHA-3 MCT). See [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md) for full breakdown.
 - NIST FIPS 202 SHA3-256, SHA3-512, SHAKE-128, SHAKE-256 test vectors
 - NIST FIPS 203 ML-KEM-1024 KAT vectors (10/10 pass — `tests/kat/fips203/`)
 - NIST FIPS 204 ML-DSA-65 KAT vectors (10/10 pass — `tests/kat/fips204/`)

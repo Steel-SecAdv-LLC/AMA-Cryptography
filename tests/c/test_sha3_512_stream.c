@@ -21,10 +21,10 @@
 #define TEST_ASSERT(condition, message) \
     do { \
         if (!(condition)) { \
-            fprintf(stderr, "FAIL: %s\n", message); \
+            fprintf(stderr, "✗ FAIL: %s\n", message); \
             return 1; \
         } else { \
-            printf("PASS: %s\n", message); \
+            printf("✓ PASS: %s\n", message); \
         } \
     } while(0)
 

@@ -657,7 +657,15 @@ class ComparativeBenchmark:
                 comparisons[f"{operation}_{result.implementation}"] = {
                     "peer_to_ama_ratio": peer_ratio,
                     "slowdown_factor": slowdown,
-                    "ama_cryptography_faster_by_percent": (slowdown - 1) * 100,
+                    # Positive = peer is slower (AMA wins); negative = peer
+                    # is faster (AMA loses). The old field name
+                    # `ama_cryptography_faster_by_percent` was read as "how
+                    # much faster AMA is than peer", but the computed sign
+                    # actually matches "how much slower the peer is than
+                    # AMA". Renamed to make the sign convention match the
+                    # name. Computed as (peer_ms / ama_ms - 1) * 100, which
+                    # is the same as (ama_ops / peer_ops - 1) * 100.
+                    "peer_slower_by_percent": (slowdown - 1) * 100,
                     "verdict": verdict,
                 }
 

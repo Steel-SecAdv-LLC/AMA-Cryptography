@@ -182,8 +182,8 @@ If "117 NIST" has been claimed externally, it does not match any count
 maintained in this repository. If the intent was to count specific
 sub-vector categories, the definition must be published before the figure
 is reported. Otherwise the figure should be retracted and replaced with
-**1,215 vectors / 12 algorithm functions / 7 NIST standards** (post-v2.1.6;
-was 815 before MCT was added to the harness).
+**1,215 vectors / 12 algorithm functions / 7 NIST standards** (current;
+was 815 before SHA-3 MCT was added to the harness on the 2.1.5 line).
 
 ### Reproduction
 
@@ -274,4 +274,4 @@ figures change.
 | 2.1.5 | 2026-04-18 | Initial version; anchors 46,235 library LoC, 2,028 test functions, 815 NIST vectors, 156 / 223 adversarial tests. Supersedes unanchored "2,068 tests / 117 NIST / 180 adversarial / 11,246 LoC" figures. |
 | 2.1.5 | 2026-04-20 | Documentation alignment sweep; header date refresh across repository. |
 | 2.1.5 | 2026-04-21 | Replaced unreachable commit-SHA anchor (`d4806b9`, no longer in history) with a branch-snapshot note; re-ran `benchmarks/benchmark_runner.py` and `build/bin/benchmark_c_raw` so README and wiki benchmark tables reflect the current tree (SHA3-256 ctypes 170,834 ops/s, Ed25519 sign 10,569, ML-DSA-65 verify 6,322, AES-256-GCM enc 278,298, ChaCha20-Poly1305 enc 271,362, X25519 22,918 — full table in `benchmark-report.md`). |
-| 2.1.6 | 2026-04-21 | Added FIPS-202 Monte Carlo Test (MCT) coverage for SHA3-256/SHA3-512/SHAKE-128/SHAKE-256 (400 vectors = 4 algos × 1 tcId × 100 outer iterations). NIST vector count: 815 → 1,215; non-AFT skipped: 1,036 → 1,032; `EXPECTED_VECTORS` floor in `.github/workflows/acvp_validation.yml`: 815 → 1,215. Attestation JSON `total_vectors_tested` updated to match. |
+| 2.1.5 | 2026-04-21 | Added FIPS-202 Monte Carlo Test (MCT) coverage for SHA3-256/SHA3-512/SHAKE-128/SHAKE-256 (400 vectors = 4 algos × 1 tcId × 100 outer iterations). NIST vector count: 815 → 1,215; non-AFT skipped: 1,036 → 1,032; `EXPECTED_VECTORS` floor in `.github/workflows/acvp_validation.yml`: 815 → 1,215. Attestation JSON `total_vectors_tested` updated to match. Landed on the 2.1.5 line; will roll into the next release tag. |

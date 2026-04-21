@@ -54,10 +54,11 @@ env:
   # Pinned to the immutable NIST release tag `v1.1.0.42` (published
   # 2026-04-16, upstream commit 15c0f3d...). This is the exact snapshot
   # the 1,215-vector attestation in docs/compliance/acvp_attestation.json
-  # was generated against (815 AFT vectors as attested through v2.1.5, plus
-  # 400 SHA-3 Monte Carlo Test vectors added in v2.1.6 — the MCT vectors
-  # were already present in this ACVP-Server snapshot; v2.1.6 changed
-  # AMA's run_vectors.py harness to exercise them rather than skip them).
+  # was generated against (815 AFT vectors as attested through early
+  # 2.1.5, plus 400 SHA-3 Monte Carlo Test vectors subsequently added on
+  # the 2.1.5 line — the MCT vectors were already present in this
+  # ACVP-Server snapshot; what changed in AMA was run_vectors.py
+  # exercising them rather than skipping them).
   # Pinning a tag rather than tracking `master` guarantees that:
   #
   #   * The weekly scheduled run cannot break spuriously from upstream

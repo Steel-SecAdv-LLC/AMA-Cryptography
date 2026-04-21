@@ -22,9 +22,11 @@ FIPS 204, FIPS 205) and 1 NIST Special Publication (SP 800-38D).
 
 **Summary:** 1,215 vectors tested, **1,215 passed**, **0 failed**, 5,789 skipped
 (non-byte-aligned inputs, non-target parameter sets, LDT/VOT test types).
-Monte Carlo Test (MCT) coverage for the SHA-3 family was added in v2.1.6
-(+400 vectors = 4 algorithms × 1 tcId × 100 outer iterations per FIPS-202
-MCT spec, across SHA3-256/SHA3-512/SHAKE-128/SHAKE-256).
+Monte Carlo Test (MCT) coverage for the SHA-3 family was added on the
+v2.1.5 line in this PR (+400 vectors = 4 algorithms × 1 tcId × 100
+outer iterations per FIPS-202 MCT spec, across
+SHA3-256/SHA3-512/SHAKE-128/SHAKE-256) and will ship in the next
+release tag.
 
 All algorithms pass 100% of applicable NIST test vectors.
 

@@ -161,8 +161,8 @@
   "coverage_changelog": [
     {
       "date": "2026-04-21",
-      "library_version": "2.1.6",
-      "change": "Added Monte Carlo Test (MCT) coverage for SHA3-256, SHA3-512, SHAKE-128, SHAKE-256 (400 vectors across 4 algorithms). total_vectors_tested: 815 -> 1215. total_vectors_skipped_non_aft: 1036 -> 1032 (MCT groups moved from skipped to tested; LDT and VOT remain skipped). MCT runner implementation is in nist_vectors/run_vectors.py::_run_sha3_mct and _run_shake_mct."
+      "library_version": "2.1.5",
+      "change": "Added Monte Carlo Test (MCT) coverage for SHA3-256, SHA3-512, SHAKE-128, SHAKE-256 (400 vectors across 4 algorithms). total_vectors_tested: 815 -> 1215. total_vectors_skipped_non_aft: 1036 -> 1032 (MCT groups moved from skipped to tested; LDT and VOT remain skipped). MCT runner implementation is in nist_vectors/run_vectors.py::_run_sha3_mct and _run_shake_mct. Landed on the 2.1.5 line; the next release tag (2.1.6) will ship with this coverage baseline."
     }
   ],
   "test_environment": {

@@ -27,7 +27,8 @@ customer-facing format.
   vectors for **12 algorithm functions** across **7 NIST standards**
   (FIPS 180-4, FIPS 198-1, FIPS 202, FIPS 203, FIPS 204, FIPS 205, SP 800-38D),
   plus **Monte Carlo Test (MCT)** coverage for the four SHA-3 family
-  algorithms (SHA3-256, SHA3-512, SHAKE-128, SHAKE-256) added in v2.1.6.
+  algorithms (SHA3-256, SHA3-512, SHAKE-128, SHAKE-256) added on the
+  2.1.5 line (see `coverage_changelog` in the attestation JSON).
 - **Deterministic, reproducible** pass/fail results against upstream
   `usnistgov/ACVP-Server` vector projections, plus published FIPS/SP
   reference vectors for SHA-256 and AES-256-GCM.
@@ -98,11 +99,13 @@ with reproduction commands.
 | **TOTAL** | | | | **1,215** | **1,215** | **100%** |
 
 The four SHA-3 family rows include **100 Monte Carlo Test (MCT) vectors each
-(400 total)** on top of the existing AFT coverage. MCT was added in v2.1.6;
-implementation lives in `nist_vectors/run_vectors.py::_run_sha3_mct` and
-`_run_shake_mct`. The FIPS-202 MCT spec is a 100 outer × 1000 inner
-per-tcId iteration over a single seed, so 1 tcId per algorithm contributes
-100 scored vectors under the per-resultsArray-entry accounting convention.
+(400 total)** on top of the existing AFT coverage. MCT was added on the
+2.1.5 line (see `coverage_changelog` in the attestation JSON for the
+exact library version and date); implementation lives in
+`nist_vectors/run_vectors.py::_run_sha3_mct` and `_run_shake_mct`. The
+FIPS-202 MCT spec is a 100 outer × 1000 inner per-tcId iteration over a
+single seed, so 1 tcId per algorithm contributes 100 scored vectors
+under the per-resultsArray-entry accounting convention.
 
 **5,789 vectors were skipped total**, split into two buckets by the kind
 of thing that was skipped:
@@ -122,12 +125,13 @@ of thing that was skipped:
   harness scope) and **Variable Output Test (VOT)** groups (1,024
   SHAKE-128/256 tcIds — output-length coverage is already exercised by
   AFT vectors in the same upstream vector files). MCT groups for the
-  four SHA-3 algorithms are no longer counted here as of v2.1.6; they
-  moved from "skipped" to "tested" (reducing this count from 1,036 to
-  1,032). Tracked per-algorithm in `nist_vectors/run_vectors.py` under
-  the legacy field name `mct_skipped` (now a semantic misnomer — the
-  field counts non-AFT groups generally); surfaced as
-  `total_non_aft_skipped` in `validation_summary.json`.
+  four SHA-3 algorithms are no longer counted here; they moved from
+  "skipped" to "tested" when MCT coverage was added on the 2.1.5 line
+  (reducing this count from 1,036 to 1,032). Tracked per-algorithm in
+  `nist_vectors/run_vectors.py` under the legacy field name
+  `mct_skipped` (now a semantic misnomer — the field counts non-AFT
+  groups generally); surfaced as `total_non_aft_skipped` in
+  `validation_summary.json`.
 
 The total (5,789) and the split match
 [`docs/compliance/acvp_attestation.json`](acvp_attestation.json) fields
@@ -142,14 +146,15 @@ From [`CSRC_ALIGN_REPORT.md` §1.4](../../CSRC_ALIGN_REPORT.md):
 
 1. **AFT + SHA-3 MCT.** Algorithm Functional Test (AFT) vectors are run for
    every covered algorithm. Monte Carlo Test (MCT) vectors are run for
-   SHA3-256, SHA3-512, SHAKE-128, and SHAKE-256 (added in v2.1.6 via
-   `_run_sha3_mct` / `_run_shake_mct` against the one-shot C API, which is
-   sufficient because FIPS-202 MCT feeds each inner iteration's digest back
-   as the next iteration's full input rather than accumulating state across
-   iterations). Large Data Test (LDT) groups remain skipped — they require
-   multi-gigabyte inputs outside the CI scope — and Variable Output Test
-   (VOT) groups remain skipped because their output-length coverage is
-   already exercised by AFT vectors in the same upstream vector files.
+   SHA3-256, SHA3-512, SHAKE-128, and SHAKE-256 via `_run_sha3_mct` /
+   `_run_shake_mct` against the one-shot C API (sufficient because
+   FIPS-202 MCT feeds each inner iteration's digest back as the next
+   iteration's full input rather than accumulating state across
+   iterations). Large Data Test (LDT) groups remain skipped — they
+   require multi-gigabyte inputs outside the CI scope — and Variable
+   Output Test (VOT) groups remain skipped because their output-length
+   coverage is already exercised by AFT vectors in the same upstream
+   vector files.
 2. **Byte-aligned only.** Vectors with `bitLength % 8 != 0` are skipped —
    the AMA C API is byte-granularity only.
 3. **ML-KEM-1024 only.** ML-KEM-512 and ML-KEM-768 parameter sets are not
@@ -199,9 +204,9 @@ Continuous validation runs on every push to `main` and on a weekly schedule
 via [`.github/workflows/acvp_validation.yml`](../../.github/workflows/acvp_validation.yml).
 The workflow parses `results.json` and enforces three conditions:
 
-1. **Floor:** `total_tested >= EXPECTED_VECTORS` (currently 1,215 after the
-   v2.1.6 SHA-3 MCT addition: 815 AFT + 400 MCT). Coverage can expand above
-   this floor; it cannot drop below it.
+1. **Floor:** `total_tested >= EXPECTED_VECTORS` (currently 1,215 after
+   the SHA-3 MCT addition on the 2.1.5 line: 815 AFT + 400 MCT).
+   Coverage can expand above this floor; it cannot drop below it.
 2. **Zero failures:** `total_failed == 0`, and no algorithm may report a
    non-zero `fail_count` or a `vectors_tested == 0`.
 3. **Attestation cross-check:** `docs/compliance/acvp_attestation.json`
@@ -221,7 +226,7 @@ skip accounting (`total_skipped_aft_filtered` vs `total_non_aft_skipped`).
 
 The following issues were identified during validation and have been
 resolved. All 1,215/1,215 vectors pass after remediation (the bullets
-below predate the v2.1.6 MCT expansion — the underlying 815 AFT vectors
+below predate the SHA-3 MCT expansion — the underlying 815 AFT vectors
 also still pass, and the added 400 MCT vectors are a superset of the
 original attestation scope).
 

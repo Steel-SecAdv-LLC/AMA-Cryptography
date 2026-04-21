@@ -50,7 +50,8 @@ following standardized primitives:
 See [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) for per-primitive implementation
 details, key sizes, and security properties; see
 [`CSRC_ALIGN_REPORT.md`](CSRC_ALIGN_REPORT.md) for ACVP validation results
-(1,851 / 1,851 applicable NIST test vectors pass as of v2.1.6). See
+(current attestation count and library version live there — consult the
+report rather than relying on a number hard-coded here). See
 [`src/c/PROVENANCE.md`](src/c/PROVENANCE.md) for per-primitive derivation
 status (PQC primitives are clean-room from the FIPS text; Ed25519 is
 vendored from ed25519-donna).

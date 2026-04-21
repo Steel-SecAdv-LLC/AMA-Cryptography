@@ -26,7 +26,7 @@ VECTORS_DIR = Path(__file__).parent
 # `v1.1.0.42` — the exact upstream snapshot the 1,215-vector attestation
 # in docs/compliance/acvp_attestation.json was generated against (815 AFT
 # + 400 SHA-3 MCT; the MCT vectors live in the same v1.1.0.42 JSON
-# projections and were brought under AMA coverage in v2.1.6 via
+# projections and were brought under AMA coverage on the 2.1.5 line via
 # run_vectors.py::_run_sha3_mct / _run_shake_mct). Pinning a tag (not a
 # branch) guarantees that a local run without ACVP_REF set reproduces
 # the same bytes the CI workflow and the published attestation
