@@ -174,7 +174,7 @@ Results are saved to `benchmark_results.json`, `BENCHMARKS.md`, and `benchmarks/
 | Full Package Create | 746 | ±50% | complex_operation |
 | Full Package Verify | 2,044 | ±50% | complex_operation |
 | Dilithium Keygen *(optional)* | 1,943 | ±40% | microbenchmark |
-| Dilithium Sign *(optional)* | 1,918 | ±40% | microbenchmark |
+| Dilithium Sign *(optional)* | 660 | ±40% | microbenchmark |
 | Dilithium Verify *(optional)* | 4,303 | ±40% | microbenchmark |
 | Kyber Keygen *(optional)* | 2,200 | ±40% | microbenchmark |
 | Kyber Encapsulate *(optional)* | 2,400 | ±40% | microbenchmark |
