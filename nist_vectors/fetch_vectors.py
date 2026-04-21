@@ -21,6 +21,7 @@ from typing import Any, cast
 
 VECTORS_DIR = Path(__file__).parent
 
+
 # The upstream ACVP-Server ref. Defaults to "master" (the upstream default)
 # for backward compatibility with existing local runs; CI and auditors can
 # pin a specific commit SHA or tag via the ACVP_REF environment variable
@@ -32,8 +33,7 @@ def _acvp_ref() -> str:
 
 
 ACVP_BASE = (
-    "https://raw.githubusercontent.com/usnistgov/ACVP-Server/"
-    f"{_acvp_ref()}/gen-val/json-files"
+    "https://raw.githubusercontent.com/usnistgov/ACVP-Server/" f"{_acvp_ref()}/gen-val/json-files"
 )
 
 # Algorithm directory names on ACVP-Server (actual paths verified)
