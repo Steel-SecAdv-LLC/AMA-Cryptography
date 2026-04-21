@@ -118,6 +118,17 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ### Added
 
+- **NIST ACVP self-attestation artifact.**
+  `docs/compliance/ACVP_SELF_ATTESTATION.md` (formal, customer-facing),
+  `docs/compliance/acvp_attestation.json` (machine-readable), and
+  `.github/workflows/acvp_validation.yml` (continuous validation on
+  push, PR, and weekly Monday cron with an `EXPECTED_VECTORS=815`
+  floor) package the existing 815/815 AFT coverage from
+  `CSRC_ALIGN_REPORT.md` into a formal deliverable. README gains a
+  `## NIST Algorithm Compliance` section with prominent CAVP/CMVP/
+  FIPS-140-3 non-endorsement disclaimers. **Self-attestation only —
+  NOT CAVP, NOT CMVP, NOT FIPS 140-3.**
+
 - `tests/c/test_x25519.c`: RFC 7748 §5.2 TV1/TV2, §6.1 Alice/Bob KATs
   (both directions), random DH symmetry, low-order point (`u = 0`)
   rejection, and NULL parameter validation.

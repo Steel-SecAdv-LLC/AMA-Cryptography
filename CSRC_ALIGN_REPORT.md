@@ -5,6 +5,12 @@
 **Organization:** Steel Security Advisors LLC
 **Author:** Andrew E. A.
 
+> **Customer-facing attestation:** this report is the technical evidence
+> underlying [`docs/compliance/ACVP_SELF_ATTESTATION.md`](docs/compliance/ACVP_SELF_ATTESTATION.md)
+> (human-readable) and [`docs/compliance/acvp_attestation.json`](docs/compliance/acvp_attestation.json)
+> (machine-readable). Continuous validation runs in
+> [`.github/workflows/acvp_validation.yml`](.github/workflows/acvp_validation.yml).
+
 ---
 
 ## Abstract

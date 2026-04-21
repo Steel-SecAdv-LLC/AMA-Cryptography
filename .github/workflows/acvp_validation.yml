@@ -21,6 +21,12 @@ on:
 permissions:
   contents: read
 
+# Collapse overlapping runs on the same branch (push + scheduled collision,
+# rapid pushes) — but never cancel the main branch or the weekly schedule.
+concurrency:
+  group: acvp-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}
+
 # The attestation floor. When additional ACVP coverage is added, bump this
 # number and CSRC_ALIGN_REPORT.md / docs/compliance in the same commit.
 env:
@@ -175,6 +181,11 @@ jobs:
             nist_vectors/results.json
             nist_vectors/validation_summary.json
             nist_vectors/acvp_badge.json
+          # Keep the attestation evidence for a year so auditors can
+          # retrieve the results.json + validation_summary.json that
+          # underwrites docs/compliance/ACVP_SELF_ATTESTATION.md at any
+          # point in the recent history.
+          retention-days: 365
 
       - name: Job summary
         if: always()
