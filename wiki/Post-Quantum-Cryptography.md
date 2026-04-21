@@ -79,23 +79,23 @@ from ama_cryptography.pqc_backends import (
 if not DILITHIUM_AVAILABLE:
     raise RuntimeError("ML-DSA-65 not available")
 
-# Generate key pair
-public_key, secret_key = generate_dilithium_keypair()
-print(f"Public key: {len(public_key)} bytes")  # 1952
-print(f"Secret key: {len(secret_key)} bytes")  # 4032
+# Generate key pair (DilithiumKeyPair dataclass)
+kp = generate_dilithium_keypair()
+print(f"Public key: {len(kp.public_key)} bytes")  # 1952
+print(f"Secret key: {len(kp.secret_key)} bytes")  # 4032
 
 # Sign
-message = b"Data to sign"
-signature = dilithium_sign(message, secret_key)
-print(f"Signature: {len(signature)} bytes")     # 3309
+message   = b"Data to sign"
+signature = dilithium_sign(message, kp.secret_key)
+print(f"Signature: {len(signature)} bytes")       # 3309
 
 # Verify
-is_valid = dilithium_verify(message, signature, public_key)
+is_valid = dilithium_verify(message, signature, kp.public_key)
 print(f"Valid: {is_valid}")  # True
 
 # Tamper detection
-tampered = b"Tampered data"
-is_tampered = dilithium_verify(tampered, signature, public_key)
+tampered   = b"Tampered data"
+is_tampered = dilithium_verify(tampered, signature, kp.public_key)
 print(f"Tampered: {is_tampered}")  # False
 ```
 
@@ -156,19 +156,19 @@ from ama_cryptography.pqc_backends import (
     KYBER_AVAILABLE,
 )
 
-# Generate recipient key pair
-pk, sk = generate_kyber_keypair()
+# Generate recipient key pair (KyberKeyPair dataclass)
+kp = generate_kyber_keypair()
 
-# Sender: encapsulate (generates ciphertext + shared secret)
-ciphertext, shared_secret_sender = kyber_encapsulate(pk)
-print(f"Ciphertext: {len(ciphertext)} bytes")      # 1568
-print(f"Shared secret: {len(shared_secret_sender)} bytes")  # 32
+# Sender: encapsulate (returns KyberEncapsulation with ct + ss)
+enc = kyber_encapsulate(kp.public_key)
+print(f"Ciphertext: {len(enc.ciphertext)} bytes")      # 1568
+print(f"Shared secret: {len(enc.shared_secret)} bytes")  # 32
 
 # Recipient: decapsulate using secret key
-shared_secret_recipient = kyber_decapsulate(ciphertext, sk)
+recovered = kyber_decapsulate(enc.ciphertext, kp.secret_key)
 
 # Shared secrets match
-assert shared_secret_sender == shared_secret_recipient
+assert recovered == enc.shared_secret
 print("Key agreement successful!")
 ```
 
@@ -222,10 +222,10 @@ from ama_cryptography.pqc_backends import (
     SPHINCS_AVAILABLE,
 )
 
-pk, sk = generate_sphincs_keypair()
-sig = sphincs_sign(b"message", sk)
-assert sphincs_verify(b"message", sig, pk)
-print(f"Signature size: {len(sig)} bytes")  # 49856
+kp  = generate_sphincs_keypair()                  # SphincsKeyPair
+sig = sphincs_sign(b"message", kp.secret_key)
+assert sphincs_verify(b"message", sig, kp.public_key)
+print(f"Signature size: {len(sig)} bytes")        # 49856
 ```
 
 ---
@@ -236,22 +236,25 @@ print(f"Signature size: {len(sig)} bytes")  # 49856
 from ama_cryptography.pqc_backends import (
     get_pqc_status,
     get_pqc_backend_info,
-    get_pqc_capabilities,
+    PQCStatus,
     DILITHIUM_AVAILABLE,
     KYBER_AVAILABLE,
     SPHINCS_AVAILABLE,
 )
 
-# Status check
+# Per-backend top-level availability booleans (read directly)
+assert DILITHIUM_AVAILABLE and KYBER_AVAILABLE and SPHINCS_AVAILABLE
+
+# High-level status: PQCStatus.AVAILABLE if at least one PQC backend loaded
 status = get_pqc_status()
-print(status)
-# {'ml_dsa_65': 'available', 'ml_kem_1024': 'available', 'sphincs_sha2_256f': 'available'}
+assert status is PQCStatus.AVAILABLE
 
-# Detailed backend info
+# Detailed backend info dict (per-algorithm availability, backend name,
+# algorithm parameters, PQC and hash/HMAC status, etc.)
 info = get_pqc_backend_info()
-
-# Capability flags
-caps = get_pqc_capabilities()
+print(info["dilithium_available"],
+      info["kyber_available"],
+      info["sphincs_available"])
 ```
 
 ---
@@ -267,22 +270,22 @@ The hybrid approach provides:
 
 ### Hybrid Signature Scheme
 
-AMA Cryptography combines Ed25519 + ML-DSA-65 in a dual-signature scheme:
+AMA Cryptography combines Ed25519 + ML-DSA-65 in a dual-signature scheme,
+driven through the unified `AmaCryptography` dispatcher with
+`AlgorithmType.HYBRID_SIG`:
 
 ```python
-from ama_cryptography.crypto_api import HybridSigner
+from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 
-signer = HybridSigner()
-pk_classical, sk_classical = signer.generate_classical_keypair()
-pk_pqc, sk_pqc = signer.generate_pqc_keypair()
-
-combined_sig = signer.combine_signatures(
-    ed25519_sig=signer.sign_classical(message, sk_classical),
-    ml_dsa_sig=signer.sign_pqc(message, sk_pqc),
-)
-
-is_valid = signer.verify_hybrid(message, combined_sig, pk_classical, pk_pqc)
+crypto = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
+kp = crypto.generate_keypair()             # KeyPair: pk = Ed25519_pk || ML-DSA_pk
+sig = crypto.sign(message, kp.secret_key)  # Signature: Ed25519_sig || ML-DSA_sig
+valid = crypto.verify(message, sig, kp.public_key)   # both layers must verify
 ```
+
+For direct access to the provider (same inputs/outputs, no
+`AlgorithmType` selection step), use `HybridSignatureProvider` from
+`ama_cryptography.crypto_api`.
 
 ### Hybrid KEM
 

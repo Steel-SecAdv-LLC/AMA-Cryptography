@@ -7,7 +7,7 @@
 **Organization:** Steel Security Advisors LLC
 
 **Version:** 2.1.5
-**Date:** 2026-04-17
+**Date:** 2026-04-21
 
 ---
 
@@ -411,7 +411,7 @@ Conclusion: Ethical integration is cryptographically safe ∎
 ## HKDF Implementation with Ethical Context
 
 ```python
-from ama_cryptography.crypto_api import derive_keys
+from ama_cryptography.legacy_compat import derive_keys, create_ethical_hkdf_context
 import os
 
 def derive_key_with_ethics(
@@ -568,7 +568,16 @@ def benchmark_ethical_integration(iterations: int = 1000) -> Dict[str, float]:
 ### Complete Workflow with Ethical Integration
 
 ```python
-from ama_cryptography.crypto_api import *
+from ama_cryptography.legacy_compat import (
+    KeyManagementSystem,
+    derive_keys,
+    create_ethical_hkdf_context,
+    create_crypto_package,
+    verify_crypto_package,
+    generate_key_management_system,
+)
+from ama_cryptography.pqc_backends import generate_dilithium_keypair
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import json
 
 # 1. Define ethical vector (4 pillars, balanced weighting)

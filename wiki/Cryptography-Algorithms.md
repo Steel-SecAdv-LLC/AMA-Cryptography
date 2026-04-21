@@ -56,9 +56,9 @@ from ama_cryptography.pqc_backends import (
     dilithium_verify,
 )
 
-pk, sk = generate_dilithium_keypair()
-sig = dilithium_sign(b"message", sk)
-assert dilithium_verify(b"message", sig, pk)
+kp  = generate_dilithium_keypair()            # DilithiumKeyPair
+sig = dilithium_sign(b"message", kp.secret_key)
+assert dilithium_verify(b"message", sig, kp.public_key)
 ```
 
 ---
@@ -87,10 +87,10 @@ from ama_cryptography.pqc_backends import (
     kyber_decapsulate,
 )
 
-pk, sk = generate_kyber_keypair()
-ciphertext, shared_secret = kyber_encapsulate(pk)
-recovered = kyber_decapsulate(ciphertext, sk)
-assert recovered == shared_secret
+kp  = generate_kyber_keypair()                 # KyberKeyPair
+enc = kyber_encapsulate(kp.public_key)         # KyberEncapsulation
+recovered = kyber_decapsulate(enc.ciphertext, kp.secret_key)
+assert recovered == enc.shared_secret
 ```
 
 ---
@@ -118,9 +118,9 @@ from ama_cryptography.pqc_backends import (
     sphincs_verify,
 )
 
-pk, sk = generate_sphincs_keypair()
-sig = sphincs_sign(b"message", sk)
-assert sphincs_verify(b"message", sig, pk)
+kp  = generate_sphincs_keypair()              # SphincsKeyPair
+sig = sphincs_sign(b"message", kp.secret_key)
+assert sphincs_verify(b"message", sig, kp.public_key)
 ```
 
 > **Note:** SPHINCS+ signatures are large (≈49 KB). Use ML-DSA-65 for most applications; SPHINCS+ provides a conservative fallback with no lattice assumptions.
@@ -149,19 +149,23 @@ assert sphincs_verify(b"message", sig, pk)
 - Validated against RFC 8032 Test Vector 1 (12 test vectors)
 - MSVC compatibility via volatile fallback for pre-C11 compilers
 
-**Performance:**
-- Key generation: ~0.12 ms (8,354 ops/sec)
-- Signing: ~0.24 ms (4,248 ops/sec)
-- Verification: ~0.25 ms (4,070 ops/sec)
+**Performance** (Python/ctypes on x86-64 Linux, refreshed 2026-04-21):
+- Key generation: ~0.11 ms (≈ 9,100 ops/sec)
+- Signing: ~0.09 ms (≈ 10,600 ops/sec with the expanded `seed || pk` cache)
+- Verification: ~0.14 ms (≈ 7,400 ops/sec)
+
+Raw C throughput from `benchmark_c_raw` is slightly higher (~10,400
+keygen / 9,700 sign / 7,200 verify ops/sec) because it bypasses the
+ctypes marshaling layer.
 
 **Usage:**
 ```python
-from ama_cryptography.crypto_api import AsymmetricCryptoAlgorithm
+from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 
-algo = AsymmetricCryptoAlgorithm()
-pk, sk = algo.generate_keypair()
-sig = algo.sign(b"message", sk)
-assert algo.verify(b"message", sig, pk)
+crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
+kp = crypto.generate_keypair()
+sig = crypto.sign(b"message", kp.secret_key)
+assert crypto.verify(b"message", sig, kp.public_key)
 ```
 
 ---
@@ -183,13 +187,17 @@ assert algo.verify(b"message", sig, pk)
 
 **Usage:**
 ```python
-from ama_cryptography.crypto_api import SymmetricCryptoAlgorithm
+from ama_cryptography.crypto_api import AESGCMProvider
 import os
 
-algo = SymmetricCryptoAlgorithm()
-key = os.urandom(32)
-ciphertext = algo.encrypt(b"plaintext", key)
-plaintext = algo.decrypt(ciphertext, key)
+aead = AESGCMProvider()
+key  = os.urandom(32)                                     # 256-bit key
+
+# Encrypt → dict: {'ciphertext', 'nonce', 'tag', 'aad', 'backend'}
+out  = aead.encrypt(b"plaintext", key, aad=b"")
+
+# Decrypt — pass nonce and tag back in; raises on tag mismatch
+pt   = aead.decrypt(out["ciphertext"], key, out["nonce"], out["tag"], aad=b"")
 ```
 
 ---
@@ -242,12 +250,13 @@ Used in hybrid KEM constructions (paired with ML-KEM-1024 for post-quantum hybri
 
 **Usage:**
 ```python
-# Used internally by key_management.py
-# Direct access via C library binding
-from ama_cryptography.key_management import KeyManager
+# HKDF-SHA3-256 is driven through HDKeyDerivation for deterministic seeds,
+# and through the native-C HKDF binding when derivation is invoked via
+# the crypto_api / pqc_backends layer.
+from ama_cryptography.key_management import HDKeyDerivation
 
-manager = KeyManager(master_key)
-key_id = manager.generate_master_key()
+hd = HDKeyDerivation(seed=b"\x00" * 32)
+subkey = hd.derive_key(purpose=44, account=0, change=0, index=0)
 ```
 
 ---

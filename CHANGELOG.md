@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 2.1.5 |
-| Last Updated | 2026-04-17 |
+| Last Updated | 2026-04-21 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -116,6 +116,22 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   now reports `AMA_IMPL_GENERIC` for `ed25519`, reflecting what actually
   runs. No runtime behavior change.
 
+- Dependency consolidation (rolls up Dependabot #241–#246 into a single
+  sweep applied consistently across `pyproject.toml`, `setup.py`,
+  `setup.cfg`, `requirements*.txt`, and the relevant workflow pins):
+  `github/codeql-action` 4.35.1 → 4.35.2 (SHA pinned);
+  `pydantic` 2.12.5 → 2.13.2 paired with `pydantic_core` 2.41.5 → 2.46.2
+  (pydantic 2.13.2 declares `pydantic-core==2.46.2` — verified via
+  `importlib.metadata`); `ruff` 0.15.10 → 0.15.11 (lockfile) with the
+  floor raised from `>=0.4.0` to `>=0.15.11` so the installed version
+  always matches the lint ruleset in `pyproject.toml`;
+  `PyKCS11` floor `>=1.5.0` → `>=1.5.18`; `sphinx-rtd-theme` major
+  `>=1.2.0` → `>=3.1.0`. Incidental: dropped `canonical_url`,
+  `analytics_id`, `logo_only`, and `display_version` from `docs/conf.py`
+  (removed by sphinx-rtd-theme 3.x), fixed the `index.rst` title
+  underline length, and added the missing `docs/_static/` referenced by
+  `html_static_path`.
+
 ### Added
 
 - **NIST ACVP self-attestation artifact.**
@@ -154,6 +170,62 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 - Benchmark coverage for `ama_chacha20poly1305_encrypt` at 256 B,
   1 KB, 4 KB, 64 KB and `ama_argon2id` at m=64 KiB and m=1 MiB in
   `benchmarks/benchmark_c_raw.c`.
+
+### Documentation
+
+- Repository-wide documentation alignment sweep (2026-04-20): refreshed
+  "Last Updated" headers across `README.md`, `ARCHITECTURE.md`,
+  `SECURITY.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
+  `CRYPTOGRAPHY.md`, `CONSTANT_TIME_VERIFICATION.md`, `MONITORING.md`,
+  `ENHANCED_FEATURES.md`, `IMPLEMENTATION_GUIDE.md`, `THREAT_MODEL.md`,
+  `CSRC_STANDARDS.md`, `CSRC_ALIGN_REPORT.md`,
+  `AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md`, `.github/INVARIANTS.md`,
+  `docs/DESIGN_NOTES.md`, `docs/METRICS_REPORT.md`,
+  `docs/COMPETITIVE_ANALYSIS.md`, `wiki/Home.md`, and
+  `wiki/Security-Model.md` to a consistent 2026-04-20 timestamp to
+  restore cross-document date alignment. No functional or technical
+  content was modified; historical release-history rows and
+  benchmark-measurement dates were preserved.
+
+- Post-review documentation correctness pass (2026-04-21):
+
+  - **Wiki API rewrite.** Five wiki pages (`API-Reference`,
+    `Quick-Start`, `Hybrid-Cryptography`, `Post-Quantum-Cryptography`,
+    `Adaptive-Posture`, `Cryptography-Algorithms`, `Key-Management`)
+    documented `CryptoMode`, `SymmetricCryptoAlgorithm`,
+    `AsymmetricCryptoAlgorithm`, `PackageSigner`, `HybridSigner`, and
+    `KeyManager` — classes that do not exist in `ama_cryptography/`.
+    Every affected example was rewritten against the real API
+    (`AmaCryptography` + `AlgorithmType`, `AESGCMProvider`,
+    `HDKeyDerivation`, `KeyRotationManager`, `HybridCombiner.{encapsulate,
+    decapsulate}_hybrid`). Every `from ama_cryptography...` import in
+    the docs tree now resolves against the shipped package.
+
+  - **Top-level doc fixes.** `AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md`
+    imported `derive_keys` / `create_ethical_hkdf_context` from
+    `crypto_api` instead of `legacy_compat` where they actually live;
+    `CONTRIBUTING.md`'s example test referenced
+    `generate_ed25519_keypair` / `sign_data` that never existed.
+    Both corrected.
+
+  - **Benchmark refresh.** Re-ran `benchmarks/benchmark_runner.py`,
+    `benchmark_suite.py`, and `build/bin/benchmark_c_raw --json` on
+    2026-04-21; refreshed the ops/sec tables in `README.md`
+    (Performance Metrics section) and `wiki/Performance-Benchmarks.md`
+    so they match `benchmark-results.json`. The previously documented
+    figures (e.g. SHA3-256 18,205 ops/sec → 170,834 ops/sec; Ed25519
+    sign 5,069 → 10,569 ops/sec; ML-DSA-65 verify 697 → 6,322 ops/sec)
+    predated the PR #238 X25519 `fe51` rewrite and PR #239 ChaCha20 +
+    Argon2 AVX2 wiring; the new tables reflect the current tree.
+
+  - **Test / file counts.** Replaced the stale "1,855+ tests across 47
+    files (37 Python + 10 C)" figure in `README.md` with the
+    `docs/METRICS_REPORT.md` anchor of 2,028 Python test functions
+    across 70 files plus 14 C test files.
+
+  - **`docs/METRICS_REPORT.md` anchor.** The commit anchor `d4806b9`
+    was unreachable in git history; replaced with a branch-snapshot
+    note and a 2026-04-21 change-log entry documenting the rerun.
 
 ---
 
