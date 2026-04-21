@@ -235,29 +235,43 @@ def _run_sha3_mct(
     hash API and mutate ``res`` in place. On Seed-length mismatches the group
     is skipped rather than failed — the ACVP server encodes seeds in ``msg``
     at full digest length.
+
+    Each MCT tcId expands to 100 vectors (one per `resultsArray` entry), so
+    when a tcId is skipped the counter is incremented by the size of the
+    results array (or a 100 fallback if the group is malformed) rather than
+    by 1 — otherwise ``vectors_tested + vectors_skipped`` does not equal the
+    algorithm's true vector count in the summary table.
     """
     for tc in tg["tests"]:
         msg_hex = tc.get("msg", "")
         results = tc.get("resultsArray") or []
+        # Every correctly-formed MCT tcId has 100 results; fall back to 100
+        # if resultsArray is absent entirely so the skip counter still
+        # reflects the "one tcId = 100 vectors" accounting used for passes.
+        expected_count = len(results) if results else 100
+
         if not msg_hex or not results:
-            res.vectors_skipped += 1
+            res.vectors_skipped += expected_count
             res.skip_reasons.append(
-                f"MCT tcId {tc['tcId']}: missing msg or resultsArray"
+                f"MCT tcId {tc['tcId']}: missing msg or resultsArray "
+                f"({expected_count} vectors skipped)"
             )
             continue
         seed = bytes.fromhex(msg_hex)
         if len(seed) != digest_size:
-            res.vectors_skipped += 1
+            res.vectors_skipped += expected_count
             res.skip_reasons.append(
                 f"MCT tcId {tc['tcId']}: seed length {len(seed)} != digest size "
-                f"{digest_size}"
+                f"{digest_size} ({expected_count} vectors skipped)"
             )
             continue
 
         try:
             actual_digests = _sha3_mct_iterate(lib, sha3_fn_name, digest_size, seed)
         except Exception as exc:  # pragma: no cover - defensive
-            res.fail_count += 1
+            # Count all 100 iterations as failed, not just 1, so the pass +
+            # fail + skip totals add up.
+            res.fail_count += expected_count
             res.failures.append(
                 {
                     "tcId": str(tc["tcId"]),
@@ -271,7 +285,6 @@ def _run_sha3_mct(
         # ACVP returns a per-iteration pass/fail view: one tcId contributes
         # 100 vectors, each of which must match. Track them independently so
         # the summary accurately reflects MCT coverage.
-        mismatch_iter = -1
         for idx, expected in enumerate(results):
             expected_hex = expected["md"].lower()
             actual_hex = actual_digests[idx].hex()
@@ -280,8 +293,6 @@ def _run_sha3_mct(
                 res.pass_count += 1
             else:
                 res.fail_count += 1
-                if mismatch_iter < 0:
-                    mismatch_iter = idx
                 res.failures.append(
                     {
                         "tcId": f"{tc['tcId']}/MCT-j={idx}",
@@ -412,6 +423,17 @@ def _shake_mct_iterate(
                 outLen = minOutLen/8 + (rightmost % Range)
             resultsArray[j] = (Output[1000], outLen_for_that_iter)
 
+    Implementation notes:
+
+    * The ctypes output buffer is allocated **once** at ``max_out`` bytes
+      and re-used for all 100,000 inner SHAKE calls. A naive version
+      allocates a fresh ``ctypes.create_string_buffer(out_len)`` on every
+      inner iteration — that is 100,000 Python/C heap roundtrips per
+      tcId and dominates CI runtime.
+    * On each squeeze, only the first ``out_len`` bytes of the shared
+      buffer are live; anything beyond that belongs to the previous
+      iteration and is ignored (and overwritten on the next call).
+
     Returns the 100 (digest, outLen_bytes) pairs.
     """
     fn = getattr(lib, shake_fn_name)
@@ -426,11 +448,15 @@ def _shake_mct_iterate(
     else:
         msg = msg[:16]
 
+    # Single reusable ctypes buffer, sized for the worst case. SHAKE writes
+    # exactly `out_len` bytes on each call (see ama_shake128/256), so the
+    # stale bytes past index out_len from the previous iteration are
+    # harmless — we slice `raw[:out_len]` before using the digest.
+    out_buf = ctypes.create_string_buffer(max_out)
     out_len = max_out
     results: list[tuple[bytes, int]] = []
     for _j in range(100):
         for _i in range(1000):
-            out_buf = ctypes.create_string_buffer(out_len)
             fn(msg, ctypes.c_size_t(len(msg)), out_buf, ctypes.c_size_t(out_len))
             digest = out_buf.raw[:out_len]
 
@@ -463,6 +489,11 @@ def _run_shake_mct(
     and ``maxOutLen`` in bits; both must be byte-aligned (they always are in
     the upstream vector files). Vectors inside the group each contain a
     ``msg`` seed and a ``resultsArray`` of 100 entries.
+
+    Skip counters mirror the SHA-3 MCT variant: a skipped tcId increments
+    ``vectors_skipped`` by the size of its ``resultsArray`` (or 100 when
+    absent) rather than by 1, so the per-algorithm totals line up with
+    the tested+skipped accounting in the summary table.
     """
     min_out_bits = int(tg.get("minOutLen", 0))
     max_out_bits = int(tg.get("maxOutLen", 0))
@@ -472,21 +503,27 @@ def _run_shake_mct(
         or min_out_bits % 8 != 0
         or max_out_bits % 8 != 0
     ):
-        count = len(tg.get("tests", []))
-        res.vectors_skipped += count
+        # Group-level skip: count 100 per tcId (the per-vector expansion)
+        skipped = 0
+        for _tc in tg.get("tests", []):
+            skipped += len(_tc.get("resultsArray") or []) or 100
+        res.vectors_skipped += skipped
         res.skip_reasons.append(
             f"MCT TG {tg['tgId']}: non-byte-aligned output-len range "
-            f"[{min_out_bits}, {max_out_bits}] bits"
+            f"[{min_out_bits}, {max_out_bits}] bits ({skipped} vectors skipped)"
         )
         return
 
     for tc in tg["tests"]:
         msg_hex = tc.get("msg", "")
         results = tc.get("resultsArray") or []
+        expected_count = len(results) if results else 100
+
         if not msg_hex or not results:
-            res.vectors_skipped += 1
+            res.vectors_skipped += expected_count
             res.skip_reasons.append(
-                f"MCT tcId {tc['tcId']}: missing msg or resultsArray"
+                f"MCT tcId {tc['tcId']}: missing msg or resultsArray "
+                f"({expected_count} vectors skipped)"
             )
             continue
         seed = bytes.fromhex(msg_hex)
@@ -496,7 +533,9 @@ def _run_shake_mct(
                 lib, shake_fn_name, seed, min_out_bits, max_out_bits
             )
         except Exception as exc:  # pragma: no cover
-            res.fail_count += 1
+            # Count every vector under this tcId as failed so the summary
+            # totals stay consistent.
+            res.fail_count += expected_count
             res.failures.append(
                 {
                     "tcId": str(tc["tcId"]),

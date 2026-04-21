@@ -20,6 +20,16 @@ AMA ("libsodium Ed25519 sign: 14.2x faster"). Operations whose peer
 library is not installed in the environment are reported as
 ``available=False`` so the output is self-descriptive rather than
 silently dropping columns.
+
+Peer libraries (PyNaCl / libsodium, liboqs-python, cryptography) are
+BENCHMARK-ONLY comparison targets. They are **NOT** dependencies of
+AMA Cryptography and **are NOT used in any production code path** —
+they appear in this file, in ``benchmarks/requirements-bench.txt``,
+and in nothing else. The INVARIANT-1 "zero external crypto
+dependencies" property of the production library is unaffected by
+this script. To install the peer libraries for local benchmarking::
+
+    pip install -r benchmarks/requirements-bench.txt
 """
 
 import json

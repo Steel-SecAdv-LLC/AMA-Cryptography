@@ -677,7 +677,7 @@ static void print_json_row(const bench_result_t *r, int last) {
  * single number would misrepresent the distribution.
  */
 static void print_json_peer_context(void) {
-    printf("  ,\n  \"peer_context\": {\n");
+    printf("  \"peer_context\": {\n");
     printf("    \"description\": \"Published ops/sec ranges for peer libraries on x86-64. Reference only — not measured by this harness.\",\n");
     printf("    \"libsodium_ed25519_keygen\":  { \"ops_per_sec_range\": [40000, 60000], \"source\": \"libsodium 1.0.20 bench on Intel x86-64 with precomputed base-point table; https://doc.libsodium.org/advanced/ed25519\" },\n");
     printf("    \"libsodium_ed25519_sign\":    { \"ops_per_sec_range\": [50000, 80000], \"source\": \"SUPERCOP ed25519/ref10, amd64; https://bench.cr.yp.to/supercop.html\" },\n");
@@ -690,7 +690,7 @@ static void print_json_peer_context(void) {
 }
 
 static void print_json_end(void) {
-    printf("  ]");
+    printf("  ],\n");
     print_json_peer_context();
     printf("}\n");
 }
