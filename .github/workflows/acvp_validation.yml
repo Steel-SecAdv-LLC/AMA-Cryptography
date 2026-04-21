@@ -101,7 +101,10 @@ jobs:
           from pathlib import Path
 
           expected = int(os.environ["EXPECTED_VECTORS"])
-          acvp_ref = os.environ.get("ACVP_REF", "master")
+          # Normalize the same way nist_vectors/fetch_vectors.py::_acvp_ref()
+          # does, so what we record in validation_summary.json matches what
+          # fetch_vectors actually used (strip whitespace, empty → master).
+          acvp_ref = (os.environ.get("ACVP_REF", "master") or "").strip() or "master"
           results_path = Path("nist_vectors/results.json")
           data = json.loads(results_path.read_text())
           summary = data.get("summary", {})
@@ -125,9 +128,17 @@ jobs:
           )
           skipped = total_skipped_non_mct + total_mct_skipped
 
-          # An algorithm is "failing" if it reports any failed vector, has
-          # zero vectors tested (vector fetch likely missed it), or emits a
-          # `notes` field (harness surfaced a non-fatal issue).
+          # Fail criteria (must stay in lockstep with the `flag` expression
+          # below). An algorithm is flagged as failing only when:
+          #   * `fail_count > 0` — the harness reported at least one failed
+          #     vector for this algorithm, OR
+          #   * `vectors_tested == 0` — the vector fetch or harness skipped
+          #     this algorithm entirely (likely a CI configuration bug).
+          # A non-empty `notes` field is NOT a failure signal on its own:
+          # the harness uses `notes` for purely informational annotations
+          # (e.g., "External/pure TG 5 only"). We still capture notes in
+          # the failure record below so they show up in the error log when
+          # an algorithm is flagged for one of the reasons above.
           failing_algos = []
           for algo in algorithms:
               fail_count = int(algo.get("fail_count", 0))
@@ -138,9 +149,6 @@ jobs:
                   else list(notes) if isinstance(notes, list)
                   else []
               )
-              # `notes` on its own is informational in the harness (e.g.,
-              # "External/pure TG 5 only"); only flag when combined with zero
-              # vectors OR an explicit failure count.
               flag = fail_count > 0 or vectors_tested == 0
               if flag:
                   failing_algos.append({
