@@ -12,6 +12,8 @@
   "cmvp_certified": false,
   "fips_140_3_certified": false,
   "nist_endorsed": false,
+  "acvp_ref": "master",
+  "acvp_ref_note": "Upstream ACVP-Server ref this attestation was generated against. The per-algorithm source_url entries below embed this ref as a human-browseable URL. For a reproducible attested run, set the ACVP_REF environment variable (consumed by nist_vectors/fetch_vectors.py and recorded in nist_vectors/validation_summary.json by .github/workflows/acvp_validation.yml) to a specific ACVP-Server commit SHA or tag, then regenerate this file and its source_urls.",
   "algorithms": [
     {
       "name": "SHA-256",

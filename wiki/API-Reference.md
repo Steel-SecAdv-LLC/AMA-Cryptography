@@ -49,12 +49,19 @@ Defined in `ama_cryptography/crypto_api.py:215–220`.
 class CryptoBackend(Enum):
     """Available implementation backends."""
     C_LIBRARY   = auto()  # libama_cryptography.so (fastest, native PQC) — default
-    CYTHON      = auto()  # Cython-optimized (fast)
-    PURE_PYTHON = auto()  # Pure-Python fallback
+    CYTHON      = auto()  # Cython-optimized (fast); provider-level overlay
+    PURE_PYTHON = auto()  # RESERVED — not a usable runtime mode
 ```
 
-> There is **no** `CryptoBackend.PYTHON` member; the pure-Python path is
-> `CryptoBackend.PURE_PYTHON`.
+> **INVARIANT-7 (revised):** The library refuses to operate without the
+> native C constant-time backend. `ama_cryptography.crypto_api` raises
+> `RuntimeError` at import time (see `crypto_api.py:105–114`) if the
+> native HMAC/HKDF accelerators are missing. `CryptoBackend.PURE_PYTHON`
+> is therefore a reserved enum slot only — passing it does **not** select
+> a pure-Python fallback; the library has none. `CryptoBackend.CYTHON`
+> remains a provider-level overlay on top of the C library.
+>
+> There is **no** `CryptoBackend.PYTHON` member.
 
 ### Dataclasses
 
@@ -116,11 +123,21 @@ equal: bool     = AmaCryptography.constant_time_compare(a: bytes, b: bytes)
 ```
 
 Invariants:
-- `generate_keypair()` / `sign()` / `verify()` are valid only when the selected
-  algorithm is a signature scheme; `encapsulate()` / `decapsulate()` only for
-  KEM schemes. Calling the wrong family raises `ValueError`.
-- INVARIANT-7 (no silent cryptographic fallback): if the native C library is
-  unavailable, `__init__` raises rather than degrading to Python.
+- `generate_keypair()` / `sign()` / `verify()` are valid only when the
+  selected algorithm is a signature scheme; `encapsulate()` /
+  `decapsulate()` only for KEM schemes. Calling the wrong family raises
+  **`TypeError`** (`"Current algorithm does not support signing"` /
+  `"...verification"` / `"...KEM"` — see
+  `ama_cryptography/crypto_api.py:1607-1645`). `AESGCMProvider` also
+  raises `TypeError` from `generate_keypair()` because AEAD does not
+  produce asymmetric keypairs.
+- **INVARIANT-7 (no silent cryptographic fallback):** if the native C
+  library is unavailable, the failure is raised **at module import
+  time** (`crypto_api.py:105-114` hard-fails the
+  `import ama_cryptography.crypto_api` with a `RuntimeError`) — not
+  later in `AmaCryptography.__init__`. A `_enforce_invariant7()` call
+  in each primitive (`crypto_api.py:149-168`) also re-checks at call
+  time, so a runtime patch that unsets the native lib fails fast.
 
 #### Direct providers
 
@@ -297,25 +314,37 @@ class KeyMetadata:
 
 #### `HDKeyDerivation`
 
-BIP32-style hierarchical deterministic key derivation. AMA uses
-HMAC-SHA3-256 (not HMAC-SHA-512) for derivation; only hardened indices
-are permitted.
+BIP32-style hierarchical deterministic key derivation. AMA uses the
+**BIP32-standard HMAC-SHA-512** PRF (delegated to the native C
+accelerator via `ama_cryptography.pqc_backends.native_hmac_sha512` to
+satisfy INVARIANT-1 — no stdlib `hmac`). Both hardened and non-hardened
+derivation are supported:
+
+- `derive_key(purpose, account, change, index)` is a convenience wrapper
+  that always emits a **fully hardened** BIP-44 path.
+- `derive_path(path)` accepts an explicit BIP32-style path and supports
+  **both hardened (`44'` or index ≥ 2^31) and non-hardened** components.
+  Non-hardened derivation uses the native secp256k1 public-key
+  computation.
 
 ```python
 from ama_cryptography.key_management import HDKeyDerivation
 
-hd = HDKeyDerivation(seed: bytes | None = None, seed_phrase: str | None = None)   # 32–64 byte seed, or a BIP-39-style phrase
+hd = HDKeyDerivation(
+    seed: bytes | None = None,           # 32–64 byte seed
+    seed_phrase: str | None = None,      # BIP-39-style phrase (PBKDF2)
+)
 
-# Derive a key at a fixed BIP-44-style position
+# Convenience: always fully-hardened BIP-44 path
 key_material: bytes = hd.derive_key(
     purpose: int,           # e.g., 44
     account: int = 0,
     change: int = 0,
     index: int = 0,
-) -> bytes
+)
 
-# Derive from an explicit hardened path. Returns (key, chain_code)
-key, chain_code = hd.derive_path(path: str)        # e.g. "m/44'/0'/0'/0'"
+# Explicit BIP32 path — accepts both hardened (44') and non-hardened (44)
+key, chain_code = hd.derive_path(path: str)   # e.g. "m/44'/0'/0'/0'" or "m/44/0/0"
 ```
 
 #### `KeyRotationManager`

@@ -576,12 +576,10 @@ from ama_cryptography.legacy_compat import (
     verify_crypto_package,
     generate_key_management_system,
 )
-from ama_cryptography.pqc_backends import generate_dilithium_keypair
-# Ed25519PrivateKey is imported from the optional PyCA `cryptography`
-# dependency used here purely as an interop helper when you already have
-# a 32-byte seed. AMA's native Ed25519 (see `ama_cryptography.ed25519`)
-# can replace this path when PyCA interop is not required.
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from ama_cryptography.pqc_backends import (
+    generate_dilithium_keypair,
+    native_ed25519_keypair_from_seed,   # AMA native Ed25519 (no PyCA)
+)
 import json
 
 # 1. Define ethical vector (4 pillars, balanced weighting)
@@ -603,9 +601,10 @@ def generate_ethical_kms(author: str) -> KeyManagementSystem:
     hmac_key = derive_key_with_ethics(master_secret, "hmac", ethical_vector)
     ed25519_seed = derive_key_with_ethics(master_secret, "ed25519", ethical_vector)
 
-    # Ed25519 keypair (PyCA interop — see import note above)
-    ed_private = Ed25519PrivateKey.from_private_bytes(ed25519_seed)
-    ed_public = ed_private.public_key()
+    # Ed25519 keypair — AMA native C backend, no external crypto dep.
+    # native_ed25519_keypair_from_seed(seed) -> (public_key, secret_key)
+    # where secret_key is the 64-byte expanded key (seed || pk).
+    ed_public, ed_private = native_ed25519_keypair_from_seed(ed25519_seed)
 
     # Dilithium keypair — generate_dilithium_keypair() returns a
     # DilithiumKeyPair dataclass with .public_key / .secret_key (bytes).

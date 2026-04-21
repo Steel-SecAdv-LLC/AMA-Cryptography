@@ -96,11 +96,26 @@ and call `derive_key(...)` — see the next section.
 
 ### Overview
 
-AMA Cryptography implements BIP32-compatible hierarchical deterministic key derivation using HKDF-SHA3-256 and secp256k1 elliptic curve operations.
+AMA Cryptography implements BIP32-compatible hierarchical deterministic
+key derivation. The PRF is **HMAC-SHA-512** (BIP32-standard, delegated to
+the native C backend via `ama_cryptography.pqc_backends.native_hmac_sha512`
+to satisfy INVARIANT-1 — no stdlib `hmac`). Non-hardened child derivation
+uses the native secp256k1 public-key computation.
 
-**Key derivation path format:** `m/{purpose}'/{account}'/{change}'/{index}'`
+**Path format:** `m/{purpose}'/{account}'/{change}'/{index}'` (BIP-44) or
+any explicit BIP32 path.
 
-All derivations use **hardened** child keys (index ≥ 2^31). Non-hardened derivation raises `NotImplementedError` because hardened derivation prevents child key exposure from compromising sibling or parent keys.
+- `HDKeyDerivation.derive_key(purpose, account, change, index)` is a
+  convenience wrapper that always emits a **fully hardened** path — all
+  four components are hardened by construction.
+- `HDKeyDerivation.derive_path(path)` accepts an explicit BIP32-style
+  path and **supports both hardened and non-hardened** components.
+  Hardened indices are written with a trailing `'` (or equivalently
+  passed as `index ≥ 2^31 = HARDENED_OFFSET`). Hardened derivation gives
+  stronger branch isolation — compromise of a hardened child cannot be
+  used to recover sibling or parent private keys — but non-hardened
+  indices are supported for the cases where public-child derivation is
+  required.
 
 ### `HDKeyDerivation`
 
