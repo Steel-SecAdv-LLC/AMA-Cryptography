@@ -116,7 +116,7 @@ of thing that was skipped:
   introduces. Tracked per-algorithm in `nist_vectors/run_vectors.py`
   under the legacy field name `mct_skipped` — which despite the name
   counts *all* non-AFT test groups, not just MCT (see `run_vectors.py`
-  lines 186, 233, 280, 337, 394, 440, 479, 548, 617, 687). Surfaced as
+  lines 203, 247, 291, 345, 399, 445, 484, 550, 616, 683). Surfaced as
   `total_non_aft_skipped` in `validation_summary.json`, with the raw
   `mct_skipped` kept alongside as a backwards-compatible alias.
 

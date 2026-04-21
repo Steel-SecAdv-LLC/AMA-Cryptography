@@ -124,6 +124,15 @@ jobs:
           test -f nist_vectors/results.json
 
       - name: Assert vector floor, cross-check attestation.json, emit validation_summary.json
+        # Must run even when `run_vectors` exited 1 (vector regression = the
+        # exact case this workflow is designed to diagnose). Without
+        # `if: always()` the shell's `set -e` aborts the job at the
+        # `run_vectors` step and this diagnostic step never runs, leaving
+        # the uploaded artifact bundle missing validation_summary.json /
+        # acvp_badge.json and the Job Summary rendering "Status: unknown".
+        # Skip the step only on cancellation (cancelled runs can't produce
+        # meaningful output and may leave partial results.json behind).
+        if: always() && steps.run_vectors.outcome != 'cancelled'
         id: summary
         run: |
           python3 <<'PY'
@@ -143,6 +152,72 @@ jobs:
           _DEFAULT_ACVP_REF = "v1.1.0.42"
           acvp_ref = (os.environ.get("ACVP_REF", _DEFAULT_ACVP_REF) or "").strip() or _DEFAULT_ACVP_REF
           results_path = Path("nist_vectors/results.json")
+
+          # Graceful handling for the `run_vectors.py` crashed early path:
+          # if we're running under `if: always()` because the previous step
+          # exited non-zero AND the harness never got far enough to write
+          # results.json, we still emit a minimal validation_summary.json
+          # and acvp_badge.json so the uploaded artifact bundle carries a
+          # diagnostic rather than an empty directory.
+          if not results_path.is_file():
+              now_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+              try:
+                  git_sha_crash = subprocess.check_output(
+                      ["git", "rev-parse", "HEAD"], text=True
+                  ).strip()
+              except Exception:
+                  git_sha_crash = ""
+              crash_summary = {
+                  "timestamp": now_ts,
+                  "git_sha": git_sha_crash,
+                  "git_ref": os.environ.get("GITHUB_REF", ""),
+                  "github_run_id": os.environ.get("GITHUB_RUN_ID", ""),
+                  "acvp_ref": acvp_ref,
+                  "expected_vectors_floor": expected,
+                  "total_tested": 0,
+                  "total_passed": 0,
+                  "total_failed": 0,
+                  "total_skipped": 0,
+                  "total_skipped_aft_filtered": 0,
+                  "total_non_aft_skipped": 0,
+                  "status": "fail",
+                  "algorithms": [],
+                  "failing_algorithms": [],
+                  "error": (
+                      "nist_vectors/results.json was not produced by "
+                      "nist_vectors/run_vectors.py. The harness crashed "
+                      "before writing results (likely a build/link/ctypes "
+                      "error loading libama_cryptography.so). Inspect the "
+                      "preceding 'Run ACVP vector validation' step log."
+                  ),
+              }
+              Path("nist_vectors/validation_summary.json").write_text(
+                  json.dumps(crash_summary, indent=2)
+              )
+              Path("nist_vectors/acvp_badge.json").write_text(
+                  json.dumps(
+                      {
+                          "schemaVersion": 1,
+                          "label": "ACVP",
+                          "message": "harness crashed (no results.json)",
+                          "color": "red",
+                      },
+                      indent=2,
+                  )
+              )
+              gh_out = os.environ.get("GITHUB_OUTPUT")
+              if gh_out:
+                  with open(gh_out, "a") as fh:
+                      fh.write("status=fail\n")
+                      fh.write("tested=0\n")
+                      fh.write("passed=0\n")
+                      fh.write("failed=0\n")
+              print(
+                  "::error::nist_vectors/results.json missing — harness crashed. "
+                  "Wrote minimal diagnostic validation_summary.json + acvp_badge.json."
+              )
+              sys.exit(1)
+
           data = json.loads(results_path.read_text())
           summary = data.get("summary", {})
           algorithms = data.get("algorithms", [])
@@ -163,8 +238,8 @@ jobs:
           # Bucket B — Non-AFT test groups skipped wholesale:
           # `run_vectors.py` increments the per-algorithm field named
           # `mct_skipped` for EVERY test group with `testType != "AFT"`
-          # (see run_vectors.py:186, 233, 280, 337, 394, 440, 479, 548,
-          # 617, 687). The name is a legacy misnomer — in practice this
+          # (see run_vectors.py:203, 247, 291, 345, 399, 445, 484, 550,
+          # 616, 683). The name is a legacy misnomer — in practice this
           # field counts MCT + LDT + VOT + any future non-AFT type the
           # harness doesn't implement. We read it here as the raw
           # per-algorithm value and expose it under the accurate name

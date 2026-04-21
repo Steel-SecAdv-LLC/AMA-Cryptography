@@ -613,7 +613,7 @@ def test_ml_kem_decap(lib: ctypes.CDLL) -> AlgorithmResult:
     for tg in data["testGroups"]:
         if tg["testType"] != "AFT":
             count = len(tg.get("tests", []))
-            res.vectors_skipped += count
+            res.mct_skipped += count
             res.skip_reasons.append(f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors")
             continue
         if tg.get("parameterSet") != "ML-KEM-1024":
