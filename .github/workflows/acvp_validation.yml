@@ -294,12 +294,34 @@ jobs:
           print(f"Wrote {out}")
 
           # Update a simple status file that can back a shields.io endpoint.
+          # Enumerate the specific reason(s) we failed so the badge / artifact
+          # is interpretable on its own. A pure floor miss or an attestation
+          # cross-check mismatch can produce `failed == 0` — the prior
+          # "{failed} failing" wording would read "0 failing" in that case,
+          # which is actively misleading.
+          if status == "pass":
+              badge_message = f"{passed}/{tested} pass"
+          else:
+              reasons: list[str] = []
+              if failing_algos:
+                  reasons.append(f"{len(failing_algos)} algos failing")
+              if tested < expected:
+                  reasons.append(f"floor {tested}/{expected}")
+              # `mismatches` is only defined inside the attestation branch;
+              # guard on locals() so this stays safe if the attestation file
+              # was missing and the cross-check was skipped.
+              if "mismatches" in locals() and mismatches:
+                  reasons.append(f"attestation_mismatch {len(mismatches)}")
+              if not reasons:
+                  # Last-resort fallback — should only fire if status was
+                  # flipped to "fail" for a reason we didn't enumerate above.
+                  reasons.append(f"{failed} failing")
+              badge_message = f"{passed}/{tested} FAIL ({', '.join(reasons)})"
+
           badge = {
               "schemaVersion": 1,
               "label": "ACVP",
-              "message": f"{passed}/{tested} pass"
-                         if status == "pass"
-                         else f"{passed}/{tested} FAIL ({failed} failing)",
+              "message": badge_message,
               "color": "brightgreen" if status == "pass" else "red",
           }
           Path("nist_vectors/acvp_badge.json").write_text(

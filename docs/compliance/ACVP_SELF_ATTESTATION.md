@@ -95,8 +95,24 @@ with reproduction commands.
 | SLH-DSA SigVer | FIPS 205 | ACVP SLH-DSA-sigVer-FIPS205 | SLH-DSA-SHA2-256f (external/pure, TG 5) | 14 | 14 | 100% |
 | **TOTAL** | | | | **815** | **815** | **100%** |
 
-4,757 vectors were skipped (MCT, LDT, VOT, non-byte-aligned, non-target
-parameter sets). Skip rationale is documented in §4.
+**5,793 vectors were skipped total**, split as:
+
+- **4,757 non-MCT skips** — LDT, VOT, non-byte-aligned inputs, non-target
+  parameter sets (ML-KEM-512/768, ML-DSA-44/87, SLH-DSA non-SHA2-256f),
+  ML-KEM encapsulation (randomness parameter `m` not exposed by the AMA
+  API), and ML-DSA / SLH-DSA internal and pre-hash test groups. This is
+  the number reported by `nist_vectors/results.json::summary.total_skipped`
+  and surfaced as `total_skipped_non_mct` in the CI
+  `validation_summary.json`.
+- **1,036 MCT skips** — Monte Carlo Test groups across all algorithms;
+  MCT requires iterative state not exposed by the one-shot AMA FFI.
+  Tracked by the harness as per-algorithm `mct_skipped` and surfaced as
+  `total_mct_skipped` in `validation_summary.json`.
+
+The total (5,793) and the split match
+[`docs/compliance/acvp_attestation.json`](acvp_attestation.json) fields
+`total_vectors_skipped`, `total_vectors_skipped_non_mct`, and
+`total_vectors_skipped_mct`. Skip rationale is documented in §4.
 
 ---
 

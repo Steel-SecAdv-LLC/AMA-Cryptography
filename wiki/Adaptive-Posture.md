@@ -85,12 +85,25 @@ controller = CryptoPostureController(monitor=monitor)
 # Drive a full monitor → evaluate → respond cycle:
 evaluation = controller.evaluate_and_respond()
 
-# PostureEvaluation exposes `.action` (the applied action), NOT
-# `.recommended_action`. See adaptive_posture.py:68.
+# PostureEvaluation exposes `.action` — the evaluator's **recommended**
+# action (there is no `.recommended_action` field; see
+# adaptive_posture.py:68-81). The controller may, in order:
+#   * execute the action immediately,
+#   * queue it as a PendingAction if `confirmation_mode=True` is set on
+#     the controller (destructive actions only; requires explicit
+#     confirm_action(action_id) later), or
+#   * skip execution when the `rotation_cooldown` window is still active
+#     (default 300s since the last rotation).
+# Check the controller's state (pending_actions, last_rotation_time) if
+# you need to know whether a recommended action was actually applied.
 if evaluation.action != PostureAction.NONE:
-    # The controller has already applied the cryptographic action; the
-    # caller typically logs / alerts on the returned decision.
-    logger.warning("Posture action applied: %s", evaluation.action)
+    logger.warning("Posture recommendation: %s", evaluation.action)
+    summary = controller.get_posture_summary()
+    for pa in summary["pending_actions"]:
+        logger.info(
+            "Queued for confirmation: %s (%s, reason=%s)",
+            pa["action_id"], pa["action"], pa["reason"],
+        )
 ```
 
 ---
@@ -118,22 +131,31 @@ from ama_cryptography.adaptive_posture import (
     PostureAction,
 )
 from ama_cryptography.double_helix_engine import AmaEquationEngine
+from ama_cryptography_monitor import AmaCryptographyMonitor
 
-# Initialize components
-engine = AmaEquationEngine()
-evaluator = PostureEvaluator()
-controller = CryptoPostureController()
+# Initialize components. In production, wire the controller to a live
+# AmaCryptographyMonitor and let evaluate_and_respond() drive the full
+# monitor → evaluate → respond cycle.
+engine     = AmaEquationEngine()
+monitor    = AmaCryptographyMonitor(enabled=True)
+controller = CryptoPostureController(monitor=monitor)
 
-# Evolve state and extract monitoring signals
-state = engine.get_current_state()
-monitoring_data = engine.get_monitoring_metrics(state)
-
-# Evaluate threat posture
-evaluation = evaluator.evaluate(monitoring_data)
+# If you only need to peek at an evaluation without dispatching actions,
+# construct a PostureEvaluator and call .evaluate(monitor_report) directly.
+# monitor_report is a dict (NOT a kwarg called monitor_signals).
+evaluator       = PostureEvaluator()
+state           = engine.get_current_state()
+monitor_report  = engine.get_monitoring_metrics(state)
+evaluation      = evaluator.evaluate(monitor_report)
 
 if evaluation.threat_level >= ThreatLevel.HIGH:
     print(f"⚠ High threat detected: {evaluation.threat_level}")
-    controller.execute_action(evaluation, crypto_api, key_manager)
+    # Drive the controller to actually respond. It enforces cooldown
+    # and confirmation_mode internally; there is no public
+    # execute_action(evaluation, ...) method.
+    applied = controller.evaluate_and_respond()
+    print(f"Applied: {applied.action}, pending queue: "
+          f"{len(controller.get_posture_summary()['pending_actions'])}")
 ```
 
 ---
@@ -147,8 +169,12 @@ decides how to react — for example, by instantiating a new
 ```python
 from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 
-# Under HIGH threat: drop Ed25519 and run ML-DSA-65 only
-if evaluation.recommended_action == PostureAction.SWITCH_ALGORITHM:
+# Under HIGH threat: drop Ed25519 and run ML-DSA-65 only.
+# The field is `action` (see adaptive_posture.py:68-81), not
+# `recommended_action`. The controller may have queued the action under
+# confirmation_mode or skipped it under rotation_cooldown — the field
+# carries the *recommendation*, not a guarantee of immediate execution.
+if evaluation.action == PostureAction.SWITCH_ALGORITHM:
     crypto_api = AmaCryptography(algorithm=AlgorithmType.ML_DSA_65)
     print("Switched to quantum-resistant-only mode")
 ```

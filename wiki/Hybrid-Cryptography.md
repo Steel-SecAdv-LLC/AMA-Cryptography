@@ -26,20 +26,35 @@ The `HybridCombiner` class implements a binding construction combining X25519 (c
 ### Construction
 
 ```
-combined_ss = HKDF-SHA3-256(
-    ikm  = u8(2)                     ||                # component count
-           u32be(|ct_c|) || ct_c     ||                # classical ciphertext
-           u32be(|ct_p|) || ct_p     ||                # pqc ciphertext
-           ss_c || ss_p,                               # concatenated shared secrets
-    salt = u32be(|pk_c|) || pk_c || u32be(|pk_p|) || pk_p,
-    info = b"ama-hybrid-kem-v1",
-)
+# Exact layout as implemented by HybridCombiner.combine()
+# (ama_cryptography/hybrid_combiner.py:184-209). All length fields are
+# u32-big-endian (via struct.pack(">I", ...)) except the component count,
+# which is a single u8 (struct.pack(">B", 2)).
+
+salt = u32be(|ct_c|) || ct_c || u32be(|ct_p|) || ct_p           # ciphertexts
+ikm  = ss_c || ss_p                                             # shared secrets (no prefix)
+info = label || u8(2)                                           # component_count
+       || u32be(|pk_c|) || pk_c
+       || u32be(|pk_p|) || pk_p                                 # public keys
+label = b"ama-hybrid-kem-v2"                                    # default (v2; v1 was pre-PR #224)
+
+combined_ss = HKDF-SHA3-256(salt, ikm, info, output_len)
 ```
 
-All variable-length fields use fixed-size length prefixes (`u32be`) so
-concatenation is unambiguous — the component-stripping attack reported in
-audit finding C6 is prevented by the `u8(count)` header together with the
-`u32be(len)` prefixes (PR #224, v2.1.5).
+Length-prefix rationale: every variable-length field uses a fixed-size
+length prefix (`u32be` for ciphertexts/public keys, `u8` for the
+component count) so concatenation is unambiguous. The `u8(2)` component
+header together with the `u32be(len)` prefixes prevents the
+component-stripping attack reported in audit finding C6 (PR #224,
+v2.1.5) — an attacker cannot reshape the HKDF input to look like a
+single-component (classical- or PQC-only) KEM output.
+
+Binding rationale: ciphertexts live in `salt` and public keys live in
+`info` so the HKDF output is cryptographically bound to **both** the
+transport-time encapsulation (`ct_c`, `ct_p`) and the identities of the
+key-holders (`pk_c`, `pk_p`). Shared secrets go in `ikm` on their own
+because they are the only fields the attacker must not be able to
+truncate — HKDF's `ikm` is processed through the Extract step whole.
 
 ### `HybridCombiner` API
 
