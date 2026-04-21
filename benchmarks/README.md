@@ -15,7 +15,7 @@ one of the artifacts below (or to live output regenerated from them):
 | [`phase0_baseline_results.json`](phase0_baseline_results.json) | Python/ctypes-path per-op medians | `python benchmarks/phase0_baseline.py` |
 | `../benchmark_results.json` (runtime-only) | Suite output consumed by dashboards | `python benchmark_suite.py --json benchmark_results.json` |
 | `../build/bin/benchmark_c_raw` (runtime-only) | Raw C per-op medians (no ctypes overhead) | `cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release && cmake --build build --target benchmark_c_raw && build/bin/benchmark_c_raw --json` |
-| [`../CSRC_ALIGN_REPORT.md`](../CSRC_ALIGN_REPORT.md) | NIST ACVP vector counts (815/815/0) | Updated with each alignment run |
+| [`../CSRC_ALIGN_REPORT.md`](../CSRC_ALIGN_REPORT.md) | NIST ACVP vector counts (1,215/1,215/0 — 815 AFT + 400 SHA-3 MCT) | Updated with each alignment run |
 
 If a chart cannot cite one of these, it should not be in the repository.
 The fallback tables in [`generate_charts.py`](generate_charts.py) are

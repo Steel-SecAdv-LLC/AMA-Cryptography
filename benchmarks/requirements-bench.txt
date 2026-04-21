@@ -12,8 +12,13 @@
 # "Peer Comparison" table falls back to the published reference ranges
 # in benchmarks/baseline.json::metadata.peer_references.
 #
-# Usage:
-#     pip install -r benchmarks/requirements-bench.txt
+# This file is the canonical pin set; the `benchmark` extra in
+# pyproject.toml carries the same three packages. Either install method
+# works — update them in lockstep:
+#
+# Usage (either form is equivalent):
+#     pip install ".[benchmark]"                           # via pyproject extra
+#     pip install -r benchmarks/requirements-bench.txt    # via flat pin file
 #     python benchmarks/comparative_benchmark.py
 
 # libsodium 1.0.x Python bindings — Ed25519 reference implementation.

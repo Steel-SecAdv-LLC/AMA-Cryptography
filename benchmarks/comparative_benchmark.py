@@ -25,9 +25,15 @@ Peer libraries (PyNaCl / libsodium, liboqs-python, cryptography) are
 BENCHMARK-ONLY comparison targets. They are **NOT** dependencies of
 AMA Cryptography and **are NOT used in any production code path** —
 they appear in this file, in ``benchmarks/requirements-bench.txt``,
-and in nothing else. The INVARIANT-1 "zero external crypto
-dependencies" property of the production library is unaffected by
-this script. To install the peer libraries for local benchmarking::
+in the ``benchmark`` extra of ``pyproject.toml``, and in nothing else.
+The INVARIANT-1 "zero external crypto dependencies" property of the
+production library is unaffected by this script. To install the peer
+libraries for local benchmarking, either::
+
+    pip install ".[benchmark]"
+
+(when the repo is installable via its build backend — the preferred
+form), or the equivalent flat pin file::
 
     pip install -r benchmarks/requirements-bench.txt
 """
@@ -339,16 +345,23 @@ class ComparativeBenchmark:
             import oqs
 
             algo = None
+            last_probe_err: Optional[str] = None
             for candidate in ("ML-KEM-1024", "Kyber1024"):
                 try:
                     probe = oqs.KeyEncapsulation(candidate)
                     probe.generate_keypair()
                     algo = candidate
                     break
-                except Exception:
+                except Exception as probe_exc:  # noqa: BLE001 - any liboqs error is "not supported"
+                    # liboqs raises different exception types per build (LibraryError,
+                    # MechanismNotSupportedError, RuntimeError). Anything here means
+                    # this build doesn't support the candidate name — probe the next.
+                    last_probe_err = f"{type(probe_exc).__name__}: {probe_exc}"
                     continue
             if algo is None:
-                raise RuntimeError("liboqs has no ML-KEM-1024 / Kyber1024")
+                raise RuntimeError(
+                    f"liboqs has no ML-KEM-1024 / Kyber1024 (last probe: {last_probe_err})"
+                )
 
             client = oqs.KeyEncapsulation(algo)
             public_key = client.generate_keypair()

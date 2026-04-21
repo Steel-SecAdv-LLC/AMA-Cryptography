@@ -689,7 +689,7 @@ The test suite includes:
 - Integration tests for package creation and verification
 - Edge case testing for error handling
 - Performance regression tests with tiered tolerances
-- NIST ACVP vector validation (815 vectors across 12 algorithm functions — see [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md))
+- NIST ACVP vector validation (1,215 vectors across 12 algorithm functions — 815 AFT + 400 SHA-3 MCT; see [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md))
 - Fuzz harnesses for 12 C targets (`fuzz/`): AES-GCM, Argon2, ChaCha20-Poly1305, consttime, Dilithium, Ed25519, HKDF, Kyber, secp256k1, SHA3, SPHINCS+, X25519
 - Empirical constant-time verification via [dudect](docs/constant-time-testing.md) (Welch's t-test on execution times)
 - [OSS-Fuzz](docs/oss-fuzz-onboarding.md) onboarding preparation for continuous 24/7 fuzzing
@@ -846,12 +846,13 @@ The module implements technical controls aligned with FIPS 140-3 Security Level 
 
 AMA Cryptography is continuously validated against official
 [NIST ACVP](https://github.com/usnistgov/ACVP-Server) Algorithm Functional
-Test (AFT) vectors plus NIST reference vectors from the applicable
-FIPS/SP publications (FIPS 180-4 §B.1 reference vectors for SHA-256,
-and SP 800-38D Appendix B test cases TC13–TC16 for AES-256-GCM, since
-those two are not sourced from ACVP-Server). The current attestation is
-**815 / 815 vectors passing** across 12 algorithm functions and 7 NIST
-standards.
+Test (AFT) vectors plus the four SHA-3 family Monte Carlo Test (MCT)
+groups and NIST reference vectors from the applicable FIPS/SP
+publications (FIPS 180-4 §B.1 reference vectors for SHA-256, and SP
+800-38D Appendix B test cases TC13–TC16 for AES-256-GCM, since those
+two are not sourced from ACVP-Server). The current attestation is
+**1,215 / 1,215 vectors passing** across 12 algorithm functions and
+7 NIST standards.
 
 - **Formal attestation:** [`docs/compliance/ACVP_SELF_ATTESTATION.md`](docs/compliance/ACVP_SELF_ATTESTATION.md)
 - **Machine-readable:** [`docs/compliance/acvp_attestation.json`](docs/compliance/acvp_attestation.json)
@@ -864,17 +865,20 @@ standards.
 |---|---|---:|---:|---:|
 | SHA-256 | FIPS 180-4 | 3 | 3 | 0 |
 | HMAC-SHA-256 | FIPS 198-1 | 150 | 150 | 0 |
-| SHA3-256 | FIPS 202 | 151 | 151 | 0 |
-| SHA3-512 | FIPS 202 | 86 | 86 | 0 |
-| SHAKE-128 | FIPS 202 | 174 | 174 | 0 |
-| SHAKE-256 | FIPS 202 | 143 | 143 | 0 |
+| SHA3-256 (AFT+MCT) | FIPS 202 | 251 | 251 | 0 |
+| SHA3-512 (AFT+MCT) | FIPS 202 | 186 | 186 | 0 |
+| SHAKE-128 (AFT+MCT) | FIPS 202 | 274 | 274 | 0 |
+| SHAKE-256 (AFT+MCT) | FIPS 202 | 243 | 243 | 0 |
 | AES-256-GCM | SP 800-38D | 4 | 4 | 0 |
 | ML-KEM-1024 KeyGen | FIPS 203 | 25 | 25 | 0 |
 | ML-KEM-1024 EncapDecap | FIPS 203 | 25 | 25 | 0 |
 | ML-DSA-65 KeyGen | FIPS 204 | 25 | 25 | 0 |
 | ML-DSA-65 SigVer | FIPS 204 | 15 | 15 | 0 |
 | SLH-DSA-SHA2-256f SigVer | FIPS 205 | 14 | 14 | 0 |
-| **TOTAL** | | **815** | **815** | **0** |
+| **TOTAL** | | **1,215** | **1,215** | **0** |
+
+Each SHA-3 family row = AFT byte-aligned count + 100 MCT vectors (1 tcId
+× 100 outer iterations per FIPS-202 MCT spec).
 
 ### Reproduction
 
@@ -923,7 +927,7 @@ Full reproduction instructions:
 | [THREAT_MODEL.md](THREAT_MODEL.md) | Threat model and risk assessment |
 | [benchmarks/](benchmarks/) | Performance measurements |
 | [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) | Cryptographic algorithm overview |
-| [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md) | NIST ACVP vector validation evidence (815/815 pass) |
+| [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md) | NIST ACVP vector validation evidence (1,215/1,215 pass — 815 AFT + 400 SHA-3 MCT) |
 | [docs/compliance/ACVP_SELF_ATTESTATION.md](docs/compliance/ACVP_SELF_ATTESTATION.md) | **Customer-facing** NIST ACVP self-attestation (NOT CAVP, NOT CMVP, NOT FIPS 140-3) |
 | [docs/compliance/acvp_attestation.json](docs/compliance/acvp_attestation.json) | Machine-readable attestation — structured fields for tooling |
 | [CSRC_STANDARDS.md](CSRC_STANDARDS.md) | Governing standards registry |
@@ -1295,7 +1299,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
-- **Rigorous testing:** 2,028 test functions across 70 Python files plus 14 C files, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (815/815), and tiered benchmark-regression checks
+- **Rigorous testing:** 2,028 test functions across 70 Python files plus 14 C files, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims

@@ -23,13 +23,16 @@ VECTORS_DIR = Path(__file__).parent
 
 
 # The upstream ACVP-Server ref. Defaults to the immutable release tag
-# `v1.1.0.42` — the exact upstream snapshot the 815-vector attestation in
-# docs/compliance/acvp_attestation.json was generated against. Pinning a
-# tag (not a branch) guarantees that a local run without ACVP_REF set
-# reproduces the same bytes the CI workflow and the published attestation
-# reference. Override with `export ACVP_REF=<tag-or-sha>` (or `master` if
-# deliberately testing against upstream tip). The resolved ref is returned
-# by `_acvp_ref()` and recorded in validation_summary.json by
+# `v1.1.0.42` — the exact upstream snapshot the 1,215-vector attestation
+# in docs/compliance/acvp_attestation.json was generated against (815 AFT
+# + 400 SHA-3 MCT; the MCT vectors live in the same v1.1.0.42 JSON
+# projections and were brought under AMA coverage in v2.1.6 via
+# run_vectors.py::_run_sha3_mct / _run_shake_mct). Pinning a tag (not a
+# branch) guarantees that a local run without ACVP_REF set reproduces
+# the same bytes the CI workflow and the published attestation
+# reference. Override with `export ACVP_REF=<tag-or-sha>` (or `master`
+# if deliberately testing against upstream tip). The resolved ref is
+# returned by `_acvp_ref()` and recorded in validation_summary.json by
 # .github/workflows/acvp_validation.yml; that workflow also cross-checks
 # the ref against docs/compliance/acvp_attestation.json::acvp_ref so the
 # attestation artifact and the CI run cannot silently drift apart.

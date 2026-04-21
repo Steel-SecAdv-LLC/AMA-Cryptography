@@ -236,9 +236,21 @@ the cell reads **N/A**.
 **Reproducing live peer numbers locally:**
 
 ```bash
-pip install pynacl oqs cryptography
+# Option A (preferred) — install via the pyproject extra:
+pip install ".[benchmark]"
+
+# Option B — install from the standalone benchmark-only requirements file
+# (equivalent, and useful when the repo is checked out without the
+# project's build backend):
+pip install -r benchmarks/requirements-bench.txt
+
 python benchmarks/comparative_benchmark.py
 ```
+
+The `benchmark` extra and `benchmarks/requirements-bench.txt` pin the same
+three packages (`pynacl`, `liboqs-python`, `cryptography`) and are kept in
+sync. Neither is a production dependency — INVARIANT-1 ("zero external
+crypto dependencies") applies only to the core library surface.
 
 This writes `benchmarks/comparative_benchmark_results.json` with a
 `comparisons` object that has a per-operation `verdict` string of the

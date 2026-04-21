@@ -25,7 +25,9 @@ customer-facing format.
 
 - **Algorithm correctness** against NIST ACVP Algorithm Functional Test (AFT)
   vectors for **12 algorithm functions** across **7 NIST standards**
-  (FIPS 180-4, FIPS 198-1, FIPS 202, FIPS 203, FIPS 204, FIPS 205, SP 800-38D).
+  (FIPS 180-4, FIPS 198-1, FIPS 202, FIPS 203, FIPS 204, FIPS 205, SP 800-38D),
+  plus **Monte Carlo Test (MCT)** coverage for the four SHA-3 family
+  algorithms (SHA3-256, SHA3-512, SHAKE-128, SHAKE-256) added in v2.1.6.
 - **Deterministic, reproducible** pass/fail results against upstream
   `usnistgov/ACVP-Server` vector projections, plus published FIPS/SP
   reference vectors for SHA-256 and AES-256-GCM.
@@ -41,10 +43,10 @@ This attestation **does not** represent, claim, or imply any of the following:
 - NIST Cryptographic Module Validation Program (CMVP) certification.
 - FIPS 140-3 compliance, validation, or accreditation at any security level.
 - Side-channel resistance guarantees (timing, power, EM, cache).
-- Implementation correctness beyond the specific AFT test vectors listed in
-  §3. Monte Carlo Test (MCT), Large Data Test (LDT), Variable Output Test
-  (VOT), non-byte-aligned inputs, and non-target parameter sets are out of
-  scope (see §4).
+- Implementation correctness beyond the specific AFT and SHA-3 MCT test
+  vectors listed in §3. Large Data Test (LDT) groups, Variable Output Test
+  (VOT) groups, MCT for non-SHA-3 algorithms, non-byte-aligned inputs, and
+  non-target parameter sets are out of scope (see §4).
 - A substitute for an independent third-party cryptographic audit.
 - NIST endorsement of any kind.
 
@@ -83,19 +85,26 @@ with reproduction commands.
 |---|---|---|---|---:|---:|---:|
 | SHA-256 | FIPS 180-4 | FIPS 180-4 §B.1 | 256-bit | 3 | 3 | 100% |
 | HMAC-SHA-256 | FIPS 198-1 | ACVP HMAC-SHA2-256-2.0 | 256-bit | 150 | 150 | 100% |
-| SHA3-256 | FIPS 202 | ACVP SHA3-256-2.0 | 256-bit | 151 | 151 | 100% |
-| SHA3-512 | FIPS 202 | ACVP SHA3-512-2.0 | 512-bit | 86 | 86 | 100% |
-| SHAKE-128 | FIPS 202 | ACVP SHAKE-128-1.0 | XOF, rate=1344 | 174 | 174 | 100% |
-| SHAKE-256 | FIPS 202 | ACVP SHAKE-256-1.0 | XOF, rate=1088 | 143 | 143 | 100% |
+| SHA3-256 | FIPS 202 | ACVP SHA3-256-2.0 (AFT + MCT) | 256-bit | 251 | 251 | 100% |
+| SHA3-512 | FIPS 202 | ACVP SHA3-512-2.0 (AFT + MCT) | 512-bit | 186 | 186 | 100% |
+| SHAKE-128 | FIPS 202 | ACVP SHAKE-128-1.0 (AFT + MCT) | XOF, rate=1344 | 274 | 274 | 100% |
+| SHAKE-256 | FIPS 202 | ACVP SHAKE-256-1.0 (AFT + MCT) | XOF, rate=1088 | 243 | 243 | 100% |
 | AES-256-GCM | SP 800-38D | SP 800-38D App. B (TC13–TC16) | 256-bit key | 4 | 4 | 100% |
 | ML-KEM KeyGen | FIPS 203 | ACVP ML-KEM-keyGen-FIPS203 | ML-KEM-1024 | 25 | 25 | 100% |
 | ML-KEM EncapDecap | FIPS 203 | ACVP ML-KEM-encapDecap-FIPS203 | ML-KEM-1024 (decap only) | 25 | 25 | 100% |
 | ML-DSA KeyGen | FIPS 204 | ACVP ML-DSA-keyGen-FIPS204 | ML-DSA-65 | 25 | 25 | 100% |
 | ML-DSA SigVer | FIPS 204 | ACVP ML-DSA-sigVer-FIPS204 | ML-DSA-65 (external/pure, TG 3) | 15 | 15 | 100% |
 | SLH-DSA SigVer | FIPS 205 | ACVP SLH-DSA-sigVer-FIPS205 | SLH-DSA-SHA2-256f (external/pure, TG 5) | 14 | 14 | 100% |
-| **TOTAL** | | | | **815** | **815** | **100%** |
+| **TOTAL** | | | | **1,215** | **1,215** | **100%** |
 
-**5,793 vectors were skipped total**, split into two buckets by the kind
+The four SHA-3 family rows include **100 Monte Carlo Test (MCT) vectors each
+(400 total)** on top of the existing AFT coverage. MCT was added in v2.1.6;
+implementation lives in `nist_vectors/run_vectors.py::_run_sha3_mct` and
+`_run_shake_mct`. The FIPS-202 MCT spec is a 100 outer × 1000 inner
+per-tcId iteration over a single seed, so 1 tcId per algorithm contributes
+100 scored vectors under the per-resultsArray-entry accounting convention.
+
+**5,789 vectors were skipped total**, split into two buckets by the kind
 of thing that was skipped:
 
 - **4,757 AFT-filtered skips** — individual vectors filtered out *within*
@@ -107,20 +116,20 @@ of thing that was skipped:
   `nist_vectors/results.json::summary.total_skipped`, aggregated from
   each algorithm's `vectors_skipped`, and surfaced as
   `total_skipped_aft_filtered` in the CI `validation_summary.json`.
-- **1,036 non-AFT skips** — entire test groups with `testType != "AFT"`
-  that the AMA harness does not exercise: Monte Carlo Test (MCT) groups
-  (iterative state not exposed by the one-shot AMA FFI), Large Data
-  Test (LDT) groups (multi-gigabyte inputs outside the CI harness
-  scope), Variable Output Test (VOT) groups (harness supports
-  fixed-length outputs only), and any future non-AFT type upstream
-  introduces. Tracked per-algorithm in `nist_vectors/run_vectors.py`
-  under the legacy field name `mct_skipped` — which despite the name
-  counts *all* non-AFT test groups, not just MCT (see `run_vectors.py`
-  lines 203, 247, 291, 345, 399, 445, 484, 550, 616, 683). Surfaced as
-  `total_non_aft_skipped` in `validation_summary.json`, with the raw
-  `mct_skipped` kept alongside as a backwards-compatible alias.
+- **1,032 non-AFT skips** — entire test groups with `testType != "AFT"`
+  that the AMA harness does not exercise: **Large Data Test (LDT)**
+  groups (8 SHA-3 tcIds total — multi-gigabyte inputs outside the CI
+  harness scope) and **Variable Output Test (VOT)** groups (1,024
+  SHAKE-128/256 tcIds — output-length coverage is already exercised by
+  AFT vectors in the same upstream vector files). MCT groups for the
+  four SHA-3 algorithms are no longer counted here as of v2.1.6; they
+  moved from "skipped" to "tested" (reducing this count from 1,036 to
+  1,032). Tracked per-algorithm in `nist_vectors/run_vectors.py` under
+  the legacy field name `mct_skipped` (now a semantic misnomer — the
+  field counts non-AFT groups generally); surfaced as
+  `total_non_aft_skipped` in `validation_summary.json`.
 
-The total (5,793) and the split match
+The total (5,789) and the split match
 [`docs/compliance/acvp_attestation.json`](acvp_attestation.json) fields
 `total_vectors_skipped`, `total_vectors_skipped_aft_filtered`, and
 `total_vectors_skipped_non_aft`. Skip rationale is documented in §4.
@@ -131,9 +140,16 @@ The total (5,793) and the split match
 
 From [`CSRC_ALIGN_REPORT.md` §1.4](../../CSRC_ALIGN_REPORT.md):
 
-1. **AFT only.** Monte Carlo Test (MCT), Large Data Test (LDT), and Variable
-   Output Test (VOT) vectors are skipped. MCT requires iterative state not
-   supported by the one-shot harness; LDT requires multi-gigabyte inputs.
+1. **AFT + SHA-3 MCT.** Algorithm Functional Test (AFT) vectors are run for
+   every covered algorithm. Monte Carlo Test (MCT) vectors are run for
+   SHA3-256, SHA3-512, SHAKE-128, and SHAKE-256 (added in v2.1.6 via
+   `_run_sha3_mct` / `_run_shake_mct` against the one-shot C API, which is
+   sufficient because FIPS-202 MCT feeds each inner iteration's digest back
+   as the next iteration's full input rather than accumulating state across
+   iterations). Large Data Test (LDT) groups remain skipped — they require
+   multi-gigabyte inputs outside the CI scope — and Variable Output Test
+   (VOT) groups remain skipped because their output-length coverage is
+   already exercised by AFT vectors in the same upstream vector files.
 2. **Byte-aligned only.** Vectors with `bitLength % 8 != 0` are skipped —
    the AMA C API is byte-granularity only.
 3. **ML-KEM-1024 only.** ML-KEM-512 and ML-KEM-768 parameter sets are not
@@ -183,8 +199,9 @@ Continuous validation runs on every push to `main` and on a weekly schedule
 via [`.github/workflows/acvp_validation.yml`](../../.github/workflows/acvp_validation.yml).
 The workflow parses `results.json` and enforces three conditions:
 
-1. **Floor:** `total_tested >= EXPECTED_VECTORS` (currently 815). Coverage
-   can expand above this floor; it cannot drop below it.
+1. **Floor:** `total_tested >= EXPECTED_VECTORS` (currently 1,215 after the
+   v2.1.6 SHA-3 MCT addition: 815 AFT + 400 MCT). Coverage can expand above
+   this floor; it cannot drop below it.
 2. **Zero failures:** `total_failed == 0`, and no algorithm may report a
    non-zero `fail_count` or a `vectors_tested == 0`.
 3. **Attestation cross-check:** `docs/compliance/acvp_attestation.json`
@@ -203,7 +220,10 @@ skip accounting (`total_skipped_aft_filtered` vs `total_non_aft_skipped`).
 ## 6. Remediation History
 
 The following issues were identified during validation and have been
-resolved. All 815/815 vectors pass after remediation.
+resolved. All 1,215/1,215 vectors pass after remediation (the bullets
+below predate the v2.1.6 MCT expansion — the underlying 815 AFT vectors
+also still pass, and the added 400 MCT vectors are a superset of the
+original attestation scope).
 
 ### 6.1 ML-DSA-65 SigVer — external/pure wrapper (now 15/15)
 

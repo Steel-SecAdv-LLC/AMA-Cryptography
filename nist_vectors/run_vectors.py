@@ -275,7 +275,7 @@ def _run_sha3_mct(
             res.failures.append(
                 {
                     "tcId": str(tc["tcId"]),
-                    "expected": f"100 × {digest_size}-byte digests",
+                    "expected": f"100 x {digest_size}-byte digests",
                     "actual": f"exception: {exc}",
                     "note": "SHA-3 MCT execution failed",
                 }
@@ -437,7 +437,15 @@ def _shake_mct_iterate(
     Returns the 100 (digest, outLen_bytes) pairs.
     """
     fn = getattr(lib, shake_fn_name)
-    assert min_out_bits % 8 == 0 and max_out_bits % 8 == 0
+    # Group-level skip in _run_shake_mct already guards against non-byte-aligned
+    # output ranges. This is a defensive check against programmer error rather
+    # than a runtime guard against malformed input — use ValueError rather than
+    # assert so the message survives `python -O`.
+    if min_out_bits % 8 != 0 or max_out_bits % 8 != 0:
+        raise ValueError(
+            f"SHAKE MCT output range must be byte-aligned: "
+            f"min={min_out_bits}b, max={max_out_bits}b"
+        )
     min_out = min_out_bits // 8
     max_out = max_out_bits // 8
     rng = max_out - min_out + 1
@@ -497,12 +505,7 @@ def _run_shake_mct(
     """
     min_out_bits = int(tg.get("minOutLen", 0))
     max_out_bits = int(tg.get("maxOutLen", 0))
-    if (
-        min_out_bits == 0
-        or max_out_bits == 0
-        or min_out_bits % 8 != 0
-        or max_out_bits % 8 != 0
-    ):
+    if min_out_bits == 0 or max_out_bits == 0 or min_out_bits % 8 != 0 or max_out_bits % 8 != 0:
         # Group-level skip: count 100 per tcId (the per-vector expansion)
         skipped = 0
         for _tc in tg.get("tests", []):
@@ -529,9 +532,7 @@ def _run_shake_mct(
         seed = bytes.fromhex(msg_hex)
 
         try:
-            actual = _shake_mct_iterate(
-                lib, shake_fn_name, seed, min_out_bits, max_out_bits
-            )
+            actual = _shake_mct_iterate(lib, shake_fn_name, seed, min_out_bits, max_out_bits)
         except Exception as exc:  # pragma: no cover
             # Count every vector under this tcId as failed so the summary
             # totals stay consistent.
@@ -539,7 +540,7 @@ def _run_shake_mct(
             res.failures.append(
                 {
                     "tcId": str(tc["tcId"]),
-                    "expected": "100 × (md, outLen)",
+                    "expected": "100 x (md, outLen)",
                     "actual": f"exception: {exc}",
                     "note": "SHAKE MCT execution failed",
                 }
@@ -552,30 +553,21 @@ def _run_shake_mct(
             actual_md, actual_outlen_bytes = actual[idx]
             actual_md_hex = actual_md.hex()
             res.vectors_tested += 1
-            if (
-                actual_md_hex == expected_md
-                and actual_outlen_bytes * 8 == expected_outlen
-            ):
+            if actual_md_hex == expected_md and actual_outlen_bytes * 8 == expected_outlen:
                 res.pass_count += 1
             else:
                 res.fail_count += 1
                 note = "SHAKE MCT mismatch"
                 if actual_outlen_bytes * 8 != expected_outlen:
-                    note += (
-                        f" (outLen {actual_outlen_bytes*8} vs {expected_outlen})"
-                    )
+                    note += f" (outLen {actual_outlen_bytes*8} vs {expected_outlen})"
                 res.failures.append(
                     {
                         "tcId": f"{tc['tcId']}/MCT-j={idx}",
                         "expected": (
-                            expected_md[:64] + "..."
-                            if len(expected_md) > 64
-                            else expected_md
+                            expected_md[:64] + "..." if len(expected_md) > 64 else expected_md
                         ),
                         "actual": (
-                            actual_md_hex[:64] + "..."
-                            if len(actual_md_hex) > 64
-                            else actual_md_hex
+                            actual_md_hex[:64] + "..." if len(actual_md_hex) > 64 else actual_md_hex
                         ),
                         "note": note,
                     }

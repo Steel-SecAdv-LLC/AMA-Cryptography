@@ -774,7 +774,7 @@ docker run ama-cryptography:latest
 | Security Tests | Cryptographic correctness | 100% crypto functions | `test_crypto_core_penetration.py`, `test_memory_security.py` |
 | Compliance Tests | Standards adherence | All claimed standards | `test_nist_kat.py`, `test_pqc_kat.py` |
 | Fuzz Tests | Input mutation testing | 12 C targets | `fuzz/fuzz_*.c` |
-| NIST ACVP Vectors | Official vector validation | 815 vectors, 12 algorithms | `nist_vectors/` |
+| NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithms (815 AFT + 400 SHA-3 MCT) | `nist_vectors/` |
 
 **Total:** 2,028 Python test functions across 70 test files, plus 11
 ctest-registered C tests and 1 standalone C benchmark under `tests/c/`.
@@ -808,7 +808,7 @@ instructions.
 
 Cryptographic implementations are validated against:
 
-- **NIST ACVP vectors** (`nist_vectors/`): 815 vectors tested, 815 passed across 12 algorithm functions and 7 NIST standards. See [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md) for full breakdown.
+- **NIST ACVP vectors** (`nist_vectors/`): 1,215 vectors tested, 1,215 passed across 12 algorithm functions and 7 NIST standards (815 AFT + 400 SHA-3 MCT added in v2.1.6). See [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md) for full breakdown.
 - NIST FIPS 202 SHA3-256, SHA3-512, SHAKE-128, SHAKE-256 test vectors
 - NIST FIPS 203 ML-KEM-1024 KAT vectors (10/10 pass — `tests/kat/fips203/`)
 - NIST FIPS 204 ML-DSA-65 KAT vectors (10/10 pass — `tests/kat/fips204/`)
@@ -880,7 +880,7 @@ Cryptographic implementations are validated against:
 - `SECURITY.md`: Detailed security proofs and analysis
 - `THREAT_MODEL.md`: Threat model and risk assessment
 - `BENCHMARKS.md`: Performance measurement methodology and results (generated locally by running `python benchmark_suite.py`; not checked into version control)
-- `CSRC_ALIGN_REPORT.md`: NIST ACVP vector validation results (815/815 pass)
+- `CSRC_ALIGN_REPORT.md`: NIST ACVP vector validation results (1,215/1,215 pass — 815 AFT + 400 SHA-3 MCT)
 - `CSRC_STANDARDS.md`: Governing standards registry
 - `IMPLEMENTATION_GUIDE.md`: Deployment and integration guide
 - `.github/INVARIANTS.md`: Canonical architectural invariants (INVARIANT-1 through INVARIANT-15), including vendoring policy and CSRC_STANDARDS.md mapping

@@ -20,10 +20,11 @@ the AMA Cryptography library (version 2.1). The validation covers 12 algorithm
 functions across 6 NIST standards (FIPS 180-4, FIPS 198-1, FIPS 202, FIPS 203,
 FIPS 204, FIPS 205) and 1 NIST Special Publication (SP 800-38D).
 
-**Summary:** 1,851 vectors tested, **1,851 passed**, **0 failed**, 3,721 skipped
+**Summary:** 1,215 vectors tested, **1,215 passed**, **0 failed**, 5,789 skipped
 (non-byte-aligned inputs, non-target parameter sets, LDT/VOT test types).
 Monte Carlo Test (MCT) coverage for the SHA-3 family was added in v2.1.6
-(+1,036 vectors across SHA3-256/SHA3-512/SHAKE-128/SHAKE-256).
+(+400 vectors = 4 algorithms × 1 tcId × 100 outer iterations per FIPS-202
+MCT spec, across SHA3-256/SHA3-512/SHAKE-128/SHAKE-256).
 
 All algorithms pass 100% of applicable NIST test vectors.
 
@@ -126,16 +127,10 @@ integration, expanded-key fast path) is in-house.
 
 | Algorithm | Standard | Source | Tested | Pass | Fail | Skipped | Notes |
 |-----------|----------|--------|-------:|-----:|-----:|--------:|-------|
-| SHA3-256 AFT | FIPS 202 | ACVP-Server | 151 | 151 | 0 | 0 | All AFT byte-aligned vectors tested |
-| SHA3-256 MCT | FIPS 202 | ACVP-Server | 300 | 300 | 0 | 0 | 3 seeds × 100 outer iterations (1,000 hashes each) via `_run_sha3_mct` |
-| SHA3-512 AFT | FIPS 202 | ACVP-Server | 86 | 86 | 0 | 0 | All AFT byte-aligned vectors tested |
-| SHA3-512 MCT | FIPS 202 | ACVP-Server | 200 | 200 | 0 | 0 | 2 seeds × 100 outer iterations via `_run_sha3_mct` |
-| SHAKE-128 AFT | FIPS 202 | ACVP-Server | 174 | 174 | 0 | 0 | All AFT byte-aligned vectors tested |
-| SHAKE-128 MCT | FIPS 202 | ACVP-Server | 300 | 300 | 0 | 0 | 3 seeds × 100 outer iterations (1,000 SHAKE calls each) via `_run_shake_mct` |
-| SHAKE-128 VOT | FIPS 202 | ACVP-Server | 0 | 0 | 0 | 1,218 | VOT skipped (output-length coverage subsumed by AFT) |
-| SHAKE-256 AFT | FIPS 202 | ACVP-Server | 143 | 143 | 0 | 0 | All AFT byte-aligned vectors tested |
-| SHAKE-256 MCT | FIPS 202 | ACVP-Server | 236 | 236 | 0 | 0 | Variable-output MCT via `_run_shake_mct` |
-| SHAKE-256 VOT | FIPS 202 | ACVP-Server | 0 | 0 | 0 | 1,005 | VOT skipped (output-length coverage subsumed by AFT) |
+| SHA3-256 (AFT + MCT) | FIPS 202 | ACVP-Server | 251 | 251 | 0 | 1,047 | 151 AFT byte-aligned + 100 MCT (1 tcId × 100 outer iterations); 1,043 AFT non-byte-aligned skipped + 4 LDT tcIds skipped |
+| SHA3-512 (AFT + MCT) | FIPS 202 | ACVP-Server | 186 | 186 | 0 | 600 | 86 AFT byte-aligned + 100 MCT (1 tcId × 100 outer iterations); 596 AFT non-byte-aligned skipped + 4 LDT tcIds skipped |
+| SHAKE-128 (AFT + MCT) | FIPS 202 | ACVP-Server | 274 | 274 | 0 | 1,730 | 174 AFT byte-aligned + 100 MCT (variable-output MCT with rightmost-16-bit feedback); 1,218 AFT non-byte-aligned skipped + 512 VOT tcIds skipped |
+| SHAKE-256 (AFT + MCT) | FIPS 202 | ACVP-Server | 243 | 243 | 0 | 1,517 | 143 AFT byte-aligned + 100 MCT; 1,005 AFT non-byte-aligned skipped + 512 VOT tcIds skipped |
 | HMAC-SHA-256 | FIPS 198-1 | ACVP-Server | 150 | 150 | 0 | 0 | All AFT vectors tested |
 | SHA-256 | FIPS 180-4 | FIPS 180-4 §B.1 | 3 | 3 | 0 | 0 | Three reference vectors from standard |
 | AES-256-GCM | SP 800-38D | SP 800-38D App. B | 4 | 4 | 0 | 0 | TC13–TC16 (256-bit key only) |
@@ -144,7 +139,7 @@ integration, expanded-key fast path) is in-house.
 | ML-DSA-65 KeyGen | FIPS 204 | ACVP-Server | 25 | 25 | 0 | 50 | ML-DSA-44/87 skipped |
 | ML-DSA-65 SigVer | FIPS 204 | ACVP-Server | 15 | 15 | 0 | 165 | External/pure TG 3; resolved via `ama_dilithium_verify_ctx` |
 | SLH-DSA-SHA2-256f SigVer | FIPS 205 | ACVP-Server | 14 | 14 | 0 | 490 | External/pure TG 5 only; resolved via FIPS 205 hash function alignment |
-| **TOTAL** | | | **1,851** | **1,851** | **0** | **3,721** | |
+| **TOTAL** | | | **1,215** | **1,215** | **0** | **5,789** | 4,757 AFT-filtered + 1,032 non-AFT (LDT+VOT) |
 
 ### 2.2 Resolved: ML-DSA-65 SigVer (previously 3 failures, now 15/15 pass)
 
@@ -290,10 +285,10 @@ optimization.
 |----------|-----------|---------|
 | FIPS 180-4 | SHA-256 | **PASS** — 3/3 reference vectors |
 | FIPS 198-1 | HMAC-SHA-256 | **PASS** — 150/150 AFT vectors |
-| FIPS 202 | SHA3-256 | **PASS** — 151/151 AFT vectors |
-| FIPS 202 | SHA3-512 | **PASS** — 86/86 AFT vectors |
-| FIPS 202 | SHAKE-128 | **PASS** — 174/174 AFT vectors |
-| FIPS 202 | SHAKE-256 | **PASS** — 143/143 AFT vectors |
+| FIPS 202 | SHA3-256 | **PASS** — 251/251 (151 AFT + 100 MCT) |
+| FIPS 202 | SHA3-512 | **PASS** — 186/186 (86 AFT + 100 MCT) |
+| FIPS 202 | SHAKE-128 | **PASS** — 274/274 (174 AFT + 100 MCT) |
+| FIPS 202 | SHAKE-256 | **PASS** — 243/243 (143 AFT + 100 MCT) |
 | SP 800-38D | AES-256-GCM | **PASS** — 4/4 test cases (TC13–TC16) |
 | FIPS 203 | ML-KEM-1024 KeyGen | **PASS** — 25/25 AFT vectors |
 | FIPS 203 | ML-KEM-1024 Decap | **PASS** — 25/25 AFT vectors |
@@ -304,10 +299,11 @@ optimization.
 ### 3.2 Summary
 
 The AMA Cryptography library demonstrates correct implementation of the core
-cryptographic algorithms for all tested NIST standards. All 815 applicable
+cryptographic algorithms for all tested NIST standards. All 1,215 applicable
 NIST test vectors pass across hash functions (SHA-256, SHA3-256, SHA3-512,
-SHAKE-128, SHAKE-256), HMAC-SHA-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65,
-and SLH-DSA-SHA2-256f.
+SHAKE-128, SHAKE-256) — including the 400 newly-added FIPS-202 Monte Carlo
+Test vectors for the SHA-3 family — HMAC-SHA-256, AES-256-GCM, ML-KEM-1024,
+ML-DSA-65, and SLH-DSA-SHA2-256f.
 
 ### 3.3 CAVP Disclaimer
 

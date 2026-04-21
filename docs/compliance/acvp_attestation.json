@@ -39,41 +39,45 @@
       "name": "SHA3-256",
       "standard": "FIPS 202",
       "parameter_set": "256-bit",
-      "source": "ACVP-Server SHA3-256-2.0",
+      "source": "ACVP-Server SHA3-256-2.0 (AFT + MCT)",
       "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/SHA3-256-2.0",
-      "vectors_tested": 151,
-      "vectors_passed": 151,
-      "vectors_failed": 0
+      "vectors_tested": 251,
+      "vectors_passed": 251,
+      "vectors_failed": 0,
+      "coverage_note": "151 AFT byte-aligned vectors + 100 MCT vectors (1 tcId x 100 outer iterations per FIPS 202 MCT spec)."
     },
     {
       "name": "SHA3-512",
       "standard": "FIPS 202",
       "parameter_set": "512-bit",
-      "source": "ACVP-Server SHA3-512-2.0",
+      "source": "ACVP-Server SHA3-512-2.0 (AFT + MCT)",
       "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/SHA3-512-2.0",
-      "vectors_tested": 86,
-      "vectors_passed": 86,
-      "vectors_failed": 0
+      "vectors_tested": 186,
+      "vectors_passed": 186,
+      "vectors_failed": 0,
+      "coverage_note": "86 AFT byte-aligned vectors + 100 MCT vectors (1 tcId x 100 outer iterations per FIPS 202 MCT spec)."
     },
     {
       "name": "SHAKE-128",
       "standard": "FIPS 202",
       "parameter_set": "XOF, rate=1344",
-      "source": "ACVP-Server SHAKE-128-1.0",
+      "source": "ACVP-Server SHAKE-128-1.0 (AFT + MCT)",
       "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/SHAKE-128-1.0",
-      "vectors_tested": 174,
-      "vectors_passed": 174,
-      "vectors_failed": 0
+      "vectors_tested": 274,
+      "vectors_passed": 274,
+      "vectors_failed": 0,
+      "coverage_note": "174 AFT byte-aligned vectors + 100 MCT vectors (variable output length, rightmost-16-bits feedback per FIPS 202 MCT spec)."
     },
     {
       "name": "SHAKE-256",
       "standard": "FIPS 202",
       "parameter_set": "XOF, rate=1088",
-      "source": "ACVP-Server SHAKE-256-1.0",
+      "source": "ACVP-Server SHAKE-256-1.0 (AFT + MCT)",
       "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/SHAKE-256-1.0",
-      "vectors_tested": 143,
-      "vectors_passed": 143,
-      "vectors_failed": 0
+      "vectors_tested": 243,
+      "vectors_passed": 243,
+      "vectors_failed": 0,
+      "coverage_note": "143 AFT byte-aligned vectors + 100 MCT vectors (variable output length per FIPS 202 MCT spec)."
     },
     {
       "name": "AES-256-GCM",
@@ -136,13 +140,13 @@
       "vectors_failed": 0
     }
   ],
-  "total_vectors_tested": 815,
-  "total_vectors_passed": 815,
+  "total_vectors_tested": 1215,
+  "total_vectors_passed": 1215,
   "total_vectors_failed": 0,
-  "total_vectors_skipped": 5793,
+  "total_vectors_skipped": 5789,
   "total_vectors_skipped_aft_filtered": 4757,
-  "total_vectors_skipped_non_aft": 1036,
-  "total_vectors_skipped_note": "total_vectors_skipped = total_vectors_skipped_aft_filtered + total_vectors_skipped_non_aft. The AFT-filtered bucket (run_vectors.py::results.summary.total_skipped, aggregated from per-algorithm vectors_skipped) counts individual vectors filtered out within AFT test groups: non-byte-aligned inputs, non-target parameter sets, ML-KEM encapsulation (AMA does not expose the randomness parameter m), and ML-DSA/SLH-DSA internal/pre-hash test groups. The non-AFT bucket counts entire test groups with testType != 'AFT' that are skipped wholesale (MCT, LDT, VOT, and any future non-AFT type); these are tracked per-algorithm in run_vectors.py under the legacy field name 'mct_skipped' (see run_vectors.py:203, 247, 291, 345, 399, 445, 484, 550, 616, 683) and surfaced in validation_summary.json as total_non_aft_skipped (with mct_skipped kept alongside as a backwards-compatible alias for the raw harness field).",
+  "total_vectors_skipped_non_aft": 1032,
+  "total_vectors_skipped_note": "total_vectors_skipped = total_vectors_skipped_aft_filtered + total_vectors_skipped_non_aft. The AFT-filtered bucket (run_vectors.py::results.summary.total_skipped, aggregated from per-algorithm vectors_skipped) counts individual vectors filtered out within AFT test groups: non-byte-aligned inputs, non-target parameter sets, ML-KEM encapsulation (AMA does not expose the randomness parameter m), and ML-DSA/SLH-DSA internal/pre-hash test groups. The non-AFT bucket counts entire test groups with testType != 'AFT' that are skipped wholesale (LDT + VOT in the current coverage; MCT moved OUT of this bucket in v2.1.6 when the four SHA-3 MCT runners were added, dropping the count from 1036 to 1032). These are tracked per-algorithm in run_vectors.py under the legacy field name 'mct_skipped' (the field name predates MCT coverage and is now semantically a misnomer — it counts non-AFT test groups generally) and surfaced in validation_summary.json as total_non_aft_skipped (with mct_skipped kept alongside as a backwards-compatible alias for the raw harness field).",
   "skip_categories_aft_filtered": [
     "Non-byte-aligned inputs (bitLength % 8 != 0)",
     "Non-target parameter sets (ML-KEM-512/768, ML-DSA-44/87, SLH-DSA non-SHA2-256f)",
@@ -150,10 +154,16 @@
     "ML-DSA/SLH-DSA internal and pre-hash test groups"
   ],
   "skip_categories_non_aft": [
-    "Monte Carlo Test (MCT) groups — iterative state not supported by the one-shot AMA FFI",
-    "Large Data Test (LDT) groups — multi-gigabyte inputs outside the CI harness scope",
-    "Variable Output Test (VOT) groups — harness supports fixed-length outputs only",
+    "Large Data Test (LDT) groups — multi-gigabyte inputs outside the CI harness scope (8 SHA-3 tcIds)",
+    "Variable Output Test (VOT) groups — output-length coverage is already exercised by AFT vectors in the same upstream vector files (1024 SHAKE tcIds)",
     "Any other testType != 'AFT' test group encountered upstream"
+  ],
+  "coverage_changelog": [
+    {
+      "date": "2026-04-21",
+      "library_version": "2.1.6",
+      "change": "Added Monte Carlo Test (MCT) coverage for SHA3-256, SHA3-512, SHAKE-128, SHAKE-256 (400 vectors across 4 algorithms). total_vectors_tested: 815 -> 1215. total_vectors_skipped_non_aft: 1036 -> 1032 (MCT groups moved from skipped to tested; LDT and VOT remain skipped). MCT runner implementation is in nist_vectors/run_vectors.py::_run_sha3_mct and _run_shake_mct."
+    }
   ],
   "test_environment": {
     "os": "Linux 6.18.5 (x86_64)",

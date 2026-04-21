@@ -32,7 +32,7 @@ and continuously enforced in
 | ML-DSA-65 (FIPS 204) | `ama_dilithium.c` | Written from FIPS 204 spec | None (no upstream code copied) | N/A (clean-room) | 25/25 KeyGen, 15/15 SigVer (TG3) |
 | SLH-DSA-SHA2-256f (FIPS 205) | `ama_sphincs.c` | Written from FIPS 205 spec | None (no upstream code copied) | N/A (clean-room) | 14/14 SigVer (TG5) |
 | Ed25519 | `ama_ed25519.c` + `vendor/ed25519-donna/` | Vendored | [floodyberry/ed25519-donna](https://github.com/floodyberry/ed25519-donna) | Public domain (see `vendor/ed25519-donna/LICENSE`) | Sign/verify round-trip |
-| SHA3-256 / SHA3-512 / SHAKE | `ama_sha3.c` | Written from FIPS 202 spec | None | N/A (clean-room) | 151 + 86 + 174 + 143 AFT + 1,036 MCT |
+| SHA3-256 / SHA3-512 / SHAKE | `ama_sha3.c` | Written from FIPS 202 spec | None | N/A (clean-room) | 554 AFT + 400 MCT (151/86/174/143 AFT + 100 MCT per algo) |
 | SHA-256 | `ama_sha256.c` | Written from FIPS 180-4 spec | None | N/A (clean-room) | FIPS 180-4 §B.1 refs |
 | HMAC-SHA-256 | `ama_hmac_sha256.c` | Written from RFC 2104 + FIPS 198-1 | None | N/A (clean-room) | 150/150 AFT |
 
