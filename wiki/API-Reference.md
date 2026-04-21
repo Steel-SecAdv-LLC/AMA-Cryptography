@@ -43,31 +43,46 @@ class AlgorithmType(Enum):
 
 #### `CryptoBackend`
 
+Defined in `ama_cryptography/crypto_api.py:215–220`.
+
 ```python
 class CryptoBackend(Enum):
-    C_LIBRARY = 1   # Native `libama_cryptography` via ctypes (default)
-    PYTHON    = 2   # Pure-Python reference path (subset only)
+    """Available implementation backends."""
+    C_LIBRARY   = auto()  # libama_cryptography.so (fastest, native PQC) — default
+    CYTHON      = auto()  # Cython-optimized (fast)
+    PURE_PYTHON = auto()  # Pure-Python fallback
 ```
+
+> There is **no** `CryptoBackend.PYTHON` member; the pure-Python path is
+> `CryptoBackend.PURE_PYTHON`.
 
 ### Dataclasses
 
+Defined in `ama_cryptography/crypto_api.py:223–274`. Not `frozen=True`;
+sensitive fields use `field(repr=False)` so `repr()` never surfaces key
+material.
+
 ```python
-@dataclass(frozen=True)
+@dataclass
 class KeyPair:
     public_key: bytes
-    secret_key: bytes
+    secret_key: bytes = field(repr=False)   # SENSITIVE
     algorithm: AlgorithmType
+    metadata: Dict[str, Any]
 
-@dataclass(frozen=True)
+@dataclass
 class Signature:
     signature: bytes
     algorithm: AlgorithmType
+    message_hash: bytes
+    metadata: Dict[str, Any]
 
-@dataclass(frozen=True)
+@dataclass
 class EncapsulatedSecret:
     ciphertext: bytes
-    shared_secret: bytes
+    shared_secret: bytes = field(repr=False)  # SENSITIVE
     algorithm: AlgorithmType
+    metadata: Dict[str, Any]
 ```
 
 ### Classes
@@ -333,16 +348,32 @@ metadata:  dict           = mgr.export_metadata(filepath: Path | None = None)
 
 #### `SecureKeyStorage`
 
+Defined in `ama_cryptography/key_management.py:537`. The constructor takes
+a **storage directory** and an optional master password — not a raw
+encryption key. `retrieve_key()` returns the ciphertext-decrypted key
+material as `Optional[bytes]` (or `None` if the id is missing); metadata
+is stored separately as a JSON-serializable `dict` and is typically
+retrieved via `KeyRotationManager`.
+
 ```python
+from pathlib import Path
 from ama_cryptography.key_management import SecureKeyStorage
 
-# Context manager for encrypted key storage.
-# encryption_key must be bytearray (for in-place zeroing on exit).
-with SecureKeyStorage(encryption_key: bytearray) as storage:
-    storage.store_key(key_id: str, key_material: bytes, metadata: KeyMetadata) -> None
-    key, meta = storage.retrieve_key(key_id: str)
-    storage.delete_key(key_id: str) -> None
-    all_ids:    list[str] = storage.list_keys()
+storage = SecureKeyStorage(
+    storage_path: Path,
+    master_password: Optional[str] = None,
+)
+
+# Store / retrieve / delete
+storage.store_key(
+    key_id: str,
+    key_data: bytes,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None
+
+key_bytes: Optional[bytes] = storage.retrieve_key(key_id: str)
+storage.delete_key(key_id: str) -> None
+all_ids:   list[str]       = storage.list_keys()
 ```
 
 #### `HSMKeyStorage` (optional — PyKCS11)
@@ -511,39 +542,48 @@ raised if online mode is requested without the dependency.
 
 ```python
 from ama_cryptography.exceptions import (
-    CryptoModuleError,                # Base exception
-    CryptoConfigError,                # Configuration / environment problems
-    IntegrityError,                   # Integrity-check failure
-    SignatureVerificationError,       # Signature rejected
-    KeyManagementError,               # Key lifecycle errors
-    PQCUnavailableError,              # Native C PQC library not loaded
-    QuantumSignatureUnavailableError, # PQC signer requested but unavailable
-    QuantumSignatureRequiredError,    # Policy requires PQC; classical-only refused
-    AmaHSMUnavailableError,           # HSM path requested without PyKCS11
-    SecurityWarning,                  # Non-fatal security warnings (Warning subclass)
+    CryptoModuleError,                # FIPS 140-3 error-state module lock (RuntimeError)
+    CryptoConfigError,                # Configuration / environment problems (Exception)
+    IntegrityError,                   # Integrity-check failure (Exception)
+    SignatureVerificationError,       # Signature rejected (Exception)
+    KeyManagementError,               # Key lifecycle errors (Exception)
+    PQCUnavailableError,              # Native C PQC library not loaded (RuntimeError)
+    QuantumSignatureUnavailableError, # PQC signer requested but unavailable (subclass of PQCUnavailableError)
+    QuantumSignatureRequiredError,    # Policy requires PQC; classical-only refused (Exception)
+    AmaHSMUnavailableError,           # HSM path requested without PyKCS11 (RuntimeError)
+    SecurityWarning,                  # Non-fatal security warnings (UserWarning)
 )
 ```
 
 ### Exception hierarchy
 
+AMA's exceptions are **not** rooted under a single base class — most
+derive directly from `Exception` or `RuntimeError`. Use the actual base
+when writing `except` clauses; `except Exception` will catch all of them
+but will over-catch.
+
 ```
-CryptoModuleError (Exception)
+RuntimeError (builtin)
+├── CryptoModuleError             # FIPS 140-3 error-state module lock
+├── PQCUnavailableError
+│   └── QuantumSignatureUnavailableError
+└── AmaHSMUnavailableError        # PyKCS11 missing
+
+Exception (builtin)
 ├── CryptoConfigError
-├── IntegrityError
-├── SignatureVerificationError
 ├── KeyManagementError
-└── PQCUnavailableError
-    ├── QuantumSignatureUnavailableError
-    ├── QuantumSignatureRequiredError
-    └── AmaHSMUnavailableError
+├── SignatureVerificationError
+├── IntegrityError
+└── QuantumSignatureRequiredError # note: NOT a PQCUnavailableError subclass
 
-SecurityWarning (Warning)
-└── Raised via warnings.warn() for non-fatal security issues
+UserWarning (builtin)
+└── SecurityWarning               # warnings.warn() for non-fatal security issues
 ```
 
-`RFC3161Error` / `TimestampUnavailableError` live in
-`ama_cryptography.rfc3161_timestamp` and are raised only when the optional
-`rfc3161ng` package is required but missing.
+> **There is no `RFC3161Error` class.** The RFC 3161 timestamp module
+> raises `TimestampError` (request failure) and `TimestampUnavailableError`
+> (optional `rfc3161ng` dependency missing), both defined in
+> `ama_cryptography/rfc3161_timestamp.py:53–62`.
 
 ---
 

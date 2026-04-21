@@ -108,15 +108,19 @@ All derivations use **hardened** child keys (index ≥ 2^31). Non-hardened deriv
 import os
 from ama_cryptography.key_management import HDKeyDerivation
 
-# The seed is bound at construction time and zeroed on drop.
+# Provide the seed (or a BIP-39-style seed_phrase) at construction. The
+# instance holds the seed for subsequent derivations; the caller is
+# responsible for seed lifetime — HDKeyDerivation does not currently
+# perform secure wipe of self.master_seed on __del__.
 seed = os.urandom(64)
 hd   = HDKeyDerivation(seed=seed)
 
-# Structured BIP-44-style derivation: fills in the m/{purpose}'/{account}'/
-# {change}'/{index}' template
-key_material = hd.derive_key(purpose=44, account=0, change=0, index=0)
+# Structured BIP-44-style derivation: always produces a FULLY hardened
+# path m/{purpose}'/{account}'/{change}'/{index}'
+key_material: bytes = hd.derive_key(purpose=44, account=0, change=0, index=0)
 
-# Explicit-path derivation: returns (key, chain_code)
+# Explicit-path derivation: returns (derived_key, chain_code).
+# Accepts both hardened (with trailing ') and non-hardened components.
 key, chain_code = hd.derive_path("m/44'/0'/0'/0'")
 ```
 
@@ -124,15 +128,23 @@ key, chain_code = hd.derive_path("m/44'/0'/0'/0'")
 
 | Path | Purpose |
 |------|---------|
-| `m/44'/0'/0'/0'` | Standard account key |
-| `m/84'/0'/0'/0'` | Native segwit-style |
-| `m/0'/0'/0'/0'` | Custom derivation |
+| `m/44'/0'/0'/0'` | Standard account key (fully hardened) |
+| `m/84'/0'/0'/0'` | Native segwit-style (fully hardened) |
+| `m/0'/0'/0'/0'` | Custom derivation (fully hardened) |
 
 **HARDENED_OFFSET = 2^31 = 2,147,483,648**
 
-Only hardened indices (≥ 2^31, written with a trailing `'`) are
-supported; calls with non-hardened indices raise `ValueError`. This
-prevents child-key compromise from exposing sibling or parent keys.
+Hardened indices are written with a trailing `'` and correspond to
+values ≥ 2^31.
+
+- `HDKeyDerivation.derive_key(purpose, account, change, index)` always
+  constructs a **fully hardened** BIP-44-style path — every component
+  emitted by this convenience API is hardened.
+- `HDKeyDerivation.derive_path(path)` accepts an explicit path and parses
+  both hardened (`44'`) and non-hardened (`44`) components. Non-hardened
+  derivation produces a public child from which sibling keys can be
+  derived; use it only when public-child derivation is required, and
+  prefer hardened components otherwise for stronger branch isolation.
 
 ---
 
@@ -190,25 +202,33 @@ For encrypted storage of key material at rest:
 
 ```python
 import os
+from pathlib import Path
 from ama_cryptography.key_management import (
     SecureKeyStorage,
     KeyRotationManager,
 )
 
-# encryption_key is stored as bytearray (not bytes)
-# to allow in-place zeroing when the context manager exits
-encryption_key = bytearray(os.urandom(32))
+# SecureKeyStorage takes a storage directory and an optional master
+# password; it derives the at-rest encryption key internally.
+storage = SecureKeyStorage(
+    storage_path=Path("/var/lib/myapp/keys"),
+    master_password=os.environ.get("AMA_KEY_PASSWORD"),   # None → uses default KDF
+)
 mgr = KeyRotationManager()
 
-with SecureKeyStorage(encryption_key) as storage:
-    key_data = os.urandom(32)
-    meta     = mgr.register_key("my-key-id", purpose="doc-signing")
+key_data = os.urandom(32)
+meta     = mgr.register_key("my-key-id", purpose="doc-signing")
 
-    storage.store_key("my-key-id", key_data, meta)
-    retrieved, retrieved_meta = storage.retrieve_key("my-key-id")
-    assert retrieved == key_data
+# store_key takes an optional plain dict of metadata; the KeyMetadata
+# returned by register_key lives in the rotation manager, not the store.
+storage.store_key("my-key-id", key_data, metadata={"purpose": "doc-signing"})
 
-# encryption_key is automatically zeroed here
+retrieved: bytes | None = storage.retrieve_key("my-key-id")
+assert retrieved == key_data
+
+# Metadata for active/deprecated/revoked status is maintained by the
+# rotation manager:
+active_meta = mgr.export_metadata()
 ```
 
 ### Key Storage Security

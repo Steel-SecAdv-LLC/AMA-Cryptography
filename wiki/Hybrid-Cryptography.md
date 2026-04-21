@@ -66,23 +66,35 @@ from ama_cryptography.pqc_backends import (
     kyber_encapsulate,
     kyber_decapsulate,
 )
-# Any classical KEM wrapper exposing encapsulate(pk) -> (ct, ss)
-# and decapsulate(ct, sk) -> ss can be plugged in.
+
+# HybridCombiner expects bare-tuple callables:
+#   encapsulate_fn(pk) -> (ciphertext: bytes, shared_secret: bytes)
+#   decapsulate_fn(ct, sk) -> shared_secret: bytes
+#
+# AMA's Kyber API returns dataclasses, so wrap to expose the tuple shape:
+def _kyber_encaps(pk: bytes):
+    enc = kyber_encapsulate(pk)                 # KyberEncapsulation
+    return enc.ciphertext, enc.shared_secret    # (bytes, bytes)
+
+# kyber_decapsulate already returns bytes, so no adapter is needed.
 
 combiner = HybridCombiner()
-classical_pk, classical_sk = b"..."         # X25519 keypair
-pqc_pk, pqc_sk = generate_kyber_keypair()
+
+classical_pk, classical_sk = b"...", b"..."     # X25519 keypair (your wrapper)
+pqc_kp   = generate_kyber_keypair()             # KyberKeyPair dataclass
+pqc_pk   = pqc_kp.public_key
+pqc_sk   = pqc_kp.secret_key
 
 encapsulation: HybridEncapsulation = combiner.encapsulate_hybrid(
-    classical_encapsulate=my_x25519_encapsulate,
-    pqc_encapsulate=kyber_encapsulate,
+    classical_encapsulate=my_x25519_encapsulate,   # (pk) -> (ct, ss)
+    pqc_encapsulate=_kyber_encaps,                 # dataclass adapter above
     classical_pk=classical_pk,
     pqc_pk=pqc_pk,
 )
 
 recovered = combiner.decapsulate_hybrid(
-    classical_decapsulate=my_x25519_decapsulate,
-    pqc_decapsulate=kyber_decapsulate,
+    classical_decapsulate=my_x25519_decapsulate,   # (ct, sk) -> ss
+    pqc_decapsulate=kyber_decapsulate,             # (ct, sk) -> ss (already bytes)
     classical_ct=encapsulation.classical_ciphertext,
     pqc_ct=encapsulation.pqc_ciphertext,
     classical_sk=classical_sk,
