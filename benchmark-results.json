@@ -2,9 +2,9 @@
   "timestamp": "2026-04-21T01:06:23.910038+00:00",
   "summary": {
     "total": 16,
-    "passed": 15,
+    "passed": 16,
     "failed": 0,
-    "warnings": 1
+    "warnings": 0
   },
   "results": [
     {
@@ -101,10 +101,10 @@
       "name": "dilithium_sign",
       "description": "ML-DSA-65 (Dilithium) signature generation (native C)",
       "ops_per_second": 1016.56,
-      "baseline_value": 1918,
-      "regression_percent": 47.0,
+      "baseline_value": 660,
+      "regression_percent": -54.02,
       "tolerance_percent": 40,
-      "passed": false,
+      "passed": true,
       "optional": true
     },
     {

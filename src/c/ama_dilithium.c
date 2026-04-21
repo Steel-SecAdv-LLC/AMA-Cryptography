@@ -40,6 +40,18 @@
  * - Constant-time polynomial arithmetic
  * - No secret-dependent branches
  * - Rejection sampling for signatures
+ *
+ * Provenance:
+ *   Implemented from: NIST FIPS 204 (August 2024 final), §5-§8 pseudocode.
+ *   No code derived from pq-crystals/dilithium, PQClean, liboqs, or any
+ *   other third-party PQC implementation. The AVX2/NEON/SVE2 NTT paths
+ *   in `src/c/avx2/`, `src/c/neon/`, and `src/c/sve2/` are in-house.
+ *   The external/pure domain-separation wrapper
+ *   (`ama_dilithium_verify_ctx`) follows FIPS 204 §5.4 directly.
+ *   Validated: 25/25 ACVP ML-DSA-65 KeyGen vectors and 15/15 ACVP
+ *   ML-DSA-65 SigVer TG 3 (external/pure) vectors. See
+ *   `src/c/PROVENANCE.md` for full provenance rationale and
+ *   `CSRC_ALIGN_REPORT.md` for KAT results.
  */
 
 #include "../include/ama_cryptography.h"

@@ -670,6 +670,111 @@ ama_error_t ama_sha3_final(ama_sha3_ctx* ctx, uint8_t* output) {
 }
 
 /* ============================================================================
+ * STREAMING SHA3-512 API
+ * SHA3-512 rate = 72 bytes (fits inside the ama_sha3_ctx::buffer[168]),
+ * capacity = 128 bytes, padding = 0x06, digest size = 64 bytes.
+ * Mirrors the ama_sha3_init/update/final contract used for SHA3-256.
+ * ============================================================================ */
+
+ama_error_t ama_sha3_512_init(ama_sha3_ctx* ctx) {
+    if (!ctx) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    memset(ctx->state, 0, sizeof(ctx->state));
+    memset(ctx->buffer, 0, sizeof(ctx->buffer));
+    ctx->buffer_len = 0;
+    ctx->finalized = 0;
+    return AMA_SUCCESS;
+}
+
+ama_error_t ama_sha3_512_update(ama_sha3_ctx* ctx, const uint8_t* data, size_t len) {
+    size_t i;
+
+    if (!ctx) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (ctx->finalized) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (!data && len > 0) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (len == 0) {
+        return AMA_SUCCESS;
+    }
+
+    if (ctx->buffer_len > 0) {
+        size_t space = SHA3_512_RATE - ctx->buffer_len;
+        size_t to_copy = (len < space) ? len : space;
+        memcpy(ctx->buffer + ctx->buffer_len, data, to_copy);
+        ctx->buffer_len += to_copy;
+        data += to_copy;
+        len -= to_copy;
+        if (ctx->buffer_len == SHA3_512_RATE) {
+            for (i = 0; i < SHA3_512_RATE / 8; i++) {
+                ctx->state[i] ^= load64_le(ctx->buffer + i * 8);
+            }
+            keccak_f1600(ctx->state);
+            ctx->buffer_len = 0;
+        }
+    }
+
+    while (len >= SHA3_512_RATE) {
+        for (i = 0; i < SHA3_512_RATE / 8; i++) {
+            ctx->state[i] ^= load64_le(data + i * 8);
+        }
+        keccak_f1600(ctx->state);
+        data += SHA3_512_RATE;
+        len -= SHA3_512_RATE;
+    }
+
+    if (len > 0) {
+        memcpy(ctx->buffer, data, len);
+        ctx->buffer_len = len;
+    }
+
+    return AMA_SUCCESS;
+}
+
+ama_error_t ama_sha3_512_final(ama_sha3_ctx* ctx, uint8_t* output) {
+    uint8_t block[SHA3_512_RATE];
+    size_t i;
+
+    if (!ctx || !output) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (ctx->finalized) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    memset(block, 0, sizeof(block));
+    if (ctx->buffer_len > 0) {
+        memcpy(block, ctx->buffer, ctx->buffer_len);
+    }
+
+    /* SHA3 padding: 0x06...0x80 */
+    block[ctx->buffer_len] = 0x06;
+    block[SHA3_512_RATE - 1] |= 0x80;
+
+    for (i = 0; i < SHA3_512_RATE / 8; i++) {
+        ctx->state[i] ^= load64_le(block + i * 8);
+    }
+    keccak_f1600(ctx->state);
+
+    /* Squeeze 64 bytes = 8 state lanes */
+    for (i = 0; i < SHA3_512_DIGEST_SIZE / 8; i++) {
+        store64_le(output + i * 8, ctx->state[i]);
+    }
+
+    ctx->finalized = 1;
+    ama_secure_memzero(ctx->state, sizeof(ctx->state));
+    ama_secure_memzero(ctx->buffer, sizeof(ctx->buffer));
+    ama_secure_memzero(block, sizeof(block));
+
+    return AMA_SUCCESS;
+}
+
+/* ============================================================================
  * STREAMING SHAKE256 API (init/absorb/finalize/squeeze)
  * SHAKE256 rate = 136 bytes (same as SHA3-256), padding = 0x1F
  * ============================================================================ */

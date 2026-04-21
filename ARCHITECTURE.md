@@ -98,7 +98,7 @@ The AMA Cryptography architecture is built on the following foundational princip
 
 **Quantum Readiness**: Primary signature algorithms are selected for resistance to known quantum attacks. The system is designed to remain secure against adversaries with access to large-scale quantum computers.
 
-**Ethical Integration**: Ethical constraints are mathematically bound to cryptographic operations through the key derivation process, ensuring that ethical metadata cannot be separated from cryptographic proofs.
+**Ethical Integration**: Ethical constraints are mathematically bound to cryptographic operations through the key derivation process, ensuring that ethical metadata cannot be separated from cryptographic proofs. This is a **policy construct layered on top of the FIPS primitives** — the ethical vector enters the cryptographic stack only through the HKDF `info` parameter (RFC 5869) and does not modify the underlying FIPS 202/203/204/205 primitives, their security bounds, or their ACVP-validated behavior. See [`AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md`](AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md) — the document is structured into Part A (FIPS Primitive Layer, reference only) and Part B (Ethical Policy Layer, original work) with an explicit boundary between the two.
 
 **Standards Compliance**: Built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the multi-layer defense architecture, key evolution, and adaptive posture system) is an original design.
 

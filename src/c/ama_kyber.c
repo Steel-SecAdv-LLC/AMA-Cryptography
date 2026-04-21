@@ -28,6 +28,16 @@
  * - Module-LWE hardness assumption
  * - Fujisaki-Okamoto transform for IND-CCA2 security
  *
+ * Provenance:
+ *   Implemented from: NIST FIPS 203 (August 2024 final), §5-§7 pseudocode.
+ *   No code derived from pq-crystals/kyber, PQClean, liboqs, or any other
+ *   third-party PQC implementation. The AVX2 NTT in `src/c/avx2/` is also
+ *   in-house; it is not derived from the pq-crystals AVX2 variant.
+ *   Validated: 25/25 ACVP ML-KEM-1024 KeyGen vectors and 25/25 ACVP
+ *   ML-KEM-1024 EncapDecap vectors (decapsulation path — AMA does not
+ *   expose the encap randomness `m`). See `src/c/PROVENANCE.md` for full
+ *   provenance rationale and `CSRC_ALIGN_REPORT.md` for KAT results.
+ *
  * For production use: pip install ama-cryptography[quantum]
  */
 

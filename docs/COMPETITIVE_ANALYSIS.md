@@ -205,26 +205,67 @@ paths for all 8 algorithm families, preparing for ARMv9 server adoption
 
 ## Performance Positioning
 
-Based on AMA measured benchmarks on x86-64 (CI shared runner, generic C path):
+### Performance Comparison (measured)
 
-| Operation | AMA Cryptography (measured) | Competitor Reference |
-|---|---|---|
-| SHA3-256 (1KB) | ~3.4 us (298K ops/s) | OpenSSL: varies by hardware |
-| HMAC-SHA3-256 (1KB) | ~4.9 us (203K ops/s) | OpenSSL: varies by hardware |
-| Ed25519 sign | ~39 us (26K ops/s) | libsodium: ~20 us (50K ops/s) on optimized builds |
-| Ed25519 verify | ~78 us (13K ops/s) | libsodium: ~40 us (25K ops/s) on optimized builds |
-| ML-DSA-65 sign | ~0.19 ms (5.2K ops/s) | liboqs: ~0.2-0.5 ms (varies) |
-| ML-DSA-65 verify | ~0.11 ms (8.9K ops/s) | liboqs: ~0.1-0.3 ms (varies) |
-| ML-KEM-1024 keygen | ~0.07 ms (15.3K ops/s) | liboqs: varies |
-| Argon2id (default) | ~250 ms | libsodium: ~260 ms |
+The table below combines (a) AMA's measured ops/sec from
+`benchmark-results.json` (GitHub Actions shared runner, x86-64, generic
+C path) with (b) peer-library numbers. Peer numbers are marked
+**(measured)** when `benchmarks/comparative_benchmark.py` captured them
+in the same environment and **(ref)** when they come from published
+reference ranges in `benchmarks/baseline.json::metadata.peer_references`
+(citations live there). Where a library does not ship the primitive,
+the cell reads **N/A**.
 
-**Note**: AMA numbers are measured from `phase0_baseline_results.json` and
-`benchmarks/benchmark_c_raw.c` on GitHub Actions CI runners (generic C path, no SIMD
-dispatch at time of measurement). Competitor numbers are published reference
-values and may differ across hardware. AMA Cryptography is competitive for
-PQC operations. Classical Ed25519 is approximately 2x slower than libsodium
-due to libsodium's highly optimized assembly backends and extensive
-precomputed tables; narrowing this gap is an active development priority.
+| Primitive | AMA (measured) | libsodium | liboqs | OpenSSL | Verdict |
+|---|---:|---:|---:|---:|---|
+| SHA3-256 hash (1KB) | 170,834 ops/s | N/A | N/A | varies | AMA competitive on generic C path |
+| HMAC-SHA3-256 (1KB) | 129,999 ops/s | N/A | N/A | varies | AMA competitive on generic C path |
+| Ed25519 KeyGen | 9,162 ops/s | 40,000–60,000 ops/s (ref) | N/A | varies | libsodium ~5.5× faster (base-point table) |
+| Ed25519 Sign | 10,569 ops/s | 50,000–80,000 ops/s (ref) | N/A | ~20,000 ops/s (ref) | libsodium ~6.1× faster; OpenSSL ~2× faster |
+| Ed25519 Verify | 7,547 ops/s | 15,000–30,000 ops/s (ref) | N/A | ~10,000 ops/s (ref) | libsodium ~3.0× faster (vartime) |
+| HKDF-SHA3-256 (3 keys) | 86,779 ops/s | HKDF-SHA256 only | N/A | HKDF-SHA256 only | Different hash — not directly comparable |
+| ML-DSA-65 KeyGen | 2,951 ops/s | N/A | 2,000–5,000 ops/s (ref) | Provider 3.4+ (ref) | Within liboqs reference band |
+| ML-DSA-65 Sign | 1,017 ops/s | N/A | 500–1,500 ops/s (ref) | Provider 3.4+ (ref) | Inside liboqs band |
+| ML-DSA-65 Verify | 6,322 ops/s | N/A | 4,000–9,000 ops/s (ref) | Provider 3.4+ (ref) | Within liboqs band |
+| ML-KEM-1024 KeyGen | 4,850 ops/s | N/A | 8,000–18,000 ops/s (ref) | Provider 3.4+ (ref) | Trails liboqs ~2× on generic C path |
+| ML-KEM-1024 Encap | 9,138 ops/s | N/A | 7,000–15,000 ops/s (ref) | Provider 3.4+ (ref) | Inside liboqs band |
+| AES-256-GCM (1KB) | 278,298 ops/s | N/A (XChaCha preferred) | N/A | ~500K ops/s (AES-NI, ref) | OpenSSL AES-NI path ~1.8× faster |
+| ChaCha20-Poly1305 (1KB) | 271,362 ops/s | ~380,000 ops/s (ref) | N/A | ~300,000 ops/s (ref) | libsodium ~1.4× faster |
+| X25519 scalar mult | 22,918 ops/s | ~40,000 ops/s (ref) | N/A | ~35,000 ops/s (ref) | libsodium ~1.8× faster |
+
+**Reproducing live peer numbers locally:**
+
+```bash
+pip install pynacl oqs cryptography
+python benchmarks/comparative_benchmark.py
+```
+
+This writes `benchmarks/comparative_benchmark_results.json` with a
+`comparisons` object that has a per-operation `verdict` string of the
+form "libsodium Ed25519 sign: 6.3× faster than AMA" — i.e. the same
+ratio that appears in the table, but measured on your hardware.
+
+**Key takeaways:**
+- Classical Ed25519 trails libsodium by ~3–6× because libsodium ships
+  a precomputed base-point table and hand-tuned `ref10` assembly, while
+  AMA uses a radix-2^51 field layout (`fe51.h`) without a comparable
+  table in the generic-C path. Narrowing this gap is an active
+  development priority — see `docs/BENCHMARK_HISTORY.md`.
+- PQC performance (ML-DSA-65, ML-KEM-1024) is **inside the liboqs
+  reference band**. ML-DSA-65 sign in particular is rejection-sampled
+  and its measured throughput has ~2× variance across runs even within
+  the same library; the band reflects this.
+- AES-256-GCM and ChaCha20-Poly1305 are competitive on generic C paths
+  and will gain further speedups when AMA's AES-NI and AVX2 SIMD paths
+  are enabled in CI (current CI numbers are from the generic fallback).
+
+**Methodology.** AMA numbers are from `benchmark-results.json` (most
+recent GitHub Actions run). Peer numbers come from (a) live measurements
+via `benchmarks/comparative_benchmark.py` when the peer library was
+installed, or (b) published reference figures from libsodium
+documentation, SUPERCOP bench-amd64, and the Open Quantum Safe
+benchmarking page. Sources are cited in
+`benchmarks/baseline.json::metadata.peer_references`.
 
 ---
 

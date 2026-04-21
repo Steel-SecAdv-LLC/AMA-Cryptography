@@ -2,7 +2,9 @@
 """Run NIST ACVP test vectors against the AMA Cryptography native C library.
 
 Rules:
-- AFT vectors only. MCT/LDT/VOT are skipped (logged).
+- AFT and MCT vectors for the SHA-3 family (SHA3-256, SHA3-512, SHAKE-128,
+  SHAKE-256). LDT/VOT are still skipped (LDT requires multi-gigabyte inputs;
+  VOT is superseded by AFT coverage of the output length range).
 - Non-byte-aligned inputs (bitLength % 8 != 0) are skipped.
 - ML-KEM-1024 only (512/768 not implemented).
 - ML-KEM EncapDecap: decapsulation only (AMA doesn't expose randomness m).
@@ -186,6 +188,110 @@ def _load_vector_file(path: Path) -> dict[str, Any] | None:
     return cast(dict[str, Any], json.loads(path.read_text()))
 
 
+def _sha3_mct_iterate(
+    lib: ctypes.CDLL,
+    sha3_fn_name: str,
+    digest_size: int,
+    seed: bytes,
+) -> list[bytes]:
+    """Run the ACVP SHA-3 Monte Carlo Test algorithm.
+
+    Per https://pages.nist.gov/ACVP/draft-celi-acvp-sha3.html Section 6.2.1:
+
+        Seed = provided seed
+        for j = 0..99:                       # outer = 100 result blocks
+            MD[0] = Seed
+            for i = 1..1000:                 # inner = 1000 hashes
+                MD[i] = SHA3(MD[i-1])
+            resultsArray[j].md = MD[1000]
+            Seed = MD[1000]
+
+    Uses the one-shot ama_sha3_256 / ama_sha3_512 entry points — each inner
+    iteration is a complete hash of the previous digest, so the streaming
+    incremental API is not required here (it is required for variants that
+    accumulate state across iterations, but the FIPS-202 MCT spec does not).
+    Returns the 100 outer-iteration digests.
+    """
+    fn = getattr(lib, sha3_fn_name)
+    out_buf = ctypes.create_string_buffer(digest_size)
+    md_prev = seed
+    results: list[bytes] = []
+    for _j in range(100):
+        for _i in range(1000):
+            fn(md_prev, ctypes.c_size_t(len(md_prev)), out_buf)
+            md_prev = out_buf.raw[:digest_size]
+        results.append(md_prev)
+    return results
+
+
+def _run_sha3_mct(
+    lib: ctypes.CDLL,
+    res: AlgorithmResult,
+    tg: dict[str, Any],
+    sha3_fn_name: str,
+    digest_size: int,
+) -> None:
+    """Score an MCT test group for SHA3-256 or SHA3-512 against AMA's one-shot
+    hash API and mutate ``res`` in place. On Seed-length mismatches the group
+    is skipped rather than failed — the ACVP server encodes seeds in ``msg``
+    at full digest length.
+    """
+    for tc in tg["tests"]:
+        msg_hex = tc.get("msg", "")
+        results = tc.get("resultsArray") or []
+        if not msg_hex or not results:
+            res.vectors_skipped += 1
+            res.skip_reasons.append(
+                f"MCT tcId {tc['tcId']}: missing msg or resultsArray"
+            )
+            continue
+        seed = bytes.fromhex(msg_hex)
+        if len(seed) != digest_size:
+            res.vectors_skipped += 1
+            res.skip_reasons.append(
+                f"MCT tcId {tc['tcId']}: seed length {len(seed)} != digest size "
+                f"{digest_size}"
+            )
+            continue
+
+        try:
+            actual_digests = _sha3_mct_iterate(lib, sha3_fn_name, digest_size, seed)
+        except Exception as exc:  # pragma: no cover - defensive
+            res.fail_count += 1
+            res.failures.append(
+                {
+                    "tcId": str(tc["tcId"]),
+                    "expected": f"100 × {digest_size}-byte digests",
+                    "actual": f"exception: {exc}",
+                    "note": "SHA-3 MCT execution failed",
+                }
+            )
+            continue
+
+        # ACVP returns a per-iteration pass/fail view: one tcId contributes
+        # 100 vectors, each of which must match. Track them independently so
+        # the summary accurately reflects MCT coverage.
+        mismatch_iter = -1
+        for idx, expected in enumerate(results):
+            expected_hex = expected["md"].lower()
+            actual_hex = actual_digests[idx].hex()
+            res.vectors_tested += 1
+            if actual_hex == expected_hex:
+                res.pass_count += 1
+            else:
+                res.fail_count += 1
+                if mismatch_iter < 0:
+                    mismatch_iter = idx
+                res.failures.append(
+                    {
+                        "tcId": f"{tc['tcId']}/MCT-j={idx}",
+                        "expected": expected_hex,
+                        "actual": actual_hex,
+                        "note": "SHA-3 MCT digest mismatch",
+                    }
+                )
+
+
 def test_sha3_256(lib: ctypes.CDLL) -> AlgorithmResult:
     res = AlgorithmResult(
         algorithm="SHA3-256",
@@ -198,10 +304,14 @@ def test_sha3_256(lib: ctypes.CDLL) -> AlgorithmResult:
         res.notes = f"Vector file {path.name} not found; run fetch_vectors.py"
         return res
     for tg in data["testGroups"]:
-        if tg["testType"] != "AFT":
+        test_type = tg["testType"]
+        if test_type == "MCT":
+            _run_sha3_mct(lib, res, tg, "ama_sha3_256", 32)
+            continue
+        if test_type != "AFT":
             count = len(tg.get("tests", []))
             res.mct_skipped += count
-            res.skip_reasons.append(f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors")
+            res.skip_reasons.append(f"TG {tg['tgId']}: skipped {count} {test_type} vectors")
             continue
         for tc in tg["tests"]:
             bit_len = tc.get("len", 0)
@@ -242,10 +352,14 @@ def test_sha3_512(lib: ctypes.CDLL) -> AlgorithmResult:
         res.notes = f"Vector file {path.name} not found; run fetch_vectors.py"
         return res
     for tg in data["testGroups"]:
-        if tg["testType"] != "AFT":
+        test_type = tg["testType"]
+        if test_type == "MCT":
+            _run_sha3_mct(lib, res, tg, "ama_sha3_512", 64)
+            continue
+        if test_type != "AFT":
             count = len(tg.get("tests", []))
             res.mct_skipped += count
-            res.skip_reasons.append(f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors")
+            res.skip_reasons.append(f"TG {tg['tgId']}: skipped {count} {test_type} vectors")
             continue
         for tc in tg["tests"]:
             bit_len = tc.get("len", 0)
@@ -274,6 +388,161 @@ def test_sha3_512(lib: ctypes.CDLL) -> AlgorithmResult:
     return res
 
 
+def _shake_mct_iterate(
+    lib: ctypes.CDLL,
+    shake_fn_name: str,
+    seed: bytes,
+    min_out_bits: int,
+    max_out_bits: int,
+) -> list[tuple[bytes, int]]:
+    """Run the ACVP SHAKE Monte Carlo Test.
+
+    Per https://pages.nist.gov/ACVP/draft-celi-acvp-sha3.html Section 6.2.2:
+
+        Range  = (maxOutLen - minOutLen) / 8 + 1        # in bytes
+        outLen = maxOutLen / 8                          # in bytes
+        Msg[0] = Seed                                   # always 128 bits
+        for j = 0..99:
+            for i = 1..1000:
+                # left-most 128 bits, zero-pad if shorter
+                Msg[i] = Output[i-1][0:16] padded/truncated to 16 bytes
+                Output[i] = SHAKE(Msg[i], outLen bytes)
+                # rightmost 16 bits of Output[i] as big-endian unsigned int
+                rightmost = int.from_bytes(Output[i][-2:], 'big')
+                outLen = minOutLen/8 + (rightmost % Range)
+            resultsArray[j] = (Output[1000], outLen_for_that_iter)
+
+    Returns the 100 (digest, outLen_bytes) pairs.
+    """
+    fn = getattr(lib, shake_fn_name)
+    assert min_out_bits % 8 == 0 and max_out_bits % 8 == 0
+    min_out = min_out_bits // 8
+    max_out = max_out_bits // 8
+    rng = max_out - min_out + 1
+
+    msg = bytes(seed)  # caller trims/pads to 16 bytes
+    if len(msg) < 16:
+        msg = msg + bytes(16 - len(msg))
+    else:
+        msg = msg[:16]
+
+    out_len = max_out
+    results: list[tuple[bytes, int]] = []
+    for _j in range(100):
+        for _i in range(1000):
+            out_buf = ctypes.create_string_buffer(out_len)
+            fn(msg, ctypes.c_size_t(len(msg)), out_buf, ctypes.c_size_t(out_len))
+            digest = out_buf.raw[:out_len]
+
+            # Build next message: left-most 16 bytes (zero-pad if short)
+            if out_len >= 16:
+                msg = digest[:16]
+            else:
+                msg = digest + bytes(16 - out_len)
+
+            # Update out_len from rightmost 16 bits of digest
+            if out_len >= 2:
+                rightmost = int.from_bytes(digest[-2:], "big")
+            elif out_len == 1:
+                rightmost = digest[-1]
+            else:
+                rightmost = 0
+            out_len = min_out + (rightmost % rng)
+
+        results.append((digest, out_len))
+    return results
+
+
+def _run_shake_mct(
+    lib: ctypes.CDLL,
+    res: AlgorithmResult,
+    tg: dict[str, Any],
+    shake_fn_name: str,
+) -> None:
+    """Score a SHAKE MCT test group. The ACVP group specifies ``minOutLen``
+    and ``maxOutLen`` in bits; both must be byte-aligned (they always are in
+    the upstream vector files). Vectors inside the group each contain a
+    ``msg`` seed and a ``resultsArray`` of 100 entries.
+    """
+    min_out_bits = int(tg.get("minOutLen", 0))
+    max_out_bits = int(tg.get("maxOutLen", 0))
+    if (
+        min_out_bits == 0
+        or max_out_bits == 0
+        or min_out_bits % 8 != 0
+        or max_out_bits % 8 != 0
+    ):
+        count = len(tg.get("tests", []))
+        res.vectors_skipped += count
+        res.skip_reasons.append(
+            f"MCT TG {tg['tgId']}: non-byte-aligned output-len range "
+            f"[{min_out_bits}, {max_out_bits}] bits"
+        )
+        return
+
+    for tc in tg["tests"]:
+        msg_hex = tc.get("msg", "")
+        results = tc.get("resultsArray") or []
+        if not msg_hex or not results:
+            res.vectors_skipped += 1
+            res.skip_reasons.append(
+                f"MCT tcId {tc['tcId']}: missing msg or resultsArray"
+            )
+            continue
+        seed = bytes.fromhex(msg_hex)
+
+        try:
+            actual = _shake_mct_iterate(
+                lib, shake_fn_name, seed, min_out_bits, max_out_bits
+            )
+        except Exception as exc:  # pragma: no cover
+            res.fail_count += 1
+            res.failures.append(
+                {
+                    "tcId": str(tc["tcId"]),
+                    "expected": "100 × (md, outLen)",
+                    "actual": f"exception: {exc}",
+                    "note": "SHAKE MCT execution failed",
+                }
+            )
+            continue
+
+        for idx, expected in enumerate(results):
+            expected_md = expected["md"].lower()
+            expected_outlen = int(expected.get("outLen", 0))
+            actual_md, actual_outlen_bytes = actual[idx]
+            actual_md_hex = actual_md.hex()
+            res.vectors_tested += 1
+            if (
+                actual_md_hex == expected_md
+                and actual_outlen_bytes * 8 == expected_outlen
+            ):
+                res.pass_count += 1
+            else:
+                res.fail_count += 1
+                note = "SHAKE MCT mismatch"
+                if actual_outlen_bytes * 8 != expected_outlen:
+                    note += (
+                        f" (outLen {actual_outlen_bytes*8} vs {expected_outlen})"
+                    )
+                res.failures.append(
+                    {
+                        "tcId": f"{tc['tcId']}/MCT-j={idx}",
+                        "expected": (
+                            expected_md[:64] + "..."
+                            if len(expected_md) > 64
+                            else expected_md
+                        ),
+                        "actual": (
+                            actual_md_hex[:64] + "..."
+                            if len(actual_md_hex) > 64
+                            else actual_md_hex
+                        ),
+                        "note": note,
+                    }
+                )
+
+
 def test_shake128(lib: ctypes.CDLL) -> AlgorithmResult:
     res = AlgorithmResult(
         algorithm="SHAKE-128",
@@ -286,10 +555,14 @@ def test_shake128(lib: ctypes.CDLL) -> AlgorithmResult:
         res.notes = f"Vector file {path.name} not found; run fetch_vectors.py"
         return res
     for tg in data["testGroups"]:
-        if tg["testType"] != "AFT":
+        test_type = tg["testType"]
+        if test_type == "MCT":
+            _run_shake_mct(lib, res, tg, "ama_shake128")
+            continue
+        if test_type != "AFT":
             count = len(tg.get("tests", []))
             res.mct_skipped += count
-            res.skip_reasons.append(f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors")
+            res.skip_reasons.append(f"TG {tg['tgId']}: skipped {count} {test_type} vectors")
             continue
         for tc in tg["tests"]:
             bit_len = tc.get("len", 0)
@@ -340,10 +613,14 @@ def test_shake256(lib: ctypes.CDLL) -> AlgorithmResult:
         res.notes = f"Vector file {path.name} not found; run fetch_vectors.py"
         return res
     for tg in data["testGroups"]:
-        if tg["testType"] != "AFT":
+        test_type = tg["testType"]
+        if test_type == "MCT":
+            _run_shake_mct(lib, res, tg, "ama_shake256")
+            continue
+        if test_type != "AFT":
             count = len(tg.get("tests", []))
             res.mct_skipped += count
-            res.skip_reasons.append(f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors")
+            res.skip_reasons.append(f"TG {tg['tgId']}: skipped {count} {test_type} vectors")
             continue
         for tc in tg["tests"]:
             bit_len = tc.get("len", 0)
