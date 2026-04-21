@@ -30,16 +30,27 @@ subclass that can also be used directly.
 
 #### `AlgorithmType`
 
+Defined in `ama_cryptography/crypto_api.py:203–212`.
+
 ```python
+from enum import Enum, auto
+
 class AlgorithmType(Enum):
-    ML_DSA_65      = 1   # NIST FIPS 204 signature (post-quantum)
-    KYBER_1024     = 2   # NIST FIPS 203 KEM (post-quantum)
-    SPHINCS_256F   = 3   # NIST FIPS 205 signature (hash-based)
-    ED25519        = 4   # RFC 8032 signature (classical)
-    AES_256_GCM    = 5   # NIST SP 800-38D AEAD
-    HYBRID_SIG     = 6   # Ed25519 || ML-DSA-65  (recommended default)
-    HYBRID_KEM     = 7   # X25519 || ML-KEM-1024
+    ML_DSA_65    = auto()  # NIST FIPS 204 signature (post-quantum)
+    KYBER_1024   = auto()  # NIST FIPS 203 KEM (post-quantum)
+    SPHINCS_256F = auto()  # NIST FIPS 205 signature (hash-based)
+    ED25519      = auto()  # RFC 8032 signature (classical)
+    AES_256_GCM  = auto()  # NIST SP 800-38D AEAD
+    HYBRID_SIG   = auto()  # Ed25519 || ML-DSA-65  (recommended default)
+    HYBRID_KEM   = auto()  # X25519 || ML-KEM-1024
 ```
+
+> The underlying integer assigned to each member by `auto()` is an
+> implementation detail — it depends on declaration order and is not
+> part of the public API. Compare by member (e.g.,
+> `alg == AlgorithmType.HYBRID_SIG`) or by name (`alg.name`), never by
+> `.value`. The numeric values may change across releases without
+> notice.
 
 #### `CryptoBackend`
 
