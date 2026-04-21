@@ -196,7 +196,7 @@ The workflow parses `results.json` and enforces three conditions:
 
 A `nist_vectors/validation_summary.json` artifact is published on every
 run with timestamp, git SHA, `acvp_ref`, per-algorithm counts, and split
-skip accounting (`total_skipped_non_mct` vs `total_mct_skipped`).
+skip accounting (`total_skipped_aft_filtered` vs `total_non_aft_skipped`).
 
 ---
 
