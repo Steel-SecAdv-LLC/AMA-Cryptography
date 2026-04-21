@@ -224,10 +224,20 @@ from ama_cryptography.key_management import (
 )
 
 # SecureKeyStorage takes a storage directory and an optional master
-# password; it derives the at-rest encryption key internally.
+# password.
+#
+# IMPORTANT (key_management.py:563-567): if `master_password` is truthy,
+# it is stretched through PBKDF2-HMAC-SHA512 (or Argon2id via
+# `migrate_kdf()`) to derive the at-rest encryption key. If
+# `master_password` is None or empty, a *random in-memory* 32-byte
+# encryption key is generated via `secrets.token_bytes(32)` — there is
+# no stable KDF derivation in that mode, so keys stored under a
+# process's random in-memory key **cannot be decrypted after process
+# restart**. Use a stable master_password whenever the store must
+# survive across processes.
 storage = SecureKeyStorage(
     storage_path=Path("/var/lib/myapp/keys"),
-    master_password=os.environ.get("AMA_KEY_PASSWORD"),   # None → uses default KDF
+    master_password=os.environ["AMA_KEY_PASSWORD"],   # stable → persistable
 )
 mgr = KeyRotationManager()
 

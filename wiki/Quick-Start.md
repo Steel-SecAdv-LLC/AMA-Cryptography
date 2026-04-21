@@ -14,6 +14,7 @@ from ama_cryptography.pqc_backends import (
     dilithium_sign,
     dilithium_verify,
     get_pqc_status,
+    get_pqc_backend_info,
 )
 from ama_cryptography.crypto_api import (
     AmaCryptography,
@@ -31,7 +32,11 @@ status = get_pqc_status()
 print(status)
 # PQCStatus.AVAILABLE  — at least one PQC backend loaded
 
-# For the per-algorithm matrix, use get_pqc_backend_info()
+# Per-algorithm backend matrix (C vs Cython vs unavailable)
+info = get_pqc_backend_info()
+print(info)
+# {'ml_kem_1024': 'c_native', 'ml_dsa_65': 'c_native',
+#  'slh_dsa_sha2_256f': 'c_native', 'ed25519': 'c_native', ...}
 ```
 
 ---

@@ -94,16 +94,31 @@ jobs:
           results_path = Path("nist_vectors/results.json")
           data = json.loads(results_path.read_text())
           summary = data.get("summary", {})
+          algorithms = data.get("algorithms", [])
           tested = int(summary.get("total_tested", 0))
           passed = int(summary.get("total_pass", 0))
           failed = int(summary.get("total_fail", 0))
-          skipped = int(summary.get("total_skipped", 0))
+
+          # `results.json.summary.total_skipped` counts only
+          # `vectors_skipped` (non-byte-aligned inputs, non-target
+          # parameter sets). `mct_skipped` per algorithm is tracked
+          # separately in run_vectors.py and IS NOT included in the
+          # summary total. Compute the true grand total here and expose
+          # both the non-MCT and MCT components so the published
+          # validation summary is unambiguous.
+          total_skipped_non_mct = sum(
+              int(a.get("vectors_skipped", 0)) for a in algorithms
+          )
+          total_mct_skipped = sum(
+              int(a.get("mct_skipped", 0)) for a in algorithms
+          )
+          skipped = total_skipped_non_mct + total_mct_skipped
 
           # An algorithm is "failing" if it reports any failed vector, has
           # zero vectors tested (vector fetch likely missed it), or emits a
           # `notes` field (harness surfaced a non-fatal issue).
           failing_algos = []
-          for algo in data.get("algorithms", []):
+          for algo in algorithms:
               fail_count = int(algo.get("fail_count", 0))
               vectors_tested = int(algo.get("vectors_tested", 0))
               notes = algo.get("notes", "")
@@ -149,6 +164,8 @@ jobs:
               "total_passed": passed,
               "total_failed": failed,
               "total_skipped": skipped,
+              "total_skipped_non_mct": total_skipped_non_mct,
+              "total_mct_skipped": total_mct_skipped,
               "status": status,
               "algorithms": [
                   {
@@ -157,8 +174,10 @@ jobs:
                       "vectors_tested": int(a.get("vectors_tested", 0)),
                       "pass_count": int(a.get("pass_count", 0)),
                       "fail_count": int(a.get("fail_count", 0)),
+                      "vectors_skipped": int(a.get("vectors_skipped", 0)),
+                      "mct_skipped": int(a.get("mct_skipped", 0)),
                   }
-                  for a in data.get("algorithms", [])
+                  for a in algorithms
               ],
               "failing_algorithms": failing_algos,
           }
@@ -195,9 +214,7 @@ jobs:
                   )
               # Per-algorithm: names must match canonical harness names,
               # and vectors_tested / vectors_passed must agree.
-              by_name = {
-                  a.get("algorithm"): a for a in data.get("algorithms", [])
-              }
+              by_name = {a.get("algorithm"): a for a in algorithms}
               for entry in att.get("algorithms", []):
                   name = entry.get("name")
                   res = by_name.get(name)
@@ -278,8 +295,10 @@ jobs:
 
           print(
               f"ACVP validation OK: {passed}/{tested} pass, "
-              f"floor={expected}, {skipped} skipped, acvp_ref={acvp_ref}, "
-              f"git_sha={git_sha}"
+              f"floor={expected}, {skipped} skipped "
+              f"({total_skipped_non_mct} non-MCT + "
+              f"{total_mct_skipped} MCT), "
+              f"acvp_ref={acvp_ref}, git_sha={git_sha}"
           )
           PY
 
