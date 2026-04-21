@@ -1,0 +1,193 @@
+name: ACVP Vector Validation
+
+# Continuous NIST ACVP self-attestation for AMA Cryptography.
+# See docs/compliance/ACVP_SELF_ATTESTATION.md for the customer-facing
+# attestation document this workflow underwrites.
+#
+# This workflow runs the same 815-vector harness used to produce
+# CSRC_ALIGN_REPORT.md and fails the build if any vector regresses.
+# A structured validation_summary.json artifact is published on every run.
+
+on:
+  push:
+    branches: [ main, 'claude/**' ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Weekly at 07:00 UTC on Monday.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The attestation floor. When additional ACVP coverage is added, bump this
+# number and CSRC_ALIGN_REPORT.md / docs/compliance in the same commit.
+env:
+  EXPECTED_VECTORS: '815'
+
+jobs:
+  acvp-vectors:
+    name: NIST ACVP Vector Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake
+
+      - name: Build native C library
+        run: |
+          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release \
+            -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build -j"$(nproc)"
+
+      - name: Fetch NIST ACVP vectors
+        run: python3 nist_vectors/fetch_vectors.py
+
+      - name: Run ACVP vector validation
+        id: run_vectors
+        run: |
+          python3 nist_vectors/run_vectors.py
+          test -f nist_vectors/results.json
+
+      - name: Assert 815/815 pass and emit validation_summary.json
+        id: summary
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          import time
+          from pathlib import Path
+
+          expected = int(os.environ["EXPECTED_VECTORS"])
+          results_path = Path("nist_vectors/results.json")
+          data = json.loads(results_path.read_text())
+          summary = data.get("summary", {})
+          tested = int(summary.get("total_tested", 0))
+          passed = int(summary.get("total_pass", 0))
+          failed = int(summary.get("total_fail", 0))
+          skipped = int(summary.get("total_skipped", 0))
+
+          failing_algos = []
+          for algo in data.get("algorithms", []):
+              if int(algo.get("fail_count", 0)) > 0:
+                  failing_algos.append({
+                      "algorithm": algo.get("algorithm"),
+                      "standard": algo.get("standard"),
+                      "fail_count": int(algo.get("fail_count", 0)),
+                      "failures": algo.get("failures", []),
+                  })
+
+          git_sha = subprocess.check_output(
+              ["git", "rev-parse", "HEAD"], text=True
+          ).strip()
+          ref = os.environ.get("GITHUB_REF", "")
+          run_id = os.environ.get("GITHUB_RUN_ID", "")
+          status = "pass" if (failed == 0 and tested == expected) else "fail"
+
+          validation_summary = {
+              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+              "git_sha": git_sha,
+              "git_ref": ref,
+              "github_run_id": run_id,
+              "expected_vectors": expected,
+              "total_tested": tested,
+              "total_passed": passed,
+              "total_failed": failed,
+              "total_skipped": skipped,
+              "status": status,
+              "algorithms": [
+                  {
+                      "algorithm": a.get("algorithm"),
+                      "standard": a.get("standard"),
+                      "vectors_tested": int(a.get("vectors_tested", 0)),
+                      "pass_count": int(a.get("pass_count", 0)),
+                      "fail_count": int(a.get("fail_count", 0)),
+                  }
+                  for a in data.get("algorithms", [])
+              ],
+              "failing_algorithms": failing_algos,
+          }
+
+          out = Path("nist_vectors/validation_summary.json")
+          out.write_text(json.dumps(validation_summary, indent=2))
+          print(f"Wrote {out}")
+
+          # Update a simple status file that can back a shields.io endpoint.
+          badge = {
+              "schemaVersion": 1,
+              "label": "ACVP",
+              "message": f"{passed}/{tested} pass"
+                         if status == "pass"
+                         else f"{passed}/{tested} FAIL ({failed} failing)",
+              "color": "brightgreen" if status == "pass" else "red",
+          }
+          Path("nist_vectors/acvp_badge.json").write_text(
+              json.dumps(badge, indent=2)
+          )
+
+          gh_out = os.environ.get("GITHUB_OUTPUT")
+          if gh_out:
+              with open(gh_out, "a") as fh:
+                  fh.write(f"status={status}\n")
+                  fh.write(f"tested={tested}\n")
+                  fh.write(f"passed={passed}\n")
+                  fh.write(f"failed={failed}\n")
+
+          if status != "pass":
+              print("::error::ACVP validation failed:")
+              print(f"  expected {expected} vectors, got {tested} tested")
+              print(f"  passed={passed} failed={failed} skipped={skipped}")
+              for fa in failing_algos:
+                  print(
+                      f"::error::{fa['algorithm']} ({fa['standard']}): "
+                      f"{fa['fail_count']} failure(s)"
+                  )
+                  for f in fa["failures"][:10]:
+                      print(f"    {f}")
+              sys.exit(1)
+
+          print(
+              f"ACVP validation OK: {passed}/{tested} pass, "
+              f"{skipped} skipped, git_sha={git_sha}"
+          )
+          PY
+
+      - name: Upload validation artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: acvp-validation-summary
+          path: |
+            nist_vectors/results.json
+            nist_vectors/validation_summary.json
+            nist_vectors/acvp_badge.json
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## NIST ACVP Vector Validation"
+            echo ""
+            echo "- Status: **${{ steps.summary.outputs.status || 'unknown' }}**"
+            echo "- Vectors tested: ${{ steps.summary.outputs.tested || 'n/a' }}"
+            echo "- Vectors passed: ${{ steps.summary.outputs.passed || 'n/a' }}"
+            echo "- Vectors failed: ${{ steps.summary.outputs.failed || 'n/a' }}"
+            echo "- Expected floor: ${EXPECTED_VECTORS}"
+            echo ""
+            echo "See \`docs/compliance/ACVP_SELF_ATTESTATION.md\` for the"
+            echo "customer-facing attestation this job underwrites."
+          } >> "$GITHUB_STEP_SUMMARY"

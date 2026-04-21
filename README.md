@@ -77,6 +77,7 @@ The system combines NIST-standardized post-quantum algorithms with a 3R runtime 
 - [Performance Metrics](#performance-metrics)
 - [Quick Start](#quick-start)
 - [Testing and Quality Assurance](#testing-and-quality-assurance)
+- [NIST Algorithm Compliance](#nist-algorithm-compliance)
 - [Documentation](#documentation)
 - [Cross-Platform Support](#cross-platform-support)
 - [Build System](#build-system-)
@@ -832,6 +833,59 @@ The module implements technical controls aligned with FIPS 140-3 Security Level 
 > **Important:** This library implements algorithms specified in FIPS 203, FIPS 204, and FIPS 205. This implementation has **NOT** been submitted for CMVP validation and is **NOT** FIPS 140-3 certified. The controls above represent design alignment with FIPS 140-3 Level 1 technical requirements as a step toward future CMVP validation. See `CSRC_STANDARDS.md` for details.
 
 </details>
+
+---
+
+## NIST Algorithm Compliance
+
+AMA Cryptography is continuously validated against the official
+[NIST ACVP](https://github.com/usnistgov/ACVP-Server) test vectors. The
+current attestation is **815 / 815 AFT vectors passing** across 12 algorithm
+functions and 7 NIST standards.
+
+- **Formal attestation:** [`docs/compliance/ACVP_SELF_ATTESTATION.md`](docs/compliance/ACVP_SELF_ATTESTATION.md)
+- **Machine-readable:** [`docs/compliance/acvp_attestation.json`](docs/compliance/acvp_attestation.json)
+- **Full evidence report:** [`CSRC_ALIGN_REPORT.md`](CSRC_ALIGN_REPORT.md)
+- **Continuous validation:** [`.github/workflows/acvp_validation.yml`](.github/workflows/acvp_validation.yml) — runs on every push to `main` and weekly on Mondays; fails if any vector regresses.
+
+### Coverage Summary
+
+| Algorithm | NIST Standard | Vectors | Pass | Fail |
+|---|---|---:|---:|---:|
+| SHA-256 | FIPS 180-4 | 3 | 3 | 0 |
+| HMAC-SHA-256 | FIPS 198-1 | 150 | 150 | 0 |
+| SHA3-256 | FIPS 202 | 151 | 151 | 0 |
+| SHA3-512 | FIPS 202 | 86 | 86 | 0 |
+| SHAKE-128 | FIPS 202 | 174 | 174 | 0 |
+| SHAKE-256 | FIPS 202 | 143 | 143 | 0 |
+| AES-256-GCM | SP 800-38D | 4 | 4 | 0 |
+| ML-KEM-1024 KeyGen | FIPS 203 | 25 | 25 | 0 |
+| ML-KEM-1024 EncapDecap | FIPS 203 | 25 | 25 | 0 |
+| ML-DSA-65 KeyGen | FIPS 204 | 25 | 25 | 0 |
+| ML-DSA-65 SigVer | FIPS 204 | 15 | 15 | 0 |
+| SLH-DSA-SHA2-256f SigVer | FIPS 205 | 14 | 14 | 0 |
+| **TOTAL** | | **815** | **815** | **0** |
+
+### Reproduction
+
+```bash
+cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
+python3 nist_vectors/fetch_vectors.py
+python3 nist_vectors/run_vectors.py     # writes nist_vectors/results.json
+```
+
+Full reproduction instructions:
+[`docs/compliance/ACVP_SELF_ATTESTATION.md §5`](docs/compliance/ACVP_SELF_ATTESTATION.md#5-reproduction-instructions).
+
+### ⚠ CAVP / FIPS Disclaimer
+
+> **This is a NIST ACVP self-attestation — it is NOT a CAVP validation
+> certificate, NOT a CMVP certificate, and NOT a claim of FIPS 140-3
+> compliance.** No NIST program has reviewed this library and no independent
+> laboratory has witnessed these results. Customers in regulated
+> environments that require FIPS validation must obtain a formal CAVP/CMVP
+> validation through an accredited CST laboratory. See
+> [`docs/compliance/ACVP_SELF_ATTESTATION.md §7`](docs/compliance/ACVP_SELF_ATTESTATION.md#7-disclaimers).
 
 ---
 
