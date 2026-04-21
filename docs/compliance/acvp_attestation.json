@@ -12,8 +12,8 @@
   "cmvp_certified": false,
   "fips_140_3_certified": false,
   "nist_endorsed": false,
-  "acvp_ref": "master",
-  "acvp_ref_note": "Upstream ACVP-Server ref this attestation was generated against. The per-algorithm source_url entries below embed this ref as a human-browseable URL. For a reproducible attested run, set the ACVP_REF environment variable (consumed by nist_vectors/fetch_vectors.py and recorded in nist_vectors/validation_summary.json by .github/workflows/acvp_validation.yml) to a specific ACVP-Server commit SHA or tag, then regenerate this file and its source_urls.",
+  "acvp_ref": "v1.1.0.42",
+  "acvp_ref_note": "Upstream ACVP-Server ref this attestation was generated against (immutable NIST release tag v1.1.0.42, published 2026-04-16, upstream commit 15c0f3d...). The per-algorithm source_url entries below embed this ref as a human-browseable URL that resolves to the exact attested bytes. .github/workflows/acvp_validation.yml sets ACVP_REF to the same tag and fails the build if this field, the workflow env var, and the value nist_vectors/fetch_vectors.py actually used (recorded in nist_vectors/validation_summary.json::acvp_ref) ever disagree. When refreshing this attestation against a newer ACVP-Server release, update this field, every source_url below, the workflow's ACVP_REF default, and nist_vectors/fetch_vectors.py::DEFAULT_ACVP_REF in the same commit; if the per-algorithm vector counts change with the new snapshot, also update totals and EXPECTED_VECTORS.",
   "algorithms": [
     {
       "name": "SHA-256",
@@ -30,7 +30,7 @@
       "standard": "FIPS 198-1",
       "parameter_set": "256-bit",
       "source": "ACVP-Server HMAC-SHA2-256-2.0",
-      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/master/gen-val/json-files/HMAC-SHA2-256-2.0",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/HMAC-SHA2-256-2.0",
       "vectors_tested": 150,
       "vectors_passed": 150,
       "vectors_failed": 0
@@ -40,7 +40,7 @@
       "standard": "FIPS 202",
       "parameter_set": "256-bit",
       "source": "ACVP-Server SHA3-256-2.0",
-      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/master/gen-val/json-files/SHA3-256-2.0",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/SHA3-256-2.0",
       "vectors_tested": 151,
       "vectors_passed": 151,
       "vectors_failed": 0
@@ -50,7 +50,7 @@
       "standard": "FIPS 202",
       "parameter_set": "512-bit",
       "source": "ACVP-Server SHA3-512-2.0",
-      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/master/gen-val/json-files/SHA3-512-2.0",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/SHA3-512-2.0",
       "vectors_tested": 86,
       "vectors_passed": 86,
       "vectors_failed": 0
@@ -60,7 +60,7 @@
       "standard": "FIPS 202",
       "parameter_set": "XOF, rate=1344",
       "source": "ACVP-Server SHAKE-128-1.0",
-      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/master/gen-val/json-files/SHAKE-128-1.0",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/SHAKE-128-1.0",
       "vectors_tested": 174,
       "vectors_passed": 174,
       "vectors_failed": 0
@@ -70,7 +70,7 @@
       "standard": "FIPS 202",
       "parameter_set": "XOF, rate=1088",
       "source": "ACVP-Server SHAKE-256-1.0",
-      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/master/gen-val/json-files/SHAKE-256-1.0",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/SHAKE-256-1.0",
       "vectors_tested": 143,
       "vectors_passed": 143,
       "vectors_failed": 0
@@ -90,7 +90,7 @@
       "standard": "FIPS 203",
       "parameter_set": "ML-KEM-1024",
       "source": "ACVP-Server ML-KEM-keyGen-FIPS203",
-      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/master/gen-val/json-files/ML-KEM-keyGen-FIPS203",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/ML-KEM-keyGen-FIPS203",
       "vectors_tested": 25,
       "vectors_passed": 25,
       "vectors_failed": 0
@@ -100,7 +100,7 @@
       "standard": "FIPS 203",
       "parameter_set": "ML-KEM-1024 (decapsulation only)",
       "source": "ACVP-Server ML-KEM-encapDecap-FIPS203",
-      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/master/gen-val/json-files/ML-KEM-encapDecap-FIPS203",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/ML-KEM-encapDecap-FIPS203",
       "vectors_tested": 25,
       "vectors_passed": 25,
       "vectors_failed": 0
@@ -110,7 +110,7 @@
       "standard": "FIPS 204",
       "parameter_set": "ML-DSA-65",
       "source": "ACVP-Server ML-DSA-keyGen-FIPS204",
-      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/master/gen-val/json-files/ML-DSA-keyGen-FIPS204",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/ML-DSA-keyGen-FIPS204",
       "vectors_tested": 25,
       "vectors_passed": 25,
       "vectors_failed": 0
@@ -120,7 +120,7 @@
       "standard": "FIPS 204",
       "parameter_set": "ML-DSA-65 (external/pure, TG 3)",
       "source": "ACVP-Server ML-DSA-sigVer-FIPS204",
-      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/master/gen-val/json-files/ML-DSA-sigVer-FIPS204",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/ML-DSA-sigVer-FIPS204",
       "vectors_tested": 15,
       "vectors_passed": 15,
       "vectors_failed": 0
@@ -130,7 +130,7 @@
       "standard": "FIPS 205",
       "parameter_set": "SLH-DSA-SHA2-256f (external/pure, TG 5)",
       "source": "ACVP-Server SLH-DSA-sigVer-FIPS205",
-      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/master/gen-val/json-files/SLH-DSA-sigVer-FIPS205",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/SLH-DSA-sigVer-FIPS205",
       "vectors_tested": 14,
       "vectors_passed": 14,
       "vectors_failed": 0

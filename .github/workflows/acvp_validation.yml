@@ -48,54 +48,43 @@ env:
   EXPECTED_VECTORS: '815'
   # Upstream ACVP-Server ref used by nist_vectors/fetch_vectors.py.
   #
-  # TRADEOFF: `master` vs pinned tag/SHA.
+  # Pinned to the immutable NIST release tag `v1.1.0.42` (published
+  # 2026-04-16, upstream commit 15c0f3d...). This is the exact snapshot
+  # the 815-vector attestation in docs/compliance/acvp_attestation.json
+  # was generated against. Pinning a tag rather than tracking `master`
+  # guarantees that:
   #
-  # `master` (current default):
-  #   * Tracks the latest published NIST ACVP vectors automatically.
-  #   * Weekly schedule can fail unexpectedly if upstream renames,
-  #     reformats, or changes vector counts in a test group we exercise
-  #     — the strict attestation cross-check (later in this workflow)
-  #     demands every total and per-algorithm count match exactly.
-  #   * Consistent with the currently-published
-  #     docs/compliance/acvp_attestation.json (`acvp_ref: "master"`), so
-  #     no immediate mismatch against the attestation artifact.
+  #   * The weekly scheduled run cannot break spuriously from upstream
+  #     churn (new vectors, renamed test groups, reformatted JSON) when
+  #     AMA code itself hasn't changed.
+  #   * The same CI run a year from now produces the same 815 count
+  #     against the same vector bytes, so the published attestation
+  #     stays reproducible for auditors.
+  #   * `docs/compliance/acvp_attestation.json::acvp_ref` and the `ref`
+  #     this workflow actually uses are locked together (the
+  #     cross-check below fails the build if they drift).
   #
-  # Pinned tag / SHA (e.g., `v1.1.0.42` or a full 40-char SHA):
-  #   * Reproducible: the same CI run a year from now gets the same
-  #     vectors and the same 815 count.
-  #   * Requires `docs/compliance/acvp_attestation.json::acvp_ref` to
-  #     move to the same value in lockstep (the cross-check enforces
-  #     this).
-  #   * Requires one-time verification that the pinned snapshot still
-  #     produces 815 vectors across the 12 attested algorithm functions.
-  #     If the pin drifts from the attestation counts, CI fails fast
-  #     with an explicit diff — which is the intended safety valve,
-  #     but means the refresh procedure below must be run deliberately.
-  #
-  # PIN REFRESH PROCEDURE (when the project publishes a new attestation):
-  #   1. Pick the upstream tag/SHA you want to attest against (NIST
-  #      publishes tags at https://github.com/usnistgov/ACVP-Server/tags
-  #      — `v1.1.0.N` immutable release tags are recommended over
-  #      branch names; known stable tags at time of writing include
-  #      v1.1.0.29 … v1.1.0.42).
-  #   2. Locally: export ACVP_REF=<chosen ref>, then run the same
+  # PIN REFRESH PROCEDURE (run deliberately, not incidentally):
+  #   1. Pick the new upstream tag from
+  #      https://github.com/usnistgov/ACVP-Server/tags — prefer the
+  #      immutable `v1.1.0.N` release tags over branch names.
+  #   2. Locally: `export ACVP_REF=<chosen tag>`, then reproduce the
   #      pipeline this workflow runs (cmake build, fetch_vectors.py,
-  #      run_vectors.py). Confirm results.json reports the expected
-  #      815 total and that all 12 per-algorithm counts match the
-  #      attestation.
-  #   3. If counts drift, update docs/compliance/acvp_attestation.json
-  #      (totals, per-algorithm vectors_tested/vectors_passed, and
-  #      `acvp_ref`) AND docs/compliance/ACVP_SELF_ATTESTATION.md AND
-  #      EXPECTED_VECTORS above AND this ACVP_REF default — all in the
-  #      same commit.
-  #   4. The resolved ref is normalized (strip whitespace, empty →
-  #      master) and recorded in both validation_summary.json::acvp_ref
-  #      and the CI cross-check against acvp_attestation.json::acvp_ref.
-  #
-  # Keeping `master` here is a conscious choice: it signals "this is
-  # the latest-known attested state" while the cross-check ensures the
-  # numbers can't silently drift without CI catching it.
-  ACVP_REF: master
+  #      run_vectors.py). Confirm results.json still reports exactly
+  #      815 total vectors and that every one of the 12 per-algorithm
+  #      counts matches what's already in acvp_attestation.json.
+  #   3. If the counts drift, update docs/compliance/acvp_attestation.json
+  #      (`acvp_ref`, totals, and each per-algorithm
+  #      vectors_tested/vectors_passed), docs/compliance/ACVP_SELF_ATTESTATION.md,
+  #      EXPECTED_VECTORS above, and this ACVP_REF default — all in the
+  #      same commit. The attestation cross-check below enforces that
+  #      these numbers stay in lockstep.
+  #   4. Also update the default in nist_vectors/fetch_vectors.py so a
+  #      local run without ACVP_REF set reproduces the same snapshot.
+  #   5. The resolved ref is normalized (strip whitespace, empty →
+  #      "v1.1.0.42") and recorded in validation_summary.json::acvp_ref
+  #      as well as checked against acvp_attestation.json::acvp_ref.
+  ACVP_REF: v1.1.0.42
 
 jobs:
   acvp-vectors:
@@ -148,8 +137,11 @@ jobs:
           expected = int(os.environ["EXPECTED_VECTORS"])
           # Normalize the same way nist_vectors/fetch_vectors.py::_acvp_ref()
           # does, so what we record in validation_summary.json matches what
-          # fetch_vectors actually used (strip whitespace, empty → master).
-          acvp_ref = (os.environ.get("ACVP_REF", "master") or "").strip() or "master"
+          # fetch_vectors actually used (strip whitespace, empty → default).
+          # Default must match the default in fetch_vectors.py so a local
+          # run without ACVP_REF set produces the same acvp_ref value.
+          _DEFAULT_ACVP_REF = "v1.1.0.42"
+          acvp_ref = (os.environ.get("ACVP_REF", _DEFAULT_ACVP_REF) or "").strip() or _DEFAULT_ACVP_REF
           results_path = Path("nist_vectors/results.json")
           data = json.loads(results_path.read_text())
           summary = data.get("summary", {})

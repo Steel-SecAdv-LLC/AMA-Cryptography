@@ -22,14 +22,22 @@ from typing import Any, cast
 VECTORS_DIR = Path(__file__).parent
 
 
-# The upstream ACVP-Server ref. Defaults to "master" (the upstream default)
-# for backward compatibility with existing local runs; CI and auditors can
-# pin a specific commit SHA or tag via the ACVP_REF environment variable
-# so that a reproduced attestation references the exact upstream snapshot.
-# The resolved ref is returned by `_acvp_ref()` and recorded in the
-# validation_summary.json emitted by .github/workflows/acvp_validation.yml.
+# The upstream ACVP-Server ref. Defaults to the immutable release tag
+# `v1.1.0.42` — the exact upstream snapshot the 815-vector attestation in
+# docs/compliance/acvp_attestation.json was generated against. Pinning a
+# tag (not a branch) guarantees that a local run without ACVP_REF set
+# reproduces the same bytes the CI workflow and the published attestation
+# reference. Override with `export ACVP_REF=<tag-or-sha>` (or `master` if
+# deliberately testing against upstream tip). The resolved ref is returned
+# by `_acvp_ref()` and recorded in validation_summary.json by
+# .github/workflows/acvp_validation.yml; that workflow also cross-checks
+# the ref against docs/compliance/acvp_attestation.json::acvp_ref so the
+# attestation artifact and the CI run cannot silently drift apart.
+DEFAULT_ACVP_REF = "v1.1.0.42"
+
+
 def _acvp_ref() -> str:
-    return os.environ.get("ACVP_REF", "master").strip() or "master"
+    return os.environ.get("ACVP_REF", DEFAULT_ACVP_REF).strip() or DEFAULT_ACVP_REF
 
 
 ACVP_BASE = (
