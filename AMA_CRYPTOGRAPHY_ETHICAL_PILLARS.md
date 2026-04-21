@@ -798,15 +798,15 @@ The 4 Omni-Code Ethical Pillars provide a mathematically rigorous framework for 
 - **Measured overhead:** <4% per package operation in the reference
   benchmark (generic C path); throughput >1,000 ops/sec on the CI
   runner. Actual overhead varies by hardware and input size.
-- **Validation status:** Validated against NIST ACVP test vectors
-  (1,851/1,851 applicable vectors pass — see
-  [`CSRC_ALIGN_REPORT.md`](CSRC_ALIGN_REPORT.md)). The ACVP validation
-  covers the FIPS primitives (Part A), not the Ethical Pillars
-  themselves. Original constructions in this document — the ethical
-  integration, adaptive posture, and weight system — have written
-  security arguments in [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md)
-  but have **not** undergone independent formal verification. This is
-  the same disclaimer carried in
+- **Validation status:** Validated against NIST ACVP test vectors;
+  see [`CSRC_ALIGN_REPORT.md`](CSRC_ALIGN_REPORT.md) for the
+  authoritative, versioned totals. The ACVP validation covers the FIPS
+  primitives (Part A), not the Ethical Pillars themselves. Original
+  constructions in this document — the ethical integration, adaptive
+  posture, and weight system — have written security arguments in
+  [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md) but have **not**
+  undergone independent formal verification. This is the same
+  disclaimer carried in
   [`ARCHITECTURE.md §Design Philosophy`](ARCHITECTURE.md) and
   [`docs/DESIGN_NOTES.md §Limitations`](docs/DESIGN_NOTES.md).
 - **Quantum resistance:** inherited from the ML-DSA-65 / ML-KEM-1024 /

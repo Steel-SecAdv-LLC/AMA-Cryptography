@@ -269,8 +269,12 @@ def _run_sha3_mct(
         try:
             actual_digests = _sha3_mct_iterate(lib, sha3_fn_name, digest_size, seed)
         except Exception as exc:  # pragma: no cover - defensive
-            # Count all 100 iterations as failed, not just 1, so the pass +
-            # fail + skip totals add up.
+            # Count all 100 iterations as tested-and-failed (not just 1), so
+            # the summary invariant `vectors_tested == pass_count +
+            # fail_count` holds and the workflow's cross-check against
+            # acvp_attestation.json::vectors_tested gets a consistent number
+            # even on the harness-crash path.
+            res.vectors_tested += expected_count
             res.fail_count += expected_count
             res.failures.append(
                 {
@@ -549,8 +553,14 @@ def _run_shake_mct(
         try:
             actual = _shake_mct_iterate(lib, shake_fn_name, seed, min_out_bits, max_out_bits)
         except Exception as exc:  # pragma: no cover
-            # Count every vector under this tcId as failed so the summary
-            # totals stay consistent.
+            # Count every vector under this tcId as tested-and-failed so
+            # the summary invariant `vectors_tested == pass_count +
+            # fail_count` holds. Without the `vectors_tested` bump, the
+            # workflow's cross-check against acvp_attestation.json
+            # (which compares per-algorithm vectors_tested) would see an
+            # inconsistent number on the harness-crash path even though
+            # fail_count moved correctly.
+            res.vectors_tested += expected_count
             res.fail_count += expected_count
             res.failures.append(
                 {
