@@ -46,10 +46,55 @@ concurrency:
 # commit. The floor and the attested totals move together.
 env:
   EXPECTED_VECTORS: '815'
-  # Pin the ACVP-Server ref used by nist_vectors/fetch_vectors.py. Defaults
-  # to master (upstream default) for backward compatibility; pin to a commit
-  # SHA or tag here to make an attested run reproducible against a specific
-  # upstream snapshot. The resolved ref is recorded in validation_summary.json.
+  # Upstream ACVP-Server ref used by nist_vectors/fetch_vectors.py.
+  #
+  # TRADEOFF: `master` vs pinned tag/SHA.
+  #
+  # `master` (current default):
+  #   * Tracks the latest published NIST ACVP vectors automatically.
+  #   * Weekly schedule can fail unexpectedly if upstream renames,
+  #     reformats, or changes vector counts in a test group we exercise
+  #     — the strict attestation cross-check (later in this workflow)
+  #     demands every total and per-algorithm count match exactly.
+  #   * Consistent with the currently-published
+  #     docs/compliance/acvp_attestation.json (`acvp_ref: "master"`), so
+  #     no immediate mismatch against the attestation artifact.
+  #
+  # Pinned tag / SHA (e.g., `v1.1.0.42` or a full 40-char SHA):
+  #   * Reproducible: the same CI run a year from now gets the same
+  #     vectors and the same 815 count.
+  #   * Requires `docs/compliance/acvp_attestation.json::acvp_ref` to
+  #     move to the same value in lockstep (the cross-check enforces
+  #     this).
+  #   * Requires one-time verification that the pinned snapshot still
+  #     produces 815 vectors across the 12 attested algorithm functions.
+  #     If the pin drifts from the attestation counts, CI fails fast
+  #     with an explicit diff — which is the intended safety valve,
+  #     but means the refresh procedure below must be run deliberately.
+  #
+  # PIN REFRESH PROCEDURE (when the project publishes a new attestation):
+  #   1. Pick the upstream tag/SHA you want to attest against (NIST
+  #      publishes tags at https://github.com/usnistgov/ACVP-Server/tags
+  #      — `v1.1.0.N` immutable release tags are recommended over
+  #      branch names; known stable tags at time of writing include
+  #      v1.1.0.29 … v1.1.0.42).
+  #   2. Locally: export ACVP_REF=<chosen ref>, then run the same
+  #      pipeline this workflow runs (cmake build, fetch_vectors.py,
+  #      run_vectors.py). Confirm results.json reports the expected
+  #      815 total and that all 12 per-algorithm counts match the
+  #      attestation.
+  #   3. If counts drift, update docs/compliance/acvp_attestation.json
+  #      (totals, per-algorithm vectors_tested/vectors_passed, and
+  #      `acvp_ref`) AND docs/compliance/ACVP_SELF_ATTESTATION.md AND
+  #      EXPECTED_VECTORS above AND this ACVP_REF default — all in the
+  #      same commit.
+  #   4. The resolved ref is normalized (strip whitespace, empty →
+  #      master) and recorded in both validation_summary.json::acvp_ref
+  #      and the CI cross-check against acvp_attestation.json::acvp_ref.
+  #
+  # Keeping `master` here is a conscious choice: it signals "this is
+  # the latest-known attested state" while the cross-check ensures the
+  # numbers can't silently drift without CI catching it.
   ACVP_REF: master
 
 jobs:
@@ -265,16 +310,39 @@ jobs:
                       f"vs results={failed}"
                   )
               # Per-algorithm: names must match canonical harness names,
-              # and vectors_tested / vectors_passed must agree.
+              # and vectors_tested / vectors_passed must agree. The check
+              # is symmetric — every algorithm in the attestation must
+              # appear in results.json (prevents the attestation from
+              # citing algorithms the harness didn't actually run), AND
+              # every algorithm in results.json must appear in the
+              # attestation (prevents a new harness algorithm, a renamed
+              # algorithm, or a missing attestation entry from silently
+              # passing while the published artifact omits it).
               by_name = {a.get("algorithm"): a for a in algorithms}
-              for entry in att.get("algorithms", []):
-                  name = entry.get("name")
+              att_by_name = {
+                  entry.get("name"): entry for entry in att.get("algorithms", [])
+              }
+              missing_from_results = sorted(
+                  name for name in att_by_name if name not in by_name
+              )
+              missing_from_attestation = sorted(
+                  name for name in by_name if name not in att_by_name
+              )
+              for name in missing_from_results:
+                  mismatches.append(
+                      f"attestation algorithm '{name}' not found in "
+                      f"results.json (canonical harness names only)"
+                  )
+              for name in missing_from_attestation:
+                  mismatches.append(
+                      f"results.json algorithm '{name}' not listed in "
+                      f"docs/compliance/acvp_attestation.json "
+                      f"(add the entry or rename to match an attested one)"
+                  )
+              for name, entry in att_by_name.items():
                   res = by_name.get(name)
                   if res is None:
-                      mismatches.append(
-                          f"attestation algorithm '{name}' not found in "
-                          f"results.json (canonical harness names only)"
-                      )
+                      # Already reported above under missing_from_results.
                       continue
                   if int(entry.get("vectors_tested", 0)) != int(
                       res.get("vectors_tested", 0)
