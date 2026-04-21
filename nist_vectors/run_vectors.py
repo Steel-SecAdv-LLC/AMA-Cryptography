@@ -464,7 +464,20 @@ def _shake_mct_iterate(
     out_len = max_out
     results: list[tuple[bytes, int]] = []
     for _j in range(100):
+        # `used_out_len` captures the output length that was passed to SHAKE
+        # at the LAST inner iteration (i.e., the length of the digest we
+        # record in resultsArray[j]). The ACVP SHAKE-MCT server reports
+        # `resultsArray[j].outLen` as this "used" length — NOT the new
+        # outLen computed from the rightmost 16 bits after i=1000 (which
+        # would be the length for the next outer iteration). Both
+        # interpretations produce byte-identical digests when truncated to
+        # the same length, but the integer comparison for outLen fails
+        # unless we record the used value. Verified against the ACVP
+        # v1.1.0.42 SHAKE-128-1.0 and SHAKE-256-1.0 resultsArray entries.
+        used_out_len = out_len
+        digest = b""
         for _i in range(1000):
+            used_out_len = out_len
             fn(msg, ctypes.c_size_t(len(msg)), out_buf, ctypes.c_size_t(out_len))
             digest = out_buf.raw[:out_len]
 
@@ -474,7 +487,9 @@ def _shake_mct_iterate(
             else:
                 msg = digest + bytes(16 - out_len)
 
-            # Update out_len from rightmost 16 bits of digest
+            # Update out_len from rightmost 16 bits of digest (the value
+            # to use at the NEXT inner iteration — not reported for this
+            # iteration).
             if out_len >= 2:
                 rightmost = int.from_bytes(digest[-2:], "big")
             elif out_len == 1:
@@ -483,7 +498,7 @@ def _shake_mct_iterate(
                 rightmost = 0
             out_len = min_out + (rightmost % rng)
 
-        results.append((digest, out_len))
+        results.append((digest, used_out_len))
     return results
 
 
