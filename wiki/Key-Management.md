@@ -226,10 +226,23 @@ from ama_cryptography.key_management import (
 # SecureKeyStorage takes a storage directory and an optional master
 # password.
 #
-# IMPORTANT (key_management.py:563-567): if `master_password` is truthy,
-# it is stretched through PBKDF2-HMAC-SHA512 (or Argon2id via
-# `migrate_kdf()`) to derive the at-rest encryption key. If
-# `master_password` is None or empty, a *random in-memory* 32-byte
+# IMPORTANT (key_management.py:563-673): if `master_password` is truthy,
+# it is stretched through a password-based KDF into a 32-byte AES-256
+# key. Algorithm selection is automatic on first use of a fresh keystore:
+#   * Argon2id (RFC 9106; t=3, m=64 MiB, p=4) is preferred whenever the
+#     native Argon2 backend is compiled in (`_ARGON2_NATIVE_AVAILABLE`
+#     is True) — this is KDF_VERSION 3 and becomes the default on any
+#     modern build of the library.
+#   * PBKDF2-HMAC-SHA256 with 600,000 iterations (OWASP 2024) is the
+#     fallback when the native Argon2 backend is unavailable — this is
+#     KDF_VERSION 2.
+#   * `migrate_kdf()` exists to opportunistically upgrade an existing
+#     v2 (PBKDF2) keystore to v3 (Argon2id); it is not required for
+#     fresh installations.
+# Selection is persisted in `.kdf_metadata.json` alongside the salt so
+# existing keystores remain decryptable across algorithm changes.
+#
+# If `master_password` is None or empty, a *random in-memory* 32-byte
 # encryption key is generated via `secrets.token_bytes(32)` — there is
 # no stable KDF derivation in that mode, so keys stored under a
 # process's random in-memory key **cannot be decrypted after process

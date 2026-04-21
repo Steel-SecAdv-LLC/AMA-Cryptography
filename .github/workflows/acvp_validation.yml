@@ -28,11 +28,22 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}
 
 # The attestation floor. Validation asserts `total_tested >= EXPECTED_VECTORS`
-# so that adding new ACVP coverage never silently reduces reporting — if the
-# harness exercises more vectors, the job still passes as long as every vector
-# passes. When intentionally adding new coverage, bump this number and
-# CSRC_ALIGN_REPORT.md / docs/compliance in the same commit so the floor
-# tracks the attested minimum.
+# so coverage never silently drops below the attested minimum.
+#
+# IMPORTANT: a later step in this workflow cross-checks
+# docs/compliance/acvp_attestation.json against results.json and forces
+# status = "fail" if either totals or per-algorithm counts disagree. That
+# means expanding ACVP coverage (running more vectors than EXPECTED_VECTORS)
+# does NOT automatically pass: the attestation JSON and this floor must be
+# bumped in the same commit as the coverage change. This policy is
+# deliberate — the published docs/compliance artifacts cannot silently drift
+# from the numbers CI just measured.
+#
+# To add coverage: (1) update nist_vectors to exercise the new vectors, (2)
+# bump EXPECTED_VECTORS below, (3) update docs/compliance/acvp_attestation.json
+# per-algorithm vectors_tested/vectors_passed and totals, and (4) update the
+# CSRC_ALIGN_REPORT.md / ACVP_SELF_ATTESTATION.md counts — all in the same
+# commit. The floor and the attested totals move together.
 env:
   EXPECTED_VECTORS: '815'
   # Pin the ACVP-Server ref used by nist_vectors/fetch_vectors.py. Defaults

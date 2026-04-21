@@ -242,12 +242,25 @@ from ama_cryptography.pqc_backends import (
     SPHINCS_AVAILABLE,
 )
 
-# Per-backend top-level availability booleans (read directly)
-assert DILITHIUM_AVAILABLE and KYBER_AVAILABLE and SPHINCS_AVAILABLE
+# Per-backend top-level availability booleans. These track whether each
+# native backend was compiled in; a valid deployment may ship with only
+# a subset loaded (e.g., signature-only builds), so check explicitly
+# rather than asserting all three.
+print(f"Dilithium (ML-DSA-65):  {DILITHIUM_AVAILABLE}")
+print(f"Kyber (ML-KEM-1024):    {KYBER_AVAILABLE}")
+print(f"SPHINCS+ (SLH-DSA):     {SPHINCS_AVAILABLE}")
 
-# High-level status: PQCStatus.AVAILABLE if at least one PQC backend loaded
+# High-level status: PQCStatus.AVAILABLE if at least one PQC backend loaded,
+# PQCStatus.UNAVAILABLE if none are loaded.
 status = get_pqc_status()
-assert status is PQCStatus.AVAILABLE
+if status is not PQCStatus.AVAILABLE:
+    raise RuntimeError(
+        "No PQC backend loaded. Rebuild with -DAMA_USE_NATIVE_PQC=ON."
+    )
+
+# Gate individual algorithm use on its specific flag, not the aggregate status:
+if not DILITHIUM_AVAILABLE:
+    raise RuntimeError("ML-DSA-65 not available in this build.")
 
 # Detailed backend info dict (per-algorithm availability, backend name,
 # algorithm parameters, PQC and hash/HMAC status, etc.)

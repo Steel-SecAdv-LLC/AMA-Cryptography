@@ -32,11 +32,21 @@ status = get_pqc_status()
 print(status)
 # PQCStatus.AVAILABLE  — at least one PQC backend loaded
 
-# Per-algorithm backend matrix (C vs Cython vs unavailable)
+# Detailed backend info dict (see ama_cryptography/pqc_backends.py::get_pqc_backend_info).
+# Top-level keys: status, <algo>_available, <algo>_backend, algorithms,
+# SHA3-256, HMAC-SHA3-256 (+ legacy flat 'backend'/'algorithm' aliases).
 info = get_pqc_backend_info()
-print(info)
-# {'ml_kem_1024': 'c_native', 'ml_dsa_65': 'c_native',
-#  'slh_dsa_sha2_256f': 'c_native', 'ed25519': 'c_native', ...}
+print(info["status"])                 # "available" / "unavailable"
+print(info["dilithium_available"], info["dilithium_backend"])  # True, "c_native"
+print(info["kyber_available"],     info["kyber_backend"])      # True, "c_native"
+print(info["sphincs_available"],   info["sphincs_backend"])    # True, "c_native"
+
+# Per-algorithm matrix lives under info["algorithms"]:
+for name, meta in info["algorithms"].items():
+    print(name, meta["available"], meta["backend"], meta["security_level"])
+# ML-DSA-65   True c_native 3
+# Kyber-1024  True c_native 5
+# SPHINCS+-256f True c_native 5
 ```
 
 ---

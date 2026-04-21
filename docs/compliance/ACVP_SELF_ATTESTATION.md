@@ -154,9 +154,22 @@ if any vector fails.
 
 Continuous validation runs on every push to `main` and on a weekly schedule
 via [`.github/workflows/acvp_validation.yml`](../../.github/workflows/acvp_validation.yml).
-The workflow parses `results.json` and asserts 815/815 pass, publishing a
-`nist_vectors/validation_summary.json` artifact with timestamp, git SHA, and
-per-algorithm counts.
+The workflow parses `results.json` and enforces three conditions:
+
+1. **Floor:** `total_tested >= EXPECTED_VECTORS` (currently 815). Coverage
+   can expand above this floor; it cannot drop below it.
+2. **Zero failures:** `total_failed == 0`, and no algorithm may report a
+   non-zero `fail_count` or a `vectors_tested == 0`.
+3. **Attestation cross-check:** `docs/compliance/acvp_attestation.json`
+   totals and per-algorithm `vectors_tested`/`vectors_passed` must match
+   `nist_vectors/results.json` exactly. Expanding coverage therefore
+   requires updating the attestation JSON and the `EXPECTED_VECTORS`
+   floor in the same commit — the published attestation and the CI
+   measurement move together.
+
+A `nist_vectors/validation_summary.json` artifact is published on every
+run with timestamp, git SHA, `acvp_ref`, per-algorithm counts, and split
+skip accounting (`total_skipped_non_mct` vs `total_mct_skipped`).
 
 ---
 
