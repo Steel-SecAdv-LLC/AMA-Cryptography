@@ -75,6 +75,9 @@ Source files for post-quantum algorithms:
 ## 3. Algorithm Coverage
 
 All results taken from [`CSRC_ALIGN_REPORT.md` §2.1](../../CSRC_ALIGN_REPORT.md).
+Vector counts are also independently anchored in
+[`docs/METRICS_REPORT.md` §"NIST ACVP Vector Counts"](../METRICS_REPORT.md)
+with reproduction commands.
 
 | Algorithm | NIST Standard | FIPS/SP Reference | Parameter Set | Vectors Tested | Vectors Passed | Pass Rate |
 |---|---|---|---|---:|---:|---:|
@@ -187,11 +190,20 @@ deviations from FIPS 205 §11.2 were corrected in `src/c/ama_sphincs.c`:
 
 From [§2.4 of the source report](../../CSRC_ALIGN_REPORT.md). FIPS 205
 §11.2 Table 5 requires HMAC-SHA-512 for PRF_msg in category 5, truncated
-to `n` bytes. Implemented `ama_hmac_sha512_3()` (FIPS 198-1 compliant) in
-`src/c/internal/ama_sha2.h` with fail-closed OOM behavior —
-`AMA_ERROR_MEMORY` is returned and keys are zeroed via
-`ama_secure_memzero()` rather than emitting a signature with zeroed
-randomness.
+to `n` bytes. Implemented `ama_hmac_sha512_3()` (FIPS 198-1 compliant)
+in `src/c/internal/ama_sha2.h` (static-linkage helper) with two
+fail-closed early-return paths: `-2` on `size_t` overflow of the input
+lengths (guard at `ama_sha2.h:199–205`) and `-1` on `calloc` allocation
+failure (`ama_sha2.h:207–212`). Both paths zero `k_pad` and the
+derived key hash via `ama_secure_memzero()` before returning.
+Public-API callers map the raw return:
+
+- `ama_hkdf.c:54–57` — `ama_hmac_sha512()` maps `-2 → AMA_ERROR_OVERFLOW`
+  and any other non-zero → `AMA_ERROR_MEMORY`.
+- `ama_sphincs.c:1065–1067` — `spx_prf_msg()` wraps
+  `ama_hmac_sha512_3()` and propagates any non-zero return as
+  `AMA_ERROR_MEMORY` upward, so signing fails fail-closed rather than
+  emitting a signature with zeroed or corrupted randomness.
 
 ### 6.4 SHA-512 duplication eliminated
 
