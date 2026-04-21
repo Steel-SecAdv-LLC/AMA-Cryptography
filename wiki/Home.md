@@ -102,4 +102,4 @@ classDef gray fill:#1f1f1f,stroke:#11AEED,color:#f6f6f6;
 ---
 
 **Contact:** steel.sa.llc@gmail.com — [Report a vulnerability](Security-Model#reporting-vulnerabilities) — [Contribute](Contributing)  
-*Built by Steel Security Advisors LLC. Last updated: 2026-04-17.*
+*Built by Steel Security Advisors LLC. Last updated: 2026-04-20.*

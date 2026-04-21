@@ -1,28 +1,28 @@
 {
-  "timestamp": "2026-04-03T00:02:24.882001+00:00",
+  "timestamp": "2026-04-21T01:06:23.910038+00:00",
   "summary": {
-    "total": 11,
-    "passed": 9,
-    "failed": 2,
-    "warnings": 0
+    "total": 16,
+    "passed": 15,
+    "failed": 0,
+    "warnings": 1
   },
   "results": [
     {
       "name": "ama_sha3_256_hash",
       "description": "AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes)",
-      "ops_per_second": 18204.53,
-      "baseline_value": 15000,
-      "regression_percent": -21.36,
-      "tolerance_percent": 30,
+      "ops_per_second": 170834.17,
+      "baseline_value": 113388,
+      "regression_percent": -50.66,
+      "tolerance_percent": 35,
       "passed": true,
       "optional": false
     },
     {
       "name": "hmac_sha3_256",
       "description": "HMAC-SHA3-256 authentication (native C via ctypes)",
-      "ops_per_second": 12127.01,
-      "baseline_value": 12000,
-      "regression_percent": -1.06,
+      "ops_per_second": 129998.95,
+      "baseline_value": 76215,
+      "regression_percent": -70.57,
       "tolerance_percent": 40,
       "passed": true,
       "optional": false
@@ -30,29 +30,29 @@
     {
       "name": "ed25519_keygen",
       "description": "Ed25519 key pair generation (native C)",
-      "ops_per_second": 5167.01,
-      "baseline_value": 10600,
-      "regression_percent": 51.25,
+      "ops_per_second": 9161.98,
+      "baseline_value": 10560,
+      "regression_percent": 13.24,
       "tolerance_percent": 35,
-      "passed": false,
+      "passed": true,
       "optional": false
     },
     {
       "name": "ed25519_sign",
       "description": "Ed25519 signature generation (native C, expanded key)",
-      "ops_per_second": 5069.15,
-      "baseline_value": 8527,
-      "regression_percent": 40.55,
+      "ops_per_second": 10568.55,
+      "baseline_value": 10430,
+      "regression_percent": -1.33,
       "tolerance_percent": 35,
-      "passed": false,
+      "passed": true,
       "optional": false
     },
     {
       "name": "ed25519_verify",
       "description": "Ed25519 signature verification (native C)",
-      "ops_per_second": 2795.58,
-      "baseline_value": 3416,
-      "regression_percent": 18.16,
+      "ops_per_second": 7547.49,
+      "baseline_value": 5113,
+      "regression_percent": -47.61,
       "tolerance_percent": 35,
       "passed": true,
       "optional": false
@@ -60,9 +60,9 @@
     {
       "name": "hkdf_derive",
       "description": "HKDF-SHA3-256 key derivation (3 keys)",
-      "ops_per_second": 8508.94,
-      "baseline_value": 6500,
-      "regression_percent": -30.91,
+      "ops_per_second": 86778.81,
+      "baseline_value": 53193,
+      "regression_percent": -63.14,
       "tolerance_percent": 35,
       "passed": true,
       "optional": false
@@ -70,9 +70,9 @@
     {
       "name": "full_package_create",
       "description": "Complete crypto package creation (with PQC)",
-      "ops_per_second": 184.13,
-      "baseline_value": 280,
-      "regression_percent": 34.24,
+      "ops_per_second": 2849.0,
+      "baseline_value": 746,
+      "regression_percent": -281.9,
       "tolerance_percent": 50,
       "passed": true,
       "optional": false
@@ -80,9 +80,9 @@
     {
       "name": "full_package_verify",
       "description": "Complete crypto package verification (with PQC)",
-      "ops_per_second": 560.64,
-      "baseline_value": 380,
-      "regression_percent": -47.54,
+      "ops_per_second": 2805.24,
+      "baseline_value": 2044,
+      "regression_percent": -37.24,
       "tolerance_percent": 50,
       "passed": true,
       "optional": false
@@ -90,9 +90,9 @@
     {
       "name": "dilithium_keygen",
       "description": "ML-DSA-65 (Dilithium) key pair generation (native C)",
-      "ops_per_second": 594.53,
-      "baseline_value": 500,
-      "regression_percent": -18.91,
+      "ops_per_second": 2951.31,
+      "baseline_value": 1943,
+      "regression_percent": -51.89,
       "tolerance_percent": 40,
       "passed": true,
       "optional": true
@@ -100,19 +100,69 @@
     {
       "name": "dilithium_sign",
       "description": "ML-DSA-65 (Dilithium) signature generation (native C)",
-      "ops_per_second": 566.78,
-      "baseline_value": 140,
-      "regression_percent": -304.84,
+      "ops_per_second": 1016.56,
+      "baseline_value": 1918,
+      "regression_percent": 47.0,
       "tolerance_percent": 40,
-      "passed": true,
+      "passed": false,
       "optional": true
     },
     {
       "name": "dilithium_verify",
       "description": "ML-DSA-65 (Dilithium) signature verification (native C)",
-      "ops_per_second": 696.51,
-      "baseline_value": 530,
-      "regression_percent": -31.42,
+      "ops_per_second": 6322.12,
+      "baseline_value": 4303,
+      "regression_percent": -46.92,
+      "tolerance_percent": 40,
+      "passed": true,
+      "optional": true
+    },
+    {
+      "name": "kyber_keygen",
+      "description": "ML-KEM-1024 (Kyber) key pair generation (native C)",
+      "ops_per_second": 4849.75,
+      "baseline_value": 2200,
+      "regression_percent": -120.44,
+      "tolerance_percent": 40,
+      "passed": true,
+      "optional": true
+    },
+    {
+      "name": "kyber_encapsulate",
+      "description": "ML-KEM-1024 (Kyber) encapsulation (native C)",
+      "ops_per_second": 9138.44,
+      "baseline_value": 2400,
+      "regression_percent": -280.77,
+      "tolerance_percent": 40,
+      "passed": true,
+      "optional": true
+    },
+    {
+      "name": "aes_256_gcm_encrypt",
+      "description": "AES-256-GCM encryption of 1KB data (native C)",
+      "ops_per_second": 278298.04,
+      "baseline_value": 150000,
+      "regression_percent": -85.53,
+      "tolerance_percent": 40,
+      "passed": true,
+      "optional": true
+    },
+    {
+      "name": "chacha20poly1305_encrypt",
+      "description": "ChaCha20-Poly1305 encryption of 1KB data (native C)",
+      "ops_per_second": 271361.58,
+      "baseline_value": 130000,
+      "regression_percent": -108.74,
+      "tolerance_percent": 40,
+      "passed": true,
+      "optional": true
+    },
+    {
+      "name": "x25519_scalarmult",
+      "description": "X25519 key exchange scalar multiplication (native C)",
+      "ops_per_second": 22918.24,
+      "baseline_value": 25000,
+      "regression_percent": 8.33,
       "tolerance_percent": 40,
       "passed": true,
       "optional": true

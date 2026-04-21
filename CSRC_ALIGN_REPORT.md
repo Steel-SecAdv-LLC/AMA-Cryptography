@@ -1,9 +1,15 @@
 # CSRC Alignment Report — NIST ACVP Vector Validation
 
 **Version:** 2.1.5
-**Date:** 2026-04-17
+**Date:** 2026-04-20
 **Organization:** Steel Security Advisors LLC
 **Author:** Andrew E. A.
+
+> **Customer-facing attestation:** this report is the technical evidence
+> underlying [`docs/compliance/ACVP_SELF_ATTESTATION.md`](docs/compliance/ACVP_SELF_ATTESTATION.md)
+> (human-readable) and [`docs/compliance/acvp_attestation.json`](docs/compliance/acvp_attestation.json)
+> (machine-readable). Continuous validation runs in
+> [`.github/workflows/acvp_validation.yml`](.github/workflows/acvp_validation.yml).
 
 ---
 
@@ -152,12 +158,23 @@ Section 11.2 Table 5, security category 5 (n=32) requires:
 198-1 compliant HMAC with SHA-512). Updated `spx_prf_msg()` to use HMAC-SHA-512
 with Trunc_n output truncation.
 
-**OOM propagation (fail-closed):** `ama_hmac_sha512_3()` returns `int` (`0` on
-success, `-1` on allocation failure). On OOM, all key material is zeroed via
-`ama_secure_memzero()` before returning. Callers (`spx_prf_msg()`) propagate
-the error upward, causing signing to fail with `AMA_ERROR_MEMORY` rather than
-producing a signature with corrupted or zeroed randomness. This is fail-closed
-behavior: no signature is emitted on resource exhaustion.
+**Fail-closed error paths:** `ama_hmac_sha512_3()` returns `int` (`0` on
+success, `-1` on `calloc` allocation failure, `-2` on `size_t` overflow
+guard against oversized `part1||part2||part3` concatenation — see
+`src/c/internal/ama_sha2.h:199–212`). On either failure path, `k_pad` and
+the derived key hash are zeroed via `ama_secure_memzero()` before
+returning.
+
+Public-API callers map the raw return to a typed error:
+
+- `ama_hkdf.c:54–57` — `ama_hmac_sha512()` maps `-2 → AMA_ERROR_OVERFLOW`
+  and any other non-zero → `AMA_ERROR_MEMORY`.
+- `ama_sphincs.c:1065–1067` — `spx_prf_msg()` propagates any non-zero
+  return as `AMA_ERROR_MEMORY`, causing signing to fail rather than
+  producing a signature with corrupted or zeroed randomness.
+
+This is fail-closed behavior: no signature is emitted on resource
+exhaustion or pathological input sizes.
 
 ### 2.5 Remediation: SHA-512 duplication eliminated (v2.2)
 
@@ -314,7 +331,7 @@ Results are written to `nist_vectors/results.json`.
 
 > **Important:** The controls in this section represent design alignment with FIPS 140-3 Security Level 1 technical requirements. This implementation has **NOT** been submitted for CMVP validation and is **NOT** FIPS 140-3 certified. These controls are implemented as a step toward future formal validation.
 
-**Date:** 2026-04-17
+**Date:** 2026-04-20
 **Implementation:** `ama_cryptography/_self_test.py`, `ama_cryptography/integrity.py`
 
 ### 4.1 Power-On Self-Tests (POST)

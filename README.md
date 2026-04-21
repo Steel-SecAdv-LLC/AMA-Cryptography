@@ -62,7 +62,7 @@ The system combines NIST-standardized post-quantum algorithms with a 3R runtime 
 > - Secure file permissions for key files and cryptographic packages (store on encrypted volumes with restricted access)
 >
 > **Status:** Community-tested | Not externally audited
-> **Last Updated:** 2026-04-17
+> **Last Updated:** 2026-04-21
 
 ---
 
@@ -77,6 +77,7 @@ The system combines NIST-standardized post-quantum algorithms with a 3R runtime 
 - [Performance Metrics](#performance-metrics)
 - [Quick Start](#quick-start)
 - [Testing and Quality Assurance](#testing-and-quality-assurance)
+- [NIST Algorithm Compliance](#nist-algorithm-compliance)
 - [Documentation](#documentation)
 - [Cross-Platform Support](#cross-platform-support)
 - [Build System](#build-system-)
@@ -351,7 +352,7 @@ NIST-standardized post-quantum algorithms:
 
 - **Wallet Security**: ML-DSA-65 quantum-resistant signatures for wallet transaction authentication.
 - **Smart Contract Signing**: Quantum-resistant signatures for long-lived contracts.
-- **Transaction Throughput**: Sub-millisecond Ed25519 verification; ML-DSA-65 adds quantum resistance at higher latency (~1.76ms sign, ~1.43ms verify — Python API via ctypes, per `benchmark-results.json`).
+- **Transaction Throughput**: Sub-millisecond Ed25519 verification (~7.5k ops/sec via ctypes); ML-DSA-65 adds quantum resistance at higher latency (~983µs sign, ~158µs verify — Python API via ctypes, per `benchmark-results.json` refreshed 2026-04-21).
 - **Cross-Chain Bridges**: Hybrid signing (Ed25519 + ML-DSA-65) for backward compatibility and quantum resistance.
 - **NFT Provenance**: Quantum-resistant signatures designed for long-term validity.
 - **Timestamp Verification**: RFC 3161 trusted timestamping with quantum resistance.
@@ -377,15 +378,20 @@ NIST-standardized post-quantum algorithms:
 
 | Operation | Throughput (Python API via ctypes) | Latency | Notes |
 |-----------|-----------|---------|-------|
-| **KeyGen** | 595 ops/sec | ~1.68ms | Native C, NTT q=8380417 |
-| **Sign** | 567 ops/sec | ~1.76ms | Rejection sampling, constant-time |
-| **Verify** | 697 ops/sec | ~1.43ms | Verified against NIST ACVP test vectors (self-attested) |
+| **KeyGen** | 2,951 ops/sec | ~339µs | Native C, NTT q=8380417 |
+| **Sign** | 1,017 ops/sec | ~983µs | Rejection sampling, constant-time |
+| **Verify** | 6,322 ops/sec | ~158µs | Verified against NIST ACVP test vectors (self-attested) |
 
-*Source: `benchmark-results.json` (CI regression suite). Run `build/bin/benchmark_c_raw` for raw C throughput without ctypes overhead.*
+*Source: `benchmark-results.json` refreshed 2026-04-21 (`python benchmarks/benchmark_runner.py`). Run `build/bin/benchmark_c_raw --json` for raw C throughput without ctypes overhead (~5,100 KeyGen, ~2,000 Sign, ~6,800 Verify ops/sec on the same host).*
 
 ### ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)
 
-ML-KEM-1024 throughput is not yet tracked in the CI regression suite. Run `build/bin/benchmark_c_raw` locally for measured numbers.
+| Operation | Throughput (Python API via ctypes) | Notes |
+|-----------|-----------|-------|
+| **KeyGen** | 4,850 ops/sec | Native C, no OpenSSL dependency |
+| **Encapsulate** | 9,138 ops/sec | Fujisaki–Okamoto transform, IND-CCA2 |
+
+*Source: `benchmark-results.json` (CI regression suite). Decapsulate and raw C throughput available via `build/bin/benchmark_c_raw --json`.*
 
 ### Full Multi-Layer Package Performance
 
@@ -393,10 +399,10 @@ Complete security package with all defense layers (Python API via ctypes):
 
 | Operation | Throughput | Latency |
 |-----------|-----------|----------|
-| Package Create (all layers) | 184 ops/sec | ~5.43ms |
-| Package Verify (all layers) | 561 ops/sec | ~1.78ms |
+| Package Create (all layers) | 2,849 ops/sec | ~351µs |
+| Package Verify (all layers) | 2,805 ops/sec | ~356µs |
 
-*Source: `benchmark-results.json` (CI regression suite).*
+*Source: `benchmark-results.json` refreshed 2026-04-21.*
 
 **All Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65 (core), HKDF, RFC 3161 (supporting)
 
@@ -404,18 +410,19 @@ Complete security package with all defense layers (Python API via ctypes):
 
 | Operation | Throughput | Source |
 |-----------|-----------|--------|
-| SHA3-256 (1KB) | 18,205 ops/sec | `benchmark-results.json` |
-| HMAC-SHA3-256 (1KB) | 12,127 ops/sec | `benchmark-results.json` |
-| HKDF-SHA3-256 (3-key derive) | 8,509 ops/sec | `benchmark-results.json` |
-| Ed25519 KeyGen | 5,167 ops/sec | `benchmark-results.json` |
-| Ed25519 Sign | 5,069 ops/sec | `benchmark-results.json` |
-| Ed25519 Verify | 2,796 ops/sec | `benchmark-results.json` |
+| SHA3-256 (1KB) | 170,834 ops/sec | `benchmark-results.json` |
+| HMAC-SHA3-256 (1KB) | 129,999 ops/sec | `benchmark-results.json` |
+| HKDF-SHA3-256 (3-key derive) | 86,779 ops/sec | `benchmark-results.json` |
+| Ed25519 KeyGen | 9,162 ops/sec | `benchmark-results.json` |
+| Ed25519 Sign | 10,569 ops/sec | `benchmark-results.json` |
+| Ed25519 Verify | 7,547 ops/sec | `benchmark-results.json` |
+| AES-256-GCM Encrypt (1KB) | 278,298 ops/sec | `benchmark-results.json` |
+| ChaCha20-Poly1305 Encrypt (1KB) | 271,362 ops/sec | `benchmark-results.json` |
+| X25519 Scalar-mult | 22,918 ops/sec | `benchmark-results.json` |
 
-AES-256-GCM, ChaCha20-Poly1305, and X25519 are not yet tracked in the CI regression suite. Run `build/bin/benchmark_c_raw` for raw C throughput without ctypes overhead.
+**Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. X25519 uses the radix-2^51 (`fe51.h`) field arithmetic shared with Ed25519; the portable radix-2^16 path is retained as a fallback where `__int128` is unavailable. See [benchmarks/](benchmarks/) for full performance data including all algorithms.
 
-**Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. See [benchmarks/](benchmarks/) for full performance data including all algorithms.
-
-*Benchmarks: Linux 5.15.200 x86_64, Python 3.12.8, 8 CPU cores, native C backend via ctypes. Reproducible via `python benchmark_suite.py` (Python API) or `build/bin/benchmark_c_raw` (raw C).*
+*Benchmarks: Linux x86-64, Python 3.11.15, native C backend via ctypes, measured 2026-04-21. Reproducible via `python benchmarks/benchmark_runner.py` (CI regression suite), `python benchmark_suite.py` (Python-API sweep), or `build/bin/benchmark_c_raw --json` (raw C). Absolute numbers depend on the host; consult [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md) for baseline-change policy.*
 
 
 ### Benchmark Charts
@@ -689,7 +696,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*1,855+ tests across 47 files (37 Python + 10 C) covering core crypto and NIST KATs, PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. Run `pytest --co -q` for the current count.*
+*2,028 test functions across 70 Python test files plus 14 C test files covering core crypto and NIST KATs, PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
 
 </details>
 
@@ -835,6 +842,63 @@ The module implements technical controls aligned with FIPS 140-3 Security Level 
 
 ---
 
+## NIST Algorithm Compliance
+
+AMA Cryptography is continuously validated against official
+[NIST ACVP](https://github.com/usnistgov/ACVP-Server) Algorithm Functional
+Test (AFT) vectors plus NIST reference vectors from the applicable
+FIPS/SP publications (FIPS 180-4 §B.1 reference vectors for SHA-256,
+and SP 800-38D Appendix B test cases TC13–TC16 for AES-256-GCM, since
+those two are not sourced from ACVP-Server). The current attestation is
+**815 / 815 vectors passing** across 12 algorithm functions and 7 NIST
+standards.
+
+- **Formal attestation:** [`docs/compliance/ACVP_SELF_ATTESTATION.md`](docs/compliance/ACVP_SELF_ATTESTATION.md)
+- **Machine-readable:** [`docs/compliance/acvp_attestation.json`](docs/compliance/acvp_attestation.json)
+- **Full evidence report:** [`CSRC_ALIGN_REPORT.md`](CSRC_ALIGN_REPORT.md)
+- **Continuous validation:** [`.github/workflows/acvp_validation.yml`](.github/workflows/acvp_validation.yml) — runs on every push to `main` and weekly on Mondays; fails if any vector regresses.
+
+### Coverage Summary
+
+| Algorithm | NIST Standard | Vectors | Pass | Fail |
+|---|---|---:|---:|---:|
+| SHA-256 | FIPS 180-4 | 3 | 3 | 0 |
+| HMAC-SHA-256 | FIPS 198-1 | 150 | 150 | 0 |
+| SHA3-256 | FIPS 202 | 151 | 151 | 0 |
+| SHA3-512 | FIPS 202 | 86 | 86 | 0 |
+| SHAKE-128 | FIPS 202 | 174 | 174 | 0 |
+| SHAKE-256 | FIPS 202 | 143 | 143 | 0 |
+| AES-256-GCM | SP 800-38D | 4 | 4 | 0 |
+| ML-KEM-1024 KeyGen | FIPS 203 | 25 | 25 | 0 |
+| ML-KEM-1024 EncapDecap | FIPS 203 | 25 | 25 | 0 |
+| ML-DSA-65 KeyGen | FIPS 204 | 25 | 25 | 0 |
+| ML-DSA-65 SigVer | FIPS 204 | 15 | 15 | 0 |
+| SLH-DSA-SHA2-256f SigVer | FIPS 205 | 14 | 14 | 0 |
+| **TOTAL** | | **815** | **815** | **0** |
+
+### Reproduction
+
+```bash
+cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
+python3 nist_vectors/fetch_vectors.py
+python3 nist_vectors/run_vectors.py     # writes nist_vectors/results.json
+```
+
+Full reproduction instructions:
+[`docs/compliance/ACVP_SELF_ATTESTATION.md §5`](docs/compliance/ACVP_SELF_ATTESTATION.md#5-reproduction-instructions).
+
+### ⚠ CAVP / FIPS Disclaimer
+
+> **This is a NIST ACVP self-attestation — it is NOT a CAVP validation
+> certificate, NOT a CMVP certificate, and NOT a claim of FIPS 140-3
+> compliance.** No NIST program has reviewed this library and no independent
+> laboratory has witnessed these results. Customers in regulated
+> environments that require FIPS validation must obtain a formal CAVP/CMVP
+> validation through an accredited CST laboratory. See
+> [`docs/compliance/ACVP_SELF_ATTESTATION.md §7`](docs/compliance/ACVP_SELF_ATTESTATION.md#7-disclaimers).
+
+---
+
 ## Documentation
 
 <details>
@@ -859,7 +923,9 @@ The module implements technical controls aligned with FIPS 140-3 Security Level 
 | [THREAT_MODEL.md](THREAT_MODEL.md) | Threat model and risk assessment |
 | [benchmarks/](benchmarks/) | Performance measurements |
 | [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) | Cryptographic algorithm overview |
-| [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md) | NIST ACVP vector validation (815/815 pass) |
+| [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md) | NIST ACVP vector validation evidence (815/815 pass) |
+| [docs/compliance/ACVP_SELF_ATTESTATION.md](docs/compliance/ACVP_SELF_ATTESTATION.md) | **Customer-facing** NIST ACVP self-attestation (NOT CAVP, NOT CMVP, NOT FIPS 140-3) |
+| [docs/compliance/acvp_attestation.json](docs/compliance/acvp_attestation.json) | Machine-readable attestation — structured fields for tooling |
 | [CSRC_STANDARDS.md](CSRC_STANDARDS.md) | Governing standards registry |
 | [CONSTANT_TIME_VERIFICATION.md](CONSTANT_TIME_VERIFICATION.md) | dudect-style timing analysis |
 | [docs/DESIGN_NOTES.md](docs/DESIGN_NOTES.md) | Security arguments for original constructions |
@@ -1229,7 +1295,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
-- **Rigorous testing:** 1,855+ tests across 47 test files (37 Python + 10 C) with CI checks including security scanning
+- **Rigorous testing:** 2,028 test functions across 70 Python files plus 14 C files, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (815/815), and tiered benchmark-regression checks
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims
@@ -1271,6 +1337,6 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 </div>
 
-*Last updated: 2026-04-17*
+*Last updated: 2026-04-21*
 
 </div>

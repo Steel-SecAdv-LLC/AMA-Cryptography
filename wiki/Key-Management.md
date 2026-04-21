@@ -49,36 +49,58 @@ meta = KeyMetadata(
 )
 ```
 
-### `KeyManager`
+### `KeyRotationManager`
 
-The primary key management class:
+The policy-level class that tracks keys under rotation. It does **not**
+hold key material itself — that stays with the application (or an HSM,
+or `SecureKeyStorage` below); the manager tracks metadata (status,
+version, expiry, usage counts) and exposes rotation hooks.
 
 ```python
-from ama_cryptography.key_management import KeyManager
-import os
+from datetime import timedelta
+from ama_cryptography.key_management import KeyRotationManager
 
-# Initialize with a 256-bit master key
-master_key = os.urandom(32)
-manager = KeyManager(master_key)
+mgr = KeyRotationManager(rotation_period=timedelta(days=90))
 
-# Generate and store a new key
-key_id = manager.generate_master_key()
+# Register a key under the rotation policy
+meta = mgr.register_key(
+    key_id="signing-key-v1",
+    purpose="document-signatures",
+    expires_in=timedelta(days=90),
+    max_usage=100_000,
+)
 
-# Derive a key for a specific purpose
-key_material = manager.derive_key("m/44'/0'/0'/0'")
+# Policy queries
+should_rotate = mgr.should_rotate("signing-key-v1")     # bool
+active_id     = mgr.get_active_key()                    # Optional[str]
 
-# Rotate a key (zero-downtime)
-new_key_id = manager.rotate_key(key_id)
+# Rotation lifecycle: old key -> ROTATING -> DEPRECATED.
+# IMPORTANT (key_management.py:435): initiate_rotation() raises
+# ValueError("Key not found") if either key_id is missing from the
+# manager. Register the replacement key first — the manager tracks
+# metadata only, so you still provision the actual key material in
+# your keystore separately.
+mgr.register_key(
+    key_id="signing-key-v2",
+    purpose="document-signatures",
+    expires_in=timedelta(days=90),
+    max_usage=100_000,
+)
 
-# Get key material
-key = manager.get_key(key_id)
+mgr.initiate_rotation("signing-key-v1", "signing-key-v2")
+# ... provision the new key material in your keystore ...
+mgr.complete_rotation("signing-key-v1")
 
-# Get metadata
-meta = manager.get_key_metadata(key_id)
-print(f"Status: {meta.status}")
-print(f"Version: {meta.version}")
-print(f"Usage: {meta.usage_count}/{meta.max_usage}")
+# Accounting
+mgr.increment_usage("signing-key-v2")
+mgr.revoke_key("signing-key-v1", reason="superseded")
+
+# Audit snapshot
+audit = mgr.export_metadata()    # or export_metadata(filepath=Path(...))
 ```
+
+For seed-derived keys, construct an `HDKeyDerivation(seed=...)`
+and call `derive_key(...)` — see the next section.
 
 ---
 
@@ -86,45 +108,70 @@ print(f"Usage: {meta.usage_count}/{meta.max_usage}")
 
 ### Overview
 
-AMA Cryptography implements BIP32-compatible hierarchical deterministic key derivation using HKDF-SHA3-256 and secp256k1 elliptic curve operations.
+AMA Cryptography implements BIP32-compatible hierarchical deterministic
+key derivation. The PRF is **HMAC-SHA-512** (BIP32-standard, delegated to
+the native C backend via `ama_cryptography.pqc_backends.native_hmac_sha512`
+to satisfy INVARIANT-1 — no stdlib `hmac`). Non-hardened child derivation
+uses the native secp256k1 public-key computation.
 
-**Key derivation path format:** `m/{purpose}'/{account}'/{change}'/{index}'`
+**Path format:** `m/{purpose}'/{account}'/{change}'/{index}'` (BIP-44) or
+any explicit BIP32 path.
 
-All derivations use **hardened** child keys (index ≥ 2^31). Non-hardened derivation raises `NotImplementedError` because hardened derivation prevents child key exposure from compromising sibling or parent keys.
+- `HDKeyDerivation.derive_key(purpose, account, change, index)` is a
+  convenience wrapper that always emits a **fully hardened** path — all
+  four components are hardened by construction.
+- `HDKeyDerivation.derive_path(path)` accepts an explicit BIP32-style
+  path and **supports both hardened and non-hardened** components.
+  Hardened indices are written with a trailing `'` (or equivalently
+  passed as `index ≥ 2^31 = HARDENED_OFFSET`). Hardened derivation gives
+  stronger branch isolation — compromise of a hardened child cannot be
+  used to recover sibling or parent private keys — but non-hardened
+  indices are supported for the cases where public-child derivation is
+  required.
 
 ### `HDKeyDerivation`
 
 ```python
+import os
 from ama_cryptography.key_management import HDKeyDerivation
 
-hd = HDKeyDerivation()
-
-# Derive key material from a seed
+# Provide the seed (or a BIP-39-style seed_phrase) at construction. The
+# instance holds the seed for subsequent derivations; the caller is
+# responsible for seed lifetime — HDKeyDerivation does not currently
+# perform secure wipe of self.master_seed on __del__.
 seed = os.urandom(64)
-key_material = hd.derive_from_seed(seed, "m/44'/0'/0'/0'")
+hd   = HDKeyDerivation(seed=seed)
 
-# Derive child from parent key
-parent_key = os.urandom(32)
-child_key = hd.derive_child(parent_key, "m/44'/0'/0'/0'")
+# Structured BIP-44-style derivation: always produces a FULLY hardened
+# path m/{purpose}'/{account}'/{change}'/{index}'
+key_material: bytes = hd.derive_key(purpose=44, account=0, change=0, index=0)
+
+# Explicit-path derivation: returns (derived_key, chain_code).
+# Accepts both hardened (with trailing ') and non-hardened components.
+key, chain_code = hd.derive_path("m/44'/0'/0'/0'")
 ```
 
 ### Derivation Path Conventions
 
 | Path | Purpose |
 |------|---------|
-| `m/44'/0'/0'/0'` | Standard account key |
-| `m/84'/0'/0'/0'` | Native segwit-style |
-| `m/0'/0'/0'/0'` | Custom derivation |
+| `m/44'/0'/0'/0'` | Standard account key (fully hardened) |
+| `m/84'/0'/0'/0'` | Native segwit-style (fully hardened) |
+| `m/0'/0'/0'/0'` | Custom derivation (fully hardened) |
 
 **HARDENED_OFFSET = 2^31 = 2,147,483,648**
 
-```python
-from ama_cryptography.key_management import HDKeyDerivation
+Hardened indices are written with a trailing `'` and correspond to
+values ≥ 2^31.
 
-# Only hardened derivation is supported
-# index >= 2^31 for hardened (denoted with ' in path)
-child = hd.derive_child(parent_key, "m/44'/0'/0'/0'")
-```
+- `HDKeyDerivation.derive_key(purpose, account, change, index)` always
+  constructs a **fully hardened** BIP-44-style path — every component
+  emitted by this convenience API is hardened.
+- `HDKeyDerivation.derive_path(path)` accepts an explicit path and parses
+  both hardened (`44'`) and non-hardened (`44`) components. Non-hardened
+  derivation produces a public child from which sibling keys can be
+  derived; use it only when public-child derivation is required, and
+  prefer hardened components otherwise for stronger branch isolation.
 
 ---
 
@@ -145,29 +192,31 @@ ACTIVE
 ### Full Lifecycle Example
 
 ```python
-from ama_cryptography.key_management import KeyManager, KeyStatus
-import os
+from datetime import timedelta
+from ama_cryptography.key_management import KeyRotationManager, KeyStatus
 
-manager = KeyManager(os.urandom(32))
+mgr = KeyRotationManager(rotation_period=timedelta(days=90))
 
-# 1. Generate active key
-key_id = manager.generate_master_key()
-meta = manager.get_key_metadata(key_id)
-assert meta.status == KeyStatus.ACTIVE
+# 1. Register the initial active key
+old_meta = mgr.register_key(
+    key_id="signing-key-v1",
+    purpose="document-signatures",
+    expires_in=timedelta(days=90),
+    max_usage=100_000,
+)
+assert old_meta.status == KeyStatus.ACTIVE
 
-# 2. Rotate (zero-downtime: old key becomes DEPRECATED, new key is ACTIVE)
-new_key_id = manager.rotate_key(key_id)
+# 2. Begin zero-downtime rotation: old key moves to ROTATING
+#    (provision the new key material in your keystore before registering it)
+mgr.register_key("signing-key-v2", purpose="document-signatures",
+                 parent_id="signing-key-v1", expires_in=timedelta(days=90))
+mgr.initiate_rotation("signing-key-v1", "signing-key-v2")
 
-old_meta = manager.get_key_metadata(key_id)
-new_meta = manager.get_key_metadata(new_key_id)
-assert old_meta.status == KeyStatus.DEPRECATED
-assert new_meta.status == KeyStatus.ACTIVE
+# 3. Finalize rotation: old key becomes DEPRECATED, new key is ACTIVE
+mgr.complete_rotation("signing-key-v1")
 
-# 3. Verify with old key still works during transition
-# (DEPRECATED keys can verify but not sign)
-
-# 4. Revoke old key when transition is complete
-manager.revoke_key(key_id)
+# 4. DEPRECATED keys can verify but not sign — let them age out, then revoke
+mgr.revoke_key("signing-key-v1", reason="superseded")
 ```
 
 ---
@@ -179,23 +228,57 @@ manager.revoke_key(key_id)
 For encrypted storage of key material at rest:
 
 ```python
-from ama_cryptography.key_management import SecureKeyStorage
 import os
+from pathlib import Path
+from ama_cryptography.key_management import (
+    SecureKeyStorage,
+    KeyRotationManager,
+)
 
-# encryption_key is stored as bytearray (not bytes)
-# to allow in-place zeroing when the context manager exits
-encryption_key = bytearray(os.urandom(32))
+# SecureKeyStorage takes a storage directory and an optional master
+# password.
+#
+# IMPORTANT (key_management.py:563-673): if `master_password` is truthy,
+# it is stretched through a password-based KDF into a 32-byte AES-256
+# key. Algorithm selection is automatic on first use of a fresh keystore:
+#   * Argon2id (RFC 9106; t=3, m=64 MiB, p=4) is preferred whenever the
+#     native Argon2 backend is compiled in (`_ARGON2_NATIVE_AVAILABLE`
+#     is True) — this is KDF_VERSION 3 and becomes the default on any
+#     modern build of the library.
+#   * PBKDF2-HMAC-SHA256 with 600,000 iterations (OWASP 2024) is the
+#     fallback when the native Argon2 backend is unavailable — this is
+#     KDF_VERSION 2.
+#   * `migrate_kdf()` exists to opportunistically upgrade an existing
+#     v2 (PBKDF2) keystore to v3 (Argon2id); it is not required for
+#     fresh installations.
+# Selection is persisted in `.kdf_metadata.json` alongside the salt so
+# existing keystores remain decryptable across algorithm changes.
+#
+# If `master_password` is None or empty, a *random in-memory* 32-byte
+# encryption key is generated via `secrets.token_bytes(32)` — there is
+# no stable KDF derivation in that mode, so keys stored under a
+# process's random in-memory key **cannot be decrypted after process
+# restart**. Use a stable master_password whenever the store must
+# survive across processes.
+storage = SecureKeyStorage(
+    storage_path=Path("/var/lib/myapp/keys"),
+    master_password=os.environ["AMA_KEY_PASSWORD"],   # stable → persistable
+)
+mgr = KeyRotationManager()
 
-with SecureKeyStorage(encryption_key) as storage:
-    # Store key
-    key_data = os.urandom(32)
-    storage.store("my-key-id", key_data)
-    
-    # Retrieve key
-    retrieved = storage.retrieve("my-key-id")
-    assert retrieved == key_data
+key_data = os.urandom(32)
+meta     = mgr.register_key("my-key-id", purpose="doc-signing")
 
-# encryption_key is automatically zeroed here
+# store_key takes an optional plain dict of metadata; the KeyMetadata
+# returned by register_key lives in the rotation manager, not the store.
+storage.store_key("my-key-id", key_data, metadata={"purpose": "doc-signing"})
+
+retrieved: bytes | None = storage.retrieve_key("my-key-id")
+assert retrieved == key_data
+
+# Metadata for active/deprecated/revoked status is maintained by the
+# rotation manager:
+active_meta = mgr.export_metadata()
 ```
 
 ### Key Storage Security
@@ -288,29 +371,73 @@ def encrypt_master_secret(master_secret: bytes, password: str, path: str):
 ### Automated Rotation
 
 ```python
-from ama_cryptography.key_management import KeyManager, KeyMetadata
-from datetime import datetime, timezone, timedelta
+from datetime import timedelta
+from ama_cryptography.key_management import KeyRotationManager
 
-def check_and_rotate(manager: KeyManager, key_id: str) -> str:
-    meta = manager.get_key_metadata(key_id)
-    now = datetime.now(timezone.utc)
-    
-    if meta.expires_at and now >= meta.expires_at:
-        print(f"Key {key_id} expired, rotating...")
-        return manager.rotate_key(key_id)
-    
-    if meta.usage_count >= meta.max_usage * 0.9:
-        print(f"Key {key_id} approaching usage limit, rotating...")
-        return manager.rotate_key(key_id)
-    
-    return key_id
+def check_and_rotate(
+    mgr: KeyRotationManager,
+    key_id: str,
+    new_key_id: str,
+    *,
+    purpose: str,
+    expires_in: timedelta,
+    max_usage: int | None = None,
+) -> str:
+    """Rotate `key_id` → `new_key_id` if policy says so; return the active id.
+
+    Note: `mgr.initiate_rotation()` raises `ValueError("Key not found")`
+    (key_management.py:435) unless both key ids are already registered
+    with the manager. We register the replacement id first so the call
+    site can't accidentally rotate into a key the manager has never
+    seen. Key *material* still lives in the caller's keystore.
+    """
+    if not mgr.should_rotate(key_id):
+        return key_id
+
+    if new_key_id not in mgr.keys:
+        mgr.register_key(
+            key_id=new_key_id,
+            purpose=purpose,
+            expires_in=expires_in,
+            max_usage=max_usage,
+        )
+
+    mgr.initiate_rotation(key_id, new_key_id)
+    # ... provision the new key material in the caller's keystore ...
+    mgr.complete_rotation(key_id)
+    return new_key_id
 ```
 
 ---
 
 ## Thread Safety
 
-Key management operations use `datetime.now(timezone.utc)` for all timestamps (timezone-aware). The `KeyManager` class is designed for concurrent use; however, critical operations around key rotation should be externally serialized in multi-threaded environments.
+`KeyRotationManager` is **not thread-safe**. The implementation
+(`ama_cryptography/key_management.py`) stores its state in a plain
+`dict` (`self.keys`) and mutates it directly from `register_key()`,
+`initiate_rotation()`, `complete_rotation()`, `revoke_key()`, and
+`increment_usage()` with no internal `threading.Lock` / `RLock`.
+Timestamps use `datetime.now(timezone.utc)` (timezone-aware), but that
+does not protect against concurrent dict mutation.
+
+If you share a `KeyRotationManager` instance across threads, you are
+responsible for serializing **every** mutating call (not just rotation)
+behind your own lock:
+
+```python
+import threading
+
+_lock = threading.Lock()
+
+with _lock:
+    mgr.register_key(..., purpose="...", expires_in=...)
+    mgr.initiate_rotation(old_id, new_id)
+    mgr.complete_rotation(old_id)
+```
+
+For single-process workloads, prefer keeping the manager inside one
+thread (e.g., a dedicated key-management worker) and routing all
+rotation requests through a queue.
 
 ---
 
@@ -320,19 +447,24 @@ Key management operations use `datetime.now(timezone.utc)` for all timestamps (t
 from ama_cryptography.exceptions import (
     KeyManagementError,
     PQCUnavailableError,
+    QuantumSignatureUnavailableError,
     SecurityWarning,
 )
+from ama_cryptography.pqc_backends import generate_dilithium_keypair
 
 try:
-    key = manager.get_key("non-existent-key-id")
+    meta = mgr.register_key("my-key", purpose="doc-signing")
+    # ... later ...
+    mgr.revoke_key("my-key", reason="operator_action")
 except KeyManagementError as e:
     print(f"Key management error: {e}")
 
 try:
-    pk, sk = generate_dilithium_keypair()
+    kp = generate_dilithium_keypair()
 except PQCUnavailableError as e:
-    print(f"PQC not available: {e}")
-    # Fall back to classical-only
+    # INVARIANT-7: we do NOT silently fall back to a classical-only path.
+    # The correct response is to surface the failure, not hide it.
+    raise
 ```
 
 ---

@@ -7,7 +7,7 @@
 **Organization:** Steel Security Advisors LLC
 
 **Version:** 2.1.5
-**Date:** 2026-04-17
+**Date:** 2026-04-21
 
 ---
 
@@ -411,7 +411,7 @@ Conclusion: Ethical integration is cryptographically safe ∎
 ## HKDF Implementation with Ethical Context
 
 ```python
-from ama_cryptography.crypto_api import derive_keys
+from ama_cryptography.legacy_compat import derive_keys, create_ethical_hkdf_context
 import os
 
 def derive_key_with_ethics(
@@ -568,7 +568,18 @@ def benchmark_ethical_integration(iterations: int = 1000) -> Dict[str, float]:
 ### Complete Workflow with Ethical Integration
 
 ```python
-from ama_cryptography.crypto_api import *
+from ama_cryptography.legacy_compat import (
+    KeyManagementSystem,
+    derive_keys,
+    create_ethical_hkdf_context,
+    create_crypto_package,
+    verify_crypto_package,
+    generate_key_management_system,
+)
+from ama_cryptography.pqc_backends import (
+    generate_dilithium_keypair,
+    native_ed25519_keypair_from_seed,   # AMA native Ed25519 (no PyCA)
+)
 import json
 
 # 1. Define ethical vector (4 pillars, balanced weighting)
@@ -590,12 +601,16 @@ def generate_ethical_kms(author: str) -> KeyManagementSystem:
     hmac_key = derive_key_with_ethics(master_secret, "hmac", ethical_vector)
     ed25519_seed = derive_key_with_ethics(master_secret, "ed25519", ethical_vector)
 
-    # Ed25519 keypair
-    ed_private = Ed25519PrivateKey.from_private_bytes(ed25519_seed)
-    ed_public = ed_private.public_key()
+    # Ed25519 keypair — AMA native C backend, no external crypto dep.
+    # native_ed25519_keypair_from_seed(seed) -> (public_key, secret_key)
+    # where secret_key is the 64-byte expanded key (seed || pk).
+    ed_public, ed_private = native_ed25519_keypair_from_seed(ed25519_seed)
 
-    # Dilithium keypair (independent)
-    dil_public, dil_private = generate_dilithium_keypair()
+    # Dilithium keypair — generate_dilithium_keypair() returns a
+    # DilithiumKeyPair dataclass with .public_key / .secret_key (bytes).
+    dil_kp = generate_dilithium_keypair()
+    dil_public = dil_kp.public_key
+    dil_private = dil_kp.secret_key
 
     return KeyManagementSystem(
         master_secret=master_secret,

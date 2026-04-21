@@ -1,0 +1,185 @@
+{
+  "attestation_type": "self_attestation",
+  "document_id": "ACVP-SELF-ATTEST-2026-001",
+  "organization": "Steel Security Advisors LLC",
+  "library": "AMA Cryptography",
+  "version": "2.1.5",
+  "date": "2026-04-21",
+  "classification": "Public",
+  "source_report": "CSRC_ALIGN_REPORT.md",
+  "attestation_document": "docs/compliance/ACVP_SELF_ATTESTATION.md",
+  "cavp_validated": false,
+  "cmvp_certified": false,
+  "fips_140_3_certified": false,
+  "nist_endorsed": false,
+  "acvp_ref": "v1.1.0.42",
+  "acvp_ref_note": "Upstream ACVP-Server ref this attestation was generated against (immutable NIST release tag v1.1.0.42, published 2026-04-16, upstream commit 15c0f3d...). The per-algorithm source_url entries below embed this ref as a human-browseable URL that resolves to the exact attested bytes. .github/workflows/acvp_validation.yml sets ACVP_REF to the same tag and fails the build if this field, the workflow env var, and the value nist_vectors/fetch_vectors.py actually used (recorded in nist_vectors/validation_summary.json::acvp_ref) ever disagree. When refreshing this attestation against a newer ACVP-Server release, update this field, every source_url below, the workflow's ACVP_REF default, and nist_vectors/fetch_vectors.py::DEFAULT_ACVP_REF in the same commit; if the per-algorithm vector counts change with the new snapshot, also update totals and EXPECTED_VECTORS.",
+  "algorithms": [
+    {
+      "name": "SHA-256",
+      "standard": "FIPS 180-4",
+      "parameter_set": "256-bit",
+      "source": "FIPS 180-4 Section B.1 reference vectors",
+      "source_url": "https://csrc.nist.gov/pubs/fips/180-4/upd1/final",
+      "vectors_tested": 3,
+      "vectors_passed": 3,
+      "vectors_failed": 0
+    },
+    {
+      "name": "HMAC-SHA-256",
+      "standard": "FIPS 198-1",
+      "parameter_set": "256-bit",
+      "source": "ACVP-Server HMAC-SHA2-256-2.0",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/HMAC-SHA2-256-2.0",
+      "vectors_tested": 150,
+      "vectors_passed": 150,
+      "vectors_failed": 0
+    },
+    {
+      "name": "SHA3-256",
+      "standard": "FIPS 202",
+      "parameter_set": "256-bit",
+      "source": "ACVP-Server SHA3-256-2.0",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/SHA3-256-2.0",
+      "vectors_tested": 151,
+      "vectors_passed": 151,
+      "vectors_failed": 0
+    },
+    {
+      "name": "SHA3-512",
+      "standard": "FIPS 202",
+      "parameter_set": "512-bit",
+      "source": "ACVP-Server SHA3-512-2.0",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/SHA3-512-2.0",
+      "vectors_tested": 86,
+      "vectors_passed": 86,
+      "vectors_failed": 0
+    },
+    {
+      "name": "SHAKE-128",
+      "standard": "FIPS 202",
+      "parameter_set": "XOF, rate=1344",
+      "source": "ACVP-Server SHAKE-128-1.0",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/SHAKE-128-1.0",
+      "vectors_tested": 174,
+      "vectors_passed": 174,
+      "vectors_failed": 0
+    },
+    {
+      "name": "SHAKE-256",
+      "standard": "FIPS 202",
+      "parameter_set": "XOF, rate=1088",
+      "source": "ACVP-Server SHAKE-256-1.0",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/SHAKE-256-1.0",
+      "vectors_tested": 143,
+      "vectors_passed": 143,
+      "vectors_failed": 0
+    },
+    {
+      "name": "AES-256-GCM",
+      "standard": "SP 800-38D",
+      "parameter_set": "256-bit key",
+      "source": "SP 800-38D Appendix B (TC13-TC16)",
+      "source_url": "https://csrc.nist.gov/pubs/sp/800/38/d/final",
+      "vectors_tested": 4,
+      "vectors_passed": 4,
+      "vectors_failed": 0
+    },
+    {
+      "name": "ML-KEM-1024 KeyGen",
+      "standard": "FIPS 203",
+      "parameter_set": "ML-KEM-1024",
+      "source": "ACVP-Server ML-KEM-keyGen-FIPS203",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/ML-KEM-keyGen-FIPS203",
+      "vectors_tested": 25,
+      "vectors_passed": 25,
+      "vectors_failed": 0
+    },
+    {
+      "name": "ML-KEM-1024 EncapDecap",
+      "standard": "FIPS 203",
+      "parameter_set": "ML-KEM-1024 (decapsulation only)",
+      "source": "ACVP-Server ML-KEM-encapDecap-FIPS203",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/ML-KEM-encapDecap-FIPS203",
+      "vectors_tested": 25,
+      "vectors_passed": 25,
+      "vectors_failed": 0
+    },
+    {
+      "name": "ML-DSA-65 KeyGen",
+      "standard": "FIPS 204",
+      "parameter_set": "ML-DSA-65",
+      "source": "ACVP-Server ML-DSA-keyGen-FIPS204",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/ML-DSA-keyGen-FIPS204",
+      "vectors_tested": 25,
+      "vectors_passed": 25,
+      "vectors_failed": 0
+    },
+    {
+      "name": "ML-DSA-65 SigVer",
+      "standard": "FIPS 204",
+      "parameter_set": "ML-DSA-65 (external/pure, TG 3)",
+      "source": "ACVP-Server ML-DSA-sigVer-FIPS204",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/ML-DSA-sigVer-FIPS204",
+      "vectors_tested": 15,
+      "vectors_passed": 15,
+      "vectors_failed": 0
+    },
+    {
+      "name": "SLH-DSA-SHA2-256f SigVer",
+      "standard": "FIPS 205",
+      "parameter_set": "SLH-DSA-SHA2-256f (external/pure, TG 5)",
+      "source": "ACVP-Server SLH-DSA-sigVer-FIPS205",
+      "source_url": "https://github.com/usnistgov/ACVP-Server/tree/v1.1.0.42/gen-val/json-files/SLH-DSA-sigVer-FIPS205",
+      "vectors_tested": 14,
+      "vectors_passed": 14,
+      "vectors_failed": 0
+    }
+  ],
+  "total_vectors_tested": 815,
+  "total_vectors_passed": 815,
+  "total_vectors_failed": 0,
+  "total_vectors_skipped": 5793,
+  "total_vectors_skipped_aft_filtered": 4757,
+  "total_vectors_skipped_non_aft": 1036,
+  "total_vectors_skipped_note": "total_vectors_skipped = total_vectors_skipped_aft_filtered + total_vectors_skipped_non_aft. The AFT-filtered bucket (run_vectors.py::results.summary.total_skipped, aggregated from per-algorithm vectors_skipped) counts individual vectors filtered out within AFT test groups: non-byte-aligned inputs, non-target parameter sets, ML-KEM encapsulation (AMA does not expose the randomness parameter m), and ML-DSA/SLH-DSA internal/pre-hash test groups. The non-AFT bucket counts entire test groups with testType != 'AFT' that are skipped wholesale (MCT, LDT, VOT, and any future non-AFT type); these are tracked per-algorithm in run_vectors.py under the legacy field name 'mct_skipped' (see run_vectors.py:203, 247, 291, 345, 399, 445, 484, 550, 616, 683) and surfaced in validation_summary.json as total_non_aft_skipped (with mct_skipped kept alongside as a backwards-compatible alias for the raw harness field).",
+  "skip_categories_aft_filtered": [
+    "Non-byte-aligned inputs (bitLength % 8 != 0)",
+    "Non-target parameter sets (ML-KEM-512/768, ML-DSA-44/87, SLH-DSA non-SHA2-256f)",
+    "ML-KEM encapsulation (randomness parameter m not exposed by AMA API)",
+    "ML-DSA/SLH-DSA internal and pre-hash test groups"
+  ],
+  "skip_categories_non_aft": [
+    "Monte Carlo Test (MCT) groups — iterative state not supported by the one-shot AMA FFI",
+    "Large Data Test (LDT) groups — multi-gigabyte inputs outside the CI harness scope",
+    "Variable Output Test (VOT) groups — harness supports fixed-length outputs only",
+    "Any other testType != 'AFT' test group encountered upstream"
+  ],
+  "test_environment": {
+    "os": "Linux 6.18.5 (x86_64)",
+    "build": "CMake Release, -DAMA_USE_NATIVE_PQC=ON, LTO enabled, AVX2 enabled",
+    "python": "3.11.14",
+    "harness": "nist_vectors/run_vectors.py",
+    "ffi": "Python ctypes -> libama_cryptography.so",
+    "pqc_backend": "native C (no liboqs, no PQClean, no third-party PQC dependency)"
+  },
+  "reproduction": {
+    "build": "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build",
+    "fetch": "python3 nist_vectors/fetch_vectors.py",
+    "run": "python3 nist_vectors/run_vectors.py",
+    "results": "nist_vectors/results.json"
+  },
+  "continuous_validation": {
+    "workflow": ".github/workflows/acvp_validation.yml",
+    "triggers": ["push:main", "push:claude/**", "pull_request:main", "weekly-schedule", "workflow_dispatch"],
+    "summary_artifact": "nist_vectors/validation_summary.json"
+  },
+  "disclaimers": [
+    "This is a self-attestation, NOT a CAVP validation certificate.",
+    "This document does NOT represent NIST endorsement.",
+    "No CAVP, CMVP, or FIPS 140-3 compliance is claimed.",
+    "This document is NOT a substitute for an independent cryptographic audit.",
+    "Side-channel resistance (timing, power, EM, cache) is out of scope.",
+    "Customers in regulated environments requiring FIPS validation must obtain formal CAVP/CMVP validation through an accredited CST laboratory."
+  ]
+}

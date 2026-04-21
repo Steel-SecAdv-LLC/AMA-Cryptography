@@ -14,12 +14,13 @@ from ama_cryptography.pqc_backends import (
     dilithium_sign,
     dilithium_verify,
     get_pqc_status,
+    get_pqc_backend_info,
 )
 from ama_cryptography.crypto_api import (
-    CryptoMode,
-    PackageSigner,
+    AmaCryptography,
+    AlgorithmType,
 )
-from ama_cryptography.key_management import KeyManager
+from ama_cryptography.key_management import KeyRotationManager
 ```
 
 ---
@@ -29,17 +30,36 @@ from ama_cryptography.key_management import KeyManager
 ```python
 status = get_pqc_status()
 print(status)
-# {'ml_dsa_65': 'available', 'ml_kem_1024': 'available', 'sphincs_sha2_256f': 'available'}
+# PQCStatus.AVAILABLE  — at least one PQC backend loaded
+
+# Detailed backend info dict (see ama_cryptography/pqc_backends.py::get_pqc_backend_info).
+# Top-level keys: status, <algo>_available, <algo>_backend, algorithms,
+# SHA3-256, HMAC-SHA3-256 (+ legacy flat 'backend'/'algorithm' aliases).
+info = get_pqc_backend_info()
+print(info["status"])                 # "AVAILABLE" / "UNAVAILABLE"  (PQCStatus.value, uppercase — see pqc_backends.py:76-77)
+print(info["dilithium_available"], info["dilithium_backend"])  # True, "native"
+print(info["kyber_available"],     info["kyber_backend"])      # True, "native"
+print(info["sphincs_available"],   info["sphincs_backend"])    # True, "native"
+
+# Per-algorithm matrix lives under info["algorithms"]:
+for name, meta in info["algorithms"].items():
+    print(name, meta["available"], meta["backend"], meta["security_level"])
+# ML-DSA-65     True native 3
+# Kyber-1024    True native 5
+# SPHINCS+-256f True native 5
 ```
 
 ---
 
 ## 3. Create and Verify a Crypto Package
 
-The main high-level API uses `ama_cryptography.crypto_api` which orchestrates all cryptographic layers. (legacy functions are available via `ama_cryptography.legacy_compat`)
+The legacy multi-layer orchestrator lives in
+`ama_cryptography.legacy_compat`; it drives the same codes + helix
+pipeline used by historical AMA deployments. For new code prefer
+`AmaCryptography` from section 4 below.
 
 ```python
-from ama_cryptography.crypto_api import (
+from ama_cryptography.legacy_compat import (
     generate_key_management_system,
     create_crypto_package,
     verify_crypto_package,
@@ -93,18 +113,18 @@ from ama_cryptography.pqc_backends import (
     dilithium_verify,
 )
 
-# Generate ML-DSA-65 key pair
-public_key, secret_key = generate_dilithium_keypair()
-print(f"Public key: {len(public_key)} bytes")   # 1952
-print(f"Secret key: {len(secret_key)} bytes")   # 4032
+# Generate ML-DSA-65 key pair (DilithiumKeyPair dataclass)
+kp = generate_dilithium_keypair()
+print(f"Public key: {len(kp.public_key)} bytes")   # 1952
+print(f"Secret key: {len(kp.secret_key)} bytes")   # 4032
 
 # Sign a message
 message = b"Hello, quantum-resistant world!"
-signature = dilithium_sign(message, secret_key)
-print(f"Signature: {len(signature)} bytes")      # 3309
+signature = dilithium_sign(message, kp.secret_key)
+print(f"Signature: {len(signature)} bytes")        # 3309
 
 # Verify the signature
-valid = dilithium_verify(message, signature, public_key)
+valid = dilithium_verify(message, signature, kp.public_key)
 print(f"Valid: {valid}")  # True
 ```
 
@@ -113,79 +133,93 @@ print(f"Valid: {valid}")  # True
 ## 5. AES-256-GCM Encryption
 
 ```python
-from ama_cryptography.crypto_api import SymmetricCryptoAlgorithm
+from ama_cryptography.crypto_api import AESGCMProvider
 import os
 
-algo = SymmetricCryptoAlgorithm()
+aead = AESGCMProvider()
 
 # Generate a 256-bit key
 key = os.urandom(32)
 
-# Encrypt
+# Encrypt — nonce is auto-generated when omitted.
+# Returns a dict: {'ciphertext', 'nonce', 'tag', 'aad', 'backend'}
 plaintext = b"Sensitive data to protect"
-ciphertext = algo.encrypt(plaintext, key)
+result    = aead.encrypt(plaintext, key, aad=b"header")
 
-# Decrypt
-recovered = algo.decrypt(ciphertext, key)
+# Decrypt — caller passes nonce and tag back in; raises on tag mismatch
+recovered = aead.decrypt(
+    ciphertext=result["ciphertext"],
+    key=key,
+    nonce=result["nonce"],
+    tag=result["tag"],
+    aad=b"header",
+)
 assert recovered == plaintext
 print("Encryption/decryption successful!")
 ```
 
 ---
 
-## 6. Key Management
+## 6. Key Rotation
 
 ```python
-from ama_cryptography.key_management import KeyManager
-import os
+from datetime import timedelta
+from ama_cryptography.key_management import KeyRotationManager
 
-# Initialize key manager with a master key
-master_key = os.urandom(32)
-manager = KeyManager(master_key)
+# Create a rotation manager with a 90-day policy
+mgr = KeyRotationManager(rotation_period=timedelta(days=90))
 
-# Generate and store a new key
-key_id = manager.generate_master_key()
-print(f"Key ID: {key_id}")
+# Register a key under rotation policy (key material lives elsewhere;
+# the manager tracks metadata, expiry, and usage counts)
+meta = mgr.register_key(
+    key_id="signing-key-v1",
+    purpose="document-signatures",
+    expires_in=timedelta(days=90),
+    max_usage=100_000,
+)
+print(f"Status: {meta.status}, created: {meta.created_at}")
 
-# Retrieve key metadata
-meta = manager.get_key_metadata(key_id)
-print(f"Status: {meta.status}")
-print(f"Created: {meta.created_at}")
-
-# Rotate the key
-new_key_id = manager.rotate_key(key_id)
-print(f"New key ID: {new_key_id}")
+# Later: check whether it needs rotating. initiate_rotation() requires
+# BOTH key ids to be registered first (key_management.py:435 raises
+# ValueError otherwise), so register the replacement before rotating.
+if mgr.should_rotate("signing-key-v1"):
+    mgr.register_key(
+        key_id="signing-key-v2",
+        purpose="document-signatures",
+        expires_in=timedelta(days=90),
+        max_usage=100_000,
+    )
+    mgr.initiate_rotation("signing-key-v1", "signing-key-v2")
+    # ... provision new key material ...
+    mgr.complete_rotation("signing-key-v1")   # old key -> DEPRECATED
 ```
+
+For HD seed derivation, use `HDKeyDerivation(seed=...)` from the
+same module.
 
 ---
 
 ## 7. Hybrid KEM (Classical + PQC)
 
 ```python
-from ama_cryptography.hybrid_combiner import HybridCombiner
-from ama_cryptography.pqc_backends import generate_kyber_keypair
-from ama_cryptography.crypto_api import AsymmetricCryptoAlgorithm
+from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 
-combiner = HybridCombiner()
-classical_algo = AsymmetricCryptoAlgorithm()
+# One-liner hybrid KEM: drives X25519 + ML-KEM-1024 internally and
+# length-prefix-binds both shared secrets through HKDF-SHA3-256.
+hybrid = AmaCryptography(algorithm=AlgorithmType.HYBRID_KEM)
 
-# Generate key pairs
-classical_pk, classical_sk = classical_algo.generate_keypair()
-pqc_pk, pqc_sk = generate_kyber_keypair()
+recipient = hybrid.generate_keypair()   # public = X25519_pk || ML-KEM_pk
+enc = hybrid.encapsulate(recipient.public_key)
+print(f"Combined secret: {enc.shared_secret.hex()[:16]}...")
 
-# Sender: encapsulate to derive shared secret
-encapsulation = combiner.encapsulate(classical_pk, pqc_pk)
-print(f"Combined secret: {encapsulation.combined_secret.hex()[:16]}...")
-
-# Receiver: decapsulate using secret keys
-recovered_secret = combiner.decapsulate(
-    encapsulation,
-    classical_sk,
-    pqc_sk,
-)
-assert recovered_secret == encapsulation.combined_secret
+# Receiver
+recovered = hybrid.decapsulate(enc.ciphertext, recipient.secret_key)
+assert recovered == enc.shared_secret
 print("Hybrid KEM key agreement successful!")
 ```
+
+See [Hybrid Cryptography](Hybrid-Cryptography) if you need to drive
+the combiner with custom classical and PQC KEM callables.
 
 ---
 

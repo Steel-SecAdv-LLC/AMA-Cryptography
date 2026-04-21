@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import os
 import platform
 import sys
 import time
@@ -25,6 +26,23 @@ from typing import Any, cast
 VECTORS_DIR = Path(__file__).parent
 REPO_ROOT = VECTORS_DIR.parent
 LIB_DIR = REPO_ROOT / "build" / "lib"
+
+
+# The upstream ACVP-Server ref whose `gen-val/json-files` tree the
+# per-algorithm `source_url` fields below point at. Must track the same
+# normalization as `nist_vectors/fetch_vectors.py::_acvp_ref()` so the
+# URLs a reader sees in `results.json` / `validation_summary.json`
+# resolve to the exact bytes the harness actually ran against. The
+# attestation cross-check in `.github/workflows/acvp_validation.yml`
+# enforces that this ref matches `acvp_attestation.json::acvp_ref`.
+_DEFAULT_ACVP_REF = "v1.1.0.42"
+
+
+def _acvp_ref() -> str:
+    return os.environ.get("ACVP_REF", _DEFAULT_ACVP_REF).strip() or _DEFAULT_ACVP_REF
+
+
+ACVP_BASE_URL = f"https://github.com/usnistgov/ACVP-Server/tree/{_acvp_ref()}/gen-val/json-files"
 
 
 # ---------------------------------------------------------------------------
@@ -172,10 +190,7 @@ def test_sha3_256(lib: ctypes.CDLL) -> AlgorithmResult:
     res = AlgorithmResult(
         algorithm="SHA3-256",
         standard="FIPS 202",
-        source_url=(
-            "https://github.com/usnistgov/ACVP-Server/tree/master/"
-            "gen-val/json-files/SHA3-256-2.0"
-        ),
+        source_url=(f"{ACVP_BASE_URL}/SHA3-256-2.0"),
     )
     path = VECTORS_DIR / "SHA3-256-2.0.json"
     data = _load_vector_file(path)
@@ -219,10 +234,7 @@ def test_sha3_512(lib: ctypes.CDLL) -> AlgorithmResult:
     res = AlgorithmResult(
         algorithm="SHA3-512",
         standard="FIPS 202",
-        source_url=(
-            "https://github.com/usnistgov/ACVP-Server/tree/master/"
-            "gen-val/json-files/SHA3-512-2.0"
-        ),
+        source_url=(f"{ACVP_BASE_URL}/SHA3-512-2.0"),
     )
     path = VECTORS_DIR / "SHA3-512-2.0.json"
     data = _load_vector_file(path)
@@ -266,10 +278,7 @@ def test_shake128(lib: ctypes.CDLL) -> AlgorithmResult:
     res = AlgorithmResult(
         algorithm="SHAKE-128",
         standard="FIPS 202",
-        source_url=(
-            "https://github.com/usnistgov/ACVP-Server/tree/master/"
-            "gen-val/json-files/SHAKE-128-1.0"
-        ),
+        source_url=(f"{ACVP_BASE_URL}/SHAKE-128-1.0"),
     )
     path = VECTORS_DIR / "SHAKE-128-1.0.json"
     data = _load_vector_file(path)
@@ -323,10 +332,7 @@ def test_shake256(lib: ctypes.CDLL) -> AlgorithmResult:
     res = AlgorithmResult(
         algorithm="SHAKE-256",
         standard="FIPS 202",
-        source_url=(
-            "https://github.com/usnistgov/ACVP-Server/tree/master/"
-            "gen-val/json-files/SHAKE-256-1.0"
-        ),
+        source_url=(f"{ACVP_BASE_URL}/SHAKE-256-1.0"),
     )
     path = VECTORS_DIR / "SHAKE-256-1.0.json"
     data = _load_vector_file(path)
@@ -380,10 +386,7 @@ def test_hmac_sha256(lib: ctypes.CDLL) -> AlgorithmResult:
     res = AlgorithmResult(
         algorithm="HMAC-SHA-256",
         standard="FIPS 198-1",
-        source_url=(
-            "https://github.com/usnistgov/ACVP-Server/tree/master/"
-            "gen-val/json-files/HMAC-SHA2-256-2.0"
-        ),
+        source_url=(f"{ACVP_BASE_URL}/HMAC-SHA2-256-2.0"),
     )
     path = VECTORS_DIR / "HMAC-SHA2-256-2.0.json"
     data = _load_vector_file(path)
@@ -534,10 +537,7 @@ def test_ml_kem_keygen(lib: ctypes.CDLL) -> AlgorithmResult:
     res = AlgorithmResult(
         algorithm="ML-KEM-1024 KeyGen",
         standard="FIPS 203",
-        source_url=(
-            "https://github.com/usnistgov/ACVP-Server/tree/master/"
-            "gen-val/json-files/ML-KEM-keyGen-FIPS203"
-        ),
+        source_url=(f"{ACVP_BASE_URL}/ML-KEM-keyGen-FIPS203"),
     )
     path = VECTORS_DIR / "ML-KEM-keyGen-FIPS203.json"
     data = _load_vector_file(path)
@@ -601,10 +601,7 @@ def test_ml_kem_decap(lib: ctypes.CDLL) -> AlgorithmResult:
     res = AlgorithmResult(
         algorithm="ML-KEM-1024 EncapDecap",
         standard="FIPS 203",
-        source_url=(
-            "https://github.com/usnistgov/ACVP-Server/tree/master/"
-            "gen-val/json-files/ML-KEM-encapDecap-FIPS203"
-        ),
+        source_url=(f"{ACVP_BASE_URL}/ML-KEM-encapDecap-FIPS203"),
         notes="Decapsulation only; deterministic encapsulation not tested "
         "(AMA does not expose randomness parameter m).",
     )
@@ -616,7 +613,7 @@ def test_ml_kem_decap(lib: ctypes.CDLL) -> AlgorithmResult:
     for tg in data["testGroups"]:
         if tg["testType"] != "AFT":
             count = len(tg.get("tests", []))
-            res.vectors_skipped += count
+            res.mct_skipped += count
             res.skip_reasons.append(f"TG {tg['tgId']}: skipped {count} {tg['testType']} vectors")
             continue
         if tg.get("parameterSet") != "ML-KEM-1024":
@@ -673,10 +670,7 @@ def test_ml_dsa_keygen(lib: ctypes.CDLL) -> AlgorithmResult:
     res = AlgorithmResult(
         algorithm="ML-DSA-65 KeyGen",
         standard="FIPS 204",
-        source_url=(
-            "https://github.com/usnistgov/ACVP-Server/tree/master/"
-            "gen-val/json-files/ML-DSA-keyGen-FIPS204"
-        ),
+        source_url=(f"{ACVP_BASE_URL}/ML-DSA-keyGen-FIPS204"),
     )
     path = VECTORS_DIR / "ML-DSA-keyGen-FIPS204.json"
     data = _load_vector_file(path)
@@ -740,10 +734,7 @@ def test_ml_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
     res = AlgorithmResult(
         algorithm="ML-DSA-65 SigVer",
         standard="FIPS 204",
-        source_url=(
-            "https://github.com/usnistgov/ACVP-Server/tree/master/"
-            "gen-val/json-files/ML-DSA-sigVer-FIPS204"
-        ),
+        source_url=(f"{ACVP_BASE_URL}/ML-DSA-sigVer-FIPS204"),
         notes="External/pure interface (TG 3) only. Uses ama_dilithium_verify_ctx "
         "which applies FIPS 204 domain-separation wrapper.",
     )
@@ -801,10 +792,7 @@ def test_slh_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
     res = AlgorithmResult(
         algorithm="SLH-DSA-SHA2-256f SigVer",
         standard="FIPS 205",
-        source_url=(
-            "https://github.com/usnistgov/ACVP-Server/tree/master/"
-            "gen-val/json-files/SLH-DSA-sigVer-FIPS205"
-        ),
+        source_url=(f"{ACVP_BASE_URL}/SLH-DSA-sigVer-FIPS205"),
         notes="External/pure interface (TG 5) only. Uses ama_sphincs_verify_ctx "
         "which applies FIPS 205 domain-separation wrapper.",
     )

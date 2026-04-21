@@ -15,6 +15,7 @@ security and performance.
    * `SECURITY.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/SECURITY.md>`_ - Security analysis
    * `CRYPTOGRAPHY.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/CRYPTOGRAPHY.md>`_ - Cryptographic details
    * `CONTRIBUTING.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/CONTRIBUTING.md>`_ - Contribution guidelines
+   * `docs/compliance/ACVP_SELF_ATTESTATION.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/docs/compliance/ACVP_SELF_ATTESTATION.md>`_ - NIST ACVP self-attestation (NOT CAVP)
 
 Quick Links
 -----------
