@@ -218,22 +218,31 @@ classical compromise:
 from ama_cryptography.adaptive_posture import (
     CryptoPostureController,
     PostureEvaluator,
+    PostureAction,
     ThreatLevel,
 )
 from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 from ama_cryptography.key_management import KeyRotationManager
+from ama_cryptography_monitor import AmaCryptographyMonitor
 
-controller = CryptoPostureController()
-evaluator  = PostureEvaluator()
+# The controller wires monitor → evaluator → response internally.
+# It exposes `evaluate_and_respond()` (no public `execute_action`).
+monitor    = AmaCryptographyMonitor(enabled=True)
+controller = CryptoPostureController(monitor=monitor)
 crypto     = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
 key_mgr    = KeyRotationManager()
 
-evaluation = evaluator.evaluate(monitor_signals={...})  # dict from the 3R monitor
-controller.execute_action(
-    evaluation=evaluation,
-    crypto_api=crypto,
-    key_manager=key_mgr,
-)
+evaluation = controller.evaluate_and_respond()  # returns PostureEvaluation
+
+# PostureEvaluation.action is the applied action (NOT `.recommended_action`).
+# Direct use of PostureEvaluator is only needed when you want to evaluate a
+# raw monitor_report dict without driving the controller:
+#     evaluator = PostureEvaluator()
+#     evaluation = evaluator.evaluate(monitor_report)   # positional arg
+if evaluation.action != PostureAction.NONE:
+    # Surface the action in your application logs / alerting. The controller
+    # has already updated the crypto stance by the time this returns.
+    ...
 ```
 
 ---

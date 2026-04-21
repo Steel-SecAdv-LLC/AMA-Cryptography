@@ -500,27 +500,42 @@ class HybridEncapsulation:
 ## `adaptive_posture`
 
 ```python
+from ama_cryptography.adaptive_posture import (
+    PostureEvaluator,
+    CryptoPostureController,
+    PostureEvaluation,
+    PostureAction,
+    ThreatLevel,
+)
+
 evaluator = PostureEvaluator()
 
-# Evaluate monitoring signals
-evaluation: PostureEvaluation = evaluator.evaluate(
-    monitor_signals: dict,
-) -> PostureEvaluation
+# Evaluate a 3R-monitor report dict. `PostureEvaluator.evaluate()` takes
+# a single positional `monitor_report: Dict[str, Any]` argument — NOT a
+# keyword argument called `monitor_signals`.
+evaluation: PostureEvaluation = evaluator.evaluate(monitor_report)
 
-# PostureEvaluation fields:
-# evaluation.threat_level: ThreatLevel
-# evaluation.recommended_action: PostureAction
-# evaluation.confidence: float  (0.0 – 1.0)
-# evaluation.signals: dict
+# PostureEvaluation fields (dataclass, see adaptive_posture.py:68):
+#   evaluation.threat_level : ThreatLevel
+#   evaluation.action       : PostureAction   # the recommended action
+#   evaluation.confidence   : float (0.0 – 1.0)
+#   evaluation.signals      : Dict[str, Any]  # contributing anomaly signals
+#   evaluation.timestamp    : float
 
-controller = CryptoPostureController()
+# The controller's public entry point is `evaluate_and_respond()`, which
+# internally calls the monitor, runs the evaluator, and dispatches the
+# recommended action through its private `_execute_action(action)`
+# machinery. There is NO public `execute_action(evaluation, ...)` method.
+from ama_cryptography_monitor import AmaCryptographyMonitor
+monitor    = AmaCryptographyMonitor(enabled=True)
+controller = CryptoPostureController(monitor=monitor)
 
-# Execute recommended action
-controller.execute_action(
-    evaluation: PostureEvaluation,
-    crypto_api: Any,
-    key_manager: KeyRotationManager,
-) -> None
+evaluation = controller.evaluate_and_respond()
+if evaluation.action != PostureAction.NONE:
+    # Application-level response (logging, paging, circuit-breaking, etc.).
+    # The controller has already applied the cryptographic action by the
+    # time evaluate_and_respond() returns.
+    ...
 ```
 
 ---

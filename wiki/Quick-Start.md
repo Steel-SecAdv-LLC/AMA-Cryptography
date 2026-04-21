@@ -179,8 +179,16 @@ meta = mgr.register_key(
 )
 print(f"Status: {meta.status}, created: {meta.created_at}")
 
-# Later: check whether it needs rotating
+# Later: check whether it needs rotating. initiate_rotation() requires
+# BOTH key ids to be registered first (key_management.py:435 raises
+# ValueError otherwise), so register the replacement before rotating.
 if mgr.should_rotate("signing-key-v1"):
+    mgr.register_key(
+        key_id="signing-key-v2",
+        purpose="document-signatures",
+        expires_in=timedelta(days=90),
+        max_usage=100_000,
+    )
     mgr.initiate_rotation("signing-key-v1", "signing-key-v2")
     # ... provision new key material ...
     mgr.complete_rotation("signing-key-v1")   # old key -> DEPRECATED

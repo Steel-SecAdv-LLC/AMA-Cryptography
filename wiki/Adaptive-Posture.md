@@ -66,25 +66,31 @@ print(f"Confidence: {evaluation.confidence}")
 
 ### `CryptoPostureController`
 
-Executes cryptographic actions based on evaluations. The controller
-accepts any object exposing the `AmaCryptography` interface for
-`crypto_api` and any `KeyRotationManager` for `key_manager`:
+Executes cryptographic actions based on a live evaluation. The controller
+wires monitor → evaluator → response internally — the public entry point
+is `evaluate_and_respond()`, which returns a `PostureEvaluation`. There is
+no public `execute_action(evaluation, ...)` method; action dispatch is
+private (`_execute_action()`) and invoked from `evaluate_and_respond()`.
 
 ```python
-from ama_cryptography.adaptive_posture import CryptoPostureController
-from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
-from ama_cryptography.key_management import KeyRotationManager
-
-controller = CryptoPostureController()
-crypto     = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
-key_mgr    = KeyRotationManager()
-
-# Execute recommended action
-controller.execute_action(
-    evaluation=evaluation,
-    crypto_api=crypto,
-    key_manager=key_mgr,
+from ama_cryptography.adaptive_posture import (
+    CryptoPostureController,
+    PostureAction,
 )
+from ama_cryptography_monitor import AmaCryptographyMonitor
+
+monitor    = AmaCryptographyMonitor(enabled=True)
+controller = CryptoPostureController(monitor=monitor)
+
+# Drive a full monitor → evaluate → respond cycle:
+evaluation = controller.evaluate_and_respond()
+
+# PostureEvaluation exposes `.action` (the applied action), NOT
+# `.recommended_action`. See adaptive_posture.py:68.
+if evaluation.action != PostureAction.NONE:
+    # The controller has already applied the cryptographic action; the
+    # caller typically logs / alerts on the returned decision.
+    logger.warning("Posture action applied: %s", evaluation.action)
 ```
 
 ---

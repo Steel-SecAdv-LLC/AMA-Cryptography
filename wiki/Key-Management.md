@@ -74,9 +74,21 @@ meta = mgr.register_key(
 should_rotate = mgr.should_rotate("signing-key-v1")     # bool
 active_id     = mgr.get_active_key()                    # Optional[str]
 
-# Rotation lifecycle: old key -> ROTATING -> DEPRECATED
+# Rotation lifecycle: old key -> ROTATING -> DEPRECATED.
+# IMPORTANT (key_management.py:435): initiate_rotation() raises
+# ValueError("Key not found") if either key_id is missing from the
+# manager. Register the replacement key first — the manager tracks
+# metadata only, so you still provision the actual key material in
+# your keystore separately.
+mgr.register_key(
+    key_id="signing-key-v2",
+    purpose="document-signatures",
+    expires_in=timedelta(days=90),
+    max_usage=100_000,
+)
+
 mgr.initiate_rotation("signing-key-v1", "signing-key-v2")
-# ... provision the new key material elsewhere ...
+# ... provision the new key material in your keystore ...
 mgr.complete_rotation("signing-key-v1")
 
 # Accounting
@@ -359,27 +371,73 @@ def encrypt_master_secret(master_secret: bytes, password: str, path: str):
 ### Automated Rotation
 
 ```python
+from datetime import timedelta
 from ama_cryptography.key_management import KeyRotationManager
 
 def check_and_rotate(
     mgr: KeyRotationManager,
     key_id: str,
     new_key_id: str,
+    *,
+    purpose: str,
+    expires_in: timedelta,
+    max_usage: int | None = None,
 ) -> str:
-    """Rotate `key_id` → `new_key_id` if policy says so; return the active id."""
-    if mgr.should_rotate(key_id):
-        mgr.initiate_rotation(key_id, new_key_id)
-        # ... provision the new key material in the caller's keystore ...
-        mgr.complete_rotation(key_id)
-        return new_key_id
-    return key_id
+    """Rotate `key_id` → `new_key_id` if policy says so; return the active id.
+
+    Note: `mgr.initiate_rotation()` raises `ValueError("Key not found")`
+    (key_management.py:435) unless both key ids are already registered
+    with the manager. We register the replacement id first so the call
+    site can't accidentally rotate into a key the manager has never
+    seen. Key *material* still lives in the caller's keystore.
+    """
+    if not mgr.should_rotate(key_id):
+        return key_id
+
+    if new_key_id not in mgr.keys:
+        mgr.register_key(
+            key_id=new_key_id,
+            purpose=purpose,
+            expires_in=expires_in,
+            max_usage=max_usage,
+        )
+
+    mgr.initiate_rotation(key_id, new_key_id)
+    # ... provision the new key material in the caller's keystore ...
+    mgr.complete_rotation(key_id)
+    return new_key_id
 ```
 
 ---
 
 ## Thread Safety
 
-Key management operations use `datetime.now(timezone.utc)` for all timestamps (timezone-aware). The `KeyRotationManager` class is designed for concurrent use; however, critical operations around key rotation (`initiate_rotation` / `complete_rotation`) should be externally serialized in multi-threaded environments.
+`KeyRotationManager` is **not thread-safe**. The implementation
+(`ama_cryptography/key_management.py`) stores its state in a plain
+`dict` (`self.keys`) and mutates it directly from `register_key()`,
+`initiate_rotation()`, `complete_rotation()`, `revoke_key()`, and
+`increment_usage()` with no internal `threading.Lock` / `RLock`.
+Timestamps use `datetime.now(timezone.utc)` (timezone-aware), but that
+does not protect against concurrent dict mutation.
+
+If you share a `KeyRotationManager` instance across threads, you are
+responsible for serializing **every** mutating call (not just rotation)
+behind your own lock:
+
+```python
+import threading
+
+_lock = threading.Lock()
+
+with _lock:
+    mgr.register_key(..., purpose="...", expires_in=...)
+    mgr.initiate_rotation(old_id, new_id)
+    mgr.complete_rotation(old_id)
+```
+
+For single-process workloads, prefer keeping the manager inside one
+thread (e.g., a dedicated key-management worker) and routing all
+rotation requests through a queue.
 
 ---
 

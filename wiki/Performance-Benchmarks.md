@@ -76,7 +76,7 @@ Benchmark results for AMA Cryptography on Linux x86-64. All measurements use the
 | hkdf_standard | 0.0085 | 117,488 |
 | hkdf_with_ethical | 0.0191 | 52,239 |
 
-> Ethical context overhead: 0.0106 ms (≈ 2.2× the standard-HKDF latency, still well under a microsecond of wall-time).
+> Ethical context overhead: 0.0106 ms ≈ **10.6 µs** wall-time (≈ 2.2× standard-HKDF latency), i.e., well under a millisecond. Negligible per-operation cost at the throughputs listed above (52,239 ops/sec).
 
 ---
 

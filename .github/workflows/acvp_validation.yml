@@ -201,10 +201,6 @@ jobs:
               "failing_algorithms": failing_algos,
           }
 
-          out = Path("nist_vectors/validation_summary.json")
-          out.write_text(json.dumps(validation_summary, indent=2))
-          print(f"Wrote {out}")
-
           # Cross-check docs/compliance/acvp_attestation.json against the
           # authoritative results.json so published attestation numbers
           # can't silently drift from what CI just measured. Names and
@@ -215,7 +211,20 @@ jobs:
               att_total = int(att.get("total_vectors_tested", -1))
               att_pass = int(att.get("total_vectors_passed", -1))
               att_fail = int(att.get("total_vectors_failed", -1))
+              # Reproducibility guard: the attestation JSON records the
+              # upstream ACVP-Server ref it was generated against. If the
+              # current run used a different ref, the published totals
+              # can't be considered reproducible against the attestation.
+              att_ref_raw = att.get("acvp_ref", "")
+              att_ref = (att_ref_raw or "").strip() if isinstance(att_ref_raw, str) else ""
               mismatches = []
+              if att_ref and att_ref != acvp_ref:
+                  mismatches.append(
+                      f"acvp_ref: attestation={att_ref!r} "
+                      f"vs run={acvp_ref!r} (set ACVP_REF to match, "
+                      f"or regenerate docs/compliance/acvp_attestation.json "
+                      f"against the current upstream snapshot)"
+                  )
               if att_total != tested:
                   mismatches.append(
                       f"total_vectors_tested: attestation={att_total} "
@@ -272,6 +281,17 @@ jobs:
                   "::warning::docs/compliance/acvp_attestation.json missing; "
                   "skipping attestation cross-check."
               )
+
+          # Write validation_summary.json AFTER the attestation cross-check so
+          # the `status` field on disk always reflects the final decision
+          # (including cross-check failures). Previously the summary was
+          # written before the cross-check, so a ref/count mismatch would
+          # exit the job non-zero but leave `status: "pass"` in the uploaded
+          # artifact — confusing for auditors reading the artifact alone.
+          validation_summary["status"] = status
+          out = Path("nist_vectors/validation_summary.json")
+          out.write_text(json.dumps(validation_summary, indent=2))
+          print(f"Wrote {out}")
 
           # Update a simple status file that can back a shields.io endpoint.
           badge = {
