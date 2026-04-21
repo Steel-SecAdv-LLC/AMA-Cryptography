@@ -1,0 +1,35 @@
+# Peer libraries used ONLY by benchmarks/comparative_benchmark.py for
+# ops/sec comparisons against AMA Cryptography.
+#
+# These are NOT dependencies of the AMA Cryptography library itself.
+# INVARIANT-1 ("zero external crypto dependencies") applies to the
+# production package defined by pyproject.toml / setup.py, not to this
+# benchmark-only requirements file.
+#
+# Installing these locally lets the comparative benchmark produce live
+# peer numbers. When they are absent, the comparative benchmark marks
+# the affected rows ``available=False`` and the benchmark-report.md
+# "Peer Comparison" table falls back to the published reference ranges
+# in benchmarks/baseline.json::metadata.peer_references.
+#
+# This file is the canonical pin set; the `benchmark` extra in
+# pyproject.toml carries the same three packages. Either install method
+# works — update them in lockstep:
+#
+# Usage (either form is equivalent):
+#     pip install ".[benchmark]"                           # via pyproject extra
+#     pip install -r benchmarks/requirements-bench.txt    # via flat pin file
+#     python benchmarks/comparative_benchmark.py
+
+# libsodium 1.0.x Python bindings — Ed25519 reference implementation.
+pynacl>=1.5.0
+
+# liboqs Python bindings — ML-DSA-65 and ML-KEM-1024 reference. Upstream
+# project name on PyPI is ``liboqs-python``; the import name is ``oqs``.
+liboqs-python>=0.10.0
+
+# OpenSSL Python bindings — used for the "cryptography (OpenSSL)" column.
+# Not strictly required (the comparative_benchmark already skips
+# gracefully when the import fails), but keeping it here surfaces the
+# full comparison set in one install.
+cryptography>=42.0

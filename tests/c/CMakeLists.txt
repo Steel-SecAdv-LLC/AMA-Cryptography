@@ -15,6 +15,7 @@ add_ama_test(test_core test_core.c)
 
 # Cryptographic primitive tests
 add_ama_test(test_sha3 test_sha3.c)
+add_ama_test(test_sha3_512_stream test_sha3_512_stream.c)
 add_ama_test(test_hkdf test_hkdf.c)
 add_ama_test(test_ed25519 test_ed25519.c)
 

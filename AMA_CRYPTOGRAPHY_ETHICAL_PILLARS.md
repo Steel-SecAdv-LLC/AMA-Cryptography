@@ -11,6 +11,64 @@
 
 ---
 
+## Document Structure
+
+This document has **two distinct sections**, and readers should be clear
+on which layer a given claim belongs to:
+
+- **Part A — FIPS Primitive Layer (reference only).** A short summary of
+  which standardized primitives the AMA Cryptography library
+  implements. No original claims live here; details belong to
+  [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) and
+  [`CSRC_ALIGN_REPORT.md`](CSRC_ALIGN_REPORT.md).
+- **Part B — Ethical Policy Layer (original work).** The 4 Omni-Code
+  Ethical Pillars, HKDF context integration, ethical vector
+  construction, and all original constructions by Steel Security
+  Advisors LLC. This is a policy framework **built on top of** the
+  FIPS primitives; it does not modify them.
+
+---
+
+## Part A — FIPS Primitive Layer (reference)
+
+The ethical framework described in Part B is built on top of the
+following standardized primitives:
+
+- **FIPS 202** — SHA3-256 / SHA3-512 / SHAKE-128 / SHAKE-256
+- **FIPS 203** — ML-KEM-1024
+- **FIPS 204** — ML-DSA-65
+- **FIPS 205** — SLH-DSA-SHA2-256f
+- **FIPS 198-1** — HMAC (with SHA3-256 per RFC 2104)
+- **FIPS 180-4** — SHA-256
+- **NIST SP 800-38D** — AES-256-GCM
+- **NIST SP 800-108 / RFC 5869** — HKDF
+- **RFC 8032** — Ed25519
+- **RFC 7748** — X25519
+- **RFC 8439** — ChaCha20-Poly1305
+- **RFC 9106** — Argon2id
+
+See [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) for per-primitive implementation
+details, key sizes, and security properties; see
+[`CSRC_ALIGN_REPORT.md`](CSRC_ALIGN_REPORT.md) for ACVP validation results
+(current attestation count and library version live there — consult the
+report rather than relying on a number hard-coded here). See
+[`src/c/PROVENANCE.md`](src/c/PROVENANCE.md) for per-primitive derivation
+status (PQC primitives are clean-room from the FIPS text; Ed25519 is
+vendored from ed25519-donna).
+
+> **Boundary Notice:** Everything above this line describes standardized
+> cryptographic primitives governed by NIST FIPS and IETF RFC
+> specifications. Everything below describes the **Omni-Code Ethical
+> Pillars** — an original policy framework by Steel Security Advisors
+> LLC that is *built on top of* those primitives. The ethical layer
+> does not modify the cryptographic primitives themselves, does not
+> alter their security bounds, and does not claim CAVP or CMVP
+> validation for the framework.
+
+---
+
+## Part B — Ethical Policy Layer (original)
+
 ## Executive Summary
 
 The 4 Omni-Code Ethical Pillars extend AMA Cryptography's multi-layer cryptographic defense with a mathematically rigorous ethical constraint system. Each pillar maps to a triad of cryptographic operations, providing verifiable ethical boundaries without compromising security guarantees.
@@ -18,9 +76,15 @@ The 4 Omni-Code Ethical Pillars extend AMA Cryptography's multi-layer cryptograp
 **Key Properties:**
 - **Balanced weighting:** Each pillar = 3.0 (3 sub-properties × 1.0), Σw = 12.0
 - **HKDF integration:** 128-bit ethical signature in key derivation context
-- **Collision resistance:** Maintains SHA3-256's 2^128 security level
-- **Zero performance impact:** <0.01ms overhead per operation
-- **Standards compliant:** Compatible with NIST FIPS 202, 203, 204, 205, SP 800-108
+- **Collision resistance:** Maintains SHA3-256's 2^128 security level — the
+  ethical vector enters HKDF only through the `info` parameter, so the
+  primitive's own collision bound (set by FIPS 202) is preserved.
+- **Low measured overhead:** <0.01 ms per operation in the reference
+  benchmark (generic C path, single-threaded). This is the overhead of
+  computing the ethical-vector hash, not a security guarantee.
+- **Standards compliant:** Consumes only FIPS / RFC primitives listed
+  in Part A. The Omni-Code Ethical Pillars themselves are original
+  work and are **not** a NIST or IETF standard.
 
 ---
 
@@ -725,14 +789,33 @@ print(f"✓ Ethical hash: {pkg_dict['ethical_hash'][:16]}...")
 The 4 Omni-Code Ethical Pillars provide a mathematically rigorous framework for integrating ethical constraints into the AMA Cryptography cryptographic system without compromising security guarantees.
 
 **Key Achievements:**
-- **Zero security trade-off:** All pillars maintain or enhance cryptographic properties
+- **No modification of FIPS primitives:** The ethical layer enters the
+  cryptographic stack only through the HKDF `info` parameter; the
+  primitives listed in Part A are used unchanged.
 - **Clean structure:** 4 pillars × 3 sub-properties = 12 ethical dimensions, Σw = 12.0
-- **Standards compliance:** NIST FIPS 202, 203, 204, 205; RFC 2104, 3161, 5869
-- **Secure and ready:** <4% overhead, >1,000 ops/sec throughput
-- **Formally verified:** Mathematical proofs for all security claims
-- **Quantum resistant:** 50+ years post-quantum security via Dilithium
+- **Primitives consumed:** NIST FIPS 202, 203, 204, 205; IETF RFC 2104,
+  3161, 5869 (see Part A for the authoritative list).
+- **Measured overhead:** <4% per package operation in the reference
+  benchmark (generic C path); throughput >1,000 ops/sec on the CI
+  runner. Actual overhead varies by hardware and input size.
+- **Validation status:** Validated against NIST ACVP test vectors;
+  see [`CSRC_ALIGN_REPORT.md`](CSRC_ALIGN_REPORT.md) for the
+  authoritative, versioned totals. The ACVP validation covers the FIPS
+  primitives (Part A), not the Ethical Pillars themselves. Original
+  constructions in this document — the ethical integration, adaptive
+  posture, and weight system — have written security arguments in
+  [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md) but have **not**
+  undergone independent formal verification. This is the same
+  disclaimer carried in
+  [`ARCHITECTURE.md §Design Philosophy`](ARCHITECTURE.md) and
+  [`docs/DESIGN_NOTES.md §Limitations`](docs/DESIGN_NOTES.md).
+- **Quantum resistance:** inherited from the ML-DSA-65 / ML-KEM-1024 /
+  SLH-DSA primitives listed in Part A.
 
-**Security Assessment:** Secure and Verified with Enhanced Key Management
+**Security Assessment:** The FIPS primitives in Part A provide the
+cryptographic security bounds. The Ethical Policy Layer in Part B adds
+policy constraints on top; its security claims are relative to those
+primitives and to the security arguments in `docs/DESIGN_NOTES.md`.
 
 This framework demonstrates that ethical constraints and cryptographic strength are not opposing forces—when properly designed, they reinforce each other.
 

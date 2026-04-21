@@ -4,8 +4,9 @@ name: ACVP Vector Validation
 # See docs/compliance/ACVP_SELF_ATTESTATION.md for the customer-facing
 # attestation document this workflow underwrites.
 #
-# This workflow runs the same 815-vector harness used to produce
-# CSRC_ALIGN_REPORT.md and fails the build if any vector regresses.
+# This workflow runs the 1,215-vector harness (815 AFT + 400 SHA-3 MCT)
+# used to produce CSRC_ALIGN_REPORT.md and fails the build if any vector
+# regresses.
 # A structured validation_summary.json artifact is published on every run.
 
 on:
@@ -45,19 +46,25 @@ concurrency:
 # CSRC_ALIGN_REPORT.md / ACVP_SELF_ATTESTATION.md counts — all in the same
 # commit. The floor and the attested totals move together.
 env:
-  EXPECTED_VECTORS: '815'
+  # 815 AFT + 400 SHA-3 MCT (SHA3-256/SHA3-512/SHAKE-128/SHAKE-256 each
+  # contribute 1 tcId x 100 outer iterations).
+  EXPECTED_VECTORS: '1215'
   # Upstream ACVP-Server ref used by nist_vectors/fetch_vectors.py.
   #
   # Pinned to the immutable NIST release tag `v1.1.0.42` (published
   # 2026-04-16, upstream commit 15c0f3d...). This is the exact snapshot
-  # the 815-vector attestation in docs/compliance/acvp_attestation.json
-  # was generated against. Pinning a tag rather than tracking `master`
-  # guarantees that:
+  # the 1,215-vector attestation in docs/compliance/acvp_attestation.json
+  # was generated against (815 AFT vectors as attested through early
+  # 2.1.5, plus 400 SHA-3 Monte Carlo Test vectors subsequently added on
+  # the 2.1.5 line — the MCT vectors were already present in this
+  # ACVP-Server snapshot; what changed in AMA was run_vectors.py
+  # exercising them rather than skipping them).
+  # Pinning a tag rather than tracking `master` guarantees that:
   #
   #   * The weekly scheduled run cannot break spuriously from upstream
   #     churn (new vectors, renamed test groups, reformatted JSON) when
   #     AMA code itself hasn't changed.
-  #   * The same CI run a year from now produces the same 815 count
+  #   * The same CI run a year from now produces the same 1,215 count
   #     against the same vector bytes, so the published attestation
   #     stays reproducible for auditors.
   #   * `docs/compliance/acvp_attestation.json::acvp_ref` and the `ref`
@@ -71,8 +78,9 @@ env:
   #   2. Locally: `export ACVP_REF=<chosen tag>`, then reproduce the
   #      pipeline this workflow runs (cmake build, fetch_vectors.py,
   #      run_vectors.py). Confirm results.json still reports exactly
-  #      815 total vectors and that every one of the 12 per-algorithm
-  #      counts matches what's already in acvp_attestation.json.
+  #      1,215 total vectors (= EXPECTED_VECTORS above) and that every
+  #      one of the 12 per-algorithm counts matches what's already in
+  #      acvp_attestation.json.
   #   3. If the counts drift, update docs/compliance/acvp_attestation.json
   #      (`acvp_ref`, totals, and each per-algorithm
   #      vectors_tested/vectors_passed), docs/compliance/ACVP_SELF_ATTESTATION.md,

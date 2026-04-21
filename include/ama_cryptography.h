@@ -444,6 +444,43 @@ AMA_API ama_error_t ama_sha3_update(ama_sha3_ctx* ctx, const uint8_t* data, size
 AMA_API ama_error_t ama_sha3_final(ama_sha3_ctx* ctx, uint8_t* output);
 
 /* ============================================================================
+ * STREAMING SHA3-512 API (init/update/final)
+ * Enables incremental hashing of large data streams with SHA3-512
+ * Reuses ama_sha3_ctx; rate = 72 bytes fits inside the 168-byte buffer
+ * ============================================================================ */
+
+/**
+ * @brief Initialize SHA3-512 streaming context
+ *
+ * @param ctx Context to initialize
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_sha3_512_init(ama_sha3_ctx* ctx);
+
+/**
+ * @brief Update SHA3-512 with additional data
+ *
+ * Can be called multiple times to process data in chunks.
+ *
+ * @param ctx Initialized context
+ * @param data Data to absorb
+ * @param len Length of data in bytes
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_sha3_512_update(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
+
+/**
+ * @brief Finalize SHA3-512 and output digest
+ *
+ * After calling this, the context cannot be used again without re-initializing.
+ *
+ * @param ctx Context to finalize
+ * @param output Output buffer (64 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_sha3_512_final(ama_sha3_ctx* ctx, uint8_t* output);
+
+/* ============================================================================
  * STREAMING SHAKE256 API (init/absorb/finalize/squeeze)
  * Enables incremental absorb and multi-block squeeze for SHAKE256 (XOF)
  * Reuses ama_sha3_ctx since SHAKE256 rate = 136 = SHA3-256 rate

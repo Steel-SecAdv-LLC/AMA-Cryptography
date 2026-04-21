@@ -662,8 +662,37 @@ static void print_json_row(const bench_result_t *r, int last) {
     printf("    }%s\n", last ? "" : ",");
 }
 
+/*
+ * Emit a `peer_context` JSON section recording published ops/sec figures
+ * for peer cryptographic libraries on comparable x86-64 hardware. These
+ * are static reference numbers with citations — they provide a frame of
+ * reference for readers when the peer libraries are not installed in the
+ * environment (so `benchmarks/comparative_benchmark.py` skips them). They
+ * are NOT live measurements. When comparative_benchmark.py runs with
+ * pynacl / oqs / cryptography installed, those live numbers supersede
+ * these references for that specific run.
+ *
+ * Ranges are intentionally used rather than point values: peer-library
+ * throughput varies by CPU model, microcode, and build flags, and a
+ * single number would misrepresent the distribution.
+ */
+static void print_json_peer_context(void) {
+    printf("  \"peer_context\": {\n");
+    printf("    \"description\": \"Published ops/sec ranges for peer libraries on x86-64. Reference only — not measured by this harness.\",\n");
+    printf("    \"libsodium_ed25519_keygen\":  { \"ops_per_sec_range\": [40000, 60000], \"source\": \"libsodium 1.0.20 bench on Intel x86-64 with precomputed base-point table; https://doc.libsodium.org/advanced/ed25519\" },\n");
+    printf("    \"libsodium_ed25519_sign\":    { \"ops_per_sec_range\": [50000, 80000], \"source\": \"SUPERCOP ed25519/ref10, amd64; https://bench.cr.yp.to/supercop.html\" },\n");
+    printf("    \"libsodium_ed25519_verify\":  { \"ops_per_sec_range\": [15000, 30000], \"source\": \"libsodium 1.0.20 on x86-64 (vartime verify); https://bench.cr.yp.to/supercop.html\" },\n");
+    printf("    \"liboqs_ml_dsa_65_sign\":     { \"ops_per_sec_range\": [500, 1500],   \"source\": \"liboqs 0.10 reference C implementation; https://openquantumsafe.org/benchmarking/\" },\n");
+    printf("    \"liboqs_ml_dsa_65_verify\":   { \"ops_per_sec_range\": [4000, 9000],  \"source\": \"liboqs 0.10 reference C implementation; https://openquantumsafe.org/benchmarking/\" },\n");
+    printf("    \"liboqs_ml_kem_1024_encap\":  { \"ops_per_sec_range\": [7000, 15000], \"source\": \"liboqs 0.10 reference C implementation; https://openquantumsafe.org/benchmarking/\" },\n");
+    printf("    \"liboqs_ml_kem_1024_decap\":  { \"ops_per_sec_range\": [6000, 13000], \"source\": \"liboqs 0.10 reference C implementation; https://openquantumsafe.org/benchmarking/\" }\n");
+    printf("  }\n");
+}
+
 static void print_json_end(void) {
-    printf("  ]\n}\n");
+    printf("  ],\n");
+    print_json_peer_context();
+    printf("}\n");
 }
 
 /* ============================================================================

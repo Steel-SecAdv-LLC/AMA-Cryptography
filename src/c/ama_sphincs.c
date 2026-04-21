@@ -52,6 +52,19 @@
  * Zero external dependencies: SHA-256 and HMAC-SHA-256 provided by
  * ama_sha256.c and ama_hmac_sha256.c respectively. Random bytes
  * provided by ama_platform_rand.c.
+ *
+ * Provenance:
+ *   Implemented from: NIST FIPS 205 (August 2024 final), §9-§11 pseudocode.
+ *   No code derived from sphincs/sphincsplus, PQClean, liboqs, or any
+ *   other third-party PQC implementation. The FIPS 205 §11.2 SHA-2
+ *   hash instantiation for category-5 parameters (H_msg = MGF1-SHA-512,
+ *   PRF_msg = HMAC-SHA-512, H/T_l = SHA-512, F = SHA-256) is the path
+ *   implemented in this file; the shared SHA-512 lives in
+ *   `internal/ama_sha2.h`.
+ *   Validated: 14/14 ACVP SLH-DSA-SHA2-256f SigVer TG 5 (external/pure)
+ *   vectors. See `src/c/PROVENANCE.md` for full provenance rationale and
+ *   `CSRC_ALIGN_REPORT.md §2.3-§2.5` for the hash-instantiation and
+ *   address-zeroing fixes that closed the initial 2 ACVP failures.
  */
 
 #include "../include/ama_cryptography.h"

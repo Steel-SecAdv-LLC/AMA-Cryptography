@@ -90,6 +90,38 @@ SPHINCS+ provides stateless hash-based signatures with security based only on ha
 
 **Integration Status:** Backend implemented in `ama_cryptography/pqc_backends.py`. Integration into main signing workflow pending.
 
+### Implementation Provenance
+
+All three post-quantum primitives (`ama_kyber.c`, `ama_dilithium.c`,
+`ama_sphincs.c`) were **written directly from the NIST FIPS 203 / 204 / 205
+specifications**. No source-level code is derived from pq-crystals,
+PQClean, liboqs, or any other third-party PQC tree. This distinguishes
+AMA from the common pattern in the ecosystem (liboqs, AWS-LC,
+BoringSSL, OpenSSL 3.5+, CIRCL all derive from pq-crystals or PQClean
+and say so in their source trees) and is recorded explicitly so that
+readers can audit the derivation status.
+
+| Primitive | File | Provenance | ACVP KAT |
+|-----------|------|------------|----------|
+| ML-KEM-1024 | `src/c/ama_kyber.c` | Clean-room from FIPS 203 §5–§7 | 25/25 KeyGen, 25/25 EncapDecap |
+| ML-DSA-65 | `src/c/ama_dilithium.c` | Clean-room from FIPS 204 §5–§8 | 25/25 KeyGen, 15/15 SigVer (TG3) |
+| SLH-DSA-SHA2-256f | `src/c/ama_sphincs.c` | Clean-room from FIPS 205 §9–§11 | 14/14 SigVer (TG5) |
+
+"Clean-room" here means the C source was written against the FIPS normative
+text — it is **not** a claim of independent formal proof. For the
+limitations of clean-room transcription (which has produced two
+implementation bugs that were caught and fixed by ACVP, not by review),
+see [`CSRC_ALIGN_REPORT.md §2.3–§2.5`](CSRC_ALIGN_REPORT.md). For file-level
+provenance statements and known divergences from the reference pseudocode,
+see [`src/c/PROVENANCE.md`](src/c/PROVENANCE.md).
+
+Ed25519 is **vendored** rather than clean-room: the radix-2^51 field
+arithmetic and base-point tables come from the public-domain
+[ed25519-donna](https://github.com/floodyberry/ed25519-donna) project under
+`src/c/vendor/ed25519-donna/`, with the upstream LICENSE preserved. The
+AMA-specific wrapper (API contract, FROST integration, expanded-key fast
+path) is in-house.
+
 ## Classical Cryptography
 
 ### Ed25519

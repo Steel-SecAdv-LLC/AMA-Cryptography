@@ -20,8 +20,13 @@ the AMA Cryptography library (version 2.1). The validation covers 12 algorithm
 functions across 6 NIST standards (FIPS 180-4, FIPS 198-1, FIPS 202, FIPS 203,
 FIPS 204, FIPS 205) and 1 NIST Special Publication (SP 800-38D).
 
-**Summary:** 815 vectors tested, **815 passed**, **0 failed**, 4,757 skipped
-(non-byte-aligned inputs, non-target parameter sets, MCT/LDT/VOT test types).
+**Summary:** 1,215 vectors tested, **1,215 passed**, **0 failed**, 5,789 skipped
+(non-byte-aligned inputs, non-target parameter sets, LDT/VOT test types).
+Monte Carlo Test (MCT) coverage for the SHA-3 family was added on the
+v2.1.5 line in this PR (+400 vectors = 4 algorithms × 1 tcId × 100
+outer iterations per FIPS-202 MCT spec, across
+SHA3-256/SHA3-512/SHAKE-128/SHAKE-256) and will ship in the next
+release tag.
 
 All algorithms pass 100% of applicable NIST test vectors.
 
@@ -57,11 +62,30 @@ implemented in native C within the AMA Cryptography library. **No external PQC
 libraries are used** — the library does not depend on liboqs, PQClean, or any
 third-party PQC implementation.
 
+**Provenance:** Each PQC primitive is **clean-room from the NIST FIPS text**.
+The three `src/c/ama_{kyber,dilithium,sphincs}.c` files were written against
+the FIPS 203 / 204 / 205 specifications directly, without consulting or copying
+from pq-crystals, PQClean, liboqs, or any other third-party PQC source tree.
+This is the opposite of the common ecosystem pattern (liboqs, AWS-LC,
+BoringSSL, OpenSSL 3.5+, and CIRCL all derive from pq-crystals or PQClean and
+say so explicitly), and is stated in the file-level `Provenance:` block of
+each PQC source and in full in [`src/c/PROVENANCE.md`](src/c/PROVENANCE.md).
+"Clean-room" here means a clean-room transcription of the standard's
+pseudocode into C, not a formal proof of correctness — the ACVP vectors in
+Section 2.1 are the correctness bar.
+
 Source files:
-- `src/c/ama_kyber.c` — ML-KEM-1024 (FIPS 203)
-- `src/c/ama_dilithium.c` — ML-DSA-65 (FIPS 204)
-- `src/c/ama_sphincs.c` — SLH-DSA-SHA2-256f (FIPS 205)
+- `src/c/ama_kyber.c` — ML-KEM-1024 (FIPS 203), clean-room from §5–§7
+- `src/c/ama_dilithium.c` — ML-DSA-65 (FIPS 204), clean-room from §5–§8
+- `src/c/ama_sphincs.c` — SLH-DSA-SHA2-256f (FIPS 205), clean-room from §9–§11
 - `src/c/internal/ama_sha2.h` — Shared SHA-512/HMAC-SHA-512 (used by Ed25519 + SLH-DSA)
+- `src/c/PROVENANCE.md` — Per-primitive derivation status, known divergences, and the clean-room attestation
+
+Ed25519 (`src/c/ama_ed25519.c`) is **vendored** rather than clean-room: the
+field arithmetic and base-point tables in `src/c/vendor/ed25519-donna/`
+come from the public-domain floodyberry/ed25519-donna project with its
+LICENSE preserved verbatim. The AMA wrapper above it (API contract, FROST
+integration, expanded-key fast path) is in-house.
 
 ### 1.3 Test Execution Environment
 
@@ -74,9 +98,18 @@ Source files:
 
 ### 1.4 Vector Selection Criteria
 
-1. **AFT only.** Monte Carlo Test (MCT), Large Data Test (LDT), and Variable
-   Output Test (VOT) vectors are skipped. MCT requires iterative state not
-   supported by a one-shot harness. LDT requires multi-gigabyte inputs.
+1. **AFT + MCT for SHA-3 family.** AFT vectors are run for every covered
+   algorithm. Monte Carlo Test (MCT) vectors are run for SHA3-256, SHA3-512,
+   SHAKE-128, and SHAKE-256 — the one-shot C API (`ama_sha3_256`,
+   `ama_sha3_512`, `ama_shake128`, `ama_shake256`) is sufficient because the
+   FIPS-202 MCT spec feeds each iteration's digest back as the next
+   iteration's full input (no streaming accumulation across iterations).
+   The MCT runner is implemented in `nist_vectors/run_vectors.py::_run_sha3_mct`
+   and `_run_shake_mct`. **Large Data Test (LDT)** vectors remain skipped —
+   they require multi-gigabyte inputs that are impractical in CI — and
+   **Variable Output Test (VOT)** vectors remain skipped for SHAKE because
+   their output-length coverage is subsumed by the AFT tests in the upstream
+   vector files.
 2. **Byte-aligned only.** Vectors with `bitLength % 8 != 0` are skipped.
    AMA's C API is byte-granularity only.
 3. **ML-KEM-1024 only.** ML-KEM-512 and ML-KEM-768 parameter sets are not
@@ -96,10 +129,10 @@ Source files:
 
 | Algorithm | Standard | Source | Tested | Pass | Fail | Skipped | Notes |
 |-----------|----------|--------|-------:|-----:|-----:|--------:|-------|
-| SHA3-256 | FIPS 202 | ACVP-Server | 151 | 151 | 0 | 1,043 | Non-byte-aligned inputs skipped; MCT/LDT skipped |
-| SHA3-512 | FIPS 202 | ACVP-Server | 86 | 86 | 0 | 596 | Non-byte-aligned inputs skipped; MCT/LDT skipped |
-| SHAKE-128 | FIPS 202 | ACVP-Server | 174 | 174 | 0 | 1,218 | Non-byte-aligned inputs skipped; MCT/VOT skipped |
-| SHAKE-256 | FIPS 202 | ACVP-Server | 143 | 143 | 0 | 1,005 | Non-byte-aligned inputs skipped; MCT/VOT skipped |
+| SHA3-256 (AFT + MCT) | FIPS 202 | ACVP-Server | 251 | 251 | 0 | 1,047 | 151 AFT byte-aligned + 100 MCT (1 tcId × 100 outer iterations); 1,043 AFT non-byte-aligned skipped + 4 LDT tcIds skipped |
+| SHA3-512 (AFT + MCT) | FIPS 202 | ACVP-Server | 186 | 186 | 0 | 600 | 86 AFT byte-aligned + 100 MCT (1 tcId × 100 outer iterations); 596 AFT non-byte-aligned skipped + 4 LDT tcIds skipped |
+| SHAKE-128 (AFT + MCT) | FIPS 202 | ACVP-Server | 274 | 274 | 0 | 1,730 | 174 AFT byte-aligned + 100 MCT (variable-output MCT with rightmost-16-bit feedback); 1,218 AFT non-byte-aligned skipped + 512 VOT tcIds skipped |
+| SHAKE-256 (AFT + MCT) | FIPS 202 | ACVP-Server | 243 | 243 | 0 | 1,517 | 143 AFT byte-aligned + 100 MCT; 1,005 AFT non-byte-aligned skipped + 512 VOT tcIds skipped |
 | HMAC-SHA-256 | FIPS 198-1 | ACVP-Server | 150 | 150 | 0 | 0 | All AFT vectors tested |
 | SHA-256 | FIPS 180-4 | FIPS 180-4 §B.1 | 3 | 3 | 0 | 0 | Three reference vectors from standard |
 | AES-256-GCM | SP 800-38D | SP 800-38D App. B | 4 | 4 | 0 | 0 | TC13–TC16 (256-bit key only) |
@@ -108,7 +141,7 @@ Source files:
 | ML-DSA-65 KeyGen | FIPS 204 | ACVP-Server | 25 | 25 | 0 | 50 | ML-DSA-44/87 skipped |
 | ML-DSA-65 SigVer | FIPS 204 | ACVP-Server | 15 | 15 | 0 | 165 | External/pure TG 3; resolved via `ama_dilithium_verify_ctx` |
 | SLH-DSA-SHA2-256f SigVer | FIPS 205 | ACVP-Server | 14 | 14 | 0 | 490 | External/pure TG 5 only; resolved via FIPS 205 hash function alignment |
-| **TOTAL** | | | **815** | **815** | **0** | **4,757** | |
+| **TOTAL** | | | **1,215** | **1,215** | **0** | **5,789** | 4,757 AFT-filtered + 1,032 non-AFT (LDT+VOT) |
 
 ### 2.2 Resolved: ML-DSA-65 SigVer (previously 3 failures, now 15/15 pass)
 
@@ -254,10 +287,10 @@ optimization.
 |----------|-----------|---------|
 | FIPS 180-4 | SHA-256 | **PASS** — 3/3 reference vectors |
 | FIPS 198-1 | HMAC-SHA-256 | **PASS** — 150/150 AFT vectors |
-| FIPS 202 | SHA3-256 | **PASS** — 151/151 AFT vectors |
-| FIPS 202 | SHA3-512 | **PASS** — 86/86 AFT vectors |
-| FIPS 202 | SHAKE-128 | **PASS** — 174/174 AFT vectors |
-| FIPS 202 | SHAKE-256 | **PASS** — 143/143 AFT vectors |
+| FIPS 202 | SHA3-256 | **PASS** — 251/251 (151 AFT + 100 MCT) |
+| FIPS 202 | SHA3-512 | **PASS** — 186/186 (86 AFT + 100 MCT) |
+| FIPS 202 | SHAKE-128 | **PASS** — 274/274 (174 AFT + 100 MCT) |
+| FIPS 202 | SHAKE-256 | **PASS** — 243/243 (143 AFT + 100 MCT) |
 | SP 800-38D | AES-256-GCM | **PASS** — 4/4 test cases (TC13–TC16) |
 | FIPS 203 | ML-KEM-1024 KeyGen | **PASS** — 25/25 AFT vectors |
 | FIPS 203 | ML-KEM-1024 Decap | **PASS** — 25/25 AFT vectors |
@@ -268,10 +301,11 @@ optimization.
 ### 3.2 Summary
 
 The AMA Cryptography library demonstrates correct implementation of the core
-cryptographic algorithms for all tested NIST standards. All 815 applicable
+cryptographic algorithms for all tested NIST standards. All 1,215 applicable
 NIST test vectors pass across hash functions (SHA-256, SHA3-256, SHA3-512,
-SHAKE-128, SHAKE-256), HMAC-SHA-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65,
-and SLH-DSA-SHA2-256f.
+SHAKE-128, SHAKE-256) — including the 400 newly-added FIPS-202 Monte Carlo
+Test vectors for the SHA-3 family — HMAC-SHA-256, AES-256-GCM, ML-KEM-1024,
+ML-DSA-65, and SLH-DSA-SHA2-256f.
 
 ### 3.3 CAVP Disclaimer
 
