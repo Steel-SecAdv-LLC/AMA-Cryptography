@@ -21,108 +21,149 @@ Complete Python API reference for `ama_cryptography`. All modules, classes, func
 
 ## `crypto_api`
 
+The algorithm-agnostic entry point is `AmaCryptography`, selected by an
+`AlgorithmType`. Every concrete backend (Ed25519, ML-DSA-65, ML-KEM-1024,
+SPHINCS+-256f, AES-256-GCM, hybrid signature, hybrid KEM) is a `CryptoProvider`
+subclass that can also be used directly.
+
 ### Enums
 
-#### `CryptoMode`
+#### `AlgorithmType`
 
 ```python
-class CryptoMode(Enum):
-    CLASSICAL          # Ed25519 only
-    QUANTUM_RESISTANT  # ML-DSA-65 only
-    HYBRID             # Ed25519 + ML-DSA-65 (recommended)
+class AlgorithmType(Enum):
+    ML_DSA_65      = 1   # NIST FIPS 204 signature (post-quantum)
+    KYBER_1024     = 2   # NIST FIPS 203 KEM (post-quantum)
+    SPHINCS_256F   = 3   # NIST FIPS 205 signature (hash-based)
+    ED25519        = 4   # RFC 8032 signature (classical)
+    AES_256_GCM    = 5   # NIST SP 800-38D AEAD
+    HYBRID_SIG     = 6   # Ed25519 || ML-DSA-65  (recommended default)
+    HYBRID_KEM     = 7   # X25519 || ML-KEM-1024
+```
+
+#### `CryptoBackend`
+
+```python
+class CryptoBackend(Enum):
+    C_LIBRARY = 1   # Native `libama_cryptography` via ctypes (default)
+    PYTHON    = 2   # Pure-Python reference path (subset only)
+```
+
+### Dataclasses
+
+```python
+@dataclass(frozen=True)
+class KeyPair:
+    public_key: bytes
+    secret_key: bytes
+    algorithm: AlgorithmType
+
+@dataclass(frozen=True)
+class Signature:
+    signature: bytes
+    algorithm: AlgorithmType
+
+@dataclass(frozen=True)
+class EncapsulatedSecret:
+    ciphertext: bytes
+    shared_secret: bytes
+    algorithm: AlgorithmType
 ```
 
 ### Classes
 
-#### `SymmetricCryptoAlgorithm`
+#### `AmaCryptography`
 
-AES-256-GCM authenticated encryption.
-
-```python
-algo = SymmetricCryptoAlgorithm()
-
-# Encrypt plaintext with a 256-bit key
-# Returns: ciphertext (includes IV and GCM tag)
-ciphertext: bytes = algo.encrypt(plaintext: bytes, key: bytes) -> bytes
-
-# Decrypt ciphertext
-# Returns: plaintext
-# Raises: ValueError if authentication fails
-plaintext: bytes = algo.decrypt(ciphertext: bytes, key: bytes) -> bytes
-```
-
-#### `AsymmetricCryptoAlgorithm`
-
-Ed25519 digital signatures.
+High-level, algorithm-agnostic orchestrator. Used as-is for single-algorithm
+workflows, or configured with `HYBRID_SIG` / `HYBRID_KEM` to transparently
+drive the Ed25519+ML-DSA-65 or X25519+ML-KEM-1024 hybrid providers.
 
 ```python
-algo = AsymmetricCryptoAlgorithm()
+from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType, CryptoBackend
 
-# Generate Ed25519 key pair
-# Returns: (public_key: 32 bytes, secret_key: 32 bytes)
-pk, sk = algo.generate_keypair() -> tuple[bytes, bytes]
+crypto = AmaCryptography(
+    algorithm: AlgorithmType = AlgorithmType.HYBRID_SIG,
+    backend: CryptoBackend = CryptoBackend.C_LIBRARY,
+)
 
-# Sign a message
-# Returns: signature (64 bytes)
-sig: bytes = algo.sign(message: bytes, secret_key: bytes) -> bytes
+# Signature primitives (ED25519, ML_DSA_65, SPHINCS_256F, HYBRID_SIG)
+kp: KeyPair      = crypto.generate_keypair()
+sig: Signature   = crypto.sign(message: bytes, secret_key: bytes | bytearray)
+valid: bool      = crypto.verify(message: bytes, signature: bytes | Signature, public_key: bytes)
 
-# Verify a signature
-# Returns: True if valid, False otherwise
-valid: bool = algo.verify(message: bytes, signature: bytes, public_key: bytes) -> bool
+# KEM primitives (KYBER_1024, HYBRID_KEM)
+enc: EncapsulatedSecret = crypto.encapsulate(public_key: bytes)
+shared: bytes           = crypto.decapsulate(ciphertext: bytes, secret_key: bytes | bytearray)
+
+# Static helpers
+digest: bytes   = AmaCryptography.hash_message(message: bytes, algorithm="sha3-256")
+equal: bool     = AmaCryptography.constant_time_compare(a: bytes, b: bytes)
 ```
 
-#### `PackageSigner`
+Invariants:
+- `generate_keypair()` / `sign()` / `verify()` are valid only when the selected
+  algorithm is a signature scheme; `encapsulate()` / `decapsulate()` only for
+  KEM schemes. Calling the wrong family raises `ValueError`.
+- INVARIANT-7 (no silent cryptographic fallback): if the native C library is
+  unavailable, `__init__` raises rather than degrading to Python.
 
-High-level package signing with configurable mode.
+#### Direct providers
+
+Each provider implements either `CryptoProvider` (sign/verify) or
+`KEMProvider` (encapsulate/decapsulate) and shares the data shapes above.
+Use them when you need to pin a single algorithm without going through the
+dispatcher.
+
+| Class | Algorithm | Family |
+|-------|-----------|--------|
+| `Ed25519Provider` | Ed25519 (RFC 8032) | signature |
+| `MLDSAProvider` | ML-DSA-65 (FIPS 204) | signature |
+| `SphincsProvider` | SPHINCS+-SHA2-256f (FIPS 205) | signature |
+| `HybridSignatureProvider` | Ed25519 ∥ ML-DSA-65 | signature |
+| `KyberProvider` | ML-KEM-1024 (FIPS 203) | KEM |
+| `HybridKEMProvider` | X25519 ∥ ML-KEM-1024 | KEM |
+| `AESGCMProvider` | AES-256-GCM (SP 800-38D) | AEAD (separate `encrypt` / `decrypt`) |
+
+Each provider shares the same constructor signature as `AmaCryptography`
+(no algorithm argument — the class itself pins the algorithm).
+
+#### `KeypairCache`
 
 ```python
-signer = PackageSigner(mode=CryptoMode.HYBRID)
-
-# Sign a data package
-# Returns: signed package dict with all applicable signatures
-signed = signer.sign_package(package: dict, private_key: bytes) -> dict
-
-# Verify a signed package
-# Returns: True if all required signatures are valid
-valid: bool = signer.verify_package(package: dict) -> bool
+cache = KeypairCache(algorithm: AlgorithmType = AlgorithmType.HYBRID_SIG)
 ```
 
-#### `HybridSigner`
+Fixed-size cache for hot-path keypair reuse. Constant-time-zeroed on eviction.
 
-Combined Ed25519 + ML-DSA-65 signing.
+#### `AESGCMProvider` (AEAD)
 
 ```python
-signer = HybridSigner(mode=CryptoMode.HYBRID)
+from ama_cryptography.crypto_api import AESGCMProvider
+import os
 
-# Generate classical (Ed25519) key pair
-pk_classical, sk_classical = signer.generate_classical_keypair()
+aead = AESGCMProvider()
+key  = os.urandom(32)                                              # 256-bit key
 
-# Generate PQC (ML-DSA-65) key pair
-pk_pqc, sk_pqc = signer.generate_pqc_keypair()
+# Encrypt: nonce is auto-generated when omitted.
+# Returns a dict with 'ciphertext', 'nonce', 'tag', 'aad', 'backend'.
+result = aead.encrypt(plaintext: bytes, key: bytes,
+                      nonce: bytes | None = None, aad: bytes = b"")
 
-# Sign with Ed25519
-sig_ed: bytes = signer.sign_classical(message: bytes, secret_key: bytes) -> bytes
-
-# Sign with ML-DSA-65
-sig_pqc: bytes = signer.sign_pqc(message: bytes, secret_key: bytes) -> bytes
-
-# Combine signatures into one structure
-combined: bytes = signer.combine_signatures(
-    ed25519_sig: bytes,
-    ml_dsa_sig: bytes,
-) -> bytes
-
-# Verify hybrid signature (both must pass)
-valid: bool = signer.verify_hybrid(
-    message: bytes,
-    combined_signature: bytes,
-    pk_classical: bytes,
-    pk_pqc: bytes,
-) -> bool
-
-# Switch cryptographic mode at runtime
-signer.set_mode(mode: CryptoMode) -> None
+# Decrypt: caller passes the nonce and tag back in.
+plaintext = aead.decrypt(
+    ciphertext: bytes,
+    key: bytes,
+    nonce: bytes,
+    tag: bytes,
+    aad: bytes = b"",
+)   # raises on tag mismatch
 ```
+
+Nonces are 96-bit (NIST SP 800-38D); tags are 128-bit. Associated data
+is authenticated but not encrypted. To reuse the same nonce/tag wire
+layout across systems, the result dict fields can be concatenated as
+`nonce || ciphertext || tag`; unpack them symmetrically on the
+receive side.
 
 ---
 
@@ -141,62 +182,65 @@ SPHINCS_AVAILABLE: bool    # True if SPHINCS+ is available
 #### Status and Discovery
 
 ```python
-# Get PQC status as a dict
-get_pqc_status() -> dict
-# Returns: {'ml_dsa_65': 'available', 'ml_kem_1024': 'available', ...}
+# High-level rollup: returns PQCStatus.AVAILABLE if at least one PQC
+# backend loaded, PQCStatus.UNAVAILABLE otherwise.
+get_pqc_status() -> PQCStatus
 
-# Get detailed backend information
+# Detailed backend dict: per-algorithm availability + backend names,
+# algorithm parameters (key/sig sizes), and hash/HMAC native-C status.
 get_pqc_backend_info() -> dict
-
-# Get algorithm availability flags
-get_pqc_capabilities() -> dict
+# Example keys: 'status', 'dilithium_available', 'dilithium_backend',
+# 'kyber_available', 'sphincs_available', 'algorithms', 'SHA3-256',
+# 'HMAC-SHA3-256'
 ```
 
 #### ML-DSA-65 (Dilithium)
 
 ```python
-# Generate ML-DSA-65 key pair
-# Returns: (public_key: 1952 bytes, secret_key: 4032 bytes)
-pk, sk = generate_dilithium_keypair() -> tuple[bytes, bytes]
+# Generate ML-DSA-65 key pair.
+# Returns a DilithiumKeyPair dataclass with .public_key (1952 bytes),
+# .secret_key (4032 bytes), and .wipe() for constant-time zeroing.
+kp = generate_dilithium_keypair()
+pk, sk = kp.public_key, kp.secret_key
 
-# Sign a message
-# Returns: signature (3309 bytes)
+# Sign a message -> 3309-byte signature
 sig: bytes = dilithium_sign(message: bytes, secret_key: bytes) -> bytes
 
 # Verify a signature
-# Returns: True if valid, False otherwise
 valid: bool = dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> bool
 ```
 
 #### ML-KEM-1024 (Kyber)
 
 ```python
-# Generate ML-KEM-1024 key pair
-# Returns: (public_key: 1568 bytes, secret_key: 3168 bytes)
-pk, sk = generate_kyber_keypair() -> tuple[bytes, bytes]
+# Generate ML-KEM-1024 key pair.
+# Returns a KyberKeyPair dataclass with .public_key (1568 bytes),
+# .secret_key (3168 bytes), and .wipe().
+kp = generate_kyber_keypair()
+pk, sk = kp.public_key, kp.secret_key
 
-# Encapsulate (sender side)
-# Returns: (ciphertext: 1568 bytes, shared_secret: 32 bytes)
-ct, ss = kyber_encapsulate(public_key: bytes) -> tuple[bytes, bytes]
+# Encapsulate (sender side).
+# Returns a KyberEncapsulation dataclass with .ciphertext (1568 bytes)
+# and .shared_secret (32 bytes).
+enc = kyber_encapsulate(public_key: bytes)
 
-# Decapsulate (receiver side)
-# Returns: shared_secret (32 bytes)
+# Decapsulate (receiver side) -> 32-byte shared secret
 ss: bytes = kyber_decapsulate(ciphertext: bytes, secret_key: bytes) -> bytes
 ```
 
 #### SPHINCS+-SHA2-256f
 
 ```python
-# Generate SPHINCS+ key pair
-# Returns: (public_key: 64 bytes, secret_key: 128 bytes)
-pk, sk = generate_sphincs_keypair() -> tuple[bytes, bytes]
+# Generate SPHINCS+ key pair.
+# Returns a SphincsKeyPair dataclass with .public_key (64 bytes),
+# .secret_key (128 bytes), and .wipe().
+kp = generate_sphincs_keypair()
+pk, sk = kp.public_key, kp.secret_key
 
-# Sign a message
-# Returns: signature (49856 bytes)
+# Sign a message -> 49856-byte signature
 sig: bytes = sphincs_sign(message: bytes, secret_key: bytes) -> bytes
 
 # Verify a signature
-# Returns: True if valid, False otherwise
 valid: bool = sphincs_verify(message: bytes, signature: bytes, public_key: bytes) -> bool
 ```
 
@@ -238,62 +282,74 @@ class KeyMetadata:
 
 #### `HDKeyDerivation`
 
-BIP32-compatible hierarchical deterministic key derivation.
+BIP32-style hierarchical deterministic key derivation. AMA uses
+HMAC-SHA3-256 (not HMAC-SHA-512) for derivation; only hardened indices
+are permitted.
 
 ```python
-hd = HDKeyDerivation()
+from ama_cryptography.key_management import HDKeyDerivation
 
-# Derive key from seed using a path
-# Only hardened derivation supported (indices ≥ 2^31)
-key_material: bytes = hd.derive_from_seed(
-    seed: bytes,            # 32-64 byte seed
-    path: str,              # e.g., "m/44'/0'/0'/0'"
+hd = HDKeyDerivation(seed: bytes | None = None, seed_phrase: str | None = None)   # 32–64 byte seed, or a BIP-39-style phrase
+
+# Derive a key at a fixed BIP-44-style position
+key_material: bytes = hd.derive_key(
+    purpose: int,           # e.g., 44
+    account: int = 0,
+    change: int = 0,
+    index: int = 0,
 ) -> bytes
 
-# Derive child from parent key
-child_key: bytes = hd.derive_child(
-    parent_key: bytes,
-    path: str,
-) -> bytes
-
-HARDENED_OFFSET: int = 2**31  # 2,147,483,648
+# Derive from an explicit hardened path. Returns (key, chain_code)
+key, chain_code = hd.derive_path(path: str)        # e.g. "m/44'/0'/0'/0'"
 ```
 
-#### `KeyManager`
+#### `KeyRotationManager`
 
 ```python
-manager = KeyManager(master_key: bytes)
+from datetime import timedelta
+from ama_cryptography.key_management import KeyRotationManager, KeyMetadata
 
-# Generate a new master key and store it
-key_id: str = manager.generate_master_key() -> str
+mgr = KeyRotationManager(rotation_period: timedelta = timedelta(days=90))
 
-# Derive key material at a given path
-key_material: bytes = manager.derive_key(derivation_path: str) -> bytes
+# Register a key with the rotation policy
+meta: KeyMetadata = mgr.register_key(
+    key_id: str,
+    purpose: str,
+    parent_id: str | None = None,
+    derivation_path: str | None = None,
+    expires_in: timedelta | None = None,
+    max_usage: int | None = None,
+)
 
-# Rotate a key (returns new key_id; old key becomes DEPRECATED)
-new_key_id: str = manager.rotate_key(old_key_id: str) -> str
-
-# Get key material by ID
-key: bytes = manager.get_key(key_id: str) -> bytes
-
-# Get key metadata
-meta: KeyMetadata = manager.get_key_metadata(key_id: str) -> KeyMetadata
-
-# Revoke a key
-manager.revoke_key(key_id: str) -> None
+# Policy hooks
+should:    bool          = mgr.should_rotate(key_id: str)
+active:    str | None    = mgr.get_active_key()
+mgr.initiate_rotation(old_key_id: str, new_key_id: str)
+mgr.complete_rotation(old_key_id: str)     # old key → DEPRECATED
+mgr.increment_usage(key_id: str)
+mgr.revoke_key(key_id: str, reason: str = "compromised")
+metadata:  dict           = mgr.export_metadata(filepath: Path | None = None)
 ```
 
 #### `SecureKeyStorage`
 
 ```python
-# Context manager for encrypted key storage
-# encryption_key must be bytearray (for in-place zeroing)
+from ama_cryptography.key_management import SecureKeyStorage
+
+# Context manager for encrypted key storage.
+# encryption_key must be bytearray (for in-place zeroing on exit).
 with SecureKeyStorage(encryption_key: bytearray) as storage:
-    storage.store(key_id: str, key_material: bytes) -> None
-    key: bytes = storage.retrieve(key_id: str) -> bytes
-    storage.delete(key_id: str) -> None
-    all_ids: list[str] = storage.list_keys() -> list[str]
+    storage.store_key(key_id: str, key_material: bytes, metadata: KeyMetadata) -> None
+    key, meta = storage.retrieve_key(key_id: str)
+    storage.delete_key(key_id: str) -> None
+    all_ids:    list[str] = storage.list_keys()
 ```
+
+#### `HSMKeyStorage` (optional — PyKCS11)
+
+Available when `PyKCS11 >= 1.5.18` is installed and `HSM_AVAILABLE` is
+`True`. Raises `AmaHSMUnavailableError` (in `ama_cryptography.exceptions`)
+when called without the dependency.
 
 ---
 
@@ -322,21 +378,49 @@ equal: bool = constant_time_compare(a: bytes, b: bytes) -> bool
 
 ## `hybrid_combiner`
 
+The combiner is KEM-agnostic: the caller supplies an `encapsulate` /
+`decapsulate` callable for each half, letting the same class drive
+X25519 ∥ ML-KEM-1024, ECDH ∥ Kyber, or any future pairing. Output is
+derived with HKDF-SHA3-256 over a length-prefixed concatenation of both
+shared secrets, both ciphertexts, and (optionally) both public keys —
+length prefixing prevents the component-stripping attack fixed in
+v2.1.5 (audit finding C6).
+
 ```python
+from ama_cryptography.hybrid_combiner import HybridCombiner, HybridEncapsulation
+
 combiner = HybridCombiner()
 
 # Sender: encapsulate using recipient's public keys
-encapsulation: HybridEncapsulation = combiner.encapsulate(
+enc: HybridEncapsulation = combiner.encapsulate_hybrid(
+    classical_encapsulate: Callable,     # e.g. X25519 encapsulate
+    pqc_encapsulate: Callable,           # e.g. ML-KEM-1024 encapsulate
     classical_pk: bytes,
     pqc_pk: bytes,
-) -> HybridEncapsulation
+)
 
 # Receiver: decapsulate using secret keys
-combined_secret: bytes = combiner.decapsulate(
-    encapsulation: HybridEncapsulation,
+combined: bytes = combiner.decapsulate_hybrid(
+    classical_decapsulate: Callable,
+    pqc_decapsulate: Callable,
+    classical_ct: bytes,
+    pqc_ct: bytes,
     classical_sk: bytes,
     pqc_sk: bytes,
-) -> bytes
+    classical_pk: bytes = b"",
+    pqc_pk: bytes = b"",
+)
+
+# Low-level combine(): use when you already hold both shared secrets
+shared: bytes = combiner.combine(
+    classical_ss: bytes,
+    pqc_ss: bytes,
+    classical_ct: bytes,
+    pqc_ct: bytes,
+    classical_pk: bytes = b"",
+    pqc_pk: bytes = b"",
+    output_len: int = 32,
+)
 ```
 
 #### `HybridEncapsulation`
@@ -344,11 +428,11 @@ combined_secret: bytes = combiner.decapsulate(
 ```python
 @dataclass
 class HybridEncapsulation:
-    combined_secret: bytes         # 32 bytes — HKDF output
+    combined_secret: bytes         # HKDF-SHA3-256 output (default 32 bytes)
     classical_ciphertext: bytes    # X25519 ephemeral public key (32 bytes)
     pqc_ciphertext: bytes          # ML-KEM-1024 ciphertext (1568 bytes)
     classical_shared_secret: bytes # X25519 shared secret (32 bytes)
-    pqc_shared_secret: bytes       # Kyber shared secret (32 bytes)
+    pqc_shared_secret: bytes       # ML-KEM-1024 shared secret (32 bytes)
 ```
 
 ---
@@ -375,7 +459,7 @@ controller = CryptoPostureController()
 controller.execute_action(
     evaluation: PostureEvaluation,
     crypto_api: Any,
-    key_manager: KeyManager,
+    key_manager: KeyRotationManager,
 ) -> None
 ```
 
@@ -384,21 +468,42 @@ controller.execute_action(
 ## `rfc3161_timestamp`
 
 ```python
-from ama_cryptography.rfc3161_timestamp import get_timestamp, TimestampResult
+from ama_cryptography.rfc3161_timestamp import (
+    get_timestamp,
+    verify_timestamp,
+    TimestampResult,
+    TimestampError,
+    TimestampUnavailableError,
+    RFC3161_AVAILABLE,
+)
 
-# Request a trusted timestamp from a TSA
+# Request a trusted timestamp.
+# tsa_mode ∈ {"online", "mock", "disabled"}.
 result: TimestampResult = get_timestamp(
-    data_hash: bytes,               # SHA3-256 hash to timestamp
-    tsa_url: str = "https://freetsa.org/tsr",  # TSA endpoint
-) -> TimestampResult
+    data: bytes,
+    tsa_url: str | None = None,                 # defaults to FreeTSA in "online"
+    hash_algorithm: str = "sha3-256",
+    certificate_file: str | None = None,
+    tsa_mode: str = "online",
+)
 
-# TimestampResult fields:
-# result.token: bytes          — DER-encoded RFC 3161 token
-# result.timestamp: datetime   — Signed timestamp (UTC)
-# result.tsa_url: str          — TSA used
-# result.success: bool
-# result.error: Optional[str]
+# Verify a previously obtained timestamp token against the original data.
+valid: bool = verify_timestamp(
+    data: bytes,
+    timestamp_result: TimestampResult,
+    certificate_file: str | None = None,
+)
+
+# TimestampResult fields (frozen dataclass):
+#   token:          bytes   — DER-encoded RFC 3161 token
+#   tsa_url:        str     — TSA that produced the token
+#   hash_algorithm: str     — hash used to imprint the message
+#   data_hash:      bytes   — imprint actually sent to the TSA
 ```
+
+Online mode requires the optional `rfc3161ng` package; mock and disabled
+modes are always available for testing. `TimestampUnavailableError` is
+raised if online mode is requested without the dependency.
 
 ---
 
@@ -406,27 +511,39 @@ result: TimestampResult = get_timestamp(
 
 ```python
 from ama_cryptography.exceptions import (
-    AMAError,              # Base exception
-    PQCUnavailableError,   # PQC library not available
-    KeyManagementError,    # Key management failures
-    SecurityWarning,       # Non-fatal security warnings (Warning subclass)
-    CryptoOperationError,  # Cryptographic operation failure
-    TimestampError,        # RFC 3161 timestamp failure
+    CryptoModuleError,                # Base exception
+    CryptoConfigError,                # Configuration / environment problems
+    IntegrityError,                   # Integrity-check failure
+    SignatureVerificationError,       # Signature rejected
+    KeyManagementError,               # Key lifecycle errors
+    PQCUnavailableError,              # Native C PQC library not loaded
+    QuantumSignatureUnavailableError, # PQC signer requested but unavailable
+    QuantumSignatureRequiredError,    # Policy requires PQC; classical-only refused
+    AmaHSMUnavailableError,           # HSM path requested without PyKCS11
+    SecurityWarning,                  # Non-fatal security warnings (Warning subclass)
 )
 ```
 
-### Exception Hierarchy
+### Exception hierarchy
 
 ```
-AMAError (Exception)
-├── PQCUnavailableError   — raise when PQC backend missing
-├── KeyManagementError    — raise on key lifecycle errors
-├── CryptoOperationError  — raise on cryptographic failures
-└── TimestampError        — raise on RFC 3161 errors
+CryptoModuleError (Exception)
+├── CryptoConfigError
+├── IntegrityError
+├── SignatureVerificationError
+├── KeyManagementError
+└── PQCUnavailableError
+    ├── QuantumSignatureUnavailableError
+    ├── QuantumSignatureRequiredError
+    └── AmaHSMUnavailableError
 
 SecurityWarning (Warning)
 └── Raised via warnings.warn() for non-fatal security issues
 ```
+
+`RFC3161Error` / `TimestampUnavailableError` live in
+`ama_cryptography.rfc3161_timestamp` and are raised only when the optional
+`rfc3161ng` package is required but missing.
 
 ---
 

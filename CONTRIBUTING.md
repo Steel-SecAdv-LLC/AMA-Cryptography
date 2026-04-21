@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 2.1.5 |
-| Last Updated | 2026-04-20 |
+| Last Updated | 2026-04-21 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -291,35 +291,34 @@ All tests must:
 
 ```python
 import pytest
-from ama_cryptography.crypto_api import generate_ed25519_keypair, sign_data
+from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 
 class TestEd25519Signatures:
     """Test Ed25519 signature generation and verification."""
 
-    def test_signature_generation_success(self):
-        """Test successful signature generation with valid input."""
-        # Arrange
-        keypair = generate_ed25519_keypair()
-        data = b"Test data for signing"
+    def setup_method(self) -> None:
+        self.crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
 
-        # Act
-        signature = sign_data(data, keypair.private_key)
+    def test_signature_generation_success(self) -> None:
+        """Sign valid data and confirm the wire format."""
+        kp = self.crypto.generate_keypair()
+        sig = self.crypto.sign(b"Test data for signing", kp.secret_key)
 
-        # Assert
-        assert len(signature) == 64  # Ed25519 signatures are 64 bytes
-        assert isinstance(signature, bytes)
+        assert isinstance(sig.signature, bytes)
+        assert len(sig.signature) == 64  # Ed25519 signatures are 64 bytes
+        assert sig.algorithm == AlgorithmType.ED25519
 
-    def test_signature_verification_success(self):
-        """Test successful signature verification."""
-        # Test implementation
-        pass
+    def test_signature_roundtrip(self) -> None:
+        """A freshly generated signature verifies under the matching key."""
+        kp = self.crypto.generate_keypair()
+        sig = self.crypto.sign(b"payload", kp.secret_key)
+        assert self.crypto.verify(b"payload", sig, kp.public_key)
 
-    def test_signature_empty_data_raises_error(self):
-        """Test that signing empty data raises ValueError."""
-        keypair = generate_ed25519_keypair()
-
-        with pytest.raises(ValueError, match="Cannot sign empty data"):
-            sign_data(b"", keypair.private_key)
+    def test_signature_rejects_tampered_message(self) -> None:
+        """A signature over `payload` must not verify a mutated message."""
+        kp = self.crypto.generate_keypair()
+        sig = self.crypto.sign(b"payload", kp.secret_key)
+        assert not self.crypto.verify(b"payload!", sig, kp.public_key)
 ```
 
 ## Pull Request Process

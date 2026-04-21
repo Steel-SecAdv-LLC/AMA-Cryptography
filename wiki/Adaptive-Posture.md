@@ -66,20 +66,24 @@ print(f"Confidence: {evaluation.confidence}")
 
 ### `CryptoPostureController`
 
-Executes cryptographic actions based on evaluations:
+Executes cryptographic actions based on evaluations. The controller
+accepts any object exposing the `AmaCryptography` interface for
+`crypto_api` and any `KeyRotationManager` for `key_manager`:
 
 ```python
 from ama_cryptography.adaptive_posture import CryptoPostureController
-from ama_cryptography.crypto_api import HybridSigner
-from ama_cryptography.key_management import KeyManager
+from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
+from ama_cryptography.key_management import KeyRotationManager
 
 controller = CryptoPostureController()
+crypto     = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
+key_mgr    = KeyRotationManager()
 
 # Execute recommended action
 controller.execute_action(
     evaluation=evaluation,
-    crypto_api=signer,
-    key_manager=manager,
+    crypto_api=crypto,
+    key_manager=key_mgr,
 )
 ```
 
@@ -130,23 +134,24 @@ if evaluation.threat_level >= ThreatLevel.HIGH:
 
 ## Algorithm Switching
 
-When `PostureAction.SWITCH_ALGORITHM` is triggered, the controller can switch the active cryptographic mode:
+When `PostureAction.SWITCH_ALGORITHM` is triggered, the application
+decides how to react — for example, by instantiating a new
+`AmaCryptography` dispatcher with a stricter `AlgorithmType`:
 
 ```python
-from ama_cryptography.crypto_api import CryptoMode
+from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 
-# Under HIGH threat: switch to quantum-resistant-only
-# (drops Ed25519 classical signatures, uses ML-DSA-65 only)
+# Under HIGH threat: drop Ed25519 and run ML-DSA-65 only
 if evaluation.recommended_action == PostureAction.SWITCH_ALGORITHM:
-    crypto_api.set_mode(CryptoMode.QUANTUM_RESISTANT)
+    crypto_api = AmaCryptography(algorithm=AlgorithmType.ML_DSA_65)
     print("Switched to quantum-resistant-only mode")
 ```
 
-| Mode | Description | Use Case |
-|------|-------------|---------|
-| `CryptoMode.CLASSICAL` | Ed25519 only | Legacy/transition environments |
-| `CryptoMode.QUANTUM_RESISTANT` | ML-DSA-65 only | Maximum quantum protection |
-| `CryptoMode.HYBRID` | Ed25519 + ML-DSA-65 | **Recommended for production** |
+| Algorithm | Description | Use Case |
+|-----------|-------------|----------|
+| `AlgorithmType.ED25519` | Ed25519 only | Legacy/transition environments |
+| `AlgorithmType.ML_DSA_65` | ML-DSA-65 only | Maximum quantum protection |
+| `AlgorithmType.HYBRID_SIG` | Ed25519 + ML-DSA-65 | **Recommended for production** |
 
 ---
 

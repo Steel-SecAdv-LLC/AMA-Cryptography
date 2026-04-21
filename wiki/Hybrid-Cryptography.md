@@ -27,46 +27,70 @@ The `HybridCombiner` class implements a binding construction combining X25519 (c
 
 ```
 combined_ss = HKDF-SHA3-256(
-    salt = classical_ciphertext || pqc_ciphertext,   # Ciphertext binding
-    ikm  = classical_shared_secret || pqc_shared_secret,  # Key material
-    info = "ama-hybrid-kem-v1" || classical_pk || pqc_pk  # Context binding
+    ikm  = u8(2)                     ||                # component count
+           u32be(|ct_c|) || ct_c     ||                # classical ciphertext
+           u32be(|ct_p|) || ct_p     ||                # pqc ciphertext
+           ss_c || ss_p,                               # concatenated shared secrets
+    salt = u32be(|pk_c|) || pk_c || u32be(|pk_p|) || pk_p,
+    info = b"ama-hybrid-kem-v1",
 )
 ```
 
-The ciphertext binding in the `salt` parameter ensures that the combined secret is bound to the specific ciphertexts used, preventing ciphertext substitution attacks.
+All variable-length fields use fixed-size length prefixes (`u32be`) so
+concatenation is unambiguous — the component-stripping attack reported in
+audit finding C6 is prevented by the `u8(count)` header together with the
+`u32be(len)` prefixes (PR #224, v2.1.5).
 
 ### `HybridCombiner` API
 
+`HybridCombiner` is KEM-agnostic: you pass in the `encapsulate` /
+`decapsulate` callables for each half, so the same class drives
+X25519 ∥ ML-KEM-1024, ECDH ∥ ML-KEM, or any pairing. The
+`AmaCryptography(AlgorithmType.HYBRID_KEM)` entry point wires this up
+for the default X25519 + ML-KEM-1024 pair.
+
 ```python
 from ama_cryptography.hybrid_combiner import HybridCombiner, HybridEncapsulation
-from ama_cryptography.pqc_backends import generate_kyber_keypair
-from ama_cryptography.crypto_api import AsymmetricCryptoAlgorithm
+from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType, KyberProvider
+
+# ---- Option A: the algorithm-agnostic dispatcher (recommended)
+hybrid = AmaCryptography(algorithm=AlgorithmType.HYBRID_KEM)
+recipient = hybrid.generate_keypair()
+enc = hybrid.encapsulate(recipient.public_key)                # EncapsulatedSecret
+shared = hybrid.decapsulate(enc.ciphertext, recipient.secret_key)
+assert shared == enc.shared_secret
+
+# ---- Option B: drive the combiner directly with explicit providers
+from ama_cryptography.pqc_backends import (
+    generate_kyber_keypair,
+    kyber_encapsulate,
+    kyber_decapsulate,
+)
+# Any classical KEM wrapper exposing encapsulate(pk) -> (ct, ss)
+# and decapsulate(ct, sk) -> ss can be plugged in.
 
 combiner = HybridCombiner()
-classical_algo = AsymmetricCryptoAlgorithm()
-
-# === Sender Setup ===
-# Generate recipient key pairs (done once; public keys are distributed)
-classical_pk, classical_sk = classical_algo.generate_keypair()
+classical_pk, classical_sk = b"..."         # X25519 keypair
 pqc_pk, pqc_sk = generate_kyber_keypair()
 
-# === Sender: Encapsulate ===
-# Encapsulate generates ciphertexts and the combined shared secret
-encapsulation: HybridEncapsulation = combiner.encapsulate(classical_pk, pqc_pk)
+encapsulation: HybridEncapsulation = combiner.encapsulate_hybrid(
+    classical_encapsulate=my_x25519_encapsulate,
+    pqc_encapsulate=kyber_encapsulate,
+    classical_pk=classical_pk,
+    pqc_pk=pqc_pk,
+)
 
-# The combined secret is derived from both component secrets
-print(f"Combined secret: {encapsulation.combined_secret.hex()}")  # 32 bytes
-print(f"Classical ciphertext: {len(encapsulation.classical_ciphertext)} bytes")
-print(f"PQC ciphertext: {len(encapsulation.pqc_ciphertext)} bytes")
-
-# Sender transmits: encapsulation.classical_ciphertext + encapsulation.pqc_ciphertext
-
-# === Receiver: Decapsulate ===
-recovered_secret = combiner.decapsulate(encapsulation, classical_sk, pqc_sk)
-
-assert recovered_secret == encapsulation.combined_secret
-print("Hybrid KEM key agreement successful!")
-print(f"Both parties share: {recovered_secret.hex()[:16]}...")
+recovered = combiner.decapsulate_hybrid(
+    classical_decapsulate=my_x25519_decapsulate,
+    pqc_decapsulate=kyber_decapsulate,
+    classical_ct=encapsulation.classical_ciphertext,
+    pqc_ct=encapsulation.pqc_ciphertext,
+    classical_sk=classical_sk,
+    pqc_sk=pqc_sk,
+    classical_pk=classical_pk,
+    pqc_pk=pqc_pk,
+)
+assert recovered == encapsulation.combined_secret
 ```
 
 ### `HybridEncapsulation` Object
@@ -85,49 +109,48 @@ class HybridEncapsulation:
 
 ## Hybrid Signature Scheme
 
-In the `ama_cryptography.crypto_api` 4-layer model, the Ed25519 + ML-DSA-65 hybrid signature is implemented at Layer 3, with Layer 4 providing HKDF-based key independence. The `HybridSigner` class provides direct access to the hybrid signature scheme.
+The Ed25519 + ML-DSA-65 dual-signature scheme is the recommended
+production default. It is exposed through the unified
+`AmaCryptography` entry point (`AlgorithmType.HYBRID_SIG`) and backed by
+`HybridSignatureProvider` in `ama_cryptography.crypto_api`.
 
 ### Security Guarantee
 
 > **Dual-signature security:** Both Ed25519 and ML-DSA-65 signatures must independently verify for the package to be accepted. An attacker must forge **both** simultaneously — one classical forgery (2^128 classical operations) and one quantum-resistant forgery (2^190 quantum operations).
 
-### `HybridSigner` API
+### Hybrid signing API
 
 ```python
-from ama_cryptography.crypto_api import HybridSigner, CryptoMode
+from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 
-signer = HybridSigner(mode=CryptoMode.HYBRID)
+crypto = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
 
-# Generate both classical and PQC key pairs
-classical_pk, classical_sk = signer.generate_classical_keypair()
-pqc_pk, pqc_sk = signer.generate_pqc_keypair()
+kp = crypto.generate_keypair()     # KeyPair.public_key  = Ed25519_pk || ML-DSA_pk
+                                   # KeyPair.secret_key  = Ed25519_sk || ML-DSA_sk
 
 message = b"Data requiring quantum-resistant protection"
-
-# Sign with both algorithms
-combined_signature = signer.combine_signatures(
-    ed25519_sig=signer.sign_classical(message, classical_sk),
-    ml_dsa_sig=signer.sign_pqc(message, pqc_sk),
-)
-
-# Verify both signatures
-is_valid = signer.verify_hybrid(
-    message,
-    combined_signature,
-    classical_pk,
-    pqc_pk,
-)
-print(f"Hybrid signature valid: {is_valid}")
+sig     = crypto.sign(message, kp.secret_key)        # Signature.signature = Ed25519_sig || ML-DSA_sig
+valid   = crypto.verify(message, sig, kp.public_key) # True only if BOTH verify
 ```
+
+The `KeyPair.public_key` / `KeyPair.secret_key` fields are fixed-size
+concatenations (32 + 1952 bytes public, 32 + 4032 bytes secret) and the
+`Signature.signature` is a 64 + 3309 byte concatenation. If you need to
+drive the two layers independently, construct `Ed25519Provider` and
+`MLDSAProvider` directly — they share the same `CryptoProvider` contract
+as the hybrid.
 
 ---
 
 ## Using the Multi-Layer Package (Full Hybrid)
 
-The highest-level API (`ama_cryptography.crypto_api`) automatically uses hybrid signatures (Ed25519 + ML-DSA-65) as layer 3:
+The legacy orchestrator still exposes the historical codes+helix package
+flow — which internally uses hybrid Ed25519 + ML-DSA-65 signatures at
+layer 3. It lives in `ama_cryptography.legacy_compat` (new code should
+prefer `AmaCryptography(AlgorithmType.HYBRID_SIG)` above):
 
 ```python
-from ama_cryptography.crypto_api import (
+from ama_cryptography.legacy_compat import (
     generate_key_management_system,
     create_crypto_package,
     verify_crypto_package,
@@ -145,26 +168,28 @@ print(f"ML-DSA-65 valid: {results['dilithium']}")
 
 ---
 
-## Hybrid Mode Selection
+## Algorithm Selection
 
 ```python
-from ama_cryptography.crypto_api import CryptoMode
+from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 
 # Classical only (Ed25519)
-mode = CryptoMode.CLASSICAL
+crypto = AmaCryptography(algorithm=AlgorithmType.ED25519)
 
 # Quantum-resistant only (ML-DSA-65)
-mode = CryptoMode.QUANTUM_RESISTANT
+crypto = AmaCryptography(algorithm=AlgorithmType.ML_DSA_65)
 
-# Hybrid (Ed25519 + ML-DSA-65)
-mode = CryptoMode.HYBRID  # Recommended for production
+# Hybrid (Ed25519 + ML-DSA-65) — recommended for production
+crypto = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
 ```
 
 ---
 
 ## Thread Safety and Serialization
 
-`HybridCombiner` and `HybridSigner` are stateless — all state is local to each method call. They are safe to use concurrently from multiple threads.
+`HybridCombiner` and the `HybridSignatureProvider` behind
+`AlgorithmType.HYBRID_SIG` are stateless — all state is local to each
+method call, so they are safe to use concurrently from multiple threads.
 
 `HybridEncapsulation` objects are serializable (can be converted to/from `bytes` or JSON for transmission).
 
@@ -172,21 +197,30 @@ mode = CryptoMode.HYBRID  # Recommended for production
 
 ## Integration with Adaptive Posture
 
-The [Adaptive Posture](Adaptive-Posture) system can automatically switch between hybrid modes based on threat level:
+The [Adaptive Posture](Adaptive-Posture) system can automatically switch
+between algorithm choices based on threat level — e.g., elevating from
+`HYBRID_SIG` to `ML_DSA_65` when timing anomalies signal potential
+classical compromise:
 
 ```python
 from ama_cryptography.adaptive_posture import (
     CryptoPostureController,
+    PostureEvaluator,
     ThreatLevel,
 )
+from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
+from ama_cryptography.key_management import KeyRotationManager
 
 controller = CryptoPostureController()
+evaluator  = PostureEvaluator()
+crypto     = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
+key_mgr    = KeyRotationManager()
 
-# On elevated threat: switch to strict quantum-resistant-only mode
+evaluation = evaluator.evaluate(monitor_signals={...})  # dict from the 3R monitor
 controller.execute_action(
-    evaluation=PostureEvaluation(threat_level=ThreatLevel.HIGH),
-    crypto_api=signer,
-    key_manager=manager,
+    evaluation=evaluation,
+    crypto_api=crypto,
+    key_manager=key_mgr,
 )
 ```
 
