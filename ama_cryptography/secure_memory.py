@@ -118,7 +118,24 @@ def secure_memzero(data: Union[bytearray, memoryview]) -> None:
         data: Mutable buffer to zero (bytearray or memoryview)
 
     Raises:
-        TypeError: If data is not a mutable buffer
+        TypeError: If ``data`` is not a mutable buffer.
+        SecureMemoryError: If the Python fallback path is in use and the
+            post-wipe verification observes a residual non-zero byte
+            (optimizer elision, concurrent write, or mis-compiled
+            ``memset_explicit``).  This is a *deliberate* hard failure —
+            a silently incomplete wipe would leave secret material in
+            memory, defeating the whole point of ``secure_memzero``.
+            The native paths (``ama_secure_memzero`` and the libc
+            ``explicit_bzero`` / ``memset_s`` back-ends) do not raise.
+
+    **Propagation from cleanup contexts.**  ``SecureBuffer.__exit__`` and
+    ``secure_buffer()``'s ``finally`` clause both call ``secure_memzero``
+    on the way out, so a ``SecureMemoryError`` raised here can propagate
+    through a ``with`` statement's exit path.  That is intentional — a
+    failed wipe is a security-critical signal that *must not* be
+    silenced.  Callers that need to suppress it (e.g. because they are
+    already handling an in-flight exception) should catch
+    ``SecureMemoryError`` explicitly at the boundary they control.
 
     Example:
         >>> secret = bytearray(b"sensitive")
@@ -593,7 +610,24 @@ class SecureBuffer:
         exc_val: Optional[BaseException],
         exc_tb: Optional[TracebackType],
     ) -> None:
-        """Exit context: zero buffer first (while still pinned), then munlock."""
+        """Exit context: zero buffer first (while still pinned), then munlock.
+
+        Raises:
+            SecureMemoryError: If ``secure_memzero`` is on the Python
+                fallback path and post-wipe verification observes a
+                residual non-zero byte.  This is a deliberate hard
+                failure — a silently incomplete wipe would defeat the
+                security contract.  If raised here while an in-flight
+                exception is already propagating through the ``with``
+                block, Python's normal ``__exit__`` semantics apply:
+                the ``SecureMemoryError`` replaces the pending
+                exception.  Callers that need to preserve the original
+                exception should wrap the inner body in their own
+                ``try``/``except SecureMemoryError``.  A ``munlock``
+                failure is *not* propagated — it is logged at WARNING
+                and swallowed, since by that point the memory has
+                already been zeroed.
+        """
         if self._data is not None:
             # CRITICAL ORDER: zero FIRST while the pages are still mlocked
             # (pinned in RAM), THEN munlock.  If we reversed these two
@@ -629,6 +663,15 @@ def secure_buffer(size: int, lock: bool = True) -> Generator[bytearray, None, No
 
     Yields:
         bytearray: Secure buffer
+
+    Raises:
+        SecureMemoryError: On the way out, if ``secure_memzero`` is on the
+            Python fallback path and observes a residual non-zero byte
+            during post-wipe verification.  This is deliberate — a silent
+            wipe failure would defeat the security contract.  See
+            :class:`SecureBuffer.__exit__` for the full semantics.  A
+            ``munlock`` failure during cleanup is logged at WARNING and
+            swallowed (the memory is already zeroed by then).
 
     Example:
         with secure_buffer(64) as key_material:
