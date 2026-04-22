@@ -124,7 +124,6 @@ def _build_intersphinx_mapping() -> dict:
 
 
 intersphinx_mapping = _build_intersphinx_mapping()
-intersphinx_disabled_reftypes: list = []
 intersphinx_timeout = 5
 
 # Defence-in-depth: if a probe briefly succeeds but the real fetch fails

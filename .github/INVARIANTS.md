@@ -141,12 +141,27 @@ If portability requires a fallback path, that path **must** be non-cryptographic
 — for example, the monitoring math engine — and **must not** touch secrets under
 any circumstances.
 
-There is **no** development escape hatch.  The failure mode for a missing
-backend is always a hard refusal to operate.
+There is **no** runtime or development escape hatch for cryptographic
+operation.  The failure mode for a missing backend is always a hard refusal
+to operate under any code path that could touch secrets.
+
+The sole import-time exception is **documentation builds**: when
+`AMA_SPHINX_BUILD=1` (or `SPHINX_BUILD=1`) is set, the import-time guards
+in `crypto_api.py`, `key_management.py`, and `legacy_compat.py` stand down
+so that Sphinx `autodoc` can introspect signatures and docstrings without
+a native library.  This override **does not permit any cryptographic
+operation to proceed** — every call-time code path still invokes
+`_enforce_invariant7*()`, which raises `RuntimeError` exactly as it would
+at import time on a regular (non-docs) run.  In other words: INVARIANT-7
+is preserved by a hop from import-time enforcement to call-time
+enforcement under the documented docs-only flag, never weakened.
 
 **Enforcement:** Module-level guards in `crypto_api.py`, `key_management.py`,
-and `pqc_backends.py` raise `RuntimeError` at import time when the native C
-backend is unavailable.
+`legacy_compat.py`, and `pqc_backends.py` raise `RuntimeError` at import
+time when the native C backend is unavailable, except under the
+documented Sphinx/docs-build override above; under that override,
+call-time enforcement (`_enforce_invariant7*`) still refuses any
+cryptographic work without the native backend.
 
 ## INVARIANT-8 — Deterministic Reproducible Builds
 

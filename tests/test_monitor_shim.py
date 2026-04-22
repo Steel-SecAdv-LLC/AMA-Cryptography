@@ -13,14 +13,14 @@ classes / factory so no divergent code object slips in during a refactor.
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
 
 
 class TestMonitorShim:
     def test_shim_is_importable(self) -> None:
         """The package-internal path must import without side-effect errors."""
-        import importlib
-
         shim = importlib.import_module("ama_cryptography.monitor")
         assert shim is not None
         # __all__ must list at least the three headline symbols so
@@ -36,8 +36,8 @@ class TestMonitorShim:
         checks written against one path would fail for objects created via
         the other path, silently diverging downstream consumers.
         """
-        import ama_cryptography.monitor as shim
-        import ama_cryptography_monitor as source
+        shim = importlib.import_module("ama_cryptography.monitor")
+        source = importlib.import_module("ama_cryptography_monitor")
 
         # Every name in __all__ must match the source by object identity.
         for name in shim.__all__:
@@ -51,11 +51,7 @@ class TestMonitorShim:
         from ama_cryptography.monitor import AmaCryptographyMonitor, create_monitor
 
         monitor = create_monitor(enabled=False)
-        try:
-            assert isinstance(monitor, AmaCryptographyMonitor)
-        finally:
-            # create_monitor returns plain Python objects; no cleanup needed.
-            del monitor
+        assert isinstance(monitor, AmaCryptographyMonitor)
 
     def test_crypto_api_uses_package_path(self) -> None:
         """crypto_api imports the shim (audit 2e migration).
@@ -71,7 +67,7 @@ class TestMonitorShim:
         native library present.
         """
         try:
-            import ama_cryptography.crypto_api as api
+            api = importlib.import_module("ama_cryptography.crypto_api")
         except RuntimeError as exc:
             if "INVARIANT-7" in str(exc):
                 pytest.skip(
@@ -81,6 +77,10 @@ class TestMonitorShim:
 
         # The AmaCryptographyMonitor class pulled into crypto_api's namespace
         # must be the same object reachable from the package-internal path.
+        # (The binding is an internal import, not a public re-export —
+        # ``crypto_api.__all__`` intentionally omits it. ``importlib`` gives
+        # us a ``ModuleType`` so mypy --strict is content with direct
+        # attribute access here.)
         from ama_cryptography.monitor import AmaCryptographyMonitor as ShimMonitor
 
         assert api.AmaCryptographyMonitor is ShimMonitor

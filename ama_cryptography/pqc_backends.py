@@ -2792,8 +2792,11 @@ def native_argon2id_legacy(
     _UINT32_MAX = 0xFFFFFFFF
     if len(salt) < 8:
         raise ValueError(f"Argon2id salt must be >= 8 bytes, got {len(salt)}")
-    if out_len < 4:
-        raise ValueError(f"Argon2id out_len must be >= 4 bytes, got {out_len}")
+    # Upper bound: Argon2 encodes outlen as a little-endian uint32 in H0
+    # (RFC 9106 §3.2); an out_len above UINT32_MAX would silently truncate
+    # during H0 prehash and produce a surprising derivation.
+    if out_len < 4 or out_len > _UINT32_MAX:
+        raise ValueError(f"Argon2id out_len must be in [4, {_UINT32_MAX}] bytes, got {out_len}")
     if t_cost < 1 or t_cost > _UINT32_MAX:
         raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
     if parallelism < 1 or parallelism > _UINT32_MAX:
@@ -2871,8 +2874,11 @@ def native_argon2id_legacy_verify(
     tag_len = len(expected_tag)
     if len(salt) < 8:
         raise ValueError(f"Argon2id salt must be >= 8 bytes, got {len(salt)}")
-    if tag_len < 4:
-        raise ValueError(f"expected_tag must be >= 4 bytes, got {tag_len}")
+    # Upper bound: Argon2 encodes outlen as uint32 in H0 (RFC 9106 §3.2);
+    # a tag above UINT32_MAX would silently truncate during prehash and
+    # also feed an unbounded size_t into the C helper's calloc().
+    if tag_len < 4 or tag_len > _UINT32_MAX:
+        raise ValueError(f"expected_tag must be in [4, {_UINT32_MAX}] bytes, got {tag_len}")
     if t_cost < 1 or t_cost > _UINT32_MAX:
         raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
     if parallelism < 1 or parallelism > _UINT32_MAX:
