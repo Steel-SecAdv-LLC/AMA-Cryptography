@@ -21,6 +21,12 @@ permissions:
   contents: read
   pull-requests: read
 
+# Collapse overlapping runs on the same ref; PR heads cancel in-flight
+# runs so a rapid series of pushes doesn't hold a runner for each.
+concurrency:
+  group: baseline-guard-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}
+
 jobs:
   baseline-justification:
     name: Enforce baseline.json justification

@@ -10,6 +10,15 @@ on:
 permissions:
   contents: read
 
+# Collapse overlapping runs on the same ref to avoid runner-queue
+# saturation when rapid pushes fire both push- and pull_request-triggered
+# workflows in parallel.  Cancelling in-flight runs is safe for feature
+# branches and PR heads; `main` and scheduled runs are preserved by
+# excluding them from ``cancel-in-progress``.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}
+
 jobs:
   test:
     name: Test ${{ matrix.os }} / Python ${{ matrix.python-version }}

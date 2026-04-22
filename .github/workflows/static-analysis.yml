@@ -10,6 +10,11 @@ permissions:
   contents: read
   security-events: write  # Required for CodeQL SARIF upload
 
+# Collapse overlapping runs on the same ref; main is preserved.
+concurrency:
+  group: static-analysis-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}
+
 jobs:
   cppcheck:
     name: Cppcheck Static Analysis

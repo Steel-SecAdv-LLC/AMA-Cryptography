@@ -7,6 +7,12 @@ on:
     branches: [ main, develop ]
   workflow_dispatch:
 
+# Collapse overlapping runs on the same ref; feature branches and PR
+# heads cancel in-flight runs, main is preserved.
+concurrency:
+  group: ci-build-test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}
+
 jobs:
   # C Library Build and Test
   c-library:
