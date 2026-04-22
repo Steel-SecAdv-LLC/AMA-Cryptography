@@ -2,17 +2,24 @@
  * Copyright 2025-2026 Steel Security Advisors LLC
  * Licensed under the Apache License, Version 2.0
  *
- * Unit tests for secp256k1 scalar multiplication and BIP32 pubkey derivation.
+ * Unit tests for ``ama_secp256k1_point_mul`` and
+ * ``ama_secp256k1_pubkey_from_privkey`` against the generator and
+ * doubling reference coordinates from SEC 2 §2.4.1.
  *
  * Validates:
- *   - Generator G from privkey == 1 matches the published SEC1 coordinates
- *   - 2G from privkey == 2 matches the published SEC1 coordinates
- *   - Pubkey parity byte (0x02 / 0x03) is computed correctly
+ *   - Generator G from privkey == 1 matches the SEC 2 §2.4.1 coordinates
+ *   - 2G from privkey == 2 matches the doubled-generator coordinates
+ *     (independently cross-checked against python-ecdsa 0.19 and direct
+ *     Weierstrass doubling — note the "byte 27 = 0xB9" clarification in
+ *     ``_2Gx`` below)
+ *   - Compressed-pubkey parity byte (0x02 / 0x03) is computed correctly
  *   - NULL / zero-scalar rejection
- *   - ama_secp256k1_point_mul is linear: scalar_mul(k, G) == pubkey(k)
+ *   - ``ama_secp256k1_point_mul`` is linear: scalar_mul(k, G) ==
+ *     pubkey_from_privkey(k) for k ∈ {3..7}
  *
- * Test vectors are the widely-published secp256k1 constants; see
- * https://en.bitcoin.it/wiki/Secp256k1 and SEC 2 §2.4.1.
+ * This file does NOT exercise BIP32 HD derivation — the public surface
+ * tested here is the raw scalar-mul / compressed-pubkey primitive that
+ * BIP32 is built on top of.
  */
 
 #include <stdio.h>

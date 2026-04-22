@@ -10,10 +10,16 @@
  *   - ama_frost_round2_sign
  *   - ama_frost_aggregate
  *
- * Strategy: consume the first bytes of the fuzzer input as the structural
- * parameters (threshold, n, num_signers, message_len), then feed the
- * remaining bytes as fuzzed participant shares, nonces, commitments and
- * messages.  Invariants checked:
+ * Strategy: consume the first 3 bytes of the fuzzer input as
+ * ``(selector, threshold, n)`` — ``selector`` (``data[0]``) picks one
+ * of the three sub-modes via ``selector % 3`` (per-participant
+ * round1 / happy-path end-to-end / fully-fuzzed aggregate),
+ * ``threshold`` is derived as ``2 + (data[1] % (FROST_FUZZ_MAX_N - 1))``
+ * so a valid threshold is always selected, and ``n`` is clamped to
+ * ``>= threshold`` from ``data[2]``.  The remaining bytes are treated
+ * as fuzzed participant shares, nonces, commitments and message
+ * material; ``msg_len`` is derived from what's left of the payload
+ * rather than being passed in as a separate field.  Invariants checked:
  *   - The library must never crash, over-read, over-write, or invoke UB
  *     for any combination of parameters — failures must be returned via
  *     the ama_error_t channel.

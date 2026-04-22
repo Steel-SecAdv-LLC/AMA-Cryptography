@@ -164,6 +164,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
+      - name: Set up Python
+        # Pin to a concrete interpreter so the job is deterministic across
+        # runner images (ubuntu-latest's default `python3` has drifted
+        # between minor versions historically).  3.11 matches the other
+        # CI jobs in ci-build-test.yml and is well above the project
+        # minimum of 3.9 declared in pyproject.toml.
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: '3.11'
+
       - name: Run version consistency check
         run: python3 tools/check_version_consistency.py
 

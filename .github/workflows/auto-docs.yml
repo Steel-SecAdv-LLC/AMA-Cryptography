@@ -36,9 +36,12 @@ jobs:
           python-version: '3.11'
 
       - name: Install documentation dependencies
+        # Single-sourced via pyproject.toml ``[project.optional-dependencies].docs``
+        # so the workflow cannot drift from the declared supported versions
+        # (audit 2c).  Adding a new doc dep means updating pyproject only.
         run: |
           python -m pip install --upgrade pip
-          python -m pip install sphinx sphinx_rtd_theme sphinx-autodoc-typehints
+          python -m pip install ".[docs]"
 
       - name: Run auto-documentation updater
         run: python tools/update_docs.py
