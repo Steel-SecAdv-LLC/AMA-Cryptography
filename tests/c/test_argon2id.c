@@ -304,25 +304,33 @@ static void test_parameter_validation(void) {
  *
  * No external reference matches the pre-2.1.5 derivation (the
  * `blake2b_long` loop ran one iteration too many), so we cannot run
- * a cross-implementation KAT against the legacy path. We instead pin
- * four invariants that any correct implementation must satisfy:
+ * a cross-implementation KAT against the legacy path.  We instead
+ * pin a set of invariants that (together) fail-closed on any
+ * accidental drift of the legacy path OR accidental reuse of it by
+ * the spec-compliant entry point:
  *
- *   1. The legacy derivation is deterministic (same inputs → same tag).
- *   2. The legacy derivation is NOT equal to the RFC 9106 derivation
- *      for any non-trivial parameter set (outlen > 64 exercises the
- *      H' loop where the bug lives; outlen=32 takes the short-circuit
- *      path and must agree across both variants since `toproduce`
- *      never enters the loop).
- *   3. ama_argon2id_legacy_verify returns AMA_SUCCESS for a legacy tag
- *      and AMA_ERROR_VERIFY_FAILED after a single bit-flip.
- *   4. ama_argon2id_legacy_verify rejects invalid parameters without
+ *   1. The legacy derivation completes without UB at standard
+ *      parameters.
+ *   2. The legacy derivation is deterministic across runs.
+ *   3. Legacy and RFC diverge for ANY non-trivial Argon2 invocation
+ *      — even when out_len ≤ 64 (the final H' step short-circuits
+ *      but the memory fill still calls `blake2b_long` with
+ *      out_len=1024, where the loop guard differs).  This confirms
+ *      the loop-guard really differs.
+ *   4. ama_argon2id_legacy_verify returns AMA_SUCCESS for a legacy
+ *      tag and AMA_ERROR_VERIFY_FAILED after a single bit-flip or
+ *      when handed an RFC-path tag (different bit-space).
+ *   5. ama_argon2id_legacy_verify rejects invalid parameters without
  *      touching the expected_tag buffer.
  * ---------------------------------------------------------------- */
 static void test_legacy_shim_self_consistency(void) {
     const uint8_t pw[]   = {'p','a','s','s','w','o','r','d'};
     const uint8_t salt[] = {'s','a','l','t','s','a','l','t','s','a','l','t','s','a','l','t'};
 
-    /* --- outlen=32: short-circuit path; legacy == RFC by construction. */
+    /* --- out_len=32 with m_cost=32 KiB.  Argon2's memory fill calls
+     * `blake2b_long(_, 1024, _)` for every initial block, so the
+     * loop inside H' IS entered and the two paths must diverge even
+     * though the FINAL tag call (out_len=32) short-circuits. */
     uint8_t rfc32[32], leg32[32];
     ama_error_t rc = ama_argon2id(pw, sizeof(pw), salt, sizeof(salt),
                                    2, 32, 1, rfc32, sizeof(rfc32));
@@ -330,8 +338,8 @@ static void test_legacy_shim_self_consistency(void) {
     rc = ama_argon2id_legacy(pw, sizeof(pw), salt, sizeof(salt),
                               2, 32, 1, leg32, sizeof(leg32));
     TEST_ASSERT(rc == AMA_SUCCESS, "legacy shim: legacy derivation (32B) succeeds");
-    TEST_ASSERT(memcmp(rfc32, leg32, 32) == 0,
-                "legacy shim: outlen<=64 short-circuits H' loop; legacy==RFC");
+    TEST_ASSERT(memcmp(rfc32, leg32, 32) != 0,
+                "legacy shim: legacy != RFC (memory fill H' loop diverges even for out_len<=64)");
 
     /* --- 1024-byte block generation path (embedded in Argon2 memory fill):
      * the H' loop IS exercised, so legacy MUST differ from RFC. We observe

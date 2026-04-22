@@ -43,8 +43,7 @@ class TestMonitorShim:
         for name in shim.__all__:
             assert hasattr(source, name), f"{name} missing from top-level module"
             assert getattr(shim, name) is getattr(source, name), (
-                f"{name} diverges between ama_cryptography.monitor "
-                f"and ama_cryptography_monitor"
+                f"{name} diverges between ama_cryptography.monitor " f"and ama_cryptography_monitor"
             )
 
     def test_create_monitor_returns_expected_type(self) -> None:
@@ -76,8 +75,7 @@ class TestMonitorShim:
         except RuntimeError as exc:
             if "INVARIANT-7" in str(exc):
                 pytest.skip(
-                    "crypto_api import blocked by INVARIANT-7 "
-                    "(native backend unavailable)"
+                    "crypto_api import blocked by INVARIANT-7 " "(native backend unavailable)"
                 )
             raise
 

@@ -46,33 +46,25 @@ def extract(file: str, pattern: str) -> str | None:
 
 
 def main() -> int:
-    canonical = extract("ama_cryptography/__init__.py",
-                        r'^__version__\s*=\s*"([^"]+)"')
+    canonical = extract("ama_cryptography/__init__.py", r'^__version__\s*=\s*"([^"]+)"')
     if canonical is None:
-        print("ERROR: could not locate __version__ in ama_cryptography/__init__.py",
-              file=sys.stderr)
+        print(
+            "ERROR: could not locate __version__ in ama_cryptography/__init__.py", file=sys.stderr
+        )
         return 1
 
     # (file, regex-with-one-capture-group, description)
     checks = [
-        ("setup.py",
-         r'^VERSION\s*=\s*"([^"]+)"',
-         "setup.py VERSION literal"),
-        ("pyproject.toml",
-         r'^version\s*=\s*"([^"]+)"',
-         "pyproject.toml [project].version"),
-        ("CMakeLists.txt",
-         r'VERSION\s+(\d+\.\d+\.\d+)',
-         "CMakeLists.txt project() VERSION"),
-        ("docs/conf.py",
-         r'^version\s*=\s*"([^"]+)"',
-         "docs/conf.py version"),
-        ("docs/conf.py",
-         r'^release\s*=\s*"([^"]+)"',
-         "docs/conf.py release"),
-        ("include/ama_cryptography.h",
-         r'AMA_CRYPTOGRAPHY_VERSION_STRING\s+"([^"]+)"',
-         "include/ama_cryptography.h AMA_CRYPTOGRAPHY_VERSION_STRING"),
+        ("setup.py", r'^VERSION\s*=\s*"([^"]+)"', "setup.py VERSION literal"),
+        ("pyproject.toml", r'^version\s*=\s*"([^"]+)"', "pyproject.toml [project].version"),
+        ("CMakeLists.txt", r"VERSION\s+(\d+\.\d+\.\d+)", "CMakeLists.txt project() VERSION"),
+        ("docs/conf.py", r'^version\s*=\s*"([^"]+)"', "docs/conf.py version"),
+        ("docs/conf.py", r'^release\s*=\s*"([^"]+)"', "docs/conf.py release"),
+        (
+            "include/ama_cryptography.h",
+            r'AMA_CRYPTOGRAPHY_VERSION_STRING\s+"([^"]+)"',
+            "include/ama_cryptography.h AMA_CRYPTOGRAPHY_VERSION_STRING",
+        ),
     ]
 
     failures: list[str] = []
@@ -81,8 +73,7 @@ def main() -> int:
         if found is None:
             failures.append(f"  - {desc}: pattern not found in {file}")
         elif found != canonical:
-            failures.append(
-                f"  - {desc}: {found!r} != canonical {canonical!r} (in {file})")
+            failures.append(f"  - {desc}: {found!r} != canonical {canonical!r} (in {file})")
         else:
             print(f"OK    {desc:<60s} = {found}")
 
@@ -92,14 +83,14 @@ def main() -> int:
     if root_inv != github_inv:
         failures.append(
             "  - INVARIANTS.md mismatch: root copy diverges from "
-            ".github/INVARIANTS.md (see audit 6a)")
+            ".github/INVARIANTS.md (see audit 6a)"
+        )
     else:
         print("OK    INVARIANTS.md root <-> .github/INVARIANTS.md: identical")
 
     if failures:
         print(
-            f"\nFAIL: canonical version = {canonical!r}\n"
-            f"Mismatches:\n" + "\n".join(failures),
+            f"\nFAIL: canonical version = {canonical!r}\n" f"Mismatches:\n" + "\n".join(failures),
             file=sys.stderr,
         )
         return 1

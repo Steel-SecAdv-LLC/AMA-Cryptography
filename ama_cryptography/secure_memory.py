@@ -581,9 +581,7 @@ class SecureBuffer:
                 # Common on Linux when RLIMIT_MEMLOCK is low, and on platforms
                 # without native mlock support. The buffer is still usable —
                 # pages may page to swap — so the caller is warned, not failed.
-                logger.warning(
-                    "SecureBuffer: mlock failed (%s); proceeding without page-lock", exc
-                )
+                logger.warning("SecureBuffer: mlock failed (%s); proceeding without page-lock", exc)
                 self._locked = False
         return self._data
 
@@ -636,9 +634,7 @@ def secure_buffer(size: int, lock: bool = True) -> Generator[bytearray, None, No
             secure_mlock(buf)
             did_lock = True
         except (SecureMemoryError, NotImplementedError, OSError) as exc:
-            logger.warning(
-                "secure_buffer: mlock failed (%s); proceeding without page-lock", exc
-            )
+            logger.warning("secure_buffer: mlock failed (%s); proceeding without page-lock", exc)
 
     try:
         yield buf

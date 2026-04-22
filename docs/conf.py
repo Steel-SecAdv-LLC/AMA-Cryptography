@@ -93,9 +93,13 @@ def _inventory_reachable(url: str) -> bool:
     a short timeout so sandboxed builds do not block.
     """
     probe = url.rstrip("/") + "/objects.inv"
+    # Restrict to http(s) — defence in depth against an accidental
+    # file:/ftp:/custom scheme leaking in through ``candidates`` below.
+    if not probe.startswith(("http://", "https://")):
+        return False
     try:
-        req = urllib.request.Request(probe, method="HEAD")
-        with urllib.request.urlopen(req, timeout=_INTERSPHINX_PROBE_TIMEOUT) as resp:
+        req = urllib.request.Request(probe, method="HEAD")  # noqa: S310
+        with urllib.request.urlopen(req, timeout=_INTERSPHINX_PROBE_TIMEOUT) as resp:  # noqa: S310
             return 200 <= resp.status < 400
     except (URLError, OSError, ValueError):
         return False

@@ -57,6 +57,11 @@ All notable changes to AMA Cryptography will be documented in this file. The for
     `AMA_ERROR_VERIFY_FAILED` on mismatch.
 
   - **Python API** (`ama_cryptography.pqc_backends`):
+    `native_argon2id_legacy(password, salt, ...)` — derive using the
+    pre-2.1.5 buggy path. Exposed so migration tooling and regression
+    tests can generate reference tags without forking the old code;
+    **never use it for new hashes** — `native_argon2id` is the
+    spec-compliant path.
     `native_argon2id_legacy_verify(password, salt, expected_tag, ...)`
     — returns `True` on match, `False` on mismatch. Raises
     `RuntimeError` when running against an older native library that

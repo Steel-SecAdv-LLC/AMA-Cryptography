@@ -120,50 +120,86 @@ class TestArgon2idLegacyVerify:
         verify through the legacy shim (by design).
         """
         return pq.native_argon2id_legacy(
-            self._PW, self._SALT,
-            t_cost=self._T, m_cost=self._M, parallelism=self._P,
+            self._PW,
+            self._SALT,
+            t_cost=self._T,
+            m_cost=self._M,
+            parallelism=self._P,
             out_len=self._OUT_LEN,
         )
 
     def test_verify_accepts_legacy_tag(self) -> None:
         tag = self._legacy_tag()
-        assert pq.native_argon2id_legacy_verify(
-            self._PW, self._SALT, tag,
-            t_cost=self._T, m_cost=self._M, parallelism=self._P,
-        ) is True
+        assert (
+            pq.native_argon2id_legacy_verify(
+                self._PW,
+                self._SALT,
+                tag,
+                t_cost=self._T,
+                m_cost=self._M,
+                parallelism=self._P,
+            )
+            is True
+        )
 
     def test_verify_rejects_bit_flip(self) -> None:
         tag = bytearray(self._legacy_tag())
         tag[0] ^= 0x01
-        assert pq.native_argon2id_legacy_verify(
-            self._PW, self._SALT, bytes(tag),
-            t_cost=self._T, m_cost=self._M, parallelism=self._P,
-        ) is False
+        assert (
+            pq.native_argon2id_legacy_verify(
+                self._PW,
+                self._SALT,
+                bytes(tag),
+                t_cost=self._T,
+                m_cost=self._M,
+                parallelism=self._P,
+            )
+            is False
+        )
 
     def test_verify_rejects_rfc_tag(self) -> None:
         """A tag produced by the RFC-compliant derivation sits in a
         different bit-space and must not verify through the legacy path."""
         rfc_tag = pq.native_argon2id(
-            self._PW, self._SALT,
-            t_cost=self._T, m_cost=self._M, parallelism=self._P, out_len=self._OUT_LEN,
+            self._PW,
+            self._SALT,
+            t_cost=self._T,
+            m_cost=self._M,
+            parallelism=self._P,
+            out_len=self._OUT_LEN,
         )
-        assert pq.native_argon2id_legacy_verify(
-            self._PW, self._SALT, rfc_tag,
-            t_cost=self._T, m_cost=self._M, parallelism=self._P,
-        ) is False
+        assert (
+            pq.native_argon2id_legacy_verify(
+                self._PW,
+                self._SALT,
+                rfc_tag,
+                t_cost=self._T,
+                m_cost=self._M,
+                parallelism=self._P,
+            )
+            is False
+        )
 
     def test_short_tag_rejected(self) -> None:
         with pytest.raises(ValueError, match="expected_tag"):
             pq.native_argon2id_legacy_verify(
-                self._PW, self._SALT, b"xxx",
-                t_cost=self._T, m_cost=self._M, parallelism=self._P,
+                self._PW,
+                self._SALT,
+                b"xxx",
+                t_cost=self._T,
+                m_cost=self._M,
+                parallelism=self._P,
             )
 
     def test_short_salt_rejected(self) -> None:
         with pytest.raises(ValueError, match="salt"):
             pq.native_argon2id_legacy_verify(
-                self._PW, b"short", b"x" * 32,
-                t_cost=self._T, m_cost=self._M, parallelism=self._P,
+                self._PW,
+                b"short",
+                b"x" * 32,
+                t_cost=self._T,
+                m_cost=self._M,
+                parallelism=self._P,
             )
 
 
