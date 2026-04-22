@@ -102,6 +102,7 @@ _INVARIANT7_OK: bool = _native_lib is not None
 # Deprecation warning for AMA_REQUIRE_CONSTANT_TIME is emitted by
 # pqc_backends.py at import time; no need to duplicate it here.
 
+
 # INVARIANT-7 (revised): No cryptographic fallbacks, ever.
 # When native constant-time backend is unavailable the library MUST refuse to
 # operate.  Pure-Python fallback for any cryptographic primitive is prohibited.
