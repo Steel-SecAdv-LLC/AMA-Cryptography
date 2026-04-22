@@ -39,6 +39,7 @@ from ama_cryptography.exceptions import (
 from ama_cryptography.pqc_backends import _HMAC_SHA512_NATIVE_AVAILABLE, native_hmac_sha512
 from ama_cryptography.secure_memory import secure_memzero
 
+
 # INVARIANT-7 (revised): No cryptographic fallbacks, ever.
 # When native constant-time backend is unavailable the library MUST refuse to
 # operate.  Pure-Python fallback for any cryptographic primitive is prohibited.
@@ -46,9 +47,16 @@ from ama_cryptography.secure_memory import secure_memzero
 # Documentation exception: Sphinx autodoc needs to import the module to
 # extract docstrings.  Setting AMA_SPHINX_BUILD=1 (or SPHINX_BUILD=1) permits
 # the import, but every call-time path still invokes _enforce_invariant7_km(),
-# which will raise if the native library is truly absent.
+# which will raise if the native library is truly absent.  The env-var check
+# requires an explicit truthy value so ``AMA_SPHINX_BUILD=0`` / ``=false`` does
+# NOT accidentally disable the guard.
+def _env_flag_enabled(name: str) -> bool:
+    """Return True only for an explicit truthy env value (INVARIANT-7)."""
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 _HMAC_SHA512_NATIVE = _HMAC_SHA512_NATIVE_AVAILABLE
-_AMA_DOCS_IMPORT = bool(os.environ.get("AMA_SPHINX_BUILD") or os.environ.get("SPHINX_BUILD"))
+_AMA_DOCS_IMPORT = _env_flag_enabled("AMA_SPHINX_BUILD") or _env_flag_enabled("SPHINX_BUILD")
 
 if not _AMA_DOCS_IMPORT and not _HMAC_SHA512_NATIVE:
     raise RuntimeError(

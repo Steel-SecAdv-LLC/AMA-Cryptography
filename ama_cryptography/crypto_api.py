@@ -111,8 +111,20 @@ _INVARIANT7_OK: bool = _native_lib is not None
 # without a constant-time backend; introspection for docs is orthogonal to
 # that guarantee.  Setting AMA_SPHINX_BUILD=1 (or SPHINX_BUILD=1) permits the
 # import, but every call-time path still invokes _enforce_invariant7(), which
-# will raise if the native library is truly absent.
-_AMA_DOCS_IMPORT = bool(os.environ.get("AMA_SPHINX_BUILD") or os.environ.get("SPHINX_BUILD"))
+# will raise if the native library is truly absent.  The env-var check
+# requires an explicit truthy value ("1"/"true"/"yes"/"on") so that an
+# accidental ``AMA_SPHINX_BUILD=0`` / ``=false`` does NOT bypass the
+# fail-closed import guard.
+def _env_flag_enabled(name: str) -> bool:
+    """Return True only for an explicit truthy env value.
+
+    Required for INVARIANT-7 fail-closed semantics: mere presence of the
+    variable must not disable the import guard — only an opt-in value does.
+    """
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+_AMA_DOCS_IMPORT = _env_flag_enabled("AMA_SPHINX_BUILD") or _env_flag_enabled("SPHINX_BUILD")
 if not _AMA_DOCS_IMPORT and (not _HMAC_NATIVE or not _HKDF_NATIVE):
     raise RuntimeError(
         "INVARIANT-7: Native HMAC/HKDF C accelerators are unavailable. "

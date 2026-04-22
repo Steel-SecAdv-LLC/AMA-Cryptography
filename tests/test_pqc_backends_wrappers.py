@@ -100,11 +100,15 @@ class TestArgon2idValidation:
 
 
 # ---------------------------------------------------------------------------
-# Argon2id pre-2.1.5 legacy verify shim (audit 3a).
+# Argon2id pre-shim legacy verify shim (audit 3a).
 #
-# The shim is only exposed by native libraries built against AMA >= 2.1.6
-# (when the symbol `ama_argon2id_legacy_verify` is linked). Older libraries
-# should raise RuntimeError rather than silently using the fixed path.
+# The shim is only exposed by native libraries that link the
+# ``ama_argon2id_legacy_verify`` symbol.  Libraries built without it must
+# raise ``RuntimeError`` at call time rather than silently dispatching to
+# the fixed derivation — the wrapper detects this with ``hasattr`` on
+# ``_native_lib`` and refuses.  Feature-based gating (not version-string
+# gating) is used throughout so the tests stay accurate across version
+# bumps.
 # ---------------------------------------------------------------------------
 
 

@@ -86,6 +86,7 @@ from ama_cryptography.pqc_backends import (
 )
 from ama_cryptography.secure_memory import constant_time_compare
 
+
 # ---------------------------------------------------------------------------
 # CRYPTO_AVAILABLE guard — must fail-closed at import time if the native
 # C library is missing.  Tests that need CRYPTO_AVAILABLE=False monkeypatch
@@ -94,10 +95,17 @@ from ama_cryptography.secure_memory import constant_time_compare
 # Documentation exception: Sphinx autodoc needs to import the module to
 # extract docstrings.  AMA_SPHINX_BUILD=1 permits import so the docs pipeline
 # can introspect symbols without a native backend; every legacy_compat
-# cryptographic function still checks CRYPTO_AVAILABLE at call-time.
+# cryptographic function still checks CRYPTO_AVAILABLE at call-time.  The
+# env-var check requires an explicit truthy value so ``AMA_SPHINX_BUILD=0`` /
+# ``=false`` does NOT accidentally disable the guard.
 # ---------------------------------------------------------------------------
+def _env_flag_enabled(name: str) -> bool:
+    """Return True only for an explicit truthy env value (INVARIANT-7)."""
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 CRYPTO_AVAILABLE: bool = _ED25519_NATIVE_AVAILABLE and _HKDF_NATIVE_AVAILABLE
-_AMA_DOCS_IMPORT = bool(os.environ.get("AMA_SPHINX_BUILD") or os.environ.get("SPHINX_BUILD"))
+_AMA_DOCS_IMPORT = _env_flag_enabled("AMA_SPHINX_BUILD") or _env_flag_enabled("SPHINX_BUILD")
 if not _AMA_DOCS_IMPORT and not CRYPTO_AVAILABLE:
     raise RuntimeError(
         "AMA native C library required. "

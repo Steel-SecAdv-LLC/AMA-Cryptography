@@ -2760,13 +2760,13 @@ def native_argon2id_legacy(
     out_len: int = 32,
 ) -> bytes:
     """
-    Derive an Argon2id tag using the pre-AMA-2.1.6 (buggy) derivation.
+    Derive an Argon2id tag using the pre-shim (buggy) derivation.
 
-    **Do NOT use this for new password hashes.**  AMA ≤ 2.1.5 shipped a
-    ``blake2b_long`` loop-termination bug that produces non-spec tags; this
-    wrapper reproduces that derivation verbatim.  It exists so migration
-    tooling and regression tests can generate reference tags without
-    forking the old code — the safe, spec-compliant path is
+    **Do NOT use this for new password hashes.**  Earlier AMA Cryptography
+    builds shipped a ``blake2b_long`` loop-termination bug that produces
+    non-spec tags; this wrapper reproduces that derivation verbatim.  It
+    exists so migration tooling and regression tests can generate reference
+    tags without forking the old code — the safe, spec-compliant path is
     :func:`native_argon2id`.
 
     Every call emits a :class:`SecurityWarning` so accidental use in a
@@ -2785,8 +2785,9 @@ def native_argon2id_legacy(
         Derived tag bytes of length ``out_len``.
 
     Raises:
-        RuntimeError: If the native library or the legacy shim is
-            unavailable (only AMA builds ≥ 2.1.6 ship the shim).
+        RuntimeError: If the native library is unavailable, or if the loaded
+            native library does not export ``ama_argon2id_legacy`` (only
+            builds that include the migration shim do).
         ValueError:   On parameter-range violations (same rules as
             :func:`native_argon2id`).
     """
@@ -2795,28 +2796,9 @@ def native_argon2id_legacy(
     if not hasattr(_native_lib, "ama_argon2id_legacy"):
         raise RuntimeError(
             "ama_argon2id_legacy() is not exported by the loaded native "
-            "library — rebuild against AMA Cryptography >= 2.1.6 to enable "
-            "the pre-2.1.5 migration shim."
+            "library — rebuild against a native library that exports "
+            "``ama_argon2id_legacy`` to enable the pre-shim migration path."
         )
-
-    # Loud runtime signal that this is not the path callers should be on.
-    # Raised once per call (not once per process) so call-site auditing
-    # catches every invocation, and ``stacklevel=2`` points at the caller.
-    # Emitted *after* the availability checks so a caller on a box without
-    # the native backend gets a single clean ``RuntimeError`` rather than a
-    # spurious "legacy path used" warning followed by a load failure — this
-    # keeps ``warnings.catch_warnings(record=True)`` collectors in
-    # monitoring/migration tooling accurate (warning == derivation actually
-    # ran on the legacy path) and mirrors the ordering already used by
-    # ``native_argon2id_legacy_verify``.
-    warnings.warn(
-        "native_argon2id_legacy() reproduces the pre-2.1.5 blake2b_long bug "
-        "for read-only migration verification ONLY. Use native_argon2id() "
-        "for any new hash; new deployments must not store tags derived by "
-        "this function. See CHANGELOG.md [Unreleased] § BREAKING.",
-        SecurityWarning,
-        stacklevel=2,
-    )
 
     _UINT32_MAX = 0xFFFFFFFF
     if len(salt) < 8:
@@ -2834,6 +2816,24 @@ def native_argon2id_legacy(
         raise ValueError(
             f"Argon2id m_cost must be in [{8 * parallelism}, {_UINT32_MAX}] KiB, got {m_cost}"
         )
+
+    # Loud runtime signal that this is not the path callers should be on.
+    # Raised once per call (not once per process) so call-site auditing
+    # catches every invocation, and ``stacklevel=2`` points at the caller.
+    # Emitted *after* both availability AND parameter validation so the
+    # warning is only observed when the legacy derivation actually
+    # executes — rejected-validation calls (e.g. short salt, out-of-range
+    # out_len) raise ``ValueError`` without polluting
+    # ``warnings.catch_warnings(record=True)`` collectors in
+    # monitoring/migration tooling that count legacy-path usage.
+    warnings.warn(
+        "native_argon2id_legacy() reproduces the pre-shim blake2b_long bug "
+        "for read-only migration verification ONLY. Use native_argon2id() "
+        "for any new hash; new deployments must not store tags derived by "
+        "this function. See CHANGELOG.md [Unreleased] § BREAKING.",
+        SecurityWarning,
+        stacklevel=2,
+    )
 
     out_buf = ctypes.create_string_buffer(out_len)
     rc = _native_lib.ama_argon2id_legacy(
@@ -2862,15 +2862,15 @@ def native_argon2id_legacy_verify(
     parallelism: int = 4,
 ) -> bool:
     """
-    Constant-time verify a pre-AMA-2.1.6 Argon2id tag.
+    Constant-time verify a pre-shim Argon2id tag.
 
-    AMA ≤ 2.1.5 shipped a ``blake2b_long`` loop-termination bug (see
-    ``CHANGELOG.md`` [Unreleased] § BREAKING). Stored hashes derived by
-    those versions sit in a non-spec bit-space and will not verify against
-    the post-fix :func:`native_argon2id`.  This helper reproduces the
-    legacy derivation and compares against ``expected_tag`` with
-    :c:func:`ama_consttime_memcmp` so a deployment can run the
-    "verify-with-legacy, re-derive-with-fixed, overwrite" migration
+    Earlier AMA Cryptography builds shipped a ``blake2b_long``
+    loop-termination bug (see ``CHANGELOG.md`` [Unreleased] § BREAKING).
+    Stored hashes derived by those versions sit in a non-spec bit-space and
+    will not verify against the post-fix :func:`native_argon2id`.  This
+    helper reproduces the legacy derivation and compares against
+    ``expected_tag`` with :c:func:`ama_consttime_memcmp` so a deployment can
+    run the "verify-with-legacy, re-derive-with-fixed, overwrite" migration
     recommended in the changelog without forking the old code.
 
     Args:
@@ -2885,8 +2885,9 @@ def native_argon2id_legacy_verify(
         ``True`` on constant-time match, ``False`` on mismatch.
 
     Raises:
-        RuntimeError: If the native library or the legacy shim is
-            unavailable (only AMA builds ≥ 2.1.6 ship the shim).
+        RuntimeError: If the native library is unavailable, or if the loaded
+            native library does not export ``ama_argon2id_legacy_verify``
+            (only builds that include the migration shim do).
         ValueError:   On parameter-range violations (same rules as
             :func:`native_argon2id`).
     """
@@ -2895,8 +2896,9 @@ def native_argon2id_legacy_verify(
     if not hasattr(_native_lib, "ama_argon2id_legacy_verify"):
         raise RuntimeError(
             "ama_argon2id_legacy_verify() is not exported by the loaded native "
-            "library — rebuild against AMA Cryptography >= 2.1.6 to enable the "
-            "pre-2.1.5 migration shim."
+            "library — rebuild against a native library that exports "
+            "``ama_argon2id_legacy_verify`` to enable the pre-shim "
+            "migration path."
         )
 
     _UINT32_MAX = 0xFFFFFFFF
