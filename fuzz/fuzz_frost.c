@@ -25,6 +25,26 @@
  *   cmake -B build-fuzz -DAMA_BUILD_FUZZ=ON -DCMAKE_C_COMPILER=clang \
  *         -DAMA_USE_NATIVE_PQC=ON
  *   cmake --build build-fuzz --target fuzz_frost
+ *
+ * Known limitation (harness non-determinism, PR #258 review thread):
+ *   ama_frost_round1_commit() calls scalar_random() internally for nonce
+ *   generation (RFC 9591 §2.1 mandates fresh per-round randomness — nonce
+ *   reuse is total key compromise, so this cannot be relaxed in the core
+ *   code). Consequently, a given fuzz input does not yield a byte-exact
+ *   protocol transcript across runs; libFuzzer corpus minimization and
+ *   exact-input reproduction are degraded.
+ *
+ *   What still works: ASan/UBSan/MSan instrumentation catches UB, OOB,
+ *   use-after-free, and undefined behaviour across round1 -> round2 ->
+ *   aggregate; crash discovery is unaffected.
+ *
+ *   Future improvement (deferred as a follow-up, not for this PR): a
+ *   custom lower-layer harness that fuzzes the primitives round1_commit
+ *   wraps (scalar arithmetic, point ops, hash-to-curve) directly,
+ *   without invoking scalar_random. A test-only deterministic-nonce
+ *   branch in the core FROST code is explicitly rejected: the cost of
+ *   getting that misconfiguration wrong (shipping non-random nonces to
+ *   production) outweighs the benefit of a reproducible fuzz input.
  */
 
 #include "ama_cryptography.h"
