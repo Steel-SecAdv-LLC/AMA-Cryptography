@@ -15,6 +15,8 @@ were previously uncovered.
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from ama_cryptography import pqc_backends as pq
@@ -72,8 +74,16 @@ class TestArgon2idValidation:
             pq.native_argon2id(b"pw", b"short", t_cost=1, m_cost=8, parallelism=1)
 
     def test_output_too_short(self) -> None:
-        with pytest.raises(ValueError, match="output length"):
+        with pytest.raises(ValueError, match="out_len"):
             pq.native_argon2id(b"pw", self._GOOD_SALT, out_len=2)
+
+    def test_output_too_large_rejected_before_allocation(self) -> None:
+        # out_len > UINT32_MAX must be rejected before
+        # ``ctypes.create_string_buffer(out_len)`` is called, so a caller
+        # passing 2**32 does not silently allocate 4 GiB on a
+        # memory-constrained host. Mirrors the cap on the legacy wrapper.
+        with pytest.raises(ValueError, match="out_len"):
+            pq.native_argon2id(b"pw", self._GOOD_SALT, out_len=2**32)
 
     def test_t_cost_out_of_range(self) -> None:
         with pytest.raises(ValueError, match="t_cost"):
@@ -117,16 +127,21 @@ class TestArgon2idLegacyVerify:
 
         We exercise ``native_argon2id_legacy`` because ``native_argon2id``
         is always the spec-compliant path — a tag derived by it would not
-        verify through the legacy shim (by design).
+        verify through the legacy shim (by design).  The wrapper is
+        contracted to emit a ``SecurityWarning`` every call; migration
+        tooling (and these tests) suppress it explicitly.  A dedicated
+        test below asserts the warning IS raised when left unsuppressed.
         """
-        return pq.native_argon2id_legacy(
-            self._PW,
-            self._SALT,
-            t_cost=self._T,
-            m_cost=self._M,
-            parallelism=self._P,
-            out_len=self._OUT_LEN,
-        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", pq.SecurityWarning)
+            return pq.native_argon2id_legacy(
+                self._PW,
+                self._SALT,
+                t_cost=self._T,
+                m_cost=self._M,
+                parallelism=self._P,
+                out_len=self._OUT_LEN,
+            )
 
     def test_verify_accepts_legacy_tag(self) -> None:
         tag = self._legacy_tag()
@@ -201,6 +216,54 @@ class TestArgon2idLegacyVerify:
                 m_cost=self._M,
                 parallelism=self._P,
             )
+
+    def test_legacy_derive_emits_security_warning(self) -> None:
+        """``native_argon2id_legacy`` must emit a SecurityWarning every call.
+
+        The derivation reproduces the pre-2.1.5 blake2b_long bug on
+        purpose; a runtime warning makes accidental use in a production
+        path loud rather than silent. Fires once per call (not once
+        per process) so call-site auditing catches every invocation.
+        """
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            pq.native_argon2id_legacy(
+                self._PW,
+                self._SALT,
+                t_cost=self._T,
+                m_cost=self._M,
+                parallelism=self._P,
+                out_len=self._OUT_LEN,
+            )
+        security_warnings = [w for w in caught if issubclass(w.category, pq.SecurityWarning)]
+        assert len(security_warnings) == 1, "expected exactly one SecurityWarning"
+        message = str(security_warnings[0].message)
+        assert "native_argon2id_legacy" in message
+        assert "migration" in message.lower() or "pre-2.1.5" in message
+
+    def test_legacy_verify_does_not_emit_security_warning(self) -> None:
+        """``native_argon2id_legacy_verify`` is the intended migration path
+        and must stay quiet — a warning on every verify call during a
+        rotation would drown the operator in noise. The footgun live
+        entirely on the derivation side.
+        """
+        # Produce a tag via the raw derivation (warning suppressed inside
+        # ``_legacy_tag``) so we can test the verify call in isolation.
+        tag = self._legacy_tag()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            pq.native_argon2id_legacy_verify(
+                self._PW,
+                self._SALT,
+                tag,
+                t_cost=self._T,
+                m_cost=self._M,
+                parallelism=self._P,
+            )
+        security_warnings = [w for w in caught if issubclass(w.category, pq.SecurityWarning)]
+        assert (
+            security_warnings == []
+        ), f"_verify must stay silent; saw {[str(w.message) for w in security_warnings]}"
 
 
 # ---------------------------------------------------------------------------

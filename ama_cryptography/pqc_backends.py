@@ -40,6 +40,7 @@ import ctypes
 import logging
 import os
 import platform
+import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -2418,7 +2419,6 @@ elif _HMAC_SHA3_256_NATIVE_AVAILABLE:
 else:
     HMAC_SHA3_256_AVAILABLE = False
     HMAC_SHA3_256_BACKEND = None
-    import warnings
 
     warnings.warn(
         "HMAC-SHA3-256 native backend not available. "
@@ -2715,8 +2715,14 @@ def native_argon2id(
     _UINT32_MAX = 0xFFFFFFFF
     if len(salt) < 8:
         raise ValueError(f"Argon2id salt must be >= 8 bytes, got {len(salt)}")
-    if out_len < 4:
-        raise ValueError(f"Argon2id output length must be >= 4, got {out_len}")
+    # Upper bound: Argon2 encodes out_len into H0 as a little-endian
+    # uint32 (RFC 9106 §3.2). Without this cap a caller passing
+    # out_len=2**32 would allocate 4 GiB via ``ctypes.create_string_buffer``
+    # before the C core could reject it, and on a memory-constrained host
+    # the allocation itself is the footgun. Kept in sync with the matching
+    # cap on ``native_argon2id_legacy``/``native_argon2id_legacy_verify``.
+    if out_len < 4 or out_len > _UINT32_MAX:
+        raise ValueError(f"Argon2id out_len must be in [4, {_UINT32_MAX}] bytes, got {out_len}")
     if t_cost < 1 or t_cost > _UINT32_MAX:
         raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
     if parallelism < 1 or parallelism > _UINT32_MAX:
@@ -2763,6 +2769,10 @@ def native_argon2id_legacy(
     forking the old code — the safe, spec-compliant path is
     :func:`native_argon2id`.
 
+    Every call emits a :class:`SecurityWarning` so accidental use in a
+    production path is loud at runtime.  Suppress it only inside migration
+    tooling that knows it is generating reference tags for verification.
+
     Args:
         password:    Password bytes.
         salt:        Salt bytes (≥ 8-byte minimum).
@@ -2780,6 +2790,18 @@ def native_argon2id_legacy(
         ValueError:   On parameter-range violations (same rules as
             :func:`native_argon2id`).
     """
+    # Loud runtime signal that this is not the path callers should be on.
+    # Raised once per call (not once per process) so call-site auditing
+    # catches every invocation, and ``stacklevel=2`` points at the caller.
+    warnings.warn(
+        "native_argon2id_legacy() reproduces the pre-2.1.5 blake2b_long bug "
+        "for read-only migration verification ONLY. Use native_argon2id() "
+        "for any new hash; new deployments must not store tags derived by "
+        "this function. See CHANGELOG.md [Unreleased] § BREAKING.",
+        SecurityWarning,
+        stacklevel=2,
+    )
+
     if _native_lib is None or not _ARGON2_NATIVE_AVAILABLE:
         raise RuntimeError("Argon2id native backend not available. " + _INSTALL_HINT)
     if not hasattr(_native_lib, "ama_argon2id_legacy"):
