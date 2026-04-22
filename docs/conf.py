@@ -20,11 +20,29 @@ from urllib.error import URLError
 # (PR #256 review thread r3122679539).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# Tell ama_cryptography modules that we are in a documentation build so the
-# INVARIANT-7 import guards in crypto_api.py / key_management.py permit
-# introspection without a native backend.  The call-time enforcement
-# (_enforce_invariant7*) still raises if any code is actually executed.
-os.environ.setdefault("AMA_SPHINX_BUILD", "1")
+# INVARIANT-7 docs-build gate is NOT mutated from this config file.  The
+# ``AMA_SPHINX_BUILD=1`` opt-in must be set explicitly by whoever drives
+# the docs build (``Makefile`` target ``docs``: sets it on the
+# ``sphinx-build`` command line; ``.github/workflows/auto-docs.yml``:
+# sets it via ``env:`` on the build step).  Config files must not
+# broaden the INVARIANT-7 bypass beyond "explicitly set by the docs
+# build" — ``os.environ.setdefault(...)`` here would leak the bypass
+# into any process that imports ``docs/conf.py`` for inspection
+# (tooling, tests, stubgen, etc.) and mask misconfiguration where a
+# caller genuinely lacks the native backend but isn't running Sphinx.
+if not os.environ.get("AMA_SPHINX_BUILD") and not os.environ.get("SPHINX_BUILD"):
+    # Not a fatal error — docs/conf.py can be imported for type-stub
+    # generation and similar tooling that does not need autodoc to
+    # succeed.  Only Sphinx itself needs the env var, and Sphinx sees
+    # it because the Makefile / auto-docs.yml set it on the outer
+    # command line.  We merely warn so a misconfigured invocation is
+    # visible in the build log.
+    print(
+        "docs/conf.py: warning: AMA_SPHINX_BUILD / SPHINX_BUILD not set; "
+        "autodoc will fail if the native backend is unavailable. "
+        "Invoke via ``make docs`` or set AMA_SPHINX_BUILD=1 explicitly.",
+        file=sys.stderr,
+    )
 
 # Project information
 project = "AMA Cryptography"

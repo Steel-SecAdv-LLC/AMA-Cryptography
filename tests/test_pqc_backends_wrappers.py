@@ -78,12 +78,21 @@ class TestArgon2idValidation:
             pq.native_argon2id(b"pw", self._GOOD_SALT, out_len=2)
 
     def test_output_too_large_rejected_before_allocation(self) -> None:
-        # out_len > UINT32_MAX must be rejected before
-        # ``ctypes.create_string_buffer(out_len)`` is called, so a caller
-        # passing 2**32 does not silently allocate 4 GiB on a
-        # memory-constrained host. Mirrors the cap on the legacy wrapper.
+        # out_len above the application-sane cap
+        # (``_ARGON2ID_MAX_TAG_LEN`` = 1024 bytes, 32× the default tag)
+        # must be rejected before ``ctypes.create_string_buffer(
+        # out_len)`` is called, so a caller-controlled length cannot
+        # become a memory-exhaustion / DoS vector on a memory-
+        # constrained host.  Mirrors the cap on the C-side
+        # ``ama_argon2id_core`` / ``ama_argon2id_legacy_verify`` (see
+        # ``AMA_ARGON2ID_MAX_TAG_LEN`` in ``include/ama_cryptography.h``
+        # — PR #258 review thread r31xxxxxxxx).
         with pytest.raises(ValueError, match="out_len"):
             pq.native_argon2id(b"pw", self._GOOD_SALT, out_len=2**32)
+        # Just-above-cap value is also rejected (defense in depth:
+        # confirms the boundary is at 1024 not UINT32_MAX).
+        with pytest.raises(ValueError, match="out_len"):
+            pq.native_argon2id(b"pw", self._GOOD_SALT, out_len=pq._ARGON2ID_MAX_TAG_LEN + 1)
 
     def test_t_cost_out_of_range(self) -> None:
         with pytest.raises(ValueError, match="t_cost"):

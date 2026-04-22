@@ -619,7 +619,7 @@ static ama_error_t ama_argon2id_core(
      * truncated during H0 prehash and silently produce a mismatched
      * derivation. Reject at the boundary — also bounds the
      * heap-allocated buffer downstream in ama_argon2id_legacy_verify. */
-    if (out_len > UINT32_MAX) {
+    if (out_len > AMA_ARGON2ID_MAX_TAG_LEN) {
         return AMA_ERROR_INVALID_PARAM;
     }
     if (!password && pwd_len > 0) {
@@ -881,11 +881,16 @@ AMA_API ama_error_t ama_argon2id_legacy_verify(
     uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
     const uint8_t *expected_tag, size_t tag_len)
 {
-    if (!expected_tag || tag_len < 4 || tag_len > UINT32_MAX) {
-        /* Upper bound: Argon2 encodes outlen as uint32 in H0 (RFC 9106
-         * §3.2); rejecting tag_len > UINT32_MAX here also bounds the
-         * calloc below and prevents unbounded allocations on malformed
-         * input. */
+    if (!expected_tag || tag_len < 4 || tag_len > AMA_ARGON2ID_MAX_TAG_LEN) {
+        /* Upper bound: application-sane ceiling on Argon2 tag length
+         * (``AMA_ARGON2ID_MAX_TAG_LEN`` = 1024, 32× the default 32-byte
+         * tag).  RFC 9106 §3.2 permits up to UINT32_MAX, but every real
+         * deployment uses 16–64 bytes and sizes above ~128 add no
+         * cryptographic value.  Rejecting here bounds the ``calloc(
+         * tag_len, 1)`` below so a caller-controlled ``expected_tag``
+         * length cannot become a memory-exhaustion / DoS vector, and
+         * also caps worst-case CPU time inside
+         * ``ama_argon2id_core()``'s blake2b_long tail. */
         return AMA_ERROR_INVALID_PARAM;
     }
 

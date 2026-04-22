@@ -527,6 +527,14 @@ def _setup_x25519_ctypes(lib: ctypes.CDLL) -> bool:
 # Argon2id native availability
 _ARGON2_NATIVE_AVAILABLE = False
 
+# Application-sane ceiling on Argon2id output/tag length.  RFC 9106 §3.2
+# permits out_len up to 2^32-1, but every real deployment uses 16–64
+# bytes; 1024 is 32× the default tag length and leaves ample headroom
+# while bounding worst-case CPU + memory in
+# ``ama_argon2id_legacy_verify``'s ``calloc(tag_len, 1)`` path.  Kept in
+# sync with ``AMA_ARGON2ID_MAX_TAG_LEN`` in ``include/ama_cryptography.h``.
+_ARGON2ID_MAX_TAG_LEN = 1024
+
 
 def _setup_argon2_ctypes(lib: ctypes.CDLL) -> bool:
     """Configure ctypes for Argon2id functions."""
@@ -2715,14 +2723,20 @@ def native_argon2id(
     _UINT32_MAX = 0xFFFFFFFF
     if len(salt) < 8:
         raise ValueError(f"Argon2id salt must be >= 8 bytes, got {len(salt)}")
-    # Upper bound: Argon2 encodes out_len into H0 as a little-endian
-    # uint32 (RFC 9106 §3.2). Without this cap a caller passing
-    # out_len=2**32 would allocate 4 GiB via ``ctypes.create_string_buffer``
-    # before the C core could reject it, and on a memory-constrained host
-    # the allocation itself is the footgun. Kept in sync with the matching
-    # cap on ``native_argon2id_legacy``/``native_argon2id_legacy_verify``.
-    if out_len < 4 or out_len > _UINT32_MAX:
-        raise ValueError(f"Argon2id out_len must be in [4, {_UINT32_MAX}] bytes, got {out_len}")
+    # Upper bound on ``out_len`` is the application-sane ceiling
+    # ``_ARGON2ID_MAX_TAG_LEN`` (1024 bytes, 32× the default 32-byte
+    # tag).  RFC 9106 §3.2 permits up to UINT32_MAX, but every real
+    # deployment uses 16–64 bytes and sizes above ~128 add no
+    # cryptographic value while turning a caller-controlled length
+    # into a memory-exhaustion / DoS vector (a 4 GiB ``out_len`` would
+    # trigger a 4 GiB ``ctypes.create_string_buffer`` allocation below).
+    # Kept in sync with the C-side ``AMA_ARGON2ID_MAX_TAG_LEN`` in
+    # ``include/ama_cryptography.h`` and the matching caps on the two
+    # legacy-shim wrappers.
+    if out_len < 4 or out_len > _ARGON2ID_MAX_TAG_LEN:
+        raise ValueError(
+            f"Argon2id out_len must be in [4, {_ARGON2ID_MAX_TAG_LEN}] bytes, got {out_len}"
+        )
     if t_cost < 1 or t_cost > _UINT32_MAX:
         raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
     if parallelism < 1 or parallelism > _UINT32_MAX:
@@ -2803,11 +2817,13 @@ def native_argon2id_legacy(
     _UINT32_MAX = 0xFFFFFFFF
     if len(salt) < 8:
         raise ValueError(f"Argon2id salt must be >= 8 bytes, got {len(salt)}")
-    # Upper bound: Argon2 encodes outlen as a little-endian uint32 in H0
-    # (RFC 9106 §3.2); an out_len above UINT32_MAX would silently truncate
-    # during H0 prehash and produce a surprising derivation.
-    if out_len < 4 or out_len > _UINT32_MAX:
-        raise ValueError(f"Argon2id out_len must be in [4, {_UINT32_MAX}] bytes, got {out_len}")
+    # Upper bound on ``out_len`` mirrors ``native_argon2id``:
+    # ``_ARGON2ID_MAX_TAG_LEN`` (1024 bytes, 32× the default tag).  Kept
+    # in sync with the C-side ``AMA_ARGON2ID_MAX_TAG_LEN``.
+    if out_len < 4 or out_len > _ARGON2ID_MAX_TAG_LEN:
+        raise ValueError(
+            f"Argon2id out_len must be in [4, {_ARGON2ID_MAX_TAG_LEN}] bytes, got {out_len}"
+        )
     if t_cost < 1 or t_cost > _UINT32_MAX:
         raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
     if parallelism < 1 or parallelism > _UINT32_MAX:
@@ -2905,11 +2921,18 @@ def native_argon2id_legacy_verify(
     tag_len = len(expected_tag)
     if len(salt) < 8:
         raise ValueError(f"Argon2id salt must be >= 8 bytes, got {len(salt)}")
-    # Upper bound: Argon2 encodes outlen as uint32 in H0 (RFC 9106 §3.2);
-    # a tag above UINT32_MAX would silently truncate during prehash and
-    # also feed an unbounded size_t into the C helper's calloc().
-    if tag_len < 4 or tag_len > _UINT32_MAX:
-        raise ValueError(f"expected_tag must be in [4, {_UINT32_MAX}] bytes, got {tag_len}")
+    # Upper bound on ``tag_len``: ``_ARGON2ID_MAX_TAG_LEN`` (1024 bytes,
+    # 32× the default).  Tighter than the theoretical ``UINT32_MAX``
+    # because a caller-controlled ``expected_tag`` length would
+    # otherwise become a memory-exhaustion / DoS vector in the C
+    # helper's ``calloc(tag_len, 1)`` for the freshly-derived
+    # ``computed`` buffer.  Kept in sync with the C-side
+    # ``AMA_ARGON2ID_MAX_TAG_LEN`` and the ``native_argon2id`` /
+    # ``native_argon2id_legacy`` derivation caps.
+    if tag_len < 4 or tag_len > _ARGON2ID_MAX_TAG_LEN:
+        raise ValueError(
+            f"expected_tag must be in [4, {_ARGON2ID_MAX_TAG_LEN}] bytes, got {tag_len}"
+        )
     if t_cost < 1 or t_cost > _UINT32_MAX:
         raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
     if parallelism < 1 or parallelism > _UINT32_MAX:

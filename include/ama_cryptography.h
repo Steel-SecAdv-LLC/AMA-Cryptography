@@ -958,6 +958,20 @@ AMA_API ama_error_t ama_x25519_key_exchange(
 #define AMA_ARGON2_TAG_BYTES   32
 
 /**
+ * @brief Upper bound on Argon2id output/tag length accepted by the public API.
+ *
+ * RFC 9106 §3.2 permits out_len up to 2^32 - 1 bytes, but every real-world
+ * deployment uses 16–64 bytes; sizes above ~128 are cryptographically
+ * indistinguishable from 64 and only waste compute / memory.  A 1024-byte
+ * cap (32× the default tag length) is the application-sane ceiling we
+ * enforce at every public entry point to bound worst-case CPU time and
+ * prevent a caller-controlled ``tag_len`` from becoming a
+ * memory-exhaustion / DoS vector in ``ama_argon2id_legacy_verify`` (which
+ * heap-allocates ``computed[tag_len]`` to hold the freshly-derived tag).
+ */
+#define AMA_ARGON2ID_MAX_TAG_LEN  1024u
+
+/**
  * @brief Argon2id password hashing / key derivation (RFC 9106)
  *
  * Memory-hard KDF with resistance to GPU/ASIC attacks.

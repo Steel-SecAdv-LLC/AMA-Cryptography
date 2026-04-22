@@ -97,6 +97,7 @@ jobs:
           - fuzz_x25519
           - fuzz_argon2
           - fuzz_secp256k1
+          - fuzz_frost
         # SPHINCS+ is too slow for CI fuzzing — run manually
         # - fuzz_sphincs
 
