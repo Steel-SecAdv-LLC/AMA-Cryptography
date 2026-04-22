@@ -9,7 +9,6 @@ import os
 import sys
 import urllib.request
 from pathlib import Path
-from typing import Optional
 from urllib.error import URLError
 
 # Add repo root (parent of docs/) to sys.path so autodoc can import the
@@ -88,7 +87,7 @@ _INTERSPHINX_CACHE = os.path.join(os.path.dirname(__file__), "_intersphinx")
 _INTERSPHINX_PROBE_TIMEOUT = float(os.environ.get("AMA_INTERSPHINX_PROBE_TIMEOUT", "3"))
 
 
-def _vendored_inventory(name: str) -> Optional[str]:
+def _vendored_inventory(name: str) -> str | None:
     path = os.path.join(_INTERSPHINX_CACHE, f"{name}.inv")
     return path if os.path.exists(path) else None
 
