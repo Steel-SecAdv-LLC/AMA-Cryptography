@@ -593,15 +593,21 @@ class SecureBuffer:
         exc_val: Optional[BaseException],
         exc_tb: Optional[TracebackType],
     ) -> None:
-        """Exit context, munlock if locked, and zero buffer."""
+        """Exit context: zero buffer first (while still pinned), then munlock."""
         if self._data is not None:
+            # CRITICAL ORDER: zero FIRST while the pages are still mlocked
+            # (pinned in RAM), THEN munlock.  If we reversed these two
+            # operations the kernel could swap the still-sensitive pages to
+            # disk between ``secure_munlock`` returning and
+            # ``secure_memzero`` running, leaking secret material to
+            # swapfile — a serious defence-in-depth regression.
+            secure_memzero(self._data)
             if self._locked:
                 try:
                     secure_munlock(self._data)
                 except (SecureMemoryError, NotImplementedError, OSError) as exc:
                     logger.warning("SecureBuffer: munlock failed: %s", exc)
                 self._locked = False
-            secure_memzero(self._data)
             self._data = None
 
         self._entered = False
@@ -641,12 +647,16 @@ def secure_buffer(size: int, lock: bool = True) -> Generator[bytearray, None, No
     try:
         yield buf
     finally:
+        # CRITICAL ORDER: zero FIRST while pages are still mlocked, THEN
+        # munlock.  See ``SecureBuffer.__exit__`` for the full rationale —
+        # reversing the order permits the kernel to page sensitive data
+        # to swap between munlock returning and memzero running.
+        secure_memzero(buf)
         if did_lock:
             try:
                 secure_munlock(buf)
             except (SecureMemoryError, NotImplementedError, OSError) as exc:
                 logger.warning("secure_buffer: munlock failed: %s", exc)
-        secure_memzero(buf)
 
 
 def _detect_mlock_available() -> bool:
