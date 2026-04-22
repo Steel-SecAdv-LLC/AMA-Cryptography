@@ -42,7 +42,8 @@ fi
 
 INCLUDE_DIR="include"
 
-# List of all fuzz targets (must match files in fuzz/ directory)
+# List of all fuzz targets (must match files in fuzz/ directory).
+# Keep in sync with fuzz/CMakeLists.txt: FUZZ_CORE_TARGETS / FUZZ_PQC_TARGETS.
 FUZZ_TARGETS=(
     fuzz_sha3
     fuzz_ed25519
@@ -56,6 +57,7 @@ FUZZ_TARGETS=(
     fuzz_x25519
     fuzz_argon2
     fuzz_secp256k1
+    fuzz_frost
 )
 
 # Compile each fuzz target
