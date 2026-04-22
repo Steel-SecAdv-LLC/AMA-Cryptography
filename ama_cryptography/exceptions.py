@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0
 """
 AMA Cryptography Exception Classes
-=================================
+==================================
 
 Centralized exception and warning classes for the AMA Cryptography package.
 All modules should import exceptions from this module to ensure consistency.

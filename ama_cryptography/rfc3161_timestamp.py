@@ -252,8 +252,8 @@ def get_timestamp(
     """
     Obtain RFC 3161 timestamp for data from a Time-Stamp Authority.
 
-    Process:
-    --------
+    **Process**
+
     1. Compute hash of data using specified algorithm
     2. Create RFC 3161 TimeStampReq with hash
     3. Send request to TSA server via HTTP POST
@@ -261,27 +261,29 @@ def get_timestamp(
     5. Extract timestamp token from response
 
     Args:
-        data: Data to timestamp (will be hashed)
-        tsa_url: URL of RFC 3161 Time-Stamp Authority
-                 Default: FreeTSA.org public service
-        hash_algorithm: Hash algorithm to use ('sha256', 'sha3-256', 'sha512')
-                       Default: 'sha3-256' (consistent with AMA Cryptography)
-        certificate_file: Optional path to TSA certificate for verification
-        tsa_mode: Operating mode for timestamping:
-                  - "online" (default): contact a real TSA server
-                  - "mock": use MockTSA for offline / testing purposes
-                  - "disabled": skip timestamping; returns a TimestampResult
-                    with tsa_url='disabled' and an empty token
+        data: Data to timestamp (will be hashed).
+        tsa_url: URL of RFC 3161 Time-Stamp Authority.
+            Default: FreeTSA.org public service.
+        hash_algorithm: Hash algorithm to use (``'sha256'``, ``'sha3-256'``,
+            ``'sha512'``). Default: ``'sha3-256'`` (consistent with AMA
+            Cryptography).
+        certificate_file: Optional path to TSA certificate for verification.
+        tsa_mode: Operating mode for timestamping. One of:
+
+            - ``"online"`` (default): contact a real TSA server.
+            - ``"mock"``: use MockTSA for offline / testing purposes.
+            - ``"disabled"``: skip timestamping; returns a TimestampResult
+              with ``tsa_url='disabled'`` and an empty token.
 
     Returns:
-        TimestampResult with timestamp token and metadata.  When tsa_mode
+        TimestampResult with timestamp token and metadata.  When ``tsa_mode``
         is ``"disabled"``, returns a TimestampResult with ``tsa_url='disabled'``
         and ``token=b""``.  Never returns ``None``.
 
     Raises:
-        TimestampUnavailableError: If rfc3161ng library not installed (online mode)
-        TimestampError: If timestamp request fails
-        ValueError: If hash_algorithm or tsa_mode is not supported
+        TimestampUnavailableError: If rfc3161ng library not installed (online mode).
+        TimestampError: If timestamp request fails.
+        ValueError: If ``hash_algorithm`` or ``tsa_mode`` is not supported.
 
     Example:
         >>> result = get_timestamp(b"Important document")
@@ -290,14 +292,15 @@ def get_timestamp(
         >>> with open("document.tsr", "wb") as f:
         ...     f.write(result.token)
 
-    Public TSA Services:
-    --------------------
+    **Public TSA Services**
+
     - FreeTSA: https://freetsa.org/tsr (free, no registration)
     - DigiCert: http://timestamp.digicert.com (free, no registration)
     - GlobalSign: http://timestamp.globalsign.com/tsa/tsa (free)
 
-    Note: For production use, consider running your own TSA server or
-          using a commercial service with SLA guarantees.
+    Note:
+        For production use, consider running your own TSA server or using a
+        commercial service with SLA guarantees.
     """
     if tsa_mode not in ("online", "mock", "disabled"):
         raise ValueError(

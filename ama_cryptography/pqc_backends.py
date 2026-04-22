@@ -877,15 +877,11 @@ class AmaContext:
 
     Algorithm constants (``ama_algorithm_t`` enum values from the C header):
 
-    ==============================  ======
-    Name                            Value
-    ==============================  ======
-    ``AmaContext.ALG_ML_DSA_65``       0
-    ``AmaContext.ALG_KYBER_1024``      1
-    ``AmaContext.ALG_SPHINCS_256F``    2
-    ``AmaContext.ALG_ED25519``         3
-    ``AmaContext.ALG_HYBRID``          4
-    ==============================  ======
+    - ``AmaContext.ALG_ML_DSA_65`` = 0
+    - ``AmaContext.ALG_KYBER_1024`` = 1
+    - ``AmaContext.ALG_SPHINCS_256F`` = 2
+    - ``AmaContext.ALG_ED25519`` = 3
+    - ``AmaContext.ALG_HYBRID`` = 4
 
     Example::
 

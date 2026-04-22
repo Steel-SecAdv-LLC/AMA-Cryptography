@@ -21,26 +21,26 @@
 extern "C" {
 #endif
 
-/* Implementation level enum */
+/** Dispatch implementation level selected at runtime. */
 typedef enum {
-    AMA_IMPL_GENERIC = 0,
-    AMA_IMPL_AVX2    = 1,
-    AMA_IMPL_AVX512  = 2,
-    AMA_IMPL_NEON    = 3,
-    AMA_IMPL_SVE2    = 4,
+    AMA_IMPL_GENERIC = 0,  /**< Portable scalar C reference implementation. */
+    AMA_IMPL_AVX2    = 1,  /**< x86-64 AVX2 (256-bit SIMD). */
+    AMA_IMPL_AVX512  = 2,  /**< x86-64 AVX-512 (512-bit SIMD; where enabled). */
+    AMA_IMPL_NEON    = 3,  /**< ARM64 NEON / AdvSIMD. */
+    AMA_IMPL_SVE2    = 4,  /**< ARM64 SVE2 (scalable vectors). */
 } ama_impl_level_t;
 
-/* Dispatch info (read-only after init) */
+/** Dispatch info populated by ama_dispatch_init() (read-only after init). */
 typedef struct {
-    ama_impl_level_t sha3;
-    ama_impl_level_t kyber;
-    ama_impl_level_t dilithium;
-    ama_impl_level_t sphincs;
-    ama_impl_level_t aes_gcm;
-    ama_impl_level_t ed25519;
-    ama_impl_level_t chacha20poly1305;
-    ama_impl_level_t argon2;
-    const char *arch_name;
+    ama_impl_level_t sha3;              /**< Selected SHA3 / Keccak-f[1600] path. */
+    ama_impl_level_t kyber;             /**< Selected Kyber NTT / pointwise path. */
+    ama_impl_level_t dilithium;         /**< Selected Dilithium NTT / pointwise path. */
+    ama_impl_level_t sphincs;           /**< Selected SPHINCS+ path. */
+    ama_impl_level_t aes_gcm;           /**< Selected AES-256-GCM path (AES-NI, etc.). */
+    ama_impl_level_t ed25519;           /**< Selected Ed25519 field-element path. */
+    ama_impl_level_t chacha20poly1305;  /**< Selected ChaCha20-Poly1305 path. */
+    ama_impl_level_t argon2;            /**< Selected Argon2 G compression path. */
+    const char *arch_name;              /**< Human-readable architecture label (for diagnostics). */
 } ama_dispatch_info_t;
 
 /* ============================================================================

@@ -105,7 +105,15 @@ _INVARIANT7_OK: bool = _native_lib is not None
 # INVARIANT-7 (revised): No cryptographic fallbacks, ever.
 # When native constant-time backend is unavailable the library MUST refuse to
 # operate.  Pure-Python fallback for any cryptographic primitive is prohibited.
-if not _HMAC_NATIVE or not _HKDF_NATIVE:
+#
+# Documentation exception: Sphinx autodoc needs to import the module to
+# extract docstrings.  The guard's purpose is to refuse *cryptographic calls*
+# without a constant-time backend; introspection for docs is orthogonal to
+# that guarantee.  Setting AMA_SPHINX_BUILD=1 (or SPHINX_BUILD=1) permits the
+# import, but every call-time path still invokes _enforce_invariant7(), which
+# will raise if the native library is truly absent.
+_AMA_DOCS_IMPORT = bool(os.environ.get("AMA_SPHINX_BUILD") or os.environ.get("SPHINX_BUILD"))
+if not _AMA_DOCS_IMPORT and (not _HMAC_NATIVE or not _HKDF_NATIVE):
     raise RuntimeError(
         "INVARIANT-7: Native HMAC/HKDF C accelerators are unavailable. "
         "The library refuses to operate without a constant-time backend. "
@@ -1247,7 +1255,8 @@ class HybridKEMProvider(KEMProvider):
     combining classical X25519 and post-quantum Kyber-1024 KEMs
     via a binding HKDF construction.
 
-    Key layout:
+    Key layout::
+
         public_key  = x25519_pub (32 bytes) || kyber_pub (1568 bytes)
         secret_key  = x25519_priv (32 bytes) || x25519_pub (32 bytes)
                       || kyber_secret (3168 bytes) || kyber_pub (1568 bytes)
@@ -2296,34 +2305,37 @@ def verify_crypto_package(
     """
     Verify all 4 layers of a crypto package plus any optional add-ons.
 
-    4-Layer Verification
-    ====================
-    Layer 1 — Content Integrity:   Recompute SHA3-256 and compare to stored hash.
-    Layer 2 — Keyed Authentication: Recompute HMAC-SHA3-256 with stored key and
-              compare to stored tag.
-    Layer 3 — Digital Signature:   Verify primary signature (Ed25519 + ML-DSA-65)
-              against stored public key.
-    Layer 4 — Key Independence:    Re-derive keys from stored master secret, salt,
-              and info; compare to stored derived keys.
+    **4-Layer Verification**
+
+    - *Layer 1 — Content Integrity:* recompute SHA3-256 and compare to
+      stored hash.
+    - *Layer 2 — Keyed Authentication:* recompute HMAC-SHA3-256 with
+      stored key and compare to stored tag.
+    - *Layer 3 — Digital Signature:* verify primary signature
+      (Ed25519 + ML-DSA-65) against stored public key.
+    - *Layer 4 — Key Independence:* re-derive keys from stored master
+      secret, salt, and info; compare to stored derived keys.
 
     Optional add-on verification:
-        - SPHINCS+ secondary signature (if present)
-        - KEM shared secret (if present and keypair available)
+
+    - SPHINCS+ secondary signature (if present)
+    - KEM shared secret (if present and keypair available)
 
     Args:
-        content: Original content that was signed
-        package: CryptoPackageResult to verify
+        content: Original content that was signed.
+        package: CryptoPackageResult to verify.
 
     Returns:
-        Dictionary with a boolean for each layer plus ``all_valid`` (True only
-        if every layer passes):
-            - content_hash: Layer 1
-            - hmac: Layer 2
-            - primary_signature: Layer 3
-            - hkdf_keys: Layer 4
-            - sphincs: (if present)
-            - kem: (if present)
-            - all_valid: True iff all checks passed
+        Dictionary with a boolean for each layer plus ``all_valid`` (True
+        only if every layer passes). Keys:
+
+        - ``content_hash``: Layer 1
+        - ``hmac``: Layer 2
+        - ``primary_signature``: Layer 3
+        - ``hkdf_keys``: Layer 4
+        - ``sphincs``: (if present)
+        - ``kem``: (if present)
+        - ``all_valid``: True iff all checks passed
 
     Example:
         >>> result = create_crypto_package(b"Hello")
