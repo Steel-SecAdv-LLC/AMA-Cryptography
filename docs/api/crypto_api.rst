@@ -1,5 +1,5 @@
-crypto_api — High-Level Crypto Facade
-=====================================
+ama_cryptography.crypto_api
+===========================
 
 .. automodule:: ama_cryptography.crypto_api
    :members:

@@ -1,5 +1,5 @@
-pqc_backends — Post-Quantum Backends
-====================================
+ama_cryptography.pqc_backends
+=============================
 
 .. automodule:: ama_cryptography.pqc_backends
    :members:

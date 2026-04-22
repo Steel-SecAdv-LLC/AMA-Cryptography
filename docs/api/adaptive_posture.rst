@@ -1,5 +1,5 @@
-adaptive_posture — Adaptive Security Posture
-============================================
+ama_cryptography.adaptive_posture
+=================================
 
 .. automodule:: ama_cryptography.adaptive_posture
    :members:

@@ -1,5 +1,5 @@
-double_helix_engine — Double-Helix Evolution Engine
-===================================================
+ama_cryptography.double_helix_engine
+====================================
 
 .. automodule:: ama_cryptography.double_helix_engine
    :members:

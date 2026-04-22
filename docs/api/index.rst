@@ -1,25 +1,28 @@
 Python API Reference
 ====================
 
-The ``ama_cryptography`` package exposes the quantum-resistant cryptographic
-primitives, key management, post-quantum backends, and runtime monitoring
-interfaces of AMA Cryptography.  This section is generated from module
-docstrings via ``sphinx.ext.autodoc``; see each module page for the
-authoritative signature list.
+The ``ama_cryptography`` package exposes the quantum-resistant
+cryptographic primitives, key management, post-quantum backends, and
+runtime monitoring interfaces of AMA Cryptography.  This section is
+generated from module docstrings via ``sphinx.ext.autodoc`` — to add
+a new module, create a matching ``<module>.rst`` under ``docs/api/``
+and add it to the toctree below.
 
 .. toctree::
    :maxdepth: 2
    :caption: Modules
 
-   crypto_api
-   pqc_backends
-   key_management
-   secure_memory
-   secure_channel
-   session
-   hybrid_combiner
-   rfc3161_timestamp
    adaptive_posture
-   exceptions
-   equations
+   crypto_api
    double_helix_engine
+   equations
+   exceptions
+   hybrid_combiner
+   integrity
+   key_management
+   legacy_compat
+   pqc_backends
+   rfc3161_timestamp
+   secure_channel
+   secure_memory
+   session

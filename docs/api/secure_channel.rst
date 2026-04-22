@@ -1,5 +1,5 @@
-secure_channel — Authenticated Transport
-========================================
+ama_cryptography.secure_channel
+===============================
 
 .. automodule:: ama_cryptography.secure_channel
    :members:

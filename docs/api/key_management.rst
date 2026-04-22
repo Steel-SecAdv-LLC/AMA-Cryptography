@@ -1,4 +1,4 @@
-key_management — Key Management
+ama_cryptography.key_management
 ===============================
 
 .. automodule:: ama_cryptography.key_management

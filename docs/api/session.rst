@@ -1,5 +1,5 @@
-session — Session / Nonce Management
-====================================
+ama_cryptography.session
+========================
 
 .. automodule:: ama_cryptography.session
    :members:

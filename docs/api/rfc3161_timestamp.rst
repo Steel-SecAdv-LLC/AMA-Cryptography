@@ -1,5 +1,5 @@
-rfc3161_timestamp — RFC 3161 Timestamping
-=========================================
+ama_cryptography.rfc3161_timestamp
+==================================
 
 .. automodule:: ama_cryptography.rfc3161_timestamp
    :members:

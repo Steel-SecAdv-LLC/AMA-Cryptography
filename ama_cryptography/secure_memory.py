@@ -15,25 +15,28 @@
 
 """
 AMA Cryptography Secure Memory Module
-=================================
+=====================================
 
 Provides secure memory operations for cryptographic applications
 requiring memory protection.  This module is dependency-free and uses
 only the Python standard library.
 
 Features:
-- Secure zeroing - multi-pass overwrite implementation
-- Constant-time comparison - AMA C library or pure-Python XOR accumulator
-- SecureBuffer context manager - automatic cleanup on exit
-- Secure random byte generation - uses os.urandom
 
-Implementation Notes:
-    - secure_memzero: Multi-pass byte-level overwrite
-    - secure_mlock/munlock: Native C backend (VirtualLock/mlock) or POSIX fallback
-    - constant_time_compare: ama_consttime_memcmp (C) or XOR accumulator (Python)
-    - secure_random_bytes: Uses os.urandom (stdlib)
+- Secure zeroing — multi-pass overwrite implementation
+- Constant-time comparison — AMA C library or pure-Python XOR accumulator
+- SecureBuffer context manager — automatic cleanup on exit
+- Secure random byte generation — uses ``os.urandom``
 
-Usage:
+Implementation notes:
+
+- ``secure_memzero``: Multi-pass byte-level overwrite
+- ``secure_mlock`` / ``munlock``: Native C backend (VirtualLock/mlock) or POSIX fallback
+- ``constant_time_compare``: ``ama_consttime_memcmp`` (C) or XOR accumulator (Python)
+- ``secure_random_bytes``: Uses ``os.urandom`` (stdlib)
+
+Usage::
+
     from ama_cryptography.secure_memory import (
         SecureBuffer,
         secure_memzero,
@@ -504,18 +507,20 @@ class SecureBuffer:
     Context manager for secure memory buffers.
 
     Provides a bytearray that is:
+
     - Automatically zeroed on exit
     - Protected from accidental exposure
 
-    Usage:
+    Usage::
+
         with SecureBuffer(32) as buf:
             buf[:] = crypto.generate_key()
             # Use the key...
         # Buffer automatically zeroed here
 
     Attributes:
-        data: The underlying bytearray (only valid within context)
-        size: Size of the buffer in bytes
+        data: The underlying bytearray (only valid within context).
+        size: Size of the buffer in bytes.
     """
 
     def __init__(self, size: int, lock: bool = True) -> None:

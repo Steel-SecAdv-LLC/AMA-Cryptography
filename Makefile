@@ -97,10 +97,18 @@ lint:
 
 # Generate documentation
 # Requires: sphinx from requirements-dev.txt (pip install -r requirements-dev.txt)
+#
+# AMA_SPHINX_BUILD=1 lifts the INVARIANT-7 import guards in crypto_api.py /
+# key_management.py / legacy_compat.py so autodoc can introspect the modules
+# without a native C backend.  Every call-time path still enforces
+# INVARIANT-7 — this affects imports only.
+#
+# -W --keep-going turns every Sphinx warning into an error while still
+# collecting the full list, so docstring regressions fail the build.
 docs:
 	@echo "Generating documentation..."
 	@cd build && doxygen ../docs/Doxyfile
-	@cd docs && sphinx-build -b html . _build/html
+	@AMA_SPHINX_BUILD=1 sphinx-build -W --keep-going -b html docs docs/_build/html
 	@echo "✓ Documentation generated"
 	@echo "  C API docs:      build/docs/html/index.html"
 	@echo "  Python API docs: docs/_build/html/index.html"

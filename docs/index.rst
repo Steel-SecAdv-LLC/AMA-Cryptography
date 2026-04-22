@@ -19,7 +19,7 @@ security and performance.
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents
+   :caption: API Reference
 
    api/index
 
