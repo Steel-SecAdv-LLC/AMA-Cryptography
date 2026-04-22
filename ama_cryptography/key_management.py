@@ -4,9 +4,10 @@
 
 """
 AMA Cryptography Key Management System
-=====================================
+======================================
 
 Enterprise-grade key management with:
+
 - Hierarchical Deterministic (HD) key derivation (BIP32-style)
 - Key rotation with zero-downtime
 - Secure key storage and retrieval
@@ -41,9 +42,15 @@ from ama_cryptography.secure_memory import secure_memzero
 # INVARIANT-7 (revised): No cryptographic fallbacks, ever.
 # When native constant-time backend is unavailable the library MUST refuse to
 # operate.  Pure-Python fallback for any cryptographic primitive is prohibited.
+#
+# Documentation exception: Sphinx autodoc needs to import the module to
+# extract docstrings.  Setting AMA_SPHINX_BUILD=1 (or SPHINX_BUILD=1) permits
+# the import, but every call-time path still invokes _enforce_invariant7_km(),
+# which will raise if the native library is truly absent.
 _HMAC_SHA512_NATIVE = _HMAC_SHA512_NATIVE_AVAILABLE
+_AMA_DOCS_IMPORT = bool(os.environ.get("AMA_SPHINX_BUILD") or os.environ.get("SPHINX_BUILD"))
 
-if not _HMAC_SHA512_NATIVE:
+if not _AMA_DOCS_IMPORT and not _HMAC_SHA512_NATIVE:
     raise RuntimeError(
         "INVARIANT-7: Native HMAC-SHA512 C backend is unavailable. "
         "The library refuses to operate without a constant-time backend "

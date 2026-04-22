@@ -19,7 +19,8 @@ secure if EITHER the classical or PQC component remains unbroken.
 This is the standard IND-CCA2 secure combiner used in TLS 1.3
 hybrid key agreement drafts.
 
-Construction (length-prefixed encoding for domain separation):
+Construction (length-prefixed encoding for domain separation)::
+
     combined_ss = HKDF-SHA3-256(
         salt = len(classical_ct) || classical_ct || len(pqc_ct) || pqc_ct,
         ikm  = classical_ss || pqc_ss,
@@ -179,7 +180,7 @@ class HybridCombiner:
             Combined shared secret of output_len bytes
 
         The construction uses length-prefixed encoding to provide
-        unambiguous domain separation and prevent component stripping:
+        unambiguous domain separation and prevent component stripping::
 
             salt = len(classical_ct) || classical_ct || len(pqc_ct) || pqc_ct
             ikm  = classical_ss || pqc_ss

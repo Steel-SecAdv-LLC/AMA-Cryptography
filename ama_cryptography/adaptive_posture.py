@@ -118,21 +118,25 @@ class PostureEvaluator:
     deployment contexts.
 
     The evaluator uses a weighted scoring model:
-        - Timing anomalies (45%) — severity-weighted scores
-        - Pattern anomalies (25%) — z-score magnitude
-        - Resonance detection (15%) — resonance ratio
-        - Lyapunov stability (15%) — double-helix engine divergence detection
+
+    - Timing anomalies (45%) — severity-weighted scores
+    - Pattern anomalies (25%) — z-score magnitude
+    - Resonance detection (15%) — resonance ratio
+    - Lyapunov stability (15%) — double-helix engine divergence detection
 
     Threshold calibration:
-        Thresholds are set at statistically meaningful sigma levels
-        mapped to the [0, 1] composite score range using a Gaussian CDF
-        survival function approximation:
-            ELEVATED  = 1 - Phi(3)  ≈ 0.0013  → 0.15  (3-sigma anomaly)
-            HIGH      = 1 - Phi(5)  ≈ 2.9e-7  → 0.45  (5-sigma anomaly)
-            CRITICAL  = 1 - Phi(7)  ≈ 1.3e-12 → 0.80  (7-sigma anomaly)
-        These values represent the probability that a score this high arises
-        from normal operational variance. The mapping to [0,1] accounts for
-        the weighted composite score compression from four signal sources.
+
+    Thresholds are set at statistically meaningful sigma levels
+    mapped to the [0, 1] composite score range using a Gaussian CDF
+    survival function approximation::
+
+        ELEVATED  = 1 - Phi(3)  ≈ 0.0013  → 0.15  (3-sigma anomaly)
+        HIGH      = 1 - Phi(5)  ≈ 2.9e-7  → 0.45  (5-sigma anomaly)
+        CRITICAL  = 1 - Phi(7)  ≈ 1.3e-12 → 0.80  (7-sigma anomaly)
+
+    These values represent the probability that a score this high arises
+    from normal operational variance. The mapping to [0,1] accounts for
+    the weighted composite score compression from four signal sources.
     """
 
     # Calibrated thresholds: 3σ, 5σ, 7σ mapped to composite score space.

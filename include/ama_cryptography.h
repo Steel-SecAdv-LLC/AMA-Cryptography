@@ -981,6 +981,57 @@ AMA_API ama_error_t ama_argon2id(
     uint8_t *output, size_t out_len
 );
 
+/**
+ * @brief Argon2id with the pre-2.1.5 buggy ``blake2b_long`` loop termination.
+ *
+ * Reproduces the non-spec derivation shipped in AMA ≤ 2.1.5. **Do not** use
+ * this for new password hashes — it is retained **only** so existing
+ * deployments can verify stored hashes during the migration window
+ * documented in ``CHANGELOG.md`` [Unreleased] § BREAKING. New derivations
+ * must use :c:func:`ama_argon2id`.
+ *
+ * Typical migration flow:
+ *   1. On next successful login, call :c:func:`ama_argon2id_legacy_verify`
+ *      with the stored tag.
+ *   2. On match, re-derive with :c:func:`ama_argon2id` and overwrite the
+ *      stored hash.
+ *   3. Retire the legacy path once all active accounts have rotated.
+ *
+ * Parameters and return codes are identical to :c:func:`ama_argon2id`.
+ */
+AMA_API ama_error_t ama_argon2id_legacy(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    uint8_t *output, size_t out_len
+);
+
+/**
+ * @brief Constant-time verify of a pre-2.1.5 Argon2id tag.
+ *
+ * Computes the legacy Argon2id derivation for the supplied inputs and
+ * compares against @p expected_tag with :c:func:`ama_consttime_memcmp`.
+ *
+ * @param password      Password bytes
+ * @param pwd_len       Password length
+ * @param salt          Salt
+ * @param salt_len      Salt length
+ * @param t_cost        Time cost (iterations)
+ * @param m_cost        Memory cost (KiB)
+ * @param parallelism   Degree of parallelism
+ * @param expected_tag  Stored tag to compare against (pre-2.1.5 format)
+ * @param tag_len       Length of expected_tag (>= 4)
+ * @return ``AMA_SUCCESS`` on constant-time match,
+ *         ``AMA_ERROR_VERIFY_FAILED`` on mismatch, or another error code
+ *         on parameter / allocation failure.
+ */
+AMA_API ama_error_t ama_argon2id_legacy_verify(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    const uint8_t *expected_tag, size_t tag_len
+);
+
 /* ============================================================================
  * CHACHA20-POLY1305 AEAD (RFC 8439)
  * ============================================================================ */

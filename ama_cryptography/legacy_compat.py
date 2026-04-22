@@ -46,6 +46,7 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import secrets
 import struct
 import subprocess  # nosec B404 -- only wraps trusted external tools (openssl, rfc3161); no user-controlled args (LC-001)
@@ -57,7 +58,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, cast
 
 if TYPE_CHECKING:
-    from ama_cryptography_monitor import AmaCryptographyMonitor
+    from ama_cryptography.monitor import AmaCryptographyMonitor
 
 _logger = logging.getLogger(__name__)
 
@@ -89,9 +90,15 @@ from ama_cryptography.secure_memory import constant_time_compare
 # CRYPTO_AVAILABLE guard — must fail-closed at import time if the native
 # C library is missing.  Tests that need CRYPTO_AVAILABLE=False monkeypatch
 # it *after* import succeeds.
+#
+# Documentation exception: Sphinx autodoc needs to import the module to
+# extract docstrings.  AMA_SPHINX_BUILD=1 permits import so the docs pipeline
+# can introspect symbols without a native backend; every legacy_compat
+# cryptographic function still checks CRYPTO_AVAILABLE at call-time.
 # ---------------------------------------------------------------------------
 CRYPTO_AVAILABLE: bool = _ED25519_NATIVE_AVAILABLE and _HKDF_NATIVE_AVAILABLE
-if not CRYPTO_AVAILABLE:
+_AMA_DOCS_IMPORT = bool(os.environ.get("AMA_SPHINX_BUILD") or os.environ.get("SPHINX_BUILD"))
+if not _AMA_DOCS_IMPORT and not CRYPTO_AVAILABLE:
     raise RuntimeError(
         "AMA native C library required. "
         "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"

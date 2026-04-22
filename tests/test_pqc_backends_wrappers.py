@@ -90,6 +90,88 @@ class TestArgon2idValidation:
 
 
 # ---------------------------------------------------------------------------
+# Argon2id pre-2.1.5 legacy verify shim (audit 3a).
+#
+# The shim is only exposed by native libraries built against AMA >= 2.1.6
+# (when the symbol `ama_argon2id_legacy_verify` is linked). Older libraries
+# should raise RuntimeError rather than silently using the fixed path.
+# ---------------------------------------------------------------------------
+
+
+@skip_no_native
+@pytest.mark.skipif(not pq._ARGON2_NATIVE_AVAILABLE, reason="Argon2id backend not built")
+@pytest.mark.skipif(
+    pq._native_lib is None or not hasattr(pq._native_lib, "ama_argon2id_legacy_verify"),
+    reason="Native library does not export ama_argon2id_legacy_verify (rebuild required)",
+)
+class TestArgon2idLegacyVerify:
+    _SALT = b"legacy-migration"
+    _PW = b"hunter2"
+    _T = 1
+    _M = 16
+    _P = 1
+    _OUT_LEN = 32
+
+    def _legacy_tag(self) -> bytes:
+        """Derive a legacy (pre-2.1.5) tag via the raw C entry point.
+
+        We exercise the C symbol directly because ``native_argon2id`` is
+        always the spec-compliant path — a tag derived by it would not
+        verify through the legacy shim (by design).
+        """
+        import ctypes
+        assert pq._native_lib is not None  # for type checkers; guarded by skipif
+        out = ctypes.create_string_buffer(self._OUT_LEN)
+        rc = pq._native_lib.ama_argon2id_legacy(
+            self._PW, len(self._PW), self._SALT, len(self._SALT),
+            self._T, self._M, self._P, out, self._OUT_LEN,
+        )
+        assert rc == 0, f"ama_argon2id_legacy failed with rc={rc}"
+        return bytes(out)
+
+    def test_verify_accepts_legacy_tag(self) -> None:
+        tag = self._legacy_tag()
+        assert pq.native_argon2id_legacy_verify(
+            self._PW, self._SALT, tag,
+            t_cost=self._T, m_cost=self._M, parallelism=self._P,
+        ) is True
+
+    def test_verify_rejects_bit_flip(self) -> None:
+        tag = bytearray(self._legacy_tag())
+        tag[0] ^= 0x01
+        assert pq.native_argon2id_legacy_verify(
+            self._PW, self._SALT, bytes(tag),
+            t_cost=self._T, m_cost=self._M, parallelism=self._P,
+        ) is False
+
+    def test_verify_rejects_rfc_tag(self) -> None:
+        """A tag produced by the RFC-compliant derivation sits in a
+        different bit-space and must not verify through the legacy path."""
+        rfc_tag = pq.native_argon2id(
+            self._PW, self._SALT,
+            t_cost=self._T, m_cost=self._M, parallelism=self._P, out_len=self._OUT_LEN,
+        )
+        assert pq.native_argon2id_legacy_verify(
+            self._PW, self._SALT, rfc_tag,
+            t_cost=self._T, m_cost=self._M, parallelism=self._P,
+        ) is False
+
+    def test_short_tag_rejected(self) -> None:
+        with pytest.raises(ValueError, match="expected_tag"):
+            pq.native_argon2id_legacy_verify(
+                self._PW, self._SALT, b"xxx",
+                t_cost=self._T, m_cost=self._M, parallelism=self._P,
+            )
+
+    def test_short_salt_rejected(self) -> None:
+        with pytest.raises(ValueError, match="salt"):
+            pq.native_argon2id_legacy_verify(
+                self._PW, b"short", b"x" * 32,
+                t_cost=self._T, m_cost=self._M, parallelism=self._P,
+            )
+
+
+# ---------------------------------------------------------------------------
 # ChaCha20-Poly1305 validation branches
 # ---------------------------------------------------------------------------
 

@@ -8,11 +8,13 @@
 FROM ubuntu:22.04 AS builder
 
 # Install build dependencies
+# INVARIANT-1: no external cryptographic libraries are linked. libssl-dev is
+# NOT installed — AMA's C sources implement ML-KEM / ML-DSA / SPHINCS+ / AES /
+# SHA-3 / ChaCha20-Poly1305 natively and never call OpenSSL at runtime.
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     git \
-    libssl-dev \
     python3-dev \
     python3-pip \
     wget \
@@ -50,8 +52,10 @@ LABEL description="AMA Cryptography - Quantum-Resistant Cryptographic Protection
 LABEL version="2.1.5"
 
 # Install runtime dependencies only
+# INVARIANT-1: libssl3 is NOT installed — AMA's native C primitives do not
+# dynamically load libcrypto/libssl. Keeping it out shrinks the container
+# attack surface (one fewer CVE-prone library on disk).
 RUN apt-get update && apt-get install -y \
-    libssl3 \
     python3 \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
