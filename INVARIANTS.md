@@ -12,9 +12,10 @@
 
 **Do NOT introduce or depend on third-party cryptographic packages**
 (`libsodium`, `pynacl`, `cryptography`, OpenSSL bindings, etc.).
-Optional extras declared in `pyproject.toml` (e.g., `[secure-memory]`) may list
-such packages for future or interop use, but the core `ama_cryptography` package
-**must not** import or call them at runtime.
+Optional extras declared in `pyproject.toml` (e.g., `[legacy]` for the PyCA
+fallback, `[benchmark]` for peer libraries used only by `benchmarks/`) may list
+such packages for opt-in interop or comparison use, but the core
+`ama_cryptography` package **must not** import or call them at runtime.
 
 No pre-built external cryptographic libraries (libsodium, OpenSSL, liboqs,
 etc.) may be linked.

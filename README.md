@@ -1247,7 +1247,7 @@ AMA Cryptography v2.1.5 has **zero core cryptographic dependencies** — all cry
 - `[monitoring]`: numpy, scipy (3R engine)
 - `[legacy]`: cryptography (fallback)
 - `[hsm]`: PyKCS11 (HSM support)
-- `[secure-memory]`: pynacl (reserved; not currently used — `ama_cryptography.secure_memory` is dependency-free)
+- `[benchmark]`: pynacl, liboqs-python, cryptography (peer libraries for `benchmarks/comparative_benchmark.py` only — not linked into the production library; INVARIANT-1 still holds)
 
 ### Dependency Graph
 

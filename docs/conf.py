@@ -8,11 +8,17 @@ from __future__ import annotations
 import os
 import sys
 import urllib.request
+from pathlib import Path
 from urllib.error import URLError
 
-# Add source to path
-# Add parent directory to path so autodoc can find ama_cryptography package
-sys.path.insert(0, os.path.abspath(".."))
+# Add repo root (parent of docs/) to sys.path so autodoc can import the
+# ``ama_cryptography`` package.  Resolved from ``__file__`` rather than
+# ``os.path.abspath("..")`` so the path is invariant to the caller's cwd:
+# the Makefile / auto-docs.yml both invoke ``sphinx-build ... docs ...``
+# from the repo root, where ``".."`` resolves to the *parent of the repo*
+# and risks importing a sibling checkout instead of this tree
+# (PR #256 review thread r3122679539).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Tell ama_cryptography modules that we are in a documentation build so the
 # INVARIANT-7 import guards in crypto_api.py / key_management.py permit
