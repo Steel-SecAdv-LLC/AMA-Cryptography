@@ -13,6 +13,8 @@ classes / factory so no divergent code object slips in during a refactor.
 
 from __future__ import annotations
 
+import pytest
+
 
 class TestMonitorShim:
     def test_shim_is_importable(self) -> None:
@@ -41,8 +43,7 @@ class TestMonitorShim:
         for name in shim.__all__:
             assert hasattr(source, name), f"{name} missing from top-level module"
             assert getattr(shim, name) is getattr(source, name), (
-                f"{name} diverges between ama_cryptography.monitor "
-                f"and ama_cryptography_monitor"
+                f"{name} diverges between ama_cryptography.monitor " f"and ama_cryptography_monitor"
             )
 
     def test_create_monitor_returns_expected_type(self) -> None:
@@ -62,8 +63,21 @@ class TestMonitorShim:
         This guards against a revert that would re-point crypto_api at the
         top-level module — doing so would silently resurrect the
         namespace-inconsistency issue flagged by the audit.
+
+        INVARIANT-7 refuses to import ``crypto_api`` when the native C
+        backend isn't built (by design — see ``CHANGELOG.md`` / audit
+        2e); in that case we skip rather than mask the protection, so
+        the contract is still pinned in any environment with the
+        native library present.
         """
-        import ama_cryptography.crypto_api as api
+        try:
+            import ama_cryptography.crypto_api as api
+        except RuntimeError as exc:
+            if "INVARIANT-7" in str(exc):
+                pytest.skip(
+                    "crypto_api import blocked by INVARIANT-7 " "(native backend unavailable)"
+                )
+            raise
 
         # The AmaCryptographyMonitor class pulled into crypto_api's namespace
         # must be the same object reachable from the package-internal path.
