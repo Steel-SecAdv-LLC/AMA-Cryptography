@@ -24,7 +24,6 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-from typing import Optional
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -33,15 +32,8 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def extract(
-    file: str, pattern: str
-) -> Optional[str]:  # noqa: UP045 -- explicit 3.9 compat for tooling layer (DOCS-002)
+def extract(file: str, pattern: str) -> str | None:
     """Return the single capture group from `pattern`, or None if not found.
-
-    ``Optional[str]`` (not ``str | None``) is a deliberate tooling-layer
-    convention for explicit Python 3.9 compatibility; see the INVARIANT-13
-    DOCS-002 note in ``docs/conf.py`` for the full rationale.  Library
-    core continues to use PEP 604.
 
     The regex is evaluated in ``re.MULTILINE`` mode so ``^`` / ``$`` match
     individual line boundaries — every pattern below pins the declaration
