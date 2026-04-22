@@ -114,10 +114,10 @@ _SPHINCS_BACKEND: Optional[str] = None
 # Kyber-1024, and SPHINCS+-256f via pure C (FIPS 203/204/205 compliant).
 
 # Mirror of ``ama_error_t`` in include/ama_cryptography.h so Python call sites
-# compare return codes against named constants instead of magic numbers.  Kept
-# in sync manually — the C header is the source of truth.  If these ever
-# drift, the ``TestErrorCodeMirror`` sanity test (tests/test_pqc_backends.py)
-# will catch it against the ctypes-loaded library at runtime.
+# compare return codes against named constants instead of magic numbers, and
+# so ``RuntimeError(... rc=N (NAME))`` messages are self-documenting instead
+# of forcing the reader to look up what ``rc=-6`` means.  Kept in sync with
+# the C header manually — that file is the source of truth.
 _AMA_SUCCESS = 0
 _AMA_ERROR_INVALID_PARAM = -1
 _AMA_ERROR_MEMORY = -2
@@ -127,6 +127,38 @@ _AMA_ERROR_NOT_IMPLEMENTED = -5
 _AMA_ERROR_TIMING_ATTACK = -6
 _AMA_ERROR_SIDE_CHANNEL = -7
 _AMA_ERROR_OVERFLOW = -8
+
+# rc → C enum name, used by ``_error_name()`` when a native call returns a
+# non-zero code we did not explicitly expect.  Referencing every mirror
+# constant above here has the additional benefit of turning each of them
+# into a ``used global`` from static-analysis' point of view, which is why
+# the dict is populated by the named constants rather than by numeric
+# literals: if the C header ever adds a new error code and someone adds
+# a matching mirror constant above without wiring it in here, that
+# constant will be flagged unused and the miss caught in review.
+_AMA_ERROR_NAMES: dict[int, str] = {
+    _AMA_SUCCESS: "AMA_SUCCESS",
+    _AMA_ERROR_INVALID_PARAM: "AMA_ERROR_INVALID_PARAM",
+    _AMA_ERROR_MEMORY: "AMA_ERROR_MEMORY",
+    _AMA_ERROR_CRYPTO: "AMA_ERROR_CRYPTO",
+    _AMA_ERROR_VERIFY_FAILED: "AMA_ERROR_VERIFY_FAILED",
+    _AMA_ERROR_NOT_IMPLEMENTED: "AMA_ERROR_NOT_IMPLEMENTED",
+    _AMA_ERROR_TIMING_ATTACK: "AMA_ERROR_TIMING_ATTACK",
+    _AMA_ERROR_SIDE_CHANNEL: "AMA_ERROR_SIDE_CHANNEL",
+    _AMA_ERROR_OVERFLOW: "AMA_ERROR_OVERFLOW",
+}
+
+
+def _error_name(rc: int) -> str:
+    """Return ``"rc=<N> (<C_ENUM_NAME>)"`` for known ``ama_error_t`` values
+    or ``"rc=<N>"`` for an unknown code.
+
+    Used inside ``RuntimeError`` messages so operators diagnosing a native
+    failure see the human-readable enum tag instead of a bare integer.
+    """
+    name = _AMA_ERROR_NAMES.get(rc)
+    return f"rc={rc} ({name})" if name is not None else f"rc={rc}"
+
 
 _native_lib: Any = None
 
@@ -1860,7 +1892,7 @@ def native_ed25519_keypair() -> tuple:
 
     rc = _native_lib.ama_ed25519_keypair(pk_buf, sk_buf)
     if rc != 0:
-        raise RuntimeError(f"Ed25519 keypair generation failed (rc={rc})")
+        raise RuntimeError(f"Ed25519 keypair generation failed: {_error_name(rc)}")
 
     return bytes(pk_buf), bytes(sk_buf)
 
@@ -1896,7 +1928,7 @@ def native_ed25519_keypair_from_seed(seed: bytes) -> tuple:
 
     rc = _native_lib.ama_ed25519_keypair(pk_buf, sk_buf)
     if rc != 0:
-        raise RuntimeError(f"Ed25519 keypair generation failed (rc={rc})")
+        raise RuntimeError(f"Ed25519 keypair generation failed: {_error_name(rc)}")
 
     return bytes(pk_buf), bytes(sk_buf)
 
@@ -1938,7 +1970,7 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
     try:
         rc = _native_lib.ama_ed25519_sign(sig_buf, message, ctypes.c_size_t(len(message)), sk_buf)
         if rc != 0:
-            raise RuntimeError(f"Ed25519 signing failed (rc={rc})")
+            raise RuntimeError(f"Ed25519 signing failed: {_error_name(rc)}")
         return bytes(sig_buf)
     finally:
         ctypes.memset(sk_buf, 0, len(secret_key))
@@ -2092,7 +2124,7 @@ def native_ed25519_batch_verify(
         # invalid (per-entry booleans still populated in ``results_arr``).
         # Any other non-zero code is a hard error.
         if rc != _AMA_SUCCESS and rc != _AMA_ERROR_VERIFY_FAILED:
-            raise RuntimeError(f"Ed25519 batch verify failed (rc={rc})")
+            raise RuntimeError(f"Ed25519 batch verify failed: {_error_name(rc)}")
         return [bool(results_arr[i]) for i in range(count)]
 
     # Fallback: verify each signature individually
@@ -2154,7 +2186,7 @@ def native_aes256_gcm_encrypt(
         tag_buf,
     )
     if rc != 0:
-        raise RuntimeError(f"AES-256-GCM encryption failed (rc={rc})")
+        raise RuntimeError(f"AES-256-GCM encryption failed: {_error_name(rc)}")
 
     return bytes(ct_buf), bytes(tag_buf)
 
@@ -2272,7 +2304,7 @@ def native_hkdf(
         ctypes.c_size_t(length),
     )
     if rc != 0:
-        raise RuntimeError(f"HKDF derivation failed (rc={rc})")
+        raise RuntimeError(f"HKDF derivation failed: {_error_name(rc)}")
 
     return bytes(okm_buf)
 
@@ -2334,7 +2366,7 @@ def native_sha3_256(data: bytes) -> bytes:
         out_buf,
     )
     if rc != 0:
-        raise RuntimeError(f"SHA3-256 failed (rc={rc})")
+        raise RuntimeError(f"SHA3-256 failed: {_error_name(rc)}")
 
     return bytes(out_buf)
 
@@ -2374,7 +2406,7 @@ def native_hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
         out_buf,
     )
     if rc != 0:
-        raise RuntimeError(f"HMAC-SHA3-256 failed (rc={rc})")
+        raise RuntimeError(f"HMAC-SHA3-256 failed: {_error_name(rc)}")
 
     return bytes(out_buf)
 
@@ -2409,7 +2441,7 @@ def native_hmac_sha512(key: bytes, msg: bytes) -> bytes:
         out_buf,
     )
     if rc != 0:
-        raise RuntimeError(f"HMAC-SHA-512 failed (rc={rc})")
+        raise RuntimeError(f"HMAC-SHA-512 failed: {_error_name(rc)}")
 
     return bytes(out_buf)
 
@@ -2633,7 +2665,7 @@ def native_secp256k1_pubkey_from_privkey(privkey: bytes) -> bytes:
     pubkey_buf = ctypes.create_string_buffer(SECP256K1_PUBKEY_BYTES)
     rc = _native_lib.ama_secp256k1_pubkey_from_privkey(privkey, pubkey_buf)
     if rc != 0:
-        raise RuntimeError(f"secp256k1 pubkey derivation failed (rc={rc})")
+        raise RuntimeError(f"secp256k1 pubkey derivation failed: {_error_name(rc)}")
 
     return bytes(pubkey_buf)
 
@@ -2661,7 +2693,7 @@ def native_x25519_keypair() -> tuple:
 
     rc = _native_lib.ama_x25519_keypair(pk_buf, sk_buf)
     if rc != 0:
-        raise RuntimeError(f"X25519 keypair generation failed (rc={rc})")
+        raise RuntimeError(f"X25519 keypair generation failed: {_error_name(rc)}")
 
     return bytes(pk_buf), bytes(sk_buf)
 
@@ -2691,7 +2723,7 @@ def native_x25519_key_exchange(our_secret_key: bytes, their_public_key: bytes) -
     ss_buf = ctypes.create_string_buffer(X25519_KEY_BYTES)
     rc = _native_lib.ama_x25519_key_exchange(ss_buf, our_secret_key, their_public_key)
     if rc != 0:
-        raise RuntimeError(f"X25519 key exchange failed (rc={rc})")
+        raise RuntimeError(f"X25519 key exchange failed: {_error_name(rc)}")
 
     return bytes(ss_buf)
 
@@ -2763,7 +2795,7 @@ def native_argon2id(
         out_len,
     )
     if rc != 0:
-        raise RuntimeError(f"Argon2id failed (rc={rc})")
+        raise RuntimeError(f"Argon2id failed: {_error_name(rc)}")
 
     return bytes(out_buf)
 
@@ -2858,7 +2890,7 @@ def native_argon2id_legacy(
         out_len,
     )
     if rc != 0:
-        raise RuntimeError(f"ama_argon2id_legacy failed (rc={rc})")
+        raise RuntimeError(f"ama_argon2id_legacy failed: {_error_name(rc)}")
 
     return bytes(out_buf)
 
@@ -2944,7 +2976,7 @@ def native_argon2id_legacy_verify(
         return True
     if rc == _AMA_ERROR_VERIFY_FAILED:
         return False
-    raise RuntimeError(f"ama_argon2id_legacy_verify failed (rc={rc})")
+    raise RuntimeError(f"ama_argon2id_legacy_verify failed: {_error_name(rc)}")
 
 
 # ============================================================================
@@ -2991,7 +3023,7 @@ def native_chacha20poly1305_encrypt(
         tag_buf,
     )
     if rc != 0:
-        raise RuntimeError(f"ChaCha20-Poly1305 encrypt failed (rc={rc})")
+        raise RuntimeError(f"ChaCha20-Poly1305 encrypt failed: {_error_name(rc)}")
 
     return bytes(ct_buf), bytes(tag_buf)
 
@@ -3040,7 +3072,7 @@ def native_chacha20poly1305_decrypt(
         pt_buf,
     )
     if rc != 0:
-        raise RuntimeError(f"ChaCha20-Poly1305 decrypt failed (rc={rc})")
+        raise RuntimeError(f"ChaCha20-Poly1305 decrypt failed: {_error_name(rc)}")
 
     return bytes(pt_buf)
 
@@ -3074,7 +3106,7 @@ def native_kyber_keypair_from_seed(d: bytes, z: bytes) -> tuple:
 
     rc = _native_lib.ama_kyber_keypair_from_seed(d, z, pk_buf, sk_buf)
     if rc != 0:
-        raise RuntimeError(f"Kyber deterministic keygen failed (rc={rc})")
+        raise RuntimeError(f"Kyber deterministic keygen failed: {_error_name(rc)}")
 
     return bytes(pk_buf), bytes(sk_buf)
 
@@ -3100,7 +3132,7 @@ def native_dilithium_keypair_from_seed(xi: bytes) -> tuple:
 
     rc = _native_lib.ama_dilithium_keypair_from_seed(xi, pk_buf, sk_buf)
     if rc != 0:
-        raise RuntimeError(f"Dilithium deterministic keygen failed (rc={rc})")
+        raise RuntimeError(f"Dilithium deterministic keygen failed: {_error_name(rc)}")
 
     return bytes(pk_buf), bytes(sk_buf)
 
@@ -3153,7 +3185,7 @@ def frost_keygen_trusted_dealer(
         sk_ptr,
     )
     if rc != 0:
-        raise RuntimeError(f"FROST keygen failed (rc={rc})")
+        raise RuntimeError(f"FROST keygen failed: {_error_name(rc)}")
 
     gpk = bytes(gpk_buf)
     raw = shares_buf.raw
@@ -3183,7 +3215,7 @@ def frost_round1_commit(participant_share: bytes) -> tuple:
 
     rc = _native_lib.ama_frost_round1_commit(nonce_buf, commit_buf, participant_share)
     if rc != 0:
-        raise RuntimeError(f"FROST round1 commit failed (rc={rc})")
+        raise RuntimeError(f"FROST round1 commit failed: {_error_name(rc)}")
 
     return bytes(nonce_buf), bytes(commit_buf)
 
@@ -3245,7 +3277,7 @@ def frost_round2_sign(
         group_public_key,
     )
     if rc != 0:
-        raise RuntimeError(f"FROST round2 sign failed (rc={rc})")
+        raise RuntimeError(f"FROST round2 sign failed: {_error_name(rc)}")
 
     return bytes(sig_share_buf)
 
@@ -3301,6 +3333,6 @@ def frost_aggregate(
         group_public_key,
     )
     if rc != 0:
-        raise RuntimeError(f"FROST aggregate failed (rc={rc})")
+        raise RuntimeError(f"FROST aggregate failed: {_error_name(rc)}")
 
     return bytes(sig_buf)
