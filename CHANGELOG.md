@@ -61,11 +61,17 @@ All notable changes to AMA Cryptography will be documented in this file. The for
     pre-2.1.5 buggy path. Exposed so migration tooling and regression
     tests can generate reference tags without forking the old code;
     **never use it for new hashes** — `native_argon2id` is the
-    spec-compliant path.
+    spec-compliant path. Every call emits an
+    `ama_cryptography.exceptions.SecurityWarning` so that accidental
+    use in a production code path is loud at runtime; migration
+    tooling can suppress the warning explicitly via
+    `warnings.catch_warnings()`.
     `native_argon2id_legacy_verify(password, salt, expected_tag, ...)`
     — returns `True` on match, `False` on mismatch. Raises
     `RuntimeError` when running against an older native library that
-    does not export the shim.
+    does not export the shim. Does NOT emit a `SecurityWarning` — it
+    is the intended migration-verification path, so a warning on
+    every call during a rotation would drown operators in noise.
 
   Recommended migration:
     1. On the next successful login, call `ama_argon2id_legacy_verify`

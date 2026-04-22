@@ -619,11 +619,11 @@ class TestInvariant5Argon2idNegativePaths:
             native_argon2id(b"password", b"")
 
     def test_rejects_out_len_below_minimum(self) -> None:
-        with pytest.raises(ValueError, match="output length must be >= 4"):
+        with pytest.raises(ValueError, match=r"out_len must be in \[4, "):
             native_argon2id(b"password", b"\x00" * 16, out_len=3)
 
     def test_rejects_zero_out_len(self) -> None:
-        with pytest.raises(ValueError, match="output length must be >= 4"):
+        with pytest.raises(ValueError, match=r"out_len must be in \[4, "):
             native_argon2id(b"password", b"\x00" * 16, out_len=0)
 
     def test_rejects_t_cost_zero(self) -> None:

@@ -8,11 +8,18 @@ from __future__ import annotations
 import os
 import sys
 import urllib.request
+from pathlib import Path
+from typing import Optional
 from urllib.error import URLError
 
-# Add source to path
-# Add parent directory to path so autodoc can find ama_cryptography package
-sys.path.insert(0, os.path.abspath(".."))
+# Add repo root (parent of docs/) to sys.path so autodoc can import the
+# ``ama_cryptography`` package.  Resolved from ``__file__`` rather than
+# ``os.path.abspath("..")`` so the path is invariant to the caller's cwd:
+# the Makefile / auto-docs.yml both invoke ``sphinx-build ... docs ...``
+# from the repo root, where ``".."`` resolves to the *parent of the repo*
+# and risks importing a sibling checkout instead of this tree
+# (PR #256 review thread r3122679539).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Tell ama_cryptography modules that we are in a documentation build so the
 # INVARIANT-7 import guards in crypto_api.py / key_management.py permit
@@ -81,7 +88,7 @@ _INTERSPHINX_CACHE = os.path.join(os.path.dirname(__file__), "_intersphinx")
 _INTERSPHINX_PROBE_TIMEOUT = float(os.environ.get("AMA_INTERSPHINX_PROBE_TIMEOUT", "3"))
 
 
-def _vendored_inventory(name: str) -> str | None:
+def _vendored_inventory(name: str) -> Optional[str]:
     path = os.path.join(_INTERSPHINX_CACHE, f"{name}.inv")
     return path if os.path.exists(path) else None
 
@@ -97,9 +104,19 @@ def _inventory_reachable(url: str) -> bool:
     # file:/ftp:/custom scheme leaking in through ``candidates`` below.
     if not probe.startswith(("http://", "https://")):
         return False
+    # INVARIANT-13 justification for the two S310 suppressions below:
+    # the URL comes from the developer-authored ``candidates`` dict in
+    # ``_build_intersphinx_mapping()`` — never from a request header, user
+    # input, or environment variable — and the ``startswith(("http://",
+    # "https://"))`` guard above statically rules out the file/ftp/custom-
+    # scheme classes the rule actually cares about. The HEAD probe is also
+    # time-bounded (``_INTERSPHINX_PROBE_TIMEOUT``), feeds only a boolean
+    # back into Sphinx's build-time config, never touches cryptographic
+    # state, does not parse network responses, and on failure drops the
+    # entry rather than raising (DOCS-001).
     try:
-        req = urllib.request.Request(probe, method="HEAD")  # noqa: S310
-        with urllib.request.urlopen(req, timeout=_INTERSPHINX_PROBE_TIMEOUT) as resp:  # noqa: S310
+        req = urllib.request.Request(probe, method="HEAD")  # fmt: skip  # noqa: E501,S310 -- static-scheme probe (DOCS-001)
+        with urllib.request.urlopen(req, timeout=_INTERSPHINX_PROBE_TIMEOUT) as resp:  # fmt: skip  # noqa: E501,S310 -- static-scheme probe (DOCS-001)
             return 200 <= resp.status < 400
     except (URLError, OSError, ValueError):
         return False
@@ -124,7 +141,6 @@ def _build_intersphinx_mapping() -> dict:
 
 
 intersphinx_mapping = _build_intersphinx_mapping()
-intersphinx_disabled_reftypes: list = []
 intersphinx_timeout = 5
 
 # Defence-in-depth: if a probe briefly succeeds but the real fetch fails

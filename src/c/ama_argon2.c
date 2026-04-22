@@ -614,6 +614,14 @@ static ama_error_t ama_argon2id_core(
     if (!output || out_len < 4) {
         return AMA_ERROR_INVALID_PARAM;
     }
+    /* Argon2 encodes out_len into H0 as a little-endian uint32 (RFC 9106
+     * §3.2), so any caller-provided length above UINT32_MAX would be
+     * truncated during H0 prehash and silently produce a mismatched
+     * derivation. Reject at the boundary — also bounds the
+     * heap-allocated buffer downstream in ama_argon2id_legacy_verify. */
+    if (out_len > UINT32_MAX) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
     if (!password && pwd_len > 0) {
         return AMA_ERROR_INVALID_PARAM;
     }
@@ -873,7 +881,11 @@ AMA_API ama_error_t ama_argon2id_legacy_verify(
     uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
     const uint8_t *expected_tag, size_t tag_len)
 {
-    if (!expected_tag || tag_len < 4) {
+    if (!expected_tag || tag_len < 4 || tag_len > UINT32_MAX) {
+        /* Upper bound: Argon2 encodes outlen as uint32 in H0 (RFC 9106
+         * §3.2); rejecting tag_len > UINT32_MAX here also bounds the
+         * calloc below and prevents unbounded allocations on malformed
+         * input. */
         return AMA_ERROR_INVALID_PARAM;
     }
 
