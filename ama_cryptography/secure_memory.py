@@ -118,7 +118,21 @@ def secure_memzero(data: Union[bytearray, memoryview]) -> None:
         data: Mutable buffer to zero (bytearray or memoryview)
 
     Raises:
-        TypeError: If data is not a mutable buffer
+        TypeError: If ``data`` is not a mutable buffer (``bytearray`` or
+            ``memoryview``).
+        SecureMemoryError: ONLY under the pure-Python fallback backend
+            (``SECURE_MEMZERO_BACKEND == "python_fallback"``), and only
+            if the post-wipe dead-store-elimination barrier observes a
+            non-zero byte after all three passes complete.  This is a
+            fail-closed guard per INVARIANT-3 (observable failure states
+            for security-critical operations): it fires when an
+            optimizer has elided the wipe, a concurrent writer is
+            corrupting the buffer, or the hardware has faulted — in
+            every such case a silent continue would leave secret
+            material in RAM, which the function exists to prevent.
+            Native backends (libc/ama) do not raise this exception
+            because the wipe is performed by a compiler-barrier-aware
+            primitive that cannot be elided.
 
     Example:
         >>> secret = bytearray(b"sensitive")
@@ -591,15 +605,22 @@ class SecureBuffer:
         exc_val: Optional[BaseException],
         exc_tb: Optional[TracebackType],
     ) -> None:
-        """Exit context, munlock if locked, and zero buffer."""
+        """Exit context: zero buffer FIRST while the page is still locked,
+        THEN release the page-lock.
+
+        Ordering matters: if we called ``munlock`` before ``memzero``, the OS
+        would be free to swap the page containing secret material to disk
+        between the two calls, defeating the point of page-locking.  The
+        zero must happen while the page is still pinned in RAM.
+        """
         if self._data is not None:
+            secure_memzero(self._data)
             if self._locked:
                 try:
                     secure_munlock(self._data)
                 except (SecureMemoryError, NotImplementedError, OSError) as exc:
                     logger.warning("SecureBuffer: munlock failed: %s", exc)
                 self._locked = False
-            secure_memzero(self._data)
             self._data = None
 
         self._entered = False
@@ -639,12 +660,16 @@ def secure_buffer(size: int, lock: bool = True) -> Generator[bytearray, None, No
     try:
         yield buf
     finally:
+        # Zero FIRST while the page is still locked, THEN release the lock.
+        # Reversing these two calls would let the OS swap the page containing
+        # secret material to disk between ``munlock`` and ``memzero``,
+        # defeating the point of the lock.  Matches SecureBuffer.__exit__.
+        secure_memzero(buf)
         if did_lock:
             try:
                 secure_munlock(buf)
             except (SecureMemoryError, NotImplementedError, OSError) as exc:
                 logger.warning("secure_buffer: munlock failed: %s", exc)
-        secure_memzero(buf)
 
 
 def _detect_mlock_available() -> bool:

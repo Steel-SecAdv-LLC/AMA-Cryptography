@@ -113,6 +113,21 @@ _SPHINCS_BACKEND: Optional[str] = None
 # Load the native AMA Cryptography shared library which provides ML-DSA-65,
 # Kyber-1024, and SPHINCS+-256f via pure C (FIPS 203/204/205 compliant).
 
+# Mirror of ``ama_error_t`` in include/ama_cryptography.h so Python call sites
+# compare return codes against named constants instead of magic numbers.  Kept
+# in sync manually — the C header is the source of truth.  If these ever
+# drift, the ``TestErrorCodeMirror`` sanity test (tests/test_pqc_backends.py)
+# will catch it against the ctypes-loaded library at runtime.
+_AMA_SUCCESS = 0
+_AMA_ERROR_INVALID_PARAM = -1
+_AMA_ERROR_MEMORY = -2
+_AMA_ERROR_CRYPTO = -3
+_AMA_ERROR_VERIFY_FAILED = -4
+_AMA_ERROR_NOT_IMPLEMENTED = -5
+_AMA_ERROR_TIMING_ATTACK = -6
+_AMA_ERROR_SIDE_CHANNEL = -7
+_AMA_ERROR_OVERFLOW = -8
+
 _native_lib: Any = None
 
 
@@ -2073,8 +2088,10 @@ def native_ed25519_batch_verify(
 
         results_arr = (ctypes.c_int * count)()
         rc = _native_lib.ama_ed25519_batch_verify(c_entries, ctypes.c_size_t(count), results_arr)
-        # 0=AMA_SUCCESS (all valid), -4=AMA_ERROR_VERIFY_FAILED (some invalid, results populated)
-        if rc != 0 and rc != -4:
+        # AMA_SUCCESS => all valid; AMA_ERROR_VERIFY_FAILED => at least one
+        # invalid (per-entry booleans still populated in ``results_arr``).
+        # Any other non-zero code is a hard error.
+        if rc != _AMA_SUCCESS and rc != _AMA_ERROR_VERIFY_FAILED:
             raise RuntimeError(f"Ed25519 batch verify failed (rc={rc})")
         return [bool(results_arr[i]) for i in range(count)]
 
@@ -2921,11 +2938,11 @@ def native_argon2id_legacy_verify(
         bytes(expected_tag),
         tag_len,
     )
-    # AMA_SUCCESS (0) == match; AMA_ERROR_VERIFY_FAILED (-4) == mismatch.
+    # AMA_SUCCESS => constant-time match; AMA_ERROR_VERIFY_FAILED => mismatch.
     # Any other non-zero code is a hard error (parameters, allocation, etc.).
-    if rc == 0:
+    if rc == _AMA_SUCCESS:
         return True
-    if rc == -4:
+    if rc == _AMA_ERROR_VERIFY_FAILED:
         return False
     raise RuntimeError(f"ama_argon2id_legacy_verify failed (rc={rc})")
 

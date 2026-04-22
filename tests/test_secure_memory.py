@@ -360,6 +360,80 @@ class TestSecureBuffer:
                 buf[:4] = b"work"
                 assert bytes(buf[:4]) == b"work"
 
+    def test_exit_zeros_before_munlock(self) -> None:
+        """SecureBuffer.__exit__ must call ``secure_memzero`` BEFORE
+        ``secure_munlock`` so the secret is wiped while the page is still
+        pinned in RAM.  Reversing the order would give the OS a window
+        between ``munlock`` and ``memzero`` in which the page (still
+        containing secret material) could be swapped to disk, defeating
+        the point of page-locking (PR #256 devin-review finding).
+        """
+        from unittest.mock import patch
+
+        from ama_cryptography import secure_memory
+        from ama_cryptography.secure_memory import SecureBuffer
+
+        call_order: list[str] = []
+
+        def record_memzero(_data: object) -> None:
+            call_order.append("memzero")
+
+        def record_munlock(_data: object) -> None:
+            call_order.append("munlock")
+
+        with (
+            patch.object(secure_memory, "secure_memzero", side_effect=record_memzero),
+            patch.object(secure_memory, "secure_munlock", side_effect=record_munlock),
+        ):
+            sb = SecureBuffer(64, lock=True)
+            with sb:
+                # Only inspect ordering when mlock actually succeeded;
+                # otherwise munlock is (correctly) never called.
+                pre_exit_locked = sb.locked
+            if pre_exit_locked:
+                assert call_order == [
+                    "memzero",
+                    "munlock",
+                ], f"expected memzero before munlock, got {call_order}"
+            else:
+                assert call_order == [
+                    "memzero"
+                ], f"unlocked buffer should only memzero, got {call_order}"
+
+    def test_secure_buffer_zeros_before_munlock(self) -> None:
+        """Functional ``secure_buffer()`` mirrors SecureBuffer.__exit__:
+        memzero must run before munlock so no swap window exists between
+        releasing the page-lock and wiping the secret.
+        """
+        from unittest.mock import patch
+
+        from ama_cryptography import secure_memory
+        from ama_cryptography.secure_memory import secure_buffer
+
+        call_order: list[str] = []
+
+        def record_memzero(_data: object) -> None:
+            call_order.append("memzero")
+
+        def record_munlock(_data: object) -> None:
+            call_order.append("munlock")
+
+        with (
+            patch.object(secure_memory, "secure_memzero", side_effect=record_memzero),
+            patch.object(secure_memory, "secure_munlock", side_effect=record_munlock),
+        ):
+            with secure_buffer(64, lock=True):
+                pass
+
+        # Either mlock succeeded (both calls recorded, memzero first) or
+        # the platform rejected mlock (only memzero recorded).  Either way,
+        # memzero must come first.
+        assert (
+            call_order[0] == "memzero"
+        ), f"expected memzero first regardless of mlock outcome, got {call_order}"
+        if "munlock" in call_order:
+            assert call_order.index("memzero") < call_order.index("munlock")
+
     def test_negative_size_raises(self) -> None:
         """SecureBuffer with negative size raises ValueError."""
         from ama_cryptography.secure_memory import SecureBuffer
