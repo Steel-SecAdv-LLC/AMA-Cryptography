@@ -453,10 +453,10 @@ class CryptoPostureController:
         - Key rotation: Uses KeyRotationManager from key_management.py
         - HD derivation: Uses HDKeyDerivation from key_management.py
         - Algorithm selection: Maps AlgorithmType from crypto_api.py
-        - Monitoring: Reads AmaCryptographyMonitor from ama_cryptography_monitor.py
+        - Monitoring: Reads AmaCryptographyMonitor from ama_cryptography.monitor
 
     Usage:
-        >>> from ama_cryptography_monitor import AmaCryptographyMonitor
+        >>> from ama_cryptography.monitor import AmaCryptographyMonitor
         >>> monitor = AmaCryptographyMonitor(enabled=True)
         >>> controller = CryptoPostureController(monitor=monitor)
         >>> # ... application performs crypto operations ...
