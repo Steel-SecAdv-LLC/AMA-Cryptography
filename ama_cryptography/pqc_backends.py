@@ -2790,18 +2790,6 @@ def native_argon2id_legacy(
         ValueError:   On parameter-range violations (same rules as
             :func:`native_argon2id`).
     """
-    # Loud runtime signal that this is not the path callers should be on.
-    # Raised once per call (not once per process) so call-site auditing
-    # catches every invocation, and ``stacklevel=2`` points at the caller.
-    warnings.warn(
-        "native_argon2id_legacy() reproduces the pre-2.1.5 blake2b_long bug "
-        "for read-only migration verification ONLY. Use native_argon2id() "
-        "for any new hash; new deployments must not store tags derived by "
-        "this function. See CHANGELOG.md [Unreleased] § BREAKING.",
-        SecurityWarning,
-        stacklevel=2,
-    )
-
     if _native_lib is None or not _ARGON2_NATIVE_AVAILABLE:
         raise RuntimeError("Argon2id native backend not available. " + _INSTALL_HINT)
     if not hasattr(_native_lib, "ama_argon2id_legacy"):
@@ -2810,6 +2798,25 @@ def native_argon2id_legacy(
             "library — rebuild against AMA Cryptography >= 2.1.6 to enable "
             "the pre-2.1.5 migration shim."
         )
+
+    # Loud runtime signal that this is not the path callers should be on.
+    # Raised once per call (not once per process) so call-site auditing
+    # catches every invocation, and ``stacklevel=2`` points at the caller.
+    # Emitted *after* the availability checks so a caller on a box without
+    # the native backend gets a single clean ``RuntimeError`` rather than a
+    # spurious "legacy path used" warning followed by a load failure — this
+    # keeps ``warnings.catch_warnings(record=True)`` collectors in
+    # monitoring/migration tooling accurate (warning == derivation actually
+    # ran on the legacy path) and mirrors the ordering already used by
+    # ``native_argon2id_legacy_verify``.
+    warnings.warn(
+        "native_argon2id_legacy() reproduces the pre-2.1.5 blake2b_long bug "
+        "for read-only migration verification ONLY. Use native_argon2id() "
+        "for any new hash; new deployments must not store tags derived by "
+        "this function. See CHANGELOG.md [Unreleased] § BREAKING.",
+        SecurityWarning,
+        stacklevel=2,
+    )
 
     _UINT32_MAX = 0xFFFFFFFF
     if len(salt) < 8:

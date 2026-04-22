@@ -229,9 +229,11 @@ def _python_fallback_memzero(data: Union[bytearray, memoryview]) -> None:
     for i in range(length):
         data[i] = 0
     # Dead-store-elimination barrier: any optimizer that wanted to drop the
-    # final zero-pass would have to prove `acc` is unused, which it can't —
-    # this function returns None but the `assert` has a visible side effect
-    # (an AssertionError) if any byte is non-zero.
+    # final zero-pass would have to prove ``acc`` is unused, which it can't —
+    # the ``if acc != 0`` check below has a visible side effect (a
+    # ``SecureMemoryError``) if any byte is non-zero.  We deliberately do
+    # *not* use ``assert`` here: assertions can be stripped with ``-O`` /
+    # ``PYTHONOPTIMIZE`` which would silently defeat the barrier.
     acc = 0
     for i in range(length):
         acc |= data[i]
