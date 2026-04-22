@@ -36,9 +36,15 @@ def extract(file: str, pattern: str) -> str | None:
     """Return the single capture group from `pattern`, or None if not found.
 
     The regex is evaluated in ``re.MULTILINE`` mode so ``^`` / ``$`` match
-    individual line boundaries — every pattern below pins the declaration
-    to the start of its own line to avoid matching substrings of unrelated
-    version references (e.g. a changelog note that mentions ``version =``).
+    individual line boundaries.  Every pattern below anchors the
+    declaration to the start of its own line — either directly with
+    ``^<literal>`` (setup.py ``VERSION``, pyproject ``version``, docs
+    ``version`` / ``release``, package ``__version__``,
+    ``#define AMA_CRYPTOGRAPHY_VERSION_STRING``) or via a stanza opener
+    (``^project`` in ``CMakeLists.txt``, whose lazy ``[^)]*?`` then spans
+    newlines to reach ``VERSION`` inside the call without crossing ``)``).
+    This avoids matching substrings of unrelated version references such
+    as a changelog note that mentions ``version =`` in prose.
     """
     text = _read(REPO / file)
     match = re.search(pattern, text, re.MULTILINE)
@@ -59,20 +65,24 @@ def main() -> int:
         ("pyproject.toml", r'^version\s*=\s*"([^"]+)"', "pyproject.toml [project].version"),
         (
             "CMakeLists.txt",
-            # Anchored to the ``project(...)`` stanza so an unrelated
+            # Anchored to the ``^project(...)`` stanza (start-of-line
+            # ``project`` keyword) so an unrelated
             # ``cmake_minimum_required(VERSION X.Y.Z)`` (if ever written
             # in 3-part form) cannot match first. ``[^)]*?`` is lazy and
             # spans newlines, so the expression reaches into a multi-line
             # ``project(AmaCryptography\n    VERSION 2.1.5\n    ...)``
             # block without crossing the closing parenthesis.
-            r"project\s*\([^)]*?VERSION\s+(\d+\.\d+\.\d+)",
+            r"^project\s*\([^)]*?VERSION\s+(\d+\.\d+\.\d+)",
             "CMakeLists.txt project() VERSION",
         ),
         ("docs/conf.py", r'^version\s*=\s*"([^"]+)"', "docs/conf.py version"),
         ("docs/conf.py", r'^release\s*=\s*"([^"]+)"', "docs/conf.py release"),
         (
             "include/ama_cryptography.h",
-            r'AMA_CRYPTOGRAPHY_VERSION_STRING\s+"([^"]+)"',
+            # Anchored to ``^#define AMA_CRYPTOGRAPHY_VERSION_STRING``
+            # so a commented-out reference or a prose mention of the
+            # macro name elsewhere in the header cannot match first.
+            r'^\s*#\s*define\s+AMA_CRYPTOGRAPHY_VERSION_STRING\s+"([^"]+)"',
             "include/ama_cryptography.h AMA_CRYPTOGRAPHY_VERSION_STRING",
         ),
     ]
