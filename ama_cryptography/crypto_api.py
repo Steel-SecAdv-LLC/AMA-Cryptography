@@ -40,7 +40,7 @@ from typing import Any, ClassVar, Dict, List, Mapping, Optional, Tuple, Union
 
 from ama_cryptography._finalizer_health import record_finalizer_error as _record_finalizer_error
 from ama_cryptography._self_test import check_operational as _check_operational
-from ama_cryptography_monitor import AmaCryptographyMonitor, create_monitor
+from ama_cryptography.monitor import AmaCryptographyMonitor, create_monitor
 
 # Module-level 3R monitor instance — feeds timing data to anomaly detection
 _monitor: AmaCryptographyMonitor = create_monitor(enabled=True)

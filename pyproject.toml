@@ -82,11 +82,6 @@ hsm = [
     # PKCS#11 support for hardware security modules
     "PyKCS11>=1.5.18",
 ]
-secure-memory = [
-    # PyNaCl reserved for future libsodium integration; not currently used.
-    # The secure_memory module uses AMA native C backend or POSIX fallbacks.
-    "pynacl>=1.6.2",
-]
 benchmark = [
     # Peer cryptographic libraries for benchmarks/comparative_benchmark.py.
     # These are BENCHMARK-ONLY comparison targets — not production
@@ -112,13 +107,30 @@ dev = [
     "pytest-benchmark>=4.0.0",
     "pytest-xdist>=3.0.0",
     "hypothesis>=6.0.0",
+    # Black dropped 3.9 in 25.x; pin the last 3.9-compatible release for 3.9
+    # and the current release for 3.10+.  Keeping the split here avoids
+    # breaking the lockfile on 3.9 CI jobs.
+    "black==24.10.0; python_version == '3.9'",
     "black>=26.3.1; python_version >= '3.10'",
     "ruff>=0.15.11",
     "mypy>=1.9.0",
     "bandit>=1.7.0",
     "safety>=2.3.0",
+    "Cython>=3.2.4",
     "numpy>=1.24.0",
     "scipy>=1.11.0",
+]
+# Umbrella extra — aggregates the non-overlapping extras above via PEP 508
+# self-reference so a single `pip install ama-cryptography[all]` pulls in
+# the full developer / benchmark / docs / math stack.
+all = [
+    "ama-cryptography[math]",
+    "ama-cryptography[monitoring]",
+    "ama-cryptography[legacy]",
+    "ama-cryptography[hsm]",
+    "ama-cryptography[benchmark]",
+    "ama-cryptography[docs]",
+    "ama-cryptography[dev]",
 ]
 
 [project.urls]

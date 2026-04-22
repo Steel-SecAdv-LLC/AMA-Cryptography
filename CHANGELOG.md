@@ -44,15 +44,34 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   **Migration required for any system storing AMA-derived Argon2id
   hashes.** Hashes produced by AMA ≤ 2.1.5 sit in the prior non-spec
   bit-space and will not verify against post-fix AMA — or against any
-  other RFC 9106 implementation. Recommended migration:
-    1. Keep the AMA ≤ 2.1.5 derivation accessible for verification only
-       (e.g. behind a `legacy_argon2id_verify(...)` shim that retains
-       the pre-fix `blake2b_long` loop).
-    2. On the next successful login, verify against the legacy path; if
-       it succeeds, immediately re-derive with the post-fix
-       `ama_argon2id` and overwrite the stored hash.
+  other RFC 9106 implementation. This release ships the legacy path
+  under two new symbols so downstream consumers can verify stored tags
+  without forking the old code:
+
+  - **C API** (`include/ama_cryptography.h`):
+    `ama_argon2id_legacy(...)` — derive using the pre-2.1.5 buggy
+    `blake2b_long` loop; identical signature to `ama_argon2id`.
+    `ama_argon2id_legacy_verify(password, ..., expected_tag, tag_len)`
+    — constant-time compare of `expected_tag` against the legacy
+    derivation; returns `AMA_SUCCESS` on match,
+    `AMA_ERROR_VERIFY_FAILED` on mismatch.
+
+  - **Python API** (`ama_cryptography.pqc_backends`):
+    `native_argon2id_legacy_verify(password, salt, expected_tag, ...)`
+    — returns `True` on match, `False` on mismatch. Raises
+    `RuntimeError` when running against an older native library that
+    does not export the shim.
+
+  Recommended migration:
+    1. On the next successful login, call `ama_argon2id_legacy_verify`
+       (C) or `native_argon2id_legacy_verify` (Python) with the stored
+       tag.
+    2. On match, re-derive with the post-fix `ama_argon2id` and
+       overwrite the stored hash in the same transaction.
     3. After a deprecation window appropriate for the deployment's
-       login frequency, remove the legacy path.
+       login frequency, remove calls to the legacy path. The symbols
+       remain exported for binary compatibility until the next major
+       bump.
 
   No other public API or output format changes; ChaCha20-Poly1305,
   Ed25519, X25519, AES-256-GCM, SHA-3, ML-KEM, ML-DSA, and SPHINCS+

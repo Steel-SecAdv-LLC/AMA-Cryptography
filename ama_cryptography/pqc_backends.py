@@ -542,6 +542,24 @@ def _setup_argon2_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_size_t,  # out_len
         ]
         lib.ama_argon2id.restype = ctypes.c_int
+        # Legacy-verify shim (CHANGELOG [Unreleased] § BREAKING). Optional —
+        # absence just means the legacy migration path is unavailable.
+        if hasattr(lib, "ama_argon2id_legacy"):
+            lib.ama_argon2id_legacy.argtypes = lib.ama_argon2id.argtypes
+            lib.ama_argon2id_legacy.restype = ctypes.c_int
+        if hasattr(lib, "ama_argon2id_legacy_verify"):
+            lib.ama_argon2id_legacy_verify.argtypes = [
+                ctypes.c_char_p,  # password
+                ctypes.c_size_t,  # pwd_len
+                ctypes.c_char_p,  # salt
+                ctypes.c_size_t,  # salt_len
+                ctypes.c_uint32,  # t_cost
+                ctypes.c_uint32,  # m_cost
+                ctypes.c_uint32,  # parallelism
+                ctypes.c_char_p,  # expected_tag
+                ctypes.c_size_t,  # tag_len
+            ]
+            lib.ama_argon2id_legacy_verify.restype = ctypes.c_int
         return True
     except AttributeError:
         return False
@@ -2729,6 +2747,87 @@ def native_argon2id(
         raise RuntimeError(f"Argon2id failed (rc={rc})")
 
     return bytes(out_buf)
+
+
+def native_argon2id_legacy_verify(
+    password: bytes,
+    salt: bytes,
+    expected_tag: bytes,
+    t_cost: int = 3,
+    m_cost: int = 65536,
+    parallelism: int = 4,
+) -> bool:
+    """
+    Constant-time verify a pre-AMA-2.1.6 Argon2id tag.
+
+    AMA ≤ 2.1.5 shipped a ``blake2b_long`` loop-termination bug (see
+    ``CHANGELOG.md`` [Unreleased] § BREAKING). Stored hashes derived by
+    those versions sit in a non-spec bit-space and will not verify against
+    the post-fix :func:`native_argon2id`.  This helper reproduces the
+    legacy derivation and compares against ``expected_tag`` with
+    :c:func:`ama_consttime_memcmp` so a deployment can run the
+    "verify-with-legacy, re-derive-with-fixed, overwrite" migration
+    recommended in the changelog without forking the old code.
+
+    Args:
+        password:     Password bytes.
+        salt:         Salt bytes (same ≥ 8-byte minimum as native_argon2id).
+        expected_tag: Stored tag bytes to compare against (≥ 4 bytes).
+        t_cost:       Time cost that produced ``expected_tag``.
+        m_cost:       Memory cost (KiB) that produced ``expected_tag``.
+        parallelism:  Parallelism that produced ``expected_tag``.
+
+    Returns:
+        ``True`` on constant-time match, ``False`` on mismatch.
+
+    Raises:
+        RuntimeError: If the native library or the legacy shim is
+            unavailable (only AMA builds ≥ 2.1.6 ship the shim).
+        ValueError:   On parameter-range violations (same rules as
+            :func:`native_argon2id`).
+    """
+    if _native_lib is None or not _ARGON2_NATIVE_AVAILABLE:
+        raise RuntimeError("Argon2id native backend not available. " + _INSTALL_HINT)
+    if not hasattr(_native_lib, "ama_argon2id_legacy_verify"):
+        raise RuntimeError(
+            "ama_argon2id_legacy_verify() is not exported by the loaded native "
+            "library — rebuild against AMA Cryptography >= 2.1.6 to enable the "
+            "pre-2.1.5 migration shim."
+        )
+
+    _UINT32_MAX = 0xFFFFFFFF
+    tag_len = len(expected_tag)
+    if len(salt) < 8:
+        raise ValueError(f"Argon2id salt must be >= 8 bytes, got {len(salt)}")
+    if tag_len < 4:
+        raise ValueError(f"expected_tag must be >= 4 bytes, got {tag_len}")
+    if t_cost < 1 or t_cost > _UINT32_MAX:
+        raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
+    if parallelism < 1 or parallelism > _UINT32_MAX:
+        raise ValueError(f"Argon2id parallelism must be in [1, {_UINT32_MAX}], got {parallelism}")
+    if m_cost < 8 * parallelism or m_cost > _UINT32_MAX:
+        raise ValueError(
+            f"Argon2id m_cost must be in [{8 * parallelism}, {_UINT32_MAX}] KiB, got {m_cost}"
+        )
+
+    rc = _native_lib.ama_argon2id_legacy_verify(
+        password,
+        len(password),
+        salt,
+        len(salt),
+        t_cost,
+        m_cost,
+        parallelism,
+        bytes(expected_tag),
+        tag_len,
+    )
+    # AMA_SUCCESS (0) == match; AMA_ERROR_VERIFY_FAILED (-4) == mismatch.
+    # Any other non-zero code is a hard error (parameters, allocation, etc.).
+    if rc == 0:
+        return True
+    if rc == -4:
+        return False
+    raise RuntimeError(f"ama_argon2id_legacy_verify failed (rc={rc})")
 
 
 # ============================================================================

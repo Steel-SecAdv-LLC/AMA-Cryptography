@@ -57,7 +57,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, cast
 
 if TYPE_CHECKING:
-    from ama_cryptography_monitor import AmaCryptographyMonitor
+    from ama_cryptography.monitor import AmaCryptographyMonitor
 
 _logger = logging.getLogger(__name__)
 

@@ -59,6 +59,13 @@ clean:
 	@find . -type f -name "*.pyc" -delete
 	@find . -type f -name "*.pyo" -delete
 	@find . -type f -name "*.c" -path "*/src/cython/*" -delete
+	# In-place Cython extensions land under ama_cryptography/ (and under
+	# build/ when PEP 517 build was used). Without the two lines below,
+	# `make clean` leaves *.cpython-*.so and Windows *.pyd files behind —
+	# subsequent `make python` then silently re-links against stale
+	# objects (audit 5b).
+	@find ama_cryptography -type f -name "*.so" -delete
+	@find ama_cryptography -type f -name "*.pyd" -delete
 	@echo "✓ Cleaned"
 
 # Install system-wide
