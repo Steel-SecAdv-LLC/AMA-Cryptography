@@ -26,28 +26,28 @@
  *         -DAMA_USE_NATIVE_PQC=ON
  *   cmake --build build-fuzz --target fuzz_frost
  *
- * Known limitation (harness non-determinism, PR #258 review thread):
- *   ama_frost_round1_commit() calls scalar_random() internally for nonce
- *   generation (RFC 9591 §2.1 mandates fresh per-round randomness — nonce
- *   reuse is total key compromise, so this cannot be relaxed in the core
- *   code). Consequently, a given fuzz input does not yield a byte-exact
- *   protocol transcript across runs; libFuzzer corpus minimization and
- *   exact-input reproduction are degraded.
+ * Determinism: harness-local, zero impact on core code.
+ *   ama_frost_round1_commit() calls ama_randombytes() internally for
+ *   nonce generation (RFC 9591 §2.1 mandates fresh per-round randomness —
+ *   nonce reuse is total key compromise, so this cannot be relaxed in
+ *   the core code).  To give libFuzzer byte-exact reproducibility for
+ *   corpus minimization and crash reduction, fuzz/CMakeLists.txt links
+ *   this target — and only this target — with
+ *       -Wl,--wrap=ama_randombytes
+ *   so every call to ama_randombytes reachable from fuzz_frost resolves
+ *   to __wrap_ama_randombytes in fuzz/fuzz_rng.c, a SHA3-256 counter
+ *   PRNG keyed by the bytes supplied to fuzz_rng_seed() at the top of
+ *   LLVMFuzzerTestOneInput().
  *
- *   What still works: ASan/UBSan/MSan instrumentation catches UB, OOB,
- *   use-after-free, and undefined behaviour across round1 -> round2 ->
- *   aggregate; crash discovery is unaffected.
- *
- *   Future improvement (deferred as a follow-up, not for this PR): a
- *   custom lower-layer harness that fuzzes the primitives round1_commit
- *   wraps (scalar arithmetic, point ops, hash-to-curve) directly,
- *   without invoking scalar_random. A test-only deterministic-nonce
- *   branch in the core FROST code is explicitly rejected: the cost of
- *   getting that misconfiguration wrong (shipping non-random nonces to
- *   production) outweighs the benefit of a reproducible fuzz input.
+ *   This is applied at link time, per-executable, and is invisible to
+ *   the production library: no ama_frost.c / ama_platform_rand.c /
+ *   public header change is required, and no other fuzz target, shared
+ *   library, or Python extension picks up the wrap.  See
+ *   fuzz/fuzz_rng.c for the rationale and PRNG construction details.
  */
 
 #include "ama_cryptography.h"
+#include "fuzz_rng.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -57,9 +57,55 @@
  * and the allocation can never wrap. */
 #define FROST_FUZZ_MAX_N 8
 
+/* libFuzzer entry point — called once before the first test input.
+ * Validates that -Wl,--wrap=ama_randombytes is actually in effect: if
+ * the link rule silently failed, ama_randombytes() would return OS
+ * entropy and the equality against the expected SHA3-256(seed || 0)
+ * block would fail.  Abort loudly in that case so CI cannot pass a
+ * misconfigured fuzz build. */
+int LLVMFuzzerInitialize(int *argc, char ***argv) {
+    (void)argc; (void)argv;
+
+    static const uint8_t SELFTEST_SEED[32] = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+    };
+    uint8_t expected[32];
+    /* Block 0 = SHA3-256(seed || LE64(0)). */
+    uint8_t block_input[32 + 8] = {0};
+    memcpy(block_input, SELFTEST_SEED, 32);
+    if (ama_sha3_256(block_input, sizeof block_input, expected) != AMA_SUCCESS) {
+        __builtin_trap();
+    }
+
+    uint8_t got[32];
+    fuzz_rng_seed(SELFTEST_SEED, sizeof SELFTEST_SEED);
+    if (ama_randombytes(got, sizeof got) != AMA_SUCCESS) {
+        __builtin_trap();
+    }
+    if (memcmp(got, expected, sizeof got) != 0) {
+        /* --wrap rule did not take effect: ama_randombytes still
+         * resolves to the real CSPRNG.  Fail loudly — a non-deterministic
+         * fuzz_frost would silently regress corpus minimization. */
+        __builtin_trap();
+    }
+    /* Clear the self-test seed so the first real input starts clean. */
+    fuzz_rng_seed(NULL, 0);
+    return 0;
+}
+
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     /* Need at least a selector + 4 struct bytes + one byte of payload. */
     if (size < 6) return 0;
+
+    /* Seed the harness-local PRNG from the fuzz input so every call to
+     * ama_randombytes inside this executable (FROST scalar_random,
+     * keygen randomness, …) is serviced deterministically via the
+     * --wrap=ama_randombytes rule on this target.  See the header
+     * comment and fuzz/fuzz_rng.c for the full mechanism. */
+    fuzz_rng_seed(data, size);
 
     uint8_t selector = data[0];
     uint8_t threshold = (uint8_t)(2 + (data[1] % (FROST_FUZZ_MAX_N - 1)));
