@@ -57,7 +57,17 @@ def main() -> int:
     checks = [
         ("setup.py", r'^VERSION\s*=\s*"([^"]+)"', "setup.py VERSION literal"),
         ("pyproject.toml", r'^version\s*=\s*"([^"]+)"', "pyproject.toml [project].version"),
-        ("CMakeLists.txt", r"VERSION\s+(\d+\.\d+\.\d+)", "CMakeLists.txt project() VERSION"),
+        (
+            "CMakeLists.txt",
+            # Anchored to the ``project(...)`` stanza so an unrelated
+            # ``cmake_minimum_required(VERSION X.Y.Z)`` (if ever written
+            # in 3-part form) cannot match first. ``[^)]*?`` is lazy and
+            # spans newlines, so the expression reaches into a multi-line
+            # ``project(AmaCryptography\n    VERSION 2.1.5\n    ...)``
+            # block without crossing the closing parenthesis.
+            r"project\s*\([^)]*?VERSION\s+(\d+\.\d+\.\d+)",
+            "CMakeLists.txt project() VERSION",
+        ),
         ("docs/conf.py", r'^version\s*=\s*"([^"]+)"', "docs/conf.py version"),
         ("docs/conf.py", r'^release\s*=\s*"([^"]+)"', "docs/conf.py release"),
         (

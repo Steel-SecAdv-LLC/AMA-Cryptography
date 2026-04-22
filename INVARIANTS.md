@@ -31,7 +31,7 @@ implementations.
 ### INVARIANT-1 Addendum — Algorithm Registry
 
 All cryptographic primitives implemented in this library **must** map to a
-non-deprecated entry in [`CSRC_STANDARDS.md`](../CSRC_STANDARDS.md). Adding any
+non-deprecated entry in [`CSRC_STANDARDS.md`](CSRC_STANDARDS.md). Adding any
 new algorithm requires updating `CSRC_STANDARDS.md` with its governing
 standard, parameter set, status, and source URL **before** implementation is
 permitted. Algorithms whose governing standard has been deprecated or

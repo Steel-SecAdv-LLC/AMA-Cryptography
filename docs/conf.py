@@ -97,9 +97,19 @@ def _inventory_reachable(url: str) -> bool:
     # file:/ftp:/custom scheme leaking in through ``candidates`` below.
     if not probe.startswith(("http://", "https://")):
         return False
+    # INVARIANT-13 justification for the two S310 suppressions below:
+    # the URL comes from the developer-authored ``candidates`` dict in
+    # ``_build_intersphinx_mapping()`` — never from a request header, user
+    # input, or environment variable — and the ``startswith(("http://",
+    # "https://"))`` guard above statically rules out the file/ftp/custom-
+    # scheme classes the rule actually cares about. The HEAD probe is also
+    # time-bounded (``_INTERSPHINX_PROBE_TIMEOUT``), feeds only a boolean
+    # back into Sphinx's build-time config, never touches cryptographic
+    # state, does not parse network responses, and on failure drops the
+    # entry rather than raising (DOCS-001).
     try:
-        req = urllib.request.Request(probe, method="HEAD")  # noqa: S310
-        with urllib.request.urlopen(req, timeout=_INTERSPHINX_PROBE_TIMEOUT) as resp:  # noqa: S310
+        req = urllib.request.Request(probe, method="HEAD")  # fmt: skip  # noqa: E501,S310 -- static-scheme probe (DOCS-001)
+        with urllib.request.urlopen(req, timeout=_INTERSPHINX_PROBE_TIMEOUT) as resp:  # fmt: skip  # noqa: E501,S310 -- static-scheme probe (DOCS-001)
             return 200 <= resp.status < 400
     except (URLError, OSError, ValueError):
         return False
