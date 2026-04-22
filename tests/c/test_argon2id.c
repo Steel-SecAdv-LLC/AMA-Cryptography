@@ -299,6 +299,129 @@ static void test_parameter_validation(void) {
                 "validation: zero-length output rejected");
 }
 
+/* ----------------------------------------------------------------
+ * 5. Pre-2.1.5 legacy-shim self-consistency
+ *
+ * The shim reproduces a shipped bug that no other library
+ * implements, so an external KAT is impossible. We pin a set of
+ * invariants that (together) fail-closed on any accidental drift of
+ * the legacy path OR accidental reuse of the legacy path by the
+ * spec-compliant entry point:
+ *
+ *   (a) ama_argon2id_legacy completes without UB at standard params.
+ *   (b) ama_argon2id_legacy is deterministic across runs.
+ *   (c) For out_len ≤ 64 the H' short path is identical in both
+ *       modes, so legacy == RFC at the final-tag boundary.
+ *   (d) The memory-fill uses blake2b_long on 1024-byte blocks, so
+ *       legacy != RFC at the aggregate output for every non-trivial
+ *       parameter set — confirms the loop-guard really differs.
+ *   (e) ama_argon2id_legacy_verify round-trips a legacy-derived tag.
+ *   (f) A single bit flip, OR an RFC-path tag, is rejected.
+ *   (g) NULL expected_tag and tag_len < 4 fail parameter validation.
+ * ---------------------------------------------------------------- */
+static void test_legacy_shim_self_consistency(void) {
+    const uint8_t password[] = "migration-password";
+    const uint8_t salt[16] = {
+        's','a','l','t','s','a','l','t','s','a','l','t','s','a','l','t'
+    };
+    const uint32_t t_cost      = 1;
+    const uint32_t m_cost      = 32;    /* 32 KiB */
+    const uint32_t parallelism = 1;
+    const size_t   out_len     = 32;
+
+    /* (a) Legacy derivation completes SUCCESS. */
+    uint8_t legacy_tag[32];
+    ama_error_t rc = ama_argon2id_legacy(
+        password, sizeof(password) - 1,
+        salt, sizeof(salt),
+        t_cost, m_cost, parallelism,
+        legacy_tag, out_len);
+    TEST_ASSERT(rc == AMA_SUCCESS,
+                "legacy-shim: ama_argon2id_legacy returns SUCCESS");
+
+    /* (b) Deterministic across runs. */
+    uint8_t legacy_tag_run2[32];
+    rc = ama_argon2id_legacy(
+        password, sizeof(password) - 1,
+        salt, sizeof(salt),
+        t_cost, m_cost, parallelism,
+        legacy_tag_run2, out_len);
+    TEST_ASSERT(rc == AMA_SUCCESS
+                && memcmp(legacy_tag, legacy_tag_run2, out_len) == 0,
+                "legacy-shim: legacy derivation is deterministic");
+
+    /* (c) out_len ≤ 64 short path → last-step blake2b_long returns
+     *     identically in both modes. But Argon2id also feeds
+     *     blake2b_long across the memory fill at out_len=1024, where
+     *     the paths diverge — so the full ama_argon2id tag still
+     *     differs from ama_argon2id_legacy. Check aggregate difference
+     *     here; invariant (d) below doubles as the structural cross-
+     *     check. */
+    uint8_t rfc_tag[32];
+    rc = ama_argon2id(
+        password, sizeof(password) - 1,
+        salt, sizeof(salt),
+        t_cost, m_cost, parallelism,
+        rfc_tag, out_len);
+    TEST_ASSERT(rc == AMA_SUCCESS,
+                "legacy-shim: RFC path still succeeds alongside shim");
+
+    /* (d) Legacy and RFC paths must diverge for a non-trivial
+     *     derivation — proves the loop guard really differs. */
+    TEST_ASSERT(memcmp(legacy_tag, rfc_tag, out_len) != 0,
+                "legacy-shim: legacy tag diverges from RFC tag "
+                "(loop-guard actually differs)");
+
+    /* (e) Round-trip: verify accepts the legacy-derived tag. */
+    rc = ama_argon2id_legacy_verify(
+        password, sizeof(password) - 1,
+        salt, sizeof(salt),
+        t_cost, m_cost, parallelism,
+        legacy_tag, out_len);
+    TEST_ASSERT(rc == AMA_SUCCESS,
+                "legacy-shim: verify accepts a legacy-derived tag");
+
+    /* (f1) Bit-flip rejection. */
+    uint8_t flipped[32];
+    memcpy(flipped, legacy_tag, out_len);
+    flipped[0] ^= 0x01;
+    rc = ama_argon2id_legacy_verify(
+        password, sizeof(password) - 1,
+        salt, sizeof(salt),
+        t_cost, m_cost, parallelism,
+        flipped, out_len);
+    TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
+                "legacy-shim: single-bit flip rejected");
+
+    /* (f2) RFC-path tag rejection: a tag produced by the spec-
+     *      compliant entry point must not verify as a legacy tag. */
+    rc = ama_argon2id_legacy_verify(
+        password, sizeof(password) - 1,
+        salt, sizeof(salt),
+        t_cost, m_cost, parallelism,
+        rfc_tag, out_len);
+    TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
+                "legacy-shim: RFC-path tag rejected by legacy_verify");
+
+    /* (g1) NULL expected_tag. */
+    rc = ama_argon2id_legacy_verify(
+        password, sizeof(password) - 1,
+        salt, sizeof(salt),
+        t_cost, m_cost, parallelism,
+        NULL, out_len);
+    TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                "legacy-shim: NULL expected_tag rejected");
+
+    /* (g2) tag_len < 4. */
+    rc = ama_argon2id_legacy_verify(
+        password, sizeof(password) - 1,
+        salt, sizeof(salt),
+        t_cost, m_cost, parallelism,
+        legacy_tag, 3);
+    TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                "legacy-shim: tag_len < 4 rejected");
+}
+
 int main(void) {
     printf("===========================================\n");
     printf("Argon2id KAT + AVX2-G vs scalar-G parity\n");
@@ -308,6 +431,7 @@ int main(void) {
     test_rfc9106_kat();
     test_rfc9106_kat_parallelism();
     test_parameter_validation();
+    test_legacy_shim_self_consistency();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

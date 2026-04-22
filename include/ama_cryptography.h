@@ -981,6 +981,70 @@ AMA_API ama_error_t ama_argon2id(
     uint8_t *output, size_t out_len
 );
 
+/**
+ * @brief Argon2id derivation using the pre-2.1.5 blake2b_long variant.
+ *
+ * Reproduces the shipped-bug derivation that AMA ≤ 2.1.5 used so that
+ * stored hashes from those versions can be re-derived and verified. The
+ * output sits in a non-spec bit-space and MUST NOT be used for new
+ * derivations — call ::ama_argon2id instead.
+ *
+ * Typical use: a deployment storing pre-2.1.5 Argon2id tags calls
+ * ::ama_argon2id_legacy_verify on the next successful authentication;
+ * on AMA_SUCCESS the caller immediately re-derives with ::ama_argon2id
+ * and overwrites the stored hash. See CHANGELOG.md [Unreleased]
+ * § BREAKING for the migration recipe.
+ *
+ * @param password    Password bytes
+ * @param pwd_len     Password length
+ * @param salt        Salt (same bytes used to produce the stored tag)
+ * @param salt_len    Salt length
+ * @param t_cost      Time cost that produced the stored tag
+ * @param m_cost      Memory cost (KiB) that produced the stored tag
+ * @param parallelism Parallelism that produced the stored tag
+ * @param output      Output tag buffer (sized to match the stored tag)
+ * @param out_len     Desired output length (>= 4)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_argon2id_legacy(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    uint8_t *output, size_t out_len
+);
+
+/**
+ * @brief Constant-time verify of a pre-2.1.5 Argon2id tag.
+ *
+ * Recomputes the legacy (pre-fix) derivation for the supplied inputs
+ * and compares against `expected_tag` with ::ama_consttime_memcmp.
+ * The comparison leaks only tag length, never tag contents, to a
+ * timing-attacking caller.
+ *
+ * Provided solely to back the "verify-with-legacy, re-derive-with-
+ * fixed, overwrite" migration of hashes stored by AMA ≤ 2.1.5. New
+ * derivations must use ::ama_argon2id; do not use this helper for
+ * fresh password hashes.
+ *
+ * @param password     Password bytes
+ * @param pwd_len      Password length
+ * @param salt         Salt bytes used to produce `expected_tag`
+ * @param salt_len     Salt length
+ * @param t_cost       Time cost used to produce `expected_tag`
+ * @param m_cost       Memory cost (KiB) used to produce `expected_tag`
+ * @param parallelism  Parallelism used to produce `expected_tag`
+ * @param expected_tag Stored tag bytes to compare against (>= 4 bytes)
+ * @param tag_len      Length of `expected_tag` in bytes
+ * @return AMA_SUCCESS on match, AMA_ERROR_VERIFY_FAILED on mismatch,
+ *         AMA_ERROR_INVALID_PARAM / AMA_ERROR_MEMORY on error.
+ */
+AMA_API ama_error_t ama_argon2id_legacy_verify(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    const uint8_t *expected_tag, size_t tag_len
+);
+
 /* ============================================================================
  * CHACHA20-POLY1305 AEAD (RFC 8439)
  * ============================================================================ */

@@ -90,6 +90,120 @@ class TestArgon2idValidation:
 
 
 # ---------------------------------------------------------------------------
+# Argon2id legacy-migration shim (pre-2.1.5 verify)
+# ---------------------------------------------------------------------------
+
+
+def _legacy_verify_available() -> bool:
+    """The legacy shim is only exported by libraries built from 2.1.6+.
+
+    Older shared libraries in the field simply do not ship
+    ``ama_argon2id_legacy_verify``; skip those cases cleanly rather
+    than emitting a spurious RuntimeError from the wrapper.
+    """
+    return (
+        pq._native_lib is not None
+        and pq._ARGON2_NATIVE_AVAILABLE
+        and hasattr(pq._native_lib, "ama_argon2id_legacy_verify")
+    )
+
+
+@pytest.mark.skipif(
+    not _legacy_verify_available(),
+    reason="ama_argon2id_legacy_verify not exported (native library too old)",
+)
+class TestArgon2idLegacyVerify:
+    """Exercise :func:`pq.native_argon2id_legacy_verify` without relying
+    on a stored reference tag — every invariant here is self-derived so
+    the test still works in an isolated sandbox with no fixtures."""
+
+    _GOOD_SALT = b"saltsaltsaltsalt"
+    _PASSWORD = b"migration-password"
+    _PARAMS = dict(t_cost=1, m_cost=32, parallelism=1)
+
+    @staticmethod
+    def _derive_legacy_tag(password: bytes, salt: bytes, out_len: int = 32) -> bytes:
+        """Drive the legacy derivation via verify() with a known-wrong tag.
+
+        The Python surface only exposes the verify() path, not a raw
+        legacy derivation — which is deliberate (we don't want new
+        deployments producing legacy tags). To obtain a legacy tag for
+        the round-trip test we ask the native library directly; its
+        argtypes were configured in ``_setup_argon2_ctypes`` when
+        ``ama_argon2id_legacy`` is exported.
+        """
+        import ctypes
+        buf = ctypes.create_string_buffer(out_len)
+        rc = pq._native_lib.ama_argon2id_legacy(
+            password,
+            len(password),
+            salt,
+            len(salt),
+            TestArgon2idLegacyVerify._PARAMS["t_cost"],
+            TestArgon2idLegacyVerify._PARAMS["m_cost"],
+            TestArgon2idLegacyVerify._PARAMS["parallelism"],
+            buf,
+            out_len,
+        )
+        assert rc == 0, f"ama_argon2id_legacy rc={rc}"
+        return bytes(buf)
+
+    @pytest.mark.skipif(
+        pq._native_lib is None
+        or not hasattr(pq._native_lib, "ama_argon2id_legacy"),
+        reason="ama_argon2id_legacy not exported (can't generate legacy tag)",
+    )
+    def test_legacy_tag_round_trip(self) -> None:
+        tag = self._derive_legacy_tag(self._PASSWORD, self._GOOD_SALT)
+        assert pq.native_argon2id_legacy_verify(
+            self._PASSWORD, self._GOOD_SALT, tag, **self._PARAMS
+        ) is True
+
+    @pytest.mark.skipif(
+        pq._native_lib is None
+        or not hasattr(pq._native_lib, "ama_argon2id_legacy"),
+        reason="ama_argon2id_legacy not exported (can't generate legacy tag)",
+    )
+    def test_bit_flip_rejected(self) -> None:
+        tag = bytearray(self._derive_legacy_tag(self._PASSWORD, self._GOOD_SALT))
+        tag[0] ^= 0x01
+        assert pq.native_argon2id_legacy_verify(
+            self._PASSWORD, self._GOOD_SALT, bytes(tag), **self._PARAMS
+        ) is False
+
+    def test_rfc_tag_rejected_as_legacy(self) -> None:
+        """A tag produced by ``ama_argon2id`` (RFC 9106) must NOT verify
+        as a legacy tag — otherwise the migration would silently succeed
+        on already-migrated entries and reintroduce the pre-fix
+        derivation."""
+        rfc_tag = pq.native_argon2id(
+            self._PASSWORD, self._GOOD_SALT, out_len=32, **self._PARAMS
+        )
+        assert pq.native_argon2id_legacy_verify(
+            self._PASSWORD, self._GOOD_SALT, rfc_tag, **self._PARAMS
+        ) is False
+
+    def test_salt_too_short_raises(self) -> None:
+        with pytest.raises(ValueError, match="salt"):
+            pq.native_argon2id_legacy_verify(
+                self._PASSWORD, b"short", b"\x00" * 32, **self._PARAMS
+            )
+
+    def test_tag_too_short_raises(self) -> None:
+        with pytest.raises(ValueError, match="expected_tag"):
+            pq.native_argon2id_legacy_verify(
+                self._PASSWORD, self._GOOD_SALT, b"\x00\x00\x00", **self._PARAMS
+            )
+
+    def test_t_cost_out_of_range_raises(self) -> None:
+        with pytest.raises(ValueError, match="t_cost"):
+            pq.native_argon2id_legacy_verify(
+                self._PASSWORD, self._GOOD_SALT, b"\x00" * 32,
+                t_cost=0, m_cost=32, parallelism=1,
+            )
+
+
+# ---------------------------------------------------------------------------
 # ChaCha20-Poly1305 validation branches
 # ---------------------------------------------------------------------------
 
