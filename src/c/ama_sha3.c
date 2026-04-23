@@ -52,6 +52,12 @@
 /* Forward declaration: generic Keccak-f[1600] exported for dispatch table */
 void ama_keccak_f1600_generic(uint64_t state[KECCAK_STATE_SIZE]);
 
+/* Forward declaration: generic 4-way Keccak-f[1600] exported for the
+ * dispatch table's always-non-NULL keccak_f1600_x4 slot.  Defined
+ * further down in this translation unit; the prototype here keeps
+ * -Wmissing-prototypes quiet. */
+void ama_keccak_f1600_x4_generic(uint64_t states[4][25]);
+
 /* Round constants for Keccak-f[1600] */
 static const uint64_t keccak_rc[KECCAK_ROUNDS] = {
     0x0000000000000001ULL, 0x0000000000008082ULL,

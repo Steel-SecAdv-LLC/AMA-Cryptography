@@ -3,18 +3,27 @@
  * Licensed under the Apache License, Version 2.0
  *
  * @file test_kyber_cbd2_equiv.c
- * @brief Byte-for-byte equivalence test: AVX2 ama_kyber_cbd2_avx2
- *        vs. the scalar CBD2 reference inside kyber_poly_cbd_eta().
+ * @brief Byte-for-byte equivalence test: dispatch-resolved CBD2 path
+ *        (the ama_kyber_cbd2_avx2 function when AVX2 is present, NULL
+ *        otherwise) vs. the scalar CBD2 reference lifted from
+ *        kyber_poly_cbd_eta().
  *
- * The AVX2 function is invoked through dispatch from
- * kyber_poly_cbd_eta(); this harness feeds the same 128-byte buffer
- * into both paths and verifies the 256 coefficients match exactly
- * across a handful of pseudo-random inputs including all-zero and
- * all-ones edge cases.  If this ever fails, ML-KEM-1024 key agreement
- * will silently diverge from KAT.
+ * Routes through ama_get_dispatch_table()->kyber_cbd2 rather than
+ * calling the AVX2 function directly, so the test:
+ *   - Links on builds where AMA_HAVE_AVX2_IMPL is not defined.
+ *   - Does not execute an AVX2 instruction on an x86-64 host that
+ *     lacks AVX2 at runtime (CPUID-guarded by the dispatch init).
+ *   - Cleanly SKIPs when the dispatcher leaves the pointer NULL
+ *     (non-x86-64 today; future NEON wiring can extend the same
+ *     dispatch entry without needing a test change).
+ *
+ * If this test fails, the dispatched CBD2 implementation will
+ * diverge from the generic path used inside kyber_poly_cbd_eta(),
+ * which would silently corrupt ML-KEM-1024 noise polynomials.
  */
 
 #include "ama_cryptography.h"
+#include "ama_dispatch.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -38,48 +47,53 @@ static void scalar_cbd2(int16_t poly[256], const uint8_t buf[128]) {
     }
 }
 
-/* Forward-declared in dispatch.c.  Safe to call directly on x86-64
- * builds with AMA_HAVE_AVX2_IMPL; the test binary links
- * ama_cryptography_test which is built with AVX2 source files. */
-#if defined(__x86_64__) || defined(_M_X64)
-extern void ama_kyber_cbd2_avx2(int16_t poly[256], const uint8_t buf[128]);
-#endif
-
-static int failed = 0;
+static int failed  = 0;
+static int skipped = 0;
 
 #define CHECK(cond, msg) do {                                   \
     if (!(cond)) { printf("  FAIL: %s\n", msg); failed++; }     \
     else         { printf("  PASS: %s\n", msg); }               \
 } while (0)
 
-static int check_cbd2(const char *label, const uint8_t buf[128]) {
+static int check_cbd2(const ama_dispatch_table_t *dt,
+                      const char *label, const uint8_t buf[128]) {
     int16_t ref[256];
     int16_t got[256];
     scalar_cbd2(ref, buf);
-#if defined(__x86_64__) || defined(_M_X64)
+
+    if (dt->kyber_cbd2 == NULL) {
+        printf("  SKIP: %s (no dispatched CBD2 on this build/CPU)\n", label);
+        skipped++;
+        return 1;
+    }
+
     memset(got, 0xFF, sizeof(got));   /* canary: catches uninit-writes */
-    ama_kyber_cbd2_avx2(got, buf);
+    dt->kyber_cbd2(got, buf);
+
     int ok = (memcmp(ref, got, sizeof(ref)) == 0);
     char msg[96];
-    snprintf(msg, sizeof(msg), "%s: AVX2 CBD2 byte-identical to scalar", label);
+    snprintf(msg, sizeof(msg), "%s: dispatched CBD2 byte-identical to scalar", label);
     CHECK(ok, msg);
     return ok;
-#else
-    (void)label; (void)buf; (void)got;
-    printf("  SKIP: %s (not x86-64)\n", label);
-    return 1;
-#endif
 }
 
 int main(void) {
     printf("===========================================\n");
-    printf("AVX2 CBD2 vs scalar CBD2 equivalence test\n");
+    printf("Dispatched CBD2 vs scalar CBD2 equivalence test\n");
     printf("===========================================\n\n");
+
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (dt->kyber_cbd2 == NULL) {
+        printf("  note: dispatched CBD2 is NULL on this build/CPU; all\n"
+               "        cases will SKIP.  The generic inline fallback\n"
+               "        in kyber_poly_cbd_eta() is still exercised by\n"
+               "        test_kat / test_kyber_cpa.\n\n");
+    }
 
     /* All-zero input: every coefficient must be 0. */
     {
         uint8_t buf[128] = {0};
-        (void)check_cbd2("all-zero", buf);
+        (void)check_cbd2(dt, "all-zero", buf);
     }
 
     /* All-ones input: each 4-bit nibble of d becomes (1+1) + (1+1) = ... let
@@ -87,7 +101,7 @@ int main(void) {
     {
         uint8_t buf[128];
         memset(buf, 0xFF, sizeof(buf));
-        (void)check_cbd2("all-0xFF", buf);
+        (void)check_cbd2(dt, "all-0xFF", buf);
     }
 
     /* Alternating bit patterns: exercises asymmetry between the a-bits
@@ -95,10 +109,10 @@ int main(void) {
     {
         uint8_t buf[128];
         memset(buf, 0xAA, sizeof(buf));
-        (void)check_cbd2("all-0xAA", buf);
+        (void)check_cbd2(dt, "all-0xAA", buf);
 
         memset(buf, 0x55, sizeof(buf));
-        (void)check_cbd2("all-0x55", buf);
+        (void)check_cbd2(dt, "all-0x55", buf);
     }
 
     /* Pseudo-random inputs.  Deterministic seed -> reproducible. */
@@ -112,15 +126,21 @@ int main(void) {
         }
         char label[32];
         snprintf(label, sizeof(label), "random trial %d", trial);
-        (void)check_cbd2(label, buf);
+        (void)check_cbd2(dt, label, buf);
     }
 
     printf("\n===========================================\n");
     if (failed) {
-        printf("%d CBD2 equivalence check(s) FAILED\n", failed);
+        printf("%d CBD2 equivalence check(s) FAILED (%d skipped)\n",
+               failed, skipped);
         return 1;
     }
-    printf("All CBD2 equivalence checks passed!\n");
+    if (skipped > 0) {
+        printf("All CBD2 equivalence checks SKIPPED "
+               "(%d cases; no dispatched CBD2 on this build/CPU)\n", skipped);
+    } else {
+        printf("All CBD2 equivalence checks passed!\n");
+    }
     printf("===========================================\n");
     return 0;
 }

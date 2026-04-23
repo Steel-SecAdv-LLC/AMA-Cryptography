@@ -123,9 +123,11 @@ typedef void (*ama_argon2_g_fn)(uint64_t out[128],
  *     kernel or to ama_keccak_f1600_x4_generic, which invokes the
  *     single-state keccak four times.
  *     Wired when SIMD detected: sha3_256, kyber_ntt, kyber_invntt,
- *     kyber_pointwise, kyber_cbd2, dilithium_ntt, dilithium_invntt,
+ *     kyber_pointwise, dilithium_ntt, dilithium_invntt,
  *     dilithium_pointwise (AVX2 and NEON; SVE2 wires keccak_f1600,
- *     kyber_*, and dilithium_* but not sha3_256).
+ *     kyber_*, and dilithium_* but not sha3_256).  kyber_cbd2 is
+ *     AVX2-only today — it remains NULL on NEON and SVE2 tiers
+ *     until a corresponding implementation is wired.
  *   - NULL: no dispatch available; caller must use its own inline generic
  *     implementation.
  *
@@ -140,7 +142,7 @@ typedef struct {
     ama_kyber_ntt_fn          kyber_ntt;            /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_ntt_fn          kyber_invntt;         /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_pointwise_fn    kyber_pointwise;      /**< Non-NULL when SIMD detected; callers MUST NULL-check */
-    ama_kyber_cbd2_fn         kyber_cbd2;           /**< Non-NULL when SIMD detected; callers MUST NULL-check */
+    ama_kyber_cbd2_fn         kyber_cbd2;           /**< Non-NULL when AVX2 detected (AVX2-only today; NEON/SVE2 wiring TBD); callers MUST NULL-check */
     ama_dilithium_ntt_fn      dilithium_ntt;        /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_dilithium_invntt_fn   dilithium_invntt;     /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_dilithium_pointwise_fn dilithium_pointwise; /**< Non-NULL when SIMD detected; callers MUST NULL-check */
