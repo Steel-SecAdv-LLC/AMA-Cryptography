@@ -186,12 +186,30 @@ at the hash layer (the SHA-2 core is straight-line).
 
 ## Ed25519 — `ama_ed25519.c` + `vendor/ed25519-donna/`
 
-**Provenance:** Vendored. Core field-arithmetic routines (radix 2^51
-`fe51.h`, base-point multiplication via precomputed tables) come from
-the [floodyberry/ed25519-donna](https://github.com/floodyberry/ed25519-donna)
-public-domain project. The vendored copy lives under
-`src/c/vendor/ed25519-donna/`, with the upstream `LICENSE` preserved
-verbatim.
+**Provenance:** Mixed. The default x86-64 build uses the vendored
+[floodyberry/ed25519-donna](https://github.com/floodyberry/ed25519-donna)
+public-domain assembly backend (enabled by `AMA_ED25519_ASSEMBLY=ON`,
+which is the CMake default on x86-64 / MSVC x64); the vendored copy
+lives under `src/c/vendor/ed25519-donna/` with the upstream `LICENSE`
+preserved verbatim. When the donna backend is not selected (the default
+on ARM / other non-x86 targets, or on any platform with
+`-DAMA_ED25519_ASSEMBLY=OFF`), the in-tree path in `src/c/ama_ed25519.c`
+is used instead. It consists of:
+- Radix 2^51 field arithmetic (`fe51.h`) — written from the
+  [Ed25519 paper](https://ed25519.cr.yp.to/ed25519-20110926.pdf) and
+  the ref10 SUPERCOP reference, in-tree.
+- Fixed-base scalar multiplication via a **signed 4-bit window comb**
+  (Bernstein–Duif–Lange–Schwabe–Yang 2012, §4) — 32 subtables × 8
+  Edwards-extended points precomputed at first use from the RFC 8032
+  base point, using the same in-tree group arithmetic as sign/verify.
+  Constant-time (INVARIANT-12): digit extraction is branchless; table
+  select is a linear cmov over all 8 entries; sign negation is a
+  branchless cmov on the coordinate negations. No external data — the
+  table is derived from ed_B by in-tree math, making every byte
+  auditable. See `ge25519_scalarmult_base_comb_signed` in
+  `ama_ed25519.c`.
+- Variable-base scalar multiplication via width-4 wNAF (vartime, used
+  only for verification where the scalar is public).
 
 The AMA-level wrapper (`ama_ed25519.c`) adds:
 - API surface matching AMA's `ama_ed25519_sign` / `_verify` contract.
@@ -202,8 +220,25 @@ The AMA-level wrapper (`ama_ed25519.c`) adds:
   misuse of vartime scalar multiplication on secret scalars (audit
   finding C7).
 
+Equivalence between the two fixed-base paths (comb vs. the wNAF
+variable-base reference) is continuously verified by
+`tests/c/test_ed25519_comb_equiv.c` on 1024 clamped random scalars,
+256 unclamped random scalars, plus seven edge-case vectors (identity,
+scalar=1, all-nibbles-+7, all-nibbles-+8, alternating bytes,
+non-clamped all-0xFF, non-clamped top-byte 0xFE).  The last two
+provably exceed the group order l and exercise the internal
+`sc25519_reduce` path specifically.
+
+**Vendored-code patches** (applied in-tree on top of upstream
+floodyberry/ed25519-donna; searchable by grepping `AMA-PATCH:`):
+
+| File | Change | Reason |
+|------|--------|--------|
+| `vendor/ed25519-donna/ed25519-hash.h` | `ed25519_hash_update` early-return when `inlen == 0` | Upstream unconditionally calls `memcpy(dst, in, want)` even when `want` can be zero.  Passing a NULL `in` with `inlen == 0` is strict-C UB ("null pointer passed as argument 2, which is declared to never be null") and is flagged by UBSan; AMA's API permits `ama_ed25519_sign(..., NULL, 0, ...)` for empty-message signing (RFC 8032 Test Vector 1).  The early-return is a pure no-op for all real behaviour but satisfies the non-null-attribute contract. |
+
 No AES-NI-like hardware instructions exist for Ed25519; all speedups
-are algorithmic (precomputed tables, Karatsuba / fe51 field layout).
+are algorithmic (precomputed tables, Karatsuba / fe51 field layout,
+signed-digit comb).
 
 ---
 

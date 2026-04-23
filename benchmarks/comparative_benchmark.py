@@ -136,6 +136,148 @@ class ComparativeBenchmark:
             available=True,
         )
 
+    def benchmark_ama_raw_c(self):
+        """Run the raw-C harness (`benchmarks/benchmark_c_raw`) and record
+        its ops/sec numbers as a separate implementation column.
+
+        The Python/ctypes path measured elsewhere in this script pays a
+        ~2-15 µs per-call FFI tax on top of every primitive (GIL release /
+        re-acquire, ctypes argument marshalling, Python wrapper dispatch).
+        That overhead dominates the measurement for sub-microsecond
+        primitives like SHA3-256, making a peer-vs-AMA ratio computed off
+        the ctypes path unfairly pessimistic for AMA's actual C throughput.
+
+        By sourcing a separate "AMA Cryptography (Raw C)" column from the
+        harness binary, reviewers can see:
+          - the raw C number (what the library actually does),
+          - the ctypes-taxed number (what Python callers see today), and
+          - the peer library (PyNaCl / liboqs / cryptography) on the same
+            Python surface.
+
+        Build prerequisite: the harness binary must exist.  Build with
+        `cmake --build build --target benchmark_c_raw` before running, or
+        `make -C benchmarks benchmark_c_raw`.  When the binary is missing
+        the method emits an `available=False` placeholder row so the
+        column shows up as "SKIP" in the summary rather than silently
+        vanishing.
+        """
+        print("\n" + "=" * 70)
+        print("AMA CRYPTOGRAPHY (RAW C — no ctypes)")
+        print("=" * 70)
+
+        import subprocess
+
+        # Search common locations for the harness binary.  On Windows the
+        # CMake target produces benchmark_c_raw.exe in Release/Debug
+        # subdirectories, and the Unix-style executable-bit check (`st_mode
+        # & 0o111`) is not meaningful — os.access(path, os.X_OK) gives the
+        # right answer on both platforms (ACL-checked on Windows, mode-
+        # checked on POSIX).
+        import os
+
+        repo_root = Path(__file__).parent.parent
+        names = ("benchmark_c_raw", "benchmark_c_raw.exe")
+        search_roots = [
+            repo_root / "build" / "bin",
+            repo_root / "build" / "bin" / "Release",
+            repo_root / "build" / "bin" / "Debug",
+            repo_root / "build",
+            repo_root / "benchmarks",
+            repo_root / "benchmarks" / "build",
+            Path("."),
+        ]
+        candidates = [root / name for root in search_roots for name in names]
+        binary = next(
+            (p for p in candidates if p.is_file() and os.access(p, os.X_OK)),
+            None,
+        )
+
+        if binary is None:
+            print(
+                "  SKIP: benchmark_c_raw binary not found. "
+                "Build with `cmake --build build --target benchmark_c_raw`."
+            )
+            self.results.append(
+                BenchmarkResult(
+                    implementation="AMA Cryptography (Raw C)",
+                    operation="Raw C harness",
+                    iterations=0,
+                    mean_time_ms=0,
+                    median_time_ms=0,
+                    ops_per_sec=0,
+                    available=False,
+                    error="benchmark_c_raw binary not built",
+                )
+            )
+            return
+
+        print(f"  Using: {binary}")
+        try:
+            # Harness is fast (~8s total); 60s is a generous ceiling.
+            completed = subprocess.run(
+                [str(binary), "--json"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=True,
+            )
+            data = json.loads(completed.stdout)
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            json.JSONDecodeError,
+        ) as e:
+            print(f"  SKIP: harness run failed ({type(e).__name__}: {e})")
+            self.results.append(
+                BenchmarkResult(
+                    implementation="AMA Cryptography (Raw C)",
+                    operation="Raw C harness",
+                    iterations=0,
+                    mean_time_ms=0,
+                    median_time_ms=0,
+                    ops_per_sec=0,
+                    available=False,
+                    error=f"harness error: {type(e).__name__}",
+                )
+            )
+            return
+
+        # Map harness operation names to the labels used elsewhere in
+        # this script so the comparative-metrics grouping finds them.
+        name_map = {
+            "Ed25519 KeyGen": "Ed25519 KeyGen",
+            "Ed25519 Sign": "Ed25519 Sign",
+            "Ed25519 Verify": "Ed25519 Verify",
+            "ML-DSA-65 KeyGen": "ML-DSA-65 KeyGen",
+            "ML-DSA-65 Sign": "ML-DSA-65 Sign",
+            "ML-DSA-65 Verify": "ML-DSA-65 Verify",
+            "ML-KEM-1024 KeyGen": "ML-KEM-1024 KeyGen",
+            "ML-KEM-1024 Encaps": "ML-KEM-1024 Encap",
+            "ML-KEM-1024 Decaps": "ML-KEM-1024 Decap",
+        }
+        for row in data.get("results", []):
+            op_src = row.get("operation", "")
+            op_dst = name_map.get(op_src)
+            if op_dst is None:
+                continue  # not one of the peer-comparable ops
+            mean_ms = float(row.get("mean_us", 0)) / 1000.0
+            median_ms = float(row.get("median_us", 0)) / 1000.0
+            self.results.append(
+                BenchmarkResult(
+                    implementation="AMA Cryptography (Raw C)",
+                    operation=op_dst,
+                    iterations=int(row.get("iterations", 0)),
+                    mean_time_ms=mean_ms,
+                    median_time_ms=median_ms,
+                    ops_per_sec=float(row.get("ops_per_sec", 0)),
+                    available=True,
+                )
+            )
+            print(
+                f"  ✓ {op_dst}: {mean_ms:.4f} ms "
+                f"({float(row.get('ops_per_sec', 0)):,.0f} ops/sec)"
+            )
+
     def benchmark_ama_cryptography(self):
         """Benchmark AMA Cryptography hybrid implementation"""
         print("\n" + "=" * 70)
@@ -631,12 +773,25 @@ class ComparativeBenchmark:
                 continue
 
             print(f"\n{operation}:")
+            # Raw-C first if present, so the FFI overhead is visible as
+            # the gap between the Raw-C and ctypes lines.
+            raw_c_result = next(
+                (r for r in results if r.implementation == "AMA Cryptography (Raw C)"),
+                None,
+            )
+            if raw_c_result:
+                print(
+                    f"  AMA Cryptography (Raw C): {raw_c_result.mean_time_ms:.4f}ms "
+                    f"({raw_c_result.ops_per_sec:,.0f} ops/sec)"
+                )
             print(
                 f"  AMA Cryptography: {ama_result.mean_time_ms:.4f}ms "
                 f"({ama_result.ops_per_sec:,.0f} ops/sec)"
             )
 
             for result in results:
+                if result.implementation == "AMA Cryptography (Raw C)":
+                    continue  # already printed above
                 if result.implementation == "AMA Cryptography":
                     continue
                 if result.ops_per_sec <= 0 or ama_result.mean_time_ms <= 0:
@@ -714,7 +869,10 @@ def main():
 
     bench = ComparativeBenchmark(iterations=1000)
 
-    # Run all benchmarks
+    # Run all benchmarks.  Raw-C goes first so the summary table displays
+    # the unfiltered C number above the ctypes-taxed AMA column, making
+    # the FFI overhead visually obvious.
+    bench.benchmark_ama_raw_c()
     bench.benchmark_ama_cryptography()
     bench.benchmark_libsodium_ed25519()
     bench.benchmark_cryptography_ed25519()

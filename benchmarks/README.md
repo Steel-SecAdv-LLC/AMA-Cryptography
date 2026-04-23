@@ -105,6 +105,33 @@ python benchmarks/benchmark_runner.py --verbose
 python benchmark_suite.py --markdown BENCHMARKS.md --json benchmark_results.json
 ```
 
+## Properties Table — Beyond ops/sec
+
+Throughput is only one axis on which a cryptographic library should be
+compared.  The table below fixes four other axes that readers routinely
+care about but rarely find side-by-side.  Citations are linked inline;
+every row points to the project's own documentation rather than a
+second-hand summary.  "—" in a cell indicates the project does not make
+an explicit claim on that axis (not necessarily "no" — absence of claim).
+
+| Property                         | AMA Cryptography | PyNaCl / libsodium | cryptography / OpenSSL | liboqs |
+|----------------------------------|------------------|--------------------|-----------------------|--------|
+| Constant-time guarantee          | Documented per-primitive in [`CONSTANT_TIME_VERIFICATION.md`](../CONSTANT_TIME_VERIFICATION.md); empirical verification via in-tree [dudect](https://github.com/oreparaz/dudect) harness under `-DAMA_ENABLE_DUDECT=ON`. | Documented at the library level; "designed to be constant-time in secret data" per [libsodium docs](https://doc.libsodium.org/internals). No dudect harness shipped. | OpenSSL 3.x documents constant-time for ECDSA, ECDH; historical audit findings (CVE-2020-0601, CVE-2020-1971) show carve-outs on some codepaths. | liboqs [Constant-time Policy](https://github.com/open-quantum-safe/liboqs/wiki/Contributing-Guide#constant-time) applies to PQC kernels; upstream CI runs `valgrind --tool=memcheck` with uninit-tainting. |
+| Supply-chain surface             | **Zero runtime crypto deps** (INVARIANT-1); only in-tree C + optional vendored ed25519-donna (public domain, compiled from source). SBOM at `schemas/*.spdx`. | libsodium native binary (`libsodium.so`) installed via OS package or wheel; PyNaCl is a thin CFFI wrapper. | OpenSSL native binary (`libcrypto.so`); `cryptography` wheels ship a Rust binding on top. | liboqs native binary (`liboqs.so`) compiled from C source; Python wrapper is a thin ctypes shim. |
+| Self-test (FIPS-style POST)      | Startup POST via `ama_self_test()` covers AES-GCM, SHA3, Ed25519, ML-DSA, ML-KEM, HKDF self-tests (see `src/c/ama_core.c`). | None shipped with libsodium / PyNaCl. | OpenSSL FIPS provider (when built) runs full FIPS 140-3 KAT suite at init; default build does not. | liboqs ships KAT test binaries (`tests/kat_sig_algs`, `tests/kat_kem_algs`), run offline; no startup POST. |
+| Audit LoC (native C)             | ~12 k lines in `src/c/*.c` + `*.h`; plus ~3 k lines of vendored ed25519-donna under `src/c/vendor/`. Per-primitive provenance in [`src/c/PROVENANCE.md`](../src/c/PROVENANCE.md). | libsodium: ~45 k lines of hand-tuned C + assembly (including portable / assembly / ARM / SSE variants). | OpenSSL libcrypto: ~500 k lines of C covering TLS, PKCS#11, legacy algorithms, engines, FIPS module. | liboqs: ~60 k lines for PQC primitives alone (ML-KEM, ML-DSA, SLH-DSA, HQC, Classic McEliece, Frodo, etc.). |
+| ACVP / NIST KAT coverage         | 1,215 / 1,215 vectors in-tree (see `CSRC_ALIGN_REPORT.md`); continuously enforced in `.github/workflows/acvp_validation.yml`. | No ACVP self-attestation; libsodium has not pursued FIPS. | OpenSSL FIPS provider validated against NIST ACVP when built in FIPS mode. | PQClean upstream ships KAT vectors; liboqs CI runs them. |
+
+### Why this table matters
+
+Throughput comparisons alone rank a PQC or classical-crypto library on
+one narrow axis.  A production deployment routinely has to trade a 2×
+throughput gain for a 10× expansion in supply-chain surface or the loss
+of a constant-time guarantee.  Making those trade-offs explicit is the
+point of this table: a 5× speedup that comes via pulling in 500 k
+additional audit LoC is a different engineering choice than a 5×
+speedup that comes from a better in-tree algorithm.
+
 ## Interpreting Results
 
 See `BENCHMARKS.md` (generated locally by running `python benchmark_suite.py`; not checked into version control) for the authoritative performance document, including:

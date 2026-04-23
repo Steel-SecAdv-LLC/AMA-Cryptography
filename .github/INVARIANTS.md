@@ -313,11 +313,18 @@ targets.
 - **Source:** https://github.com/floodyberry/ed25519-donna
 - **License:** Public domain (Andrew Moon)
 - **Location:** `src/c/vendor/ed25519-donna/`
-- **CMake flag:** `AMA_ED25519_ASSEMBLY` (default OFF)
+- **CMake flag:** `AMA_ED25519_ASSEMBLY` (default **ON** on x86-64 and
+  MSVC x64; default **OFF** on ARM and other non-x86 targets, where donna
+  has no assembly path. Opt out of donna on x86-64 with
+  `-DAMA_ED25519_ASSEMBLY=OFF`, which forces the in-tree fe51 + signed
+  4-bit window comb backend in `src/c/ama_ed25519.c` — useful for
+  clean-room auditing of the AMA-authored Ed25519 path.)
 - **Purpose:** Optimized x86-64 Ed25519 scalar multiplication with inline
   assembly for constant-time Niels basepoint table selection. Provides ~3x
   keygen/sign speedup and ~2.5x verify speedup over AMA's fe51 C
-  implementation on x86-64.
+  implementation on x86-64. The in-tree backend also uses a signed 4-bit
+  window comb (BDLSY 2012) that closes most of that gap on platforms where
+  donna is not available.
 - **INVARIANT-1 compliance:** The vendored source is public domain, compiled
   from source as part of AMA's build system, and never linked as a pre-built
   binary. It satisfies INVARIANT-1 under the vendoring policy: vendored

@@ -24,7 +24,7 @@
               |                                                                              |
               |   C Layer (Native)     |   Cython Layer         |   Python API               |
               |   ─────────────────    |   ─────────────────    |   ─────────────────        |
-              |   SHA3/HKDF/Ed25519    |   18-37x Math Speedup  |   Algorithm Agnostic       |
+              |   SHA3/HKDF/Ed25519    |   3R Math (Lyap/NTT)   |   Algorithm Agnostic       |
               |   ML-DSA-65/Kyber      |   NumPy Integration    |   Key Management           |
               |   SPHINCS+/NTT Ops     |   Math Engine          |   3R Monitoring            |
               |                                                                              |
@@ -45,7 +45,7 @@
 
 AMA Cryptography is a hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Community-tested, not externally audited. A multi-language cryptographic security system designed to protect people, data, and networks against both classical and quantum threats. Built on NIST-standardized post-quantum cryptography (PQC), AMA Cryptography provides security-hardened features with measured performance (see [Performance Metrics](#performance-metrics)).
 
-The system combines NIST-standardized post-quantum algorithms with a 3R runtime security monitoring framework, creating a defense-in-depth architecture that provides visibility into cryptographic operations while maintaining less than 2% monitoring overhead. The multi-language architecture (C + Cython + Python) pairs constant-time C implementations with optional Cython acceleration (18–37x speedup over pure Python mathematical baseline for 3R monitoring computations). Independent security review is recommended before deployment in high-security or regulated environments.
+The system combines NIST-standardized post-quantum algorithms with a 3R runtime security monitoring framework, creating a defense-in-depth architecture that provides visibility into cryptographic operations while maintaining less than 2% monitoring overhead. The multi-language architecture (C + Cython + Python) pairs constant-time C implementations with optional Cython acceleration for the 3R math engine only. On that specific workload — Lyapunov exponent, NTT-shaped rotation matrix-vector products, and helix evolution kernels in `ama_cryptography/math_engine.pyx` — Cython is 18–37× faster than the pure-Python NumPy baseline on x86-64 (see [`wiki/Performance-Benchmarks.md`](wiki/Performance-Benchmarks.md) for methodology). This speedup is for 3R monitoring math and **does not apply to the C-implemented cryptographic primitives** — those numbers live in [`benchmark-report.md`](benchmark-report.md). Independent security review is recommended before deployment in high-security or regulated environments.
 
 **Protecting people, data, and networks with quantum-resistant cryptography**
 
@@ -236,7 +236,7 @@ NIST-standardized post-quantum algorithms:
 **Legend:**
 - **Full**: Complete native C implementation with constant-time operations.
 - **Full (native)**: Complete native C implementation — no external PQC dependency required.
-- **Note**: Ed25519 C implementation uses radix 2^51 field arithmetic (fe51.h — 25 cross-products vs 100 in ref10). Optional ed25519-donna x86-64 assembly backend available via `AMA_ED25519_ASSEMBLY=ON` (auto-enabled on MSVC x64). Full RFC 8032 sign/verify roundtrip verified.
+- **Note**: Ed25519 C implementation uses radix 2^51 field arithmetic (fe51.h — 25 cross-products vs 100 in ref10) with a signed 4-bit window comb for fixed-base scalar mult (64 mixed adds + 4 doublings, per Bernstein–Duif–Lange–Schwabe–Yang 2012). The ed25519-donna x86-64 assembly backend is now the default on x86-64 builds (`AMA_ED25519_ASSEMBLY=ON` auto-set by CMake on x86-64 and MSVC x64); pass `-DAMA_ED25519_ASSEMBLY=OFF` to force the in-tree fe51+comb backend for auditing. Full RFC 8032 sign/verify roundtrip verified on both backends.
 
 **C Library Implementations (v2.1) — 23 core + 25 SIMD source files in `src/c/`:**
 - `ama_core.c`: Library initialization, version, feature detection, shared utilities
@@ -1005,7 +1005,7 @@ sudo cmake --install .
 - `AMA_BUILD_STATIC` - Build static library (default: ON)
 - `AMA_BUILD_TESTS` - Build test suite including NIST KAT tests (default: ON)
 - `AMA_BUILD_EXAMPLES` - Build C example programs (default: ON)
-- `AMA_ED25519_ASSEMBLY` - Enable ed25519-donna x86-64 assembly scalar mult (default: OFF; auto-ON on MSVC x64)
+- `AMA_ED25519_ASSEMBLY` - Enable ed25519-donna x86-64 assembly scalar mult (default: **ON** on x86-64 builds — donna's AVX2 field arithmetic outruns the in-tree fe51 path there; **OFF** on ARM and other non-x86 targets where donna has no assembly path. Set `-DAMA_ED25519_ASSEMBLY=OFF` to force the in-tree `src/c/ama_ed25519.c` backend on x86-64, e.g. for clean-room auditing of the signed 4-bit window comb.)
 - `AMA_ENABLE_AVX2` - Enable AVX2 SIMD optimizations (x86-64)
 - `AMA_ENABLE_NEON` - Enable ARM NEON SIMD optimizations (AArch64)
 - `AMA_ENABLE_SVE2` - Enable ARM SVE2 SIMD optimizations (AArch64, stretch)

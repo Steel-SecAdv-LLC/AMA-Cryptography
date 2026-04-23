@@ -48,6 +48,28 @@ AMA Cryptography implements defense-in-depth with multiple independent security 
 - **Adaptive Cryptographic Posture System** (runtime threat-level response)
 - **Hybrid KEM Combiner** (IND-CCA2 binding construction per Bindel et al.)
 
+### Performance — Framing
+
+Throughput is a continuously-improving axis, not a ceiling.  On x86-64
+AVX2 AMA's current ops/sec is within a factor of 2–5× of the
+best-known public numbers for libsodium (Ed25519) and liboqs
+(ML-DSA-65, ML-KEM-1024), and every release closes some of that gap;
+recent work (see `CHANGELOG.md` from v2.1 onward) added 4-way Keccak
+batching, Ed25519 signed-window combs, and merged-layer ML-DSA NTT.
+The deliberate choices that constitute AMA's security posture —
+zero external cryptographic dependencies, in-tree constant-time
+implementations audited under `INVARIANT-12`, and a vendored
+build-from-source supply chain — auto-bound peak ops/sec against
+libraries that lean on AVX-512 or hand-tuned assembly across 500 k+
+LoC of audit surface.  Readers who value raw speed over supply-chain
+minimalism are unlikely to be the target audience for this library;
+readers who need auditable, small-surface post-quantum primitives
+with headroom to keep improving should find the trade-off
+acceptable.  Measured ops/sec numbers are in `benchmark-report.md`
+and `benchmarks/README.md` — any claim to the contrary elsewhere in
+the repository should be treated as aspirational and reported as a
+documentation bug.
+
 ## Reporting a Vulnerability
 
 ### Critical Security Issues

@@ -20,7 +20,26 @@ option(AMA_ENABLE_SANITIZERS "Enable address/undefined sanitizers" OFF)
 option(AMA_ENABLE_LTO "Enable link-time optimization" ON)
 option(AMA_USE_NATIVE_PQC "Enable native PQC implementations (ML-DSA-65, Kyber-1024, SPHINCS+)" ON)
 option(AMA_AES_CONSTTIME "Use constant-time bitsliced AES S-box (eliminates cache-timing)" ON)
-option(AMA_ED25519_ASSEMBLY "Enable ed25519-donna x86-64 assembly scalar mult" OFF)
+
+# Ed25519 backend default:
+#  - x86-64  → ON  (donna's hand-tuned AVX2 field arithmetic + precomputed
+#                   base-point table outruns the in-tree fe51 comb by ~1.5–2×
+#                   on x86-64, for both keygen/sign and verify)
+#  - non-x86 → OFF (donna's fast path is x86-64 assembly; on ARM and other
+#                   targets the in-tree fe51 + signed 4-bit window comb in
+#                   src/c/ama_ed25519.c is used instead, and remains fast
+#                   for fixed-base keygen/sign)
+# Opt out explicitly with -DAMA_ED25519_ASSEMBLY=OFF to force the in-tree
+# backend regardless of platform (useful for clean-room audits of the
+# ama_ed25519.c path on x86-64).
+set(_AMA_DONNA_DEFAULT OFF)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+    set(_AMA_DONNA_DEFAULT ON)
+endif()
+option(AMA_ED25519_ASSEMBLY
+       "Enable ed25519-donna x86-64 assembly scalar mult"
+       ${_AMA_DONNA_DEFAULT})
+
 option(AMA_ENABLE_NATIVE_ARCH "Use -march=native for host-optimized builds" OFF)
 option(AMA_ENABLE_DUDECT "Build dudect constant-time verification tests" OFF)
 option(AMA_ENABLE_NEON "Enable ARM NEON optimizations (AArch64)" ON)
@@ -287,7 +306,21 @@ if(AMA_USE_NATIVE_PQC)
     message(STATUS "Native PQC enabled: ML-DSA-65, Kyber-1024, SPHINCS+-256f (zero OpenSSL dependency)")
 endif()
 
-# ed25519-donna assembly path (x86-64 only)
+# ed25519-donna assembly path (x86-64 only).  Auto-fallback when sanitizers
+# are active: donna's ge25519_scalarmult_base_choose_niels inline assembly
+# consumes most of the x86-64 XMM register file, and -fsanitize=address,
+# undefined instrumentation pushes clang past the register budget with
+# "inline assembly requires more registers than available".  Rather than
+# patch the vendored asm, we disable the inline-asm tier via donna's own
+# ED25519_NO_INLINE_ASM gate when sanitizers are present; the fallback C
+# path is what donna ships for exactly this situation.
+set(_AMA_SANITIZERS_ACTIVE FALSE)
+if(AMA_ENABLE_SANITIZERS)
+    set(_AMA_SANITIZERS_ACTIVE TRUE)
+endif()
+if(CMAKE_C_FLAGS MATCHES "-fsanitize=")
+    set(_AMA_SANITIZERS_ACTIVE TRUE)
+endif()
 if(AMA_ED25519_ASSEMBLY)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
         list(REMOVE_ITEM AMA_SOURCES src/c/ama_ed25519.c)
@@ -296,7 +329,15 @@ if(AMA_ED25519_ASSEMBLY)
         if(NOT AMA_USE_NATIVE_PQC)
             list(APPEND AMA_SOURCES src/c/ama_platform_rand.c)
         endif()
-        message(STATUS "Ed25519: donna x86-64 assembly scalar mult (vendored, public domain)")
+        if(_AMA_SANITIZERS_ACTIVE)
+            message(STATUS
+                "Ed25519: donna x86-64 path active, but sanitizer flags detected "
+                "— defining ED25519_NO_INLINE_ASM to route around the choose-niels "
+                "inline asm (register pressure vs. ASan/UBSan instrumentation)")
+        else()
+            message(STATUS
+                "Ed25519: donna x86-64 assembly scalar mult (vendored, public domain)")
+        endif()
     else()
         message(WARNING "AMA_ED25519_ASSEMBLY requires x86-64 — falling back to fe51")
         set(AMA_ED25519_ASSEMBLY OFF)
@@ -330,6 +371,11 @@ endif()
 function(ama_apply_donna_settings target)
     if(AMA_ED25519_ASSEMBLY)
         target_compile_definitions(${target} PRIVATE AMA_ED25519_ASSEMBLY)
+        # When sanitizers are active, route donna around its x86-64 inline
+        # assembly (register-budget conflict with -fsanitize instrumentation).
+        if(_AMA_SANITIZERS_ACTIVE)
+            target_compile_definitions(${target} PRIVATE ED25519_NO_INLINE_ASM)
+        endif()
         # donna's shim includes vendored source via relative path;
         # suppress warnings from vendored third-party code
         if(NOT MSVC)

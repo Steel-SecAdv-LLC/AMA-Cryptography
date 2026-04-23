@@ -170,8 +170,9 @@ static const fe25519 ed_d2 = {
     0x6738cc7407977ULL, 0x2406d9dc56dffULL
 };
 
-/* Forward declaration — needed by ensure_base_point() below */
+/* Forward declarations */
 static int ge25519_frombytes(ge25519_p3 *h, const uint8_t *s);
+static void sc25519_reduce(uint8_t *s);
 
 /*
  * Base point B — lazily initialized from the Ed25519 compressed base point.
@@ -506,22 +507,47 @@ static void ge25519_scalarmult(ge25519_p3 *r, const uint8_t *scalar, const ge255
 }
 
 /* ============================================================================
- * OPTIMIZED BASE POINT MULTIPLICATION
- * Comb method with 8 tables × 32 entries (~20KB) for 3-4x faster keygen/sign.
+ * OPTIMIZED BASE POINT MULTIPLICATION — Signed 4-bit Window Comb
+ * ============================================================================
  *
- * The comb method splits the 256-bit scalar into 8 interleaved 32-bit combs.
- * Each comb addresses one of 8 precomputed tables, each with 32 entries
- * (5-bit windows). This reduces the computation to 32 doublings + 8×32 = 256
- * constant-time table lookups + 256 additions, compared to the old approach
- * of 252 doublings + 64 additions with 16-entry tables.
+ * Algorithm: Bernstein–Duif–Lange–Schwabe–Yang (2012), "High-speed high-
+ * security signatures", §4.  The same technique used by libsodium / ref10.
  *
- * The net win comes from drastically reducing doublings: 32 vs 252.
+ * Precompute: 32 subtables × 8 Edwards-extended points:
+ *   comb_table[k][j] = (j+1) * 2^(8k) * B        for k in [0..31], j in [0..7]
+ *
+ * The 256-bit scalar s is split into 64 signed 4-bit digits e[0..63] with
+ * e[i] ∈ [-8..+7] and s = sum_{i=0..63} e[i] * 16^i.  Lookups use
+ * |e[i]| to index the subtable; the sign of e[i] conditionally negates
+ * the selected point.  Because 16^(2k)   = 256^k and
+ *                       16^(2k+1) = 16 * 256^k,
+ * the odd-index and even-index digit passes share the same 32 subtables,
+ * separated by four doublings that multiply the accumulator by 16:
+ *
+ *   h = O
+ *   for i odd  (1,3,...,63): h += e[i] * 2^(8*(i>>1)) * B     (32 adds)
+ *   h = 16 * h                                                 (4 doublings)
+ *   for i even (0,2,...,62): h += e[i] * 2^(8*(i>>1)) * B     (32 adds)
+ *
+ * Total: 64 mixed adds + 4 doublings (down from 256 adds + 31 doublings in
+ * the previous bit-by-bit comb).
+ *
+ * Constant-time guarantees (INVARIANT-12):
+ *   - Digit extraction is branchless arithmetic on the input scalar.
+ *   - Table selection is a linear cmov over all 8 entries.
+ *   - Sign handling is a branchless cmov on the coordinate negations.
+ *
+ * Table storage: stays in-tree; generated at first use from ed_B via the
+ * same primitives used in sign/verify.  This satisfies the INVARIANT-1
+ * vendoring addendum (no external crypto deps; no ad-hoc constants) and
+ * keeps PROVENANCE.md auditable — every byte of the table is derived from
+ * the RFC 8032 §5.1.4 base point by in-tree group arithmetic.  Memory
+ * footprint: 32 * 8 * sizeof(ge25519_p3) = 40960 bytes (unchanged from the
+ * prior comb layout; only the shape of the table differs).
  * ============================================================================ */
 
-/* Comb table: comb_table[t][i] = (i+1) * (2^(32*t)) * B for t in [0,7], i in [0,31] */
-#define COMB_TABLES 8
-#define COMB_ENTRIES 32
-#define COMB_BITS 5  /* log2(COMB_ENTRIES) */
+#define COMB_TABLES 32
+#define COMB_ENTRIES 8  /* signed 4-bit window: entries represent multiples 1..8 */
 
 static ge25519_p3 ge_comb_table[COMB_TABLES][COMB_ENTRIES];
 static AMA_ATOMIC_INT ge_comb_table_ready = 0;
@@ -529,10 +555,8 @@ static AMA_ATOMIC_INT ge_comb_table_ready = 0;
 /* Initialize the comb precomputed table.
  * Thread-safe via CAS tri-state: only one thread computes, others spin-wait.
  *
- * Computes: for each table t in [0..7]:
- *   base_t = 2^(32*t) * B
- *   comb_table[t][i] = (i+1) * base_t  for i in [0..31]
- */
+ * comb_table[k][j] = (j+1) * 2^(8*k) * B for k in [0..31], j in [0..7].
+ * Each subtable's base is the previous subtable's base doubled 8 times. */
 static void ge25519_init_comb_table(void) {
     int state = AMA_ATOMIC_LOAD(ge_comb_table_ready);
 
@@ -555,15 +579,15 @@ static void ge25519_init_comb_table(void) {
                 /* local_comb[t][0] = 1 * base_t */
                 memcpy(&local_comb[t][0], &base_t, sizeof(ge25519_p3));
 
-                /* local_comb[t][i] = (i+1) * base_t */
-                for (int i = 1; i < COMB_ENTRIES; i++) {
-                    ge25519_add(&tt, &local_comb[t][i-1], &base_t);
-                    ge25519_p1p1_to_p3(&local_comb[t][i], &tt);
+                /* local_comb[t][j] = (j+1) * base_t for j in [1..7] */
+                for (int j = 1; j < COMB_ENTRIES; j++) {
+                    ge25519_add(&tt, &local_comb[t][j-1], &base_t);
+                    ge25519_p1p1_to_p3(&local_comb[t][j], &tt);
                 }
 
-                /* Advance base_t: base_{t+1} = 2^32 * base_t */
+                /* Advance: base_{t+1} = 2^8 * base_t (8 doublings per subtable). */
                 if (t < COMB_TABLES - 1) {
-                    for (int d = 0; d < 32; d++) {
+                    for (int d = 0; d < 8; d++) {
                         ge25519_p3_to_p2(&pp2, &base_t);
                         ge25519_p2_dbl(&tt, &pp2);
                         ge25519_p1p1_to_p3(&base_t, &tt);
@@ -595,107 +619,132 @@ static void ge25519_cmov(ge25519_p3 *r, const ge25519_p3 *p, int flag) {
     }
 }
 
-/* Constant-time table lookup for comb table: selects comb_table[tbl][idx-1]
- * when idx > 0, or the identity when idx == 0.
- * Uses binary decomposition cmov (5 layers for 32 entries). */
-static void ge25519_comb_lookup(ge25519_p3 *r, int tbl, int idx) {
-    int lookup = idx - 1;  /* -1 when idx==0 */
-    ge25519_p3_0(r);
+/* Constant-time signed-window table select.
+ *
+ * digit ∈ [-8..+8].  Selects ge_comb_table[tbl][|digit|-1] for |digit|>0,
+ * or identity for digit==0, then conditionally negates the result when
+ * digit<0 by negating the X and T coordinates (standard Edwards negation:
+ * (x,y) -> (-x,y), and T = x*y so T flips sign too).
+ *
+ * Constant-time contract (INVARIANT-12):
+ *   - |digit| is computed with arithmetic XOR/mask, no branches.
+ *   - Entry selection is a linear scan over all 8 table rows with cmov.
+ *   - Sign conditional negation uses a 64-bit mask cmov per limb.
+ *
+ * Why [-8..+8] and not [-8..+7]: nibble-63 of a reduced/clamped scalar
+ * can carry up to 8 after the carry-propagation step in the caller (see
+ * comment there).  The extra branch on abs_d in [0..8] stays constant-
+ * time because we iterate k in [1..8] unconditionally. */
+static void ge25519_comb_select_signed(ge25519_p3 *r, int tbl, int8_t digit) {
+    /* is_neg = (digit < 0) ? 1 : 0, via sign-bit extension. */
+    uint8_t is_neg = (uint8_t)((uint8_t)digit >> 7);
+    /* abs_d = |digit| in [0..8], branchless. */
+    int8_t abs_d = (int8_t)((uint8_t)digit ^ (uint8_t)(0u - (unsigned)is_neg))
+                 + (int8_t)is_neg;
 
-    /* Linear scan: constant-time over all 32 entries */
-    for (int k = 0; k < COMB_ENTRIES; k++) {
-        int eq = 1 ^ (int)(((unsigned int)(k ^ lookup) | (unsigned int)(-(k ^ lookup))) >> 31);
-        ge25519_cmov(r, &ge_comb_table[tbl][k], eq);
+    /* Linear-scan select over 8 candidates; r = identity if abs_d == 0. */
+    ge25519_p3_0(r);
+    for (int k = 1; k <= COMB_ENTRIES; k++) {
+        int diff = (int)abs_d ^ k;
+        /* eq = (diff == 0) ? 1 : 0, branchless. */
+        int eq = 1 ^ (int)(((unsigned int)diff | (unsigned int)(-diff)) >> 31);
+        ge25519_cmov(r, &ge_comb_table[tbl][k - 1], eq);
+    }
+
+    /* Conditional negation when digit < 0.
+     * For twisted Edwards (X:Y:Z:T), -P = (-X : Y : Z : -T). */
+    fe25519 negX, negT;
+    fe25519_neg(negX, r->X);
+    fe25519_neg(negT, r->T);
+    uint64_t mask = 0ULL - (uint64_t)is_neg;
+    for (int j = 0; j < 5; j++) {
+        r->X[j] ^= mask & (r->X[j] ^ negX[j]);
+        r->T[j] ^= mask & (r->T[j] ^ negT[j]);
     }
 }
 
-/* Optimized base point multiplication using comb method (constant-time).
+/* Constant-time base-point scalar multiplication via the signed 4-bit
+ * window comb.  See the block comment at the top of the OPTIMIZED BASE
+ * POINT MULTIPLICATION section for the algorithm derivation.
  *
- * Algorithm (comb with 8 tables × 32 entries):
- * 1. Split 256-bit scalar into 8 combs of 32 bits each:
- *    scalar = sum_{t=0}^{7} sum_{j=0}^{31} s_{t,j} * 2^(32*t + j)
- * 2. Group by bit position j:
- *    scalar = sum_{j=0}^{31} 2^j * sum_{t=0}^{7} s_{t,j} * 2^(32*t)
- * 3. For each bit position j (from MSB to LSB), accumulate contributions
- *    from each of the 8 tables using 5-bit windows.
- *
- * This gives 31 doublings + up to 8×32 = 256 additions (with constant-time
- * conditional moves), a major improvement over 252 doublings.
- *
- * Constant-time: all table lookups use linear scan cmov; no secret-dependent branches.
- */
+ * Scalar range: accepts any 32-byte little-endian scalar in [0, 2^256).
+ * Because B has order l (the Ed25519 group order, < 2^253), the output
+ * point is a function of (scalar mod l) only, so we reduce first via
+ * sc25519_reduce into a canonical representative < 2^253.  This keeps
+ * the top signed nibble e[63] within [-8, +8] after carry propagation
+ * (the contract ge25519_comb_select_signed is built around), matches
+ * the behaviour of libsodium's crypto_scalarmult_ed25519_base, and
+ * makes ama_ed25519_point_from_scalar's documented linearity identity
+ *   point_from_scalar(a) + point_from_scalar(b) == point_from_scalar(a+b)
+ * hold for all 32-byte inputs — including unreduced ones that would
+ * otherwise set |e[63]| up to 16. */
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((hot))
 #endif
-static void ge25519_scalarmult_base_windowed(ge25519_p3 *r, const uint8_t *scalar) {
-    ge25519_p3 Q, P, Q_after_add;
-    ge25519_p1p1 t;
-    ge25519_p2 p2;
-
-    /* Ensure comb table is initialized */
+static void ge25519_scalarmult_base_comb_signed(ge25519_p3 *r,
+                                                const uint8_t *scalar) {
     ge25519_init_comb_table();
 
-    /* Extract 5-bit windows for each of the 8 combs at each of 7 bit positions.
-     * Window w for comb t = bits [5*w .. 5*w+4] of the 32-bit comb_t.
-     *
-     * Simpler approach: process scalar byte-by-byte with 8 combs of 32 bits.
-     * For each comb t, the 32-bit value is scalar[4*t .. 4*t+3] (little-endian).
-     * We process 5-bit windows: 6 full windows + 2 remaining bits. */
+    /* Canonicalise the scalar mod l via sc25519_reduce, which expects a
+     * 64-byte little-endian integer.  Zero-pad the high half and reduce
+     * in a local buffer — the input is not mutated. */
+    uint8_t scalar_reduced[64];
+    memcpy(scalar_reduced, scalar, 32);
+    memset(scalar_reduced + 32, 0, 32);
+    sc25519_reduce(scalar_reduced);
 
-    /* Extract 32-bit comb values */
-    uint32_t comb[COMB_TABLES];
-    for (int tt = 0; tt < COMB_TABLES; tt++) {
-        comb[tt] = (uint32_t)scalar[4*tt]
-                 | ((uint32_t)scalar[4*tt+1] << 8)
-                 | ((uint32_t)scalar[4*tt+2] << 16)
-                 | ((uint32_t)scalar[4*tt+3] << 24);
+    /* Split scalar into 64 unsigned 4-bit nibbles, then carry-propagate to
+     * signed digits in [-8..+7].  After sc25519_reduce, scalar < l < 2^253,
+     * so the unrebalanced top nibble e[63] starts in [0..7]; the final
+     * carry can increase it to 8, which is still within the [-8..+8]
+     * contract of ge25519_comb_select_signed. */
+    int8_t e[64];
+    for (int i = 0; i < 32; i++) {
+        e[2*i + 0] = (int8_t)(scalar_reduced[i] & 0x0F);
+        e[2*i + 1] = (int8_t)((scalar_reduced[i] >> 4) & 0x0F);
+    }
+    int32_t carry = 0;
+    for (int i = 0; i < 63; i++) {
+        int32_t v = (int32_t)e[i] + carry;
+        /* carry = (v >= 8) ? 1 : 0, with v in [0..16] due to prior carry. */
+        carry = (v + 8) >> 4;
+        e[i] = (int8_t)(v - (carry << 4));
+    }
+    e[63] = (int8_t)((int32_t)e[63] + carry);
+
+    ge25519_p3 h, t;
+    ge25519_p1p1 p1p1;
+    ge25519_p2 p2;
+
+    ge25519_p3_0(&h);
+
+    /* Odd-index pass: accumulate e[i] * 2^(8*(i/2)) * B for i = 1,3,...,63. */
+    for (int i = 1; i < 64; i += 2) {
+        ge25519_comb_select_signed(&t, i / 2, e[i]);
+        ge25519_add(&p1p1, &h, &t);
+        ge25519_p1p1_to_p3(&h, &p1p1);
     }
 
-    /* Start with identity */
-    ge25519_p3_0(&Q);
-
-    /* Process from MSB to LSB, one bit at a time (32 iterations).
-     * At each bit position j (31 down to 0):
-     *   Q = 2*Q  (except first iteration)
-     *   For each comb t: extract bit j of comb[t], accumulate. */
-
-    /* Actually, use 5-bit windows for efficiency:
-     * Process 7 windows of 5 bits (covering bits 31..2) + 1 window of 2 bits.
-     * But the simplest correct approach for the comb: process bit-by-bit. */
-
-    for (int j = 31; j >= 0; j--) {
-        /* Q = 2*Q (skip on first iteration when Q is identity) */
-        if (j < 31) {
-            ge25519_p3_to_p2(&p2, &Q);
-            ge25519_p2_dbl(&t, &p2);
-            ge25519_p1p1_to_p3(&Q, &t);
-        }
-
-        /* For each comb table, extract bit j and conditionally add.
-         * Uses ge25519_comb_lookup for constant-time table access. */
-        for (int tt = 0; tt < COMB_TABLES; tt++) {
-            int bit = (comb[tt] >> j) & 1;
-
-            /* Constant-time lookup: returns identity when bit==0,
-             * or table entry when bit==1.  ge25519_comb_lookup uses
-             * linear-scan cmov over all 32 entries. */
-            ge25519_comb_lookup(&P, tt, bit);
-
-            /* Always compute addition, conditionally keep result */
-            ge25519_add(&t, &Q, &P);
-            ge25519_p1p1_to_p3(&Q_after_add, &t);
-
-            /* Q = bit ? Q_after_add : Q (constant-time) */
-            ge25519_cmov(&Q, &Q_after_add, bit);
-        }
+    /* Four doublings: h *= 16. */
+    for (int k = 0; k < 4; k++) {
+        ge25519_p3_to_p2(&p2, &h);
+        ge25519_p2_dbl(&p1p1, &p2);
+        ge25519_p1p1_to_p3(&h, &p1p1);
     }
 
-    memcpy(r, &Q, sizeof(ge25519_p3));
+    /* Even-index pass: accumulate e[i] * 2^(8*(i/2)) * B for i = 0,2,...,62. */
+    for (int i = 0; i < 64; i += 2) {
+        ge25519_comb_select_signed(&t, i / 2, e[i]);
+        ge25519_add(&p1p1, &h, &t);
+        ge25519_p1p1_to_p3(&h, &p1p1);
+    }
+
+    memcpy(r, &h, sizeof(ge25519_p3));
 }
 
-/* Base point multiplication - use optimized windowed version */
+/* Base point multiplication — signed 4-bit window comb entry point. */
 static void ge25519_scalarmult_base(ge25519_p3 *r, const uint8_t *scalar) {
-    ge25519_scalarmult_base_windowed(r, scalar);
+    ge25519_scalarmult_base_comb_signed(r, scalar);
 }
 
 /* ============================================================================
