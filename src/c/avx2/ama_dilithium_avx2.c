@@ -23,12 +23,29 @@
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
 
+/* MSVC needs <intrin.h> for __popcnt; GCC/Clang expose __builtin_popcount
+ * unconditionally once <immintrin.h> is included. */
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#endif
+
 /* Portable "unused" annotation: GCC/Clang __attribute__, MSVC no-op. */
 #if defined(__GNUC__) || defined(__clang__)
 #define AMA_UNUSED __attribute__((unused))
 #else
 #define AMA_UNUSED
 #endif
+
+/* Portable 32-bit popcount.  __builtin_popcount is GCC/Clang-specific;
+ * MSVC provides __popcnt with matching semantics.  Wrapped in a static
+ * inline so the per-toolchain selection stays out of the hot loop. */
+static inline unsigned int ama_popcount_u32(uint32_t x) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    return (unsigned int)__popcnt(x);
+#else
+    return (unsigned int)__builtin_popcount(x);
+#endif
+}
 
 /* ML-DSA-65 parameters */
 #define DILITHIUM_Q        8380417
@@ -669,7 +686,12 @@ int ama_dilithium_rej_uniform_avx2(int32_t *out, size_t outlen,
         __m128i hi_bytes = _mm_loadu_si128((const __m128i *)(buf + pos + 12));
         __m128i lo_vals  = _mm_shuffle_epi8(lo_bytes, shuf);
         __m128i hi_vals  = _mm_shuffle_epi8(hi_bytes, shuf);
-        __m256i vals     = _mm256_setr_m128i(lo_vals, hi_vals);
+        /* Cast + inserti128 rather than _mm256_setr_m128i: the latter is a
+         * compiler macro that GCC/Clang ship via <immintrin.h> but MSVC's
+         * <immintrin.h> does not always expose, so the portable form keeps
+         * Windows + clang-cl builds green. */
+        __m256i vals     = _mm256_castsi128_si256(lo_vals);
+        vals             = _mm256_inserti128_si256(vals, hi_vals, 1);
 
         /* Mask to 23 bits (top bit of the 3-byte triple is ignored). */
         vals = _mm256_and_si256(vals, mask23);
@@ -691,7 +713,7 @@ int ama_dilithium_rej_uniform_avx2(int32_t *out, size_t outlen,
          * next iteration / tail will overwrite the trailing slots. */
         _mm256_storeu_si256((__m256i *)(out + ctr), compact);
 
-        ctr += (size_t)__builtin_popcount(m);
+        ctr += (size_t)ama_popcount_u32((uint32_t)m);
         pos += 24;
     }
 

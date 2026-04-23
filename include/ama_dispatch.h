@@ -88,8 +88,9 @@ typedef void (*ama_dilithium_pointwise_fn)(int32_t r[256],
 
 /** Dilithium rejection-uniform sampler: consumes a SHAKE128 byte stream,
  * writes up to `outlen` accepted 23-bit coefficients < q into `out`, and
- * returns the number of accepted samples.  Byte-identical to the 3-byte
- * -at-a-time scalar loop; the AVX2 variant batches 8 candidates/24B. */
+ * returns the number of accepted samples.  Byte-identical to the
+ * 3-byte-at-a-time scalar loop; the AVX2 variant batches 8 candidates
+ * per 24-byte chunk. */
 typedef int (*ama_dilithium_rej_uniform_fn)(int32_t *out, size_t outlen,
                                              const uint8_t *buf, size_t buflen);
 
