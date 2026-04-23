@@ -170,8 +170,9 @@ static const fe25519 ed_d2 = {
     0x6738cc7407977ULL, 0x2406d9dc56dffULL
 };
 
-/* Forward declaration — needed by ensure_base_point() below */
+/* Forward declarations */
 static int ge25519_frombytes(ge25519_p3 *h, const uint8_t *s);
+static void sc25519_reduce(uint8_t *s);
 
 /*
  * Base point B — lazily initialized from the Ed25519 compressed base point.
@@ -664,7 +665,19 @@ static void ge25519_comb_select_signed(ge25519_p3 *r, int tbl, int8_t digit) {
 
 /* Constant-time base-point scalar multiplication via the signed 4-bit
  * window comb.  See the block comment at the top of the OPTIMIZED BASE
- * POINT MULTIPLICATION section for the algorithm derivation. */
+ * POINT MULTIPLICATION section for the algorithm derivation.
+ *
+ * Scalar range: accepts any 32-byte little-endian scalar in [0, 2^256).
+ * Because B has order l (the Ed25519 group order, < 2^253), the output
+ * point is a function of (scalar mod l) only, so we reduce first via
+ * sc25519_reduce into a canonical representative < 2^253.  This keeps
+ * the top signed nibble e[63] within [-8, +8] after carry propagation
+ * (the contract ge25519_comb_select_signed is built around), matches
+ * the behaviour of libsodium's crypto_scalarmult_ed25519_base, and
+ * makes ama_ed25519_point_from_scalar's documented linearity identity
+ *   point_from_scalar(a) + point_from_scalar(b) == point_from_scalar(a+b)
+ * hold for all 32-byte inputs — including unreduced ones that would
+ * otherwise set |e[63]| up to 16. */
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((hot))
 #endif
@@ -672,14 +685,22 @@ static void ge25519_scalarmult_base_comb_signed(ge25519_p3 *r,
                                                 const uint8_t *scalar) {
     ge25519_init_comb_table();
 
+    /* Canonicalise the scalar mod l via sc25519_reduce, which expects a
+     * 64-byte little-endian integer.  Zero-pad the high half and reduce
+     * in a local buffer — the input is not mutated. */
+    uint8_t scalar_reduced[64];
+    memcpy(scalar_reduced, scalar, 32);
+    memset(scalar_reduced + 32, 0, 32);
+    sc25519_reduce(scalar_reduced);
+
     /* Split scalar into 64 unsigned 4-bit nibbles, then carry-propagate to
-     * signed digits in [-8..+7].  The final digit (e[63]) can absorb an
-     * incoming carry, so |e[63]| <= 8 for any reduced/clamped scalar; see
-     * the comment in ge25519_comb_select_signed for the [-8..+8] contract. */
+     * signed digits in [-8..+7].  After sc25519_reduce, scalar < l < 2^253,
+     * so e[63] is at most 7 after carry — well within the [-8..+8] contract
+     * of ge25519_comb_select_signed. */
     int8_t e[64];
     for (int i = 0; i < 32; i++) {
-        e[2*i + 0] = (int8_t)(scalar[i] & 0x0F);
-        e[2*i + 1] = (int8_t)((scalar[i] >> 4) & 0x0F);
+        e[2*i + 0] = (int8_t)(scalar_reduced[i] & 0x0F);
+        e[2*i + 1] = (int8_t)((scalar_reduced[i] >> 4) & 0x0F);
     }
     int32_t carry = 0;
     for (int i = 0; i < 63; i++) {
