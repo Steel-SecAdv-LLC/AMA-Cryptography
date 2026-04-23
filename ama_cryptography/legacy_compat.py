@@ -352,6 +352,7 @@ def canonical_hash_code(
 
 def hmac_authenticate(message: bytes, key: bytes) -> bytes:
     """Generate HMAC-SHA3-256 authentication tag (RFC 2104)."""
+    _enforce_invariant7_lc()
     if len(key) < 32:
         raise ValueError("HMAC key must be at least 32 bytes for SHA3-256 security")
 
@@ -360,6 +361,7 @@ def hmac_authenticate(message: bytes, key: bytes) -> bytes:
 
 def hmac_verify(message: bytes, tag: bytes, key: bytes) -> bool:
     """Verify HMAC-SHA3-256 authentication tag (constant-time)."""
+    _enforce_invariant7_lc()
     expected = hmac_authenticate(message, key)
     return constant_time_compare(tag, expected)
 
