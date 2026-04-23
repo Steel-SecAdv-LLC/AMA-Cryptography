@@ -20,7 +20,26 @@ option(AMA_ENABLE_SANITIZERS "Enable address/undefined sanitizers" OFF)
 option(AMA_ENABLE_LTO "Enable link-time optimization" ON)
 option(AMA_USE_NATIVE_PQC "Enable native PQC implementations (ML-DSA-65, Kyber-1024, SPHINCS+)" ON)
 option(AMA_AES_CONSTTIME "Use constant-time bitsliced AES S-box (eliminates cache-timing)" ON)
-option(AMA_ED25519_ASSEMBLY "Enable ed25519-donna x86-64 assembly scalar mult" OFF)
+
+# Ed25519 backend default:
+#  - x86-64  → ON  (donna's hand-tuned AVX2 field arithmetic + precomputed
+#                   base-point table outruns the in-tree fe51 comb by ~1.5–2×
+#                   on x86-64, for both keygen/sign and verify)
+#  - non-x86 → OFF (donna's fast path is x86-64 assembly; on ARM and other
+#                   targets the in-tree fe51 + signed 4-bit window comb in
+#                   src/c/ama_ed25519.c is used instead, and remains fast
+#                   for fixed-base keygen/sign)
+# Opt out explicitly with -DAMA_ED25519_ASSEMBLY=OFF to force the in-tree
+# backend regardless of platform (useful for clean-room audits of the
+# ama_ed25519.c path on x86-64).
+set(_AMA_DONNA_DEFAULT OFF)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+    set(_AMA_DONNA_DEFAULT ON)
+endif()
+option(AMA_ED25519_ASSEMBLY
+       "Enable ed25519-donna x86-64 assembly scalar mult"
+       ${_AMA_DONNA_DEFAULT})
+
 option(AMA_ENABLE_NATIVE_ARCH "Use -march=native for host-optimized builds" OFF)
 option(AMA_ENABLE_DUDECT "Build dudect constant-time verification tests" OFF)
 option(AMA_ENABLE_NEON "Enable ARM NEON optimizations (AArch64)" ON)
