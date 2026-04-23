@@ -16,6 +16,21 @@ option(AMA_BUILD_TESTS "Build test suite" ON)
 option(AMA_BUILD_EXAMPLES "Build examples" ON)
 option(AMA_ENABLE_SIMD "Enable SIMD optimizations" ON)
 option(AMA_ENABLE_AVX2 "Enable AVX2 instructions" ON)
+
+# AMA_ENABLE_AVX512 — PR A (2026-04) VAES + AVX-512 Keccak dispatch.
+# Defaults:
+#   - gcc / clang on x86-64 : ON  (all supported hosts have modern toolchain)
+#   - MSVC                  : OFF until a build-sample has gone green on CI;
+#     /arch:AVX512 handling has been flaky historically.
+#   - non-x86-64            : OFF (no-op on ARM / generic).
+# Runtime dispatch still CPUID-gates every kernel, so turning this ON on a
+# host without the required feature bits simply leaves the pointer NULL.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64" AND NOT MSVC)
+    option(AMA_ENABLE_AVX512 "Enable AVX-512 VAES / Keccak kernels (PR A)" ON)
+else()
+    option(AMA_ENABLE_AVX512 "Enable AVX-512 VAES / Keccak kernels (PR A)" OFF)
+endif()
+
 option(AMA_ENABLE_SANITIZERS "Enable address/undefined sanitizers" OFF)
 option(AMA_ENABLE_LTO "Enable link-time optimization" ON)
 option(AMA_USE_NATIVE_PQC "Enable native PQC implementations (ML-DSA-65, Kyber-1024, SPHINCS+)" ON)
@@ -179,6 +194,7 @@ endif()
 # ============================================================================
 
 set(AMA_AVX2_SOURCES "")
+set(AMA_AVX512_SOURCES "")
 set(AMA_NEON_SOURCES "")
 set(AMA_SVE2_SOURCES "")
 set(AMA_DISPATCH_SOURCES src/c/dispatch/ama_dispatch.c)
@@ -202,6 +218,44 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
         message(STATUS "SIMD: AVX2 hand-written intrinsics enabled (7 algorithms)")
         # Tell dispatch code that AVX2 implementations are linked in
         add_compile_definitions(AMA_HAVE_AVX2_IMPL)
+    endif()
+endif()
+
+# AVX-512 hand-written intrinsics (x86-64 only — PR A: VAES AES-GCM +
+# AVX-512 Keccak 4-way).  Source files live under src/c/avx2/ rather
+# than a parallel src/c/avx512/ tree on purpose: both are compiled
+# with -mavx2 -mavx512f -mavx512vl -mvaes -mvpclmulqdq, and the
+# AVX-512VL design means the VAES path never emits a ZMM opcode
+# (avoids the downclock penalty on some Xeon SKUs).  Runtime dispatch
+# still CPUID-gates every kernel, so a host missing a feature bit
+# simply leaves the corresponding pointer NULL.
+if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX512)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+        set(_AMA_AVX512_CANDIDATES
+            src/c/avx2/ama_aes_gcm_vaes.c
+            src/c/avx2/ama_keccak_avx512.c
+        )
+        # Only register source files that actually exist on disk.  The
+        # PR A series lands the CMake wiring first (so CI picks up the
+        # option) and the kernel files in follow-up commits; listing a
+        # nonexistent path would break configure for anyone checked out
+        # at an intermediate commit.
+        set(AMA_AVX512_SOURCES "")
+        foreach(_src IN LISTS _AMA_AVX512_CANDIDATES)
+            if(EXISTS "${CMAKE_SOURCE_DIR}/${_src}")
+                list(APPEND AMA_AVX512_SOURCES "${_src}")
+            endif()
+        endforeach()
+        if(AMA_AVX512_SOURCES)
+            if(NOT MSVC)
+                set_source_files_properties(${AMA_AVX512_SOURCES} PROPERTIES
+                    COMPILE_FLAGS "-mavx2 -mavx512f -mavx512vl -mvaes -mvpclmulqdq -maes -mpclmul")
+            endif()
+            message(STATUS "SIMD: AVX-512 / VAES kernels enabled (${AMA_AVX512_SOURCES})")
+            add_compile_definitions(AMA_HAVE_AVX512_IMPL)
+        else()
+            message(STATUS "SIMD: AVX-512 enabled but no kernel sources present yet (PR A scaffold commit)")
+        endif()
     endif()
 endif()
 
@@ -284,6 +338,7 @@ set(AMA_SOURCES
     src/c/ama_secure_memory.c
     ${AMA_DISPATCH_SOURCES}
     ${AMA_AVX2_SOURCES}
+    ${AMA_AVX512_SOURCES}
     ${AMA_NEON_SOURCES}
     ${AMA_SVE2_SOURCES}
 )
@@ -545,6 +600,7 @@ message(STATUS "  Tests:          ${AMA_BUILD_TESTS}")
 message(STATUS "  Examples:       ${AMA_BUILD_EXAMPLES}")
 message(STATUS "  SIMD:           ${AMA_ENABLE_SIMD}")
 message(STATUS "  AVX2:           ${AMA_ENABLE_AVX2}")
+message(STATUS "  AVX-512 (PR A): ${AMA_ENABLE_AVX512}")
 message(STATUS "  NEON:           ${AMA_ENABLE_NEON}")
 message(STATUS "  SVE2:           ${AMA_ENABLE_SVE2}")
 message(STATUS "  Sanitizers:     ${AMA_ENABLE_SANITIZERS}")

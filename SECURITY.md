@@ -259,6 +259,22 @@ We will deprecate cryptographic algorithms when:
 
 **30 days notice** will be provided before deprecating any algorithm, with migration guides and backwards compatibility support.
 
+### Performance note on AVX-512 dispatch (x86-64)
+
+The library ships optional AVX-512 kernels (VAES AES-GCM, 4-way Keccak —
+PR A, 2026-04) behind runtime CPUID + XCR0 gating. They are **not** the
+published-throughput baseline: sustained AVX-512 traffic downclocks
+noticeably on several x86 cloud hosts (Intel SKX/CLX/ICX Xeon, AWS
+`m5`/`m6i`/`c6i`, some Azure Dv5/Ev5 SKUs), and the throughput a
+neighbouring Python process or noisy-neighbour VM sees can be
+**lower** than the AVX2 path's steady-state number. Our
+`benchmarks/baseline.json` harness therefore continues to target
+the AVX2 AES-NI + PCLMULQDQ path shipped in #253 / #254 / #260 / #261.
+Enabling AVX-512 (`-DAMA_ENABLE_AVX512=ON`, on by default on
+gcc/clang x86-64) is supported for users who have measured their own
+bare-metal host; public performance claims for the AVX-512 path will
+only be made once reproduced on dedicated silicon.
+
 ## Security Audits
 
 AMA Cryptography has undergone internal security analysis documented in this file. We welcome:

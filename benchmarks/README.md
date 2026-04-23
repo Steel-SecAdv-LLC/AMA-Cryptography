@@ -132,6 +132,23 @@ point of this table: a 5× speedup that comes via pulling in 500 k
 additional audit LoC is a different engineering choice than a 5×
 speedup that comes from a better in-tree algorithm.
 
+## AVX-512 dispatch is not the baseline (PR A, 2026-04)
+
+The library grew two optional AVX-512 kernels in PR A: VAES AES-GCM and
+a 4-way Keccak-f[1600]. They are runtime-dispatched behind an
+OSXSAVE-gated CPUID probe (see `ama_cpuid_has_avx512_aesgcm_bundle()`
+and `ama_cpuid_has_avx512_keccak()`). They are **not** the reference
+number quoted in [`baseline.json`](baseline.json): sustained AVX-512
+traffic downclocks on several x86 cloud hosts (Intel SKX/CLX/ICX Xeon
+sold in AWS `m5`/`m6i`/`c6i` and some Azure Dv5/Ev5 sizes), so a
+regression check that expects AVX-512 throughput would flake the first
+time it ran on a throttled host. The baseline harness therefore
+continues to target the AVX2 AES-NI + PCLMULQDQ path, and the
+AVX-512 kernels ship behind `AMA_ENABLE_AVX512` (default ON on
+gcc/clang x86-64, OFF on MSVC until a green sample build lands).
+Public performance claims for the AVX-512 path will only be made once
+reproduced on bare-metal silicon.
+
 ## Interpreting Results
 
 See `BENCHMARKS.md` (generated locally by running `python benchmark_suite.py`; not checked into version control) for the authoritative performance document, including:
