@@ -141,7 +141,7 @@ class ComparativeBenchmark:
         its ops/sec numbers as a separate implementation column.
 
         The Python/ctypes path measured elsewhere in this script pays a
-        ~2–15 µs per-call FFI tax on top of every primitive (GIL release /
+        ~2-15 µs per-call FFI tax on top of every primitive (GIL release /
         re-acquire, ctypes argument marshalling, Python wrapper dispatch).
         That overhead dominates the measurement for sub-microsecond
         primitives like SHA3-256, making a peer-vs-AMA ratio computed off
