@@ -306,7 +306,21 @@ if(AMA_USE_NATIVE_PQC)
     message(STATUS "Native PQC enabled: ML-DSA-65, Kyber-1024, SPHINCS+-256f (zero OpenSSL dependency)")
 endif()
 
-# ed25519-donna assembly path (x86-64 only)
+# ed25519-donna assembly path (x86-64 only).  Auto-fallback when sanitizers
+# are active: donna's ge25519_scalarmult_base_choose_niels inline assembly
+# consumes most of the x86-64 XMM register file, and -fsanitize=address,
+# undefined instrumentation pushes clang past the register budget with
+# "inline assembly requires more registers than available".  Rather than
+# patch the vendored asm, we disable the inline-asm tier via donna's own
+# ED25519_NO_INLINE_ASM gate when sanitizers are present; the fallback C
+# path is what donna ships for exactly this situation.
+set(_AMA_SANITIZERS_ACTIVE FALSE)
+if(AMA_ENABLE_SANITIZERS)
+    set(_AMA_SANITIZERS_ACTIVE TRUE)
+endif()
+if(CMAKE_C_FLAGS MATCHES "-fsanitize=")
+    set(_AMA_SANITIZERS_ACTIVE TRUE)
+endif()
 if(AMA_ED25519_ASSEMBLY)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
         list(REMOVE_ITEM AMA_SOURCES src/c/ama_ed25519.c)
@@ -315,7 +329,15 @@ if(AMA_ED25519_ASSEMBLY)
         if(NOT AMA_USE_NATIVE_PQC)
             list(APPEND AMA_SOURCES src/c/ama_platform_rand.c)
         endif()
-        message(STATUS "Ed25519: donna x86-64 assembly scalar mult (vendored, public domain)")
+        if(_AMA_SANITIZERS_ACTIVE)
+            message(STATUS
+                "Ed25519: donna x86-64 path active, but sanitizer flags detected "
+                "— defining ED25519_NO_INLINE_ASM to route around the choose-niels "
+                "inline asm (register pressure vs. ASan/UBSan instrumentation)")
+        else()
+            message(STATUS
+                "Ed25519: donna x86-64 assembly scalar mult (vendored, public domain)")
+        endif()
     else()
         message(WARNING "AMA_ED25519_ASSEMBLY requires x86-64 — falling back to fe51")
         set(AMA_ED25519_ASSEMBLY OFF)
@@ -349,6 +371,11 @@ endif()
 function(ama_apply_donna_settings target)
     if(AMA_ED25519_ASSEMBLY)
         target_compile_definitions(${target} PRIVATE AMA_ED25519_ASSEMBLY)
+        # When sanitizers are active, route donna around its x86-64 inline
+        # assembly (register-budget conflict with -fsanitize instrumentation).
+        if(_AMA_SANITIZERS_ACTIVE)
+            target_compile_definitions(${target} PRIVATE ED25519_NO_INLINE_ASM)
+        endif()
         # donna's shim includes vendored source via relative path;
         # suppress warnings from vendored third-party code
         if(NOT MSVC)
