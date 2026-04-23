@@ -662,14 +662,34 @@ int ama_dilithium_rej_uniform_avx2(int32_t *out, size_t outlen,
     size_t ctr = 0;
     size_t pos = 0;
 
-    /* Byte-extraction shuffle mask for _mm_shuffle_epi8.
-     * Takes bytes [0..11] of a 16-byte input and expands each 3-byte
-     * triple into a 4-byte int32 (little-endian, high byte zero). */
-    const __m128i shuf = _mm_setr_epi8(
+    /* Two byte-extraction shuffle masks for _mm_shuffle_epi8.
+     *
+     * shuf_lo processes bytes [0..11] of the low 16-byte load, yielding
+     * 4 int32 lanes (one per 3-byte triple, high byte zero).  shuf_hi
+     * processes bytes [4..15] of a 16-byte load that overlaps the low
+     * load by 4 bytes — i.e. we load (buf + pos + 8) rather than
+     * (buf + pos + 12), so the second load's tail (byte offset 15)
+     * aligns with the last byte of the 24-byte window (buf[pos + 23]).
+     *
+     * The overlapping-load layout is deliberately chosen to avoid an
+     * out-of-bounds read: the loop guard only proves pos + 24 <= buflen,
+     * so the naive "_mm_loadu_si128(buf + pos + 12)" reads bytes
+     * [pos + 12 .. pos + 27] — 4 bytes past end.  On a heap buffer
+     * sized exactly to buflen ending near a page boundary, that can
+     * segfault; on our internal x4 callers it was merely reading stack
+     * tails of neighbouring SHAKE-stream slots.  Both are fixed by
+     * reading from buf + pos + 8 and picking up the high-half triples
+     * from the upper 12 bytes of that vector. */
+    const __m128i shuf_lo = _mm_setr_epi8(
         0,  1,  2, -1,
         3,  4,  5, -1,
         6,  7,  8, -1,
         9, 10, 11, -1);
+    const __m128i shuf_hi = _mm_setr_epi8(
+         4,  5,  6, -1,
+         7,  8,  9, -1,
+        10, 11, 12, -1,
+        13, 14, 15, -1);
 
     const __m256i mask23 = _mm256_set1_epi32(0x007FFFFF);
     const __m256i q_vec  = _mm256_set1_epi32(DILITHIUM_Q);
@@ -679,13 +699,15 @@ int ama_dilithium_rej_uniform_avx2(int32_t *out, size_t outlen,
      * unaligned _mm256_storeu_si256 never writes past end; any residual
      * shortfall is mopped up by the scalar tail below. */
     while (pos + 24 <= buflen && ctr + 8 <= outlen) {
-        /* Lower 4 lanes of the __m256i come from bytes 0..11 of the
-         * current chunk; upper 4 come from bytes 12..23.  Two separate
-         * _mm_loadu_si128 + pshufb sidestep cross-lane shuffling. */
+        /* Both 16-byte loads are provably within [pos, pos + 24): the
+         * low load covers [pos + 0, pos + 16), the high load covers
+         * [pos + 8, pos + 24).  The 4-byte overlap (offsets 8..11 of
+         * the low load = offsets 0..3 of the high load) is ignored by
+         * shuf_hi (which starts at byte offset 4). */
         __m128i lo_bytes = _mm_loadu_si128((const __m128i *)(buf + pos));
-        __m128i hi_bytes = _mm_loadu_si128((const __m128i *)(buf + pos + 12));
-        __m128i lo_vals  = _mm_shuffle_epi8(lo_bytes, shuf);
-        __m128i hi_vals  = _mm_shuffle_epi8(hi_bytes, shuf);
+        __m128i hi_bytes = _mm_loadu_si128((const __m128i *)(buf + pos + 8));
+        __m128i lo_vals  = _mm_shuffle_epi8(lo_bytes, shuf_lo);
+        __m128i hi_vals  = _mm_shuffle_epi8(hi_bytes, shuf_hi);
         /* Cast + inserti128 rather than _mm256_setr_m128i: the latter is a
          * compiler macro that GCC/Clang ship via <immintrin.h> but MSVC's
          * <immintrin.h> does not always expose, so the portable form keeps
