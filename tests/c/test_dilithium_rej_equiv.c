@@ -2,25 +2,32 @@
  * Copyright 2025-2026 Steel Security Advisors LLC
  * Licensed under the Apache License, Version 2.0
  *
- * Byte-equivalence test for the vectorized ML-DSA-65 rejection sampler
- * (ama_dilithium_rej_uniform_avx2) against a scalar reference matching
- * the 3-byte-per-candidate algorithm in FIPS 204 §7.3.
+ * Byte-equivalence test for the dispatched ML-DSA-65 rejection sampler
+ * (typically ama_dilithium_rej_uniform_avx2 when AVX2 is available, NULL
+ * on non-x86 or AVX2-less hosts) against a scalar reference that
+ * matches the 3-byte-per-candidate algorithm in FIPS 204 §7.3.
  *
  * Generates pseudo-random byte streams with a reproducible PRNG, runs
  * both implementations, and asserts identical output arrays and identical
  * accepted counts.  A regression in the mask extraction, the 23-bit
  * trim, or the compaction LUT would flip some accepted values to zero
  * or into the wrong slot, caught here by direct memcmp.
+ *
+ * Routes through ama_get_dispatch_table()->dilithium_rej_uniform rather
+ * than calling the AVX2 entry point directly so the test:
+ *   - Links on builds where AMA_HAVE_AVX2_IMPL is not defined.
+ *   - Does not execute an AVX2 instruction on an x86-64 host that lacks
+ *     AVX2 at runtime (CPUID-guarded by the dispatch init).
+ *   - Cleanly SKIPs when the dispatcher leaves the pointer NULL.
  */
 
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include "ama_cryptography.h"
+#include "ama_dispatch.h"
 
 #define DILITHIUM_Q 8380417
-
-extern int ama_dilithium_rej_uniform_avx2(int32_t *out, size_t outlen,
-                                          const uint8_t *buf, size_t buflen);
 
 static int scalar_rej_uniform(int32_t *out, size_t outlen,
                               const uint8_t *buf, size_t buflen) {
@@ -47,13 +54,16 @@ static uint8_t xs_byte(void) {
 }
 
 int main(void) {
-    printf("ML-DSA-65 rejection sampler AVX2-vs-scalar equivalence\n");
-    printf("=======================================================\n");
+    printf("ML-DSA-65 rejection sampler dispatched-vs-scalar equivalence\n");
+    printf("============================================================\n");
 
-#if !defined(__x86_64__) && !defined(_M_X64)
-    printf("SKIP: AVX2 rejection sampler requires x86-64\n");
-    return 0;
-#else
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (dt == NULL || dt->dilithium_rej_uniform == NULL) {
+        printf("SKIP: dispatched rej_uniform unavailable on this build/CPU\n");
+        printf("============================================================\n");
+        return 0;
+    }
+
     const int TRIALS = 256;
     const size_t BUF_LEN = 840; /* typical SHAKE128 squeezeblocks × ~5 */
     const size_t OUT_LEN = 256;
@@ -69,7 +79,7 @@ int main(void) {
         memset(out_avx, 0xAA, sizeof(out_avx));
         memset(out_ref, 0xAA, sizeof(out_ref));
 
-        int n_avx = ama_dilithium_rej_uniform_avx2(out_avx, OUT_LEN, buf, BUF_LEN);
+        int n_avx = dt->dilithium_rej_uniform(out_avx, OUT_LEN, buf, BUF_LEN);
         int n_ref = scalar_rej_uniform(out_ref, OUT_LEN, buf, BUF_LEN);
 
         if (n_avx != n_ref) {
@@ -96,7 +106,7 @@ int main(void) {
             for (size_t i = 0; i < blen; i++) buf[i] = xs_byte();
             memset(out_avx, 0xAA, sizeof(out_avx));
             memset(out_ref, 0xAA, sizeof(out_ref));
-            int n_avx = ama_dilithium_rej_uniform_avx2(out_avx, OUT_LEN, buf, blen);
+            int n_avx = dt->dilithium_rej_uniform(out_avx, OUT_LEN, buf, blen);
             int n_ref = scalar_rej_uniform(out_ref, OUT_LEN, buf, blen);
             if (n_avx != n_ref || memcmp(out_avx, out_ref, (size_t)n_ref * sizeof(int32_t)) != 0) {
                 fprintf(stderr, "FAIL: short buflen %zu mismatch\n", blen);
@@ -111,7 +121,7 @@ int main(void) {
         for (size_t olen = 0; olen <= 9; olen++) {
             memset(out_avx, 0xAA, sizeof(out_avx));
             memset(out_ref, 0xAA, sizeof(out_ref));
-            int n_avx = ama_dilithium_rej_uniform_avx2(out_avx, olen, buf, BUF_LEN);
+            int n_avx = dt->dilithium_rej_uniform(out_avx, olen, buf, BUF_LEN);
             int n_ref = scalar_rej_uniform(out_ref, olen, buf, BUF_LEN);
             if (n_avx != n_ref || (n_ref > 0 && memcmp(out_avx, out_ref, (size_t)n_ref * sizeof(int32_t)) != 0)) {
                 fprintf(stderr, "FAIL: small outlen %zu mismatch (avx=%d ref=%d)\n",
@@ -126,7 +136,6 @@ int main(void) {
         return 1;
     }
     printf("PASS: %d random trials + short-buflen + small-outlen edge cases\n", TRIALS);
-    printf("=======================================================\n");
+    printf("============================================================\n");
     return 0;
-#endif
 }

@@ -2,35 +2,39 @@
  * Copyright 2025-2026 Steel Security Advisors LLC
  * Licensed under the Apache License, Version 2.0
  *
- * Byte-equivalence test for the merged-layer AVX2 Dilithium NTT / invNTT
- * against a scalar reference that matches dil_ntt_cached / dil_invntt_cached
- * in src/c/ama_dilithium.c.
+ * Byte-equivalence test for the dispatched ML-DSA-65 NTT / inverse NTT
+ * (typically ama_dilithium_ntt_avx2 / invntt_avx2 when AVX2 is available,
+ * NULL on non-x86 or AVX2-less hosts) against a scalar reference that
+ * matches dil_ntt_cached / dil_invntt_cached in src/c/ama_dilithium.c.
  *
  * Rationale: the AVX2 path restructures the eight NTT layers into merged
  * register-resident blocks; correctness must survive that restructuring
  * byte-for-byte, not merely up to equivalence under Z[x]/(x^256 + 1).
  * The full sign/verify KATs also catch regressions, but they pin the
  * whole pipeline.  This test pins the individual transform.
+ *
+ * Routes through ama_get_dispatch_table()->dilithium_ntt / dilithium_invntt
+ * rather than calling the AVX2 entry points directly so the test:
+ *   - Links on builds where AMA_HAVE_AVX2_IMPL is not defined.
+ *   - Does not execute an AVX2 instruction on an x86-64 host that lacks
+ *     AVX2 at runtime (CPUID-guarded by the dispatch init).
+ *   - Cleanly SKIPs when the dispatcher leaves the pointer NULL.
  */
 
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include "ama_cryptography.h"
+#include "ama_dispatch.h"
 
 #define DILITHIUM_Q     8380417
 #define DILITHIUM_N     256
 #define DILITHIUM_QINV  58728449
 
-/* Externally-declared AVX2 entry points (mirrors dispatch/ama_dispatch.c). */
-extern void ama_dilithium_ntt_avx2(int32_t poly[DILITHIUM_N],
-                                    const int32_t zetas[256]);
-extern void ama_dilithium_invntt_avx2(int32_t poly[DILITHIUM_N],
-                                       const int32_t zetas[256]);
-
 /* Dilithium zetas[256] — identical values to dil_zetas in ama_dilithium.c,
  * reproduced here so this test is standalone (the dil_zetas symbol has
  * internal linkage in the library).  A drift would be caught by the
- * scalar_ntt path producing different output from ama_dilithium_ntt_avx2. */
+ * scalar_ntt path producing different output from the dispatched NTT. */
 static const int32_t dil_zetas[256] = {
          0,    25847, -2608894,  -518909,   237124,  -777960,  -876248,   466468,
    1826347,  2353451,  -359251, -2091905,  3119733, -2884855,  3111497,  2680103,
@@ -129,10 +133,13 @@ int main(void) {
     printf("Dilithium NTT merged-vs-scalar equivalence\n");
     printf("==========================================\n");
 
-#if !defined(__x86_64__) && !defined(_M_X64)
-    printf("SKIP: AVX2 NTT requires x86-64 target\n");
-    return 0;
-#else
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (dt == NULL || dt->dilithium_ntt == NULL || dt->dilithium_invntt == NULL) {
+        printf("SKIP: dispatched Dilithium NTT/invNTT unavailable on this build/CPU\n");
+        printf("==========================================\n");
+        return 0;
+    }
+
     int fail = 0;
     const int N_TRIALS = 256;
 
@@ -150,12 +157,12 @@ int main(void) {
         }
 
         scalar_ntt(poly_s);
-        ama_dilithium_ntt_avx2(poly_v, dil_zetas);
+        dt->dilithium_ntt(poly_v, dil_zetas);
         fail += cmp_poly(poly_s, poly_v, "forward NTT", trial);
 
         /* Now invert and check byte-identity again. */
         scalar_invntt(poly_s);
-        ama_dilithium_invntt_avx2(poly_v, dil_zetas);
+        dt->dilithium_invntt(poly_v, dil_zetas);
         fail += cmp_poly(poly_s, poly_v, "inverse NTT", trial);
 
         if (fail && trial >= 2) break; /* avoid flooding on bad runs */
@@ -169,5 +176,4 @@ int main(void) {
            N_TRIALS);
     printf("==========================================\n");
     return 0;
-#endif
 }

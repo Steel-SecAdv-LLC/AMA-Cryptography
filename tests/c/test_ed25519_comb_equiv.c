@@ -6,15 +6,27 @@
  * (ge25519_scalarmult_base_comb_signed) against the variable-base wNAF
  * reference (ge25519_scalarmult, exposed via ama_ed25519_scalarmult_public).
  *
- * Contract: for any 32-byte scalar s, both code paths compute the same
- * compressed Edwards point:
+ * Contract: for any 32-byte scalar s in [0, 2^256), both code paths
+ * compute the same compressed Edwards point:
  *     ama_ed25519_point_from_scalar(s)                  // fixed-base comb
  *  == ama_ed25519_scalarmult_public(s, base_compressed) // variable-base wNAF
  *
- * The test cycles through deterministically-seeded random scalars plus a
- * handful of edge-case vectors (identity-adjacent, nibble-boundary,
- * sign-bit-propagating) so a regression in the carry-propagation or signed
- * lookup would be caught.
+ * Because the base point B has order l ≈ 2^252.6 < 2^253, both paths are
+ * equivalent to multiplying (s mod l)·B — the fixed-base comb reduces
+ * the scalar mod l up front via sc25519_reduce (the same path libsodium
+ * uses), and the variable-base wNAF operates on the raw 256-bit integer
+ * which is equivalent in the group.  Hence the test covers scalars with
+ * arbitrary high bits set, not just the RFC 8032 clamped domain used
+ * during keygen/sign.
+ *
+ * Coverage:
+ *   - Edge cases (identity, 1, all-nibbles-+7, all-nibbles-+8, alternating).
+ *   - 1024 clamped scalars (keygen / sign domain).
+ *   - 256 unclamped scalars with high bits set (the non-clamped
+ *     linearity domain used by FROST binding factors et al.).
+ *   - Explicit top-bit-set vector (scalar[31] = 0xFF) to exercise the
+ *     sc25519_reduce path and confirm the comb and the wNAF agree on a
+ *     scalar that is provably > l.
  *
  * Running this suite complements the RFC 8032 KATs in test_ed25519.c:
  *   - The KATs pin the absolute public key / signature for one seed.
@@ -46,7 +58,7 @@ static uint64_t xs64_next(void) {
     return x * 0x2545F4914F6CDD1DULL;
 }
 
-static void fill_scalar(uint8_t s[32]) {
+static void fill_random_bytes(uint8_t s[32]) {
     for (int i = 0; i < 32; i += 8) {
         uint64_t r = xs64_next();
         for (int j = 0; j < 8; j++) {
@@ -54,19 +66,44 @@ static void fill_scalar(uint8_t s[32]) {
             r >>= 8;
         }
     }
+}
+
+static void fill_scalar(uint8_t s[32]) {
+    fill_random_bytes(s);
     /* Ed25519 RFC 8032 clamp: zero low 3 bits of byte 0, clear bit 255,
      * set bit 254.  This matches how the derivation path feeds scalars into
-     * ge25519_scalarmult_base, so we test the realistic input domain. */
+     * ge25519_scalarmult_base for keypair / sign. */
     s[0]  &= 0xF8;
     s[31] &= 0x7F;
     s[31] |= 0x40;
 }
 
+/* Compare the fixed-base comb's output for `scalar` against the
+ * variable-base wNAF applied to (scalar mod l)·B.
+ *
+ * We feed the wNAF path the sc_reduce'd scalar so the reference is a
+ * straight 253-bit scalar; the wNAF implementation
+ * (ge25519_scalarmult) has an implicit precondition that its input is
+ * < 2^253 — for larger scalars the carry during NAF extraction can
+ * overflow past bit 255 and produce a different group element than
+ * the mathematical scalar·P would.  Reducing the wNAF input mod l is
+ * equivalent (B has order l, so s·B = (s mod l)·B), and tests precisely
+ * the property we care about: that the comb's internal sc_reduce +
+ * signed-window recoding produces the correct group element for any
+ * 32-byte input. */
 static int test_one(const uint8_t scalar[32], const char *label) {
     uint8_t p_fixed[32], p_var[32];
 
     ama_ed25519_point_from_scalar(p_fixed, scalar);
-    ama_error_t rc = ama_ed25519_scalarmult_public(p_var, scalar, base_compressed);
+
+    /* Build a 64-byte reduction buffer: scalar little-endian in the low
+     * half, zero-pad in the high half, then reduce mod l in place. */
+    uint8_t reduce_buf[64];
+    memcpy(reduce_buf, scalar, 32);
+    memset(reduce_buf + 32, 0, 32);
+    ama_ed25519_sc_reduce(reduce_buf);
+
+    ama_error_t rc = ama_ed25519_scalarmult_public(p_var, reduce_buf, base_compressed);
     if (rc != AMA_SUCCESS) {
         fprintf(stderr, "FAIL: %s — scalarmult_public returned %d\n", label, (int)rc);
         return 1;
@@ -74,11 +111,13 @@ static int test_one(const uint8_t scalar[32], const char *label) {
 
     if (memcmp(p_fixed, p_var, 32) != 0) {
         fprintf(stderr, "FAIL: %s — point mismatch\n", label);
-        fprintf(stderr, "  scalar: ");
+        fprintf(stderr, "  scalar:      ");
         for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", scalar[i]);
-        fprintf(stderr, "\n  fixed:  ");
+        fprintf(stderr, "\n  reduced(s):  ");
+        for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", reduce_buf[i]);
+        fprintf(stderr, "\n  comb(s):     ");
         for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", p_fixed[i]);
-        fprintf(stderr, "\n  var:    ");
+        fprintf(stderr, "\n  wNAF(red*B): ");
         for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", p_var[i]);
         fprintf(stderr, "\n");
         return 1;
@@ -138,24 +177,61 @@ int main(void) {
         failures += test_one(s, "alternating 0xFF/0x00");
     }
 
-    /* Randomized batch: 1024 clamped scalars drawn from a reproducible
-     * xorshift stream. */
-    const int N_RANDOM = 1024;
-    for (int i = 0; i < N_RANDOM; i++) {
+    /* Edge-case 6: non-clamped all-0xFF scalar.  Pre-reduction the raw
+     * top-nibble carry would blow past |e[63]| = 8, so this is the
+     * single vector that exercises the sc25519_reduce path most
+     * directly — without the reduce, the fixed-base comb would produce
+     * the wrong point. */
+    {
+        uint8_t s[32];
+        memset(s, 0xFF, 32);
+        failures += test_one(s, "non-clamped all-0xFF (bit 255 set)");
+    }
+
+    /* Edge-case 7: non-clamped scalar with top byte = 0xFE (bit 255 = 1). */
+    {
+        uint8_t s[32] = {0};
+        s[0] = 0x42;
+        s[16] = 0x42;
+        s[31] = 0xFE;
+        failures += test_one(s, "non-clamped top-byte 0xFE");
+    }
+
+    /* Randomized batch 1: 1024 clamped scalars drawn from a reproducible
+     * xorshift stream (the keygen / sign domain). */
+    const int N_CLAMPED = 1024;
+    for (int i = 0; i < N_CLAMPED; i++) {
         uint8_t s[32];
         fill_scalar(s);
         char label[64];
-        snprintf(label, sizeof(label), "random scalar #%d", i);
+        snprintf(label, sizeof(label), "clamped random scalar #%d", i);
         failures += test_one(s, label);
     }
 
+    /* Randomized batch 2: 256 unclamped scalars — full 32-byte random
+     * bytes with no RFC 8032 clamp applied.  Exercises the non-clamped
+     * domain used by FROST binding-factor arithmetic and any other
+     * scalar flowing through ama_ed25519_point_from_scalar without
+     * going through ama_ed25519_keypair first.  Without the sc25519_
+     * reduce in the comb entry point, scalars whose top nibble > 7
+     * would diverge from the wNAF reference here. */
+    const int N_UNCLAMPED = 256;
+    for (int i = 0; i < N_UNCLAMPED; i++) {
+        uint8_t s[32];
+        fill_random_bytes(s);
+        char label[64];
+        snprintf(label, sizeof(label), "unclamped random scalar #%d", i);
+        failures += test_one(s, label);
+    }
+
+    const int total = 7 + N_CLAMPED + N_UNCLAMPED;
     if (failures) {
-        fprintf(stderr, "\n%d / %d vectors FAILED\n", failures, N_RANDOM + 5);
+        fprintf(stderr, "\n%d / %d vectors FAILED\n", failures, total);
         return 1;
     }
 
-    printf("PASS: %d vectors (5 edge cases + %d random scalars)\n",
-           5 + N_RANDOM, N_RANDOM);
+    printf("PASS: %d vectors (7 edge cases + %d clamped + %d unclamped random scalars)\n",
+           total, N_CLAMPED, N_UNCLAMPED);
     printf("=====================================\n");
     printf("Ed25519 comb equivalence OK\n");
     return 0;
