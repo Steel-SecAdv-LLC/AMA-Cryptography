@@ -29,6 +29,12 @@ on:
 permissions:
   contents: read
 
+# Collapse overlapping runs on the same ref.  Main and the weekly
+# schedule (Sundays 02:00 UTC) are preserved.
+concurrency:
+  group: dudect-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}
+
 jobs:
   dudect-utility:
     name: dudect - Utility Functions

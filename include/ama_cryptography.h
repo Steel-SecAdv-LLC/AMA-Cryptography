@@ -958,6 +958,20 @@ AMA_API ama_error_t ama_x25519_key_exchange(
 #define AMA_ARGON2_TAG_BYTES   32
 
 /**
+ * @brief Upper bound on Argon2id output/tag length accepted by the public API.
+ *
+ * RFC 9106 §3.2 permits out_len up to 2^32 - 1 bytes, but every real-world
+ * deployment uses 16–64 bytes; sizes above ~128 are cryptographically
+ * indistinguishable from 64 and only waste compute / memory.  A 1024-byte
+ * cap (32× the default tag length) is the application-sane ceiling we
+ * enforce at every public entry point to bound worst-case CPU time and
+ * prevent a caller-controlled ``tag_len`` from becoming a
+ * memory-exhaustion / DoS vector in ``ama_argon2id_legacy_verify`` (which
+ * heap-allocates ``computed[tag_len]`` to hold the freshly-derived tag).
+ */
+#define AMA_ARGON2ID_MAX_TAG_LEN  1024u
+
+/**
  * @brief Argon2id password hashing / key derivation (RFC 9106)
  *
  * Memory-hard KDF with resistance to GPU/ASIC attacks.
@@ -979,6 +993,57 @@ AMA_API ama_error_t ama_argon2id(
     const uint8_t *salt, size_t salt_len,
     uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
     uint8_t *output, size_t out_len
+);
+
+/**
+ * @brief Argon2id with the pre-2.1.5 buggy ``blake2b_long`` loop termination.
+ *
+ * Reproduces the non-spec derivation shipped in AMA ≤ 2.1.5. **Do not** use
+ * this for new password hashes — it is retained **only** so existing
+ * deployments can verify stored hashes during the migration window
+ * documented in ``CHANGELOG.md`` [Unreleased] § BREAKING. New derivations
+ * must use :c:func:`ama_argon2id`.
+ *
+ * Typical migration flow:
+ *   1. On next successful login, call :c:func:`ama_argon2id_legacy_verify`
+ *      with the stored tag.
+ *   2. On match, re-derive with :c:func:`ama_argon2id` and overwrite the
+ *      stored hash.
+ *   3. Retire the legacy path once all active accounts have rotated.
+ *
+ * Parameters and return codes are identical to :c:func:`ama_argon2id`.
+ */
+AMA_API ama_error_t ama_argon2id_legacy(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    uint8_t *output, size_t out_len
+);
+
+/**
+ * @brief Constant-time verify of a pre-2.1.5 Argon2id tag.
+ *
+ * Computes the legacy Argon2id derivation for the supplied inputs and
+ * compares against @p expected_tag with :c:func:`ama_consttime_memcmp`.
+ *
+ * @param password      Password bytes
+ * @param pwd_len       Password length
+ * @param salt          Salt
+ * @param salt_len      Salt length
+ * @param t_cost        Time cost (iterations)
+ * @param m_cost        Memory cost (KiB)
+ * @param parallelism   Degree of parallelism
+ * @param expected_tag  Stored tag to compare against (pre-2.1.5 format)
+ * @param tag_len       Length of expected_tag (>= 4)
+ * @return ``AMA_SUCCESS`` on constant-time match,
+ *         ``AMA_ERROR_VERIFY_FAILED`` on mismatch, or another error code
+ *         on parameter / allocation failure.
+ */
+AMA_API ama_error_t ama_argon2id_legacy_verify(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    const uint8_t *expected_tag, size_t tag_len
 );
 
 /* ============================================================================

@@ -265,8 +265,7 @@ NIST-standardized post-quantum algorithms:
 - `avx2/`: ML-KEM (vectorized NTT/Barrett), ML-DSA (vectorized NTT q=8380417), SPHINCS+ (4-way SHA-256), SHA3 (Keccak-f[1600] AVX2), AES-GCM (pipelined AES-NI + PCLMULQDQ GHASH), ChaCha20-Poly1305 (8-way parallel block function, ≥512 B ≈ 2.1–2.3×), Argon2 (4-way BlaMka G over AVX2 YMM, ≈1.3×)
 - `neon/`: ARM NEON 128-bit vector equivalents using `<arm_neon.h>` intrinsics + ARM Crypto Extensions
 - `sve2/`: ARM SVE2 scalable vector implementations for variable-length SIMD
-- `avx512/`: AVX-512 (x86-64) — **planned future feature**, not yet implemented; the CMake option `AMA_ENABLE_AVX512` is reserved for this release
-- `dispatch/ama_dispatch.c`: Runtime CPU feature detection and function pointer dispatch (AVX2 > generic on x86; SVE2 > NEON > generic on ARM)
+- `dispatch/ama_dispatch.c`: Runtime CPU feature detection and function pointer dispatch (AVX2 > generic on x86; SVE2 > NEON > generic on ARM). An AVX-512 dispatch slot (`AMA_IMPL_AVX512`) exists in the enum and CPUID probe, but no AVX-512 source files are shipped and the dispatcher downgrades it to AVX2 at runtime.
 
 **Cython Acceleration Modules (`src/cython/`):**
 - `hmac_binding.pyx`: Direct Cython binding to `ama_hmac_sha3_256()` (~262K ops/sec)
@@ -1010,7 +1009,6 @@ sudo cmake --install .
 - `AMA_ENABLE_AVX2` - Enable AVX2 SIMD optimizations (x86-64)
 - `AMA_ENABLE_NEON` - Enable ARM NEON SIMD optimizations (AArch64)
 - `AMA_ENABLE_SVE2` - Enable ARM SVE2 SIMD optimizations (AArch64, stretch)
-- `AMA_ENABLE_AVX512` - Enable AVX-512 SIMD optimizations (x86-64) — **future/planned**, currently has no effect
 - `AMA_ENABLE_SANITIZERS` - Enable AddressSanitizer/UBSan
 - `AMA_ENABLE_LTO` - Link-time optimization
 - `AMA_ENABLE_NATIVE_ARCH` - Enable `-march=native` for host-optimized builds (default: OFF)
@@ -1249,7 +1247,7 @@ AMA Cryptography v2.1.5 has **zero core cryptographic dependencies** — all cry
 - `[monitoring]`: numpy, scipy (3R engine)
 - `[legacy]`: cryptography (fallback)
 - `[hsm]`: PyKCS11 (HSM support)
-- `[secure-memory]`: pynacl (reserved; not currently used — `ama_cryptography.secure_memory` is dependency-free)
+- `[benchmark]`: pynacl, liboqs-python, cryptography (peer libraries for `benchmarks/comparative_benchmark.py` only — not linked into the production library; INVARIANT-1 still holds)
 
 ### Dependency Graph
 

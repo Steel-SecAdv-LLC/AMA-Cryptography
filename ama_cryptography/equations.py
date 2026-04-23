@@ -229,17 +229,18 @@ def verify_all_codes() -> Dict[str, Dict[str, float]]:
     Verify helical geometric invariants for all 7 Omni-Codes.
 
     Returns:
-        Dictionary mapping Omni-Codes to verification results:
-        {
-            'code': {
-                'radius': r,
-                'pitch': c,
-                'curvature': κ,
-                'torsion': τ,
-                'fundamental_error': |κ² + τ² - 1/(r²+c²)|,
-                'valid': bool (error < 10⁻¹⁰)
+        Dictionary mapping Omni-Codes to verification results::
+
+            {
+                'code': {
+                    'radius': r,
+                    'pitch': c,
+                    'curvature': κ,
+                    'torsion': τ,
+                    'fundamental_error': ``|κ² + τ² - 1/(r²+c²)|``,
+                    'valid': bool (error < 10⁻¹⁰)
+                }
             }
-        }
     """
     results = {}
     for code, (r, c) in zip(OMNI_CODES, HELIX_PARAMS):
@@ -402,19 +403,20 @@ def golden_ratio_convergence_proof(iterations: int = 30) -> Tuple[bool, float, D
     Prove Fibonacci ratio convergence to golden ratio φ.
 
     Theorem: lim(n→∞) Fₙ₊₁/Fₙ = φ = (1 + √5)/2
-    Error bound: |Fₙ₊₁/Fₙ - φ| = O(φ⁻ⁿ)
+    Error bound: ``|Fₙ₊₁/Fₙ - φ|`` = O(φ⁻ⁿ)
 
     Args:
         iterations: Number of Fibonacci terms (default 30)
 
     Returns:
-        (converged, ratio, proof_dict)
-        proof_dict = {
-            'ratio': Fₙ₊₁/Fₙ,
-            'error': |ratio - φ|,
-            'phi': φ,
-            'iterations': n
-        }
+        (converged, ratio, proof_dict) where ``proof_dict`` has the form::
+
+            {
+                'ratio': Fₙ₊₁/Fₙ,
+                'error': ``|ratio - φ|``,
+                'phi': φ,
+                'iterations': n
+            }
     """
     fib = fibonacci_sequence(iterations + 1)
     if len(fib) < 2:

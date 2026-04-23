@@ -283,7 +283,24 @@ static void blake2b(const uint8_t *data, size_t len, uint8_t *out, size_t outlen
  *   H'(outlen, X) = V1[0..31] || V2[0..31] || ... || Vr[0..31] || V_{r+1}
  * ============================================================================ */
 
-static void blake2b_long(uint8_t *out, size_t outlen, const uint8_t *in, size_t inlen)
+/* blake2b_long implementation.  Controlled by the `legacy` flag:
+ *
+ *   legacy == 0 (default): RFC 9106 §3.2 H' as implemented by the PHC
+ *     reference.  Loop guard `toproduce > BLAKE2B_OUTBYTES` so the final
+ *     V_{r+1} is a BLAKE2b with output length in [33, 64].
+ *
+ *   legacy != 0: reproduces the pre-release bug shipped in AMA ≤ 2.1.5:
+ *     the loop guard was `toproduce > BLAKE2B_OUTBYTES / 2`, running one
+ *     extra hash iteration so that V_{r+1} was re-hashed and truncated to
+ *     outlen - 32*(r+1) bytes instead of being emitted verbatim.  This
+ *     path exists **only** so that ama_argon2id_legacy_verify() can verify
+ *     hashes stored by AMA ≤ 2.1.5 during a one-shot migration window.
+ *     It is NOT a spec-compliant derivation — never call it from new
+ *     code.
+ */
+static void blake2b_long_impl(uint8_t *out, size_t outlen,
+                              const uint8_t *in, size_t inlen,
+                              int legacy)
 {
     uint8_t outlen_le[4];
     store32_le(outlen_le, (uint32_t)outlen);
@@ -298,23 +315,6 @@ static void blake2b_long(uint8_t *out, size_t outlen, const uint8_t *in, size_t 
         return;
     }
 
-    /* RFC 9106 §3.2 H' for outlen > 64 (all sizes are in bytes):
-     *   V_1        = BLAKE2b-64( LE32(outlen) || X )
-     *   V_i        = BLAKE2b-64( V_{i-1} )           for i = 2 .. r
-     *   V_{r+1}    = BLAKE2b-(outlen - 32*r)( V_r )
-     *   H'(outlen, X) = V_1[0..31] || V_2[0..31] || ... || V_r[0..31] || V_{r+1}
-     *
-     * Equivalent PHC "toproduce" control-flow (blake2b.c blake2b_long):
-     *   write V_1[0..31];          toproduce  = outlen - 32
-     *   while (toproduce > 64)     write V_i[0..31];   toproduce -= 32
-     *   write V_{r+1} (exactly toproduce bytes — could be 33..64 at termination)
-     *
-     * A prior implementation ran one extra loop iteration and then called
-     * BLAKE2b-(outlen-32*(r+1)) against V_{r+1}, producing a non-RFC tail
-     * (~32 bytes wrong at the end of every block, which silently corrupted
-     * every Argon2 block after the memory fill started). Fixed to mirror
-     * PHC's termination exactly.
-     */
     uint8_t V_curr[BLAKE2B_OUTBYTES];
     uint8_t V_prev[BLAKE2B_OUTBYTES];
 
@@ -331,7 +331,9 @@ static void blake2b_long(uint8_t *out, size_t outlen, const uint8_t *in, size_t 
     out += BLAKE2B_OUTBYTES / 2;
     size_t toproduce = outlen - BLAKE2B_OUTBYTES / 2;
 
-    while (toproduce > BLAKE2B_OUTBYTES) {
+    const size_t loop_guard = legacy ? (BLAKE2B_OUTBYTES / 2)
+                                     : BLAKE2B_OUTBYTES;
+    while (toproduce > loop_guard) {
         blake2b(V_prev, BLAKE2B_OUTBYTES, V_curr, BLAKE2B_OUTBYTES);
         memcpy(out, V_curr, BLAKE2B_OUTBYTES / 2);
         memcpy(V_prev, V_curr, BLAKE2B_OUTBYTES);
@@ -339,12 +341,25 @@ static void blake2b_long(uint8_t *out, size_t outlen, const uint8_t *in, size_t 
         toproduce -= BLAKE2B_OUTBYTES / 2;
     }
 
-    /* V_{r+1}: output exactly `toproduce` bytes (toproduce ∈ [33, 64]). */
+    /* RFC path: toproduce ∈ [33, 64], emit V_{r+1} verbatim.
+     * Legacy path: toproduce ∈ [1, 32], V_prev is V_{r+1} and we re-hash it
+     *   to a truncated BLAKE2b before emission — the shipped bug. */
     blake2b(V_prev, BLAKE2B_OUTBYTES, V_curr, toproduce);
     memcpy(out, V_curr, toproduce);
 
     ama_secure_memzero(V_curr, sizeof(V_curr));
     ama_secure_memzero(V_prev, sizeof(V_prev));
+}
+
+static void blake2b_long(uint8_t *out, size_t outlen, const uint8_t *in, size_t inlen)
+{
+    blake2b_long_impl(out, outlen, in, inlen, 0);
+}
+
+static void blake2b_long_legacy(uint8_t *out, size_t outlen,
+                                 const uint8_t *in, size_t inlen)
+{
+    blake2b_long_impl(out, outlen, in, inlen, 1);
 }
 
 /* ============================================================================
@@ -580,16 +595,31 @@ static void blake2b_update_u32le(blake2b_state *S, uint32_t val)
     blake2b_update(S, buf, 4);
 }
 
-AMA_API ama_error_t ama_argon2id(
+static ama_error_t ama_argon2id_core(
     const uint8_t *password, size_t pwd_len,
     const uint8_t *salt, size_t salt_len,
     uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
-    uint8_t *output, size_t out_len)
+    uint8_t *output, size_t out_len,
+    int use_legacy_blake2b_long)
 {
+    /* `blake2b_long_fn` selects the RFC 9106 §3.2 H' (default) or the
+     * pre-2.1.5 buggy variant (legacy) used only by
+     * ama_argon2id_legacy_verify for one-shot migration. */
+    void (*blake2b_long_fn)(uint8_t *, size_t, const uint8_t *, size_t) =
+        use_legacy_blake2b_long ? blake2b_long_legacy : blake2b_long;
+
     /* ----------------------------------------------------------------
      * Parameter validation and clamping
      * ---------------------------------------------------------------- */
     if (!output || out_len < 4) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    /* Argon2 encodes out_len into H0 as a little-endian uint32 (RFC 9106
+     * §3.2), so any caller-provided length above UINT32_MAX would be
+     * truncated during H0 prehash and silently produce a mismatched
+     * derivation. Reject at the boundary — also bounds the
+     * heap-allocated buffer downstream in ama_argon2id_legacy_verify. */
+    if (out_len > AMA_ARGON2ID_MAX_TAG_LEN) {
         return AMA_ERROR_INVALID_PARAM;
     }
     if (!password && pwd_len > 0) {
@@ -666,13 +696,13 @@ AMA_API ama_error_t ama_argon2id(
             /* Column 0 */
             store32_le(seed + 64, 0);
             store32_le(seed + 68, l);
-            blake2b_long((uint8_t *)&memory[l * lane_length], ARGON2_BLOCK_SIZE,
-                         seed, ARGON2_PREHASH_SEED_LENGTH);
+            blake2b_long_fn((uint8_t *)&memory[l * lane_length], ARGON2_BLOCK_SIZE,
+                            seed, ARGON2_PREHASH_SEED_LENGTH);
 
             /* Column 1 */
             store32_le(seed + 64, 1);
             store32_le(seed + 68, l);
-            blake2b_long((uint8_t *)&memory[l * lane_length + 1], ARGON2_BLOCK_SIZE,
+            blake2b_long_fn((uint8_t *)&memory[l * lane_length + 1], ARGON2_BLOCK_SIZE,
                          seed, ARGON2_PREHASH_SEED_LENGTH);
         }
 
@@ -803,8 +833,87 @@ AMA_API ama_error_t ama_argon2id(
     free(memory);
 
     /* Compute tag = H'(final_block) */
-    blake2b_long(output, out_len, (const uint8_t *)&final_block, ARGON2_BLOCK_SIZE);
+    blake2b_long_fn(output, out_len, (const uint8_t *)&final_block, ARGON2_BLOCK_SIZE);
     ama_secure_memzero(&final_block, sizeof(final_block));
 
     return AMA_SUCCESS;
+}
+
+/* ============================================================================
+ * Public API (3 entry points)
+ *
+ *   ama_argon2id               — spec-compliant (RFC 9106).  USE THIS.
+ *   ama_argon2id_legacy        — pre-2.1.5 buggy derivation.  READ-ONLY
+ *                                migration verification.  Do not use for
+ *                                new hashes.
+ *   ama_argon2id_legacy_verify — constant-time comparison of a stored
+ *                                pre-2.1.5 tag against the legacy derivation
+ *                                of the supplied inputs.
+ *
+ * See CHANGELOG.md [Unreleased] § BREAKING for the migration recipe.
+ * ============================================================================ */
+
+AMA_API ama_error_t ama_argon2id(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    uint8_t *output, size_t out_len)
+{
+    return ama_argon2id_core(password, pwd_len, salt, salt_len,
+                             t_cost, m_cost, parallelism,
+                             output, out_len, /*use_legacy=*/0);
+}
+
+AMA_API ama_error_t ama_argon2id_legacy(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    uint8_t *output, size_t out_len)
+{
+    return ama_argon2id_core(password, pwd_len, salt, salt_len,
+                             t_cost, m_cost, parallelism,
+                             output, out_len, /*use_legacy=*/1);
+}
+
+AMA_API ama_error_t ama_argon2id_legacy_verify(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    const uint8_t *expected_tag, size_t tag_len)
+{
+    if (!expected_tag || tag_len < 4 || tag_len > AMA_ARGON2ID_MAX_TAG_LEN) {
+        /* Upper bound: application-sane ceiling on Argon2 tag length
+         * (``AMA_ARGON2ID_MAX_TAG_LEN`` = 1024, 32× the default 32-byte
+         * tag).  RFC 9106 §3.2 permits up to UINT32_MAX, but every real
+         * deployment uses 16–64 bytes and sizes above ~128 add no
+         * cryptographic value.  Rejecting here bounds the ``calloc(
+         * tag_len, 1)`` below so a caller-controlled ``expected_tag``
+         * length cannot become a memory-exhaustion / DoS vector, and
+         * also caps worst-case CPU time inside
+         * ``ama_argon2id_core()``'s blake2b_long tail. */
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    /* Derive into a heap-allocated buffer sized exactly to tag_len so the
+     * helper works for any legitimate output length (Argon2 spec permits
+     * up to 2^32 - 1 bytes; a sane deployment uses 32–64). */
+    uint8_t *computed = (uint8_t *)calloc(tag_len, 1);
+    if (!computed) {
+        return AMA_ERROR_MEMORY;
+    }
+
+    ama_error_t rc = ama_argon2id_core(password, pwd_len, salt, salt_len,
+                                        t_cost, m_cost, parallelism,
+                                        computed, tag_len, /*use_legacy=*/1);
+    if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(computed, tag_len);
+        free(computed);
+        return rc;
+    }
+
+    /* ama_consttime_memcmp returns 0 on equality. */
+    int diff = ama_consttime_memcmp(computed, expected_tag, tag_len);
+    ama_secure_memzero(computed, tag_len);
+    free(computed);
+    return (diff == 0) ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
 }

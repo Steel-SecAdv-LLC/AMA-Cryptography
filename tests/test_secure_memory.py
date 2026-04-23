@@ -298,12 +298,67 @@ class TestSecureBuffer:
         sb = SecureBuffer(64)
         assert sb.size == 64
 
-    def test_locked_property_always_false(self) -> None:
-        """SecureBuffer.locked is always False (no libsodium)."""
+    def test_locked_property_before_enter(self) -> None:
+        """SecureBuffer.locked is False before the context is entered.
+
+        Wiring in audit 2a: ``lock=True`` now best-effort calls
+        secure_mlock on __enter__; the .locked flag reports whether that
+        call succeeded. Before __enter__, no mlock has been attempted,
+        so .locked must be False regardless of platform.
+        """
         from ama_cryptography.secure_memory import SecureBuffer
 
-        sb = SecureBuffer(32)
+        sb = SecureBuffer(32, lock=True)
         assert sb.locked is False
+
+    def test_locked_reflects_mlock_outcome(self) -> None:
+        """lock=True context: .locked matches the best-effort mlock outcome.
+
+        Per audit 2a, __enter__ calls secure_mlock inside a try/except that
+        downgrades SecureMemoryError / NotImplementedError / OSError to a
+        warning — so the contract is "either locked == True or a warning
+        was logged + locked == False".  Never an uncaught exception.
+        """
+        from ama_cryptography.secure_memory import SecureBuffer
+
+        sb = SecureBuffer(64, lock=True)
+        with sb:
+            assert isinstance(sb.locked, bool)
+        # After exit, the internal flag is cleared regardless of outcome.
+        assert sb.locked is False
+
+    def test_lock_false_never_locks(self) -> None:
+        """lock=False must never attempt secure_mlock; .locked stays False."""
+        from ama_cryptography.secure_memory import SecureBuffer
+
+        sb = SecureBuffer(64, lock=False)
+        with sb:
+            assert sb.locked is False
+        assert sb.locked is False
+
+    def test_lock_failure_does_not_raise(self) -> None:
+        """A failing mlock backend must not raise through SecureBuffer.__enter__.
+
+        Audit 2a: the common production case on Linux without
+        CAP_IPC_LOCK or a raised RLIMIT_MEMLOCK is that mlock returns
+        EPERM — that must be downgraded to a warning, not a crash that
+        destroys the calling code path.
+        """
+        from unittest.mock import patch
+
+        from ama_cryptography import secure_memory
+        from ama_cryptography.secure_memory import SecureBuffer, SecureMemoryError
+
+        def always_fail(_data: object) -> None:
+            raise SecureMemoryError("simulated RLIMIT_MEMLOCK")
+
+        with patch.object(secure_memory, "secure_mlock", side_effect=always_fail):
+            sb = SecureBuffer(64, lock=True)
+            with sb as buf:
+                # The failure should have been swallowed with .locked=False.
+                assert sb.locked is False
+                buf[:4] = b"work"
+                assert bytes(buf[:4]) == b"work"
 
     def test_negative_size_raises(self) -> None:
         """SecureBuffer with negative size raises ValueError."""

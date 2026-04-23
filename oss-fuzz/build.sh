@@ -42,7 +42,8 @@ fi
 
 INCLUDE_DIR="include"
 
-# List of all fuzz targets (must match files in fuzz/ directory)
+# List of all fuzz targets (must match files in fuzz/ directory).
+# Keep in sync with fuzz/CMakeLists.txt: FUZZ_CORE_TARGETS / FUZZ_PQC_TARGETS.
 FUZZ_TARGETS=(
     fuzz_sha3
     fuzz_ed25519
@@ -56,6 +57,7 @@ FUZZ_TARGETS=(
     fuzz_x25519
     fuzz_argon2
     fuzz_secp256k1
+    fuzz_frost
 )
 
 # Compile each fuzz target
@@ -70,10 +72,24 @@ for target in "${FUZZ_TARGETS[@]}"; do
     $CC $CFLAGS -I"$INCLUDE_DIR" \
         -c "$src_file" -o "build/${target}.o"
 
+    # Per-target extras.  fuzz_frost uses --wrap=ama_randombytes to
+    # service randomness from a SHA3-256 counter PRNG keyed by the fuzz
+    # input (see fuzz/fuzz_rng.c + fuzz/CMakeLists.txt for the
+    # rationale).  Keep the link-flag list in sync with fuzz/CMakeLists.txt.
+    extra_objs=()
+    extra_link_flags=()
+    if [ "$target" = "fuzz_frost" ]; then
+        $CC $CFLAGS -I"$INCLUDE_DIR" \
+            -c "fuzz/fuzz_rng.c" -o "build/fuzz_rng.o"
+        extra_objs+=("build/fuzz_rng.o")
+        extra_link_flags+=("-Wl,--wrap=ama_randombytes")
+    fi
+
     $CXX $CXXFLAGS \
-        "build/${target}.o" \
+        "build/${target}.o" "${extra_objs[@]}" \
         "$AMA_LIB" \
         $LIB_FUZZING_ENGINE \
+        "${extra_link_flags[@]}" \
         -lm -lpthread \
         -o "$OUT/${target}"
 

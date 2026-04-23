@@ -10,6 +10,11 @@ permissions:
   contents: read
   security-events: write  # Required for CodeQL SARIF upload
 
+# Collapse overlapping runs on the same ref; main is preserved.
+concurrency:
+  group: static-analysis-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}
+
 jobs:
   cppcheck:
     name: Cppcheck Static Analysis
@@ -150,6 +155,22 @@ jobs:
 
       - name: Run tests
         run: cd build-strict && ctest --output-on-failure
+
+  version-consistency:
+    # Enforces audit 5a: every file that declares the library version must
+    # agree with ama_cryptography/__init__.py. Also enforces audit 6a:
+    # root INVARIANTS.md must stay byte-identical to .github/INVARIANTS.md
+    # — we inlined the full content to eliminate the dead-pointer stub, so
+    # CI now fails if a future edit touches only one copy.
+    name: Version / Invariants Consistency
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Run version consistency check
+        run: python3 tools/check_version_consistency.py
 
   address-sanitizer:
     name: AddressSanitizer + UBSan

@@ -12,9 +12,10 @@
 
 **Do NOT introduce or depend on third-party cryptographic packages**
 (`libsodium`, `pynacl`, `cryptography`, OpenSSL bindings, etc.).
-Optional extras declared in `pyproject.toml` (e.g., `[secure-memory]`) may list
-such packages for future or interop use, but the core `ama_cryptography` package
-**must not** import or call them at runtime.
+Optional extras declared in `pyproject.toml` (e.g., `[legacy]` for the PyCA
+fallback, `[benchmark]` for peer libraries used only by `benchmarks/`) may list
+such packages for opt-in interop or comparison use, but the core
+`ama_cryptography` package **must not** import or call them at runtime.
 
 No pre-built external cryptographic libraries (libsodium, OpenSSL, liboqs,
 etc.) may be linked.
@@ -31,7 +32,7 @@ implementations.
 ### INVARIANT-1 Addendum — Algorithm Registry
 
 All cryptographic primitives implemented in this library **must** map to a
-non-deprecated entry in [`CSRC_STANDARDS.md`](../CSRC_STANDARDS.md). Adding any
+non-deprecated entry in [`CSRC_STANDARDS.md`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/CSRC_STANDARDS.md). Adding any
 new algorithm requires updating `CSRC_STANDARDS.md` with its governing
 standard, parameter set, status, and source URL **before** implementation is
 permitted. Algorithms whose governing standard has been deprecated or
@@ -141,12 +142,27 @@ If portability requires a fallback path, that path **must** be non-cryptographic
 — for example, the monitoring math engine — and **must not** touch secrets under
 any circumstances.
 
-There is **no** development escape hatch.  The failure mode for a missing
-backend is always a hard refusal to operate.
+There is **no** runtime or development escape hatch for cryptographic
+operation.  The failure mode for a missing backend is always a hard refusal
+to operate under any code path that could touch secrets.
+
+The sole import-time exception is **documentation builds**: when
+`AMA_SPHINX_BUILD=1` (or `SPHINX_BUILD=1`) is set, the import-time guards
+in `crypto_api.py`, `key_management.py`, and `legacy_compat.py` stand down
+so that Sphinx `autodoc` can introspect signatures and docstrings without
+a native library.  This override **does not permit any cryptographic
+operation to proceed** — every call-time code path still invokes
+`_enforce_invariant7*()`, which raises `RuntimeError` exactly as it would
+at import time on a regular (non-docs) run.  In other words: INVARIANT-7
+is preserved by a hop from import-time enforcement to call-time
+enforcement under the documented docs-only flag, never weakened.
 
 **Enforcement:** Module-level guards in `crypto_api.py`, `key_management.py`,
-and `pqc_backends.py` raise `RuntimeError` at import time when the native C
-backend is unavailable.
+`legacy_compat.py`, and `pqc_backends.py` raise `RuntimeError` at import
+time when the native C backend is unavailable, except under the
+documented Sphinx/docs-build override above; under that override,
+call-time enforcement (`_enforce_invariant7*`) still refuses any
+cryptographic work without the native backend.
 
 ## INVARIANT-8 — Deterministic Reproducible Builds
 

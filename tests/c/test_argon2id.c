@@ -299,6 +299,102 @@ static void test_parameter_validation(void) {
                 "validation: zero-length output rejected");
 }
 
+/* ----------------------------------------------------------------
+ * Legacy-verify shim (audit 3a).
+ *
+ * No external reference matches the pre-2.1.5 derivation (the
+ * `blake2b_long` loop ran one iteration too many), so we cannot run
+ * a cross-implementation KAT against the legacy path.  We instead
+ * pin a set of invariants that (together) fail-closed on any
+ * accidental drift of the legacy path OR accidental reuse of it by
+ * the spec-compliant entry point:
+ *
+ *   1. The legacy derivation completes without UB at standard
+ *      parameters.
+ *   2. The legacy derivation is deterministic across runs.
+ *   3. Legacy and RFC diverge for ANY non-trivial Argon2 invocation
+ *      — even when out_len ≤ 64 (the final H' step short-circuits
+ *      but the memory fill still calls `blake2b_long` with
+ *      out_len=1024, where the loop guard differs).  This confirms
+ *      the loop-guard really differs.
+ *   4. ama_argon2id_legacy_verify returns AMA_SUCCESS for a legacy
+ *      tag and AMA_ERROR_VERIFY_FAILED after a single bit-flip or
+ *      when handed an RFC-path tag (different bit-space).
+ *   5. ama_argon2id_legacy_verify rejects invalid parameters without
+ *      touching the expected_tag buffer.
+ * ---------------------------------------------------------------- */
+static void test_legacy_shim_self_consistency(void) {
+    const uint8_t pw[]   = {'p','a','s','s','w','o','r','d'};
+    const uint8_t salt[] = {'s','a','l','t','s','a','l','t','s','a','l','t','s','a','l','t'};
+
+    /* --- out_len=32 with m_cost=32 KiB.  Argon2's memory fill calls
+     * `blake2b_long(_, 1024, _)` for every initial block, so the
+     * loop inside H' IS entered and the two paths must diverge even
+     * though the FINAL tag call (out_len=32) short-circuits. */
+    uint8_t rfc32[32], leg32[32];
+    ama_error_t rc = ama_argon2id(pw, sizeof(pw), salt, sizeof(salt),
+                                   2, 32, 1, rfc32, sizeof(rfc32));
+    TEST_ASSERT(rc == AMA_SUCCESS, "legacy shim: RFC derivation (32B) succeeds");
+    rc = ama_argon2id_legacy(pw, sizeof(pw), salt, sizeof(salt),
+                              2, 32, 1, leg32, sizeof(leg32));
+    TEST_ASSERT(rc == AMA_SUCCESS, "legacy shim: legacy derivation (32B) succeeds");
+    TEST_ASSERT(memcmp(rfc32, leg32, 32) != 0,
+                "legacy shim: legacy != RFC (memory fill H' loop diverges even for out_len<=64)");
+
+    /* --- 1024-byte block generation path (embedded in Argon2 memory fill):
+     * the H' loop IS exercised, so legacy MUST differ from RFC. We observe
+     * the difference indirectly — run a small Argon2id with parameters
+     * small enough that the buggy memory fill corrupts the final tag. */
+
+    /* Derive two 32-byte tags with t=1,m=8,p=1 using the two paths. The
+     * memory fill uses blake2b_long to produce 1024-byte blocks, so any
+     * divergence in the loop propagates. */
+    uint8_t rfc_tag[32], leg_tag[32];
+    rc = ama_argon2id(pw, sizeof(pw), salt, sizeof(salt),
+                      1, 8, 1, rfc_tag, sizeof(rfc_tag));
+    TEST_ASSERT(rc == AMA_SUCCESS, "legacy shim: RFC derivation (full pipeline) succeeds");
+    rc = ama_argon2id_legacy(pw, sizeof(pw), salt, sizeof(salt),
+                              1, 8, 1, leg_tag, sizeof(leg_tag));
+    TEST_ASSERT(rc == AMA_SUCCESS, "legacy shim: legacy derivation (full pipeline) succeeds");
+    TEST_ASSERT(memcmp(rfc_tag, leg_tag, 32) != 0,
+                "legacy shim: legacy != RFC once the H' loop is entered");
+
+    /* Determinism: second derivation with identical inputs yields identical tag. */
+    uint8_t leg_tag2[32];
+    rc = ama_argon2id_legacy(pw, sizeof(pw), salt, sizeof(salt),
+                              1, 8, 1, leg_tag2, sizeof(leg_tag2));
+    TEST_ASSERT(rc == AMA_SUCCESS, "legacy shim: legacy derivation repeats");
+    TEST_ASSERT(memcmp(leg_tag, leg_tag2, 32) == 0,
+                "legacy shim: legacy derivation is deterministic");
+
+    /* verify: correct tag round-trips. */
+    rc = ama_argon2id_legacy_verify(pw, sizeof(pw), salt, sizeof(salt),
+                                     1, 8, 1, leg_tag, sizeof(leg_tag));
+    TEST_ASSERT(rc == AMA_SUCCESS, "legacy shim: verify accepts matching tag");
+
+    /* verify: bit-flip rejected. */
+    uint8_t bad_tag[32];
+    memcpy(bad_tag, leg_tag, 32);
+    bad_tag[0] ^= 0x01;
+    rc = ama_argon2id_legacy_verify(pw, sizeof(pw), salt, sizeof(salt),
+                                     1, 8, 1, bad_tag, sizeof(bad_tag));
+    TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED, "legacy shim: verify rejects bit-flipped tag");
+
+    /* verify: RFC-path tag must NOT verify through the legacy path (sanity). */
+    rc = ama_argon2id_legacy_verify(pw, sizeof(pw), salt, sizeof(salt),
+                                     1, 8, 1, rfc_tag, sizeof(rfc_tag));
+    TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
+                "legacy shim: verify rejects RFC-path tag (distinct bit-space)");
+
+    /* Parameter validation */
+    rc = ama_argon2id_legacy_verify(pw, sizeof(pw), salt, sizeof(salt),
+                                     1, 8, 1, NULL, 32);
+    TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, "legacy shim: NULL expected_tag rejected");
+    rc = ama_argon2id_legacy_verify(pw, sizeof(pw), salt, sizeof(salt),
+                                     1, 8, 1, leg_tag, 3);
+    TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, "legacy shim: tag_len < 4 rejected");
+}
+
 int main(void) {
     printf("===========================================\n");
     printf("Argon2id KAT + AVX2-G vs scalar-G parity\n");
@@ -308,6 +404,7 @@ int main(void) {
     test_rfc9106_kat();
     test_rfc9106_kat_parallelism();
     test_parameter_validation();
+    test_legacy_shim_self_consistency();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

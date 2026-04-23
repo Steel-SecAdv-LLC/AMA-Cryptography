@@ -17,6 +17,12 @@ security and performance.
    * `CONTRIBUTING.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/CONTRIBUTING.md>`_ - Contribution guidelines
    * `docs/compliance/ACVP_SELF_ATTESTATION.md <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/docs/compliance/ACVP_SELF_ATTESTATION.md>`_ - NIST ACVP self-attestation (NOT CAVP)
 
+.. toctree::
+   :maxdepth: 2
+   :caption: API Reference
+
+   api/index
+
 Quick Links
 -----------
 

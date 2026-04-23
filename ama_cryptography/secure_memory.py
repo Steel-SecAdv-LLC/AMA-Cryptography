@@ -15,25 +15,28 @@
 
 """
 AMA Cryptography Secure Memory Module
-=================================
+=====================================
 
 Provides secure memory operations for cryptographic applications
 requiring memory protection.  This module is dependency-free and uses
 only the Python standard library.
 
 Features:
-- Secure zeroing - multi-pass overwrite implementation
-- Constant-time comparison - AMA C library or pure-Python XOR accumulator
-- SecureBuffer context manager - automatic cleanup on exit
-- Secure random byte generation - uses os.urandom
 
-Implementation Notes:
-    - secure_memzero: Multi-pass byte-level overwrite
-    - secure_mlock/munlock: Native C backend (VirtualLock/mlock) or POSIX fallback
-    - constant_time_compare: ama_consttime_memcmp (C) or XOR accumulator (Python)
-    - secure_random_bytes: Uses os.urandom (stdlib)
+- Secure zeroing — multi-pass overwrite implementation
+- Constant-time comparison — AMA C library or pure-Python XOR accumulator
+- SecureBuffer context manager — automatic cleanup on exit
+- Secure random byte generation — uses ``os.urandom``
 
-Usage:
+Implementation notes:
+
+- ``secure_memzero``: Multi-pass byte-level overwrite
+- ``secure_mlock`` / ``secure_munlock``: Native C backend (VirtualLock/mlock) or POSIX fallback
+- ``constant_time_compare``: ``ama_consttime_memcmp`` (C) or XOR accumulator (Python)
+- ``secure_random_bytes``: Uses ``os.urandom`` (stdlib)
+
+Usage::
+
     from ama_cryptography.secure_memory import (
         SecureBuffer,
         secure_memzero,
@@ -115,7 +118,24 @@ def secure_memzero(data: Union[bytearray, memoryview]) -> None:
         data: Mutable buffer to zero (bytearray or memoryview)
 
     Raises:
-        TypeError: If data is not a mutable buffer
+        TypeError: If ``data`` is not a mutable buffer.
+        SecureMemoryError: If the Python fallback path is in use and the
+            post-wipe verification observes a residual non-zero byte
+            (optimizer elision, concurrent write, or mis-compiled
+            ``memset_explicit``).  This is a *deliberate* hard failure —
+            a silently incomplete wipe would leave secret material in
+            memory, defeating the whole point of ``secure_memzero``.
+            The native paths (``ama_secure_memzero`` and the libc
+            ``explicit_bzero`` / ``memset_s`` back-ends) do not raise.
+
+    **Propagation from cleanup contexts.**  ``SecureBuffer.__exit__`` and
+    ``secure_buffer()``'s ``finally`` clause both call ``secure_memzero``
+    on the way out, so a ``SecureMemoryError`` raised here can propagate
+    through a ``with`` statement's exit path.  That is intentional — a
+    failed wipe is a security-critical signal that *must not* be
+    silenced.  Callers that need to suppress it (e.g. because they are
+    already handling an in-flight exception) should catch
+    ``SecureMemoryError`` explicitly at the boundary they control.
 
     Example:
         >>> secret = bytearray(b"sensitive")
@@ -209,7 +229,15 @@ def _try_libc_memset_s() -> "Optional[Callable[[Union[bytearray, memoryview]], N
 
 
 def _python_fallback_memzero(data: Union[bytearray, memoryview]) -> None:
-    """Multi-pass byte-level overwrite.  Best-effort when no native backend is available."""
+    """Multi-pass byte-level overwrite.  Best-effort when no native backend is available.
+
+    CPython's current bytecode interpreter does not elide these writes, but
+    optimizing runtimes (PyPy JIT, a future CPython JIT) could treat
+    subsequent-unobserved-stores as dead. The final ``acc`` verification read
+    below forces the final zero pass to be materialized: every byte must be
+    observed as zero, so the JIT/optimizer cannot discard the pass without
+    breaking the assertion's value dependency.
+    """
     length = len(data)
     for i in range(length):
         data[i] = 0
@@ -217,6 +245,20 @@ def _python_fallback_memzero(data: Union[bytearray, memoryview]) -> None:
         data[i] = 0xFF
     for i in range(length):
         data[i] = 0
+    # Dead-store-elimination barrier: any optimizer that wanted to drop the
+    # final zero-pass would have to prove ``acc`` is unused, which it can't —
+    # the ``if acc != 0`` check below has a visible side effect (a
+    # ``SecureMemoryError``) if any byte is non-zero.  We deliberately do
+    # *not* use ``assert`` here: assertions can be stripped with ``-O`` /
+    # ``PYTHONOPTIMIZE`` which would silently defeat the barrier.
+    acc = 0
+    for i in range(length):
+        acc |= data[i]
+    if acc != 0:
+        raise SecureMemoryError(
+            "_python_fallback_memzero: post-wipe verification failed "
+            "(residual byte observed — optimizer elision or concurrent write)"
+        )
 
 
 # Select the best available backend at module load time.
@@ -283,6 +325,18 @@ def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
                 f"Current implementation: {sys.implementation.name}"
             )
         addr = id(data) + bytes.__basicsize__ - 1
+        # Runtime layout assertion: if CPython changes the PyBytesObject
+        # layout (or a build uses a non-standard struct), the computed
+        # address will no longer point at ob_sval[0]. Catch that here
+        # rather than silently mlocking unrelated memory.
+        probe = ctypes.string_at(addr, 1)
+        if size > 0 and probe != data[:1]:
+            raise NotImplementedError(
+                "secure_mlock: PyBytesObject layout probe failed — "
+                f"computed address does not point to bytes payload "
+                f"(probe={probe!r} expected={data[:1]!r}). Refusing to mlock "
+                "arbitrary memory. Pass a bytearray for mutable buffers."
+            )
 
     try:
         from ama_cryptography.pqc_backends import _native_lib
@@ -352,6 +406,14 @@ def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
                 f"Current implementation: {sys.implementation.name}"
             )
         addr = id(data) + bytes.__basicsize__ - 1
+        # Layout probe — see secure_mlock() for rationale.
+        probe = ctypes.string_at(addr, 1)
+        if size > 0 and probe != data[:1]:
+            raise NotImplementedError(
+                "secure_munlock: PyBytesObject layout probe failed — "
+                f"computed address does not point to bytes payload "
+                f"(probe={probe!r} expected={data[:1]!r})."
+            )
 
     try:
         from ama_cryptography.pqc_backends import _native_lib
@@ -464,18 +526,20 @@ class SecureBuffer:
     Context manager for secure memory buffers.
 
     Provides a bytearray that is:
+
     - Automatically zeroed on exit
     - Protected from accidental exposure
 
-    Usage:
+    Usage::
+
         with SecureBuffer(32) as buf:
             buf[:] = crypto.generate_key()
             # Use the key...
         # Buffer automatically zeroed here
 
     Attributes:
-        data: The underlying bytearray (only valid within context)
-        size: Size of the buffer in bytes
+        data: The underlying bytearray (only valid within context).
+        size: Size of the buffer in bytes.
     """
 
     def __init__(self, size: int, lock: bool = True) -> None:
@@ -484,7 +548,11 @@ class SecureBuffer:
 
         Args:
             size: Size of buffer in bytes
-            lock: Ignored (retained for API compatibility)
+            lock: Request page-locking via ``secure_mlock`` on enter and
+                ``secure_munlock`` on exit. Best-effort — a ``SecureMemoryError``
+                or ``NotImplementedError`` from the backend (e.g. RLIMIT_MEMLOCK
+                exceeded, no POSIX/native support) is logged and the buffer
+                proceeds unlocked. Inspect :attr:`locked` to confirm status.
 
         Raises:
             ValueError: If size is negative
@@ -495,6 +563,8 @@ class SecureBuffer:
         self._size = size
         self._data: Optional[bytearray] = None
         self._entered = False
+        self._lock_requested = lock
+        self._locked = False
 
     @property
     def size(self) -> int:
@@ -503,8 +573,8 @@ class SecureBuffer:
 
     @property
     def locked(self) -> bool:
-        """Whether memory is currently locked (always False)."""
-        return False
+        """Whether the buffer's memory is currently page-locked."""
+        return self._locked
 
     @property
     def data(self) -> bytearray:
@@ -519,9 +589,19 @@ class SecureBuffer:
         return self._data
 
     def __enter__(self) -> bytearray:
-        """Enter context and allocate secure buffer."""
+        """Enter context, allocate buffer, and (optionally) page-lock it."""
         self._data = bytearray(self._size)
         self._entered = True
+        if self._lock_requested and self._size > 0:
+            try:
+                secure_mlock(self._data)
+                self._locked = True
+            except (SecureMemoryError, NotImplementedError, OSError) as exc:
+                # Common on Linux when RLIMIT_MEMLOCK is low, and on platforms
+                # without native mlock support. The buffer is still usable —
+                # pages may page to swap — so the caller is warned, not failed.
+                logger.warning("SecureBuffer: mlock failed (%s); proceeding without page-lock", exc)
+                self._locked = False
         return self._data
 
     def __exit__(
@@ -530,10 +610,52 @@ class SecureBuffer:
         exc_val: Optional[BaseException],
         exc_tb: Optional[TracebackType],
     ) -> None:
-        """Exit context and zero buffer."""
+        """Exit context: zero buffer first (while still pinned), then munlock.
+
+        Raises:
+            SecureMemoryError: If ``secure_memzero`` is on the Python
+                fallback path and post-wipe verification observes a
+                residual non-zero byte.  This is a deliberate hard
+                failure — a silently incomplete wipe would defeat the
+                security contract.  If raised here while an in-flight
+                exception is already propagating through the ``with``
+                block, Python's normal ``__exit__`` semantics apply:
+                the ``SecureMemoryError`` replaces the pending
+                exception.  Callers that need to preserve the original
+                exception should wrap the inner body in their own
+                ``try``/``except SecureMemoryError``.  A ``munlock``
+                failure is *not* propagated — it is logged at WARNING
+                and swallowed, since by that point the memory has
+                already been zeroed.
+        """
         if self._data is not None:
-            secure_memzero(self._data)
-            self._data = None
+            # CRITICAL ORDER: zero FIRST while the pages are still mlocked
+            # (pinned in RAM), THEN munlock.  If we reversed these two
+            # operations the kernel could swap the still-sensitive pages to
+            # disk between ``secure_munlock`` returning and
+            # ``secure_memzero`` running, leaking secret material to
+            # swapfile — a serious defence-in-depth regression.
+            #
+            # ``try/finally`` around the wipe is equally critical: if
+            # ``secure_memzero`` raises ``SecureMemoryError`` (Python
+            # fallback path, post-wipe verification failed), we still
+            # MUST run ``secure_munlock`` and reset ``_locked`` / ``_data``
+            # so the caller's process does not leak an mlock pin or
+            # leave the ``SecureBuffer`` instance in a half-cleaned
+            # state.  The wipe error itself is re-raised by the
+            # ``finally`` implicit re-raise so callers still learn the
+            # wipe failed (the documented contract above).
+            data = self._data
+            try:
+                secure_memzero(data)
+            finally:
+                if self._locked:
+                    try:
+                        secure_munlock(data)
+                    except (SecureMemoryError, NotImplementedError, OSError) as exc:
+                        logger.warning("SecureBuffer: munlock failed: %s", exc)
+                    self._locked = False
+                self._data = None
 
         self._entered = False
         return None  # Don't suppress exceptions
@@ -548,10 +670,21 @@ def secure_buffer(size: int, lock: bool = True) -> Generator[bytearray, None, No
 
     Args:
         size: Size of buffer in bytes
-        lock: Whether to attempt memory locking
+        lock: Request page-locking via ``secure_mlock``. Best-effort — a
+            ``SecureMemoryError``/``NotImplementedError`` is logged and the
+            buffer proceeds unlocked.
 
     Yields:
         bytearray: Secure buffer
+
+    Raises:
+        SecureMemoryError: On the way out, if ``secure_memzero`` is on the
+            Python fallback path and observes a residual non-zero byte
+            during post-wipe verification.  This is deliberate — a silent
+            wipe failure would defeat the security contract.  See
+            :class:`SecureBuffer.__exit__` for the full semantics.  A
+            ``munlock`` failure during cleanup is logged at WARNING and
+            swallowed (the memory is already zeroed by then).
 
     Example:
         with secure_buffer(64) as key_material:
@@ -559,11 +692,36 @@ def secure_buffer(size: int, lock: bool = True) -> Generator[bytearray, None, No
             key_material[32:] = mac_key
     """
     buf = bytearray(size)
+    did_lock = False
+    if lock and size > 0:
+        try:
+            secure_mlock(buf)
+            did_lock = True
+        except (SecureMemoryError, NotImplementedError, OSError) as exc:
+            logger.warning("secure_buffer: mlock failed (%s); proceeding without page-lock", exc)
 
     try:
         yield buf
     finally:
-        secure_memzero(buf)
+        # CRITICAL ORDER: zero FIRST while pages are still mlocked, THEN
+        # munlock.  See ``SecureBuffer.__exit__`` for the full rationale —
+        # reversing the order permits the kernel to page sensitive data
+        # to swap between munlock returning and memzero running.
+        #
+        # ``try/finally`` around the wipe is equally critical here: if
+        # ``secure_memzero`` raises, we still need to release the mlock
+        # pin so the process does not leak locked pages on the way out.
+        # The wipe error is re-raised by the ``finally`` implicit
+        # re-raise so callers learn about the post-wipe verification
+        # failure (same contract as ``SecureBuffer.__exit__``).
+        try:
+            secure_memzero(buf)
+        finally:
+            if did_lock:
+                try:
+                    secure_munlock(buf)
+                except (SecureMemoryError, NotImplementedError, OSError) as exc:
+                    logger.warning("secure_buffer: munlock failed: %s", exc)
 
 
 def _detect_mlock_available() -> bool:

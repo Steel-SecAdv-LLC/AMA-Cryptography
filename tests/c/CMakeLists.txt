@@ -26,6 +26,19 @@ if(AMA_USE_NATIVE_PQC)
     add_ama_test(test_x25519 test_x25519.c)
     add_ama_test(test_chacha20poly1305 test_chacha20poly1305.c)
     add_ama_test(test_argon2id test_argon2id.c)
+    # secp256k1 and FROST are also gated on AMA_USE_NATIVE_PQC (they live in
+    # src/c/ama_secp256k1.c and src/c/ama_frost.c, which are only compiled
+    # when native PQC is enabled — see the top-level CMakeLists.txt).
+    add_ama_test(test_secp256k1 test_secp256k1.c)
+    add_ama_test(test_frost test_frost.c)
+endif()
+
+# Constant-time bitsliced AES-256 (NIST SP 800-38A §F.1.5 KAT).
+# Only built when the constant-time backend is active — otherwise the
+# ama_aes_sbox_consttime / key_expansion / encrypt_block symbols aren't
+# exported by the library.
+if(AMA_AES_CONSTTIME)
+    add_ama_test(test_aes_bitsliced test_aes_bitsliced.c)
 endif()
 
 # PQC Known Answer Tests (KAT) and debug tests

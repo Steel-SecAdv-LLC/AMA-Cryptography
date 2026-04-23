@@ -48,7 +48,7 @@ try:
 except ImportError:
     pytest.skip("numpy not installed", allow_module_level=True)
 
-from ama_cryptography_monitor import (
+from ama_cryptography.monitor import (
     AmaCryptographyMonitor,
     IncrementalStats,
     RecursionPatternMonitor,

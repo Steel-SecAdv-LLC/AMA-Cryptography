@@ -31,6 +31,7 @@ set(FUZZ_PQC_TARGETS
     fuzz_x25519
     fuzz_argon2
     fuzz_secp256k1
+    fuzz_frost
 )
 
 # Determine fuzzing engine: libFuzzer (default) or AFL
@@ -71,6 +72,18 @@ if(AMA_USE_NATIVE_PQC)
         add_fuzz_target(${target} ${CMAKE_CURRENT_SOURCE_DIR}/${target}.c)
     endforeach()
     message(STATUS "Fuzzing: PQC targets enabled (Dilithium, Kyber, SPHINCS+, etc.)")
+
+    # Deterministic PRNG for fuzz_frost only.  The core FROST code calls
+    # ama_randombytes from scalar_random inside ama_frost_round1_commit
+    # (RFC 9591 §2.1 — fresh per-round nonces are mandatory), which would
+    # otherwise make the harness non-reproducible and defeat libFuzzer
+    # corpus minimization.  We resolve this at link time, on this target
+    # only, by rewriting every call to ama_randombytes reachable from
+    # fuzz_frost to __wrap_ama_randombytes (see fuzz/fuzz_rng.c).  The
+    # production library is never relinked — no other target, shared
+    # library, or Python extension picks up the wrap.
+    target_sources(fuzz_frost PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fuzz_rng.c)
+    target_link_options(fuzz_frost PRIVATE "-Wl,--wrap=ama_randombytes")
 else()
     message(STATUS "Fuzzing: PQC targets disabled (use -DAMA_USE_NATIVE_PQC=ON)")
 endif()

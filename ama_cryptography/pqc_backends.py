@@ -40,6 +40,7 @@ import ctypes
 import logging
 import os
 import platform
+import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -526,6 +527,14 @@ def _setup_x25519_ctypes(lib: ctypes.CDLL) -> bool:
 # Argon2id native availability
 _ARGON2_NATIVE_AVAILABLE = False
 
+# Application-sane ceiling on Argon2id output/tag length.  RFC 9106 §3.2
+# permits out_len up to 2^32-1, but every real deployment uses 16–64
+# bytes; 1024 is 32× the default tag length and leaves ample headroom
+# while bounding worst-case CPU + memory in
+# ``ama_argon2id_legacy_verify``'s ``calloc(tag_len, 1)`` path.  Kept in
+# sync with ``AMA_ARGON2ID_MAX_TAG_LEN`` in ``include/ama_cryptography.h``.
+_ARGON2ID_MAX_TAG_LEN = 1024
+
 
 def _setup_argon2_ctypes(lib: ctypes.CDLL) -> bool:
     """Configure ctypes for Argon2id functions."""
@@ -542,6 +551,24 @@ def _setup_argon2_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_size_t,  # out_len
         ]
         lib.ama_argon2id.restype = ctypes.c_int
+        # Legacy-verify shim (CHANGELOG [Unreleased] § BREAKING). Optional —
+        # absence just means the legacy migration path is unavailable.
+        if hasattr(lib, "ama_argon2id_legacy"):
+            lib.ama_argon2id_legacy.argtypes = lib.ama_argon2id.argtypes
+            lib.ama_argon2id_legacy.restype = ctypes.c_int
+        if hasattr(lib, "ama_argon2id_legacy_verify"):
+            lib.ama_argon2id_legacy_verify.argtypes = [
+                ctypes.c_char_p,  # password
+                ctypes.c_size_t,  # pwd_len
+                ctypes.c_char_p,  # salt
+                ctypes.c_size_t,  # salt_len
+                ctypes.c_uint32,  # t_cost
+                ctypes.c_uint32,  # m_cost
+                ctypes.c_uint32,  # parallelism
+                ctypes.c_char_p,  # expected_tag
+                ctypes.c_size_t,  # tag_len
+            ]
+            lib.ama_argon2id_legacy_verify.restype = ctypes.c_int
         return True
     except AttributeError:
         return False
@@ -877,15 +904,11 @@ class AmaContext:
 
     Algorithm constants (``ama_algorithm_t`` enum values from the C header):
 
-    ==============================  ======
-    Name                            Value
-    ==============================  ======
-    ``AmaContext.ALG_ML_DSA_65``       0
-    ``AmaContext.ALG_KYBER_1024``      1
-    ``AmaContext.ALG_SPHINCS_256F``    2
-    ``AmaContext.ALG_ED25519``         3
-    ``AmaContext.ALG_HYBRID``          4
-    ==============================  ======
+    - ``AmaContext.ALG_ML_DSA_65`` = 0
+    - ``AmaContext.ALG_KYBER_1024`` = 1
+    - ``AmaContext.ALG_SPHINCS_256F`` = 2
+    - ``AmaContext.ALG_ED25519`` = 3
+    - ``AmaContext.ALG_HYBRID`` = 4
 
     Example::
 
@@ -2404,7 +2427,6 @@ elif _HMAC_SHA3_256_NATIVE_AVAILABLE:
 else:
     HMAC_SHA3_256_AVAILABLE = False
     HMAC_SHA3_256_BACKEND = None
-    import warnings
 
     warnings.warn(
         "HMAC-SHA3-256 native backend not available. "
@@ -2701,8 +2723,20 @@ def native_argon2id(
     _UINT32_MAX = 0xFFFFFFFF
     if len(salt) < 8:
         raise ValueError(f"Argon2id salt must be >= 8 bytes, got {len(salt)}")
-    if out_len < 4:
-        raise ValueError(f"Argon2id output length must be >= 4, got {out_len}")
+    # Upper bound on ``out_len`` is the application-sane ceiling
+    # ``_ARGON2ID_MAX_TAG_LEN`` (1024 bytes, 32× the default 32-byte
+    # tag).  RFC 9106 §3.2 permits up to UINT32_MAX, but every real
+    # deployment uses 16–64 bytes and sizes above ~128 add no
+    # cryptographic value while turning a caller-controlled length
+    # into a memory-exhaustion / DoS vector (a 4 GiB ``out_len`` would
+    # trigger a 4 GiB ``ctypes.create_string_buffer`` allocation below).
+    # Kept in sync with the C-side ``AMA_ARGON2ID_MAX_TAG_LEN`` in
+    # ``include/ama_cryptography.h`` and the matching caps on the two
+    # legacy-shim wrappers.
+    if out_len < 4 or out_len > _ARGON2ID_MAX_TAG_LEN:
+        raise ValueError(
+            f"Argon2id out_len must be in [4, {_ARGON2ID_MAX_TAG_LEN}] bytes, got {out_len}"
+        )
     if t_cost < 1 or t_cost > _UINT32_MAX:
         raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
     if parallelism < 1 or parallelism > _UINT32_MAX:
@@ -2729,6 +2763,203 @@ def native_argon2id(
         raise RuntimeError(f"Argon2id failed (rc={rc})")
 
     return bytes(out_buf)
+
+
+def native_argon2id_legacy(
+    password: bytes,
+    salt: bytes,
+    t_cost: int = 3,
+    m_cost: int = 65536,
+    parallelism: int = 4,
+    out_len: int = 32,
+) -> bytes:
+    """
+    Derive an Argon2id tag using the pre-shim (buggy) derivation.
+
+    **Do NOT use this for new password hashes.**  Earlier AMA Cryptography
+    builds shipped a ``blake2b_long`` loop-termination bug that produces
+    non-spec tags; this wrapper reproduces that derivation verbatim.  It
+    exists so migration tooling and regression tests can generate reference
+    tags without forking the old code — the safe, spec-compliant path is
+    :func:`native_argon2id`.
+
+    Every call emits a :class:`SecurityWarning` so accidental use in a
+    production path is loud at runtime.  Suppress it only inside migration
+    tooling that knows it is generating reference tags for verification.
+
+    Args:
+        password:    Password bytes.
+        salt:        Salt bytes (≥ 8-byte minimum).
+        t_cost:      Time cost (iterations, ≥ 1).
+        m_cost:      Memory cost (KiB, ≥ 8 * parallelism).
+        parallelism: Parallelism (lanes, ≥ 1).
+        out_len:     Output tag length (≥ 4 bytes).
+
+    Returns:
+        Derived tag bytes of length ``out_len``.
+
+    Raises:
+        RuntimeError: If the native library is unavailable, or if the loaded
+            native library does not export ``ama_argon2id_legacy`` (only
+            builds that include the migration shim do).
+        ValueError:   On parameter-range violations (same rules as
+            :func:`native_argon2id`).
+    """
+    if _native_lib is None or not _ARGON2_NATIVE_AVAILABLE:
+        raise RuntimeError("Argon2id native backend not available. " + _INSTALL_HINT)
+    if not hasattr(_native_lib, "ama_argon2id_legacy"):
+        raise RuntimeError(
+            "ama_argon2id_legacy() is not exported by the loaded native "
+            "library — rebuild against a native library that exports "
+            "``ama_argon2id_legacy`` to enable the pre-shim migration path."
+        )
+
+    _UINT32_MAX = 0xFFFFFFFF
+    if len(salt) < 8:
+        raise ValueError(f"Argon2id salt must be >= 8 bytes, got {len(salt)}")
+    # Upper bound on ``out_len`` mirrors ``native_argon2id``:
+    # ``_ARGON2ID_MAX_TAG_LEN`` (1024 bytes, 32× the default tag).  Kept
+    # in sync with the C-side ``AMA_ARGON2ID_MAX_TAG_LEN``.
+    if out_len < 4 or out_len > _ARGON2ID_MAX_TAG_LEN:
+        raise ValueError(
+            f"Argon2id out_len must be in [4, {_ARGON2ID_MAX_TAG_LEN}] bytes, got {out_len}"
+        )
+    if t_cost < 1 or t_cost > _UINT32_MAX:
+        raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
+    if parallelism < 1 or parallelism > _UINT32_MAX:
+        raise ValueError(f"Argon2id parallelism must be in [1, {_UINT32_MAX}], got {parallelism}")
+    if m_cost < 8 * parallelism or m_cost > _UINT32_MAX:
+        raise ValueError(
+            f"Argon2id m_cost must be in [{8 * parallelism}, {_UINT32_MAX}] KiB, got {m_cost}"
+        )
+
+    # Loud runtime signal that this is not the path callers should be on.
+    # Raised once per call (not once per process) so call-site auditing
+    # catches every invocation, and ``stacklevel=2`` points at the caller.
+    # Emitted *after* both availability AND parameter validation so the
+    # warning is only observed when the legacy derivation actually
+    # executes — rejected-validation calls (e.g. short salt, out-of-range
+    # out_len) raise ``ValueError`` without polluting
+    # ``warnings.catch_warnings(record=True)`` collectors in
+    # monitoring/migration tooling that count legacy-path usage.
+    warnings.warn(
+        "native_argon2id_legacy() reproduces the pre-shim blake2b_long bug "
+        "for read-only migration verification ONLY. Use native_argon2id() "
+        "for any new hash; new deployments must not store tags derived by "
+        "this function. See CHANGELOG.md [Unreleased] § BREAKING.",
+        SecurityWarning,
+        stacklevel=2,
+    )
+
+    out_buf = ctypes.create_string_buffer(out_len)
+    rc = _native_lib.ama_argon2id_legacy(
+        password,
+        len(password),
+        salt,
+        len(salt),
+        t_cost,
+        m_cost,
+        parallelism,
+        out_buf,
+        out_len,
+    )
+    if rc != 0:
+        raise RuntimeError(f"ama_argon2id_legacy failed (rc={rc})")
+
+    return bytes(out_buf)
+
+
+def native_argon2id_legacy_verify(
+    password: bytes,
+    salt: bytes,
+    expected_tag: bytes,
+    t_cost: int = 3,
+    m_cost: int = 65536,
+    parallelism: int = 4,
+) -> bool:
+    """
+    Constant-time verify a pre-shim Argon2id tag.
+
+    Earlier AMA Cryptography builds shipped a ``blake2b_long``
+    loop-termination bug (see ``CHANGELOG.md`` [Unreleased] § BREAKING).
+    Stored hashes derived by those versions sit in a non-spec bit-space and
+    will not verify against the post-fix :func:`native_argon2id`.  This
+    helper reproduces the legacy derivation and compares against
+    ``expected_tag`` with :c:func:`ama_consttime_memcmp` so a deployment can
+    run the "verify-with-legacy, re-derive-with-fixed, overwrite" migration
+    recommended in the changelog without forking the old code.
+
+    Args:
+        password:     Password bytes.
+        salt:         Salt bytes (same ≥ 8-byte minimum as native_argon2id).
+        expected_tag: Stored tag bytes to compare against (≥ 4 bytes).
+        t_cost:       Time cost that produced ``expected_tag``.
+        m_cost:       Memory cost (KiB) that produced ``expected_tag``.
+        parallelism:  Parallelism that produced ``expected_tag``.
+
+    Returns:
+        ``True`` on constant-time match, ``False`` on mismatch.
+
+    Raises:
+        RuntimeError: If the native library is unavailable, or if the loaded
+            native library does not export ``ama_argon2id_legacy_verify``
+            (only builds that include the migration shim do).
+        ValueError:   On parameter-range violations (same rules as
+            :func:`native_argon2id`).
+    """
+    if _native_lib is None or not _ARGON2_NATIVE_AVAILABLE:
+        raise RuntimeError("Argon2id native backend not available. " + _INSTALL_HINT)
+    if not hasattr(_native_lib, "ama_argon2id_legacy_verify"):
+        raise RuntimeError(
+            "ama_argon2id_legacy_verify() is not exported by the loaded native "
+            "library — rebuild against a native library that exports "
+            "``ama_argon2id_legacy_verify`` to enable the pre-shim "
+            "migration path."
+        )
+
+    _UINT32_MAX = 0xFFFFFFFF
+    tag_len = len(expected_tag)
+    if len(salt) < 8:
+        raise ValueError(f"Argon2id salt must be >= 8 bytes, got {len(salt)}")
+    # Upper bound on ``tag_len``: ``_ARGON2ID_MAX_TAG_LEN`` (1024 bytes,
+    # 32× the default).  Tighter than the theoretical ``UINT32_MAX``
+    # because a caller-controlled ``expected_tag`` length would
+    # otherwise become a memory-exhaustion / DoS vector in the C
+    # helper's ``calloc(tag_len, 1)`` for the freshly-derived
+    # ``computed`` buffer.  Kept in sync with the C-side
+    # ``AMA_ARGON2ID_MAX_TAG_LEN`` and the ``native_argon2id`` /
+    # ``native_argon2id_legacy`` derivation caps.
+    if tag_len < 4 or tag_len > _ARGON2ID_MAX_TAG_LEN:
+        raise ValueError(
+            f"expected_tag must be in [4, {_ARGON2ID_MAX_TAG_LEN}] bytes, got {tag_len}"
+        )
+    if t_cost < 1 or t_cost > _UINT32_MAX:
+        raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
+    if parallelism < 1 or parallelism > _UINT32_MAX:
+        raise ValueError(f"Argon2id parallelism must be in [1, {_UINT32_MAX}], got {parallelism}")
+    if m_cost < 8 * parallelism or m_cost > _UINT32_MAX:
+        raise ValueError(
+            f"Argon2id m_cost must be in [{8 * parallelism}, {_UINT32_MAX}] KiB, got {m_cost}"
+        )
+
+    rc = _native_lib.ama_argon2id_legacy_verify(
+        password,
+        len(password),
+        salt,
+        len(salt),
+        t_cost,
+        m_cost,
+        parallelism,
+        bytes(expected_tag),
+        tag_len,
+    )
+    # AMA_SUCCESS (0) == match; AMA_ERROR_VERIFY_FAILED (-4) == mismatch.
+    # Any other non-zero code is a hard error (parameters, allocation, etc.).
+    if rc == 0:
+        return True
+    if rc == -4:
+        return False
+    raise RuntimeError(f"ama_argon2id_legacy_verify failed (rc={rc})")
 
 
 # ============================================================================

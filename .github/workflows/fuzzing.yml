@@ -15,6 +15,15 @@ on:
 permissions:
   contents: read
 
+# Collapse overlapping runs on the same ref so rapid pushes don't
+# saturate the runner queue (libFuzzer builds plus 11 matrix targets
+# per trigger × 2 triggers = 22+ concurrent jobs per push).  Feature
+# branches and PR heads cancel previous in-flight runs; main and
+# scheduled runs are preserved.
+concurrency:
+  group: fuzzing-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}
+
 jobs:
   fuzz-core:
     name: Fuzz Core Primitives (${{ matrix.target }})
@@ -88,6 +97,7 @@ jobs:
           - fuzz_x25519
           - fuzz_argon2
           - fuzz_secp256k1
+          - fuzz_frost
         # SPHINCS+ is too slow for CI fuzzing — run manually
         # - fuzz_sphincs
 

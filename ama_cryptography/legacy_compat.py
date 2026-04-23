@@ -46,6 +46,7 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import secrets
 import struct
 import subprocess  # nosec B404 -- only wraps trusted external tools (openssl, rfc3161); no user-controlled args (LC-001)
@@ -57,7 +58,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, cast
 
 if TYPE_CHECKING:
-    from ama_cryptography_monitor import AmaCryptographyMonitor
+    from ama_cryptography.monitor import AmaCryptographyMonitor
 
 _logger = logging.getLogger(__name__)
 
@@ -85,17 +86,59 @@ from ama_cryptography.pqc_backends import (
 )
 from ama_cryptography.secure_memory import constant_time_compare
 
+
 # ---------------------------------------------------------------------------
 # CRYPTO_AVAILABLE guard — must fail-closed at import time if the native
 # C library is missing.  Tests that need CRYPTO_AVAILABLE=False monkeypatch
 # it *after* import succeeds.
+#
+# Documentation exception: Sphinx autodoc needs to import the module to
+# extract docstrings.  AMA_SPHINX_BUILD=1 permits import so the docs pipeline
+# can introspect symbols without a native backend; every legacy_compat
+# cryptographic function still checks CRYPTO_AVAILABLE at call-time.  The
+# env-var check requires an explicit truthy value so ``AMA_SPHINX_BUILD=0`` /
+# ``=false`` does NOT accidentally disable the guard.
 # ---------------------------------------------------------------------------
+def _env_flag_enabled(name: str) -> bool:
+    """Return True only for an explicit truthy env value (INVARIANT-7)."""
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 CRYPTO_AVAILABLE: bool = _ED25519_NATIVE_AVAILABLE and _HKDF_NATIVE_AVAILABLE
-if not CRYPTO_AVAILABLE:
+_AMA_DOCS_IMPORT = _env_flag_enabled("AMA_SPHINX_BUILD") or _env_flag_enabled("SPHINX_BUILD")
+if not _AMA_DOCS_IMPORT and not CRYPTO_AVAILABLE:
     raise RuntimeError(
         "AMA native C library required. "
         "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
     )
+
+
+def _enforce_invariant7_lc() -> None:
+    """INVARIANT-7 call-time enforcement for ``legacy_compat``.
+
+    Mirrors ``crypto_api._enforce_invariant7`` and
+    ``key_management._enforce_invariant7_km``: re-verifies that the
+    native C library is loaded before every cryptographic entry point
+    on this module.  Needed because the docs-build env-var gate
+    (``AMA_SPHINX_BUILD=1``) permits import without the backend; every
+    call site here must still refuse to operate without it, per the
+    INVARIANT-7 preservation guarantee written into ``INVARIANTS.md``
+    ("the contract moves from import-time to call-time under the
+    documented flag, never weakens").
+
+    Re-reads ``_native_lib`` through ``sys.modules`` so test-time
+    patches (``unittest.mock.patch``, ``monkeypatch.setattr``) are
+    respected, matching the pattern already used in ``crypto_api``.
+    """
+    _pb = sys.modules.get("ama_cryptography.pqc_backends")
+    if _pb is None or getattr(_pb, "_native_lib", None) is None:
+        raise RuntimeError(
+            "INVARIANT-7 (call-time): Native C cryptographic library is not "
+            "loaded. ama_cryptography.legacy_compat refuses to operate without "
+            "a constant-time backend. Build the native C library: "
+            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
+
 
 # Import centralized exception classes
 # Re-import constants from equations for convenience
@@ -137,6 +180,7 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
     This wrapper function checks module-level DILITHIUM_AVAILABLE,
     allowing tests to monkeypatch it.
     """
+    _enforce_invariant7_lc()
     import sys
 
     this_module = sys.modules[__name__]
@@ -153,6 +197,7 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
 
 def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """Sign message with CRYSTALS-Dilithium (ML-DSA-65)."""
+    _enforce_invariant7_lc()
     import sys
 
     this_module = sys.modules[__name__]
@@ -169,6 +214,7 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
 
 def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
     """Verify CRYSTALS-Dilithium signature."""
+    _enforce_invariant7_lc()
     import sys
 
     this_module = sys.modules[__name__]
@@ -306,6 +352,7 @@ def canonical_hash_code(
 
 def hmac_authenticate(message: bytes, key: bytes) -> bytes:
     """Generate HMAC-SHA3-256 authentication tag (RFC 2104)."""
+    _enforce_invariant7_lc()
     if len(key) < 32:
         raise ValueError("HMAC key must be at least 32 bytes for SHA3-256 security")
 
@@ -314,6 +361,7 @@ def hmac_authenticate(message: bytes, key: bytes) -> bytes:
 
 def hmac_verify(message: bytes, tag: bytes, key: bytes) -> bool:
     """Verify HMAC-SHA3-256 authentication tag (constant-time)."""
+    _enforce_invariant7_lc()
     expected = hmac_authenticate(message, key)
     return constant_time_compare(tag, expected)
 
@@ -341,6 +389,7 @@ class Ed25519KeyPair:
 
 def generate_ed25519_keypair(seed: Optional[bytes] = None) -> Ed25519KeyPair:
     """Generate Ed25519 key pair using native C backend (RFC 8032, Section 5.1.5)."""
+    _enforce_invariant7_lc()
     if not CRYPTO_AVAILABLE:
         raise RuntimeError(
             "AMA native C library required for Ed25519 key generation. "
@@ -358,6 +407,7 @@ def generate_ed25519_keypair(seed: Optional[bytes] = None) -> Ed25519KeyPair:
 
 def ed25519_sign(message: bytes, private_key: bytes) -> bytes:
     """Sign message with Ed25519 (deterministic) using native C backend."""
+    _enforce_invariant7_lc()
     if not CRYPTO_AVAILABLE:
         raise RuntimeError(
             "AMA native C library required for Ed25519 signing. "
@@ -375,6 +425,7 @@ def ed25519_sign(message: bytes, private_key: bytes) -> bytes:
 
 def ed25519_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
     """Verify Ed25519 signature using native C backend (RFC 8032, Section 5.1.7)."""
+    _enforce_invariant7_lc()
     if not CRYPTO_AVAILABLE:
         raise RuntimeError(
             "AMA native C library required for Ed25519 verification. "
@@ -451,9 +502,13 @@ def verify_rfc3161_timestamp(
 ) -> bool:
     """Verify RFC 3161 timestamp token cryptographically.
 
+    INVARIANT-7 call-time enforcement: refuses to operate without the
+    native backend loaded, matching the import-time contract.
+
     NOTE: This is the LEGACY API taking raw ``bytes``, NOT the same as
     ``rfc3161_timestamp.verify_timestamp()`` which takes ``TimestampResult``.
     """
+    _enforce_invariant7_lc()
     import os
     import shutil
     import tempfile
@@ -541,6 +596,7 @@ def create_ethical_hkdf_context(
     base_context: bytes, ethical_vector: Optional[Dict[str, float]] = None
 ) -> bytes:
     """Integrate ethical vector into HKDF key derivation context."""
+    _enforce_invariant7_lc()
     if ethical_vector is None:
         ethical_vector = ETHICAL_VECTOR
 
@@ -565,6 +621,7 @@ def derive_keys(
     salt: Optional[bytes] = None,
 ) -> Tuple[List[bytes], bytes]:
     """Derive multiple independent keys from master secret using HKDF (RFC 5869)."""
+    _enforce_invariant7_lc()
     if not CRYPTO_AVAILABLE:
         raise RuntimeError(
             "AMA native C library required for HKDF. "
@@ -623,6 +680,7 @@ def generate_key_management_system(
     author: str, ethical_vector: Optional[Dict[str, float]] = None
 ) -> KeyManagementSystem:
     """Initialize complete key management system with ethical integration."""
+    _enforce_invariant7_lc()
     if ethical_vector is None:
         ethical_vector = ETHICAL_VECTOR.copy()
 
@@ -783,6 +841,7 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordi
     .. deprecated::
         Use :func:`ama_cryptography.crypto_api.create_crypto_package` instead.
     """
+    _enforce_invariant7_lc()
     import warnings
 
     warnings.warn(
@@ -967,6 +1026,7 @@ def verify_crypto_package(
     .. deprecated::
         Use :func:`ama_cryptography.crypto_api.verify_crypto_package` instead.
     """
+    _enforce_invariant7_lc()
     import warnings
 
     warnings.warn(

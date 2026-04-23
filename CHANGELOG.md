@@ -44,19 +44,86 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   **Migration required for any system storing AMA-derived Argon2id
   hashes.** Hashes produced by AMA ≤ 2.1.5 sit in the prior non-spec
   bit-space and will not verify against post-fix AMA — or against any
-  other RFC 9106 implementation. Recommended migration:
-    1. Keep the AMA ≤ 2.1.5 derivation accessible for verification only
-       (e.g. behind a `legacy_argon2id_verify(...)` shim that retains
-       the pre-fix `blake2b_long` loop).
-    2. On the next successful login, verify against the legacy path; if
-       it succeeds, immediately re-derive with the post-fix
-       `ama_argon2id` and overwrite the stored hash.
+  other RFC 9106 implementation. This release ships the legacy path
+  under two new symbols so downstream consumers can verify stored tags
+  without forking the old code:
+
+  - **C API** (`include/ama_cryptography.h`):
+    `ama_argon2id_legacy(...)` — derive using the pre-2.1.5 buggy
+    `blake2b_long` loop; identical signature to `ama_argon2id`.
+    `ama_argon2id_legacy_verify(password, ..., expected_tag, tag_len)`
+    — constant-time compare of `expected_tag` against the legacy
+    derivation; returns `AMA_SUCCESS` on match,
+    `AMA_ERROR_VERIFY_FAILED` on mismatch.
+
+  - **Python API** (`ama_cryptography.pqc_backends`):
+    `native_argon2id_legacy(password, salt, ...)` — derive using the
+    pre-2.1.5 buggy path. Exposed so migration tooling and regression
+    tests can generate reference tags without forking the old code;
+    **never use it for new hashes** — `native_argon2id` is the
+    spec-compliant path. Every call emits an
+    `ama_cryptography.exceptions.SecurityWarning` so that accidental
+    use in a production code path is loud at runtime; migration
+    tooling can suppress the warning explicitly via
+    `warnings.catch_warnings()`.
+    `native_argon2id_legacy_verify(password, salt, expected_tag, ...)`
+    — returns `True` on match, `False` on mismatch. Raises
+    `RuntimeError` when running against an older native library that
+    does not export the shim. Does NOT emit a `SecurityWarning` — it
+    is the intended migration-verification path, so a warning on
+    every call during a rotation would drown operators in noise.
+
+  Recommended migration:
+    1. On the next successful login, call `ama_argon2id_legacy_verify`
+       (C) or `native_argon2id_legacy_verify` (Python) with the stored
+       tag.
+    2. On match, re-derive with the post-fix `ama_argon2id` and
+       overwrite the stored hash in the same transaction.
     3. After a deprecation window appropriate for the deployment's
-       login frequency, remove the legacy path.
+       login frequency, remove calls to the legacy path. The symbols
+       remain exported for binary compatibility until the next major
+       bump.
 
   No other public API or output format changes; ChaCha20-Poly1305,
   Ed25519, X25519, AES-256-GCM, SHA-3, ML-KEM, ML-DSA, and SPHINCS+
   outputs are unaffected.
+
+- **Argon2id output length capped at `AMA_ARGON2ID_MAX_TAG_LEN`
+  (1024 bytes).** Previously all three public Argon2id entry points
+  (`ama_argon2id`, `ama_argon2id_legacy`, `ama_argon2id_legacy_verify`
+  in C; `native_argon2id`, `native_argon2id_legacy`,
+  `native_argon2id_legacy_verify` in Python) accepted
+  `out_len` / `tag_len` up to `UINT32_MAX` (4 GiB) — the RFC 9106
+  §3.2 theoretical maximum.  That surface was a caller-controlled
+  memory-exhaustion / DoS vector because
+  `ama_argon2id_legacy_verify` heap-allocates a `computed[tag_len]`
+  buffer to hold the freshly-derived tag, and all three derivation
+  paths pay CPU time proportional to `out_len / 32` BLAKE2b
+  compressions in the `blake2b_long` tail.
+
+  A new ceiling `AMA_ARGON2ID_MAX_TAG_LEN = 1024` (32× the default
+  32-byte tag) is now enforced at every entry point.  This covers
+  every practical deployment — Argon2id tags are universally
+  16–64 bytes in the wild, and sizes above ~128 bytes are
+  cryptographically indistinguishable from 64 so only waste compute
+  and memory.
+
+  **Behaviour change:** calls with `out_len > 1024` or
+  `tag_len > 1024` now return `AMA_ERROR_INVALID_PARAM` from C and
+  raise `ValueError` from Python, whereas ≤ 2.1.5 would have
+  attempted the allocation and either succeeded (small-to-medium
+  values) or silently truncated / OOMed (large values).  The Python
+  `ValueError` message text also changed from the prior
+  `"Argon2id output length must be >= 4, got N"` wording to
+  `"Argon2id out_len must be in [4, 1024] bytes, got N"`; any caller
+  doing substring matching on the error message must update to the
+  new `"out_len"` text.  No spec-compliant user of the library is
+  affected; any caller that relied on the old unbounded behaviour
+  was already outside the recommended parameter space and should
+  switch to a ≤ 1024-byte tag.  The cap is exposed as
+  `AMA_ARGON2ID_MAX_TAG_LEN` in `include/ama_cryptography.h` and
+  mirrored as `ama_cryptography.pqc_backends._ARGON2ID_MAX_TAG_LEN`
+  so downstream callers can gate on it at compile / import time.
 
 ### Performance
 

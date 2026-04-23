@@ -373,68 +373,9 @@ setup(
     python_requires=">=3.9",
     packages=find_packages(exclude=["tests", "tests.*", "examples", "examples.*", "src", "src.*"]),
     py_modules=["ama_cryptography_monitor"],
-    # Note: pyproject.toml is the authoritative source for dependencies.
-    # This section is kept in sync for compatibility with older tools.
-    install_requires=[],
-    extras_require={
-        # numpy/scipy: optional, used by equations/double_helix and 3R monitor
-        # when available. Core cryptographic operations work without them.
-        "monitoring": [
-            "numpy>=1.24.0,<3.0.0",
-            "scipy>=1.7.0",
-        ],
-        # PyCA cryptography — only needed as fallback when native C library is not available
-        "legacy": ["cryptography>=41.0.7"],
-        # PKCS#11 support for hardware security modules
-        "hsm": ["PyKCS11>=1.5.18"],
-        # PyNaCl reserved for future libsodium integration; not currently used
-        "secure-memory": ["pynacl>=1.6.2"],
-        # NOTE: pyproject.toml [project.optional-dependencies.dev] is authoritative.
-        "dev": [
-            "pytest>=7.0.0",
-            "pytest-cov>=4.0.0",
-            "pytest-timeout>=2.1.0",
-            "pytest-benchmark>=4.0.0",
-            "pytest-xdist>=3.0.0",
-            "hypothesis>=6.0.0",
-            "black==24.10.0; python_version=='3.9'",
-            "black>=26.3.1; python_version>='3.10'",
-            "ruff>=0.15.11",
-            "mypy>=1.9.0",
-            "bandit>=1.7.0",
-            "safety>=2.3.0",
-            "Cython>=3.2.4",
-            "numpy>=1.24.0",
-            "scipy>=1.11.0",
-        ],
-        "docs": [
-            "sphinx>=7.4.7",
-            "sphinx-rtd-theme>=3.1.0",
-            "sphinx-autodoc-typehints>=2.3.0",
-        ],
-        "all": [
-            "pynacl>=1.6.2",
-            "PyKCS11>=1.5.18",
-            "pytest>=7.0.0",
-            "pytest-cov>=4.0.0",
-            "pytest-timeout>=2.1.0",
-            "pytest-benchmark>=4.0.0",
-            "pytest-xdist>=3.0.0",
-            "hypothesis>=6.0.0",
-            "black==24.10.0; python_version=='3.9'",
-            "black>=26.3.1; python_version>='3.10'",
-            "ruff>=0.15.11",
-            "mypy>=1.9.0",
-            "bandit>=1.7.0",
-            "safety>=2.3.0",
-            "Cython>=3.2.4",
-            "sphinx>=7.4.7",
-            "sphinx-rtd-theme>=3.1.0",
-            "sphinx-autodoc-typehints>=2.3.0",
-            "numpy>=1.24.0",
-            "scipy>=1.11.0",
-        ],
-    },
+    # Dependency metadata (install_requires / extras_require) is declared
+    # **only** in pyproject.toml. Setuptools merges the two automatically; any
+    # second copy here would be a silent source of drift (see audit 2c).
     ext_modules=get_cythonized_extensions(),
     cmdclass={"build_ext": CMakeBuild},
     include_package_data=True,

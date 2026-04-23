@@ -31,7 +31,7 @@ from ama_cryptography.adaptive_posture import (
     PostureEvaluator,
     ThreatLevel,
 )
-from ama_cryptography_monitor import (
+from ama_cryptography.monitor import (
     AmaCryptographyMonitor,
     ImportHijackViolation,
     IntegrityViolation,

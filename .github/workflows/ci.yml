@@ -10,6 +10,15 @@ on:
 permissions:
   contents: read
 
+# Collapse overlapping runs on the same ref to avoid runner-queue
+# saturation when rapid pushes fire both push- and pull_request-triggered
+# workflows in parallel.  Cancelling in-flight runs is safe for feature
+# branches and PR heads; `main` and scheduled runs are preserved by
+# excluding them from ``cancel-in-progress``.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}
+
 jobs:
   test:
     name: Test ${{ matrix.os }} / Python ${{ matrix.python-version }}
@@ -45,8 +54,41 @@ jobs:
 
     - name: Install system dependencies (Windows)
       if: runner.os == 'Windows'
+      shell: pwsh
+      # CMake is pre-installed on GitHub-hosted Windows runners
+      # (see https://github.com/actions/runner-images/ image manifests),
+      # so the common case is a no-op.  Only install via Chocolatey —
+      # with retries — if ``cmake`` is genuinely missing, so a transient
+      # Chocolatey CDN outage cannot break the build.  Matches the
+      # pattern already used in ``ci-build-test.yml``; PR #258 review
+      # fix for the flaky ``Install system dependencies (Windows)``
+      # step that was single-attempt ``choco install cmake``.
       run: |
-        choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+        if (Get-Command cmake -ErrorAction SilentlyContinue) {
+          Write-Host "CMake already available: $(cmake --version | Select-Object -First 1)"
+        } else {
+          Write-Host "CMake not found; installing via Chocolatey with retries..."
+          $maxAttempts = 5
+          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            Write-Host "Attempt ${attempt}/${maxAttempts}: choco install cmake..."
+            choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y 2>&1
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "Successfully installed cmake"
+              break
+            }
+            if ($attempt -lt $maxAttempts) {
+              $delay = $attempt * 15
+              Write-Host "Install failed, waiting ${delay}s before retry..."
+              Start-Sleep -Seconds $delay
+            }
+          }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "All ${maxAttempts} attempts to install cmake via Chocolatey failed"
+            exit 1
+          }
+          Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
+          refreshenv
+        }
 
     - name: Build native C library (Linux)
       if: runner.os == 'Linux'

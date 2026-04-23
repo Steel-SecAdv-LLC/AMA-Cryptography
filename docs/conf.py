@@ -3,12 +3,60 @@
 #
 # Sphinx configuration for AMA Cryptography Python API documentation
 
+from __future__ import annotations
+
 import os
 import sys
+import urllib.request
+from pathlib import Path
+from urllib.error import URLError
 
-# Add source to path
-# Add parent directory to path so autodoc can find ama_cryptography package
-sys.path.insert(0, os.path.abspath(".."))
+# Add repo root (parent of docs/) to sys.path so autodoc can import the
+# ``ama_cryptography`` package.  Resolved from ``__file__`` rather than
+# ``os.path.abspath("..")`` so the path is invariant to the caller's cwd:
+# the Makefile / auto-docs.yml both invoke ``sphinx-build ... docs ...``
+# from the repo root, where ``".."`` resolves to the *parent of the repo*
+# and risks importing a sibling checkout instead of this tree
+# (PR #256 review thread r3122679539).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# INVARIANT-7 docs-build gate is NOT mutated from this config file.  The
+# ``AMA_SPHINX_BUILD=1`` opt-in must be set explicitly by whoever drives
+# the docs build (``Makefile`` target ``docs``: sets it on the
+# ``sphinx-build`` command line; ``.github/workflows/auto-docs.yml``:
+# sets it via ``env:`` on the build step).  Config files must not
+# broaden the INVARIANT-7 bypass beyond "explicitly set by the docs
+# build" — ``os.environ.setdefault(...)`` here would leak the bypass
+# into any process that imports ``docs/conf.py`` for inspection
+# (tooling, tests, stubgen, etc.) and mask misconfiguration where a
+# caller genuinely lacks the native backend but isn't running Sphinx.
+# Consistency note: this check must mirror the ``_env_flag_enabled``
+# helper used by the INVARIANT-7 import guards in ``crypto_api.py``,
+# ``key_management.py``, and ``legacy_compat.py`` — those accept only
+# explicit truthy values (``"1"``, ``"true"``, ``"yes"``, ``"on"``).  A
+# plain ``os.environ.get(name)`` here would treat ``AMA_SPHINX_BUILD=0``
+# as set (non-empty string) and suppress the warning, leaving the user
+# with a cryptic ``RuntimeError`` from the import guards and no hint in
+# the build log about the misconfiguration (PR #258 review thread).
+_DOCS_FLAG_TRUTHY = {"1", "true", "yes", "on"}
+_docs_flag_set = (
+    os.environ.get("AMA_SPHINX_BUILD", "").strip().lower() in _DOCS_FLAG_TRUTHY
+    or os.environ.get("SPHINX_BUILD", "").strip().lower() in _DOCS_FLAG_TRUTHY
+)
+if not _docs_flag_set:
+    # Not a fatal error — docs/conf.py can be imported for type-stub
+    # generation and similar tooling that does not need autodoc to
+    # succeed.  Only Sphinx itself needs the env var, and Sphinx sees
+    # it because the Makefile / auto-docs.yml set it on the outer
+    # command line.  We merely warn so a misconfigured invocation is
+    # visible in the build log.
+    print(
+        "docs/conf.py: warning: AMA_SPHINX_BUILD / SPHINX_BUILD not set "
+        "to an explicit truthy value (``1`` / ``true`` / ``yes`` / ``on``); "
+        "autodoc will fail if the native backend is unavailable. "
+        "Invoke via ``make docs`` or set AMA_SPHINX_BUILD=1 explicitly.",
+        file=sys.stderr,
+    )
 
 # Project information
 project = "AMA Cryptography"
@@ -60,12 +108,79 @@ autodoc_type_aliases = {}
 autosummary_generate = True
 autosummary_imported_members = False
 
-# Intersphinx mapping
-intersphinx_mapping = {
-    "python": ("https://docs.python.org/3", None),
-    "numpy": ("https://numpy.org/doc/stable/", None),
-    "scipy": ("https://docs.scipy.org/doc/scipy/", None),
-}
+# Intersphinx mapping.  Prefer vendored inventories under docs/_intersphinx/
+# when available (offline CI).  For remote URLs we probe reachability at
+# conf-load time and drop unreachable entries so that sandboxed / offline
+# runners do not emit a bare "failed to reach any of the inventories"
+# warning that would break strict (``-W``) builds.  Operators who want
+# deterministic offline builds should vendor inventories under
+# docs/_intersphinx/ per the README there.
+_INTERSPHINX_CACHE = os.path.join(os.path.dirname(__file__), "_intersphinx")
+_INTERSPHINX_PROBE_TIMEOUT = float(os.environ.get("AMA_INTERSPHINX_PROBE_TIMEOUT", "3"))
+
+
+def _vendored_inventory(name: str) -> str | None:
+    path = os.path.join(_INTERSPHINX_CACHE, f"{name}.inv")
+    return path if os.path.exists(path) else None
+
+
+def _inventory_reachable(url: str) -> bool:
+    """Probe ``{url}/objects.inv`` and return True if it is fetchable.
+
+    Used to decide whether to include a remote intersphinx entry.  Uses
+    a short timeout so sandboxed builds do not block.
+    """
+    probe = url.rstrip("/") + "/objects.inv"
+    # Restrict to http(s) — defence in depth against an accidental
+    # file:/ftp:/custom scheme leaking in through ``candidates`` below.
+    if not probe.startswith(("http://", "https://")):
+        return False
+    # INVARIANT-13 justification for the two S310 suppressions below:
+    # the URL comes from the developer-authored ``candidates`` dict in
+    # ``_build_intersphinx_mapping()`` — never from a request header, user
+    # input, or environment variable — and the ``startswith(("http://",
+    # "https://"))`` guard above statically rules out the file/ftp/custom-
+    # scheme classes the rule actually cares about. The HEAD probe is also
+    # time-bounded (``_INTERSPHINX_PROBE_TIMEOUT``), feeds only a boolean
+    # back into Sphinx's build-time config, never touches cryptographic
+    # state, does not parse network responses, and on failure drops the
+    # entry rather than raising (DOCS-001).
+    try:
+        req = urllib.request.Request(probe, method="HEAD")  # fmt: skip  # noqa: E501,S310 -- static-scheme probe (DOCS-001)
+        with urllib.request.urlopen(req, timeout=_INTERSPHINX_PROBE_TIMEOUT) as resp:  # fmt: skip  # noqa: E501,S310 -- static-scheme probe (DOCS-001)
+            return 200 <= resp.status < 400
+    except (URLError, OSError, ValueError):
+        return False
+
+
+def _build_intersphinx_mapping() -> dict:
+    """Assemble ``intersphinx_mapping`` using vendored > reachable > drop."""
+    candidates = {
+        "python": "https://docs.python.org/3",
+        "numpy": "https://numpy.org/doc/stable/",
+        "scipy": "https://docs.scipy.org/doc/scipy/",
+    }
+    mapping: dict = {}
+    for name, url in candidates.items():
+        vendored = _vendored_inventory(name)
+        if vendored is not None:
+            mapping[name] = (url, vendored)
+        elif _inventory_reachable(url):
+            mapping[name] = (url, None)
+        # else: drop — offline build, no cross-references for this project.
+    return mapping
+
+
+intersphinx_mapping = _build_intersphinx_mapping()
+intersphinx_timeout = 5
+
+# Defence-in-depth: if a probe briefly succeeds but the real fetch fails
+# mid-build (transient 5xx), classify the resulting message as a
+# non-fatal warning category so -W does not abort strict builds.
+suppress_warnings = [
+    "intersphinx.external",
+    "config.cache",
+]
 
 # Templates path
 templates_path = ["_templates"]
@@ -80,7 +195,7 @@ master_doc = "index"
 language = "en"
 
 # List of patterns to exclude
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "_intersphinx", "Thumbs.db", ".DS_Store"]
 
 # Pygments style
 pygments_style = "sphinx"

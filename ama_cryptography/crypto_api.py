@@ -40,7 +40,7 @@ from typing import Any, ClassVar, Dict, List, Mapping, Optional, Tuple, Union
 
 from ama_cryptography._finalizer_health import record_finalizer_error as _record_finalizer_error
 from ama_cryptography._self_test import check_operational as _check_operational
-from ama_cryptography_monitor import AmaCryptographyMonitor, create_monitor
+from ama_cryptography.monitor import AmaCryptographyMonitor, create_monitor
 
 # Module-level 3R monitor instance — feeds timing data to anomaly detection
 _monitor: AmaCryptographyMonitor = create_monitor(enabled=True)
@@ -102,10 +102,31 @@ _INVARIANT7_OK: bool = _native_lib is not None
 # Deprecation warning for AMA_REQUIRE_CONSTANT_TIME is emitted by
 # pqc_backends.py at import time; no need to duplicate it here.
 
+
 # INVARIANT-7 (revised): No cryptographic fallbacks, ever.
 # When native constant-time backend is unavailable the library MUST refuse to
 # operate.  Pure-Python fallback for any cryptographic primitive is prohibited.
-if not _HMAC_NATIVE or not _HKDF_NATIVE:
+#
+# Documentation exception: Sphinx autodoc needs to import the module to
+# extract docstrings.  The guard's purpose is to refuse *cryptographic calls*
+# without a constant-time backend; introspection for docs is orthogonal to
+# that guarantee.  Setting AMA_SPHINX_BUILD=1 (or SPHINX_BUILD=1) permits the
+# import, but every call-time path still invokes _enforce_invariant7(), which
+# will raise if the native library is truly absent.  The env-var check
+# requires an explicit truthy value ("1"/"true"/"yes"/"on") so that an
+# accidental ``AMA_SPHINX_BUILD=0`` / ``=false`` does NOT bypass the
+# fail-closed import guard.
+def _env_flag_enabled(name: str) -> bool:
+    """Return True only for an explicit truthy env value.
+
+    Required for INVARIANT-7 fail-closed semantics: mere presence of the
+    variable must not disable the import guard — only an opt-in value does.
+    """
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+_AMA_DOCS_IMPORT = _env_flag_enabled("AMA_SPHINX_BUILD") or _env_flag_enabled("SPHINX_BUILD")
+if not _AMA_DOCS_IMPORT and (not _HMAC_NATIVE or not _HKDF_NATIVE):
     raise RuntimeError(
         "INVARIANT-7: Native HMAC/HKDF C accelerators are unavailable. "
         "The library refuses to operate without a constant-time backend. "
@@ -339,6 +360,7 @@ class MLDSAProvider(CryptoProvider):
         Raises:
             PQCUnavailableError: If no Dilithium backend is available
         """
+        _enforce_invariant7()
         if not self._available:
             raise PQCUnavailableError(
                 "PQC_UNAVAILABLE: ML-DSA-65 requires native C backend. "
@@ -382,6 +404,7 @@ class MLDSAProvider(CryptoProvider):
         Raises:
             PQCUnavailableError: If no Dilithium backend is available
         """
+        _enforce_invariant7()
         if not self._available:
             raise PQCUnavailableError("PQC_UNAVAILABLE: ML-DSA-65 requires native C backend.")
 
@@ -415,6 +438,7 @@ class MLDSAProvider(CryptoProvider):
         Raises:
             PQCUnavailableError: If no Dilithium backend is available
         """
+        _enforce_invariant7()
         if not self._available:
             raise PQCUnavailableError("PQC_UNAVAILABLE: ML-DSA-65 requires native C backend.")
 
@@ -448,6 +472,7 @@ class Ed25519Provider(CryptoProvider):
 
     def generate_keypair(self) -> KeyPair:
         """Generate Ed25519 keypair using native C backend."""
+        _enforce_invariant7()
         pk_bytes, sk_bytes = native_ed25519_keypair()
         # Return 32-byte seed as secret_key for API consistency
         # The full 64-byte key is seed || public_key
@@ -476,6 +501,7 @@ class Ed25519Provider(CryptoProvider):
         Returns:
             Signature object with Ed25519 signature
         """
+        _enforce_invariant7()
         # Handle 32-byte seed: expand to 64-byte native format
         if len(secret_key) == 32:
             _, full_sk = native_ed25519_keypair_from_seed(bytes(secret_key))
@@ -508,6 +534,7 @@ class Ed25519Provider(CryptoProvider):
         Returns:
             True if signature is valid, False otherwise
         """
+        _enforce_invariant7()
         try:
             return native_ed25519_verify(signature, message, public_key)
         except ValueError:
@@ -529,6 +556,7 @@ class Ed25519Provider(CryptoProvider):
         Returns:
             List of bools — True if corresponding signature is valid.
         """
+        _enforce_invariant7()
         return native_ed25519_batch_verify(entries)
 
 
@@ -604,6 +632,7 @@ class KeypairCache:
         copy cannot be securely wiped by ``rotate()``/``__del__``; the cache
         controls the only wipeable ``bytearray`` reference internally.
         """
+        _enforce_invariant7()
         with self._lock:
             if self._pk is None or self._sk is None:
                 crypto = AmaCryptography(algorithm=self._algorithm)
@@ -667,6 +696,7 @@ class KyberProvider(KEMProvider):
         Raises:
             KyberUnavailableError: If Kyber backend is not available
         """
+        _enforce_invariant7()
         keypair = generate_kyber_keypair()
 
         # Copy secret_key to detach from KyberKeyPair's bytearray;
@@ -696,6 +726,7 @@ class KyberProvider(KEMProvider):
             KyberUnavailableError: If Kyber backend is not available
             ValueError: If public_key has incorrect length
         """
+        _enforce_invariant7()
         encap = kyber_encapsulate(public_key)
 
         return EncapsulatedSecret(
@@ -723,6 +754,7 @@ class KyberProvider(KEMProvider):
             KyberUnavailableError: If Kyber backend is not available
             ValueError: If ciphertext or secret_key has incorrect length
         """
+        _enforce_invariant7()
         return kyber_decapsulate(ciphertext, secret_key)
 
 
@@ -770,6 +802,7 @@ class SphincsProvider(CryptoProvider):
         Raises:
             SphincsUnavailableError: If SPHINCS+ backend is not available
         """
+        _enforce_invariant7()
         keypair = generate_sphincs_keypair()
 
         # Copy secret_key to detach from SphincsKeyPair's bytearray;
@@ -807,6 +840,7 @@ class SphincsProvider(CryptoProvider):
             SphincsUnavailableError: If SPHINCS+ backend is not available
             ValueError: If secret_key has incorrect length
         """
+        _enforce_invariant7()
         sig_bytes = sphincs_sign(message, secret_key)
         message_hash = (
             precomputed_hash if precomputed_hash is not None else hashlib.sha3_256(message).digest()
@@ -838,6 +872,7 @@ class SphincsProvider(CryptoProvider):
             SphincsUnavailableError: If SPHINCS+ backend is not available
             ValueError: If public_key has incorrect length
         """
+        _enforce_invariant7()
         return sphincs_verify(message, signature, public_key)
 
 
@@ -1133,6 +1168,7 @@ class AESGCMProvider:
         Returns:
             Dict with 'ciphertext', 'nonce', 'tag', 'aad' keys
         """
+        _enforce_invariant7()
         import secrets as _secrets
 
         # Fork detection: refuse to reuse nonce state after os.fork()
@@ -1227,6 +1263,7 @@ class AESGCMProvider:
         Raises:
             ValueError: If authentication tag verification fails
         """
+        _enforce_invariant7()
         if len(key) != 32:
             raise ValueError(f"AES-256 key must be 32 bytes, got {len(key)}")
         if len(nonce) != 12:
@@ -1247,7 +1284,8 @@ class HybridKEMProvider(KEMProvider):
     combining classical X25519 and post-quantum Kyber-1024 KEMs
     via a binding HKDF construction.
 
-    Key layout:
+    Key layout::
+
         public_key  = x25519_pub (32 bytes) || kyber_pub (1568 bytes)
         secret_key  = x25519_priv (32 bytes) || x25519_pub (32 bytes)
                       || kyber_secret (3168 bytes) || kyber_pub (1568 bytes)
@@ -1264,6 +1302,7 @@ class HybridKEMProvider(KEMProvider):
 
     def generate_keypair(self) -> KeyPair:
         """Generate both X25519 and Kyber-1024 keypairs."""
+        _enforce_invariant7()
         from ama_cryptography.pqc_backends import native_x25519_keypair
 
         x25519_pk, x25519_sk = native_x25519_keypair()
@@ -1288,6 +1327,7 @@ class HybridKEMProvider(KEMProvider):
 
     def encapsulate(self, public_key: bytes) -> EncapsulatedSecret:
         """Perform X25519 ephemeral-static DH + Kyber encapsulation."""
+        _enforce_invariant7()
         from ama_cryptography.pqc_backends import (
             native_x25519_key_exchange,
             native_x25519_keypair,
@@ -1325,6 +1365,7 @@ class HybridKEMProvider(KEMProvider):
 
     def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
         """Split ciphertext and secret key, recover both shared secrets, combine."""
+        _enforce_invariant7()
         from ama_cryptography.pqc_backends import native_x25519_key_exchange
 
         # Split ciphertext
@@ -1397,6 +1438,7 @@ class HybridSignatureProvider(CryptoProvider):
         Raises:
             PQCUnavailableError: If Dilithium backend is not available
         """
+        _enforce_invariant7()
         if not self._pqc_available:
             raise PQCUnavailableError(
                 "PQC_UNAVAILABLE: Hybrid signatures require ML-DSA-65. "
@@ -1456,6 +1498,7 @@ class HybridSignatureProvider(CryptoProvider):
         Raises:
             PQCUnavailableError: If Dilithium backend is not available
         """
+        _enforce_invariant7()
         if not self._pqc_available:
             raise PQCUnavailableError("PQC_UNAVAILABLE: Hybrid signatures require ML-DSA-65.")
 
@@ -1515,6 +1558,7 @@ class HybridSignatureProvider(CryptoProvider):
         Raises:
             PQCUnavailableError: If Dilithium backend is not available
         """
+        _enforce_invariant7()
         if not self._pqc_available:
             raise PQCUnavailableError("PQC_UNAVAILABLE: Hybrid signatures require ML-DSA-65.")
 
@@ -1599,6 +1643,7 @@ class AmaCryptography:
 
     def generate_keypair(self) -> KeyPair:
         """Generate cryptographic keypair"""
+        _enforce_invariant7()
         _check_operational()
         if isinstance(self.provider, AESGCMProvider):
             raise TypeError("AES-256-GCM does not support keypair generation")
@@ -1606,6 +1651,7 @@ class AmaCryptography:
 
     def sign(self, message: bytes, secret_key: Union[bytes, bytearray]) -> Signature:
         """Sign a message"""
+        _enforce_invariant7()
         _check_operational()
         if not isinstance(self.provider, CryptoProvider):
             raise TypeError("Current algorithm does not support signing")
@@ -1627,6 +1673,7 @@ class AmaCryptography:
         Returns:
             True if valid, False otherwise.
         """
+        _enforce_invariant7()
         _check_operational()
         if not isinstance(self.provider, CryptoProvider):
             raise TypeError("Current algorithm does not support verification")
@@ -1635,6 +1682,7 @@ class AmaCryptography:
 
     def encapsulate(self, public_key: bytes) -> EncapsulatedSecret:
         """Encapsulate a shared secret (KEM)"""
+        _enforce_invariant7()
         _check_operational()
         if not isinstance(self.provider, KEMProvider):
             raise TypeError("Current algorithm does not support KEM")
@@ -1642,6 +1690,7 @@ class AmaCryptography:
 
     def decapsulate(self, ciphertext: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
         """Decapsulate a shared secret (KEM)"""
+        _enforce_invariant7()
         _check_operational()
         if not isinstance(self.provider, KEMProvider):
             raise TypeError("Current algorithm does not support KEM")
@@ -1714,6 +1763,7 @@ def quick_hash(
         >>> digest = quick_hash(b"Hello from AI agent")
         >>> assert len(digest) == 32  # SHA3-256
     """
+    _enforce_invariant7()
     _check_operational()
     return AmaCryptography.hash_message(message, algorithm)
 
@@ -1731,6 +1781,7 @@ def quick_sign(
     Returns:
         (keypair, signature)
     """
+    _enforce_invariant7()
     crypto = AmaCryptography(algorithm=algorithm)
     keypair = crypto.generate_keypair()
     signature = crypto.sign(message, keypair.secret_key)
@@ -1755,6 +1806,7 @@ def quick_verify(
     Returns:
         True if valid, False otherwise
     """
+    _enforce_invariant7()
     crypto = AmaCryptography(algorithm=algorithm)
     return crypto.verify(message, signature, public_key)
 
@@ -1771,6 +1823,7 @@ def quick_kem(
     Returns:
         (keypair, encapsulated_secret)
     """
+    _enforce_invariant7()
     crypto = AmaCryptography(algorithm=algorithm)
     keypair = crypto.generate_keypair()
     encapsulated = crypto.encapsulate(keypair.public_key)
@@ -2133,6 +2186,7 @@ def create_crypto_package(
         ValueError: If content is empty
         CryptoModuleError: If the module is not in OPERATIONAL state
     """
+    _enforce_invariant7()
     _check_operational()
     # Input validation
     if not isinstance(content, bytes):
@@ -2296,40 +2350,44 @@ def verify_crypto_package(
     """
     Verify all 4 layers of a crypto package plus any optional add-ons.
 
-    4-Layer Verification
-    ====================
-    Layer 1 — Content Integrity:   Recompute SHA3-256 and compare to stored hash.
-    Layer 2 — Keyed Authentication: Recompute HMAC-SHA3-256 with stored key and
-              compare to stored tag.
-    Layer 3 — Digital Signature:   Verify primary signature (Ed25519 + ML-DSA-65)
-              against stored public key.
-    Layer 4 — Key Independence:    Re-derive keys from stored master secret, salt,
-              and info; compare to stored derived keys.
+    **4-Layer Verification**
+
+    - *Layer 1 — Content Integrity:* recompute SHA3-256 and compare to
+      stored hash.
+    - *Layer 2 — Keyed Authentication:* recompute HMAC-SHA3-256 with
+      stored key and compare to stored tag.
+    - *Layer 3 — Digital Signature:* verify primary signature
+      (Ed25519 + ML-DSA-65) against stored public key.
+    - *Layer 4 — Key Independence:* re-derive keys from stored master
+      secret, salt, and info; compare to stored derived keys.
 
     Optional add-on verification:
-        - SPHINCS+ secondary signature (if present)
-        - KEM shared secret (if present and keypair available)
+
+    - SPHINCS+ secondary signature (if present)
+    - KEM shared secret (if present and keypair available)
 
     Args:
-        content: Original content that was signed
-        package: CryptoPackageResult to verify
+        content: Original content that was signed.
+        package: CryptoPackageResult to verify.
 
     Returns:
-        Dictionary with a boolean for each layer plus ``all_valid`` (True only
-        if every layer passes):
-            - content_hash: Layer 1
-            - hmac: Layer 2
-            - primary_signature: Layer 3
-            - hkdf_keys: Layer 4
-            - sphincs: (if present)
-            - kem: (if present)
-            - all_valid: True iff all checks passed
+        Dictionary with a boolean for each layer plus ``all_valid`` (True
+        only if every layer passes). Keys:
+
+        - ``content_hash``: Layer 1
+        - ``hmac``: Layer 2
+        - ``primary_signature``: Layer 3
+        - ``hkdf_keys``: Layer 4
+        - ``sphincs``: (if present)
+        - ``kem``: (if present)
+        - ``all_valid``: True iff all checks passed
 
     Example:
         >>> result = create_crypto_package(b"Hello")
         >>> v = verify_crypto_package(b"Hello", result)
         >>> assert v["all_valid"]
     """
+    _enforce_invariant7()
     _check_operational()
     results: Dict[str, bool] = {}
 
