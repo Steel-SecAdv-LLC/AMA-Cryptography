@@ -20,6 +20,15 @@ add_ama_test(test_sha3_x4 test_sha3_x4.c)
 add_ama_test(test_hkdf test_hkdf.c)
 add_ama_test(test_ed25519 test_ed25519.c)
 
+# test_ed25519_comb_equiv validates the in-tree signed 4-bit window comb
+# (ge25519_scalarmult_base_comb_signed) against the variable-base wNAF
+# reference.  When AMA_ED25519_ASSEMBLY=ON (default on x86-64), the donna
+# shim replaces ama_ed25519.c, so the comb is not compiled and this test
+# would be a no-op tautology.  Only build it on the in-tree backend.
+if(NOT AMA_ED25519_ASSEMBLY)
+    add_ama_test(test_ed25519_comb_equiv test_ed25519_comb_equiv.c)
+endif()
+
 # X25519 lives under AMA_USE_NATIVE_PQC (see top-level CMakeLists.txt),
 # so its test is only built when that option is enabled — otherwise the
 # ama_x25519_* symbols aren't in the library and linking would fail.
