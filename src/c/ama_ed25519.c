@@ -695,8 +695,9 @@ static void ge25519_scalarmult_base_comb_signed(ge25519_p3 *r,
 
     /* Split scalar into 64 unsigned 4-bit nibbles, then carry-propagate to
      * signed digits in [-8..+7].  After sc25519_reduce, scalar < l < 2^253,
-     * so e[63] is at most 7 after carry — well within the [-8..+8] contract
-     * of ge25519_comb_select_signed. */
+     * so the unrebalanced top nibble e[63] starts in [0..7]; the final
+     * carry can increase it to 8, which is still within the [-8..+8]
+     * contract of ge25519_comb_select_signed. */
     int8_t e[64];
     for (int i = 0; i < 32; i++) {
         e[2*i + 0] = (int8_t)(scalar_reduced[i] & 0x0F);
