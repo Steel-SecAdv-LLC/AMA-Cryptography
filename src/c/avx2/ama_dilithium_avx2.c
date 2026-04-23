@@ -481,23 +481,228 @@ void ama_dilithium_power2round_avx2(int32_t a1[DILITHIUM_N],
 }
 
 /* ============================================================================
- * Vectorized rejection sampling: check coefficients against bound
- * Returns count of valid samples found in buf.
+ * Vectorized rejection sampling (FIPS 204 §7.3 / SampleInBall domain).
+ *
+ * Each iteration processes 24 bytes of SHAKE128 output, producing 8
+ * candidate 23-bit coefficients (3 bytes per candidate), masking them to
+ * 23 bits, comparing in parallel against DILITHIUM_Q, then compacting
+ * the accepted lanes to the front via _mm256_permutevar8x32_epi32 with
+ * a precomputed 256-entry permutation LUT.  The compacted result is
+ * unaligned-stored into the output buffer and ctr is advanced by the
+ * popcount of the accept mask.
+ *
+ * Throughput: best case 8 candidates per 24-byte SHAKE chunk vs. 1 per
+ * 3 bytes in the scalar loop — ~8× if the rejection rate is ignored, or
+ * ~7× net given ML-DSA-65's ~0.2% reject rate and the AVX2 overhead.
+ *
+ * Constant-time contract (INVARIANT-12): rejection rate and accept mask
+ * depend only on the public SHAKE128 stream (expanded from ρ || nonce,
+ * both public).  Compaction LUT is a public constant, never indexed by
+ * secret data.  A scalar tail (< 24 bytes left, or within the last few
+ * output slots) handles the edge where a full AVX2 chunk would overflow.
  * ============================================================================ */
+
+/* 256-entry compaction LUT for _mm256_permutevar8x32_epi32.
+ * For an 8-bit accept mask m, rej_compaction_lut[m] is a vector of 8
+ * int32 lane indices that moves each accepted lane to the front and
+ * leaves the trailing (rejected) lanes with arbitrary values (don't-care;
+ * they are overwritten on the next store because ctr advances only by
+ * popcount(m)).  Generated mechanically by tools/gen_rej_compaction_lut.py;
+ * re-generate and re-paste if the output shape ever changes. */
+static const int32_t rej_compaction_lut[256][8] = {
+    { 0, 0, 0, 0, 0, 0, 0, 0 }, { 0, 0, 0, 0, 0, 0, 0, 0 },
+    { 1, 0, 0, 0, 0, 0, 0, 0 }, { 0, 1, 0, 0, 0, 0, 0, 0 },
+    { 2, 0, 0, 0, 0, 0, 0, 0 }, { 0, 2, 0, 0, 0, 0, 0, 0 },
+    { 1, 2, 0, 0, 0, 0, 0, 0 }, { 0, 1, 2, 0, 0, 0, 0, 0 },
+    { 3, 0, 0, 0, 0, 0, 0, 0 }, { 0, 3, 0, 0, 0, 0, 0, 0 },
+    { 1, 3, 0, 0, 0, 0, 0, 0 }, { 0, 1, 3, 0, 0, 0, 0, 0 },
+    { 2, 3, 0, 0, 0, 0, 0, 0 }, { 0, 2, 3, 0, 0, 0, 0, 0 },
+    { 1, 2, 3, 0, 0, 0, 0, 0 }, { 0, 1, 2, 3, 0, 0, 0, 0 },
+    { 4, 0, 0, 0, 0, 0, 0, 0 }, { 0, 4, 0, 0, 0, 0, 0, 0 },
+    { 1, 4, 0, 0, 0, 0, 0, 0 }, { 0, 1, 4, 0, 0, 0, 0, 0 },
+    { 2, 4, 0, 0, 0, 0, 0, 0 }, { 0, 2, 4, 0, 0, 0, 0, 0 },
+    { 1, 2, 4, 0, 0, 0, 0, 0 }, { 0, 1, 2, 4, 0, 0, 0, 0 },
+    { 3, 4, 0, 0, 0, 0, 0, 0 }, { 0, 3, 4, 0, 0, 0, 0, 0 },
+    { 1, 3, 4, 0, 0, 0, 0, 0 }, { 0, 1, 3, 4, 0, 0, 0, 0 },
+    { 2, 3, 4, 0, 0, 0, 0, 0 }, { 0, 2, 3, 4, 0, 0, 0, 0 },
+    { 1, 2, 3, 4, 0, 0, 0, 0 }, { 0, 1, 2, 3, 4, 0, 0, 0 },
+    { 5, 0, 0, 0, 0, 0, 0, 0 }, { 0, 5, 0, 0, 0, 0, 0, 0 },
+    { 1, 5, 0, 0, 0, 0, 0, 0 }, { 0, 1, 5, 0, 0, 0, 0, 0 },
+    { 2, 5, 0, 0, 0, 0, 0, 0 }, { 0, 2, 5, 0, 0, 0, 0, 0 },
+    { 1, 2, 5, 0, 0, 0, 0, 0 }, { 0, 1, 2, 5, 0, 0, 0, 0 },
+    { 3, 5, 0, 0, 0, 0, 0, 0 }, { 0, 3, 5, 0, 0, 0, 0, 0 },
+    { 1, 3, 5, 0, 0, 0, 0, 0 }, { 0, 1, 3, 5, 0, 0, 0, 0 },
+    { 2, 3, 5, 0, 0, 0, 0, 0 }, { 0, 2, 3, 5, 0, 0, 0, 0 },
+    { 1, 2, 3, 5, 0, 0, 0, 0 }, { 0, 1, 2, 3, 5, 0, 0, 0 },
+    { 4, 5, 0, 0, 0, 0, 0, 0 }, { 0, 4, 5, 0, 0, 0, 0, 0 },
+    { 1, 4, 5, 0, 0, 0, 0, 0 }, { 0, 1, 4, 5, 0, 0, 0, 0 },
+    { 2, 4, 5, 0, 0, 0, 0, 0 }, { 0, 2, 4, 5, 0, 0, 0, 0 },
+    { 1, 2, 4, 5, 0, 0, 0, 0 }, { 0, 1, 2, 4, 5, 0, 0, 0 },
+    { 3, 4, 5, 0, 0, 0, 0, 0 }, { 0, 3, 4, 5, 0, 0, 0, 0 },
+    { 1, 3, 4, 5, 0, 0, 0, 0 }, { 0, 1, 3, 4, 5, 0, 0, 0 },
+    { 2, 3, 4, 5, 0, 0, 0, 0 }, { 0, 2, 3, 4, 5, 0, 0, 0 },
+    { 1, 2, 3, 4, 5, 0, 0, 0 }, { 0, 1, 2, 3, 4, 5, 0, 0 },
+    { 6, 0, 0, 0, 0, 0, 0, 0 }, { 0, 6, 0, 0, 0, 0, 0, 0 },
+    { 1, 6, 0, 0, 0, 0, 0, 0 }, { 0, 1, 6, 0, 0, 0, 0, 0 },
+    { 2, 6, 0, 0, 0, 0, 0, 0 }, { 0, 2, 6, 0, 0, 0, 0, 0 },
+    { 1, 2, 6, 0, 0, 0, 0, 0 }, { 0, 1, 2, 6, 0, 0, 0, 0 },
+    { 3, 6, 0, 0, 0, 0, 0, 0 }, { 0, 3, 6, 0, 0, 0, 0, 0 },
+    { 1, 3, 6, 0, 0, 0, 0, 0 }, { 0, 1, 3, 6, 0, 0, 0, 0 },
+    { 2, 3, 6, 0, 0, 0, 0, 0 }, { 0, 2, 3, 6, 0, 0, 0, 0 },
+    { 1, 2, 3, 6, 0, 0, 0, 0 }, { 0, 1, 2, 3, 6, 0, 0, 0 },
+    { 4, 6, 0, 0, 0, 0, 0, 0 }, { 0, 4, 6, 0, 0, 0, 0, 0 },
+    { 1, 4, 6, 0, 0, 0, 0, 0 }, { 0, 1, 4, 6, 0, 0, 0, 0 },
+    { 2, 4, 6, 0, 0, 0, 0, 0 }, { 0, 2, 4, 6, 0, 0, 0, 0 },
+    { 1, 2, 4, 6, 0, 0, 0, 0 }, { 0, 1, 2, 4, 6, 0, 0, 0 },
+    { 3, 4, 6, 0, 0, 0, 0, 0 }, { 0, 3, 4, 6, 0, 0, 0, 0 },
+    { 1, 3, 4, 6, 0, 0, 0, 0 }, { 0, 1, 3, 4, 6, 0, 0, 0 },
+    { 2, 3, 4, 6, 0, 0, 0, 0 }, { 0, 2, 3, 4, 6, 0, 0, 0 },
+    { 1, 2, 3, 4, 6, 0, 0, 0 }, { 0, 1, 2, 3, 4, 6, 0, 0 },
+    { 5, 6, 0, 0, 0, 0, 0, 0 }, { 0, 5, 6, 0, 0, 0, 0, 0 },
+    { 1, 5, 6, 0, 0, 0, 0, 0 }, { 0, 1, 5, 6, 0, 0, 0, 0 },
+    { 2, 5, 6, 0, 0, 0, 0, 0 }, { 0, 2, 5, 6, 0, 0, 0, 0 },
+    { 1, 2, 5, 6, 0, 0, 0, 0 }, { 0, 1, 2, 5, 6, 0, 0, 0 },
+    { 3, 5, 6, 0, 0, 0, 0, 0 }, { 0, 3, 5, 6, 0, 0, 0, 0 },
+    { 1, 3, 5, 6, 0, 0, 0, 0 }, { 0, 1, 3, 5, 6, 0, 0, 0 },
+    { 2, 3, 5, 6, 0, 0, 0, 0 }, { 0, 2, 3, 5, 6, 0, 0, 0 },
+    { 1, 2, 3, 5, 6, 0, 0, 0 }, { 0, 1, 2, 3, 5, 6, 0, 0 },
+    { 4, 5, 6, 0, 0, 0, 0, 0 }, { 0, 4, 5, 6, 0, 0, 0, 0 },
+    { 1, 4, 5, 6, 0, 0, 0, 0 }, { 0, 1, 4, 5, 6, 0, 0, 0 },
+    { 2, 4, 5, 6, 0, 0, 0, 0 }, { 0, 2, 4, 5, 6, 0, 0, 0 },
+    { 1, 2, 4, 5, 6, 0, 0, 0 }, { 0, 1, 2, 4, 5, 6, 0, 0 },
+    { 3, 4, 5, 6, 0, 0, 0, 0 }, { 0, 3, 4, 5, 6, 0, 0, 0 },
+    { 1, 3, 4, 5, 6, 0, 0, 0 }, { 0, 1, 3, 4, 5, 6, 0, 0 },
+    { 2, 3, 4, 5, 6, 0, 0, 0 }, { 0, 2, 3, 4, 5, 6, 0, 0 },
+    { 1, 2, 3, 4, 5, 6, 0, 0 }, { 0, 1, 2, 3, 4, 5, 6, 0 },
+    { 7, 0, 0, 0, 0, 0, 0, 0 }, { 0, 7, 0, 0, 0, 0, 0, 0 },
+    { 1, 7, 0, 0, 0, 0, 0, 0 }, { 0, 1, 7, 0, 0, 0, 0, 0 },
+    { 2, 7, 0, 0, 0, 0, 0, 0 }, { 0, 2, 7, 0, 0, 0, 0, 0 },
+    { 1, 2, 7, 0, 0, 0, 0, 0 }, { 0, 1, 2, 7, 0, 0, 0, 0 },
+    { 3, 7, 0, 0, 0, 0, 0, 0 }, { 0, 3, 7, 0, 0, 0, 0, 0 },
+    { 1, 3, 7, 0, 0, 0, 0, 0 }, { 0, 1, 3, 7, 0, 0, 0, 0 },
+    { 2, 3, 7, 0, 0, 0, 0, 0 }, { 0, 2, 3, 7, 0, 0, 0, 0 },
+    { 1, 2, 3, 7, 0, 0, 0, 0 }, { 0, 1, 2, 3, 7, 0, 0, 0 },
+    { 4, 7, 0, 0, 0, 0, 0, 0 }, { 0, 4, 7, 0, 0, 0, 0, 0 },
+    { 1, 4, 7, 0, 0, 0, 0, 0 }, { 0, 1, 4, 7, 0, 0, 0, 0 },
+    { 2, 4, 7, 0, 0, 0, 0, 0 }, { 0, 2, 4, 7, 0, 0, 0, 0 },
+    { 1, 2, 4, 7, 0, 0, 0, 0 }, { 0, 1, 2, 4, 7, 0, 0, 0 },
+    { 3, 4, 7, 0, 0, 0, 0, 0 }, { 0, 3, 4, 7, 0, 0, 0, 0 },
+    { 1, 3, 4, 7, 0, 0, 0, 0 }, { 0, 1, 3, 4, 7, 0, 0, 0 },
+    { 2, 3, 4, 7, 0, 0, 0, 0 }, { 0, 2, 3, 4, 7, 0, 0, 0 },
+    { 1, 2, 3, 4, 7, 0, 0, 0 }, { 0, 1, 2, 3, 4, 7, 0, 0 },
+    { 5, 7, 0, 0, 0, 0, 0, 0 }, { 0, 5, 7, 0, 0, 0, 0, 0 },
+    { 1, 5, 7, 0, 0, 0, 0, 0 }, { 0, 1, 5, 7, 0, 0, 0, 0 },
+    { 2, 5, 7, 0, 0, 0, 0, 0 }, { 0, 2, 5, 7, 0, 0, 0, 0 },
+    { 1, 2, 5, 7, 0, 0, 0, 0 }, { 0, 1, 2, 5, 7, 0, 0, 0 },
+    { 3, 5, 7, 0, 0, 0, 0, 0 }, { 0, 3, 5, 7, 0, 0, 0, 0 },
+    { 1, 3, 5, 7, 0, 0, 0, 0 }, { 0, 1, 3, 5, 7, 0, 0, 0 },
+    { 2, 3, 5, 7, 0, 0, 0, 0 }, { 0, 2, 3, 5, 7, 0, 0, 0 },
+    { 1, 2, 3, 5, 7, 0, 0, 0 }, { 0, 1, 2, 3, 5, 7, 0, 0 },
+    { 4, 5, 7, 0, 0, 0, 0, 0 }, { 0, 4, 5, 7, 0, 0, 0, 0 },
+    { 1, 4, 5, 7, 0, 0, 0, 0 }, { 0, 1, 4, 5, 7, 0, 0, 0 },
+    { 2, 4, 5, 7, 0, 0, 0, 0 }, { 0, 2, 4, 5, 7, 0, 0, 0 },
+    { 1, 2, 4, 5, 7, 0, 0, 0 }, { 0, 1, 2, 4, 5, 7, 0, 0 },
+    { 3, 4, 5, 7, 0, 0, 0, 0 }, { 0, 3, 4, 5, 7, 0, 0, 0 },
+    { 1, 3, 4, 5, 7, 0, 0, 0 }, { 0, 1, 3, 4, 5, 7, 0, 0 },
+    { 2, 3, 4, 5, 7, 0, 0, 0 }, { 0, 2, 3, 4, 5, 7, 0, 0 },
+    { 1, 2, 3, 4, 5, 7, 0, 0 }, { 0, 1, 2, 3, 4, 5, 7, 0 },
+    { 6, 7, 0, 0, 0, 0, 0, 0 }, { 0, 6, 7, 0, 0, 0, 0, 0 },
+    { 1, 6, 7, 0, 0, 0, 0, 0 }, { 0, 1, 6, 7, 0, 0, 0, 0 },
+    { 2, 6, 7, 0, 0, 0, 0, 0 }, { 0, 2, 6, 7, 0, 0, 0, 0 },
+    { 1, 2, 6, 7, 0, 0, 0, 0 }, { 0, 1, 2, 6, 7, 0, 0, 0 },
+    { 3, 6, 7, 0, 0, 0, 0, 0 }, { 0, 3, 6, 7, 0, 0, 0, 0 },
+    { 1, 3, 6, 7, 0, 0, 0, 0 }, { 0, 1, 3, 6, 7, 0, 0, 0 },
+    { 2, 3, 6, 7, 0, 0, 0, 0 }, { 0, 2, 3, 6, 7, 0, 0, 0 },
+    { 1, 2, 3, 6, 7, 0, 0, 0 }, { 0, 1, 2, 3, 6, 7, 0, 0 },
+    { 4, 6, 7, 0, 0, 0, 0, 0 }, { 0, 4, 6, 7, 0, 0, 0, 0 },
+    { 1, 4, 6, 7, 0, 0, 0, 0 }, { 0, 1, 4, 6, 7, 0, 0, 0 },
+    { 2, 4, 6, 7, 0, 0, 0, 0 }, { 0, 2, 4, 6, 7, 0, 0, 0 },
+    { 1, 2, 4, 6, 7, 0, 0, 0 }, { 0, 1, 2, 4, 6, 7, 0, 0 },
+    { 3, 4, 6, 7, 0, 0, 0, 0 }, { 0, 3, 4, 6, 7, 0, 0, 0 },
+    { 1, 3, 4, 6, 7, 0, 0, 0 }, { 0, 1, 3, 4, 6, 7, 0, 0 },
+    { 2, 3, 4, 6, 7, 0, 0, 0 }, { 0, 2, 3, 4, 6, 7, 0, 0 },
+    { 1, 2, 3, 4, 6, 7, 0, 0 }, { 0, 1, 2, 3, 4, 6, 7, 0 },
+    { 5, 6, 7, 0, 0, 0, 0, 0 }, { 0, 5, 6, 7, 0, 0, 0, 0 },
+    { 1, 5, 6, 7, 0, 0, 0, 0 }, { 0, 1, 5, 6, 7, 0, 0, 0 },
+    { 2, 5, 6, 7, 0, 0, 0, 0 }, { 0, 2, 5, 6, 7, 0, 0, 0 },
+    { 1, 2, 5, 6, 7, 0, 0, 0 }, { 0, 1, 2, 5, 6, 7, 0, 0 },
+    { 3, 5, 6, 7, 0, 0, 0, 0 }, { 0, 3, 5, 6, 7, 0, 0, 0 },
+    { 1, 3, 5, 6, 7, 0, 0, 0 }, { 0, 1, 3, 5, 6, 7, 0, 0 },
+    { 2, 3, 5, 6, 7, 0, 0, 0 }, { 0, 2, 3, 5, 6, 7, 0, 0 },
+    { 1, 2, 3, 5, 6, 7, 0, 0 }, { 0, 1, 2, 3, 5, 6, 7, 0 },
+    { 4, 5, 6, 7, 0, 0, 0, 0 }, { 0, 4, 5, 6, 7, 0, 0, 0 },
+    { 1, 4, 5, 6, 7, 0, 0, 0 }, { 0, 1, 4, 5, 6, 7, 0, 0 },
+    { 2, 4, 5, 6, 7, 0, 0, 0 }, { 0, 2, 4, 5, 6, 7, 0, 0 },
+    { 1, 2, 4, 5, 6, 7, 0, 0 }, { 0, 1, 2, 4, 5, 6, 7, 0 },
+    { 3, 4, 5, 6, 7, 0, 0, 0 }, { 0, 3, 4, 5, 6, 7, 0, 0 },
+    { 1, 3, 4, 5, 6, 7, 0, 0 }, { 0, 1, 3, 4, 5, 6, 7, 0 },
+    { 2, 3, 4, 5, 6, 7, 0, 0 }, { 0, 2, 3, 4, 5, 6, 7, 0 },
+    { 1, 2, 3, 4, 5, 6, 7, 0 }, { 0, 1, 2, 3, 4, 5, 6, 7 },
+};
+
 int ama_dilithium_rej_uniform_avx2(int32_t *out, size_t outlen,
                                     const uint8_t *buf, size_t buflen) {
     size_t ctr = 0;
     size_t pos = 0;
 
-    /* Process 32 bytes at a time for vectorized comparison */
+    /* Byte-extraction shuffle mask for _mm_shuffle_epi8.
+     * Takes bytes [0..11] of a 16-byte input and expands each 3-byte
+     * triple into a 4-byte int32 (little-endian, high byte zero). */
+    const __m128i shuf = _mm_setr_epi8(
+        0,  1,  2, -1,
+        3,  4,  5, -1,
+        6,  7,  8, -1,
+        9, 10, 11, -1);
+
+    const __m256i mask23 = _mm256_set1_epi32(0x007FFFFF);
+    const __m256i q_vec  = _mm256_set1_epi32(DILITHIUM_Q);
+
+    /* Main AVX2 loop: process 24 bytes per iteration, produce up to 8
+     * candidate int32 samples.  Require at least 8 output slots so the
+     * unaligned _mm256_storeu_si256 never writes past end; any residual
+     * shortfall is mopped up by the scalar tail below. */
+    while (pos + 24 <= buflen && ctr + 8 <= outlen) {
+        /* Lower 4 lanes of the __m256i come from bytes 0..11 of the
+         * current chunk; upper 4 come from bytes 12..23.  Two separate
+         * _mm_loadu_si128 + pshufb sidestep cross-lane shuffling. */
+        __m128i lo_bytes = _mm_loadu_si128((const __m128i *)(buf + pos));
+        __m128i hi_bytes = _mm_loadu_si128((const __m128i *)(buf + pos + 12));
+        __m128i lo_vals  = _mm_shuffle_epi8(lo_bytes, shuf);
+        __m128i hi_vals  = _mm_shuffle_epi8(hi_bytes, shuf);
+        __m256i vals     = _mm256_setr_m128i(lo_vals, hi_vals);
+
+        /* Mask to 23 bits (top bit of the 3-byte triple is ignored). */
+        vals = _mm256_and_si256(vals, mask23);
+
+        /* valid_mask = (vals < DILITHIUM_Q) ? 0xFFFFFFFF : 0 per lane.
+         * Note _mm256_cmpgt_epi32 is signed GT; vals are in [0..2^23-1]
+         * and DILITHIUM_Q = 8380417 < 2^23, both positive — no signed-
+         * comparison ambiguity. */
+        __m256i valid = _mm256_cmpgt_epi32(q_vec, vals);
+
+        /* Reduce to 8-bit scalar mask. */
+        int m = _mm256_movemask_ps(_mm256_castsi256_ps(valid));
+
+        /* Compact accepted lanes to the front via per-mask permutation. */
+        __m256i idx      = _mm256_loadu_si256((const __m256i *)rej_compaction_lut[m]);
+        __m256i compact  = _mm256_permutevar8x32_epi32(vals, idx);
+
+        /* Store 8 int32 (only the first popcount(m) are "live"); the
+         * next iteration / tail will overwrite the trailing slots. */
+        _mm256_storeu_si256((__m256i *)(out + ctr), compact);
+
+        ctr += (size_t)__builtin_popcount(m);
+        pos += 24;
+    }
+
+    /* Scalar tail: fewer than 24 bytes left, or within 8 slots of the
+     * output cap. */
     while (pos + 3 <= buflen && ctr < outlen) {
-        /* Extract 3 bytes -> 23-bit candidate */
         uint32_t t = ((uint32_t)buf[pos]) |
                      ((uint32_t)buf[pos + 1] << 8) |
                      ((uint32_t)buf[pos + 2] << 16);
-        t &= 0x7FFFFF; /* 23 bits */
+        t &= 0x7FFFFF;
         pos += 3;
-
         if (t < (uint32_t)DILITHIUM_Q) {
             out[ctr++] = (int32_t)t;
         }

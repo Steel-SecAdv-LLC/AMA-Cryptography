@@ -68,6 +68,7 @@ if(AMA_USE_NATIVE_PQC)
     add_ama_test(test_kyber_cpa test_kyber_cpa.c)
     add_ama_test(test_kyber_cbd2_equiv test_kyber_cbd2_equiv.c)
     add_ama_test(test_dilithium_ntt_equiv test_dilithium_ntt_equiv.c)
+    add_ama_test(test_dilithium_rej_equiv test_dilithium_rej_equiv.c)
 endif()
 
 # Performance benchmark (not added to ctest - run manually)

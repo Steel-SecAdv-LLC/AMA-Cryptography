@@ -1144,11 +1144,20 @@ static void dil_polyveck_use_hint(dil_polyveck *w, const dil_polyveck *v,
  * via the scalar path (which re-squeezes as needed).
  *
  * Byte-for-byte equivalent to the first phase of dil_poly_uniform()
- * below when the stream is the initial 5-block squeeze.
+ * below when the stream is the initial 5-block squeeze.  When AVX2 is
+ * available the dispatch table's vectorised rej_uniform batches 8
+ * candidates per 24-byte chunk; otherwise the 3-byte scalar loop runs.
  */
 static int dil_rej_uniform_from_stream(dil_poly *a,
                                         const uint8_t *stream, size_t stream_len)
 {
+    const ama_dispatch_table_t *dt = dil_cached_dt ? dil_cached_dt : ama_get_dispatch_table();
+    if (dt->dilithium_rej_uniform) {
+        int n = dt->dilithium_rej_uniform(a->coeffs, DIL_N, stream, stream_len);
+        return (n == (int)DIL_N) ? 1 : 0;
+    }
+
+    /* Scalar fallback: 3 bytes -> 23-bit candidate, accept if < q. */
     unsigned int ctr = 0;
     size_t pos = 0;
 

@@ -86,6 +86,13 @@ typedef void (*ama_dilithium_pointwise_fn)(int32_t r[256],
                                            const int32_t a[256],
                                            const int32_t b[256]);
 
+/** Dilithium rejection-uniform sampler: consumes a SHAKE128 byte stream,
+ * writes up to `outlen` accepted 23-bit coefficients < q into `out`, and
+ * returns the number of accepted samples.  Byte-identical to the 3-byte
+ * -at-a-time scalar loop; the AVX2 variant batches 8 candidates/24B. */
+typedef int (*ama_dilithium_rej_uniform_fn)(int32_t *out, size_t outlen,
+                                             const uint8_t *buf, size_t buflen);
+
 /** AES-256-GCM encrypt (AVX2/AES-NI accelerated) */
 typedef void (*ama_aes_gcm_encrypt_fn)(const uint8_t *plaintext, size_t plaintext_len,
                                         const uint8_t *aad, size_t aad_len,
@@ -146,6 +153,7 @@ typedef struct {
     ama_dilithium_ntt_fn      dilithium_ntt;        /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_dilithium_invntt_fn   dilithium_invntt;     /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_dilithium_pointwise_fn dilithium_pointwise; /**< Non-NULL when SIMD detected; callers MUST NULL-check */
+    ama_dilithium_rej_uniform_fn dilithium_rej_uniform; /**< Non-NULL when AVX2 detected; callers MUST NULL-check */
     ama_aes_gcm_encrypt_fn    aes_gcm_encrypt;       /**< Non-NULL when AES-NI+PCLMULQDQ detected; callers MUST NULL-check */
     ama_aes_gcm_decrypt_fn    aes_gcm_decrypt;       /**< Non-NULL when AES-NI+PCLMULQDQ detected; callers MUST NULL-check */
     ama_chacha20_block_x8_fn  chacha20_block_x8;     /**< Non-NULL when AVX2 ChaCha20 detected; emits 8 blocks / 512 B */

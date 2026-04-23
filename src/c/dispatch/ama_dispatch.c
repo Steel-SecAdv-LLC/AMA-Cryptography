@@ -194,6 +194,8 @@ extern void ama_dilithium_invntt_avx2(int32_t poly[256],
 extern void ama_dilithium_poly_pointwise_avx2(int32_t r[256],
                                                const int32_t a[256],
                                                const int32_t b[256]);
+extern int ama_dilithium_rej_uniform_avx2(int32_t *out, size_t outlen,
+                                           const uint8_t *buf, size_t buflen);
 extern void ama_aes256_gcm_encrypt_avx2(const uint8_t *plaintext, size_t plaintext_len,
                                          const uint8_t *aad, size_t aad_len,
                                          const uint8_t key[32], const uint8_t nonce[12],
@@ -355,6 +357,7 @@ static void dispatch_init_internal(void) {
     dispatch_table.dilithium_ntt     = NULL;
     dispatch_table.dilithium_invntt  = NULL;
     dispatch_table.dilithium_pointwise = NULL;
+    dispatch_table.dilithium_rej_uniform = NULL;  /* NULL = caller uses 3-byte scalar loop */
     dispatch_table.aes_gcm_encrypt     = NULL;  /* NULL = caller uses schoolbook GHASH */
     dispatch_table.aes_gcm_decrypt     = NULL;
     dispatch_table.chacha20_block_x8   = NULL;  /* NULL = caller uses scalar 1-block loop */
@@ -373,9 +376,10 @@ static void dispatch_init_internal(void) {
         dispatch_table.kyber_cbd2      = ama_kyber_cbd2_avx2;
     }
     if (dispatch_info.dilithium >= AMA_IMPL_AVX2) {
-        dispatch_table.dilithium_ntt       = ama_dilithium_ntt_avx2;
-        dispatch_table.dilithium_invntt    = ama_dilithium_invntt_avx2;
-        dispatch_table.dilithium_pointwise = ama_dilithium_poly_pointwise_avx2;
+        dispatch_table.dilithium_ntt         = ama_dilithium_ntt_avx2;
+        dispatch_table.dilithium_invntt      = ama_dilithium_invntt_avx2;
+        dispatch_table.dilithium_pointwise   = ama_dilithium_poly_pointwise_avx2;
+        dispatch_table.dilithium_rej_uniform = ama_dilithium_rej_uniform_avx2;
     }
     if (dispatch_info.aes_gcm >= AMA_IMPL_AVX2) {
         dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_avx2;
