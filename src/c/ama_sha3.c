@@ -1039,10 +1039,16 @@ ama_error_t ama_shake128_x4_absorb_once(
     if (!ctx || !in0 || !in1 || !in2 || !in3) {
         return AMA_ERROR_INVALID_PARAM;
     }
-    if (in0_len > AMA_SHAKE128_X4_RATE ||
-        in1_len > AMA_SHAKE128_X4_RATE ||
-        in2_len > AMA_SHAKE128_X4_RATE ||
-        in3_len > AMA_SHAKE128_X4_RATE) {
+    if (in0_len >= AMA_SHAKE128_X4_RATE ||
+        in1_len >= AMA_SHAKE128_X4_RATE ||
+        in2_len >= AMA_SHAKE128_X4_RATE ||
+        in3_len >= AMA_SHAKE128_X4_RATE) {
+        /* A full-rate (168-byte) absorb would require a second padding
+         * block; the one-block fast path cannot safely write the 0x1F
+         * domain separator at block[in_len] when in_len == rate.  All
+         * current callers use 32-66-byte inputs, so the tighter bound
+         * costs nothing.  Update this check plus the header contract
+         * together if a multi-block absorb is ever needed. */
         return AMA_ERROR_INVALID_PARAM;
     }
 
@@ -1160,10 +1166,13 @@ ama_error_t ama_shake256_x4_absorb_once(
     if (!ctx || !in0 || !in1 || !in2 || !in3) {
         return AMA_ERROR_INVALID_PARAM;
     }
-    if (in0_len > AMA_SHAKE256_X4_RATE ||
-        in1_len > AMA_SHAKE256_X4_RATE ||
-        in2_len > AMA_SHAKE256_X4_RATE ||
-        in3_len > AMA_SHAKE256_X4_RATE) {
+    if (in0_len >= AMA_SHAKE256_X4_RATE ||
+        in1_len >= AMA_SHAKE256_X4_RATE ||
+        in2_len >= AMA_SHAKE256_X4_RATE ||
+        in3_len >= AMA_SHAKE256_X4_RATE) {
+        /* Same rationale as the SHAKE128 variant above: the one-block
+         * fast path cannot safely write the 0x1F domain separator at
+         * block[in_len] when in_len == rate. */
         return AMA_ERROR_INVALID_PARAM;
     }
 

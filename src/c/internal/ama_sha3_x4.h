@@ -25,9 +25,14 @@
  * single-state dispatch pointer four times.
  *
  * Inputs:
- *   - Each input buffer MUST fit within a single rate block
- *     (SHAKE128_X4_RATE = 168, SHAKE256_X4_RATE = 136 bytes).
- *     Sampling callers use 32-66-byte inputs, well under.
+ *   - Each input buffer MUST be STRICTLY smaller than a single rate
+ *     block (SHAKE128_X4_RATE = 168, SHAKE256_X4_RATE = 136 bytes).
+ *     A full-rate input would require a second padding block; the
+ *     one-block fast path here cannot safely write the 0x1F domain
+ *     separator at block[in_len] when in_len == rate.  Callers whose
+ *     inputs are 32-66 bytes (matrix/noise seed + nonce) meet this
+ *     bound by a wide margin; absorb_once() returns
+ *     AMA_ERROR_INVALID_PARAM for in_len >= rate.
  *   - Output buffers must hold nblocks * rate bytes per lane.
  *
  * This file is internal; do not include it from headers published
@@ -64,13 +69,15 @@ typedef ama_shake128_x4_ctx ama_shake256_x4_ctx;
 /* ------------------------------------------------------------------ */
 
 /**
- * Absorb four short inputs (each <= AMA_SHAKE128_X4_RATE = 168 bytes),
- * apply the SHAKE domain separator 0x1F and final-bit 0x80, and leave
- * all four states ready to squeeze via
- * ama_shake128_x4_squeezeblocks().
+ * Absorb four short inputs (each STRICTLY less than
+ * AMA_SHAKE128_X4_RATE = 168 bytes), apply the SHAKE domain separator
+ * 0x1F and final-bit 0x80, and leave all four states ready to squeeze
+ * via ama_shake128_x4_squeezeblocks().
  *
- * Returns AMA_ERROR_INVALID_PARAM if any input is NULL or exceeds
- * one rate block; AMA_SUCCESS otherwise.
+ * Returns AMA_ERROR_INVALID_PARAM if any input is NULL or is
+ * >= AMA_SHAKE128_X4_RATE; AMA_SUCCESS otherwise.  See the file-level
+ * comment for why full-rate inputs are rejected rather than padded
+ * across two blocks.
  */
 ama_error_t ama_shake128_x4_absorb_once(
     ama_shake128_x4_ctx *ctx,
@@ -100,7 +107,9 @@ ama_error_t ama_shake128_x4_squeezeblocks(
  * Same contract as ama_shake128_x4_absorb_once() but with
  * SHAKE256 rate = AMA_SHAKE256_X4_RATE = 136 bytes.  Same SHAKE
  * domain separator (0x1F); only the capacity/rate differ per
- * FIPS 202.  Inputs must be <= 136 bytes each.
+ * FIPS 202.  Each input must be STRICTLY less than 136 bytes;
+ * in_len >= rate returns AMA_ERROR_INVALID_PARAM for the same
+ * padding-safety reason as the SHAKE128 variant.
  */
 ama_error_t ama_shake256_x4_absorb_once(
     ama_shake256_x4_ctx *ctx,

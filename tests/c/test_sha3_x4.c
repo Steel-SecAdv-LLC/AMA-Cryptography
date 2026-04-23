@@ -61,6 +61,7 @@ static int check_equiv_128(const char *label,
                        size_t nblocks)
 {
     const size_t per_lane = nblocks * AMA_SHAKE128_X4_RATE;
+    int result = 0;
 
     uint8_t *ref0 = (uint8_t *)malloc(per_lane);
     uint8_t *ref1 = (uint8_t *)malloc(per_lane);
@@ -80,9 +81,17 @@ static int check_equiv_128(const char *label,
     ama_error_t rc = ama_shake128_x4_absorb_once(&x4ctx,
         in0, in0_len, in1, in1_len, in2, in2_len, in3, in3_len);
     CHECK(rc == AMA_SUCCESS, "shake128 x4 absorb returns success");
+    if (rc != AMA_SUCCESS) {
+        /* Absorb failed: further comparison would run memcmp on
+         * uninitialized output buffers.  Bail out early after freeing. */
+        goto done;
+    }
 
     rc = ama_shake128_x4_squeezeblocks(&x4ctx, x4_0, x4_1, x4_2, x4_3, nblocks);
     CHECK(rc == AMA_SUCCESS, "shake128 x4 squeeze returns success");
+    if (rc != AMA_SUCCESS) {
+        goto done;
+    }
 
     int eq0 = (memcmp(ref0, x4_0, per_lane) == 0);
     int eq1 = (memcmp(ref1, x4_1, per_lane) == 0);
@@ -99,9 +108,12 @@ static int check_equiv_128(const char *label,
     snprintf(msg, sizeof(msg), "%s lane 3 byte-identical (nblocks=%zu)", label, nblocks);
     CHECK(eq3, msg);
 
+    result = eq0 && eq1 && eq2 && eq3;
+
+done:
     free(ref0); free(ref1); free(ref2); free(ref3);
     free(x4_0); free(x4_1); free(x4_2); free(x4_3);
-    return eq0 && eq1 && eq2 && eq3;
+    return result;
 }
 
 static int check_equiv_256(const char *label,
@@ -112,6 +124,7 @@ static int check_equiv_256(const char *label,
                        size_t nblocks)
 {
     const size_t per_lane = nblocks * AMA_SHAKE256_X4_RATE;
+    int result = 0;
 
     uint8_t *ref0 = (uint8_t *)malloc(per_lane);
     uint8_t *ref1 = (uint8_t *)malloc(per_lane);
@@ -131,9 +144,15 @@ static int check_equiv_256(const char *label,
     ama_error_t rc = ama_shake256_x4_absorb_once(&x4ctx,
         in0, in0_len, in1, in1_len, in2, in2_len, in3, in3_len);
     CHECK(rc == AMA_SUCCESS, "shake256 x4 absorb returns success");
+    if (rc != AMA_SUCCESS) {
+        goto done;
+    }
 
     rc = ama_shake256_x4_squeezeblocks(&x4ctx, x4_0, x4_1, x4_2, x4_3, nblocks);
     CHECK(rc == AMA_SUCCESS, "shake256 x4 squeeze returns success");
+    if (rc != AMA_SUCCESS) {
+        goto done;
+    }
 
     int eq0 = (memcmp(ref0, x4_0, per_lane) == 0);
     int eq1 = (memcmp(ref1, x4_1, per_lane) == 0);
@@ -150,9 +169,12 @@ static int check_equiv_256(const char *label,
     snprintf(msg, sizeof(msg), "%s lane 3 byte-identical (nblocks=%zu)", label, nblocks);
     CHECK(eq3, msg);
 
+    result = eq0 && eq1 && eq2 && eq3;
+
+done:
     free(ref0); free(ref1); free(ref2); free(ref3);
     free(x4_0); free(x4_1); free(x4_2); free(x4_3);
-    return eq0 && eq1 && eq2 && eq3;
+    return result;
 }
 
 int main(void) {
@@ -223,6 +245,29 @@ int main(void) {
         CHECK(rc == AMA_ERROR_INVALID_PARAM, "shake128 absorb rejects input > rate");
     }
 
+    /* SHAKE128: inputs exactly equal to rate must also be refused —
+     * the one-block fast path cannot safely write 0x1F at block[rate]
+     * without a second padding block (Copilot review finding, PR #260). */
+    {
+        uint8_t full[AMA_SHAKE128_X4_RATE] = {0};
+        ama_shake128_x4_ctx ctx;
+        ama_error_t rc = ama_shake128_x4_absorb_once(&ctx,
+            full, sizeof(full), in0, 34, in1, 34, in2, 34);
+        CHECK(rc == AMA_ERROR_INVALID_PARAM, "shake128 absorb rejects input == rate");
+
+        rc = ama_shake128_x4_absorb_once(&ctx,
+            in0, 34, full, sizeof(full), in1, 34, in2, 34);
+        CHECK(rc == AMA_ERROR_INVALID_PARAM, "shake128 absorb rejects in_len == rate on lane 1");
+
+        rc = ama_shake128_x4_absorb_once(&ctx,
+            in0, 34, in1, 34, full, sizeof(full), in2, 34);
+        CHECK(rc == AMA_ERROR_INVALID_PARAM, "shake128 absorb rejects in_len == rate on lane 2");
+
+        rc = ama_shake128_x4_absorb_once(&ctx,
+            in0, 34, in1, 34, in2, 34, full, sizeof(full));
+        CHECK(rc == AMA_ERROR_INVALID_PARAM, "shake128 absorb rejects in_len == rate on lane 3");
+    }
+
     /* SHAKE256 - Dilithium eta/gamma1 sampling: 64-byte seed (CRH) +
      * 2-byte nonce = 66 bytes, fits in a single SHAKE256 block (136). */
     uint8_t crh[64];
@@ -287,6 +332,28 @@ int main(void) {
         ama_error_t rc = ama_shake256_x4_absorb_once(&ctx,
             big, sizeof(big), e0, 66, e1, 66, e2, 66);
         CHECK(rc == AMA_ERROR_INVALID_PARAM, "shake256 absorb rejects input > rate");
+    }
+
+    /* SHAKE256: inputs exactly equal to rate must also be refused —
+     * same boundary-safety requirement as the SHAKE128 case above. */
+    {
+        uint8_t full[AMA_SHAKE256_X4_RATE] = {0};
+        ama_shake256_x4_ctx ctx;
+        ama_error_t rc = ama_shake256_x4_absorb_once(&ctx,
+            full, sizeof(full), e0, 66, e1, 66, e2, 66);
+        CHECK(rc == AMA_ERROR_INVALID_PARAM, "shake256 absorb rejects input == rate");
+
+        rc = ama_shake256_x4_absorb_once(&ctx,
+            e0, 66, full, sizeof(full), e1, 66, e2, 66);
+        CHECK(rc == AMA_ERROR_INVALID_PARAM, "shake256 absorb rejects in_len == rate on lane 1");
+
+        rc = ama_shake256_x4_absorb_once(&ctx,
+            e0, 66, e1, 66, full, sizeof(full), e2, 66);
+        CHECK(rc == AMA_ERROR_INVALID_PARAM, "shake256 absorb rejects in_len == rate on lane 2");
+
+        rc = ama_shake256_x4_absorb_once(&ctx,
+            e0, 66, e1, 66, e2, 66, full, sizeof(full));
+        CHECK(rc == AMA_ERROR_INVALID_PARAM, "shake256 absorb rejects in_len == rate on lane 3");
     }
 
     printf("\n===========================================\n");

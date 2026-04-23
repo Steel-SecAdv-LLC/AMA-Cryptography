@@ -118,15 +118,19 @@ typedef void (*ama_argon2_g_fn)(uint64_t out[128],
  *
  * After ama_dispatch_init(), function pointers are either:
  *   - Non-NULL: points to the optimal implementation (SIMD or generic).
- *     Guaranteed non-NULL: keccak_f1600.
+ *     Guaranteed non-NULL: keccak_f1600, keccak_f1600_x4.  The x4
+ *     pointer always resolves — either to the AVX2 interleaved
+ *     kernel or to ama_keccak_f1600_x4_generic, which invokes the
+ *     single-state keccak four times.
  *     Wired when SIMD detected: sha3_256, kyber_ntt, kyber_invntt,
- *     kyber_pointwise, dilithium_ntt, dilithium_invntt,
+ *     kyber_pointwise, kyber_cbd2, dilithium_ntt, dilithium_invntt,
  *     dilithium_pointwise (AVX2 and NEON; SVE2 wires keccak_f1600,
  *     kyber_*, and dilithium_* but not sha3_256).
  *   - NULL: no dispatch available; caller must use its own inline generic
  *     implementation.
  *
- * Callers MUST NULL-check before calling any field except keccak_f1600.
+ * Callers MUST NULL-check before calling any field except keccak_f1600
+ * and keccak_f1600_x4 (both always non-NULL after init).
  * ============================================================================ */
 
 typedef struct {
