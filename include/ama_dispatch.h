@@ -69,6 +69,10 @@ typedef void (*ama_kyber_pointwise_fn)(int16_t r[256],
                                        const int16_t b[256],
                                        const int16_t zetas[128]);
 
+/** Kyber CBD2 noise sampler: 128-byte uniform stream -> 256 coefficients
+ *  in {-2, -1, 0, 1, 2} per FIPS 203 §4.2.2 (ML-KEM eta=2). */
+typedef void (*ama_kyber_cbd2_fn)(int16_t poly[256], const uint8_t buf[128]);
+
 /** Dilithium NTT forward transform */
 typedef void (*ama_dilithium_ntt_fn)(int32_t poly[256],
                                      const int32_t zetas[256]);
@@ -132,6 +136,7 @@ typedef struct {
     ama_kyber_ntt_fn          kyber_ntt;            /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_ntt_fn          kyber_invntt;         /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_pointwise_fn    kyber_pointwise;      /**< Non-NULL when SIMD detected; callers MUST NULL-check */
+    ama_kyber_cbd2_fn         kyber_cbd2;           /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_dilithium_ntt_fn      dilithium_ntt;        /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_dilithium_invntt_fn   dilithium_invntt;     /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_dilithium_pointwise_fn dilithium_pointwise; /**< Non-NULL when SIMD detected; callers MUST NULL-check */

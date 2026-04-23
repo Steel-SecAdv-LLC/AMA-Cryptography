@@ -246,42 +246,49 @@ void ama_kyber_poly_pointwise_avx2(int16_t r[KYBER_N],
 /* ============================================================================
  * Vectorized CBD2 sampling (Centered Binomial Distribution, eta=2)
  *
- * Samples a polynomial from a uniform byte stream using CBD with eta=2.
- * Each coefficient is in {-2, -1, 0, 1, 2}.
+ * Samples a polynomial from a 128-byte uniform stream using CBD with
+ * eta=2.  Each coefficient is in {-2, -1, 0, 1, 2} and is built from
+ * 4 input bits as (a0 + a1) - (b0 + b1).  128 bytes = 1024 bits =
+ * 256 coefficients.
+ *
+ * Byte-for-byte identical to kyber_poly_cbd_eta() in
+ * src/c/ama_kyber.c — the AVX2 path only accelerates the bit-count
+ * phase (which is the bulk of the per-coefficient work); coefficient
+ * extraction is kept scalar so the layout exactly matches the
+ * reference.  Proven by the CBD equivalence check in
+ * tests/c/test_kyber_cbd2_equiv.c.
+ *
+ * Note: replaces a previous implementation whose inner extraction
+ * loop only emitted 128 of the 256 coefficients (see commit log) and
+ * whose lo - hi subtraction borrowed across nibble boundaries.  The
+ * function had no callers before this change.
  * ============================================================================ */
 void ama_kyber_cbd2_avx2(int16_t poly[KYBER_N], const uint8_t buf[128]) {
-    /* Process 32 bytes at a time -> 64 coefficients */
-    for (int i = 0; i < KYBER_N / 64; i++) {
-        __m256i bytes = _mm256_loadu_si256((const __m256i *)(buf + i * 32));
+    const __m256i mask55 = _mm256_set1_epi32(0x55555555);
 
-        /* Extract individual bits and sum pairs for eta=2 */
-        const __m256i mask55 = _mm256_set1_epi32(0x55555555);
-        const __m256i mask33 = _mm256_set1_epi32(0x33333333);
-
-        /* Count bits in pairs */
+    /* 128-byte input → 256 coefficients.  Process 32 bytes at a time
+     * via AVX2 for the bit-count phase.  Each 4-byte chunk produces
+     * 8 coefficients, one per 4-bit nibble of the accumulator d. */
+    for (int i = 0; i < 4; i++) {  /* 128 / 32 = 4 iterations */
+        __m256i bytes  = _mm256_loadu_si256((const __m256i *)(buf + i * 32));
         __m256i a_bits = _mm256_and_si256(bytes, mask55);
         __m256i b_bits = _mm256_and_si256(_mm256_srli_epi32(bytes, 1), mask55);
-        __m256i sum_ab = _mm256_add_epi32(a_bits, b_bits);
+        __m256i d      = _mm256_add_epi32(a_bits, b_bits);  /* matches scalar d */
 
-        /* Extract 2-bit groups */
-        __m256i lo = _mm256_and_si256(sum_ab, mask33);
-        __m256i hi = _mm256_and_si256(_mm256_srli_epi32(sum_ab, 2), mask33);
+        _Alignas(32) uint32_t dvec[8];
+        _mm256_store_si256((__m256i *)dvec, d);
 
-        /* Coefficients = lo - hi (in range [-2, 2]) */
-        /* Unpack to 16-bit and store */
-        __m256i diff = _mm256_sub_epi32(lo, hi);
-
-        /* Extract and store 16-bit coefficients */
-        int32_t tmp[8];
-        _mm256_storeu_si256((__m256i *)tmp, diff);
+        /* Coefficient extraction mirrors kyber_poly_cbd_eta() exactly.
+         * The eight dvec lanes correspond to the scalar loop index
+         * [8*i + j] for j = 0..7; extracting eight 4-bit nibbles from
+         * each lane fills eight coefficients per lane. */
         for (int j = 0; j < 8; j++) {
-            int32_t val = tmp[j];
-            for (int k = 0; k < 8; k += 2) {
-                int16_t coeff = (int16_t)((val >> k) & 0x3) -
-                                (int16_t)((val >> (k + 2)) & 0x3);
-                int idx = i * 64 + j * 8 + k / 2;
-                if (idx < KYBER_N)
-                    poly[idx] = coeff;
+            uint32_t dj = dvec[j];
+            int base = i * 64 + j * 8;
+            for (int k = 0; k < 8; k++) {
+                int16_t a = (int16_t)((dj >> (4 * k + 0)) & 0x3);
+                int16_t b = (int16_t)((dj >> (4 * k + 2)) & 0x3);
+                poly[base + k] = a - b;
             }
         }
     }

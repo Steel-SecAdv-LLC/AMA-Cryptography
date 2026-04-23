@@ -333,13 +333,23 @@ static void kyber_gen_matrix(polyvec mat[KYBER_K], const uint8_t seed[32], int t
 
 /**
  * Sample noise polynomial with CBD (eta = 2)
+ *
+ * Routes to the AVX2 bit-count path via the dispatch table when
+ * available; coefficient output is byte-for-byte identical to the
+ * generic inline fallback below.
  */
 static void kyber_poly_cbd_eta(poly* r, const uint8_t* buf) {
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (dt->kyber_cbd2) {
+        dt->kyber_cbd2(r->coeffs, buf);
+        return;
+    }
+
+    /* Generic C implementation — CBD with eta = 2: need eta*N/4 = 128 bytes */
     unsigned int i, j;
     uint32_t t, d;
     int16_t a, b;
 
-    /* CBD with eta = 2: need eta*N/4 = 128 bytes */
     for (i = 0; i < KYBER_N / 8; i++) {
         t = buf[4*i] | ((uint32_t)buf[4*i + 1] << 8) |
             ((uint32_t)buf[4*i + 2] << 16) | ((uint32_t)buf[4*i + 3] << 24);
@@ -356,13 +366,53 @@ static void kyber_poly_cbd_eta(poly* r, const uint8_t* buf) {
 }
 
 /**
- * Sample noise vector using SHAKE256 and CBD
+ * Sample noise vector using SHAKE256 and CBD.
+ *
+ * For KYBER_K = 4 the four SHAKE256 streams are batched through
+ * ama_shake256_x4_absorb_once / squeezeblocks in exactly one group of
+ * 4 (no scalar tail).  Each lane's 128-byte noise buffer is then fed
+ * to kyber_poly_cbd_eta(), which now dispatches to ama_kyber_cbd2_avx2
+ * on AVX2 hardware.
+ *
+ * Byte-for-byte identical to the previous scalar loop; see
+ * tests/c/test_sha3_x4.c (SHAKE256 equivalence) and
+ * tests/c/test_kyber_cbd2_equiv.c (CBD2 equivalence).
+ *
+ * KYBER_ETA1 * KYBER_N / 4 = 128 bytes fits inside one SHAKE256 rate
+ * block (136 bytes), so the inner call to ama_shake256_x4_squeezeblocks
+ * requests exactly 1 block per lane and we use the first 128 bytes.
  */
 static void kyber_gennoise(polyvec* r, const uint8_t seed[32], uint8_t nonce) {
+    const size_t kNoiseBytes = (size_t)(KYBER_ETA1 * KYBER_N / 4);  /* 128 */
+    _Static_assert(KYBER_ETA1 * KYBER_N / 4 <= AMA_SHAKE256_X4_RATE,
+                   "kyber_gennoise assumes noise fits in one SHAKE256 block");
     unsigned int i;
+
+    if (KYBER_K == 4) {
+        uint8_t bufs[4][34];
+        for (i = 0; i < 4; i++) {
+            memcpy(bufs[i], seed, 32);
+            bufs[i][32] = nonce + (uint8_t)i;
+            bufs[i][33] = 0;
+        }
+
+        ama_shake256_x4_ctx ctx;
+        ama_shake256_x4_absorb_once(&ctx,
+            bufs[0], 33, bufs[1], 33, bufs[2], 33, bufs[3], 33);
+
+        uint8_t streams[4][AMA_SHAKE256_X4_RATE];
+        ama_shake256_x4_squeezeblocks(&ctx,
+            streams[0], streams[1], streams[2], streams[3], 1);
+
+        for (i = 0; i < 4; i++) {
+            kyber_poly_cbd_eta(&r->vec[i], streams[i]);
+        }
+        return;
+    }
+
+    /* Fallback scalar path for other parameter sets (unused at KYBER_K=4). */
     uint8_t buf[34];
     uint8_t stream[KYBER_ETA1 * KYBER_N / 4];
-
     for (i = 0; i < KYBER_K; i++) {
         memcpy(buf, seed, 32);
         buf[32] = nonce + (uint8_t)i;
@@ -370,6 +420,7 @@ static void kyber_gennoise(polyvec* r, const uint8_t seed[32], uint8_t nonce) {
         ama_shake256(buf, 33, stream, sizeof(stream));
         kyber_poly_cbd_eta(&r->vec[i], stream);
     }
+    (void)kNoiseBytes;
 }
 
 #ifdef AMA_TESTING_MODE

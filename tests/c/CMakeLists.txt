@@ -57,6 +57,7 @@ if(AMA_USE_NATIVE_PQC)
     # Kyber debug / CPA isolation tests (run manually or via ctest)
     add_ama_test(test_kyber_debug test_kyber_debug.c)
     add_ama_test(test_kyber_cpa test_kyber_cpa.c)
+    add_ama_test(test_kyber_cbd2_equiv test_kyber_cbd2_equiv.c)
 endif()
 
 # Performance benchmark (not added to ctest - run manually)

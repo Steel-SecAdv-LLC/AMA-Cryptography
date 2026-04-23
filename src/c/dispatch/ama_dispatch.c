@@ -186,6 +186,7 @@ extern void ama_kyber_poly_pointwise_avx2(int16_t r[256],
                                            const int16_t a[256],
                                            const int16_t b[256],
                                            const int16_t zetas[128]);
+extern void ama_kyber_cbd2_avx2(int16_t poly[256], const uint8_t buf[128]);
 extern void ama_dilithium_ntt_avx2(int32_t poly[256],
                                     const int32_t zetas[256]);
 extern void ama_dilithium_invntt_avx2(int32_t poly[256],
@@ -350,6 +351,7 @@ static void dispatch_init_internal(void) {
     dispatch_table.kyber_ntt         = NULL;  /* NULL = caller uses inline generic */
     dispatch_table.kyber_invntt      = NULL;
     dispatch_table.kyber_pointwise   = NULL;
+    dispatch_table.kyber_cbd2        = NULL;  /* NULL = caller uses inline generic */
     dispatch_table.dilithium_ntt     = NULL;
     dispatch_table.dilithium_invntt  = NULL;
     dispatch_table.dilithium_pointwise = NULL;
@@ -368,6 +370,7 @@ static void dispatch_init_internal(void) {
         dispatch_table.kyber_ntt       = ama_kyber_ntt_avx2;
         dispatch_table.kyber_invntt    = ama_kyber_invntt_avx2;
         dispatch_table.kyber_pointwise = ama_kyber_poly_pointwise_avx2;
+        dispatch_table.kyber_cbd2      = ama_kyber_cbd2_avx2;
     }
     if (dispatch_info.dilithium >= AMA_IMPL_AVX2) {
         dispatch_table.dilithium_ntt       = ama_dilithium_ntt_avx2;
