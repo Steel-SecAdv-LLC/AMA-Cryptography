@@ -43,6 +43,7 @@
 
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
+#include "internal/ama_sha3_x4.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -229,18 +230,104 @@ static void kyber_poly_uniform(poly* a, const uint8_t seed[32], uint8_t x, uint8
 }
 
 /**
- * Expand matrix A from seed (K x K matrix in NTT domain)
+ * Rejection-sample one polynomial from an already-squeezed SHAKE128
+ * stream window.  Returns 1 if all KYBER_N coefficients were filled,
+ * 0 if the stream was exhausted first.
+ *
+ * Byte-for-byte equivalent to the rejection loop in kyber_poly_uniform().
+ */
+static int kyber_rej_uniform_from_stream(poly *a,
+                                          const uint8_t *stream, size_t stream_len)
+{
+    unsigned int ctr = 0;
+    size_t pos = 0;
+
+    while (ctr < KYBER_N && pos + 3 <= stream_len) {
+        uint16_t val0 = ((stream[pos] | ((uint16_t)stream[pos + 1] << 8)) & 0xFFF);
+        uint16_t val1 = ((stream[pos + 1] >> 4) | ((uint16_t)stream[pos + 2] << 4)) & 0xFFF;
+        pos += 3;
+
+        if (val0 < KYBER_Q) {
+            a->coeffs[ctr++] = (int16_t)val0;
+        }
+        if (ctr < KYBER_N && val1 < KYBER_Q) {
+            a->coeffs[ctr++] = (int16_t)val1;
+        }
+    }
+
+    return (ctr == KYBER_N) ? 1 : 0;
+}
+
+/**
+ * Expand matrix A from seed (K x K matrix in NTT domain).
+ *
+ * Batched over four lanes via ama_shake128_x4_absorb_once /
+ * ama_shake128_x4_squeezeblocks.  Per-lane coefficients are
+ * byte-for-byte identical to the scalar kyber_poly_uniform()
+ * reference above.
+ *
+ * For Kyber-1024 (KYBER_K=4), the matrix has 16 polys → 4 full
+ * groups of 4 with no trailing scalar work.  The initial 4-block
+ * squeeze (672 bytes per lane) matches the scalar stream[672].
  */
 static void kyber_gen_matrix(polyvec mat[KYBER_K], const uint8_t seed[32], int transposed) {
-    unsigned int i, j;
-    for (i = 0; i < KYBER_K; i++) {
-        for (j = 0; j < KYBER_K; j++) {
-            if (transposed) {
-                kyber_poly_uniform(&mat[i].vec[j], seed, (uint8_t)i, (uint8_t)j);
-            } else {
-                kyber_poly_uniform(&mat[i].vec[j], seed, (uint8_t)j, (uint8_t)i);
+    const unsigned int total = KYBER_K * KYBER_K;
+    const size_t kInitialBlocks = 4;   /* matches scalar kyber_poly_uniform stream[672] */
+    unsigned int flat = 0;
+
+    while (flat + 4 <= total) {
+        uint8_t bufs[4][34];
+        poly *polys[4];
+        uint8_t xy[4][2];  /* keep (x, y) for fallback path */
+
+        for (int lane = 0; lane < 4; lane++) {
+            unsigned int f = flat + (unsigned int)lane;
+            unsigned int i = f / KYBER_K, j = f % KYBER_K;
+            uint8_t x = transposed ? (uint8_t)i : (uint8_t)j;
+            uint8_t y = transposed ? (uint8_t)j : (uint8_t)i;
+            memcpy(bufs[lane], seed, 32);
+            bufs[lane][32] = x;
+            bufs[lane][33] = y;
+            xy[lane][0] = x;
+            xy[lane][1] = y;
+            polys[lane] = &mat[i].vec[j];
+        }
+
+        ama_shake128_x4_ctx ctx;
+        ama_shake128_x4_absorb_once(&ctx,
+            bufs[0], 34, bufs[1], 34, bufs[2], 34, bufs[3], 34);
+
+        uint8_t streams[4][AMA_SHAKE128_X4_RATE * 4];
+        ama_shake128_x4_squeezeblocks(&ctx,
+            streams[0], streams[1], streams[2], streams[3], kInitialBlocks);
+
+        for (int lane = 0; lane < 4; lane++) {
+            int ok = kyber_rej_uniform_from_stream(polys[lane],
+                                                    streams[lane],
+                                                    AMA_SHAKE128_X4_RATE * kInitialBlocks);
+            if (!ok) {
+                /* Scalar fallback (effectively unreachable: Kyber's ~18.7 %
+                 * rejection rate and 448 candidates per 4 blocks gives
+                 * expected accepts >> 256, matching the scalar reference's
+                 * one-shot squeeze budget exactly). */
+                kyber_poly_uniform(polys[lane], seed, xy[lane][0], xy[lane][1]);
             }
         }
+
+        flat += 4;
+    }
+
+    /* Trailing 0..3 polys (only relevant for parameter sets where
+     * KYBER_K*KYBER_K is not a multiple of 4; currently never for
+     * K=4 but kept for completeness / future parameter sets). */
+    while (flat < total) {
+        unsigned int i = flat / KYBER_K, j = flat % KYBER_K;
+        if (transposed) {
+            kyber_poly_uniform(&mat[i].vec[j], seed, (uint8_t)i, (uint8_t)j);
+        } else {
+            kyber_poly_uniform(&mat[i].vec[j], seed, (uint8_t)j, (uint8_t)i);
+        }
+        flat++;
     }
 }
 
