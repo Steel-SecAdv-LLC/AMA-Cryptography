@@ -30,7 +30,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # into any process that imports ``docs/conf.py`` for inspection
 # (tooling, tests, stubgen, etc.) and mask misconfiguration where a
 # caller genuinely lacks the native backend but isn't running Sphinx.
-if not os.environ.get("AMA_SPHINX_BUILD") and not os.environ.get("SPHINX_BUILD"):
+# Consistency note: this check must mirror the ``_env_flag_enabled``
+# helper used by the INVARIANT-7 import guards in ``crypto_api.py``,
+# ``key_management.py``, and ``legacy_compat.py`` — those accept only
+# explicit truthy values (``"1"``, ``"true"``, ``"yes"``, ``"on"``).  A
+# plain ``os.environ.get(name)`` here would treat ``AMA_SPHINX_BUILD=0``
+# as set (non-empty string) and suppress the warning, leaving the user
+# with a cryptic ``RuntimeError`` from the import guards and no hint in
+# the build log about the misconfiguration (PR #258 review thread).
+_DOCS_FLAG_TRUTHY = {"1", "true", "yes", "on"}
+_docs_flag_set = (
+    os.environ.get("AMA_SPHINX_BUILD", "").strip().lower() in _DOCS_FLAG_TRUTHY
+    or os.environ.get("SPHINX_BUILD", "").strip().lower() in _DOCS_FLAG_TRUTHY
+)
+if not _docs_flag_set:
     # Not a fatal error — docs/conf.py can be imported for type-stub
     # generation and similar tooling that does not need autodoc to
     # succeed.  Only Sphinx itself needs the env var, and Sphinx sees
@@ -38,7 +51,8 @@ if not os.environ.get("AMA_SPHINX_BUILD") and not os.environ.get("SPHINX_BUILD")
     # command line.  We merely warn so a misconfigured invocation is
     # visible in the build log.
     print(
-        "docs/conf.py: warning: AMA_SPHINX_BUILD / SPHINX_BUILD not set; "
+        "docs/conf.py: warning: AMA_SPHINX_BUILD / SPHINX_BUILD not set "
+        "to an explicit truthy value (``1`` / ``true`` / ``yes`` / ``on``); "
         "autodoc will fail if the native backend is unavailable. "
         "Invoke via ``make docs`` or set AMA_SPHINX_BUILD=1 explicitly.",
         file=sys.stderr,
