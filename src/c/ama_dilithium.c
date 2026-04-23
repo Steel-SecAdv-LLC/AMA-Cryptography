@@ -56,6 +56,7 @@
 
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
+#include "internal/ama_sha3_x4.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -989,15 +990,106 @@ static void dil_polyveck_use_hint(dil_polyveck *w, const dil_polyveck *v,
  * ============================================================================ */
 
 /**
- * Expand matrix A from seed (produces k x l matrix of polynomials in NTT domain)
+ * Sample one matrix polynomial from an already-squeezed SHAKE128 stream.
+ * Returns 1 if the 256 coefficients were fully sampled from the given
+ * stream window, 0 if the stream ran out and the caller must re-sample
+ * via the scalar path (which re-squeezes as needed).
+ *
+ * Byte-for-byte equivalent to the first phase of dil_poly_uniform()
+ * below when the stream is the initial 5-block squeeze.
+ */
+static int dil_rej_uniform_from_stream(dil_poly *a,
+                                        const uint8_t *stream, size_t stream_len)
+{
+    unsigned int ctr = 0;
+    size_t pos = 0;
+
+    while (ctr < DIL_N && pos + 3 <= stream_len) {
+        int32_t t;
+        t  = stream[pos++];
+        t |= (int32_t)stream[pos++] << 8;
+        t |= (int32_t)stream[pos++] << 16;
+        t &= 0x7FFFFF;  /* 23 bits */
+
+        if (t < DIL_Q) {
+            a->coeffs[ctr++] = t;
+        }
+    }
+
+    return (ctr == DIL_N) ? 1 : 0;
+}
+
+/**
+ * Expand matrix A from seed (produces k x l matrix of polynomials in NTT domain).
+ *
+ * Batched over four lanes via ama_shake128_x4_absorb_once /
+ * ama_shake128_x4_squeezeblocks (see src/c/internal/ama_sha3_x4.h).
+ * Per-lane coefficients are byte-for-byte identical to the scalar
+ * dil_poly_uniform() reference; the batching only changes how the
+ * four independent Keccak states are laid out in memory during the
+ * permutation.
+ *
+ * For ML-DSA-65 (DIL_K=6, DIL_L=5) the flat matrix has 30 entries →
+ * 7 full groups of 4 + 2 trailing polys sampled via the scalar path.
+ *
+ * The rejection-sampling fallback (scalar re-squeeze) is a
+ * probability-< 10^-30 branch for 256-coefficient samples from 5
+ * rate blocks at a 0.1 % rejection rate, but is preserved for
+ * correctness across all possible (rho, nonce) inputs.
  */
 static void dil_expand_matrix(dil_poly mat[DIL_K][DIL_L],
                                const uint8_t rho[DIL_SEEDBYTES]) {
-    unsigned int i, j;
-    for (i = 0; i < DIL_K; ++i) {
-        for (j = 0; j < DIL_L; ++j) {
-            dil_poly_uniform(&mat[i][j], rho, (uint16_t)((i << 8) + j));
+    const unsigned int total = DIL_K * DIL_L;
+    const size_t kInitialBlocks = 5;   /* matches scalar dil_poly_uniform stream */
+    unsigned int flat = 0;
+
+    while (flat + 4 <= total) {
+        uint8_t bufs[4][DIL_SEEDBYTES + 2];
+        dil_poly *polys[4];
+
+        for (int lane = 0; lane < 4; lane++) {
+            unsigned int f = flat + (unsigned int)lane;
+            unsigned int i = f / DIL_L, j = f % DIL_L;
+            uint16_t nonce = (uint16_t)((i << 8) + j);
+            memcpy(bufs[lane], rho, DIL_SEEDBYTES);
+            bufs[lane][DIL_SEEDBYTES]     = (uint8_t)(nonce & 0xFF);
+            bufs[lane][DIL_SEEDBYTES + 1] = (uint8_t)(nonce >> 8);
+            polys[lane] = &mat[i][j];
         }
+
+        ama_shake128_x4_ctx ctx;
+        ama_shake128_x4_absorb_once(&ctx,
+            bufs[0], DIL_SEEDBYTES + 2,
+            bufs[1], DIL_SEEDBYTES + 2,
+            bufs[2], DIL_SEEDBYTES + 2,
+            bufs[3], DIL_SEEDBYTES + 2);
+
+        uint8_t streams[4][AMA_SHAKE128_X4_RATE * 5];
+        ama_shake128_x4_squeezeblocks(&ctx,
+            streams[0], streams[1], streams[2], streams[3], kInitialBlocks);
+
+        for (int lane = 0; lane < 4; lane++) {
+            int ok = dil_rej_uniform_from_stream(polys[lane],
+                                                  streams[lane],
+                                                  AMA_SHAKE128_X4_RATE * kInitialBlocks);
+            if (!ok) {
+                /* Rare fallback (<1e-30 probability for 5 blocks at 0.1% reject):
+                 * redo this single poly via the scalar path, which has its own
+                 * incremental re-squeeze loop. */
+                unsigned int f = flat + (unsigned int)lane;
+                unsigned int i = f / DIL_L, j = f % DIL_L;
+                dil_poly_uniform(polys[lane], rho, (uint16_t)((i << 8) + j));
+            }
+        }
+
+        flat += 4;
+    }
+
+    /* Trailing 0..3 polys: use the scalar path directly. */
+    while (flat < total) {
+        unsigned int i = flat / DIL_L, j = flat % DIL_L;
+        dil_poly_uniform(&mat[i][j], rho, (uint16_t)((i << 8) + j));
+        flat++;
     }
 }
 
