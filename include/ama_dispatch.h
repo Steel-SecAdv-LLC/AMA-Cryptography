@@ -50,6 +50,12 @@ typedef struct {
 /** Keccak-f[1600] permutation (24 rounds on 25 x uint64_t state) */
 typedef void (*ama_keccak_f1600_fn)(uint64_t state[25]);
 
+/** 4-way Keccak-f[1600] permutation on four independent states.
+ *  Generic fallback invokes the single-state keccak_f1600 four times;
+ *  AVX2 path permutes the four states interleaved in YMM registers,
+ *  amortizing theta/rho/pi/chi/iota across all four lanes. */
+typedef void (*ama_keccak_f1600_x4_fn)(uint64_t states[4][25]);
+
 /** SHA3-256: full hash (input, len) -> output[32] */
 typedef ama_error_t (*ama_sha3_256_fn)(const uint8_t *input, size_t input_len,
                                         uint8_t output[32]);
@@ -121,6 +127,7 @@ typedef void (*ama_argon2_g_fn)(uint64_t out[128],
 
 typedef struct {
     ama_keccak_f1600_fn       keccak_f1600;        /**< Always non-NULL after init */
+    ama_keccak_f1600_x4_fn    keccak_f1600_x4;     /**< Always non-NULL after init; 4-way batched permutation */
     ama_sha3_256_fn           sha3_256;             /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_ntt_fn          kyber_ntt;            /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_ntt_fn          kyber_invntt;         /**< Non-NULL when SIMD detected; callers MUST NULL-check */

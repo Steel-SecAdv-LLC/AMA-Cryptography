@@ -165,12 +165,19 @@ static int detect_sve2(void) { return 0; }
 /* Forward declaration: generic keccak_f1600 from ama_sha3.c */
 extern void ama_keccak_f1600_generic(uint64_t state[25]);
 
+/* Forward declaration: generic 4-way keccak_f1600 from ama_sha3.c.
+ * Invokes the single-state dispatch pointer four times, so it
+ * automatically benefits from AVX2/NEON single-state acceleration
+ * on builds where the interleaved x4 kernel is unavailable. */
+extern void ama_keccak_f1600_x4_generic(uint64_t states[4][25]);
+
 /* ============================================================================
  * SIMD implementations (conditionally available at link time)
  * ============================================================================ */
 
 #ifdef AMA_HAVE_AVX2_IMPL
 extern void ama_keccak_f1600_avx2(uint64_t state[25]);
+extern void ama_keccak_f1600_x4_avx2(uint64_t states[4][25]);
 extern ama_error_t ama_sha3_256_avx2(const uint8_t *input, size_t input_len,
                                       uint8_t output[32]);
 extern void ama_kyber_ntt_avx2(int16_t poly[256], const int16_t zetas[128]);
@@ -338,6 +345,7 @@ static void dispatch_init_internal(void) {
      * ==================================================================== */
 
     dispatch_table.keccak_f1600      = ama_keccak_f1600_generic;
+    dispatch_table.keccak_f1600_x4   = ama_keccak_f1600_x4_generic;
     dispatch_table.sha3_256          = NULL;  /* dispatched via keccak_f1600 */
     dispatch_table.kyber_ntt         = NULL;  /* NULL = caller uses inline generic */
     dispatch_table.kyber_invntt      = NULL;
@@ -352,8 +360,9 @@ static void dispatch_init_internal(void) {
 
 #ifdef AMA_HAVE_AVX2_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_AVX2) {
-        dispatch_table.keccak_f1600 = ama_keccak_f1600_avx2;
-        dispatch_table.sha3_256     = ama_sha3_256_avx2;
+        dispatch_table.keccak_f1600    = ama_keccak_f1600_avx2;
+        dispatch_table.keccak_f1600_x4 = ama_keccak_f1600_x4_avx2;
+        dispatch_table.sha3_256        = ama_sha3_256_avx2;
     }
     if (dispatch_info.kyber >= AMA_IMPL_AVX2) {
         dispatch_table.kyber_ntt       = ama_kyber_ntt_avx2;
@@ -505,6 +514,11 @@ static void dispatch_init_internal(void) {
             } else {
                 dispatch_table.keccak_f1600 = ama_keccak_f1600_generic;
             }
+            /* Revert the batched x4 kernel in lockstep: if the single-state
+             * AVX2/NEON kernel is slower than scalar on this host, the
+             * interleaved 4-way kernel almost certainly is too.  The generic
+             * x4_fn falls through to the (now-reverted) single-state pointer. */
+            dispatch_table.keccak_f1600_x4 = ama_keccak_f1600_x4_generic;
             if (dispatch_verbose())
                 fprintf(stderr,
                     "[AMA Dispatch] Auto-tune: SIMD keccak regressed >10%% "
