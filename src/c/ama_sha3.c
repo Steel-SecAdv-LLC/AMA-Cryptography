@@ -32,6 +32,7 @@
 
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
+#include "internal/ama_sha3_x4.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -50,6 +51,12 @@
 
 /* Forward declaration: generic Keccak-f[1600] exported for dispatch table */
 void ama_keccak_f1600_generic(uint64_t state[KECCAK_STATE_SIZE]);
+
+/* Forward declaration: generic 4-way Keccak-f[1600] exported for the
+ * dispatch table's always-non-NULL keccak_f1600_x4 slot.  Defined
+ * further down in this translation unit; the prototype here keeps
+ * -Wmissing-prototypes quiet. */
+void ama_keccak_f1600_x4_generic(uint64_t states[4][25]);
 
 /* Round constants for Keccak-f[1600] */
 static const uint64_t keccak_rc[KECCAK_ROUNDS] = {
@@ -986,5 +993,261 @@ ama_error_t ama_shake128_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t 
             ctx->buffer_len = 0;
         }
     }
+    return AMA_SUCCESS;
+}
+
+/* ============================================================================
+ * 4-WAY BATCHED SHAKE128 (internal)
+ *
+ * Drives ama_keccak_f1600_x4_avx2 (src/c/avx2/ama_sha3_avx2.c) from
+ * the Dilithium and Kyber matrix-expansion paths.  Byte-for-byte
+ * identical to four independent ama_shake128_inc_* streams; see
+ * src/c/internal/ama_sha3_x4.h for the contract.
+ *
+ * The generic fallback calls the single-state dispatch pointer four
+ * times per block, so architectures without an interleaved 4-way
+ * kernel still benefit from their best single-state implementation
+ * (AVX2 single-state, NEON, or scalar).
+ * ============================================================================ */
+
+/**
+ * Generic 4-way Keccak-f[1600] — always safe, always correct.
+ * Wired into dispatch_table.keccak_f1600_x4 when no interleaved
+ * SIMD kernel is available.
+ */
+void ama_keccak_f1600_x4_generic(uint64_t states[4][25]) {
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    dt->keccak_f1600(states[0]);
+    dt->keccak_f1600(states[1]);
+    dt->keccak_f1600(states[2]);
+    dt->keccak_f1600(states[3]);
+}
+
+/**
+ * Absorb four independent inputs into four parallel SHAKE128 states,
+ * apply padding, and run one 4-way permutation so each state holds
+ * its first rate block of output — matching the byte-exact state of
+ * ama_shake128_inc_finalize() on four independent contexts.
+ *
+ * Each input MUST fit in a single SHAKE128 rate block (168 bytes).
+ * Matrix-expansion callers use 34-byte inputs (32-byte seed + 2-byte
+ * index pair), which safely meets this bound.  The preconditions are
+ * checked at runtime so a larger input is a hard error rather than
+ * silent truncation.
+ */
+ama_error_t ama_shake128_x4_absorb_once(
+    ama_shake128_x4_ctx *ctx,
+    const uint8_t *in0, size_t in0_len,
+    const uint8_t *in1, size_t in1_len,
+    const uint8_t *in2, size_t in2_len,
+    const uint8_t *in3, size_t in3_len)
+{
+    if (!ctx || !in0 || !in1 || !in2 || !in3) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (in0_len >= AMA_SHAKE128_X4_RATE ||
+        in1_len >= AMA_SHAKE128_X4_RATE ||
+        in2_len >= AMA_SHAKE128_X4_RATE ||
+        in3_len >= AMA_SHAKE128_X4_RATE) {
+        /* A full-rate (168-byte) absorb would require a second padding
+         * block; the one-block fast path cannot safely write the 0x1F
+         * domain separator at block[in_len] when in_len == rate.  All
+         * current callers use 32-66-byte inputs, so the tighter bound
+         * costs nothing.  Update this check plus the header contract
+         * together if a multi-block absorb is ever needed. */
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    memset(ctx->states, 0, sizeof(ctx->states));
+    ctx->blocks_squeezed = 0;
+    ctx->finalized       = 0;
+
+    /* Build one padded SHAKE128 block per lane, XOR into lane state. */
+    const uint8_t *ins[4]       = { in0, in1, in2, in3 };
+    const size_t   in_lens[4]   = { in0_len, in1_len, in2_len, in3_len };
+
+    for (int lane = 0; lane < 4; lane++) {
+        uint8_t block[AMA_SHAKE128_X4_RATE];
+        memset(block, 0, sizeof(block));
+        if (in_lens[lane] > 0) {
+            memcpy(block, ins[lane], in_lens[lane]);
+        }
+        /* SHAKE domain separator and final-bit padding. */
+        block[in_lens[lane]]             = 0x1F;
+        block[AMA_SHAKE128_X4_RATE - 1] |= 0x80;
+
+        for (size_t i = 0; i < AMA_SHAKE128_X4_RATE / 8; i++) {
+            ctx->states[lane][i] ^= load64_le(block + i * 8);
+        }
+        ama_secure_memzero(block, sizeof(block));
+    }
+
+    /* Mirror scalar ama_shake128_inc_finalize: apply one permutation
+     * so the first rate block of squeeze output lives in the state. */
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    dt->keccak_f1600_x4(ctx->states);
+
+    ctx->finalized = 1;
+    return AMA_SUCCESS;
+}
+
+/**
+ * Squeeze nblocks * 168 bytes from each of the four lanes.
+ *
+ * After ama_shake128_x4_absorb_once(), every state already holds its
+ * first rate block (one permutation applied at finalize, matching the
+ * scalar streaming API).  Each subsequent block requires another
+ * permutation.  This loop emits the pending block first, then
+ * permutes before emitting the next — byte-identical to calling
+ * ama_shake128_inc_squeeze() four times on parallel contexts.
+ */
+ama_error_t ama_shake128_x4_squeezeblocks(
+    ama_shake128_x4_ctx *ctx,
+    uint8_t *out0,
+    uint8_t *out1,
+    uint8_t *out2,
+    uint8_t *out3,
+    size_t nblocks)
+{
+    if (!ctx || !out0 || !out1 || !out2 || !out3) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (!ctx->finalized) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    uint8_t *outs[4] = { out0, out1, out2, out3 };
+
+    for (size_t b = 0; b < nblocks; b++) {
+        /* Permute before every block except the very first one emitted
+         * after absorb (state is already post-finalize). */
+        if (ctx->blocks_squeezed > 0) {
+            dt->keccak_f1600_x4(ctx->states);
+        }
+
+        for (int lane = 0; lane < 4; lane++) {
+            for (size_t i = 0; i < AMA_SHAKE128_X4_RATE / 8; i++) {
+                store64_le(outs[lane] + i * 8, ctx->states[lane][i]);
+            }
+            outs[lane] += AMA_SHAKE128_X4_RATE;
+        }
+
+        ctx->blocks_squeezed++;
+    }
+
+    return AMA_SUCCESS;
+}
+
+/* ============================================================================
+ * 4-WAY BATCHED SHAKE256 (internal)
+ *
+ * Mirrors the SHAKE128 x4 wrapper above but with SHAKE256's rate
+ * (136 bytes).  Byte-for-byte identical to four independent
+ * ama_shake256_inc_* streams; see src/c/internal/ama_sha3_x4.h.
+ *
+ * SHAKE256 and SHAKE128 share the domain separator 0x1F and the same
+ * Keccak-f[1600] permutation; the only difference is the rate/capacity
+ * split, which changes the block size and thus the padding position.
+ * ============================================================================ */
+
+/**
+ * Absorb four independent inputs into four parallel SHAKE256 states,
+ * apply padding, and run one 4-way permutation so each state holds
+ * its first rate block of output — matching the byte-exact state of
+ * ama_shake256_inc_finalize() on four independent contexts.
+ *
+ * Each input MUST fit in a single SHAKE256 rate block (136 bytes).
+ * Dilithium eta/gamma1 and Kyber CBD-noise callers use 34-66-byte
+ * inputs, well under; the preconditions are checked at runtime so a
+ * larger input is a hard error rather than silent truncation.
+ */
+ama_error_t ama_shake256_x4_absorb_once(
+    ama_shake256_x4_ctx *ctx,
+    const uint8_t *in0, size_t in0_len,
+    const uint8_t *in1, size_t in1_len,
+    const uint8_t *in2, size_t in2_len,
+    const uint8_t *in3, size_t in3_len)
+{
+    if (!ctx || !in0 || !in1 || !in2 || !in3) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (in0_len >= AMA_SHAKE256_X4_RATE ||
+        in1_len >= AMA_SHAKE256_X4_RATE ||
+        in2_len >= AMA_SHAKE256_X4_RATE ||
+        in3_len >= AMA_SHAKE256_X4_RATE) {
+        /* Same rationale as the SHAKE128 variant above: the one-block
+         * fast path cannot safely write the 0x1F domain separator at
+         * block[in_len] when in_len == rate. */
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    memset(ctx->states, 0, sizeof(ctx->states));
+    ctx->blocks_squeezed = 0;
+    ctx->finalized       = 0;
+
+    const uint8_t *ins[4]     = { in0, in1, in2, in3 };
+    const size_t   in_lens[4] = { in0_len, in1_len, in2_len, in3_len };
+
+    for (int lane = 0; lane < 4; lane++) {
+        uint8_t block[AMA_SHAKE256_X4_RATE];
+        memset(block, 0, sizeof(block));
+        if (in_lens[lane] > 0) {
+            memcpy(block, ins[lane], in_lens[lane]);
+        }
+        block[in_lens[lane]]             = 0x1F;
+        block[AMA_SHAKE256_X4_RATE - 1] |= 0x80;
+
+        for (size_t i = 0; i < AMA_SHAKE256_X4_RATE / 8; i++) {
+            ctx->states[lane][i] ^= load64_le(block + i * 8);
+        }
+        ama_secure_memzero(block, sizeof(block));
+    }
+
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    dt->keccak_f1600_x4(ctx->states);
+
+    ctx->finalized = 1;
+    return AMA_SUCCESS;
+}
+
+/**
+ * Squeeze nblocks * 136 bytes from each of the four lanes.  Matches
+ * the scalar ama_shake256_inc_squeeze() contract byte-for-byte:
+ * emit first, permute between blocks.
+ */
+ama_error_t ama_shake256_x4_squeezeblocks(
+    ama_shake256_x4_ctx *ctx,
+    uint8_t *out0,
+    uint8_t *out1,
+    uint8_t *out2,
+    uint8_t *out3,
+    size_t nblocks)
+{
+    if (!ctx || !out0 || !out1 || !out2 || !out3) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (!ctx->finalized) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    uint8_t *outs[4] = { out0, out1, out2, out3 };
+
+    for (size_t b = 0; b < nblocks; b++) {
+        if (ctx->blocks_squeezed > 0) {
+            dt->keccak_f1600_x4(ctx->states);
+        }
+
+        for (int lane = 0; lane < 4; lane++) {
+            for (size_t i = 0; i < AMA_SHAKE256_X4_RATE / 8; i++) {
+                store64_le(outs[lane] + i * 8, ctx->states[lane][i]);
+            }
+            outs[lane] += AMA_SHAKE256_X4_RATE;
+        }
+
+        ctx->blocks_squeezed++;
+    }
+
     return AMA_SUCCESS;
 }

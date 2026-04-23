@@ -43,6 +43,7 @@
 
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
+#include "internal/ama_sha3_x4.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -229,30 +230,126 @@ static void kyber_poly_uniform(poly* a, const uint8_t seed[32], uint8_t x, uint8
 }
 
 /**
- * Expand matrix A from seed (K x K matrix in NTT domain)
+ * Rejection-sample one polynomial from an already-squeezed SHAKE128
+ * stream window.  Returns 1 if all KYBER_N coefficients were filled,
+ * 0 if the stream was exhausted first.
+ *
+ * Byte-for-byte equivalent to the rejection loop in kyber_poly_uniform().
+ */
+static int kyber_rej_uniform_from_stream(poly *a,
+                                          const uint8_t *stream, size_t stream_len)
+{
+    unsigned int ctr = 0;
+    size_t pos = 0;
+
+    while (ctr < KYBER_N && pos + 3 <= stream_len) {
+        uint16_t val0 = ((stream[pos] | ((uint16_t)stream[pos + 1] << 8)) & 0xFFF);
+        uint16_t val1 = ((stream[pos + 1] >> 4) | ((uint16_t)stream[pos + 2] << 4)) & 0xFFF;
+        pos += 3;
+
+        if (val0 < KYBER_Q) {
+            a->coeffs[ctr++] = (int16_t)val0;
+        }
+        if (ctr < KYBER_N && val1 < KYBER_Q) {
+            a->coeffs[ctr++] = (int16_t)val1;
+        }
+    }
+
+    return (ctr == KYBER_N) ? 1 : 0;
+}
+
+/**
+ * Expand matrix A from seed (K x K matrix in NTT domain).
+ *
+ * Batched over four lanes via ama_shake128_x4_absorb_once /
+ * ama_shake128_x4_squeezeblocks.  Per-lane coefficients are
+ * byte-for-byte identical to the scalar kyber_poly_uniform()
+ * reference above.
+ *
+ * For Kyber-1024 (KYBER_K=4), the matrix has 16 polys → 4 full
+ * groups of 4 with no trailing scalar work.  The initial 4-block
+ * squeeze (672 bytes per lane) matches the scalar stream[672].
  */
 static void kyber_gen_matrix(polyvec mat[KYBER_K], const uint8_t seed[32], int transposed) {
-    unsigned int i, j;
-    for (i = 0; i < KYBER_K; i++) {
-        for (j = 0; j < KYBER_K; j++) {
-            if (transposed) {
-                kyber_poly_uniform(&mat[i].vec[j], seed, (uint8_t)i, (uint8_t)j);
-            } else {
-                kyber_poly_uniform(&mat[i].vec[j], seed, (uint8_t)j, (uint8_t)i);
+    const unsigned int total = KYBER_K * KYBER_K;
+    const size_t kInitialBlocks = 4;   /* matches scalar kyber_poly_uniform stream[672] */
+    unsigned int flat = 0;
+
+    while (flat + 4 <= total) {
+        uint8_t bufs[4][34];
+        poly *polys[4];
+        uint8_t xy[4][2];  /* keep (x, y) for fallback path */
+
+        for (int lane = 0; lane < 4; lane++) {
+            unsigned int f = flat + (unsigned int)lane;
+            unsigned int i = f / KYBER_K, j = f % KYBER_K;
+            uint8_t x = transposed ? (uint8_t)i : (uint8_t)j;
+            uint8_t y = transposed ? (uint8_t)j : (uint8_t)i;
+            memcpy(bufs[lane], seed, 32);
+            bufs[lane][32] = x;
+            bufs[lane][33] = y;
+            xy[lane][0] = x;
+            xy[lane][1] = y;
+            polys[lane] = &mat[i].vec[j];
+        }
+
+        ama_shake128_x4_ctx ctx;
+        ama_shake128_x4_absorb_once(&ctx,
+            bufs[0], 34, bufs[1], 34, bufs[2], 34, bufs[3], 34);
+
+        uint8_t streams[4][AMA_SHAKE128_X4_RATE * 4];
+        ama_shake128_x4_squeezeblocks(&ctx,
+            streams[0], streams[1], streams[2], streams[3], kInitialBlocks);
+
+        for (int lane = 0; lane < 4; lane++) {
+            int ok = kyber_rej_uniform_from_stream(polys[lane],
+                                                    streams[lane],
+                                                    AMA_SHAKE128_X4_RATE * kInitialBlocks);
+            if (!ok) {
+                /* Scalar fallback (effectively unreachable: Kyber's ~18.7 %
+                 * rejection rate and 448 candidates per 4 blocks gives
+                 * expected accepts >> 256, matching the scalar reference's
+                 * one-shot squeeze budget exactly). */
+                kyber_poly_uniform(polys[lane], seed, xy[lane][0], xy[lane][1]);
             }
         }
+
+        flat += 4;
+    }
+
+    /* Trailing 0..3 polys (only relevant for parameter sets where
+     * KYBER_K*KYBER_K is not a multiple of 4; currently never for
+     * K=4 but kept for completeness / future parameter sets). */
+    while (flat < total) {
+        unsigned int i = flat / KYBER_K, j = flat % KYBER_K;
+        if (transposed) {
+            kyber_poly_uniform(&mat[i].vec[j], seed, (uint8_t)i, (uint8_t)j);
+        } else {
+            kyber_poly_uniform(&mat[i].vec[j], seed, (uint8_t)j, (uint8_t)i);
+        }
+        flat++;
     }
 }
 
 /**
  * Sample noise polynomial with CBD (eta = 2)
+ *
+ * Routes to the AVX2 bit-count path via the dispatch table when
+ * available; coefficient output is byte-for-byte identical to the
+ * generic inline fallback below.
  */
 static void kyber_poly_cbd_eta(poly* r, const uint8_t* buf) {
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (dt->kyber_cbd2) {
+        dt->kyber_cbd2(r->coeffs, buf);
+        return;
+    }
+
+    /* Generic C implementation — CBD with eta = 2: need eta*N/4 = 128 bytes */
     unsigned int i, j;
     uint32_t t, d;
     int16_t a, b;
 
-    /* CBD with eta = 2: need eta*N/4 = 128 bytes */
     for (i = 0; i < KYBER_N / 8; i++) {
         t = buf[4*i] | ((uint32_t)buf[4*i + 1] << 8) |
             ((uint32_t)buf[4*i + 2] << 16) | ((uint32_t)buf[4*i + 3] << 24);
@@ -269,13 +366,53 @@ static void kyber_poly_cbd_eta(poly* r, const uint8_t* buf) {
 }
 
 /**
- * Sample noise vector using SHAKE256 and CBD
+ * Sample noise vector using SHAKE256 and CBD.
+ *
+ * For KYBER_K = 4 the four SHAKE256 streams are batched through
+ * ama_shake256_x4_absorb_once / squeezeblocks in exactly one group of
+ * 4 (no scalar tail).  Each lane's 128-byte noise buffer is then fed
+ * to kyber_poly_cbd_eta(), which now dispatches to ama_kyber_cbd2_avx2
+ * on AVX2 hardware.
+ *
+ * Byte-for-byte identical to the previous scalar loop; see
+ * tests/c/test_sha3_x4.c (SHAKE256 equivalence) and
+ * tests/c/test_kyber_cbd2_equiv.c (CBD2 equivalence).
+ *
+ * KYBER_ETA1 * KYBER_N / 4 = 128 bytes fits inside one SHAKE256 rate
+ * block (136 bytes), so the inner call to ama_shake256_x4_squeezeblocks
+ * requests exactly 1 block per lane and we use the first 128 bytes.
  */
 static void kyber_gennoise(polyvec* r, const uint8_t seed[32], uint8_t nonce) {
+    const size_t kNoiseBytes = (size_t)(KYBER_ETA1 * KYBER_N / 4);  /* 128 */
+    _Static_assert(KYBER_ETA1 * KYBER_N / 4 <= AMA_SHAKE256_X4_RATE,
+                   "kyber_gennoise assumes noise fits in one SHAKE256 block");
     unsigned int i;
+
+    if (KYBER_K == 4) {
+        uint8_t bufs[4][34];
+        for (i = 0; i < 4; i++) {
+            memcpy(bufs[i], seed, 32);
+            bufs[i][32] = nonce + (uint8_t)i;
+            bufs[i][33] = 0;
+        }
+
+        ama_shake256_x4_ctx ctx;
+        ama_shake256_x4_absorb_once(&ctx,
+            bufs[0], 33, bufs[1], 33, bufs[2], 33, bufs[3], 33);
+
+        uint8_t streams[4][AMA_SHAKE256_X4_RATE];
+        ama_shake256_x4_squeezeblocks(&ctx,
+            streams[0], streams[1], streams[2], streams[3], 1);
+
+        for (i = 0; i < 4; i++) {
+            kyber_poly_cbd_eta(&r->vec[i], streams[i]);
+        }
+        return;
+    }
+
+    /* Fallback scalar path for other parameter sets (unused at KYBER_K=4). */
     uint8_t buf[34];
     uint8_t stream[KYBER_ETA1 * KYBER_N / 4];
-
     for (i = 0; i < KYBER_K; i++) {
         memcpy(buf, seed, 32);
         buf[32] = nonce + (uint8_t)i;
@@ -283,6 +420,7 @@ static void kyber_gennoise(polyvec* r, const uint8_t seed[32], uint8_t nonce) {
         ama_shake256(buf, 33, stream, sizeof(stream));
         kyber_poly_cbd_eta(&r->vec[i], stream);
     }
+    (void)kNoiseBytes;
 }
 
 #ifdef AMA_TESTING_MODE

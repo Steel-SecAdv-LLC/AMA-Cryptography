@@ -16,6 +16,7 @@ add_ama_test(test_core test_core.c)
 # Cryptographic primitive tests
 add_ama_test(test_sha3 test_sha3.c)
 add_ama_test(test_sha3_512_stream test_sha3_512_stream.c)
+add_ama_test(test_sha3_x4 test_sha3_x4.c)
 add_ama_test(test_hkdf test_hkdf.c)
 add_ama_test(test_ed25519 test_ed25519.c)
 
@@ -56,6 +57,7 @@ if(AMA_USE_NATIVE_PQC)
     # Kyber debug / CPA isolation tests (run manually or via ctest)
     add_ama_test(test_kyber_debug test_kyber_debug.c)
     add_ama_test(test_kyber_cpa test_kyber_cpa.c)
+    add_ama_test(test_kyber_cbd2_equiv test_kyber_cbd2_equiv.c)
 endif()
 
 # Performance benchmark (not added to ctest - run manually)

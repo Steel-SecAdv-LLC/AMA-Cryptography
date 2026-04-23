@@ -50,6 +50,12 @@ typedef struct {
 /** Keccak-f[1600] permutation (24 rounds on 25 x uint64_t state) */
 typedef void (*ama_keccak_f1600_fn)(uint64_t state[25]);
 
+/** 4-way Keccak-f[1600] permutation on four independent states.
+ *  Generic fallback invokes the single-state keccak_f1600 four times;
+ *  AVX2 path permutes the four states interleaved in YMM registers,
+ *  amortizing theta/rho/pi/chi/iota across all four lanes. */
+typedef void (*ama_keccak_f1600_x4_fn)(uint64_t states[4][25]);
+
 /** SHA3-256: full hash (input, len) -> output[32] */
 typedef ama_error_t (*ama_sha3_256_fn)(const uint8_t *input, size_t input_len,
                                         uint8_t output[32]);
@@ -62,6 +68,10 @@ typedef void (*ama_kyber_pointwise_fn)(int16_t r[256],
                                        const int16_t a[256],
                                        const int16_t b[256],
                                        const int16_t zetas[128]);
+
+/** Kyber CBD2 noise sampler: 128-byte uniform stream -> 256 coefficients
+ *  in {-2, -1, 0, 1, 2} per FIPS 203 §4.2.2 (ML-KEM eta=2). */
+typedef void (*ama_kyber_cbd2_fn)(int16_t poly[256], const uint8_t buf[128]);
 
 /** Dilithium NTT forward transform */
 typedef void (*ama_dilithium_ntt_fn)(int32_t poly[256],
@@ -108,23 +118,31 @@ typedef void (*ama_argon2_g_fn)(uint64_t out[128],
  *
  * After ama_dispatch_init(), function pointers are either:
  *   - Non-NULL: points to the optimal implementation (SIMD or generic).
- *     Guaranteed non-NULL: keccak_f1600.
+ *     Guaranteed non-NULL: keccak_f1600, keccak_f1600_x4.  The x4
+ *     pointer always resolves — either to the AVX2 interleaved
+ *     kernel or to ama_keccak_f1600_x4_generic, which invokes the
+ *     single-state keccak four times.
  *     Wired when SIMD detected: sha3_256, kyber_ntt, kyber_invntt,
  *     kyber_pointwise, dilithium_ntt, dilithium_invntt,
  *     dilithium_pointwise (AVX2 and NEON; SVE2 wires keccak_f1600,
- *     kyber_*, and dilithium_* but not sha3_256).
+ *     kyber_*, and dilithium_* but not sha3_256).  kyber_cbd2 is
+ *     AVX2-only today — it remains NULL on NEON and SVE2 tiers
+ *     until a corresponding implementation is wired.
  *   - NULL: no dispatch available; caller must use its own inline generic
  *     implementation.
  *
- * Callers MUST NULL-check before calling any field except keccak_f1600.
+ * Callers MUST NULL-check before calling any field except keccak_f1600
+ * and keccak_f1600_x4 (both always non-NULL after init).
  * ============================================================================ */
 
 typedef struct {
     ama_keccak_f1600_fn       keccak_f1600;        /**< Always non-NULL after init */
+    ama_keccak_f1600_x4_fn    keccak_f1600_x4;     /**< Always non-NULL after init; 4-way batched permutation */
     ama_sha3_256_fn           sha3_256;             /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_ntt_fn          kyber_ntt;            /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_ntt_fn          kyber_invntt;         /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_pointwise_fn    kyber_pointwise;      /**< Non-NULL when SIMD detected; callers MUST NULL-check */
+    ama_kyber_cbd2_fn         kyber_cbd2;           /**< Non-NULL when AVX2 detected (AVX2-only today; NEON/SVE2 wiring TBD); callers MUST NULL-check */
     ama_dilithium_ntt_fn      dilithium_ntt;        /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_dilithium_invntt_fn   dilithium_invntt;     /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_dilithium_pointwise_fn dilithium_pointwise; /**< Non-NULL when SIMD detected; callers MUST NULL-check */
