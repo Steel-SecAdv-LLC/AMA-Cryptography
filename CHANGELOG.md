@@ -112,14 +112,18 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   `tag_len > 1024` now return `AMA_ERROR_INVALID_PARAM` from C and
   raise `ValueError` from Python, whereas ≤ 2.1.5 would have
   attempted the allocation and either succeeded (small-to-medium
-  values) or silently truncated / OOMed (large values).  No
-  spec-compliant user of the library is affected; any caller that
-  relied on the old unbounded behaviour was already outside the
-  recommended parameter space and should switch to a ≤ 1024-byte
-  tag.  The cap is exposed as `AMA_ARGON2ID_MAX_TAG_LEN` in
-  `include/ama_cryptography.h` and mirrored as
-  `ama_cryptography.pqc_backends._ARGON2ID_MAX_TAG_LEN` so
-  downstream callers can gate on it at compile / import time.
+  values) or silently truncated / OOMed (large values).  The Python
+  `ValueError` message text also changed from the prior
+  `"Argon2id output length must be >= 4, got N"` wording to
+  `"Argon2id out_len must be in [4, 1024] bytes, got N"`; any caller
+  doing substring matching on the error message must update to the
+  new `"out_len"` text.  No spec-compliant user of the library is
+  affected; any caller that relied on the old unbounded behaviour
+  was already outside the recommended parameter space and should
+  switch to a ≤ 1024-byte tag.  The cap is exposed as
+  `AMA_ARGON2ID_MAX_TAG_LEN` in `include/ama_cryptography.h` and
+  mirrored as `ama_cryptography.pqc_backends._ARGON2ID_MAX_TAG_LEN`
+  so downstream callers can gate on it at compile / import time.
 
 ### Performance
 
