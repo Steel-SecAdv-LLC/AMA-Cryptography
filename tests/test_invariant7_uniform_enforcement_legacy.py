@@ -91,7 +91,10 @@ def _make_entries() -> list[tuple[str, Callable[[], Any]]]:
             "create_ethical_hkdf_context",
             lambda: lc.create_ethical_hkdf_context(dummy_bytes),
         ),
-        ("derive_keys", lambda: lc.derive_keys(dummy_bytes, dummy_bytes)),
+        # ``info`` is typed as ``str``; satisfy the annotation so
+        # mypy --strict doesn't flag the call site before the sentinel
+        # can fire.  Value is irrelevant.
+        ("derive_keys", lambda: lc.derive_keys(dummy_bytes, "dummy-info")),
         # The next three entries need enough positional args to pass
         # Python's argument-binding phase so the sentinel fires from
         # inside the function body.  Argument *values* are irrelevant
@@ -106,11 +109,22 @@ def _make_entries() -> list[tuple[str, Callable[[], Any]]]:
         ),
         (
             "create_crypto_package",
-            lambda: lc.create_crypto_package("dummy-codes", [(1.0, 1.0)], object(), "test-author"),
+            # ``object()`` stands in for ``KeyManagementSystem`` — the
+            # sentinel patch fires before mypy-visible argument types
+            # are ever consulted at runtime, so the type-level mismatch
+            # is intentional; silence mypy --strict on the call site.
+            lambda: lc.create_crypto_package(
+                "dummy-codes", [(1.0, 1.0)], object(), "test-author"  # type: ignore[arg-type]
+            ),
         ),
         (
             "verify_crypto_package",
-            lambda: lc.verify_crypto_package("dummy-codes", [(1.0, 1.0)], object(), dummy_bytes),
+            # Same reasoning as ``create_crypto_package`` above: the
+            # ``object()`` stand-in for ``CryptoPackage`` is binding-
+            # phase filler, never inspected.
+            lambda: lc.verify_crypto_package(
+                "dummy-codes", [(1.0, 1.0)], object(), dummy_bytes  # type: ignore[arg-type]
+            ),
         ),
     ]
     return entries
