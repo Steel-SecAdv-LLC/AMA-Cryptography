@@ -88,6 +88,39 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   Ed25519, X25519, AES-256-GCM, SHA-3, ML-KEM, ML-DSA, and SPHINCS+
   outputs are unaffected.
 
+- **Argon2id output length capped at `AMA_ARGON2ID_MAX_TAG_LEN`
+  (1024 bytes).** Previously all three public Argon2id entry points
+  (`ama_argon2id`, `ama_argon2id_legacy`, `ama_argon2id_legacy_verify`
+  in C; `native_argon2id`, `native_argon2id_legacy`,
+  `native_argon2id_legacy_verify` in Python) accepted
+  `out_len` / `tag_len` up to `UINT32_MAX` (4 GiB) — the RFC 9106
+  §3.2 theoretical maximum.  That surface was a caller-controlled
+  memory-exhaustion / DoS vector because
+  `ama_argon2id_legacy_verify` heap-allocates a `computed[tag_len]`
+  buffer to hold the freshly-derived tag, and all three derivation
+  paths pay CPU time proportional to `out_len / 32` BLAKE2b
+  compressions in the `blake2b_long` tail.
+
+  A new ceiling `AMA_ARGON2ID_MAX_TAG_LEN = 1024` (32× the default
+  32-byte tag) is now enforced at every entry point.  This covers
+  every practical deployment — Argon2id tags are universally
+  16–64 bytes in the wild, and sizes above ~128 bytes are
+  cryptographically indistinguishable from 64 so only waste compute
+  and memory.
+
+  **Behaviour change:** calls with `out_len > 1024` or
+  `tag_len > 1024` now return `AMA_ERROR_INVALID_PARAM` from C and
+  raise `ValueError` from Python, whereas ≤ 2.1.5 would have
+  attempted the allocation and either succeeded (small-to-medium
+  values) or silently truncated / OOMed (large values).  No
+  spec-compliant user of the library is affected; any caller that
+  relied on the old unbounded behaviour was already outside the
+  recommended parameter space and should switch to a ≤ 1024-byte
+  tag.  The cap is exposed as `AMA_ARGON2ID_MAX_TAG_LEN` in
+  `include/ama_cryptography.h` and mirrored as
+  `ama_cryptography.pqc_backends._ARGON2ID_MAX_TAG_LEN` so
+  downstream callers can gate on it at compile / import time.
+
 ### Performance
 
 - X25519 scalar multiplication: rewrite `ama_x25519.c` onto the radix-2^51

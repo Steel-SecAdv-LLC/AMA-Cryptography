@@ -112,6 +112,34 @@ if not _AMA_DOCS_IMPORT and not CRYPTO_AVAILABLE:
         "Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
     )
 
+
+def _enforce_invariant7_lc() -> None:
+    """INVARIANT-7 call-time enforcement for ``legacy_compat``.
+
+    Mirrors ``crypto_api._enforce_invariant7`` and
+    ``key_management._enforce_invariant7_km``: re-verifies that the
+    native C library is loaded before every cryptographic entry point
+    on this module.  Needed because the docs-build env-var gate
+    (``AMA_SPHINX_BUILD=1``) permits import without the backend; every
+    call site here must still refuse to operate without it, per the
+    INVARIANT-7 preservation guarantee written into ``INVARIANTS.md``
+    ("the contract moves from import-time to call-time under the
+    documented flag, never weakens").
+
+    Re-reads ``_native_lib`` through ``sys.modules`` so test-time
+    patches (``unittest.mock.patch``, ``monkeypatch.setattr``) are
+    respected, matching the pattern already used in ``crypto_api``.
+    """
+    _pb = sys.modules.get("ama_cryptography.pqc_backends")
+    if _pb is None or getattr(_pb, "_native_lib", None) is None:
+        raise RuntimeError(
+            "INVARIANT-7 (call-time): Native C cryptographic library is not "
+            "loaded. ama_cryptography.legacy_compat refuses to operate without "
+            "a constant-time backend. Build the native C library: "
+            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
+
+
 # Import centralized exception classes
 # Re-import constants from equations for convenience
 from ama_cryptography.equations import (
@@ -152,6 +180,7 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
     This wrapper function checks module-level DILITHIUM_AVAILABLE,
     allowing tests to monkeypatch it.
     """
+    _enforce_invariant7_lc()
     import sys
 
     this_module = sys.modules[__name__]
@@ -168,6 +197,7 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
 
 def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """Sign message with CRYSTALS-Dilithium (ML-DSA-65)."""
+    _enforce_invariant7_lc()
     import sys
 
     this_module = sys.modules[__name__]
@@ -184,6 +214,7 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
 
 def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
     """Verify CRYSTALS-Dilithium signature."""
+    _enforce_invariant7_lc()
     import sys
 
     this_module = sys.modules[__name__]
@@ -356,6 +387,7 @@ class Ed25519KeyPair:
 
 def generate_ed25519_keypair(seed: Optional[bytes] = None) -> Ed25519KeyPair:
     """Generate Ed25519 key pair using native C backend (RFC 8032, Section 5.1.5)."""
+    _enforce_invariant7_lc()
     if not CRYPTO_AVAILABLE:
         raise RuntimeError(
             "AMA native C library required for Ed25519 key generation. "
@@ -466,9 +498,13 @@ def verify_rfc3161_timestamp(
 ) -> bool:
     """Verify RFC 3161 timestamp token cryptographically.
 
+    INVARIANT-7 call-time enforcement: refuses to operate without the
+    native backend loaded, matching the import-time contract.
+
     NOTE: This is the LEGACY API taking raw ``bytes``, NOT the same as
     ``rfc3161_timestamp.verify_timestamp()`` which takes ``TimestampResult``.
     """
+    _enforce_invariant7_lc()
     import os
     import shutil
     import tempfile
@@ -556,6 +592,7 @@ def create_ethical_hkdf_context(
     base_context: bytes, ethical_vector: Optional[Dict[str, float]] = None
 ) -> bytes:
     """Integrate ethical vector into HKDF key derivation context."""
+    _enforce_invariant7_lc()
     if ethical_vector is None:
         ethical_vector = ETHICAL_VECTOR
 
@@ -580,6 +617,7 @@ def derive_keys(
     salt: Optional[bytes] = None,
 ) -> Tuple[List[bytes], bytes]:
     """Derive multiple independent keys from master secret using HKDF (RFC 5869)."""
+    _enforce_invariant7_lc()
     if not CRYPTO_AVAILABLE:
         raise RuntimeError(
             "AMA native C library required for HKDF. "
@@ -638,6 +676,7 @@ def generate_key_management_system(
     author: str, ethical_vector: Optional[Dict[str, float]] = None
 ) -> KeyManagementSystem:
     """Initialize complete key management system with ethical integration."""
+    _enforce_invariant7_lc()
     if ethical_vector is None:
         ethical_vector = ETHICAL_VECTOR.copy()
 
@@ -798,6 +837,7 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordi
     .. deprecated::
         Use :func:`ama_cryptography.crypto_api.create_crypto_package` instead.
     """
+    _enforce_invariant7_lc()
     import warnings
 
     warnings.warn(
@@ -982,6 +1022,7 @@ def verify_crypto_package(
     .. deprecated::
         Use :func:`ama_cryptography.crypto_api.verify_crypto_package` instead.
     """
+    _enforce_invariant7_lc()
     import warnings
 
     warnings.warn(
