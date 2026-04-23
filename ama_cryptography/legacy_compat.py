@@ -405,6 +405,7 @@ def generate_ed25519_keypair(seed: Optional[bytes] = None) -> Ed25519KeyPair:
 
 def ed25519_sign(message: bytes, private_key: bytes) -> bytes:
     """Sign message with Ed25519 (deterministic) using native C backend."""
+    _enforce_invariant7_lc()
     if not CRYPTO_AVAILABLE:
         raise RuntimeError(
             "AMA native C library required for Ed25519 signing. "
@@ -422,6 +423,7 @@ def ed25519_sign(message: bytes, private_key: bytes) -> bytes:
 
 def ed25519_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
     """Verify Ed25519 signature using native C backend (RFC 8032, Section 5.1.7)."""
+    _enforce_invariant7_lc()
     if not CRYPTO_AVAILABLE:
         raise RuntimeError(
             "AMA native C library required for Ed25519 verification. "

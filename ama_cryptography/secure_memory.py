@@ -31,7 +31,7 @@ Features:
 Implementation notes:
 
 - ``secure_memzero``: Multi-pass byte-level overwrite
-- ``secure_mlock`` / ``munlock``: Native C backend (VirtualLock/mlock) or POSIX fallback
+- ``secure_mlock`` / ``secure_munlock``: Native C backend (VirtualLock/mlock) or POSIX fallback
 - ``constant_time_compare``: ``ama_consttime_memcmp`` (C) or XOR accumulator (Python)
 - ``secure_random_bytes``: Uses ``os.urandom`` (stdlib)
 
