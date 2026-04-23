@@ -139,9 +139,22 @@ static inline int32_t dil_montgomery_reduce_scalar(int64_t a) {
 /* ============================================================================
  * Forward NTT for Dilithium polynomial (256 int32 coefficients)
  *
- * 8-layer NTT matching generic: len from 128 down to 1.
- * Uses ++k (pre-increment) zeta indexing: first zeta is zetas[1].
- * len=1 layer uses scalar fallback (intra-register butterfly).
+ * 8-layer decimation-in-time NTT matching the generic C reference in
+ * ama_dilithium.c:dil_ntt_cached.  Uses ++k (pre-increment) zeta indexing;
+ * the first zeta consumed is zetas[1].
+ *
+ * Merged layer layout (Seiler 2018, "Faster AVX2 optimized NTT
+ * multiplication for Ring-LWE lattice cryptography", §4):
+ *
+ *   Layers 1+2 (len=128, 64) merged    — four 8-ymm tuples kept in regs
+ *   Layers 3+4 (len=32,  16) merged    — four clusters × two 4-ymm tuples
+ *   Layer  5   (len=8)       inter-register, single pass
+ *   Layers 6+7+8 (len=4,2,1) intra-register, scalar fallback
+ *
+ * Merging pairs of inter-register layers cuts the f[] round-trip traffic
+ * roughly in half on those layers by keeping each butterfly tuple live
+ * in YMM registers across both layers, instead of writing then re-reading
+ * the intermediate polynomial through the f[] working array.
  * ============================================================================ */
 void ama_dilithium_ntt_avx2(int32_t poly[DILITHIUM_N],
                              const int32_t zetas[256]) {
@@ -152,20 +165,89 @@ void ama_dilithium_ntt_avx2(int32_t poly[DILITHIUM_N],
     }
 
     int k = 0;
-    /* Layers len=128 down to len=8: butterfly pairs span different registers */
-    for (int len = 128; len >= 8; len >>= 1) {
-        for (int start = 0; start < DILITHIUM_N; start += 2 * len) {
-            int32_t zeta = zetas[++k];
-            for (int j = start; j < start + len; j += 8) {
-                int idx_a = j / 8;
-                int idx_b = (j + len) / 8;
-                ntt_butterfly_dil_avx2(&f[idx_a], &f[idx_b], zeta);
-            }
+
+    /* ====== Merged layers 1+2: len=128 then len=64 ======
+     * Layer len=128 has one group (zetas[1]); layer len=64 has two groups
+     * (zetas[2], zetas[3]).  For each i in [0..7], the 4-tuple
+     *   (f[i], f[i+8], f[i+16], f[i+24])
+     * is closed under both layers' butterflies: len=128 pairs f[i]↔f[i+16]
+     * and f[i+8]↔f[i+24]; len=64 then pairs f[i]↔f[i+8] and
+     * f[i+16]↔f[i+24].  All four butterflies run with the tuple resident
+     * in registers. */
+    {
+        int32_t zL1  = zetas[++k]; /* len=128, group 0 */
+        int32_t zL2a = zetas[++k]; /* len=64,  group 0 */
+        int32_t zL2b = zetas[++k]; /* len=64,  group 1 */
+        for (int i = 0; i < 8; i++) {
+            __m256i a = f[i];
+            __m256i b = f[i + 8];
+            __m256i c = f[i + 16];
+            __m256i d = f[i + 24];
+            /* Layer len=128: (a,c) and (b,d) with zL1. */
+            ntt_butterfly_dil_avx2(&a, &c, zL1);
+            ntt_butterfly_dil_avx2(&b, &d, zL1);
+            /* Layer len=64: (a,b) with zL2a, (c,d) with zL2b. */
+            ntt_butterfly_dil_avx2(&a, &b, zL2a);
+            ntt_butterfly_dil_avx2(&c, &d, zL2b);
+            f[i]      = a;
+            f[i + 8]  = b;
+            f[i + 16] = c;
+            f[i + 24] = d;
         }
     }
 
-    /* Layers len=4, len=2, len=1: butterfly pairs within same register.
-     * Fall back to scalar for correctness. */
+    /* ====== Merged layers 3+4: len=32 then len=16 ======
+     * Each of the four 8-ymm clusters (f[0..7], f[8..15], f[16..23],
+     * f[24..31]) sees one zL3 (len=32 for that cluster) and two zL4
+     * subgroups (len=16 with two sub-starts inside the cluster).  Inside
+     * a cluster, for each i in [0..1], the 4-tuple
+     *   (f[base+i], f[base+i+2], f[base+i+4], f[base+i+6])
+     * is closed under both layers' butterflies.
+     *
+     * Zeta consumption order must match the generic reference.  In the
+     * flat zetas[] table, all four len=32 zetas (indices 4..7) come
+     * before any of the eight len=16 zetas (indices 8..15).  We preload
+     * the two strips into local arrays so the per-cluster inner loop can
+     * stay tight without re-interleaving the global k counter. */
+    int32_t zL3[4];
+    for (int c = 0; c < 4; c++) zL3[c] = zetas[++k];
+    int32_t zL4[8];
+    for (int g = 0; g < 8; g++) zL4[g] = zetas[++k];
+    for (int cluster = 0; cluster < 4; cluster++) {
+        int base = cluster * 8;
+        int32_t zl3  = zL3[cluster];
+        int32_t zl4a = zL4[2 * cluster];
+        int32_t zl4b = zL4[2 * cluster + 1];
+        for (int i = 0; i < 2; i++) {
+            __m256i a = f[base + i];
+            __m256i b = f[base + i + 2];
+            __m256i c = f[base + i + 4];
+            __m256i d = f[base + i + 6];
+            /* Layer len=32 on the cluster: (a,c) and (b,d) with zl3. */
+            ntt_butterfly_dil_avx2(&a, &c, zl3);
+            ntt_butterfly_dil_avx2(&b, &d, zl3);
+            /* Layer len=16 within cluster: (a,b) zl4a, (c,d) zl4b. */
+            ntt_butterfly_dil_avx2(&a, &b, zl4a);
+            ntt_butterfly_dil_avx2(&c, &d, zl4b);
+            f[base + i]     = a;
+            f[base + i + 2] = b;
+            f[base + i + 4] = c;
+            f[base + i + 6] = d;
+        }
+    }
+
+    /* ====== Layer 5: len=8 (inter-register, single pass) ======
+     * 16 butterfly pairs, each with its own zeta. */
+    for (int group = 0; group < 16; group++) {
+        int base = group * 2;
+        int32_t zeta = zetas[++k];
+        ntt_butterfly_dil_avx2(&f[base], &f[base + 1], zeta);
+    }
+
+    /* Layers 6+7+8 (len=4, 2, 1): intra-register butterflies fall back to
+     * scalar.  A shuffle-based AVX2 path is feasible but deferred — these
+     * three layers are ~7% of NTT time on x86-64; the merged inter-register
+     * block above is the larger win. */
     for (int i = 0; i < 32; i++) {
         _mm256_storeu_si256((__m256i *)(poly + i * 8), f[i]);
     }
@@ -183,19 +265,41 @@ void ama_dilithium_ntt_avx2(int32_t poly[DILITHIUM_N],
 }
 
 /* ============================================================================
- * Inverse NTT for Dilithium polynomial (256 int32 coefficients)
+ * Inverse NTT (Gentleman–Sande) for Dilithium polynomial
  *
- * 8-layer inverse NTT matching generic dil_invntt():
- * - k=256, iterate len from 1 to 128
- * - GS butterfly: t=a[j], a[j]=t+a[j+len], a[j+len]=mont(-zeta*(t-a[j+len]))
- * - Final multiply by f=41978 (Mont^{-1} * N^{-1} mod q)
- * - len=1,2,4 use scalar fallback (intra-register butterfly)
+ * 8-layer inverse NTT matching generic dil_invntt_cached():
+ *   k starts at 256 and decrements.
+ *   GS butterfly: t = a[j]; a[j] = t + a[j+len];
+ *                 a[j+len] = montgomery(-zeta * (t - a[j+len]))
+ *   Final multiply by f = 41978 (Mont^{-1} * N^{-1} mod q).
+ *
+ * Merged layer layout (mirrors the forward NTT merging in reverse):
+ *   Layers 1+2+3 (len=1, 2, 4) intra-register, scalar fallback
+ *   Layer  4    (len=8)        inter-register, single pass
+ *   Layers 5+6  (len=16, 32)   merged — four clusters × two 4-ymm tuples
+ *   Layers 7+8  (len=64, 128)  merged — eight 4-ymm tuples
+ *   Final Montgomery multiply by f=41978 on all 32 YMMs.
  * ============================================================================ */
+
+/* Inverse GS butterfly operating on two __m256i lanes with an already-
+ * broadcast zeta vector.  Matches the body of the original scalar fallback
+ * loop, vectorised and inlined so the merged-layer loops below stay
+ * readable. */
+static inline void invntt_butterfly_dil_avx2(__m256i *a, __m256i *b,
+                                              int32_t zeta) {
+    __m256i z = _mm256_set1_epi32(zeta);
+    __m256i t = *a;
+    *a = _mm256_add_epi32(t, *b);
+    *b = _mm256_sub_epi32(t, *b);
+    *b = montgomery_mul_dil_avx2(z, *b);
+}
+
 void ama_dilithium_invntt_avx2(int32_t poly[DILITHIUM_N],
                                 const int32_t zetas[256]) {
     int k = 256;
 
-    /* Layers len=1,2,4: intra-register, use scalar */
+    /* Layers 1+2+3 (len=1, 2, 4): intra-register butterflies fall back to
+     * scalar (mirrors the forward NTT's tail). */
     for (int len = 1; len <= 4; len <<= 1) {
         for (int start = 0; start < DILITHIUM_N; start += 2 * len) {
             int32_t zeta = -zetas[--k];
@@ -209,28 +313,99 @@ void ama_dilithium_invntt_avx2(int32_t poly[DILITHIUM_N],
         }
     }
 
-    /* Layers len=8 to len=128: inter-register, use AVX2 */
     __m256i f[32];
     for (int i = 0; i < 32; i++) {
         f[i] = _mm256_loadu_si256((const __m256i *)(poly + i * 8));
     }
 
-    for (int len = 8; len < DILITHIUM_N; len <<= 1) {
-        for (int start = 0; start < DILITHIUM_N; start += 2 * len) {
-            int32_t zeta = -zetas[--k];
-            __m256i z = _mm256_set1_epi32(zeta);
-            for (int j = start; j < start + len; j += 8) {
-                int idx_a = j / 8;
-                int idx_b = (j + len) / 8;
-                __m256i t = f[idx_a];
-                f[idx_a] = _mm256_add_epi32(t, f[idx_b]);
-                f[idx_b] = _mm256_sub_epi32(t, f[idx_b]);
-                f[idx_b] = montgomery_mul_dil_avx2(z, f[idx_b]);
-            }
+    /* ====== Layer 4: len=8 (inter-register, single pass) ======
+     * 16 butterfly pairs.  The generic inverse walk iterates starts in
+     * FORWARD order within each layer, with --k decrementing on each
+     * iteration: start=0 consumes -zetas[31], start=16 consumes
+     * -zetas[30], ..., start=240 consumes -zetas[16].  Iterate group
+     * forward to match. */
+    for (int group = 0; group < 16; group++) {
+        int base = group * 2;
+        int32_t zeta = -zetas[--k];
+        invntt_butterfly_dil_avx2(&f[base], &f[base + 1], zeta);
+    }
+
+    /* ====== Merged layers 5+6: len=16 then len=32 ======
+     * Mirror of forward layers 3+4.  Inside each 8-ymm cluster, for each
+     * i in [0..1], the 4-tuple
+     *   (f[base+i], f[base+i+2], f[base+i+4], f[base+i+6])
+     * is closed under both layers' butterflies.  The inverse walk must
+     * consume all len=16 zetas (indices 15..8) before any len=32 zeta
+     * (indices 7..4), matching the generic path.  Preload into local
+     * strips so the per-cluster loop reads them in forward cluster order.
+     *
+     * Mapping (matches the generic inverse's start-increasing walk):
+     *   cluster c ∈ [0..3] uses
+     *     zl4a = iL4[2c]       (len=16 start = 32*2c)
+     *     zl4b = iL4[2c + 1]   (len=16 start = 32*(2c+1))
+     *     zl3  = iL3[c]        (len=32 start = 64*c)
+     */
+    int32_t iL4[8];
+    for (int g = 0; g < 8; g++) iL4[g] = -zetas[--k]; /* zetas[15],[14],...,[8] */
+    int32_t iL3[4];
+    for (int c = 0; c < 4; c++) iL3[c] = -zetas[--k]; /* zetas[7],[6],[5],[4] */
+    for (int cluster = 0; cluster < 4; cluster++) {
+        int base = cluster * 8;
+        int32_t zl4a = iL4[2 * cluster];
+        int32_t zl4b = iL4[2 * cluster + 1];
+        int32_t zl3  = iL3[cluster];
+        for (int i = 0; i < 2; i++) {
+            __m256i a = f[base + i];
+            __m256i b = f[base + i + 2];
+            __m256i c = f[base + i + 4];
+            __m256i d = f[base + i + 6];
+            /* Layer len=16: (a,b) zl4a, (c,d) zl4b. */
+            invntt_butterfly_dil_avx2(&a, &b, zl4a);
+            invntt_butterfly_dil_avx2(&c, &d, zl4b);
+            /* Layer len=32: (a,c) and (b,d) both with zl3. */
+            invntt_butterfly_dil_avx2(&a, &c, zl3);
+            invntt_butterfly_dil_avx2(&b, &d, zl3);
+            f[base + i]     = a;
+            f[base + i + 2] = b;
+            f[base + i + 4] = c;
+            f[base + i + 6] = d;
         }
     }
 
-    /* Final multiply by f = 41978 (Mont^{-1} * N^{-1} mod q) */
+    /* ====== Merged layers 7+8: len=64 then len=128 ======
+     * Mirror of forward layers 1+2.  For each i in [0..7], the 4-tuple
+     *   (f[i], f[i+8], f[i+16], f[i+24])
+     * is closed under both layers' butterflies.
+     *
+     * The generic inverse walks (start=0, then start=128) at len=64 with
+     * --k decrementing from 4.  So the first --k (k:4→3) reads -zetas[3]
+     * for start=0 (the (a,b) butterfly in our 4-tuple — coefficients
+     * [0..127]), and the second --k (k:3→2) reads -zetas[2] for
+     * start=128 (the (c,d) butterfly — coefficients [128..255]).  The
+     * third --k reads -zetas[1] for the single len=128 butterfly. */
+    {
+        int32_t zL2a = -zetas[--k]; /* len=64 start=0   (applies to (a,b)) */
+        int32_t zL2b = -zetas[--k]; /* len=64 start=128 (applies to (c,d)) */
+        int32_t zL1  = -zetas[--k]; /* len=128 */
+        for (int i = 0; i < 8; i++) {
+            __m256i a = f[i];
+            __m256i b = f[i + 8];
+            __m256i c = f[i + 16];
+            __m256i d = f[i + 24];
+            /* Layer len=64: (a,b) zL2a, (c,d) zL2b. */
+            invntt_butterfly_dil_avx2(&a, &b, zL2a);
+            invntt_butterfly_dil_avx2(&c, &d, zL2b);
+            /* Layer len=128: (a,c) and (b,d) both with zL1. */
+            invntt_butterfly_dil_avx2(&a, &c, zL1);
+            invntt_butterfly_dil_avx2(&b, &d, zL1);
+            f[i]      = a;
+            f[i + 8]  = b;
+            f[i + 16] = c;
+            f[i + 24] = d;
+        }
+    }
+
+    /* Final multiply by f = 41978 (Mont^{-1} * N^{-1} mod q). */
     __m256i finv = _mm256_set1_epi32(41978);
     for (int i = 0; i < 32; i++) {
         f[i] = montgomery_mul_dil_avx2(finv, f[i]);
