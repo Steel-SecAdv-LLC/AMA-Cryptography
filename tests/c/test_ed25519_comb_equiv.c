@@ -20,13 +20,13 @@
  * during keygen/sign.
  *
  * Coverage:
- *   - Edge cases (identity, 1, all-nibbles-+7, all-nibbles-+8, alternating).
+ *   - 7 edge cases: identity, scalar=1, all-nibbles-+7, all-nibbles-+8,
+ *     alternating 0xFF/0x00, non-clamped all-0xFF (bit 255 set), and
+ *     non-clamped top-byte-0xFE.  The last two vectors provably exceed
+ *     l and exercise the sc25519_reduce path specifically.
  *   - 1024 clamped scalars (keygen / sign domain).
  *   - 256 unclamped scalars with high bits set (the non-clamped
  *     linearity domain used by FROST binding factors et al.).
- *   - Explicit top-bit-set vector (scalar[31] = 0xFF) to exercise the
- *     sc25519_reduce path and confirm the comb and the wNAF agree on a
- *     scalar that is provably > l.
  *
  * Running this suite complements the RFC 8032 KATs in test_ed25519.c:
  *   - The KATs pin the absolute public key / signature for one seed.

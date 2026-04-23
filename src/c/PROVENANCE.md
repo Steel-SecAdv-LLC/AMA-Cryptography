@@ -222,9 +222,12 @@ The AMA-level wrapper (`ama_ed25519.c`) adds:
 
 Equivalence between the two fixed-base paths (comb vs. the wNAF
 variable-base reference) is continuously verified by
-`tests/c/test_ed25519_comb_equiv.c` on 1024 randomized scalars plus
-five edge-case vectors (identity, scalar=1, all-nibbles-+7,
-all-nibbles-+8, alternating bytes).
+`tests/c/test_ed25519_comb_equiv.c` on 1024 clamped random scalars,
+256 unclamped random scalars, plus seven edge-case vectors (identity,
+scalar=1, all-nibbles-+7, all-nibbles-+8, alternating bytes,
+non-clamped all-0xFF, non-clamped top-byte 0xFE).  The last two
+provably exceed the group order l and exercise the internal
+`sc25519_reduce` path specifically.
 
 **Vendored-code patches** (applied in-tree on top of upstream
 floodyberry/ed25519-donna; searchable by grepping `AMA-PATCH:`):
