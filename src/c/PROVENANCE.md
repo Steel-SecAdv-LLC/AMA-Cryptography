@@ -226,6 +226,13 @@ variable-base reference) is continuously verified by
 five edge-case vectors (identity, scalar=1, all-nibbles-+7,
 all-nibbles-+8, alternating bytes).
 
+**Vendored-code patches** (applied in-tree on top of upstream
+floodyberry/ed25519-donna; searchable by grepping `AMA-PATCH:`):
+
+| File | Change | Reason |
+|------|--------|--------|
+| `vendor/ed25519-donna/ed25519-hash.h` | `ed25519_hash_update` early-return when `inlen == 0` | Upstream unconditionally calls `memcpy(dst, in, want)` even when `want` can be zero.  Passing a NULL `in` with `inlen == 0` is strict-C UB ("null pointer passed as argument 2, which is declared to never be null") and is flagged by UBSan; AMA's API permits `ama_ed25519_sign(..., NULL, 0, ...)` for empty-message signing (RFC 8032 Test Vector 1).  The early-return is a pure no-op for all real behaviour but satisfies the non-null-attribute contract. |
+
 No AES-NI-like hardware instructions exist for Ed25519; all speedups
 are algorithmic (precomputed tables, Karatsuba / fe51 field layout,
 signed-digit comb).

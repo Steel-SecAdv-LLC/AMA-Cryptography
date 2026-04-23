@@ -124,6 +124,18 @@ static void
 ed25519_hash_update(sha512_state *S, const uint8_t *in, size_t inlen) {
 	size_t blocks, want;
 
+	/* AMA-PATCH: early-return for zero-length input.  Strict C requires
+	 * memcpy's source and destination pointers to be non-NULL even when
+	 * n == 0; passing (NULL, 0) through to memcpy is UB and is flagged
+	 * by -fsanitize=undefined (UBSan: "null pointer passed as argument
+	 * 2, which is declared to never be null").  AMA's Ed25519 API
+	 * allows sign/verify of empty messages via ama_ed25519_sign(...,
+	 * NULL, 0, ...), which must traverse this function; short-circuit
+	 * here so the vendored hash reaches neither memcpy nor the block
+	 * loop when nothing was handed in.  Behaviour is unchanged for any
+	 * inlen > 0 call.  See src/c/PROVENANCE.md for the patch log. */
+	if (inlen == 0) return;
+
 	/* handle the previous data */
 	if (S->leftover) {
 		want = (HASH_BLOCK_SIZE - S->leftover);
