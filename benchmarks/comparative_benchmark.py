@@ -178,8 +178,10 @@ class ComparativeBenchmark:
         binary = next((p for p in candidates if p.is_file() and p.stat().st_mode & 0o111), None)
 
         if binary is None:
-            print("  SKIP: benchmark_c_raw binary not found. "
-                  "Build with `cmake --build build --target benchmark_c_raw`.")
+            print(
+                "  SKIP: benchmark_c_raw binary not found. "
+                "Build with `cmake --build build --target benchmark_c_raw`."
+            )
             self.results.append(
                 BenchmarkResult(
                     implementation="AMA Cryptography (Raw C)",
@@ -199,11 +201,17 @@ class ComparativeBenchmark:
             # Harness is fast (~8s total); 60s is a generous ceiling.
             completed = subprocess.run(
                 [str(binary), "--json"],
-                capture_output=True, text=True, timeout=60, check=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=True,
             )
             data = json.loads(completed.stdout)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
-                json.JSONDecodeError) as e:
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            json.JSONDecodeError,
+        ) as e:
             print(f"  SKIP: harness run failed ({type(e).__name__}: {e})")
             self.results.append(
                 BenchmarkResult(
@@ -222,15 +230,15 @@ class ComparativeBenchmark:
         # Map harness operation names to the labels used elsewhere in
         # this script so the comparative-metrics grouping finds them.
         name_map = {
-            "Ed25519 KeyGen":       "Ed25519 KeyGen",
-            "Ed25519 Sign":         "Ed25519 Sign",
-            "Ed25519 Verify":       "Ed25519 Verify",
-            "ML-DSA-65 KeyGen":     "ML-DSA-65 KeyGen",
-            "ML-DSA-65 Sign":       "ML-DSA-65 Sign",
-            "ML-DSA-65 Verify":     "ML-DSA-65 Verify",
-            "ML-KEM-1024 KeyGen":   "ML-KEM-1024 KeyGen",
-            "ML-KEM-1024 Encaps":   "ML-KEM-1024 Encap",
-            "ML-KEM-1024 Decaps":   "ML-KEM-1024 Decap",
+            "Ed25519 KeyGen": "Ed25519 KeyGen",
+            "Ed25519 Sign": "Ed25519 Sign",
+            "Ed25519 Verify": "Ed25519 Verify",
+            "ML-DSA-65 KeyGen": "ML-DSA-65 KeyGen",
+            "ML-DSA-65 Sign": "ML-DSA-65 Sign",
+            "ML-DSA-65 Verify": "ML-DSA-65 Verify",
+            "ML-KEM-1024 KeyGen": "ML-KEM-1024 KeyGen",
+            "ML-KEM-1024 Encaps": "ML-KEM-1024 Encap",
+            "ML-KEM-1024 Decaps": "ML-KEM-1024 Decap",
         }
         for row in data.get("results", []):
             op_src = row.get("operation", "")
@@ -250,8 +258,10 @@ class ComparativeBenchmark:
                     available=True,
                 )
             )
-            print(f"  ✓ {op_dst}: {mean_ms:.4f} ms "
-                  f"({float(row.get('ops_per_sec', 0)):,.0f} ops/sec)")
+            print(
+                f"  ✓ {op_dst}: {mean_ms:.4f} ms "
+                f"({float(row.get('ops_per_sec', 0)):,.0f} ops/sec)"
+            )
 
     def benchmark_ama_cryptography(self):
         """Benchmark AMA Cryptography hybrid implementation"""
