@@ -114,7 +114,10 @@ def _make_entries() -> list[tuple[str, Callable[[], Any]]]:
             # are ever consulted at runtime, so the type-level mismatch
             # is intentional; silence mypy --strict on the call site.
             lambda: lc.create_crypto_package(
-                "dummy-codes", [(1.0, 1.0)], object(), "test-author"  # type: ignore[arg-type]
+                "dummy-codes",
+                [(1.0, 1.0)],
+                object(),  # type: ignore[arg-type]  # KMS stand-in — sentinel fires first (LCT-001)
+                "test-author",
             ),
         ),
         (
@@ -123,7 +126,10 @@ def _make_entries() -> list[tuple[str, Callable[[], Any]]]:
             # ``object()`` stand-in for ``CryptoPackage`` is binding-
             # phase filler, never inspected.
             lambda: lc.verify_crypto_package(
-                "dummy-codes", [(1.0, 1.0)], object(), dummy_bytes  # type: ignore[arg-type]
+                "dummy-codes",
+                [(1.0, 1.0)],
+                object(),  # type: ignore[arg-type]  # CryptoPackage stand-in — sentinel fires first (LCT-002)
+                dummy_bytes,
             ),
         ),
     ]

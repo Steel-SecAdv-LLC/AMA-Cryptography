@@ -124,8 +124,21 @@ class TestArgon2idValidation:
 @skip_no_native
 @pytest.mark.skipif(not pq._ARGON2_NATIVE_AVAILABLE, reason="Argon2id backend not built")
 @pytest.mark.skipif(
-    pq._native_lib is None or not hasattr(pq._native_lib, "ama_argon2id_legacy_verify"),
-    reason="Native library does not export ama_argon2id_legacy_verify (rebuild required)",
+    # The tests in this class exercise both halves of the legacy shim:
+    # ``native_argon2id_legacy`` (derivation, used by ``_legacy_tag`` to
+    # produce reference tags) and ``native_argon2id_legacy_verify``
+    # (constant-time compare).  Skip the whole class unless the native
+    # library exports *both* symbols — a build that exports only one
+    # would make ``_legacy_tag`` raise ``RuntimeError`` and the suite
+    # fail with an error that looks like a test bug rather than a
+    # missing-feature skip.
+    pq._native_lib is None
+    or not hasattr(pq._native_lib, "ama_argon2id_legacy_verify")
+    or not hasattr(pq._native_lib, "ama_argon2id_legacy"),
+    reason=(
+        "Native library does not export both ama_argon2id_legacy and "
+        "ama_argon2id_legacy_verify (rebuild required)"
+    ),
 )
 class TestArgon2idLegacyVerify:
     _SALT = b"legacy-migration"

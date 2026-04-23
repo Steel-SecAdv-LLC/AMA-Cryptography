@@ -635,14 +635,27 @@ class SecureBuffer:
             # disk between ``secure_munlock`` returning and
             # ``secure_memzero`` running, leaking secret material to
             # swapfile — a serious defence-in-depth regression.
-            secure_memzero(self._data)
-            if self._locked:
-                try:
-                    secure_munlock(self._data)
-                except (SecureMemoryError, NotImplementedError, OSError) as exc:
-                    logger.warning("SecureBuffer: munlock failed: %s", exc)
-                self._locked = False
-            self._data = None
+            #
+            # ``try/finally`` around the wipe is equally critical: if
+            # ``secure_memzero`` raises ``SecureMemoryError`` (Python
+            # fallback path, post-wipe verification failed), we still
+            # MUST run ``secure_munlock`` and reset ``_locked`` / ``_data``
+            # so the caller's process does not leak an mlock pin or
+            # leave the ``SecureBuffer`` instance in a half-cleaned
+            # state.  The wipe error itself is re-raised by the
+            # ``finally`` implicit re-raise so callers still learn the
+            # wipe failed (the documented contract above).
+            data = self._data
+            try:
+                secure_memzero(data)
+            finally:
+                if self._locked:
+                    try:
+                        secure_munlock(data)
+                    except (SecureMemoryError, NotImplementedError, OSError) as exc:
+                        logger.warning("SecureBuffer: munlock failed: %s", exc)
+                    self._locked = False
+                self._data = None
 
         self._entered = False
         return None  # Don't suppress exceptions
@@ -694,12 +707,21 @@ def secure_buffer(size: int, lock: bool = True) -> Generator[bytearray, None, No
         # munlock.  See ``SecureBuffer.__exit__`` for the full rationale —
         # reversing the order permits the kernel to page sensitive data
         # to swap between munlock returning and memzero running.
-        secure_memzero(buf)
-        if did_lock:
-            try:
-                secure_munlock(buf)
-            except (SecureMemoryError, NotImplementedError, OSError) as exc:
-                logger.warning("secure_buffer: munlock failed: %s", exc)
+        #
+        # ``try/finally`` around the wipe is equally critical here: if
+        # ``secure_memzero`` raises, we still need to release the mlock
+        # pin so the process does not leak locked pages on the way out.
+        # The wipe error is re-raised by the ``finally`` implicit
+        # re-raise so callers learn about the post-wipe verification
+        # failure (same contract as ``SecureBuffer.__exit__``).
+        try:
+            secure_memzero(buf)
+        finally:
+            if did_lock:
+                try:
+                    secure_munlock(buf)
+                except (SecureMemoryError, NotImplementedError, OSError) as exc:
+                    logger.warning("secure_buffer: munlock failed: %s", exc)
 
 
 def _detect_mlock_available() -> bool:
