@@ -167,15 +167,30 @@ class ComparativeBenchmark:
 
         import subprocess
 
-        # Search common locations for the harness binary.
+        # Search common locations for the harness binary.  On Windows the
+        # CMake target produces benchmark_c_raw.exe in Release/Debug
+        # subdirectories, and the Unix-style executable-bit check (`st_mode
+        # & 0o111`) is not meaningful — os.access(path, os.X_OK) gives the
+        # right answer on both platforms (ACL-checked on Windows, mode-
+        # checked on POSIX).
+        import os
+
         repo_root = Path(__file__).parent.parent
-        candidates = [
-            repo_root / "build" / "bin" / "benchmark_c_raw",
-            repo_root / "benchmarks" / "benchmark_c_raw",
-            repo_root / "benchmarks" / "build" / "benchmark_c_raw",
-            Path("./benchmark_c_raw"),
+        names = ("benchmark_c_raw", "benchmark_c_raw.exe")
+        search_roots = [
+            repo_root / "build" / "bin",
+            repo_root / "build" / "bin" / "Release",
+            repo_root / "build" / "bin" / "Debug",
+            repo_root / "build",
+            repo_root / "benchmarks",
+            repo_root / "benchmarks" / "build",
+            Path("."),
         ]
-        binary = next((p for p in candidates if p.is_file() and p.stat().st_mode & 0o111), None)
+        candidates = [root / name for root in search_roots for name in names]
+        binary = next(
+            (p for p in candidates if p.is_file() and os.access(p, os.X_OK)),
+            None,
+        )
 
         if binary is None:
             print(
