@@ -92,14 +92,25 @@ def _make_entries() -> list[tuple[str, Callable[[], Any]]]:
             lambda: lc.create_ethical_hkdf_context(dummy_bytes),
         ),
         ("derive_keys", lambda: lc.derive_keys(dummy_bytes, dummy_bytes)),
+        # The next three entries need enough positional args to pass
+        # Python's argument-binding phase so the sentinel fires from
+        # inside the function body.  Argument *values* are irrelevant
+        # because ``_enforce_invariant7_lc()`` runs before any real
+        # validation — ``TypeError`` during binding would short-circuit
+        # the sentinel and make ``pytest.raises(_InvariantSentinelError)``
+        # fail with the wrong exception class (PR #258 review thread:
+        # BUG_pr-review-job-246eb23eb389465884aeef12845cb8a7_0001).
         (
             "generate_key_management_system",
-            lambda: lc.generate_key_management_system(),
+            lambda: lc.generate_key_management_system("test-author"),
         ),
-        ("create_crypto_package", lambda: lc.create_crypto_package(dummy_bytes)),
+        (
+            "create_crypto_package",
+            lambda: lc.create_crypto_package("dummy-codes", [(1.0, 1.0)], object(), "test-author"),
+        ),
         (
             "verify_crypto_package",
-            lambda: lc.verify_crypto_package(dummy_bytes, object()),
+            lambda: lc.verify_crypto_package("dummy-codes", [(1.0, 1.0)], object(), dummy_bytes),
         ),
     ]
     return entries
