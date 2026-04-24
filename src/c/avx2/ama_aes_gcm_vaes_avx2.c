@@ -362,7 +362,19 @@ static inline __m128i ghash_aad(const uint8_t *aad, size_t aad_len, __m128i H) {
  *
  * Signature matches ama_aes256_gcm_encrypt_avx2 so it can be plugged
  * into ama_dispatch_table.aes_gcm_encrypt one-for-one.
+ *
+ * The prototype is re-declared here (mirroring the extern in
+ * src/c/dispatch/ama_dispatch.c) so the -Wmissing-prototypes lint
+ * carried by the project CFLAGS sees a visible declaration in this
+ * TU.  Keeping it inline to the source file avoids a new header for
+ * a symbol that has no non-dispatch caller.
  * ============================================================================ */
+void ama_aes256_gcm_encrypt_vaes_avx2(
+    const uint8_t *plaintext, size_t plaintext_len,
+    const uint8_t *aad, size_t aad_len,
+    const uint8_t key[32], const uint8_t nonce[12],
+    uint8_t *ciphertext, uint8_t tag[16]);
+
 void ama_aes256_gcm_encrypt_vaes_avx2(
     const uint8_t *plaintext, size_t plaintext_len,
     const uint8_t *aad, size_t aad_len,
@@ -482,7 +494,16 @@ void ama_aes256_gcm_encrypt_vaes_avx2(
 
 /* ============================================================================
  * Public entry — VAES AES-256-GCM decrypt with constant-time tag verify.
+ *
+ * Prototype mirrored inline for the same -Wmissing-prototypes reason
+ * documented at the encrypt entry above.
  * ============================================================================ */
+ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
+    const uint8_t *ciphertext, size_t ciphertext_len,
+    const uint8_t *aad, size_t aad_len,
+    const uint8_t key[32], const uint8_t nonce[12],
+    const uint8_t tag[16], uint8_t *plaintext);
+
 ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
     const uint8_t *ciphertext, size_t ciphertext_len,
     const uint8_t *aad, size_t aad_len,
