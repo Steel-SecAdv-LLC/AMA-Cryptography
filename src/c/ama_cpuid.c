@@ -86,6 +86,49 @@ static int has_aes_ni_cached = 0;
 static int has_pclmulqdq_cached = 0;
 static int has_avx2_cached = 0;
 static int has_avx512f_cached = 0;
+/* PR A (2026-04) — VAES AES-GCM YMM dispatch.
+ *
+ * VAES (CPUID.(EAX=7,ECX=0):ECX[9]) and VPCLMULQDQ (ECX[10]) are
+ * independent of AVX-512.  Their VEX-encoded YMM forms only need AVX
+ * OS save-area state (XCR0 bits 1 + 2 = SSE + AVX), *not* the AVX-512
+ * opmask / ZMM bits.  Targeting YMM keeps the kernel off the
+ * Skylake-SP / Cascade Lake ZMM downclock curve while still covering
+ * every Ice Lake+ / Alder Lake+ / Zen 3+ host.
+ *
+ * These caches are populated from the *same* detect_x86_features()
+ * one-shot invocation as the legacy fields above, gated by the
+ * existing `cpuid_once` pthread_once / InitOnceExecuteOnce primitive.
+ * INVARIANT-15 unchanged: same once-primitive, no reordering, no new
+ * call sites in dispatch_init_internal(). */
+static int has_vaes_cached = 0;
+static int has_vpclmulqdq_cached = 0;
+static int has_avx_osxsave_cached = 0;
+
+/* Read XCR0 via XGETBV and confirm the OS has enabled SSE + AVX state.
+ *
+ * CPUID.(EAX=1):ECX[27] (OSXSAVE) gates whether XGETBV itself is safe
+ * to issue — without OSXSAVE the instruction #UDs.  XCR0 bit 1 = SSE
+ * (XMM), bit 2 = AVX (YMM Hi128).  Both must be enabled before we may
+ * legally execute a VEX-encoded YMM instruction; otherwise the first
+ * VAES / VPCLMULQDQ opcode will fault inside a VM whose host kernel
+ * has not enabled AVX state.  This is the same gate the Linux kernel
+ * uses (arch/x86/kernel/fpu/xstate.c) and is intentionally NOT the
+ * AVX-512 gate — we never read XCR0 bits 5/6/7. */
+static int xcr0_has_avx_state(void) {
+#ifdef _MSC_VER
+    /* _xgetbv(0) returns XCR0 */
+    unsigned long long xcr0 = _xgetbv(0);
+#else
+    unsigned int eax_xcr, edx_xcr;
+    __asm__ volatile (".byte 0x0f, 0x01, 0xd0"
+                      : "=a"(eax_xcr), "=d"(edx_xcr)
+                      : "c"(0));
+    unsigned long long xcr0 =
+        ((unsigned long long)edx_xcr << 32) | (unsigned long long)eax_xcr;
+#endif
+    const unsigned long long avx_bits = (1ULL << 1) | (1ULL << 2);
+    return (xcr0 & avx_bits) == avx_bits;
+}
 
 static void detect_x86_features(void) {
 #ifdef _MSC_VER
@@ -93,21 +136,39 @@ static void detect_x86_features(void) {
     __cpuid(info, 1);
     has_aes_ni_cached = (info[2] >> 25) & 1;
     has_pclmulqdq_cached = (info[2] >> 1) & 1;
-    /* Leaf 7, sub-leaf 0: AVX2 (EBX[5]) and AVX-512F (EBX[16]) */
+    int osxsave = (info[2] >> 27) & 1;
+    /* Leaf 7, sub-leaf 0:
+     *   EBX bit 5  — AVX2
+     *   EBX bit 16 — AVX-512F
+     *   ECX bit 9  — VAES         (PR A — independent of AVX-512)
+     *   ECX bit 10 — VPCLMULQDQ   (PR A — independent of AVX-512) */
     __cpuidex(info, 7, 0);
-    has_avx2_cached = (info[1] >> 5) & 1;
-    has_avx512f_cached = (info[1] >> 16) & 1;
+    has_avx2_cached       = (info[1] >> 5)  & 1;
+    has_avx512f_cached    = (info[1] >> 16) & 1;
+    has_vaes_cached       = (info[2] >> 9)  & 1;
+    has_vpclmulqdq_cached = (info[2] >> 10) & 1;
+    has_avx_osxsave_cached = osxsave ? xcr0_has_avx_state() : 0;
 #else
     unsigned int eax, ebx, ecx, edx;
+    int osxsave = 0;
     if (__get_cpuid(1, &eax, &ebx, &ecx, &edx)) {
-        has_aes_ni_cached = (ecx >> 25) & 1;
-        has_pclmulqdq_cached = (ecx >> 1) & 1;
+        has_aes_ni_cached    = (ecx >> 25) & 1;
+        has_pclmulqdq_cached = (ecx >> 1)  & 1;
+        osxsave              = (ecx >> 27) & 1;
     }
-    /* CPUID leaf 7, sub-leaf 0: AVX2 (EBX bit 5), AVX-512F (EBX bit 16) */
+    /* CPUID leaf 7, sub-leaf 0:
+     *   EBX bit 5  — AVX2
+     *   EBX bit 16 — AVX-512F
+     *   ECX bit 9  — VAES         (PR A — independent of AVX-512)
+     *   ECX bit 10 — VPCLMULQDQ   (PR A — independent of AVX-512)
+     * Only read XCR0 when OSXSAVE is set; otherwise XGETBV #UDs. */
     if (__get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx)) {
-        has_avx2_cached = (ebx >> 5) & 1;
-        has_avx512f_cached = (ebx >> 16) & 1;
+        has_avx2_cached       = (ebx >> 5)  & 1;
+        has_avx512f_cached    = (ebx >> 16) & 1;
+        has_vaes_cached       = (ecx >> 9)  & 1;
+        has_vpclmulqdq_cached = (ecx >> 10) & 1;
     }
+    has_avx_osxsave_cached = osxsave ? xcr0_has_avx_state() : 0;
 #endif
 }
 
@@ -129,6 +190,32 @@ int ama_has_avx2(void) {
 int ama_has_avx512f(void) {
     AMA_CALL_ONCE(cpuid_once, detect_x86_features);
     return has_avx512f_cached;
+}
+
+int ama_has_vaes(void) {
+    AMA_CALL_ONCE(cpuid_once, detect_x86_features);
+    /* CPUID bit alone is insufficient — the OS must have enabled AVX
+     * state in XCR0, otherwise the first VEX-encoded YMM VAES opcode
+     * (vaesenc ymm) would #UD inside a VM whose host kernel did not
+     * advertise AVX state.  AVX-512 state is intentionally NOT
+     * required: the PR A path stays on YMM only. */
+    return has_vaes_cached && has_avx_osxsave_cached;
+}
+
+int ama_has_vpclmulqdq(void) {
+    AMA_CALL_ONCE(cpuid_once, detect_x86_features);
+    return has_vpclmulqdq_cached && has_avx_osxsave_cached;
+}
+
+int ama_cpuid_has_vaes_aesgcm(void) {
+    /* Each getter shares pthread_once via cpuid_once, so the underlying
+     * detect_x86_features() probe runs exactly once.  AES-NI is still
+     * required: AESKEYGENASSIST is a 128-bit AES-NI opcode that runs
+     * the AES-256 key schedule — VAES only provides the rounds. */
+    return ama_has_avx2()
+        && ama_has_vaes()
+        && ama_has_vpclmulqdq()
+        && ama_has_aes_ni();
 }
 
 int ama_has_arm_aes(void) { return 0; }
@@ -212,6 +299,9 @@ int ama_has_aes_ni(void) { return 0; }
 int ama_has_pclmulqdq(void) { return 0; }
 int ama_has_avx2(void) { return 0; }
 int ama_has_avx512f(void) { return 0; }
+int ama_has_vaes(void) { return 0; }
+int ama_has_vpclmulqdq(void) { return 0; }
+int ama_cpuid_has_vaes_aesgcm(void) { return 0; }
 
 int ama_has_arm_aes(void) {
     AMA_CALL_ONCE(arm_once, detect_arm_features);
@@ -243,6 +333,9 @@ int ama_has_aes_ni(void) { return 0; }
 int ama_has_pclmulqdq(void) { return 0; }
 int ama_has_avx2(void) { return 0; }
 int ama_has_avx512f(void) { return 0; }
+int ama_has_vaes(void) { return 0; }
+int ama_has_vpclmulqdq(void) { return 0; }
+int ama_cpuid_has_vaes_aesgcm(void) { return 0; }
 int ama_has_arm_aes(void) { return 0; }
 int ama_has_arm_pmull(void) { return 0; }
 int ama_has_arm_neon(void) { return 0; }
