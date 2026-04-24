@@ -92,13 +92,22 @@ typedef int ama_aes_gcm_vaes_avx2_msvc_skipped;
  * ordering.  Per the Intel whitepaper, all GHASH operands (H, data
  * blocks, accumulator output) must be byte-swapped when crossing the
  * GCM <-> PCLMULQDQ domain boundary.
+ *
+ * The shuffle masks are declared as file-scope `static const __m{128,256}i`
+ * via a typed union so the compiler treats them as a single .rodata
+ * constant per width.  This makes the `vpshufb` operand a hoist-able
+ * RIP-relative load instead of an unguaranteed loop-invariant move from
+ * an `uint8_t` array (Copilot review #3140468406 / #3140468448).
  * ============================================================================ */
-static const uint8_t bswap_mask128[16] = {
-    15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0
+static const union {
+    uint8_t bytes[16];
+    __m128i v;
+} bswap_mask128 = {
+    .bytes = { 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0 }
 };
 
 static inline __m128i bswap128(__m128i v) {
-    return _mm_shuffle_epi8(v, _mm_loadu_si128((const __m128i *)bswap_mask128));
+    return _mm_shuffle_epi8(v, bswap_mask128.v);
 }
 
 /* ============================================================================
@@ -285,13 +294,18 @@ static inline __m128i ghash_mul_full(__m128i a_gcm, __m128i b_gcm) {
  * 57/62/63 and 1/2/7 are intrinsically scalar across the 128-bit
  * polynomial, so widening the reduction past XMM yields no benefit.
  * ============================================================================ */
-static const uint8_t bswap_mask256_init[32] = {
-    15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0,
-    15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0
+static const union {
+    uint8_t bytes[32];
+    __m256i v;
+} bswap_mask256 = {
+    .bytes = {
+        15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0,
+        15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0
+    }
 };
 
 static inline __m256i bswap256(__m256i v) {
-    return _mm256_shuffle_epi8(v, _mm256_loadu_si256((const __m256i *)bswap_mask256_init));
+    return _mm256_shuffle_epi8(v, bswap_mask256.v);
 }
 
 static inline __m256i pack_pair_ymm(__m128i lane0, __m128i lane1) {

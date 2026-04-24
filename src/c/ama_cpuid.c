@@ -115,16 +115,43 @@ static int has_avx_osxsave_cached = 0;
  * uses (arch/x86/kernel/fpu/xstate.c) and is intentionally NOT the
  * AVX-512 gate — we never read XCR0 bits 5/6/7. */
 static int xcr0_has_avx_state(void) {
-#ifdef _MSC_VER
-    /* _xgetbv(0) returns XCR0 */
-    unsigned long long xcr0 = _xgetbv(0);
+    /* Prefer the compiler-provided XGETBV intrinsic when the compiler can
+     * actually emit it — it's easier to audit than a raw .byte sequence
+     * (Copilot review #3140468467).  Fall back to inline asm when the
+     * intrinsic is unavailable for the TU's compile flags.
+     *
+     * Constraints that drive the gating:
+     *   - MSVC's _xgetbv(0) is unconditional — always available, always
+     *     emits the opcode inline.
+     *   - GCC/Clang's __builtin_ia32_xgetbv requires the XSAVE feature
+     *     to be enabled at compile time (e.g. via -mxsave or any
+     *     -march=* that implies it; AVX2 implies XSAVE so AVX2-compiled
+     *     TUs get __XSAVE__ for free).  Without it the builtin lowers
+     *     to an external libgcc symbol that fails to link.
+     *   - This TU (ama_cpuid.c) is intentionally compiled for the
+     *     lowest common denominator — we cannot require -mxsave, since
+     *     legacy harnesses (tools/constant_time/Makefile) compile with
+     *     plain `-O2` and would link-fail on the builtin.
+     *
+     * Strategy: use the intrinsic when __XSAVE__ is defined (CMake
+     * AVX2 build sets this transitively via -mavx2), otherwise the raw
+     * .byte sequence — same XGETBV opcode, no compile-time feature
+     * dependency, so the legacy dudect Makefile keeps building. */
+    unsigned long long xcr0;
+#if defined(_MSC_VER)
+    xcr0 = _xgetbv(0);
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__XSAVE__)
+    xcr0 = (unsigned long long)__builtin_ia32_xgetbv(0);
 #else
+    /* Fallback: raw XGETBV opcode (.byte 0f 01 d0).  Same instruction
+     * the intrinsic emits; spelled in machine code so the assembler
+     * doesn't need to recognise the `xgetbv` mnemonic and the linker
+     * doesn't need libgcc's __xgetbv stub. */
     unsigned int eax_xcr, edx_xcr;
     __asm__ volatile (".byte 0x0f, 0x01, 0xd0"
                       : "=a"(eax_xcr), "=d"(edx_xcr)
                       : "c"(0));
-    unsigned long long xcr0 =
-        ((unsigned long long)edx_xcr << 32) | (unsigned long long)eax_xcr;
+    xcr0 = ((unsigned long long)edx_xcr << 32) | (unsigned long long)eax_xcr;
 #endif
     const unsigned long long avx_bits = (1ULL << 1) | (1ULL << 2);
     return (xcr0 & avx_bits) == avx_bits;
