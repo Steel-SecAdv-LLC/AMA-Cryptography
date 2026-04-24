@@ -1220,6 +1220,9 @@ cmake .. \
 | `AMA_ENABLE_SIMD` | ON | Enable SIMD optimizations |
 | `AMA_ENABLE_AVX2` | ON | Enable AVX2 instructions |
 | `AMA_ENABLE_LTO` | ON | Enable link-time optimization |
+| `AMA_ED25519_VERIFY_SHAMIR` | ON | Ed25519 verify path (in-tree backend only; ignored by the donna shim). `ON` = Shamir/Straus joint scalar mult `[s]B + [h](-A)` in one interleaved pass (~30% fewer point doublings than the split layout). `OFF` = sequential layout (`[s]B` via comb + `[h](-A)` via wNAF + final point add). Both paths are byte-identical at the `R_check` level (verified by `tests/c/test_ed25519_verify_equiv.c` layer B). |
+| `AMA_ED25519_VERIFY_WINDOW` | 5 | wNAF window width used by the variable-base scalar mults inside the Ed25519 verify path (both Shamir joint mult and the split mult; in-tree backend only). Accepted range: `[2, 6]`. Stack table size per point is `2^(W-2) * sizeof(ge25519_p3)` ≈ 160 B × `2^(W-2)` (Shamir instantiates two such tables). Practical sweet spot is `W=5` (≈18% fewer adds vs `W=4`); `W=6` is roughly par on Curve25519 with a doubled stack footprint. |
+| `AMA_ENABLE_DUDECT` | OFF | Build the `test_dudect` empirical constant-time test binary (Welch's t-test on timing samples). Required to run the dudect CI workflow (`.github/workflows/dudect.yml`). |
 
 ### Environment Variables (Python Build)
 

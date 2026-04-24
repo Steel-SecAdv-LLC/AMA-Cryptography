@@ -276,6 +276,20 @@ static bench_result_t bench_ed25519_sign(int iters, int warmup) {
     return compute_stats("Ed25519 Sign", g_samples, iters);
 }
 
+/* Ed25519 verify, end-to-end: SHA-512(R||A||M), point decompression,
+ * and the verify scalar-mult.  The reported number is what protocol
+ * stacks (TLS cert chains, Noise handshakes, MLS Welcome/Commit) see
+ * per signature check.
+ *
+ * Backend-dependent interpretation:
+ *   - In-tree C backend (AMA_ED25519_ASSEMBLY=OFF): the scalar-mult
+ *     path is selected by the compile-time gates AMA_ED25519_VERIFY_SHAMIR
+ *     (default 1 — Shamir/Straus joint layout) and AMA_ED25519_VERIFY_WINDOW
+ *     (default 5 — wNAF window width).
+ *   - Donna shim backend (AMA_ED25519_ASSEMBLY=ON, auto-enabled on MSVC
+ *     x64): those gates are ignored; the shim uses its own vendored
+ *     scalar-mult and wNAF width.  Toggling the gates at CMake-time has
+ *     no effect on this benchmark's numbers on shim builds. */
 static bench_result_t bench_ed25519_verify(int iters, int warmup) {
     uint8_t pk[32], sk[64], sig[64];
     const uint8_t msg[] = "Benchmark message for Ed25519 sign/verify test 0123456789ABCDEF";
@@ -294,6 +308,68 @@ static bench_result_t bench_ed25519_verify(int iters, int warmup) {
         g_samples[i] = now_ns() - t0;
     }
     return compute_stats("Ed25519 Verify", g_samples, iters);
+}
+
+/* Ed25519 double-scalarmult [s1]P1 + [s2]P2 in isolation.
+ *
+ * Times ama_ed25519_double_scalarmult_public() without the surrounding
+ * verify overhead (no SHA-512 of (R||A||M), no extra decompressions).
+ * Interpretation is backend-dependent:
+ *
+ *   - In-tree C backend (AMA_ED25519_ASSEMBLY=OFF): measures the
+ *     Shamir/Straus joint pass that the verify path uses.  This is the
+ *     relevant microbenchmark for AMA_ED25519_VERIFY_WINDOW tuning —
+ *     comparing results across builds with W=4/5/6 isolates the pure
+ *     scalar-mult cost from the SHA-512 noise that dominates whole-
+ *     verify timings on short messages.
+ *   - Donna shim backend (AMA_ED25519_ASSEMBLY=ON): the public API is
+ *     implemented as two separate scalar multiplications plus one
+ *     point add, so this bench does NOT isolate the in-tree Shamir
+ *     path, and AMA_ED25519_VERIFY_WINDOW has no effect on the
+ *     measured code.
+ *
+ * Setup uses two pseudo-random valid Ed25519 points (public keys from
+ * two derived keypairs) and the s/h halves of a real signature for
+ * scalars, so the input shape closely matches the verify call site. */
+static bench_result_t bench_ed25519_double_scalarmult(int iters, int warmup) {
+    uint8_t pk1[32], pk2[32], sk1[64], sk2[64], sig[64], h[64];
+    const uint8_t msg[] = "Benchmark message for Ed25519 sign/verify test 0123456789ABCDEF";
+    size_t msg_len = sizeof(msg) - 1;
+
+    fill_random(sk1, 32);
+    ama_ed25519_keypair(pk1, sk1);
+    fill_random(sk2, 32);
+    ama_ed25519_keypair(pk2, sk2);
+    ama_ed25519_sign(sig, msg, msg_len, sk1);
+
+    /* Build a verify-shaped second scalar: h = SHA-512(R || A || M)
+     * reduced mod l, exactly what ama_ed25519_verify computes
+     * internally.  This keeps the wNAF expansion realistic.  Size
+     * hbuf from sizeof(msg) so editing the benchmark message cannot
+     * silently overflow this buffer (sizeof includes the trailing
+     * NUL, so we have one extra byte of headroom — harmless). */
+    uint8_t hbuf[32 + 32 + sizeof(msg)];
+    memcpy(hbuf, sig, 32);
+    memcpy(hbuf + 32, pk1, 32);
+    memcpy(hbuf + 64, msg, msg_len);
+    ama_ed25519_sha512(hbuf, 64 + msg_len, h);
+    /* sc_reduce works on a 64-byte buffer in place; result lives in h[0..31]. */
+    ama_ed25519_sc_reduce(h);
+
+    /* s1 = signature s-half (already < l); s2 = h (already reduced). */
+    const uint8_t *s1 = sig + 32;
+    const uint8_t *s2 = h;
+
+    uint8_t out[32];
+    for (int i = 0; i < warmup; i++)
+        ama_ed25519_double_scalarmult_public(out, s1, pk1, s2, pk2);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        ama_ed25519_double_scalarmult_public(out, s1, pk1, s2, pk2);
+        g_samples[i] = now_ns() - t0;
+    }
+    return compute_stats("Ed25519 Double-ScalarMult", g_samples, iters);
 }
 
 /* --- ML-DSA-65 (Dilithium) --- */
@@ -780,6 +856,7 @@ int main(int argc, char **argv) {
     results[n++] = bench_ed25519_keygen(iters_med, warmup);
     results[n++] = bench_ed25519_sign(iters_med, warmup);
     results[n++] = bench_ed25519_verify(iters_med, warmup);
+    results[n++] = bench_ed25519_double_scalarmult(iters_med, warmup);
 
     /* --- X25519 --- */
     results[n++] = bench_x25519_keygen(iters_med, warmup);

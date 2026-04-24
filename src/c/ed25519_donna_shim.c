@@ -248,6 +248,45 @@ AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
     return AMA_SUCCESS;
 }
 
+/* Joint variable-time double-base scalar mult: [s1]P1 + [s2]P2.
+ * NOT constant-time — both scalars MUST be PUBLIC.
+ *
+ * donna's ge25519_double_scalarmult_vartime is hardcoded to compute
+ * `s1*P + s2*B` (B is the basepoint), so for the generic two-arbitrary-
+ * point form we do two single-base scalarmults and a final point add.
+ * This is the donna-backend equivalent of the in-tree Shamir routine
+ * exposed for the same test/bench purpose — see the in-tree definition
+ * in src/c/ama_ed25519.c for the API contract. */
+AMA_API ama_error_t ama_ed25519_double_scalarmult_public(
+    uint8_t result[32],
+    const uint8_t s1[32], const uint8_t P1[32],
+    const uint8_t s2[32], const uint8_t P2[32]) {
+    ge25519 ALIGN(16) P1u, P2u, R1, R2, R;
+    bignum256modm e1, e2, zero = {0};
+    ge25519_p1p1 ALIGN(16) sum;
+
+    if (!result || !s1 || !P1 || !s2 || !P2) return AMA_ERROR_INVALID_PARAM;
+    if (!ge25519_unpack_negative_vartime(&P1u, P1)) return AMA_ERROR_INVALID_PARAM;
+    curve25519_neg(P1u.x, P1u.x);
+    curve25519_neg(P1u.t, P1u.t);
+    if (!ge25519_unpack_negative_vartime(&P2u, P2)) return AMA_ERROR_INVALID_PARAM;
+    curve25519_neg(P2u.x, P2u.x);
+    curve25519_neg(P2u.t, P2u.t);
+
+    expand256_modm(e1, s1, 32);
+    expand256_modm(e2, s2, 32);
+
+    /* R1 = s1*P1, R2 = s2*P2 (each via donna's existing double-mult
+     * with a zero basepoint scalar). */
+    ge25519_double_scalarmult_vartime(&R1, &P1u, e1, zero);
+    ge25519_double_scalarmult_vartime(&R2, &P2u, e2, zero);
+
+    ge25519_add_p1p1(&sum, &R1, &R2);
+    ge25519_p1p1_to_full(&R, &sum);
+    ge25519_pack(result, &R);
+    return AMA_SUCCESS;
+}
+
 AMA_API void ama_ed25519_sc_reduce(uint8_t s[64]) {
     bignum256modm m;
     expand256_modm(m, s, 64);

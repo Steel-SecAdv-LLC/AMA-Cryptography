@@ -279,6 +279,7 @@ Tracked ignores:
 | CVE | Package | Reason | Remove when |
 |-----|---------|--------|-------------|
 | CVE-2026-4539 | Pygments (transitive via rich/bandit) | ReDoS in AdlLexer — dev-only, local access, not used at runtime | Pygments ships a fix (>2.20.0) or the transitive dependency is dropped |
+| CVE-2026-3219 | pip (build-time tool) | pip itself — build-time installer, not a runtime cryptographic dependency; no fix version published upstream | Upstream ships a pip release with a fix |
 
 > **Review cadence:** Re-evaluate all tracked CVE ignores on the first of each
 > quarter or when Dependabot bumps the affected package, whichever comes first.

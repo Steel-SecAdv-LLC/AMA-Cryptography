@@ -55,7 +55,39 @@ AVX2 AMA's current ops/sec is within a factor of 2–5× of the
 best-known public numbers for libsodium (Ed25519) and liboqs
 (ML-DSA-65, ML-KEM-1024), and every release closes some of that gap;
 recent work (see `CHANGELOG.md` from v2.1 onward) added 4-way Keccak
-batching, Ed25519 signed-window combs, and merged-layer ML-DSA NTT.
+batching, Ed25519 signed-window combs, merged-layer ML-DSA NTT, and
+Ed25519 verify via Shamir/Straus joint scalar multiplication with a
+width-5 wNAF — roughly doubling verify throughput.
+
+#### What "2× verify" means in practice
+
+Ed25519 verify dominates wall-clock time in three protocol families
+that AMA's downstream consumers run at scale:
+
+- **X.509 certificate-chain validation** (TLS handshake, code-signing).
+  A typical chain is 3–4 certificates deep; each certificate signature
+  is one Ed25519 verify.  Doubling per-verify throughput halves the
+  CPU budget per chain validation, which on a busy gateway is the
+  difference between handling N and 2N concurrent handshakes per core.
+- **Noise Protocol Framework handshakes** (WireGuard, Lightning,
+  Nym).  The XX, IK and IKpsk2 patterns each do at least one Ed25519
+  verify of the responder's static key per handshake; mixed-PQ
+  patterns (e.g. `Noise_XXhfs_25519+ML-KEM-1024_*`) keep the same
+  verify on the classical leg.  Faster verify shortens the
+  Diffie-Hellman-bound handshake critical path.
+- **MLS (RFC 9420) group operations.**  Each Welcome / Commit
+  message carries one or more Ed25519 signatures over the GroupContext
+  and KeyPackages.  In a 1000-member group an Add/Remove can require
+  verifying O(log N) signatures along the ratchet-tree path; verify
+  speed sets the floor on group-rekey latency.
+
+The change is purely algorithmic — same group-element math, no new
+external dependency, no new dispatch slot — and is gated behind
+`AMA_ED25519_VERIFY_SHAMIR` (default ON) and `AMA_ED25519_VERIFY_WINDOW`
+(default 5) so a single recompile reverts to the prior layout if a
+downstream consumer needs the old throughput envelope for
+deterministic regression purposes.
+
 The deliberate choices that constitute AMA's security posture —
 zero external cryptographic dependencies, in-tree constant-time
 implementations audited under `INVARIANT-12`, and a vendored

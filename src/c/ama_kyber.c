@@ -143,8 +143,34 @@ static void polyvec_reduce(polyvec* r) {
     }
 }
 
-/**
- * Inner product of two polynomial vectors in NTT domain
+/* polyvec_basemul_acc: r = sum_{i=0..K-1} basemul(a[i], b[i]).
+ *
+ * Reduction-pairing / coefficient-range audit:
+ *
+ *   (This is an arithmetic-range correctness note, NOT an INVARIANT-12
+ *   constant-time claim — the ranges below are public, not derived from
+ *   secret material.)
+ *
+ *   The trailing poly_reduce(r) (Barrett) is load-bearing and CANNOT be
+ *   removed.  After accumulating K=4 basemul outputs, each in (-2q, 2q)
+ *   (basemul sums two montgomery_reduce outputs each in (-q, q)), the
+ *   running sum is in (-8q, 8q) ≈ (-26632, 26632) — still fitting
+ *   int16_t but outside the [-q/2, q/2] domain that poly_tomont /
+ *   poly_invntt / polyvec_tobytes expect.  Removing it would silently
+ *   corrupt NTT-domain coefficients and would be detected by the KAT
+ *   suite, but only after producing wrong ciphertexts on encaps.
+ *
+ *   Similar audit results in the generic C path:
+ *     - poly_invntt's final montgomery_reduce(f * x) is the only
+ *       reduction; output is in (-q, q), exactly what the callers
+ *       (poly_add, poly_sub, coeff_normalize) tolerate.  No pair.
+ *     - poly_ntt's per-butterfly montgomery_reduce keeps |coeff|
+ *       bounded by q + |a|/R.  After log2(KYBER_N)=8 layers the
+ *       bound is ≲ 9q (per Bos–Friedberger §3.3); the trailing
+ *       polyvec_reduce in callers covers it.  No interior pair.
+ *
+ *   The generic-C reduction layout is already algorithmically minimal
+ *   at q=3329 / int16 coefficients.
  */
 static void polyvec_basemul_acc(poly* r, const polyvec* a, const polyvec* b) {
     unsigned int i;
@@ -497,12 +523,19 @@ static ama_error_t kyber_keypair_generate(
         /* Generate matrix A from rho (in NTT domain) */
         kyber_gen_matrix(a, rho, 0);
 
-        /* Sample secret vector s and error vector e from CBD */
+        /* Sample secret vector s and error vector e from CBD, then NTT.
+         *
+         * Pipelined for L1-residency: each polyvec is NTT'd immediately
+         * after sampling, before the next 4-way SHAKE256 batch is
+         * absorbed/squeezed.  Working set per phase is one polyvec
+         * (~2 KiB) instead of two (~4 KiB) — keeps the just-sampled
+         * coefficients hot through the NTT butterflies.  Output is
+         * byte-identical to the previous sample-all-then-NTT-all
+         * layout because NTT acts on each polynomial independently
+         * (no cross-poly dependencies inside polyvec_ntt). */
         kyber_gennoise(&s, sigma, 0);
-        kyber_gennoise(&e, sigma, (uint8_t)KYBER_K);
-
-        /* NTT(s) */
         polyvec_ntt(&s);
+        kyber_gennoise(&e, sigma, (uint8_t)KYBER_K);
         polyvec_ntt(&e);
 
         /* Compute t = A*s + e (in NTT domain).
@@ -577,8 +610,14 @@ static void kyber_cpapke_enc(uint8_t *ct, const uint8_t *m,
     /* Generate matrix A^T from rho */
     kyber_gen_matrix(a, rho, 1);
 
-    /* Sample r, e1, e2 from coins */
+    /* Sample r, e1, e2 from coins.  NTT r immediately after sampling
+     * so r's coefficients stay L1-resident through the NTT butterflies
+     * (r is the only sampled polyvec used in the NTT domain in this
+     * function — e1 and e2 are added in the coefficient domain after
+     * invntt below, so they are intentionally NOT NTT'd here).  Output
+     * is byte-identical to the previous sample-all-then-NTT layout. */
     kyber_gennoise(&sp, coins, 0);
+    polyvec_ntt(&sp);
     kyber_gennoise(&ep, coins, (uint8_t)KYBER_K);
     {
         uint8_t noise_buf[33];
@@ -588,9 +627,6 @@ static void kyber_cpapke_enc(uint8_t *ct, const uint8_t *m,
         ama_shake256(noise_buf, 33, noise_stream, sizeof(noise_stream));
         kyber_poly_cbd_eta(&epp, noise_stream);
     }
-
-    /* NTT(r) */
-    polyvec_ntt(&sp);
 
     /* Compute u = A^T * r + e1 */
     for (i = 0; i < KYBER_K; i++) {
@@ -1653,12 +1689,13 @@ AMA_API ama_error_t ama_kyber_keypair_from_seed(
     /* Generate matrix A from rho (in NTT domain) */
     kyber_gen_matrix(a, rho, 0);
 
-    /* Sample secret vector s and error vector e from CBD */
+    /* Sample secret/error vectors from CBD and NTT each polyvec
+     * immediately after sampling — see the matching commentary in
+     * kyber_keypair_generate().  Byte-identical to the previous
+     * sample-all-then-NTT-all layout. */
     kyber_gennoise(&s, sigma, 0);
-    kyber_gennoise(&e, sigma, (uint8_t)KYBER_K);
-
-    /* NTT(s), NTT(e) */
     polyvec_ntt(&s);
+    kyber_gennoise(&e, sigma, (uint8_t)KYBER_K);
     polyvec_ntt(&e);
 
     /* Compute t = A*s + e (in NTT domain) */

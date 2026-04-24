@@ -416,6 +416,55 @@ class TestMLKEM1024KAT:
             unique_bytes >= 20
         ), f"Shared secret lacks entropy: only {unique_bytes} unique byte values"
 
+    def test_random_encaps_decaps_50_trials(self, kyber_provider: Any) -> None:
+        """50 randomized encaps/decaps round-trips beyond ACVP vectors.
+
+        Under one fixed keypair: every round-trip must produce matching
+        shared secrets, each encaps must produce a distinct ciphertext
+        (collision probability ≪ 2^-100), and each run must produce a
+        distinct 32-byte shared secret.  Catches caching/aliasing
+        regressions anywhere in the encaps path.
+        """
+        keypair = kyber_provider.generate_keypair()
+        seen_cts: set[bytes] = set()
+        seen_secrets: set[bytes] = set()
+        for trial in range(50):
+            ciphertext, ss_enc = kyber_provider.encapsulate(keypair.public_key)
+            ss_dec = kyber_provider.decapsulate(ciphertext, keypair.secret_key)
+            assert (
+                ss_enc == ss_dec
+            ), f"trial {trial}: encaps/decaps shared secrets diverged in kyber_cpapke_enc"
+            seen_cts.add(bytes(ciphertext))
+            seen_secrets.add(bytes(ss_enc))
+
+        # 50 randomized encaps under one pk should yield 50 distinct
+        # ciphertexts (collision probability ≪ 2^-100) and 50 distinct
+        # 32-byte secrets.
+        assert len(seen_cts) == 50, (
+            f"Only {len(seen_cts)} distinct ciphertexts across 50 encaps — "
+            "encapsulation randomness is degraded"
+        )
+        assert len(seen_secrets) == 50, (
+            f"Only {len(seen_secrets)} distinct shared secrets across 50 "
+            "encaps — KDF output is degenerate"
+        )
+
+    def test_random_keypair_encaps_decaps_25_trials(self, kyber_provider: Any) -> None:
+        """25 fresh keypairs, each with its own encaps/decaps round-trip.
+
+        Exercises kyber_keypair_generate (including its sample+NTT
+        pipelining) against an independent seed every iteration.
+        Companion to the 50-trial single-keypair test, which instead
+        stresses encapsulation under a fixed key.
+        """
+        for trial in range(25):
+            kp = kyber_provider.generate_keypair()
+            ct, ss_enc = kyber_provider.encapsulate(kp.public_key)
+            ss_dec = kyber_provider.decapsulate(ct, kp.secret_key)
+            assert (
+                ss_enc == ss_dec
+            ), f"keypair-trial {trial}: round-trip mismatch in kyber_keypair_generate"
+
 
 # =============================================================================
 # Cross-Algorithm Tests
