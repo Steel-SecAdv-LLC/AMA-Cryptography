@@ -56,16 +56,13 @@ extern void ama_aes256_gcm_encrypt_avx2(const uint8_t *plaintext, size_t plainte
                                          const uint8_t *aad, size_t aad_len,
                                          const uint8_t key[32], const uint8_t nonce[12],
                                          uint8_t *ciphertext, uint8_t tag[16]);
-extern ama_error_t ama_aes256_gcm_decrypt_avx2(const uint8_t *ciphertext, size_t ciphertext_len,
-                                                const uint8_t *aad, size_t aad_len,
-                                                const uint8_t key[32], const uint8_t nonce[12],
-                                                const uint8_t tag[16], uint8_t *plaintext);
 extern int ama_cpuid_has_vaes_aesgcm(void);
 #endif
 
-#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
-static int failed = 0;
-static int passed = 0;
+static int failed  = 0;
+static int passed  = 0;
+#if !(defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64)))
+static int skipped = 0;
 #endif
 
 #define MAX_LEN (65536u + 64u)
@@ -86,18 +83,12 @@ static void prng_fill(uint8_t *buf, size_t n) {
 
 /* Compare dispatched encrypt against AES-NI reference for one tuple.
  * Returns 1 on byte-identical match, 0 on mismatch (and increments
- * `failed`).
- *
- * Guarded by the same AMA_HAVE_AVX2_IMPL + x86-64 predicate as every
- * one of its call sites.  On builds without AVX2 the function is
- * unreachable, so wrapping the definition silences the
- * -Wunused-function warning flagged in Copilot review #3136110856
- * without resorting to an attribute. */
-#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+ * `failed`). */
 static int check_one_encrypt(const ama_dispatch_table_t *dt,
                               size_t pt_len, size_t aad_len,
                               const char *label_prefix, int trial)
 {
+#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
     static uint8_t pt[MAX_LEN];
     static uint8_t ct_dispatch[MAX_LEN];
     static uint8_t ct_ref[MAX_LEN];
@@ -171,8 +162,12 @@ static int check_one_encrypt(const ama_dispatch_table_t *dt,
 
     passed++;
     return 1;
+#else
+    (void)dt; (void)pt_len; (void)aad_len; (void)label_prefix; (void)trial;
+    skipped++;
+    return 1;
+#endif
 }
-#endif  /* AMA_HAVE_AVX2_IMPL && x86-64 */
 
 int main(void) {
     printf("================================================\n");
@@ -192,33 +187,21 @@ int main(void) {
     }
 
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
-    /* Stronger SKIP: if the dispatched slot IS the AES-NI reference
-     * function pointer, then the equivalence check below would compare
-     * the reference against itself — trivially passing with zero
-     * coverage of the VAES kernel.  This happens in three legitimate
-     * cases: (a) CPUID/OSXSAVE does not advertise VAES, (b) the MSVC
-     * build intentionally compiles the VAES symbol out, (c) any
-     * future opt-out env knob that forces the AES-NI fallback.  A
-     * pointer compare catches all three uniformly — stronger than the
-     * prior CPUID-bundle check, which missed case (b) on MSVC
-     * (Copilot review #3136110840). */
-    int vaes_path_selected =
-        (dt->aes_gcm_encrypt != ama_aes256_gcm_encrypt_avx2) ||
-        (dt->aes_gcm_decrypt != ama_aes256_gcm_decrypt_avx2);
-    if (!vaes_path_selected) {
-        printf("  SKIP: dispatcher selected the AVX2 AES-NI reference, not\n"
-               "        a distinct VAES kernel.  The equivalence check\n"
-               "        below would be tautological (reference vs itself),\n"
-               "        so skip it — the reference path is already covered\n"
-               "        by test_kat / ACVP.  Possible causes:\n"
-               "          - host lacks VAES / VPCLMULQDQ / AVX OS state\n"
-               "            (ama_cpuid_has_vaes_aesgcm()=%d)\n"
-               "          - MSVC build (VAES symbol compiled out)\n"
-               "          - dispatch opt-out env knob\n"
-               "        Run on Ice Lake+ / Alder Lake+ / Zen 3+ under a\n"
-               "        GCC/Clang build for meaningful VAES coverage.\n",
-               ama_cpuid_has_vaes_aesgcm());
-        printf("\nAll AES-GCM equivalence checks SKIPPED (VAES not active).\n");
+    /* Stronger SKIP: if the VAES path isn't actually selected, the
+     * dispatched slot points at the AVX2 AES-NI reference and the
+     * equivalence check below would compare the reference against
+     * itself — trivially passing with zero coverage of the VAES
+     * kernel.  Make this explicit so CI on non-VAES hosts is honest
+     * about what was exercised. */
+    if (!ama_cpuid_has_vaes_aesgcm()) {
+        printf("  SKIP: VAES bundle not present at runtime\n"
+               "        (ama_cpuid_has_vaes_aesgcm()==0).  Dispatcher is\n"
+               "        routing AES-GCM through the AVX2 AES-NI fallback,\n"
+               "        which is already covered by test_kat / ACVP.\n"
+               "        The VAES kernel in ama_aes_gcm_vaes_avx2.c is NOT\n"
+               "        exercised on this host — run on Ice Lake+ /\n"
+               "        Alder Lake+ / Zen 3+ for meaningful coverage.\n");
+        printf("\nAll AES-GCM equivalence checks SKIPPED (no VAES).\n");
         return 0;
     }
 

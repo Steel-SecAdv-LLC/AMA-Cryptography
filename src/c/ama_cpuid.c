@@ -184,31 +184,11 @@ int ama_has_pclmulqdq(void) {
 
 int ama_has_avx2(void) {
     AMA_CALL_ONCE(cpuid_once, detect_x86_features);
-    /* CPUID bit alone is NOT sufficient — the OS must have enabled AVX
-     * state in XCR0 (bits 1+2 = SSE + AVX YMM Hi128), otherwise any
-     * VEX-encoded 128-bit or 256-bit AVX instruction (including the
-     * XMM forms our AES-NI reference emits under -mavx2) will #UD
-     * inside a VM whose host kernel did not advertise AVX state.
-     *
-     * Without this gate, `detect_avx2()` in the dispatch layer would
-     * happily select the AVX2 AES-GCM path on such a host and crash
-     * the caller with SIGILL — Copilot review #3136110805.  Matching
-     * the already-gated semantics of ama_has_vaes() /
-     * ama_has_vpclmulqdq() localises the correctness argument here. */
-    return has_avx2_cached && has_avx_osxsave_cached;
+    return has_avx2_cached;
 }
 
 int ama_has_avx512f(void) {
     AMA_CALL_ONCE(cpuid_once, detect_x86_features);
-    /* NOTE: This probe currently returns the raw CPUID bit without an
-     * XCR0 gate.  The project does not yet emit any EVEX-encoded / ZMM
-     * AVX-512 opcodes, so the practical hazard is zero.  When the
-     * first AVX-512 kernel lands, gate this on XCR0 bits 5 (opmask),
-     * 6 (ZMM Hi256), and 7 (Hi16 ZMM) — those are distinct from the
-     * AVX state bits checked by xcr0_has_avx_state() above.  Until
-     * then, callers must NOT emit AVX-512 instructions purely on
-     * this bit; treat it as "feature flag present" not "safe to
-     * execute". */
     return has_avx512f_cached;
 }
 
