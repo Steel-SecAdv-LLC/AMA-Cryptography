@@ -690,6 +690,25 @@ class ComparativeBenchmark:
 
         # OpenSSL AES-NI reference via the cryptography library.
         try:
+            # Pre-check: verify cryptography library is functional
+            # (guards against broken CFFI/Rust/pyo3 bindings that panic
+            # on import — same pattern as benchmark_cryptography_ed25519
+            # above, so the benchmark suite SKIPs cleanly instead of
+            # aborting the whole process on a broken install).
+            import subprocess
+
+            check = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "from cryptography.hazmat.primitives.ciphers.aead import AESGCM",
+                ],
+                capture_output=True,
+                timeout=5,
+            )
+            if check.returncode != 0:
+                raise ImportError("cryptography library has broken bindings")
+
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
             key = b"\x42" * 32
@@ -714,7 +733,7 @@ class ComparativeBenchmark:
                         lambda c=ct: aead.decrypt(nonce, c, aad),
                     )
                 )
-        except (ImportError, OSError, Exception) as e:
+        except Exception as e:
             print(f"  SKIP OpenSSL AES-GCM: {type(e).__name__}")
             self.results.append(
                 BenchmarkResult(
