@@ -431,9 +431,9 @@ class TestMLKEM1024KAT:
         for trial in range(50):
             ciphertext, ss_enc = kyber_provider.encapsulate(keypair.public_key)
             ss_dec = kyber_provider.decapsulate(ciphertext, keypair.secret_key)
-            assert ss_enc == ss_dec, (
-                f"trial {trial}: encaps/decaps shared secrets diverged in kyber_cpapke_enc"
-            )
+            assert (
+                ss_enc == ss_dec
+            ), f"trial {trial}: encaps/decaps shared secrets diverged in kyber_cpapke_enc"
             seen_cts.add(bytes(ciphertext))
             seen_secrets.add(bytes(ss_enc))
 
@@ -461,9 +461,9 @@ class TestMLKEM1024KAT:
             kp = kyber_provider.generate_keypair()
             ct, ss_enc = kyber_provider.encapsulate(kp.public_key)
             ss_dec = kyber_provider.decapsulate(ct, kp.secret_key)
-            assert ss_enc == ss_dec, (
-                f"keypair-trial {trial}: round-trip mismatch in kyber_keypair_generate"
-            )
+            assert (
+                ss_enc == ss_dec
+            ), f"keypair-trial {trial}: round-trip mismatch in kyber_keypair_generate"
 
 
 # =============================================================================

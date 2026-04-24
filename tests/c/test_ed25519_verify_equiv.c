@@ -225,8 +225,10 @@ int main(void) {
         size_t  msg_len;
         ama_error_t err;
 
-        /* Random keypair (uses the same RFC 8032 derivation chain
-         * exercised by the production keygen). */
+        /* ama_ed25519_keypair reads sk[0..31] as the RFC 8032 seed.
+         * Populate it from the test PRNG so every trial is deterministic
+         * and we never read uninitialized stack. */
+        fill_random_bytes(sk, 32);
         err = ama_ed25519_keypair(pk, sk);
         if (err != AMA_SUCCESS) {
             printf("  FAIL: ama_ed25519_keypair returned %d at trial %d\n",
@@ -329,6 +331,7 @@ int main(void) {
         uint8_t pk[32], sk[64], msg[8], zero_sig[64];
         memset(zero_sig, 0, sizeof(zero_sig));
         memset(msg, 0xA5, sizeof(msg));
+        fill_random_bytes(sk, 32);  /* seed for ama_ed25519_keypair */
         ama_error_t err = ama_ed25519_keypair(pk, sk);
         CHECK(err == AMA_SUCCESS, "keypair for edge-case test");
         err = ama_ed25519_verify(zero_sig, msg, sizeof(msg), pk);
@@ -359,9 +362,18 @@ int main(void) {
 
             /* Random points: derive two distinct keypairs and use their
              * public keys as P1/P2.  This guarantees both points are
-             * valid Edwards points in the prime-order subgroup. */
-            (void)ama_ed25519_keypair(pk1, sk_unused);
-            (void)ama_ed25519_keypair(pk2, sk_unused);
+             * valid Edwards points in the prime-order subgroup.  sk[0..31]
+             * is an input seed to ama_ed25519_keypair — seed each call
+             * from the PRNG so the two keypairs differ and no uninitialized
+             * stack is read.  Return code is asserted so pk1/pk2 are
+             * guaranteed valid before use. */
+            ama_error_t err;
+            fill_random_bytes(sk_unused, 32);
+            err = ama_ed25519_keypair(pk1, sk_unused);
+            if (err != AMA_SUCCESS) { byte_id_failures++; continue; }
+            fill_random_bytes(sk_unused, 32);
+            err = ama_ed25519_keypair(pk2, sk_unused);
+            if (err != AMA_SUCCESS) { byte_id_failures++; continue; }
 
             snprintf(label, sizeof(label), "byte-identity tuple #%d", t);
             byte_id_failures += test_byte_identity_one(s1, pk1, s2, pk2, label);
@@ -453,6 +465,7 @@ int main(void) {
         ama_error_t err;
 
         memset(msg, 0x5C, sizeof(msg));
+        fill_random_bytes(sk, 32);  /* seed for ama_ed25519_keypair */
         err = ama_ed25519_keypair(pk, sk);
         CHECK(err == AMA_SUCCESS, "keypair for strict-encoding tests");
         err = ama_ed25519_sign(sig, msg, sizeof(msg), sk);
