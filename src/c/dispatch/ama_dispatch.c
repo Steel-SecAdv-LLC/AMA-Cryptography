@@ -336,7 +336,22 @@ static void dispatch_init_internal(void) {
         dispatch_table.dilithium_pointwise   = ama_dilithium_poly_pointwise_avx2;
         dispatch_table.dilithium_rej_uniform = ama_dilithium_rej_uniform_avx2;
     }
-    if (dispatch_info.aes_gcm >= AMA_IMPL_AVX2) {
+    /* The AVX2 AES-GCM kernel emits AES-NI (AESENC / AESENCLAST /
+     * AESKEYGENASSIST) and PCLMULQDQ (CLMUL) opcodes in addition to
+     * VEX-encoded 128-bit loads/stores.  AVX2 alone is not a
+     * sufficient gate: a hypervisor (or chicken-bit MSR) may advertise
+     * CPUID.(EAX=7,ECX=0):EBX[5] while masking CPUID.(EAX=1):ECX[25]
+     * (AES-NI) or CPUID.(EAX=1):ECX[1] (PCLMULQDQ).  Installing the
+     * AVX2 AES-NI pointers on such a host would SIGILL on the first
+     * AESENC — Copilot review #3140228457 / #3140228489.  Require all
+     * three features explicitly; the VAES upgrade below is already
+     * gated by ama_cpuid_has_vaes_aesgcm() which requires AES-NI
+     * (AESKEYGENASSIST) and baseline PCLMULQDQ transitively via
+     * VPCLMULQDQ, so it was already safe — this tightens the AES-NI
+     * fallback path to match. */
+    if (dispatch_info.aes_gcm >= AMA_IMPL_AVX2
+        && ama_has_aes_ni()
+        && ama_has_pclmulqdq()) {
         dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_avx2;
         dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_avx2;
         /* PR A — VAES + VPCLMULQDQ YMM upgrade.  CPUID-gated; falls
@@ -352,6 +367,11 @@ static void dispatch_init_internal(void) {
                 fprintf(stderr, "[AMA Dispatch] AES-GCM: VAES+VPCLMULQDQ YMM path selected\n");
         }
 #endif
+    } else if (dispatch_verbose() && dispatch_info.aes_gcm >= AMA_IMPL_AVX2) {
+        fprintf(stderr,
+            "[AMA Dispatch] AES-GCM: AVX2 present but AES-NI=%d PCLMULQDQ=%d"
+            " — falling back to generic C path\n",
+            ama_has_aes_ni(), ama_has_pclmulqdq());
     }
     if (dispatch_info.chacha20poly1305 >= AMA_IMPL_AVX2) {
         /* Env override honored for A/B benchmarking and smoke-testing

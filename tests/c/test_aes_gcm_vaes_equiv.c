@@ -30,6 +30,11 @@
  *     target, plus AMA_ENABLE_AVX2=OFF on x86-64).  The C-side
  *     AES-GCM path in src/c/ama_aes_gcm.c is already covered by
  *     test_kat and ACVP.
+ *   - Before the NULL-slot check, SKIPs on x86-64 AMA_HAVE_AVX2_IMPL
+ *     builds when the host masks AES-NI (CPUID.EAX=1:ECX[25]) or
+ *     baseline PCLMULQDQ (CPUID.EAX=1:ECX[1]).  The AVX2 AES-NI
+ *     reference emits those opcodes directly, so calling it on a
+ *     masked-CPUID VM would SIGILL — Copilot review #3140228489.
  *
  * Coverage (keep in sync with boundary_pt[] and aad_lens[] below):
  *   - Boundary plaintext lengths:
@@ -197,13 +202,42 @@ int main(void) {
     printf("equivalence test (PR A — VAES + VPCLMULQDQ YMM)\n");
     printf("================================================\n\n");
 
+#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+    /* Pre-dispatch safety gate (Copilot review #3140228489): the AVX2
+     * AES-NI reference (ama_aes256_gcm_encrypt_avx2) that this test
+     * directly invokes as the "ground truth" emits AES-NI and
+     * PCLMULQDQ opcodes.  A VM / hypervisor can legitimately expose
+     * AVX2 while masking AES-NI (CPUID.EAX=1:ECX[25]) or PCLMULQDQ
+     * (CPUID.EAX=1:ECX[1]); calling the reference on such a host
+     * would SIGILL with zero test coverage.  Check explicitly and
+     * SKIP before touching either function pointer.  The same gate
+     * now exists in dispatch.c (so on the same host the dispatcher
+     * also leaves the slots NULL and the check below would SKIP
+     * anyway) — this early SKIP is defence-in-depth and makes the
+     * failure mode easier to diagnose. */
+    if (ama_has_aes_ni() == 0 || ama_has_pclmulqdq() == 0) {
+        printf("  SKIP: AVX2 present but AES-NI=%d PCLMULQDQ=%d — the AVX2\n"
+               "        AES-GCM reference used as ground truth would SIGILL\n"
+               "        on this CPU/VM.  Real VAES/AES-NI coverage requires\n"
+               "        a host (or hypervisor configuration) that exposes\n"
+               "        CPUID.EAX=1:ECX[25] and CPUID.EAX=1:ECX[1] in\n"
+               "        addition to AVX2.  The generic C AES-GCM path in\n"
+               "        src/c/ama_aes_gcm.c is already covered by test_kat\n"
+               "        and ACVP.\n",
+               ama_has_aes_ni(), ama_has_pclmulqdq());
+        printf("\nAll AES-GCM equivalence checks SKIPPED.\n");
+        return 0;
+    }
+#endif
+
     const ama_dispatch_table_t *dt = ama_get_dispatch_table();
     if (dt->aes_gcm_encrypt == NULL || dt->aes_gcm_decrypt == NULL) {
         printf("  SKIP: dispatcher left aes_gcm_encrypt / aes_gcm_decrypt NULL\n"
                "        on this build/CPU (typical on non-x86-64 builds, or\n"
-               "        an x86-64 host without AVX2 + AES-NI).  The C-side\n"
-               "        AES-GCM implementation in src/c/ama_aes_gcm.c is\n"
-               "        already covered by test_kat and ACVP.\n");
+               "        an x86-64 host without AVX2 + AES-NI + PCLMULQDQ).\n"
+               "        The C-side AES-GCM implementation in\n"
+               "        src/c/ama_aes_gcm.c is already covered by test_kat\n"
+               "        and ACVP.\n");
         printf("\nAll AES-GCM equivalence checks SKIPPED.\n");
         return 0;
     }
