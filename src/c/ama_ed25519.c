@@ -1543,7 +1543,6 @@ ama_error_t ama_ed25519_verify(
 ) {
     uint8_t h[64];
     ge25519_p3 A, R_check;
-    ge25519_p1p1 t;
     uint8_t R_bytes[32];
     int i;
 
@@ -1611,13 +1610,13 @@ ama_error_t ama_ed25519_verify(
         ge25519_double_scalarmult_vartime(&R_check,
                                           signature + 32, &base_pt,
                                           h,             &A);
-        (void)t;  /* unused on the Shamir path */
     }
 #else
     /* Pre-PR-B layout: two independent scalar mults plus one final add. */
     ge25519_scalarmult_base(&R_check, signature + 32);
     {
         ge25519_p3 hA;
+        ge25519_p1p1 t;
         ge25519_scalarmult(&hA, h, &A);
         ge25519_add(&t, &R_check, &hA);
         ge25519_p1p1_to_p3(&R_check, &t);

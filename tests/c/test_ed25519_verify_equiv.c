@@ -3,7 +3,7 @@
  * Licensed under the Apache License, Version 2.0
  *
  * @file test_ed25519_verify_equiv.c
- * @brief Behavioural equivalence test for the PR-B verify path.
+ * @brief Behavioral equivalence test for the PR-B verify path.
  *
  * PR B replaces the pre-PR-B verify implementation
  *   [s]B  via comb         (constant-time)
