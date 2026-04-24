@@ -11,36 +11,23 @@
  * ama_get_dispatch_table()->aes_gcm_encrypt / aes_gcm_decrypt rather
  * than calling the VAES function directly, so the test:
  *
- *   - Links cleanly on builds where AMA_HAVE_AVX2_IMPL is not
- *     defined (e.g. AMA_ENABLE_AVX2=OFF, or any non-x86-64 target).
- *     On such builds main() SKIPs via the NULL-slot check below and
- *     the AVX2 reference extern is never referenced at link time.
+ *   - Links cleanly on builds where AMA_HAVE_AVX2_IMPL is not defined
+ *     (non-x86-64).
  *   - Does not execute a VAES instruction on an x86-64 host that
- *     lacks VAES at runtime.  The dispatcher's VAES upgrade is gated
- *     by ama_cpuid_has_vaes_aesgcm() inside dispatch_init_internal(),
- *     so on a non-VAES host the AES-GCM slots resolve to the AVX2
- *     AES-NI reference (non-NULL but equal to that reference's
- *     function pointer).  The stronger SKIP gate further down
- *     compares dt->aes_gcm_{encrypt,decrypt} against the reference
- *     pointers directly and SKIPs when they match, preventing a
- *     tautological reference-vs-itself comparison.
- *   - SKIPs at the top of main() when the dispatcher leaves the
- *     AES-GCM slots NULL — that happens on any build where no AVX2
- *     AES-GCM kernel is wired for dispatch (today: every non-x86-64
- *     target, plus AMA_ENABLE_AVX2=OFF on x86-64).  The C-side
- *     AES-GCM path in src/c/ama_aes_gcm.c is already covered by
- *     test_kat and ACVP.
+ *     lacks VAES at runtime (CPUID-guarded by ama_cpuid_has_vaes_aesgcm
+ *     inside dispatch_init_internal()).
+ *   - Cleanly SKIPs when the dispatcher leaves the slot NULL (any
+ *     non-x86-64 today, or an x86-64 host without VAES + VPCLMULQDQ),
+ *     in which case the AVX2 AES-NI fallback path is the active
+ *     implementation and is already covered by test_kat / ACVP.
  *
- * Coverage (keep in sync with boundary_pt[] and aad_lens[] below):
- *   - Boundary plaintext lengths:
- *       {0, 15, 16, 17, 31, 32, 33, 4095, 4096, 4097, 65535, 65536}
- *   - AAD lengths: {0, 1, 13, 16, 17, 64, 96}
+ * Coverage:
+ *   - Boundary plaintext lengths: {0, 15, 16, 4095, 4096, 65535, 65536}
  *   - 2048 random (key, iv, aad, pt) tuples drawn from a deterministic
  *     splitmix-style PRNG so the exact failure case is reproducible
  *     from the seed.
  *   - Tag-tamper rejection: flipping a single tag bit must cause
- *     decrypt to return AMA_ERROR_VERIFY_FAILED (including for
- *     pt_len == 0, because AES-GCM authenticates empty messages).
+ *     decrypt to return AMA_ERROR_VERIFY_FAILED.
  *
  * If this test fails, the dispatched AES-GCM implementation diverges
  * from the AES-NI reference, which would silently break interop with
@@ -49,7 +36,6 @@
  */
 
 #include "ama_cryptography.h"
-#include "ama_cpuid.h"
 #include "ama_dispatch.h"
 #include <stdio.h>
 #include <stdint.h>
@@ -64,11 +50,7 @@
  * Gated behind AMA_HAVE_AVX2_IMPL so the test links cleanly on
  * x86-64 builds that disable AVX2 sources (e.g., AMA_ENABLE_AVX2=OFF).
  * When the gate is off the test SKIPs at main() below — the AVX2
- * reference symbol is not referenced at link time.
- *
- * ama_cpuid_has_vaes_aesgcm() is picked up from <ama_cpuid.h> above
- * (single source of truth — avoids the signature-drift that a local
- * forward declaration would invite). */
+ * reference symbol is not referenced at link time. */
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
 extern void ama_aes256_gcm_encrypt_avx2(const uint8_t *plaintext, size_t plaintext_len,
                                          const uint8_t *aad, size_t aad_len,
@@ -78,6 +60,7 @@ extern ama_error_t ama_aes256_gcm_decrypt_avx2(const uint8_t *ciphertext, size_t
                                                 const uint8_t *aad, size_t aad_len,
                                                 const uint8_t key[32], const uint8_t nonce[12],
                                                 const uint8_t tag[16], uint8_t *plaintext);
+extern int ama_cpuid_has_vaes_aesgcm(void);
 #endif
 
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
@@ -278,15 +261,9 @@ int main(void) {
     printf("================================================\n");
     return 0;
 #else
-    /* Build without AMA_HAVE_AVX2_IMPL (or non-x86-64): this test
-     * intentionally SKIPs regardless of what AES-GCM pointers the
-     * dispatcher may install from some other backend, because the
-     * AVX2 AES-NI reference path (the baseline we compare the VAES
-     * kernel against) is not compiled in.  Without the reference,
-     * the equivalence test has nothing meaningful to do.  Casting
-     * `dt` to void only silences the unused-variable warning — it
-     * does NOT imply `dt` is NULL (the NULL-slot SKIP higher up in
-     * main() handles that case separately). */
+    /* Build without AMA_HAVE_AVX2_IMPL (or non-x86-64): dispatcher is
+     * NULL above and we already returned.  This stub exists only so
+     * the compiler doesn't warn on `dt` being unreferenced. */
     (void)dt;
     printf("\nAll AES-GCM equivalence checks SKIPPED (no AVX2 build).\n");
     return 0;
