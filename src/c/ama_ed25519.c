@@ -384,17 +384,43 @@ static inline void ge25519_p3_to_p2(ge25519_p2 *r, const ge25519_p3 *p) {
 
 /* vartime: safe for verification where scalar is public.
  *
- * Width-4 wNAF (non-adjacent form) scalar multiplication.
- * Reduces additions from ~128 to ~64 while keeping ~256 doublings,
- * yielding ~25-30% faster verification compared to naive double-and-add.
+ * Width-w wNAF (non-adjacent form) scalar multiplication.  The window
+ * size is configurable via AMA_ED25519_VERIFY_WINDOW (default: 5):
  *
- * The wNAF representation converts the 256-bit scalar to digits in {-15,...,15}
- * (odd values only) so that at most one addition per 4 doublings is needed.
+ *   w=4:  8 table entries, ~64 expected additions  (legacy #261 path)
+ *   w=5: 16 table entries, ~43 expected additions  (default)
+ *   w=6: 32 table entries, ~32 expected additions
+ *
+ * In all cases the inner loop performs ~256 doublings; the win is
+ * additions saved in the wNAF expansion (avg digit density 1/(w+1)).
+ * The precomputed odd-multiples table is rebuilt per call (the variable
+ * base point P changes), costing 2^(w-1)-1 additions amortised over
+ * the evaluation.  Net cost (additions, w / table-build / eval / total):
+ *   w=4: 7  + ~64  ≈  71
+ *   w=5: 15 + ~43  ≈  58       (~18% fewer adds vs w=4)
+ *   w=6: 31 + ~32  ≈  63       (about par; doubled stack footprint)
+ *
+ * SECURITY (INVARIANT-12): wNAF digit extraction and table indexing
+ * are scalar-dependent.  This routine is variable-time by design and
+ * is only safe when the scalar is PUBLIC — Ed25519 verify (h, derived
+ * from the signature & public key & message) and FROST binding factors
+ * both qualify.  Do NOT use with secret scalars.
  */
+#ifndef AMA_ED25519_VERIFY_WINDOW
+/* Default: width-5 wNAF.  Fastest evaluation in the practical range
+ * with a modest 16 * sizeof(ge25519_p3) ≈ 2.5 KiB stack table.
+ * Override with -DAMA_ED25519_VERIFY_WINDOW=4 to fall back to the
+ * #261 width-4 path (kept for one release as a rollback hatch). */
+#define AMA_ED25519_VERIFY_WINDOW 5
+#endif
+#if AMA_ED25519_VERIFY_WINDOW < 2 || AMA_ED25519_VERIFY_WINDOW > 8
+#error "AMA_ED25519_VERIFY_WINDOW must be in [2, 8]; default 5 is recommended"
+#endif
+
 static void ge25519_scalarmult(ge25519_p3 *r, const uint8_t *scalar, const ge25519_p3 *p) {
-    /* Width-4 wNAF parameters */
-    #define WNAF_WIDTH 4
-    #define WNAF_TABLE_SIZE (1 << (WNAF_WIDTH - 1))  /* 8 entries */
+    /* Width-w wNAF parameters */
+    #define WNAF_WIDTH AMA_ED25519_VERIFY_WINDOW
+    #define WNAF_TABLE_SIZE (1 << (WNAF_WIDTH - 1))  /* 2^(w-1) entries */
 
     ge25519_p3 table[WNAF_TABLE_SIZE]; /* table[i] = (2*i+1)*P */
     int8_t wnaf[256];
