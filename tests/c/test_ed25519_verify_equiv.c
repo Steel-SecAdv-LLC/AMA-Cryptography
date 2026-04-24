@@ -143,12 +143,14 @@ static const uint8_t rfc8032_sig[64] = {
  * scalars.  Mathematically both must produce identical compressed
  * output for any (s1, P1, s2, P2) tuple.
  *
- * Limitations: ama_ed25519_scalarmult_public has the implicit
- * precondition that its scalar is < 2^253 — we therefore feed both
- * sub-mults the sc25519_reduce'd form of the test scalar so the
- * comparison is well-defined for arbitrary 32-byte inputs.  The Shamir
- * helper has no such precondition (it operates on the raw 256-bit
- * integer), so we likewise feed it the reduced form for parity.
+ * For arbitrary 32-byte test inputs we feed both paths the
+ * sc25519_reduce'd form of each scalar so the comparison is made using
+ * canonical representatives modulo the Ed25519 group order l.  Neither
+ * scalarmult has a hard <2^253 precondition — both consume all 256 bits
+ * — but reducing first keeps the byte-identity check strictly "mod l"
+ * and guarantees the joint and split constructions are exercised on the
+ * same scalar values (any `s` and `s + k*l` are group-equivalent but
+ * hit different wNAF expansions, which we do not want to compare here).
  * ============================================================================ */
 static int test_byte_identity_one(const uint8_t s1[32], const uint8_t P1[32],
                                   const uint8_t s2[32], const uint8_t P2[32],

@@ -329,8 +329,11 @@ static bench_result_t bench_ed25519_double_scalarmult(int iters, int warmup) {
 
     /* Build a verify-shaped second scalar: h = SHA-512(R || A || M)
      * reduced mod l, exactly what ama_ed25519_verify computes
-     * internally.  This keeps the wNAF expansion realistic. */
-    uint8_t hbuf[64 + 32 + 64];
+     * internally.  This keeps the wNAF expansion realistic.  Size
+     * hbuf from sizeof(msg) so editing the benchmark message cannot
+     * silently overflow this buffer (sizeof includes the trailing
+     * NUL, so we have one extra byte of headroom — harmless). */
+    uint8_t hbuf[32 + 32 + sizeof(msg)];
     memcpy(hbuf, sig, 32);
     memcpy(hbuf + 32, pk1, 32);
     memcpy(hbuf + 64, msg, msg_len);

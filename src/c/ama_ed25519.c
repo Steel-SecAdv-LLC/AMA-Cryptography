@@ -396,11 +396,13 @@ static inline void ge25519_p3_to_p2(ge25519_p2 *r, const ge25519_p3 *p) {
  *       over the two lock-step wNAF expansions, used by Ed25519 verify to
  *       evaluate [s]B + [h](-A) in a single interleaved loop.
  *
- * Window size w is AMA_ED25519_VERIFY_WINDOW:
+ * Window size w is AMA_ED25519_VERIFY_WINDOW.  The precomputed table
+ * holds 2^(w-2) odd multiples of the base point (the maximum |digit|/2
+ * ever indexed from a width-w wNAF expansion):
  *
- *   w=4:  8 table entries/point, ~64 expected adds per scalar
- *   w=5: 16 table entries/point, ~43 expected adds per scalar   (default)
- *   w=6: 32 table entries/point, ~32 expected adds per scalar
+ *   w=4:  4 table entries/point, ~64 expected adds per scalar
+ *   w=5:  8 table entries/point, ~43 expected adds per scalar   (default)
+ *   w=6: 16 table entries/point, ~32 expected adds per scalar
  *
  * Each entry point performs ~256 doublings (one per bit).  Shamir shares
  * those between the two scalar mults, so the joint call is close in cost
@@ -423,11 +425,11 @@ static inline void ge25519_p3_to_p2(ge25519_p2 *r, const ge25519_p3 *p) {
 #define AMA_ED25519_VERIFY_WINDOW 5
 #endif
 #if AMA_ED25519_VERIFY_WINDOW < 2 || AMA_ED25519_VERIFY_WINDOW > 6
-/* W>6 doubles the per-point odd-multiples table past 32 entries
- * (~5 KiB each); the Shamir routine instantiates two, crossing 16 KiB
- * of stack on platforms with a 64 KiB default thread stack (musl,
- * OpenBSD pthreads).  W<2 is not a wNAF.  W=2 is kept as a functional
- * lower bound for fuzzing the carry-propagation path. */
+/* Beyond W=6 the per-bit doubling cost dominates any saved additions on
+ * Curve25519, and the odd-multiples tables grow large enough to bloat
+ * stack pressure without measurable benefit.  W<2 is not a wNAF.  W=2
+ * is kept as a functional lower bound for fuzzing the carry-propagation
+ * path. */
 #error "AMA_ED25519_VERIFY_WINDOW must be in [2, 6] (default 5)"
 #endif
 
@@ -436,7 +438,12 @@ static inline void ge25519_p3_to_p2(ge25519_p2 *r, const ge25519_p3 *p) {
 #endif
 
 #define WNAF_W         AMA_ED25519_VERIFY_WINDOW
-#define WNAF_TAB_LEN   (1 << (WNAF_W - 1))   /* 2^(w-1) odd multiples per point */
+/* wNAF digits produced by sc25519_to_wnaf are odd in [-(2^(w-1)-1),
+ * 2^(w-1)-1], so only |digit|/2 ∈ [0, 2^(w-2)-1] is ever indexed.
+ * Size the precomputed odd-multiples table accordingly.  For w=5 that
+ * is 8 entries (~1.3 KiB per table); the Shamir routine instantiates
+ * two, for ~2.5 KiB of stack per call. */
+#define WNAF_TAB_LEN   (1 << (WNAF_W - 2))
 
 /* Compute width-w wNAF expansion of a 32-byte little-endian scalar.
  * Output: 256 signed digits in wnaf[], each odd in [-(2^(w-1)-1),
