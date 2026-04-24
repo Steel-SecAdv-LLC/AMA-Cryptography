@@ -670,7 +670,7 @@ class ComparativeBenchmark:
                     self.benchmark_operation(
                         "AMA Cryptography",
                         f"AES-256-GCM Dec {sz // 1024}KB",
-                        lambda c=ct, t=tag: native_aes256_gcm_decrypt(key, nonce, c, aad, t),
+                        lambda c=ct, t=tag: native_aes256_gcm_decrypt(key, nonce, c, t, aad),
                     )
                 )
         except Exception as e:
