@@ -36,6 +36,64 @@ int ama_has_aes_ni(void);
  */
 int ama_has_pclmulqdq(void);
 
+/* ============================================================================
+ * VAES + VPCLMULQDQ probes (PR A — VAES AES-GCM YMM dispatch, 2026-04).
+ *
+ * VAES (CPUID.(EAX=7,ECX=0):ECX[9]) and VPCLMULQDQ (ECX[10]) are
+ * *independent* of AVX-512.  Their VEX-encoded YMM forms only require
+ * AVX OS save-area state (XCR0 bits 1 + 2 — SSE + AVX), not the AVX-512
+ * opmask / ZMM bits.  Targeting YMM keeps the kernel off the pre-Ice-Lake
+ * ZMM downclock curve entirely while still covering every Intel
+ * Ice Lake+ / Alder Lake+ and AMD Zen 3+ host.
+ *
+ * All probes share the same pthread_once / InitOnceExecuteOnce primitive
+ * that guards the rest of ama_cpuid.c (INVARIANT-15 unchanged — no new
+ * once-primitive, no reordering of detect_x86_features()).  Non-x86
+ * builds return 0 unconditionally, matching the existing ARM / generic
+ * stubs above.
+ * ============================================================================ */
+
+/**
+ * @brief Check for VAES (vectorized AES-NI) on YMM.
+ *
+ * CPUID.(EAX=7,ECX=0):ECX[9].  Lets a single AESENC / AESENCLAST act on
+ * two 128-bit blocks packed in a YMM register.  Combined with the
+ * 4-block-parallel inner loop in src/c/avx2/ama_aes_gcm_vaes_avx2.c,
+ * this is the bulk-throughput primitive for the AVX2 VAES AES-GCM
+ * path.  Returns 1 only when CPUID reports VAES *and* the OS has
+ * enabled AVX state in XCR0 (bits 1 + 2).  AVX-512 state is
+ * intentionally *not* required.
+ */
+int ama_has_vaes(void);
+
+/**
+ * @brief Check for VPCLMULQDQ (vectorized carry-less multiply) on YMM.
+ *
+ * CPUID.(EAX=7,ECX=0):ECX[10].  Carry-less multiply acting on two
+ * 128-bit lanes of a YMM register simultaneously — used for 4-lane
+ * Karatsuba GHASH and Montgomery reduction in the PR A AES-GCM path.
+ * Pair with VPCLMULQDQ rather than a table-lookup GHASH to preserve
+ * INVARIANT-12 (constant-time secret-dependent operations).  Returns 1
+ * only when CPUID reports VPCLMULQDQ *and* the OS has enabled AVX
+ * state in XCR0.
+ */
+int ama_has_vpclmulqdq(void);
+
+/**
+ * @brief Bundle check: AVX2 + VAES + VPCLMULQDQ + AES-NI.
+ *
+ * The PR A VAES AES-GCM path needs all four:
+ *   - AVX2          — base ISA for YMM register set + integer ops
+ *   - VAES          — 2-blocks-per-YMM AES rounds
+ *   - VPCLMULQDQ    — 2-lane carry-less multiply for GHASH
+ *   - AES-NI        — 128-bit AESKEYGENASSIST runs the AES-256 key schedule
+ *                     (VAES does not provide a YMM key-expansion opcode)
+ *
+ * Returns 1 only when every component passes; otherwise the dispatcher
+ * falls back to the AVX2 AES-NI + PCLMULQDQ path shipped in #253 / #254.
+ */
+int ama_cpuid_has_vaes_aesgcm(void);
+
 /**
  * @brief Check for ARMv8 AES Crypto Extension support.
  * @return 1 if ARM AES is available, 0 otherwise. Cached after first call.
