@@ -108,14 +108,33 @@ int ama_has_vpclmulqdq(void);
 int ama_cpuid_has_vaes_aesgcm(void);
 
 /**
- * @brief Check for x86 AVX2 (CPUID.(EAX=7,ECX=0):EBX[5]).
- * @return 1 if AVX2 is available, 0 otherwise. Cached after first call.
+ * @brief Check for x86 AVX2 runtime capability.
+ *
+ * CPUID.(EAX=7,ECX=0):EBX[5] AND OSXSAVE AND XCR0 bits 1+2 (SSE+AVX).
+ * The OSXSAVE/XCR0 gate is essential: on a VM whose host kernel has
+ * not enabled AVX state, VEX-encoded 128-bit or 256-bit AVX opcodes
+ * will #UD, so the runtime dispatcher must refuse to select the AVX2
+ * path there.  A caller who needs the raw CPUID feature-flag bit
+ * (e.g. capability advertisement divorced from execution safety)
+ * should not use this function.
+ *
+ * @return 1 if AVX2 is available AND the OS has enabled AVX state,
+ *         0 otherwise.  Cached after first call.
  */
 int ama_has_avx2(void);
 
 /**
- * @brief Check for x86 AVX-512F (CPUID.(EAX=7,ECX=0):EBX[16]).
- * @return 1 if AVX-512F is available, 0 otherwise. Cached after first call.
+ * @brief Check for x86 AVX-512F CPUID feature bit.
+ *
+ * CPUID.(EAX=7,ECX=0):EBX[16] only — no XCR0 gate.  The project does
+ * not yet emit any EVEX-encoded / ZMM AVX-512 opcodes, so the
+ * practical hazard is zero.  When the first AVX-512 kernel lands,
+ * callers must ALSO verify XCR0 bits 5 (opmask) + 6 (ZMM Hi256) +
+ * 7 (Hi16 ZMM); those are distinct from the AVX-only bits checked
+ * inside ama_has_avx2().
+ *
+ * @return 1 if AVX-512F is reported by CPUID, 0 otherwise.  Cached
+ *         after first call.
  */
 int ama_has_avx512f(void);
 
