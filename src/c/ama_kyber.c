@@ -317,9 +317,29 @@ static void kyber_gen_matrix(polyvec mat[KYBER_K], const uint8_t seed[32], int t
         flat += 4;
     }
 
-    /* Trailing 0..3 polys (only relevant for parameter sets where
-     * KYBER_K*KYBER_K is not a multiple of 4; currently never for
-     * K=4 but kept for completeness / future parameter sets). */
+    /* Trailing 0..3 polys — only reachable for parameter sets where
+     * KYBER_K * KYBER_K is not a multiple of 4.  For KYBER_K = 4
+     * (the only value this file currently supports) the first loop
+     * consumes all 16 polys exactly, so the block below is dead code.
+     *
+     * The #if guard is not just a micro-optimisation: leaving the
+     * trailing loop unguarded tripped GCC's
+     * -Waggressive-loop-optimizations on the `kyber_gen_matrix.constprop`
+     * clone, which speculatively unrolled to 4 iterations and
+     * (mis)concluded that iteration 4 would index mat[4] OOB.  The
+     * warning was a loop-bound-visibility artefact, not a §5.3
+     * sampling error — once the block is preprocessed out for K=4
+     * the warning vanishes.
+     *
+     * Compiling with a future parameter set whose K*K is not a
+     * multiple of 4 re-enables this block automatically; the
+     * _Static_assert immediately below catches any attempt to reach
+     * this path with an unaudited rejection-sampling budget. */
+#if (KYBER_K * KYBER_K) % 4 != 0
+    _Static_assert(0,
+        "kyber_gen_matrix trailing loop: audit the rejection-sampling "
+        "budget before enabling this path for KYBER_K values where "
+        "K*K is not a multiple of 4 (see kyber_poly_uniform stream[672])");
     while (flat < total) {
         unsigned int i = flat / KYBER_K, j = flat % KYBER_K;
         if (transposed) {
@@ -329,6 +349,9 @@ static void kyber_gen_matrix(polyvec mat[KYBER_K], const uint8_t seed[32], int t
         }
         flat++;
     }
+#else
+    (void)flat; /* loop already reached total in the 4-way batch above */
+#endif
 }
 
 /**

@@ -299,7 +299,7 @@ void ama_kyber_cbd2_avx2(int16_t poly[KYBER_N], const uint8_t buf[128]) {
 /* ============================================================================
  * Vectorized polynomial addition
  * ============================================================================ */
-static AMA_UNUSED void ama_kyber_poly_add_avx2(int16_t r[KYBER_N],
+static AMA_MAYBE_UNUSED void ama_kyber_poly_add_avx2(int16_t r[KYBER_N],
                               const int16_t a[KYBER_N],
                               const int16_t b[KYBER_N]) {
     for (int i = 0; i < 16; i++) {
@@ -313,7 +313,7 @@ static AMA_UNUSED void ama_kyber_poly_add_avx2(int16_t r[KYBER_N],
 /* ============================================================================
  * Vectorized polynomial subtraction
  * ============================================================================ */
-static AMA_UNUSED void ama_kyber_poly_sub_avx2(int16_t r[KYBER_N],
+static AMA_MAYBE_UNUSED void ama_kyber_poly_sub_avx2(int16_t r[KYBER_N],
                               const int16_t a[KYBER_N],
                               const int16_t b[KYBER_N]) {
     for (int i = 0; i < 16; i++) {
