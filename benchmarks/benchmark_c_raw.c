@@ -276,6 +276,17 @@ static bench_result_t bench_ed25519_sign(int iters, int warmup) {
     return compute_stats("Ed25519 Sign", g_samples, iters);
 }
 
+/* Ed25519 verify: as of PR-B this path uses Shamir/Straus joint
+ * scalar multiplication ([s]B + [h](-A) in one interleaved pass) at
+ * width-5 wNAF — see ge25519_double_scalarmult_vartime in
+ * src/c/ama_ed25519.c.  The harness measures end-to-end verify time
+ * (including SHA-512 of (R||A||M), point decompression, and the joint
+ * scalar mult) so the reported number directly reflects what protocol
+ * stacks (TLS cert chains, Noise handshakes, MLS Welcome/Commit) see
+ * per signature check.  Compile-time gates AMA_ED25519_VERIFY_SHAMIR
+ * (default 1) and AMA_ED25519_VERIFY_WINDOW (default 5) revert to the
+ * pre-PR-B layout for regression comparison; this benchmark always
+ * exercises whichever path was compiled. */
 static bench_result_t bench_ed25519_verify(int iters, int warmup) {
     uint8_t pk[32], sk[64], sig[64];
     const uint8_t msg[] = "Benchmark message for Ed25519 sign/verify test 0123456789ABCDEF";

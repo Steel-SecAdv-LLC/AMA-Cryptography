@@ -154,6 +154,15 @@ class ComparativeBenchmark:
           - the peer library (PyNaCl / liboqs / cryptography) on the same
             Python surface.
 
+        PR-B note: the "Ed25519 Verify" row sourced from the raw-C harness
+        now exercises the Shamir/Straus joint scalar-mult path
+        (ge25519_double_scalarmult_vartime, width-5 wNAF) gated on
+        AMA_ED25519_VERIFY_SHAMIR=1.  Comparative numbers against
+        libsodium's vartime verify should therefore be re-collected from
+        a fresh raw-C harness run after this change merges; the prior
+        baseline is preserved by setting -DAMA_ED25519_VERIFY_SHAMIR=0
+        -DAMA_ED25519_VERIFY_WINDOW=4 at CMake-time.
+
         Build prerequisite: the harness binary must exist.  Build with
         `cmake --build build --target benchmark_c_raw` before running, or
         `make -C benchmarks benchmark_c_raw`.  When the binary is missing
