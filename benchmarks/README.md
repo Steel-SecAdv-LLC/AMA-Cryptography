@@ -132,6 +132,30 @@ point of this table: a 5× speedup that comes via pulling in 500 k
 additional audit LoC is a different engineering choice than a 5×
 speedup that comes from a better in-tree algorithm.
 
+## VAES AES-256-GCM dispatch (PR A, 2026-04)
+
+The library grew an optional bulk-throughput AES-256-GCM kernel in
+PR A: VAES + VPCLMULQDQ on YMM, runtime-dispatched behind an
+OSXSAVE-gated CPUID probe (see `ama_cpuid_has_vaes_aesgcm()`).
+
+The VAES + VPCLMULQDQ AES-GCM path targets **YMM (256-bit), not
+ZMM**. Zen 3+ / Ice Lake+ CPUs execute these without the AVX-512
+ZMM frequency penalty documented for Skylake-SP / Cascade Lake.
+Cloud VM variance on shared hosts is still the dominant noise
+source; published throughput numbers are from bare-metal runs, not
+CI. The regression baseline tracked in
+[`baseline.json`](baseline.json) continues to target the AVX2
+AES-NI + PCLMULQDQ path shipped in #253 / #254 / #260 / #261, and
+the VAES kernel will only be promoted to the published throughput
+number after a 3-run stability check on dedicated silicon — mirroring
+the 2026-04-21 dilithium_sign recalibration pattern already in
+`baseline.json::metadata.baseline_change_log`.
+
+Hosts without VAES (or any non-x86-64 host) automatically route
+through the AVX2 AES-NI + PCLMULQDQ fallback, which was already
+validated by ACVP and is byte-identical to the VAES path
+(see `tests/c/test_aes_gcm_vaes_equiv.c`).
+
 ## Interpreting Results
 
 See `BENCHMARKS.md` (generated locally by running `python benchmark_suite.py`; not checked into version control) for the authoritative performance document, including:
