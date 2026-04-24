@@ -785,11 +785,19 @@ int main(int argc, char **argv) {
     results[n++] = bench_x25519_keygen(iters_med, warmup);
     results[n++] = bench_x25519_dh(iters_med, warmup);
 
-    /* --- AES-256-GCM --- */
+    /* --- AES-256-GCM ---
+     * 1 KB / 4 KB / 16 KB / 64 KB rows.  PR A (2026-04) added the 16 KB
+     * row to bracket the regime where the VAES + VPCLMULQDQ YMM kernel
+     * starts to dominate the AVX2 AES-NI 8-way path: per-block setup
+     * overhead is amortized, but the working set still fits in L1d, so
+     * the throughput plateau here is the cleanest signal of the kernel
+     * choice rather than memory-bandwidth saturation. */
     results[n++] = bench_aes_gcm_encrypt(1024, iters_med, warmup);
     results[n++] = bench_aes_gcm_decrypt(1024, iters_med, warmup);
     results[n++] = bench_aes_gcm_encrypt(4096, iters_slow, warmup);
     results[n++] = bench_aes_gcm_decrypt(4096, iters_slow, warmup);
+    results[n++] = bench_aes_gcm_encrypt(16384, iters_slow, warmup);
+    results[n++] = bench_aes_gcm_decrypt(16384, iters_slow, warmup);
     results[n++] = bench_aes_gcm_encrypt(65536, iters_vslow, warmup);
     results[n++] = bench_aes_gcm_decrypt(65536, iters_vslow, warmup);
 

@@ -610,6 +610,115 @@ class ComparativeBenchmark:
                 )
             )
 
+    def benchmark_aes_gcm_comparison(self):
+        """Benchmark AES-256-GCM at 1 / 4 / 16 / 64 KB.
+
+        PR A (2026-04) — adds the 4 KB / 16 KB / 64 KB rows requested in
+        the brief; the existing 1 KB row is the historical reference
+        point.  Compares the AMA dispatched path (which routes through
+        the VAES + VPCLMULQDQ YMM kernel on Ice Lake+ / Alder Lake+ /
+        Zen 3+ hosts via ``ama_cpuid_has_vaes_aesgcm``) against the
+        ``cryptography`` library's OpenSSL AES-NI reference path.
+
+        Both columns route through the same Python overhead floor
+        (ctypes call for AMA, CFFI for ``cryptography``) so the
+        comparison reflects per-byte kernel cost plus a roughly
+        constant FFI overhead — the bare-metal raw-C numbers in
+        ``benchmark_c_raw.c`` are the authoritative measurement of
+        kernel throughput.
+        """
+        print("\n" + "=" * 70)
+        print("AES-256-GCM @ 1 / 4 / 16 / 64 KB — AMA vs OpenSSL AES-NI")
+        print("=" * 70)
+
+        sizes = [1024, 4096, 16384, 65536]
+
+        # AMA side via the existing native ctypes wrapper.
+        try:
+            from ama_cryptography.pqc_backends import (
+                native_aes256_gcm_decrypt,
+                native_aes256_gcm_encrypt,
+            )
+
+            key = b"\x42" * 32
+            nonce = b"\x01" * 12
+            aad = b""
+
+            for sz in sizes:
+                pt = b"\x00" * sz
+                # Probe — surfaces RuntimeError on a build without
+                # native AES-GCM linked in.
+                ct, tag = native_aes256_gcm_encrypt(key, nonce, pt, aad)
+                self.results.append(
+                    self.benchmark_operation(
+                        "AMA Cryptography",
+                        f"AES-256-GCM Enc {sz // 1024}KB",
+                        lambda p=pt: native_aes256_gcm_encrypt(key, nonce, p, aad),
+                    )
+                )
+                self.results.append(
+                    self.benchmark_operation(
+                        "AMA Cryptography",
+                        f"AES-256-GCM Dec {sz // 1024}KB",
+                        lambda c=ct, t=tag: native_aes256_gcm_decrypt(key, nonce, c, aad, t),
+                    )
+                )
+        except Exception as e:
+            print(f"  SKIP AMA AES-GCM: {type(e).__name__}: {e}")
+            self.results.append(
+                BenchmarkResult(
+                    implementation="AMA Cryptography",
+                    operation="AES-256-GCM",
+                    iterations=0,
+                    mean_time_ms=0,
+                    median_time_ms=0,
+                    ops_per_sec=0,
+                    available=False,
+                    error=f"native AES-GCM not available: {type(e).__name__}",
+                )
+            )
+
+        # OpenSSL AES-NI reference via the cryptography library.
+        try:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+            key = b"\x42" * 32
+            nonce = b"\x01" * 12
+            aad = b""
+            aead = AESGCM(key)
+
+            for sz in sizes:
+                pt = b"\x00" * sz
+                ct = aead.encrypt(nonce, pt, aad)
+                self.results.append(
+                    self.benchmark_operation(
+                        "cryptography (OpenSSL)",
+                        f"AES-256-GCM Enc {sz // 1024}KB",
+                        lambda p=pt: aead.encrypt(nonce, p, aad),
+                    )
+                )
+                self.results.append(
+                    self.benchmark_operation(
+                        "cryptography (OpenSSL)",
+                        f"AES-256-GCM Dec {sz // 1024}KB",
+                        lambda c=ct: aead.decrypt(nonce, c, aad),
+                    )
+                )
+        except (ImportError, OSError, Exception) as e:
+            print(f"  SKIP OpenSSL AES-GCM: {type(e).__name__}")
+            self.results.append(
+                BenchmarkResult(
+                    implementation="cryptography (OpenSSL)",
+                    operation="AES-256-GCM",
+                    iterations=0,
+                    mean_time_ms=0,
+                    median_time_ms=0,
+                    ops_per_sec=0,
+                    available=False,
+                    error=f"cryptography library not available: {type(e).__name__}",
+                )
+            )
+
     def benchmark_liboqs_direct(self):
         """Benchmark pure liboqs-python (if available)"""
         print("\n" + "=" * 70)
@@ -876,6 +985,7 @@ def main():
     bench.benchmark_ama_cryptography()
     bench.benchmark_libsodium_ed25519()
     bench.benchmark_cryptography_ed25519()
+    bench.benchmark_aes_gcm_comparison()
     bench.benchmark_liboqs_direct()
     bench.benchmark_liboqs_ml_kem()
     bench.benchmark_hybrid_openssl_liboqs()
