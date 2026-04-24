@@ -204,6 +204,22 @@ extern ama_error_t ama_aes256_gcm_decrypt_avx2(const uint8_t *ciphertext, size_t
                                                 const uint8_t *aad, size_t aad_len,
                                                 const uint8_t key[32], const uint8_t nonce[12],
                                                 const uint8_t tag[16], uint8_t *plaintext);
+/* PR A (2026-04) — VAES + VPCLMULQDQ AES-GCM YMM kernel.  Symbol is
+ * compiled out on MSVC (#pragma message in the source file documents
+ * the skip).  We declare it conditionally here so the dispatcher links
+ * cleanly on Windows; the AVX2 AES-NI fallback below is then selected
+ * automatically. */
+#if !defined(_MSC_VER)
+extern void ama_aes256_gcm_encrypt_vaes_avx2(const uint8_t *plaintext, size_t plaintext_len,
+                                              const uint8_t *aad, size_t aad_len,
+                                              const uint8_t key[32], const uint8_t nonce[12],
+                                              uint8_t *ciphertext, uint8_t tag[16]);
+extern ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(const uint8_t *ciphertext, size_t ciphertext_len,
+                                                     const uint8_t *aad, size_t aad_len,
+                                                     const uint8_t key[32], const uint8_t nonce[12],
+                                                     const uint8_t tag[16], uint8_t *plaintext);
+extern int ama_cpuid_has_vaes_aesgcm(void);
+#endif
 extern void ama_chacha20_block_x8_avx2(const uint8_t key[32],
                                         const uint8_t nonce[12],
                                         uint32_t counter,
@@ -384,6 +400,19 @@ static void dispatch_init_internal(void) {
     if (dispatch_info.aes_gcm >= AMA_IMPL_AVX2) {
         dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_avx2;
         dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_avx2;
+        /* PR A — VAES + VPCLMULQDQ YMM upgrade.  CPUID-gated; falls
+         * through to the AVX2 AES-NI pointers above when the bundle
+         * (AVX2 + VAES + VPCLMULQDQ + AES-NI + AVX-OSXSAVE) is not
+         * present.  No reordering of dispatch_init_internal() calls
+         * — INVARIANT-15 unchanged. */
+#if !defined(_MSC_VER)
+        if (ama_cpuid_has_vaes_aesgcm()) {
+            dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_vaes_avx2;
+            dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_vaes_avx2;
+            if (dispatch_verbose())
+                fprintf(stderr, "[AMA Dispatch] AES-GCM: VAES+VPCLMULQDQ YMM path selected\n");
+        }
+#endif
     }
     if (dispatch_info.chacha20poly1305 >= AMA_IMPL_AVX2) {
         /* Env override honored for A/B benchmarking and smoke-testing
