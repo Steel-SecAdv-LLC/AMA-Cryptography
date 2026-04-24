@@ -145,7 +145,11 @@ static void polyvec_reduce(polyvec* r) {
 
 /* polyvec_basemul_acc: r = sum_{i=0..K-1} basemul(a[i], b[i]).
  *
- * Reduction-pairing invariant (INVARIANT-12):
+ * Reduction-pairing / coefficient-range audit:
+ *
+ *   (This is an arithmetic-range correctness note, NOT an INVARIANT-12
+ *   constant-time claim — the ranges below are public, not derived from
+ *   secret material.)
  *
  *   The trailing poly_reduce(r) (Barrett) is load-bearing and CANNOT be
  *   removed.  After accumulating K=4 basemul outputs, each in (-2q, 2q)

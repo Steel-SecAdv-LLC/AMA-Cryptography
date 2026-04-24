@@ -277,13 +277,19 @@ static bench_result_t bench_ed25519_sign(int iters, int warmup) {
 }
 
 /* Ed25519 verify, end-to-end: SHA-512(R||A||M), point decompression,
- * and the joint [s]B + [h](-A) scalar mult.  The reported number is
- * what protocol stacks (TLS cert chains, Noise handshakes, MLS
- * Welcome/Commit) see per signature check.  Compile-time gates
- * AMA_ED25519_VERIFY_SHAMIR (default 1) and AMA_ED25519_VERIFY_WINDOW
- * (default 5) select between the Shamir/Straus joint layout and the
- * legacy split layout; this benchmark always exercises whichever path
- * was compiled. */
+ * and the verify scalar-mult.  The reported number is what protocol
+ * stacks (TLS cert chains, Noise handshakes, MLS Welcome/Commit) see
+ * per signature check.
+ *
+ * Backend-dependent interpretation:
+ *   - In-tree C backend (AMA_ED25519_ASSEMBLY=OFF): the scalar-mult
+ *     path is selected by the compile-time gates AMA_ED25519_VERIFY_SHAMIR
+ *     (default 1 — Shamir/Straus joint layout) and AMA_ED25519_VERIFY_WINDOW
+ *     (default 5 — wNAF window width).
+ *   - Donna shim backend (AMA_ED25519_ASSEMBLY=ON, auto-enabled on MSVC
+ *     x64): those gates are ignored; the shim uses its own vendored
+ *     scalar-mult and wNAF width.  Toggling the gates at CMake-time has
+ *     no effect on this benchmark's numbers on shim builds. */
 static bench_result_t bench_ed25519_verify(int iters, int warmup) {
     uint8_t pk[32], sk[64], sig[64];
     const uint8_t msg[] = "Benchmark message for Ed25519 sign/verify test 0123456789ABCDEF";
@@ -304,14 +310,23 @@ static bench_result_t bench_ed25519_verify(int iters, int warmup) {
     return compute_stats("Ed25519 Verify", g_samples, iters);
 }
 
-/* Ed25519 joint double-scalarmult [s1]P1 + [s2]P2 in isolation.
+/* Ed25519 double-scalarmult [s1]P1 + [s2]P2 in isolation.
  *
- * Times the Shamir/Straus joint pass (ama_ed25519_double_scalarmult_public)
- * without the surrounding verify overhead (no SHA-512 of (R||A||M), no
- * extra decompressions).  Useful for tuning AMA_ED25519_VERIFY_WINDOW:
- * comparing this metric across builds with W=4/5/6 isolates the pure
- * scalar-mult cost from SHA-512 noise that dominates whole-verify
- * timings on short messages.
+ * Times ama_ed25519_double_scalarmult_public() without the surrounding
+ * verify overhead (no SHA-512 of (R||A||M), no extra decompressions).
+ * Interpretation is backend-dependent:
+ *
+ *   - In-tree C backend (AMA_ED25519_ASSEMBLY=OFF): measures the
+ *     Shamir/Straus joint pass that the verify path uses.  This is the
+ *     relevant microbenchmark for AMA_ED25519_VERIFY_WINDOW tuning —
+ *     comparing results across builds with W=4/5/6 isolates the pure
+ *     scalar-mult cost from the SHA-512 noise that dominates whole-
+ *     verify timings on short messages.
+ *   - Donna shim backend (AMA_ED25519_ASSEMBLY=ON): the public API is
+ *     implemented as two separate scalar multiplications plus one
+ *     point add, so this bench does NOT isolate the in-tree Shamir
+ *     path, and AMA_ED25519_VERIFY_WINDOW has no effect on the
+ *     measured code.
  *
  * Setup uses two pseudo-random valid Ed25519 points (public keys from
  * two derived keypairs) and the s/h halves of a real signature for
