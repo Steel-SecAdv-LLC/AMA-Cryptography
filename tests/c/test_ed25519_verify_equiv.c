@@ -3,81 +3,49 @@
  * Licensed under the Apache License, Version 2.0
  *
  * @file test_ed25519_verify_equiv.c
- * @brief Behavioral + byte-identity equivalence test for the PR-B verify path.
+ * @brief Behavioral + byte-identity equivalence tests for the Ed25519
+ *        verify path (both the Shamir/Straus joint layout and the
+ *        legacy split layout).
  *
- * PR B replaces the pre-PR-B verify implementation
- *   [s]B  via comb         (constant-time)
- *   [h]A  via wNAF (w=4)   (vartime; public scalar)
- *   final ge25519_add
- * with the Shamir/Straus joint scalar-mult
+ * AMA_ED25519_VERIFY_SHAMIR=1 (default) implements verify as
  *   ge25519_double_scalarmult_vartime(R_check, s, B, h, -A)
- * at width AMA_ED25519_VERIFY_WINDOW (default 5), gated on
- * AMA_ED25519_VERIFY_SHAMIR (default 1).
+ * at width AMA_ED25519_VERIFY_WINDOW (default 5).  Setting it to 0
+ * selects the legacy split layout: [s]B via comb + [h](-A) via wNAF +
+ * one final ge25519_add.  The two paths are mathematically required to
+ * compute the same group element; this test pins that contract on five
+ * independent layers:
  *
- * Both code paths are mathematically required to compute the same
- * group element, so for any (signature, message, public_key) tuple
- * they must agree on accept/reject.  This test pins that contract on
- * three independent layers:
- *
- *   (A) BEHAVIORAL accept/reject parity (pre-existing):
- *       1. 256 randomized (msg, sk) pairs.  Sign with the in-tree
- *          ama_ed25519_sign, then verify with ama_ed25519_verify.
+ *   (A) Behavioral accept/reject parity:
+ *       1. 256 randomized (msg, sk) pairs signed with ama_ed25519_sign.
  *          Every well-formed signature MUST verify.
- *       2. For each of the 256 tuples, tamper a deterministic bit (one
- *          from the signature R half, one from the s half, one from the
- *          message, one from the public key) and re-verify.  Every
- *          tampered tuple MUST fail to verify.
- *       3. Edge case: an all-zero signature on an arbitrary message
- *          (must reject).
+ *       2. For each tuple, tamper a deterministic bit (one from the
+ *          signature R half, one from s, one from the message, one from
+ *          the public key) and re-verify.  Every tampered tuple MUST
+ *          fail to verify.
+ *       3. All-zero signature on an arbitrary message: must reject.
  *
- *   (B) BYTE-IDENTITY of the joint scalar mult itself
- *       (PR-B hardening pass — addresses review item #1):
- *       For 256 random (s1, P1, s2, P2) tuples, assert that
+ *   (B) Byte-identity of the joint scalar mult itself.  For 256 random
+ *       (s1, P1, s2, P2) tuples, assert
  *           ama_ed25519_double_scalarmult_public(out, s1, P1, s2, P2)
- *       (the Shamir joint pass) produces byte-for-byte the same
- *       compressed Edwards point as the legacy split layout
- *           [s1]P1 + [s2]P2  via two independent scalarmults plus one
- *                            point addition.
- *       The legacy layout is reconstructed from the existing public
- *       primitives ama_ed25519_scalarmult_public + ama_ed25519_point_add,
- *       so the test is a true cross-path comparison even in builds
- *       where production verify uses the legacy layout (the Shamir
- *       helpers are compiled unconditionally — see the gate-control
- *       note in src/c/ama_ed25519.c).
+ *       produces byte-for-byte the same compressed Edwards point as the
+ *       legacy split layout reconstructed from the public primitives
+ *       ama_ed25519_scalarmult_public + ama_ed25519_point_add.  This
+ *       locks cross-path equivalence in every CI run rather than
+ *       requiring the SHAMIR=1 / SHAMIR=0 build matrix.
  *
- *   (C) ZERO-SCALAR / l-1 EDGE CASES for ge25519_double_scalarmult_vartime
- *       (PR-B hardening pass — addresses review item #3):
- *       (s1=0, s2≠0), (s1≠0, s2=0), (s1=0, s2=0), and scalar = l-1
- *       (the largest reduced scalar) under both inputs.  These exercise
- *       the explicit `top < 0` identity-handling branch and the
- *       most-significant-bit boundary of sc25519_to_wnaf.
+ *   (C) Zero-scalar / l-1 edge cases for the joint scalar mult:
+ *       (s1=0, s2!=0), (s1!=0, s2=0), (s1=0, s2=0), and scalar = l-1
+ *       under both inputs.  Exercises the explicit `top < 0`
+ *       identity-handling branch and the MSB boundary of
+ *       sc25519_to_wnaf.
  *
- *   (D) STRICT-ENCODING REJECTION VECTORS
- *       (PR-B hardening pass — addresses review item #2):
- *       4 negative vectors that pin the verify path's rejection
- *       behavior on signatures that are mathematically guaranteed
- *       to fail under any correct cofactored Ed25519 verifier
- *       (s with high bits forcing R_check ≠ R; non-canonical y
- *       encoding of A producing a different point than the signer
- *       used; signature R that is valid bytes but mathematically
- *       inconsistent with (h, A, s); signature R = identity with
- *       non-zero h).  These are robust against the cofactored vs
- *       cofactorless verification distinction (see Chalkias &
- *       Konstantinou 2020) — a refactor that accidentally accepts
- *       any of them is a correctness regression regardless of
- *       which Ed25519 dialect the impl claims to follow.
+ *   (D) Strict-encoding rejection vectors.  Four negative (sig, msg, pk)
+ *       tuples that any correct cofactored Ed25519 verifier MUST reject
+ *       on the underlying group-element check, not on a strict-mode-only
+ *       canonicalization rule — robust against the cofactored vs
+ *       cofactorless distinction (Chalkias & Konstantinou 2020).
  *
- *   (E) RFC 8032 §7.1 KAT (pre-existing):
- *       Pins absolute correctness against the published vector.
- *
- * To compare PR-B's Shamir path against the legacy split path
- * byte-for-byte at the verify level, run this suite twice:
- *   - once with the default build (AMA_ED25519_VERIFY_SHAMIR=1, W=5)
- *   - once with -DAMA_ED25519_VERIFY_SHAMIR=0 -DAMA_ED25519_VERIFY_WINDOW=4
- * Both invocations MUST report identical pass/fail counts.  Layer (B)
- * additionally provides byte-identity at the group-element level on
- * every build, so the cross-path equivalence is locked down in any
- * single CI run rather than requiring the matrix.
+ *   (E) RFC 8032 §7.1 KAT pin for absolute correctness.
  */
 
 #include "ama_cryptography.h"
@@ -238,7 +206,7 @@ static void reduce_scalar_32(uint8_t out[32], const uint8_t in[32]) {
 
 int main(void) {
     printf("===========================================\n");
-    printf("Ed25519 verify equivalence test (PR-B)\n");
+    printf("Ed25519 verify equivalence test\n");
     printf("===========================================\n\n");
 
     /* -- (E) RFC 8032 KAT first: pins the absolute correctness. -- */

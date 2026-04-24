@@ -45,6 +45,20 @@ option(AMA_ENABLE_DUDECT "Build dudect constant-time verification tests" OFF)
 option(AMA_ENABLE_NEON "Enable ARM NEON optimizations (AArch64)" ON)
 option(AMA_ENABLE_SVE2 "Enable ARM SVE2 optimizations (ARMv9)" OFF)
 
+# Ed25519 verify-path tuning gates.  Propagated to the in-tree ama_ed25519.c
+# via target_compile_definitions further below.  Ignored by the donna shim
+# path (AMA_ED25519_ASSEMBLY=ON), which has its own scalarmult.
+option(AMA_ED25519_VERIFY_SHAMIR
+       "Use Shamir/Straus joint [s]B+[h](-A) in Ed25519 verify (1=on, 0=legacy split)"
+       ON)
+set(AMA_ED25519_VERIFY_WINDOW "5" CACHE STRING
+    "wNAF window width for Ed25519 verify scalar mults (integer in [2,6]; 5 default)")
+set_property(CACHE AMA_ED25519_VERIFY_WINDOW PROPERTY STRINGS "2" "3" "4" "5" "6")
+if(NOT AMA_ED25519_VERIFY_WINDOW MATCHES "^[2-6]$")
+    message(FATAL_ERROR
+        "AMA_ED25519_VERIFY_WINDOW must be an integer in [2,6]; got '${AMA_ED25519_VERIFY_WINDOW}'")
+endif()
+
 # MSVC lacks __uint128_t required by fe51 field arithmetic. Auto-enable the
 # donna shim (which provides its own field ops) so Windows builds compile.
 # On MSVC ARM64, neither fe51 nor donna is available — fail at configure time.
@@ -383,6 +397,18 @@ function(ama_apply_donna_settings target)
                 COMPILE_FLAGS "-Wno-unused-function -Wno-missing-prototypes -Wno-strict-prototypes"
             )
         endif()
+    else()
+        # In-tree ama_ed25519.c path: propagate the verify-gate CMake cache
+        # variables to the compiler so `-DAMA_ED25519_VERIFY_SHAMIR=0` and
+        # `-DAMA_ED25519_VERIFY_WINDOW=W` actually change codegen.  The
+        # donna shim ignores these (it has its own scalar-mult routines).
+        if(AMA_ED25519_VERIFY_SHAMIR)
+            target_compile_definitions(${target} PRIVATE AMA_ED25519_VERIFY_SHAMIR=1)
+        else()
+            target_compile_definitions(${target} PRIVATE AMA_ED25519_VERIFY_SHAMIR=0)
+        endif()
+        target_compile_definitions(${target} PRIVATE
+            AMA_ED25519_VERIFY_WINDOW=${AMA_ED25519_VERIFY_WINDOW})
     endif()
 endfunction()
 
@@ -556,6 +582,9 @@ if(MSVC AND AMA_ED25519_ASSEMBLY)
     message(STATUS "  Ed25519 donna:  Auto (MSVC — fe51 requires __uint128_t)")
 else()
     message(STATUS "  Ed25519 donna:  ${AMA_ED25519_ASSEMBLY}")
+endif()
+if(NOT AMA_ED25519_ASSEMBLY)
+    message(STATUS "  Ed25519 verify: Shamir=${AMA_ED25519_VERIFY_SHAMIR}, wNAF W=${AMA_ED25519_VERIFY_WINDOW}")
 endif()
 message(STATUS "")
 message(STATUS "Post-Quantum Cryptography:")

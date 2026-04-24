@@ -276,17 +276,14 @@ static bench_result_t bench_ed25519_sign(int iters, int warmup) {
     return compute_stats("Ed25519 Sign", g_samples, iters);
 }
 
-/* Ed25519 verify: as of PR-B this path uses Shamir/Straus joint
- * scalar multiplication ([s]B + [h](-A) in one interleaved pass) at
- * width-5 wNAF — see ge25519_double_scalarmult_vartime in
- * src/c/ama_ed25519.c.  The harness measures end-to-end verify time
- * (including SHA-512 of (R||A||M), point decompression, and the joint
- * scalar mult) so the reported number directly reflects what protocol
- * stacks (TLS cert chains, Noise handshakes, MLS Welcome/Commit) see
- * per signature check.  Compile-time gates AMA_ED25519_VERIFY_SHAMIR
- * (default 1) and AMA_ED25519_VERIFY_WINDOW (default 5) revert to the
- * pre-PR-B layout for regression comparison; this benchmark always
- * exercises whichever path was compiled. */
+/* Ed25519 verify, end-to-end: SHA-512(R||A||M), point decompression,
+ * and the joint [s]B + [h](-A) scalar mult.  The reported number is
+ * what protocol stacks (TLS cert chains, Noise handshakes, MLS
+ * Welcome/Commit) see per signature check.  Compile-time gates
+ * AMA_ED25519_VERIFY_SHAMIR (default 1) and AMA_ED25519_VERIFY_WINDOW
+ * (default 5) select between the Shamir/Straus joint layout and the
+ * legacy split layout; this benchmark always exercises whichever path
+ * was compiled. */
 static bench_result_t bench_ed25519_verify(int iters, int warmup) {
     uint8_t pk[32], sk[64], sig[64];
     const uint8_t msg[] = "Benchmark message for Ed25519 sign/verify test 0123456789ABCDEF";
@@ -307,22 +304,17 @@ static bench_result_t bench_ed25519_verify(int iters, int warmup) {
     return compute_stats("Ed25519 Verify", g_samples, iters);
 }
 
-/* Ed25519 joint double-scalarmult [s1]P1 + [s2]P2 in isolation
- * (PR-B hardening pass — addresses review item #6).
+/* Ed25519 joint double-scalarmult [s1]P1 + [s2]P2 in isolation.
  *
- * Times the Shamir/Straus joint pass exposed via
- * ama_ed25519_double_scalarmult_public WITHOUT the surrounding verify
- * overhead (no SHA-512 of (R||A||M), no nested point decompression of
- * A and -A inside ama_ed25519_verify — the public API still does one
- * decompression per input point, which is unavoidable since the API
- * takes compressed inputs).  Useful for tuning the
- * AMA_ED25519_VERIFY_WINDOW default: comparing this metric across
- * builds with -DAMA_ED25519_VERIFY_WINDOW=4/5/6 isolates the pure
+ * Times the Shamir/Straus joint pass (ama_ed25519_double_scalarmult_public)
+ * without the surrounding verify overhead (no SHA-512 of (R||A||M), no
+ * extra decompressions).  Useful for tuning AMA_ED25519_VERIFY_WINDOW:
+ * comparing this metric across builds with W=4/5/6 isolates the pure
  * scalar-mult cost from SHA-512 noise that dominates whole-verify
  * timings on short messages.
  *
- * Setup uses two pseudo-random valid Ed25519 points (the public keys
- * of two derived keypairs) and the s/h halves of a real signature for
+ * Setup uses two pseudo-random valid Ed25519 points (public keys from
+ * two derived keypairs) and the s/h halves of a real signature for
  * scalars, so the input shape closely matches the verify call site. */
 static bench_result_t bench_ed25519_double_scalarmult(int iters, int warmup) {
     uint8_t pk1[32], pk2[32], sk1[64], sk2[64], sig[64], h[64];

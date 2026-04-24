@@ -728,8 +728,8 @@ AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
  * implementation block comment in src/c/ama_ed25519.c for the full
  * security contract.
  *
- * Exposed primarily as a regression / equivalence test surface for the
- * PR-B Shamir refactor and as a micro-benchmark target.
+ * Exposed as a regression / equivalence-test surface and a
+ * micro-benchmark target for tuning the wNAF window default.
  */
 AMA_API ama_error_t ama_ed25519_double_scalarmult_public(
     uint8_t result[32],

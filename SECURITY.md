@@ -56,8 +56,8 @@ best-known public numbers for libsodium (Ed25519) and liboqs
 (ML-DSA-65, ML-KEM-1024), and every release closes some of that gap;
 recent work (see `CHANGELOG.md` from v2.1 onward) added 4-way Keccak
 batching, Ed25519 signed-window combs, merged-layer ML-DSA NTT, and
-(PR-B) Ed25519 verify via Shamir/Straus joint scalar multiplication
-with a width-5 wNAF — roughly doubling verify throughput.
+Ed25519 verify via Shamir/Straus joint scalar multiplication with a
+width-5 wNAF — roughly doubling verify throughput.
 
 #### What "2× verify" means in practice
 

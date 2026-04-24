@@ -143,37 +143,30 @@ static void polyvec_reduce(polyvec* r) {
     }
 }
 
-/**
- * Inner product of two polynomial vectors in NTT domain
- */
 /* polyvec_basemul_acc: r = sum_{i=0..K-1} basemul(a[i], b[i]).
  *
- * Reduction-pairing audit (PR B, INVARIANT-12 considerations):
+ * Reduction-pairing invariant (INVARIANT-12):
  *
- *   The trailing poly_reduce(r) (Barrett) here CANNOT be removed.
- *   After accumulating K=4 basemul outputs, each in (-2q, 2q) (basemul
- *   sums two montgomery_reduce outputs each in (-q, q)), the running
- *   sum is in (-8q, 8q) ≈ (-26632, 26632), still fitting int16_t but
- *   not in the [-q/2, q/2] domain that the next stage assumes.  All
- *   downstream consumers (poly_tomont, poly_invntt, polyvec_tobytes)
- *   require either |x| ≤ q or x ∈ [0, q-1], so the Barrett step is
- *   load-bearing.  Removing it would silently produce wrong NTT-domain
- *   coefficients on encaps and KAT-detectable corruption.
+ *   The trailing poly_reduce(r) (Barrett) is load-bearing and CANNOT be
+ *   removed.  After accumulating K=4 basemul outputs, each in (-2q, 2q)
+ *   (basemul sums two montgomery_reduce outputs each in (-q, q)), the
+ *   running sum is in (-8q, 8q) ≈ (-26632, 26632) — still fitting
+ *   int16_t but outside the [-q/2, q/2] domain that poly_tomont /
+ *   poly_invntt / polyvec_tobytes expect.  Removing it would silently
+ *   corrupt NTT-domain coefficients and would be detected by the KAT
+ *   suite, but only after producing wrong ciphertexts on encaps.
  *
- *   Similar audit results elsewhere in the generic C path:
+ *   Similar audit results in the generic C path:
  *     - poly_invntt's final montgomery_reduce(f * x) is the only
- *       reduction; output is in (-q, q), exactly what the caller
- *       (poly_add / poly_sub / coeff_normalize) tolerates.  No pair.
+ *       reduction; output is in (-q, q), exactly what the callers
+ *       (poly_add, poly_sub, coeff_normalize) tolerate.  No pair.
  *     - poly_ntt's per-butterfly montgomery_reduce keeps |coeff|
- *       bounded by q + |a|/R.  After log2(KYBER_N)=8 layers, the
- *       bound is ≲ 9q (per Bos-Friedberger §3.3); the trailing
+ *       bounded by q + |a|/R.  After log2(KYBER_N)=8 layers the
+ *       bound is ≲ 9q (per Bos–Friedberger §3.3); the trailing
  *       polyvec_reduce in callers covers it.  No interior pair.
  *
- *   Net: the generic-C reduction layout is already algorithmically
- *   minimal at q=3329 with int16 coefficients.  The redundant pairs
- *   targeted in PR-B's plan exist primarily in the AVX2 NTT path
- *   (src/c/avx2/ama_kyber_avx2.c), which is in PR A's file scope and
- *   intentionally not touched here.
+ *   The generic-C reduction layout is already algorithmically minimal
+ *   at q=3329 / int16 coefficients.
  */
 static void polyvec_basemul_acc(poly* r, const polyvec* a, const polyvec* b) {
     unsigned int i;
