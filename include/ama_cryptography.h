@@ -719,6 +719,23 @@ AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
 /* Backwards-compatible macro — deprecated, use ama_ed25519_scalarmult_public */
 #define ama_ed25519_scalar_mult(r, s, p) ama_ed25519_scalarmult_public((r), (s), (p))
 
+/**
+ * Joint variable-time double-base scalar multiplication:
+ *   result = [s1]P1 + [s2]P2  (one interleaved Shamir/Straus pass).
+ *
+ * SECURITY: NOT constant-time — both scalars MUST be PUBLIC data
+ * (Ed25519 verify, FROST verifier, batch verify).  See the in-tree
+ * implementation block comment in src/c/ama_ed25519.c for the full
+ * security contract.
+ *
+ * Exposed primarily as a regression / equivalence test surface for the
+ * PR-B Shamir refactor and as a micro-benchmark target.
+ */
+AMA_API ama_error_t ama_ed25519_double_scalarmult_public(
+    uint8_t result[32],
+    const uint8_t s1[32], const uint8_t P1[32],
+    const uint8_t s2[32], const uint8_t P2[32]);
+
 /** Reduce 64-byte scalar mod l (Ed25519 group order). Result in s[0..31]. */
 AMA_API void ama_ed25519_sc_reduce(uint8_t s[64]);
 

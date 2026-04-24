@@ -413,8 +413,20 @@ static inline void ge25519_p3_to_p2(ge25519_p2 *r, const ge25519_p3 *p) {
  * #261 width-4 path (kept for one release as a rollback hatch). */
 #define AMA_ED25519_VERIFY_WINDOW 5
 #endif
-#if AMA_ED25519_VERIFY_WINDOW < 2 || AMA_ED25519_VERIFY_WINDOW > 8
-#error "AMA_ED25519_VERIFY_WINDOW must be in [2, 8]; default 5 is recommended"
+/* Accepted range narrowed to [2, 6] in the PR-B hardening pass:
+ *   - W=7 pushes the per-point odd-multiples table to 64 entries
+ *     (~10 KiB of ge25519_p3) and the joint Shamir routine instantiates
+ *     two such tables, crossing the 16 KiB mark on the call stack —
+ *     several platforms (musl by default, OpenBSD pthreads) ship 64 KiB
+ *     thread stacks where that becomes uncomfortably close to overflow.
+ *   - W=8 doubles that again with no measurable gain on Curve25519
+ *     (the per-bit doubling cost dominates above W=5).
+ *   - W=2 is retained as a "smallest functional" floor for tooling /
+ *     fuzzing that wants to stress the carry-propagation path.
+ * Default remains W=5; W=4 is the documented rollback gate to the
+ * pre-PR-B layout (see ge25519_scalarmult comment block above). */
+#if AMA_ED25519_VERIFY_WINDOW < 2 || AMA_ED25519_VERIFY_WINDOW > 6
+#error "AMA_ED25519_VERIFY_WINDOW must be in [2, 6]; default 5 is recommended"
 #endif
 
 static void ge25519_scalarmult(ge25519_p3 *r, const uint8_t *scalar, const ge25519_p3 *p) {
@@ -566,11 +578,19 @@ static void ge25519_scalarmult(ge25519_p3 *r, const uint8_t *scalar, const ge255
 #ifndef AMA_ED25519_VERIFY_SHAMIR
 /* Default ON.  Override with -DAMA_ED25519_VERIFY_SHAMIR=0 to fall back
  * to the pre-PR-B sequential layout ([s]B via comb + [h](-A) via wNAF
- * + ge25519_add).  Kept for one release as a rollback hatch. */
+ * + ge25519_add).  Kept for one release as a rollback hatch.
+ *
+ * NOTE (PR-B hardening pass): the helpers below are compiled
+ * unconditionally so that the `ama_ed25519_double_scalarmult_public`
+ * test/bench API is available regardless of the gate value.  The gate
+ * now controls only the verify call site, not symbol availability —
+ * this lets the byte-identity test cross-check the Shamir path against
+ * the legacy split path even in builds where production verify uses
+ * the legacy layout. */
 #define AMA_ED25519_VERIFY_SHAMIR 1
 #endif
 
-#if AMA_ED25519_VERIFY_SHAMIR
+/* Compile the Shamir helpers unconditionally — see note above. */
 
 /* Compute width-w wNAF expansion of a 32-byte little-endian scalar.
  * Output: 256 signed digits in wnaf[], each odd in [-(2^(w-1)-1),
@@ -712,7 +732,11 @@ static void ge25519_double_scalarmult_vartime(ge25519_p3 *r,
     #undef DSM_T
 }
 
-#endif /* AMA_ED25519_VERIFY_SHAMIR */
+/* (helpers above were previously enclosed in
+ *    #if AMA_ED25519_VERIFY_SHAMIR ... #endif
+ * — the guard was removed in the PR-B hardening pass so the
+ * `ama_ed25519_double_scalarmult_public` API works in both gate
+ * configurations.) */
 
 /* ============================================================================
  * OPTIMIZED BASE POINT MULTIPLICATION — Signed 4-bit Window Comb
@@ -1752,6 +1776,49 @@ AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
     ge25519_scalarmult(&R, public_scalar, &P);
     ge25519_p3_tobytes(result, &R);
 
+    return AMA_SUCCESS;
+}
+
+/**
+ * Joint variable-time double-base scalar multiplication using the
+ * Shamir/Straus trick: result = [s1]P1 + [s2]P2 in one interleaved pass.
+ *
+ * SECURITY: NOT constant-time.  Both scalars MUST be PUBLIC data
+ * (Ed25519 verify, batch verify, FROST verifier).  Do NOT use with
+ * secret scalars — wNAF digit extraction and table indexing leak the
+ * scalars via timing side-channels.
+ *
+ * Exposed primarily as a regression / equivalence test surface for the
+ * PR-B Shamir refactor: tests/c/test_ed25519_verify_equiv.c uses this
+ * to compare the joint-pass output byte-for-byte against the legacy
+ * "[s1]P1 + [s2]P2 via two separate scalarmults + one ge25519_add"
+ * layout (which the test reconstructs from the existing public
+ * primitives ama_ed25519_scalarmult_public + ama_ed25519_point_add).
+ * Also used by benchmarks/benchmark_c_raw.c to time the joint mult in
+ * isolation (without the SHA-512 / point-decompression overhead that
+ * a full ama_ed25519_verify call would include) for future tuning of
+ * the AMA_ED25519_VERIFY_WINDOW default.
+ *
+ * @param result  Output: 32-byte compressed Edwards point [s1]P1 + [s2]P2
+ * @param s1      Input:  32-byte little-endian PUBLIC scalar
+ * @param P1      Input:  32-byte compressed Edwards point
+ * @param s2      Input:  32-byte little-endian PUBLIC scalar
+ * @param P2      Input:  32-byte compressed Edwards point
+ * @return AMA_SUCCESS on success,
+ *         AMA_ERROR_INVALID_PARAM on NULL inputs or point decompression failure.
+ */
+AMA_API ama_error_t ama_ed25519_double_scalarmult_public(
+    uint8_t result[32],
+    const uint8_t s1[32], const uint8_t P1[32],
+    const uint8_t s2[32], const uint8_t P2[32]) {
+    ge25519_p3 p1, p2, r;
+
+    if (!result || !s1 || !P1 || !s2 || !P2) return AMA_ERROR_INVALID_PARAM;
+    if (ge25519_frombytes(&p1, P1) != 0) return AMA_ERROR_INVALID_PARAM;
+    if (ge25519_frombytes(&p2, P2) != 0) return AMA_ERROR_INVALID_PARAM;
+
+    ge25519_double_scalarmult_vartime(&r, s1, &p1, s2, &p2);
+    ge25519_p3_tobytes(result, &r);
     return AMA_SUCCESS;
 }
 
