@@ -22,6 +22,7 @@
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
+#include "ama_avx2_internal.h"
 
 /* ============================================================================
  * Keccak-f[1600] round constants
