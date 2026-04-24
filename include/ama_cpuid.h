@@ -67,27 +67,41 @@ int ama_has_pclmulqdq(void);
 int ama_has_vaes(void);
 
 /**
- * @brief Check for VPCLMULQDQ (vectorized carry-less multiply) on YMM.
+ * @brief Check for VPCLMULQDQ (CPUID feature bit) on an AVX-enabled OS.
  *
- * CPUID.(EAX=7,ECX=0):ECX[10].  Carry-less multiply acting on two
- * 128-bit lanes of a YMM register simultaneously — used for 4-lane
- * Karatsuba GHASH and Montgomery reduction in the PR A AES-GCM path.
- * Pair with VPCLMULQDQ rather than a table-lookup GHASH to preserve
- * INVARIANT-12 (constant-time secret-dependent operations).  Returns 1
- * only when CPUID reports VPCLMULQDQ *and* the OS has enabled AVX
- * state in XCR0.
+ * CPUID.(EAX=7,ECX=0):ECX[10].  This probe reports the availability of
+ * the vector carry-less-multiply extension associated with the
+ * YMM-capable VPCLMULQDQ instruction forms.  It is a hardware/OS
+ * capability check only; callers must not assume the current AES-GCM
+ * kernel necessarily emits 256-bit VPCLMULQDQ intrinsics in every
+ * build.  The PR A GHASH fold currently uses the 128-bit XMM form
+ * (_mm_clmulepi64_si128); a future PR may widen it to
+ * _mm256_clmulepi64_epi128 without changing this capability contract.
+ * GHASH must remain constant-time (INVARIANT-12), so this capability
+ * is paired with carry-less-multiply implementations rather than
+ * table lookups.  Returns 1 only when CPUID reports VPCLMULQDQ *and*
+ * the OS has enabled AVX state in XCR0.
  */
 int ama_has_vpclmulqdq(void);
 
 /**
  * @brief Bundle check: AVX2 + VAES + VPCLMULQDQ + AES-NI.
  *
- * The PR A VAES AES-GCM path needs all four:
+ * The PR A VAES AES-GCM dispatch gate checks all four:
  *   - AVX2          — base ISA for YMM register set + integer ops
- *   - VAES          — 2-blocks-per-YMM AES rounds
- *   - VPCLMULQDQ    — 2-lane carry-less multiply for GHASH
- *   - AES-NI        — 128-bit AESKEYGENASSIST runs the AES-256 key schedule
- *                     (VAES does not provide a YMM key-expansion opcode)
+ *   - VAES          — 2-blocks-per-YMM AES rounds (emitted by the
+ *                     current kernel via _mm256_aesenc_epi128 /
+ *                     _mm256_aesenclast_epi128)
+ *   - VPCLMULQDQ    — vector CLMUL capability bit.  Declared in the
+ *                     bundle for forward-compat with a future YMM
+ *                     GHASH fold.  The current kernel's GHASH uses
+ *                     the 128-bit XMM form (_mm_clmulepi64_si128),
+ *                     but on shipped hardware every VAES-capable
+ *                     consumer CPU (Ice Lake+ / Alder Lake+ / Zen 3+)
+ *                     also ships VPCLMULQDQ, so the gate is not more
+ *                     restrictive in practice.
+ *   - AES-NI        — 128-bit AESKEYGENASSIST runs the AES-256 key
+ *                     schedule (VAES provides only the rounds).
  *
  * Returns 1 only when every component passes; otherwise the dispatcher
  * falls back to the AVX2 AES-NI + PCLMULQDQ path shipped in #253 / #254.
