@@ -200,21 +200,16 @@ int ama_has_avx2(void) {
 
 int ama_has_avx512f(void) {
     AMA_CALL_ONCE(cpuid_once, detect_x86_features);
-    /* AVX-512F is a strict superset of AVX2, which in turn requires
-     * SSE + AVX YMM state in XCR0 (bits 1+2).  The dispatcher maps
-     * AMA_IMPL_AVX512 → AMA_IMPL_AVX2 (no EVEX/ZMM code yet), so if
-     * this probe returns 1 while the OS has NOT enabled AVX state,
-     * the dispatch layer would wire AVX2 function pointers whose
-     * VEX-encoded opcodes #UD — a latent SIGILL on VMs where the
-     * hypervisor exposes the host CPUID but restricts XCR0 (Devin
-     * Review #3136221784).
-     *
-     * Gate on has_avx_osxsave_cached (same flag ama_has_avx2() /
-     * ama_has_vaes() / ama_has_vpclmulqdq() use).  When the first
-     * AVX-512 kernel lands, ALSO verify XCR0 bits 5 (opmask) +
-     * 6 (ZMM Hi256) + 7 (Hi16 ZMM); those are distinct from the
-     * AVX state bits and are not checked here. */
-    return has_avx512f_cached && has_avx_osxsave_cached;
+    /* NOTE: This probe currently returns the raw CPUID bit without an
+     * XCR0 gate.  The project does not yet emit any EVEX-encoded / ZMM
+     * AVX-512 opcodes, so the practical hazard is zero.  When the
+     * first AVX-512 kernel lands, gate this on XCR0 bits 5 (opmask),
+     * 6 (ZMM Hi256), and 7 (Hi16 ZMM) — those are distinct from the
+     * AVX state bits checked by xcr0_has_avx_state() above.  Until
+     * then, callers must NOT emit AVX-512 instructions purely on
+     * this bit; treat it as "feature flag present" not "safe to
+     * execute". */
+    return has_avx512f_cached;
 }
 
 int ama_has_vaes(void) {

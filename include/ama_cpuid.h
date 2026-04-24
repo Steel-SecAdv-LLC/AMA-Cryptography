@@ -124,20 +124,17 @@ int ama_cpuid_has_vaes_aesgcm(void);
 int ama_has_avx2(void);
 
 /**
- * @brief Check for x86 AVX-512F CPUID feature bit + AVX OS state.
+ * @brief Check for x86 AVX-512F CPUID feature bit.
  *
- * CPUID.(EAX=7,ECX=0):EBX[16] AND OSXSAVE AND XCR0 bits 1+2
- * (SSE+AVX).  AVX-512F is a strict superset of AVX2; the dispatch
- * layer currently maps AMA_IMPL_AVX512 → AMA_IMPL_AVX2 (no
- * EVEX/ZMM code emitted yet), so the AVX state gate is necessary
- * to prevent wiring AVX2 function pointers on a host where the OS
- * has not enabled AVX state in XCR0.  When the first AVX-512 kernel
- * lands, callers must ALSO verify XCR0 bits 5 (opmask) + 6 (ZMM
- * Hi256) + 7 (Hi16 ZMM); those are distinct from the AVX-only bits
- * and are not checked here.
+ * CPUID.(EAX=7,ECX=0):EBX[16] only — no XCR0 gate.  The project does
+ * not yet emit any EVEX-encoded / ZMM AVX-512 opcodes, so the
+ * practical hazard is zero.  When the first AVX-512 kernel lands,
+ * callers must ALSO verify XCR0 bits 5 (opmask) + 6 (ZMM Hi256) +
+ * 7 (Hi16 ZMM); those are distinct from the AVX-only bits checked
+ * inside ama_has_avx2().
  *
- * @return 1 if AVX-512F is reported by CPUID AND the OS has enabled
- *         AVX state, 0 otherwise.  Cached after first call.
+ * @return 1 if AVX-512F is reported by CPUID, 0 otherwise.  Cached
+ *         after first call.
  */
 int ama_has_avx512f(void);
 

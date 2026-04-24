@@ -223,16 +223,11 @@ static void dispatch_init_internal(void) {
     dispatch_info.arch_name = "x86-64";
 
     int has_avx2 = ama_has_avx2();       /* CPUID + OSXSAVE + XCR0 AVX state */
-    int has_avx512f = ama_has_avx512f(); /* CPUID + OSXSAVE AVX state; no ZMM XCR0 yet */
+    int has_avx512f = ama_has_avx512f(); /* CPUID bit only; no ZMM emission yet */
 
     ama_impl_level_t best = AMA_IMPL_GENERIC;
     if (has_avx2)   best = AMA_IMPL_AVX2;
-    /* Belt-and-suspenders: AVX-512F is a strict superset of AVX2.
-     * Never promote past AVX2 unless AVX2 itself passed its XCR0
-     * gate, preventing the effective→AVX2 fallback below from
-     * wiring VEX-encoded function pointers on a host whose OS has
-     * not enabled AVX state (Devin Review #3136221784). */
-    if (has_avx512f && has_avx2) best = AMA_IMPL_AVX512;
+    if (has_avx512f) best = AMA_IMPL_AVX512;
 
     /* All algorithms use the best available level.
      * AVX-512 implementations fall back to AVX2 where AVX-512
