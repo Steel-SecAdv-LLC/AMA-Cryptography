@@ -27,6 +27,11 @@ add_ama_test(test_ed25519 test_ed25519.c)
 # would be a no-op tautology.  Only build it on the in-tree backend.
 if(NOT AMA_ED25519_ASSEMBLY)
     add_ama_test(test_ed25519_comb_equiv test_ed25519_comb_equiv.c)
+    # PR-B verify-path equivalence: behavioural accept/reject parity for
+    # the Shamir/Straus joint scalar mult vs the legacy split layout.
+    # Like test_ed25519_comb_equiv, only built on the in-tree backend
+    # (the donna shim replaces ama_ed25519.c entirely).
+    add_ama_test(test_ed25519_verify_equiv test_ed25519_verify_equiv.c)
 endif()
 
 # X25519 lives under AMA_USE_NATIVE_PQC (see top-level CMakeLists.txt),

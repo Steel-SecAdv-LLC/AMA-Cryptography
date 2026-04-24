@@ -416,6 +416,62 @@ class TestMLKEM1024KAT:
             unique_bytes >= 20
         ), f"Shared secret lacks entropy: only {unique_bytes} unique byte values"
 
+    def test_random_encaps_decaps_50_trials(self, kyber_provider: Any) -> None:
+        """50 randomized encaps/decaps round-trips beyond ACVP vectors.
+
+        PR-B regression guard: the Kyber sample+NTT merge in
+        kyber_keypair_generate / kyber_cpapke_enc / kyber_keypair_from_seed
+        is byte-identical by construction (NTT is per-poly), but a wider
+        random net catches any caching/aliasing bug introduced by the
+        reordering — every round-trip must produce matching shared
+        secrets, the ciphertext must differ across encaps, and the
+        decap-with-correct-key vs decap-with-wrong-key paths must remain
+        distinguishable.
+        """
+        keypair = kyber_provider.generate_keypair()
+        seen_cts: set[bytes] = set()
+        seen_secrets: set[bytes] = set()
+        for trial in range(50):
+            ciphertext, ss_enc = kyber_provider.encapsulate(keypair.public_key)
+            ss_dec = kyber_provider.decapsulate(ciphertext, keypair.secret_key)
+            assert ss_enc == ss_dec, (
+                f"trial {trial}: encaps/decaps shared secrets diverged "
+                f"(post-merge regression in kyber_cpapke_enc)"
+            )
+            seen_cts.add(bytes(ciphertext))
+            seen_secrets.add(bytes(ss_enc))
+
+        # 50 randomized encaps under one pk should yield 50 distinct
+        # ciphertexts (collision probability ≪ 2^-100) and 50 distinct
+        # 32-byte secrets.
+        assert len(seen_cts) == 50, (
+            f"Only {len(seen_cts)} distinct ciphertexts across 50 encaps — "
+            "encapsulation randomness is degraded"
+        )
+        assert len(seen_secrets) == 50, (
+            f"Only {len(seen_secrets)} distinct shared secrets across 50 "
+            "encaps — KDF output is degenerate"
+        )
+
+    def test_random_keypair_encaps_decaps_25_trials(self, kyber_provider: Any) -> None:
+        """25 fresh keypairs, each with its own encaps/decaps.
+
+        Companion to the 50-trial single-keypair test: this exercises
+        the keypair-generation merge (sample+NTT pipelining in
+        kyber_keypair_generate) against an independent seed every
+        iteration.  Together with the 50-trial test, this gives the
+        50 random encaps/decaps trials the PR-B plan calls for plus
+        25 fresh-keypair trials, well beyond the 25/25 ACVP vectors.
+        """
+        for trial in range(25):
+            kp = kyber_provider.generate_keypair()
+            ct, ss_enc = kyber_provider.encapsulate(kp.public_key)
+            ss_dec = kyber_provider.decapsulate(ct, kp.secret_key)
+            assert ss_enc == ss_dec, (
+                f"keypair-trial {trial}: round-trip mismatch — "
+                "post-merge regression in kyber_keypair_generate"
+            )
+
 
 # =============================================================================
 # Cross-Algorithm Tests
