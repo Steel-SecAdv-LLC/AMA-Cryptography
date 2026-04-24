@@ -533,6 +533,188 @@ static void ge25519_scalarmult(ge25519_p3 *r, const uint8_t *scalar, const ge255
 }
 
 /* ============================================================================
+ * SHAMIR'S TRICK (Straus, 1964) — joint double-base scalar multiplication
+ * ============================================================================
+ *
+ * Computes r = [s1]P1 + [s2]P2 in a single interleaved pass.  Used by
+ * Ed25519 verify to evaluate [s]B + [h](-A) — replaces two independent
+ * scalar mults plus one final addition with one shared-doubling loop.
+ *
+ * Algorithm: width-w wNAF on each scalar (w = AMA_ED25519_VERIFY_WINDOW),
+ * scanned in lock-step from the most significant nonzero position.  At
+ * each bit position the accumulator is doubled exactly once, then up to
+ * one addition per scalar is performed.  Total cost (w = 5):
+ *   ~256 doublings  (shared between both scalars; was ~512 in the
+ *                    naive split-then-add layout, ~260 in the comb-on-B
+ *                    + wNAF-on-A layout used pre-Shamir)
+ *   ~43 + ~43 mixed adds (~86, vs ~107 in the old split layout)
+ *   2 * (2^(w-1) - 1) = 30 table-build adds (per call; both points vary)
+ *
+ * SECURITY (INVARIANT-12): wNAF digit extraction, leading-zero skipping
+ * and table indexing are all scalar-dependent.  This routine is
+ * variable-time by design and is ONLY safe when both scalars are
+ * PUBLIC — Ed25519 verify (s comes from the signature, h is the SHA-512
+ * hash of (R || A || M) reduced mod l) and any future batch-verify use
+ * both qualify.  Do NOT use this routine with secret scalars.
+ *
+ * Reference: Straus, "Addition chains of vectors", Amer. Math. Monthly
+ * (1964); Möller, "Algorithms for multi-exponentiation" (SAC 2001).
+ * Standards: NIST FIPS 186-5 §6.4.3 explicitly permits variable-time
+ * verification when the scalar is public.
+ * ============================================================================ */
+
+#ifndef AMA_ED25519_VERIFY_SHAMIR
+/* Default ON.  Override with -DAMA_ED25519_VERIFY_SHAMIR=0 to fall back
+ * to the pre-PR-B sequential layout ([s]B via comb + [h](-A) via wNAF
+ * + ge25519_add).  Kept for one release as a rollback hatch. */
+#define AMA_ED25519_VERIFY_SHAMIR 1
+#endif
+
+#if AMA_ED25519_VERIFY_SHAMIR
+
+/* Compute width-w wNAF expansion of a 32-byte little-endian scalar.
+ * Output: 256 signed digits in wnaf[], each odd in [-(2^(w-1)-1),
+ * 2^(w-1)-1] or 0.  Matches the in-line expansion in
+ * ge25519_scalarmult byte-for-byte. */
+static void sc25519_to_wnaf(int8_t wnaf[256], const uint8_t scalar[32], int w) {
+    uint32_t s[8];
+    for (int i = 0; i < 8; i++) {
+        s[i] = (uint32_t)scalar[4*i]
+             | ((uint32_t)scalar[4*i+1] << 8)
+             | ((uint32_t)scalar[4*i+2] << 16)
+             | ((uint32_t)scalar[4*i+3] << 24);
+    }
+    memset(wnaf, 0, 256);
+    const uint32_t mask = ((uint32_t)1 << w) - 1u;
+    const int32_t  half = (int32_t)1 << (w - 1);
+    const int32_t  full = (int32_t)1 << w;
+    for (int pos = 0; pos < 256; pos++) {
+        if (s[0] & 1u) {
+            int32_t digit = (int32_t)(s[0] & mask);
+            if (digit >= half) digit -= full;
+            wnaf[pos] = (int8_t)digit;
+            if (digit < 0) {
+                uint64_t carry = (uint64_t)(uint32_t)(-digit);
+                for (int j = 0; j < 8; j++) {
+                    carry += (uint64_t)s[j];
+                    s[j] = (uint32_t)carry;
+                    carry >>= 32;
+                }
+            } else {
+                uint64_t borrow = 0;
+                uint64_t sub = (uint64_t)(uint32_t)digit;
+                for (int j = 0; j < 8; j++) {
+                    uint64_t val = (uint64_t)s[j] - sub - borrow;
+                    s[j] = (uint32_t)val;
+                    borrow = (val >> 63) & 1;
+                    sub = 0;
+                }
+            }
+        }
+        for (int j = 0; j < 7; j++) {
+            s[j] = (s[j] >> 1) | (s[j+1] << 31);
+        }
+        s[7] >>= 1;
+    }
+}
+
+/* Build a table of odd multiples of P: table[i] = (2*i+1) * P, i = 0..n-1.
+ * Caller provides the storage; n is the table length.  Cost: n-1 additions
+ * plus one doubling. */
+static void ge25519_build_odd_multiples(ge25519_p3 *table, int n,
+                                        const ge25519_p3 *p) {
+    ge25519_p1p1 t;
+    ge25519_p2 p2;
+    ge25519_p3 P2;
+
+    memcpy(&table[0], p, sizeof(ge25519_p3));
+    ge25519_p3_to_p2(&p2, p);
+    ge25519_p2_dbl(&t, &p2);
+    ge25519_p1p1_to_p3(&P2, &t);
+
+    for (int i = 1; i < n; i++) {
+        ge25519_add(&t, &table[i - 1], &P2);
+        ge25519_p1p1_to_p3(&table[i], &t);
+    }
+}
+
+/* Joint Shamir/Straus scalar mult: r = [s1]P1 + [s2]P2.  See block
+ * comment above for security contract — both scalars MUST be public. */
+static void ge25519_double_scalarmult_vartime(ge25519_p3 *r,
+                                              const uint8_t s1[32],
+                                              const ge25519_p3 *P1,
+                                              const uint8_t s2[32],
+                                              const ge25519_p3 *P2) {
+    #define DSM_W AMA_ED25519_VERIFY_WINDOW
+    #define DSM_T (1 << (DSM_W - 1))   /* table length per point */
+
+    ge25519_p3 tab1[DSM_T];   /* odd multiples of P1 */
+    ge25519_p3 tab2[DSM_T];   /* odd multiples of P2 */
+    int8_t wnaf1[256], wnaf2[256];
+
+    ge25519_build_odd_multiples(tab1, DSM_T, P1);
+    ge25519_build_odd_multiples(tab2, DSM_T, P2);
+
+    sc25519_to_wnaf(wnaf1, s1, DSM_W);
+    sc25519_to_wnaf(wnaf2, s2, DSM_W);
+
+    /* Find the highest position that is nonzero in EITHER expansion. */
+    int top = 255;
+    while (top >= 0 && wnaf1[top] == 0 && wnaf2[top] == 0) top--;
+
+    ge25519_p3   Q;
+    ge25519_p1p1 t;
+    ge25519_p2   p2;
+    ge25519_p3_0(&Q);
+
+    /* If both scalars are zero, return identity. */
+    if (top < 0) {
+        memcpy(r, &Q, sizeof(ge25519_p3));
+        return;
+    }
+
+    for (int i = top; i >= 0; i--) {
+        /* Q = 2*Q (shared doubling — the whole point of Shamir's trick). */
+        ge25519_p3_to_p2(&p2, &Q);
+        ge25519_p2_dbl(&t, &p2);
+        ge25519_p1p1_to_p3(&Q, &t);
+
+        /* Q += sign(wnaf1[i]) * tab1[|wnaf1[i]|/2] */
+        if (wnaf1[i] > 0) {
+            ge25519_add(&t, &Q, &tab1[wnaf1[i] / 2]);
+            ge25519_p1p1_to_p3(&Q, &t);
+        } else if (wnaf1[i] < 0) {
+            ge25519_p3 neg;
+            memcpy(&neg, &tab1[(-wnaf1[i]) / 2], sizeof(ge25519_p3));
+            fe25519_neg(neg.X, neg.X);
+            fe25519_neg(neg.T, neg.T);
+            ge25519_add(&t, &Q, &neg);
+            ge25519_p1p1_to_p3(&Q, &t);
+        }
+
+        /* Q += sign(wnaf2[i]) * tab2[|wnaf2[i]|/2] */
+        if (wnaf2[i] > 0) {
+            ge25519_add(&t, &Q, &tab2[wnaf2[i] / 2]);
+            ge25519_p1p1_to_p3(&Q, &t);
+        } else if (wnaf2[i] < 0) {
+            ge25519_p3 neg;
+            memcpy(&neg, &tab2[(-wnaf2[i]) / 2], sizeof(ge25519_p3));
+            fe25519_neg(neg.X, neg.X);
+            fe25519_neg(neg.T, neg.T);
+            ge25519_add(&t, &Q, &neg);
+            ge25519_p1p1_to_p3(&Q, &t);
+        }
+    }
+
+    memcpy(r, &Q, sizeof(ge25519_p3));
+
+    #undef DSM_W
+    #undef DSM_T
+}
+
+#endif /* AMA_ED25519_VERIFY_SHAMIR */
+
+/* ============================================================================
  * OPTIMIZED BASE POINT MULTIPLICATION — Signed 4-bit Window Comb
  * ============================================================================
  *
@@ -1410,17 +1592,37 @@ ama_error_t ama_ed25519_verify(
         free(buf);
     }
 
-    /* Check: [s]B - [h]A == R */
-    /* Compute [s]B */
+    /* Check: [s]B - [h]A == R, computed as [s]B + [h](-A).
+     * A is already negated above (X and T flipped).
+     *
+     * Shamir/Straus joint scalar mult: shares the per-bit doubling pass
+     * between the two scalar mults instead of doing them sequentially
+     * and then adding.  Both s and h are public (s comes from the
+     * signature; h = SHA-512(R||A||M) reduced mod l), so vartime
+     * windowed evaluation is safe — see ge25519_double_scalarmult_vartime
+     * security contract.  Keep the legacy split path under
+     * #ifndef AMA_ED25519_VERIFY_SHAMIR for one-flag rollback. */
+#if AMA_ED25519_VERIFY_SHAMIR
+    {
+        /* base_pt = +B (verify needs [s]*B, not [s]*(-B)) */
+        ge25519_p3 base_pt;
+        ensure_base_point();
+        memcpy(&base_pt, &ed_B, sizeof(ge25519_p3));
+        ge25519_double_scalarmult_vartime(&R_check,
+                                          signature + 32, &base_pt,
+                                          h,             &A);
+        (void)t;  /* unused on the Shamir path */
+    }
+#else
+    /* Pre-PR-B layout: two independent scalar mults plus one final add. */
     ge25519_scalarmult_base(&R_check, signature + 32);
-
-    /* Compute [h]A (A is already negated) */
-    ge25519_p3 hA;
-    ge25519_scalarmult(&hA, h, &A);
-
-    /* R_check = [s]B + (-[h]A) = [s]B - [h]A */
-    ge25519_add(&t, &R_check, &hA);
-    ge25519_p1p1_to_p3(&R_check, &t);
+    {
+        ge25519_p3 hA;
+        ge25519_scalarmult(&hA, h, &A);
+        ge25519_add(&t, &R_check, &hA);
+        ge25519_p1p1_to_p3(&R_check, &t);
+    }
+#endif
 
     /* Encode and compare */
     ge25519_p3_tobytes(R_bytes, &R_check);
