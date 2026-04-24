@@ -307,6 +307,61 @@ static bench_result_t bench_ed25519_verify(int iters, int warmup) {
     return compute_stats("Ed25519 Verify", g_samples, iters);
 }
 
+/* Ed25519 joint double-scalarmult [s1]P1 + [s2]P2 in isolation
+ * (PR-B hardening pass — addresses review item #6).
+ *
+ * Times the Shamir/Straus joint pass exposed via
+ * ama_ed25519_double_scalarmult_public WITHOUT the surrounding verify
+ * overhead (no SHA-512 of (R||A||M), no nested point decompression of
+ * A and -A inside ama_ed25519_verify — the public API still does one
+ * decompression per input point, which is unavoidable since the API
+ * takes compressed inputs).  Useful for tuning the
+ * AMA_ED25519_VERIFY_WINDOW default: comparing this metric across
+ * builds with -DAMA_ED25519_VERIFY_WINDOW=4/5/6 isolates the pure
+ * scalar-mult cost from SHA-512 noise that dominates whole-verify
+ * timings on short messages.
+ *
+ * Setup uses two pseudo-random valid Ed25519 points (the public keys
+ * of two derived keypairs) and the s/h halves of a real signature for
+ * scalars, so the input shape closely matches the verify call site. */
+static bench_result_t bench_ed25519_double_scalarmult(int iters, int warmup) {
+    uint8_t pk1[32], pk2[32], sk1[64], sk2[64], sig[64], h[64];
+    const uint8_t msg[] = "Benchmark message for Ed25519 sign/verify test 0123456789ABCDEF";
+    size_t msg_len = sizeof(msg) - 1;
+
+    fill_random(sk1, 32);
+    ama_ed25519_keypair(pk1, sk1);
+    fill_random(sk2, 32);
+    ama_ed25519_keypair(pk2, sk2);
+    ama_ed25519_sign(sig, msg, msg_len, sk1);
+
+    /* Build a verify-shaped second scalar: h = SHA-512(R || A || M)
+     * reduced mod l, exactly what ama_ed25519_verify computes
+     * internally.  This keeps the wNAF expansion realistic. */
+    uint8_t hbuf[64 + 32 + 64];
+    memcpy(hbuf, sig, 32);
+    memcpy(hbuf + 32, pk1, 32);
+    memcpy(hbuf + 64, msg, msg_len);
+    ama_ed25519_sha512(hbuf, 64 + msg_len, h);
+    /* sc_reduce works on a 64-byte buffer in place; result lives in h[0..31]. */
+    ama_ed25519_sc_reduce(h);
+
+    /* s1 = signature s-half (already < l); s2 = h (already reduced). */
+    const uint8_t *s1 = sig + 32;
+    const uint8_t *s2 = h;
+
+    uint8_t out[32];
+    for (int i = 0; i < warmup; i++)
+        ama_ed25519_double_scalarmult_public(out, s1, pk1, s2, pk2);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        ama_ed25519_double_scalarmult_public(out, s1, pk1, s2, pk2);
+        g_samples[i] = now_ns() - t0;
+    }
+    return compute_stats("Ed25519 Double-ScalarMult", g_samples, iters);
+}
+
 /* --- ML-DSA-65 (Dilithium) --- */
 static bench_result_t bench_dilithium_keygen(int iters, int warmup) {
     uint8_t pk[AMA_ML_DSA_65_PUBLIC_KEY_BYTES];
@@ -791,6 +846,7 @@ int main(int argc, char **argv) {
     results[n++] = bench_ed25519_keygen(iters_med, warmup);
     results[n++] = bench_ed25519_sign(iters_med, warmup);
     results[n++] = bench_ed25519_verify(iters_med, warmup);
+    results[n++] = bench_ed25519_double_scalarmult(iters_med, warmup);
 
     /* --- X25519 --- */
     results[n++] = bench_x25519_keygen(iters_med, warmup);

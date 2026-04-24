@@ -299,15 +299,16 @@ int main(void) {
             if (err != AMA_SUCCESS) tamper_rejects++;
         }
 
-        /* Tamper #2: flip a bit in s (signature second half). */
+        /* Tamper #2: flip a bit in s (signature second half).
+         * Constrain the index to bytes [32, 62] so we avoid byte 63
+         * (which holds s's high bits — for valid scalars s < l < 2^253
+         * only the low 4 bits of byte 63 can be set, and flipping a
+         * high bit there could land in a code path that rejects on a
+         * non-canonical-encoding criterion rather than on the
+         * group-element check we want to exercise here). */
         {
             uint8_t bad[64];
             memcpy(bad, sig, 64);
-            /* Stay below s's high bit: byte 63 has only low 4 bits set
-             * for valid scalars (s < l < 2^253), and flipping the high
-             * bit could land in a branch that the verify rejects on
-             * canonical-encoding grounds rather than on the
-             * group-element check.  Flip a low bit of byte 32+x. */
             bad[32 + ((t >> 1) & 30)] ^= 0x02;
             err = ama_ed25519_verify(bad, msg, msg_len, pk);
             tamper_attempts++;

@@ -426,7 +426,7 @@ static inline void ge25519_p3_to_p2(ge25519_p2 *r, const ge25519_p3 *p) {
  * Default remains W=5; W=4 is the documented rollback gate to the
  * pre-PR-B layout (see ge25519_scalarmult comment block above). */
 #if AMA_ED25519_VERIFY_WINDOW < 2 || AMA_ED25519_VERIFY_WINDOW > 6
-#error "AMA_ED25519_VERIFY_WINDOW must be in [2, 6]; default 5 is recommended"
+#error "AMA_ED25519_VERIFY_WINDOW must be in [2,6] (default 5). W<2 disables wNAF; W>6 doubles the per-call stack table to >16 KiB (Shamir routine instantiates two), which crosses the comfortable margin on platforms with 64 KiB default thread stacks."
 #endif
 
 static void ge25519_scalarmult(ge25519_p3 *r, const uint8_t *scalar, const ge25519_p3 *p) {
