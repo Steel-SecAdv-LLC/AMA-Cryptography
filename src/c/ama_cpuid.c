@@ -209,9 +209,24 @@ int ama_has_vpclmulqdq(void) {
 
 int ama_cpuid_has_vaes_aesgcm(void) {
     /* Each getter shares pthread_once via cpuid_once, so the underlying
-     * detect_x86_features() probe runs exactly once.  AES-NI is still
-     * required: AESKEYGENASSIST is a 128-bit AES-NI opcode that runs
-     * the AES-256 key schedule — VAES only provides the rounds. */
+     * detect_x86_features() probe runs exactly once.
+     *
+     *   - AVX2        — base ISA for YMM registers + AVX OS state
+     *   - VAES        — _mm256_aesenc_epi128 / _mm256_aesenclast_epi128
+     *                   (actually emitted by the current kernel)
+     *   - VPCLMULQDQ  — capability-level requirement; declared in the
+     *                   bundle for forward-compat with a future YMM
+     *                   GHASH fold.  The current kernel's GHASH uses
+     *                   the 128-bit XMM form (_mm_clmulepi64_si128),
+     *                   so on hardware this gate is satisfied whenever
+     *                   both VAES and PCLMULQDQ are present (every
+     *                   shipped VAES-capable consumer CPU ships
+     *                   VPCLMULQDQ too).  Keeping VPCLMULQDQ in the
+     *                   gate lets a later PR widen the fold without
+     *                   churning the dispatch contract.
+     *   - AES-NI      — AESKEYGENASSIST is a 128-bit AES-NI opcode;
+     *                   it runs the AES-256 key schedule.  VAES only
+     *                   provides the rounds. */
     return ama_has_avx2()
         && ama_has_vaes()
         && ama_has_vpclmulqdq()

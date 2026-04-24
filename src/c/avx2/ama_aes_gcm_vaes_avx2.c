@@ -25,7 +25,11 @@
  * Inner loop:
  *   - 4 counter blocks per iteration, packed two-per-YMM (256 bits)
  *   - vaesenc ymm / vaesenclast ymm rounds (round keys broadcast once)
- *   - 4-lane Karatsuba GHASH using vpclmulqdq ymm
+ *   - 4-lane Karatsuba GHASH using _mm_clmulepi64_si128 (128-bit XMM
+ *     PCLMULQDQ) per lane — see the honesty note below on why the
+ *     wider _mm256_clmulepi64_epi128 (YMM VPCLMULQDQ) form is NOT
+ *     emitted by the current code even though the dispatch bundle
+ *     gates on CPUID.VPCLMULQDQ.
  *   - GHASH reduction is the standard reflected GCM polynomial
  *     reduction (Intel "Carry-Less Multiplication and its Usage for
  *     Computing the GCM Mode" whitepaper, Algorithm 5), executed in
@@ -33,11 +37,24 @@
  *     itself is intrinsically scalar in the high bits, so widening it
  *     past XMM yields no benefit.
  *
+ * Honesty note on "VPCLMULQDQ" in this file's name and in the
+ * ama_cpuid_has_vaes_aesgcm() bundle: the AES rounds really are YMM
+ * (VAES via _mm256_aesenc_epi128 / _mm256_aesenclast_epi128) and
+ * deliver the bulk of the throughput win.  The GHASH fold, however,
+ * is currently implemented with the 128-bit XMM form of PCLMULQDQ
+ * (_mm_clmulepi64_si128), not the 256-bit VPCLMULQDQ form that would
+ * fold two lanes per multiply.  VPCLMULQDQ remains in the dispatch
+ * gate as a capability declaration / forward-compat marker: a
+ * follow-up PR may widen the GHASH inner loop to
+ * _mm256_clmulepi64_epi128 without changing the dispatch contract.
+ * Until then, "vpclmulqdq" in the file/bundle name refers to the
+ * CPUID feature bit queried, not to the intrinsic width emitted.
+ *
  * INVARIANT-1   : zero external crypto deps; kernel written in-tree.
  *                 Algorithmic provenance: Intel intel-ipsec-mb (BSD-3),
  *                 cited for reference only — no code copied.
- * INVARIANT-12  : tag compare unchanged, GHASH uses VPCLMULQDQ
- *                 carryless multiply, no table lookups.
+ * INVARIANT-12  : tag compare unchanged, GHASH uses carry-less multiply
+ *                 (PCLMULQDQ, currently XMM-width) with no table lookups.
  * INVARIANT-15  : no dispatch reorder, kernel entered only via the
  *                 ama_dispatch_table function pointer set inside the
  *                 existing dispatch_init_internal() once-call.
