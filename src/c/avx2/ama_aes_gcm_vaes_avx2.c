@@ -25,36 +25,28 @@
  * Inner loop:
  *   - 4 counter blocks per iteration, packed two-per-YMM (256 bits)
  *   - vaesenc ymm / vaesenclast ymm rounds (round keys broadcast once)
- *   - 4-lane Karatsuba GHASH using _mm_clmulepi64_si128 (128-bit XMM
- *     PCLMULQDQ) per lane — see the honesty note below on why the
- *     wider _mm256_clmulepi64_epi128 (YMM VPCLMULQDQ) form is NOT
- *     emitted by the current code even though the dispatch bundle
- *     gates on CPUID.VPCLMULQDQ.
+ *   - 4-lane Karatsuba GHASH using _mm256_clmulepi64_epi128 (YMM
+ *     VPCLMULQDQ): two (block, H_power) lane-pairs per YMM, 8 YMM
+ *     CLMULs per 4-block iteration instead of 16 XMM CLMULs.  The
+ *     intrinsic applies the imm8 selector independently per 128-bit
+ *     lane, so the algebra is identical to the XMM-per-lane form.
  *   - GHASH reduction is the standard reflected GCM polynomial
  *     reduction (Intel "Carry-Less Multiplication and its Usage for
  *     Computing the GCM Mode" whitepaper, Algorithm 5), executed in
  *     the XMM domain after a horizontal lane fold — the reduction
- *     itself is intrinsically scalar in the high bits, so widening it
- *     past XMM yields no benefit.
- *
- * Honesty note on "VPCLMULQDQ" in this file's name and in the
- * ama_cpuid_has_vaes_aesgcm() bundle: the AES rounds really are YMM
- * (VAES via _mm256_aesenc_epi128 / _mm256_aesenclast_epi128) and
- * deliver the bulk of the throughput win.  The GHASH fold, however,
- * is currently implemented with the 128-bit XMM form of PCLMULQDQ
- * (_mm_clmulepi64_si128), not the 256-bit VPCLMULQDQ form that would
- * fold two lanes per multiply.  VPCLMULQDQ remains in the dispatch
- * gate as a capability declaration / forward-compat marker: a
- * follow-up PR may widen the GHASH inner loop to
- * _mm256_clmulepi64_epi128 without changing the dispatch contract.
- * Until then, "vpclmulqdq" in the file/bundle name refers to the
- * CPUID feature bit queried, not to the intrinsic width emitted.
+ *     itself is intrinsically scalar in the high bits (shifts of
+ *     57 / 62 / 63 and 1 / 2 / 7 across the 128-bit polynomial), so
+ *     widening it past XMM yields no benefit.
+ *   - Short-AAD / trailing-partial / final length-block paths stay
+ *     XMM: they are single-block GHASH multiplies and vectorising
+ *     them does not pay back the pack/fold overhead.
  *
  * INVARIANT-1   : zero external crypto deps; kernel written in-tree.
  *                 Algorithmic provenance: Intel intel-ipsec-mb (BSD-3),
  *                 cited for reference only — no code copied.
- * INVARIANT-12  : tag compare unchanged, GHASH uses carry-less multiply
- *                 (PCLMULQDQ, currently XMM-width) with no table lookups.
+ * INVARIANT-12  : tag compare unchanged, GHASH uses VAES + VPCLMULQDQ
+ *                 carry-less multiply (YMM for the 4-block fold, XMM
+ *                 for single-block edge paths), no table lookups.
  * INVARIANT-15  : no dispatch reorder, kernel entered only via the
  *                 ama_dispatch_table function pointer set inside the
  *                 existing dispatch_init_internal() once-call.
@@ -74,6 +66,7 @@
 #include <stddef.h>
 #include <string.h>
 #include "ama_cryptography.h"
+#include "ama_avx2_internal.h"
 
 /* MSVC: leave kernel out, let dispatcher fall back to AVX2 AES-NI. */
 #if defined(_MSC_VER)
@@ -88,16 +81,9 @@ typedef int ama_aes_gcm_vaes_avx2_msvc_skipped;
 #include <wmmintrin.h>  /* AES-NI (xmm key expansion) */
 #include <tmmintrin.h>  /* SSSE3 _mm_shuffle_epi8 */
 
-/* ============================================================================
- * AES-256 key expansion (AES-NI, 128-bit) — reused from ama_aes_gcm_avx2.c.
- *
- * Declared `extern` rather than re-implemented so that any future bug-fix
- * to the key schedule lands in exactly one place.  ama_aes256_expand_key_avx2
- * is defined in ama_aes_gcm_avx2.c and is unconditionally compiled in the
- * same AVX2 SIMD source group, so the symbol is always available alongside
- * this kernel.
- * ============================================================================ */
-extern void ama_aes256_expand_key_avx2(const uint8_t key[32], __m128i rk[15]);
+/* AES-256 key expansion (AES-NI, 128-bit) is declared in
+ * ama_avx2_internal.h and defined in ama_aes_gcm_avx2.c; reused here
+ * so any future bug-fix to the key schedule lands in exactly one place. */
 
 /* ============================================================================
  * Byte-reverse helpers
@@ -272,6 +258,85 @@ static inline __m128i ghash_mul_full(__m128i a_gcm, __m128i b_gcm) {
 }
 
 /* ============================================================================
+ * 4-lane Karatsuba GHASH using YMM VPCLMULQDQ (_mm256_clmulepi64_epi128).
+ *
+ * Stage-2 widen (2026-04, this PR): folds 4 GHASH lanes with 8 YMM
+ * carry-less multiplies instead of 16 XMM ones.  Intrinsic
+ * _mm256_clmulepi64_epi128 applies the imm8 selector independently to
+ * each 128-bit lane of the YMM operand pair, so packing two (block,H)
+ * lane-pairs per YMM gives the same algebra as the XMM version with
+ * half the CLMUL count.
+ *
+ * Inputs are in GCM-native byte order (XMM).  Packing:
+ *
+ *     a_pair0 = [ x0 | ct1 ]       b_pair0 = [ H4 | H3 ]
+ *     a_pair1 = [ ct2| ct3 ]       b_pair1 = [ H2 | H  ]
+ *
+ * After byte-reversing both pairs (YMM shuffle with a broadcast
+ * bswap mask) we issue the 4 Karatsuba imm variants per pair, XOR
+ * across pairs, and horizontally fold the two 128-bit lanes of each
+ * resulting YMM into one XMM triple.  That XMM triple is the exact
+ * aggregate the original XMM path produced, so the downstream
+ * ghash_reduce() is reused unchanged and byte-identity with the
+ * AES-NI reference is preserved (verified by the 2132-trial
+ * equivalence test in tests/c/test_aes_gcm_vaes_equiv.c).
+ *
+ * The Montgomery reduction itself stays XMM: the high-bit shifts
+ * 57/62/63 and 1/2/7 are intrinsically scalar across the 128-bit
+ * polynomial, so widening the reduction past XMM yields no benefit.
+ * ============================================================================ */
+static const uint8_t bswap_mask256_init[32] = {
+    15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0,
+    15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0
+};
+
+static inline __m256i bswap256(__m256i v) {
+    return _mm256_shuffle_epi8(v, _mm256_loadu_si256((const __m256i *)bswap_mask256_init));
+}
+
+static inline __m256i pack_pair_ymm(__m128i lane0, __m128i lane1) {
+    return _mm256_inserti128_si256(_mm256_castsi128_si256(lane0), lane1, 1);
+}
+
+static inline __m128i fold_ymm_to_xmm(__m256i v) {
+    return _mm_xor_si128(_mm256_castsi256_si128(v),
+                          _mm256_extracti128_si256(v, 1));
+}
+
+/* YMM Karatsuba: (a_p0,b_p0) and (a_p1,b_p1) each cover 2 GHASH lanes.
+ * Output is the cross-lane-summed {lo, hi, mid} triple in XMM, ready
+ * for ghash_reduce(). */
+static inline void ghash_mul_4lanes_ymm(
+    __m128i x0_gcm, __m128i c1_gcm, __m128i c2_gcm, __m128i c3_gcm,
+    __m128i H4_gcm, __m128i H3_gcm, __m128i H2_gcm, __m128i H_gcm,
+    __m128i *out_lo, __m128i *out_hi, __m128i *out_mid)
+{
+    __m256i a_p0 = bswap256(pack_pair_ymm(x0_gcm,  c1_gcm));
+    __m256i b_p0 = bswap256(pack_pair_ymm(H4_gcm,  H3_gcm));
+    __m256i a_p1 = bswap256(pack_pair_ymm(c2_gcm,  c3_gcm));
+    __m256i b_p1 = bswap256(pack_pair_ymm(H2_gcm,  H_gcm));
+
+    __m256i lo_p0   = _mm256_clmulepi64_epi128(a_p0, b_p0, 0x00);
+    __m256i hi_p0   = _mm256_clmulepi64_epi128(a_p0, b_p0, 0x11);
+    __m256i m1_p0   = _mm256_clmulepi64_epi128(a_p0, b_p0, 0x01);
+    __m256i m2_p0   = _mm256_clmulepi64_epi128(a_p0, b_p0, 0x10);
+
+    __m256i lo_p1   = _mm256_clmulepi64_epi128(a_p1, b_p1, 0x00);
+    __m256i hi_p1   = _mm256_clmulepi64_epi128(a_p1, b_p1, 0x11);
+    __m256i m1_p1   = _mm256_clmulepi64_epi128(a_p1, b_p1, 0x01);
+    __m256i m2_p1   = _mm256_clmulepi64_epi128(a_p1, b_p1, 0x10);
+
+    __m256i lo_sum  = _mm256_xor_si256(lo_p0, lo_p1);
+    __m256i hi_sum  = _mm256_xor_si256(hi_p0, hi_p1);
+    __m256i mid_sum = _mm256_xor_si256(_mm256_xor_si256(m1_p0, m2_p0),
+                                        _mm256_xor_si256(m1_p1, m2_p1));
+
+    *out_lo  = fold_ymm_to_xmm(lo_sum);
+    *out_hi  = fold_ymm_to_xmm(hi_sum);
+    *out_mid = fold_ymm_to_xmm(mid_sum);
+}
+
+/* ============================================================================
  * Counter-block helpers (32-bit big-endian counter in tail 4 bytes).
  *
  * gcm_inc_counter_xmm advances by 1; the ctr_block_4 helper produces
@@ -361,20 +426,9 @@ static inline __m128i ghash_aad(const uint8_t *aad, size_t aad_len, __m128i H) {
  * Public entry — VAES AES-256-GCM encrypt.
  *
  * Signature matches ama_aes256_gcm_encrypt_avx2 so it can be plugged
- * into ama_dispatch_table.aes_gcm_encrypt one-for-one.
- *
- * The prototype is re-declared here (mirroring the extern in
- * src/c/dispatch/ama_dispatch.c) so the -Wmissing-prototypes lint
- * carried by the project CFLAGS sees a visible declaration in this
- * TU.  Keeping it inline to the source file avoids a new header for
- * a symbol that has no non-dispatch caller.
+ * into ama_dispatch_table.aes_gcm_encrypt one-for-one.  Prototype
+ * lives in src/c/avx2/ama_avx2_internal.h.
  * ============================================================================ */
-void ama_aes256_gcm_encrypt_vaes_avx2(
-    const uint8_t *plaintext, size_t plaintext_len,
-    const uint8_t *aad, size_t aad_len,
-    const uint8_t key[32], const uint8_t nonce[12],
-    uint8_t *ciphertext, uint8_t tag[16]);
-
 void ama_aes256_gcm_encrypt_vaes_avx2(
     const uint8_t *plaintext, size_t plaintext_len,
     const uint8_t *aad, size_t aad_len,
@@ -430,21 +484,15 @@ void ama_aes256_gcm_encrypt_vaes_avx2(
 
         /* Aggregate-then-reduce 4-lane GHASH:
          *   ((acc ^ C0) * H^4) ^ (C1 * H^3) ^ (C2 * H^2) ^ (C3 * H^1)
-         */
+         * Implemented with YMM VPCLMULQDQ — two lane-pairs per YMM,
+         * 8 _mm256_clmulepi64_epi128 ops per 4 blocks instead of 16
+         * XMM ops.  Montgomery reduction stays XMM (intrinsically
+         * scalar in the high bits). */
         __m128i x0 = _mm_xor_si128(ghash_acc, ct0);
-        __m128i lo0, hi0, mid0;
-        __m128i lo1, hi1, mid1;
-        __m128i lo2, hi2, mid2;
-        __m128i lo3, hi3, mid3;
-        lo0 = ghash_mul_raw_lo(x0,  H4, &hi0, &mid0);
-        lo1 = ghash_mul_raw_lo(ct1, H3, &hi1, &mid1);
-        lo2 = ghash_mul_raw_lo(ct2, H2, &hi2, &mid2);
-        lo3 = ghash_mul_raw_lo(ct3, H,  &hi3, &mid3);
-
-        __m128i lo  = _mm_xor_si128(_mm_xor_si128(lo0, lo1), _mm_xor_si128(lo2, lo3));
-        __m128i hi  = _mm_xor_si128(_mm_xor_si128(hi0, hi1), _mm_xor_si128(hi2, hi3));
-        __m128i mid = _mm_xor_si128(_mm_xor_si128(mid0, mid1), _mm_xor_si128(mid2, mid3));
-
+        __m128i lo, hi, mid;
+        ghash_mul_4lanes_ymm(x0, ct1, ct2, ct3,
+                              H4, H3, H2, H,
+                              &lo, &hi, &mid);
         ghash_acc = ghash_reduce(lo, hi, mid);
 
         i += 4;
@@ -494,16 +542,8 @@ void ama_aes256_gcm_encrypt_vaes_avx2(
 
 /* ============================================================================
  * Public entry — VAES AES-256-GCM decrypt with constant-time tag verify.
- *
- * Prototype mirrored inline for the same -Wmissing-prototypes reason
- * documented at the encrypt entry above.
+ * Prototype in src/c/avx2/ama_avx2_internal.h.
  * ============================================================================ */
-ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
-    const uint8_t *ciphertext, size_t ciphertext_len,
-    const uint8_t *aad, size_t aad_len,
-    const uint8_t key[32], const uint8_t nonce[12],
-    const uint8_t tag[16], uint8_t *plaintext);
-
 ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
     const uint8_t *ciphertext, size_t ciphertext_len,
     const uint8_t *aad, size_t aad_len,
@@ -540,15 +580,12 @@ ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
         __m128i ct2 = _mm_loadu_si128((const __m128i *)(ciphertext + (i+2)*16));
         __m128i ct3 = _mm_loadu_si128((const __m128i *)(ciphertext + (i+3)*16));
 
+        /* YMM VPCLMULQDQ 4-lane GHASH fold (stage-2 widen). */
         __m128i x0 = _mm_xor_si128(ghash_acc, ct0);
-        __m128i lo0, hi0, mid0, lo1, hi1, mid1, lo2, hi2, mid2, lo3, hi3, mid3;
-        lo0 = ghash_mul_raw_lo(x0,  H4, &hi0, &mid0);
-        lo1 = ghash_mul_raw_lo(ct1, H3, &hi1, &mid1);
-        lo2 = ghash_mul_raw_lo(ct2, H2, &hi2, &mid2);
-        lo3 = ghash_mul_raw_lo(ct3, H,  &hi3, &mid3);
-        __m128i lo  = _mm_xor_si128(_mm_xor_si128(lo0, lo1), _mm_xor_si128(lo2, lo3));
-        __m128i hi  = _mm_xor_si128(_mm_xor_si128(hi0, hi1), _mm_xor_si128(hi2, hi3));
-        __m128i mid = _mm_xor_si128(_mm_xor_si128(mid0, mid1), _mm_xor_si128(mid2, mid3));
+        __m128i lo, hi, mid;
+        ghash_mul_4lanes_ymm(x0, ct1, ct2, ct3,
+                              H4, H3, H2, H,
+                              &lo, &hi, &mid);
         ghash_acc = ghash_reduce(lo, hi, mid);
 
         i += 4;

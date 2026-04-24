@@ -67,46 +67,57 @@ int ama_has_pclmulqdq(void);
 int ama_has_vaes(void);
 
 /**
- * @brief Check for VPCLMULQDQ (CPUID feature bit) on an AVX-enabled OS.
+ * @brief Check for VPCLMULQDQ (vectorized carry-less multiply) on YMM.
  *
- * CPUID.(EAX=7,ECX=0):ECX[10].  This probe reports the availability of
- * the vector carry-less-multiply extension associated with the
- * YMM-capable VPCLMULQDQ instruction forms.  It is a hardware/OS
- * capability check only; callers must not assume the current AES-GCM
- * kernel necessarily emits 256-bit VPCLMULQDQ intrinsics in every
- * build.  The PR A GHASH fold currently uses the 128-bit XMM form
- * (_mm_clmulepi64_si128); a future PR may widen it to
- * _mm256_clmulepi64_epi128 without changing this capability contract.
- * GHASH must remain constant-time (INVARIANT-12), so this capability
- * is paired with carry-less-multiply implementations rather than
- * table lookups.  Returns 1 only when CPUID reports VPCLMULQDQ *and*
- * the OS has enabled AVX state in XCR0.
+ * CPUID.(EAX=7,ECX=0):ECX[10].  Carry-less multiply acting on two
+ * 128-bit lanes of a YMM register simultaneously
+ * (_mm256_clmulepi64_epi128) — emitted by the 4-block GHASH fold in
+ * src/c/avx2/ama_aes_gcm_vaes_avx2.c (8 YMM CLMULs per 4-block
+ * iteration, replacing the 16 XMM CLMULs of a per-lane Karatsuba).
+ * GHASH must remain constant-time (INVARIANT-12), so this is paired
+ * with a carry-less-multiply implementation rather than a table
+ * lookup.  Returns 1 only when CPUID reports VPCLMULQDQ *and* the OS
+ * has enabled AVX state in XCR0.
  */
 int ama_has_vpclmulqdq(void);
 
 /**
  * @brief Bundle check: AVX2 + VAES + VPCLMULQDQ + AES-NI.
  *
- * The PR A VAES AES-GCM dispatch gate checks all four:
+ * The VAES AES-GCM dispatch gate checks all four:
  *   - AVX2          — base ISA for YMM register set + integer ops
- *   - VAES          — 2-blocks-per-YMM AES rounds (emitted by the
- *                     current kernel via _mm256_aesenc_epi128 /
- *                     _mm256_aesenclast_epi128)
- *   - VPCLMULQDQ    — vector CLMUL capability bit.  Declared in the
- *                     bundle for forward-compat with a future YMM
- *                     GHASH fold.  The current kernel's GHASH uses
- *                     the 128-bit XMM form (_mm_clmulepi64_si128),
- *                     but on shipped hardware every VAES-capable
- *                     consumer CPU (Ice Lake+ / Alder Lake+ / Zen 3+)
- *                     also ships VPCLMULQDQ, so the gate is not more
- *                     restrictive in practice.
+ *   - VAES          — 2-blocks-per-YMM AES rounds, emitted by the
+ *                     4-block inner loop via _mm256_aesenc_epi128 /
+ *                     _mm256_aesenclast_epi128
+ *   - VPCLMULQDQ    — 2-lane carry-less multiply for the 4-lane
+ *                     Karatsuba GHASH fold, emitted by the 4-block
+ *                     inner loop via _mm256_clmulepi64_epi128
+ *                     (8 YMM CLMULs per 4 blocks, vs 16 XMM in the
+ *                     per-lane form)
  *   - AES-NI        — 128-bit AESKEYGENASSIST runs the AES-256 key
- *                     schedule (VAES provides only the rounds).
+ *                     schedule (VAES provides only the rounds; the
+ *                     single-block edge paths — AAD, trailing
+ *                     partial, length block — also stay on
+ *                     _mm_clmulepi64_si128 since vectorising a
+ *                     single-block multiply does not pay back the
+ *                     pack/fold overhead).
  *
  * Returns 1 only when every component passes; otherwise the dispatcher
  * falls back to the AVX2 AES-NI + PCLMULQDQ path shipped in #253 / #254.
  */
 int ama_cpuid_has_vaes_aesgcm(void);
+
+/**
+ * @brief Check for x86 AVX2 (CPUID.(EAX=7,ECX=0):EBX[5]).
+ * @return 1 if AVX2 is available, 0 otherwise. Cached after first call.
+ */
+int ama_has_avx2(void);
+
+/**
+ * @brief Check for x86 AVX-512F (CPUID.(EAX=7,ECX=0):EBX[16]).
+ * @return 1 if AVX-512F is available, 0 otherwise. Cached after first call.
+ */
+int ama_has_avx512f(void);
 
 /**
  * @brief Check for ARMv8 AES Crypto Extension support.
@@ -119,6 +130,18 @@ int ama_has_arm_aes(void);
  * @return 1 if ARM PMULL is available, 0 otherwise. Cached after first call.
  */
 int ama_has_arm_pmull(void);
+
+/**
+ * @brief Check for ARMv8 NEON advanced-SIMD support.
+ * @return 1 if NEON is available, 0 otherwise. Cached after first call.
+ */
+int ama_has_arm_neon(void);
+
+/**
+ * @brief Check for ARMv9 SVE2 advanced-SIMD support.
+ * @return 1 if SVE2 is available, 0 otherwise. Cached after first call.
+ */
+int ama_has_arm_sve2(void);
 
 /**
  * AEAD backend identifiers for runtime dispatch.
