@@ -32,12 +32,14 @@
  * kernels or the dispatch layer reading their prototypes; pulling in
  * the Intel intrinsic types here lets the AES-256 key-expansion
  * signature be declared as `__m128i rk[15]` (which is how it is
- * defined) rather than type-erased to `void *`. */
-#if !defined(_MSC_VER)
+ * defined) rather than type-erased to `void *`.
+ *
+ * <immintrin.h> is the correct header on MSVC as well: it pulls in
+ * the full SSE/AVX/AVX2 intrinsic type set (including __m128i / __m256i).
+ * The previous MSVC branch used <intrin.h>, which exposes compiler
+ * intrinsics like __cpuid / _xgetbv but does NOT reliably provide
+ * the SIMD vector types these prototypes need. */
 #include <immintrin.h>
-#else
-#include <intrin.h>
-#endif
 
 #ifdef __cplusplus
 extern "C" {
