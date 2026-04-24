@@ -69,6 +69,14 @@ if(AMA_USE_NATIVE_PQC)
     add_ama_test(test_kyber_cbd2_equiv test_kyber_cbd2_equiv.c)
     add_ama_test(test_dilithium_ntt_equiv test_dilithium_ntt_equiv.c)
     add_ama_test(test_dilithium_rej_equiv test_dilithium_rej_equiv.c)
+    # PR A (2026-04) — VAES + VPCLMULQDQ AES-GCM YMM dispatch
+    # equivalence test.  SKIPs on hosts where the dispatcher leaves
+    # aes_gcm_encrypt / aes_gcm_decrypt NULL (non-x86-64, or x86-64
+    # without AVX2 + AES-NI).  When the runtime CPUID probe enables
+    # the VAES path, the test verifies byte-identical ciphertext +
+    # tag against the AVX2 AES-NI reference, round-trip decrypt
+    # correctness, and tag-tamper rejection.
+    add_ama_test(test_aes_gcm_vaes_equiv test_aes_gcm_vaes_equiv.c)
 endif()
 
 # Performance benchmark (not added to ctest - run manually)
