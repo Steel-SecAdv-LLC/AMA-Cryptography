@@ -24,6 +24,8 @@
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
+#include "ama_cryptography.h"
+#include "ama_avx2_internal.h"
 
 /* SHA-256 round constants */
 static const uint32_t K256[64] = {
@@ -73,7 +75,7 @@ static inline __m256i rotr32_avx2(__m256i x, int n) {
  * When fewer than 8 instances are available, the caller should use
  * ama_sha256_compress_x4_avx2 (below) which falls back to 4-way.
  * ============================================================================ */
-void ama_sha256_compress_x8_avx2(uint32_t state[8][8],
+static void ama_sha256_compress_x8_avx2(uint32_t state[8][8],
                                   const uint8_t blocks[8][64]) {
     __m256i a, b, c, d, e, f, g, h;
     __m256i W[64];
@@ -179,7 +181,7 @@ void ama_sha256_compress_x8_avx2(uint32_t state[8][8],
  * For callers that have fewer than 8 hash instances to process.
  * Delegates to the 8-way function with dummy padding for the upper lanes.
  * ============================================================================ */
-void ama_sha256_compress_x4_avx2(uint32_t state[4][8],
+static AMA_UNUSED void ama_sha256_compress_x4_avx2(uint32_t state[4][8],
                                   const uint8_t blocks[4][64]) {
     uint32_t state8[8][8];
     uint8_t blocks8[8][64];
@@ -209,7 +211,7 @@ void ama_sha256_compress_x4_avx2(uint32_t state[4][8],
  * Computes WOTS+ chain: iterate SHA-256 compression `steps` times
  * on `n_chains` independent chains in parallel (groups of 4).
  * ============================================================================ */
-void ama_sphincs_wots_chain_avx2(uint8_t *out, const uint8_t *in,
+static AMA_UNUSED void ama_sphincs_wots_chain_avx2(uint8_t *out, const uint8_t *in,
                                   uint32_t start, uint32_t steps,
                                   const uint8_t *pub_seed,
                                   uint32_t addr[8], size_t n) {
