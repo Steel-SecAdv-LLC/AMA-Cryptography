@@ -43,16 +43,23 @@
 extern "C" {
 #endif
 
-/* Portable "intentionally unused" marker for helper functions that
- * are defined for completeness / future-wiring but currently have no
- * caller in-tree.  The scalar reference path and the dispatch layer
- * are the only things that ship with callers for every AVX2 helper;
- * lane-local add/sub/compress/chain routines are kept in-tree so they
- * don't have to be re-derived next time the dispatch graph grows. */
+/* Portable "may be unused" marker for helper functions that are
+ * defined for completeness / future-wiring but currently have no
+ * caller in-tree.  Semantically equivalent to C++17 / C23
+ * [[maybe_unused]] on a function: it grants the compiler permission
+ * to emit the symbol without triggering -Wunused-function, without
+ * claiming the function IS unused (which would be wrong — a future
+ * dispatch-graph extension may well wire it up).
+ *
+ * Lane-local add/sub/compress/chain routines are kept in-tree so
+ * they don't have to be re-derived next time the dispatch graph
+ * grows; dispatch-facing entry points carry no marker and reaching
+ * -Wunused-function on one of those is a real "this SIMD kernel
+ * is compiled but nothing calls it" bug. */
 #if defined(__GNUC__) || defined(__clang__)
-#define AMA_UNUSED __attribute__((unused))
+#define AMA_MAYBE_UNUSED __attribute__((unused))
 #else
-#define AMA_UNUSED
+#define AMA_MAYBE_UNUSED
 #endif
 
 /* ============================================================================

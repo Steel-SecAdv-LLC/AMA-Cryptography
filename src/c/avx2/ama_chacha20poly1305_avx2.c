@@ -167,7 +167,7 @@ typedef struct {
     uint64_t pad[2]; /* one-time pad s */
 } poly1305_state_avx2;
 
-static AMA_UNUSED void ama_poly1305_init_avx2(poly1305_state_avx2 *st,
+static AMA_MAYBE_UNUSED void ama_poly1305_init_avx2(poly1305_state_avx2 *st,
                              const uint8_t key[32]) {
     /* r = key[0..15] clamped */
     uint64_t t0, t1;
@@ -183,7 +183,7 @@ static AMA_UNUSED void ama_poly1305_init_avx2(poly1305_state_avx2 *st,
     st->h[0] = st->h[1] = st->h[2] = 0;
 }
 
-static AMA_UNUSED void ama_poly1305_block_avx2(poly1305_state_avx2 *st,
+static AMA_MAYBE_UNUSED void ama_poly1305_block_avx2(poly1305_state_avx2 *st,
                               const uint8_t msg[16], int partial_block) {
     /* Add message block to accumulator.
      * partial_block: set to 1 for the final block ONLY if it is shorter
@@ -227,7 +227,7 @@ static AMA_UNUSED void ama_poly1305_block_avx2(poly1305_state_avx2 *st,
     st->h[1] += c;
 }
 
-static AMA_UNUSED void ama_poly1305_finish_avx2(poly1305_state_avx2 *st, uint8_t tag[16]) {
+static AMA_MAYBE_UNUSED void ama_poly1305_finish_avx2(poly1305_state_avx2 *st, uint8_t tag[16]) {
     /* Final carry propagation */
     uint64_t h0 = st->h[0], h1 = st->h[1], h2 = st->h[2];
     uint64_t c;

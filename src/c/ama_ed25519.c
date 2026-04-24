@@ -46,11 +46,13 @@
 
 #include "fe51.h"
 
-/* Portable "unused" annotation: GCC/Clang __attribute__, MSVC no-op. */
+/* Portable "may be unused" annotation — see AMA_MAYBE_UNUSED in
+ * src/c/avx2/ama_avx2_internal.h for the full rationale.  Semantically
+ * equivalent to C++17 / C23 [[maybe_unused]] on a function. */
 #if defined(__GNUC__) || defined(__clang__)
-#define AMA_UNUSED __attribute__((unused))
+#define AMA_MAYBE_UNUSED __attribute__((unused))
 #else
-#define AMA_UNUSED
+#define AMA_MAYBE_UNUSED
 #endif
 
 /* C11 atomics for thread-safe lazy initialization of base point tables.
@@ -315,8 +317,8 @@ static void ge25519_p1p1_to_p3(ge25519_p3 *r, const ge25519_p1p1 *p) {
 }
 
 /* Retained for future variable-base scalar multiplication —
-   AMA_UNUSED resolves CodeQL alert #20. */
-static AMA_UNUSED void ge25519_p1p1_to_p2(ge25519_p2 *r, const ge25519_p1p1 *p) {
+   AMA_MAYBE_UNUSED resolves CodeQL alert #20. */
+static AMA_MAYBE_UNUSED void ge25519_p1p1_to_p2(ge25519_p2 *r, const ge25519_p1p1 *p) {
     fe25519_mul(r->X, p->X, p->T);
     fe25519_mul(r->Y, p->Y, p->Z);
     fe25519_mul(r->Z, p->Z, p->T);

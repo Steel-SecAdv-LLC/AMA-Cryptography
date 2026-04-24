@@ -22,10 +22,15 @@
 
 /* ===================================================================
  * GCC / Clang — native 128-bit integer
+ *
+ * `__extension__` tells the compiler "yes, I know __int128 is a
+ * language extension not in ISO C" and suppresses -Wpedantic for
+ * this one declaration, so pedantic builds stay clean without
+ * disabling the warning for the rest of the project.
  * =================================================================== */
 #if defined(__GNUC__) || defined(__clang__)
 
-typedef unsigned __int128 ama_uint128;
+__extension__ typedef unsigned __int128 ama_uint128;
 
 #define AMA_MUL64(a, b)       ((ama_uint128)(a) * (b))
 #define AMA_U128_LO(x)        ((uint64_t)(x))

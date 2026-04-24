@@ -31,7 +31,7 @@
 #include <intrin.h>
 #endif
 
-/* AMA_UNUSED is provided by ama_avx2_internal.h. */
+/* AMA_MAYBE_UNUSED is provided by ama_avx2_internal.h. */
 
 /* Portable 32-bit popcount.  __builtin_popcount is GCC/Clang-specific;
  * MSVC provides __popcnt with matching semantics.  Wrapped in a static
@@ -62,7 +62,7 @@ static inline unsigned int ama_popcount_u32(uint32_t x) {
  *   t = (int32_t)(a * QINV)   (low 32 bits)
  *   r = (a - t * q) >> 32
  * ============================================================================ */
-static inline AMA_UNUSED
+static inline AMA_MAYBE_UNUSED
 __m256i montgomery_reduce_avx2(__m256i a_lo, __m256i a_hi) {
     const __m256i q    = _mm256_set1_epi32(DILITHIUM_Q);
     const __m256i qinv = _mm256_set1_epi32(DILITHIUM_QINV);
@@ -88,7 +88,7 @@ __m256i montgomery_reduce_avx2(__m256i a_lo, __m256i a_hi) {
 /* ============================================================================
  * Conditional addition of q (reduce to [0, q))
  * ============================================================================ */
-static inline AMA_UNUSED __m256i caddq_avx2(__m256i a) {
+static inline AMA_MAYBE_UNUSED __m256i caddq_avx2(__m256i a) {
     const __m256i q    = _mm256_set1_epi32(DILITHIUM_Q);
     const __m256i zero = _mm256_setzero_si256();
     /* mask = (a < 0) ? 0xFFFFFFFF : 0 */
@@ -449,7 +449,7 @@ void ama_dilithium_poly_pointwise_avx2(int32_t r[DILITHIUM_N],
 /* ============================================================================
  * Polynomial addition
  * ============================================================================ */
-static AMA_UNUSED void ama_dilithium_poly_add_avx2(int32_t r[DILITHIUM_N],
+static AMA_MAYBE_UNUSED void ama_dilithium_poly_add_avx2(int32_t r[DILITHIUM_N],
                                   const int32_t a[DILITHIUM_N],
                                   const int32_t b[DILITHIUM_N]) {
     for (int i = 0; i < 32; i++) {
@@ -462,7 +462,7 @@ static AMA_UNUSED void ama_dilithium_poly_add_avx2(int32_t r[DILITHIUM_N],
 /* ============================================================================
  * Polynomial subtraction
  * ============================================================================ */
-static AMA_UNUSED void ama_dilithium_poly_sub_avx2(int32_t r[DILITHIUM_N],
+static AMA_MAYBE_UNUSED void ama_dilithium_poly_sub_avx2(int32_t r[DILITHIUM_N],
                                   const int32_t a[DILITHIUM_N],
                                   const int32_t b[DILITHIUM_N]) {
     for (int i = 0; i < 32; i++) {
@@ -475,7 +475,7 @@ static AMA_UNUSED void ama_dilithium_poly_sub_avx2(int32_t r[DILITHIUM_N],
 /* ============================================================================
  * Vectorized power2round: decompose a into (a1, a0) where a = a1*2^d + a0
  * ============================================================================ */
-static AMA_UNUSED void ama_dilithium_power2round_avx2(int32_t a1[DILITHIUM_N],
+static AMA_MAYBE_UNUSED void ama_dilithium_power2round_avx2(int32_t a1[DILITHIUM_N],
                                      int32_t a0[DILITHIUM_N],
                                      const int32_t a[DILITHIUM_N]) {
     const __m256i d_mask = _mm256_set1_epi32((1 << DILITHIUM_D) - 1);
