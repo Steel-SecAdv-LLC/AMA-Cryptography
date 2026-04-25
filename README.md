@@ -409,19 +409,19 @@ Complete security package with all defense layers (Python API via ctypes):
 
 | Operation | Throughput | Source |
 |-----------|-----------|--------|
-| SHA3-256 (1KB) | 170,834 ops/sec | `benchmark-results.json` |
-| HMAC-SHA3-256 (1KB) | 129,999 ops/sec | `benchmark-results.json` |
-| HKDF-SHA3-256 (3-key derive) | 86,779 ops/sec | `benchmark-results.json` |
-| Ed25519 KeyGen | 9,162 ops/sec | `benchmark-results.json` |
-| Ed25519 Sign | 10,569 ops/sec | `benchmark-results.json` |
-| Ed25519 Verify | 7,547 ops/sec | `benchmark-results.json` |
-| AES-256-GCM Encrypt (1KB) | 278,298 ops/sec | `benchmark-results.json` |
-| ChaCha20-Poly1305 Encrypt (1KB) | 271,362 ops/sec | `benchmark-results.json` |
-| X25519 Scalar-mult | 22,918 ops/sec | `benchmark-results.json` |
+| SHA3-256 (1KB) | 179,490 ops/sec | `benchmark-results.json` |
+| HMAC-SHA3-256 (1KB) | 126,098 ops/sec | `benchmark-results.json` |
+| HKDF-SHA3-256 (3-key derive) | 86,154 ops/sec | `benchmark-results.json` |
+| Ed25519 KeyGen | 35,946 ops/sec | `benchmark-results.json` |
+| Ed25519 Sign | 51,206 ops/sec | `benchmark-results.json` |
+| Ed25519 Verify | 21,129 ops/sec | `benchmark-results.json` |
+| AES-256-GCM Encrypt (1KB) | 271,449 ops/sec | `benchmark-results.json` |
+| ChaCha20-Poly1305 Encrypt (1KB) | 263,430 ops/sec | `benchmark-results.json` |
+| X25519 Scalar-mult | 21,632 ops/sec | `benchmark-results.json` |
 
 **Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. X25519 uses the radix-2^51 (`fe51.h`) field arithmetic shared with Ed25519; the portable radix-2^16 path is retained as a fallback where `__int128` is unavailable. See [benchmarks/](benchmarks/) for full performance data including all algorithms.
 
-*Benchmarks: Linux x86-64, Python 3.11.15, native C backend via ctypes, measured 2026-04-21. Reproducible via `python benchmarks/benchmark_runner.py` (CI regression suite), `python benchmark_suite.py` (Python-API sweep), or `build/bin/benchmark_c_raw --json` (raw C). Absolute numbers depend on the host; consult [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md) for baseline-change policy.*
+*Benchmarks: Linux x86-64, Python 3.11.15, native C backend via ctypes, measured 2026-04-25. Reproducible via `python benchmarks/benchmark_runner.py` (CI regression suite), `python benchmark_suite.py` (Python-API sweep), or `build/bin/benchmark_c_raw --json` (raw C). Absolute numbers depend on the host; consult [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md) for baseline-change policy.*
 
 
 ### Benchmark Charts

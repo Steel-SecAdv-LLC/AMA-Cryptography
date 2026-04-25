@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 2.1.5 |
-| Last Updated | 2026-04-21 |
+| Last Updated | 2026-04-25 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -21,6 +21,50 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 
 ## [Unreleased]
+
+
+### Added
+
+- **AVX-512 Keccak 4-way decision record** (`docs/AVX512_KECCAK_PLAN.md`).
+  Terminal record for the PR C closing plan: work shipped since PR #261
+  (#265 ed25519 verify SWE; #266 VAES + VPCLMULQDQ YMM AES-256-GCM),
+  status of the closed PR cluster (#262 / #263 / #264 superseded by
+  #266), the two unblock gates for PR C (an AVX-512-capable CI runner
+  + priority clearance for the +20–40% SHA3-256 1 KB gain), an
+  inventory of the ~28 AVX-512 references already in `main` (flagged
+  as load-bearing safety code, not scaffolding), the PR C
+  implementation sketch when both gates clear (vendor
+  KeccakP-1600-AVX512.s under CC0, build via `AMA_ENABLE_AVX512`,
+  drop the dispatcher downgrade for the SHA3 slot only, tighten
+  `ama_has_avx512f()` XCR0 gating, KAT byte-identity vs the AVX2
+  4-way and scalar reference), and the validation ladder (local
+  Intel SDE → CPUID-gated CI job → quarterly bare-metal bench on
+  Sapphire Rapids / Zen 4). Doc-only change, cherry-picked from
+  `claude/avx512-keccak-ci-plan-cwVrX`.
+
+### Changed
+
+- **Benchmark and ACVP re-run (2026-04-25).** Full validation and
+  performance suite re-executed on a Linux x86-64 host with AVX-512F /
+  BW / DQ / VL / VBMI + VAES + VPCLMULQDQ after the cherry-pick above.
+  NIST ACVP: **1,215 / 1,215 pass, 0 fail**, 5,789 skipped (4,667
+  `vectors_skipped` + 1,122 `mct_skipped`) — matches the attestation
+  in `docs/compliance/acvp_attestation.json` exactly. `ctest`: 20 / 20
+  pass. FIPS-140 self-test + KAT + SIMD KAT Python lanes: 128 / 128
+  pass. Regression benchmark: 16 / 16 pass, 0 warnings. Refreshed
+  ops/sec tables in `README.md`, `benchmark-report.md`,
+  `benchmark-results.json`, and `docs/COMPETITIVE_ANALYSIS.md` so they
+  reflect the current tree including the post-#261 base-point comb
+  table, #265 verify-path SWE rectification, and #266 VAES YMM
+  AES-256-GCM landed on the 2.1.5 line. Notable deltas on this host:
+  Ed25519 sign 10,569 → 51,206 ops/sec, Ed25519 verify 7,547 →
+  21,129 ops/sec, Ed25519 keygen 9,162 → 35,946 ops/sec, ML-DSA-65
+  sign 1,017 → 2,976 ops/sec, ML-KEM-1024 encap 9,138 → 10,253
+  ops/sec. AES-256-GCM 1KB (278,298 → 271,449 ops/sec) and
+  ChaCha20-Poly1305 1KB (271,362 → 263,430 ops/sec) are within
+  run-to-run noise at the 1KB block size; the VAES YMM win shows up
+  at ≥ 4KB in `build/bin/benchmark_c_raw --json`. A new row captures
+  the rerun in `docs/METRICS_REPORT.md` under §Change Log.
 
 
 ### BREAKING
