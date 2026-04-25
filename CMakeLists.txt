@@ -45,6 +45,14 @@ option(AMA_ENABLE_DUDECT "Build dudect constant-time verification tests" OFF)
 option(AMA_ENABLE_NEON "Enable ARM NEON optimizations (AArch64)" ON)
 option(AMA_ENABLE_SVE2 "Enable ARM SVE2 optimizations (ARMv9)" OFF)
 
+# AVX-512 SHA3 4-way kernel (PR C — 2026-04).  Off by default — does not
+# perturb the existing matrix builds.  Enables the in-house AVX-512 VL
+# Keccak-f[1600] ×4 kernel in src/c/avx512/ama_sha3_x4_avx512.c, which
+# the dispatcher promotes to for the SHA3 slot when the runtime CPUID
+# bundle (ama_cpuid_has_avx512_keccak()) passes.  AVX2 4-way remains
+# the fallback when the bundle fails or when this flag is OFF.
+option(AMA_ENABLE_AVX512 "Enable AVX-512 SHA3 4-way kernel (x86-64 only)" OFF)
+
 # Ed25519 verify-path tuning gates.  Propagated to the in-tree ama_ed25519.c
 # via target_compile_definitions further below.  Ignored by the donna shim
 # path (AMA_ED25519_ASSEMBLY=ON), which has its own scalarmult.
@@ -193,6 +201,7 @@ endif()
 # ============================================================================
 
 set(AMA_AVX2_SOURCES "")
+set(AMA_AVX512_SOURCES "")
 set(AMA_NEON_SOURCES "")
 set(AMA_SVE2_SOURCES "")
 set(AMA_DISPATCH_SOURCES src/c/dispatch/ama_dispatch.c)
@@ -227,6 +236,38 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
         message(STATUS "SIMD: AVX2 hand-written intrinsics enabled (8 algorithms incl. VAES AES-GCM)")
         # Tell dispatch code that AVX2 implementations are linked in
         add_compile_definitions(AMA_HAVE_AVX2_IMPL)
+    endif()
+endif()
+
+# AVX-512 SHA3 4-way kernel (x86-64 only, opt-in via AMA_ENABLE_AVX512).
+#
+# Compiles src/c/avx512/ama_sha3_x4_avx512.c with -mavx512f -mavx512vl,
+# defines AMA_HAVE_AVX512_IMPL on the library targets, and the dispatcher
+# (src/c/dispatch/ama_dispatch.c) wires dispatch_table.keccak_f1600_x4
+# to the AVX-512 kernel when the runtime CPUID bundle gate
+# (ama_cpuid_has_avx512_keccak() — AVX-512F + AVX-512VL + XCR0 1+2+5+6+7)
+# passes.  The kernel emits EVEX-encoded YMM ops only — no ZMM register
+# is touched, no opmask is used.
+#
+# MSVC: no AVX-512 path is built.  The kernel relies on GCC/Clang
+# intrinsic semantics for _mm256_ternarylogic_epi64 / _mm256_rol_epi64
+# under per-file -mavx512f -mavx512vl flags, the same MSVC-escape
+# pattern src/c/avx2/ama_aes_gcm_vaes_avx2.c uses.
+if(AMA_ENABLE_AVX512)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+        if(NOT MSVC)
+            set(AMA_AVX512_SOURCES
+                src/c/avx512/ama_sha3_x4_avx512.c
+            )
+            set_source_files_properties(${AMA_AVX512_SOURCES} PROPERTIES
+                COMPILE_FLAGS "-mavx512f -mavx512vl")
+            add_compile_definitions(AMA_HAVE_AVX512_IMPL)
+            message(STATUS "SIMD: AVX-512 SHA3 4-way kernel enabled (in-house, AVX-512F + AVX-512VL)")
+        else()
+            message(STATUS "SIMD: AVX-512 SHA3 4-way kernel requested but MSVC is not supported — skipping")
+        endif()
+    else()
+        message(STATUS "SIMD: AVX-512 SHA3 4-way kernel requested but architecture is ${CMAKE_SYSTEM_PROCESSOR} — skipping")
     endif()
 endif()
 
@@ -309,6 +350,7 @@ set(AMA_SOURCES
     src/c/ama_secure_memory.c
     ${AMA_DISPATCH_SOURCES}
     ${AMA_AVX2_SOURCES}
+    ${AMA_AVX512_SOURCES}
     ${AMA_NEON_SOURCES}
     ${AMA_SVE2_SOURCES}
 )
@@ -582,6 +624,7 @@ message(STATUS "  Tests:          ${AMA_BUILD_TESTS}")
 message(STATUS "  Examples:       ${AMA_BUILD_EXAMPLES}")
 message(STATUS "  SIMD:           ${AMA_ENABLE_SIMD}")
 message(STATUS "  AVX2:           ${AMA_ENABLE_AVX2}")
+message(STATUS "  AVX-512:        ${AMA_ENABLE_AVX512}")
 message(STATUS "  NEON:           ${AMA_ENABLE_NEON}")
 message(STATUS "  SVE2:           ${AMA_ENABLE_SVE2}")
 message(STATUS "  Sanitizers:     ${AMA_ENABLE_SANITIZERS}")

@@ -163,6 +163,19 @@ extern void ama_keccak_f1600_x4_generic(uint64_t states[4][25]);
 #endif
 #endif
 
+/* AVX-512 4-way Keccak (PR C — 2026-04, opt-in via AMA_ENABLE_AVX512).
+ *
+ * Only the SHA3 slot is promoted past AMA_IMPL_AVX2 today: this is the
+ * single in-house AVX-512 kernel.  The dispatcher gates the wiring on
+ * ama_cpuid_has_avx512_keccak() (AVX-512F + AVX-512VL + XCR0 1+2+5+6+7)
+ * AND on AMA_HAVE_AVX512_IMPL having been defined by CMake — the
+ * AMA_ENABLE_AVX512 build option is the build-time half of that gate. */
+#ifdef AMA_HAVE_AVX512_IMPL
+#if defined(__x86_64__) || defined(_M_X64)
+extern void ama_keccak_f1600_x4_avx512(uint64_t states[4][25]);
+#endif
+#endif
+
 #ifdef AMA_HAVE_NEON_IMPL
 extern void ama_keccak_f1600_neon(uint64_t state[25]);
 extern ama_error_t ama_sha3_256_neon(const uint8_t *input, size_t input_len,
@@ -241,7 +254,26 @@ static void dispatch_init_internal(void) {
                                  ? AMA_IMPL_AVX2  /* AVX-512 files are stretch */
                                  : best;
 
-    dispatch_info.sha3             = effective;
+    /* PR C — SHA3 slot promotion to AMA_IMPL_AVX512.
+     *
+     * The in-house AVX-512 4-way Keccak kernel
+     * (src/c/avx512/ama_sha3_x4_avx512.c) is the only AVX-512 path
+     * wired today.  Promote the SHA3 slot past the per-slot
+     * effective→AVX2 downgrade if and only if:
+     *   1. CMake compiled the kernel in (AMA_HAVE_AVX512_IMPL), and
+     *   2. the runtime CPUID bundle gate
+     *      (ama_cpuid_has_avx512_keccak() — AVX-512F + AVX-512VL
+     *      + XCR0 1+2+5+6+7) passes on this host.
+     * All other slots keep `effective` until they grow ZMM/EVEX
+     * kernels of their own — explicit non-goal of PR C. */
+    ama_impl_level_t effective_sha3 = effective;
+#ifdef AMA_HAVE_AVX512_IMPL
+    if (best == AMA_IMPL_AVX512 && ama_cpuid_has_avx512_keccak()) {
+        effective_sha3 = AMA_IMPL_AVX512;
+    }
+#endif
+
+    dispatch_info.sha3             = effective_sha3;
     dispatch_info.kyber            = effective;
     dispatch_info.dilithium        = effective;
     dispatch_info.sphincs          = effective;
@@ -257,8 +289,11 @@ static void dispatch_init_internal(void) {
 
     if (dispatch_verbose())
         fprintf(stderr,
-            "[AMA Dispatch] x86-64: AVX2=%d AVX-512F=%d => level=%d\n",
-            has_avx2, has_avx512f, (int)effective);
+            "[AMA Dispatch] x86-64: AVX2=%d AVX-512F=%d AVX-512-Keccak=%d "
+            "=> level=%d (sha3=%d)\n",
+            has_avx2, has_avx512f,
+            ama_cpuid_has_avx512_keccak(),
+            (int)effective, (int)effective_sha3);
 
 #elif defined(__aarch64__) || defined(_M_ARM64)
     dispatch_info.arch_name = "AArch64";
@@ -324,6 +359,35 @@ static void dispatch_init_internal(void) {
         dispatch_table.keccak_f1600_x4 = ama_keccak_f1600_x4_avx2;
         dispatch_table.sha3_256        = ama_sha3_256_avx2;
     }
+#endif
+
+    /* PR C — AVX-512 4-way Keccak upgrade.  Layered on top of the
+     * AVX2 wiring so that:
+     *   - When AMA_ENABLE_AVX512 is OFF (default), this block is
+     *     compiled out entirely and the AVX2 4-way pointer stands.
+     *   - When AMA_ENABLE_AVX512 is ON but the runtime gate fails
+     *     (no AVX-512F/VL CPUID, or OS hasn't enabled the AVX-512
+     *     save area in XCR0), dispatch_info.sha3 < AMA_IMPL_AVX512
+     *     and this branch is skipped — AVX2 4-way remains.
+     *   - When both the build flag and the runtime gate pass, the
+     *     in-house AVX-512 kernel takes over the keccak_f1600_x4
+     *     pointer.  The single-state keccak_f1600 pointer is left
+     *     on the AVX2 path — this PR ships only the 4-way kernel.
+     * The hand-written kernel preserves the same uint64_t[4][25]
+     * ABI as the AVX2 4-way path, so the SHAKE128/SHAKE256 absorb +
+     * squeeze wrappers in src/c/ama_sha3.c need no changes. */
+#ifdef AMA_HAVE_AVX512_IMPL
+#if defined(__x86_64__) || defined(_M_X64)
+    if (dispatch_info.sha3 >= AMA_IMPL_AVX512) {
+        dispatch_table.keccak_f1600_x4 = ama_keccak_f1600_x4_avx512;
+        if (dispatch_verbose())
+            fprintf(stderr,
+                "[AMA Dispatch] keccak_f1600_x4: AVX-512 (vprolq + vpternlogq) selected\n");
+    }
+#endif
+#endif
+
+#ifdef AMA_HAVE_AVX2_IMPL
     if (dispatch_info.kyber >= AMA_IMPL_AVX2) {
         dispatch_table.kyber_ntt       = ama_kyber_ntt_avx2;
         dispatch_table.kyber_invntt    = ama_kyber_invntt_avx2;

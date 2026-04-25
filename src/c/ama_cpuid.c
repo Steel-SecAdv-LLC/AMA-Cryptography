@@ -103,6 +103,22 @@ static int has_avx512f_cached = 0;
 static int has_vaes_cached = 0;
 static int has_vpclmulqdq_cached = 0;
 static int has_avx_osxsave_cached = 0;
+/* PR C (2026-04) — AVX-512 SHA3 4-way kernel.
+ *
+ * AVX-512VL (CPUID.(EAX=7,ECX=0):EBX[31]) lets the AVX-512 EVEX-encoded
+ * instructions (vprolq / vpternlogq) act on 256-bit YMM registers, which
+ * is what the in-house 4-way Keccak kernel emits — it never touches a
+ * ZMM register or opmask in the hot path.  We still gate on the full
+ * ZMM XCR0 bits (5/6/7) because EVEX-encoded YMM operations on a host
+ * whose OS has not enabled the AVX-512 save area will #UD inside a
+ * sandboxed VM whose host kernel did not advertise AVX-512 state — same
+ * SIGILL category as the AVX OSXSAVE gate already covers for AVX2.
+ *
+ * Both fields are populated from the same detect_x86_features() one-shot
+ * invocation as the legacy fields above (INVARIANT-15 unchanged — same
+ * cpuid_once primitive, no reordering, no new call sites). */
+static int has_avx512vl_cached = 0;
+static int has_avx512_zmm_state_cached = 0;
 
 /* Read XCR0 via XGETBV and confirm the OS has enabled SSE + AVX state.
  *
@@ -157,6 +173,37 @@ static int xcr0_has_avx_state(void) {
     return (xcr0 & avx_bits) == avx_bits;
 }
 
+/* Read XCR0 and confirm the OS has enabled the AVX-512 save area.
+ *
+ * AVX-512 needs three additional XCR0 bits beyond the AVX state checked
+ * by xcr0_has_avx_state():
+ *   - bit 5: opmask registers (k0..k7)
+ *   - bit 6: ZMM Hi256 (upper 256 bits of ZMM0..ZMM15)
+ *   - bit 7: Hi16 ZMM (ZMM16..ZMM31)
+ * All three must be set before the kernel may legally emit *any* EVEX
+ * encoding — including EVEX-encoded YMM ops like vprolq (AVX-512 VL),
+ * which the 4-way Keccak kernel uses.  Without this gate, the first
+ * EVEX opcode would #UD inside a VM whose host has not advertised
+ * AVX-512 state to its guests (same hazard the AVX-state gate covers
+ * for AVX2). */
+static int xcr0_has_avx512_state(void) {
+    unsigned long long xcr0;
+#if defined(_MSC_VER)
+    xcr0 = _xgetbv(0);
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__XSAVE__)
+    xcr0 = (unsigned long long)__builtin_ia32_xgetbv(0);
+#else
+    unsigned int eax_xcr, edx_xcr;
+    __asm__ volatile (".byte 0x0f, 0x01, 0xd0"
+                      : "=a"(eax_xcr), "=d"(edx_xcr)
+                      : "c"(0));
+    xcr0 = ((unsigned long long)edx_xcr << 32) | (unsigned long long)eax_xcr;
+#endif
+    const unsigned long long avx512_bits =
+        (1ULL << 5) | (1ULL << 6) | (1ULL << 7);
+    return (xcr0 & avx512_bits) == avx512_bits;
+}
+
 static void detect_x86_features(void) {
 #ifdef _MSC_VER
     int info[4];
@@ -167,14 +214,21 @@ static void detect_x86_features(void) {
     /* Leaf 7, sub-leaf 0:
      *   EBX bit 5  — AVX2
      *   EBX bit 16 — AVX-512F
+     *   EBX bit 31 — AVX-512VL  (PR C — required for vprolq / vpternlogq on YMM)
      *   ECX bit 9  — VAES         (PR A — independent of AVX-512)
      *   ECX bit 10 — VPCLMULQDQ   (PR A — independent of AVX-512) */
     __cpuidex(info, 7, 0);
     has_avx2_cached       = (info[1] >> 5)  & 1;
     has_avx512f_cached    = (info[1] >> 16) & 1;
+    has_avx512vl_cached   = (info[1] >> 31) & 1;
     has_vaes_cached       = (info[2] >> 9)  & 1;
     has_vpclmulqdq_cached = (info[2] >> 10) & 1;
     has_avx_osxsave_cached = osxsave ? xcr0_has_avx_state() : 0;
+    /* AVX-512 ZMM/opmask save-area state in XCR0 (bits 5+6+7) is a
+     * superset gate: only meaningful when the AVX state gate already
+     * passed, since OSXSAVE is the prerequisite for XGETBV. */
+    has_avx512_zmm_state_cached =
+        (osxsave && has_avx_osxsave_cached) ? xcr0_has_avx512_state() : 0;
 #else
     unsigned int eax, ebx, ecx, edx;
     int osxsave = 0;
@@ -186,16 +240,20 @@ static void detect_x86_features(void) {
     /* CPUID leaf 7, sub-leaf 0:
      *   EBX bit 5  — AVX2
      *   EBX bit 16 — AVX-512F
+     *   EBX bit 31 — AVX-512VL  (PR C — required for vprolq / vpternlogq on YMM)
      *   ECX bit 9  — VAES         (PR A — independent of AVX-512)
      *   ECX bit 10 — VPCLMULQDQ   (PR A — independent of AVX-512)
      * Only read XCR0 when OSXSAVE is set; otherwise XGETBV #UDs. */
     if (__get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx)) {
         has_avx2_cached       = (ebx >> 5)  & 1;
         has_avx512f_cached    = (ebx >> 16) & 1;
+        has_avx512vl_cached   = (ebx >> 31) & 1;
         has_vaes_cached       = (ecx >> 9)  & 1;
         has_vpclmulqdq_cached = (ecx >> 10) & 1;
     }
     has_avx_osxsave_cached = osxsave ? xcr0_has_avx_state() : 0;
+    has_avx512_zmm_state_cached =
+        (osxsave && has_avx_osxsave_cached) ? xcr0_has_avx512_state() : 0;
 #endif
 }
 
@@ -228,20 +286,51 @@ int ama_has_avx2(void) {
 int ama_has_avx512f(void) {
     AMA_CALL_ONCE(cpuid_once, detect_x86_features);
     /* AVX-512F is a strict superset of AVX2, which in turn requires
-     * SSE + AVX YMM state in XCR0 (bits 1+2).  The dispatcher maps
-     * AMA_IMPL_AVX512 → AMA_IMPL_AVX2 (no EVEX/ZMM code yet), so if
-     * this probe returns 1 while the OS has NOT enabled AVX state,
-     * the dispatch layer would wire AVX2 function pointers whose
-     * VEX-encoded opcodes #UD — a latent SIGILL on VMs where the
-     * hypervisor exposes the host CPUID but restricts XCR0 (Devin
-     * Review #3136221784).
+     * SSE + AVX YMM state in XCR0 (bits 1+2).  Beyond that, *any*
+     * EVEX-encoded opcode (including the EVEX-encoded YMM forms used
+     * by the in-house 4-way Keccak kernel — vprolq, vpternlogq) needs
+     * the AVX-512 save area enabled in XCR0 (bits 5+6+7 — opmask,
+     * ZMM Hi256, Hi16 ZMM).  Without that gate, the first EVEX op
+     * would #UD on a host whose hypervisor advertised the CPUID bits
+     * but masked the XCR0 bits — same SIGILL category as Devin
+     * Review #3136221784.
      *
-     * Gate on has_avx_osxsave_cached (same flag ama_has_avx2() /
-     * ama_has_vaes() / ama_has_vpclmulqdq() use).  When the first
-     * AVX-512 kernel lands, ALSO verify XCR0 bits 5 (opmask) +
-     * 6 (ZMM Hi256) + 7 (Hi16 ZMM); those are distinct from the
-     * AVX state bits and are not checked here. */
-    return has_avx512f_cached && has_avx_osxsave_cached;
+     * PR C tightens this gate: the bundle now requires AVX state +
+     * AVX-512 ZMM/opmask state.  Both are populated from the same
+     * one-shot detect_x86_features() probe (INVARIANT-15 unchanged). */
+    return has_avx512f_cached
+        && has_avx_osxsave_cached
+        && has_avx512_zmm_state_cached;
+}
+
+int ama_has_avx512vl(void) {
+    AMA_CALL_ONCE(cpuid_once, detect_x86_features);
+    /* AVX-512VL is the gate for EVEX-encoded YMM/XMM ops (vprolq,
+     * vpternlogq on __m256i, …).  Same XCR0 contract as ama_has_avx512f():
+     * the AVX-512 save area must be enabled by the OS, otherwise the
+     * first EVEX-encoded op #UDs.  Returns 1 only when CPUID reports
+     * AVX-512VL *and* the OS has enabled both the AVX state and the
+     * AVX-512 ZMM/opmask state. */
+    return has_avx512vl_cached
+        && has_avx_osxsave_cached
+        && has_avx512_zmm_state_cached;
+}
+
+int ama_cpuid_has_avx512_keccak(void) {
+    /* Bundle gate for the in-house AVX-512 4-way Keccak kernel
+     * (src/c/avx512/ama_sha3_x4_avx512.c).  All getters share the same
+     * pthread_once / InitOnceExecuteOnce primitive, so the underlying
+     * detect_x86_features() probe runs exactly once.
+     *
+     * The kernel emits:
+     *   - AVX-512F  — base ISA enabling EVEX encoding
+     *   - AVX-512VL — EVEX-encoded vprolq / vpternlogq on YMM (__m256i)
+     * Both require AVX OS state (XCR0 bits 1+2) AND AVX-512 OS state
+     * (XCR0 bits 5+6+7) — checked transitively by ama_has_avx512f() /
+     * ama_has_avx512vl(), each of which already AND-folds the XCR0
+     * gates.  The dispatcher must consult this bundle (not the raw
+     * AVX-512F bit) before promoting the SHA3 slot to AMA_IMPL_AVX512. */
+    return ama_has_avx512f() && ama_has_avx512vl();
 }
 
 int ama_has_vaes(void) {
@@ -375,6 +464,8 @@ int ama_has_aes_ni(void) { return 0; }
 int ama_has_pclmulqdq(void) { return 0; }
 int ama_has_avx2(void) { return 0; }
 int ama_has_avx512f(void) { return 0; }
+int ama_has_avx512vl(void) { return 0; }
+int ama_cpuid_has_avx512_keccak(void) { return 0; }
 int ama_has_vaes(void) { return 0; }
 int ama_has_vpclmulqdq(void) { return 0; }
 int ama_cpuid_has_vaes_aesgcm(void) { return 0; }
@@ -409,6 +500,8 @@ int ama_has_aes_ni(void) { return 0; }
 int ama_has_pclmulqdq(void) { return 0; }
 int ama_has_avx2(void) { return 0; }
 int ama_has_avx512f(void) { return 0; }
+int ama_has_avx512vl(void) { return 0; }
+int ama_cpuid_has_avx512_keccak(void) { return 0; }
 int ama_has_vaes(void) { return 0; }
 int ama_has_vpclmulqdq(void) { return 0; }
 int ama_cpuid_has_vaes_aesgcm(void) { return 0; }

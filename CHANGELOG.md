@@ -171,6 +171,52 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ### Performance
 
+- **PR C — In-house AVX-512 4-way Keccak permutation kernel (opt-in via
+  `-DAMA_ENABLE_AVX512=ON`).** New
+  `src/c/avx512/ama_sha3_x4_avx512.c` provides
+  `ama_keccak_f1600_x4_avx512`, a hand-written AVX-512 VL implementation
+  of FIPS 202 §3.2 Keccak-p[1600, 24] that matches the
+  `uint64_t states[4][25]` ABI of the existing AVX2 4-way kernel. Two
+  per-round wins over the AVX2 reference, both EVEX-encoded but emitted
+  at YMM width (no ZMM, no opmask, no ternary state in the hot path):
+  `vprolq` (`_mm256_rol_epi64`) replaces the synthesised
+  `(x << n) | (x >> 64-n)` rotate, and `vpternlogq`
+  (`_mm256_ternarylogic_epi64`) collapses theta's three-way XOR (imm
+  `0x96`) and the chi step `B[i] ^ (~B[i+1] & B[i+2])` (imm `0xD2`)
+  into single instructions. The dispatcher in
+  `src/c/dispatch/ama_dispatch.c` promotes only the SHA3 slot to
+  `AMA_IMPL_AVX512`; every other slot keeps the existing
+  effective-level downgrade until it grows its own ZMM kernel
+  (explicit non-goal of PR C — no ZMM path is added for AES-GCM,
+  ChaCha20, Argon2, Kyber NTT, Dilithium NTT, or SPHINCS+). The AVX2
+  4-way kernel remains the fallback whenever the runtime gate fails
+  or when the build flag is off (the default), so the existing matrix
+  builds are not perturbed.
+
+  Hardening: `src/c/ama_cpuid.c` adds `xcr0_has_avx512_state()`
+  (XCR0 bits 5+6+7 — opmask, ZMM Hi256, Hi16 ZMM), surfaces
+  `ama_has_avx512vl()` and the bundle helper
+  `ama_cpuid_has_avx512_keccak()`, and tightens `ama_has_avx512f()`
+  to AND its previous AVX-state gate with the new ZMM-state gate.
+  Without that, an EVEX-encoded YMM op (vprolq / vpternlogq) would
+  `#UD` on a host whose hypervisor advertised the CPUID bits but
+  masked the XCR0 bits — same SIGILL category Devin Review
+  #3136221784 covered for AVX2 in PR A. INVARIANT-15 unchanged: all
+  new cache fields are populated from the same one-shot
+  `detect_x86_features()` invocation as the legacy ones.
+
+  Coverage: new `tests/c/test_sha3_avx512_kat.c` (built only when
+  `AMA_ENABLE_AVX512=ON`) verifies byte-identity across all three
+  permutation tiers — pure scalar, AVX2 4-way, AVX-512 4-way — for
+  SHAKE128, SHAKE256, and SHA3-256, including the FIPS 202 KAT
+  vectors (empty string, `"abc"`), 1-byte and empty-input edges, and
+  heterogeneous lane lengths. Skips with CTest exit code 77 when
+  `ama_cpuid_has_avx512_keccak()` returns 0 (INVARIANT-3 — observable
+  skip, never silent pass). New `test-avx512` CI job in
+  `.github/workflows/ci.yml` runs the KAT under a
+  `/proc/cpuinfo`-based runner-capability gate; the build/test body
+  itself never uses `continue-on-error` (INVARIANT-2).
+
 - X25519 scalar multiplication: rewrite `ama_x25519.c` onto the radix-2^51
   (`fe51.h`) field arithmetic already used by Ed25519. The portable
   radix-2^16 (TweetNaCl-style) path is retained as a fallback for

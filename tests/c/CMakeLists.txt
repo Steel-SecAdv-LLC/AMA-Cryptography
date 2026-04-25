@@ -17,6 +17,20 @@ add_ama_test(test_core test_core.c)
 add_ama_test(test_sha3 test_sha3.c)
 add_ama_test(test_sha3_512_stream test_sha3_512_stream.c)
 add_ama_test(test_sha3_x4 test_sha3_x4.c)
+
+# AVX-512 4-way Keccak byte-identity KAT (PR C — 2026-04).  Only built
+# when AMA_ENABLE_AVX512=ON; otherwise the AVX-512 kernel symbol does
+# not exist in ama_cryptography_test and linking would fail.  At
+# runtime, the test exits with CTest's standard skip code 77 when
+# ama_cpuid_has_avx512_keccak() returns 0 (host has no AVX-512F/VL or
+# the OS has not enabled the AVX-512 save area in XCR0) — surfaces as
+# "Skipped" in ctest output rather than a silent pass.
+if(AMA_ENABLE_AVX512 AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64" AND NOT MSVC)
+    add_executable(test_sha3_avx512_kat test_sha3_avx512_kat.c)
+    target_link_libraries(test_sha3_avx512_kat ama_cryptography_test)
+    add_test(NAME test_sha3_avx512_kat COMMAND test_sha3_avx512_kat)
+    set_tests_properties(test_sha3_avx512_kat PROPERTIES SKIP_RETURN_CODE 77)
+endif()
 add_ama_test(test_hkdf test_hkdf.c)
 add_ama_test(test_ed25519 test_ed25519.c)
 
