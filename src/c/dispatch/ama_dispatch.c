@@ -247,11 +247,12 @@ static void dispatch_init_internal(void) {
      * not enabled AVX state (Devin Review #3136221784). */
     if (has_avx512f && has_avx2) best = AMA_IMPL_AVX512;
 
-    /* All algorithms use the best available level.
-     * AVX-512 implementations fall back to AVX2 where AVX-512
-     * specific code isn't yet available. */
-    ama_impl_level_t effective = (best == AMA_IMPL_AVX512 && 1)
-                                 ? AMA_IMPL_AVX2  /* AVX-512 files are stretch */
+    /* Default per-slot effective level.  Until each non-SHA3 slot
+     * grows its own ZMM/EVEX kernel, AMA_IMPL_AVX512 is downgraded
+     * to AMA_IMPL_AVX2 here; PR C carved out the SHA3 slot only,
+     * via the explicit promotion below. */
+    ama_impl_level_t effective = (best == AMA_IMPL_AVX512)
+                                 ? AMA_IMPL_AVX2
                                  : best;
 
     /* PR C — SHA3 slot promotion to AMA_IMPL_AVX512.

@@ -86,6 +86,20 @@ static void shake_scalar_one_block(size_t rate,
 {
     uint64_t state[25];
     uint8_t block[200];
+    /* Contract: the one-block fast path handles in_len < rate; a
+     * caller passing in_len >= rate would write the SHAKE domain
+     * separator past `block[]`'s rate-byte window (Copilot review
+     * #3141559617).  Hard abort rather than truncate — every test
+     * vector below is well under the smallest SHAKE rate (136 B for
+     * SHAKE128; 168 B for SHAKE256), so this is a "loud guard for
+     * future test extension" only. */
+    if (in_len >= rate) {
+        fprintf(stderr,
+            "FATAL: shake_scalar_one_block called with in_len=%zu >= rate=%zu; "
+            "this helper handles single-block absorbs only.\n",
+            in_len, rate);
+        abort();
+    }
     memset(state, 0, sizeof(state));
     memset(block, 0, rate);
     if (in_len > 0) memcpy(block, in, in_len);
@@ -128,6 +142,19 @@ static void shake_x4_one_block(size_t rate,
     uint8_t       *outs[4]  = { out0, out1, out2, out3 };
 
     for (int lane = 0; lane < 4; lane++) {
+        /* Contract (matches shake_scalar_one_block): per-lane in_len
+         * must be < rate so block[lens[lane]] stays inside the
+         * rate-byte window (Copilot review #3141559621).  Hard abort
+         * rather than truncate — every test vector below is well
+         * under the smallest SHAKE rate, so this is a "loud guard
+         * for future test extension" only. */
+        if (lens[lane] >= rate) {
+            fprintf(stderr,
+                "FATAL: shake_x4_one_block lane %d in_len=%zu >= rate=%zu; "
+                "this helper handles single-block absorbs only.\n",
+                lane, lens[lane], rate);
+            abort();
+        }
         uint8_t block[200];
         memset(block, 0, rate);
         if (lens[lane] > 0) memcpy(block, ins[lane], lens[lane]);
