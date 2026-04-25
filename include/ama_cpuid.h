@@ -132,22 +132,56 @@ int ama_cpuid_has_vaes_aesgcm(void);
 int ama_has_avx2(void);
 
 /**
- * @brief Check for x86 AVX-512F CPUID feature bit + AVX OS state.
+ * @brief Check for x86 AVX-512F CPUID feature bit + full AVX-512 OS state.
  *
- * CPUID.(EAX=7,ECX=0):EBX[16] AND OSXSAVE AND XCR0 bits 1+2
- * (SSE+AVX).  AVX-512F is a strict superset of AVX2; the dispatch
- * layer currently maps AMA_IMPL_AVX512 → AMA_IMPL_AVX2 (no
- * EVEX/ZMM code emitted yet), so the AVX state gate is necessary
- * to prevent wiring AVX2 function pointers on a host where the OS
- * has not enabled AVX state in XCR0.  When the first AVX-512 kernel
- * lands, callers must ALSO verify XCR0 bits 5 (opmask) + 6 (ZMM
- * Hi256) + 7 (Hi16 ZMM); those are distinct from the AVX-only bits
- * and are not checked here.
+ * CPUID.(EAX=7,ECX=0):EBX[16] AND OSXSAVE AND XCR0 bits 1+2 (SSE+AVX)
+ * AND XCR0 bits 5+6+7 (opmask, ZMM Hi256, Hi16 ZMM).  AVX-512F is a
+ * strict superset of AVX2, but the AVX OS-state gate alone is *not*
+ * sufficient — *any* EVEX-encoded opcode (including the EVEX-encoded
+ * YMM forms emitted by the in-house AVX-512 4-way Keccak kernel:
+ * vprolq, vpternlogq) requires the AVX-512 save area enabled in XCR0.
+ * Without that gate, the first EVEX op would #UD on a host whose
+ * hypervisor advertises the CPUID bits but masks the XCR0 bits — the
+ * same SIGILL category Devin Review #3136221784 covers for AVX2.
  *
  * @return 1 if AVX-512F is reported by CPUID AND the OS has enabled
- *         AVX state, 0 otherwise.  Cached after first call.
+ *         both the AVX state and the AVX-512 ZMM/opmask state,
+ *         0 otherwise.  Cached after first call.
  */
 int ama_has_avx512f(void);
+
+/**
+ * @brief Check for x86 AVX-512VL CPUID feature bit + full AVX-512 OS state.
+ *
+ * CPUID.(EAX=7,ECX=0):EBX[31] AND the same XCR0 contract as
+ * ama_has_avx512f().  AVX-512VL ("Vector Length") is what allows
+ * EVEX-encoded AVX-512 instructions (vprolq, vpternlogq, …) to act on
+ * 256-bit YMM (and 128-bit XMM) registers instead of requiring full
+ * 512-bit ZMM operands.  The 4-way Keccak kernel uses YMM-width EVEX
+ * ops exclusively, so AVX-512VL — not just AVX-512F — is part of its
+ * runtime gate.
+ *
+ * @return 1 if AVX-512VL is reported by CPUID AND the OS has enabled
+ *         the AVX-512 save area, 0 otherwise.  Cached after first call.
+ */
+int ama_has_avx512vl(void);
+
+/**
+ * @brief Bundle check: AVX-512F + AVX-512VL + full AVX/AVX-512 OS state.
+ *
+ * The AVX-512 4-way Keccak dispatch gate.  Returns 1 only when every
+ * component required by the in-house kernel
+ * (src/c/avx512/ama_sha3_x4_avx512.c) passes:
+ *   - AVX-512F  — base ISA enabling EVEX encoding
+ *   - AVX-512VL — EVEX-encoded vprolq / vpternlogq on YMM (__m256i)
+ *   - AVX OS state (XCR0 bits 1+2)        — checked transitively
+ *   - AVX-512 OS state (XCR0 bits 5+6+7)  — checked transitively
+ *
+ * Otherwise the dispatcher leaves the SHA3 4-way slot wired to the
+ * AVX2 kernel (ama_keccak_f1600_x4_avx2) — never to a generic-only
+ * fallback when AVX2 is itself available.
+ */
+int ama_cpuid_has_avx512_keccak(void);
 
 /**
  * @brief Check for ARMv8 AES Crypto Extension support.

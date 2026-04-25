@@ -218,20 +218,20 @@ the cell reads **N/A**.
 
 | Primitive | AMA (measured) | libsodium | liboqs | OpenSSL | Verdict |
 |---|---:|---:|---:|---:|---|
-| SHA3-256 hash (1KB) | 170,834 ops/s | N/A | N/A | varies | AMA competitive on generic C path |
-| HMAC-SHA3-256 (1KB) | 129,999 ops/s | N/A | N/A | varies | AMA competitive on generic C path |
-| Ed25519 KeyGen | 9,162 ops/s | 40,000–60,000 ops/s (ref) | N/A | varies | libsodium ~5.5× faster (base-point table) |
-| Ed25519 Sign | 10,569 ops/s | 50,000–80,000 ops/s (ref) | N/A | ~20,000 ops/s (ref) | libsodium ~6.1× faster; OpenSSL ~2× faster |
-| Ed25519 Verify | 7,547 ops/s | 15,000–30,000 ops/s (ref) | N/A | ~10,000 ops/s (ref) | libsodium ~3.0× faster (vartime) |
-| HKDF-SHA3-256 (3 keys) | 86,779 ops/s | HKDF-SHA256 only | N/A | HKDF-SHA256 only | Different hash — not directly comparable |
-| ML-DSA-65 KeyGen | 2,951 ops/s | N/A | 2,000–5,000 ops/s (ref) | Provider 3.4+ (ref) | Within liboqs reference band |
-| ML-DSA-65 Sign | 1,017 ops/s | N/A | 500–1,500 ops/s (ref) | Provider 3.4+ (ref) | Inside liboqs band |
-| ML-DSA-65 Verify | 6,322 ops/s | N/A | 4,000–9,000 ops/s (ref) | Provider 3.4+ (ref) | Within liboqs band |
-| ML-KEM-1024 KeyGen | 4,850 ops/s | N/A | 8,000–18,000 ops/s (ref) | Provider 3.4+ (ref) | Trails liboqs ~2× on generic C path |
-| ML-KEM-1024 Encap | 9,138 ops/s | N/A | 7,000–15,000 ops/s (ref) | Provider 3.4+ (ref) | Inside liboqs band |
-| AES-256-GCM (1KB) | 278,298 ops/s | N/A (XChaCha preferred) | N/A | ~500K ops/s (AES-NI, ref) | OpenSSL AES-NI path ~1.8× faster |
-| ChaCha20-Poly1305 (1KB) | 271,362 ops/s | ~380,000 ops/s (ref) | N/A | ~300,000 ops/s (ref) | libsodium ~1.4× faster |
-| X25519 scalar mult | 22,918 ops/s | ~40,000 ops/s (ref) | N/A | ~35,000 ops/s (ref) | libsodium ~1.8× faster |
+| SHA3-256 hash (1KB) | 179,490 ops/s | N/A | N/A | varies | AMA competitive on generic C path |
+| HMAC-SHA3-256 (1KB) | 126,098 ops/s | N/A | N/A | varies | AMA competitive on generic C path |
+| Ed25519 KeyGen | 35,946 ops/s | 40,000–60,000 ops/s (ref) | N/A | varies | within libsodium reference band (base-point comb table landed) |
+| Ed25519 Sign | 51,206 ops/s | 50,000–80,000 ops/s (ref) | N/A | ~20,000 ops/s (ref) | within libsodium band; OpenSSL ~2.5× slower |
+| Ed25519 Verify | 21,129 ops/s | 15,000–30,000 ops/s (ref) | N/A | ~10,000 ops/s (ref) | within libsodium reference band (vartime, AVX2 SWE rectified) |
+| HKDF-SHA3-256 (3 keys) | 86,154 ops/s | HKDF-SHA256 only | N/A | HKDF-SHA256 only | Different hash — not directly comparable |
+| ML-DSA-65 KeyGen | 3,626 ops/s | N/A | 2,000–5,000 ops/s (ref) | Provider 3.4+ (ref) | Within liboqs reference band |
+| ML-DSA-65 Sign | 2,976 ops/s | N/A | 500–1,500 ops/s (ref) | Provider 3.4+ (ref) | ~2× faster than the liboqs reference band |
+| ML-DSA-65 Verify | 7,576 ops/s | N/A | 4,000–9,000 ops/s (ref) | Provider 3.4+ (ref) | Within liboqs band |
+| ML-KEM-1024 KeyGen | 4,965 ops/s | N/A | 8,000–18,000 ops/s (ref) | Provider 3.4+ (ref) | Trails liboqs ~2× on generic C path |
+| ML-KEM-1024 Encap | 10,253 ops/s | N/A | 7,000–15,000 ops/s (ref) | Provider 3.4+ (ref) | Inside liboqs band |
+| AES-256-GCM (1KB) | 271,449 ops/s | N/A (XChaCha preferred) | N/A | ~500K ops/s (AES-NI, ref) | OpenSSL AES-NI path ~1.8× faster |
+| ChaCha20-Poly1305 (1KB) | 263,430 ops/s | ~380,000 ops/s (ref) | N/A | ~300,000 ops/s (ref) | libsodium ~1.4× faster |
+| X25519 scalar mult | 21,632 ops/s | ~40,000 ops/s (ref) | N/A | ~35,000 ops/s (ref) | libsodium ~1.8× faster |
 
 **Reproducing live peer numbers locally:**
 

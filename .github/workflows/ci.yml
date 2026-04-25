@@ -402,3 +402,52 @@ jobs:
       with:
         name: constant-time-results
         path: tools/constant_time/
+
+  # ============================================================================
+  # AVX-512 SHA3 4-way KAT (PR C — 2026-04)
+  #
+  # Best-effort gate: GitHub-hosted ubuntu-latest currently rotates among
+  # Cascade Lake / Ice Lake / Sapphire Rapids host CPUs, so AVX-512 hits
+  # only some fraction of runs.  We probe /proc/cpuinfo for the avx512f
+  # feature flag and skip honestly when it's missing — the build/test
+  # body itself never uses continue-on-error (INVARIANT-2: fail-closed
+  # CI on the steps that actually run).  Local validation ladder for
+  # pre-merge: SDE (`sde64 -spr -- ./test_sha3_avx512_kat`) plus a
+  # quarterly bare-metal bench post-merge.
+  # ============================================================================
+  test-avx512:
+    name: AVX-512 SHA3 4-way KAT
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+    - name: Probe /proc/cpuinfo for AVX-512F + AVX-512VL
+      id: cpu
+      run: |
+        if grep -q '\bavx512f\b' /proc/cpuinfo && grep -q '\bavx512vl\b' /proc/cpuinfo; then
+          echo "have_avx512=1" >> "$GITHUB_OUTPUT"
+          echo "::notice::ubuntu-latest runner reports AVX-512F + AVX-512VL — running KAT"
+        else
+          echo "have_avx512=0" >> "$GITHUB_OUTPUT"
+          echo "::notice::ubuntu-latest runner lacks AVX-512F or AVX-512VL — skipping KAT job"
+        fi
+
+    - name: Install build dependencies
+      if: steps.cpu.outputs.have_avx512 == '1'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential
+
+    - name: Configure with AVX-512 enabled
+      if: steps.cpu.outputs.have_avx512 == '1'
+      run: cmake -S . -B build -DAMA_ENABLE_AVX512=ON -DAMA_BUILD_TESTS=ON
+
+    - name: Build AVX-512 KAT test
+      if: steps.cpu.outputs.have_avx512 == '1'
+      run: cmake --build build --target test_sha3_avx512_kat --parallel
+
+    - name: Run AVX-512 KAT test (byte-identity vs scalar + AVX2)
+      if: steps.cpu.outputs.have_avx512 == '1'
+      run: ctest --test-dir build -R test_sha3_avx512_kat --output-on-failure
