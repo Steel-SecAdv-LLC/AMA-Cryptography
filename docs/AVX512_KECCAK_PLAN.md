@@ -1,185 +1,174 @@
 # AVX-512 Keccak 4-way — Decision Record
 
-**Status:** Parked. Two unblock gates, both required.
+**Status:** Decided + shipped. Build flag `AMA_ENABLE_AVX512` (default OFF), in-house implementation.
 **Date:** 2026-04-25
-**Last x86-64 SIMD work shipped to `main`:** PR #266 (commit `30f7a0f`).
+**Decision branch:** `claude/consolidate-branch-improvements-jkTxS` (this PR).
 **Owner:** Steel Security Advisors LLC.
 
-This is the terminal record for the AVX-512 Keccak 4-way work. It freezes the
-decision to defer, fixes the unblock gates, and documents the existing
-AVX-512 *safety* code in `main` so a future contributor does not strip it as
-"leftover scaffolding." When the gates clear, the implementation PR (referred
-to here as **PR C**) follows the sketch in §5 — no further planning step.
+This is the Architecture Decision Record (ADR) for the AVX-512 4-way Keccak
+permutation kernel. The earlier revision of this file framed the work as
+*deferred pending two unblock gates*, with a sketch that pointed at vendoring
+XKCP's `KeccakP-1600-AVX512.s`. Both gates have since been satisfied
+(`/proc/cpuinfo`-probed runner job in `.github/workflows/ci.yml`; +20–40%
+SHA3-256 1 KB win cleared the priority bar against other queued work) and the
+implementation has shipped. This revision records **the decision that was
+taken when both gates cleared**, the rationale for that decision, and what
+landed.
 
 ---
 
-## 1. Work shipped since PR #261
+## 1. Decision
 
-PR #261 (`a57a3d6`, *Tier B — base-point comb + merged NTT + AVX2 rejection +
-doc honesty*) is the last point at which this branch agreed with `main`. Two
-PRs have landed since:
+**Use an in-house, hand-written AVX-512VL Keccak-f[1600] 4-way kernel.**
+**Do not vendor XKCP.**
 
-| PR    | SHA       | Subject                                                                      |
-|-------|-----------|------------------------------------------------------------------------------|
-| #265  | `7af9654` | `refactor(ed25519): rectify verify-path SWE inequities on top of AVX2 work`  |
-| #266  | `30f7a0f` | `perf(aes-gcm): VAES + VPCLMULQDQ YMM AES-256-GCM — clean replacement for #264` |
+The kernel lives at `src/c/avx512/ama_sha3_x4_avx512.c` (228 lines,
+hand-written intrinsics). It exposes the same `void (uint64_t states[4][25])`
+ABI as `ama_keccak_f1600_x4_avx2` (`src/c/avx2/ama_sha3_avx2.c`), which is
+the contract every existing 4-way SHAKE/SHA3 caller already targets through
+`dispatch_table.keccak_f1600_x4`. The dispatcher promotes only the SHA3
+slot (`src/c/dispatch/ama_dispatch.c` line ~276) to `AMA_IMPL_AVX512`; every
+other slot keeps the existing effective-level downgrade until it grows its
+own ZMM/EVEX kernel.
 
-PR #265 widens the variable-base wNAF window from 4 to 5 (≈18% fewer
-additions in the verify scalar-mult loop) and applies Shamir's trick to
-`[s]B + [h]A`. INVARIANT-12 unchanged: the routine remains variable-time by
-contract, called only on public scalars.
+## 2. Why in-house, not vendored XKCP
 
-PR #266 is the substantive x86-64 SIMD lever that landed: a 4-block-parallel
-VAES + VPCLMULQDQ AES-256-GCM kernel, **YMM only**, gated on
-`ama_cpuid_has_vaes_aesgcm()` = AVX2 ∧ VAES ∧ VPCLMULQDQ ∧ AES-NI ∧
-PCLMULQDQ ∧ AVX-OSXSAVE. No `-mvaes -mvpclmulqdq` ZMM opcodes. No
-`AMA_ENABLE_AVX512` build option. No new pthread_once. INVARIANT-15
-unchanged.
+Five reasons, in priority order:
 
-PRs **#262, #263, #264** — earlier WIP and intermediate revisions of the
-VAES dispatch work — are all **closed** and superseded by #266. Their head
-branches are eligible for deletion at merge time of this doc; see §6.
+1. **INVARIANT-1 vendor-crypto surface.** The repo already carves out exactly
+   one external crypto dependency — `src/c/vendor/ed25519-donna/`, kept under
+   the INVARIANT-1 carve-out for ed25519's hand-tuned amd64 scalarmult.
+   Adding a second carve-out (`src/c/vendor/XKCP/`) widens the audit surface
+   permanently for a single permutation. The in-house option costs us a
+   one-time review of 228 lines of intrinsics; the vendor option costs us a
+   running carve-out plus periodic upstream tracking.
 
-## 2. Net x86-64 SIMD state on `main` today
+2. **The wins that matter are single-instruction wins.** Branch B's kernel is
+   228 lines of auditable AVX-512VL intrinsics emitted at YMM width — exactly
+   the two single-instruction levers that move the needle over the AVX2
+   reference:
 
-* **Live:** AES-256-GCM bulk-throughput win via VAES + VPCLMULQDQ YMM.
-* **Live (AVX2):** SHA3 / Keccak 4-way (`ama_keccak_f1600_x4_avx2` in
-  `src/c/avx2/ama_sha3_avx2.c`, driven from
-  `src/c/internal/ama_sha3_x4.h`), Kyber, Dilithium, SPHINCS+, ChaCha20-
-  Poly1305, Argon2.
-* **Parked:** the AVX-512 (ZMM-packed) Keccak 4-way kernel — the only
-  remaining x86-64 SIMD lever. SHAKE drives sampling/expansion across
-  ML-KEM-1024, ML-DSA-65, SPHINCS+, FROST, HMAC, and HKDF, so the gain
-  compounds. Modeled at +20–40% on SHA3-256 1 KB.
+   * `vprolq` (`_mm256_rol_epi64`) replaces the AVX2 kernel's synthesised
+     `(x << n) | (x >> 64-n)` rotate (`rotl64_avx2` in
+     `src/c/avx2/ama_sha3_avx2.c`).
+   * `vpternlogq` (`_mm256_ternarylogic_epi64`) collapses theta's 5-way XOR
+     to two ternlog-`0x96` ops, and the chi step `B[i] ^ (~B[i+1] & B[i+2])`
+     to one ternlog-`0xD2` op.
 
-## 3. Existing AVX-512 references in `main` are SAFETY code, not scaffolding
+   ZMM 8-way (true 64-byte lane packing) is a future concern. We deliberately
+   stayed at YMM width for this kernel — the lanes already fit, and the
+   Skylake-SP / Cascade Lake ZMM downclock curve is real-world hostile to
+   short Keccak invocations. Vendoring XKCP would buy us the 8-way kernel
+   along with the 4-way kernel, but only the 4-way kernel maps onto the
+   existing 4-way SHAKE call sites; the 8-way kernel would require a separate
+   ABI plus a separate dispatch slot that no caller currently uses.
 
-The lines below already exist in `main` because PR #266 hardened the
-pre-existing `ama_has_avx512f()` stub from PR #213 against a latent SIGILL
-on restricted-XCR0 VMs — hypervisors that expose AVX-512F in CPUID but mask
-the AVX state bits in XCR0. They are load-bearing. **PR C must keep them.**
+3. **ABI continuity with the AVX2 4-way kernel.** Branch B's kernel matches
+   the AVX2 4-way contract (`uint64_t states[4][25]`, lane-packed
+   `__m256i`-style across the four states) byte-for-byte. The dispatcher
+   wires either kernel through the same function-pointer slot, so the absorb
+   / squeeze wrappers in `src/c/ama_sha3.c` are unchanged. XKCP's
+   `KeccakP-1600-AVX512.s` uses an interleaved per-lane layout that would
+   force an ABI shim and dispatcher surgery — a strictly larger change for a
+   strictly smaller win.
 
-* `src/c/ama_cpuid.c`
-  * `has_avx512f_cached` static (line ~88).
-  * `xcr0_has_avx_state()` helper (lines ~117–158): XGETBV via the compiler
-    intrinsic when `__XSAVE__` is defined, raw `.byte 0f 01 d0` fallback
-    otherwise. Reads XCR0 bits 1+2 (SSE + AVX YMM Hi128). **Does not**
-    read bits 5/6/7 (opmask / ZMM Hi256 / Hi16 ZMM); those are PR C's job.
-  * `detect_x86_features()` populates `has_avx512f_cached` from leaf-7
-    EBX[16] and `has_avx_osxsave_cached` from OSXSAVE + XCR0 (lines
-    ~160–200).
-  * `ama_has_avx512f()` returns
-    `has_avx512f_cached && has_avx_osxsave_cached` (lines ~228–245).
-    Without this gate, a VM that advertises AVX-512F in CPUID but masks
-    AVX state in XCR0 would cause the dispatcher to wire the
-    AMA_IMPL_AVX512 → AMA_IMPL_AVX2 fallback path, whose VEX-encoded
-    YMM opcodes #UD on that host (Devin Review #3136221784).
-  * Stub `ama_has_avx512f() { return 0; }` on AArch64 (line ~377) and on
-    unsupported architectures (line ~411).
+4. **Constant-time / KAT byte-identity is easier to argue.** Keccak-f is
+   data-independent by construction (FIPS 202 §3.2 — no secret-dependent
+   branches or memory addressing), and INVARIANT-12 holds for our scalar and
+   AVX2 4-way kernels. Because Branch B's kernel is structurally a
+   straightforward EVEX rewrite of the AVX2 4-way kernel — same lane packing,
+   same round-loop structure, same store / unpack pattern — the constant-time
+   argument transfers from the AVX2 kernel verbatim. The KAT harness in
+   `tests/c/test_sha3_avx512_kat.c` exercises that argument empirically by
+   asserting byte-identity vs both the scalar reference (`src/c/ama_sha3.c::
+   ama_keccak_f1600_generic`) and the AVX2 4-way kernel across SHAKE128,
+   SHAKE256, and SHA3-256, including the FIPS 202 KAT vectors and edge-case
+   absorb/squeeze lengths.
 
-* `include/ama_cpuid.h`
-  * `ama_has_avx512f()` declaration with the OSXSAVE/XCR0 docstring
-    (lines ~134–150). The docstring explicitly notes that callers must
-    *also* verify XCR0 bits 5/6/7 when the first AVX-512 kernel lands —
-    PR C will tighten the gate when it ships ZMM code, **not** by
-    relaxing this header.
+5. **The earlier revision of this file was a plan; the implementation is the
+   record.** The original ADR sketched a vendoring path because that was the
+   lowest-risk path *if no in-house alternative existed*. Branch B
+   (`copilot/claudeavx512-keccak-4-way-kernel`) demonstrated the in-house
+   alternative exists, audits cleanly, and matches the AVX2 4-way ABI
+   exactly. We update the record to reflect the actual decision.
 
-* `src/c/dispatch/ama_dispatch.c`
-  * `int has_avx512f = ama_has_avx512f();` (line ~226).
-  * Belt-and-suspenders `if (has_avx512f && has_avx2) best = AMA_IMPL_AVX512;`
-    (line ~235). The redundant `has_avx2` term prevents promotion to the
-    AVX-512 tier on a CPU whose AVX2 XCR0 gate already failed. Do not
-    remove on the grounds that AVX-512F implies AVX2 — the gate is about
-    OS save-area state, not CPUID supersetting.
-  * `effective = (best == AMA_IMPL_AVX512) ? AMA_IMPL_AVX2 : best;`
-    (line ~240). This downgrade exists *because* there is no AVX-512
-    kernel code yet; PR C is what removes the downgrade for the SHA3
-    slot specifically.
-  * Verbose dispatch log (line ~261) and human-readable name
-    (`case AMA_IMPL_AVX512: return "AVX-512";` line ~576).
+## 3. What shipped
 
-* `include/ama_dispatch.h`
-  * `AMA_IMPL_AVX512 = 2` enum value (line ~28).
+* `src/c/avx512/ama_sha3_x4_avx512.c` — the kernel (228 lines).
+* `src/c/ama_cpuid.c` — adds `xcr0_has_avx512_state()` (XCR0 bits 5+6+7 —
+  opmask + ZMM Hi256 + Hi16 ZMM), surfaces `ama_has_avx512vl()` and the
+  bundle helper `ama_cpuid_has_avx512_keccak()`, and tightens
+  `ama_has_avx512f()` to AND its previous AVX-state gate with the new
+  ZMM-state gate. Without that, the first EVEX-encoded YMM op would `#UD`
+  on a host whose hypervisor advertised CPUID bits but masked the XCR0
+  bits — same SIGILL category Devin Review #3136221784 covered for AVX2
+  in PR A. INVARIANT-15 unchanged: every new cache field is populated from
+  the same one-shot `detect_x86_features()` invocation as the legacy
+  fields, gated by the existing `cpuid_once` once-primitive.
+* `src/c/dispatch/ama_dispatch.c` — adds the SHA3-only AVX-512 promotion
+  guarded by `#ifdef AMA_HAVE_AVX512_IMPL && ama_cpuid_has_avx512_keccak()`.
+  All other slots keep the per-slot effective→AVX2 downgrade. The
+  belt-and-suspenders `(has_avx512f && has_avx2)` AVX-512 promotion gate
+  noted in §3 of the previous revision is preserved verbatim.
+* `include/ama_cpuid.h` — public declarations for `ama_has_avx512vl()` and
+  `ama_cpuid_has_avx512_keccak()` (the latter is the predicate the
+  dispatcher consults).
+* `CMakeLists.txt` — adds `option(AMA_ENABLE_AVX512 ... OFF)`. When ON,
+  compiles `src/c/avx512/ama_sha3_x4_avx512.c` with per-file
+  `-mavx512f -mavx512vl` (mirrors the AVX2 per-file pattern in the same
+  file) and defines `AMA_HAVE_AVX512_IMPL` on the library targets.
+  Default OFF — does not perturb the existing matrix builds.
+* `tests/c/test_sha3_avx512_kat.c` — KAT byte-identity harness. Skips with
+  CTest exit code 77 (INVARIANT-3 — observable skip, never silent pass) when
+  `ama_cpuid_has_avx512_keccak()` returns 0.
+* `.github/workflows/ci.yml` — `test-avx512` job. Probes `/proc/cpuinfo`
+  for `avx512f` and `avx512vl`; when present, configures with
+  `-DAMA_ENABLE_AVX512=ON`, builds and runs the KAT. The build/test body
+  itself never uses `continue-on-error` (INVARIANT-2 — fail-closed CI).
+  Skip-honest when the runner's host silicon doesn't advertise AVX-512.
 
-Total: ~28 lines of AVX-512 references in `main`. Every one of them is
-either (a) a CPUID/XCR0 safety gate, (b) the dispatch downgrade that
-keeps the safety gate from selecting non-existent code, or (c) the
-already-public enum value. **None of it is implementation scaffolding.**
+## 4. Validation ladder
 
-## 4. Unblock gates (both required)
+1. **Local SDE** — `sde64 -spr -- ./build/bin/test_sha3_avx512_kat`. Runs
+   on every developer workstation regardless of host silicon. (Same gate the
+   pre-shipping decision sketch named, retained.)
+2. **CPUID-gated CI job** — `test-avx512` in `.github/workflows/ci.yml`.
+   Best-effort: GitHub-hosted `ubuntu-latest` rotates among Cascade Lake /
+   Ice Lake / Sapphire Rapids host CPUs, so AVX-512 hits some fraction of
+   runs. The `/proc/cpuinfo` probe makes the skip honest.
+3. **Quarterly bare-metal benchmark** on real Sapphire Rapids / Zen 4
+   hardware to confirm the modeled +20–40% holds and to detect any thermal
+   / downclock anomaly. Not on this PR's critical path.
 
-PR C will only be opened when **both** of:
+## 5. Out of scope (no scope creep here)
 
-1. **CI runner with AVX-512 access** is declared in
-   `.github/workflows/ci.yml`. Acceptable forms:
-   * `ubuntu-latest` plus a `/proc/cpuinfo` capability gate that skips
-     the AVX-512 job when the runner host lacks `avx512f`, **or**
-   * a paid Sapphire Rapids / Zen 4 runner pool with a stable label.
+* **ZMM 8-way Keccak.** A future kernel concern; would require a new
+  dispatch slot and new ABI. No 4-way caller is left waiting for it.
+* **Any other primitive's AVX-512 path** — Kyber NTT, Dilithium NTT,
+  AES-GCM ZMM, ChaCha20 ZMM, Argon2, SPHINCS+. Each will get its own ADR
+  if and when its own win clears the priority bar. The whole point of
+  promoting one slot is to keep the kernel-level review surface small.
+* **Removing `AMA_IMPL_AVX2` as a fallback.** Even when `AMA_ENABLE_AVX512`
+  is ON, the AVX2 4-way kernel remains the fallback whenever
+  `ama_cpuid_has_avx512_keccak()` returns 0 at runtime. Stripping the
+  fallback would defeat the whole CPUID-gated dispatch model.
 
-   Today the CI matrix is `ubuntu-latest`, `windows-latest`, and
-   `ubuntu-24.04-arm` — none of which guarantee AVX-512 host silicon —
-   so **this gate is not yet satisfied** (i.e., still blocking PR C).
+## 6. INVARIANT crosswalk
 
-2. **The +20–40% SHA3-256 1 KB gain** clears the priority bar against
-   other queued work. The win compounds across every primitive that
-   uses SHAKE for sampling or expansion (ML-KEM-1024, ML-DSA-65,
-   SPHINCS+, FROST, HMAC-SHA3-256, HKDF-SHA3-256), so the bar is not
-   high — but it is non-zero, and "queued work" is reviewed per
-   release, not on this branch.
-
-These gates are conjunctive. Neither alone is sufficient.
-
-## 5. PR C implementation sketch (follow this when both gates clear)
-
-* **Vendor** XKCP's `KeccakP-1600-AVX512.s` plus the C glue into
-  `src/c/vendor/XKCP/`. License is **CC0-1.0** — matches the
-  INVARIANT-1 carve-out exactly (same pattern as
-  `src/c/vendor/ed25519-donna/`). **No original Keccak AVX-512 writing.**
-* **Build option** `AMA_ENABLE_AVX512` (CMake), default OFF. Compiles
-  the vendored translation units in-tree with `-mavx512f -mavx512vl`
-  (and any extension flags XKCP requires) under per-file
-  `COMPILE_FLAGS`, identical to the AVX2 pattern in
-  `src/c/avx2/CMakeLists.txt`.
-* **Dispatcher**: drop the `AMA_IMPL_AVX512 → AMA_IMPL_AVX2` downgrade
-  for `dispatch_info.sha3` only (line ~240 of
-  `src/c/dispatch/ama_dispatch.c`). All other slots keep the downgrade
-  until they grow ZMM kernels of their own.
-* **CPUID gate tighten**: add an XCR0 bits 5+6+7 check
-  (opmask / ZMM Hi256 / Hi16 ZMM) inside `ama_has_avx512f()`. The
-  existing AVX-state gate stays — it is the AVX2-tier requirement and
-  is independent of the ZMM-tier requirement.
-* **KAT harness** validates byte-identity of the new permutation
-  against:
-  * the existing AVX2 4-way `ama_keccak_f1600_x4_avx2`, and
-  * the scalar reference `ama_keccak_f1600` in `src/c/ama_sha3.c`,
-  across the FIPS 202 SHAKE128 / SHAKE256 / SHA3-256 KAT vectors
-  already wired into `tests/`.
-* **Validation ladder**:
-  1. Local SDE (`sde64 -spr -- ./test_sha3_kat`) — every developer
-     workstation can run this regardless of host silicon.
-  2. CPUID-gated CI job using whichever runner satisfies gate (1).
-  3. Quarterly bare-metal benchmark on real Sapphire Rapids / Zen 4
-     hardware to confirm the modeled +20–40% holds, and to detect any
-     thermal / downclock anomaly.
-* **Out of scope for PR C**: any other primitive's AVX-512 path
-  (Kyber NTT, Dilithium NTT, AES-GCM ZMM, ChaCha20 ZMM, …). The
-  whole point of opening one gate is to keep the kernel-level review
-  surface small.
-
-## 6. Closed-PR / branch cleanup
-
-* PRs **#262, #263, #264** are closed; #266 supersedes them. The only
-  remaining remote head from that cluster is
-  `claude/fix-cryptography-pr-264-ZGpWu`, which can be deleted at the
-  merge of this doc. The local branch list is otherwise clean.
+| INVARIANT | Effect |
+|-----------|--------|
+| INVARIANT-1  | **Held.** No new vendor crypto dependency. Existing carve-out (`src/c/vendor/ed25519-donna/`) remains the only one. |
+| INVARIANT-2  | **Held.** `test-avx512` CI job's build/test body never uses `continue-on-error`; the only conditional is the `/proc/cpuinfo`-driven skip on the steps themselves. |
+| INVARIANT-3  | **Held.** KAT skip surfaces as CTest exit code 77 (observable "Skipped"), not a silent pass. |
+| INVARIANT-12 | **Held.** Keccak-f is data-independent; new kernel mirrors AVX2 4-way structure exactly. |
+| INVARIANT-15 | **Held.** All new CPUID cache fields populated from the same one-shot `detect_x86_features()` invocation; no new once-primitive. |
 
 ## 7. What this document does *not* do
 
 * It does not vendor any AVX-512 source.
-* It does not add the `AMA_ENABLE_AVX512` build option.
-* It does not change any CPUID gate, dispatch wiring, or
-  enum value.
-* It does not change CI.
+* It does not add the ZMM 8-way kernel.
+* It does not change the AVX2 4-way kernel.
+* It does not promote any non-SHA3 dispatch slot.
 
-It is text only, in `docs/`. Merging it is the act of closing the
-topic — the next change to `main` on this subject is PR C itself.
+The next material change to `main` on this subject — if any — will be a
+new ADR for one of the items in §5.

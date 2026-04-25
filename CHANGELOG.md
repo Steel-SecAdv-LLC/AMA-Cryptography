@@ -25,22 +25,22 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ### Added
 
-- **AVX-512 Keccak 4-way decision record** (`docs/AVX512_KECCAK_PLAN.md`).
-  Terminal record for the PR C closing plan: work shipped since PR #261
-  (#265 ed25519 verify SWE; #266 VAES + VPCLMULQDQ YMM AES-256-GCM),
-  status of the closed PR cluster (#262 / #263 / #264 superseded by
-  #266), the two unblock gates for PR C (an AVX-512-capable CI runner
-  + priority clearance for the +20–40% SHA3-256 1 KB gain), an
-  inventory of the ~28 AVX-512 references already in `main` (flagged
-  as load-bearing safety code, not scaffolding), the PR C
-  implementation sketch when both gates clear (vendor
-  KeccakP-1600-AVX512.s under CC0, build via `AMA_ENABLE_AVX512`,
-  drop the dispatcher downgrade for the SHA3 slot only, tighten
-  `ama_has_avx512f()` XCR0 gating, KAT byte-identity vs the AVX2
-  4-way and scalar reference), and the validation ladder (local
-  Intel SDE → CPUID-gated CI job → quarterly bare-metal bench on
-  Sapphire Rapids / Zen 4). Doc-only change, cherry-picked from
-  `claude/avx512-keccak-ci-plan-cwVrX`.
+- **AVX-512 Keccak 4-way Architecture Decision Record**
+  (`docs/AVX512_KECCAK_PLAN.md`). Records the in-house-vs-vendored choice
+  for the AVX-512 4-way Keccak permutation kernel. Five-reason rationale
+  for in-house (INVARIANT-1 carve-out surface, single-instruction wins
+  via `vprolq` + `vpternlogq`, AVX2 4-way ABI continuity, constant-time
+  argument transferability, plan-vs-record alignment), inventory of what
+  shipped (kernel TU, CPUID hardening with XCR0 5+6+7 gate, dispatcher
+  SHA3-slot promotion, build option `AMA_ENABLE_AVX512` default-OFF,
+  KAT harness, CPUID-gated CI job), validation ladder (Intel SDE →
+  `/proc/cpuinfo`-gated CI → quarterly bare-metal bench on Sapphire
+  Rapids / Zen 4), explicit out-of-scope list (ZMM 8-way; AES-GCM /
+  ChaCha20 / Kyber / Dilithium / Argon2 / SPHINCS+ AVX-512 paths; AVX2
+  fallback removal), and an INVARIANT crosswalk (1 / 2 / 3 / 12 / 15
+  all held). Supersedes the pre-implementation "parked, two unblock
+  gates" sketch — both gates have cleared and the implementation has
+  shipped (see Performance section).
 
 ### Changed
 
