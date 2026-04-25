@@ -13,8 +13,18 @@
  *
  * Dispatch gate (src/c/dispatch/ama_dispatch.c):
  *   ama_cpuid_has_vaes_aesgcm() == 1
- *     <=> CPUID(VAES) && CPUID(VPCLMULQDQ) && CPUID(AVX2)
- *      && CPUID(AES-NI) && OSXSAVE && (XCR0 & {SSE,AVX})
+ *     <=> CPUID(VAES) && CPUID(VPCLMULQDQ) && CPUID(PCLMULQDQ)
+ *      && CPUID(AVX2) && CPUID(AES-NI)
+ *      && OSXSAVE && (XCR0 & {SSE,AVX})
+ *
+ * Both VPCLMULQDQ (CPUID.(EAX=7,ECX=0):ECX[10], YMM CLMUL for the
+ * 4-block GHASH fold) and baseline PCLMULQDQ (CPUID.(EAX=1):ECX[1],
+ * XMM CLMUL for single-block edge paths — AAD blocks, H power
+ * precompute, trailing partial, length block) are required
+ * explicitly because the ISA documents them as architecturally
+ * independent feature bits; every shipped Intel/AMD CPU has both,
+ * but the bundle's safety contract should not depend on that
+ * empirical observation (Devin Review #3140732664).
  *
  * AES-NI is still required because AESKEYGENASSIST (the key-schedule
  * primitive for AES-256) is a 128-bit XMM opcode and has no YMM/VAES

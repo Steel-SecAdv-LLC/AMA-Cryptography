@@ -82,9 +82,9 @@ int ama_has_vaes(void);
 int ama_has_vpclmulqdq(void);
 
 /**
- * @brief Bundle check: AVX2 + VAES + VPCLMULQDQ + AES-NI.
+ * @brief Bundle check: AVX2 + VAES + VPCLMULQDQ + PCLMULQDQ + AES-NI.
  *
- * The VAES AES-GCM dispatch gate checks all four:
+ * The VAES AES-GCM dispatch gate checks all five:
  *   - AVX2          — base ISA for YMM register set + integer ops
  *   - VAES          — 2-blocks-per-YMM AES rounds, emitted by the
  *                     4-block inner loop via _mm256_aesenc_epi128 /
@@ -94,13 +94,21 @@ int ama_has_vpclmulqdq(void);
  *                     inner loop via _mm256_clmulepi64_epi128
  *                     (8 YMM CLMULs per 4 blocks, vs 16 XMM in the
  *                     per-lane form)
+ *   - PCLMULQDQ     — baseline 128-bit CLMUL (CPUID.(EAX=1):ECX[1]),
+ *                     architecturally independent of VPCLMULQDQ
+ *                     (CPUID.(EAX=7,ECX=0):ECX[10]).  The kernel calls
+ *                     _mm_clmulepi64_si128 directly on every
+ *                     single-block edge path (AAD blocks, H power
+ *                     precompute, trailing-partial-block tail, and
+ *                     the final length block), so the bundle must
+ *                     gate PCLMULQDQ explicitly — every shipped CPU
+ *                     with VPCLMULQDQ also has PCLMULQDQ but the ISA
+ *                     does not document this as a strict superset
+ *                     relationship (Devin Review #3140732664).
  *   - AES-NI        — 128-bit AESKEYGENASSIST runs the AES-256 key
- *                     schedule (VAES provides only the rounds; the
- *                     single-block edge paths — AAD, trailing
- *                     partial, length block — also stay on
- *                     _mm_clmulepi64_si128 since vectorising a
- *                     single-block multiply does not pay back the
- *                     pack/fold overhead).
+ *                     schedule (VAES provides only the rounds);
+ *                     _mm_aesenc_si128 / _mm_aesenclast_si128 are
+ *                     also called on the single-block edge paths.
  *
  * Returns 1 only when every component passes; otherwise the dispatcher
  * falls back to the AVX2 AES-NI + PCLMULQDQ path shipped in #253 / #254.

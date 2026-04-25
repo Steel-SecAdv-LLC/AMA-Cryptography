@@ -261,7 +261,7 @@ int ama_has_vpclmulqdq(void) {
 
 int ama_cpuid_has_vaes_aesgcm(void) {
     /* Each getter shares pthread_once via cpuid_once, so the underlying
-     * detect_x86_features() probe runs exactly once.  All four bits
+     * detect_x86_features() probe runs exactly once.  All five bits
      * below are emitted by the VAES AES-GCM kernel:
      *
      *   - AVX2        — base ISA for YMM registers + AVX OS state
@@ -269,16 +269,29 @@ int ama_cpuid_has_vaes_aesgcm(void) {
      *                   (4-block counter-mode AES rounds)
      *   - VPCLMULQDQ  — _mm256_clmulepi64_epi128 (4-lane Karatsuba
      *                   GHASH fold: 8 YMM CLMULs per 4 blocks)
+     *   - PCLMULQDQ   — _mm_clmulepi64_si128 (XMM, 128-bit CLMUL) used
+     *                   on every single-block GHASH edge path: AAD
+     *                   blocks, the H/H²/H³/H⁴ power precompute, the
+     *                   trailing-partial-block tail, and the final
+     *                   length block.  PCLMULQDQ
+     *                   (CPUID.(EAX=1):ECX[1]) is **architecturally
+     *                   independent** of VPCLMULQDQ (CPUID.(EAX=7,
+     *                   ECX=0):ECX[10]) — every shipped Intel/AMD CPU
+     *                   has both, but the ISA documents them as
+     *                   separate feature bits and the bundle's safety
+     *                   contract should not depend on a "no real CPU
+     *                   ships VPCLMULQDQ without PCLMULQDQ" empirical
+     *                   observation.  Devin Review #3140732664.
      *   - AES-NI      — AESKEYGENASSIST, a 128-bit AES-NI opcode, runs
      *                   the AES-256 key schedule (VAES only provides
-     *                   the rounds); also used by the single-block
-     *                   edge paths (AAD, trailing partial, length
-     *                   block) where widening does not pay back the
-     *                   pack/fold overhead. */
+     *                   the rounds); also _mm_aesenc_si128 /
+     *                   _mm_aesenclast_si128 in single-block edge
+     *                   paths (J0 keystream, partial trailing block). */
     return ama_has_avx2()
         && ama_has_vaes()
         && ama_has_vpclmulqdq()
-        && ama_has_aes_ni();
+        && ama_has_aes_ni()
+        && ama_has_pclmulqdq();
 }
 
 int ama_has_arm_aes(void) { return 0; }

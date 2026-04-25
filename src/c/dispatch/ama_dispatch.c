@@ -343,12 +343,15 @@ static void dispatch_init_internal(void) {
      * CPUID.(EAX=7,ECX=0):EBX[5] while masking CPUID.(EAX=1):ECX[25]
      * (AES-NI) or CPUID.(EAX=1):ECX[1] (PCLMULQDQ).  Installing the
      * AVX2 AES-NI pointers on such a host would SIGILL on the first
-     * AESENC — Copilot review #3140228457 / #3140228489.  Require all
-     * three features explicitly; the VAES upgrade below is already
-     * gated by ama_cpuid_has_vaes_aesgcm() which requires AES-NI
-     * (AESKEYGENASSIST) and baseline PCLMULQDQ transitively via
-     * VPCLMULQDQ, so it was already safe — this tightens the AES-NI
-     * fallback path to match. */
+     * AESENC — Copilot review #3140228457 / #3140228489.  Require
+     * AVX2 + AES-NI + PCLMULQDQ explicitly here.  The VAES upgrade
+     * inside this block is gated separately by
+     * ama_cpuid_has_vaes_aesgcm(), which since Devin Review
+     * #3140732664 also explicitly checks PCLMULQDQ (the kernel uses
+     * _mm_clmulepi64_si128 on single-block edge paths;
+     * baseline PCLMULQDQ — CPUID.(EAX=1):ECX[1] — is architecturally
+     * independent of VPCLMULQDQ — CPUID.(EAX=7,ECX=0):ECX[10] — even
+     * though every shipped CPU has both). */
     if (dispatch_info.aes_gcm >= AMA_IMPL_AVX2
         && ama_has_aes_ni()
         && ama_has_pclmulqdq()) {
