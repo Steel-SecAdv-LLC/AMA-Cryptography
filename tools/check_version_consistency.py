@@ -70,7 +70,7 @@ def main() -> int:
             # ``cmake_minimum_required(VERSION X.Y.Z)`` (if ever written
             # in 3-part form) cannot match first. ``[^)]*?`` is lazy and
             # spans newlines, so the expression reaches into a multi-line
-            # ``project(AmaCryptography\n    VERSION 2.1.5\n    ...)``
+            # ``project(AmaCryptography\n    VERSION 2.2.0\n    ...)``
             # block without crossing the closing parenthesis.
             r"^project\s*\([^)]*?VERSION\s+(\d+\.\d+\.\d+)",
             "CMakeLists.txt project() VERSION",

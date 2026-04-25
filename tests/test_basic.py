@@ -11,7 +11,7 @@ import ama_cryptography
 
 def test_version() -> None:
     """Test that version is correctly set"""
-    assert ama_cryptography.__version__ == "2.1.5"
+    assert ama_cryptography.__version__ == "2.2.0"
 
 
 def test_version_consistency() -> None:
