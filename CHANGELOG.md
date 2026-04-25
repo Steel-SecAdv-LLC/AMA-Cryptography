@@ -4,7 +4,7 @@
 
 | Property | Value |
 |----------|-------|
-| Applies to Release | 2.1.5 |
+| Applies to Release | 2.2.0 |
 | Last Updated | 2026-04-25 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
@@ -21,6 +21,26 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 
 ## [Unreleased]
+
+_Nothing yet._
+
+
+## [2.2.0] - 2026-04-25
+
+Headline: in-house AVX-512 4-way Keccak permutation kernel (opt-in,
+default OFF) lands as the first ZMM-class SIMD path in the tree, paired
+with a published Architecture Decision Record (`docs/AVX512_KECCAK_PLAN.md`)
+explaining the in-house-vs-vendored choice. Argon2id moves to RFC 9106
+byte-identity (BREAKING — migration shim provided), the `out_len`
+ceiling is now enforced at every entry point, and the Tier-B PQC,
+Ed25519 verify-path SWE, VAES YMM AES-256-GCM, X25519 fe51, ChaCha20
+AVX2 and Argon2 BlaMka G AVX2 paths shipped during the 2.1.5-line are
+now cited end-to-end across `README.md`, `benchmark-report.md`,
+`docs/COMPETITIVE_ANALYSIS.md`, and `wiki/Performance-Benchmarks.md`
+against fresh measurements. CI gains a CPUID-gated AVX-512 KAT,
+re-floored slow-runner regression baselines, NIST ACVP self-attestation
+under continuous validation, and removal of a duplicate, un-pinned
+constant-time check that was a flake source on contended runners.
 
 
 ### Added
@@ -314,6 +334,19 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   (removed by sphinx-rtd-theme 3.x), fixed the `index.rst` title
   underline length, and added the missing `docs/_static/` referenced by
   `html_static_path`.
+
+- **CI: removed duplicate constant-time job from `fuzzing.yml`.** The
+  `constant-time-crypto` job in `.github/workflows/fuzzing.yml` ran the
+  same `tools/constant_time/dudect_harness 50000` and `dudect_crypto
+  50000` invocations as `dudect.yml::dudect-legacy-harnesses`, but
+  without `taskset -c 0 nice -n -10` single-core pinning and without
+  `cmake --build -j$(nproc)` parallelism. On contended GitHub-hosted
+  runners that produced occasional t-statistic excursions and
+  build-step underruns that would surface as a flaky red check on
+  every PR. The `dudect.yml` workflow's three jobs (`dudect-utility`,
+  `dudect-pqc`, `dudect-legacy-harnesses`) remain the sole owners of
+  constant-time verification — coverage is unchanged, only the
+  un-pinned duplicate is gone.
 
 ### Added
 
