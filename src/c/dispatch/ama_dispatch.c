@@ -577,18 +577,39 @@ static void dispatch_init_internal(void) {
             } else {
                 dispatch_table.keccak_f1600 = ama_keccak_f1600_generic;
             }
-            /* Revert the batched x4 kernel in lockstep: if the single-state
-             * AVX2/NEON kernel is slower than scalar on this host, the
-             * interleaved 4-way kernel almost certainly is too.  The generic
-             * x4_fn falls through to the (now-reverted) single-state pointer. */
-            dispatch_table.keccak_f1600_x4 = ama_keccak_f1600_x4_generic;
+            /* Revert the batched x4 kernel in lockstep ONLY when it points
+             * at a tier the auto-tune actually measured.  The single-state
+             * benchmark above exercises dispatch_table.keccak_f1600 (the
+             * AVX2/NEON single-state kernel); when it regresses, the
+             * matching AVX2/NEON 4-way kernel almost certainly does too,
+             * so reverting both makes sense.
+             *
+             * BUT — if dispatch_info.sha3 was promoted to AMA_IMPL_AVX512,
+             * keccak_f1600_x4 is the in-house AVX-512 kernel (PR C —
+             * vprolq + vpternlogq EVEX-YMM), a fundamentally different
+             * implementation that was never benchmarked here.  Reverting
+             * it on a single-state AVX2 regression would silently discard
+             * the ML-DSA / ML-KEM / SPHINCS+ matrix-expansion win for an
+             * unrelated reason (Devin Review
+             * BUG_pr-review-job-f0260c65de73482bb856b1b86b90eda3_0001).
+             * Leave the AVX-512 4-way pointer alone in that case. */
+            int x4_preserved_avx512 = 0;
+            if (dispatch_info.sha3 < AMA_IMPL_AVX512) {
+                dispatch_table.keccak_f1600_x4 = ama_keccak_f1600_x4_generic;
+            } else {
+                x4_preserved_avx512 = 1;
+            }
             if (dispatch_verbose())
                 fprintf(stderr,
                     "[AMA Dispatch] Auto-tune: SIMD keccak regressed >10%% "
-                    "(best %lld ns vs %lld ns generic) — reverted to %s\n",
+                    "(best %lld ns vs %lld ns generic) — reverted to %s; "
+                    "keccak_f1600_x4 = %s\n",
                     (long long)simd_best, (long long)generic_best,
                     dispatch_table.keccak_f1600 == ama_keccak_f1600_generic
-                        ? "generic" : "previous tier");
+                        ? "generic" : "previous tier",
+                    x4_preserved_avx512
+                        ? "AVX-512 (preserved — not measured by single-state bench)"
+                        : "generic (lockstep revert)");
         } else if (dispatch_verbose()) {
             fprintf(stderr,
                 "[AMA Dispatch] Auto-tune: SIMD keccak kept "

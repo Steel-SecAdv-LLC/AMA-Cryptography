@@ -351,7 +351,7 @@ NIST-standardized post-quantum algorithms:
 
 - **Wallet Security**: ML-DSA-65 quantum-resistant signatures for wallet transaction authentication.
 - **Smart Contract Signing**: Quantum-resistant signatures for long-lived contracts.
-- **Transaction Throughput**: Sub-millisecond Ed25519 verification (~7.5k ops/sec via ctypes); ML-DSA-65 adds quantum resistance at higher latency (~983µs sign, ~158µs verify — Python API via ctypes, per `benchmark-results.json` refreshed 2026-04-21).
+- **Transaction Throughput**: Sub-millisecond Ed25519 verification (~21k ops/sec via ctypes on canonical bench, 2026-04-25); ML-DSA-65 adds quantum resistance at higher latency (~336µs sign, ~132µs verify — Python API via ctypes, canonical bench host; see Performance Metrics section for methodology).
 - **Cross-Chain Bridges**: Hybrid signing (Ed25519 + ML-DSA-65) for backward compatibility and quantum resistance.
 - **NFT Provenance**: Quantum-resistant signatures designed for long-term validity.
 - **Timestamp Verification**: RFC 3161 trusted timestamping with quantum resistance.
@@ -361,6 +361,8 @@ NIST-standardized post-quantum algorithms:
 ---
 
 ## Performance Metrics
+
+> **Reading the numbers below.** All ops/sec figures in the tables that follow are from the **canonical bench host** (Linux x86-64 with AVX-512F/VL/BW/DQ/VBMI + VAES + VPCLMULQDQ; Sapphire Rapids / Zen 4 class), measured 2026-04-25 with `python benchmarks/benchmark_runner.py` and `build/bin/benchmark_c_raw --json`. The checked-in `benchmark-results.json` and `benchmarks/baseline.json` carry a separate, lower set of numbers — the **slow-runner CI regression floor** — so even contended GitHub Actions shared runners clear the regression threshold without false-positive failures. The two are not the same number, on purpose. Reproduce the canonical numbers on equivalent silicon; the regression floor is documented in [CHANGELOG.md](CHANGELOG.md#unreleased) §"Slow-runner regression-floor recalibration".
 
 <details>
 <summary><strong>Cryptographic Operation Benchmarks</strong></summary>
@@ -381,7 +383,7 @@ NIST-standardized post-quantum algorithms:
 | **Sign** | 2,976 ops/sec | ~336µs | Rejection sampling, constant-time |
 | **Verify** | 7,576 ops/sec | ~132µs | Verified against NIST ACVP test vectors (self-attested) |
 
-*Source: `benchmark-results.json` refreshed 2026-04-25 (`python benchmarks/benchmark_runner.py`). Run `build/bin/benchmark_c_raw --json` for raw C throughput without ctypes overhead (~4,845 KeyGen, ~3,929 Sign, ~7,773 Verify ops/sec on the same host).*
+*Source: canonical bench host (Linux x86-64 with AVX-512F/VL/BW/DQ/VBMI + VAES + VPCLMULQDQ), measured 2026-04-25. Reproducible with `python benchmarks/benchmark_runner.py` and `build/bin/benchmark_c_raw --json` on equivalent silicon (~4,845 KeyGen, ~3,929 Sign, ~7,773 Verify ops/sec raw C, no ctypes). The checked-in `benchmark-results.json` carries the slow-runner CI regression floor — see [CHANGELOG.md](CHANGELOG.md#unreleased) and [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md) for the dual-host methodology.*
 
 ### ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)
 
@@ -390,7 +392,7 @@ NIST-standardized post-quantum algorithms:
 | **KeyGen** | 4,965 ops/sec | Native C, no OpenSSL dependency |
 | **Encapsulate** | 10,253 ops/sec | Fujisaki–Okamoto transform, IND-CCA2 |
 
-*Source: `benchmark-results.json` (CI regression suite). Decapsulate and raw C throughput available via `build/bin/benchmark_c_raw --json` (~10,834 Decaps ops/sec on the same host).*
+*Source: canonical bench host, measured 2026-04-25. Decapsulate and raw C throughput available via `build/bin/benchmark_c_raw --json` (~10,834 Decaps ops/sec on the same host). The checked-in `benchmark-results.json` carries the slow-runner CI regression floor, not these canonical numbers.*
 
 ### Full Multi-Layer Package Performance
 
@@ -401,7 +403,7 @@ Complete security package with all defense layers (Python API via ctypes):
 | Package Create (all layers) | 2,853 ops/sec | ~350µs |
 | Package Verify (all layers) | 4,973 ops/sec | ~201µs |
 
-*Source: `benchmark-results.json` refreshed 2026-04-25.*
+*Source: canonical bench host, measured 2026-04-25. The checked-in `benchmark-results.json` carries the slow-runner CI regression floor (see [CHANGELOG.md](CHANGELOG.md#unreleased) §"Slow-runner regression-floor recalibration").*
 
 **All Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65 (core), HKDF, RFC 3161 (supporting)
 
@@ -409,15 +411,15 @@ Complete security package with all defense layers (Python API via ctypes):
 
 | Operation | Throughput | Source |
 |-----------|-----------|--------|
-| SHA3-256 (1KB) | 179,490 ops/sec | `benchmark-results.json` |
-| HMAC-SHA3-256 (1KB) | 126,098 ops/sec | `benchmark-results.json` |
-| HKDF-SHA3-256 (3-key derive) | 86,154 ops/sec | `benchmark-results.json` |
-| Ed25519 KeyGen | 35,946 ops/sec | `benchmark-results.json` |
-| Ed25519 Sign | 51,206 ops/sec | `benchmark-results.json` |
-| Ed25519 Verify | 21,129 ops/sec | `benchmark-results.json` |
-| AES-256-GCM Encrypt (1KB) | 271,449 ops/sec | `benchmark-results.json` |
-| ChaCha20-Poly1305 Encrypt (1KB) | 263,430 ops/sec | `benchmark-results.json` |
-| X25519 Scalar-mult | 21,632 ops/sec | `benchmark-results.json` |
+| SHA3-256 (1KB) | 179,490 ops/sec | canonical bench, 2026-04-25 |
+| HMAC-SHA3-256 (1KB) | 126,098 ops/sec | canonical bench, 2026-04-25 |
+| HKDF-SHA3-256 (3-key derive) | 86,154 ops/sec | canonical bench, 2026-04-25 |
+| Ed25519 KeyGen | 35,946 ops/sec | canonical bench, 2026-04-25 |
+| Ed25519 Sign | 51,206 ops/sec | canonical bench, 2026-04-25 |
+| Ed25519 Verify | 21,129 ops/sec | canonical bench, 2026-04-25 |
+| AES-256-GCM Encrypt (1KB) | 271,449 ops/sec | canonical bench, 2026-04-25 |
+| ChaCha20-Poly1305 Encrypt (1KB) | 263,430 ops/sec | canonical bench, 2026-04-25 |
+| X25519 Scalar-mult | 21,632 ops/sec | canonical bench, 2026-04-25 |
 
 **Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. X25519 uses the radix-2^51 (`fe51.h`) field arithmetic shared with Ed25519; the portable radix-2^16 path is retained as a fallback where `__int128` is unavailable. See [benchmarks/](benchmarks/) for full performance data including all algorithms.
 
