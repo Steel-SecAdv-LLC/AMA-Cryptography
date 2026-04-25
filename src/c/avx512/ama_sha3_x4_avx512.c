@@ -46,6 +46,8 @@
 #include "ama_cryptography.h"
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(__x86_64__) || defined(_M_X64)
@@ -203,13 +205,26 @@ void ama_keccak_f1600_x4_avx512(uint64_t states[4][25]) {
 
 /* Compiled into the AVX-512 OBJECT lib only; this branch should never
  * be reached because CMake gates the source on AMA_ENABLE_AVX512 and
- * applies -mavx512f -mavx512vl per-file.  The stub keeps the TU
- * compilable under static analysis runs that don't honour CMake's
- * per-file flags (e.g. clang-tidy with a global compile_commands.json
- * stripped of arch flags). */
+ * applies -mavx512f -mavx512vl per-file.  The body still exists so a
+ * static-analysis run that does not honour CMake's per-file flags
+ * (e.g. clang-tidy with a global compile_commands.json stripped of
+ * arch flags) can compile the TU.
+ *
+ * If the symbol is ever *executed* — i.e. the dispatcher selected it
+ * because AMA_HAVE_AVX512_IMPL was defined but the per-file
+ * -mavx512f -mavx512vl flags did not propagate to this TU — we abort
+ * loudly rather than return zeros, which would silently produce
+ * wrong Keccak hashes (Copilot review #3141510662).  Loud failure is
+ * strictly preferable to an undetected correctness regression for a
+ * cryptographic permutation. */
 void ama_keccak_f1600_x4_avx512(uint64_t states[4][25]);
 void ama_keccak_f1600_x4_avx512(uint64_t states[4][25]) {
     (void)states;
+    fprintf(stderr,
+        "FATAL: ama_keccak_f1600_x4_avx512 invoked but TU was compiled "
+        "without -mavx512f -mavx512vl. CMake per-file flags did not "
+        "propagate; the dispatcher must not select this symbol.\n");
+    abort();
 }
 
 #endif /* __AVX512F__ && __AVX512VL__ */
@@ -217,12 +232,18 @@ void ama_keccak_f1600_x4_avx512(uint64_t states[4][25]) {
 #else  /* non-x86 */
 
 /* Stub for non-x86 builds — the source file is excluded by CMake on
- * non-x86 architectures, but we keep the symbol declaration here so a
+ * non-x86 architectures, but we keep the symbol definition here so a
  * misconfigured build (source compiled, AMA_HAVE_AVX512_IMPL undefined)
- * does not surface an unexpected missing-symbol link error. */
+ * does not surface an unexpected missing-symbol link error.  Same
+ * abort-on-execute discipline as the !__AVX512F__ branch above. */
 void ama_keccak_f1600_x4_avx512(uint64_t states[4][25]);
 void ama_keccak_f1600_x4_avx512(uint64_t states[4][25]) {
     (void)states;
+    fprintf(stderr,
+        "FATAL: ama_keccak_f1600_x4_avx512 invoked on a non-x86-64 build. "
+        "CMake should have excluded this TU; the dispatcher must not "
+        "select this symbol.\n");
+    abort();
 }
 
 #endif /* x86_64 */

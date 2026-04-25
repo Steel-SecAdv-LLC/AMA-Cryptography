@@ -253,7 +253,12 @@ endif()
 # intrinsic semantics for _mm256_ternarylogic_epi64 / _mm256_rol_epi64
 # under per-file -mavx512f -mavx512vl flags, the same MSVC-escape
 # pattern src/c/avx2/ama_aes_gcm_vaes_avx2.c uses.
-if(AMA_ENABLE_AVX512)
+#
+# Nested under AMA_ENABLE_SIMD for parity with the AVX2, NEON, and SVE2
+# blocks below (all of which honour the master SIMD toggle).  When
+# AMA_ENABLE_SIMD=OFF the kernel is silently dropped, matching the
+# user expectation that "no SIMD" disables every arch-specific path.
+if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX512)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
         if(NOT MSVC)
             set(AMA_AVX512_SOURCES
