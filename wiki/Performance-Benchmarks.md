@@ -4,8 +4,8 @@
 
 Benchmark results for AMA Cryptography on Linux x86-64. All measurements use the native C library via Python/ctypes unless noted.
 
-**Platform:** Linux x86-64 | **CPU:** 16 logical cores | **Python:** 3.11.15
-**Date:** 2026-04-21 | **ML-DSA-65 Backend:** native C (no OpenSSL, no liboqs)
+**Platform:** Linux x86-64 | **CPU:** 16 logical cores (AVX-512F/BW/DQ/VL/VBMI + VAES + VPCLMULQDQ) | **Python:** 3.11.15
+**Date:** 2026-04-25 | **ML-DSA-65 Backend:** native C (no OpenSSL, no liboqs)
 
 ---
 
@@ -13,19 +13,19 @@ Benchmark results for AMA Cryptography on Linux x86-64. All measurements use the
 
 | Operation | Mean (ms) | Ops/sec |
 |-----------|----------:|--------:|
-| SHA3-256 (32 B) | 0.001 | 1,008,379 |
-| HMAC-SHA3-256 auth (32 B) | 0.004 | 249,949 |
-| HMAC-SHA3-256 verify (32 B) | 0.005 | 204,983 |
-| HKDF-SHA3-256 (96 B output) | 0.055 | 18,316 |
-| Ed25519 keygen | 0.110 | 9,082 |
-| Ed25519 sign (240 B) | 0.093 | 10,767 |
-| Ed25519 verify (240 B) | 0.136 | 7,372 |
-| ML-DSA-65 keygen | 0.315 | 3,178 |
-| ML-DSA-65 sign | 0.527 | 1,898 |
-| ML-DSA-65 verify | 0.154 | 6,513 |
-| KMS generation | 0.479 | 2,088 |
-| Package creation (multi-layer) | 0.866 | 1,155 |
-| Package verification | 0.320 | 3,125 |
+| SHA3-256 (32 B) | 0.001 | 1,002,079 |
+| HMAC-SHA3-256 auth (32 B) | 0.004 | 231,090 |
+| HMAC-SHA3-256 verify (32 B) | 0.005 | 183,619 |
+| HKDF-SHA3-256 (96 B output) | 0.059 | 16,898 |
+| Ed25519 keygen | 0.030 | 33,073 |
+| Ed25519 sign (240 B) | 0.020 | 50,805 |
+| Ed25519 verify (240 B) | 0.049 | 20,559 |
+| ML-DSA-65 keygen | 0.280 | 3,574 |
+| ML-DSA-65 sign | 0.338 | 2,958 |
+| ML-DSA-65 verify | 0.137 | 7,309 |
+| KMS generation | 0.425 | 2,353 |
+| Package creation (multi-layer) | 0.277 | 3,612 |
+| Package verification | 0.230 | 4,348 |
 
 *(Output of `python benchmark_suite.py` — all numbers Python/ctypes path on the measurement host. See the notes below for the difference between these figures and the CI-regression-suite baseline.)*
 
@@ -35,11 +35,11 @@ Benchmark results for AMA Cryptography on Linux x86-64. All measurements use the
 
 | Operation | Mean (ms) | Median (ms) | Std Dev (ms) | Ops/sec | Iterations |
 |-----------|----------:|------------:|-------------:|--------:|-----------:|
-| master_secret | 0.0047 | 0.0043 | 0.0016 | 214,452 | 10,000 |
-| hkdf_derivation | 0.0546 | 0.0510 | 0.0090 | 18,316 | 1,000 |
-| ed25519_keygen | 0.1101 | 0.1060 | 0.0133 | 9,082 | 1,000 |
-| dilithium_keygen | 0.3146 | 0.3041 | 0.0345 | 3,178 | 100 |
-| kms_generation | 0.4790 | 0.4734 | 0.0255 | 2,088 | 100 |
+| master_secret | 0.0049 | 0.0043 | 0.0028 | 202,241 | 10,000 |
+| hkdf_derivation | 0.0592 | 0.0535 | 0.0156 | 16,898 | 1,000 |
+| ed25519_keygen | 0.0302 | 0.0285 | 0.0123 | 33,073 | 1,000 |
+| dilithium_keygen | 0.2798 | 0.2755 | 0.0255 | 3,574 | 100 |
+| kms_generation | 0.4250 | 0.4011 | 0.0743 | 2,353 | 100 |
 
 ---
 
@@ -47,13 +47,13 @@ Benchmark results for AMA Cryptography on Linux x86-64. All measurements use the
 
 | Operation | Mean (ms) | Median (ms) | Std Dev (ms) | Ops/sec | Iterations |
 |-----------|----------:|------------:|-------------:|--------:|-----------:|
-| sha3_256 | 0.0010 | 0.0009 | 0.0003 | 1,008,379 | 10,000 |
-| hmac_auth | 0.0040 | 0.0038 | 0.0008 | 249,949 | 10,000 |
-| hmac_verify | 0.0049 | 0.0046 | 0.0014 | 204,983 | 10,000 |
-| ed25519_sign | 0.0929 | 0.0917 | 0.0069 | 10,767 | 1,000 |
-| ed25519_verify | 0.1357 | 0.1324 | 0.0091 | 7,372 | 1,000 |
-| dilithium_sign | 0.5268 | 0.5263 | 0.0168 | 1,898 | 100 |
-| dilithium_verify | 0.1535 | 0.1493 | 0.0118 | 6,513 | 100 |
+| sha3_256 | 0.0010 | 0.0009 | 0.0004 | 1,002,079 | 10,000 |
+| hmac_auth | 0.0043 | 0.0040 | 0.0015 | 231,090 | 10,000 |
+| hmac_verify | 0.0054 | 0.0049 | 0.0015 | 183,619 | 10,000 |
+| ed25519_sign | 0.0197 | 0.0172 | 0.0044 | 50,805 | 1,000 |
+| ed25519_verify | 0.0486 | 0.0446 | 0.0086 | 20,559 | 1,000 |
+| dilithium_sign | 0.3381 | 0.3345 | 0.0178 | 2,958 | 100 |
+| dilithium_verify | 0.1368 | 0.1341 | 0.0146 | 7,309 | 100 |
 
 ---
 
@@ -61,10 +61,10 @@ Benchmark results for AMA Cryptography on Linux x86-64. All measurements use the
 
 | Operation | Mean (ms) | Median (ms) | Std Dev (ms) | Ops/sec | Iterations |
 |-----------|----------:|------------:|-------------:|--------:|-----------:|
-| canonical_encoding | 0.0014 | 0.0013 | 0.0004 | 724,268 | 10,000 |
-| code_hash | 0.0142 | 0.0138 | 0.0019 | 70,329 | 10,000 |
-| package_creation | 0.8661 | 0.8586 | 0.0646 | 1,155 | 100 |
-| package_verification | 0.3200 | 0.3175 | 0.0164 | 3,125 | 100 |
+| canonical_encoding | 0.0015 | 0.0014 | 0.0006 | 657,855 | 10,000 |
+| code_hash | 0.0154 | 0.0140 | 0.0038 | 65,012 | 10,000 |
+| package_creation | 0.2769 | 0.2659 | 0.0975 | 3,612 | 100 |
+| package_verification | 0.2300 | 0.2247 | 0.0279 | 4,348 | 100 |
 
 ---
 
@@ -72,11 +72,11 @@ Benchmark results for AMA Cryptography on Linux x86-64. All measurements use the
 
 | Operation | Mean (ms) | Ops/sec |
 |-----------|----------:|--------:|
-| ethical_context | 0.0041 | 242,091 |
-| hkdf_standard | 0.0085 | 117,488 |
-| hkdf_with_ethical | 0.0191 | 52,239 |
+| ethical_context | 0.0046 | 218,867 |
+| hkdf_standard | 0.0079 | 126,715 |
+| hkdf_with_ethical | 0.0218 | 45,951 |
 
-> Ethical context overhead: 0.0106 ms ≈ **10.6 µs** wall-time (≈ 2.2× standard-HKDF latency), i.e., well under a millisecond. Negligible per-operation cost at the throughputs listed above (52,239 ops/sec).
+> Ethical context overhead: 0.0139 ms ≈ **13.9 µs** wall-time (≈ 2.8× standard-HKDF latency), i.e., well under a millisecond. Negligible per-operation cost at the throughputs listed above (45,951 ops/sec).
 
 ---
 
