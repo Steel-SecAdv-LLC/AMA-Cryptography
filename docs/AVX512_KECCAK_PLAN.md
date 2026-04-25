@@ -118,7 +118,7 @@ PR C will only be opened when **both** of:
 
    Today the CI matrix is `ubuntu-latest`, `windows-latest`, and
    `ubuntu-24.04-arm` — none of which guarantee AVX-512 host silicon —
-   so this gate is open.
+   so **this gate is not yet satisfied** (i.e., still blocking PR C).
 
 2. **The +20–40% SHA3-256 1 KB gain** clears the priority bar against
    other queued work. The win compounds across every primitive that

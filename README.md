@@ -377,20 +377,20 @@ NIST-standardized post-quantum algorithms:
 
 | Operation | Throughput (Python API via ctypes) | Latency | Notes |
 |-----------|-----------|---------|-------|
-| **KeyGen** | 2,951 ops/sec | ~339µs | Native C, NTT q=8380417 |
-| **Sign** | 1,017 ops/sec | ~983µs | Rejection sampling, constant-time |
-| **Verify** | 6,322 ops/sec | ~158µs | Verified against NIST ACVP test vectors (self-attested) |
+| **KeyGen** | 3,626 ops/sec | ~276µs | Native C, NTT q=8380417 |
+| **Sign** | 2,976 ops/sec | ~336µs | Rejection sampling, constant-time |
+| **Verify** | 7,576 ops/sec | ~132µs | Verified against NIST ACVP test vectors (self-attested) |
 
-*Source: `benchmark-results.json` refreshed 2026-04-21 (`python benchmarks/benchmark_runner.py`). Run `build/bin/benchmark_c_raw --json` for raw C throughput without ctypes overhead (~5,100 KeyGen, ~2,000 Sign, ~6,800 Verify ops/sec on the same host).*
+*Source: `benchmark-results.json` refreshed 2026-04-25 (`python benchmarks/benchmark_runner.py`). Run `build/bin/benchmark_c_raw --json` for raw C throughput without ctypes overhead (~4,845 KeyGen, ~3,929 Sign, ~7,773 Verify ops/sec on the same host).*
 
 ### ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)
 
 | Operation | Throughput (Python API via ctypes) | Notes |
 |-----------|-----------|-------|
-| **KeyGen** | 4,850 ops/sec | Native C, no OpenSSL dependency |
-| **Encapsulate** | 9,138 ops/sec | Fujisaki–Okamoto transform, IND-CCA2 |
+| **KeyGen** | 4,965 ops/sec | Native C, no OpenSSL dependency |
+| **Encapsulate** | 10,253 ops/sec | Fujisaki–Okamoto transform, IND-CCA2 |
 
-*Source: `benchmark-results.json` (CI regression suite). Decapsulate and raw C throughput available via `build/bin/benchmark_c_raw --json`.*
+*Source: `benchmark-results.json` (CI regression suite). Decapsulate and raw C throughput available via `build/bin/benchmark_c_raw --json` (~10,834 Decaps ops/sec on the same host).*
 
 ### Full Multi-Layer Package Performance
 
@@ -398,10 +398,10 @@ Complete security package with all defense layers (Python API via ctypes):
 
 | Operation | Throughput | Latency |
 |-----------|-----------|----------|
-| Package Create (all layers) | 2,849 ops/sec | ~351µs |
-| Package Verify (all layers) | 2,805 ops/sec | ~356µs |
+| Package Create (all layers) | 2,853 ops/sec | ~350µs |
+| Package Verify (all layers) | 4,973 ops/sec | ~201µs |
 
-*Source: `benchmark-results.json` refreshed 2026-04-21.*
+*Source: `benchmark-results.json` refreshed 2026-04-25.*
 
 **All Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65 (core), HKDF, RFC 3161 (supporting)
 
