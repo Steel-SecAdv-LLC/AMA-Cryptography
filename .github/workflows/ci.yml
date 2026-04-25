@@ -276,8 +276,11 @@ jobs:
       # CVE-2026-4539: ReDoS in pygments AdlLexer (dev-only, local access, not used at runtime).
       # pygments is a transitive dev dependency (via rich/bandit) — see INVARIANT-14.
       # Remove ignore when Pygments >2.20.0 ships a fix.
-      # CVE-2026-3219: pip itself (build-time tool, not a runtime cryptographic
-      # dependency); no fix version available yet.  Remove when upstream ships one.
+      #
+      # CVE-2026-3219: pip treats concatenated tar+ZIP archives as ZIP regardless of
+      # filename.  Build-time installer behaviour; NO fix version released upstream.
+      # Zero runtime attack surface — ama-cryptography ships ZERO Python runtime
+      # dependencies.  Remove when pip ships a fix.
       run: pip-audit --ignore-vuln CVE-2026-4539 --ignore-vuln CVE-2026-3219
 
     - name: Security linting with Bandit

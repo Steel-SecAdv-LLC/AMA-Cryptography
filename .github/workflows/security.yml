@@ -42,8 +42,14 @@ jobs:
       # CVE-2026-4539: ReDoS in pygments AdlLexer (local access only, no fix version yet).
       # pygments is a transitive dev dependency (via rich/bandit) — not used at runtime.
       # See INVARIANT-14 for review cadence.  Remove ignore when Pygments >2.20.0 ships a fix.
-      # CVE-2026-3219: pip itself (build-time tool, not a runtime cryptographic
-      # dependency); no fix version available yet.  Remove when upstream ships one.
+      #
+      # CVE-2026-3219: pip treats concatenated tar+ZIP archives as ZIP regardless of
+      # filename.  Build-time installer behaviour; NO fix version released upstream as
+      # of 2026-04-24.  The ama-cryptography library ships ZERO Python runtime
+      # dependencies (see requirements.txt), so this CVE has no runtime attack surface
+      # against the cryptographic API — it only affects CI install of CI-controlled
+      # pinned archives (requirements-lock.txt hashes pin every build-time wheel).
+      # Tracked for removal as soon as pip ships a fix.
       run: |
         pip-audit --desc --ignore-vuln CVE-2026-4539 --ignore-vuln CVE-2026-3219
 
@@ -96,8 +102,12 @@ jobs:
       # CVE-2026-4539: ReDoS in pygments AdlLexer (dev-only, local access, not used at runtime).
       # pygments is a transitive dev dependency (via rich/bandit) — see INVARIANT-14.
       # Remove ignore when Pygments >2.20.0 ships a fix.
-      # CVE-2026-3219: pip itself (build-time tool, not a runtime cryptographic
-      # dependency); no fix version available yet.  Remove when upstream ships one.
+      #
+      # CVE-2026-3219: pip treats concatenated tar+ZIP archives as ZIP regardless of
+      # filename.  Build-time installer behaviour; NO fix version released upstream.
+      # Zero runtime attack surface — ama-cryptography ships ZERO Python runtime
+      # dependencies and requirements-lock.txt pins every wheel.  Remove when pip
+      # ships a fix.
       run: |
         pip-audit --format=json --output pip-audit.json --ignore-vuln CVE-2026-4539 --ignore-vuln CVE-2026-3219
 

@@ -36,6 +36,119 @@ int ama_has_aes_ni(void);
  */
 int ama_has_pclmulqdq(void);
 
+/* ============================================================================
+ * VAES + VPCLMULQDQ probes (PR A — VAES AES-GCM YMM dispatch, 2026-04).
+ *
+ * VAES (CPUID.(EAX=7,ECX=0):ECX[9]) and VPCLMULQDQ (ECX[10]) are
+ * *independent* of AVX-512.  Their VEX-encoded YMM forms only require
+ * AVX OS save-area state (XCR0 bits 1 + 2 — SSE + AVX), not the AVX-512
+ * opmask / ZMM bits.  Targeting YMM keeps the kernel off the pre-Ice-Lake
+ * ZMM downclock curve entirely while still covering every Intel
+ * Ice Lake+ / Alder Lake+ and AMD Zen 3+ host.
+ *
+ * All probes share the same pthread_once / InitOnceExecuteOnce primitive
+ * that guards the rest of ama_cpuid.c (INVARIANT-15 unchanged — no new
+ * once-primitive, no reordering of detect_x86_features()).  Non-x86
+ * builds return 0 unconditionally, matching the existing ARM / generic
+ * stubs above.
+ * ============================================================================ */
+
+/**
+ * @brief Check for VAES (vectorized AES-NI) on YMM.
+ *
+ * CPUID.(EAX=7,ECX=0):ECX[9].  Lets a single AESENC / AESENCLAST act on
+ * two 128-bit blocks packed in a YMM register.  Combined with the
+ * 4-block-parallel inner loop in src/c/avx2/ama_aes_gcm_vaes_avx2.c,
+ * this is the bulk-throughput primitive for the AVX2 VAES AES-GCM
+ * path.  Returns 1 only when CPUID reports VAES *and* the OS has
+ * enabled AVX state in XCR0 (bits 1 + 2).  AVX-512 state is
+ * intentionally *not* required.
+ */
+int ama_has_vaes(void);
+
+/**
+ * @brief Check for VPCLMULQDQ (vectorized carry-less multiply) on YMM.
+ *
+ * CPUID.(EAX=7,ECX=0):ECX[10].  Carry-less multiply acting on two
+ * 128-bit lanes of a YMM register simultaneously
+ * (_mm256_clmulepi64_epi128) — emitted by the 4-block GHASH fold in
+ * src/c/avx2/ama_aes_gcm_vaes_avx2.c (8 YMM CLMULs per 4-block
+ * iteration, replacing the 16 XMM CLMULs of a per-lane Karatsuba).
+ * GHASH must remain constant-time (INVARIANT-12), so this is paired
+ * with a carry-less-multiply implementation rather than a table
+ * lookup.  Returns 1 only when CPUID reports VPCLMULQDQ *and* the OS
+ * has enabled AVX state in XCR0.
+ */
+int ama_has_vpclmulqdq(void);
+
+/**
+ * @brief Bundle check: AVX2 + VAES + VPCLMULQDQ + PCLMULQDQ + AES-NI.
+ *
+ * The VAES AES-GCM dispatch gate checks all five:
+ *   - AVX2          — base ISA for YMM register set + integer ops
+ *   - VAES          — 2-blocks-per-YMM AES rounds, emitted by the
+ *                     4-block inner loop via _mm256_aesenc_epi128 /
+ *                     _mm256_aesenclast_epi128
+ *   - VPCLMULQDQ    — 2-lane carry-less multiply for the 4-lane
+ *                     Karatsuba GHASH fold, emitted by the 4-block
+ *                     inner loop via _mm256_clmulepi64_epi128
+ *                     (8 YMM CLMULs per 4 blocks, vs 16 XMM in the
+ *                     per-lane form)
+ *   - PCLMULQDQ     — baseline 128-bit CLMUL (CPUID.(EAX=1):ECX[1]),
+ *                     architecturally independent of VPCLMULQDQ
+ *                     (CPUID.(EAX=7,ECX=0):ECX[10]).  The kernel calls
+ *                     _mm_clmulepi64_si128 directly on every
+ *                     single-block edge path (AAD blocks, H power
+ *                     precompute, trailing-partial-block tail, and
+ *                     the final length block), so the bundle must
+ *                     gate PCLMULQDQ explicitly — every shipped CPU
+ *                     with VPCLMULQDQ also has PCLMULQDQ but the ISA
+ *                     does not document this as a strict superset
+ *                     relationship (Devin Review #3140732664).
+ *   - AES-NI        — 128-bit AESKEYGENASSIST runs the AES-256 key
+ *                     schedule (VAES provides only the rounds);
+ *                     _mm_aesenc_si128 / _mm_aesenclast_si128 are
+ *                     also called on the single-block edge paths.
+ *
+ * Returns 1 only when every component passes; otherwise the dispatcher
+ * falls back to the AVX2 AES-NI + PCLMULQDQ path shipped in #253 / #254.
+ */
+int ama_cpuid_has_vaes_aesgcm(void);
+
+/**
+ * @brief Check for x86 AVX2 runtime capability.
+ *
+ * CPUID.(EAX=7,ECX=0):EBX[5] AND OSXSAVE AND XCR0 bits 1+2 (SSE+AVX).
+ * The OSXSAVE/XCR0 gate is essential: on a VM whose host kernel has
+ * not enabled AVX state, VEX-encoded 128-bit or 256-bit AVX opcodes
+ * will #UD, so the runtime dispatcher must refuse to select the AVX2
+ * path there.  A caller who needs the raw CPUID feature-flag bit
+ * (e.g. capability advertisement divorced from execution safety)
+ * should not use this function.
+ *
+ * @return 1 if AVX2 is available AND the OS has enabled AVX state,
+ *         0 otherwise.  Cached after first call.
+ */
+int ama_has_avx2(void);
+
+/**
+ * @brief Check for x86 AVX-512F CPUID feature bit + AVX OS state.
+ *
+ * CPUID.(EAX=7,ECX=0):EBX[16] AND OSXSAVE AND XCR0 bits 1+2
+ * (SSE+AVX).  AVX-512F is a strict superset of AVX2; the dispatch
+ * layer currently maps AMA_IMPL_AVX512 → AMA_IMPL_AVX2 (no
+ * EVEX/ZMM code emitted yet), so the AVX state gate is necessary
+ * to prevent wiring AVX2 function pointers on a host where the OS
+ * has not enabled AVX state in XCR0.  When the first AVX-512 kernel
+ * lands, callers must ALSO verify XCR0 bits 5 (opmask) + 6 (ZMM
+ * Hi256) + 7 (Hi16 ZMM); those are distinct from the AVX-only bits
+ * and are not checked here.
+ *
+ * @return 1 if AVX-512F is reported by CPUID AND the OS has enabled
+ *         AVX state, 0 otherwise.  Cached after first call.
+ */
+int ama_has_avx512f(void);
+
 /**
  * @brief Check for ARMv8 AES Crypto Extension support.
  * @return 1 if ARM AES is available, 0 otherwise. Cached after first call.
@@ -47,6 +160,18 @@ int ama_has_arm_aes(void);
  * @return 1 if ARM PMULL is available, 0 otherwise. Cached after first call.
  */
 int ama_has_arm_pmull(void);
+
+/**
+ * @brief Check for ARMv8 NEON advanced-SIMD support.
+ * @return 1 if NEON is available, 0 otherwise. Cached after first call.
+ */
+int ama_has_arm_neon(void);
+
+/**
+ * @brief Check for ARMv9 SVE2 advanced-SIMD support.
+ * @return 1 if SVE2 is available, 0 otherwise. Cached after first call.
+ */
+int ama_has_arm_sve2(void);
 
 /**
  * AEAD backend identifiers for runtime dispatch.

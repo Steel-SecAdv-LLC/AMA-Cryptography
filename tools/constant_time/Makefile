@@ -26,6 +26,7 @@ CRYPTO_SRCS = $(SRC_DIR)/ama_consttime.c \
               $(SRC_DIR)/ama_ed25519.c \
               $(SRC_DIR)/ama_aes_gcm.c \
               $(SRC_DIR)/ama_hkdf.c \
+              $(SRC_DIR)/ama_cpuid.c \
               $(DISPATCH_DIR)/ama_dispatch.c
 
 .PHONY: all clean test test-full test-crypto test-crypto-full help

@@ -86,6 +86,76 @@ static int has_aes_ni_cached = 0;
 static int has_pclmulqdq_cached = 0;
 static int has_avx2_cached = 0;
 static int has_avx512f_cached = 0;
+/* PR A (2026-04) — VAES AES-GCM YMM dispatch.
+ *
+ * VAES (CPUID.(EAX=7,ECX=0):ECX[9]) and VPCLMULQDQ (ECX[10]) are
+ * independent of AVX-512.  Their VEX-encoded YMM forms only need AVX
+ * OS save-area state (XCR0 bits 1 + 2 = SSE + AVX), *not* the AVX-512
+ * opmask / ZMM bits.  Targeting YMM keeps the kernel off the
+ * Skylake-SP / Cascade Lake ZMM downclock curve while still covering
+ * every Ice Lake+ / Alder Lake+ / Zen 3+ host.
+ *
+ * These caches are populated from the *same* detect_x86_features()
+ * one-shot invocation as the legacy fields above, gated by the
+ * existing `cpuid_once` pthread_once / InitOnceExecuteOnce primitive.
+ * INVARIANT-15 unchanged: same once-primitive, no reordering, no new
+ * call sites in dispatch_init_internal(). */
+static int has_vaes_cached = 0;
+static int has_vpclmulqdq_cached = 0;
+static int has_avx_osxsave_cached = 0;
+
+/* Read XCR0 via XGETBV and confirm the OS has enabled SSE + AVX state.
+ *
+ * CPUID.(EAX=1):ECX[27] (OSXSAVE) gates whether XGETBV itself is safe
+ * to issue — without OSXSAVE the instruction #UDs.  XCR0 bit 1 = SSE
+ * (XMM), bit 2 = AVX (YMM Hi128).  Both must be enabled before we may
+ * legally execute a VEX-encoded YMM instruction; otherwise the first
+ * VAES / VPCLMULQDQ opcode will fault inside a VM whose host kernel
+ * has not enabled AVX state.  This is the same gate the Linux kernel
+ * uses (arch/x86/kernel/fpu/xstate.c) and is intentionally NOT the
+ * AVX-512 gate — we never read XCR0 bits 5/6/7. */
+static int xcr0_has_avx_state(void) {
+    /* Prefer the compiler-provided XGETBV intrinsic when the compiler can
+     * actually emit it — it's easier to audit than a raw .byte sequence
+     * (Copilot review #3140468467).  Fall back to inline asm when the
+     * intrinsic is unavailable for the TU's compile flags.
+     *
+     * Constraints that drive the gating:
+     *   - MSVC's _xgetbv(0) is unconditional — always available, always
+     *     emits the opcode inline.
+     *   - GCC/Clang's __builtin_ia32_xgetbv requires the XSAVE feature
+     *     to be enabled at compile time (e.g. via -mxsave or any
+     *     -march=* that implies it; AVX2 implies XSAVE so AVX2-compiled
+     *     TUs get __XSAVE__ for free).  Without it the builtin lowers
+     *     to an external libgcc symbol that fails to link.
+     *   - This TU (ama_cpuid.c) is intentionally compiled for the
+     *     lowest common denominator — we cannot require -mxsave, since
+     *     legacy harnesses (tools/constant_time/Makefile) compile with
+     *     plain `-O2` and would link-fail on the builtin.
+     *
+     * Strategy: use the intrinsic when __XSAVE__ is defined (CMake
+     * AVX2 build sets this transitively via -mavx2), otherwise the raw
+     * .byte sequence — same XGETBV opcode, no compile-time feature
+     * dependency, so the legacy dudect Makefile keeps building. */
+    unsigned long long xcr0;
+#if defined(_MSC_VER)
+    xcr0 = _xgetbv(0);
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__XSAVE__)
+    xcr0 = (unsigned long long)__builtin_ia32_xgetbv(0);
+#else
+    /* Fallback: raw XGETBV opcode (.byte 0f 01 d0).  Same instruction
+     * the intrinsic emits; spelled in machine code so the assembler
+     * doesn't need to recognise the `xgetbv` mnemonic and the linker
+     * doesn't need libgcc's __xgetbv stub. */
+    unsigned int eax_xcr, edx_xcr;
+    __asm__ volatile (".byte 0x0f, 0x01, 0xd0"
+                      : "=a"(eax_xcr), "=d"(edx_xcr)
+                      : "c"(0));
+    xcr0 = ((unsigned long long)edx_xcr << 32) | (unsigned long long)eax_xcr;
+#endif
+    const unsigned long long avx_bits = (1ULL << 1) | (1ULL << 2);
+    return (xcr0 & avx_bits) == avx_bits;
+}
 
 static void detect_x86_features(void) {
 #ifdef _MSC_VER
@@ -93,21 +163,39 @@ static void detect_x86_features(void) {
     __cpuid(info, 1);
     has_aes_ni_cached = (info[2] >> 25) & 1;
     has_pclmulqdq_cached = (info[2] >> 1) & 1;
-    /* Leaf 7, sub-leaf 0: AVX2 (EBX[5]) and AVX-512F (EBX[16]) */
+    int osxsave = (info[2] >> 27) & 1;
+    /* Leaf 7, sub-leaf 0:
+     *   EBX bit 5  — AVX2
+     *   EBX bit 16 — AVX-512F
+     *   ECX bit 9  — VAES         (PR A — independent of AVX-512)
+     *   ECX bit 10 — VPCLMULQDQ   (PR A — independent of AVX-512) */
     __cpuidex(info, 7, 0);
-    has_avx2_cached = (info[1] >> 5) & 1;
-    has_avx512f_cached = (info[1] >> 16) & 1;
+    has_avx2_cached       = (info[1] >> 5)  & 1;
+    has_avx512f_cached    = (info[1] >> 16) & 1;
+    has_vaes_cached       = (info[2] >> 9)  & 1;
+    has_vpclmulqdq_cached = (info[2] >> 10) & 1;
+    has_avx_osxsave_cached = osxsave ? xcr0_has_avx_state() : 0;
 #else
     unsigned int eax, ebx, ecx, edx;
+    int osxsave = 0;
     if (__get_cpuid(1, &eax, &ebx, &ecx, &edx)) {
-        has_aes_ni_cached = (ecx >> 25) & 1;
-        has_pclmulqdq_cached = (ecx >> 1) & 1;
+        has_aes_ni_cached    = (ecx >> 25) & 1;
+        has_pclmulqdq_cached = (ecx >> 1)  & 1;
+        osxsave              = (ecx >> 27) & 1;
     }
-    /* CPUID leaf 7, sub-leaf 0: AVX2 (EBX bit 5), AVX-512F (EBX bit 16) */
+    /* CPUID leaf 7, sub-leaf 0:
+     *   EBX bit 5  — AVX2
+     *   EBX bit 16 — AVX-512F
+     *   ECX bit 9  — VAES         (PR A — independent of AVX-512)
+     *   ECX bit 10 — VPCLMULQDQ   (PR A — independent of AVX-512)
+     * Only read XCR0 when OSXSAVE is set; otherwise XGETBV #UDs. */
     if (__get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx)) {
-        has_avx2_cached = (ebx >> 5) & 1;
-        has_avx512f_cached = (ebx >> 16) & 1;
+        has_avx2_cached       = (ebx >> 5)  & 1;
+        has_avx512f_cached    = (ebx >> 16) & 1;
+        has_vaes_cached       = (ecx >> 9)  & 1;
+        has_vpclmulqdq_cached = (ecx >> 10) & 1;
     }
+    has_avx_osxsave_cached = osxsave ? xcr0_has_avx_state() : 0;
 #endif
 }
 
@@ -123,12 +211,87 @@ int ama_has_pclmulqdq(void) {
 
 int ama_has_avx2(void) {
     AMA_CALL_ONCE(cpuid_once, detect_x86_features);
-    return has_avx2_cached;
+    /* CPUID bit alone is NOT sufficient — the OS must have enabled AVX
+     * state in XCR0 (bits 1+2 = SSE + AVX YMM Hi128), otherwise any
+     * VEX-encoded 128-bit or 256-bit AVX instruction (including the
+     * XMM forms our AES-NI reference emits under -mavx2) will #UD
+     * inside a VM whose host kernel did not advertise AVX state.
+     *
+     * Without this gate, `detect_avx2()` in the dispatch layer would
+     * happily select the AVX2 AES-GCM path on such a host and crash
+     * the caller with SIGILL — Copilot review #3136110805.  Matching
+     * the already-gated semantics of ama_has_vaes() /
+     * ama_has_vpclmulqdq() localises the correctness argument here. */
+    return has_avx2_cached && has_avx_osxsave_cached;
 }
 
 int ama_has_avx512f(void) {
     AMA_CALL_ONCE(cpuid_once, detect_x86_features);
-    return has_avx512f_cached;
+    /* AVX-512F is a strict superset of AVX2, which in turn requires
+     * SSE + AVX YMM state in XCR0 (bits 1+2).  The dispatcher maps
+     * AMA_IMPL_AVX512 → AMA_IMPL_AVX2 (no EVEX/ZMM code yet), so if
+     * this probe returns 1 while the OS has NOT enabled AVX state,
+     * the dispatch layer would wire AVX2 function pointers whose
+     * VEX-encoded opcodes #UD — a latent SIGILL on VMs where the
+     * hypervisor exposes the host CPUID but restricts XCR0 (Devin
+     * Review #3136221784).
+     *
+     * Gate on has_avx_osxsave_cached (same flag ama_has_avx2() /
+     * ama_has_vaes() / ama_has_vpclmulqdq() use).  When the first
+     * AVX-512 kernel lands, ALSO verify XCR0 bits 5 (opmask) +
+     * 6 (ZMM Hi256) + 7 (Hi16 ZMM); those are distinct from the
+     * AVX state bits and are not checked here. */
+    return has_avx512f_cached && has_avx_osxsave_cached;
+}
+
+int ama_has_vaes(void) {
+    AMA_CALL_ONCE(cpuid_once, detect_x86_features);
+    /* CPUID bit alone is insufficient — the OS must have enabled AVX
+     * state in XCR0, otherwise the first VEX-encoded YMM VAES opcode
+     * (vaesenc ymm) would #UD inside a VM whose host kernel did not
+     * advertise AVX state.  AVX-512 state is intentionally NOT
+     * required: the PR A path stays on YMM only. */
+    return has_vaes_cached && has_avx_osxsave_cached;
+}
+
+int ama_has_vpclmulqdq(void) {
+    AMA_CALL_ONCE(cpuid_once, detect_x86_features);
+    return has_vpclmulqdq_cached && has_avx_osxsave_cached;
+}
+
+int ama_cpuid_has_vaes_aesgcm(void) {
+    /* Each getter shares pthread_once via cpuid_once, so the underlying
+     * detect_x86_features() probe runs exactly once.  All five bits
+     * below are emitted by the VAES AES-GCM kernel:
+     *
+     *   - AVX2        — base ISA for YMM registers + AVX OS state
+     *   - VAES        — _mm256_aesenc_epi128 / _mm256_aesenclast_epi128
+     *                   (4-block counter-mode AES rounds)
+     *   - VPCLMULQDQ  — _mm256_clmulepi64_epi128 (4-lane Karatsuba
+     *                   GHASH fold: 8 YMM CLMULs per 4 blocks)
+     *   - PCLMULQDQ   — _mm_clmulepi64_si128 (XMM, 128-bit CLMUL) used
+     *                   on every single-block GHASH edge path: AAD
+     *                   blocks, the H/H²/H³/H⁴ power precompute, the
+     *                   trailing-partial-block tail, and the final
+     *                   length block.  PCLMULQDQ
+     *                   (CPUID.(EAX=1):ECX[1]) is **architecturally
+     *                   independent** of VPCLMULQDQ (CPUID.(EAX=7,
+     *                   ECX=0):ECX[10]) — every shipped Intel/AMD CPU
+     *                   has both, but the ISA documents them as
+     *                   separate feature bits and the bundle's safety
+     *                   contract should not depend on a "no real CPU
+     *                   ships VPCLMULQDQ without PCLMULQDQ" empirical
+     *                   observation.  Devin Review #3140732664.
+     *   - AES-NI      — AESKEYGENASSIST, a 128-bit AES-NI opcode, runs
+     *                   the AES-256 key schedule (VAES only provides
+     *                   the rounds); also _mm_aesenc_si128 /
+     *                   _mm_aesenclast_si128 in single-block edge
+     *                   paths (J0 keystream, partial trailing block). */
+    return ama_has_avx2()
+        && ama_has_vaes()
+        && ama_has_vpclmulqdq()
+        && ama_has_aes_ni()
+        && ama_has_pclmulqdq();
 }
 
 int ama_has_arm_aes(void) { return 0; }
@@ -212,6 +375,9 @@ int ama_has_aes_ni(void) { return 0; }
 int ama_has_pclmulqdq(void) { return 0; }
 int ama_has_avx2(void) { return 0; }
 int ama_has_avx512f(void) { return 0; }
+int ama_has_vaes(void) { return 0; }
+int ama_has_vpclmulqdq(void) { return 0; }
+int ama_cpuid_has_vaes_aesgcm(void) { return 0; }
 
 int ama_has_arm_aes(void) {
     AMA_CALL_ONCE(arm_once, detect_arm_features);
@@ -243,6 +409,9 @@ int ama_has_aes_ni(void) { return 0; }
 int ama_has_pclmulqdq(void) { return 0; }
 int ama_has_avx2(void) { return 0; }
 int ama_has_avx512f(void) { return 0; }
+int ama_has_vaes(void) { return 0; }
+int ama_has_vpclmulqdq(void) { return 0; }
+int ama_cpuid_has_vaes_aesgcm(void) { return 0; }
 int ama_has_arm_aes(void) { return 0; }
 int ama_has_arm_pmull(void) { return 0; }
 int ama_has_arm_neon(void) { return 0; }

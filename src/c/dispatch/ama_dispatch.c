@@ -79,39 +79,13 @@ static ama_dispatch_table_t dispatch_table_post_init;
 
 #if defined(__x86_64__) || defined(_M_X64)
 
-#ifdef _MSC_VER
-#include <intrin.h>
-#else
-#include <cpuid.h>
-#endif
-
-static int detect_avx2(void) {
-#ifdef _MSC_VER
-    int info[4];
-    __cpuidex(info, 7, 0);
-    return (info[1] >> 5) & 1; /* EBX bit 5 */
-#else
-    unsigned int eax, ebx, ecx, edx;
-    if (__get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx)) {
-        return (ebx >> 5) & 1; /* EBX bit 5 = AVX2 */
-    }
-    return 0;
-#endif
-}
-
-static int detect_avx512f(void) {
-#ifdef _MSC_VER
-    int info[4];
-    __cpuidex(info, 7, 0);
-    return (info[1] >> 16) & 1; /* EBX bit 16 */
-#else
-    unsigned int eax, ebx, ecx, edx;
-    if (__get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx)) {
-        return (ebx >> 16) & 1; /* EBX bit 16 = AVX-512F */
-    }
-    return 0;
-#endif
-}
+/* x86-64 CPU-feature detection is consolidated in ama_cpuid.c — that
+ * layer carries the OSXSAVE + XCR0 AVX-state gate that the dispatcher
+ * must honour before selecting any VEX-encoded kernel (Copilot review
+ * #3136110805).  We just forward to it from the already-included
+ * ama_cpuid.h so there is a single source of truth for the runtime
+ * feature contract and no duplicated CPUID emission. */
+#include "ama_cpuid.h"
 
 #elif defined(__aarch64__) || defined(_M_ARM64)
 
@@ -176,41 +150,17 @@ extern void ama_keccak_f1600_x4_generic(uint64_t states[4][25]);
  * ============================================================================ */
 
 #ifdef AMA_HAVE_AVX2_IMPL
-extern void ama_keccak_f1600_avx2(uint64_t state[25]);
-extern void ama_keccak_f1600_x4_avx2(uint64_t states[4][25]);
-extern ama_error_t ama_sha3_256_avx2(const uint8_t *input, size_t input_len,
-                                      uint8_t output[32]);
-extern void ama_kyber_ntt_avx2(int16_t poly[256], const int16_t zetas[128]);
-extern void ama_kyber_invntt_avx2(int16_t poly[256], const int16_t zetas[128]);
-extern void ama_kyber_poly_pointwise_avx2(int16_t r[256],
-                                           const int16_t a[256],
-                                           const int16_t b[256],
-                                           const int16_t zetas[128]);
-extern void ama_kyber_cbd2_avx2(int16_t poly[256], const uint8_t buf[128]);
-extern void ama_dilithium_ntt_avx2(int32_t poly[256],
-                                    const int32_t zetas[256]);
-extern void ama_dilithium_invntt_avx2(int32_t poly[256],
-                                       const int32_t zetas[256]);
-extern void ama_dilithium_poly_pointwise_avx2(int32_t r[256],
-                                               const int32_t a[256],
-                                               const int32_t b[256]);
-extern int ama_dilithium_rej_uniform_avx2(int32_t *out, size_t outlen,
-                                           const uint8_t *buf, size_t buflen);
-extern void ama_aes256_gcm_encrypt_avx2(const uint8_t *plaintext, size_t plaintext_len,
-                                         const uint8_t *aad, size_t aad_len,
-                                         const uint8_t key[32], const uint8_t nonce[12],
-                                         uint8_t *ciphertext, uint8_t tag[16]);
-extern ama_error_t ama_aes256_gcm_decrypt_avx2(const uint8_t *ciphertext, size_t ciphertext_len,
-                                                const uint8_t *aad, size_t aad_len,
-                                                const uint8_t key[32], const uint8_t nonce[12],
-                                                const uint8_t tag[16], uint8_t *plaintext);
-extern void ama_chacha20_block_x8_avx2(const uint8_t key[32],
-                                        const uint8_t nonce[12],
-                                        uint32_t counter,
-                                        uint8_t out[512]);
-extern void ama_argon2_g_avx2(uint64_t out[128],
-                               const uint64_t x[128],
-                               const uint64_t y[128]);
+#if defined(__x86_64__) || defined(_M_X64)
+/* Single source of truth for the AVX2/VAES kernel prototypes.  This
+ * header is private to src/c/avx2/ and this dispatch TU; it carries
+ * the VAES/VPCLMULQDQ entry points (with the _MSC_VER guard), the
+ * AES-NI reference, and every dispatch-registered SIMD helper.
+ * Including it here — instead of re-declaring each extern inline —
+ * eliminates signature-drift risk flagged in Copilot review
+ * #3136110871.  The header pulls in <immintrin.h> transitively, so
+ * it stays under the x86-64 guard even within AMA_HAVE_AVX2_IMPL. */
+#include "../avx2/ama_avx2_internal.h"
+#endif
 #endif
 
 #ifdef AMA_HAVE_NEON_IMPL
@@ -272,12 +222,17 @@ static void dispatch_init_internal(void) {
 #if defined(__x86_64__) || defined(_M_X64)
     dispatch_info.arch_name = "x86-64";
 
-    int has_avx2 = detect_avx2();
-    int has_avx512f = detect_avx512f();
+    int has_avx2 = ama_has_avx2();       /* CPUID + OSXSAVE + XCR0 AVX state */
+    int has_avx512f = ama_has_avx512f(); /* CPUID + OSXSAVE AVX state; no ZMM XCR0 yet */
 
     ama_impl_level_t best = AMA_IMPL_GENERIC;
     if (has_avx2)   best = AMA_IMPL_AVX2;
-    if (has_avx512f) best = AMA_IMPL_AVX512;
+    /* Belt-and-suspenders: AVX-512F is a strict superset of AVX2.
+     * Never promote past AVX2 unless AVX2 itself passed its XCR0
+     * gate, preventing the effective→AVX2 fallback below from
+     * wiring VEX-encoded function pointers on a host whose OS has
+     * not enabled AVX state (Devin Review #3136221784). */
+    if (has_avx512f && has_avx2) best = AMA_IMPL_AVX512;
 
     /* All algorithms use the best available level.
      * AVX-512 implementations fall back to AVX2 where AVX-512
@@ -381,9 +336,45 @@ static void dispatch_init_internal(void) {
         dispatch_table.dilithium_pointwise   = ama_dilithium_poly_pointwise_avx2;
         dispatch_table.dilithium_rej_uniform = ama_dilithium_rej_uniform_avx2;
     }
-    if (dispatch_info.aes_gcm >= AMA_IMPL_AVX2) {
+    /* The AVX2 AES-GCM kernel emits AES-NI (AESENC / AESENCLAST /
+     * AESKEYGENASSIST) and PCLMULQDQ (CLMUL) opcodes in addition to
+     * VEX-encoded 128-bit loads/stores.  AVX2 alone is not a
+     * sufficient gate: a hypervisor (or chicken-bit MSR) may advertise
+     * CPUID.(EAX=7,ECX=0):EBX[5] while masking CPUID.(EAX=1):ECX[25]
+     * (AES-NI) or CPUID.(EAX=1):ECX[1] (PCLMULQDQ).  Installing the
+     * AVX2 AES-NI pointers on such a host would SIGILL on the first
+     * AESENC — Copilot review #3140228457 / #3140228489.  Require
+     * AVX2 + AES-NI + PCLMULQDQ explicitly here.  The VAES upgrade
+     * inside this block is gated separately by
+     * ama_cpuid_has_vaes_aesgcm(), which since Devin Review
+     * #3140732664 also explicitly checks PCLMULQDQ (the kernel uses
+     * _mm_clmulepi64_si128 on single-block edge paths;
+     * baseline PCLMULQDQ — CPUID.(EAX=1):ECX[1] — is architecturally
+     * independent of VPCLMULQDQ — CPUID.(EAX=7,ECX=0):ECX[10] — even
+     * though every shipped CPU has both). */
+    if (dispatch_info.aes_gcm >= AMA_IMPL_AVX2
+        && ama_has_aes_ni()
+        && ama_has_pclmulqdq()) {
         dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_avx2;
         dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_avx2;
+        /* PR A — VAES + VPCLMULQDQ YMM upgrade.  CPUID-gated; falls
+         * through to the AVX2 AES-NI pointers above when the bundle
+         * (AVX2 + VAES + VPCLMULQDQ + AES-NI + AVX-OSXSAVE) is not
+         * present.  No reordering of dispatch_init_internal() calls
+         * — INVARIANT-15 unchanged. */
+#if !defined(_MSC_VER)
+        if (ama_cpuid_has_vaes_aesgcm()) {
+            dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_vaes_avx2;
+            dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_vaes_avx2;
+            if (dispatch_verbose())
+                fprintf(stderr, "[AMA Dispatch] AES-GCM: VAES+VPCLMULQDQ YMM path selected\n");
+        }
+#endif
+    } else if (dispatch_verbose() && dispatch_info.aes_gcm >= AMA_IMPL_AVX2) {
+        fprintf(stderr,
+            "[AMA Dispatch] AES-GCM: AVX2 present but AES-NI=%d PCLMULQDQ=%d"
+            " — falling back to generic C path\n",
+            ama_has_aes_ni(), ama_has_pclmulqdq());
     }
     if (dispatch_info.chacha20poly1305 >= AMA_IMPL_AVX2) {
         /* Env override honored for A/B benchmarking and smoke-testing

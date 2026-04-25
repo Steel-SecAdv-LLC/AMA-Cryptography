@@ -291,6 +291,20 @@ We will deprecate cryptographic algorithms when:
 
 **30 days notice** will be provided before deprecating any algorithm, with migration guides and backwards compatibility support.
 
+### Performance note on the VAES AES-GCM dispatch path (x86-64)
+
+The library ships an optional VAES + VPCLMULQDQ AES-256-GCM kernel
+(PR A, 2026-04) behind runtime CPUID + XCR0 gating
+(`ama_cpuid_has_vaes_aesgcm()`). The VAES + VPCLMULQDQ AES-GCM path
+targets **YMM (256-bit), not ZMM**: Zen 3+ / Ice Lake+ CPUs execute
+these without the AVX-512 ZMM frequency penalty documented for
+Skylake-SP / Cascade Lake. Cloud VM variance on shared hosts is still
+the dominant noise source; published throughput numbers are from
+bare-metal runs, not CI. Hosts without VAES — or any non-x86-64
+host — automatically route through the AVX2 AES-NI + PCLMULQDQ path
+shipped in #253 / #254 / #260 / #261, which remains the regression
+baseline tracked in `benchmarks/baseline.json`.
+
 ## Security Audits
 
 AMA Cryptography has undergone internal security analysis documented in this file. We welcome:

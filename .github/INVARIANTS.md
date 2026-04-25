@@ -279,7 +279,7 @@ Tracked ignores:
 | CVE | Package | Reason | Remove when |
 |-----|---------|--------|-------------|
 | CVE-2026-4539 | Pygments (transitive via rich/bandit) | ReDoS in AdlLexer — dev-only, local access, not used at runtime | Pygments ships a fix (>2.20.0) or the transitive dependency is dropped |
-| CVE-2026-3219 | pip (build-time tool) | pip itself — build-time installer, not a runtime cryptographic dependency; no fix version published upstream | Upstream ships a pip release with a fix |
+| CVE-2026-3219 | pip (build-time installer) | pip handles concatenated tar+ZIP archives as ZIP regardless of filename. Build-time installer bug; ama-cryptography ships ZERO Python runtime dependencies, so this CVE has no runtime attack surface against the cryptographic API. CI installs from a pinned `requirements-lock.txt` (no attacker-controlled archives). No fix version released upstream as of 2026-04-24. | pip ships a fix (track via https://github.com/pypa/pip issue tracker) |
 
 > **Review cadence:** Re-evaluate all tracked CVE ignores on the first of each
 > quarter or when Dependabot bumps the affected package, whichever comes first.

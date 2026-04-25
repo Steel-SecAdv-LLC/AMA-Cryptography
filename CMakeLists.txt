@@ -206,14 +206,25 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
             src/c/avx2/ama_dilithium_avx2.c
             src/c/avx2/ama_sphincs_avx2.c
             src/c/avx2/ama_aes_gcm_avx2.c
+            src/c/avx2/ama_aes_gcm_vaes_avx2.c
             src/c/avx2/ama_chacha20poly1305_avx2.c
             src/c/avx2/ama_argon2_avx2.c
         )
         if(NOT MSVC)
             set_source_files_properties(${AMA_AVX2_SOURCES} PROPERTIES
                 COMPILE_FLAGS "-mavx2 -maes -mpclmul")
+            # PR A — VAES + VPCLMULQDQ AES-GCM YMM kernel.  Adds -mvaes
+            # and -mvpclmulqdq on top of the AVX2 baseline.  Targets
+            # YMM only; no AVX-512 flag is added (the kernel never
+            # emits a ZMM, opmask, or EVEX opcode).  Runtime CPUID
+            # gating in ama_cpuid_has_vaes_aesgcm() prevents these
+            # opcodes from ever executing on a host without the
+            # corresponding feature bits.
+            set_source_files_properties(src/c/avx2/ama_aes_gcm_vaes_avx2.c
+                PROPERTIES COMPILE_FLAGS
+                "-mavx2 -mvaes -mvpclmulqdq -maes -mpclmul")
         endif()
-        message(STATUS "SIMD: AVX2 hand-written intrinsics enabled (7 algorithms)")
+        message(STATUS "SIMD: AVX2 hand-written intrinsics enabled (8 algorithms incl. VAES AES-GCM)")
         # Tell dispatch code that AVX2 implementations are linked in
         add_compile_definitions(AMA_HAVE_AVX2_IMPL)
     endif()

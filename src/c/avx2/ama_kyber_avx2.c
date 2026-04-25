@@ -24,6 +24,8 @@
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
+#include "ama_cryptography.h"
+#include "ama_avx2_internal.h"
 
 /* Kyber-1024 parameters */
 #define KYBER_Q       3329
@@ -297,7 +299,7 @@ void ama_kyber_cbd2_avx2(int16_t poly[KYBER_N], const uint8_t buf[128]) {
 /* ============================================================================
  * Vectorized polynomial addition
  * ============================================================================ */
-void ama_kyber_poly_add_avx2(int16_t r[KYBER_N],
+static AMA_MAYBE_UNUSED void ama_kyber_poly_add_avx2(int16_t r[KYBER_N],
                               const int16_t a[KYBER_N],
                               const int16_t b[KYBER_N]) {
     for (int i = 0; i < 16; i++) {
@@ -311,7 +313,7 @@ void ama_kyber_poly_add_avx2(int16_t r[KYBER_N],
 /* ============================================================================
  * Vectorized polynomial subtraction
  * ============================================================================ */
-void ama_kyber_poly_sub_avx2(int16_t r[KYBER_N],
+static AMA_MAYBE_UNUSED void ama_kyber_poly_sub_avx2(int16_t r[KYBER_N],
                               const int16_t a[KYBER_N],
                               const int16_t b[KYBER_N]) {
     for (int i = 0; i < 16; i++) {
