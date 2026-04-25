@@ -21,7 +21,7 @@ infrastructure that the channel protocol operates on.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 2.2.0
+Version: 3.0.0
 """
 
 import logging

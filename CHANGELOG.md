@@ -4,7 +4,7 @@
 
 | Property | Value |
 |----------|-------|
-| Applies to Release | 2.2.0 |
+| Applies to Release | 3.0.0 |
 | Last Updated | 2026-04-25 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
@@ -25,7 +25,7 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 _Nothing yet._
 
 
-## [2.2.0] - 2026-04-25
+## [3.0.0] - 2026-04-25
 
 Headline: in-house AVX-512 4-way Keccak permutation kernel (opt-in,
 default OFF) lands as the first ZMM-class SIMD path in the tree, paired

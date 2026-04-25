@@ -30,7 +30,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2026-04-17
-Version: 2.2.0
+Version: 3.0.0
 Project: AMA Cryptography 3R Test Suite
 
 AI Co-Architects:

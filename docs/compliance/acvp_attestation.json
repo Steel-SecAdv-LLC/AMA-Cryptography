@@ -3,7 +3,7 @@
   "document_id": "ACVP-SELF-ATTEST-2026-001",
   "organization": "Steel Security Advisors LLC",
   "library": "AMA Cryptography",
-  "version": "2.2.0",
+  "version": "3.0.0",
   "date": "2026-04-25",
   "classification": "Public",
   "source_report": "CSRC_ALIGN_REPORT.md",

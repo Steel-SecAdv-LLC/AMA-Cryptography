@@ -198,7 +198,7 @@ plt.rcParams.update(
 def create_performance_dashboard():
     fig, axes = plt.subplots(3, 3, figsize=(18, 13))
     fig.suptitle(
-        "AMA Cryptography v2.2.0 \u2014 Performance Dashboard",
+        "AMA Cryptography v3.0.0 \u2014 Performance Dashboard",
         fontsize=18,
         fontweight="bold",
         color="#ffffff",
@@ -499,7 +499,7 @@ def create_performance_dashboard():
 def create_benchmark_report():
     fig, axes = plt.subplots(3, 3, figsize=(18, 13))
     fig.suptitle(
-        "AMA Cryptography v2.2.0 \u2014 Cryptographic Benchmark Report",
+        "AMA Cryptography v3.0.0 \u2014 Cryptographic Benchmark Report",
         fontsize=18,
         fontweight="bold",
         color="#ffffff",
@@ -919,7 +919,7 @@ def create_defense_layers():
     ax.text(
         7,
         0.25,
-        "v2.2.0  •  "
+        "v3.0.0  •  "
         "SIMD Acceleration: AVX2 (x86-64) | NEON (AArch64) | SVE2 (ARMv9)"
         "  •  Zero external dependencies  •  FIPS 202/203/204/205 compliant",
         ha="center",
