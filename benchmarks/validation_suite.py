@@ -73,7 +73,7 @@ class BenchmarkValidator:
         # Format: claim_name -> (value, unit, tolerance_pct)
         self.documented_claims: Dict[str, Tuple[float, str, float]] = {
             # Section 1.1 - Key Generation (ms) - native C backend
-            "master_secret_gen": (0.001, "ms", 100.0),  # ~0.001ms (CSPRNG)
+            "master_secret_gen": (0.005, "ms", 100.0),  # ~0.005ms (secrets.token_bytes(32) — glibc getrandom syscall)
             "hkdf_derivation": (0.06, "ms", 100.0),  # ~0.06ms (native SHA3 HKDF)
             "ed25519_keygen": (0.13, "ms", 50.0),  # ~0.13ms (native C, no asm)
             "dilithium_keygen": (0.25, "ms", 100.0),  # ~0.25ms (native C)

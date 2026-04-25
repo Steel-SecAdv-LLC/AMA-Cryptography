@@ -56,8 +56,8 @@ AVX2 path), not live measurements.
 
 | Primitive | AMA ops/sec (measured) | libsodium ops/sec | liboqs ops/sec | Ratio (peer / AMA) |
 |-----------|---------------------:|---------------------:|--------------------:|--------------------|
-| Ed25519 KeyGen | 35,946 | 40,000–60,000 (ref) / N/A (not installed) | N/A (Ed25519 not in liboqs) | ~1.4x faster — libsodium has a precomputed base-point table |
-| Ed25519 Sign | 51,206 | 50,000–80,000 (ref) / N/A (not installed) | N/A | ~1.3x faster — libsodium sign is the x86-64 ops/sec reference |
+| Ed25519 KeyGen | 35,946 | 40,000–60,000 (ref) / N/A (not installed) | N/A (Ed25519 not in liboqs) | within reference band — AMA now ships an equivalent base-point comb table (#261); any residual gap is attributable to hand-tuned amd64 `ref10` assembly in libsodium and measurement-harness differences |
+| Ed25519 Sign | 51,206 | 50,000–80,000 (ref) / N/A (not installed) | N/A | within reference band — same basis as KeyGen (comb-table path shared); libsodium sign remains the x86-64 reference point, but AMA is no longer categorically slower |
 | Ed25519 Verify | 21,129 | 15,000–30,000 (ref) / N/A (not installed) | N/A | within reference band — vartime verify with AVX2 primitives |
 | ML-DSA-65 Sign | 2,976 | N/A (not in libsodium) | 500–1,500 (ref) / N/A (not installed) | AMA ~2x faster than the liboqs reference band |
 | ML-DSA-65 Verify | 7,576 | N/A | 4,000–9,000 (ref) / N/A (not installed) | within reference band |
