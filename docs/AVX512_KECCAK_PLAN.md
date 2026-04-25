@@ -2,7 +2,7 @@
 
 **Status:** Decided + shipped. Build flag `AMA_ENABLE_AVX512` (default OFF), in-house implementation.
 **Date:** 2026-04-25
-**Decision branch:** `claude/consolidate-branch-improvements-jkTxS` (this PR).
+**Merged in:** PR #269 (commit 6a86668).
 **Owner:** Steel Security Advisors LLC.
 
 This is the Architecture Decision Record (ADR) for the AVX-512 4-way Keccak
