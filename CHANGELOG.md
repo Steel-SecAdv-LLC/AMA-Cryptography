@@ -341,6 +341,41 @@ constant-time check that was a flake source on contended runners.
   the same `ama_cpuid_has_x25519_mulx()` gate captures the rest of
   the curve.  No public-API change.
 
+- **X25519 fe64 MULX+ADX kernel: dual-chain ADCX/ADOX + dedicated
+  squaring (PR D follow-up, 2026-04).**  Replaces the intrinsic-based
+  PR D kernel with hand-written GCC inline assembly that the previous
+  paragraph flagged as the "remaining gap".  Three changes land in
+  `src/c/internal/ama_x25519_fe64_mulx.c`:
+  (1) `fe64_mul512_mulx` issues explicit `ADCX` (CF chain) and `ADOX`
+  (OF chain) so the lo-column and hi-column accumulations propagate
+  in parallel instead of serialising through a single `adc` chain —
+  disassembly: 20 `adcx` + 18 `adox` (vs 0 + 0 in the previous
+  intrinsic build);
+  (2) `fe64_sq512_mulx` is a dedicated squaring kernel exploiting the
+  off-diagonal symmetry of `(sum f_i)^2`: 6 cross products doubled +
+  4 diagonal squares = 10 multiplications, vs 16 for the full
+  schoolbook (disassembly confirms `sq_mulx` dropped from 17 → 12
+  `mulx` instructions, including 2 in the reduce step);
+  (3) `fe64_reduce512_mulx` rewritten in inline asm with the same
+  dual-chain pattern across the `38 * r[4..7]` fold.  Additionally,
+  `ama_x25519.c::fe64_invert_with_ops` templates the modular
+  inverse over the same runtime-selected `mul`/`sq` ops as the
+  ladder body, so the ~265-square + ~11-multiply Fermat inversion
+  also runs through the MULX kernel on supported hosts (previously
+  it called the pure-C `fe64.h` reference unconditionally).
+  Equivalence still pinned by
+  `tests/c/test_x25519_fe64_mulx_equiv.c` (4096 / 4096 vectors
+  byte-identical to pure-C `fe64_mul` / `fe64_sq`) and
+  `tests/c/test_x25519_field_equiv.c` (1024 / 1024 vectors fe51
+  vs fe64).  dudect X25519 lane t = +0.74 (PASS, constant-time on
+  the new kernel).  Measured on the same canonical-host VM as the
+  PR D paragraph: ~15.7K → ~17.8K X25519 DH ops/s (~13 % gain on
+  top of PR D's intrinsic kernel; the literature-reported 1.8-2.2×
+  win shows up on hosts whose hypervisor exposes the full ADX
+  scheduler latency to userland — the dispatcher lights this kernel
+  up automatically wherever BMI2 + ADX are reported).  No
+  public-API change.
+
 - ChaCha20-Poly1305 AVX2 wiring: `ama_chacha20_block_x8_avx2` (8-way
   parallel ChaCha20 block function emitting 512 B of keystream) is
   now wired through the dispatch table and invoked by the CTR inner

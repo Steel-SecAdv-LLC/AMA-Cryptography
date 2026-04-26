@@ -149,6 +149,55 @@ typedef void (*fe64_mul_fn)(uint64_t h[4], const uint64_t f[4],
                             const uint64_t g[4]);
 typedef void (*fe64_sq_fn) (uint64_t h[4], const uint64_t f[4]);
 
+/* Templated 1/z over GF(2^255-19) — exact same straight-line schedule
+ * as `fe64_invert` in src/c/fe64.h, but with the field multiply / square
+ * provided as function-pointer arguments. Marked `always_inline` so the
+ * runtime-selected mul/sq fold through every call site here, which lights
+ * the MULX+ADX kernel up across the ~265 squares + ~11 multiplies inside
+ * the inversion as well as inside the ladder body. */
+static inline __attribute__((always_inline))
+void fe64_invert_with_ops(uint64_t out[4], const uint64_t z[4],
+                          fe64_mul_fn mul, fe64_sq_fn sq) {
+    uint64_t t0[4], t1[4], t2[4], t3[4];
+    int i;
+
+    sq (t0, z);
+    sq (t1, t0); sq(t1, t1);
+    mul(t1, z, t1);
+    mul(t0, t0, t1);
+    sq (t2, t0);
+    mul(t1, t1, t2);
+    sq (t2, t1);
+    for (i = 0; i < 4; i++)  sq(t2, t2);
+    mul(t1, t2, t1);
+    sq (t2, t1);
+    for (i = 0; i < 9; i++)  sq(t2, t2);
+    mul(t2, t2, t1);
+    sq (t3, t2);
+    for (i = 0; i < 19; i++) sq(t3, t3);
+    mul(t2, t3, t2);
+    sq (t2, t2);
+    for (i = 0; i < 9; i++)  sq(t2, t2);
+    mul(t1, t2, t1);
+    sq (t2, t1);
+    for (i = 0; i < 49; i++) sq(t2, t2);
+    mul(t2, t2, t1);
+    sq (t3, t2);
+    for (i = 0; i < 99; i++) sq(t3, t3);
+    mul(t2, t3, t2);
+    sq (t2, t2);
+    for (i = 0; i < 49; i++) sq(t2, t2);
+    mul(t1, t2, t1);
+    sq (t1, t1);
+    for (i = 0; i < 4; i++)  sq(t1, t1);
+    mul(out, t1, t0);
+
+    ama_secure_memzero(t0, sizeof(t0));
+    ama_secure_memzero(t1, sizeof(t1));
+    ama_secure_memzero(t2, sizeof(t2));
+    ama_secure_memzero(t3, sizeof(t3));
+}
+
 static inline __attribute__((always_inline))
 void x25519_scalarmult_fe64_with_ops(uint8_t q[32],
                                      const uint8_t n[32],
@@ -209,12 +258,12 @@ void x25519_scalarmult_fe64_with_ops(uint8_t q[32],
 
     /* Result = x2 / z2.
      *
-     * fe64_invert internally calls the fe64_mul / fe64_sq from fe64.h —
-     * not the runtime-branched `mul` / `sq`. The cost is a small
-     * fraction of the total ladder cost (266 mults + 11 squares total
-     * for invert vs ~2500 mults+squares in the ladder body), so this
-     * isn't worth re-templating. */
-    fe64_invert(z2, z2);
+     * Templated invert: ~265 squares + 11 multiplies, all routed
+     * through the same runtime-selected `mul` / `sq` ops as the
+     * ladder body. On hosts where the MULX+ADX kernel is selected
+     * the inversion runs through it too (the squarings dominate the
+     * count and benefit most from the dedicated sq kernel). */
+    fe64_invert_with_ops(z2, z2, mul, sq);
     mul        (x2, x2, z2);
     fe64_tobytes(q, x2);
 
