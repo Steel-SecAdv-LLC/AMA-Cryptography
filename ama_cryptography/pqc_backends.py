@@ -519,6 +519,18 @@ def _setup_x25519_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_char_p,  # their_public_key[32]
         ]
         lib.ama_x25519_key_exchange.restype = ctypes.c_int
+
+        # Batched X25519: out[count][32], scalars[count][32], points[count][32].
+        # ctypes treats fixed-shape `uint8_t (*)[32]` as opaque void* at this
+        # layer; the Python wrapper packs a `bytes` blob of length count*32
+        # for each parameter and `ctypes.c_char_p` carries the pointer.
+        lib.ama_x25519_scalarmult_batch.argtypes = [
+            ctypes.c_char_p,  # out      (count × 32 bytes)
+            ctypes.c_char_p,  # scalars  (count × 32 bytes)
+            ctypes.c_char_p,  # points   (count × 32 bytes)
+            ctypes.c_size_t,  # count
+        ]
+        lib.ama_x25519_scalarmult_batch.restype = ctypes.c_int
         return True
     except AttributeError:
         return False
@@ -2685,6 +2697,64 @@ def native_x25519_key_exchange(our_secret_key: bytes, their_public_key: bytes) -
         raise RuntimeError(f"X25519 key exchange failed (rc={rc})")
 
     return bytes(ss_buf)
+
+
+def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) -> list[bytes]:
+    """
+    Batched X25519 Diffie-Hellman key exchange.
+
+    Computes ``shared[k] = X25519(scalars[k], points[k])`` for each k. On
+    x86-64 hosts where the AVX2 4-way Montgomery-ladder kernel is opted in
+    via ``AMA_DISPATCH_USE_X25519_AVX2=1``, batches of length >= 2 dispatch
+    to a SIMD path that runs four ladders in parallel; otherwise the
+    additive batch API simply sequences the scalar single-shot path.
+    Output is byte-identical to ``len(scalars)`` sequential
+    ``native_x25519_key_exchange`` calls in either case.
+
+    Low-order rejection is aggregated across the batch — if ANY lane
+    produces an all-zero shared secret (RFC 7748 §6.1) the whole batch
+    fails with ``RuntimeError`` and no partial results are returned.
+
+    Args:
+        scalars: List of 32-byte secret keys.
+        points: List of 32-byte u-coordinates (must match scalars in length).
+
+    Returns:
+        List of 32-byte shared secrets, in the same order as inputs.
+
+    Raises:
+        ValueError: On length mismatch or wrong-sized inputs.
+        RuntimeError: On low-order rejection or native backend unavailable.
+    """
+    if _native_lib is None or not _X25519_NATIVE_AVAILABLE:
+        raise RuntimeError("X25519 native backend not available. " + _INSTALL_HINT)
+    if len(scalars) != len(points):
+        raise ValueError(f"batch length mismatch: {len(scalars)} scalars vs {len(points)} points")
+
+    count = len(scalars)
+    if count == 0:
+        return []
+
+    # Pack into contiguous count*32-byte buffers — mirrors the C
+    # `uint8_t [count][32]` layout the C function expects.
+    scalars_blob = b"".join(scalars)
+    points_blob = b"".join(points)
+    if len(scalars_blob) != count * X25519_KEY_BYTES:
+        raise ValueError(
+            f"each scalar must be {X25519_KEY_BYTES} bytes; got blob of {len(scalars_blob)}"
+        )
+    if len(points_blob) != count * X25519_KEY_BYTES:
+        raise ValueError(
+            f"each point must be {X25519_KEY_BYTES} bytes; got blob of {len(points_blob)}"
+        )
+
+    out_buf = ctypes.create_string_buffer(count * X25519_KEY_BYTES)
+    rc = _native_lib.ama_x25519_scalarmult_batch(out_buf, scalars_blob, points_blob, count)
+    if rc != 0:
+        raise RuntimeError(f"X25519 batch scalar-mult failed (rc={rc})")
+
+    out_bytes = bytes(out_buf)
+    return [out_bytes[i * X25519_KEY_BYTES : (i + 1) * X25519_KEY_BYTES] for i in range(count)]
 
 
 # ============================================================================

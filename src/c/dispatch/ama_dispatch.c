@@ -460,11 +460,28 @@ static void dispatch_init_internal(void) {
             dispatch_table.argon2_g = ama_argon2_g_avx2;
     }
     if (dispatch_info.x25519 >= AMA_IMPL_AVX2) {
-        /* Env override honored for A/B benchmarking and smoke-testing
-         * the scalar fallback in production builds without a rebuild,
-         * matching the ChaCha20 / Argon2 opt-out hooks above. */
-        const char *no_x25519 = getenv("AMA_DISPATCH_NO_X25519_AVX2");
-        if (!(no_x25519 && no_x25519[0] == '1'))
+        /* X25519 4-way AVX2 kernel is **opt-in**, not opt-out.
+         *
+         * Rationale: on hosts where the scalar X25519 path is fe64
+         * (radix-2^64, x86-64 GCC/Clang with MULX/ADX), four
+         * sequential scalar ladders are *faster* than four lanes of
+         * the AVX2 donna-32bit ladder.  The 4-way kernel uses 32-bit
+         * limbs because AVX2 lacks a 64×64→128 lane-wise multiply
+         * (that arrived with AVX-512 IFMA); donna-32bit's larger
+         * cross-product count outpaces the 4× SIMD width on
+         * Skylake-Cascade-class cores.  Measured locally:
+         *   scalar fe64    : ~78 µs / op
+         *   AVX2 4-way     : ~234 µs / op
+         * — a ~3× regression per op.
+         *
+         * The kernel is still wired in for: (a) the `_x4` constant-
+         * time test lane, (b) CI matrix coverage of the SIMD path,
+         * (c) future hosts where the scalar path falls back to fe51
+         * or gf16 and the 4-way may break even, (d) eventual port
+         * to AVX-512 IFMA / VPMADD52 which closes the gap.  Opt in
+         * with `AMA_DISPATCH_USE_X25519_AVX2=1` to exercise it. */
+        const char *use_x25519 = getenv("AMA_DISPATCH_USE_X25519_AVX2");
+        if (use_x25519 && use_x25519[0] == '1')
             dispatch_table.x25519_x4 = ama_x25519_scalarmult_x4_avx2;
     }
 #endif
@@ -738,6 +755,21 @@ void ama_test_force_chacha20_block_x8_scalar(void) {
 void ama_test_force_x25519_x4_scalar(void) {
     ama_dispatch_init();
     dispatch_table.x25519_x4 = NULL;
+}
+
+void ama_test_force_x25519_x4_avx2(void);
+void ama_test_force_x25519_x4_avx2(void) {
+    /* Test-only: wires the AVX2 4-way kernel into the dispatch table
+     * unconditionally so tests can verify the SIMD path even when
+     * `AMA_DISPATCH_USE_X25519_AVX2` is not set in the environment.
+     * Safe to call only when the host actually supports AVX2 — which
+     * is what `dispatch_info.x25519 >= AMA_IMPL_AVX2` gates on.  No-op
+     * on hosts without AVX2 (the kernel symbol still exists but
+     * `ama_x25519_scalarmult_x4_avx2` would crash on a non-AVX2 CPU,
+     * so the dispatch level guard is mandatory). */
+    ama_dispatch_init();
+    if (dispatch_info.x25519 >= AMA_IMPL_AVX2)
+        dispatch_table.x25519_x4 = ama_x25519_scalarmult_x4_avx2;
 }
 
 /* Restore the function pointer to its post-dispatch_init value (which

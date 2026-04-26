@@ -169,6 +169,53 @@ static bench_result_t bench_x25519_dh(int iters, int warmup) {
     return compute_stats("X25519 DH Exchange", g_samples, iters);
 }
 
+/* Batch DH at a few representative N's.  N=1 measures the fast-path
+ * pass-through (must be ≈ single-shot); N=4 measures one straight
+ * AVX2 chunk (no tail); N=8 / N=16 measure two / four chunks.
+ * Useful for callers who batch handshakes (e.g. server-side TLS
+ * resumption clusters, mass key-derivation pipelines). */
+static bench_result_t bench_x25519_dh_batch(size_t batch_n, int iters, int warmup) {
+    uint8_t pk_a[32], sk_a[32];
+    ama_x25519_keypair(pk_a, sk_a);
+
+    uint8_t (*scs)[32]   = (uint8_t (*)[32])malloc(batch_n * 32);
+    uint8_t (*pts)[32]   = (uint8_t (*)[32])malloc(batch_n * 32);
+    uint8_t (*outs)[32]  = (uint8_t (*)[32])malloc(batch_n * 32);
+    if (!scs || !pts || !outs) {
+        free(scs); free(pts); free(outs);
+        bench_result_t r = {0}; r.name = "(alloc failed)"; return r;
+    }
+    for (size_t k = 0; k < batch_n; k++) {
+        uint8_t pk_k[32], sk_k[32];
+        ama_x25519_keypair(pk_k, sk_k);
+        memcpy(scs[k], sk_a, 32);
+        memcpy(pts[k], pk_k, 32);
+    }
+
+    for (int i = 0; i < warmup; i++)
+        ama_x25519_scalarmult_batch(outs,
+                                     (const uint8_t (*)[32])scs,
+                                     (const uint8_t (*)[32])pts,
+                                     batch_n);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        ama_x25519_scalarmult_batch(outs,
+                                     (const uint8_t (*)[32])scs,
+                                     (const uint8_t (*)[32])pts,
+                                     batch_n);
+        g_samples[i] = now_ns() - t0;
+    }
+
+    static char name_buf[8][64];  /* small static cache so labels live for the report */
+    static int  name_idx = 0;
+    char *name = name_buf[name_idx++ & 7];
+    snprintf(name, 64, "X25519 DH Batch×%zu", batch_n);
+
+    free(scs); free(pts); free(outs);
+    return compute_stats(name, g_samples, iters);
+}
+
 /* --- AES-256-GCM --- */
 static bench_result_t bench_aes_gcm_encrypt(size_t data_size, int iters, int warmup) {
     uint8_t key[32], nonce[12], tag[16];
@@ -861,6 +908,10 @@ int main(int argc, char **argv) {
     /* --- X25519 --- */
     results[n++] = bench_x25519_keygen(iters_med, warmup);
     results[n++] = bench_x25519_dh(iters_med, warmup);
+    results[n++] = bench_x25519_dh_batch(1,  iters_med, warmup);
+    results[n++] = bench_x25519_dh_batch(4,  iters_med, warmup);
+    results[n++] = bench_x25519_dh_batch(8,  iters_med, warmup);
+    results[n++] = bench_x25519_dh_batch(16, iters_med, warmup);
 
     /* --- AES-256-GCM ---
      * 1 KB / 4 KB / 16 KB / 64 KB rows.  PR A (2026-04) added the 16 KB

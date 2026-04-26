@@ -22,7 +22,54 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **X25519 4-way AVX2 Montgomery-ladder kernel + `ama_x25519_scalarmult_batch` API.**
+  `src/c/avx2/ama_x25519_avx2.c` ships an AVX2 SIMD kernel that
+  evaluates four independent X25519 Montgomery ladders in parallel
+  using radix-2^25.5 / 10-limb donna-32bit field arithmetic packed
+  into 4×64-bit `__m256i` lanes, with a constant-time XOR-mask
+  per-lane `cswap`.  The reduction's wraparound carry uses a
+  64-bit shift+add for `p * 19` because the unreduced ladder inputs
+  push `m9 >> 25` past the 32-bit `mul_epu32` window — the bug surfaced
+  as a ~36% per-vector mismatch under a 50-vector sweep before the fix
+  and is regression-pinned by `tests/c/test_x25519.c`.  A new public
+  additive API `ama_x25519_scalarmult_batch(out[], scalars[], points[],
+  count)` exposes batched DH: `count == 0` is a no-op, `count == 1`
+  bypasses the SIMD kernel and pays no zero-fill overhead, and `count
+  >= 2` runs full 4-lane chunks plus a scalar tail (when AVX2 is opted
+  in) or sequences the scalar fe64 path otherwise.  Low-order rejection
+  is aggregated across the batch — any zero shared-secret lane fails
+  the whole call with `AMA_ERROR_CRYPTO` and scrubs all output slots,
+  preventing accidental use of partial batch results.
+  RFC 7748 §5.2 TV1/TV2 broadcast across all four lanes match
+  byte-for-byte; 64 random vectors are cross-checked against the
+  scalar single-shot reference in both AVX2-forced and scalar-forced
+  configurations; tail counts {1, 2, 3, 5, 6, 7, 9, 13} all match
+  sequential single-shot (`tests/c/test_x25519.c`).  Constant-time
+  signal exposed via a new `X25519 scalarmult batch×4` lane in
+  `tests/c/test_dudect.c` (info-only, same CI-noise rationale as the
+  single-shot lane).  Python ctypes binding +
+  `pqc_backends.native_x25519_scalarmult_batch()` wrapper with full
+  validation coverage in `tests/test_pqc_backends_wrappers.py`.
+
+### Performance
+
+- **X25519 4-way kernel is currently opt-in (`AMA_DISPATCH_USE_X25519_AVX2=1`).**
+  On x86-64 hosts with the scalar fe64 (MULX/ADX) field path, four
+  sequential scalar ladders are *faster* than four AVX2 lanes of the
+  donna-32bit ladder.  Measured locally on a Skylake-class CI runner:
+  scalar fe64 single-shot ~78 µs/op vs AVX2 4-way ~234 µs/op — a ~3×
+  per-op regression.  The gap is structural: AVX2 lacks a 64×64→128
+  lane-wise multiply (that arrived with AVX-512 IFMA / VPMADD52), so
+  the kernel must use 32-bit limbs whose larger cross-product count
+  outpaces the 4× SIMD width on Skylake-class cores.  The kernel is
+  retained for: (a) CI matrix coverage of the SIMD path, (b)
+  constant-time validation (`X25519 scalarmult batch×4` dudect lane),
+  (c) hosts that fall back to fe51 / gf16 where the 4-way may break
+  even, (d) a future AVX-512 IFMA port.  The default policy keeps
+  `ama_x25519_scalarmult_batch` correctness-positive without a
+  perf regression on the common path.
 
 
 ## [3.0.0] - 2026-04-25

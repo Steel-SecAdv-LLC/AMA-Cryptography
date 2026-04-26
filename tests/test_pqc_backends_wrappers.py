@@ -55,6 +55,56 @@ class TestX25519Validation:
         assert len(ss_ab) == 32
 
 
+@skip_no_native
+@pytest.mark.skipif(not pq._X25519_NATIVE_AVAILABLE, reason="X25519 backend not built")
+class TestX25519Batch:
+    """Coverage for ``native_x25519_scalarmult_batch`` (additive batch API)."""
+
+    def test_empty_batch_returns_empty_list(self) -> None:
+        # count==0 short-circuits in C and Python — must not touch the
+        # native lib (still safe with native_lib loaded; just a no-op).
+        assert pq.native_x25519_scalarmult_batch([], []) == []
+
+    def test_length_mismatch_raises(self) -> None:
+        pk, sk = pq.native_x25519_keypair()
+        with pytest.raises(ValueError, match="batch length mismatch"):
+            pq.native_x25519_scalarmult_batch([bytes(sk), bytes(sk)], [bytes(pk)])
+
+    def test_wrong_scalar_size_raises(self) -> None:
+        pk, _sk = pq.native_x25519_keypair()
+        # 16-byte scalar but pk is 32 — the input-blob validator catches this.
+        with pytest.raises(ValueError, match="each scalar must be 32"):
+            pq.native_x25519_scalarmult_batch([b"\x00" * 16], [bytes(pk)])
+
+    def test_wrong_point_size_raises(self) -> None:
+        _pk, sk = pq.native_x25519_keypair()
+        with pytest.raises(ValueError, match="each point must be 32"):
+            pq.native_x25519_scalarmult_batch([bytes(sk)], [b"\x00" * 16])
+
+    def test_batch_matches_sequential(self) -> None:
+        # Build 7 independent (sk, peer_pk) pairs — 7 isn't a multiple of
+        # 4, so this exercises both the SIMD prefix (when AVX2 is opted
+        # in) and the scalar tail.
+        scalars: list[bytes] = []
+        points: list[bytes] = []
+        expected: list[bytes] = []
+        for _ in range(7):
+            _our_pk, our_sk = pq.native_x25519_keypair()
+            their_pk, _their_sk = pq.native_x25519_keypair()
+            scalars.append(bytes(our_sk))
+            points.append(bytes(their_pk))
+            expected.append(pq.native_x25519_key_exchange(bytes(our_sk), bytes(their_pk)))
+        got = pq.native_x25519_scalarmult_batch(scalars, points)
+        assert got == expected, "batch must be byte-identical to sequential single-shot"
+
+    def test_low_order_rejection(self) -> None:
+        # u=0 is the canonical low-order point; the batch must surface
+        # AMA_ERROR_CRYPTO as RuntimeError without returning partial output.
+        _pk, sk = pq.native_x25519_keypair()
+        with pytest.raises(RuntimeError, match="batch scalar-mult failed"):
+            pq.native_x25519_scalarmult_batch([bytes(sk)], [b"\x00" * 32])
+
+
 # ---------------------------------------------------------------------------
 # Argon2id validation branches
 # ---------------------------------------------------------------------------
