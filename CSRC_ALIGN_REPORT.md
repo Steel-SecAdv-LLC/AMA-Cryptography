@@ -180,7 +180,7 @@ preserved in FORS and WOTS+ pk compression addresses.
 
 **Verification:** All 815 NIST ACVP vectors now pass (813/815 previously).
 
-### 2.4 Remediation: PRF_msg corrected to HMAC-SHA-512 (v2.2)
+### 2.4 Remediation: PRF_msg corrected to HMAC-SHA-512 (v3.0.0)
 
 **Root cause:** PRF_msg used HMAC-SHA-256 via `ama_hmac_sha256_2()`. Per FIPS 205
 Section 11.2 Table 5, security category 5 (n=32) requires:
@@ -209,7 +209,7 @@ Public-API callers map the raw return to a typed error:
 This is fail-closed behavior: no signature is emitted on resource
 exhaustion or pathological input sizes.
 
-### 2.5 Remediation: SHA-512 duplication eliminated (v2.2)
+### 2.5 Remediation: SHA-512 duplication eliminated (v3.0.0)
 
 **Root cause:** Identical SHA-512 implementations existed in both
 `ama_sphincs.c` and `ama_ed25519.c`.
@@ -218,7 +218,7 @@ exhaustion or pathological input sizes.
 static linkage). Both source files now include the shared header. Zero external
 dependencies maintained.
 
-### 2.6 CRYPTO_PACKAGE.json classification (v2.2)
+### 2.6 CRYPTO_PACKAGE.json classification (v3.0.0)
 
 All fields classified as attestation/build metadata:
 - `content_hash`, `hmac_tag`: Content integrity verification
@@ -229,7 +229,7 @@ All fields classified as attestation/build metadata:
 
 **No key material present.** Safe to commit.
 
-### 2.7 Native HMAC-SHA3-256 promoted to public API (v2.3)
+### 2.7 Native HMAC-SHA3-256 promoted to public API (v3.0.0)
 
 The internal `hmac_sha3_256()` function in `src/c/ama_hkdf.c` (used by HKDF
 Extract/Expand since v2.0) was promoted to a public `AMA_API` function:
@@ -248,7 +248,7 @@ A Cython binding (`cy_hmac_sha3_256`) was added to eliminate ctypes per-call
 marshaling overhead. The Cython path compiles to C and calls
 `ama_hmac_sha3_256()` directly, achieving ~262K ops/sec vs ~182K via ctypes.
 
-### 2.8 Ed25519 performance — post-fix results (v2.3)
+### 2.8 Ed25519 performance — post-fix results (v3.0.0)
 
 **Performance fix applied:** `generate_ed25519_keypair()` now stores the 64-byte
 expanded key (seed||pk) instead of discarding it. `ed25519_sign()` detects

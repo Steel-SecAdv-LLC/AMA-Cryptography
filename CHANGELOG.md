@@ -785,7 +785,25 @@ pytest
 
 ## Deprecation Notices
 
-No features are currently deprecated.
+**Argon2id legacy-compat shim (deprecated as of 3.0.0).** The
+pre-RFC-9106 Argon2id derivation is exposed under
+`ama_argon2id_legacy` / `ama_argon2id_legacy_verify` (C) and
+`native_argon2id_legacy` / `native_argon2id_legacy_verify` (Python)
+solely as a one-shot migration path for verifying hashes stored by
+AMA ≤ 2.1.5. The Python derivation path emits
+`ama_cryptography.exceptions.SecurityWarning` on every call; the
+C symbols and the Python verify path are silent so that rotation
+campaigns are not drowned in warning noise.
+
+The shim is **deprecated from day one of 3.0.0** and slated for
+removal in the next major version (4.0.0). Recommended migration is
+documented inline under `## [3.0.0] → ### BREAKING → Argon2id output
+bit-space change` above: verify-with-legacy on next successful
+authentication, then re-derive with the spec-compliant
+`ama_argon2id` / `native_argon2id` and overwrite the stored hash in
+the same transaction. New code must not call the legacy symbols for
+any purpose other than migration; `native_argon2id` is the only
+spec-compliant path.
 
 ---
 
