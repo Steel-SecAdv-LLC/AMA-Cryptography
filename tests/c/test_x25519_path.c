@@ -25,14 +25,25 @@
 
 #include "ama_cryptography.h"
 
-/* Replicate the build-time selector from ama_x25519.c. If either file
- * is edited, the assertion below catches drift between them. */
-#if (defined(__GNUC__) || defined(__clang__)) && defined(__SIZEOF_INT128__)
-#  define EXPECT_FE64_AVAILABLE 1
+/* Replicate the build-time selector from ama_x25519.c. The two
+ * fe-availability predicates intentionally mirror the per-header
+ * preconditions exactly:
+ *   - fe51.h: any compiler that defines __SIZEOF_INT128__
+ *   - fe64.h: GCC/Clang AND __SIZEOF_INT128__ (the schoolbook depends
+ *             on GCC/Clang's `unsigned __int128` extension specifically)
+ * Keeping them distinct here means a hypothetical `__int128`-capable
+ * non-GCC/Clang toolchain would still pick fe51 in both ama_x25519.c
+ * and this test, instead of drifting to gf16 in the test only. */
+#if defined(__SIZEOF_INT128__)
 #  define EXPECT_FE51_AVAILABLE 1
 #else
-#  define EXPECT_FE64_AVAILABLE 0
 #  define EXPECT_FE51_AVAILABLE 0
+#endif
+
+#if (defined(__GNUC__) || defined(__clang__)) && defined(__SIZEOF_INT128__)
+#  define EXPECT_FE64_AVAILABLE 1
+#else
+#  define EXPECT_FE64_AVAILABLE 0
 #endif
 
 #if defined(AMA_X25519_FORCE_FE64) && EXPECT_FE64_AVAILABLE

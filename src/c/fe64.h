@@ -446,13 +446,13 @@ void fe64_pow22523(fe64 out, const fe64 z) {
     fe64_mul(out, t1, z);
 }
 
-static int fe64_isnegative(const fe64 f) {
+static __attribute__((unused)) int fe64_isnegative(const fe64 f) {
     uint8_t s[32];
     fe64_tobytes(s, f);
     return s[0] & 1;
 }
 
-static int fe64_iszero(const fe64 f) {
+static __attribute__((unused)) int fe64_iszero(const fe64 f) {
     uint8_t s[32];
     fe64_tobytes(s, f);
     int ret = 0;
