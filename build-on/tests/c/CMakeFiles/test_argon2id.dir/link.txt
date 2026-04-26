@@ -1,0 +1,1 @@
+/usr/bin/cc  -Wall -Wextra -Wpedantic -Wvla -Wformat=2 -Wformat-security -Wstrict-prototypes -Wmissing-prototypes -fstack-protector-strong -mavx2 -DAMA_HAS_AVX2 -Wl,--dependency-file=CMakeFiles/test_argon2id.dir/link.d CMakeFiles/test_argon2id.dir/test_argon2id.c.o -o ../../bin/test_argon2id  ../../lib/libama_cryptography_test.a

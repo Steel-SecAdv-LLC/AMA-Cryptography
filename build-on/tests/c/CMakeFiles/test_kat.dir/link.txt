@@ -1,0 +1,1 @@
+/usr/bin/cc  -Wall -Wextra -Wpedantic -Wvla -Wformat=2 -Wformat-security -Wstrict-prototypes -Wmissing-prototypes -fstack-protector-strong -mavx2 -DAMA_HAS_AVX2 -Wl,--dependency-file=CMakeFiles/test_kat.dir/link.d CMakeFiles/test_kat.dir/test_kat.c.o -o ../../bin/test_kat  ../../lib/libama_cryptography_test.a /usr/lib/x86_64-linux-gnu/libcrypto.so
