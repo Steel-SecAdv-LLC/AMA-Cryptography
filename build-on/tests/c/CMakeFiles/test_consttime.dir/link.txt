@@ -1,1 +1,0 @@
-/usr/bin/cc  -Wall -Wextra -Wpedantic -Wvla -Wformat=2 -Wformat-security -Wstrict-prototypes -Wmissing-prototypes -fstack-protector-strong -mavx2 -DAMA_HAS_AVX2 -Wl,--dependency-file=CMakeFiles/test_consttime.dir/link.d CMakeFiles/test_consttime.dir/test_consttime.c.o -o ../../bin/test_consttime  ../../lib/libama_cryptography_test.a

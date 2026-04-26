@@ -968,6 +968,45 @@ AMA_API ama_error_t ama_x25519_key_exchange(
 );
 
 /**
+ * @brief Batched X25519 Diffie-Hellman key exchange.
+ *
+ * Computes `out[k] = X25519(scalars[k], points[k])` for k in [0, count).
+ * On x86-64 with AVX2 detected at runtime, batches of N >= 2 dispatch
+ * to a 4-way Montgomery ladder kernel that runs four ladders in
+ * parallel, with any tail (N % 4) processed via the scalar single-
+ * shot path.  Single-element batches (N == 1) bypass the 4-way kernel
+ * entirely and use the scalar fe64 / fe51 / gf16 path so callers do
+ * not pay the 3-lane zero-fill cost on the hot path of
+ * `ama_x25519_key_exchange`.
+ *
+ * Output is byte-identical to N sequential `ama_x25519_key_exchange`
+ * calls (verified by `tests/c/test_x25519.c`).
+ *
+ * Low-order rejection is aggregated across the batch: if ANY lane's
+ * shared secret is all-zero (RFC 7748 §6.1 low-order point), the
+ * function returns `AMA_ERROR_CRYPTO` and ALL outputs are zeroed
+ * before return — preventing accidental use of a partially-failing
+ * batch result.
+ *
+ * Standards reference: RFC 7748 §5 (clamp + scalar mult) and §6.1
+ * (low-order rejection).
+ *
+ * @param out      Output: count × 32-byte shared-secret slots
+ * @param scalars  Input:  count × 32-byte secret keys (pre-clamping)
+ * @param points   Input:  count × 32-byte u-coordinates
+ * @param count    Number of independent X25519 operations (0 returns AMA_SUCCESS)
+ * @return AMA_SUCCESS on success, AMA_ERROR_INVALID_PARAM if any pointer
+ *         is NULL with `count > 0`, or AMA_ERROR_CRYPTO on low-order
+ *         rejection (with all outputs zeroed).
+ */
+AMA_API ama_error_t ama_x25519_scalarmult_batch(
+    uint8_t out[][32],
+    const uint8_t scalars[][32],
+    const uint8_t points[][32],
+    size_t count
+);
+
+/**
  * @brief Return the X25519 field-arithmetic path selected at compile time.
  *
  * Returns one of the string literals "fe64" (radix 2^64, 4 limbs — x86-64

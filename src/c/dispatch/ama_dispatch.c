@@ -287,6 +287,7 @@ static void dispatch_init_internal(void) {
     dispatch_info.ed25519          = AMA_IMPL_GENERIC;
     dispatch_info.chacha20poly1305 = effective;
     dispatch_info.argon2           = effective;
+    dispatch_info.x25519           = effective;
 
     if (dispatch_verbose())
         fprintf(stderr,
@@ -317,6 +318,10 @@ static void dispatch_init_internal(void) {
     dispatch_info.ed25519          = AMA_IMPL_GENERIC;
     dispatch_info.chacha20poly1305 = best;
     dispatch_info.argon2           = best;
+    /* X25519 4-way ladder: AVX2-only kernel ships in this PR; NEON
+     * and SVE2 tiers fall through to GENERIC and the public batch
+     * API uses the scalar fe51 ladder per lane. */
+    dispatch_info.x25519           = AMA_IMPL_GENERIC;
 
     if (dispatch_verbose())
         fprintf(stderr,
@@ -353,6 +358,7 @@ static void dispatch_init_internal(void) {
     dispatch_table.aes_gcm_decrypt     = NULL;
     dispatch_table.chacha20_block_x8   = NULL;  /* NULL = caller uses scalar 1-block loop */
     dispatch_table.argon2_g            = NULL;  /* NULL = caller uses scalar BlaMka G */
+    dispatch_table.x25519_x4           = NULL;  /* NULL = caller uses 4 sequential scalar ladders */
 
 #ifdef AMA_HAVE_AVX2_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_AVX2) {
@@ -452,6 +458,14 @@ static void dispatch_init_internal(void) {
         const char *no_argon = getenv("AMA_DISPATCH_NO_ARGON2_AVX2");
         if (!(no_argon && no_argon[0] == '1'))
             dispatch_table.argon2_g = ama_argon2_g_avx2;
+    }
+    if (dispatch_info.x25519 >= AMA_IMPL_AVX2) {
+        /* Env override honored for A/B benchmarking and smoke-testing
+         * the scalar fallback in production builds without a rebuild,
+         * matching the ChaCha20 / Argon2 opt-out hooks above. */
+        const char *no_x25519 = getenv("AMA_DISPATCH_NO_X25519_AVX2");
+        if (!(no_x25519 && no_x25519[0] == '1'))
+            dispatch_table.x25519_x4 = ama_x25519_scalarmult_x4_avx2;
     }
 #endif
 
@@ -634,6 +648,8 @@ static void dispatch_init_internal(void) {
                 dispatch_table.chacha20_block_x8 ? "SIMD" : "scalar");
         fprintf(stderr, "[AMA Dispatch] argon2_g     -> %s\n",
                 dispatch_table.argon2_g ? "SIMD" : "scalar");
+        fprintf(stderr, "[AMA Dispatch] x25519_x4    -> %s\n",
+                dispatch_table.x25519_x4 ? "SIMD (AVX2 4-way)" : "scalar (4× sequential)");
         fprintf(stderr, "[AMA Dispatch] ed25519      -> scalar (no SIMD wired; backend chosen at build time)\n");
     }
 
@@ -704,8 +720,10 @@ const ama_dispatch_table_t *ama_get_dispatch_table(void) {
 
 void ama_test_force_argon2_g_scalar(void);
 void ama_test_force_chacha20_block_x8_scalar(void);
+void ama_test_force_x25519_x4_scalar(void);
 void ama_test_restore_argon2_g_avx2(void);
 void ama_test_restore_chacha20_block_x8_avx2(void);
+void ama_test_restore_x25519_x4_avx2(void);
 
 void ama_test_force_argon2_g_scalar(void) {
     ama_dispatch_init();
@@ -715,6 +733,11 @@ void ama_test_force_argon2_g_scalar(void) {
 void ama_test_force_chacha20_block_x8_scalar(void) {
     ama_dispatch_init();
     dispatch_table.chacha20_block_x8 = NULL;
+}
+
+void ama_test_force_x25519_x4_scalar(void) {
+    ama_dispatch_init();
+    dispatch_table.x25519_x4 = NULL;
 }
 
 /* Restore the function pointer to its post-dispatch_init value (which
@@ -741,6 +764,11 @@ void ama_test_restore_chacha20_block_x8_avx2(void) {
     ama_dispatch_init();
     dispatch_table.chacha20_block_x8 = dispatch_table_post_init.chacha20_block_x8;
 }
+
+void ama_test_restore_x25519_x4_avx2(void) {
+    ama_dispatch_init();
+    dispatch_table.x25519_x4 = dispatch_table_post_init.x25519_x4;
+}
 #endif /* AMA_TESTING_MODE */
 
 /**
@@ -762,6 +790,7 @@ void ama_print_dispatch_info(void) {
     fprintf(stderr, "║  Ed25519:            %-24s║\n", ama_impl_level_name(info->ed25519));
     fprintf(stderr, "║  ChaCha20-Poly1305:  %-24s║\n", ama_impl_level_name(info->chacha20poly1305));
     fprintf(stderr, "║  Argon2:             %-24s║\n", ama_impl_level_name(info->argon2));
+    fprintf(stderr, "║  X25519 4-way:       %-24s║\n", ama_impl_level_name(info->x25519));
     fprintf(stderr, "╚══════════════════════════════════════════════╝\n");
     fprintf(stderr, "\n");
 }

@@ -40,6 +40,7 @@ typedef struct {
     ama_impl_level_t ed25519;           /**< Selected Ed25519 field-element path. */
     ama_impl_level_t chacha20poly1305;  /**< Selected ChaCha20-Poly1305 path. */
     ama_impl_level_t argon2;            /**< Selected Argon2 G compression path. */
+    ama_impl_level_t x25519;            /**< Selected X25519 4-way ladder path (batch API only; single-shot stays scalar). */
     const char *arch_name;              /**< Human-readable architecture label (for diagnostics). */
 } ama_dispatch_info_t;
 
@@ -121,6 +122,17 @@ typedef void (*ama_argon2_g_fn)(uint64_t out[128],
                                 const uint64_t x[128],
                                 const uint64_t y[128]);
 
+/** X25519 4-way Montgomery ladder.  Computes four independent
+ *  scalarmult(scalar[k], point[k]) -> out[k] in parallel.  Each
+ *  scalar is clamped per RFC 7748 §5 inside the kernel.  Output is
+ *  byte-identical to four sequential calls of the scalar single-shot
+ *  ladder (verified across both fe51 and fe64 paths by
+ *  tests/c/test_x25519.c).  Wired only when AVX2 is detected;
+ *  callers MUST NULL-check before invoking. */
+typedef void (*ama_x25519_scalarmult_x4_fn)(uint8_t out[4][32],
+                                             const uint8_t scalar[4][32],
+                                             const uint8_t point[4][32]);
+
 /* ============================================================================
  * Dispatch function table (global, set once at init)
  *
@@ -159,6 +171,7 @@ typedef struct {
     ama_aes_gcm_decrypt_fn    aes_gcm_decrypt;       /**< Non-NULL when AES-NI+PCLMULQDQ detected; callers MUST NULL-check */
     ama_chacha20_block_x8_fn  chacha20_block_x8;     /**< Non-NULL when AVX2 ChaCha20 detected; emits 8 blocks / 512 B */
     ama_argon2_g_fn           argon2_g;              /**< Non-NULL when AVX2 Argon2 G detected; 1024 B compression */
+    ama_x25519_scalarmult_x4_fn x25519_x4;           /**< Non-NULL when AVX2 X25519 4-way ladder detected; callers MUST NULL-check */
 } ama_dispatch_table_t;
 
 /* ============================================================================

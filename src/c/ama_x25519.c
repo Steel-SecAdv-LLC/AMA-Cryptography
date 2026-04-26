@@ -57,6 +57,7 @@
 
 #include "../include/ama_cryptography.h"
 #include "../include/ama_cpuid.h"
+#include "../include/ama_dispatch.h"
 #include "ama_platform_rand.h"
 #include <string.h>
 #include <stdint.h>
@@ -701,6 +702,95 @@ AMA_API ama_error_t ama_x25519_key_exchange(
     if (zero_check == 0) {
         ama_secure_memzero(shared_secret, 32);
         return AMA_ERROR_CRYPTO;
+    }
+
+    return AMA_SUCCESS;
+}
+
+/* ============================================================================
+ * Batch scalar multiplication (additive API for SIMD parallelism)
+ *
+ * Computes `out[k] = X25519(scalars[k], points[k])` for k in [0, count).
+ * For batches of N >= 2 the AVX2 4-way Montgomery ladder kernel
+ * (`src/c/avx2/ama_x25519_avx2.c`) is invoked, processing four ladders
+ * in parallel; tail lanes for N % 4 != 0 are processed via the scalar
+ * single-shot ladder.  Single-element batches (N == 1) bypass the
+ * 4-way kernel entirely and fall through to the scalar fe64 / fe51 /
+ * gf16 path so callers don't pay the 3-lane zero-fill cost on the hot
+ * path of `ama_x25519_key_exchange`.
+ *
+ * Low-order point handling matches the single-shot API: any lane
+ * whose ladder produces an all-zero shared secret (indicating
+ * scalarmult of a low-order u-coordinate) causes the entire batch to
+ * fail with AMA_ERROR_CRYPTO and ALL outputs to be zeroed — preventing
+ * accidental use of a partially-failing batch result.
+ * ============================================================================ */
+AMA_API ama_error_t ama_x25519_scalarmult_batch(
+    uint8_t out[][32],
+    const uint8_t scalars[][32],
+    const uint8_t points[][32],
+    size_t count
+) {
+    if (count == 0) {
+        return AMA_SUCCESS;
+    }
+    if (!out || !scalars || !points) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    const ama_dispatch_table_t *tbl = ama_get_dispatch_table();
+    size_t i;
+
+    /* 4-way SIMD path: process full chunks of 4 lanes at a time when
+     * the AVX2 kernel is wired in.  Available iff the dispatcher
+     * detected AVX2 + the env opt-out wasn't tripped. */
+    size_t chunks = 0;
+    if (tbl->x25519_x4 != NULL && count >= 2) {
+        chunks = count / 4;
+        for (i = 0; i < chunks; i++) {
+            uint8_t lane_out[4][32];
+            tbl->x25519_x4(lane_out,
+                           (const uint8_t (*)[32])&scalars[i * 4],
+                           (const uint8_t (*)[32])&points[i * 4]);
+            memcpy(&out[i * 4], lane_out, sizeof(lane_out));
+            ama_secure_memzero(lane_out, sizeof(lane_out));
+        }
+    }
+
+    /* Tail (or whole batch when count < 2 or no AVX2): scalar
+     * single-shot ladder per remaining lane.  Reuses the same
+     * field-path-selected scalarmult driver so the byte-for-byte
+     * equivalence pinned by tests/c/test_x25519.c carries over to
+     * batch tail lanes for free. */
+    for (i = chunks * 4; i < count; i++) {
+        x25519_scalarmult(out[i], scalars[i], points[i]);
+    }
+
+    /* Aggregate low-order rejection across all lanes: if ANY lane's
+     * shared secret is all-zero, scrub every output and surface the
+     * crypto error.  Same semantics as the single-shot API, applied
+     * per-lane and then OR-reduced. */
+    uint8_t batch_zero_or = 0xFF; /* 0xFF if every lane is zero so far */
+    for (i = 0; i < count; i++) {
+        uint8_t lane_or = 0;
+        size_t j;
+        for (j = 0; j < 32; j++) {
+            lane_or |= out[i][j];
+        }
+        /* Detect any individual all-zero lane: bitmask AND with
+         * (lane_or == 0 ? 0xFF : 0x00) carried branchlessly. */
+        uint8_t lane_is_zero = (uint8_t)(((uint32_t)lane_or - 1u) >> 8) & 0xFFu;
+        if (lane_is_zero) {
+            /* RFC 7748 §6.1: implementations MAY reject all-zero
+             * shared secrets.  AMA does — and per the single-shot
+             * contract, scrub the whole batch so a caller that
+             * ignores the error code can't leak partial results. */
+            for (j = 0; j < count; j++) {
+                ama_secure_memzero(out[j], 32);
+            }
+            return AMA_ERROR_CRYPTO;
+        }
+        (void)batch_zero_or;
     }
 
     return AMA_SUCCESS;

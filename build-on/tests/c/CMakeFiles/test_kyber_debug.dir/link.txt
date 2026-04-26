@@ -1,1 +1,0 @@
-/usr/bin/cc  -Wall -Wextra -Wpedantic -Wvla -Wformat=2 -Wformat-security -Wstrict-prototypes -Wmissing-prototypes -fstack-protector-strong -mavx2 -DAMA_HAS_AVX2 -Wl,--dependency-file=CMakeFiles/test_kyber_debug.dir/link.d CMakeFiles/test_kyber_debug.dir/test_kyber_debug.c.o -o ../../bin/test_kyber_debug  ../../lib/libama_cryptography_test.a
