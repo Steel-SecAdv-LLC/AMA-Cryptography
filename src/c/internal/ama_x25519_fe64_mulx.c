@@ -7,46 +7,48 @@
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2026-04-26
  *
- * Hand-tuned 4×4 schoolbook multiply over GF(2^255-19), targeting the
- * BMI2 (MULX) + ADX (ADCX/ADOX) ISA extensions:
+ * Hand-tuned 4×4 schoolbook multiply / dedicated squaring over
+ * GF(2^255-19), targeting the BMI2 (MULX) + ADX (ADCX/ADOX) ISA
+ * extensions:
  *
  *   - MULX:  unsigned 64×64 → 128 multiply that writes the high half to
  *            one destination and the low half to another *without
- *            clobbering CF / OF*. Lets the surrounding carry chain
- *            survive across multiplies that would otherwise have
- *            spilled the high half through RDX (and clobbered EFLAGS).
+ *            clobbering CF / OF*. Lets two surrounding carry chains
+ *            survive across the multiplies that drive them.
  *   - ADCX:  64-bit add-with-carry that consumes/produces *only CF*
  *            (OF untouched).
  *   - ADOX:  64-bit add-with-carry that consumes/produces *only OF*
  *            (CF untouched).
  *
  * The kernel runs two carry chains in parallel — CF-chain (ADCX) for
- * high-half propagation, OF-chain (ADOX) for low-half accumulation —
- * which removes the carry-flag bottleneck that limits the pure-C
- * radix-2^64 schoolbook in `src/c/fe64.h::fe64_mul512`. This is the
- * exact pattern used by OpenSSL's `crypto/ec/asm/x25519-x86_64.pl`
- * and BoringSSL's fiat-crypto MULX/ADX output — measured ~1.8–2.2× over
- * the pure-C schoolbook on Skylake+ / Zen+.
+ * the lo-column accumulation and OF-chain (ADOX) for the hi-column
+ * accumulation — which removes the carry-flag bottleneck that limits
+ * the pure-C radix-2^64 schoolbook in `src/c/fe64.h::fe64_mul512`.
+ * Implemented as GCC inline assembly, because GCC's `_addcarry_u64`
+ * intrinsic with `-madx` still emits sequential `adc` (verified by
+ * `objdump -d` on the previous-generation kernel: 34 `adc`, 0 `adcx`
+ * across `mul_mulx`+`sq_mulx`).
  *
- * Compiled with `-mbmi2 -madx -O3` (per-file flags, see CMakeLists.txt
- * in the AVX2 / AVX-512 SIMD blocks). Runtime gating by
+ * Two distinct kernels:
+ *   - `fe64_mul512_mulx`   — 4×4 schoolbook (16 cross-products),
+ *                            three rows of dual ADCX/ADOX accumulation.
+ *   - `fe64_sq512_mulx`    — dedicated squaring exploiting off-diagonal
+ *                            symmetry: 6 cross-products doubled +
+ *                            4 diagonal squares = 10 mults vs 16.
+ *
+ * Compiled with `-mbmi2 -madx -O3` (per-file flags, see
+ * `CMakeLists.txt::AMA_X25519_MULX_SOURCES`). Runtime gating by
  * `ama_cpuid_has_x25519_mulx()` ensures the kernel only executes on
  * hosts that report BOTH BMI2 (CPUID.(EAX=7,ECX=0):EBX[8]) AND ADX
- * (EBX[19]) — BMI2 and ADX are architecturally independent feature
- * bits even though every shipped Intel Broadwell+ / AMD Zen+ part has
- * both, so the bundle gate is defensive (matches the contract used by
- * `ama_cpuid_has_vaes_aesgcm()` for VPCLMULQDQ vs PCLMULQDQ —
- * Devin Review #3140732664).
+ * (EBX[19]).
  *
  * Correctness: byte-identical to the pure-C `fe64_mul512` /
  * `fe64_reduce512` reference across 4096 random (a, b) vectors —
- * pinned by `tests/c/test_x25519_fe64_mulx_equiv.c`.
+ * pinned by `tests/c/test_x25519_fe64_mulx_equiv.c` (mul + sq).
  *
  * Constant-time: no secret-dependent branches; MULX / ADCX / ADOX
  * latencies are operand-independent on every Intel Broadwell+ /
- * AMD Zen+ part this kernel is gated for. dudect harness keeps the
- * X25519 lane (which exercises whichever path the dispatcher
- * selected) — see `tests/c/test_dudect.c`.
+ * AMD Zen+ part this kernel is gated for.
  *
  * Build-time guard: `AMA_X25519_FE64_MULX_AVAILABLE` is defined when
  * the kernel is compiled in (x86-64 GCC/Clang with __SIZEOF_INT128__,
@@ -59,219 +61,359 @@
     && !defined(_MSC_VER)
 
 #include <stdint.h>
-#include <x86intrin.h>
 
 #define AMA_X25519_FE64_MULX_AVAILABLE 1
-
-/* MULX wrapper: produce 64×64 → 128, hi : lo, with no flag clobber.
- * `_mulx_u64` requires <immintrin.h> and the BMI2 feature flag; the
- * file-level -mbmi2 in CMake makes that available unconditionally for
- * this TU. The intrinsic returns the low half and writes the high half
- * via the out-pointer. */
-static inline __attribute__((always_inline))
-void mulx_64(uint64_t *hi, uint64_t *lo, uint64_t a, uint64_t b) {
-    unsigned long long h;
-    *lo = (uint64_t)_mulx_u64((unsigned long long)a,
-                              (unsigned long long)b, &h);
-    *hi = (uint64_t)h;
-}
 
 /* ----------------------------------------------------------------------
  * 4×4 schoolbook multiply: r[0..7] = f[0..3] * g[0..3]
  *
- * Row-by-row accumulation. For row i, we multiply f[i] by each g[j],
- * accumulating (lo, hi) pairs into r[i..i+4]. The straight
- * `_addcarry_u64` chain compiles cleanly to interleaved ADCX / ADOX
- * sequences under -madx on GCC 12+ / Clang 15+ — verified by reading
- * the `objdump -d` output during development.
+ * Row 0 (no accumulation, single CF chain): plain ADC after the four
+ * MULX. Rows 1..3 accumulate into r[i..i+4] using a dual carry chain:
  *
- * Each row produces a partial sum that is at most
- *   2^64 * (2^64 - 1) + (2^64 - 1) + (2^64 - 1) < 2^128
- * so the carry-out from the row's top limb is at most 1 — fits in the
- * `r[i+4]` slot without overflow.
+ *   ADCX chain — propagates the lo-column carry
+ *   ADOX chain — propagates the hi-column carry
+ *
+ * The two chains are flag-independent (CF vs OF), so a modern OoO core
+ * can keep multiple ADCX and ADOX in flight simultaneously instead of
+ * serialising on a single CF chain.
+ *
+ * Pattern per row i (i ≥ 1):
+ *     xor      rax, rax            ; clear CF and OF, rax = 0
+ *     mov      f[i], rdx
+ *     mulx     g[0], lo, hi
+ *     adcx     lo, r[i]            ; CF chain
+ *     adox     hi, r[i+1]          ; OF chain
+ *     mulx     g[1], lo, hi
+ *     adcx     lo, r[i+1]          ; CF chain (continues)
+ *     adox     hi, r[i+2]          ; OF chain (continues)
+ *     ...
+ *     adcx     rax, r[i+4]         ; close CF
+ *     adox     rax, r[i+5]         ; close OF (last row's r[i+5] is r[8],
+ *                                  ;   mathematically zero — see below)
+ *
+ * The 4×4 product has 8 significant limbs; row 3's final OF carry-out
+ * would land in r[8], but a 256×256 → 512 product fits exactly in 512
+ * bits (no bit beyond r[7]), so that OF residual is mathematically
+ * zero. We discard it.
  * ---------------------------------------------------------------------- */
 static inline __attribute__((always_inline, hot))
 void fe64_mul512_mulx(uint64_t r[8], const uint64_t f[4],
                       const uint64_t g[4]) {
-    uint64_t hi0, hi1, hi2, hi3;
-    uint64_t lo0, lo1, lo2, lo3;
-    unsigned char c;
+    uint64_t r0, r1, r2, r3, r4, r5, r6, r7;
+    uint64_t lo, hi;
 
-    /* Row 0: r[0..4] = f[0] * g[0..3]
-     *
-     *   r[0] = lo0
-     *   r[1] = lo1 + hi0
-     *   r[2] = lo2 + hi1 + c1
-     *   r[3] = lo3 + hi2 + c2
-     *   r[4] =       hi3 + c3
-     */
-    mulx_64(&hi0, &lo0, f[0], g[0]);
-    mulx_64(&hi1, &lo1, f[0], g[1]);
-    mulx_64(&hi2, &lo2, f[0], g[2]);
-    mulx_64(&hi3, &lo3, f[0], g[3]);
+    __asm__ __volatile__ (
+        /* ===== ROW 0: r[0..4] = f[0] * g[0..3] (single CF chain) ===== */
+        "movq   (%[f]), %%rdx                \n\t"
+        "mulx   (%[g]),  %[r0], %[r1]        \n\t"
+        "mulx   8(%[g]), %[lo], %[r2]        \n\t"
+        "addq   %[lo], %[r1]                 \n\t"
+        "mulx   16(%[g]),%[lo], %[r3]        \n\t"
+        "adcq   %[lo], %[r2]                 \n\t"
+        "mulx   24(%[g]),%[lo], %[r4]        \n\t"
+        "adcq   %[lo], %[r3]                 \n\t"
+        "adcq   $0, %[r4]                    \n\t"
 
-    r[0] = lo0;
-    c = _addcarry_u64(0, lo1, hi0, (unsigned long long *)&r[1]);
-    c = _addcarry_u64(c, lo2, hi1, (unsigned long long *)&r[2]);
-    c = _addcarry_u64(c, lo3, hi2, (unsigned long long *)&r[3]);
-    /* propagate the final carry of row 0 into r[4]; row 1 will resume
-     * from r[4]=hi3+c which fits in 64 bits since hi3 < 2^64 and c<=1.
-     * The +c here cannot itself overflow because hi3 was already
-     * strictly < 2^64. */
-    r[4] = hi3 + (uint64_t)c;
+        /* Initialize r5, r6, r7 to zero (rows 1..3 accumulate into them) */
+        "xorl   %k[r5], %k[r5]               \n\t"
+        "xorl   %k[r6], %k[r6]               \n\t"
+        "xorl   %k[r7], %k[r7]               \n\t"
 
-    /* Row 1: add f[1] * g[0..3] to r[1..5]
-     *
-     * Need a fresh r[5]=0 slot before accumulation, since the row 1
-     * partial sum can reach into bit 320. */
-    r[5] = 0;
-    mulx_64(&hi0, &lo0, f[1], g[0]);
-    mulx_64(&hi1, &lo1, f[1], g[1]);
-    mulx_64(&hi2, &lo2, f[1], g[2]);
-    mulx_64(&hi3, &lo3, f[1], g[3]);
+        /* ===== ROW 1: f[1] * g[0..3] -> r[1..5] (dual chain) ===== */
+        "xorl   %%eax, %%eax                 \n\t"   /* clear CF + OF */
+        "movq   8(%[f]), %%rdx               \n\t"
+        "mulx   (%[g]),  %[lo], %[hi]        \n\t"
+        "adcx   %[lo], %[r1]                 \n\t"
+        "adox   %[hi], %[r2]                 \n\t"
+        "mulx   8(%[g]), %[lo], %[hi]        \n\t"
+        "adcx   %[lo], %[r2]                 \n\t"
+        "adox   %[hi], %[r3]                 \n\t"
+        "mulx   16(%[g]),%[lo], %[hi]        \n\t"
+        "adcx   %[lo], %[r3]                 \n\t"
+        "adox   %[hi], %[r4]                 \n\t"
+        "mulx   24(%[g]),%[lo], %[hi]        \n\t"
+        "adcx   %[lo], %[r4]                 \n\t"
+        "adox   %[hi], %[r5]                 \n\t"
+        "adcx   %%rax, %[r5]                 \n\t"   /* close CF chain */
+        "adox   %%rax, %[r6]                 \n\t"   /* close OF chain */
 
-    /* Add the lo column to r[1..4] with one carry chain */
-    c = _addcarry_u64(0, r[1], lo0, (unsigned long long *)&r[1]);
-    c = _addcarry_u64(c, r[2], lo1, (unsigned long long *)&r[2]);
-    c = _addcarry_u64(c, r[3], lo2, (unsigned long long *)&r[3]);
-    c = _addcarry_u64(c, r[4], lo3, (unsigned long long *)&r[4]);
-    /* push the carry into r[5] */
-    r[5] = (uint64_t)c;
+        /* ===== ROW 2: f[2] * g[0..3] -> r[2..6] (dual chain) ===== */
+        "xorl   %%eax, %%eax                 \n\t"
+        "movq   16(%[f]), %%rdx              \n\t"
+        "mulx   (%[g]),  %[lo], %[hi]        \n\t"
+        "adcx   %[lo], %[r2]                 \n\t"
+        "adox   %[hi], %[r3]                 \n\t"
+        "mulx   8(%[g]), %[lo], %[hi]        \n\t"
+        "adcx   %[lo], %[r3]                 \n\t"
+        "adox   %[hi], %[r4]                 \n\t"
+        "mulx   16(%[g]),%[lo], %[hi]        \n\t"
+        "adcx   %[lo], %[r4]                 \n\t"
+        "adox   %[hi], %[r5]                 \n\t"
+        "mulx   24(%[g]),%[lo], %[hi]        \n\t"
+        "adcx   %[lo], %[r5]                 \n\t"
+        "adox   %[hi], %[r6]                 \n\t"
+        "adcx   %%rax, %[r6]                 \n\t"
+        "adox   %%rax, %[r7]                 \n\t"
 
-    /* Add the hi column to r[2..5] with a second carry chain */
-    c = _addcarry_u64(0, r[2], hi0, (unsigned long long *)&r[2]);
-    c = _addcarry_u64(c, r[3], hi1, (unsigned long long *)&r[3]);
-    c = _addcarry_u64(c, r[4], hi2, (unsigned long long *)&r[4]);
-    c = _addcarry_u64(c, r[5], hi3, (unsigned long long *)&r[5]);
-    /* No r[6] slot has been touched yet; absorb the final carry below
-     * after row 2 zero-initialises r[6]. We accumulate it into a
-     * dedicated `row1_overflow` so we don't clobber a not-yet-written
-     * r[6]. row 2 and row 3 fold this back in deterministically. */
-    uint64_t row1_overflow = (uint64_t)c;
+        /* ===== ROW 3: f[3] * g[0..3] -> r[3..7] (dual chain) ===== */
+        "xorl   %%eax, %%eax                 \n\t"
+        "movq   24(%[f]), %%rdx              \n\t"
+        "mulx   (%[g]),  %[lo], %[hi]        \n\t"
+        "adcx   %[lo], %[r3]                 \n\t"
+        "adox   %[hi], %[r4]                 \n\t"
+        "mulx   8(%[g]), %[lo], %[hi]        \n\t"
+        "adcx   %[lo], %[r4]                 \n\t"
+        "adox   %[hi], %[r5]                 \n\t"
+        "mulx   16(%[g]),%[lo], %[hi]        \n\t"
+        "adcx   %[lo], %[r5]                 \n\t"
+        "adox   %[hi], %[r6]                 \n\t"
+        "mulx   24(%[g]),%[lo], %[hi]        \n\t"
+        "adcx   %[lo], %[r6]                 \n\t"
+        "adox   %[hi], %[r7]                 \n\t"
+        "adcx   %%rax, %[r7]                 \n\t"
+        /* Final OF would land in r[8]; mathematically zero for 4×4 < 2^512. */
 
-    /* Row 2: add f[2] * g[0..3] to r[2..6] */
-    r[6] = row1_overflow;  /* seed r[6] with row 1's overflow */
-    mulx_64(&hi0, &lo0, f[2], g[0]);
-    mulx_64(&hi1, &lo1, f[2], g[1]);
-    mulx_64(&hi2, &lo2, f[2], g[2]);
-    mulx_64(&hi3, &lo3, f[2], g[3]);
+        : [r0]"=&r"(r0), [r1]"=&r"(r1), [r2]"=&r"(r2), [r3]"=&r"(r3),
+          [r4]"=&r"(r4), [r5]"=&r"(r5), [r6]"=&r"(r6), [r7]"=&r"(r7),
+          [lo]"=&r"(lo), [hi]"=&r"(hi)
+        : [f]"r"(f), [g]"r"(g)
+        : "rax", "rdx", "cc", "memory"
+    );
 
-    c = _addcarry_u64(0, r[2], lo0, (unsigned long long *)&r[2]);
-    c = _addcarry_u64(c, r[3], lo1, (unsigned long long *)&r[3]);
-    c = _addcarry_u64(c, r[4], lo2, (unsigned long long *)&r[4]);
-    c = _addcarry_u64(c, r[5], lo3, (unsigned long long *)&r[5]);
-    /* propagate into r[6] */
-    c = _addcarry_u64(c, r[6], 0, (unsigned long long *)&r[6]);
-    uint64_t row2_lo_overflow = (uint64_t)c;  /* propagated into r[7] below */
+    r[0] = r0; r[1] = r1; r[2] = r2; r[3] = r3;
+    r[4] = r4; r[5] = r5; r[6] = r6; r[7] = r7;
+}
 
-    c = _addcarry_u64(0, r[3], hi0, (unsigned long long *)&r[3]);
-    c = _addcarry_u64(c, r[4], hi1, (unsigned long long *)&r[4]);
-    c = _addcarry_u64(c, r[5], hi2, (unsigned long long *)&r[5]);
-    c = _addcarry_u64(c, r[6], hi3, (unsigned long long *)&r[6]);
-    uint64_t row2_overflow = (uint64_t)c + row2_lo_overflow;
+/* ----------------------------------------------------------------------
+ * Dedicated squaring: r[0..7] = f[0..3]^2
+ *
+ * Exploits the off-diagonal symmetry of (sum f_i)^2:
+ *
+ *   r = sum_i f_i^2 * 2^(128 i)               // 4 diagonal squares
+ *     + 2 * sum_{i<j} f_i*f_j * 2^(64 (i+j))  // 6 cross products doubled
+ *
+ * 10 multiplications vs 16 for the full multiply — ~37% fewer mults
+ * across the squaring half of the Montgomery ladder.
+ *
+ * Algorithm:
+ *   Phase 1 — accumulate the 6 cross products into r[1..6]:
+ *               c01 -> r[1..2],  c02 -> r[2..3],  c03 -> r[3..4]
+ *               c12 -> r[3..4],  c13 -> r[4..5],  c23 -> r[5..6]
+ *             r[0] and r[7] left as 0; dual ADCX/ADOX chains where
+ *             accumulation columns overlap.
+ *
+ *   Phase 2 — double r in place: r = r + r (single ADCX chain across
+ *             r[0..7]; final carry-out propagates into the cleared r[7]).
+ *
+ *   Phase 3 — add the 4 diagonal squares at limb positions [0..1],
+ *             [2..3], [4..5], [6..7]. Single CF chain, but the 4 MULX
+ *             can issue out-of-order with the chain — modern OoO cores
+ *             keep the multipliers and the ALU running in parallel.
+ *
+ * Bounds: each cross-product position accumulates at most 3 64-bit
+ * values (max position-3 sum is c02.hi + c03.lo + c12.lo), so the
+ * 1-bit overflows from those adds always fit in the next limb up.
+ * ---------------------------------------------------------------------- */
+static inline __attribute__((always_inline, hot))
+void fe64_sq512_mulx(uint64_t r[8], const uint64_t f[4]) {
+    uint64_t r0, r1, r2, r3, r4, r5, r6, r7;
+    uint64_t lo, hi;
 
-    /* Row 3: add f[3] * g[0..3] to r[3..7] */
-    r[7] = row2_overflow;  /* seed r[7] with row 2's overflow */
-    mulx_64(&hi0, &lo0, f[3], g[0]);
-    mulx_64(&hi1, &lo1, f[3], g[1]);
-    mulx_64(&hi2, &lo2, f[3], g[2]);
-    mulx_64(&hi3, &lo3, f[3], g[3]);
+    __asm__ __volatile__ (
+        /* ===== Phase 1a: f[0] * f[1..3] — three products =====
+         *   c01 = f0*f1 -> (r1, r2)         (no accumulation; first writes)
+         *   c02 = f0*f2 -> (lo, r3); r2 += lo
+         *   c03 = f0*f3 -> (lo, r4); r3 += lo (with carry from r2 += lo)
+         * Single ADC chain — no overlap with prior writes. */
+        "movq   (%[f]),  %%rdx               \n\t"
+        "mulx   8(%[f]), %[r1], %[r2]        \n\t"
+        "mulx   16(%[f]),%[lo], %[r3]        \n\t"
+        "addq   %[lo], %[r2]                 \n\t"
+        "mulx   24(%[f]),%[lo], %[r4]        \n\t"
+        "adcq   %[lo], %[r3]                 \n\t"
+        "adcq   $0, %[r4]                    \n\t"
 
-    c = _addcarry_u64(0, r[3], lo0, (unsigned long long *)&r[3]);
-    c = _addcarry_u64(c, r[4], lo1, (unsigned long long *)&r[4]);
-    c = _addcarry_u64(c, r[5], lo2, (unsigned long long *)&r[5]);
-    c = _addcarry_u64(c, r[6], lo3, (unsigned long long *)&r[6]);
-    c = _addcarry_u64(c, r[7], 0,   (unsigned long long *)&r[7]);
-    /* row 3's lo-column carry-out lands in r[7]; final carry would be
-     * the bit beyond r[7] — but the 4×4 product has only 256 bits of
-     * significance + at most 1 bit of overflow per row, all of which
-     * is now folded into r[7]. */
+        /* Pre-zero r[5], r[6] for Phase 1b */
+        "xorl   %k[r5], %k[r5]               \n\t"
+        "xorl   %k[r6], %k[r6]               \n\t"
 
-    c = _addcarry_u64(0, r[4], hi0, (unsigned long long *)&r[4]);
-    c = _addcarry_u64(c, r[5], hi1, (unsigned long long *)&r[5]);
-    c = _addcarry_u64(c, r[6], hi2, (unsigned long long *)&r[6]);
-    c = _addcarry_u64(c, r[7], hi3, (unsigned long long *)&r[7]);
-    /* Final carry-out of the 8-limb product is mathematically zero —
-     * the product f * g of two values < 2^256 fits in 512 bits exactly,
-     * with no bit beyond r[7]. The carry chain above is structurally
-     * sound by construction; we discard `c` here as a no-op. */
-    (void)c;
+        /* ===== Phase 1b: f[1] * f[2..3] — two products =====
+         *   c12 = f1*f2 -> (lo, hi); r3 += lo, r4 += hi
+         *   c13 = f1*f3 -> (lo, hi); r4 += lo, r5 += hi
+         * Dual ADCX/ADOX chain across the overlapping (r4) columns. */
+        "xorl   %%eax, %%eax                 \n\t"   /* clear CF + OF */
+        "movq   8(%[f]),  %%rdx              \n\t"
+        "mulx   16(%[f]), %[lo], %[hi]       \n\t"
+        "adcx   %[lo], %[r3]                 \n\t"
+        "adox   %[hi], %[r4]                 \n\t"
+        "mulx   24(%[f]), %[lo], %[hi]       \n\t"
+        "adcx   %[lo], %[r4]                 \n\t"
+        "adox   %[hi], %[r5]                 \n\t"
+        "adcx   %%rax, %[r5]                 \n\t"
+        "adox   %%rax, %[r6]                 \n\t"
+
+        /* ===== Phase 1c: f[2] * f[3] — one product =====
+         *   c23 = f2*f3 -> (lo, hi); r5 += lo, r6 += hi
+         * Single ADC chain (only one column). */
+        "movq   16(%[f]), %%rdx              \n\t"
+        "mulx   24(%[f]), %[lo], %[hi]       \n\t"
+        "addq   %[lo], %[r5]                 \n\t"
+        "adcq   %[hi], %[r6]                 \n\t"
+
+        /* ===== Phase 2: r = 2 * r =====
+         * r[0] is still uninitialised; clear it and r[7], then run
+         * a single ADCX chain that doubles r[1..6] and propagates the
+         * top bit into r[7]. r[0] doubles trivially (it's zero).
+         *
+         * `adcx ri, ri` computes ri = ri + ri + CF — that's a left-shift
+         * by one with carry-in/out, which is exactly what we need. */
+        "xorl   %k[r0], %k[r0]               \n\t"
+        "xorl   %k[r7], %k[r7]               \n\t"
+        "xorl   %%eax, %%eax                 \n\t"   /* clear CF + OF */
+        "adcx   %[r1], %[r1]                 \n\t"
+        "adcx   %[r2], %[r2]                 \n\t"
+        "adcx   %[r3], %[r3]                 \n\t"
+        "adcx   %[r4], %[r4]                 \n\t"
+        "adcx   %[r5], %[r5]                 \n\t"
+        "adcx   %[r6], %[r6]                 \n\t"
+        "adcx   %%rax, %[r7]                 \n\t"   /* propagate top bit */
+
+        /* ===== Phase 3: add the 4 diagonal squares =====
+         *   d0 = f0*f0 -> r[0..1]
+         *   d1 = f1*f1 -> r[2..3]
+         *   d2 = f2*f2 -> r[4..5]
+         *   d3 = f3*f3 -> r[6..7]
+         *
+         * Each diagonal contributes (lo, hi) to two adjacent limbs.
+         * Single ADCX chain across all 8 adds — straight carry path,
+         * but the 4 MULX issue into a different unit and overlap
+         * with the chain on an OoO core. */
+        "xorl   %%eax, %%eax                 \n\t"   /* clear CF + OF */
+
+        "movq   (%[f]),  %%rdx               \n\t"
+        "mulx   %%rdx,   %[lo], %[hi]        \n\t"   /* f0^2 */
+        "adcx   %[lo], %[r0]                 \n\t"
+        "adcx   %[hi], %[r1]                 \n\t"
+
+        "movq   8(%[f]), %%rdx               \n\t"
+        "mulx   %%rdx,   %[lo], %[hi]        \n\t"   /* f1^2 */
+        "adcx   %[lo], %[r2]                 \n\t"
+        "adcx   %[hi], %[r3]                 \n\t"
+
+        "movq   16(%[f]),%%rdx               \n\t"
+        "mulx   %%rdx,   %[lo], %[hi]        \n\t"   /* f2^2 */
+        "adcx   %[lo], %[r4]                 \n\t"
+        "adcx   %[hi], %[r5]                 \n\t"
+
+        "movq   24(%[f]),%%rdx               \n\t"
+        "mulx   %%rdx,   %[lo], %[hi]        \n\t"   /* f3^2 */
+        "adcx   %[lo], %[r6]                 \n\t"
+        "adcx   %[hi], %[r7]                 \n\t"
+        /* Top carry would land beyond r[7]; mathematically zero for
+         * a 256-bit value squared into 512 bits. */
+
+        : [r0]"=&r"(r0), [r1]"=&r"(r1), [r2]"=&r"(r2), [r3]"=&r"(r3),
+          [r4]"=&r"(r4), [r5]"=&r"(r5), [r6]"=&r"(r6), [r7]"=&r"(r7),
+          [lo]"=&r"(lo), [hi]"=&r"(hi)
+        : [f]"r"(f)
+        : "rax", "rdx", "cc", "memory"
+    );
+
+    r[0] = r0; r[1] = r1; r[2] = r2; r[3] = r3;
+    r[4] = r4; r[5] = r5; r[6] = r6; r[7] = r7;
 }
 
 /* ----------------------------------------------------------------------
  * Reduce a 512-bit value (8 limbs) modulo 2^255-19 into 4 limbs.
- * Same recipe as `fe64_reduce512` in src/c/fe64.h: the high 4 limbs
- * carry weight 2^256, and 2^256 ≡ 38 (mod p), so we fold them back
- * into the low 4 limbs via a 64×64 multiply-and-add. We use MULX here
- * for the same flag-preservation property — keeps the carry chain
- * clean across the four (h[i] += 38 * r[i+4]) accumulations.
+ *
+ * Uses 2^256 ≡ 38 (mod p): h[0..3] = r[0..3] + 38 * r[4..7], folded
+ * twice for any residual high carry.
+ *
+ * The first fold places 38 in rdx and runs four MULX r[4..7] in a row,
+ * accumulating with a dual ADCX/ADOX chain (lo column on CF, hi column
+ * on OF). The second and third folds handle any 65-bit overflow that
+ * leaks past h[3] — bounded to one bit, so a single fold of `top * 38`
+ * settles the value into [0, 2*p).
+ *
+ * The post-condition matches `fe64_reduce512` in src/c/fe64.h: result is
+ * in [0, 2*p), final canonicalisation is the surrounding fe64_tobytes.
  * ---------------------------------------------------------------------- */
 static inline __attribute__((always_inline, hot))
 void fe64_reduce512_mulx(uint64_t h[4], const uint64_t r[8]) {
-    /* Step 1: h[0..3] = r[0..3] + 38 * r[4..7] (with carry propagation).
-     *
-     * 38 * r[i+4] is at most 38 * (2^64 - 1) < 2^70, so the high half of
-     * the multiply by 38 is at most 37 — comfortably bounded. We use
-     * MULX so the multiply doesn't disturb the running carry. */
-    uint64_t hi, lo;
-    unsigned char c;
+    uint64_t h0, h1, h2, h3;
+    uint64_t lo, hi, top;
 
-    mulx_64(&hi, &lo, r[4], 38ULL);
-    c = _addcarry_u64(0, r[0], lo, (unsigned long long *)&h[0]);
+    __asm__ __volatile__ (
+        /* Load h[0..3] = r[0..3] (we accumulate into these registers) */
+        "movq   (%[r]),   %[h0]              \n\t"
+        "movq   8(%[r]),  %[h1]              \n\t"
+        "movq   16(%[r]), %[h2]              \n\t"
+        "movq   24(%[r]), %[h3]              \n\t"
 
-    uint64_t hi_acc = hi;  /* high half of 38*r[4] feeds into h[1] */
+        /* Pre-zero `top` for the OF-chain finalisation */
+        "xorl   %k[top], %k[top]             \n\t"
 
-    mulx_64(&hi, &lo, r[5], 38ULL);
-    /* h[1] = r[1] + lo + hi_acc + carry_in */
-    c = _addcarry_u64(c, r[1], lo, (unsigned long long *)&h[1]);
-    /* fold hi_acc */
-    {
-        unsigned char c2 = _addcarry_u64(0, h[1], hi_acc,
-                                          (unsigned long long *)&h[1]);
-        c = (unsigned char)(c + c2);
-    }
-    hi_acc = hi;
+        /* Fold-1: h[0..3] += 38 * r[4..7], dual ADCX/ADOX chain.
+         *   Place constant 38 in rdx so successive `mulx ri, lo, hi`
+         *   compute (lo, hi) = 38 * ri.
+         *
+         *   CF chain: h[0] += 38r4.lo, h[1] += 38r5.lo, h[2] += 38r6.lo,
+         *             h[3] += 38r7.lo
+         *   OF chain: h[1] += 38r4.hi, h[2] += 38r5.hi, h[3] += 38r6.hi,
+         *             top  += 38r7.hi
+         * Both chains ride simultaneously since CF and OF are independent. */
+        "xorl   %%eax, %%eax                 \n\t"   /* clear CF + OF */
+        "movq   $38, %%rdx                   \n\t"
 
-    mulx_64(&hi, &lo, r[6], 38ULL);
-    c = _addcarry_u64(c, r[2], lo, (unsigned long long *)&h[2]);
-    {
-        unsigned char c2 = _addcarry_u64(0, h[2], hi_acc,
-                                          (unsigned long long *)&h[2]);
-        c = (unsigned char)(c + c2);
-    }
-    hi_acc = hi;
+        "mulx   32(%[r]), %[lo], %[hi]       \n\t"   /* 38 * r[4] */
+        "adcx   %[lo], %[h0]                 \n\t"
+        "adox   %[hi], %[h1]                 \n\t"
 
-    mulx_64(&hi, &lo, r[7], 38ULL);
-    c = _addcarry_u64(c, r[3], lo, (unsigned long long *)&h[3]);
-    {
-        unsigned char c2 = _addcarry_u64(0, h[3], hi_acc,
-                                          (unsigned long long *)&h[3]);
-        c = (unsigned char)(c + c2);
-    }
-    /* hi here is the high half of 38*r[7], plus any cascading carries
-     * — fold back into h via 2^256 ≡ 38 (mod p). */
-    uint64_t top = hi + (uint64_t)c;
+        "mulx   40(%[r]), %[lo], %[hi]       \n\t"   /* 38 * r[5] */
+        "adcx   %[lo], %[h1]                 \n\t"
+        "adox   %[hi], %[h2]                 \n\t"
 
-    /* Step 2: fold the high carry "top" back into h[] via *38. The
-     * fold-once guarantee for the second pass: top * 38 < 38 * (2^64)
-     * which fits in 70 bits, so the propagation can only ripple one
-     * more time past h[3] — handled by the third pass below. */
-    mulx_64(&hi, &lo, top, 38ULL);
-    c = _addcarry_u64(0, h[0], lo, (unsigned long long *)&h[0]);
-    c = _addcarry_u64(c, h[1], hi, (unsigned long long *)&h[1]);
-    c = _addcarry_u64(c, h[2], 0,  (unsigned long long *)&h[2]);
-    c = _addcarry_u64(c, h[3], 0,  (unsigned long long *)&h[3]);
-    /* Step 3: a final carry from h[3] is possible — fold once more.
-     * After this pass the value is in canonical [0, 2*p) form, matching
-     * the post-condition of `fe64_reduce512` in src/c/fe64.h (the
-     * surrounding ladder treats the result as not-yet-fully-reduced
-     * and the final fe64_tobytes pass handles the final mod-p step). */
-    uint64_t top2 = (uint64_t)c * 38ULL;
-    c = _addcarry_u64(0, h[0], top2, (unsigned long long *)&h[0]);
-    c = _addcarry_u64(c, h[1], 0,    (unsigned long long *)&h[1]);
-    c = _addcarry_u64(c, h[2], 0,    (unsigned long long *)&h[2]);
-    c = _addcarry_u64(c, h[3], 0,    (unsigned long long *)&h[3]);
-    (void)c;
+        "mulx   48(%[r]), %[lo], %[hi]       \n\t"   /* 38 * r[6] */
+        "adcx   %[lo], %[h2]                 \n\t"
+        "adox   %[hi], %[h3]                 \n\t"
+
+        "mulx   56(%[r]), %[lo], %[hi]       \n\t"   /* 38 * r[7] */
+        "adcx   %[lo], %[h3]                 \n\t"
+        "adox   %[hi], %[top]                \n\t"
+        "adcx   %%rax, %[top]                \n\t"   /* close CF into top */
+        /* OF chain closes naturally; any residual OF beyond `top` would
+         * be mathematically impossible since the 38*r terms are bounded
+         * by 38 * 2^64 each, and the four-row sum is < 2^70 above r[3]. */
+
+        /* Fold-2: top * 38 added back to h[0..3].
+         *   `top` is bounded above by 38 + 1 < 2^7, so 38*top fits in
+         *   ~12 bits and the fold ripples at most one bit past h[3]. */
+        "movq   %[top], %%rdx                \n\t"
+        "mulx   %[c38], %[lo], %[hi]         \n\t"   /* 38 * top -> (lo, hi) */
+        "addq   %[lo], %[h0]                 \n\t"
+        "adcq   %[hi], %[h1]                 \n\t"
+        "adcq   $0,    %[h2]                 \n\t"
+        "adcq   $0,    %[h3]                 \n\t"
+
+        /* Fold-3 (single bit): if h[3] overflowed, the carry-out is
+         *   * 38, added back into h[0]. `setc` materialises CF as a
+         * 0/1 byte, then we multiply by 38 unconditionally (zero in,
+         * zero out — branch-free, same as fe64_reduce512). */
+        "setc   %%al                         \n\t"
+        "movzbl %%al, %%eax                  \n\t"
+        "imulq  $38, %%rax, %%rax            \n\t"
+        "addq   %%rax, %[h0]                 \n\t"
+        "adcq   $0,    %[h1]                 \n\t"
+        "adcq   $0,    %[h2]                 \n\t"
+        "adcq   $0,    %[h3]                 \n\t"
+
+        : [h0]"=&r"(h0), [h1]"=&r"(h1), [h2]"=&r"(h2), [h3]"=&r"(h3),
+          [lo]"=&r"(lo), [hi]"=&r"(hi),  [top]"=&r"(top)
+        : [r]"r"(r), [c38]"r"((uint64_t)38)
+        : "rax", "rdx", "cc", "memory"
+    );
+
+    h[0] = h0; h[1] = h1; h[2] = h2; h[3] = h3;
 }
 
 /* ----------------------------------------------------------------------
@@ -300,14 +442,16 @@ void ama_x25519_fe64_mul_mulx(uint64_t h[4], const uint64_t f[4],
 /**
  * Field squaring: h = f^2 mod (2^255 - 19).
  *
- * Currently re-uses the multiply path (f, f). A dedicated squaring
- * kernel that exploits the off-diagonal symmetry (10 cross-products
- * doubled + 4 diagonal squares vs 16 cross-products) is a follow-on
- * win but not required to land the dispatch wiring.
+ * Dedicated squaring kernel exploiting off-diagonal symmetry — 10
+ * multiplications (6 cross + 4 squares) vs 16 for the full multiply.
+ * Roughly half the Montgomery ladder is squarings, so ~37% fewer
+ * 64×64 multiplies across the ladder body when this kernel is live.
  */
 __attribute__((visibility("hidden")))
 void ama_x25519_fe64_sq_mulx(uint64_t h[4], const uint64_t f[4]) {
-    ama_x25519_fe64_mul_mulx(h, f, f);
+    uint64_t r[8];
+    fe64_sq512_mulx(r, f);
+    fe64_reduce512_mulx(h, r);
 }
 
 #else  /* not x86-64 GCC/Clang — emit nothing, dispatch never selects this path */
