@@ -16,17 +16,16 @@
 ## Abstract
 
 This report documents the results of running official NIST test vectors against
-the AMA Cryptography library (version 2.1). The validation covers 12 algorithm
+the AMA Cryptography library (version 3.0). The validation covers 12 algorithm
 functions across 6 NIST standards (FIPS 180-4, FIPS 198-1, FIPS 202, FIPS 203,
 FIPS 204, FIPS 205) and 1 NIST Special Publication (SP 800-38D).
 
 **Summary:** 1,215 vectors tested, **1,215 passed**, **0 failed**, 5,789 skipped
 (non-byte-aligned inputs, non-target parameter sets, LDT/VOT test types).
 Monte Carlo Test (MCT) coverage for the SHA-3 family was added on the
-v2.1.5 line in this PR (+400 vectors = 4 algorithms × 1 tcId × 100
-outer iterations per FIPS-202 MCT spec, across
-SHA3-256/SHA3-512/SHAKE-128/SHAKE-256) and will ship in the next
-release tag.
+v2.1.5 line (+400 vectors = 4 algorithms × 1 tcId × 100 outer iterations
+per FIPS-202 MCT spec, across SHA3-256/SHA3-512/SHAKE-128/SHAKE-256) and
+first ships in v3.0.0.
 
 All algorithms pass 100% of applicable NIST test vectors.
 
