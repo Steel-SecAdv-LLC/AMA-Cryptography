@@ -2740,8 +2740,7 @@ def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) ->
     if not hasattr(_native_lib, "ama_x25519_scalarmult_batch"):
         raise RuntimeError(
             "ama_x25519_scalarmult_batch is not exported by the loaded native "
-            "library — rebuild against a newer libama_cryptography. "
-            + _INSTALL_HINT
+            "library — rebuild against a newer libama_cryptography. " + _INSTALL_HINT
         )
     if len(scalars) != len(points):
         raise ValueError(f"batch length mismatch: {len(scalars)} scalars vs {len(points)} points")
@@ -2760,14 +2759,12 @@ def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) ->
     for i, scalar in enumerate(scalars):
         if not isinstance(scalar, (bytes, bytearray, memoryview)):
             raise ValueError(
-                f"scalar at index {i} must be bytes-like and "
-                f"{X25519_KEY_BYTES} bytes long"
+                f"scalar at index {i} must be bytes-like and " f"{X25519_KEY_BYTES} bytes long"
             )
         scalar_bytes = bytes(scalar)
         if len(scalar_bytes) != X25519_KEY_BYTES:
             raise ValueError(
-                f"scalar at index {i} must be {X25519_KEY_BYTES} bytes; "
-                f"got {len(scalar_bytes)}"
+                f"scalar at index {i} must be {X25519_KEY_BYTES} bytes; " f"got {len(scalar_bytes)}"
             )
         validated_scalars.append(scalar_bytes)
 
@@ -2775,14 +2772,12 @@ def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) ->
     for i, point in enumerate(points):
         if not isinstance(point, (bytes, bytearray, memoryview)):
             raise ValueError(
-                f"point at index {i} must be bytes-like and "
-                f"{X25519_KEY_BYTES} bytes long"
+                f"point at index {i} must be bytes-like and " f"{X25519_KEY_BYTES} bytes long"
             )
         point_bytes = bytes(point)
         if len(point_bytes) != X25519_KEY_BYTES:
             raise ValueError(
-                f"point at index {i} must be {X25519_KEY_BYTES} bytes; "
-                f"got {len(point_bytes)}"
+                f"point at index {i} must be {X25519_KEY_BYTES} bytes; " f"got {len(point_bytes)}"
             )
         validated_points.append(point_bytes)
 

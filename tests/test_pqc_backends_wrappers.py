@@ -90,9 +90,7 @@ class TestX25519Batch:
         # review on PR #273.
         pk, _sk = pq.native_x25519_keypair()
         with pytest.raises(ValueError, match=r"scalar at index 0 must be 32 bytes"):
-            pq.native_x25519_scalarmult_batch(
-                [b"\x00" * 16, b"\x11" * 48], [bytes(pk), bytes(pk)]
-            )
+            pq.native_x25519_scalarmult_batch([b"\x00" * 16, b"\x11" * 48], [bytes(pk), bytes(pk)])
 
     def test_non_bytes_scalar_raises(self) -> None:
         # `int` (or any non-bytes-like) scalar should fail the per-element
