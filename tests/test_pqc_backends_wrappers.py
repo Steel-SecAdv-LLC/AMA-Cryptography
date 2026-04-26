@@ -99,7 +99,10 @@ class TestX25519Batch:
         # type check rather than producing a cryptic ctypes error.
         pk, _sk = pq.native_x25519_keypair()
         with pytest.raises(ValueError, match=r"scalar at index 0 must be bytes-like"):
-            pq.native_x25519_scalarmult_batch([12345], [bytes(pk)])  # type: ignore[list-item]
+            pq.native_x25519_scalarmult_batch(
+                [12345],  # type: ignore[list-item]  # int stand-in for non-bytes-like — exercises per-element type rejection (XB-001)
+                [bytes(pk)],
+            )
 
     def test_batch_matches_sequential(self) -> None:
         # Build 7 independent (sk, peer_pk) pairs — 7 isn't a multiple of
