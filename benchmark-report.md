@@ -22,7 +22,7 @@
 | ML-KEM-1024 (Kyber) encapsulation (native C) | 12,365 | 2,400 | -415.2% | 40% | PASS |
 | AES-256-GCM encryption of 1KB data (native C) | 293,143 | 150,000 | -95.4% | 40% | PASS |
 | ChaCha20-Poly1305 encryption of 1KB data (native C) | 256,249 | 32,000 | -700.8% | 40% | PASS |
-| X25519 key exchange scalar multiplication (native C) | 11,519 | 5,000 | -130.4% | 40% | PASS |
+| X25519 key exchange scalar multiplication (native C, MULX+ADX) | 13,168 | 5,000 | -163.4% | 40% | PASS |
 
 ## Throughput Comparison
 
@@ -42,5 +42,5 @@
        kyber_encapsulate | █ 12,365
      aes_256_gcm_encrypt | ████████████████████████████████████████ 293,143
 chacha20poly1305_encrypt | ██████████████████████████████████ 256,249
-       x25519_scalarmult | █ 11,519
+       x25519_scalarmult | █ 13,168
 ```

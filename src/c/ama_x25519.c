@@ -56,12 +56,34 @@
  */
 
 #include "../include/ama_cryptography.h"
+#include "../include/ama_cpuid.h"
 #include "ama_platform_rand.h"
 #include <string.h>
 #include <stdint.h>
 
 #include "fe51.h"
 #include "fe64.h"
+
+/* PR D (2026-04) — MULX+ADX fe64 kernel runtime branch.
+ *
+ * The kernel lives in src/c/internal/ama_x25519_fe64_mulx.c and is
+ * compiled with per-file -mbmi2 -madx flags. CMake defines
+ * AMA_HAVE_X25519_FE64_MULX_IMPL on every target that links the
+ * kernel TU.
+ *
+ * The forward declarations are *unconditional* on every TU that picks
+ * up this header chain, matching the style used by the other dispatch
+ * targets — but they're only invoked under the runtime CPUID gate
+ * `ama_cpuid_has_x25519_mulx()` (BMI2 + ADX) AND the build-time
+ * AMA_HAVE_X25519_FE64_MULX_IMPL macro AND the `AMA_X25519_FIELD_FE64`
+ * compile-path. On every host that fails any of those gates the
+ * pure-C fe64_mul / fe64_sq from fe64.h continues to drive the
+ * Montgomery ladder. */
+#if defined(AMA_HAVE_X25519_FE64_MULX_IMPL) && defined(AMA_FE64_AVAILABLE)
+extern void ama_x25519_fe64_mul_mulx(uint64_t h[4], const uint64_t f[4],
+                                     const uint64_t g[4]);
+extern void ama_x25519_fe64_sq_mulx(uint64_t h[4], const uint64_t f[4]);
+#endif
 
 /* ----------------------------------------------------------------------
  * Build-time field-path selection (deterministic).
@@ -117,8 +139,22 @@
  * directly to a single MUL/MULX instruction.
  * ============================================================================ */
 
-AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32], const uint8_t n[32],
-                              const uint8_t p[32]) {
+/* Per-call ladder driver: takes function pointers for the field
+ * multiply and square so the runtime branch (pure-C fe64 vs MULX+ADX
+ * kernel) happens *once* per scalar-mult instead of once per ladder
+ * step. Marked `always_inline` so the compiler folds the function-
+ * pointer indirection through the surrounding caller and re-inlines
+ * the chosen multiply at every call site. */
+typedef void (*fe64_mul_fn)(uint64_t h[4], const uint64_t f[4],
+                            const uint64_t g[4]);
+typedef void (*fe64_sq_fn) (uint64_t h[4], const uint64_t f[4]);
+
+static inline __attribute__((always_inline))
+void x25519_scalarmult_fe64_with_ops(uint8_t q[32],
+                                     const uint8_t n[32],
+                                     const uint8_t p[32],
+                                     fe64_mul_fn mul,
+                                     fe64_sq_fn  sq) {
     uint8_t z[32];
     fe64 x1, x2, z2, x3, z3;
     fe64 A, AA, B, BB, E, C, D, DA, CB, t0, t1;
@@ -148,32 +184,38 @@ AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32], const uint8_t n[
         swap = k_t;
 
         fe64_add(A, x2, z2);      /* A  = x2 + z2    */
-        fe64_sq (AA, A);          /* AA = A^2        */
+        sq      (AA, A);          /* AA = A^2        */
         fe64_sub(B, x2, z2);      /* B  = x2 - z2    */
-        fe64_sq (BB, B);          /* BB = B^2        */
+        sq      (BB, B);          /* BB = B^2        */
         fe64_sub(E, AA, BB);      /* E  = AA - BB    */
         fe64_add(C, x3, z3);      /* C  = x3 + z3    */
         fe64_sub(D, x3, z3);      /* D  = x3 - z3    */
-        fe64_mul(DA, D, A);       /* DA = D * A      */
-        fe64_mul(CB, C, B);       /* CB = C * B      */
+        mul     (DA, D, A);       /* DA = D * A      */
+        mul     (CB, C, B);       /* CB = C * B      */
         fe64_add(t0, DA, CB);     /* t0 = DA + CB    */
-        fe64_sq (x3, t0);         /* x3 = (DA+CB)^2  */
+        sq      (x3, t0);         /* x3 = (DA+CB)^2  */
         fe64_sub(t0, DA, CB);     /* t0 = DA - CB    */
-        fe64_sq (t1, t0);         /* t1 = (DA-CB)^2  */
-        fe64_mul(z3, x1, t1);     /* z3 = x1 * (DA-CB)^2 */
-        fe64_mul(x2, AA, BB);     /* x2 = AA * BB    */
+        sq      (t1, t0);         /* t1 = (DA-CB)^2  */
+        mul     (z3, x1, t1);     /* z3 = x1 * (DA-CB)^2 */
+        mul     (x2, AA, BB);     /* x2 = AA * BB    */
         fe64_mul_121665(t0, E);   /* t0 = a24 * E    */
         fe64_add(t1, AA, t0);     /* t1 = AA + a24*E */
-        fe64_mul(z2, E, t1);      /* z2 = E * (AA + a24*E) */
+        mul     (z2, E, t1);      /* z2 = E * (AA + a24*E) */
     }
 
     /* Final swap */
     fe64_cswap(x2, x3, (uint64_t)swap);
     fe64_cswap(z2, z3, (uint64_t)swap);
 
-    /* Result = x2 / z2 */
+    /* Result = x2 / z2.
+     *
+     * fe64_invert internally calls the fe64_mul / fe64_sq from fe64.h —
+     * not the runtime-branched `mul` / `sq`. The cost is a small
+     * fraction of the total ladder cost (266 mults + 11 squares total
+     * for invert vs ~2500 mults+squares in the ladder body), so this
+     * isn't worth re-templating. */
     fe64_invert(z2, z2);
-    fe64_mul(x2, x2, z2);
+    mul        (x2, x2, z2);
     fe64_tobytes(q, x2);
 
     /* Secure cleanup of all sensitive intermediates */
@@ -194,6 +236,42 @@ AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32], const uint8_t n[
     ama_secure_memzero(CB, sizeof(fe64));
     ama_secure_memzero(t0, sizeof(fe64));
     ama_secure_memzero(t1, sizeof(fe64));
+}
+
+/* Pure-C fe64 multiply / square wrappers. Match the (uint64_t[4], …)
+ * signature expected by `x25519_scalarmult_fe64_with_ops`. The
+ * compiler inlines these through the function-pointer call site
+ * because both are `always_inline` — no indirect-call cost in the
+ * hot loop. */
+static inline __attribute__((always_inline))
+void fe64_mul_purec_wrapper(uint64_t h[4], const uint64_t f[4],
+                            const uint64_t g[4]) {
+    fe64_mul((uint64_t *)h, (const uint64_t *)f, (const uint64_t *)g);
+}
+
+static inline __attribute__((always_inline))
+void fe64_sq_purec_wrapper(uint64_t h[4], const uint64_t f[4]) {
+    fe64_sq((uint64_t *)h, (const uint64_t *)f);
+}
+
+AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32],
+                                                 const uint8_t n[32],
+                                                 const uint8_t p[32]) {
+#if defined(AMA_HAVE_X25519_FE64_MULX_IMPL)
+    /* Runtime branch: BMI2 (MULX) + ADX (ADCX/ADOX) bundle gate. The
+     * detection is cached after the first call by `cpuid_once` in
+     * ama_cpuid.c, so the cost is one predictable load + branch per
+     * scalarmult, amortised over ~2500 mults+squares in the ladder. */
+    if (ama_cpuid_has_x25519_mulx()) {
+        x25519_scalarmult_fe64_with_ops(q, n, p,
+                                        ama_x25519_fe64_mul_mulx,
+                                        ama_x25519_fe64_sq_mulx);
+        return;
+    }
+#endif
+    x25519_scalarmult_fe64_with_ops(q, n, p,
+                                    fe64_mul_purec_wrapper,
+                                    fe64_sq_purec_wrapper);
 }
 
 #elif defined(AMA_X25519_FIELD_FE51)

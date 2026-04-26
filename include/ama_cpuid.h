@@ -183,6 +183,89 @@ int ama_has_avx512vl(void);
  */
 int ama_cpuid_has_avx512_keccak(void);
 
+/* ============================================================================
+ * BMI2 + ADX probes (PR D — MULX+ADX X25519 fe64 kernel, 2026-04).
+ *
+ * BMI2 (CPUID.(EAX=7,ECX=0):EBX[8]) supplies MULX — an unsigned 64×64→128
+ * multiplication that writes the high half to one register and the low
+ * half to another *without touching the carry flag*.  ADX (EBX[19])
+ * supplies ADCX / ADOX — two independent 64-bit add-with-carry chains
+ * that consume CF and OF respectively, so the kernel can interleave two
+ * carry chains across the 4×4 schoolbook without serialising on CF.
+ *
+ * Together they let a hand-tuned X25519 fe64 multiply emit the entire
+ * inner loop without GCC's spilled-flag overhead — the exact pattern
+ * the OpenSSL "x25519-x86_64.pl" and BoringSSL "fiat" generators use to
+ * outrun the pure-C radix-2^64 schoolbook by ~1.8–2.2× on Skylake+.
+ *
+ * Both bits are read at the same detect_x86_features() probe as the
+ * legacy AES-NI / AVX2 / AVX-512 / VAES fields above (INVARIANT-15
+ * unchanged: same once-primitive, no reordering, no new call sites in
+ * dispatch_init_internal()).  Neither requires any XCR0 gate — MULX
+ * targets general-purpose registers, ADCX/ADOX target rFLAGS and
+ * general-purpose registers, no SIMD save area is touched.
+ * ============================================================================ */
+
+/**
+ * @brief Check for x86 BMI2 (MULX, et al.) support.
+ *
+ * CPUID.(EAX=7,ECX=0):EBX[8].  MULX is the single-instruction
+ * 64×64→128-bit unsigned multiply that writes the high half into one
+ * destination register and the low half into another *without altering
+ * the CF / OF flags*.  This is the prerequisite for interleaving with
+ * ADX (ADCX/ADOX) in the X25519 fe64 multiply — without MULX, every
+ * 64×64 product would spill the high half through RDX and clobber the
+ * carry chain.
+ *
+ * No XCR0 gate is required: MULX is a general-purpose instruction with
+ * no SIMD save-area dependency.
+ *
+ * @return 1 if BMI2 is reported by CPUID, 0 otherwise.  Cached after
+ *         first call.
+ */
+int ama_has_bmi2(void);
+
+/**
+ * @brief Check for x86 ADX (ADCX, ADOX) support.
+ *
+ * CPUID.(EAX=7,ECX=0):EBX[19].  ADCX consumes/produces CF; ADOX
+ * consumes/produces OF.  Pairing them lets the X25519 fe64 multiply
+ * carry two independent reduction chains across the 4×4 schoolbook in
+ * parallel, eliminating the carry-flag bottleneck that limits the
+ * pure-C radix-2^64 schoolbook on x86-64.
+ *
+ * No XCR0 gate is required: ADCX/ADOX are general-purpose instructions
+ * that touch only rFLAGS and the named general-purpose registers.
+ *
+ * @return 1 if ADX is reported by CPUID, 0 otherwise.  Cached after
+ *         first call.
+ */
+int ama_has_adx(void);
+
+/**
+ * @brief Bundle check: BMI2 + ADX gate for the X25519 fe64 MULX+ADX kernel.
+ *
+ * Returns 1 only when both BMI2 (MULX) and ADX (ADCX/ADOX) are reported
+ * by CPUID.  Both feature bits ship together on every Intel Broadwell+
+ * and AMD Zen+ part — but the ISA documents them as architecturally
+ * independent, so the bundle gates each one explicitly rather than
+ * relying on the empirical "every shipped CPU with one has the other"
+ * observation (same defensive contract used by
+ * `ama_cpuid_has_vaes_aesgcm()` for VPCLMULQDQ vs PCLMULQDQ).
+ *
+ * The hand-tuned MULX+ADX inner loop in
+ * `src/c/internal/ama_x25519_fe64_mulx.c` emits both opcode families
+ * unconditionally — without this bundle gate, the dispatcher must
+ * leave the X25519 entry point on the pure-C fe64 schoolbook
+ * (or fe51, on a host where fe64 was forced off).
+ *
+ * Otherwise the dispatcher falls back to the pure-C fe64 multiply
+ * emitted by `fe64_mul` / `fe64_sq` in `src/c/fe64.h` — the same
+ * radix-2^64 schoolbook the in-tree ladder already uses, just without
+ * the MULX+ADCX/ADOX micro-optimisation.
+ */
+int ama_cpuid_has_x25519_mulx(void);
+
 /**
  * @brief Check for ARMv8 AES Crypto Extension support.
  * @return 1 if ARM AES is available, 0 otherwise. Cached after first call.

@@ -159,10 +159,10 @@
     },
     {
       "name": "x25519_scalarmult",
-      "description": "X25519 key exchange scalar multiplication (native C)",
-      "ops_per_second": 11519.11,
+      "description": "X25519 key exchange scalar multiplication (native C, MULX+ADX)",
+      "ops_per_second": 13167.91,
       "baseline_value": 5000,
-      "regression_percent": -130.38,
+      "regression_percent": -163.36,
       "tolerance_percent": 40,
       "passed": true,
       "optional": true

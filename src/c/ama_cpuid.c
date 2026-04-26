@@ -119,6 +119,23 @@ static int has_avx_osxsave_cached = 0;
  * cpuid_once primitive, no reordering, no new call sites). */
 static int has_avx512vl_cached = 0;
 static int has_avx512_zmm_state_cached = 0;
+/* PR D (2026-04) — MULX+ADX X25519 fe64 kernel.
+ *
+ * BMI2 (CPUID.(EAX=7,ECX=0):EBX[8]) supplies MULX, the carry-flag-
+ * preserving 64×64→128 multiply.  ADX (EBX[19]) supplies ADCX / ADOX,
+ * the two-independent-carry-chain adders.  Together they let a hand-
+ * tuned X25519 fe64 multiply interleave both reduction carry chains
+ * across the 4×4 schoolbook without serialising on CF — the same
+ * pattern OpenSSL `x25519-x86_64.pl` and BoringSSL's fiat output use to
+ * outrun the pure-C radix-2^64 schoolbook by ~1.8–2.2× on Skylake+.
+ *
+ * Neither bit needs an XCR0 gate (MULX targets GPRs; ADCX/ADOX target
+ * rFLAGS + GPRs — no SIMD save area is touched).  Both fields populate
+ * from the same `detect_x86_features()` one-shot probe as the legacy
+ * fields above (INVARIANT-15 unchanged: same once-primitive, no
+ * reordering, no new call sites in dispatch_init_internal()). */
+static int has_bmi2_cached = 0;
+static int has_adx_cached = 0;
 
 /* Read XCR0 via XGETBV and confirm the OS has enabled SSE + AVX state.
  *
@@ -213,13 +230,17 @@ static void detect_x86_features(void) {
     int osxsave = (info[2] >> 27) & 1;
     /* Leaf 7, sub-leaf 0:
      *   EBX bit 5  — AVX2
+     *   EBX bit 8  — BMI2         (PR D — MULX, X25519 fe64 MULX+ADX kernel)
      *   EBX bit 16 — AVX-512F
+     *   EBX bit 19 — ADX          (PR D — ADCX/ADOX, X25519 fe64 MULX+ADX kernel)
      *   EBX bit 31 — AVX-512VL  (PR C — required for vprolq / vpternlogq on YMM)
      *   ECX bit 9  — VAES         (PR A — independent of AVX-512)
      *   ECX bit 10 — VPCLMULQDQ   (PR A — independent of AVX-512) */
     __cpuidex(info, 7, 0);
     has_avx2_cached       = (info[1] >> 5)  & 1;
+    has_bmi2_cached       = (info[1] >> 8)  & 1;
     has_avx512f_cached    = (info[1] >> 16) & 1;
+    has_adx_cached        = (info[1] >> 19) & 1;
     has_avx512vl_cached   = (info[1] >> 31) & 1;
     has_vaes_cached       = (info[2] >> 9)  & 1;
     has_vpclmulqdq_cached = (info[2] >> 10) & 1;
@@ -239,14 +260,18 @@ static void detect_x86_features(void) {
     }
     /* CPUID leaf 7, sub-leaf 0:
      *   EBX bit 5  — AVX2
+     *   EBX bit 8  — BMI2         (PR D — MULX, X25519 fe64 MULX+ADX kernel)
      *   EBX bit 16 — AVX-512F
+     *   EBX bit 19 — ADX          (PR D — ADCX/ADOX, X25519 fe64 MULX+ADX kernel)
      *   EBX bit 31 — AVX-512VL  (PR C — required for vprolq / vpternlogq on YMM)
      *   ECX bit 9  — VAES         (PR A — independent of AVX-512)
      *   ECX bit 10 — VPCLMULQDQ   (PR A — independent of AVX-512)
      * Only read XCR0 when OSXSAVE is set; otherwise XGETBV #UDs. */
     if (__get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx)) {
         has_avx2_cached       = (ebx >> 5)  & 1;
+        has_bmi2_cached       = (ebx >> 8)  & 1;
         has_avx512f_cached    = (ebx >> 16) & 1;
+        has_adx_cached        = (ebx >> 19) & 1;
         has_avx512vl_cached   = (ebx >> 31) & 1;
         has_vaes_cached       = (ecx >> 9)  & 1;
         has_vpclmulqdq_cached = (ecx >> 10) & 1;
@@ -383,6 +408,39 @@ int ama_cpuid_has_vaes_aesgcm(void) {
         && ama_has_pclmulqdq();
 }
 
+int ama_has_bmi2(void) {
+    AMA_CALL_ONCE(cpuid_once, detect_x86_features);
+    /* MULX touches GPRs only; no XCR0 SIMD-state gate is required. */
+    return has_bmi2_cached;
+}
+
+int ama_has_adx(void) {
+    AMA_CALL_ONCE(cpuid_once, detect_x86_features);
+    /* ADCX/ADOX touch rFLAGS + GPRs only; no XCR0 SIMD-state gate. */
+    return has_adx_cached;
+}
+
+int ama_cpuid_has_x25519_mulx(void) {
+    /* Bundle gate for the in-house MULX+ADX X25519 fe64 kernel
+     * (src/c/internal/ama_x25519_fe64_mulx.c).  All getters share the
+     * same pthread_once / InitOnceExecuteOnce primitive, so the
+     * underlying detect_x86_features() probe runs exactly once.
+     *
+     * The kernel emits MULX (BMI2) and ADCX/ADOX (ADX) unconditionally
+     * inside its hot loop.  Both feature bits ship together on Intel
+     * Broadwell+ and AMD Zen+, but the ISA documents them as
+     * architecturally independent — gate each one explicitly rather
+     * than rely on the empirical "every shipped CPU with one has the
+     * other" observation (same defensive contract used by
+     * ama_cpuid_has_vaes_aesgcm() for VPCLMULQDQ vs PCLMULQDQ —
+     * Devin Review #3140732664).
+     *
+     * Otherwise the dispatcher leaves the X25519 entry point on the
+     * pure-C fe64 schoolbook (or fe51, on a host where fe64 was forced
+     * off via -DAMA_X25519_FORCE_FE51). */
+    return ama_has_bmi2() && ama_has_adx();
+}
+
 int ama_has_arm_aes(void) { return 0; }
 int ama_has_arm_pmull(void) { return 0; }
 int ama_has_arm_neon(void) { return 0; }
@@ -469,6 +527,9 @@ int ama_cpuid_has_avx512_keccak(void) { return 0; }
 int ama_has_vaes(void) { return 0; }
 int ama_has_vpclmulqdq(void) { return 0; }
 int ama_cpuid_has_vaes_aesgcm(void) { return 0; }
+int ama_has_bmi2(void) { return 0; }
+int ama_has_adx(void) { return 0; }
+int ama_cpuid_has_x25519_mulx(void) { return 0; }
 
 int ama_has_arm_aes(void) {
     AMA_CALL_ONCE(arm_once, detect_arm_features);
@@ -505,6 +566,9 @@ int ama_cpuid_has_avx512_keccak(void) { return 0; }
 int ama_has_vaes(void) { return 0; }
 int ama_has_vpclmulqdq(void) { return 0; }
 int ama_cpuid_has_vaes_aesgcm(void) { return 0; }
+int ama_has_bmi2(void) { return 0; }
+int ama_has_adx(void) { return 0; }
+int ama_cpuid_has_x25519_mulx(void) { return 0; }
 int ama_has_arm_aes(void) { return 0; }
 int ama_has_arm_pmull(void) { return 0; }
 int ama_has_arm_neon(void) { return 0; }

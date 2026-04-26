@@ -295,6 +295,52 @@ constant-time check that was a flake source on contended runners.
   `AMA_X25519_FIELD_FE64` guard. fe51 still reachable on x86-64 via
   `-DAMA_X25519_FORCE_FE51`.
 
+- **X25519 fe64 MULX+ADX kernel + runtime CPUID dispatch (PR D, 2026-04).**
+  `src/c/internal/ama_x25519_fe64_mulx.c` ships an in-house 4×4
+  schoolbook field multiply / square that emits MULX (BMI2,
+  `_mulx_u64`) for the carry-flag-preserving 64×64→128 multiplication
+  and `_addcarry_u64` accumulation chains the compiler lowers to
+  ADCX/ADOX (ADX) under `-mbmi2 -madx -O3`.  Two new CPUID accessors
+  (`ama_has_bmi2()` reading `CPUID.(EAX=7,ECX=0):EBX[8]` and
+  `ama_has_adx()` reading `EBX[19]`) feed a bundle gate
+  `ama_cpuid_has_x25519_mulx()` that the dispatch layer in
+  `ama_x25519.c` consults *once per scalar-mult* (not per ladder
+  step) — the gate result is cached by the existing `cpuid_once`
+  primitive, the ladder body re-uses two `always_inline` function
+  pointers that the compiler folds back into straight-line code
+  inside the renamed `x25519_scalarmult_fe64_with_ops` driver.
+  Neither bit needs an XCR0 gate (MULX targets GPRs; ADCX/ADOX touch
+  rFLAGS + GPRs only — no SIMD save area).  The bundle gate is
+  defensive (matches `ama_cpuid_has_vaes_aesgcm()` — Devin Review
+  #3140732664): even though every shipped Intel Broadwell+ / AMD
+  Zen+ part has both bits, the ISA documents them as architecturally
+  independent, so the dispatcher gates each one explicitly.  Pure-C
+  fe64 multiply remains the fallback when the bundle gate fails
+  (e.g. KVM guest with BMI2 masked, pre-Broadwell host, or MSVC
+  build — the kernel TU is GCC/Clang only and never compiled on
+  MSVC).  Equivalence pinned by
+  `tests/c/test_x25519_fe64_mulx_equiv.c`: 4096 random (a, b) pairs
+  fed through both the MULX+ADX kernel and the pure-C `fe64_mul` /
+  `fe64_sq` reference, asserting byte-identical canonical encodings
+  (test SKIPs with code 77 on hosts whose CPUID lacks BMI2 + ADX).
+  CMake gain `AMA_X25519_MULX_SOURCES` per-file `-mbmi2 -madx`
+  flags applied via `set_source_files_properties` — same
+  per-file-flags pattern as the AVX2 / AVX-512 / VAES kernels;
+  the rest of the library stays compiled at the lowest-common-
+  denominator ISA so legacy harnesses
+  (`tools/constant_time/Makefile`) keep linking.  ctest sweep:
+  **23 / 23 pass** (was 22 / 22 — `+1` for the new MULX equivalence
+  test; the 4096-vector run completes in <10 ms).  Honest perf
+  framing: on this build's sandbox host the MULX kernel runs at
+  ~13.4–14.0K X25519 DH ops/s vs the pure-C fe64 baseline of
+  ~11.5K — a real 17–22 % improvement, well short of the 1.8–2.2×
+  reported by OpenSSL's hand-tuned `crypto/ec/asm/x25519-x86_64.pl`
+  on the same uarch class.  The remaining gap is the ADCX / ADOX
+  dual-carry-chain interleave that intrinsic-driven C code can't
+  reliably emit — a future hand-written .S kernel slotting behind
+  the same `ama_cpuid_has_x25519_mulx()` gate captures the rest of
+  the curve.  No public-API change.
+
 - ChaCha20-Poly1305 AVX2 wiring: `ama_chacha20_block_x8_avx2` (8-way
   parallel ChaCha20 block function emitting 512 B of keystream) is
   now wired through the dispatch table and invoked by the CTR inner

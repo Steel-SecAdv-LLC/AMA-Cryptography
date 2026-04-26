@@ -216,10 +216,12 @@ paths for all 8 algorithm families, preparing for ARMv9 server adoption
 > AES-NI + PCLMULQDQ on lower-tier hosts — so AMA's runtime dispatcher
 > falls back to the generic-C scalar path. Concretely, the dispatcher
 > consults `ama_has_aes_ni()`, `ama_has_pclmulqdq()`,
-> `ama_cpuid_has_vaes_aesgcm()`, `ama_cpuid_has_avx2()`, and
-> `ama_cpuid_has_avx512_keccak()` (XCR0-aware AVX-512F/BW/DQ/VL gate)
-> before promoting an algorithm slot to a SIMD kernel. When any of
-> those return 0 the slot stays scalar. **Users who benchmark in cloud
+> `ama_cpuid_has_vaes_aesgcm()`, `ama_cpuid_has_avx2()`,
+> `ama_cpuid_has_avx512_keccak()` (XCR0-aware AVX-512F/BW/DQ/VL gate),
+> and `ama_cpuid_has_x25519_mulx()` (BMI2 + ADX gate for the X25519
+> fe64 MULX+ADX kernel) before promoting an algorithm slot to a SIMD
+> or hand-tuned-GPR kernel. When any of those return 0 the slot stays
+> on the pure-C reference path. **Users who benchmark in cloud
 > CI will therefore see numbers ~1.5–2× slower than the table for
 > AES-GCM, ChaCha20-Poly1305, X25519, and ML-KEM-1024 keygen.** This
 > is environmental, not a code regression. Verify which paths the
@@ -254,7 +256,7 @@ the cell reads **N/A**.
 | ML-KEM-1024 Encap | 12,365 ops/s | N/A | 7,000–15,000 ops/s (ref) | Provider 3.4+ (ref) | inside liboqs band |
 | AES-256-GCM (1KB) | 293,143 ops/s | N/A (XChaCha preferred) | N/A | ~500K ops/s (AES-NI, ref) | OpenSSL AES-NI path ~1.7× faster (VAES YMM landed; gap closes at ≥4 KB) |
 | ChaCha20-Poly1305 (1KB) | 256,249 ops/s | ~380,000 ops/s (ref) | N/A | ~300,000 ops/s (ref) | libsodium ~1.5× faster |
-| X25519 scalar mult (fe64) | 11,519 ops/s | ~40,000 ops/s (ref) | N/A | ~35,000 ops/s (ref) | libsodium ~3.5× faster on the pure-C fe64 path; gap closes when MULX+ADX assembly lands. fe51 fallback measures ~21,800 ops/s on the same host (`-DAMA_X25519_FORCE_FE51`). |
+| X25519 scalar mult (fe64 + MULX+ADX) | 13,168 ops/s | ~40,000 ops/s (ref) | N/A | ~35,000 ops/s (ref) | libsodium ~3.0× faster on the in-house intrinsics-driven MULX+ADX kernel; gap closes when a hand-written `.S` kernel with explicit ADCX/ADOX dual-carry-chain interleave slots in behind the same `ama_cpuid_has_x25519_mulx()` gate. fe51 fallback measures ~21,800 ops/s on the same host (`-DAMA_X25519_FORCE_FE51`); pure-C fe64 (BMI2/ADX masked, e.g. `taskset` to a guest with the bits hidden) measures ~11,500 ops/s. |
 
 **Reproducing live peer numbers locally:**
 

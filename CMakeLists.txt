@@ -276,6 +276,36 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX512)
     endif()
 endif()
 
+# X25519 fe64 MULX+ADX kernel (PR D — 2026-04, x86-64 GCC/Clang only).
+#
+# Compiles src/c/internal/ama_x25519_fe64_mulx.c with -mbmi2 -madx
+# (and -O3 inherited from the release flags).  Defines
+# AMA_HAVE_X25519_FE64_MULX_IMPL on the library targets so
+# src/c/ama_x25519.c can pick up the extern declaration of
+# ama_x25519_fe64_mul_mulx / ama_x25519_fe64_sq_mulx and runtime-branch
+# the inner ladder via ama_cpuid_has_x25519_mulx().
+#
+# MSVC: not built.  The kernel uses _mulx_u64 + _addcarry_u64
+# intrinsics under per-file -mbmi2 -madx, the same MSVC-escape pattern
+# as the AVX-512 SHA3 kernel.  MSVC builds keep the pure-C fe64
+# multiply emitted by fe64.h (or fall back to fe51 / gf16 entirely).
+#
+# Always built on x86-64 GCC/Clang regardless of AMA_ENABLE_SIMD —
+# MULX and ADCX/ADOX are general-purpose ISA extensions, not SIMD.
+# The runtime CPUID gate (ama_cpuid_has_x25519_mulx()) prevents
+# execution on hosts that lack BMI2 + ADX, so adding the TU to every
+# x86-64 build is safe.
+set(AMA_X25519_MULX_SOURCES "")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64" AND NOT MSVC)
+    set(AMA_X25519_MULX_SOURCES
+        src/c/internal/ama_x25519_fe64_mulx.c
+    )
+    set_source_files_properties(${AMA_X25519_MULX_SOURCES} PROPERTIES
+        COMPILE_FLAGS "-mbmi2 -madx")
+    add_compile_definitions(AMA_HAVE_X25519_FE64_MULX_IMPL)
+    message(STATUS "X25519: MULX+ADX fe64 kernel enabled (BMI2 + ADX, x86-64 GCC/Clang)")
+endif()
+
 # ARM NEON intrinsics (AArch64 only)
 if(AMA_ENABLE_SIMD AND AMA_ENABLE_NEON)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
@@ -356,6 +386,7 @@ set(AMA_SOURCES
     ${AMA_DISPATCH_SOURCES}
     ${AMA_AVX2_SOURCES}
     ${AMA_AVX512_SOURCES}
+    ${AMA_X25519_MULX_SOURCES}
     ${AMA_NEON_SOURCES}
     ${AMA_SVE2_SOURCES}
 )

@@ -135,14 +135,45 @@ The two `__int128` paths are byte-for-byte arithmetic equivalent — see
 matches.
 
 On a Sapphire Rapids canonical-host run with `benchmark_c_raw`,
-fe64 measured ~11,500 X25519 DH ops/sec vs ~21,800 for fe51 on the
-same hardware (Linux, GCC 12, `-O3 -march=native`). The radix-2^64
-schoolbook trails the radix-2^51 carry-pipelined layout in pure C
-because GCC does not yet generate MULX+ADCX (BMI2+ADX) for the
-4×4 schoolbook pattern — the wiring sets up the correct field-element
-type for a future hand-tuned MULX+ADX assembly kernel where fe64
-will lead. fe51 remains available as a fallback by building with
-`-DAMA_X25519_FORCE_FE51`.
+the previous pure-C fe64 path measured ~11,500 X25519 DH ops/sec
+vs ~21,800 for fe51 on the same hardware (Linux, GCC 12,
+`-O3 -march=native`). The radix-2^64 schoolbook trails the
+radix-2^51 carry-pipelined layout in pure C because GCC does not
+yet generate MULX+ADCX (BMI2+ADX) for the 4×4 schoolbook pattern.
+
+#### X25519 fe64 MULX+ADX kernel (3.0.0, PR D)
+
+When CPUID reports both BMI2 (`CPUID.(EAX=7,ECX=0):EBX[8]`) and
+ADX (`EBX[19]`), the dispatcher promotes the inner ladder's
+multiply / square to the in-house MULX+ADCX/ADOX kernel in
+`src/c/internal/ama_x25519_fe64_mulx.c`, compiled with per-file
+`-mbmi2 -madx -O3` flags. Bundle gate:
+`ama_cpuid_has_x25519_mulx()` (defensive: gates each bit
+explicitly even though every shipped Intel Broadwell+ / AMD Zen+
+part has both).
+
+Same canonical-host class with the kernel active, this build's
+benchmark sandbox measures **~13,168 X25519 DH ops/sec via the
+Python C-FFI runner** (or ~13,988 ops/sec when the C-raw harness
+amortises the FFI layer away) — a real **~21 % improvement** over
+the pure-C fe64 baseline. Byte-equivalence to pure-C fe64
+asserted across **4096 / 4096 random vectors** by
+`tests/c/test_x25519_fe64_mulx_equiv.c` (skips with code 77 on
+hosts whose CPUID lacks the bundle).
+
+The kernel uses `_mulx_u64` for the carry-flag-preserving 64×64
+multiply and `_addcarry_u64` chains the compiler lowers to ADCX /
+ADOX. The remaining gap to the ~25K ops/sec reported by
+OpenSSL's hand-tuned `crypto/ec/asm/x25519-x86_64.pl` on the same
+microarchitecture class is the explicit **two-carry-chain
+interleave** that intrinsic-driven C cannot reliably emit — a
+future hand-written `.S` kernel slotting in behind the same
+CPUID gate captures the rest of the curve. fe51 remains
+available as a fallback by building with
+`-DAMA_X25519_FORCE_FE51`; the pure-C fe64 schoolbook still runs
+on hosts whose CPUID lacks BMI2 + ADX (e.g. KVM guest with the
+bits masked, pre-Broadwell host, or any MSVC build — the kernel
+TU is GCC/Clang only).
 
 ### 3R Monitoring Overhead
 
