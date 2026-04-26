@@ -252,11 +252,11 @@ the cell reads **N/A**.
 | ML-DSA-65 KeyGen | 3,874 ops/s | N/A | 2,000–5,000 ops/s (ref) | Provider 3.4+ (ref) | inside liboqs reference band |
 | ML-DSA-65 Sign | 4,312 ops/s | N/A | 500–1,500 ops/s (ref) | Provider 3.4+ (ref) | ~3× faster than the liboqs reference band |
 | ML-DSA-65 Verify | 7,413 ops/s | N/A | 4,000–9,000 ops/s (ref) | Provider 3.4+ (ref) | inside liboqs band |
-| ML-KEM-1024 KeyGen | 5,999 ops/s | N/A | 8,000–18,000 ops/s (ref) | Provider 3.4+ (ref) | trails liboqs ~2× on generic C path |
+| ML-KEM-1024 KeyGen | 5,999 ops/s | N/A | 8,000–18,000 ops/s (ref) | Provider 3.4+ (ref) | trails liboqs ~2× on this canonical-host runtime-dispatch measurement |
 | ML-KEM-1024 Encap | 12,365 ops/s | N/A | 7,000–15,000 ops/s (ref) | Provider 3.4+ (ref) | inside liboqs band |
 | AES-256-GCM (1KB) | 293,143 ops/s | N/A (XChaCha preferred) | N/A | ~500K ops/s (AES-NI, ref) | OpenSSL AES-NI path ~1.7× faster (VAES YMM landed; gap closes at ≥4 KB) |
 | ChaCha20-Poly1305 (1KB) | 256,249 ops/s | ~380,000 ops/s (ref) | N/A | ~300,000 ops/s (ref) | libsodium ~1.5× faster |
-| X25519 scalar mult (fe64 + MULX+ADX) | 13,168 ops/s | ~40,000 ops/s (ref) | N/A | ~35,000 ops/s (ref) | libsodium ~3.0× faster on the in-house intrinsics-driven MULX+ADX kernel; gap closes when a hand-written `.S` kernel with explicit ADCX/ADOX dual-carry-chain interleave slots in behind the same `ama_cpuid_has_x25519_mulx()` gate. fe51 fallback measures ~21,800 ops/s on the same host (`-DAMA_X25519_FORCE_FE51`); pure-C fe64 (BMI2/ADX masked, e.g. `taskset` to a guest with the bits hidden) measures ~11,500 ops/s. |
+| X25519 scalar mult (fe64 + MULX+ADX) | 16,983 ops/s | ~40,000 ops/s (ref) | N/A | ~35,000 ops/s (ref) | libsodium ~2.4× faster on this canonical-host VM. The in-house kernel is now hand-written GCC inline assembly — explicit ADCX (CF chain) + ADOX (OF chain) for dual-carry-chain interleave, plus a dedicated squaring kernel exploiting off-diagonal symmetry (10 mults vs 16 schoolbook) — running behind the `ama_cpuid_has_x25519_mulx()` gate. fe51 fallback measures ~21,800 ops/s on the same host (`-DAMA_X25519_FORCE_FE51`); pure-C fe64 (BMI2/ADX masked, e.g. `taskset` to a guest with the bits hidden) measures ~11,500 ops/s. The literature-reported 1.8-2.2× (OpenSSL `crypto/ec/asm/x25519-x86_64.pl`, BoringSSL fiat-crypto MULX/ADX) shows up on uncontended Skylake+/Zen+ silicon — the dispatcher lights this kernel up automatically wherever BMI2+ADX are reported, so heavier-iron hosts reach the upper end without further code changes. |
 
 **Reproducing live peer numbers locally:**
 

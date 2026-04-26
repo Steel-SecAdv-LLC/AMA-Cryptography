@@ -22,7 +22,7 @@ location for the C-side version is ``include/ama_cryptography.h``'s
 checks above already pin to the package version). The
 ``src/c/`` tree should *use* that macro, never re-declare a literal —
 today the scan returns zero hits and that is the steady state. The
-test (`tests/tools/test_check_version_consistency.py`) writes a
+test (``tests/test_version_consistency.py``) writes a
 synthetic C file with a fake version literal into a temp tree and
 asserts the scanner flags it.
 
@@ -85,17 +85,24 @@ def scan_c_sources_for_version_literals(root: Path) -> list[str]:
         except UnicodeDecodeError:
             continue
 
-        # Strip /* ... */ block comments. We do this on a copy used only
-        # for hit detection — the original lines are still reported in
-        # the message so the developer can locate the literal precisely.
-        stripped = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+        # Strip /* ... */ block comments — but preserve the line count
+        # by replacing each comment with the same number of newlines it
+        # spanned. This keeps stripped_lines[i] in 1:1 correspondence
+        # with original_lines[i], so reported line numbers and the
+        # ident-window check on the previous line remain accurate even
+        # when files contain multi-line block comments. (Devin Review
+        # 2026-04-26: the previous re.sub(..., "", DOTALL) collapsed
+        # multi-line comments to nothing, shifting subsequent lines up
+        # and making stripped_lines[i] reference a different physical
+        # line than original_lines[i].)
+        stripped = re.sub(
+            r"/\*.*?\*/",
+            lambda m: "\n" * m.group(0).count("\n"),
+            text,
+            flags=re.DOTALL,
+        )
         stripped_lines = stripped.splitlines()
         original_lines = text.splitlines()
-
-        # Pad stripped_lines to match original line count if block-
-        # comment removal collapsed any lines.
-        if len(stripped_lines) < len(original_lines):
-            stripped_lines += [""] * (len(original_lines) - len(stripped_lines))
 
         for i, line in enumerate(stripped_lines):
             # Drop // line comments before searching.

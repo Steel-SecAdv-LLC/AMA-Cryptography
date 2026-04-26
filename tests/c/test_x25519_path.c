@@ -25,22 +25,26 @@
 
 #include "ama_cryptography.h"
 
-/* Replicate the build-time selector from ama_x25519.c. The two
- * fe-availability predicates intentionally mirror the per-header
- * preconditions exactly:
- *   - fe51.h: any compiler that defines __SIZEOF_INT128__
- *   - fe64.h: GCC/Clang AND __SIZEOF_INT128__ (the schoolbook depends
- *             on GCC/Clang's `unsigned __int128` extension specifically)
- * Keeping them distinct here means a hypothetical `__int128`-capable
- * non-GCC/Clang toolchain would still pick fe51 in both ama_x25519.c
- * and this test, instead of drifting to gf16 in the test only. */
-#if defined(__SIZEOF_INT128__)
+/* Source of truth for fe-availability comes from the field-element
+ * headers themselves, which both publish AMA_FE{51,64}_AVAILABLE
+ * exactly when their preconditions are met (see fe51.h:25, fe64.h:26).
+ * Including them here lets the test mirror ama_x25519.c's selector
+ * by reading the same macros, instead of recomputing the predicate
+ * from raw __SIZEOF_INT128__ / __GNUC__ checks that could drift if
+ * either header tightens or relaxes its precondition. (Copilot
+ * Review 2026-04-26: previously test_x25519_path.c re-derived the
+ * predicate locally and therefore could quietly disagree with the
+ * production selector.) */
+#include "fe51.h"
+#include "fe64.h"
+
+#if defined(AMA_FE51_AVAILABLE) && AMA_FE51_AVAILABLE
 #  define EXPECT_FE51_AVAILABLE 1
 #else
 #  define EXPECT_FE51_AVAILABLE 0
 #endif
 
-#if (defined(__GNUC__) || defined(__clang__)) && defined(__SIZEOF_INT128__)
+#if defined(AMA_FE64_AVAILABLE) && AMA_FE64_AVAILABLE
 #  define EXPECT_FE64_AVAILABLE 1
 #else
 #  define EXPECT_FE64_AVAILABLE 0
@@ -73,17 +77,25 @@ int main(void) {
         return 1;
     }
 
-#if defined(__x86_64__) || defined(_M_X64)
-    /* On x86-64 GCC/Clang we should always land on fe64 unless the build
-     * is explicitly forcing something else via AMA_X25519_FORCE_FE51. */
-#  if !defined(AMA_X25519_FORCE_FE51)
+#if (defined(__x86_64__) || defined(_M_X64)) \
+    && EXPECT_FE64_AVAILABLE && !defined(AMA_X25519_FORCE_FE51)
+    /* On x86-64 toolchains where fe64 is *available* (GCC/Clang with
+     * __int128) and the build isn't explicitly forcing fe51, the
+     * dispatcher must land on fe64 — this is the defensive
+     * regression pin for the radix-2^64 wiring.
+     *
+     * Gated on EXPECT_FE64_AVAILABLE so MSVC/clang-cl x64 builds
+     * (where fe64 is unavailable and the selector intentionally
+     * falls back to gf16) and any hypothetical x86-64 toolchain
+     * without __int128 don't trigger a false-positive failure here.
+     * (Copilot Review 2026-04-26.) */
     if (strcmp(got, "fe64") != 0) {
         fprintf(stderr,
-                "FAIL: x86-64 build did not select fe64 path "
-                "(got %s). The radix-2^64 wiring has regressed.\n", got);
+                "FAIL: x86-64 build with fe64 available did not select "
+                "fe64 path (got %s). The radix-2^64 wiring has "
+                "regressed.\n", got);
         return 1;
     }
-#  endif
 #endif
 
     printf("PASS: x25519 field path pinned to %s\n", got);
