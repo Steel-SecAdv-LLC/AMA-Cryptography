@@ -39,7 +39,16 @@
  *   The kernel is byte-identical to four sequential
  *   `ama_x25519_key_exchange` calls (verified by
  *   `tests/c/test_x25519.c` — RFC 7748 §5.2 TVs broadcast across all
- *   four lanes plus 1024 random vectors against the scalar reference).
+ *   four lanes plus 1024 random vectors against the scalar reference,
+ *   matching the cross-check budget of `tests/c/test_x25519_field_equiv.c`).
+ *
+ * TODO(AVX-512-IFMA): the kernel's real home is AVX-512 IFMA
+ * (`vpmadd52luq` / `vpmadd52huq` on Cannon Lake+, Ice Lake+,
+ * Sapphire Rapids, Zen 5).  IFMA gives a 4-way 52-bit lane-wise
+ * multiply that drops donna-32bit's ~100-cross-product schedule to
+ * ~25 — the regime where 4× SIMD finally beats 4× scalar fe64.
+ * The field layout, cswap, and dispatch glue carry over
+ * unchanged; only `fe_mul_x4` / `fe_sqr_x4` swap to IFMA intrinsics.
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
@@ -533,126 +542,113 @@ static void fe_invert_x4(bignum25519_x4 out, const bignum25519_x4 z) {
 void ama_x25519_scalarmult_x4_avx2(uint8_t out[4][32],
                                     const uint8_t scalar[4][32],
                                     const uint8_t point[4][32]) {
+    /* All sensitive ladder state lives in one struct so the secure
+     * scrub at the end is a single contiguous memzero rather than a
+     * 17-call ladder of per-variable zeroings (each of which the
+     * compiler has to keep undefeated against DCE individually). */
+    struct {
+        uint8_t        k[4][32];
+        fe25519_10     u_a, u_b, u_c, u_d;
+        fe25519_10     r_a, r_b, r_c, r_d;
+        uint64_t       swap[4];
+        bignum25519_x4 x1, x2, z2, x3, z3;
+        bignum25519_x4 A, AA, B, BB, E, C, D, DA, CB, t0, t1;
+    } s;
+
+    int lane, t;
+
     /* Decode and clamp each lane's scalar (RFC 7748 §5). */
-    uint8_t k[4][32];
-    int lane, i, t;
     for (lane = 0; lane < 4; lane++) {
-        memcpy(k[lane], scalar[lane], 32);
-        k[lane][0]  &= 248;
-        k[lane][31] &= 127;
-        k[lane][31] |= 64;
+        memcpy(s.k[lane], scalar[lane], 32);
+        s.k[lane][0]  &= 248;
+        s.k[lane][31] &= 127;
+        s.k[lane][31] |= 64;
     }
 
     /* Decode each lane's u-coordinate into 10-limb form, then pack
      * the four scalar bignums into 10 __m256i lanes. */
-    fe25519_10 u_a, u_b, u_c, u_d;
-    fe25519_10_expand(u_a, point[0]);
-    fe25519_10_expand(u_b, point[1]);
-    fe25519_10_expand(u_c, point[2]);
-    fe25519_10_expand(u_d, point[3]);
+    fe25519_10_expand(s.u_a, point[0]);
+    fe25519_10_expand(s.u_b, point[1]);
+    fe25519_10_expand(s.u_c, point[2]);
+    fe25519_10_expand(s.u_d, point[3]);
 
-    bignum25519_x4 x1, x2, z2, x3, z3;
-    pack_4way(x1, u_a, u_b, u_c, u_d);
+    pack_4way(s.x1, s.u_a, s.u_b, s.u_c, s.u_d);
 
     /* Ladder initial state — same as RFC 7748 / donna scalar:
      *   x2 = 1, z2 = 0, x3 = x1, z3 = 1.
      * Set as broadcast constants since all four lanes start identically. */
-    fe_set1_x4(x2, 1);
-    fe_set1_x4(z2, 0);
-    fe_copy_x4(x3, x1);
-    fe_set1_x4(z3, 1);
+    fe_set1_x4(s.x2, 1);
+    fe_set1_x4(s.z2, 0);
+    fe_copy_x4(s.x3, s.x1);
+    fe_set1_x4(s.z3, 1);
 
     /* Ladder body — 255 steps from bit 254 down to bit 0.  Per-step
      * the cswap mask is built from each lane's k_t bit XORed with the
      * running per-lane swap state.  No data-dependent branch. */
-    uint64_t swap[4] = { 0, 0, 0, 0 };
-    bignum25519_x4 A, AA, B, BB, E, C, D, DA, CB, t0, t1;
+    s.swap[0] = s.swap[1] = s.swap[2] = s.swap[3] = 0;
 
     for (t = 254; t >= 0; t--) {
         uint64_t kt[4];
         uint64_t mask[4];
         for (lane = 0; lane < 4; lane++) {
-            kt[lane] = (uint64_t)((k[lane][t >> 3] >> (t & 7)) & 1);
-            swap[lane] ^= kt[lane];
+            kt[lane] = (uint64_t)((s.k[lane][t >> 3] >> (t & 7)) & 1);
+            s.swap[lane] ^= kt[lane];
             /* mask = -swap (0 → 0x000…000, 1 → 0xFFF…FFF). */
-            mask[lane] = (uint64_t)(0 - swap[lane]);
-            swap[lane] = kt[lane];
+            mask[lane] = (uint64_t)(0 - s.swap[lane]);
+            s.swap[lane] = kt[lane];
         }
         __m256i m = _mm256_setr_epi64x((int64_t)mask[0], (int64_t)mask[1],
                                        (int64_t)mask[2], (int64_t)mask[3]);
-        fe_cswap_x4(x2, x3, m);
-        fe_cswap_x4(z2, z3, m);
+        fe_cswap_x4(s.x2, s.x3, m);
+        fe_cswap_x4(s.z2, s.z3, m);
 
-        fe_add_x4(A,  x2, z2);     /* A  = x2 + z2    */
-        fe_sq_x4 (AA, A);          /* AA = A^2        */
-        fe_sub_x4(B,  x2, z2);     /* B  = x2 - z2    */
-        fe_sq_x4 (BB, B);          /* BB = B^2        */
-        fe_sub_x4(E,  AA, BB);     /* E  = AA - BB    */
-        fe_add_x4(C,  x3, z3);     /* C  = x3 + z3    */
-        fe_sub_x4(D,  x3, z3);     /* D  = x3 - z3    */
-        fe_mul_x4(DA, D, A);       /* DA = D * A      */
-        fe_mul_x4(CB, C, B);       /* CB = C * B      */
-        fe_add_x4(t0, DA, CB);     /* t0 = DA + CB    */
-        fe_sq_x4 (x3, t0);         /* x3 = (DA+CB)^2  */
-        fe_sub_x4(t0, DA, CB);     /* t0 = DA - CB    */
-        fe_sq_x4 (t1, t0);         /* t1 = (DA-CB)^2  */
-        fe_mul_x4(z3, x1, t1);     /* z3 = x1 * (DA-CB)^2 */
-        fe_mul_x4(x2, AA, BB);     /* x2 = AA * BB    */
-        fe_mul_121665_x4(t0, E);   /* t0 = a24 * E    */
-        fe_add_x4(t1, AA, t0);     /* t1 = AA + a24*E */
-        fe_mul_x4(z2, E, t1);      /* z2 = E * (AA + a24*E) */
+        fe_add_x4(s.A,  s.x2, s.z2);     /* A  = x2 + z2    */
+        fe_sq_x4 (s.AA, s.A);            /* AA = A^2        */
+        fe_sub_x4(s.B,  s.x2, s.z2);     /* B  = x2 - z2    */
+        fe_sq_x4 (s.BB, s.B);            /* BB = B^2        */
+        fe_sub_x4(s.E,  s.AA, s.BB);     /* E  = AA - BB    */
+        fe_add_x4(s.C,  s.x3, s.z3);     /* C  = x3 + z3    */
+        fe_sub_x4(s.D,  s.x3, s.z3);     /* D  = x3 - z3    */
+        fe_mul_x4(s.DA, s.D, s.A);       /* DA = D * A      */
+        fe_mul_x4(s.CB, s.C, s.B);       /* CB = C * B      */
+        fe_add_x4(s.t0, s.DA, s.CB);     /* t0 = DA + CB    */
+        fe_sq_x4 (s.x3, s.t0);           /* x3 = (DA+CB)^2  */
+        fe_sub_x4(s.t0, s.DA, s.CB);     /* t0 = DA - CB    */
+        fe_sq_x4 (s.t1, s.t0);           /* t1 = (DA-CB)^2  */
+        fe_mul_x4(s.z3, s.x1, s.t1);     /* z3 = x1 * (DA-CB)^2 */
+        fe_mul_x4(s.x2, s.AA, s.BB);     /* x2 = AA * BB    */
+        fe_mul_121665_x4(s.t0, s.E);     /* t0 = a24 * E    */
+        fe_add_x4(s.t1, s.AA, s.t0);     /* t1 = AA + a24*E */
+        fe_mul_x4(s.z2, s.E, s.t1);      /* z2 = E * (AA + a24*E) */
     }
 
     /* Final swap based on the residual swap state. */
     {
         __m256i m = _mm256_setr_epi64x(
-            (int64_t)(uint64_t)(0 - swap[0]),
-            (int64_t)(uint64_t)(0 - swap[1]),
-            (int64_t)(uint64_t)(0 - swap[2]),
-            (int64_t)(uint64_t)(0 - swap[3]));
-        fe_cswap_x4(x2, x3, m);
-        fe_cswap_x4(z2, z3, m);
+            (int64_t)(uint64_t)(0 - s.swap[0]),
+            (int64_t)(uint64_t)(0 - s.swap[1]),
+            (int64_t)(uint64_t)(0 - s.swap[2]),
+            (int64_t)(uint64_t)(0 - s.swap[3]));
+        fe_cswap_x4(s.x2, s.x3, m);
+        fe_cswap_x4(s.z2, s.z3, m);
     }
 
     /* Result lane k = x2_k / z2_k mod p.  4-way Fermat inversion. */
-    fe_invert_x4(z2, z2);
-    fe_mul_x4(x2, x2, z2);
+    fe_invert_x4(s.z2, s.z2);
+    fe_mul_x4(s.x2, s.x2, s.z2);
 
     /* Unpack and contract to canonical 32-byte form per lane. */
-    fe25519_10 r_a, r_b, r_c, r_d;
-    unpack_4way(r_a, r_b, r_c, r_d, x2);
-    fe25519_10_contract(out[0], r_a);
-    fe25519_10_contract(out[1], r_b);
-    fe25519_10_contract(out[2], r_c);
-    fe25519_10_contract(out[3], r_d);
+    unpack_4way(s.r_a, s.r_b, s.r_c, s.r_d, s.x2);
+    fe25519_10_contract(out[0], s.r_a);
+    fe25519_10_contract(out[1], s.r_b);
+    fe25519_10_contract(out[2], s.r_c);
+    fe25519_10_contract(out[3], s.r_d);
 
-    /* Secure cleanup of all sensitive ladder state. */
-    ama_secure_memzero(k,    sizeof(k));
-    ama_secure_memzero(u_a,  sizeof(u_a));
-    ama_secure_memzero(u_b,  sizeof(u_b));
-    ama_secure_memzero(u_c,  sizeof(u_c));
-    ama_secure_memzero(u_d,  sizeof(u_d));
-    ama_secure_memzero(r_a,  sizeof(r_a));
-    ama_secure_memzero(r_b,  sizeof(r_b));
-    ama_secure_memzero(r_c,  sizeof(r_c));
-    ama_secure_memzero(r_d,  sizeof(r_d));
-    ama_secure_memzero(x1,   sizeof(x1));
-    ama_secure_memzero(x2,   sizeof(x2));
-    ama_secure_memzero(z2,   sizeof(z2));
-    ama_secure_memzero(x3,   sizeof(x3));
-    ama_secure_memzero(z3,   sizeof(z3));
-    ama_secure_memzero(A,    sizeof(A));
-    ama_secure_memzero(AA,   sizeof(AA));
-    ama_secure_memzero(B,    sizeof(B));
-    ama_secure_memzero(BB,   sizeof(BB));
-    ama_secure_memzero(E,    sizeof(E));
-    ama_secure_memzero(C,    sizeof(C));
-    ama_secure_memzero(D,    sizeof(D));
-    ama_secure_memzero(DA,   sizeof(DA));
-    ama_secure_memzero(CB,   sizeof(CB));
-    ama_secure_memzero(t0,   sizeof(t0));
-    ama_secure_memzero(t1,   sizeof(t1));
-    ama_secure_memzero(swap, sizeof(swap));
+    /* Secure cleanup of all sensitive ladder state in one shot.
+     * Because every secret local lives in `s`, a single memzero of the
+     * struct covers them all and is trivial to extend the next time a
+     * helper-temporary lands in this function. */
+    ama_secure_memzero(&s, sizeof(s));
 }
 
 #else

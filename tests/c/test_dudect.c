@@ -460,6 +460,9 @@ static double test_x25519_scalarmult_x4(int iterations) {
     dudect_print_result(&ctx);
     return dudect_get_t(&ctx);
 }
+
+/* -----------------------------------------------------------------------
+ * Test 10: Kyber-1024 decaps (constant-time ciphertext rejection)
  *
  * Class 0: Decapsulate valid ciphertext
  * Class 1: Decapsulate corrupted ciphertext

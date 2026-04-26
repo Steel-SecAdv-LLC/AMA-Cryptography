@@ -175,6 +175,28 @@ on hosts whose CPUID lacks BMI2 + ADX (e.g. KVM guest with the
 bits masked, pre-Broadwell host, or any MSVC build — the kernel
 TU is GCC/Clang only).
 
+#### X25519 4-way batch API (3.0.0, currently opt-in)
+
+`ama_x25519_scalarmult_batch(out[], scalars[], points[], count)` is
+a new additive API that exposes a 4-way AVX2 Montgomery-ladder
+kernel for batched Diffie-Hellman.  `print_dispatch_info` reports
+its capability row as `X25519 4-way: AVX2 (opt-in, off)` whenever
+the host has AVX2 but the kernel pointer is unwired — the kernel
+does **not** light up automatically.  Set
+`AMA_DISPATCH_USE_X25519_AVX2=1` in the environment to opt in.
+
+Why opt-in: on x86-64 hosts where the scalar X25519 path is fe64 +
+MULX/ADX (Broadwell+ Intel, Zen+ AMD), four sequential scalar
+ladders are *faster* than four lanes of the AVX2 donna-32bit
+ladder.  The kernel uses 32-bit limbs because AVX2 lacks a
+64×64→128 lane-wise multiply (that arrived with AVX-512 IFMA's
+`VPMADD52LUQ` / `VPMADD52HUQ`); donna-32bit's larger
+cross-product schedule outpaces the 4× SIMD width on
+Skylake-class cores.  See the CHANGELOG `[3.0.0]` Performance
+entry for the per-op measurement and the full retention rationale
+(constant-time test lane, CI matrix coverage, fe51/gf16 fallback
+hosts, and the planned AVX-512 IFMA port that closes the gap).
+
 ### 3R Monitoring Overhead
 
 - **Monitoring overhead:** < 2% on typical workloads

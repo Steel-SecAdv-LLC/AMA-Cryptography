@@ -206,11 +206,14 @@ int main(void) {
                     "batch N=1 matches single-shot");
     }
 
-    /* Exhaustive cross-check: 64 random vectors via batch == 64 sequential
-     * single-shots.  Run TWICE — once with the AVX2 kernel wired in, once
-     * with it forced off — to cover both code paths in the same binary. */
+    /* Exhaustive cross-check: 1024 random vectors via batch == 1024
+     * sequential single-shots.  Run TWICE — once with the AVX2 kernel
+     * wired in, once with it forced off — to cover both code paths in
+     * the same binary.  Matches the budget of test_x25519_field_equiv.c
+     * so the SIMD-vs-scalar coverage is on the same footing as the
+     * fe64-vs-fe51 byte-equivalence pin. */
     {
-        const size_t N = 64;
+        const size_t N = 1024;
         uint8_t (*scs)[32]   = malloc(N * 32);
         uint8_t (*pts)[32]   = malloc(N * 32);
         uint8_t (*bouts)[32] = malloc(N * 32);
@@ -237,7 +240,7 @@ int main(void) {
         TEST_ASSERT(ama_x25519_scalarmult_batch(bouts,
                                                  (const uint8_t (*)[32])scs,
                                                  (const uint8_t (*)[32])pts, N) == AMA_SUCCESS,
-                    "batch random ×64 (AVX2 forced) success");
+                    "batch random ×1024 (AVX2 forced) success");
         for (i = 0; i < N; i++) {
             TEST_ASSERT(memcmp(bouts[i], souts[i], 32) == 0,
                         "batch lane matches single-shot (AVX2 forced)");
@@ -248,7 +251,7 @@ int main(void) {
         TEST_ASSERT(ama_x25519_scalarmult_batch(bouts,
                                                  (const uint8_t (*)[32])scs,
                                                  (const uint8_t (*)[32])pts, N) == AMA_SUCCESS,
-                    "batch random ×64 (scalar forced) success");
+                    "batch random ×1024 (scalar forced) success");
         for (i = 0; i < N; i++) {
             TEST_ASSERT(memcmp(bouts[i], souts[i], 32) == 0,
                         "batch lane matches single-shot (scalar forced)");

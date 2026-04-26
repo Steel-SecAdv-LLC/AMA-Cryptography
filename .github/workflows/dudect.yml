@@ -127,3 +127,42 @@ jobs:
           taskset -c 0 nice -n -10 ./dudect_harness 50000
           echo "=== Crypto primitive timing analysis ==="
           taskset -c 0 nice -n -10 ./dudect_crypto 50000
+
+  dudect-x25519-avx2-batch:
+    # Re-runs the dudect binary with AMA_DISPATCH_USE_X25519_AVX2=1 so
+    # the `X25519 scalarmult batch×4` lane actually exercises the
+    # 4-way AVX2 kernel rather than four sequential scalar ladders.
+    # Without this opt-in, the batch lane measures the scalar path
+    # (the dispatcher leaves x25519_x4 NULL by default — see
+    # CHANGELOG [3.0.0] §Performance for the rationale) and the SIMD
+    # kernel's constant-time signal is never sampled in CI.
+    name: dudect - X25519 AVX2 4-way (opt-in)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake
+
+      - name: Build with dudect enabled
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DAMA_ENABLE_DUDECT=ON \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_ENABLE_LTO=OFF \
+            -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build -j$(nproc)
+
+      - name: Run dudect with X25519 AVX2 4-way kernel wired in
+        env:
+          MEASUREMENTS: ${{ github.event.inputs.measurements || '100000' }}
+          AMA_DISPATCH_USE_X25519_AVX2: '1'
+        run: |
+          taskset -c 0 nice -n -10 \
+            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 300

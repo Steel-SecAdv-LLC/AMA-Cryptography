@@ -742,18 +742,23 @@ AMA_API ama_error_t ama_x25519_scalarmult_batch(
     size_t i;
 
     /* 4-way SIMD path: process full chunks of 4 lanes at a time when
-     * the AVX2 kernel is wired in.  Available iff the dispatcher
-     * detected AVX2 + the env opt-out wasn't tripped. */
+     * the AVX2 kernel is wired in.  The dispatcher leaves
+     * `tbl->x25519_x4 == NULL` by default on x86-64 (the scalar fe64
+     * path beats 4× donna-32bit on Skylake-class cores; the kernel is
+     * opt-in via `AMA_DISPATCH_USE_X25519_AVX2=1` for the constant-time
+     * test lane and a future AVX-512 IFMA port). */
     size_t chunks = 0;
     if (tbl->x25519_x4 != NULL && count >= 2) {
         chunks = count / 4;
         for (i = 0; i < chunks; i++) {
-            uint8_t lane_out[4][32];
-            tbl->x25519_x4(lane_out,
+            /* Kernel writes directly into the caller's output slice —
+             * `out[i*4 .. i*4+3]` is contiguous and ABI-compatible
+             * with `uint8_t (*)[32]`, so no staging buffer is needed.
+             * The aggregate scrub below covers the same memory on the
+             * rejection path. */
+            tbl->x25519_x4((uint8_t (*)[32])&out[i * 4],
                            (const uint8_t (*)[32])&scalars[i * 4],
                            (const uint8_t (*)[32])&points[i * 4]);
-            memcpy(&out[i * 4], lane_out, sizeof(lane_out));
-            ama_secure_memzero(lane_out, sizeof(lane_out));
         }
     }
 
@@ -766,31 +771,34 @@ AMA_API ama_error_t ama_x25519_scalarmult_batch(
         x25519_scalarmult(out[i], scalars[i], points[i]);
     }
 
-    /* Aggregate low-order rejection across all lanes: if ANY lane's
-     * shared secret is all-zero, scrub every output and surface the
-     * crypto error.  Same semantics as the single-shot API, applied
-     * per-lane and then OR-reduced. */
-    uint8_t batch_zero_or = 0xFF; /* 0xFF if every lane is zero so far */
+    /* Aggregate low-order rejection across all lanes, branchlessly:
+     * accumulate an "any lane all-zero" mask without short-circuiting,
+     * then a single end-of-loop check decides whether to scrub the
+     * batch and surface AMA_ERROR_CRYPTO.  No data-dependent branch
+     * inside the per-lane reduction reveals which lane (if any) was
+     * rejected; the only bit the caller learns is the boolean
+     * batch-level outcome, identical to what the return code already
+     * exposes. */
+    uint8_t batch_zero_mask = 0;
     for (i = 0; i < count; i++) {
         uint8_t lane_or = 0;
         size_t j;
         for (j = 0; j < 32; j++) {
             lane_or |= out[i][j];
         }
-        /* Detect any individual all-zero lane: bitmask AND with
-         * (lane_or == 0 ? 0xFF : 0x00) carried branchlessly. */
-        uint8_t lane_is_zero = (uint8_t)(((uint32_t)lane_or - 1u) >> 8) & 0xFFu;
-        if (lane_is_zero) {
-            /* RFC 7748 §6.1: implementations MAY reject all-zero
-             * shared secrets.  AMA does — and per the single-shot
-             * contract, scrub the whole batch so a caller that
-             * ignores the error code can't leak partial results. */
-            for (j = 0; j < count; j++) {
-                ama_secure_memzero(out[j], 32);
-            }
-            return AMA_ERROR_CRYPTO;
+        /* lane_zero_mask: 0xFF if lane_or == 0, else 0x00. */
+        uint8_t lane_zero_mask = (uint8_t)((((uint32_t)lane_or) - 1u) >> 8) & 0xFFu;
+        batch_zero_mask |= lane_zero_mask;
+    }
+    if (batch_zero_mask) {
+        /* RFC 7748 §6.1: implementations MAY reject all-zero shared
+         * secrets.  AMA does — and per the single-shot contract,
+         * scrub the whole batch so a caller that ignores the error
+         * code can't leak partial results. */
+        for (i = 0; i < count; i++) {
+            ama_secure_memzero(out[i], 32);
         }
-        (void)batch_zero_or;
+        return AMA_ERROR_CRYPTO;
     }
 
     return AMA_SUCCESS;

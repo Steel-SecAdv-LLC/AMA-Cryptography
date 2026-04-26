@@ -822,7 +822,25 @@ void ama_print_dispatch_info(void) {
     fprintf(stderr, "║  Ed25519:            %-24s║\n", ama_impl_level_name(info->ed25519));
     fprintf(stderr, "║  ChaCha20-Poly1305:  %-24s║\n", ama_impl_level_name(info->chacha20poly1305));
     fprintf(stderr, "║  Argon2:             %-24s║\n", ama_impl_level_name(info->argon2));
-    fprintf(stderr, "║  X25519 4-way:       %-24s║\n", ama_impl_level_name(info->x25519));
+    /* Annotate the X25519 4-way row when capability is detected but the
+     * kernel pointer is NULL — i.e., the dispatcher saw AVX2+ but the
+     * `AMA_DISPATCH_USE_X25519_AVX2=1` opt-in wasn't tripped, so the
+     * batch path falls back to four sequential scalar ladders.  Without
+     * this annotation an external reader sees "AVX2" here and concludes
+     * the SIMD kernel is on, which is the obvious confused-bug-report
+     * source. */
+    {
+        const char *x25519_label;
+        char x25519_buf[24];
+        if (info->x25519 >= AMA_IMPL_AVX2 && dispatch_table.x25519_x4 == NULL) {
+            snprintf(x25519_buf, sizeof(x25519_buf), "%s (opt-in, off)",
+                     ama_impl_level_name(info->x25519));
+            x25519_label = x25519_buf;
+        } else {
+            x25519_label = ama_impl_level_name(info->x25519);
+        }
+        fprintf(stderr, "║  X25519 4-way:       %-24s║\n", x25519_label);
+    }
     fprintf(stderr, "╚══════════════════════════════════════════════╝\n");
     fprintf(stderr, "\n");
 }
