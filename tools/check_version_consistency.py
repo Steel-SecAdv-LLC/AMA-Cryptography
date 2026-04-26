@@ -45,7 +45,9 @@ def _read(path: Path) -> str:
 
 
 _C_VERSION_LITERAL_RE = re.compile(r'"\d+\.\d+\.\d+"')
-_C_VERSION_IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*[Vv][Ee][Rr][Ss][Ii][Oo][Nn]\w*\b|\bversion\b")
+_C_VERSION_IDENT_RE = re.compile(
+    r"\b[A-Za-z_][A-Za-z0-9_]*[Vv][Ee][Rr][Ss][Ii][Oo][Nn]\w*\b|\bversion\b"
+)
 
 
 def scan_c_sources_for_version_literals(root: Path) -> list[str]:
