@@ -57,6 +57,31 @@ endif()
 # ama_x25519_* symbols aren't in the library and linking would fail.
 if(AMA_USE_NATIVE_PQC)
     add_ama_test(test_x25519 test_x25519.c)
+
+    # X25519 field-path pinning regression test. Asserts that the build-
+    # time selector in src/c/ama_x25519.c picks the deterministic path
+    # for the host (fe64 on x86-64 GCC/Clang, fe51 elsewhere on 64-bit
+    # GCC/Clang, gf16 otherwise) — catches a future build-flag change
+    # that silently regresses the radix-2^64 wiring.
+    add_ama_test(test_x25519_path test_x25519_path.c)
+
+    # X25519 fe51 vs fe64 byte-equivalence. Compiles ama_x25519.c twice
+    # with the field path forced on each side, then runs 1024 random
+    # (scalar, point) vectors through both ladders and asserts byte-
+    # for-byte equality of every output. Only built when both fe51 and
+    # fe64 are available (64-bit GCC/Clang with __int128).
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang"
+       AND CMAKE_SIZEOF_VOID_P EQUAL 8
+       AND NOT MSVC)
+        add_executable(test_x25519_field_equiv
+            test_x25519_field_equiv.c
+            x25519_equiv_fe51.c
+            x25519_equiv_fe64.c
+        )
+        target_link_libraries(test_x25519_field_equiv ama_cryptography_test)
+        add_test(NAME test_x25519_field_equiv COMMAND test_x25519_field_equiv)
+    endif()
+
     add_ama_test(test_chacha20poly1305 test_chacha20poly1305.c)
     add_ama_test(test_argon2id test_argon2id.c)
     # secp256k1 and FROST are also gated on AMA_USE_NATIVE_PQC (they live in

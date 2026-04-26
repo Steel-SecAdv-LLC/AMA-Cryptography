@@ -967,6 +967,21 @@ AMA_API ama_error_t ama_x25519_key_exchange(
     const uint8_t their_public_key[32]
 );
 
+/**
+ * @brief Return the X25519 field-arithmetic path selected at compile time.
+ *
+ * Returns one of the string literals "fe64" (radix 2^64, 4 limbs — x86-64
+ * GCC/Clang default), "fe51" (radix 2^51, 5 limbs — non-x86-64 64-bit
+ * GCC/Clang fallback), or "gf16" (radix 2^16, 16 limbs — MSVC and 32-bit
+ * portable fallback). The selection is deterministic: changing the
+ * compiler or target architecture is the only way to switch paths.
+ *
+ * Used by the path-pinning regression test
+ * (`tests/c/test_x25519_path.c`) to assert that a future build-flag
+ * change cannot silently regress the compiled-in path.
+ */
+AMA_API const char *ama_x25519_field_path(void);
+
 /* ============================================================================
  * ARGON2ID KEY DERIVATION (RFC 9106)
  * ============================================================================ */

@@ -112,6 +112,38 @@ Cython acceleration does **not** affect C-implemented cryptographic primitives (
 
 > ML-DSA-65 is ~6× slower to sign than Ed25519 on this host (pre-SIMD scalar NTT path) but provides NIST category III quantum security. Sign/verify latency shifts substantially with CPU microarchitecture — re-run `benchmark_suite.py` on your deployment host before quoting numbers externally.
 
+### X25519 Field-Path Selection (3.0.0)
+
+The X25519 Montgomery ladder now picks its field-arithmetic representation
+deterministically at compile time:
+
+| Toolchain / target          | Path | Layout                          |
+|-----------------------------|------|---------------------------------|
+| x86-64 GCC/Clang + __int128 | fe64 | radix 2^64, 4 limbs of uint64_t |
+| Other 64-bit GCC/Clang + __int128 (aarch64, ppc64le, …) | fe51 | radix 2^51, 5 limbs |
+| MSVC, clang-cl, 32-bit, no __int128 | gf16 | radix 2^16, 16 limbs of int64_t |
+
+Verify which path the local build picked:
+
+```bash
+./build/bin/test_x25519_path
+```
+
+The two `__int128` paths are byte-for-byte arithmetic equivalent — see
+`tests/c/test_x25519_field_equiv.c`, which runs 1024 random
+(scalar, point) vectors through both ladders and asserts every output
+matches.
+
+On a Sapphire Rapids canonical-host run with `benchmark_c_raw`,
+fe64 measured ~11,500 X25519 DH ops/sec vs ~21,800 for fe51 on the
+same hardware (Linux, GCC 12, `-O3 -march=native`). The radix-2^64
+schoolbook trails the radix-2^51 carry-pipelined layout in pure C
+because GCC does not yet generate MULX+ADCX (BMI2+ADX) for the
+4×4 schoolbook pattern — the wiring sets up the correct field-element
+type for a future hand-tuned MULX+ADX assembly kernel where fe64
+will lead. fe51 remains available as a fallback by building with
+`-DAMA_X25519_FORCE_FE51`.
+
 ### 3R Monitoring Overhead
 
 - **Monitoring overhead:** < 2% on typical workloads

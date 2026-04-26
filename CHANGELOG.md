@@ -274,6 +274,27 @@ constant-time check that was a flake source on contended runners.
   roughly 15–20× the pre-change scalar path. Reproduce with
   `cmake --build build && ./build/bin/benchmark_c_raw --json`.
 
+- **X25519 fe64 wiring on x86-64 (radix-2^64, 4-limb field arithmetic).**
+  `src/c/ama_x25519.c` now selects the radix-2^64 ladder (`fe64.h`,
+  4 limbs of `uint64_t` with `__uint128_t` intermediates, 16 cross-
+  products per multiplication) by default on x86-64 GCC/Clang. fe51 is
+  retained as the fallback for non-x86-64 64-bit GCC/Clang
+  (aarch64, ppc64le) and the radix-2^16 portable path remains for MSVC,
+  clang-cl, and 32-bit targets. The selection is deterministic at compile
+  time and exposed via `ama_x25519_field_path()` / pinned by
+  `tests/c/test_x25519_path.c`. Byte-for-byte equivalence between fe51
+  and fe64 ladders is verified across 1024 random (scalar, point) vectors
+  by `tests/c/test_x25519_field_equiv.c`. dudect harness extended with an
+  X25519 lane that re-runs against whichever path the build selected.
+  Measured throughput on a Sapphire Rapids host with all SIMD gates
+  advertised: fe64 ~11.5K X25519 DH ops/s vs fe51 ~21.8K ops/s on the
+  same host (`-O3 -march=native`, GCC 12) — the wiring is a foundation
+  step; the radix-2^64 schoolbook trails fe51 in pure C because GCC does
+  not yet emit MULX+ADCX (BMI2+ADX) for 4×4 schoolbook, and the win lands
+  when a hand-tuned MULX+ADX kernel slots in behind the same
+  `AMA_X25519_FIELD_FE64` guard. fe51 still reachable on x86-64 via
+  `-DAMA_X25519_FORCE_FE51`.
+
 - ChaCha20-Poly1305 AVX2 wiring: `ama_chacha20_block_x8_avx2` (8-way
   parallel ChaCha20 block function emitting 512 B of keystream) is
   now wired through the dispatch table and invoked by the CTR inner
@@ -311,6 +332,20 @@ constant-time check that was a flake source on contended runners.
   `AMA_DISPATCH_NO_AUTOTUNE=1`.
 
 ### Changed — Dispatch Cleanup, Dependencies, and CI
+
+- **Version-consistency tool extended to scan C source for hardcoded
+  version literals.** `tools/check_version_consistency.py` now walks
+  `src/c/**/*.{c,h}` and flags any `"X.Y.Z"` literal that sits adjacent
+  to a `VERSION` / `version` / `Version` identifier on the same or
+  previous line. The canonical C-side anchor remains
+  `include/ama_cryptography.h::AMA_CRYPTOGRAPHY_VERSION_STRING`; today's
+  `src/c/` tree returns zero hits and the test
+  (`tests/test_version_consistency.py`) keeps it that way by writing a
+  synthetic `#define MY_VERSION "9.9.9"` into a temp directory and
+  asserting the scanner flags it. Block / line C comments are ignored
+  so historical change-log notes inside source headers don't trip the
+  check. Net: the tool now reports the existing 8 anchors plus this
+  zero-hit assertion, all in agreement on the canonical version.
 
 - Remove dead `ama_ed25519_*_avx2` trampolines and associated dispatch
   wiring: the "AVX2" Ed25519 entry points forwarded directly to the scalar
@@ -388,6 +423,27 @@ constant-time check that was a flake source on contended runners.
   `benchmarks/benchmark_c_raw.c`.
 
 ### Documentation
+
+- **Performance comparison numbers refreshed against AVX-512 + VAES +
+  AES-NI host; CI-environmental note added to
+  `docs/COMPETITIVE_ANALYSIS.md`.** Re-ran the full benchmark suite
+  (`benchmarks/benchmark_runner.py`, `build/bin/benchmark_c_raw --json`,
+  `benchmarks/comparative_benchmark.py`) on a Linux x86-64 host with
+  AES-NI + PCLMULQDQ + AVX2 + VAES + VPCLMULQDQ + AVX-512F/BW/DQ/VL/VBMI
+  advertised through to userland (no hypervisor masking). Refreshed
+  `README.md`, `benchmark-report.md`, `benchmark-results.json`,
+  `docs/COMPETITIVE_ANALYSIS.md`, and `wiki/Performance-Benchmarks.md`
+  so they match the canonical-host run, with X25519 specifically
+  captured before/after the fe64 wiring (fe51 ~21.8K → fe64 ~11.5K
+  DH ops/sec on this host). New paragraph at the top of
+  `docs/COMPETITIVE_ANALYSIS.md` §Performance Comparison spelling
+  out which CPUID gates the dispatcher checks
+  (`ama_has_aes_ni()`, `ama_has_pclmulqdq()`,
+  `ama_cpuid_has_vaes_aesgcm()`, `ama_cpuid_has_avx2()`,
+  `ama_cpuid_has_avx512_keccak()`) and the typical 1.5–2× slowdown
+  cloud-CI shared runners see when the hypervisor masks any of those
+  features — readers can verify which paths their hardware actually
+  selected via `AMA_DISPATCH_VERBOSE=1`.
 
 - Repository-wide documentation alignment sweep (2026-04-20): refreshed
   "Last Updated" headers across `README.md`, `ARCHITECTURE.md`,

@@ -207,31 +207,54 @@ paths for all 8 algorithm families, preparing for ARMv9 server adoption
 
 ### Performance Comparison (measured)
 
+> **CI environmental context.** The throughput numbers published below
+> are measured on a Linux x86-64 host that advertises **AES-NI +
+> PCLMULQDQ + AVX2 + VAES + VPCLMULQDQ + AVX-512F/BW/DQ/VL/VBMI** all
+> the way through to userland (no hypervisor masking). GitHub Actions
+> shared runners frequently mask one or more of these features at the
+> hypervisor layer — most often AVX-512 and VAES, occasionally even
+> AES-NI + PCLMULQDQ on lower-tier hosts — so AMA's runtime dispatcher
+> falls back to the generic-C scalar path. Concretely, the dispatcher
+> consults `ama_has_aes_ni()`, `ama_has_pclmulqdq()`,
+> `ama_cpuid_has_vaes_aesgcm()`, `ama_cpuid_has_avx2()`, and
+> `ama_cpuid_has_avx512_keccak()` (XCR0-aware AVX-512F/BW/DQ/VL gate)
+> before promoting an algorithm slot to a SIMD kernel. When any of
+> those return 0 the slot stays scalar. **Users who benchmark in cloud
+> CI will therefore see numbers ~1.5–2× slower than the table for
+> AES-GCM, ChaCha20-Poly1305, X25519, and ML-KEM-1024 keygen.** This
+> is environmental, not a code regression. Verify which paths the
+> dispatcher actually selected on your hardware by re-running with
+> `AMA_DISPATCH_VERBOSE=1`; the printout names every promoted slot
+> and the CPUID gate that allowed (or didn't allow) it. For
+> reproducible peer comparison on cloud CI, expect the generic-C
+> band, not the canonical-host band.
+
 The table below combines (a) AMA's measured ops/sec from
-`benchmark-results.json` (GitHub Actions shared runner, x86-64, generic
-C path) with (b) peer-library numbers. Peer numbers are marked
-**(measured)** when `benchmarks/comparative_benchmark.py` captured them
-in the same environment and **(ref)** when they come from published
-reference ranges in `benchmarks/baseline.json::metadata.peer_references`
+`benchmark-results.json` (Linux x86-64 canonical-host run with the
+SIMD gates listed above advertised) with (b) peer-library numbers.
+Peer numbers are marked **(measured)** when
+`benchmarks/comparative_benchmark.py` captured them in the same
+environment and **(ref)** when they come from published reference
+ranges in `benchmarks/baseline.json::metadata.peer_references`
 (citations live there). Where a library does not ship the primitive,
 the cell reads **N/A**.
 
 | Primitive | AMA (measured) | libsodium | liboqs | OpenSSL | Verdict |
 |---|---:|---:|---:|---:|---|
-| SHA3-256 hash (1KB) | 179,490 ops/s | N/A | N/A | varies | AMA competitive on generic C path |
-| HMAC-SHA3-256 (1KB) | 126,098 ops/s | N/A | N/A | varies | AMA competitive on generic C path |
-| Ed25519 KeyGen | 35,946 ops/s | 40,000–60,000 ops/s (ref) | N/A | varies | within libsodium reference band (base-point comb table landed) |
-| Ed25519 Sign | 51,206 ops/s | 50,000–80,000 ops/s (ref) | N/A | ~20,000 ops/s (ref) | within libsodium band; OpenSSL ~2.5× slower |
-| Ed25519 Verify | 21,129 ops/s | 15,000–30,000 ops/s (ref) | N/A | ~10,000 ops/s (ref) | within libsodium reference band (vartime, AVX2 SWE rectified) |
-| HKDF-SHA3-256 (3 keys) | 86,154 ops/s | HKDF-SHA256 only | N/A | HKDF-SHA256 only | Different hash — not directly comparable |
-| ML-DSA-65 KeyGen | 3,626 ops/s | N/A | 2,000–5,000 ops/s (ref) | Provider 3.4+ (ref) | Within liboqs reference band |
-| ML-DSA-65 Sign | 2,976 ops/s | N/A | 500–1,500 ops/s (ref) | Provider 3.4+ (ref) | ~2× faster than the liboqs reference band |
-| ML-DSA-65 Verify | 7,576 ops/s | N/A | 4,000–9,000 ops/s (ref) | Provider 3.4+ (ref) | Within liboqs band |
-| ML-KEM-1024 KeyGen | 4,965 ops/s | N/A | 8,000–18,000 ops/s (ref) | Provider 3.4+ (ref) | Trails liboqs ~2× on generic C path |
-| ML-KEM-1024 Encap | 10,253 ops/s | N/A | 7,000–15,000 ops/s (ref) | Provider 3.4+ (ref) | Inside liboqs band |
-| AES-256-GCM (1KB) | 271,449 ops/s | N/A (XChaCha preferred) | N/A | ~500K ops/s (AES-NI, ref) | OpenSSL AES-NI path ~1.8× faster |
-| ChaCha20-Poly1305 (1KB) | 263,430 ops/s | ~380,000 ops/s (ref) | N/A | ~300,000 ops/s (ref) | libsodium ~1.4× faster |
-| X25519 scalar mult | 21,632 ops/s | ~40,000 ops/s (ref) | N/A | ~35,000 ops/s (ref) | libsodium ~1.8× faster |
+| SHA3-256 hash (1KB) | 184,112 ops/s | N/A | N/A | varies | AMA competitive on generic C path |
+| HMAC-SHA3-256 (1KB) | 115,408 ops/s | N/A | N/A | varies | AMA competitive on generic C path |
+| Ed25519 KeyGen | 55,716 ops/s | 40,000–60,000 ops/s (ref) | N/A | varies | inside libsodium reference band (base-point comb table) |
+| Ed25519 Sign | 51,488 ops/s | 50,000–80,000 ops/s (ref) | N/A | ~20,000 ops/s (ref) | within libsodium band; OpenSSL ~2.5× slower |
+| Ed25519 Verify | 21,338 ops/s | 15,000–30,000 ops/s (ref) | N/A | ~10,000 ops/s (ref) | within libsodium reference band (vartime, AVX2 SWE rectified) |
+| HKDF-SHA3-256 (3 keys) | 81,703 ops/s | HKDF-SHA256 only | N/A | HKDF-SHA256 only | Different hash — not directly comparable |
+| ML-DSA-65 KeyGen | 3,874 ops/s | N/A | 2,000–5,000 ops/s (ref) | Provider 3.4+ (ref) | inside liboqs reference band |
+| ML-DSA-65 Sign | 4,312 ops/s | N/A | 500–1,500 ops/s (ref) | Provider 3.4+ (ref) | ~3× faster than the liboqs reference band |
+| ML-DSA-65 Verify | 7,413 ops/s | N/A | 4,000–9,000 ops/s (ref) | Provider 3.4+ (ref) | inside liboqs band |
+| ML-KEM-1024 KeyGen | 5,999 ops/s | N/A | 8,000–18,000 ops/s (ref) | Provider 3.4+ (ref) | trails liboqs ~2× on generic C path |
+| ML-KEM-1024 Encap | 12,365 ops/s | N/A | 7,000–15,000 ops/s (ref) | Provider 3.4+ (ref) | inside liboqs band |
+| AES-256-GCM (1KB) | 293,143 ops/s | N/A (XChaCha preferred) | N/A | ~500K ops/s (AES-NI, ref) | OpenSSL AES-NI path ~1.7× faster (VAES YMM landed; gap closes at ≥4 KB) |
+| ChaCha20-Poly1305 (1KB) | 256,249 ops/s | ~380,000 ops/s (ref) | N/A | ~300,000 ops/s (ref) | libsodium ~1.5× faster |
+| X25519 scalar mult (fe64) | 11,519 ops/s | ~40,000 ops/s (ref) | N/A | ~35,000 ops/s (ref) | libsodium ~3.5× faster on the pure-C fe64 path; gap closes when MULX+ADX assembly lands. fe51 fallback measures ~21,800 ops/s on the same host (`-DAMA_X25519_FORCE_FE51`). |
 
 **Reproducing live peer numbers locally:**
 

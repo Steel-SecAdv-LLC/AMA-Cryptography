@@ -23,13 +23,25 @@
  * Implements X25519 Diffie-Hellman key exchange per RFC 7748 using the
  * Montgomery curve Curve25519: y^2 = x^3 + 486662*x^2 + x over GF(2^255-19).
  *
- * Field arithmetic:
- *   - On toolchains with native `__int128` (GCC/Clang on 64-bit targets,
- *     detected via `__SIZEOF_INT128__`): radix 2^51 (5 limbs of uint64_t
- *     with __uint128_t intermediates) via fe51.h. This is the donna64
- *     layout — 25 cross-products per multiplication vs. 256 for radix-2^16.
- *   - On every other platform (MSVC, clang-cl, 32-bit targets, etc.):
- *     radix 2^16 (16 limbs of int64_t), TweetNaCl-style.
+ * Field arithmetic — three tiers, selected at compile time:
+ *   - **fe64** (radix 2^64, 4 limbs of uint64_t with __uint128_t
+ *     intermediates) on x86-64 GCC/Clang where the 64x64→128 native
+ *     multiply is single-cycle and `__int128` is available. The fewest
+ *     possible limbs on a 64-bit target — 16 cross-products per mul.
+ *   - **fe51** (radix 2^51, 5 limbs) — the donna64 layout, 25 cross-
+ *     products per mul. Used on non-x86-64 GCC/Clang 64-bit targets
+ *     (e.g. aarch64, ppc64le) where `__int128` is available but the
+ *     fe64 carry chain is less of a win or unverified at perf level.
+ *   - **gf radix-2^16** (16 limbs of int64_t, TweetNaCl-style) — fully
+ *     portable fallback for MSVC, clang-cl, 32-bit targets, and any
+ *     other toolchain without `__int128`.
+ *
+ * The selection is *deterministic* at compile time — the build-time
+ * guard `AMA_X25519_FIELD_FE64` is defined exactly when the fe64 path
+ * is selected, and `ama_x25519_field_path()` returns a stable string
+ * literal ("fe64" / "fe51" / "gf16") so a future build-flag change
+ * cannot silently regress the path. See `tests/c/test_x25519_path.c`
+ * for the compile-time pin.
  *
  * The Montgomery ladder operates on x-coordinates only, processing scalar
  * bits from bit 254 down to 0 with constant-time conditional swaps.
@@ -49,12 +61,142 @@
 #include <stdint.h>
 
 #include "fe51.h"
+#include "fe64.h"
 
-/* The fe51 (radix-2^51) field requires a native 128-bit integer type.
- * fe51.h defines `AMA_FE51_AVAILABLE` when the host compiler provides
- * `__int128` (GCC/Clang on 64-bit targets). Otherwise we fall through
- * to the portable radix-2^16 implementation below. */
-#if defined(AMA_FE51_AVAILABLE)
+/* ----------------------------------------------------------------------
+ * Build-time field-path selection (deterministic).
+ *
+ *   AMA_X25519_FIELD_FE64 — set when the fe64 (radix 2^64) ladder is
+ *                           compiled in. Default: x86-64 GCC/Clang
+ *                           with __int128.
+ *   AMA_X25519_FIELD_FE51 — set when the fe51 (radix 2^51) ladder is
+ *                           compiled in. Default: non-x86-64 GCC/Clang
+ *                           with __int128.
+ *   AMA_X25519_FIELD_GF   — set when the portable radix-2^16 ladder is
+ *                           compiled in. Default: anything else.
+ *
+ * Override knobs (mostly for the byte-equivalence test that compiles
+ * the fe51 path on an x86-64 host):
+ *   AMA_X25519_FORCE_FE51 — force fe51 even when fe64 would otherwise
+ *                           win (useful for bit-for-bit cross-checks).
+ *   AMA_X25519_FORCE_FE64 — force fe64 (only takes effect if
+ *                           AMA_FE64_AVAILABLE).
+ * ---------------------------------------------------------------------- */
+#if defined(AMA_X25519_FORCE_FE64) && defined(AMA_FE64_AVAILABLE)
+#  define AMA_X25519_FIELD_FE64 1
+#elif defined(AMA_X25519_FORCE_FE51) && defined(AMA_FE51_AVAILABLE)
+#  define AMA_X25519_FIELD_FE51 1
+#elif defined(AMA_FE64_AVAILABLE) && (defined(__x86_64__) || defined(_M_X64))
+#  define AMA_X25519_FIELD_FE64 1
+#elif defined(AMA_FE51_AVAILABLE)
+#  define AMA_X25519_FIELD_FE51 1
+#else
+#  define AMA_X25519_FIELD_GF 1
+#endif
+
+/* Linkage of the inner ladder. Defaults to `static` so the production
+ * library export surface is exactly `ama_x25519_keypair` /
+ * `ama_x25519_key_exchange` / `ama_x25519_field_path`. The fe51-vs-fe64
+ * byte-equivalence test (`tests/c/test_x25519_field_equiv.c`) overrides
+ * this to nothing so it can compile two TUs from this file with
+ * different rename macros and link the resulting non-static
+ * `x25519_scalarmult_{fe51,fe64}` symbols into a single test binary. */
+#ifndef AMA_X25519_LADDER_LINKAGE
+#  define AMA_X25519_LADDER_LINKAGE static
+#endif
+
+#if defined(AMA_X25519_FIELD_FE64)
+
+/* ============================================================================
+ * X25519 SCALAR MULTIPLICATION  (radix-2^64, RFC 7748 Section 5 / Appendix A)
+ *
+ * Same RFC 7748 Appendix A ladder structure as the fe51 path — only the
+ * field-element type and the per-step ops change. 4-limb representation
+ * with __uint128_t intermediates: 16 cross-products per multiplication
+ * (vs 25 for fe51) and the 64x64→128 native multiply on x86-64 maps
+ * directly to a single MUL/MULX instruction.
+ * ============================================================================ */
+
+AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32], const uint8_t n[32],
+                              const uint8_t p[32]) {
+    uint8_t z[32];
+    fe64 x1, x2, z2, x3, z3;
+    fe64 A, AA, B, BB, E, C, D, DA, CB, t0, t1;
+    unsigned int swap = 0;
+    int t;
+
+    /* Copy and clamp scalar per RFC 7748 Section 5 */
+    memcpy(z, n, 32);
+    z[0]  &= 248;
+    z[31] &= 127;
+    z[31] |= 64;
+
+    /* Decode u-coordinate of base point (clears bit 255 inside) */
+    fe64_frombytes(x1, p);
+
+    /* Ladder initial state */
+    fe64_1(x2);
+    fe64_0(z2);
+    fe64_copy(x3, x1);
+    fe64_1(z3);
+
+    for (t = 254; t >= 0; t--) {
+        unsigned int k_t = (z[t >> 3] >> (t & 7)) & 1;
+        swap ^= k_t;
+        fe64_cswap(x2, x3, (uint64_t)swap);
+        fe64_cswap(z2, z3, (uint64_t)swap);
+        swap = k_t;
+
+        fe64_add(A, x2, z2);      /* A  = x2 + z2    */
+        fe64_sq (AA, A);          /* AA = A^2        */
+        fe64_sub(B, x2, z2);      /* B  = x2 - z2    */
+        fe64_sq (BB, B);          /* BB = B^2        */
+        fe64_sub(E, AA, BB);      /* E  = AA - BB    */
+        fe64_add(C, x3, z3);      /* C  = x3 + z3    */
+        fe64_sub(D, x3, z3);      /* D  = x3 - z3    */
+        fe64_mul(DA, D, A);       /* DA = D * A      */
+        fe64_mul(CB, C, B);       /* CB = C * B      */
+        fe64_add(t0, DA, CB);     /* t0 = DA + CB    */
+        fe64_sq (x3, t0);         /* x3 = (DA+CB)^2  */
+        fe64_sub(t0, DA, CB);     /* t0 = DA - CB    */
+        fe64_sq (t1, t0);         /* t1 = (DA-CB)^2  */
+        fe64_mul(z3, x1, t1);     /* z3 = x1 * (DA-CB)^2 */
+        fe64_mul(x2, AA, BB);     /* x2 = AA * BB    */
+        fe64_mul_121665(t0, E);   /* t0 = a24 * E    */
+        fe64_add(t1, AA, t0);     /* t1 = AA + a24*E */
+        fe64_mul(z2, E, t1);      /* z2 = E * (AA + a24*E) */
+    }
+
+    /* Final swap */
+    fe64_cswap(x2, x3, (uint64_t)swap);
+    fe64_cswap(z2, z3, (uint64_t)swap);
+
+    /* Result = x2 / z2 */
+    fe64_invert(z2, z2);
+    fe64_mul(x2, x2, z2);
+    fe64_tobytes(q, x2);
+
+    /* Secure cleanup of all sensitive intermediates */
+    ama_secure_memzero(z,  sizeof(z));
+    ama_secure_memzero(x1, sizeof(fe64));
+    ama_secure_memzero(x2, sizeof(fe64));
+    ama_secure_memzero(z2, sizeof(fe64));
+    ama_secure_memzero(x3, sizeof(fe64));
+    ama_secure_memzero(z3, sizeof(fe64));
+    ama_secure_memzero(A,  sizeof(fe64));
+    ama_secure_memzero(AA, sizeof(fe64));
+    ama_secure_memzero(B,  sizeof(fe64));
+    ama_secure_memzero(BB, sizeof(fe64));
+    ama_secure_memzero(E,  sizeof(fe64));
+    ama_secure_memzero(C,  sizeof(fe64));
+    ama_secure_memzero(D,  sizeof(fe64));
+    ama_secure_memzero(DA, sizeof(fe64));
+    ama_secure_memzero(CB, sizeof(fe64));
+    ama_secure_memzero(t0, sizeof(fe64));
+    ama_secure_memzero(t1, sizeof(fe64));
+}
+
+#elif defined(AMA_X25519_FIELD_FE51)
 
 /* ============================================================================
  * X25519 SCALAR MULTIPLICATION  (radix-2^51, RFC 7748 Section 5 / Appendix A)
@@ -65,7 +207,7 @@
  * on the scalar.
  * ============================================================================ */
 
-static void x25519_scalarmult(uint8_t q[32], const uint8_t n[32],
+AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32], const uint8_t n[32],
                               const uint8_t p[32]) {
     uint8_t z[32];
     fe51 x1, x2, z2, x3, z3;
@@ -144,7 +286,7 @@ static void x25519_scalarmult(uint8_t q[32], const uint8_t n[32],
     ama_secure_memzero(t1, sizeof(fe51));
 }
 
-#else  /* !AMA_FE51_AVAILABLE — portable radix-2^16 fallback */
+#else  /* AMA_X25519_FIELD_GF — portable radix-2^16 fallback */
 
 /* ============================================================================
  * FIELD ELEMENT TYPE: 16 limbs of ~16 bits each, stored in int64_t
@@ -267,7 +409,7 @@ static void pack25519(uint8_t o[32], const gf n) {
     }
 }
 
-static void x25519_scalarmult(uint8_t q[32], const uint8_t n[32],
+AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32], const uint8_t n[32],
                               const uint8_t p[32]) {
     uint8_t z[32];
     gf x, a, b, c, d, e, f;
@@ -329,11 +471,39 @@ static void x25519_scalarmult(uint8_t q[32], const uint8_t n[32],
     ama_secure_memzero(f, sizeof(gf));
 }
 
-#endif  /* AMA_FE51_AVAILABLE */
+#endif  /* AMA_X25519_FIELD_* */
 
 /* ============================================================================
  * PUBLIC API
+ *
+ * The byte-equivalence test compiles this TU twice with different field-
+ * path force flags to expose two non-static `x25519_scalarmult` symbols
+ * (renamed via `-Dx25519_scalarmult=x25519_scalarmult_fe51` etc.). In
+ * those builds, AMA_X25519_NO_PUBLIC_API is defined so the AMA_API
+ * exports below are skipped — otherwise we'd get duplicate definitions
+ * of `ama_x25519_keypair` etc. when the test executable links the two
+ * wrapper TUs together with the production library.
  * ============================================================================ */
+
+#ifndef AMA_X25519_NO_PUBLIC_API
+
+/**
+ * @brief Return the X25519 field-arithmetic path selected at compile time.
+ *
+ * Returns one of the string literals "fe64", "fe51", or "gf16". Used by
+ * the path-pinning regression test (see `tests/c/test_x25519_path.c`)
+ * to assert that a future build-flag change cannot silently regress the
+ * compiled-in path.
+ */
+AMA_API const char *ama_x25519_field_path(void) {
+#if defined(AMA_X25519_FIELD_FE64)
+    return "fe64";
+#elif defined(AMA_X25519_FIELD_FE51)
+    return "fe51";
+#else
+    return "gf16";
+#endif
+}
 
 /**
  * @brief Generate X25519 keypair.
@@ -408,3 +578,5 @@ AMA_API ama_error_t ama_x25519_key_exchange(
 
     return AMA_SUCCESS;
 }
+
+#endif /* AMA_X25519_NO_PUBLIC_API */

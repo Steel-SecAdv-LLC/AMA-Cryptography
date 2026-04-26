@@ -14,9 +14,21 @@ Also verifies that the root ``INVARIANTS.md`` stays byte-identical to
 ``.github/INVARIANTS.md`` — we inlined the content to remove the unhelpful
 one-line pointer (audit 6a), so CI must catch any future drift.
 
+Additionally enforces that no C source file under ``src/c/**/*.{c,h}``
+embeds a hardcoded ``"X.Y.Z"`` version-string literal near a
+``VERSION`` / ``version`` / ``Version`` identifier. The canonical
+location for the C-side version is ``include/ama_cryptography.h``'s
+``AMA_CRYPTOGRAPHY_VERSION_STRING`` macro (which the canonical-anchor
+checks above already pin to the package version). The
+``src/c/`` tree should *use* that macro, never re-declare a literal —
+today the scan returns zero hits and that is the steady state. The
+test (`tests/tools/test_check_version_consistency.py`) writes a
+synthetic C file with a fake version literal into a temp tree and
+asserts the scanner flags it.
+
 Exit code:
-    0  all versions and invariants agree
-    1  a mismatch was detected
+    0  all versions and invariants agree, no embedded C-source version literals
+    1  a mismatch or stray C-source version literal was detected
 """
 
 from __future__ import annotations
@@ -30,6 +42,73 @@ REPO = Path(__file__).resolve().parent.parent
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+_C_VERSION_LITERAL_RE = re.compile(r'"\d+\.\d+\.\d+"')
+_C_VERSION_IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*[Vv][Ee][Rr][Ss][Ii][Oo][Nn]\w*\b|\bversion\b")
+
+
+def scan_c_sources_for_version_literals(root: Path) -> list[str]:
+    """Scan every ``*.c`` / ``*.h`` under ``root`` for hardcoded
+    ``"X.Y.Z"`` literals that sit near a ``VERSION`` / ``version``
+    identifier on the same line or the previous line.
+
+    Returns a list of ``"<relpath>:<lineno>: <line>"`` hits — one entry
+    per offending line. The canonical location for the C-side version
+    is ``include/ama_cryptography.h``'s ``AMA_CRYPTOGRAPHY_VERSION_STRING``
+    macro (already pinned by the canonical-anchor checks above), so
+    ``src/c/`` files must reference that macro rather than re-declaring
+    a literal.
+
+    Lines inside C `// ...` line comments and `/* ... */` block comments
+    are ignored — historical or annotation-only mentions of a version
+    in a comment are not a code-shipped literal. (We're permissive here
+    because the goal is to flag *executable* embedded version literals,
+    not documentation.) The detection is intentionally line-oriented
+    rather than full preprocessor-aware: it errs on the side of false
+    positives, which is the right tradeoff for a CI safety net.
+    """
+    hits: list[str] = []
+    if not root.exists():
+        return hits
+
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        if path.suffix not in (".c", ".h"):
+            continue
+
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+
+        # Strip /* ... */ block comments. We do this on a copy used only
+        # for hit detection — the original lines are still reported in
+        # the message so the developer can locate the literal precisely.
+        stripped = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+        stripped_lines = stripped.splitlines()
+        original_lines = text.splitlines()
+
+        # Pad stripped_lines to match original line count if block-
+        # comment removal collapsed any lines.
+        if len(stripped_lines) < len(original_lines):
+            stripped_lines += [""] * (len(original_lines) - len(stripped_lines))
+
+        for i, line in enumerate(stripped_lines):
+            # Drop // line comments before searching.
+            code = re.sub(r"//.*$", "", line)
+            if not _C_VERSION_LITERAL_RE.search(code):
+                continue
+            ident_window = code
+            if i > 0:
+                ident_window += " " + re.sub(r"//.*$", "", stripped_lines[i - 1])
+            if not _C_VERSION_IDENT_RE.search(ident_window):
+                continue
+            rel = path.relative_to(root.parent) if root.parent in path.parents else path
+            hits.append(f"{rel}:{i + 1}: {original_lines[i].strip()}")
+
+    return hits
 
 
 def extract(file: str, pattern: str) -> str | None:
@@ -123,6 +202,22 @@ def main() -> int:
         )
     else:
         print("OK    INVARIANTS.md root <-> .github/INVARIANTS.md: identical")
+
+    # C-source embedded-version-literal scan. The canonical anchor for
+    # the C side is include/ama_cryptography.h's
+    # AMA_CRYPTOGRAPHY_VERSION_STRING macro (verified above). Anything
+    # under src/c/ that re-declares a "X.Y.Z" literal next to a
+    # VERSION / version identifier is a future drift hazard — flag it.
+    c_hits = scan_c_sources_for_version_literals(REPO / "src" / "c")
+    if c_hits:
+        failures.append(
+            "  - src/c/ contains embedded version-string literals (use "
+            "AMA_CRYPTOGRAPHY_VERSION_STRING from include/ama_cryptography.h):"
+        )
+        for hit in c_hits:
+            failures.append(f"      {hit}")
+    else:
+        print("OK    src/c/ embedded-version-literal scan: 0 hits")
 
     if failures:
         print(
