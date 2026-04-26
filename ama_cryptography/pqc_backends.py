@@ -524,13 +524,19 @@ def _setup_x25519_ctypes(lib: ctypes.CDLL) -> bool:
         # ctypes treats fixed-shape `uint8_t (*)[32]` as opaque void* at this
         # layer; the Python wrapper packs a `bytes` blob of length count*32
         # for each parameter and `ctypes.c_char_p` carries the pointer.
-        lib.ama_x25519_scalarmult_batch.argtypes = [
-            ctypes.c_char_p,  # out      (count × 32 bytes)
-            ctypes.c_char_p,  # scalars  (count × 32 bytes)
-            ctypes.c_char_p,  # points   (count × 32 bytes)
-            ctypes.c_size_t,  # count
-        ]
-        lib.ama_x25519_scalarmult_batch.restype = ctypes.c_int
+        # `hasattr` guard so a pre-batch-API native build still exposes the
+        # core keypair / key-exchange path — without this, `AttributeError`
+        # would propagate to the except clause and disable ALL of X25519
+        # rather than just the additive batch wrapper.  Same pattern as
+        # the Argon2id legacy-shim guard below.
+        if hasattr(lib, "ama_x25519_scalarmult_batch"):
+            lib.ama_x25519_scalarmult_batch.argtypes = [
+                ctypes.c_char_p,  # out      (count × 32 bytes)
+                ctypes.c_char_p,  # scalars  (count × 32 bytes)
+                ctypes.c_char_p,  # points   (count × 32 bytes)
+                ctypes.c_size_t,  # count
+            ]
+            lib.ama_x25519_scalarmult_batch.restype = ctypes.c_int
         return True
     except AttributeError:
         return False
@@ -2705,10 +2711,13 @@ def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) ->
 
     Computes ``shared[k] = X25519(scalars[k], points[k])`` for each k. On
     x86-64 hosts where the AVX2 4-way Montgomery-ladder kernel is opted in
-    via ``AMA_DISPATCH_USE_X25519_AVX2=1``, batches of length >= 2 dispatch
-    to a SIMD path that runs four ladders in parallel; otherwise the
-    additive batch API simply sequences the scalar single-shot path.
-    Output is byte-identical to ``len(scalars)`` sequential
+    via ``AMA_DISPATCH_USE_X25519_AVX2=1``, batches with at least one full
+    4-lane chunk (``count >= 4``) dispatch those full chunks to a SIMD
+    path that runs four ladders in parallel; any tail (``count % 4``) and
+    short batches (``count`` of 1, 2, or 3) are processed via the scalar
+    single-shot path.  Without the opt-in, the additive batch API simply
+    sequences the scalar fe64 / fe51 / gf16 single-shot path.  Output is
+    byte-identical to ``len(scalars)`` sequential
     ``native_x25519_key_exchange`` calls in either case.
 
     Low-order rejection is aggregated across the batch — if ANY lane
@@ -2728,6 +2737,12 @@ def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) ->
     """
     if _native_lib is None or not _X25519_NATIVE_AVAILABLE:
         raise RuntimeError("X25519 native backend not available. " + _INSTALL_HINT)
+    if not hasattr(_native_lib, "ama_x25519_scalarmult_batch"):
+        raise RuntimeError(
+            "ama_x25519_scalarmult_batch is not exported by the loaded native "
+            "library — rebuild against a newer libama_cryptography. "
+            + _INSTALL_HINT
+        )
     if len(scalars) != len(points):
         raise ValueError(f"batch length mismatch: {len(scalars)} scalars vs {len(points)} points")
 
@@ -2735,18 +2750,46 @@ def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) ->
     if count == 0:
         return []
 
+    # Validate each element individually before joining.  A bare blob-length
+    # check on `b"".join(...)` would let mixed-size elements that happen to
+    # sum to count*32 (e.g. 16+48) slide through and silently shift element
+    # boundaries inside the C call.  Bytes-likeness is also enforced so a
+    # caller passing e.g. a list of `int`s gets a clear error rather than a
+    # cryptic ctypes failure.
+    validated_scalars: list[bytes] = []
+    for i, scalar in enumerate(scalars):
+        if not isinstance(scalar, (bytes, bytearray, memoryview)):
+            raise ValueError(
+                f"scalar at index {i} must be bytes-like and "
+                f"{X25519_KEY_BYTES} bytes long"
+            )
+        scalar_bytes = bytes(scalar)
+        if len(scalar_bytes) != X25519_KEY_BYTES:
+            raise ValueError(
+                f"scalar at index {i} must be {X25519_KEY_BYTES} bytes; "
+                f"got {len(scalar_bytes)}"
+            )
+        validated_scalars.append(scalar_bytes)
+
+    validated_points: list[bytes] = []
+    for i, point in enumerate(points):
+        if not isinstance(point, (bytes, bytearray, memoryview)):
+            raise ValueError(
+                f"point at index {i} must be bytes-like and "
+                f"{X25519_KEY_BYTES} bytes long"
+            )
+        point_bytes = bytes(point)
+        if len(point_bytes) != X25519_KEY_BYTES:
+            raise ValueError(
+                f"point at index {i} must be {X25519_KEY_BYTES} bytes; "
+                f"got {len(point_bytes)}"
+            )
+        validated_points.append(point_bytes)
+
     # Pack into contiguous count*32-byte buffers — mirrors the C
     # `uint8_t [count][32]` layout the C function expects.
-    scalars_blob = b"".join(scalars)
-    points_blob = b"".join(points)
-    if len(scalars_blob) != count * X25519_KEY_BYTES:
-        raise ValueError(
-            f"each scalar must be {X25519_KEY_BYTES} bytes; got blob of {len(scalars_blob)}"
-        )
-    if len(points_blob) != count * X25519_KEY_BYTES:
-        raise ValueError(
-            f"each point must be {X25519_KEY_BYTES} bytes; got blob of {len(points_blob)}"
-        )
+    scalars_blob = b"".join(validated_scalars)
+    points_blob = b"".join(validated_points)
 
     out_buf = ctypes.create_string_buffer(count * X25519_KEY_BYTES)
     rc = _native_lib.ama_x25519_scalarmult_batch(out_buf, scalars_blob, points_blob, count)

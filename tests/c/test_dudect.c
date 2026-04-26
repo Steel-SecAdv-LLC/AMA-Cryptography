@@ -418,7 +418,7 @@ static double test_x25519_scalarmult(int iterations) {
 }
 
 /* -----------------------------------------------------------------------
- * Test 9b: X25519 4-way batch ladder (AVX2 path)
+ * Test 10b: X25519 4-way batch ladder (AVX2 path)
  *
  * The 4-way Montgomery ladder uses a packed XOR-mask cswap that
  * applies independent per-lane scalar bits — there is no shared

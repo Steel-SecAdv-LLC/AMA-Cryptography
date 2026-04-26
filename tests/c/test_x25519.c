@@ -150,11 +150,15 @@ int main(void) {
     /* ========================================================================
      * Batch API (ama_x25519_scalarmult_batch)
      *
-     * On x86-64 with AVX2 the batch API dispatches to a 4-way
-     * Montgomery ladder kernel for chunks of 4; tail and N==1 fall
-     * through to the scalar single-shot path.  We exercise both:
-     *   1. AVX2 path (default when CPU supports it)
-     *   2. Scalar fallback (force-disabled via test hook)
+     * On x86-64 with AVX2 the batch API can dispatch to a 4-way
+     * Montgomery ladder kernel for full chunks of 4 when that path
+     * is explicitly enabled by dispatcher configuration or the test
+     * hook (the kernel is opt-in by default — see
+     * `src/c/dispatch/ama_dispatch.c`); tail lanes (count % 4) and
+     * short batches (count of 1, 2, or 3) fall through to the scalar
+     * single-shot path.  We exercise both:
+     *   1. AVX2 path (force-enabled via the test hook)
+     *   2. Scalar fallback (force-disabled via the test hook)
      * Each sub-test must produce byte-identical output to the
      * single-shot `ama_x25519_key_exchange` reference.
      * ====================================================================== */
@@ -206,12 +210,18 @@ int main(void) {
                     "batch N=1 matches single-shot");
     }
 
-    /* Exhaustive cross-check: 1024 random vectors via batch == 1024
-     * sequential single-shots.  Run TWICE — once with the AVX2 kernel
-     * wired in, once with it forced off — to cover both code paths in
-     * the same binary.  Matches the budget of test_x25519_field_equiv.c
-     * so the SIMD-vs-scalar coverage is on the same footing as the
-     * fe64-vs-fe51 byte-equivalence pin. */
+    /* Exhaustive cross-check: 1024 deterministically constructed
+     * (scalar, point) vectors via batch == 1024 sequential
+     * single-shots.  Inputs are derived from the loop indices
+     * (`(i, j) -> byte`) rather than a PRNG: deterministic for
+     * reproducibility, but distinct enough across the 1024 × 32
+     * grid to exercise the SIMD ladder over a wide spread of
+     * scalars and u-coordinates.  Run TWICE — once with the AVX2
+     * kernel wired in, once with it forced off — to cover both
+     * code paths in the same binary.  Matches the budget of
+     * test_x25519_field_equiv.c so the SIMD-vs-scalar coverage is
+     * on the same footing as the fe64-vs-fe51 byte-equivalence
+     * pin. */
     {
         const size_t N = 1024;
         uint8_t (*scs)[32]   = malloc(N * 32);
@@ -240,7 +250,7 @@ int main(void) {
         TEST_ASSERT(ama_x25519_scalarmult_batch(bouts,
                                                  (const uint8_t (*)[32])scs,
                                                  (const uint8_t (*)[32])pts, N) == AMA_SUCCESS,
-                    "batch random ×1024 (AVX2 forced) success");
+                    "batch deterministic ×1024 (AVX2 forced) success");
         for (i = 0; i < N; i++) {
             TEST_ASSERT(memcmp(bouts[i], souts[i], 32) == 0,
                         "batch lane matches single-shot (AVX2 forced)");
@@ -251,7 +261,7 @@ int main(void) {
         TEST_ASSERT(ama_x25519_scalarmult_batch(bouts,
                                                  (const uint8_t (*)[32])scs,
                                                  (const uint8_t (*)[32])pts, N) == AMA_SUCCESS,
-                    "batch random ×1024 (scalar forced) success");
+                    "batch deterministic ×1024 (scalar forced) success");
         for (i = 0; i < N; i++) {
             TEST_ASSERT(memcmp(bouts[i], souts[i], 32) == 0,
                         "batch lane matches single-shot (scalar forced)");

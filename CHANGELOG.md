@@ -420,16 +420,17 @@ constant-time check that was a flake source on contended runners.
   over — `TODO(AVX-512-IFMA)` marker in
   `src/c/avx2/ama_x25519_avx2.c`).
   RFC 7748 §5.2 TV1/TV2 broadcast across all four lanes match
-  byte-for-byte; 1024 random vectors are cross-checked against the
-  scalar single-shot reference in both AVX2-forced and scalar-forced
-  configurations; tail counts {1, 2, 3, 5, 6, 7, 9, 13} all match
-  sequential single-shot (`tests/c/test_x25519.c`).  Python ctypes
-  binding + `pqc_backends.native_x25519_scalarmult_batch()` wrapper
-  with full validation coverage in
-  `tests/test_pqc_backends_wrappers.py`.  Dispatcher annotates the
-  X25519 4-way row in `ama_print_dispatch_info` with `(opt-in, off)`
-  whenever AVX2 is detected but the env override isn't set, so
-  external readers don't conclude the SIMD path is on by default.
+  byte-for-byte; 1024 deterministically constructed (scalar, point)
+  vectors are cross-checked against the scalar single-shot reference
+  in both AVX2-forced and scalar-forced configurations; tail counts
+  {1, 2, 3, 5, 6, 7, 9, 13} all match sequential single-shot
+  (`tests/c/test_x25519.c`).  Python ctypes binding +
+  `pqc_backends.native_x25519_scalarmult_batch()` wrapper with full
+  validation coverage in `tests/test_pqc_backends_wrappers.py`.
+  Dispatcher annotates the X25519 4-way row in
+  `ama_print_dispatch_info` with `(opt-in, off)` whenever AVX2 is
+  detected but the env override isn't set, so external readers don't
+  conclude the SIMD path is on by default.
 
 - ChaCha20-Poly1305 AVX2 wiring: `ama_chacha20_block_x8_avx2` (8-way
   parallel ChaCha20 block function emitting 512 B of keystream) is

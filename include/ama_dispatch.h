@@ -127,8 +127,12 @@ typedef void (*ama_argon2_g_fn)(uint64_t out[128],
  *  scalar is clamped per RFC 7748 §5 inside the kernel.  Output is
  *  byte-identical to four sequential calls of the scalar single-shot
  *  ladder (verified across both fe51 and fe64 paths by
- *  tests/c/test_x25519.c).  Wired only when AVX2 is detected;
- *  callers MUST NULL-check before invoking. */
+ *  tests/c/test_x25519.c).  Wired only when AVX2 is detected AND
+ *  `AMA_DISPATCH_USE_X25519_AVX2=1` is explicitly set in the
+ *  environment (the kernel is opt-in by default — see
+ *  `src/c/dispatch/ama_dispatch.c` for the rationale); otherwise the
+ *  pointer may remain NULL even on AVX2-capable hosts.  Callers MUST
+ *  NULL-check before invoking. */
 typedef void (*ama_x25519_scalarmult_x4_fn)(uint8_t out[4][32],
                                              const uint8_t scalar[4][32],
                                              const uint8_t point[4][32]);

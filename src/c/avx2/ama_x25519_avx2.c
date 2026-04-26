@@ -7,9 +7,13 @@
  *
  * 4-way SIMD path that processes four independent X25519 scalar
  * multiplications in parallel.  Used by the additive batch API
- * `ama_x25519_scalarmult_batch` for batches of N >= 2.  Single-shot
- * (`ama_x25519_key_exchange`, N == 1) keeps using the scalar fe64
- * path; this kernel is purely additive.
+ * `ama_x25519_scalarmult_batch` only for full 4-lane chunks
+ * (count / 4 of them), and only when the dispatcher has the kernel
+ * wired in via `AMA_DISPATCH_USE_X25519_AVX2=1`.  The wrapper does
+ * not pad shorter batches up to four lanes — counts of 1, 2, or 3,
+ * the (count % 4) tail of longer batches, and `ama_x25519_key_exchange`
+ * itself all stay on the scalar fe64 / fe51 / gf16 path; this kernel
+ * is purely additive.
  *
  * Field representation:
  *   radix-2^25.5 (10 limbs, alternating 26 / 25 bits) — donna's
@@ -29,18 +33,19 @@
  * Constant-time guarantee:
  *   The CPUID-based dispatch gate (ama_has_avx2()) is the ONLY place
  *   the host's feature bits are consulted; the kernel itself is
- *   straight-line and never branches on a scalar bit.  Per-lane
- *   processing in chunks of 4 means lanes 1..3 of a tail-shorter call
- *   are zero-fill placeholders processed with the same instruction
- *   schedule as live lanes, so even partial batches retain timing
- *   uniformity across all four lanes.
+ *   straight-line and never branches on a scalar bit.  All four
+ *   lanes always carry live ladders (the wrapper only ever calls in
+ *   for full 4-lane chunks), so per-lane timing uniformity is
+ *   trivially uniform across the call — there are no zero-fill
+ *   placeholder lanes.
  *
  * Correctness:
  *   The kernel is byte-identical to four sequential
  *   `ama_x25519_key_exchange` calls (verified by
  *   `tests/c/test_x25519.c` — RFC 7748 §5.2 TVs broadcast across all
- *   four lanes plus 1024 random vectors against the scalar reference,
- *   matching the cross-check budget of `tests/c/test_x25519_field_equiv.c`).
+ *   four lanes plus 1024 deterministically constructed (scalar, point)
+ *   vectors against the scalar reference, matching the cross-check
+ *   budget of `tests/c/test_x25519_field_equiv.c`).
  *
  * TODO(AVX-512-IFMA): the kernel's real home is AVX-512 IFMA
  * (`vpmadd52luq` / `vpmadd52huq` on Cannon Lake+, Ice Lake+,

@@ -72,14 +72,34 @@ class TestX25519Batch:
 
     def test_wrong_scalar_size_raises(self) -> None:
         pk, _sk = pq.native_x25519_keypair()
-        # 16-byte scalar but pk is 32 — the input-blob validator catches this.
-        with pytest.raises(ValueError, match="each scalar must be 32"):
+        # 16-byte scalar but pk is 32 — caught by per-element validation
+        # (not a post-join blob length check, which mixed-size elements
+        # could slip past, e.g. 16+48 == 2*32).
+        with pytest.raises(ValueError, match=r"scalar at index 0 must be 32 bytes"):
             pq.native_x25519_scalarmult_batch([b"\x00" * 16], [bytes(pk)])
 
     def test_wrong_point_size_raises(self) -> None:
         _pk, sk = pq.native_x25519_keypair()
-        with pytest.raises(ValueError, match="each point must be 32"):
+        with pytest.raises(ValueError, match=r"point at index 0 must be 32 bytes"):
             pq.native_x25519_scalarmult_batch([bytes(sk)], [b"\x00" * 16])
+
+    def test_mixed_size_elements_raises(self) -> None:
+        # 16-byte + 48-byte scalars sum to 64 == 2*32 — would slip past a
+        # post-join blob-length check.  Per-element validation catches the
+        # first short element by index.  Regression-pinned per Copilot
+        # review on PR #273.
+        pk, _sk = pq.native_x25519_keypair()
+        with pytest.raises(ValueError, match=r"scalar at index 0 must be 32 bytes"):
+            pq.native_x25519_scalarmult_batch(
+                [b"\x00" * 16, b"\x11" * 48], [bytes(pk), bytes(pk)]
+            )
+
+    def test_non_bytes_scalar_raises(self) -> None:
+        # `int` (or any non-bytes-like) scalar should fail the per-element
+        # type check rather than producing a cryptic ctypes error.
+        pk, _sk = pq.native_x25519_keypair()
+        with pytest.raises(ValueError, match=r"scalar at index 0 must be bytes-like"):
+            pq.native_x25519_scalarmult_batch([12345], [bytes(pk)])  # type: ignore[list-item]
 
     def test_batch_matches_sequential(self) -> None:
         # Build 7 independent (sk, peer_pk) pairs — 7 isn't a multiple of

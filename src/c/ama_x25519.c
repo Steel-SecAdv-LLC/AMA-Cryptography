@@ -711,13 +711,16 @@ AMA_API ama_error_t ama_x25519_key_exchange(
  * Batch scalar multiplication (additive API for SIMD parallelism)
  *
  * Computes `out[k] = X25519(scalars[k], points[k])` for k in [0, count).
- * For batches of N >= 2 the AVX2 4-way Montgomery ladder kernel
- * (`src/c/avx2/ama_x25519_avx2.c`) is invoked, processing four ladders
- * in parallel; tail lanes for N % 4 != 0 are processed via the scalar
- * single-shot ladder.  Single-element batches (N == 1) bypass the
- * 4-way kernel entirely and fall through to the scalar fe64 / fe51 /
- * gf16 path so callers don't pay the 3-lane zero-fill cost on the hot
- * path of `ama_x25519_key_exchange`.
+ * When the dispatcher has the AVX2 4-way kernel wired in (opt-in via
+ * `AMA_DISPATCH_USE_X25519_AVX2=1`) AND the batch contains at least
+ * one full 4-lane chunk (count >= 4), those full chunks dispatch to
+ * the AVX2 4-way Montgomery ladder kernel (`src/c/avx2/ama_x25519_avx2.c`)
+ * which processes four ladders in parallel; any tail lanes for
+ * count % 4 != 0 are processed via the scalar single-shot ladder.
+ * Short batches (count of 1, 2, or 3) bypass the 4-way kernel entirely
+ * — the wrapper does not pad them up to four lanes — and fall through
+ * to the scalar fe64 / fe51 / gf16 path so callers don't pay any
+ * zero-fill cost on the hot path of `ama_x25519_key_exchange`.
  *
  * Low-order point handling matches the single-shot API: any lane
  * whose ladder produces an all-zero shared secret (indicating

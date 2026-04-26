@@ -234,7 +234,7 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
                 PROPERTIES COMPILE_FLAGS
                 "-mavx2 -mvaes -mvpclmulqdq -maes -mpclmul")
         endif()
-        message(STATUS "SIMD: AVX2 hand-written intrinsics enabled (8 algorithms incl. VAES AES-GCM)")
+        message(STATUS "SIMD: AVX2 hand-written intrinsics enabled (9 algorithms incl. VAES AES-GCM, X25519 4-way)")
         # Tell dispatch code that AVX2 implementations are linked in
         add_compile_definitions(AMA_HAVE_AVX2_IMPL)
     endif()

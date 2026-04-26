@@ -973,17 +973,19 @@ AMA_API ama_error_t ama_x25519_key_exchange(
  * Computes `out[k] = X25519(scalars[k], points[k])` for k in [0, count).
  *
  * On x86-64 hosts where the AVX2 4-way Montgomery-ladder kernel is
- * **opted in** via `AMA_DISPATCH_USE_X25519_AVX2=1`, batches of N >= 2
- * dispatch to a SIMD path that runs four ladders in parallel, with
- * any tail (N % 4) processed via the scalar single-shot path.  The
- * 4-way kernel is opt-in because on hosts with the scalar fe64
- * (MULX/ADX) field path, four sequential scalar ladders are faster
- * than four AVX2 lanes of the donna-32bit ladder; the kernel is
- * provided for the future AVX-512 IFMA port and for CI/test coverage
- * of the SIMD path.  Single-element batches (N == 1) bypass the 4-way
- * kernel entirely and use the scalar fe64 / fe51 / gf16 path so
- * callers do not pay the 3-lane zero-fill cost on the hot path of
- * `ama_x25519_key_exchange`.
+ * **opted in** via `AMA_DISPATCH_USE_X25519_AVX2=1`, batches with at
+ * least one full 4-lane chunk (N >= 4) dispatch those full chunks to
+ * a SIMD path that runs four ladders in parallel; any tail (N % 4)
+ * is processed via the scalar single-shot path.  Batches with N of
+ * 1, 2, or 3 use the scalar fe64 / fe51 / gf16 path entirely — the
+ * batch wrapper never pads short calls up to four lanes.  The 4-way
+ * kernel is opt-in because on hosts with the scalar fe64 (MULX/ADX)
+ * field path, four sequential scalar ladders are faster than four
+ * AVX2 lanes of the donna-32bit ladder; the kernel is provided for
+ * the future AVX-512 IFMA port and for CI/test coverage of the SIMD
+ * path.  Single-element batches (N == 1) bypass the 4-way kernel
+ * entirely so callers do not pay the 3-lane zero-fill cost on the
+ * hot path of `ama_x25519_key_exchange`.
  *
  * Output is byte-identical to N sequential `ama_x25519_key_exchange`
  * calls (verified by `tests/c/test_x25519.c` across both code paths).
