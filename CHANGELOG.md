@@ -310,7 +310,7 @@ constant-time check that was a flake source on contended runners.
   10 % slower than generic's best time. Opt out entirely with
   `AMA_DISPATCH_NO_AUTOTUNE=1`.
 
-### Changed
+### Changed — Dispatch Cleanup, Dependencies, and CI
 
 - Remove dead `ama_ed25519_*_avx2` trampolines and associated dispatch
   wiring: the "AVX2" Ed25519 entry points forwarded directly to the scalar
@@ -348,7 +348,7 @@ constant-time check that was a flake source on contended runners.
   constant-time verification — coverage is unchanged, only the
   un-pinned duplicate is gone.
 
-### Added
+### Added — Compliance and Tests
 
 - **NIST ACVP self-attestation artifact.**
   `docs/compliance/ACVP_SELF_ATTESTATION.md` (formal, customer-facing),
