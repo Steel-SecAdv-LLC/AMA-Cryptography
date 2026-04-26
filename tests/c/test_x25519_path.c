@@ -35,8 +35,8 @@
  * Review 2026-04-26: previously test_x25519_path.c re-derived the
  * predicate locally and therefore could quietly disagree with the
  * production selector.) */
-#include "fe51.h"
-#include "fe64.h"
+#include "../../src/c/fe51.h"
+#include "../../src/c/fe64.h"
 
 #if defined(AMA_FE51_AVAILABLE) && AMA_FE51_AVAILABLE
 #  define EXPECT_FE51_AVAILABLE 1
