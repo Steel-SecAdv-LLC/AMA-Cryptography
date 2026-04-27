@@ -31,41 +31,139 @@ import subprocess
 import sys
 from pathlib import Path
 
-# D-9: Preflight setuptools version check.  Debian's setuptools 68.x ships a
-# downstream patch (install_lib.set_undefined_options('install','install_layout'))
-# that raises AttributeError on bdist_wheel because the install command isn't
-# constructed in that flow.  Modern setuptools (>=70) removed install_layout
-# from the path and is the supported floor here.  Failing fast with a clear
-# remedy is far better than the opaque AttributeError users would otherwise
-# see deep inside pip's wheel build subprocess.
-_SETUPTOOLS_MIN = (70, 0, 0)
-try:
-    import setuptools as _setuptools_preflight
+# D-9: Preflight version checks for every build-time dependency listed in
+# pyproject.toml's [build-system].requires.  Each floor matches the version
+# pinned there, so the comment "enforced by setup.py's preflight check" is
+# now factually accurate (Copilot review #5 / D-9-extended).
+#
+#   * setuptools >= 70.0.0:  Debian's patched setuptools 68.x raises
+#     AttributeError(install_layout) deep inside pip's bdist_wheel subprocess.
+#     70.0.0 also closes GHSA-cx63-2mw6-8hw5; we float to 78.1.1 in
+#     pyproject.toml to also pick up PYSEC-2025-49.
+#   * wheel >= 0.46.2:        closes GHSA-8rrh-rw8j-w5fx.
+#   * cmake >= 3.16:          minimum C-side floor; CMakeLists.txt's
+#     cmake_minimum_required(VERSION 3.16) would otherwise abort late.
+#   * Cython >= 3.2.4:        floor for the math_engine extension's
+#     `cimport numpy` typed-memoryview surface.
+#   * numpy >= 1.24.0:        provides the `numpy.pxd` headers the Cython
+#     extension absorbs at C-compile time.
+#
+# Failing fast with a single FATAL message is far better than the opaque
+# downstream errors users would otherwise see (AttributeError deep inside
+# pip's wheel-build subprocess; "numpy.pxd not found" inside Cython's
+# cythonize call; cmake_minimum_required abort; etc.).
+#
+# Version comparison goes through packaging.version.Version when available
+# (handles PEP 440 + Debian-style local/build suffixes like "70.0.0+deb"
+# and "70.0.0-1" — Copilot review #6).  When packaging is unavailable
+# (very old build environments), we pad the digit-only tuple to length 3
+# so 70.0+ still satisfies (70, 0, 0).
+_BUILD_REQS = {
+    "setuptools": ((70, 0, 0), "AttributeError(install_layout) on bdist_wheel"),
+    "wheel": ((0, 46, 2), "GHSA-8rrh-rw8j-w5fx"),
+    "Cython": ((3, 2, 4), "math_engine cimport numpy stability floor"),
+    "numpy": ((1, 24, 0), "numpy.pxd headers required by math_engine"),
+}
 
-    _v = tuple(int(x) for x in _setuptools_preflight.__version__.split(".")[:3] if x.isdigit())
-    if _v and _v < _SETUPTOOLS_MIN:
+
+def _parse_version(raw: str) -> tuple:
+    """Best-effort PEP 440 parse → 3-tuple of ints.
+
+    Falls back to a tolerant digit-only split when ``packaging`` is not
+    importable.  Local / build suffixes (``+deb``, ``-1``) are stripped
+    so a Debian-packaged ``70.0.0+deb`` does not get rejected as
+    ``(70, 0)`` by a naive ``split('.')`` (Copilot review #6).
+    """
+    try:
+        from packaging.version import Version  # type: ignore[import-not-found]
+
+        v = Version(raw)
+        release = v.release
+        # Pad to exactly three components so ``(70, 0)`` compares the same
+        # as ``(70, 0, 0)``.
+        return tuple(release) + (0,) * max(0, 3 - len(release))
+    except Exception:  # pragma: no cover - packaging is in modern setuptools
+        # Strip local/build segments and any pre/post markers; keep only
+        # the leading dotted-numeric release portion.
+        head = raw.split("+", 1)[0].split("-", 1)[0]
+        digits = [int(x) for x in head.split(".") if x.isdigit()]
+        return tuple(digits[:3]) + (0,) * max(0, 3 - len(digits[:3]))
+
+
+def _check_build_dependency(import_name: str, attr: str = "__version__") -> None:
+    floor, reason = _BUILD_REQS[import_name]
+    try:
+        mod = __import__(import_name)
+    except ImportError:
+        # The module is enforced by [build-system].requires; absent it,
+        # the build cannot proceed regardless.  Surface the same FATAL
+        # path so the user sees one consolidated remedy.
         sys.stderr.write(
-            "FATAL: setuptools >= {req} required (found {got}).\n"
-            "Older setuptools (notably Debian's patched 68.x) breaks 'pip wheel'\n"
-            "with AttributeError: install_layout. Upgrade with:\n"
-            "  python3 -m pip install --upgrade 'setuptools>=70' 'wheel>=0.46.2'\n".format(
-                req=".".join(str(x) for x in _SETUPTOOLS_MIN),
-                got=_setuptools_preflight.__version__,
-            )
+            f"FATAL: {import_name} is required at build time (>= "
+            f"{'.'.join(str(x) for x in floor)}, reason: {reason}). "
+            "Install with:\n  python3 -m pip install --upgrade "
+            "'setuptools>=78.1.1' 'wheel>=0.46.2' 'cmake>=3.16' "
+            "'Cython>=3.2.4' 'numpy>=1.24.0'\n"
         )
         sys.exit(1)
-except ImportError:
-    pass
+    raw = getattr(mod, attr, None)
+    if raw is None:
+        # Older releases without a __version__ attribute — let the build
+        # try to proceed.  pyproject.toml's PEP 517 isolation pulls in
+        # versions that DO carry __version__, so this branch is mostly
+        # defensive against weird vendored installs.
+        return
+    parsed = _parse_version(str(raw))
+    if parsed < floor:
+        sys.stderr.write(
+            f"FATAL: {import_name} >= {'.'.join(str(x) for x in floor)} "
+            f"required (found {raw}; reason: {reason}). Upgrade with:\n"
+            "  python3 -m pip install --upgrade "
+            "'setuptools>=78.1.1' 'wheel>=0.46.2' 'cmake>=3.16' "
+            "'Cython>=3.2.4' 'numpy>=1.24.0'\n"
+        )
+        sys.exit(1)
+
+
+# Run the preflight before any setuptools imports below — the Debian
+# install_layout regression fires inside setuptools' own __init__ paths
+# during bdist_wheel, so a check that runs after `from setuptools import
+# Extension` would race the very failure mode it is meant to prevent.
+for _name in ("setuptools",):
+    _check_build_dependency(_name)
+# wheel / Cython / numpy are not strictly required at this exact module-
+# top moment (setuptools imports below do not transitively touch them),
+# but checking them here lets the user see all four floors in a single
+# preflight pass rather than tripping into Cython.cythonize / numpy
+# imports later with a different style of error.
+for _name in ("wheel", "Cython", "numpy"):
+    try:
+        _check_build_dependency(_name)
+    except SystemExit:
+        # Re-raise so the build aborts; an exception in this block is
+        # treated identically to the setuptools preflight.
+        raise
 
 from setuptools import Extension, find_packages, setup  # noqa: E402
 from setuptools.command.build_ext import build_ext  # noqa: E402
 
-# Check for Cython availability
+# Check for Cython availability at the call-site level (the preflight
+# above only proves a minimum version; AMA_NO_CYTHON=1 still gates
+# whether Cython is actually invoked).
 try:
     from Cython.Build import cythonize
 
     CYTHON_AVAILABLE = True
-except ImportError:
+except ImportError:  # pragma: no cover - preflight should have caught this
+    # CodeQL flagged this as an empty except without explanation
+    # (https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/security/code-scanning/503).
+    # The preflight at the top of this module already validates Cython is
+    # importable and at the required version floor; a second ImportError
+    # here means the user opted out (AMA_NO_CYTHON=1) or is running an
+    # exotic embedded interpreter where the preflight short-circuited.
+    # Either way the right behaviour is to fall through to the pure-C
+    # extension build path; the wheel will still be functional, just
+    # without the math_engine accelerator.
     CYTHON_AVAILABLE = False
     cythonize = None
 
@@ -74,7 +172,11 @@ try:
     import numpy as np
 
     NUMPY_AVAILABLE = True
-except ImportError:
+except ImportError:  # pragma: no cover - preflight should have caught this
+    # Same rationale as the Cython block above: the preflight enforces
+    # numpy>=1.24.0; a second ImportError here means an opt-out path
+    # (AMA_NO_CYTHON=1 short-circuits the math_engine build, which is
+    # the only consumer of numpy headers) and the build can proceed.
     NUMPY_AVAILABLE = False
     np = None
 
@@ -381,11 +483,27 @@ class CMakeBuild(build_ext):
 
         # Update Cython binding `library_dirs` to point at our isolated
         # CMake build dir so the in-place build can link against the
-        # libraries we just produced (D-3).
+        # libraries we just produced (D-3).  Mirror the same multi-layout
+        # candidate set that _copy_native_library_into_package uses so
+        # the link step doesn't fail on Windows multi-config generators
+        # whose import library lands under a Release/ or Debug/ subdir
+        # rather than the conventional lib/ (Copilot review #3).
+        link_candidates = [
+            str(build_directory / "lib"),
+            str(build_directory),
+        ]
+        for cfg_subdir in ("Release", "Debug", "RelWithDebInfo", "MinSizeRel"):
+            link_candidates.extend(
+                [
+                    str(build_directory / cfg_subdir / "lib"),
+                    str(build_directory / cfg_subdir),
+                    str(build_directory / "lib" / cfg_subdir),
+                ]
+            )
         for ext in self.extensions or []:
             if "ama_cryptography" in ext.libraries:
-                ext.library_dirs = [str(build_directory / "lib")] + [
-                    d for d in ext.library_dirs if d != "build/lib"
+                ext.library_dirs = link_candidates + [
+                    d for d in ext.library_dirs if d not in link_candidates and d != "build/lib"
                 ]
 
     def _copy_native_library_into_package(self):
@@ -415,18 +533,51 @@ class CMakeBuild(build_ext):
         correctly via DT_RUNPATH=$ORIGIN.
         """
         is_windows = platform.system() == "Windows"
-        cmake_lib_dir = (PY_CMAKE_BUILD_DIR / "lib").absolute()
-        cmake_bin_dir = (PY_CMAKE_BUILD_DIR / "bin").absolute()
+        cmake_root = PY_CMAKE_BUILD_DIR.absolute()
+        cmake_lib_dir = cmake_root / "lib"
+        cmake_bin_dir = cmake_root / "bin"
+
+        # Where CMake actually puts the artifacts varies by generator and
+        # build type.  CMakeLists.txt lines 130-132 set the default
+        # output dirs to <BIN>/lib and <BIN>/bin, but on Windows
+        # multi-config generators (Visual Studio) those settings are
+        # ignored unless _RELEASE / _DEBUG-suffixed forms are also set,
+        # AND outputs land in <root>/Release/<lib_or_bin>/ rather than
+        # <root>/lib or <root>/bin.  setup.py's CMake invocation does
+        # set the suffixed forms but points them at the build root,
+        # which sidesteps the per-config subdir but means the artifacts
+        # land in the build root itself.  Older / single-config
+        # generators put them in <root>/lib + <root>/bin.  This
+        # discovery code therefore scans every reasonable layout —
+        # search ROOT first to handle the override path, then the
+        # single-config defaults, then per-config subdirs as a final
+        # fallback.  Copilot review #3 reproduction.
+        candidate_dirs = [cmake_root, cmake_lib_dir, cmake_bin_dir]
+        for cfg_subdir in ("Release", "Debug", "RelWithDebInfo", "MinSizeRel"):
+            candidate_dirs.extend(
+                [
+                    cmake_root / cfg_subdir,
+                    cmake_root / cfg_subdir / "lib",
+                    cmake_root / cfg_subdir / "bin",
+                    cmake_root / "lib" / cfg_subdir,
+                    cmake_root / "bin" / cfg_subdir,
+                ]
+            )
 
         if is_windows:
-            patterns = [
-                str(cmake_bin_dir / "ama_cryptography*.dll"),
-                str(cmake_lib_dir / "ama_cryptography*.lib"),
-            ]
+            shared_globs = ("ama_cryptography*.dll", "libama_cryptography*.dll")
+            archive_globs = ("ama_cryptography*.lib", "libama_cryptography*.lib")
         elif sys.platform == "darwin":
-            patterns = [str(cmake_lib_dir / "libama_cryptography*.dylib")]
+            shared_globs = ("libama_cryptography*.dylib",)
+            archive_globs = ()
         else:
-            patterns = [str(cmake_lib_dir / "libama_cryptography.so*")]
+            shared_globs = ("libama_cryptography.so*",)
+            archive_globs = ()
+
+        patterns: list[str] = []
+        for d in candidate_dirs:
+            for g in shared_globs + archive_globs:
+                patterns.append(str(d / g))
 
         # Compute both destination directories.  build_lib is set by
         # setuptools before build_ext.run() runs.
@@ -439,10 +590,18 @@ class CMakeBuild(build_ext):
             staging_dir.mkdir(parents=True, exist_ok=True)
             destinations.append(staging_dir)
 
+        # Track filenames already copied so a glob hit in two candidate
+        # dirs (e.g., one populated by single-config CMake, one by a
+        # leftover Visual Studio Release/ dir) doesn't overwrite the
+        # newer artifact with an older one.
+        seen_basenames: set = set()
         copied = []
         for pat in patterns:
-            for src in glob.glob(pat):
+            for src in sorted(glob.glob(pat)):
                 src_path = Path(src)
+                if src_path.name in seen_basenames:
+                    continue
+                seen_basenames.add(src_path.name)
                 for dst_dir in destinations:
                     dst_path = dst_dir / src_path.name
                     if dst_path.is_symlink() or dst_path.exists():
@@ -457,10 +616,12 @@ class CMakeBuild(build_ext):
                     copied.append(str(dst_path))
 
         if not copied:
+            searched = "\n  ".join(str(d) for d in candidate_dirs)
             raise RuntimeError(
                 "FATAL: CMake reported success but no libama_cryptography "
-                "shared library was found under "
-                f"{cmake_lib_dir}. The wheel would be unusable; aborting."
+                "shared library was found.  Searched (in order):\n  "
+                f"{searched}\n"
+                "The wheel would be unusable; aborting."
             )
 
 

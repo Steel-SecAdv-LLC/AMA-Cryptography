@@ -1336,11 +1336,18 @@ if __name__ == "__main__":
     signing_key, _ = hd.derive_path("m/44'/0'/0'")
     encryption_key, _ = hd.derive_path("m/44'/0'/1'")
 
-    # Intentional demo: shows derived-key fingerprint (first 16 bytes of a
-    # demo HD-derived key seeded inside this __main__ block). Not production
-    # code; never reached during library-as-import use.
-    logger.info(f"Signing key:    {signing_key.hex()[:32]}...")  # nosemgrep: private-key-logging
-    logger.info(f"Encryption key: {encryption_key.hex()[:32]}...")  # nosemgrep: private-key-logging
+    # Demo display uses a SHA3-256 fingerprint of each derived key rather
+    # than the key bytes themselves (PR #277, Copilot review #2).  The
+    # previous form printed the first 16 raw bytes (128 bits) of each
+    # 32-byte key — even truncated, that is real key material that a
+    # user copy-pasting the demo into a real environment would persist
+    # to logs / terminal scrollback.  A SHA3-256 fingerprint is one-way,
+    # supports `grep` / log-correlation just as well as a hex prefix,
+    # and reveals nothing about the key value itself.
+    sk_fp = hashlib.sha3_256(signing_key).hexdigest()[:16]
+    ek_fp = hashlib.sha3_256(encryption_key).hexdigest()[:16]
+    logger.info(f"Signing key fingerprint:    sha3-256:{sk_fp}")
+    logger.info(f"Encryption key fingerprint: sha3-256:{ek_fp}")
 
     # Key Rotation
     logger.info("\n2. Key Rotation Management")

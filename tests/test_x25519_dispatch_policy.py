@@ -17,8 +17,10 @@ two paths — fails CI loudly:
 
   * test_batch_correctness_default       — batch4/8/16 = 4×/8×/16× sequential single-shot
   * test_batch_correctness_avx2_optin    — same, but with the AVX2 kernel forced on
-  * test_avx2_optin_changes_dispatch     — AMA_DISPATCH_PRINT confirms the table differs
-                                           between the two builds
+  * test_avx2_optin_dispatch_print_differs — AMA_DISPATCH_VERBOSE confirms the
+                                           x25519_x4 table entry differs between
+                                           the two builds (and is *required* to be
+                                           present in both — no silent skip)
   * test_low_order_rejection_uniform     — low-order points rejected on both paths
 """
 
@@ -154,23 +156,32 @@ def test_batch_correctness_avx2_optin() -> None:
 
 @requires_x25519
 def test_avx2_optin_dispatch_print_differs() -> None:
-    """AMA_DISPATCH_PRINT confirms x25519_x4 is set to scalar by default and SIMD when opted in.
+    """``AMA_DISPATCH_VERBOSE=1`` pins x25519_x4 = scalar by default, SIMD when opted in.
 
-    This is the contract test for the dispatch policy itself: if a future
-    change accidentally flips the default to AVX2-on, this test fails.
+    Contract test for the dispatch policy itself: if a future change flips
+    the default to AVX2-on, this test fails loudly.  Asserts the stderr
+    line is *present* (the previous version of this test only asserted
+    when the line happened to appear, which let a missing-line outcome
+    silently pass — Copilot review #9).
     """
     snippet = """
-        # Forcing AMA_DISPATCH_PRINT=1 makes ama_dispatch_init log the chosen
-        # backends to stderr on first dispatch.  Touching any X25519 entry
-        # triggers init.
+        # AMA_DISPATCH_VERBOSE=1 makes ama_dispatch_init log the chosen
+        # backends to stderr on first dispatch (see
+        # src/c/dispatch/ama_dispatch.c:236, getenv("AMA_DISPATCH_VERBOSE")).
+        # Touching any X25519 entry triggers init.
         from ama_cryptography.pqc_backends import native_x25519_keypair
         native_x25519_keypair()
     """
 
-    def _stderr(env: dict[str, str]) -> str:
+    def _verbose_stderr(env: dict[str, str]) -> str:
         env_full = os.environ.copy()
         env_full.update(env)
-        env_full["AMA_DISPATCH_PRINT"] = "1"
+        # Copilot review #9: the dispatcher reads AMA_DISPATCH_VERBOSE,
+        # not AMA_DISPATCH_PRINT.  The previous form set the wrong env
+        # var, the dispatch table never printed, and the test's
+        # `if "x25519_x4" in stderr` guard let the assertions silently
+        # skip.  Set the right var here.
+        env_full["AMA_DISPATCH_VERBOSE"] = "1"
         import ama_cryptography as _ama
 
         env_full["PYTHONPATH"] = str(Path(_ama.__file__).resolve().parent.parent)
@@ -182,23 +193,49 @@ def test_avx2_optin_dispatch_print_differs() -> None:
             check=False,
             env=env_full,
         )
+        # Copilot review #4: fail loudly when the subprocess fails to
+        # import / execute (e.g. missing shared library, ImportError,
+        # crash before dispatch init).  Previously a non-zero rc
+        # produced empty stderr that the conditional assertions then
+        # let through as a silent pass.
+        if proc.returncode != 0:
+            raise AssertionError(
+                "AMA_DISPATCH_VERBOSE subprocess failed: "
+                f"rc={proc.returncode}\nstdout:\n{proc.stdout[:2000]}\n"
+                f"stderr:\n{proc.stderr[:2000]}"
+            )
         return proc.stderr
 
-    default_stderr = _stderr({})
-    avx2_stderr = _stderr({"AMA_DISPATCH_USE_X25519_AVX2": "1"})
+    default_stderr = _verbose_stderr({})
+    avx2_stderr = _verbose_stderr({"AMA_DISPATCH_USE_X25519_AVX2": "1"})
 
-    # The dispatch print is best-effort: not every build emits the table on
-    # AMA_DISPATCH_PRINT=1 (some platforms wire it behind AMA_DISPATCH_DEBUG).
-    # When it IS emitted, both branches should agree on basic sanity.
-    if "x25519_x4" in default_stderr or "x25519_x4" in avx2_stderr:
-        assert "scalar (4× sequential)" in default_stderr, (
-            "Default policy must keep x25519_x4 = scalar (4× sequential).\n"
-            f"stderr was:\n{default_stderr}"
-        )
-        # AVX2 opt-in either succeeds (SIMD) or falls back to scalar on
-        # hosts that lack AVX2; both are acceptable, but it must NOT differ
-        # from the default by selecting some other backend.
-        assert "x25519_x4" in avx2_stderr, "expected x25519_x4 line in opt-in branch"
+    # Hard-assert the dispatch line is present in BOTH runs.  Without
+    # this the earlier `if "x25519_x4" in ...` guard let a non-emitting
+    # build silently pass — turning the contract test into a no-op.
+    assert "x25519_x4" in default_stderr, (
+        "AMA_DISPATCH_VERBOSE=1 did not produce an x25519_x4 dispatch "
+        "line under the default policy.  Either the runtime gate "
+        "ama_print_dispatch_info disabled the print, or the binding "
+        "extension never reached the dispatch init point.  stderr was:\n"
+        f"{default_stderr}"
+    )
+    assert "scalar (4× sequential)" in default_stderr, (
+        "Default policy MUST keep x25519_x4 = scalar (4× sequential) on "
+        "MULX/ADX hosts (PR #273 design note, ama_dispatch.c:478-502). "
+        "If the AVX2 4-way kernel is now selected by default, that is a "
+        "performance regression on every shipped Broadwell+/Zen+ part. "
+        f"stderr was:\n{default_stderr}"
+    )
+    # AVX2 opt-in either selects the SIMD kernel (uncontended modern
+    # x86_64) or falls back to scalar on hosts that lack AVX2; both are
+    # acceptable.  What is NOT acceptable is for the env-var to have no
+    # effect at all (which would prove the dispatch table can't be
+    # opted in).
+    assert "x25519_x4" in avx2_stderr, (
+        "AMA_DISPATCH_VERBOSE=1 + AMA_DISPATCH_USE_X25519_AVX2=1 did "
+        "not produce an x25519_x4 dispatch line. stderr was:\n"
+        f"{avx2_stderr}"
+    )
 
 
 @requires_x25519

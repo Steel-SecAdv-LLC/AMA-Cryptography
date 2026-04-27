@@ -108,22 +108,6 @@
       "tolerance_percent": 35,
       "tier": "microbenchmark"
     },
-    "x25519_scalarmult": {
-      "description": "X25519 single-shot Diffie-Hellman scalar-mult (native C, default dispatch). Backed by fe64 (radix-2^64, MULX/ADX) on x86-64 hosts with BMI2+ADX, fe51 (radix-2^51) on hosts without, and gf16 on aarch64. The AVX2 4-way kernel is OPT-IN via AMA_DISPATCH_USE_X25519_AVX2=1 and is intentionally not faster than scalar fe64 on MULX/ADX hosts — see src/c/dispatch/ama_dispatch.c:478-502 and tests/test_x25519_dispatch_policy.py for the dispatch contract.",
-      "metric": "operations_per_second",
-      "baseline_value": 13000,
-      "unit": "ops/sec",
-      "tolerance_percent": 40,
-      "tier": "microbenchmark"
-    },
-    "x25519_scalarmult_batch4": {
-      "description": "X25519 batch-4 Diffie-Hellman under default dispatch (4 sequential scalar ladders). Per-op latency should track x25519_scalarmult to within ~5% — a wider gap typically means the AVX2 4-way kernel was accidentally selected as the default, which is a regression on MULX/ADX hosts (PR #273 design note).",
-      "metric": "operations_per_second",
-      "baseline_value": 12500,
-      "unit": "ops/sec",
-      "tolerance_percent": 40,
-      "tier": "microbenchmark"
-    },
     "full_package_create": {
       "description": "Complete crypto package creation (with PQC)",
       "metric": "operations_per_second",
@@ -199,9 +183,17 @@
       "optional": true
     },
     "x25519_scalarmult": {
-      "description": "X25519 key exchange scalar multiplication (native C)",
+      "description": "X25519 single-shot Diffie-Hellman scalar-mult (native C, default dispatch). Backed by fe64 (radix-2^64, MULX/ADX) on x86-64 hosts with BMI2+ADX, fe51 (radix-2^51) on 64-bit hosts without, and gf16 on 32-bit. The AVX2 4-way kernel is OPT-IN via AMA_DISPATCH_USE_X25519_AVX2=1 and is intentionally not faster than scalar fe64 on MULX/ADX hosts — see src/c/dispatch/ama_dispatch.c:478-502 and tests/test_x25519_dispatch_policy.py for the dispatch contract. Re-floored 5,000 → 13,000 (2026-04-27 audit) so the regression gate actually catches a >40% drop from canonical-host throughput rather than ignoring it.",
       "metric": "operations_per_second",
-      "baseline_value": 5000,
+      "baseline_value": 13000,
+      "unit": "ops/sec",
+      "tolerance_percent": 40,
+      "optional": true
+    },
+    "x25519_scalarmult_batch4": {
+      "description": "X25519 batch-4 Diffie-Hellman under default dispatch — measures BATCHES/SEC, not per-op rate. On MULX/ADX hosts this is roughly x25519_scalarmult / 4 plus the wrapper's per-batch overhead (canonical-host run measured ~4,100 batches/sec vs ~17,000 single-shot ops/sec). A significantly slower batches/sec number typically means the AVX2 4-way kernel was accidentally selected as the default — that is a regression on every shipped Broadwell+/Zen+ part (see PR #273 design note and ama_dispatch.c:478-502). The runner calls native_x25519_scalarmult_batch with count=4 so this baseline genuinely exercises the batch wrapper, not four sequential native_x25519_key_exchange calls.",
+      "metric": "operations_per_second",
+      "baseline_value": 2600,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true

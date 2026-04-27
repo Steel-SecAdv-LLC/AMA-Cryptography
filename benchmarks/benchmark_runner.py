@@ -386,6 +386,47 @@ def run_x25519_benchmark(iterations: int = 100) -> Optional[float]:
         return None
 
 
+def run_x25519_batch4_benchmark(iterations: int = 100) -> Optional[float]:
+    """Benchmark X25519 batch-4 DH via native_x25519_scalarmult_batch.
+
+    Reports the per-batch (count=4) ops/sec, NOT the per-op rate.  A
+    canonical-host run that yields ~13K single-shot ops/sec should
+    yield ~12.5K batch-of-4 ops/sec under the default dispatch policy
+    (the batch is four sequential scalar ladders plus the wrapper's
+    per-batch overhead — wrapper overhead is what brings batch-of-4
+    throughput slightly under single-shot, NOT a regression).  A
+    significantly slower number typically means the AVX2 4-way kernel
+    was accidentally selected as the default; that is a regression on
+    every shipped Broadwell+/Zen+ part (see PR #273 design note).
+    """
+    try:
+        from ama_cryptography.pqc_backends import (
+            _X25519_NATIVE_AVAILABLE,
+            _native_lib,
+            native_x25519_scalarmult_batch,
+        )
+
+        if (
+            _native_lib is None
+            or not _X25519_NATIVE_AVAILABLE
+            or not hasattr(_native_lib, "ama_x25519_scalarmult_batch")
+        ):
+            return None
+
+        scalars = [secrets.token_bytes(32) for _ in range(4)]
+        points = [secrets.token_bytes(32) for _ in range(4)]
+
+        # Probe once to trip availability checks before timing.
+        native_x25519_scalarmult_batch(scalars, points)
+
+        def operation():
+            native_x25519_scalarmult_batch(scalars, points)
+
+        return benchmark_operation(operation, iterations, warmup=5)
+    except Exception:
+        return None
+
+
 def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[BenchmarkResult]:
     """Run all benchmarks and compare against baseline."""
     results = []
@@ -411,6 +452,11 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
         "aes_256_gcm_encrypt": run_aes_gcm_benchmark,
         "chacha20poly1305_encrypt": run_chacha20poly1305_benchmark,
         "x25519_scalarmult": run_x25519_benchmark,
+        # PR #277, Devin review #10: x25519_scalarmult_batch4 pins the
+        # batch wrapper's throughput so a future change that flips the
+        # AVX2 4-way kernel to default-on is caught by CI rather than
+        # silently regressing per-batch latency.
+        "x25519_scalarmult_batch4": run_x25519_batch4_benchmark,
     }
 
     # Run standard benchmarks
