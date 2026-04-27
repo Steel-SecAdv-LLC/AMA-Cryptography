@@ -228,6 +228,7 @@ cdef class AmaEngineOptimized:
         cdef double fractal_val, symmetric_val, entropy, max_entropy, info_grad
         cdef double velocity_norm, gamma_lorentz, alignment_val, distance, omega_score
         cdef double noise_scale, purity_norm, lyap_grad, sigma, helix2_norm
+        cdef double prob, scale, bound
 
         cdef double[:] helix1 = np.copy(state)
         cdef double[:] helix2 = np.zeros(self.state_dim, dtype=np.float64)
@@ -410,7 +411,7 @@ cdef class AmaEngineOptimized:
 
             entropy = 0.0
             for i in range(self.state_dim):
-                cdef double prob = fabs(state[i]) / sum_val
+                prob = fabs(state[i]) / sum_val
                 if prob > 0:
                     entropy -= prob * log(prob)
 
@@ -490,13 +491,13 @@ cdef class AmaEngineOptimized:
 
         if sigma < SIGMA_THRESHOLD:
             # Correction needed
-            cdef double scale = sqrt(SIGMA_THRESHOLD / sigma) if sigma > 0 else 1.0
+            scale = sqrt(SIGMA_THRESHOLD / sigma) if sigma > 0 else 1.0
             for i in range(self.state_dim):
                 result[i] *= scale
 
         # ∞_b: Boundedness constraint
         if self.enable_inf_b:
-            cdef double bound = 10.0 * PHI_CUBED
+            bound = 10.0 * PHI_CUBED
             for i in range(self.state_dim):
                 if result[i] > bound:
                     result[i] = bound
