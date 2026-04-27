@@ -46,10 +46,13 @@ ed25519_randombytes_unsafe(void *p, size_t len) {
 #pragma GCC diagnostic ignored "-Wunused-function"
 #endif
 
-/* Include donna's single-file compilation unit. The actual `#include
- * "ed25519.c"` lives in a vendor-local aggregator header so the
- * deliberately non-header include sits inside the path-ignored vendor
- * tree (see .github/codeql/codeql-config.yml). */
+/* Include donna's single-file compilation unit. The actual
+ * `#include` lives in a vendor-local aggregator header so the
+ * pattern stays inside the path-ignored vendor tree (see
+ * .github/codeql/codeql-config.yml). Donna's upstream `ed25519.c`
+ * is shipped here as `ed25519_unit.h` so the directive includes a
+ * header-extension file and CodeQL's `cpp/include-non-header`
+ * rule remains enabled for first-party code. */
 #include "vendor/ed25519-donna/ama_donna_unit.h"
 
 #if defined(__GNUC__) || defined(__clang__)
