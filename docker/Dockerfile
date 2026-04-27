@@ -15,9 +15,7 @@ FROM ubuntu:22.04 AS builder
 # gcc-12 / g++-12 are installed alongside the default gcc-11 because
 # CMakeLists.txt enforces INVARIANT-8 (GCC >= 12 required for reliable
 # constant-time codegen + full SIMD intrinsic support) and ubuntu:22.04
-# defaults to gcc-11. The CMake invocation below selects gcc-12 via
-# CC/CXX rather than rewriting the alternatives, so a future bump to
-# ubuntu:24.04 can drop these two packages without other edits.
+# defaults to gcc-11.
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
@@ -29,14 +27,18 @@ RUN apt-get update && apt-get install -y \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Make gcc-12 the default for every subsequent RUN in this stage.
-# This covers BOTH the explicit C library build below AND the implicit
-# cmake re-invocation that `python3 -m build --wheel` does via
-# setup.py::CMakeBuild — the wheel build runs in a separate sub-shell
-# and would otherwise fall back to the ubuntu:22.04 default gcc-11
-# and trip CMakeLists.txt:103's INVARIANT-8 toolchain check again.
-ENV CC=gcc-12
-ENV CXX=g++-12
+# Make gcc-12 the system default `gcc` / `g++` via update-alternatives.
+# We can't just set CC/CXX env vars here: `python3 -m build --wheel`
+# below runs in a PEP 517 isolated build environment whose subprocess
+# may not propagate the parent env reliably to setuptools' CMakeBuild
+# subshell. Rewriting the alternatives makes every gcc/g++ invocation
+# in the stage resolve to v12, which guarantees CMakeLists.txt:103's
+# INVARIANT-8 toolchain check passes regardless of which sub-shell
+# does the cmake call.
+RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100 && \
+    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100 && \
+    update-alternatives --set gcc /usr/bin/gcc-12 && \
+    update-alternatives --set g++ /usr/bin/g++-12
 
 # Install Python dependencies
 COPY requirements.txt requirements-dev.txt /tmp/

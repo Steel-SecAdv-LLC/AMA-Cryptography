@@ -168,9 +168,10 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: |
           cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
-          # Explicit -j$(nproc); bare `-j` would unbound make's parallelism
-          # and OOM the runner. Matches ci.yml::test pattern.
-          cmake --build build -j$(nproc)
+          # Use Python's os.cpu_count() for portability — `nproc` is GNU
+          # coreutils and not guaranteed on macos-latest. Bare `-j` would
+          # unbound make's parallelism and OOM the runner.
+          cmake --build build -j"$(python -c 'import os; print(os.cpu_count() or 1)')"
 
       - name: Build native C library (Windows)
         if: matrix.os == 'windows-latest'
