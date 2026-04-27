@@ -11,9 +11,18 @@ FROM ubuntu:22.04 AS builder
 # INVARIANT-1: no external cryptographic libraries are linked. libssl-dev is
 # NOT installed — AMA's C sources implement ML-KEM / ML-DSA / SPHINCS+ / AES /
 # SHA-3 / ChaCha20-Poly1305 natively and never call OpenSSL at runtime.
+#
+# gcc-12 / g++-12 are installed alongside the default gcc-11 because
+# CMakeLists.txt enforces INVARIANT-8 (GCC >= 12 required for reliable
+# constant-time codegen + full SIMD intrinsic support) and ubuntu:22.04
+# defaults to gcc-11. The CMake invocation below selects gcc-12 via
+# CC/CXX rather than rewriting the alternatives, so a future bump to
+# ubuntu:24.04 can drop these two packages without other edits.
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
+    gcc-12 \
+    g++-12 \
     git \
     python3-dev \
     python3-pip \
@@ -28,20 +37,14 @@ RUN pip3 install --no-cache-dir -r /tmp/requirements.txt -r /tmp/requirements-de
 WORKDIR /build
 COPY . .
 
-# Build C library — AMA_USE_NATIVE_PQC=ON is required because the
-# image deliberately does NOT install libssl-dev (INVARIANT-1, see
-# the apt-get block above). Without it the build pulls in the
-# non-native PQC path that depends on OpenSSL and fails at link time.
-#
-# AMA_ENABLE_LTO=OFF: Ubuntu 22.04 ships gcc-11 whose LTO plugin has
-# repeatable link-time crashes (segfault / "internal compiler error")
-# when the donna single-translation-unit shim is compiled together
-# with the native PQC archives at -O3. The non-LTO build is byte-
-# correct (cross-checked against KAT vectors); LTO only buys ~3-5%
-# on the affected codepaths. Re-enable once the base image moves to
-# 24.04 / gcc-13 or the donna path is split into its own object.
+# Build C library. CC=gcc-12 / CXX=g++-12 satisfies the INVARIANT-8
+# toolchain check in CMakeLists.txt:103 — see the apt-get block for
+# the reasoning. AMA_USE_NATIVE_PQC=ON is required because the image
+# deliberately does NOT install libssl-dev (INVARIANT-1); without it
+# the build pulls in the non-native PQC path that depends on OpenSSL
+# and fails at link time.
 RUN mkdir -p build && cd build && \
-    cmake .. \
+    CC=gcc-12 CXX=g++-12 cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
         -DAMA_USE_NATIVE_PQC=ON \
         -DAMA_BUILD_SHARED=ON \
@@ -49,7 +52,7 @@ RUN mkdir -p build && cd build && \
         -DAMA_BUILD_TESTS=OFF \
         -DAMA_BUILD_EXAMPLES=OFF \
         -DAMA_ENABLE_AVX2=OFF \
-        -DAMA_ENABLE_LTO=OFF && \
+        -DAMA_ENABLE_LTO=ON && \
     cmake --build . --config Release -j$(nproc)
 
 # Build Python package (modern PEP 517 build)
