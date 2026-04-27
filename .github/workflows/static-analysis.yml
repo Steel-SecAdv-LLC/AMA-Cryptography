@@ -110,6 +110,7 @@ jobs:
         with:
           languages: c-cpp, python
           queries: security-and-quality
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Build C library for CodeQL
         run: |

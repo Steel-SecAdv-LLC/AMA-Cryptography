@@ -12,6 +12,8 @@ RUN apk add --no-cache \
     openssl-dev \
     python3-dev \
     py3-pip \
+    py3-setuptools \
+    py3-wheel \
     git
 
 WORKDIR /build
@@ -27,6 +29,15 @@ RUN mkdir build && cd build && \
         -DAMA_ENABLE_AVX2=OFF && \
     cmake --build . -j$(nproc)
 
+# Wheel build. Alpine 3.18 ships setuptools 67.7.2 (< 70), so the
+# legacy `python3 setup.py bdist_wheel` invocation still works here —
+# the original failure on this line was the missing `wheel` Python
+# package (not the deprecation), now resolved by the `py3-wheel` apk
+# add above. Keeping the legacy invocation rather than `pip wheel
+# --no-build-isolation` because the latter trips an alpine-specific
+# friction with how setuptools' CMakeBuild re-runs cmake in an env
+# where pip's setuptools shim doesn't fully line up with the system
+# setuptools — manifests as opaque exit-1 with no actionable trace.
 RUN python3 setup.py bdist_wheel
 
 FROM alpine:3.18
