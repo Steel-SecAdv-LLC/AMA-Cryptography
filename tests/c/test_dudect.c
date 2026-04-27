@@ -418,6 +418,65 @@ static double test_x25519_scalarmult(int iterations) {
 }
 
 /* -----------------------------------------------------------------------
+ * Test 10b: X25519 dispatched batch ladder (AVX2 4-way OR scalar fallback)
+ *
+ * Measures the runtime-dispatched X25519 batch path.  Which kernel
+ * actually runs depends on dispatcher state:
+ *
+ *   - With `AMA_DISPATCH_USE_X25519_AVX2=1` set in the environment
+ *     (or the test hook `ama_test_force_x25519_x4_avx2()` called),
+ *     the AVX2 4-way Montgomery ladder is exercised.  That kernel
+ *     uses a packed XOR-mask cswap that applies independent per-lane
+ *     scalar bits — no shared branch that could leak whether a
+ *     particular lane has bit-0 vs bit-1 set, structurally as
+ *     constant-time as the scalar ladder.
+ *
+ *   - Without the opt-in (the default), the wrapper falls through
+ *     to four sequential scalar single-shot ladders, the same path
+ *     measured by Test 10a above (each call is constant-time on its
+ *     own, and four of them in series carry the same property).
+ *
+ * Reported info-only for the same CI-noise reason as the single-
+ * shot X25519 lane above.  CI matrix entry
+ * `dudect-x25519-avx2-batch` exports the env var and re-runs this
+ * lane so the SIMD kernel's signal is sampled even when the default
+ * policy is explicit opt-in (default-off).
+ *
+ * Class 0: Batch of 4 with all-zero (post-clamp) secret seeds
+ * Class 1: Batch of 4 with all-0xFF (post-clamp) secret seeds
+ * ----------------------------------------------------------------------- */
+static double test_x25519_scalarmult_x4(int iterations) {
+    dudect_ctx_t ctx;
+    dudect_ctx_init(&ctx, "X25519 scalarmult batch×4 (scalar-independent)");
+
+    uint8_t sk0[4][32], sk1[4][32], pts[4][32], out[4][32];
+    memset(sk0, 0x00, sizeof(sk0));
+    memset(sk1, 0xFF, sizeof(sk1));
+    memset(pts, 0,    sizeof(pts));
+    for (int k = 0; k < 4; k++) pts[k][0] = 9;  /* basepoint per lane */
+
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+
+        uint64_t start = dudect_get_time_ns();
+        if (class_idx == 0)
+            ama_x25519_scalarmult_batch(out,
+                                         (const uint8_t (*)[32])sk0,
+                                         (const uint8_t (*)[32])pts, 4);
+        else
+            ama_x25519_scalarmult_batch(out,
+                                         (const uint8_t (*)[32])sk1,
+                                         (const uint8_t (*)[32])pts, 4);
+        uint64_t end = dudect_get_time_ns();
+
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    dudect_print_result(&ctx);
+    return dudect_get_t(&ctx);
+}
+
+/* -----------------------------------------------------------------------
  * Test 10: Kyber KEM — decapsulation timing must not depend on
  * ciphertext validity (implicit rejection must be constant-time)
  *
@@ -575,6 +634,18 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
      * still surfacing the t-value in the summary. Reproduce locally
      * with `taskset -c 0 nice -n -20 ./test_dudect --measurements
      * 10000000` for a clean reading. */
+    results[idx].is_info_only = 1;
+    idx++;
+
+    results[idx].name = "X25519 scalarmult batch×4";
+    results[idx].t_value = test_x25519_scalarmult_x4(iterations);
+    /* Same CI-noise rationale as the single-shot X25519 lane above —
+     * info-only.  The 4-way ladder uses an XOR-mask cswap that handles
+     * independent per-lane scalar bits with no scalar-dependent
+     * branches, so it is structurally as constant-time as the scalar
+     * path.  When AVX2 isn't available this lane falls through to four
+     * sequential scalar ladders and the same constant-time argument
+     * applies. */
     results[idx].is_info_only = 1;
     idx++;
 

@@ -57,6 +57,7 @@
 
 #include "../include/ama_cryptography.h"
 #include "../include/ama_cpuid.h"
+#include "../include/ama_dispatch.h"
 #include "ama_platform_rand.h"
 #include <string.h>
 #include <stdint.h>
@@ -700,6 +701,112 @@ AMA_API ama_error_t ama_x25519_key_exchange(
 
     if (zero_check == 0) {
         ama_secure_memzero(shared_secret, 32);
+        return AMA_ERROR_CRYPTO;
+    }
+
+    return AMA_SUCCESS;
+}
+
+/* ============================================================================
+ * Batch scalar multiplication (additive API for SIMD parallelism)
+ *
+ * Computes `out[k] = X25519(scalars[k], points[k])` for k in [0, count).
+ * When the dispatcher has the AVX2 4-way kernel wired in (opt-in via
+ * `AMA_DISPATCH_USE_X25519_AVX2=1`) AND the batch contains at least
+ * one full 4-lane chunk (count >= 4), those full chunks dispatch to
+ * the AVX2 4-way Montgomery ladder kernel (`src/c/avx2/ama_x25519_avx2.c`)
+ * which processes four ladders in parallel; any tail lanes for
+ * count % 4 != 0 are processed via the scalar single-shot ladder.
+ * Short batches (count of 1, 2, or 3) bypass the 4-way kernel entirely
+ * — the wrapper does not pad them up to four lanes — and fall through
+ * to the scalar fe64 / fe51 / gf16 path so callers don't pay any
+ * zero-fill cost on the hot path of `ama_x25519_key_exchange`.
+ *
+ * Low-order point handling matches the single-shot API: any lane
+ * whose ladder produces an all-zero shared secret (indicating
+ * scalarmult of a low-order u-coordinate) causes the entire batch to
+ * fail with AMA_ERROR_CRYPTO and ALL outputs to be zeroed — preventing
+ * accidental use of a partially-failing batch result.
+ * ============================================================================ */
+AMA_API ama_error_t ama_x25519_scalarmult_batch(
+    uint8_t out[][32],
+    const uint8_t scalars[][32],
+    const uint8_t points[][32],
+    size_t count
+) {
+    if (count == 0) {
+        return AMA_SUCCESS;
+    }
+    if (!out || !scalars || !points) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    const ama_dispatch_table_t *tbl = ama_get_dispatch_table();
+    size_t i;
+
+    /* 4-way SIMD path: process full chunks of 4 lanes at a time when
+     * the AVX2 kernel is wired in AND the batch contains at least one
+     * full 4-lane chunk.  The dispatcher leaves `tbl->x25519_x4 ==
+     * NULL` by default on x86-64 (the scalar fe64 path beats 4×
+     * donna-32bit on Skylake-class cores; the kernel is opt-in via
+     * `AMA_DISPATCH_USE_X25519_AVX2=1` for the constant-time test lane
+     * and a future AVX-512 IFMA port).  `count >= 4` matches the only
+     * way the kernel is actually invoked: `chunks = count / 4` would
+     * be zero for count of 2 or 3 and the for-loop body would not
+     * run, so the previous `count >= 2` guard was misleading without
+     * being incorrect — the wrapper has always pushed short batches
+     * (1 / 2 / 3) entirely down the scalar tail path. */
+    size_t chunks = 0;
+    if (tbl->x25519_x4 != NULL && count >= 4) {
+        chunks = count / 4;
+        for (i = 0; i < chunks; i++) {
+            /* Kernel writes directly into the caller's output slice —
+             * `out[i*4 .. i*4+3]` is contiguous and ABI-compatible
+             * with `uint8_t (*)[32]`, so no staging buffer is needed.
+             * The aggregate scrub below covers the same memory on the
+             * rejection path. */
+            tbl->x25519_x4((uint8_t (*)[32])&out[i * 4],
+                           (const uint8_t (*)[32])&scalars[i * 4],
+                           (const uint8_t (*)[32])&points[i * 4]);
+        }
+    }
+
+    /* Tail (or whole batch when count < 4 or `tbl->x25519_x4 == NULL`):
+     * scalar single-shot ladder per remaining lane.  Reuses the same
+     * field-path-selected scalarmult driver so the byte-for-byte
+     * equivalence pinned by tests/c/test_x25519.c carries over to
+     * batch tail lanes for free. */
+    for (i = chunks * 4; i < count; i++) {
+        x25519_scalarmult(out[i], scalars[i], points[i]);
+    }
+
+    /* Aggregate low-order rejection across all lanes, branchlessly:
+     * accumulate an "any lane all-zero" mask without short-circuiting,
+     * then a single end-of-loop check decides whether to scrub the
+     * batch and surface AMA_ERROR_CRYPTO.  No data-dependent branch
+     * inside the per-lane reduction reveals which lane (if any) was
+     * rejected; the only bit the caller learns is the boolean
+     * batch-level outcome, identical to what the return code already
+     * exposes. */
+    uint8_t batch_zero_mask = 0;
+    for (i = 0; i < count; i++) {
+        uint8_t lane_or = 0;
+        size_t j;
+        for (j = 0; j < 32; j++) {
+            lane_or |= out[i][j];
+        }
+        /* lane_zero_mask: 0xFF if lane_or == 0, else 0x00. */
+        uint8_t lane_zero_mask = (uint8_t)((((uint32_t)lane_or) - 1u) >> 8) & 0xFFu;
+        batch_zero_mask |= lane_zero_mask;
+    }
+    if (batch_zero_mask) {
+        /* RFC 7748 §6.1: implementations MAY reject all-zero shared
+         * secrets.  AMA does — and per the single-shot contract,
+         * scrub the whole batch so a caller that ignores the error
+         * code can't leak partial results. */
+        for (i = 0; i < count; i++) {
+            ama_secure_memzero(out[i], 32);
+        }
         return AMA_ERROR_CRYPTO;
     }
 

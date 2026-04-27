@@ -14,6 +14,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "ama_cryptography.h"
 
@@ -76,6 +77,144 @@ static const uint8_t expected_shared[32] = {
     0x4a,0x5d,0x9d,0x5b,0xa4,0xce,0x2d,0xe1, 0x72,0x8e,0x3b,0xf4,0x80,0x35,0x0f,0x25,
     0xe0,0x7e,0x21,0xc9,0x47,0xd1,0x9e,0x33, 0x76,0xf0,0x9b,0x3c,0x1e,0x16,0x17,0x42
 };
+
+/* ----------------------------------------------------------------------
+ * 1024-vector batch cross-check, extracted to a helper so the four
+ * malloc-backed buffers (`scs`, `pts`, `bouts`, `souts`) are released
+ * through a single `goto cleanup` path on every exit — including the
+ * "any inner assertion fails" path.  Returns 0 on success, 1 on failure
+ * (matching the convention `main()` propagates from file-scope
+ * `TEST_ASSERT`).
+ *
+ * Two function-local assertion macros, both scoped to this helper:
+ *
+ *   - `BATCH_ASSERT_OR_GOTO(cond, msg)` — the outer-summary form:
+ *     same FAIL/PASS log-line shape as the file-scope `TEST_ASSERT`,
+ *     used for the handful of high-level milestones (malloc OK, each
+ *     batch call returned AMA_SUCCESS, each pass / tail-count run
+ *     completed).  Six emit-on-success lines total.
+ *
+ *   - `BATCH_INNER_OR_GOTO(cond, msg)` — silent on success, FAIL on
+ *     failure.  Used for the inner per-vector cross-check loops
+ *     (1024 single-shot refs + 1024 AVX2-forced + 1024 scalar-forced
+ *     + 47 tail-count = ~3119 checks).  Without this, the helper
+ *     would print one PASS line per check — thousands of lines of
+ *     noise that buries failures and bloats CI logs.  On failure
+ *     it still emits the same FAIL message and goto's cleanup, so
+ *     the first-mismatch diagnostic is unchanged.
+ *
+ * Neither macro shadows the file-scope `TEST_ASSERT` used by the
+ * rest of the suite; both are `#undef`'d at the bottom of the
+ * helper.
+ * ---------------------------------------------------------------------- */
+static int batch_random_cross_check_1024(void) {
+    extern void ama_test_force_x25519_x4_scalar(void);
+    extern void ama_test_force_x25519_x4_avx2(void);
+    extern void ama_test_restore_x25519_x4_avx2(void);
+
+    const size_t N = 1024;
+    int rc = 0;
+    uint8_t (*scs)[32]   = malloc(N * 32);
+    uint8_t (*pts)[32]   = malloc(N * 32);
+    uint8_t (*bouts)[32] = malloc(N * 32);
+    uint8_t (*souts)[32] = malloc(N * 32);
+    size_t i, j;
+    const size_t tail_counts[] = { 1, 2, 3, 5, 6, 7, 9, 13 };
+
+#define BATCH_ASSERT_OR_GOTO(condition, message)            \
+    do {                                                    \
+        if (!(condition)) {                                 \
+            fprintf(stderr, "FAIL: %s\n", message);         \
+            rc = 1;                                         \
+            goto cleanup;                                   \
+        } else {                                            \
+            printf("PASS: %s\n", message);                  \
+        }                                                   \
+    } while (0)
+
+#define BATCH_INNER_OR_GOTO(condition, message)             \
+    do {                                                    \
+        if (!(condition)) {                                 \
+            fprintf(stderr, "FAIL: %s\n", message);         \
+            rc = 1;                                         \
+            goto cleanup;                                   \
+        }                                                   \
+    } while (0)
+
+    BATCH_ASSERT_OR_GOTO(scs && pts && bouts && souts, "batch: malloc");
+
+    for (i = 0; i < N; i++) {
+        for (j = 0; j < 32; j++) {
+            scs[i][j] = (uint8_t)((i + 1) * 13 + j * 7);
+            pts[i][j] = (uint8_t)((i + 5) * 11 + j * 3);
+        }
+    }
+    /* Single-shot reference (1024 silent inner checks → 1 summary PASS). */
+    for (i = 0; i < N; i++) {
+        BATCH_INNER_OR_GOTO(
+            ama_x25519_key_exchange(souts[i], scs[i], pts[i]) == AMA_SUCCESS,
+            "batch ref: single-shot success");
+    }
+    BATCH_ASSERT_OR_GOTO(1, "batch ref: 1024/1024 single-shots succeeded");
+
+    /* Pass 1 — force the AVX2 4-way kernel on (regardless of the
+     * `AMA_DISPATCH_USE_X25519_AVX2` env default-off policy).  On
+     * hosts without AVX2 this is a no-op and the call falls through
+     * to scalar — still correct, just same path as Pass 2. */
+    ama_test_force_x25519_x4_avx2();
+    BATCH_ASSERT_OR_GOTO(
+        ama_x25519_scalarmult_batch(bouts,
+                                    (const uint8_t (*)[32])scs,
+                                    (const uint8_t (*)[32])pts, N) == AMA_SUCCESS,
+        "batch deterministic ×1024 (AVX2 forced) success");
+    for (i = 0; i < N; i++) {
+        BATCH_INNER_OR_GOTO(memcmp(bouts[i], souts[i], 32) == 0,
+                            "batch lane matches single-shot (AVX2 forced)");
+    }
+    BATCH_ASSERT_OR_GOTO(1, "batch deterministic ×1024 (AVX2 forced): 1024/1024 lanes match");
+
+    /* Pass 2 — forced scalar fallback. */
+    ama_test_force_x25519_x4_scalar();
+    BATCH_ASSERT_OR_GOTO(
+        ama_x25519_scalarmult_batch(bouts,
+                                    (const uint8_t (*)[32])scs,
+                                    (const uint8_t (*)[32])pts, N) == AMA_SUCCESS,
+        "batch deterministic ×1024 (scalar forced) success");
+    for (i = 0; i < N; i++) {
+        BATCH_INNER_OR_GOTO(memcmp(bouts[i], souts[i], 32) == 0,
+                            "batch lane matches single-shot (scalar forced)");
+    }
+    BATCH_ASSERT_OR_GOTO(1, "batch deterministic ×1024 (scalar forced): 1024/1024 lanes match");
+    ama_test_restore_x25519_x4_avx2();
+
+    /* Tail-lane coverage: counts that don't divide by 4 (1, 2, 3,
+     * 5, 6, 7, 9, 13) must still produce correct results — the
+     * 4-way kernel handles the integral-of-4 prefix and the
+     * scalar fallback handles the (count % 4) tail. */
+    for (j = 0; j < sizeof(tail_counts) / sizeof(tail_counts[0]); j++) {
+        size_t tc = tail_counts[j];
+        BATCH_ASSERT_OR_GOTO(
+            ama_x25519_scalarmult_batch(bouts,
+                                        (const uint8_t (*)[32])scs,
+                                        (const uint8_t (*)[32])pts, tc) == AMA_SUCCESS,
+            "batch tail-count success");
+        for (i = 0; i < tc; i++) {
+            BATCH_INNER_OR_GOTO(memcmp(bouts[i], souts[i], 32) == 0,
+                                "batch tail-count lane matches single-shot");
+        }
+    }
+    BATCH_ASSERT_OR_GOTO(1, "batch tail-counts {1,2,3,5,6,7,9,13}: all lanes match single-shot");
+
+cleanup:
+    free(scs);
+    free(pts);
+    free(bouts);
+    free(souts);
+    return rc;
+
+#undef BATCH_ASSERT_OR_GOTO
+#undef BATCH_INNER_OR_GOTO
+}
 
 int main(void) {
     uint8_t out[32];
@@ -145,6 +284,128 @@ int main(void) {
                 "DH rejects NULL sk");
     TEST_ASSERT(ama_x25519_key_exchange(out, sk_a, NULL) == AMA_ERROR_INVALID_PARAM,
                 "DH rejects NULL pk");
+
+    /* ========================================================================
+     * Batch API (ama_x25519_scalarmult_batch)
+     *
+     * On x86-64 with AVX2 the batch API can dispatch to a 4-way
+     * Montgomery ladder kernel for full chunks of 4 when that path
+     * is explicitly enabled by dispatcher configuration or the test
+     * hook (the kernel is opt-in by default — see
+     * `src/c/dispatch/ama_dispatch.c`); tail lanes (count % 4) and
+     * short batches (count of 1, 2, or 3) fall through to the scalar
+     * single-shot path.  We exercise both:
+     *   1. AVX2 path (force-enabled via the test hook)
+     *   2. Scalar fallback (force-disabled via the test hook)
+     * Each sub-test must produce byte-identical output to the
+     * single-shot `ama_x25519_key_exchange` reference.
+     * ====================================================================== */
+    extern void ama_test_force_x25519_x4_scalar(void);
+    extern void ama_test_force_x25519_x4_avx2(void);
+    extern void ama_test_restore_x25519_x4_avx2(void);
+
+    /* RFC 7748 §5.2 TVs broadcast across all four lanes — exercises
+     * the kernel directly with known-answer vectors. */
+    {
+        uint8_t b_scalars[4][32], b_points[4][32], b_outs[4][32];
+        int k;
+        for (k = 0; k < 4; k++) {
+            memcpy(b_scalars[k], tv1_scalar, 32);
+            memcpy(b_points[k],  tv1_u,      32);
+        }
+        TEST_ASSERT(ama_x25519_scalarmult_batch(b_outs, (const uint8_t (*)[32])b_scalars, (const uint8_t (*)[32])b_points, 4) == AMA_SUCCESS,
+                    "batch RFC 7748 TV1 ×4 success");
+        for (k = 0; k < 4; k++) {
+            TEST_ASSERT(memcmp(b_outs[k], tv1_out, 32) == 0,
+                        "batch TV1 lane matches RFC expected");
+        }
+        for (k = 0; k < 4; k++) {
+            memcpy(b_scalars[k], tv2_scalar, 32);
+            memcpy(b_points[k],  tv2_u,      32);
+        }
+        TEST_ASSERT(ama_x25519_scalarmult_batch(b_outs, (const uint8_t (*)[32])b_scalars, (const uint8_t (*)[32])b_points, 4) == AMA_SUCCESS,
+                    "batch RFC 7748 TV2 ×4 success");
+        for (k = 0; k < 4; k++) {
+            TEST_ASSERT(memcmp(b_outs[k], tv2_out, 32) == 0,
+                        "batch TV2 lane matches RFC expected");
+        }
+    }
+
+    /* count == 0: no-op success (must NOT touch out / scalars / points). */
+    TEST_ASSERT(ama_x25519_scalarmult_batch(NULL, NULL, NULL, 0) == AMA_SUCCESS,
+                "batch count==0 is a no-op");
+
+    /* count == 1: scalar fast-path (bypasses 4-way kernel); must match
+     * single-shot byte-for-byte. */
+    {
+        uint8_t one_scalar[1][32], one_point[1][32], one_out[1][32], expected[32];
+        memcpy(one_scalar[0], alice_sk, 32);
+        memcpy(one_point[0],  bob_pk,   32);
+        ama_x25519_key_exchange(expected, alice_sk, bob_pk);
+        TEST_ASSERT(ama_x25519_scalarmult_batch(one_out, (const uint8_t (*)[32])one_scalar, (const uint8_t (*)[32])one_point, 1) == AMA_SUCCESS,
+                    "batch N=1 success");
+        TEST_ASSERT(memcmp(one_out[0], expected, 32) == 0,
+                    "batch N=1 matches single-shot");
+    }
+
+    /* Exhaustive cross-check: 1024 deterministically constructed
+     * (scalar, point) vectors via batch == 1024 sequential
+     * single-shots.  Inputs are derived from the loop indices
+     * (`(i, j) -> byte`) rather than a PRNG: deterministic for
+     * reproducibility, but distinct enough across the 1024 × 32
+     * grid to exercise the SIMD ladder over a wide spread of
+     * scalars and u-coordinates.  Run TWICE — once with the AVX2
+     * kernel wired in, once with it forced off — to cover both
+     * code paths in the same binary.  Matches the budget of
+     * test_x25519_field_equiv.c so the SIMD-vs-scalar coverage is
+     * on the same footing as the fe64-vs-fe51 byte-equivalence
+     * pin.
+     *
+     * Delegated to `batch_random_cross_check_1024()` so the four
+     * malloc-backed buffers are released through a single goto-
+     * cleanup path on both success and any assertion failure. */
+    {
+        int batch_rc = batch_random_cross_check_1024();
+        if (batch_rc != 0) {
+            return batch_rc;
+        }
+    }
+
+    /* Aggregate low-order rejection: any zero shared-secret lane causes
+     * the whole batch to fail with AMA_ERROR_CRYPTO and ALL outputs to
+     * be zeroed.  Lane 2 here uses u=0 (small-order) while the others
+     * use legitimate points; we expect the entire batch to fail and
+     * every output slot to be scrubbed. */
+    {
+        uint8_t b_scalars[4][32], b_points[4][32], b_outs[4][32];
+        int k;
+        memset(b_outs, 0xAA, sizeof(b_outs));
+        for (k = 0; k < 4; k++) {
+            memcpy(b_scalars[k], dummy_sk, 32);
+            memcpy(b_points[k],  bob_pk,   32);
+        }
+        memset(b_points[2], 0, 32);  /* lane 2: low-order u = 0 */
+        TEST_ASSERT(ama_x25519_scalarmult_batch(b_outs, (const uint8_t (*)[32])b_scalars, (const uint8_t (*)[32])b_points, 4) == AMA_ERROR_CRYPTO,
+                    "batch low-order rejection (any-lane → whole-batch fail)");
+        uint8_t accum = 0;
+        size_t i, j;
+        for (i = 0; i < 4; i++) for (j = 0; j < 32; j++) accum |= b_outs[i][j];
+        TEST_ASSERT(accum == 0, "batch low-order: ALL outputs zeroed on failure");
+    }
+
+    /* NULL parameter validation. */
+    {
+        uint8_t b_outs[1][32], b_scalars[1][32], b_points[1][32];
+        memset(b_scalars, 0, sizeof(b_scalars));
+        memset(b_points,  0, sizeof(b_points));
+        TEST_ASSERT(ama_x25519_scalarmult_batch(NULL, (const uint8_t (*)[32])b_scalars, (const uint8_t (*)[32])b_points, 1) == AMA_ERROR_INVALID_PARAM,
+                    "batch rejects NULL out");
+        TEST_ASSERT(ama_x25519_scalarmult_batch(b_outs, NULL, (const uint8_t (*)[32])b_points, 1) == AMA_ERROR_INVALID_PARAM,
+                    "batch rejects NULL scalars");
+        TEST_ASSERT(ama_x25519_scalarmult_batch(b_outs, (const uint8_t (*)[32])b_scalars, NULL, 1) == AMA_ERROR_INVALID_PARAM,
+                    "batch rejects NULL points");
+    }
+
 
     printf("\nAll X25519 tests passed.\n");
     return 0;

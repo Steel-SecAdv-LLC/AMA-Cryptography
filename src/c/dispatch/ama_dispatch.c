@@ -16,11 +16,27 @@
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 
-/* Expose POSIX clock_gettime / CLOCK_MONOTONIC on glibc.
- * Must precede all system headers.  Harmless on non-glibc platforms. */
-#if !defined(_POSIX_C_SOURCE) || _POSIX_C_SOURCE < 199309L
+/* Expose POSIX clock_gettime / CLOCK_MONOTONIC + C99 snprintf on every
+ * libc.  Must precede all system headers.
+ *
+ * Bumped from 199309L (POSIX.1b) → 200809L (POSIX.1-2008) to align
+ * with the rest of the project (tests/c/test_*.c and
+ * benchmarks/benchmark_c_raw.c all use 200809L).  The previous value
+ * was sufficient on glibc — POSIX.1b exposes clock_gettime, and
+ * glibc separately exposes the C99 stdio surface (snprintf etc.)
+ * regardless of _POSIX_C_SOURCE level — but on Apple's libc, defining
+ * _POSIX_C_SOURCE at any level (including 199309L) switches
+ * <stdio.h> into strict POSIX mode, which hides snprintf below
+ * _POSIX_C_SOURCE = 200112L (the level POSIX.1-2001 incorporated the
+ * C99 stdio additions).  Apple Clang's default
+ * `-Werror=implicit-function-declaration` then fails the build at the
+ * snprintf call in `print_dispatch_info` below.  200809L exposes both
+ * clock_gettime and snprintf on every supported libc (glibc, musl,
+ * Apple libc, BSD libc), and matches the version the rest of the C
+ * test/benchmark surface already uses. */
+#if !defined(_POSIX_C_SOURCE) || _POSIX_C_SOURCE < 200809L
 #undef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 199309L
+#define _POSIX_C_SOURCE 200809L
 #endif
 
 #include "ama_dispatch.h"
@@ -287,6 +303,7 @@ static void dispatch_init_internal(void) {
     dispatch_info.ed25519          = AMA_IMPL_GENERIC;
     dispatch_info.chacha20poly1305 = effective;
     dispatch_info.argon2           = effective;
+    dispatch_info.x25519           = effective;
 
     if (dispatch_verbose())
         fprintf(stderr,
@@ -317,6 +334,10 @@ static void dispatch_init_internal(void) {
     dispatch_info.ed25519          = AMA_IMPL_GENERIC;
     dispatch_info.chacha20poly1305 = best;
     dispatch_info.argon2           = best;
+    /* X25519 4-way ladder: AVX2-only kernel ships in this PR; NEON
+     * and SVE2 tiers fall through to GENERIC and the public batch
+     * API uses the scalar fe51 ladder per lane. */
+    dispatch_info.x25519           = AMA_IMPL_GENERIC;
 
     if (dispatch_verbose())
         fprintf(stderr,
@@ -353,6 +374,7 @@ static void dispatch_init_internal(void) {
     dispatch_table.aes_gcm_decrypt     = NULL;
     dispatch_table.chacha20_block_x8   = NULL;  /* NULL = caller uses scalar 1-block loop */
     dispatch_table.argon2_g            = NULL;  /* NULL = caller uses scalar BlaMka G */
+    dispatch_table.x25519_x4           = NULL;  /* NULL = caller uses 4 sequential scalar ladders */
 
 #ifdef AMA_HAVE_AVX2_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_AVX2) {
@@ -452,6 +474,31 @@ static void dispatch_init_internal(void) {
         const char *no_argon = getenv("AMA_DISPATCH_NO_ARGON2_AVX2");
         if (!(no_argon && no_argon[0] == '1'))
             dispatch_table.argon2_g = ama_argon2_g_avx2;
+    }
+    if (dispatch_info.x25519 >= AMA_IMPL_AVX2) {
+        /* X25519 4-way AVX2 kernel is **opt-in**, not opt-out.
+         *
+         * Rationale: on hosts where the scalar X25519 path is fe64
+         * (radix-2^64, x86-64 GCC/Clang with MULX/ADX), four
+         * sequential scalar ladders are *faster* than four lanes of
+         * the AVX2 donna-32bit ladder.  The 4-way kernel uses 32-bit
+         * limbs because AVX2 lacks a 64×64→128 lane-wise multiply
+         * (that arrived with AVX-512 IFMA); donna-32bit's larger
+         * cross-product count outpaces the 4× SIMD width on
+         * Skylake-Cascade-class cores.  Measured locally:
+         *   scalar fe64    : ~78 µs / op
+         *   AVX2 4-way     : ~234 µs / op
+         * — a ~3× regression per op.
+         *
+         * The kernel is still wired in for: (a) the `_x4` constant-
+         * time test lane, (b) CI matrix coverage of the SIMD path,
+         * (c) future hosts where the scalar path falls back to fe51
+         * or gf16 and the 4-way may break even, (d) eventual port
+         * to AVX-512 IFMA / VPMADD52 which closes the gap.  Opt in
+         * with `AMA_DISPATCH_USE_X25519_AVX2=1` to exercise it. */
+        const char *use_x25519 = getenv("AMA_DISPATCH_USE_X25519_AVX2");
+        if (use_x25519 && use_x25519[0] == '1')
+            dispatch_table.x25519_x4 = ama_x25519_scalarmult_x4_avx2;
     }
 #endif
 
@@ -634,6 +681,8 @@ static void dispatch_init_internal(void) {
                 dispatch_table.chacha20_block_x8 ? "SIMD" : "scalar");
         fprintf(stderr, "[AMA Dispatch] argon2_g     -> %s\n",
                 dispatch_table.argon2_g ? "SIMD" : "scalar");
+        fprintf(stderr, "[AMA Dispatch] x25519_x4    -> %s\n",
+                dispatch_table.x25519_x4 ? "SIMD (AVX2 4-way)" : "scalar (4× sequential)");
         fprintf(stderr, "[AMA Dispatch] ed25519      -> scalar (no SIMD wired; backend chosen at build time)\n");
     }
 
@@ -704,8 +753,10 @@ const ama_dispatch_table_t *ama_get_dispatch_table(void) {
 
 void ama_test_force_argon2_g_scalar(void);
 void ama_test_force_chacha20_block_x8_scalar(void);
+void ama_test_force_x25519_x4_scalar(void);
 void ama_test_restore_argon2_g_avx2(void);
 void ama_test_restore_chacha20_block_x8_avx2(void);
+void ama_test_restore_x25519_x4_avx2(void);
 
 void ama_test_force_argon2_g_scalar(void) {
     ama_dispatch_init();
@@ -715,6 +766,37 @@ void ama_test_force_argon2_g_scalar(void) {
 void ama_test_force_chacha20_block_x8_scalar(void) {
     ama_dispatch_init();
     dispatch_table.chacha20_block_x8 = NULL;
+}
+
+void ama_test_force_x25519_x4_scalar(void) {
+    ama_dispatch_init();
+    dispatch_table.x25519_x4 = NULL;
+}
+
+void ama_test_force_x25519_x4_avx2(void);
+void ama_test_force_x25519_x4_avx2(void) {
+    /* Test-only: wires the AVX2 4-way kernel into the dispatch table
+     * unconditionally so tests can verify the SIMD path even when
+     * `AMA_DISPATCH_USE_X25519_AVX2` is not set in the environment.
+     * Safe to call only when the host actually supports AVX2 — which
+     * is what `dispatch_info.x25519 >= AMA_IMPL_AVX2` gates on.  No-op
+     * on hosts without AVX2 (the kernel symbol still exists but
+     * `ama_x25519_scalarmult_x4_avx2` would crash on a non-AVX2 CPU,
+     * so the dispatch level guard is mandatory).
+     *
+     * On builds without `AMA_HAVE_AVX2_IMPL` (non-x86-64 hosts,
+     * `-DAMA_ENABLE_AVX2=OFF`, MSVC builds where the AVX2 sources
+     * aren't compiled in), the symbol `ama_x25519_scalarmult_x4_avx2`
+     * is neither declared nor defined, so referencing it would fail
+     * to compile.  Keep this hook available on every build as a
+     * compile-clean no-op — non-AVX2 test binaries can still call
+     * `ama_test_force_x25519_x4_scalar()` / restore counterparts
+     * without conditional compilation at the call site. */
+    ama_dispatch_init();
+#ifdef AMA_HAVE_AVX2_IMPL
+    if (dispatch_info.x25519 >= AMA_IMPL_AVX2)
+        dispatch_table.x25519_x4 = ama_x25519_scalarmult_x4_avx2;
+#endif
 }
 
 /* Restore the function pointer to its post-dispatch_init value (which
@@ -741,6 +823,11 @@ void ama_test_restore_chacha20_block_x8_avx2(void) {
     ama_dispatch_init();
     dispatch_table.chacha20_block_x8 = dispatch_table_post_init.chacha20_block_x8;
 }
+
+void ama_test_restore_x25519_x4_avx2(void) {
+    ama_dispatch_init();
+    dispatch_table.x25519_x4 = dispatch_table_post_init.x25519_x4;
+}
 #endif /* AMA_TESTING_MODE */
 
 /**
@@ -762,6 +849,47 @@ void ama_print_dispatch_info(void) {
     fprintf(stderr, "║  Ed25519:            %-24s║\n", ama_impl_level_name(info->ed25519));
     fprintf(stderr, "║  ChaCha20-Poly1305:  %-24s║\n", ama_impl_level_name(info->chacha20poly1305));
     fprintf(stderr, "║  Argon2:             %-24s║\n", ama_impl_level_name(info->argon2));
+    /* Annotate the X25519 4-way row when capability is detected but the
+     * kernel pointer is NULL — i.e., the dispatcher saw AVX2+ but the
+     * `AMA_DISPATCH_USE_X25519_AVX2=1` opt-in wasn't tripped, so the
+     * batch path falls back to four sequential scalar ladders.  Without
+     * this annotation an external reader sees "AVX2" here and concludes
+     * the SIMD kernel is on, which is the obvious confused-bug-report
+     * source. */
+    {
+        const char *x25519_label;
+        char x25519_buf[24];
+#ifdef AMA_HAVE_AVX2_IMPL
+        /* On builds where the AVX2 4-way kernel TU was actually
+         * compiled in, the `(opt-in, off)` suffix is meaningful: the
+         * symbol exists, the dispatcher can wire it via
+         * `AMA_DISPATCH_USE_X25519_AVX2=1`, and the user has a
+         * concrete path to enable the kernel.  Annotate the row so
+         * external readers don't conclude the SIMD path is on by
+         * default (Copilot Review 2026-04 — the obvious
+         * confused-bug-report source).  On non-AMA_HAVE_AVX2_IMPL
+         * builds (-DAMA_ENABLE_AVX2=OFF, non-x86-64 hosts, MSVC
+         * without the AVX2 sources), `dispatch_table.x25519_x4` is
+         * also NULL, but for a different reason — the kernel TU was
+         * never compiled — so the opt-in is not actually available
+         * and the annotation would mislead the reader into thinking
+         * a build-time-decided absence is a runtime-toggleable one.
+         * Drop the suffix in that case (the bare `AMA_IMPL_GENERIC`
+         * label `info->x25519` will hold matches reality: there's no
+         * AVX2 kernel for X25519 in this binary, period). */
+        if (info->x25519 >= AMA_IMPL_AVX2 && dispatch_table.x25519_x4 == NULL) {
+            snprintf(x25519_buf, sizeof(x25519_buf), "%s (opt-in, off)",
+                     ama_impl_level_name(info->x25519));
+            x25519_label = x25519_buf;
+        } else {
+            x25519_label = ama_impl_level_name(info->x25519);
+        }
+#else
+        (void)x25519_buf;
+        x25519_label = ama_impl_level_name(info->x25519);
+#endif
+        fprintf(stderr, "║  X25519 4-way:       %-24s║\n", x25519_label);
+    }
     fprintf(stderr, "╚══════════════════════════════════════════════╝\n");
     fprintf(stderr, "\n");
 }

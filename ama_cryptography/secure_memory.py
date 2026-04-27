@@ -680,13 +680,11 @@ def secure_buffer(size: int, lock: bool = True) -> Generator[bytearray, None, No
     Raises:
         SecureMemoryError: On the way out, if ``secure_memzero`` is on the
             Python fallback path and observes a residual non-zero byte
-            during post-wipe verification.  This is deliberate — a silent
-            wipe failure would defeat the security contract.  See
-            :class:`SecureBuffer.__exit__` for the full semantics.  A
-            ``munlock`` failure during cleanup is logged at WARNING and
-            swallowed (the memory is already zeroed by then).
+            during post-wipe verification. A ``munlock`` failure during
+            cleanup is logged at WARNING and swallowed.
 
-    Example:
+    Usage::
+
         with secure_buffer(64) as key_material:
             key_material[:32] = encryption_key
             key_material[32:] = mac_key

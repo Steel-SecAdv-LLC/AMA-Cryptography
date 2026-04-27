@@ -537,11 +537,28 @@ class TestReplayWindowLargeGap:
     """Test replay window behavior with large sequence gaps."""
 
     def test_large_gap_o1_performance(self) -> None:
-        """Sequence jump from 0 to 1_000_000 completes in O(1) time."""
+        """Sequence jump from 0 to 1_000_000 completes in O(1) work.
+
+        O(1) is asserted as a *state-based* property — regardless of gap
+        size, the sliding-window cleanup advances ``base`` by at most one
+        per element added, and ``_seen`` stays bounded by ``window_size``.
+        An O(gap) regression would advance ``base`` to roughly
+        ``seq - window_size + 1`` (~999,991 here) and/or grow ``_seen``
+        through the full 1,000,000-element range during the slide.  Both
+        observations are deterministic (no scheduler-jitter flakes).
+
+        A wall-clock backstop is retained for catastrophic regressions
+        (e.g., O(gap²) or accidental ``time.sleep``) that somehow pass
+        the state checks, with a generous 5-second bound — typical
+        Windows CI scheduler jitter is 10–100 ms, while 1,000,000
+        set-op iterations on the slowest CI runner clear seconds.
+        Tight 10 ms thresholds caught CI jitter, not regressions
+        (PR #273 review thread).
+        """
         import time as _time
 
         rw = ReplayWindow(window_size=10)
-        # Fill the window so it slides
+        # Fill the window so it slides on the next add.
         for i in range(10):
             rw.check_and_accept(i)
 
@@ -549,10 +566,38 @@ class TestReplayWindowLargeGap:
         rw.check_and_accept(1_000_000)
         elapsed = _time.monotonic() - start
 
-        # Must complete in < 10ms (not seconds of O(gap) iteration)
-        assert elapsed < 0.01, f"Large gap took {elapsed:.3f}s, expected < 10ms"
-        # Base should have advanced past 0
+        # PRIMARY: state-based O(1) proof.  An O(gap) implementation
+        # would advance base to ~999,991 here.  O(1) advances base by
+        # exactly the count of newly-evicted elements (one, in this
+        # test).  ``window_size + 1`` gives a small constant margin
+        # for plausible implementation variations without admitting
+        # any O(gap) behaviour.
+        assert rw.base <= rw.window_size + 1, (
+            f"base advanced to {rw.base}; an O(1) implementation should "
+            f"not scale base advancement with gap size"
+        )
+
+        # PRIMARY: window stays bounded.  Same invariant as
+        # test_large_gap_window_size_respected, kept here as a
+        # deterministic O(1) marker — an O(gap) impl might briefly
+        # hold 1M+ elements in ``_seen`` before sliding them away.
+        assert len(rw._seen) <= rw.window_size, (
+            f"window size {len(rw._seen)} exceeds bound {rw.window_size}; "
+            f"implementation may be touching every element in the gap"
+        )
+
+        # PRIMARY: base did advance (the slide actually fired).
         assert rw.base > 0
+
+        # BACKSTOP: catastrophic-regression wall-clock check.  5 s is
+        # generous enough for any CI environment including Windows
+        # under contention but tight enough that a true O(gap)
+        # regression (1M set ops, ~100 ms - 5 s on slow runners) is
+        # caught even if it somehow passes the state checks above.
+        assert elapsed < 5.0, (
+            f"Large gap took {elapsed:.3f}s — likely O(gap) regression "
+            f"despite passing state-based O(1) checks"
+        )
 
     def test_large_gap_window_size_respected(self) -> None:
         """After large gap, window size stays bounded."""

@@ -519,6 +519,24 @@ def _setup_x25519_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_char_p,  # their_public_key[32]
         ]
         lib.ama_x25519_key_exchange.restype = ctypes.c_int
+
+        # Batched X25519: out[count][32], scalars[count][32], points[count][32].
+        # ctypes treats fixed-shape `uint8_t (*)[32]` as opaque void* at this
+        # layer; the Python wrapper packs a `bytes` blob of length count*32
+        # for each parameter and `ctypes.c_char_p` carries the pointer.
+        # `hasattr` guard so a pre-batch-API native build still exposes the
+        # core keypair / key-exchange path — without this, `AttributeError`
+        # would propagate to the except clause and disable ALL of X25519
+        # rather than just the additive batch wrapper.  Same pattern as
+        # the Argon2id legacy-shim guard below.
+        if hasattr(lib, "ama_x25519_scalarmult_batch"):
+            lib.ama_x25519_scalarmult_batch.argtypes = [
+                ctypes.c_char_p,  # out      (count × 32 bytes)
+                ctypes.c_char_p,  # scalars  (count × 32 bytes)
+                ctypes.c_char_p,  # points   (count × 32 bytes)
+                ctypes.c_size_t,  # count
+            ]
+            lib.ama_x25519_scalarmult_batch.restype = ctypes.c_int
         return True
     except AttributeError:
         return False
@@ -2685,6 +2703,138 @@ def native_x25519_key_exchange(our_secret_key: bytes, their_public_key: bytes) -
         raise RuntimeError(f"X25519 key exchange failed (rc={rc})")
 
     return bytes(ss_buf)
+
+
+def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) -> list[bytes]:
+    """
+    Batched X25519 Diffie-Hellman key exchange.
+
+    Computes ``shared[k] = X25519(scalars[k], points[k])`` for each k. On
+    x86-64 hosts where the AVX2 4-way Montgomery-ladder kernel is opted in
+    via ``AMA_DISPATCH_USE_X25519_AVX2=1``, batches with at least one full
+    4-lane chunk (``count >= 4``) dispatch those full chunks to a SIMD
+    path that runs four ladders in parallel; any tail (``count % 4``) and
+    short batches (``count`` of 1, 2, or 3) are processed via the scalar
+    single-shot path.  Without the opt-in, the additive batch API simply
+    sequences the scalar fe64 / fe51 / gf16 single-shot path.  Output is
+    byte-identical to ``len(scalars)`` sequential
+    ``native_x25519_key_exchange`` calls in either case.
+
+    Low-order rejection is aggregated across the batch — if ANY lane
+    produces an all-zero shared secret (RFC 7748 §6.1) the whole batch
+    fails with ``RuntimeError`` and no partial results are returned.
+
+    Args:
+        scalars: List of 32-byte secret keys.
+        points: List of 32-byte u-coordinates (must match scalars in length).
+
+    Returns:
+        List of 32-byte shared secrets, in the same order as inputs.
+
+    Raises:
+        ValueError: On length mismatch or wrong-sized inputs.
+        RuntimeError: On low-order rejection or native backend unavailable.
+    """
+    if _native_lib is None or not _X25519_NATIVE_AVAILABLE:
+        raise RuntimeError("X25519 native backend not available. " + _INSTALL_HINT)
+    if not hasattr(_native_lib, "ama_x25519_scalarmult_batch"):
+        raise RuntimeError(
+            "ama_x25519_scalarmult_batch is not exported by the loaded native "
+            "library — rebuild against a newer libama_cryptography. " + _INSTALL_HINT
+        )
+    if len(scalars) != len(points):
+        raise ValueError(f"batch length mismatch: {len(scalars)} scalars vs {len(points)} points")
+
+    count = len(scalars)
+    if count == 0:
+        return []
+
+    # Pack inputs directly into mutable ctypes buffers we can wipe — never
+    # accumulate intermediate immutable bytes copies of secret scalars.
+    # `create_string_buffer(size)` returns a `c_char * size` array, which
+    # ctypes passes transparently to a `c_char_p` argument and which we
+    # can ``ctypes.memset`` to zero on the way out.  ``bytearray`` would
+    # also work for wipeability but does not satisfy the `c_char_p`
+    # argtype contract without an extra cast that would re-introduce a
+    # copy.  Validation is performed while packing (single pass) so a
+    # caller passing e.g. a list with one short element doesn't leave
+    # partial secret material in the blob before raising — the buffer
+    # is wiped in the ``finally`` regardless of which validation step
+    # raises.
+    total_bytes = count * X25519_KEY_BYTES
+    scalars_blob = ctypes.create_string_buffer(total_bytes)
+    points_blob = ctypes.create_string_buffer(total_bytes)
+    out_buf = ctypes.create_string_buffer(total_bytes)
+
+    try:
+        # Validate each element individually before joining.  A bare blob-
+        # length check on a fixed-total buffer would let mixed-size
+        # elements that happen to sum to count*32 (e.g. 16+48) slide
+        # through and silently shift element boundaries inside the C
+        # call.  Bytes-likeness is also enforced so a caller passing
+        # e.g. a list of `int`s gets a clear error rather than a cryptic
+        # ctypes failure.
+        for i, scalar in enumerate(scalars):
+            if not isinstance(scalar, (bytes, bytearray, memoryview)):
+                raise ValueError(
+                    f"scalar at index {i} must be bytes-like and " f"{X25519_KEY_BYTES} bytes long"
+                )
+            scalar_view = memoryview(scalar)
+            if scalar_view.nbytes != X25519_KEY_BYTES:
+                raise ValueError(
+                    f"scalar at index {i} must be {X25519_KEY_BYTES} bytes; "
+                    f"got {scalar_view.nbytes}"
+                )
+            offset = i * X25519_KEY_BYTES
+            ctypes.memmove(
+                ctypes.addressof(scalars_blob) + offset,
+                bytes(scalar_view),
+                X25519_KEY_BYTES,
+            )
+
+        for i, point in enumerate(points):
+            if not isinstance(point, (bytes, bytearray, memoryview)):
+                raise ValueError(
+                    f"point at index {i} must be bytes-like and " f"{X25519_KEY_BYTES} bytes long"
+                )
+            point_view = memoryview(point)
+            if point_view.nbytes != X25519_KEY_BYTES:
+                raise ValueError(
+                    f"point at index {i} must be {X25519_KEY_BYTES} bytes; "
+                    f"got {point_view.nbytes}"
+                )
+            offset = i * X25519_KEY_BYTES
+            ctypes.memmove(
+                ctypes.addressof(points_blob) + offset,
+                bytes(point_view),
+                X25519_KEY_BYTES,
+            )
+
+        rc = _native_lib.ama_x25519_scalarmult_batch(out_buf, scalars_blob, points_blob, count)
+        if rc != 0:
+            raise RuntimeError(f"X25519 batch scalar-mult failed (rc={rc})")
+
+        # Slice out per-lane shared secrets.  These are immutable bytes by
+        # API contract (the caller may pin them in their own collections);
+        # the wipeable buffers below are the wrapper's own intermediate
+        # storage, which we MUST scrub.
+        return [
+            bytes(out_buf.raw[i * X25519_KEY_BYTES : (i + 1) * X25519_KEY_BYTES])
+            for i in range(count)
+        ]
+    finally:
+        # Scrub all wrapper-internal buffers regardless of which path we
+        # took (validation error, native failure, or success).  The
+        # caller's input lists and our returned shared-secret bytes are
+        # outside this wrapper's lifetime contract — those are the
+        # caller's to manage.  But `scalars_blob` (concatenated secret
+        # keys) and `points_blob` (concatenated public points, also
+        # zeroed for symmetry / defence-in-depth) and `out_buf`
+        # (concatenated shared secrets, post-slice) are wrapper-owned
+        # secret material that should not survive return.
+        ctypes.memset(ctypes.addressof(scalars_blob), 0, total_bytes)
+        ctypes.memset(ctypes.addressof(points_blob), 0, total_bytes)
+        ctypes.memset(ctypes.addressof(out_buf), 0, total_bytes)
 
 
 # ============================================================================

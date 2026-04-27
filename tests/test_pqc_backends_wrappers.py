@@ -55,6 +55,88 @@ class TestX25519Validation:
         assert len(ss_ab) == 32
 
 
+@skip_no_native
+@pytest.mark.skipif(not pq._X25519_NATIVE_AVAILABLE, reason="X25519 backend not built")
+@pytest.mark.skipif(
+    pq._native_lib is None or not hasattr(pq._native_lib, "ama_x25519_scalarmult_batch"),
+    reason="ama_x25519_scalarmult_batch not exported by loaded native library "
+    "(older system libama_cryptography or build without the batch API). "
+    "The wrapper intentionally tolerates this configuration via a "
+    "hasattr guard in _setup_x25519_ctypes; tests gate on it too so "
+    "running against an older lib does not flag spurious failures.",
+)
+class TestX25519Batch:
+    """Coverage for ``native_x25519_scalarmult_batch`` (additive batch API)."""
+
+    def test_empty_batch_returns_empty_list(self) -> None:
+        # count==0 short-circuits in C and Python — must not touch the
+        # native lib (still safe with native_lib loaded; just a no-op).
+        assert pq.native_x25519_scalarmult_batch([], []) == []
+
+    def test_length_mismatch_raises(self) -> None:
+        pk, sk = pq.native_x25519_keypair()
+        with pytest.raises(ValueError, match="batch length mismatch"):
+            pq.native_x25519_scalarmult_batch([bytes(sk), bytes(sk)], [bytes(pk)])
+
+    def test_wrong_scalar_size_raises(self) -> None:
+        pk, _sk = pq.native_x25519_keypair()
+        # 16-byte scalar but pk is 32 — caught by per-element validation
+        # (not a post-join blob length check, which mixed-size elements
+        # could slip past, e.g. 16+48 == 2*32).
+        with pytest.raises(ValueError, match=r"scalar at index 0 must be 32 bytes"):
+            pq.native_x25519_scalarmult_batch([b"\x00" * 16], [bytes(pk)])
+
+    def test_wrong_point_size_raises(self) -> None:
+        _pk, sk = pq.native_x25519_keypair()
+        with pytest.raises(ValueError, match=r"point at index 0 must be 32 bytes"):
+            pq.native_x25519_scalarmult_batch([bytes(sk)], [b"\x00" * 16])
+
+    def test_mixed_size_elements_raises(self) -> None:
+        # 16-byte + 48-byte scalars sum to 64 == 2*32 — would slip past a
+        # post-join blob-length check.  Per-element validation catches the
+        # first short element by index.  Regression-pinned per Copilot
+        # review on PR #273.
+        pk, _sk = pq.native_x25519_keypair()
+        with pytest.raises(ValueError, match=r"scalar at index 0 must be 32 bytes"):
+            pq.native_x25519_scalarmult_batch(
+                [b"\x00" * 16, b"\x11" * 48],
+                [bytes(pk), bytes(pk)],
+            )
+
+    def test_non_bytes_scalar_raises(self) -> None:
+        # `int` (or any non-bytes-like) scalar should fail the per-element
+        # type check rather than producing a cryptic ctypes error.
+        pk, _sk = pq.native_x25519_keypair()
+        with pytest.raises(ValueError, match=r"scalar at index 0 must be bytes-like"):
+            pq.native_x25519_scalarmult_batch(
+                [12345],  # type: ignore[list-item]  # int stand-in for non-bytes-like — exercises per-element type rejection (XB-001)
+                [bytes(pk)],
+            )
+
+    def test_batch_matches_sequential(self) -> None:
+        # Build 7 independent (sk, peer_pk) pairs — 7 isn't a multiple of
+        # 4, so this exercises both the SIMD prefix (when AVX2 is opted
+        # in) and the scalar tail.
+        scalars: list[bytes] = []
+        points: list[bytes] = []
+        expected: list[bytes] = []
+        for _ in range(7):
+            _our_pk, our_sk = pq.native_x25519_keypair()
+            their_pk, _their_sk = pq.native_x25519_keypair()
+            scalars.append(bytes(our_sk))
+            points.append(bytes(their_pk))
+            expected.append(pq.native_x25519_key_exchange(bytes(our_sk), bytes(their_pk)))
+        got = pq.native_x25519_scalarmult_batch(scalars, points)
+        assert got == expected, "batch must be byte-identical to sequential single-shot"
+
+    def test_low_order_rejection(self) -> None:
+        # u=0 is the canonical low-order point; the batch must surface
+        # AMA_ERROR_CRYPTO as RuntimeError without returning partial output.
+        _pk, sk = pq.native_x25519_keypair()
+        with pytest.raises(RuntimeError, match="batch scalar-mult failed"):
+            pq.native_x25519_scalarmult_batch([bytes(sk)], [b"\x00" * 32])
+
+
 # ---------------------------------------------------------------------------
 # Argon2id validation branches
 # ---------------------------------------------------------------------------
