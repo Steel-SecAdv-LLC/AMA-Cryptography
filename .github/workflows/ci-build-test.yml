@@ -349,7 +349,10 @@ jobs:
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4
 
       - name: Log in to Docker Hub (optional, avoids rate limits)
-        if: env.DOCKERHUB_USERNAME != ''
+        # Gate on BOTH secrets: a half-configured fork (e.g. username
+        # set but token missing) would otherwise reach docker/login-action
+        # and fail noisily, defeating the "optional" intent of the step.
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121  # v4
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}

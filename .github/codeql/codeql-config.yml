@@ -26,9 +26,9 @@ name: "AMA Cryptography CodeQL"
 paths-ignore:
   - "src/c/vendor/**"
 
-# Note on `cpp/include-non-header` (alert #502 in PR #274 history):
+# Note on `cpp/include-non-header`:
 #   The donna single-translation-unit pattern uses `#include` on what
-#   was upstream `ed25519.c`. We resolved the alert *without* a
+#   was upstream `ed25519.c`. We resolved the finding *without* a
 #   project-wide rule disable by renaming the included file locally to
 #   `ed25519_unit.h` — see src/c/vendor/ed25519-donna/ama_donna_unit.h
 #   for the full rationale. The rule remains active for first-party C
