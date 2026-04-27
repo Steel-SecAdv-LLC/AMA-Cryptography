@@ -2749,50 +2749,92 @@ def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) ->
     if count == 0:
         return []
 
-    # Validate each element individually before joining.  A bare blob-length
-    # check on `b"".join(...)` would let mixed-size elements that happen to
-    # sum to count*32 (e.g. 16+48) slide through and silently shift element
-    # boundaries inside the C call.  Bytes-likeness is also enforced so a
-    # caller passing e.g. a list of `int`s gets a clear error rather than a
-    # cryptic ctypes failure.
-    validated_scalars: list[bytes] = []
-    for i, scalar in enumerate(scalars):
-        if not isinstance(scalar, (bytes, bytearray, memoryview)):
-            raise ValueError(
-                f"scalar at index {i} must be bytes-like and " f"{X25519_KEY_BYTES} bytes long"
-            )
-        scalar_bytes = bytes(scalar)
-        if len(scalar_bytes) != X25519_KEY_BYTES:
-            raise ValueError(
-                f"scalar at index {i} must be {X25519_KEY_BYTES} bytes; " f"got {len(scalar_bytes)}"
-            )
-        validated_scalars.append(scalar_bytes)
+    # Pack inputs directly into mutable ctypes buffers we can wipe — never
+    # accumulate intermediate immutable bytes copies of secret scalars.
+    # `create_string_buffer(size)` returns a `c_char * size` array, which
+    # ctypes passes transparently to a `c_char_p` argument and which we
+    # can ``ctypes.memset`` to zero on the way out.  ``bytearray`` would
+    # also work for wipeability but does not satisfy the `c_char_p`
+    # argtype contract without an extra cast that would re-introduce a
+    # copy.  Validation is performed while packing (single pass) so a
+    # caller passing e.g. a list with one short element doesn't leave
+    # partial secret material in the blob before raising — the buffer
+    # is wiped in the ``finally`` regardless of which validation step
+    # raises.
+    total_bytes = count * X25519_KEY_BYTES
+    scalars_blob = ctypes.create_string_buffer(total_bytes)
+    points_blob = ctypes.create_string_buffer(total_bytes)
+    out_buf = ctypes.create_string_buffer(total_bytes)
 
-    validated_points: list[bytes] = []
-    for i, point in enumerate(points):
-        if not isinstance(point, (bytes, bytearray, memoryview)):
-            raise ValueError(
-                f"point at index {i} must be bytes-like and " f"{X25519_KEY_BYTES} bytes long"
+    try:
+        # Validate each element individually before joining.  A bare blob-
+        # length check on a fixed-total buffer would let mixed-size
+        # elements that happen to sum to count*32 (e.g. 16+48) slide
+        # through and silently shift element boundaries inside the C
+        # call.  Bytes-likeness is also enforced so a caller passing
+        # e.g. a list of `int`s gets a clear error rather than a cryptic
+        # ctypes failure.
+        for i, scalar in enumerate(scalars):
+            if not isinstance(scalar, (bytes, bytearray, memoryview)):
+                raise ValueError(
+                    f"scalar at index {i} must be bytes-like and " f"{X25519_KEY_BYTES} bytes long"
+                )
+            scalar_view = memoryview(scalar)
+            if scalar_view.nbytes != X25519_KEY_BYTES:
+                raise ValueError(
+                    f"scalar at index {i} must be {X25519_KEY_BYTES} bytes; "
+                    f"got {scalar_view.nbytes}"
+                )
+            offset = i * X25519_KEY_BYTES
+            ctypes.memmove(
+                ctypes.addressof(scalars_blob) + offset,
+                bytes(scalar_view),
+                X25519_KEY_BYTES,
             )
-        point_bytes = bytes(point)
-        if len(point_bytes) != X25519_KEY_BYTES:
-            raise ValueError(
-                f"point at index {i} must be {X25519_KEY_BYTES} bytes; " f"got {len(point_bytes)}"
+
+        for i, point in enumerate(points):
+            if not isinstance(point, (bytes, bytearray, memoryview)):
+                raise ValueError(
+                    f"point at index {i} must be bytes-like and " f"{X25519_KEY_BYTES} bytes long"
+                )
+            point_view = memoryview(point)
+            if point_view.nbytes != X25519_KEY_BYTES:
+                raise ValueError(
+                    f"point at index {i} must be {X25519_KEY_BYTES} bytes; "
+                    f"got {point_view.nbytes}"
+                )
+            offset = i * X25519_KEY_BYTES
+            ctypes.memmove(
+                ctypes.addressof(points_blob) + offset,
+                bytes(point_view),
+                X25519_KEY_BYTES,
             )
-        validated_points.append(point_bytes)
 
-    # Pack into contiguous count*32-byte buffers — mirrors the C
-    # `uint8_t [count][32]` layout the C function expects.
-    scalars_blob = b"".join(validated_scalars)
-    points_blob = b"".join(validated_points)
+        rc = _native_lib.ama_x25519_scalarmult_batch(out_buf, scalars_blob, points_blob, count)
+        if rc != 0:
+            raise RuntimeError(f"X25519 batch scalar-mult failed (rc={rc})")
 
-    out_buf = ctypes.create_string_buffer(count * X25519_KEY_BYTES)
-    rc = _native_lib.ama_x25519_scalarmult_batch(out_buf, scalars_blob, points_blob, count)
-    if rc != 0:
-        raise RuntimeError(f"X25519 batch scalar-mult failed (rc={rc})")
-
-    out_bytes = bytes(out_buf)
-    return [out_bytes[i * X25519_KEY_BYTES : (i + 1) * X25519_KEY_BYTES] for i in range(count)]
+        # Slice out per-lane shared secrets.  These are immutable bytes by
+        # API contract (the caller may pin them in their own collections);
+        # the wipeable buffers below are the wrapper's own intermediate
+        # storage, which we MUST scrub.
+        return [
+            bytes(out_buf.raw[i * X25519_KEY_BYTES : (i + 1) * X25519_KEY_BYTES])
+            for i in range(count)
+        ]
+    finally:
+        # Scrub all wrapper-internal buffers regardless of which path we
+        # took (validation error, native failure, or success).  The
+        # caller's input lists and our returned shared-secret bytes are
+        # outside this wrapper's lifetime contract — those are the
+        # caller's to manage.  But `scalars_blob` (concatenated secret
+        # keys) and `points_blob` (concatenated public points, also
+        # zeroed for symmetry / defence-in-depth) and `out_buf`
+        # (concatenated shared secrets, post-slice) are wrapper-owned
+        # secret material that should not survive return.
+        ctypes.memset(ctypes.addressof(scalars_blob), 0, total_bytes)
+        ctypes.memset(ctypes.addressof(points_blob), 0, total_bytes)
+        ctypes.memset(ctypes.addressof(out_buf), 0, total_bytes)
 
 
 # ============================================================================
