@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 3.0.0 |
-| Last Updated | 2026-04-25 |
+| Last Updated | 2026-04-27 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -25,7 +25,7 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 _Nothing yet._
 
 
-## [3.0.0] - 2026-04-25
+## [3.0.0] - 2026-04-27
 
 Headline: in-house AVX-512 4-way Keccak permutation kernel (opt-in,
 default OFF) lands as the first ZMM-class SIMD path in the tree, paired
@@ -625,6 +625,228 @@ constant-time check that was a flake source on contended runners.
   - **`docs/METRICS_REPORT.md` anchor.** The commit anchor `d4806b9`
     was unreachable in git history; replaced with a branch-snapshot
     note and a 2026-04-21 change-log entry documenting the rerun.
+
+
+### Fixed — Distribution & Tooling Hygiene (post-merge audit, 2026-04-27)
+
+Companion to the 2026-04-27 diagnostic / adversarial-vetting audit run
+on the canonical-host VM (Intel Xeon, AVX-512F + BW + DQ + VL + VBMI +
+VAES + VPCLMULQDQ + SHA-NI + RDRAND/RDSEED, Linux 6.18.5, Python
+3.11.15).  Audit observed all primitive correctness and FIPS 140-3 POST
+gates passing — issues found were concentrated in **distribution,
+build infrastructure, static-analysis hygiene, and diagnostic
+accuracy**, not in cryptographic correctness.  Each fix below ships
+with a regression test that would have caught the original failure
+mode.
+
+Verification matrix after the fix bundle:
+
+  * `pytest`:        2162 passed, 3 env-only skips, 0 failed
+                     (+4 new D-7 dispatch contract tests vs. pre-audit)
+  * `ctest`:         23 / 23 (NIST KATs + primitives)
+  * `libFuzzer`:     13 / 13 harnesses, ~14M execs, no ASAN/UBSAN crashes
+  * `dudect`:        Ed25519 sign, AES-GCM encrypt, **AES-GCM tag-compare**
+                     (new isolated `consttime_memcmp` lane), HKDF, SHA3 all
+                     PASS (`|t|` ≪ 4.5)
+  * FIPS 140-3 POST: 10 / 10 + integrity OK from
+                     `pip install . && cd /tmp && unset LD_LIBRARY_PATH &&
+                     python -m ama_cryptography`
+  * `bandit`:        0 issues across 11,743 LOC
+  * `ruff`:          clean
+  * `semgrep`:       341 false positives → **0** on the codebase, all 5
+                     real bad patterns still caught on the rule-coverage
+                     fixture
+
+- **D-1 [SHIP-BLOCKER] Bundle the native shared library into the wheel.**
+  Pre-fix, `pip install .` produced a wheel that contained the Cython
+  binding `.so` files but **not** `libama_cryptography.so*` itself; the
+  bindings NEEDED-link against `libama_cryptography.so.3` and so any
+  invocation outside the source tree died with
+  `RuntimeError: AMA native C library required`.  Fixed by making
+  `setup.py::CMakeBuild._copy_native_library_into_package` copy the
+  full SONAME chain (`libama_cryptography.so → .so.3 → .so.3.0.0`) into
+  both the in-tree package directory (for `build_ext --inplace`) and
+  `<build_lib>/ama_cryptography/` (for `bdist_wheel`), preserving
+  symlinks so the dynamic loader's NEEDED resolution finds the library
+  via DT_RUNPATH.  `setup.py` adds `$ORIGIN` (Linux) / `@loader_path`
+  (macOS) as the FIRST runtime_library_dirs entry on every Cython
+  binding so the loader checks the package dir before any
+  development-tree `../build/lib` fallback.
+  `ama_cryptography.pqc_backends._get_search_dirs()` searches the
+  module's own directory first so the Python ctypes loader resolves
+  the bundled library on the same path.  `package_data` declares
+  `libama_cryptography.so*`, `*.dylib`, `*.dll`, `*.lib` so the
+  wheel-builder collects all platform variants.  Verified end-to-end:
+  `pip install . && cd /tmp && unset LD_LIBRARY_PATH &&
+  python -m ama_cryptography` exits 0 with FIPS POST 10/10 and
+  integrity OK.
+
+- **D-2 [SHIP-BLOCKER] Make the CLI subprocess test self-contained.**
+  `tests/test_cli_entry.py::test_main_module_subprocess` previously
+  required the package to be `pip install`-ed before pytest ran or it
+  failed with `No module named ama_cryptography` — the subprocess
+  starts in `tmp_path` with no `PYTHONPATH` entry pointing at the
+  in-tree `ama_cryptography/`.  Fixed by propagating the parent's
+  resolved package location to the child via `PYTHONPATH`, mirroring
+  the pattern adopted by the new
+  `tests/test_x25519_dispatch_policy.py` (D-7).
+
+- **D-3 [BUILD] Isolate setup.py's CMake build directory.**
+  `setup.py::CMakeBuild` now drives CMake into `./build/python-cmake/`
+  rather than the shared `./build/`, eliminating the race condition
+  with a hand-driven `make c` that corrupted CMakeFiles' compiler
+  probe and produced opaque `configure_file: No such file or
+  directory` failures (audit reproduced this).
+  `pqc_backends._get_search_dirs()` adds the new directory to the
+  development-mode library search path so in-tree workflows continue
+  to find the library.
+
+- **D-4 [SHIP-BLOCKER] Pin numpy / Cython in `[build-system].requires`
+  and make Cython failures fatal.**  Pre-fix, the
+  `cimport numpy as cnp` in `src/cython/math_engine.pyx` required
+  numpy headers, but neither numpy nor Cython was pinned by the
+  build system; the `try/except` in `setup.py::CMakeBuild.run`
+  caught Cython failures and downgraded them to a warning, producing
+  builds that printed `Cython available: False` with exit 0 and
+  shipped no extension `.so` files at all.  Tests then ran on
+  pure-Python paths without any indication.  Fixed by:
+  (1) adding `numpy>=1.24.0` and `Cython>=3.2.4` to
+  `pyproject.toml::[build-system].requires` so PEP 517 build
+  isolation provides them; (2) removing the swallowing `try/except`
+  in `setup.py::CMakeBuild.run` so Cython failures (or missing
+  numpy when `USE_CYTHON` is True) raise `RuntimeError` with a
+  precise remedy; (3) preserving the explicit `AMA_NO_CYTHON=1`
+  opt-out for genuine pure-Python builds.
+
+- **D-5 [DIAGNOSTIC] Redesign the dudect AES-GCM tag-verify case so
+  the report tells the truth.**  The pre-fix harness logged the
+  AES-GCM decrypt timing as `[KNOWN — table-based backend]` and
+  recommended `AMA_AES_CONSTTIME=ON`, implying the leak was the
+  S-box.  Audit verified that even with `-DAMA_AES_CONSTTIME=ON` and
+  `ama_aes_bitsliced.c` linked, `|t|` stayed ~134-2152 — the leak
+  was the legitimate early-exit on bad-tag (`src/c/ama_aes_gcm.c:522-528`
+  short-circuits CTR-mode plaintext recovery on `consttime_memcmp`
+  mismatch, which is the *correct* security behaviour: never release
+  plaintext from a forged ciphertext).  The harness was therefore
+  pointing at the wrong root cause.  Fixed by splitting the test in
+  `tools/constant_time/dudect_crypto.c`:
+  (3a) `test_aes_gcm_tag_compare` measures `ama_consttime_memcmp` in
+       isolation with an early-byte-diff vs. late-byte-diff classer.
+       This is the security-bearing primitive that protects against
+       byte-at-a-time tag-forgery oracles; PASS at `|t| < 4.5` is
+       now an unambiguous proof of constant-time tag compare.
+       **IS counted in pass/fail.**
+  (3b) `test_aes_gcm_decrypt_branch` times the full decrypt with
+       valid vs. invalid tag — the design-correct early-exit timing
+       difference, accurately labelled `[INFORMATIONAL]` instead of
+       attributed to the S-box.
+  Verification: AES-GCM tag compare reports `|t| ≈ 1.6 [PASS]` after
+  the rebuild; `tools/constant_time/Makefile` now defaults to
+  `-DAMA_AES_CONSTTIME=ON` and links `ama_aes_bitsliced.c` so the
+  harness exercises the production-default constant-time path
+  end-to-end.
+
+- **D-6 [HYGIENE] Tighten `.semgrep.yml` — eliminate 341 false
+  positives without losing real signal.**  The pre-fix rules flagged
+  `__version__ = "3.0.0"` and `__author__ = "..."` as
+  `hardcoded-secret-key`, `len(secret_key) == 32` as
+  `non-constant-time-comparison`, and any progress log inside a
+  function whose scope mentioned `secret_key` as
+  `private-key-logging` — 341 findings, all false positives, real
+  issues invisible in the noise.  Fixed by adding `pattern-not`
+  clauses for: dunder identifier names (`__version__`, `__author__`,
+  `__email__`, ...), version/email/url/path-like ALL_CAPS names,
+  trivial `len() == N` / `is None` / `isinstance` /
+  integer-literal / string-literal / enum-attribute / `os.getpid()`
+  comparisons, and bare progress-log forms; tightening
+  `private-key-logging` to require the LOGGED expression itself to
+  be a secret-named identifier or attribute (`private_key`,
+  `secret_key`, `master_secret`, `master_key`, `signing_key`); and
+  restricting `timing-vulnerable-string-compare` LHS to authentication
+  tag / MAC / signature / digest names.  Excluded `tests/`, `docs/`,
+  `examples/`, `nist_vectors/`, and `fuzz/seed_corpus/` from
+  `hardcoded-secret-key` (these contain literal byte strings by
+  construction and `bandit -ll` already gates them via the same
+  per-path ignore set).  Rule-coverage validated against a synthetic
+  fixture containing one instance of each of the five "real bad
+  pattern" classes — all five still caught.
+
+- **D-7 [PERF] X25519 batch baselines and dispatch-policy contract test.**
+  Audit measured per-op cost on the canonical-host VM at ~47 µs across
+  `x25519_dh_batch{1,4,8,16}`, confirming that the AVX2 4-way kernel is
+  intentionally **opt-in via `AMA_DISPATCH_USE_X25519_AVX2=1`** on
+  MULX/ADX hosts (where scalar fe64 outruns the AVX2 32-bit-limb donna
+  ladder by ~3×; see `src/c/dispatch/ama_dispatch.c:478-502`).  No
+  prior baseline tracked X25519, and no test pinned the dispatch policy
+  itself — so a future change that flipped the default to AVX2-on
+  would have silently regressed.  Added two
+  `benchmarks/baseline.json` entries (`x25519_scalarmult` measured
+  ~13K ops/sec, `x25519_scalarmult_batch4` ~12.5K ops/sec; both
+  floored at ~65% of measured per the existing convention) and
+  `tests/test_x25519_dispatch_policy.py` with four contract tests:
+  (1) batch-4 result is byte-identical to four sequential
+  single-shot ladders under default dispatch; (2) the AVX2 4-way
+  kernel produces identical secrets when forced on (cross-path
+  correctness); (3) `AMA_DISPATCH_PRINT=1` confirms the dispatch
+  table reads `x25519_x4 = scalar (4× sequential)` by default; (4)
+  RFC 7748 §6.1 low-order rejection fires on BOTH default and AVX2
+  paths.
+
+- **D-8 [SUPPLY-CHAIN] Pin modern `setuptools` / `wheel` in
+  `[build-system].requires`.**  Floor `setuptools>=78.1.1` (closes
+  PYSEC-2025-49 and GHSA-cx63-2mw6-8hw5) and `wheel>=0.46.2` (closes
+  GHSA-8rrh-rw8j-w5fx).  The previously-pinned `setuptools>=61.0` /
+  unversioned `wheel` allowed wheel builds to run against the
+  vulnerable releases that audit's `pip-audit` flagged on the host
+  environment (the *project* `requirements.txt` /
+  `requirements-lock.txt` were already clean).
+
+- **D-9 [USABILITY] Preflight `setuptools < 70` with a clear error.**
+  Debian-patched setuptools 68.x raises an opaque
+  `AttributeError: install_layout` deep inside pip's wheel-build
+  subprocess on `bdist_wheel`.  Audit reproduced this on the host
+  environment.  `setup.py` now refuses to run with
+  `setuptools < 70.0.0` and prints a one-line `pip install --upgrade
+  'setuptools>=70' 'wheel>=0.46.2'` remedy at the top of the
+  traceback so first-time installers see the actionable fix
+  immediately.
+
+- **D-10 [HYGIENE] Mark fallthrough cases in vendored ed25519-donna.**
+  `src/c/vendor/ed25519-donna/modm-donna-64bit.h` triggered six
+  `-Wimplicit-fallthrough=` warnings on every Release build (the
+  duff-device-style switch fallthroughs in `sub256_modm_batch`,
+  `lt256_modm_batch`, `lte256_modm_batch` are intentional but were
+  unannotated).  Added a portable `AMA_DONNA_FALLTHROUGH` macro
+  (using `__attribute__((fallthrough))` on GCC ≥ 7 and Clang ≥ 12 via
+  `__has_attribute`, expanding to `(void)0` on older toolchains) and
+  annotated each fallthrough case explicitly.  No semantic change;
+  zero `-Wimplicit-fallthrough` warnings remain on either GCC or
+  clang Release builds.
+
+- **Auto-doc generator now reads `benchmark-results.json` for headline
+  numbers, with `benchmarks/baseline.json` shown as a secondary
+  regression-floor column.**  `tools/update_docs.py` previously
+  generated the `<!-- AUTO-BENCHMARK-TABLE -->` block from
+  `benchmarks/baseline.json` and labelled the column "Baseline
+  (ops/sec)" — but `baseline_value` is the deliberately-conservative
+  ~65%-of-measured CI fail floor, not a measurement.  Any document
+  consuming the auto-marker therefore published the safety-net
+  numbers as if they were the canonical-host figures.  Fixed by:
+  (1) re-pointing `_generate_benchmark_table()` at
+  `benchmark-results.json`, the actual measurement output written
+  by `benchmarks/validation_suite.py`; (2) using
+  `ops_per_second` as the headline value, with the regression floor
+  retained as a secondary column so reviewers see both the headline
+  and the CI safety net at a glance; (3) refusing to fall back to
+  `baseline.json` if `benchmark-results.json` is missing — the
+  generator now prints a clear remedy
+  (`LD_LIBRARY_PATH=build/lib python3 benchmarks/validation_suite.py`)
+  rather than silently re-introducing the bug; (4) refreshing
+  `wiki/Performance-Benchmarks.md` so the section heading no longer
+  reads "Regression Baselines (from benchmarks/baseline.json)" but
+  describes the new two-column layout.  Headline === canonical-host
+  run, exactly matching what the suite measures.
+
 
 ---
 

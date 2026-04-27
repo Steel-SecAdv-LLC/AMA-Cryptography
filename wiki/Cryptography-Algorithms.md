@@ -271,6 +271,122 @@ subkey = hd.derive_key(purpose=44, account=0, change=0, index=0)
 | Mode | Argon2id (hybrid time/memory-hard) |
 | Use Case | Password hashing, key derivation from passwords |
 | Tuning | Memory cost, time cost, parallelism configurable |
+| Output cap (3.0.0+) | `AMA_ARGON2ID_MAX_TAG_LEN = 1024` bytes (32× the 32-byte default) |
+
+#### Output length cap (3.0.0+)
+
+`out_len` / `tag_len` is capped at **1024 bytes** at every public
+Argon2id entry point — `ama_argon2id` (C),
+`ama_cryptography.pqc_backends.native_argon2id` (Python), and the two
+legacy-shim entry points below.  Calls with `out_len > 1024` return
+`AMA_ERROR_INVALID_PARAM` from C and raise `ValueError` from Python:
+
+```text
+ValueError: Argon2id out_len must be in [4, 1024] bytes, got N
+```
+
+The cap is exposed as `AMA_ARGON2ID_MAX_TAG_LEN` in
+`include/ama_cryptography.h` and as
+`ama_cryptography.pqc_backends._ARGON2ID_MAX_TAG_LEN` so callers can
+gate on it at compile or import time.  The previous unbounded surface
+(`UINT32_MAX`, RFC 9106's 4 GiB theoretical maximum) was a
+caller-controlled memory-exhaustion / DoS vector — callers running
+inside a multi-tenant process that accepted untrusted `out_len` could
+exhaust heap by passing a large value to `ama_argon2id_legacy_verify`,
+which heap-allocates `computed[tag_len]` to hold the freshly-derived
+tag.  Argon2id tags are universally 16-64 bytes in the wild and any
+size above ~128 bytes is cryptographically indistinguishable from 64,
+so the new ceiling does not constrain any spec-compliant deployment.
+
+#### RFC 9106 conformance fix and the legacy-shim migration path
+
+Releases ≤ 2.1.5 contained a pre-existing bug in
+`blake2b_long` (H' / variable-output BLAKE2b, RFC 9106 §3.2): the
+tail-bytes loop ran one iteration too far and re-hashed `V_{r+1}` to
+produce the trailing 32 bytes instead of writing `V_{r+1}`'s output
+verbatim.  Every memory block produced during the fill — and the final
+tag — therefore had its trailing 32 bytes set to
+`BLAKE2b-32(V_{r+1})` rather than `V_{r+1}[32..63]`, so AMA's Argon2id
+output diverged from the spec for **every** parameter combination.
+3.0.0 fixes the loop and brings AMA byte-for-byte in line with RFC 9106
+(verified against `argon2-cffi` 25.1.0 and `phc-winner-argon2`'s
+master).
+
+**Migration is required for any system storing AMA-derived Argon2id
+hashes.**  Tags produced by AMA ≤ 2.1.5 sit in the prior non-spec
+bit-space and will not verify against post-fix AMA — or against any
+other RFC 9106 implementation.  The release ships a
+forward-compatible legacy path under two new symbols so downstream
+consumers can verify stored tags without forking the old code.
+
+**C API** (`include/ama_cryptography.h`):
+
+```c
+/* Derive using the pre-2.1.5 buggy blake2b_long loop. */
+ama_error_t ama_argon2id_legacy(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt,     size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t p_cost,
+    uint8_t *out, size_t out_len);
+
+/* Constant-time compare expected_tag against the legacy derivation. */
+ama_error_t ama_argon2id_legacy_verify(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt,     size_t salt_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t p_cost,
+    const uint8_t *expected_tag, size_t tag_len);
+```
+
+**Python API** (`ama_cryptography.pqc_backends`):
+
+```python
+from ama_cryptography.pqc_backends import (
+    native_argon2id,
+    native_argon2id_legacy,
+    native_argon2id_legacy_verify,
+)
+
+# 1. On the next successful login, verify against the stored legacy tag.
+ok = native_argon2id_legacy_verify(
+    password, salt, expected_tag,
+    t_cost=t, m_cost=m, p_cost=p,
+)
+
+# 2. On match, re-derive with the post-fix path and rewrite the store
+#    in the same transaction.
+if ok:
+    new_tag = native_argon2id(password, salt, t_cost=t, m_cost=m, p_cost=p)
+    storage.update_password_hash(user_id, new_tag, kdf_version=3)
+```
+
+`native_argon2id_legacy` emits an
+`ama_cryptography.exceptions.SecurityWarning` on every call so
+accidental use in a production code path is loud at runtime; migration
+tooling can suppress the warning explicitly via
+`warnings.catch_warnings()`.  `native_argon2id_legacy_verify` does NOT
+emit a warning — it is the intended migration-verification path, so
+spamming a warning on every login during rotation would drown
+operators in noise.
+
+**Recommended migration plan:**
+
+1. On the next successful login, call
+   `ama_argon2id_legacy_verify` (C) or `native_argon2id_legacy_verify`
+   (Python) with the stored tag.
+2. On match, re-derive with the post-fix `ama_argon2id` /
+   `native_argon2id` and overwrite the stored hash in the same
+   transaction.
+3. After a deprecation window appropriate for the deployment's login
+   frequency (typically 90-180 days for consumer auth, longer for B2B
+   logins), remove calls to the legacy path.  The symbols remain
+   exported for binary compatibility until the next major bump.
+
+No other public API or output format changes — ChaCha20-Poly1305,
+Ed25519, X25519, AES-256-GCM, SHA-3, ML-KEM, ML-DSA, and SPHINCS+
+outputs are unaffected.  See `CHANGELOG.md` §3.0.0 BREAKING for the
+full conformance / sweep matrix
+(`t ∈ {1,2,3,4}`, `m ∈ {8,32,64,128,1024} KiB`, `p ∈ {1,2,4}`,
+`out_len ∈ {16,32,64,128}`).
 
 ---
 
