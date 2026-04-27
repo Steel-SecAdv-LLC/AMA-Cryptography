@@ -6,7 +6,7 @@
 #   patched 68.x — fail bdist_wheel with `AttributeError: install_layout`.
 #   70.0.0 also closes GHSA-cx63-2mw6-8hw5 and 78.1.1 closes PYSEC-2025-49,
 #   so we float to >=78.1.1 to take both fixes.
-# - wheel >= 0.46.2 (D-8): closes GHSA-8rrh-rw8j-w5fx.
+# - wheel >= 0.47.0 (D-8): closes GHSA-8rrh-rw8j-w5fx.
 # - cmake: required to auto-build the native C cryptographic library during
 #   `pip install .` — the CMakeBuild command in setup.py invokes cmake.
 # - numpy, Cython: required to build the math_engine extension; failures
