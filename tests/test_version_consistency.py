@@ -108,7 +108,7 @@ def test_header_files_are_scanned(tool_module: ModuleType, tmp_path: Path) -> No
     assert any("fake_module.h" in hit and "2.5.0" in hit for hit in hits)
 
 
-def test_standalone_uppercase_VERSION_identifier_is_flagged(
+def test_standalone_uppercase_version_identifier_is_flagged(
     tool_module: ModuleType, tmp_path: Path
 ) -> None:
     """The bare uppercase `VERSION` identifier — no leading prefix
@@ -126,7 +126,7 @@ def test_standalone_uppercase_VERSION_identifier_is_flagged(
     assert any("1.2.3" in hit for hit in hits), f"VERSION was not flagged: {hits}"
 
 
-def test_standalone_titlecase_Version_identifier_is_flagged(
+def test_standalone_titlecase_version_identifier_is_flagged(
     tool_module: ModuleType, tmp_path: Path
 ) -> None:
     """Same Devin Review 2026-04-27 false-negative, title-case
