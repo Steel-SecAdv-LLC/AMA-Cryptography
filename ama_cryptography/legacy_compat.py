@@ -516,12 +516,13 @@ def verify_rfc3161_timestamp(
     tmp_dir = tempfile.mkdtemp(prefix="ama_rfc3161_")
     os.chmod(tmp_dir, 0o700)
 
-    # Custom opener forces O_EXCL + 0o600 on creation. The fresh tmp_dir
-    # makes a pre-existing file impossible, but O_EXCL is kept as a
-    # defense-in-depth race guard; the explicit mode prevents a creation
-    # umask wider than 0o077.
-    def _excl_opener(path: str, _flags: int) -> int:
-        return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    # Custom opener that preserves the flags `open()` selected for "wb"
+    # (notably O_BINARY on Windows) and OR-s in O_EXCL + restrictive 0o600
+    # mode. The fresh tmp_dir makes a pre-existing file impossible, but
+    # O_EXCL is kept as a defense-in-depth race guard; the explicit mode
+    # prevents a creation umask wider than 0o077.
+    def _excl_opener(path: str, flags: int) -> int:
+        return os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
 
     try:
         tsr_path = os.path.join(tmp_dir, "timestamp.tsr")

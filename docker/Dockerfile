@@ -28,10 +28,14 @@ RUN pip3 install --no-cache-dir -r /tmp/requirements.txt -r /tmp/requirements-de
 WORKDIR /build
 COPY . .
 
-# Build C library
+# Build C library — AMA_USE_NATIVE_PQC=ON is required because the
+# image deliberately does NOT install libssl-dev (INVARIANT-1, see
+# the apt-get block above). Without it the build pulls in the
+# non-native PQC path that depends on OpenSSL and fails at link time.
 RUN mkdir -p build && cd build && \
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
+        -DAMA_USE_NATIVE_PQC=ON \
         -DAMA_BUILD_SHARED=ON \
         -DAMA_BUILD_STATIC=OFF \
         -DAMA_BUILD_TESTS=OFF \

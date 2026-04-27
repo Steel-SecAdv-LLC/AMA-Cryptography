@@ -17,3 +17,15 @@ name: "AMA Cryptography CodeQL"
 
 paths-ignore:
   - "src/c/vendor/**"
+
+# Disable `cpp/include-non-header` project-wide. The only place we
+# include a `.c` file is the donna single-translation-unit pattern,
+# which lives in `src/c/vendor/ed25519-donna/ama_donna_unit.h` (a
+# vendor-tree aggregator that exists solely to keep the directive in
+# vendor code). Even though the file is path-ignored, CodeQL still
+# reports the directive at its source location, so a project-wide
+# rule disable is the only way to silence the alert without
+# restructuring vendor code we ship unmodified.
+query-filters:
+  - exclude:
+      id: cpp/include-non-header
