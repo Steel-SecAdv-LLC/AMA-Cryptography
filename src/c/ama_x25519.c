@@ -771,8 +771,8 @@ AMA_API ama_error_t ama_x25519_scalarmult_batch(
         }
     }
 
-    /* Tail (or whole batch when count < 2 or no AVX2): scalar
-     * single-shot ladder per remaining lane.  Reuses the same
+    /* Tail (or whole batch when count < 4 or `tbl->x25519_x4 == NULL`):
+     * scalar single-shot ladder per remaining lane.  Reuses the same
      * field-path-selected scalarmult driver so the byte-for-byte
      * equivalence pinned by tests/c/test_x25519.c carries over to
      * batch tail lanes for free. */

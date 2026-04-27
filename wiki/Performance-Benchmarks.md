@@ -191,10 +191,10 @@ TU is GCC/Clang only).
 
 `ama_x25519_scalarmult_batch(out[], scalars[], points[], count)` is
 a new additive API that exposes a 4-way AVX2 Montgomery-ladder
-kernel for batched Diffie-Hellman.  `print_dispatch_info` reports
-its capability row as `X25519 4-way: AVX2 (opt-in, off)` whenever
-the host has AVX2 but the kernel pointer is unwired — the kernel
-does **not** light up automatically.  Set
+kernel for batched Diffie-Hellman.  `ama_print_dispatch_info()`
+reports its capability row as `X25519 4-way: AVX2 (opt-in, off)`
+whenever the host has AVX2 but the kernel pointer is unwired —
+the kernel does **not** light up automatically.  Set
 `AMA_DISPATCH_USE_X25519_AVX2=1` in the environment to opt in.
 
 Why opt-in: on x86-64 hosts where the scalar X25519 path is fe64 +

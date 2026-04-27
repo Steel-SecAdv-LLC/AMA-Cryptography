@@ -380,9 +380,10 @@ constant-time check that was a flake source on contended runners.
   public additive API `ama_x25519_scalarmult_batch(out[], scalars[],
   points[], count)` exposes batched DH: `count == 0` is a no-op,
   `count == 1` bypasses the SIMD kernel and pays no zero-fill
-  overhead, and `count >= 2` runs full 4-lane chunks plus a scalar
-  tail (when AVX2 is opted in) or sequences the scalar fe64 path
-  otherwise.  Low-order rejection is aggregated branchlessly across
+  overhead, counts `2-3` run entirely on the scalar tail with zero
+  SIMD chunks, and `count >= 4` runs full 4-lane chunks plus a
+  scalar tail (when AVX2 is opted in) or sequences the scalar fe64
+  path otherwise.  Low-order rejection is aggregated branchlessly across
   the batch — an OR-reduced "any lane all-zero" mask is checked
   once at the end and, if set, the whole call returns
   `AMA_ERROR_CRYPTO` and scrubs every output slot, preventing

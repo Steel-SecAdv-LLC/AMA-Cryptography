@@ -440,7 +440,7 @@ static double test_x25519_scalarmult(int iterations) {
  * shot X25519 lane above.  CI matrix entry
  * `dudect-x25519-avx2-batch` exports the env var and re-runs this
  * lane so the SIMD kernel's signal is sampled even when the default
- * policy is opt-out.
+ * policy is explicit opt-in (default-off).
  *
  * Class 0: Batch of 4 with all-zero (post-clamp) secret seeds
  * Class 1: Batch of 4 with all-0xFF (post-clamp) secret seeds
