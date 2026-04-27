@@ -27,6 +27,25 @@ _Nothing yet._
 
 ## [3.0.0] - 2026-04-27
 
+- **deps: align build floors with D-8 fix.** Roll-up of Dependabot
+  #276/#278–#284: `wheel >= 0.47.0`, `cmake >= 4.3.2`, `build >= 1.4.4`
+  (PEP-518 `[build-system].requires`, `requirements-dev.txt`, and the
+  inline D-8 GHSA-8rrh-rw8j-w5fx comment kept in lockstep so the audit
+  trail no longer drifts between the three); `requirements-lock.txt`
+  refresh — `ruff 0.15.12`, `pydantic 2.13.3`, `pydantic_core 2.46.3`,
+  `pathspec 1.1.1`; `trufflesecurity/trufflehog` v3.94.3 → v3.95.2
+  (SHA-pinned in `.github/workflows/security.yml`).  Folds the
+  second-round AI/Bot review fixes from PR #277 (originally PR #285):
+  Windows `AddDllDirectory` cookie retained in a module-level list to
+  survive GC, `setup.py` Cython/numpy preflight honours
+  `AMA_NO_CYTHON` / `AMA_NO_C_EXTENSIONS`, `_verbose_stderr` PREPENDS
+  to `PYTHONPATH`, KM-003/KM-004/SM-001/SM-002 INVARIANT-13 tracking
+  refs added to the four `nosemgrep` markers, suppression-hygiene
+  scanner extended to recognise `nosemgrep`, and two CHANGELOG
+  in-place corrections (`AMA_DISPATCH_PRINT` → `AMA_DISPATCH_VERBOSE`;
+  benchmark-table generator producer cited as
+  `benchmarks/benchmark_runner.py --output benchmark-results.json`).
+
 Headline: in-house AVX-512 4-way Keccak permutation kernel (opt-in,
 default OFF) lands as the first ZMM-class SIMD path in the tree, paired
 with a published Architecture Decision Record (`docs/AVX512_KECCAK_PLAN.md`)
