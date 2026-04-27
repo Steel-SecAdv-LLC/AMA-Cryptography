@@ -57,6 +57,14 @@ class TestX25519Validation:
 
 @skip_no_native
 @pytest.mark.skipif(not pq._X25519_NATIVE_AVAILABLE, reason="X25519 backend not built")
+@pytest.mark.skipif(
+    pq._native_lib is None or not hasattr(pq._native_lib, "ama_x25519_scalarmult_batch"),
+    reason="ama_x25519_scalarmult_batch not exported by loaded native library "
+    "(older system libama_cryptography or build without the batch API). "
+    "The wrapper intentionally tolerates this configuration via a "
+    "hasattr guard in _setup_x25519_ctypes; tests gate on it too so "
+    "running against an older lib does not flag spurious failures.",
+)
 class TestX25519Batch:
     """Coverage for ``native_x25519_scalarmult_batch`` (additive batch API)."""
 
