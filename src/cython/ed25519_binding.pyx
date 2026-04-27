@@ -141,6 +141,7 @@ def cy_ed25519_batch_verify(list entries):
 
     cdef ama_ed25519_batch_entry *c_entries = NULL
     cdef int *results = NULL
+    cdef int rc
 
     c_entries = <ama_ed25519_batch_entry *>malloc(count * sizeof(ama_ed25519_batch_entry))
     results = <int *>malloc(count * sizeof(int))
@@ -169,10 +170,15 @@ def cy_ed25519_batch_verify(list entries):
             c_entries[i].signature = <const uint8_t *>(<bytes>sig)
             c_entries[i].public_key = <const uint8_t *>(<bytes>pk)
 
-        # Return code is intentionally discarded: per-entry validity is
-        # already in `results` (zero-initialized, so unfilled entries
-        # read as 0 / invalid — fail-closed).
-        ama_ed25519_batch_verify(c_entries, count, results)
+        rc = ama_ed25519_batch_verify(c_entries, count, results)
+        # 0 = AMA_SUCCESS (all valid), -4 = AMA_ERROR_VERIFY_FAILED
+        # (at least one invalid, per-entry validity in `results`).
+        # Any other code signals an internal error
+        # (AMA_ERROR_INVALID_PARAM / AMA_ERROR_MEMORY / future codes) —
+        # raise to mirror the ctypes wrapper in pqc_backends.py rather
+        # than silently returning all-False.
+        if rc != 0 and rc != -4:
+            raise RuntimeError(f"Ed25519 batch verify failed (rc={rc})")
 
         return [bool(results[i]) for i in range(count)]
     finally:
