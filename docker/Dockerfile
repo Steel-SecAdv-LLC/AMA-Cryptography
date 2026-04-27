@@ -29,6 +29,15 @@ RUN apt-get update && apt-get install -y \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
+# Make gcc-12 the default for every subsequent RUN in this stage.
+# This covers BOTH the explicit C library build below AND the implicit
+# cmake re-invocation that `python3 -m build --wheel` does via
+# setup.py::CMakeBuild — the wheel build runs in a separate sub-shell
+# and would otherwise fall back to the ubuntu:22.04 default gcc-11
+# and trip CMakeLists.txt:103's INVARIANT-8 toolchain check again.
+ENV CC=gcc-12
+ENV CXX=g++-12
+
 # Install Python dependencies
 COPY requirements.txt requirements-dev.txt /tmp/
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt -r /tmp/requirements-dev.txt
@@ -47,7 +56,7 @@ COPY . .
 # discovers OpenSSL `QUIET` for downstream consumers but AMA itself
 # never references it.
 RUN mkdir -p build && cd build && \
-    CC=gcc-12 CXX=g++-12 cmake .. \
+    cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
         -DAMA_USE_NATIVE_PQC=ON \
         -DAMA_BUILD_SHARED=ON \
