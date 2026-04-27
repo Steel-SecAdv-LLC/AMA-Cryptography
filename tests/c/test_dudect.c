@@ -477,7 +477,8 @@ static double test_x25519_scalarmult_x4(int iterations) {
 }
 
 /* -----------------------------------------------------------------------
- * Test 10: Kyber-1024 decaps (constant-time ciphertext rejection)
+ * Test 10: Kyber KEM — decapsulation timing must not depend on
+ * ciphertext validity (implicit rejection must be constant-time)
  *
  * Class 0: Decapsulate valid ciphertext
  * Class 1: Decapsulate corrupted ciphertext

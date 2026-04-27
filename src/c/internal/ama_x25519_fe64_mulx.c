@@ -50,10 +50,16 @@
  * latencies are operand-independent on every Intel Broadwell+ /
  * AMD Zen+ part this kernel is gated for.
  *
- * Build-time guard: `AMA_X25519_FE64_MULX_AVAILABLE` is defined when
- * the kernel is compiled in (x86-64 GCC/Clang with __SIZEOF_INT128__,
- * non-MSVC). Callers that want to reference `ama_x25519_fe64_mul_mulx`
- * / `ama_x25519_fe64_sq_mulx` should `#ifdef` on this guard.
+ * Build-time guard: callers that want to reference
+ * `ama_x25519_fe64_mul_mulx` / `ama_x25519_fe64_sq_mulx` should
+ * `#ifdef` on the build-system-provided `AMA_HAVE_X25519_FE64_MULX_IMPL`
+ * compile-definition (set in CMakeLists.txt via `add_compile_definitions`
+ * on every target on x86-64 GCC/Clang non-MSVC; the call site in
+ * `src/c/ama_x25519.c` already gates on this macro). The
+ * `AMA_X25519_FE64_MULX_AVAILABLE` macro defined a few lines below is
+ * only a translation-unit-local marker used inside this implementation
+ * file; it is *not* visible to other TUs and not part of the call-site
+ * gating contract. (Copilot Review 2026-04-27.)
  */
 
 #if (defined(__x86_64__) || defined(_M_X64)) \

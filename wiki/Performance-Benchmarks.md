@@ -161,15 +161,27 @@ asserted across **4096 / 4096 random vectors** by
 `tests/c/test_x25519_fe64_mulx_equiv.c` (skips with code 77 on
 hosts whose CPUID lacks the bundle).
 
-The kernel uses `_mulx_u64` for the carry-flag-preserving 64×64
-multiply and `_addcarry_u64` chains the compiler lowers to ADCX /
-ADOX. The remaining gap to the ~25K ops/sec reported by
-OpenSSL's hand-tuned `crypto/ec/asm/x25519-x86_64.pl` on the same
-microarchitecture class is the explicit **two-carry-chain
-interleave** that intrinsic-driven C cannot reliably emit — a
-future hand-written `.S` kernel slotting in behind the same
-CPUID gate captures the rest of the curve. fe51 remains
-available as a fallback by building with
+The kernel is implemented as GCC/Clang **inline assembly** with
+explicit `mulx` (BMI2) plus `adcx` / `adox` (ADX) instructions —
+not via `_mulx_u64` + `_addcarry_u64` intrinsics. The inline-asm
+path exists specifically because GCC's `_addcarry_u64` did *not*
+lower to ADCX/ADOX even under `-madx`; without the explicit
+mnemonic the kernel's lo-column and hi-column carry chains would
+serialise through a single `adc` chain instead of running in
+parallel. The kernel also ships a **dedicated squaring path**
+that exploits the off-diagonal symmetry of `(sum f_i)^2`
+(10 multiplications: 6 cross products doubled + 4 diagonal
+squares — vs 16 for the full schoolbook). The active kernel is
+therefore already a hand-written inline-asm path using BMI2
+`MULX` plus explicit ADX `ADCX` / `ADOX` carry-chain interleave
+behind the same CPUID gate. The remaining gap to the ~25K
+ops/sec reported by OpenSSL's hand-tuned
+`crypto/ec/asm/x25519-x86_64.pl` on the same microarchitecture
+class therefore reflects broader implementation differences
+(instruction scheduling, register allocation, reduction shape,
+and surrounding glue), not reliance on compiler-lowered
+intrinsics or the absence of a hand-written asm kernel. fe51
+remains available as a fallback by building with
 `-DAMA_X25519_FORCE_FE51`; the pure-C fe64 schoolbook still runs
 on hosts whose CPUID lacks BMI2 + ADX (e.g. KVM guest with the
 bits masked, pre-Broadwell host, or any MSVC build — the kernel

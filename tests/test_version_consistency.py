@@ -106,3 +106,36 @@ def test_header_files_are_scanned(tool_module: ModuleType, tmp_path: Path) -> No
     h.write_text('#define FAKE_VERSION "2.5.0"\n')
     hits = tool_module.scan_c_sources_for_version_literals(src_dir)
     assert any("fake_module.h" in hit and "2.5.0" in hit for hit in hits)
+
+
+def test_standalone_uppercase_version_identifier_is_flagged(
+    tool_module: ModuleType, tmp_path: Path
+) -> None:
+    """The bare uppercase `VERSION` identifier — no leading prefix
+    characters — must still be picked up. Devin Review 2026-04-27
+    found that an earlier draft of `_C_VERSION_IDENT_RE` required
+    at least one prefix character before the `[Vv]ersion` substring,
+    so `#define VERSION "1.2.3"` slipped through the safety net.
+    This regression test pins the fixed regex against that
+    false-negative case."""
+    src_dir = tmp_path / "c"
+    src_dir.mkdir()
+    f = src_dir / "standalone_upper.c"
+    f.write_text('#define VERSION "1.2.3"\n')
+    hits = tool_module.scan_c_sources_for_version_literals(src_dir)
+    assert any("1.2.3" in hit for hit in hits), f"VERSION was not flagged: {hits}"
+
+
+def test_standalone_titlecase_version_identifier_is_flagged(
+    tool_module: ModuleType, tmp_path: Path
+) -> None:
+    """Same Devin Review 2026-04-27 false-negative, title-case
+    variant: `#define Version "2.0.0"` must be flagged. Without
+    the bare-`[Vv]ersion` alternative in the regex, this slipped
+    through too."""
+    src_dir = tmp_path / "c"
+    src_dir.mkdir()
+    f = src_dir / "standalone_title.c"
+    f.write_text('#define Version "2.0.0"\n')
+    hits = tool_module.scan_c_sources_for_version_literals(src_dir)
+    assert any("2.0.0" in hit for hit in hits), f"Version was not flagged: {hits}"
