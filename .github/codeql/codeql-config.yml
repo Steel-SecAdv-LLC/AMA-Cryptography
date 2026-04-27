@@ -1,0 +1,19 @@
+name: "AMA Cryptography CodeQL"
+
+# CodeQL settings for the static-analysis CodeQL Security Analysis job.
+# Wired up via `config-file:` on github/codeql-action/init.
+#
+# paths-ignore: third-party vendored code is intentionally not analyzed.
+#   - src/c/vendor/ed25519-donna/ : public-domain ed25519-donna by
+#     Andrew Moon, shipped unmodified. We compile it as a single
+#     translation unit through src/c/ed25519_donna_shim.c (donna's own
+#     -DED25519_REFHASH / -DED25519_CUSTOMRANDOM single-unit pattern)
+#     and gate cross-checks via the AMA_ED25519_ASSEMBLY build flag.
+#     CodeQL's `cpp/include-non-header` and `cpp/unused-static-variable`
+#     fire on the vendor headers (e.g. unused reduce_mask_40 /
+#     reduce_mask_56 in curve25519-donna-64bit.h, which are referenced
+#     by the variant the vendor library compiles for other targets).
+#     These are upstream cosmetics in code we deliberately don't fork.
+
+paths-ignore:
+  - "src/c/vendor/**"
