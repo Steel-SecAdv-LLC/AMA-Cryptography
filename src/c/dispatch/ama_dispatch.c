@@ -859,6 +859,24 @@ void ama_print_dispatch_info(void) {
     {
         const char *x25519_label;
         char x25519_buf[24];
+#ifdef AMA_HAVE_AVX2_IMPL
+        /* On builds where the AVX2 4-way kernel TU was actually
+         * compiled in, the `(opt-in, off)` suffix is meaningful: the
+         * symbol exists, the dispatcher can wire it via
+         * `AMA_DISPATCH_USE_X25519_AVX2=1`, and the user has a
+         * concrete path to enable the kernel.  Annotate the row so
+         * external readers don't conclude the SIMD path is on by
+         * default (Copilot Review 2026-04 — the obvious
+         * confused-bug-report source).  On non-AMA_HAVE_AVX2_IMPL
+         * builds (-DAMA_ENABLE_AVX2=OFF, non-x86-64 hosts, MSVC
+         * without the AVX2 sources), `dispatch_table.x25519_x4` is
+         * also NULL, but for a different reason — the kernel TU was
+         * never compiled — so the opt-in is not actually available
+         * and the annotation would mislead the reader into thinking
+         * a build-time-decided absence is a runtime-toggleable one.
+         * Drop the suffix in that case (the bare `AMA_IMPL_GENERIC`
+         * label `info->x25519` will hold matches reality: there's no
+         * AVX2 kernel for X25519 in this binary, period). */
         if (info->x25519 >= AMA_IMPL_AVX2 && dispatch_table.x25519_x4 == NULL) {
             snprintf(x25519_buf, sizeof(x25519_buf), "%s (opt-in, off)",
                      ama_impl_level_name(info->x25519));
@@ -866,6 +884,10 @@ void ama_print_dispatch_info(void) {
         } else {
             x25519_label = ama_impl_level_name(info->x25519);
         }
+#else
+        (void)x25519_buf;
+        x25519_label = ama_impl_level_name(info->x25519);
+#endif
         fprintf(stderr, "║  X25519 4-way:       %-24s║\n", x25519_label);
     }
     fprintf(stderr, "╚══════════════════════════════════════════════╝\n");
