@@ -57,6 +57,14 @@ def _run_in_subprocess(snippet: str, *, env_overrides: dict[str, str]) -> str:
     """
     env = os.environ.copy()
     env.update(env_overrides)
+    # Match the UTF-8 stdio handling used in test_cli_entry.py so
+    # subprocess output decodes consistently on Windows runners (where
+    # the system ANSI code page would otherwise turn UTF-8 emit from the
+    # native dispatcher into mojibake — D-2 follow-up).  The JSON-bearing
+    # callers in this module work in pure ASCII so they are unaffected
+    # either way; the verbose-stderr caller depends on this.
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
 
     # Make the in-tree package importable regardless of whether the user
     # ran `pip install -e .` (mirrors the same fix used in
@@ -72,6 +80,8 @@ def _run_in_subprocess(snippet: str, *, env_overrides: dict[str, str]) -> str:
         [sys.executable, "-c", textwrap.dedent(snippet)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=60,
         check=False,
         env=env,
@@ -182,6 +192,17 @@ def test_avx2_optin_dispatch_print_differs() -> None:
         # `if "x25519_x4" in stderr` guard let the assertions silently
         # skip.  Set the right var here.
         env_full["AMA_DISPATCH_VERBOSE"] = "1"
+        # Force the subprocess into UTF-8 stdio on Windows — the
+        # dispatcher's verbose print emits the multiplication-sign
+        # codepoint in "scalar (4× sequential)" as UTF-8 bytes.  Without
+        # PYTHONUTF8/PYTHONIOENCODING the child interpreter on Windows
+        # decodes its stdio with the system ANSI code page (cp1252), so
+        # ``capture_output=text`` would read the bytes back as mojibake
+        # and the substring assertions below would never find ``×`` —
+        # mirrors the same fix applied in tests/test_cli_entry.py for
+        # the banner glyphs (D-2 follow-up).
+        env_full.setdefault("PYTHONIOENCODING", "utf-8")
+        env_full.setdefault("PYTHONUTF8", "1")
         import ama_cryptography as _ama
 
         env_full["PYTHONPATH"] = str(Path(_ama.__file__).resolve().parent.parent)
@@ -189,6 +210,8 @@ def test_avx2_optin_dispatch_print_differs() -> None:
             [sys.executable, "-c", textwrap.dedent(snippet)],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=60,
             check=False,
             env=env_full,
@@ -219,7 +242,11 @@ def test_avx2_optin_dispatch_print_differs() -> None:
         "extension never reached the dispatch init point.  stderr was:\n"
         f"{default_stderr}"
     )
-    assert "scalar (4× sequential)" in default_stderr, (
+    # ASCII-only substring — tolerates either rendering of the
+    # multiplication sign (``×`` UTF-8 / ``x`` ASCII) so a future
+    # platform whose stdio narrows the codepoint cannot turn this
+    # contract test into a mojibake-driven false negative.
+    assert "scalar" in default_stderr and "sequential" in default_stderr, (
         "Default policy MUST keep x25519_x4 = scalar (4× sequential) on "
         "MULX/ADX hosts (PR #273 design note, ama_dispatch.c:478-502). "
         "If the AVX2 4-way kernel is now selected by default, that is a "
