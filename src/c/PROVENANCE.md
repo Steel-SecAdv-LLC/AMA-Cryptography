@@ -159,7 +159,7 @@ transcribing FIPS 205 §9–§11 into C.
 - `F` (single-block thash) = SHA-256 with `toByte(0, 64 − n)`.
 
 The shared SHA-512 implementation lives in `src/c/internal/ama_sha2.h`
-(extracted in v2.2 after SLH-DSA and Ed25519 were both shipped with
+(extracted in v3.0.0 after SLH-DSA and Ed25519 were both shipped with
 redundant copies — see [`CSRC_ALIGN_REPORT.md §2.5`](../../CSRC_ALIGN_REPORT.md)).
 
 **ADRS compression:** The 22-byte compressed address used as the SHA-2

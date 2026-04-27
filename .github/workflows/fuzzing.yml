@@ -191,31 +191,11 @@ jobs:
           path: artifacts/fuzz_aes_gcm_ct/
           retention-days: 30
 
-  constant-time-crypto:
-    name: Constant-Time Verification (Crypto Primitives)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-
-      - name: Install dependencies
-        run: |
-          # Remove non-essential third-party apt repos that may cause 403 errors on runners
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake
-
-      - name: Build C library
-        run: |
-          mkdir -p build
-          cd build && cmake .. && make
-
-      - name: Build and run dudect harnesses
-        run: |
-          cd tools/constant_time
-          make clean && make all
-          echo "=== Utility function timing analysis ==="
-          ./dudect_harness 50000
-          echo "=== Crypto primitive timing analysis ==="
-          ./dudect_crypto 50000
+  # Constant-time verification of the legacy tools/constant_time/ harnesses
+  # lives in .github/workflows/dudect.yml :: dudect-legacy-harnesses.  That
+  # job runs the same `dudect_harness 50000` and `dudect_crypto 50000`
+  # invocations under `taskset -c 0 nice -n -10` (single-core pinning +
+  # elevated priority) and `cmake --build -j$(nproc)`, both of which the
+  # earlier in-file `constant-time-crypto` job lacked.  Keeping a second,
+  # un-pinned copy here only multiplied flake exposure on contended
+  # runners without adding coverage.

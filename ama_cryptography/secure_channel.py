@@ -48,7 +48,7 @@ Protocol flow:
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 2.1.5
+Version: 3.0.0
 """
 
 import hashlib

@@ -4,7 +4,7 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 2.1.5 |
+| Document Version | 3.0.0 |
 | Last Updated | 2026-04-20 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
@@ -23,7 +23,8 @@ We actively maintain and provide security updates for the following versions:
 
 | Version | Supported | Status |
 |---------|-----------|--------|
-| 2.1.x | Yes | Active development and security updates |
+| 3.0.x | Yes | Active development and security updates |
+| 2.1.x | No | Superseded by v3.0 (legacy_compat Argon2id shim available for one-shot migration; see CHANGELOG `[3.0.0] → ### BREAKING`) |
 | 2.0.x | No | Superseded by v2.1 |
 | 1.0.x | No | Superseded by v2.0 |
 

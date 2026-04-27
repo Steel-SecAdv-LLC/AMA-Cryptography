@@ -727,7 +727,7 @@ def create_test_coverage():
     fig.text(
         0.5,
         -0.06,
-        f"v2.1.5 | Chart: {total_tests} test functions across "
+        f"v3.0.0 | Chart: {total_tests} test functions across "
         f"{n_files} test_*.py files "
         "(scanned live at chart-generation time by "
         "_count_test_functions_by_category(); excludes conftest.py). "

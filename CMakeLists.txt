@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.15)
 
 project(AmaCryptography
-    VERSION 2.1.5
+    VERSION 3.0.0
     DESCRIPTION "Quantum-Resistant Cryptographic Protection System"
     LANGUAGES C CXX
 )

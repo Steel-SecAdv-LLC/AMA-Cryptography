@@ -70,7 +70,7 @@ def main() -> int:
             # ``cmake_minimum_required(VERSION X.Y.Z)`` (if ever written
             # in 3-part form) cannot match first. ``[^)]*?`` is lazy and
             # spans newlines, so the expression reaches into a multi-line
-            # ``project(AmaCryptography\n    VERSION 2.1.5\n    ...)``
+            # ``project(AmaCryptography\n    VERSION 3.0.0\n    ...)``
             # block without crossing the closing parenthesis.
             r"^project\s*\([^)]*?VERSION\s+(\d+\.\d+\.\d+)",
             "CMakeLists.txt project() VERSION",
@@ -84,6 +84,22 @@ def main() -> int:
             # macro name elsewhere in the header cannot match first.
             r'^\s*#\s*define\s+AMA_CRYPTOGRAPHY_VERSION_STRING\s+"([^"]+)"',
             "include/ama_cryptography.h AMA_CRYPTOGRAPHY_VERSION_STRING",
+        ),
+        (
+            # OCI image label on the Python runtime image. Surfaced by
+            # `docker inspect` and consumed by container registries for
+            # release-tag matching, so it must track the canonical version.
+            "docker/Dockerfile",
+            r'^\s*LABEL\s+version\s*=\s*"([^"]+)"',
+            "docker/Dockerfile LABEL version",
+        ),
+        (
+            # OCI Image Spec annotation on the C-API image
+            # (https://github.com/opencontainers/image-spec/blob/main/annotations.md).
+            # Same release-tag alignment requirement as Dockerfile above.
+            "docker/Dockerfile.c-api",
+            r'^\s*LABEL\s+org\.opencontainers\.image\.version\s*=\s*"([^"]+)"',
+            "docker/Dockerfile.c-api LABEL org.opencontainers.image.version",
         ),
     ]
 

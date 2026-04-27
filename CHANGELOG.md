@@ -4,7 +4,7 @@
 
 | Property | Value |
 |----------|-------|
-| Applies to Release | 2.1.5 |
+| Applies to Release | 3.0.0 |
 | Last Updated | 2026-04-25 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
@@ -21,6 +21,26 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 
 ## [Unreleased]
+
+_Nothing yet._
+
+
+## [3.0.0] - 2026-04-25
+
+Headline: in-house AVX-512 4-way Keccak permutation kernel (opt-in,
+default OFF) lands as the first ZMM-class SIMD path in the tree, paired
+with a published Architecture Decision Record (`docs/AVX512_KECCAK_PLAN.md`)
+explaining the in-house-vs-vendored choice. Argon2id moves to RFC 9106
+byte-identity (BREAKING — migration shim provided), the `out_len`
+ceiling is now enforced at every entry point, and the Tier-B PQC,
+Ed25519 verify-path SWE, VAES YMM AES-256-GCM, X25519 fe51, ChaCha20
+AVX2 and Argon2 BlaMka G AVX2 paths shipped during the 2.1.5-line are
+now cited end-to-end across `README.md`, `benchmark-report.md`,
+`docs/COMPETITIVE_ANALYSIS.md`, and `wiki/Performance-Benchmarks.md`
+against fresh measurements. CI gains a CPUID-gated AVX-512 KAT,
+re-floored slow-runner regression baselines, NIST ACVP self-attestation
+under continuous validation, and removal of a duplicate, un-pinned
+constant-time check that was a flake source on contended runners.
 
 
 ### Added
@@ -290,7 +310,7 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   10 % slower than generic's best time. Opt out entirely with
   `AMA_DISPATCH_NO_AUTOTUNE=1`.
 
-### Changed
+### Changed — Dispatch Cleanup, Dependencies, and CI
 
 - Remove dead `ama_ed25519_*_avx2` trampolines and associated dispatch
   wiring: the "AVX2" Ed25519 entry points forwarded directly to the scalar
@@ -315,7 +335,20 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   underline length, and added the missing `docs/_static/` referenced by
   `html_static_path`.
 
-### Added
+- **CI: removed duplicate constant-time job from `fuzzing.yml`.** The
+  `constant-time-crypto` job in `.github/workflows/fuzzing.yml` ran the
+  same `tools/constant_time/dudect_harness 50000` and `dudect_crypto
+  50000` invocations as `dudect.yml::dudect-legacy-harnesses`, but
+  without `taskset -c 0 nice -n -10` single-core pinning and without
+  `cmake --build -j$(nproc)` parallelism. On contended GitHub-hosted
+  runners that produced occasional t-statistic excursions and
+  build-step underruns that would surface as a flaky red check on
+  every PR. The `dudect.yml` workflow's three jobs (`dudect-utility`,
+  `dudect-pqc`, `dudect-legacy-harnesses`) remain the sole owners of
+  constant-time verification — coverage is unchanged, only the
+  un-pinned duplicate is gone.
+
+### Added — Compliance and Tests
 
 - **NIST ACVP self-attestation artifact.**
   `docs/compliance/ACVP_SELF_ATTESTATION.md` (formal, customer-facing),
@@ -717,6 +750,7 @@ After upgrading to v2.0:
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 3.0.0 | 2026-04-25 | In-house AVX-512 4-way Keccak permutation kernel + ADR (opt-in, default OFF, first ZMM-class SIMD path); Argon2id RFC 9106 byte-identity (BREAKING — `legacy_compat` migration shim provided, deprecated from day one and slated for removal in 4.0.0); Argon2id `out_len` cap at `AMA_ARGON2ID_MAX_TAG_LEN` (1024 B); Tier-B PQC + Ed25519 verify-path SWE + VAES YMM AES-256-GCM + X25519 `fe51` + ChaCha20 AVX2 + Argon2 BlaMka G AVX2 paths cited end-to-end against fresh measurements; CPUID-gated AVX-512 KAT in CI; re-floored slow-runner regression baselines (30/30 pass); NIST ACVP self-attestation under continuous validation (1,215/1,215 pass with SHA-3 MCT); duplicate un-pinned const-time-crypto job removed from `fuzzing.yml` |
 | 2.0.0 | 2026-03-07 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, Phase 2 primitives, CI hardening (PR #116: ruff, Semgrep, HMAC-SHA512, mypy --strict, CVE-2026-26007), FIPS 203/204/205 |
 | 1.0.0 | 2025-11-22 | First public open-source release (Apache 2.0) |
 
@@ -752,7 +786,25 @@ pytest
 
 ## Deprecation Notices
 
-No features are currently deprecated.
+**Argon2id legacy-compat shim (deprecated as of 3.0.0).** The
+pre-RFC-9106 Argon2id derivation is exposed under
+`ama_argon2id_legacy` / `ama_argon2id_legacy_verify` (C) and
+`native_argon2id_legacy` / `native_argon2id_legacy_verify` (Python)
+solely as a one-shot migration path for verifying hashes stored by
+AMA ≤ 2.1.5. The Python derivation path emits
+`ama_cryptography.exceptions.SecurityWarning` on every call; the
+C symbols and the Python verify path are silent so that rotation
+campaigns are not drowned in warning noise.
+
+The shim is **deprecated from day one of 3.0.0** and slated for
+removal in the next major version (4.0.0). Recommended migration is
+documented inline under `## [3.0.0] → ### BREAKING → Argon2id output
+bit-space change` above: verify-with-legacy on next successful
+authentication, then re-derive with the spec-compliant
+`ama_argon2id` / `native_argon2id` and overwrite the stored hash in
+the same transaction. New code must not call the legacy symbols for
+any purpose other than migration; `native_argon2id` is the only
+spec-compliant path.
 
 ---
 

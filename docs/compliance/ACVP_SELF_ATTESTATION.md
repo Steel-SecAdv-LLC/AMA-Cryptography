@@ -5,8 +5,8 @@
 | Organization | Steel Security Advisors LLC |
 | Library | AMA Cryptography |
 | Document ID | ACVP-SELF-ATTEST-2026-001 |
-| Version | 2.1.5 |
-| Date | 2026-04-21 |
+| Version | 3.0.0 |
+| Date | 2026-04-25 |
 | Classification | Public |
 | Attestation Type | **Self-Attestation (NOT CAVP, NOT CMVP, NOT FIPS 140-3)** |
 | Source Report | [`CSRC_ALIGN_REPORT.md`](../../CSRC_ALIGN_REPORT.md) |
