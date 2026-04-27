@@ -129,20 +129,32 @@ def _check_build_dependency(import_name: str, attr: str = "__version__") -> None
 # install_layout regression fires inside setuptools' own __init__ paths
 # during bdist_wheel, so a check that runs after `from setuptools import
 # Extension` would race the very failure mode it is meant to prevent.
-for _name in ("setuptools",):
+# setuptools and wheel are checked unconditionally — they are required
+# for any setup.py invocation regardless of whether Cython is enabled.
+# Cython and numpy are only required when the math_engine Cython
+# extension is being built; the documented ``AMA_NO_CYTHON=1`` opt-out
+# (and its companion ``AMA_NO_C_EXTENSIONS=1``, which short-circuits all
+# native build paths including the Cython one) must therefore skip those
+# preflight checks.  Copilot reviews #12/#15/#22 and Devin review #13
+# observed that the previous form ran every floor unconditionally,
+# turning a documented opt-out into an unconditional FATAL when the
+# environment lacked Cython/numpy (e.g. minimal embedded builders or
+# ``pip install --no-build-isolation`` against a host without
+# Cython/numpy).  pyproject.toml's [build-system].requires comment
+# already reads "FATAL unless AMA_NO_CYTHON=1"; this brings the runtime
+# behaviour in line with the documented contract.
+for _name in ("setuptools", "wheel"):
     _check_build_dependency(_name)
-# wheel / Cython / numpy are not strictly required at this exact module-
-# top moment (setuptools imports below do not transitively touch them),
-# but checking them here lets the user see all four floors in a single
-# preflight pass rather than tripping into Cython.cythonize / numpy
-# imports later with a different style of error.
-for _name in ("wheel", "Cython", "numpy"):
-    try:
+
+_SKIP_CYTHON_PREFLIGHT = bool(os.getenv("AMA_NO_CYTHON")) or bool(os.getenv("AMA_NO_C_EXTENSIONS"))
+if not _SKIP_CYTHON_PREFLIGHT:
+    for _name in ("Cython", "numpy"):
         _check_build_dependency(_name)
-    except SystemExit:
-        # Re-raise so the build aborts; an exception in this block is
-        # treated identically to the setuptools preflight.
-        raise
+else:
+    sys.stderr.write(
+        "AMA_NO_CYTHON / AMA_NO_C_EXTENSIONS set: skipping Cython/numpy "
+        "preflight (the math_engine accelerator will not be built).\n"
+    )
 
 from setuptools import Extension, find_packages, setup  # noqa: E402
 from setuptools.command.build_ext import build_ext  # noqa: E402

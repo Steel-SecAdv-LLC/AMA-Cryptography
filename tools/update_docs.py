@@ -344,9 +344,11 @@ def _baseline_index() -> dict[str, dict]:
     removed and the ``pqc_benchmarks`` entry re-floored to the
     measured 13,000 ops/sec).  This implementation tolerates a future
     ``benchmarks`` ⇄ ``pqc_benchmarks`` overlap by deterministically
-    deferring to the PQC block, but a CI lint check
-    (``check_baseline_justification.py``) would catch the issue at PR
-    review time.
+    deferring to the PQC block; the existing CI lint check
+    ``benchmarks/check_baseline_justification.py`` (run by
+    ``.github/workflows/baseline-guard.yml``) catches baseline-floor
+    regressions at PR review time, complementing this resolution
+    contract.
     """
     if not BASELINE_JSON.exists():
         return {}

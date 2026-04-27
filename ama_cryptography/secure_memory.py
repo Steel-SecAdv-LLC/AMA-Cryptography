@@ -331,7 +331,9 @@ def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
         # rather than silently mlocking unrelated memory.
         probe = ctypes.string_at(addr, 1)
         # Layout-probe comparison: 1-byte sanity check, not a secret comparison.
-        if size > 0 and probe != data[:1]:  # nosemgrep: non-constant-time-comparison
+        if (
+            size > 0 and probe != data[:1]
+        ):  # nosemgrep: non-constant-time-comparison -- 1-byte PyBytesObject layout probe, not secret comparison (SM-001)
             raise NotImplementedError(
                 "secure_mlock: PyBytesObject layout probe failed — "
                 f"computed address does not point to bytes payload "
@@ -410,7 +412,9 @@ def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
         # Layout probe — see secure_mlock() for rationale.
         probe = ctypes.string_at(addr, 1)
         # Layout-probe comparison: 1-byte sanity check, not a secret comparison.
-        if size > 0 and probe != data[:1]:  # nosemgrep: non-constant-time-comparison
+        if (
+            size > 0 and probe != data[:1]
+        ):  # nosemgrep: non-constant-time-comparison -- 1-byte PyBytesObject layout probe, not secret comparison (SM-002)
             raise NotImplementedError(
                 "secure_munlock: PyBytesObject layout probe failed — "
                 f"computed address does not point to bytes payload "

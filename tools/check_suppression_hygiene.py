@@ -19,8 +19,19 @@ import sys
 import tokenize
 from pathlib import Path
 
-# Suppression tokens to scan for
-_SUPPRESSION_RE = re.compile(r"#\s*(noqa|nosec|pylint:\s*disable|type:\s*ignore)")
+# Suppression tokens to scan for.
+#
+# ``nosemgrep`` is included here because INVARIANT-13 is worded "any
+# equivalent suppression marker"; semgrep is part of the same defence-in-
+# depth stack as bandit/ruff/mypy and the same tracking-ID + justification
+# requirements apply.  Devin reviews #19/#20/#21/#22 (PR #277) caught four
+# ``nosemgrep`` markers that lacked tracking IDs; extending the scanner is
+# the regression check that would have caught those at PR-review time.
+# We deliberately keep ``nosemgrep:`` distinct from ``# nosemgrep`` (no
+# colon) — semgrep accepts both, but every legitimate use in this repo
+# names the rule it suppresses, which makes the line-targeted form (with
+# a colon and the rule id) the only one we want to allow.
+_SUPPRESSION_RE = re.compile(r"#\s*(noqa|nosec|nosemgrep|pylint:\s*disable|type:\s*ignore)")
 
 # Tracking ID pattern: parenthesised alphanumeric tag, e.g. (KM-001), (FIN-002)
 _TRACKING_ID_RE = re.compile(r"\([A-Z]+-\d+\)")
