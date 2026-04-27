@@ -82,14 +82,30 @@ static const uint8_t expected_shared[32] = {
  * 1024-vector batch cross-check, extracted to a helper so the four
  * malloc-backed buffers (`scs`, `pts`, `bouts`, `souts`) are released
  * through a single `goto cleanup` path on every exit — including the
- * "any TEST_ASSERT inside the block fails" path.  Returns 0 on success,
- * 1 on failure (matching the convention `main()` propagates from
- * file-scope `TEST_ASSERT`).
+ * "any inner assertion fails" path.  Returns 0 on success, 1 on failure
+ * (matching the convention `main()` propagates from file-scope
+ * `TEST_ASSERT`).
  *
- * Local `BATCH_ASSERT_OR_GOTO` macro is scoped to this function only —
- * it does not shadow the file-scope `TEST_ASSERT` used by the rest of
- * the suite.  Same FAIL/PASS log-line shape as `TEST_ASSERT` so
- * existing log scrapers keep working unchanged.
+ * Two function-local assertion macros, both scoped to this helper:
+ *
+ *   - `BATCH_ASSERT_OR_GOTO(cond, msg)` — the outer-summary form:
+ *     same FAIL/PASS log-line shape as the file-scope `TEST_ASSERT`,
+ *     used for the handful of high-level milestones (malloc OK, each
+ *     batch call returned AMA_SUCCESS, each pass / tail-count run
+ *     completed).  Six emit-on-success lines total.
+ *
+ *   - `BATCH_INNER_OR_GOTO(cond, msg)` — silent on success, FAIL on
+ *     failure.  Used for the inner per-vector cross-check loops
+ *     (1024 single-shot refs + 1024 AVX2-forced + 1024 scalar-forced
+ *     + 47 tail-count = ~3119 checks).  Without this, the helper
+ *     would print one PASS line per check — thousands of lines of
+ *     noise that buries failures and bloats CI logs.  On failure
+ *     it still emits the same FAIL message and goto's cleanup, so
+ *     the first-mismatch diagnostic is unchanged.
+ *
+ * Neither macro shadows the file-scope `TEST_ASSERT` used by the
+ * rest of the suite; both are `#undef`'d at the bottom of the
+ * helper.
  * ---------------------------------------------------------------------- */
 static int batch_random_cross_check_1024(void) {
     extern void ama_test_force_x25519_x4_scalar(void);
@@ -116,6 +132,15 @@ static int batch_random_cross_check_1024(void) {
         }                                                   \
     } while (0)
 
+#define BATCH_INNER_OR_GOTO(condition, message)             \
+    do {                                                    \
+        if (!(condition)) {                                 \
+            fprintf(stderr, "FAIL: %s\n", message);         \
+            rc = 1;                                         \
+            goto cleanup;                                   \
+        }                                                   \
+    } while (0)
+
     BATCH_ASSERT_OR_GOTO(scs && pts && bouts && souts, "batch: malloc");
 
     for (i = 0; i < N; i++) {
@@ -124,12 +149,13 @@ static int batch_random_cross_check_1024(void) {
             pts[i][j] = (uint8_t)((i + 5) * 11 + j * 3);
         }
     }
-    /* Single-shot reference. */
+    /* Single-shot reference (1024 silent inner checks → 1 summary PASS). */
     for (i = 0; i < N; i++) {
-        BATCH_ASSERT_OR_GOTO(
+        BATCH_INNER_OR_GOTO(
             ama_x25519_key_exchange(souts[i], scs[i], pts[i]) == AMA_SUCCESS,
             "batch ref: single-shot success");
     }
+    BATCH_ASSERT_OR_GOTO(1, "batch ref: 1024/1024 single-shots succeeded");
 
     /* Pass 1 — force the AVX2 4-way kernel on (regardless of the
      * `AMA_DISPATCH_USE_X25519_AVX2` env default-off policy).  On
@@ -142,9 +168,10 @@ static int batch_random_cross_check_1024(void) {
                                     (const uint8_t (*)[32])pts, N) == AMA_SUCCESS,
         "batch deterministic ×1024 (AVX2 forced) success");
     for (i = 0; i < N; i++) {
-        BATCH_ASSERT_OR_GOTO(memcmp(bouts[i], souts[i], 32) == 0,
-                             "batch lane matches single-shot (AVX2 forced)");
+        BATCH_INNER_OR_GOTO(memcmp(bouts[i], souts[i], 32) == 0,
+                            "batch lane matches single-shot (AVX2 forced)");
     }
+    BATCH_ASSERT_OR_GOTO(1, "batch deterministic ×1024 (AVX2 forced): 1024/1024 lanes match");
 
     /* Pass 2 — forced scalar fallback. */
     ama_test_force_x25519_x4_scalar();
@@ -154,9 +181,10 @@ static int batch_random_cross_check_1024(void) {
                                     (const uint8_t (*)[32])pts, N) == AMA_SUCCESS,
         "batch deterministic ×1024 (scalar forced) success");
     for (i = 0; i < N; i++) {
-        BATCH_ASSERT_OR_GOTO(memcmp(bouts[i], souts[i], 32) == 0,
-                             "batch lane matches single-shot (scalar forced)");
+        BATCH_INNER_OR_GOTO(memcmp(bouts[i], souts[i], 32) == 0,
+                            "batch lane matches single-shot (scalar forced)");
     }
+    BATCH_ASSERT_OR_GOTO(1, "batch deterministic ×1024 (scalar forced): 1024/1024 lanes match");
     ama_test_restore_x25519_x4_avx2();
 
     /* Tail-lane coverage: counts that don't divide by 4 (1, 2, 3,
@@ -171,10 +199,11 @@ static int batch_random_cross_check_1024(void) {
                                         (const uint8_t (*)[32])pts, tc) == AMA_SUCCESS,
             "batch tail-count success");
         for (i = 0; i < tc; i++) {
-            BATCH_ASSERT_OR_GOTO(memcmp(bouts[i], souts[i], 32) == 0,
-                                 "batch tail-count lane matches single-shot");
+            BATCH_INNER_OR_GOTO(memcmp(bouts[i], souts[i], 32) == 0,
+                                "batch tail-count lane matches single-shot");
         }
     }
+    BATCH_ASSERT_OR_GOTO(1, "batch tail-counts {1,2,3,5,6,7,9,13}: all lanes match single-shot");
 
 cleanup:
     free(scs);
@@ -184,6 +213,7 @@ cleanup:
     return rc;
 
 #undef BATCH_ASSERT_OR_GOTO
+#undef BATCH_INNER_OR_GOTO
 }
 
 int main(void) {

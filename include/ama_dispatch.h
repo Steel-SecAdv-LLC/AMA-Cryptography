@@ -30,7 +30,13 @@ typedef enum {
     AMA_IMPL_SVE2    = 4,  /**< ARM64 SVE2 (scalable vectors). */
 } ama_impl_level_t;
 
-/** Dispatch info populated by ama_dispatch_init() (read-only after init). */
+/** Dispatch info populated by ama_dispatch_init() (read-only after init).
+ *
+ * ABI policy: append-only.  New fields land *after* `arch_name` so
+ * binaries linked against older copies of this header still see the
+ * same offset for every field they know about.  Reordering or
+ * inserting fields earlier would silently break consumers compiled
+ * against a previous release. */
 typedef struct {
     ama_impl_level_t sha3;              /**< Selected SHA3 / Keccak-f[1600] path. */
     ama_impl_level_t kyber;             /**< Selected Kyber NTT / pointwise path. */
@@ -40,8 +46,8 @@ typedef struct {
     ama_impl_level_t ed25519;           /**< Selected Ed25519 field-element path. */
     ama_impl_level_t chacha20poly1305;  /**< Selected ChaCha20-Poly1305 path. */
     ama_impl_level_t argon2;            /**< Selected Argon2 G compression path. */
-    ama_impl_level_t x25519;            /**< Selected X25519 4-way ladder path (batch API only; single-shot stays scalar). */
     const char *arch_name;              /**< Human-readable architecture label (for diagnostics). */
+    ama_impl_level_t x25519;            /**< Selected X25519 4-way ladder path (batch API only; single-shot stays scalar). 3.0.0+. */
 } ama_dispatch_info_t;
 
 /* ============================================================================

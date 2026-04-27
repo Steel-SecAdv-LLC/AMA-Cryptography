@@ -418,14 +418,29 @@ static double test_x25519_scalarmult(int iterations) {
 }
 
 /* -----------------------------------------------------------------------
- * Test 10b: X25519 4-way batch ladder (AVX2 path)
+ * Test 10b: X25519 dispatched batch ladder (AVX2 4-way OR scalar fallback)
  *
- * The 4-way Montgomery ladder uses a packed XOR-mask cswap that
- * applies independent per-lane scalar bits — there is no shared
- * branch that could leak whether a particular lane has bit-0 vs
- * bit-1 set.  This is structurally as constant-time as the scalar
- * ladder.  Reported info-only for the same CI-noise reason as the
- * single-shot X25519 lane above.
+ * Measures the runtime-dispatched X25519 batch path.  Which kernel
+ * actually runs depends on dispatcher state:
+ *
+ *   - With `AMA_DISPATCH_USE_X25519_AVX2=1` set in the environment
+ *     (or the test hook `ama_test_force_x25519_x4_avx2()` called),
+ *     the AVX2 4-way Montgomery ladder is exercised.  That kernel
+ *     uses a packed XOR-mask cswap that applies independent per-lane
+ *     scalar bits — no shared branch that could leak whether a
+ *     particular lane has bit-0 vs bit-1 set, structurally as
+ *     constant-time as the scalar ladder.
+ *
+ *   - Without the opt-in (the default), the wrapper falls through
+ *     to four sequential scalar single-shot ladders, the same path
+ *     measured by Test 10a above (each call is constant-time on its
+ *     own, and four of them in series carry the same property).
+ *
+ * Reported info-only for the same CI-noise reason as the single-
+ * shot X25519 lane above.  CI matrix entry
+ * `dudect-x25519-avx2-batch` exports the env var and re-runs this
+ * lane so the SIMD kernel's signal is sampled even when the default
+ * policy is opt-out.
  *
  * Class 0: Batch of 4 with all-zero (post-clamp) secret seeds
  * Class 1: Batch of 4 with all-0xFF (post-clamp) secret seeds

@@ -766,10 +766,21 @@ void ama_test_force_x25519_x4_avx2(void) {
      * is what `dispatch_info.x25519 >= AMA_IMPL_AVX2` gates on.  No-op
      * on hosts without AVX2 (the kernel symbol still exists but
      * `ama_x25519_scalarmult_x4_avx2` would crash on a non-AVX2 CPU,
-     * so the dispatch level guard is mandatory). */
+     * so the dispatch level guard is mandatory).
+     *
+     * On builds without `AMA_HAVE_AVX2_IMPL` (non-x86-64 hosts,
+     * `-DAMA_ENABLE_AVX2=OFF`, MSVC builds where the AVX2 sources
+     * aren't compiled in), the symbol `ama_x25519_scalarmult_x4_avx2`
+     * is neither declared nor defined, so referencing it would fail
+     * to compile.  Keep this hook available on every build as a
+     * compile-clean no-op — non-AVX2 test binaries can still call
+     * `ama_test_force_x25519_x4_scalar()` / restore counterparts
+     * without conditional compilation at the call site. */
     ama_dispatch_init();
+#ifdef AMA_HAVE_AVX2_IMPL
     if (dispatch_info.x25519 >= AMA_IMPL_AVX2)
         dispatch_table.x25519_x4 = ama_x25519_scalarmult_x4_avx2;
+#endif
 }
 
 /* Restore the function pointer to its post-dispatch_init value (which

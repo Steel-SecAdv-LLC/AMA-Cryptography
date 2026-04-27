@@ -149,10 +149,13 @@ void ama_argon2_g_avx2(uint64_t out[128],
  * X25519 — 4-way Montgomery ladder (RFC 7748)
  *
  * Processes four independent X25519 scalar multiplications in
- * parallel.  Used by the additive batch API
- * `ama_x25519_scalarmult_batch` for batches of N >= 2.  Each scalar
- * is clamped per RFC 7748 §5 inside the kernel; callers pass the
- * raw 32-byte secret keys.
+ * parallel.  Invoked by the additive batch API
+ * `ama_x25519_scalarmult_batch` only for full 4-lane chunks
+ * (count / 4 of them) — short batches of 1, 2, or 3 and the (count
+ * % 4) tail of longer batches stay on the scalar single-shot path
+ * and are NOT padded into this kernel.  Each scalar is clamped per
+ * RFC 7748 §5 inside the kernel; callers pass the raw 32-byte
+ * secret keys.
  * ============================================================================ */
 void ama_x25519_scalarmult_x4_avx2(uint8_t out[4][32],
                                     const uint8_t scalar[4][32],

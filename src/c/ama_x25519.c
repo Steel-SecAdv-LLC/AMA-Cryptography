@@ -745,13 +745,19 @@ AMA_API ama_error_t ama_x25519_scalarmult_batch(
     size_t i;
 
     /* 4-way SIMD path: process full chunks of 4 lanes at a time when
-     * the AVX2 kernel is wired in.  The dispatcher leaves
-     * `tbl->x25519_x4 == NULL` by default on x86-64 (the scalar fe64
-     * path beats 4× donna-32bit on Skylake-class cores; the kernel is
-     * opt-in via `AMA_DISPATCH_USE_X25519_AVX2=1` for the constant-time
-     * test lane and a future AVX-512 IFMA port). */
+     * the AVX2 kernel is wired in AND the batch contains at least one
+     * full 4-lane chunk.  The dispatcher leaves `tbl->x25519_x4 ==
+     * NULL` by default on x86-64 (the scalar fe64 path beats 4×
+     * donna-32bit on Skylake-class cores; the kernel is opt-in via
+     * `AMA_DISPATCH_USE_X25519_AVX2=1` for the constant-time test lane
+     * and a future AVX-512 IFMA port).  `count >= 4` matches the only
+     * way the kernel is actually invoked: `chunks = count / 4` would
+     * be zero for count of 2 or 3 and the for-loop body would not
+     * run, so the previous `count >= 2` guard was misleading without
+     * being incorrect — the wrapper has always pushed short batches
+     * (1 / 2 / 3) entirely down the scalar tail path. */
     size_t chunks = 0;
-    if (tbl->x25519_x4 != NULL && count >= 2) {
+    if (tbl->x25519_x4 != NULL && count >= 4) {
         chunks = count / 4;
         for (i = 0; i < chunks; i++) {
             /* Kernel writes directly into the caller's output slice —
