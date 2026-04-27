@@ -117,9 +117,7 @@ class TestX25519Batch:
             their_pk, _their_sk = pq.native_x25519_keypair()
             scalars.append(bytes(our_sk))
             points.append(bytes(their_pk))
-            expected.append(
-                pq.native_x25519_key_exchange(bytes(our_sk), bytes(their_pk))
-            )
+            expected.append(pq.native_x25519_key_exchange(bytes(our_sk), bytes(their_pk)))
         got = pq.native_x25519_scalarmult_batch(scalars, points)
         assert got == expected, "batch must be byte-identical to sequential single-shot"
 
