@@ -243,8 +243,8 @@ the cell reads **N/A**.
 
 | Primitive | AMA (measured) | libsodium | liboqs | OpenSSL | Verdict |
 |---|---:|---:|---:|---:|---|
-| SHA3-256 hash (1KB) | 184,112 ops/s | N/A | N/A | varies | AMA competitive on generic C path |
-| HMAC-SHA3-256 (1KB) | 115,408 ops/s | N/A | N/A | varies | AMA competitive on generic C path |
+| SHA3-256 hash (1KB) | 184,112 ops/s | N/A | N/A | varies | AMA competitive |
+| HMAC-SHA3-256 (1KB) | 115,408 ops/s | N/A | N/A | varies | AMA competitive |
 | Ed25519 KeyGen | 55,716 ops/s | 40,000–60,000 ops/s (ref) | N/A | varies | inside libsodium reference band (base-point comb table) |
 | Ed25519 Sign | 51,488 ops/s | 50,000–80,000 ops/s (ref) | N/A | ~20,000 ops/s (ref) | within libsodium band; OpenSSL ~2.5× slower |
 | Ed25519 Verify | 21,338 ops/s | 15,000–30,000 ops/s (ref) | N/A | ~10,000 ops/s (ref) | within libsodium reference band (vartime, AVX2 SWE rectified) |
@@ -256,7 +256,7 @@ the cell reads **N/A**.
 | ML-KEM-1024 Encap | 12,365 ops/s | N/A | 7,000–15,000 ops/s (ref) | Provider 3.4+ (ref) | inside liboqs band |
 | AES-256-GCM (1KB) | 293,143 ops/s | N/A (XChaCha preferred) | N/A | ~500K ops/s (AES-NI, ref) | OpenSSL AES-NI path ~1.7× faster (VAES YMM landed; gap closes at ≥4 KB) |
 | ChaCha20-Poly1305 (1KB) | 256,249 ops/s | ~380,000 ops/s (ref) | N/A | ~300,000 ops/s (ref) | libsodium ~1.5× faster |
-| X25519 scalar mult (fe64 + MULX+ADX) | 16,983 ops/s | ~40,000 ops/s (ref) | N/A | ~35,000 ops/s (ref) | libsodium ~2.4× faster on this canonical-host VM. The in-house kernel is now hand-written GCC inline assembly — explicit ADCX (CF chain) + ADOX (OF chain) for dual-carry-chain interleave, plus a dedicated squaring kernel exploiting off-diagonal symmetry (10 mults vs 16 schoolbook) — running behind the `ama_cpuid_has_x25519_mulx()` gate. fe51 fallback measures ~21,800 ops/s on the same host (`-DAMA_X25519_FORCE_FE51`); pure-C fe64 (BMI2/ADX masked, e.g. `taskset` to a guest with the bits hidden) measures ~11,500 ops/s. The literature-reported 1.8-2.2× (OpenSSL `crypto/ec/asm/x25519-x86_64.pl`, BoringSSL fiat-crypto MULX/ADX) shows up on uncontended Skylake+/Zen+ silicon — the dispatcher lights this kernel up automatically wherever BMI2+ADX are reported, so heavier-iron hosts reach the upper end without further code changes. |
+| X25519 scalar mult (fe64 + MULX+ADX) | 15,401 ops/s | ~40,000 ops/s (ref) | N/A | ~35,000 ops/s (ref) | libsodium ~2.6× faster on this canonical-host VM (number from `benchmarks/benchmark_runner.py` Python-via-ctypes harness; the raw-C `build/bin/benchmark_c_raw` harness measures ~16,983 ops/s on the same host — the gap is per-call FFI overhead, not field-arithmetic difference). The in-house kernel is hand-written GCC inline assembly — explicit ADCX (CF chain) + ADOX (OF chain) for dual-carry-chain interleave, plus a dedicated squaring kernel exploiting off-diagonal symmetry (10 mults vs 16 schoolbook) — running behind the `ama_cpuid_has_x25519_mulx()` gate. fe51 fallback measures ~21,800 ops/s on the same host (`-DAMA_X25519_FORCE_FE51`); pure-C fe64 (BMI2/ADX masked, e.g. `taskset` to a guest with the bits hidden) measures ~11,500 ops/s. The literature-reported 1.8-2.2× over pure-C schoolbook (OpenSSL `crypto/ec/asm/x25519-x86_64.pl`, BoringSSL fiat-crypto MULX/ADX) shows up on uncontended Skylake+/Zen+ silicon — the dispatcher lights this kernel up automatically wherever BMI2+ADX are reported, so heavier-iron hosts reach the upper end without further code changes. |
 
 **Reproducing live peer numbers locally:**
 

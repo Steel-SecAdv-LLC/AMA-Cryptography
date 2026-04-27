@@ -285,10 +285,15 @@ endif()
 # ama_x25519_fe64_mul_mulx / ama_x25519_fe64_sq_mulx and runtime-branch
 # the inner ladder via ama_cpuid_has_x25519_mulx().
 #
-# MSVC: not built.  The kernel uses _mulx_u64 + _addcarry_u64
-# intrinsics under per-file -mbmi2 -madx, the same MSVC-escape pattern
-# as the AVX-512 SHA3 kernel.  MSVC builds keep the pure-C fe64
-# multiply emitted by fe64.h (or fall back to fe51 / gf16 entirely).
+# MSVC: not built.  The kernel is implemented as GCC/Clang inline
+# assembly issuing `mulx` / `adcx` / `adox` directly under per-file
+# `-mbmi2 -madx`, so this TU remains x86-64 GCC/Clang-only (the
+# inline asm uses GCC extended-asm syntax that MSVC doesn't accept,
+# and `_addcarry_u64` was found not to lower to ADCX/ADOX reliably
+# even with `-madx` on GCC 14, so the inline-asm path is the only
+# way to get the dual-carry-chain interleave the kernel needs).
+# MSVC builds keep the pure-C fe64 multiply emitted by fe64.h (or
+# fall back to fe51 / gf16 entirely).
 #
 # Always built on x86-64 GCC/Clang regardless of AMA_ENABLE_SIMD —
 # MULX and ADCX/ADOX are general-purpose ISA extensions, not SIMD.

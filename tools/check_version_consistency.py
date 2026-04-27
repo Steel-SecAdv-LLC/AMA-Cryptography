@@ -46,7 +46,20 @@ def _read(path: Path) -> str:
 
 _C_VERSION_LITERAL_RE = re.compile(r'"\d+\.\d+\.\d+"')
 _C_VERSION_IDENT_RE = re.compile(
-    r"\b[A-Za-z_][A-Za-z0-9_]*[Vv][Ee][Rr][Ss][Ii][Oo][Nn]\w*\b|\bversion\b"
+    # Two alternatives:
+    #   1. `\b[A-Za-z_][A-Za-z0-9_]*[Vv][Ee][Rr][Ss][Ii][Oo][Nn]\w*\b`
+    #      — matches identifiers with at least one prefix character
+    #      before the `[Vv]ersion` substring (e.g., `MY_VERSION`,
+    #      `LIB_Version`, `pkg_version_tag`).
+    #   2. `\b[Vv][Ee][Rr][Ss][Ii][Oo][Nn]\b`
+    #      — matches the bare identifiers `Version`, `version`, and
+    #      (case-folded) `VERSION` standing alone, with no surrounding
+    #      identifier characters. Without this branch the scanner
+    #      escaped `#define VERSION "1.2.3"` and similar standalone
+    #      uppercase / title-case identifiers (Devin Review
+    #      2026-04-27).
+    r"\b[A-Za-z_][A-Za-z0-9_]*[Vv][Ee][Rr][Ss][Ii][Oo][Nn]\w*\b"
+    r"|\b[Vv][Ee][Rr][Ss][Ii][Oo][Nn]\b"
 )
 
 
@@ -114,7 +127,19 @@ def scan_c_sources_for_version_literals(root: Path) -> list[str]:
                 ident_window += " " + re.sub(r"//.*$", "", stripped_lines[i - 1])
             if not _C_VERSION_IDENT_RE.search(ident_window):
                 continue
-            rel = path.relative_to(root.parent) if root.parent in path.parents else path
+            # Report repo-relative paths so a CI failure reads
+            # `src/c/foo.c:42:` (greppable from the repo root) rather
+            # than `c/foo.c:42:` (which depends on the caller's
+            # `root` argument and is ambiguous across runs).
+            # Falls through to `relative_to(root.parent)` for callers
+            # passing a `root` outside the repo (e.g. tmp paths from
+            # the unit tests). (Copilot Review 2026-04-27.)
+            if REPO in path.parents or path == REPO:
+                rel = path.relative_to(REPO)
+            elif root.parent in path.parents or path == root.parent:
+                rel = path.relative_to(root.parent)
+            else:
+                rel = path
             hits.append(f"{rel}:{i + 1}: {original_lines[i].strip()}")
 
     return hits
