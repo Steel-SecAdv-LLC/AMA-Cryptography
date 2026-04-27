@@ -22,7 +22,7 @@ coverage==7.13.5
 black==26.3.1
 mypy==1.19.1
 mypy_extensions==1.1.0
-ruff==0.15.11
+ruff==0.15.12
 
 # --- Security scanning ---
 bandit==1.9.4
