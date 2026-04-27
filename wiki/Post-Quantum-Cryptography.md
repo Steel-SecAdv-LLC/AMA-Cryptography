@@ -107,6 +107,15 @@ print(f"Tampered: {is_tampered}")  # False
 | Signing | 1.02 ms | 981 |
 | Verification | 0.21 ms | 4,809 |
 
+> **3.0.0 SIMD acceleration:** The native ML-DSA-65 sampling path now
+> packs four SHAKE128 and four SHAKE256 absorptions into a single AVX2
+> 4-way kernel and uses an AVX2-vectorised CBD2 noise sampler — same
+> backend that benefits ML-KEM-1024.  Dispatched automatically when
+> `ama_cpuid_has_avx2()` returns true.  See the
+> [SIMD Acceleration Paths](Performance-Benchmarks#simd-acceleration-paths-300)
+> matrix for the full per-primitive engineered-path inventory and
+> opt-out env vars.
+
 ---
 
 ## ML-KEM-1024 (Kyber) — Post-Quantum Key Encapsulation

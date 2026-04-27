@@ -4,7 +4,13 @@
 # Makefile for Constant-Time Verification Tools
 
 CC = gcc
-CFLAGS = -O2 -Wall -Wextra -I../../include
+# D-5: build the harness AGAINST THE PRODUCTION-DEFAULT constant-time AES path
+# (-DAMA_AES_CONSTTIME=ON), so the timing measurements faithfully reflect
+# what end users get from `cmake -DAMA_USE_NATIVE_PQC=ON` (the canonical
+# build).  Without this flag the harness silently exercised the table-based
+# S-box reference path and produced misleading "[KNOWN - table-based]"
+# attribution for failures actually unrelated to the S-box.
+CFLAGS = -O2 -Wall -Wextra -I../../include -DAMA_AES_CONSTTIME=ON
 LDFLAGS = -lm -lpthread
 
 # Source directories
@@ -18,13 +24,17 @@ DUDECT_CRYPTO  = dudect_crypto
 # Source files needed by each harness
 CONSTTIME_SRC = $(SRC_DIR)/ama_consttime.c
 
-# All sources needed for the crypto-primitive harness
+# All sources needed for the crypto-primitive harness.  ama_aes_bitsliced.c
+# provides the constant-time S-box that ama_aes_gcm.c uses when
+# AMA_AES_CONSTTIME is defined; without it the link fails with an undefined
+# reference to ama_aes256_key_expansion_consttime.
 DISPATCH_DIR = ../../src/c/dispatch
 CRYPTO_SRCS = $(SRC_DIR)/ama_consttime.c \
               $(SRC_DIR)/ama_core.c \
               $(SRC_DIR)/ama_sha3.c \
               $(SRC_DIR)/ama_ed25519.c \
               $(SRC_DIR)/ama_aes_gcm.c \
+              $(SRC_DIR)/ama_aes_bitsliced.c \
               $(SRC_DIR)/ama_hkdf.c \
               $(SRC_DIR)/ama_cpuid.c \
               $(DISPATCH_DIR)/ama_dispatch.c

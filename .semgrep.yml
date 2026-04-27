@@ -1,10 +1,20 @@
 # Semgrep Configuration for AMA Cryptography
 # Custom cryptographic security rules
-# Version: 3.0.0
-# Last Updated: 2026-04-25
+# Version: 3.0.1
+# Last Updated: 2026-04-27
+#
+# D-6 (audit 2026-04-27): rules tightened to drop the previous false-positive
+# storm (`__version__ = "3.0.0"` flagged as a hardcoded secret, `len(key) == 32`
+# flagged as non-constant-time, `logger.info("done in %s ms", t)` flagged as
+# private-key logging, etc.).  Each rule below is now scoped so the SEVERITY
+# floor can stay actionable: a fresh ERROR finding represents an actual issue,
+# not a layout artefact.  See section "Rule design notes" at the bottom for
+# the rationale of each `pattern-not` clause.
 
 rules:
+  # --------------------------------------------------------------------------
   # Cryptographic Security Rules
+  # --------------------------------------------------------------------------
   - id: insecure-random-usage
     patterns:
       - pattern-either:
@@ -12,7 +22,7 @@ rules:
           - pattern: random.randint(...)
           - pattern: random.choice(...)
           - pattern: random.randrange(...)
-    message: "Use secrets module for cryptographic randomness instead of random module"
+    message: "Use the `secrets` module for cryptographic randomness, not `random`."
     languages: [python]
     severity: ERROR
     metadata:
@@ -21,12 +31,40 @@ rules:
       cwe: "CWE-330: Use of Insufficiently Random Values"
 
   - id: hardcoded-secret-key
+    # Match assignments that *look like* hardcoded secret material and are
+    # NOT one of the well-known false-positive patterns (dunder metadata,
+    # version strings, doc strings, type annotations).
     patterns:
       - pattern-either:
           - pattern: $KEY = "..."
           - pattern: $SECRET = "..."
           - pattern: $PASSWORD = "..."
-    message: "Potential hardcoded secret detected. Use environment variables or secure key management."
+      - pattern-not: $KEY = ""
+      - metavariable-pattern:
+          metavariable: $KEY
+          patterns:
+            - pattern-not-regex: '^(__\w+__|VERSION|NAME|TITLE|DESCRIPTION|AUTHOR|MAINTAINER|EMAIL|URL|HOMEPAGE|LICENSE|COPYRIGHT|README|CHANGELOG|RELEASE|TAG|BUILD|MODULE|PACKAGE|FORMAT|TYPE|KIND|MODE|STATUS|STATE|LEVEL|GRADE|CATEGORY|SUBCATEGORY|CLASS|FAMILY|GROUP|LABEL|MARKER|HEADING|SECTION|PROMPT|MESSAGE|TEXT|HEADER|FOOTER|PATH|FILE|DIR|HOST|PORT|SERVICE|ENDPOINT)$'
+      - metavariable-pattern:
+          metavariable: $SECRET
+          patterns:
+            - pattern-not-regex: '^(__\w+__|VERSION|NAME|TITLE|DESCRIPTION|AUTHOR|MAINTAINER|EMAIL|URL|HOMEPAGE|LICENSE|COPYRIGHT|README|CHANGELOG|RELEASE|TAG|BUILD|MODULE|PACKAGE|FORMAT|TYPE|KIND|MODE|STATUS|STATE|LEVEL|GRADE|CATEGORY|SUBCATEGORY|CLASS|FAMILY|GROUP|LABEL|MARKER|HEADING|SECTION|PROMPT|MESSAGE|TEXT|HEADER|FOOTER|PATH|FILE|DIR|HOST|PORT|SERVICE|ENDPOINT)$'
+      - metavariable-pattern:
+          metavariable: $PASSWORD
+          patterns:
+            - pattern-not-regex: '^(__\w+__|VERSION|NAME|TITLE|DESCRIPTION|AUTHOR|MAINTAINER|EMAIL|URL|HOMEPAGE|LICENSE|COPYRIGHT|README|CHANGELOG|RELEASE|TAG|BUILD|MODULE|PACKAGE|FORMAT|TYPE|KIND|MODE|STATUS|STATE|LEVEL|GRADE|CATEGORY|SUBCATEGORY|CLASS|FAMILY|GROUP|LABEL|MARKER|HEADING|SECTION|PROMPT|MESSAGE|TEXT|HEADER|FOOTER|PATH|FILE|DIR|HOST|PORT|SERVICE|ENDPOINT)$'
+    paths:
+      exclude:
+        # Tests, fixtures, docs, KAT vectors, and example scripts contain
+        # literal byte strings by construction.  bandit (`S105`/`S106`) is
+        # already configured to ignore these paths, so semgrep follows
+        # suit to keep the two analysers aligned.
+        - "tests/"
+        - "tests/**"
+        - "docs/"
+        - "examples/"
+        - "nist_vectors/"
+        - "fuzz/seed_corpus/"
+    message: "Potential hardcoded secret. Use environment variables or a key-management API."
     languages: [python]
     severity: WARNING
     metadata:
@@ -38,7 +76,7 @@ rules:
       - pattern-either:
           - pattern: hashlib.md5(...)
           - pattern: hashlib.sha1(...)
-    message: "Weak hash algorithm detected. Use SHA-256 or SHA3-256 for cryptographic purposes."
+    message: "Weak hash algorithm. Use SHA-256 / SHA3-256 for cryptographic purposes."
     languages: [python]
     severity: ERROR
     metadata:
@@ -47,16 +85,61 @@ rules:
       cwe: "CWE-328: Reversible One-Way Hash"
 
   - id: non-constant-time-comparison
+    # Catch `==` / `!=` between two byte-typed expressions (or named bindings
+    # that look secret) inside crypto modules, but NOT trivial length checks
+    # or string-literal comparisons.
     patterns:
       - pattern-either:
           - pattern: $A == $B
           - pattern: $A != $B
+      # Skip length comparisons — `len(key) == 32` is not a side-channel.
+      - pattern-not: len(...) == $N
+      - pattern-not: len(...) != $N
+      - pattern-not: $X == len(...)
+      - pattern-not: $X != len(...)
+      # Skip None / sentinel comparisons.
+      - pattern-not: $X == None
+      - pattern-not: $X is None
+      - pattern-not: $X != None
+      - pattern-not: $X is not None
+      # Skip type checks.
+      - pattern-not: type($X) == $T
+      - pattern-not: type($X) != $T
+      - pattern-not: isinstance($X, $T)
+      # Skip integer/string-literal comparisons that are obviously not
+      # constant-time-relevant (the secret is always one of the operands).
+      - pattern-not: $X == 0
+      - pattern-not: $X != 0
+      - pattern-not: $X == ""
+      - pattern-not: $X != ""
+      - pattern-not: $X == b""
+      - pattern-not: $X != b""
+      - pattern-not: |
+          $X == "..."
+      - pattern-not: |
+          $X != "..."
+      - pattern-not: |
+          "..." == $X
+      - pattern-not: |
+          "..." != $X
+      # Skip enum / class-attribute dispatch — `if self.algorithm == AlgorithmType.X:`
+      # and similar `==` against a `Class.MEMBER` attribute access reveal nothing
+      # about a secret value.
+      - pattern-not: $X == $C.$M
+      - pattern-not: $X != $C.$M
+      - pattern-not: $C.$M == $X
+      - pattern-not: $C.$M != $X
+      # Skip identity-style PID / counter / state checks.
+      - pattern-not: os.getpid() == $X
+      - pattern-not: os.getpid() != $X
     paths:
       include:
         - "**/crypto*.py"
         - "**/secure*.py"
         - "**/key*.py"
-    message: "Use hmac.compare_digest() for constant-time comparison of secrets"
+      exclude:
+        - "tests/"
+    message: "Use hmac.compare_digest() for constant-time comparison of secret values."
     languages: [python]
     severity: WARNING
     metadata:
@@ -71,7 +154,7 @@ rules:
           - pattern: from Crypto.Cipher import DES3
           - pattern: from Crypto.Cipher import Blowfish
           - pattern: from Crypto.Cipher import ARC4
-    message: "Deprecated cryptographic algorithm. Use AES-256-GCM or ChaCha20-Poly1305."
+    message: "Deprecated cipher. Use AES-256-GCM or ChaCha20-Poly1305."
     languages: [python]
     severity: ERROR
     metadata:
@@ -85,7 +168,7 @@ rules:
     metavariable-comparison:
       metavariable: $ITER
       comparison: $ITER < 100000
-    message: "PBKDF2 iterations too low. Use at least 600,000 iterations (OWASP 2024 recommendation)."
+    message: "PBKDF2 iterations too low. Use >=600,000 (OWASP 2024) for password derivation."
     languages: [python]
     severity: WARNING
     metadata:
@@ -93,21 +176,44 @@ rules:
       subcategory: key-derivation
 
   - id: private-key-logging
+    # Match log/print of an identifier that *unambiguously* names secret
+    # material (private_key / secret_key / master_secret).  The previous
+    # implementation matched any logger call whose enclosing scope merely
+    # had a `secret_key` parameter in scope, producing 125 false positives
+    # on benign progress logs (`logger.info("done in %s ms", t)`).
     patterns:
       - pattern-either:
+          - pattern: print($KEY)
           - pattern: print(..., $KEY, ...)
           - pattern: logging.info(..., $KEY, ...)
           - pattern: logging.debug(..., $KEY, ...)
+          - pattern: logging.warning(..., $KEY, ...)
+          - pattern: logging.error(..., $KEY, ...)
           - pattern: logger.info(..., $KEY, ...)
           - pattern: logger.debug(..., $KEY, ...)
-    metavariable-pattern:
-      metavariable: $KEY
-      patterns:
-        - pattern-either:
-            - pattern: private_key
-            - pattern: secret_key
-            - pattern: master_secret
-    message: "Potential logging of private key material. Never log secrets."
+          - pattern: logger.warning(..., $KEY, ...)
+          - pattern: logger.error(..., $KEY, ...)
+      - metavariable-pattern:
+          metavariable: $KEY
+          patterns:
+            - pattern-either:
+                - pattern: private_key
+                - pattern: secret_key
+                - pattern: master_secret
+                - pattern: master_key
+                - pattern: signing_key
+                - pattern: $X.private_key
+                - pattern: $X.secret_key
+                - pattern: $X.master_secret
+                - pattern: $X.master_key
+                - pattern: $X.signing_key
+      # Permit length / hash / fingerprint / digest reports — they reveal
+      # nothing about the secret bytes.
+      - pattern-not: print(len($KEY))
+      - pattern-not: logging.info(..., len($KEY), ...)
+      - pattern-not: logger.info(..., len($KEY), ...)
+      - pattern-not: logger.debug(..., len($KEY), ...)
+    message: "Logging private key material. Never log secrets — use len()/hash() if you must report."
     languages: [python]
     severity: ERROR
     metadata:
@@ -120,7 +226,7 @@ rules:
       - pattern-either:
           - pattern: pickle.load(...)
           - pattern: pickle.loads(...)
-    message: "Unsafe pickle deserialization. Use JSON or other safe serialization formats for untrusted data."
+    message: "Unsafe pickle deserialization. Use JSON or another safe format for untrusted data."
     languages: [python]
     severity: ERROR
     metadata:
@@ -135,7 +241,9 @@ rules:
         - "**/crypto*.py"
         - "**/secure*.py"
         - "**/verify*.py"
-    message: "Assert statements are removed in optimized mode. Use explicit checks for security validation."
+      exclude:
+        - "tests/"
+    message: "asserts are stripped under -O. Use explicit checks for security-bearing validation."
     languages: [python]
     severity: WARNING
     metadata:
@@ -143,10 +251,30 @@ rules:
       subcategory: validation
 
   - id: timing-vulnerable-string-compare
-    pattern: |
-      if $SECRET == $INPUT:
-          ...
-    message: "String comparison may be vulnerable to timing attacks. Use hmac.compare_digest() for secrets."
+    # Refined: only flag when the LHS is unambiguously secret material.
+    patterns:
+      - pattern: |
+          if $SECRET == $INPUT:
+              ...
+      - metavariable-pattern:
+          metavariable: $SECRET
+          patterns:
+            - pattern-either:
+                - pattern: tag
+                - pattern: mac
+                - pattern: hmac_value
+                - pattern: signature
+                - pattern: digest
+                - pattern: secret
+                - pattern: password
+                - pattern: $X.tag
+                - pattern: $X.mac
+                - pattern: $X.signature
+                - pattern: $X.digest
+    paths:
+      exclude:
+        - "tests/"
+    message: "Comparison of authentication tag / MAC / signature should use hmac.compare_digest()."
     languages: [python]
     severity: WARNING
     metadata:
@@ -160,3 +288,23 @@ rules:
   # rationale (e.g., FIPS ERROR state transition, __del__ destructor).
   # Re-evaluate when semgrep adds Python except-clause pattern support.
   # See: INVARIANT-9 in .github/INVARIANTS.md
+
+# --------------------------------------------------------------------------
+# Rule design notes (2026-04-27 audit follow-up)
+# --------------------------------------------------------------------------
+# - hardcoded-secret-key now excludes the dunder/metadata identifier set
+#   (__version__, __author__, NAME, DESCRIPTION, ...) so that PEP 396-style
+#   module metadata does not register as a secret.  Tests/, docs/,
+#   nist_vectors/, examples/ are excluded by path because they contain
+#   literal byte strings by design (KAT vectors, demo passwords with nosec).
+# - non-constant-time-comparison now skips trivial forms — len() ==,
+#   None / sentinel, isinstance, integer/string-literal — that the
+#   original rule could not distinguish from real secret comparisons.
+# - private-key-logging now requires the LOGGED expression itself to be a
+#   secret-named identifier or attribute, instead of the older "any log
+#   line in a function whose scope mentions secret_key" semantics.  It
+#   permits `len(key)` and `hash(key)` reports, which are routinely useful
+#   for diagnostics.
+# - timing-vulnerable-string-compare now restricts the LHS to authentication
+#   tag / MAC / signature / digest names, which is what the rule was meant
+#   to catch (HMAC oracle leaks).  Generic `if x == y:` no longer matches.

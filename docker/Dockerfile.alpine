@@ -29,15 +29,26 @@ RUN mkdir build && cd build && \
         -DAMA_ENABLE_AVX2=OFF && \
     cmake --build . -j$(nproc)
 
-# Wheel build. Alpine 3.18 ships setuptools 67.7.2 (< 70), so the
-# legacy `python3 setup.py bdist_wheel` invocation still works here —
-# the original failure on this line was the missing `wheel` Python
-# package (not the deprecation), now resolved by the `py3-wheel` apk
-# add above. Keeping the legacy invocation rather than `pip wheel
-# --no-build-isolation` because the latter trips an alpine-specific
-# friction with how setuptools' CMakeBuild re-runs cmake in an env
-# where pip's setuptools shim doesn't fully line up with the system
-# setuptools — manifests as opaque exit-1 with no actionable trace.
+# Upgrade setuptools / wheel above the floor enforced by setup.py's
+# D-9 preflight (PR #277, 2026-04-27 audit) — Alpine 3.18 ships
+# py3-setuptools 67.7.2 / py3-wheel 0.40.x system-wide, both below the
+# enforced minimums (setuptools>=70 to dodge Debian's install_layout
+# regression + the GHSA-cx63-2mw6-8hw5 / PYSEC-2025-49 advisories;
+# wheel>=0.46.2 for GHSA-8rrh-rw8j-w5fx).  We `--break-system-packages`
+# because Alpine's PEP 668 `EXTERNALLY-MANAGED` marker would otherwise
+# reject the upgrade — the override is contained to this builder stage,
+# never reaches the runtime image, and the upgraded versions are exactly
+# the ones the preflight requires.  See setup.py's `_check_build_dependency`.
+RUN pip3 install --no-cache-dir --upgrade --break-system-packages \
+        'setuptools>=78.1.1' 'wheel>=0.46.2' 'Cython>=3.2.4' 'numpy>=1.24.0'
+
+# Wheel build.  The legacy `python3 setup.py bdist_wheel` invocation is
+# kept (rather than `python -m build` / `pip wheel --no-build-isolation`)
+# because both alternatives trip an alpine-specific friction with how
+# setuptools' CMakeBuild re-runs cmake in an env where pip's setuptools
+# shim doesn't fully line up with the system setuptools — manifests as
+# an opaque exit-1 with no actionable trace.  After the upgrade above
+# the system setuptools meets every floor the D-9 preflight enforces.
 RUN python3 setup.py bdist_wheel
 
 FROM alpine:3.18

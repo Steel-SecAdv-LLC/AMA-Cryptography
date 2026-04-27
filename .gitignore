@@ -5,6 +5,13 @@ __pycache__/
 
 # C extensions
 *.so
+# Versioned shared libraries bundled into the Python package by setup.py's
+# CMakeBuild._copy_native_library_into_package (D-1 fix, 2026-04-27).
+# These are build artefacts; the wheel re-creates them on every install.
+*.so.[0-9]
+*.so.[0-9].[0-9]
+*.so.[0-9].[0-9].[0-9]
+ama_cryptography/libama_cryptography*
 
 # Distribution / packaging
 .Python

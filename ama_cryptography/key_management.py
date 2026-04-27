@@ -1094,7 +1094,8 @@ class HSMKeyStorage:
         for slot in slots:
             try:
                 info = self.lib.getTokenInfo(slot)
-                if info.label.strip() == token_label:
+                # PKCS#11 token labels are public identifiers, not secret material.
+                if info.label.strip() == token_label:  # nosemgrep: non-constant-time-comparison
                     return slot
             except self.pkcs11.PyKCS11Error:
                 continue
@@ -1335,8 +1336,18 @@ if __name__ == "__main__":
     signing_key, _ = hd.derive_path("m/44'/0'/0'")
     encryption_key, _ = hd.derive_path("m/44'/0'/1'")
 
-    logger.info(f"Signing key:    {signing_key.hex()[:32]}...")
-    logger.info(f"Encryption key: {encryption_key.hex()[:32]}...")
+    # Demo display uses a SHA3-256 fingerprint of each derived key rather
+    # than the key bytes themselves (PR #277, Copilot review #2).  The
+    # previous form printed the first 16 raw bytes (128 bits) of each
+    # 32-byte key — even truncated, that is real key material that a
+    # user copy-pasting the demo into a real environment would persist
+    # to logs / terminal scrollback.  A SHA3-256 fingerprint is one-way,
+    # supports `grep` / log-correlation just as well as a hex prefix,
+    # and reveals nothing about the key value itself.
+    sk_fp = hashlib.sha3_256(signing_key).hexdigest()[:16]
+    ek_fp = hashlib.sha3_256(encryption_key).hexdigest()[:16]
+    logger.info(f"Signing key fingerprint:    sha3-256:{sk_fp}")
+    logger.info(f"Encryption key fingerprint: sha3-256:{ek_fp}")
 
     # Key Rotation
     logger.info("\n2. Key Rotation Management")
@@ -1369,8 +1380,9 @@ if __name__ == "__main__":
     storage.store_key("master-key-001", test_key, metadata={"purpose": "signing"})
     logger.info("✓ Key stored securely")
 
-    # Retrieve key
+    # Retrieve key — demo-only equality check on a freshly-generated key.
     retrieved_key = storage.retrieve_key("master-key-001")
+    # nosemgrep: non-constant-time-comparison
     logger.info(f"✓ Key retrieved: {retrieved_key == test_key}")
 
     logger.info("\n" + "=" * 70)

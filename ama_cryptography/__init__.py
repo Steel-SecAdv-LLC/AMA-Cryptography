@@ -29,10 +29,41 @@ AI Co-Architects:
 """
 
 import importlib as _importlib
+import os as _os
+import sys as _sys
 from typing import TYPE_CHECKING, Any
 
 __version__ = "3.0.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
+
+# Windows DLL search-path registration (Python 3.8+).
+#
+# On Windows, Python's loader for compiled extensions (`.pyd` files) does
+# NOT search the package's own directory for transitive DLL dependencies
+# unless that directory has been registered via ``os.add_dll_directory``.
+# Our Cython binding extensions (sha3_binding, ed25519_binding, etc.)
+# NEEDED-link against ``ama_cryptography.dll`` which the CMake build
+# (D-1, 2026-04-27 audit) bundles next to them in this package's
+# directory.  Without this registration the loader cannot find that DLL
+# and every binding import dies with ``ImportError: DLL load failed``
+# (PR #277 Windows ci.yml regression).
+#
+# `os.add_dll_directory` keeps a handle alive for the process lifetime;
+# we discard it intentionally because the package directory must remain
+# resolvable for as long as ama_cryptography is importable.  Linux and
+# macOS resolve transitive deps via DT_RUNPATH=$ORIGIN baked into each
+# binding extension, so this branch is a no-op there.
+if _sys.platform == "win32":
+    _here = _os.path.dirname(_os.path.abspath(__file__))
+    if _os.path.isdir(_here):
+        try:
+            _os.add_dll_directory(_here)  # type: ignore[attr-defined]  # Windows-only API; mypy on Linux/macOS (where strict CI runs) does not see it (WIN-001)
+        except (OSError, AttributeError):
+            # AttributeError on Python <3.8 (we require >=3.9 so this is
+            # defence in depth); OSError on the rare case the directory
+            # is unreadable.  Either way, fall through and let the
+            # downstream import surface a clear error.
+            pass
 
 # FIPS 140-3 Power-On Self-Tests — run at module import time.
 # Sets module state to OPERATIONAL or ERROR.

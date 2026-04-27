@@ -6,10 +6,21 @@ AMA Cryptography — Global Auto-Documentation System
 =====================================================
 
 Updates documentation targets from source-of-truth data:
-  1. CHANGELOG.md    — new section from git log since last entry
-  2. README.md        — refresh version number and date stamps
-  3. Benchmark docs   — regenerate tables from benchmarks/baseline.json
-  4. wiki/*.md        — update version and date stamps
+  1. CHANGELOG.md   — new section from git log since last entry
+  2. README.md       — refresh version number and date stamps
+  3. Benchmark docs  — regenerate tables from ``benchmark-results.json``
+                       (canonical-host run; the actual measurement output),
+                       cross-checked against ``benchmarks/baseline.json``
+                       for the regression-floor secondary column. Pre-3.0.1
+                       this generator pointed at ``baseline.json`` and so
+                       published the *floors* (~65% of measured) as if they
+                       were headline numbers — the wiki caption reflected
+                       that, calling the table "Regression Baselines".
+                       The published numbers now match what the suite
+                       actually measures on the canonical host; the floor
+                       remains visible as a secondary column so reviewers
+                       see both the headline and the CI safety net.
+  4. wiki/*.md       — update version and date stamps
 
 Usage:
     python tools/update_docs.py                # full update
@@ -19,7 +30,18 @@ Usage:
 
 from __future__ import annotations
 
+# `from __future__ import annotations` (above) makes every annotation in
+# this module a lazy string at parse time, so the PEP 604 ``X | None``
+# syntax used in def signatures below parses fine on Python 3.9 even
+# though that release predates PEP 604's runtime support.  Ruff's UP045
+# rule actively prefers this form across the rest of the project, so
+# downgrading to ``Optional[str]`` would create cross-rule churn (the
+# original PR review suggestion mistakenly flagged this as a 3.9
+# SyntaxError; from __future__ annotations defers evaluation, the
+# parser only needs to recognise the syntax — which it does in 3.9).
+
 import argparse
+import datetime as _dt
 import json
 import re
 import subprocess
@@ -29,6 +51,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CHANGELOG = ROOT / "CHANGELOG.md"
 README = ROOT / "README.md"
+# Source-of-truth split (3.0.0 audit follow-up):
+#   * Headline ops/sec come from the canonical-host *measurement* file
+#     produced by ``benchmarks/benchmark_runner.py --output
+#     benchmark-results.json`` (the same command CI runs — see
+#     ``.github/workflows/ci.yml``'s "Benchmark Regression Detection"
+#     step, which also flows ``benchmark-results.json`` and
+#     ``benchmark-report.md`` through to the workflow artifacts).
+#   * The regression floor (a deliberately-conservative ~65% of measured)
+#     stays in baseline.json and is shown in a secondary column so the
+#     reader can sanity-check that measured >> floor.
+BENCHMARK_RESULTS_JSON = ROOT / "benchmark-results.json"
 BASELINE_JSON = ROOT / "benchmarks" / "baseline.json"
 WIKI_DIR = ROOT / "wiki"
 INIT_PY = ROOT / "ama_cryptography" / "__init__.py"
@@ -263,36 +296,155 @@ def update_readme(dry_run: bool = False) -> bool:
 # ============================================================================
 # 3. Benchmark table generation
 # ============================================================================
+#
+# The auto-generated benchmark table publishes the latest *measured* ops/sec
+# from ``benchmark-results.json`` as the headline number — the canonical-host
+# run that the suite actually produced — and pairs each row with the matching
+# regression floor from ``benchmarks/baseline.json``.  Reviewers see both:
+#   * "Throughput (ops/sec)" — what the host actually measured.
+#   * "Regression floor"     — what CI enforces (deliberately ~65% of
+#                              measured, with `tolerance_percent` headroom).
+#
+# Headline === canonical-host run.  The pre-3.0.1 generator pointed at the
+# floor file and so unintentionally published the safety-net numbers as if
+# they were the canonical figures; that has been corrected here.
+
+
+def _format_iso_date(timestamp: str | None) -> str:
+    """Return ``YYYY-MM-DD`` from an ISO-8601 timestamp, or ``unknown``."""
+    if not timestamp:
+        return "unknown"
+    try:
+        # Python 3.11+ accepts trailing Z directly; we also strip it for safety.
+        normalised = timestamp.replace("Z", "+00:00")
+        return _dt.datetime.fromisoformat(normalised).date().isoformat()
+    except ValueError:
+        return timestamp[:10] if len(timestamp) >= 10 else "unknown"
+
+
+def _baseline_index() -> dict[str, dict]:
+    """Flatten baseline.json into ``{name: entry}`` so per-row lookup is O(1).
+
+    Both the ``benchmarks`` and ``pqc_benchmarks`` blocks contribute.
+    On a name collision the **PQC block wins**, mirroring the runner's
+    own resolution order: ``benchmarks/benchmark_runner.py`` reads each
+    benchmark's config from whichever block holds the matching key, and
+    PQC functions (e.g. ``x25519_scalarmult``) are registered in
+    ``pqc_benchmark_functions`` so the runner pulls their config from
+    ``pqc_benchmarks``.  Mirroring that here ensures
+    ``tools/update_docs.py`` and ``benchmark_runner.py`` agree on the
+    canonical floor for every primitive.
+
+    Devin review #10 caught a 3.0.0-audit-PR regression where a new
+    ``x25519_scalarmult`` entry was added to the ``benchmarks`` block
+    while the existing one in ``pqc_benchmarks`` was left at a stale
+    floor (5,000 ops/sec, ~38 % of measured) — the runner kept reading
+    the stale ``pqc_benchmarks`` entry and the new ``benchmarks`` entry
+    was dead.  That has been fixed (the ``benchmarks`` entry was
+    removed and the ``pqc_benchmarks`` entry re-floored to the
+    measured 13,000 ops/sec).  This implementation tolerates a future
+    ``benchmarks`` ⇄ ``pqc_benchmarks`` overlap by deterministically
+    deferring to the PQC block, but a CI lint check
+    (``check_baseline_justification.py``) would catch the issue at PR
+    review time.
+    """
+    if not BASELINE_JSON.exists():
+        return {}
+    data = json.loads(BASELINE_JSON.read_text())
+    flat: dict[str, dict] = {}
+    flat.update(data.get("benchmarks", {}))
+    flat.update(data.get("pqc_benchmarks", {}))
+    return flat
 
 
 def _generate_benchmark_table() -> str:
-    if not BASELINE_JSON.exists():
+    """Emit the canonical-host throughput table.
+
+    ``benchmark-results.json`` is the source of truth for the headline
+    numbers; if it is missing the function returns an empty string and
+    ``update_benchmark_docs`` prints a remedy rather than silently
+    falling back to the floors (which would re-introduce the bug this
+    refactor fixes).
+    """
+    if not BENCHMARK_RESULTS_JSON.exists():
         return ""
 
-    data = json.loads(BASELINE_JSON.read_text())
-    benchmarks = data.get("benchmarks", {})
-    pqc = data.get("pqc_benchmarks", {})
+    measured = json.loads(BENCHMARK_RESULTS_JSON.read_text())
+    rows = measured.get("results", [])
+    if not rows:
+        return ""
+
+    floor_for = _baseline_index()
+    captured = _format_iso_date(measured.get("timestamp"))
 
     lines = [
-        "| Benchmark | Baseline (ops/sec) | Tolerance | Tier |",
-        "|-----------|-------------------:|----------:|------|",
+        "<!-- "
+        "Throughput numbers below are the canonical-host measurements written "
+        "by `benchmarks/benchmark_runner.py --output benchmark-results.json` "
+        f"(the same command CI runs) on {captured}.  The regression-floor "
+        "column is the value enforced by `benchmarks/baseline.json` (CI "
+        "fails when measured drops more than `tolerance_percent` below "
+        "floor).  Regenerate via `python tools/update_docs.py`. -->",
+        f"_Headline source: `benchmark-results.json` (run {captured}). "
+        "Regression floor: `benchmarks/baseline.json`.  CI fails on "
+        "(measured - tolerance%) < floor — both columns shown so reviewers "
+        "can sanity-check the headroom._",
+        "",
+        "| Benchmark | Throughput (ops/sec) | Regression floor (ops/sec) | Tolerance | Tier |",
+        "|-----------|---------------------:|---------------------------:|----------:|------|",
     ]
 
-    for name, info in {**benchmarks, **pqc}.items():
+    for row in rows:
+        name = row.get("name", "")
         display = name.replace("_", " ").title()
-        baseline = f"{info['baseline_value']:,}"
-        tol = f"±{info['tolerance_percent']}%"
-        tier = info.get("tier", "microbenchmark")
-        optional = " *(optional)*" if info.get("optional") else ""
-        lines.append(f"| {display}{optional} | {baseline} | {tol} | {tier} |")
+        ops = row.get("ops_per_second")
+        if ops is None:
+            measured_cell = "—"
+        elif ops >= 10_000:
+            measured_cell = f"{ops:,.0f}"
+        else:
+            # Sub-10k benchmarks (e.g. PQC sign / verify, full_package_*)
+            # benefit from one decimal place — readers cite these numbers
+            # in marketing copy, so 3,727.6 is more useful than 3,728.
+            measured_cell = f"{ops:,.1f}"
+
+        floor_entry = floor_for.get(name) or {}
+        floor_value = floor_entry.get("baseline_value", row.get("baseline_value"))
+        floor_cell = f"{floor_value:,}" if isinstance(floor_value, (int, float)) else "—"
+
+        tol_value = floor_entry.get("tolerance_percent", row.get("tolerance_percent"))
+        tol_cell = f"±{tol_value}%" if tol_value is not None else "—"
+
+        tier = floor_entry.get("tier", "microbenchmark")
+        optional = " *(optional)*" if row.get("optional") or floor_entry.get("optional") else ""
+
+        lines.append(
+            f"| {display}{optional} | {measured_cell} | {floor_cell} | {tol_cell} | {tier} |"
+        )
 
     return "\n".join(lines)
 
 
 def update_benchmark_docs(dry_run: bool = False) -> bool:
+    if not BENCHMARK_RESULTS_JSON.exists():
+        # Copilot review #8: the canonical producer is benchmark_runner.py
+        # (not validation_suite.py).  CI runs it via the "Benchmark
+        # Regression Detection" job, see .github/workflows/ci.yml.
+        # validation_suite.py is the slow-runner regression-floor
+        # validation harness and writes to a different output file
+        # (benchmarks/validation_results.json) -- not benchmark-results.json.
+        print(
+            "  BENCHMARKS: benchmark-results.json missing — refusing to "
+            "regenerate the auto-table from baseline floors. Re-run\n"
+            "    LD_LIBRARY_PATH=build/lib python3 benchmarks/benchmark_runner.py \\\n"
+            "        --output benchmark-results.json --markdown benchmark-report.md\n"
+            "on the canonical host first."
+        )
+        return False
+
     table = _generate_benchmark_table()
     if not table:
-        print("  BENCHMARKS: no baseline.json found")
+        print("  BENCHMARKS: benchmark-results.json contains no `results` entries")
         return False
 
     changed = False

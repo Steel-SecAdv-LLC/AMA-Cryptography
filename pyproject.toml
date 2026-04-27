@@ -1,10 +1,24 @@
 [build-system]
-# cmake: required to auto-build the native C cryptographic library during
+# Build-time dependencies (PEP 518).  These versions are floors enforced
+# by setup.py's preflight check (D-9).
+#
+# - setuptools >= 70.0.0 (D-8/D-9): older releases — particularly Debian's
+#   patched 68.x — fail bdist_wheel with `AttributeError: install_layout`.
+#   70.0.0 also closes GHSA-cx63-2mw6-8hw5 and 78.1.1 closes PYSEC-2025-49,
+#   so we float to >=78.1.1 to take both fixes.
+# - wheel >= 0.46.2 (D-8): closes GHSA-8rrh-rw8j-w5fx.
+# - cmake: required to auto-build the native C cryptographic library during
 #   `pip install .` — the CMakeBuild command in setup.py invokes cmake.
-# NumPy and Cython are optional — needed only for the math_engine Cython extension.
-# The core cryptographic package installs and works without them.
-# Set AMA_NO_CYTHON=1 to skip Cython extensions entirely.
-requires = ["setuptools>=61.0", "wheel", "cmake>=3.16"]
+# - numpy, Cython: required to build the math_engine extension; failures
+#   here are now FATAL unless AMA_NO_CYTHON=1 (D-4).  Users on pure-Python
+#   environments are still supported via the opt-out env var.
+requires = [
+    "setuptools>=78.1.1",
+    "wheel>=0.46.2",
+    "cmake>=3.16",
+    "Cython>=3.2.4",
+    "numpy>=1.24.0",
+]
 build-backend = "setuptools.build_meta"
 
 [project]
