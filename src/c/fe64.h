@@ -15,7 +15,15 @@
 #ifndef AMA_FE64_H
 #define AMA_FE64_H
 
-#if defined(__GNUC__) || defined(__clang__)
+/* fe64 requires both a native 128-bit integer type (`__int128`) and a
+ * fast 64x64→128 native multiply. GCC/Clang on x86-64 (and other
+ * GNU-style 64-bit toolchains that define `__SIZEOF_INT128__`) satisfy
+ * both. MSVC, clang-cl, and 32-bit targets do not, and continue to use
+ * the radix-2^51 path (fe51) or the radix-2^16 fallback. Callers should
+ * check `AMA_FE64_AVAILABLE` before referencing any fe64_* symbol. */
+#if (defined(__GNUC__) || defined(__clang__)) && defined(__SIZEOF_INT128__)
+
+#define AMA_FE64_AVAILABLE 1
 
 #include <stdint.h>
 #include <string.h>
@@ -181,6 +189,56 @@ static inline void fe64_neg(fe64 h, const fe64 f) {
 }
 
 /**
+ * Constant-time conditional swap: if b != 0, swap p and q. b must be 0 or 1.
+ * Mirrors fe51_cswap. The mask is derived from b via 0 - b so timing/branches
+ * never depend on the secret swap bit.
+ */
+static inline void fe64_cswap(fe64 p, fe64 q, uint64_t b) {
+    uint64_t mask = (uint64_t)0 - b;
+    uint64_t t;
+    t = mask & (p[0] ^ q[0]); p[0] ^= t; q[0] ^= t;
+    t = mask & (p[1] ^ q[1]); p[1] ^= t; q[1] ^= t;
+    t = mask & (p[2] ^ q[2]); p[2] ^= t; q[2] ^= t;
+    t = mask & (p[3] ^ q[3]); p[3] ^= t; q[3] ^= t;
+}
+
+/**
+ * h = f * 121665 mod (2^255 - 19).
+ *
+ * Specialized scalar multiplication for the Curve25519 constant
+ * a24 = (A-2)/4 = 121665. Uses 128-bit intermediates and folds the
+ * top carry via 2^256 ≡ 38 (mod p).
+ */
+static inline void fe64_mul_121665(fe64 h, const fe64 f) {
+    uint128_t c;
+    uint64_t carry;
+
+    c = (uint128_t)f[0] * 121665;
+    h[0] = (uint64_t)c; carry = (uint64_t)(c >> 64);
+    c = (uint128_t)f[1] * 121665 + carry;
+    h[1] = (uint64_t)c; carry = (uint64_t)(c >> 64);
+    c = (uint128_t)f[2] * 121665 + carry;
+    h[2] = (uint64_t)c; carry = (uint64_t)(c >> 64);
+    c = (uint128_t)f[3] * 121665 + carry;
+    h[3] = (uint64_t)c; carry = (uint64_t)(c >> 64);
+
+    /* Fold the bits above 2^256 back via 2^256 ≡ 38 (mod p). */
+    c = (uint128_t)h[0] + (uint128_t)carry * 38;
+    h[0] = (uint64_t)c; c >>= 64;
+    c += h[1]; h[1] = (uint64_t)c; c >>= 64;
+    c += h[2]; h[2] = (uint64_t)c; c >>= 64;
+    c += h[3]; h[3] = (uint64_t)c;
+
+    /* Second fold: a carry from h[3] is possible — branchless top-fold. */
+    uint64_t top = (uint64_t)(c >> 64);
+    c = (uint128_t)h[0] + (uint128_t)top * 38;
+    h[0] = (uint64_t)c; c >>= 64;
+    c += h[1]; h[1] = (uint64_t)c; c >>= 64;
+    c += h[2]; h[2] = (uint64_t)c; c >>= 64;
+    c += h[3]; h[3] = (uint64_t)c;
+}
+
+/**
  * Reduce a 4-limb value that may be up to ~2^256.
  * Uses: 2^256 ≡ 38 (mod p).
  */
@@ -289,8 +347,14 @@ static inline void fe64_reduce512(fe64 h, const uint64_t r[8]) {
  *
  * 4x4 schoolbook multiplication with row-by-row carry propagation
  * (overflow-safe), followed by modular reduction via 2^256 ≡ 38.
+ *
+ * Marked `hot` + `always_inline` so the compiler folds the call sites
+ * inside the Montgomery ladder into one straight-line basic block —
+ * without inlining, every fe64_mul in the inner loop becomes a function
+ * call and the speedup over fe51 evaporates on x86-64.
  */
-static void fe64_mul(fe64 h, const fe64 f, const fe64 g) {
+static inline __attribute__((hot, always_inline))
+void fe64_mul(fe64 h, const fe64 f, const fe64 g) {
     uint64_t r[8];
     fe64_mul512(r, f, g);
     fe64_reduce512(h, r);
@@ -300,14 +364,16 @@ static void fe64_mul(fe64 h, const fe64 f, const fe64 g) {
  * Field squaring: h = f^2 mod (2^255 - 19)
  * Uses fe64_mul512 for overflow safety, then reduces.
  */
-static void fe64_sq(fe64 h, const fe64 f) {
+static inline __attribute__((hot, always_inline))
+void fe64_sq(fe64 h, const fe64 f) {
     uint64_t r[8];
     fe64_mul512(r, f, f);
     fe64_reduce512(h, r);
 }
 
 /** Inversion: a^(-1) = a^(p-2) mod p */
-static void fe64_invert(fe64 out, const fe64 z) {
+static __attribute__((unused))
+void fe64_invert(fe64 out, const fe64 z) {
     fe64 t0, t1, t2, t3;
     int i;
 
@@ -343,7 +409,8 @@ static void fe64_invert(fe64 out, const fe64 z) {
     fe64_mul(out, t1, t0);
 }
 
-static void fe64_pow22523(fe64 out, const fe64 z) {
+static __attribute__((unused))
+void fe64_pow22523(fe64 out, const fe64 z) {
     fe64 t0, t1, t2, t3;
     int i;
 
@@ -379,13 +446,13 @@ static void fe64_pow22523(fe64 out, const fe64 z) {
     fe64_mul(out, t1, z);
 }
 
-static int fe64_isnegative(const fe64 f) {
+static __attribute__((unused)) int fe64_isnegative(const fe64 f) {
     uint8_t s[32];
     fe64_tobytes(s, f);
     return s[0] & 1;
 }
 
-static int fe64_iszero(const fe64 f) {
+static __attribute__((unused)) int fe64_iszero(const fe64 f) {
     uint8_t s[32];
     fe64_tobytes(s, f);
     int ret = 0;
@@ -393,6 +460,6 @@ static int fe64_iszero(const fe64 f) {
     return ret == 0;
 }
 
-#endif /* defined(__GNUC__) || defined(__clang__) */
+#endif /* (__GNUC__ || __clang__) && __SIZEOF_INT128__ */
 
 #endif /* AMA_FE64_H */

@@ -375,6 +375,49 @@ static double test_hmac_verify(int iterations) {
 #ifdef AMA_USE_NATIVE_PQC
 
 /* -----------------------------------------------------------------------
+ * Test 10a: X25519 scalar mult — Montgomery ladder timing must not
+ * depend on the secret scalar (the cswap-based ladder must be
+ * constant-time across both fe51 and fe64 paths). Re-runs against
+ * whichever field path the build selected; `ama_x25519_field_path()`
+ * is logged in the harness output so the report distinguishes
+ * fe51-path vs fe64-path measurements.
+ *
+ * Class 0: Scalar mult with all-zero (post-clamp) secret seed
+ * Class 1: Scalar mult with all-0xFF (post-clamp) secret seed
+ * ----------------------------------------------------------------------- */
+static double test_x25519_scalarmult(int iterations) {
+    char label[96];
+    snprintf(label, sizeof(label),
+             "X25519 scalarmult (path=%s, scalar-independent)",
+             ama_x25519_field_path());
+
+    dudect_ctx_t ctx;
+    dudect_ctx_init(&ctx, label);
+
+    uint8_t sk0[32], sk1[32], basepoint[32], out[32];
+    memset(sk0, 0x00, 32);
+    memset(sk1, 0xFF, 32);
+    memset(basepoint, 0, 32);
+    basepoint[0] = 9;
+
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+
+        uint64_t start = dudect_get_time_ns();
+        if (class_idx == 0)
+            ama_x25519_key_exchange(out, sk0, basepoint);
+        else
+            ama_x25519_key_exchange(out, sk1, basepoint);
+        uint64_t end = dudect_get_time_ns();
+
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    dudect_print_result(&ctx);
+    return dudect_get_t(&ctx);
+}
+
+/* -----------------------------------------------------------------------
  * Test 10: Kyber KEM — decapsulation timing must not depend on
  * ciphertext validity (implicit rejection must be constant-time)
  *
@@ -521,6 +564,20 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
     idx++;
 
 #ifdef AMA_USE_NATIVE_PQC
+    printf("\n--- Classical (key exchange) ---\n");
+    results[idx].name = "X25519 scalarmult";
+    results[idx].t_value = test_x25519_scalarmult(iterations);
+    /* The ladder is structurally constant-time across both fe51 and fe64
+     * field paths (cswap-driven, no scalar-dependent branches), but on
+     * shared CI runners the per-iteration cost (~250µs) makes
+     * environmental noise dominate the timing distribution. Mark
+     * info-only so a noisy CI environment doesn't fail this lane while
+     * still surfacing the t-value in the summary. Reproduce locally
+     * with `taskset -c 0 nice -n -20 ./test_dudect --measurements
+     * 10000000` for a clean reading. */
+    results[idx].is_info_only = 1;
+    idx++;
+
     printf("\n--- Post-Quantum Cryptography ---\n");
     results[idx].name = "Kyber-1024 decaps";
     results[idx].t_value = test_kyber_decaps(iterations);

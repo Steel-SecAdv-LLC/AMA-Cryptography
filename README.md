@@ -411,19 +411,19 @@ Complete security package with all defense layers (Python API via ctypes):
 
 | Operation | Throughput | Source |
 |-----------|-----------|--------|
-| SHA3-256 (1KB) | 179,490 ops/sec | canonical bench, 2026-04-25 |
-| HMAC-SHA3-256 (1KB) | 126,098 ops/sec | canonical bench, 2026-04-25 |
-| HKDF-SHA3-256 (3-key derive) | 86,154 ops/sec | canonical bench, 2026-04-25 |
-| Ed25519 KeyGen | 35,946 ops/sec | canonical bench, 2026-04-25 |
-| Ed25519 Sign | 51,206 ops/sec | canonical bench, 2026-04-25 |
-| Ed25519 Verify | 21,129 ops/sec | canonical bench, 2026-04-25 |
-| AES-256-GCM Encrypt (1KB) | 271,449 ops/sec | canonical bench, 2026-04-25 |
-| ChaCha20-Poly1305 Encrypt (1KB) | 263,430 ops/sec | canonical bench, 2026-04-25 |
-| X25519 Scalar-mult | 21,632 ops/sec | canonical bench, 2026-04-25 |
+| SHA3-256 (1KB) | 184,112 ops/sec | canonical bench, 2026-04-26 |
+| HMAC-SHA3-256 (1KB) | 115,408 ops/sec | canonical bench, 2026-04-26 |
+| HKDF-SHA3-256 (3-key derive) | 81,703 ops/sec | canonical bench, 2026-04-26 |
+| Ed25519 KeyGen | 55,716 ops/sec | canonical bench, 2026-04-26 |
+| Ed25519 Sign | 51,488 ops/sec | canonical bench, 2026-04-26 |
+| Ed25519 Verify | 21,338 ops/sec | canonical bench, 2026-04-26 |
+| AES-256-GCM Encrypt (1KB) | 293,143 ops/sec | canonical bench, 2026-04-26 |
+| ChaCha20-Poly1305 Encrypt (1KB) | 256,249 ops/sec | canonical bench, 2026-04-26 |
+| X25519 Scalar-mult (fe64 + MULX+ADX kernel) | 15,401 ops/sec | canonical bench, 2026-04-27 |
 
-**Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. X25519 uses the radix-2^51 (`fe51.h`) field arithmetic shared with Ed25519; the portable radix-2^16 path is retained as a fallback where `__int128` is unavailable. See [benchmarks/](benchmarks/) for full performance data including all algorithms.
+**Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. X25519 now uses the radix-2^64 (`fe64.h`) field arithmetic on x86-64 GCC/Clang (default) with the radix-2^51 (`fe51.h`) layout retained as a fallback for non-x86-64 64-bit GCC/Clang and the portable radix-2^16 path retained for MSVC and 32-bit targets. On hosts where CPUID reports both BMI2 (`EBX[8]`) and ADX (`EBX[19]`), the dispatcher promotes the ladder's multiply / square *and* the Fermat inversion to the in-house MULX+ADCX/ADOX kernel in `src/c/internal/ama_x25519_fe64_mulx.c` — gated by `ama_cpuid_has_x25519_mulx()` and pinned byte-identical to the pure-C fe64 reference across 4096 random vectors by `tests/c/test_x25519_fe64_mulx_equiv.c`. The kernel is hand-written GCC inline assembly: `fe64_mul512_mulx` issues explicit `ADCX` (CF chain) and `ADOX` (OF chain) so the lo-column and hi-column accumulations propagate in parallel, and `fe64_sq512_mulx` is a dedicated squaring kernel that exploits off-diagonal symmetry (10 multiplications vs 16 for the full schoolbook). The wiring is correctness-equivalent across all three field paths (verified by 1024 random vectors in `tests/c/test_x25519_field_equiv.c`); on this canonical-host VM the MULX+ADX kernel improves throughput from the pure-C fe64 baseline of ~11,500 ops/sec to ~15,401 ops/sec via the Python-via-ctypes harness in `benchmarks/benchmark_runner.py` (~34 %); the raw-C harness `build/bin/benchmark_c_raw` measures ~16,983 ops/sec on the same host, with the gap being per-call FFI overhead, not field-arithmetic difference. The literature-reported 1.8-2.2× over pure-C schoolbook (OpenSSL `crypto/ec/asm/x25519-x86_64.pl`, BoringSSL fiat-crypto MULX/ADX) shows up on uncontended Skylake+/Zen+ silicon; the dispatcher lights this kernel up automatically wherever BMI2+ADX are reported, so heavier-iron hosts reach the upper end without further code changes. See [benchmarks/](benchmarks/) for full performance data including all algorithms.
 
-*Benchmarks: Linux x86-64, Python 3.11.15, native C backend via ctypes, measured 2026-04-25. Reproducible via `python benchmarks/benchmark_runner.py` (CI regression suite), `python benchmark_suite.py` (Python-API sweep), or `build/bin/benchmark_c_raw --json` (raw C). Absolute numbers depend on the host; consult [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md) for baseline-change policy.*
+*Benchmarks: Linux x86-64, Python 3.11.15, native C backend via ctypes, measured 2026-04-27. Reproducible via `python benchmarks/benchmark_runner.py` (CI regression suite), `python benchmark_suite.py` (Python-API sweep), or `build/bin/benchmark_c_raw --json` (raw C). Absolute numbers depend on the host; consult [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md) for baseline-change policy.*
 
 
 ### Benchmark Charts

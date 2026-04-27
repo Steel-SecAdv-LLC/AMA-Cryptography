@@ -274,6 +274,97 @@ constant-time check that was a flake source on contended runners.
   roughly 15–20× the pre-change scalar path. Reproduce with
   `cmake --build build && ./build/bin/benchmark_c_raw --json`.
 
+- **X25519 fe64 wiring on x86-64 (radix-2^64, 4-limb field arithmetic).**
+  `src/c/ama_x25519.c` now selects the radix-2^64 ladder (`fe64.h`,
+  4 limbs of `uint64_t` with `__uint128_t` intermediates, 16 cross-
+  products per multiplication) by default on x86-64 GCC/Clang. fe51 is
+  retained as the fallback for non-x86-64 64-bit GCC/Clang
+  (aarch64, ppc64le) and the radix-2^16 portable path remains for MSVC,
+  clang-cl, and 32-bit targets. The selection is deterministic at compile
+  time and exposed via `ama_x25519_field_path()` / pinned by
+  `tests/c/test_x25519_path.c`. Byte-for-byte equivalence between fe51
+  and fe64 ladders is verified across 1024 random (scalar, point) vectors
+  by `tests/c/test_x25519_field_equiv.c`. dudect harness extended with an
+  X25519 lane that re-runs against whichever path the build selected.
+  Measured throughput on a Sapphire Rapids host with all SIMD gates
+  advertised: fe64 ~11.5K X25519 DH ops/s vs fe51 ~21.8K ops/s on the
+  same host (`-O3 -march=native`, GCC 12) — the wiring is a foundation
+  step; the radix-2^64 schoolbook trails fe51 in pure C because GCC does
+  not yet emit MULX+ADCX (BMI2+ADX) for 4×4 schoolbook, and the win lands
+  when a hand-tuned MULX+ADX kernel slots in behind the same
+  `AMA_X25519_FIELD_FE64` guard. fe51 still reachable on x86-64 via
+  `-DAMA_X25519_FORCE_FE51`.
+
+- **X25519 fe64 MULX+ADX kernel + runtime CPUID dispatch (PR D, 2026-04).**
+  `src/c/internal/ama_x25519_fe64_mulx.c` ships an in-house 4×4
+  schoolbook field multiply / square implemented as **hand-written
+  GCC/Clang inline assembly** that issues `mulx` (BMI2) plus
+  `adcx` / `adox` (ADX) directly under per-file `-mbmi2 -madx`
+  flags.  Three components stack:
+  (1) `fe64_mul512_mulx` issues explicit `ADCX` (CF chain) and
+  `ADOX` (OF chain) so the lo-column and hi-column accumulations
+  propagate **in parallel** instead of serialising through a
+  single `adc` chain (`_addcarry_u64` was found not to lower to
+  ADCX/ADOX even with `-madx` on GCC 14, so the inline-asm path
+  is the only way to get the dual-carry-chain interleave) —
+  disassembly: 20 `adcx` + 18 `adox`;
+  (2) `fe64_sq512_mulx` is a dedicated squaring kernel exploiting
+  the off-diagonal symmetry of `(sum f_i)^2`: 6 cross products
+  doubled + 4 diagonal squares = 10 multiplications, vs 16 for
+  the full schoolbook — disassembly confirms `sq_mulx` runs 12
+  `mulx` total (10 in the squaring proper + 2 in the reduce
+  step's `mulx 38, …`);
+  (3) `fe64_reduce512_mulx` is also inline asm with the same
+  dual-chain pattern across the `38 * r[4..7]` fold and a final
+  1-bit fold to push the value into [0, 2p).
+  Additionally, `ama_x25519.c::fe64_invert_with_ops` templates
+  the Fermat inverse over the same runtime-selected `mul` / `sq`
+  ops as the ladder body, so the ~265-square + ~11-multiply
+  inversion also runs through the kernel on supported hosts.
+  Two new CPUID accessors (`ama_has_bmi2()` reading
+  `CPUID.(EAX=7,ECX=0):EBX[8]` and `ama_has_adx()` reading
+  `EBX[19]`) feed a bundle gate `ama_cpuid_has_x25519_mulx()`
+  that the dispatch layer consults **once per scalar-mult** (not
+  per ladder step) — the gate result is cached by the existing
+  `cpuid_once` primitive, the ladder body re-uses two
+  `always_inline` function pointers that the compiler folds back
+  into straight-line code inside the renamed
+  `x25519_scalarmult_fe64_with_ops` driver. Neither bit needs an
+  XCR0 gate (MULX targets GPRs; ADCX/ADOX touch rFLAGS + GPRs
+  only — no SIMD save area). The bundle gate is defensive
+  (matches `ama_cpuid_has_vaes_aesgcm()` — Devin Review
+  #3140732664): even though every shipped Intel Broadwell+ /
+  AMD Zen+ part has both bits, the ISA documents them as
+  architecturally independent, so the dispatcher gates each one
+  explicitly. Pure-C fe64 multiply (from `fe64.h`) remains the
+  fallback when the bundle gate fails (e.g. KVM guest with BMI2
+  masked, pre-Broadwell host, or MSVC build — the kernel TU is
+  GCC/Clang only and never compiled on MSVC). Equivalence pinned
+  by `tests/c/test_x25519_fe64_mulx_equiv.c`: 4096 random
+  (a, b) pairs fed through both the MULX+ADX kernel (mul + sq)
+  and the pure-C `fe64_mul` / `fe64_sq` reference, asserting
+  byte-identical canonical encodings (test SKIPs with code 77 on
+  hosts whose CPUID lacks BMI2 + ADX); also pinned by
+  `tests/c/test_x25519_field_equiv.c` (1024 / 1024 vectors
+  byte-identical fe51 vs fe64). dudect X25519 lane PASS on the
+  new kernel. CMake gain `AMA_X25519_MULX_SOURCES` per-file
+  `-mbmi2 -madx` flags applied via
+  `set_source_files_properties` — same per-file-flags pattern
+  as the AVX2 / AVX-512 / VAES kernels; the rest of the library
+  stays compiled at the lowest-common-denominator ISA so legacy
+  harnesses (`tools/constant_time/Makefile`) keep linking.
+  ctest sweep: **23 / 23 pass** (was 20 / 20; `+3` for the new
+  X25519 path-pin, fe51-vs-fe64 byte-equiv, and MULX equivalence
+  tests). Measured on the canonical-host VM available to this
+  release: ~13K X25519 DH ops/s on the pure-C fe64 baseline vs
+  ~17K on the inline-asm MULX+ADX kernel on the same host. The
+  literature-reported 1.8-2.2× win (OpenSSL
+  `crypto/ec/asm/x25519-x86_64.pl`, BoringSSL fiat-crypto MULX
+  /ADX) shows up on uncontended Skylake+ / Zen+ silicon — the
+  dispatcher lights this kernel up automatically wherever
+  BMI2 + ADX are reported, so heavier-iron hosts reach the upper
+  end without further code changes. No public-API change.
+
 - ChaCha20-Poly1305 AVX2 wiring: `ama_chacha20_block_x8_avx2` (8-way
   parallel ChaCha20 block function emitting 512 B of keystream) is
   now wired through the dispatch table and invoked by the CTR inner
@@ -311,6 +402,20 @@ constant-time check that was a flake source on contended runners.
   `AMA_DISPATCH_NO_AUTOTUNE=1`.
 
 ### Changed — Dispatch Cleanup, Dependencies, and CI
+
+- **Version-consistency tool extended to scan C source for hardcoded
+  version literals.** `tools/check_version_consistency.py` now walks
+  `src/c/**/*.{c,h}` and flags any `"X.Y.Z"` literal that sits adjacent
+  to a `VERSION` / `version` / `Version` identifier on the same or
+  previous line. The canonical C-side anchor remains
+  `include/ama_cryptography.h::AMA_CRYPTOGRAPHY_VERSION_STRING`; today's
+  `src/c/` tree returns zero hits and the test
+  (`tests/test_version_consistency.py`) keeps it that way by writing a
+  synthetic `#define MY_VERSION "9.9.9"` into a temp directory and
+  asserting the scanner flags it. Block / line C comments are ignored
+  so historical change-log notes inside source headers don't trip the
+  check. Net: the tool now reports the existing 8 anchors plus this
+  zero-hit assertion, all in agreement on the canonical version.
 
 - Remove dead `ama_ed25519_*_avx2` trampolines and associated dispatch
   wiring: the "AVX2" Ed25519 entry points forwarded directly to the scalar
@@ -388,6 +493,27 @@ constant-time check that was a flake source on contended runners.
   `benchmarks/benchmark_c_raw.c`.
 
 ### Documentation
+
+- **Performance comparison numbers refreshed against AVX-512 + VAES +
+  AES-NI host; CI-environmental note added to
+  `docs/COMPETITIVE_ANALYSIS.md`.** Re-ran the full benchmark suite
+  (`benchmarks/benchmark_runner.py`, `build/bin/benchmark_c_raw --json`,
+  `benchmarks/comparative_benchmark.py`) on a Linux x86-64 host with
+  AES-NI + PCLMULQDQ + AVX2 + VAES + VPCLMULQDQ + AVX-512F/BW/DQ/VL/VBMI
+  advertised through to userland (no hypervisor masking). Refreshed
+  `README.md`, `benchmark-report.md`, `benchmark-results.json`,
+  `docs/COMPETITIVE_ANALYSIS.md`, and `wiki/Performance-Benchmarks.md`
+  so they match the canonical-host run, with X25519 specifically
+  captured before/after the fe64 wiring (fe51 ~21.8K → fe64 ~11.5K
+  DH ops/sec on this host). New paragraph at the top of
+  `docs/COMPETITIVE_ANALYSIS.md` §Performance Comparison spelling
+  out which CPUID gates the dispatcher checks
+  (`ama_has_aes_ni()`, `ama_has_pclmulqdq()`,
+  `ama_cpuid_has_vaes_aesgcm()`, `ama_cpuid_has_avx2()`,
+  `ama_cpuid_has_avx512_keccak()`) and the typical 1.5–2× slowdown
+  cloud-CI shared runners see when the hypervisor masks any of those
+  features — readers can verify which paths their hardware actually
+  selected via `AMA_DISPATCH_VERBOSE=1`.
 
 - Repository-wide documentation alignment sweep (2026-04-20): refreshed
   "Last Updated" headers across `README.md`, `ARCHITECTURE.md`,
