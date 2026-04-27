@@ -39,10 +39,13 @@ COPY . .
 
 # Build C library. CC=gcc-12 / CXX=g++-12 satisfies the INVARIANT-8
 # toolchain check in CMakeLists.txt:103 — see the apt-get block for
-# the reasoning. AMA_USE_NATIVE_PQC=ON is required because the image
-# deliberately does NOT install libssl-dev (INVARIANT-1); without it
-# the build pulls in the non-native PQC path that depends on OpenSSL
-# and fails at link time.
+# the reasoning. AMA_USE_NATIVE_PQC=ON is set explicitly to lock in
+# the native PQC sources (ML-KEM / ML-DSA / SPHINCS+) for this image;
+# the flag controls only which PQC sources are compiled, NOT any
+# OpenSSL link dependency. The image omits libssl-dev because AMA's C
+# sources do not link against OpenSSL at all (INVARIANT-1) — CMake
+# discovers OpenSSL `QUIET` for downstream consumers but AMA itself
+# never references it.
 RUN mkdir -p build && cd build && \
     CC=gcc-12 CXX=g++-12 cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
