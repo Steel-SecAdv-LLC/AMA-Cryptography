@@ -12,6 +12,8 @@ RUN apk add --no-cache \
     openssl-dev \
     python3-dev \
     py3-pip \
+    py3-setuptools \
+    py3-wheel \
     git
 
 WORKDIR /build
@@ -27,7 +29,14 @@ RUN mkdir build && cd build && \
         -DAMA_ENABLE_AVX2=OFF && \
     cmake --build . -j$(nproc)
 
-RUN python3 setup.py bdist_wheel
+# Modern wheel build: `pip wheel` is the supported replacement for the
+# deprecated `python3 setup.py bdist_wheel` invocation, which newer
+# setuptools versions (>=70) refuse to run. --no-deps avoids re-pulling
+# all install_requires into dist/ (we only want the package's own wheel);
+# --no-build-isolation reuses the venv that pip already populated above
+# rather than spinning up a separate PEP 517 isolated env.
+RUN pip3 install --no-cache-dir build && \
+    pip3 wheel . --no-deps --no-build-isolation -w dist/
 
 FROM alpine:3.18
 
