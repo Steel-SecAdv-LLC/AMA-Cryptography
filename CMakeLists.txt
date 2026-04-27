@@ -218,6 +218,7 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
             src/c/avx2/ama_aes_gcm_vaes_avx2.c
             src/c/avx2/ama_chacha20poly1305_avx2.c
             src/c/avx2/ama_argon2_avx2.c
+            src/c/avx2/ama_x25519_avx2.c
         )
         if(NOT MSVC)
             set_source_files_properties(${AMA_AVX2_SOURCES} PROPERTIES
