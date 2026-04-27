@@ -32,6 +32,14 @@ COPY . .
 # image deliberately does NOT install libssl-dev (INVARIANT-1, see
 # the apt-get block above). Without it the build pulls in the
 # non-native PQC path that depends on OpenSSL and fails at link time.
+#
+# AMA_ENABLE_LTO=OFF: Ubuntu 22.04 ships gcc-11 whose LTO plugin has
+# repeatable link-time crashes (segfault / "internal compiler error")
+# when the donna single-translation-unit shim is compiled together
+# with the native PQC archives at -O3. The non-LTO build is byte-
+# correct (cross-checked against KAT vectors); LTO only buys ~3-5%
+# on the affected codepaths. Re-enable once the base image moves to
+# 24.04 / gcc-13 or the donna path is split into its own object.
 RUN mkdir -p build && cd build && \
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
@@ -41,7 +49,7 @@ RUN mkdir -p build && cd build && \
         -DAMA_BUILD_TESTS=OFF \
         -DAMA_BUILD_EXAMPLES=OFF \
         -DAMA_ENABLE_AVX2=OFF \
-        -DAMA_ENABLE_LTO=ON && \
+        -DAMA_ENABLE_LTO=OFF && \
     cmake --build . --config Release -j$(nproc)
 
 # Build Python package (modern PEP 517 build)
