@@ -90,7 +90,10 @@ class TestX25519Batch:
         # review on PR #273.
         pk, _sk = pq.native_x25519_keypair()
         with pytest.raises(ValueError, match=r"scalar at index 0 must be 32 bytes"):
-            pq.native_x25519_scalarmult_batch([b"\x00" * 16, b"\x11" * 48], [bytes(pk), bytes(pk)])
+            pq.native_x25519_scalarmult_batch(
+                [b"\x00" * 16, b"\x11" * 48],
+                [bytes(pk), bytes(pk)],
+            )
 
     def test_non_bytes_scalar_raises(self) -> None:
         # `int` (or any non-bytes-like) scalar should fail the per-element
@@ -114,7 +117,9 @@ class TestX25519Batch:
             their_pk, _their_sk = pq.native_x25519_keypair()
             scalars.append(bytes(our_sk))
             points.append(bytes(their_pk))
-            expected.append(pq.native_x25519_key_exchange(bytes(our_sk), bytes(their_pk)))
+            expected.append(
+                pq.native_x25519_key_exchange(bytes(our_sk), bytes(their_pk))
+            )
         got = pq.native_x25519_scalarmult_batch(scalars, points)
         assert got == expected, "batch must be byte-identical to sequential single-shot"
 

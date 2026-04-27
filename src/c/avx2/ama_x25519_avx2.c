@@ -654,6 +654,23 @@ void ama_x25519_scalarmult_x4_avx2(uint8_t out[4][32],
      * struct covers them all and is trivial to extend the next time a
      * helper-temporary lands in this function. */
     ama_secure_memzero(&s, sizeof(s));
+
+    /* Issue VZEROUPPER before returning so the caller resumes in the
+     * baseline (SSE / scalar) execution mode without paying the
+     * AVX-SSE transition penalty on subsequent non-VEX-encoded
+     * instructions.  Without this, the upper 128 bits of every YMM
+     * register stay live, and the CPU's dynamic frequency licensing
+     * keeps the core in the AVX2 frequency domain for ~675 µs after
+     * the last YMM access.  In a CI dudect lane that runs this kernel
+     * once and then immediately measures `ama_consttime_memcmp` in
+     * tight 100k-iteration loops, that residual frequency
+     * destabilisation contaminates the t-statistic — the ladder
+     * itself measures clean (t = +0.40..+0.75 across rounds) but the
+     * subsequent strict utility lane sees t = +11..+17 because the
+     * core is still drifting between AVX2 and base frequency.
+     * VZEROUPPER explicitly tells the licensing logic the AVX2 epoch
+     * is over so the core returns to baseline immediately. */
+    _mm256_zeroupper();
 }
 
 #else
