@@ -2,6 +2,24 @@
 	Public domain by Andrew M. <liquidsun@gmail.com>
 */
 
+/*
+	D-10 (Steel Security Advisors LLC, 2026-04-27): the duff's-device-style
+	switch fallthroughs below are intentional (they implement variable-limb
+	subtraction).  Annotate them so -Wimplicit-fallthrough does not fire on
+	GCC >= 7 / Clang >= 12.  We do not edit the original donna logic.
+*/
+#if defined(__has_attribute)
+#  if __has_attribute(fallthrough)
+#    define AMA_DONNA_FALLTHROUGH __attribute__((fallthrough))
+#  endif
+#endif
+#ifndef AMA_DONNA_FALLTHROUGH
+#  if defined(__GNUC__) && __GNUC__ >= 7
+#    define AMA_DONNA_FALLTHROUGH __attribute__((fallthrough))
+#  else
+#    define AMA_DONNA_FALLTHROUGH ((void)0)
+#  endif
+#endif
 
 /*
 	Arithmetic modulo the group order n = 2^252 +  27742317777372353535851937790883648493 = 7237005577332262213973186563042994240857116359379907606001950938285454250989
@@ -289,11 +307,11 @@ sub256_modm_batch(bignum256modm out, const bignum256modm a, const bignum256modm 
 	size_t i = 0;
 	bignum256modm_element_t carry = 0;
 	switch (limbsize) {
-		case 4: out[i] = (a[i] - b[i])        ; carry = (out[i] >> 63); out[i] &= 0xffffffffffffff; i++;
-		case 3: out[i] = (a[i] - b[i]) - carry; carry = (out[i] >> 63); out[i] &= 0xffffffffffffff; i++;
-		case 2: out[i] = (a[i] - b[i]) - carry; carry = (out[i] >> 63); out[i] &= 0xffffffffffffff; i++;
-		case 1: out[i] = (a[i] - b[i]) - carry; carry = (out[i] >> 63); out[i] &= 0xffffffffffffff; i++;
-		case 0: 
+		case 4: out[i] = (a[i] - b[i])        ; carry = (out[i] >> 63); out[i] &= 0xffffffffffffff; i++; AMA_DONNA_FALLTHROUGH;
+		case 3: out[i] = (a[i] - b[i]) - carry; carry = (out[i] >> 63); out[i] &= 0xffffffffffffff; i++; AMA_DONNA_FALLTHROUGH;
+		case 2: out[i] = (a[i] - b[i]) - carry; carry = (out[i] >> 63); out[i] &= 0xffffffffffffff; i++; AMA_DONNA_FALLTHROUGH;
+		case 1: out[i] = (a[i] - b[i]) - carry; carry = (out[i] >> 63); out[i] &= 0xffffffffffffff; i++; AMA_DONNA_FALLTHROUGH;
+		case 0: AMA_DONNA_FALLTHROUGH;
 		default: out[i] = (a[i] - b[i]) - carry;
 	}
 }
@@ -305,10 +323,10 @@ lt256_modm_batch(const bignum256modm a, const bignum256modm b, size_t limbsize) 
 	size_t i = 0;
 	bignum256modm_element_t t, carry = 0;
 	switch (limbsize) {
-		case 4: t = (a[i] - b[i])        ; carry = (t >> 63); i++;
-		case 3: t = (a[i] - b[i]) - carry; carry = (t >> 63); i++;
-		case 2: t = (a[i] - b[i]) - carry; carry = (t >> 63); i++;
-		case 1: t = (a[i] - b[i]) - carry; carry = (t >> 63); i++;
+		case 4: t = (a[i] - b[i])        ; carry = (t >> 63); i++; AMA_DONNA_FALLTHROUGH;
+		case 3: t = (a[i] - b[i]) - carry; carry = (t >> 63); i++; AMA_DONNA_FALLTHROUGH;
+		case 2: t = (a[i] - b[i]) - carry; carry = (t >> 63); i++; AMA_DONNA_FALLTHROUGH;
+		case 1: t = (a[i] - b[i]) - carry; carry = (t >> 63); i++; AMA_DONNA_FALLTHROUGH;
 		case 0: t = (a[i] - b[i]) - carry; carry = (t >> 63);
 	}
 	return (int)carry;
@@ -320,10 +338,10 @@ lte256_modm_batch(const bignum256modm a, const bignum256modm b, size_t limbsize)
 	size_t i = 0;
 	bignum256modm_element_t t, carry = 0;
 	switch (limbsize) {
-		case 4: t = (b[i] - a[i])        ; carry = (t >> 63); i++;
-		case 3: t = (b[i] - a[i]) - carry; carry = (t >> 63); i++;
-		case 2: t = (b[i] - a[i]) - carry; carry = (t >> 63); i++;
-		case 1: t = (b[i] - a[i]) - carry; carry = (t >> 63); i++;
+		case 4: t = (b[i] - a[i])        ; carry = (t >> 63); i++; AMA_DONNA_FALLTHROUGH;
+		case 3: t = (b[i] - a[i]) - carry; carry = (t >> 63); i++; AMA_DONNA_FALLTHROUGH;
+		case 2: t = (b[i] - a[i]) - carry; carry = (t >> 63); i++; AMA_DONNA_FALLTHROUGH;
+		case 1: t = (b[i] - a[i]) - carry; carry = (t >> 63); i++; AMA_DONNA_FALLTHROUGH;
 		case 0: t = (b[i] - a[i]) - carry; carry = (t >> 63);
 	}
 	return (int)!carry;

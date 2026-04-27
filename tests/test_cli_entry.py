@@ -69,6 +69,22 @@ def test_main_module_subprocess(tmp_path: Path) -> None:
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("PYTHONUTF8", "1")
+
+    # D-2: propagate the parent's resolved package location to the child via
+    # PYTHONPATH so this test passes whether the package was installed
+    # (`pip install .`) or is being exercised straight from a source
+    # checkout.  Without this the subprocess starts in tmp_path with no
+    # path entry pointing at the in-tree ama_cryptography/, and dies with
+    # `No module named ama_cryptography` — looking like a real CLI defect
+    # when the only thing missing was a developer install step.
+    import ama_cryptography as _ama  # already importable in the parent
+
+    pkg_parent = str(Path(_ama.__file__).resolve().parent.parent)
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        pkg_parent + os.pathsep + existing_pythonpath if existing_pythonpath else pkg_parent
+    )
+
     proc = subprocess.run(
         [sys.executable, "-m", "ama_cryptography"],
         capture_output=True,

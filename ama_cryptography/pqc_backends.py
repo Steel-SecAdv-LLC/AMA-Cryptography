@@ -130,10 +130,19 @@ def _get_search_dirs() -> list:
     """Build the list of directories to search for the native library."""
     search_dirs: list = []
 
-    # Project build directories (relative to this file's package)
-    pkg_dir = Path(__file__).resolve().parent.parent
+    # D-1 (2026-04-27 audit): the installed wheel ships
+    # libama_cryptography.so* alongside the Python module itself (set up by
+    # CMakeBuild._copy_native_library_into_package in setup.py).  Search the
+    # module's own directory FIRST so a `pip install`ed package never
+    # depends on LD_LIBRARY_PATH or a leftover ./build/ tree.
+    module_dir = Path(__file__).resolve().parent
+    search_dirs.append(module_dir)
+
+    # In-tree development tree builds (build/, build/python-cmake/, etc.)
+    pkg_dir = module_dir.parent
     build_dirs = [
         "build/lib",
+        "build/python-cmake/lib",  # D-3: setup.py's isolated CMake build dir
         "build",
         "build/bin",  # MSVC puts DLLs in runtime output dir
         "build/bin/Release",

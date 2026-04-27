@@ -108,6 +108,22 @@
       "tolerance_percent": 35,
       "tier": "microbenchmark"
     },
+    "x25519_scalarmult": {
+      "description": "X25519 single-shot Diffie-Hellman scalar-mult (native C, default dispatch). Backed by fe64 (radix-2^64, MULX/ADX) on x86-64 hosts with BMI2+ADX, fe51 (radix-2^51) on hosts without, and gf16 on aarch64. The AVX2 4-way kernel is OPT-IN via AMA_DISPATCH_USE_X25519_AVX2=1 and is intentionally not faster than scalar fe64 on MULX/ADX hosts — see src/c/dispatch/ama_dispatch.c:478-502 and tests/test_x25519_dispatch_policy.py for the dispatch contract.",
+      "metric": "operations_per_second",
+      "baseline_value": 13000,
+      "unit": "ops/sec",
+      "tolerance_percent": 40,
+      "tier": "microbenchmark"
+    },
+    "x25519_scalarmult_batch4": {
+      "description": "X25519 batch-4 Diffie-Hellman under default dispatch (4 sequential scalar ladders). Per-op latency should track x25519_scalarmult to within ~5% — a wider gap typically means the AVX2 4-way kernel was accidentally selected as the default, which is a regression on MULX/ADX hosts (PR #273 design note).",
+      "metric": "operations_per_second",
+      "baseline_value": 12500,
+      "unit": "ops/sec",
+      "tolerance_percent": 40,
+      "tier": "microbenchmark"
+    },
     "full_package_create": {
       "description": "Complete crypto package creation (with PQC)",
       "metric": "operations_per_second",

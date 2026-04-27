@@ -1094,7 +1094,8 @@ class HSMKeyStorage:
         for slot in slots:
             try:
                 info = self.lib.getTokenInfo(slot)
-                if info.label.strip() == token_label:
+                # PKCS#11 token labels are public identifiers, not secret material.
+                if info.label.strip() == token_label:  # nosemgrep: non-constant-time-comparison
                     return slot
             except self.pkcs11.PyKCS11Error:
                 continue
@@ -1335,8 +1336,11 @@ if __name__ == "__main__":
     signing_key, _ = hd.derive_path("m/44'/0'/0'")
     encryption_key, _ = hd.derive_path("m/44'/0'/1'")
 
-    logger.info(f"Signing key:    {signing_key.hex()[:32]}...")
-    logger.info(f"Encryption key: {encryption_key.hex()[:32]}...")
+    # Intentional demo: shows derived-key fingerprint (first 16 bytes of a
+    # demo HD-derived key seeded inside this __main__ block). Not production
+    # code; never reached during library-as-import use.
+    logger.info(f"Signing key:    {signing_key.hex()[:32]}...")  # nosemgrep: private-key-logging
+    logger.info(f"Encryption key: {encryption_key.hex()[:32]}...")  # nosemgrep: private-key-logging
 
     # Key Rotation
     logger.info("\n2. Key Rotation Management")
@@ -1369,8 +1373,9 @@ if __name__ == "__main__":
     storage.store_key("master-key-001", test_key, metadata={"purpose": "signing"})
     logger.info("✓ Key stored securely")
 
-    # Retrieve key
+    # Retrieve key — demo-only equality check on a freshly-generated key.
     retrieved_key = storage.retrieve_key("master-key-001")
+    # nosemgrep: non-constant-time-comparison
     logger.info(f"✓ Key retrieved: {retrieved_key == test_key}")
 
     logger.info("\n" + "=" * 70)
