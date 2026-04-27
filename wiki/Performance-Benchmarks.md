@@ -262,22 +262,22 @@ Results are saved to `benchmark_results.json`, `BENCHMARKS.md`, and `benchmarks/
 <!-- AUTO-BENCHMARK-TABLE-START -->
 | Benchmark | Baseline (ops/sec) | Tolerance | Tier |
 |-----------|-------------------:|----------:|------|
-| Ama Sha3 256 Hash | 113,388 | ±35% | microbenchmark |
-| Hmac Sha3 256 | 76,215 | ±40% | microbenchmark |
+| Ama Sha3 256 Hash | 31,000 | ±35% | microbenchmark |
+| Hmac Sha3 256 | 19,500 | ±40% | microbenchmark |
 | Ed25519 Keygen | 10,560 | ±35% | microbenchmark |
 | Ed25519 Sign | 10,430 | ±35% | microbenchmark |
 | Ed25519 Verify | 5,113 | ±35% | microbenchmark |
-| Hkdf Derive | 53,193 | ±35% | microbenchmark |
-| Full Package Create | 746 | ±50% | complex_operation |
-| Full Package Verify | 2,044 | ±50% | complex_operation |
+| Hkdf Derive | 12,500 | ±35% | microbenchmark |
+| Full Package Create | 200 | ±70% | complex_operation |
+| Full Package Verify | 700 | ±50% | complex_operation |
 | Dilithium Keygen *(optional)* | 1,943 | ±40% | microbenchmark |
-| Dilithium Sign *(optional)* | 1,918 | ±40% | microbenchmark |
-| Dilithium Verify *(optional)* | 4,303 | ±40% | microbenchmark |
+| Dilithium Sign *(optional)* | 130 | ±50% | microbenchmark |
+| Dilithium Verify *(optional)* | 900 | ±40% | microbenchmark |
 | Kyber Keygen *(optional)* | 2,200 | ±40% | microbenchmark |
 | Kyber Encapsulate *(optional)* | 2,400 | ±40% | microbenchmark |
 | Aes 256 Gcm Encrypt *(optional)* | 150,000 | ±40% | microbenchmark |
-| Chacha20Poly1305 Encrypt *(optional)* | 130,000 | ±40% | microbenchmark |
-| X25519 Scalarmult *(optional)* | 25,000 | ±40% | microbenchmark |
+| Chacha20Poly1305 Encrypt *(optional)* | 32,000 | ±40% | microbenchmark |
+| X25519 Scalarmult *(optional)* | 5,000 | ±40% | microbenchmark |
 <!-- AUTO-BENCHMARK-TABLE-END -->
 
 *See [Cryptography Algorithms](Cryptography-Algorithms) for algorithm key sizes, or [Architecture](Architecture) for the multi-language performance architecture.*
