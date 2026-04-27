@@ -16,11 +16,27 @@
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 
-/* Expose POSIX clock_gettime / CLOCK_MONOTONIC on glibc.
- * Must precede all system headers.  Harmless on non-glibc platforms. */
-#if !defined(_POSIX_C_SOURCE) || _POSIX_C_SOURCE < 199309L
+/* Expose POSIX clock_gettime / CLOCK_MONOTONIC + C99 snprintf on every
+ * libc.  Must precede all system headers.
+ *
+ * Bumped from 199309L (POSIX.1b) → 200809L (POSIX.1-2008) to align
+ * with the rest of the project (tests/c/test_*.c and
+ * benchmarks/benchmark_c_raw.c all use 200809L).  The previous value
+ * was sufficient on glibc — POSIX.1b exposes clock_gettime, and
+ * glibc separately exposes the C99 stdio surface (snprintf etc.)
+ * regardless of _POSIX_C_SOURCE level — but on Apple's libc, defining
+ * _POSIX_C_SOURCE at any level (including 199309L) switches
+ * <stdio.h> into strict POSIX mode, which hides snprintf below
+ * _POSIX_C_SOURCE = 200112L (the level POSIX.1-2001 incorporated the
+ * C99 stdio additions).  Apple Clang's default
+ * `-Werror=implicit-function-declaration` then fails the build at the
+ * snprintf call in `print_dispatch_info` below.  200809L exposes both
+ * clock_gettime and snprintf on every supported libc (glibc, musl,
+ * Apple libc, BSD libc), and matches the version the rest of the C
+ * test/benchmark surface already uses. */
+#if !defined(_POSIX_C_SOURCE) || _POSIX_C_SOURCE < 200809L
 #undef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 199309L
+#define _POSIX_C_SOURCE 200809L
 #endif
 
 #include "ama_dispatch.h"
