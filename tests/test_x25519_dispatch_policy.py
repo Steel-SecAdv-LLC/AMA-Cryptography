@@ -253,8 +253,6 @@ def test_low_order_rejection_uniform() -> None:
             print("OK")
     """
     default_out = _run_in_subprocess(snippet, env_overrides={})
-    avx2_out = _run_in_subprocess(
-        snippet, env_overrides={"AMA_DISPATCH_USE_X25519_AVX2": "1"}
-    )
+    avx2_out = _run_in_subprocess(snippet, env_overrides={"AMA_DISPATCH_USE_X25519_AVX2": "1"})
     assert "OK" in default_out, f"low-order rejection failed under default policy: {default_out}"
     assert "OK" in avx2_out, f"low-order rejection failed under AVX2 opt-in: {avx2_out}"
