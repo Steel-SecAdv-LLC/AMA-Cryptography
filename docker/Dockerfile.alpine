@@ -31,12 +31,18 @@ RUN mkdir build && cd build && \
 
 # Modern wheel build: `pip wheel` is the supported replacement for the
 # deprecated `python3 setup.py bdist_wheel` invocation, which newer
-# setuptools versions (>=70) refuse to run. --no-deps avoids re-pulling
-# all install_requires into dist/ (we only want the package's own wheel);
-# --no-build-isolation reuses the venv that pip already populated above
-# rather than spinning up a separate PEP 517 isolated env.
-RUN pip3 install --no-cache-dir build && \
-    pip3 wheel . --no-deps --no-build-isolation -w dist/
+# setuptools versions (>=70) refuse to run. `pip wheel` is part of pip
+# itself (no extra `pip install build` step needed — `build` is a
+# different tool used for `python -m build`).
+#   --no-deps               wheel only THIS package, not its
+#                           install_requires (we only want the AMA wheel
+#                           dropped in dist/, not numpy / scipy / etc.).
+#   --no-build-isolation    reuse the system Python where pip already
+#                           installed our build deps (line 23) rather
+#                           than spinning up a separate PEP 517 isolated
+#                           env. Sidesteps PEP 668 / venv-on-alpine
+#                           friction since we're not creating a venv.
+RUN pip3 wheel . --no-deps --no-build-isolation -w dist/
 
 FROM alpine:3.18
 
