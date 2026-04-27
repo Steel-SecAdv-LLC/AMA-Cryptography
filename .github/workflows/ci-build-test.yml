@@ -158,22 +158,46 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install "Cython>=3.0.0" "numpy>=1.24.0,<3.0.0"
 
-      - name: Install Python dependencies
+      # Pre-build the native C library so the install step can rely on
+      # an already-populated ``build/`` directory. Mirrors the
+      # proven-working pattern from ``ci.yml::test`` and avoids the
+      # latent setup.py CMakeBuild fragility on Windows / macOS that
+      # surfaces as "Python X.Y on {os} -- exit 1/2" without the
+      # pre-build.
+      - name: Build native C library (Linux / macOS)
+        if: matrix.os != 'windows-latest'
         run: |
-          pip install -r requirements-dev.txt
+          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+          # Use Python's os.cpu_count() for portability — `nproc` is GNU
+          # coreutils and not guaranteed on macos-latest. Bare `-j` would
+          # unbound make's parallelism and OOM the runner.
+          cmake --build build -j"$(python -c 'import os; print(os.cpu_count() or 1)')"
 
-      - name: Build and install package (CMake auto-build via setup.py)
-        run: pip install -e .
+      - name: Build native C library (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build --config Release --parallel
+
+      - name: Install Python dependencies + package (with [dev] extras)
+        # Use the [dev] extras so hypothesis / pytest-cov / mypy / etc.
+        # come in via the canonical pyproject.toml declaration rather
+        # than the legacy requirements-dev.txt.  Matches ci.yml::test.
+        run: pip install -e ".[dev]"
 
       - name: Verify module integrity
         run: python -m ama_cryptography.integrity --verify
 
       - name: Run tests
         env:
+          # Force backend availability check to fail loudly if the
+          # native C library didn't build / didn't load — otherwise
+          # tests silently skip and mask backend regressions.
+          AMA_CI_REQUIRE_BACKENDS: "1"
           # UTF-8 encoding for Windows to support Unicode symbols in output
           PYTHONIOENCODING: ${{ matrix.os == 'windows-latest' && 'utf-8' || '' }}
           PYTHONUTF8: ${{ matrix.os == 'windows-latest' && '1' || '' }}
-        run: pytest tests/ -v --cov=ama_cryptography --cov-report=xml
+        run: pytest tests/ -v --tb=short --cov=ama_cryptography --cov-report=xml
 
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
@@ -296,6 +320,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     continue-on-error: true
+    # Job-level env so the optional-login step can gate on env.* in `if:`.
+    # `secrets.*` is not allowed in step-level `if:` expressions, which
+    # otherwise causes a workflow-validation error before any job runs.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
@@ -319,11 +349,14 @@ jobs:
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4
 
       - name: Log in to Docker Hub (optional, avoids rate limits)
-        if: ${{ secrets.DOCKERHUB_USERNAME != '' }}
+        # Gate on BOTH secrets: a half-configured fork (e.g. username
+        # set but token missing) would otherwise reach docker/login-action
+        # and fail noisily, defeating the "optional" intent of the step.
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121  # v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
 
       - name: Build Ubuntu image
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7

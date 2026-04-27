@@ -1,0 +1,35 @@
+name: "AMA Cryptography CodeQL"
+
+# CodeQL settings for the static-analysis CodeQL Security Analysis job.
+# Wired up via `config-file:` on github/codeql-action/init.
+#
+# paths-ignore: third-party vendored code is intentionally not analyzed.
+#   - src/c/vendor/ed25519-donna/ : public-domain ed25519-donna by
+#     Andrew Moon. The upstream donna sources are kept unmodified
+#     (only renamed — see ama_donna_unit.h for the rationale); AMA
+#     adds one project-local aggregator header in this directory
+#     (ama_donna_unit.h) for build/analysis integration only.
+#     We compile donna as a single translation unit through
+#     src/c/ed25519_donna_shim.c (donna's own -DED25519_REFHASH /
+#     -DED25519_CUSTOMRANDOM single-unit pattern) and gate cross-
+#     checks via the AMA_ED25519_ASSEMBLY build flag.
+#     CodeQL's `cpp/unused-static-variable` may still surface on
+#     curve25519-donna-64bit.h's reduce_mask_40 / reduce_mask_56
+#     constants (referenced from build configurations donna compiles
+#     for other targets but not ours). These alerts are tagged
+#     "Library" by CodeQL and should be dismissed in the GitHub
+#     Security UI as "Won't fix — third-party library cosmetic" if
+#     they leak through paths-ignore (CodeQL's path filtering is
+#     only fully reliable for interpreted languages; for C/C++ the
+#     extractor traces through included files).
+
+paths-ignore:
+  - "src/c/vendor/**"
+
+# Note on `cpp/include-non-header`:
+#   The donna single-translation-unit pattern uses `#include` on what
+#   was upstream `ed25519.c`. We resolved the finding *without* a
+#   project-wide rule disable by renaming the included file locally to
+#   `ed25519_unit.h` — see src/c/vendor/ed25519-donna/ama_donna_unit.h
+#   for the full rationale. The rule remains active for first-party C
+#   code so accidental `#include "foo.c"` patterns continue to surface.
