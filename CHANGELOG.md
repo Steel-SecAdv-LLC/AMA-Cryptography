@@ -787,8 +787,11 @@ Verification matrix after the fix bundle:
   (1) batch-4 result is byte-identical to four sequential
   single-shot ladders under default dispatch; (2) the AVX2 4-way
   kernel produces identical secrets when forced on (cross-path
-  correctness); (3) `AMA_DISPATCH_PRINT=1` confirms the dispatch
-  table reads `x25519_x4 = scalar (4× sequential)` by default; (4)
+  correctness); (3) `AMA_DISPATCH_VERBOSE=1` confirms the dispatch
+  table reads `x25519_x4 = scalar (4× sequential)` by default (the
+  dispatcher reads `AMA_DISPATCH_VERBOSE` — see
+  `src/c/dispatch/ama_dispatch.c:236`; an earlier draft of this
+  changelog and the test helper used the wrong env var name); (4)
   RFC 7748 §6.1 low-order rejection fires on BOTH default and AVX2
   paths.
 
@@ -834,13 +837,17 @@ Verification matrix after the fix bundle:
   numbers as if they were the canonical-host figures.  Fixed by:
   (1) re-pointing `_generate_benchmark_table()` at
   `benchmark-results.json`, the actual measurement output written
-  by `benchmarks/validation_suite.py`; (2) using
+  by `benchmarks/benchmark_runner.py --output benchmark-results.json`
+  (the same command CI runs in `.github/workflows/ci.yml`'s
+  "Benchmark Regression Detection" job — `benchmarks/validation_suite.py`
+  is the slow-runner regression-floor validator and writes a
+  different file, `benchmarks/validation_results.json`); (2) using
   `ops_per_second` as the headline value, with the regression floor
   retained as a secondary column so reviewers see both the headline
   and the CI safety net at a glance; (3) refusing to fall back to
   `baseline.json` if `benchmark-results.json` is missing — the
   generator now prints a clear remedy
-  (`LD_LIBRARY_PATH=build/lib python3 benchmarks/validation_suite.py`)
+  (`LD_LIBRARY_PATH=build/lib python3 benchmarks/benchmark_runner.py --output benchmark-results.json --markdown benchmark-report.md`)
   rather than silently re-introducing the bug; (4) refreshing
   `wiki/Performance-Benchmarks.md` so the section heading no longer
   reads "Regression Baselines (from benchmarks/baseline.json)" but

@@ -205,7 +205,19 @@ def test_avx2_optin_dispatch_print_differs() -> None:
         env_full.setdefault("PYTHONUTF8", "1")
         import ama_cryptography as _ama
 
-        env_full["PYTHONPATH"] = str(Path(_ama.__file__).resolve().parent.parent)
+        # Devin review: prepend the package parent rather than overwriting
+        # PYTHONPATH.  Overwriting drops virtualenv site-packages /
+        # CI-injected entries that the subprocess may need to import its
+        # own dependencies, which then surfaces as an ImportError that
+        # the rc!=0 guard below would re-raise as an opaque AssertionError
+        # rather than the actual missing-import.  Mirrors the prepend
+        # pattern in _run_in_subprocess (lines 60-78) and
+        # tests/test_cli_entry.py (D-2).
+        pkg_parent = str(Path(_ama.__file__).resolve().parent.parent)
+        existing_pp = env_full.get("PYTHONPATH")
+        env_full["PYTHONPATH"] = (
+            pkg_parent + os.pathsep + existing_pp if existing_pp else pkg_parent
+        )
         proc = subprocess.run(
             [sys.executable, "-c", textwrap.dedent(snippet)],
             capture_output=True,

@@ -48,22 +48,32 @@ __author__ = "Andrew E. A., Steel Security Advisors LLC"
 # and every binding import dies with ``ImportError: DLL load failed``
 # (PR #277 Windows ci.yml regression).
 #
-# `os.add_dll_directory` keeps a handle alive for the process lifetime;
-# we discard it intentionally because the package directory must remain
-# resolvable for as long as ama_cryptography is importable.  Linux and
-# macOS resolve transitive deps via DT_RUNPATH=$ORIGIN baked into each
-# binding extension, so this branch is a no-op there.
+# `os.add_dll_directory` returns an opaque cookie object whose ``close()``
+# method is invoked at GC time, at which point the directory is removed
+# from the AddDllDirectory search list (see Python docs for
+# ``os.add_dll_directory`` and Win32 ``AddDllDirectory``).  Discarding the
+# return value lets the cookie become unreachable as soon as this module's
+# top-level frame finishes evaluating, after which a later
+# ``import ama_cryptography.sha3_binding`` (etc.) can intermittently die
+# with ``ImportError: DLL load failed`` once the GC closes the cookie.
+# Copilot review #11/#21 flagged this; we now bind the cookie to a
+# module-level name (``_AMA_DLL_DIR_COOKIE``) so it lives for the
+# interpreter's lifetime — the package directory stays resolvable for as
+# long as ``ama_cryptography`` is importable.  Linux and macOS resolve
+# transitive deps via DT_RUNPATH=$ORIGIN baked into each binding
+# extension, so this branch is a no-op there.
+_AMA_DLL_DIR_COOKIE: Any = None  # Windows-only; kept alive for process lifetime
 if _sys.platform == "win32":
     _here = _os.path.dirname(_os.path.abspath(__file__))
     if _os.path.isdir(_here):
         try:
-            _os.add_dll_directory(_here)  # type: ignore[attr-defined]  # Windows-only API; mypy on Linux/macOS (where strict CI runs) does not see it (WIN-001)
+            _AMA_DLL_DIR_COOKIE = _os.add_dll_directory(_here)  # type: ignore[attr-defined]  # Windows-only API; mypy on Linux/macOS (where strict CI runs) does not see it (WIN-001)
         except (OSError, AttributeError):
             # AttributeError on Python <3.8 (we require >=3.9 so this is
             # defence in depth); OSError on the rare case the directory
             # is unreadable.  Either way, fall through and let the
             # downstream import surface a clear error.
-            pass
+            _AMA_DLL_DIR_COOKIE = None
 
 # FIPS 140-3 Power-On Self-Tests — run at module import time.
 # Sets module state to OPERATIONAL or ERROR.

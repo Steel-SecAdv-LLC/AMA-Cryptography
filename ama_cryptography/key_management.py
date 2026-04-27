@@ -1095,7 +1095,9 @@ class HSMKeyStorage:
             try:
                 info = self.lib.getTokenInfo(slot)
                 # PKCS#11 token labels are public identifiers, not secret material.
-                if info.label.strip() == token_label:  # nosemgrep: non-constant-time-comparison
+                if (
+                    info.label.strip() == token_label
+                ):  # nosemgrep: non-constant-time-comparison -- PKCS#11 token labels are public identifiers, not secret material (KM-003)
                     return slot
             except self.pkcs11.PyKCS11Error:
                 continue
@@ -1382,8 +1384,9 @@ if __name__ == "__main__":
 
     # Retrieve key — demo-only equality check on a freshly-generated key.
     retrieved_key = storage.retrieve_key("master-key-001")
-    # nosemgrep: non-constant-time-comparison
-    logger.info(f"✓ Key retrieved: {retrieved_key == test_key}")
+    logger.info(
+        f"✓ Key retrieved: {retrieved_key == test_key}"  # nosemgrep: non-constant-time-comparison -- demo-only equality check on freshly-generated key in __main__ block (KM-004)
+    )
 
     logger.info("\n" + "=" * 70)
     logger.info("✓ Key Management System operational")
