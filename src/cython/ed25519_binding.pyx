@@ -169,7 +169,10 @@ def cy_ed25519_batch_verify(list entries):
             c_entries[i].signature = <const uint8_t *>(<bytes>sig)
             c_entries[i].public_key = <const uint8_t *>(<bytes>pk)
 
-        cdef int rc = ama_ed25519_batch_verify(c_entries, count, results)
+        # Return code is intentionally discarded: per-entry validity is
+        # already in `results` (zero-initialized, so unfilled entries
+        # read as 0 / invalid — fail-closed).
+        ama_ed25519_batch_verify(c_entries, count, results)
 
         return [bool(results[i]) for i in range(count)]
     finally:
