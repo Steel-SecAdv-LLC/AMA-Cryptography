@@ -32,4 +32,11 @@ liboqs-python>=0.10.0
 # Not strictly required (the comparative_benchmark already skips
 # gracefully when the import fails), but keeping it here surfaces the
 # full comparison set in one install.
-cryptography>=42.0
+#
+# Floor 46.0.6 closes the open advisories against older majors:
+# GHSA-h4gh-qq45-vh27 / CVE-2024-26130 (HIGH; fixed in 42.0.4),
+# CVE-2024-0727 (42.0.2), CVE-2023-50782 (42.0.0), CVE-2026-26007
+# (46.0.5), CVE-2026-34073 (46.0.6). Mirrors pyproject.toml [legacy]
+# and [benchmark]. Manual bump because dependabot.yml carries a
+# semver-major ignore on this package.
+cryptography>=46.0.6
