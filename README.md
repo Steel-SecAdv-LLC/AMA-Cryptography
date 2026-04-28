@@ -739,7 +739,7 @@ GitHub Actions automatically tests:
 | CI - Build & Test | `ci-build-test.yml` | Full C library build and C test suite |
 | Security | `security.yml` | pip-audit, bandit, Semgrep, secret scanning |
 | Static Analysis | `static-analysis.yml` | CodeQL analysis |
-| Fuzzing | `fuzzing.yml` | C fuzz harnesses (12 targets) |
+| Fuzzing | `fuzzing.yml` | C fuzz harnesses (13 targets) |
 | dudect | `dudect.yml` | Empirical constant-time verification |
 | Auto Docs | `auto-docs.yml` | Auto-generate documentation via PR |
 | Wiki Sync | `wiki-sync.yml` | Auto-sync wiki/ to GitHub Wiki |
