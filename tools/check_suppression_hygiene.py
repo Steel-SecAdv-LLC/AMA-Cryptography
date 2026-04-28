@@ -19,8 +19,29 @@ import sys
 import tokenize
 from pathlib import Path
 
-# Suppression tokens to scan for
-_SUPPRESSION_RE = re.compile(r"#\s*(noqa|nosec|pylint:\s*disable|type:\s*ignore)")
+# Suppression tokens to scan for.
+#
+# ``nosemgrep`` is included here because INVARIANT-13 is worded "any
+# equivalent suppression marker"; semgrep is part of the same defence-in-
+# depth stack as bandit/ruff/mypy and the same tracking-ID + justification
+# requirements apply.  Devin reviews #19/#20/#21/#22 (PR #277) caught four
+# ``nosemgrep`` markers that lacked tracking IDs; extending the scanner is
+# the regression check that would have caught those at PR-review time.
+#
+# Two-stage matching:
+#   1. ``_SUPPRESSION_RE`` matches *any* suppression marker — including a
+#      bare ``# nosemgrep`` with no rule id — so the line is always
+#      flagged for the tracking-ID + justification pass.
+#   2. For the ``nosemgrep`` family specifically, ``_NOSEMGREP_STRICT_RE``
+#      then asserts the line-targeted form ``# nosemgrep: <rule_id>``
+#      (Copilot review @ tools/check_suppression_hygiene.py:34).  Bare
+#      ``# nosemgrep`` blanket-suppresses every rule on the line, which
+#      is exactly the kind of catch-all the INVARIANT-13 audit trail is
+#      meant to prevent.  Semgrep itself accepts both forms; this repo
+#      requires the colon + rule id form so reviewers can verify *which*
+#      rule each suppression silences.
+_SUPPRESSION_RE = re.compile(r"#\s*(noqa|nosec|nosemgrep|pylint:\s*disable|type:\s*ignore)")
+_NOSEMGREP_STRICT_RE = re.compile(r"^:\s*\S+")
 
 # Tracking ID pattern: parenthesised alphanumeric tag, e.g. (KM-001), (FIN-002)
 _TRACKING_ID_RE = re.compile(r"\([A-Z]+-\d+\)")
@@ -79,6 +100,15 @@ def _scan_file(filepath: str) -> list[str]:
                         violations.append(f"{tag}: suppression in forbidden directory")
                         break
                     rest = line[m.end() :]
+                    # nosemgrep strict form: require ":<rule_id>" so the
+                    # marker targets a specific rule rather than blanket-
+                    # suppressing every semgrep rule on the line.
+                    if m.group(1) == "nosemgrep" and not _NOSEMGREP_STRICT_RE.match(rest):
+                        violations.append(
+                            f"{tag}: suppression 'nosemgrep' missing rule id "
+                            f"(expected '# nosemgrep: <rule_id> -- justification (TAG-NNN)')"
+                        )
+                        continue
                     if not _JUSTIFICATION_RE.search(rest):
                         violations.append(
                             f"{tag}: suppression '{m.group()}' missing justification "

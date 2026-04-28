@@ -34,13 +34,14 @@ RUN mkdir build && cd build && \
 # py3-setuptools 67.7.2 / py3-wheel 0.40.x system-wide, both below the
 # enforced minimums (setuptools>=70 to dodge Debian's install_layout
 # regression + the GHSA-cx63-2mw6-8hw5 / PYSEC-2025-49 advisories;
-# wheel>=0.46.2 for GHSA-8rrh-rw8j-w5fx).  We `--break-system-packages`
+# wheel>=0.47.0 for GHSA-8rrh-rw8j-w5fx; cmake>=4.3.2 Dependabot
+# supply-chain floor).  We `--break-system-packages`
 # because Alpine's PEP 668 `EXTERNALLY-MANAGED` marker would otherwise
 # reject the upgrade — the override is contained to this builder stage,
 # never reaches the runtime image, and the upgraded versions are exactly
 # the ones the preflight requires.  See setup.py's `_check_build_dependency`.
 RUN pip3 install --no-cache-dir --upgrade --break-system-packages \
-        'setuptools>=78.1.1' 'wheel>=0.46.2' 'Cython>=3.2.4' 'numpy>=1.24.0'
+        'setuptools>=78.1.1' 'wheel>=0.47.0' 'cmake>=4.3.2' 'Cython>=3.2.4' 'numpy>=1.24.0'
 
 # Wheel build.  The legacy `python3 setup.py bdist_wheel` invocation is
 # kept (rather than `python -m build` / `pip wheel --no-build-isolation`)

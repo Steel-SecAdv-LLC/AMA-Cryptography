@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 # D-9: Preflight version checks for every build-time dependency listed in
 # pyproject.toml's [build-system].requires.  Each floor matches the version
@@ -40,9 +41,11 @@ from pathlib import Path
 #     AttributeError(install_layout) deep inside pip's bdist_wheel subprocess.
 #     70.0.0 also closes GHSA-cx63-2mw6-8hw5; we float to 78.1.1 in
 #     pyproject.toml to also pick up PYSEC-2025-49.
-#   * wheel >= 0.46.2:        closes GHSA-8rrh-rw8j-w5fx.
-#   * cmake >= 3.16:          minimum C-side floor; CMakeLists.txt's
-#     cmake_minimum_required(VERSION 3.16) would otherwise abort late.
+#   * wheel >= 0.47.0:        closes GHSA-8rrh-rw8j-w5fx.
+#   * cmake >= 4.3.2:         Dependabot supply-chain floor (matches
+#     pyproject.toml's [build-system].requires).  CMakeLists.txt's
+#     cmake_minimum_required is 3.15, but this higher floor is enforced
+#     for supply-chain security.
 #   * Cython >= 3.2.4:        floor for the math_engine extension's
 #     `cimport numpy` typed-memoryview surface.
 #   * numpy >= 1.24.0:        provides the `numpy.pxd` headers the Cython
@@ -60,7 +63,13 @@ from pathlib import Path
 # so 70.0+ still satisfies (70, 0, 0).
 _BUILD_REQS = {
     "setuptools": ((70, 0, 0), "AttributeError(install_layout) on bdist_wheel"),
-    "wheel": ((0, 46, 2), "GHSA-8rrh-rw8j-w5fx"),
+    "wheel": ((0, 47, 0), "GHSA-8rrh-rw8j-w5fx"),
+    "cmake": (
+        (4, 3, 2),
+        "Dependabot supply-chain floor (pyproject.toml [build-system].requires);"
+        " CMakeLists.txt cmake_minimum_required is 3.15 but this higher"
+        " floor is enforced for supply-chain security",
+    ),
     "Cython": ((3, 2, 4), "math_engine cimport numpy stability floor"),
     "numpy": ((1, 24, 0), "numpy.pxd headers required by math_engine"),
 }
@@ -90,6 +99,13 @@ def _parse_version(raw: str) -> tuple:
         return tuple(digits[:3]) + (0,) * max(0, 3 - len(digits[:3]))
 
 
+_REMEDY = (
+    "  python3 -m pip install --upgrade "
+    "'setuptools>=78.1.1' 'wheel>=0.47.0' 'cmake>=4.3.2' "
+    "'Cython>=3.2.4' 'numpy>=1.24.0'\n"
+)
+
+
 def _check_build_dependency(import_name: str, attr: str = "__version__") -> None:
     floor, reason = _BUILD_REQS[import_name]
     try:
@@ -101,9 +117,7 @@ def _check_build_dependency(import_name: str, attr: str = "__version__") -> None
         sys.stderr.write(
             f"FATAL: {import_name} is required at build time (>= "
             f"{'.'.join(str(x) for x in floor)}, reason: {reason}). "
-            "Install with:\n  python3 -m pip install --upgrade "
-            "'setuptools>=78.1.1' 'wheel>=0.46.2' 'cmake>=3.16' "
-            "'Cython>=3.2.4' 'numpy>=1.24.0'\n"
+            f"Install with:\n{_REMEDY}"
         )
         sys.exit(1)
     raw = getattr(mod, attr, None)
@@ -117,10 +131,66 @@ def _check_build_dependency(import_name: str, attr: str = "__version__") -> None
     if parsed < floor:
         sys.stderr.write(
             f"FATAL: {import_name} >= {'.'.join(str(x) for x in floor)} "
-            f"required (found {raw}; reason: {reason}). Upgrade with:\n"
-            "  python3 -m pip install --upgrade "
-            "'setuptools>=78.1.1' 'wheel>=0.46.2' 'cmake>=3.16' "
-            "'Cython>=3.2.4' 'numpy>=1.24.0'\n"
+            f"required (found {raw}; reason: {reason}). Upgrade with:\n{_REMEDY}"
+        )
+        sys.exit(1)
+
+
+def _check_cmake_version() -> None:
+    """Dual-path cmake floor check.
+
+    cmake is fundamentally a CLI tool, not a Python module — but
+    pyproject.toml's [build-system].requires installs the ``cmake`` PyPI
+    shim (which carries ``cmake.__version__``) into PEP 517 isolated
+    build envs.  Direct ``python setup.py`` invocations instead rely on
+    the system cmake CLI (apt / brew / dnf / cmake.org installer).
+    Probe both paths so neither fails spuriously: prefer the PyPI shim
+    when present, otherwise parse ``cmake --version`` from the CLI on
+    PATH.  Either way, enforce the same floor as ``_BUILD_REQS["cmake"]``
+    and ``pyproject.toml`` so the audit trail stays consistent across
+    all four pin sites (Copilot review @ setup.py:150 + Devin review
+    @ setup.py:63).
+    """
+    floor, reason = _BUILD_REQS["cmake"]
+    raw: Optional[str] = None
+    # Path A: PyPI cmake shim (PEP 517 isolated build env).
+    try:
+        import cmake as _cmake  # type: ignore[import-not-found]
+
+        raw = getattr(_cmake, "__version__", None)
+    except ImportError:
+        pass  # PyPI cmake shim not installed; fall through to CLI probe
+    # Path B: system cmake CLI.
+    if raw is None:
+        try:
+            result = subprocess.run(
+                ["cmake", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout:
+                first_line = result.stdout.splitlines()[0]
+                parts = first_line.split()
+                # Expected: "cmake version X.Y.Z"
+                if len(parts) >= 3 and parts[0] == "cmake" and parts[1] == "version":
+                    raw = parts[2]
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass  # cmake CLI not on PATH or timed out; fall through to FATAL
+    if raw is None:
+        sys.stderr.write(
+            f"FATAL: cmake is required at build time (>= "
+            f"{'.'.join(str(x) for x in floor)}, reason: {reason}). "
+            f"Install via your system package manager (apt install cmake / "
+            f"brew install cmake / dnf install cmake) or:\n{_REMEDY}"
+        )
+        sys.exit(1)
+    parsed = _parse_version(str(raw))
+    if parsed < floor:
+        sys.stderr.write(
+            f"FATAL: cmake >= {'.'.join(str(x) for x in floor)} "
+            f"required (found {raw}; reason: {reason}). Upgrade with:\n{_REMEDY}"
         )
         sys.exit(1)
 
@@ -129,20 +199,43 @@ def _check_build_dependency(import_name: str, attr: str = "__version__") -> None
 # install_layout regression fires inside setuptools' own __init__ paths
 # during bdist_wheel, so a check that runs after `from setuptools import
 # Extension` would race the very failure mode it is meant to prevent.
-for _name in ("setuptools",):
+# setuptools and wheel are checked unconditionally — they are required
+# for any setup.py invocation regardless of whether Cython is enabled.
+# Cython and numpy are only required when the math_engine Cython
+# extension is being built; the documented ``AMA_NO_CYTHON=1`` opt-out
+# (and its companion ``AMA_NO_C_EXTENSIONS=1``, which short-circuits all
+# native build paths including the Cython one) must therefore skip those
+# preflight checks.  Copilot reviews #12/#15/#22 and Devin review #13
+# observed that the previous form ran every floor unconditionally,
+# turning a documented opt-out into an unconditional FATAL when the
+# environment lacked Cython/numpy (e.g. minimal embedded builders or
+# ``pip install --no-build-isolation`` against a host without
+# Cython/numpy).  pyproject.toml's [build-system].requires comment
+# already reads "FATAL unless AMA_NO_CYTHON=1"; this brings the runtime
+# behaviour in line with the documented contract.
+for _name in ("setuptools", "wheel"):
     _check_build_dependency(_name)
-# wheel / Cython / numpy are not strictly required at this exact module-
-# top moment (setuptools imports below do not transitively touch them),
-# but checking them here lets the user see all four floors in a single
-# preflight pass rather than tripping into Cython.cythonize / numpy
-# imports later with a different style of error.
-for _name in ("wheel", "Cython", "numpy"):
-    try:
+
+# cmake is needed for the C-side build (CMakeBuild → cmake_minimum_required
+# in CMakeLists.txt).  Skip only when the entire native build is opted out
+# (AMA_NO_C_EXTENSIONS=1); AMA_NO_CYTHON=1 alone still builds C extensions
+# that go through cmake.  Copilot review @ setup.py:150 + Devin review
+# @ setup.py:63 caught the drift where pyproject.toml [build-system].requires
+# was bumped to cmake>=4.3.2 but setup.py's preflight hadn't matched —
+# documented "kept in lockstep" only became true when this check landed.
+_SKIP_C_PREFLIGHT = bool(os.getenv("AMA_NO_C_EXTENSIONS"))
+if not _SKIP_C_PREFLIGHT:
+    _check_cmake_version()
+
+_SKIP_CYTHON_PREFLIGHT = bool(os.getenv("AMA_NO_CYTHON")) or _SKIP_C_PREFLIGHT
+if not _SKIP_CYTHON_PREFLIGHT:
+    for _name in ("Cython", "numpy"):
         _check_build_dependency(_name)
-    except SystemExit:
-        # Re-raise so the build aborts; an exception in this block is
-        # treated identically to the setuptools preflight.
-        raise
+else:
+    sys.stderr.write(
+        "AMA_NO_CYTHON / AMA_NO_C_EXTENSIONS set: skipping Cython/numpy "
+        "preflight (the math_engine accelerator will not be built).\n"
+    )
 
 from setuptools import Extension, find_packages, setup  # noqa: E402
 from setuptools.command.build_ext import build_ext  # noqa: E402
