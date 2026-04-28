@@ -707,7 +707,7 @@ The C library uses CMake (`CMakeLists.txt`, ~270 lines) with the following key c
 
 When `AMA_USE_NATIVE_PQC=OFF`, the PQC source files are excluded and the library provides only classical primitives (SHA3, Ed25519, HKDF, AES-GCM).
 
-Fuzz harnesses are built separately via `fuzz/CMakeLists.txt` (12 targets covering all C implementations).
+Fuzz harnesses are built separately via `fuzz/CMakeLists.txt` (13 targets covering all C implementations).
 
 ### Architectural Invariants
 
@@ -767,16 +767,16 @@ docker run ama-cryptography:latest
 
 | Category | Purpose | Coverage Target | Files |
 |----------|---------|-----------------|-------|
-| Unit Tests | Individual function validation | 80% line coverage | 70 Python test files |
-| C Unit Tests | Native library validation | All C functions | 11 `test_*.c` registered via ctest in `tests/c/` (+ 1 standalone `bench_*.c`) |
+| Unit Tests | Individual function validation | 80% line coverage | 74 Python test files |
+| C Unit Tests | Native library validation | All C functions | 29 `test_*.c` registered via ctest in `tests/c/` (+ 1 standalone `bench_*.c` + 2 standalone `x25519_equiv_*.c`) |
 | Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
 | Performance Tests | Benchmark regression detection | All critical paths | `test_performance.py`, `benchmarks/` |
 | Security Tests | Cryptographic correctness | 100% crypto functions | `test_crypto_core_penetration.py`, `test_memory_security.py` |
 | Compliance Tests | Standards adherence | All claimed standards | `test_nist_kat.py`, `test_pqc_kat.py` |
-| Fuzz Tests | Input mutation testing | 12 C targets | `fuzz/fuzz_*.c` |
+| Fuzz Tests | Input mutation testing | 13 C targets | `fuzz/fuzz_*.c` |
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithms (815 AFT + 400 SHA-3 MCT) | `nist_vectors/` |
 
-**Total:** 2,028 Python test functions across 70 test files, plus the
+**Total:** 2,070 Python test functions across 74 test files, plus the
 ctest-registered C tests and standalone C benchmark under `tests/c/`
 (the exact C-test count varies with build options — `AMA_USE_NATIVE_PQC`
 gates `test_x25519`, `test_chacha20poly1305`, `test_argon2id`,
