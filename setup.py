@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 # D-9: Preflight version checks for every build-time dependency listed in
 # pyproject.toml's [build-system].requires.  Each floor matches the version
@@ -151,7 +152,7 @@ def _check_cmake_version() -> None:
     @ setup.py:63).
     """
     floor, reason = _BUILD_REQS["cmake"]
-    raw: str | None = None
+    raw: Optional[str] = None
     # Path A: PyPI cmake shim (PEP 517 isolated build env).
     try:
         import cmake as _cmake  # type: ignore[import-not-found]
