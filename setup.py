@@ -41,9 +41,10 @@ from pathlib import Path
 #     70.0.0 also closes GHSA-cx63-2mw6-8hw5; we float to 78.1.1 in
 #     pyproject.toml to also pick up PYSEC-2025-49.
 #   * wheel >= 0.47.0:        closes GHSA-8rrh-rw8j-w5fx.
-#   * cmake >= 4.3.2:         minimum C-side floor (matches
-#     pyproject.toml's [build-system].requires; CMakeLists.txt's
-#     cmake_minimum_required would otherwise abort late).
+#   * cmake >= 4.3.2:         Dependabot supply-chain floor (matches
+#     pyproject.toml's [build-system].requires).  CMakeLists.txt's
+#     cmake_minimum_required is 3.15, but this higher floor is enforced
+#     for supply-chain security.
 #   * Cython >= 3.2.4:        floor for the math_engine extension's
 #     `cimport numpy` typed-memoryview surface.
 #   * numpy >= 1.24.0:        provides the `numpy.pxd` headers the Cython
@@ -62,7 +63,12 @@ from pathlib import Path
 _BUILD_REQS = {
     "setuptools": ((70, 0, 0), "AttributeError(install_layout) on bdist_wheel"),
     "wheel": ((0, 47, 0), "GHSA-8rrh-rw8j-w5fx"),
-    "cmake": ((4, 3, 2), "pyproject.toml [build-system].requires; CMakeLists.txt cmake_minimum_required would otherwise abort late"),
+    "cmake": (
+        (4, 3, 2),
+        "Dependabot supply-chain floor (pyproject.toml [build-system].requires);"
+        " CMakeLists.txt cmake_minimum_required is 3.15 but this higher"
+        " floor is enforced for supply-chain security",
+    ),
     "Cython": ((3, 2, 4), "math_engine cimport numpy stability floor"),
     "numpy": ((1, 24, 0), "numpy.pxd headers required by math_engine"),
 }
@@ -152,7 +158,7 @@ def _check_cmake_version() -> None:
 
         raw = getattr(_cmake, "__version__", None)
     except ImportError:
-        pass
+        pass  # PyPI cmake shim not installed; fall through to CLI probe
     # Path B: system cmake CLI.
     if raw is None:
         try:
@@ -170,7 +176,7 @@ def _check_cmake_version() -> None:
                 if len(parts) >= 3 and parts[0] == "cmake" and parts[1] == "version":
                     raw = parts[2]
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            pass
+            pass  # cmake CLI not on PATH or timed out; fall through to FATAL
     if raw is None:
         sys.stderr.write(
             f"FATAL: cmake is required at build time (>= "
