@@ -48,15 +48,15 @@ _Nothing yet._
 
 Headline: in-house AVX-512 4-way Keccak permutation kernel (opt-in,
 default OFF) lands as the first ZMM-class SIMD path in the tree, paired
-with a published Architecture Decision Record (`docs/AVX512_KECCAK_PLAN.md`)
+with a published Architecture Decision Record (`docs/AVX512_KECCAK_ADR.md`)
 explaining the in-house-vs-vendored choice. Argon2id moves to RFC 9106
 byte-identity (BREAKING — migration shim provided), the `out_len`
 ceiling is now enforced at every entry point, and the Tier-B PQC,
 Ed25519 verify-path SWE, VAES YMM AES-256-GCM, X25519 fe51, ChaCha20
 AVX2 and Argon2 BlaMka G AVX2 paths shipped during the 2.1.5-line are
-now cited end-to-end across `README.md`, `benchmark-report.md`,
-`docs/COMPETITIVE_ANALYSIS.md`, and `wiki/Performance-Benchmarks.md`
-against fresh measurements. CI gains a CPUID-gated AVX-512 KAT,
+now cited end-to-end across `README.md`, `benchmark-report.md`, and
+`wiki/Performance-Benchmarks.md` against fresh measurements. CI gains a
+CPUID-gated AVX-512 KAT,
 re-floored slow-runner regression baselines, NIST ACVP self-attestation
 under continuous validation, and removal of a duplicate, un-pinned
 constant-time check that was a flake source on contended runners.
@@ -65,7 +65,7 @@ constant-time check that was a flake source on contended runners.
 ### Added
 
 - **AVX-512 Keccak 4-way Architecture Decision Record**
-  (`docs/AVX512_KECCAK_PLAN.md`). Records the in-house-vs-vendored choice
+  (`docs/AVX512_KECCAK_ADR.md`). Records the in-house-vs-vendored choice
   for the AVX-512 4-way Keccak permutation kernel. Five-reason rationale
   for in-house (INVARIANT-1 carve-out surface, single-instruction wins
   via `vprolq` + `vpternlogq`, AVX2 4-way ABI continuity, constant-time
@@ -117,9 +117,9 @@ constant-time check that was a flake source on contended runners.
   in `docs/compliance/acvp_attestation.json` exactly. `ctest`: 20 / 20
   pass. FIPS-140 self-test + KAT + SIMD KAT Python lanes: 128 / 128
   pass. Regression benchmark: 16 / 16 pass, 0 warnings. Refreshed
-  ops/sec tables in `README.md`, `benchmark-report.md`,
-  `benchmark-results.json`, and `docs/COMPETITIVE_ANALYSIS.md` so they
-  reflect the current tree including the post-#261 base-point comb
+  ops/sec tables in `README.md`, `benchmark-report.md`, and
+  `benchmark-results.json` so they reflect the current tree including
+  the post-#261 base-point comb
   table, #265 verify-path SWE rectification, and #266 VAES YMM
   AES-256-GCM landed on the 2.1.5 line. Notable deltas on this host:
   Ed25519 sign 10,569 → 51,206 ops/sec, Ed25519 verify 7,547 →
@@ -570,21 +570,19 @@ constant-time check that was a flake source on contended runners.
 
 ### Documentation
 
-- **Performance comparison numbers refreshed against AVX-512 + VAES +
-  AES-NI host; CI-environmental note added to
-  `docs/COMPETITIVE_ANALYSIS.md`.** Re-ran the full benchmark suite
-  (`benchmarks/benchmark_runner.py`, `build/bin/benchmark_c_raw --json`,
+- **Performance numbers refreshed against AVX-512 + VAES + AES-NI host;
+  CI-environmental note added to `benchmark-report.md`.** Re-ran the
+  full benchmark suite (`benchmarks/benchmark_runner.py`,
+  `build/bin/benchmark_c_raw --json`,
   `benchmarks/comparative_benchmark.py`) on a Linux x86-64 host with
   AES-NI + PCLMULQDQ + AVX2 + VAES + VPCLMULQDQ + AVX-512F/BW/DQ/VL/VBMI
   advertised through to userland (no hypervisor masking). Refreshed
-  `README.md`, `benchmark-report.md`, `benchmark-results.json`,
-  `docs/COMPETITIVE_ANALYSIS.md`, and `wiki/Performance-Benchmarks.md`
-  so they match the canonical-host run, with X25519 specifically
-  captured before/after the fe64 wiring (fe51 ~21.8K → fe64 ~11.5K
-  DH ops/sec on this host). New paragraph at the top of
-  `docs/COMPETITIVE_ANALYSIS.md` §Performance Comparison spelling
-  out which CPUID gates the dispatcher checks
-  (`ama_has_aes_ni()`, `ama_has_pclmulqdq()`,
+  `README.md`, `benchmark-report.md`, `benchmark-results.json`, and
+  `wiki/Performance-Benchmarks.md` so they match the canonical-host
+  run, with X25519 specifically captured before/after the fe64 wiring
+  (fe51 ~21.8K → fe64 ~11.5K DH ops/sec on this host). New paragraph
+  at the top of `benchmark-report.md` spelling out which CPUID gates
+  the dispatcher checks (`ama_has_aes_ni()`, `ama_has_pclmulqdq()`,
   `ama_cpuid_has_vaes_aesgcm()`, `ama_cpuid_has_avx2()`,
   `ama_cpuid_has_avx512_keccak()`) and the typical 1.5–2× slowdown
   cloud-CI shared runners see when the hypervisor masks any of those
@@ -598,9 +596,8 @@ constant-time check that was a flake source on contended runners.
   `ENHANCED_FEATURES.md`, `IMPLEMENTATION_GUIDE.md`, `THREAT_MODEL.md`,
   `CSRC_STANDARDS.md`, `CSRC_ALIGN_REPORT.md`,
   `AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md`, `.github/INVARIANTS.md`,
-  `docs/DESIGN_NOTES.md`, `docs/METRICS_REPORT.md`,
-  `docs/COMPETITIVE_ANALYSIS.md`, `wiki/Home.md`, and
-  `wiki/Security-Model.md` to a consistent 2026-04-20 timestamp to
+  `docs/DESIGN_NOTES.md`, `docs/METRICS_REPORT.md`, `wiki/Home.md`,
+  and `wiki/Security-Model.md` to a consistent 2026-04-20 timestamp to
   restore cross-document date alignment. No functional or technical
   content was modified; historical release-history rows and
   benchmark-measurement dates were preserved.

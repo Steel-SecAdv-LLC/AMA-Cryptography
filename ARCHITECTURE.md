@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 3.0.0 |
-| Last Updated | 2026-04-20 |
+| Last Updated | 2026-04-28 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -707,7 +707,7 @@ The C library uses CMake (`CMakeLists.txt`, ~270 lines) with the following key c
 
 When `AMA_USE_NATIVE_PQC=OFF`, the PQC source files are excluded and the library provides only classical primitives (SHA3, Ed25519, HKDF, AES-GCM).
 
-Fuzz harnesses are built separately via `fuzz/CMakeLists.txt` (12 targets covering all C implementations).
+Fuzz harnesses are built separately via `fuzz/CMakeLists.txt` (13 targets covering all C implementations).
 
 ### Architectural Invariants
 
@@ -767,16 +767,16 @@ docker run ama-cryptography:latest
 
 | Category | Purpose | Coverage Target | Files |
 |----------|---------|-----------------|-------|
-| Unit Tests | Individual function validation | 80% line coverage | 70 Python test files |
-| C Unit Tests | Native library validation | All C functions | 11 `test_*.c` registered via ctest in `tests/c/` (+ 1 standalone `bench_*.c`) |
+| Unit Tests | Individual function validation | 80% line coverage | 74 Python test files |
+| C Unit Tests | Native library validation | All C functions | 29 `test_*.c` registered via ctest in `tests/c/` (+ 1 standalone `bench_*.c` + 2 standalone `x25519_equiv_*.c`) |
 | Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
 | Performance Tests | Benchmark regression detection | All critical paths | `test_performance.py`, `benchmarks/` |
 | Security Tests | Cryptographic correctness | 100% crypto functions | `test_crypto_core_penetration.py`, `test_memory_security.py` |
 | Compliance Tests | Standards adherence | All claimed standards | `test_nist_kat.py`, `test_pqc_kat.py` |
-| Fuzz Tests | Input mutation testing | 12 C targets | `fuzz/fuzz_*.c` |
+| Fuzz Tests | Input mutation testing | 13 C targets | `fuzz/fuzz_*.c` |
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithms (815 AFT + 400 SHA-3 MCT) | `nist_vectors/` |
 
-**Total:** 2,028 Python test functions across 70 test files, plus the
+**Total:** 2,070 Python test functions across 74 test files, plus the
 ctest-registered C tests and standalone C benchmark under `tests/c/`
 (the exact C-test count varies with build options — `AMA_USE_NATIVE_PQC`
 gates `test_x25519`, `test_chacha20poly1305`, `test_argon2id`,
@@ -900,6 +900,7 @@ Cryptographic implementations are validated against:
 | 2.0.0 | 2026-03-08 | Steel Security Advisors LLC | Zero-dependency native C architecture, adaptive posture, hybrid KEM combiner, AES-256-GCM, FIPS 203/204/205 algorithm implementation, Phase 2 primitives, ethical pillar alignment, Mercury Agent integration |
 | 2.1.0 | 2026-03-25 | Steel Security Advisors LLC | Hand-written AVX2/NEON/SVE2 SIMD for 8 algorithms, runtime dispatch, security fixes S1-S6, HMAC-SHA3-256 Cython binding, CSRC alignment report, SHA-512 deduplication, Python package structure, Cython acceleration strategy, build system architecture, INVARIANTS reference, NIST ACVP validation (815 vectors), fuzz testing (12 targets) |
 | 2.1.5 | 2026-04-17 | Steel Security Advisors LLC | Security audit fixes (length-prefixed HKDF encoding, constant-time ops), HSM support via PyKCS11, fd leak protection, INVARIANT-13 restoration with 52 tracked suppressions, comprehensive test coverage for secure_memory/crypto_api/PQC backends, documentation version alignment |
+| 3.0.0 | 2026-04-27 | Steel Security Advisors LLC | RFC 9106 Argon2id byte-identity fix (BREAKING — `ama_argon2id_legacy` / `native_argon2id_legacy` verify-only shim) and `out_len` cap at `AMA_ARGON2ID_MAX_TAG_LEN = 1024`; in-house AVX-512 4-way Keccak permutation kernel (opt-in `-DAMA_ENABLE_AVX512=ON`, EVEX YMM-width `vprolq` + `vpternlogq`, XCR0 5+6+7 gated) with `docs/AVX512_KECCAK_ADR.md` ADR; X25519 fe64 (radix-2⁶⁴) ladder + hand-written MULX+ADX inline-asm kernel (`fe64_mul512_mulx` / `fe64_sq512_mulx` / `fe64_reduce512_mulx`) under BMI2∧ADX bundle gate; X25519 4-way AVX2 Montgomery-ladder kernel + `ama_x25519_scalarmult_batch` API (opt-in `AMA_DISPATCH_USE_X25519_AVX2=1`); VAES + VPCLMULQDQ YMM AES-256-GCM clean replacement; Ed25519 verify-path SWE rectification + base-point comb table + merged NTT + AVX2 rejection (Tier-B PQC); batch ML-DSA-65 / ML-KEM-1024 sampling via 4-way SHAKE128/SHAKE256 + CBD2 AVX2; ChaCha20-Poly1305 8-way AVX2 (≥ 512 B) and Argon2 BlaMka G AVX2; SHA-3 auto-tune hysteresis (best-of-5, 10% revert threshold); NIST ACVP self-attestation (815/815 AFT, weekly continuous validation); D-1…D-10 distribution / tooling audit (wheel SONAME bundling with `$ORIGIN`/`@loader_path` runtime_library_dirs, CLI subprocess test self-contained, isolated `setup.py` CMake build dir, fatal Cython failures + `numpy>=1.24.0` / `Cython>=3.2.4` build pins, dudect AES-GCM tag-compare redesign, `.semgrep.yml` 341 FP → 0, X25519 dispatch-policy contract test, `setuptools>=78.1.1` / `wheel>=0.46.2` supply-chain pins, `setuptools<70` preflight, ed25519-donna fallthrough annotations) |
 
 ---
 
