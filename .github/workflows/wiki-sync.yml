@@ -1,5 +1,11 @@
 name: Sync Wiki
 
+# RULESET / REQUIRED-CHECKS NOTE: this workflow only fires on push to
+# `main` with `wiki/**` changes. The `sync-wiki` job is documentation
+# publishing, not correctness, so it must NOT be added to the
+# required-status-check ruleset on `main`. Same exclusion class as
+# `dudect.yml` and `baseline-guard.yml`; see PR #289 'Deliberately not
+# included' for the canonical list.
 on:
   push:
     branches:
@@ -10,6 +16,15 @@ on:
 
 permissions:
   contents: write
+
+# Serialize wiki publishes. The wiki is a separate git repository and
+# two concurrent pushes would race each other on `git push origin HEAD`,
+# leaving the wiki in a state where one of the two updates is silently
+# lost. We deliberately do NOT cancel in-progress runs — cancelling
+# mid-push could leave the wiki repo in a partial state. Queue instead.
+concurrency:
+  group: wiki-sync-${{ github.workflow }}
+  cancel-in-progress: false
 
 jobs:
   sync-wiki:

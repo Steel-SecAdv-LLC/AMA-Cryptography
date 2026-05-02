@@ -87,10 +87,10 @@ Five reasons, in priority order:
 
 5. **The earlier revision of this file was a plan; the implementation is the
    record.** The original ADR sketched a vendoring path because that was the
-   lowest-risk path *if no in-house alternative existed*. Branch B
-   (`copilot/claudeavx512-keccak-4-way-kernel`) demonstrated the in-house
-   alternative exists, audits cleanly, and matches the AVX2 4-way ABI
-   exactly. We update the record to reflect the actual decision.
+   lowest-risk path *if no in-house alternative existed*. The in-house
+   Branch B prototype demonstrated that the alternative exists, audits
+   cleanly, and matches the AVX2 4-way ABI exactly. We update the record
+   to reflect the actual decision.
 
 ## 3. What shipped
 

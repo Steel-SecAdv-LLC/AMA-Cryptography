@@ -11,9 +11,9 @@ name: ACVP Vector Validation
 
 on:
   push:
-    branches: [ main, 'claude/**' ]
+    branches: [ main, develop, 'feature/**', 'fix/**' ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
   schedule:
     # Weekly at 07:00 UTC on Monday.
     - cron: '0 7 * * 1'
@@ -111,6 +111,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
           sudo apt-get update
           sudo apt-get install -y build-essential cmake
 

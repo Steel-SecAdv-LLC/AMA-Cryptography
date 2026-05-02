@@ -2,7 +2,7 @@ name: CI - Build and Test
 
 on:
   push:
-    branches: [ main, develop, 'claude/**' ]
+    branches: [ main, develop, 'feature/**', 'fix/**' ]
   pull_request:
     branches: [ main, develop ]
   workflow_dispatch:
@@ -48,6 +48,7 @@ jobs:
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
           sudo apt-get update
           sudo apt-get install -y cmake libssl-dev ${{ matrix.cc }} ${{ matrix.cxx }}
 
@@ -112,6 +113,7 @@ jobs:
       - name: Install system dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
           sudo apt-get update
           sudo apt-get install -y build-essential python3-dev cmake libssl-dev
 
@@ -264,14 +266,26 @@ jobs:
       - name: Security scan (bandit)
         run: bandit -r ama_cryptography/ -l
 
-  # Benchmark Regression Detection
+  # Benchmark Regression Detection (Wheel Install)
   # Required job — fails the workflow on detected regression.
   # Environment variance on shared CI runners (25-50%) means baselines
   # must account for ctypes-fallback throughput, not Cython-optimized peaks.
+  #
+  # NAME DISAMBIGUATION: ci.yml::benchmark-regression also produces a
+  # "Benchmark Regression Detection" status check via an editable install
+  # (`pip install -e ".[dev]"`). This job is deliberately the wheel-install
+  # variant — it builds a real wheel via PEP 517 (`python -m build --wheel`),
+  # installs that wheel, and runs the benchmark harness from a directory
+  # outside the source tree so the install under test cannot be shadowed
+  # by `./ama_cryptography/`. Packaging-time regressions (missing
+  # MANIFEST.in entries, missing package_data, broken setup.py CMakeBuild
+  # paths, incomplete pyproject.toml [build-system].requires) only surface
+  # in this variant — they're invisible to an editable install.
+  # The two checks must remain independently required in branch rulesets.
   benchmark-regression:
-    name: Benchmark Regression Detection
+    name: Benchmark Regression Detection (Wheel Install)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     needs: [c-library]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -283,26 +297,60 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
           sudo apt-get update
           sudo apt-get install -y build-essential cmake libssl-dev
 
-      - name: Build native C library
-        run: |
-          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
-          cmake --build build -j4
-
-      - name: Install Python package
+      - name: Build wheel via PEP 517 (isolated build env)
+        # `python -m build --wheel` runs the build in an isolated env that
+        # only sees pyproject.toml's [build-system].requires — so a missing
+        # build-time dep (e.g., Cython, cmake, numpy) fails closed here
+        # rather than silently falling through on a workstation that
+        # happened to have it. setup.py's CMakeBuild compiles the native
+        # C library inside the build, so the resulting wheel ships the
+        # compiled libama_cryptography artifact.
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          pip install build
+          python -m build --wheel --outdir dist/
+          ls -lh dist/
 
-      - name: Run benchmark regression detection
+      - name: Install built wheel (no source-tree shadow)
+        # Plain `pip install dist/*.whl` — no `-e`, no fallback to source.
+        # numpy is only needed to import the optional math_engine extension
+        # transitively touched by some benchmarks; it's not declared in the
+        # base wheel's runtime deps because INVARIANT-1 keeps the runtime
+        # closure dependency-free.
         run: |
-          python benchmarks/benchmark_runner.py \
+          pip install dist/*.whl
+          pip install "numpy>=1.24.0,<3.0.0"
+
+      - name: Run benchmark regression detection (from temp dir, wheel-only)
+        # cd OUT of $GITHUB_WORKSPACE so `import ama_cryptography` cannot
+        # resolve to ./ama_cryptography (the working-tree shadow that
+        # would silently turn this job into ci.yml's editable variant).
+        # The site-packages assertion makes the shadow regression noisy:
+        # if a future commit accidentally re-introduces the editable
+        # install, this assertion fails the job before benchmarks run.
+        env:
+          SRCDIR: ${{ github.workspace }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/wheel-bench"
+          cd "$RUNNER_TEMP/wheel-bench"
+          python -c "
+          import ama_cryptography
+          loc = ama_cryptography.__file__
+          assert 'site-packages' in loc, (
+              f'wheel install not active — ama_cryptography loaded from {loc!r}; '
+              'editable / source-tree shadow regression. Re-check the install step.'
+          )
+          print(f'OK: ama_cryptography loaded from {loc}')
+          "
+          python "$SRCDIR/benchmarks/benchmark_runner.py" \
             --verbose \
-            --baseline benchmarks/baseline.json \
-            --output benchmarks/regression_results.json \
-            --markdown benchmarks/regression_report.md
+            --baseline "$SRCDIR/benchmarks/baseline.json" \
+            --output "$SRCDIR/benchmarks/regression_results.json" \
+            --markdown "$SRCDIR/benchmarks/regression_report.md"
 
       - name: Upload regression report
         if: always()
@@ -312,14 +360,24 @@ jobs:
           path: |
             benchmarks/regression_results.json
             benchmarks/regression_report.md
+            dist/*.whl
 
-  # Docker Build — non-blocking: transient Docker Hub auth/rate-limit
-  # failures must not gate PRs.
+  # Docker Build — gating: the smoke tests at the bottom of this job
+  # exercise the exact path a downstream consumer hits on `docker pull`,
+  # so a build/runtime regression here is a customer-visible regression
+  # and must block merge. Transient Docker Hub auth/rate-limit failures
+  # are mitigated in-job via:
+  #   * Pre-pulling the BuildKit image with 5 retries + exponential backoff
+  #   * Optional Docker Hub login (gated on both DOCKERHUB_USERNAME and
+  #     DOCKERHUB_TOKEN being set, so a half-configured fork degrades
+  #     cleanly rather than failing noisily)
+  # If you find yourself wanting to re-add continue-on-error here,
+  # diagnose the underlying flake instead — silencing this gate masks
+  # exactly the class of regression it exists to catch.
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    continue-on-error: true
     # Job-level env so the optional-login step can gate on env.* in `if:`.
     # `secrets.*` is not allowed in step-level `if:` expressions, which
     # otherwise causes a workflow-validation error before any job runs.
