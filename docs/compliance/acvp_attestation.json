@@ -181,7 +181,7 @@
   },
   "continuous_validation": {
     "workflow": ".github/workflows/acvp_validation.yml",
-    "triggers": ["push:main", "push:claude/**", "pull_request:main", "weekly-schedule", "workflow_dispatch"],
+    "triggers": ["push:main", "push:develop", "push:feature/**", "pull_request:main", "pull_request:develop", "weekly-schedule", "workflow_dispatch"],
     "summary_artifact": "nist_vectors/validation_summary.json"
   },
   "disclaimers": [

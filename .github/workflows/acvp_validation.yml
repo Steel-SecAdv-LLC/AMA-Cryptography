@@ -11,7 +11,7 @@ name: ACVP Vector Validation
 
 on:
   push:
-    branches: [ main, develop, 'claude/**' ]
+    branches: [ main, develop, 'feature/**' ]
   pull_request:
     branches: [ main, develop ]
   schedule:
