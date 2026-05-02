@@ -1,5 +1,11 @@
 name: Sync Wiki
 
+# RULESET / REQUIRED-CHECKS NOTE: this workflow only fires on push to
+# `main` with `wiki/**` changes. The `sync-wiki` job is documentation
+# publishing, not correctness, so it must NOT be added to the
+# required-status-check ruleset on `main`. Same exclusion class as
+# `dudect.yml` and `baseline-guard.yml`; see PR #289 'Deliberately not
+# included' for the canonical list.
 on:
   push:
     branches:

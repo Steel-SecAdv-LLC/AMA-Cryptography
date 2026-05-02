@@ -1,5 +1,26 @@
 name: CI - dudect Constant-Time Verification
 
+# RULESET / REQUIRED-CHECKS NOTE
+# ------------------------------
+# This workflow is path-filtered to PRs that touch C source / dudect
+# harness code (see `paths:` blocks below). PRs that don't touch any of
+# those paths will NOT trigger this workflow, so its 4 job names
+# ('dudect - Utility Functions', 'dudect - PQC Primitives',
+#  'dudect - Legacy Harnesses (tools/constant_time)',
+#  'dudect - X25519 AVX2 4-way (opt-in)') do NOT emit a status check on
+# such PRs.
+#
+# Consequence for branch rulesets: do NOT add these 4 names to the
+# `main` branch's required-status-check list. A required check that is
+# never reported on path-filtered PRs blocks merge indefinitely with
+# 'Expected — Waiting for status to be reported'. Same reasoning as
+# `baseline-guard.yml::Enforce baseline.json justification` and the
+# wiki-sync job — see PR #289 description ('Deliberately not included')
+# for the canonical exclusion list.
+#
+# The dudect gate still fails closed when it DOES run (no
+# `continue-on-error`, no silent skips inside the harness), which is the
+# regression case it exists to catch.
 on:
   push:
     branches: [ main, develop, 'feature/**' ]

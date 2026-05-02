@@ -9,6 +9,15 @@
 # an identifier for the CI runner on which the measurement was taken.
 # See benchmarks/check_baseline_justification.py for the full contract
 # and docs/BENCHMARK_HISTORY.md for the motivating history.
+#
+# RULESET / REQUIRED-CHECKS NOTE: this workflow is path-filtered to PRs
+# touching `benchmarks/baseline.json`, so its 'Enforce baseline.json
+# justification' job does NOT emit on unrelated PRs. Do NOT list this
+# job in the `main` branch's required-status-check ruleset — it would
+# block every PR that doesn't touch baseline.json with 'Expected —
+# Waiting for status to be reported'. Same reasoning as `dudect.yml`
+# and the wiki-sync job; see PR #289 'Deliberately not included' for
+# the canonical exclusion list.
 
 name: Baseline.json Change Guard
 
