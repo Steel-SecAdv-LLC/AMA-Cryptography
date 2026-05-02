@@ -393,11 +393,25 @@ jobs:
         cd tools/constant_time
         make clean
         make all
-        # Run smoke tests with 50K iterations (faster for CI)
+        # Run smoke tests with 50K iterations (faster for CI).
+        #
+        # Pin to a single core (`taskset -c 0`) and elevate priority
+        # (`nice -n -10`) to suppress CPU-contention noise on shared
+        # GitHub-hosted runners. Without this, the dudect t-statistic
+        # at 50K iterations can drift past its leakage threshold from
+        # background noise alone — producing a CI false-positive on a
+        # tree that has not regressed (the failure mode observed on
+        # commit 8b8fe23, where this PR touched no C source). Mirrors
+        # the pattern dudect.yml::dudect-legacy-harnesses already uses
+        # for the identical binaries at the identical iteration count.
+        # The full dudect.yml gate (path-filtered to src/c/** changes)
+        # remains the authoritative constant-time check; this smoke
+        # test exists as a fast pre-gate for every PR regardless of
+        # path filter.
         echo "=== Utility function timing analysis ==="
-        ./dudect_harness 50000
+        taskset -c 0 nice -n -10 ./dudect_harness 50000
         echo "=== Crypto primitive timing analysis ==="
-        ./dudect_crypto 50000
+        taskset -c 0 nice -n -10 ./dudect_crypto 50000
 
     - name: Upload timing analysis results
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
