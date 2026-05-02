@@ -23,7 +23,7 @@ name: CI - dudect Constant-Time Verification
 # regression case it exists to catch.
 on:
   push:
-    branches: [ main, develop, 'feature/**' ]
+    branches: [ main, develop, 'feature/**', 'fix/**' ]
     paths:
       - 'src/c/**'
       - 'include/**'

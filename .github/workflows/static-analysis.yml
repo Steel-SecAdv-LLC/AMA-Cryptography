@@ -2,7 +2,7 @@ name: CI - Static Analysis (C Code)
 
 on:
   push:
-    branches: [ main, develop, 'feature/**' ]
+    branches: [ main, develop, 'feature/**', 'fix/**' ]
   pull_request:
     branches: [ main, develop ]
 
@@ -25,7 +25,10 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Install cppcheck
-        run: sudo apt-get update && sudo apt-get install -y cppcheck
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y cppcheck
 
       - name: Run cppcheck on C sources
         run: |
@@ -60,6 +63,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
           sudo apt-get update
           sudo apt-get install -y cmake clang clang-tools
 
@@ -140,6 +144,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
           sudo apt-get update
           sudo apt-get install -y cmake ${{ matrix.compiler }}
 
@@ -183,6 +188,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
           sudo apt-get update
           sudo apt-get install -y cmake clang
 
