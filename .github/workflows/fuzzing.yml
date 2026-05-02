@@ -2,7 +2,7 @@ name: CI - Fuzzing (libFuzzer)
 
 on:
   push:
-    branches: [ main, develop, 'claude/**' ]
+    branches: [ main, develop, 'feature/**' ]
   pull_request:
     branches: [ main, develop ]
   workflow_dispatch:

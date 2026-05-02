@@ -2,7 +2,7 @@ name: Security Scanning
 
 on:
   push:
-    branches: [ main, develop, 'claude/**' ]
+    branches: [ main, develop, 'feature/**' ]
     tags: [ 'v*' ]
   pull_request:
     branches: [ main, develop ]

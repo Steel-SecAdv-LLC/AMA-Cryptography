@@ -2,7 +2,7 @@ name: CI - dudect Constant-Time Verification
 
 on:
   push:
-    branches: [ main, develop, 'claude/**' ]
+    branches: [ main, develop, 'feature/**' ]
     paths:
       - 'src/c/**'
       - 'include/**'

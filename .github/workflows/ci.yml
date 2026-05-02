@@ -2,7 +2,7 @@ name: CI - Testing and Code Quality
 
 on:
   push:
-    branches: [ main, develop, 'claude/**' ]
+    branches: [ main, develop, 'feature/**' ]
   pull_request:
     branches: [ main, develop ]
   workflow_dispatch:
