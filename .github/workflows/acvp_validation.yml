@@ -11,9 +11,9 @@ name: ACVP Vector Validation
 
 on:
   push:
-    branches: [ main, 'claude/**' ]
+    branches: [ main, develop, 'claude/**' ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
   schedule:
     # Weekly at 07:00 UTC on Monday.
     - cron: '0 7 * * 1'

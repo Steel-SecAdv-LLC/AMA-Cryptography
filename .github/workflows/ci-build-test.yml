@@ -264,12 +264,20 @@ jobs:
       - name: Security scan (bandit)
         run: bandit -r ama_cryptography/ -l
 
-  # Benchmark Regression Detection
+  # Benchmark Regression Detection (Wheel Install)
   # Required job — fails the workflow on detected regression.
   # Environment variance on shared CI runners (25-50%) means baselines
   # must account for ctypes-fallback throughput, not Cython-optimized peaks.
+  #
+  # NAME DISAMBIGUATION: ci.yml::benchmark-regression also produces a
+  # "Benchmark Regression Detection" status check via an editable install
+  # (`pip install -e ".[dev]"`). This job is deliberately the wheel-install
+  # variant ("pip install -e ." against the prebuilt C library) because
+  # packaging-time regressions (missing MANIFEST.in entries, missing
+  # data files, broken setup.py CMakeBuild paths) only surface here.
+  # The two checks must remain independently required in branch rulesets.
   benchmark-regression:
-    name: Benchmark Regression Detection
+    name: Benchmark Regression Detection (Wheel Install)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [c-library]
@@ -313,13 +321,22 @@ jobs:
             benchmarks/regression_results.json
             benchmarks/regression_report.md
 
-  # Docker Build — non-blocking: transient Docker Hub auth/rate-limit
-  # failures must not gate PRs.
+  # Docker Build — gating: the smoke tests at the bottom of this job
+  # exercise the exact path a downstream consumer hits on `docker pull`,
+  # so a build/runtime regression here is a customer-visible regression
+  # and must block merge. Transient Docker Hub auth/rate-limit failures
+  # are mitigated in-job via:
+  #   * Pre-pulling the BuildKit image with 5 retries + exponential backoff
+  #   * Optional Docker Hub login (gated on both DOCKERHUB_USERNAME and
+  #     DOCKERHUB_TOKEN being set, so a half-configured fork degrades
+  #     cleanly rather than failing noisily)
+  # If you find yourself wanting to re-add continue-on-error here,
+  # diagnose the underlying flake instead — silencing this gate masks
+  # exactly the class of regression it exists to catch.
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    continue-on-error: true
     # Job-level env so the optional-login step can gate on env.* in `if:`.
     # `secrets.*` is not allowed in step-level `if:` expressions, which
     # otherwise causes a workflow-validation error before any job runs.
