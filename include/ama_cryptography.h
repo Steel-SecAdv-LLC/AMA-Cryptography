@@ -103,10 +103,29 @@ typedef enum {
 #define AMA_KYBER_1024_CIPHERTEXT_BYTES 1568
 #define AMA_KYBER_1024_SHARED_SECRET_BYTES 32
 
-/* SPHINCS+-256f */
+/* SPHINCS+-256f (legacy aliases for SLH-DSA-SHA2-256f-simple) */
 #define AMA_SPHINCS_256F_PUBLIC_KEY_BYTES 64
 #define AMA_SPHINCS_256F_SECRET_KEY_BYTES 128
 #define AMA_SPHINCS_256F_SIGNATURE_BYTES 49856
+
+/* SLH-DSA parameter set sizes (FIPS 205 Table 2) */
+#define AMA_SLHDSA_SHA2_256F_PUBLIC_KEY_BYTES 64
+#define AMA_SLHDSA_SHA2_256F_SECRET_KEY_BYTES 128
+#define AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES  49856
+
+#define AMA_SLHDSA_SHAKE_128S_PUBLIC_KEY_BYTES 32
+#define AMA_SLHDSA_SHAKE_128S_SECRET_KEY_BYTES 64
+#define AMA_SLHDSA_SHAKE_128S_SIGNATURE_BYTES  7856
+
+/**
+ * @brief FIPS 205 SLH-DSA parameter set selector.
+ *
+ * Numeric values are stable and form part of the AMA ABI.
+ */
+typedef enum {
+    AMA_SLHDSA_SHA2_256F  = 0,  /**< SLH-DSA-SHA2-256f-simple, NIST L5 */
+    AMA_SLHDSA_SHAKE_128S = 1   /**< SLH-DSA-SHAKE-128s,        NIST L1 */
+} ama_slhdsa_param_set_t;
 
 /* Ed25519 */
 #define AMA_ED25519_PUBLIC_KEY_BYTES 32
@@ -1393,6 +1412,94 @@ AMA_API ama_error_t ama_sphincs_verify_ctx(
     const uint8_t *signature, size_t signature_len,
     const uint8_t *public_key
 );
+
+/* ============================================================================
+ * SLH-DSA (FIPS 205) — parameter-driven public API
+ *
+ * Supports SLH-DSA-SHA2-256f-simple (AMA_SLHDSA_SHA2_256F, NIST L5) and
+ * SLH-DSA-SHAKE-128s (AMA_SLHDSA_SHAKE_128S, NIST L1). The legacy
+ * ama_sphincs_* surface above is preserved as a thin wrapper around the
+ * SHA2-256f variant; new code should use ama_slhdsa_*.
+ * ============================================================================ */
+
+/**
+ * @brief Generate an SLH-DSA keypair.
+ *
+ * @param ps  Parameter set selector.
+ * @param pk  Output buffer of `2n` bytes (32 for SHAKE-128s, 64 for SHA2-256f).
+ * @param sk  Output buffer of `4n` bytes (64 for SHAKE-128s, 128 for SHA2-256f).
+ * @return AMA_SUCCESS or error code.
+ */
+AMA_API ama_error_t ama_slhdsa_keygen(ama_slhdsa_param_set_t ps,
+                                      uint8_t *pk, uint8_t *sk);
+
+/**
+ * @brief Deterministic SLH-DSA keypair from explicit (sk_seed, sk_prf, pk_seed).
+ *
+ * Exposed for KAT validation and re-seeding flows; bypasses RNG.
+ * Each seed is `n` bytes (16 for SHAKE-128s, 32 for SHA2-256f).
+ */
+AMA_API ama_error_t ama_slhdsa_keygen_from_seed(ama_slhdsa_param_set_t ps,
+                                                const uint8_t *sk_seed,
+                                                const uint8_t *sk_prf,
+                                                const uint8_t *pk_seed,
+                                                uint8_t *pk, uint8_t *sk);
+
+/**
+ * @brief SLH-DSA signing with FIPS 205 §10.2 external/pure context wrapper.
+ *
+ * Applies M' = 0x00 || IntegerToBytes(|ctx|, 1) || ctx || M and signs M' with
+ * a fresh randomizer (hedged variant). Pass `ctx = NULL`, `ctx_len = 0` for
+ * the empty-context form. Rejects `ctx_len > 255`.
+ *
+ * @param ps             Parameter set selector.
+ * @param signature      Output buffer of at least `sig_bytes`.
+ * @param signature_len  In: capacity; Out: bytes written.
+ */
+AMA_API ama_error_t ama_slhdsa_sign(ama_slhdsa_param_set_t ps,
+                                    uint8_t *signature, size_t *signature_len,
+                                    const uint8_t *message, size_t message_len,
+                                    const uint8_t *ctx, size_t ctx_len,
+                                    const uint8_t *sk);
+
+/**
+ * @brief SLH-DSA verification with FIPS 205 §10.2 external/pure context wrapper.
+ */
+AMA_API ama_error_t ama_slhdsa_verify(ama_slhdsa_param_set_t ps,
+                                      const uint8_t *signature,
+                                      size_t signature_len,
+                                      const uint8_t *message, size_t message_len,
+                                      const uint8_t *ctx, size_t ctx_len,
+                                      const uint8_t *pk);
+
+/**
+ * @brief Deterministic SLH-DSA signing (FIPS 205 §10.2, addrnd = PK.seed).
+ *
+ * Exposed for ACVP byte-exact KAT validation against NIST's deterministic
+ * sigGen vectors. Production code should call ama_slhdsa_sign() (hedged).
+ */
+AMA_API ama_error_t ama_slhdsa_sign_deterministic(ama_slhdsa_param_set_t ps,
+                                                  uint8_t *signature,
+                                                  size_t *signature_len,
+                                                  const uint8_t *message,
+                                                  size_t message_len,
+                                                  const uint8_t *ctx,
+                                                  size_t ctx_len,
+                                                  const uint8_t *sk);
+
+/**
+ * @brief SLH-DSA "internal interface" signing with explicit `addrnd`.
+ *
+ * Skips the §10.2 context wrapper and signs `message` directly. Exposed for
+ * ACVP `signatureInterface == "internal"` KAT validation.
+ */
+AMA_API ama_error_t ama_slhdsa_sign_internal(ama_slhdsa_param_set_t ps,
+                                             uint8_t *signature,
+                                             size_t *signature_len,
+                                             const uint8_t *message,
+                                             size_t message_len,
+                                             const uint8_t *addrnd,
+                                             const uint8_t *sk);
 
 /* ============================================================================
  * DETERMINISTIC KEYGEN FROM SEED (KAT TESTING)
