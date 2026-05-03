@@ -324,6 +324,72 @@ def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_sphincs_verify_ctx.restype = ctypes.c_int
 
+        # SLH-DSA (FIPS 205) — parameter-driven public API.
+        # Param set selector: 0 = AMA_SLHDSA_SHA2_256F, 1 = AMA_SLHDSA_SHAKE_128S.
+        lib.ama_slhdsa_keygen.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+        ]
+        lib.ama_slhdsa_keygen.restype = ctypes.c_int
+
+        lib.ama_slhdsa_keygen_from_seed.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,  # sk_seed
+            ctypes.c_char_p,  # sk_prf
+            ctypes.c_char_p,  # pk_seed
+            ctypes.c_char_p,  # pk
+            ctypes.c_char_p,  # sk
+        ]
+        lib.ama_slhdsa_keygen_from_seed.restype = ctypes.c_int
+
+        lib.ama_slhdsa_sign.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+        ]
+        lib.ama_slhdsa_sign.restype = ctypes.c_int
+
+        lib.ama_slhdsa_verify.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+        ]
+        lib.ama_slhdsa_verify.restype = ctypes.c_int
+
+        lib.ama_slhdsa_sign_deterministic.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+        ]
+        lib.ama_slhdsa_sign_deterministic.restype = ctypes.c_int
+
+        lib.ama_slhdsa_sign_internal.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,  # addrnd (n bytes)
+            ctypes.c_char_p,
+        ]
+        lib.ama_slhdsa_sign_internal.restype = ctypes.c_int
+
         return True
     except AttributeError:
         # Library found but missing expected symbols — not built with AMA_USE_NATIVE_PQC
@@ -890,10 +956,40 @@ KYBER_SECRET_KEY_BYTES = 3168
 KYBER_CIPHERTEXT_BYTES = 1568
 KYBER_SHARED_SECRET_BYTES = 32
 
-# SPHINCS+-SHA2-256f-simple
+# SPHINCS+-SHA2-256f-simple (legacy aliases for SLH-DSA-SHA2-256f-simple)
 SPHINCS_PUBLIC_KEY_BYTES = 64
 SPHINCS_SECRET_KEY_BYTES = 128
 SPHINCS_SIGNATURE_BYTES = 49856
+
+# SLH-DSA (FIPS 205) — parameter set sizes.
+SLHDSA_SHA2_256F_PUBLIC_KEY_BYTES = 64
+SLHDSA_SHA2_256F_SECRET_KEY_BYTES = 128
+SLHDSA_SHA2_256F_SIGNATURE_BYTES = 49856
+
+SLHDSA_SHAKE_128S_PUBLIC_KEY_BYTES = 32
+SLHDSA_SHAKE_128S_SECRET_KEY_BYTES = 64
+SLHDSA_SHAKE_128S_SIGNATURE_BYTES = 7856
+
+# Param set selector values must match ama_slhdsa_param_set_t in the header.
+_AMA_SLHDSA_SHA2_256F = 0
+_AMA_SLHDSA_SHAKE_128S = 1
+
+_SLHDSA_PARAM_SETS = {
+    "SHA2-256f": (
+        _AMA_SLHDSA_SHA2_256F,
+        SLHDSA_SHA2_256F_PUBLIC_KEY_BYTES,
+        SLHDSA_SHA2_256F_SECRET_KEY_BYTES,
+        SLHDSA_SHA2_256F_SIGNATURE_BYTES,
+        32,  # n
+    ),
+    "SHAKE-128s": (
+        _AMA_SLHDSA_SHAKE_128S,
+        SLHDSA_SHAKE_128S_PUBLIC_KEY_BYTES,
+        SLHDSA_SHAKE_128S_SECRET_KEY_BYTES,
+        SLHDSA_SHAKE_128S_SIGNATURE_BYTES,
+        16,  # n
+    ),
+}
 
 # Ed25519 (RFC 8032)
 ED25519_PUBLIC_KEY_BYTES = 32
@@ -1921,6 +2017,259 @@ def sphincs_verify_ctx(message: bytes, signature: bytes, public_key: bytes, ctx:
         )
         return bool(rc == 0)
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
+
+
+# ============================================================================
+# SLH-DSA (FIPS 205) — parameter-driven Python API
+# ============================================================================
+
+
+@dataclass
+class SlhDsaKeyPair:
+    """
+    SLH-DSA (FIPS 205) post-quantum key pair, parameter-driven.
+
+    Supports two NIST-standardized parameter sets:
+
+    - ``"SHA2-256f"`` — NIST L5; pk=64, sk=128, sig=49856.
+    - ``"SHAKE-128s"`` — NIST L1; pk=32, sk=64,  sig=7856.
+
+    INVARIANT-6: secret_key is stored as a mutable bytearray so it can be
+    securely zeroed via :meth:`wipe` / :meth:`__del__`.
+    """
+
+    public_key: bytes
+    secret_key: Union[bytes, bytearray] = field(repr=False)
+    param_set: str = "SHAKE-128s"
+
+    def __post_init__(self) -> None:
+        if isinstance(self.secret_key, bytes):
+            object.__setattr__(self, "secret_key", bytearray(self.secret_key))
+        if self.param_set not in _SLHDSA_PARAM_SETS:
+            raise ValueError(
+                f"Unsupported SLH-DSA parameter set: {self.param_set!r}. "
+                f"Supported: {sorted(_SLHDSA_PARAM_SETS)}"
+            )
+        _, pk_len, sk_len, _, _ = _SLHDSA_PARAM_SETS[self.param_set]
+        if len(self.public_key) != pk_len:
+            raise ValueError(
+                f"SLH-DSA-{self.param_set}: invalid public key length "
+                f"(expected {pk_len}, got {len(self.public_key)})"
+            )
+        if len(self.secret_key) != sk_len:
+            raise ValueError(
+                f"SLH-DSA-{self.param_set}: invalid secret key length "
+                f"(expected {sk_len}, got {len(self.secret_key)})"
+            )
+
+    def wipe(self) -> None:
+        """Securely zero the secret key in place (INVARIANT-6)."""
+        if isinstance(self.secret_key, bytearray):
+            for i in range(len(self.secret_key)):
+                self.secret_key[i] = 0
+
+    def __del__(self) -> None:
+        try:
+            self.wipe()
+        except Exception as exc:  # — INVARIANT-3/9: __del__ must not raise (FIN-004)
+            # INVARIANT-3 addendum: silence is never the only outcome.
+            record_finalizer_error("SlhDsaKeyPair", f"wipe() failed: {exc}")
+
+
+def _slhdsa_resolve(param_set: str) -> tuple:
+    """Look up (enum_id, pk_len, sk_len, sig_len, n) or raise ValueError."""
+    try:
+        return _SLHDSA_PARAM_SETS[param_set]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unsupported SLH-DSA parameter set: {param_set!r}. "
+            f"Supported: {sorted(_SLHDSA_PARAM_SETS)}"
+        ) from exc
+
+
+def generate_slhdsa_keypair(param_set: str = "SHAKE-128s") -> SlhDsaKeyPair:
+    """Generate an SLH-DSA keypair.
+
+    Args:
+        param_set: One of ``"SHA2-256f"`` or ``"SHAKE-128s"``.
+
+    Returns:
+        SlhDsaKeyPair with platform-RNG-sourced key material.
+
+    Raises:
+        SphincsUnavailableError: If the native SLH-DSA backend is not built.
+        ValueError: On unsupported param_set.
+        RuntimeError: On native key generation failure.
+    """
+    enum_id, pk_len, sk_len, _, _ = _slhdsa_resolve(param_set)
+    if not SPHINCS_AVAILABLE or _native_lib is None:
+        raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
+    pk_buf = ctypes.create_string_buffer(pk_len)
+    sk_buf = ctypes.create_string_buffer(sk_len)
+    rc = _native_lib.ama_slhdsa_keygen(ctypes.c_int(enum_id), pk_buf, sk_buf)
+    if rc != 0:
+        raise RuntimeError(f"ama_slhdsa_keygen({param_set}) failed: rc={rc}")
+    return SlhDsaKeyPair(
+        public_key=bytes(pk_buf.raw[:pk_len]),
+        secret_key=bytearray(sk_buf.raw[:sk_len]),
+        param_set=param_set,
+    )
+
+
+def slhdsa_sign(
+    message: bytes,
+    secret_key: Union[bytes, bytearray],
+    ctx: bytes = b"",
+    param_set: str = "SHAKE-128s",
+) -> bytes:
+    """Sign a message with SLH-DSA using the FIPS 205 §10.2 context wrapper.
+
+    The signature is produced via the hedged variant (fresh ``addrnd``).
+    For byte-exact NIST ACVP deterministic test vectors, use
+    :func:`slhdsa_sign_deterministic`.
+
+    Raises:
+        ValueError: If ``len(ctx) > 255`` or ``secret_key`` is the wrong length.
+        SphincsUnavailableError: If the native backend is not built.
+        RuntimeError: On native signing failure.
+    """
+    if len(ctx) > 255:
+        raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
+    enum_id, _, sk_len, sig_len, _ = _slhdsa_resolve(param_set)
+    if not SPHINCS_AVAILABLE or _native_lib is None:
+        raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
+    if len(secret_key) != sk_len:
+        raise ValueError(
+            f"SLH-DSA-{param_set}: invalid secret key length "
+            f"(expected {sk_len}, got {len(secret_key)})"
+        )
+    sig_buf = ctypes.create_string_buffer(sig_len)
+    sig_buf_len = ctypes.c_size_t(sig_len)
+    rc = _native_lib.ama_slhdsa_sign(
+        ctypes.c_int(enum_id),
+        sig_buf,
+        ctypes.byref(sig_buf_len),
+        message,
+        ctypes.c_size_t(len(message)),
+        ctx if ctx else None,
+        ctypes.c_size_t(len(ctx)),
+        bytes(secret_key),
+    )
+    if rc != 0:
+        raise RuntimeError(f"ama_slhdsa_sign({param_set}) failed: rc={rc}")
+    return bytes(sig_buf.raw[: sig_buf_len.value])
+
+
+def slhdsa_verify(
+    message: bytes,
+    signature: bytes,
+    public_key: bytes,
+    ctx: bytes = b"",
+    param_set: str = "SHAKE-128s",
+) -> bool:
+    """Verify an SLH-DSA signature with FIPS 205 §10.2 context wrapper.
+
+    Returns ``True`` iff the signature is valid; returns ``False`` for any
+    cryptographic verification failure (wrong message, wrong context, wrong
+    public key, malformed signature length, …).
+    """
+    if len(ctx) > 255:
+        raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
+    enum_id, pk_len, _, _, _ = _slhdsa_resolve(param_set)
+    if not SPHINCS_AVAILABLE or _native_lib is None:
+        raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
+    if len(public_key) != pk_len:
+        raise ValueError(
+            f"SLH-DSA-{param_set}: invalid public key length "
+            f"(expected {pk_len}, got {len(public_key)})"
+        )
+    rc = _native_lib.ama_slhdsa_verify(
+        ctypes.c_int(enum_id),
+        signature,
+        ctypes.c_size_t(len(signature)),
+        message,
+        ctypes.c_size_t(len(message)),
+        ctx if ctx else None,
+        ctypes.c_size_t(len(ctx)),
+        public_key,
+    )
+    return rc == 0
+
+
+def slhdsa_sign_deterministic(
+    message: bytes,
+    secret_key: Union[bytes, bytearray],
+    ctx: bytes = b"",
+    param_set: str = "SHAKE-128s",
+) -> bytes:
+    """Deterministic SLH-DSA sign (FIPS 205 §10.2 with ``addrnd = PK.seed``).
+
+    Exposed for byte-exact NIST ACVP KAT validation against the deterministic
+    sigGen vectors. **Production code should call** :func:`slhdsa_sign`
+    (hedged) **for forward-secrecy under fault attacks.**
+    """
+    if len(ctx) > 255:
+        raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
+    enum_id, _, sk_len, sig_len, _ = _slhdsa_resolve(param_set)
+    if not SPHINCS_AVAILABLE or _native_lib is None:
+        raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
+    if len(secret_key) != sk_len:
+        raise ValueError(
+            f"SLH-DSA-{param_set}: invalid secret key length "
+            f"(expected {sk_len}, got {len(secret_key)})"
+        )
+    sig_buf = ctypes.create_string_buffer(sig_len)
+    sig_buf_len = ctypes.c_size_t(sig_len)
+    rc = _native_lib.ama_slhdsa_sign_deterministic(
+        ctypes.c_int(enum_id),
+        sig_buf,
+        ctypes.byref(sig_buf_len),
+        message,
+        ctypes.c_size_t(len(message)),
+        ctx if ctx else None,
+        ctypes.c_size_t(len(ctx)),
+        bytes(secret_key),
+    )
+    if rc != 0:
+        raise RuntimeError(f"ama_slhdsa_sign_deterministic({param_set}) failed: rc={rc}")
+    return bytes(sig_buf.raw[: sig_buf_len.value])
+
+
+def slhdsa_sign_internal(
+    message: bytes,
+    secret_key: Union[bytes, bytearray],
+    addrnd: bytes,
+    param_set: str = "SHAKE-128s",
+) -> bytes:
+    """SLH-DSA "internal interface" sign with explicit ``addrnd``.
+
+    Skips the FIPS 205 §10.2 context wrapper and signs ``message`` directly.
+    Exposed for ACVP ``signatureInterface == "internal"`` KAT validation.
+    """
+    enum_id, _, sk_len, sig_len, n = _slhdsa_resolve(param_set)
+    if not SPHINCS_AVAILABLE or _native_lib is None:
+        raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
+    if len(secret_key) != sk_len:
+        raise ValueError(
+            f"SLH-DSA-{param_set}: invalid secret key length "
+            f"(expected {sk_len}, got {len(secret_key)})"
+        )
+    if len(addrnd) != n:
+        raise ValueError(f"SLH-DSA-{param_set}: addrnd must be {n} bytes, got {len(addrnd)}")
+    sig_buf = ctypes.create_string_buffer(sig_len)
+    sig_buf_len = ctypes.c_size_t(sig_len)
+    rc = _native_lib.ama_slhdsa_sign_internal(
+        ctypes.c_int(enum_id),
+        sig_buf,
+        ctypes.byref(sig_buf_len),
+        message,
+        ctypes.c_size_t(len(message)),
+        bytes(addrnd),
+        bytes(secret_key),
+    )
+    if rc != 0:
+        raise RuntimeError(f"ama_slhdsa_sign_internal({param_set}) failed: rc={rc}")
+    return bytes(sig_buf.raw[: sig_buf_len.value])
 
 
 # ============================================================================

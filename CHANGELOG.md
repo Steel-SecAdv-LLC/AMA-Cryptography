@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Applies to Release | 3.0.0 |
-| Last Updated | 2026-04-27 |
+| Applies to Release | 3.1.0 |
+| Last Updated | 2026-05-03 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -20,7 +20,7 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 
 
-## [Unreleased]
+## [3.1.0] - 2026-05-03
 
 ### Added
 - **FIPS 204 §5.2 ML-DSA-65 context-aware signing.** New
@@ -36,6 +36,43 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   could not be reproduced by the empty-context-only signing path.
   *Strictly additive; the existing context-free `ama_dilithium_sign` /
   `dilithium_sign` API is unchanged.*
+- **FIPS 205 SLH-DSA-SHAKE-128s parameter set (NIST L1, in-house, no
+  vendoring).** New parameter-driven core in `src/c/ama_slhdsa.c`
+  threads `const slhdsa_params_t *p` through every helper instead of
+  `#define SPX_*` macros and instantiates two parameter sets:
+  `AMA_SLHDSA_SHA2_256F` (existing -256f, NIST L5) and
+  `AMA_SLHDSA_SHAKE_128S` (new, NIST L1). The SHAKE family uses the
+  full uncompressed 32-byte ADRS (FIPS 205 §4.2) and the SHAKE-256-based
+  hash chain `H_msg / PRF / PRF_msg / F / H / T_l` (FIPS 205 §11.1)
+  reusing the existing streaming `ama_shake256_inc_*` API in
+  `src/c/ama_sha3.c`; PRF inputs use the separate `WOTS_PRF=5` /
+  `FORS_PRF=6` address types per FIPS 205 §6 / §8. New public C API
+  `ama_slhdsa_keygen / keygen_from_seed / sign / verify`, plus
+  `ama_slhdsa_sign_deterministic` and `ama_slhdsa_sign_internal` for
+  ACVP byte-exact KAT pinning, alongside size constants
+  `AMA_SLHDSA_{SHA2_256F,SHAKE_128S}_{PUBLIC_KEY,SECRET_KEY,SIGNATURE}_BYTES`
+  in `include/ama_cryptography.h`. Python binding in
+  `ama_cryptography/pqc_backends.py` adds the `SlhDsaKeyPair` dataclass,
+  `generate_slhdsa_keypair / slhdsa_sign / slhdsa_verify`, the
+  `slhdsa_sign_deterministic` / `slhdsa_sign_internal` test helpers, and
+  the `SLHDSA_SHAKE_128S_*_BYTES` size constants. Pinned byte-exact
+  against all 14 NIST ACVP sigGen vectors for SLH-DSA-SHAKE-128s
+  (7 deterministic external/pure tcIds 214–220, plus 7 hedged
+  external/pure tcIds 526–532) in `tests/test_pqc_kat.py`; the
+  existing FIPS 205 SLH-DSA-SHA2-256f sigVer KAT remains green.
+
+### Changed
+- **No backward-compat regressions.** The legacy `ama_sphincs_*` C API
+  and the Python `sphincs_sign / sphincs_verify / generate_sphincs_keypair`
+  surface are unchanged externally; the size constants
+  `SPHINCS_PUBLIC_KEY_BYTES / SPHINCS_SECRET_KEY_BYTES /
+  SPHINCS_SIGNATURE_BYTES` continue to report the SLH-DSA-SHA2-256f-simple
+  sizes (64 / 128 / 49856) and the on-the-wire signature format is
+  identical. New SLH-DSA symbols are net-additive.
+
+
+## [Unreleased]
+
 
 
 ## [3.0.0] - 2026-04-27

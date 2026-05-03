@@ -683,3 +683,143 @@ class TestSLHDSA_SHA2_256f_KAT:
                 tested += 1
 
         assert tested > 0, "No SLH-DSA-SHA2-256f external pure vectors found"
+
+
+# ============================================================================
+# SLH-DSA-SHAKE-128s — NIST ACVP byte-exact KAT (FIPS 205, NIST L1)
+# ============================================================================
+
+
+class TestSLHDSA_SHAKE_128s_ACVP:
+    """Byte-exact NIST ACVP sigGen vectors for SLH-DSA-SHAKE-128s.
+
+    Vectors live at ``tests/kat/fips205/SLH-DSA-SHAKE-128s-sigGen-FIPS205.json``;
+    each entry carries everything needed to reproduce the signature
+    (sk, message, context, expected signature, and for hedged vectors
+    also additionalRandomness). The test asserts byte equality —
+    "FIPS-aligned but doesn't pass FIPS KATs" is not a contract this
+    suite is willing to ship.
+    """
+
+    VECTORS_PATH = (
+        Path(__file__).parent / "kat" / "fips205" / "SLH-DSA-SHAKE-128s-sigGen-FIPS205.json"
+    )
+
+    @pytest.fixture(scope="class")
+    def vectors(self) -> list:
+        if not self.VECTORS_PATH.exists():
+            pytest.skip(f"NIST ACVP SLH-DSA-SHAKE-128s vectors not present at {self.VECTORS_PATH}")
+        with open(self.VECTORS_PATH) as f:
+            data = json.load(f)
+        vectors = data["vectors"]
+        if not vectors:
+            pytest.skip("No SLH-DSA-SHAKE-128s vectors in JSON")
+        return vectors
+
+    def test_size_constants(self) -> None:
+        from ama_cryptography.pqc_backends import (
+            SLHDSA_SHAKE_128S_PUBLIC_KEY_BYTES,
+            SLHDSA_SHAKE_128S_SECRET_KEY_BYTES,
+            SLHDSA_SHAKE_128S_SIGNATURE_BYTES,
+        )
+
+        assert SLHDSA_SHAKE_128S_PUBLIC_KEY_BYTES == 32
+        assert SLHDSA_SHAKE_128S_SECRET_KEY_BYTES == 64
+        assert SLHDSA_SHAKE_128S_SIGNATURE_BYTES == 7856
+
+    def test_round_trip(self) -> None:
+        """SHAKE-128s keygen → sign → verify holds, negatives reject."""
+        from ama_cryptography.pqc_backends import (
+            generate_slhdsa_keypair,
+            slhdsa_sign,
+            slhdsa_verify,
+        )
+
+        kp = generate_slhdsa_keypair("SHAKE-128s")
+        assert len(kp.public_key) == 32 and len(kp.secret_key) == 64
+        sig = slhdsa_sign(b"hello SHAKE-128s", kp.secret_key, b"")
+        assert len(sig) == 7856
+        assert slhdsa_verify(b"hello SHAKE-128s", sig, kp.public_key, b"")
+        # wrong message
+        assert not slhdsa_verify(b"different", sig, kp.public_key, b"")
+        # wrong context
+        assert not slhdsa_verify(b"hello SHAKE-128s", sig, kp.public_key, b"x")
+        # wrong public key
+        kp2 = generate_slhdsa_keypair("SHAKE-128s")
+        assert not slhdsa_verify(b"hello SHAKE-128s", sig, kp2.public_key, b"")
+
+    def test_round_trip_with_context(self) -> None:
+        """SHAKE-128s sign/verify with a non-empty context (FIPS 205 §10.2)."""
+        from ama_cryptography.pqc_backends import (
+            generate_slhdsa_keypair,
+            slhdsa_sign,
+            slhdsa_verify,
+        )
+
+        kp = generate_slhdsa_keypair("SHAKE-128s")
+        ctx = b"FINDOMEGAYOU/v1"
+        sig = slhdsa_sign(b"hi", kp.secret_key, ctx)
+        assert slhdsa_verify(b"hi", sig, kp.public_key, ctx)
+        assert not slhdsa_verify(b"hi", sig, kp.public_key, b"")
+
+    def test_ctx_too_long_rejected(self) -> None:
+        from ama_cryptography.pqc_backends import generate_slhdsa_keypair, slhdsa_sign
+
+        kp = generate_slhdsa_keypair("SHAKE-128s")
+        with pytest.raises(ValueError):
+            slhdsa_sign(b"x", kp.secret_key, b"\x00" * 256)
+
+    def test_acvp_siggen_byte_exact(self, vectors: list) -> None:
+        """All 14 NIST ACVP SHAKE-128s sigGen vectors match byte-for-byte.
+
+        This is the contract: sign(M, sk, ctx[, addrnd]) produces exactly
+        the bytes NIST published. Mercury's tcIds {214, 215, 216} are
+        covered as a subset of the deterministic external/pure set.
+        """
+        from ama_cryptography.pqc_backends import (
+            slhdsa_sign_deterministic,
+            slhdsa_sign_internal,
+        )
+
+        det_count = hedged_count = 0
+        for v in vectors:
+            sk = bytes.fromhex(v["sk"])
+            msg = bytes.fromhex(v["message"])
+            ctx = bytes.fromhex(v.get("context", ""))
+            expected = bytes.fromhex(v["signature"])
+            assert len(expected) == 7856, f"tc{v['tcId']}: expected sig is not 7856 B"
+
+            if v.get("deterministic"):
+                produced = slhdsa_sign_deterministic(msg, sk, ctx, param_set="SHAKE-128s")
+                det_count += 1
+            else:
+                # Hedged: NIST provides additionalRandomness; replay it via the
+                # internal interface after applying the §10.2 context wrapper
+                # (matching the exact M' the public sign() would build).
+                addrnd = bytes.fromhex(v["additionalRandomness"])
+                wrapped = b"\x00" + bytes([len(ctx)]) + ctx + msg
+                produced = slhdsa_sign_internal(wrapped, sk, addrnd, param_set="SHAKE-128s")
+                hedged_count += 1
+
+            assert produced == expected, (
+                f"SLH-DSA-SHAKE-128s sigGen tc{v['tcId']}: "
+                "AMA signature differs from NIST reference."
+            )
+
+        # Both modes must be exercised so a regression in either path is caught.
+        assert det_count >= 1, "no deterministic vectors exercised"
+        assert hedged_count >= 1, "no hedged vectors exercised"
+
+    def test_acvp_siggen_verify_round_trip(self, vectors: list) -> None:
+        """Each NIST signature also verifies under our verifier (sanity)."""
+        from ama_cryptography.pqc_backends import slhdsa_verify
+
+        for v in vectors:
+            sk = bytes.fromhex(v["sk"])
+            pk = sk[32:]  # PK.seed || PK.root for n=16 (FIPS 205 §10.1)
+            msg = bytes.fromhex(v["message"])
+            ctx = bytes.fromhex(v.get("context", ""))
+            sig = bytes.fromhex(v["signature"])
+            assert slhdsa_verify(
+                msg, sig, pk, ctx, param_set="SHAKE-128s"
+            ), f"NIST sig tc{v['tcId']} did not verify under AMA verifier"

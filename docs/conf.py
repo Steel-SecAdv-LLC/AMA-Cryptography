@@ -62,8 +62,8 @@ if not _docs_flag_set:
 project = "AMA Cryptography"
 copyright = "2025-2026, Steel Security Advisors LLC"
 author = "Andrew E. A."
-version = "3.0.0"
-release = "3.0.0"
+version = "3.1.0"
+release = "3.1.0"
 
 # General configuration
 extensions = [
