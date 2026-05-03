@@ -1870,6 +1870,76 @@ AMA_API ama_error_t ama_dilithium_verify(const uint8_t *message, size_t message_
 }
 
 /**
+ * ML-DSA-65 Signing with context (FIPS 204 §5.2, Algorithm 2 — external/pure)
+ *
+ * Applies the domain-separation wrapper M' = IntegerToBytes(0,1) ||
+ * IntegerToBytes(|ctx|,1) || ctx || M defined in FIPS 204 §5.2 (lines 5–6),
+ * then delegates to ama_dilithium_sign(). This is the symmetric counterpart
+ * of ama_dilithium_verify_ctx() and matches it byte-for-byte on the wrapped
+ * message construction so sign/verify symmetry holds.
+ *
+ * Per FIPS 204 §5.2 line 4, ctx_len > 255 is rejected with a non-zero error.
+ *
+ * @param signature     Output buffer for signature (3309 bytes max)
+ * @param signature_len Pointer to signature length (in/out)
+ * @param message       Raw message to sign
+ * @param message_len   Length of message
+ * @param ctx           Context string (0–255 bytes, per FIPS 204 §5.2)
+ * @param ctx_len       Length of context (must be <= 255)
+ * @param secret_key    Secret key (4032 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_dilithium_sign_ctx(
+    uint8_t *signature, size_t *signature_len,
+    const uint8_t *message, size_t message_len,
+    const uint8_t *ctx, size_t ctx_len,
+    const uint8_t *secret_key) {
+
+    uint8_t *wrapped;
+    size_t wrapped_len;
+    ama_error_t result;
+
+    if (signature == NULL || signature_len == NULL ||
+        message == NULL || secret_key == NULL) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (ctx_len > 0 && ctx == NULL) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    /* FIPS 204 §5.2 line 4: context must be at most 255 bytes */
+    if (ctx_len > 255) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    /* Overflow guard: wrapped_len = 2 + ctx_len + message_len */
+    if (message_len > SIZE_MAX - 2 - ctx_len) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    wrapped_len = 2 + ctx_len + message_len;
+
+    wrapped = (uint8_t *)calloc((size_t)1, wrapped_len);
+    if (!wrapped) {
+        return AMA_ERROR_MEMORY;
+    }
+
+    /* M' = 0x00 || IntegerToBytes(|ctx|, 1) || ctx || M */
+    wrapped[0] = 0x00;
+    wrapped[1] = (uint8_t)ctx_len;
+    if (ctx_len > 0 && ctx != NULL) {
+        memcpy(wrapped + 2, ctx, ctx_len);
+    }
+    memcpy(wrapped + 2 + ctx_len, message, message_len);
+
+    result = ama_dilithium_sign(signature, signature_len,
+                                wrapped, wrapped_len, secret_key);
+
+    ama_secure_memzero(wrapped, wrapped_len);
+    free(wrapped);
+    return result;
+}
+
+/**
  * ML-DSA-65 Verification with context (FIPS 204, Algorithm 5 — external/pure)
  *
  * Applies the domain-separation wrapper M' = 0x00 || len(ctx) || ctx || M

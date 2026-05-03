@@ -1218,6 +1218,32 @@ AMA_API ama_error_t ama_dilithium_sign(
 );
 
 /**
+ * @brief Sign message with ML-DSA-65 (Dilithium) using FIPS 204 §5.2 binding context
+ *
+ * Applies domain-separation wrapper M' = 0x00 || len(ctx) || ctx || M
+ * before delegating to ama_dilithium_sign(). This is the symmetric
+ * counterpart of ama_dilithium_verify_ctx() — identical wrapper, so
+ * sign/verify round-trip with the same ctx always succeeds.
+ *
+ * Per FIPS 204 §5.2 line 4, ctx_len > 255 is rejected with a non-zero error.
+ *
+ * @param signature     Output: signature buffer
+ * @param signature_len Output: actual signature length (in/out)
+ * @param message       Raw message to sign
+ * @param message_len   Length of message
+ * @param ctx           Context string (0–255 bytes)
+ * @param ctx_len       Length of context (must be <= 255)
+ * @param secret_key    Secret key (4032 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_dilithium_sign_ctx(
+    uint8_t *signature, size_t *signature_len,
+    const uint8_t *message, size_t message_len,
+    const uint8_t *ctx, size_t ctx_len,
+    const uint8_t *secret_key
+);
+
+/**
  * @brief Verify ML-DSA-65 (Dilithium) signature
  *
  * @param message       Message to verify

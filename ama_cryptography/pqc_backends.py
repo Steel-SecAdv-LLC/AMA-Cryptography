@@ -251,6 +251,17 @@ def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_dilithium_verify_ctx.restype = ctypes.c_int
 
+        lib.ama_dilithium_sign_ctx.argtypes = [
+            ctypes.c_char_p,  # signature (out)
+            ctypes.POINTER(ctypes.c_size_t),  # signature_len (in/out)
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # ctx
+            ctypes.c_size_t,  # ctx_len
+            ctypes.c_char_p,  # secret_key
+        ]
+        lib.ama_dilithium_sign_ctx.restype = ctypes.c_int
+
         # Kyber-1024
         lib.ama_kyber_keypair.argtypes = [
             ctypes.c_char_p,
@@ -1496,6 +1507,67 @@ def dilithium_verify_ctx(message: bytes, signature: bytes, public_key: bytes, ct
             public_key,
         )
         return bool(rc == 0)
+    raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
+
+
+def dilithium_sign_ctx(message: bytes, secret_key: Union[bytes, bytearray], ctx: bytes) -> bytes:
+    """
+    ML-DSA-65 sign with FIPS 204 §5.2 binding context (external/pure).
+
+    Applies the domain-separation wrapper M' = 0x00 || len(ctx) || ctx || M
+    defined in FIPS 204 §5.2 (lines 5–6) before invoking the internal
+    signing algorithm. This is the symmetric counterpart of
+    :func:`dilithium_verify_ctx`: a signature produced here verifies
+    against the same context, and only against the same context.
+
+    Args:
+        message: Raw message to sign (arbitrary length)
+        secret_key: ML-DSA-65 secret key (4032 bytes)
+        ctx: Context string (0–255 bytes, per FIPS 204 §5.2 line 4)
+
+    Returns:
+        ML-DSA-65 signature (3309 bytes)
+
+    Raises:
+        QuantumSignatureUnavailableError: If no Dilithium backend is available
+        ValueError: If ``ctx`` exceeds 255 bytes or ``secret_key`` length is wrong
+
+    Standards:
+        NIST FIPS 204 §5.2 (ML-DSA.Sign).
+    """
+    if len(ctx) > 255:
+        raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
+    if not DILITHIUM_AVAILABLE:
+        raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
+    if len(secret_key) != DILITHIUM_SECRET_KEY_BYTES:
+        raise ValueError(
+            f"Invalid secret key length: expected {DILITHIUM_SECRET_KEY_BYTES}, "
+            f"got {len(secret_key)}"
+        )
+
+    if DILITHIUM_BACKEND == "native" and _native_lib is not None:
+        sig_buf = ctypes.create_string_buffer(DILITHIUM_SIGNATURE_BYTES)
+        sig_len = ctypes.c_size_t(DILITHIUM_SIGNATURE_BYTES)
+        # INVARIANT-6: use mutable ctypes buffer to avoid non-wipeable bytes() copy
+        sk_buf = ctypes.create_string_buffer(bytes(secret_key), len(secret_key))
+        try:
+            rc = _native_lib.ama_dilithium_sign_ctx(
+                sig_buf,
+                ctypes.byref(sig_len),
+                message,
+                ctypes.c_size_t(len(message)),
+                ctx,
+                ctypes.c_size_t(len(ctx)),
+                sk_buf,
+            )
+            if rc != 0:
+                raise QuantumSignatureUnavailableError(
+                    f"Native dilithium_sign_ctx failed with error code {rc}"
+                )
+            return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-001)
+        finally:
+            ctypes.memset(sk_buf, 0, len(secret_key))
+
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
 

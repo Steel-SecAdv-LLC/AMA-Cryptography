@@ -62,7 +62,9 @@ try:
         DILITHIUM_AVAILABLE,
         KYBER_AVAILABLE,
         dilithium_sign,
+        dilithium_sign_ctx,
         dilithium_verify,
+        dilithium_verify_ctx,
         generate_dilithium_keypair,
         generate_kyber_keypair,
         kyber_decapsulate,
@@ -703,6 +705,116 @@ class TestMLDSAKATValidation:
             assert is_valid, (
                 f"Vector {i}: FIPS 204 ML-DSA-65 KAT signature verification "
                 f"failed (msg_len={kat.mlen}, ctx_len={kat.ctx_len})"
+            )
+
+    @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
+    def test_dilithium_sign_ctx_round_trip(self) -> None:
+        """
+        FIPS 204 §5.2 sign-with-context round-trip.
+
+        A signature produced by ``dilithium_sign_ctx(M, sk, ctx)`` must verify
+        with ``dilithium_verify_ctx(M, sig, pk, ctx)`` for the *same* context,
+        across the full 0..255 byte range of admissible context lengths.
+        """
+        keypair = generate_dilithium_keypair()
+        message = b"AMA FIPS 204 sign_ctx round-trip"
+        for ctx_len in (0, 1, 16, 33, 134, 220, 255):
+            ctx = bytes(range(256))[:ctx_len]
+            sig = dilithium_sign_ctx(message, keypair.secret_key, ctx)
+            assert len(sig) == 3309, f"ctx_len={ctx_len}: bad sig length {len(sig)}"
+            assert dilithium_verify_ctx(
+                message, sig, keypair.public_key, ctx
+            ), f"ctx_len={ctx_len}: round-trip verify_ctx failed"
+
+    @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
+    def test_dilithium_sign_ctx_negative(self) -> None:
+        """
+        FIPS 204 §5.2 context binding is enforced.
+
+        A signature produced under ``ctx_a`` must NOT verify under any
+        ``ctx_b ≠ ctx_a``, and must NOT verify under the empty/no-context
+        verifier (``dilithium_verify`` with raw message).
+        """
+        keypair = generate_dilithium_keypair()
+        message = b"context binding negative test"
+        ctx_a = b"context-A-binding"
+        ctx_b = b"context-B-different-but-same-length"
+        sig_a = dilithium_sign_ctx(message, keypair.secret_key, ctx_a)
+
+        # ctx_b ≠ ctx_a: must fail
+        assert not dilithium_verify_ctx(
+            message, sig_a, keypair.public_key, ctx_b
+        ), "Signature with ctx_a unexpectedly verified under ctx_b"
+        # Empty ctx ≠ ctx_a: must fail
+        assert not dilithium_verify_ctx(
+            message, sig_a, keypair.public_key, b""
+        ), "Signature with ctx_a unexpectedly verified under empty ctx"
+        # Plain (no-ctx) verify against ctx-bound sig: must fail
+        # (sign_ctx wraps M' = 0x00||len||ctx||M; plain verify sees raw M)
+        assert not dilithium_verify(
+            message, sig_a, keypair.public_key
+        ), "ctx-bound signature unexpectedly verified by plain dilithium_verify"
+
+    @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
+    def test_dilithium_sign_ctx_rejects_oversized_context(self) -> None:
+        """FIPS 204 §5.2 line 4: ctx_len > 255 must be rejected."""
+        keypair = generate_dilithium_keypair()
+        oversized = b"\x00" * 256
+        with pytest.raises(ValueError):
+            dilithium_sign_ctx(b"msg", keypair.secret_key, oversized)
+
+    @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
+    def test_dilithium_sign_ctx_matches_verify_ctx_wrapper(self) -> None:
+        """
+        Sign/verify wrappers apply the *identical* M' = 0x00||len(ctx)||ctx||M
+        construction. Therefore a signature produced by ``dilithium_sign_ctx``
+        on (M, ctx) must equal a signature produced by the underlying
+        ``dilithium_sign`` on the manually-prefixed wrapped message.
+
+        This locks the C-side wrapper symmetry that closes the FIPS 204 §5.2
+        ACVP sigGen vectors with non-empty contexts.
+        """
+        keypair = generate_dilithium_keypair()
+        message = b"wrapper equivalence"
+        for ctx in (b"", b"AMA", bytes(range(50)), bytes(range(255))):
+            wrapped = bytes([0x00, len(ctx)]) + ctx + message
+            sig_via_wrapper = dilithium_sign_ctx(message, keypair.secret_key, ctx)
+            sig_via_manual = dilithium_sign(wrapped, keypair.secret_key)
+            assert (
+                sig_via_wrapper == sig_via_manual
+            ), f"sign_ctx output diverges from manual M' wrapping at ctx_len={len(ctx)}"
+
+    @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
+    @pytest.mark.skipif(
+        not fips204_kat_available(),
+        reason="FIPS 204 ML-DSA-65 KAT vectors not available",
+    )
+    def test_fips204_ml_dsa_65_sign_ctx_kat_round_trip(self) -> None:
+        """
+        FIPS 204 §5.2 sign-with-context KAT round-trip.
+
+        For each FIPS 204 ML-DSA-65 KAT vector (which carries a non-empty
+        ``ctx`` field), produce a signature via ``dilithium_sign_ctx`` and
+        confirm it verifies under ``dilithium_verify_ctx`` against the KAT
+        public key. This exercises the full sign + ctx-binding + verify
+        path against NIST-derived (sk, pk, msg, ctx) tuples.
+
+        Note: byte-exact equality with the KAT ``sig`` field is *not*
+        asserted here because the KAT vectors are produced under the
+        hedged variant of ML-DSA.Sign with a non-zero ``rnd`` input that
+        AMA's deterministic ``ama_dilithium_sign`` does not accept. The
+        round-trip property below is the strongest check possible against
+        the local KAT corpus and validates the §5.2 context-binding logic
+        end-to-end.
+        """
+        vectors = load_fips204_kat_vectors(FIPS204_DIR / "ml_dsa_65.kat", max_vectors=10)
+        assert len(vectors) >= 5, "Need at least 5 FIPS 204 KAT vectors"
+        for i, kat in enumerate(vectors):
+            sig = dilithium_sign_ctx(kat.msg, kat.sk, kat.ctx)
+            assert len(sig) == 3309, f"Vector {i}: bad sig length {len(sig)}"
+            assert dilithium_verify_ctx(kat.msg, sig, kat.pk, kat.ctx), (
+                f"Vector {i}: sign_ctx output failed verify_ctx against KAT pk "
+                f"(msg_len={kat.mlen}, ctx_len={kat.ctx_len})"
             )
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")

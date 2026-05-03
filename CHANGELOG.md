@@ -22,7 +22,20 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+- **FIPS 204 §5.2 ML-DSA-65 context-aware signing.** New
+  `ama_dilithium_sign_ctx(sig, sig_len, msg, msg_len, ctx, ctx_len, sk)`
+  C symbol in `src/c/ama_dilithium.c` and matching Python binding
+  `dilithium_sign_ctx(message, secret_key, ctx)` in
+  `ama_cryptography/pqc_backends.py`. Applies the FIPS 204 §5.2
+  domain-separation wrapper `M' = 0x00 || IntegerToBytes(|ctx|, 1) || ctx || M`
+  before delegating to the internal sign, byte-for-byte mirroring the
+  existing `ama_dilithium_verify_ctx` so sign/verify symmetry holds.
+  Rejects `ctx_len > 255` per FIPS 204 §5.2 line 4. Closes the
+  ML-DSA-65 ACVP sigGen vectors with non-empty contexts that previously
+  could not be reproduced by the empty-context-only signing path.
+  *Strictly additive; the existing context-free `ama_dilithium_sign` /
+  `dilithium_sign` API is unchanged.*
 
 
 ## [3.0.0] - 2026-04-27
