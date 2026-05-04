@@ -23,7 +23,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ama-cryptography"
-version = "3.0.0"
+version = "3.1.0"
 description = "Quantum-resistant cryptographic protection system for helical mathematical Omni-Codes"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -171,7 +171,13 @@ Repository = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography"
 Issues = "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/issues"
 
 [tool.setuptools.package-data]
-ama_cryptography = ["_integrity_digest.txt"]
+ama_cryptography = [
+    "_integrity_digest.txt",
+    # Pinned NIST ACVP-Server vectors used by FIPS 140-3 POST.
+    # Verify-only KATs keep module-import latency under the 2000ms budget
+    # while still exercising the full FIPS 205 SHAKE-128s code path.
+    "_post_kats/*.json",
+]
 
 # Ruff configuration — replaces flake8, isort
 [tool.ruff]

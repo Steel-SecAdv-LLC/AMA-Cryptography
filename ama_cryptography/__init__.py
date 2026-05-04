@@ -22,7 +22,7 @@ Post-quantum cryptographic security system with rigorous mathematical foundation
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
-Version: 3.0.0
+Version: 3.1.0
 
 AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
@@ -33,7 +33,7 @@ import os as _os
 import sys as _sys
 from typing import TYPE_CHECKING, Any
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
 # Windows DLL search-path registration (Python 3.8+).

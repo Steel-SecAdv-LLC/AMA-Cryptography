@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.15)
 
 project(AmaCryptography
-    VERSION 3.0.0
+    VERSION 3.1.0
     DESCRIPTION "Quantum-Resistant Cryptographic Protection System"
     LANGUAGES C CXX
 )
@@ -406,6 +406,7 @@ if(AMA_USE_NATIVE_PQC)
         src/c/ama_kyber.c
         src/c/ama_dilithium.c
         src/c/ama_sphincs.c
+        src/c/ama_slhdsa.c
         src/c/ama_secp256k1.c
         src/c/ama_frost.c
         src/c/ama_x25519.c

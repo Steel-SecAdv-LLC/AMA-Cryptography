@@ -20,6 +20,7 @@ Version: 3.0.0
 """
 
 import hashlib
+import json
 import logging
 import math
 import secrets
@@ -369,7 +370,11 @@ def _kat_ml_dsa_65() -> Tuple[bool, str]:
 
 
 def _kat_slh_dsa() -> Tuple[bool, str]:
-    """SLH-DSA (SPHINCS+) KAT: keygen + sign + verify roundtrip."""
+    """SLH-DSA (SPHINCS+) KAT: keygen + sign + verify roundtrip.
+
+    Exercises the SHA2-256f-simple parameter set via the legacy SPHINCS+
+    surface and tampers the message to confirm the verifier rejects.
+    """
     try:
         from ama_cryptography.pqc_backends import (
             SPHINCS_AVAILABLE,
@@ -384,12 +389,82 @@ def _kat_slh_dsa() -> Tuple[bool, str]:
         kp = generate_sphincs_keypair()
         msg = b"FIPS 140-3 SLH-DSA KAT"
         sig = sphincs_sign(msg, kp.secret_key)
-        valid = sphincs_verify(msg, sig, kp.public_key)
-        if not valid:
+        if not sphincs_verify(msg, sig, kp.public_key):
             return False, "SLH-DSA KAT: signature verification failed"
+        # Negative path: tampered message must NOT verify (FIPS 140-3 §4.9.1).
+        if sphincs_verify(b"tampered " + msg, sig, kp.public_key):
+            return False, "SLH-DSA KAT: tampered message incorrectly verified"
         return True, "SLH-DSA KAT passed"
     except Exception as exc:
         return False, f"SLH-DSA KAT exception: {exc}"
+
+
+def _kat_slh_dsa_shake_128s() -> Tuple[bool, str]:
+    """SLH-DSA-SHAKE-128s KAT: verify-only against a pinned NIST ACVP vector.
+
+    Validates the FIPS 205 NIST L1 parameter set added in v3.1.0. SHAKE-128s
+    sign latency is ~1-2 s on commodity x86_64 CI runners (the ``s`` ("small,
+    slow") parameter set deliberately trades sign cost for compact signatures
+    -- 7856 bytes vs 17088 for ``128f``), which would push the FIPS 140-3 POST
+    budget past the 2000 ms ceiling on the slowest runners.
+
+    A *Known Answer Test* in the FIPS 140-3 §4.9.1 sense is satisfied by
+    pinning a vetted (pk, msg, ctx, signature) quadruple from NIST CAVP's
+    ACVP-Server vector bank and exercising verify-only -- which is ~50 ms
+    even on the slowest hosts and still walks the entire FIPS 205 §10.3
+    ``slh_verify`` path (M' wrapping, FORS public-key reconstruction,
+    Merkle-authentication path verification, hypertree top-out). The
+    negative paths (tampered message, wrong context) confirm the verifier
+    rejects each, which is the FIPS 140-3 negative-KAT requirement.
+    """
+    try:
+        from ama_cryptography.pqc_backends import SPHINCS_AVAILABLE, slhdsa_verify
+
+        if not SPHINCS_AVAILABLE:
+            return True, "SLH-DSA-SHAKE-128s KAT skipped (backend unavailable)"
+
+        try:
+            from importlib.resources import files as _resfiles
+        except ImportError:  # pragma: no cover - Py<3.9 not supported in this lib
+            return False, "SLH-DSA-SHAKE-128s KAT: importlib.resources unavailable"
+
+        kat_path = _resfiles("ama_cryptography").joinpath(
+            "_post_kats/slh_dsa_shake_128s_sigver.json"
+        )
+        try:
+            payload = json.loads(kat_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return False, "SLH-DSA-SHAKE-128s KAT: pinned vector missing"
+
+        pk = bytes.fromhex(payload["pk_hex"])
+        msg = bytes.fromhex(payload["message_hex"])
+        ctx = bytes.fromhex(payload["context_hex"])
+        sig = bytes.fromhex(payload["signature_hex"])
+
+        if not slhdsa_verify(msg, sig, pk, ctx, param_set="SHAKE-128s"):
+            return False, "SLH-DSA-SHAKE-128s KAT: pinned NIST signature did not verify"
+        if slhdsa_verify(b"\x00" + msg, sig, pk, ctx, param_set="SHAKE-128s"):
+            return (
+                False,
+                "SLH-DSA-SHAKE-128s KAT: tampered message incorrectly verified",
+            )
+        if ctx and slhdsa_verify(
+            msg,
+            sig,
+            pk,
+            ctx[:-1] + bytes([ctx[-1] ^ 0x01]),
+            param_set="SHAKE-128s",
+        ):
+            return (
+                False,
+                "SLH-DSA-SHAKE-128s KAT: tampered ctx incorrectly verified",
+            )
+        return (
+            True,
+            f"SLH-DSA-SHAKE-128s KAT passed (pinned NIST tcId={payload['tcId']})",
+        )
+    except Exception as exc:
+        return False, f"SLH-DSA-SHAKE-128s KAT exception: {exc}"
 
 
 def _kat_ed25519() -> Tuple[bool, str]:
@@ -537,6 +612,7 @@ def _run_self_tests() -> bool:
         ("ML-KEM-1024", _kat_ml_kem_1024),
         ("ML-DSA-65", _kat_ml_dsa_65),
         ("SLH-DSA", _kat_slh_dsa),
+        ("SLH-DSA-SHAKE-128s", _kat_slh_dsa_shake_128s),
         ("Ed25519", _kat_ed25519),
     ]
 

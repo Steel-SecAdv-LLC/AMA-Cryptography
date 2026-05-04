@@ -95,6 +95,7 @@ extern ama_error_t ama_shake128_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, 
 #define DIL_D 13
 
 #define DIL_SEEDBYTES 32
+#define DIL_RNDBYTES 32  /* FIPS 204 Section 6.2 Algorithm 7: rnd in {0,1}^256. */
 #define DIL_CTILDEBYTES 48  /* ML-DSA-65: 48; mode 2: 32; mode 5: 64 */
 #define DIL_CRHBYTES 64
 #define DIL_TRBYTES 64
@@ -1498,7 +1499,8 @@ AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len
     uint8_t *rho, *key, *tr;
     uint8_t mu[DIL_CRHBYTES];
     uint8_t rhoprime[DIL_CRHBYTES];
-    uint8_t hashbuf[DIL_SEEDBYTES + DIL_CRHBYTES];
+    /* FIPS 204 §6.2 Algorithm 7 line 3 layout: K (32) || rnd (32) || mu (64) */
+    uint8_t hashbuf[DIL_SEEDBYTES + DIL_RNDBYTES + DIL_CRHBYTES];
     dil_poly mat[DIL_K][DIL_L];
     dil_polyvecl s1, y, z;
     dil_polyveck s2, t0, w1, w0, ct0, cs2;
@@ -1573,10 +1575,24 @@ AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len
         free(mu_input);
     }
 
-    /* Compute rhoprime = H(key || mu) for deterministic signing */
+    /*
+     * FIPS 204 Section 6.2 Algorithm 7 (ML-DSA.Sign_internal) line 3:
+     *   rho' = H(K || rnd || mu, 64)
+     *
+     * This entry point is the FIPS 204 *deterministic* signer - the variant
+     * exercised by every NIST ACVP-Server "deterministic" sigGen group - so
+     * we pin rnd = 0^256 here. Pre-3.1.0 AMA omitted the rnd field entirely,
+     * which silently diverged from the FIPS 204 spec and from every NIST
+     * deterministic ACVP vector. Round-trip self-tests still passed because
+     * verify recomputes mu from the signature's c-tilde head, so the defect
+     * could only be caught by byte-exact ACVP-Server replay; this fix lands
+     * together with the FIPS 204/205 KAT pin.
+     */
     memcpy(hashbuf, key, DIL_SEEDBYTES);
-    memcpy(hashbuf + DIL_SEEDBYTES, mu, DIL_CRHBYTES);
-    ama_shake256(hashbuf, DIL_SEEDBYTES + DIL_CRHBYTES, rhoprime, DIL_CRHBYTES);
+    memset(hashbuf + DIL_SEEDBYTES, 0, DIL_RNDBYTES);  /* rnd = 0^256 (deterministic) */
+    memcpy(hashbuf + DIL_SEEDBYTES + DIL_RNDBYTES, mu, DIL_CRHBYTES);
+    ama_shake256(hashbuf, DIL_SEEDBYTES + DIL_RNDBYTES + DIL_CRHBYTES,
+                 rhoprime, DIL_CRHBYTES);
 
     /* Rejection sampling loop
      * Expected iterations ~4-5 for ML-DSA-65. Cap at 1000 to prevent
@@ -1591,6 +1607,7 @@ AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len
             ama_secure_memzero(&s2hat, sizeof(s2hat));
             ama_secure_memzero(mu, sizeof(mu));
             ama_secure_memzero(rhoprime, sizeof(rhoprime));
+            ama_secure_memzero(hashbuf, sizeof(hashbuf));
             return AMA_ERROR_CRYPTO;
         }
         /* Sample y from [-gamma1+1, gamma1] — per-attempt batched through
@@ -1697,6 +1714,7 @@ AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len
     ama_secure_memzero(&s2hat, sizeof(s2hat));
     ama_secure_memzero(mu, sizeof(mu));
     ama_secure_memzero(rhoprime, sizeof(rhoprime));
+    ama_secure_memzero(hashbuf, sizeof(hashbuf));
 
     return AMA_SUCCESS;
 }
@@ -1867,6 +1885,76 @@ AMA_API ama_error_t ama_dilithium_verify(const uint8_t *message, size_t message_
     }
 
     return AMA_SUCCESS;
+}
+
+/**
+ * ML-DSA-65 Signing with context (FIPS 204 §5.2, Algorithm 2 — external/pure)
+ *
+ * Applies the domain-separation wrapper M' = IntegerToBytes(0,1) ||
+ * IntegerToBytes(|ctx|,1) || ctx || M defined in FIPS 204 §5.2 (lines 5–6),
+ * then delegates to ama_dilithium_sign(). This is the symmetric counterpart
+ * of ama_dilithium_verify_ctx() and matches it byte-for-byte on the wrapped
+ * message construction so sign/verify symmetry holds.
+ *
+ * Per FIPS 204 §5.2 line 4, ctx_len > 255 is rejected with a non-zero error.
+ *
+ * @param signature     Output buffer for signature (3309 bytes max)
+ * @param signature_len Pointer to signature length (in/out)
+ * @param message       Raw message to sign
+ * @param message_len   Length of message
+ * @param ctx           Context string (0–255 bytes, per FIPS 204 §5.2)
+ * @param ctx_len       Length of context (must be <= 255)
+ * @param secret_key    Secret key (4032 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_dilithium_sign_ctx(
+    uint8_t *signature, size_t *signature_len,
+    const uint8_t *message, size_t message_len,
+    const uint8_t *ctx, size_t ctx_len,
+    const uint8_t *secret_key) {
+
+    uint8_t *wrapped;
+    size_t wrapped_len;
+    ama_error_t result;
+
+    if (signature == NULL || signature_len == NULL ||
+        message == NULL || secret_key == NULL) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (ctx_len > 0 && ctx == NULL) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    /* FIPS 204 §5.2 line 4: context must be at most 255 bytes */
+    if (ctx_len > 255) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    /* Overflow guard: wrapped_len = 2 + ctx_len + message_len */
+    if (message_len > SIZE_MAX - 2 - ctx_len) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    wrapped_len = 2 + ctx_len + message_len;
+
+    wrapped = (uint8_t *)calloc((size_t)1, wrapped_len);
+    if (!wrapped) {
+        return AMA_ERROR_MEMORY;
+    }
+
+    /* M' = 0x00 || IntegerToBytes(|ctx|, 1) || ctx || M */
+    wrapped[0] = 0x00;
+    wrapped[1] = (uint8_t)ctx_len;
+    if (ctx_len > 0 && ctx != NULL) {
+        memcpy(wrapped + 2, ctx, ctx_len);
+    }
+    memcpy(wrapped + 2 + ctx_len, message, message_len);
+
+    result = ama_dilithium_sign(signature, signature_len,
+                                wrapped, wrapped_len, secret_key);
+
+    ama_secure_memzero(wrapped, wrapped_len);
+    free(wrapped);
+    return result;
 }
 
 /**

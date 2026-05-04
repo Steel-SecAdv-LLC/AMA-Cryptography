@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Applies to Release | 3.0.0 |
-| Last Updated | 2026-04-27 |
+| Applies to Release | 3.1.0 |
+| Last Updated | 2026-05-03 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -20,9 +20,104 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 
 
+## [3.1.0] - 2026-05-03
+
+### Added
+- **FIPS 204 §5.2 ML-DSA-65 context-aware signing.** New
+  `ama_dilithium_sign_ctx(sig, sig_len, msg, msg_len, ctx, ctx_len, sk)`
+  C symbol in `src/c/ama_dilithium.c` and matching Python binding
+  `dilithium_sign_ctx(message, secret_key, ctx)` in
+  `ama_cryptography/pqc_backends.py`. Applies the FIPS 204 §5.2
+  domain-separation wrapper `M' = 0x00 || IntegerToBytes(|ctx|, 1) || ctx || M`
+  before delegating to the internal sign, byte-for-byte mirroring the
+  existing `ama_dilithium_verify_ctx` so sign/verify symmetry holds.
+  Rejects `ctx_len > 255` per FIPS 204 §5.2 line 4. Closes the
+  ML-DSA-65 ACVP sigGen vectors with non-empty contexts that previously
+  could not be reproduced by the empty-context-only signing path.
+  *Strictly additive; the existing context-free `ama_dilithium_sign` /
+  `dilithium_sign` API is unchanged.*
+- **FIPS 205 SLH-DSA-SHAKE-128s parameter set (NIST L1, in-house, no
+  vendoring).** New parameter-driven core in `src/c/ama_slhdsa.c`
+  threads `const slhdsa_params_t *p` through every helper instead of
+  `#define SPX_*` macros and instantiates two parameter sets:
+  `AMA_SLHDSA_SHA2_256F` (existing -256f, NIST L5) and
+  `AMA_SLHDSA_SHAKE_128S` (new, NIST L1). The SHAKE family uses the
+  full uncompressed 32-byte ADRS (FIPS 205 §4.2) and the SHAKE-256-based
+  hash chain `H_msg / PRF / PRF_msg / F / H / T_l` (FIPS 205 §11.1)
+  reusing the existing streaming `ama_shake256_inc_*` API in
+  `src/c/ama_sha3.c`; PRF inputs use the separate `WOTS_PRF=5` /
+  `FORS_PRF=6` address types per FIPS 205 §6 / §8. New public C API
+  `ama_slhdsa_keygen / keygen_from_seed / sign / verify`, plus
+  `ama_slhdsa_sign_deterministic` and `ama_slhdsa_sign_internal` for
+  ACVP byte-exact KAT pinning, alongside size constants
+  `AMA_SLHDSA_{SHA2_256F,SHAKE_128S}_{PUBLIC_KEY,SECRET_KEY,SIGNATURE}_BYTES`
+  in `include/ama_cryptography.h`. Python binding in
+  `ama_cryptography/pqc_backends.py` adds the `SlhDsaKeyPair` dataclass,
+  `generate_slhdsa_keypair / slhdsa_sign / slhdsa_verify`, the
+  `slhdsa_sign_deterministic` / `slhdsa_sign_internal` test helpers, and
+  the `SLHDSA_SHAKE_128S_*_BYTES` size constants. Pinned byte-exact
+  against all 14 NIST ACVP sigGen vectors for SLH-DSA-SHAKE-128s
+  (7 deterministic external/pure tcIds 214–220, plus 7 hedged
+  external/pure tcIds 526–532) in `tests/test_pqc_kat.py`; the
+  existing FIPS 205 SLH-DSA-SHA2-256f sigVer KAT remains green.
+
+### Changed
+- **No backward-compat regressions.** The legacy `ama_sphincs_*` C API
+  and the Python `sphincs_sign / sphincs_verify / generate_sphincs_keypair`
+  surface are unchanged externally; the size constants
+  `SPHINCS_PUBLIC_KEY_BYTES / SPHINCS_SECRET_KEY_BYTES /
+  SPHINCS_SIGNATURE_BYTES` continue to report the SLH-DSA-SHA2-256f-simple
+  sizes (64 / 128 / 49856) and the on-the-wire signature format is
+  identical. New SLH-DSA symbols are net-additive.
+
+### Hardened
+- **INVARIANT-6 secret-key zeroization across every SLH-DSA Python wrapper.**
+  `generate_slhdsa_keypair`, `generate_slhdsa_keypair_from_seed` (new),
+  `slhdsa_sign`, `slhdsa_sign_deterministic`, and `slhdsa_sign_internal`
+  in `ama_cryptography/pqc_backends.py` now route the secret key (and,
+  for the deterministic-keygen path, all three FIPS 205 §10.1 seeds plus
+  the explicit `addrnd` for the internal-interface signer) through
+  mutable `ctypes.create_string_buffer` storage and call
+  `ctypes.memset(..., 0, sk_len)` in a `try/finally` block. This closes
+  the SLH-DSA-shaped variant of the same INVARIANT-6 gap that the
+  Dilithium/Kyber/SPHINCS+ wrappers already cover and removes a class
+  of post-mortem secret-recovery exposure where the immutable `bytes(sk)`
+  copy would otherwise linger on the Python heap until garbage collection.
+- **`sha2_HT` no-allocation hot path (FIPS 205 §11.2 SHA2 family).**
+  `src/c/ama_slhdsa.c` replaces the per-call `calloc` in `sha2_HT` with
+  a fixed 2304-byte stack scratch buffer (worst-case bound is
+  `128 + 22 + wots_len*n = 2294` for SLH-DSA-SHA2-256s/f, with `n=32`
+  and `wots_len=67`). This (a) eliminates the silent-zero-out branch
+  that used to produce a deterministic-but-corrupted digest on
+  `calloc` failure inside the WOTS PK / hypertree merge loops, and
+  (b) removes attacker-influenceable heap allocator state from the
+  signing/verification hot loop. A defensive runtime check still
+  refuses to write a half-formed digest if a future parameter set
+  exceeds the static envelope.
+- **FIPS 140-3 POST coverage for SLH-DSA-SHAKE-128s.** New
+  `_kat_slh_dsa_shake_128s` in `ama_cryptography/_self_test.py`
+  exercises parameter-driven keygen, FIPS 205 §10.2 ctx-bound sign,
+  and verification under both message and context tampering, then
+  registers the test in the module-import POST sequence so any
+  regression in the new NIST L1 path now puts the module in the
+  ERROR state at import time. The pre-existing SHA2-256f KAT also
+  picks up an explicit tampered-message negative path.
+- **mypy --strict cleanup.** `slhdsa_verify` now wraps its return in
+  `bool(...)` so the strict type checker no longer flags it as
+  returning `Any` from a `-> bool` declaration.
+
+### Added
+- **`generate_slhdsa_keypair_from_seed` Python binding.** New wrapper
+  over the existing C-level `ama_slhdsa_keygen_from_seed` symbol that
+  derives a deterministic `SlhDsaKeyPair` from caller-supplied
+  `(SK.seed, SK.prf, PK.seed)` of length `n`. All three seeds and the
+  resulting SK scratch buffer are wiped on the way out (INVARIANT-6).
+  This closes a Python-side API gap that previously forced KAT and
+  reproducible-keygen consumers to drop down into ctypes manually.
+
+
 ## [Unreleased]
 
-_Nothing yet._
 
 
 ## [3.0.0] - 2026-04-27
