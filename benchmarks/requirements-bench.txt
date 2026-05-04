@@ -39,4 +39,4 @@ liboqs-python>=0.10.0
 # (46.0.5), CVE-2026-34073 (46.0.6). Mirrors pyproject.toml [legacy]
 # and [benchmark]. Manual bump because dependabot.yml carries a
 # semver-major ignore on this package.
-cryptography>=46.0.6
+cryptography>=46.0.7
