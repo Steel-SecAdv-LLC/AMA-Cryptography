@@ -90,7 +90,7 @@ classDef gray fill:#1f1f1f,stroke:#11AEED,color:#f6f6f6;
 
 | Property | Value |
 |----------|-------|
-| Version | 3.0.0 |
+| Version | 3.1.0 |
 | Algorithms | ML-DSA-65, Kyber-1024, SPHINCS+, Ed25519, AES-256-GCM, Argon2id |
 | Platforms | Linux, macOS, Windows |
 | Python | 3.9 – 3.13 |
