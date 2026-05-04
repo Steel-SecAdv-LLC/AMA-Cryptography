@@ -95,6 +95,7 @@ extern ama_error_t ama_shake128_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, 
 #define DIL_D 13
 
 #define DIL_SEEDBYTES 32
+#define DIL_RNDBYTES 32  /* FIPS 204 Section 6.2 Algorithm 7: rnd in {0,1}^256. */
 #define DIL_CTILDEBYTES 48  /* ML-DSA-65: 48; mode 2: 32; mode 5: 64 */
 #define DIL_CRHBYTES 64
 #define DIL_TRBYTES 64
@@ -1498,7 +1499,8 @@ AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len
     uint8_t *rho, *key, *tr;
     uint8_t mu[DIL_CRHBYTES];
     uint8_t rhoprime[DIL_CRHBYTES];
-    uint8_t hashbuf[DIL_SEEDBYTES + DIL_CRHBYTES];
+    /* FIPS 204 §6.2 Algorithm 7 line 3 layout: K (32) || rnd (32) || mu (64) */
+    uint8_t hashbuf[DIL_SEEDBYTES + DIL_RNDBYTES + DIL_CRHBYTES];
     dil_poly mat[DIL_K][DIL_L];
     dil_polyvecl s1, y, z;
     dil_polyveck s2, t0, w1, w0, ct0, cs2;
@@ -1573,10 +1575,24 @@ AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len
         free(mu_input);
     }
 
-    /* Compute rhoprime = H(key || mu) for deterministic signing */
+    /*
+     * FIPS 204 Section 6.2 Algorithm 7 (ML-DSA.Sign_internal) line 3:
+     *   rho' = H(K || rnd || mu, 64)
+     *
+     * This entry point is the FIPS 204 *deterministic* signer - the variant
+     * exercised by every NIST ACVP-Server "deterministic" sigGen group - so
+     * we pin rnd = 0^256 here. Pre-3.1.0 AMA omitted the rnd field entirely,
+     * which silently diverged from the FIPS 204 spec and from every NIST
+     * deterministic ACVP vector. Round-trip self-tests still passed because
+     * verify recomputes mu from the signature's c-tilde head, so the defect
+     * could only be caught by byte-exact ACVP-Server replay; this fix lands
+     * together with the FIPS 204/205 KAT pin.
+     */
     memcpy(hashbuf, key, DIL_SEEDBYTES);
-    memcpy(hashbuf + DIL_SEEDBYTES, mu, DIL_CRHBYTES);
-    ama_shake256(hashbuf, DIL_SEEDBYTES + DIL_CRHBYTES, rhoprime, DIL_CRHBYTES);
+    memset(hashbuf + DIL_SEEDBYTES, 0, DIL_RNDBYTES);  /* rnd = 0^256 (deterministic) */
+    memcpy(hashbuf + DIL_SEEDBYTES + DIL_RNDBYTES, mu, DIL_CRHBYTES);
+    ama_shake256(hashbuf, DIL_SEEDBYTES + DIL_RNDBYTES + DIL_CRHBYTES,
+                 rhoprime, DIL_CRHBYTES);
 
     /* Rejection sampling loop
      * Expected iterations ~4-5 for ML-DSA-65. Cap at 1000 to prevent
@@ -1591,6 +1607,7 @@ AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len
             ama_secure_memzero(&s2hat, sizeof(s2hat));
             ama_secure_memzero(mu, sizeof(mu));
             ama_secure_memzero(rhoprime, sizeof(rhoprime));
+            ama_secure_memzero(hashbuf, sizeof(hashbuf));
             return AMA_ERROR_CRYPTO;
         }
         /* Sample y from [-gamma1+1, gamma1] — per-attempt batched through
@@ -1697,6 +1714,7 @@ AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len
     ama_secure_memzero(&s2hat, sizeof(s2hat));
     ama_secure_memzero(mu, sizeof(mu));
     ama_secure_memzero(rhoprime, sizeof(rhoprime));
+    ama_secure_memzero(hashbuf, sizeof(hashbuf));
 
     return AMA_SUCCESS;
 }

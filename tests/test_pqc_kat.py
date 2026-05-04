@@ -706,12 +706,12 @@ class TestSLHDSA_SHAKE_128s_ACVP:
     )
 
     @pytest.fixture(scope="class")
-    def vectors(self) -> list:
+    def vectors(self) -> list[dict[str, Any]]:
         if not self.VECTORS_PATH.exists():
             pytest.skip(f"NIST ACVP SLH-DSA-SHAKE-128s vectors not present at {self.VECTORS_PATH}")
         with open(self.VECTORS_PATH) as f:
             data = json.load(f)
-        vectors = data["vectors"]
+        vectors: list[dict[str, Any]] = data["vectors"]
         if not vectors:
             pytest.skip("No SLH-DSA-SHAKE-128s vectors in JSON")
         return vectors
@@ -769,7 +769,7 @@ class TestSLHDSA_SHAKE_128s_ACVP:
         with pytest.raises(ValueError):
             slhdsa_sign(b"x", kp.secret_key, b"\x00" * 256)
 
-    def test_acvp_siggen_byte_exact(self, vectors: list) -> None:
+    def test_acvp_siggen_byte_exact(self, vectors: list[dict[str, Any]]) -> None:
         """All 14 NIST ACVP SHAKE-128s sigGen vectors match byte-for-byte.
 
         This is the contract: sign(M, sk, ctx[, addrnd]) produces exactly
@@ -810,7 +810,7 @@ class TestSLHDSA_SHAKE_128s_ACVP:
         assert det_count >= 1, "no deterministic vectors exercised"
         assert hedged_count >= 1, "no hedged vectors exercised"
 
-    def test_acvp_siggen_verify_round_trip(self, vectors: list) -> None:
+    def test_acvp_siggen_verify_round_trip(self, vectors: list[dict[str, Any]]) -> None:
         """Each NIST signature also verifies under our verifier (sanity)."""
         from ama_cryptography.pqc_backends import slhdsa_verify
 
