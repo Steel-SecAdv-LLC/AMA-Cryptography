@@ -369,7 +369,11 @@ def _kat_ml_dsa_65() -> Tuple[bool, str]:
 
 
 def _kat_slh_dsa() -> Tuple[bool, str]:
-    """SLH-DSA (SPHINCS+) KAT: keygen + sign + verify roundtrip."""
+    """SLH-DSA (SPHINCS+) KAT: keygen + sign + verify roundtrip.
+
+    Exercises the SHA2-256f-simple parameter set via the legacy SPHINCS+
+    surface and tampers the message to confirm the verifier rejects.
+    """
     try:
         from ama_cryptography.pqc_backends import (
             SPHINCS_AVAILABLE,
@@ -384,12 +388,55 @@ def _kat_slh_dsa() -> Tuple[bool, str]:
         kp = generate_sphincs_keypair()
         msg = b"FIPS 140-3 SLH-DSA KAT"
         sig = sphincs_sign(msg, kp.secret_key)
-        valid = sphincs_verify(msg, sig, kp.public_key)
-        if not valid:
+        if not sphincs_verify(msg, sig, kp.public_key):
             return False, "SLH-DSA KAT: signature verification failed"
+        # Negative path: tampered message must NOT verify (FIPS 140-3 §4.9.1).
+        if sphincs_verify(b"tampered " + msg, sig, kp.public_key):
+            return False, "SLH-DSA KAT: tampered message incorrectly verified"
         return True, "SLH-DSA KAT passed"
     except Exception as exc:
         return False, f"SLH-DSA KAT exception: {exc}"
+
+
+def _kat_slh_dsa_shake_128s() -> Tuple[bool, str]:
+    """SLH-DSA-SHAKE-128s KAT: parameter-driven keygen + ctx sign + verify.
+
+    Validates the FIPS 205 NIST L1 parameter set added in v3.1.0. We use
+    a non-empty FIPS 205 §10.2 context to ensure the domain-separation
+    wrapper round-trips correctly through both the signer and the
+    verifier, then tamper both the message and the context to confirm
+    the verifier rejects each (negative path required by FIPS 140-3 §4.9.1).
+    """
+    try:
+        from ama_cryptography.pqc_backends import (
+            SPHINCS_AVAILABLE,
+            generate_slhdsa_keypair,
+            slhdsa_sign,
+            slhdsa_verify,
+        )
+
+        if not SPHINCS_AVAILABLE:
+            return True, "SLH-DSA-SHAKE-128s KAT skipped (backend unavailable)"
+
+        kp = generate_slhdsa_keypair("SHAKE-128s")
+        msg = b"FIPS 140-3 SLH-DSA-SHAKE-128s KAT"
+        ctx = b"AMA-Cryptography/v3.1.0"
+        sig = slhdsa_sign(msg, kp.secret_key, ctx, param_set="SHAKE-128s")
+        if not slhdsa_verify(msg, sig, kp.public_key, ctx, param_set="SHAKE-128s"):
+            return False, "SLH-DSA-SHAKE-128s KAT: signature verification failed"
+        if slhdsa_verify(b"tampered " + msg, sig, kp.public_key, ctx, param_set="SHAKE-128s"):
+            return (
+                False,
+                "SLH-DSA-SHAKE-128s KAT: tampered message incorrectly verified",
+            )
+        if slhdsa_verify(msg, sig, kp.public_key, b"wrong-ctx", param_set="SHAKE-128s"):
+            return (
+                False,
+                "SLH-DSA-SHAKE-128s KAT: wrong-context signature incorrectly verified",
+            )
+        return True, "SLH-DSA-SHAKE-128s KAT passed"
+    except Exception as exc:
+        return False, f"SLH-DSA-SHAKE-128s KAT exception: {exc}"
 
 
 def _kat_ed25519() -> Tuple[bool, str]:
@@ -537,6 +584,7 @@ def _run_self_tests() -> bool:
         ("ML-KEM-1024", _kat_ml_kem_1024),
         ("ML-DSA-65", _kat_ml_dsa_65),
         ("SLH-DSA", _kat_slh_dsa),
+        ("SLH-DSA-SHAKE-128s", _kat_slh_dsa_shake_128s),
         ("Ed25519", _kat_ed25519),
     ]
 

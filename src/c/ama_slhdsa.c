@@ -263,32 +263,48 @@ static void sha2_F(const slhdsa_params_t *p, uint8_t *out,
     ama_secure_memzero(hash, sizeof(hash));
 }
 
+/* sha2_HT input bound: header (128 bytes: PK.seed || toByte(0,128-n)) +
+ * compressed ADRSc (22 bytes) + msglen, where msglen = inblocks * n. The
+ * largest caller is the WOTS public-key compression in slh_xmss_gen_leaf,
+ * which uses inblocks = wots_len. For the SHA2 family parameter sets we
+ * actually ship — currently SLH-DSA-SHA2-256f-simple, with n=32 and
+ * wots_len=67 — that yields msglen ≤ 67*32 = 2144 and a total ≤ 2294.
+ *
+ * The bound below covers every NIST FIPS 205 SHA2 parameter set (the
+ * worst case is SLH-DSA-SHA2-256s/f with n=32, wots_len=67); using a
+ * fixed stack buffer here removes a silent OOM-on-calloc corruption
+ * path on the hot signing/verification loop and removes an attacker
+ * influence over heap allocator state during signing. */
+#define AMA_SLHDSA_SHA2_HT_BUF_BYTES 2304u
+
 static void sha2_HT(const slhdsa_params_t *p, uint8_t *out,
                     const uint8_t *pub_seed, const uint32_t adrs[8],
                     const uint8_t *m, size_t inblocks) {
     /* H / T_l = Trunc_n(SHA-512(PK.seed || toByte(0, 128-n) || ADRSc || M)) */
     uint8_t addr_c[22];
     uint8_t hash[64];
+    uint8_t buf[AMA_SLHDSA_SHA2_HT_BUF_BYTES];
     size_t total, msglen;
-    uint8_t *buf;
 
     slh_addr_serialize(p, addr_c, adrs);
     msglen = inblocks * p->n;
     total = p->n + (128 - p->n) + 22 + msglen;
-    buf = (uint8_t *)calloc((size_t)1, total);
-    if (!buf) {
-        memset(out, 0, p->n);
+    /* Defensive bound check: any future parameter set exceeding the static
+     * envelope is a programming error, not a runtime input. Refuse to write
+     * a half-formed digest rather than corrupting the chain silently. */
+    if (total > sizeof(buf)) {
+        ama_secure_memzero(out, p->n);
         return;
     }
+    memset(buf, 0, total);
     memcpy(buf, pub_seed, p->n);
-    /* toByte(0, 128-n) is already zero (calloc) */
+    /* toByte(0, 128-n) is left as zeros from the memset above. */
     memcpy(buf + 128, addr_c, 22);
-    memcpy(buf + 150, m, msglen);
+    if (msglen > 0) memcpy(buf + 150, m, msglen);
     ama_sha512(buf, total, hash);
     memcpy(out, hash, p->n);
     ama_secure_memzero(hash, sizeof(hash));
     ama_secure_memzero(buf, total);
-    free(buf);
 }
 
 static void sha2_PRF(const slhdsa_params_t *p, uint8_t *out,

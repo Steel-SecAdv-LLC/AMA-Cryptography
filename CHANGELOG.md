@@ -70,6 +70,51 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   sizes (64 / 128 / 49856) and the on-the-wire signature format is
   identical. New SLH-DSA symbols are net-additive.
 
+### Hardened
+- **INVARIANT-6 secret-key zeroization across every SLH-DSA Python wrapper.**
+  `generate_slhdsa_keypair`, `generate_slhdsa_keypair_from_seed` (new),
+  `slhdsa_sign`, `slhdsa_sign_deterministic`, and `slhdsa_sign_internal`
+  in `ama_cryptography/pqc_backends.py` now route the secret key (and,
+  for the deterministic-keygen path, all three FIPS 205 §10.1 seeds plus
+  the explicit `addrnd` for the internal-interface signer) through
+  mutable `ctypes.create_string_buffer` storage and call
+  `ctypes.memset(..., 0, sk_len)` in a `try/finally` block. This closes
+  the SLH-DSA-shaped variant of the same INVARIANT-6 gap that the
+  Dilithium/Kyber/SPHINCS+ wrappers already cover and removes a class
+  of post-mortem secret-recovery exposure where the immutable `bytes(sk)`
+  copy would otherwise linger on the Python heap until garbage collection.
+- **`sha2_HT` no-allocation hot path (FIPS 205 §11.2 SHA2 family).**
+  `src/c/ama_slhdsa.c` replaces the per-call `calloc` in `sha2_HT` with
+  a fixed 2304-byte stack scratch buffer (worst-case bound is
+  `128 + 22 + wots_len*n = 2294` for SLH-DSA-SHA2-256s/f, with `n=32`
+  and `wots_len=67`). This (a) eliminates the silent-zero-out branch
+  that used to produce a deterministic-but-corrupted digest on
+  `calloc` failure inside the WOTS PK / hypertree merge loops, and
+  (b) removes attacker-influenceable heap allocator state from the
+  signing/verification hot loop. A defensive runtime check still
+  refuses to write a half-formed digest if a future parameter set
+  exceeds the static envelope.
+- **FIPS 140-3 POST coverage for SLH-DSA-SHAKE-128s.** New
+  `_kat_slh_dsa_shake_128s` in `ama_cryptography/_self_test.py`
+  exercises parameter-driven keygen, FIPS 205 §10.2 ctx-bound sign,
+  and verification under both message and context tampering, then
+  registers the test in the module-import POST sequence so any
+  regression in the new NIST L1 path now puts the module in the
+  ERROR state at import time. The pre-existing SHA2-256f KAT also
+  picks up an explicit tampered-message negative path.
+- **mypy --strict cleanup.** `slhdsa_verify` now wraps its return in
+  `bool(...)` so the strict type checker no longer flags it as
+  returning `Any` from a `-> bool` declaration.
+
+### Added
+- **`generate_slhdsa_keypair_from_seed` Python binding.** New wrapper
+  over the existing C-level `ama_slhdsa_keygen_from_seed` symbol that
+  derives a deterministic `SlhDsaKeyPair` from caller-supplied
+  `(SK.seed, SK.prf, PK.seed)` of length `n`. All three seeds and the
+  resulting SK scratch buffer are wiped on the way out (INVARIANT-6).
+  This closes a Python-side API gap that previously forced KAT and
+  reproducible-keygen consumers to drop down into ctypes manually.
+
 
 ## [Unreleased]
 

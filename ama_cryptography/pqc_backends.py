@@ -2106,14 +2106,75 @@ def generate_slhdsa_keypair(param_set: str = "SHAKE-128s") -> SlhDsaKeyPair:
         raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
     pk_buf = ctypes.create_string_buffer(pk_len)
     sk_buf = ctypes.create_string_buffer(sk_len)
-    rc = _native_lib.ama_slhdsa_keygen(ctypes.c_int(enum_id), pk_buf, sk_buf)
-    if rc != 0:
-        raise RuntimeError(f"ama_slhdsa_keygen({param_set}) failed: rc={rc}")
-    return SlhDsaKeyPair(
-        public_key=bytes(pk_buf.raw[:pk_len]),
-        secret_key=bytearray(sk_buf.raw[:sk_len]),
-        param_set=param_set,
-    )
+    try:
+        rc = _native_lib.ama_slhdsa_keygen(ctypes.c_int(enum_id), pk_buf, sk_buf)
+        if rc != 0:
+            raise RuntimeError(f"ama_slhdsa_keygen({param_set}) failed: rc={rc}")
+        # INVARIANT-6: copy SK into a wipeable bytearray, then immediately
+        # zero the ctypes scratch buffer so the only live copy of the secret
+        # key is the one the SlhDsaKeyPair (or its caller) owns.
+        return SlhDsaKeyPair(
+            public_key=bytes(pk_buf.raw[:pk_len]),
+            secret_key=bytearray(sk_buf.raw[:sk_len]),
+            param_set=param_set,
+        )
+    finally:
+        ctypes.memset(sk_buf, 0, sk_len)
+
+
+def generate_slhdsa_keypair_from_seed(
+    sk_seed: Union[bytes, bytearray],
+    sk_prf: Union[bytes, bytearray],
+    pk_seed: Union[bytes, bytearray],
+    param_set: str = "SHAKE-128s",
+) -> SlhDsaKeyPair:
+    """Deterministically derive an SLH-DSA keypair from FIPS 205 §10.1 seeds.
+
+    Mirrors the C-level :c:func:`ama_slhdsa_keygen_from_seed` entry point.
+    All three seed inputs must be exactly ``n`` bytes long
+    (``n = 16`` for SHAKE-128s, ``n = 32`` for SHA2-256f). The resulting
+    secret key layout is ``SK.seed || SK.prf || PK.seed || PK.root`` and
+    the public key is ``PK.seed || PK.root``.
+
+    Raises:
+        SphincsUnavailableError: If the native SLH-DSA backend is not built.
+        ValueError: On unsupported ``param_set`` or wrong seed length.
+        RuntimeError: On native key generation failure.
+    """
+    enum_id, pk_len, sk_len, _, n = _slhdsa_resolve(param_set)
+    if not SPHINCS_AVAILABLE or _native_lib is None:
+        raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
+    for label, seed in (("sk_seed", sk_seed), ("sk_prf", sk_prf), ("pk_seed", pk_seed)):
+        if len(seed) != n:
+            raise ValueError(f"SLH-DSA-{param_set}: {label} must be {n} bytes, got {len(seed)}")
+    pk_buf = ctypes.create_string_buffer(pk_len)
+    sk_buf = ctypes.create_string_buffer(sk_len)
+    # INVARIANT-6: keep all secret-bearing scratch buffers in mutable
+    # ctypes storage so they can be wiped before this function returns.
+    sk_seed_buf = ctypes.create_string_buffer(bytes(sk_seed), n)
+    sk_prf_buf = ctypes.create_string_buffer(bytes(sk_prf), n)
+    pk_seed_buf = ctypes.create_string_buffer(bytes(pk_seed), n)
+    try:
+        rc = _native_lib.ama_slhdsa_keygen_from_seed(
+            ctypes.c_int(enum_id),
+            sk_seed_buf,
+            sk_prf_buf,
+            pk_seed_buf,
+            pk_buf,
+            sk_buf,
+        )
+        if rc != 0:
+            raise RuntimeError(f"ama_slhdsa_keygen_from_seed({param_set}) failed: rc={rc}")
+        return SlhDsaKeyPair(
+            public_key=bytes(pk_buf.raw[:pk_len]),
+            secret_key=bytearray(sk_buf.raw[:sk_len]),
+            param_set=param_set,
+        )
+    finally:
+        ctypes.memset(sk_buf, 0, sk_len)
+        ctypes.memset(sk_seed_buf, 0, n)
+        ctypes.memset(sk_prf_buf, 0, n)
+        ctypes.memset(pk_seed_buf, 0, n)
 
 
 def slhdsa_sign(
@@ -2145,19 +2206,26 @@ def slhdsa_sign(
         )
     sig_buf = ctypes.create_string_buffer(sig_len)
     sig_buf_len = ctypes.c_size_t(sig_len)
-    rc = _native_lib.ama_slhdsa_sign(
-        ctypes.c_int(enum_id),
-        sig_buf,
-        ctypes.byref(sig_buf_len),
-        message,
-        ctypes.c_size_t(len(message)),
-        ctx if ctx else None,
-        ctypes.c_size_t(len(ctx)),
-        bytes(secret_key),
-    )
-    if rc != 0:
-        raise RuntimeError(f"ama_slhdsa_sign({param_set}) failed: rc={rc}")
-    return bytes(sig_buf.raw[: sig_buf_len.value])
+    # INVARIANT-6: route the secret key through a mutable ctypes buffer so it
+    # can be zeroed on the way out — ``bytes(secret_key)`` would otherwise
+    # leave an immutable, non-wipeable copy on the Python heap.
+    sk_buf = ctypes.create_string_buffer(bytes(secret_key), sk_len)
+    try:
+        rc = _native_lib.ama_slhdsa_sign(
+            ctypes.c_int(enum_id),
+            sig_buf,
+            ctypes.byref(sig_buf_len),
+            message,
+            ctypes.c_size_t(len(message)),
+            ctx if ctx else None,
+            ctypes.c_size_t(len(ctx)),
+            sk_buf,
+        )
+        if rc != 0:
+            raise RuntimeError(f"ama_slhdsa_sign({param_set}) failed: rc={rc}")
+        return bytes(sig_buf.raw[: sig_buf_len.value])
+    finally:
+        ctypes.memset(sk_buf, 0, sk_len)
 
 
 def slhdsa_verify(
@@ -2193,7 +2261,7 @@ def slhdsa_verify(
         ctypes.c_size_t(len(ctx)),
         public_key,
     )
-    return rc == 0
+    return bool(rc == 0)
 
 
 def slhdsa_sign_deterministic(
@@ -2220,19 +2288,24 @@ def slhdsa_sign_deterministic(
         )
     sig_buf = ctypes.create_string_buffer(sig_len)
     sig_buf_len = ctypes.c_size_t(sig_len)
-    rc = _native_lib.ama_slhdsa_sign_deterministic(
-        ctypes.c_int(enum_id),
-        sig_buf,
-        ctypes.byref(sig_buf_len),
-        message,
-        ctypes.c_size_t(len(message)),
-        ctx if ctx else None,
-        ctypes.c_size_t(len(ctx)),
-        bytes(secret_key),
-    )
-    if rc != 0:
-        raise RuntimeError(f"ama_slhdsa_sign_deterministic({param_set}) failed: rc={rc}")
-    return bytes(sig_buf.raw[: sig_buf_len.value])
+    # INVARIANT-6: see slhdsa_sign — wipe the ctypes scratch SK on exit.
+    sk_buf = ctypes.create_string_buffer(bytes(secret_key), sk_len)
+    try:
+        rc = _native_lib.ama_slhdsa_sign_deterministic(
+            ctypes.c_int(enum_id),
+            sig_buf,
+            ctypes.byref(sig_buf_len),
+            message,
+            ctypes.c_size_t(len(message)),
+            ctx if ctx else None,
+            ctypes.c_size_t(len(ctx)),
+            sk_buf,
+        )
+        if rc != 0:
+            raise RuntimeError(f"ama_slhdsa_sign_deterministic({param_set}) failed: rc={rc}")
+        return bytes(sig_buf.raw[: sig_buf_len.value])
+    finally:
+        ctypes.memset(sk_buf, 0, sk_len)
 
 
 def slhdsa_sign_internal(
@@ -2258,18 +2331,29 @@ def slhdsa_sign_internal(
         raise ValueError(f"SLH-DSA-{param_set}: addrnd must be {n} bytes, got {len(addrnd)}")
     sig_buf = ctypes.create_string_buffer(sig_len)
     sig_buf_len = ctypes.c_size_t(sig_len)
-    rc = _native_lib.ama_slhdsa_sign_internal(
-        ctypes.c_int(enum_id),
-        sig_buf,
-        ctypes.byref(sig_buf_len),
-        message,
-        ctypes.c_size_t(len(message)),
-        bytes(addrnd),
-        bytes(secret_key),
-    )
-    if rc != 0:
-        raise RuntimeError(f"ama_slhdsa_sign_internal({param_set}) failed: rc={rc}")
-    return bytes(sig_buf.raw[: sig_buf_len.value])
+    # INVARIANT-6: route both SK and addrnd through wipeable ctypes scratch
+    # storage. ``addrnd`` is randomness bound into the signature and —
+    # depending on caller policy — may be derived from secret material
+    # (e.g. PRF over SK), so we treat it as sensitive even though it is
+    # ultimately revealed via the resulting signature.
+    sk_buf = ctypes.create_string_buffer(bytes(secret_key), sk_len)
+    addrnd_buf = ctypes.create_string_buffer(bytes(addrnd), n)
+    try:
+        rc = _native_lib.ama_slhdsa_sign_internal(
+            ctypes.c_int(enum_id),
+            sig_buf,
+            ctypes.byref(sig_buf_len),
+            message,
+            ctypes.c_size_t(len(message)),
+            addrnd_buf,
+            sk_buf,
+        )
+        if rc != 0:
+            raise RuntimeError(f"ama_slhdsa_sign_internal({param_set}) failed: rc={rc}")
+        return bytes(sig_buf.raw[: sig_buf_len.value])
+    finally:
+        ctypes.memset(sk_buf, 0, sk_len)
+        ctypes.memset(addrnd_buf, 0, n)
 
 
 # ============================================================================
