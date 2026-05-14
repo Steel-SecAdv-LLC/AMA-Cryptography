@@ -9,7 +9,7 @@
 | Date | 2026-04-25 |
 | Classification | Public |
 | Attestation Type | **Self-Attestation (NOT CAVP, NOT CMVP, NOT FIPS 140-3)** |
-| Source Report | [`CSRC_ALIGN_REPORT.md`](../../CSRC_ALIGN_REPORT.md) |
+| Source Report | [`CSRC_ALIGN_REPORT.md`](CSRC_ALIGN_REPORT.md) |
 | Machine-readable | [`acvp_attestation.json`](acvp_attestation.json) |
 
 ---
@@ -18,7 +18,7 @@
 
 This document formally attests to the results of running official NIST ACVP
 test vectors against the AMA Cryptography library. It restructures the
-evidence in [`CSRC_ALIGN_REPORT.md`](../../CSRC_ALIGN_REPORT.md) into a
+evidence in [`CSRC_ALIGN_REPORT.md`](CSRC_ALIGN_REPORT.md) into a
 customer-facing format.
 
 ### 1.1 What IS Covered
@@ -55,7 +55,7 @@ This attestation **does not** represent, claim, or imply any of the following:
 
 ## 2. Test Environment
 
-From [`CSRC_ALIGN_REPORT.md` §1.3](../../CSRC_ALIGN_REPORT.md):
+From [`CSRC_ALIGN_REPORT.md` §1.3](CSRC_ALIGN_REPORT.md):
 
 | Property | Value |
 |---|---|
@@ -77,7 +77,7 @@ Source files for post-quantum algorithms:
 
 ## 3. Algorithm Coverage
 
-All results taken from [`CSRC_ALIGN_REPORT.md` §2.1](../../CSRC_ALIGN_REPORT.md).
+All results taken from [`CSRC_ALIGN_REPORT.md` §2.1](CSRC_ALIGN_REPORT.md).
 Vector counts are also independently anchored in
 [`docs/METRICS_REPORT.md` §"NIST ACVP Vector Counts"](../METRICS_REPORT.md)
 with reproduction commands.
@@ -142,7 +142,7 @@ The total (5,789) and the split match
 
 ## 4. Vector Selection Criteria
 
-From [`CSRC_ALIGN_REPORT.md` §1.4](../../CSRC_ALIGN_REPORT.md):
+From [`CSRC_ALIGN_REPORT.md` §1.4](CSRC_ALIGN_REPORT.md):
 
 1. **AFT + SHA-3 MCT.** Algorithm Functional Test (AFT) vectors are run for
    every covered algorithm. Monte Carlo Test (MCT) vectors are run for
@@ -170,7 +170,7 @@ From [`CSRC_ALIGN_REPORT.md` §1.4](../../CSRC_ALIGN_REPORT.md):
 
 ## 5. Reproduction Instructions
 
-From [`CSRC_ALIGN_REPORT.md` Appendix B](../../CSRC_ALIGN_REPORT.md).
+From [`CSRC_ALIGN_REPORT.md` Appendix B](CSRC_ALIGN_REPORT.md).
 
 ### 5.1 Build
 
@@ -232,7 +232,7 @@ original attestation scope).
 
 ### 6.1 ML-DSA-65 SigVer — external/pure wrapper (now 15/15)
 
-From [§2.2 of the source report](../../CSRC_ALIGN_REPORT.md). Added
+From [§2.2 of the source report](CSRC_ALIGN_REPORT.md). Added
 `ama_dilithium_verify_ctx()` implementing the FIPS 204 §5.4
 external/pure domain-separation transform
 `M' = 0x00 || len(ctx) || ctx || M` before delegating to the internal
@@ -241,7 +241,7 @@ now all 15 TG 3 vectors pass.
 
 ### 6.2 SLH-DSA-SHA2-256f — FIPS 205 hash alignment (now 14/14)
 
-From [§2.3 of the source report](../../CSRC_ALIGN_REPORT.md). Four
+From [§2.3 of the source report](CSRC_ALIGN_REPORT.md). Four
 deviations from FIPS 205 §11.2 were corrected in `src/c/ama_sphincs.c`:
 
 - `H_msg`, `H`, and `T_l` now use SHA-512 with `toByte(0, 128-n)` padding
@@ -253,7 +253,7 @@ deviations from FIPS 205 §11.2 were corrected in `src/c/ama_sphincs.c`:
 
 ### 6.3 PRF_msg corrected to HMAC-SHA-512
 
-From [§2.4 of the source report](../../CSRC_ALIGN_REPORT.md). FIPS 205
+From [§2.4 of the source report](CSRC_ALIGN_REPORT.md). FIPS 205
 §11.2 Table 5 requires HMAC-SHA-512 for PRF_msg in category 5, truncated
 to `n` bytes. Implemented `ama_hmac_sha512_3()` (FIPS 198-1 compliant)
 in `src/c/internal/ama_sha2.h` (static-linkage helper) with two
@@ -272,14 +272,14 @@ Public-API callers map the raw return:
 
 ### 6.4 SHA-512 duplication eliminated
 
-From [§2.5 of the source report](../../CSRC_ALIGN_REPORT.md). The two
+From [§2.5 of the source report](CSRC_ALIGN_REPORT.md). The two
 identical SHA-512 copies in `ama_sphincs.c` and `ama_ed25519.c` were
 extracted to the header-only `src/c/internal/ama_sha2.h` with static
 linkage. Zero external dependencies maintained.
 
 ### 6.5 Native HMAC-SHA3-256 promoted to public API
 
-From [§2.7 of the source report](../../CSRC_ALIGN_REPORT.md). The
+From [§2.7 of the source report](CSRC_ALIGN_REPORT.md). The
 internal `hmac_sha3_256()` in `src/c/ama_hkdf.c` was promoted to
 `ama_hmac_sha3_256()` with `AMA_API` export, replacing the pure-Python
 RFC 2104 stopgap introduced to resolve an `import hmac` INVARIANT-1
@@ -296,8 +296,8 @@ paths including OOM.
 >
 > ### **⚠ This document is NOT a substitute for an independent cryptographic audit.**
 
-Per [`CSRC_ALIGN_REPORT.md` lines 22–24](../../CSRC_ALIGN_REPORT.md)
-and [§3.3](../../CSRC_ALIGN_REPORT.md):
+Per [`CSRC_ALIGN_REPORT.md` lines 22–24](CSRC_ALIGN_REPORT.md)
+and [§3.3](CSRC_ALIGN_REPORT.md):
 
 > This report constitutes self-attested algorithm compliance using official
 > NIST ACVP test vectors. **It is NOT a CAVP validation certificate** and
@@ -331,7 +331,7 @@ accredited Cryptographic and Security Testing (CST) Laboratory.
 ---
 
 *This document is generated from the evidence in
-[`CSRC_ALIGN_REPORT.md`](../../CSRC_ALIGN_REPORT.md) and verified by the
+[`CSRC_ALIGN_REPORT.md`](CSRC_ALIGN_REPORT.md) and verified by the
 continuous validation workflow at
 [`.github/workflows/acvp_validation.yml`](../../.github/workflows/acvp_validation.yml).
 The machine-readable counterpart is

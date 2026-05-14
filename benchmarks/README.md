@@ -13,9 +13,9 @@ one of the artifacts below (or to live output regenerated from them):
 |----------|-------|-------------|
 | [`baseline.json`](baseline.json) | CI regression tolerances (65% of measured performance) | Edited manually when primitives land/change |
 | [`phase0_baseline_results.json`](phase0_baseline_results.json) | Python/ctypes-path per-op medians | `python benchmarks/phase0_baseline.py` |
-| `../benchmark_results.json` (runtime-only) | Suite output consumed by dashboards | `python benchmark_suite.py --json benchmark_results.json` |
+| `benchmark_results.json` (runtime-only) | Suite output consumed by dashboards | `python benchmarks/benchmark_suite.py --json benchmarks/benchmark_results.json` |
 | `../build/bin/benchmark_c_raw` (runtime-only) | Raw C per-op medians (no ctypes overhead) | `cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release && cmake --build build --target benchmark_c_raw && build/bin/benchmark_c_raw --json` |
-| [`../CSRC_ALIGN_REPORT.md`](../CSRC_ALIGN_REPORT.md) | NIST ACVP vector counts (1,215/1,215/0 — 815 AFT + 400 SHA-3 MCT) | Updated with each alignment run |
+| [`../docs/compliance/CSRC_ALIGN_REPORT.md`](../docs/compliance/CSRC_ALIGN_REPORT.md) | NIST ACVP vector counts (1,215/1,215/0 — 815 AFT + 400 SHA-3 MCT) | Updated with each alignment run |
 
 If a chart cannot cite one of these, it should not be in the repository.
 The fallback tables in [`generate_charts.py`](generate_charts.py) are
@@ -102,7 +102,7 @@ python benchmarks/benchmark_runner.py --verbose
 ### Running the Full Suite
 
 ```bash
-python benchmark_suite.py --markdown BENCHMARKS.md --json benchmark_results.json
+python benchmarks/benchmark_suite.py --markdown BENCHMARKS.md --json benchmarks/benchmark_results.json
 ```
 
 ## Properties Table — Beyond ops/sec
@@ -120,7 +120,7 @@ an explicit claim on that axis (not necessarily "no" — absence of claim).
 | Supply-chain surface             | **Zero runtime crypto deps** (INVARIANT-1); only in-tree C + optional vendored ed25519-donna (public domain, compiled from source). SBOM at `schemas/*.spdx`. | libsodium native binary (`libsodium.so`) installed via OS package or wheel; PyNaCl is a thin CFFI wrapper. | OpenSSL native binary (`libcrypto.so`); `cryptography` wheels ship a Rust binding on top. | liboqs native binary (`liboqs.so`) compiled from C source; Python wrapper is a thin ctypes shim. |
 | Self-test (FIPS-style POST)      | Startup POST via `ama_self_test()` covers AES-GCM, SHA3, Ed25519, ML-DSA, ML-KEM, HKDF self-tests (see `src/c/ama_core.c`). | None shipped with libsodium / PyNaCl. | OpenSSL FIPS provider (when built) runs full FIPS 140-3 KAT suite at init; default build does not. | liboqs ships KAT test binaries (`tests/kat_sig_algs`, `tests/kat_kem_algs`), run offline; no startup POST. |
 | Audit LoC (native C)             | ~12 k lines in `src/c/*.c` + `*.h`; plus ~3 k lines of vendored ed25519-donna under `src/c/vendor/`. Per-primitive provenance in [`src/c/PROVENANCE.md`](../src/c/PROVENANCE.md). | libsodium: ~45 k lines of hand-tuned C + assembly (including portable / assembly / ARM / SSE variants). | OpenSSL libcrypto: ~500 k lines of C covering TLS, PKCS#11, legacy algorithms, engines, FIPS module. | liboqs: ~60 k lines for PQC primitives alone (ML-KEM, ML-DSA, SLH-DSA, HQC, Classic McEliece, Frodo, etc.). |
-| ACVP / NIST KAT coverage         | 1,215 / 1,215 vectors in-tree (see `CSRC_ALIGN_REPORT.md`); continuously enforced in `.github/workflows/acvp_validation.yml`. | No ACVP self-attestation; libsodium has not pursued FIPS. | OpenSSL FIPS provider validated against NIST ACVP when built in FIPS mode. | PQClean upstream ships KAT vectors; liboqs CI runs them. |
+| ACVP / NIST KAT coverage         | 1,215 / 1,215 vectors in-tree (see `docs/compliance/CSRC_ALIGN_REPORT.md`); continuously enforced in `.github/workflows/acvp_validation.yml`. | No ACVP self-attestation; libsodium has not pursued FIPS. | OpenSSL FIPS provider validated against NIST ACVP when built in FIPS mode. | PQClean upstream ships KAT vectors; liboqs CI runs them. |
 
 ### Why this table matters
 
@@ -158,7 +158,7 @@ validated by ACVP and is byte-identical to the VAES path
 
 ## Interpreting Results
 
-See `BENCHMARKS.md` (generated locally by running `python benchmark_suite.py`; not checked into version control) for the authoritative performance document, including:
+See `BENCHMARKS.md` (generated locally by running `python benchmarks/benchmark_suite.py`; not checked into version control) for the authoritative performance document, including:
 
 - Three-column comparison (Raw C | Python/ctypes | ctypes overhead)
 - Competitive context against libsodium, liboqs, and OpenSSL

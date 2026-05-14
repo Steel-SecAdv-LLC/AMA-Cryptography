@@ -66,7 +66,7 @@ flowchart TD
         direction LR
         kms["KeyManagementSystem\nkey_management.py\nHKDF derivation"]:::blue
         cpkg["CryptoPackage\ncreate_crypto_package()\nverify_crypto_package()"]:::blue
-        mon["AmaCryptographyMonitor\nama_cryptography_monitor.py\n3R runtime security"]:::blue
+        mon["AmaCryptographyMonitor\ntools/monitoring/ama_cryptography_monitor.py\n3R runtime security"]:::blue
         capi["AmaCryptography\ncrypto_api.py\nHigh-level interface"]:::blue
     end
 

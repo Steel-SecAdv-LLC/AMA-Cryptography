@@ -267,4 +267,4 @@ audit efforts, use [GitHub Private Vulnerability Reporting](https://github.com/S
 - [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) — Algorithm summary
 - [`../ARCHITECTURE.md`](../ARCHITECTURE.md) — System architecture
 - [`../CONSTANT_TIME_VERIFICATION.md`](../CONSTANT_TIME_VERIFICATION.md) — Timing-side-channel validation
-- [`../CSRC_ALIGN_REPORT.md`](../CSRC_ALIGN_REPORT.md) — NIST ACVP vector conformance
+- [`compliance/CSRC_ALIGN_REPORT.md`](compliance/CSRC_ALIGN_REPORT.md) — NIST ACVP vector conformance
