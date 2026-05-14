@@ -13,7 +13,7 @@
 
 ## Executive Summary
 
-AMA Cryptography is a cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. It serves as the cryptographic protection layer for current downstream consumers including [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent) and FINDΩYOU™ (private repo). The architecture implements defense-in-depth security through multiple independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
+AMA Cryptography is a cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. Current consumers include [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent) and FINDΩYOU™ (private repo). The architecture implements defense-in-depth security through multiple independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
 
 This document provides a comprehensive technical reference for system architects, security engineers, and developers working with or evaluating the AMA Cryptography system.
 

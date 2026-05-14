@@ -249,7 +249,7 @@ constant-time check that was a flake source on contended runners.
   hashes.** Hashes produced by AMA ≤ 2.1.5 sit in the prior non-spec
   bit-space and will not verify against post-fix AMA — or against any
   other RFC 9106 implementation. This release ships the legacy path
-  under two new symbols so downstream consumers can verify stored tags
+  under two new symbols so consumers can verify stored tags
   without forking the old code:
 
   - **C API** (`include/ama_cryptography.h`):
@@ -327,7 +327,7 @@ constant-time check that was a flake source on contended runners.
   switch to a ≤ 1024-byte tag.  The cap is exposed as
   `AMA_ARGON2ID_MAX_TAG_LEN` in `include/ama_cryptography.h` and
   mirrored as `ama_cryptography.pqc_backends._ARGON2ID_MAX_TAG_LEN`
-  so downstream callers can gate on it at compile / import time.
+  so callers can gate on it at compile / import time.
 
 ### Performance
 

@@ -13,7 +13,7 @@
 
 ## Overview
 
-AMA Cryptography is a quantum-resistant cryptographic protection system released under the Apache License 2.0 as free and open-source software. As of v2.0, all cryptographic primitives are implemented natively in C with zero core dependencies. Current downstream consumers include Mercury Agent and FINDΩYOU™ (private repo). Security is our highest priority. We take all vulnerabilities seriously and appreciate responsible disclosure from the security research community.
+AMA Cryptography is a quantum-resistant cryptographic protection system released under the Apache License 2.0 as free and open-source software. As of v2.0, all cryptographic primitives are implemented natively in C with zero core dependencies. Current consumers include [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent) and FINDΩYOU™ (private repo). Security is our highest priority. We take all vulnerabilities seriously and appreciate responsible disclosure from the security research community.
 
 ---
 
@@ -64,7 +64,7 @@ width-5 wNAF — roughly doubling verify throughput.
 #### What "2× verify" means in practice
 
 Ed25519 verify dominates wall-clock time in three protocol families
-that AMA's downstream consumers run at scale:
+that AMA consumers run at scale:
 
 - **X.509 certificate-chain validation** (TLS handshake, code-signing).
   A typical chain is 3–4 certificates deep; each certificate signature
@@ -87,7 +87,7 @@ The change is purely algorithmic — same group-element math, no new
 external dependency, no new dispatch slot — and is gated behind
 `AMA_ED25519_VERIFY_SHAMIR` (default ON) and `AMA_ED25519_VERIFY_WINDOW`
 (default 5) so a single recompile reverts to the prior layout if a
-downstream consumer needs the old throughput envelope for
+consumer needs the old throughput envelope for
 deterministic regression purposes.
 
 The deliberate choices that constitute AMA's security posture —
@@ -365,7 +365,7 @@ Non-compliance with these standards should be reported as a high-severity securi
 | 2.1.0 | 2026-03-25 | Hand-written AVX2/NEON/SVE2 SIMD for 8 algorithms, runtime dispatch, security fixes S1-S6, bitsliced constant-time AES default |
 | 2.1.5 | 2026-04-17 | Security audit fixes (length-prefixed HKDF encoding, constant-time ops, finding C6/C7/H2), HSM support via PyKCS11, fd leak protection (CodeQL #297), secure channel protocol v2 with `rekey_epoch` AAD, INVARIANT-13 restoration |
 | 3.0.0 | 2026-04-27 | RFC 9106 Argon2id byte-identity fix (BREAKING — legacy verify-only shim provided) and `out_len` cap at `AMA_ARGON2ID_MAX_TAG_LEN = 1024`; in-house AVX-512 4-way Keccak permutation kernel (opt-in via `-DAMA_ENABLE_AVX512=ON`, XCR0 5+6+7 gated) with `docs/AVX512_KECCAK_ADR.md` ADR; X25519 fe64 (radix-2⁶⁴) ladder + hand-written MULX+ADX inline-asm kernel under BMI2∧ADX bundle gate; X25519 4-way AVX2 batch API (`ama_x25519_scalarmult_batch`, opt-in); VAES YMM AES-256-GCM; Ed25519 verify-path SWE rectification + base-point comb + merged NTT + AVX2 rejection; batch ML-DSA-65 / ML-KEM-1024 sampling via 4-way SHAKE; ChaCha20-Poly1305 AVX2 (≥ 512 B) and Argon2 BlaMka G AVX2; SHA-3 auto-tune hysteresis; NIST ACVP self-attestation (815/815 AFT) under continuous validation; D-1…D-10 distribution / tooling audit (wheel SONAME bundling, Cython/numpy build pins, `setuptools≥78.1.1` / `wheel≥0.46.2`, dudect AES-GCM tag-compare redesign, `.semgrep.yml` 341 FP → 0, X25519 dispatch-policy contract test, ed25519-donna fallthrough annotations) |
-| 3.1.0 | 2026-05-14 | Security hygiene release documentation alignment for downstream consumers, v3.1.0 tag legitimacy, INVARIANT-14 CVE-ignore review, and no public API changes since v3.0.0 |
+| 3.1.0 | 2026-05-14 | Security hygiene release documentation alignment for current consumers, v3.1.0 tag legitimacy, INVARIANT-14 CVE-ignore review, and no public API changes since v3.0.0 |
 
 ---
 

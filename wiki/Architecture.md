@@ -6,7 +6,7 @@ This page describes the system architecture of AMA Cryptography, including the m
 
 ## System Overview
 
-AMA Cryptography is a **defense-in-depth** cryptographic protection system implementing multiple independent cryptographic layers. It serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent).
+AMA Cryptography is a **defense-in-depth** cryptographic protection system implementing multiple independent cryptographic layers. Current consumers include [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent) and FINDΩYOU™ (private repo).
 
 ```mermaid
 flowchart TD
