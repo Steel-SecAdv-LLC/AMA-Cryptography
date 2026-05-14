@@ -145,6 +145,18 @@ class TestRFC3161SuccessPath:
             parsed.hostname == "tsa.example.com"
         ), f"Expected TSA hostname tsa.example.com, got {parsed.hostname}"
 
+    def test_rfc3161_rejects_http_url_before_network(self) -> None:
+        """HTTP TSA URLs are rejected before subprocess or network calls."""
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("urllib.request.urlopen") as mock_urlopen,
+        ):
+            tsr = dgs.get_rfc3161_timestamp(b"data", "http://tsa.example.com")
+
+        assert tsr is None
+        mock_run.assert_not_called()
+        mock_urlopen.assert_not_called()
+
     def test_create_crypto_package_rfc3161_success(self, monkeypatch: Any) -> None:
         """Test package creation with successful RFC 3161 timestamp."""
         kms = dgs.generate_key_management_system("test_author")

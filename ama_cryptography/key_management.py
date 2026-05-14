@@ -1373,9 +1373,8 @@ if __name__ == "__main__":
     import tempfile
 
     demo_storage_path = Path(tempfile.gettempdir()) / "ama_keys_demo"
-    storage = SecureKeyStorage(
-        demo_storage_path, master_password="test_password_123"
-    )  # nosec B106 -- intentional demo password in __main__ example block (KM-002)
+    demo_password = secrets.token_urlsafe(24)
+    storage = SecureKeyStorage(demo_storage_path, master_password=demo_password)
 
     # Store a key
     test_key = secrets.token_bytes(32)

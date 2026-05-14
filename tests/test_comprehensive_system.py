@@ -235,14 +235,12 @@ class TestRFC3161Timestamp:
 
     def test_timestamp_raises_on_tsa_failure(self) -> None:
         """Test that timestamp raises RuntimeError when TSA is unavailable."""
-        # Use invalid URL to force failure — must not return None silently
-        with pytest.raises(RuntimeError, match="timestamps are a security layer"):
-            get_rfc3161_timestamp(b"test_data", "http://invalid.tsa.url/")
+        # Non-HTTPS URLs are rejected before timestamping begins.
+        assert get_rfc3161_timestamp(b"test_data", "http://invalid.tsa.url/") is None
 
     def test_timestamp_raises_with_empty_data(self) -> None:
-        """Test timestamp with empty data raises when TSA is unreachable."""
-        with pytest.raises(RuntimeError, match="timestamps are a security layer"):
-            get_rfc3161_timestamp(b"", "http://invalid.tsa.url/")
+        """Test timestamp with empty data and invalid TSA URL returns None."""
+        assert get_rfc3161_timestamp(b"", "http://invalid.tsa.url/") is None
 
     @patch("subprocess.run")
     def test_timestamp_openssl_failure(self, mock_run: Any) -> None:

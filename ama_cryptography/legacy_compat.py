@@ -56,6 +56,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, cast
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from ama_cryptography.monitor import AmaCryptographyMonitor
@@ -447,8 +448,8 @@ def ed25519_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
 def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optional[bytes]:
     """Get RFC 3161 trusted timestamp for data.
 
-    Returns RFC 3161 timestamp token (DER-encoded), or None for invalid URL
-    schemes.  Raises RuntimeError on TSA request failure.
+    Returns RFC 3161 timestamp token (DER-encoded), or None for non-HTTPS
+    URL schemes.  Raises RuntimeError on TSA request failure.
 
     NOTE: This is the LEGACY API returning ``Optional[bytes]``, NOT the same
     as ``rfc3161_timestamp.get_timestamp()`` which returns ``TimestampResult``.
@@ -456,11 +457,9 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
     if tsa_url is None:
         tsa_url = "https://freetsa.org/tsr"
 
-    import urllib.parse
-
-    parsed_url = urllib.parse.urlparse(tsa_url)
-    if parsed_url.scheme not in ("http", "https"):
-        _logger.warning("Invalid TSA URL scheme '%s', must be http or https", parsed_url.scheme)
+    parsed_url = urlparse(tsa_url)
+    if parsed_url.scheme != "https":
+        _logger.warning("Invalid TSA URL scheme '%s', must be https", parsed_url.scheme)
         return None
 
     try:
@@ -482,9 +481,7 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
             tsa_url, data=tsq, headers={"Content-Type": "application/timestamp-query"}
         )
 
-        with urllib.request.urlopen(
-            req, timeout=10
-        ) as response:  # nosec B310 -- TSA URL is app-configured, HTTPS enforced (LC-003)
+        with urllib.request.urlopen(req, timeout=10) as response:
             tsr = response.read()
 
         return cast(bytes, tsr)
