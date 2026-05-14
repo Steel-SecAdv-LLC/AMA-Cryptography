@@ -55,7 +55,7 @@ platformdirs==4.9.4
 pluggy==1.6.0
 py-cpuinfo==9.0.0
 pydantic==2.13.4
-pydantic_core==2.46.3
+pydantic_core==2.46.4
 # Pygments 2.20.0 includes the CVE-2026-4539 AdlLexer ReDoS fix.
 # Pygments remains a transitive dev dependency only; it is not used at runtime.
 Pygments==2.20.0
