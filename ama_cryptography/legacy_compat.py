@@ -56,7 +56,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -495,7 +495,7 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
         finally:
             conn.close()
 
-        return cast(bytes, tsr)
+        return tsr
 
     except Exception as e:
         _logger.error("RFC 3161 timestamp request failed: %s", e)
