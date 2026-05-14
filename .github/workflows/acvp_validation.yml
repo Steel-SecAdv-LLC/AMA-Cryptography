@@ -12,6 +12,7 @@ name: ACVP Vector Validation
 on:
   push:
     branches: [ main, develop, 'feature/**', 'fix/**' ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main, develop ]
   schedule:
