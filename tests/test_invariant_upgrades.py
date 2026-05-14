@@ -387,7 +387,7 @@ class TestInvariantsDocumentation:
 
     def _read_invariants_md(self) -> str:
         repo_root = Path(__file__).resolve().parent.parent
-        return (repo_root / ".github" / "INVARIANTS.md").read_text(encoding="utf-8")
+        return (repo_root / "INVARIANTS.md").read_text(encoding="utf-8")
 
     def test_invariant_3_addendum_documented(self) -> None:
         content = self._read_invariants_md()

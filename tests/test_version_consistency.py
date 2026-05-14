@@ -46,6 +46,14 @@ def test_real_tree_returns_zero_hits(tool_module: ModuleType) -> None:
     assert hits == [], f"unexpected version literals in src/c/: {hits}"
 
 
+def test_github_invariants_file_is_pointer() -> None:
+    pointer = REPO_ROOT / ".github" / "INVARIANTS.md"
+    assert (
+        pointer.read_text(encoding="utf-8")
+        == "# AMA Cryptography invariants\n\nCanonical copy: ../INVARIANTS.md\n"
+    )
+
+
 def test_synthetic_c_file_is_flagged(tool_module: ModuleType, tmp_path: Path) -> None:
     """Drop a fake `#define MY_VERSION "9.9.9"` into a temp directory
     and confirm the scanner picks it up. Mirrors the pattern a future
