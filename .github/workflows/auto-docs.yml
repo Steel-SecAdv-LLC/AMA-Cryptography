@@ -16,6 +16,7 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
 jobs:
   update-docs:
@@ -42,6 +43,24 @@ jobs:
 
       - name: Run auto-documentation updater
         run: python tools/update_docs.py
+
+      - name: Close stale auto-docs PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          EXISTING_PR=$(gh pr list --head auto-docs/update --state open --json number,updatedAt --jq '.[0] // empty')
+          if [ -z "$EXISTING_PR" ]; then
+            exit 0
+          fi
+
+          PR_NUMBER=$(jq -r '.number' <<< "$EXISTING_PR")
+          UPDATED_AT=$(jq -r '.updatedAt' <<< "$EXISTING_PR")
+          CUTOFF=$(date -u -d '7 days ago' +%s)
+          UPDATED_TS=$(date -u -d "$UPDATED_AT" +%s)
+
+          if [ "$UPDATED_TS" -lt "$CUTOFF" ]; then
+            gh pr close "$PR_NUMBER" --comment "Closing stale auto-docs PR after 7 days without updates. The next documentation change will open a fresh auto-docs PR."
+          fi
 
       # Publish the Python API reference generated from docs/api/*.rst.
       # AMA_SPHINX_BUILD=1 lifts INVARIANT-7 import guards for autodoc only;
