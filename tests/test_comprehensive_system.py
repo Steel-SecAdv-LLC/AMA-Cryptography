@@ -250,11 +250,11 @@ class TestRFC3161Timestamp:
         assert result is None
 
     @patch("subprocess.run")
-    @patch("urllib.request.urlopen")
-    def test_timestamp_network_failure_raises(self, mock_urlopen: Any, mock_run: Any) -> None:
+    @patch("http.client.HTTPSConnection")
+    def test_timestamp_network_failure_raises(self, mock_https_conn: Any, mock_run: Any) -> None:
         """Test that network failure raises RuntimeError (fail-loud)."""
         mock_run.return_value = MagicMock(returncode=0, stdout=b"query_data")
-        mock_urlopen.side_effect = Exception("Network error")
+        mock_https_conn.side_effect = Exception("Network error")
         with pytest.raises(RuntimeError, match="timestamps are a security layer"):
             get_rfc3161_timestamp(b"test_data")
 

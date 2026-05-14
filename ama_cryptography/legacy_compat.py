@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import json
 import logging
 import os
@@ -474,15 +475,25 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
             return None
 
         tsq = proc.stdout
+        if parsed_url.hostname is None:
+            _logger.warning("Invalid TSA URL host")
+            return None
 
-        import urllib.request
+        path = parsed_url.path or "/"
+        if parsed_url.query:
+            path = f"{path}?{parsed_url.query}"
 
-        req = urllib.request.Request(
-            tsa_url, data=tsq, headers={"Content-Type": "application/timestamp-query"}
-        )
-
-        with urllib.request.urlopen(req, timeout=10) as response:
+        conn = http.client.HTTPSConnection(parsed_url.hostname, parsed_url.port, timeout=10)
+        try:
+            conn.request(
+                "POST", path, body=tsq, headers={"Content-Type": "application/timestamp-query"}
+            )
+            response = conn.getresponse()
+            if response.status < 200 or response.status >= 300:
+                raise RuntimeError(f"TSA returned HTTP status {response.status}")
             tsr = response.read()
+        finally:
+            conn.close()
 
         return cast(bytes, tsr)
 

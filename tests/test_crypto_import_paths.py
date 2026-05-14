@@ -34,7 +34,6 @@ AI Co-Architects:
 import base64
 from typing import Any
 from unittest.mock import MagicMock, patch
-from urllib.parse import urlparse
 
 import pytest
 
@@ -115,14 +114,15 @@ FAKE_SIGNATURE = b"S" * 3309  # 3309 bytes for ML-DSA-65 signature
 class TestRFC3161SuccessPath:
     """Tests for RFC 3161 timestamp success paths."""
 
-    @patch("urllib.request.urlopen")
+    @patch("http.client.HTTPSConnection")
     @patch("subprocess.run")
-    def test_rfc3161_success(self, mock_run: Any, mock_urlopen: Any) -> None:
+    def test_rfc3161_success(self, mock_run: Any, mock_https_conn: Any) -> None:
         """Test successful RFC 3161 timestamp retrieval."""
         mock_run.return_value = MagicMock(returncode=0, stdout=b"TSQ_DATA")
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = b"TSR_RESPONSE"
-        mock_urlopen.return_value.__enter__.return_value = mock_resp
+        mock_response = MagicMock(status=200)
+        mock_response.read.return_value = b"TSR_RESPONSE"
+        mock_conn = mock_https_conn.return_value
+        mock_conn.getresponse.return_value = mock_response
 
         tsr = dgs.get_rfc3161_timestamp(b"data", "https://tsa.example.com")
 
@@ -136,26 +136,27 @@ class TestRFC3161SuccessPath:
             run_kwargs.get("input") is not None
         ), "TSQ bytes must be passed as input to subprocess.run"
 
-        # Verify urlopen was called with a Request targeting the TSA URL
-        mock_urlopen.assert_called_once()
-        urlopen_args = mock_urlopen.call_args
-        request_obj = urlopen_args[0][0]
-        parsed = urlparse(request_obj.full_url)
-        assert (
-            parsed.hostname == "tsa.example.com"
-        ), f"Expected TSA hostname tsa.example.com, got {parsed.hostname}"
+        # Verify HTTPSConnection was called with the expected host.
+        mock_https_conn.assert_called_once_with("tsa.example.com", None, timeout=10)
+        mock_conn.request.assert_called_once_with(
+            "POST",
+            "/",
+            body=b"TSQ_DATA",
+            headers={"Content-Type": "application/timestamp-query"},
+        )
+        mock_conn.close.assert_called_once()
 
     def test_rfc3161_rejects_http_url_before_network(self) -> None:
         """HTTP TSA URLs are rejected before subprocess or network calls."""
         with (
             patch("subprocess.run") as mock_run,
-            patch("urllib.request.urlopen") as mock_urlopen,
+            patch("http.client.HTTPSConnection") as mock_https_conn,
         ):
             tsr = dgs.get_rfc3161_timestamp(b"data", "http://tsa.example.com")
 
         assert tsr is None
         mock_run.assert_not_called()
-        mock_urlopen.assert_not_called()
+        mock_https_conn.assert_not_called()
 
     def test_create_crypto_package_rfc3161_success(self, monkeypatch: Any) -> None:
         """Test package creation with successful RFC 3161 timestamp."""
