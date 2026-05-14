@@ -13,7 +13,7 @@
 
 ## Overview
 
-AMA Cryptography is a quantum-resistant cryptographic protection system released under the Apache License 2.0 as free and open-source software. As of v2.0, all cryptographic primitives are implemented natively in C with zero core dependencies. Downstream consumers include Mercury Agent and FINDΩYOU™ (Private repo, coming soon). Security is our highest priority. We take all vulnerabilities seriously and appreciate responsible disclosure from the security research community.
+AMA Cryptography is a quantum-resistant cryptographic protection system released under the Apache License 2.0 as free and open-source software. As of v2.0, all cryptographic primitives are implemented natively in C with zero core dependencies. Current downstream consumers include Mercury Agent and FINDΩYOU™ (private repo). Security is our highest priority. We take all vulnerabilities seriously and appreciate responsible disclosure from the security research community.
 
 ---
 
