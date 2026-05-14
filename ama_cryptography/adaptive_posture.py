@@ -145,7 +145,7 @@ class PostureEvaluator:
     # thresholds where P(score > threshold | normal) matches the target
     # false-positive rates: 1-in-750 (ELEVATED), 1-in-3.5M (HIGH),
     # 1-in-780B (CRITICAL).  The values below were calibrated against
-    # the AMA benchmark suite (benchmark_suite.py) timing distributions.
+    # the AMA benchmark suite (benchmarks/benchmark_suite.py) timing distributions.
     DEFAULT_ELEVATED_THRESHOLD = 0.15  # 3-sigma: mild concern
     DEFAULT_HIGH_THRESHOLD = 0.45  # 5-sigma: probable attack
     DEFAULT_CRITICAL_THRESHOLD = 0.80  # 7-sigma: active side-channel

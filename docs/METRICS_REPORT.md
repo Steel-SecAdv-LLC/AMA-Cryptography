@@ -166,16 +166,16 @@ find fuzz -name 'fuzz_*.c' | wc -l
 
 ## NIST ACVP Vector Counts
 
-Authoritative anchor: [`CSRC_ALIGN_REPORT.md`](../CSRC_ALIGN_REPORT.md).
+Authoritative anchor: [`CSRC_ALIGN_REPORT.md`](compliance/CSRC_ALIGN_REPORT.md).
 
 | Count | Value | Anchor |
 |-------|------:|--------|
-| Vectors tested | **1,215** | `CSRC_ALIGN_REPORT.md` §Abstract |
-| Vectors passed | **1,215** | `CSRC_ALIGN_REPORT.md` §Abstract |
-| Vectors failed | **0** | `CSRC_ALIGN_REPORT.md` §Abstract |
-| Vectors skipped | 5,789 | `CSRC_ALIGN_REPORT.md` §Abstract (4,757 AFT-filtered + 1,032 non-AFT) |
+| Vectors tested | **1,215** | `docs/compliance/CSRC_ALIGN_REPORT.md` §Abstract |
+| Vectors passed | **1,215** | `docs/compliance/CSRC_ALIGN_REPORT.md` §Abstract |
+| Vectors failed | **0** | `docs/compliance/CSRC_ALIGN_REPORT.md` §Abstract |
+| Vectors skipped | 5,789 | `docs/compliance/CSRC_ALIGN_REPORT.md` §Abstract (4,757 AFT-filtered + 1,032 non-AFT) |
 | SHA-3 Monte Carlo Test (MCT) vectors | **400** | 4 algos × 1 tcId × 100 outer iterations (FIPS-202 MCT spec) |
-| Algorithm functions tested | **12** | `CSRC_ALIGN_REPORT.md` §1.1 |
+| Algorithm functions tested | **12** | `docs/compliance/CSRC_ALIGN_REPORT.md` §1.1 |
 | NIST standards covered | **7** | 6 FIPS (180-4, 198-1, 202, 203, 204, 205) + SP 800-38D |
 
 If "117 NIST" has been claimed externally, it does not match any count
@@ -188,11 +188,11 @@ was 815 before SHA-3 MCT was added to the harness on the 2.1.5 line).
 ### Reproduction
 
 ```bash
-grep -E "^\*\*Summary:\*\*" CSRC_ALIGN_REPORT.md
+grep -E "^\*\*Summary:\*\*" docs/compliance/CSRC_ALIGN_REPORT.md
 # Expected: **Summary:** 1,215 vectors tested, **1,215 passed**, **0 failed**, 5,789 skipped
 
 # Standards covered
-grep -E "FIPS |SP 800-" CSRC_ALIGN_REPORT.md | head
+grep -E "FIPS |SP 800-" docs/compliance/CSRC_ALIGN_REPORT.md | head
 ```
 
 ---

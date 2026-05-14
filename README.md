@@ -373,7 +373,7 @@ NIST-standardized post-quantum algorithms:
 
 ## Performance Metrics
 
-> **Reading the numbers below.** All ops/sec figures in the tables that follow are from the **canonical bench host** (Linux x86-64 with AVX-512F/VL/BW/DQ/VBMI + VAES + VPCLMULQDQ; Sapphire Rapids / Zen 4 class), measured 2026-04-25 with `python benchmarks/benchmark_runner.py` and `build/bin/benchmark_c_raw --json`. The checked-in `benchmark-results.json` and `benchmarks/baseline.json` carry a separate, lower set of numbers — the **slow-runner CI regression floor** — so even contended GitHub Actions shared runners clear the regression threshold without false-positive failures. The two are not the same number, on purpose. Reproduce the canonical numbers on equivalent silicon; the regression floor is documented in [CHANGELOG.md](CHANGELOG.md#300---2026-04-27) §"Slow-runner regression-floor recalibration".
+> **Reading the numbers below.** All ops/sec figures in the tables that follow are from the **canonical bench host** (Linux x86-64 with AVX-512F/VL/BW/DQ/VBMI + VAES + VPCLMULQDQ; Sapphire Rapids / Zen 4 class), measured 2026-04-25 with `python benchmarks/benchmark_runner.py` and `build/bin/benchmark_c_raw --json`. The checked-in `benchmarks/benchmark-results.json` and `benchmarks/baseline.json` carry a separate, lower set of numbers — the **slow-runner CI regression floor** — so even contended GitHub Actions shared runners clear the regression threshold without false-positive failures. The two are not the same number, on purpose. Reproduce the canonical numbers on equivalent silicon; the regression floor is documented in [CHANGELOG.md](CHANGELOG.md#300---2026-04-27) §"Slow-runner regression-floor recalibration".
 
 <details>
 <summary><strong>Cryptographic Operation Benchmarks</strong></summary>
@@ -394,7 +394,7 @@ NIST-standardized post-quantum algorithms:
 | **Sign** | 2,976 ops/sec | ~336µs | Rejection sampling, constant-time |
 | **Verify** | 7,576 ops/sec | ~132µs | Verified against NIST ACVP test vectors (self-attested) |
 
-*Source: canonical bench host (Linux x86-64 with AVX-512F/VL/BW/DQ/VBMI + VAES + VPCLMULQDQ), measured 2026-04-25. Reproducible with `python benchmarks/benchmark_runner.py` and `build/bin/benchmark_c_raw --json` on equivalent silicon (~4,845 KeyGen, ~3,929 Sign, ~7,773 Verify ops/sec raw C, no ctypes). The checked-in `benchmark-results.json` carries the slow-runner CI regression floor — see [CHANGELOG.md](CHANGELOG.md#300---2026-04-27) and [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md) for the dual-host methodology.*
+*Source: canonical bench host (Linux x86-64 with AVX-512F/VL/BW/DQ/VBMI + VAES + VPCLMULQDQ), measured 2026-04-25. Reproducible with `python benchmarks/benchmark_runner.py` and `build/bin/benchmark_c_raw --json` on equivalent silicon (~4,845 KeyGen, ~3,929 Sign, ~7,773 Verify ops/sec raw C, no ctypes). The checked-in `benchmarks/benchmark-results.json` carries the slow-runner CI regression floor — see [CHANGELOG.md](CHANGELOG.md#300---2026-04-27) and [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md) for the dual-host methodology.*
 
 ### ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)
 
@@ -403,7 +403,7 @@ NIST-standardized post-quantum algorithms:
 | **KeyGen** | 4,965 ops/sec | Native C, no OpenSSL dependency |
 | **Encapsulate** | 10,253 ops/sec | Fujisaki–Okamoto transform, IND-CCA2 |
 
-*Source: canonical bench host, measured 2026-04-25. Decapsulate and raw C throughput available via `build/bin/benchmark_c_raw --json` (~10,834 Decaps ops/sec on the same host). The checked-in `benchmark-results.json` carries the slow-runner CI regression floor, not these canonical numbers.*
+*Source: canonical bench host, measured 2026-04-25. Decapsulate and raw C throughput available via `build/bin/benchmark_c_raw --json` (~10,834 Decaps ops/sec on the same host). The checked-in `benchmarks/benchmark-results.json` carries the slow-runner CI regression floor, not these canonical numbers.*
 
 ### Full Multi-Layer Package Performance
 
@@ -414,7 +414,7 @@ Complete security package with all defense layers (Python API via ctypes):
 | Package Create (all layers) | 2,853 ops/sec | ~350µs |
 | Package Verify (all layers) | 4,973 ops/sec | ~201µs |
 
-*Source: canonical bench host, measured 2026-04-25. The checked-in `benchmark-results.json` carries the slow-runner CI regression floor (see [CHANGELOG.md](CHANGELOG.md#300---2026-04-27) §"Slow-runner regression-floor recalibration").*
+*Source: canonical bench host, measured 2026-04-25. The checked-in `benchmarks/benchmark-results.json` carries the slow-runner CI regression floor (see [CHANGELOG.md](CHANGELOG.md#300---2026-04-27) §"Slow-runner regression-floor recalibration").*
 
 **All Layers:** SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65 (core), HKDF, RFC 3161 (supporting)
 
@@ -434,7 +434,7 @@ Complete security package with all defense layers (Python API via ctypes):
 
 **Performance Note:** Ed25519 signing stores the expanded 64-byte key (seed||pk) to avoid redundant SHA-512 expansion on each sign call. X25519 now uses the radix-2^64 (`fe64.h`) field arithmetic on x86-64 GCC/Clang (default) with the radix-2^51 (`fe51.h`) layout retained as a fallback for non-x86-64 64-bit GCC/Clang and the portable radix-2^16 path retained for MSVC and 32-bit targets. On hosts where CPUID reports both BMI2 (`EBX[8]`) and ADX (`EBX[19]`), the dispatcher promotes the ladder's multiply / square *and* the Fermat inversion to the in-house MULX+ADCX/ADOX kernel in `src/c/internal/ama_x25519_fe64_mulx.c` — gated by `ama_cpuid_has_x25519_mulx()` and pinned byte-identical to the pure-C fe64 reference across 4096 random vectors by `tests/c/test_x25519_fe64_mulx_equiv.c`. The kernel is hand-written GCC inline assembly: `fe64_mul512_mulx` issues explicit `ADCX` (CF chain) and `ADOX` (OF chain) so the lo-column and hi-column accumulations propagate in parallel, and `fe64_sq512_mulx` is a dedicated squaring kernel that exploits off-diagonal symmetry (10 multiplications vs 16 for the full schoolbook). The wiring is correctness-equivalent across all three field paths (verified by 1024 random vectors in `tests/c/test_x25519_field_equiv.c`); on this canonical-host VM the MULX+ADX kernel improves throughput from the pure-C fe64 baseline of ~11,500 ops/sec to ~15,401 ops/sec via the Python-via-ctypes harness in `benchmarks/benchmark_runner.py` (~34 %); the raw-C harness `build/bin/benchmark_c_raw` measures ~16,983 ops/sec on the same host, with the gap being per-call FFI overhead, not field-arithmetic difference. The literature-reported 1.8-2.2× over pure-C schoolbook (OpenSSL `crypto/ec/asm/x25519-x86_64.pl`, BoringSSL fiat-crypto MULX/ADX) shows up on uncontended Skylake+/Zen+ silicon; the dispatcher lights this kernel up automatically wherever BMI2+ADX are reported, so heavier-iron hosts reach the upper end without further code changes. See [benchmarks/](benchmarks/) for full performance data including all algorithms.
 
-*Benchmarks: Linux x86-64, Python 3.11.15, native C backend via ctypes, measured 2026-04-27. Reproducible via `python benchmarks/benchmark_runner.py` (CI regression suite), `python benchmark_suite.py` (Python-API sweep), or `build/bin/benchmark_c_raw --json` (raw C). Absolute numbers depend on the host; consult [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md) for baseline-change policy.*
+*Benchmarks: Linux x86-64, Python 3.11.15, native C backend via ctypes, measured 2026-04-27. Reproducible via `python benchmarks/benchmark_runner.py` (CI regression suite), `python benchmarks/benchmark_suite.py` (Python-API sweep), or `build/bin/benchmark_c_raw --json` (raw C). Absolute numbers depend on the host; consult [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md) for baseline-change policy.*
 
 
 ### Benchmark Charts
@@ -471,7 +471,7 @@ Complete security package with all defense layers (Python API via ctypes):
 Scalability across input sizes is not yet tracked in the CI regression suite. Measure locally:
 
 ```bash
-python benchmark_suite.py   # varies message size automatically
+python benchmarks/benchmark_suite.py   # varies message size automatically
 ```
 
 </details>
@@ -482,7 +482,7 @@ python benchmark_suite.py   # varies message size automatically
 Ethical integration overhead is not yet tracked in the CI regression suite. The ethical layer adds cryptographic binding to the 4 Omni-Code Ethical Pillars via HKDF context. End-to-end package creation overhead remains under 2% of total time since HKDF is a small fraction of the pipeline (ML-DSA-65 signing dominates at ~336µs / ~2,976 ops/sec on the canonical bench host post-v3.0.0 — see Performance Metrics). Measure locally:
 
 ```bash
-python benchmark_suite.py   # includes ethical overhead breakdown
+python benchmarks/benchmark_suite.py   # includes ethical overhead breakdown
 ```
 
 </details>
@@ -701,7 +701,7 @@ The test suite includes:
 - Integration tests for package creation and verification
 - Edge case testing for error handling
 - Performance regression tests with tiered tolerances
-- NIST ACVP vector validation (1,215 vectors across 12 algorithm functions — 815 AFT + 400 SHA-3 MCT; see [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md))
+- NIST ACVP vector validation (1,215 vectors across 12 algorithm functions — 815 AFT + 400 SHA-3 MCT; see [CSRC_ALIGN_REPORT.md](docs/compliance/CSRC_ALIGN_REPORT.md))
 - Fuzz harnesses for 13 C targets (`fuzz/`): AES-GCM, Argon2, ChaCha20-Poly1305, consttime, Dilithium, Ed25519, FROST, HKDF, Kyber, secp256k1, SHA3, SPHINCS+, X25519
 - Empirical constant-time verification via [dudect](docs/constant-time-testing.md) (Welch's t-test on execution times)
 - [OSS-Fuzz](docs/oss-fuzz-onboarding.md) onboarding preparation for continuous 24/7 fuzzing
@@ -868,7 +868,7 @@ two are not sourced from ACVP-Server). The current attestation is
 
 - **Formal attestation:** [`docs/compliance/ACVP_SELF_ATTESTATION.md`](docs/compliance/ACVP_SELF_ATTESTATION.md)
 - **Machine-readable:** [`docs/compliance/acvp_attestation.json`](docs/compliance/acvp_attestation.json)
-- **Full evidence report:** [`CSRC_ALIGN_REPORT.md`](CSRC_ALIGN_REPORT.md)
+- **Full evidence report:** [`docs/compliance/CSRC_ALIGN_REPORT.md`](docs/compliance/CSRC_ALIGN_REPORT.md)
 - **Continuous validation:** [`.github/workflows/acvp_validation.yml`](.github/workflows/acvp_validation.yml) — runs on every push to `main` and weekly on Mondays; fails if any vector regresses.
 
 ### Coverage Summary
@@ -939,7 +939,7 @@ Full reproduction instructions:
 | [THREAT_MODEL.md](THREAT_MODEL.md) | Threat model and risk assessment |
 | [benchmarks/](benchmarks/) | Performance measurements |
 | [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) | Cryptographic algorithm overview |
-| [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md) | NIST ACVP vector validation evidence (1,215/1,215 pass — 815 AFT + 400 SHA-3 MCT) |
+| [CSRC_ALIGN_REPORT.md](docs/compliance/CSRC_ALIGN_REPORT.md) | NIST ACVP vector validation evidence (1,215/1,215 pass — 815 AFT + 400 SHA-3 MCT) |
 | [docs/compliance/ACVP_SELF_ATTESTATION.md](docs/compliance/ACVP_SELF_ATTESTATION.md) | **Customer-facing** NIST ACVP self-attestation (NOT CAVP, NOT CMVP, NOT FIPS 140-3) |
 | [docs/compliance/acvp_attestation.json](docs/compliance/acvp_attestation.json) | Machine-readable attestation — structured fields for tooling |
 | [CSRC_STANDARDS.md](CSRC_STANDARDS.md) | Governing standards registry |

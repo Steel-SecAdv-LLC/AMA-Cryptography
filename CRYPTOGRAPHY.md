@@ -111,7 +111,7 @@ readers can audit the derivation status.
 text — it is **not** a claim of independent formal proof. For the
 limitations of clean-room transcription (which has produced two
 implementation bugs that were caught and fixed by ACVP, not by review),
-see [`CSRC_ALIGN_REPORT.md §2.3–§2.5`](CSRC_ALIGN_REPORT.md). For file-level
+see [`CSRC_ALIGN_REPORT.md §2.3–§2.5`](docs/compliance/CSRC_ALIGN_REPORT.md). For file-level
 provenance statements and known divergences from the reference pseudocode,
 see [`src/c/PROVENANCE.md`](src/c/PROVENANCE.md).
 

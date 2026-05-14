@@ -8,7 +8,7 @@ AMA Cryptography — Global Auto-Documentation System
 Updates documentation targets from source-of-truth data:
   1. CHANGELOG.md   — new section from git log since last entry
   2. README.md       — refresh version number and date stamps
-  3. Benchmark docs  — regenerate tables from ``benchmark-results.json``
+  3. Benchmark docs  — regenerate tables from ``benchmarks/benchmark-results.json``
                        (canonical-host run; the actual measurement output),
                        cross-checked against ``benchmarks/baseline.json``
                        for the regression-floor secondary column. Pre-3.0.1
@@ -54,14 +54,14 @@ README = ROOT / "README.md"
 # Source-of-truth split (3.0.0 audit follow-up):
 #   * Headline ops/sec come from the canonical-host *measurement* file
 #     produced by ``benchmarks/benchmark_runner.py --output
-#     benchmark-results.json`` (the same command CI runs — see
+#     benchmarks/benchmark-results.json`` (the same command CI runs — see
 #     ``.github/workflows/ci.yml``'s "Benchmark Regression Detection"
-#     step, which also flows ``benchmark-results.json`` and
+#     step, which also flows ``benchmarks/benchmark-results.json`` and
 #     ``benchmark-report.md`` through to the workflow artifacts).
 #   * The regression floor (a deliberately-conservative ~65% of measured)
 #     stays in baseline.json and is shown in a secondary column so the
 #     reader can sanity-check that measured >> floor.
-BENCHMARK_RESULTS_JSON = ROOT / "benchmark-results.json"
+BENCHMARK_RESULTS_JSON = ROOT / "benchmarks" / "benchmark-results.json"
 BASELINE_JSON = ROOT / "benchmarks" / "baseline.json"
 WIKI_DIR = ROOT / "wiki"
 INIT_PY = ROOT / "ama_cryptography" / "__init__.py"
@@ -298,7 +298,7 @@ def update_readme(dry_run: bool = False) -> bool:
 # ============================================================================
 #
 # The auto-generated benchmark table publishes the latest *measured* ops/sec
-# from ``benchmark-results.json`` as the headline number — the canonical-host
+# from ``benchmarks/benchmark-results.json`` as the headline number — the canonical-host
 # run that the suite actually produced — and pairs each row with the matching
 # regression floor from ``benchmarks/baseline.json``.  Reviewers see both:
 #   * "Throughput (ops/sec)" — what the host actually measured.
@@ -362,7 +362,7 @@ def _baseline_index() -> dict[str, dict]:
 def _generate_benchmark_table() -> str:
     """Emit the canonical-host throughput table.
 
-    ``benchmark-results.json`` is the source of truth for the headline
+    ``benchmarks/benchmark-results.json`` is the source of truth for the headline
     numbers; if it is missing the function returns an empty string and
     ``update_benchmark_docs`` prints a remedy rather than silently
     falling back to the floors (which would re-introduce the bug this
@@ -382,12 +382,12 @@ def _generate_benchmark_table() -> str:
     lines = [
         "<!-- "
         "Throughput numbers below are the canonical-host measurements written "
-        "by `benchmarks/benchmark_runner.py --output benchmark-results.json` "
+        "by `benchmarks/benchmark_runner.py --output benchmarks/benchmark-results.json` "
         f"(the same command CI runs) on {captured}.  The regression-floor "
         "column is the value enforced by `benchmarks/baseline.json` (CI "
         "fails when measured drops more than `tolerance_percent` below "
         "floor).  Regenerate via `python tools/update_docs.py`. -->",
-        f"_Headline source: `benchmark-results.json` (run {captured}). "
+        f"_Headline source: `benchmarks/benchmark-results.json` (run {captured}). "
         "Regression floor: `benchmarks/baseline.json`.  CI fails on "
         "(measured - tolerance%) < floor — both columns shown so reviewers "
         "can sanity-check the headroom._",
@@ -434,19 +434,19 @@ def update_benchmark_docs(dry_run: bool = False) -> bool:
         # Regression Detection" job, see .github/workflows/ci.yml.
         # validation_suite.py is the slow-runner regression-floor
         # validation harness and writes to a different output file
-        # (benchmarks/validation_results.json) -- not benchmark-results.json.
+        # (benchmarks/validation_results.json) -- not benchmarks/benchmark-results.json.
         print(
-            "  BENCHMARKS: benchmark-results.json missing — refusing to "
+            "  BENCHMARKS: benchmarks/benchmark-results.json missing — refusing to "
             "regenerate the auto-table from baseline floors. Re-run\n"
             "    LD_LIBRARY_PATH=build/lib python3 benchmarks/benchmark_runner.py \\\n"
-            "        --output benchmark-results.json --markdown benchmark-report.md\n"
+            "        --output benchmarks/benchmark-results.json --markdown benchmark-report.md\n"
             "on the canonical host first."
         )
         return False
 
     table = _generate_benchmark_table()
     if not table:
-        print("  BENCHMARKS: benchmark-results.json contains no `results` entries")
+        print("  BENCHMARKS: benchmarks/benchmark-results.json contains no `results` entries")
         return False
 
     changed = False

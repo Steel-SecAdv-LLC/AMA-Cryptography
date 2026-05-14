@@ -773,7 +773,10 @@ setup(
         "digital-signatures",
     ],
     python_requires=">=3.9",
-    packages=find_packages(exclude=["tests", "tests.*", "examples", "examples.*", "src", "src.*"]),
+    packages=find_packages(
+        include=["ama_cryptography", "ama_cryptography.*", "tools", "tools.*"],
+        exclude=["tests", "tests.*", "examples", "examples.*", "src", "src.*"],
+    ),
     py_modules=["ama_cryptography_monitor"],
     # Dependency metadata (install_requires / extras_require) is declared
     # **only** in pyproject.toml. Setuptools merges the two automatically; any

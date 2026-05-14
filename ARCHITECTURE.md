@@ -308,8 +308,8 @@ ama_cryptography/
 
 Root-level modules:
 ├── ama_cryptography/legacy_compat.py  # Legacy API compat (ported from code_guardian_secure.py)
-├── ama_cryptography_monitor.py      # 3R runtime security monitor
-└── ama_cryptography_monitor_demo.py # Monitor demonstration
+├── ama_cryptography_monitor.py        # Top-level monitor compatibility shim
+└── tools/monitoring/                  # 3R runtime security monitor and demo
 ```
 
 ### Core Components
@@ -812,7 +812,7 @@ instructions.
 
 Cryptographic implementations are validated against:
 
-- **NIST ACVP vectors** (`nist_vectors/`): 1,215 vectors tested, 1,215 passed across 12 algorithm functions and 7 NIST standards (815 AFT + 400 SHA-3 MCT). See [CSRC_ALIGN_REPORT.md](CSRC_ALIGN_REPORT.md) for full breakdown.
+- **NIST ACVP vectors** (`nist_vectors/`): 1,215 vectors tested, 1,215 passed across 12 algorithm functions and 7 NIST standards (815 AFT + 400 SHA-3 MCT). See [CSRC_ALIGN_REPORT.md](docs/compliance/CSRC_ALIGN_REPORT.md) for full breakdown.
 - NIST FIPS 202 SHA3-256, SHA3-512, SHAKE-128, SHAKE-256 test vectors
 - NIST FIPS 203 ML-KEM-1024 KAT vectors (10/10 pass — `tests/kat/fips203/`)
 - NIST FIPS 204 ML-DSA-65 KAT vectors (10/10 pass — `tests/kat/fips204/`)
@@ -883,8 +883,8 @@ Cryptographic implementations are validated against:
 - `include/ama_cryptography.h`: Complete C API specification
 - `SECURITY.md`: Detailed security proofs and analysis
 - `THREAT_MODEL.md`: Threat model and risk assessment
-- `BENCHMARKS.md`: Performance measurement methodology and results (generated locally by running `python benchmark_suite.py`; not checked into version control)
-- `CSRC_ALIGN_REPORT.md`: NIST ACVP vector validation results (1,215/1,215 pass — 815 AFT + 400 SHA-3 MCT)
+- `BENCHMARKS.md`: Performance measurement methodology and results (generated locally by running `python benchmarks/benchmark_suite.py`; not checked into version control)
+- `docs/compliance/CSRC_ALIGN_REPORT.md`: NIST ACVP vector validation results (1,215/1,215 pass — 815 AFT + 400 SHA-3 MCT)
 - `CSRC_STANDARDS.md`: Governing standards registry
 - `IMPLEMENTATION_GUIDE.md`: Deployment and integration guide
 - `.github/INVARIANTS.md`: Canonical architectural invariants (INVARIANT-1 through INVARIANT-15), including vendoring policy and CSRC_STANDARDS.md mapping
