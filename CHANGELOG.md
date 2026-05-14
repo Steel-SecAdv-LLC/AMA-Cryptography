@@ -139,7 +139,7 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   scanner extended to recognise `nosemgrep`, and two CHANGELOG
   in-place corrections (`AMA_DISPATCH_PRINT` → `AMA_DISPATCH_VERBOSE`;
   benchmark-table generator producer cited as
-  `benchmarks/benchmark_runner.py --output benchmark-results.json`).
+  `benchmarks/benchmark_runner.py --output benchmarks/benchmark-results.json`).
 
 Headline: in-house AVX-512 4-way Keccak permutation kernel (opt-in,
 default OFF) lands as the first ZMM-class SIMD path in the tree, paired
@@ -213,7 +213,7 @@ constant-time check that was a flake source on contended runners.
   pass. FIPS-140 self-test + KAT + SIMD KAT Python lanes: 128 / 128
   pass. Regression benchmark: 16 / 16 pass, 0 warnings. Refreshed
   ops/sec tables in `README.md`, `benchmark-report.md`, and
-  `benchmark-results.json` so they reflect the current tree including
+  `benchmarks/benchmark-results.json` so they reflect the current tree including
   the post-#261 base-point comb
   table, #265 verify-path SWE rectification, and #266 VAES YMM
   AES-256-GCM landed on the 2.1.5 line. Notable deltas on this host:
@@ -249,7 +249,7 @@ constant-time check that was a flake source on contended runners.
   hashes.** Hashes produced by AMA ≤ 2.1.5 sit in the prior non-spec
   bit-space and will not verify against post-fix AMA — or against any
   other RFC 9106 implementation. This release ships the legacy path
-  under two new symbols so downstream consumers can verify stored tags
+  under two new symbols so consumers can verify stored tags
   without forking the old code:
 
   - **C API** (`include/ama_cryptography.h`):
@@ -327,7 +327,7 @@ constant-time check that was a flake source on contended runners.
   switch to a ≤ 1024-byte tag.  The cap is exposed as
   `AMA_ARGON2ID_MAX_TAG_LEN` in `include/ama_cryptography.h` and
   mirrored as `ama_cryptography.pqc_backends._ARGON2ID_MAX_TAG_LEN`
-  so downstream callers can gate on it at compile / import time.
+  so callers can gate on it at compile / import time.
 
 ### Performance
 
@@ -632,7 +632,7 @@ constant-time check that was a flake source on contended runners.
   `.github/workflows/acvp_validation.yml` (continuous validation on
   push, PR, and weekly Monday cron with an `EXPECTED_VECTORS=815`
   floor) package the existing 815/815 AFT coverage from
-  `CSRC_ALIGN_REPORT.md` into a formal deliverable. README gains a
+  `docs/compliance/CSRC_ALIGN_REPORT.md` into a formal deliverable. README gains a
   `## NIST Algorithm Compliance` section with prominent CAVP/CMVP/
   FIPS-140-3 non-endorsement disclaimers. **Self-attestation only —
   NOT CAVP, NOT CMVP, NOT FIPS 140-3.**
@@ -672,7 +672,7 @@ constant-time check that was a flake source on contended runners.
   `benchmarks/comparative_benchmark.py`) on a Linux x86-64 host with
   AES-NI + PCLMULQDQ + AVX2 + VAES + VPCLMULQDQ + AVX-512F/BW/DQ/VL/VBMI
   advertised through to userland (no hypervisor masking). Refreshed
-  `README.md`, `benchmark-report.md`, `benchmark-results.json`, and
+  `README.md`, `benchmark-report.md`, `benchmarks/benchmark-results.json`, and
   `wiki/Performance-Benchmarks.md` so they match the canonical-host
   run, with X25519 specifically captured before/after the fe64 wiring
   (fe51 ~21.8K → fe64 ~11.5K DH ops/sec on this host). New paragraph
@@ -689,7 +689,7 @@ constant-time check that was a flake source on contended runners.
   `SECURITY.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
   `CRYPTOGRAPHY.md`, `CONSTANT_TIME_VERIFICATION.md`, `MONITORING.md`,
   `ENHANCED_FEATURES.md`, `IMPLEMENTATION_GUIDE.md`, `THREAT_MODEL.md`,
-  `CSRC_STANDARDS.md`, `CSRC_ALIGN_REPORT.md`,
+  `CSRC_STANDARDS.md`, `docs/compliance/CSRC_ALIGN_REPORT.md`,
   `AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md`, `.github/INVARIANTS.md`,
   `docs/DESIGN_NOTES.md`, `docs/METRICS_REPORT.md`, `wiki/Home.md`,
   and `wiki/Security-Model.md` to a consistent 2026-04-20 timestamp to
@@ -719,10 +719,10 @@ constant-time check that was a flake source on contended runners.
     Both corrected.
 
   - **Benchmark refresh.** Re-ran `benchmarks/benchmark_runner.py`,
-    `benchmark_suite.py`, and `build/bin/benchmark_c_raw --json` on
+    `benchmarks/benchmark_suite.py`, and `build/bin/benchmark_c_raw --json` on
     2026-04-21; refreshed the ops/sec tables in `README.md`
     (Performance Metrics section) and `wiki/Performance-Benchmarks.md`
-    so they match `benchmark-results.json`. The previously documented
+    so they match `benchmarks/benchmark-results.json`. The previously documented
     figures (e.g. SHA3-256 18,205 ops/sec → 170,834 ops/sec; Ed25519
     sign 5,069 → 10,569 ops/sec; ML-DSA-65 verify 697 → 6,322 ops/sec)
     predated the PR #238 X25519 `fe51` rewrite and PR #239 ChaCha20 +
@@ -937,7 +937,7 @@ Verification matrix after the fix bundle:
   zero `-Wimplicit-fallthrough` warnings remain on either GCC or
   clang Release builds.
 
-- **Auto-doc generator now reads `benchmark-results.json` for headline
+- **Auto-doc generator now reads `benchmarks/benchmark-results.json` for headline
   numbers, with `benchmarks/baseline.json` shown as a secondary
   regression-floor column.**  `tools/update_docs.py` previously
   generated the `<!-- AUTO-BENCHMARK-TABLE -->` block from
@@ -947,8 +947,8 @@ Verification matrix after the fix bundle:
   consuming the auto-marker therefore published the safety-net
   numbers as if they were the canonical-host figures.  Fixed by:
   (1) re-pointing `_generate_benchmark_table()` at
-  `benchmark-results.json`, the actual measurement output written
-  by `benchmarks/benchmark_runner.py --output benchmark-results.json`
+  `benchmarks/benchmark-results.json`, the actual measurement output written
+  by `benchmarks/benchmark_runner.py --output benchmarks/benchmark-results.json`
   (the same command CI runs in `.github/workflows/ci.yml`'s
   "Benchmark Regression Detection" job — `benchmarks/validation_suite.py`
   is the slow-runner regression-floor validator and writes a
@@ -956,9 +956,9 @@ Verification matrix after the fix bundle:
   `ops_per_second` as the headline value, with the regression floor
   retained as a secondary column so reviewers see both the headline
   and the CI safety net at a glance; (3) refusing to fall back to
-  `baseline.json` if `benchmark-results.json` is missing — the
+  `baseline.json` if `benchmarks/benchmark-results.json` is missing — the
   generator now prints a clear remedy
-  (`LD_LIBRARY_PATH=build/lib python3 benchmarks/benchmark_runner.py --output benchmark-results.json --markdown benchmark-report.md`)
+  (`LD_LIBRARY_PATH=build/lib python3 benchmarks/benchmark_runner.py --output benchmarks/benchmark-results.json --markdown benchmark-report.md`)
   rather than silently re-introducing the bug; (4) refreshing
   `wiki/Performance-Benchmarks.md` so the section heading no longer
   reads "Regression Baselines (from benchmarks/baseline.json)" but

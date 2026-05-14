@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import json
 import logging
 import os
@@ -55,7 +56,8 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from ama_cryptography.monitor import AmaCryptographyMonitor
@@ -447,8 +449,8 @@ def ed25519_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
 def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optional[bytes]:
     """Get RFC 3161 trusted timestamp for data.
 
-    Returns RFC 3161 timestamp token (DER-encoded), or None for invalid URL
-    schemes.  Raises RuntimeError on TSA request failure.
+    Returns RFC 3161 timestamp token (DER-encoded), or None for non-HTTPS
+    URL schemes.  Raises RuntimeError on TSA request failure.
 
     NOTE: This is the LEGACY API returning ``Optional[bytes]``, NOT the same
     as ``rfc3161_timestamp.get_timestamp()`` which returns ``TimestampResult``.
@@ -456,11 +458,9 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
     if tsa_url is None:
         tsa_url = "https://freetsa.org/tsr"
 
-    import urllib.parse
-
-    parsed_url = urllib.parse.urlparse(tsa_url)
-    if parsed_url.scheme not in ("http", "https"):
-        _logger.warning("Invalid TSA URL scheme '%s', must be http or https", parsed_url.scheme)
+    parsed_url = urlparse(tsa_url)
+    if parsed_url.scheme != "https":
+        _logger.warning("Invalid TSA URL scheme '%s', must be https", parsed_url.scheme)
         return None
 
     try:
@@ -475,19 +475,27 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
             return None
 
         tsq = proc.stdout
+        if parsed_url.hostname is None:
+            _logger.warning("Invalid TSA URL host")
+            return None
 
-        import urllib.request
+        path = parsed_url.path or "/"
+        if parsed_url.query:
+            path = f"{path}?{parsed_url.query}"
 
-        req = urllib.request.Request(
-            tsa_url, data=tsq, headers={"Content-Type": "application/timestamp-query"}
-        )
-
-        with urllib.request.urlopen(
-            req, timeout=10
-        ) as response:  # nosec B310 -- TSA URL is app-configured, HTTPS enforced (LC-003)
+        conn = http.client.HTTPSConnection(parsed_url.hostname, parsed_url.port, timeout=10)
+        try:
+            conn.request(
+                "POST", path, body=tsq, headers={"Content-Type": "application/timestamp-query"}
+            )
+            response = conn.getresponse()
+            if response.status < 200 or response.status >= 300:
+                raise RuntimeError(f"TSA returned HTTP status {response.status}")
             tsr = response.read()
+        finally:
+            conn.close()
 
-        return cast(bytes, tsr)
+        return tsr
 
     except Exception as e:
         _logger.error("RFC 3161 timestamp request failed: %s", e)
@@ -923,8 +931,12 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordi
     timestamp_token = None
     if use_rfc3161:
         token = get_rfc3161_timestamp(content_hash, tsa_url)
-        if token:
-            timestamp_token = base64.b64encode(token).decode("ascii")
+        if token is None:
+            raise RuntimeError(
+                "RFC 3161 timestamp request failed. "
+                "Cannot fall back silently — timestamps are a security layer."
+            )
+        timestamp_token = base64.b64encode(token).decode("ascii")
 
     # 9. Record package metadata for pattern analysis
     if monitor:

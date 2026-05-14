@@ -20,7 +20,7 @@ on which layer a given claim belongs to:
   which standardized primitives the AMA Cryptography library
   implements. No original claims live here; details belong to
   [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) and
-  [`CSRC_ALIGN_REPORT.md`](CSRC_ALIGN_REPORT.md).
+  [`CSRC_ALIGN_REPORT.md`](docs/compliance/CSRC_ALIGN_REPORT.md).
 - **Part B — Ethical Policy Layer (original work).** The 4 Omni-Code
   Ethical Pillars, HKDF context integration, ethical vector
   construction, and all original constructions by Steel Security
@@ -49,7 +49,7 @@ following standardized primitives:
 
 See [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) for per-primitive implementation
 details, key sizes, and security properties; see
-[`CSRC_ALIGN_REPORT.md`](CSRC_ALIGN_REPORT.md) for ACVP validation results
+[`CSRC_ALIGN_REPORT.md`](docs/compliance/CSRC_ALIGN_REPORT.md) for ACVP validation results
 (current attestation count and library version live there — consult the
 report rather than relying on a number hard-coded here). See
 [`src/c/PROVENANCE.md`](src/c/PROVENANCE.md) for per-primitive derivation
@@ -799,7 +799,7 @@ The 4 Omni-Code Ethical Pillars provide a mathematically rigorous framework for 
   benchmark (generic C path); throughput >1,000 ops/sec on the CI
   runner. Actual overhead varies by hardware and input size.
 - **Validation status:** Validated against NIST ACVP test vectors;
-  see [`CSRC_ALIGN_REPORT.md`](CSRC_ALIGN_REPORT.md) for the
+  see [`CSRC_ALIGN_REPORT.md`](docs/compliance/CSRC_ALIGN_REPORT.md) for the
   authoritative, versioned totals. The ACVP validation covers the FIPS
   primitives (Part A), not the Ethical Pillars themselves. Original
   constructions in this document — the ethical integration, adaptive

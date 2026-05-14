@@ -316,8 +316,8 @@ master).
 hashes.**  Tags produced by AMA ≤ 2.1.5 sit in the prior non-spec
 bit-space and will not verify against post-fix AMA — or against any
 other RFC 9106 implementation.  The release ships a
-forward-compatible legacy path under two new symbols so downstream
-consumers can verify stored tags without forking the old code.
+forward-compatible legacy path under two new symbols so consumers can
+verify stored tags without forking the old code.
 
 **C API** (`include/ama_cryptography.h`):
 

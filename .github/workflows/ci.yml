@@ -274,15 +274,7 @@ jobs:
         pip install pip-audit bandit
 
     - name: Audit dependencies
-      # CVE-2026-4539: ReDoS in pygments AdlLexer (dev-only, local access, not used at runtime).
-      # pygments is a transitive dev dependency (via rich/bandit) — see INVARIANT-14.
-      # Remove ignore when Pygments >2.20.0 ships a fix.
-      #
-      # CVE-2026-3219: pip treats concatenated tar+ZIP archives as ZIP regardless of
-      # filename.  Build-time installer behaviour; NO fix version released upstream.
-      # Zero runtime attack surface — ama-cryptography ships ZERO Python runtime
-      # dependencies.  Remove when pip ships a fix.
-      run: pip-audit --ignore-vuln CVE-2026-4539 --ignore-vuln CVE-2026-3219
+      run: pip-audit
 
     - name: Security linting with Bandit
       run: |
@@ -355,7 +347,7 @@ jobs:
 
     - name: Run benchmark regression tests
       run: |
-        python benchmarks/benchmark_runner.py --verbose --output benchmark-results.json --markdown benchmark-report.md
+        python benchmarks/benchmark_runner.py --verbose --output benchmarks/benchmark-results.json --markdown benchmark-report.md
 
     - name: Upload benchmark results
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -363,7 +355,7 @@ jobs:
       with:
         name: benchmark-results
         path: |
-          benchmark-results.json
+          benchmarks/benchmark-results.json
           benchmark-report.md
 
   constant-time-check:

@@ -110,7 +110,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225  # v4.35.2
+        uses: github/codeql-action/init@68bde559dea0fdcac2102bfdf6230c5f70eb485e  # v4.35.4
         with:
           languages: c-cpp, python
           queries: security-and-quality
@@ -126,7 +126,7 @@ jobs:
           cmake --build build -j$(nproc)
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225  # v4.35.2
+        uses: github/codeql-action/analyze@68bde559dea0fdcac2102bfdf6230c5f70eb485e  # v4.35.4
         with:
           category: "/language:c-cpp"
 
@@ -165,9 +165,8 @@ jobs:
   version-consistency:
     # Enforces audit 5a: every file that declares the library version must
     # agree with ama_cryptography/__init__.py. Also enforces audit 6a:
-    # root INVARIANTS.md must stay byte-identical to .github/INVARIANTS.md
-    # — we inlined the full content to eliminate the dead-pointer stub, so
-    # CI now fails if a future edit touches only one copy.
+    # root INVARIANTS.md is canonical, while .github/INVARIANTS.md must
+    # remain a short pointer so a second divergent copy cannot reappear.
     name: Version / Invariants Consistency
     runs-on: ubuntu-latest
     timeout-minutes: 2

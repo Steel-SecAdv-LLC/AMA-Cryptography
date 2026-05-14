@@ -24,7 +24,10 @@ break the declared ``py_modules=['ama_cryptography_monitor']`` packaging
 contract and the many tests that still import from the historical name.
 """
 
-from ama_cryptography_monitor import (
+import sys
+
+from tools.monitoring import ama_cryptography_monitor as _monitor_module
+from tools.monitoring.ama_cryptography_monitor import (
     AmaCryptographyMonitor,
     EWMAStats,
     ImportHijackViolation,
@@ -39,6 +42,8 @@ from ama_cryptography_monitor import (
     create_monitor,
     high_resolution_timer,
 )
+
+sys.modules.setdefault("ama_cryptography_monitor", _monitor_module)
 
 __all__ = [
     "AmaCryptographyMonitor",

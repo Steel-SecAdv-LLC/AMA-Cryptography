@@ -104,7 +104,7 @@ legacy = [
     # semver-major` ignore on this package; security fixes that span
     # majors (41 → 46) cannot land via the bot.  Re-evaluate the ignore
     # rule when the next major (47) ships if a CVE follows.
-    "cryptography>=46.0.6",
+    "cryptography>=46.0.7",
 ]
 hsm = [
     # PKCS#11 support for hardware security modules
@@ -121,10 +121,10 @@ benchmark = [
     # Install with: pip install "ama-cryptography[benchmark]"
     "pynacl>=1.5.0",
     "liboqs-python>=0.10.0",
-    # Same 46.0.6 floor as [legacy] above — closes CVE-2026-26007 /
+    # Same 46.0.7 floor as [legacy] above — closes CVE-2026-26007 /
     # -34073 that 42.x still has open. Mirrors the bump in
     # benchmarks/requirements-bench.txt.
-    "cryptography>=46.0.6",
+    "cryptography>=46.0.7",
 ]
 docs = [
     "sphinx>=7.4.7",
@@ -252,17 +252,17 @@ ignore = []  # Do not add ignores without a comment explaining why.
     "S310", "S603",
     "UP006", "UP007", "UP012", "UP015", "UP035", "UP045",
 ]
-# ama_cryptography_monitor.py — production monitoring module with same conventions
-"ama_cryptography_monitor.py" = [
+# tools/monitoring/ama_cryptography_monitor.py — production monitoring module with same conventions
+"tools/monitoring/ama_cryptography_monitor.py" = [
     "I001", "N806",
     "RUF003", "RUF022", "RUF023",
     "UP006", "UP015", "UP035",
 ]
 # Demo script for the monitoring module
-"ama_cryptography_monitor_demo.py" = ["B007", "RUF001"]
+"tools/monitoring/ama_cryptography_monitor_demo.py" = ["B007", "RUF001"]
 # Benchmark and tooling scripts — not part of the core library
-# benchmark_suite.py: E402 because psutil optional-import block precedes ama_cryptography imports
-"benchmark_suite.py" = ["C901", "UP006", "UP035", "E501", "E402"]  # C901: generate_markdown complexity
+# benchmarks/benchmark_suite.py: E402 because psutil optional-import block precedes ama_cryptography imports
+"benchmarks/benchmark_suite.py" = ["C901", "UP006", "UP035", "E501", "E402"]  # C901: generate_markdown complexity
 "setup.py" = ["E501", "RUF005", "S603", "S607"]
 "benchmarks/*" = [
     "E402", "E501", "F541", "I001",
@@ -337,13 +337,15 @@ ignore_missing_imports = true
 module = "ama_cryptography.hmac_binding"
 ignore_missing_imports = true
 
-# ama_cryptography_monitor — production monitoring, relax generic-type-arg.
+# ama_cryptography_monitor — compatibility shim for production monitoring.
+# tools.monitoring.ama_cryptography_monitor — production monitoring, relax generic-type-arg.
 # NOTE: ama_cryptography.* is NOT blanket-relaxed. Only specific modules that
 # have pre-existing bare generic annotations (dict, list, tuple without type
 # params) are individually listed here. New modules must use strict generics.
 [[tool.mypy.overrides]]
 module = [
     "ama_cryptography_monitor",
+    "tools.monitoring.ama_cryptography_monitor",
     "ama_cryptography.pqc_backends",
     "ama_cryptography.crypto_api",
     "ama_cryptography.adaptive_posture",

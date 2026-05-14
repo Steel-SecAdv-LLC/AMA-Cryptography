@@ -10,9 +10,9 @@ bumped without the others (audit 5a).
 The canonical source is ``ama_cryptography/__init__.py``'s ``__version__``.
 Every other occurrence must match literally (no range operators, etc.).
 
-Also verifies that the root ``INVARIANTS.md`` stays byte-identical to
-``.github/INVARIANTS.md`` — we inlined the content to remove the unhelpful
-one-line pointer (audit 6a), so CI must catch any future drift.
+Also verifies that ``.github/INVARIANTS.md`` stays a short pointer to the
+canonical root ``INVARIANTS.md``.  The root copy is the only canonical
+document; CI fails if the pointer grows into a divergent duplicate.
 
 Additionally enforces that no C source file under ``src/c/**/*.{c,h}``
 embeds a hardcoded ``"X.Y.Z"`` version-string literal near a
@@ -226,16 +226,20 @@ def main() -> int:
         else:
             print(f"OK    {desc:<60s} = {found}")
 
-    # Invariants sync check (audit 6a).
-    root_inv = _read(REPO / "INVARIANTS.md")
-    github_inv = _read(REPO / ".github" / "INVARIANTS.md")
-    if root_inv != github_inv:
+    # Invariants pointer check (audit 6a).
+    root_inv_path = REPO / "INVARIANTS.md"
+    github_inv_path = REPO / ".github" / "INVARIANTS.md"
+    if not root_inv_path.exists():
+        failures.append("  - INVARIANTS.md missing: root canonical copy is required")
+    expected_github_inv = "# AMA Cryptography invariants\n\nCanonical copy: ../INVARIANTS.md\n"
+    github_inv = _read(github_inv_path)
+    if github_inv != expected_github_inv:
         failures.append(
-            "  - INVARIANTS.md mismatch: root copy diverges from "
-            ".github/INVARIANTS.md (see audit 6a)"
+            "  - .github/INVARIANTS.md must remain the 3-line pointer to "
+            "the canonical root INVARIANTS.md"
         )
     else:
-        print("OK    INVARIANTS.md root <-> .github/INVARIANTS.md: identical")
+        print("OK    .github/INVARIANTS.md -> ../INVARIANTS.md pointer")
 
     # C-source embedded-version-literal scan. The canonical anchor for
     # the C side is include/ama_cryptography.h's

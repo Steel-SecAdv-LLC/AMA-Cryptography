@@ -48,7 +48,7 @@ from ama_cryptography.legacy_compat import (
     generate_key_management_system,
     verify_crypto_package,
 )
-from ama_cryptography_monitor import AmaCryptographyMonitor
+from tools.monitoring.ama_cryptography_monitor import AmaCryptographyMonitor
 
 
 def print_section(title: str) -> None:
@@ -228,7 +228,7 @@ def demo_security_report() -> None:
             print(f"    • {rec}")
 
 
-def main():
+def main() -> None:
     """Run all demos."""
     print("=" * 70)
     print("  AMA CRYPTOGRAPHY - 3R SECURITY MONITORING DEMONSTRATION")

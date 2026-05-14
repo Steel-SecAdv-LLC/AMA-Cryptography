@@ -5,13 +5,14 @@ name: ACVP Vector Validation
 # attestation document this workflow underwrites.
 #
 # This workflow runs the 1,215-vector harness (815 AFT + 400 SHA-3 MCT)
-# used to produce CSRC_ALIGN_REPORT.md and fails the build if any vector
+# used to produce docs/compliance/CSRC_ALIGN_REPORT.md and fails the build if any vector
 # regresses.
 # A structured validation_summary.json artifact is published on every run.
 
 on:
   push:
     branches: [ main, develop, 'feature/**', 'fix/**' ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main, develop ]
   schedule:
@@ -43,7 +44,7 @@ concurrency:
 # To add coverage: (1) update nist_vectors to exercise the new vectors, (2)
 # bump EXPECTED_VECTORS below, (3) update docs/compliance/acvp_attestation.json
 # per-algorithm vectors_tested/vectors_passed and totals, and (4) update the
-# CSRC_ALIGN_REPORT.md / ACVP_SELF_ATTESTATION.md counts — all in the same
+# docs/compliance/CSRC_ALIGN_REPORT.md / ACVP_SELF_ATTESTATION.md counts — all in the same
 # commit. The floor and the attested totals move together.
 env:
   # 815 AFT + 400 SHA-3 MCT (SHA3-256/SHA3-512/SHAKE-128/SHAKE-256 each

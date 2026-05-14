@@ -251,7 +251,7 @@ monitor = AmaCryptographyMonitor(alert_retention=1000)
 - `get_security_report()`
 - `analyze_codebase(directory)`
 
-See inline documentation in `ama_cryptography_monitor.py` for complete API details.
+See inline documentation in `tools/monitoring/ama_cryptography_monitor.py` for complete API details.
 
 ---
 

@@ -274,15 +274,22 @@ Every `--ignore-vuln` flag in CI workflows **must** have an accompanying comment
 that states: (a) the CVE ID, (b) why the vulnerability is not exploitable in
 this context, and (c) the condition under which the ignore should be removed.
 
-Tracked ignores:
+Active ignores:
 
-| CVE | Package | Reason | Remove when |
-|-----|---------|--------|-------------|
-| CVE-2026-4539 | Pygments (transitive via rich/bandit) | ReDoS in AdlLexer — dev-only, local access, not used at runtime | Pygments ships a fix (>2.20.0) or the transitive dependency is dropped |
-| CVE-2026-3219 | pip (build-time installer) | pip handles concatenated tar+ZIP archives as ZIP regardless of filename. Build-time installer bug; ama-cryptography ships ZERO Python runtime dependencies, so this CVE has no runtime attack surface against the cryptographic API. CI installs from a pinned `requirements-lock.txt` (no attacker-controlled archives). No fix version released upstream as of 2026-04-24. | pip ships a fix (track via https://github.com/pypa/pip issue tracker) |
+| CVE | Package | Reason | Remove when | Last reviewed |
+|-----|---------|--------|-------------|---------------|
+| _None_ | _N/A_ | No active `--ignore-vuln` flags remain in CI as of the Q2 review. | _N/A_ | 2026-05-14 |
+
+Historical Q2 2026 review:
+
+| CVE | Package | Review result | Evidence | Last reviewed |
+|-----|---------|---------------|----------|---------------|
+| CVE-2026-4539 | Pygments | Removed from CI ignores. `requirements-lock.txt` pins Pygments 2.20.0, which contains the upstream AdlLexer ReDoS fix. | https://github.com/pygments/pygments/issues/3058 | 2026-05-14 |
+| CVE-2026-3219 | pip | Removed from CI ignores. CI upgrades pip before audit; pip 26.1 includes the archive-unpacking fix, and fresh CI-shaped audit environments with pip 26.1.1 report no known vulnerabilities. The library still has zero Python runtime dependencies, so there is no runtime cryptographic API attack surface. | https://github.com/pypa/pip/pull/13870 | 2026-05-14 |
 
 > **Review cadence:** Re-evaluate all tracked CVE ignores on the first of each
 > quarter or when Dependabot bumps the affected package, whichever comes first.
+> Next scheduled review: 2026-07-01.
 
 ## INVARIANT-15 — Thread-Safe CPU Dispatch via Platform Once-Primitive
 

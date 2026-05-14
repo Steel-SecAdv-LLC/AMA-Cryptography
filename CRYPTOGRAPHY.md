@@ -13,7 +13,7 @@
 
 This document provides an overview of the cryptographic algorithms used in AMA Cryptography, their security properties, and references to official specifications.
 
-> **Design Note:** AMA Cryptography is built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the multi-layer defense architecture, double-helix key evolution, and adaptive posture system) is an original design by Steel Security Advisors LLC. Written security arguments for those original constructions are maintained in [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md). AMA Cryptography is a standalone cryptographic library for any Python project, AI agent, or AI system requiring quantum-resistant security. [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent) is one consumer, but the library is designed for general-purpose independent use.
+> **Design Note:** AMA Cryptography is built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the multi-layer defense architecture, double-helix key evolution, and adaptive posture system) is an original design by Steel Security Advisors LLC. Written security arguments for those original constructions are maintained in [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md). AMA Cryptography is a standalone cryptographic library for any Python project, AI agent, or AI system requiring quantum-resistant security. Current consumers include [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent) and FINDΩYOU™ (private repo), but the library is designed for general-purpose independent use.
 
 ## Algorithm Summary
 
@@ -111,7 +111,7 @@ readers can audit the derivation status.
 text — it is **not** a claim of independent formal proof. For the
 limitations of clean-room transcription (which has produced two
 implementation bugs that were caught and fixed by ACVP, not by review),
-see [`CSRC_ALIGN_REPORT.md §2.3–§2.5`](CSRC_ALIGN_REPORT.md). For file-level
+see [`CSRC_ALIGN_REPORT.md §2.3–§2.5`](docs/compliance/CSRC_ALIGN_REPORT.md). For file-level
 provenance statements and known divergences from the reference pseudocode,
 see [`src/c/PROVENANCE.md`](src/c/PROVENANCE.md).
 

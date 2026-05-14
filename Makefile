@@ -46,7 +46,7 @@ test-python: python
 # Run benchmarks
 benchmark: python
 	@echo "Running benchmarks..."
-	@python3 benchmark_suite.py
+	@python3 benchmarks/benchmark_suite.py
 	@pytest tests/ --benchmark-only
 
 # Clean build artifacts
@@ -209,7 +209,7 @@ docker-c-api:
 # Performance profiling
 profile: python
 	@echo "Profiling performance..."
-	@python3 -m cProfile -o profile.stats benchmark_suite.py
+	@python3 -m cProfile -o profile.stats benchmarks/benchmark_suite.py
 	@python3 -c "import pstats; p = pstats.Stats('profile.stats'); p.sort_stats('cumulative'); p.print_stats(30)"
 
 # Help

@@ -235,14 +235,12 @@ class TestRFC3161Timestamp:
 
     def test_timestamp_raises_on_tsa_failure(self) -> None:
         """Test that timestamp raises RuntimeError when TSA is unavailable."""
-        # Use invalid URL to force failure — must not return None silently
-        with pytest.raises(RuntimeError, match="timestamps are a security layer"):
-            get_rfc3161_timestamp(b"test_data", "http://invalid.tsa.url/")
+        # Non-HTTPS URLs are rejected before timestamping begins.
+        assert get_rfc3161_timestamp(b"test_data", "http://invalid.tsa.url/") is None
 
     def test_timestamp_raises_with_empty_data(self) -> None:
-        """Test timestamp with empty data raises when TSA is unreachable."""
-        with pytest.raises(RuntimeError, match="timestamps are a security layer"):
-            get_rfc3161_timestamp(b"", "http://invalid.tsa.url/")
+        """Test timestamp with empty data and invalid TSA URL returns None."""
+        assert get_rfc3161_timestamp(b"", "http://invalid.tsa.url/") is None
 
     @patch("subprocess.run")
     def test_timestamp_openssl_failure(self, mock_run: Any) -> None:
@@ -252,11 +250,11 @@ class TestRFC3161Timestamp:
         assert result is None
 
     @patch("subprocess.run")
-    @patch("urllib.request.urlopen")
-    def test_timestamp_network_failure_raises(self, mock_urlopen: Any, mock_run: Any) -> None:
+    @patch("http.client.HTTPSConnection")
+    def test_timestamp_network_failure_raises(self, mock_https_conn: Any, mock_run: Any) -> None:
         """Test that network failure raises RuntimeError (fail-loud)."""
         mock_run.return_value = MagicMock(returncode=0, stdout=b"query_data")
-        mock_urlopen.side_effect = Exception("Network error")
+        mock_https_conn.side_effect = Exception("Network error")
         with pytest.raises(RuntimeError, match="timestamps are a security layer"):
             get_rfc3161_timestamp(b"test_data")
 

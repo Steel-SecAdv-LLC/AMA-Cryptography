@@ -103,7 +103,7 @@ COPY --from=builder /build/requirements.txt /tmp/
 
 # Install Python package and runtime dependencies
 # The core library has zero runtime dependencies. numpy is installed only because
-# ama_cryptography_monitor_demo.py uses it to simulate CPU-intensive workloads.
+# tools/monitoring/ama_cryptography_monitor_demo.py uses it to simulate CPU-intensive workloads.
 RUN pip3 install --no-cache-dir /tmp/*.whl && \
     pip3 install --no-cache-dir -r /tmp/requirements.txt && \
     pip3 install --no-cache-dir numpy && \
@@ -123,7 +123,7 @@ WORKDIR /app
 COPY --chown=ama:ama examples/ /app/examples/
 COPY --chown=ama:ama README.md LICENSE /app/
 # Copy monitor and benchmark scripts to /app for docker-compose services
-COPY --chown=ama:ama ama_cryptography_monitor_demo.py benchmark_suite.py /app/
+COPY --chown=ama:ama tools/monitoring/ama_cryptography_monitor_demo.py benchmarks/benchmark_suite.py /app/
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \

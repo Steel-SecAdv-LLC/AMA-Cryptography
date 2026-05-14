@@ -18,7 +18,7 @@ source file conflict, **the source file is authoritative** — this document
 must be updated to match.
 
 Every claim of "clean-room from FIPS" is backed by ACVP Known Answer Test
-results published in [`../../CSRC_ALIGN_REPORT.md`](../../CSRC_ALIGN_REPORT.md)
+results published in [`../../docs/compliance/CSRC_ALIGN_REPORT.md`](../../docs/compliance/CSRC_ALIGN_REPORT.md)
 and continuously enforced in
 [`.github/workflows/acvp_validation.yml`](../../.github/workflows/acvp_validation.yml).
 
@@ -107,7 +107,7 @@ pseudocode in FIPS 204 §5–§8 into C.
 FIPS 204 §5.4 transform `M' = 0x00 || len(ctx) || ctx || M` before
 delegating to the internal verify. This was added to resolve the 3
 initial ACVP TG 3 failures documented in
-[`CSRC_ALIGN_REPORT.md §2.2`](../../CSRC_ALIGN_REPORT.md) — the internal
+[`CSRC_ALIGN_REPORT.md §2.2`](../../docs/compliance/CSRC_ALIGN_REPORT.md) — the internal
 verify function was correct all along; only the wrapper was missing.
 
 **Randomness:** KeyGen consumes 32 bytes through `ama_platform_rand.c`;
@@ -152,21 +152,21 @@ transcribing FIPS 205 §9–§11 into C.
 **Hash instantiation (FIPS 205 §11.2, security categories {3,5}):**
 `ama_sphincs.c` uses:
 - `H_msg` = MGF1-SHA-512 (with `toByte(0, 64 − n)` padding) — full
-  resolution is documented in [`CSRC_ALIGN_REPORT.md §2.3`](../../CSRC_ALIGN_REPORT.md).
+  resolution is documented in [`CSRC_ALIGN_REPORT.md §2.3`](../../docs/compliance/CSRC_ALIGN_REPORT.md).
 - `PRF_msg` = `Trunc_n(HMAC-SHA-512(SK.prf, opt_rand || M))` — see
-  [`CSRC_ALIGN_REPORT.md §2.4`](../../CSRC_ALIGN_REPORT.md).
+  [`CSRC_ALIGN_REPORT.md §2.4`](../../docs/compliance/CSRC_ALIGN_REPORT.md).
 - `H` and `T_l` (multi-block thash) = SHA-512 with `toByte(0, 128 − n)`.
 - `F` (single-block thash) = SHA-256 with `toByte(0, 64 − n)`.
 
 The shared SHA-512 implementation lives in `src/c/internal/ama_sha2.h`
 (extracted in v3.0.0 after SLH-DSA and Ed25519 were both shipped with
-redundant copies — see [`CSRC_ALIGN_REPORT.md §2.5`](../../CSRC_ALIGN_REPORT.md)).
+redundant copies — see [`CSRC_ALIGN_REPORT.md §2.5`](../../docs/compliance/CSRC_ALIGN_REPORT.md)).
 
 **ADRS compression:** The 22-byte compressed address used as the SHA-2
 MGF1/PRF input follows the FIPS 205 §11.2 mapping (1-byte layer address
 LSB, 8-byte tree address LSB, 1-byte type, 12-byte "rest" field). The
 initial implementation used a different layout — see
-[`CSRC_ALIGN_REPORT.md §2.3`](../../CSRC_ALIGN_REPORT.md) for the fix.
+[`CSRC_ALIGN_REPORT.md §2.3`](../../docs/compliance/CSRC_ALIGN_REPORT.md) for the fix.
 
 **Known divergences from the FIPS 205 pseudocode:** None in the
 algorithmic sense. All 14 TG 5 SigVer vectors pass byte-exact. Non-
@@ -175,7 +175,7 @@ normative differences:
   `setTreeHeight` / `setTreeIndex` / `setType` calls (FIPS 205
   Algorithms 7, 16, 18). A bug that zeroed the keypair address too
   early was caught by ACVP and is documented in
-  [`CSRC_ALIGN_REPORT.md §2.3`](../../CSRC_ALIGN_REPORT.md).
+  [`CSRC_ALIGN_REPORT.md §2.3`](../../docs/compliance/CSRC_ALIGN_REPORT.md).
 
 **Side-channel posture:** SLH-DSA is by construction hash-only; there
 is no secret scalar, no rejection sampling, and no number-theoretic
@@ -215,7 +215,7 @@ The AMA-level wrapper (`ama_ed25519.c`) adds:
 - API surface matching AMA's `ama_ed25519_sign` / `_verify` contract.
 - Integration with the AMA ctypes bindings and the FROST threshold layer.
 - Expanded-key fast path used by `generate_ed25519_keypair` — see
-  [`CSRC_ALIGN_REPORT.md §2.8`](../../CSRC_ALIGN_REPORT.md).
+  [`CSRC_ALIGN_REPORT.md §2.8`](../../docs/compliance/CSRC_ALIGN_REPORT.md).
 - `ama_ed25519_scalarmult_public` with explicit naming to prevent
   misuse of vartime scalar multiplication on secret scalars (audit
   finding C7).
@@ -255,7 +255,7 @@ LLC) attests that:
    trees were consulted at the specification layer only (to understand
    ambiguous FIPS wording) and never at the code layer.
 3. Algorithmic correctness is validated by the ACVP vectors in
-   [`CSRC_ALIGN_REPORT.md`](../../CSRC_ALIGN_REPORT.md). A clean-room
+   [`CSRC_ALIGN_REPORT.md`](../../docs/compliance/CSRC_ALIGN_REPORT.md). A clean-room
    implementation that matches byte-for-byte against the upstream KAT
    vectors is — by definition — interoperable with any conformant
    implementation.
@@ -264,11 +264,11 @@ This attestation does **not** claim:
 - Formal proof of correctness. See `docs/DESIGN_NOTES.md §Limitations`.
 - Immunity from implementation bugs. Two such bugs have already been
   found and fixed (the SLH-DSA hash-instantiation and address-zeroing
-  bugs in [`CSRC_ALIGN_REPORT.md §2.3`](../../CSRC_ALIGN_REPORT.md)).
+  bugs in [`CSRC_ALIGN_REPORT.md §2.3`](../../docs/compliance/CSRC_ALIGN_REPORT.md)).
   Readers should expect more over the life of the project and are
   encouraged to file issues via the `SECURITY.md` disclosure process.
 - FIPS 140-3 certification. See
-  [`CSRC_ALIGN_REPORT.md §3.3`](../../CSRC_ALIGN_REPORT.md).
+  [`CSRC_ALIGN_REPORT.md §3.3`](../../docs/compliance/CSRC_ALIGN_REPORT.md).
 
 ---
 

@@ -6,7 +6,7 @@
   "version": "3.0.0",
   "date": "2026-04-25",
   "classification": "Public",
-  "source_report": "CSRC_ALIGN_REPORT.md",
+  "source_report": "docs/compliance/CSRC_ALIGN_REPORT.md",
   "attestation_document": "docs/compliance/ACVP_SELF_ATTESTATION.md",
   "cavp_validated": false,
   "cmvp_certified": false,
