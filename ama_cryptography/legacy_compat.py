@@ -931,8 +931,12 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordi
     timestamp_token = None
     if use_rfc3161:
         token = get_rfc3161_timestamp(content_hash, tsa_url)
-        if token:
-            timestamp_token = base64.b64encode(token).decode("ascii")
+        if token is None:
+            raise RuntimeError(
+                "RFC 3161 timestamp request failed. "
+                "Cannot fall back silently — timestamps are a security layer."
+            )
+        timestamp_token = base64.b64encode(token).decode("ascii")
 
     # 9. Record package metadata for pattern analysis
     if monitor:
