@@ -104,7 +104,7 @@ legacy = [
     # semver-major` ignore on this package; security fixes that span
     # majors (41 → 46) cannot land via the bot.  Re-evaluate the ignore
     # rule when the next major (47) ships if a CVE follows.
-    "cryptography>=46.0.6",
+    "cryptography>=46.0.7",
 ]
 hsm = [
     # PKCS#11 support for hardware security modules
@@ -124,7 +124,7 @@ benchmark = [
     # Same 46.0.6 floor as [legacy] above — closes CVE-2026-26007 /
     # -34073 that 42.x still has open. Mirrors the bump in
     # benchmarks/requirements-bench.txt.
-    "cryptography>=46.0.6",
+    "cryptography>=46.0.7",
 ]
 docs = [
     "sphinx>=7.4.7",
