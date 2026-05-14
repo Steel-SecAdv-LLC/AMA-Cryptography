@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 3.0.0 |
-| Last Updated | 2026-04-28 |
+| Document Version | 3.1.0 |
+| Last Updated | 2026-05-14 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -13,7 +13,7 @@
 
 ## Executive Summary
 
-AMA Cryptography is a cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. It serves as the cryptographic protection layer for [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent). The architecture implements defense-in-depth security through multiple independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
+AMA Cryptography is a cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. It serves as the cryptographic protection layer for downstream consumers including [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent) and FINDΩYOU™ (Private repo, coming soon). The architecture implements defense-in-depth security through multiple independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
 
 This document provides a comprehensive technical reference for system architects, security engineers, and developers working with or evaluating the AMA Cryptography system.
 
@@ -120,7 +120,7 @@ The following constraints govern architectural decisions:
 
 ## Cryptographic Architecture
 
-AMA Cryptography is designed as a standalone cryptographic library for all AI agents and AI systems, not exclusively Mercury Agent. Any Python or C project can integrate these primitives independently. The library provides a complete, self-contained suite of quantum-resistant cryptographic operations suitable for any application requiring post-quantum security.
+AMA Cryptography is designed as a standalone cryptographic library for all AI agents and AI systems, not exclusively Mercury Agent or FINDΩYOU™. Any Python or C project can integrate these primitives independently. The library provides a complete, self-contained suite of quantum-resistant cryptographic operations suitable for any application requiring post-quantum security.
 
 ### Cryptographic Primitive Selection
 
@@ -901,6 +901,7 @@ Cryptographic implementations are validated against:
 | 2.1.0 | 2026-03-25 | Steel Security Advisors LLC | Hand-written AVX2/NEON/SVE2 SIMD for 8 algorithms, runtime dispatch, security fixes S1-S6, HMAC-SHA3-256 Cython binding, CSRC alignment report, SHA-512 deduplication, Python package structure, Cython acceleration strategy, build system architecture, INVARIANTS reference, NIST ACVP validation (815 vectors), fuzz testing (12 targets) |
 | 2.1.5 | 2026-04-17 | Steel Security Advisors LLC | Security audit fixes (length-prefixed HKDF encoding, constant-time ops), HSM support via PyKCS11, fd leak protection, INVARIANT-13 restoration with 52 tracked suppressions, comprehensive test coverage for secure_memory/crypto_api/PQC backends, documentation version alignment |
 | 3.0.0 | 2026-04-27 | Steel Security Advisors LLC | RFC 9106 Argon2id byte-identity fix (BREAKING — `ama_argon2id_legacy` / `native_argon2id_legacy` verify-only shim) and `out_len` cap at `AMA_ARGON2ID_MAX_TAG_LEN = 1024`; in-house AVX-512 4-way Keccak permutation kernel (opt-in `-DAMA_ENABLE_AVX512=ON`, EVEX YMM-width `vprolq` + `vpternlogq`, XCR0 5+6+7 gated) with `docs/AVX512_KECCAK_ADR.md` ADR; X25519 fe64 (radix-2⁶⁴) ladder + hand-written MULX+ADX inline-asm kernel (`fe64_mul512_mulx` / `fe64_sq512_mulx` / `fe64_reduce512_mulx`) under BMI2∧ADX bundle gate; X25519 4-way AVX2 Montgomery-ladder kernel + `ama_x25519_scalarmult_batch` API (opt-in `AMA_DISPATCH_USE_X25519_AVX2=1`); VAES + VPCLMULQDQ YMM AES-256-GCM clean replacement; Ed25519 verify-path SWE rectification + base-point comb table + merged NTT + AVX2 rejection (Tier-B PQC); batch ML-DSA-65 / ML-KEM-1024 sampling via 4-way SHAKE128/SHAKE256 + CBD2 AVX2; ChaCha20-Poly1305 8-way AVX2 (≥ 512 B) and Argon2 BlaMka G AVX2; SHA-3 auto-tune hysteresis (best-of-5, 10% revert threshold); NIST ACVP self-attestation (815/815 AFT, weekly continuous validation); D-1…D-10 distribution / tooling audit (wheel SONAME bundling with `$ORIGIN`/`@loader_path` runtime_library_dirs, CLI subprocess test self-contained, isolated `setup.py` CMake build dir, fatal Cython failures + `numpy>=1.24.0` / `Cython>=3.2.4` build pins, dudect AES-GCM tag-compare redesign, `.semgrep.yml` 341 FP → 0, X25519 dispatch-policy contract test, `setuptools>=78.1.1` / `wheel>=0.46.2` supply-chain pins, `setuptools<70` preflight, ed25519-donna fallthrough annotations) |
+| 3.1.0 | 2026-05-14 | Steel Security Advisors LLC | Public documentation alignment for Mercury Agent and FINDΩYOU™ consumers, v3.1.0 release hygiene, INVARIANT-14 CVE-ignore review, and no public API changes since v3.0.0 |
 
 ---
 
