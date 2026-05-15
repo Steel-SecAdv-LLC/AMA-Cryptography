@@ -138,10 +138,8 @@ dev = [
     "pytest-benchmark>=4.0.0",
     "pytest-xdist>=3.0.0",
     "hypothesis>=6.0.0",
-    # Black dropped 3.9 in 25.x; pin the last 3.9-compatible release for 3.9
-    # and the current release for 3.10+.  Keeping the split here avoids
-    # breaking the lockfile on 3.9 CI jobs.
-    "black==24.10.0; python_version == '3.9'",
+    # Black 26.3.1 contains the GHSA-fc3w-v5rg-v7q6 fix and requires Python
+    # 3.10+, so do not install a vulnerable 3.9-only fallback.
     "black>=26.3.1; python_version >= '3.10'",
     "ruff>=0.15.12",
     "mypy>=1.9.0",
