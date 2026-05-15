@@ -5,21 +5,21 @@
  * @file test_aes_gcm_neon_equiv.c
  * @brief Byte-for-byte equivalence test for the NEON AES-256-GCM
  *        kernels (ama_aes256_gcm_{encrypt,decrypt}_neon) against the
- *        generic C AES-GCM reference in src/c/ama_aes_gcm.c.
+ *        generic-C AES-GCM reference in src/c/ama_aes_gcm.c.
  *
- * Pattern mirrors test_aes_gcm_vaes_equiv.c:
- *   - Routes ENCRYPT through the dispatch table (which the dispatcher
- *     wires to ama_aes256_gcm_encrypt_neon when ARM-AES + ARM-PMULL
- *     are present at runtime).
- *   - Calls the SCALAR reference (ama_aes256_gcm_encrypt /
- *     ama_aes256_gcm_decrypt) DIRECTLY with the dispatch table
- *     temporarily forced scalar via ama_test_force_aes_gcm_scalar() —
- *     this is the test-only hook installed by the dispatcher when
- *     AMA_TESTING_MODE is defined.  We do not actually need to flip
- *     the dispatch state because we can just call the scalar variant
- *     via ama_aes256_gcm_encrypt with both kernels disabled — but the
- *     test-mode hook keeps the test layout uniform with
- *     test_aes_gcm_vaes_equiv.c.
+ * Two-phase test layout:
+ *   1. SIMD phase: call the NEON kernel DIRECTLY (not through dispatch)
+ *      and capture (ct_neon, tag_neon).
+ *   2. Scalar phase: force the dispatch table to scalar via
+ *      ama_test_force_aes_gcm_scalar() and call the public
+ *      ama_aes256_gcm_encrypt / ama_aes256_gcm_decrypt API.  With
+ *      both dispatch slots NULL the generic implementation in
+ *      ama_aes_gcm.c runs inline rather than routing back into the
+ *      NEON kernel — which is what makes the byte-identity
+ *      comparison meaningful instead of tautological (Copilot review
+ *      #3249188280).  At the end of the test the dispatch state is
+ *      restored via ama_test_restore_aes_gcm() so subsequent tests
+ *      in the same process observe the production dispatch choice.
  *
  * SKIP conditions (return 77 — CTest "Skipped"):
  *   - Non-AArch64 build OR AArch64 host without ARM Crypto Extensions:
@@ -54,6 +54,11 @@ extern ama_error_t ama_aes256_gcm_decrypt_neon(const uint8_t *ciphertext, size_t
                                                 const uint8_t *aad, size_t aad_len,
                                                 const uint8_t key[32], const uint8_t nonce[12],
                                                 const uint8_t tag[16], uint8_t *plaintext);
+
+/* AMA_TESTING_MODE-only dispatch overrides (forward decls — the
+ * symbols live in src/c/dispatch/ama_dispatch.c). */
+extern void ama_test_force_aes_gcm_scalar(void);
+extern void ama_test_restore_aes_gcm(void);
 #endif
 
 #define MAX_LEN (65536u + 64u)
@@ -115,60 +120,85 @@ int main(void) {
 
     prng_state = 0xA5A5A5A5DEADBEEFULL;
 
+    /* One trial = generate inputs once, then:
+     *   (a) NEON encrypt — call the NEON kernel DIRECTLY (not through
+     *       dispatch) so the result is unambiguously NEON output.
+     *   (b) Scalar encrypt — flip dispatch to scalar, call the public
+     *       ama_aes256_gcm_encrypt (which now runs the generic C
+     *       implementation inline rather than forwarding to NEON),
+     *       then restore dispatch.  The dispatch flip lives entirely
+     *       inside the test trial so concurrent threads (none here,
+     *       but the contract is the same) see consistent state at the
+     *       boundaries.
+     *   (c) Compare ct_neon vs ct_ref and tag_neon vs tag_ref.
+     *   (d) Round-trip: NEON decrypt of NEON ciphertext.
+     *   (e) Tag-tamper rejection: NEON decrypt of mutated tag → expect
+     *       AMA_ERROR_VERIFY_FAILED. */
+    #define RUN_TRIAL(LABEL, pt_len_v, aad_len_v, trial_id)                    \
+    do {                                                                       \
+        size_t _pt_len  = (pt_len_v);                                          \
+        size_t _aad_len = (aad_len_v);                                         \
+        uint8_t key[32], nonce[12], aad[256];                                  \
+        uint8_t tag_neon[16], tag_ref[16];                                     \
+                                                                               \
+        prng_fill(key, 32); prng_fill(nonce, 12);                              \
+        prng_fill(aad, _aad_len); prng_fill(pt, _pt_len);                      \
+                                                                               \
+        /* (a) Direct NEON encrypt. */                                         \
+        ama_aes256_gcm_encrypt_neon(pt, _pt_len, aad, _aad_len, key, nonce,    \
+                                     ct_neon, tag_neon);                       \
+                                                                               \
+        /* (b) Scalar reference via forced-scalar dispatch. */                 \
+        ama_test_force_aes_gcm_scalar();                                       \
+        (void)ama_aes256_gcm_encrypt(key, nonce, pt, _pt_len, aad, _aad_len,   \
+                                      ct_ref, tag_ref);                        \
+        ama_test_restore_aes_gcm();                                            \
+                                                                               \
+        /* (c) Byte-identity check. */                                         \
+        int ct_ok  = (_pt_len == 0) ||                                         \
+                     (memcmp(ct_neon, ct_ref, _pt_len) == 0);                  \
+        int tag_ok = (memcmp(tag_neon, tag_ref, 16) == 0);                     \
+        if (!ct_ok || !tag_ok) {                                               \
+            printf("  FAIL: %s trial=%d pt_len=%zu aad_len=%zu  "              \
+                   "ct_ok=%d tag_ok=%d\n",                                     \
+                   LABEL, (int)(trial_id), _pt_len, _aad_len, ct_ok, tag_ok);  \
+            failed++;                                                          \
+            break;                                                             \
+        }                                                                      \
+                                                                               \
+        /* (d) Round-trip: NEON decrypt of NEON ciphertext. */                 \
+        memset(pt_back, 0, _pt_len);                                           \
+        ama_error_t _r = ama_aes256_gcm_decrypt_neon(                          \
+            ct_neon, _pt_len, aad, _aad_len, key, nonce, tag_neon, pt_back);   \
+        if (_r != AMA_SUCCESS ||                                               \
+            (_pt_len > 0 && memcmp(pt_back, pt, _pt_len) != 0)) {              \
+            printf("  FAIL: %s round-trip trial=%d pt_len=%zu r=%d\n",         \
+                   LABEL, (int)(trial_id), _pt_len, (int)_r);                  \
+            failed++;                                                          \
+            break;                                                             \
+        }                                                                      \
+                                                                               \
+        /* (e) Tag-tamper rejection — exact error code, INVARIANT-12. */       \
+        uint8_t bad_tag[16];                                                   \
+        memcpy(bad_tag, tag_neon, 16);                                         \
+        bad_tag[(trial_id) & 15] ^=                                            \
+            (uint8_t)(1u << (((trial_id) >> 4) & 7));                          \
+        _r = ama_aes256_gcm_decrypt_neon(                                      \
+            ct_neon, _pt_len, aad, _aad_len, key, nonce, bad_tag, pt_back);    \
+        if (_r != AMA_ERROR_VERIFY_FAILED) {                                   \
+            printf("  FAIL: %s tag-tamper trial=%d pt_len=%zu r=%d\n",         \
+                   LABEL, (int)(trial_id), _pt_len, (int)_r);                  \
+            failed++;                                                          \
+            break;                                                             \
+        }                                                                      \
+        passed++;                                                              \
+    } while (0)
+
     /* Boundary lattice. */
     for (size_t pi = 0; pi < sizeof(boundary_pt) / sizeof(boundary_pt[0]); pi++) {
         for (size_t ai = 0; ai < sizeof(aad_lens) / sizeof(aad_lens[0]); ai++) {
-            size_t pt_len = boundary_pt[pi];
-            size_t aad_len = aad_lens[ai];
-            uint8_t key[32], nonce[12], aad[256];
-            uint8_t tag_neon[16], tag_ref[16];
-
-            prng_fill(key, 32); prng_fill(nonce, 12);
-            prng_fill(aad, aad_len); prng_fill(pt, pt_len);
-
-            /* NEON path (via dispatch). */
-            dt->aes_gcm_encrypt(pt, pt_len, aad, aad_len, key, nonce,
-                                 ct_neon, tag_neon);
-            /* Scalar reference path (direct call). */
-            ama_aes256_gcm_encrypt(key, nonce, pt, pt_len, aad, aad_len,
-                                    ct_ref, tag_ref);
-
-            int ct_ok = (pt_len == 0) ||
-                        (memcmp(ct_neon, ct_ref, pt_len) == 0);
-            int tag_ok = (memcmp(tag_neon, tag_ref, 16) == 0);
-            if (!ct_ok || !tag_ok) {
-                printf("  FAIL: boundary pt_len=%zu aad_len=%zu  "
-                       "ct_ok=%d tag_ok=%d\n",
-                       pt_len, aad_len, ct_ok, tag_ok);
-                failed++;
-                continue;
-            }
-
-            /* Round-trip: NEON decrypt of NEON ciphertext. */
-            memset(pt_back, 0, pt_len);
-            ama_error_t r = dt->aes_gcm_decrypt(ct_neon, pt_len, aad, aad_len,
-                                                 key, nonce, tag_neon, pt_back);
-            if (r != AMA_SUCCESS ||
-                (pt_len > 0 && memcmp(pt_back, pt, pt_len) != 0)) {
-                printf("  FAIL: boundary round-trip pt_len=%zu aad_len=%zu r=%d\n",
-                       pt_len, aad_len, (int)r);
-                failed++;
-                continue;
-            }
-
-            /* Tag-tamper rejection. */
-            uint8_t bad_tag[16];
-            memcpy(bad_tag, tag_neon, 16);
-            bad_tag[0] ^= 0x01;
-            r = dt->aes_gcm_decrypt(ct_neon, pt_len, aad, aad_len, key, nonce,
-                                     bad_tag, pt_back);
-            if (r != AMA_ERROR_VERIFY_FAILED) {
-                printf("  FAIL: boundary tag-tamper pt_len=%zu aad_len=%zu r=%d\n",
-                       pt_len, aad_len, (int)r);
-                failed++;
-                continue;
-            }
-            passed++;
+            RUN_TRIAL("boundary", boundary_pt[pi], aad_lens[ai],
+                       (int)((pi << 8) | ai));
         }
     }
 
@@ -178,34 +208,9 @@ int main(void) {
         size_t pt_len = (size_t)(r & 0x3FFFu);
         size_t aad_len = (size_t)((r >> 16) & 0x7Fu);
         if (aad_len > 96) aad_len = 96;
-
-        uint8_t key[32], nonce[12], aad[256];
-        uint8_t tag_neon[16], tag_ref[16];
-        prng_fill(key, 32); prng_fill(nonce, 12);
-        prng_fill(aad, aad_len); prng_fill(pt, pt_len);
-
-        dt->aes_gcm_encrypt(pt, pt_len, aad, aad_len, key, nonce, ct_neon, tag_neon);
-        ama_aes256_gcm_encrypt(key, nonce, pt, pt_len, aad, aad_len, ct_ref, tag_ref);
-
-        if ((pt_len > 0 && memcmp(ct_neon, ct_ref, pt_len) != 0) ||
-            memcmp(tag_neon, tag_ref, 16) != 0) {
-            printf("  FAIL: random trial=%d pt_len=%zu aad_len=%zu\n",
-                   trial, pt_len, aad_len);
-            failed++;
-            continue;
-        }
-
-        ama_error_t rr = dt->aes_gcm_decrypt(ct_neon, pt_len, aad, aad_len,
-                                              key, nonce, tag_neon, pt_back);
-        if (rr != AMA_SUCCESS ||
-            (pt_len > 0 && memcmp(pt_back, pt, pt_len) != 0)) {
-            printf("  FAIL: random round-trip trial=%d pt_len=%zu r=%d\n",
-                   trial, pt_len, (int)rr);
-            failed++;
-            continue;
-        }
-        passed++;
+        RUN_TRIAL("random", pt_len, aad_len, trial);
     }
+    #undef RUN_TRIAL
 
     printf("\n==================================================\n");
     if (failed) {

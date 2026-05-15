@@ -27,9 +27,13 @@
  * a + b + 2*lo32(a)*lo32(b) in scalar — vmull_u32 is also available
  * for a future 2-wide BlaMka G port, but is not in the hot path of
  * this kernel today), and XOR's Z ^ R into the output with NEON.
- * Byte-identity with the scalar argon2_G is verified by
- * `tests/c/test_argon2id.c` (the RFC 9106 KAT lives there) and by
- * the new `test_argon2_g_neon_equiv.c` paired equivalence test.
+ * Byte-identity with the scalar argon2_G is verified two ways:
+ *   - `tests/c/test_argon2id.c` runs the RFC 9106 KAT through the
+ *     dispatched pipeline (NEON when wired, scalar when forced via
+ *     `ama_test_force_argon2_g_scalar()`).
+ *   - `tests/c/test_argon2_g_neon_equiv.c` calls this kernel
+ *     DIRECTLY against the in-test scalar BlaMka G over ≥1024
+ *     random (X, Y) blocks plus boundary corner cases.
  * -------------------------------------------------------------------
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @

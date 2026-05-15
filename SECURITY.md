@@ -301,14 +301,39 @@ re-bless tampered code and defeat the tamper-detection contract.
 
 ### Implementation status
 
-The `--update` gate and digest-based verification ship in the
-AArch64-completeness PR (2026-05).  The ctypes-bridged Ed25519
-sign/verify pipeline and the `_integrity_signature.py` artefact
-are wired in the same PR's build-pipeline hook (`setup.py`
-post-build step); when the artefact is absent (e.g., editable
-installs, source checkouts), the module falls back to digest-only
-verification with a logged warning so developer ergonomics do not
-require a full wheel build on every edit.
+Both halves ship together in the AArch64-completeness PR (2026-05):
+
+1. **`--update` gate** — `python -m ama_cryptography.integrity --update`
+   requires `AMA_BUILD_PIPELINE=1` in the environment.  Outside that
+   gate the command exits 2 with a remediation message.  See
+   `ama_cryptography/integrity.py`.
+2. **Signing pipeline** — `python -m ama_cryptography._build_sign`
+   (invoked by the build pipeline, e.g. `setup.py` post-build hook /
+   CMake post-install step / wheel CI workflow) generates an ephemeral
+   Ed25519 keypair via the in-tree `ama_ed25519_keypair` C symbol
+   (INVARIANT-1: no PyCA dependency), signs the SHA3-256 digest with
+   `ama_ed25519_sign`, writes `ama_cryptography/_integrity_signature.py`
+   with the embedded pubkey + signature + digest, and discards the
+   private key before exit.  See `ama_cryptography/_build_sign.py`.
+3. **Import-time verifier** — `_self_test._verify_integrity()` calls
+   `_verify_signed_integrity()` first.  When the signature artefact is
+   present (the normal post-wheel-build state), it recomputes the
+   digest, calls `ama_ed25519_verify` via ctypes with the embedded
+   pubkey and signature, and accepts only on a positive verify.  When
+   the artefact is absent (editable installs, source checkouts,
+   wheels built without `AMA_BUILD_PIPELINE=1`), the module falls
+   back to digest-only verification against `_integrity_digest.txt`
+   with a logged WARNING — developer ergonomics do not require a
+   full wheel build on every edit, but packagers see the missing
+   signature in CI logs.
+
+End-to-end smoke test (from the AArch64-completeness PR's CI):
+
+    AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign
+    python -m ama_cryptography.integrity --verify   # → "OK (signed integrity verified, ...)"
+    # Now edit a .py file and re-import:
+    python -c "import ama_cryptography; ama_cryptography._self_test._run_self_tests()"
+    # → ERROR state, all crypto operations refused
 
 ## Cryptographic Algorithm Security
 

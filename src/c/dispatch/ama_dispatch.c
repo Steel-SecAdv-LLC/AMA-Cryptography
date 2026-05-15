@@ -542,24 +542,24 @@ static void dispatch_init_internal(void) {
     }
     /* NEON AES-GCM, ChaCha20, Argon2 wiring (2026-05).
      *
-     * AES-GCM is gated at runtime on `ama_has_arm_aes()` (which combines
-     * HWCAP_AES + HWCAP_PMULL on Linux, sysctl FEAT_AES/FEAT_PMULL on
-     * Apple Silicon).  Without the ARMv8 Crypto Extensions the kernel
-     * would SIGILL on the first vaeseq_u8 — even though baseline NEON
-     * is mandatory on AArch64, AES + PMULL is *optional* per the ARMv8
-     * architecture (ARMv9 makes them mandatory, but the dispatcher
-     * cannot rely on shipping only on ARMv9 hosts).  The encrypt kernel
-     * existed before this PR; the decrypt kernel and these wiring lines
-     * are new.  ChaCha20 and Argon2 only need baseline NEON, which is
-     * mandatory on AArch64 (`detect_neon()` always returns 1), so they
-     * wire unconditionally under AMA_HAVE_NEON_IMPL.  Each kernel
-     * scrubs sensitive intermediate state on every return path
-     * (INVARIANT-12). */
-    if (dispatch_info.aes_gcm >= AMA_IMPL_NEON && ama_has_arm_aes()) {
+     * AES-GCM is gated on `ama_cpuid_has_arm_aes()` — the AES + PMULL
+     * bundle.  The kernel emits both vaeseq_u8/vaesmcq_u8 (FEAT_AES)
+     * and vmull_p64/vmull_high_p64 (FEAT_PMULL) for GHASH; a host that
+     * reports AES but masks PMULL would SIGILL on the first GHASH
+     * multiply.  Gating on the bundle gate — rather than `ama_has_arm_aes()`
+     * alone — closes that hazard (Copilot review #3249188230).
+     *
+     * The encrypt kernel existed before this PR; the decrypt kernel
+     * and these wiring lines are new.  ChaCha20 and Argon2 only need
+     * baseline NEON, which is mandatory on AArch64 (`detect_neon()`
+     * always returns 1), so they wire unconditionally under
+     * AMA_HAVE_NEON_IMPL.  Each kernel scrubs sensitive intermediate
+     * state on every return path (INVARIANT-12). */
+    if (dispatch_info.aes_gcm >= AMA_IMPL_NEON && ama_cpuid_has_arm_aes()) {
         dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_neon;
         dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_neon;
         if (dispatch_verbose())
-            fprintf(stderr, "[AMA Dispatch] AES-GCM: NEON + ARMv8 Crypto Ext selected\n");
+            fprintf(stderr, "[AMA Dispatch] AES-GCM: NEON + ARMv8 Crypto Ext (AES + PMULL) selected\n");
     } else if (dispatch_verbose() && dispatch_info.aes_gcm >= AMA_IMPL_NEON) {
         fprintf(stderr,
             "[AMA Dispatch] AES-GCM: NEON present but ARM-AES=%d ARM-PMULL=%d"
@@ -827,9 +827,17 @@ const ama_dispatch_table_t *ama_get_dispatch_table(void) {
 void ama_test_force_argon2_g_scalar(void);
 void ama_test_force_chacha20_block_x8_scalar(void);
 void ama_test_force_x25519_x4_scalar(void);
+void ama_test_force_aes_gcm_scalar(void);
+void ama_test_force_keccak_f1600_scalar(void);
+void ama_test_force_kyber_ntt_scalar(void);
+void ama_test_force_dilithium_ntt_scalar(void);
 void ama_test_restore_argon2_g_avx2(void);
 void ama_test_restore_chacha20_block_x8_avx2(void);
 void ama_test_restore_x25519_x4_avx2(void);
+void ama_test_restore_aes_gcm(void);
+void ama_test_restore_keccak_f1600(void);
+void ama_test_restore_kyber_ntt(void);
+void ama_test_restore_dilithium_ntt(void);
 
 void ama_test_force_argon2_g_scalar(void) {
     ama_dispatch_init();
@@ -844,6 +852,53 @@ void ama_test_force_chacha20_block_x8_scalar(void) {
 void ama_test_force_x25519_x4_scalar(void) {
     ama_dispatch_init();
     dispatch_table.x25519_x4 = NULL;
+}
+
+/* Force the generic-C AES-GCM scalar reference (src/c/ama_aes_gcm.c)
+ * by NULLing the dispatch slot.  When the public
+ * ama_aes256_gcm_encrypt / ama_aes256_gcm_decrypt are called with the
+ * slot NULL, the generic implementation in ama_aes_gcm.c runs inline
+ * instead of forwarding to the SIMD kernel.  Used by
+ * test_aes_gcm_neon_equiv.c and the VAES/AVX2 equivalence tests to
+ * obtain a NON-DISPATCHED scalar ground truth, which is what makes
+ * the byte-identity comparison meaningful — Copilot review
+ * #3249188280.  Restore via ama_test_restore_aes_gcm(). */
+void ama_test_force_aes_gcm_scalar(void) {
+    ama_dispatch_init();
+    dispatch_table.aes_gcm_encrypt = NULL;
+    dispatch_table.aes_gcm_decrypt = NULL;
+}
+
+/* Force the generic-C Keccak-f[1600] scalar reference by reverting the
+ * single-state pointer to ama_keccak_f1600_generic.  The x4 pointer
+ * is kept on the (typically faster) installed kernel because the x4
+ * scalar fallback simply invokes the single-state pointer 4 times —
+ * NULLing the single-state pointer already routes the x4 call to the
+ * generic path via the dispatch contract documented in
+ * include/ama_dispatch.h. */
+void ama_test_force_keccak_f1600_scalar(void) {
+    ama_dispatch_init();
+    dispatch_table.keccak_f1600 = ama_keccak_f1600_generic;
+}
+
+/* Force the generic-C Kyber NTT path by NULLing the SIMD pointers.
+ * ama_kyber.c's NULL-check then dispatches to its inline scalar
+ * NTT/inverse-NTT/pointwise implementations. */
+void ama_test_force_kyber_ntt_scalar(void) {
+    ama_dispatch_init();
+    dispatch_table.kyber_ntt = NULL;
+    dispatch_table.kyber_invntt = NULL;
+    dispatch_table.kyber_pointwise = NULL;
+}
+
+/* Force the generic-C Dilithium NTT path by NULLing the SIMD
+ * pointers.  ama_dilithium.c's NULL-check then dispatches to its
+ * inline scalar NTT/inverse-NTT/pointwise implementations. */
+void ama_test_force_dilithium_ntt_scalar(void) {
+    ama_dispatch_init();
+    dispatch_table.dilithium_ntt = NULL;
+    dispatch_table.dilithium_invntt = NULL;
+    dispatch_table.dilithium_pointwise = NULL;
 }
 
 void ama_test_force_x25519_x4_avx2(void);
@@ -900,6 +955,36 @@ void ama_test_restore_chacha20_block_x8_avx2(void) {
 void ama_test_restore_x25519_x4_avx2(void) {
     ama_dispatch_init();
     dispatch_table.x25519_x4 = dispatch_table_post_init.x25519_x4;
+}
+
+/* Restore the post-init dispatch state for the families forced to
+ * scalar by the new test hooks above.  Snapshot semantics mirror the
+ * argon2 / chacha20 / x25519 restores: returns to the choices the
+ * dispatcher actually made at init (respecting env opt-outs and the
+ * auto-tune verdict). */
+void ama_test_restore_aes_gcm(void) {
+    ama_dispatch_init();
+    dispatch_table.aes_gcm_encrypt = dispatch_table_post_init.aes_gcm_encrypt;
+    dispatch_table.aes_gcm_decrypt = dispatch_table_post_init.aes_gcm_decrypt;
+}
+
+void ama_test_restore_keccak_f1600(void) {
+    ama_dispatch_init();
+    dispatch_table.keccak_f1600 = dispatch_table_post_init.keccak_f1600;
+}
+
+void ama_test_restore_kyber_ntt(void) {
+    ama_dispatch_init();
+    dispatch_table.kyber_ntt = dispatch_table_post_init.kyber_ntt;
+    dispatch_table.kyber_invntt = dispatch_table_post_init.kyber_invntt;
+    dispatch_table.kyber_pointwise = dispatch_table_post_init.kyber_pointwise;
+}
+
+void ama_test_restore_dilithium_ntt(void) {
+    ama_dispatch_init();
+    dispatch_table.dilithium_ntt = dispatch_table_post_init.dilithium_ntt;
+    dispatch_table.dilithium_invntt = dispatch_table_post_init.dilithium_invntt;
+    dispatch_table.dilithium_pointwise = dispatch_table_post_init.dilithium_pointwise;
 }
 #endif /* AMA_TESTING_MODE */
 

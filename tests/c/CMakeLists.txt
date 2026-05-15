@@ -168,6 +168,67 @@ if(AMA_USE_NATIVE_PQC)
     add_test(NAME test_chacha20_x8_avx2_equiv
              COMMAND test_chacha20_x8_avx2_equiv)
     set_tests_properties(test_chacha20_x8_avx2_equiv PROPERTIES SKIP_RETURN_CODE 77)
+
+    # SIMD-equivalence PR (2026-05) — NEON Argon2 BlaMka G kernel
+    # equivalence test.  Pairs ama_argon2_g_neon against an inlined
+    # scalar BlaMka G reference (RFC 9106 §3) across a boundary
+    # lattice (all-zeros, all-ones, X==Y, X^Y) plus 1024 random
+    # (X, Y) blocks of 128 uint64_t each.  Skips with code 77 on
+    # non-AArch64 builds or hosts whose dispatcher leaves
+    # argon2_g NULL.
+    add_executable(test_argon2_g_neon_equiv test_argon2_g_neon_equiv.c)
+    target_link_libraries(test_argon2_g_neon_equiv ama_cryptography_test)
+    add_test(NAME test_argon2_g_neon_equiv COMMAND test_argon2_g_neon_equiv)
+    set_tests_properties(test_argon2_g_neon_equiv PROPERTIES SKIP_RETURN_CODE 77)
+
+    # SIMD-equivalence PR (2026-05) — AVX2 Argon2 BlaMka G kernel
+    # equivalence test.  Mirrors the NEON variant for the x86-64
+    # AVX2 path: ama_argon2_g_avx2 vs the same inlined scalar
+    # reference, boundary lattice + 1024 random blocks.  Skips
+    # with code 77 on non-x86-64 builds or hosts whose dispatcher
+    # leaves argon2_g NULL.
+    add_executable(test_argon2_g_avx2_equiv test_argon2_g_avx2_equiv.c)
+    target_link_libraries(test_argon2_g_avx2_equiv ama_cryptography_test)
+    add_test(NAME test_argon2_g_avx2_equiv COMMAND test_argon2_g_avx2_equiv)
+    set_tests_properties(test_argon2_g_avx2_equiv PROPERTIES SKIP_RETURN_CODE 77)
+
+    # SIMD-equivalence PR (2026-05) — NEON ChaCha20 8-way block
+    # function equivalence test.  Mirrors test_chacha20_x8_avx2_equiv
+    # for the AArch64 NEON path: 512 B of keystream produced by
+    # ama_chacha20_block_x8_neon vs 8 sequential scalar single-block
+    # calls over 1024 random (key, nonce, counter) tuples.  Skips
+    # with code 77 on non-AArch64 builds or hosts whose dispatcher
+    # leaves chacha20_block_x8 NULL.
+    add_executable(test_chacha20_x8_neon_equiv test_chacha20_x8_neon_equiv.c)
+    target_link_libraries(test_chacha20_x8_neon_equiv ama_cryptography_test)
+    add_test(NAME test_chacha20_x8_neon_equiv
+             COMMAND test_chacha20_x8_neon_equiv)
+    set_tests_properties(test_chacha20_x8_neon_equiv PROPERTIES SKIP_RETURN_CODE 77)
+
+    # SIMD-equivalence PR (2026-05) — Kyber NTT + inverse NTT
+    # equivalence test.  Routes through the dispatch table so it
+    # exercises the AVX2 path on x86-64 and the NEON path on AArch64
+    # against an inlined scalar reference (Cooley-Tukey forward,
+    # Gentleman-Sande inverse, Montgomery + Barrett reductions).
+    # 1024 random polynomials per direction.  Skips with code 77
+    # when dispatch leaves kyber_ntt / kyber_invntt NULL.
+    add_executable(test_kyber_ntt_equiv test_kyber_ntt_equiv.c)
+    target_link_libraries(test_kyber_ntt_equiv ama_cryptography_test)
+    add_test(NAME test_kyber_ntt_equiv COMMAND test_kyber_ntt_equiv)
+    set_tests_properties(test_kyber_ntt_equiv PROPERTIES SKIP_RETURN_CODE 77)
+
+    # SIMD-equivalence PR (2026-05) — Keccak-f[1600] permutation
+    # equivalence test.  Compares the dispatched single-state and
+    # x4-batched keccak pointers (AVX2 / AVX-512 4-way / NEON
+    # depending on platform) against ama_keccak_f1600_generic over
+    # 4096 random single states and 1024 random 4-state batches.
+    # SKIPs with 77 when the dispatched single-state pointer is the
+    # generic reference itself (no SIMD installed — comparison would
+    # be tautological).
+    add_executable(test_keccak_equiv test_keccak_equiv.c)
+    target_link_libraries(test_keccak_equiv ama_cryptography_test)
+    add_test(NAME test_keccak_equiv COMMAND test_keccak_equiv)
+    set_tests_properties(test_keccak_equiv PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # Performance benchmark (not added to ctest - run manually)
