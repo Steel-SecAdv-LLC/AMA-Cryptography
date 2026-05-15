@@ -288,13 +288,27 @@ class TestHKDFEdgeCases:
             ikm=large_ss + large_ss,
             info=b"test",
             okm_len=32,
+            _test_only_allow_python=True,
         )
         assert len(result) == 32
 
     def test_hkdf_output_exceeding_max_raises(self) -> None:
         """Output length > 255 * 32 should raise ValueError."""
         with pytest.raises(ValueError, match="exceeds maximum"):
-            HybridCombiner._hkdf_python(b"salt", b"ikm", b"info", 255 * 32 + 1)
+            HybridCombiner._hkdf_python(
+                b"salt", b"ikm", b"info", 255 * 32 + 1, _test_only_allow_python=True
+            )
+
+    def test_hkdf_python_refuses_without_opt_in(self) -> None:
+        """_hkdf_python is hard-disabled without the keyword-only opt-in.
+
+        INVARIANT-7 hardening: production code never calls _hkdf_python;
+        an accidental call from any path must fail closed.  Tests must
+        pass _test_only_allow_python=True explicitly to access the
+        reference implementation.
+        """
+        with pytest.raises(RuntimeError, match="test-only"):
+            HybridCombiner._hkdf_python(b"salt", b"ikm", b"info", 32)
 
     def test_default_label(self) -> None:
         """Default label should match module constant."""

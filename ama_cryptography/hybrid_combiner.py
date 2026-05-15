@@ -241,21 +241,48 @@ class HybridCombiner:
         return bytes(okm_buf)
 
     @staticmethod
-    def _hkdf_python(salt: bytes, ikm: bytes, info: bytes, okm_len: int) -> bytes:
-        """Internal test-only fallback. Do NOT call from production code paths.
+    def _hkdf_python(
+        salt: bytes,
+        ikm: bytes,
+        info: bytes,
+        okm_len: int,
+        *,
+        _test_only_allow_python: bool = False,
+    ) -> bytes:
+        """Internal test-only HKDF reference. Hard-disabled by default.
 
-        Use the C-backed HKDF implementation (ama_hkdf) instead.
-        combine() enforces INVARIANT-7 by refusing to call this method;
-        it exists solely for direct unit testing of the HKDF construction
-        (see TestHKDFEdgeCases).
+        This method is reserved for direct unit testing of the HKDF-SHA3-256
+        construction (RFC 5869) against the native C backend.  Production
+        code MUST NOT call it: the implementation is in pure Python and is
+        not constant-time, so it leaks bit-pattern timing for the IKM and
+        salt.  ``combine()`` enforces INVARIANT-7 by raising if the native
+        backend is unavailable; this method enforces the same invariant
+        directly so that an accidental call from any code path (production
+        or otherwise) fails closed.
 
-        NOT constant-time. This helper may process controlled test inputs,
-        including test IKM/secret vectors, but it MUST NOT be used for
-        production secret handling or any live cryptographic code path.
+        To use from a unit test, pass the explicit keyword-only opt-in:
+
+            HybridCombiner._hkdf_python(
+                salt, ikm, info, okm_len, _test_only_allow_python=True
+            )
+
+        Raises:
+            RuntimeError: If ``_test_only_allow_python`` is not set to
+                ``True``.  This is a deliberate hard failure — the
+                production code path forbids any pure-Python KDF, and
+                the test-only contract is made explicit at the call site.
 
         Matches the native C ama_hkdf (HMAC-SHA3-256, RFC 5869).
         SHA3-256 block size (rate) = 136 bytes, digest size = 32 bytes.
         """
+        if not _test_only_allow_python:
+            raise RuntimeError(
+                "INVARIANT-7: HybridCombiner._hkdf_python is a test-only "
+                "reference implementation and is disabled by default.  "
+                "Production code MUST use the native C HKDF backend "
+                "(ama_hkdf).  Tests opt in via the explicit keyword-only "
+                "_test_only_allow_python=True flag."
+            )
         hash_len = 32  # SHA3-256 digest size
         block_size = 136  # SHA3-256 rate (Keccak sponge rate for SHA3-256)
 

@@ -352,12 +352,14 @@ class TestLengthPrefixedEncodingPreventsAmbiguousConcatenation:
             ikm=ikm,
             info=info,
             okm_len=32,
+            _test_only_allow_python=True,
         )
         result_b = HybridCombiner._hkdf_python(
             salt=self._build_salt(ct1_b, ct2_b),
             ikm=ikm,
             info=info,
             okm_len=32,
+            _test_only_allow_python=True,
         )
 
         assert result_a != result_b, (
@@ -385,12 +387,14 @@ class TestLengthPrefixedEncodingPreventsAmbiguousConcatenation:
             ikm=ss1_a + ss2_a,
             info=info,
             okm_len=32,
+            _test_only_allow_python=True,
         )
         result_b = HybridCombiner._hkdf_python(
             salt=salt,
             ikm=ss1_b + ss2_b,
             info=info,
             okm_len=32,
+            _test_only_allow_python=True,
         )
 
         assert result_a != result_b, (
@@ -419,12 +423,14 @@ class TestLengthPrefixedEncodingPreventsAmbiguousConcatenation:
             ikm=ikm,
             info=self._build_info(label, pk1_a, pk2_a),
             okm_len=32,
+            _test_only_allow_python=True,
         )
         result_b = HybridCombiner._hkdf_python(
             salt=salt,
             ikm=ikm,
             info=self._build_info(label, pk1_b, pk2_b),
             okm_len=32,
+            _test_only_allow_python=True,
         )
 
         assert result_a != result_b, (
@@ -694,7 +700,9 @@ class TestHKDFPythonNativeParity:
         info = b"ama-hybrid-kem-v2-parity-check"  # 30 bytes
         length = 32
 
-        python_result = HybridCombiner._hkdf_python(salt=salt, ikm=ikm, info=info, okm_len=length)
+        python_result = HybridCombiner._hkdf_python(
+            salt=salt, ikm=ikm, info=info, okm_len=length, _test_only_allow_python=True
+        )
         native_result = combiner._hkdf_native(salt=salt, ikm=ikm, info=info, okm_len=length)
 
         assert python_result == native_result, (
@@ -713,7 +721,11 @@ class TestHKDFPythonNativeParity:
 
         for length in (16, 32, 48, 64, 128):
             python_result = HybridCombiner._hkdf_python(
-                salt=salt, ikm=ikm, info=info, okm_len=length
+                salt=salt,
+                ikm=ikm,
+                info=info,
+                okm_len=length,
+                _test_only_allow_python=True,
             )
             native_result = combiner._hkdf_native(salt=salt, ikm=ikm, info=info, okm_len=length)
             assert python_result == native_result, (
@@ -727,9 +739,23 @@ class TestHKDFPythonNativeParity:
         combiner = self._make_native_combiner()
 
         python_result = HybridCombiner._hkdf_python(
-            salt=b"", ikm=b"some-key-material", info=b"info", okm_len=32
+            salt=b"",
+            ikm=b"some-key-material",
+            info=b"info",
+            okm_len=32,
+            _test_only_allow_python=True,
         )
         native_result = combiner._hkdf_native(
             salt=b"", ikm=b"some-key-material", info=b"info", okm_len=32
         )
         assert python_result == native_result
+
+    def test_hkdf_python_refuses_without_opt_in(self) -> None:
+        """_hkdf_python must fail closed without the explicit opt-in.
+
+        INVARIANT-7: production code never calls _hkdf_python; the
+        keyword-only opt-in makes the test-only contract explicit at
+        every call site.
+        """
+        with pytest.raises(RuntimeError, match="test-only"):
+            HybridCombiner._hkdf_python(b"salt", b"ikm", b"info", 32)

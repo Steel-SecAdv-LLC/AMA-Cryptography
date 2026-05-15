@@ -363,49 +363,61 @@ class TestKATs:
 
     @skip_no_native
     def test_kat_hmac_sha3_256(self) -> None:
-        """HMAC-SHA3-256 KAT passes or skips."""
+        """HMAC-SHA3-256 KAT passes (skip translates to pytest.skip)."""
         from ama_cryptography._self_test import _kat_hmac_sha3_256
 
-        passed, _detail = _kat_hmac_sha3_256()
-        assert passed
+        passed, detail = _kat_hmac_sha3_256()
+        if passed is None:
+            pytest.skip(detail)
+        assert passed, detail
 
     @skip_no_native
     def test_kat_aes_256_gcm(self) -> None:
-        """AES-256-GCM KAT passes or skips."""
+        """AES-256-GCM KAT passes (skip translates to pytest.skip)."""
         from ama_cryptography._self_test import _kat_aes_256_gcm
 
-        passed, _detail = _kat_aes_256_gcm()
-        assert passed
+        passed, detail = _kat_aes_256_gcm()
+        if passed is None:
+            pytest.skip(detail)
+        assert passed, detail
 
     @skip_no_kyber
     def test_kat_ml_kem_1024(self) -> None:
         """ML-KEM-1024 KAT passes."""
         from ama_cryptography._self_test import _kat_ml_kem_1024
 
-        passed, _detail = _kat_ml_kem_1024()
-        assert passed
+        passed, detail = _kat_ml_kem_1024()
+        if passed is None:
+            pytest.skip(detail)
+        assert passed, detail
 
     @skip_no_dilithium
     def test_kat_ml_dsa_65(self) -> None:
         """ML-DSA-65 KAT passes."""
         from ama_cryptography._self_test import _kat_ml_dsa_65
 
-        passed, _detail = _kat_ml_dsa_65()
-        assert passed
+        passed, detail = _kat_ml_dsa_65()
+        if passed is None:
+            pytest.skip(detail)
+        assert passed, detail
 
     def test_kat_slh_dsa(self) -> None:
-        """SLH-DSA KAT passes or skips."""
+        """SLH-DSA KAT passes (skip translates to pytest.skip)."""
         from ama_cryptography._self_test import _kat_slh_dsa
 
-        passed, _detail = _kat_slh_dsa()
-        assert passed
+        passed, detail = _kat_slh_dsa()
+        if passed is None:
+            pytest.skip(detail)
+        assert passed, detail
 
     def test_kat_ed25519(self) -> None:
-        """Ed25519 KAT passes or skips."""
+        """Ed25519 KAT passes (skip translates to pytest.skip)."""
         from ama_cryptography._self_test import _kat_ed25519
 
-        passed, _detail = _kat_ed25519()
-        assert passed
+        passed, detail = _kat_ed25519()
+        if passed is None:
+            pytest.skip(detail)
+        assert passed, detail
 
 
 # ===========================================================================
@@ -497,21 +509,36 @@ class TestTimingOracle:
     """Test _timing_oracle_consttime."""
 
     def test_timing_oracle_passes(self) -> None:
-        """Timing oracle test passes (constant-time implementation)."""
+        """Timing oracle returns a tri-state tuple.
+
+        Tri-state: ``True`` = constant-time, ``False`` = leak detected,
+        ``None`` = skipped (native backend not loaded).  This test only
+        asserts the type contract — the deterministic single-pass run
+        means a real timing leak in the native kernel would be
+        reproducible, but on a noisy CI host an occasional ``False``
+        is still possible.  Tests of leak *detection* live elsewhere
+        and inject a known timing leak.
+        """
         from ama_cryptography._self_test import _timing_oracle_consttime
 
         passed, detail = _timing_oracle_consttime()
-        # May occasionally fail due to noise, so just verify it returns a tuple
-        assert isinstance(passed, bool)
+        assert passed is None or isinstance(passed, bool)
         assert isinstance(detail, str)
 
     def test_timing_oracle_skips_when_no_native(self) -> None:
-        """Timing oracle skips when native consttime is not available."""
+        """Timing oracle returns the skip sentinel when no native backend.
+
+        The skip is now ``passed is None`` (NOT True) so callers that
+        treat "passed" as "tested" cannot conflate skip-with-pass.
+        """
         from ama_cryptography._self_test import _timing_oracle_consttime
 
         with patch("ama_cryptography.secure_memory._native_consttime_memcmp", None):
             passed, detail = _timing_oracle_consttime()
-            assert passed
+            assert passed is None, (
+                "Timing oracle skip must be tri-state None (NOT True / passed). "
+                f"Got passed={passed!r}, detail={detail!r}"
+            )
             assert "skipped" in detail.lower() or "not available" in detail.lower()
 
 
@@ -575,14 +602,18 @@ class TestPOSTResults:
         assert duration >= 0
 
     def test_module_self_test_results(self) -> None:
-        """module_self_test_results returns a list of tuples."""
+        """module_self_test_results returns a list of tuples.
+
+        ``passed`` is tri-state: ``True`` / ``False`` / ``None`` (skip).
+        Consumers MUST accept ``None`` as a valid third state.
+        """
         from ama_cryptography._self_test import module_self_test_results
 
         results = module_self_test_results()
         assert isinstance(results, list)
         for name, passed, detail in results:
             assert isinstance(name, str)
-            assert isinstance(passed, bool)
+            assert passed is None or isinstance(passed, bool)
             assert isinstance(detail, str)
 
 

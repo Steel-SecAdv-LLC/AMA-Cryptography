@@ -354,6 +354,55 @@ End-to-end smoke test (from the AArch64-completeness PR's CI):
     python -c "import ama_cryptography; ama_cryptography._self_test._run_self_tests()"
     # → ERROR state, all crypto operations refused
 
+### `AMA_FIPS_STRICT` — escalate skipped KATs to POST failure
+
+Released wheels and FIPS-validated deployments should set
+`AMA_FIPS_STRICT=1` so a missing backend cannot silently degrade the
+approved-algorithm self-test set:
+
+  * **Unset (default, developer / docs / CI matrix builds):** when a
+    KAT cannot run because its backend is unavailable (e.g. SPHINCS+
+    was not built into the C library), the POST runner logs a WARNING,
+    records the skip with `passed=None` in
+    `module_self_test_results()`, and continues.  Skip is NOT a pass —
+    consumers filtering for "everything passed" must compare
+    `passed is True`.
+  * **`=1` (release / FIPS-validated path):** a skipped KAT is
+    escalated to a hard POST failure.  The module enters ERROR state
+    and refuses every cryptographic operation until the missing
+    backend is built and the process restarted.  This makes a
+    forgotten `cmake -DAMA_USE_NATIVE_PQC=ON` in the release build a
+    visible failure rather than a silent posture downgrade.
+
+The strict-mode flag applies uniformly to every KAT (SHA3-256,
+HMAC-SHA3-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65, SLH-DSA,
+SLH-DSA-SHAKE-128s, Ed25519) and the constant-time timing oracle.
+
+### `AMA_ALLOW_PYTHON_MEMZERO` — opt into best-effort Python memzero
+
+`secure_memzero` refuses to operate when the native C
+zero-on-erase backend is unavailable; the Python multi-pass loop is
+opt-in via `AMA_ALLOW_PYTHON_MEMZERO=1` (development / test) or
+`AMA_SPHINX_BUILD=1` / `SPHINX_BUILD=1` (docs builds).  Production
+deployments should never need the opt-in because INVARIANT-7 already
+refuses to import the library without the native HMAC/HKDF backend,
+so the native memzero is also present.  The gate is defence-in-depth
+against a partial-build state where the constant-time primitives are
+linked but the secure-memzero symbol is not.
+
+### Multi-process AES-GCM nonce safety
+
+`AESGCMProvider.encrypt()` reserves its per-key counter slot
+atomically via an inter-process file lock before any nonce is
+generated or AEAD is invoked.  Concurrent processes sharing the
+same AES-GCM key reserve disjoint slots — a previous race window
+where two processes could load the same baseline and write back
+`max(N+a, N+b)` instead of `N+a+b` is closed.  Ephemeral mode
+(`configure_ephemeral(True)` or `ephemeral=True` in the constructor)
+bypasses disk I/O for hermetic test runs; in that mode the
+multi-process race surface is the same as the historical
+single-process design and callers MUST partition keys per-process.
+
 ## Cryptographic Algorithm Security
 
 ### Current Algorithms

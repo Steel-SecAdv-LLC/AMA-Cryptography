@@ -40,8 +40,26 @@ logger = logging.getLogger(__name__)
 
 _MODULE_STATE = "SELF_TEST"  # OPERATIONAL | ERROR | SELF_TEST
 _ERROR_REASON: Optional[str] = None
-_SELF_TEST_RESULTS: List[Tuple[str, bool, str]] = []  # (name, passed, detail)
+# ``passed`` is tri-state:
+#   * True  — the test ran and the algorithm produced the expected output.
+#   * False — the test ran and the algorithm failed; module enters ERROR.
+#   * None  — the test was skipped because its backend is not built.
+#             A skip is NOT a pass: callers must treat ``None`` as "not
+#             tested" rather than "passing".  When AMA_FIPS_STRICT=1 is
+#             set, a skip is escalated to a hard failure inside
+#             ``_run_self_tests``.  See _kat_*() docstrings for the
+#             specific skip conditions of each algorithm.
+_SELF_TEST_RESULTS: List[Tuple[str, Optional[bool], str]] = []  # (name, passed, detail)
 _POST_DURATION_MS: float = 0.0
+
+# Strict mode env: when set, a skipped KAT is treated as a failure so
+# release builds (and any deployment that demands every approved
+# algorithm be self-tested) refuse to enter OPERATIONAL without every
+# backend present.  Non-strict mode (the default for dev / source
+# checkouts) records the skip and logs WARNING but allows startup so
+# documentation and CI matrix jobs that intentionally exclude a
+# backend keep working.
+_AMA_FIPS_STRICT_ENV = "AMA_FIPS_STRICT"
 
 
 def module_status() -> str:
@@ -54,8 +72,19 @@ def module_error_reason() -> Optional[str]:
     return _ERROR_REASON
 
 
-def module_self_test_results() -> List[Tuple[str, bool, str]]:
-    """Return list of (test_name, passed, detail) from the last POST run."""
+def module_self_test_results() -> List[Tuple[str, Optional[bool], str]]:
+    """Return list of ``(test_name, passed, detail)`` from the last POST run.
+
+    ``passed`` is tri-state:
+
+    * ``True``  — KAT executed and matched the expected output.
+    * ``False`` — KAT executed and failed.
+    * ``None``  — KAT was skipped because its backend is unavailable.
+                  Skipped tests are *not* counted as passes; consumers
+                  filtering for "everything passed" must check
+                  ``passed is True`` (or, equivalently, exclude
+                  ``passed is None``).
+    """
     return list(_SELF_TEST_RESULTS)
 
 
@@ -428,8 +457,12 @@ def update_integrity_digest() -> str:
 # ============================================================================
 
 
-def _kat_sha3_256() -> Tuple[bool, str]:
-    """SHA3-256 KAT: hash empty string, compare to known digest."""
+def _kat_sha3_256() -> Tuple[Optional[bool], str]:
+    """SHA3-256 KAT: hash empty string, compare to known digest.
+
+    SHA3-256 ships in CPython's hashlib so the result is always either
+    ``(True, ...)`` or ``(False, ...)`` — there is no skip path.
+    """
     known_input = b""
     # SHA3-256("") = a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a
     expected = "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
@@ -439,7 +472,7 @@ def _kat_sha3_256() -> Tuple[bool, str]:
     return False, f"SHA3-256 KAT failed: got {result}"
 
 
-def _kat_hmac_sha3_256() -> Tuple[bool, str]:
+def _kat_hmac_sha3_256() -> Tuple[Optional[bool], str]:
     """HMAC-SHA3-256 KAT using native backend against hardcoded NIST-style vector.
 
     Vector: NIST SP 800-198 / ACVP-derived
@@ -454,7 +487,7 @@ def _kat_hmac_sha3_256() -> Tuple[bool, str]:
         )
 
         if not _HMAC_SHA3_256_NATIVE_AVAILABLE:
-            return True, "HMAC-SHA3-256 KAT skipped (native unavailable)"
+            return None, "HMAC-SHA3-256 KAT skipped (native unavailable)"
 
         key = bytes.fromhex("000102030405060708090a0b0c0d0e0f" "101112131415161718191a1b1c1d1e1f")
         data = bytes.fromhex("53616d706c65206d65737361676520666f72206b65796c656e3d626c6f636b6c656e")
@@ -471,7 +504,7 @@ def _kat_hmac_sha3_256() -> Tuple[bool, str]:
         return False, f"HMAC-SHA3-256 KAT exception: {exc}"
 
 
-def _kat_aes_256_gcm() -> Tuple[bool, str]:
+def _kat_aes_256_gcm() -> Tuple[Optional[bool], str]:
     """AES-256-GCM KAT: encrypt known plaintext, verify roundtrip."""
     try:
         from ama_cryptography.pqc_backends import (
@@ -481,7 +514,7 @@ def _kat_aes_256_gcm() -> Tuple[bool, str]:
         )
 
         if not _AES_GCM_NATIVE_AVAILABLE:
-            return True, "AES-256-GCM KAT skipped (native unavailable)"
+            return None, "AES-256-GCM KAT skipped (native unavailable)"
 
         # NIST SP 800-38D Test Case 16 (AES-256, 96-bit IV, AAD)
         key = bytes.fromhex("feffe9928665731c6d6a8f9467308308" "feffe9928665731c6d6a8f9467308308")
@@ -519,7 +552,7 @@ def _kat_aes_256_gcm() -> Tuple[bool, str]:
         return False, f"AES-256-GCM KAT exception: {exc}"
 
 
-def _kat_ml_kem_1024() -> Tuple[bool, str]:
+def _kat_ml_kem_1024() -> Tuple[Optional[bool], str]:
     """ML-KEM-1024 KAT: keygen + encaps + decaps roundtrip."""
     try:
         from ama_cryptography.pqc_backends import (
@@ -530,7 +563,7 @@ def _kat_ml_kem_1024() -> Tuple[bool, str]:
         )
 
         if not KYBER_AVAILABLE:
-            return True, "ML-KEM-1024 KAT skipped (backend unavailable)"
+            return None, "ML-KEM-1024 KAT skipped (backend unavailable)"
 
         kp = generate_kyber_keypair()
         encap = kyber_encapsulate(kp.public_key)
@@ -542,7 +575,7 @@ def _kat_ml_kem_1024() -> Tuple[bool, str]:
         return False, f"ML-KEM-1024 KAT exception: {exc}"
 
 
-def _kat_ml_dsa_65() -> Tuple[bool, str]:
+def _kat_ml_dsa_65() -> Tuple[Optional[bool], str]:
     """ML-DSA-65 KAT: keygen + sign + verify roundtrip."""
     try:
         from ama_cryptography.pqc_backends import (
@@ -553,7 +586,7 @@ def _kat_ml_dsa_65() -> Tuple[bool, str]:
         )
 
         if not DILITHIUM_AVAILABLE:
-            return True, "ML-DSA-65 KAT skipped (backend unavailable)"
+            return None, "ML-DSA-65 KAT skipped (backend unavailable)"
 
         kp = generate_dilithium_keypair()
         msg = b"FIPS 140-3 ML-DSA-65 KAT"
@@ -570,7 +603,7 @@ def _kat_ml_dsa_65() -> Tuple[bool, str]:
         return False, f"ML-DSA-65 KAT exception: {exc}"
 
 
-def _kat_slh_dsa() -> Tuple[bool, str]:
+def _kat_slh_dsa() -> Tuple[Optional[bool], str]:
     """SLH-DSA (SPHINCS+) KAT: keygen + sign + verify roundtrip.
 
     Exercises the SHA2-256f-simple parameter set via the legacy SPHINCS+
@@ -585,7 +618,7 @@ def _kat_slh_dsa() -> Tuple[bool, str]:
         )
 
         if not SPHINCS_AVAILABLE:
-            return True, "SLH-DSA KAT skipped (backend unavailable)"
+            return None, "SLH-DSA KAT skipped (backend unavailable)"
 
         kp = generate_sphincs_keypair()
         msg = b"FIPS 140-3 SLH-DSA KAT"
@@ -600,7 +633,7 @@ def _kat_slh_dsa() -> Tuple[bool, str]:
         return False, f"SLH-DSA KAT exception: {exc}"
 
 
-def _kat_slh_dsa_shake_128s() -> Tuple[bool, str]:
+def _kat_slh_dsa_shake_128s() -> Tuple[Optional[bool], str]:
     """SLH-DSA-SHAKE-128s KAT: verify-only against a pinned NIST ACVP vector.
 
     Validates the FIPS 205 NIST L1 parameter set added in v3.1.0. SHAKE-128s
@@ -622,7 +655,7 @@ def _kat_slh_dsa_shake_128s() -> Tuple[bool, str]:
         from ama_cryptography.pqc_backends import SPHINCS_AVAILABLE, slhdsa_verify
 
         if not SPHINCS_AVAILABLE:
-            return True, "SLH-DSA-SHAKE-128s KAT skipped (backend unavailable)"
+            return None, "SLH-DSA-SHAKE-128s KAT skipped (backend unavailable)"
 
         try:
             from importlib.resources import files as _resfiles
@@ -668,7 +701,7 @@ def _kat_slh_dsa_shake_128s() -> Tuple[bool, str]:
         return False, f"SLH-DSA-SHAKE-128s KAT exception: {exc}"
 
 
-def _kat_ed25519() -> Tuple[bool, str]:
+def _kat_ed25519() -> Tuple[Optional[bool], str]:
     """Ed25519 KAT: keygen + sign + verify roundtrip."""
     try:
         from ama_cryptography.pqc_backends import (
@@ -679,7 +712,7 @@ def _kat_ed25519() -> Tuple[bool, str]:
         )
 
         if not _ED25519_NATIVE_AVAILABLE:
-            return True, "Ed25519 KAT skipped (native unavailable)"
+            return None, "Ed25519 KAT skipped (native unavailable)"
 
         pk, sk = native_ed25519_keypair()
         msg = b"FIPS 140-3 Ed25519 KAT"
@@ -703,9 +736,17 @@ def _kat_ed25519() -> Tuple[bool, str]:
 
 # Threshold: |t| > 4.5 indicates timing leak (dudect convention)
 _DUDECT_THRESHOLD = 4.5
-_TIMING_ITERATIONS = 1000
-_TIMING_WARMUP = 100
-_TIMING_RETRY_ITERATIONS = 10000
+# Single deterministic pass with high statistical power.  The previous
+# retry-until-pass loop (3 attempts, 1000 → 10000 → 10000 iterations)
+# was a probabilistic test-amplifier — a flaky noise sample on attempt
+# 1 was simply re-rolled until it passed, masking real timing leaks
+# that happen to fall below the threshold on a noisier-than-usual
+# retry.  A single 10000-iteration pass gives the same statistical
+# power as one retry attempt and the result is deterministic: the
+# outcome depends solely on the implementation under test, not on how
+# many bites at the apple POST took.
+_TIMING_ITERATIONS = 10000
+_TIMING_WARMUP = 200
 
 
 def _measure_timing_batch(
@@ -754,26 +795,44 @@ def _measure_timing_batch(
     return mean1, mean2, var1, var2, n1
 
 
-def _timing_oracle_consttime() -> Tuple[bool, str]:
+def _timing_oracle_consttime() -> Tuple[Optional[bool], str]:
     """Test ama_consttime_memcmp for timing leaks via Welch's t-test.
 
+    Single deterministic pass with high statistical power (no retry).
+
     Runs interleaved comparisons with equal and unequal inputs, measures
-    execution time for each, then computes Welch's t-statistic.
-    If |t| > 4.5, the comparison function may leak timing information.
+    execution time for each, then computes Welch's t-statistic.  If
+    |t| > ``_DUDECT_THRESHOLD`` (4.5), the comparison function may leak
+    timing information.
 
-    To eliminate false positives from scheduler noise on shared CI
-    runners, the test uses a warmup phase (stabilizes CPU frequency and
-    instruction cache) and retries with 10x samples on first failure.
-    Real timing leaks persist with more samples; transient noise from
-    context switches and frequency scaling averages out.
+    The previous implementation retried up to three times with growing
+    sample sizes and accepted ANY pass.  That pattern is a timing-leak
+    *amplifier*: a real leak that happens to fall just under the
+    threshold on a high-noise retry would be reported as a pass.  By
+    running a single 10 000-iteration pass — equivalent in power to
+    one of the previous retry attempts — POST gives the same answer
+    every time for a given binary and host, with no opportunity to
+    re-roll a borderline result into a green light.  Real timing
+    leaks (|t| >> 4.5) reproduce; scheduler noise is averaged out by
+    the warmup phase + interleaved measurement design.
 
-    This makes AMA-Crypto the first open-source library that self-tests
-    for timing leaks at startup via FIPS POST.
+    Returns:
+        * ``(True, detail)``  — implementation is consistent with
+          constant-time on this host.
+        * ``(False, detail)`` — measured |t| exceeds the threshold;
+          treat as a real leak and refuse to enter OPERATIONAL.
+        * ``(None, detail)``  — native consttime backend not loaded;
+          the test cannot run.  Honoured by the POST runner as a
+          skip (NOT as a pass), and escalated to ERROR under
+          ``AMA_FIPS_STRICT=1``.
+
+    This makes AMA-Crypto the first open-source library that
+    self-tests for timing leaks at startup via FIPS POST.
     """
     from ama_cryptography.secure_memory import _native_consttime_memcmp
 
     if _native_consttime_memcmp is None:
-        return True, "Skipped: native consttime_memcmp not available"
+        return None, "Constant-time oracle skipped: native consttime_memcmp not available"
 
     buf_size = 32
     equal_a = b"\xaa" * buf_size
@@ -781,7 +840,9 @@ def _timing_oracle_consttime() -> Tuple[bool, str]:
     differ_a = b"\xaa" * buf_size
     differ_b = b"\x55" * buf_size
 
-    # Warmup: stabilize CPU frequency, fill i-cache and branch predictors
+    # Warmup: stabilize CPU frequency, fill i-cache and branch predictors.
+    # 200 warmup iterations (up from 100) help the JIT and frequency
+    # scaling converge before the measurement window opens.
     for _ in range(_TIMING_WARMUP):
         _native_consttime_memcmp(equal_a, equal_b, buf_size)
         _native_consttime_memcmp(differ_a, differ_b, buf_size)
@@ -806,33 +867,9 @@ def _timing_oracle_consttime() -> Tuple[bool, str]:
             f"(equal={mean1:.0f}ns, differ={mean2:.0f}ns, n={n1})",
         )
 
-    # First pass failed — retry with 10x samples to distinguish a real
-    # leak from transient scheduler noise.  A genuine timing side-channel
-    # will reproduce with higher statistical power; noise averages out
-    # proportional to 1/sqrt(n).
-    mean1, mean2, var1, var2, n1 = _measure_timing_batch(
-        _TIMING_RETRY_ITERATIONS,
-        _native_consttime_memcmp,
-        equal_a,
-        equal_b,
-        differ_a,
-        differ_b,
-        buf_size,
-    )
-
-    se = math.sqrt(var1 / n1 + var2 / n1) if (var1 + var2) > 0 else 0.0
-    t_stat = (mean1 - mean2) / se if se > 0 else (0.0 if mean1 == mean2 else float("inf"))
-
-    if abs(t_stat) > _DUDECT_THRESHOLD:
-        return (
-            False,
-            f"Timing leak detected: |t|={abs(t_stat):.2f} > {_DUDECT_THRESHOLD} "
-            f"(equal={mean1:.0f}ns, differ={mean2:.0f}ns, n={n1})",
-        )
-
     return (
-        True,
-        f"Constant-time OK (retry): |t|={abs(t_stat):.2f} <= {_DUDECT_THRESHOLD} "
+        False,
+        f"Timing leak detected: |t|={abs(t_stat):.2f} > {_DUDECT_THRESHOLD} "
         f"(equal={mean1:.0f}ns, differ={mean2:.0f}ns, n={n1})",
     )
 
@@ -841,14 +878,29 @@ def _run_self_tests() -> bool:
     """
     Run all FIPS 140-3 power-on self-tests.
 
-    Returns True if all tests passed and module is OPERATIONAL.
-    Returns False and sets ERROR state if any test failed.
+    Returns True if all tests passed (skipped tests with the backend
+    unavailable are NOT counted as passes — see the tri-state semantics
+    on ``_SELF_TEST_RESULTS``) and module is OPERATIONAL.  Returns False
+    and sets ERROR state if any test failed.
+
+    Skip handling:
+        * Default (``AMA_FIPS_STRICT`` unset): a skipped KAT is logged
+          at WARNING and recorded in ``_SELF_TEST_RESULTS`` with
+          ``passed=None``.  POST continues.  ``module_status()``
+          becomes ``OPERATIONAL`` provided no test actually failed.
+        * Strict (``AMA_FIPS_STRICT=1``): a skipped KAT is escalated
+          to a hard failure — POST returns False and the module enters
+          ERROR.  Release wheels and FIPS-validated deployments should
+          set this so an absent backend (e.g. SPHINCS+ build flag
+          omitted) cannot silently degrade the approved-algorithm set.
     """
     global _MODULE_STATE, _ERROR_REASON, _SELF_TEST_RESULTS, _POST_DURATION_MS
     _MODULE_STATE = "SELF_TEST"
     _ERROR_REASON = None
     _SELF_TEST_RESULTS = []
     start = time.monotonic()
+
+    strict_mode = _env_flag_enabled(_AMA_FIPS_STRICT_ENV)
 
     # 1. Module integrity verification
     try:
@@ -881,6 +933,30 @@ def _run_self_tests() -> bool:
         try:
             passed, detail = test_fn()
             _SELF_TEST_RESULTS.append((name, passed, detail))
+            if passed is None:
+                # Skipped — backend not built.  Skip is NOT a pass:
+                # the previous behaviour ("(True, ...skipped)") let an
+                # absent backend silently disable its own POST coverage,
+                # turning the algorithm into an untested code path
+                # behind a still-OPERATIONAL module.  Under strict
+                # mode we now escalate; otherwise we log loudly so the
+                # operator can notice.
+                if strict_mode:
+                    _set_error(
+                        f"FIPS strict mode ({_AMA_FIPS_STRICT_ENV}=1): "
+                        f"{name} KAT cannot run — {detail}"
+                    )
+                    all_passed = False
+                    break
+                logger.warning(
+                    "FIPS 140-3 POST: %s KAT skipped (%s).  This backend has NO "
+                    "self-test coverage in this run.  Build the C library or set "
+                    "%s=1 to escalate this skip to a hard POST failure.",
+                    name,
+                    detail,
+                    _AMA_FIPS_STRICT_ENV,
+                )
+                continue
             if not passed:
                 all_passed = False
                 _set_error(detail)
@@ -892,35 +968,36 @@ def _run_self_tests() -> bool:
             all_passed = False
             break
 
-    # 3. Constant-time timing oracle (dudect-inspired)
-    # Retry up to 3 times before declaring failure.  Unlike the KATs above,
-    # this test is inherently probabilistic (Welch's t-test on wall-clock
-    # nanosecond measurements).  Transient environmental noise — GC pauses,
-    # CPU throttling, context switches, container scheduling — can inflate
-    # |t| above the 4.5 threshold even when the implementation is correct.
-    # Retrying is acceptable for FIPS POST here because:
-    #   (a) A *real* constant-time violation produces |t| >> 4.5 on every
-    #       attempt (the signal is structural, not transient).
-    #   (b) With 3 independent attempts the false-positive rate drops from
-    #       ~6.8e-6 per-import to ~3.1e-16 (assuming independence), making
-    #       spurious module shutdowns effectively impossible.
-    #   (c) The underlying KATs (deterministic, no retry) still gate all
-    #       algorithm correctness; the timing oracle is an *additional*
-    #       defence-in-depth layer, not the sole correctness check.
+    # 3. Constant-time timing oracle (dudect-inspired) — single
+    # deterministic pass (no retry).  See the docstring on
+    # ``_timing_oracle_consttime`` for rationale: retry-until-pass is
+    # a timing-leak amplifier and is removed.
     if all_passed:
-        oracle_passed = False
-        oracle_detail = ""
-        for _attempt in range(3):
-            try:
-                oracle_passed, oracle_detail = _timing_oracle_consttime()
-                if oracle_passed:
-                    break
-                # Retry on failure — transient noise is the most common cause
-            except Exception as exc:
-                oracle_detail = f"Timing oracle exception: {exc}"
-                oracle_passed = False
+        try:
+            oracle_passed, oracle_detail = _timing_oracle_consttime()
+        except Exception as exc:
+            oracle_detail = f"Timing oracle exception: {exc}"
+            oracle_passed = False
         _SELF_TEST_RESULTS.append(("consttime-oracle", oracle_passed, oracle_detail))
-        if not oracle_passed:
+        if oracle_passed is None:
+            # Native consttime not loaded — same skip semantics as the
+            # KATs above (skip ≠ pass).  Under strict mode this is a
+            # hard failure; otherwise we WARN and continue.
+            if strict_mode:
+                _set_error(
+                    f"FIPS strict mode ({_AMA_FIPS_STRICT_ENV}=1): "
+                    f"consttime-oracle cannot run — {oracle_detail}"
+                )
+                all_passed = False
+            else:
+                logger.warning(
+                    "FIPS 140-3 POST: consttime-oracle skipped (%s).  "
+                    "Native constant-time backend is required for timing-leak "
+                    "self-test; set %s=1 to escalate.",
+                    oracle_detail,
+                    _AMA_FIPS_STRICT_ENV,
+                )
+        elif oracle_passed is False:
             all_passed = False
             _set_error(oracle_detail)
 
@@ -945,10 +1022,16 @@ def _run_self_tests() -> bool:
 
     if all_passed:
         _set_operational()
+        # Count outcomes for the operator log
+        n_pass = sum(1 for _, p, _ in _SELF_TEST_RESULTS if p is True)
+        n_skip = sum(1 for _, p, _ in _SELF_TEST_RESULTS if p is None)
         logger.info(
-            "FIPS 140-3 POST completed successfully in %.1f ms (%d tests)",
+            "FIPS 140-3 POST completed successfully in %.1f ms "
+            "(%d tests run; %d passed, %d skipped)",
             _POST_DURATION_MS,
             len(_SELF_TEST_RESULTS),
+            n_pass,
+            n_skip,
         )
 
     return all_passed
