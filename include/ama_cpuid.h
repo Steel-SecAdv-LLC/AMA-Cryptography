@@ -279,6 +279,22 @@ int ama_has_arm_aes(void);
 int ama_has_arm_pmull(void);
 
 /**
+ * @brief Bundle check: ARMv8 AES + PMULL gate for the NEON AES-GCM kernel.
+ *
+ * The NEON AES-GCM kernel (src/c/neon/ama_aes_gcm_neon.c) emits
+ * vaeseq_u8 / vaesmcq_u8 (ARMv8 AES) for the round function and
+ * vmull_p64 / vmull_high_p64 (ARMv8 PMULL) for the GHASH multiply.
+ * Both feature bits are optional on ARMv8 (they ship together on every
+ * Cortex-A55+ / Apple Silicon part, but the ISA documents them as
+ * separate FEAT_AES + FEAT_PMULL features — mirror the defensive
+ * per-bit contract used by `ama_cpuid_has_vaes_aesgcm()` on x86-64).
+ *
+ * Returns 1 only when both bits are present in HWCAP / sysctl.
+ * Non-AArch64 builds return 0 unconditionally.
+ */
+int ama_cpuid_has_arm_aes(void);
+
+/**
  * @brief Check for ARMv8 NEON advanced-SIMD support.
  * @return 1 if NEON is available, 0 otherwise. Cached after first call.
  */

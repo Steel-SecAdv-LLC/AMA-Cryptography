@@ -474,7 +474,14 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
 
         # Calculate percent change from baseline.
         # Positive = faster than baseline, negative = slower than baseline.
-        pct_change = ((ops_per_sec - baseline_value) / baseline_value) * 100
+        # When baseline_value is 0 ("first run on this runner class — record
+        # current measurement as the new baseline"), there is no prior
+        # number to regress against, so report the recorded value as a
+        # PASS rather than dividing by zero.
+        if baseline_value == 0:
+            pct_change = 0.0
+        else:
+            pct_change = ((ops_per_sec - baseline_value) / baseline_value) * 100
         # Only fail on regressions (slower).  Improvements always pass.
         regression = -pct_change  # positive = slower
         passed = regression <= tolerance
@@ -514,7 +521,12 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
         baseline_value = config["baseline_value"]
         tolerance = config.get("tolerance_percent", threshold)
 
-        pct_change = ((ops_per_sec - baseline_value) / baseline_value) * 100
+        # Same baseline_value==0 first-run guard as the core benchmark loop:
+        # avoid ZeroDivisionError when seeding a fresh runner-class baseline.
+        if baseline_value == 0:
+            pct_change = 0.0
+        else:
+            pct_change = ((ops_per_sec - baseline_value) / baseline_value) * 100
         regression = -pct_change
         passed = regression <= tolerance
 

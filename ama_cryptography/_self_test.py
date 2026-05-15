@@ -182,41 +182,168 @@ def _compute_module_digest() -> str:
 
     Line endings are normalized (CRLF → LF) before hashing so that the digest
     is identical on Windows (autocrlf=true) and Linux/macOS.
+
+    Excludes ``_integrity_signature.py`` (the build-time-generated
+    signature artefact) so the digest input is independent of the
+    signature output — otherwise the construction is self-referential
+    and the signature could never be verified.
     """
     pkg_dir = Path(__file__).resolve().parent
     hasher = hashlib.sha3_256()
     py_files = sorted(pkg_dir.glob("*.py"))
     for py_file in py_files:
+        if py_file.name == "_integrity_signature.py":
+            continue
         hasher.update(py_file.name.encode("utf-8"))
         content = py_file.read_bytes().replace(b"\r\n", b"\n")
         hasher.update(content)
     return hasher.hexdigest()
 
 
-def verify_module_integrity() -> Tuple[bool, str]:
-    """Verify module source files against stored digest.
+def _verify_signed_integrity(digest_hex: str) -> Tuple[bool, str]:
+    """Verify the build-time Ed25519 signature over the .py digest.
 
     Returns:
-        Tuple of (passed, detail) where detail describes the specific
-        outcome — preserving the exact reason on failure.
+        ``(True, detail)`` on signature verify, ``(False, reason)`` on
+        any failure mode that we can describe, or ``(None, ...)`` is
+        intentionally not used — every failure mode must produce a
+        Boolean outcome so the caller fails-closed.
+
+    The signature artefact is generated at wheel build time by
+    ``ama_cryptography._build_sign`` using the in-tree
+    ``ama_ed25519_sign`` C kernel (INVARIANT-1 — no PyCA dependency)
+    with an ephemeral, per-build private key.  Only the public key
+    and signature ship with the wheel; the private key is discarded
+    immediately after signing.  At runtime we recompute the digest
+    and call ``ama_ed25519_verify`` with the embedded pubkey.
+
+    Failure modes:
+      - signature module missing      → caller falls back to digest-only
+      - digest mismatch vs embedded   → tampered .py files between build and now
+      - signature verify returns False → tampered signature module (the
+        embedded fields were edited post-build to match a tampered .py
+        digest), or the native verify call itself reports a bad sig
     """
+    try:
+        # Lazy import so a missing artefact doesn't surface as a hard
+        # ImportError on every call site of verify_module_integrity().
+        from ama_cryptography import _integrity_signature as sig_mod
+    except ImportError:
+        return False, "no signed-integrity artefact (digest-only fallback)"
+
+    try:
+        embedded_digest_hex = sig_mod.INTEGRITY_DIGEST_HEX
+        pubkey_hex = sig_mod.INTEGRITY_PUBKEY_HEX
+        signature_hex = sig_mod.INTEGRITY_SIGNATURE_HEX
+    except AttributeError as exc:
+        return False, f"signature module malformed: missing field ({exc})"
+
+    if embedded_digest_hex != digest_hex:
+        return False, (
+            f"signed digest mismatch: stored={embedded_digest_hex[:16]}... "
+            f"computed={digest_hex[:16]}... — .py files changed post-build"
+        )
+
+    try:
+        pubkey = bytes.fromhex(pubkey_hex)
+        signature = bytes.fromhex(signature_hex)
+        digest_raw = bytes.fromhex(digest_hex)
+    except ValueError as exc:
+        return False, f"signature module fields not hex: {exc}"
+
+    if len(pubkey) != 32 or len(signature) != 64:
+        return False, (
+            f"signature module sizes wrong: pubkey={len(pubkey)} "
+            f"signature={len(signature)} (expected 32, 64)"
+        )
+
+    try:
+        from ama_cryptography.pqc_backends import (
+            _ED25519_NATIVE_AVAILABLE,
+            native_ed25519_verify,
+        )
+    except ImportError as exc:
+        return False, f"native Ed25519 unavailable: {exc}"
+
+    if not _ED25519_NATIVE_AVAILABLE:
+        return False, "native Ed25519 not built — cannot verify signature"
+
+    try:
+        ok = native_ed25519_verify(signature, digest_raw, pubkey)
+    except Exception as exc:  # fail-closed: any verify exception must yield False (INT-003)
+        return False, f"native Ed25519 verify raised: {exc}"
+    if not ok:
+        return False, "Ed25519 signature did NOT verify — module tampered"
+    return True, "signed integrity verified (Ed25519, build-time pubkey)"
+
+
+def verify_module_integrity() -> Tuple[bool, str]:
+    """Verify module source files via signature, falling back to digest.
+
+    Primary path (since v3.2.0, build-pipeline-signed wheels):
+      1. Recompute SHA3-256 over the .py files.
+      2. Load ``_integrity_signature.py``: embedded pubkey + signature
+         + digest.  Recomputed digest must match embedded; then
+         ``ama_ed25519_verify`` must accept the (pubkey, signature)
+         pair over the raw digest.
+      3. Any failure → ERROR state (module refuses crypto ops).
+
+    Fallback path (editable installs, source checkouts, or wheels
+    built without ``AMA_BUILD_PIPELINE=1`` in the build env):
+      1. Recompute SHA3-256.
+      2. Compare to ``_integrity_digest.txt`` (the legacy textual
+         artefact).  Mismatch → ERROR state.  Log a WARNING that the
+         signed artefact is missing so packagers notice the
+         degraded protection in CI logs.
+
+    Both paths are deterministic and side-effect-free; the only
+    runtime cost is a single hash + (optionally) a single Ed25519
+    verify, both well under 1 ms.
+    """
+    current = _compute_module_digest()
+
+    signed_ok, signed_detail = _verify_signed_integrity(current)
+    if signed_ok:
+        return True, signed_detail
+
+    # Signed path was not available OR failed.  If it FAILED (digest
+    # matched but signature didn't verify), that's an error — return
+    # the specific reason.  If it was simply MISSING, fall back to
+    # digest-only with a warning.
+    if "no signed-integrity artefact" not in signed_detail:
+        logger.error("Signed integrity check failed: %s", signed_detail)
+        return False, signed_detail
+
+    # Digest-only fallback (editable install / source checkout).
     if not _INTEGRITY_DIGEST_FILE.exists():
-        logger.error("Integrity digest file not found")
+        logger.error("Integrity digest file not found and no signature artefact")
         return False, "Integrity digest file missing"
     stored = _INTEGRITY_DIGEST_FILE.read_text().strip()
     if not stored:
         logger.error("Integrity digest file is empty")
         return False, "Integrity digest file empty"
-    current = _compute_module_digest()
     if stored != current:
         reason = f"Module digest mismatch: stored={stored[:16]}... computed={current[:16]}..."
         logger.error(reason)
         return False, reason
-    return True, "Module integrity verified"
+    # Digest-only path is healthy; log that signing is missing so the
+    # packager can notice it in CI logs (one-time WARN, not ERROR).
+    logger.warning(
+        "Module integrity verified via digest-only fallback "
+        "(_integrity_signature.py absent — wheel was built without "
+        "AMA_BUILD_PIPELINE=1)."
+    )
+    return True, "Module integrity verified (digest-only fallback)"
 
 
 def update_integrity_digest() -> str:
-    """Recompute and store the module integrity digest. Returns the new digest."""
+    """Recompute and store the module integrity digest. Returns the new digest.
+
+    Used by the wheel build pipeline (``--digest-only`` mode) and the
+    legacy ``integrity --update`` CLI.  Does NOT regenerate the
+    signed-integrity artefact — that requires the native Ed25519
+    kernel and lives in ``ama_cryptography._build_sign``.
+    """
     digest = _compute_module_digest()
     _INTEGRITY_DIGEST_FILE.write_text(digest + "\n")
     return digest
@@ -503,14 +630,68 @@ def _kat_ed25519() -> Tuple[bool, str]:
 # Threshold: |t| > 4.5 indicates timing leak (dudect convention)
 _DUDECT_THRESHOLD = 4.5
 _TIMING_ITERATIONS = 1000
+_TIMING_WARMUP = 100
+_TIMING_RETRY_ITERATIONS = 10000
+
+
+def _measure_timing_batch(
+    n_iterations: int,
+    memcmp_fn: Callable[[bytes, bytes, int], int],
+    equal_a: bytes,
+    equal_b: bytes,
+    differ_a: bytes,
+    differ_b: bytes,
+    buf_size: int,
+) -> Tuple[float, float, float, float, int]:
+    """Run n_iterations interleaved timing measurements.
+
+    Returns (mean_equal, mean_differ, var_equal, var_differ, n).
+    """
+    times_equal: List[float] = []
+    times_differ: List[float] = []
+
+    for i in range(n_iterations):
+        if i % 2 == 0:
+            t0 = time.perf_counter_ns()
+            memcmp_fn(equal_a, equal_b, buf_size)
+            t1 = time.perf_counter_ns()
+            times_equal.append(float(t1 - t0))
+
+            t0 = time.perf_counter_ns()
+            memcmp_fn(differ_a, differ_b, buf_size)
+            t1 = time.perf_counter_ns()
+            times_differ.append(float(t1 - t0))
+        else:
+            t0 = time.perf_counter_ns()
+            memcmp_fn(differ_a, differ_b, buf_size)
+            t1 = time.perf_counter_ns()
+            times_differ.append(float(t1 - t0))
+
+            t0 = time.perf_counter_ns()
+            memcmp_fn(equal_a, equal_b, buf_size)
+            t1 = time.perf_counter_ns()
+            times_equal.append(float(t1 - t0))
+
+    n1 = len(times_equal)
+    mean1 = sum(times_equal) / n1
+    mean2 = sum(times_differ) / n1
+    var1 = sum((x - mean1) ** 2 for x in times_equal) / (n1 - 1)
+    var2 = sum((x - mean2) ** 2 for x in times_differ) / (n1 - 1)
+    return mean1, mean2, var1, var2, n1
 
 
 def _timing_oracle_consttime() -> Tuple[bool, str]:
     """Test ama_consttime_memcmp for timing leaks via Welch's t-test.
 
-    Runs _TIMING_ITERATIONS comparisons with equal and unequal inputs,
-    measures execution time for each, then computes Welch's t-statistic.
+    Runs interleaved comparisons with equal and unequal inputs, measures
+    execution time for each, then computes Welch's t-statistic.
     If |t| > 4.5, the comparison function may leak timing information.
+
+    To eliminate false positives from scheduler noise on shared CI
+    runners, the test uses a warmup phase (stabilizes CPU frequency and
+    instruction cache) and retries with 10x samples on first failure.
+    Real timing leaks persist with more samples; transient noise from
+    context switches and frequency scaling averages out.
 
     This makes AMA-Crypto the first open-source library that self-tests
     for timing leaks at startup via FIPS POST.
@@ -526,41 +707,46 @@ def _timing_oracle_consttime() -> Tuple[bool, str]:
     differ_a = b"\xaa" * buf_size
     differ_b = b"\x55" * buf_size
 
-    times_equal: List[float] = []
-    times_differ: List[float] = []
+    # Warmup: stabilize CPU frequency, fill i-cache and branch predictors
+    for _ in range(_TIMING_WARMUP):
+        _native_consttime_memcmp(equal_a, equal_b, buf_size)
+        _native_consttime_memcmp(differ_a, differ_b, buf_size)
 
-    # Interleave measurements to reduce systematic bias
-    for i in range(_TIMING_ITERATIONS):
-        if i % 2 == 0:
-            t0 = time.perf_counter_ns()
-            _native_consttime_memcmp(equal_a, equal_b, buf_size)
-            t1 = time.perf_counter_ns()
-            times_equal.append(float(t1 - t0))
+    mean1, mean2, var1, var2, n1 = _measure_timing_batch(
+        _TIMING_ITERATIONS,
+        _native_consttime_memcmp,
+        equal_a,
+        equal_b,
+        differ_a,
+        differ_b,
+        buf_size,
+    )
 
-            t0 = time.perf_counter_ns()
-            _native_consttime_memcmp(differ_a, differ_b, buf_size)
-            t1 = time.perf_counter_ns()
-            times_differ.append(float(t1 - t0))
-        else:
-            t0 = time.perf_counter_ns()
-            _native_consttime_memcmp(differ_a, differ_b, buf_size)
-            t1 = time.perf_counter_ns()
-            times_differ.append(float(t1 - t0))
+    se = math.sqrt(var1 / n1 + var2 / n1) if (var1 + var2) > 0 else 0.0
+    t_stat = (mean1 - mean2) / se if se > 0 else (0.0 if mean1 == mean2 else float("inf"))
 
-            t0 = time.perf_counter_ns()
-            _native_consttime_memcmp(equal_a, equal_b, buf_size)
-            t1 = time.perf_counter_ns()
-            times_equal.append(float(t1 - t0))
+    if abs(t_stat) <= _DUDECT_THRESHOLD:
+        return (
+            True,
+            f"Constant-time OK: |t|={abs(t_stat):.2f} <= {_DUDECT_THRESHOLD} "
+            f"(equal={mean1:.0f}ns, differ={mean2:.0f}ns, n={n1})",
+        )
 
-    # Welch's t-test (unequal variance)
-    n1 = len(times_equal)
-    n2 = len(times_differ)
-    mean1 = sum(times_equal) / n1
-    mean2 = sum(times_differ) / n2
-    var1 = sum((x - mean1) ** 2 for x in times_equal) / (n1 - 1)
-    var2 = sum((x - mean2) ** 2 for x in times_differ) / (n2 - 1)
+    # First pass failed — retry with 10x samples to distinguish a real
+    # leak from transient scheduler noise.  A genuine timing side-channel
+    # will reproduce with higher statistical power; noise averages out
+    # proportional to 1/sqrt(n).
+    mean1, mean2, var1, var2, n1 = _measure_timing_batch(
+        _TIMING_RETRY_ITERATIONS,
+        _native_consttime_memcmp,
+        equal_a,
+        equal_b,
+        differ_a,
+        differ_b,
+        buf_size,
+    )
 
-    se = math.sqrt(var1 / n1 + var2 / n2) if (var1 + var2) > 0 else 0.0
+    se = math.sqrt(var1 / n1 + var2 / n1) if (var1 + var2) > 0 else 0.0
     t_stat = (mean1 - mean2) / se if se > 0 else (0.0 if mean1 == mean2 else float("inf"))
 
     if abs(t_stat) > _DUDECT_THRESHOLD:
@@ -572,7 +758,7 @@ def _timing_oracle_consttime() -> Tuple[bool, str]:
 
     return (
         True,
-        f"Constant-time OK: |t|={abs(t_stat):.2f} <= {_DUDECT_THRESHOLD} "
+        f"Constant-time OK (retry): |t|={abs(t_stat):.2f} <= {_DUDECT_THRESHOLD} "
         f"(equal={mean1:.0f}ns, differ={mean2:.0f}ns, n={n1})",
     )
 

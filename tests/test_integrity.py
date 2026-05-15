@@ -31,13 +31,46 @@ from ama_cryptography.integrity import main
 class TestIntegrityCLI:
     """Test the integrity CLI entry point."""
 
-    def test_update_calls_update_digest(self) -> None:
+    def test_update_calls_update_digest_under_build_pipeline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--update only proceeds when AMA_BUILD_PIPELINE=1.
+
+        The wheel build pipeline sets the env var before invoking the
+        CLI so the digest can be regenerated post-build; outside that
+        flow, --update would silently re-bless tampered .py files and
+        defeat the FIPS 140-3 §4.9.1 tamper-detection contract.  The
+        gate is documented in SECURITY.md.
+        """
+        monkeypatch.setenv("AMA_BUILD_PIPELINE", "1")
         with patch(
             "ama_cryptography.integrity.update_integrity_digest", return_value="abc123"
         ) as mock_update:
             with patch("sys.argv", ["integrity", "--update"]):
-                main()
+                rc = main()
             mock_update.assert_called_once()
+            assert rc == 0
+
+    def test_update_outside_build_pipeline_refuses(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        """--update without AMA_BUILD_PIPELINE=1 exits non-zero.
+
+        This is the post-build tamper-detection guarantee — a user who
+        edits a .py file post-install cannot re-bless their own copy
+        with `python -m ama_cryptography.integrity --update`.
+        """
+        monkeypatch.delenv("AMA_BUILD_PIPELINE", raising=False)
+        with patch(
+            "ama_cryptography.integrity.update_integrity_digest", return_value="abc123"
+        ) as mock_update:
+            with patch("sys.argv", ["integrity", "--update"]):
+                rc = main()
+            mock_update.assert_not_called()
+            assert rc != 0
+        # The CLI prints a remediation hint to stderr.
+        captured = capsys.readouterr()
+        assert "AMA_BUILD_PIPELINE" in captured.err
 
     def test_verify_success(self) -> None:
         with patch(
@@ -45,17 +78,17 @@ class TestIntegrityCLI:
             return_value=(True, ""),
         ):
             with patch("sys.argv", ["integrity", "--verify"]):
-                main()  # should not raise
+                rc = main()
+                assert rc == 0
 
-    def test_verify_failure_exits_with_code_1(self) -> None:
+    def test_verify_failure_returns_non_zero(self) -> None:
         with patch(
             "ama_cryptography.integrity.verify_module_integrity",
             return_value=(False, "digest mismatch"),
         ):
             with patch("sys.argv", ["integrity", "--verify"]):
-                with pytest.raises(SystemExit) as exc_info:
-                    main()
-                assert exc_info.value.code == 1
+                rc = main()
+                assert rc == 1
 
     def test_show_prints_digest(self, capsys: Any) -> None:
         with patch(
@@ -63,7 +96,8 @@ class TestIntegrityCLI:
             return_value="deadbeef1234",
         ):
             with patch("sys.argv", ["integrity", "--show"]):
-                main()
+                rc = main()
+                assert rc == 0
         captured = capsys.readouterr()
         assert "deadbeef1234" in captured.out
 

@@ -556,9 +556,17 @@ void ama_aes256_gcm_encrypt_vaes_avx2(
     __m128i tag_val = _mm_xor_si128(ghash_acc, enc_j0);
     _mm_storeu_si128((__m128i *)tag, tag_val);
 
-    /* Scrub key material from stack. */
+    /* Scrub key material from stack.  Adds GHASH key H, the H power
+     * precompute (H^2, H^3, H^4), and the J0 tag-mask alongside the
+     * XMM/YMM round-key schedule.  Each is derivable from the AES-256
+     * key class via tag forgery if recovered from a stack snapshot. */
     ama_secure_memzero(rk,  sizeof(rk));
     ama_secure_memzero(rky, sizeof(rky));
+    ama_secure_memzero(&H,  sizeof(H));
+    ama_secure_memzero(&H2, sizeof(H2));
+    ama_secure_memzero(&H3, sizeof(H3));
+    ama_secure_memzero(&H4, sizeof(H4));
+    ama_secure_memzero(&enc_j0, sizeof(enc_j0));
     /* Zero the AVX upper halves to avoid an SSE/AVX transition penalty
      * for the next caller running in the legacy SSE register file. */
     _mm256_zeroupper();
@@ -639,6 +647,11 @@ ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
         ama_secure_memzero(rk, sizeof(rk));
         ama_secure_memzero(rky, sizeof(rky));
         ama_secure_memzero(computed_tag_bytes, sizeof(computed_tag_bytes));
+        ama_secure_memzero(&H,  sizeof(H));
+        ama_secure_memzero(&H2, sizeof(H2));
+        ama_secure_memzero(&H3, sizeof(H3));
+        ama_secure_memzero(&H4, sizeof(H4));
+        ama_secure_memzero(&enc_j0, sizeof(enc_j0));
         _mm256_zeroupper();
         return AMA_ERROR_VERIFY_FAILED;
     }
@@ -686,6 +699,12 @@ ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
     ama_secure_memzero(rk,  sizeof(rk));
     ama_secure_memzero(rky, sizeof(rky));
     ama_secure_memzero(computed_tag_bytes, sizeof(computed_tag_bytes));
+    /* Scrub GHASH key H, the H power precompute, and the J0 tag-mask. */
+    ama_secure_memzero(&H,  sizeof(H));
+    ama_secure_memzero(&H2, sizeof(H2));
+    ama_secure_memzero(&H3, sizeof(H3));
+    ama_secure_memzero(&H4, sizeof(H4));
+    ama_secure_memzero(&enc_j0, sizeof(enc_j0));
     _mm256_zeroupper();
     return AMA_SUCCESS;
 }

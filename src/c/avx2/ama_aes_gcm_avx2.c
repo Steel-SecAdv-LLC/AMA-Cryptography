@@ -321,8 +321,14 @@ void ama_aes256_gcm_encrypt_avx2(
     __m128i tag_val = _mm_xor_si128(ghash_acc, enc_j0);
     _mm_storeu_si128((__m128i *)tag, tag_val);
 
-    /* Scrub sensitive key material from stack (matching generic C path) */
-    ama_secure_memzero(rk, sizeof(rk));
+    /* Scrub sensitive key material from stack (mirrors generic C path
+     * in ama_aes_gcm.c:434-438).  Round-key schedule, GHASH key H, and
+     * the J0 keystream block (tag-mask) all leak the AES-256 key class
+     * via tag forgery if recovered.  ama_secure_memzero uses a
+     * compiler-barrier so the writes are not DCE'd away. */
+    ama_secure_memzero(rk,      sizeof(rk));
+    ama_secure_memzero(&H,      sizeof(H));
+    ama_secure_memzero(&enc_j0, sizeof(enc_j0));
 }
 
 /**
@@ -403,6 +409,8 @@ ama_error_t ama_aes256_gcm_decrypt_avx2(
     if (ama_consttime_memcmp(computed_tag_bytes, tag, 16) != 0) {
         ama_secure_memzero(rk, sizeof(rk));
         ama_secure_memzero(computed_tag_bytes, sizeof(computed_tag_bytes));
+        ama_secure_memzero(&H, sizeof(H));
+        ama_secure_memzero(&enc_j0, sizeof(enc_j0));
         return AMA_ERROR_VERIFY_FAILED;
     }
 
@@ -470,9 +478,13 @@ ama_error_t ama_aes256_gcm_decrypt_avx2(
         memcpy(plaintext + full_blocks * 16, pad_pt, remaining);
     }
 
-    /* Scrub sensitive key material from stack */
+    /* Scrub sensitive key material from stack.  H is the GHASH key
+     * (AES_K(0)) and enc_j0 is the tag-mask; both leak AES-256 key
+     * class via tag forgery if recovered from a stack snapshot. */
     ama_secure_memzero(rk, sizeof(rk));
     ama_secure_memzero(computed_tag_bytes, sizeof(computed_tag_bytes));
+    ama_secure_memzero(&H, sizeof(H));
+    ama_secure_memzero(&enc_j0, sizeof(enc_j0));
 
     return AMA_SUCCESS;
 }
