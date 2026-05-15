@@ -1,44 +1,34 @@
-# Production Dependencies for AMA Cryptography 2.1
+# Production Dependencies for AMA Cryptography 3.1+
 # Install with: pip install -r requirements.txt
 #
-# Core cryptographic operations — ZERO external Python dependencies required.
-# The native C library (libama_cryptography) provides:
+# INVARIANT-1: Core cryptographic operations have ZERO external Python
+# crypto dependencies.  The native C library (libama_cryptography) provides
+# every primitive used by the runtime path:
 #   - Ed25519 digital signatures (RFC 8032)
-#   - AES-256-GCM authenticated encryption
-#   - HKDF key derivation (RFC 5869)
-#   - SHA3-256 / SHA-512 hashing
-#   - Constant-time comparison utilities
+#   - AES-256-GCM authenticated encryption (NIST SP 800-38D)
+#   - HKDF-SHA3-256 key derivation (RFC 5869) — INVARIANT-7: no Python fallback
+#   - SHA3-256 / HMAC-SHA3-256 / SHA-512 hashing
+#   - Constant-time comparison utilities (dudect-verified)
+#   - ML-DSA-65 (FIPS 204), ML-KEM-1024 (FIPS 203), SLH-DSA (FIPS 205)
 # Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
-
-# Legacy PyCA cryptography fallback (OPTIONAL)
-# Only needed if native C library is not built/available.
-# Install with: pip install "ama-cryptography[legacy]"
-# cryptography>=41.0.0
-
-# Quantum-resistant cryptography — fully native C backend
-# The native C library (libama_cryptography) provides ML-DSA-65, Kyber-1024,
-# and SPHINCS+-256f without any external PQC dependencies.
 #
-# All implementations pass NIST KAT (Known Answer Test) validation:
-#   - FIPS 203 (ML-KEM-1024): 10/10 KAT vectors pass
-#   - FIPS 204 (ML-DSA-65): 10/10 KAT vectors pass
-#   - FIPS 205 (SPHINCS+-SHA2-256f-simple): Native implementation
+# This file is intentionally minimal because pyproject.toml's [project]
+# table is the single source of truth for declared dependencies.  Listing
+# them twice creates drift; this file exists only as a discoverability
+# breadcrumb for downstream tools that grep for requirements.txt.
 
 # Secure memory operations (OPTIONAL, recommended for high-security environments)
-# The secure_memory module uses AMA native C backend or POSIX mlock/munlock.
-# PyNaCl is reserved for future libsodium integration.
+# The secure_memory module uses the AMA native C backend or POSIX mlock/munlock.
 # Install with: pip install "ama-cryptography[secure-memory]"
 # pynacl>=1.5.0
 
 # HSM integration (OPTIONAL)
-# PKCS#11 support for hardware security modules
+# PKCS#11 support for hardware security modules.
 # Install with: pip install "ama-cryptography[hsm]"
 # PyKCS11>=1.5.18
 
 # Mathematical monitoring dependencies (OPTIONAL)
-# The core cryptographic operations work without numpy/scipy.
-# Install for mathematical monitoring (ama_cryptography_monitor):
-#   pip install "ama-cryptography[monitoring]"
-#
+# Core cryptographic operations work without numpy/scipy.
+# Install with: pip install "ama-cryptography[monitoring]"
 # numpy>=1.24.0,<3.0.0
 # scipy>=1.7.0

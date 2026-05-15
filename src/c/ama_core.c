@@ -87,6 +87,14 @@ void ama_version_number(int* major, int* minor, int* patch) {
     if (patch) *patch = AMA_CRYPTOGRAPHY_VERSION_PATCH;
 }
 
+#ifndef AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX
+#define AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX ""
+#endif
+
+const char* ama_integrity_trust_anchor_pubkey_hex(void) {
+    return AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX;
+}
+
 /**
  * Initialize AMA Cryptography context
  */

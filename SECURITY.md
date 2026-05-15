@@ -275,7 +275,8 @@ both the digest and the signing key are produced by the same build
 that produced the code being signed.  The contract is:
 
 1. The wheel build computes SHA3-256 over the package's `.py` files,
-   generates an **ephemeral, per-build Ed25519 key**, signs the
+   generates an **ephemeral, per-build Ed25519 key** by default (or
+   uses `AMA_INTEGRITY_SIGNING_SEED_HEX` in release CI), signs the
    digest, embeds **the signature + the public verification key** as
    a Python literal in `ama_cryptography/_integrity_signature.py`,
    then **discards the private key** before publishing the wheel.
@@ -286,11 +287,16 @@ that produced the code being signed.  The contract is:
    transitions the module to the ERROR state and refuses every
    cryptographic operation.
 
-There is **no long-lived signing key**.  Each build generates,
-signs once, and discards.  That eliminates the "key theft = forge
-arbitrary updates" failure mode at the cost of binding integrity to
-a single wheel artefact — exactly what FIPS 140-3 §4.9.1 requires
-("integrity of cryptographic module software / firmware"). 
+There is **no long-lived signing key in developer builds**.  Each
+default build generates, signs once, and discards.  Release CI may
+compile the expected public key into the native library with CMake's
+`AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` option and set
+`AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1`; then the build signer refuses
+to emit an artefact whose derived public key does not match the native
+anchor, and the import-time verifier fails closed if the embedded
+public key is not that anchor.  This gives release packaging a stable
+trust-anchor gate without adding any external crypto dependency or
+trusting mutable Python source for the anchor.
 
 ### `--update` is build-pipeline-only
 
@@ -308,24 +314,37 @@ Both halves ship together in the AArch64-completeness PR (2026-05):
    gate the command exits 2 with a remediation message.  See
    `ama_cryptography/integrity.py`.
 2. **Signing pipeline** — `python -m ama_cryptography._build_sign`
-   (invoked by the build pipeline, e.g. `setup.py` post-build hook /
-   CMake post-install step / wheel CI workflow) generates an ephemeral
-   Ed25519 keypair via the in-tree `ama_ed25519_keypair` C symbol
-   (INVARIANT-1: no PyCA dependency), signs the SHA3-256 digest with
-   `ama_ed25519_sign`, writes `ama_cryptography/_integrity_signature.py`
-   with the embedded pubkey + signature + digest, and discards the
-   private key before exit.  See `ama_cryptography/_build_sign.py`.
+    (invoked by the build pipeline, e.g. `setup.py` post-build hook /
+    CMake post-install step / wheel CI workflow) generates an ephemeral
+    Ed25519 keypair (or uses `AMA_INTEGRITY_SIGNING_SEED_HEX` in
+    release CI) via the in-tree `ama_ed25519_keypair` C symbol
+    (INVARIANT-1: no PyCA dependency), checks the resulting public key
+    against the C-compiled trust anchor when one is present, signs the
+    SHA3-256 digest with `ama_ed25519_sign`, writes
+    `ama_cryptography/_integrity_signature.py` with the embedded pubkey
+    + signature + digest, and discards the private key before exit.
+    See `ama_cryptography/_build_sign.py`.
 3. **Import-time verifier** — `_self_test._verify_integrity()` calls
-   `_verify_signed_integrity()` first.  When the signature artefact is
-   present (the normal post-wheel-build state), it recomputes the
-   digest, calls `ama_ed25519_verify` via ctypes with the embedded
-   pubkey and signature, and accepts only on a positive verify.  When
-   the artefact is absent (editable installs, source checkouts,
-   wheels built without `AMA_BUILD_PIPELINE=1`), the module falls
-   back to digest-only verification against `_integrity_digest.txt`
-   with a logged WARNING — developer ergonomics do not require a
-   full wheel build on every edit, but packagers see the missing
-   signature in CI logs.
+    `_verify_signed_integrity()` first.  When the signature artefact is
+    present (the normal post-wheel-build state), it recomputes the
+    digest, reads any native trust anchor via
+    `ama_integrity_trust_anchor_pubkey_hex()`, calls
+    `ama_ed25519_verify` via ctypes with the embedded pubkey and
+    signature, and accepts only on a positive verify plus trust-anchor
+    match when configured.  When the artefact is absent (editable
+    installs, source checkouts, wheels built without
+    `AMA_BUILD_PIPELINE=1`), the behaviour depends on
+    `AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR`:
+    - **Unset (developer / editable / source-checkout path):** the
+      module falls back to digest-only verification against
+      `_integrity_digest.txt` with a logged WARNING.  Developer
+      ergonomics do not require a full wheel build on every edit;
+      packagers still see the missing signature in CI logs.
+    - **`=1` (release path):** the module refuses to fall back and
+      transitions to ERROR state — release wheels MUST ship the
+      Ed25519-signed artefact or every crypto call is rejected.  This
+      makes a forgotten `AMA_BUILD_PIPELINE=1` in the release pipeline
+      a hard failure instead of a silent posture downgrade.
 
 End-to-end smoke test (from the AArch64-completeness PR's CI):
 

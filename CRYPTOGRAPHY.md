@@ -234,7 +234,7 @@ combined_ss = HKDF-SHA3-256(
 
 **Security:** IND-CCA2 secure if **either** component KEM remains unbroken. Ciphertext binding prevents mix-and-match attacks.
 
-**Implementation:** `ama_cryptography/hybrid_combiner.py` — uses native C HKDF-SHA3-256 with Python fallback.
+**Implementation:** `ama_cryptography/hybrid_combiner.py` — INVARIANT-7 requires native C HKDF-SHA3-256 (`ama_hkdf`). The `combine()` method refuses to fall back to Python HKDF; the pure-Python `_hkdf_python` static method is retained solely for direct unit testing of the HKDF construction (`TestHKDFEdgeCases`) and is NEVER reached from a production code path.
 
 ## Defense-in-Depth Layers
 

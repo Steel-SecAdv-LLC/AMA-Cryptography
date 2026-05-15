@@ -19,10 +19,12 @@ Author/Inventor: Andrew E. A.
 Version: 3.0.0
 """
 
+import ctypes
 import hashlib
 import json
 import logging
 import math
+import os
 import secrets
 import time
 from pathlib import Path
@@ -175,6 +177,53 @@ def pairwise_test_kem(
 # ============================================================================
 
 _INTEGRITY_DIGEST_FILE = Path(__file__).resolve().parent / "_integrity_digest.txt"
+_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV = "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR"
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when a boolean environment variable is explicitly enabled."""
+    return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
+
+
+def _load_integrity_trust_anchor() -> Tuple[Optional[str], Optional[str]]:
+    """Return the configured trust-anchor pubkey hex or an error string.
+
+    The trust anchor is compiled into the native library rather than read from
+    mutable Python source.  Developer builds return an empty string and keep
+    using the per-build public key embedded in ``_integrity_signature.py``.
+    """
+    try:
+        from ama_cryptography.pqc_backends import _native_lib
+    except ImportError as exc:
+        return None, f"native backend unavailable for trust-anchor lookup: {exc}"
+
+    if _native_lib is None or not hasattr(_native_lib, "ama_integrity_trust_anchor_pubkey_hex"):
+        return None, None
+    # The native call and the decode/strip must both be inside the protected
+    # block: a broken ctypes binding can raise OSError, a malformed pointer
+    # can yield non-ASCII bytes that fail .decode(), and an unexpected
+    # NULL-terminator placement can produce a truncated buffer.  All three
+    # paths must collapse to a deterministic ``(None, reason)`` so callers
+    # fail-closed instead of surfacing a raw traceback from import-time POST.
+    try:
+        _native_lib.ama_integrity_trust_anchor_pubkey_hex.argtypes = []
+        _native_lib.ama_integrity_trust_anchor_pubkey_hex.restype = ctypes.c_char_p
+        raw_bytes = _native_lib.ama_integrity_trust_anchor_pubkey_hex()
+        raw = raw_bytes.decode("ascii") if raw_bytes else ""
+        anchor_hex = raw.strip().lower()
+    except Exception as exc:
+        return None, f"native trust-anchor lookup failed: {exc}"
+
+    if not anchor_hex:
+        return None, None
+    try:
+        anchor = bytes.fromhex(anchor_hex)
+    except ValueError as exc:
+        return None, f"integrity trust anchor is not hex: {exc}"
+    if len(anchor) != 32:
+        return None, f"integrity trust anchor has {len(anchor)} bytes (expected 32)"
+    return anchor_hex, None
 
 
 def _compute_module_digest() -> str:
@@ -257,6 +306,17 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[bool, str]:
             f"signature={len(signature)} (expected 32, 64)"
         )
 
+    trust_anchor_hex, trust_anchor_error = _load_integrity_trust_anchor()
+    if trust_anchor_error is not None:
+        return False, trust_anchor_error
+    if trust_anchor_hex is None and _env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV):
+        return False, "integrity trust anchor required but not configured"
+    if trust_anchor_hex is not None and pubkey_hex.strip().lower() != trust_anchor_hex:
+        return False, (
+            "integrity trust anchor mismatch: "
+            f"signed_pubkey={pubkey_hex[:16]}... anchor={trust_anchor_hex[:16]}..."
+        )
+
     try:
         from ama_cryptography.pqc_backends import (
             _ED25519_NATIVE_AVAILABLE,
@@ -274,6 +334,8 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[bool, str]:
         return False, f"native Ed25519 verify raised: {exc}"
     if not ok:
         return False, "Ed25519 signature did NOT verify — module tampered"
+    if trust_anchor_hex is not None:
+        return True, "signed integrity verified (Ed25519, trusted build pubkey)"
     return True, "signed integrity verified (Ed25519, build-time pubkey)"
 
 
@@ -309,10 +371,22 @@ def verify_module_integrity() -> Tuple[bool, str]:
     # Signed path was not available OR failed.  If it FAILED (digest
     # matched but signature didn't verify), that's an error — return
     # the specific reason.  If it was simply MISSING, fall back to
-    # digest-only with a warning.
+    # digest-only with a warning UNLESS a trust anchor is required.
     if "no signed-integrity artefact" not in signed_detail:
         logger.error("Signed integrity check failed: %s", signed_detail)
         return False, signed_detail
+
+    # Release builds must fail closed: AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1
+    # means "this is a release wheel — no unsigned digest-only acceptance
+    # is permitted, even if the .py files happen to match."  Developer
+    # editable installs and source checkouts leave the env var unset and
+    # still get the documented digest-only WARN-and-continue behaviour.
+    if _env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV):
+        return False, (
+            "signed-integrity artefact missing and "
+            f"{_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV}=1 forbids digest-only "
+            "fallback — rebuild the wheel with AMA_BUILD_PIPELINE=1"
+        )
 
     # Digest-only fallback (editable install / source checkout).
     if not _INTEGRITY_DIGEST_FILE.exists():

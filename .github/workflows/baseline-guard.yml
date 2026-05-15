@@ -3,7 +3,8 @@
 #
 # Baseline.json change guard.
 #
-# Any PR that modifies `benchmarks/baseline.json` must carry, in the PR
+# Any PR that modifies `benchmarks/baseline.json` or
+# `benchmarks/arm-baseline.json` must carry, in the PR
 # body and/or the commits touching the file, a line-item justification
 # per primitive, at least one measured ops/sec (or latency) reading, and
 # an identifier for the CI runner on which the measurement was taken.
@@ -11,7 +12,7 @@
 # and docs/BENCHMARK_HISTORY.md for the motivating history.
 #
 # RULESET / REQUIRED-CHECKS NOTE: this workflow is path-filtered to PRs
-# touching `benchmarks/baseline.json`, so its 'Enforce baseline.json
+# touching a benchmark baseline JSON, so its 'Enforce baseline JSON
 # justification' job does NOT emit on unrelated PRs. Do NOT list this
 # job in the `main` branch's required-status-check ruleset — it would
 # block every PR that doesn't touch baseline.json with 'Expected —
@@ -19,12 +20,13 @@
 # and the wiki-sync job; see PR #289 'Deliberately not included' for
 # the canonical exclusion list.
 
-name: Baseline.json Change Guard
+name: Baseline Change Guard
 
 on:
   pull_request:
     paths:
       - "benchmarks/baseline.json"
+      - "benchmarks/arm-baseline.json"
 
 permissions:
   contents: read
@@ -38,7 +40,7 @@ concurrency:
 
 jobs:
   baseline-justification:
-    name: Enforce baseline.json justification
+    name: Enforce baseline JSON justification
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -21,13 +21,15 @@ Exit codes:
 
 import argparse
 import json
+import os
 import secrets
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -50,11 +52,61 @@ class BenchmarkResult:
 def load_baseline(baseline_path: Path) -> Dict[str, Any]:
     """Load baseline configuration from JSON file."""
     with open(baseline_path) as f:
-        return json.load(f)
+        return cast(Dict[str, Any], json.load(f))
+
+
+_RUNNER_CLASS_ALIASES = {
+    "amd64": "x86_64",
+    "x64": "x86_64",
+    "x86-64": "x86_64",
+    "x86_64": "x86_64",
+    "arm64": "aarch64",
+    "aarch64": "aarch64",
+}
+
+
+def normalize_runner_cpu_class(value: str) -> str:
+    """Normalize common runner architecture spellings for baseline matching."""
+    return _RUNNER_CLASS_ALIASES.get(value.strip().lower(), value.strip().lower())
+
+
+def validate_baseline_contract(
+    baseline: Dict[str, Any],
+    baseline_path: Path,
+    expected_runner_cpu_class: str = "",
+    require_populated_baseline: bool = False,
+) -> None:
+    """Validate baseline metadata before benchmark comparisons run."""
+    metadata = baseline.get("metadata", {})
+    actual = normalize_runner_cpu_class(str(metadata.get("runner_cpu_class", "")))
+    expected = normalize_runner_cpu_class(expected_runner_cpu_class)
+    if expected:
+        if not actual:
+            raise ValueError(
+                f"{baseline_path} is missing metadata.runner_cpu_class; "
+                f"expected {expected_runner_cpu_class!r}"
+            )
+        if actual != expected:
+            raise ValueError(
+                f"{baseline_path} targets runner_cpu_class={actual!r}, "
+                f"but this runner is {expected!r}"
+            )
+
+    if not require_populated_baseline:
+        return
+
+    zero_entries = []
+    for section in ("benchmarks", "pqc_benchmarks"):
+        for name, entry in baseline.get(section, {}).items():
+            if entry.get("baseline_value") == 0:
+                zero_entries.append(name)
+    if zero_entries:
+        joined = ", ".join(sorted(zero_entries))
+        raise ValueError(f"{baseline_path} contains unpopulated zero baselines: {joined}")
 
 
 def benchmark_operation(
-    operation: callable,
+    operation: Callable[[], object],
     iterations: int = 100,
     warmup: int = 5,
 ) -> float:
@@ -88,7 +140,7 @@ def run_sha3_256_benchmark(iterations: int = 100) -> float:
 
     data = b"A" * 1024  # 1KB data
 
-    def operation():
+    def operation() -> None:
         native_sha3_256(data)
 
     return benchmark_operation(operation, iterations)
@@ -101,7 +153,7 @@ def run_hmac_sha3_256_benchmark(iterations: int = 100) -> float:
     key = secrets.token_bytes(32)
     data = b"A" * 1024
 
-    def operation():
+    def operation() -> None:
         hmac_authenticate(data, key)
 
     return benchmark_operation(operation, iterations)
@@ -111,7 +163,7 @@ def run_ed25519_keygen_benchmark(iterations: int = 50) -> float:
     """Benchmark Ed25519 key generation using native C backend."""
     from ama_cryptography.legacy_compat import generate_ed25519_keypair
 
-    def operation():
+    def operation() -> None:
         generate_ed25519_keypair()
 
     return benchmark_operation(operation, iterations)
@@ -124,7 +176,7 @@ def run_ed25519_sign_benchmark(iterations: int = 50) -> float:
     keypair = generate_ed25519_keypair()
     message = b"Test message for signing" * 10
 
-    def operation():
+    def operation() -> None:
         ed25519_sign(message, keypair.private_key)
 
     return benchmark_operation(operation, iterations)
@@ -142,7 +194,7 @@ def run_ed25519_verify_benchmark(iterations: int = 50) -> float:
     message = b"Test message for signing" * 10
     signature = ed25519_sign(message, keypair.private_key)
 
-    def operation():
+    def operation() -> None:
         ed25519_verify(message, signature, keypair.public_key)
 
     return benchmark_operation(operation, iterations)
@@ -150,13 +202,13 @@ def run_ed25519_verify_benchmark(iterations: int = 50) -> float:
 
 def run_hkdf_derive_benchmark(iterations: int = 100) -> float:
     """Benchmark HKDF key derivation using native C backend."""
-    from ama_cryptography.legacy_compat import native_hkdf
+    from ama_cryptography.pqc_backends import native_hkdf
 
     master_secret = secrets.token_bytes(32)
     salt = secrets.token_bytes(32)
     info = b"benchmark-test"
 
-    def operation():
+    def operation() -> None:
         native_hkdf(master_secret, 96, salt, info)
 
     return benchmark_operation(operation, iterations)
@@ -173,7 +225,7 @@ def run_full_package_create_benchmark(iterations: int = 20) -> float:
     codes = "TEST_OMNI_CODE_12345"
     helix_params = [(1.0, 2.0)]
 
-    def operation():
+    def operation() -> None:
         create_crypto_package(
             codes=codes,
             helix_params=helix_params,
@@ -205,7 +257,7 @@ def run_full_package_verify_benchmark(iterations: int = 20) -> float:
         use_rfc3161=False,
     )
 
-    def operation():
+    def operation() -> None:
         verify_crypto_package(
             codes=codes,
             helix_params=helix_params,
@@ -228,7 +280,7 @@ def run_dilithium_keygen_benchmark(iterations: int = 20) -> Optional[float]:
         if not DILITHIUM_AVAILABLE:
             return None
 
-        def operation():
+        def operation() -> None:
             generate_dilithium_keypair()
 
         return benchmark_operation(operation, iterations, warmup=2)
@@ -251,7 +303,7 @@ def run_dilithium_sign_benchmark(iterations: int = 20) -> Optional[float]:
         kp = generate_dilithium_keypair()
         message = b"Test message for ML-DSA-65 signing" * 10
 
-        def operation():
+        def operation() -> None:
             dilithium_sign(message, kp.secret_key)
 
         return benchmark_operation(operation, iterations, warmup=2)
@@ -276,7 +328,7 @@ def run_dilithium_verify_benchmark(iterations: int = 20) -> Optional[float]:
         message = b"Test message for ML-DSA-65 signing" * 10
         signature = dilithium_sign(message, kp.secret_key)
 
-        def operation():
+        def operation() -> None:
             dilithium_verify(message, signature, kp.public_key)
 
         return benchmark_operation(operation, iterations, warmup=2)
@@ -295,7 +347,7 @@ def run_kyber_keygen_benchmark(iterations: int = 20) -> Optional[float]:
         if not KYBER_AVAILABLE:
             return None
 
-        def operation():
+        def operation() -> None:
             generate_kyber_keypair()
 
         return benchmark_operation(operation, iterations, warmup=2)
@@ -317,7 +369,7 @@ def run_kyber_encapsulate_benchmark(iterations: int = 20) -> Optional[float]:
 
         kp = generate_kyber_keypair()
 
-        def operation():
+        def operation() -> None:
             kyber_encapsulate(kp.public_key)
 
         return benchmark_operation(operation, iterations, warmup=2)
@@ -338,7 +390,7 @@ def run_aes_gcm_benchmark(iterations: int = 100) -> Optional[float]:
         # Probe once — native_aes256_gcm_encrypt raises RuntimeError if unavailable.
         native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
 
-        def operation():
+        def operation() -> None:
             native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
 
         return benchmark_operation(operation, iterations, warmup=5)
@@ -359,7 +411,7 @@ def run_chacha20poly1305_benchmark(iterations: int = 100) -> Optional[float]:
         # Probe once — native_chacha20poly1305_encrypt raises RuntimeError if unavailable.
         native_chacha20poly1305_encrypt(key, nonce, plaintext, aad)
 
-        def operation():
+        def operation() -> None:
             native_chacha20poly1305_encrypt(key, nonce, plaintext, aad)
 
         return benchmark_operation(operation, iterations, warmup=5)
@@ -378,7 +430,7 @@ def run_x25519_benchmark(iterations: int = 100) -> Optional[float]:
         # Probe once — native_x25519_key_exchange raises RuntimeError if unavailable.
         native_x25519_key_exchange(scalar, point)
 
-        def operation():
+        def operation() -> None:
             native_x25519_key_exchange(scalar, point)
 
         return benchmark_operation(operation, iterations, warmup=5)
@@ -419,7 +471,7 @@ def run_x25519_batch4_benchmark(iterations: int = 100) -> Optional[float]:
         # Probe once to trip availability checks before timing.
         native_x25519_scalarmult_batch(scalars, points)
 
-        def operation():
+        def operation() -> None:
             native_x25519_scalarmult_batch(scalars, points)
 
         return benchmark_operation(operation, iterations, warmup=5)
@@ -432,7 +484,7 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
     results = []
     threshold = baseline["thresholds"]["regression_threshold_percent"]
 
-    benchmark_functions = {
+    benchmark_functions: dict[str, Callable[[], float]] = {
         "ama_sha3_256_hash": run_sha3_256_benchmark,
         "hmac_sha3_256": run_hmac_sha3_256_benchmark,
         "ed25519_keygen": run_ed25519_keygen_benchmark,
@@ -443,7 +495,7 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
         "full_package_verify": run_full_package_verify_benchmark,
     }
 
-    pqc_benchmark_functions = {
+    pqc_benchmark_functions: dict[str, Callable[[], Optional[float]]] = {
         "dilithium_keygen": run_dilithium_keygen_benchmark,
         "dilithium_sign": run_dilithium_sign_benchmark,
         "dilithium_verify": run_dilithium_verify_benchmark,
@@ -503,7 +555,7 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
             print(f"{ops_per_sec:.0f} ops/sec ({regression:+.1f}%) [{status}]")
 
     # Run PQC benchmarks (optional)
-    for name, func in pqc_benchmark_functions.items():
+    for name, pqc_func in pqc_benchmark_functions.items():
         if name not in baseline.get("pqc_benchmarks", {}):
             continue
 
@@ -511,9 +563,9 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
         if verbose:
             print(f"Running {name}...", end=" ", flush=True)
 
-        ops_per_sec = func()
+        pqc_ops_per_sec = pqc_func()
 
-        if ops_per_sec is None:
+        if pqc_ops_per_sec is None:
             if verbose:
                 print("SKIPPED (PQC not available)")
             continue
@@ -526,7 +578,7 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
         if baseline_value == 0:
             pct_change = 0.0
         else:
-            pct_change = ((ops_per_sec - baseline_value) / baseline_value) * 100
+            pct_change = ((pqc_ops_per_sec - baseline_value) / baseline_value) * 100
         regression = -pct_change
         passed = regression <= tolerance
 
@@ -534,7 +586,7 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
             BenchmarkResult(
                 name=name,
                 description=config["description"],
-                ops_per_second=ops_per_sec,
+                ops_per_second=pqc_ops_per_sec,
                 baseline_value=baseline_value,
                 tolerance_percent=tolerance,
                 regression_percent=regression,
@@ -545,7 +597,7 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
 
         if verbose:
             status = "PASS" if passed else "WARN"
-            print(f"{ops_per_sec:.0f} ops/sec ({regression:+.1f}%) [{status}]")
+            print(f"{pqc_ops_per_sec:.0f} ops/sec ({regression:+.1f}%) [{status}]")
 
     return results
 
@@ -621,7 +673,7 @@ def generate_markdown_report(results: List[BenchmarkResult], report: Dict[str, A
     return "\n".join(lines)
 
 
-def main():
+def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(
         description="AMA Cryptography Benchmark Runner - Performance Regression Detection"
@@ -649,6 +701,19 @@ def main():
         help="Update baseline with current results (use with caution)",
     )
     parser.add_argument(
+        "--require-runner-class",
+        default=os.environ.get("AMA_RUNNER_CPU_CLASS", ""),
+        help=(
+            "Require baseline metadata.runner_cpu_class to match this runner "
+            "(defaults to AMA_RUNNER_CPU_CLASS when set)."
+        ),
+    )
+    parser.add_argument(
+        "--require-populated-baseline",
+        action="store_true",
+        help="Fail if any selected baseline_value is zero.",
+    )
+    parser.add_argument(
         "--markdown",
         type=Path,
         help="Path to write markdown report with tables and charts",
@@ -664,6 +729,12 @@ def main():
     # Load baseline
     try:
         baseline = load_baseline(args.baseline)
+        validate_baseline_contract(
+            baseline,
+            args.baseline,
+            expected_runner_cpu_class=args.require_runner_class,
+            require_populated_baseline=args.require_populated_baseline,
+        )
         print(f"Loaded baseline: {args.baseline}")
         print(f"Regression threshold: {baseline['thresholds']['regression_threshold_percent']}%")
         print()

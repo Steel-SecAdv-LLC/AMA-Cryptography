@@ -106,6 +106,17 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Set up Python ${{ matrix.python-version }}
+        id: setup-python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        continue-on-error: true
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # First-party retry path: actions/setup-python intermittently fails on
+      # GitHub-hosted Windows runners (toolcache / cache-restore flake; see
+      # PR #306).  Only runs on the first miss, so happy path is unchanged.
+      - name: Set up Python ${{ matrix.python-version }} (retry)
+        if: steps.setup-python.outcome == 'failure'
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
@@ -296,7 +307,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake libssl-dev
 
-      - name: Build wheel via PEP 517 (isolated build env)
+      - name: Build wheel via PEP 517 (isolated build env, signed integrity)
         # `python -m build --wheel` runs the build in an isolated env that
         # only sees pyproject.toml's [build-system].requires — so a missing
         # build-time dep (e.g., Cython, cmake, numpy) fails closed here
@@ -304,6 +315,18 @@ jobs:
         # happened to have it. setup.py's CMakeBuild compiles the native
         # C library inside the build, so the resulting wheel ships the
         # compiled libama_cryptography artifact.
+        #
+        # AMA_BUILD_PIPELINE=1 enables setup.py's post-build integrity
+        # signer (CMakeBuild._run_integrity_signer) so the wheel ships an
+        # Ed25519-signed integrity artefact, not just the digest-only
+        # fallback.  The signer uses the in-tree ama_ed25519 C kernel via
+        # ctypes (INVARIANT-1: no PyCA dependency).  Tagged releases can
+        # additionally set AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX +
+        # AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1 in the release workflow to
+        # produce trust-anchored wheels — this PR-level job uses a
+        # per-build ephemeral pubkey (still verified at import time).
+        env:
+          AMA_BUILD_PIPELINE: "1"
         run: |
           python -m pip install --upgrade pip
           pip install build

@@ -269,7 +269,10 @@ def main(argv: List[str]) -> int:
     failures = _check_justification(changes, combined_text)
     if failures:
         print("\n" + "=" * 72, file=sys.stderr)
-        print("FAIL: baseline.json changes are missing required justification.", file=sys.stderr)
+        print(
+            "FAIL: benchmark baseline JSON changes are missing required justification.",
+            file=sys.stderr,
+        )
         print("=" * 72, file=sys.stderr)
         for msg in failures:
             print("\n" + msg, file=sys.stderr)

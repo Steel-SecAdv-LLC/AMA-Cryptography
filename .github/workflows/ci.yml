@@ -41,10 +41,23 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
     - name: Set up Python ${{ matrix.python-version }}
+      id: setup-python
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+      continue-on-error: true
       with:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
+
+    # First-party retry path: actions/setup-python intermittently fails on
+    # GitHub-hosted Windows runners during the Python 3.13 install
+    # (toolcache / cache-restore flake; see PR #306 review).  The retry
+    # is non-fatal on the first miss and only re-runs when needed, so the
+    # happy path remains a single setup-python call.
+    - name: Set up Python ${{ matrix.python-version }} (retry without cache)
+      if: steps.setup-python.outcome == 'failure'
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+      with:
+        python-version: ${{ matrix.python-version }}
 
     - name: Install system dependencies (Linux)
       if: runner.os == 'Linux'
@@ -387,33 +400,6 @@ jobs:
         pip install "Cython>=3.0.0" "numpy>=1.24.0,<3.0.0"
         pip install -e ".[dev]"
 
-    - name: Seed arm-baseline.json on first AArch64 run
-      if: matrix.runner_cpu_class == 'aarch64'
-      run: |
-        # The AArch64 baseline file is created on first run with the
-        # same schema as the x86 baseline but zeroed `baseline_value`s
-        # (which the runner treats as "no regression yet — record
-        # current values").  Subsequent PRs that change the values
-        # carry the documented justification (line-item, measurement,
-        # runner ID) per benchmarks/check_baseline_justification.py.
-        # Skipped if the file already exists in-tree.
-        if [ ! -f benchmarks/arm-baseline.json ]; then
-          python - <<'PY'
-        import json, pathlib
-        x86 = json.loads(pathlib.Path("benchmarks/baseline.json").read_text())
-        # Zero baseline values so the first AArch64 run records measurements
-        # rather than reporting spurious regressions against x86 numbers.
-        for section in ("benchmarks", "pqc_benchmarks"):
-            for name, entry in x86.get(section, {}).items():
-                entry["baseline_value"] = 0
-                entry["unit"] = entry.get("unit", "ops/sec")
-        x86.setdefault("metadata", {})["runner_cpu_class"] = "aarch64"
-        pathlib.Path("benchmarks/arm-baseline.json").write_text(
-            json.dumps(x86, indent=2) + "\n")
-        PY
-          echo "Seeded benchmarks/arm-baseline.json."
-        fi
-
     - name: Run benchmark regression tests
       env:
         AMA_RUNNER_CPU_CLASS: ${{ steps.cpu_class.outputs.arch }}
@@ -436,6 +422,8 @@ jobs:
         taskset -c 0 nice -n -10 python benchmarks/benchmark_runner.py \
           --verbose \
           --baseline "$AMA_MATRIX_BASELINE" \
+          --require-runner-class "$AMA_RUNNER_CPU_CLASS" \
+          --require-populated-baseline \
           --output benchmarks/benchmark-results.json \
           --markdown benchmark-report.md
 

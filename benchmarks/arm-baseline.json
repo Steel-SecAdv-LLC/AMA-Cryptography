@@ -2,9 +2,9 @@
   "metadata": {
     "baseline_source_release": "2.1.2",
     "applies_through_release": "3.0.0",
-    "created": "2026-05-15T00:00:00Z",
-    "description": "AArch64 (ubuntu-24.04-arm / Apple Silicon) baseline for regression detection.  Initial values are zeroed so the first AArch64 run records measurements rather than reporting spurious regressions against the x86 baseline.  Subsequent updates to baseline_value carry the documented justification per benchmarks/check_baseline_justification.py.",
-    "system": "GitHub Actions shared runner, Linux x86-64, Python 3.11",
+    "created": "2026-05-15T18:49:48Z",
+    "description": "AArch64 (ubuntu-24.04-arm) populated baseline for regression detection. Values are conservative 65% floors from the first successful PR #305 AArch64 benchmark artifact; subsequent updates require line-item justification per benchmarks/check_baseline_justification.py.",
+    "system": "GitHub Actions ubuntu-24.04-arm shared runner, Linux AArch64, Python 3.11",
     "notes": "Baseline measured against v2.1.2 (see `baseline_source_release`) and remains valid through v3.0.0 \u2014 slow-runner regression floors recalibrated 2026-04-25 against 30-run stable medians (see `baseline_change_log`); canonical Sapphire Rapids / Zen 4 hosts continue to clear every floor by a wide margin. Earlier rounds adjusted for INVARIANT-7 call-time enforcement, SVE2 NTT fixes, and CI matrix expansion (Windows + ARM64). All baselines set to ~65% of measured performance to provide 35% regression headroom (50\u201370% on a few entries with documented variance). SHA3-256 dispatches through AVX2 Keccak (or AVX-512 4-way when `AMA_ENABLE_AVX512=ON` is set at build and the runtime gate passes \u2014 see `docs/AVX512_KECCAK_ADR.md`). Kyber NTT uses AVX2 for len>=16 layers. Ed25519 uses radix 2^51 field arithmetic (`fe51.h`) plus a base-point comb table on the sign path and a width-5 wNAF + Shamir's trick on the verify path. PQC benchmarks use the native C library.",
     "peer_references": {
       "description": "Published ops/sec figures for peer cryptographic libraries on comparable x86-64 hardware. These are context numbers for the `Peer Comparison` table in `benchmark-report.md`; the regression harness does not compare against them. When `benchmarks/comparative_benchmark.py` runs with `pynacl`/`oqs`/`cryptography` installed it produces live measurements that supersede these static references for that specific run.",
@@ -82,6 +82,82 @@
           "x25519_scalarmult"
         ],
         "reason": "Re-floored after observing stable runner-variance on a slower contended sandbox host (3-run medians taken with build configured at -DAMA_ENABLE_AVX512=ON; AVX-512 SHA3 4-way kernel landed in this release). Each baseline set to ~65% of the slowest-runner stable median so even a contended GitHub-hosted shared runner clears the regression threshold without false positives; canonical Sapphire Rapids / Zen 4 hosts continue to clear by a wide negative-regression margin (faster than baseline). full_package_create tolerance bumped 50%\u219270% to absorb the GC-stall variance observed at 3-run min/max ratios > 2.5x. README, benchmark-report.md, and wiki/Performance-Benchmarks.md continue to publish the canonical-host throughput numbers \u2014 those are distinct from this regression floor, which is the worst-case-runner safety net. Source measurements: stable-medians captured 2026-04-25 across 30+ runs of validation_suite.py and 10+ runs of benchmark_runner.py; full_package_verify floor lowered 2044\u2192700 to absorb the borderline 47\u201355% variance band. Source measurements: 3-run medians captured 2026-04-25, full transcript saved alongside benchmark-results.json on the consolidate branch."
+      },
+      {
+        "date": "2026-05-15",
+        "runner": "ubuntu-24.04-arm / aarch64 GitHub Actions",
+        "source": "PR #305 workflow run 25935429662 artifact benchmark-results-aarch64 (2026-05-15T18:49:48Z)",
+        "reason": "Populated ARM baseline require infrastructure: replaced first-run zero placeholders with 65% regression floors from successful AArch64 benchmark measurements so CI fails on real ARM regressions instead of accepting unpopulated baselines.",
+        "measurements": {
+          "ama_sha3_256_hash": {
+            "measured_ops_per_sec": 411140.26,
+            "baseline_value": 267241
+          },
+          "hmac_sha3_256": {
+            "measured_ops_per_sec": 260171.4,
+            "baseline_value": 169111
+          },
+          "ed25519_keygen": {
+            "measured_ops_per_sec": 44041.42,
+            "baseline_value": 28626
+          },
+          "ed25519_sign": {
+            "measured_ops_per_sec": 46563.13,
+            "baseline_value": 30266
+          },
+          "ed25519_verify": {
+            "measured_ops_per_sec": 18239.31,
+            "baseline_value": 11855
+          },
+          "hkdf_derive": {
+            "measured_ops_per_sec": 172802.6,
+            "baseline_value": 112321
+          },
+          "full_package_create": {
+            "measured_ops_per_sec": 5078.5,
+            "baseline_value": 3301
+          },
+          "full_package_verify": {
+            "measured_ops_per_sec": 6100.41,
+            "baseline_value": 3965
+          },
+          "dilithium_keygen": {
+            "measured_ops_per_sec": 4154.07,
+            "baseline_value": 2700
+          },
+          "dilithium_sign": {
+            "measured_ops_per_sec": 4698.4,
+            "baseline_value": 3053
+          },
+          "dilithium_verify": {
+            "measured_ops_per_sec": 11359.43,
+            "baseline_value": 7383
+          },
+          "kyber_keygen": {
+            "measured_ops_per_sec": 6298.95,
+            "baseline_value": 4094
+          },
+          "kyber_encapsulate": {
+            "measured_ops_per_sec": 19830.74,
+            "baseline_value": 12889
+          },
+          "aes_256_gcm_encrypt": {
+            "measured_ops_per_sec": 283212.31,
+            "baseline_value": 184088
+          },
+          "chacha20poly1305_encrypt": {
+            "measured_ops_per_sec": 203164.49,
+            "baseline_value": 132056
+          },
+          "x25519_scalarmult": {
+            "measured_ops_per_sec": 25047.72,
+            "baseline_value": 16281
+          },
+          "x25519_scalarmult_batch4": {
+            "measured_ops_per_sec": 5981.96,
+            "baseline_value": 3888
+          }
+        }
       }
     ],
     "runner_cpu_class": "aarch64"
@@ -95,7 +171,7 @@
     "ama_sha3_256_hash": {
       "description": "AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes)",
       "metric": "operations_per_second",
-      "baseline_value": 0,
+      "baseline_value": 267241,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
@@ -103,7 +179,7 @@
     "hmac_sha3_256": {
       "description": "HMAC-SHA3-256 authentication (native C via ctypes)",
       "metric": "operations_per_second",
-      "baseline_value": 0,
+      "baseline_value": 169111,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "tier": "microbenchmark"
@@ -111,7 +187,7 @@
     "ed25519_keygen": {
       "description": "Ed25519 key pair generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 0,
+      "baseline_value": 28626,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
@@ -119,7 +195,7 @@
     "ed25519_sign": {
       "description": "Ed25519 signature generation (native C, expanded key)",
       "metric": "operations_per_second",
-      "baseline_value": 0,
+      "baseline_value": 30266,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
@@ -127,7 +203,7 @@
     "ed25519_verify": {
       "description": "Ed25519 signature verification (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 0,
+      "baseline_value": 11855,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
@@ -135,7 +211,7 @@
     "hkdf_derive": {
       "description": "HKDF-SHA3-256 key derivation (3 keys)",
       "metric": "operations_per_second",
-      "baseline_value": 0,
+      "baseline_value": 112321,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
@@ -143,7 +219,7 @@
     "full_package_create": {
       "description": "Complete crypto package creation (with PQC)",
       "metric": "operations_per_second",
-      "baseline_value": 0,
+      "baseline_value": 3301,
       "unit": "ops/sec",
       "tolerance_percent": 70,
       "tier": "complex_operation"
@@ -151,7 +227,7 @@
     "full_package_verify": {
       "description": "Complete crypto package verification (with PQC)",
       "metric": "operations_per_second",
-      "baseline_value": 0,
+      "baseline_value": 3965,
       "unit": "ops/sec",
       "tolerance_percent": 50,
       "tier": "complex_operation"
@@ -161,7 +237,7 @@
     "dilithium_keygen": {
       "description": "ML-DSA-65 (Dilithium) key pair generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 0,
+      "baseline_value": 2700,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true
@@ -169,7 +245,7 @@
     "dilithium_sign": {
       "description": "ML-DSA-65 (Dilithium) signature generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 0,
+      "baseline_value": 3053,
       "unit": "ops/sec",
       "tolerance_percent": 50,
       "optional": true
@@ -177,7 +253,7 @@
     "dilithium_verify": {
       "description": "ML-DSA-65 (Dilithium) signature verification (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 0,
+      "baseline_value": 7383,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true
@@ -185,7 +261,7 @@
     "kyber_keygen": {
       "description": "ML-KEM-1024 (Kyber) key pair generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 0,
+      "baseline_value": 4094,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true
@@ -193,7 +269,7 @@
     "kyber_encapsulate": {
       "description": "ML-KEM-1024 (Kyber) encapsulation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 0,
+      "baseline_value": 12889,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true
@@ -201,7 +277,7 @@
     "aes_256_gcm_encrypt": {
       "description": "AES-256-GCM encryption of 1KB data (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 0,
+      "baseline_value": 184088,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true
@@ -209,7 +285,7 @@
     "chacha20poly1305_encrypt": {
       "description": "ChaCha20-Poly1305 encryption of 1KB data (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 0,
+      "baseline_value": 132056,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true
@@ -217,7 +293,7 @@
     "x25519_scalarmult": {
       "description": "X25519 single-shot Diffie-Hellman scalar-mult (native C, default dispatch). Backed by fe64 (radix-2^64, MULX/ADX) on x86-64 hosts with BMI2+ADX, fe51 (radix-2^51) on 64-bit hosts without, and gf16 on 32-bit. The AVX2 4-way kernel is OPT-IN via AMA_DISPATCH_USE_X25519_AVX2=1 and is intentionally not faster than scalar fe64 on MULX/ADX hosts \u2014 see src/c/dispatch/ama_dispatch.c:478-502 and tests/test_x25519_dispatch_policy.py for the dispatch contract. Re-floored 5,000 \u2192 13,000 (2026-04-27 audit) so the regression gate actually catches a >40% drop from canonical-host throughput rather than ignoring it.",
       "metric": "operations_per_second",
-      "baseline_value": 0,
+      "baseline_value": 16281,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true
@@ -225,7 +301,7 @@
     "x25519_scalarmult_batch4": {
       "description": "X25519 batch-4 Diffie-Hellman under default dispatch \u2014 measures BATCHES/SEC, not per-op rate. On MULX/ADX hosts this is roughly x25519_scalarmult / 4 plus the wrapper's per-batch overhead (canonical-host run measured ~4,100 batches/sec vs ~17,000 single-shot ops/sec). A significantly slower batches/sec number typically means the AVX2 4-way kernel was accidentally selected as the default \u2014 that is a regression on every shipped Broadwell+/Zen+ part (see PR #273 design note and ama_dispatch.c:478-502). The runner calls native_x25519_scalarmult_batch with count=4 so this baseline genuinely exercises the batch wrapper, not four sequential native_x25519_key_exchange calls.",
       "metric": "operations_per_second",
-      "baseline_value": 0,
+      "baseline_value": 3888,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true

@@ -87,23 +87,29 @@ monitoring = [
     "scipy>=1.7.0",
 ]
 legacy = [
-    # PyCA cryptography — only needed as fallback when native C library is not
-    # available. Ed25519 and AES-256-GCM are now provided natively.
-    # Install with: pip install "ama-cryptography[legacy]"
+    # PyCA cryptography is NOT a runtime fallback — INVARIANT-1 prohibits a
+    # PyCA dependency in the production code path, and the runtime tree
+    # imports nothing from this package.  This extra exists solely so that
+    # downstream tests and benchmark scripts (tests/test_aes_gcm_native.py,
+    # tests/test_hkdf_sha3_256.py, tests/test_ed25519_native.py, and
+    # benchmarks/comparative_benchmark.py) which cross-check our native
+    # primitives against an independent reference implementation can be
+    # installed with one extra:
+    #   pip install "ama-cryptography[legacy]"
     #
-    # Floor is 46.0.6 to clear the open CVEs against earlier majors that
-    # the dependabot.yml semver-major ignore would otherwise let drift
-    # forever:
-    #   GHSA-h4gh-qq45-vh27 / CVE-2024-26130 (HIGH; PKCS12 SECP256R1
-    #     NULL-pointer deref) — fixed in 42.0.4
-    #   CVE-2024-0727 (PKCS12 OOB read)                — fixed in 42.0.2
-    #   CVE-2023-50782 (Bleichenbacher RSA timing)     — fixed in 42.0.0
-    #   CVE-2026-26007                                  — fixed in 46.0.5
-    #   CVE-2026-34073                                  — fixed in 46.0.6
+    # Production deployments do NOT need this extra; do not install it
+    # unless you are reproducing the native-vs-pyca cross-checks.
+    #
+    # Floor is 46.0.7 to clear the open CVEs against earlier majors:
+    #   GHSA-h4gh-qq45-vh27 / CVE-2024-26130   — fixed in 42.0.4
+    #   CVE-2024-0727 (PKCS12 OOB read)        — fixed in 42.0.2
+    #   CVE-2023-50782 (Bleichenbacher timing) — fixed in 42.0.0
+    #   CVE-2026-26007                          — fixed in 46.0.5
+    #   CVE-2026-34073                          — fixed in 46.0.6
     # Manual bump because dependabot.yml carries a `version-update:
     # semver-major` ignore on this package; security fixes that span
     # majors (41 → 46) cannot land via the bot.  Re-evaluate the ignore
-    # rule when the next major (47) ships if a CVE follows.
+    # rule when the next major ships if a CVE follows.
     "cryptography>=46.0.7",
 ]
 hsm = [
@@ -237,6 +243,9 @@ ignore = []  # Do not add ignores without a comment explaining why.
     "B028",
     "UP006", "UP015", "UP035",  # UP006/UP035: deprecated typing imports (existing pattern)
 ]
+# _build_sign.py intentionally keeps Optional[...] annotations for Python 3.9
+# parser compatibility; PEP 604 `X | None` syntax is not valid on 3.9.
+"ama_cryptography/_build_sign.py" = ["UP045"]
 # ama_cryptography/legacy_compat.py — ported from code_guardian_secure.py
 #   UP007/UP045: PEP 604 union syntax (existing pattern)
 #   S310/S603: URL open and subprocess calls in security tooling
