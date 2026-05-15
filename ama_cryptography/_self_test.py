@@ -874,6 +874,138 @@ def _timing_oracle_consttime() -> Tuple[Optional[bool], str]:
     )
 
 
+def _run_integrity_stage() -> Tuple[bool, Optional[str]]:
+    """Run the module-integrity verification stage.
+
+    Returns ``(passed, error_reason)``.  ``passed=True`` means the
+    integrity check verified and POST may proceed; ``passed=False``
+    means the runner must short-circuit and ``_run_self_tests`` must
+    set ERROR with ``error_reason``.
+
+    Appends one row to ``_SELF_TEST_RESULTS`` regardless of outcome.
+    """
+    try:
+        integrity_passed, integrity_detail = verify_module_integrity()
+    except Exception as exc:
+        _SELF_TEST_RESULTS.append(("integrity", False, f"Exception: {exc}"))
+        return False, f"Module integrity check exception: {exc}"
+    _SELF_TEST_RESULTS.append(("integrity", integrity_passed, integrity_detail))
+    if not integrity_passed:
+        return False, integrity_detail
+    return True, None
+
+
+def _handle_kat_skip(name: str, detail: str, strict_mode: bool) -> Optional[str]:
+    """Decide whether a KAT skip should fail POST or just WARN.
+
+    Returns the error reason if the skip should fail POST under
+    strict mode; returns ``None`` if the runner should continue.
+    Logs a WARNING in the non-strict case so the operator can
+    notice the missing coverage in CI logs.
+    """
+    if strict_mode:
+        return f"FIPS strict mode ({_AMA_FIPS_STRICT_ENV}=1): " f"{name} KAT cannot run — {detail}"
+    logger.warning(
+        "FIPS 140-3 POST: %s KAT skipped (%s).  This backend has NO "
+        "self-test coverage in this run.  Build the C library or set "
+        "%s=1 to escalate this skip to a hard POST failure.",
+        name,
+        detail,
+        _AMA_FIPS_STRICT_ENV,
+    )
+    return None
+
+
+def _run_kat_stage(strict_mode: bool) -> Tuple[bool, Optional[str]]:
+    """Run every per-algorithm KAT and record its outcome.
+
+    Returns ``(passed, error_reason)`` with the same semantics as
+    :func:`_run_integrity_stage`.  Walks the list of KAT callables
+    once; on the first hard-failure (or strict-mode skip) the
+    function returns early without running the remaining KATs.
+    """
+    kat_tests = (
+        ("SHA3-256", _kat_sha3_256),
+        ("HMAC-SHA3-256", _kat_hmac_sha3_256),
+        ("AES-256-GCM", _kat_aes_256_gcm),
+        ("ML-KEM-1024", _kat_ml_kem_1024),
+        ("ML-DSA-65", _kat_ml_dsa_65),
+        ("SLH-DSA", _kat_slh_dsa),
+        ("SLH-DSA-SHAKE-128s", _kat_slh_dsa_shake_128s),
+        ("Ed25519", _kat_ed25519),
+    )
+    for name, test_fn in kat_tests:
+        try:
+            passed, detail = test_fn()
+        except Exception as exc:
+            detail = f"{name} KAT exception: {exc}"
+            _SELF_TEST_RESULTS.append((name, False, detail))
+            return False, detail
+        _SELF_TEST_RESULTS.append((name, passed, detail))
+        if passed is None:
+            err = _handle_kat_skip(name, detail, strict_mode)
+            if err is not None:
+                return False, err
+            continue
+        if not passed:
+            return False, detail
+    return True, None
+
+
+def _run_timing_oracle_stage(strict_mode: bool) -> Tuple[bool, Optional[str]]:
+    """Run the constant-time timing-oracle stage exactly once.
+
+    Returns ``(passed, error_reason)``.  Skip semantics mirror the
+    KAT stage: ``None`` from the oracle (no native consttime
+    backend) is a skip — WARNING in non-strict mode, hard error
+    in strict mode.  A measured leak is always a hard error.
+    """
+    try:
+        oracle_passed, oracle_detail = _timing_oracle_consttime()
+    except Exception as exc:
+        oracle_detail = f"Timing oracle exception: {exc}"
+        oracle_passed = False
+    _SELF_TEST_RESULTS.append(("consttime-oracle", oracle_passed, oracle_detail))
+    if oracle_passed is None:
+        if strict_mode:
+            return False, (
+                f"FIPS strict mode ({_AMA_FIPS_STRICT_ENV}=1): "
+                f"consttime-oracle cannot run — {oracle_detail}"
+            )
+        logger.warning(
+            "FIPS 140-3 POST: consttime-oracle skipped (%s).  "
+            "Native constant-time backend is required for timing-leak "
+            "self-test; set %s=1 to escalate.",
+            oracle_detail,
+            _AMA_FIPS_STRICT_ENV,
+        )
+        return True, None
+    if oracle_passed is False:
+        return False, oracle_detail
+    return True, None
+
+
+def _run_rng_stage() -> Tuple[bool, Optional[str]]:
+    """Run the initial continuous-RNG health check.
+
+    Returns ``(passed, error_reason)``.  Two consecutive identical
+    32-byte draws is a hard failure; an exception from
+    ``secrets.token_bytes`` is treated the same way.
+    """
+    try:
+        out1 = secrets.token_bytes(32)
+        out2 = secrets.token_bytes(32)
+    except Exception as exc:
+        _SELF_TEST_RESULTS.append(("RNG", False, f"Exception: {exc}"))
+        return False, f"RNG health test exception: {exc}"
+    if out1 == out2:
+        _SELF_TEST_RESULTS.append(("RNG", False, "Identical consecutive outputs"))
+        return False, "RNG health test failed at startup"
+    _rng_state["previous"] = out2
+    _SELF_TEST_RESULTS.append(("RNG", True, "RNG health test passed"))
+    return True, None
+
+
 def _run_self_tests() -> bool:
     """
     Run all FIPS 140-3 power-on self-tests.
@@ -893,6 +1025,11 @@ def _run_self_tests() -> bool:
           ERROR.  Release wheels and FIPS-validated deployments should
           set this so an absent backend (e.g. SPHINCS+ build flag
           omitted) cannot silently degrade the approved-algorithm set.
+
+    Implementation is split into per-stage helpers (integrity / KAT /
+    timing-oracle / RNG) so the main runner stays under the project's
+    cyclomatic-complexity ceiling and each stage is independently
+    testable.
     """
     global _MODULE_STATE, _ERROR_REASON, _SELF_TEST_RESULTS, _POST_DURATION_MS
     _MODULE_STATE = "SELF_TEST"
@@ -902,121 +1039,21 @@ def _run_self_tests() -> bool:
 
     strict_mode = _env_flag_enabled(_AMA_FIPS_STRICT_ENV)
 
-    # 1. Module integrity verification
-    try:
-        integrity_passed, integrity_detail = verify_module_integrity()
-        _SELF_TEST_RESULTS.append(("integrity", integrity_passed, integrity_detail))
-        if not integrity_passed:
-            _set_error(integrity_detail)
-            _POST_DURATION_MS = (time.monotonic() - start) * 1000
-            return False
-    except Exception as exc:
-        _SELF_TEST_RESULTS.append(("integrity", False, f"Exception: {exc}"))
-        _set_error(f"Module integrity check exception: {exc}")
-        _POST_DURATION_MS = (time.monotonic() - start) * 1000
-        return False
-
-    # 2. KAT for each approved algorithm
-    kat_tests = [
-        ("SHA3-256", _kat_sha3_256),
-        ("HMAC-SHA3-256", _kat_hmac_sha3_256),
-        ("AES-256-GCM", _kat_aes_256_gcm),
-        ("ML-KEM-1024", _kat_ml_kem_1024),
-        ("ML-DSA-65", _kat_ml_dsa_65),
-        ("SLH-DSA", _kat_slh_dsa),
-        ("SLH-DSA-SHAKE-128s", _kat_slh_dsa_shake_128s),
-        ("Ed25519", _kat_ed25519),
-    ]
+    stages: Tuple[Tuple[str, Callable[[], Tuple[bool, Optional[str]]]], ...] = (
+        ("integrity", _run_integrity_stage),
+        ("kat", lambda: _run_kat_stage(strict_mode)),
+        ("oracle", lambda: _run_timing_oracle_stage(strict_mode)),
+        ("rng", _run_rng_stage),
+    )
 
     all_passed = True
-    for name, test_fn in kat_tests:
-        try:
-            passed, detail = test_fn()
-            _SELF_TEST_RESULTS.append((name, passed, detail))
-            if passed is None:
-                # Skipped — backend not built.  Skip is NOT a pass:
-                # the previous behaviour ("(True, ...skipped)") let an
-                # absent backend silently disable its own POST coverage,
-                # turning the algorithm into an untested code path
-                # behind a still-OPERATIONAL module.  Under strict
-                # mode we now escalate; otherwise we log loudly so the
-                # operator can notice.
-                if strict_mode:
-                    _set_error(
-                        f"FIPS strict mode ({_AMA_FIPS_STRICT_ENV}=1): "
-                        f"{name} KAT cannot run — {detail}"
-                    )
-                    all_passed = False
-                    break
-                logger.warning(
-                    "FIPS 140-3 POST: %s KAT skipped (%s).  This backend has NO "
-                    "self-test coverage in this run.  Build the C library or set "
-                    "%s=1 to escalate this skip to a hard POST failure.",
-                    name,
-                    detail,
-                    _AMA_FIPS_STRICT_ENV,
-                )
-                continue
-            if not passed:
-                all_passed = False
-                _set_error(detail)
-                break
-        except Exception as exc:
-            detail = f"{name} KAT exception: {exc}"
-            _SELF_TEST_RESULTS.append((name, False, detail))
-            _set_error(detail)
+    for _stage_name, stage_fn in stages:
+        stage_ok, err = stage_fn()
+        if not stage_ok:
+            assert err is not None, "stage returned (False, None)"
+            _set_error(err)
             all_passed = False
             break
-
-    # 3. Constant-time timing oracle (dudect-inspired) — single
-    # deterministic pass (no retry).  See the docstring on
-    # ``_timing_oracle_consttime`` for rationale: retry-until-pass is
-    # a timing-leak amplifier and is removed.
-    if all_passed:
-        try:
-            oracle_passed, oracle_detail = _timing_oracle_consttime()
-        except Exception as exc:
-            oracle_detail = f"Timing oracle exception: {exc}"
-            oracle_passed = False
-        _SELF_TEST_RESULTS.append(("consttime-oracle", oracle_passed, oracle_detail))
-        if oracle_passed is None:
-            # Native consttime not loaded — same skip semantics as the
-            # KATs above (skip ≠ pass).  Under strict mode this is a
-            # hard failure; otherwise we WARN and continue.
-            if strict_mode:
-                _set_error(
-                    f"FIPS strict mode ({_AMA_FIPS_STRICT_ENV}=1): "
-                    f"consttime-oracle cannot run — {oracle_detail}"
-                )
-                all_passed = False
-            else:
-                logger.warning(
-                    "FIPS 140-3 POST: consttime-oracle skipped (%s).  "
-                    "Native constant-time backend is required for timing-leak "
-                    "self-test; set %s=1 to escalate.",
-                    oracle_detail,
-                    _AMA_FIPS_STRICT_ENV,
-                )
-        elif oracle_passed is False:
-            all_passed = False
-            _set_error(oracle_detail)
-
-    # 4. Continuous RNG initial test
-    if all_passed:
-        try:
-            out1 = secrets.token_bytes(32)
-            out2 = secrets.token_bytes(32)
-            if out1 == out2:
-                _SELF_TEST_RESULTS.append(("RNG", False, "Identical consecutive outputs"))
-                _set_error("RNG health test failed at startup")
-                all_passed = False
-            else:
-                _rng_state["previous"] = out2
-                _SELF_TEST_RESULTS.append(("RNG", True, "RNG health test passed"))
-        except Exception as exc:
-            _SELF_TEST_RESULTS.append(("RNG", False, f"Exception: {exc}"))
-            _set_error(f"RNG health test exception: {exc}")
-            all_passed = False
 
     _POST_DURATION_MS = (time.monotonic() - start) * 1000
 

@@ -244,9 +244,7 @@ class HandshakeMessage:
         # bounds against actual payload are checked per-field below.
         min_len = 2 + 1 + 4 + 4
         if len(data) < min_len:
-            raise ChannelError(
-                f"Truncated HandshakeMessage: {len(data)} bytes < minimum {min_len}"
-            )
+            raise ChannelError(f"Truncated HandshakeMessage: {len(data)} bytes < minimum {min_len}")
 
         offset = 0
         if offset + 2 > len(data):
@@ -303,9 +301,7 @@ class HandshakeMessage:
         offset += ct_len
 
         if offset != len(data):
-            raise ChannelError(
-                f"Malformed HandshakeMessage: {len(data) - offset} trailing bytes"
-            )
+            raise ChannelError(f"Malformed HandshakeMessage: {len(data) - offset} trailing bytes")
 
         return cls(
             protocol_name=protocol_name,
@@ -534,8 +530,17 @@ class SecureSession:
                 + struct.pack(">Q", self.send_seq)
             )
 
-            # native_aes256_gcm_encrypt accepts bytes-like; bytearray is
-            # bytes-like in CPython.  Pass directly to avoid an extra copy.
+            # ``native_aes256_gcm_encrypt`` is typed (and ctypes-bound)
+            # to ``bytes``; bytearray does not satisfy ``ctypes.c_char_p``
+            # (it requires immutable bytes or an integer address), so we
+            # MUST materialise a transient bytes copy of the key for
+            # this call.  The copy is short-lived (it is unreferenced
+            # the moment this expression returns) and the canonical
+            # storage (``self.send_key``) remains the wipeable
+            # ``bytearray`` that ``close()`` will zero in place.
+            # Plumbing the buffer protocol all the way through the FFI
+            # would avoid the transient copy but requires touching the
+            # native wrapper signature; out of scope for this commit.
             ct, tag = native_aes256_gcm_encrypt(bytes(self.send_key), nonce, plaintext, aad)
 
             msg = ChannelMessage(
@@ -588,17 +593,11 @@ class SecureSession:
             # membership check against the set-insert.
             seq = msg.sequence_number
             if seq < self._replay_window_base:
-                raise ReplayError(
-                    f"Sequence {seq} below window base {self._replay_window_base}"
-                )
+                raise ReplayError(f"Sequence {seq} below window base {self._replay_window_base}")
             if seq in self._replay_window:
                 raise ReplayError(f"Sequence {seq} already received (replay)")
 
-            aad = (
-                self.session_id
-                + struct.pack(">I", self.rekey_epoch)
-                + struct.pack(">Q", seq)
-            )
+            aad = self.session_id + struct.pack(">I", self.rekey_epoch) + struct.pack(">Q", seq)
             plaintext = native_aes256_gcm_decrypt(
                 bytes(self.recv_key), msg.nonce, msg.ciphertext, msg.tag, aad
             )
