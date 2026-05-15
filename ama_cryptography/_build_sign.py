@@ -144,8 +144,9 @@ def _generate_keypair_and_sign(digest: bytes) -> Tuple[bytes, bytes]:
 
     pk = bytearray(32)
     sk = bytearray(64)
-    seed = os.urandom(32)
+    seed = bytearray(os.urandom(32))
     sk[0:32] = seed
+    secure_memzero(seed)
 
     pk_buf = (ctypes.c_char * 32).from_buffer(pk)
     sk_buf = (ctypes.c_char * 64).from_buffer(sk)
@@ -175,9 +176,9 @@ def _generate_keypair_and_sign(digest: bytes) -> Tuple[bytes, bytes]:
     pubkey_out = bytes(pk)
     signature_out = bytes(sig)
 
-    # Discard the ephemeral private key from memory.  The bytearray
-    # backing the secure-memzero is the only copy left after this
-    # function returns; the seed was already consumed by ama_ed25519_keypair.
+    # Discard the ephemeral private key from memory.  The seed was
+    # wiped immediately after copy into sk (line above); sk, sig, and
+    # pk are the only mutable copies remaining.
     secure_memzero(sk)
     secure_memzero(sig)
     secure_memzero(pk)

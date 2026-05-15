@@ -30,6 +30,7 @@
 #include <string.h>
 
 #include "ama_cryptography.h"
+#include "ama_cpuid.h"
 #include "ama_dispatch.h"
 
 /* Forward decl: src/c/ama_sha3.c always defines this, regardless of
@@ -83,6 +84,10 @@ typedef void (*keccak_x4_fn)(uint64_t states[4][25]);
 
 static keccak_single_fn simd_keccak_single(const char **label) {
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+    if (!ama_has_avx2()) {
+        (void)label;
+        return NULL;
+    }
     *label = "AVX2";
     return ama_keccak_f1600_avx2;
 #elif defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
@@ -96,6 +101,10 @@ static keccak_single_fn simd_keccak_single(const char **label) {
 
 static keccak_x4_fn simd_keccak_x4(const char **label) {
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+    if (!ama_has_avx2()) {
+        (void)label;
+        return NULL;
+    }
     *label = "AVX2 4-way";
     return ama_keccak_f1600_x4_avx2;
 #else
