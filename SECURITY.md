@@ -263,6 +263,53 @@ Users deploying AMA Cryptography in production should:
 - **RECOMMENDED:** Implement rate limiting for signature operations
 - **RECOMMENDED:** Regular security audits of deployment configuration
 
+## Module Integrity Verification (FIPS 140-3 §4.9.1)
+
+### Threat model
+
+The integrity check verifies that an installed wheel's `.py` files
+have not been tampered with after build.  It is **not** a supply-chain
+identity check (PyPI's existing PGP / sigstore mechanisms cover that)
+and it does **not** prove anything about a malicious build pipeline —
+both the digest and the signing key are produced by the same build
+that produced the code being signed.  The contract is:
+
+1. The wheel build computes SHA3-256 over the package's `.py` files,
+   generates an **ephemeral, per-build Ed25519 key**, signs the
+   digest, embeds **the signature + the public verification key** as
+   a Python literal in `ama_cryptography/_integrity_signature.py`,
+   then **discards the private key** before publishing the wheel.
+2. At import, `_self_test._verify_integrity()` re-hashes the
+   `.py` files, loads the embedded `(pubkey, signature)` pair, and
+   calls `ama_ed25519_verify` from the in-tree C kernel (via
+   ctypes — INVARIANT-1 forbids a PyCA dependency).  Mismatch
+   transitions the module to the ERROR state and refuses every
+   cryptographic operation.
+
+There is **no long-lived signing key**.  Each build generates,
+signs once, and discards.  That eliminates the "key theft = forge
+arbitrary updates" failure mode at the cost of binding integrity to
+a single wheel artefact — exactly what FIPS 140-3 §4.9.1 requires
+("integrity of cryptographic module software / firmware"). 
+
+### `--update` is build-pipeline-only
+
+`python -m ama_cryptography.integrity --update` is gated behind
+`AMA_BUILD_PIPELINE=1`.  Users who modify `.py` files after install
+must rebuild the wheel — running `--update` locally would silently
+re-bless tampered code and defeat the tamper-detection contract.
+
+### Implementation status
+
+The `--update` gate and digest-based verification ship in the
+AArch64-completeness PR (2026-05).  The ctypes-bridged Ed25519
+sign/verify pipeline and the `_integrity_signature.py` artefact
+are wired in the same PR's build-pipeline hook (`setup.py`
+post-build step); when the artefact is absent (e.g., editable
+installs, source checkouts), the module falls back to digest-only
+verification with a logged warning so developer ergonomics do not
+require a full wheel build on every edit.
+
 ## Cryptographic Algorithm Security
 
 ### Current Algorithms

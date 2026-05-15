@@ -142,6 +142,32 @@ if(AMA_USE_NATIVE_PQC)
     # tag against the AVX2 AES-NI reference, round-trip decrypt
     # correctness, and tag-tamper rejection.
     add_ama_test(test_aes_gcm_vaes_equiv test_aes_gcm_vaes_equiv.c)
+
+    # AArch64-completeness PR (2026-05) — NEON AES-GCM kernel
+    # equivalence test.  Pairs the dispatch-resolved NEON AES-GCM
+    # encrypt + decrypt against the generic-C scalar reference over
+    # boundary lattice + 1024 random vectors, plus tag-tamper
+    # rejection.  Uses SKIP_RETURN_CODE 77 so non-AArch64 hosts and
+    # AArch64 hosts without ARM Crypto Extensions surface as
+    # "Skipped" rather than passing tautologically.
+    add_executable(test_aes_gcm_neon_equiv test_aes_gcm_neon_equiv.c)
+    target_link_libraries(test_aes_gcm_neon_equiv ama_cryptography_test)
+    add_test(NAME test_aes_gcm_neon_equiv COMMAND test_aes_gcm_neon_equiv)
+    set_tests_properties(test_aes_gcm_neon_equiv PROPERTIES SKIP_RETURN_CODE 77)
+
+    # AArch64-completeness PR (2026-05) — AVX2 ChaCha20 8-way
+    # block-function equivalence test.  Compares 512 B of keystream
+    # produced by ama_chacha20_block_x8_avx2 against 8 sequential
+    # scalar single-block calls over 1024 random (key, nonce, counter)
+    # tuples.  Catches AVX2 lane-shuffle / column-vs-diagonal mistakes
+    # that the existing test_chacha20poly1305 KAT (counter=0, single
+    # block) would not detect.  SKIP_RETURN_CODE 77 on non-x86-64
+    # builds, or x86-64 builds where the host lacks AVX2.
+    add_executable(test_chacha20_x8_avx2_equiv test_chacha20_x8_avx2_equiv.c)
+    target_link_libraries(test_chacha20_x8_avx2_equiv ama_cryptography_test)
+    add_test(NAME test_chacha20_x8_avx2_equiv
+             COMMAND test_chacha20_x8_avx2_equiv)
+    set_tests_properties(test_chacha20_x8_avx2_equiv PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # Performance benchmark (not added to ctest - run manually)

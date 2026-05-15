@@ -51,6 +51,14 @@ from typing import Dict, List, Tuple
 
 BASELINE_PATH = "benchmarks/baseline.json"
 
+# Companion baseline produced by the ubuntu-24.04-arm matrix entry of
+# the benchmark-regression CI job.  Changes to either file must carry
+# justification: a silent NEON regression dropping AArch64 throughput
+# 20% would otherwise be masked by editing only the AArch64 baseline.
+ARM_BASELINE_PATH = "benchmarks/arm-baseline.json"
+
+ALL_BASELINE_PATHS = (BASELINE_PATH, ARM_BASELINE_PATH)
+
 # Regex for "<digits>[,_<digits>] ops/sec" or "... ops/s" or "... us" / "... ms"
 # latencies. Case-insensitive, tolerates commas/underscores in numbers.
 _MEASUREMENT_RE = re.compile(
@@ -92,17 +100,17 @@ def _run_git(*args: str) -> str:
     return result.stdout
 
 
-def _load_baseline_at(ref: str) -> Dict[str, Dict]:
+def _load_baseline_at(ref: str, path: str = BASELINE_PATH) -> Dict[str, Dict]:
     """Return {primitive_name: entry_dict} merged from benchmarks + pqc_benchmarks
     sections, as they appeared at ``ref``. Missing file yields {}."""
     try:
-        raw = _run_git("show", f"{ref}:{BASELINE_PATH}")
+        raw = _run_git("show", f"{ref}:{path}")
     except subprocess.CalledProcessError:
         return {}
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        print(f"ERROR: could not parse {BASELINE_PATH}@{ref}: {exc}", file=sys.stderr)
+        print(f"ERROR: could not parse {path}@{ref}: {exc}", file=sys.stderr)
         sys.exit(2)
     merged: Dict[str, Dict] = {}
     for section in ("benchmarks", "pqc_benchmarks"):
@@ -128,8 +136,9 @@ def _changed_baseline_values(
 
 def _collect_commit_text(base_ref: str, head_ref: str) -> str:
     """Concatenate every commit message in ``base_ref..head_ref`` that touches
-    BASELINE_PATH. We only inspect the commits that actually modified the
-    file — unrelated commit messages would be noise.
+    a baseline JSON (x86 or arm).  We only inspect the commits that
+    actually modified one of the baseline files — unrelated commit
+    messages would be noise.
 
     A shallow clone or an unreachable base ref yields a CalledProcessError
     from git; return an empty string in that case so the check falls back
@@ -141,7 +150,7 @@ def _collect_commit_text(base_ref: str, head_ref: str) -> str:
             f"{base_ref}..{head_ref}",
             "--pretty=format:%H%n%B%n---END-COMMIT---",
             "--",
-            BASELINE_PATH,
+            *ALL_BASELINE_PATHS,
         )
     except subprocess.CalledProcessError as exc:
         print(
@@ -229,23 +238,30 @@ def main(argv: List[str]) -> int:
             return 2
 
     try:
-        before = _load_baseline_at(args.base_ref)
-        after = _load_baseline_at(args.head_ref)
+        per_path_changes: List[Tuple[str, List[Tuple[str, object, object]]]] = []
+        for path in ALL_BASELINE_PATHS:
+            before_p = _load_baseline_at(args.base_ref, path)
+            after_p = _load_baseline_at(args.head_ref, path)
+            ch_p = _changed_baseline_values(before_p, after_p)
+            if ch_p:
+                per_path_changes.append((path, ch_p))
     except subprocess.CalledProcessError as exc:
         print(f"ERROR: git show failed: {exc.stderr}", file=sys.stderr)
         return 2
 
-    changes = _changed_baseline_values(before, after)
-    if not changes:
+    if not per_path_changes:
         print(
-            f"OK: {BASELINE_PATH} has no baseline_value changes in "
-            f"{args.base_ref}..{args.head_ref}."
+            f"OK: {' / '.join(ALL_BASELINE_PATHS)} have no baseline_value "
+            f"changes in {args.base_ref}..{args.head_ref}."
         )
         return 0
 
-    print(f"Detected {len(changes)} baseline_value change(s):")
-    for name, b, a in changes:
-        print(f"  - {name}: {b!r} -> {a!r}")
+    changes: List[Tuple[str, object, object]] = []
+    for path, ch_p in per_path_changes:
+        print(f"Detected {len(ch_p)} baseline_value change(s) in {path}:")
+        for name, b, a in ch_p:
+            print(f"  - {name}: {b!r} -> {a!r}")
+        changes.extend(ch_p)
 
     commit_text = _collect_commit_text(args.base_ref, args.head_ref)
     combined_text = commit_text + "\n\n" + (args.pr_body or "")

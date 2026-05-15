@@ -314,9 +314,25 @@ jobs:
         fi
 
   benchmark-regression:
-    name: Benchmark Regression Detection
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    name: Benchmark Regression Detection (${{ matrix.runner_cpu_class }})
+    # x86_64 entry uses ubuntu-latest; arm64 entry uses ubuntu-24.04-arm
+    # (GitHub-hosted Cortex-A78 / Graviton-class AArch64 runner).  The
+    # arm-baseline.json arm entry exercises the NEON paths wired by this
+    # PR (AES-GCM, ChaCha20, Argon2) end-to-end so any byte-level
+    # divergence between the NEON kernel and the scalar reference shows
+    # up as a regression-detector hit, not a silent passing build.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            runner_cpu_class: x86_64
+            baseline_path: benchmarks/baseline.json
+          - os: ubuntu-24.04-arm
+            runner_cpu_class: aarch64
+            baseline_path: benchmarks/arm-baseline.json
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
 
     steps:
     - name: Checkout code
@@ -332,11 +348,37 @@ jobs:
       run: |
         sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
         sudo apt-get update
-        sudo apt-get install -y build-essential cmake
+        sudo apt-get install -y build-essential cmake util-linux
+
+    - name: Capture runner CPU class
+      id: cpu_class
+      run: |
+        # lscpu reports the canonical "Architecture:" field which we
+        # treat as the source of truth.  Pin the value into the runner
+        # matrix entry so a benchmark JSON produced by ubuntu-24.04-arm
+        # is unambiguously distinguishable from one produced by
+        # ubuntu-latest x86_64 (the regression detector keys off this).
+        ARCH=$(lscpu | awk -F: '/^Architecture:/ {gsub(/^ +/, "", $2); print $2}')
+        echo "arch=${ARCH}"   >> "$GITHUB_OUTPUT"
+        echo "matrix_class=${{ matrix.runner_cpu_class }}" >> "$GITHUB_OUTPUT"
 
     - name: Build native C library
       run: |
-        cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+        # AMA_ENABLE_AVX512=ON enables the in-house AVX-512 4-way Keccak
+        # kernel on x86-64 hosts (gated on runtime CPUID at dispatch
+        # init, so a no-op on AArch64).  AMA_ENABLE_NATIVE_ARCH=ON adds
+        # -march=native so the benchmark exercises the host's full
+        # microarchitecture (AES-NI, BMI2, AVX2/AVX-512, NEON Crypto
+        # Extensions as appropriate).  Without these flags the benchmark
+        # numbers reflect the lowest-common-denominator generic C path,
+        # not what users actually run.
+        cmake -B build \
+          -DAMA_USE_NATIVE_PQC=ON \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DAMA_BUILD_TESTS=OFF \
+          -DAMA_BUILD_EXAMPLES=OFF \
+          -DAMA_ENABLE_AVX512=ON \
+          -DAMA_ENABLE_NATIVE_ARCH=ON
         cmake --build build -j$(nproc)
 
     - name: Install dependencies
@@ -346,14 +388,41 @@ jobs:
         pip install -e ".[dev]"
 
     - name: Run benchmark regression tests
+      env:
+        AMA_RUNNER_CPU_CLASS: ${{ steps.cpu_class.outputs.arch }}
       run: |
-        python benchmarks/benchmark_runner.py --verbose --output benchmarks/benchmark-results.json --markdown benchmark-report.md
+        # Pin to a single core (`taskset -c 0`) and raise scheduling
+        # priority (`nice -n -10`) so the benchmark numbers are not
+        # contaminated by other tasks on the shared GitHub-hosted
+        # runner.  Mirrors the same harness dudect.yml uses for its
+        # constant-time measurements at the identical priority — the
+        # dudect t-statistic and the benchmark medians both depend on
+        # the same noise floor.
+        taskset -c 0 nice -n -10 python benchmarks/benchmark_runner.py \
+          --verbose \
+          --output benchmarks/benchmark-results.json \
+          --markdown benchmark-report.md
+
+        # Annotate the baseline JSON with the runner CPU class so the
+        # arm-baseline.json and baseline.json artefacts are uniformly
+        # tagged.  The downstream `check_baseline_justification.py`
+        # uses this tag to compare against the matching baseline.
+        python - <<'PY'
+        import json, os, pathlib
+        path = pathlib.Path("benchmarks/benchmark-results.json")
+        if path.exists():
+            data = json.loads(path.read_text())
+            data.setdefault("metadata", {})["runner_cpu_class"] = (
+                os.environ.get("AMA_RUNNER_CPU_CLASS", "unknown")
+            )
+            path.write_text(json.dumps(data, indent=2) + "\n")
+        PY
 
     - name: Upload benchmark results
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
       if: success()
       with:
-        name: benchmark-results
+        name: benchmark-results-${{ matrix.runner_cpu_class }}
         path: |
           benchmarks/benchmark-results.json
           benchmark-report.md

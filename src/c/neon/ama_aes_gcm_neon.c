@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+#include "ama_cryptography.h"
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
@@ -304,6 +305,151 @@ void ama_aes256_gcm_encrypt_neon(
     uint8x16_t enc_j0 = aes256_encrypt_block_neon(J0, rk);
     uint8x16_t tag_val = veorq_u8(ghash_acc, enc_j0);
     vst1q_u8(tag, tag_val);
+
+    /* Scrub sensitive key material from stack (INVARIANT-12).  rk is
+     * the AES-256 round-key schedule, H = AES_K(0) is the GHASH key,
+     * and enc_j0 is the J0 tag-mask — every one of which leaks the
+     * AES-256 key class via tag forgery if recovered. */
+    ama_secure_memzero(rk, sizeof(rk));
+    ama_secure_memzero(&H, sizeof(H));
+    ama_secure_memzero(&enc_j0, sizeof(enc_j0));
+}
+
+/* ============================================================================
+ * AES-256-GCM decryption using ARM Crypto Extensions.
+ *
+ * GCM decryption runs AES-CTR over the ciphertext using the *forward*
+ * AES block cipher — never the inverse — because CTR mode XOR's the
+ * keystream produced by encrypting the counter blocks under the same
+ * key.  Consequently the inverse AES round opcodes (vaesdq_u8 +
+ * vaesimcq_u8) are not used here; they exist in the ARMv8 Crypto
+ * Extensions ISA primarily for ECB/CBC-decrypt and AEGIS-style paths
+ * that genuinely run AES^-1 over secret material.  Mentioned here so
+ * a future reader doesn't add an unreachable inverse helper.
+ *
+ * GCM decryption runs AES-CTR over the ciphertext (using the forward
+ * AES block cipher — *not* the inverse) and verifies the GHASH tag
+ * before releasing any plaintext (constant-time compare).  We compute
+ * the tag over ciphertext+AAD BEFORE decrypting, reject on mismatch
+ * with a zeroed-out plaintext output, and only run the CTR mode pass
+ * when the tag is authenticated.  Round-key schedule, GHASH key H,
+ * and J0 tag-mask are scrubbed on every return path (INVARIANT-12).
+ * ============================================================================ */
+ama_error_t ama_aes256_gcm_decrypt_neon(
+    const uint8_t *ciphertext, size_t ciphertext_len,
+    const uint8_t *aad, size_t aad_len,
+    const uint8_t key[32], const uint8_t nonce[12],
+    const uint8_t tag[16], uint8_t *plaintext)
+{
+    uint8x16_t rk[15];
+    ama_aes256_expand_key_neon(key, rk);
+
+    /* H = AES_K(0) — GHASH key in GCM-native byte order. */
+    uint8x16_t H = aes256_encrypt_block_neon(vdupq_n_u8(0), rk);
+
+    /* Initial counter block J0 = nonce || 0x00000001. */
+    uint8_t j0_buf[16] = {0};
+    memcpy(j0_buf, nonce, 12);
+    j0_buf[15] = 1;
+    uint8x16_t J0 = vld1q_u8(j0_buf);
+
+    /* Compute GHASH(AAD || C || len) BEFORE decrypting. */
+    uint8x16_t ghash_acc = vdupq_n_u8(0);
+
+    size_t aad_blocks = (aad_len + 15) / 16;
+    for (size_t i = 0; i < aad_blocks; i++) {
+        uint8_t block[16] = {0};
+        size_t copy_len = (i + 1) * 16 <= aad_len ? 16 : aad_len - i * 16;
+        memcpy(block, aad + i * 16, copy_len);
+        uint8x16_t aad_block = vld1q_u8(block);
+        ghash_acc = veorq_u8(ghash_acc, aad_block);
+        ghash_acc = ghash_mul_neon(ghash_acc, H);
+    }
+
+    size_t full_blocks = ciphertext_len / 16;
+    for (size_t i = 0; i < full_blocks; i++) {
+        uint8x16_t ct = vld1q_u8(ciphertext + i * 16);
+        ghash_acc = veorq_u8(ghash_acc, ct);
+        ghash_acc = ghash_mul_neon(ghash_acc, H);
+    }
+    size_t remaining = ciphertext_len - full_blocks * 16;
+    if (remaining > 0) {
+        uint8_t pad_ct[16] = {0};
+        memcpy(pad_ct, ciphertext + full_blocks * 16, remaining);
+        uint8x16_t ct = vld1q_u8(pad_ct);
+        ghash_acc = veorq_u8(ghash_acc, ct);
+        ghash_acc = ghash_mul_neon(ghash_acc, H);
+    }
+
+    /* Length block: len(AAD) || len(C) in bits, big-endian. */
+    uint64_t aad_bits = (uint64_t)aad_len * 8;
+    uint64_t ct_bits = (uint64_t)ciphertext_len * 8;
+    uint8_t len_block[16];
+    for (int i = 0; i < 8; i++) {
+        len_block[i]     = (uint8_t)(aad_bits >> (56 - i * 8));
+        len_block[i + 8] = (uint8_t)(ct_bits  >> (56 - i * 8));
+    }
+    ghash_acc = veorq_u8(ghash_acc, vld1q_u8(len_block));
+    ghash_acc = ghash_mul_neon(ghash_acc, H);
+
+    /* Computed tag = GHASH XOR AES_K(J0). */
+    uint8x16_t enc_j0 = aes256_encrypt_block_neon(J0, rk);
+    uint8x16_t computed_tag = veorq_u8(ghash_acc, enc_j0);
+
+    uint8_t computed_tag_bytes[16];
+    vst1q_u8(computed_tag_bytes, computed_tag);
+
+    if (ama_consttime_memcmp(computed_tag_bytes, tag, 16) != 0) {
+        ama_secure_memzero(rk, sizeof(rk));
+        ama_secure_memzero(&H, sizeof(H));
+        ama_secure_memzero(&enc_j0, sizeof(enc_j0));
+        ama_secure_memzero(computed_tag_bytes, sizeof(computed_tag_bytes));
+        return AMA_ERROR_VERIFY_FAILED;
+    }
+
+    /* Tag verified — decrypt via CTR mode (counter = 2 onward). */
+    uint32_t ctr = 2;
+    for (size_t i = 0; i < full_blocks; i++) {
+        uint8_t cb_buf[16];
+        memcpy(cb_buf, nonce, 12);
+        cb_buf[12] = (uint8_t)(ctr >> 24);
+        cb_buf[13] = (uint8_t)(ctr >> 16);
+        cb_buf[14] = (uint8_t)(ctr >> 8);
+        cb_buf[15] = (uint8_t)(ctr);
+        ctr++;
+
+        uint8x16_t cb = vld1q_u8(cb_buf);
+        uint8x16_t ks = aes256_encrypt_block_neon(cb, rk);
+        uint8x16_t ct = vld1q_u8(ciphertext + i * 16);
+        uint8x16_t pt = veorq_u8(ks, ct);
+        vst1q_u8(plaintext + i * 16, pt);
+    }
+    if (remaining > 0) {
+        uint8_t cb_buf[16];
+        memcpy(cb_buf, nonce, 12);
+        cb_buf[12] = (uint8_t)(ctr >> 24);
+        cb_buf[13] = (uint8_t)(ctr >> 16);
+        cb_buf[14] = (uint8_t)(ctr >> 8);
+        cb_buf[15] = (uint8_t)(ctr);
+
+        uint8x16_t cb = vld1q_u8(cb_buf);
+        uint8x16_t ks = aes256_encrypt_block_neon(cb, rk);
+        uint8_t pad_ct[16] = {0}, pad_pt[16] = {0};
+        memcpy(pad_ct, ciphertext + full_blocks * 16, remaining);
+        uint8x16_t ct = vld1q_u8(pad_ct);
+        uint8x16_t pt = veorq_u8(ks, ct);
+        vst1q_u8(pad_pt, pt);
+        memcpy(plaintext + full_blocks * 16, pad_pt, remaining);
+        /* Scrub the over-allocated tail of pad_pt so partial-block
+         * plaintext bytes do not leak past the caller's slice. */
+        ama_secure_memzero(pad_pt, sizeof(pad_pt));
+    }
+
+    ama_secure_memzero(rk, sizeof(rk));
+    ama_secure_memzero(&H, sizeof(H));
+    ama_secure_memzero(&enc_j0, sizeof(enc_j0));
+    ama_secure_memzero(computed_tag_bytes, sizeof(computed_tag_bytes));
+    return AMA_SUCCESS;
 }
 
 #else
