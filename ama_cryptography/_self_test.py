@@ -23,6 +23,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import secrets
 import time
 from pathlib import Path
@@ -175,6 +176,37 @@ def pairwise_test_kem(
 # ============================================================================
 
 _INTEGRITY_DIGEST_FILE = Path(__file__).resolve().parent / "_integrity_digest.txt"
+_INTEGRITY_TRUST_ANCHOR_ENV = "AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX"
+_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV = "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR"
+_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX = ""
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when a boolean environment variable is explicitly enabled."""
+    return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
+
+
+def _load_integrity_trust_anchor() -> Tuple[Optional[str], Optional[str]]:
+    """Return the configured trust-anchor pubkey hex or an error string.
+
+    The default repository checkout leaves ``_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX``
+    empty so editable installs can keep using the per-build public key embedded
+    in ``_integrity_signature.py``.  Release builders may pin a public key via
+    ``AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX`` and set
+    ``AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1`` in CI to force anchored signatures.
+    """
+    raw = os.environ.get(_INTEGRITY_TRUST_ANCHOR_ENV, _INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX)
+    anchor_hex = raw.strip().lower()
+    if not anchor_hex:
+        return None, None
+    try:
+        anchor = bytes.fromhex(anchor_hex)
+    except ValueError as exc:
+        return None, f"integrity trust anchor is not hex: {exc}"
+    if len(anchor) != 32:
+        return None, f"integrity trust anchor has {len(anchor)} bytes (expected 32)"
+    return anchor_hex, None
 
 
 def _compute_module_digest() -> str:
@@ -257,6 +289,17 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[bool, str]:
             f"signature={len(signature)} (expected 32, 64)"
         )
 
+    trust_anchor_hex, trust_anchor_error = _load_integrity_trust_anchor()
+    if trust_anchor_error is not None:
+        return False, trust_anchor_error
+    if trust_anchor_hex is None and _env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV):
+        return False, "integrity trust anchor required but not configured"
+    if trust_anchor_hex is not None and pubkey_hex.strip().lower() != trust_anchor_hex:
+        return False, (
+            "integrity trust anchor mismatch: "
+            f"signed_pubkey={pubkey_hex[:16]}... anchor={trust_anchor_hex[:16]}..."
+        )
+
     try:
         from ama_cryptography.pqc_backends import (
             _ED25519_NATIVE_AVAILABLE,
@@ -274,6 +317,8 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[bool, str]:
         return False, f"native Ed25519 verify raised: {exc}"
     if not ok:
         return False, "Ed25519 signature did NOT verify — module tampered"
+    if trust_anchor_hex is not None:
+        return True, "signed integrity verified (Ed25519, trusted build pubkey)"
     return True, "signed integrity verified (Ed25519, build-time pubkey)"
 
 

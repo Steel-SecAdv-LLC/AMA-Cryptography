@@ -255,6 +255,38 @@ class TestModuleIntegrity:
         assert not ok
         assert "no signed-integrity artefact" in detail
 
+    def test_verify_signed_integrity_requires_trust_anchor(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Strict release mode fails closed if no trust anchor is configured."""
+        from ama_cryptography import _integrity_signature as sig_mod
+        from ama_cryptography._self_test import _verify_signed_integrity
+
+        monkeypatch.delenv("AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX", raising=False)
+        monkeypatch.setenv("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", "1")
+
+        ok, detail = _verify_signed_integrity(sig_mod.INTEGRITY_DIGEST_HEX)
+
+        assert not ok
+        assert "trust anchor required" in detail
+
+    def test_verify_signed_integrity_rejects_wrong_trust_anchor(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Signed path rejects a signature whose pubkey is not the configured anchor."""
+        from ama_cryptography import _integrity_signature as sig_mod
+        from ama_cryptography._self_test import _verify_signed_integrity
+
+        wrong_anchor = "00" * 32
+        if sig_mod.INTEGRITY_PUBKEY_HEX == wrong_anchor:
+            wrong_anchor = "11" * 32
+        monkeypatch.setenv("AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX", wrong_anchor)
+
+        ok, detail = _verify_signed_integrity(sig_mod.INTEGRITY_DIGEST_HEX)
+
+        assert not ok
+        assert "trust anchor mismatch" in detail
+
 
 # ===========================================================================
 # KAT Tests

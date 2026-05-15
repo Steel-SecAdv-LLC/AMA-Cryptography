@@ -21,6 +21,7 @@ Exit codes:
 
 import argparse
 import json
+import os
 import secrets
 import sys
 import time
@@ -51,6 +52,56 @@ def load_baseline(baseline_path: Path) -> Dict[str, Any]:
     """Load baseline configuration from JSON file."""
     with open(baseline_path) as f:
         return json.load(f)
+
+
+_RUNNER_CLASS_ALIASES = {
+    "amd64": "x86_64",
+    "x64": "x86_64",
+    "x86-64": "x86_64",
+    "x86_64": "x86_64",
+    "arm64": "aarch64",
+    "aarch64": "aarch64",
+}
+
+
+def normalize_runner_cpu_class(value: str) -> str:
+    """Normalize common runner architecture spellings for baseline matching."""
+    return _RUNNER_CLASS_ALIASES.get(value.strip().lower(), value.strip().lower())
+
+
+def validate_baseline_contract(
+    baseline: Dict[str, Any],
+    baseline_path: Path,
+    expected_runner_cpu_class: str = "",
+    require_populated_baseline: bool = False,
+) -> None:
+    """Validate baseline metadata before benchmark comparisons run."""
+    metadata = baseline.get("metadata", {})
+    actual = normalize_runner_cpu_class(str(metadata.get("runner_cpu_class", "")))
+    expected = normalize_runner_cpu_class(expected_runner_cpu_class)
+    if expected:
+        if not actual:
+            raise ValueError(
+                f"{baseline_path} is missing metadata.runner_cpu_class; "
+                f"expected {expected_runner_cpu_class!r}"
+            )
+        if actual != expected:
+            raise ValueError(
+                f"{baseline_path} targets runner_cpu_class={actual!r}, "
+                f"but this runner is {expected!r}"
+            )
+
+    if not require_populated_baseline:
+        return
+
+    zero_entries = []
+    for section in ("benchmarks", "pqc_benchmarks"):
+        for name, entry in baseline.get(section, {}).items():
+            if entry.get("baseline_value") == 0:
+                zero_entries.append(name)
+    if zero_entries:
+        joined = ", ".join(sorted(zero_entries))
+        raise ValueError(f"{baseline_path} contains unpopulated zero baselines: {joined}")
 
 
 def benchmark_operation(
@@ -649,6 +700,19 @@ def main():
         help="Update baseline with current results (use with caution)",
     )
     parser.add_argument(
+        "--require-runner-class",
+        default=os.environ.get("AMA_RUNNER_CPU_CLASS", ""),
+        help=(
+            "Require baseline metadata.runner_cpu_class to match this runner "
+            "(defaults to AMA_RUNNER_CPU_CLASS when set)."
+        ),
+    )
+    parser.add_argument(
+        "--require-populated-baseline",
+        action="store_true",
+        help="Fail if any selected baseline_value is zero.",
+    )
+    parser.add_argument(
         "--markdown",
         type=Path,
         help="Path to write markdown report with tables and charts",
@@ -664,6 +728,12 @@ def main():
     # Load baseline
     try:
         baseline = load_baseline(args.baseline)
+        validate_baseline_contract(
+            baseline,
+            args.baseline,
+            expected_runner_cpu_class=args.require_runner_class,
+            require_populated_baseline=args.require_populated_baseline,
+        )
         print(f"Loaded baseline: {args.baseline}")
         print(f"Regression threshold: {baseline['thresholds']['regression_threshold_percent']}%")
         print()

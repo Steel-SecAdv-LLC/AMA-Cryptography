@@ -49,9 +49,13 @@ import hashlib
 import os
 import sys
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 _BUILD_PIPELINE_ENV = "AMA_BUILD_PIPELINE"
+_INTEGRITY_SIGNING_SEED_ENV = "AMA_INTEGRITY_SIGNING_SEED_HEX"
+_INTEGRITY_TRUST_ANCHOR_ENV = "AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX"
+_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV = "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR"
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 
 
 def _require_build_pipeline() -> None:
@@ -95,7 +99,31 @@ def _compute_package_digest(pkg_dir: Path) -> bytes:
     return hasher.digest()
 
 
-def _generate_keypair_and_sign(digest: bytes) -> Tuple[bytes, bytes]:
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when a boolean environment variable is explicitly enabled."""
+    return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
+
+
+def _load_hex_env_bytes(name: str, expected_len: int) -> Optional[bytes]:
+    """Load an optional hex-encoded byte string from an environment variable."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = bytes.fromhex(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be hex-encoded: {exc}") from exc
+    if len(value) != expected_len:
+        raise RuntimeError(f"{name} has {len(value)} bytes; expected {expected_len}")
+    return value
+
+
+def _generate_keypair_and_sign(
+    digest: bytes,
+    seed_override: Optional[bytes] = None,
+    trusted_pubkey: Optional[bytes] = None,
+    require_trust_anchor: bool = False,
+) -> Tuple[bytes, bytes]:
     """Generate an ephemeral Ed25519 keypair and sign ``digest``.
 
     Uses the in-tree C kernel via ctypes — INVARIANT-1 forbids PyCA
@@ -111,6 +139,12 @@ def _generate_keypair_and_sign(digest: bytes) -> Tuple[bytes, bytes]:
             signing call fails.  Either is a hard build error — the
             wheel must not ship without a valid signature.
     """
+    if require_trust_anchor and trusted_pubkey is None:
+        raise RuntimeError(
+            f"{_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV}=1 requires "
+            f"{_INTEGRITY_TRUST_ANCHOR_ENV} to pin the expected build public key."
+        )
+
     # Late imports so this module is importable in environments that
     # cannot find the native library (e.g. doc builders): the failure
     # surfaces only when sign is actually requested.
@@ -144,7 +178,7 @@ def _generate_keypair_and_sign(digest: bytes) -> Tuple[bytes, bytes]:
 
     pk = bytearray(32)
     sk = bytearray(64)
-    seed = bytearray(os.urandom(32))
+    seed = bytearray(seed_override if seed_override is not None else os.urandom(32))
     sk[0:32] = seed
     secure_memzero(seed)
 
@@ -156,6 +190,14 @@ def _generate_keypair_and_sign(digest: bytes) -> Tuple[bytes, bytes]:
         secure_memzero(pk)
         raise RuntimeError(
             f"ama_ed25519_keypair returned rc={rc}; the native build " "may be miscompiled."
+        )
+
+    if trusted_pubkey is not None and bytes(pk) != trusted_pubkey:
+        secure_memzero(sk)
+        secure_memzero(pk)
+        raise RuntimeError(
+            "Generated integrity signing public key does not match "
+            f"{_INTEGRITY_TRUST_ANCHOR_ENV}; refusing to write an unanchored signature."
         )
 
     sig = bytearray(64)
@@ -268,7 +310,14 @@ def main() -> int:
         return 0
 
     try:
-        pubkey, signature = _generate_keypair_and_sign(digest)
+        seed_override = _load_hex_env_bytes(_INTEGRITY_SIGNING_SEED_ENV, 32)
+        trusted_pubkey = _load_hex_env_bytes(_INTEGRITY_TRUST_ANCHOR_ENV, 32)
+        pubkey, signature = _generate_keypair_and_sign(
+            digest,
+            seed_override=seed_override,
+            trusted_pubkey=trusted_pubkey,
+            require_trust_anchor=_env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV),
+        )
     except RuntimeError as exc:
         print(
             f"ERROR: {exc}\n"
@@ -287,6 +336,8 @@ def main() -> int:
         f"  pubkey    = {pubkey.hex()}\n"
         f"  signature = {signature.hex()[:32]}... (64 B)"
     )
+    if os.environ.get(_INTEGRITY_TRUST_ANCHOR_ENV, "").strip():
+        print("  trust     = enforced by AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX")
     return 0
 
 
