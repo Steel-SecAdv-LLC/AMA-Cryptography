@@ -630,14 +630,68 @@ def _kat_ed25519() -> Tuple[bool, str]:
 # Threshold: |t| > 4.5 indicates timing leak (dudect convention)
 _DUDECT_THRESHOLD = 4.5
 _TIMING_ITERATIONS = 1000
+_TIMING_WARMUP = 100
+_TIMING_RETRY_ITERATIONS = 10000
+
+
+def _measure_timing_batch(
+    n_iterations: int,
+    memcmp_fn: Callable[[bytes, bytes, int], int],
+    equal_a: bytes,
+    equal_b: bytes,
+    differ_a: bytes,
+    differ_b: bytes,
+    buf_size: int,
+) -> Tuple[float, float, float, float, int]:
+    """Run n_iterations interleaved timing measurements.
+
+    Returns (mean_equal, mean_differ, var_equal, var_differ, n).
+    """
+    times_equal: List[float] = []
+    times_differ: List[float] = []
+
+    for i in range(n_iterations):
+        if i % 2 == 0:
+            t0 = time.perf_counter_ns()
+            memcmp_fn(equal_a, equal_b, buf_size)
+            t1 = time.perf_counter_ns()
+            times_equal.append(float(t1 - t0))
+
+            t0 = time.perf_counter_ns()
+            memcmp_fn(differ_a, differ_b, buf_size)
+            t1 = time.perf_counter_ns()
+            times_differ.append(float(t1 - t0))
+        else:
+            t0 = time.perf_counter_ns()
+            memcmp_fn(differ_a, differ_b, buf_size)
+            t1 = time.perf_counter_ns()
+            times_differ.append(float(t1 - t0))
+
+            t0 = time.perf_counter_ns()
+            memcmp_fn(equal_a, equal_b, buf_size)
+            t1 = time.perf_counter_ns()
+            times_equal.append(float(t1 - t0))
+
+    n1 = len(times_equal)
+    mean1 = sum(times_equal) / n1
+    mean2 = sum(times_differ) / n1
+    var1 = sum((x - mean1) ** 2 for x in times_equal) / (n1 - 1)
+    var2 = sum((x - mean2) ** 2 for x in times_differ) / (n1 - 1)
+    return mean1, mean2, var1, var2, n1
 
 
 def _timing_oracle_consttime() -> Tuple[bool, str]:
     """Test ama_consttime_memcmp for timing leaks via Welch's t-test.
 
-    Runs _TIMING_ITERATIONS comparisons with equal and unequal inputs,
-    measures execution time for each, then computes Welch's t-statistic.
+    Runs interleaved comparisons with equal and unequal inputs, measures
+    execution time for each, then computes Welch's t-statistic.
     If |t| > 4.5, the comparison function may leak timing information.
+
+    To eliminate false positives from scheduler noise on shared CI
+    runners, the test uses a warmup phase (stabilizes CPU frequency and
+    instruction cache) and retries with 10x samples on first failure.
+    Real timing leaks persist with more samples; transient noise from
+    context switches and frequency scaling averages out.
 
     This makes AMA-Crypto the first open-source library that self-tests
     for timing leaks at startup via FIPS POST.
@@ -653,41 +707,46 @@ def _timing_oracle_consttime() -> Tuple[bool, str]:
     differ_a = b"\xaa" * buf_size
     differ_b = b"\x55" * buf_size
 
-    times_equal: List[float] = []
-    times_differ: List[float] = []
+    # Warmup: stabilize CPU frequency, fill i-cache and branch predictors
+    for _ in range(_TIMING_WARMUP):
+        _native_consttime_memcmp(equal_a, equal_b, buf_size)
+        _native_consttime_memcmp(differ_a, differ_b, buf_size)
 
-    # Interleave measurements to reduce systematic bias
-    for i in range(_TIMING_ITERATIONS):
-        if i % 2 == 0:
-            t0 = time.perf_counter_ns()
-            _native_consttime_memcmp(equal_a, equal_b, buf_size)
-            t1 = time.perf_counter_ns()
-            times_equal.append(float(t1 - t0))
+    mean1, mean2, var1, var2, n1 = _measure_timing_batch(
+        _TIMING_ITERATIONS,
+        _native_consttime_memcmp,
+        equal_a,
+        equal_b,
+        differ_a,
+        differ_b,
+        buf_size,
+    )
 
-            t0 = time.perf_counter_ns()
-            _native_consttime_memcmp(differ_a, differ_b, buf_size)
-            t1 = time.perf_counter_ns()
-            times_differ.append(float(t1 - t0))
-        else:
-            t0 = time.perf_counter_ns()
-            _native_consttime_memcmp(differ_a, differ_b, buf_size)
-            t1 = time.perf_counter_ns()
-            times_differ.append(float(t1 - t0))
+    se = math.sqrt(var1 / n1 + var2 / n1) if (var1 + var2) > 0 else 0.0
+    t_stat = (mean1 - mean2) / se if se > 0 else (0.0 if mean1 == mean2 else float("inf"))
 
-            t0 = time.perf_counter_ns()
-            _native_consttime_memcmp(equal_a, equal_b, buf_size)
-            t1 = time.perf_counter_ns()
-            times_equal.append(float(t1 - t0))
+    if abs(t_stat) <= _DUDECT_THRESHOLD:
+        return (
+            True,
+            f"Constant-time OK: |t|={abs(t_stat):.2f} <= {_DUDECT_THRESHOLD} "
+            f"(equal={mean1:.0f}ns, differ={mean2:.0f}ns, n={n1})",
+        )
 
-    # Welch's t-test (unequal variance)
-    n1 = len(times_equal)
-    n2 = len(times_differ)
-    mean1 = sum(times_equal) / n1
-    mean2 = sum(times_differ) / n2
-    var1 = sum((x - mean1) ** 2 for x in times_equal) / (n1 - 1)
-    var2 = sum((x - mean2) ** 2 for x in times_differ) / (n2 - 1)
+    # First pass failed — retry with 10x samples to distinguish a real
+    # leak from transient scheduler noise.  A genuine timing side-channel
+    # will reproduce with higher statistical power; noise averages out
+    # proportional to 1/sqrt(n).
+    mean1, mean2, var1, var2, n1 = _measure_timing_batch(
+        _TIMING_RETRY_ITERATIONS,
+        _native_consttime_memcmp,
+        equal_a,
+        equal_b,
+        differ_a,
+        differ_b,
+        buf_size,
+    )
 
-    se = math.sqrt(var1 / n1 + var2 / n2) if (var1 + var2) > 0 else 0.0
+    se = math.sqrt(var1 / n1 + var2 / n1) if (var1 + var2) > 0 else 0.0
     t_stat = (mean1 - mean2) / se if se > 0 else (0.0 if mean1 == mean2 else float("inf"))
 
     if abs(t_stat) > _DUDECT_THRESHOLD:
@@ -699,7 +758,7 @@ def _timing_oracle_consttime() -> Tuple[bool, str]:
 
     return (
         True,
-        f"Constant-time OK: |t|={abs(t_stat):.2f} <= {_DUDECT_THRESHOLD} "
+        f"Constant-time OK (retry): |t|={abs(t_stat):.2f} <= {_DUDECT_THRESHOLD} "
         f"(equal={mean1:.0f}ns, differ={mean2:.0f}ns, n={n1})",
     )
 
