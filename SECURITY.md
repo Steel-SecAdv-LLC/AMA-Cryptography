@@ -263,6 +263,78 @@ Users deploying AMA Cryptography in production should:
 - **RECOMMENDED:** Implement rate limiting for signature operations
 - **RECOMMENDED:** Regular security audits of deployment configuration
 
+## Module Integrity Verification (FIPS 140-3 §4.9.1)
+
+### Threat model
+
+The integrity check verifies that an installed wheel's `.py` files
+have not been tampered with after build.  It is **not** a supply-chain
+identity check (PyPI's existing PGP / sigstore mechanisms cover that)
+and it does **not** prove anything about a malicious build pipeline —
+both the digest and the signing key are produced by the same build
+that produced the code being signed.  The contract is:
+
+1. The wheel build computes SHA3-256 over the package's `.py` files,
+   generates an **ephemeral, per-build Ed25519 key**, signs the
+   digest, embeds **the signature + the public verification key** as
+   a Python literal in `ama_cryptography/_integrity_signature.py`,
+   then **discards the private key** before publishing the wheel.
+2. At import, `_self_test._verify_integrity()` re-hashes the
+   `.py` files, loads the embedded `(pubkey, signature)` pair, and
+   calls `ama_ed25519_verify` from the in-tree C kernel (via
+   ctypes — INVARIANT-1 forbids a PyCA dependency).  Mismatch
+   transitions the module to the ERROR state and refuses every
+   cryptographic operation.
+
+There is **no long-lived signing key**.  Each build generates,
+signs once, and discards.  That eliminates the "key theft = forge
+arbitrary updates" failure mode at the cost of binding integrity to
+a single wheel artefact — exactly what FIPS 140-3 §4.9.1 requires
+("integrity of cryptographic module software / firmware"). 
+
+### `--update` is build-pipeline-only
+
+`python -m ama_cryptography.integrity --update` is gated behind
+`AMA_BUILD_PIPELINE=1`.  Users who modify `.py` files after install
+must rebuild the wheel — running `--update` locally would silently
+re-bless tampered code and defeat the tamper-detection contract.
+
+### Implementation status
+
+Both halves ship together in the AArch64-completeness PR (2026-05):
+
+1. **`--update` gate** — `python -m ama_cryptography.integrity --update`
+   requires `AMA_BUILD_PIPELINE=1` in the environment.  Outside that
+   gate the command exits 2 with a remediation message.  See
+   `ama_cryptography/integrity.py`.
+2. **Signing pipeline** — `python -m ama_cryptography._build_sign`
+   (invoked by the build pipeline, e.g. `setup.py` post-build hook /
+   CMake post-install step / wheel CI workflow) generates an ephemeral
+   Ed25519 keypair via the in-tree `ama_ed25519_keypair` C symbol
+   (INVARIANT-1: no PyCA dependency), signs the SHA3-256 digest with
+   `ama_ed25519_sign`, writes `ama_cryptography/_integrity_signature.py`
+   with the embedded pubkey + signature + digest, and discards the
+   private key before exit.  See `ama_cryptography/_build_sign.py`.
+3. **Import-time verifier** — `_self_test._verify_integrity()` calls
+   `_verify_signed_integrity()` first.  When the signature artefact is
+   present (the normal post-wheel-build state), it recomputes the
+   digest, calls `ama_ed25519_verify` via ctypes with the embedded
+   pubkey and signature, and accepts only on a positive verify.  When
+   the artefact is absent (editable installs, source checkouts,
+   wheels built without `AMA_BUILD_PIPELINE=1`), the module falls
+   back to digest-only verification against `_integrity_digest.txt`
+   with a logged WARNING — developer ergonomics do not require a
+   full wheel build on every edit, but packagers see the missing
+   signature in CI logs.
+
+End-to-end smoke test (from the AArch64-completeness PR's CI):
+
+    AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign
+    python -m ama_cryptography.integrity --verify   # → "OK (signed integrity verified, ...)"
+    # Now edit a .py file and re-import:
+    python -c "import ama_cryptography; ama_cryptography._self_test._run_self_tests()"
+    # → ERROR state, all crypto operations refused
+
 ## Cryptographic Algorithm Security
 
 ### Current Algorithms

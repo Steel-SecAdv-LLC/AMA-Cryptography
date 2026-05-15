@@ -124,6 +124,30 @@ void ama_chacha20_block_x4_neon(const uint8_t key[32],
     }
 }
 
+/* ============================================================================
+ * ChaCha20 block_x8: 8 sequential keystream blocks (512 B output).
+ *
+ * Matches the AVX2 ama_chacha20_block_x8_avx2 signature so the
+ * dispatch table can install either kernel polymorphically.  The
+ * underlying NEON kernel processes 4 blocks per call (the maximum
+ * that fits in a single 4-lane wide AdvSIMD permute pattern without
+ * exhausting the vector register file), so we invoke it twice — once
+ * for blocks [counter, counter+3] and once for [counter+4, counter+7].
+ *
+ * Byte-identity with the scalar chacha20_block path is inherited from
+ * ama_chacha20_block_x4_neon, which is already validated by
+ * tests/c/test_chacha20poly1305.c — INVARIANT-1 (no external crypto
+ * deps) holds because the reference path is the in-tree scalar
+ * implementation.
+ * ============================================================================ */
+void ama_chacha20_block_x8_neon(const uint8_t key[32],
+                                  const uint8_t nonce[12],
+                                  uint32_t counter,
+                                  uint8_t out[512]) {
+    ama_chacha20_block_x4_neon(key, nonce, counter,       out);
+    ama_chacha20_block_x4_neon(key, nonce, counter + 4u,  out + 256);
+}
+
 #else
 typedef int ama_chacha20poly1305_neon_not_available;
 #endif /* __aarch64__ */

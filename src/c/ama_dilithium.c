@@ -1600,11 +1600,24 @@ AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len
     reject = 1;
     unsigned int attempts = 0;
     const unsigned int MAX_SIGN_ATTEMPTS = 1000;
+    /* yhat hoisted out of the loop so its stack slot is visible at the
+     * success/error exits and can be scrubbed.  The previous in-loop
+     * declaration left the last iteration's NTT(y) on the stack with no
+     * subsequent overwrite — recoverable from a stack snapshot. */
+    dil_polyvecl yhat;
     while (reject) {
         if (++attempts > MAX_SIGN_ATTEMPTS) {
             ama_secure_memzero(&s1, sizeof(s1));
             ama_secure_memzero(&s1hat, sizeof(s1hat));
             ama_secure_memzero(&s2hat, sizeof(s2hat));
+            ama_secure_memzero(&t0hat, sizeof(t0hat));
+            ama_secure_memzero(&y, sizeof(y));
+            ama_secure_memzero(&yhat, sizeof(yhat));
+            ama_secure_memzero(&cs2, sizeof(cs2));
+            ama_secure_memzero(&ct0, sizeof(ct0));
+            ama_secure_memzero(&cp, sizeof(cp));
+            ama_secure_memzero(&w0, sizeof(w0));
+            ama_secure_memzero(&w1, sizeof(w1));
             ama_secure_memzero(mu, sizeof(mu));
             ama_secure_memzero(rhoprime, sizeof(rhoprime));
             ama_secure_memzero(hashbuf, sizeof(hashbuf));
@@ -1617,8 +1630,9 @@ AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len
         dil_polyvecl_uniform_gamma1(&y, rhoprime, (uint16_t)(DIL_L * nonce));
         nonce++;
 
-        /* Compute w = A*NTT(y) */
-        dil_polyvecl yhat = y;
+        /* Compute w = A*NTT(y).  yhat is hoisted (see above) so its
+         * stack slot persists past the loop for scrub. */
+        yhat = y;
         dil_polyvecl_ntt(&yhat);
         dil_polyvec_matrix_pointwise(&w1, mat, &yhat);
         dil_polyveck_invntt(&w1);
@@ -1708,10 +1722,29 @@ AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len
 
     *signature_len = AMA_ML_DSA_65_SIGNATURE_BYTES;
 
-    /* Scrub sensitive data */
+    /* Scrub sensitive data.
+     *
+     * INVARIANT-12: the success path leaves recoverable signing
+     * intermediates on the stack — the NTT-domain ephemeral mask
+     * (`y`, `yhat`), the c*s2 and c*t0 products used to enforce the
+     * gamma2/beta norm bounds (`cs2`, `ct0`), the NTT-domain unpacked
+     * t0 portion of the secret key (`t0hat`), the challenge polynomial
+     * (`cp`), and the high/low decomposition of A*NTT(y) (`w0`, `w1`).
+     * Each is derivable from the secret key and the message-bound nonce
+     * `rhoprime`, so they must be scrubbed alongside the previously
+     * cleared (`s1`, `s1hat`, `s2hat`, `mu`, `rhoprime`, `hashbuf`)
+     * fields before return. */
     ama_secure_memzero(&s1, sizeof(s1));
     ama_secure_memzero(&s1hat, sizeof(s1hat));
     ama_secure_memzero(&s2hat, sizeof(s2hat));
+    ama_secure_memzero(&t0hat, sizeof(t0hat));
+    ama_secure_memzero(&y, sizeof(y));
+    ama_secure_memzero(&yhat, sizeof(yhat));
+    ama_secure_memzero(&cs2, sizeof(cs2));
+    ama_secure_memzero(&ct0, sizeof(ct0));
+    ama_secure_memzero(&cp, sizeof(cp));
+    ama_secure_memzero(&w0, sizeof(w0));
+    ama_secure_memzero(&w1, sizeof(w1));
     ama_secure_memzero(mu, sizeof(mu));
     ama_secure_memzero(rhoprime, sizeof(rhoprime));
     ama_secure_memzero(hashbuf, sizeof(hashbuf));

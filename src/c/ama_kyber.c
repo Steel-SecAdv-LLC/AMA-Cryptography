@@ -590,6 +590,16 @@ static ama_error_t kyber_keypair_generate(
         err = kyber_randombytes(
             secret_key + KYBER_K * 384 + AMA_KYBER_1024_PUBLIC_KEY_BYTES + 32, 32);
         if (err != AMA_SUCCESS) {
+            /* Late-error path: even though we have not yet written the
+             * final sk byte, the NTT-domain s vector and the (rho,sigma)
+             * seed in `buf` are already populated.  Scrub before
+             * returning so the secret state never survives the error
+             * path on the caller's stack. */
+            ama_secure_memzero(d, sizeof(d));
+            ama_secure_memzero(buf, sizeof(buf));
+            ama_secure_memzero(&s, sizeof(s));
+            ama_secure_memzero(&e, sizeof(e));
+            ama_secure_memzero(&pkpv, sizeof(pkpv));
             return err;
         }
 
@@ -880,9 +890,25 @@ static ama_error_t kyber_decapsulate(
             ama_secure_memzero(ss_reject, sizeof(ss_reject));
         }
 
-        /* Scrub sensitive data */
+        /* Scrub sensitive data.
+         *
+         * INVARIANT-12: the decap success path leaves recoverable
+         * secret material on the stack — the secret key polyvec
+         * (`skpv`), the recovered message polynomial (`mp`), the
+         * decompressed ciphertext (`bp`, `v`), and the re-encrypted
+         * ciphertext used by the FO comparator (`ct_cmp`).  All
+         * of these are derivable from the secret key once seen,
+         * so they must be scrubbed alongside `m` and `kr` before
+         * return.  Without this, a stack-snapshot attacker (or a
+         * later miscompilation that doesn't reuse the slots) could
+         * recover the secret. */
         ama_secure_memzero(m, sizeof(m));
         ama_secure_memzero(kr, sizeof(kr));
+        ama_secure_memzero(&skpv, sizeof(skpv));
+        ama_secure_memzero(&bp, sizeof(bp));
+        ama_secure_memzero(&v, sizeof(v));
+        ama_secure_memzero(&mp, sizeof(mp));
+        ama_secure_memzero(ct_cmp, sizeof(ct_cmp));
 
         return AMA_SUCCESS;
     }

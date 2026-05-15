@@ -251,3 +251,7 @@ build-verify/
 build-verify2/
 build-rollback/
 build-on/
+
+# Cross-compile aarch64 build dir (local-only)
+build-arm/
+aarch64-toolchain.cmake

@@ -445,6 +445,7 @@ int ama_has_arm_aes(void) { return 0; }
 int ama_has_arm_pmull(void) { return 0; }
 int ama_has_arm_neon(void) { return 0; }
 int ama_has_arm_sve2(void) { return 0; }
+int ama_cpuid_has_arm_aes(void) { return 0; }
 
 /* ============================================================================
  * ARM Crypto Extension Detection
@@ -551,6 +552,16 @@ int ama_has_arm_sve2(void) {
     return has_arm_sve2_cached;
 }
 
+int ama_cpuid_has_arm_aes(void) {
+    /* Bundle gate for the NEON AES-GCM kernel
+     * (src/c/neon/ama_aes_gcm_neon.c).  Returns 1 only when both
+     * ARMv8 AES (vaeseq_u8 / vaesmcq_u8) and ARMv8 PMULL (vmull_p64 /
+     * vmull_high_p64) are reported by HWCAP / sysctl.  Both share the
+     * same arm_once primitive so the underlying detect_arm_features()
+     * probe runs exactly once. */
+    return ama_has_arm_aes() && ama_has_arm_pmull();
+}
+
 /* ============================================================================
  * Unsupported architecture — no hardware crypto
  * ============================================================================ */
@@ -573,6 +584,7 @@ int ama_has_arm_aes(void) { return 0; }
 int ama_has_arm_pmull(void) { return 0; }
 int ama_has_arm_neon(void) { return 0; }
 int ama_has_arm_sve2(void) { return 0; }
+int ama_cpuid_has_arm_aes(void) { return 0; }
 
 #endif
 
