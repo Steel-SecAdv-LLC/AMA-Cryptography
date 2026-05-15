@@ -9,8 +9,9 @@
 
 ## The guard
 
-Every PR that modifies `benchmarks/baseline.json` must include, in its
-commit messages and/or the PR body, for **each primitive whose
+Every PR that modifies `benchmarks/baseline.json` or
+`benchmarks/arm-baseline.json` must include, in its commit messages
+and/or the PR body, for **each primitive whose
 `baseline_value` changed**:
 
 1. **A line-item mention by name** of the primitive (its JSON key).
@@ -22,8 +23,8 @@ Enforcement mechanisms:
 
 - `.github/workflows/baseline-guard.yml` runs
   `benchmarks/check_baseline_justification.py` on every PR touching
-  `benchmarks/baseline.json` and fails CI if any of the three
-  requirements is missing.
+  either baseline JSON and fails CI if any of the three requirements
+  is missing.
 - `.github/CODEOWNERS` routes review of `benchmarks/baseline.json`,
   `benchmarks/check_baseline_justification.py`, and
   `.github/workflows/baseline-guard.yml` to

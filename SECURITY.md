@@ -275,7 +275,8 @@ both the digest and the signing key are produced by the same build
 that produced the code being signed.  The contract is:
 
 1. The wheel build computes SHA3-256 over the package's `.py` files,
-   generates an **ephemeral, per-build Ed25519 key**, signs the
+   generates an **ephemeral, per-build Ed25519 key** by default (or
+   uses `AMA_INTEGRITY_SIGNING_SEED_HEX` in release CI), signs the
    digest, embeds **the signature + the public verification key** as
    a Python literal in `ama_cryptography/_integrity_signature.py`,
    then **discards the private key** before publishing the wheel.
@@ -286,11 +287,14 @@ that produced the code being signed.  The contract is:
    transitions the module to the ERROR state and refuses every
    cryptographic operation.
 
-There is **no long-lived signing key**.  Each build generates,
-signs once, and discards.  That eliminates the "key theft = forge
-arbitrary updates" failure mode at the cost of binding integrity to
-a single wheel artefact — exactly what FIPS 140-3 §4.9.1 requires
-("integrity of cryptographic module software / firmware"). 
+There is **no long-lived signing key in developer builds**.  Each
+default build generates, signs once, and discards.  Release CI may set
+`AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` and
+`AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1`; then the build signer refuses
+to emit an artefact whose derived public key does not match the pinned
+anchor, and the import-time verifier fails closed if the embedded
+public key is not that anchor.  This gives release packaging a stable
+trust-anchor gate without adding any external crypto dependency.
 
 ### `--update` is build-pipeline-only
 
