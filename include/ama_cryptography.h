@@ -1587,6 +1587,17 @@ AMA_API const char* ama_version_string(void);
  */
 AMA_API void ama_version_number(int* major, int* minor, int* patch);
 
+/**
+ * @brief Return the native build's module-integrity Ed25519 trust anchor.
+ *
+ * Release builds may compile a 32-byte public key into the native module via
+ * CMake's AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX option. Developer builds return
+ * an empty string.
+ *
+ * @return 64-character lowercase/uppercase hex public key, or "" if unset.
+ */
+AMA_API const char* ama_integrity_trust_anchor_pubkey_hex(void);
+
 #ifdef __cplusplus
 }
 #endif

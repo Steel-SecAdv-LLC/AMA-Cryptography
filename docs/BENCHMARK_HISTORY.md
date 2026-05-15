@@ -25,6 +25,10 @@ Enforcement mechanisms:
   `benchmarks/check_baseline_justification.py` on every PR touching
   either baseline JSON and fails CI if any of the three requirements
   is missing.
+- The benchmark-regression CI job passes `--require-runner-class` and
+  `--require-populated-baseline`, so x86 and AArch64 matrix entries
+  must consume their matching baseline file and no `baseline_value: 0`
+  first-run placeholder can pass as a real regression floor.
 - `.github/CODEOWNERS` routes review of `benchmarks/baseline.json`,
   `benchmarks/check_baseline_justification.py`, and
   `.github/workflows/baseline-guard.yml` to

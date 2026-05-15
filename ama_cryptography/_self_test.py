@@ -19,6 +19,7 @@ Author/Inventor: Andrew E. A.
 Version: 3.0.0
 """
 
+import ctypes
 import hashlib
 import json
 import logging
@@ -176,9 +177,7 @@ def pairwise_test_kem(
 # ============================================================================
 
 _INTEGRITY_DIGEST_FILE = Path(__file__).resolve().parent / "_integrity_digest.txt"
-_INTEGRITY_TRUST_ANCHOR_ENV = "AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX"
 _INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV = "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR"
-_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX = ""
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 
 
@@ -190,13 +189,25 @@ def _env_flag_enabled(name: str) -> bool:
 def _load_integrity_trust_anchor() -> Tuple[Optional[str], Optional[str]]:
     """Return the configured trust-anchor pubkey hex or an error string.
 
-    The default repository checkout leaves ``_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX``
-    empty so editable installs can keep using the per-build public key embedded
-    in ``_integrity_signature.py``.  Release builders may pin a public key via
-    ``AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX`` and set
-    ``AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1`` in CI to force anchored signatures.
+    The trust anchor is compiled into the native library rather than read from
+    mutable Python source.  Developer builds return an empty string and keep
+    using the per-build public key embedded in ``_integrity_signature.py``.
     """
-    raw = os.environ.get(_INTEGRITY_TRUST_ANCHOR_ENV, _INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX)
+    try:
+        from ama_cryptography.pqc_backends import _native_lib
+    except ImportError as exc:
+        return None, f"native backend unavailable for trust-anchor lookup: {exc}"
+
+    if _native_lib is None or not hasattr(_native_lib, "ama_integrity_trust_anchor_pubkey_hex"):
+        return None, None
+    try:
+        _native_lib.ama_integrity_trust_anchor_pubkey_hex.argtypes = []
+        _native_lib.ama_integrity_trust_anchor_pubkey_hex.restype = ctypes.c_char_p
+        raw_bytes = _native_lib.ama_integrity_trust_anchor_pubkey_hex()
+    except Exception as exc:
+        return None, f"native trust-anchor lookup failed: {exc}"
+
+    raw = raw_bytes.decode("ascii") if raw_bytes else ""
     anchor_hex = raw.strip().lower()
     if not anchor_hex:
         return None, None

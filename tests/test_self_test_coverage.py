@@ -260,12 +260,12 @@ class TestModuleIntegrity:
     ) -> None:
         """Strict release mode fails closed if no trust anchor is configured."""
         from ama_cryptography import _integrity_signature as sig_mod
-        from ama_cryptography._self_test import _verify_signed_integrity
+        from ama_cryptography import _self_test as st_mod
 
-        monkeypatch.delenv("AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX", raising=False)
+        monkeypatch.setattr(st_mod, "_load_integrity_trust_anchor", lambda: (None, None))
         monkeypatch.setenv("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", "1")
 
-        ok, detail = _verify_signed_integrity(sig_mod.INTEGRITY_DIGEST_HEX)
+        ok, detail = st_mod._verify_signed_integrity(sig_mod.INTEGRITY_DIGEST_HEX)
 
         assert not ok
         assert "trust anchor required" in detail
@@ -275,14 +275,18 @@ class TestModuleIntegrity:
     ) -> None:
         """Signed path rejects a signature whose pubkey is not the configured anchor."""
         from ama_cryptography import _integrity_signature as sig_mod
-        from ama_cryptography._self_test import _verify_signed_integrity
+        from ama_cryptography import _self_test as st_mod
 
         wrong_anchor = "00" * 32
         if sig_mod.INTEGRITY_PUBKEY_HEX == wrong_anchor:
             wrong_anchor = "11" * 32
-        monkeypatch.setenv("AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX", wrong_anchor)
+        monkeypatch.setattr(
+            st_mod,
+            "_load_integrity_trust_anchor",
+            lambda: (wrong_anchor, None),
+        )
 
-        ok, detail = _verify_signed_integrity(sig_mod.INTEGRITY_DIGEST_HEX)
+        ok, detail = st_mod._verify_signed_integrity(sig_mod.INTEGRITY_DIGEST_HEX)
 
         assert not ok
         assert "trust anchor mismatch" in detail

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -15,7 +16,7 @@ from benchmarks.benchmark_runner import (
 )
 
 
-def _baseline(runner_cpu_class: str = "aarch64", baseline_value: int = 1) -> dict:
+def _baseline(runner_cpu_class: str = "aarch64", baseline_value: int = 1) -> dict[str, Any]:
     return {
         "metadata": {"runner_cpu_class": runner_cpu_class},
         "benchmarks": {

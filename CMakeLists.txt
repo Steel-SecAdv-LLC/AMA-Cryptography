@@ -44,6 +44,16 @@ option(AMA_ENABLE_NATIVE_ARCH "Use -march=native for host-optimized builds" OFF)
 option(AMA_ENABLE_DUDECT "Build dudect constant-time verification tests" OFF)
 option(AMA_ENABLE_NEON "Enable ARM NEON optimizations (AArch64)" ON)
 option(AMA_ENABLE_SVE2 "Enable ARM SVE2 optimizations (ARMv9)" OFF)
+set(AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX "" CACHE STRING
+    "Optional 32-byte Ed25519 public-key trust anchor for signed module-integrity verification")
+if(AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX)
+    string(LENGTH "${AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX}" _AMA_ANCHOR_HEX_LEN)
+    if(NOT _AMA_ANCHOR_HEX_LEN EQUAL 64 OR
+       NOT "${AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX}" MATCHES "^[0-9A-Fa-f]+$")
+        message(FATAL_ERROR
+            "AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX must be empty or exactly 64 hex characters")
+    endif()
+endif()
 
 # AVX-512 SHA3 4-way kernel (PR C — 2026-04).  Off by default — does not
 # perturb the existing matrix builds.  Enables the in-house AVX-512 VL
@@ -508,6 +518,11 @@ function(ama_apply_donna_settings target)
     endif()
 endfunction()
 
+function(ama_apply_integrity_anchor target)
+    target_compile_definitions(${target} PRIVATE
+        AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX="${AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX}")
+endfunction()
+
 # Create shared library
 # Note: on MSVC the header provides explicit __declspec(dllexport) via AMA_API,
 # so WINDOWS_EXPORT_ALL_SYMBOLS is not needed (and would trigger cmake -E
@@ -533,6 +548,7 @@ if(AMA_BUILD_SHARED)
         target_compile_definitions(ama_cryptography_shared PRIVATE AMA_AES_CONSTTIME)
     endif()
     ama_apply_donna_settings(ama_cryptography_shared)
+    ama_apply_integrity_anchor(ama_cryptography_shared)
 
     # Threading (INVARIANT-15): pthread_once on POSIX, InitOnceExecuteOnce on Windows
     target_link_libraries(ama_cryptography_shared PRIVATE Threads::Threads)
@@ -561,6 +577,7 @@ if(AMA_BUILD_STATIC)
         target_compile_definitions(ama_cryptography_static PRIVATE AMA_AES_CONSTTIME)
     endif()
     ama_apply_donna_settings(ama_cryptography_static)
+    ama_apply_integrity_anchor(ama_cryptography_static)
 
     target_link_libraries(ama_cryptography_static PRIVATE Threads::Threads)
 
@@ -602,6 +619,7 @@ if(AMA_BUILD_TESTS)
         target_compile_definitions(ama_cryptography_test PRIVATE AMA_AES_CONSTTIME)
     endif()
     ama_apply_donna_settings(ama_cryptography_test)
+    ama_apply_integrity_anchor(ama_cryptography_test)
 
     target_link_libraries(ama_cryptography_test PRIVATE Threads::Threads)
 

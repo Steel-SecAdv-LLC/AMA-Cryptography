@@ -410,6 +410,7 @@ jobs:
           --verbose \
           --baseline "$AMA_MATRIX_BASELINE" \
           --require-runner-class "$AMA_RUNNER_CPU_CLASS" \
+          --require-populated-baseline \
           --output benchmarks/benchmark-results.json \
           --markdown benchmark-report.md
 

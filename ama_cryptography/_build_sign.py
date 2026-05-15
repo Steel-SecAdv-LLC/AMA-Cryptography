@@ -10,10 +10,12 @@ post-build hook / CMake post-install step / explicit ``pip wheel``
 wrapper) to:
 
   1. Generate an *ephemeral, per-build* Ed25519 keypair using the
-     in-tree ``ama_ed25519_keypair`` C symbol via ctypes — INVARIANT-1
-     forbids a PyCA dependency anywhere in the runtime tree, and this
-     module ships as part of the runtime tree so the build-time
-     signer must also obey that contract.
+     in-tree ``ama_ed25519_keypair`` C symbol via ctypes — or, in
+     release CI, derive it from ``AMA_INTEGRITY_SIGNING_SEED_HEX`` and
+     require it to match the trust anchor compiled into the native
+     library.  INVARIANT-1 forbids a PyCA dependency anywhere in the
+     runtime tree, and this module ships as part of the runtime tree so
+     the build-time signer must also obey that contract.
   2. Compute the SHA3-256 digest over the package's ``.py`` files
      (the same algorithm ``_self_test._compute_module_digest`` uses
      at import time).
@@ -118,6 +120,24 @@ def _load_hex_env_bytes(name: str, expected_len: int) -> bytes | None:
     return value
 
 
+def _load_native_trust_anchor(lib: ctypes.CDLL) -> bytes | None:
+    """Return the C-compiled integrity trust anchor, if this build has one."""
+    if not hasattr(lib, "ama_integrity_trust_anchor_pubkey_hex"):
+        return None
+    lib.ama_integrity_trust_anchor_pubkey_hex.argtypes = []
+    lib.ama_integrity_trust_anchor_pubkey_hex.restype = ctypes.c_char_p
+    raw = lib.ama_integrity_trust_anchor_pubkey_hex()
+    if not raw:
+        return None
+    try:
+        value = bytes.fromhex(raw.decode("ascii").strip())
+    except ValueError as exc:
+        raise RuntimeError(f"native integrity trust anchor is not valid hex: {exc}") from exc
+    if len(value) != 32:
+        raise RuntimeError(f"native integrity trust anchor has {len(value)} bytes; expected 32")
+    return value
+
+
 def _generate_keypair_and_sign(
     digest: bytes,
     seed_override: bytes | None = None,
@@ -139,12 +159,6 @@ def _generate_keypair_and_sign(
             signing call fails.  Either is a hard build error — the
             wheel must not ship without a valid signature.
     """
-    if require_trust_anchor and trusted_pubkey is None:
-        raise RuntimeError(
-            f"{_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV}=1 requires "
-            f"{_INTEGRITY_TRUST_ANCHOR_ENV} to pin the expected build public key."
-        )
-
     # Late imports so this module is importable in environments that
     # cannot find the native library (e.g. doc builders): the failure
     # surfaces only when sign is actually requested.
@@ -158,6 +172,21 @@ def _generate_keypair_and_sign(
             "the C extension first (cmake -B build && cmake --build "
             "build).  The signing pipeline depends on the in-tree "
             "Ed25519 kernel (INVARIANT-1: no PyCA dependency)."
+        )
+
+    native_trust_anchor = _load_native_trust_anchor(lib)
+    if native_trust_anchor is not None:
+        if trusted_pubkey is not None and trusted_pubkey != native_trust_anchor:
+            raise RuntimeError(
+                f"{_INTEGRITY_TRUST_ANCHOR_ENV} does not match the trust anchor "
+                "compiled into the native library."
+            )
+        trusted_pubkey = native_trust_anchor
+    if require_trust_anchor and trusted_pubkey is None:
+        raise RuntimeError(
+            f"{_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV}=1 requires either a native "
+            f"CMake {_INTEGRITY_TRUST_ANCHOR_ENV} build anchor or "
+            f"{_INTEGRITY_TRUST_ANCHOR_ENV} to pin the expected build public key."
         )
 
     # ama_ed25519_keypair(public_key[32], secret_key[64])
@@ -321,10 +350,9 @@ def main() -> int:
     except RuntimeError as exc:
         print(
             f"ERROR: {exc}\n"
-            "Falling back to digest-only signing — the import-time "
-            "verifier will accept this artefact but the wheel will "
-            "lack the signed-integrity protection.  Build the native "
-            "library before running _build_sign for full protection.",
+            "Refusing to write a signed-integrity artefact.  Build the "
+            "native library first and, for anchored release builds, compile "
+            "it with -DAMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX=<pubkey>.",
             file=sys.stderr,
         )
         return 1
