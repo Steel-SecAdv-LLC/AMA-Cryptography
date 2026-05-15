@@ -159,7 +159,10 @@ def _generate_keypair_and_sign(digest: bytes) -> Tuple[bytes, bytes]:
 
     sig = bytearray(64)
     sig_buf = (ctypes.c_char * 64).from_buffer(sig)
-    msg_buf = (ctypes.c_char * len(digest))(*digest)
+    # from_buffer_copy gives mypy a `bytes`-compatible factory and avoids
+    # unpacking the digest into per-byte int arguments (which the
+    # c_char array constructor rejects under strict typing).
+    msg_buf = (ctypes.c_char * len(digest)).from_buffer_copy(digest)
     rc = lib.ama_ed25519_sign(sig_buf, msg_buf, len(digest), sk_buf)
     if rc != 0:
         secure_memzero(sk)

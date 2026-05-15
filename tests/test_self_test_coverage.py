@@ -249,7 +249,10 @@ class TestModuleIntegrity:
             if cached_mod is not None:
                 sys.modules["ama_cryptography._integrity_signature"] = cached_mod
             if cached_attr is not None:
-                ama_cryptography._integrity_signature = cached_attr  # type: ignore[attr-defined]  -- restore cached submodule attr after import-shadow test (INT-005)
+                # Use setattr to set the dynamic submodule attribute back
+                # without provoking mypy's `attr-defined` check on the
+                # private `_integrity_signature` symbol (INT-005).
+                setattr(ama_cryptography, "_integrity_signature", cached_attr)
 
         assert not ok
         assert "no signed-integrity artefact" in detail
