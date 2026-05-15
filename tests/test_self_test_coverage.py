@@ -228,7 +228,8 @@ class TestModuleIntegrity:
         import sys
 
         import ama_cryptography
-        from ama_cryptography import _self_test as st_mod
+
+        st_mod = ama_cryptography._self_test
 
         sig_path = Path(st_mod.__file__).resolve().parent / "_integrity_signature.py"
         backup = sig_path.with_suffix(".py.bak-test-INT-004")
@@ -249,10 +250,7 @@ class TestModuleIntegrity:
             if cached_mod is not None:
                 sys.modules["ama_cryptography._integrity_signature"] = cached_mod
             if cached_attr is not None:
-                # Use setattr to set the dynamic submodule attribute back
-                # without provoking mypy's `attr-defined` check on the
-                # private `_integrity_signature` symbol (INT-005).
-                setattr(ama_cryptography, "_integrity_signature", cached_attr)
+                ama_cryptography._integrity_signature = cached_attr
 
         assert not ok
         assert "no signed-integrity artefact" in detail
