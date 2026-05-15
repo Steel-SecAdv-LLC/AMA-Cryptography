@@ -109,7 +109,7 @@ def _env_flag_enabled(name: str) -> bool:
 def _load_hex_env_bytes(
     name: str,
     expected_len: int,
-) -> Optional[bytes]:  # noqa: UP045  # Python 3.9 parser compatibility.
+) -> Optional[bytes]:
     """Load an optional hex-encoded byte string from an environment variable."""
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -125,7 +125,7 @@ def _load_hex_env_bytes(
 
 def _load_native_trust_anchor(
     lib: ctypes.CDLL,
-) -> Optional[bytes]:  # noqa: UP045  # Python 3.9 parser compatibility.
+) -> Optional[bytes]:
     """Return the C-compiled integrity trust anchor, if this build has one."""
     if not hasattr(lib, "ama_integrity_trust_anchor_pubkey_hex"):
         return None
@@ -145,8 +145,8 @@ def _load_native_trust_anchor(
 
 def _generate_keypair_and_sign(
     digest: bytes,
-    seed_override: Optional[bytes] = None,  # noqa: UP045  # Python 3.9 parser compatibility.
-    trusted_pubkey: Optional[bytes] = None,  # noqa: UP045  # Python 3.9 parser compatibility.
+    seed_override: Optional[bytes] = None,
+    trusted_pubkey: Optional[bytes] = None,
     require_trust_anchor: bool = False,
 ) -> Tuple[bytes, bytes]:
     """Generate an ephemeral Ed25519 keypair and sign ``digest``.

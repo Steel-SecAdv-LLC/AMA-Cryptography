@@ -237,6 +237,9 @@ ignore = []  # Do not add ignores without a comment explaining why.
     "B028",
     "UP006", "UP015", "UP035",  # UP006/UP035: deprecated typing imports (existing pattern)
 ]
+# _build_sign.py intentionally keeps Optional[...] annotations for Python 3.9
+# parser compatibility; PEP 604 `X | None` syntax is not valid on 3.9.
+"ama_cryptography/_build_sign.py" = ["UP045"]
 # ama_cryptography/legacy_compat.py — ported from code_guardian_secure.py
 #   UP007/UP045: PEP 604 union syntax (existing pattern)
 #   S310/S603: URL open and subprocess calls in security tooling
