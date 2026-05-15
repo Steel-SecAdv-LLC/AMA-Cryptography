@@ -227,7 +227,7 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[bool, str]:
     try:
         # Lazy import so a missing artefact doesn't surface as a hard
         # ImportError on every call site of verify_module_integrity().
-        from ama_cryptography import _integrity_signature as sig_mod  # noqa: WPS433
+        from ama_cryptography import _integrity_signature as sig_mod
     except ImportError:
         return False, "no signed-integrity artefact (digest-only fallback)"
 
@@ -258,7 +258,7 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[bool, str]:
         )
 
     try:
-        from ama_cryptography.pqc_backends import (  # noqa: WPS433
+        from ama_cryptography.pqc_backends import (
             _ED25519_NATIVE_AVAILABLE,
             native_ed25519_verify,
         )
@@ -270,7 +270,7 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[bool, str]:
 
     try:
         ok = native_ed25519_verify(signature, digest_raw, pubkey)
-    except Exception as exc:  # noqa: BLE001 — fail-closed
+    except Exception as exc:  # fail-closed: any verify exception must yield False (INT-003)
         return False, f"native Ed25519 verify raised: {exc}"
     if not ok:
         return False, "Ed25519 signature did NOT verify — module tampered"

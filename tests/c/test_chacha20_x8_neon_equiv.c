@@ -47,6 +47,7 @@ extern void ama_chacha20_block_x8_neon(const uint8_t key[32],
  * is the same algorithm the in-tree production scalar implements; we
  * just keep an independent copy here as the equivalence ground truth.
  */
+#if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
 static uint32_t rotl32_ref(uint32_t v, int n) {
     return (v << n) | (v >> (32 - n));
 }
@@ -101,6 +102,7 @@ static uint64_t prng_next(void) {
 static void prng_fill(uint8_t *buf, size_t n) {
     for (size_t i = 0; i < n; i++) buf[i] = (uint8_t)(prng_next() >> 24);
 }
+#endif /* AMA_HAVE_NEON_IMPL && __aarch64__ */
 
 int main(void) {
     printf("===============================================\n");

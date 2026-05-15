@@ -13,6 +13,7 @@ timing oracle, and the main POST runner.
 AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
 """
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -118,20 +119,39 @@ class TestModuleIntegrity:
         assert isinstance(result[1], str)
 
     def test_verify_missing_digest_file(self) -> None:
-        """Missing digest file returns (False, ...)."""
+        """Missing digest file returns (False, ...) when the signed-integrity
+        artefact is also unavailable (fallback path).
+
+        The signed-integrity primary path bypasses the digest file when it
+        succeeds, so this test must force `_verify_signed_integrity` into the
+        "no signed-integrity artefact" branch to exercise the digest-only
+        fallback that the original test was written for.
+        """
         from ama_cryptography._self_test import verify_module_integrity
 
-        with patch("ama_cryptography._self_test._INTEGRITY_DIGEST_FILE") as mock_path:
+        with (
+            patch(
+                "ama_cryptography._self_test._verify_signed_integrity",
+                return_value=(False, "no signed-integrity artefact (digest-only fallback)"),
+            ),
+            patch("ama_cryptography._self_test._INTEGRITY_DIGEST_FILE") as mock_path,
+        ):
             mock_path.exists.return_value = False
             passed, detail = verify_module_integrity()
             assert not passed
             assert "missing" in detail.lower() or "not found" in detail.lower()
 
     def test_verify_empty_digest_file(self) -> None:
-        """Empty digest file returns (False, ...)."""
+        """Empty digest file returns (False, ...) on the digest-only fallback path."""
         from ama_cryptography._self_test import verify_module_integrity
 
-        with patch("ama_cryptography._self_test._INTEGRITY_DIGEST_FILE") as mock_path:
+        with (
+            patch(
+                "ama_cryptography._self_test._verify_signed_integrity",
+                return_value=(False, "no signed-integrity artefact (digest-only fallback)"),
+            ),
+            patch("ama_cryptography._self_test._INTEGRITY_DIGEST_FILE") as mock_path,
+        ):
             mock_path.exists.return_value = True
             mock_path.read_text.return_value = ""
             passed, detail = verify_module_integrity()
@@ -139,10 +159,16 @@ class TestModuleIntegrity:
             assert "empty" in detail.lower()
 
     def test_verify_mismatched_digest(self) -> None:
-        """Mismatched digest returns (False, ...)."""
+        """Mismatched digest returns (False, ...) on the digest-only fallback path."""
         from ama_cryptography._self_test import verify_module_integrity
 
-        with patch("ama_cryptography._self_test._INTEGRITY_DIGEST_FILE") as mock_path:
+        with (
+            patch(
+                "ama_cryptography._self_test._verify_signed_integrity",
+                return_value=(False, "no signed-integrity artefact (digest-only fallback)"),
+            ),
+            patch("ama_cryptography._self_test._INTEGRITY_DIGEST_FILE") as mock_path,
+        ):
             mock_path.exists.return_value = True
             mock_path.read_text.return_value = "deadbeef" * 8
             passed, detail = verify_module_integrity()
@@ -165,6 +191,68 @@ class TestModuleIntegrity:
         d1 = _compute_module_digest()
         d2 = _compute_module_digest()
         assert d1 == d2
+
+    def test_verify_signed_integrity_mismatched_embedded_digest(self) -> None:
+        """Signed path returns (False, ...) when the embedded digest does not
+        match the recomputed digest — i.e. .py files were tampered after the
+        wheel was built and signed.
+        """
+        from ama_cryptography._self_test import _verify_signed_integrity
+
+        # The embedded digest is "deadbeef" * 8; the recomputed digest passed
+        # in is the real digest, so they differ -> failure path.
+        ok, detail = _verify_signed_integrity("a" * 64)
+        # If the signature module is absent on this install the test is not
+        # applicable (we'd hit the "no signed-integrity artefact" branch).
+        if "no signed-integrity artefact" in detail:
+            pytest.skip("signed-integrity artefact not shipped on this install")
+        assert not ok
+        # Either the digest mismatch or the verify-failure branch is acceptable —
+        # both are correct fail-closed outcomes for tampered input.
+        assert (
+            "mismatch" in detail.lower()
+            or "did not verify" in detail.lower()
+            or "did NOT verify" in detail
+        )
+
+    def test_verify_signed_integrity_missing_module(self) -> None:
+        """Signed path returns the well-defined no-artefact sentinel when
+        ``_integrity_signature`` cannot be imported, so the caller can fall
+        back to the digest-only path rather than treating it as a failure.
+
+        Implementation note: ``from X import Y`` re-loads ``Y`` from disk
+        when its sys.modules entry is missing, so simply popping the cache
+        is not enough.  We rename the artefact file briefly to force the
+        ImportError, then restore it.
+        """
+        import sys
+
+        import ama_cryptography
+        from ama_cryptography import _self_test as st_mod
+
+        sig_path = Path(st_mod.__file__).resolve().parent / "_integrity_signature.py"
+        backup = sig_path.with_suffix(".py.bak-test-INT-004")
+        cached_mod = sys.modules.pop("ama_cryptography._integrity_signature", None)
+        cached_attr = getattr(ama_cryptography, "_integrity_signature", None)
+        if cached_attr is not None:
+            try:
+                delattr(ama_cryptography, "_integrity_signature")
+            except AttributeError:
+                pass
+        if sig_path.exists():
+            sig_path.rename(backup)
+        try:
+            ok, detail = st_mod._verify_signed_integrity("a" * 64)
+        finally:
+            if backup.exists():
+                backup.rename(sig_path)
+            if cached_mod is not None:
+                sys.modules["ama_cryptography._integrity_signature"] = cached_mod
+            if cached_attr is not None:
+                ama_cryptography._integrity_signature = cached_attr  # type: ignore[attr-defined]  -- restore cached submodule attr after import-shadow test (INT-005)
+
+        assert not ok
+        assert "no signed-integrity artefact" in detail
 
 
 # ===========================================================================

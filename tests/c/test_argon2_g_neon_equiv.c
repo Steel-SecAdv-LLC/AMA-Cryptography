@@ -59,6 +59,7 @@ extern void ama_argon2_g_neon(uint64_t out[128],
 /*  mutating the reference side of the test (INVARIANT-1).             */
 /* -------------------------------------------------------------------- */
 
+#if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
 static uint64_t ref_rotr64(uint64_t x, unsigned int n) {
     return (x >> n) | (x << (64 - n));
 }
@@ -134,6 +135,7 @@ static void argon2_g_ref(uint64_t out[QWORDS_IN_BLOCK],
         out[i] = R[i] ^ Z[i];
     }
 }
+#endif /* AMA_HAVE_NEON_IMPL && __aarch64__ */
 
 #if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
 static uint64_t prng_state;

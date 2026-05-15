@@ -51,7 +51,6 @@ import sys
 from pathlib import Path
 from typing import Tuple
 
-
 _BUILD_PIPELINE_ENV = "AMA_BUILD_PIPELINE"
 
 
@@ -115,8 +114,8 @@ def _generate_keypair_and_sign(digest: bytes) -> Tuple[bytes, bytes]:
     # Late imports so this module is importable in environments that
     # cannot find the native library (e.g. doc builders): the failure
     # surfaces only when sign is actually requested.
-    from ama_cryptography.pqc_backends import _find_native_library  # noqa: WPS433
-    from ama_cryptography.secure_memory import secure_memzero  # noqa: WPS433
+    from ama_cryptography.pqc_backends import _find_native_library
+    from ama_cryptography.secure_memory import secure_memzero
 
     lib = _find_native_library()
     if lib is None:
@@ -155,8 +154,7 @@ def _generate_keypair_and_sign(digest: bytes) -> Tuple[bytes, bytes]:
         secure_memzero(sk)
         secure_memzero(pk)
         raise RuntimeError(
-            f"ama_ed25519_keypair returned rc={rc}; the native build "
-            "may be miscompiled."
+            f"ama_ed25519_keypair returned rc={rc}; the native build " "may be miscompiled."
         )
 
     sig = bytearray(64)
@@ -168,8 +166,7 @@ def _generate_keypair_and_sign(digest: bytes) -> Tuple[bytes, bytes]:
         secure_memzero(sig)
         secure_memzero(pk)
         raise RuntimeError(
-            f"ama_ed25519_sign returned rc={rc}; the native build "
-            "may be miscompiled."
+            f"ama_ed25519_sign returned rc={rc}; the native build " "may be miscompiled."
         )
 
     pubkey_out = bytes(pk)
@@ -214,9 +211,7 @@ BUILD_PIPELINE_VERSION = "1"
 '''
 
 
-def _write_signature_module(
-    pkg_dir: Path, digest: bytes, pubkey: bytes, signature: bytes
-) -> Path:
+def _write_signature_module(pkg_dir: Path, digest: bytes, pubkey: bytes, signature: bytes) -> Path:
     """Emit ``_integrity_signature.py`` as a Python literal module."""
     out_path = pkg_dir / "_integrity_signature.py"
     out_path.write_text(
@@ -232,9 +227,7 @@ def _write_signature_module(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description=(
-            "Wheel-build integrity signer (INVARIANT-1: no PyCA dependency)."
-        )
+        description=("Wheel-build integrity signer (INVARIANT-1: no PyCA dependency).")
     )
     parser.add_argument(
         "--package-dir",

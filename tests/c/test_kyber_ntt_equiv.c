@@ -173,7 +173,6 @@ int main(void) {
     /* Boundary cases: all-zero, all-q-1, alternating signs. */
     int16_t poly_s[KYBER_N];
     int16_t poly_v[KYBER_N];
-    int16_t poly_back[KYBER_N];
 
     for (int trial = 0; trial < N_TRIALS; trial++) {
         /* Fill with random int16 coefficients in the canonical range
@@ -184,7 +183,6 @@ int main(void) {
             int16_t r = (int16_t)(xs_next() % (2 * KYBER_Q - 1)) - (KYBER_Q - 1);
             poly_s[i] = r;
             poly_v[i] = r;
-            poly_back[i] = r;
         }
 
         scalar_kyber_ntt(poly_s);

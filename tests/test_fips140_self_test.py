@@ -286,7 +286,13 @@ class TestModuleIntegrity:
 
         passed, detail = verify_module_integrity()
         assert passed is True
-        assert detail == "Module integrity verified"
+        # Detail string format depends on which path verified the module:
+        #   - signed-integrity primary path (wheel built with AMA_BUILD_PIPELINE=1)
+        #   - digest-only fallback (editable install / source checkout)
+        # Both are valid OPERATIONAL outcomes; only the (False, ...) shape is
+        # an error.  Pin a stable substring rather than the full message so
+        # the test does not break when the detail wording is refined.
+        assert "integrity verified" in detail.lower() or "module integrity" in detail.lower()
 
     def test_integrity_cli_verify(self) -> None:
         """Test `python -m ama_cryptography.integrity --verify` succeeds."""

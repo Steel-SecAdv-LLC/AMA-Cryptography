@@ -65,9 +65,7 @@ def main() -> int:
             f"(build pipeline only — requires {_BUILD_PIPELINE_ENV}=1)"
         ),
     )
-    group.add_argument(
-        "--verify", action="store_true", help="Verify module integrity"
-    )
+    group.add_argument("--verify", action="store_true", help="Verify module integrity")
     group.add_argument("--show", action="store_true", help="Show the current computed digest")
     parser.add_argument(
         "--sign",
@@ -84,7 +82,7 @@ def main() -> int:
     if args.update:
         if not _build_pipeline_active():
             print(
-                f"ERROR: --update is build-pipeline-only.  Set {_BUILD_PIPELINE_ENV}=1 "
+                f"ERROR: --update is build-pipeline-only.  Set {_BUILD_PIPELINE_ENV}=1 "  # noqa: S608 -- not SQL; user-facing error message containing the literal env-var name (INT-006)
                 "if you are the wheel build script; otherwise rebuild the wheel "
                 "instead of mutating an installed module's integrity digest.",
                 file=sys.stderr,
@@ -103,9 +101,7 @@ def main() -> int:
                 # and its sys.exit() path is honoured via the
                 # SystemExit it raises.
                 try:
-                    runpy.run_module(
-                        "ama_cryptography._build_sign", run_name="__main__"
-                    )
+                    runpy.run_module("ama_cryptography._build_sign", run_name="__main__")
                 except SystemExit as exc:
                     return int(exc.code or 0)
             finally:
