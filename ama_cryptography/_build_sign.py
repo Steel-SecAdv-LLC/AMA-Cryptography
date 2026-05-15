@@ -49,7 +49,7 @@ import hashlib
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Tuple
 
 _BUILD_PIPELINE_ENV = "AMA_BUILD_PIPELINE"
 _INTEGRITY_SIGNING_SEED_ENV = "AMA_INTEGRITY_SIGNING_SEED_HEX"
@@ -104,7 +104,7 @@ def _env_flag_enabled(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
 
 
-def _load_hex_env_bytes(name: str, expected_len: int) -> Optional[bytes]:
+def _load_hex_env_bytes(name: str, expected_len: int) -> bytes | None:
     """Load an optional hex-encoded byte string from an environment variable."""
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -120,8 +120,8 @@ def _load_hex_env_bytes(name: str, expected_len: int) -> Optional[bytes]:
 
 def _generate_keypair_and_sign(
     digest: bytes,
-    seed_override: Optional[bytes] = None,
-    trusted_pubkey: Optional[bytes] = None,
+    seed_override: bytes | None = None,
+    trusted_pubkey: bytes | None = None,
     require_trust_anchor: bool = False,
 ) -> Tuple[bytes, bytes]:
     """Generate an ephemeral Ed25519 keypair and sign ``digest``.
