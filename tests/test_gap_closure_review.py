@@ -21,8 +21,8 @@ Each test class covers exactly one item from the review:
 
 from __future__ import annotations
 
+import inspect
 import json
-import os
 import struct
 import threading
 from collections.abc import Generator
@@ -31,7 +31,6 @@ from unittest.mock import patch
 
 import pytest
 
-import ama_cryptography.secure_memory as sm
 from ama_cryptography import _self_test as st
 from ama_cryptography.hybrid_combiner import HybridCombiner
 from ama_cryptography.secure_channel import (
@@ -44,16 +43,15 @@ from ama_cryptography.secure_channel import (
     ChannelState,
     HandshakeError,
     HandshakeMessage,
-    HandshakeResponse,
-    ReplayError,
     SecureSession,
     _MAX_FIELD_BYTES,
 )
-from ama_cryptography.secure_memory import (
-    SECURE_MEMZERO_BACKEND,
-    SecureMemoryError,
-    secure_memzero,
-)
+from ama_cryptography.secure_memory import SecureMemoryError, secure_memzero
+
+# Module-level string path used by monkeypatch.setattr for SECURE_MEMZERO_BACKEND.
+# Using the string form avoids the CodeQL "import + import-from of the same
+# module" finding while still letting tests flip the backend selection.
+_SM_BACKEND_PATH = "ama_cryptography.secure_memory.SECURE_MEMZERO_BACKEND"
 
 
 # =============================================================================
@@ -299,12 +297,14 @@ class TestItem3_SecureSessionLocking:
 
         def call_decrypt_b() -> None:
             # B will block on the lock; once we release it, B will
-            # try the (junk) decrypt and raise.  We just want to
-            # confirm that B waited.
+            # try the (junk) decrypt and raise.  We only care that
+            # B waited for the lock — the eventual failure of the
+            # junk decrypt is expected and irrelevant to the
+            # locking invariant under test, so swallow it.
             try:
                 sess.decrypt(msg)
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001 -- intentional broad swallow; we only assert B waited for the lock (GCR-008)
+                pass  # intentional: B's decrypt failure is expected and not the assertion target
             b_finished.set()
 
         with sess._lock:
@@ -414,17 +414,13 @@ class TestItem5_HandshakeMessageBounds:
             HandshakeMessage.deserialize(b"")
 
     def test_oversize_protocol_name_rejected(self) -> None:
-        # name_len = 65537 (1 over the limit)
-        data = struct.pack(">H", 0xFFFF) + b"A" * 65535
-        # We must build a partial frame so the early "min len" check
-        # passes; then the bounds check fires on name_len.
-        # Min len is 2 + 1 + 4 + 4 = 11; supply enough total bytes.
-        # name_len of 65535 IS <= _MAX_FIELD_BYTES (65536), so this is
-        # the boundary; test the strictly-over-limit case.
-        # Hard-fail by setting len explicitly past the cap.
+        # protocol_name length is a uint16, so the maximum on-wire
+        # value (0xFFFF = 65535) is already <= _MAX_FIELD_BYTES.
+        # The strictly-over-limit case is therefore unreachable for
+        # name_len in this serialisation — but the same bounds path
+        # is exercised by ``epk_len`` (uint32), which CAN exceed
+        # _MAX_FIELD_BYTES.  Test the over-cap epk_len bound:
         with pytest.raises(ChannelError, match="exceeds maximum"):
-            # Cannot pack >H past 0xFFFF; use a synthetic ct or epk
-            # field over the limit instead.
             HandshakeMessage.deserialize(
                 struct.pack(">H", 4)
                 + b"NAME"
@@ -551,7 +547,7 @@ class TestItem7_PythonFallbackFailClosed:
     def test_python_fallback_without_opt_in_raises(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(sm, "SECURE_MEMZERO_BACKEND", "python_fallback")
+        monkeypatch.setattr(_SM_BACKEND_PATH, "python_fallback")
         monkeypatch.delenv("AMA_ALLOW_PYTHON_MEMZERO", raising=False)
         monkeypatch.delenv("AMA_SPHINX_BUILD", raising=False)
         monkeypatch.delenv("SPHINX_BUILD", raising=False)
@@ -563,7 +559,7 @@ class TestItem7_PythonFallbackFailClosed:
     def test_python_fallback_with_explicit_opt_in_works(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(sm, "SECURE_MEMZERO_BACKEND", "python_fallback")
+        monkeypatch.setattr(_SM_BACKEND_PATH, "python_fallback")
         monkeypatch.setenv("AMA_ALLOW_PYTHON_MEMZERO", "1")
         buf = bytearray(b"sensitive")
         secure_memzero(buf)
@@ -572,7 +568,7 @@ class TestItem7_PythonFallbackFailClosed:
     def test_python_fallback_with_sphinx_build_works(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(sm, "SECURE_MEMZERO_BACKEND", "python_fallback")
+        monkeypatch.setattr(_SM_BACKEND_PATH, "python_fallback")
         monkeypatch.delenv("AMA_ALLOW_PYTHON_MEMZERO", raising=False)
         monkeypatch.setenv("AMA_SPHINX_BUILD", "1")
         buf = bytearray(b"sensitive")
@@ -583,7 +579,7 @@ class TestItem7_PythonFallbackFailClosed:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """AMA_ALLOW_PYTHON_MEMZERO=0 (or empty) does NOT count as opt-in."""
-        monkeypatch.setattr(sm, "SECURE_MEMZERO_BACKEND", "python_fallback")
+        monkeypatch.setattr(_SM_BACKEND_PATH, "python_fallback")
         for falsy in ("", "0", "false", "no", "off", "anything-else"):
             monkeypatch.setenv("AMA_ALLOW_PYTHON_MEMZERO", falsy)
             with pytest.raises(SecureMemoryError):
@@ -609,13 +605,31 @@ class TestItem8_HkdfPythonDisabled:
         assert len(out) == 32
 
     def test_opt_in_must_be_keyword_only(self) -> None:
-        """The opt-in flag cannot be passed positionally.
+        """The opt-in flag is keyword-only.
 
         Reduces the surface for accidental production callers — a
         ``*args`` shim cannot inadvertently include the flag.
+
+        We inspect the signature directly rather than exercising an
+        intentionally-invalid call: a static call with the wrong
+        positional-arg count is a real bug from the type system's
+        perspective (CodeQL py/wrong-number-arguments) even when
+        the runtime behaviour is the intended TypeError.  Walking
+        ``inspect.Parameter.kind`` proves the same property
+        (KEYWORD_ONLY) without making the bad call.
         """
-        with pytest.raises(TypeError):
-            HybridCombiner._hkdf_python(b"salt", b"ikm", b"info", 32, True)  # type: ignore[call-arg, misc]  # deliberately positional to verify the keyword-only guard (GCR-007)
+        sig = inspect.signature(HybridCombiner._hkdf_python)
+        opt_in = sig.parameters.get("_test_only_allow_python")
+        assert opt_in is not None, (
+            "_test_only_allow_python parameter missing from _hkdf_python "
+            "signature — the production guard has regressed"
+        )
+        assert opt_in.kind is inspect.Parameter.KEYWORD_ONLY, (
+            f"_test_only_allow_python must be KEYWORD_ONLY, got {opt_in.kind!r}.  "
+            "A future refactor that drops the keyword-only marker would let "
+            "production code pass True positionally — restore the * marker "
+            "before the named parameter."
+        )
 
 
 # =============================================================================
@@ -637,8 +651,6 @@ class TestItem9_TimingOracleNoRetry:
         import ama_cryptography._self_test as st_local
 
         call_counter = {"n": 0}
-        # Use the real oracle's return type
-        original = st_local._timing_oracle_consttime
 
         def counting_oracle() -> tuple[bool | None, str]:
             call_counter["n"] += 1
@@ -756,9 +768,11 @@ class TestItem10_KATSkipNotPass:
         )
 
         try:
-            ok = st_local._run_self_tests()
-            # POST might still fail if other tests fail in this env,
-            # but the SHA3-256 skip must NOT be the reason.
+            # POST overall pass/fail can depend on other state in this
+            # process (e.g. a forced-skip on the timing oracle in
+            # strict-mode test runs).  We only care about the SHA3-256
+            # row's tri-state ``passed`` field, not the aggregate.
+            st_local._run_self_tests()
             results = st_local.module_self_test_results()
             sha = next((r for r in results if r[0] == "SHA3-256"), None)
             assert sha is not None
