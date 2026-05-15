@@ -291,6 +291,59 @@ class TestModuleIntegrity:
         assert not ok
         assert "trust anchor mismatch" in detail
 
+    def test_load_integrity_trust_anchor_normalises_native_decode_errors(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ctypes/OSError/UnicodeDecodeError from the native lookup must
+        collapse to ``(None, reason)`` instead of bubbling out as a raw
+        traceback at import-time POST.  Without the fix the decode/strip
+        was outside the try/except and a malformed pointer would crash
+        the module instead of fail-closed (Copilot review #3251129734)."""
+        from typing import ClassVar
+
+        from ama_cryptography import _self_test as st_mod
+
+        class _Pubkey:
+            argtypes: ClassVar[list[object]] = []
+            restype: object = None
+
+            def __call__(self) -> bytes:
+                # Simulate a malformed native return that fails .decode("ascii").
+                return b"\xff\xfe not-ascii"
+
+        class _Lib:
+            ama_integrity_trust_anchor_pubkey_hex = _Pubkey()
+
+        monkeypatch.setattr(
+            "ama_cryptography.pqc_backends._native_lib",
+            _Lib(),
+        )
+
+        anchor, err = st_mod._load_integrity_trust_anchor()
+        assert anchor is None
+        assert err is not None
+        assert "trust-anchor lookup failed" in err
+
+    def test_verify_signed_integrity_strict_release_refuses_digest_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1 must refuse digest-only fallback
+        even when the digest matches — this is the release-grade posture."""
+        from ama_cryptography import _self_test as st_mod
+
+        monkeypatch.setattr(
+            st_mod,
+            "_verify_signed_integrity",
+            lambda _digest: (False, "no signed-integrity artefact (digest-only fallback)"),
+        )
+        monkeypatch.setenv("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", "1")
+
+        ok, detail = st_mod.verify_module_integrity()
+
+        assert not ok
+        assert "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR" in detail
+        assert "forbids digest-only" in detail
+
 
 # ===========================================================================
 # KAT Tests

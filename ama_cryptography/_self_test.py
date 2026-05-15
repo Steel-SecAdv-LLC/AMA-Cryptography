@@ -200,15 +200,21 @@ def _load_integrity_trust_anchor() -> Tuple[Optional[str], Optional[str]]:
 
     if _native_lib is None or not hasattr(_native_lib, "ama_integrity_trust_anchor_pubkey_hex"):
         return None, None
+    # The native call and the decode/strip must both be inside the protected
+    # block: a broken ctypes binding can raise OSError, a malformed pointer
+    # can yield non-ASCII bytes that fail .decode(), and an unexpected
+    # NULL-terminator placement can produce a truncated buffer.  All three
+    # paths must collapse to a deterministic ``(None, reason)`` so callers
+    # fail-closed instead of surfacing a raw traceback from import-time POST.
     try:
         _native_lib.ama_integrity_trust_anchor_pubkey_hex.argtypes = []
         _native_lib.ama_integrity_trust_anchor_pubkey_hex.restype = ctypes.c_char_p
         raw_bytes = _native_lib.ama_integrity_trust_anchor_pubkey_hex()
+        raw = raw_bytes.decode("ascii") if raw_bytes else ""
+        anchor_hex = raw.strip().lower()
     except Exception as exc:
         return None, f"native trust-anchor lookup failed: {exc}"
 
-    raw = raw_bytes.decode("ascii") if raw_bytes else ""
-    anchor_hex = raw.strip().lower()
     if not anchor_hex:
         return None, None
     try:
@@ -365,10 +371,22 @@ def verify_module_integrity() -> Tuple[bool, str]:
     # Signed path was not available OR failed.  If it FAILED (digest
     # matched but signature didn't verify), that's an error — return
     # the specific reason.  If it was simply MISSING, fall back to
-    # digest-only with a warning.
+    # digest-only with a warning UNLESS a trust anchor is required.
     if "no signed-integrity artefact" not in signed_detail:
         logger.error("Signed integrity check failed: %s", signed_detail)
         return False, signed_detail
+
+    # Release builds must fail closed: AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1
+    # means "this is a release wheel — no unsigned digest-only acceptance
+    # is permitted, even if the .py files happen to match."  Developer
+    # editable installs and source checkouts leave the env var unset and
+    # still get the documented digest-only WARN-and-continue behaviour.
+    if _env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV):
+        return False, (
+            "signed-integrity artefact missing and "
+            f"{_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV}=1 forbids digest-only "
+            "fallback — rebuild the wheel with AMA_BUILD_PIPELINE=1"
+        )
 
     # Digest-only fallback (editable install / source checkout).
     if not _INTEGRITY_DIGEST_FILE.exists():

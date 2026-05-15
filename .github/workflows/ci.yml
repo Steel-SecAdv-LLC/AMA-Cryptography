@@ -41,10 +41,23 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
     - name: Set up Python ${{ matrix.python-version }}
+      id: setup-python
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+      continue-on-error: true
       with:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
+
+    # First-party retry path: actions/setup-python intermittently fails on
+    # GitHub-hosted Windows runners during the Python 3.13 install
+    # (toolcache / cache-restore flake; see PR #306 review).  The retry
+    # is non-fatal on the first miss and only re-runs when needed, so the
+    # happy path remains a single setup-python call.
+    - name: Set up Python ${{ matrix.python-version }} (retry without cache)
+      if: steps.setup-python.outcome == 'failure'
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+      with:
+        python-version: ${{ matrix.python-version }}
 
     - name: Install system dependencies (Linux)
       if: runner.os == 'Linux'

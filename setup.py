@@ -494,27 +494,86 @@ class CMakeBuild(build_ext):
         self._build_cmake()
         self._copy_native_library_into_package()
 
-        if not self.extensions:
+        if self.extensions:
+            # D-4: Cython failures are now fatal unless the user explicitly opted
+            # out of Cython entirely (AMA_NO_CYTHON=1) or asked to skip C
+            # extensions altogether (AMA_NO_C_EXTENSIONS=1).  Previously the
+            # exception was caught and downgraded to a warning, which produced
+            # broken installs that quietly advertised "Cython available: False"
+            # while having no extension .so files at all (audit D-4).
+            if not USE_CYTHON:
+                self._run_integrity_signer()
+                return
+            if not NUMPY_AVAILABLE:
+                raise RuntimeError(
+                    "FATAL: numpy is required to build the Cython math_engine extension "
+                    "(src/cython/math_engine.pyx uses `cimport numpy`).\n"
+                    "Install with:\n"
+                    "  pip install 'numpy>=1.24'\n"
+                    "Or skip Cython extensions entirely:\n"
+                    "  AMA_NO_CYTHON=1 pip install ."
+                )
+            super().run()
+
+        # Build-pipeline-only Ed25519 signed-integrity hook.
+        # Gated on AMA_BUILD_PIPELINE=1 so plain `pip install .` from a source
+        # checkout is unaffected — those users get the digest-only fallback
+        # (logged WARNING at import time).  Release CI sets the env var to
+        # produce a signed wheel; combined with -DAMA_INTEGRITY_TRUST_ANCHOR_
+        # PUBKEY_HEX on the CMake invocation above this gives anchored,
+        # trust-pinned wheels with no extra release-pipeline step.
+        self._run_integrity_signer()
+
+    def _run_integrity_signer(self):
+        """Invoke ama_cryptography._build_sign when running under the wheel pipeline.
+
+        The signer reads:
+          - AMA_BUILD_PIPELINE=1                   (required gate)
+          - AMA_INTEGRITY_SIGNING_SEED_HEX         (release-CI deterministic seed)
+          - AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX  (env-var trust anchor; optional
+              when the native library was compiled with a CMake anchor)
+          - AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR     (fail closed if no anchor)
+        and writes the signed-integrity artefact into BOTH the source tree
+        copy of the package and the staging build_lib copy so the wheel
+        builder picks it up exactly the way it picks up _integrity_digest.txt.
+        """
+        if os.environ.get("AMA_BUILD_PIPELINE") != "1":
             return
 
-        # D-4: Cython failures are now fatal unless the user explicitly opted
-        # out of Cython entirely (AMA_NO_CYTHON=1) or asked to skip C
-        # extensions altogether (AMA_NO_C_EXTENSIONS=1).  Previously the
-        # exception was caught and downgraded to a warning, which produced
-        # broken installs that quietly advertised "Cython available: False"
-        # while having no extension .so files at all (audit D-4).
-        if not USE_CYTHON:
-            return
-        if not NUMPY_AVAILABLE:
+        src_pkg_dir = Path(__file__).resolve().parent / "ama_cryptography"
+        staged_pkg_dir = Path(self.build_lib) / "ama_cryptography" if self.build_lib else None
+
+        # _build_sign loads the native library via _find_native_library,
+        # which searches the in-tree package dir first.  We already copied
+        # libama_cryptography.so* into BOTH the source and staging dirs
+        # in _copy_native_library_into_package, so the loader can resolve
+        # it without an LD_LIBRARY_PATH override.
+        cmd = [
+            sys.executable,
+            "-m",
+            "ama_cryptography._build_sign",
+            "--package-dir",
+            str(src_pkg_dir),
+        ]
+        env = os.environ.copy()
+        env["AMA_BUILD_PIPELINE"] = "1"
+        try:
+            subprocess.check_call(cmd, env=env)
+        except subprocess.CalledProcessError as e:
             raise RuntimeError(
-                "FATAL: numpy is required to build the Cython math_engine extension "
-                "(src/cython/math_engine.pyx uses `cimport numpy`).\n"
-                "Install with:\n"
-                "  pip install 'numpy>=1.24'\n"
-                "Or skip Cython extensions entirely:\n"
-                "  AMA_NO_CYTHON=1 pip install ."
-            )
-        super().run()
+                f"FATAL: integrity signer failed (exit {e.returncode}). "
+                "AMA_BUILD_PIPELINE=1 was set so the wheel must ship a "
+                "signed integrity artefact; refusing to produce an "
+                "unsigned release wheel."
+            ) from e
+
+        # Mirror the freshly-written artefact into the staging dir so the
+        # wheel builder packages it.  The signer ran against src_pkg_dir.
+        if staged_pkg_dir is not None and staged_pkg_dir.is_dir():
+            for name in ("_integrity_signature.py", "_integrity_digest.txt"):
+                src_file = src_pkg_dir / name
+                if src_file.is_file():
+                    shutil.copy2(src_file, staged_pkg_dir / name)
 
     def _build_cmake(self):
         """Build libama_cryptography via CMake."""

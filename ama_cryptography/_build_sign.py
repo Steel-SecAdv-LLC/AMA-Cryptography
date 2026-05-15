@@ -126,16 +126,26 @@ def _load_hex_env_bytes(
 def _load_native_trust_anchor(
     lib: ctypes.CDLL,
 ) -> Optional[bytes]:
-    """Return the C-compiled integrity trust anchor, if this build has one."""
+    """Return the C-compiled integrity trust anchor, if this build has one.
+
+    All native-call failures (ctypes OSError, non-ASCII bytes, missing
+    NUL terminator) are normalised to ``RuntimeError`` so the CLI's
+    ``main()`` exception handler can produce a stable, single-line
+    failure message instead of a raw traceback from the ctypes layer.
+    """
     if not hasattr(lib, "ama_integrity_trust_anchor_pubkey_hex"):
         return None
-    lib.ama_integrity_trust_anchor_pubkey_hex.argtypes = []
-    lib.ama_integrity_trust_anchor_pubkey_hex.restype = ctypes.c_char_p
-    raw = lib.ama_integrity_trust_anchor_pubkey_hex()
-    if not raw:
+    try:
+        lib.ama_integrity_trust_anchor_pubkey_hex.argtypes = []
+        lib.ama_integrity_trust_anchor_pubkey_hex.restype = ctypes.c_char_p
+        raw = lib.ama_integrity_trust_anchor_pubkey_hex()
+        decoded = raw.decode("ascii").strip() if raw else ""
+    except Exception as exc:
+        raise RuntimeError(f"native trust-anchor lookup failed: {exc}") from exc
+    if not decoded:
         return None
     try:
-        value = bytes.fromhex(raw.decode("ascii").strip())
+        value = bytes.fromhex(decoded)
     except ValueError as exc:
         raise RuntimeError(f"native integrity trust anchor is not valid hex: {exc}") from exc
     if len(value) != 32:
@@ -148,7 +158,7 @@ def _generate_keypair_and_sign(
     seed_override: Optional[bytes] = None,
     trusted_pubkey: Optional[bytes] = None,
     require_trust_anchor: bool = False,
-) -> Tuple[bytes, bytes]:
+) -> Tuple[bytes, bytes, str]:
     """Generate an ephemeral Ed25519 keypair and sign ``digest``.
 
     Uses the in-tree C kernel via ctypes — INVARIANT-1 forbids PyCA
@@ -157,7 +167,11 @@ def _generate_keypair_and_sign(
     so it does not survive on the build host's heap.
 
     Returns:
-        ``(pubkey_32, signature_64)`` — both raw bytes.
+        ``(pubkey_32, signature_64, anchor_source)`` — raw bytes plus
+        a string identifying which trust source pinned the keypair:
+        ``"native"`` (CMake ``-DAMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX``),
+        ``"env"`` (``AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX`` env var
+        only), or ``"none"`` (unanchored developer build).
 
     Raises:
         RuntimeError: if the native library is not loadable or the
@@ -180,6 +194,7 @@ def _generate_keypair_and_sign(
         )
 
     native_trust_anchor = _load_native_trust_anchor(lib)
+    anchor_source = "none"
     if native_trust_anchor is not None:
         if trusted_pubkey is not None and trusted_pubkey != native_trust_anchor:
             raise RuntimeError(
@@ -187,6 +202,9 @@ def _generate_keypair_and_sign(
                 "compiled into the native library."
             )
         trusted_pubkey = native_trust_anchor
+        anchor_source = "native"
+    elif trusted_pubkey is not None:
+        anchor_source = "env"
     if require_trust_anchor and trusted_pubkey is None:
         raise RuntimeError(
             f"{_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV}=1 requires either a native "
@@ -260,7 +278,7 @@ def _generate_keypair_and_sign(
     secure_memzero(pk)
     # Locals will be GC'd at function return.
 
-    return pubkey_out, signature_out
+    return pubkey_out, signature_out, anchor_source
 
 
 _SIGNATURE_TEMPLATE = '''"""
@@ -345,14 +363,18 @@ def main() -> int:
 
     try:
         seed_override = _load_hex_env_bytes(_INTEGRITY_SIGNING_SEED_ENV, 32)
-        trusted_pubkey = _load_hex_env_bytes(_INTEGRITY_TRUST_ANCHOR_ENV, 32)
-        pubkey, signature = _generate_keypair_and_sign(
+        trusted_pubkey_env = _load_hex_env_bytes(_INTEGRITY_TRUST_ANCHOR_ENV, 32)
+        pubkey, signature, anchor_source = _generate_keypair_and_sign(
             digest,
             seed_override=seed_override,
-            trusted_pubkey=trusted_pubkey,
+            trusted_pubkey=trusted_pubkey_env,
             require_trust_anchor=_env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV),
         )
-    except RuntimeError as exc:
+    except Exception as exc:
+        # Catch every exception (RuntimeError, ctypes OSError, KeyboardInterrupt
+        # excluded by the bare Exception base) so build pipelines see a stable
+        # exit code 1 with a one-line cause instead of a Python traceback.
+        # KeyboardInterrupt / SystemExit are intentionally NOT swallowed.
         print(
             f"ERROR: {exc}\n"
             "Refusing to write a signed-integrity artefact.  Build the "
@@ -369,8 +391,15 @@ def main() -> int:
         f"  pubkey    = {pubkey.hex()}\n"
         f"  signature = {signature.hex()[:32]}... (64 B)"
     )
-    if os.environ.get(_INTEGRITY_TRUST_ANCHOR_ENV, "").strip():
-        print("  trust     = enforced by AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX")
+    # Report the *actual* enforcement state — native-compiled anchor, env-var
+    # anchor, or unanchored — so CI logs cannot mislead packagers about
+    # whether the wheel they just produced is release-grade or developer-grade.
+    if anchor_source == "native":
+        print("  trust     = enforced by native AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX (CMake)")
+    elif anchor_source == "env":
+        print(f"  trust     = enforced by {_INTEGRITY_TRUST_ANCHOR_ENV} env var")
+    else:
+        print("  trust     = unanchored (developer build; per-build ephemeral key)")
     return 0
 
 

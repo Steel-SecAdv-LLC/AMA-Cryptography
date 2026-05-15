@@ -333,10 +333,18 @@ Both halves ship together in the AArch64-completeness PR (2026-05):
     signature, and accepts only on a positive verify plus trust-anchor
     match when configured.  When the artefact is absent (editable
     installs, source checkouts, wheels built without
-    `AMA_BUILD_PIPELINE=1`), the module falls back to digest-only
-    verification against `_integrity_digest.txt` with a logged WARNING —
-    developer ergonomics do not require a full wheel build on every
-    edit, but packagers see the missing signature in CI logs.
+    `AMA_BUILD_PIPELINE=1`), the behaviour depends on
+    `AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR`:
+    - **Unset (developer / editable / source-checkout path):** the
+      module falls back to digest-only verification against
+      `_integrity_digest.txt` with a logged WARNING.  Developer
+      ergonomics do not require a full wheel build on every edit;
+      packagers still see the missing signature in CI logs.
+    - **`=1` (release path):** the module refuses to fall back and
+      transitions to ERROR state — release wheels MUST ship the
+      Ed25519-signed artefact or every crypto call is rejected.  This
+      makes a forgotten `AMA_BUILD_PIPELINE=1` in the release pipeline
+      a hard failure instead of a silent posture downgrade.
 
 End-to-end smoke test (from the AArch64-completeness PR's CI):
 
