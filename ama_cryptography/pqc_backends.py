@@ -3759,7 +3759,11 @@ def native_chacha20poly1305_decrypt(
         Decrypted plaintext
 
     Raises:
-        RuntimeError: On tag verification failure
+        RuntimeError: On tag verification failure.  The underlying C
+            entry point does not modify the plaintext buffer on tag
+            mismatch (it never wrote to it in the first place); this
+            wrapper raises before the freshly-allocated zero-initialised
+            buffer is returned, so caller-visible behaviour is unchanged.
     """
     if _native_lib is None or not _CHACHA20_POLY1305_NATIVE_AVAILABLE:
         raise RuntimeError("ChaCha20-Poly1305 native backend not available. " + _INSTALL_HINT)

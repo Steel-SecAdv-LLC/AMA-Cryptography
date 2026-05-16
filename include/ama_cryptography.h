@@ -1184,7 +1184,9 @@ AMA_API ama_error_t ama_chacha20poly1305_encrypt(
 /**
  * @brief ChaCha20-Poly1305 AEAD decryption (RFC 8439)
  *
- * Verifies tag and decrypts. Fail-closed: zeros plaintext on tag mismatch.
+ * Verifies tag and decrypts.  Fail-closed: on AMA_ERROR_VERIFY_FAILED
+ * the plaintext buffer is not modified (matches the scalar AES-GCM
+ * decrypt contract).
  *
  * @param key        32-byte key
  * @param nonce      12-byte nonce
@@ -1193,7 +1195,8 @@ AMA_API ama_error_t ama_chacha20poly1305_encrypt(
  * @param aad        Additional authenticated data (can be NULL if aad_len == 0)
  * @param aad_len    Length of AAD
  * @param tag        16-byte authentication tag to verify
- * @param plaintext  Output: decrypted plaintext (same length as ciphertext)
+ * @param plaintext  Output: decrypted plaintext (same length as ciphertext);
+ *                   not modified on tag mismatch
  * @return AMA_SUCCESS or AMA_ERROR_VERIFY_FAILED
  */
 AMA_API ama_error_t ama_chacha20poly1305_decrypt(

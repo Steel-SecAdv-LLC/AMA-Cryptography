@@ -548,8 +548,9 @@ ama_error_t ama_chacha20poly1305_encrypt(
  * @brief ChaCha20-Poly1305 AEAD decryption (RFC 8439)
  *
  * Verifies authentication tag and decrypts ciphertext.
- * Fail-closed: returns AMA_ERROR_VERIFY_FAILED and zeros plaintext on tag
- * mismatch.
+ * Fail-closed: on AMA_ERROR_VERIFY_FAILED the plaintext buffer is not
+ * modified (no plaintext was ever written, so there is nothing to
+ * scrub; matches the scalar AES-GCM decrypt contract).
  *
  * @param key        32-byte ChaCha20 key
  * @param nonce      12-byte nonce
@@ -558,7 +559,8 @@ ama_error_t ama_chacha20poly1305_encrypt(
  * @param aad        Additional authenticated data (can be NULL if aad_len == 0)
  * @param aad_len    Length of AAD
  * @param tag        16-byte authentication tag to verify
- * @param plaintext  Output: decrypted plaintext (same length as ciphertext)
+ * @param plaintext  Output: decrypted plaintext (same length as ciphertext);
+ *                   not modified on tag mismatch
  * @return AMA_SUCCESS or AMA_ERROR_VERIFY_FAILED
  */
 ama_error_t ama_chacha20poly1305_decrypt(
@@ -587,9 +589,11 @@ ama_error_t ama_chacha20poly1305_decrypt(
 
     /* Step 3: Verify tag (constant-time comparison) */
     if (ama_consttime_memcmp(computed_tag, tag, 16) != 0) {
-        /* Tag mismatch — zero plaintext and fail */
-        if (ct_len > 0)
-            ama_secure_memzero(plaintext, ct_len);
+        /* SECURITY: plaintext was never written above this point;
+         * zeroing it here would silently corrupt caller memory with no
+         * cryptographic benefit.  Caller contract: on
+         * AMA_ERROR_VERIFY_FAILED, plaintext is not modified.  Matches
+         * the scalar AES-GCM decrypt path in ama_aes_gcm.c. */
         ama_secure_memzero(computed_tag, sizeof(computed_tag));
         return AMA_ERROR_VERIFY_FAILED;
     }

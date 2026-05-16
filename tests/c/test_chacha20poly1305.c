@@ -249,7 +249,10 @@ static void test_scalar_vs_dispatched_sweep(void) {
 }
 
 /* ----------------------------------------------------------------
- * Tag-mismatch must return VERIFY_FAILED and zero plaintext.
+ * Tag-mismatch must return VERIFY_FAILED and leave the caller's
+ * plaintext buffer untouched (contract change: previously the buffer
+ * was zeroed, which silently corrupted caller memory that the function
+ * had never written to).
  * ---------------------------------------------------------------- */
 static void test_tag_mismatch(void) {
     uint8_t key[32] = {0};
@@ -262,21 +265,22 @@ static void test_tag_mismatch(void) {
     TEST_ASSERT(rc == AMA_SUCCESS, "tag-mismatch setup encrypt SUCCESS");
 
     tag[0] ^= 0x01; /* Flip one bit */
-    /* Pre-fill dec with a non-zero canary so the "zeroed on failure"
-     * assertion below genuinely tests the implementation's zeroing
-     * behaviour, not whatever happened to be on the stack. */
+    /* Pre-fill dec with a canary.  The new contract is: on
+     * AMA_ERROR_VERIFY_FAILED the plaintext buffer is NOT modified,
+     * so every canary byte must still be 0xA5 after the failed
+     * decrypt. */
     memset(dec, 0xA5, sizeof(dec));
     rc = ama_chacha20poly1305_decrypt(
         key, nonce, ct, sizeof(pt), NULL, 0, tag, dec);
     TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
                 "flipped-tag decrypt returns VERIFY_FAILED");
     for (size_t i = 0; i < sizeof(pt); i++) {
-        if (dec[i] != 0) {
-            TEST_ASSERT(0, "flipped-tag decrypt must zero plaintext buffer");
+        if (dec[i] != 0xA5) {
+            TEST_ASSERT(0, "flipped-tag decrypt must NOT modify plaintext buffer");
             return;
         }
     }
-    TEST_ASSERT(1, "flipped-tag decrypt zeros plaintext buffer");
+    TEST_ASSERT(1, "flipped-tag decrypt leaves canary intact");
 }
 
 int main(void) {
