@@ -58,8 +58,10 @@ static void ghash_mul_gf128(const uint8_t X[16], const uint8_t Y[16],
 
     for (int i = 0; i < 16; i++) {
         for (int j = 7; j >= 0; j--) {
-            /* If bit (i*8 + (7-j)) of X is set, Z ^= V */
-            uint8_t mask = (uint8_t)(-(int8_t)((X[i] >> j) & 1));
+            /* If bit (i*8 + (7-j)) of X is set, Z ^= V.  Unsigned
+             * negation (0u - bit) for stylistic consistency with the
+             * rest of the tree — hardening, not UB. */
+            uint8_t mask = (uint8_t)(0u - (unsigned)((X[i] >> j) & 1));
             for (int k = 0; k < 16; k++)
                 Z[k] ^= V[k] & mask;
 
@@ -68,7 +70,7 @@ static void ghash_mul_gf128(const uint8_t X[16], const uint8_t Y[16],
             for (int k = 15; k > 0; k--)
                 V[k] = (uint8_t)((V[k] >> 1) | (V[k-1] << 7));
             V[0] >>= 1;
-            V[0] ^= (uint8_t)(0xe1 & (-(int)lsb));
+            V[0] ^= (uint8_t)(0xe1u & (0u - (unsigned)lsb));
         }
     }
 

@@ -216,8 +216,11 @@ static void ghash_mul(const uint8_t X[16], const uint8_t Y[16], uint8_t out[16])
 
     for (i = 0; i < 16; i++) {
         for (j = 7; j >= 0; j--) {
-            /* If bit (i*8 + (7-j)) of X is set, Z ^= V */
-            uint8_t mask = (uint8_t)(-(int8_t)((X[i] >> j) & 1));
+            /* If bit (i*8 + (7-j)) of X is set, Z ^= V.  Build the
+             * mask via unsigned negation (0u - bit) for stylistic
+             * consistency with the unsigned-arithmetic discipline
+             * used elsewhere in the file — hardening, not UB. */
+            uint8_t mask = (uint8_t)(0u - (unsigned)((X[i] >> j) & 1));
             for (int k = 0; k < 16; k++)
                 Z[k] ^= V[k] & mask;
 
@@ -228,7 +231,7 @@ static void ghash_mul(const uint8_t X[16], const uint8_t Y[16], uint8_t out[16])
             V[0] >>= 1;
 
             /* If lsb was 1, XOR with R = 0xe1 || 0^120 */
-            V[0] ^= (uint8_t)(0xe1 & (-(int)lsb));
+            V[0] ^= (uint8_t)(0xe1u & (0u - (unsigned)lsb));
         }
     }
 
