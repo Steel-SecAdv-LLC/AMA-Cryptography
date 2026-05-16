@@ -519,6 +519,40 @@ static double test_kyber_decaps(int iterations) {
 }
 
 /* -----------------------------------------------------------------------
+ * Test: FROST scalar_negate — timing must not depend on the secret
+ * scalar bytes (branchless borrow loop, INVARIANT-12).
+ *
+ * Class 0: Negate all-zero scalar (s = 0)
+ * Class 1: Negate all-0xFF scalar (high-borrow regime)
+ * ----------------------------------------------------------------------- */
+extern void ama_frost_test_scalar_negate(uint8_t neg[32], const uint8_t s[32]);
+
+static double test_frost_scalar_negate(int iterations) {
+    dudect_ctx_t ctx;
+    dudect_ctx_init(&ctx, "FROST scalar_negate (secret-independent)");
+
+    uint8_t s0[32], s1[32], neg[32];
+    memset(s0, 0x00, 32);
+    memset(s1, 0xFF, 32);
+
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+
+        uint64_t start = dudect_get_time_ns();
+        if (class_idx == 0)
+            ama_frost_test_scalar_negate(neg, s0);
+        else
+            ama_frost_test_scalar_negate(neg, s1);
+        uint64_t end = dudect_get_time_ns();
+
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    dudect_print_result(&ctx);
+    return dudect_get_t(&ctx);
+}
+
+/* -----------------------------------------------------------------------
  * Test 11: Dilithium signing — timing must not depend on message content
  *
  * Class 0: Sign all-zero message
@@ -647,6 +681,12 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
      * sequential scalar ladders and the same constant-time argument
      * applies. */
     results[idx].is_info_only = 1;
+    idx++;
+
+    printf("\n--- Threshold Signature Building Blocks ---\n");
+    results[idx].name = "FROST scalar_negate";
+    results[idx].t_value = test_frost_scalar_negate(iterations);
+    results[idx].is_info_only = 0;
     idx++;
 
     printf("\n--- Post-Quantum Cryptography ---\n");
