@@ -163,23 +163,27 @@ def secure_memzero(data: Union[bytearray, memoryview]) -> None:
 
     Raises:
         TypeError: If ``data`` is not a mutable buffer.
-        SecureMemoryError:
-          * If the active backend is the Python fallback AND none of
+        SecureMemoryError: Raised in two distinct fail-closed cases (the
+            native ``ama_secure_memzero`` and the libc ``explicit_bzero`` /
+            ``memset_s`` back-ends never raise).
+
+            **Case 1 — no native backend, no opt-in.** If the active
+            backend is the Python fallback AND none of
             ``AMA_ALLOW_PYTHON_MEMZERO=1`` / ``AMA_SPHINX_BUILD=1`` /
-            ``SPHINX_BUILD=1`` is set.  In that configuration the
-            module refuses to wipe at all — falling back silently to a
-            best-effort Python loop in production would defeat the
-            security contract.  Build the native C library
+            ``SPHINX_BUILD=1`` is set, the module refuses to wipe at all.
+            Falling back silently to a best-effort Python loop in
+            production would defeat the security contract. Build the
+            native C library
             (``cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build``)
             or set the opt-in env var for development / docs builds.
-          * If the Python fallback path *is* in use (via opt-in) and
-            the post-wipe verification observes a residual non-zero
-            byte (optimizer elision, concurrent write, or mis-compiled
-            ``memset_explicit``).  This is a deliberate hard failure —
-            a silently incomplete wipe would leave secret material in
-            memory.  The native paths (``ama_secure_memzero`` and the
-            libc ``explicit_bzero`` / ``memset_s`` back-ends) do not
-            raise.
+
+            **Case 2 — opt-in fallback with residual non-zero byte.** If
+            the Python fallback path *is* in use (via opt-in) and the
+            post-wipe verification observes a residual non-zero byte
+            (optimizer elision, concurrent write, or mis-compiled
+            ``memset_explicit``), the function raises. This is a
+            deliberate hard failure — a silently incomplete wipe would
+            leave secret material in memory.
 
     **Propagation from cleanup contexts.**  ``SecureBuffer.__exit__`` and
     ``secure_buffer()``'s ``finally`` clause both call ``secure_memzero``
