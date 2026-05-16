@@ -12,6 +12,7 @@ endmacro()
 # Core tests
 add_ama_test(test_consttime test_consttime.c)
 add_ama_test(test_core test_core.c)
+add_ama_test(test_aes_gcm_scalar_kat test_aes_gcm_scalar_kat.c)
 
 # Cryptographic primitive tests
 add_ama_test(test_sha3 test_sha3.c)
