@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 3.0.0 |
-| Last Updated | 2026-04-20 |
+| Document Version | 3.1.0 + Unreleased |
+| Last Updated | 2026-05-16 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -70,11 +70,11 @@ ML-KEM-1024 provides IND-CCA2 secure key encapsulation for establishing shared s
 
 **Standard:** NIST FIPS 203 (2024)
 
-**Integration Status:** Backend implemented in `ama_cryptography/pqc_backends.py`. Integration into main signing workflow pending.
+**Integration Status:** Wired through `ama_cryptography/pqc_backends.py` and exposed via the `KyberProvider` / `SPHINCSProvider` classes in `ama_cryptography/crypto_api.py` and the hybrid KEM combiner.
 
-### SPHINCS+-SHA2-256f-simple
+### SLH-DSA-SHA2-256f (SPHINCS+ lineage)
 
-SPHINCS+ provides stateless hash-based signatures with security based only on hash function properties.
+SLH-DSA (FIPS 205, SPHINCS+ lineage) provides stateless hash-based signatures with security based only on hash function properties.
 
 **Key Sizes:**
 - Public Key: 64 bytes
@@ -88,7 +88,7 @@ SPHINCS+ provides stateless hash-based signatures with security based only on ha
 
 **Standard:** NIST FIPS 205 (2024)
 
-**Integration Status:** Backend implemented in `ama_cryptography/pqc_backends.py`. Integration into main signing workflow pending.
+**Integration Status:** Wired through `ama_cryptography/pqc_backends.py` and exposed via the `SPHINCSProvider` class in `ama_cryptography/crypto_api.py` and the adaptive posture system.
 
 ### Implementation Provenance
 

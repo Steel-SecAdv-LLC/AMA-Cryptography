@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 3.0.0 |
-| Last Updated | 2026-04-20 |
+| Document Version | 3.1.0 + Unreleased |
+| Last Updated | 2026-05-16 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -13,7 +13,7 @@
 
 ## Overview
 
-AMA Cryptography v2.1 features a zero-dependency, multi-language architecture that combines the security of native C cryptographic primitives with the usability of Python. All cryptographic operations are implemented natively — no external cryptographic libraries required. This document describes the enhanced features available in the current release.
+AMA Cryptography features a zero-dependency, multi-language architecture that combines the security of native C cryptographic primitives with the usability of Python. All cryptographic operations are implemented natively — no external cryptographic libraries required. This document describes the enhanced features available in the current release.
 
 ---
 
