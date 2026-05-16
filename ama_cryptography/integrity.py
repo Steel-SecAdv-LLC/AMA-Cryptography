@@ -4,8 +4,10 @@
 """
 Module integrity digest management CLI.
 
-Use ``python -m ama_cryptography.integrity --verify`` to verify integrity and
-``python -m ama_cryptography.integrity --show`` to show the current digest.
+Use ``python -m ama_cryptography.integrity --verify`` to verify integrity,
+``python -m ama_cryptography.integrity --show`` to show the current digest,
+and ``python -m ama_cryptography.integrity --update`` only from the build
+pipeline to refresh the digest.
 
 The --update subcommand is build-pipeline-only.  It regenerates the
 integrity digest and (when invoked with ``--sign``) the signed

@@ -317,7 +317,7 @@ See [Key Management](Key-Management) for full details.
 | NIST FIPS 202 | SHA3-256/512, SHAKE | `ama_sha3.c` |
 | NIST FIPS 203 | ML-KEM-1024 (Kyber) | `ama_kyber.c` |
 | NIST FIPS 204 | ML-DSA-65 (Dilithium) | `ama_dilithium.c` |
-| NIST FIPS 205 | SLH-DSA (SLH-DSA) | `ama_sphincs.c` |
+| NIST FIPS 205 | SLH-DSA-SHA2-256f | `ama_sphincs.c` |
 | NIST SP 800-38D | AES-256-GCM | `ama_aes_gcm.c` |
 | RFC 2104 | HMAC | `ama_hkdf.c` |
 | RFC 5869 | HKDF | `ama_hkdf.c` |
