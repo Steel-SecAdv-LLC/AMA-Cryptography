@@ -600,17 +600,19 @@ static void dispatch_init_internal(void) {
     }
     /* Follow-up (deferred from the AArch64-completeness PR, 2026-05):
      * the SVE2 tier currently wires only keccak / kyber / dilithium —
-     * AES-GCM, ChaCha20, and Argon2 SVE2 kernels exist as
-     * compiled-but-unwired *_sve2.c TUs.  Wiring them needs:
-     *   - a runtime probe for the SVE2 AES feature (FEAT_SVE_AES,
-     *     HWCAP2_SVEAES) — distinct from baseline ARMv8 FEAT_AES
-     *   - validation that the kernels are byte-identical to the
-     *     scalar reference under sufficiently varied SVE vector
-     *     widths (128 / 256 / 512 bit), which requires SVE-aware CI
-     * Tracked in the AArch64-completeness PR's follow-up issue.  Until
-     * then, AArch64 hosts on SVE2 still get the NEON kernels for
-     * AES-GCM / ChaCha20 / Argon2 — wired above — which is a strict
-     * upgrade over the previous "generic C" state. */
+     * ChaCha20 and Argon2 SVE2 kernels exist as compiled-but-unwired
+     * *_sve2.c TUs.  Wiring them needs validation that the kernels are
+     * byte-identical to the scalar reference under sufficiently varied
+     * SVE vector widths (128 / 256 / 512 bit), which requires
+     * SVE-aware CI.  Until then, AArch64 hosts on SVE2 still get the
+     * NEON kernels for ChaCha20 / Argon2 — wired above — which is a
+     * strict upgrade over the previous "generic C" state.
+     *
+     * AES-GCM SVE2: the prior compiled-but-unwired stub TU
+     * (src/c/sve2/ama_aes_gcm_sve2.c) was a scalar bit-loop GHASH with
+     * no actual SVE2 acceleration; it has been removed.  AES-GCM on
+     * SVE2 hosts dispatches through the NEON kernel above, which uses
+     * the Armv8 Crypto Extensions PMULL intrinsics. */
 #endif
 
     /* ====================================================================
