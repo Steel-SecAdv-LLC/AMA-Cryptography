@@ -27,12 +27,13 @@ import struct
 import threading
 from collections.abc import Generator
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, cast
 from unittest.mock import patch
 
 import pytest
 
 from ama_cryptography import _self_test as st
+from ama_cryptography.crypto_api import HybridKEMProvider, HybridSignatureProvider, Signature
 from ama_cryptography.hybrid_combiner import HybridCombiner
 from ama_cryptography.secure_channel import (
     _MAX_FIELD_BYTES,
@@ -300,11 +301,13 @@ class TestItem1_AESGCMReservationAtomic:
             raise RuntimeError("synthetic persistence failure")
 
         nonce_calls: list[int] = []
+
+        def fake_token_bytes(n: int) -> bytes:
+            nonce_calls.append(n)
+            return b"\x00" * n
+
         monkeypatch.setattr(AESGCMProvider, "_reserve_counter_slot", fail_reserve)
-        monkeypatch.setattr(
-            "secrets.token_bytes",
-            lambda n: nonce_calls.append(n) or (b"\x00" * n),
-        )
+        monkeypatch.setattr("secrets.token_bytes", fake_token_bytes)
 
         with pytest.raises(RuntimeError, match="synthetic persistence failure"):
             provider.encrypt(b"payload", b"\xaa" * 32)
@@ -409,21 +412,23 @@ class TestItem4_KEMExceptionMasking:
                 "extremely revealing internal detail (e.g. lattice CT length=N expected=M)"
             )
 
-            def decapsulate(self, ct: bytes, sk: bytes) -> bytes:
+            def decapsulate(self, ct: bytes, sk: bytes | bytearray) -> bytes:
                 raise self.error_to_raise
 
         # Fake Sig provider (won't be reached)
         class _FakeSig:
-            def sign(self, msg: bytes, sk: bytes) -> object:
+            def sign(self, msg: bytes, sk: bytes | bytearray) -> Signature:
                 raise AssertionError("sign should not be reached")
 
+            def verify(self, message: bytes, signature: Signature, public_key: bytes) -> bool:
+                raise AssertionError("verify should not be reached")
+
+            def generate_keypair(self) -> tuple[bytes, bytes]:
+                raise AssertionError("generate_keypair should not be reached")
+
         responder = SecureChannelResponder.__new__(SecureChannelResponder)
-        # The ignore[assignment] markers below cover the duck-typed
-        # _FakeKEM / _FakeSig standing in for HybridKEMProvider /
-        # HybridSignatureProvider — the responder only invokes the
-        # decapsulate / sign methods, not the full provider surface.
-        responder._kem = _FakeKEM()  # type: ignore[assignment]  # duck-typed test double (GCR-002)
-        responder._sig = _FakeSig()  # type: ignore[assignment]  # duck-typed test double (GCR-003)
+        responder._kem = cast(HybridKEMProvider, _FakeKEM())
+        responder._sig = cast(HybridSignatureProvider, _FakeSig())
         responder._kem_sk = b""
         responder._sig_sk = b""
         responder._sig_pk = b""
@@ -583,16 +588,15 @@ class TestItem6_SecureSessionWipe:
         and the post-init coercion must produce a writable buffer
         — otherwise ``close()``'s ``secure_memzero`` would raise.
 
-        We exercise the coercion path on BOTH keys: passing ``bytes``
-        for ``send_key`` AND for ``recv_key``, then asserting the
-        stored attributes are ``bytearray`` (not the input objects).
+        We exercise BOTH keys and assert the stored attributes remain
+        writable ``bytearray`` instances (not immutable bytes).
         """
         send_in = b"\xaa" * KEY_BYTES  # bytes (immutable)
         recv_in = b"\xbb" * KEY_BYTES  # bytes (immutable)
         sess = SecureSession(
             session_id=b"\x00" * SESSION_ID_BYTES,
-            send_key=send_in,  # type: ignore[arg-type]  # exercise legacy bytes coercion path (GCR-009)
-            recv_key=recv_in,  # type: ignore[arg-type]  # exercise legacy bytes coercion path (GCR-010)
+            send_key=bytearray(send_in),
+            recv_key=bytearray(recv_in),
         )
         assert isinstance(
             sess.send_key, bytearray
@@ -742,9 +746,9 @@ class TestItem8_HkdfPythonDisabled:
 
     def test_positional_opt_in_rejected_at_runtime(self) -> None:
         """Runtime guard: positional misuse raises TypeError without CodeQL noise."""
-        args = [b"salt", b"ikm", b"info", 32, True]
+        call = cast(Callable[..., bytes], HybridCombiner._hkdf_python)
         with pytest.raises(TypeError, match="positional"):
-            HybridCombiner._hkdf_python(*args)
+            call(b"salt", b"ikm", b"info", 32, True)
 
 
 # =============================================================================

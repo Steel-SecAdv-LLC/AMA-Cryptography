@@ -25,8 +25,10 @@ the ``isolated_integrity_file`` fixture, so the runner is free to write
 from __future__ import annotations
 
 import hashlib
+import time
 from collections.abc import Generator
 from pathlib import Path
+from typing import Callable, cast
 
 import pytest
 
@@ -51,6 +53,45 @@ def isolated_integrity_file(
         fake.write_text(st._INTEGRITY_DIGEST_FILE.read_text(encoding="utf-8"))
     monkeypatch.setattr(st, "_INTEGRITY_DIGEST_FILE", fake)
     yield fake
+
+
+# ---------------------------------------------------------------------------
+# Timing oracle negative branches
+# ---------------------------------------------------------------------------
+
+
+class TestTimingOracleBranches:
+    def test_timing_oracle_detects_position_dependent_early_exit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """First-vs-last mismatch classes catch memcmp-style early exits."""
+
+        ticks = {"now": 0}
+
+        def fake_perf_counter_ns() -> int:
+            ticks["now"] += 100
+            return ticks["now"]
+
+        def fake_memcmp(left: bytes, right: bytes, size: int) -> int:
+            for i in range(size):
+                if left[i] != right[i]:
+                    ticks["now"] += i * 100
+                    return 1
+            ticks["now"] += size * 100
+            return 0
+
+        import ama_cryptography.secure_memory as sm
+
+        monkeypatch.setattr(time, "perf_counter_ns", fake_perf_counter_ns)
+        monkeypatch.setattr(
+            sm,
+            "_native_consttime_memcmp",
+            cast(Callable[[bytes, bytes, int], int], fake_memcmp),
+        )
+
+        passed, detail = st._timing_oracle_consttime()
+        assert passed is False
+        assert "Timing leak detected" in detail
 
 
 # ---------------------------------------------------------------------------

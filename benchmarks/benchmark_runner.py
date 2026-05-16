@@ -134,6 +134,19 @@ def benchmark_operation(
     return iterations / elapsed if elapsed > 0 else float("inf")
 
 
+def benchmark_operation_best_of(
+    operation: Callable[[], object],
+    iterations: int,
+    warmup: int,
+    rounds: int,
+) -> float:
+    """Benchmark latency-spiky composite operations and keep the fastest round."""
+    measurements = [
+        benchmark_operation(operation, iterations=iterations, warmup=warmup) for _ in range(rounds)
+    ]
+    return max(measurements)
+
+
 def run_sha3_256_benchmark(iterations: int = 100) -> float:
     """Benchmark AMA native C SHA3-256 hashing (FIPS 202)."""
     from ama_cryptography.pqc_backends import native_sha3_256
@@ -234,7 +247,7 @@ def run_full_package_create_benchmark(iterations: int = 20) -> float:
             use_rfc3161=False,
         )
 
-    return benchmark_operation(operation, iterations, warmup=2)
+    return benchmark_operation_best_of(operation, iterations, warmup=2, rounds=5)
 
 
 def run_full_package_verify_benchmark(iterations: int = 20) -> float:

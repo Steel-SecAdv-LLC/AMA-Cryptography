@@ -752,15 +752,15 @@ _TIMING_WARMUP = 200
 def _measure_timing_batch(
     n_iterations: int,
     memcmp_fn: Callable[[bytes, bytes, int], int],
-    equal_a: bytes,
-    equal_b: bytes,
-    differ_a: bytes,
-    differ_b: bytes,
+    class_a_left: bytes,
+    class_a_right: bytes,
+    class_b_left: bytes,
+    class_b_right: bytes,
     buf_size: int,
 ) -> Tuple[float, float, float, float, int]:
     """Run n_iterations interleaved timing measurements.
 
-    Returns (mean_equal, mean_differ, var_equal, var_differ, n).
+    Returns (mean_class_a, mean_class_b, var_class_a, var_class_b, n).
     """
     times_equal: List[float] = []
     times_differ: List[float] = []
@@ -768,22 +768,22 @@ def _measure_timing_batch(
     for i in range(n_iterations):
         if i % 2 == 0:
             t0 = time.perf_counter_ns()
-            memcmp_fn(equal_a, equal_b, buf_size)
+            memcmp_fn(class_a_left, class_a_right, buf_size)
             t1 = time.perf_counter_ns()
             times_equal.append(float(t1 - t0))
 
             t0 = time.perf_counter_ns()
-            memcmp_fn(differ_a, differ_b, buf_size)
+            memcmp_fn(class_b_left, class_b_right, buf_size)
             t1 = time.perf_counter_ns()
             times_differ.append(float(t1 - t0))
         else:
             t0 = time.perf_counter_ns()
-            memcmp_fn(differ_a, differ_b, buf_size)
+            memcmp_fn(class_b_left, class_b_right, buf_size)
             t1 = time.perf_counter_ns()
             times_differ.append(float(t1 - t0))
 
             t0 = time.perf_counter_ns()
-            memcmp_fn(equal_a, equal_b, buf_size)
+            memcmp_fn(class_a_left, class_a_right, buf_size)
             t1 = time.perf_counter_ns()
             times_equal.append(float(t1 - t0))
 
@@ -800,10 +800,10 @@ def _timing_oracle_consttime() -> Tuple[Optional[bool], str]:
 
     Single deterministic pass with high statistical power (no retry).
 
-    Runs interleaved comparisons with equal and unequal inputs, measures
-    execution time for each, then computes Welch's t-statistic.  If
-    |t| > ``_DUDECT_THRESHOLD`` (4.5), the comparison function may leak
-    timing information.
+    Runs interleaved comparisons with a first-byte mismatch and a last-byte
+    mismatch, measures execution time for each, then computes Welch's
+    t-statistic.  If |t| > ``_DUDECT_THRESHOLD`` (4.5), the comparison
+    function may leak timing information through data-dependent early exit.
 
     The previous implementation retried up to three times with growing
     sample sizes and accepted ANY pass.  That pattern is a timing-leak
@@ -814,7 +814,11 @@ def _timing_oracle_consttime() -> Tuple[Optional[bool], str]:
     every time for a given binary and host, with no opportunity to
     re-roll a borderline result into a green light.  Real timing
     leaks (|t| >> 4.5) reproduce; scheduler noise is averaged out by
-    the warmup phase + interleaved measurement design.
+    the warmup phase + interleaved measurement design.  The two
+    classes are intentionally both mismatches (first byte versus last
+    byte) so POST tests for data-dependent early exit without
+    conflating equal-result fast paths with leak evidence on noisy CI
+    hosts.
 
     Returns:
         * ``(True, detail)``  — implementation is consistent with
@@ -835,25 +839,25 @@ def _timing_oracle_consttime() -> Tuple[Optional[bool], str]:
         return None, "Constant-time oracle skipped: native consttime_memcmp not available"
 
     buf_size = 32
-    equal_a = b"\xaa" * buf_size
-    equal_b = b"\xaa" * buf_size
-    differ_a = b"\xaa" * buf_size
-    differ_b = b"\x55" * buf_size
+    first_diff_a = b"\xaa" * buf_size
+    first_diff_b = b"\x55" + (b"\xaa" * (buf_size - 1))
+    last_diff_a = b"\xaa" * buf_size
+    last_diff_b = (b"\xaa" * (buf_size - 1)) + b"\x55"
 
     # Warmup: stabilize CPU frequency, fill i-cache and branch predictors.
     # 200 warmup iterations (up from 100) help the JIT and frequency
     # scaling converge before the measurement window opens.
     for _ in range(_TIMING_WARMUP):
-        _native_consttime_memcmp(equal_a, equal_b, buf_size)
-        _native_consttime_memcmp(differ_a, differ_b, buf_size)
+        _native_consttime_memcmp(first_diff_a, first_diff_b, buf_size)
+        _native_consttime_memcmp(last_diff_a, last_diff_b, buf_size)
 
     mean1, mean2, var1, var2, n1 = _measure_timing_batch(
         _TIMING_ITERATIONS,
         _native_consttime_memcmp,
-        equal_a,
-        equal_b,
-        differ_a,
-        differ_b,
+        first_diff_a,
+        first_diff_b,
+        last_diff_a,
+        last_diff_b,
         buf_size,
     )
 
@@ -864,13 +868,13 @@ def _timing_oracle_consttime() -> Tuple[Optional[bool], str]:
         return (
             True,
             f"Constant-time OK: |t|={abs(t_stat):.2f} <= {_DUDECT_THRESHOLD} "
-            f"(equal={mean1:.0f}ns, differ={mean2:.0f}ns, n={n1})",
+            f"(first-diff={mean1:.0f}ns, last-diff={mean2:.0f}ns, n={n1})",
         )
 
     return (
         False,
         f"Timing leak detected: |t|={abs(t_stat):.2f} > {_DUDECT_THRESHOLD} "
-        f"(equal={mean1:.0f}ns, differ={mean2:.0f}ns, n={n1})",
+        f"(first-diff={mean1:.0f}ns, last-diff={mean2:.0f}ns, n={n1})",
     )
 
 
