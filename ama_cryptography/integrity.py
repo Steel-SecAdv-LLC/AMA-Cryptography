@@ -2,12 +2,10 @@
 # Copyright 2025-2026 Steel Security Advisors LLC
 # Licensed under the Apache License, Version 2.0
 """
-Module Integrity Digest Management CLI
-=======================================
+Module integrity digest management CLI.
 
-Usage:
-    python -m ama_cryptography.integrity --verify    # Verify integrity
-    python -m ama_cryptography.integrity --show      # Show current digest
+Use ``python -m ama_cryptography.integrity --verify`` to verify integrity and
+``python -m ama_cryptography.integrity --show`` to show the current digest.
 
 The --update subcommand is build-pipeline-only.  It regenerates the
 integrity digest and (when invoked with ``--sign``) the signed
