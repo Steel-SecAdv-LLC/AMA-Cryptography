@@ -530,18 +530,10 @@ class SecureSession:
                 + struct.pack(">Q", self.send_seq)
             )
 
-            # ``native_aes256_gcm_encrypt`` is typed (and ctypes-bound)
-            # to ``bytes``; bytearray does not satisfy ``ctypes.c_char_p``
-            # (it requires immutable bytes or an integer address), so we
-            # MUST materialise a transient bytes copy of the key for
-            # this call.  The copy is short-lived (it is unreferenced
-            # the moment this expression returns) and the canonical
-            # storage (``self.send_key``) remains the wipeable
-            # ``bytearray`` that ``close()`` will zero in place.
-            # Plumbing the buffer protocol all the way through the FFI
-            # would avoid the transient copy but requires touching the
-            # native wrapper signature; out of scope for this commit.
-            ct, tag = native_aes256_gcm_encrypt(bytes(self.send_key), nonce, plaintext, aad)
+            # The native wrapper borrows this bytearray via ctypes
+            # ``from_buffer``; do NOT coerce to ``bytes`` here, because
+            # immutable key copies cannot be scrubbed by ``close()``.
+            ct, tag = native_aes256_gcm_encrypt(self.send_key, nonce, plaintext, aad)
 
             msg = ChannelMessage(
                 session_id=self.session_id,
@@ -599,7 +591,7 @@ class SecureSession:
 
             aad = self.session_id + struct.pack(">I", self.rekey_epoch) + struct.pack(">Q", seq)
             plaintext = native_aes256_gcm_decrypt(
-                bytes(self.recv_key), msg.nonce, msg.ciphertext, msg.tag, aad
+                self.recv_key, msg.nonce, msg.ciphertext, msg.tag, aad
             )
 
             # Update replay window after successful decryption.  If the
@@ -637,17 +629,14 @@ class SecureSession:
         from ama_cryptography.pqc_backends import native_hkdf
 
         with self._lock:
-            new_send_bytes = native_hkdf(
-                bytes(self.send_key), KEY_BYTES, salt=None, info=b"ama-rekey"
-            )
-            new_recv_bytes = native_hkdf(
-                bytes(self.recv_key), KEY_BYTES, salt=None, info=b"ama-rekey"
-            )
+            # HKDF borrows the current bytearray keys through the native
+            # buffer path, eliminating bytes(self.key) heap copies before
+            # the old material is wiped below.
+            new_send_bytes = native_hkdf(self.send_key, KEY_BYTES, salt=None, info=b"ama-rekey")
+            new_recv_bytes = native_hkdf(self.recv_key, KEY_BYTES, salt=None, info=b"ama-rekey")
             new_send = bytearray(new_send_bytes)
             new_recv = bytearray(new_recv_bytes)
-            # Wipe the source key material (the bytes returned by HKDF
-            # contained transient copies of the previous key; wipe the
-            # bytearray reference we held, not the immutable bytes).
+            # Wipe the source key material after native HKDF succeeds.
             self._wipe_keys()
             self.send_key = new_send
             self.recv_key = new_recv

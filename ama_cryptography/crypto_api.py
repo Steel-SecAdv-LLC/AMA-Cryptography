@@ -954,19 +954,9 @@ class AESGCMProvider:
     """
 
     _NONCE_SAFETY_LIMIT: int = 2**32
-    # ``_PERSIST_INTERVAL = 1`` means "persist on every encrypt".
-    # Previously this defaulted to 64, which allowed up to 63
-    # unpersisted increments to be lost on crash and let concurrent
-    # processes undercount their combined nonce usage by the same
-    # amount.  Persisting every encrypt closes both windows.  The
-    # cost is one fcntl-locked read-modify-write per call (~1 ms on
-    # commodity NVMe); callers needing higher throughput against a
-    # single-process key can opt into ephemeral mode.
-    _PERSIST_INTERVAL: int = 1
     _encrypt_counters: ClassVar[Dict[bytes, int]] = {}
     _counters_persist_path: ClassVar[Optional[str]] = None
     _counters_loaded: ClassVar[bool] = False
-    _counters_dirty: ClassVar[int] = 0
     _atexit_registered: ClassVar[bool] = False
     _ephemeral: ClassVar[bool] = False
     # Process-local lock protecting in-memory counter mutations and
@@ -1003,7 +993,6 @@ class AESGCMProvider:
         cls._counters_loaded = False
         cls._atexit_registered = False
         cls._encrypt_counters = {}
-        cls._counters_dirty = 0
 
     def __init__(
         self,
@@ -1080,13 +1069,9 @@ class AESGCMProvider:
         """Acquire an exclusive flock on ``lock_fd`` (blocking).
 
         Tries ``fcntl.flock`` on POSIX, ``msvcrt.locking`` on Windows.
-        Falls back to a logged warning (NOT silent debug) if neither
-        is available — refusing to encrypt would be safer, but on
-        platforms without either primitive the caller is best served
-        by a loud warning so they know nonce safety degrades to
-        single-process.  The race surface in that fallback case is
-        the same as the pre-fix behaviour, with an unmistakable log
-        trail.
+        Fail-closed if no supported OS lock can be acquired.  A noisy
+        warning-only fallback would recreate the exact cross-process
+        nonce race this persistence path exists to close.
         """
         try:
             import fcntl
@@ -1096,24 +1081,20 @@ class AESGCMProvider:
         except ImportError:
             pass  # POSIX flock unavailable — try Windows
         except OSError as _lock_err:
-            logger.warning(
-                "AES-GCM counter file lock (fcntl) failed: %s — "
-                "multi-process nonce safety may be degraded for this call",
-                _lock_err,
-            )
-            return
+            raise RuntimeError(
+                "AES-GCM counter file lock (fcntl) failed; refusing to encrypt because "
+                "multi-process nonce safety cannot be guaranteed"
+            ) from _lock_err
         try:
             import msvcrt  # Windows-only stdlib module
 
             msvcrt.locking(lock_fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]  # Windows-only attr (CA-004)
             return
         except (ImportError, OSError) as _lock_err:
-            logger.warning(
-                "AES-GCM counter file lock unavailable on this platform "
-                "(no fcntl, no msvcrt): %s — multi-process nonce safety "
-                "may be degraded",
-                _lock_err,
-            )
+            raise RuntimeError(
+                "AES-GCM counter file lock unavailable (no working fcntl or msvcrt); "
+                "refusing to encrypt because multi-process nonce safety cannot be guaranteed"
+            ) from _lock_err
 
     @classmethod
     @contextlib.contextmanager
@@ -1371,9 +1352,7 @@ class AESGCMProvider:
         if len(key) != 32:
             raise ValueError(f"AES-256 key must be 32 bytes, got {len(key)}")
 
-        if nonce is None:
-            nonce = _secrets.token_bytes(12)
-        elif len(nonce) != 12:
+        if nonce is not None and len(nonce) != 12:
             raise ValueError(f"AES-256-GCM nonce must be 12 bytes, got {len(nonce)}")
 
         key_id: bytes = hashlib.sha256(key).digest()
@@ -1383,10 +1362,14 @@ class AESGCMProvider:
         # every 64 calls" design.  On return, the disk reflects
         # slot+1 and no concurrent process can issue the same slot.
         # If reservation raises (corrupt file, full disk, safety
-        # limit), no nonce has been generated and no AEAD has run —
-        # the caller sees a clean RuntimeError and may retry once
-        # the operator has resolved the failure cause.
+        # limit), no nonce has been generated and no AEAD has run.
         AESGCMProvider._reserve_counter_slot(key_id)
+
+        # Generate the random nonce only after the durable counter
+        # reservation succeeds, so failed persistence cannot consume
+        # entropy or leave an untracked nonce candidate in caller state.
+        if nonce is None:
+            nonce = _secrets.token_bytes(12)
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 

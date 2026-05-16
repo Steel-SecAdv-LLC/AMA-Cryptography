@@ -18,6 +18,7 @@ Validates:
 
 from __future__ import annotations
 
+import ctypes
 import os
 from typing import Any
 from unittest.mock import MagicMock
@@ -244,6 +245,9 @@ class TestHybridCombinerNativePath:
             pqc_ct=b"\x00" * 1568,
         )
         mock_lib.ama_hkdf.assert_called_once()
+        assert mock_lib.ama_hkdf.argtypes[0] is ctypes.c_void_p
+        assert mock_lib.ama_hkdf.argtypes[2] is ctypes.c_void_p
+        assert mock_lib.ama_hkdf.argtypes[4] is ctypes.c_void_p
 
     def test_native_hkdf_error_raises(self) -> None:
         """Non-zero return from native HKDF should raise RuntimeError."""

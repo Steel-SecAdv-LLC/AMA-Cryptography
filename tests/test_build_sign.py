@@ -180,6 +180,34 @@ def test_require_trust_anchor_without_anchor_raises(
         bs._generate_keypair_and_sign(b"\x00" * 32, require_trust_anchor=True)
 
 
+def test_strict_release_signing_accepts_pinned_anchor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strict release mode signs only when the generated key matches its anchor."""
+    from ama_cryptography.pqc_backends import _native_lib
+
+    if _native_lib is None:
+        pytest.skip("native library not available in this environment")
+
+    # Simulate a release-CI native anchor without needing a relinked C
+    # library: first derive the public key for the deterministic seed,
+    # then make _load_native_trust_anchor return exactly that anchor.
+    seed = b"\x44" * 32
+    monkeypatch.setattr(bs, "_load_native_trust_anchor", lambda _lib: None)
+    pubkey, _sig, _source = bs._generate_keypair_and_sign(b"\x22" * 32, seed_override=seed)
+
+    monkeypatch.setattr(bs, "_load_native_trust_anchor", lambda _lib: pubkey)
+    pubkey2, signature2, source = bs._generate_keypair_and_sign(
+        b"\x33" * 32,
+        seed_override=seed,
+        require_trust_anchor=True,
+    )
+
+    assert pubkey2 == pubkey
+    assert len(signature2) == 64
+    assert source == "native"
+
+
 def test_main_catches_unexpected_exception_returns_exit_1(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any, capsys: Any
 ) -> None:

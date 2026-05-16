@@ -82,14 +82,12 @@ def aesgcm_persist_dir(
         "loaded": AESGCMProvider._counters_loaded,
         "registered": AESGCMProvider._atexit_registered,
         "counters": dict(AESGCMProvider._encrypt_counters),
-        "dirty": AESGCMProvider._counters_dirty,
     }
     AESGCMProvider._counters_persist_path = str(target)
     AESGCMProvider._ephemeral = False
     AESGCMProvider._counters_loaded = False
     AESGCMProvider._atexit_registered = False
     AESGCMProvider._encrypt_counters = {}
-    AESGCMProvider._counters_dirty = 0
 
     try:
         yield target
@@ -99,7 +97,6 @@ def aesgcm_persist_dir(
         AESGCMProvider._counters_loaded = saved["loaded"]
         AESGCMProvider._atexit_registered = saved["registered"]
         AESGCMProvider._encrypt_counters = saved["counters"]
-        AESGCMProvider._counters_dirty = saved["dirty"]
 
 
 _native_available = True
@@ -216,6 +213,50 @@ class TestItem1_AESGCMReservationAtomic:
         # Counter unchanged
         assert AESGCMProvider._encrypt_counters[key_id] == AESGCMProvider._NONCE_SAFETY_LIMIT
 
+    def test_file_lock_unavailable_fails_closed(
+        self, aesgcm_persist_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No flock backend means no encrypt: warning-only fallback is unsafe."""
+        from ama_cryptography.crypto_api import AESGCMProvider
+
+        real_import = __import__
+
+        def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name in {"fcntl", "msvcrt"}:
+                raise ImportError(name)
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", fake_import)
+        with pytest.raises(RuntimeError, match="file lock unavailable"):
+            AESGCMProvider._reserve_counter_slot(b"\xcd" * 32)
+        assert not aesgcm_persist_dir.exists()
+
+    def test_file_lock_oserror_fails_closed(
+        self, aesgcm_persist_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failing flock primitive aborts instead of silently degrading."""
+        from ama_cryptography.crypto_api import AESGCMProvider
+
+        class _BadFcntl:
+            LOCK_EX = 1
+            LOCK_UN = 2
+
+            @staticmethod
+            def flock(_fd: int, _op: int) -> None:
+                raise OSError("synthetic flock failure")
+
+        real_import = __import__
+
+        def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "fcntl":
+                return _BadFcntl
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", fake_import)
+        with pytest.raises(RuntimeError, match=r"file lock \(fcntl\) failed"):
+            AESGCMProvider._reserve_counter_slot(b"\xce" * 32)
+        assert not aesgcm_persist_dir.exists()
+
     def test_encrypt_persists_before_aead(self, aesgcm_persist_dir: Path) -> None:
         """Counter is durable before native_aes256_gcm_encrypt is invoked.
 
@@ -246,6 +287,28 @@ class TestItem1_AESGCMReservationAtomic:
             "AEAD call runs.  Otherwise a crash inside the AEAD would leak "
             "a usable nonce slot for the next process."
         )
+
+    def test_encrypt_generates_nonce_after_reservation(
+        self, aesgcm_persist_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Persistence failure must not generate a random nonce first."""
+        from ama_cryptography.crypto_api import AESGCMProvider, CryptoBackend
+
+        provider = AESGCMProvider(backend=CryptoBackend.C_LIBRARY)
+
+        def fail_reserve(_key_id: bytes) -> int:
+            raise RuntimeError("synthetic persistence failure")
+
+        nonce_calls: list[int] = []
+        monkeypatch.setattr(AESGCMProvider, "_reserve_counter_slot", fail_reserve)
+        monkeypatch.setattr(
+            "secrets.token_bytes",
+            lambda n: nonce_calls.append(n) or (b"\x00" * n),
+        )
+
+        with pytest.raises(RuntimeError, match="synthetic persistence failure"):
+            provider.encrypt(b"payload", b"\xaa" * 32)
+        assert nonce_calls == []
 
 
 # =============================================================================
@@ -545,6 +608,48 @@ class TestItem6_SecureSessionWipe:
         assert all(b == 0 for b in sess.send_key)
         assert all(b == 0 for b in sess.recv_key)
 
+    def test_encrypt_decrypt_rekey_do_not_copy_key_bytes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SecureSession hot paths pass bytearray keys directly to native FFI."""
+        seen: list[tuple[str, type[object]]] = []
+
+        def fake_encrypt(
+            key: object, nonce: bytes, plaintext: bytes, aad: bytes
+        ) -> tuple[bytes, bytes]:
+            seen.append(("encrypt", type(key)))
+            return plaintext, b"\x00" * TAG_BYTES
+
+        def fake_decrypt(
+            key: object, nonce: bytes, ciphertext: bytes, tag: bytes, aad: bytes
+        ) -> bytes:
+            seen.append(("decrypt", type(key)))
+            return ciphertext
+
+        def fake_hkdf(ikm: object, length: int, salt: object = None, info: bytes = b"") -> bytes:
+            seen.append(("hkdf", type(ikm)))
+            return b"\x33" * length
+
+        monkeypatch.setattr("ama_cryptography.pqc_backends.native_aes256_gcm_encrypt", fake_encrypt)
+        monkeypatch.setattr("ama_cryptography.pqc_backends.native_aes256_gcm_decrypt", fake_decrypt)
+        monkeypatch.setattr("ama_cryptography.pqc_backends.native_hkdf", fake_hkdf)
+
+        sess = SecureSession(
+            session_id=b"\x00" * SESSION_ID_BYTES,
+            send_key=bytearray(b"\xaa" * KEY_BYTES),
+            recv_key=bytearray(b"\xbb" * KEY_BYTES),
+        )
+        msg = sess.encrypt(b"payload")
+        sess.decrypt(msg)
+        sess.rekey()
+
+        assert seen == [
+            ("encrypt", bytearray),
+            ("decrypt", bytearray),
+            ("hkdf", bytearray),
+            ("hkdf", bytearray),
+        ]
+
 
 # =============================================================================
 # Item 7 — _python_fallback_memzero fail-closed
@@ -634,6 +739,12 @@ class TestItem8_HkdfPythonDisabled:
             "production code pass True positionally — restore the * marker "
             "before the named parameter."
         )
+
+    def test_positional_opt_in_rejected_at_runtime(self) -> None:
+        """Runtime guard: positional misuse raises TypeError without CodeQL noise."""
+        args = [b"salt", b"ikm", b"info", 32, True]
+        with pytest.raises(TypeError, match="positional"):
+            HybridCombiner._hkdf_python(*args)
 
 
 # =============================================================================

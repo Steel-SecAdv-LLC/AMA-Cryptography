@@ -1050,7 +1050,11 @@ def _run_self_tests() -> bool:
     for _stage_name, stage_fn in stages:
         stage_ok, err = stage_fn()
         if not stage_ok:
-            assert err is not None, "stage returned (False, None)"
+            if err is None:
+                # SECURITY: asserts can be stripped with ``python -O``;
+                # fail closed explicitly if a stage violates the
+                # ``(False, reason)`` contract.
+                err = "FIPS POST internal error: stage returned (False, None)"
             _set_error(err)
             all_passed = False
             break

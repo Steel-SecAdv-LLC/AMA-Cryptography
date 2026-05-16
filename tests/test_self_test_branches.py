@@ -280,6 +280,32 @@ class TestRunSelfTestsFailures:
             st.update_integrity_digest()
             _set_operational()
 
+    def test_stage_false_none_fails_closed_without_assert(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        isolated_integrity_file: Path,
+    ) -> None:
+        from ama_cryptography._self_test import (
+            _run_self_tests,
+            _set_operational,
+            module_error_reason,
+            module_status,
+        )
+
+        monkeypatch.setattr(
+            "ama_cryptography._self_test._run_integrity_stage",
+            lambda: (False, None),
+        )
+        try:
+            assert _run_self_tests() is False
+            assert module_status() == "ERROR"
+            assert module_error_reason() == (
+                "FIPS POST internal error: stage returned (False, None)"
+            )
+        finally:
+            st.update_integrity_digest()
+            _set_operational()
+
     def test_rng_identical_outputs_fails(
         self,
         monkeypatch: pytest.MonkeyPatch,

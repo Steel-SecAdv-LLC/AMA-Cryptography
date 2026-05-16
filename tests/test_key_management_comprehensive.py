@@ -448,6 +448,31 @@ class TestSecureKeyStorageComprehensive:
 
         assert retrieved == test_key_material
 
+    def test_store_retrieve_uses_wipeable_key_buffer(
+        self, secure_storage: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SecureKeyStorage passes its bytearray encryption key to AES-GCM."""
+        seen: list[tuple[str, type[object]]] = []
+
+        def fake_encrypt(
+            key: object, nonce: bytes, plaintext: bytes, aad: bytes
+        ) -> tuple[bytes, bytes]:
+            seen.append(("encrypt", type(key)))
+            return plaintext, b"\x00" * 16
+
+        def fake_decrypt(
+            key: object, nonce: bytes, ciphertext: bytes, tag: bytes, aad: bytes
+        ) -> bytes:
+            seen.append(("decrypt", type(key)))
+            return ciphertext
+
+        monkeypatch.setattr("ama_cryptography.pqc_backends.native_aes256_gcm_encrypt", fake_encrypt)
+        monkeypatch.setattr("ama_cryptography.pqc_backends.native_aes256_gcm_decrypt", fake_decrypt)
+
+        secure_storage.store_key("test-key", b"secret")
+        assert secure_storage.retrieve_key("test-key") == b"secret"
+        assert seen == [("encrypt", bytearray), ("decrypt", bytearray)]
+
     def test_store_retrieve_with_metadata(
         self,
         secure_storage: Any,

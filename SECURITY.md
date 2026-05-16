@@ -354,6 +354,20 @@ End-to-end smoke test (from the AArch64-completeness PR's CI):
     python -c "import ama_cryptography; ama_cryptography._self_test._run_self_tests()"
     # → ERROR state, all crypto operations refused
 
+Release-anchor smoke test:
+
+    export AMA_BUILD_PIPELINE=1
+    export AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1
+    export AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX=<32-byte expected Ed25519 pubkey hex>
+    export AMA_INTEGRITY_SIGNING_SEED_HEX=<32-byte release signing seed hex>
+    python -m ama_cryptography.integrity --update --sign
+    AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1 python -m ama_cryptography.integrity --verify
+
+The release job normally supplies the trust anchor via the compiled
+`AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` CMake option; the environment
+form above is a reproducible local equivalent used by tests to prove
+the strict path rejects unanchored artefacts.
+
 ### `AMA_FIPS_STRICT` — escalate skipped KATs to POST failure
 
 Released wheels and FIPS-validated deployments should set
@@ -402,6 +416,13 @@ where two processes could load the same baseline and write back
 bypasses disk I/O for hermetic test runs; in that mode the
 multi-process race surface is the same as the historical
 single-process design and callers MUST partition keys per-process.
+If the host cannot provide a working `fcntl.flock` (POSIX) or
+`msvcrt.locking` (Windows) primitive, encryption fails closed instead
+of logging and continuing with degraded nonce safety.
+
+The persisted counter path no longer keeps a dirty counter or batching
+interval: every successful reservation writes the `slot+1` high-water
+mark atomically, so there is no deferred flush state to lose on crash.
 
 ## Cryptographic Algorithm Security
 

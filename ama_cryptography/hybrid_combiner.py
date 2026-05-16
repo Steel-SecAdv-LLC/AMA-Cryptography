@@ -140,13 +140,13 @@ class HybridCombiner:
         """Configure ctypes for ama_hkdf. Returns True on success."""
         try:
             lib.ama_hkdf.argtypes = [
-                ctypes.c_char_p,
+                ctypes.c_void_p,
                 ctypes.c_size_t,  # salt, salt_len
-                ctypes.c_char_p,
+                ctypes.c_void_p,
                 ctypes.c_size_t,  # ikm, ikm_len
-                ctypes.c_char_p,
+                ctypes.c_void_p,
                 ctypes.c_size_t,  # info, info_len
-                ctypes.c_char_p,
+                ctypes.c_void_p,
                 ctypes.c_size_t,  # okm, okm_len
             ]
             lib.ama_hkdf.restype = ctypes.c_int

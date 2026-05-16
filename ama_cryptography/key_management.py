@@ -834,10 +834,11 @@ class SecureKeyStorage:
 
         nonce = secrets.token_bytes(12)  # 96-bit nonce for GCM (NIST recommended)
 
-        # Encrypt with key_id as associated data (binds ciphertext to key_id)
-        # Convert bytearray to bytes for ctypes compatibility
+        # Encrypt with key_id as associated data (binds ciphertext to key_id).
+        # The native wrapper borrows this bytearray key through the buffer
+        # protocol so the context manager can still wipe the only live copy.
         ct, tag = native_aes256_gcm_encrypt(
-            bytes(self.encryption_key), nonce, key_data, key_id.encode("utf-8")
+            self.encryption_key, nonce, key_data, key_id.encode("utf-8")
         )
         ciphertext = ct + tag  # Store as combined ct||tag for format compatibility
 
@@ -894,10 +895,10 @@ class SecureKeyStorage:
             ct = combined[:-16]
             tag = combined[-16:]
 
-            # Decrypt with authentication (raises ValueError if tampered)
-            # Convert bytearray to bytes for ctypes compatibility
+            # Decrypt with authentication (raises ValueError if tampered);
+            # keep the wipeable bytearray key on the buffer-protocol path.
             plaintext: bytes = native_aes256_gcm_decrypt(
-                bytes(self.encryption_key), nonce, ct, tag, key_id.encode("utf-8")
+                self.encryption_key, nonce, ct, tag, key_id.encode("utf-8")
             )
             return plaintext
 
@@ -1216,10 +1217,10 @@ class HSMKeyStorage:
         Returns:
             Tuple of (nonce, ciphertext, tag)
         """
-        nonce = secrets.token_bytes(12)
         handle = self._handle_map.get(key_handle, int.from_bytes(key_handle, "big"))
 
         try:
+            nonce = secrets.token_bytes(12)
             mechanism = self.pkcs11.AES_GCM_Mechanism(nonce, b"", 128)
             ciphertext_with_tag = bytes(self.session.encrypt(handle, plaintext, mechanism))
 
