@@ -34,6 +34,7 @@ import sys
 import threading
 import time
 import warnings
+from _thread import LockType
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -963,7 +964,7 @@ class AESGCMProvider:
     # serialising the slot-reservation transaction against parallel
     # threads inside the SAME process.  The file lock (fcntl.flock)
     # protects between processes; this protects within one process.
-    _counter_lock: ClassVar[threading.Lock] = threading.Lock()
+    _counter_lock: ClassVar[LockType] = threading.Lock()
 
     @classmethod
     def configure_ephemeral(cls, enabled: bool = True) -> None:

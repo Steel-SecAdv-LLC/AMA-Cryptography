@@ -57,6 +57,7 @@ import secrets
 import struct
 import threading
 import time
+from _thread import LockType
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional, Tuple
@@ -470,7 +471,7 @@ class SecureSession:
         # so a plain Lock is sufficient and an attempted nested acquire
         # surfaces as a deadlock at the bad call site rather than being
         # silently allowed.
-        self._lock: threading.Lock = threading.Lock()
+        self._lock: LockType = threading.Lock()
         # Defensive type coercion: callers from older API paths might pass
         # ``bytes`` for send/recv keys.  We canonicalise to bytearray so
         # ``close()`` can wipe the live memory rather than rebind names.
