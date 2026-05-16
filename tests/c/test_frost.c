@@ -35,6 +35,31 @@
         } \
     } while (0)
 
+/* AMA_TESTING_MODE-only exports from src/c/ama_frost.c.  Forward-
+ * declared here so the test can exercise the constant-time branchless
+ * borrow loop in scalar_negate directly (INVARIANT-12). */
+extern void ama_frost_test_scalar_negate(uint8_t neg[32], const uint8_t s[32]);
+extern void ama_frost_test_scalar_add(uint8_t c[32], const uint8_t a[32],
+                                       const uint8_t b[32]);
+
+/* Run a single scalar_negate boundary check: assert
+ * scalar_add(scalar_negate(x), x) == 0 (mod l). */
+static int check_negate_inverse(const uint8_t x[32], const char *label) {
+    uint8_t neg[32], sum[32];
+    ama_frost_test_scalar_negate(neg, x);
+    ama_frost_test_scalar_add(sum, neg, x);
+    int all_zero = 1;
+    for (int i = 0; i < 32; i++) {
+        if (sum[i] != 0) { all_zero = 0; break; }
+    }
+    if (!all_zero) {
+        fprintf(stderr, "FAIL: scalar_negate(%s) + %s != 0 mod l\n", label, label);
+        return 1;
+    }
+    printf("PASS: scalar_negate(%s) + %s == 0 mod l\n", label, label);
+    return 0;
+}
+
 /* Fixed 32-byte secret key so the group public key is deterministic within
  * a run.  Value is cryptographically irrelevant — just non-zero and non-
  * reducing (fits in [0, 2^252) after reduction). */
@@ -219,6 +244,38 @@ int main(void) {
             commitments, signer_indices, 1, group_pk);
         TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
                     "round2_sign rejects num_signers < 2");
+    }
+
+    /* Test 5: scalar_negate boundary cases (INVARIANT-12 branchless
+     * borrow loop).  Verify scalar_add(scalar_negate(x), x) == 0 mod l
+     * for s = 0, s = 1, s = l-1, and a representative mid-range value. */
+    {
+        /* s = 0 (the edge case the sc_reduce final step must collapse). */
+        uint8_t zero[32] = {0};
+        if (check_negate_inverse(zero, "0")) return 1;
+
+        /* s = 1. */
+        uint8_t one[32] = {0};
+        one[0] = 1;
+        if (check_negate_inverse(one, "1")) return 1;
+
+        /* s = l - 1 (largest in-range scalar; ED25519_ORDER minus one). */
+        uint8_t l_minus_1[32] = {
+            0xec, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
+            0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10
+        };
+        if (check_negate_inverse(l_minus_1, "l-1")) return 1;
+
+        /* Representative mid-range scalar (fits in [0, 2^252) post-reduce). */
+        uint8_t mid[32] = {
+            0xC1, 0xE3, 0x97, 0x12, 0x11, 0x1F, 0x68, 0xD2,
+            0xAB, 0x34, 0x5B, 0x7C, 0x9E, 0x4D, 0x2A, 0x5F,
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+            0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x0F
+        };
+        if (check_negate_inverse(mid, "mid")) return 1;
     }
 
     printf("\n===========================================\n");

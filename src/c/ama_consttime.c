@@ -53,8 +53,15 @@ int ama_consttime_memcmp(const void* a, const void* b, size_t len) {
         diff |= va[i] ^ vb[i];
     }
 
-    /* Convert any non-zero to 1 */
-    return (int)((diff | -diff) >> 7) & 1;
+    /* Convert any non-zero to 1.  Stay in unsigned arithmetic the whole
+     * way: right-shifting a negative signed value is implementation-
+     * defined under C11 §6.5.7p5, which the original `(diff | -diff)
+     * >> 7` form triggered after the usual integer promotion of diff
+     * to int.  Two's-complement negation of an unsigned value is
+     * ~x + 1; the result is 0 only when diff == 0, otherwise bit 7
+     * (or higher) is set, so the >> 7 mask yields {0, 1}. */
+    uint32_t d = diff;
+    return (int)(((d | (~d + 1u)) >> 7) & 1u);
 }
 
 /**

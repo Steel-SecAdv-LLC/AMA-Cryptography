@@ -54,6 +54,17 @@ static void scalar_mul(uint8_t c[32], const uint8_t a[32], const uint8_t b[32]) 
     ama_ed25519_sc_muladd(c, SCALAR_ZERO, a, b);
 }
 
+/* Constant-time negation mod the Ed25519 group order l.
+ *
+ * INVARIANT-12: this routine MUST be constant-time wrt the input
+ * scalar s, because every caller passes secret material.  Current
+ * callers (audit list):
+ *   - scalar_sub (line below), called from compute_lagrange_coeff
+ *     with public signer-index differences AND from any future
+ *     secret-scalar arithmetic.
+ * If a future caller passes non-secret input, document that fact at
+ * the call site — do NOT remove this constant-time discipline.
+ */
 static void scalar_negate(uint8_t neg[32], const uint8_t s[32]) {
     /* neg = l - s mod l.  For s == 0, result is 0. */
     static const uint8_t ED25519_ORDER[32] = {
@@ -62,12 +73,17 @@ static void scalar_negate(uint8_t neg[32], const uint8_t s[32]) {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10
     };
-    int borrow = 0;
+    /* INVARIANT-12: branchless borrow-subtract.  Each iteration
+     * computes ud = 256 + l[i] - s[i] - borrow ∈ [0, 511].  Bit 8 of
+     * ud is the no-borrow flag (1 iff ud >= 256, i.e. the subtraction
+     * did not underflow); the new borrow is its complement.  No
+     * data-dependent branch on the secret bytes of s. */
+    uint32_t borrow = 0;
     for (int i = 0; i < 32; i++) {
-        int diff = (int)ED25519_ORDER[i] - (int)s[i] - borrow;
-        if (diff < 0) { diff += 256; borrow = 1; }
-        else { borrow = 0; }
-        neg[i] = (uint8_t)diff;
+        uint32_t ud = 256u + (uint32_t)ED25519_ORDER[i]
+                    - (uint32_t)s[i] - borrow;
+        neg[i] = (uint8_t)ud;
+        borrow = 1u - (ud >> 8);
     }
     /* If s was 0, we get l — reduce to get 0 */
     uint8_t tmp[64];
@@ -559,3 +575,18 @@ AMA_API ama_error_t ama_frost_aggregate(
 
     return AMA_SUCCESS;
 }
+
+#ifdef AMA_TESTING_MODE
+/* Test-only export of scalar_negate so tests/c/test_frost.c can
+ * exercise the constant-time branchless borrow loop directly
+ * (INVARIANT-12 boundary tests for s ∈ {0, 1, l-1, mid-range}).
+ * Not exposed in any public header — visible only to AMA_TESTING_MODE
+ * builds of the test static library. */
+void ama_frost_test_scalar_negate(uint8_t neg[32], const uint8_t s[32]) {
+    scalar_negate(neg, s);
+}
+void ama_frost_test_scalar_add(uint8_t c[32], const uint8_t a[32],
+                                const uint8_t b[32]) {
+    scalar_add(c, a, b);
+}
+#endif
