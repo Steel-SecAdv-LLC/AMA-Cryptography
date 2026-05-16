@@ -227,17 +227,21 @@ class TestModuleIntegrity:
         """
         import sys
 
-        import ama_cryptography
+        # Reach the parent package via sys.modules rather than ``import
+        # ama_cryptography`` to keep this file using a single import style
+        # for ``ama_cryptography`` — both ``import X`` and ``from X import Y``
+        # in the same module trigger CodeQL note #524 ("mixed import style").
+        from ama_cryptography import _self_test as st_mod
 
-        st_mod = ama_cryptography._self_test
+        pkg = sys.modules["ama_cryptography"]
 
         sig_path = Path(st_mod.__file__).resolve().parent / "_integrity_signature.py"
         backup = sig_path.with_suffix(".py.bak-test-INT-004")
         cached_mod = sys.modules.pop("ama_cryptography._integrity_signature", None)
-        cached_attr = getattr(ama_cryptography, "_integrity_signature", None)
+        cached_attr = getattr(pkg, "_integrity_signature", None)
         if cached_attr is not None:
             try:
-                delattr(ama_cryptography, "_integrity_signature")
+                delattr(pkg, "_integrity_signature")
             except AttributeError:
                 pass
         if sig_path.exists():
@@ -250,7 +254,10 @@ class TestModuleIntegrity:
             if cached_mod is not None:
                 sys.modules["ama_cryptography._integrity_signature"] = cached_mod
             if cached_attr is not None:
-                ama_cryptography._integrity_signature = cached_attr
+                # ``pkg`` is a runtime ``sys.modules`` lookup typed as
+                # ``ModuleType``, so mypy cannot see the dynamic
+                # ``_integrity_signature`` attribute we are restoring.
+                pkg._integrity_signature = cached_attr  # type: ignore[attr-defined]  # dynamic submodule restore after forced-ImportError window (STC-001)
 
         assert not ok
         assert "no signed-integrity artefact" in detail

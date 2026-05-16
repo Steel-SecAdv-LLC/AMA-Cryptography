@@ -148,11 +148,14 @@ class TestRFC3161SuccessPath:
 
     def test_rfc3161_rejects_http_url_before_network(self) -> None:
         """HTTP TSA URLs are rejected before subprocess or network calls."""
-        with (
-            patch("subprocess.run") as mock_run,
-            patch("http.client.HTTPSConnection") as mock_https_conn,
-        ):
-            tsr = dgs.get_rfc3161_timestamp(b"data", "http://tsa.example.com")
+        # Nested ``with`` (rather than the PEP 617 parenthesized form
+        # ``with (a, b):``) keeps the file parseable by the CodeQL Python
+        # extractor pinned in .github/workflows/static-analysis.yml, which
+        # does not yet accept parenthesized-context-manager syntax on every
+        # release.  Semantics are unchanged.
+        with patch("subprocess.run") as mock_run:
+            with patch("http.client.HTTPSConnection") as mock_https_conn:
+                tsr = dgs.get_rfc3161_timestamp(b"data", "http://tsa.example.com")
 
         assert tsr is None
         mock_run.assert_not_called()
