@@ -101,7 +101,7 @@ make test-crypto-full
 
 | Function | Test Description | Input Classes |
 |----------|-----------------|---------------|
-| Kyber-1024 decaps | Implicit rejection timing | Class 0: valid ciphertext / Class 1: corrupted ciphertext |
+| ML-KEM-1024 decaps | Implicit rejection timing | Class 0: valid ciphertext / Class 1: corrupted ciphertext |
 | ML-DSA-65 sign | Message-independent timing | Class 0: zero message / Class 1: 0xFF message |
 
 ## Interpreting Results

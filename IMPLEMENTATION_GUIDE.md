@@ -52,7 +52,7 @@ cmake --build build
 pip install -e .
 ```
 
-**Note:** As of v2.0, all cryptographic primitives (SHA3-256, HKDF-SHA3-256, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+) are implemented natively in C. No external cryptographic libraries are required.
+**Note:** As of v2.0, all production cryptographic primitives (SHA3-256, HKDF-SHA3-256, Ed25519, AES-256-GCM, ML-DSA-65, ML-KEM-1024, SLH-DSA, X25519, ChaCha20-Poly1305, Argon2id, secp256k1, FROST) are implemented natively in C. No external cryptographic libraries are required.
 
 ### 2. Run Demo
 
@@ -120,7 +120,7 @@ cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-All cryptographic algorithms (SHA3-256, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+-256f) are implemented natively — no external libraries required. PQC implementations pass NIST KAT validation (10/10 for ML-DSA-65 and ML-KEM-1024).
+All production cryptographic algorithms (SHA3-256, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, ML-KEM-1024, SLH-DSA, X25519, ChaCha20-Poly1305, Argon2id, secp256k1, FROST) are implemented natively — no external cryptographic libraries required. Current self-attested NIST-vector scope is documented in `docs/compliance/CSRC_ALIGN_REPORT.md`.
 
 #### Verify Installation
 
@@ -128,7 +128,7 @@ All cryptographic algorithms (SHA3-256, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, K
 from ama_cryptography.pqc_backends import get_pqc_status
 print("PQC status:")
 print(get_pqc_status())
-# Output should report ML-DSA-65, Kyber-1024, and SPHINCS+-256f as available
+# Output should report ML-DSA-65, ML-KEM-1024, and SLH-DSA as available
 ```
 
 ### Step 2: Set Up Key Management
@@ -788,7 +788,7 @@ results = verify_multiple_packages(packages, MASTER_OMNI_CODES, MASTER_HELIX_PAR
 
 ### Pre-Deployment
 
-- [ ] Build native PQC C library (ML-DSA-65, Kyber-1024, SPHINCS+-256f)
+- [ ] Build native PQC C library (ML-DSA-65, ML-KEM-1024, SLH-DSA)
 - [ ] Set up HSM or hardware token for master secret
 - [ ] Configure RFC 3161 TSA (FreeTSA or commercial)
 - [ ] Test key generation and signing
@@ -1191,8 +1191,8 @@ sudo cmake --install build
 
 | Algorithm | NIST Standard | Key Sizes | KAT Status |
 |-----------|---------------|-----------|------------|
-| ML-DSA-65 (Dilithium3) | FIPS 204 | PK: 1952, SK: 4032, Sig: 3309 | **10/10 PASS** |
-| ML-KEM-1024 (Kyber-1024) | FIPS 203 | PK: 1568, SK: 3168, CT: 1568 | **10/10 PASS** |
+| ML-DSA-65 (Dilithium3) | FIPS 204 | PK: 1952, SK: 4032, Sig: 3309 | See `docs/compliance/CSRC_ALIGN_REPORT.md` |
+| ML-KEM-1024 (Kyber lineage) | FIPS 203 | PK: 1568, SK: 3168, CT: 1568 | See `docs/compliance/CSRC_ALIGN_REPORT.md` |
 | SPHINCS+-SHA2-256f | FIPS 205 | PK: 64, SK: 128, Sig: 49856 | Native |
 
 **Note:** For most users, the Python API is recommended over the C library. All cryptographic algorithms are implemented natively — no external libraries required.

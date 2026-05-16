@@ -83,7 +83,7 @@ Each layer provides independent protection from a different mathematical foundat
 | 3 | Hybrid Ed25519 + ML-DSA-65 | Discrete log (Curve25519) + Module-LWE lattice hardness (RFC 8032 + NIST FIPS 204) | Quantum computer (Shor) for Ed25519; unknown lattice breakthrough for ML-DSA-65 |
 | 4 | HKDF-SHA3-256 | PRF security of HMAC-SHA3-256 (RFC 5869) | Only if underlying PRF is broken |
 
-**Optional add-ons (not core layers):** SPHINCS+-256f, ML-KEM-1024, RFC 3161 timestamping.
+**Optional add-ons (not core layers):** SLH-DSA-SHA2-256f, ML-KEM-1024, RFC 3161 timestamping.
 
 **Combined security:** Package authenticity is protected by four independent cryptographic operations. An attacker must simultaneously break **all applicable layers**. No known attack accomplishes this.
 

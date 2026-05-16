@@ -45,8 +45,8 @@ print(info["sphincs_available"],   info["sphincs_backend"])    # True, "native"
 for name, meta in info["algorithms"].items():
     print(name, meta["available"], meta["backend"], meta["security_level"])
 # ML-DSA-65     True native 3
-# Kyber-1024    True native 5
-# SPHINCS+-256f True native 5
+# ML-KEM-1024    True native 5
+# SLH-DSA-SHA2-256f True native 5
 ```
 
 ---

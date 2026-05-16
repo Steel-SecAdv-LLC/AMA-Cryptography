@@ -19,67 +19,97 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
-### Changed
-- **BEHAVIORAL CHANGE — `ama_chacha20poly1305_decrypt` on tag mismatch.**
-  The function used to call `ama_secure_memzero(plaintext, ct_len)` on
-  `AMA_ERROR_VERIFY_FAILED`, but it had never written to `plaintext` —
-  the zero-write silently overwrote whatever the caller stored there.
-  The function now leaves `plaintext` untouched on tag mismatch,
-  matching the scalar AES-GCM decrypt path in `ama_aes_gcm.c`.
+### Added
+- **Signed module-integrity release plumbing (PR #305/#306).** Added
+  `ama_cryptography/_build_sign.py`, `_integrity_signature.py`, native trust-anchor
+  access through `AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX`, and fail-closed
+  release behavior when `AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1`. Developer and
+  editable installs keep digest-only WARN-and-continue behavior; release wheels
+  must ship a signature anchored to the compiled native public key.
+- **AArch64 benchmark regression floor (PR #306).** Added
+  `benchmarks/arm-baseline.json` from GitHub Actions `ubuntu-24.04-arm` run
+  `25935429662` with conservative 65% floors for SHA3/HMAC/HKDF, Ed25519,
+  ML-DSA-65, ML-KEM-1024, AES-GCM, ChaCha20-Poly1305, X25519 scalar-mult,
+  and X25519 batch4. CI now requires runner-class metadata to match the
+  selected baseline and rejects `baseline_value: 0` placeholders.
+- **AArch64 SIMD wiring and equivalence coverage (PR #305).** NEON AES-GCM,
+  ChaCha20-Poly1305, and Argon2 dispatch paths gained dedicated equivalence
+  tests, and the C test suite now includes additional SIMD/native parity
+  harnesses for AES-GCM, Argon2, ChaCha20, Keccak, Kyber NTT, and FROST.
+- **PR-time Sphinx documentation gate (PR #309).** `ci.yml` now runs
+  `AMA_SPHINX_BUILD=1 sphinx-build -W --keep-going -b html docs docs/_build/html`
+  on push and pull-request events, so docstring rendering errors block the
+  PR that introduced them instead of surfacing only in post-merge auto-docs.
 
-  Caller impact: third-party C / Cython / FFI callers that previously
-  relied on the documented "zeros plaintext on tag mismatch" behavior
-  (e.g., to ensure no stale plaintext could be returned to a higher
-  layer after a failed authentication) will now observe the unzeroed
-  buffer instead.  The Python wrapper `native_chacha20poly1305_decrypt`
-  raises `RuntimeError` before returning, so caller-visible behavior
-  through the Python API is unchanged.  Treat this as a candidate for
-  a major-version bump under strict SemVer; the maintainer to decide
-  whether to land this in a 3.x minor with a documented breaking-note
-  or hold for 4.0.  Function signature is unchanged either way.
+### Changed
+- **BEHAVIORAL CHANGE — `ama_chacha20poly1305_decrypt` on tag mismatch
+  (PR #308).** The function used to call `ama_secure_memzero(plaintext, ct_len)`
+  on `AMA_ERROR_VERIFY_FAILED`, but it had never written to `plaintext`; the
+  zero-write silently overwrote whatever the caller stored there. It now leaves
+  `plaintext` untouched on tag mismatch, matching the scalar AES-GCM decrypt
+  path. Python API behavior is unchanged because `native_chacha20poly1305_decrypt`
+  raises `RuntimeError` before returning data.
+- **FIPS POST timing-oracle policy (PR #307/#309).** The constant-time POST now
+  uses one deterministic 10,000-iteration pass (no retry-until-pass loop) and
+  a 50 ns minimum-effect floor for `perf_counter_ns` jitter on shared runners.
+  POST lockout messages now label downstream `CryptoModuleError` cascades as
+  symptoms of one root cause.
+- **Secure-memory fallback contract (PR #307).** `secure_memzero()` now refuses
+  the Python fallback when the native backend is absent unless
+  `AMA_ALLOW_PYTHON_MEMZERO=1`, `AMA_SPHINX_BUILD=1`, or `SPHINX_BUILD=1` is set.
+  This keeps production aligned with INVARIANT-7 while preserving explicit
+  documentation-build and test opt-ins.
 
 ### Fixed
+- **Dependency and toolchain hygiene (PR #301/#303).** Raised benchmark/test-only
+  `cryptography` floors to `>=46.0.7`, updated CodeQL action and lockfile
+  packages, and removed the vulnerable Python 3.9-specific Black pin. These are
+  tooling/reference dependencies only; production crypto remains zero external
+  dependency per INVARIANT-1.
+- **Multi-process AES-GCM nonce counter race (PR #307).** Shared-key counter
+  slots are now reserved atomically under an inter-process file lock and
+  persisted every encrypt by default, closing the previous batched-persistence
+  race between processes.
+- **Secure-channel hardening (PR #307).** Session decrypt/replay-window mutation
+  is serialized by a per-session lock; `close()` and `rekey()` wipe mutable
+  session keys in place; handshake deserialization bounds every length and
+  rejects trailing bytes; KEM decapsulation failures collapse to the opaque
+  `HandshakeError("Handshake failed")` for remote callers.
+- **POST/KAT fail-closed semantics (PR #307).** Backend-missing KATs are now
+  tri-state `(None, "...skipped")` instead of counted as pass; `AMA_FIPS_STRICT=1`
+  escalates any skip to import-time POST failure.
+- **Hybrid combiner fallback guard (PR #307).** The private Python HKDF helper
+  is disabled unless called with the explicit test-only opt-in, preventing any
+  accidental production pure-Python cryptographic fallback path.
 - **C11 §6.5.7p5: implementation-defined signed shift in
-  `ama_consttime_memcmp`.**  Replaced `(diff | -diff) >> 7` (which
-  right-shifted a signed `int` after integer promotion) with an
-  end-to-end unsigned form `(d | (~d + 1u)) >> 7`.  Identical
-  observable result on every two's-complement target; clears the
-  UBSan `-fsanitize=shift` and CodeQL `cpp/shift-out-of-range`
-  alerts on `src/c/ama_consttime.c:57`.
-- **INVARIANT-12: secret-dependent branch in FROST `scalar_negate`.**
-  The prior `if (diff < 0)` borrow loop branched on a value derived
-  from the secret scalar `s`, leaking ≤1 bit per byte via execution
-  timing.  Replaced with the branchless borrow recurrence
-  `ud = 256 + l[i] - s[i] - borrow; borrow = 1u - (ud >> 8);`.
-  Dudect verified — t = +1.73 on a local 50 000-measurement run,
-  well below the 4.5 threshold.
+  `ama_consttime_memcmp` (PR #308).** Replaced `(diff | -diff) >> 7` with an
+  end-to-end unsigned form, clearing UBSan `-fsanitize=shift` and CodeQL
+  `cpp/shift-out-of-range` without changing the observable result.
+- **INVARIANT-12: secret-dependent branch in FROST `scalar_negate` (PR #308).**
+  Replaced the branchy borrow loop with a branchless recurrence. Local dudect
+  verification reported t = +1.73 on 50,000 measurements, below the 4.5
+  threshold.
+- **Sphinx and CodeQL parser/import hygiene (PR #309).** Reworked the
+  `secure_memzero` docstring `Raises:` block for Napoleon/docutils, rewrote a
+  parenthesized `with` test construct into nested `with` statements for the
+  pinned CodeQL Python extractor, and normalized mixed import style in
+  self-test coverage tests.
 
 ### Performance
-- **AES-256-GCM scalar GHASH.**  The previous schoolbook 128-iteration
-  bit loop in `src/c/ama_aes_gcm.c` has been replaced with a 4-bit
-  sliding-window precomputed-table method per NIST SP 800-38D §6.3.
-  Setup builds a 16-entry `H_table` from H via a doubling cascade
-  plus XOR compositions; per-block multiply is Horner over 32 nibbles
-  accelerated by a 16-entry `REM4_TABLE` for the GCM reduction.
-  Measured on x86-64 (GCC 11, -O3, scalar dispatch forced):
-  GHASH-dominated workloads improve from 149 → 35 cycles/byte
-  (-77 %); full-encrypt 64 KiB workloads from 1487 → 1376 cycles/byte
-  (-7.5 %).  Bit-exact against NIST SP 800-38D Appendix B Test
-  Cases 13 & 14.  No change on dispatch paths that wire AES-NI /
-  PCLMULQDQ / PMULL — those bypass the scalar GHASH entirely.
+- **AES-256-GCM scalar GHASH (PR #308).** The previous 128-iteration bit loop in
+  `src/c/ama_aes_gcm.c` was replaced with a 4-bit sliding-window
+  precomputed-table method per NIST SP 800-38D §6.3. Measured on x86-64
+  (GCC 11, `-O3`, scalar dispatch forced): GHASH-dominated workloads improved
+  from 149 to 35 cycles/byte (-77%); full-encrypt 64 KiB workloads improved
+  from 1487 to 1376 cycles/byte (-7.5%). SIMD AES-NI/PCLMULQDQ/PMULL paths are
+  unchanged because they bypass scalar GHASH.
 
 ### Removed
-- **Unwired SVE2 AES-GCM stub.**  `src/c/sve2/ama_aes_gcm_sve2.c`
-  contained a scalar bit-loop `ghash_mul_gf128` /
-  `ama_ghash_precompute_sve2` / `ama_bulk_xor_sve2` triple that was
-  compiled but never referenced by any dispatch table entry — dead
-  code carrying audit cost without operational benefit.  Removed.
-  AES-GCM on SVE2 hosts dispatches through the NEON kernel
-  (`src/c/neon/ama_aes_gcm_neon.c`), which uses Armv8 Crypto
-  Extensions PMULL intrinsics and is validated by
-  `tests/c/test_aes_gcm_neon_equiv.c`.  The file remains as a
-  placeholder TU (single typedef + header comment) so the SVE2
-  source list in `CMakeLists.txt` does not need to change.
+- **Unwired SVE2 AES-GCM stub (PR #308).** Removed dead SVE2 scalar-helper code
+  that was compiled but never referenced by the dispatch table. AES-GCM on SVE2
+  hosts dispatches through the NEON PMULL kernel validated by
+  `tests/c/test_aes_gcm_neon_equiv.c`; the placeholder translation unit remains
+  so the CMake source list is stable.
 
 ---
 
@@ -178,10 +208,6 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   resulting SK scratch buffer are wiped on the way out (INVARIANT-6).
   This closes a Python-side API gap that previously forced KAT and
   reproducible-keygen consumers to drop down into ctypes manually.
-
-
-## [Unreleased]
-
 
 
 ## [3.0.0] - 2026-04-27
@@ -794,8 +820,9 @@ constant-time check that was a flake source on contended runners.
 
   - **Test / file counts.** Replaced the stale "1,855+ tests across 47
     files (37 Python + 10 C)" figure in `README.md` with the
-    `docs/METRICS_REPORT.md` anchor of 2,028 Python test functions
-    across 70 files plus 14 C test files.
+    then-current `docs/METRICS_REPORT.md` anchor of 2,028 Python test
+    functions across 70 files plus 14 C test files. Later branch snapshots
+    re-measure those counts in `docs/METRICS_REPORT.md`.
 
   - **`docs/METRICS_REPORT.md` anchor.** The commit anchor `d4806b9`
     was unreachable in git history; replaced with a branch-snapshot

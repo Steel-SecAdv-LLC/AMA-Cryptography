@@ -72,7 +72,7 @@ AMA Cryptography is a zero-dependency native C cryptographic library providing q
 | T1.5 | ML-DSA-65 forgery (quantum) | PQC signature layer | Negligible (2^190 ops) | CRITICAL | **LOW** |
 | T1.6 | HKDF key recovery | Key derivation | Negligible (2^256 ops) | CRITICAL | **LOW** |
 | T1.7 | AES-256-GCM key recovery | Encryption layer | Negligible (2^128 quantum) | HIGH | **LOW** |
-| T1.8 | Kyber-1024 decapsulation | KEM layer | Negligible (2^254 ops) | HIGH | **LOW** |
+| T1.8 | ML-KEM-1024 decapsulation | KEM layer | Negligible (2^254 ops) | HIGH | **LOW** |
 
 ### T2: Implementation Attacks
 
@@ -114,11 +114,11 @@ AMA Cryptography is a zero-dependency native C cryptographic library providing q
 | T1.1 | SHA3-256 (FIPS 202) — 128-bit collision resistance | **IMPLEMENTED** | `ama_sha3.c`, NIST KAT vectors pass |
 | T1.2 | HMAC-SHA3-256 (RFC 2104) — keyed authentication | **IMPLEMENTED** | `ama_hkdf.c`, constant-time comparison |
 | T1.3 | Ed25519 (RFC 8032) — 128-bit classical security | **IMPLEMENTED** | `ama_ed25519.c`, deterministic signing |
-| T1.4 | ML-DSA-65 (FIPS 204) — quantum-resistant backup | **IMPLEMENTED** | `ama_dilithium.c`, 10/10 NIST KAT pass |
+| T1.4 | ML-DSA-65 (FIPS 204) — quantum-resistant backup | **IMPLEMENTED** | `ama_dilithium.c`; current self-attested vector scope in `docs/compliance/CSRC_ALIGN_REPORT.md` |
 | T1.5 | ML-DSA-65 lattice hardness — 192-bit quantum security | **IMPLEMENTED** | MLWE assumption, FIPS 204 compliant |
 | T1.6 | HKDF-SHA3-256 (RFC 5869) — one-way derivation | **IMPLEMENTED** | `ama_hkdf.c`, domain-separated contexts |
 | T1.7 | AES-256-GCM (SP 800-38D) — 128-bit quantum security | **IMPLEMENTED** | `ama_aes_gcm.c`, NIST test vectors |
-| T1.8 | Kyber-1024 (FIPS 203) — 256-bit quantum security | **IMPLEMENTED** | `ama_kyber.c`, 10/10 NIST KAT pass |
+| T1.8 | ML-KEM-1024 (FIPS 203) — 256-bit quantum security | **IMPLEMENTED** | `ama_kyber.c`; current self-attested vector scope in `docs/compliance/CSRC_ALIGN_REPORT.md` |
 
 ### M2: Side-Channel Mitigations
 
@@ -166,7 +166,7 @@ These risks are accepted or require external mitigation:
 |------|----------|-----------|
 | Table-based AES S-box (opt-in) | **LOW** | Constant-time bitsliced AES is the **default** build (`AMA_AES_CONSTTIME=ON`). Disabling it emits a compile-time warning. |
 | No third-party security audit | **MEDIUM** | Self-assessed. Recommended before high-value production deployment. |
-| PQC algorithm maturity | **LOW** | ML-DSA-65 and Kyber-1024 are NIST-standardized (FIPS 203/204) but have limited deployment history. |
+| PQC algorithm maturity | **LOW** | ML-DSA-65 and ML-KEM-1024 are NIST-standardized (FIPS 203/204) but have limited deployment history. |
 | Ed25519 quantum vulnerability | **LOW** | Mitigated by ML-DSA-65 quantum-resistant layer. Ed25519 provides classical defense only. |
 | RFC 3161 TSA trust dependency | **LOW** | Timestamps depend on external TSA integrity. Use multiple TSAs for defense-in-depth. |
 | Compiler optimization of secure zeroing | **LOW** | Mitigated with `volatile` pointers and compiler barriers (`__asm__ __volatile__`). |
@@ -183,8 +183,8 @@ How each defense layer is verified:
 | HMAC-SHA3-256 | `test_hkdf.c` | RFC 5869 | `fuzz_hkdf` | `dudect_crypto` | Yes |
 | Ed25519 | `test_ed25519.c` | RFC 8032 | `fuzz_ed25519` | `dudect_crypto` | Yes |
 | ML-DSA-65 | `test_kat.c` | FIPS 204 | `fuzz_dilithium` | — | Yes |
-| Kyber-1024 | `test_kat.c` | FIPS 203 | `fuzz_kyber` | — | Yes |
-| SPHINCS+-256f | `test_kat.c` | FIPS 205 | `fuzz_sphincs` | — | Yes |
+| ML-KEM-1024 | `test_kat.c` | FIPS 203 | `fuzz_kyber` | — | Yes |
+| SLH-DSA-SHA2-256f | `test_kat.c` | FIPS 205 | `fuzz_sphincs` | — | Yes |
 | AES-256-GCM | `test_kat.c` | SP 800-38D | `fuzz_aes_gcm` | `dudect_crypto` | Yes |
 | ChaCha20-Poly1305 | — | RFC 8439 | `fuzz_chacha20poly1305` | — | Yes |
 | X25519 | — | RFC 7748 | `fuzz_x25519` | — | Yes |
@@ -207,7 +207,7 @@ How each defense layer is verified:
 If a NIST-approved algorithm is broken:
 
 1. **Ed25519 broken (quantum):** ML-DSA-65 provides continued protection. Disable Ed25519 verification requirement.
-2. **ML-DSA-65 broken:** Upgrade to SPHINCS+-256f (hash-based, conservative assumption). Switch via adaptive posture system.
+2. **ML-DSA-65 broken:** Upgrade to SLH-DSA-SHA2-256f (hash-based, conservative assumption). Switch via adaptive posture system.
 3. **SHA3-256 broken:** Switch to SHA-512 or BLAKE3. Update all hash-dependent layers.
 4. **AES-256-GCM broken:** Switch to ChaCha20-Poly1305 (already implemented as alternative).
 

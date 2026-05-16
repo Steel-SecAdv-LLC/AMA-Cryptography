@@ -50,7 +50,7 @@ cd AMA-Cryptography
 
 ## Step 2: Build the Native C Library
 
-The native C library provides all cryptographic primitives (SHA3-256, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+) with **zero external dependencies**.
+The native C library provides all cryptographic primitives (SHA3-256, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, ML-KEM-1024, SLH-DSA) with **zero external dependencies**.
 
 ### Standard Build (Recommended)
 
@@ -84,7 +84,7 @@ cmake --build build
 | `AMA_BUILD_SHARED` | `ON` | Build shared library (`.so`/`.dll`) |
 | `AMA_BUILD_STATIC` | `ON` | Build static library (`.a`/`.lib`) |
 | `AMA_BUILD_TESTS` | `ON` | Build C test suite |
-| `AMA_USE_NATIVE_PQC` | `ON` | Enable ML-DSA-65, Kyber-1024, SPHINCS+ |
+| `AMA_USE_NATIVE_PQC` | `ON` | Enable ML-DSA-65, ML-KEM-1024, SLH-DSA |
 | `AMA_ENABLE_SIMD` | `ON` | SIMD optimizations |
 | `AMA_ENABLE_AVX2` | `ON` | AVX2 acceleration (x86_64 only) |
 | `AMA_AES_CONSTTIME` | `ON` | Bitsliced AES (cache-timing safe, **default since v2.1.2**) |
@@ -217,7 +217,7 @@ cmake -B build \
 cmake --build build
 ```
 
-Fuzzing targets include: AES-GCM, Ed25519, HKDF, X25519, ChaCha20-Poly1305, SHA3, Kyber, Dilithium, SPHINCS+, Argon2id, secp256k1, constant-time operations.
+Fuzzing targets include: AES-GCM, Ed25519, HKDF, X25519, ChaCha20-Poly1305, SHA3, Kyber, Dilithium, SLH-DSA, Argon2id, secp256k1, constant-time operations.
 
 ---
 
