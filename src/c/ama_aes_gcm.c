@@ -333,6 +333,10 @@ static void ghash_mul_table(const ghash_table_t *t, uint8_t Z[16]) {
     }
 
     memcpy(Z, acc, 16);
+    /* acc holds H_table-derived intermediate state (built from the
+     * secret subkey H); scrub before return.  Consistent with the
+     * H_table scrub in ghash() — Copilot review #3251987718. */
+    ama_secure_memzero(acc, sizeof(acc));
 }
 
 /**
@@ -415,8 +419,14 @@ static void ghash(const uint8_t H[16],
 
     memcpy(tag, S, 16);
 
-    /* H_table is derived from the secret subkey H; scrub before return. */
+    /* Scrub H_table (derived from secret H), the running GHASH state S
+     * (intermediate H-products), and the local block buffer (may carry
+     * the last AAD/CT bytes processed).  block is non-secret on its
+     * own but is part of the same scrub discipline — Copilot review
+     * #3251987718. */
     ama_secure_memzero(&H_table, sizeof(H_table));
+    ama_secure_memzero(S, sizeof(S));
+    ama_secure_memzero(block, sizeof(block));
 }
 
 /* ============================================================================

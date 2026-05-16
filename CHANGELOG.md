@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 3.1.0 |
-| Last Updated | 2026-05-03 |
+| Last Updated | 2026-05-16 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -17,7 +17,71 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ---
 
+## [Unreleased]
 
+### Changed
+- **BEHAVIORAL CHANGE — `ama_chacha20poly1305_decrypt` on tag mismatch.**
+  The function used to call `ama_secure_memzero(plaintext, ct_len)` on
+  `AMA_ERROR_VERIFY_FAILED`, but it had never written to `plaintext` —
+  the zero-write silently overwrote whatever the caller stored there.
+  The function now leaves `plaintext` untouched on tag mismatch,
+  matching the scalar AES-GCM decrypt path in `ama_aes_gcm.c`.
+
+  Caller impact: third-party C / Cython / FFI callers that previously
+  relied on the documented "zeros plaintext on tag mismatch" behavior
+  (e.g., to ensure no stale plaintext could be returned to a higher
+  layer after a failed authentication) will now observe the unzeroed
+  buffer instead.  The Python wrapper `native_chacha20poly1305_decrypt`
+  raises `RuntimeError` before returning, so caller-visible behavior
+  through the Python API is unchanged.  Treat this as a candidate for
+  a major-version bump under strict SemVer; the maintainer to decide
+  whether to land this in a 3.x minor with a documented breaking-note
+  or hold for 4.0.  Function signature is unchanged either way.
+
+### Fixed
+- **C11 §6.5.7p5: implementation-defined signed shift in
+  `ama_consttime_memcmp`.**  Replaced `(diff | -diff) >> 7` (which
+  right-shifted a signed `int` after integer promotion) with an
+  end-to-end unsigned form `(d | (~d + 1u)) >> 7`.  Identical
+  observable result on every two's-complement target; clears the
+  UBSan `-fsanitize=shift` and CodeQL `cpp/shift-out-of-range`
+  alerts on `src/c/ama_consttime.c:57`.
+- **INVARIANT-12: secret-dependent branch in FROST `scalar_negate`.**
+  The prior `if (diff < 0)` borrow loop branched on a value derived
+  from the secret scalar `s`, leaking ≤1 bit per byte via execution
+  timing.  Replaced with the branchless borrow recurrence
+  `ud = 256 + l[i] - s[i] - borrow; borrow = 1u - (ud >> 8);`.
+  Dudect verified — t = +1.73 on a local 50 000-measurement run,
+  well below the 4.5 threshold.
+
+### Performance
+- **AES-256-GCM scalar GHASH.**  The previous schoolbook 128-iteration
+  bit loop in `src/c/ama_aes_gcm.c` has been replaced with a 4-bit
+  sliding-window precomputed-table method per NIST SP 800-38D §6.3.
+  Setup builds a 16-entry `H_table` from H via a doubling cascade
+  plus XOR compositions; per-block multiply is Horner over 32 nibbles
+  accelerated by a 16-entry `REM4_TABLE` for the GCM reduction.
+  Measured on x86-64 (GCC 11, -O3, scalar dispatch forced):
+  GHASH-dominated workloads improve from 149 → 35 cycles/byte
+  (-77 %); full-encrypt 64 KiB workloads from 1487 → 1376 cycles/byte
+  (-7.5 %).  Bit-exact against NIST SP 800-38D Appendix B Test
+  Cases 13 & 14.  No change on dispatch paths that wire AES-NI /
+  PCLMULQDQ / PMULL — those bypass the scalar GHASH entirely.
+
+### Removed
+- **Unwired SVE2 AES-GCM stub.**  `src/c/sve2/ama_aes_gcm_sve2.c`
+  contained a scalar bit-loop `ghash_mul_gf128` /
+  `ama_ghash_precompute_sve2` / `ama_bulk_xor_sve2` triple that was
+  compiled but never referenced by any dispatch table entry — dead
+  code carrying audit cost without operational benefit.  Removed.
+  AES-GCM on SVE2 hosts dispatches through the NEON kernel
+  (`src/c/neon/ama_aes_gcm_neon.c`), which uses Armv8 Crypto
+  Extensions PMULL intrinsics and is validated by
+  `tests/c/test_aes_gcm_neon_equiv.c`.  The file remains as a
+  placeholder TU (single typedef + header comment) so the SVE2
+  source list in `CMakeLists.txt` does not need to change.
+
+---
 
 
 ## [3.1.0] - 2026-05-03

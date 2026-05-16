@@ -582,12 +582,9 @@ AMA_API ama_error_t ama_frost_aggregate(
  * (INVARIANT-12 boundary tests for s ∈ {0, 1, l-1, mid-range}).
  * Not exposed in any public header — visible only to AMA_TESTING_MODE
  * builds of the test static library. */
-void ama_frost_test_scalar_negate(uint8_t neg[32], const uint8_t s[32]);
 void ama_frost_test_scalar_negate(uint8_t neg[32], const uint8_t s[32]) {
     scalar_negate(neg, s);
 }
-void ama_frost_test_scalar_add(uint8_t c[32], const uint8_t a[32],
-                                const uint8_t b[32]);
 void ama_frost_test_scalar_add(uint8_t c[32], const uint8_t a[32],
                                 const uint8_t b[32]) {
     scalar_add(c, a, b);

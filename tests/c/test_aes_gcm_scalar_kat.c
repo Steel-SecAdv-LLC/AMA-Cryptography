@@ -199,14 +199,24 @@ static void test_scalar_vs_simd_equiv(void) {
             prng_fill(aad, al);
 
             /* SIMD path (dispatch slots non-NULL after restore). */
-            ama_aes256_gcm_encrypt(key, iv, pl ? pt : NULL, pl,
-                                    al ? aad : NULL, al, ct_simd, tag_simd);
+            ama_error_t rc_simd = ama_aes256_gcm_encrypt(
+                key, iv, pl ? pt : NULL, pl,
+                al ? aad : NULL, al, ct_simd, tag_simd);
+            CHECK(rc_simd == AMA_SUCCESS, "SIMD encrypt SUCCESS in equiv");
 
             /* Force scalar tier and re-encrypt. */
             ama_test_force_aes_gcm_scalar();
-            ama_aes256_gcm_encrypt(key, iv, pl ? pt : NULL, pl,
-                                    al ? aad : NULL, al, ct_scalar, tag_scalar);
+            ama_error_t rc_scalar = ama_aes256_gcm_encrypt(
+                key, iv, pl ? pt : NULL, pl,
+                al ? aad : NULL, al, ct_scalar, tag_scalar);
             ama_test_restore_aes_gcm();
+            CHECK(rc_scalar == AMA_SUCCESS, "scalar encrypt SUCCESS in equiv");
+
+            /* Only compare outputs when both encrypts succeeded —
+             * otherwise the buffers are uninitialised and memcmp is
+             * meaningless (Copilot review #3251987707). */
+            if (rc_simd != AMA_SUCCESS || rc_scalar != AMA_SUCCESS)
+                continue;
 
             CHECK(pl == 0 || memcmp(ct_scalar, ct_simd, pl) == 0,
                   "scalar ciphertext byte-identical to SIMD");

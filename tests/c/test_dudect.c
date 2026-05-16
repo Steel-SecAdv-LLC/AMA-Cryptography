@@ -522,14 +522,27 @@ static double test_kyber_decaps(int iterations) {
  * Test: FROST scalar_negate — timing must not depend on the secret
  * scalar bytes (branchless borrow loop, INVARIANT-12).
  *
- * Class 0: Negate all-zero scalar (s = 0)
- * Class 1: Negate all-0xFF scalar (high-borrow regime)
+ * Two lanes cover distinct borrow regimes (Copilot review #3251987737 —
+ * a single extreme-vs-extreme contrast would miss a regression that
+ * only affects mid-range borrow patterns):
+ *   - Lane A: all-zero vs all-0xFF (the two byte-borrow extremes).
+ *   - Lane B: all-zero vs a fixed mid-range scalar (irregular borrow
+ *     pattern across positions, same scalar bytes test_frost.c uses
+ *     in its `mid` boundary check).
  * ----------------------------------------------------------------------- */
 extern void ama_frost_test_scalar_negate(uint8_t neg[32], const uint8_t s[32]);
 
-static double test_frost_scalar_negate(int iterations) {
+/* Mid-range scalar matching the `mid` boundary case in test_frost.c. */
+static const uint8_t SCALAR_NEGATE_MID[32] = {
+    0xC1, 0xE3, 0x97, 0x12, 0x11, 0x1F, 0x68, 0xD2,
+    0xAB, 0x34, 0x5B, 0x7C, 0x9E, 0x4D, 0x2A, 0x5F,
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+    0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x0F
+};
+
+static double test_frost_scalar_negate_extremes(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "FROST scalar_negate (secret-independent)");
+    dudect_ctx_init(&ctx, "FROST scalar_negate (0x00 vs 0xFF)");
 
     uint8_t s0[32], s1[32], neg[32];
     memset(s0, 0x00, 32);
@@ -543,6 +556,30 @@ static double test_frost_scalar_negate(int iterations) {
             ama_frost_test_scalar_negate(neg, s0);
         else
             ama_frost_test_scalar_negate(neg, s1);
+        uint64_t end = dudect_get_time_ns();
+
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    dudect_print_result(&ctx);
+    return dudect_get_t(&ctx);
+}
+
+static double test_frost_scalar_negate_midrange(int iterations) {
+    dudect_ctx_t ctx;
+    dudect_ctx_init(&ctx, "FROST scalar_negate (0x00 vs mid-range)");
+
+    uint8_t s0[32], neg[32];
+    memset(s0, 0x00, 32);
+
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+
+        uint64_t start = dudect_get_time_ns();
+        if (class_idx == 0)
+            ama_frost_test_scalar_negate(neg, s0);
+        else
+            ama_frost_test_scalar_negate(neg, SCALAR_NEGATE_MID);
         uint64_t end = dudect_get_time_ns();
 
         dudect_record(&ctx, class_idx, (double)(end - start));
@@ -684,8 +721,13 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
     idx++;
 
     printf("\n--- Threshold Signature Building Blocks ---\n");
-    results[idx].name = "FROST scalar_negate";
-    results[idx].t_value = test_frost_scalar_negate(iterations);
+    results[idx].name = "FROST scalar_negate (extremes)";
+    results[idx].t_value = test_frost_scalar_negate_extremes(iterations);
+    results[idx].is_info_only = 0;
+    idx++;
+
+    results[idx].name = "FROST scalar_negate (mid-range)";
+    results[idx].t_value = test_frost_scalar_negate_midrange(iterations);
     results[idx].is_info_only = 0;
     idx++;
 
