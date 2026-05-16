@@ -91,7 +91,180 @@ class TestTimingOracleBranches:
 
         passed, detail = st._timing_oracle_consttime()
         assert passed is False
-        assert "Timing leak detected" in detail
+        # Accept either the legacy ("Timing leak detected") or the post-RA7BN
+        # auditable form ("FIPS POST: timing-leak detected ... Operator
+        # remediation:"); both are valid fail-closed outcomes.
+        assert "timing-leak detected" in detail.lower() or "timing leak detected" in detail.lower()
+        assert "remediation" in detail.lower() or "delta=" in detail
+
+    def test_timing_oracle_min_effect_floor_suppresses_small_delta_false_positive(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """High-|t|, low-delta signals (host jitter) MUST NOT trip POST.
+
+        This reproduces the shared-runner failure shape: |t| above 4.5 with
+        a mean delta below the absolute-effect floor.  Under the post-RA7BN
+        platform-aware floor (``max(50, 4×perf_counter_resolution_ns)``),
+        this pattern must be ABSORBED as scheduler / quantization noise
+        rather than treated as a real leak — otherwise the module flips to
+        ERROR and every subsequent crypto call is locked out for a non-
+        cryptographic reason.
+
+        Construction: simulate two classes that average exactly
+        ``_TIMING_MIN_EFFECT_NS - epsilon`` apart but with extremely tight
+        variance.  The tight variance forces |t| above 4.5; the small mean
+        delta keeps the absolute effect below the floor.  The fail-closed
+        contract for a *real* leak is preserved by the companion test
+        ``test_timing_oracle_detects_position_dependent_early_exit`` (which
+        injects deltas in the thousands-of-ns range — well above any floor
+        we'd reasonably set on any platform).
+        """
+
+        # Target delta: just under the host's auto-computed floor.  Reading
+        # ``_TIMING_MIN_EFFECT_NS`` rather than hard-coding 50 / 400 keeps
+        # this test correct on Linux (1 ns clock → 50 ns floor) and
+        # Windows (100 ns clock → 400 ns floor) without per-platform
+        # branching.
+        target_delta = st._TIMING_MIN_EFFECT_NS - 5.0
+        assert target_delta > 0, "guard: floor must be > 5 ns for this test to be meaningful"
+
+        # Interleaved measurement loop alternates which class gets the *first*
+        # half of each pair (see ``_measure_timing_batch``).  Returning a
+        # constant integer per call gives mean1 == mean2 (no |t|).  Instead,
+        # we use a counter that returns a deterministic pair of values so
+        # class A is exactly ``target_delta`` ns slower than class B every
+        # iteration, with zero within-class variance.  Zero variance → SE → 0
+        # → |t| → infinity, which is the worst-case false-positive shape.
+        call_state = {"now": 0}
+
+        def fake_perf_counter_ns() -> int:
+            now = call_state["now"]
+            call_state["now"] = now + 1  # arbitrary monotonic tick; deltas
+            # computed below via memcmp side effect.
+            return now
+
+        # The driver under test pairs two start/end measurements per memcmp
+        # call.  We make the memcmp function advance the clock by a known
+        # amount: ``target_delta`` for "class A" inputs, 0 for "class B".
+        def fake_memcmp(left: bytes, right: bytes, size: int) -> int:
+            # Distinguish class A from B by which buffer the mismatch is in.
+            # ``_timing_oracle_consttime`` builds class A as a first-byte
+            # mismatch and class B as a last-byte mismatch.
+            is_class_a = left[0] != right[0]
+            call_state["now"] += int(target_delta) if is_class_a else 0
+            return 1
+
+        import ama_cryptography.secure_memory as sm
+
+        monkeypatch.setattr(time, "perf_counter_ns", fake_perf_counter_ns)
+        monkeypatch.setattr(
+            sm,
+            "_native_consttime_memcmp",
+            cast(Callable[[bytes, bytes, int], int], fake_memcmp),
+        )
+
+        passed, detail = st._timing_oracle_consttime()
+        # With delta < floor the oracle MUST return True (no false-positive),
+        # regardless of how large |t| is — the absolute-effect floor is the
+        # second gate that guards against jitter-only signals.
+        assert passed is True, (
+            f"min-effect floor failed to suppress sub-floor delta: "
+            f"got passed={passed!r}, detail={detail!r}"
+        )
+        assert "OK" in detail or "constant" in detail.lower()
+
+
+class TestTimingFloorScaling:
+    """Unit tests for ``_compute_timing_min_effect_ns`` platform scaling.
+
+    The floor must (a) honor the 50 ns absolute baseline on fine-grain
+    clocks (Linux/macOS, 1 ns resolution), (b) scale to ``4 × resolution``
+    on coarse-grain clocks (Windows, 100 ns resolution), and (c) accept an
+    explicit operator override via ``AMA_POST_TIMING_MIN_EFFECT_NS``.
+    """
+
+    def test_floor_at_least_absolute_baseline(self) -> None:
+        # The module-import-time floor must never drop below the 50 ns
+        # absolute baseline regardless of platform — even a hypothetical
+        # zero-resolution clock would still produce a >= 50 ns floor.
+        assert st._TIMING_MIN_EFFECT_NS >= 50.0
+
+    def test_floor_scales_with_coarse_clock(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A 100 ns simulated resolution must yield a 400 ns floor."""
+        from types import SimpleNamespace
+
+        def fake_get_clock_info(name: str) -> SimpleNamespace:
+            assert name == "perf_counter"
+            return SimpleNamespace(resolution=100e-9)  # 100 ns in seconds
+
+        monkeypatch.setattr(time, "get_clock_info", fake_get_clock_info)
+        floor = st._compute_timing_min_effect_ns()
+        assert floor == 400.0, f"expected 4 × 100 ns = 400; got {floor!r}"
+
+    def test_floor_uses_absolute_baseline_on_fine_clock(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 1 ns simulated resolution must collapse to the 50 ns floor."""
+        from types import SimpleNamespace
+
+        def fake_get_clock_info(name: str) -> SimpleNamespace:
+            assert name == "perf_counter"
+            return SimpleNamespace(resolution=1e-9)  # 1 ns in seconds
+
+        monkeypatch.setattr(time, "get_clock_info", fake_get_clock_info)
+        floor = st._compute_timing_min_effect_ns()
+        # 4 × 1 = 4 ns, below absolute baseline → use baseline.
+        assert floor == 50.0, f"expected 50 ns baseline; got {floor!r}"
+
+    def test_floor_environment_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Operators can pin the floor explicitly for a deployment."""
+        monkeypatch.setenv("AMA_POST_TIMING_MIN_EFFECT_NS", "1234")
+        floor = st._compute_timing_min_effect_ns()
+        assert floor == 1234.0
+
+    def test_floor_environment_override_invalid_falls_back(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A non-numeric override is ignored with a WARNING, not a crash."""
+        import logging
+
+        monkeypatch.setenv("AMA_POST_TIMING_MIN_EFFECT_NS", "not-a-number")
+        with caplog.at_level(logging.WARNING, logger="ama_cryptography._self_test"):
+            floor = st._compute_timing_min_effect_ns()
+        # Falls back to auto-computed value, must be at least the baseline.
+        assert floor >= 50.0
+        assert any("not a number" in rec.message.lower() for rec in caplog.records)
+
+
+class TestPOSTLockoutLabelling:
+    """Regression: downstream errors from POST lockout must be labelled.
+
+    The change in this PR makes ``check_operational`` produce error messages
+    that clearly identify the call as a *symptom* of a prior POST failure,
+    not a fresh independent error.  This keeps CI logs readable: one root
+    cause, N labelled downstream symptoms.
+    """
+
+    def test_check_operational_labels_downstream_failures(self) -> None:
+        from ama_cryptography._self_test import (
+            _set_error,
+            _set_operational,
+            check_operational,
+        )
+        from ama_cryptography.exceptions import CryptoModuleError
+
+        try:
+            _set_error("FIPS POST: timing-leak detected in ama_consttime_memcmp")
+            with pytest.raises(CryptoModuleError) as exc_info:
+                check_operational()
+            msg = str(exc_info.value)
+            # Symptom labelling
+            assert "locked out by FIPS POST failure" in msg
+            assert "downstream symptom" in msg
+            # Root cause preserved verbatim
+            assert "timing-leak detected" in msg
+        finally:
+            _set_operational()
 
 
 # ---------------------------------------------------------------------------

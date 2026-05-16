@@ -33,3 +33,34 @@ paths-ignore:
 #   `ed25519_unit.h` — see src/c/vendor/ed25519-donna/ama_donna_unit.h
 #   for the full rationale. The rule remains active for first-party C
 #   code so accidental `#include "foo.c"` patterns continue to surface.
+
+# ─────────────────────────────────────────────────────────────────────
+# Dismissal procedure for ed25519-donna cosmetic noise (#500, #499 and
+# any future cpp/unused-static-variable that leaks past paths-ignore)
+# ─────────────────────────────────────────────────────────────────────
+# Findings to dismiss:
+#   • #500  cpp/unused-static-variable on reduce_mask_40
+#   • #499  cpp/unused-static-variable on reduce_mask_56
+#   (Both in src/c/vendor/ed25519-donna/curve25519-donna-64bit.h —
+#    upstream code, intentionally unmodified, only referenced from
+#    build configurations donna compiles for other targets.)
+#
+# Steps (must be performed by a repo admin with security_events write):
+#   1. Open https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/security/code-scanning
+#   2. Filter by rule "cpp/unused-static-variable" + file "src/c/vendor/**"
+#   3. Select the affected alerts (one at a time, or bulk).
+#   4. Choose "Dismiss alert" → "Won't fix" → comment:
+#        "Third-party library cosmetic — public-domain ed25519-donna,
+#         intentionally unmodified upstream code, scoped out per
+#         .github/codeql/codeql-config.yml paths-ignore. AMA does not
+#         compile the unreferenced configuration these constants
+#         belong to (gated via AMA_ED25519_ASSEMBLY)."
+#   5. Confirm the alerts move to "Closed / Won't fix" state.
+#
+# Why dismissal is needed even with paths-ignore:
+#   CodeQL's C/C++ extractor inlines vendored headers reachable from
+#   first-party translation units, so a cosmetic alert on a vendor
+#   header can still surface attributed to the analysed first-party
+#   file. paths-ignore stops most of these, dismissal handles the
+#   residue. This is the project policy for the donna unit only —
+#   first-party cpp/unused-static-variable findings are NOT dismissed.
