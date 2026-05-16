@@ -384,6 +384,13 @@ ama_error_t ama_aes256_gcm_encrypt(
     if ((uint64_t)aad_len > AMA_AES_GCM_MAX_AAD_BYTES)
         return AMA_ERROR_INVALID_PARAM;
 
+    /* SCRUB INVARIANT: No cryptographic state has been written to any local
+     * buffer above this point.  The SIMD early-return below is safe because
+     * there is nothing to scrub.  Any future edit that initializes
+     * round_keys, H, J0, counter, keystream, or tag_mask above this line
+     * MUST add a corresponding ama_secure_memzero call before the early
+     * return. */
+
     /* Dispatch to AVX2/AES-NI implementation when available */
     const ama_dispatch_table_t *dt = ama_get_dispatch_table();
     if (dt->aes_gcm_encrypt) {
@@ -494,6 +501,13 @@ ama_error_t ama_aes256_gcm_decrypt(
         return AMA_ERROR_INVALID_PARAM;
     if ((uint64_t)aad_len > AMA_AES_GCM_MAX_AAD_BYTES)
         return AMA_ERROR_INVALID_PARAM;
+
+    /* SCRUB INVARIANT: No cryptographic state has been written to any local
+     * buffer above this point.  The SIMD early-return below is safe because
+     * there is nothing to scrub.  Any future edit that initializes
+     * round_keys, H, J0, counter, keystream, tag_mask, or computed_tag
+     * above this line MUST add a corresponding ama_secure_memzero call
+     * before the early return. */
 
     /* Dispatch to AVX2/AES-NI implementation when available */
     const ama_dispatch_table_t *dt = ama_get_dispatch_table();
