@@ -505,6 +505,20 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
         ) from e
 
 
+def _looks_like_der_sequence(data: bytes) -> bool:
+    """Minimal DER SEQUENCE envelope check before invoking OpenSSL."""
+    if len(data) < 2 or data[0] != 0x30:
+        return False
+    length_octet = data[1]
+    if length_octet < 0x80:
+        return len(data) == length_octet + 2
+    length_len = length_octet & 0x7F
+    if length_len == 0 or length_len > 4 or len(data) < 2 + length_len:
+        return False
+    content_len = int.from_bytes(data[2 : 2 + length_len], "big")
+    return len(data) == 2 + length_len + content_len
+
+
 def verify_rfc3161_timestamp(
     data: bytes, timestamp_token: bytes, tsa_cert_path: Optional[str] = None
 ) -> bool:
@@ -517,6 +531,8 @@ def verify_rfc3161_timestamp(
     ``rfc3161_timestamp.verify_timestamp()`` which takes ``TimestampResult``.
     """
     _enforce_invariant7_lc()
+    if not _looks_like_der_sequence(timestamp_token):
+        return False
     import os
     import shutil
     import tempfile

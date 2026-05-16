@@ -545,6 +545,24 @@ class TestAESGCMFunctions:
         pt = native_aes256_gcm_decrypt(key, nonce, ct, tag, aad)
         assert pt == plaintext
 
+    def test_bytearray_key_buffer_roundtrip(self) -> None:
+        """Writable key buffers are accepted without immutable bytes coercion."""
+        import secrets
+
+        from ama_cryptography.pqc_backends import (
+            native_aes256_gcm_decrypt,
+            native_aes256_gcm_encrypt,
+        )
+
+        key = bytearray(secrets.token_bytes(32))
+        nonce = bytearray(secrets.token_bytes(12))
+        plaintext = b"buffer-protocol AES-GCM"
+        aad = bytearray(b"aad")
+
+        ct, tag = native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
+        pt = native_aes256_gcm_decrypt(key, nonce, ct, tag, aad)
+        assert pt == plaintext
+
     def test_decrypt_tampered_tag(self) -> None:
         """Tampered tag causes decryption failure."""
         import secrets
@@ -586,6 +604,15 @@ class TestHKDFFunctions:
 
         out1 = native_hkdf(b"ikm", 32, salt=b"salt", info=b"info")
         out2 = native_hkdf(b"ikm", 32, salt=b"salt", info=b"info")
+        assert out1 == out2
+
+    def test_hkdf_accepts_bytearray_ikm(self) -> None:
+        """HKDF can derive directly from wipeable bytearray key material."""
+        from ama_cryptography.pqc_backends import native_hkdf
+
+        ikm = bytearray(b"\x01" * 32)
+        out1 = native_hkdf(ikm, 32, salt=bytearray(b"salt"), info=bytearray(b"info"))
+        out2 = native_hkdf(b"\x01" * 32, 32, salt=b"salt", info=b"info")
         assert out1 == out2
 
 

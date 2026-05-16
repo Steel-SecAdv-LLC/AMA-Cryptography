@@ -24,6 +24,7 @@ PQC Backend:
 """
 
 import concurrent.futures
+import contextlib
 import hashlib
 import logging
 import os
@@ -33,6 +34,7 @@ import sys
 import threading
 import time
 import warnings
+from _thread import LockType
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -927,30 +929,42 @@ class AESGCMProvider:
     Security: 256-bit key, 96-bit nonce, 128-bit auth tag
     Standard: NIST SP 800-38D
 
-    .. warning:: **Single-process nonce safety only.**
+    **Multi-process nonce safety (hardened).**
 
-       The counter persistence uses ``max()``-based merging: each process
-       loads the on-disk counter at startup and writes back the max of its
-       in-memory value and the on-disk value.  If two processes encrypt with
-       the **same key** concurrently, each increments independently from the
-       same loaded baseline — the persisted counter will undercount total
-       nonce usage (N+M instead of N+2M), risking birthday-bound violations
-       before the 2^32 safety limit triggers.
+    Every encryption acquires a per-key counter slot atomically via an
+    inter-process file lock: the on-disk counter is reloaded under the
+    lock, incremented, persisted, and the lock released — *before* the
+    nonce is generated or the AEAD is invoked.  This closes the
+    previous race window where two processes sharing the same key could
+    each load the same baseline N, encrypt independently, and write
+    back ``max(N+a, N+b)`` instead of ``N+a+b``, undercounting total
+    nonce usage and risking birthday-bound violations before the 2^32
+    safety limit triggered.
 
-       For multi-process deployments sharing the same AES-GCM key, use
-       external nonce coordination (e.g. per-process nonce partitioning,
-       a shared atomic counter, or the ``NonceTracker`` in the monitoring
-       framework which uses append-only per-entry persistence).
+    The lock is held only for the read-modify-write transaction on the
+    counter file (microseconds in the steady state), not for the AEAD
+    call itself, so contention between concurrent encrypters is
+    minimal.  Single-process callers see no functional change; ephemeral
+    mode (``configure_ephemeral(True)`` or ``ephemeral=True`` in the
+    constructor) still bypasses all disk I/O for hermetic tests.
+
+    Threading: in-memory counter dict mutations are also protected by
+    a per-class ``threading.Lock`` so multi-threaded encrypt on the
+    same key from one process is serialised consistently with the
+    inter-process file lock.
     """
 
     _NONCE_SAFETY_LIMIT: int = 2**32
-    _PERSIST_INTERVAL: int = 64
     _encrypt_counters: ClassVar[Dict[bytes, int]] = {}
     _counters_persist_path: ClassVar[Optional[str]] = None
     _counters_loaded: ClassVar[bool] = False
-    _counters_dirty: ClassVar[int] = 0
     _atexit_registered: ClassVar[bool] = False
     _ephemeral: ClassVar[bool] = False
+    # Process-local lock protecting in-memory counter mutations and
+    # serialising the slot-reservation transaction against parallel
+    # threads inside the SAME process.  The file lock (fcntl.flock)
+    # protects between processes; this protects within one process.
+    _counter_lock: ClassVar[LockType] = threading.Lock()
 
     @classmethod
     def configure_ephemeral(cls, enabled: bool = True) -> None:
@@ -980,7 +994,6 @@ class AESGCMProvider:
         cls._counters_loaded = False
         cls._atexit_registered = False
         cls._encrypt_counters = {}
-        cls._counters_dirty = 0
 
     def __init__(
         self,
@@ -1028,7 +1041,14 @@ class AESGCMProvider:
 
     @classmethod
     def _load_persisted_counters(cls) -> None:
-        """Load persisted encrypt counters from disk."""
+        """Load persisted encrypt counters from disk (no locking).
+
+        Bootstrap-only: called once during ``__init__`` to populate the
+        in-memory dict.  The slot-reservation path
+        (:meth:`_reserve_counter_slot`) re-reads under the file lock
+        before every encrypt, so a stale baseline from this load
+        cannot cause undercounting.
+        """
         if cls._ephemeral:
             return
         import json as _json
@@ -1046,98 +1066,235 @@ class AESGCMProvider:
             raise RuntimeError(f"Failed to load persisted AES-GCM counters from {path}: {e}") from e
 
     @classmethod
-    def _persist_counters(cls, *, _raising: bool = False) -> None:
-        """Persist encrypt counters to disk using atomic write-rename with file locking.
+    def _acquire_file_lock(cls, lock_fd: int) -> None:
+        """Acquire an exclusive flock on ``lock_fd`` (blocking).
 
-        Acquires an exclusive lock on a .lock file to prevent inter-process
-        races. Writes to a temporary file first, then atomically renames to the
-        target path. This prevents counter loss on crash — either the old
-        file remains intact or the new file fully replaces it.
+        Tries ``fcntl.flock`` on POSIX, ``msvcrt.locking`` on Windows.
+        Fail-closed if no supported OS lock can be acquired.  A noisy
+        warning-only fallback would recreate the exact cross-process
+        nonce race this persistence path exists to close.
+        """
+        try:
+            import fcntl
+
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            return
+        except ImportError:
+            pass  # POSIX flock unavailable — try Windows
+        except OSError as _lock_err:
+            raise RuntimeError(
+                "AES-GCM counter file lock (fcntl) failed; refusing to encrypt because "
+                "multi-process nonce safety cannot be guaranteed"
+            ) from _lock_err
+        try:
+            import msvcrt  # Windows-only stdlib module
+
+            msvcrt.locking(lock_fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]  # Windows-only attr (CA-004)
+            return
+        except (ImportError, OSError) as _lock_err:
+            raise RuntimeError(
+                "AES-GCM counter file lock unavailable (no working fcntl or msvcrt); "
+                "refusing to encrypt because multi-process nonce safety cannot be guaranteed"
+            ) from _lock_err
+
+    @classmethod
+    @contextlib.contextmanager
+    def _counter_file_lock(cls) -> "Any":
+        """Acquire the inter-process counter file lock + the thread lock.
+
+        Ephemeral mode: only the thread lock is taken (no disk file is
+        opened).  In all modes the thread lock is taken FIRST so
+        nested thread-level acquisitions inside the same process
+        don't deadlock against the kernel-level file lock.
+        """
+        # The thread lock keeps multi-threaded code inside a single
+        # process from racing the in-memory dict mutation against a
+        # parallel thread that also holds the file lock.  Acquiring it
+        # before the file lock keeps lock ordering consistent and
+        # prevents thread-vs-file-lock interleavings.
+        with cls._counter_lock:
+            if cls._ephemeral:
+                yield
+                return
+            import os as _os
+
+            path = cls._get_persist_path()
+            lock_path = path.parent / ".counters.lock"
+            lock_fd = _os.open(str(lock_path), _os.O_CREAT | _os.O_RDWR, 0o600)
+            try:
+                cls._acquire_file_lock(lock_fd)
+                yield
+            finally:
+                # Closing the fd implicitly releases an fcntl.flock —
+                # POSIX semantics.  On Windows the msvcrt.locking
+                # region is also released on close, so a single close
+                # suffices for both backends.
+                _os.close(lock_fd)
+
+    @classmethod
+    def _reload_counters_under_lock(cls, *, raising: bool) -> None:
+        """Merge on-disk counters into the in-memory dict (caller holds the lock).
+
+        Caller MUST hold the file lock (via :meth:`_counter_file_lock`).
+        This method does the unsynchronised read — splitting load from
+        lock acquisition keeps the lock-acquire path testable.
 
         Args:
-            _raising: If True, propagate write failures as RuntimeError instead
-                of logging a warning. Used when called from the encrypt path
-                where an unpersisted counter could allow nonce reuse after
-                restart. The atexit handler passes False (default) because
-                raising during interpreter shutdown is unsafe.
+            raising: If True (encrypt path), propagate corrupt-file
+                errors so the caller refuses to encrypt.  If False
+                (atexit path), preserve the corrupt file for forensic
+                analysis and proceed with in-memory state.
         """
-        if cls._ephemeral:
-            return
         import json as _json
         import os as _os
 
         path = cls._get_persist_path()
-        lock_path = path.parent / ".counters.lock"
-        lock_fd: Optional[int] = None
         try:
-            # Acquire inter-process lock
-            lock_fd = _os.open(str(lock_path), _os.O_CREAT | _os.O_RDWR, 0o600)
+            with open(path) as f:
+                on_disk = _json.load(f)
+            for key_hex, count in on_disk.items():
+                key_id = bytes.fromhex(key_hex)
+                cls._encrypt_counters[key_id] = max(cls._encrypt_counters.get(key_id, 0), count)
+        except FileNotFoundError:
+            logger.debug("No existing counter file at %s — first write", path)
+        except (_json.JSONDecodeError, ValueError, KeyError, TypeError) as _merge_err:
+            if raising:
+                raise RuntimeError(
+                    f"Corrupt AES-GCM counter file at {path}: {_merge_err}. "
+                    "Cannot safely merge counters — manual inspection required."
+                ) from _merge_err
+            # atexit path: preserve corrupt file for forensic analysis
             try:
-                import fcntl
+                corrupt_bak = path.parent / (path.name + ".corrupt")
+                _os.replace(str(path), str(corrupt_bak))
+                logger.critical(
+                    "Corrupt counter file renamed to %s for forensic analysis. "
+                    "Overwriting with in-memory counters. If a concurrent process "
+                    "had higher counter values, nonce safety may be compromised. "
+                    "Original error: %s",
+                    corrupt_bak,
+                    _merge_err,
+                )
+            except OSError as _bak_err:
+                logger.critical(
+                    "Corrupt counter file at %s AND failed to preserve backup: %s. "
+                    "Overwriting with in-memory counters. Original error: %s",
+                    path,
+                    _bak_err,
+                    _merge_err,
+                )
 
-                fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            except ImportError:
-                # Windows: fcntl unavailable — try msvcrt.locking
+    @classmethod
+    def _write_counters_under_lock(cls) -> None:
+        """Atomic-write the in-memory counter dict to disk (caller holds the lock).
+
+        Caller MUST hold the file lock (via :meth:`_counter_file_lock`).
+        ``_atomic_write_json`` does temp-file + ``os.replace``, so
+        either the previous file remains intact or the new file fully
+        replaces it.
+        """
+        path = cls._get_persist_path()
+        data = {k.hex(): v for k, v in cls._encrypt_counters.items()}
+        _atomic_write_json(data, path)
+
+    @classmethod
+    def _reserve_counter_slot(cls, key_id: bytes) -> int:
+        """Atomically reserve one counter slot for ``key_id`` and persist it.
+
+        Returns the reserved counter value (which the caller may then
+        consume).  After this returns:
+
+          * The on-disk counter for ``key_id`` is the slot+1
+            high-water mark.  No subsequent encrypt — in this or any
+            other process — can reuse the same slot.
+          * The in-memory dict mirrors the on-disk value.
+
+        Failure modes:
+          * ``RuntimeError`` if the safety limit (2^32) is reached.
+            No slot is consumed.
+          * ``RuntimeError`` if the on-disk counter file is corrupt.
+            No slot is consumed.
+          * ``RuntimeError`` if the disk write fails.  The in-memory
+            increment is rolled back so the caller does not encrypt
+            with a slot that was never durably persisted.
+
+        Ephemeral mode skips disk I/O and uses only the in-memory
+        counter; in that mode the per-process race surface is
+        unchanged from the pre-existing single-process design.
+        """
+        with cls._counter_file_lock():
+            if not cls._ephemeral:
+                # Reload from disk under the lock so we see any slot
+                # reservations made by other processes after our last
+                # write.  This is the critical step that closes the
+                # multi-process race.
+                cls._reload_counters_under_lock(raising=True)
+
+            count = cls._encrypt_counters.get(key_id, 0)
+            if count >= cls._NONCE_SAFETY_LIMIT:
+                raise RuntimeError(
+                    f"AES-GCM nonce safety limit ({cls._NONCE_SAFETY_LIMIT}) "
+                    f"reached for this key. Re-key required."
+                )
+            if count >= int(cls._NONCE_SAFETY_LIMIT * 0.75):
+                logger.warning(
+                    "AES-GCM nonce count approaching safety limit (%d / %d). "
+                    "Re-key recommended.",
+                    count,
+                    cls._NONCE_SAFETY_LIMIT,
+                )
+
+            # Reserve the slot in memory FIRST so a concurrent thread
+            # in this process (already past the thread lock acquire
+            # since we hold it) cannot race us — well, the thread
+            # lock already prevents that, but the +1 is the durable
+            # commitment.
+            cls._encrypt_counters[key_id] = count + 1
+
+            if not cls._ephemeral:
                 try:
-                    import msvcrt  # Windows-only stdlib module
-
-                    msvcrt.locking(lock_fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]  # Windows-only attr, absent from mypy stubs (CA-004)
-                except (ImportError, OSError) as _lock_err:
-                    logger.debug(
-                        "File locking unavailable (no fcntl or msvcrt): "
-                        "%s — proceeding without lock",
-                        _lock_err,
-                    )
-            except OSError as _lock_err:
-                logger.debug("File locking failed: %s — proceeding without lock", _lock_err)
-
-            # Merge with any counters persisted by another process
-            try:
-                with open(path) as f:
-                    on_disk = _json.load(f)
-                for key_hex, count in on_disk.items():
-                    key_id = bytes.fromhex(key_hex)
-                    cls._encrypt_counters[key_id] = max(cls._encrypt_counters.get(key_id, 0), count)
-            except FileNotFoundError:
-                logger.debug("No existing counter file at %s — first write", path)
-            except (_json.JSONDecodeError, ValueError, KeyError, TypeError) as _merge_err:
-                # Corrupt counter file during persist-merge.
-                # When called from the encrypt path (_raising=True), this is
-                # a safety-critical error: a corrupt file may contain stale
-                # counters that could allow nonce reuse after overwrite.
-                # Consistent with _load_persisted_counters which raises on
-                # any corruption.
-                if _raising:
+                    cls._write_counters_under_lock()
+                except Exception as exc:
+                    # Roll the in-memory increment back so a later
+                    # reserve doesn't see a count that was never
+                    # durably persisted.  Better to refuse the
+                    # encrypt than to issue ciphertext whose slot
+                    # could be reused after restart.
+                    cls._encrypt_counters[key_id] = count
                     raise RuntimeError(
-                        f"Corrupt AES-GCM counter file at {path}: {_merge_err}. "
-                        "Cannot safely merge counters — manual inspection required."
-                    ) from _merge_err
-                # Atexit path: cannot raise, but overwriting a corrupt file
-                # risks losing higher counter values from a concurrent process.
-                # Preserve the corrupt file for forensic analysis and log at
-                # CRITICAL severity — this is a potential nonce-safety event.
-                try:
-                    corrupt_bak = path.parent / (path.name + ".corrupt")
-                    _os.replace(str(path), str(corrupt_bak))
-                    logger.critical(
-                        "Corrupt counter file renamed to %s for forensic analysis. "
-                        "Overwriting with in-memory counters. If a concurrent process "
-                        "had higher counter values, nonce safety may be compromised. "
-                        "Original error: %s",
-                        corrupt_bak,
-                        _merge_err,
-                    )
-                except OSError as _bak_err:
-                    logger.critical(
-                        "Corrupt counter file at %s AND failed to preserve backup: %s. "
-                        "Overwriting with in-memory counters. Original error: %s",
-                        path,
-                        _bak_err,
-                        _merge_err,
-                    )
+                        f"Failed to persist AES-GCM counter slot for this key: "
+                        f"{exc}.  No slot reserved; counter unchanged."
+                    ) from exc
 
-            data = {k.hex(): v for k, v in cls._encrypt_counters.items()}
-            _atomic_write_json(data, path)
+            return count
+
+    @classmethod
+    def _persist_counters(cls, *, _raising: bool = False) -> None:
+        """Persist in-memory counters to disk under the file lock.
+
+        Used by the ``atexit`` handler to flush the final in-memory
+        state on interpreter shutdown.  The encrypt path no longer
+        relies on this — :meth:`_reserve_counter_slot` persists each
+        slot immediately under the same lock — so the on-disk file
+        is always current; this method is a defence-in-depth flush
+        that captures any in-memory state mutated outside the
+        reservation path (e.g. tests that poke ``_encrypt_counters``
+        directly).
+
+        Args:
+            _raising: If True, propagate write failures as
+                ``RuntimeError`` instead of logging a warning.
+                The atexit handler passes False (default) because
+                raising during interpreter shutdown is unsafe.
+        """
+        if cls._ephemeral:
+            return
+
+        path = cls._get_persist_path()
+        try:
+            with cls._counter_file_lock():
+                cls._reload_counters_under_lock(raising=_raising)
+                cls._write_counters_under_lock()
         except Exception as e:
             if _raising:
                 raise RuntimeError(
@@ -1145,9 +1302,6 @@ class AESGCMProvider:
                     "Counter tracking cannot guarantee nonce safety without durable persistence."
                 ) from e
             logger.warning("Failed to persist AES-GCM counters: %s", e)
-        finally:
-            if lock_fd is not None:
-                _os.close(lock_fd)
 
     def encrypt(
         self,
@@ -1159,6 +1313,17 @@ class AESGCMProvider:
         """
         Encrypt plaintext with AES-256-GCM.
 
+        Multi-process / multi-thread safe: the per-key counter slot
+        is reserved atomically via :meth:`_reserve_counter_slot`
+        BEFORE the AEAD runs.  That reservation acquires an
+        inter-process file lock, re-reads the on-disk counter,
+        increments, and persists — so two processes (or threads)
+        encrypting with the same key cannot race the in-memory
+        counter against the persisted value.  The slot is committed
+        to disk before any nonce is generated or any plaintext is
+        consumed, so even a crash mid-encrypt cannot leave a slot
+        that gets reused after restart.
+
         Args:
             plaintext: Data to encrypt
             key: 32-byte AES-256 key
@@ -1167,6 +1332,12 @@ class AESGCMProvider:
 
         Returns:
             Dict with 'ciphertext', 'nonce', 'tag', 'aad' keys
+
+        Raises:
+            RuntimeError: If the per-key counter would exceed the
+                2^32 safety limit, the on-disk counter file is
+                corrupt, persistence fails, or the provider state
+                was inherited across ``os.fork()``.
         """
         _enforce_invariant7()
         import secrets as _secrets
@@ -1182,62 +1353,36 @@ class AESGCMProvider:
         if len(key) != 32:
             raise ValueError(f"AES-256 key must be 32 bytes, got {len(key)}")
 
-        if nonce is None:
-            nonce = _secrets.token_bytes(12)
-        elif len(nonce) != 12:
+        if nonce is not None and len(nonce) != 12:
             raise ValueError(f"AES-256-GCM nonce must be 12 bytes, got {len(nonce)}")
 
         key_id: bytes = hashlib.sha256(key).digest()
-        count: int = self._encrypt_counters.get(key_id, 0)
-        if count >= self._NONCE_SAFETY_LIMIT:
-            raise RuntimeError("AES-GCM nonce safety limit exceeded. Re-key required.")
-        if count >= int(self._NONCE_SAFETY_LIMIT * 0.75):
-            logger.warning("AES-GCM nonce count approaching safety limit. Re-key recommended.")
+
+        # Reserve a counter slot atomically.  This is the critical
+        # change vs. the previous "increment in memory, batch-persist
+        # every 64 calls" design.  On return, the disk reflects
+        # slot+1 and no concurrent process can issue the same slot.
+        # If reservation raises (corrupt file, full disk, safety
+        # limit), no nonce has been generated and no AEAD has run.
+        AESGCMProvider._reserve_counter_slot(key_id)
+
+        # Generate the random nonce only after the durable counter
+        # reservation succeeds, so failed persistence cannot consume
+        # entropy or leave an untracked nonce candidate in caller state.
+        if nonce is None:
+            nonce = _secrets.token_bytes(12)
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
         ct, tag = native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
 
-        # Increment counter AFTER successful encryption so a persistence
-        # failure (disk full, permission error) does not inflate the count
-        # without an actual encryption having occurred.
-        self._encrypt_counters[key_id] = count + 1
-        AESGCMProvider._counters_dirty += 1
-
-        result = {
+        return {
             "ciphertext": ct,
             "nonce": nonce,
             "tag": tag,
             "aad": aad,
             "backend": "native_c",
         }
-
-        if AESGCMProvider._counters_dirty >= self._PERSIST_INTERVAL:
-            try:
-                self._persist_counters(_raising=True)
-            except Exception as exc:
-                logger.warning("AES-GCM counter persist failed (will retry next encrypt): %s", exc)
-                # Persist failed — set dirty to interval-1 so the VERY NEXT
-                # encrypt retries persistence immediately, avoiding both:
-                # (a) 63 encrypts without persistence (finally-reset-to-0), and
-                # (b) permanent bricking (success-only reset where dirty stays
-                #     above the threshold forever after any transient I/O error).
-                AESGCMProvider._counters_dirty = self._PERSIST_INTERVAL - 1
-                # CRITICAL: The encryption already happened and the nonce is
-                # consumed.  We MUST return the ciphertext — raising here would
-                # discard valid ciphertext and mislead callers into retrying
-                # with the same nonce (catastrophic for AES-GCM).  The persist
-                # failure is logged at CRITICAL and retried on next encrypt().
-                logger.critical(
-                    "AES-GCM counter persistence failed — ciphertext returned "
-                    "but counter may not survive restart.  Will retry on next "
-                    "encrypt().  DO NOT re-encrypt with the same nonce."
-                )
-            else:
-                # Persist succeeded — reset to 0 for normal operation.
-                AESGCMProvider._counters_dirty = 0
-
-        return result
 
     def decrypt(
         self,

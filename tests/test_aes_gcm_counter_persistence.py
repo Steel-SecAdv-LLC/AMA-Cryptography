@@ -49,7 +49,6 @@ def persist_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Pa
         "loaded": AESGCMProvider._counters_loaded,
         "registered": AESGCMProvider._atexit_registered,
         "counters": dict(AESGCMProvider._encrypt_counters),
-        "dirty": AESGCMProvider._counters_dirty,
     }
 
     AESGCMProvider._counters_persist_path = str(target)
@@ -57,7 +56,6 @@ def persist_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Pa
     AESGCMProvider._counters_loaded = False
     AESGCMProvider._atexit_registered = False
     AESGCMProvider._encrypt_counters = {}
-    AESGCMProvider._counters_dirty = 0
 
     try:
         yield target
@@ -67,7 +65,6 @@ def persist_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Pa
         AESGCMProvider._counters_loaded = saved["loaded"]
         AESGCMProvider._atexit_registered = saved["registered"]
         AESGCMProvider._encrypt_counters = saved["counters"]
-        AESGCMProvider._counters_dirty = saved["dirty"]
 
 
 class TestPersistenceHappyPath:

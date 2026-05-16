@@ -107,6 +107,50 @@ def is_available() -> bool:
     return True
 
 
+# Env-flag gates for the python_fallback path.  Production deployments
+# (where INVARIANT-7 already refuses to import without the native C
+# accelerator) should never reach the fallback, but the secure_memzero
+# code path is reachable from documentation builds, type-checkers, and
+# editable installs where the native lib might be absent.  We refuse
+# to silently use a best-effort multi-pass-Python wipe unless the
+# operator has explicitly opted in.
+_TRUE_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def _env_flag_enabled(name: str) -> bool:
+    """Return True only for an explicit truthy env value."""
+    return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
+
+
+# Computed at module load; updated lazily on every call via re-read so
+# tests can flip the env var inside a single process.  The selection
+# logic below sets SECURE_MEMZERO_BACKEND once at load time; this gate
+# protects the *call* path.
+_AMA_ALLOW_PYTHON_MEMZERO_ENV = "AMA_ALLOW_PYTHON_MEMZERO"
+_AMA_SPHINX_BUILD_ENV = "AMA_SPHINX_BUILD"
+_SPHINX_BUILD_ENV = "SPHINX_BUILD"
+
+
+def _python_fallback_opt_in() -> bool:
+    """True iff the caller has opted into best-effort Python memzero.
+
+    Three gates are honoured:
+      * ``AMA_ALLOW_PYTHON_MEMZERO=1`` — explicit dev/test opt-in.
+      * ``AMA_SPHINX_BUILD=1`` / ``SPHINX_BUILD=1`` — autodoc builds
+        that import the module for docstring extraction must not
+        trigger a hard failure on a host without the native lib.
+
+    Any other configuration MUST fail closed: silently falling back to
+    a Python wipe in production would defeat the security contract
+    that ``secure_memzero`` is the canonical wipe primitive.
+    """
+    return (
+        _env_flag_enabled(_AMA_ALLOW_PYTHON_MEMZERO_ENV)
+        or _env_flag_enabled(_AMA_SPHINX_BUILD_ENV)
+        or _env_flag_enabled(_SPHINX_BUILD_ENV)
+    )
+
+
 def secure_memzero(data: Union[bytearray, memoryview]) -> None:
     """
     Securely zero memory using a multi-pass overwrite.
@@ -119,14 +163,23 @@ def secure_memzero(data: Union[bytearray, memoryview]) -> None:
 
     Raises:
         TypeError: If ``data`` is not a mutable buffer.
-        SecureMemoryError: If the Python fallback path is in use and the
-            post-wipe verification observes a residual non-zero byte
-            (optimizer elision, concurrent write, or mis-compiled
-            ``memset_explicit``).  This is a *deliberate* hard failure —
+        SecureMemoryError:
+          * If the active backend is the Python fallback AND none of
+            ``AMA_ALLOW_PYTHON_MEMZERO=1`` / ``AMA_SPHINX_BUILD=1`` /
+            ``SPHINX_BUILD=1`` is set.  In that configuration the
+            module refuses to wipe at all — falling back silently to a
+            best-effort Python loop in production would defeat the
+            security contract.  Build the native C library
+            (``cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build``)
+            or set the opt-in env var for development / docs builds.
+          * If the Python fallback path *is* in use (via opt-in) and
+            the post-wipe verification observes a residual non-zero
+            byte (optimizer elision, concurrent write, or mis-compiled
+            ``memset_explicit``).  This is a deliberate hard failure —
             a silently incomplete wipe would leave secret material in
-            memory, defeating the whole point of ``secure_memzero``.
-            The native paths (``ama_secure_memzero`` and the libc
-            ``explicit_bzero`` / ``memset_s`` back-ends) do not raise.
+            memory.  The native paths (``ama_secure_memzero`` and the
+            libc ``explicit_bzero`` / ``memset_s`` back-ends) do not
+            raise.
 
     **Propagation from cleanup contexts.**  ``SecureBuffer.__exit__`` and
     ``secure_buffer()``'s ``finally`` clause both call ``secure_memzero``
@@ -147,6 +200,22 @@ def secure_memzero(data: Union[bytearray, memoryview]) -> None:
 
     if len(data) == 0:
         return
+
+    # Fail-closed gate: refuse to silently use the python_fallback path
+    # in production.  When the native backend is unavailable AND the
+    # operator has not explicitly opted into the Python loop, raise so
+    # the caller knows the wipe contract cannot be honoured.  This is
+    # the "appropriate" fail-closed behaviour requested by INVARIANT-7
+    # at the secure-memory layer.
+    if SECURE_MEMZERO_BACKEND == "python_fallback" and not _python_fallback_opt_in():
+        raise SecureMemoryError(
+            "secure_memzero: native backend unavailable and Python fallback is "
+            "not opted-in.  Refusing to silently use a best-effort wipe in "
+            "production.  Build the native C library "
+            "(cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build), "
+            f"or set {_AMA_ALLOW_PYTHON_MEMZERO_ENV}=1 for development / "
+            "test contexts where best-effort zeroing is acceptable."
+        )
 
     _memzero(data)
 
@@ -283,8 +352,14 @@ else:
             SECURE_MEMZERO_BACKEND = "libc_memset_s"
         else:
             logger.warning(
-                "secure_memzero: using Python byte-by-byte fallback. "
-                "Build the native C library for guaranteed secure zeroing."
+                "secure_memzero: native backend unavailable.  "
+                "secure_memzero() will refuse to operate (fail-closed) until "
+                "the native C library is built "
+                "(cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build), "
+                "or the operator explicitly opts into the best-effort Python "
+                "fallback via AMA_ALLOW_PYTHON_MEMZERO=1.  "
+                "Documentation builds (AMA_SPHINX_BUILD=1 / SPHINX_BUILD=1) "
+                "are also permitted."
             )
 
 

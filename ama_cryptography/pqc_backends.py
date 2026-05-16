@@ -36,11 +36,13 @@ Standards:
 AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 """
 
+import contextlib
 import ctypes
 import logging
 import os
 import platform
 import warnings
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -114,6 +116,38 @@ _SPHINCS_BACKEND: Optional[str] = None
 # Kyber-1024, and SPHINCS+-256f via pure C (FIPS 203/204/205 compliant).
 
 _native_lib: Any = None
+
+_BufferInput = Union[bytes, bytearray, memoryview]
+
+
+@contextlib.contextmanager
+def _c_buffer_view(data: _BufferInput) -> Iterator[Any]:
+    """Yield a ctypes buffer view without copying writable key material.
+
+    SECURITY: ``ctypes.c_char_p`` accepts immutable ``bytes`` directly but
+    rejects ``bytearray``.  For mutable buffers we borrow the exporter with
+    ``from_buffer`` so session keys stay in their wipeable bytearray storage
+    instead of being materialised as transient heap copies.
+    """
+    if isinstance(data, bytes):
+        yield data
+        return
+    view = memoryview(data)
+    if view.readonly:
+        # Read-only memoryviews may not expose a writable buffer for
+        # ``from_buffer``; converting to bytes is limited to non-wipeable
+        # public inputs and never used by SecureSession key storage.
+        try:
+            yield view.tobytes()
+        finally:
+            view.release()
+        return
+    try:
+        if view.ndim != 1 or view.itemsize != 1:
+            raise TypeError("buffer must be a one-dimensional byte buffer")
+        yield (ctypes.c_char * view.nbytes).from_buffer(view)
+    finally:
+        view.release()
 
 
 def _get_lib_names() -> list:
@@ -458,26 +492,26 @@ def _setup_aes_gcm_ctypes(lib: ctypes.CDLL) -> bool:
     """Configure ctypes for AES-256-GCM functions. Separate from PQC setup."""
     try:
         lib.ama_aes256_gcm_encrypt.argtypes = [
-            ctypes.c_char_p,  # key[32]
-            ctypes.c_char_p,  # nonce[12]
-            ctypes.c_char_p,  # plaintext
+            ctypes.c_void_p,  # key[32]
+            ctypes.c_void_p,  # nonce[12]
+            ctypes.c_void_p,  # plaintext
             ctypes.c_size_t,  # pt_len
-            ctypes.c_char_p,  # aad
+            ctypes.c_void_p,  # aad
             ctypes.c_size_t,  # aad_len
-            ctypes.c_char_p,  # ciphertext
-            ctypes.c_char_p,  # tag[16]
+            ctypes.c_void_p,  # ciphertext
+            ctypes.c_void_p,  # tag[16]
         ]
         lib.ama_aes256_gcm_encrypt.restype = ctypes.c_int
 
         lib.ama_aes256_gcm_decrypt.argtypes = [
-            ctypes.c_char_p,  # key[32]
-            ctypes.c_char_p,  # nonce[12]
-            ctypes.c_char_p,  # ciphertext
+            ctypes.c_void_p,  # key[32]
+            ctypes.c_void_p,  # nonce[12]
+            ctypes.c_void_p,  # ciphertext
             ctypes.c_size_t,  # ct_len
-            ctypes.c_char_p,  # aad
+            ctypes.c_void_p,  # aad
             ctypes.c_size_t,  # aad_len
-            ctypes.c_char_p,  # tag[16]
-            ctypes.c_char_p,  # plaintext
+            ctypes.c_void_p,  # tag[16]
+            ctypes.c_void_p,  # plaintext
         ]
         lib.ama_aes256_gcm_decrypt.restype = ctypes.c_int
 
@@ -494,13 +528,13 @@ def _setup_hkdf_ctypes(lib: ctypes.CDLL) -> bool:
     """Configure ctypes for HKDF functions. Separate from PQC setup."""
     try:
         lib.ama_hkdf.argtypes = [
-            ctypes.c_char_p,  # salt
+            ctypes.c_void_p,  # salt
             ctypes.c_size_t,  # salt_len
-            ctypes.c_char_p,  # ikm
+            ctypes.c_void_p,  # ikm
             ctypes.c_size_t,  # ikm_len
-            ctypes.c_char_p,  # info
+            ctypes.c_void_p,  # info
             ctypes.c_size_t,  # info_len
-            ctypes.c_char_p,  # okm
+            ctypes.c_void_p,  # okm
             ctypes.c_size_t,  # okm_len
         ]
         lib.ama_hkdf.restype = ctypes.c_int
@@ -2632,11 +2666,11 @@ def native_ed25519_batch_verify(
 
 
 def native_aes256_gcm_encrypt(
-    key: bytes,
-    nonce: bytes,
-    plaintext: bytes,
-    aad: bytes = b"",
-) -> tuple:
+    key: _BufferInput,
+    nonce: _BufferInput,
+    plaintext: _BufferInput,
+    aad: _BufferInput = b"",
+) -> tuple[bytes, bytes]:
     """
     AES-256-GCM authenticated encryption using native C backend.
 
@@ -2666,16 +2700,25 @@ def native_aes256_gcm_encrypt(
     ct_buf = ctypes.create_string_buffer(len(plaintext))
     tag_buf = ctypes.create_string_buffer(AES256_GCM_TAG_BYTES)
 
-    rc = _native_lib.ama_aes256_gcm_encrypt(
-        key,
-        nonce,
-        plaintext if len(plaintext) > 0 else None,
-        ctypes.c_size_t(len(plaintext)),
-        aad if len(aad) > 0 else None,
-        ctypes.c_size_t(len(aad)),
-        ct_buf,
-        tag_buf,
-    )
+    # SECURITY: borrow bytearray-backed key material directly through the
+    # buffer protocol; do not call bytes(key), which leaves an immutable
+    # transient copy outside the secure wipe path.
+    with (
+        _c_buffer_view(key) as key_buf,
+        _c_buffer_view(nonce) as nonce_buf,
+        _c_buffer_view(plaintext) as pt_buf,
+        _c_buffer_view(aad) as aad_buf,
+    ):
+        rc = _native_lib.ama_aes256_gcm_encrypt(
+            key_buf,
+            nonce_buf,
+            pt_buf if len(plaintext) > 0 else None,
+            ctypes.c_size_t(len(plaintext)),
+            aad_buf if len(aad) > 0 else None,
+            ctypes.c_size_t(len(aad)),
+            ct_buf,
+            tag_buf,
+        )
     if rc != 0:
         raise RuntimeError(f"AES-256-GCM encryption failed (rc={rc})")
 
@@ -2683,11 +2726,11 @@ def native_aes256_gcm_encrypt(
 
 
 def native_aes256_gcm_decrypt(
-    key: bytes,
-    nonce: bytes,
-    ciphertext: bytes,
-    tag: bytes,
-    aad: bytes = b"",
+    key: _BufferInput,
+    nonce: _BufferInput,
+    ciphertext: _BufferInput,
+    tag: _BufferInput,
+    aad: _BufferInput = b"",
 ) -> bytes:
     """
     AES-256-GCM authenticated decryption using native C backend.
@@ -2723,16 +2766,25 @@ def native_aes256_gcm_decrypt(
 
     pt_buf = ctypes.create_string_buffer(len(ciphertext))
 
-    rc = _native_lib.ama_aes256_gcm_decrypt(
-        key,
-        nonce,
-        ciphertext if len(ciphertext) > 0 else None,
-        ctypes.c_size_t(len(ciphertext)),
-        aad if len(aad) > 0 else None,
-        ctypes.c_size_t(len(aad)),
-        tag,
-        pt_buf,
-    )
+    # SECURITY: borrow bytearray-backed key material directly through the
+    # buffer protocol; authentication failure never observes a copied key.
+    with (
+        _c_buffer_view(key) as key_buf,
+        _c_buffer_view(nonce) as nonce_buf,
+        _c_buffer_view(ciphertext) as ct_buf,
+        _c_buffer_view(aad) as aad_buf,
+        _c_buffer_view(tag) as tag_buf,
+    ):
+        rc = _native_lib.ama_aes256_gcm_decrypt(
+            key_buf,
+            nonce_buf,
+            ct_buf if len(ciphertext) > 0 else None,
+            ctypes.c_size_t(len(ciphertext)),
+            aad_buf if len(aad) > 0 else None,
+            ctypes.c_size_t(len(aad)),
+            tag_buf,
+            pt_buf,
+        )
     if rc != 0:
         raise ValueError("AES-256-GCM authentication tag verification failed")
 
@@ -2745,10 +2797,10 @@ def native_aes256_gcm_decrypt(
 
 
 def native_hkdf(
-    ikm: bytes,
+    ikm: _BufferInput,
     length: int,
-    salt: "Optional[bytes]" = None,
-    info: bytes = b"",
+    salt: "Optional[_BufferInput]" = None,
+    info: _BufferInput = b"",
 ) -> bytes:
     """
     HKDF key derivation using native C backend (HMAC-SHA3-256).
@@ -2774,8 +2826,16 @@ def native_hkdf(
     if length <= 0:
         raise ValueError(f"HKDF output length must be > 0, got {length}")
 
-    # Primary path: Cython binding (zero marshaling overhead)
-    if _cy_hkdf_fn is not None:
+    # Primary path: Cython binding for immutable bytes.  Writable key
+    # buffers intentionally use the ctypes path below so the native C
+    # kernel reads the caller-owned bytearray directly and no Python
+    # bytes(key) copy survives outside secure_memzero.
+    if (
+        _cy_hkdf_fn is not None
+        and isinstance(ikm, bytes)
+        and (salt is None or isinstance(salt, bytes))
+        and isinstance(info, bytes)
+    ):
         hkdf_result: bytes = _cy_hkdf_fn(ikm, length, salt=salt, info=info if info else None)
         return hkdf_result
 
@@ -2784,16 +2844,26 @@ def native_hkdf(
 
     okm_buf = ctypes.create_string_buffer(length)
 
-    rc = _native_lib.ama_hkdf(
-        salt if salt else None,
-        ctypes.c_size_t(len(salt) if salt else 0),
-        ikm,
-        ctypes.c_size_t(len(ikm)),
-        info if len(info) > 0 else None,
-        ctypes.c_size_t(len(info)),
-        okm_buf,
-        ctypes.c_size_t(length),
-    )
+    salt_len = len(salt) if salt else 0
+    info_len = len(info)
+    # SECURITY: rekey derives from live bytearray key storage via a
+    # borrowed ctypes view.  This removes the previous bytes(self.key)
+    # transient heap copy while preserving the native HKDF implementation.
+    with (
+        _c_buffer_view(ikm) as ikm_buf,
+        _c_buffer_view(salt or b"") as salt_buf,
+        _c_buffer_view(info) as info_buf,
+    ):
+        rc = _native_lib.ama_hkdf(
+            salt_buf if salt_len > 0 else None,
+            ctypes.c_size_t(salt_len),
+            ikm_buf if len(ikm) > 0 else None,
+            ctypes.c_size_t(len(ikm)),
+            info_buf if info_len > 0 else None,
+            ctypes.c_size_t(info_len),
+            okm_buf,
+            ctypes.c_size_t(length),
+        )
     if rc != 0:
         raise RuntimeError(f"HKDF derivation failed (rc={rc})")
 

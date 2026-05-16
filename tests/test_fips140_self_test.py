@@ -135,11 +135,24 @@ class TestPowerOnSelfTests:
         assert duration < 2000, f"POST took {duration:.1f}ms, exceeding 2000ms budget"
 
     def test_all_kats_passed(self) -> None:
+        """Every recorded KAT either passed or was an explicit skip.
+
+        Skip semantics: ``passed is None`` is a "backend unavailable"
+        skip, which is NOT a pass but is also NOT a failure outside
+        strict mode.  In CI (with ``AMA_CI_REQUIRE_BACKENDS=1``) the
+        conftest fixture turns backend-related skips into hard
+        failures, so this loop sees ``passed is True`` for every KAT.
+        In a local checkout without the C library built, the loop
+        tolerates skipped entries.
+        """
         from ama_cryptography._self_test import module_self_test_results
 
         results = module_self_test_results()
         assert len(results) > 0, "No self-test results recorded"
         for name, passed, detail in results:
+            if passed is None:
+                # Skipped — backend not present.  Not a failure here.
+                continue
             assert passed, f"KAT {name} failed: {detail}"
 
     def test_expected_kat_names_present(self) -> None:
@@ -163,42 +176,55 @@ class TestPowerOnSelfTests:
         from ama_cryptography._self_test import _kat_sha3_256
 
         passed, detail = _kat_sha3_256()
+        # SHA3-256 ships in CPython hashlib — never None (no skip path).
         assert passed, detail
 
     def test_individual_kat_hmac_sha3_256(self) -> None:
         from ama_cryptography._self_test import _kat_hmac_sha3_256
 
         passed, detail = _kat_hmac_sha3_256()
+        if passed is None:
+            pytest.skip(detail)
         assert passed, detail
 
     def test_individual_kat_aes_256_gcm(self) -> None:
         from ama_cryptography._self_test import _kat_aes_256_gcm
 
         passed, detail = _kat_aes_256_gcm()
+        if passed is None:
+            pytest.skip(detail)
         assert passed, detail
 
     def test_individual_kat_ml_kem_1024(self) -> None:
         from ama_cryptography._self_test import _kat_ml_kem_1024
 
         passed, detail = _kat_ml_kem_1024()
+        if passed is None:
+            pytest.skip(detail)
         assert passed, detail
 
     def test_individual_kat_ml_dsa_65(self) -> None:
         from ama_cryptography._self_test import _kat_ml_dsa_65
 
         passed, detail = _kat_ml_dsa_65()
+        if passed is None:
+            pytest.skip(detail)
         assert passed, detail
 
     def test_individual_kat_slh_dsa(self) -> None:
         from ama_cryptography._self_test import _kat_slh_dsa
 
         passed, detail = _kat_slh_dsa()
+        if passed is None:
+            pytest.skip(detail)
         assert passed, detail
 
     def test_individual_kat_ed25519(self) -> None:
         from ama_cryptography._self_test import _kat_ed25519
 
         passed, detail = _kat_ed25519()
+        if passed is None:
+            pytest.skip(detail)
         assert passed, detail
 
 

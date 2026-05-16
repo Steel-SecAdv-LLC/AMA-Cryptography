@@ -5,13 +5,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from benchmarks.benchmark_runner import (
+    benchmark_operation_best_of,
     normalize_runner_cpu_class,
+    run_full_package_create_benchmark,
     validate_baseline_contract,
 )
 
@@ -63,3 +66,41 @@ def test_validate_baseline_contract_rejects_zero_when_required() -> None:
             expected_runner_cpu_class="aarch64",
             require_populated_baseline=True,
         )
+
+
+def test_benchmark_operation_best_of_uses_fastest_round(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Latency-spiky composite benchmarks compare steady-state throughput."""
+
+    measurements = iter([10.0, 42.0, 17.0])
+
+    def fake_benchmark_operation(
+        operation: Callable[[], object], iterations: int = 100, warmup: int = 5
+    ) -> float:
+        assert iterations == 20
+        assert warmup == 2
+        return next(measurements)
+
+    import benchmarks.benchmark_runner as br
+
+    monkeypatch.setattr(br, "benchmark_operation", fake_benchmark_operation)
+
+    assert benchmark_operation_best_of(lambda: None, iterations=20, warmup=2, rounds=3) == 42.0
+
+
+def test_full_package_create_uses_best_of_rounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The GC-heavy package-create benchmark samples multiple rounds."""
+
+    calls: list[tuple[int, int, int]] = []
+
+    def fake_best_of(
+        operation: Callable[[], object], iterations: int, warmup: int, rounds: int
+    ) -> float:
+        calls.append((iterations, warmup, rounds))
+        return 123.0
+
+    monkeypatch.setattr("benchmarks.benchmark_runner.benchmark_operation_best_of", fake_best_of)
+
+    assert run_full_package_create_benchmark() == 123.0
+    assert calls == [(20, 2, 5)]
