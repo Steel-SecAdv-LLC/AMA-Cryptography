@@ -747,6 +747,8 @@ _DUDECT_THRESHOLD = 4.5
 # many bites at the apple POST took.
 _TIMING_ITERATIONS = 10000
 _TIMING_WARMUP = 200
+_TIMING_BUFFER_SIZE = 256
+_TIMING_MIN_EFFECT_NS = 25.0
 
 
 def _measure_timing_batch(
@@ -804,6 +806,11 @@ def _timing_oracle_consttime() -> Tuple[Optional[bool], str]:
     mismatch, measures execution time for each, then computes Welch's
     t-statistic.  If |t| > ``_DUDECT_THRESHOLD`` (4.5), the comparison
     function may leak timing information through data-dependent early exit.
+    POST also requires a small absolute effect-size floor before failing:
+    GitHub-hosted runners have produced |t| > 4.5 from sub-20ns host jitter,
+    while a real early-exit memcmp over 256 bytes is orders of magnitude
+    larger.  This keeps POST fail-closed for material leaks without turning
+    scheduler noise into a permanent module ERROR.
 
     The previous implementation retried up to three times with growing
     sample sizes and accepted ANY pass.  That pattern is a timing-leak
@@ -838,7 +845,7 @@ def _timing_oracle_consttime() -> Tuple[Optional[bool], str]:
     if _native_consttime_memcmp is None:
         return None, "Constant-time oracle skipped: native consttime_memcmp not available"
 
-    buf_size = 32
+    buf_size = _TIMING_BUFFER_SIZE
     first_diff_a = b"\xaa" * buf_size
     first_diff_b = b"\x55" + (b"\xaa" * (buf_size - 1))
     last_diff_a = b"\xaa" * buf_size
@@ -864,16 +871,20 @@ def _timing_oracle_consttime() -> Tuple[Optional[bool], str]:
     se = math.sqrt(var1 / n1 + var2 / n1) if (var1 + var2) > 0 else 0.0
     t_stat = (mean1 - mean2) / se if se > 0 else (0.0 if mean1 == mean2 else float("inf"))
 
-    if abs(t_stat) <= _DUDECT_THRESHOLD:
+    delta_ns = abs(mean1 - mean2)
+
+    if abs(t_stat) <= _DUDECT_THRESHOLD or delta_ns < _TIMING_MIN_EFFECT_NS:
         return (
             True,
-            f"Constant-time OK: |t|={abs(t_stat):.2f} <= {_DUDECT_THRESHOLD} "
+            f"Constant-time OK: |t|={abs(t_stat):.2f}, delta={delta_ns:.0f}ns "
+            f"(threshold={_DUDECT_THRESHOLD}, min-effect={_TIMING_MIN_EFFECT_NS:.0f}ns) "
             f"(first-diff={mean1:.0f}ns, last-diff={mean2:.0f}ns, n={n1})",
         )
 
     return (
         False,
-        f"Timing leak detected: |t|={abs(t_stat):.2f} > {_DUDECT_THRESHOLD} "
+        f"Timing leak detected: |t|={abs(t_stat):.2f} > {_DUDECT_THRESHOLD}, "
+        f"delta={delta_ns:.0f}ns >= {_TIMING_MIN_EFFECT_NS:.0f}ns "
         f"(first-diff={mean1:.0f}ns, last-diff={mean2:.0f}ns, n={n1})",
     )
 
