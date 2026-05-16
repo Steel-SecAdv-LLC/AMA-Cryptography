@@ -595,8 +595,8 @@ class TestItem6_SecureSessionWipe:
         recv_in = b"\xbb" * KEY_BYTES  # bytes (immutable)
         sess = SecureSession(
             session_id=b"\x00" * SESSION_ID_BYTES,
-            send_key=bytearray(send_in),
-            recv_key=bytearray(recv_in),
+            send_key=cast(bytearray, send_in),
+            recv_key=cast(bytearray, recv_in),
         )
         assert isinstance(
             sess.send_key, bytearray
