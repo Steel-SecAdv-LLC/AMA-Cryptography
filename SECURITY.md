@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 3.1.0 |
-| Last Updated | 2026-05-14 |
+| Document Version | 3.1.0 + Unreleased |
+| Last Updated | 2026-05-16 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -13,7 +13,7 @@
 
 ## Overview
 
-AMA Cryptography is a quantum-resistant cryptographic protection system released under the Apache License 2.0 as free and open-source software. As of v2.0, all cryptographic primitives are implemented natively in C with zero core dependencies. Current consumers include [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent) and FINDΩYOU™ (private repo). Security is our highest priority. We take all vulnerabilities seriously and appreciate responsible disclosure from the security research community.
+AMA Cryptography is a quantum-resistant cryptographic protection system released under the Apache License 2.0 as free and open-source software. As of v2.0, all production cryptographic primitives are implemented natively in C with zero runtime cryptographic dependencies. Security is our highest priority. We take all vulnerabilities seriously and appreciate responsible disclosure from the security research community.
 
 ---
 
@@ -46,17 +46,16 @@ AMA Cryptography implements defense-in-depth with multiple independent security 
 
 - **AES-256-GCM Authenticated Encryption** (NIST SP 800-38D)
 - **ML-KEM-1024 Key Encapsulation** (NIST FIPS 203)
-- **SPHINCS+-SHA2-256f Hash-Based Signatures** (NIST FIPS 205)
+- **SLH-DSA-SHA2-256f and SLH-DSA-SHAKE-128s Hash-Based Signatures** (NIST FIPS 205)
 - **Adaptive Cryptographic Posture System** (runtime threat-level response)
 - **Hybrid KEM Combiner** (IND-CCA2 binding construction per Bindel et al.)
 
 ### Performance — Framing
 
 Throughput is a continuously-improving axis, not a ceiling.  On x86-64
-AVX2 AMA's current ops/sec is within a factor of 2–5× of the
-best-known public numbers for libsodium (Ed25519) and liboqs
-(ML-DSA-65, ML-KEM-1024), and every release closes some of that gap;
-recent work (see `CHANGELOG.md` from v2.1 onward) added 4-way Keccak
+AVX2 AMA's checked-in benchmark artifacts and generated reports provide the
+only supported throughput claims; avoid quoting relative speedups unless the
+source artifact and host class are named. Recent work (see `CHANGELOG.md` from v2.1 onward) added 4-way Keccak
 batching, Ed25519 signed-window combs, merged-layer ML-DSA NTT, and
 Ed25519 verify via Shamir/Straus joint scalar multiplication with a
 width-5 wNAF — roughly doubling verify throughput.
@@ -239,7 +238,7 @@ Users deploying AMA Cryptography in production should:
 
 ### Zero-Dependency Architecture (v2.1)
 - **REQUIRED:** Build native C library (`cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build`)
-- All cryptographic primitives (SHA3, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+, X25519, ChaCha20-Poly1305, Argon2, secp256k1) are native C — no external cryptographic dependencies required
+- All production cryptographic primitives (SHA3, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, ML-KEM-1024, SLH-DSA, X25519, ChaCha20-Poly1305, Argon2id, secp256k1) are native C — no external cryptographic dependencies required
 - Optional: numpy/scipy for 3R monitoring, PyKCS11 for HSM
 
 ### Cryptographic Operations

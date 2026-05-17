@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 3.0.0 |
-| Last Updated | 2026-04-20 |
+| Document Version | 3.1.0 + Unreleased |
+| Last Updated | 2026-05-16 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -19,7 +19,7 @@ Constant-time implementations are critical for preventing timing side-channel at
 
 1. **C Layer**: Custom constant-time utilities in `src/c/ama_consttime.c` (C11 atomics for thread safety)
 2. **Python Layer**: Use of `hmac.compare_digest()` for constant-time comparison
-3. **Native PQC Layer**: All PQC implementations (ML-DSA-65, Kyber-1024, SPHINCS+) use constant-time primitives internally
+3. **Native PQC Layer**: All PQC implementations (ML-DSA-65, ML-KEM-1024, SLH-DSA) use constant-time primitives internally
 4. **Ed25519 Layer**: Dedicated `fe25519_sq()` field squaring, C11 `_Atomic` initialization guards
 
 ## Constant-Time Implementations
@@ -159,7 +159,7 @@ A clean run should show:
 
 ## Upstream Library Guarantees
 
-### Native PQC (ML-DSA-65, Kyber-1024, SPHINCS+-256f)
+### Native PQC (ML-DSA-65, ML-KEM-1024, SLH-DSA-256f)
 
 The native C implementations provide constant-time operations:
 

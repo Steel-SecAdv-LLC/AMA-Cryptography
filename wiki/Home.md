@@ -91,7 +91,7 @@ classDef gray fill:#1f1f1f,stroke:#11AEED,color:#f6f6f6;
 | Property | Value |
 |----------|-------|
 | Version | 3.0.0 |
-| Algorithms | ML-DSA-65, Kyber-1024, SPHINCS+, Ed25519, AES-256-GCM, Argon2id |
+| Algorithms | ML-DSA-65, ML-KEM-1024, SLH-DSA, Ed25519, AES-256-GCM, Argon2id |
 | Platforms | Linux, macOS, Windows |
 | Python | 3.9 – 3.13 |
 | Audit | Community-tested · Not externally audited |
@@ -102,4 +102,4 @@ classDef gray fill:#1f1f1f,stroke:#11AEED,color:#f6f6f6;
 ---
 
 **Contact:** steel.sa.llc@gmail.com — [Report a vulnerability](Security-Model#reporting-vulnerabilities) — [Contribute](Contributing)  
-*Built by Steel Security Advisors LLC. Last updated: 2026-04-20.*
+*Built by Steel Security Advisors LLC. Last updated: 2026-05-16.*

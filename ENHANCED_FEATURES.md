@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 3.0.0 |
-| Last Updated | 2026-04-20 |
+| Document Version | 3.1.0 + Unreleased |
+| Last Updated | 2026-05-16 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -13,7 +13,7 @@
 
 ## Overview
 
-AMA Cryptography v2.1 features a zero-dependency, multi-language architecture that combines the security of native C cryptographic primitives with the usability of Python. All cryptographic operations are implemented natively — no external cryptographic libraries required. This document describes the enhanced features available in the current release.
+AMA Cryptography features a zero-dependency, multi-language architecture that combines the security of native C cryptographic primitives with the usability of Python. All cryptographic operations are implemented natively — no external cryptographic libraries required. This document describes the enhanced features available in the current release.
 
 ---
 
@@ -44,7 +44,7 @@ AMA Cryptography v2.1 features a zero-dependency, multi-language architecture th
 |              C CORE LIBRARY (libama_cryptography)               |
 |                  src/c/  include/                           |
 |  - Constant-time cryptographic primitives                   |
-|  - ML-DSA-65, Kyber-1024, SPHINCS+-256f (FIPS 203/204/205)  |
+|  - ML-DSA-65, ML-KEM-1024, SLH-DSA-SHA2-256f (FIPS 203/204/205)  |
 |  - AES-256-GCM, Ed25519, SHA3-256, HKDF-SHA3-256            |
 |  - C11 atomics for thread-safe initialization                |
 |  - Memory-safe context management                           |
@@ -102,7 +102,7 @@ Hand-written SIMD implementations for all 8 core cryptographic algorithms across
 |-----------|------|-------------------|
 | ML-KEM-1024 | `ama_kyber_avx2.c` | Vectorized NTT butterfly (16 coefficients/cycle), Barrett reduction, CBD sampling |
 | ML-DSA-65 | `ama_dilithium_avx2.c` | Vectorized NTT (q=8380417, 8 coefficients/YMM), rejection sampling, power2round |
-| SPHINCS+-256f | `ama_sphincs_avx2.c` | 4-way parallel SHA-256 compression, vectorized WOTS+ chains, Merkle tree hashing |
+| SLH-DSA-SHA2-256f | `ama_sphincs_avx2.c` | 4-way parallel SHA-256 compression, vectorized WOTS+ chains, Merkle tree hashing |
 | SHA3/Keccak | `ama_sha3_avx2.c` | Keccak-f[1600] with vectorized theta/rho/pi/chi/iota, 4-way parallel hashing |
 | AES-256-GCM | `ama_aes_gcm_avx2.c` | Pipelined AES-NI (8 blocks), PCLMULQDQ GHASH with Karatsuba, interleaved CTR+GHASH |
 | Ed25519 | `ama_ed25519_avx2.c` | Vectorized radix-2^51 field arithmetic, 4-way parallel scalar multiplication |
@@ -159,9 +159,9 @@ Automatic best-implementation selection at initialization:
 - Signature: ~3,309 bytes
 - Security: NIST Level 3 (~192-bit quantum)
 - Constant-time implementation
-- NIST KAT validated: **10/10 PASS**
+- NIST-vector scope: see `docs/compliance/CSRC_ALIGN_REPORT.md`
 
-### Kyber-1024 (ML-KEM)
+### ML-KEM-1024
 
 **NIST FIPS 203 — Native C Implementation**
 
@@ -173,9 +173,9 @@ Automatic best-implementation selection at initialization:
 - Shared secret: 32 bytes
 - Security: NIST Level 5 (~256-bit quantum)
 - IND-CCA2 secure (Fujisaki-Okamoto transform)
-- NIST KAT validated: **10/10 PASS**
+- NIST-vector scope: see `docs/compliance/CSRC_ALIGN_REPORT.md`
 
-### SPHINCS+-SHA2-256f-simple
+### SLH-DSA-SHA2-256f (SPHINCS+ lineage)
 
 **NIST FIPS 205 — Native C Implementation**
 
@@ -353,7 +353,7 @@ Tests:
 - `test_consttime.c`: Constant-time operation validation (structural correctness)
 - `test_dudect.c`: Empirical constant-time verification via dudect (Welch's t-test)
 - `test_core.c`: Context and lifecycle management
-- `test_kyber.c`: Kyber-1024 algorithm tests
+- `test_kyber.c`: ML-KEM-1024 algorithm tests
 - `test_ml_dsa.c`: ML-DSA-65 signature tests
 
 Run with:
@@ -602,7 +602,7 @@ All security-critical functions are empirically verified using the dudect method
 ✓ AES-GCM tag verification
 ✓ HKDF key derivation (IKM-independent)
 ✓ HMAC-SHA256 verification comparison
-✓ Kyber-1024 decapsulation (constant-time implicit rejection)
+✓ ML-KEM-1024 decapsulation (constant-time implicit rejection)
 
 See [docs/constant-time-testing.md](docs/constant-time-testing.md) for methodology and usage.
 
@@ -664,7 +664,7 @@ python -c "from ama_cryptography.math_engine import benchmark_matrix_operations;
 | Clang | 10+ | C11 support |
 | MSVC | 2019+ | Windows builds (volatile fallback for atomics) |
 
-**Note:** OpenSSL is **no longer required** as of v2.0. All cryptographic primitives (SHA3, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, Kyber-1024, SPHINCS+, X25519, ChaCha20-Poly1305, Argon2, secp256k1) are implemented natively in C.
+**Note:** OpenSSL is **no longer required** as of v2.0. All cryptographic primitives (SHA3, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, ML-KEM-1024, SLH-DSA, X25519, ChaCha20-Poly1305, Argon2, secp256k1) are implemented natively in C.
 
 ---
 

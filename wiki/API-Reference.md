@@ -23,7 +23,7 @@ Complete Python API reference for `ama_cryptography`. All modules, classes, func
 
 The algorithm-agnostic entry point is `AmaCryptography`, selected by an
 `AlgorithmType`. Every concrete backend (Ed25519, ML-DSA-65, ML-KEM-1024,
-SPHINCS+-256f, AES-256-GCM, hybrid signature, hybrid KEM) is a `CryptoProvider`
+SLH-DSA-SHA2-256f, AES-256-GCM, hybrid signature, hybrid KEM) is a `CryptoProvider`
 subclass that can also be used directly.
 
 ### Enums

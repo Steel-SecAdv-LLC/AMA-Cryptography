@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 3.0.0 |
-| Last Updated | 2026-04-20 |
+| Document Version | 3.1.0 + Unreleased |
+| Last Updated | 2026-05-16 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -13,7 +13,7 @@
 
 This document provides an overview of the cryptographic algorithms used in AMA Cryptography, their security properties, and references to official specifications.
 
-> **Design Note:** AMA Cryptography is built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the multi-layer defense architecture, double-helix key evolution, and adaptive posture system) is an original design by Steel Security Advisors LLC. Written security arguments for those original constructions are maintained in [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md). AMA Cryptography is a standalone cryptographic library for any Python project, AI agent, or AI system requiring quantum-resistant security. Current consumers include [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent) and FINDΩYOU™ (private repo), but the library is designed for general-purpose independent use.
+> **Design Note:** AMA Cryptography is built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the multi-layer defense architecture, double-helix key evolution, and adaptive posture system) is an original design by Steel Security Advisors LLC. Written security arguments for those original constructions are maintained in [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md). AMA Cryptography is a standalone cryptographic library for any Python project, AI agent, or AI system requiring quantum-resistant security and independent deployment review.
 
 ## Algorithm Summary
 
@@ -53,9 +53,9 @@ ML-DSA-65 is the primary post-quantum signature algorithm, providing 192-bit qua
 **Reference:**
 > Ducas, L., et al. (2021). "CRYSTALS-Dilithium: Algorithm Specifications and Supporting Documentation (Version 3.1)." NIST PQC Round 3 Submission.
 
-### Kyber-1024 (ML-KEM)
+### ML-KEM-1024 (Kyber lineage)
 
-Kyber-1024 provides IND-CCA2 secure key encapsulation for establishing shared secrets.
+ML-KEM-1024 provides IND-CCA2 secure key encapsulation for establishing shared secrets.
 
 **Key Sizes:**
 - Public Key: 1,568 bytes
@@ -70,11 +70,11 @@ Kyber-1024 provides IND-CCA2 secure key encapsulation for establishing shared se
 
 **Standard:** NIST FIPS 203 (2024)
 
-**Integration Status:** Backend implemented in `ama_cryptography/pqc_backends.py`. Integration into main signing workflow pending.
+**Integration Status:** Wired through `ama_cryptography/pqc_backends.py` and exposed via the `KyberProvider` / `SPHINCSProvider` classes in `ama_cryptography/crypto_api.py` and the hybrid KEM combiner.
 
-### SPHINCS+-SHA2-256f-simple
+### SLH-DSA-SHA2-256f (SPHINCS+ lineage)
 
-SPHINCS+ provides stateless hash-based signatures with security based only on hash function properties.
+SLH-DSA (FIPS 205, SPHINCS+ lineage) provides stateless hash-based signatures with security based only on hash function properties.
 
 **Key Sizes:**
 - Public Key: 64 bytes
@@ -88,7 +88,7 @@ SPHINCS+ provides stateless hash-based signatures with security based only on ha
 
 **Standard:** NIST FIPS 205 (2024)
 
-**Integration Status:** Backend implemented in `ama_cryptography/pqc_backends.py`. Integration into main signing workflow pending.
+**Integration Status:** Wired through `ama_cryptography/pqc_backends.py` and exposed via the `SPHINCSProvider` class in `ama_cryptography/crypto_api.py` and the adaptive posture system.
 
 ### Implementation Provenance
 
@@ -248,7 +248,7 @@ AMA Cryptography applies four independent cryptographic layers, matching the `am
 
 **Optional Add-ons (not core layers):**
 - **Canonical Encoding** — Deterministic length-prefixed input normalization (prevents concatenation attacks)
-- **SPHINCS+-256f / ML-KEM-1024** — Additional post-quantum signature and KEM schemes
+- **SLH-DSA / ML-KEM-1024** — Additional post-quantum signature and KEM schemes
 - **RFC 3161 Timestamp** — Third-party temporal proof of existence
 
 **Security Bound:** Overall security is bounded by the weakest core layer (~128-bit classical, ~192-bit quantum when ML-DSA-65 is enforced). Defense-in-depth ensures continued protection if any single layer is compromised. See [SECURITY.md](SECURITY.md) for detailed analysis.
@@ -351,7 +351,7 @@ X25519 provides elliptic curve Diffie-Hellman key exchange on Curve25519.
 **Security Properties:**
 - 128-bit classical security
 - NOT quantum-resistant (vulnerable to Shor's algorithm)
-- Used in hybrid KEM combiner (classical component alongside Kyber-1024)
+- Used in hybrid KEM combiner (classical component alongside ML-KEM-1024)
 
 **Standard:** RFC 7748
 

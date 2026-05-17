@@ -384,20 +384,22 @@ def verify_module_integrity() -> Tuple[bool, str]:
     """Verify module source files via signature, falling back to digest.
 
     Primary path (since v3.2.0, build-pipeline-signed wheels):
-      1. Recompute SHA3-256 over the .py files.
-      2. Load ``_integrity_signature.py``: embedded pubkey + signature
-         + digest.  Recomputed digest must match embedded; then
-         ``ama_ed25519_verify`` must accept the (pubkey, signature)
-         pair over the raw digest.
-      3. Any failure → ERROR state (module refuses crypto ops).
+
+    1. Recompute SHA3-256 over the .py files.
+    2. Load ``_integrity_signature.py``: embedded pubkey + signature
+       + digest.  Recomputed digest must match embedded; then
+       ``ama_ed25519_verify`` must accept the (pubkey, signature)
+       pair over the raw digest.
+    3. Any failure → ERROR state (module refuses crypto ops).
 
     Fallback path (editable installs, source checkouts, or wheels
     built without ``AMA_BUILD_PIPELINE=1`` in the build env):
-      1. Recompute SHA3-256.
-      2. Compare to ``_integrity_digest.txt`` (the legacy textual
-         artefact).  Mismatch → ERROR state.  Log a WARNING that the
-         signed artefact is missing so packagers notice the
-         degraded protection in CI logs.
+
+    1. Recompute SHA3-256.
+    2. Compare to ``_integrity_digest.txt`` (the legacy textual
+       artefact).  Mismatch → ERROR state.  Log a WARNING that the
+       signed artefact is missing so packagers notice the
+       degraded protection in CI logs.
 
     Both paths are deterministic and side-effect-free; the only
     runtime cost is a single hash + (optionally) a single Ed25519

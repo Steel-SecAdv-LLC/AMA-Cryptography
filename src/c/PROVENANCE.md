@@ -2,7 +2,7 @@
 
 **Repository:** `steel-secadv-llc/ama-cryptography`
 **Scope:** Native-C post-quantum primitives in `src/c/`
-**Date:** 2026-04-21
+**Date:** 2026-05-16
 **Maintainer:** Steel Security Advisors LLC
 
 This document records, per primitive, whether the AMA Cryptography native-C

@@ -6,8 +6,8 @@
 **Author/Inventor:** Andrew E. A.
 **Organization:** Steel Security Advisors LLC
 
-**Version:** 3.0.0
-**Date:** 2026-04-21
+**Version:** 3.1.0 + Unreleased
+**Date:** 2026-05-16
 
 ---
 
@@ -229,7 +229,7 @@ Conclusion: Suitable for real-time cryptographic protection
 - Layer 2: HMAC-SHA3-256 keyed authentication — RFC 2104, 256-bit key
 - Layer 3: Hybrid Ed25519 + ML-DSA-65 digital signature — RFC 8032 + NIST FIPS 204
 - Layer 4: HKDF-SHA3-256 key derivation (key independence) — RFC 5869
-- Optional add-ons (not core layers): SPHINCS+-256f, ML-KEM-1024, RFC 3161 timestamping
+- Optional add-ons (not core layers): SLH-DSA-SHA2-256f, ML-KEM-1024, RFC 3161 timestamping
 
 **Defense-in-Depth Proof:**
 ```

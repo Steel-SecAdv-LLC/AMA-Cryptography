@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 3.1.0 |
-| Last Updated | 2026-05-14 |
+| Document Version | 3.1.0 + Unreleased |
+| Last Updated | 2026-05-16 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -13,7 +13,7 @@
 
 ## Executive Summary
 
-AMA Cryptography is a cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. Current consumers include [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent) and FINDΩYOU™ (private repo). The architecture implements defense-in-depth security through multiple independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
+AMA Cryptography is a cryptographic protection system designed to secure sensitive data structures using quantum-resistant cryptography. The architecture implements defense-in-depth security through multiple independent cryptographic layers, with mathematical integration of ethical constraints into key derivation operations.
 
 This document provides a comprehensive technical reference for system architects, security engineers, and developers working with or evaluating the AMA Cryptography system.
 
@@ -53,7 +53,7 @@ The following are explicitly not goals of this architecture:
 
 - General-purpose encryption-as-a-service (the system provides AES-256-GCM and hybrid KEM for targeted use cases, not as a generic encryption service)
 - Real-time streaming cryptographic operations
-- Hardware-level cryptographic acceleration
+- Dedicated accelerator-appliance or HSM firmware implementation
 - Certificate authority or PKI infrastructure
 
 ### High-Level Architecture
@@ -104,7 +104,7 @@ The AMA Cryptography architecture is built on the following foundational princip
 
 **Zero External Crypto Dependencies (INVARIANT-1)**: All cryptographic primitives are implemented natively in C. No third-party crypto packages are permitted. See [`.github/INVARIANTS.md`](.github/INVARIANTS.md).
 
-**Performance Efficiency**: Cryptographic operations are optimized to maintain throughput exceeding 450 packages/second for full multi-layer operations.
+**Performance Efficiency**: Cryptographic operations are optimized and measured through reproducible benchmark artifacts. Throughput claims must name the benchmark host, build flags, and generated artifact.
 
 ### Architectural Constraints
 
@@ -120,7 +120,7 @@ The following constraints govern architectural decisions:
 
 ## Cryptographic Architecture
 
-AMA Cryptography is designed as a standalone cryptographic library for all AI agents and AI systems, not exclusively Mercury Agent or FINDΩYOU™. Any Python or C project can integrate these primitives independently. The library provides a complete, self-contained suite of quantum-resistant cryptographic operations suitable for any application requiring post-quantum security.
+AMA Cryptography is designed as a standalone cryptographic library. Any Python or C project can integrate these primitives independently. The library provides a self-contained suite of quantum-resistant cryptographic operations suitable for applications requiring post-quantum security after appropriate independent review.
 
 ### Cryptographic Primitive Selection
 
@@ -131,7 +131,8 @@ AMA Cryptography is designed as a standalone cryptographic library for all AI ag
 | Classical Signature | Ed25519 | RFC 8032 | 128-bit classical security | **Full** (ama_ed25519.c) |
 | Quantum-Resistant Signature | ML-DSA-65 (Dilithium) | NIST FIPS 204 | 192-bit quantum security | **Full** (ama_dilithium.c) |
 | Key Encapsulation | ML-KEM-1024 (Kyber) | NIST FIPS 203 | 256-bit quantum security | **Full** (ama_kyber.c) |
-| Hash-Based Signature | SPHINCS+-SHA2-256f | NIST FIPS 205 | 256-bit quantum security | **Full** (ama_sphincs.c) |
+| Hash-Based Signature | SLH-DSA-SHA2-256f | NIST FIPS 205 | 256-bit quantum security | **Full** (ama_sphincs.c / ama_slhdsa.c) |
+| Hash-Based Signature | SLH-DSA-SHAKE-128s | NIST FIPS 205 | NIST L1 | **Full** (ama_slhdsa.c) |
 | Authenticated Encryption | AES-256-GCM | NIST SP 800-38D | 256-bit key, 128-bit security | **Full** (ama_aes_gcm.c) |
 | Key Derivation | HKDF-SHA3-256 | RFC 5869 | 256-bit derived keys | **Full** (ama_hkdf.c) |
 | Timestamping | RFC 3161 TSA | RFC 3161 | Third-party attestation | Python API only |
@@ -142,7 +143,7 @@ AMA Cryptography is designed as a standalone cryptographic library for all AI ag
 | Constant-Time Utilities | memcmp, memzero, swap, lookup, copy | — | Side-channel resistance | **Full** (ama_consttime.c) |
 | Platform CSPRNG | getrandom/getentropy/BCryptGenRandom | — | Entropy source | **Full** (ama_platform_rand.c) |
 
-**C Library Source Files — 20 .c files + 1 internal header in `src/c/`:**
+**C Library Source Files — measured 2026-05-16: 22 top-level `.c` files, 2 internal headers, 1 internal `.c`, and 4 public headers across `src/c/` and `include/`:**
 
 Core primitives:
 - `src/c/ama_core.c` - Library initialization, version info, feature detection, shared utilities
@@ -152,13 +153,15 @@ Core primitives:
 - `src/c/ama_platform_rand.c` - Platform-native CSPRNG (getrandom/getentropy/BCryptGenRandom)
 - `src/c/ama_hkdf.c` - HKDF-SHA3-256 with HMAC-SHA3-256 (RFC 5869)
 - `src/c/ama_consttime.c` - Constant-time utilities (memcmp, memzero, swap, lookup, copy)
-- `src/c/internal/ama_sha2.h` - Extracted SHA-512 header-only implementation (deduplication for Ed25519/SPHINCS+)
+- `src/c/internal/ama_sha2.h` - Extracted SHA-512 header-only implementation (deduplication for Ed25519/SLH-DSA/FROST)
+- `src/c/internal/ama_sha3_x4.h` - 4-way Keccak-f[1600] interface shared by AVX2 and AVX-512 backends
 
 Signature and key exchange:
 - `src/c/ama_ed25519.c` - Ed25519 keygen/sign/verify with windowed scalar mult
 - `src/c/ama_kyber.c` - ML-KEM-1024 full native implementation (NTT, IND-CCA2, Fujisaki-Okamoto)
 - `src/c/ama_dilithium.c` - ML-DSA-65 full native implementation (NTT q=8380417, rejection sampling)
-- `src/c/ama_sphincs.c` - SPHINCS+-SHA2-256f-simple full native implementation (WOTS+, FORS, hypertree)
+- `src/c/ama_sphincs.c` - legacy SLH-DSA-SHA2-256f-compatible API surface (WOTS+, FORS, hypertree)
+- `src/c/ama_slhdsa.c` - parameterized SLH-DSA implementation for SHA2-256f and SHAKE-128s (FIPS 205)
 - `src/c/ama_x25519.c` - X25519 Diffie-Hellman key exchange (RFC 7748)
 - `src/c/ama_secp256k1.c` - secp256k1 elliptic curve operations (HD key derivation)
 
@@ -169,11 +172,11 @@ Encryption and KDF:
 - `src/c/ama_argon2.c` - Argon2id password hashing (RFC 9106)
 
 Infrastructure:
-- `src/c/ama_cpuid.c` - CPU feature detection (AES-NI, PCLMULQDQ, ARMv8-CE) for AEAD backend selection
+- `src/c/ama_cpuid.c` - CPU feature detection (AES-NI, PCLMULQDQ, AVX2, AVX-512F/VL, BMI2, ADX, VAES, VPCLMULQDQ, SHA-NI, NEON, SVE2) for runtime dispatch
 - `src/c/ama_secure_memory.c` - Secure memory operations (mlock/munlock) via native platform APIs
 - `src/c/ed25519_donna_shim.c` - Ed25519-donna assembly variant shim (optional via `-DAMA_ED25519_ASSEMBLY=ON`)
 
-**Zero-Dependency PQC:** All three PQC algorithms (Kyber, Dilithium, SPHINCS+) operate without OpenSSL. SHA-256, HMAC-SHA-256, and random byte generation are provided by native implementations (`ama_sha256.c`, `ama_hmac_sha256.c`, `ama_platform_rand.c`), validated against NIST KAT vectors.
+**Zero-Dependency PQC:** ML-KEM-1024, ML-DSA-65, and SLH-DSA parameter sets operate without OpenSSL, liboqs, PQClean, or external PQC libraries. SHA-256, HMAC-SHA-256, SHA-3/SHAKE, and random byte generation are provided by native implementations and validated against the repository's NIST-vector harness.
 
 ### Cryptographic Layer Stack
 
@@ -901,7 +904,7 @@ Cryptographic implementations are validated against:
 | 2.1.0 | 2026-03-25 | Steel Security Advisors LLC | Hand-written AVX2/NEON/SVE2 SIMD for 8 algorithms, runtime dispatch, security fixes S1-S6, HMAC-SHA3-256 Cython binding, CSRC alignment report, SHA-512 deduplication, Python package structure, Cython acceleration strategy, build system architecture, INVARIANTS reference, NIST ACVP validation (815 vectors), fuzz testing (12 targets) |
 | 2.1.5 | 2026-04-17 | Steel Security Advisors LLC | Security audit fixes (length-prefixed HKDF encoding, constant-time ops), HSM support via PyKCS11, fd leak protection, INVARIANT-13 restoration with 52 tracked suppressions, comprehensive test coverage for secure_memory/crypto_api/PQC backends, documentation version alignment |
 | 3.0.0 | 2026-04-27 | Steel Security Advisors LLC | RFC 9106 Argon2id byte-identity fix (BREAKING — `ama_argon2id_legacy` / `native_argon2id_legacy` verify-only shim) and `out_len` cap at `AMA_ARGON2ID_MAX_TAG_LEN = 1024`; in-house AVX-512 4-way Keccak permutation kernel (opt-in `-DAMA_ENABLE_AVX512=ON`, EVEX YMM-width `vprolq` + `vpternlogq`, XCR0 5+6+7 gated) with `docs/AVX512_KECCAK_ADR.md` ADR; X25519 fe64 (radix-2⁶⁴) ladder + hand-written MULX+ADX inline-asm kernel (`fe64_mul512_mulx` / `fe64_sq512_mulx` / `fe64_reduce512_mulx`) under BMI2∧ADX bundle gate; X25519 4-way AVX2 Montgomery-ladder kernel + `ama_x25519_scalarmult_batch` API (opt-in `AMA_DISPATCH_USE_X25519_AVX2=1`); VAES + VPCLMULQDQ YMM AES-256-GCM clean replacement; Ed25519 verify-path SWE rectification + base-point comb table + merged NTT + AVX2 rejection (Tier-B PQC); batch ML-DSA-65 / ML-KEM-1024 sampling via 4-way SHAKE128/SHAKE256 + CBD2 AVX2; ChaCha20-Poly1305 8-way AVX2 (≥ 512 B) and Argon2 BlaMka G AVX2; SHA-3 auto-tune hysteresis (best-of-5, 10% revert threshold); NIST ACVP self-attestation (815/815 AFT, weekly continuous validation); D-1…D-10 distribution / tooling audit (wheel SONAME bundling with `$ORIGIN`/`@loader_path` runtime_library_dirs, CLI subprocess test self-contained, isolated `setup.py` CMake build dir, fatal Cython failures + `numpy>=1.24.0` / `Cython>=3.2.4` build pins, dudect AES-GCM tag-compare redesign, `.semgrep.yml` 341 FP → 0, X25519 dispatch-policy contract test, `setuptools>=78.1.1` / `wheel>=0.46.2` supply-chain pins, `setuptools<70` preflight, ed25519-donna fallthrough annotations) |
-| 3.1.0 | 2026-05-14 | Steel Security Advisors LLC | Public documentation alignment for Mercury Agent and FINDΩYOU™ consumers, v3.1.0 release hygiene, INVARIANT-14 CVE-ignore review, and no public API changes since v3.0.0 |
+| 3.1.0 | 2026-05-14 | Steel Security Advisors LLC | Public documentation alignment, v3.1.0 release hygiene, INVARIANT-14 CVE-ignore review, and no public API changes since v3.0.0 |
 
 ---
 

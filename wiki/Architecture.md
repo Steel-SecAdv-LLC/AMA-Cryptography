@@ -6,7 +6,7 @@ This page describes the system architecture of AMA Cryptography, including the m
 
 ## System Overview
 
-AMA Cryptography is a **defense-in-depth** cryptographic protection system implementing multiple independent cryptographic layers. Current consumers include [Mercury Agent](https://github.com/Steel-SecAdv-LLC/Mercury-Agent) and FINDΩYOU™ (private repo).
+AMA Cryptography is a **defense-in-depth** cryptographic protection system implementing multiple independent cryptographic layers. It is designed as a standalone library for independently reviewed deployments.
 
 ```mermaid
 flowchart TD
@@ -54,7 +54,7 @@ Ethical constraints are mathematically bound to cryptographic operations through
 Built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC). No custom ciphers, hash functions, or signature schemes. The composition protocol is an original design by Steel Security Advisors LLC.
 
 ### Performance Efficiency
-Cryptographic operations maintain throughput exceeding 1,000 operations per second with less than 2% overhead for monitoring integration.
+Cryptographic operations maintain throughput exceeding 1,000 operations per second with monitoring overhead measured per environment.
 
 ---
 
@@ -81,7 +81,7 @@ flowchart TD
         kyber["ama_kyber.c\nML-KEM-1024 (FIPS 203)"]:::gold
         ed["ama_ed25519.c\nEd25519 C11 atomics"]:::gold
         sha3["ama_sha3.c\nSHA3-256 / SHAKE128 / SHAKE256"]:::black
-        sphincs["ama_sphincs.c\nSPHINCS+-SHA2-256f"]:::black
+        sphincs["ama_sphincs.c\nSLH-DSA-SHA2-256f"]:::black
         aesgcm["ama_aes_gcm.c\nAES-256-GCM"]:::black
         ct["ama_consttime.c\nSide-channel resistant ops"]:::black
     end
@@ -100,7 +100,7 @@ classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 ```
 
 **C Layer (`src/c/`):**
-Implements all cryptographic primitives in C11 with zero external dependencies. NIST FIPS compliant implementations for ML-DSA-65, ML-KEM-1024, SPHINCS+-SHA2-256f, SHA3-256, HKDF, Ed25519, AES-256-GCM, and more.
+Implements all cryptographic primitives in C11 with zero external dependencies. NIST FIPS compliant implementations for ML-DSA-65, ML-KEM-1024, SLH-DSA-SHA2-256f, SHA3-256, HKDF, Ed25519, AES-256-GCM, and more.
 
 **Cython Layer:**
 Optional acceleration for mathematical operations (18–37x vs pure Python). Provides NumPy integration for the 3R monitoring engine.
@@ -182,7 +182,7 @@ Optional third-party timestamp providing temporal proof of existence at a specif
 
 ```mermaid
 flowchart TD
-    capi["crypto_api.py"]:::blue --> pqc["pqc_backends.py\nDilithium, Kyber, SPHINCS+"]:::gold
+    capi["crypto_api.py"]:::blue --> pqc["pqc_backends.py\nDilithium, Kyber, SLH-DSA"]:::gold
     capi --> rfc["rfc3161_timestamp.py\nRFC 3161 TSP"]:::gold
     capi --> clib["C Library\nHMAC / HKDF / Ed25519 / AES-GCM"]:::black
 
@@ -214,7 +214,7 @@ classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 | `ama_aes_bitsliced.c` | Constant-time AES S-box | — |
 | `ama_dilithium.c` | ML-DSA-65 (Dilithium) | NIST FIPS 204 |
 | `ama_kyber.c` | ML-KEM-1024 (Kyber) | NIST FIPS 203 |
-| `ama_sphincs.c` | SPHINCS+-SHA2-256f | NIST FIPS 205 |
+| `ama_sphincs.c` | SLH-DSA-SHA2-256f | NIST FIPS 205 |
 | `ama_x25519.c` | X25519 key exchange | RFC 7748 |
 | `ama_chacha20poly1305.c` | ChaCha20-Poly1305 AEAD | RFC 8439 |
 | `ama_argon2.c` | Argon2id password hashing | RFC 9106 |
@@ -250,7 +250,7 @@ classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 
 ## 3R Runtime Security Monitoring
 
-The 3R monitoring framework provides real-time visibility with less than 2% performance overhead:
+The 3R monitoring framework provides real-time visibility with environment-specific performance overhead:
 
 ```mermaid
 flowchart LR
@@ -317,7 +317,7 @@ See [Key Management](Key-Management) for full details.
 | NIST FIPS 202 | SHA3-256/512, SHAKE | `ama_sha3.c` |
 | NIST FIPS 203 | ML-KEM-1024 (Kyber) | `ama_kyber.c` |
 | NIST FIPS 204 | ML-DSA-65 (Dilithium) | `ama_dilithium.c` |
-| NIST FIPS 205 | SLH-DSA (SPHINCS+) | `ama_sphincs.c` |
+| NIST FIPS 205 | SLH-DSA-SHA2-256f | `ama_sphincs.c` |
 | NIST SP 800-38D | AES-256-GCM | `ama_aes_gcm.c` |
 | RFC 2104 | HMAC | `ama_hkdf.c` |
 | RFC 5869 | HKDF | `ama_hkdf.c` |
