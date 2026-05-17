@@ -640,26 +640,28 @@ ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
     __m128i enc_j0 = aes256_encrypt_block_xmm(J0, rk);
     __m128i computed_tag = _mm_xor_si128(ghash_acc, enc_j0);
 
-    /* Constant-time tag compare — INVARIANT-12. */
+    /* Constant-time tag compare — INVARIANT-12.
+     *
+     * Tag-compare outcome (`tag_match`) is folded into the post-verify
+     * CTR-decrypt loop bounds as a mask so this function presents a
+     * unified post-verify control flow to both classes.  When
+     * `tag_match == 0` the loop bounds are masked to zero — no
+     * plaintext byte is written (fail-closed contract preserved) and
+     * the scrub-then-return tail is reached via the same path the
+     * success branch uses.  Closes the structural dudect leak at
+     * tests/c/test_dudect.c::test_aes_gcm_tag_verify. */
     uint8_t computed_tag_bytes[16];
     _mm_storeu_si128((__m128i *)computed_tag_bytes, computed_tag);
-    if (ama_consttime_memcmp(computed_tag_bytes, tag, 16) != 0) {
-        ama_secure_memzero(rk, sizeof(rk));
-        ama_secure_memzero(rky, sizeof(rky));
-        ama_secure_memzero(computed_tag_bytes, sizeof(computed_tag_bytes));
-        ama_secure_memzero(&H,  sizeof(H));
-        ama_secure_memzero(&H2, sizeof(H2));
-        ama_secure_memzero(&H3, sizeof(H3));
-        ama_secure_memzero(&H4, sizeof(H4));
-        ama_secure_memzero(&enc_j0, sizeof(enc_j0));
-        _mm256_zeroupper();
-        return AMA_ERROR_VERIFY_FAILED;
-    }
+    int tag_match = (ama_consttime_memcmp(computed_tag_bytes, tag, 16) == 0);
+    size_t bound_mask = (size_t)0 - (size_t)tag_match;
+    size_t bounded_full      = full_blocks & bound_mask;
+    size_t bounded_remaining = remaining   & bound_mask;
 
-    /* Tag verified — decrypt via CTR mode (4-way pipelined). */
+    /* Decrypt via CTR mode (4-way pipelined).  Loop bounds use
+     * `bounded_*` so verify-fail iterations touch no plaintext. */
     __m128i cb = gcm_inc_counter_xmm(J0);
     i = 0;
-    while (i + 4 <= full_blocks) {
+    while (i + 4 <= bounded_full) {
         __m128i cb0 = cb; cb = gcm_inc_counter_xmm(cb);
         __m128i cb1 = cb; cb = gcm_inc_counter_xmm(cb);
         __m128i cb2 = cb; cb = gcm_inc_counter_xmm(cb);
@@ -680,20 +682,20 @@ ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
 
         i += 4;
     }
-    for (; i < full_blocks; i++) {
+    for (; i < bounded_full; i++) {
         __m128i ks = aes256_encrypt_block_xmm(cb, rk);
         cb = gcm_inc_counter_xmm(cb);
         __m128i ct = _mm_loadu_si128((const __m128i *)(ciphertext + i * 16));
         _mm_storeu_si128((__m128i *)(plaintext + i * 16), _mm_xor_si128(ks, ct));
     }
-    if (remaining > 0) {
+    if (bounded_remaining > 0) {
         __m128i ks = aes256_encrypt_block_xmm(cb, rk);
         uint8_t pad_ct[16] = {0}, pad_pt[16] = {0};
-        memcpy(pad_ct, ciphertext + full_blocks * 16, remaining);
+        memcpy(pad_ct, ciphertext + full_blocks * 16, bounded_remaining);
         __m128i ct = _mm_loadu_si128((const __m128i *)pad_ct);
         __m128i pt = _mm_xor_si128(ks, ct);
         _mm_storeu_si128((__m128i *)pad_pt, pt);
-        memcpy(plaintext + full_blocks * 16, pad_pt, remaining);
+        memcpy(plaintext + full_blocks * 16, pad_pt, bounded_remaining);
     }
 
     ama_secure_memzero(rk,  sizeof(rk));
@@ -706,7 +708,7 @@ ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
     ama_secure_memzero(&H4, sizeof(H4));
     ama_secure_memzero(&enc_j0, sizeof(enc_j0));
     _mm256_zeroupper();
-    return AMA_SUCCESS;
+    return tag_match ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
 }
 
 #else
