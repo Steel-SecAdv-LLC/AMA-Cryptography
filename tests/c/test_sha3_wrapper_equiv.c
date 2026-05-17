@@ -165,11 +165,14 @@ static int run_shake128(void) {
         }
 
         ama_test_force_keccak_f1600_scalar();
-        ama_error_t rc =
-            ama_shake128_inc_init(&ctx) |
-            ama_shake128_inc_absorb(&ctx, input, L) |
-            ama_shake128_inc_finalize(&ctx) |
-            ama_shake128_inc_squeeze(&ctx, out_scal, MAX_OUTPUT);
+        /* Sequential error checks — the streaming SHAKE pipeline must
+         * short-circuit on the first failure.  Bitwise `|` evaluates
+         * every stage even after a fault, which can call absorb /
+         * finalize / squeeze with an uninitialised context (UB). */
+        ama_error_t rc = ama_shake128_inc_init(&ctx);
+        if (rc == AMA_SUCCESS) rc = ama_shake128_inc_absorb(&ctx, input, L);
+        if (rc == AMA_SUCCESS) rc = ama_shake128_inc_finalize(&ctx);
+        if (rc == AMA_SUCCESS) rc = ama_shake128_inc_squeeze(&ctx, out_scal, MAX_OUTPUT);
         ama_test_restore_keccak_f1600();
         if (rc != AMA_SUCCESS) {
             fprintf(stderr, "FAIL: shake128 scalar pipeline len=%zu\n", L);
@@ -203,11 +206,12 @@ static int run_shake256(void) {
         }
 
         ama_test_force_keccak_f1600_scalar();
-        ama_error_t rc =
-            ama_shake256_inc_init(&ctx) |
-            ama_shake256_inc_absorb(&ctx, input, L) |
-            ama_shake256_inc_finalize(&ctx) |
-            ama_shake256_inc_squeeze(&ctx, out_scal, MAX_OUTPUT);
+        /* Sequential error checks — see the matching SHAKE128 lane for
+         * why bitwise `|` is unsafe across this streaming pipeline. */
+        ama_error_t rc = ama_shake256_inc_init(&ctx);
+        if (rc == AMA_SUCCESS) rc = ama_shake256_inc_absorb(&ctx, input, L);
+        if (rc == AMA_SUCCESS) rc = ama_shake256_inc_finalize(&ctx);
+        if (rc == AMA_SUCCESS) rc = ama_shake256_inc_squeeze(&ctx, out_scal, MAX_OUTPUT);
         ama_test_restore_keccak_f1600();
         if (rc != AMA_SUCCESS) {
             fprintf(stderr, "FAIL: shake256 scalar pipeline len=%zu\n", L);

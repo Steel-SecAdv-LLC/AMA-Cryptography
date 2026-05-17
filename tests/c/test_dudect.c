@@ -51,6 +51,14 @@
 #define TABLE_SIZE           16
 #define ELEM_SIZE            8
 
+/* Sentinel t-value returned by a lane that detected a hard-fault
+ * (setup failure or per-class rc mismatch).  Far above DUDECT_T_THRESHOLD
+ * so the lane is always tagged FAIL in the summary AND overrides the
+ * is_info_only suppression in run_all_tests — semantic faults are
+ * real defects regardless of whether the timing measurement was
+ * info-only on this lane.  See is_fatal_result() below. */
+#define DUDECT_FATAL_SENTINEL 99999.0
+
 static int g_measurements = DEFAULT_MEASUREMENTS;
 static volatile int g_timeout_hit = 0;
 
@@ -303,15 +311,28 @@ static double test_aes_gcm_tag_verify(int iterations) {
 
     /* Encrypt an empty payload so we get an authenticated tag over
      * AAD + empty CT.  The harness then exercises ONLY the verify
-     * path (no CTR decrypt work). */
+     * path (no CTR decrypt work).  Setup failure must surface as a
+     * lane FAIL — see the matching ChaCha20-Poly1305 lane comment. */
     if (ama_aes256_gcm_encrypt(key, nonce, NULL, 0, aad, sizeof(aad),
                                NULL, tag) != AMA_SUCCESS) {
+        fprintf(stderr,
+                "  FAIL: AES-GCM dudect setup encrypt failed; "
+                "tag-verify lane never executed\n");
         dudect_print_result(&ctx);
-        return dudect_get_t(&ctx);
+        return DUDECT_FATAL_SENTINEL;
     }
 
     memcpy(bad_tag, tag, 16);
     bad_tag[0] ^= 0x01;
+
+    /* Per-class outcome validation — see the matching ChaCha20-Poly1305
+     * lane comment for the rationale.  Without this an always-pass or
+     * always-fail regression in ama_aes256_gcm_decrypt would still
+     * produce a clean t-value because both classes would walk the
+     * same code path and time identically.  Pinned strict here:
+     * class 0 (good tag) must return AMA_SUCCESS, class 1 (one-bit-
+     * flipped tag) must return AMA_ERROR_VERIFY_FAILED. */
+    int rc_mismatches = 0;
 
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
@@ -324,9 +345,22 @@ static double test_aes_gcm_tag_verify(int iterations) {
             ama_aes256_gcm_decrypt(key, nonce, NULL, 0, aad, sizeof(aad),
                                    tag_use, NULL);
         uint64_t end = dudect_get_time_ns();
-        (void)rc;
+
+        ama_error_t expected = class_idx ? AMA_ERROR_VERIFY_FAILED
+                                         : AMA_SUCCESS;
+        if (rc != expected) rc_mismatches++;
 
         dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches > 0) {
+        fprintf(stderr,
+                "  FAIL: AES-GCM tag-verify rc mismatches: %d "
+                "(expected AMA_SUCCESS for good tag, AMA_ERROR_VERIFY_FAILED "
+                "for tampered tag)\n",
+                rc_mismatches);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
@@ -374,6 +408,14 @@ static double test_ed25519_verify(int iterations) {
     memcpy(sig_bad, sig_good, 64);
     sig_bad[40] ^= 0x10;
 
+    /* Per-class outcome validation: even though this lane is
+     * info-only (Ed25519 verify is vartime by RFC 8032 §5.1.7 — the
+     * t-value alone is allowed to exceed the threshold), the
+     * underlying rc semantics must still hold or the lane is
+     * testifying to nothing.  An always-AMA_SUCCESS or always-fail
+     * regression is a real defect even in an info-only lane. */
+    int rc_mismatches = 0;
+
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         const uint8_t *sig = class_idx ? sig_bad : sig_good;
@@ -382,9 +424,22 @@ static double test_ed25519_verify(int iterations) {
         volatile ama_error_t rc =
             ama_ed25519_verify(sig, msg, sizeof(msg), pk);
         uint64_t end = dudect_get_time_ns();
-        (void)rc;
+
+        ama_error_t expected = class_idx ? AMA_ERROR_VERIFY_FAILED
+                                         : AMA_SUCCESS;
+        if (rc != expected) rc_mismatches++;
 
         dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches > 0) {
+        fprintf(stderr,
+                "  FAIL: Ed25519 verify rc mismatches: %d "
+                "(expected AMA_SUCCESS for good signature, "
+                "AMA_ERROR_VERIFY_FAILED for tampered)\n",
+                rc_mismatches);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
@@ -437,17 +492,34 @@ static double test_chacha20poly1305_tag_verify(int iterations) {
     random_bytes(aad, sizeof(aad));
 
     /* Encrypt an empty payload so the harness exercises ONLY the
-     * verify path (no ChaCha20 decrypt work). */
+     * verify path (no ChaCha20 decrypt work).  Setup must succeed —
+     * a silent encrypt failure here would let the lane "pass" with a
+     * t-value of 0 from an empty dudect context (no measurements
+     * recorded), masking a real configuration regression.  Surface
+     * the failure as a sentinel above DUDECT_T_THRESHOLD so the lane
+     * is marked FAIL in the summary table. */
     if (ama_chacha20poly1305_encrypt(key, nonce,
                                      NULL, 0,
                                      aad, sizeof(aad),
                                      NULL, tag_good) != AMA_SUCCESS) {
+        fprintf(stderr,
+                "  FAIL: ChaCha20-Poly1305 dudect setup encrypt failed; "
+                "tag-verify lane never executed\n");
         dudect_print_result(&ctx);
-        return dudect_get_t(&ctx);
+        return DUDECT_FATAL_SENTINEL;
     }
 
     memcpy(tag_bad, tag_good, AMA_POLY1305_TAG_BYTES);
     tag_bad[0] ^= 0x01;
+
+    /* Per-class return-code mismatches.  The lane is only meaningful
+     * when class 0 actually witnesses AMA_SUCCESS (real verify-pass)
+     * and class 1 actually witnesses AMA_ERROR_VERIFY_FAILED (real
+     * verify-fail).  A regression that collapses both to always-pass
+     * or always-fail would otherwise still produce a clean Welch's t
+     * (because both classes would time the same code path) and the
+     * lane would silently testify to nothing. */
+    int rc_mismatches = 0;
 
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
@@ -461,9 +533,23 @@ static double test_chacha20poly1305_tag_verify(int iterations) {
                                          aad, sizeof(aad),
                                          tag_use, NULL);
         uint64_t end = dudect_get_time_ns();
-        (void)rc;
+
+        /* Per-class outcome check (outside the timing region). */
+        ama_error_t expected = class_idx ? AMA_ERROR_VERIFY_FAILED
+                                         : AMA_SUCCESS;
+        if (rc != expected) rc_mismatches++;
 
         dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches > 0) {
+        fprintf(stderr,
+                "  FAIL: ChaCha20-Poly1305 tag-verify rc mismatches: %d "
+                "(expected AMA_SUCCESS for good tag, AMA_ERROR_VERIFY_FAILED "
+                "for tampered tag)\n",
+                rc_mismatches);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
@@ -503,8 +589,11 @@ static double test_argon2id_legacy_verify(int iterations) {
                             salt, sizeof(salt),
                             t_cost, m_cost, parallelism,
                             tag_good, sizeof(tag_good)) != AMA_SUCCESS) {
+        fprintf(stderr,
+                "  FAIL: Argon2id dudect setup hash failed; "
+                "verify lane never executed\n");
         dudect_print_result(&ctx);
-        return dudect_get_t(&ctx);
+        return DUDECT_FATAL_SENTINEL;
     }
     memcpy(tag_bad, tag_good, sizeof(tag_good));
     tag_bad[0] ^= 0x01;
@@ -517,6 +606,11 @@ static double test_argon2id_legacy_verify(int iterations) {
      * repeatable. */
     int local_iters = iterations < 8192 ? iterations : 8192;
 
+    /* Per-class outcome validation — see ChaCha20-Poly1305 lane for
+     * the rationale (a silently-broken verify path would still
+     * produce a clean t-value without witnessing the actual compare). */
+    int rc_mismatches = 0;
+
     for (int i = 0; i < local_iters && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         const uint8_t *tag_use = class_idx ? tag_bad : tag_good;
@@ -528,9 +622,22 @@ static double test_argon2id_legacy_verify(int iterations) {
                                        t_cost, m_cost, parallelism,
                                        tag_use, sizeof(tag_good));
         uint64_t end = dudect_get_time_ns();
-        (void)rc;
+
+        ama_error_t expected = class_idx ? AMA_ERROR_VERIFY_FAILED
+                                         : AMA_SUCCESS;
+        if (rc != expected) rc_mismatches++;
 
         dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches > 0) {
+        fprintf(stderr,
+                "  FAIL: Argon2id legacy verify rc mismatches: %d "
+                "(expected AMA_SUCCESS for good tag, AMA_ERROR_VERIFY_FAILED "
+                "for tampered tag)\n",
+                rc_mismatches);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
@@ -996,8 +1103,11 @@ static double test_slhdsa_sign(int iterations) {
     memset(msg1, 0xFF, 64);
 
     if (ama_slhdsa_keygen(AMA_SLHDSA_SHA2_256F, pk, sk) != AMA_SUCCESS) {
+        fprintf(stderr,
+                "  FAIL: SLH-DSA-SHA2-256f dudect setup keygen failed; "
+                "sign lane never executed\n");
         dudect_print_result(&ctx);
-        return dudect_get_t(&ctx);
+        return DUDECT_FATAL_SENTINEL;
     }
 
     /* Cap iterations — each SHA2-256f sign is ~50 ms on a typical
@@ -1035,8 +1145,17 @@ static double test_slhdsa_sign(int iterations) {
 typedef struct {
     const char *name;
     double t_value;
-    int is_info_only;  /* 1 = don't fail CI on this test */
+    int is_info_only;  /* 1 = don't fail CI on timing alone */
 } test_result_t;
+
+/* Returns 1 iff the t-value is the sentinel for a fatal harness fault
+ * (setup failure or per-class rc mismatch).  DUDECT_FATAL_SENTINEL is
+ * defined near the top of this file.  We use a 1.0 tolerance so a
+ * floating-point round-trip cannot accidentally produce a false
+ * negative on the sentinel comparison. */
+static int is_fatal_result(double t) {
+    return t >= DUDECT_FATAL_SENTINEL - 1.0;
+}
 
 static int run_all_tests(int iterations, test_result_t *results, int *num_results) {
     int idx = 0;
@@ -1195,10 +1314,18 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
 
     *num_results = idx;
 
-    /* Check strict tests */
+    /* Check strict tests.  Two failure conditions:
+     *   1. Strict (non-info) lanes whose t-value exceeds the threshold.
+     *   2. Any lane that returned the fatal sentinel (rc mismatch or
+     *      setup failure) — this overrides is_info_only because a
+     *      lane that did not actually witness its invariant is a
+     *      real defect, not a timing-noise artefact. */
     int all_pass = 1;
     for (int i = 0; i < idx; i++) {
-        if (!results[i].is_info_only && fabs(results[i].t_value) >= DUDECT_T_THRESHOLD) {
+        if (is_fatal_result(results[i].t_value)) {
+            all_pass = 0;
+        } else if (!results[i].is_info_only &&
+                   fabs(results[i].t_value) >= DUDECT_T_THRESHOLD) {
             all_pass = 0;
         }
     }
@@ -1213,9 +1340,15 @@ static void print_summary(test_result_t *results, int num_results) {
            "--------");
 
     for (int i = 0; i < num_results; i++) {
-        int passed = fabs(results[i].t_value) < DUDECT_T_THRESHOLD;
+        int fatal  = is_fatal_result(results[i].t_value);
+        int passed = !fatal && fabs(results[i].t_value) < DUDECT_T_THRESHOLD;
         const char *status;
-        if (passed) {
+        if (fatal) {
+            /* Setup failure or per-class rc mismatch — overrides
+             * is_info_only because a lane that did not witness its
+             * invariant is a real defect, not a timing-noise artefact. */
+            status = "FAIL";
+        } else if (passed) {
             status = "PASS";
         } else if (results[i].is_info_only) {
             status = "INFO";
