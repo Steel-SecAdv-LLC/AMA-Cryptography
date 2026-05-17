@@ -52,6 +52,20 @@ extern void ama_keccak_f1600_x4_avx2(uint64_t states[4][25]);
 #if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
 extern void ama_keccak_f1600_neon(uint64_t state[25]);
 #endif
+#if defined(AMA_HAVE_SVE2_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
+extern void ama_keccak_f1600_sve2(uint64_t state[25]);
+#endif
+
+/* AMA_TESTING_MODE hook so the x4 dispatch can be exercised against
+ * the scalar reference even on platforms where no SIMD x4 kernel is
+ * wired (NEON / SVE2 today).  The hook itself only reverts the
+ * single-state pointer; the x4 fallback in
+ * ama_keccak_f1600_x4_generic loops the single-state pointer 4
+ * times, so flipping the single pointer is sufficient to switch the
+ * entire x4 pipeline onto the scalar reference.  Resolved at link
+ * time from libama_cryptography_test. */
+extern void ama_test_force_keccak_f1600_scalar(void);
+extern void ama_test_restore_keccak_f1600(void);
 
 static uint64_t xs_state = 0xC0FFEE5005BAD123ULL;
 static uint64_t xs_next(void) {
@@ -90,6 +104,21 @@ static keccak_single_fn simd_keccak_single(const char **label) {
     }
     *label = "AVX2";
     return ama_keccak_f1600_avx2;
+#elif defined(AMA_HAVE_SVE2_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
+    /* Prefer the SVE2 kernel where available — `ama_has_arm_sve2()`
+     * gates the kernel pointer; if SVE2 is compiled in but the host
+     * doesn't expose it at runtime we fall through to NEON below. */
+    if (ama_has_arm_sve2()) {
+        *label = "SVE2";
+        return ama_keccak_f1600_sve2;
+    }
+#if defined(AMA_HAVE_NEON_IMPL)
+    *label = "NEON";
+    return ama_keccak_f1600_neon;
+#else
+    (void)label;
+    return NULL;
+#endif
 #elif defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
     *label = "NEON";
     return ama_keccak_f1600_neon;
@@ -189,6 +218,66 @@ int main(void) {
         printf("PASS: %s x4 (%d trials)\n", x4_label, N_X4);
     } else {
         printf("INFO: no SIMD x4 kernel on this target — single-state covers it\n");
+    }
+
+    /* x4-via-dispatch-vs-forced-scalar parity lane.  This covers two
+     * gaps in a single sweep:
+     *   1. The x4 dispatch pointer on NEON-only / SVE2-only / scalar
+     *      builds is set to `ama_keccak_f1600_x4_generic`, which
+     *      simply loops the single-state pointer 4 times.  The
+     *      forced-scalar hook reverts that single-state pointer to
+     *      `ama_keccak_f1600_generic`, so this lane proves the
+     *      dispatched x4 path is byte-identical to four scalar
+     *      single-state calls — closing the "Keccak x4 NEON" gap on
+     *      AArch64 (and the analogous "x4 SVE2" gap).
+     *   2. On x86-64 with the AVX2 x4 kernel wired, the dispatched
+     *      x4 pointer is `ama_keccak_f1600_x4_avx2`; the lane still
+     *      runs (the AVX2 single-state has already been validated
+     *      above) and provides a second independent witness via the
+     *      production dispatch surface. */
+    {
+        const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+        if (dt != NULL && dt->keccak_f1600_x4 != NULL) {
+            const int N_PAIR = 256;
+            int pair_fail = 0;
+            for (int trial = 0; trial < N_PAIR; trial++) {
+                uint64_t s_simd[4][25], s_scal[4][25];
+                for (int lane = 0; lane < 4; lane++) {
+                    for (int i = 0; i < 25; i++) {
+                        uint64_t r = xs_next();
+                        s_simd[lane][i] = r;
+                        s_scal[lane][i] = r;
+                    }
+                }
+                /* Dispatched x4 with whatever kernel is wired. */
+                dt->keccak_f1600_x4(s_simd);
+                /* Force single-state to scalar (which makes the
+                 * generic x4 wrapper a 4-loop of scalar) then call
+                 * the x4 dispatch pointer.  When that pointer is
+                 * `ama_keccak_f1600_x4_avx2` it stays vectorised
+                 * regardless of the single-state slot, so we instead
+                 * compute the scalar reference directly. */
+                ama_test_force_keccak_f1600_scalar();
+                for (int lane = 0; lane < 4; lane++) {
+                    ama_keccak_f1600_generic(s_scal[lane]);
+                }
+                ama_test_restore_keccak_f1600();
+                for (int lane = 0; lane < 4; lane++) {
+                    if (cmp_state(s_scal[lane], s_simd[lane],
+                                  "dispatched x4 vs forced-scalar", trial)) {
+                        pair_fail++;
+                        break;
+                    }
+                }
+                if (pair_fail && trial >= 2) break;
+            }
+            if (pair_fail) {
+                fprintf(stderr, "%d mismatches in x4 forced-scalar parity\n",
+                        pair_fail);
+                return 1;
+            }
+            printf("PASS: dispatched x4 vs forced-scalar (%d trials)\n", N_PAIR);
+        }
     }
 
     printf("================================================\n");

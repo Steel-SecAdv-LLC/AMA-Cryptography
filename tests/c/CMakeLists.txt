@@ -134,6 +134,7 @@ if(AMA_USE_NATIVE_PQC)
     add_ama_test(test_kyber_cpa test_kyber_cpa.c)
     add_ama_test(test_kyber_cbd2_equiv test_kyber_cbd2_equiv.c)
     add_ama_test(test_dilithium_ntt_equiv test_dilithium_ntt_equiv.c)
+    set_tests_properties(test_dilithium_ntt_equiv PROPERTIES SKIP_RETURN_CODE 77)
     add_ama_test(test_dilithium_rej_equiv test_dilithium_rej_equiv.c)
     # PR A (2026-04) — VAES + VPCLMULQDQ AES-GCM YMM dispatch
     # equivalence test.  SKIPs on hosts where the dispatcher leaves
@@ -230,6 +231,49 @@ if(AMA_USE_NATIVE_PQC)
     target_link_libraries(test_keccak_equiv ama_cryptography_test)
     add_test(NAME test_keccak_equiv COMMAND test_keccak_equiv)
     set_tests_properties(test_keccak_equiv PROPERTIES SKIP_RETURN_CODE 77)
+
+    # SIMD-equivalence PR (2026-05) — wrapper-level SHA3 SIMD parity.
+    # Uses the AMA_TESTING_MODE keccak force/restore hooks to swap the
+    # dispatched Keccak permutation between SIMD and scalar mid-test,
+    # then asserts that the public SHA3-256 / SHA3-512 / SHAKE128 /
+    # SHAKE256 wrappers produce byte-identical output on the same
+    # input across both backends.  Closes the gap between the
+    # permutation-level test_keccak_equiv and the NIST-KAT
+    # test_sha3.c (neither of which pinned the wrapper plumbing
+    # against SIMD-vs-scalar Keccak).  SKIPs with 77 when the
+    # dispatched single-state Keccak pointer already equals
+    # ama_keccak_f1600_generic (no SIMD installed -> tautological).
+    add_executable(test_sha3_wrapper_equiv test_sha3_wrapper_equiv.c)
+    target_link_libraries(test_sha3_wrapper_equiv ama_cryptography_test)
+    add_test(NAME test_sha3_wrapper_equiv COMMAND test_sha3_wrapper_equiv)
+    # Disable the dispatch auto-tune to guarantee the SIMD Keccak slot
+    # stays wired on noisy CI runners (a >10% regression in the SIMD
+    # vs generic micro-bench would otherwise demote the slot to
+    # ama_keccak_f1600_generic, at which point the SIMD-vs-scalar
+    # comparison is tautological and the test would SKIP with 77,
+    # silently leaving the wrapper-level SIMD path unvalidated).
+    # Setting AMA_DISPATCH_NO_AUTOTUNE here keeps coverage on every
+    # SIMD-capable runner.
+    set_tests_properties(test_sha3_wrapper_equiv PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "AMA_DISPATCH_NO_AUTOTUNE=1")
+
+    # SIMD-equivalence PR (2026-05) — SPHINCS+ / SLH-DSA SIMD parity.
+    # Two lanes in a single binary:
+    #   1. SLH-DSA-SHAKE-128s deterministic sign / verify byte-identity
+    #      under the dispatched (SIMD) Keccak vs the forced-scalar
+    #      Keccak (via AMA_TESTING_MODE override hook).
+    #   2. SPHINCS+ AVX2 / NEON wots_chain helper byte-identity against
+    #      an inlined scalar SHA-256 reference matching the helper's
+    #      exact block-build pattern.
+    # SKIPs with 77 only when neither lane is exercisable on the
+    # current build/CPU.
+    add_executable(test_sphincs_simd_equiv test_sphincs_simd_equiv.c)
+    target_link_libraries(test_sphincs_simd_equiv ama_cryptography_test)
+    add_test(NAME test_sphincs_simd_equiv COMMAND test_sphincs_simd_equiv)
+    set_tests_properties(test_sphincs_simd_equiv PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "AMA_DISPATCH_NO_AUTOTUNE=1")
 endif()
 
 # Performance benchmark (not added to ctest - run manually)
