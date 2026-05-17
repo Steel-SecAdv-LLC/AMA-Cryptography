@@ -119,11 +119,33 @@ Hand-written SIMD implementations for all 8 core cryptographic algorithms across
 
 #### ARM SVE2 (AArch64) — `src/c/sve2/`
 
-Scalable Vector Extension 2 implementations (stretch goal):
+Scalable Vector Extension 2 implementations (stretch goal).  Wired
+surface as of release 3.1.0:
+
+| Slot | Source | Status |
+|------|--------|--------|
+| `keccak_f1600` | `ama_sha3_sve2.c` | wired (SHA3/SHAKE on SVE2 hosts) |
+| `kyber_ntt` / `kyber_invntt` / `kyber_pointwise` | `ama_kyber_sve2.c` | wired (ML-KEM-1024 hot loop) |
+| `dilithium_ntt` / `dilithium_invntt` / `dilithium_pointwise` | `ama_dilithium_sve2.c` | wired (ML-DSA-65 hot loop) |
+| AES-GCM / ChaCha20 / Argon2 / SPHINCS+ / Ed25519 | placeholder TUs | **not wired** — see below |
+
+The four placeholder TUs (`ama_aes_gcm_sve2.c`,
+`ama_chacha20poly1305_sve2.c`, `ama_argon2_sve2.c`,
+`ama_sphincs_sve2.c`, `ama_ed25519_sve2.c`) document — in their per-file
+headers — the concrete preconditions a future SVE2 kernel must meet
+before being wired (matching dispatch signature, byte-identity KAT
+under SVE-aware CI, real production caller, algorithmic correctness
+versus the relevant FIPS / RFC).  AArch64 hosts on SVE2 hardware
+currently dispatch those algorithms to the validated NEON kernels
+(`src/c/neon/`), which is a strict upgrade over the previous "generic
+C" state.  The SVE2 Keccak permutation underneath is reached
+indirectly by every SHAKE-driven algorithm (SLH-DSA, FROST, HKDF).
+
+Implementation notes for the wired SVE2 surface:
 - Variable-length SIMD using SVE2 predicated operations
-- `svint32_t` / `svuint32_t` for hardware-adaptive vector widths
-- SVE2 polynomial multiply for GHASH acceleration
-- Scalable NTT implementations that adapt to available vector length
+- `svint16_t` / `svint32_t` for hardware-adaptive vector widths
+  (VL=128/256/512 are all covered by the same binary)
+- VL-agnostic loops via `svwhilelt_b16`/`svwhilelt_b32` + `svcntw()`
 
 #### Runtime Dispatch — `src/c/dispatch/ama_dispatch.c`
 

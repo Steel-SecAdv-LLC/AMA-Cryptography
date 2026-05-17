@@ -3,98 +3,45 @@
  * Licensed under the Apache License, Version 2.0
  *
  * @file ama_ed25519_sve2.c
- * @brief ARM SVE2-optimized Ed25519 field arithmetic
+ * @brief ARM SVE2 Ed25519 placeholder TU (no kernels currently wired)
  *
- * SVE2 scalable-vector intrinsics for Ed25519 radix-2^51 operations.
- * Processes multiple independent field elements using scalable vectors.
+ * SVE2 Ed25519 acceleration is not currently shipped.  As documented
+ * at `src/c/dispatch/ama_dispatch.c` lines 354-357, the dispatcher
+ * reports `dispatch_info.ed25519 = AMA_IMPL_GENERIC` on every AArch64
+ * host: the concrete non-vector backend (scalar `fe51` radix-2^51, or
+ * the donna shim when `AMA_ED25519_ASSEMBLY` is enabled) is selected
+ * by the build configuration, not at runtime, because:
+ *
+ *   1. Ed25519 single-shot signatures are dominated by SHA-512 and a
+ *      single-point scalar multiplication.  Vectorizing the field
+ *      arithmetic does not help a single ladder — the ladder is
+ *      sequential by construction.  A vector path is only useful for a
+ *      batched API, and AMA Cryptography intentionally does not expose
+ *      a batched Ed25519 sign / verify API today (per the project's
+ *      "no speculative API surface" principle — see `THREAT_MODEL.md`).
+ *   2. The AVX2 Ed25519 trampoline was removed in PR #238 after
+ *      benchmarks showed the scalar `fe51` backend was already faster;
+ *      that decision applies symmetrically to NEON and SVE2 absent a
+ *      batched caller.
+ *
+ * The previous content of this file was scalar-driven
+ * `ama_fe51_add_batch_sve2` / `ama_fe51_sub_batch_sve2` helpers that
+ * exposed a `fe51_sve2 {uint64_t v[5];}` struct never referenced by
+ * any other TU.  No dispatch table slot fed them, no public API
+ * consumed them, and no KAT covered them — they were dead code, and
+ * dead crypto code is pre-installed attack surface.  They have been
+ * removed.
+ *
+ * A future SVE2 Ed25519 acceleration must (a) materialize through a
+ * deliberately declared batched API (`include/ama_cryptography.h`
+ * change required) with its own threat model, ethical gate, and PQC
+ * companion path, and (b) land alongside an SVE-aware CI lane that
+ * compares the batched output byte-for-byte against the scalar
+ * single-shot reference per lane.
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 
 #include <stdint.h>
-#include <stddef.h>
-#include <string.h>
 
-#if defined(__ARM_FEATURE_SVE2)
-#include <arm_sve.h>
-
-typedef struct {
-    uint64_t v[5];
-} fe51_sve2;
-
-/* ============================================================================
- * SVE2 batch field addition
- *
- * Adds N independent field element pairs using scalable vectors.
- * Processes as many elements as the hardware vector length allows.
- * ============================================================================ */
-void ama_fe51_add_batch_sve2(fe51_sve2 *r, const fe51_sve2 *a,
-                              const fe51_sve2 *b, size_t count) {
-    for (int limb = 0; limb < 5; limb++) {
-        size_t i = 0;
-        while (i < count) {
-            svbool_t pg = svwhilelt_b64((int64_t)i, (int64_t)count);
-
-            /* Gather limb values from struct arrays */
-            /* Since fe51_sve2 is 40 bytes (5 * uint64), stride = 5 */
-            uint64_t a_limbs[8], b_limbs[8]; /* Max SVE VL = 2048 bits = 32 uint64 */
-            size_t batch = 0;
-            for (size_t j = i; j < count && batch < 8; j++, batch++) {
-                a_limbs[batch] = a[j].v[limb];
-                b_limbs[batch] = b[j].v[limb];
-            }
-
-            svuint64_t va = svld1_u64(pg, a_limbs);
-            svuint64_t vb = svld1_u64(pg, b_limbs);
-            svuint64_t vr = svadd_u64_x(pg, va, vb);
-
-            uint64_t r_limbs[8];
-            svst1_u64(pg, r_limbs, vr);
-            batch = 0;
-            for (size_t j = i; j < count && batch < 8; j++, batch++) {
-                r[j].v[limb] = r_limbs[batch];
-            }
-
-            i += svcntd();
-        }
-    }
-}
-
-/* ============================================================================
- * SVE2 batch field subtraction (with 2p addition to avoid underflow)
- * ============================================================================ */
-static const uint64_t TWO_P_SVE2[5] = {
-    0xFFFFFFFFFFFDA, 0xFFFFFFFFFFFFE, 0xFFFFFFFFFFFFE,
-    0xFFFFFFFFFFFFE, 0xFFFFFFFFFFFFE
-};
-
-void ama_fe51_sub_batch_sve2(fe51_sve2 *r, const fe51_sve2 *a,
-                              const fe51_sve2 *b, size_t count) {
-    for (int limb = 0; limb < 5; limb++) {
-        size_t i = 0;
-        svuint64_t v2p = svdup_n_u64(TWO_P_SVE2[limb]);
-        while (i < count) {
-            svbool_t pg = svwhilelt_b64((int64_t)i, (int64_t)count);
-            uint64_t a_limbs[8], b_limbs[8];
-            size_t batch = 0;
-            for (size_t j = i; j < count && batch < 8; j++, batch++) {
-                a_limbs[batch] = a[j].v[limb];
-                b_limbs[batch] = b[j].v[limb];
-            }
-            svuint64_t va = svld1_u64(pg, a_limbs);
-            svuint64_t vb = svld1_u64(pg, b_limbs);
-            svuint64_t vr = svsub_u64_x(pg, svadd_u64_x(pg, va, v2p), vb);
-            uint64_t r_limbs[8];
-            svst1_u64(pg, r_limbs, vr);
-            batch = 0;
-            for (size_t j = i; j < count && batch < 8; j++, batch++) {
-                r[j].v[limb] = r_limbs[batch];
-            }
-            i += svcntd();
-        }
-    }
-}
-
-#else
 typedef int ama_ed25519_sve2_not_available;
-#endif /* __ARM_FEATURE_SVE2 */

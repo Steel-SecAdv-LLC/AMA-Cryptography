@@ -105,6 +105,31 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   unchanged because they bypass scalar GHASH.
 
 ### Removed
+- **Unwired SVE2 ChaCha20 / Argon2 / SPHINCS+ / Ed25519 kernels.**
+  Extending the PR #308 precedent that removed the unwired AES-GCM SVE2
+  stub, the remaining four SVE2 translation units that the dispatcher
+  documented as "compiled-but-unwired" have been reduced to
+  documentation placeholders (`typedef int ..._not_available;`).  Each
+  was unreachable from the dispatch table for a concrete, enumerated
+  reason: ChaCha20's VL-dependent block-count signature was
+  incompatible with `ama_chacha20_block_x8_fn`; Argon2 implemented
+  plain Blake2b G instead of RFC 9106 §3.5 BlaMka G and would have
+  broken Argon2id KATs if wired; the dispatch table intentionally
+  exposes no SPHINCS+ or Ed25519 function-pointer slots.  Per the
+  project's "no speculative API surface" principle (dead crypto code
+  is pre-installed attack surface), the kernel bodies were removed; the
+  per-file headers now document the preconditions a future SVE2 kernel
+  must meet before wiring (matching dispatch signature, byte-identity
+  KAT under SVE-aware CI sweeping VL=128/256/512, algorithmic
+  correctness vs. the relevant FIPS/RFC, real production caller).  The
+  wired SVE2 surface (SHA3 / Keccak, ML-KEM-1024 NTT, ML-DSA-65 NTT)
+  is unchanged; SVE2 hosts continue to dispatch the un-wired
+  algorithms through the validated NEON kernels in `src/c/neon/`.
+- **Unused SVE2 Dilithium helpers.**  Removed
+  `ama_dilithium_poly_add_sve2`, `ama_dilithium_poly_sub_sve2`,
+  `ama_dilithium_power2round_sve2`, and the unreferenced
+  `barrett_reduce_dil_sve2` helper from `src/c/sve2/ama_dilithium_sve2.c`.
+  They had no callers, no dispatch slots, and no KATs.
 - **Unwired SVE2 AES-GCM stub (PR #308).** Removed dead SVE2 scalar-helper code
   that was compiled but never referenced by the dispatch table. AES-GCM on SVE2
   hosts dispatches through the NEON PMULL kernel validated by
