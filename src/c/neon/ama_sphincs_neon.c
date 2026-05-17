@@ -57,62 +57,74 @@ static inline uint32_t rotr32(uint32_t x, int n) {
  * otherwise falls back to NEON-vectorized computation.
  * ============================================================================ */
 #if defined(__ARM_FEATURE_SHA2)
-/* ARM SHA2 Crypto Extensions path */
+/* ARM SHA2 Crypto Extensions path — single-block SHA-256 compression.
+ *
+ * Algorithm: standard ARM Crypto Extension idiom (cf. Arm Architecture
+ * Reference Manual SHA256H / SHA256H2 / SHA256SU0 / SHA256SU1 entries).
+ * At every 4-round quartet R (R = 0, 4, 8, ..., 60):
+ *
+ *   1. K-add: tmp = msg[(R/4) & 3] + K256[R..R+3].
+ *   2. Hash: efgh, abcd = sha256h(efgh, abcd, tmp), sha256h2(abcd, ef_save, tmp).
+ *   3. Schedule (only while we still need future w-words, i.e. R < 48):
+ *        msg[(R/4) & 3] = sha256su1(sha256su0(msg[(R/4) & 3], msg[((R/4)+1) & 3]),
+ *                                   msg[((R/4)+2) & 3], msg[((R/4)+3) & 3])
+ *      The slot whose contents just fed the K-add (and will no longer
+ *      be needed for any of the remaining rounds) is reused to hold
+ *      the freshly-scheduled w[R+16..R+19].
+ *
+ * The previous rotation-based implementation here had two correlated
+ * bugs in the rounds-12+ loop: the schedule step passed `msg0` to
+ * both arguments of vsha256su0q_u32, and the K-add unconditionally
+ * indexed `msg3` while the rotation moved the next round's message
+ * to a different slot.  Net effect: every input block whose
+ * compression touched rounds 12+ (which is every input block)
+ * produced a wrong digest, which is what
+ * tests/c/test_sphincs_simd_equiv.c surfaced once it began comparing
+ * the NEON helper against an in-test scalar SHA-256 reference.
+ *
+ * The replacement uses explicit array indexing instead of variable
+ * rotation, which makes the schedule arguments match the standard
+ * idiom by construction and removes the dependency between the
+ * K-add slot and any prior rotation step. */
 void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]) {
     uint32x4_t abcd = vld1q_u32(state);
     uint32x4_t efgh = vld1q_u32(state + 4);
     uint32x4_t abcd_save = abcd;
     uint32x4_t efgh_save = efgh;
 
-    /* Load and byte-swap message words */
-    uint32x4_t msg0 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(block)));
-    uint32x4_t msg1 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(block + 16)));
-    uint32x4_t msg2 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(block + 32)));
-    uint32x4_t msg3 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(block + 48)));
+    /* Load and byte-swap message words (block is big-endian per FIPS 180-4). */
+    uint32x4_t msg[4];
+    msg[0] = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(block)));
+    msg[1] = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(block + 16)));
+    msg[2] = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(block + 32)));
+    msg[3] = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(block + 48)));
 
-    /* Rounds 0-3 */
-    uint32x4_t tmp = vaddq_u32(msg0, vld1q_u32(&K256[0]));
-    uint32x4_t tmp2 = efgh;
-    efgh = vsha256hq_u32(efgh, abcd, tmp);
-    abcd = vsha256h2q_u32(abcd, tmp2, tmp);
-    msg0 = vsha256su1q_u32(vsha256su0q_u32(msg0, msg1), msg2, msg3);
-
-    /* Rounds 4-7 */
-    tmp = vaddq_u32(msg1, vld1q_u32(&K256[4]));
-    tmp2 = efgh;
-    efgh = vsha256hq_u32(efgh, abcd, tmp);
-    abcd = vsha256h2q_u32(abcd, tmp2, tmp);
-    msg1 = vsha256su1q_u32(vsha256su0q_u32(msg1, msg2), msg3, msg0);
-
-    /* Rounds 8-11 */
-    tmp = vaddq_u32(msg2, vld1q_u32(&K256[8]));
-    tmp2 = efgh;
-    efgh = vsha256hq_u32(efgh, abcd, tmp);
-    abcd = vsha256h2q_u32(abcd, tmp2, tmp);
-    msg2 = vsha256su1q_u32(vsha256su0q_u32(msg2, msg3), msg0, msg1);
-
-    /* Rounds 12-59 (continue pattern) */
-    for (int i = 12; i < 60; i += 4) {
-        tmp = vaddq_u32(msg3, vld1q_u32(&K256[i]));
-        tmp2 = efgh;
+    /* Rounds 0..47 (R/4 = 0..11): hash quartet + schedule next w-block.
+     * After iteration r, msg[r & 3] holds w[(r+4)*4..(r+4)*4+3]. */
+    for (int r = 0; r < 12; r++) {
+        int s0 = r & 3;
+        int s1 = (r + 1) & 3;
+        int s2 = (r + 2) & 3;
+        int s3 = (r + 3) & 3;
+        uint32x4_t tmp  = vaddq_u32(msg[s0], vld1q_u32(&K256[r * 4]));
+        uint32x4_t tmp2 = efgh;
         efgh = vsha256hq_u32(efgh, abcd, tmp);
         abcd = vsha256h2q_u32(abcd, tmp2, tmp);
-        uint32x4_t *next = (i % 16 == 12) ? &msg0 :
-                           (i % 16 == 0)  ? &msg1 :
-                           (i % 16 == 4)  ? &msg2 : &msg3;
-        *next = vsha256su1q_u32(vsha256su0q_u32(*next, msg0), msg2, msg3);
-        /* Rotate message pointers */
-        uint32x4_t t = msg0;
-        msg0 = msg1; msg1 = msg2; msg2 = msg3; msg3 = t;
+        msg[s0] = vsha256su1q_u32(vsha256su0q_u32(msg[s0], msg[s1]),
+                                  msg[s2], msg[s3]);
     }
 
-    /* Rounds 60-63 */
-    tmp = vaddq_u32(msg3, vld1q_u32(&K256[60]));
-    tmp2 = efgh;
-    efgh = vsha256hq_u32(efgh, abcd, tmp);
-    abcd = vsha256h2q_u32(abcd, tmp2, tmp);
+    /* Rounds 48..63 (R/4 = 12..15): hash only — no more w-words needed.
+     * At entry msg[] holds {w[48..51], w[52..55], w[56..59], w[60..63]}
+     * in cyclic order; msg[r & 3] selects the right slot at each step. */
+    for (int r = 12; r < 16; r++) {
+        uint32x4_t tmp  = vaddq_u32(msg[r & 3], vld1q_u32(&K256[r * 4]));
+        uint32x4_t tmp2 = efgh;
+        efgh = vsha256hq_u32(efgh, abcd, tmp);
+        abcd = vsha256h2q_u32(abcd, tmp2, tmp);
+    }
 
-    /* Add saved state */
+    /* Add saved state (Merkle-Damgård feed-forward). */
     abcd = vaddq_u32(abcd, abcd_save);
     efgh = vaddq_u32(efgh, efgh_save);
 

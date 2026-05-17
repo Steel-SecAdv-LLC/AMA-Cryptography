@@ -129,7 +129,7 @@ surface as of release 3.1.0:
 | `dilithium_ntt` / `dilithium_invntt` / `dilithium_pointwise` | `ama_dilithium_sve2.c` | wired (ML-DSA-65 hot loop) |
 | AES-GCM / ChaCha20 / Argon2 / SPHINCS+ / Ed25519 | placeholder TUs | **not wired** — see below |
 
-The four placeholder TUs (`ama_aes_gcm_sve2.c`,
+The five placeholder TUs (`ama_aes_gcm_sve2.c`,
 `ama_chacha20poly1305_sve2.c`, `ama_argon2_sve2.c`,
 `ama_sphincs_sve2.c`, `ama_ed25519_sve2.c`) document — in their per-file
 headers — the concrete preconditions a future SVE2 kernel must meet
