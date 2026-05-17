@@ -262,30 +262,69 @@ static double test_ed25519_sign(int iterations) {
  * Class 0: Verify with correct tag
  * Class 1: Verify with incorrect tag
  * ----------------------------------------------------------------------- */
+/* -----------------------------------------------------------------------
+ * Test 7: AES-GCM tag verification — timing must not depend on tag match
+ *
+ * Class 0: Verify with correct tag
+ * Class 1: Verify with incorrect (single-bit-flipped) tag
+ *
+ * Pre-fix this lane was info-only because (a) the harness had an
+ * `if (class_idx == 0)` *inside* the timing region (branch-predictor
+ * variance leaked class membership independent of the function being
+ * timed), and (b) it timed a non-zero `ct_len`, which meant the
+ * post-verify AES-CTR decrypt step (Step 4 in ama_aes_gcm.c) ran in
+ * Class 0 but was short-circuited by the verify-failure return in
+ * Class 1 — a structural class delta unrelated to the
+ * constant-time-tag-compare invariant under test.
+ *
+ * Both issues are now closed:
+ *   - The tag pointer is selected *before* the timer starts (same
+ *     pointer-select pattern as the secp256k1 lane).
+ *   - ct_len = 0 collapses Step 4 to a no-op in **both** classes
+ *     (`if (ct_len > 0)` guards the CTR-decrypt step), so the only
+ *     work whose duration could differ between classes is the
+ *     `ama_consttime_memcmp` of the 16-byte tag — exactly the
+ *     invariant this lane is supposed to witness.  GHASH still
+ *     processes the AAD + length block identically in both classes.
+ *
+ * Restored to strict pass/fail.
+ * ----------------------------------------------------------------------- */
 static double test_aes_gcm_tag_verify(int iterations) {
     dudect_ctx_t ctx;
     dudect_ctx_init(&ctx, "AES-GCM tag verify");
 
     uint8_t key[32], nonce[12];
-    uint8_t pt[64], ct[64], tag[16], bad_tag[16], out[64];
+    uint8_t aad[32];
+    uint8_t tag[16], bad_tag[16];
 
     random_bytes(key, 32);
     random_bytes(nonce, 12);
-    random_bytes(pt, 64);
-    ama_aes256_gcm_encrypt(key, nonce, pt, 64, NULL, 0, ct, tag);
+    random_bytes(aad, sizeof(aad));
+
+    /* Encrypt an empty payload so we get an authenticated tag over
+     * AAD + empty CT.  The harness then exercises ONLY the verify
+     * path (no CTR decrypt work). */
+    if (ama_aes256_gcm_encrypt(key, nonce, NULL, 0, aad, sizeof(aad),
+                               NULL, tag) != AMA_SUCCESS) {
+        dudect_print_result(&ctx);
+        return dudect_get_t(&ctx);
+    }
 
     memcpy(bad_tag, tag, 16);
     bad_tag[0] ^= 0x01;
 
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
+        /* Pointer select OUTSIDE the timing region to remove
+         * class-correlated branch-predictor delta. */
+        const uint8_t *tag_use = class_idx ? bad_tag : tag;
 
         uint64_t start = dudect_get_time_ns();
-        if (class_idx == 0)
-            ama_aes256_gcm_decrypt(key, nonce, ct, 64, NULL, 0, tag, out);
-        else
-            ama_aes256_gcm_decrypt(key, nonce, ct, 64, NULL, 0, bad_tag, out);
+        volatile ama_error_t rc =
+            ama_aes256_gcm_decrypt(key, nonce, NULL, 0, aad, sizeof(aad),
+                                   tag_use, NULL);
         uint64_t end = dudect_get_time_ns();
+        (void)rc;
 
         dudect_record(&ctx, class_idx, (double)(end - start));
     }
@@ -357,14 +396,31 @@ static double test_ed25519_verify(int iterations) {
  *
  * Class 0: Decrypt with correct Poly1305 tag (returns AMA_SUCCESS)
  * Class 1: Decrypt with single-bit-flipped tag (returns
- *          AMA_ERROR_VERIFY_FAILED — plaintext buffer not modified
- *          per the fail-closed contract documented at
- *          ama_chacha20poly1305_decrypt()).
+ *          AMA_ERROR_VERIFY_FAILED).
  *
- * The implementation must compare tags via `hmac.compare_digest`-style
- * constant-time memcmp (see ama_consttime_memcmp in src/c/ama_core.c).
- * Closes the gap noted at tests/c/test_chacha20poly1305.c:1-21 (which
- * is KAT-only).
+ * The first iteration of this harness timed a non-zero `ct_len`,
+ * which made the lane structurally fail at +100..+200 σ: after
+ * `ama_consttime_memcmp` returns at src/c/ama_chacha20poly1305.c:591,
+ * Class 0 continued into the `chacha20_xor` decrypt step (Step 4,
+ * `ct_len` bytes of work), while Class 1 early-returned.  That is a
+ * structural wall-clock delta unrelated to the constant-time tag
+ * compare — the verify outcome is observable via the return code,
+ * but the lane was claiming to test something else.
+ *
+ * Fixed by setting `ct_len = 0`.  Step 4 of the decrypt is guarded
+ * by `if (ct_len > 0)` and collapses to a no-op in **both** classes,
+ * so the only work whose duration could differ between classes is the
+ * `ama_consttime_memcmp` of the 16-byte tag — exactly the invariant
+ * this lane is supposed to witness.  The Poly1305 tag computation
+ * (Step 2) still runs identically in both classes over the AAD plus
+ * the empty CT plus the RFC 8439 length block.
+ *
+ * Tag pointer is selected *before* the timer starts (pointer-select
+ * pattern, same as the secp256k1 lane) so branch-predictor variance
+ * cannot leak class membership.
+ *
+ * Strict pass/fail.  Closes the gap noted at
+ * tests/c/test_chacha20poly1305.c:1-21 (which is KAT-only).
  * ----------------------------------------------------------------------- */
 static double test_chacha20poly1305_tag_verify(int iterations) {
     dudect_ctx_t ctx;
@@ -372,23 +428,20 @@ static double test_chacha20poly1305_tag_verify(int iterations) {
 
     uint8_t key[AMA_CHACHA20_KEY_BYTES];
     uint8_t nonce[AMA_CHACHA20_NONCE_BYTES];
-    uint8_t aad[16];
-    uint8_t pt_in[64], ct[64], pt_out[64];
+    uint8_t aad[32];
     uint8_t tag_good[AMA_POLY1305_TAG_BYTES];
     uint8_t tag_bad[AMA_POLY1305_TAG_BYTES];
 
     random_bytes(key, sizeof(key));
     random_bytes(nonce, sizeof(nonce));
     random_bytes(aad, sizeof(aad));
-    random_bytes(pt_in, sizeof(pt_in));
 
+    /* Encrypt an empty payload so the harness exercises ONLY the
+     * verify path (no ChaCha20 decrypt work). */
     if (ama_chacha20poly1305_encrypt(key, nonce,
-                                     pt_in, sizeof(pt_in),
+                                     NULL, 0,
                                      aad, sizeof(aad),
-                                     ct, tag_good) != AMA_SUCCESS) {
-        /* If encrypt itself fails the harness can't measure verify;
-         * record a placeholder reading and let the result surface as
-         * a vacuous PASS. */
+                                     NULL, tag_good) != AMA_SUCCESS) {
         dudect_print_result(&ctx);
         return dudect_get_t(&ctx);
     }
@@ -398,14 +451,15 @@ static double test_chacha20poly1305_tag_verify(int iterations) {
 
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
+        /* Pointer select OUTSIDE the timing region. */
         const uint8_t *tag_use = class_idx ? tag_bad : tag_good;
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
             ama_chacha20poly1305_decrypt(key, nonce,
-                                         ct, sizeof(ct),
+                                         NULL, 0,
                                          aad, sizeof(aad),
-                                         tag_use, pt_out);
+                                         tag_use, NULL);
         uint64_t end = dudect_get_time_ns();
         (void)rc;
 
@@ -808,12 +862,13 @@ static double test_frost_scalar_negate_extremes(int iterations) {
 
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
+        /* Pointer select OUTSIDE the timing region so a branch on
+         * `class_idx` cannot leak class membership via the
+         * branch-predictor — same pattern as the secp256k1 lane. */
+        const uint8_t *s = class_idx ? s1 : s0;
 
         uint64_t start = dudect_get_time_ns();
-        if (class_idx == 0)
-            ama_frost_test_scalar_negate(neg, s0);
-        else
-            ama_frost_test_scalar_negate(neg, s1);
+        ama_frost_test_scalar_negate(neg, s);
         uint64_t end = dudect_get_time_ns();
 
         dudect_record(&ctx, class_idx, (double)(end - start));
@@ -832,12 +887,18 @@ static double test_frost_scalar_negate_midrange(int iterations) {
 
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
+        /* Pointer select OUTSIDE the timing region; previously this
+         * lane had a class-dependent `if (class_idx == 0)` inside the
+         * timer, which leaked at ~+5 σ (100k measurements) entirely
+         * from branch-predictor variance — the underlying
+         * `ama_frost_test_scalar_negate` is byte-by-byte branchless
+         * (src/c/ama_frost.c).  Fixed: select the input pointer up
+         * front so the timed region is one indirect call with no
+         * class-correlated control flow. */
+        const uint8_t *s = class_idx ? SCALAR_NEGATE_MID : s0;
 
         uint64_t start = dudect_get_time_ns();
-        if (class_idx == 0)
-            ama_frost_test_scalar_negate(neg, s0);
-        else
-            ama_frost_test_scalar_negate(neg, SCALAR_NEGATE_MID);
+        ama_frost_test_scalar_negate(neg, s);
         uint64_t end = dudect_get_time_ns();
 
         dudect_record(&ctx, class_idx, (double)(end - start));
@@ -1023,6 +1084,10 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
 
     results[idx].name = "ChaCha20-Poly1305 tag verify";
     results[idx].t_value = test_chacha20poly1305_tag_verify(iterations);
+    /* Strict: ct_len=0 in the harness collapses the post-verify
+     * decrypt branch in both classes, so any class delta is a real
+     * leak in the tag-compare path.  See header comment on
+     * test_chacha20poly1305_tag_verify(). */
     results[idx].is_info_only = 0;
     idx++;
 
@@ -1033,10 +1098,12 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
 
     results[idx].name = "AES-GCM tag verify";
     results[idx].t_value = test_aes_gcm_tag_verify(iterations);
-    /* AES-GCM tag verify excluded from strict pass/fail when using
-     * table-based S-box backend (known timing variation).
-     * Use AMA_AES_CONSTTIME=ON for constant-time tag verification. */
-    results[idx].is_info_only = 1;
+    /* Strict: ct_len=0 in the harness collapses the post-verify
+     * AES-CTR decrypt branch (which would otherwise pull the AES
+     * S-box variance into the measurement); pointer-select also
+     * lifted out of the timing region.  See header comment on
+     * test_aes_gcm_tag_verify(). */
+    results[idx].is_info_only = 0;
     idx++;
 
     results[idx].name = "HKDF-SHA3-256";
