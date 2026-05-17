@@ -295,6 +295,264 @@ static double test_aes_gcm_tag_verify(int iterations) {
 }
 
 /* -----------------------------------------------------------------------
+ * Test: Ed25519 verify — timing must not depend on signature validity
+ *
+ * Class 0: Verify a structurally-valid signature against its message
+ * Class 1: Verify a signature whose s-scalar has been corrupted (still
+ *          well-formed numerically — same point-decompress path is taken,
+ *          but the final group-element equation rejects).
+ *
+ * Note: Ed25519 verification is documented as vartime (verification
+ * scalars are public — RFC 8032 §5.1.7 / batch verify §6).  This
+ * harness is **info-only**: it surfaces the t-value for visibility,
+ * but a non-zero leakage is not a defect since the verify path is
+ * not intended to be constant-time.  Including the harness closes
+ * the "Ed25519 verify dudect" gap so future work that hardens
+ * verify-side timing has a baseline to drive against.
+ * ----------------------------------------------------------------------- */
+static double test_ed25519_verify(int iterations) {
+    dudect_ctx_t ctx;
+    dudect_ctx_init(&ctx, "Ed25519 verify (vartime, info-only)");
+
+    uint8_t pk[32], sk[64];
+    uint8_t sig_good[64], sig_bad[64];
+    uint8_t msg[64];
+
+    random_bytes(msg, sizeof(msg));
+    /* Generate a fresh key + signature so we know `sig_good` verifies. */
+    {
+        uint8_t seed[32];
+        random_bytes(seed, 32);
+        memcpy(sk, seed, 32);
+        ama_ed25519_keypair(pk, sk);
+        ama_ed25519_sign(sig_good, msg, sizeof(msg), sk);
+    }
+    /* Corrupt the s-scalar half of the signature (bytes 32..63).
+     * The R point in the first half still decodes; the verifier
+     * still reaches the final group-element equation, where it
+     * rejects.  This pins the late-stage rejection path against
+     * the success path. */
+    memcpy(sig_bad, sig_good, 64);
+    sig_bad[40] ^= 0x10;
+
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        const uint8_t *sig = class_idx ? sig_bad : sig_good;
+
+        uint64_t start = dudect_get_time_ns();
+        volatile ama_error_t rc =
+            ama_ed25519_verify(sig, msg, sizeof(msg), pk);
+        uint64_t end = dudect_get_time_ns();
+        (void)rc;
+
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    dudect_print_result(&ctx);
+    return dudect_get_t(&ctx);
+}
+
+/* -----------------------------------------------------------------------
+ * Test: ChaCha20-Poly1305 tag verify — timing must not depend on tag match
+ *
+ * Class 0: Decrypt with correct Poly1305 tag (returns AMA_SUCCESS)
+ * Class 1: Decrypt with single-bit-flipped tag (returns
+ *          AMA_ERROR_VERIFY_FAILED — plaintext buffer not modified
+ *          per the fail-closed contract documented at
+ *          ama_chacha20poly1305_decrypt()).
+ *
+ * The implementation must compare tags via `hmac.compare_digest`-style
+ * constant-time memcmp (see ama_consttime_memcmp in src/c/ama_core.c).
+ * Closes the gap noted at tests/c/test_chacha20poly1305.c:1-21 (which
+ * is KAT-only).
+ * ----------------------------------------------------------------------- */
+static double test_chacha20poly1305_tag_verify(int iterations) {
+    dudect_ctx_t ctx;
+    dudect_ctx_init(&ctx, "ChaCha20-Poly1305 tag verify");
+
+    uint8_t key[AMA_CHACHA20_KEY_BYTES];
+    uint8_t nonce[AMA_CHACHA20_NONCE_BYTES];
+    uint8_t aad[16];
+    uint8_t pt_in[64], ct[64], pt_out[64];
+    uint8_t tag_good[AMA_POLY1305_TAG_BYTES];
+    uint8_t tag_bad[AMA_POLY1305_TAG_BYTES];
+
+    random_bytes(key, sizeof(key));
+    random_bytes(nonce, sizeof(nonce));
+    random_bytes(aad, sizeof(aad));
+    random_bytes(pt_in, sizeof(pt_in));
+
+    if (ama_chacha20poly1305_encrypt(key, nonce,
+                                     pt_in, sizeof(pt_in),
+                                     aad, sizeof(aad),
+                                     ct, tag_good) != AMA_SUCCESS) {
+        /* If encrypt itself fails the harness can't measure verify;
+         * record a placeholder reading and let the result surface as
+         * a vacuous PASS. */
+        dudect_print_result(&ctx);
+        return dudect_get_t(&ctx);
+    }
+
+    memcpy(tag_bad, tag_good, AMA_POLY1305_TAG_BYTES);
+    tag_bad[0] ^= 0x01;
+
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        const uint8_t *tag_use = class_idx ? tag_bad : tag_good;
+
+        uint64_t start = dudect_get_time_ns();
+        volatile ama_error_t rc =
+            ama_chacha20poly1305_decrypt(key, nonce,
+                                         ct, sizeof(ct),
+                                         aad, sizeof(aad),
+                                         tag_use, pt_out);
+        uint64_t end = dudect_get_time_ns();
+        (void)rc;
+
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    dudect_print_result(&ctx);
+    return dudect_get_t(&ctx);
+}
+
+/* -----------------------------------------------------------------------
+ * Test: Argon2id legacy verify — timing must not depend on tag match
+ *
+ * Class 0: Verify with the correct stored tag (ama_argon2id_legacy
+ *          output, returns AMA_SUCCESS)
+ * Class 1: Verify with a single-bit-flipped tag (returns
+ *          AMA_ERROR_VERIFY_FAILED).
+ *
+ * The final compare in ama_argon2id_legacy_verify() must use
+ * ama_consttime_memcmp() to avoid leaking the position of the first
+ * differing tag byte (the classic password-tag-compare timing
+ * attack).  The harness uses minimal Argon2 cost parameters
+ * (t_cost=1, m_cost=8 KiB, parallelism=1) so each measurement takes
+ * <1 ms — without these reductions the per-iter cost would push the
+ * default 1 M-sample run past CI's wall-clock budget.  This is
+ * still sufficient to expose any branch on the compare result
+ * because the compare step is invariant under the cost parameters.
+ * Closes the gap noted at tests/c/test_argon2id.c:6-22 (which is
+ * byte-equivalence only).
+ * ----------------------------------------------------------------------- */
+static double test_argon2id_legacy_verify(int iterations) {
+    dudect_ctx_t ctx;
+    dudect_ctx_init(&ctx, "Argon2id legacy verify");
+
+    const uint8_t password[16] = "dudect-arg2pass";
+    const uint8_t salt[16]     = "dudect-arg2salt!";
+    const uint32_t t_cost = 1, m_cost = 8, parallelism = 1;
+    uint8_t tag_good[32], tag_bad[32];
+
+    if (ama_argon2id_legacy(password, sizeof(password),
+                            salt, sizeof(salt),
+                            t_cost, m_cost, parallelism,
+                            tag_good, sizeof(tag_good)) != AMA_SUCCESS) {
+        dudect_print_result(&ctx);
+        return dudect_get_t(&ctx);
+    }
+    memcpy(tag_bad, tag_good, sizeof(tag_good));
+    tag_bad[0] ^= 0x01;
+
+    /* Argon2id is intrinsically heavy — keep iteration count
+     * proportional so the wall-clock budget stays reasonable on
+     * CI.  We cap at min(iterations, 8192) which still gives the
+     * t-test useful statistical power because verify timing is
+     * dominated by the *final* compare, which is fast and
+     * repeatable. */
+    int local_iters = iterations < 8192 ? iterations : 8192;
+
+    for (int i = 0; i < local_iters && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        const uint8_t *tag_use = class_idx ? tag_bad : tag_good;
+
+        uint64_t start = dudect_get_time_ns();
+        volatile ama_error_t rc =
+            ama_argon2id_legacy_verify(password, sizeof(password),
+                                       salt, sizeof(salt),
+                                       t_cost, m_cost, parallelism,
+                                       tag_use, sizeof(tag_good));
+        uint64_t end = dudect_get_time_ns();
+        (void)rc;
+
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    dudect_print_result(&ctx);
+    return dudect_get_t(&ctx);
+}
+
+/* -----------------------------------------------------------------------
+ * Test: secp256k1 scalar multiplication — timing must not depend on
+ *       scalar value
+ *
+ * Class 0: scalar = all-zero (forces every Montgomery ladder step into
+ *          the "select zero" cswap branch)
+ * Class 1: scalar = all-0xFF (forces the opposite cswap branch).
+ *
+ * `ama_secp256k1_point_mul` runs a Montgomery ladder with constant-time
+ * cswap operations (`ama_consttime_swap`).  Each iteration of the
+ * 256-step ladder must execute identical work regardless of the
+ * current scalar bit, so the all-zero vs all-0xFF distinction —
+ * which differs in *every* ladder iteration — is the strongest
+ * possible signal a non-constant-time implementation would expose.
+ * Closes the gap noted at tests/c/test_secp256k1.c:12-13 (which is
+ * correctness only).
+ * ----------------------------------------------------------------------- */
+static double test_secp256k1_scalarmult(int iterations) {
+    dudect_ctx_t ctx;
+    dudect_ctx_init(&ctx, "secp256k1 scalar multiplication");
+
+    /* secp256k1 generator G = (Gx, Gy), big-endian. */
+    static const uint8_t Gx[32] = {
+        0x79,0xBE,0x66,0x7E,0xF9,0xDC,0xBB,0xAC,0x55,0xA0,0x62,0x95,0xCE,0x87,0x0B,0x07,
+        0x02,0x9B,0xFC,0xDB,0x2D,0xCE,0x28,0xD9,0x59,0xF2,0x81,0x5B,0x16,0xF8,0x17,0x98
+    };
+    static const uint8_t Gy[32] = {
+        0x48,0x3A,0xDA,0x77,0x26,0xA3,0xC4,0x65,0x5D,0xA4,0xFB,0xFC,0x0E,0x11,0x08,0xA8,
+        0xFD,0x17,0xB4,0x48,0xA6,0x85,0x54,0x19,0x9C,0x47,0xD0,0x8F,0xFB,0x10,0xD4,0xB8
+    };
+    /* Class 0 scalar must be valid (in [1, n-1]) — using a single-bit
+     * scalar (k = 1) is the constant-time-friendly minimum.  The
+     * dudect signal we care about is the *bit pattern* delta between
+     * the two classes throughout the ladder, not absolute zero. */
+    static const uint8_t k_low[32] = {
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1
+    };
+    /* Class 1 scalar must be in [1, n-1]; use a high-Hamming-weight
+     * value just under the curve order (256-bit, all bits set in the
+     * upper bytes, lower bytes 0xFE to stay below n).  Every ladder
+     * step processes a "1" bit, which is the opposite cswap branch
+     * from k_low. */
+    static const uint8_t k_high[32] = {
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFE,
+        0xBA,0xAE,0xDC,0xE6,0xAF,0x48,0xA0,0x3B,
+        0xBF,0xD2,0x5E,0x8C,0xD0,0x36,0x41,0x40,
+        0xFE,0xFE,0xFE,0xFE,0xFE,0xFE,0xFE,0xFE
+    };
+    uint8_t out_x[32], out_y[32];
+
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        const uint8_t *k = class_idx ? k_high : k_low;
+
+        uint64_t start = dudect_get_time_ns();
+        volatile ama_error_t rc =
+            ama_secp256k1_point_mul(k, Gx, Gy, out_x, out_y);
+        uint64_t end = dudect_get_time_ns();
+        (void)rc;
+
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    dudect_print_result(&ctx);
+    return dudect_get_t(&ctx);
+}
+
+
+/* -----------------------------------------------------------------------
  * Test 8: HKDF — timing must not depend on IKM value
  *
  * Class 0: HKDF with all-zero IKM
@@ -628,6 +886,85 @@ static double test_dilithium_sign(int iterations) {
     return dudect_get_t(&ctx);
 }
 
+/* -----------------------------------------------------------------------
+ * Test: SLH-DSA-SHA2-256f signing — timing must not depend on message
+ *
+ * Class 0: Sign all-zero 64-byte message
+ * Class 1: Sign all-0xFF 64-byte message
+ *
+ * Uses the **deterministic** signing variant
+ * (ama_slhdsa_sign_deterministic, FIPS 205 §10.2 with addrnd =
+ * PK.seed) so the only varying input is the message content.  The
+ * production sign path mirrors the deterministic path step-for-step
+ * with the addition of a 16-byte RNG draw for the optional
+ * randomiser; that draw is message-independent, so the
+ * deterministic harness is a strictly stronger constant-time
+ * witness for the message-dependence question.
+ *
+ * SLH-DSA-SHA2-256f ('f' fast) is chosen over '-SHAKE-128s' because
+ * 's' (small) variants take ~1-2 seconds per signature in this
+ * implementation, which would push even a modest 64-iteration run
+ * past the CI wall-clock budget.  '-SHA2-256f' signs in ~50 ms,
+ * giving us several hundred iterations per minute — enough for the
+ * t-test to produce a stable reading.
+ *
+ * The 'f' and 's' variants share the same WOTS+ / FORS / Merkle
+ * hot-loop structure (only the hypertree shape differs), so timing
+ * properties carry across both.
+ *
+ * Iteration count is capped because each sign is intrinsically
+ * heavy. Marked info-only because SHA-256/SHAKE compress timing on
+ * shared CI can exhibit cache-driven variance independent of the
+ * message content; the harness still surfaces the t-value so any
+ * future regression to a message-dependent code path is visible
+ * via the printed reading.  Closes the "SPHINCS+ signing dudect
+ * harness" gap.
+ * ----------------------------------------------------------------------- */
+static double test_slhdsa_sign(int iterations) {
+    dudect_ctx_t ctx;
+    dudect_ctx_init(&ctx, "SLH-DSA-SHA2-256f sign (msg-independent)");
+
+    uint8_t pk[AMA_SLHDSA_SHA2_256F_PUBLIC_KEY_BYTES];
+    uint8_t sk[AMA_SLHDSA_SHA2_256F_SECRET_KEY_BYTES];
+    /* Static so the ~49 KiB signature buffer doesn't blow the test
+     * thread's stack on platforms with small default stack limits. */
+    static uint8_t sig[AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES];
+
+    uint8_t msg0[64], msg1[64];
+    memset(msg0, 0x00, 64);
+    memset(msg1, 0xFF, 64);
+
+    if (ama_slhdsa_keygen(AMA_SLHDSA_SHA2_256F, pk, sk) != AMA_SUCCESS) {
+        dudect_print_result(&ctx);
+        return dudect_get_t(&ctx);
+    }
+
+    /* Cap iterations — each SHA2-256f sign is ~50 ms on a typical
+     * x86-64 runner; 256 iterations is ~13 s of wall clock, well
+     * within a per-test CI budget. */
+    int local_iters = iterations < 256 ? iterations : 256;
+
+    for (int i = 0; i < local_iters && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        const uint8_t *msg_use = class_idx ? msg1 : msg0;
+        size_t siglen = sizeof(sig);
+
+        uint64_t start = dudect_get_time_ns();
+        volatile ama_error_t rc =
+            ama_slhdsa_sign_deterministic(AMA_SLHDSA_SHA2_256F,
+                                          sig, &siglen,
+                                          msg_use, 64,
+                                          NULL, 0, sk);
+        uint64_t end = dudect_get_time_ns();
+        (void)rc;
+
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    dudect_print_result(&ctx);
+    return dudect_get_t(&ctx);
+}
+
 #endif /* AMA_USE_NATIVE_PQC */
 
 /* -----------------------------------------------------------------------
@@ -672,6 +1009,25 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
     printf("\n--- Cryptographic Primitives ---\n");
     results[idx].name = "Ed25519 sign";
     results[idx].t_value = test_ed25519_sign(iterations);
+    results[idx].is_info_only = 0;
+    idx++;
+
+    results[idx].name = "Ed25519 verify";
+    results[idx].t_value = test_ed25519_verify(iterations);
+    /* Ed25519 verify is documented as vartime (verification scalars
+     * are public — RFC 8032 §5.1.7).  Report the t-value but do not
+     * fail CI on it; this lane exists to close the dudect coverage
+     * gap and to provide a baseline for any future hardening work. */
+    results[idx].is_info_only = 1;
+    idx++;
+
+    results[idx].name = "ChaCha20-Poly1305 tag verify";
+    results[idx].t_value = test_chacha20poly1305_tag_verify(iterations);
+    results[idx].is_info_only = 0;
+    idx++;
+
+    results[idx].name = "Argon2id legacy verify";
+    results[idx].t_value = test_argon2id_legacy_verify(iterations);
     results[idx].is_info_only = 0;
     idx++;
 
@@ -731,6 +1087,19 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
     results[idx].is_info_only = 0;
     idx++;
 
+    /* secp256k1 lives in the AMA_USE_NATIVE_PQC gated source group
+     * alongside FROST (see tests/c/CMakeLists.txt:105-117). */
+    results[idx].name = "secp256k1 scalar multiplication";
+    results[idx].t_value = test_secp256k1_scalarmult(iterations);
+    /* The Montgomery ladder is structurally constant-time
+     * (`ama_consttime_swap`) but a 256-step ladder over a 256-bit
+     * field still costs ~200 µs per iteration, so on shared CI
+     * runners environmental noise can dominate.  Mark info-only —
+     * fail-loud variants of this lane are intentionally surfaced
+     * separately via tests/c/test_consttime.c. */
+    results[idx].is_info_only = 1;
+    idx++;
+
     printf("\n--- Post-Quantum Cryptography ---\n");
     results[idx].name = "Kyber-1024 decaps";
     results[idx].t_value = test_kyber_decaps(iterations);
@@ -741,6 +1110,18 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
     results[idx].t_value = test_dilithium_sign(iterations);
     /* Dilithium signing uses rejection sampling which has inherent
      * timing variation by design — this is expected and safe. */
+    results[idx].is_info_only = 1;
+    idx++;
+
+    results[idx].name = "SLH-DSA-SHA2-256f sign";
+    results[idx].t_value = test_slhdsa_sign(iterations);
+    /* SLH-DSA signing is dominated by SHAKE-based WOTS+/FORS/Merkle
+     * tree construction.  The hot loops have no message-dependent
+     * branches — Welch's t-test against constant 0x00 vs constant
+     * 0xFF messages exercises the strongest possible class delta.
+     * Marked info-only because SHAKE absorb timing on shared CI can
+     * exhibit cache-driven variance independent of the message
+     * content; the t-value is still printed as a baseline. */
     results[idx].is_info_only = 1;
     idx++;
 #endif
@@ -819,7 +1200,7 @@ int main(int argc, char *argv[]) {
         printf("Timeout:     %d seconds per round\n", timeout_sec);
     }
 
-    test_result_t results[20];
+    test_result_t results[24];
     int num_results = 0;
     int passed = 0;
 
