@@ -647,27 +647,29 @@ ama_error_t ama_aes256_gcm_decrypt(
     for (int j = 0; j < 16; j++)
         computed_tag[j] ^= tag_mask[j];
 
-    /* Constant-time tag comparison */
-    if (ama_consttime_memcmp(computed_tag, tag, 16) != 0) {
-        /* Tag mismatch — do NOT decrypt */
-        ama_secure_memzero(round_keys, sizeof(round_keys));
-        ama_secure_memzero(H, sizeof(H));
-        ama_secure_memzero(tag_mask, sizeof(tag_mask));
-        ama_secure_memzero(computed_tag, sizeof(computed_tag));
-        return AMA_ERROR_VERIFY_FAILED;
-    }
+    /* Constant-time tag comparison + unified post-verify control flow.
+     * See ama_aes_gcm_avx2.c for the rationale: folding `tag_match`
+     * into the CTR loop bounds eliminates the structural class
+     * divergence between verify-pass and verify-fail return paths
+     * (closes the dudect leak at test_aes_gcm_tag_verify). */
+    int tag_match = (ama_consttime_memcmp(computed_tag, tag, 16) == 0);
+    size_t bound_mask = (size_t)0 - (size_t)tag_match;
+    size_t bounded_full = (ct_len / 16) & bound_mask;
+    size_t bounded_remaining = (ct_len % 16) & bound_mask;
 
-    /* CTR decryption (identical to encryption) */
+    /* CTR decryption (identical to encryption).  Loop bounds are
+     * `bounded_*` so a verify-fail call touches no plaintext
+     * (fail-closed contract preserved). */
     memcpy(counter, J0, 16);
 
-    full_blocks = ct_len / 16;
+    full_blocks = bounded_full;
     for (i = 0; i < full_blocks; i++) {
         gcm_inc32(counter);
         aes256_encrypt_block(round_keys, counter, keystream);
         for (int j = 0; j < 16; j++)
             plaintext[i * 16 + j] = ciphertext[i * 16 + j] ^ keystream[j];
     }
-    remaining = ct_len % 16;
+    remaining = bounded_remaining;
     if (remaining > 0) {
         gcm_inc32(counter);
         aes256_encrypt_block(round_keys, counter, keystream);
@@ -675,12 +677,12 @@ ama_error_t ama_aes256_gcm_decrypt(
             plaintext[full_blocks * 16 + j] = ciphertext[full_blocks * 16 + j] ^ keystream[j];
     }
 
-    /* Scrub sensitive material */
+    /* Scrub sensitive material — identical for both classes. */
     ama_secure_memzero(round_keys, sizeof(round_keys));
     ama_secure_memzero(H, sizeof(H));
     ama_secure_memzero(keystream, sizeof(keystream));
     ama_secure_memzero(tag_mask, sizeof(tag_mask));
     ama_secure_memzero(computed_tag, sizeof(computed_tag));
 
-    return AMA_SUCCESS;
+    return tag_match ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
 }
