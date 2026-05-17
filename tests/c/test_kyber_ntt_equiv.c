@@ -31,6 +31,27 @@
 #include "ama_cryptography.h"
 #include "ama_dispatch.h"
 
+/* Direct-symbol forward declarations for the per-ISA NTT kernels.
+ * Mirrors test_dilithium_ntt_equiv.c — exercises the SIMD kernel
+ * regardless of what the dispatch auto-tune picks at init. */
+#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+extern void ama_kyber_ntt_avx2(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_kyber_invntt_avx2(int16_t poly[256], const int16_t zetas[128]);
+#endif
+#if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
+extern void ama_kyber_ntt_neon(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_kyber_invntt_neon(int16_t poly[256], const int16_t zetas[128]);
+#endif
+#if defined(AMA_HAVE_SVE2_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
+extern void ama_kyber_ntt_sve2(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_kyber_invntt_sve2(int16_t poly[256], const int16_t zetas[128]);
+#endif
+
+/* AMA_TESTING_MODE end-to-end forced-scalar parity hooks (resolved
+ * at link time from libama_cryptography_test). */
+extern void ama_test_force_kyber_ntt_scalar(void);
+extern void ama_test_restore_kyber_ntt(void);
+
 #define KYBER_N 256
 #define KYBER_Q 3329
 
@@ -157,53 +178,169 @@ static int cmp_poly(const int16_t a[KYBER_N], const int16_t b[KYBER_N],
 }
 
 int main(void) {
-    printf("Kyber NTT dispatched-vs-scalar equivalence\n");
+    printf("Kyber NTT multi-lane equivalence\n");
     printf("==========================================\n");
 
     const ama_dispatch_table_t *dt = ama_get_dispatch_table();
-    if (dt == NULL || dt->kyber_ntt == NULL || dt->kyber_invntt == NULL) {
-        printf("SKIP: dispatched Kyber NTT/invNTT unavailable on this build/CPU\n");
-        printf("==========================================\n");
-        return 77;
-    }
-
     int fail = 0;
     const int N_TRIALS = 1024;
+    int any_lane_exercised = 0;
 
     /* Boundary cases: all-zero, all-q-1, alternating signs. */
     int16_t poly_s[KYBER_N];
     int16_t poly_v[KYBER_N];
 
-    for (int trial = 0; trial < N_TRIALS; trial++) {
-        /* Fill with random int16 coefficients in the canonical range
-         * [-q+1, q-1].  Pre-NTT inputs in ML-KEM-1024 are bounded by
-         * |coeff| < q after polyvec_reduce, so this matches the
-         * production usage. */
-        for (int i = 0; i < KYBER_N; i++) {
-            int16_t r = (int16_t)(xs_next() % (2 * KYBER_Q - 1)) - (KYBER_Q - 1);
-            poly_s[i] = r;
-            poly_v[i] = r;
+    /* --------------------------------------------------------------
+     * Lane 1: dispatched-pointer path.
+     * -------------------------------------------------------------- */
+    if (dt != NULL && dt->kyber_ntt != NULL && dt->kyber_invntt != NULL) {
+        any_lane_exercised = 1;
+        for (int trial = 0; trial < N_TRIALS; trial++) {
+            for (int i = 0; i < KYBER_N; i++) {
+                int16_t r = (int16_t)(xs_next() % (2 * KYBER_Q - 1)) - (KYBER_Q - 1);
+                poly_s[i] = r;
+                poly_v[i] = r;
+            }
+            scalar_kyber_ntt(poly_s);
+            dt->kyber_ntt(poly_v, kyb_zetas);
+            fail += cmp_poly(poly_s, poly_v, "dispatched forward NTT", trial);
+
+            scalar_kyber_invntt(poly_s);
+            dt->kyber_invntt(poly_v, kyb_zetas);
+            fail += cmp_poly(poly_s, poly_v, "dispatched inverse NTT", trial);
+
+            if (fail && trial >= 2) break;
         }
-
-        scalar_kyber_ntt(poly_s);
-        dt->kyber_ntt(poly_v, kyb_zetas);
-        fail += cmp_poly(poly_s, poly_v, "forward NTT", trial);
-
-        /* Round-trip: inverse the dispatched output and confirm it
-         * matches the scalar inverse of the scalar forward output. */
-        scalar_kyber_invntt(poly_s);
-        dt->kyber_invntt(poly_v, kyb_zetas);
-        fail += cmp_poly(poly_s, poly_v, "inverse NTT", trial);
-
-        if (fail && trial >= 2) break;
+        if (fail) {
+            fprintf(stderr, "FAIL: dispatched lane %d mismatches\n", fail);
+            return 1;
+        }
+        printf("PASS: dispatched lane, %d trials\n", N_TRIALS);
+    } else {
+        printf("INFO: dispatcher leaves kyber_ntt NULL on this build/CPU\n");
     }
 
-    if (fail) {
-        fprintf(stderr, "\n%d mismatches\n", fail);
-        return 1;
+    /* --------------------------------------------------------------
+     * Lane 2: direct per-ISA SIMD symbol path.
+     * -------------------------------------------------------------- */
+    struct {
+        const char *label;
+        void (*ntt)(int16_t[256], const int16_t[128]);
+        void (*invntt)(int16_t[256], const int16_t[128]);
+    } direct_lanes[] = {
+#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+        { "direct AVX2", ama_kyber_ntt_avx2, ama_kyber_invntt_avx2 },
+#endif
+#if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
+        { "direct NEON", ama_kyber_ntt_neon, ama_kyber_invntt_neon },
+#endif
+#if defined(AMA_HAVE_SVE2_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
+        { "direct SVE2", ama_kyber_ntt_sve2, ama_kyber_invntt_sve2 },
+#endif
+        { NULL, NULL, NULL }
+    };
+
+    for (int L = 0; direct_lanes[L].label != NULL; L++) {
+        any_lane_exercised = 1;
+        for (int trial = 0; trial < N_TRIALS; trial++) {
+            for (int i = 0; i < KYBER_N; i++) {
+                int16_t r = (int16_t)(xs_next() % (2 * KYBER_Q - 1)) - (KYBER_Q - 1);
+                poly_s[i] = r;
+                poly_v[i] = r;
+            }
+            scalar_kyber_ntt(poly_s);
+            direct_lanes[L].ntt(poly_v, kyb_zetas);
+            fail += cmp_poly(poly_s, poly_v, direct_lanes[L].label, trial);
+            scalar_kyber_invntt(poly_s);
+            direct_lanes[L].invntt(poly_v, kyb_zetas);
+            fail += cmp_poly(poly_s, poly_v, direct_lanes[L].label, trial);
+            if (fail && trial >= 2) break;
+        }
+        if (fail) {
+            fprintf(stderr, "FAIL: %s lane mismatches (%d)\n",
+                    direct_lanes[L].label, fail);
+            return 1;
+        }
+        printf("PASS: %s lane, %d trials\n", direct_lanes[L].label, N_TRIALS);
     }
-    printf("PASS: %d trials, forward + inverse byte-identical to scalar\n",
-           N_TRIALS);
+
+    /* --------------------------------------------------------------
+     * Lane 3: end-to-end forced-scalar KEM parity.
+     * Run encaps + decaps once under the dispatched SIMD NTT and
+     * once under the forced-scalar NTT.  Decap of either ciphertext
+     * under either path must yield the same shared secret as
+     * encaps produced — proving the two NTT paths are interop-safe
+     * round-trip across the full ML-KEM-1024 pipeline.
+     * -------------------------------------------------------------- */
+    if (dt != NULL && dt->kyber_ntt != NULL) {
+        any_lane_exercised = 1;
+        uint8_t pk[AMA_KYBER_1024_PUBLIC_KEY_BYTES];
+        uint8_t sk[AMA_KYBER_1024_SECRET_KEY_BYTES];
+        uint8_t ct_simd[AMA_KYBER_1024_CIPHERTEXT_BYTES];
+        uint8_t ct_scal[AMA_KYBER_1024_CIPHERTEXT_BYTES];
+        uint8_t ss_enc_simd[AMA_KYBER_1024_SHARED_SECRET_BYTES];
+        uint8_t ss_enc_scal[AMA_KYBER_1024_SHARED_SECRET_BYTES];
+        uint8_t ss_dec[AMA_KYBER_1024_SHARED_SECRET_BYTES];
+        size_t  ct_len;
+
+        if (ama_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk)) != AMA_SUCCESS) {
+            fprintf(stderr, "FAIL: forced-scalar lane keygen\n");
+            return 1;
+        }
+        /* Encap under SIMD. */
+        ct_len = sizeof(ct_simd);
+        if (ama_kyber_encapsulate(pk, sizeof(pk), ct_simd, &ct_len,
+                                  ss_enc_simd, sizeof(ss_enc_simd))
+            != AMA_SUCCESS) {
+            fprintf(stderr, "FAIL: SIMD encap\n");
+            return 1;
+        }
+        /* Decap of SIMD ciphertext under SIMD must equal encap secret. */
+        if (ama_kyber_decapsulate(ct_simd, ct_len, sk, sizeof(sk),
+                                  ss_dec, sizeof(ss_dec)) != AMA_SUCCESS ||
+            memcmp(ss_dec, ss_enc_simd, sizeof(ss_dec)) != 0) {
+            fprintf(stderr, "FAIL: SIMD decap of SIMD ct\n");
+            return 1;
+        }
+        /* Switch to scalar NTT. */
+        ama_test_force_kyber_ntt_scalar();
+        /* Decap of SIMD ciphertext under scalar must still equal. */
+        if (ama_kyber_decapsulate(ct_simd, ct_len, sk, sizeof(sk),
+                                  ss_dec, sizeof(ss_dec)) != AMA_SUCCESS ||
+            memcmp(ss_dec, ss_enc_simd, sizeof(ss_dec)) != 0) {
+            ama_test_restore_kyber_ntt();
+            fprintf(stderr, "FAIL: scalar decap of SIMD ct diverged\n");
+            return 1;
+        }
+        /* Encap under scalar (using same pk). */
+        {
+            size_t ct_len_scal = sizeof(ct_scal);
+            if (ama_kyber_encapsulate(pk, sizeof(pk), ct_scal, &ct_len_scal,
+                                      ss_enc_scal, sizeof(ss_enc_scal))
+                != AMA_SUCCESS) {
+                ama_test_restore_kyber_ntt();
+                fprintf(stderr, "FAIL: scalar encap\n");
+                return 1;
+            }
+            ama_test_restore_kyber_ntt();
+            /* Decap of scalar ciphertext under SIMD must equal scalar encap. */
+            if (ama_kyber_decapsulate(ct_scal, ct_len_scal, sk, sizeof(sk),
+                                      ss_dec, sizeof(ss_dec)) != AMA_SUCCESS ||
+                memcmp(ss_dec, ss_enc_scal, sizeof(ss_dec)) != 0) {
+                fprintf(stderr, "FAIL: SIMD decap of scalar ct diverged\n");
+                return 1;
+            }
+        }
+        printf("PASS: end-to-end SIMD<->scalar encap/decap cross-parity\n");
+    } else {
+        printf("INFO: forced-scalar parity lane skipped (no SIMD wired)\n");
+    }
+
+    if (!any_lane_exercised) {
+        printf("SKIP: no SIMD Kyber NTT kernel on this build/CPU\n");
+        printf("==========================================\n");
+        return 77;
+    }
     printf("==========================================\n");
     return 0;
 }

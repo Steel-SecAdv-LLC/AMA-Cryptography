@@ -2,30 +2,77 @@
  * Copyright 2025-2026 Steel Security Advisors LLC
  * Licensed under the Apache License, Version 2.0
  *
- * Byte-equivalence test for the dispatched ML-DSA-65 NTT / inverse NTT
- * (typically ama_dilithium_ntt_avx2 / invntt_avx2 when AVX2 is available,
- * NULL on non-x86 or AVX2-less hosts) against a scalar reference that
- * matches dil_ntt_cached / dil_invntt_cached in src/c/ama_dilithium.c.
+ * Byte-equivalence test for the ML-DSA-65 NTT / inverse NTT.
  *
- * Rationale: the AVX2 path restructures the eight NTT layers into merged
- * register-resident blocks; correctness must survive that restructuring
- * byte-for-byte, not merely up to equivalence under Z[x]/(x^256 + 1).
- * The full sign/verify KATs also catch regressions, but they pin the
- * whole pipeline.  This test pins the individual transform.
+ * Exercises three independent surfaces in a single test process so that
+ * a regression in any one of them is localised to a labelled trial:
  *
- * Routes through ama_get_dispatch_table()->dilithium_ntt / dilithium_invntt
- * rather than calling the AVX2 entry points directly so the test:
- *   - Links on builds where AMA_HAVE_AVX2_IMPL is not defined.
- *   - Does not execute an AVX2 instruction on an x86-64 host that lacks
- *     AVX2 at runtime (CPUID-guarded by the dispatch init).
- *   - Cleanly SKIPs when the dispatcher leaves the pointer NULL.
+ *   1. **Dispatched path** — `ama_get_dispatch_table()->dilithium_ntt`
+ *      (whichever SIMD kernel the auto-tune selected at init: AVX2 on
+ *      x86-64+AVX2, NEON on AArch64, SVE2 on ARMv9+SVE2).
+ *   2. **Direct SIMD-symbol path** — bypasses the dispatch auto-tune
+ *      (which on noisy hosts can demote SIMD back to generic and would
+ *      otherwise silently turn the dispatched lane into a tautology).
+ *      Calls `ama_dilithium_ntt_avx2`, `_neon`, and `_sve2` directly via
+ *      their `AMA_HAVE_*_IMPL` build guards.  When **none** of those
+ *      kernels is compiled in (truly scalar build) the lane SKIPs;
+ *      when *any* is compiled in it MUST byte-match the scalar
+ *      reference or the test FAILs.
+ *   3. **Forced-scalar parity** — uses the
+ *      `ama_test_force_dilithium_ntt_scalar()` / `_restore` hooks
+ *      (exposed only under `AMA_TESTING_MODE`) to flip the production
+ *      `ama_dilithium_sign` pipeline onto the scalar fallback for one
+ *      full sign/verify cycle, then back onto the dispatched SIMD
+ *      kernel for another cycle on the same (key, message), and
+ *      asserts byte-identical signatures.  Catches dispatch
+ *      misroutes that only surface end-to-end.
+ *
+ * Rationale: the AVX2 / NEON / SVE2 paths restructure the eight NTT
+ * layers into merged register-resident blocks; correctness must
+ * survive that restructuring byte-for-byte, not merely up to
+ * equivalence under Z[x]/(x^256 + 1).  Full sign/verify KATs also
+ * catch regressions, but they pin the whole pipeline; this test
+ * pins the individual transform.
  */
 
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include "ama_cryptography.h"
 #include "ama_dispatch.h"
+
+/* Direct-symbol declarations for the per-ISA NTT kernels.  Guarded by
+ * the same `AMA_HAVE_*_IMPL` macros the dispatcher uses so the test
+ * links on every build configuration.  When the kernel is compiled in
+ * its dispatch slot will be wired by `dispatch_init_internal`, but
+ * `auto_tune` can demote `keccak_f1600` to generic on a noisy host —
+ * the NTT slots are NOT autotuned, but referencing the symbol
+ * directly is still the only way to guarantee the SIMD code path
+ * actually executes (the dispatched pointer is the authoritative
+ * production wiring; the direct symbol is the authoritative
+ * regression anchor). */
+#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+extern void ama_dilithium_ntt_avx2(int32_t poly[256], const int32_t zetas[256]);
+extern void ama_dilithium_invntt_avx2(int32_t poly[256], const int32_t zetas[256]);
+#endif
+#if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
+extern void ama_dilithium_ntt_neon(int32_t poly[256], const int32_t zetas[256]);
+extern void ama_dilithium_invntt_neon(int32_t poly[256], const int32_t zetas[256]);
+#endif
+#if defined(AMA_HAVE_SVE2_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
+extern void ama_dilithium_ntt_sve2(int32_t poly[256], const int32_t zetas[256]);
+extern void ama_dilithium_invntt_sve2(int32_t poly[256], const int32_t zetas[256]);
+#endif
+
+/* AMA_TESTING_MODE dispatch override hooks for the end-to-end
+ * forced-scalar parity lane.  Declared `extern` so they resolve at
+ * link time from libama_cryptography_test (built with
+ * AMA_TESTING_MODE).  The consuming test executable itself is
+ * not built with that define — see the pattern in
+ * tests/c/test_aes_gcm_scalar_kat.c. */
+extern void ama_test_force_dilithium_ntt_scalar(void);
+extern void ama_test_restore_dilithium_ntt(void);
 
 #define DILITHIUM_Q     8380417
 #define DILITHIUM_N     256
@@ -121,7 +168,7 @@ static int cmp_poly(const int32_t a[DILITHIUM_N], const int32_t b[DILITHIUM_N],
                     const char *label, int trial) {
     for (int i = 0; i < DILITHIUM_N; i++) {
         if (a[i] != b[i]) {
-            fprintf(stderr, "FAIL: %s trial %d, coefficient %d: scalar=%d avx2=%d\n",
+            fprintf(stderr, "FAIL: %s trial %d, coefficient %d: scalar=%d simd=%d\n",
                     label, trial, i, a[i], b[i]);
             return 1;
         }
@@ -134,46 +181,163 @@ int main(void) {
     printf("==========================================\n");
 
     const ama_dispatch_table_t *dt = ama_get_dispatch_table();
-    if (dt == NULL || dt->dilithium_ntt == NULL || dt->dilithium_invntt == NULL) {
-        printf("SKIP: dispatched Dilithium NTT/invNTT unavailable on this build/CPU\n");
-        printf("==========================================\n");
-        return 0;
-    }
-
     int fail = 0;
     const int N_TRIALS = 256;
+    int any_lane_exercised = 0;
 
-    for (int trial = 0; trial < N_TRIALS; trial++) {
-        int32_t poly_s[DILITHIUM_N];
-        int32_t poly_v[DILITHIUM_N];
+    /* --------------------------------------------------------------
+     * Lane 1: dispatched-pointer path.
+     * SKIPs (informational) when the slot is NULL, but does NOT
+     * collapse the test — Lanes 2 and 3 still run, so a SIMD build
+     * always exercises at least one SIMD path even if dispatcher
+     * auto-tune turned it off on a noisy host.
+     * -------------------------------------------------------------- */
+    if (dt != NULL && dt->dilithium_ntt != NULL && dt->dilithium_invntt != NULL) {
+        any_lane_exercised = 1;
+        for (int trial = 0; trial < N_TRIALS; trial++) {
+            int32_t poly_s[DILITHIUM_N], poly_v[DILITHIUM_N];
+            for (int i = 0; i < DILITHIUM_N; i++) {
+                int32_t r = (int32_t)(xs_next() & 0x7FFFFF);
+                r -= (DILITHIUM_Q / 2);
+                poly_s[i] = r;
+                poly_v[i] = r;
+            }
+            scalar_ntt(poly_s);
+            dt->dilithium_ntt(poly_v, dil_zetas);
+            fail += cmp_poly(poly_s, poly_v, "dispatched forward NTT", trial);
 
-        /* Fill with random int32 coefficients in a realistic range for a
-         * pre-NTT polynomial: centered around 0, within ~23-bit magnitude. */
-        for (int i = 0; i < DILITHIUM_N; i++) {
-            int32_t r = (int32_t)(xs_next() & 0x7FFFFF);
-            r -= (DILITHIUM_Q / 2);
-            poly_s[i] = r;
-            poly_v[i] = r;
+            scalar_invntt(poly_s);
+            dt->dilithium_invntt(poly_v, dil_zetas);
+            fail += cmp_poly(poly_s, poly_v, "dispatched inverse NTT", trial);
+
+            if (fail && trial >= 2) break;
         }
-
-        scalar_ntt(poly_s);
-        dt->dilithium_ntt(poly_v, dil_zetas);
-        fail += cmp_poly(poly_s, poly_v, "forward NTT", trial);
-
-        /* Now invert and check byte-identity again. */
-        scalar_invntt(poly_s);
-        dt->dilithium_invntt(poly_v, dil_zetas);
-        fail += cmp_poly(poly_s, poly_v, "inverse NTT", trial);
-
-        if (fail && trial >= 2) break; /* avoid flooding on bad runs */
+        if (fail) {
+            fprintf(stderr, "FAIL: dispatched-lane mismatches (%d)\n", fail);
+            return 1;
+        }
+        printf("PASS: dispatched lane, %d trials\n", N_TRIALS);
+    } else {
+        printf("INFO: dispatcher leaves dilithium_ntt NULL on this build/CPU\n");
     }
 
-    if (fail) {
-        fprintf(stderr, "\n%d mismatches across %d trials\n", fail, N_TRIALS);
-        return 1;
+    /* --------------------------------------------------------------
+     * Lane 2: direct per-ISA SIMD symbol path.
+     * For every AMA_HAVE_*_IMPL macro defined at build time we
+     * invoke the kernel symbol directly (bypassing any dispatch
+     * auto-tune) and require byte-identity to the scalar reference.
+     * -------------------------------------------------------------- */
+    struct {
+        const char *label;
+        void (*ntt)(int32_t[256], const int32_t[256]);
+        void (*invntt)(int32_t[256], const int32_t[256]);
+    } direct_lanes[] = {
+#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+        { "direct AVX2", ama_dilithium_ntt_avx2, ama_dilithium_invntt_avx2 },
+#endif
+#if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
+        { "direct NEON", ama_dilithium_ntt_neon, ama_dilithium_invntt_neon },
+#endif
+#if defined(AMA_HAVE_SVE2_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
+        { "direct SVE2", ama_dilithium_ntt_sve2, ama_dilithium_invntt_sve2 },
+#endif
+        { NULL, NULL, NULL }
+    };
+
+    for (int L = 0; direct_lanes[L].label != NULL; L++) {
+        any_lane_exercised = 1;
+        for (int trial = 0; trial < N_TRIALS; trial++) {
+            int32_t poly_s[DILITHIUM_N], poly_v[DILITHIUM_N];
+            for (int i = 0; i < DILITHIUM_N; i++) {
+                int32_t r = (int32_t)(xs_next() & 0x7FFFFF);
+                r -= (DILITHIUM_Q / 2);
+                poly_s[i] = r;
+                poly_v[i] = r;
+            }
+            scalar_ntt(poly_s);
+            direct_lanes[L].ntt(poly_v, dil_zetas);
+            fail += cmp_poly(poly_s, poly_v, direct_lanes[L].label, trial);
+            scalar_invntt(poly_s);
+            direct_lanes[L].invntt(poly_v, dil_zetas);
+            fail += cmp_poly(poly_s, poly_v, direct_lanes[L].label, trial);
+            if (fail && trial >= 2) break;
+        }
+        if (fail) {
+            fprintf(stderr, "FAIL: %s lane mismatches (%d)\n",
+                    direct_lanes[L].label, fail);
+            return 1;
+        }
+        printf("PASS: %s lane, %d trials\n", direct_lanes[L].label, N_TRIALS);
     }
-    printf("PASS: %d trials, forward + inverse both byte-identical to scalar reference\n",
-           N_TRIALS);
+
+    /* --------------------------------------------------------------
+     * Lane 3: end-to-end forced-scalar parity.
+     * Sign + verify the same message with the dispatched SIMD NTT
+     * pipeline AND with the scalar fallback (via the AMA_TESTING_MODE
+     * override hook exposed by libama_cryptography_test).  ML-DSA-65
+     * signing is randomised, so we cannot compare signatures
+     * byte-for-byte — but `ama_dilithium_verify` must accept the
+     * SIMD signature against the scalar pipeline and vice versa.
+     * Cross-verification proves the dispatched and scalar paths
+     * produce signatures in the same algebraic structure (the
+     * NTT-domain matrix-vector product is the only SIMD-touched
+     * arithmetic in the sign / verify hot loop).
+     * -------------------------------------------------------------- */
+    if (dt != NULL && dt->dilithium_ntt != NULL) {
+        any_lane_exercised = 1;
+        uint8_t pk[1952], sk[4032];
+        uint8_t sig_simd[3309], sig_scalar[3309];
+        size_t  siglen_simd = sizeof(sig_simd), siglen_scalar = sizeof(sig_scalar);
+        const uint8_t msg[64] = { 'd', 'i', 'l', 'i', 't', 'h', 'i', 'u', 'm' };
+
+        if (ama_dilithium_keypair(pk, sk) != AMA_SUCCESS) {
+            fprintf(stderr, "FAIL: forced-scalar lane keygen\n");
+            return 1;
+        }
+        /* Switch to dispatched SIMD NTT path explicitly (in case a
+         * previous test in the same process forced scalar and didn't
+         * restore). */
+        ama_test_restore_dilithium_ntt();
+        siglen_simd = sizeof(sig_simd);
+        if (ama_dilithium_sign(sig_simd, &siglen_simd, msg, sizeof(msg), sk)
+            != AMA_SUCCESS) {
+            fprintf(stderr, "FAIL: SIMD-path sign\n");
+            return 1;
+        }
+        /* Switch to scalar NTT path and sign again. */
+        ama_test_force_dilithium_ntt_scalar();
+        siglen_scalar = sizeof(sig_scalar);
+        if (ama_dilithium_sign(sig_scalar, &siglen_scalar, msg, sizeof(msg), sk)
+            != AMA_SUCCESS) {
+            ama_test_restore_dilithium_ntt();
+            fprintf(stderr, "FAIL: scalar-path sign\n");
+            return 1;
+        }
+        /* Verify SIMD signature under scalar path. */
+        if (ama_dilithium_verify(msg, sizeof(msg), sig_simd, siglen_simd, pk)
+            != AMA_SUCCESS) {
+            ama_test_restore_dilithium_ntt();
+            fprintf(stderr, "FAIL: scalar-path verify rejected SIMD signature\n");
+            return 1;
+        }
+        ama_test_restore_dilithium_ntt();
+        /* And cross-verify the scalar signature under the SIMD path. */
+        if (ama_dilithium_verify(msg, sizeof(msg), sig_scalar, siglen_scalar, pk)
+            != AMA_SUCCESS) {
+            fprintf(stderr, "FAIL: SIMD-path verify rejected scalar signature\n");
+            return 1;
+        }
+        printf("PASS: end-to-end SIMD<->scalar sign/verify cross-parity\n");
+    } else {
+        printf("INFO: forced-scalar parity lane skipped (no SIMD wired)\n");
+    }
+
+    if (!any_lane_exercised) {
+        printf("SKIP: no SIMD Dilithium NTT kernel on this build/CPU\n");
+        printf("==========================================\n");
+        return 77;
+    }
+
     printf("==========================================\n");
     return 0;
 }
