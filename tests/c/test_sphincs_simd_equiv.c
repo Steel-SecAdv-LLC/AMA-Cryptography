@@ -18,31 +18,38 @@
  *      backends.  This is the only production code path that
  *      transitively exercises SIMD inside SLH-DSA/SPHINCS+.
  *
- *   2. **SPHINCS+ AVX2 / NEON `wots_chain` helper vs scalar
- *      SHA-256**.  These are the standalone SIMD helpers shipped
- *      alongside the production SPHINCS+-256f scalar pipeline.
- *      They are not on the production call path today, but they
- *      ship in the build, document the SIMD intent for a future
- *      wiring, and need parity coverage so that wiring is safe.
+ *   2. **SPHINCS+ AVX2 `wots_chain` helper vs scalar SHA-256**.
+ *      `ama_sphincs_wots_chain_avx2` ships in the build alongside
+ *      the production SPHINCS+-256f scalar pipeline.  It is NOT on
+ *      the production call path today (see `slh_wots_chain` in
+ *      `src/c/ama_slhdsa.c` — it loops scalar SHA-256 step-by-step
+ *      and never dispatches to the SIMD helper), but it is shipped,
+ *      documents the SIMD intent for a future wiring, and needs
+ *      parity coverage so that wiring is safe.
  *
- *      Compares `ama_sphincs_wots_chain_{avx2,neon}` against an
- *      inlined scalar SHA-256 implementation (FIPS 180-4) executed
- *      with the exact same block-build / chaining pattern.  This
- *      is byte-identity, not algebraic equivalence — a mismatch
- *      means a SIMD regression that would silently corrupt WOTS+
- *      chains the moment the helper is wired in.
+ *      Compares the AVX2 helper against an inlined scalar SHA-256
+ *      implementation (FIPS 180-4) executed with the exact same
+ *      block-build / chaining pattern.  This is byte-identity, not
+ *      algebraic equivalence — a mismatch means a SIMD regression
+ *      that would silently corrupt WOTS+ chains the moment the
+ *      helper is wired in.
  *
  *      The AVX2 helper is `extern` (not `static`) so this test can
  *      reach it (see src/c/avx2/ama_sphincs_avx2.c).  The NEON
- *      helper has always been externally linkable.
+ *      `wots_chain` lane was previously pinned here too, but has
+ *      been deliberately retired — see the explanatory comment block
+ *      inside `run_wots_chain_parity` for the full rationale.
  *
  * SKIP semantics:
  *   - Lane 1 SKIPs (informational) when the dispatched Keccak
  *     pointer is already the scalar reference (no SIMD Keccak built
  *     in — comparison is tautological) or when SLH-DSA is not
  *     present in the build.
- *   - Lane 2 SKIPs each helper independently when its
- *     `AMA_HAVE_*_IMPL` macro is not defined.
+ *   - Lane 2 SKIPs the AVX2 sub-lane when `AMA_HAVE_AVX2_IMPL` is
+ *     not defined at build time OR when the runtime CPU lacks AVX2
+ *     (`ama_has_avx2()` returns 0) — calling the AVX2 entry point
+ *     without that runtime check would SIGILL on a non-AVX2 CPU
+ *     even though the production dispatcher would safely fall back.
  *   - Returns code 77 if no lane was exercised; 0 on success; 1 on
  *     mismatch.
  */
@@ -52,6 +59,7 @@
 #include <string.h>
 
 #include "ama_cryptography.h"
+#include "ama_cpuid.h"
 #include "ama_dispatch.h"
 
 extern void ama_keccak_f1600_generic(uint64_t state[25]);
@@ -73,17 +81,24 @@ extern void ama_sphincs_wots_chain_avx2(uint8_t *out, const uint8_t *in,
  * built into the library; this test simply no longer pins it.) */
 
 /* --------------------------------------------------------------
- * Scalar reference for the SPHINCS+ `wots_chain` helper.
+ * Scalar reference for the SPHINCS+ AVX2 `wots_chain` helper.
  *
- * Mirrors the block construction used by both the AVX2 and NEON
- * helpers in src/c/{avx2,neon}/ama_sphincs_{avx2,neon}.c: each step
- * builds a 64-byte SHA-256 block as [chain-value || addr[0] ||
- * addr[6]] padded with zeros, then runs a single FIPS 180-4 SHA-256
- * compression seeded with the standard IV.  No padding bytes are
- * appended (the helpers' write pattern is non-spec — they emit only
- * a single compression per step, matching the helpers byte-for-byte
- * which is what this test pins).  `pub_seed` is unused, consistent
- * with the helpers; suppressing via `(void)pub_seed`.
+ * Mirrors the block construction used by the AVX2 helper in
+ * `src/c/avx2/ama_sphincs_avx2.c`: each step builds a 64-byte SHA-256
+ * block as [chain-value || addr[0] || addr[6]] padded with zeros,
+ * then runs a single FIPS 180-4 SHA-256 compression seeded with the
+ * standard IV.  No padding bytes are appended (the helper's write
+ * pattern is non-spec — it emits only a single compression per step,
+ * matching the helper byte-for-byte which is what this test pins).
+ * `pub_seed` is unused, consistent with the helper; suppressed via
+ * `(void)pub_seed`.
+ *
+ * Note: the NEON helper in `src/c/neon/ama_sphincs_neon.c` uses a
+ * different block-build pattern (writes only `addr[0]` into the
+ * block, never `addr[6]`).  This scalar reference does NOT mirror
+ * the NEON pattern — when the NEON `wots_chain` lane was pinned
+ * here it used a separate `scalar_wots_chain_no_hash_addr`
+ * reference, which was removed alongside the NEON lane itself.
  * -------------------------------------------------------------- */
 static const uint32_t SHA256_K[64] = {
     0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,
@@ -279,7 +294,17 @@ static int run_wots_chain_parity(int *exercised) {
 
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
     built_any = 1;
-    {
+    /* Runtime ISA gate: the AVX2 helper compiles into the binary
+     * whenever `AMA_HAVE_AVX2_IMPL` is set at build time, but calling
+     * it on a CPU that lacks AVX2 (older x86-64, qemu-user without
+     * `-cpu max`, sandboxed runners) executes a VEX-encoded
+     * instruction and SIGILLs.  The production dispatcher CPUID-gates
+     * around exactly this case (see `dispatch_init_internal`); the
+     * direct-symbol test path must do the same gating itself. */
+    if (!ama_has_avx2()) {
+        printf("  INFO: ama_sphincs_wots_chain_avx2 built in but "
+               "runtime CPU lacks AVX2 — skipping direct-symbol lane\n");
+    } else {
         const size_t n = 32;  /* SPHINCS+-256f hash length */
         uint8_t in[32], out_simd[32], out_scal[32];
         uint8_t pub_seed[32] = {0};

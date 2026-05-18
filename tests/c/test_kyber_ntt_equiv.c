@@ -3,20 +3,37 @@
  * Licensed under the Apache License, Version 2.0
  *
  * @file test_kyber_ntt_equiv.c
- * @brief Byte-equivalence test for the dispatched ML-KEM-1024 NTT /
- *        inverse NTT (ama_kyber_ntt_avx2 / invntt_avx2 on x86-64,
- *        ama_kyber_ntt_neon / invntt_neon on AArch64, NULL otherwise)
- *        against the scalar reference lifted from
+ * @brief Multi-lane equivalence test for the ML-KEM-1024 NTT /
+ *        inverse NTT against the scalar reference lifted from
  *        ``poly_ntt`` / ``poly_invntt`` in ``src/c/ama_kyber.c``.
  *
- * Same routing pattern as ``test_dilithium_ntt_equiv.c``: goes through
- * ``ama_get_dispatch_table()->kyber_ntt`` rather than calling the AVX2
- * or NEON entry point directly, so the test:
- *   - Links on builds where AMA_HAVE_AVX2_IMPL / AMA_HAVE_NEON_IMPL
- *     is not defined.
- *   - Does not execute an AVX2 / NEON instruction on a CPU that lacks
- *     the corresponding ISA (CPUID-guarded by dispatch init).
- *   - Cleanly SKIPs when the dispatcher leaves the pointer NULL.
+ * Same multi-lane structure as ``test_dilithium_ntt_equiv.c`` — pins
+ * three independent surfaces in a single test process so a regression
+ * in any one of them is localised to a labelled trial:
+ *
+ *   1. **Dispatched-pointer path** — goes through
+ *      ``ama_get_dispatch_table()->kyber_ntt`` (whichever SIMD kernel
+ *      the auto-tune selected at init: AVX2 on x86-64+AVX2, NEON on
+ *      AArch64, SVE2 on ARMv9+SVE2; ``NULL`` on a scalar build, in
+ *      which case this lane logs INFO and continues).
+ *   2. **Direct per-ISA SIMD-symbol path** — for every
+ *      ``AMA_HAVE_*_IMPL`` macro defined at build time, references
+ *      the kernel symbol directly (bypassing the dispatcher's
+ *      auto-tune, which on noisy hosts can demote SIMD back to
+ *      generic).  Each direct lane is **runtime ISA-gated**: AVX2
+ *      and SVE2 are checked via ``ama_has_avx2()`` /
+ *      ``ama_has_arm_sve2()`` and skipped on CPUs that lack the
+ *      ISA (calling them anyway would SIGILL); NEON is part of the
+ *      AArch64 ABI baseline and always runs.
+ *   3. **Forced-scalar parity** — flips the production
+ *      ``ama_kyber_encaps`` / ``ama_kyber_decaps`` pipeline onto
+ *      the scalar fallback via the ``AMA_TESTING_MODE``
+ *      ``ama_test_force_kyber_ntt_scalar()`` hook and cross-verifies
+ *      the encap'd ciphertext / shared-secret pair against the
+ *      dispatched SIMD path.
+ *
+ * SKIP semantics: the test exits with code 77 only if NONE of the
+ * three lanes was exercised (truly scalar build on a scalar runtime).
  *
  * If this test fails, the dispatched Kyber NTT diverges from the
  * scalar baseline used inside ``poly_ntt`` — every ML-KEM-1024
@@ -29,6 +46,7 @@
 #include <string.h>
 
 #include "ama_cryptography.h"
+#include "ama_cpuid.h"
 #include "ama_dispatch.h"
 
 /* Direct-symbol forward declarations for the per-ISA NTT kernels.
@@ -222,25 +240,40 @@ int main(void) {
 
     /* --------------------------------------------------------------
      * Lane 2: direct per-ISA SIMD symbol path.
+     *
+     * Runtime ISA gating: each direct lane carries a `has` predicate.
+     * AVX2 and SVE2 ship as build artifacts whenever their
+     * `AMA_HAVE_*_IMPL` macros are set, but executing those entry
+     * points on a CPU that lacks the ISA SIGILLs (the production
+     * dispatcher CPUID-gates around this case in
+     * `dispatch_init_internal`).  NEON is part of the AArch64 ABI
+     * baseline and always runs.
      * -------------------------------------------------------------- */
-    struct {
+    struct direct_lane {
         const char *label;
         void (*ntt)(int16_t[256], const int16_t[128]);
         void (*invntt)(int16_t[256], const int16_t[128]);
-    } direct_lanes[] = {
+        int (*has)(void);  /* NULL = always present (ABI baseline). */
+    };
+    struct direct_lane direct_lanes[] = {
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
-        { "direct AVX2", ama_kyber_ntt_avx2, ama_kyber_invntt_avx2 },
+        { "direct AVX2", ama_kyber_ntt_avx2, ama_kyber_invntt_avx2, ama_has_avx2 },
 #endif
 #if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
-        { "direct NEON", ama_kyber_ntt_neon, ama_kyber_invntt_neon },
+        { "direct NEON", ama_kyber_ntt_neon, ama_kyber_invntt_neon, NULL },
 #endif
 #if defined(AMA_HAVE_SVE2_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
-        { "direct SVE2", ama_kyber_ntt_sve2, ama_kyber_invntt_sve2 },
+        { "direct SVE2", ama_kyber_ntt_sve2, ama_kyber_invntt_sve2, ama_has_arm_sve2 },
 #endif
-        { NULL, NULL, NULL }
+        { NULL, NULL, NULL, NULL }
     };
 
     for (int L = 0; direct_lanes[L].label != NULL; L++) {
+        if (direct_lanes[L].has != NULL && !direct_lanes[L].has()) {
+            printf("INFO: %s lane skipped — kernel compiled in but "
+                   "runtime CPU lacks the ISA\n", direct_lanes[L].label);
+            continue;
+        }
         any_lane_exercised = 1;
         for (int trial = 0; trial < N_TRIALS; trial++) {
             for (int i = 0; i < KYBER_N; i++) {

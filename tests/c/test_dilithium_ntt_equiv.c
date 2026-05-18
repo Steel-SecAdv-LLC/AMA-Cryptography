@@ -23,9 +23,14 @@
  *      (exposed only under `AMA_TESTING_MODE`) to flip the production
  *      `ama_dilithium_sign` pipeline onto the scalar fallback for one
  *      full sign/verify cycle, then back onto the dispatched SIMD
- *      kernel for another cycle on the same (key, message), and
- *      asserts byte-identical signatures.  Catches dispatch
- *      misroutes that only surface end-to-end.
+ *      kernel for another cycle on the same (key, message).  ML-DSA-65
+ *      signing is randomised (FIPS 204 §4.2 sampling) so the two
+ *      signature bytes will NOT match — instead the test cross-verifies
+ *      each signature under the OTHER backend's verify path.  That
+ *      catches dispatch misroutes that only surface end-to-end (a
+ *      forward-NTT regression would break the algebraic structure of
+ *      the signature, and `ama_dilithium_verify` would reject it
+ *      regardless of which backend is active).
  *
  * Rationale: the AVX2 / NEON / SVE2 paths restructure the eight NTT
  * layers into merged register-resident blocks; correctness must
@@ -40,6 +45,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "ama_cryptography.h"
+#include "ama_cpuid.h"
 #include "ama_dispatch.h"
 
 /* Direct-symbol declarations for the per-ISA NTT kernels.  Guarded by
@@ -226,25 +232,41 @@ int main(void) {
      * For every AMA_HAVE_*_IMPL macro defined at build time we
      * invoke the kernel symbol directly (bypassing any dispatch
      * auto-tune) and require byte-identity to the scalar reference.
+     *
+     * Runtime ISA gating: each direct lane carries a `has` predicate.
+     * AVX2 and SVE2 ship as build artifacts whenever their
+     * `AMA_HAVE_*_IMPL` macros are set, but executing those entry
+     * points on a CPU that lacks the ISA SIGILLs (the production
+     * dispatcher would CPUID-gate around exactly this case in
+     * `dispatch_init_internal`).  NEON is part of the AArch64 ABI
+     * baseline and is always present when `__aarch64__` is defined,
+     * so its predicate is `NULL` and the lane runs unconditionally.
      * -------------------------------------------------------------- */
-    struct {
+    struct direct_lane {
         const char *label;
         void (*ntt)(int32_t[256], const int32_t[256]);
         void (*invntt)(int32_t[256], const int32_t[256]);
-    } direct_lanes[] = {
+        int (*has)(void);  /* NULL = always present (ABI baseline). */
+    };
+    struct direct_lane direct_lanes[] = {
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
-        { "direct AVX2", ama_dilithium_ntt_avx2, ama_dilithium_invntt_avx2 },
+        { "direct AVX2", ama_dilithium_ntt_avx2, ama_dilithium_invntt_avx2, ama_has_avx2 },
 #endif
 #if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
-        { "direct NEON", ama_dilithium_ntt_neon, ama_dilithium_invntt_neon },
+        { "direct NEON", ama_dilithium_ntt_neon, ama_dilithium_invntt_neon, NULL },
 #endif
 #if defined(AMA_HAVE_SVE2_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
-        { "direct SVE2", ama_dilithium_ntt_sve2, ama_dilithium_invntt_sve2 },
+        { "direct SVE2", ama_dilithium_ntt_sve2, ama_dilithium_invntt_sve2, ama_has_arm_sve2 },
 #endif
-        { NULL, NULL, NULL }
+        { NULL, NULL, NULL, NULL }
     };
 
     for (int L = 0; direct_lanes[L].label != NULL; L++) {
+        if (direct_lanes[L].has != NULL && !direct_lanes[L].has()) {
+            printf("INFO: %s lane skipped — kernel compiled in but "
+                   "runtime CPU lacks the ISA\n", direct_lanes[L].label);
+            continue;
+        }
         any_lane_exercised = 1;
         for (int trial = 0; trial < N_TRIALS; trial++) {
             int32_t poly_s[DILITHIUM_N], poly_v[DILITHIUM_N];
