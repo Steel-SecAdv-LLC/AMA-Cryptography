@@ -1,0 +1,17 @@
+ README.md                                    |   17 +-
+ benchmarks/README.md                         |   62 +-
+ benchmarks/benchmark_c_raw.c                 |  443 +-
+ benchmarks/charts/c_vs_python.svg            |  355 +-
+ benchmarks/charts/kem_performance.svg        |   48 +-
+ benchmarks/charts/layer_breakdown.svg        |    4 +-
+ benchmarks/charts/pqc_benchmark_overview.svg | 5575 ++++++++++++++++++++++++++
+ benchmarks/charts/scalability.svg            |  136 +-
+ benchmarks/charts/signature_performance.svg  | 1037 +++--
+ benchmarks/generate_charts.py                |  215 +
+ docs/BENCHMARK_HISTORY.md                    |   50 +
+ include/ama_cryptography.h                   |   63 +
+ pyproject.toml                               |    3 +-
+ src/c/ama_dilithium.c                        |   40 +
+ src/c/ama_x25519.c                           |   54 +-
+ wiki/Performance-Benchmarks.md               |   36 +-
+ 16 files changed, 7359 insertions(+), 779 deletions(-)

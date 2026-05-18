@@ -1,0 +1,16 @@
+README.md
+benchmarks/README.md
+benchmarks/benchmark_c_raw.c
+benchmarks/charts/c_vs_python.svg
+benchmarks/charts/kem_performance.svg
+benchmarks/charts/layer_breakdown.svg
+benchmarks/charts/pqc_benchmark_overview.svg
+benchmarks/charts/scalability.svg
+benchmarks/charts/signature_performance.svg
+benchmarks/generate_charts.py
+docs/BENCHMARK_HISTORY.md
+include/ama_cryptography.h
+pyproject.toml
+src/c/ama_dilithium.c
+src/c/ama_x25519.c
+wiki/Performance-Benchmarks.md
