@@ -59,8 +59,8 @@ make -C benchmarks benchmark_c_raw
 | Hash | SHA3-256 (32B, 1KB), SHA3-512 (32B, 1KB) |
 | MAC | HMAC-SHA3-256 (32B, 1KB) |
 | KDF | HKDF-SHA3-256 (96B output) |
-| Signatures (classical) | Ed25519 (keygen/sign/verify, plus Shamir wNAF double-scalar-mult), SLH-DSA-SHAKE-128s (FIPS 205 L1 keygen/sign/verify) |
-| Signatures (PQC) | ML-DSA-65 (keygen/sign/verify); ML-DSA-65 NTT / invNTT kernel isolation (scalar vs dispatched) |
+| Signatures (classical) | Ed25519 (keygen/sign/verify, plus Shamir wNAF double-scalar-mult) |
+| Signatures (PQC) | ML-DSA-65 (keygen/sign/verify); ML-DSA-65 NTT / invNTT kernel isolation (scalar vs dispatched); SLH-DSA-SHAKE-128s (FIPS 205 L1 keygen/sign/verify) |
 | KEM | ML-KEM-1024 (keygen/encaps/decaps); ML-KEM-1024 poly add/sub/reduce kernels (scalar vs dispatched) |
 | AEAD | AES-256-GCM (1KB/4KB/16KB/64KB enc+dec), ChaCha20-Poly1305 (256B/1KB/4KB/64KB) |
 | Password hashing | Argon2id (m=64 KiB, m=1 MiB) |

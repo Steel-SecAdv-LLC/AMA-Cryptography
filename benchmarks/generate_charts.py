@@ -444,7 +444,12 @@ def generate_charts(output_dir: str) -> None:
     plt.close()
     print(f"  Created {output_dir}/scalability.svg")
 
-    # -- Chart 6: X25519 fe64 MULX/ADX kernel on-vs-off ----------------------
+    # -- Chart 6: PQC + kernel benchmark overview collage (2x2) ---------------
+    # Single combined figure replacing what used to be four standalone SVGs
+    # (x25519_mulx_kernel, dilithium_ntt_kernel, pqc_sign_latency,
+    # frost_2of3). One artifact = one piece of truth; the underlying
+    # numbers are not duplicated across multiple checked-in SVGs.
+
     # Live-data override: pick up `X25519 DH (MULX off)` / `(MULX on)` rows
     # from a raw-C harness JSON file if it sits alongside benchmark_results.
     mulx_rows = dict(X25519_MULX)
@@ -461,15 +466,29 @@ def generate_charts(output_dir: str) -> None:
                     mulx_rows["MULX on (BMI2+ADX kernel)"]["ops_sec"] = entry["ops_per_sec"]
                     mulx_rows["MULX on (BMI2+ADX kernel)"]["latency_us"] = entry["mean_us"]
         except (json.JSONDecodeError, KeyError, TypeError):
+            # Live-data override is best-effort: a malformed or partial
+            # benchmark_c_raw_results.json file should not break chart
+            # generation. Fall back to the anchored sandbox numbers in
+            # X25519_MULX (already loaded into `mulx_rows` above).
             pass
 
-    fig, ax = plt.subplots(figsize=(9, 5))
+    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+    fig.suptitle(
+        "PQC + Kernel Benchmark Overview — 2026-05 coverage expansion",
+        fontsize=15,
+        fontweight="bold",
+        color=TEXT_COLOR,
+        y=0.995,
+    )
+
+    # Panel (0,0): X25519 fe64 MULX/ADX kernel on-vs-off
+    ax = axes[0, 0]
     mulx_names = list(mulx_rows.keys())
     mulx_vals = [mulx_rows[n]["ops_sec"] for n in mulx_names]
     mulx_lats = [mulx_rows[n]["latency_us"] for n in mulx_names]
     bars = ax.bar(mulx_names, mulx_vals, color=["#ff6b6b", "#00d2ff"], edgecolor="none", width=0.5)
-    ax.set_ylabel("Operations/sec", fontsize=11)
-    ax.set_title("X25519 fe64 MULX/ADX Kernel — On vs Off", fontsize=14, fontweight="bold", pad=12)
+    ax.set_ylabel("Operations/sec", fontsize=10)
+    ax.set_title("X25519 fe64 MULX/ADX Kernel — On vs Off", fontsize=12, fontweight="bold", pad=8)
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
     for bar, val, lat in zip(bars, mulx_vals, mulx_lats):
         ax.text(
@@ -477,7 +496,7 @@ def generate_charts(output_dir: str) -> None:
             bar.get_height() + max(mulx_vals) * 0.02,
             f"{val:,.0f} ops/s\n({lat:.2f} µs)",
             ha="center",
-            fontsize=9,
+            fontsize=8,
             color=TEXT_COLOR,
         )
     if mulx_vals[0] > 0:
@@ -485,91 +504,78 @@ def generate_charts(output_dir: str) -> None:
         ax.text(
             0.98,
             0.02,
-            f"Kernel speedup: {speedup:.2f}× | Byte-identical to pure-C fe64 "
-            "(tests/c/test_x25519_fe64_mulx_equiv.c)",
+            f"Kernel speedup: {speedup:.2f}×",
             transform=ax.transAxes,
             ha="right",
             fontsize=8,
-            color="#666666",
+            color="#888888",
             style="italic",
         )
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "x25519_mulx_kernel.svg"), format="svg")
-    plt.close()
-    print(f"  Created {output_dir}/x25519_mulx_kernel.svg")
 
-    # -- Chart 7: Dilithium NTT / invNTT scalar vs dispatched ----------------
-    fig, ax = plt.subplots(figsize=(9, 5))
+    # Panel (0,1): Dilithium NTT / invNTT scalar vs dispatched
+    ax = axes[0, 1]
     ntt_names = list(DILITHIUM_NTT.keys())
     ntt_vals = [DILITHIUM_NTT[n]["ops_sec"] for n in ntt_names]
     ntt_colors = ["#ff6b6b", "#00d2ff", "#ff922b", "#6bcb77"]
     bars = ax.bar(ntt_names, ntt_vals, color=ntt_colors, edgecolor="none", width=0.55)
-    ax.set_ylabel("Operations/sec", fontsize=11)
+    ax.set_ylabel("Operations/sec", fontsize=10)
     ax.set_title(
-        "ML-DSA-65 NTT / invNTT — Scalar vs Dispatched", fontsize=14, fontweight="bold", pad=12
+        "ML-DSA-65 NTT / invNTT — Scalar vs Dispatched", fontsize=12, fontweight="bold", pad=8
     )
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+    ax.tick_params(axis="x", labelsize=8)
     for bar, val in zip(bars, ntt_vals):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
             bar.get_height() + max(ntt_vals) * 0.02,
-            f"{val:,.0f} ops/s",
+            f"{val:,.0f}",
             ha="center",
-            fontsize=9,
+            fontsize=8,
             color=TEXT_COLOR,
         )
     ax.text(
         0.98,
         0.02,
-        "Isolated via ama_dilithium_{ntt,invntt}_bench() — "
-        "AVX2/NEON/SVE2/AVX-512 when wired and runtime-gated.",
+        "Isolated via ama_dilithium_{ntt,invntt}_bench()",
         transform=ax.transAxes,
         ha="right",
         fontsize=8,
-        color="#666666",
+        color="#888888",
         style="italic",
     )
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "dilithium_ntt_kernel.svg"), format="svg")
-    plt.close()
-    print(f"  Created {output_dir}/dilithium_ntt_kernel.svg")
 
-    # -- Chart 8: PQC Sign Latency (log-scale) ------------------------------
-    fig, ax = plt.subplots(figsize=(9, 5))
+    # Panel (1,0): PQC Sign Latency (log scale)
+    ax = axes[1, 0]
     pqc_names = list(PQC_SIGN_LATENCY.keys())
     pqc_lats = [PQC_SIGN_LATENCY[n]["latency_ms"] for n in pqc_names]
     bars = ax.barh(
         pqc_names, pqc_lats, color=["#00d2ff", "#7b2ff7", "#ff6b6b"], edgecolor="none", height=0.5
     )
-    ax.set_xlabel("Sign latency (ms, log scale)", fontsize=11)
+    ax.set_xlabel("Sign latency (ms, log scale)", fontsize=10)
     ax.set_xscale("log")
-    ax.set_title("Signature Family — Sign Latency (log)", fontsize=14, fontweight="bold", pad=12)
+    ax.set_title("Signature Family — Sign Latency (log)", fontsize=12, fontweight="bold", pad=8)
     for bar, lat in zip(bars, pqc_lats):
         ax.text(
             bar.get_width() * 1.05,
             bar.get_y() + bar.get_height() / 2,
             f"{lat:,.3f} ms" if lat < 100 else f"{lat:,.1f} ms",
             va="center",
-            fontsize=9,
+            fontsize=8,
             color=TEXT_COLOR,
         )
     ax.text(
         0.98,
         0.02,
-        "Ed25519: RFC 8032 | ML-DSA-65: FIPS 204 | SLH-DSA-SHAKE-128s: FIPS 205 L1",
+        "Ed25519: RFC 8032 | ML-DSA-65: FIPS 204 | SLH-DSA: FIPS 205 L1",
         transform=ax.transAxes,
         ha="right",
         fontsize=8,
-        color="#666666",
+        color="#888888",
         style="italic",
     )
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "pqc_sign_latency.svg"), format="svg")
-    plt.close()
-    print(f"  Created {output_dir}/pqc_sign_latency.svg")
 
-    # -- Chart 9: FROST 2-of-3 per-role cost --------------------------------
-    fig, ax = plt.subplots(figsize=(9, 5))
+    # Panel (1,1): FROST 2-of-3 (RFC 9591) per-role cost
+    ax = axes[1, 1]
     frost_names = list(FROST_OPS.keys())
     frost_vals = [FROST_OPS[n]["ops_sec"] for n in frost_names]
     frost_lats = [FROST_OPS[n]["latency_us"] for n in frost_names]
@@ -580,8 +586,8 @@ def generate_charts(output_dir: str) -> None:
         edgecolor="none",
         width=0.5,
     )
-    ax.set_ylabel("Operations/sec", fontsize=11)
-    ax.set_title("FROST 2-of-3 (RFC 9591) — Per-Role Cost", fontsize=14, fontweight="bold", pad=12)
+    ax.set_ylabel("Operations/sec", fontsize=10)
+    ax.set_title("FROST 2-of-3 (RFC 9591) — Per-Role Cost", fontsize=12, fontweight="bold", pad=8)
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
     for bar, val, lat in zip(bars, frost_vals, frost_lats):
         ax.text(
@@ -589,24 +595,24 @@ def generate_charts(output_dir: str) -> None:
             bar.get_height() + max(frost_vals) * 0.02,
             f"{val:,.0f} ops/s\n({lat:.1f} µs)",
             ha="center",
-            fontsize=9,
+            fontsize=8,
             color=TEXT_COLOR,
         )
     ax.text(
         0.98,
         0.02,
-        "Round1: nonce commitment | Round2: signature share | "
-        "Aggregate: Ed25519-compatible 64-byte signature",
+        "Round1 commit | Round2 sign | Aggregate (Ed25519-compatible)",
         transform=ax.transAxes,
         ha="right",
         fontsize=8,
-        color="#666666",
+        color="#888888",
         style="italic",
     )
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "frost_2of3.svg"), format="svg")
+
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    plt.savefig(os.path.join(output_dir, "pqc_benchmark_overview.svg"), format="svg")
     plt.close()
-    print(f"  Created {output_dir}/frost_2of3.svg")
+    print(f"  Created {output_dir}/pqc_benchmark_overview.svg (2x2 collage)")
 
     print(f"\nAll charts generated in {output_dir}/")
 

@@ -349,69 +349,28 @@ This library implements algorithms specified in FIPS 203 (ML-KEM), FIPS 204 (ML-
 ## Benchmark coverage map (2026-05)
 
 The raw-C harness (`build/bin/benchmark_c_raw`) was extended in 2026-05
-to close every gap called out in the May 2026 coverage review. Each gap
-maps to one or more explicit rows in the harness output (greppable in
-both `--csv` and `--json` modes):
+to close every gap called out in the May 2026 coverage review
+(MULX/ADX on-vs-off X25519, SLH-DSA-SHAKE-128s, secp256k1, FROST
+2-of-3, and ML-DSA-65 NTT/invNTT kernel isolation).
 
-| Coverage area                                       | Status   | Row(s) in harness                                                                 |
-|-----------------------------------------------------|----------|-----------------------------------------------------------------------------------|
-| X25519 batch-4 (no env gating)                      | ✅       | `X25519 DH Batch×4` (unconditional)                                              |
-| Argon2id                                            | ✅       | `Argon2id (m=64KiB,t=1)`, `Argon2id (m=1MiB,t=1)`                                |
-| Raw HKDF-SHA3-256                                   | ✅       | `HKDF-SHA3-256 (96B)`                                                            |
-| ML-KEM-1024 decapsulate                             | ✅       | `ML-KEM-1024 Decaps`                                                             |
-| MULX/ADX on-vs-off X25519 ratio                     | ✅ **(added 2026-05)** | `X25519 DH (MULX off)` / `X25519 DH (MULX on)`                  |
-| SLH-DSA / SPHINCS+ (FIPS 205)                       | ✅ **(added 2026-05)** | `SLH-DSA-SHAKE-128s KeyGen` / `Sign` / `Verify` (NIST L1)         |
-| secp256k1                                           | ✅ **(added 2026-05)** | `secp256k1 pubkey`                                                |
-| FROST (RFC 9591)                                    | ✅ **(added 2026-05)** | `FROST round1 commit` / `round2 sign` / `aggregate`               |
-| Dilithium NTT kernel isolation                      | ✅ **(added 2026-05)** | `ML-DSA-65 NTT (scalar)` / `NTT (dispatch)` / `invNTT (scalar)` / `invNTT (dispatch)` |
+To avoid duplicating numbers across the repo, the canonical references
+live in one place each — pick the right one for your question:
 
-### Kernel-isolation rows: why three scalar-vs-dispatch families
+- **Gap → row mapping** (which `benchmark_c_raw` rows close which
+  audit gaps): [`benchmarks/README.md`](../benchmarks/README.md)
+  *Benchmark coverage map (2026-05)*.
+- **Sample sandbox medians + full provenance** (one-off measurements
+  for sanity-checking only): [`docs/BENCHMARK_HISTORY.md`](../docs/BENCHMARK_HISTORY.md)
+  *2026-05: Benchmark coverage expansion*.
+- **Visual summary** (2×2 chart collage of the four new families):
+  [`benchmarks/charts/pqc_benchmark_overview.svg`](../benchmarks/charts/pqc_benchmark_overview.svg).
 
-Three families now emit paired `(scalar)` / `(dispatch)` rows so the
-per-kernel SIMD win is measurable directly, instead of being folded
-into an end-to-end primitive cost:
-
-| Family                       | Why isolated                                                                                     |
-|------------------------------|--------------------------------------------------------------------------------------------------|
-| ML-DSA-65 NTT / invNTT       | End-to-end sign/verify is dominated by sampling and rejection; NTT speedups disappear in noise.  |
-| ML-KEM-1024 poly_{add,sub,reduce} | SVE2 win (where present) is sub-microsecond per call — too small to measure inside encaps.    |
-| X25519 DH (MULX off / on)    | Both paths produce byte-identical output, so the CPUID-gated kernel speedup is the only signal. |
-
-Enabled by three benchmark/test-only entry points documented in
-`include/ama_cryptography.h`:
-
-- `ama_dilithium_ntt_bench(int32_t poly[256], int use_dispatch)`
-- `ama_dilithium_invntt_bench(int32_t poly[256], int use_dispatch)`
-- `ama_x25519_set_mulx_override(int mode)` (`-1` = auto, `0` = force off, `1` = force on)
-
-These entry points are explicitly **not part of the production
-crypto surface** — they exist so a single shipped binary can produce
-paired rows without per-row rebuilds. Production callers continue to
-go through `ama_dilithium_sign()` / `ama_dilithium_verify()` (FIPS 204
-§6.1 / §6.2) and `ama_x25519_key_exchange()` (RFC 7748).
-
-### Sample numbers (sandbox host)
-
-Linux x86-64, GCC, AVX2, ed25519-donna + ML-DSA AVX2 dispatched,
-MULX+ADX kernel available. Quoted for sanity-checking only — re-run on
-the deployment host before quoting externally:
-
-| Row                              | Median latency | Throughput                              |
-|----------------------------------|---------------:|-----------------------------------------|
-| X25519 DH (MULX off)             | ~75.1 µs       | ~13,300 ops/s                          |
-| X25519 DH (MULX on)              | ~51.5 µs       | ~19,400 ops/s (**~1.46× vs off**)      |
-| ML-DSA-65 NTT (scalar)           | ~1.26 µs       | ~796,000 ops/s                         |
-| ML-DSA-65 NTT (dispatch)         | ~1.04 µs       | ~965,000 ops/s (**~1.21× vs scalar**)  |
-| ML-DSA-65 invNTT (scalar)        | ~1.32 µs       | ~759,000 ops/s                         |
-| ML-DSA-65 invNTT (dispatch)      | ~1.11 µs       | ~898,000 ops/s (**~1.18× vs scalar**)  |
-| SLH-DSA-SHAKE-128s KeyGen        | ~164 ms        | ~6 ops/s                               |
-| SLH-DSA-SHAKE-128s Sign          | ~1.25 s        | ~1 op/s                                |
-| SLH-DSA-SHAKE-128s Verify        | ~1.15 ms       | ~870 ops/s                             |
-| secp256k1 pubkey                 | ~329 µs        | ~3,000 ops/s                           |
-| FROST round1 commit              | ~24.6 µs       | ~40,700 ops/s                          |
-| FROST round2 sign                | ~185 µs        | ~5,400 ops/s                           |
-| FROST aggregate                  | ~113 µs        | ~8,900 ops/s                           |
-
-Full provenance and the run procedure are catalogued in
-[`docs/BENCHMARK_HISTORY.md`](../docs/BENCHMARK_HISTORY.md) under
-"2026-05: Benchmark coverage expansion".
+The benchmark/test-only C entry points that enable the paired
+scalar-vs-dispatched and MULX on-vs-off rows
+(`ama_dilithium_ntt_bench`, `ama_dilithium_invntt_bench`,
+`ama_x25519_set_mulx_override`) are documented in
+[`include/ama_cryptography.h`](../include/ama_cryptography.h) and are
+explicitly **not part of the production crypto surface**. Production
+callers continue to go through `ama_dilithium_sign()` /
+`ama_dilithium_verify()` (FIPS 204 §6.1 / §6.2) and
+`ama_x25519_key_exchange()` (RFC 7748).

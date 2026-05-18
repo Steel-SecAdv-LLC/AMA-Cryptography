@@ -970,19 +970,36 @@ static void fill_random_int32_poly(int32_t a[256]) {
     }
 }
 
-static bench_result_t bench_dilithium_ntt(int iters, int warmup, int use_dispatch) {
-    int32_t poly[256];
+/* Pre-randomised ring of BENCH_INNER_LOOP independent input polynomials.
+ * Each inner-loop call below indexes into this ring so every NTT/invNTT
+ * call operates on a fresh, in-range polynomial rather than the
+ * compounding output of the previous (in-place) call. The ring is
+ * static (256 polys × 256 int32 × 4 B = 256 KiB) to keep stack pressure
+ * bounded and to mirror the kyber_poly_{add,sub,reduce} ring pattern
+ * earlier in this file. */
+static int32_t g_dil_ntt_ring[BENCH_INNER_LOOP][256];
 
+static void fill_dil_ntt_ring(void) {
+    for (int j = 0; j < BENCH_INNER_LOOP; j++)
+        fill_random_int32_poly(g_dil_ntt_ring[j]);
+}
+
+static bench_result_t bench_dilithium_ntt(int iters, int warmup, int use_dispatch) {
+    int32_t scratch[256];
+
+    fill_dil_ntt_ring();
     for (int i = 0; i < warmup; i++) {
-        fill_random_int32_poly(poly);
-        ama_dilithium_ntt_bench(poly, use_dispatch);
+        memcpy(scratch, g_dil_ntt_ring[i % BENCH_INNER_LOOP], sizeof(scratch));
+        ama_dilithium_ntt_bench(scratch, use_dispatch);
     }
 
     for (int i = 0; i < iters; i++) {
-        fill_random_int32_poly(poly);
+        /* Refresh the ring per outer iteration so the timed inner loop
+         * always begins from independent, never-transformed inputs. */
+        fill_dil_ntt_ring();
         double t0 = now_ns();
         for (int j = 0; j < BENCH_INNER_LOOP; j++) {
-            ama_dilithium_ntt_bench(poly, use_dispatch);
+            ama_dilithium_ntt_bench(g_dil_ntt_ring[j], use_dispatch);
         }
         g_samples[i] = (now_ns() - t0) / (double)BENCH_INNER_LOOP;
     }
@@ -995,18 +1012,19 @@ static bench_result_t bench_dilithium_ntt(int iters, int warmup, int use_dispatc
 }
 
 static bench_result_t bench_dilithium_invntt(int iters, int warmup, int use_dispatch) {
-    int32_t poly[256];
+    int32_t scratch[256];
 
+    fill_dil_ntt_ring();
     for (int i = 0; i < warmup; i++) {
-        fill_random_int32_poly(poly);
-        ama_dilithium_invntt_bench(poly, use_dispatch);
+        memcpy(scratch, g_dil_ntt_ring[i % BENCH_INNER_LOOP], sizeof(scratch));
+        ama_dilithium_invntt_bench(scratch, use_dispatch);
     }
 
     for (int i = 0; i < iters; i++) {
-        fill_random_int32_poly(poly);
+        fill_dil_ntt_ring();
         double t0 = now_ns();
         for (int j = 0; j < BENCH_INNER_LOOP; j++) {
-            ama_dilithium_invntt_bench(poly, use_dispatch);
+            ama_dilithium_invntt_bench(g_dil_ntt_ring[j], use_dispatch);
         }
         g_samples[i] = (now_ns() - t0) / (double)BENCH_INNER_LOOP;
     }
@@ -1027,11 +1045,22 @@ static bench_result_t bench_dilithium_invntt(int iters, int warmup, int use_disp
  *
  * Uses `iters_vslow` (50) at the call site because SLH-DSA-SHAKE-128s
  * sign is multi-millisecond on a modern core; pushing higher would
- * dominate the harness runtime without adding statistical precision. */
+ * dominate the harness runtime without adding statistical precision.
+ *
+ * Warmup is capped *locally* per call (see SLH_KEYGEN_WARMUP_MAX /
+ * SLH_SIGN_WARMUP_MAX / SLH_VERIFY_WARMUP_MAX below) so that the
+ * shared `--warmup N` flag (default 50) does not multiply against
+ * multi-millisecond keygen and seconds-long sign. Without these caps,
+ * 50 warmup signs alone burn ~60 s before measurement begins. */
+
+#define SLH_KEYGEN_WARMUP_MAX 3   /* ~164 ms each -> ~0.5 s warmup */
+#define SLH_SIGN_WARMUP_MAX   2   /* ~1.25 s each -> ~2.5 s warmup */
+#define SLH_VERIFY_WARMUP_MAX 10  /* ~1.15 ms each -> ~12 ms warmup */
 static bench_result_t bench_slhdsa_shake128s_keygen(int iters, int warmup) {
     uint8_t pk[AMA_SLHDSA_SHAKE_128S_PUBLIC_KEY_BYTES];
     uint8_t sk[AMA_SLHDSA_SHAKE_128S_SECRET_KEY_BYTES];
 
+    if (warmup > SLH_KEYGEN_WARMUP_MAX) warmup = SLH_KEYGEN_WARMUP_MAX;
     for (int i = 0; i < warmup; i++)
         ama_slhdsa_keygen(AMA_SLHDSA_SHAKE_128S, pk, sk);
 
@@ -1054,6 +1083,7 @@ static bench_result_t bench_slhdsa_shake128s_sign(int iters, int warmup) {
 
     ama_slhdsa_keygen(AMA_SLHDSA_SHAKE_128S, pk, sk);
 
+    if (warmup > SLH_SIGN_WARMUP_MAX) warmup = SLH_SIGN_WARMUP_MAX;
     for (int i = 0; i < warmup; i++) {
         sig_len = AMA_SLHDSA_SHAKE_128S_SIGNATURE_BYTES;
         ama_slhdsa_sign(AMA_SLHDSA_SHAKE_128S, sig, &sig_len,
@@ -1085,6 +1115,7 @@ static bench_result_t bench_slhdsa_shake128s_verify(int iters, int warmup) {
     ama_slhdsa_sign(AMA_SLHDSA_SHAKE_128S, sig, &sig_len,
                     msg, msg_len, NULL, 0, sk);
 
+    if (warmup > SLH_VERIFY_WARMUP_MAX) warmup = SLH_VERIFY_WARMUP_MAX;
     for (int i = 0; i < warmup; i++)
         ama_slhdsa_verify(AMA_SLHDSA_SHAKE_128S, sig, sig_len,
                           msg, msg_len, NULL, 0, pk);
