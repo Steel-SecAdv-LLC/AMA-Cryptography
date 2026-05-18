@@ -3,11 +3,21 @@
  * Licensed under the Apache License, Version 2.0
  *
  * @file ama_sha3_sve2.c
- * @brief ARM SVE2-optimized Keccak-f[1600] permutation and SHA-3
+ * @brief ARM SVE2-optimized Keccak-f[1600] permutation + SHA3-256 wrapper
  *
  * SVE2 (Scalable Vector Extension 2) for ARMv9 processors.
  * Uses scalable vectors that adapt to hardware vector length.
- * Provides Keccak-f[1600] and SHA3-256 with SVE2 acceleration.
+ *
+ * Wired surface (`src/c/dispatch/ama_dispatch.c`):
+ *   - `ama_keccak_f1600_sve2` — single-state permutation (line ~589).
+ *   - `ama_sha3_256_sve2`     — SHA3-256 wrapper (line ~590, this PR).
+ *
+ * The SHA3-256 wrapper reuses the wired Keccak permutation above; the
+ * only SVE2-specific work is the rate-block absorb (predicated XOR via
+ * `sveor_u64_x`).  Algorithmic correctness is straightforward (it is
+ * literally FIPS 202's sponge construction at rate=136, padding 0x06)
+ * and is pinned by every SHA3-256 KAT in the suite once the dispatch
+ * pointer is set.
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
@@ -102,10 +112,23 @@ void ama_keccak_f1600_sve2(uint64_t state[25]) {
 }
 
 /* ============================================================================
- * SVE2 SHA3-256
+ * SVE2 SHA3-256 — single-shot hash (no streaming API).
+ *
+ * FIPS 202 sponge: absorb `input` at rate=136 bytes, pad with 0x06 ||
+ * 0* || 0x80, run f1600 over the final block, squeeze 32 output bytes.
+ * The absorb XOR is the only SVE2-vectorised step (lane-predicated
+ * `svld1_u64` / `sveor_u64_x` pair over the rate-block lanes); the
+ * permutation reuses `ama_keccak_f1600_sve2` above.
+ *
+ * Signature matches `ama_sha3_256_fn` in `include/ama_dispatch.h`
+ * (returns `ama_error_t`) so the dispatcher can wire this function
+ * directly into `dispatch_table.sha3_256`.  Pinned by the existing
+ * SHA3-256 KATs at every layer (the FIPS 202 vectors flow through
+ * the dispatched `sha3_256` slot).
  * ============================================================================ */
-int ama_sha3_256_sve2(const uint8_t *input, size_t input_len, uint8_t output[32]) {
-    if (!input || !output) return -1;
+ama_error_t ama_sha3_256_sve2(const uint8_t *input, size_t input_len, uint8_t output[32]) {
+    if (!output) return AMA_ERROR_INVALID_PARAM;
+    if (!input && input_len > 0) return AMA_ERROR_INVALID_PARAM;
 
     uint64_t state[25];
     memset(state, 0, sizeof(state));
@@ -113,7 +136,7 @@ int ama_sha3_256_sve2(const uint8_t *input, size_t input_len, uint8_t output[32]
     size_t offset = 0;
 
     while (offset + rate <= input_len) {
-        /* Absorb using SVE2 XOR */
+        /* Absorb a full rate block using SVE2 lane-predicated XOR. */
         size_t lanes = rate / 8;
         size_t i = 0;
         while (i < lanes) {
@@ -131,7 +154,7 @@ int ama_sha3_256_sve2(const uint8_t *input, size_t input_len, uint8_t output[32]
         offset += rate;
     }
 
-    /* Final block with padding */
+    /* Final block with SHA-3 padding (0x06 marker + 0x80 sentinel). */
     uint8_t block[200];
     memset(block, 0, sizeof(block));
     size_t remaining = input_len - offset;
@@ -149,13 +172,12 @@ int ama_sha3_256_sve2(const uint8_t *input, size_t input_len, uint8_t output[32]
 
     memcpy(output, state, 32);
 
-    /* SECURITY FIX: Scrub Keccak state and padding block after use.
-     * Plain memset() can be optimized away by the compiler; use
-     * ama_secure_memzero() to guarantee zeroization (audit finding MEM-1). */
+    /* Scrub Keccak state and padding scratch buffer.  `ama_secure_memzero`
+     * is guaranteed not to be optimised away (audit finding MEM-1). */
     ama_secure_memzero(state, sizeof(state));
     ama_secure_memzero(block, sizeof(block));
 
-    return 0;
+    return AMA_SUCCESS;
 }
 
 #else

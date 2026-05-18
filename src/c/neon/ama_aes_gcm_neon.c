@@ -463,17 +463,18 @@ ama_error_t ama_aes256_gcm_decrypt_neon(
     uint8_t computed_tag_bytes[16];
     vst1q_u8(computed_tag_bytes, computed_tag);
 
-    if (ama_consttime_memcmp(computed_tag_bytes, tag, 16) != 0) {
-        ama_secure_memzero(rk, sizeof(rk));
-        ama_secure_memzero(&H, sizeof(H));
-        ama_secure_memzero(&enc_j0, sizeof(enc_j0));
-        ama_secure_memzero(computed_tag_bytes, sizeof(computed_tag_bytes));
-        return AMA_ERROR_VERIFY_FAILED;
-    }
+    /* Constant-time tag compare + unified post-verify control flow.
+     * See ama_aes_gcm_avx2.c for the rationale; closes the dudect
+     * leak at test_dudect.c::test_aes_gcm_tag_verify. */
+    int tag_match = (ama_consttime_memcmp(computed_tag_bytes, tag, 16) == 0);
+    size_t bound_mask = (size_t)0 - (size_t)tag_match;
+    size_t bounded_full      = full_blocks & bound_mask;
+    size_t bounded_remaining = remaining   & bound_mask;
 
-    /* Tag verified — decrypt via CTR mode (counter = 2 onward). */
+    /* CTR decryption (counter = 2 onward).  Loop bounds use
+     * `bounded_*` so a verify-fail call writes no plaintext. */
     uint32_t ctr = 2;
-    for (size_t i = 0; i < full_blocks; i++) {
+    for (size_t i = 0; i < bounded_full; i++) {
         uint8_t cb_buf[16];
         memcpy(cb_buf, nonce, 12);
         cb_buf[12] = (uint8_t)(ctr >> 24);
@@ -488,7 +489,7 @@ ama_error_t ama_aes256_gcm_decrypt_neon(
         uint8x16_t pt = veorq_u8(ks, ct);
         vst1q_u8(plaintext + i * 16, pt);
     }
-    if (remaining > 0) {
+    if (bounded_remaining > 0) {
         uint8_t cb_buf[16];
         memcpy(cb_buf, nonce, 12);
         cb_buf[12] = (uint8_t)(ctr >> 24);
@@ -499,11 +500,11 @@ ama_error_t ama_aes256_gcm_decrypt_neon(
         uint8x16_t cb = vld1q_u8(cb_buf);
         uint8x16_t ks = aes256_encrypt_block_neon(cb, rk);
         uint8_t pad_ct[16] = {0}, pad_pt[16] = {0};
-        memcpy(pad_ct, ciphertext + full_blocks * 16, remaining);
+        memcpy(pad_ct, ciphertext + full_blocks * 16, bounded_remaining);
         uint8x16_t ct = vld1q_u8(pad_ct);
         uint8x16_t pt = veorq_u8(ks, ct);
         vst1q_u8(pad_pt, pt);
-        memcpy(plaintext + full_blocks * 16, pad_pt, remaining);
+        memcpy(plaintext + full_blocks * 16, pad_pt, bounded_remaining);
         /* Scrub the over-allocated tail of pad_pt so partial-block
          * plaintext bytes do not leak past the caller's slice. */
         ama_secure_memzero(pad_pt, sizeof(pad_pt));
@@ -513,7 +514,7 @@ ama_error_t ama_aes256_gcm_decrypt_neon(
     ama_secure_memzero(&H, sizeof(H));
     ama_secure_memzero(&enc_j0, sizeof(enc_j0));
     ama_secure_memzero(computed_tag_bytes, sizeof(computed_tag_bytes));
-    return AMA_SUCCESS;
+    return tag_match ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
 }
 
 #else

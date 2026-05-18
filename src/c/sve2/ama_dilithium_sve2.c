@@ -41,47 +41,24 @@ static inline int32_t dil_montgomery_reduce_scalar(int64_t a) {
     return (int32_t)((a - (int64_t)t * DILITHIUM_Q) >> 32);
 }
 
-/* ============================================================================
- * SVE2 Barrett reduction for Dilithium
- * ============================================================================ */
-static inline svint32_t barrett_reduce_dil_sve2(svbool_t pg, svint32_t a) {
-    svint32_t q = svdup_n_s32(DILITHIUM_Q);
-    svint32_t t = svasr_n_s32_x(pg, a, 23);
-    t = svmul_s32_x(pg, t, q);
-    return svsub_s32_x(pg, a, t);
-}
+/* NOTE: an SVE2 `barrett_reduce_dil_sve2` helper used to live here but
+ * was never called — the NTT/invNTT butterflies use the scalar
+ * Montgomery reduction above for the per-element reduction, and the
+ * pointwise multiply does the same.  Removed alongside the other
+ * unused SVE2 helpers below.
+ */
 
-/* ============================================================================
- * SVE2 polynomial addition
- * ============================================================================ */
-void ama_dilithium_poly_add_sve2(int32_t r[DILITHIUM_N],
-                                  const int32_t a[DILITHIUM_N],
-                                  const int32_t b[DILITHIUM_N]) {
-    size_t i = 0;
-    while (i < DILITHIUM_N) {
-        svbool_t pg = svwhilelt_b32((int64_t)i, (int64_t)DILITHIUM_N);
-        svint32_t va = svld1_s32(pg, a + i);
-        svint32_t vb = svld1_s32(pg, b + i);
-        svst1_s32(pg, r + i, svadd_s32_x(pg, va, vb));
-        i += svcntw();
-    }
-}
-
-/* ============================================================================
- * SVE2 polynomial subtraction
- * ============================================================================ */
-void ama_dilithium_poly_sub_sve2(int32_t r[DILITHIUM_N],
-                                  const int32_t a[DILITHIUM_N],
-                                  const int32_t b[DILITHIUM_N]) {
-    size_t i = 0;
-    while (i < DILITHIUM_N) {
-        svbool_t pg = svwhilelt_b32((int64_t)i, (int64_t)DILITHIUM_N);
-        svint32_t va = svld1_s32(pg, a + i);
-        svint32_t vb = svld1_s32(pg, b + i);
-        svst1_s32(pg, r + i, svsub_s32_x(pg, va, vb));
-        i += svcntw();
-    }
-}
+/* NOTE: SVE2 helpers `ama_dilithium_poly_add_sve2`,
+ * `ama_dilithium_poly_sub_sve2`, and `ama_dilithium_power2round_sve2`
+ * were removed alongside the unwired SVE2 ChaCha20 / Argon2 / SPHINCS+
+ * / Ed25519 TUs.  They were never reached from `ama_dispatch.c`
+ * (the dispatch table exposes no `dilithium_poly_add` / `_poly_sub` /
+ * `_power2round` function-pointer slots) and had no external callers
+ * via `grep -rn ama_dilithium_poly_add_sve2 .` — dead code, removed per
+ * the project's "no speculative API surface" principle.  The wired
+ * surface (forward NTT, inverse NTT, pointwise multiply) is unchanged
+ * and remains hooked at `src/c/dispatch/ama_dispatch.c` lines 596-599.
+ */
 
 /* ============================================================================
  * Forward NTT — Cooley-Tukey butterfly (SVE2 vectorized, 32-bit Dilithium)
@@ -252,29 +229,6 @@ void ama_dilithium_poly_pointwise_sve2(int32_t r[DILITHIUM_N],
                                         const int32_t b[DILITHIUM_N]) {
     for (int i = 0; i < DILITHIUM_N; i++) {
         r[i] = dil_montgomery_reduce_scalar((int64_t)a[i] * b[i]);
-    }
-}
-
-/* ============================================================================
- * SVE2 power2round
- * ============================================================================ */
-void ama_dilithium_power2round_sve2(int32_t a1[DILITHIUM_N],
-                                     int32_t a0[DILITHIUM_N],
-                                     const int32_t a[DILITHIUM_N]) {
-    svint32_t d_mask = svdup_n_s32((1 << DILITHIUM_D) - 1);
-    svint32_t half_d = svdup_n_s32(1 << (DILITHIUM_D - 1));
-
-    size_t i = 0;
-    while (i < DILITHIUM_N) {
-        svbool_t pg = svwhilelt_b32((int64_t)i, (int64_t)DILITHIUM_N);
-        svint32_t va = svld1_s32(pg, a + i);
-        svint32_t va0 = svand_s32_x(pg, va, d_mask);
-        va0 = svsub_s32_x(pg, va0, half_d);
-        svint32_t va1 = svsub_s32_x(pg, va, va0);
-        va1 = svasr_n_s32_x(pg, va1, DILITHIUM_D);
-        svst1_s32(pg, a0 + i, va0);
-        svst1_s32(pg, a1 + i, va1);
-        i += svcntw();
     }
 }
 

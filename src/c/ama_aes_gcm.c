@@ -596,7 +596,7 @@ ama_error_t ama_aes256_gcm_decrypt(
     uint8_t keystream[16];
     uint8_t tag_mask[16];
     uint8_t computed_tag[16];
-    size_t i, full_blocks, remaining;
+    size_t i;
 
     if (!key || !nonce || !tag) return AMA_ERROR_INVALID_PARAM;
     if (ct_len > 0 && (!ciphertext || !plaintext)) return AMA_ERROR_INVALID_PARAM;
@@ -647,40 +647,48 @@ ama_error_t ama_aes256_gcm_decrypt(
     for (int j = 0; j < 16; j++)
         computed_tag[j] ^= tag_mask[j];
 
-    /* Constant-time tag comparison */
-    if (ama_consttime_memcmp(computed_tag, tag, 16) != 0) {
-        /* Tag mismatch — do NOT decrypt */
-        ama_secure_memzero(round_keys, sizeof(round_keys));
-        ama_secure_memzero(H, sizeof(H));
-        ama_secure_memzero(tag_mask, sizeof(tag_mask));
-        ama_secure_memzero(computed_tag, sizeof(computed_tag));
-        return AMA_ERROR_VERIFY_FAILED;
-    }
+    /* Constant-time tag comparison + unified post-verify control flow.
+     * See ama_aes_gcm_avx2.c for the rationale: folding `tag_match`
+     * into the CTR loop bounds eliminates the structural class
+     * divergence between verify-pass and verify-fail return paths
+     * (closes the dudect leak at test_aes_gcm_tag_verify). */
+    int tag_match = (ama_consttime_memcmp(computed_tag, tag, 16) == 0);
+    size_t bound_mask = (size_t)0 - (size_t)tag_match;
+    size_t bounded_full = (ct_len / 16) & bound_mask;
+    size_t bounded_remaining = (ct_len % 16) & bound_mask;
 
-    /* CTR decryption (identical to encryption) */
+    /* CTR decryption.  Loop bounds are `bounded_*` so a verify-fail
+     * call touches no plaintext (fail-closed contract preserved).
+     * The bound itself is a constant-time mask of the original length,
+     * so both classes execute the same instruction sequence shape —
+     * only the iteration count differs (0 for tag_match==0, real for
+     * tag_match==1).  See ama_aes_gcm_avx2.c for the full rationale. */
     memcpy(counter, J0, 16);
 
-    full_blocks = ct_len / 16;
-    for (i = 0; i < full_blocks; i++) {
+    for (i = 0; i < bounded_full; i++) {
         gcm_inc32(counter);
         aes256_encrypt_block(round_keys, counter, keystream);
         for (int j = 0; j < 16; j++)
             plaintext[i * 16 + j] = ciphertext[i * 16 + j] ^ keystream[j];
     }
-    remaining = ct_len % 16;
-    if (remaining > 0) {
+    if (bounded_remaining > 0) {
         gcm_inc32(counter);
         aes256_encrypt_block(round_keys, counter, keystream);
-        for (size_t j = 0; j < remaining; j++)
-            plaintext[full_blocks * 16 + j] = ciphertext[full_blocks * 16 + j] ^ keystream[j];
+        /* Source offset uses `bounded_full` — `bounded_remaining > 0`
+         * implies tag_match == 1, so bounded_full == ct_len / 16. */
+        for (size_t j = 0; j < bounded_remaining; j++)
+            plaintext[bounded_full * 16 + j] = ciphertext[bounded_full * 16 + j] ^ keystream[j];
     }
 
-    /* Scrub sensitive material */
+    /* Scrub sensitive material — identical for both classes.  `counter`
+     * holds J0 (12-byte nonce + CTR-state) on every path; scrub it so
+     * the CTR sequence cannot be reconstructed from a stack snapshot. */
     ama_secure_memzero(round_keys, sizeof(round_keys));
     ama_secure_memzero(H, sizeof(H));
+    ama_secure_memzero(counter, sizeof(counter));
     ama_secure_memzero(keystream, sizeof(keystream));
     ama_secure_memzero(tag_mask, sizeof(tag_mask));
     ama_secure_memzero(computed_tag, sizeof(computed_tag));
 
-    return AMA_SUCCESS;
+    return tag_match ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
 }

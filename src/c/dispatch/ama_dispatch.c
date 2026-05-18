@@ -236,6 +236,8 @@ extern void ama_argon2_g_neon(uint64_t out[128],
 
 #ifdef AMA_HAVE_SVE2_IMPL
 extern void ama_keccak_f1600_sve2(uint64_t state[25]);
+extern ama_error_t ama_sha3_256_sve2(const uint8_t *input, size_t input_len,
+                                     uint8_t output[32]);
 extern void ama_kyber_ntt_sve2(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_kyber_invntt_sve2(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_kyber_poly_pointwise_sve2(int16_t r[256],
@@ -583,10 +585,25 @@ static void dispatch_init_internal(void) {
      * the auto-tuning fallback reverts to this rather than always
      * falling back to generic C — which would skip the NEON tier. */
     ama_keccak_f1600_fn pre_sve2_keccak = dispatch_table.keccak_f1600;
+    /* Save the pre-SVE2 sha3_256 slot the same way so the auto-tune
+     * revert below can keep the two slots in lockstep: the SVE2
+     * `ama_sha3_256_sve2` wrapper calls `ama_keccak_f1600_sve2`
+     * directly (not through the dispatch table), so if the auto-tune
+     * decides SVE2 keccak regressed on this host, sha3_256 must revert
+     * too — otherwise sha3_256 stays on the slow SVE2 path while
+     * keccak_f1600 has already moved off it. */
+    ama_sha3_256_fn pre_sve2_sha3_256 = dispatch_table.sha3_256;
 
 #ifdef AMA_HAVE_SVE2_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_SVE2) {
         dispatch_table.keccak_f1600 = ama_keccak_f1600_sve2;
+        /* sha3_256 wrapper: reuses the SVE2 Keccak permutation above
+         * and adds a lane-predicated rate-block absorb.  Promoted from
+         * "compiled but unwired" to wired in this PR; pinned by the
+         * existing FIPS 202 SHA3-256 KATs which flow through
+         * `dispatch_table.sha3_256` on any host where this slot is
+         * non-NULL. */
+        dispatch_table.sha3_256     = ama_sha3_256_sve2;
     }
     if (dispatch_info.kyber >= AMA_IMPL_SVE2) {
         dispatch_table.kyber_ntt       = ama_kyber_ntt_sve2;
@@ -598,21 +615,55 @@ static void dispatch_init_internal(void) {
         dispatch_table.dilithium_invntt    = ama_dilithium_invntt_sve2;
         dispatch_table.dilithium_pointwise = ama_dilithium_poly_pointwise_sve2;
     }
-    /* Follow-up (deferred from the AArch64-completeness PR, 2026-05):
-     * the SVE2 tier currently wires only keccak / kyber / dilithium —
-     * ChaCha20 and Argon2 SVE2 kernels exist as compiled-but-unwired
-     * *_sve2.c TUs.  Wiring them needs validation that the kernels are
-     * byte-identical to the scalar reference under sufficiently varied
-     * SVE vector widths (128 / 256 / 512 bit), which requires
-     * SVE-aware CI.  Until then, AArch64 hosts on SVE2 still get the
-     * NEON kernels for ChaCha20 / Argon2 — wired above — which is a
-     * strict upgrade over the previous "generic C" state.
+    /* SVE2 wired surface (canonical as of this PR):
+     *   - keccak_f1600  (single-state Keccak permutation)
+     *   - sha3_256      (SHA3-256 sponge using the above permutation;
+     *                    promoted from compiled-but-unwired in PR #312)
+     *   - kyber_ntt / kyber_invntt / kyber_pointwise
+     *   - dilithium_ntt / dilithium_invntt / dilithium_pointwise
      *
-     * AES-GCM SVE2: the prior compiled-but-unwired stub TU
-     * (src/c/sve2/ama_aes_gcm_sve2.c) was a scalar bit-loop GHASH with
-     * no actual SVE2 acceleration; it has been removed.  AES-GCM on
-     * SVE2 hosts dispatches through the NEON kernel above, which uses
-     * the Armv8 Crypto Extensions PMULL intrinsics. */
+     * Compiled-but-unwired (pending follow-up — see
+     * `src/c/sve2/ama_kyber_sve2.c` header for the wiring checklist):
+     *   - ama_kyber_poly_add_sve2
+     *   - ama_kyber_poly_sub_sve2
+     *   - ama_kyber_poly_reduce_sve2
+     *
+     * Every other SVE2 TU has been reduced to a documentation
+     * placeholder (mirroring `ama_aes_gcm_sve2.c` from PR #308) for
+     * one of three concrete reasons, all enumerated in the per-file
+     * headers under `src/c/sve2/`:
+     *
+     *   - ChaCha20 (`ama_chacha20poly1305_sve2.c`): prior kernel had a
+     *     VL-dependent block-count signature that could not match the
+     *     fixed `ama_chacha20_block_x8_fn` dispatch contract, and no
+     *     SVE-aware CI lane existed to KAT-validate it across
+     *     VL=128/256/512.  AArch64 hosts continue to dispatch to the
+     *     validated NEON kernel wired above.
+     *   - Argon2 (`ama_argon2_sve2.c`): prior kernel implemented
+     *     plain Blake2b G — not RFC 9106 §3.5 BlaMka G — and was
+     *     missing the column-pass entirely.  Wiring it would have
+     *     broken Argon2id KATs.  AArch64 hosts continue to dispatch
+     *     to the validated NEON BlaMka kernel wired above.
+     *   - SPHINCS+ / SLH-DSA (`ama_sphincs_sve2.c`): the dispatch
+     *     table intentionally exposes no SPHINCS+ function-pointer
+     *     slots; the SLH-DSA inner loop accelerates indirectly via
+     *     the `keccak_f1600` slot above (which on SVE2 routes to the
+     *     SVE2 Keccak kernel).  A standalone SLH-DSA SVE2 surface
+     *     would be speculative API.
+     *   - Ed25519 (`ama_ed25519_sve2.c`): the dispatcher reports
+     *     `ed25519 = AMA_IMPL_GENERIC` on every AArch64 host (see
+     *     lines 354-357 above).  A vector-wide Ed25519 path only
+     *     pays off in a batched API which AMA Cryptography
+     *     intentionally does not expose.
+     *   - AES-GCM (`ama_aes_gcm_sve2.c`): PR #308 precedent.  AES-GCM
+     *     on SVE2 dispatches through the NEON PMULL kernel above,
+     *     which carries the ARMv8 Crypto Extensions.
+     *
+     * Each placeholder TU documents the preconditions (correct
+     * algorithmic shape, byte-identity KAT lane under SVE-aware CI,
+     * conforming dispatch signature, real production caller) that
+     * a future SVE2 kernel must meet before wiring.  The current
+     * wired tier is the strict superset of every previous release. */
 #endif
 
     /* ====================================================================
@@ -698,6 +749,12 @@ static void dispatch_init_internal(void) {
                 dispatch_table.keccak_f1600 = pre_sve2_keccak;
             } else {
                 dispatch_table.keccak_f1600 = ama_keccak_f1600_generic;
+            }
+            /* Lockstep revert sha3_256: the SVE2 sha3_256 wrapper
+             * embeds calls to `ama_keccak_f1600_sve2`, so if SVE2
+             * keccak regressed here, sha3_256 must move off SVE2 too. */
+            if (pre_sve2_sha3_256 != dispatch_table.sha3_256) {
+                dispatch_table.sha3_256 = pre_sve2_sha3_256;
             }
             /* Revert the batched x4 kernel in lockstep ONLY when it points
              * at a tier the auto-tune actually measured.  The single-state

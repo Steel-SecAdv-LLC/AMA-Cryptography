@@ -23,11 +23,28 @@
  */
 
 #include "ama_cryptography.h"
+#include "ama_cpuid.h"
 #include "ama_dispatch.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+
+/* Direct-symbol forward decl for the AVX2 CBD2 kernel.  No NEON or
+ * SVE2 CBD2 kernels are wired today (per src/c/dispatch/ama_dispatch.c
+ * the dispatch slot for `kyber_cbd2` is set to NULL on NEON and SVE2
+ * tiers, and the generic inline path in `kyber_poly_cbd_eta` is the
+ * exclusive caller).  This test exercises:
+ *
+ *   - The direct AVX2 symbol when the build compiled it in (lane 2).
+ *   - The dispatched pointer (lane 1) — non-NULL only on AVX2 hosts.
+ *   - Asserts the NEON / SVE2 structural NULL-by-design (lane 3) so a
+ *     future wiring change without a corresponding test update is
+ *     caught.
+ */
+#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+extern void ama_kyber_cbd2_avx2(int16_t poly[256], const uint8_t buf[128]);
+#endif
 
 /* Scalar reference, lifted verbatim from kyber_poly_cbd_eta() generic path. */
 static void scalar_cbd2(int16_t poly[256], const uint8_t buf[128]) {
@@ -48,11 +65,12 @@ static void scalar_cbd2(int16_t poly[256], const uint8_t buf[128]) {
 }
 
 static int failed  = 0;
+static int passed  = 0;
 static int skipped = 0;
 
 #define CHECK(cond, msg) do {                                   \
     if (!(cond)) { printf("  FAIL: %s\n", msg); failed++; }     \
-    else         { printf("  PASS: %s\n", msg); }               \
+    else         { printf("  PASS: %s\n", msg); passed++; }     \
 } while (0)
 
 static int check_cbd2(const ama_dispatch_table_t *dt,
@@ -83,13 +101,83 @@ int main(void) {
     printf("===========================================\n\n");
 
     const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    const ama_dispatch_info_t  *di = ama_get_dispatch_info();
+
+    /* Lane 3 (run first so the structural fact is logged before any
+     * skip-based exit): assert NEON / SVE2 CBD2 NULL-by-design.  If a
+     * future PR wires a NEON or SVE2 CBD2 kernel without updating this
+     * test alongside the dispatcher, the assertion fires and forces
+     * the gap to be closed in the same change. */
+#if defined(__aarch64__) || defined(_M_ARM64)
+    if (di != NULL && di->kyber >= AMA_IMPL_NEON && dt->kyber_cbd2 != NULL) {
+        printf("  NOTE: kyber_cbd2 is non-NULL on AArch64 — a NEON/SVE2 CBD2\n"
+               "        kernel has been wired.  Extending the direct-symbol\n"
+               "        lane to test it is REQUIRED before this test can be\n"
+               "        considered up to date.  Failing now to force the\n"
+               "        coverage gap closed in the same PR.\n");
+        return 1;
+    }
+    if (di != NULL && di->kyber >= AMA_IMPL_NEON) {
+        printf("  PASS: NEON/SVE2 CBD2 slot is NULL by design "
+               "(kyber tier=%s, generic inline path active)\n",
+               ama_impl_level_name(di->kyber));
+        passed++;
+    }
+#else
+    (void)di;
+#endif
+
+    /* Lane 2: direct AVX2 kernel symbol (bypasses dispatch entirely
+     * — pins the kernel itself rather than the dispatch wiring). */
+#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+    if (ama_has_avx2()) {
+        printf("  --- direct AVX2 symbol lane ---\n");
+        uint8_t buf[128];
+        int16_t ref[256], got[256];
+
+        memset(buf, 0, sizeof(buf));
+        scalar_cbd2(ref, buf);
+        memset(got, 0xFF, sizeof(got));
+        ama_kyber_cbd2_avx2(got, buf);
+        CHECK(memcmp(ref, got, sizeof(ref)) == 0,
+              "direct AVX2: all-zero byte-identical to scalar");
+
+        memset(buf, 0xFF, sizeof(buf));
+        scalar_cbd2(ref, buf);
+        memset(got, 0x00, sizeof(got));
+        ama_kyber_cbd2_avx2(got, buf);
+        CHECK(memcmp(ref, got, sizeof(ref)) == 0,
+              "direct AVX2: all-0xFF byte-identical to scalar");
+
+        for (int trial = 0; trial < 64; trial++) {
+            uint32_t seed = 0xDEADBEEFu ^ (uint32_t)trial;
+            for (int i = 0; i < 128; i++) {
+                seed = seed * 1664525u + 1013904223u;
+                buf[i] = (uint8_t)(seed >> 24);
+            }
+            scalar_cbd2(ref, buf);
+            memset(got, 0xAA, sizeof(got));
+            ama_kyber_cbd2_avx2(got, buf);
+            if (memcmp(ref, got, sizeof(ref)) != 0) {
+                printf("  FAIL: direct AVX2 trial %d mismatch\n", trial);
+                failed++;
+                break;
+            }
+        }
+        if (!failed) {
+            printf("  PASS: direct AVX2 byte-identical across 64 random trials\n");
+        }
+    }
+#endif
+
     if (dt->kyber_cbd2 == NULL) {
         printf("  note: dispatched CBD2 is NULL on this build/CPU; all\n"
-               "        cases will SKIP.  The generic inline fallback\n"
+               "        dispatched cases will SKIP.  The generic inline fallback\n"
                "        in kyber_poly_cbd_eta() is still exercised by\n"
                "        test_kat / test_kyber_cpa.\n\n");
     }
 
+    printf("  --- dispatched-pointer lane ---\n");
     /* All-zero input: every coefficient must be 0. */
     {
         uint8_t buf[128] = {0};
@@ -135,12 +223,17 @@ int main(void) {
                failed, skipped);
         return 1;
     }
-    if (skipped > 0) {
+    /* CTest SKIP semantics: return 77 when nothing was actually
+     * exercised so the result is `Skipped`, not the silently-misleading
+     * `Passed`.  CMakeLists pairs this with `SKIP_RETURN_CODE 77`. */
+    if (passed == 0 && skipped > 0) {
         printf("All CBD2 equivalence checks SKIPPED "
                "(%d cases; no dispatched CBD2 on this build/CPU)\n", skipped);
-    } else {
-        printf("All CBD2 equivalence checks passed!\n");
+        printf("===========================================\n");
+        return 77;
     }
+    printf("All CBD2 equivalence checks passed! (%d passed, %d skipped)\n",
+           passed, skipped);
     printf("===========================================\n");
     return 0;
 }

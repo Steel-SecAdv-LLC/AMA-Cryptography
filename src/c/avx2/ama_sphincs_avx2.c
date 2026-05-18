@@ -216,7 +216,27 @@ static AMA_MAYBE_UNUSED void ama_sha256_compress_x4_avx2(uint32_t state[4][8],
  * Computes WOTS+ chain: iterate SHA-256 compression `steps` times
  * on `n_chains` independent chains in parallel (groups of 4).
  * ============================================================================ */
-static AMA_MAYBE_UNUSED void ama_sphincs_wots_chain_avx2(uint8_t *out, const uint8_t *in,
+/* Forward declaration (silences `-Wmissing-prototypes` on the
+ * definition below — required when the function has external
+ * linkage but is not declared in any header).  Mirrors the test
+ * harness's `extern` declaration in tests/c/test_sphincs_simd_equiv.c. */
+void ama_sphincs_wots_chain_avx2(uint8_t *out, const uint8_t *in,
+                                 uint32_t start, uint32_t steps,
+                                 const uint8_t *pub_seed,
+                                 uint32_t addr[8], size_t n);
+
+/* External linkage (not `static`) so the test harness
+ * `tests/c/test_sphincs_simd_equiv.c` can pair it directly against
+ * the scalar SHA-256 wots-chain reference for a byte-identity
+ * equivalence check.  Production code does not call this helper
+ * today (the production SPHINCS+ sign / verify pipeline runs the
+ * scalar SHA-256 path); exposing the symbol does not change runtime
+ * behaviour, but it does let the test surface `wots_chain_avx2`
+ * regressions in the same PR that introduces them rather than
+ * waiting for a future production wiring.  `AMA_MAYBE_UNUSED`
+ * suppresses `-Wunused-function` on builds where the test isn't
+ * compiled in. */
+AMA_MAYBE_UNUSED void ama_sphincs_wots_chain_avx2(uint8_t *out, const uint8_t *in,
                                   uint32_t start, uint32_t steps,
                                   const uint8_t *pub_seed,
                                   uint32_t addr[8], size_t n) {
