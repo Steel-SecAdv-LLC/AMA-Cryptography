@@ -268,6 +268,15 @@ int main(void) {
             continue;
         }
         any_lane_exercised = 1;
+        /* Compose per-direction labels so a mismatch tells you whether
+         * the forward NTT or the inverse NTT diverged from scalar.
+         * snprintf-into-stack-buffer is safe: label is bounded by the
+         * `lanes[]` array initializers above (max "direct AVX2"). */
+        char lbl_fwd[64], lbl_inv[64];
+        snprintf(lbl_fwd, sizeof(lbl_fwd),
+                 "%s forward NTT",  direct_lanes[L].label);
+        snprintf(lbl_inv, sizeof(lbl_inv),
+                 "%s inverse NTT",  direct_lanes[L].label);
         for (int trial = 0; trial < N_TRIALS; trial++) {
             int32_t poly_s[DILITHIUM_N], poly_v[DILITHIUM_N];
             for (int i = 0; i < DILITHIUM_N; i++) {
@@ -278,10 +287,10 @@ int main(void) {
             }
             scalar_ntt(poly_s);
             direct_lanes[L].ntt(poly_v, dil_zetas);
-            fail += cmp_poly(poly_s, poly_v, direct_lanes[L].label, trial);
+            fail += cmp_poly(poly_s, poly_v, lbl_fwd, trial);
             scalar_invntt(poly_s);
             direct_lanes[L].invntt(poly_v, dil_zetas);
-            fail += cmp_poly(poly_s, poly_v, direct_lanes[L].label, trial);
+            fail += cmp_poly(poly_s, poly_v, lbl_inv, trial);
             if (fail && trial >= 2) break;
         }
         if (fail) {
