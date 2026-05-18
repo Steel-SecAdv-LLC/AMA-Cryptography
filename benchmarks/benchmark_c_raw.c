@@ -38,6 +38,7 @@
 #include <float.h>
 
 #include "ama_cryptography.h"
+#include "ama_dispatch.h"
 
 /* ============================================================================
  * TIMING HELPERS
@@ -540,6 +541,153 @@ static bench_result_t bench_kyber_decaps(int iters, int warmup) {
     return compute_stats("ML-KEM-1024 Decaps", g_samples, iters);
 }
 
+/* --- ML-KEM-1024 poly helpers (poly_add / poly_sub / poly_reduce) ---
+ *
+ * Microbench for the SVE2 kyber_poly_{add,sub,reduce} dispatch slots.
+ * Compares the dispatched helper against an explicit scalar loop —
+ * NOT against the inline scalar in src/c/ama_kyber.c (which is what
+ * the dispatcher itself falls back to when the slot is NULL), so the
+ * two timings are directly comparable without re-entering the dispatch
+ * indirection.
+ *
+ * Wired today only on SVE2; on AVX2/NEON hosts the slot is NULL and
+ * the "(scalar)" and "(dispatch)" rows both measure the same compiler
+ * auto-vectorised loop, which is intentional — it confirms the
+ * autovectorizer is delivering on those tiers.
+ *
+ * IMPORTANT: a single poly_add over 256 int16_t is ~hundreds of
+ * picoseconds on a modern core, so per-iteration `now_ns()` overhead
+ * dominates.  Each iteration runs the helper in a tight 256-call
+ * inner loop (g_samples[i] holds the per-call mean over those 256
+ * calls) so the dispatch arithmetic is amortised across enough work
+ * to land in the resolvable timing band.
+ *
+ * NOTE on real-hardware measurement: qemu's SVE2 emulation is ~47x
+ * slower than scalar and is NOT representative.  Real ARMv9 hardware
+ * is required for the SVE2 helper to clearly beat the auto-vectoriser
+ * — see the rationale block at the SVE2 init in
+ * src/c/dispatch/ama_dispatch.c. */
+#define KYBER_POLY_N 256
+#define KYBER_POLY_Q 3329
+#define BENCH_INNER_LOOP 256
+
+static void scalar_kyber_poly_add(int16_t r[KYBER_POLY_N],
+                                   const int16_t a[KYBER_POLY_N],
+                                   const int16_t b[KYBER_POLY_N]) {
+    for (int i = 0; i < KYBER_POLY_N; i++) r[i] = (int16_t)(a[i] + b[i]);
+}
+static void scalar_kyber_poly_sub(int16_t r[KYBER_POLY_N],
+                                   const int16_t a[KYBER_POLY_N],
+                                   const int16_t b[KYBER_POLY_N]) {
+    for (int i = 0; i < KYBER_POLY_N; i++) r[i] = (int16_t)(a[i] - b[i]);
+}
+static int16_t kyber_barrett_ref(int16_t a) {
+    const int16_t v = ((1 << 26) + KYBER_POLY_Q / 2) / KYBER_POLY_Q;
+    int16_t t = (int16_t)(((int32_t)v * a) >> 26);
+    t *= KYBER_POLY_Q;
+    return (int16_t)(a - t);
+}
+static void scalar_kyber_poly_reduce(int16_t r[KYBER_POLY_N]) {
+    for (int i = 0; i < KYBER_POLY_N; i++) r[i] = kyber_barrett_ref(r[i]);
+}
+
+static void fill_random_poly(int16_t p[KYBER_POLY_N]) {
+    for (int i = 0; i < KYBER_POLY_N; i++) {
+        p[i] = (int16_t)(rand() % (2 * KYBER_POLY_Q - 1)) - (KYBER_POLY_Q - 1);
+    }
+}
+
+static bench_result_t bench_kyber_poly_add(int iters, int warmup, int use_dispatch) {
+    int16_t a[KYBER_POLY_N], b[KYBER_POLY_N], r[KYBER_POLY_N];
+    fill_random_poly(a); fill_random_poly(b);
+
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    ama_kyber_poly_add_fn fn = (use_dispatch && dt->kyber_poly_add)
+                                 ? dt->kyber_poly_add
+                                 : scalar_kyber_poly_add;
+
+    for (int i = 0; i < warmup; i++) fn(r, a, b);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        for (int j = 0; j < BENCH_INNER_LOOP; j++) fn(r, a, b);
+        g_samples[i] = (now_ns() - t0) / (double)BENCH_INNER_LOOP;
+    }
+    static char labels[2][48];
+    snprintf(labels[use_dispatch ? 1 : 0], sizeof(labels[0]),
+             "ML-KEM-1024 poly_add (%s)",
+             use_dispatch ? "dispatch" : "scalar");
+    return compute_stats(labels[use_dispatch ? 1 : 0], g_samples, iters);
+}
+
+static bench_result_t bench_kyber_poly_sub(int iters, int warmup, int use_dispatch) {
+    int16_t a[KYBER_POLY_N], b[KYBER_POLY_N], r[KYBER_POLY_N];
+    fill_random_poly(a); fill_random_poly(b);
+
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    ama_kyber_poly_sub_fn fn = (use_dispatch && dt->kyber_poly_sub)
+                                 ? dt->kyber_poly_sub
+                                 : scalar_kyber_poly_sub;
+
+    for (int i = 0; i < warmup; i++) fn(r, a, b);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        for (int j = 0; j < BENCH_INNER_LOOP; j++) fn(r, a, b);
+        g_samples[i] = (now_ns() - t0) / (double)BENCH_INNER_LOOP;
+    }
+    static char labels[2][48];
+    snprintf(labels[use_dispatch ? 1 : 0], sizeof(labels[0]),
+             "ML-KEM-1024 poly_sub (%s)",
+             use_dispatch ? "dispatch" : "scalar");
+    return compute_stats(labels[use_dispatch ? 1 : 0], g_samples, iters);
+}
+
+static bench_result_t bench_kyber_poly_reduce(int iters, int warmup, int use_dispatch) {
+    /* Pre-randomise a ring of BENCH_INNER_LOOP input polys so the
+     * timed inner loop calls fn() on a fresh, distinct in-place
+     * buffer every call.  This keeps the input distribution stable
+     * across runs (no implicit re-randomisation cost in the timed
+     * region) AND removes the memcpy-per-call that was previously
+     * dominating the measurement and masking dispatch-vs-scalar
+     * differences.  Re-seed the ring once per outer iteration; the
+     * re-seed happens outside the clock-gettime fence. */
+    static int16_t ring[BENCH_INNER_LOOP][KYBER_POLY_N];
+    for (int j = 0; j < BENCH_INNER_LOOP; j++) fill_random_poly(ring[j]);
+
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    ama_kyber_poly_reduce_fn fn = (use_dispatch && dt->kyber_poly_reduce)
+                                    ? dt->kyber_poly_reduce
+                                    : scalar_kyber_poly_reduce;
+
+    /* Warmup: reduce the warmed buffers in place.  Subsequent
+     * iterations re-seed the ring before timing so the input
+     * distribution stays bounded in [-q+1, q-1]. */
+    for (int i = 0; i < warmup; i++) {
+        fn(ring[i % BENCH_INNER_LOOP]);
+    }
+    for (int j = 0; j < BENCH_INNER_LOOP; j++) fill_random_poly(ring[j]);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        for (int j = 0; j < BENCH_INNER_LOOP; j++) {
+            fn(ring[j]);
+        }
+        g_samples[i] = (now_ns() - t0) / (double)BENCH_INNER_LOOP;
+        /* Re-seed outside the timed region so the next outer iteration
+         * sees the same input distribution as the first one.  Without
+         * the re-seed, after one pass every coefficient is already
+         * reduced — measuring "reduce of already-reduced poly" rather
+         * than "reduce of a poly in the natural post-add range". */
+        for (int j = 0; j < BENCH_INNER_LOOP; j++) fill_random_poly(ring[j]);
+    }
+    static char labels[2][48];
+    snprintf(labels[use_dispatch ? 1 : 0], sizeof(labels[0]),
+             "ML-KEM-1024 poly_reduce (%s)",
+             use_dispatch ? "dispatch" : "scalar");
+    return compute_stats(labels[use_dispatch ? 1 : 0], g_samples, iters);
+}
+
 /* --- SHA3-256 / SHA3-512 --- */
 static bench_result_t bench_sha3_256(size_t data_size, int iters, int warmup) {
     uint8_t *data = (uint8_t *)malloc(data_size);
@@ -866,7 +1014,7 @@ int main(int argc, char **argv) {
     const int iters_vslow = 50;     /* 1ms+ ops */
 
     /* Collect all results */
-    #define MAX_RESULTS 40
+    #define MAX_RESULTS 48
     bench_result_t results[MAX_RESULTS];
     int n = 0;
 
@@ -948,6 +1096,21 @@ int main(int argc, char **argv) {
     results[n++] = bench_kyber_keygen(iters_slow, warmup);
     results[n++] = bench_kyber_encaps(iters_slow, warmup);
     results[n++] = bench_kyber_decaps(iters_slow, warmup);
+
+    /* --- ML-KEM-1024 poly helpers (scalar vs dispatched) ---
+     * Surfaces the SVE2 kyber_poly_{add,sub,reduce} win (if any) on
+     * ARMv9 hardware.  On AVX2/NEON hosts the dispatch slot is NULL
+     * and both rows time the same compiler auto-vectorised loop —
+     * the comparison is a no-op there.  Run as `iters_fast` because
+     * each sample averages BENCH_INNER_LOOP=256 helper calls (the
+     * single helper is sub-nanosecond on a modern core, well below
+     * clock_gettime resolution). */
+    results[n++] = bench_kyber_poly_add(iters_fast, warmup, 0);
+    results[n++] = bench_kyber_poly_add(iters_fast, warmup, 1);
+    results[n++] = bench_kyber_poly_sub(iters_fast, warmup, 0);
+    results[n++] = bench_kyber_poly_sub(iters_fast, warmup, 1);
+    results[n++] = bench_kyber_poly_reduce(iters_fast, warmup, 0);
+    results[n++] = bench_kyber_poly_reduce(iters_fast, warmup, 1);
 
     /* --- Output --- */
     if (json_mode) {

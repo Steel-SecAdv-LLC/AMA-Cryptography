@@ -127,8 +127,8 @@ surface as of release 3.1.0:
 | `keccak_f1600` | `ama_sha3_sve2.c` | wired (single-state Keccak permutation) |
 | `sha3_256` | `ama_sha3_sve2.c` | wired (FIPS 202 sponge over the permutation above; PR #312) |
 | `kyber_ntt` / `kyber_invntt` / `kyber_pointwise` | `ama_kyber_sve2.c` | wired (ML-KEM-1024 hot loop) |
+| `kyber_poly_add` / `kyber_poly_sub` / `kyber_poly_reduce` | `ama_kyber_sve2.c` | wired (VL-agnostic `svadd_s16_x` / `svsub_s16_x` plus the Barrett reduction reused from the wired NTT path; auto-tune lockstep-reverts these slots if the SVE2 codegen tier regresses on a particular host) |
 | `dilithium_ntt` / `dilithium_invntt` / `dilithium_pointwise` | `ama_dilithium_sve2.c` | wired (ML-DSA-65 hot loop) |
-| `ama_kyber_poly_{add,sub,reduce}_sve2` | `ama_kyber_sve2.c` | **compiled but unwired** — pending follow-up (dispatch slots `kyber_poly_{add,sub,reduce}` + caller refactor in `src/c/ama_kyber.c`) |
 | AES-GCM / ChaCha20 / Argon2 / SPHINCS+ / Ed25519 | placeholder TUs | **not wired** — see below |
 
 The five placeholder TUs (`ama_aes_gcm_sve2.c`,

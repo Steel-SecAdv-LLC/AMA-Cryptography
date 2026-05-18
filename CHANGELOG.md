@@ -77,6 +77,43 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   vs the compiler's auto-vectorised scalar (modern GCC/Clang already
   auto-vectorise short int16 add/sub loops with `-O3`, so the SVE2
   win may be marginal — measurement required).
+- **SVE2 `kyber_poly_{add,sub,reduce}` dispatch slots wired
+  (follow-up to PR #312).**  Promoted the three previously
+  compiled-but-unwired SVE2 helpers from
+  `src/c/sve2/ama_kyber_sve2.c` to fully wired:
+    - `include/ama_dispatch.h` gained
+      `ama_kyber_poly_add_fn` / `_sub_fn` / `_reduce_fn` typedefs
+      and matching `ama_dispatch_table_t` slots.
+    - `src/c/dispatch/ama_dispatch.c` installs the three SVE2 symbols
+      in the `dispatch_info.kyber >= AMA_IMPL_SVE2` block alongside
+      `kyber_ntt`, snapshots the pre-SVE2 slot values, and lockstep-
+      reverts them in the auto-tune fallback when the SVE2 keccak
+      proxy regresses past the 10% hysteresis band (qemu's SVE2
+      emulation is ~47x slower than scalar — auto-tune correctly
+      demotes there, but that is a qemu artifact, not a real-hardware
+      finding).
+    - `src/c/ama_kyber.c` `poly_add` / `poly_sub` / `poly_reduce`
+      indirect through the dispatch table when the slot is non-NULL,
+      falling back to the existing inlined scalar (which modern
+      GCC/Clang already auto-vectorise at -O3 on AVX2/NEON targets,
+      so no helper is wired on those tiers today).
+    - `tests/c/test_kyber_poly_equiv.c` adds byte-identity KATs
+      (1024 random polys per helper) across two lanes — dispatched-
+      pointer and direct per-ISA SVE2 symbol — mirroring the
+      multi-lane structure of `test_kyber_ntt_equiv.c`.  Uses a
+      mod-q-tolerant comparison for `poly_reduce` because the
+      production scalar Barrett (floor-divide) and the SVE2 kernel's
+      centered Barrett (`+ (1 << 25)` rounding) can pick
+      representatives differing by an exact multiple of q — both
+      valid under the `output ≡ input (mod q)` contract.
+    - `benchmarks/benchmark_c_raw.c` adds scalar-vs-dispatched
+      microbenches for all three helpers (256-call inner loop to
+      land above `clock_gettime` resolution).  Per the task
+      acceptance, a real-ARMv9-hardware bench is required to confirm
+      the SVE2 path beats the auto-vectoriser by ≥10%; if a future
+      measurement on actual silicon shows regression, the auto-tune
+      lockstep revert above will demote the slots without a code
+      change.
 - **`test_keccak_equiv` x4 reference via `ama_keccak_f1600_x4_generic`.**  The
   x4 dispatch parity lane now compares the dispatched x4 pointer directly
   against `ama_keccak_f1600_x4_generic` (instead of a hand-rolled 4-loop of

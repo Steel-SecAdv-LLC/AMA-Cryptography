@@ -244,6 +244,13 @@ extern void ama_kyber_poly_pointwise_sve2(int16_t r[256],
                                            const int16_t a[256],
                                            const int16_t b[256],
                                            const int16_t zetas[128]);
+extern void ama_kyber_poly_add_sve2(int16_t r[256],
+                                     const int16_t a[256],
+                                     const int16_t b[256]);
+extern void ama_kyber_poly_sub_sve2(int16_t r[256],
+                                     const int16_t a[256],
+                                     const int16_t b[256]);
+extern void ama_kyber_poly_reduce_sve2(int16_t poly[256]);
 extern void ama_dilithium_ntt_sve2(int32_t poly[256],
                                     const int32_t zetas[256]);
 extern void ama_dilithium_invntt_sve2(int32_t poly[256],
@@ -390,6 +397,9 @@ static void dispatch_init_internal(void) {
     dispatch_table.kyber_ntt         = NULL;  /* NULL = caller uses inline generic */
     dispatch_table.kyber_invntt      = NULL;
     dispatch_table.kyber_pointwise   = NULL;
+    dispatch_table.kyber_poly_add    = NULL;  /* NULL = caller uses inline scalar; today only the SVE2 init below wires this */
+    dispatch_table.kyber_poly_sub    = NULL;
+    dispatch_table.kyber_poly_reduce = NULL;
     dispatch_table.kyber_cbd2        = NULL;  /* NULL = caller uses inline generic */
     dispatch_table.dilithium_ntt     = NULL;
     dispatch_table.dilithium_invntt  = NULL;
@@ -593,6 +603,18 @@ static void dispatch_init_internal(void) {
      * too — otherwise sha3_256 stays on the slow SVE2 path while
      * keccak_f1600 has already moved off it. */
     ama_sha3_256_fn pre_sve2_sha3_256 = dispatch_table.sha3_256;
+    /* Save the pre-SVE2 kyber_poly_{add,sub,reduce} slots for the same
+     * lockstep revert reason: today no other tier wires these (AVX2 /
+     * NEON let the compiler auto-vectorise the trivial int16 add/sub
+     * loop), so the pre-SVE2 values are NULL on every host.  Saving
+     * them anyway keeps the revert path future-proof: if a NEON or
+     * AVX2 helper is wired in a later release, the SVE2 auto-tune
+     * fallback will demote to that tier instead of all the way to
+     * scalar.  Mirrors the pre_sve2_keccak / pre_sve2_sha3_256
+     * pattern above. */
+    ama_kyber_poly_add_fn    pre_sve2_kyber_poly_add    = dispatch_table.kyber_poly_add;
+    ama_kyber_poly_sub_fn    pre_sve2_kyber_poly_sub    = dispatch_table.kyber_poly_sub;
+    ama_kyber_poly_reduce_fn pre_sve2_kyber_poly_reduce = dispatch_table.kyber_poly_reduce;
 
 #ifdef AMA_HAVE_SVE2_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_SVE2) {
@@ -606,9 +628,37 @@ static void dispatch_init_internal(void) {
         dispatch_table.sha3_256     = ama_sha3_256_sve2;
     }
     if (dispatch_info.kyber >= AMA_IMPL_SVE2) {
-        dispatch_table.kyber_ntt       = ama_kyber_ntt_sve2;
-        dispatch_table.kyber_invntt    = ama_kyber_invntt_sve2;
-        dispatch_table.kyber_pointwise = ama_kyber_poly_pointwise_sve2;
+        dispatch_table.kyber_ntt        = ama_kyber_ntt_sve2;
+        dispatch_table.kyber_invntt     = ama_kyber_invntt_sve2;
+        dispatch_table.kyber_pointwise  = ama_kyber_poly_pointwise_sve2;
+        /* Promoted from compiled-but-unwired in this PR.  All three
+         * are algorithmically straightforward (svadd_s16_x,
+         * svsub_s16_x, and the Barrett reduction reused from the
+         * wired SVE2 NTT path), reuse the same VL-agnostic predicated
+         * loop scaffold as kyber_ntt_sve2, and are pinned by
+         * test_kyber_poly_equiv.c.  See the file header in
+         * src/c/sve2/ama_kyber_sve2.c for the historical wiring
+         * checklist; every item is now resolved.
+         *
+         * NOTE on benchmarking: modern GCC/Clang already auto-vectorise
+         * short int16 add/sub loops at -O3, so the SVE2 win over
+         * scalar may be marginal on real ARMv9 hardware.  If a future
+         * measurement on a real ARMv9 host shows SVE2 regressing past
+         * the 10% hysteresis band, the auto-tune lockstep revert
+         * below (the SVE2 keccak proxy) will demote these three slots
+         * back to NULL — production code in src/c/ama_kyber.c then
+         * falls through to its inline scalar loop, which the compiler
+         * auto-vectorises on AArch64.  kyber_ntt / kyber_invntt /
+         * kyber_pointwise are NOT reverted in lockstep today (their
+         * arithmetic intensity is high enough that the auto-tune
+         * proxy is a worse fit for them than the empirical reality
+         * on real silicon); only the three thin int16 helpers ride
+         * the keccak proxy.  qemu's SVE2 emulation is ~47x slower
+         * than scalar and is not a real-hardware finding; benchmark
+         * on an actual core. */
+        dispatch_table.kyber_poly_add    = ama_kyber_poly_add_sve2;
+        dispatch_table.kyber_poly_sub    = ama_kyber_poly_sub_sve2;
+        dispatch_table.kyber_poly_reduce = ama_kyber_poly_reduce_sve2;
     }
     if (dispatch_info.dilithium >= AMA_IMPL_SVE2) {
         dispatch_table.dilithium_ntt       = ama_dilithium_ntt_sve2;
@@ -620,13 +670,10 @@ static void dispatch_init_internal(void) {
      *   - sha3_256      (SHA3-256 sponge using the above permutation;
      *                    promoted from compiled-but-unwired in PR #312)
      *   - kyber_ntt / kyber_invntt / kyber_pointwise
+     *   - kyber_poly_add / kyber_poly_sub / kyber_poly_reduce
+     *                   (promoted from compiled-but-unwired in this
+     *                    PR; pinned by test_kyber_poly_equiv.c)
      *   - dilithium_ntt / dilithium_invntt / dilithium_pointwise
-     *
-     * Compiled-but-unwired (pending follow-up — see
-     * `src/c/sve2/ama_kyber_sve2.c` header for the wiring checklist):
-     *   - ama_kyber_poly_add_sve2
-     *   - ama_kyber_poly_sub_sve2
-     *   - ama_kyber_poly_reduce_sve2
      *
      * Every other SVE2 TU has been reduced to a documentation
      * placeholder (mirroring `ama_aes_gcm_sve2.c` from PR #308) for
@@ -756,6 +803,30 @@ static void dispatch_init_internal(void) {
             if (pre_sve2_sha3_256 != dispatch_table.sha3_256) {
                 dispatch_table.sha3_256 = pre_sve2_sha3_256;
             }
+            /* Lockstep revert the SVE2 kyber_poly_{add,sub,reduce}
+             * slots: a regressed SVE2 keccak is the canonical proxy
+             * for "the SVE2 codegen tier is a bad fit for this host",
+             * so the three thin int16 helpers that share that tier
+             * ride along.  pre_sve2_kyber_poly_* is NULL on every
+             * host today (no other tier wires these slots), so the
+             * effect on a regression is "demote the SVE2 helpers
+             * back to the inline scalar in ama_kyber.c"; the saved
+             * pointer makes the revert future-proof if a NEON/AVX2
+             * helper is wired in a later release.  Only touched when
+             * the SVE2 init above actually installed something
+             * different from the saved pointer — mirrors the
+             * keccak/sha3 guards above so that a non-SVE2 host
+             * (where the saved pointer already equals the current
+             * pointer) is a no-op. */
+            if (pre_sve2_kyber_poly_add != dispatch_table.kyber_poly_add) {
+                dispatch_table.kyber_poly_add = pre_sve2_kyber_poly_add;
+            }
+            if (pre_sve2_kyber_poly_sub != dispatch_table.kyber_poly_sub) {
+                dispatch_table.kyber_poly_sub = pre_sve2_kyber_poly_sub;
+            }
+            if (pre_sve2_kyber_poly_reduce != dispatch_table.kyber_poly_reduce) {
+                dispatch_table.kyber_poly_reduce = pre_sve2_kyber_poly_reduce;
+            }
             /* Revert the batched x4 kernel in lockstep ONLY when it points
              * at a tier the auto-tune actually measured.  The single-state
              * benchmark above exercises dispatch_table.keccak_f1600 (the
@@ -807,6 +878,12 @@ static void dispatch_init_internal(void) {
                     ? "generic" : "SIMD");
         fprintf(stderr, "[AMA Dispatch] kyber_ntt    -> %s\n",
                 dispatch_table.kyber_ntt ? "SIMD" : "generic (inline)");
+        fprintf(stderr, "[AMA Dispatch] kyber_poly_* -> %s\n",
+                (dispatch_table.kyber_poly_add &&
+                 dispatch_table.kyber_poly_sub &&
+                 dispatch_table.kyber_poly_reduce)
+                    ? "SIMD (add/sub/reduce)"
+                    : "scalar (compiler auto-vectorised)");
         fprintf(stderr, "[AMA Dispatch] dil_ntt      -> %s\n",
                 dispatch_table.dilithium_ntt ? "SIMD" : "generic (inline)");
         fprintf(stderr, "[AMA Dispatch] chacha20_x8 -> %s\n",
@@ -942,12 +1019,21 @@ void ama_test_force_keccak_f1600_scalar(void) {
 
 /* Force the generic-C Kyber NTT path by NULLing the SIMD pointers.
  * ama_kyber.c's NULL-check then dispatches to its inline scalar
- * NTT/inverse-NTT/pointwise implementations. */
+ * NTT/inverse-NTT/pointwise implementations.  Also NULLs the
+ * kyber_poly_{add,sub,reduce} slots: after this hook fires, the
+ * scalar inline fallbacks inside `poly_add` / `poly_sub` /
+ * `poly_reduce` are exercised end-to-end by every Kyber test that
+ * subsequently runs, which is the production behaviour on any host
+ * that lacks an SVE2 wiring for these slots.  Paired with
+ * `ama_test_restore_kyber_ntt()` below. */
 void ama_test_force_kyber_ntt_scalar(void) {
     ama_dispatch_init();
     dispatch_table.kyber_ntt = NULL;
     dispatch_table.kyber_invntt = NULL;
     dispatch_table.kyber_pointwise = NULL;
+    dispatch_table.kyber_poly_add = NULL;
+    dispatch_table.kyber_poly_sub = NULL;
+    dispatch_table.kyber_poly_reduce = NULL;
 }
 
 /* Force the generic-C Dilithium NTT path by NULLing the SIMD
@@ -1037,6 +1123,9 @@ void ama_test_restore_kyber_ntt(void) {
     dispatch_table.kyber_ntt = dispatch_table_post_init.kyber_ntt;
     dispatch_table.kyber_invntt = dispatch_table_post_init.kyber_invntt;
     dispatch_table.kyber_pointwise = dispatch_table_post_init.kyber_pointwise;
+    dispatch_table.kyber_poly_add = dispatch_table_post_init.kyber_poly_add;
+    dispatch_table.kyber_poly_sub = dispatch_table_post_init.kyber_poly_sub;
+    dispatch_table.kyber_poly_reduce = dispatch_table_post_init.kyber_poly_reduce;
 }
 
 void ama_test_restore_dilithium_ntt(void) {
