@@ -695,6 +695,13 @@ static double test_secp256k1_scalarmult(int iterations) {
     };
     uint8_t out_x[32], out_y[32];
 
+    /* Per-class outcome validation — both scalars are valid in
+     * [1, n-1] so both classes must return AMA_SUCCESS.  A regression
+     * that started rejecting one of them (e.g., a tightened range
+     * check) would otherwise still produce a clean t-value while no
+     * longer witnessing the Montgomery ladder under test. */
+    int rc_mismatches = 0;
+
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         const uint8_t *k = class_idx ? k_high : k_low;
@@ -703,9 +710,20 @@ static double test_secp256k1_scalarmult(int iterations) {
         volatile ama_error_t rc =
             ama_secp256k1_point_mul(k, Gx, Gy, out_x, out_y);
         uint64_t end = dudect_get_time_ns();
-        (void)rc;
+
+        if (rc != AMA_SUCCESS) rc_mismatches++;
 
         dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches > 0) {
+        fprintf(stderr,
+                "  FAIL: secp256k1 scalar multiplication rc mismatches: %d "
+                "(both classes use valid scalars in [1, n-1]; AMA_SUCCESS "
+                "expected for both)\n",
+                rc_mismatches);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
@@ -1115,6 +1133,13 @@ static double test_slhdsa_sign(int iterations) {
      * within a per-test CI budget. */
     int local_iters = iterations < 256 ? iterations : 256;
 
+    /* Per-class outcome validation — both messages are valid 64-byte
+     * payloads so both classes must return AMA_SUCCESS with
+     * siglen == AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES.  A regression
+     * that started failing one branch would otherwise still emit a
+     * t-value and be marked INFO-only, masking a real defect. */
+    int rc_mismatches = 0;
+
     for (int i = 0; i < local_iters && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         const uint8_t *msg_use = class_idx ? msg1 : msg0;
@@ -1127,9 +1152,23 @@ static double test_slhdsa_sign(int iterations) {
                                           msg_use, 64,
                                           NULL, 0, sk);
         uint64_t end = dudect_get_time_ns();
-        (void)rc;
+
+        if (rc != AMA_SUCCESS ||
+            siglen != AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES) {
+            rc_mismatches++;
+        }
 
         dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches > 0) {
+        fprintf(stderr,
+                "  FAIL: SLH-DSA-SHA2-256f sign rc/siglen mismatches: %d "
+                "(expected AMA_SUCCESS + siglen=%zu for both classes)\n",
+                rc_mismatches,
+                (size_t)AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
