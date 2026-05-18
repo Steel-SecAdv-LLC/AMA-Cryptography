@@ -1,0 +1,48 @@
+diff --git a/src/c/ama_dilithium.c b/src/c/ama_dilithium.c
+index f0ee21a..002b848 100644
+--- a/src/c/ama_dilithium.c
++++ b/src/c/ama_dilithium.c
+@@ -2054,3 +2054,43 @@ AMA_API ama_error_t ama_dilithium_verify_ctx(
+     return result;
+ }
+ 
++
++/* ============================================================================
++ * BENCHMARK-ONLY NTT KERNEL ACCESSORS (declared in include/ama_cryptography.h)
++ *
++ * These thin wrappers route a caller-supplied poly[256] through the same
++ * `dil_ntt_cached` / `dil_invntt_cached` routines used by ML-DSA sign/verify,
++ * but bind the dispatch slot explicitly so `benchmark_c_raw.c` can time the
++ * scalar reference loop and the dispatched SIMD kernel separately. The static
++ * `dil_zetas` table stays internal — these accessors are the only sanctioned
++ * way for external code to drive the NTT in isolation.
++ *
++ * Not for production use. ML-DSA-65 production callers go through
++ * `ama_dilithium_sign()` / `ama_dilithium_verify()` (FIPS 204 §6.1 / §6.2).
++ * ============================================================================ */
++
++AMA_API void ama_dilithium_ntt_bench(int32_t poly[256], int use_dispatch) {
++    if (use_dispatch) {
++        /* Production dispatch path: AVX2 / NEON / SVE2 / AVX-512 when wired,
++         * otherwise the scalar reference loop inside dil_ntt_cached. */
++        dil_ntt_cached(poly, ama_get_dispatch_table());
++    } else {
++        /* Scalar reference only: synthesise a dispatch table with the
++         * SIMD slot cleared so dil_ntt_cached falls through to the
++         * generic C implementation. Same code path that runs on any
++         * host whose CPUID misses every SIMD gate. */
++        ama_dispatch_table_t scalar = *ama_get_dispatch_table();
++        scalar.dilithium_ntt = NULL;
++        dil_ntt_cached(poly, &scalar);
++    }
++}
++
++AMA_API void ama_dilithium_invntt_bench(int32_t poly[256], int use_dispatch) {
++    if (use_dispatch) {
++        dil_invntt_cached(poly, ama_get_dispatch_table());
++    } else {
++        ama_dispatch_table_t scalar = *ama_get_dispatch_table();
++        scalar.dilithium_invntt = NULL;
++        dil_invntt_cached(poly, &scalar);
++    }
++}

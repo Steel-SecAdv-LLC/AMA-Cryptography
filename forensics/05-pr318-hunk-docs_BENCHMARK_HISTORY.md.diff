@@ -1,0 +1,58 @@
+diff --git a/docs/BENCHMARK_HISTORY.md b/docs/BENCHMARK_HISTORY.md
+index 8022e11..9b3f5b8 100644
+--- a/docs/BENCHMARK_HISTORY.md
++++ b/docs/BENCHMARK_HISTORY.md
+@@ -142,3 +142,53 @@ No baseline values in `benchmarks/baseline.json` were changed by the
+ wiring work; the entries above are new benchmark columns in the
+ `benchmark_c_raw` output, not entries the CI regression gate
+ currently tracks.
++
++## 2026-05: Benchmark coverage expansion (no baseline_value changes)
++
++In May 2026 the raw-C harness gained five new benchmark families to
++close the gap list audited in the May 2026 review:
++
++| Family                                     | Rows added to `benchmark_c_raw` |
++|--------------------------------------------|---------------------------------|
++| SLH-DSA (FIPS 205 L1, SHAKE-128s)          | `SLH-DSA-SHAKE-128s KeyGen` / `Sign` / `Verify` |
++| secp256k1 pubkey-from-privkey              | `secp256k1 pubkey` |
++| FROST 2-of-3 (RFC 9591)                    | `FROST round1 commit` / `round2 sign` / `aggregate` |
++| Dilithium NTT kernel isolation             | `ML-DSA-65 NTT (scalar)` / `NTT (dispatch)` / `invNTT (scalar)` / `invNTT (dispatch)` |
++| X25519 MULX/ADX kernel on-vs-off ratio     | `X25519 DH (MULX off)` / `X25519 DH (MULX on)` |
++
++The Dilithium-NTT and X25519-MULX rows depend on benchmark/test-only
++entry points added to `include/ama_cryptography.h`
++(`ama_dilithium_ntt_bench`, `ama_dilithium_invntt_bench`,
++`ama_x25519_set_mulx_override`). These are documented as **not part of
++the production crypto surface** — they exist so a single shipped
++binary can produce paired scalar-vs-dispatched and kernel-on-vs-off
++rows without per-row rebuilds.
++
++Sample raw-C medians on the sandbox host (Linux x86-64, GCC, AVX2,
++ed25519-donna + ML-DSA AVX2 dispatched, MULX+ADX kernel available):
++
++| Row | Median latency | Throughput |
++|-----|---------------:|-----------:|
++| X25519 DH (MULX off)         | ~75.1 µs | ~13,300 ops/s |
++| X25519 DH (MULX on)          | ~51.5 µs | ~19,400 ops/s (**~1.46× over off**) |
++| ML-DSA-65 NTT (scalar)       | ~1.26 µs | ~796,000 ops/s |
++| ML-DSA-65 NTT (dispatch)     | ~1.04 µs | ~965,000 ops/s (**~1.21×**) |
++| ML-DSA-65 invNTT (scalar)    | ~1.32 µs | ~759,000 ops/s |
++| ML-DSA-65 invNTT (dispatch)  | ~1.11 µs | ~898,000 ops/s (**~1.18×**) |
++| SLH-DSA-SHAKE-128s KeyGen    | ~164 ms  | ~6 ops/s |
++| SLH-DSA-SHAKE-128s Sign      | ~1.25 s  | ~1 op/s |
++| SLH-DSA-SHAKE-128s Verify    | ~1.15 ms | ~870 ops/s |
++| secp256k1 pubkey             | ~329 µs  | ~3,000 ops/s |
++| FROST round1 commit          | ~24.6 µs | ~40,700 ops/s |
++| FROST round2 sign            | ~185 µs  | ~5,400 ops/s |
++| FROST aggregate              | ~113 µs  | ~8,900 ops/s |
++
++Sandbox numbers are for sanity-checking only and not authoritative;
++re-run on the deployment host before quoting externally.
++
++No `baseline_value` entries in `benchmarks/baseline.json` or
++`benchmarks/arm-baseline.json` were changed by the coverage expansion.
++The five new families are not yet wired into the CI regression-detection
++runner (`benchmarks/benchmark_runner.py`); they extend the **raw-C
++harness output surface** and the visualisation surface
++(`benchmarks/generate_charts.py`) only.

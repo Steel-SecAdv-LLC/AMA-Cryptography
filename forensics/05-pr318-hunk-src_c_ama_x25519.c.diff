@@ -1,0 +1,77 @@
+diff --git a/src/c/ama_x25519.c b/src/c/ama_x25519.c
+index b3c7fdb..bdd81b2 100644
+--- a/src/c/ama_x25519.c
++++ b/src/c/ama_x25519.c
+@@ -86,6 +86,27 @@ extern void ama_x25519_fe64_mul_mulx(uint64_t h[4], const uint64_t f[4],
+ extern void ama_x25519_fe64_sq_mulx(uint64_t h[4], const uint64_t f[4]);
+ #endif
+ 
++/* Benchmark/test-only runtime override for the MULX+ADX gate.
++ *
++ *   -1 = auto (default; honour CPUID)
++ *    0 = force off (pure-C fe64 even when MULX kernel is built + CPUID OK)
++ *    1 = force on  (only effective when the kernel TU is linked AND
++ *                   CPUID exposes BMI2+ADX; otherwise no-op)
++ *
++ * Set via the documented `ama_x25519_set_mulx_override()` public API
++ * (`include/ama_cryptography.h`). The accessor is consumed only by the
++ * `x25519_scalarmult` runtime branch below; non-fe64 build paths
++ * ignore it entirely. Stored as a plain `int` because reads happen on
++ * the hot path of every scalarmult and writes happen from single-
++ * threaded harness setup code — the production policy (-1) and the
++ * two test/bench values are word-sized writes that are atomic on every
++ * architecture AMA Cryptography targets. */
++static int ama_x25519_mulx_override = -1;
++
++static inline int ama_x25519_mulx_override_get(void) {
++    return ama_x25519_mulx_override;
++}
++
+ /* ----------------------------------------------------------------------
+  * Build-time field-path selection (deterministic).
+  *
+@@ -311,8 +332,18 @@ AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32],
+     /* Runtime branch: BMI2 (MULX) + ADX (ADCX/ADOX) bundle gate. The
+      * detection is cached after the first call by `cpuid_once` in
+      * ama_cpuid.c, so the cost is one predictable load + branch per
+-     * scalarmult, amortised over ~2500 mults+squares in the ladder. */
+-    if (ama_cpuid_has_x25519_mulx()) {
++     * scalarmult, amortised over ~2500 mults+squares in the ladder.
++     *
++     * Benchmark/test override: when `ama_x25519_set_mulx_override()` has
++     * been called with mode != -1, the override wins over CPUID. The
++     * default (mode == -1) is the production policy (CPUID-driven). The
++     * override only flips the *selection*; the two paths are byte-
++     * identical per `tests/c/test_x25519_fe64_mulx_equiv.c`. */
++    int override_mode = ama_x25519_mulx_override_get();
++    int use_mulx = (override_mode == -1)
++                   ? ama_cpuid_has_x25519_mulx()
++                   : (override_mode != 0);
++    if (use_mulx && ama_cpuid_has_x25519_mulx()) {
+         x25519_scalarmult_fe64_with_ops(q, n, p,
+                                         ama_x25519_fe64_mul_mulx,
+                                         ama_x25519_fe64_sq_mulx);
+@@ -813,4 +844,23 @@ AMA_API ama_error_t ama_x25519_scalarmult_batch(
+     return AMA_SUCCESS;
+ }
+ 
++/**
++ * @brief Benchmark/test-only override for the X25519 fe64 MULX+ADX gate.
++ *
++ * Public declaration and full documentation live in
++ * `include/ama_cryptography.h`. On builds without the MULX+ADX kernel
++ * (non-x86-64, or fe51/gf16 field path) the override variable still
++ * exists for ABI stability but is never consulted, so the call is a
++ * documented no-op exactly as advertised.
++ */
++AMA_API void ama_x25519_set_mulx_override(int mode) {
++    /* Clamp to the documented domain: anything outside {-1, 0, 1} is
++     * coerced to -1 (auto) so a future caller using a richer value
++     * scheme does not accidentally land on "force on" semantics. */
++    if (mode != 0 && mode != 1) {
++        mode = -1;
++    }
++    ama_x25519_mulx_override = mode;
++}
++
+ #endif /* AMA_X25519_NO_PUBLIC_API */

@@ -1,0 +1,74 @@
+diff --git a/include/ama_cryptography.h b/include/ama_cryptography.h
+index 7d1856f..5cd38f6 100644
+--- a/include/ama_cryptography.h
++++ b/include/ama_cryptography.h
+@@ -1053,6 +1053,69 @@ AMA_API ama_error_t ama_x25519_scalarmult_batch(
+  */
+ AMA_API const char *ama_x25519_field_path(void);
+ 
++/**
++ * @brief Benchmark/test-only override for the X25519 fe64 MULX+ADX runtime gate.
++ *
++ * Sets a process-wide override for the BMI2 (MULX) + ADX (ADCX/ADOX) bundle
++ * gate consulted by `x25519_scalarmult()` (see `ama_cpuid_has_x25519_mulx()`).
++ * Used by `benchmarks/benchmark_c_raw.c` to measure the MULX+ADX kernel on-vs-
++ * off without rebuilding, and by equivalence tests that pin the pure-C fe64
++ * path on hosts where the kernel would otherwise be selected.
++ *
++ * **NOT a production policy knob.** The default policy (CPUID-driven auto-
++ * selection) is byte-identical across both paths; this override exists only
++ * for measurement and equivalence-test harnesses.
++ *
++ * @param mode  -1 = auto (default; honour CPUID),
++ *               0 = force kernel off (pure-C fe64 even when CPUID + build
++ *                   would otherwise select the MULX+ADX kernel),
++ *               1 = force kernel on  (only takes effect when the kernel TU
++ *                   was actually compiled in via `AMA_HAVE_X25519_FE64_MULX_IMPL`
++ *                   AND the host CPUID exposes BMI2+ADX; otherwise pure-C
++ *                   fe64 still runs and the call is a no-op).
++ *
++ * On non-x86-64 toolchains, on builds without `AMA_HAVE_X25519_FE64_MULX_IMPL`,
++ * and on field paths other than fe64 (fe51 / gf16), this call is a documented
++ * no-op so benchmark/test code can call it unconditionally.
++ *
++ * **Threading contract.** The override is a single word read on the hot path
++ * of every `ama_x25519_key_exchange()` / `ama_x25519_scalarmult_batch()` call
++ * with no internal synchronisation. Callers MUST only invoke
++ * `ama_x25519_set_mulx_override()` from a single thread during harness/test
++ * setup, with no concurrent scalarmult work in flight. Concurrent setter
++ * calls while X25519 operations are running on other threads is undefined
++ * behaviour. (The two values that actually matter — pinning off, pinning on
++ * — are word-sized writes that are atomic on every supported architecture,
++ * so the worst observable effect of a torn write would be a one-iteration
++ * mis-selection between two byte-identical code paths; but this is not a
++ * sanctioned use mode and not a contract this function intends to honour.)
++ */
++AMA_API void ama_x25519_set_mulx_override(int mode);
++
++/**
++ * @brief Benchmark-only forward NTT over the static Dilithium zetas table.
++ *
++ * Runs one forward Number-Theoretic Transform (NTT) over `poly[256]` using the
++ * compiled-in zetas constants. `use_dispatch != 0` selects the dispatched SIMD
++ * kernel (AVX2 / NEON / SVE2 / AVX-512 when wired and runtime-gated on); `0`
++ * selects the scalar reference loop. Exposed so `benchmark_c_raw.c` can isolate
++ * the NTT kernel cost from the surrounding ML-DSA-65 sign/verify code that
++ * `bench_dilithium_sign()` measures end-to-end.
++ *
++ * Not part of the production ML-DSA API; production callers go through
++ * `ama_dilithium_sign()` / `ama_dilithium_verify()` (FIPS 204 §6.1 / §6.2).
++ */
++AMA_API void ama_dilithium_ntt_bench(int32_t poly[256], int use_dispatch);
++
++/**
++ * @brief Benchmark-only inverse NTT over the static Dilithium zetas table.
++ *
++ * Inverse counterpart of `ama_dilithium_ntt_bench()`. Includes the final
++ * Montgomery-domain scaling by `f = 41978` so the output is in the same
++ * domain ML-DSA uses internally. Same `use_dispatch` semantics.
++ */
++AMA_API void ama_dilithium_invntt_bench(int32_t poly[256], int use_dispatch);
++
+ /* ============================================================================
+  * ARGON2ID KEY DERIVATION (RFC 9106)
+  * ============================================================================ */
