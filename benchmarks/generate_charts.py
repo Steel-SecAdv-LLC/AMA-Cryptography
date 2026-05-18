@@ -488,12 +488,12 @@ def generate_charts(output_dir: str) -> None:
                 # and the X25519_MULX docstring above.
                 if entry.get("operation") == "X25519 DH (MULX off)":
                     live_off = {
-                        "ops_sec":    entry["ops_per_sec"],
+                        "ops_sec": entry["ops_per_sec"],
                         "latency_us": entry["median_us"],
                     }
                 elif entry.get("operation") == "X25519 DH (MULX on)":
                     live_on = {
-                        "ops_sec":    entry["ops_per_sec"],
+                        "ops_sec": entry["ops_per_sec"],
                         "latency_us": entry["median_us"],
                     }
             # Atomic swap: both rows or neither. Either both temporaries
