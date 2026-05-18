@@ -884,9 +884,11 @@ static bench_result_t bench_hkdf(int iters, int warmup) {
  * Same Diffie-Hellman call as `bench_x25519_dh()`, but pins the runtime
  * selection of the in-house BMI2+ADX kernel via the benchmark/test-only
  * `ama_x25519_set_mulx_override()` API. Used to quantify the MULX+ADX
- * speedup quoted in `wiki/Performance-Benchmarks.md` (~21% on this
- * sandbox; literature 1.8-2.2x on uncontended Skylake+ / Zen+) without
- * rebuilding.
+ * speedup quoted in `wiki/Performance-Benchmarks.md` (~1.46× on this
+ * sandbox — 75.1 µs → 51.5 µs, 13.3k → 19.4k ops/s; literature 1.8-2.2×
+ * on uncontended Skylake+ / Zen+) without rebuilding. The previous ~21%
+ * figure referenced here was a copy from the ML-DSA-65 NTT row
+ * (1.21× / 21%) and did not match the X25519 measurement.
  *
  * If the host CPUID lacks BMI2+ADX OR the MULX kernel TU was not linked
  * in (`AMA_HAVE_X25519_FE64_MULX_IMPL` undefined at build), the
@@ -961,9 +963,13 @@ static bench_result_t bench_x25519_dh_mulx_on(int iters, int warmup) {
 
 static void fill_random_int32_poly(int32_t a[256]) {
     /* Coefficients in [-q+1, q-1] for q = 8380417 — the natural input
-     * range entering the NTT during ML-DSA signing. Uses the same
-     * `rand()` fallback as `fill_random_poly` so the result is
-     * reproducible across runs on a single host. */
+     * range entering the NTT during ML-DSA signing. Lightweight,
+     * non-cryptographic benchmark input generation via `rand()`,
+     * seeded from `time(NULL)` in `main()` — the sequence varies from
+     * run to run on the same host, which is intentional (the
+     * benchmark cares about per-NTT throughput, not byte-for-byte
+     * reproducibility of inputs; the bench harness already filters
+     * timing noise via median + stddev across ≥50 samples per row). */
     for (int i = 0; i < 256; i++) {
         int32_t v = (int32_t)((unsigned)rand() % 8380417u);
         if (rand() & 1) v = -v;

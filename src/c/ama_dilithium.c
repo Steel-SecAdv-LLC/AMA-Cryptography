@@ -2065,32 +2065,69 @@ AMA_API ama_error_t ama_dilithium_verify_ctx(
  * `dil_zetas` table stays internal — these accessors are the only sanctioned
  * way for external code to drive the NTT in isolation.
  *
+ * Each wrapper records which path it actually took into a static last-used
+ * tracker that `ama_dilithium_{ntt,invntt}_bench_last_dispatch_get()` exposes.
+ * The tracker lets a regression test verify the selector wiring directly
+ * rather than relying on output byte-equality (which would still pass if a
+ * wrapper silently ignored `use_dispatch` because both paths are designed
+ * to produce identical bytes). Storage is single-threaded plain `int`,
+ * matching the bench-harness use pattern; the wrappers are not in the
+ * production hot path.
+ *
  * Not for production use. ML-DSA-65 production callers go through
  * `ama_dilithium_sign()` / `ama_dilithium_verify()` (FIPS 204 §6.1 / §6.2).
  * ============================================================================ */
 
+/* Last-used trackers: -1 = wrapper has not been called yet in this process,
+ * 0 = scalar reference loop ran, 1 = dispatched SIMD kernel ran. The values
+ * are read via the public getters declared in the header. */
+static int ama_dilithium_ntt_bench_last_dispatch    = -1;
+static int ama_dilithium_invntt_bench_last_dispatch = -1;
+
 AMA_API void ama_dilithium_ntt_bench(int32_t poly[256], int use_dispatch) {
-    if (use_dispatch) {
-        /* Production dispatch path: AVX2 / NEON / SVE2 / AVX-512 when wired,
-         * otherwise the scalar reference loop inside dil_ntt_cached. */
-        dil_ntt_cached(poly, ama_get_dispatch_table());
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (use_dispatch && dt->dilithium_ntt) {
+        /* Production dispatch path: AVX2 / NEON / SVE2 / AVX-512 when wired
+         * AND the caller asked for it. */
+        dt->dilithium_ntt(poly, dil_zetas);
+        ama_dilithium_ntt_bench_last_dispatch = 1;
     } else {
-        /* Scalar reference only: synthesise a dispatch table with the
-         * SIMD slot cleared so dil_ntt_cached falls through to the
-         * generic C implementation. Same code path that runs on any
-         * host whose CPUID misses every SIMD gate. */
-        ama_dispatch_table_t scalar = *ama_get_dispatch_table();
+        /* Scalar reference: either the caller forced it (use_dispatch == 0)
+         * or no SIMD slot was wired on this host. Synthesise a dispatch
+         * table with the slot cleared so dil_ntt_cached falls through to
+         * the generic C implementation. */
+        ama_dispatch_table_t scalar = *dt;
         scalar.dilithium_ntt = NULL;
         dil_ntt_cached(poly, &scalar);
+        ama_dilithium_ntt_bench_last_dispatch = 0;
     }
 }
 
 AMA_API void ama_dilithium_invntt_bench(int32_t poly[256], int use_dispatch) {
-    if (use_dispatch) {
-        dil_invntt_cached(poly, ama_get_dispatch_table());
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (use_dispatch && dt->dilithium_invntt) {
+        dt->dilithium_invntt(poly, dil_zetas);
+        ama_dilithium_invntt_bench_last_dispatch = 1;
     } else {
-        ama_dispatch_table_t scalar = *ama_get_dispatch_table();
+        ama_dispatch_table_t scalar = *dt;
         scalar.dilithium_invntt = NULL;
         dil_invntt_cached(poly, &scalar);
+        ama_dilithium_invntt_bench_last_dispatch = 0;
     }
+}
+
+AMA_API int ama_dilithium_ntt_bench_last_dispatch_get(void) {
+    return ama_dilithium_ntt_bench_last_dispatch;
+}
+
+AMA_API int ama_dilithium_invntt_bench_last_dispatch_get(void) {
+    return ama_dilithium_invntt_bench_last_dispatch;
+}
+
+AMA_API int ama_dilithium_ntt_dispatch_slot_wired(void) {
+    return ama_get_dispatch_table()->dilithium_ntt != NULL;
+}
+
+AMA_API int ama_dilithium_invntt_dispatch_slot_wired(void) {
+    return ama_get_dispatch_table()->dilithium_invntt != NULL;
 }

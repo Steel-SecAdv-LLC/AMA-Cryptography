@@ -114,6 +114,24 @@ static inline int ama_x25519_mulx_override_get(void) {
     return ama_x25519_mulx_override;
 }
 
+/* Test-only observation of which kernel the most recent fe64 scalarmult
+ * actually selected. -1 = no fe64 scalarmult has run yet (or this build has
+ * no fe64/MULX path), 0 = pure-C fe64 schoolbook, 1 = MULX+ADX kernel.
+ * Mirrors the override storage: plain int, single-threaded contract, no
+ * production cost beyond the AMA_TESTING_MODE-gated store inside the
+ * runtime branch. Production builds compile this variable out entirely. */
+#ifdef AMA_TESTING_MODE
+static int ama_x25519_mulx_last_used = -1;
+/* Forward declaration matches the extern-declared usage in
+ * `tests/c/test_x25519_mulx_override.c`; mirrors how
+ * `ama_dilithium_randombytes_hook` exposes a test-only symbol without
+ * leaking it into the production header. */
+AMA_API int ama_x25519_mulx_last_used_get(void);
+AMA_API int ama_x25519_mulx_last_used_get(void) {
+    return ama_x25519_mulx_last_used;
+}
+#endif
+
 /* ----------------------------------------------------------------------
  * Build-time field-path selection (deterministic).
  *
@@ -354,11 +372,17 @@ AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32],
     int has_mulx = ama_cpuid_has_x25519_mulx();
     int use_mulx = (override_mode == -1) ? has_mulx : (override_mode != 0);
     if (use_mulx && has_mulx) {
+#ifdef AMA_TESTING_MODE
+        ama_x25519_mulx_last_used = 1;
+#endif
         x25519_scalarmult_fe64_with_ops(q, n, p,
                                         ama_x25519_fe64_mul_mulx,
                                         ama_x25519_fe64_sq_mulx);
         return;
     }
+#endif
+#if defined(AMA_HAVE_X25519_FE64_MULX_IMPL) && defined(AMA_TESTING_MODE)
+    ama_x25519_mulx_last_used = 0;
 #endif
     x25519_scalarmult_fe64_with_ops(q, n, p,
                                     fe64_mul_purec_wrapper,
@@ -871,6 +895,22 @@ AMA_API void ama_x25519_set_mulx_override(int mode) {
         mode = -1;
     }
     ama_x25519_mulx_override = mode;
+}
+
+/**
+ * @brief Read the currently-effective MULX override (post-clamp).
+ *
+ * Returns the value the setter stored after clamping out-of-domain modes
+ * to -1. Lets a regression test verify that `set_mulx_override(42)` was
+ * coerced to auto without having to infer the clamp from byte-identical
+ * shared secrets (which is a necessary but not sufficient observation).
+ *
+ * Production callers should never need this. Public for symmetry with
+ * `ama_x25519_set_mulx_override()` and to give the bench/test harnesses
+ * a way to verify the setter contract directly.
+ */
+AMA_API int ama_x25519_get_mulx_override(void) {
+    return ama_x25519_mulx_override;
 }
 
 #endif /* AMA_X25519_NO_PUBLIC_API */

@@ -468,25 +468,48 @@ def generate_charts(output_dir: str) -> None:
     mulx_rows = copy.deepcopy(X25519_MULX)
     bench_raw = ROOT / "benchmarks" / "benchmark_c_raw_results.json"
     if bench_raw.exists():
+        # Transactional override: collect BOTH live rows into local
+        # temporaries before mutating `mulx_rows`. A malformed or
+        # partial file that yields a valid `MULX off` entry and then
+        # raises (KeyError / TypeError) while parsing `MULX on` MUST
+        # NOT leave the chart in a mixed live+fallback state — both
+        # bars come from the same source, or neither does. The fall-
+        # back is the anchored constants in `X25519_MULX` already
+        # deep-copied into `mulx_rows`.
         try:
             with open(bench_raw) as f:
                 raw = json.load(f)
+            live_off = None
+            live_on = None
             for entry in raw.get("results", []):
-                # Use median_us (not mean_us) so the live numbers match the
-                # "Raw C medians" anchor convention used everywhere else in
-                # this file — see KEM_OPS, the panel headers, and the
-                # X25519_MULX docstring above.
+                # Use median_us (not mean_us) so the live numbers match
+                # the "Raw C medians" anchor convention used everywhere
+                # else in this file — see KEM_OPS, the panel headers,
+                # and the X25519_MULX docstring above.
                 if entry.get("operation") == "X25519 DH (MULX off)":
-                    mulx_rows["MULX off (pure-C fe64)"]["ops_sec"] = entry["ops_per_sec"]
-                    mulx_rows["MULX off (pure-C fe64)"]["latency_us"] = entry["median_us"]
+                    live_off = {
+                        "ops_sec":    entry["ops_per_sec"],
+                        "latency_us": entry["median_us"],
+                    }
                 elif entry.get("operation") == "X25519 DH (MULX on)":
-                    mulx_rows["MULX on (BMI2+ADX kernel)"]["ops_sec"] = entry["ops_per_sec"]
-                    mulx_rows["MULX on (BMI2+ADX kernel)"]["latency_us"] = entry["median_us"]
+                    live_on = {
+                        "ops_sec":    entry["ops_per_sec"],
+                        "latency_us": entry["median_us"],
+                    }
+            # Atomic swap: both rows or neither. Either both temporaries
+            # are populated, or the file did not contain the paired
+            # rows we expect and the anchored constants stand unchanged.
+            if live_off is not None and live_on is not None:
+                mulx_rows["MULX off (pure-C fe64)"].update(live_off)
+                mulx_rows["MULX on (BMI2+ADX kernel)"].update(live_on)
         except (json.JSONDecodeError, KeyError, TypeError):
             # Live-data override is best-effort: a malformed or partial
             # benchmark_c_raw_results.json file should not break chart
             # generation. Fall back to the anchored sandbox numbers in
             # X25519_MULX (already loaded into `mulx_rows` above).
+            # Because the per-row mutation is gated on both temporaries
+            # being populated, no partial state can leak past this
+            # except-block.
             pass
 
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))

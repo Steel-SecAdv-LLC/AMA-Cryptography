@@ -24,7 +24,7 @@
  * invoking the inverse helper — would silently mislabel the published
  * benchmark numbers without breaking any other test.
  *
- * This test pins four behaviours through the public wrappers exclusively:
+ * This test pins five behaviours through the public wrappers exclusively:
  *
  *   1. `ntt_bench(poly, 1)` matches `ntt_bench(poly, 0)` byte-for-byte
  *      on the same input. Both lanes use the same `dil_ntt_cached`
@@ -34,14 +34,25 @@
  *      well-known reference implementation.
  *   3. `invntt_bench(poly, 1)` matches `invntt_bench(poly, 0)` and the
  *      scalar invNTT reference (mirror of items 1 and 2).
- *   4. Forward then inverse round-trip on a random polynomial is the
- *      identity (modulo the Montgomery `f = 41978` factor already
- *      folded into the invNTT — `dil_invntt_cached` produces output
- *      in the same domain ML-DSA uses internally, so an invNTT(NTT(a))
- *      cycle reproduces `a` exactly without an explicit Montgomery
- *      rescale). Run on both `use_dispatch=0` and `use_dispatch=1` so
- *      a forward-vs-inverse wiring swap inside either wrapper is
- *      caught even if both halves are individually self-consistent.
+ *   4. Forward then inverse round-trip on a random polynomial reproduces
+ *      the input after one Montgomery reduction per coefficient. The
+ *      public wrapper is `invntt_tomont` semantics — the final scale by
+ *      `f = R^2 / N mod q` (where `R = 2^32 mod q`, `N = 256`) leaves
+ *      the result in Montgomery domain rather than standard domain, so
+ *      `invntt_bench(ntt_bench(a))[j] = a[j] * R mod q`. Applying one
+ *      Montgomery reduction (`mont_reduce(b[j]) = b[j] * R^(-1) mod q`)
+ *      recovers `a[j] mod q` per coefficient. Run on both
+ *      `use_dispatch=0` and `use_dispatch=1` so a forward-vs-inverse
+ *      wiring swap inside either wrapper is caught even if both halves
+ *      are individually self-consistent.
+ *   5. Selector observability: after each wrapper call the
+ *      `ama_dilithium_{ntt,invntt}_bench_last_dispatch_get()` getter
+ *      reports the path actually taken, and the corresponding
+ *      `_dispatch_slot_wired()` predicate reports whether the SIMD
+ *      slot is non-NULL on this build/host. Together they pin the
+ *      selector wiring directly (a wrapper that silently ignored
+ *      `use_dispatch` would still pass lanes 1-4 because both kernels
+ *      produce byte-identical output, but it would fail lane 5).
  *
  * Inputs are deterministic xorshift64* polynomials in the FIPS 204
  * input range `[-(Q-1), Q-1]` for Q = 8 380 417, mirroring the natural
@@ -100,6 +111,25 @@ static const int32_t dil_zetas[256] = {
    -554416,  3919660,   -48306, -1362209,  3937738,  1400424,  -846154,  1976782
 };
 
+/* Local copy of dil_montgomery_reduce: same straight-line schedule as the
+ * library's `dil_montgomery_reduce` (`src/c/ama_dilithium.c`, line ~176).
+ * Computes `a * R^(-1) mod q` where `R = 2^32`. Used by the scalar
+ * reference NTT/invNTT below AND by the round-trip recovery in lane 4. */
+static int32_t mont_reduce(int64_t a) {
+    int32_t t = (int32_t)((int64_t)(int32_t)a * DILITHIUM_QINV);
+    t = (int32_t)((a - (int64_t)t * DILITHIUM_Q) >> 32);
+    return t;
+}
+
+/* Canonical [0, q) representative. Lets the round-trip recovery compare a
+ * negative original against a positive `mont_reduce(b)` (or vice versa)
+ * by collapsing both to the same residue class. */
+static int32_t canon_modq(int32_t x) {
+    int32_t r = x % DILITHIUM_Q;
+    if (r < 0) r += DILITHIUM_Q;
+    return r;
+}
+
 /* Scalar reference NTT — straight port of FIPS 204 Algorithm 35 (NTT)
  * using Montgomery reduction. Identical to the helper that
  * `dil_ntt_cached` falls through to when the SIMD slot is NULL. */
@@ -110,8 +140,7 @@ static void scalar_ntt(int32_t a[DILITHIUM_N]) {
         for (start = 0; start < DILITHIUM_N; start = j + len) {
             zeta = dil_zetas[++k];
             for (j = start; j < start + len; ++j) {
-                int32_t tmp = (int32_t)((int64_t)(int32_t)((int64_t)zeta * a[j + len]) * DILITHIUM_QINV);
-                t = (int32_t)(((int64_t)zeta * a[j + len] - (int64_t)tmp * DILITHIUM_Q) >> 32);
+                t = mont_reduce((int64_t)zeta * a[j + len]);
                 a[j + len] = a[j] - t;
                 a[j] = a[j] + t;
             }
@@ -120,7 +149,9 @@ static void scalar_ntt(int32_t a[DILITHIUM_N]) {
 }
 
 /* Scalar reference invNTT — FIPS 204 Algorithm 36 with the final
- * Montgomery rescale by f = 41978 folded in. */
+ * Montgomery rescale by f = 41978 = R^2 / N mod q folded in. Output is
+ * therefore in Montgomery domain (`b[j] = a[j] * R mod q`), matching
+ * the library's `dil_invntt_cached` (`invntt_tomont` variant) exactly. */
 static void scalar_invntt(int32_t a[DILITHIUM_N]) {
     unsigned int start, len, j, k = 256;
     int32_t t, zeta;
@@ -132,14 +163,12 @@ static void scalar_invntt(int32_t a[DILITHIUM_N]) {
                 t = a[j];
                 a[j] = t + a[j + len];
                 a[j + len] = t - a[j + len];
-                int32_t tmp = (int32_t)((int64_t)(int32_t)((int64_t)zeta * a[j + len]) * DILITHIUM_QINV);
-                a[j + len] = (int32_t)(((int64_t)zeta * a[j + len] - (int64_t)tmp * DILITHIUM_Q) >> 32);
+                a[j + len] = mont_reduce((int64_t)zeta * a[j + len]);
             }
         }
     }
     for (j = 0; j < DILITHIUM_N; ++j) {
-        int32_t tmp = (int32_t)((int64_t)(int32_t)((int64_t)f * a[j]) * DILITHIUM_QINV);
-        a[j] = (int32_t)(((int64_t)f * a[j] - (int64_t)tmp * DILITHIUM_Q) >> 32);
+        a[j] = mont_reduce((int64_t)f * a[j]);
     }
 }
 
@@ -176,12 +205,45 @@ static int cmp_poly(const int32_t a[DILITHIUM_N], const int32_t b[DILITHIUM_N],
     return 0;
 }
 
+/* Round-trip comparator: recovers each round-trip coefficient via one
+ * Montgomery reduction (undoes the `f = R^2/N` final scale that leaves
+ * `invntt_tomont` output in Montgomery domain) and compares to the
+ * original modulo Q. */
+static int cmp_poly_after_mont_recovery(const int32_t original[DILITHIUM_N],
+                                        const int32_t roundtrip[DILITHIUM_N],
+                                        const char *label, int trial) {
+    for (int i = 0; i < DILITHIUM_N; i++) {
+        int32_t recovered = mont_reduce((int64_t)roundtrip[i]);
+        if (canon_modq(recovered) != canon_modq(original[i])) {
+            fprintf(stderr,
+                    "FAIL: %s trial %d, coefficient %d: "
+                    "original=%d (canon=%d) roundtrip=%d "
+                    "recovered=%d (canon=%d)\n",
+                    label, trial, i,
+                    original[i], canon_modq(original[i]),
+                    roundtrip[i],
+                    recovered, canon_modq(recovered));
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int main(void) {
     printf("Dilithium NTT/invNTT bench-wrapper public-API regression\n");
     printf("========================================================\n");
 
     const int N_TRIALS = 64;
     int fail = 0;
+
+    /* Pre-flight: snapshot the SIMD slot wiring so lane-5 assertions can
+     * predict what `use_dispatch=1` will route to on this host. The slots
+     * are CPUID+build-time decisions that do not change at runtime. */
+    const int ntt_slot_wired    = ama_dilithium_ntt_dispatch_slot_wired();
+    const int invntt_slot_wired = ama_dilithium_invntt_dispatch_slot_wired();
+    printf("dispatch slots: dilithium_ntt=%s dilithium_invntt=%s\n",
+           ntt_slot_wired    ? "WIRED" : "NULL",
+           invntt_slot_wired ? "WIRED" : "NULL");
 
     /* --------------------------------------------------------------
      * Lane 1: forward NTT — wrapper(use_dispatch=1) vs wrapper(0).
@@ -240,11 +302,16 @@ int main(void) {
     }
 
     /* --------------------------------------------------------------
-     * Lane 4: NTT then invNTT round-trip identity on both dispatch
-     * settings. Catches a forward-vs-inverse swap inside either
-     * wrapper that Lanes 1-3 would not — because both swapped halves
-     * could individually be self-consistent, but the round-trip
-     * would not return to the original polynomial. */
+     * Lane 4: NTT then invNTT round-trip on both dispatch settings.
+     * The result is NOT byte-identical to the original — the invNTT
+     * wrapper is `invntt_tomont` semantics (final scale by
+     * `f = R^2/N mod q`), so `invntt_bench(ntt_bench(a))[j] = a[j] * R
+     * mod q`. One Montgomery reduction recovers the original modulo Q.
+     *
+     * A forward-vs-inverse swap inside either wrapper that Lanes 1-3
+     * would not catch — because both swapped halves could individually
+     * be self-consistent — is caught here: the recovered polynomial
+     * would not equal the original modulo Q. */
     for (int use_dispatch = 0; use_dispatch <= 1; use_dispatch++) {
         for (int trial = 0; trial < N_TRIALS; trial++) {
             int32_t original[DILITHIUM_N];
@@ -257,23 +324,85 @@ int main(void) {
 
             char label[64];
             snprintf(label, sizeof(label),
-                     "NTT(invNTT) identity (use_dispatch=%d)",
+                     "ntt->invntt round-trip mod Q (use_dispatch=%d)",
                      use_dispatch);
-            fail += cmp_poly(original, roundtrip, label, trial);
+            fail += cmp_poly_after_mont_recovery(original, roundtrip,
+                                                 label, trial);
+        }
+    }
+
+    /* --------------------------------------------------------------
+     * Lane 5: selector observability. After each wrapper call, the
+     * library's last-dispatch getter reports the path that actually
+     * ran. The expected value is:
+     *
+     *   - use_dispatch == 0                              -> 0 (always)
+     *   - use_dispatch == 1 AND slot wired               -> 1
+     *   - use_dispatch == 1 AND slot NULL (no SIMD here) -> 0
+     *
+     * A wrapper that silently ignored `use_dispatch` would still pass
+     * lanes 1-4 (because both kernel paths produce identical bytes)
+     * but would fail HERE. This is the assertion that pins the new
+     * selector wiring directly, per the engineering item Copilot
+     * raised in the second-pass review on PR #320. */
+    {
+        int32_t scratch[DILITHIUM_N];
+        fill_random_poly(scratch);
+
+        ama_dilithium_ntt_bench(scratch, 0);
+        if (ama_dilithium_ntt_bench_last_dispatch_get() != 0) {
+            fprintf(stderr,
+                    "FAIL: ntt_bench(use_dispatch=0) reported "
+                    "last_dispatch=%d (expected 0)\n",
+                    ama_dilithium_ntt_bench_last_dispatch_get());
+            fail++;
+        }
+        ama_dilithium_ntt_bench(scratch, 1);
+        const int ntt_expected_on = ntt_slot_wired ? 1 : 0;
+        if (ama_dilithium_ntt_bench_last_dispatch_get() != ntt_expected_on) {
+            fprintf(stderr,
+                    "FAIL: ntt_bench(use_dispatch=1) reported "
+                    "last_dispatch=%d (expected %d on slot=%s host)\n",
+                    ama_dilithium_ntt_bench_last_dispatch_get(),
+                    ntt_expected_on,
+                    ntt_slot_wired ? "WIRED" : "NULL");
+            fail++;
+        }
+
+        fill_random_poly(scratch);
+        ama_dilithium_invntt_bench(scratch, 0);
+        if (ama_dilithium_invntt_bench_last_dispatch_get() != 0) {
+            fprintf(stderr,
+                    "FAIL: invntt_bench(use_dispatch=0) reported "
+                    "last_dispatch=%d (expected 0)\n",
+                    ama_dilithium_invntt_bench_last_dispatch_get());
+            fail++;
+        }
+        ama_dilithium_invntt_bench(scratch, 1);
+        const int invntt_expected_on = invntt_slot_wired ? 1 : 0;
+        if (ama_dilithium_invntt_bench_last_dispatch_get() != invntt_expected_on) {
+            fprintf(stderr,
+                    "FAIL: invntt_bench(use_dispatch=1) reported "
+                    "last_dispatch=%d (expected %d on slot=%s host)\n",
+                    ama_dilithium_invntt_bench_last_dispatch_get(),
+                    invntt_expected_on,
+                    invntt_slot_wired ? "WIRED" : "NULL");
+            fail++;
         }
     }
 
     if (fail) {
         fprintf(stderr,
-                "\nFAIL: %d divergence(s) across the four lanes — the bench "
-                "wrappers do not agree with each other or with the in-test "
-                "scalar reference.\n",
+                "\nFAIL: %d divergence(s) across the five lanes — the bench "
+                "wrappers do not agree with each other, with the in-test "
+                "scalar reference, with the documented round-trip semantics, "
+                "or with their own selector-observability contract.\n",
                 fail);
         return 1;
     }
 
-    printf("\n=== PASS — %d trials × 4 lanes, all dispatched/scalar/reference "
-           "byte-identical, round-trip identity verified ===\n",
-           N_TRIALS);
+    printf("\n=== PASS — %d trials × 3 byte-eq lanes + %d round-trip + 4 "
+           "selector-observability assertions, all pinned ===\n",
+           N_TRIALS, N_TRIALS * 2);
     return 0;
 }
