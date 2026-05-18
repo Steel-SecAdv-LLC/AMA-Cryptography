@@ -307,8 +307,10 @@ int main(void) {
      * -------------------------------------------------------------- */
     if (dt != NULL && dt->dilithium_ntt != NULL) {
         any_lane_exercised = 1;
-        uint8_t pk[1952], sk[4032];
-        uint8_t sig_simd[3309], sig_scalar[3309];
+        uint8_t pk[AMA_ML_DSA_65_PUBLIC_KEY_BYTES];
+        uint8_t sk[AMA_ML_DSA_65_SECRET_KEY_BYTES];
+        uint8_t sig_simd[AMA_ML_DSA_65_SIGNATURE_BYTES];
+        uint8_t sig_scalar[AMA_ML_DSA_65_SIGNATURE_BYTES];
         size_t  siglen_simd = sizeof(sig_simd), siglen_scalar = sizeof(sig_scalar);
         const uint8_t msg[64] = { 'd', 'i', 'l', 'i', 't', 'h', 'i', 'u', 'm' };
 

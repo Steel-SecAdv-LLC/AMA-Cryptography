@@ -181,7 +181,15 @@ static void scalar_wots_chain(uint8_t *out, const uint8_t *in,
         uint32_t h[8];
         memcpy(h, SHA256_H, sizeof(SHA256_H));
         sha256_compress_one_block(h, block);
-        for (int j = 0; j < 8 && j * 4 < (int)n; j++) {
+        /* Only output complete 32-bit words.  The previous guard
+         * `j * 4 < (int)n` admitted iterations where 1-3 of the four
+         * `out[j*4+k]` writes would overrun the buffer when `n` is
+         * not a multiple of 4 (e.g., n=1 still wrote bytes 0..3).
+         * The SIMD helpers this scalar reference mirrors are only
+         * defined for `n == 32` (SPHINCS+-256f hash length), and
+         * SLH-DSA hash lengths are 16 / 24 / 32 — all multiples of
+         * 4 — so the stricter bound is the right invariant. */
+        for (size_t j = 0; j < 8 && (j * 4) + 4 <= n; j++) {
             out[j*4+0] = (uint8_t)(h[j] >> 24);
             out[j*4+1] = (uint8_t)(h[j] >> 16);
             out[j*4+2] = (uint8_t)(h[j] >> 8);
