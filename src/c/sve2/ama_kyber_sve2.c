@@ -23,22 +23,30 @@
  *   - `ama_kyber_ntt_sve2`
  *   - `ama_kyber_invntt_sve2`
  *   - `ama_kyber_poly_pointwise_sve2`
+ *   - `ama_kyber_poly_add_sve2`
+ *   - `ama_kyber_poly_sub_sve2`
+ *   - `ama_kyber_poly_reduce_sve2`
  *
- * Compiled but NOT YET wired — kept as build artifacts pending a
- * follow-up PR that adds the corresponding dispatch slots
- * (`kyber_poly_add`, `_sub`, `_reduce`) and refactors the call sites in
- * `src/c/ama_kyber.c` to indirect through them.  Algorithmic
- * correctness is straightforward (`svadd_s16_x`, `svsub_s16_x`, and
- * the Barrett reduction reused from the NTT path) but wiring needs:
- *   1. Add `kyber_poly_add_fn` / `_sub_fn` / `_reduce_fn` typedefs to
- *      `include/ama_dispatch.h`.
- *   2. Add the matching slots to `ama_dispatch_table_t`.
- *   3. Refactor `poly_add` / `poly_sub` / `poly_reduce` in
- *      `src/c/ama_kyber.c` to call through the dispatch table.
- *   4. Add byte-identity KAT in `tests/c/test_kyber_*_equiv.c`.
- *   5. Benchmark vs the compiler's auto-vectorised scalar to confirm
- *      the SVE2 path actually wins (modern GCC/Clang already
- *      auto-vectorise short int16 add/sub loops with `-O3`).
+ * The three poly helpers were promoted from compiled-but-unwired in
+ * the PR that landed `kyber_poly_{add,sub,reduce}` dispatch slots:
+ *   1. `kyber_poly_add_fn` / `_sub_fn` / `_reduce_fn` typedefs added
+ *      to `include/ama_dispatch.h`.
+ *   2. Matching slots in `ama_dispatch_table_t`.
+ *   3. `poly_add` / `poly_sub` / `poly_reduce` in `src/c/ama_kyber.c`
+ *      now indirect through the dispatch table when the slot is
+ *      non-NULL, falling back to the existing inlined scalar.
+ *   4. Byte-identity KAT in `tests/c/test_kyber_poly_equiv.c`
+ *      (dispatched-pointer + direct per-ISA SIMD-symbol lanes,
+ *      1024 random poly inputs in [-q+1, q-1]).
+ *   5. Microbenchmarks in `benchmarks/benchmark_c_raw.c` —
+ *      modern GCC/Clang already auto-vectorise short int16 add/sub
+ *      loops at -O3 on AVX2/NEON targets, so on those tiers the
+ *      dispatch slot is intentionally left NULL and the inline
+ *      scalar wins via the autovectorizer.  On SVE2 the predicated
+ *      VL-agnostic loop avoids the auto-vectoriser's fixed-width
+ *      epilogue and the auto-tune lockstep revert (see
+ *      `src/c/dispatch/ama_dispatch.c`) demotes the helpers if the
+ *      SVE2 codegen tier regresses on a particular host.
  *
  * Helpers:
  *   - `ama_kyber_poly_add_sve2`
@@ -96,10 +104,7 @@ static inline svint16_t barrett_reduce_sve2(svbool_t pg, svint16_t a) {
 }
 
 /* ============================================================================
- * SVE2 polynomial addition
- * TODO(wire): no `kyber_poly_add` dispatch slot exists; this helper is a
- * build artifact pending follow-up.  See file header for the wiring
- * checklist.
+ * SVE2 polynomial addition — wired via dispatch_table.kyber_poly_add.
  * ============================================================================ */
 void ama_kyber_poly_add_sve2(int16_t r[KYBER_N],
                               const int16_t a[KYBER_N],
@@ -115,8 +120,7 @@ void ama_kyber_poly_add_sve2(int16_t r[KYBER_N],
 }
 
 /* ============================================================================
- * SVE2 polynomial subtraction
- * TODO(wire): no `kyber_poly_sub` dispatch slot exists; see file header.
+ * SVE2 polynomial subtraction — wired via dispatch_table.kyber_poly_sub.
  * ============================================================================ */
 void ama_kyber_poly_sub_sve2(int16_t r[KYBER_N],
                               const int16_t a[KYBER_N],
@@ -327,8 +331,8 @@ void ama_kyber_poly_pointwise_sve2(int16_t r[KYBER_N],
 }
 
 /* ============================================================================
- * SVE2 Barrett reduction of full polynomial
- * TODO(wire): no `kyber_poly_reduce` dispatch slot exists; see file header.
+ * SVE2 Barrett reduction of full polynomial — wired via
+ * dispatch_table.kyber_poly_reduce.
  * ============================================================================ */
 void ama_kyber_poly_reduce_sve2(int16_t poly[KYBER_N]) {
     size_t i = 0;

@@ -1971,8 +1971,20 @@ static void poly_basemul(poly* r, const poly* a, const poly* b) {
 
 /**
  * Add two polynomials
+ *
+ * Dispatches to an SVE2 svadd_s16_x kernel when the slot is non-NULL;
+ * falls back to the inline scalar loop below (which modern GCC/Clang
+ * already auto-vectorise at -O3 on AVX2/NEON targets, so no
+ * dispatched helper is wired on those tiers today).  Output range
+ * is the int16 sum [a+b]; callers needing canonical [-q+1, q-1] must
+ * follow with poly_reduce().
  */
 static void poly_add(poly* r, const poly* a, const poly* b) {
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (dt->kyber_poly_add) {
+        dt->kyber_poly_add(r->coeffs, a->coeffs, b->coeffs);
+        return;
+    }
     for (int i = 0; i < KYBER_N; i++) {
         r->coeffs[i] = a->coeffs[i] + b->coeffs[i];
     }
@@ -1980,8 +1992,17 @@ static void poly_add(poly* r, const poly* a, const poly* b) {
 
 /**
  * Subtract two polynomials
+ *
+ * Dispatches to an SVE2 svsub_s16_x kernel when the slot is non-NULL;
+ * falls back to the inline scalar loop below.  Same auto-vectorisation
+ * rationale as poly_add().
  */
 static void poly_sub(poly* r, const poly* a, const poly* b) {
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (dt->kyber_poly_sub) {
+        dt->kyber_poly_sub(r->coeffs, a->coeffs, b->coeffs);
+        return;
+    }
     for (int i = 0; i < KYBER_N; i++) {
         r->coeffs[i] = a->coeffs[i] - b->coeffs[i];
     }
@@ -1989,8 +2010,17 @@ static void poly_sub(poly* r, const poly* a, const poly* b) {
 
 /**
  * Reduce all coefficients mod q
+ *
+ * Dispatches to an SVE2 vector-load + scalar-Barrett kernel when the
+ * slot is non-NULL; falls back to the inline scalar Barrett loop
+ * below.
  */
 static void poly_reduce(poly* r) {
+    const ama_dispatch_table_t *dt = ama_get_dispatch_table();
+    if (dt->kyber_poly_reduce) {
+        dt->kyber_poly_reduce(r->coeffs);
+        return;
+    }
     for (int i = 0; i < KYBER_N; i++) {
         r->coeffs[i] = barrett_reduce(r->coeffs[i]);
     }

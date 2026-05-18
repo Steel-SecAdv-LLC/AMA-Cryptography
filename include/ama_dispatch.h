@@ -76,6 +76,23 @@ typedef void (*ama_kyber_pointwise_fn)(int16_t r[256],
                                        const int16_t b[256],
                                        const int16_t zetas[128]);
 
+/** Kyber polynomial add: r = a + b (coefficient-wise int16_t add).
+ *  Output range is [-2(q-1), 2(q-1)]; callers that need canonical
+ *  reduction must follow with `kyber_poly_reduce`. */
+typedef void (*ama_kyber_poly_add_fn)(int16_t r[256],
+                                       const int16_t a[256],
+                                       const int16_t b[256]);
+
+/** Kyber polynomial sub: r = a - b (coefficient-wise int16_t sub).
+ *  Output range is [-2(q-1), 2(q-1)]; callers that need canonical
+ *  reduction must follow with `kyber_poly_reduce`. */
+typedef void (*ama_kyber_poly_sub_fn)(int16_t r[256],
+                                       const int16_t a[256],
+                                       const int16_t b[256]);
+
+/** Kyber polynomial Barrett reduction in place: poly[i] -> [-q+1, q-1]. */
+typedef void (*ama_kyber_poly_reduce_fn)(int16_t poly[256]);
+
 /** Kyber CBD2 noise sampler: 128-byte uniform stream -> 256 coefficients
  *  in {-2, -1, 0, 1, 2} per FIPS 203 §4.2.2 (ML-KEM eta=2). */
 typedef void (*ama_kyber_cbd2_fn)(int16_t poly[256], const uint8_t buf[128]);
@@ -172,6 +189,9 @@ typedef struct {
     ama_kyber_ntt_fn          kyber_ntt;            /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_ntt_fn          kyber_invntt;         /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_pointwise_fn    kyber_pointwise;      /**< Non-NULL when SIMD detected; callers MUST NULL-check */
+    ama_kyber_poly_add_fn     kyber_poly_add;       /**< Non-NULL when SVE2 detected (today: SVE2 only — AVX2/NEON paths let the compiler auto-vectorise the trivial int16 add loop); callers MUST NULL-check */
+    ama_kyber_poly_sub_fn     kyber_poly_sub;       /**< Non-NULL when SVE2 detected (today: SVE2 only — see kyber_poly_add); callers MUST NULL-check */
+    ama_kyber_poly_reduce_fn  kyber_poly_reduce;    /**< Non-NULL when SVE2 detected (today: SVE2 only — see kyber_poly_add); callers MUST NULL-check */
     ama_kyber_cbd2_fn         kyber_cbd2;           /**< Non-NULL when AVX2 detected (AVX2-only today; NEON/SVE2 wiring TBD); callers MUST NULL-check */
     ama_dilithium_ntt_fn      dilithium_ntt;        /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_dilithium_invntt_fn   dilithium_invntt;     /**< Non-NULL when SIMD detected; callers MUST NULL-check */

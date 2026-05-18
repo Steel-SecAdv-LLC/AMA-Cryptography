@@ -224,6 +224,19 @@ if(AMA_USE_NATIVE_PQC)
     add_test(NAME test_kyber_ntt_equiv COMMAND test_kyber_ntt_equiv)
     set_tests_properties(test_kyber_ntt_equiv PROPERTIES SKIP_RETURN_CODE 77)
 
+    # Wire-SVE2-kyber-poly-helpers PR (2026-05) — byte-identity
+    # equivalence test for the kyber_poly_{add,sub,reduce} dispatch
+    # slots (SVE2 today; future NEON/AVX2 helpers ride the same
+    # multi-lane harness).  Two lanes: dispatched-pointer + direct
+    # per-ISA SVE2 symbol.  1024 random polynomials per helper over
+    # the full [-q+1, q-1] coefficient range.  SKIPs with 77 when no
+    # SIMD helper is wired AND no direct-symbol lane runs (truly
+    # scalar build on a scalar runtime).
+    add_executable(test_kyber_poly_equiv test_kyber_poly_equiv.c)
+    target_link_libraries(test_kyber_poly_equiv ama_cryptography_test)
+    add_test(NAME test_kyber_poly_equiv COMMAND test_kyber_poly_equiv)
+    set_tests_properties(test_kyber_poly_equiv PROPERTIES SKIP_RETURN_CODE 77)
+
     # SIMD-equivalence PR (2026-05) — Keccak-f[1600] permutation
     # equivalence test.  Compares the dispatched single-state and
     # x4-batched keccak pointers (AVX2 / AVX-512 4-way / NEON
