@@ -1407,8 +1407,32 @@ typedef struct {
  * Counted by hand: utility(5) + primitives(7) + classical-kex(2) +
  * threshold(3) + PQC(3) = 20.  Reserve 32 to give 12 lanes of
  * headroom for future additions without silently overflowing the
- * fixed-size results array.  Guarded by a runtime assertion below. */
+ * fixed-size results array.  Bumping this constant is the only place
+ * a lane addition needs to be capacity-checked. */
 #define DUDECT_MAX_LANES 32
+
+/* Capacity-checked lane registration.  Fail-safe BEFORE writing to
+ * `results[idx]` so adding more than DUDECT_MAX_LANES lanes can never
+ * corrupt the stack — it aborts with a clear message naming the lane
+ * that pushed the count over the limit.  Centralising the pattern in
+ * one macro removes the per-call bookkeeping that the previous
+ * post-hoc `if (idx > DUDECT_MAX_LANES) abort();` after the loop
+ * could only catch in hindsight. */
+#define DUDECT_REGISTER_LANE(_results, _idx, _name, _expr, _info_only)        \
+    do {                                                                      \
+        if ((_idx) >= DUDECT_MAX_LANES) {                                     \
+            fprintf(stderr,                                                   \
+                    "  FATAL: dudect lane '%s' would overflow "               \
+                    "DUDECT_MAX_LANES=%d (current idx=%d); bump the "         \
+                    "constant in test_dudect.c\n",                            \
+                    (_name), DUDECT_MAX_LANES, (_idx));                       \
+            abort();                                                          \
+        }                                                                     \
+        (_results)[(_idx)].name         = (_name);                            \
+        (_results)[(_idx)].t_value      = (_expr);                            \
+        (_results)[(_idx)].is_info_only = (_info_only);                       \
+        (_idx)++;                                                             \
+    } while (0)
 
 /* Returns 1 iff the t-value is the sentinel for a fatal harness fault
  * (setup failure or per-class rc mismatch).  DUDECT_FATAL_SENTINEL is
@@ -1422,98 +1446,77 @@ static int is_fatal_result(double t) {
 static int run_all_tests(int iterations, test_result_t *results, int *num_results) {
     int idx = 0;
 
+    /* All lane registrations go through DUDECT_REGISTER_LANE, which
+     * fail-safes BEFORE the write to `results[idx]` — adding a 33rd
+     * lane (or any lane past DUDECT_MAX_LANES) aborts with a clear
+     * error rather than silently corrupting stack memory. */
+
     printf("\n--- Utility Functions ---\n");
-    results[idx].name = "ama_consttime_memcmp";
-    results[idx].t_value = test_consttime_memcmp(iterations);
-    results[idx].is_info_only = 0;
-    idx++;
-
-    results[idx].name = "ama_consttime_swap";
-    results[idx].t_value = test_consttime_swap(iterations);
-    results[idx].is_info_only = 0;
-    idx++;
-
-    results[idx].name = "ama_secure_memzero";
-    results[idx].t_value = test_secure_memzero(iterations);
-    results[idx].is_info_only = 0;
-    idx++;
-
-    results[idx].name = "ama_consttime_lookup";
-    results[idx].t_value = test_consttime_lookup(iterations);
-    results[idx].is_info_only = 0;
-    idx++;
-
-    results[idx].name = "ama_consttime_copy";
-    results[idx].t_value = test_consttime_copy(iterations);
-    results[idx].is_info_only = 0;
-    idx++;
+    DUDECT_REGISTER_LANE(results, idx,
+        "ama_consttime_memcmp",
+        test_consttime_memcmp(iterations), 0);
+    DUDECT_REGISTER_LANE(results, idx,
+        "ama_consttime_swap",
+        test_consttime_swap(iterations), 0);
+    DUDECT_REGISTER_LANE(results, idx,
+        "ama_secure_memzero",
+        test_secure_memzero(iterations), 0);
+    DUDECT_REGISTER_LANE(results, idx,
+        "ama_consttime_lookup",
+        test_consttime_lookup(iterations), 0);
+    DUDECT_REGISTER_LANE(results, idx,
+        "ama_consttime_copy",
+        test_consttime_copy(iterations), 0);
 
     printf("\n--- Cryptographic Primitives ---\n");
-    results[idx].name = "Ed25519 sign";
-    results[idx].t_value = test_ed25519_sign(iterations);
-    results[idx].is_info_only = 0;
-    idx++;
-
-    results[idx].name = "Ed25519 verify";
-    results[idx].t_value = test_ed25519_verify(iterations);
+    DUDECT_REGISTER_LANE(results, idx,
+        "Ed25519 sign",
+        test_ed25519_sign(iterations), 0);
     /* Ed25519 verify is documented as vartime (verification scalars
      * are public — RFC 8032 §5.1.7).  Report the t-value but do not
      * fail CI on it; this lane exists to close the dudect coverage
      * gap and to provide a baseline for any future hardening work. */
-    results[idx].is_info_only = 1;
-    idx++;
-
-    results[idx].name = "ChaCha20-Poly1305 tag verify";
-    results[idx].t_value = test_chacha20poly1305_tag_verify(iterations);
+    DUDECT_REGISTER_LANE(results, idx,
+        "Ed25519 verify",
+        test_ed25519_verify(iterations), 1);
     /* Strict: ct_len=0 in the harness collapses the post-verify
      * decrypt branch in both classes, so any class delta is a real
      * leak in the tag-compare path.  See header comment on
      * test_chacha20poly1305_tag_verify(). */
-    results[idx].is_info_only = 0;
-    idx++;
-
-    results[idx].name = "Argon2id legacy verify";
-    results[idx].t_value = test_argon2id_legacy_verify(iterations);
-    results[idx].is_info_only = 0;
-    idx++;
-
-    results[idx].name = "AES-GCM tag verify";
-    results[idx].t_value = test_aes_gcm_tag_verify(iterations);
+    DUDECT_REGISTER_LANE(results, idx,
+        "ChaCha20-Poly1305 tag verify",
+        test_chacha20poly1305_tag_verify(iterations), 0);
+    DUDECT_REGISTER_LANE(results, idx,
+        "Argon2id legacy verify",
+        test_argon2id_legacy_verify(iterations), 0);
     /* Strict: ct_len=0 in the harness collapses the post-verify
      * AES-CTR decrypt branch (which would otherwise pull the AES
      * S-box variance into the measurement); pointer-select also
      * lifted out of the timing region.  See header comment on
      * test_aes_gcm_tag_verify(). */
-    results[idx].is_info_only = 0;
-    idx++;
-
-    results[idx].name = "HKDF-SHA3-256";
-    results[idx].t_value = test_hkdf(iterations);
-    results[idx].is_info_only = 0;
-    idx++;
-
-    results[idx].name = "HMAC-SHA3-256 verify";
-    results[idx].t_value = test_hmac_verify(iterations);
-    results[idx].is_info_only = 0;
-    idx++;
+    DUDECT_REGISTER_LANE(results, idx,
+        "AES-GCM tag verify",
+        test_aes_gcm_tag_verify(iterations), 0);
+    DUDECT_REGISTER_LANE(results, idx,
+        "HKDF-SHA3-256",
+        test_hkdf(iterations), 0);
+    DUDECT_REGISTER_LANE(results, idx,
+        "HMAC-SHA3-256 verify",
+        test_hmac_verify(iterations), 0);
 
 #ifdef AMA_USE_NATIVE_PQC
     printf("\n--- Classical (key exchange) ---\n");
-    results[idx].name = "X25519 scalarmult";
-    results[idx].t_value = test_x25519_scalarmult(iterations);
     /* The ladder is structurally constant-time across both fe51 and fe64
      * field paths (cswap-driven, no scalar-dependent branches), but on
      * shared CI runners the per-iteration cost (~250µs) makes
-     * environmental noise dominate the timing distribution. Mark
+     * environmental noise dominate the timing distribution.  Mark
      * info-only so a noisy CI environment doesn't fail this lane while
-     * still surfacing the t-value in the summary. Reproduce locally
+     * still surfacing the t-value in the summary.  Reproduce locally
      * with `taskset -c 0 nice -n -20 ./test_dudect --measurements
      * 10000000` for a clean reading. */
-    results[idx].is_info_only = 1;
-    idx++;
-
-    results[idx].name = "X25519 scalarmult batch×4";
-    results[idx].t_value = test_x25519_scalarmult_x4(iterations);
+    DUDECT_REGISTER_LANE(results, idx,
+        "X25519 scalarmult",
+        test_x25519_scalarmult(iterations), 1);
     /* Same CI-noise rationale as the single-shot X25519 lane above —
      * info-only.  The 4-way ladder uses an XOR-mask cswap that handles
      * independent per-lane scalar bits with no scalar-dependent
@@ -1521,48 +1524,38 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
      * path.  When AVX2 isn't available this lane falls through to four
      * sequential scalar ladders and the same constant-time argument
      * applies. */
-    results[idx].is_info_only = 1;
-    idx++;
+    DUDECT_REGISTER_LANE(results, idx,
+        "X25519 scalarmult batch×4",
+        test_x25519_scalarmult_x4(iterations), 1);
 
     printf("\n--- Threshold Signature Building Blocks ---\n");
-    results[idx].name = "FROST scalar_negate (extremes)";
-    results[idx].t_value = test_frost_scalar_negate_extremes(iterations);
-    results[idx].is_info_only = 0;
-    idx++;
-
-    results[idx].name = "FROST scalar_negate (mid-range)";
-    results[idx].t_value = test_frost_scalar_negate_midrange(iterations);
-    results[idx].is_info_only = 0;
-    idx++;
-
+    DUDECT_REGISTER_LANE(results, idx,
+        "FROST scalar_negate (extremes)",
+        test_frost_scalar_negate_extremes(iterations), 0);
+    DUDECT_REGISTER_LANE(results, idx,
+        "FROST scalar_negate (mid-range)",
+        test_frost_scalar_negate_midrange(iterations), 0);
     /* secp256k1 lives in the AMA_USE_NATIVE_PQC gated source group
-     * alongside FROST (see tests/c/CMakeLists.txt:105-117). */
-    results[idx].name = "secp256k1 scalar multiplication";
-    results[idx].t_value = test_secp256k1_scalarmult(iterations);
-    /* The Montgomery ladder is structurally constant-time
+     * alongside FROST (see tests/c/CMakeLists.txt:105-117).  The
+     * Montgomery ladder is structurally constant-time
      * (`ama_consttime_swap`) but a 256-step ladder over a 256-bit
      * field still costs ~200 µs per iteration, so on shared CI
      * runners environmental noise can dominate.  Mark info-only —
      * fail-loud variants of this lane are intentionally surfaced
      * separately via tests/c/test_consttime.c. */
-    results[idx].is_info_only = 1;
-    idx++;
+    DUDECT_REGISTER_LANE(results, idx,
+        "secp256k1 scalar multiplication",
+        test_secp256k1_scalarmult(iterations), 1);
 
     printf("\n--- Post-Quantum Cryptography ---\n");
-    results[idx].name = "Kyber-1024 decaps";
-    results[idx].t_value = test_kyber_decaps(iterations);
-    results[idx].is_info_only = 0;
-    idx++;
-
-    results[idx].name = "ML-DSA-65 sign";
-    results[idx].t_value = test_dilithium_sign(iterations);
+    DUDECT_REGISTER_LANE(results, idx,
+        "Kyber-1024 decaps",
+        test_kyber_decaps(iterations), 0);
     /* Dilithium signing uses rejection sampling which has inherent
      * timing variation by design — this is expected and safe. */
-    results[idx].is_info_only = 1;
-    idx++;
-
-    results[idx].name = "SLH-DSA-SHA2-256f sign";
-    results[idx].t_value = test_slhdsa_sign(iterations);
+    DUDECT_REGISTER_LANE(results, idx,
+        "ML-DSA-65 sign",
+        test_dilithium_sign(iterations), 1);
     /* SLH-DSA signing is dominated by SHAKE-based WOTS+/FORS/Merkle
      * tree construction.  The hot loops have no message-dependent
      * branches — Welch's t-test against constant 0x00 vs constant
@@ -1570,25 +1563,12 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
      * Marked info-only because SHAKE absorb timing on shared CI can
      * exhibit cache-driven variance independent of the message
      * content; the t-value is still printed as a baseline. */
-    results[idx].is_info_only = 1;
-    idx++;
+    DUDECT_REGISTER_LANE(results, idx,
+        "SLH-DSA-SHA2-256f sign",
+        test_slhdsa_sign(iterations), 1);
 #endif
 
     *num_results = idx;
-
-    /* Defensive assertion: catches the case where a future lane
-     * addition exceeds the fixed-size results array.  Note this fires
-     * AFTER any overflow has already corrupted the stack — the value
-     * is in surfacing the issue loudly on subsequent runs once it
-     * happens once.  For prevention, bump DUDECT_MAX_LANES at the
-     * top of this file before adding new lanes. */
-    if (idx > DUDECT_MAX_LANES) {
-        fprintf(stderr,
-                "  FATAL: dudect lane count %d exceeds "
-                "DUDECT_MAX_LANES=%d; bump the constant in test_dudect.c\n",
-                idx, DUDECT_MAX_LANES);
-        abort();
-    }
 
     /* Check strict tests.  Two failure conditions:
      *   1. Strict (non-info) lanes whose t-value exceeds the threshold.

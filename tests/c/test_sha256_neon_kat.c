@@ -34,6 +34,7 @@
  * `ama_sha256_compress_neon` lane surfaces as a hard FAIL.
  */
 
+#include <inttypes.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -104,11 +105,15 @@ static int check_one(const char *label,
     memcpy(state, H256_init, sizeof(state));
     ama_sha256_compress_neon(state, block);
     if (memcmp(state, expected, sizeof(state)) != 0) {
+        /* `PRIx32` from <inttypes.h> matches the underlying type of
+         * `uint32_t`, which is not guaranteed to be `unsigned int` on
+         * every platform — a plain `%x` would be technically UB if the
+         * type happened to be `unsigned long`. */
         printf("  FAIL: %s digest mismatch\n", label);
         printf("    expected: ");
-        for (int i = 0; i < 8; i++) printf("%08x ", expected[i]);
+        for (int i = 0; i < 8; i++) printf("%08" PRIx32 " ", expected[i]);
         printf("\n    got:      ");
-        for (int i = 0; i < 8; i++) printf("%08x ", state[i]);
+        for (int i = 0; i < 8; i++) printf("%08" PRIx32 " ", state[i]);
         printf("\n");
         return 1;
     }
