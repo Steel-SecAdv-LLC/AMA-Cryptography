@@ -251,6 +251,8 @@ build-verify/
 build-verify2/
 build-rollback/
 build-on/
+build-dudect/
+build-warn/
 
 # Cross-compile aarch64 build dir (local-only)
 build-arm/
