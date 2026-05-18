@@ -108,9 +108,12 @@ Cython acceleration does **not** affect C-implemented cryptographic primitives (
 | Ed25519 | 0.09 | 0.14 | 64 bytes |
 | ML-DSA-65 | 0.53 | 0.15 | 3,309 bytes |
 | Hybrid (Ed25519 + ML-DSA-65) | ~0.62 | ~0.29 | 3,373 bytes |
-| SPHINCS+-SHA2-256f | ~230 | ~5.90 | 49,856 bytes |
+| SLH-DSA-SHAKE-128s (FIPS 205 L1) | ~1,250 | ~1.15 | 7,856 bytes |
+| SPHINCS+-SHA2-256f (FIPS 205 L5, legacy alias) | ~230 | ~5.90 | 49,856 bytes |
 
 > ML-DSA-65 is ~6× slower to sign than Ed25519 on this host (pre-SIMD scalar NTT path) but provides NIST category III quantum security. Sign/verify latency shifts substantially with CPU microarchitecture — re-run `benchmarks/benchmark_suite.py` on your deployment host before quoting numbers externally.
+>
+> SLH-DSA-SHAKE-128s is the slowest signer in the table by ~3 orders of magnitude — that is **by design** (FIPS 205 hash-based one-shot signatures trade sign-time for the smallest, most conservative cryptographic assumption). The raw-C harness now measures all three SLH-DSA ops (`benchmark_c_raw.c` rows `SLH-DSA-SHAKE-128s KeyGen / Sign / Verify`); the sign row is iterated only ~50× to bound harness runtime.
 
 ### X25519 Field-Path Selection (3.0.0)
 
@@ -340,3 +343,75 @@ _Headline source: `benchmarks/benchmark-results.json` (run 2026-04-27). Regressi
 ## Standards Compliance Note
 
 This library implements algorithms specified in FIPS 203 (ML-KEM), FIPS 204 (ML-DSA), FIPS 205 (SLH-DSA), and FIPS 202 (SHA-3). This implementation has **NOT** been submitted for CMVP validation and is **NOT** FIPS 140-3 certified. See `CSRC_STANDARDS.md` for detailed compliance status.
+
+---
+
+## Benchmark coverage map (2026-05)
+
+The raw-C harness (`build/bin/benchmark_c_raw`) was extended in 2026-05
+to close every gap called out in the May 2026 coverage review. Each gap
+maps to one or more explicit rows in the harness output (greppable in
+both `--csv` and `--json` modes):
+
+| Coverage area                                       | Status   | Row(s) in harness                                                                 |
+|-----------------------------------------------------|----------|-----------------------------------------------------------------------------------|
+| X25519 batch-4 (no env gating)                      | ✅       | `X25519 DH Batch×4` (unconditional)                                              |
+| Argon2id                                            | ✅       | `Argon2id (m=64KiB,t=1)`, `Argon2id (m=1MiB,t=1)`                                |
+| Raw HKDF-SHA3-256                                   | ✅       | `HKDF-SHA3-256 (96B)`                                                            |
+| ML-KEM-1024 decapsulate                             | ✅       | `ML-KEM-1024 Decaps`                                                             |
+| MULX/ADX on-vs-off X25519 ratio                     | ✅ **(added 2026-05)** | `X25519 DH (MULX off)` / `X25519 DH (MULX on)`                  |
+| SLH-DSA / SPHINCS+ (FIPS 205)                       | ✅ **(added 2026-05)** | `SLH-DSA-SHAKE-128s KeyGen` / `Sign` / `Verify` (NIST L1)         |
+| secp256k1                                           | ✅ **(added 2026-05)** | `secp256k1 pubkey`                                                |
+| FROST (RFC 9591)                                    | ✅ **(added 2026-05)** | `FROST round1 commit` / `round2 sign` / `aggregate`               |
+| Dilithium NTT kernel isolation                      | ✅ **(added 2026-05)** | `ML-DSA-65 NTT (scalar)` / `NTT (dispatch)` / `invNTT (scalar)` / `invNTT (dispatch)` |
+
+### Kernel-isolation rows: why three scalar-vs-dispatch families
+
+Three families now emit paired `(scalar)` / `(dispatch)` rows so the
+per-kernel SIMD win is measurable directly, instead of being folded
+into an end-to-end primitive cost:
+
+| Family                       | Why isolated                                                                                     |
+|------------------------------|--------------------------------------------------------------------------------------------------|
+| ML-DSA-65 NTT / invNTT       | End-to-end sign/verify is dominated by sampling and rejection; NTT speedups disappear in noise.  |
+| ML-KEM-1024 poly_{add,sub,reduce} | SVE2 win (where present) is sub-microsecond per call — too small to measure inside encaps.    |
+| X25519 DH (MULX off / on)    | Both paths produce byte-identical output, so the CPUID-gated kernel speedup is the only signal. |
+
+Enabled by three benchmark/test-only entry points documented in
+`include/ama_cryptography.h`:
+
+- `ama_dilithium_ntt_bench(int32_t poly[256], int use_dispatch)`
+- `ama_dilithium_invntt_bench(int32_t poly[256], int use_dispatch)`
+- `ama_x25519_set_mulx_override(int mode)` (`-1` = auto, `0` = force off, `1` = force on)
+
+These entry points are explicitly **not part of the production
+crypto surface** — they exist so a single shipped binary can produce
+paired rows without per-row rebuilds. Production callers continue to
+go through `ama_dilithium_sign()` / `ama_dilithium_verify()` (FIPS 204
+§6.1 / §6.2) and `ama_x25519_key_exchange()` (RFC 7748).
+
+### Sample numbers (sandbox host)
+
+Linux x86-64, GCC, AVX2, ed25519-donna + ML-DSA AVX2 dispatched,
+MULX+ADX kernel available. Quoted for sanity-checking only — re-run on
+the deployment host before quoting externally:
+
+| Row                              | Median latency | Throughput                              |
+|----------------------------------|---------------:|-----------------------------------------|
+| X25519 DH (MULX off)             | ~75.1 µs       | ~13,300 ops/s                          |
+| X25519 DH (MULX on)              | ~51.5 µs       | ~19,400 ops/s (**~1.46× vs off**)      |
+| ML-DSA-65 NTT (scalar)           | ~1.26 µs       | ~796,000 ops/s                         |
+| ML-DSA-65 NTT (dispatch)         | ~1.04 µs       | ~965,000 ops/s (**~1.21× vs scalar**)  |
+| ML-DSA-65 invNTT (scalar)        | ~1.32 µs       | ~759,000 ops/s                         |
+| ML-DSA-65 invNTT (dispatch)      | ~1.11 µs       | ~898,000 ops/s (**~1.18× vs scalar**)  |
+| SLH-DSA-SHAKE-128s KeyGen        | ~164 ms        | ~6 ops/s                               |
+| SLH-DSA-SHAKE-128s Sign          | ~1.25 s        | ~1 op/s                                |
+| SLH-DSA-SHAKE-128s Verify        | ~1.15 ms       | ~870 ops/s                             |
+| secp256k1 pubkey                 | ~329 µs        | ~3,000 ops/s                           |
+| FROST round1 commit              | ~24.6 µs       | ~40,700 ops/s                          |
+| FROST round2 sign                | ~185 µs        | ~5,400 ops/s                           |
+| FROST aggregate                  | ~113 µs        | ~8,900 ops/s                           |
+
+Full provenance and the run procedure are catalogued in
+[`docs/BENCHMARK_HISTORY.md`](../docs/BENCHMARK_HISTORY.md) under
+"2026-05: Benchmark coverage expansion".

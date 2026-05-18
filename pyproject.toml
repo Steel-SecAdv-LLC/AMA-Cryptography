@@ -272,8 +272,9 @@ ignore = []  # Do not add ignores without a comment explaining why.
 "benchmarks/benchmark_suite.py" = ["C901", "UP006", "UP035", "E501", "E402"]  # C901: generate_markdown complexity
 "setup.py" = ["E501", "RUF005", "S603", "S607"]
 "benchmarks/*" = [
+    "C901",
     "E402", "E501", "F541", "I001",
-    "RUF059", "RUF100",
+    "RUF001", "RUF059", "RUF100",
     "S603", "S607",  # subprocess calls with bare executable name (git, cmake, ...) are intentional in benchmark tooling
     "UP006", "UP035",
 ]
