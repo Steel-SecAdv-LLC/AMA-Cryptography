@@ -256,4 +256,5 @@ build-warn/
 
 # Cross-compile aarch64 build dir (local-only)
 build-arm/
+build-aarch64/
 aarch64-toolchain.cmake
