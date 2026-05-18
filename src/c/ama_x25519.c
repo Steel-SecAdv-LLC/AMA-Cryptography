@@ -338,12 +338,15 @@ AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32],
      * been called with mode != -1, the override wins over CPUID. The
      * default (mode == -1) is the production policy (CPUID-driven). The
      * override only flips the *selection*; the two paths are byte-
-     * identical per `tests/c/test_x25519_fe64_mulx_equiv.c`. */
+     * identical per `tests/c/test_x25519_fe64_mulx_equiv.c`.
+     *
+     * `ama_cpuid_has_x25519_mulx()` is evaluated once and cached in
+     * `has_mulx` so the hot path makes a single CPUID-result load even
+     * when both the override decision and the safety guard need it. */
     int override_mode = ama_x25519_mulx_override_get();
-    int use_mulx = (override_mode == -1)
-                   ? ama_cpuid_has_x25519_mulx()
-                   : (override_mode != 0);
-    if (use_mulx && ama_cpuid_has_x25519_mulx()) {
+    int has_mulx = ama_cpuid_has_x25519_mulx();
+    int use_mulx = (override_mode == -1) ? has_mulx : (override_mode != 0);
+    if (use_mulx && has_mulx) {
         x25519_scalarmult_fe64_with_ops(q, n, p,
                                         ama_x25519_fe64_mul_mulx,
                                         ama_x25519_fe64_sq_mulx);

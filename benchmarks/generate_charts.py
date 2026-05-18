@@ -459,12 +459,16 @@ def generate_charts(output_dir: str) -> None:
             with open(bench_raw) as f:
                 raw = json.load(f)
             for entry in raw.get("results", []):
+                # Use median_us (not mean_us) so the live numbers match the
+                # "Raw C medians" anchor convention used everywhere else in
+                # this file — see KEM_OPS, the panel headers, and the
+                # X25519_MULX docstring above.
                 if entry.get("operation") == "X25519 DH (MULX off)":
                     mulx_rows["MULX off (pure-C fe64)"]["ops_sec"] = entry["ops_per_sec"]
-                    mulx_rows["MULX off (pure-C fe64)"]["latency_us"] = entry["mean_us"]
+                    mulx_rows["MULX off (pure-C fe64)"]["latency_us"] = entry["median_us"]
                 elif entry.get("operation") == "X25519 DH (MULX on)":
                     mulx_rows["MULX on (BMI2+ADX kernel)"]["ops_sec"] = entry["ops_per_sec"]
-                    mulx_rows["MULX on (BMI2+ADX kernel)"]["latency_us"] = entry["mean_us"]
+                    mulx_rows["MULX on (BMI2+ADX kernel)"]["latency_us"] = entry["median_us"]
         except (json.JSONDecodeError, KeyError, TypeError):
             # Live-data override is best-effort: a malformed or partial
             # benchmark_c_raw_results.json file should not break chart

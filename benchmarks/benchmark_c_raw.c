@@ -39,7 +39,6 @@
 
 #include "ama_cryptography.h"
 #include "ama_dispatch.h"
-#include "ama_cpuid.h"
 
 /* ============================================================================
  * TIMING HELPERS
@@ -953,10 +952,12 @@ static bench_result_t bench_x25519_dh_mulx_on(int iters, int warmup) {
  * (single NTT is a few hundred nanoseconds with SIMD wired up).
  * The poly is reinitialised inside the inner loop so each NTT runs
  * on a fresh (in-place) buffer and the accumulated runs do not
- * compound the result into something the compiler can hoist. */
-#ifndef BENCH_INNER_LOOP
-#define BENCH_INNER_LOOP 256
-#endif
+ * compound the result into something the compiler can hoist.
+ *
+ * BENCH_INNER_LOOP itself is defined once earlier in this file
+ * (next to KYBER_POLY_N) — that single define is the source of
+ * truth for every microbench that needs a per-sample inner-loop
+ * count. */
 
 static void fill_random_int32_poly(int32_t a[256]) {
     /* Coefficients in [-q+1, q-1] for q = 8380417 — the natural input
