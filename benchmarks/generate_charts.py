@@ -59,6 +59,51 @@ SIGNATURE_OPS = {
     "Ed25519 Verify": {"ops_sec": 2_785, "latency_ms": 0.359},
     "ML-DSA-65 Sign": {"ops_sec": 373, "latency_ms": 2.682},
     "ML-DSA-65 Verify": {"ops_sec": 633, "latency_ms": 1.581},
+    # SLH-DSA-SHAKE-128s Verify fits within an order of magnitude of the
+    # rest of the signature chart; Sign is multi-second and gets its own
+    # log-scale chart (PQC_SIGN_LATENCY below) so it does not flatten
+    # this one. Anchor: `benchmark_c_raw --json` rows added in 2026-05
+    # (see docs/BENCHMARK_HISTORY.md "Benchmark coverage expansion").
+    "SLH-DSA-SHAKE-128s Verify": {"ops_sec": 867, "latency_ms": 1.153},
+    # secp256k1 pubkey-from-privkey (constant-time Montgomery ladder).
+    # Anchor: `benchmark_c_raw --json` row `secp256k1 pubkey` added in 2026-05.
+    "secp256k1 pubkey": {"ops_sec": 3_038, "latency_ms": 0.329},
+}
+
+# Sign-latency comparison for the hash-based + lattice families.
+# Plotted on a log scale so the four orders of magnitude between
+# Ed25519 Sign and SLH-DSA-SHAKE-128s Sign do not collapse to a
+# single visible bar. Anchored to `benchmark_c_raw` rows.
+PQC_SIGN_LATENCY = {
+    "Ed25519 Sign": {"latency_ms": 0.187},
+    "ML-DSA-65 Sign": {"latency_ms": 2.682},
+    "SLH-DSA-SHAKE-128s Sign": {"latency_ms": 1245.81},
+}
+
+# X25519 fe64 MULX/ADX kernel on-vs-off (BMI2+ADX gate). Anchor:
+# `benchmark_c_raw` rows `X25519 DH (MULX off)` / `(MULX on)` added
+# in 2026-05. Live-data override below picks these up by name when
+# present in `benchmark_results.json`.
+X25519_MULX = {
+    "MULX off (pure-C fe64)": {"ops_sec": 13_314, "latency_us": 75.11},
+    "MULX on (BMI2+ADX kernel)": {"ops_sec": 19_431, "latency_us": 51.46},
+}
+
+# Dilithium NTT / invNTT scalar vs dispatched (FIPS 204 §6.5).
+# Anchor: `benchmark_c_raw` rows added in 2026-05.
+DILITHIUM_NTT = {
+    "NTT (scalar)": {"ops_sec": 795_978, "latency_us": 1.26},
+    "NTT (dispatch)": {"ops_sec": 964_760, "latency_us": 1.04},
+    "invNTT (scalar)": {"ops_sec": 758_538, "latency_us": 1.32},
+    "invNTT (dispatch)": {"ops_sec": 897_629, "latency_us": 1.11},
+}
+
+# FROST 2-of-3 (RFC 9591) per-row per-signer cost. Anchor:
+# `benchmark_c_raw` rows added in 2026-05.
+FROST_OPS = {
+    "round1 commit": {"ops_sec": 40_688, "latency_us": 24.58},
+    "round2 sign": {"ops_sec": 5_396, "latency_us": 185.34},
+    "aggregate": {"ops_sec": 8_871, "latency_us": 112.73},
 }
 
 # Raw C medians from `build/bin/benchmark_c_raw --json`. Latency = median_us /
@@ -398,6 +443,170 @@ def generate_charts(output_dir: str) -> None:
     plt.savefig(os.path.join(output_dir, "scalability.svg"), format="svg")
     plt.close()
     print(f"  Created {output_dir}/scalability.svg")
+
+    # -- Chart 6: X25519 fe64 MULX/ADX kernel on-vs-off ----------------------
+    # Live-data override: pick up `X25519 DH (MULX off)` / `(MULX on)` rows
+    # from a raw-C harness JSON file if it sits alongside benchmark_results.
+    mulx_rows = dict(X25519_MULX)
+    bench_raw = ROOT / "benchmarks" / "benchmark_c_raw_results.json"
+    if bench_raw.exists():
+        try:
+            with open(bench_raw) as f:
+                raw = json.load(f)
+            for entry in raw.get("results", []):
+                if entry.get("operation") == "X25519 DH (MULX off)":
+                    mulx_rows["MULX off (pure-C fe64)"]["ops_sec"] = entry["ops_per_sec"]
+                    mulx_rows["MULX off (pure-C fe64)"]["latency_us"] = entry["mean_us"]
+                elif entry.get("operation") == "X25519 DH (MULX on)":
+                    mulx_rows["MULX on (BMI2+ADX kernel)"]["ops_sec"] = entry["ops_per_sec"]
+                    mulx_rows["MULX on (BMI2+ADX kernel)"]["latency_us"] = entry["mean_us"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    mulx_names = list(mulx_rows.keys())
+    mulx_vals = [mulx_rows[n]["ops_sec"] for n in mulx_names]
+    mulx_lats = [mulx_rows[n]["latency_us"] for n in mulx_names]
+    bars = ax.bar(mulx_names, mulx_vals, color=["#ff6b6b", "#00d2ff"], edgecolor="none", width=0.5)
+    ax.set_ylabel("Operations/sec", fontsize=11)
+    ax.set_title("X25519 fe64 MULX/ADX Kernel — On vs Off", fontsize=14, fontweight="bold", pad=12)
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+    for bar, val, lat in zip(bars, mulx_vals, mulx_lats):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + max(mulx_vals) * 0.02,
+            f"{val:,.0f} ops/s\n({lat:.2f} µs)",
+            ha="center",
+            fontsize=9,
+            color=TEXT_COLOR,
+        )
+    if mulx_vals[0] > 0:
+        speedup = mulx_vals[1] / mulx_vals[0]
+        ax.text(
+            0.98,
+            0.02,
+            f"Kernel speedup: {speedup:.2f}× | Byte-identical to pure-C fe64 "
+            "(tests/c/test_x25519_fe64_mulx_equiv.c)",
+            transform=ax.transAxes,
+            ha="right",
+            fontsize=8,
+            color="#666666",
+            style="italic",
+        )
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "x25519_mulx_kernel.svg"), format="svg")
+    plt.close()
+    print(f"  Created {output_dir}/x25519_mulx_kernel.svg")
+
+    # -- Chart 7: Dilithium NTT / invNTT scalar vs dispatched ----------------
+    fig, ax = plt.subplots(figsize=(9, 5))
+    ntt_names = list(DILITHIUM_NTT.keys())
+    ntt_vals = [DILITHIUM_NTT[n]["ops_sec"] for n in ntt_names]
+    ntt_colors = ["#ff6b6b", "#00d2ff", "#ff922b", "#6bcb77"]
+    bars = ax.bar(ntt_names, ntt_vals, color=ntt_colors, edgecolor="none", width=0.55)
+    ax.set_ylabel("Operations/sec", fontsize=11)
+    ax.set_title(
+        "ML-DSA-65 NTT / invNTT — Scalar vs Dispatched", fontsize=14, fontweight="bold", pad=12
+    )
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+    for bar, val in zip(bars, ntt_vals):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + max(ntt_vals) * 0.02,
+            f"{val:,.0f} ops/s",
+            ha="center",
+            fontsize=9,
+            color=TEXT_COLOR,
+        )
+    ax.text(
+        0.98,
+        0.02,
+        "Isolated via ama_dilithium_{ntt,invntt}_bench() — "
+        "AVX2/NEON/SVE2/AVX-512 when wired and runtime-gated.",
+        transform=ax.transAxes,
+        ha="right",
+        fontsize=8,
+        color="#666666",
+        style="italic",
+    )
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "dilithium_ntt_kernel.svg"), format="svg")
+    plt.close()
+    print(f"  Created {output_dir}/dilithium_ntt_kernel.svg")
+
+    # -- Chart 8: PQC Sign Latency (log-scale) ------------------------------
+    fig, ax = plt.subplots(figsize=(9, 5))
+    pqc_names = list(PQC_SIGN_LATENCY.keys())
+    pqc_lats = [PQC_SIGN_LATENCY[n]["latency_ms"] for n in pqc_names]
+    bars = ax.barh(
+        pqc_names, pqc_lats, color=["#00d2ff", "#7b2ff7", "#ff6b6b"], edgecolor="none", height=0.5
+    )
+    ax.set_xlabel("Sign latency (ms, log scale)", fontsize=11)
+    ax.set_xscale("log")
+    ax.set_title("Signature Family — Sign Latency (log)", fontsize=14, fontweight="bold", pad=12)
+    for bar, lat in zip(bars, pqc_lats):
+        ax.text(
+            bar.get_width() * 1.05,
+            bar.get_y() + bar.get_height() / 2,
+            f"{lat:,.3f} ms" if lat < 100 else f"{lat:,.1f} ms",
+            va="center",
+            fontsize=9,
+            color=TEXT_COLOR,
+        )
+    ax.text(
+        0.98,
+        0.02,
+        "Ed25519: RFC 8032 | ML-DSA-65: FIPS 204 | SLH-DSA-SHAKE-128s: FIPS 205 L1",
+        transform=ax.transAxes,
+        ha="right",
+        fontsize=8,
+        color="#666666",
+        style="italic",
+    )
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "pqc_sign_latency.svg"), format="svg")
+    plt.close()
+    print(f"  Created {output_dir}/pqc_sign_latency.svg")
+
+    # -- Chart 9: FROST 2-of-3 per-role cost --------------------------------
+    fig, ax = plt.subplots(figsize=(9, 5))
+    frost_names = list(FROST_OPS.keys())
+    frost_vals = [FROST_OPS[n]["ops_sec"] for n in frost_names]
+    frost_lats = [FROST_OPS[n]["latency_us"] for n in frost_names]
+    bars = ax.bar(
+        frost_names,
+        frost_vals,
+        color=["#6bcb77", "#ffd93d", "#7b2ff7"],
+        edgecolor="none",
+        width=0.5,
+    )
+    ax.set_ylabel("Operations/sec", fontsize=11)
+    ax.set_title("FROST 2-of-3 (RFC 9591) — Per-Role Cost", fontsize=14, fontweight="bold", pad=12)
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+    for bar, val, lat in zip(bars, frost_vals, frost_lats):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + max(frost_vals) * 0.02,
+            f"{val:,.0f} ops/s\n({lat:.1f} µs)",
+            ha="center",
+            fontsize=9,
+            color=TEXT_COLOR,
+        )
+    ax.text(
+        0.98,
+        0.02,
+        "Round1: nonce commitment | Round2: signature share | "
+        "Aggregate: Ed25519-compatible 64-byte signature",
+        transform=ax.transAxes,
+        ha="right",
+        fontsize=8,
+        color="#666666",
+        style="italic",
+    )
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "frost_2of3.svg"), format="svg")
+    plt.close()
+    print(f"  Created {output_dir}/frost_2of3.svg")
 
     print(f"\nAll charts generated in {output_dir}/")
 

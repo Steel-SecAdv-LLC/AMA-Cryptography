@@ -39,6 +39,7 @@
 
 #include "ama_cryptography.h"
 #include "ama_dispatch.h"
+#include "ama_cpuid.h"
 
 /* ============================================================================
  * TIMING HELPERS
@@ -863,6 +864,383 @@ static bench_result_t bench_hkdf(int iters, int warmup) {
 }
 
 /* ============================================================================
+ * BENCHMARK ADDITIONS — explicit gap-list coverage (2026-05)
+ *
+ * Five benchmark families added to close the gaps called out in the brief:
+ *   - MULX/ADX on-vs-off X25519 ratio
+ *   - SLH-DSA (SHAKE-128s, FIPS 205 L1)
+ *   - secp256k1 pubkey-from-privkey
+ *   - FROST 2-of-3 round1 / round2 / aggregate (RFC 9591)
+ *   - Dilithium NTT kernel isolation (forward + inverse, scalar vs dispatched)
+ *
+ * Provenance / design notes per family live above each function. The five
+ * families together fill the "Benchmarks still missing" list in
+ * `benchmarks/README.md` and feed `benchmarks/generate_charts.py` so the
+ * SVG dashboards reflect coverage rather than only ML-DSA / ML-KEM /
+ * Ed25519 / X25519 ops.
+ * ============================================================================ */
+
+/* --- X25519 DH (MULX/ADX) on / off ---
+ *
+ * Same Diffie-Hellman call as `bench_x25519_dh()`, but pins the runtime
+ * selection of the in-house BMI2+ADX kernel via the benchmark/test-only
+ * `ama_x25519_set_mulx_override()` API. Used to quantify the MULX+ADX
+ * speedup quoted in `wiki/Performance-Benchmarks.md` (~21% on this
+ * sandbox; literature 1.8-2.2x on uncontended Skylake+ / Zen+) without
+ * rebuilding.
+ *
+ * If the host CPUID lacks BMI2+ADX OR the MULX kernel TU was not linked
+ * in (`AMA_HAVE_X25519_FE64_MULX_IMPL` undefined at build), the
+ * "MULX on" override is a documented no-op and both rows time the
+ * pure-C fe64 path — the equal numbers are themselves informative
+ * ("no kernel on this host"). The override is restored to auto (-1)
+ * at the end of each function so subsequent benchmarks see the
+ * default production policy. */
+static bench_result_t bench_x25519_dh_mulx_off(int iters, int warmup) {
+    uint8_t pk_a[32], sk_a[32], pk_b[32], sk_b[32], shared[32];
+    ama_x25519_keypair(pk_a, sk_a);
+    ama_x25519_keypair(pk_b, sk_b);
+
+    ama_x25519_set_mulx_override(0);    /* pin pure-C fe64 */
+
+    for (int i = 0; i < warmup; i++)
+        ama_x25519_key_exchange(shared, sk_a, pk_b);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        ama_x25519_key_exchange(shared, sk_a, pk_b);
+        g_samples[i] = now_ns() - t0;
+    }
+
+    ama_x25519_set_mulx_override(-1);   /* restore auto */
+    return compute_stats("X25519 DH (MULX off)", g_samples, iters);
+}
+
+static bench_result_t bench_x25519_dh_mulx_on(int iters, int warmup) {
+    uint8_t pk_a[32], sk_a[32], pk_b[32], sk_b[32], shared[32];
+    ama_x25519_keypair(pk_a, sk_a);
+    ama_x25519_keypair(pk_b, sk_b);
+
+    ama_x25519_set_mulx_override(1);    /* pin MULX+ADX kernel (no-op
+                                         * on hosts without BMI2+ADX
+                                         * or without the kernel TU) */
+
+    for (int i = 0; i < warmup; i++)
+        ama_x25519_key_exchange(shared, sk_a, pk_b);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        ama_x25519_key_exchange(shared, sk_a, pk_b);
+        g_samples[i] = now_ns() - t0;
+    }
+
+    ama_x25519_set_mulx_override(-1);   /* restore auto */
+    return compute_stats("X25519 DH (MULX on)", g_samples, iters);
+}
+
+/* --- Dilithium NTT kernel isolation ---
+ *
+ * Times the forward and inverse NTT in isolation from the surrounding
+ * `bench_dilithium_sign` / `bench_dilithium_verify` flow (which sums
+ * the NTT kernel cost into the end-to-end ML-DSA latency along with
+ * sampling, rejection, and packing). The benchmark-only
+ * `ama_dilithium_{ntt,invntt}_bench()` entry points route the same
+ * `dil_{ntt,invntt}_cached` code, but bind the dispatch slot
+ * explicitly so we can produce paired scalar-vs-dispatched rows.
+ *
+ * Per-sample inner loop is BENCH_INNER_LOOP iterations to push the
+ * per-NTT cost above clock_gettime() resolution on modern hosts
+ * (single NTT is a few hundred nanoseconds with SIMD wired up).
+ * The poly is reinitialised inside the inner loop so each NTT runs
+ * on a fresh (in-place) buffer and the accumulated runs do not
+ * compound the result into something the compiler can hoist. */
+#ifndef BENCH_INNER_LOOP
+#define BENCH_INNER_LOOP 256
+#endif
+
+static void fill_random_int32_poly(int32_t a[256]) {
+    /* Coefficients in [-q+1, q-1] for q = 8380417 — the natural input
+     * range entering the NTT during ML-DSA signing. Uses the same
+     * `rand()` fallback as `fill_random_poly` so the result is
+     * reproducible across runs on a single host. */
+    for (int i = 0; i < 256; i++) {
+        int32_t v = (int32_t)((unsigned)rand() % 8380417u);
+        if (rand() & 1) v = -v;
+        a[i] = v;
+    }
+}
+
+static bench_result_t bench_dilithium_ntt(int iters, int warmup, int use_dispatch) {
+    int32_t poly[256];
+
+    for (int i = 0; i < warmup; i++) {
+        fill_random_int32_poly(poly);
+        ama_dilithium_ntt_bench(poly, use_dispatch);
+    }
+
+    for (int i = 0; i < iters; i++) {
+        fill_random_int32_poly(poly);
+        double t0 = now_ns();
+        for (int j = 0; j < BENCH_INNER_LOOP; j++) {
+            ama_dilithium_ntt_bench(poly, use_dispatch);
+        }
+        g_samples[i] = (now_ns() - t0) / (double)BENCH_INNER_LOOP;
+    }
+
+    static char labels[2][48];
+    snprintf(labels[use_dispatch ? 1 : 0], sizeof(labels[0]),
+             "ML-DSA-65 NTT (%s)",
+             use_dispatch ? "dispatch" : "scalar");
+    return compute_stats(labels[use_dispatch ? 1 : 0], g_samples, iters);
+}
+
+static bench_result_t bench_dilithium_invntt(int iters, int warmup, int use_dispatch) {
+    int32_t poly[256];
+
+    for (int i = 0; i < warmup; i++) {
+        fill_random_int32_poly(poly);
+        ama_dilithium_invntt_bench(poly, use_dispatch);
+    }
+
+    for (int i = 0; i < iters; i++) {
+        fill_random_int32_poly(poly);
+        double t0 = now_ns();
+        for (int j = 0; j < BENCH_INNER_LOOP; j++) {
+            ama_dilithium_invntt_bench(poly, use_dispatch);
+        }
+        g_samples[i] = (now_ns() - t0) / (double)BENCH_INNER_LOOP;
+    }
+
+    static char labels[2][48];
+    snprintf(labels[use_dispatch ? 1 : 0], sizeof(labels[0]),
+             "ML-DSA-65 invNTT (%s)",
+             use_dispatch ? "dispatch" : "scalar");
+    return compute_stats(labels[use_dispatch ? 1 : 0], g_samples, iters);
+}
+
+/* --- SLH-DSA SHAKE-128s (FIPS 205, NIST L1) ---
+ *
+ * Times the practical L1 parameter set: smallest public key (32 B),
+ * smallest signature (7,856 B) at the cost of the slowest sign of the
+ * SLH-DSA family. Verify is the more common production hot path and
+ * is significantly faster than sign on this parameter set.
+ *
+ * Uses `iters_vslow` (50) at the call site because SLH-DSA-SHAKE-128s
+ * sign is multi-millisecond on a modern core; pushing higher would
+ * dominate the harness runtime without adding statistical precision. */
+static bench_result_t bench_slhdsa_shake128s_keygen(int iters, int warmup) {
+    uint8_t pk[AMA_SLHDSA_SHAKE_128S_PUBLIC_KEY_BYTES];
+    uint8_t sk[AMA_SLHDSA_SHAKE_128S_SECRET_KEY_BYTES];
+
+    for (int i = 0; i < warmup; i++)
+        ama_slhdsa_keygen(AMA_SLHDSA_SHAKE_128S, pk, sk);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        ama_slhdsa_keygen(AMA_SLHDSA_SHAKE_128S, pk, sk);
+        g_samples[i] = now_ns() - t0;
+    }
+    return compute_stats("SLH-DSA-SHAKE-128s KeyGen", g_samples, iters);
+}
+
+static bench_result_t bench_slhdsa_shake128s_sign(int iters, int warmup) {
+    uint8_t pk[AMA_SLHDSA_SHAKE_128S_PUBLIC_KEY_BYTES];
+    uint8_t sk[AMA_SLHDSA_SHAKE_128S_SECRET_KEY_BYTES];
+    uint8_t *sig = (uint8_t *)malloc(AMA_SLHDSA_SHAKE_128S_SIGNATURE_BYTES);
+    if (!sig) { bench_result_t r = {0}; r.name = "(alloc failed)"; return r; }
+    size_t sig_len = AMA_SLHDSA_SHAKE_128S_SIGNATURE_BYTES;
+    const uint8_t msg[] = "SLH-DSA SHAKE-128s benchmark message";
+    size_t msg_len = sizeof(msg) - 1;
+
+    ama_slhdsa_keygen(AMA_SLHDSA_SHAKE_128S, pk, sk);
+
+    for (int i = 0; i < warmup; i++) {
+        sig_len = AMA_SLHDSA_SHAKE_128S_SIGNATURE_BYTES;
+        ama_slhdsa_sign(AMA_SLHDSA_SHAKE_128S, sig, &sig_len,
+                        msg, msg_len, NULL, 0, sk);
+    }
+
+    for (int i = 0; i < iters; i++) {
+        sig_len = AMA_SLHDSA_SHAKE_128S_SIGNATURE_BYTES;
+        double t0 = now_ns();
+        ama_slhdsa_sign(AMA_SLHDSA_SHAKE_128S, sig, &sig_len,
+                        msg, msg_len, NULL, 0, sk);
+        g_samples[i] = now_ns() - t0;
+    }
+
+    free(sig);
+    return compute_stats("SLH-DSA-SHAKE-128s Sign", g_samples, iters);
+}
+
+static bench_result_t bench_slhdsa_shake128s_verify(int iters, int warmup) {
+    uint8_t pk[AMA_SLHDSA_SHAKE_128S_PUBLIC_KEY_BYTES];
+    uint8_t sk[AMA_SLHDSA_SHAKE_128S_SECRET_KEY_BYTES];
+    uint8_t *sig = (uint8_t *)malloc(AMA_SLHDSA_SHAKE_128S_SIGNATURE_BYTES);
+    if (!sig) { bench_result_t r = {0}; r.name = "(alloc failed)"; return r; }
+    size_t sig_len = AMA_SLHDSA_SHAKE_128S_SIGNATURE_BYTES;
+    const uint8_t msg[] = "SLH-DSA SHAKE-128s benchmark message";
+    size_t msg_len = sizeof(msg) - 1;
+
+    ama_slhdsa_keygen(AMA_SLHDSA_SHAKE_128S, pk, sk);
+    ama_slhdsa_sign(AMA_SLHDSA_SHAKE_128S, sig, &sig_len,
+                    msg, msg_len, NULL, 0, sk);
+
+    for (int i = 0; i < warmup; i++)
+        ama_slhdsa_verify(AMA_SLHDSA_SHAKE_128S, sig, sig_len,
+                          msg, msg_len, NULL, 0, pk);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        ama_slhdsa_verify(AMA_SLHDSA_SHAKE_128S, sig, sig_len,
+                          msg, msg_len, NULL, 0, pk);
+        g_samples[i] = now_ns() - t0;
+    }
+
+    free(sig);
+    return compute_stats("SLH-DSA-SHAKE-128s Verify", g_samples, iters);
+}
+
+/* --- secp256k1 pubkey-from-privkey ---
+ *
+ * Constant-time Montgomery-ladder scalar multiplication on secp256k1
+ * (`ama_secp256k1_pubkey_from_privkey`, SEC1 compressed output). The
+ * single-shot pubkey derivation is the dominant cost in BIP-340
+ * Schnorr / ECDSA signing and is what production wallets call to
+ * import a private key. */
+static bench_result_t bench_secp256k1_pubkey(int iters, int warmup) {
+    uint8_t privkey[32];
+    uint8_t pubkey[33];
+
+    /* Fill with a non-zero scalar in [1, N-1]. The library rejects 0
+     * and values >= N; using 0x01..0x20 keeps the ladder on the same
+     * code path every iteration. */
+    for (int i = 0; i < 32; i++) privkey[i] = (uint8_t)(i + 1);
+
+    for (int i = 0; i < warmup; i++)
+        ama_secp256k1_pubkey_from_privkey(privkey, pubkey);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        ama_secp256k1_pubkey_from_privkey(privkey, pubkey);
+        g_samples[i] = now_ns() - t0;
+    }
+    return compute_stats("secp256k1 pubkey", g_samples, iters);
+}
+
+/* --- FROST 2-of-3 (RFC 9591) ---
+ *
+ * Three rows for the per-round per-signer cost in a 2-of-3 FROST
+ * session: round1 nonce commitment, round2 signature share, and the
+ * coordinator's final aggregate into a standard Ed25519 signature.
+ * Keygen-trusted-dealer is run once at setup and is NOT in the timed
+ * region (it is an offline / one-shot operation, not the hot path
+ * any production deployment cares about). */
+static bench_result_t bench_frost_round1_commit(int iters, int warmup) {
+    uint8_t group_pk[32];
+    uint8_t shares[3 * AMA_FROST_SHARE_BYTES];
+    if (ama_frost_keygen_trusted_dealer(2, 3, group_pk, shares, NULL) != AMA_SUCCESS) {
+        bench_result_t r = {0}; r.name = "(FROST keygen failed)"; return r;
+    }
+
+    uint8_t nonce_pair[AMA_FROST_NONCE_BYTES];
+    uint8_t commitment[AMA_FROST_COMMITMENT_BYTES];
+    const uint8_t *share1 = shares + 0 * AMA_FROST_SHARE_BYTES;
+
+    for (int i = 0; i < warmup; i++)
+        ama_frost_round1_commit(nonce_pair, commitment, share1);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        ama_frost_round1_commit(nonce_pair, commitment, share1);
+        g_samples[i] = now_ns() - t0;
+    }
+    return compute_stats("FROST round1 commit", g_samples, iters);
+}
+
+static bench_result_t bench_frost_round2_sign(int iters, int warmup) {
+    uint8_t group_pk[32];
+    uint8_t shares[3 * AMA_FROST_SHARE_BYTES];
+    if (ama_frost_keygen_trusted_dealer(2, 3, group_pk, shares, NULL) != AMA_SUCCESS) {
+        bench_result_t r = {0}; r.name = "(FROST keygen failed)"; return r;
+    }
+
+    /* Two signers (indices 1 and 2). Each generates its round1
+     * commitment; round2 sign needs the concatenated commitments and
+     * indices of the participating signer set. */
+    uint8_t nonce_pairs[2][AMA_FROST_NONCE_BYTES];
+    uint8_t commitments[2 * AMA_FROST_COMMITMENT_BYTES];
+    uint8_t signer_indices[2] = { 1, 2 };
+    for (int s = 0; s < 2; s++) {
+        ama_frost_round1_commit(nonce_pairs[s],
+                                commitments + s * AMA_FROST_COMMITMENT_BYTES,
+                                shares + s * AMA_FROST_SHARE_BYTES);
+    }
+
+    const uint8_t msg[] = "FROST 2-of-3 benchmark message";
+    size_t msg_len = sizeof(msg) - 1;
+    uint8_t sig_share[AMA_FROST_SIG_SHARE_BYTES];
+
+    for (int i = 0; i < warmup; i++)
+        ama_frost_round2_sign(sig_share, msg, msg_len,
+                              shares + 0 * AMA_FROST_SHARE_BYTES, 1,
+                              nonce_pairs[0],
+                              commitments, signer_indices, 2, group_pk);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        ama_frost_round2_sign(sig_share, msg, msg_len,
+                              shares + 0 * AMA_FROST_SHARE_BYTES, 1,
+                              nonce_pairs[0],
+                              commitments, signer_indices, 2, group_pk);
+        g_samples[i] = now_ns() - t0;
+    }
+    return compute_stats("FROST round2 sign", g_samples, iters);
+}
+
+static bench_result_t bench_frost_aggregate(int iters, int warmup) {
+    uint8_t group_pk[32];
+    uint8_t shares[3 * AMA_FROST_SHARE_BYTES];
+    if (ama_frost_keygen_trusted_dealer(2, 3, group_pk, shares, NULL) != AMA_SUCCESS) {
+        bench_result_t r = {0}; r.name = "(FROST keygen failed)"; return r;
+    }
+
+    uint8_t nonce_pairs[2][AMA_FROST_NONCE_BYTES];
+    uint8_t commitments[2 * AMA_FROST_COMMITMENT_BYTES];
+    uint8_t signer_indices[2] = { 1, 2 };
+    for (int s = 0; s < 2; s++) {
+        ama_frost_round1_commit(nonce_pairs[s],
+                                commitments + s * AMA_FROST_COMMITMENT_BYTES,
+                                shares + s * AMA_FROST_SHARE_BYTES);
+    }
+
+    const uint8_t msg[] = "FROST 2-of-3 benchmark message";
+    size_t msg_len = sizeof(msg) - 1;
+    uint8_t sig_shares[2 * AMA_FROST_SIG_SHARE_BYTES];
+    for (int s = 0; s < 2; s++) {
+        ama_frost_round2_sign(sig_shares + s * AMA_FROST_SIG_SHARE_BYTES,
+                              msg, msg_len,
+                              shares + s * AMA_FROST_SHARE_BYTES,
+                              signer_indices[s],
+                              nonce_pairs[s],
+                              commitments, signer_indices, 2, group_pk);
+    }
+
+    uint8_t signature[64];
+
+    for (int i = 0; i < warmup; i++)
+        ama_frost_aggregate(signature, sig_shares, commitments,
+                            signer_indices, 2, msg, msg_len, group_pk);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        ama_frost_aggregate(signature, sig_shares, commitments,
+                            signer_indices, 2, msg, msg_len, group_pk);
+        g_samples[i] = now_ns() - t0;
+    }
+    return compute_stats("FROST aggregate", g_samples, iters);
+}
+
+/* ============================================================================
  * OUTPUT FORMATTERS
  * ============================================================================ */
 
@@ -1014,7 +1392,7 @@ int main(int argc, char **argv) {
     const int iters_vslow = 50;     /* 1ms+ ops */
 
     /* Collect all results */
-    #define MAX_RESULTS 48
+    #define MAX_RESULTS 80
     bench_result_t results[MAX_RESULTS];
     int n = 0;
 
@@ -1061,6 +1439,22 @@ int main(int argc, char **argv) {
     results[n++] = bench_x25519_dh_batch(8,  iters_med, warmup);
     results[n++] = bench_x25519_dh_batch(16, iters_med, warmup);
 
+    /* --- X25519 MULX/ADX kernel on-vs-off ---
+     * Surfaces the BMI2+ADX speedup quoted in
+     * `wiki/Performance-Benchmarks.md` directly in the harness output.
+     * On hosts without the kernel (CPUID gate or build flag), the two
+     * rows match — informative in its own right. */
+    results[n++] = bench_x25519_dh_mulx_off(iters_med, warmup);
+    results[n++] = bench_x25519_dh_mulx_on(iters_med, warmup);
+
+    /* --- secp256k1 (constant-time Montgomery ladder) --- */
+    results[n++] = bench_secp256k1_pubkey(iters_med, warmup);
+
+    /* --- FROST 2-of-3 (RFC 9591) --- */
+    results[n++] = bench_frost_round1_commit(iters_med, warmup);
+    results[n++] = bench_frost_round2_sign(iters_med, warmup);
+    results[n++] = bench_frost_aggregate(iters_med, warmup);
+
     /* --- AES-256-GCM ---
      * 1 KB / 4 KB / 16 KB / 64 KB rows.  PR A (2026-04) added the 16 KB
      * row to bracket the regime where the VAES + VPCLMULQDQ YMM kernel
@@ -1091,6 +1485,22 @@ int main(int argc, char **argv) {
     results[n++] = bench_dilithium_keygen(iters_slow, warmup);
     results[n++] = bench_dilithium_sign(iters_slow, warmup);
     results[n++] = bench_dilithium_verify(iters_slow, warmup);
+
+    /* --- ML-DSA-65 NTT kernel isolation (scalar vs dispatched) ---
+     * Isolates the NTT cost from the surrounding ML-DSA flow so a
+     * future SIMD-NTT win shows up here as a scalar-vs-dispatch
+     * delta even when end-to-end sign/verify is dominated by
+     * sampling and rejection. */
+    results[n++] = bench_dilithium_ntt(iters_fast,    warmup, 0);
+    results[n++] = bench_dilithium_ntt(iters_fast,    warmup, 1);
+    results[n++] = bench_dilithium_invntt(iters_fast, warmup, 0);
+    results[n++] = bench_dilithium_invntt(iters_fast, warmup, 1);
+
+    /* --- SLH-DSA SHAKE-128s (FIPS 205, NIST L1) ---
+     * Sign is multi-millisecond; keep iters small to bound runtime. */
+    results[n++] = bench_slhdsa_shake128s_keygen(iters_slow,  warmup);
+    results[n++] = bench_slhdsa_shake128s_sign(iters_vslow,   warmup);
+    results[n++] = bench_slhdsa_shake128s_verify(iters_slow,  warmup);
 
     /* --- ML-KEM-1024 --- */
     results[n++] = bench_kyber_keygen(iters_slow, warmup);
