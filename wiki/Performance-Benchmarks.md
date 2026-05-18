@@ -357,19 +357,19 @@ To avoid duplicating numbers across the repo, the canonical references
 live in one place each — pick the right one for your question:
 
 - **Gap → row mapping** (which `benchmark_c_raw` rows close which
-  audit gaps): [`benchmarks/README.md`](../benchmarks/README.md)
+  audit gaps): [`benchmarks/README.md`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/benchmarks/README.md)
   *Benchmark coverage map (2026-05)*.
 - **Sample sandbox medians + full provenance** (one-off measurements
-  for sanity-checking only): [`docs/BENCHMARK_HISTORY.md`](../docs/BENCHMARK_HISTORY.md)
+  for sanity-checking only): [`docs/BENCHMARK_HISTORY.md`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/docs/BENCHMARK_HISTORY.md)
   *2026-05: Benchmark coverage expansion*.
 - **Visual summary** (2×2 chart collage of the four new families):
-  [`benchmarks/charts/pqc_benchmark_overview.svg`](../benchmarks/charts/pqc_benchmark_overview.svg).
+  [`benchmarks/charts/pqc_benchmark_overview.svg`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/benchmarks/charts/pqc_benchmark_overview.svg).
 
 The benchmark/test-only C entry points that enable the paired
 scalar-vs-dispatched and MULX on-vs-off rows
 (`ama_dilithium_ntt_bench`, `ama_dilithium_invntt_bench`,
 `ama_x25519_set_mulx_override`) are documented in
-[`include/ama_cryptography.h`](../include/ama_cryptography.h) and are
+[`include/ama_cryptography.h`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/include/ama_cryptography.h) and are
 explicitly **not part of the production crypto surface**. Production
 callers continue to go through `ama_dilithium_sign()` /
 `ama_dilithium_verify()` (FIPS 204 §6.1 / §6.2) and

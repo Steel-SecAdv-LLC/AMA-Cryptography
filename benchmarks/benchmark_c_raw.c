@@ -952,9 +952,15 @@ static bench_result_t bench_x25519_dh_mulx_on(int iters, int warmup) {
  * Per-sample inner loop is BENCH_INNER_LOOP iterations to push the
  * per-NTT cost above clock_gettime() resolution on modern hosts
  * (single NTT is a few hundred nanoseconds with SIMD wired up).
- * The poly is reinitialised inside the inner loop so each NTT runs
- * on a fresh (in-place) buffer and the accumulated runs do not
- * compound the result into something the compiler can hoist.
+ * Each *outer* sample begins by refilling `g_dil_ntt_ring` with
+ * BENCH_INNER_LOOP independent random polynomials (see
+ * `fill_dil_ntt_ring()` and the `for (i = 0; i < iters; i++)` loops
+ * below); the *inner* loop then indexes through that prefilled ring
+ * one poly per call. Pre-filling outside the timed region keeps the
+ * `fill_random_int32_poly()` work out of the measurement; indexing
+ * a fresh ring slot per call still ensures every NTT operates on
+ * independent inputs so the compiler cannot hoist the result and
+ * successive in-place transforms do not compound across iterations.
  *
  * BENCH_INNER_LOOP itself is defined once earlier in this file
  * (next to KYBER_POLY_N) — that single define is the source of
