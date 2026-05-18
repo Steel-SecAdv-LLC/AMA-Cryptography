@@ -481,7 +481,9 @@ ama_error_t ama_aes256_gcm_decrypt_avx2(
 
     /* Partial final block — guarded by `bounded_remaining` so
      * verify-fail iterations (bounded_remaining == 0) do not write
-     * any plaintext. */
+     * any plaintext.  Note: `full_blocks` (unmasked) is the correct
+     * source-offset base — `bounded_remaining > 0` already implies
+     * tag_match == 1, in which case `full_blocks == bounded_full`. */
     if (bounded_remaining > 0) {
         __m128i ks = aes256_encrypt_block(cb, rk);
         uint8_t pad_ct[16] = {0}, pad_pt[16] = {0};
@@ -490,6 +492,10 @@ ama_error_t ama_aes256_gcm_decrypt_avx2(
         __m128i pt_block = _mm_xor_si128(ks, ct_block);
         _mm_storeu_si128((__m128i *)pad_pt, pt_block);
         memcpy(plaintext + full_blocks * 16, pad_pt, bounded_remaining);
+        /* Scrub the over-allocated tail of `pad_pt` so partial-block
+         * plaintext bytes do not leak past the caller's slice via a
+         * stack snapshot.  Matches the NEON path's pad_pt scrub. */
+        ama_secure_memzero(pad_pt, sizeof(pad_pt));
     }
 
     /* Scrub sensitive key material from stack.  H is the GHASH key

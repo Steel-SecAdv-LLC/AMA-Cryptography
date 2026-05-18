@@ -65,11 +65,12 @@ static void scalar_cbd2(int16_t poly[256], const uint8_t buf[128]) {
 }
 
 static int failed  = 0;
+static int passed  = 0;
 static int skipped = 0;
 
 #define CHECK(cond, msg) do {                                   \
     if (!(cond)) { printf("  FAIL: %s\n", msg); failed++; }     \
-    else         { printf("  PASS: %s\n", msg); }               \
+    else         { printf("  PASS: %s\n", msg); passed++; }     \
 } while (0)
 
 static int check_cbd2(const ama_dispatch_table_t *dt,
@@ -120,6 +121,7 @@ int main(void) {
         printf("  PASS: NEON/SVE2 CBD2 slot is NULL by design "
                "(kyber tier=%s, generic inline path active)\n",
                ama_impl_level_name(di->kyber));
+        passed++;
     }
 #else
     (void)di;
@@ -221,12 +223,17 @@ int main(void) {
                failed, skipped);
         return 1;
     }
-    if (skipped > 0) {
+    /* CTest SKIP semantics: return 77 when nothing was actually
+     * exercised so the result is `Skipped`, not the silently-misleading
+     * `Passed`.  CMakeLists pairs this with `SKIP_RETURN_CODE 77`. */
+    if (passed == 0 && skipped > 0) {
         printf("All CBD2 equivalence checks SKIPPED "
                "(%d cases; no dispatched CBD2 on this build/CPU)\n", skipped);
-    } else {
-        printf("All CBD2 equivalence checks passed!\n");
+        printf("===========================================\n");
+        return 77;
     }
+    printf("All CBD2 equivalence checks passed! (%d passed, %d skipped)\n",
+           passed, skipped);
     printf("===========================================\n");
     return 0;
 }

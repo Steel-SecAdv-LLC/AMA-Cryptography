@@ -233,6 +233,17 @@ static double test_consttime_copy(int iterations) {
  *
  * Class 0: Sign with key derived from all-zero seed
  * Class 1: Sign with key derived from all-0xFF seed
+ *
+ * Setup-failure (ama_ed25519_keypair returning non-AMA_SUCCESS) and
+ * per-iteration sign-failure both surface as a hard lane FAIL via
+ * DUDECT_FATAL_SENTINEL — without this an always-fail or always-succeed
+ * regression in ed25519_sign would still produce a clean t-value
+ * because both classes would walk the same code path.
+ *
+ * The per-iteration sk pointer is selected OUTSIDE the timing region
+ * (pointer-select-out-of-timer pattern) so the class-correlated
+ * branch-predictor delta of the prior `if (class_idx == 0)` form
+ * cannot contaminate the measurement.
  * ----------------------------------------------------------------------- */
 static double test_ed25519_sign(int iterations) {
     dudect_ctx_t ctx;
@@ -242,34 +253,48 @@ static double test_ed25519_sign(int iterations) {
     uint8_t sig[64], msg[64];
 
     memset(sk0, 0x00, 32);
-    ama_ed25519_keypair(pk0, sk0);
     memset(sk1, 0xFF, 32);
-    ama_ed25519_keypair(pk1, sk1);
+    if (ama_ed25519_keypair(pk0, sk0) != AMA_SUCCESS ||
+        ama_ed25519_keypair(pk1, sk1) != AMA_SUCCESS) {
+        fprintf(stderr,
+                "  FAIL: Ed25519 dudect setup keypair failed; "
+                "sign lane never executed\n");
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
+    }
+
+    int rc_mismatches = 0;
 
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         random_bytes(msg, sizeof(msg));
         int class_idx = rand() & 1;
+        /* Pointer-select OUTSIDE the timing region. */
+        const uint8_t *sk_use = class_idx ? sk1 : sk0;
 
         uint64_t start = dudect_get_time_ns();
-        if (class_idx == 0)
-            ama_ed25519_sign(sig, msg, sizeof(msg), sk0);
-        else
-            ama_ed25519_sign(sig, msg, sizeof(msg), sk1);
+        volatile ama_error_t rc =
+            ama_ed25519_sign(sig, msg, sizeof(msg), sk_use);
         uint64_t end = dudect_get_time_ns();
 
+        if (rc != AMA_SUCCESS) rc_mismatches++;
+
         dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches > 0) {
+        fprintf(stderr,
+                "  FAIL: Ed25519 sign rc mismatches: %d "
+                "(expected AMA_SUCCESS on every iteration; both 32-byte "
+                "seeds are valid)\n",
+                rc_mismatches);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
     return dudect_get_t(&ctx);
 }
 
-/* -----------------------------------------------------------------------
- * Test 7: AES-GCM tag verification — timing must not depend on tag match
- *
- * Class 0: Verify with correct tag
- * Class 1: Verify with incorrect tag
- * ----------------------------------------------------------------------- */
 /* -----------------------------------------------------------------------
  * Test 7: AES-GCM tag verification — timing must not depend on tag match
  *
@@ -293,7 +318,8 @@ static double test_ed25519_sign(int iterations) {
  *     work whose duration could differ between classes is the
  *     `ama_consttime_memcmp` of the 16-byte tag — exactly the
  *     invariant this lane is supposed to witness.  GHASH still
- *     processes the AAD + length block identically in both classes.
+ *     processes the AAD + length block identically in both classes,
+ *     and the AES-256 key expansion runs once in both classes.
  *
  * Restored to strict pass/fail.
  * ----------------------------------------------------------------------- */
@@ -392,13 +418,23 @@ static double test_ed25519_verify(int iterations) {
     uint8_t msg[64];
 
     random_bytes(msg, sizeof(msg));
-    /* Generate a fresh key + signature so we know `sig_good` verifies. */
+    /* Generate a fresh key + signature so we know `sig_good` verifies.
+     * Both setup calls must succeed or the lane is testifying to
+     * nothing — surface failure via DUDECT_FATAL_SENTINEL rather than
+     * letting the rc-mismatches counter misreport "always-fails" as
+     * "tag mismatches". */
     {
         uint8_t seed[32];
         random_bytes(seed, 32);
         memcpy(sk, seed, 32);
-        ama_ed25519_keypair(pk, sk);
-        ama_ed25519_sign(sig_good, msg, sizeof(msg), sk);
+        if (ama_ed25519_keypair(pk, sk) != AMA_SUCCESS ||
+            ama_ed25519_sign(sig_good, msg, sizeof(msg), sk) != AMA_SUCCESS) {
+            fprintf(stderr,
+                    "  FAIL: Ed25519 verify dudect setup "
+                    "(keypair/sign) failed; verify lane never executed\n");
+            dudect_print_result(&ctx);
+            return DUDECT_FATAL_SENTINEL;
+        }
     }
     /* Corrupt the s-scalar half of the signature (bytes 32..63).
      * The R point in the first half still decodes; the verifier
@@ -736,6 +772,12 @@ static double test_secp256k1_scalarmult(int iterations) {
  *
  * Class 0: HKDF with all-zero IKM
  * Class 1: HKDF with all-0xFF IKM
+ *
+ * Both IKMs are valid 32-byte inputs, so both classes must return
+ * AMA_SUCCESS.  Per-iteration rc validation + pointer-select-out-of-
+ * timer (same pattern as the AES-GCM / ChaCha20-Poly1305 / Ed25519
+ * lanes) protect against an always-fail or always-succeed regression
+ * in ama_hkdf silently producing a vacuous PASS.
  * ----------------------------------------------------------------------- */
 static double test_hkdf(int iterations) {
     dudect_ctx_t ctx;
@@ -749,17 +791,31 @@ static double test_hkdf(int iterations) {
     const uint8_t *info = (const uint8_t *)"dudect-timing-test";
     size_t info_len = 18;
 
+    int rc_mismatches = 0;
+
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
+        /* Pointer-select OUTSIDE the timing region. */
+        const uint8_t *ikm_use = class_idx ? ikm1 : ikm0;
 
         uint64_t start = dudect_get_time_ns();
-        if (class_idx == 0)
-            ama_hkdf(salt, 32, ikm0, 32, info, info_len, okm, 32);
-        else
-            ama_hkdf(salt, 32, ikm1, 32, info, info_len, okm, 32);
+        volatile ama_error_t rc =
+            ama_hkdf(salt, 32, ikm_use, 32, info, info_len, okm, 32);
         uint64_t end = dudect_get_time_ns();
 
+        if (rc != AMA_SUCCESS) rc_mismatches++;
+
         dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches > 0) {
+        fprintf(stderr,
+                "  FAIL: HKDF rc mismatches: %d "
+                "(expected AMA_SUCCESS on every iteration; both 32-byte "
+                "IKMs are valid inputs)\n",
+                rc_mismatches);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
@@ -769,14 +825,29 @@ static double test_hkdf(int iterations) {
 /* -----------------------------------------------------------------------
  * Test 9: HMAC-SHA3-256 verification — timing must not depend on MAC match
  *
- * Class 0: Verify with correct HMAC
- * Class 1: Verify with incorrect HMAC
+ * Class 0: Verify a correct HMAC tag against (key, msg)
+ * Class 1: Verify a one-bit-flipped HMAC tag against (key, msg)
  *
- * This tests the final comparison step in HMAC verification.
+ * A bona-fide HMAC verify operation is the composition `compute_then_
+ * constant_time_compare`: derive the expected tag from (key, msg) using
+ * ama_hmac_sha3_256 and compare it against the candidate tag with
+ * ama_consttime_memcmp.  Pre-fix this lane only invoked the compare,
+ * which was structurally identical to Test 1 (test_consttime_memcmp)
+ * and would not have surfaced a future regression in
+ * ama_hmac_sha3_256's internal timing.
+ *
+ * Post-fix the entire compute-then-compare composition is inside the
+ * timed window.  Both classes execute identical ama_hmac_sha3_256
+ * calls (same key, same msg) and a constant-time compare against
+ * test_mac (which differs by exactly one bit between classes), so any
+ * residual t-value isolates the compare side — the very invariant the
+ * lane is supposed to witness.  Per-iteration `rc` check on the HMAC
+ * compute ensures the lane fails loudly if the primitive regresses,
+ * rather than silently emitting a vacuous-pass t-value.
  * ----------------------------------------------------------------------- */
 static double test_hmac_verify(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "HMAC-SHA3-256 verify comparison");
+    dudect_ctx_init(&ctx, "HMAC-SHA3-256 verify (compute+compare)");
 
     uint8_t key[32], msg[64];
     uint8_t mac[32], bad_mac[32];
@@ -784,25 +855,54 @@ static double test_hmac_verify(int iterations) {
     random_bytes(key, 32);
     random_bytes(msg, 64);
 
-    /* Compute correct HMAC-SHA3-256 */
-    ama_hmac_sha3_256(key, 32, msg, 64, mac);
+    /* Compute the reference HMAC; setup-failure surfaces as a hard
+     * lane FAIL so the harness cannot silently emit a t-value on an
+     * empty context. */
+    if (ama_hmac_sha3_256(key, 32, msg, 64, mac) != AMA_SUCCESS) {
+        fprintf(stderr,
+                "  FAIL: HMAC-SHA3-256 dudect setup compute failed; "
+                "verify lane never executed\n");
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
+    }
 
-    /* Create bad HMAC */
     memcpy(bad_mac, mac, 32);
     bad_mac[0] ^= 0x01;
 
+    /* Per-iteration `rc` validation outside the timing region.  A
+     * future regression in ama_hmac_sha3_256 (e.g. returning an
+     * error code on valid input) would otherwise produce a clean
+     * t-value because both classes would fail identically. */
+    int rc_mismatches = 0;
+
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
+        /* Pointer-select OUTSIDE the timing region to remove
+         * class-correlated branch-predictor delta. */
         const uint8_t *test_mac = class_idx ? bad_mac : mac;
+        uint8_t computed[32];
 
-        /* Use consttime_memcmp to compare — this is what a secure
-         * HMAC verification should use internally */
         uint64_t start = dudect_get_time_ns();
-        volatile int result = ama_consttime_memcmp(test_mac, mac, 32);
+        volatile ama_error_t rc =
+            ama_hmac_sha3_256(key, 32, msg, 64, computed);
+        volatile int match =
+            (ama_consttime_memcmp(computed, test_mac, 32) == 0);
         uint64_t end = dudect_get_time_ns();
-        (void)result;
+        (void)match;
+
+        if (rc != AMA_SUCCESS) rc_mismatches++;
 
         dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches > 0) {
+        fprintf(stderr,
+                "  FAIL: HMAC-SHA3-256 verify rc mismatches: %d "
+                "(expected AMA_SUCCESS on every iteration; the input "
+                "(key=32B, msg=64B) is always valid)\n",
+                rc_mismatches);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
@@ -821,6 +921,12 @@ static double test_hmac_verify(int iterations) {
  *
  * Class 0: Scalar mult with all-zero (post-clamp) secret seed
  * Class 1: Scalar mult with all-0xFF (post-clamp) secret seed
+ *
+ * Both secret seeds yield valid post-clamp scalars (X25519 RFC 7748
+ * §5 clamping always produces a valid scalar in [2^254, 2^255-1]), so
+ * both classes must return AMA_SUCCESS.  Pointer-select-out-of-timer
+ * + per-iteration rc validation match the AES-GCM / ChaCha20-Poly1305
+ * / Ed25519 pattern.
  * ----------------------------------------------------------------------- */
 static double test_x25519_scalarmult(int iterations) {
     char label[96];
@@ -837,17 +943,31 @@ static double test_x25519_scalarmult(int iterations) {
     memset(basepoint, 0, 32);
     basepoint[0] = 9;
 
+    int rc_mismatches = 0;
+
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
+        /* Pointer-select OUTSIDE the timing region. */
+        const uint8_t *sk_use = class_idx ? sk1 : sk0;
 
         uint64_t start = dudect_get_time_ns();
-        if (class_idx == 0)
-            ama_x25519_key_exchange(out, sk0, basepoint);
-        else
-            ama_x25519_key_exchange(out, sk1, basepoint);
+        volatile ama_error_t rc =
+            ama_x25519_key_exchange(out, sk_use, basepoint);
         uint64_t end = dudect_get_time_ns();
 
+        if (rc != AMA_SUCCESS) rc_mismatches++;
+
         dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches > 0) {
+        fprintf(stderr,
+                "  FAIL: X25519 scalar mult rc mismatches: %d "
+                "(expected AMA_SUCCESS on every iteration; both 32-byte "
+                "scalars are valid post-clamp X25519 secrets)\n",
+                rc_mismatches);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
@@ -858,17 +978,19 @@ static double test_x25519_scalarmult(int iterations) {
  * Test 10b: X25519 dispatched batch ladder (AVX2 4-way OR scalar fallback)
  *
  * Measures the runtime-dispatched X25519 batch path.  Which kernel
- * actually runs depends on dispatcher state:
+ * actually runs depends on dispatcher state at the moment this lane
+ * runs (this lane does not itself call any `ama_test_force_*` hook —
+ * the env-var path below is the only way the SIMD kernel becomes
+ * active here):
  *
- *   - With `AMA_DISPATCH_USE_X25519_AVX2=1` set in the environment
- *     (or the test hook `ama_test_force_x25519_x4_avx2()` called),
+ *   - With `AMA_DISPATCH_USE_X25519_AVX2=1` set in the environment,
  *     the AVX2 4-way Montgomery ladder is exercised.  That kernel
  *     uses a packed XOR-mask cswap that applies independent per-lane
  *     scalar bits — no shared branch that could leak whether a
  *     particular lane has bit-0 vs bit-1 set, structurally as
  *     constant-time as the scalar ladder.
  *
- *   - Without the opt-in (the default), the wrapper falls through
+ *   - Without the env var (the default), the wrapper falls through
  *     to four sequential scalar single-shot ladders, the same path
  *     measured by Test 10a above (each call is constant-time on its
  *     own, and four of them in series carry the same property).
@@ -877,7 +999,9 @@ static double test_x25519_scalarmult(int iterations) {
  * shot X25519 lane above.  CI matrix entry
  * `dudect-x25519-avx2-batch` exports the env var and re-runs this
  * lane so the SIMD kernel's signal is sampled even when the default
- * policy is explicit opt-in (default-off).
+ * policy is explicit opt-in (default-off).  (The
+ * `ama_test_force_x25519_x4_avx2()` hook lives in
+ * tests/c/test_x25519.c, not here.)
  *
  * Class 0: Batch of 4 with all-zero (post-clamp) secret seeds
  * Class 1: Batch of 4 with all-0xFF (post-clamp) secret seeds
@@ -892,21 +1016,33 @@ static double test_x25519_scalarmult_x4(int iterations) {
     memset(pts, 0,    sizeof(pts));
     for (int k = 0; k < 4; k++) pts[k][0] = 9;  /* basepoint per lane */
 
+    int rc_mismatches = 0;
+
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
+        /* Pointer-select OUTSIDE the timing region. */
+        const uint8_t (*sk_use)[32] = class_idx
+            ? (const uint8_t (*)[32])sk1
+            : (const uint8_t (*)[32])sk0;
 
         uint64_t start = dudect_get_time_ns();
-        if (class_idx == 0)
-            ama_x25519_scalarmult_batch(out,
-                                         (const uint8_t (*)[32])sk0,
-                                         (const uint8_t (*)[32])pts, 4);
-        else
-            ama_x25519_scalarmult_batch(out,
-                                         (const uint8_t (*)[32])sk1,
+        volatile ama_error_t rc =
+            ama_x25519_scalarmult_batch(out, sk_use,
                                          (const uint8_t (*)[32])pts, 4);
         uint64_t end = dudect_get_time_ns();
 
+        if (rc != AMA_SUCCESS) rc_mismatches++;
+
         dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches > 0) {
+        fprintf(stderr,
+                "  FAIL: X25519 batch×4 rc mismatches: %d "
+                "(expected AMA_SUCCESS on every iteration)\n",
+                rc_mismatches);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
@@ -915,10 +1051,21 @@ static double test_x25519_scalarmult_x4(int iterations) {
 
 /* -----------------------------------------------------------------------
  * Test 10: Kyber KEM — decapsulation timing must not depend on
- * ciphertext validity (implicit rejection must be constant-time)
+ * ciphertext validity (FIPS 203 implicit rejection must be constant-time)
  *
- * Class 0: Decapsulate valid ciphertext
- * Class 1: Decapsulate corrupted ciphertext
+ * Class 0: Decapsulate valid ciphertext (returns AMA_SUCCESS, ss is the
+ *          shared secret matching encapsulator's ss)
+ * Class 1: Decapsulate corrupted ciphertext (returns AMA_SUCCESS by
+ *          design — FIPS 203 §6.3 implicit rejection: the decapsulator
+ *          derives a deterministic pseudo-random shared secret from
+ *          K' = J(z‖c) so an attacker observing only the rc cannot
+ *          distinguish valid from corrupted CT)
+ *
+ * Setup-failure (keypair / encapsulate returning non-AMA_SUCCESS) and
+ * per-iteration decapsulate-failure both surface as a hard lane FAIL
+ * via DUDECT_FATAL_SENTINEL.  Note both classes must return AMA_SUCCESS
+ * — the implicit-rejection contract requires the rc to be identical;
+ * an rc divergence would itself be a constant-time defect.
  * ----------------------------------------------------------------------- */
 static double test_kyber_decaps(int iterations) {
     dudect_ctx_t ctx;
@@ -928,27 +1075,55 @@ static double test_kyber_decaps(int iterations) {
     uint8_t sk[AMA_KYBER_1024_SECRET_KEY_BYTES];
     uint8_t ct[AMA_KYBER_1024_CIPHERTEXT_BYTES];
     uint8_t ct_bad[AMA_KYBER_1024_CIPHERTEXT_BYTES];
-    size_t ct_len = 0;
+    /* `ct_len` is in/out for ama_kyber_encapsulate — pre-set to the
+     * buffer capacity so the call doesn't reject with "insufficient
+     * buffer" before producing the ciphertext. */
+    size_t ct_len = sizeof(ct);
     uint8_t ss[AMA_KYBER_1024_SHARED_SECRET_BYTES];
 
-    ama_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk));
-    ama_kyber_encapsulate(pk, sizeof(pk), ct, &ct_len, ss, sizeof(ss));
+    if (ama_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk)) != AMA_SUCCESS ||
+        ama_kyber_encapsulate(pk, sizeof(pk), ct, &ct_len, ss, sizeof(ss))
+            != AMA_SUCCESS) {
+        fprintf(stderr,
+                "  FAIL: Kyber dudect setup (keypair/encapsulate) failed; "
+                "decaps lane never executed\n");
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     /* Create corrupted ciphertext */
     memcpy(ct_bad, ct, sizeof(ct_bad));
     ct_bad[0] ^= 0xFF;
 
+    int rc_mismatches = 0;
+
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
+        /* Pointer-select OUTSIDE the timing region.  Both class 0 and
+         * class 1 must return AMA_SUCCESS — FIPS 203 implicit
+         * rejection returns a pseudo-random shared secret on CT
+         * tampering rather than surfacing the failure via rc. */
+        const uint8_t *ct_use = class_idx ? ct_bad : ct;
 
         uint64_t start = dudect_get_time_ns();
-        if (class_idx == 0)
-            ama_kyber_decapsulate(ct, ct_len, sk, sizeof(sk), ss, sizeof(ss));
-        else
-            ama_kyber_decapsulate(ct_bad, ct_len, sk, sizeof(sk), ss, sizeof(ss));
+        volatile ama_error_t rc =
+            ama_kyber_decapsulate(ct_use, ct_len, sk, sizeof(sk),
+                                  ss, sizeof(ss));
         uint64_t end = dudect_get_time_ns();
 
+        if (rc != AMA_SUCCESS) rc_mismatches++;
+
         dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches > 0) {
+        fprintf(stderr,
+                "  FAIL: Kyber-1024 decaps rc mismatches: %d "
+                "(FIPS 203 implicit rejection requires AMA_SUCCESS for "
+                "both classes — an rc divergence is itself a CT defect)\n",
+                rc_mismatches);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
@@ -1036,36 +1211,77 @@ static double test_frost_scalar_negate_midrange(int iterations) {
 /* -----------------------------------------------------------------------
  * Test 11: Dilithium signing — timing must not depend on message content
  *
- * Class 0: Sign all-zero message
- * Class 1: Sign all-0xFF message
+ * Class 0: Sign all-zero 64-byte message
+ * Class 1: Sign all-0xFF 64-byte message
+ *
+ * Both messages are valid 64-byte inputs, so `ama_dilithium_sign` must
+ * return AMA_SUCCESS in both classes and `siglen` must equal
+ * AMA_ML_DSA_65_SIGNATURE_BYTES.  Pre-fix the lane discarded both rc
+ * and siglen; an always-fail or short-signature regression would have
+ * still produced a clean t-value.  Post-fix uses the
+ * pointer-select-out-of-timer + per-iteration rc/siglen-validation
+ * pattern from the SLH-DSA lane below.
+ *
+ * Note: ML-DSA-65 signing uses FIPS 204 §A.1 rejection sampling, so
+ * the message-dependent rejection count makes this lane info-only on
+ * the t-test side.  The DUDECT_FATAL_SENTINEL still forces a hard
+ * lane FAIL on any rc/siglen mismatch (semantic correctness is not
+ * "info-only" — only the timing t-value is).
  * ----------------------------------------------------------------------- */
 static double test_dilithium_sign(int iterations) {
     dudect_ctx_t ctx;
     dudect_ctx_init(&ctx, "ML-DSA-65 sign (msg-independent)");
 
-    /* ML-DSA-65: pk=1952, sk=4032, sig=3309 bytes */
-    uint8_t pk[1952];
-    uint8_t sk[4032];
-    uint8_t sig[3309];
+    uint8_t pk[AMA_ML_DSA_65_PUBLIC_KEY_BYTES];
+    uint8_t sk[AMA_ML_DSA_65_SECRET_KEY_BYTES];
+    uint8_t sig[AMA_ML_DSA_65_SIGNATURE_BYTES];
     size_t siglen;
 
     uint8_t msg0[64], msg1[64];
     memset(msg0, 0x00, 64);
     memset(msg1, 0xFF, 64);
 
-    ama_dilithium_keypair(pk, sk);
+    if (ama_dilithium_keypair(pk, sk) != AMA_SUCCESS) {
+        fprintf(stderr,
+                "  FAIL: ML-DSA-65 dudect setup keypair failed; "
+                "sign lane never executed\n");
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
+    }
+
+    int rc_mismatches = 0;
 
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
+        /* Pointer-select OUTSIDE the timing region. */
+        const uint8_t *msg_use = class_idx ? msg1 : msg0;
+        /* `signature_len` is in/out: the call reads it as the buffer
+         * capacity before writing the actual signature length back.
+         * Re-initialise per iteration so a stale shrunk value doesn't
+         * cause spurious early-return errors. */
+        siglen = sizeof(sig);
 
         uint64_t start = dudect_get_time_ns();
-        if (class_idx == 0)
-            ama_dilithium_sign(sig, &siglen, msg0, 64, sk);
-        else
-            ama_dilithium_sign(sig, &siglen, msg1, 64, sk);
+        volatile ama_error_t rc =
+            ama_dilithium_sign(sig, &siglen, msg_use, 64, sk);
         uint64_t end = dudect_get_time_ns();
 
+        if (rc != AMA_SUCCESS ||
+            siglen != AMA_ML_DSA_65_SIGNATURE_BYTES) {
+            rc_mismatches++;
+        }
+
         dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches > 0) {
+        fprintf(stderr,
+                "  FAIL: ML-DSA-65 sign rc/siglen mismatches: %d "
+                "(expected AMA_SUCCESS + siglen=%d for both classes; "
+                "FIPS 204 fixed-size signature)\n",
+                rc_mismatches, AMA_ML_DSA_65_SIGNATURE_BYTES);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
@@ -1186,6 +1402,13 @@ typedef struct {
     double t_value;
     int is_info_only;  /* 1 = don't fail CI on timing alone */
 } test_result_t;
+
+/* Upper bound on the number of lanes `run_all_tests` registers.
+ * Counted by hand: utility(5) + primitives(7) + classical-kex(2) +
+ * threshold(3) + PQC(3) = 20.  Reserve 32 to give 12 lanes of
+ * headroom for future additions without silently overflowing the
+ * fixed-size results array.  Guarded by a runtime assertion below. */
+#define DUDECT_MAX_LANES 32
 
 /* Returns 1 iff the t-value is the sentinel for a fatal harness fault
  * (setup failure or per-class rc mismatch).  DUDECT_FATAL_SENTINEL is
@@ -1353,6 +1576,20 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
 
     *num_results = idx;
 
+    /* Defensive assertion: catches the case where a future lane
+     * addition exceeds the fixed-size results array.  Note this fires
+     * AFTER any overflow has already corrupted the stack — the value
+     * is in surfacing the issue loudly on subsequent runs once it
+     * happens once.  For prevention, bump DUDECT_MAX_LANES at the
+     * top of this file before adding new lanes. */
+    if (idx > DUDECT_MAX_LANES) {
+        fprintf(stderr,
+                "  FATAL: dudect lane count %d exceeds "
+                "DUDECT_MAX_LANES=%d; bump the constant in test_dudect.c\n",
+                idx, DUDECT_MAX_LANES);
+        abort();
+    }
+
     /* Check strict tests.  Two failure conditions:
      *   1. Strict (non-info) lanes whose t-value exceeds the threshold.
      *   2. Any lane that returned the fatal sentinel (rc mismatch or
@@ -1439,7 +1676,7 @@ int main(int argc, char *argv[]) {
         printf("Timeout:     %d seconds per round\n", timeout_sec);
     }
 
-    test_result_t results[24];
+    test_result_t results[DUDECT_MAX_LANES];
     int num_results = 0;
     int passed = 0;
 

@@ -696,6 +696,10 @@ ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
         __m128i pt = _mm_xor_si128(ks, ct);
         _mm_storeu_si128((__m128i *)pad_pt, pt);
         memcpy(plaintext + full_blocks * 16, pad_pt, bounded_remaining);
+        /* Scrub the over-allocated tail of `pad_pt` so partial-block
+         * plaintext bytes do not leak past the caller's slice via a
+         * stack snapshot.  Matches the NEON path's pad_pt scrub. */
+        ama_secure_memzero(pad_pt, sizeof(pad_pt));
     }
 
     ama_secure_memzero(rk,  sizeof(rk));

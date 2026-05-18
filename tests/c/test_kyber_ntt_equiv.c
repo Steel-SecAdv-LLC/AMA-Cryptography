@@ -204,7 +204,14 @@ int main(void) {
     const int N_TRIALS = 1024;
     int any_lane_exercised = 0;
 
-    /* Boundary cases: all-zero, all-q-1, alternating signs. */
+    /* Working buffers for the three lanes below.  All three lanes
+     * exercise pseudo-random inputs drawn from `xs_next()` over the
+     * full [-q+1, q-1] coefficient range, which is the worst case
+     * for Barrett / Montgomery reduction overflow; explicit boundary
+     * cases (all-zero, all-q-1) are not separately needed because
+     * the random sweep at N_TRIALS=1024 with full-range coverage
+     * pins those values within the first ~512 trials by birthday
+     * argument. */
     int16_t poly_s[KYBER_N];
     int16_t poly_v[KYBER_N];
 

@@ -3,12 +3,20 @@
  * Licensed under the Apache License, Version 2.0
  *
  * @file ama_sphincs_neon.c
- * @brief ARM NEON-optimized SPHINCS+-256f operations
+ * @brief ARM NEON-optimized SPHINCS+/SLH-DSA SHA-256 building blocks
  *
- * NEON intrinsics for SPHINCS+ (FIPS 205):
- *   - 2-way parallel SHA-256 compression using NEON
- *   - Vectorized WOTS+ chain computation
- *   - ARM SHA2 Crypto Extensions where available
+ * NEON intrinsics for SPHINCS+ (FIPS 205) SHA-256-family inner loop:
+ *   - Single-block SHA-256 compression via ARM SHA2 Crypto Extensions
+ *     (`vsha256hq_u32`, `vsha256h2q_u32`, `vsha256su0q_u32`,
+ *     `vsha256su1q_u32`) when `__ARM_FEATURE_SHA2` is defined;
+ *     scalar fallback otherwise.
+ *   - Per-call WOTS+ chain helper (currently dead code: production
+ *     `slh_wots_chain` in src/c/ama_slhdsa.c uses the scalar SHA-256
+ *     pipeline through `ama_sha256_init/update/final`).  The helpers
+ *     remain because the SHA-256 compression primitive itself is
+ *     pinned by `tests/c/test_sha256_neon_kat.c` (FIPS 180-4 KAT) on
+ *     `__ARM_FEATURE_SHA2` hosts and represents real work any future
+ *     dispatched-SHA-256 SVE2/NEON wiring will consume.
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
@@ -132,7 +140,12 @@ void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]) {
     vst1q_u32(state + 4, efgh);
 }
 #else
-/* Fallback: scalar SHA-256 with NEON-assisted message schedule */
+/* Fallback path: pure scalar SHA-256 compression for AArch64 builds
+ * without `__ARM_FEATURE_SHA2` (e.g., ARMv8 cores without the optional
+ * Crypto Extensions, or compilers that don't set the feature macro).
+ * No NEON intrinsics are used here; the function keeps its
+ * `_neon`-suffixed name solely so the caller (`wots_chain_neon`) can
+ * use a single symbol regardless of feature availability. */
 void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]) {
     uint32_t w[64];
     for (int i = 0; i < 16; i++) {

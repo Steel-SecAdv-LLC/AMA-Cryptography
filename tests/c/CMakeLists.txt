@@ -133,6 +133,11 @@ if(AMA_USE_NATIVE_PQC)
     add_ama_test(test_kyber_debug test_kyber_debug.c)
     add_ama_test(test_kyber_cpa test_kyber_cpa.c)
     add_ama_test(test_kyber_cbd2_equiv test_kyber_cbd2_equiv.c)
+    # Returns 77 (CTest SKIP) when no dispatched CBD2 was exercised
+    # (non-AVX2 hosts where the dispatch table leaves kyber_cbd2 NULL
+    # by design — generic inline path is exercised elsewhere by
+    # test_kat / test_kyber_cpa).
+    set_tests_properties(test_kyber_cbd2_equiv PROPERTIES SKIP_RETURN_CODE 77)
     add_ama_test(test_dilithium_ntt_equiv test_dilithium_ntt_equiv.c)
     set_tests_properties(test_dilithium_ntt_equiv PROPERTIES SKIP_RETURN_CODE 77)
     add_ama_test(test_dilithium_rej_equiv test_dilithium_rej_equiv.c)
@@ -274,6 +279,17 @@ if(AMA_USE_NATIVE_PQC)
     set_tests_properties(test_sphincs_simd_equiv PROPERTIES
         SKIP_RETURN_CODE 77
         ENVIRONMENT "AMA_DISPATCH_NO_AUTOTUNE=1")
+
+    # NEON SHA-256 compression FIPS 180-4 KAT.  Plugs the regression
+    # coverage gap created when the speculative NEON wots_chain
+    # byte-identity sub-lane was retired in PR #311 — that lane was
+    # the only test exercising `ama_sha256_compress_neon` on any host.
+    # Skips (77) on non-AArch64 builds where the helper isn't compiled.
+    add_executable(test_sha256_neon_kat test_sha256_neon_kat.c)
+    target_link_libraries(test_sha256_neon_kat ama_cryptography_test)
+    add_test(NAME test_sha256_neon_kat COMMAND test_sha256_neon_kat)
+    set_tests_properties(test_sha256_neon_kat PROPERTIES
+        SKIP_RETURN_CODE 77)
 endif()
 
 # Performance benchmark (not added to ctest - run manually)

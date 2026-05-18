@@ -50,6 +50,19 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   build do not SIGILL on CPUs that lack the ISA.  Added dudect harnesses for
   Argon2id, secp256k1 scalar-mul, SLH-DSA-SHA2-256f sign, and Ed25519 verify
   (all PASS strict at 100k measurements).
+- **NEON SHA-256 compression FIPS 180-4 KAT (`tests/c/test_sha256_neon_kat.c`).**
+  Pins `ama_sha256_compress_neon` against the FIPS 180-4 §B.1/§B.2 reference
+  digests for "abc" and the empty string.  Plugs the regression-coverage gap
+  created when the speculative NEON `wots_chain` byte-identity sub-lane was
+  retired earlier in this PR — that lane had been the only test exercising
+  the helper on any host.  Skips (CTest 77) on non-AArch64 builds where the
+  helper is not compiled.
+- **`test_keccak_equiv` x4 reference via `ama_keccak_f1600_x4_generic`.**  The
+  x4 dispatch parity lane now compares the dispatched x4 pointer directly
+  against `ama_keccak_f1600_x4_generic` (instead of a hand-rolled 4-loop of
+  the single-state helper).  This pins any inter-lane state management inside
+  the generic x4 wrapper that the previous open-coded reference would have
+  skipped over.
 
 ### Changed
 - **BEHAVIORAL CHANGE — `ama_chacha20poly1305_decrypt` on tag mismatch
@@ -70,6 +83,51 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   emitted).  Same fold applied to the ChaCha20-Poly1305 decrypt path
   (`ct_len=0` + pointer-select-out-of-timer harness redesign,
   t=+167 → t=-3.82 PASS strict).
+- **AES-GCM AVX2/VAES-AVX2 `pad_pt` over-allocated tail scrub.** The NEON
+  partial-block path scrubs the 16-byte `pad_pt` stack buffer after copying
+  out `bounded_remaining` bytes; the AVX2 and VAES-AVX2 paths previously did
+  not.  All three SIMD paths are now symmetric — the partial-block plaintext
+  tail (`pad_pt[bounded_remaining..15]`, raw keystream XOR padding) is no
+  longer recoverable from a stack snapshot on any path.  Same partial-block
+  shape, same scrub.
+- **Scalar AES-GCM `counter` scrub.** The 16-byte CTR state buffer in
+  `src/c/ama_aes_gcm.c` is now `ama_secure_memzero`-scrubbed alongside the
+  other sensitive locals in `ama_aes256_gcm_decrypt_scalar`.  Previously the
+  buffer held J0 || final CTR state on every successful exit, which the
+  other SIMD paths avoid by keeping the counter in a `__m128i` register and
+  scrubbing the register on return.  No call-site change.
+- **`test_dudect.c` HMAC verify lane now exercises HMAC compute + compare**
+  (was a tautological re-test of `ama_consttime_memcmp`).  The compute-then-
+  constant-time-compare composition is now inside the timed window, so a
+  future regression in either `ama_hmac_sha3_256`'s internal timing or the
+  compare step surfaces as a real t-value rather than a vacuous PASS.
+- **`test_dudect.c` rc-validation + pointer-select-out-of-timer pattern
+  extended.** Applied to seven additional lanes
+  (`test_ed25519_sign`, `test_ed25519_verify` setup, `test_hkdf`,
+  `test_hmac_verify` setup, `test_kyber_decaps`, `test_x25519_scalarmult`,
+  `test_x25519_scalarmult_x4`, `test_dilithium_sign`).  Each lane now
+  surfaces a hard `DUDECT_FATAL_SENTINEL` on setup failure or per-iteration
+  `rc` mismatch — info-only lanes can still mask CI noise on timing, but
+  semantic faults (always-fail / always-succeed regressions) now fail the
+  whole harness regardless of `is_info_only`.  Removed the residual
+  `if (class_idx == 0)` branches inside the timing windows of the same
+  seven lanes (branch-predictor variance was the FROST mid-range +5σ
+  leak's root cause; closing the same anti-pattern wherever it appeared).
+- **`test_dudect.c` results array now uses `DUDECT_MAX_LANES = 32`.** The
+  previously hardcoded `results[24]` carried four lanes of headroom; the
+  new constant carries twelve and is asserted at runtime so a future
+  silent stack overflow on lane addition fails loudly.
+- **`test_kyber_cbd2_equiv` returns CTest SKIP (77) when no dispatched CBD2
+  was exercised.** Previously returned 0 on non-AVX2 hosts even though no
+  byte-identity check ran; CMakeLists pairs the test with `SKIP_RETURN_CODE
+  77` so the result is `Skipped` rather than the silently-misleading
+  `Passed`.  Matches the existing posture of every other SIMD-equivalence
+  test in the suite.
+- **`test_dilithium_ntt_equiv` buffer sizes from public header macros.**
+  Cross-verify lane now uses `AMA_ML_DSA_65_PUBLIC_KEY_BYTES /
+  SECRET_KEY_BYTES / SIGNATURE_BYTES` rather than hardcoded `1952` / `4032`
+  / `3309` literals.  A future parameter-set bump (e.g. ML-DSA-87) will be
+  picked up automatically instead of silently overflowing fixed buffers.
 - **FIPS POST timing-oracle policy (PR #307/#309).** The constant-time POST now
   uses one deterministic 10,000-iteration pass (no retry-until-pass loop) and
   a 50 ns minimum-effect floor for `perf_counter_ns` jitter on shared runners.
@@ -165,6 +223,30 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   `ama_dilithium_power2round_sve2`, and the unreferenced
   `barrett_reduce_dil_sve2` helper from `src/c/sve2/ama_dilithium_sve2.c`.
   They had no callers, no dispatch slots, and no KATs.
+- **Unused SVE2 Kyber helpers (PR #311).** Same principle, applied this
+  PR: `ama_kyber_poly_add_sve2`, `ama_kyber_poly_sub_sve2`, and
+  `ama_kyber_poly_reduce_sve2` had no callers, no dispatch slots, no
+  KATs.  Removed from `src/c/sve2/ama_kyber_sve2.c`.  The wired SVE2
+  Kyber surface (`ama_kyber_ntt_sve2`, `_invntt_sve2`,
+  `_poly_pointwise_sve2`) is unchanged.
+- **Unused SVE2 SHA3-256 wrapper (PR #311).** Removed
+  `ama_sha3_256_sve2` from `src/c/sve2/ama_sha3_sve2.c`.  The dispatch
+  table exposes no SVE2 slot for `sha3_256`; the wrapper had no caller
+  in `src/`, `include/`, or `tests/`.  The wired SVE2 surface
+  (`ama_keccak_f1600_sve2` — the underlying single-state permutation
+  reached indirectly by every SHAKE-driven algorithm) is unchanged.
+- **Stale `test_dudect.c` `test_aes_gcm_tag_verify` duplicate header
+  comment (PR #311).**  The lane carried two header comment blocks — the
+  older was the pre-fix description (2 classes, no rationale), the newer
+  was the full post-fold rationale.  Removed the duplicate so future
+  readers see exactly one description.
+- **Dead `ama_test_force_keccak_f1600_scalar` / `_restore_keccak_f1600`
+  externs in `test_keccak_equiv.c` (PR #311).** The x4 forced-scalar
+  parity lane now references `ama_keccak_f1600_x4_generic` directly as
+  the reference (closing the previously-dead extern), so the
+  AMA_TESTING_MODE force/restore hooks for `keccak_f1600` are no longer
+  needed here and were removed.  The hooks themselves remain in the
+  library for other test consumers.
 - **Unwired SVE2 AES-GCM stub (PR #308).** Removed dead SVE2 scalar-helper code
   that was compiled but never referenced by the dispatch table. AES-GCM on SVE2
   hosts dispatches through the NEON PMULL kernel validated by

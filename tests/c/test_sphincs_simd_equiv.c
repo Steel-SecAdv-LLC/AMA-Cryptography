@@ -289,11 +289,17 @@ static int run_slhdsa_simd_parity(int *exercised) {
 }
 
 static int run_wots_chain_parity(int *exercised) {
-    int built_any = 0;
-    (void)built_any;
+    /* `pinned_avx2` tracks whether the AVX2 byte-identity sub-lane
+     * actually ran on this host (compiled in AND CPUID-gated AVX2 at
+     * runtime).  The NEON byte-identity sub-lane was retired (see
+     * comment block below) — when only NEON is built, no byte-identity
+     * lane runs here even though `ama_sphincs_wots_chain_neon` is
+     * itself compiled into the library.  The underlying NEON SHA-256
+     * compression primitive is separately pinned by
+     * `tests/c/test_sha256_neon_kat.c` on AArch64 builds. */
+    int pinned_avx2 = 0;
 
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
-    built_any = 1;
     /* Runtime ISA gate: the AVX2 helper compiles into the binary
      * whenever `AMA_HAVE_AVX2_IMPL` is set at build time, but calling
      * it on a CPU that lacks AVX2 (older x86-64, qemu-user without
@@ -305,6 +311,7 @@ static int run_wots_chain_parity(int *exercised) {
         printf("  INFO: ama_sphincs_wots_chain_avx2 built in but "
                "runtime CPU lacks AVX2 — skipping direct-symbol lane\n");
     } else {
+        pinned_avx2 = 1;
         const size_t n = 32;  /* SPHINCS+-256f hash length */
         uint8_t in[32], out_simd[32], out_scal[32];
         uint8_t pub_seed[32] = {0};
@@ -371,8 +378,18 @@ static int run_wots_chain_parity(int *exercised) {
      *     dispatched SHAKE on real callers). */
 #endif
 
-    if (!built_any) {
-        printf("  INFO: no SPHINCS+ SIMD wots_chain helper built in\n");
+    if (!pinned_avx2) {
+#if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
+        printf("  INFO: AArch64 build — NEON wots_chain helper is built "
+               "into the library but the byte-identity sub-lane is "
+               "intentionally retired; the underlying NEON SHA-256 "
+               "compression primitive is pinned by "
+               "test_sha256_neon_kat (FIPS 180-4 KAT)\n");
+#else
+        printf("  INFO: no SPHINCS+ SIMD wots_chain helper compiled "
+               "into this build (neither AMA_HAVE_AVX2_IMPL nor "
+               "AMA_HAVE_NEON_IMPL set)\n");
+#endif
     }
     return 0;
 }

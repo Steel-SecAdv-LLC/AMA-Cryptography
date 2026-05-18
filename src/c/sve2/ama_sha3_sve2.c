@@ -3,11 +3,22 @@
  * Licensed under the Apache License, Version 2.0
  *
  * @file ama_sha3_sve2.c
- * @brief ARM SVE2-optimized Keccak-f[1600] permutation and SHA-3
+ * @brief ARM SVE2-optimized Keccak-f[1600] permutation
  *
  * SVE2 (Scalable Vector Extension 2) for ARMv9 processors.
  * Uses scalable vectors that adapt to hardware vector length.
- * Provides Keccak-f[1600] and SHA3-256 with SVE2 acceleration.
+ *
+ * Wired surface: `ama_keccak_f1600_sve2` (single-state permutation).
+ * The dispatcher routes `keccak_f1600` to this kernel when
+ * `ama_has_arm_sve2()` returns 1 (see src/c/dispatch/ama_dispatch.c:588).
+ *
+ * Note: a prior `ama_sha3_256_sve2` wrapper lived here but was never
+ * wired (the dispatch table exposes no `sha3_256` SVE2 slot — SHA-3-256
+ * dispatches to the NEON kernel on AArch64 and accelerates indirectly
+ * through this Keccak permutation on SVE2 hosts).  The wrapper was
+ * removed in this PR for parity with the no-compiled-but-unwired-crypto
+ * principle established by the Dilithium poly-helper cleanup in commit
+ * d8ffd80 (see ENHANCED_FEATURES.md SIMD coverage table).
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
@@ -99,63 +110,6 @@ void ama_keccak_f1600_sve2(uint64_t state[25]) {
         /* Iota */
         state[0] ^= RC[round];
     }
-}
-
-/* ============================================================================
- * SVE2 SHA3-256
- * ============================================================================ */
-int ama_sha3_256_sve2(const uint8_t *input, size_t input_len, uint8_t output[32]) {
-    if (!input || !output) return -1;
-
-    uint64_t state[25];
-    memset(state, 0, sizeof(state));
-    const size_t rate = 136;
-    size_t offset = 0;
-
-    while (offset + rate <= input_len) {
-        /* Absorb using SVE2 XOR */
-        size_t lanes = rate / 8;
-        size_t i = 0;
-        while (i < lanes) {
-            svbool_t pg = svwhilelt_b64((int64_t)i, (int64_t)lanes);
-            svuint64_t vs = svld1_u64(pg, &state[i]);
-            uint64_t temp[17];
-            for (size_t j = i; j < lanes && j < i + svcntd(); j++) {
-                memcpy(&temp[j - i], input + offset + j * 8, 8);
-            }
-            svuint64_t vi = svld1_u64(pg, temp);
-            svst1_u64(pg, &state[i], sveor_u64_x(pg, vs, vi));
-            i += svcntd();
-        }
-        ama_keccak_f1600_sve2(state);
-        offset += rate;
-    }
-
-    /* Final block with padding */
-    uint8_t block[200];
-    memset(block, 0, sizeof(block));
-    size_t remaining = input_len - offset;
-    if (remaining > 0)
-        memcpy(block, input + offset, remaining);
-    block[remaining] = 0x06;
-    block[rate - 1] |= 0x80;
-
-    for (size_t i = 0; i < rate / 8; i++) {
-        uint64_t lane;
-        memcpy(&lane, block + i * 8, 8);
-        state[i] ^= lane;
-    }
-    ama_keccak_f1600_sve2(state);
-
-    memcpy(output, state, 32);
-
-    /* SECURITY FIX: Scrub Keccak state and padding block after use.
-     * Plain memset() can be optimized away by the compiler; use
-     * ama_secure_memzero() to guarantee zeroization (audit finding MEM-1). */
-    ama_secure_memzero(state, sizeof(state));
-    ama_secure_memzero(block, sizeof(block));
-
-    return 0;
 }
 
 #else
