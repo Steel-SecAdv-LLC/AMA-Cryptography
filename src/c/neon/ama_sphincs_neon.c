@@ -68,11 +68,25 @@ static inline uint32_t rotr32(uint32_t x, int n) {
 /* ARM SHA2 Crypto Extensions path — single-block SHA-256 compression.
  *
  * Algorithm: standard ARM Crypto Extension idiom (cf. Arm Architecture
- * Reference Manual SHA256H / SHA256H2 / SHA256SU0 / SHA256SU1 entries).
+ * Reference Manual SHA256H / SHA256H2 / SHA256SU0 / SHA256SU1 entries,
+ * and the canonical patterns in OpenSSL `crypto/sha/asm/sha256-armv8.pl`
+ * and Linux `arch/arm64/crypto/sha2-ce-core.S`).
+ *
+ * ABCD/EFGH assignment contract (ACLE):
+ *   vsha256hq_u32(hash_abcd, hash_efgh, wk)  → next ABCD
+ *   vsha256h2q_u32(hash_efgh, hash_abcd, wk) → next EFGH
+ *
+ * Both intrinsics consume the OLD ABCD; we therefore save ABCD into
+ * tmp2 BEFORE the sha256h call so sha256h2 has the same value to feed
+ * the EFGH update.
+ *
  * At every 4-round quartet R (R = 0, 4, 8, ..., 60):
  *
  *   1. K-add: tmp = msg[(R/4) & 3] + K256[R..R+3].
- *   2. Hash: efgh, abcd = sha256h(efgh, abcd, tmp), sha256h2(abcd, ef_save, tmp).
+ *   2. Hash:
+ *        tmp2 = abcd
+ *        abcd = sha256h (abcd, efgh, tmp)
+ *        efgh = sha256h2(efgh, tmp2, tmp)
  *   3. Schedule (only while we still need future w-words, i.e. R < 48):
  *        msg[(R/4) & 3] = sha256su1(sha256su0(msg[(R/4) & 3], msg[((R/4)+1) & 3]),
  *                                   msg[((R/4)+2) & 3], msg[((R/4)+3) & 3])
@@ -80,20 +94,23 @@ static inline uint32_t rotr32(uint32_t x, int n) {
  *      be needed for any of the remaining rounds) is reused to hold
  *      the freshly-scheduled w[R+16..R+19].
  *
- * The previous rotation-based implementation here had two correlated
- * bugs in the rounds-12+ loop: the schedule step passed `msg0` to
- * both arguments of vsha256su0q_u32, and the K-add unconditionally
- * indexed `msg3` while the rotation moved the next round's message
- * to a different slot.  Net effect: every input block whose
- * compression touched rounds 12+ (which is every input block)
- * produced a wrong digest, which is what
- * tests/c/test_sphincs_simd_equiv.c surfaced once it began comparing
- * the NEON helper against an in-test scalar SHA-256 reference.
+ * Bug history:
+ *   - The earliest rotation-based implementation (commit 4f877bc, PR
+ *     #305 SIMD wiring) had two correlated message-schedule bugs in
+ *     the rounds-12+ loop: the schedule step passed `msg0` to both
+ *     arguments of vsha256su0q_u32, and the K-add unconditionally
+ *     indexed `msg3` while the rotation moved the next round's
+ *     message to a different slot.
+ *   - The faf2e8d rewrite replaced the rotation with explicit array
+ *     indexing, fixing those two but preserving an inherited
+ *     ABCD/EFGH argument/assignment swap (the original wrote
+ *     `efgh = vsha256hq_u32(efgh, abcd, ...)` which is "compute next
+ *     ABCD treating EFGH as ABCD" — wrong since the two intrinsics
+ *     are not symmetric in their first two arguments).
  *
- * The replacement uses explicit array indexing instead of variable
- * rotation, which makes the schedule arguments match the standard
- * idiom by construction and removes the dependency between the
- * K-add slot and any prior rotation step. */
+ * The current revision is the canonical ABCD/EFGH pattern.  Pinned by
+ * `tests/c/test_sha256_neon_kat.c` against FIPS 180-4 §B.1/§B.2 digests
+ * on every AArch64 CI run. */
 void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]) {
     uint32x4_t abcd = vld1q_u32(state);
     uint32x4_t efgh = vld1q_u32(state + 4);
@@ -115,9 +132,9 @@ void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]) {
         int s2 = (r + 2) & 3;
         int s3 = (r + 3) & 3;
         uint32x4_t tmp  = vaddq_u32(msg[s0], vld1q_u32(&K256[r * 4]));
-        uint32x4_t tmp2 = efgh;
-        efgh = vsha256hq_u32(efgh, abcd, tmp);
-        abcd = vsha256h2q_u32(abcd, tmp2, tmp);
+        uint32x4_t tmp2 = abcd;
+        abcd = vsha256hq_u32 (abcd, efgh, tmp);
+        efgh = vsha256h2q_u32(efgh, tmp2, tmp);
         msg[s0] = vsha256su1q_u32(vsha256su0q_u32(msg[s0], msg[s1]),
                                   msg[s2], msg[s3]);
     }
@@ -127,9 +144,9 @@ void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]) {
      * in cyclic order; msg[r & 3] selects the right slot at each step. */
     for (int r = 12; r < 16; r++) {
         uint32x4_t tmp  = vaddq_u32(msg[r & 3], vld1q_u32(&K256[r * 4]));
-        uint32x4_t tmp2 = efgh;
-        efgh = vsha256hq_u32(efgh, abcd, tmp);
-        abcd = vsha256h2q_u32(abcd, tmp2, tmp);
+        uint32x4_t tmp2 = abcd;
+        abcd = vsha256hq_u32 (abcd, efgh, tmp);
+        efgh = vsha256h2q_u32(efgh, tmp2, tmp);
     }
 
     /* Add saved state (Merkle-Damgård feed-forward). */
