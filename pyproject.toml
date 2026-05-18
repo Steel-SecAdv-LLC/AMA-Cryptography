@@ -147,7 +147,7 @@ dev = [
     # Black 26.3.1 contains the GHSA-fc3w-v5rg-v7q6 fix and requires Python
     # 3.10+, so do not install a vulnerable 3.9-only fallback.
     "black>=26.3.1; python_version >= '3.10'",
-    "ruff>=0.15.12",
+    "ruff>=0.15.13",
     "mypy>=1.9.0",
     "bandit>=1.7.0",
     "safety>=2.3.0",
