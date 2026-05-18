@@ -1077,6 +1077,18 @@ AMA_API const char *ama_x25519_field_path(void);
  * On non-x86-64 toolchains, on builds without `AMA_HAVE_X25519_FE64_MULX_IMPL`,
  * and on field paths other than fe64 (fe51 / gf16), this call is a documented
  * no-op so benchmark/test code can call it unconditionally.
+ *
+ * **Threading contract.** The override is a single word read on the hot path
+ * of every `ama_x25519_key_exchange()` / `ama_x25519_scalarmult_batch()` call
+ * with no internal synchronisation. Callers MUST only invoke
+ * `ama_x25519_set_mulx_override()` from a single thread during harness/test
+ * setup, with no concurrent scalarmult work in flight. Concurrent setter
+ * calls while X25519 operations are running on other threads is undefined
+ * behaviour. (The two values that actually matter — pinning off, pinning on
+ * — are word-sized writes that are atomic on every supported architecture,
+ * so the worst observable effect of a torn write would be a one-iteration
+ * mis-selection between two byte-identical code paths; but this is not a
+ * sanctioned use mode and not a contract this function intends to honour.)
  */
 AMA_API void ama_x25519_set_mulx_override(int mode);
 
