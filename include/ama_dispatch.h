@@ -90,7 +90,21 @@ typedef void (*ama_kyber_poly_sub_fn)(int16_t r[256],
                                        const int16_t a[256],
                                        const int16_t b[256]);
 
-/** Kyber polynomial Barrett reduction in place: poly[i] -> [-q+1, q-1]. */
+/** Kyber polynomial Barrett reduction in place.
+ *
+ *  Post-condition: each output coefficient is congruent to its input
+ *  modulo q (= 3329) and small enough to feed back into further mod-q
+ *  int16 arithmetic without overflow.  The actual representative is
+ *  implementation-defined within roughly [-q, q]: the production
+ *  scalar barrett_reduce() in src/c/ama_kyber.c can return +q (or -q)
+ *  for some inputs at the extremes of its input range (e.g., a == -q
+ *  yields t == (v*-q)>>26 == -2 via arithmetic right shift, producing
+ *  a - t*q == +q), and the SVE2 kernel's *centered* Barrett (with the
+ *  `+ (1 << 25)` rounding term) can pick a representative differing
+ *  by exactly q from the scalar result.  Both are cryptographically
+ *  correct because every downstream consumer re-reduces before bit
+ *  extraction.  Callers needing a strict canonical form must follow
+ *  with the FIPS 203 csubq / freeze step. */
 typedef void (*ama_kyber_poly_reduce_fn)(int16_t poly[256]);
 
 /** Kyber CBD2 noise sampler: 128-byte uniform stream -> 256 coefficients
@@ -189,9 +203,6 @@ typedef struct {
     ama_kyber_ntt_fn          kyber_ntt;            /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_ntt_fn          kyber_invntt;         /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_pointwise_fn    kyber_pointwise;      /**< Non-NULL when SIMD detected; callers MUST NULL-check */
-    ama_kyber_poly_add_fn     kyber_poly_add;       /**< Non-NULL when SVE2 detected (today: SVE2 only — AVX2/NEON paths let the compiler auto-vectorise the trivial int16 add loop); callers MUST NULL-check */
-    ama_kyber_poly_sub_fn     kyber_poly_sub;       /**< Non-NULL when SVE2 detected (today: SVE2 only — see kyber_poly_add); callers MUST NULL-check */
-    ama_kyber_poly_reduce_fn  kyber_poly_reduce;    /**< Non-NULL when SVE2 detected (today: SVE2 only — see kyber_poly_add); callers MUST NULL-check */
     ama_kyber_cbd2_fn         kyber_cbd2;           /**< Non-NULL when AVX2 detected (AVX2-only today; NEON/SVE2 wiring TBD); callers MUST NULL-check */
     ama_dilithium_ntt_fn      dilithium_ntt;        /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_dilithium_invntt_fn   dilithium_invntt;     /**< Non-NULL when SIMD detected; callers MUST NULL-check */
@@ -202,6 +213,14 @@ typedef struct {
     ama_chacha20_block_x8_fn  chacha20_block_x8;     /**< Non-NULL when AVX2 ChaCha20 detected; emits 8 blocks / 512 B */
     ama_argon2_g_fn           argon2_g;              /**< Non-NULL when AVX2 Argon2 G detected; 1024 B compression */
     ama_x25519_scalarmult_x4_fn x25519_x4;           /**< Non-NULL when AVX2 X25519 4-way ladder detected; callers MUST NULL-check */
+    /* --- Appended slots (ABI rule: append-only at the end of this
+     *     struct).  ama_dispatch.h is installed as a PUBLIC_HEADER, so
+     *     inserting fields in the middle would shift every later
+     *     field's offset and break any consumer compiled against an
+     *     older header.  New slots go here. ------------------------ */
+    ama_kyber_poly_add_fn     kyber_poly_add;       /**< Appended 2026-05 (SVE2 wiring PR).  Non-NULL when SVE2 detected (today: SVE2 only — AVX2/NEON paths let the compiler auto-vectorise the trivial int16 add loop); callers MUST NULL-check */
+    ama_kyber_poly_sub_fn     kyber_poly_sub;       /**< Appended 2026-05.  Non-NULL when SVE2 detected (today: SVE2 only — see kyber_poly_add); callers MUST NULL-check */
+    ama_kyber_poly_reduce_fn  kyber_poly_reduce;    /**< Appended 2026-05.  Non-NULL when SVE2 detected (today: SVE2 only — see kyber_poly_add); callers MUST NULL-check */
 } ama_dispatch_table_t;
 
 /* ============================================================================

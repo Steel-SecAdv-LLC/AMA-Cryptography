@@ -645,9 +645,17 @@ static void dispatch_init_internal(void) {
          * scalar may be marginal on real ARMv9 hardware.  If a future
          * measurement on a real ARMv9 host shows SVE2 regressing past
          * the 10% hysteresis band, the auto-tune lockstep revert
-         * below will demote these slots in step with kyber_ntt_sve2
-         * (qemu's SVE2 emulation is ~47x slower than scalar and is
-         * not a real-hardware finding; benchmark on an actual core). */
+         * below (the SVE2 keccak proxy) will demote these three slots
+         * back to NULL — production code in src/c/ama_kyber.c then
+         * falls through to its inline scalar loop, which the compiler
+         * auto-vectorises on AArch64.  kyber_ntt / kyber_invntt /
+         * kyber_pointwise are NOT reverted in lockstep today (their
+         * arithmetic intensity is high enough that the auto-tune
+         * proxy is a worse fit for them than the empirical reality
+         * on real silicon); only the three thin int16 helpers ride
+         * the keccak proxy.  qemu's SVE2 emulation is ~47x slower
+         * than scalar and is not a real-hardware finding; benchmark
+         * on an actual core. */
         dispatch_table.kyber_poly_add    = ama_kyber_poly_add_sve2;
         dispatch_table.kyber_poly_sub    = ama_kyber_poly_sub_sve2;
         dispatch_table.kyber_poly_reduce = ama_kyber_poly_reduce_sve2;
@@ -1012,9 +1020,12 @@ void ama_test_force_keccak_f1600_scalar(void) {
 /* Force the generic-C Kyber NTT path by NULLing the SIMD pointers.
  * ama_kyber.c's NULL-check then dispatches to its inline scalar
  * NTT/inverse-NTT/pointwise implementations.  Also NULLs the
- * kyber_poly_{add,sub,reduce} slots so the forced-scalar lane in
- * test_kyber_poly_equiv.c can compare the inline scalar callsites
- * against the dispatched SIMD baseline. */
+ * kyber_poly_{add,sub,reduce} slots: after this hook fires, the
+ * scalar inline fallbacks inside `poly_add` / `poly_sub` /
+ * `poly_reduce` are exercised end-to-end by every Kyber test that
+ * subsequently runs, which is the production behaviour on any host
+ * that lacks an SVE2 wiring for these slots.  Paired with
+ * `ama_test_restore_kyber_ntt()` below. */
 void ama_test_force_kyber_ntt_scalar(void) {
     ama_dispatch_init();
     dispatch_table.kyber_ntt = NULL;

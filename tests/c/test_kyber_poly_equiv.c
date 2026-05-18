@@ -3,10 +3,22 @@
  * Licensed under the Apache License, Version 2.0
  *
  * @file test_kyber_poly_equiv.c
- * @brief Byte-identity equivalence test for the ML-KEM-1024
+ * @brief Cross-implementation equivalence test for the ML-KEM-1024
  *        `kyber_poly_add` / `kyber_poly_sub` / `kyber_poly_reduce`
  *        dispatch slots against the inlined scalar reference in
  *        `src/c/ama_kyber.c`.
+ *
+ *        `poly_add` and `poly_sub` use **strict byte-identity**
+ *        comparison (non-reducing int16 ops — the only valid output
+ *        is a single bit pattern).  `poly_reduce` uses a
+ *        **mod-q-tolerant** comparator (cmp_poly_modq below): the
+ *        production scalar Barrett (floor-divide) and the SVE2
+ *        kernel's centered Barrett can pick representatives that
+ *        differ by an exact multiple of q for the same input —
+ *        both valid under `output ≡ input (mod q)`, and the
+ *        production pipeline always re-reduces before bit
+ *        extraction so the difference is invisible to ML-KEM
+ *        consumers.
  *
  * Mirrors the multi-lane structure of `test_kyber_ntt_equiv.c`:
  *
@@ -61,17 +73,28 @@ extern void ama_kyber_poly_reduce_sve2(int16_t poly[256]);
 #define KYBER_Q 3329
 
 /* Barrett reduction reference — verbatim from `src/c/ama_kyber.c`
- * (the inline scalar in `poly_reduce`).  Reduces `a` to [-q+1, q-1].
+ * (the inline scalar in `poly_reduce`).
+ *
+ * Contract: output is congruent to `a` modulo q and small enough to
+ * feed into further mod-q int16 arithmetic without overflow.  The
+ * specific representative is *not* tightly bounded by [-q+1, q-1]:
+ * for some inputs the formula produces ±q exactly (e.g., a == -q
+ * yields t == -2 via arithmetic right shift, so the return value is
+ * a - t*q == +q).  This is cryptographically correct because every
+ * downstream consumer re-reduces before bit extraction, and
+ * `cmp_poly_modq()` below is written to accept ±q representatives
+ * accordingly.
  *
  * NOTE on the centered-vs-floor split: the SVE2 kernel in
  * `src/c/sve2/ama_kyber_sve2.c::barrett_reduce_scalar` uses a
  * *centered* Barrett formula (`+ (1 << 25)` rounding term).  Both
- * conventions produce a representative in [-q+1, q-1], but for some
+ * conventions land in roughly the same small window, but for some
  * inputs they pick representatives that differ by exactly q
  * (semantically equal mod q).  The production code always re-reduces
  * before bit extraction so this difference is invisible to ML-KEM
- * consumers — and `poly_reduce`'s public contract is "output ≡ input
- * (mod q), in [-q+1, q-1]", which both implementations satisfy.
+ * consumers — and `poly_reduce`'s public contract (now stated in
+ * include/ama_dispatch.h) only promises a small representative
+ * congruent mod q, which both implementations satisfy.
  *
  * `cmp_poly_modq()` below accepts either representative; the looser
  * comparison is the correct one for `poly_reduce` and is future-proof

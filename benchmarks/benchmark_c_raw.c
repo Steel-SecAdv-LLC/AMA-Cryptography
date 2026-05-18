@@ -644,26 +644,42 @@ static bench_result_t bench_kyber_poly_sub(int iters, int warmup, int use_dispat
 }
 
 static bench_result_t bench_kyber_poly_reduce(int iters, int warmup, int use_dispatch) {
-    int16_t r[KYBER_POLY_N], r0[KYBER_POLY_N];
-    fill_random_poly(r0);
+    /* Pre-randomise a ring of BENCH_INNER_LOOP input polys so the
+     * timed inner loop calls fn() on a fresh, distinct in-place
+     * buffer every call.  This keeps the input distribution stable
+     * across runs (no implicit re-randomisation cost in the timed
+     * region) AND removes the memcpy-per-call that was previously
+     * dominating the measurement and masking dispatch-vs-scalar
+     * differences.  Re-seed the ring once per outer iteration; the
+     * re-seed happens outside the clock-gettime fence. */
+    static int16_t ring[BENCH_INNER_LOOP][KYBER_POLY_N];
+    for (int j = 0; j < BENCH_INNER_LOOP; j++) fill_random_poly(ring[j]);
 
     const ama_dispatch_table_t *dt = ama_get_dispatch_table();
     ama_kyber_poly_reduce_fn fn = (use_dispatch && dt->kyber_poly_reduce)
                                     ? dt->kyber_poly_reduce
                                     : scalar_kyber_poly_reduce;
 
-    /* The reduce kernel mutates in place, so re-seed each iteration
-     * to keep the input distribution stable. */
-    memcpy(r, r0, sizeof(r0));
-    for (int i = 0; i < warmup; i++) { memcpy(r, r0, sizeof(r0)); fn(r); }
+    /* Warmup: reduce the warmed buffers in place.  Subsequent
+     * iterations re-seed the ring before timing so the input
+     * distribution stays bounded in [-q+1, q-1]. */
+    for (int i = 0; i < warmup; i++) {
+        fn(ring[i % BENCH_INNER_LOOP]);
+    }
+    for (int j = 0; j < BENCH_INNER_LOOP; j++) fill_random_poly(ring[j]);
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
         for (int j = 0; j < BENCH_INNER_LOOP; j++) {
-            memcpy(r, r0, sizeof(r0));
-            fn(r);
+            fn(ring[j]);
         }
         g_samples[i] = (now_ns() - t0) / (double)BENCH_INNER_LOOP;
+        /* Re-seed outside the timed region so the next outer iteration
+         * sees the same input distribution as the first one.  Without
+         * the re-seed, after one pass every coefficient is already
+         * reduced — measuring "reduce of already-reduced poly" rather
+         * than "reduce of a poly in the natural post-add range". */
+        for (int j = 0; j < BENCH_INNER_LOOP; j++) fill_random_poly(ring[j]);
     }
     static char labels[2][48];
     snprintf(labels[use_dispatch ? 1 : 0], sizeof(labels[0]),
