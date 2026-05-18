@@ -236,6 +236,8 @@ extern void ama_argon2_g_neon(uint64_t out[128],
 
 #ifdef AMA_HAVE_SVE2_IMPL
 extern void ama_keccak_f1600_sve2(uint64_t state[25]);
+extern ama_error_t ama_sha3_256_sve2(const uint8_t *input, size_t input_len,
+                                     uint8_t output[32]);
 extern void ama_kyber_ntt_sve2(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_kyber_invntt_sve2(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_kyber_poly_pointwise_sve2(int16_t r[256],
@@ -583,10 +585,25 @@ static void dispatch_init_internal(void) {
      * the auto-tuning fallback reverts to this rather than always
      * falling back to generic C — which would skip the NEON tier. */
     ama_keccak_f1600_fn pre_sve2_keccak = dispatch_table.keccak_f1600;
+    /* Save the pre-SVE2 sha3_256 slot the same way so the auto-tune
+     * revert below can keep the two slots in lockstep: the SVE2
+     * `ama_sha3_256_sve2` wrapper calls `ama_keccak_f1600_sve2`
+     * directly (not through the dispatch table), so if the auto-tune
+     * decides SVE2 keccak regressed on this host, sha3_256 must revert
+     * too — otherwise sha3_256 stays on the slow SVE2 path while
+     * keccak_f1600 has already moved off it. */
+    ama_sha3_256_fn pre_sve2_sha3_256 = dispatch_table.sha3_256;
 
 #ifdef AMA_HAVE_SVE2_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_SVE2) {
         dispatch_table.keccak_f1600 = ama_keccak_f1600_sve2;
+        /* sha3_256 wrapper: reuses the SVE2 Keccak permutation above
+         * and adds a lane-predicated rate-block absorb.  Promoted from
+         * "compiled but unwired" to wired in this PR; pinned by the
+         * existing FIPS 202 SHA3-256 KATs which flow through
+         * `dispatch_table.sha3_256` on any host where this slot is
+         * non-NULL. */
+        dispatch_table.sha3_256     = ama_sha3_256_sve2;
     }
     if (dispatch_info.kyber >= AMA_IMPL_SVE2) {
         dispatch_table.kyber_ntt       = ama_kyber_ntt_sve2;
@@ -600,8 +617,16 @@ static void dispatch_init_internal(void) {
     }
     /* SVE2 wired surface (canonical as of this PR):
      *   - keccak_f1600  (single-state Keccak permutation)
+     *   - sha3_256      (SHA3-256 sponge using the above permutation;
+     *                    promoted from compiled-but-unwired in PR #312)
      *   - kyber_ntt / kyber_invntt / kyber_pointwise
      *   - dilithium_ntt / dilithium_invntt / dilithium_pointwise
+     *
+     * Compiled-but-unwired (pending follow-up — see
+     * `src/c/sve2/ama_kyber_sve2.c` header for the wiring checklist):
+     *   - ama_kyber_poly_add_sve2
+     *   - ama_kyber_poly_sub_sve2
+     *   - ama_kyber_poly_reduce_sve2
      *
      * Every other SVE2 TU has been reduced to a documentation
      * placeholder (mirroring `ama_aes_gcm_sve2.c` from PR #308) for
@@ -724,6 +749,12 @@ static void dispatch_init_internal(void) {
                 dispatch_table.keccak_f1600 = pre_sve2_keccak;
             } else {
                 dispatch_table.keccak_f1600 = ama_keccak_f1600_generic;
+            }
+            /* Lockstep revert sha3_256: the SVE2 sha3_256 wrapper
+             * embeds calls to `ama_keccak_f1600_sve2`, so if SVE2
+             * keccak regressed here, sha3_256 must move off SVE2 too. */
+            if (pre_sve2_sha3_256 != dispatch_table.sha3_256) {
+                dispatch_table.sha3_256 = pre_sve2_sha3_256;
             }
             /* Revert the batched x4 kernel in lockstep ONLY when it points
              * at a tier the auto-tune actually measured.  The single-state

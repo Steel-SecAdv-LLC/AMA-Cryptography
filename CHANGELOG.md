@@ -57,6 +57,26 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   retired earlier in this PR — that lane had been the only test exercising
   the helper on any host.  Skips (CTest 77) on non-AArch64 builds where the
   helper is not compiled.
+- **SVE2 `sha3_256` dispatch slot wired (PR #312).**  Promoted
+  `ama_sha3_256_sve2` from compiled-but-unwired to wired:
+  `src/c/dispatch/ama_dispatch.c` now sets
+  `dispatch_table.sha3_256 = ama_sha3_256_sve2` whenever
+  `dispatch_info.sha3 >= AMA_IMPL_SVE2`.  The wrapper is FIPS 202
+  sponge-construct over the already-wired `ama_keccak_f1600_sve2`
+  permutation; signature was changed from `int` → `ama_error_t` to match
+  `ama_sha3_256_fn`.  Pinned by every SHA3-256 KAT in the suite (which
+  flow through `dispatch_table.sha3_256` on any host where the slot is
+  non-NULL).  SVE2 hosts previously dispatched `sha3_256` to the NEON
+  kernel; this lifts the dispatch to the SVE2 tier on ARMv9 hardware.
+- **SVE2 compiled-but-unwired helpers kept for follow-up (PR #312).**
+  `ama_kyber_poly_add_sve2`, `_sub_sve2`, `_reduce_sve2` retained as
+  build artifacts with explicit `TODO(wire)` markers and a wiring
+  checklist in `src/c/sve2/ama_kyber_sve2.c`.  Wiring needs new
+  `kyber_poly_{add,sub,reduce}` dispatch slots, refactor of the call
+  sites in `src/c/ama_kyber.c`, byte-identity KATs, and a benchmark
+  vs the compiler's auto-vectorised scalar (modern GCC/Clang already
+  auto-vectorise short int16 add/sub loops with `-O3`, so the SVE2
+  win may be marginal — measurement required).
 - **`test_keccak_equiv` x4 reference via `ama_keccak_f1600_x4_generic`.**  The
   x4 dispatch parity lane now compares the dispatched x4 pointer directly
   against `ama_keccak_f1600_x4_generic` (instead of a hand-rolled 4-loop of
@@ -223,18 +243,6 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   `ama_dilithium_power2round_sve2`, and the unreferenced
   `barrett_reduce_dil_sve2` helper from `src/c/sve2/ama_dilithium_sve2.c`.
   They had no callers, no dispatch slots, and no KATs.
-- **Unused SVE2 Kyber helpers (PR #311).** Same principle, applied this
-  PR: `ama_kyber_poly_add_sve2`, `ama_kyber_poly_sub_sve2`, and
-  `ama_kyber_poly_reduce_sve2` had no callers, no dispatch slots, no
-  KATs.  Removed from `src/c/sve2/ama_kyber_sve2.c`.  The wired SVE2
-  Kyber surface (`ama_kyber_ntt_sve2`, `_invntt_sve2`,
-  `_poly_pointwise_sve2`) is unchanged.
-- **Unused SVE2 SHA3-256 wrapper (PR #311).** Removed
-  `ama_sha3_256_sve2` from `src/c/sve2/ama_sha3_sve2.c`.  The dispatch
-  table exposes no SVE2 slot for `sha3_256`; the wrapper had no caller
-  in `src/`, `include/`, or `tests/`.  The wired SVE2 surface
-  (`ama_keccak_f1600_sve2` — the underlying single-state permutation
-  reached indirectly by every SHAKE-driven algorithm) is unchanged.
 - **Stale `test_dudect.c` `test_aes_gcm_tag_verify` duplicate header
   comment (PR #311).**  The lane carried two header comment blocks — the
   older was the pre-fix description (2 classes, no rationale), the newer

@@ -19,19 +19,31 @@
  * scalar reduction avoids the svmul/svmulh signed-borrow pitfall
  * entirely and is provably equivalent to the generic C reference.
  *
- * Wired surface (matches the SVE2 block in src/c/dispatch/ama_dispatch.c
- * lines 591-595):
+ * Wired surface (matches the SVE2 block in src/c/dispatch/ama_dispatch.c):
  *   - `ama_kyber_ntt_sve2`
  *   - `ama_kyber_invntt_sve2`
  *   - `ama_kyber_poly_pointwise_sve2`
  *
- * Three prior helpers (`poly_add_sve2`, `poly_sub_sve2`,
- * `poly_reduce_sve2`) lived here but were never wired (the dispatch
- * table exposes no Kyber slots for them — production callers use the
- * generic C poly_add / poly_sub / poly_reduce in src/c/ama_kyber.c).
- * They were removed in this PR for parity with the no-compiled-but-
- * unwired-crypto principle established by the Dilithium poly-helper
- * cleanup in commit d8ffd80.
+ * Compiled but NOT YET wired — kept as build artifacts pending a
+ * follow-up PR that adds the corresponding dispatch slots
+ * (`kyber_poly_add`, `_sub`, `_reduce`) and refactors the call sites in
+ * `src/c/ama_kyber.c` to indirect through them.  Algorithmic
+ * correctness is straightforward (`svadd_s16_x`, `svsub_s16_x`, and
+ * the Barrett reduction reused from the NTT path) but wiring needs:
+ *   1. Add `kyber_poly_add_fn` / `_sub_fn` / `_reduce_fn` typedefs to
+ *      `include/ama_dispatch.h`.
+ *   2. Add the matching slots to `ama_dispatch_table_t`.
+ *   3. Refactor `poly_add` / `poly_sub` / `poly_reduce` in
+ *      `src/c/ama_kyber.c` to call through the dispatch table.
+ *   4. Add byte-identity KAT in `tests/c/test_kyber_*_equiv.c`.
+ *   5. Benchmark vs the compiler's auto-vectorised scalar to confirm
+ *      the SVE2 path actually wins (modern GCC/Clang already
+ *      auto-vectorise short int16 add/sub loops with `-O3`).
+ *
+ * Helpers:
+ *   - `ama_kyber_poly_add_sve2`
+ *   - `ama_kyber_poly_sub_sve2`
+ *   - `ama_kyber_poly_reduce_sve2`
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
@@ -81,6 +93,42 @@ static inline svint16_t barrett_reduce_sve2(svbool_t pg, svint16_t a) {
         buf[e] = barrett_reduce_scalar(buf[e]);
     }
     return svld1_s16(pg, buf);
+}
+
+/* ============================================================================
+ * SVE2 polynomial addition
+ * TODO(wire): no `kyber_poly_add` dispatch slot exists; this helper is a
+ * build artifact pending follow-up.  See file header for the wiring
+ * checklist.
+ * ============================================================================ */
+void ama_kyber_poly_add_sve2(int16_t r[KYBER_N],
+                              const int16_t a[KYBER_N],
+                              const int16_t b[KYBER_N]) {
+    size_t i = 0;
+    while (i < KYBER_N) {
+        svbool_t pg = svwhilelt_b16((int64_t)i, (int64_t)KYBER_N);
+        svint16_t va = svld1_s16(pg, a + i);
+        svint16_t vb = svld1_s16(pg, b + i);
+        svst1_s16(pg, r + i, svadd_s16_x(pg, va, vb));
+        i += svcnth();
+    }
+}
+
+/* ============================================================================
+ * SVE2 polynomial subtraction
+ * TODO(wire): no `kyber_poly_sub` dispatch slot exists; see file header.
+ * ============================================================================ */
+void ama_kyber_poly_sub_sve2(int16_t r[KYBER_N],
+                              const int16_t a[KYBER_N],
+                              const int16_t b[KYBER_N]) {
+    size_t i = 0;
+    while (i < KYBER_N) {
+        svbool_t pg = svwhilelt_b16((int64_t)i, (int64_t)KYBER_N);
+        svint16_t va = svld1_s16(pg, a + i);
+        svint16_t vb = svld1_s16(pg, b + i);
+        svst1_s16(pg, r + i, svsub_s16_x(pg, va, vb));
+        i += svcnth();
+    }
 }
 
 /* ============================================================================
@@ -275,6 +323,20 @@ void ama_kyber_poly_pointwise_sve2(int16_t r[KYBER_N],
     for (int i = 0; i < 64; i++) {
         basemul_sve2_scalar(&r[4*i],     &a[4*i],     &b[4*i],      zetas[64 + i]);
         basemul_sve2_scalar(&r[4*i + 2], &a[4*i + 2], &b[4*i + 2], -zetas[64 + i]);
+    }
+}
+
+/* ============================================================================
+ * SVE2 Barrett reduction of full polynomial
+ * TODO(wire): no `kyber_poly_reduce` dispatch slot exists; see file header.
+ * ============================================================================ */
+void ama_kyber_poly_reduce_sve2(int16_t poly[KYBER_N]) {
+    size_t i = 0;
+    while (i < KYBER_N) {
+        svbool_t pg = svwhilelt_b16((int64_t)i, (int64_t)KYBER_N);
+        svint16_t va = svld1_s16(pg, poly + i);
+        svst1_s16(pg, poly + i, barrett_reduce_sve2(pg, va));
+        i += svcnth();
     }
 }
 
