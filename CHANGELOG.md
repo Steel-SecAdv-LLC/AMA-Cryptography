@@ -40,16 +40,6 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   `AMA_SPHINX_BUILD=1 sphinx-build -W --keep-going -b html docs docs/_build/html`
   on push and pull-request events, so docstring rendering errors block the
   PR that introduced them instead of surfacing only in post-merge auto-docs.
-- **SIMD equivalence + dudect coverage closure (PR #311).** Added three new
-  C tests pinning ML-DSA-65 NTT (`test_dilithium_ntt_equiv`), ML-KEM-1024 NTT
-  (`test_kyber_ntt_equiv`), and SPHINCS+/SLH-DSA SIMD surfaces
-  (`test_sphincs_simd_equiv`) across three lanes each (dispatched-pointer
-  path, direct per-ISA SIMD symbol path, and forced-scalar end-to-end parity
-  via `AMA_TESTING_MODE` hooks).  Direct-symbol lanes are runtime-ISA-gated
-  via `ama_has_avx2()` / `ama_has_arm_sve2()` so kernels compiled into the
-  build do not SIGILL on CPUs that lack the ISA.  Added dudect harnesses for
-  Argon2id, secp256k1 scalar-mul, SLH-DSA-SHA2-256f sign, and Ed25519 verify
-  (all PASS strict at 100k measurements).
 
 ### Changed
 - **BEHAVIORAL CHANGE — `ama_chacha20poly1305_decrypt` on tag mismatch
@@ -59,17 +49,6 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   `plaintext` untouched on tag mismatch, matching the scalar AES-GCM decrypt
   path. Python API behavior is unchanged because `native_chacha20poly1305_decrypt`
   raises `RuntimeError` before returning data.
-- **AES-GCM tag-mismatch CTR control flow folded into tag mask (PR #311).**
-  All four `ama_aes256_gcm_decrypt*` paths (scalar, AVX2, VAES-AVX2, NEON)
-  now fold `tag_match` into the CTR loop bounds as a mask, so verify-fail
-  iterations traverse the identical post-verify control flow that verify-OK
-  iterations do.  Closes a structural timing leak that dudect flagged at
-  t=+68 on the AES-GCM tag-verify lane (was info-only behind a stale
-  "S-box backend" justification); now t=+2.05 PASS strict.  Fail-closed
-  contract preserved (zero-bounded CTR loop on tag mismatch == no plaintext
-  emitted).  Same fold applied to the ChaCha20-Poly1305 decrypt path
-  (`ct_len=0` + pointer-select-out-of-timer harness redesign,
-  t=+167 → t=-3.82 PASS strict).
 - **FIPS POST timing-oracle policy (PR #307/#309).** The constant-time POST now
   uses one deterministic 10,000-iteration pass (no retry-until-pass loop) and
   a 50 ns minimum-effect floor for `perf_counter_ns` jitter on shared runners.
@@ -110,20 +89,6 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   Replaced the branchy borrow loop with a branchless recurrence. Local dudect
   verification reported t = +1.73 on 50,000 measurements, below the 4.5
   threshold.
-- **FROST `scalar_negate` mid-range timing leak (PR #311).** The mid-range
-  dudect lane was reporting t=+5.28 after the PR #308 branchless rewrite —
-  root cause was a residual `if (class_idx==0)` branch sitting INSIDE the
-  timed region (branch-predictor variance, not a real key-dependent leak).
-  Lifted the class selection out of the timing window; now t=+0.25 PASS
-  strict.  Extreme-range lanes were hardened with the same pattern for
-  consistency.
-- **NEON SHA-256 compression correctness (PR #311).** Rewrote
-  `ama_sha256_compress_neon` in `src/c/neon/ama_sphincs_neon.c` to fix a
-  latent message-schedule defect in the ARM Crypto Extensions path.  The
-  helper is currently dead code (no production caller — `slh_wots_chain`
-  in `src/c/ama_slhdsa.c` runs scalar SHA-256 step-by-step), but the fix
-  is a real correctness improvement to a library helper that any future
-  production wiring of `ama_sphincs_wots_chain_neon` would consume.
 - **Sphinx and CodeQL parser/import hygiene (PR #309).** Reworked the
   `secure_memzero` docstring `Raises:` block for Napoleon/docutils, rewrote a
   parenthesized `with` test construct into nested `with` statements for the
