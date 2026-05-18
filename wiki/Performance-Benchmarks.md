@@ -113,7 +113,7 @@ Cython acceleration does **not** affect C-implemented cryptographic primitives (
 
 > ML-DSA-65 is ~6× slower to sign than Ed25519 on this host (pre-SIMD scalar NTT path) but provides NIST category III quantum security. Sign/verify latency shifts substantially with CPU microarchitecture — re-run `benchmarks/benchmark_suite.py` on your deployment host before quoting numbers externally.
 >
-> SLH-DSA-SHAKE-128s is the slowest signer in the table by ~3 orders of magnitude — that is **by design** (FIPS 205 hash-based one-shot signatures trade sign-time for the smallest, most conservative cryptographic assumption). The raw-C harness now measures all three SLH-DSA ops (`benchmark_c_raw.c` rows `SLH-DSA-SHAKE-128s KeyGen / Sign / Verify`); the sign row is iterated only ~50× to bound harness runtime.
+> SLH-DSA-SHAKE-128s sign (~1,250 ms) is the slowest signer in the table — roughly **four orders of magnitude** slower than Ed25519 sign (~0.09 ms) and **three orders** slower than ML-DSA-65 sign (~0.53 ms). That is **by design** (FIPS 205 hash-based one-shot signatures trade sign-time for the smallest, most conservative cryptographic assumption). The raw-C harness now measures all three SLH-DSA ops (`benchmark_c_raw.c` rows `SLH-DSA-SHAKE-128s KeyGen / Sign / Verify`); the sign row uses a dedicated `iters_slh_sign = 5` tier so the whole family stays inside the 60 s subprocess timeout that downstream runners enforce on `benchmark_c_raw` (5 iterations × 1.25 s ≈ 6 s for sign; keygen and verify use the standard `iters_slow = 200` tier).
 
 ### X25519 Field-Path Selection (3.0.0)
 

@@ -17,6 +17,7 @@ Licensed under the Apache License, Version 2.0
 """
 
 import argparse
+import copy
 import json
 import os
 from pathlib import Path
@@ -83,7 +84,9 @@ PQC_SIGN_LATENCY = {
 # X25519 fe64 MULX/ADX kernel on-vs-off (BMI2+ADX gate). Anchor:
 # `benchmark_c_raw` rows `X25519 DH (MULX off)` / `(MULX on)` added
 # in 2026-05. Live-data override below picks these up by name when
-# present in `benchmark_results.json`.
+# present in `benchmarks/benchmark_c_raw_results.json` (the same
+# path the override block actually reads — see the `bench_raw =
+# ROOT / "benchmarks" / "benchmark_c_raw_results.json"` line below).
 X25519_MULX = {
     "MULX off (pure-C fe64)": {"ops_sec": 13_314, "latency_us": 75.11},
     "MULX on (BMI2+ADX kernel)": {"ops_sec": 19_431, "latency_us": 51.46},
@@ -451,8 +454,18 @@ def generate_charts(output_dir: str) -> None:
     # numbers are not duplicated across multiple checked-in SVGs.
 
     # Live-data override: pick up `X25519 DH (MULX off)` / `(MULX on)` rows
-    # from a raw-C harness JSON file if it sits alongside benchmark_results.
-    mulx_rows = dict(X25519_MULX)
+    # from `benchmarks/benchmark_c_raw_results.json` when it is present.
+    #
+    # `copy.deepcopy(X25519_MULX)` (not `dict(X25519_MULX)`) so the per-row
+    # `{"ops_sec": ..., "latency_us": ...}` nested dicts are *independent*
+    # of the module-level anchored constants. If the live-data block
+    # below mutates one row and then raises on the next entry (or if
+    # `generate_charts()` is invoked twice in the same process), the
+    # anchored fallback values in `X25519_MULX` must remain pristine —
+    # otherwise the second call would mix half-stale live data with the
+    # anchored constants, producing a chart that silently misrepresents
+    # both.
+    mulx_rows = copy.deepcopy(X25519_MULX)
     bench_raw = ROOT / "benchmarks" / "benchmark_c_raw_results.json"
     if bench_raw.exists():
         try:

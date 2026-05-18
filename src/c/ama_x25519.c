@@ -96,11 +96,18 @@ extern void ama_x25519_fe64_sq_mulx(uint64_t h[4], const uint64_t f[4]);
  * Set via the documented `ama_x25519_set_mulx_override()` public API
  * (`include/ama_cryptography.h`). The accessor is consumed only by the
  * `x25519_scalarmult` runtime branch below; non-fe64 build paths
- * ignore it entirely. Stored as a plain `int` because reads happen on
- * the hot path of every scalarmult and writes happen from single-
- * threaded harness setup code — the production policy (-1) and the
- * two test/bench values are word-sized writes that are atomic on every
- * architecture AMA Cryptography targets. */
+ * ignore it entirely.
+ *
+ * Storage is a plain `int`, not `_Atomic int`, by design: the public API
+ * contract (header docs) restricts the setter to single-threaded harness
+ * / test-setup use with no concurrent scalarmult work in flight, so the
+ * cost of an `atomic_load_explicit(..., memory_order_relaxed)` on the
+ * scalarmult hot path is not justified. The plain `int` does NOT make
+ * unsynchronised concurrent reads + writes safe — that would be a C-
+ * language-level data race (UB) regardless of how the underlying word
+ * write happens to be implemented at the architecture level. The
+ * safety guarantee here is the single-threaded contract, not any
+ * architecture-atomicity claim. */
 static int ama_x25519_mulx_override = -1;
 
 static inline int ama_x25519_mulx_override_get(void) {
