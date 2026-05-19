@@ -923,11 +923,29 @@ static ama_error_t kyber_decapsulate(
 /* ============================================================================
  * DEBUG / TEST FUNCTIONS
  * ============================================================================
- * These functions are only compiled in test builds (AMA_TESTING_MODE).
- * They provide NTT roundtrip verification, polynomial multiplication tests,
- * and CPA encrypt/decrypt roundtrip diagnostics for development validation.
+ * These functions are only compiled when AMA_KYBER_BUILD_DIAGNOSTICS is
+ * defined.  They provide NTT roundtrip verification, polynomial
+ * multiplication tests, and CPA encrypt/decrypt roundtrip diagnostics
+ * for development validation — and rely on <stdio.h> printf, which
+ * downstream embedded / FFI-only consumers cannot necessarily link.
+ *
+ * Gating rationale (separate from AMA_TESTING_MODE):
+ *   AMA_TESTING_MODE enables generic test hooks (randombytes overrides
+ *   for KAT determinism, etc.) that are valuable across the test suite
+ *   but stay compact and quiet.  The Kyber diagnostic block is loud
+ *   (printf-heavy), large (~600 lines), and only consumed by the
+ *   focused tests/c/test_kyber_cpa.c harness.  Decoupling its gate
+ *   keeps the production .so free of the diagnostic surface area
+ *   while preserving the AMA_TESTING_MODE hooks the rest of the test
+ *   suite depends on.  Default: OFF.  CMake enables it only when
+ *   AMA_BUILD_TESTS is ON.
+ *
+ * Threat-model note: the printf calls expose intermediate polynomial
+ * state to anyone with stdout access — including potentially a
+ * reverser of a tools build.  Production builds MUST NOT define
+ * AMA_KYBER_BUILD_DIAGNOSTICS.
  * ============================================================================ */
-#ifdef AMA_TESTING_MODE
+#ifdef AMA_KYBER_BUILD_DIAGNOSTICS
 #include <stdio.h>
 
 /**
@@ -1684,7 +1702,7 @@ int ama_kyber_debug_cpa_roundtrip(void) {
 #endif
 }
 
-#endif /* AMA_TESTING_MODE - end of debug/test functions */
+#endif /* AMA_KYBER_BUILD_DIAGNOSTICS - end of debug/test functions */
 
 /* ============================================================================
  * PUBLIC WRAPPERS FOR CORE DISPATCH

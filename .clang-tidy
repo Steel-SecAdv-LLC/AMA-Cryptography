@@ -1,0 +1,70 @@
+# Copyright 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# clang-tidy configuration for AMA Cryptography (audit Issue 9).
+#
+# The checks below are scoped to high-signal categories that are useful
+# for cryptographic C code without producing a wall of style noise that
+# obscures genuine findings.  The exclusions in `Checks:` below opt out
+# of style-only checks that the project's own conventions (CSRC_STANDARDS.md)
+# already cover; the project's clang-format config is the source of truth
+# for those.
+#
+# Severity: `WarningsAsErrors: "*"` is intentional — the CI job that
+# uses this file gates merge on any new finding, so the configuration
+# must err on the side of false-zero-warning when applied to the
+# current codebase.  Any whitelist of grandfathered findings lives in
+# `tools/clang-tidy-baseline.yaml` (TODO if/when needed); inline
+# `// NOLINT(check-name, justification)` comments are subject to
+# INVARIANT-13 (justification + tracking ID required).
+
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  concurrency-*,
+  misc-misplaced-const,
+  misc-redundant-expression,
+  misc-static-assert,
+  misc-unused-parameters,
+  performance-*,
+  portability-*,
+  readability-misleading-indentation,
+  readability-misplaced-array-index,
+  readability-non-const-parameter,
+  readability-redundant-control-flow,
+  readability-redundant-declaration,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -cert-err33-c,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -performance-no-int-to-ptr,
+  -readability-magic-numbers,
+  -bugprone-reserved-identifier,
+  -cert-dcl37-c,
+  -cert-dcl51-cpp
+
+WarningsAsErrors: "*"
+
+# Header filter:
+#   We only check our own headers (src/c/, include/).  Vendored sources
+#   under src/c/vendor/ and third-party headers under /usr/include are
+#   excluded — clang-tidy would otherwise drown the output in third-
+#   party-noise.
+HeaderFilterRegex: '^(.*/)?(src/c|include)/(?!vendor/).*\.h$'
+
+# Format style — match the project's clang-format config.
+FormatStyle: file
+
+# Per-check configuration
+CheckOptions:
+  - key: readability-non-const-parameter.IgnoreMacros
+    value: 'true'
+  - key: bugprone-suspicious-string-compare.WarnOnImplicitComparison
+    value: 'true'
+  - key: bugprone-suspicious-string-compare.WarnOnLogicalNotComparison
+    value: 'true'
+
+# Style options scoped to the C dialect we target.
+User: 'ama-cryptography'

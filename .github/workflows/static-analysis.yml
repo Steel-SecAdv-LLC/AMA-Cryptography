@@ -5,12 +5,20 @@ on:
     branches: [ main, develop, 'feature/**', 'fix/**' ]
   pull_request:
     branches: [ main, develop ]
+  schedule:
+    # Weekly extended sanitizer matrix at 04:00 UTC Saturdays (audit
+    # Issue 9).  MSan and TSan have higher false-positive rates than
+    # ASan+UBSan and a per-PR latency cost we're not willing to pay,
+    # so we run them weekly out of the merge-critical path.  Failures
+    # surface on the scheduled run and a follow-up PR fixes them.
+    - cron: '0 4 * * 6'
 
 permissions:
   contents: read
   security-events: write  # Required for CodeQL SARIF upload
 
-# Collapse overlapping runs on the same ref; main is preserved.
+# Collapse overlapping runs on the same ref; main and scheduled runs
+# (the weekly extended sanitizer matrix) are preserved.
 concurrency:
   group: static-analysis-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}
@@ -208,3 +216,326 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1:detect_stack_use_after_return=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: cd build-asan && ctest --output-on-failure
+
+  # =========================================================================
+  # Extended sanitizer + clang-tidy + reproducible-build matrix
+  # (audit Issues 9 + 10) — runs weekly on the schedule above plus on
+  # manual workflow_dispatch.  PR-time and push-time runs only invoke
+  # the original ASan+UBSan gate above; this matrix is intentionally
+  # out of the merge critical path because MSan/TSan/clang-tidy/
+  # reproducible-build can each take 15-25 minutes by themselves.
+  # =========================================================================
+
+  memory-sanitizer:
+    name: MemorySanitizer (uninit reads)
+    # MSan needs every linked library — including libc++ / libstdc++ —
+    # to be MSan-instrumented or the false-positive volume becomes
+    # unmanageable.  We use clang's `-stdlib=libc++` with the
+    # pre-instrumented runtime that ships with clang-18.  This is a
+    # known cost of MSan that the project accepts because the
+    # uninitialized-read class is invisible to ASan and the
+    # constant-time codebase has hot spots (lookup masks, conditional
+    # selects) that an uninit-read can mask without symptom.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y cmake clang-18 libc++-18-dev libc++abi-18-dev
+
+      - name: Build with MSan
+        run: |
+          cmake -B build-msan \
+            -DCMAKE_C_COMPILER=clang-18 \
+            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_C_FLAGS="-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1 -stdlib=libc++" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=memory -stdlib=libc++" \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_ENABLE_LTO=OFF \
+            -DAMA_ENABLE_SIMD=OFF \
+            -DAMA_AES_CONSTTIME=ON
+          cmake --build build-msan -j$(nproc)
+
+      - name: Run tests under MSan
+        env:
+          MSAN_OPTIONS: print_stacktrace=1:halt_on_error=1:abort_on_error=1
+        run: cd build-msan && ctest --output-on-failure -L "fast"  || cd build-msan && ctest --output-on-failure
+        # The label selector `-L fast` (if defined by individual tests)
+        # runs the quick subset first; the `||` fallback runs the full
+        # ctest set when no `fast` label is present, which is the
+        # current state.  Either way, failures surface.
+
+  thread-sanitizer:
+    name: ThreadSanitizer (dispatch init races)
+    # TSan targets the multi-threaded code in ama_cpuid.c +
+    # ama_dispatch.c — the platform once-primitive (pthread_once on
+    # POSIX, InitOnceExecuteOnce on Windows) per INVARIANT-15.  A
+    # data race on the dispatch table would cause SIMD kernels to be
+    # called with NULL function pointers from one thread while another
+    # is still initialising; TSan is the only sanitiser that detects
+    # this class.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y cmake clang
+
+      - name: Build with TSan
+        run: |
+          cmake -B build-tsan \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g -O1" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread" \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_ENABLE_LTO=OFF \
+            -DAMA_AES_CONSTTIME=ON
+          cmake --build build-tsan -j$(nproc)
+
+      - name: Run tests under TSan
+        env:
+          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+        run: cd build-tsan && ctest --output-on-failure
+
+  valgrind-memcheck:
+    name: Valgrind memcheck (defense-in-depth)
+    # Complements ASan with a different leak/uninit reader.  Slow —
+    # ~5x runtime — so scheduled only.  The test suite that runs here
+    # is the same one ctest runs in the ASan job; Valgrind's strength
+    # is that it catches uninit reads that ASan misses (different
+    # implementation strategy) and gives us a second opinion on the
+    # ASan reports for free.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y cmake clang valgrind
+
+      - name: Build (no sanitizers, just symbols + no LTO)
+        run: |
+          cmake -B build-valgrind \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_C_FLAGS="-g -O1 -fno-omit-frame-pointer" \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_ENABLE_LTO=OFF \
+            -DAMA_AES_CONSTTIME=ON \
+            -DAMA_ENABLE_SIMD=OFF
+          cmake --build build-valgrind -j$(nproc)
+
+      - name: Run a focused subset under Valgrind memcheck
+        run: |
+          cd build-valgrind
+          # Run the most coverage-rich subset under Valgrind — the
+          # PQC primitives and AEAD tests exercise the largest stack
+          # / heap surface.  Running the full ctest suite under
+          # Valgrind would exceed the runner timeout.
+          for test in bin/test_consttime bin/test_core bin/test_aes_gcm_scalar_kat bin/test_chacha20poly1305 bin/test_ed25519 bin/test_sha3; do
+            if [ -x "$test" ]; then
+              echo "=== valgrind: $test ==="
+              valgrind \
+                --error-exitcode=1 \
+                --leak-check=full \
+                --show-leak-kinds=definite,indirect \
+                --errors-for-leak-kinds=definite \
+                --track-origins=yes \
+                "$test"
+            fi
+          done
+
+  clang-tidy:
+    name: clang-tidy (security + correctness)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y cmake clang clang-tidy
+
+      - name: Configure and generate compile_commands.json
+        run: |
+          cmake -B build-tidy \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=OFF \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_ENABLE_LTO=OFF \
+            -DAMA_AES_CONSTTIME=ON
+
+      - name: Run clang-tidy on our C sources
+        # Only run on src/c/ and include/, excluding vendored code under
+        # src/c/vendor/.  The .clang-tidy config file at repo root drives
+        # check selection; CI just enumerates the input files.
+        run: |
+          # Build a file list excluding vendor/.  `find ... -prune` is
+          # the portable way; pipe through clang-tidy with -p pointing
+          # to the build directory for the compile_commands.json.
+          files=$(find src/c include \
+            -type d -name vendor -prune -o \
+            -type f \( -name '*.c' -o -name '*.h' \) -print)
+          if [ -z "$files" ]; then
+            echo "ERROR: no C/H source files found — is the layout intact?"
+            exit 1
+          fi
+          # Run clang-tidy.  --warnings-as-errors is wired in .clang-tidy
+          # itself (`WarningsAsErrors: "*"`), so any finding fails.
+          # `-quiet` suppresses the "X warnings generated" banner per file
+          # which is just noise; the actual diagnostics are still printed.
+          echo "$files" | xargs -n 1 -P $(nproc) clang-tidy -p build-tidy --quiet
+
+  reproducible-build:
+    name: Reproducible Build (wheel byte-equality)
+    # INVARIANT-8 declares deterministic builds.  Audit Issue 10 closes
+    # the missing verification step: build the wheel twice from
+    # identical inputs and assert byte-equality.  The
+    # _integrity_signature module's INTEGRITY_DIGEST_HEX is computed
+    # over the same .py file set both times — if a build pulls in
+    # something host-dependent (a `pip cache` entry, a build-time
+    # timestamp embedded in a .pyc, a NumPy version), the digest
+    # changes and this job fails.
+    #
+    # Inputs we hold steady:
+    #   - SOURCE_DATE_EPOCH pinned to a fixed value so any embedded
+    #     timestamp is identical across builds.
+    #   - PYTHONHASHSEED=0 so dict iteration order is deterministic.
+    #   - Same Python version (single setup-python step).
+    #   - Same pip cache (the actions/setup-python `cache: pip` option).
+    #
+    # The wheel filename includes a build hash that depends on these
+    # inputs.  We compare via `sha256sum dist/*.whl` between the two
+    # builds; if they match, the wheel is reproducible.  We also
+    # cross-check the integrity digest emitted into
+    # ama_cryptography/_integrity_signature.py across both builds —
+    # that's the truly load-bearing artifact.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libssl-dev
+          python -m pip install --upgrade pip
+          pip install build
+
+      - name: Build wheel — pass 1
+        env:
+          AMA_BUILD_PIPELINE: "1"
+          SOURCE_DATE_EPOCH: "1700000000"   # 2023-11-14 — stable reference epoch
+          PYTHONHASHSEED: "0"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          rm -rf build dist
+          python -m build --wheel --outdir dist1/
+          ls -lh dist1/
+          # Extract the integrity digest from the wheel's bundled
+          # _integrity_signature.py — that's the canonical artifact
+          # whose stability matters at runtime.
+          python -c "
+          import re, zipfile
+          wheel = sorted(__import__('pathlib').Path('dist1').glob('*.whl'))[0]
+          with zipfile.ZipFile(wheel) as zf:
+              with zf.open(next(n for n in zf.namelist() if n.endswith('_integrity_signature.py'))) as fh:
+                  sig_src = fh.read().decode('utf-8')
+          digest = re.search(r'INTEGRITY_DIGEST_HEX\s*=\s*\"([0-9a-fA-F]+)\"', sig_src).group(1)
+          __import__('pathlib').Path('dist1/_integrity_digest.txt').write_text(digest)
+          print(f'Pass-1 integrity digest: {digest}')
+          "
+          sha256sum dist1/*.whl > dist1/wheel.sha256
+
+      - name: Build wheel — pass 2 (verify byte-equality)
+        env:
+          AMA_BUILD_PIPELINE: "1"
+          SOURCE_DATE_EPOCH: "1700000000"
+          PYTHONHASHSEED: "0"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          rm -rf build
+          python -m build --wheel --outdir dist2/
+          ls -lh dist2/
+          python -c "
+          import re, zipfile
+          wheel = sorted(__import__('pathlib').Path('dist2').glob('*.whl'))[0]
+          with zipfile.ZipFile(wheel) as zf:
+              with zf.open(next(n for n in zf.namelist() if n.endswith('_integrity_signature.py'))) as fh:
+                  sig_src = fh.read().decode('utf-8')
+          digest = re.search(r'INTEGRITY_DIGEST_HEX\s*=\s*\"([0-9a-fA-F]+)\"', sig_src).group(1)
+          __import__('pathlib').Path('dist2/_integrity_digest.txt').write_text(digest)
+          print(f'Pass-2 integrity digest: {digest}')
+          "
+          sha256sum dist2/*.whl > dist2/wheel.sha256
+
+      - name: Compare integrity digests AND wheel content
+        run: |
+          d1=$(cat dist1/_integrity_digest.txt)
+          d2=$(cat dist2/_integrity_digest.txt)
+          echo "Pass 1: $d1"
+          echo "Pass 2: $d2"
+          if [ "$d1" != "$d2" ]; then
+            echo "::error::INVARIANT-8 violated: integrity digest differs between two builds with identical inputs."
+            echo "         This means ama_cryptography/_integrity_signature.py's"
+            echo "         INTEGRITY_DIGEST_HEX is not a stable function of the source"
+            echo "         tree — the wheel-integrity gate at import time will become"
+            echo "         a coin flip across redeploys.  Investigate the .py file set"
+            echo "         the build picked up, environment variables, and timestamps."
+            exit 1
+          fi
+          # Compare wheel content (excluding RECORD metadata which legitimately
+          # contains build-host artifacts like file sizes that match between
+          # runs but include a manifest header).  We extract both wheels to
+          # temp dirs and diff bytewise — RECORD is regenerated on the fly
+          # and its content is a function of the file digests, which we've
+          # already shown match via the integrity check above.
+          mkdir -p /tmp/w1 /tmp/w2
+          (cd /tmp/w1 && unzip -q "$GITHUB_WORKSPACE"/dist1/*.whl)
+          (cd /tmp/w2 && unzip -q "$GITHUB_WORKSPACE"/dist2/*.whl)
+          # diff the two extracted trees.  --brief shows any divergence;
+          # --recursive walks the layout.  Exclude RECORD which is a
+          # generated manifest.
+          if ! diff --brief --recursive --exclude=RECORD /tmp/w1 /tmp/w2 ; then
+            echo "::error::Reproducible build failed — extracted wheel content differs."
+            exit 1
+          fi
+          echo "OK: both wheels share the integrity digest $d1 and identical content."

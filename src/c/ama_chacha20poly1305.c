@@ -368,7 +368,10 @@ static void poly1305_final(poly1305_ctx *ctx, uint8_t tag[16]) {
     /* Process any remaining partial block */
     if (ctx->buf_len > 0) {
         uint8_t block[16];
-        memset(block, 0, 16);
+        /* Pre-zero with the secure scrub primitive — `block` will hold the
+         * tail of the last absorbed message and is in the same scrub
+         * class as the matching scrub at function exit (INVARIANT-6). */
+        ama_secure_memzero(block, sizeof(block));
         memcpy(block, ctx->buf, ctx->buf_len);
         block[ctx->buf_len] = 0x01; /* Padding byte */
         poly1305_block(ctx, block, 0); /* hibit = 0 for partial block */
@@ -470,10 +473,18 @@ static void chacha20poly1305_compute_tag(const uint8_t poly_key[32],
     if (aad_len > 0)
         poly1305_update(&ctx, aad, aad_len);
 
-    /* Pad AAD to 16-byte boundary */
+    /* Pad AAD to 16-byte boundary.
+     *
+     * The pad bytes themselves are zero (RFC 8439 §2.8 mandates zero
+     * padding) and not secret, but `pad` is on the stack of a function
+     * that handles the secret Poly1305 key derivative; INVARIANT-6
+     * blanket-applies the secure scrub primitive to every zero of a
+     * stack buffer in the AEAD critical path so a future refactor
+     * cannot accidentally weaken the discipline (a bare memset is one
+     * `pad`-rename away from scrubbing a key spill). */
     pad_len = (16 - (aad_len % 16)) % 16;
     if (pad_len > 0) {
-        memset(pad, 0, pad_len);
+        ama_secure_memzero(pad, pad_len);
         poly1305_update(&ctx, pad, pad_len);
     }
 
@@ -481,10 +492,11 @@ static void chacha20poly1305_compute_tag(const uint8_t poly_key[32],
     if (ct_len > 0)
         poly1305_update(&ctx, ciphertext, ct_len);
 
-    /* Pad ciphertext to 16-byte boundary */
+    /* Pad ciphertext to 16-byte boundary (same scrub rationale as the
+     * AAD pad block above). */
     pad_len = (16 - (ct_len % 16)) % 16;
     if (pad_len > 0) {
-        memset(pad, 0, pad_len);
+        ama_secure_memzero(pad, pad_len);
         poly1305_update(&ctx, pad, pad_len);
     }
 

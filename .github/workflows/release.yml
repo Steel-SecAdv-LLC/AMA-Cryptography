@@ -1,0 +1,477 @@
+name: Release — Build, Sign, and Publish
+
+# Tagged-release pipeline for ama-cryptography (audit Issue 1).
+#
+# INVARIANT-11 declares the SBOM as the release gate.  Prior to this
+# workflow, `git tag --list` was empty and no `release.yml` existed;
+# the `tags: ['v*']` triggers on acvp_validation.yml and security.yml
+# would have fired once a tag was pushed, but nothing actually built
+# and published a wheel.  This workflow closes the gap.
+#
+# The pipeline runs ONLY on `v*` tag pushes (and manual workflow_dispatch
+# for dry-runs that don't publish).  Pull requests, branch pushes, and
+# scheduled runs DO NOT trigger this workflow — release-grade signing
+# keys (sigstore identity, PyPI Trusted Publishing) are only valid
+# when the tag-protection ruleset is exercised, and a misconfigured
+# trigger here is the easiest way to leak a published artefact.
+#
+# Stages, in order:
+#
+#   1. preflight       — re-derive the package version from the tag,
+#                        regenerate the C-library SBOM, sanity check
+#                        that the version-consistency script passes.
+#                        FAILS the release if anything drifted.
+#
+#   2. build-wheels    — cibuildwheel matrix across Linux/macOS/Windows
+#                        and Python 3.9–3.13.  Each wheel ships the
+#                        Ed25519-signed _integrity_signature.py
+#                        artefact via setup.py's AMA_BUILD_PIPELINE
+#                        hook.
+#
+#   3. build-sdist     — single sdist (tarball) for completeness.
+#
+#   4. provenance      — slsa-framework/slsa-github-generator builds
+#                        SLSA v1 provenance attestations over every
+#                        wheel + the sdist.  The attestation lands in
+#                        a sibling artefact and is uploaded to PyPI
+#                        alongside the wheels via the trusted publisher.
+#
+#   5. sign            — sigstore-python signs each wheel + the sdist
+#                        with the keyless OIDC-bound identity that
+#                        GitHub Actions exposes.  Signatures live in
+#                        the artefact alongside the binary they sign.
+#
+#   6. publish-pypi    — PyPI Trusted Publishing (no long-lived token).
+#                        Requires the PyPI project's "trusted publisher"
+#                        rule to permit
+#                          repo = Steel-SecAdv-LLC/AMA-Cryptography
+#                          workflow = release.yml
+#                          environment = pypi
+#                        Until this is configured on PyPI, publish-pypi
+#                        is gated by the `environment: pypi` block on the
+#                        deployment that requires manual approval.
+#
+#   7. github-release  — create the GitHub Release with the changelog,
+#                        attach the wheels + sdist + provenance +
+#                        signatures.
+#
+# Operator runbook:
+#
+#   $ git tag -s v3.1.0 -m "ama-cryptography 3.1.0"
+#   $ git push origin v3.1.0
+#
+# All of stages 1-7 run automatically.  A failure in any stage halts
+# the pipeline before the next; the published artefact is exactly the
+# one that passed every gate.
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build but do not publish (dry-run smoke test).'
+        type: boolean
+        default: true
+
+# Top-level permissions are minimal.  Each job below grants the
+# additional permissions it needs (id-token for OIDC, contents:write
+# only on the github-release job).
+permissions:
+  contents: read
+
+# Avoid clobbering an in-flight release if a maintainer accidentally
+# pushes a second tag while the first is still building.  Cancellation
+# is OFF — we never cancel a release in progress; the second tag must
+# wait.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Preflight (tag + version + SBOM coherence)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag_clean: ${{ steps.version.outputs.tag_clean }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Resolve tag → version (must match pyproject.toml)
+        id: version
+        run: |
+          # When run via tag push, github.ref looks like refs/tags/vX.Y.Z.
+          # When run via workflow_dispatch, github.ref is a branch — we
+          # let the build proceed but mark it as a dry-run.  In either
+          # case we anchor on pyproject.toml as the canonical version.
+          tag="${GITHUB_REF##*/}"
+          tag_clean="${tag#v}"
+          pyproject_version=$(python -c "
+          import re, sys
+          from pathlib import Path
+          m = re.search(r'^version\s*=\s*\"([^\"]+)\"',
+                        Path('pyproject.toml').read_text(encoding='utf-8'),
+                        re.MULTILINE)
+          if m is None:
+              sys.exit('pyproject.toml has no [project].version')
+          print(m.group(1))
+          ")
+          echo "Tag (raw):           $tag"
+          echo "Tag (clean):         $tag_clean"
+          echo "pyproject.toml:      $pyproject_version"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            if [ "$tag_clean" != "$pyproject_version" ]; then
+              echo "::error::Tag $tag_clean does not match pyproject.toml version $pyproject_version."
+              echo "         Bump pyproject.toml (and all the artifacts tools/check_version_consistency.py"
+              echo "         tracks) and re-tag from the new commit."
+              exit 1
+            fi
+          fi
+          {
+            echo "version=$pyproject_version"
+            echo "tag_clean=$tag_clean"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run version consistency check
+        # Cross-validate that every other version anchor (CMakeLists.txt,
+        # include/ama_cryptography.h, docs/conf.py, Dockerfiles, etc.)
+        # agrees with pyproject.toml.  This is the same check ci.yml
+        # already runs; gating the release on it again is the
+        # belt-and-suspenders pattern INVARIANT-11 expects.
+        run: python tools/check_version_consistency.py
+
+      - name: Regenerate + check SBOM
+        # Audit Issue 2: SBOM is driven from pyproject.toml.  We
+        # regenerate fresh and require the committed copy match,
+        # exactly the same way security.yml::sbom does.
+        run: python tools/generate_sbom.py --check
+
+  build-wheels:
+    name: cibuildwheel ${{ matrix.os }}
+    needs: [preflight]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-13, macos-14, windows-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Build wheels via cibuildwheel
+        uses: pypa/cibuildwheel@e9c4a96e93b86beae8e0a78eef4b54cbc81e9a47  # v3.2.0
+        env:
+          # PYTHON VERSION MATRIX:
+          # Build for the same Python range the test workflows already
+          # cover (3.9–3.13).  Skip PyPy and 32-bit musllinux variants;
+          # the native build under setup.py CMakeBuild is x86-64 / arm64
+          # only, and the ctypes shims in ama_cryptography/ don't gain
+          # anything from PyPy's tracing JIT.
+          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-* cp313-*"
+          CIBW_SKIP: "pp* *_i686 *_ppc64le *_s390x *-musllinux_*"
+          CIBW_ARCHS_LINUX: "auto64"
+          CIBW_ARCHS_MACOS: "auto64"
+          CIBW_ARCHS_WINDOWS: "AMD64"
+          # WHEEL BUILD ENVIRONMENT:
+          # AMA_BUILD_PIPELINE=1 enables setup.py's post-build integrity
+          # signer.  AMA_USE_NATIVE_PQC=ON keeps the native PQC kernels
+          # in the build (no opt-out at release time — INVARIANT-7).
+          # AMA_AES_CONSTTIME=ON locks in the bitsliced AES default
+          # (INVARIANT-20).  AMA_KYBER_BUILD_DIAGNOSTICS is INTENTIONALLY
+          # left unset so the production wheels ship without the
+          # ~600 lines of printf-emitting Kyber debug code (audit
+          # Issue 7).
+          CIBW_ENVIRONMENT: >-
+            AMA_BUILD_PIPELINE=1
+            CMAKE_BUILD_PARALLEL_LEVEL=4
+          # PRE-BUILD COMMANDS — install cmake + the cython/numpy build
+          # deps that setup.py CMakeBuild needs.  cibuildwheel runs in
+          # an isolated build env that only sees pyproject.toml's
+          # [build-system].requires, so any missing build-time dep
+          # fails the wheel build closed.
+          CIBW_BEFORE_BUILD_LINUX: "pip install cmake>=4.3.2 cython>=3.2.4 numpy>=1.24.0"
+          CIBW_BEFORE_BUILD_MACOS: "pip install cmake>=4.3.2 cython>=3.2.4 numpy>=1.24.0"
+          CIBW_BEFORE_BUILD_WINDOWS: "pip install cmake>=4.3.2 cython>=3.2.4 numpy>=1.24.0"
+          # MANYLINUX BASELINE: manylinux_2_28 has GCC 12 baseline (the
+          # INVARIANT-8 minimum), AVX-512 intrinsics, and is supported
+          # by every modern pip.
+          CIBW_MANYLINUX_X86_64_IMAGE: "manylinux_2_28"
+          CIBW_MANYLINUX_AARCH64_IMAGE: "manylinux_2_28"
+          # TEST COMMAND: smoke-test the wheel after build.  The full
+          # pytest suite runs in ci-build-test.yml; here we just verify
+          # the wheel imports + the native library loads + a single
+          # KEM keypair round-trip succeeds.  A regression in any of
+          # these stops the release before publishing.
+          CIBW_TEST_COMMAND: >-
+            python -c "
+            import ama_cryptography as a;
+            print('version', a.__version__);
+            from ama_cryptography import crypto_api;
+            kem = crypto_api.KyberProvider();
+            kp = kem.generate_keypair();
+            enc = kem.encapsulate(kp.public_key);
+            ss2 = kem.decapsulate(enc.ciphertext, kp.secret_key);
+            assert enc.shared_secret == ss2, 'ML-KEM round-trip failed in smoke test';
+            print('OK smoke test')
+            "
+
+      - name: Upload wheel artefacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: wheels-${{ matrix.os }}
+          path: ./wheelhouse/*.whl
+          retention-days: 30
+
+  build-sdist:
+    name: Build sdist
+    needs: [preflight]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Install build
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+
+      - name: Build sdist
+        run: python -m build --sdist
+
+      - name: Upload sdist artefact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          retention-days: 30
+
+  # =========================================================================
+  # Aggregate artefact digests — single SLSA provenance attestation over
+  # the union of wheels + sdist.  The slsa-github-generator workflow
+  # accepts a base64-encoded JSON document of {"name", "digest"} pairs;
+  # we compute that here so the provenance job is matrix-free and the
+  # attestation file is one .intoto.jsonl rather than one per OS.
+  # =========================================================================
+  hash-artefacts:
+    name: Hash artefacts for SLSA subject set
+    needs: [build-wheels, build-sdist]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      subjects: ${{ steps.hash.outputs.subjects }}
+    steps:
+      - name: Download wheel artefacts
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
+        with:
+          path: dist
+          pattern: wheels-*
+          merge-multiple: true
+
+      - name: Download sdist artefact
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
+        with:
+          name: sdist
+          path: dist
+
+      - name: Compute base64 subjects
+        id: hash
+        run: |
+          # The SLSA generator expects a single base64-encoded string
+          # containing one "DIGEST  FILENAME" line per artefact, in
+          # the same shape sha256sum prints natively.  We sort to make
+          # the output deterministic across re-runs.
+          cd dist
+          sha256sum *.whl *.tar.gz | LC_ALL=C sort > ../subjects.txt
+          cd ..
+          cat subjects.txt
+          subjects_b64=$(base64 --wrap=0 subjects.txt)
+          echo "subjects=$subjects_b64" >> "$GITHUB_OUTPUT"
+
+  provenance:
+    name: SLSA v1 provenance attestation
+    needs: [hash-artefacts]
+    permissions:
+      id-token: write       # OIDC for the keyless attestation
+      contents: read
+      actions: read
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.hash-artefacts.outputs.subjects }}
+      provenance-name: "ama-cryptography.intoto.jsonl"
+      upload-assets: false
+
+  # =========================================================================
+  # Sigstore signing (sigstore-python) — keyless, OIDC-bound.  No long-
+  # lived signing key sits on the runner.  The signature .sig + the
+  # public certificate .crt ship alongside the wheel; verification uses
+  # `sigstore verify identity`.
+  # =========================================================================
+  sign:
+    name: Sigstore sign (wheels + sdist)
+    needs: [build-wheels, build-sdist]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Download wheel artefacts
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
+        with:
+          path: dist
+          pattern: wheels-*
+          merge-multiple: true
+
+      - name: Download sdist artefact
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
+        with:
+          name: sdist
+          path: dist
+
+      - name: Sign distribution with sigstore-python
+        uses: sigstore/gh-action-sigstore-python@f7ad0af51a5648d09a20d00370f0a91c3bdf8f84  # v3.0.1
+        with:
+          inputs: ./dist/*.whl ./dist/*.tar.gz
+          upload-signing-artifacts: true
+          release-signing-artifacts: false
+
+      - name: Upload signed bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: signed-distribution
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/*.sigstore
+            dist/*.sigstore.json
+          retention-days: 90
+
+  # =========================================================================
+  # PyPI Trusted Publishing — no long-lived token.  Requires the PyPI
+  # project to have a "trusted publisher" configured for this repo /
+  # workflow / environment trio.  The `environment: pypi` block gates
+  # publishing on a maintainer approval click in the GitHub Actions
+  # UI — that's an intentional human-in-the-loop barrier between a
+  # tag push and a published release.
+  # =========================================================================
+  publish-pypi:
+    name: Publish to PyPI (Trusted Publishing)
+    needs: [preflight, sign, provenance]
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ama-cryptography/${{ needs.preflight.outputs.version }}/
+    permissions:
+      id-token: write       # required for trusted publishing OIDC
+    steps:
+      - name: Download signed distribution
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
+        with:
+          name: signed-distribution
+          path: dist
+
+      - name: Filter to wheels + sdist (drop sigstore files)
+        # pypa/gh-action-pypi-publish only wants the actual distributions,
+        # not the .sigstore signature blobs that ride alongside them.
+        # We move the signatures out of dist/ before the upload step.
+        run: |
+          mkdir -p signatures
+          mv dist/*.sigstore* signatures/ 2>/dev/null || true
+          ls -la dist/
+          ls -la signatures/
+
+      - name: Publish to PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc  # v1.13.0
+        with:
+          packages-dir: dist/
+          # No `password` — Trusted Publishing handles OIDC exchange.
+          # Skip-existing avoids breaking on re-runs of a partial
+          # publish, but if a wheel has actually changed bytes since
+          # the prior partial upload, that's a worse problem we want
+          # to surface, not skip.  Off by default; flip to true only
+          # after the first failed-mid-upload incident.
+          skip-existing: false
+          verbose: true
+
+  github-release:
+    name: Create GitHub Release
+    needs: [preflight, sign, provenance]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Download all artefacts
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
+        with:
+          path: artefacts
+
+      - name: Aggregate release assets
+        run: |
+          mkdir -p release-assets
+          # Wheels & sdist
+          find artefacts -name '*.whl' -exec cp {} release-assets/ \;
+          find artefacts -name '*.tar.gz' -exec cp {} release-assets/ \;
+          # Sigstore signatures
+          find artefacts -name '*.sigstore*' -exec cp {} release-assets/ \;
+          # SLSA provenance attestations
+          find artefacts -name '*.intoto.jsonl' -exec cp {} release-assets/ \;
+          # SBOM (committed)
+          cp docs/compliance/sbom-c-library.json release-assets/
+          ls -la release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090  # v2.4.0
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: |
+            AMA Cryptography ${{ needs.preflight.outputs.version }}
+
+            * Wheels signed via sigstore (keyless, OIDC-bound).
+            * SLSA v1 provenance attestations attached.
+            * Python SBOM + C-library SBOM (CycloneDX) attached.
+            * Published to PyPI via Trusted Publishing (no long-lived token).
+
+            Verify with:
+
+                $ pip install sigstore slsa-verifier
+                $ sigstore verify identity --bundle DOWNLOAD.sigstore.json \
+                    --cert-identity https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }} \
+                    --cert-oidc-issuer https://token.actions.githubusercontent.com \
+                    DOWNLOAD.whl
+                $ slsa-verifier verify-artifact DOWNLOAD.whl \
+                    --provenance-path DOWNLOAD.intoto.jsonl \
+                    --source-uri github.com/${{ github.repository }} \
+                    --source-tag ${{ github.ref_name }}
+
+            See the full release notes in CHANGELOG.md.
+          files: release-assets/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}

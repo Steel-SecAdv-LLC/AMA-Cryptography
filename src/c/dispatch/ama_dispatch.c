@@ -1199,3 +1199,59 @@ void ama_print_dispatch_info(void) {
     fprintf(stderr, "╚══════════════════════════════════════════════╝\n");
     fprintf(stderr, "\n");
 }
+
+/* ============================================================================
+ * AES-GCM backend introspection (audit Issue 5 / INVARIANT-20)
+ *
+ * Identifies which AES-GCM kernel the runtime dispatcher actually
+ * selected on the current host.  Recognition order matches the
+ * dispatch_init_internal() selection order above:
+ *
+ *   1. VAES + VPCLMULQDQ YMM kernel  -> "vaes-avx2"
+ *   2. AVX2 AES-NI + PCLMULQDQ       -> "aes-ni-pclmul"
+ *   3. NEON + ARMv8 crypto AES+PMULL -> "arm-aes-pmull"
+ *   4. compile-time bitsliced S-box  -> "bitsliced-software"
+ *   5. compile-time table S-box      -> "table-insecure"
+ *
+ * 4 and 5 are mutually exclusive at compile time: AMA_AES_CONSTTIME
+ * gates ama_aes_bitsliced.c into the build via CMakeLists.txt, and
+ * the macro is checked in ama_aes_gcm.c::aes256_encrypt_block.  The
+ * runtime check below derives the active path from the dispatcher's
+ * function pointers when SIMD is wired in; otherwise it returns the
+ * compile-time selection.
+ *
+ * The kernel pointer comparisons cross translation units, so the
+ * compared symbol must have external linkage with the same name on
+ * both sides — which it does (these are declared `extern` near the
+ * top of this TU and defined as global functions in the AVX2 / NEON
+ * source files).  No type-punning / dlsym is required. ============= */
+const char *ama_aes_gcm_active_backend(void) {
+    ama_dispatch_init();
+#ifdef AMA_HAVE_AVX2_IMPL
+#if !defined(_MSC_VER)
+    if (dispatch_table.aes_gcm_encrypt == ama_aes256_gcm_encrypt_vaes_avx2)
+        return "vaes-avx2";
+#endif
+    if (dispatch_table.aes_gcm_encrypt == ama_aes256_gcm_encrypt_avx2)
+        return "aes-ni-pclmul";
+#endif
+#ifdef AMA_HAVE_NEON_IMPL
+    if (dispatch_table.aes_gcm_encrypt == ama_aes256_gcm_encrypt_neon)
+        return "arm-aes-pmull";
+#endif
+    /* Compile-time S-box selection — the SIMD dispatch table left
+     * aes_gcm_encrypt at NULL because no hardware AES kernel was
+     * detected, so the generic schoolbook GHASH + S-box path will
+     * run.  Which S-box flavour that is, is fixed at compile time. */
+#ifdef AMA_AES_CONSTTIME
+    return "bitsliced-software";
+#else
+    /* INVARIANT-20: this path is only reachable when the build was
+     * explicitly opted in via -DAMA_AES_TABLE_INSECURE=ON; the CMake
+     * guardrail above fails configuration otherwise.  The returned
+     * label is intentionally loud so an integration test that just
+     * does `assert(strcmp(backend, "table-insecure") != 0)` will
+     * catch a regression. */
+    return "table-insecure";
+#endif
+}

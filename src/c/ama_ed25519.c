@@ -458,7 +458,13 @@ static void sc25519_to_wnaf(int8_t wnaf[256], const uint8_t scalar[32], int w) {
              | ((uint32_t)scalar[4*i+2] << 16)
              | ((uint32_t)scalar[4*i+3] << 24);
     }
-    memset(wnaf, 0, 256);
+    /* `wnaf` is the secret-scalar's signed digit expansion — every
+     * non-zero entry leaks one bit of the secret scalar if observable.
+     * Zero-initialise on the secure path so the bytes that stay zero
+     * (where the digit-extraction loop never wrote) are in the same
+     * scrub class as the bytes that will hold secret digits
+     * (INVARIANT-6). */
+    ama_secure_memzero(wnaf, 256);
     const uint32_t mask = ((uint32_t)1 << w) - 1u;
     const int32_t  half = (int32_t)1 << (w - 1);
     const int32_t  full = (int32_t)1 << w;
@@ -773,7 +779,11 @@ static void ge25519_scalarmult_base_comb_signed(ge25519_p3 *r,
      * in a local buffer — the input is not mutated. */
     uint8_t scalar_reduced[64];
     memcpy(scalar_reduced, scalar, 32);
-    memset(scalar_reduced + 32, 0, 32);
+    /* The low 32 bytes are the secret scalar; the high 32 bytes are
+     * about to be the high half of the 64-byte input to the modular
+     * reduction.  Zero on the secure scrub path so the whole buffer
+     * is uniformly in the same scrub class (INVARIANT-6). */
+    ama_secure_memzero(scalar_reduced + 32, 32);
     sc25519_reduce(scalar_reduced);
 
     /* Split scalar into 64 unsigned 4-bit nibbles, then carry-propagate to
@@ -823,6 +833,15 @@ static void ge25519_scalarmult_base_comb_signed(ge25519_p3 *r,
     }
 
     memcpy(r, &h, sizeof(ge25519_p3));
+
+    /* Scrub the secret-derived signed-digit expansion and the reduced
+     * scalar.  Caller-level scrubs (ama_ed25519_sign / keypair_seed)
+     * already wipe the secret key bytes; this scrubs the per-call
+     * stack-resident derivatives so the same discipline holds along
+     * the comb-signed scalar-mult path even if the comb is reached
+     * from a future caller that forgets the outer scrub. */
+    ama_secure_memzero(scalar_reduced, sizeof(scalar_reduced));
+    ama_secure_memzero(e, sizeof(e));
 }
 
 /* Base point multiplication — signed 4-bit window comb entry point. */

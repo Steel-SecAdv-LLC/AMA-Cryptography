@@ -13,6 +13,9 @@ endmacro()
 add_ama_test(test_consttime test_consttime.c)
 add_ama_test(test_core test_core.c)
 add_ama_test(test_aes_gcm_scalar_kat test_aes_gcm_scalar_kat.c)
+# Audit Issues 5+6 (2026-05): runtime backend introspection + NIST
+# SP 800-38D length-limit regression.
+add_ama_test(test_aes_gcm_backend_introspect test_aes_gcm_backend_introspect.c)
 
 # Cryptographic primitive tests
 add_ama_test(test_sha3 test_sha3.c)

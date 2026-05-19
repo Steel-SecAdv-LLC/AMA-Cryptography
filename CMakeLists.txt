@@ -20,6 +20,29 @@ option(AMA_ENABLE_SANITIZERS "Enable address/undefined sanitizers" OFF)
 option(AMA_ENABLE_LTO "Enable link-time optimization" ON)
 option(AMA_USE_NATIVE_PQC "Enable native PQC implementations (ML-DSA-65, Kyber-1024, SPHINCS+)" ON)
 option(AMA_AES_CONSTTIME "Use constant-time bitsliced AES S-box (eliminates cache-timing)" ON)
+# INVARIANT-20 hardening (audit Issue 5):
+# Disabling the constant-time AES S-box is only permitted when the build
+# operator has acknowledged the cache-timing exposure by ALSO setting
+# AMA_AES_TABLE_INSECURE=ON.  This makes the previously implicit
+# "-DAMA_AES_CONSTTIME=OFF" footgun explicit so a downstream packager
+# cannot silently ship the table-based path.  The runtime API
+# `ama_aes_gcm_active_backend()` reports which backend (bitsliced,
+# AES-NI, ARMv8 crypto, VAES-AVX2, or table) is actually selected at
+# load time, so consumers can assert.
+option(AMA_AES_TABLE_INSECURE
+       "I acknowledge that -DAMA_AES_CONSTTIME=OFF builds the cache-timing-unsafe table S-box and accept the risk for this build (INVARIANT-20)"
+       OFF)
+
+# Kyber NTT/CPA diagnostic harness (printf-heavy, opt-in).  Default OFF —
+# the production .so / .a never contains the ~600-line printf-emitting
+# diagnostic block in ama_kyber.c.  Auto-enabled below when
+# AMA_BUILD_TESTS=ON so test_kyber_cpa / test_kyber_debug continue to
+# link against the symbols they extern-declare.  See ama_kyber.c
+# "DEBUG / TEST FUNCTIONS" header comment for the threat-model
+# rationale (Issue 7).
+option(AMA_KYBER_BUILD_DIAGNOSTICS
+       "Compile the printf-heavy Kyber NTT/CPA debug roundtrip block (default OFF; test-only)"
+       OFF)
 
 # Ed25519 backend default:
 #  - x86-64  → ON  (donna's hand-tuned AVX2 field arithmetic + precomputed
@@ -464,12 +487,45 @@ if(AMA_ED25519_ASSEMBLY)
     endif()
 endif()
 
-# Constant-time AES S-box (bitsliced algebraic decomposition)
+# Constant-time AES S-box (bitsliced algebraic decomposition).
+#
+# INVARIANT-20 hardening (audit Issue 5): if the operator opts out of
+# the constant-time path via -DAMA_AES_CONSTTIME=OFF, require an
+# explicit acknowledgement via -DAMA_AES_TABLE_INSECURE=ON.  This
+# closes the silent-footgun problem where a downstream packager could
+# disable the bitsliced default by mistake (CMakeCache.txt edit,
+# stale -D from a copy-pasted command) and ship a table-based path
+# vulnerable to Bernstein 2005 / Osvik-Shamir-Tromer 2006 cache-timing.
+#
+# The bitsliced default is preserved.  On hardware with AES-NI / ARMv8
+# crypto extensions, the runtime dispatcher promotes to a hardware
+# kernel regardless of which compile-time S-box was selected — but
+# the compile-time fallback for hosts without AES-NI must remain the
+# constant-time bitsliced path unless the operator has explicitly
+# acknowledged the risk.  Inspect the active runtime backend with
+# `ama_aes_gcm_active_backend()`.
+if(NOT AMA_AES_CONSTTIME AND NOT AMA_AES_TABLE_INSECURE)
+    message(FATAL_ERROR
+        "AMA_AES_CONSTTIME=OFF requires AMA_AES_TABLE_INSECURE=ON to acknowledge\n"
+        "  the cache-timing exposure (INVARIANT-20).  The table-based AES S-box\n"
+        "  is NOT safe in shared-tenant or side-channel-sensitive deployments\n"
+        "  (Bernstein 2005, Osvik-Shamir-Tromer 2006).\n"
+        "\n"
+        "  To build the constant-time path (recommended):  drop -DAMA_AES_CONSTTIME=OFF.\n"
+        "  To build the table path anyway (NOT recommended): also pass\n"
+        "      -DAMA_AES_TABLE_INSECURE=ON\n"
+        "  with a justification recorded in the build script comment / CHANGELOG.\n"
+        "  Inspect the runtime backend at startup with ama_aes_gcm_active_backend().")
+endif()
 if(AMA_AES_CONSTTIME)
     list(APPEND AMA_SOURCES src/c/ama_aes_bitsliced.c)
     message(STATUS "AES backend: constant-time bitsliced S-box (cache-timing safe)")
 else()
-    message(STATUS "AES backend: table-based S-box (fast, NOT cache-timing safe)")
+    message(WARNING
+        "AES backend: table-based S-box (AMA_AES_TABLE_INSECURE=ON acknowledged).\n"
+        "             NOT safe on shared-tenant CPUs without AES-NI.  Verify\n"
+        "             the dispatcher promotes to a hardware backend on every\n"
+        "             target host (`ama_aes_gcm_active_backend()`).")
 endif()
 
 # Threading: ama_cpuid.c uses pthread_once (POSIX) or InitOnceExecuteOnce
@@ -547,6 +603,9 @@ if(AMA_BUILD_SHARED)
     if(AMA_AES_CONSTTIME)
         target_compile_definitions(ama_cryptography_shared PRIVATE AMA_AES_CONSTTIME)
     endif()
+    if(AMA_KYBER_BUILD_DIAGNOSTICS)
+        target_compile_definitions(ama_cryptography_shared PRIVATE AMA_KYBER_BUILD_DIAGNOSTICS)
+    endif()
     ama_apply_donna_settings(ama_cryptography_shared)
     ama_apply_integrity_anchor(ama_cryptography_shared)
 
@@ -575,6 +634,9 @@ if(AMA_BUILD_STATIC)
     endif()
     if(AMA_AES_CONSTTIME)
         target_compile_definitions(ama_cryptography_static PRIVATE AMA_AES_CONSTTIME)
+    endif()
+    if(AMA_KYBER_BUILD_DIAGNOSTICS)
+        target_compile_definitions(ama_cryptography_static PRIVATE AMA_KYBER_BUILD_DIAGNOSTICS)
     endif()
     ama_apply_donna_settings(ama_cryptography_static)
     ama_apply_integrity_anchor(ama_cryptography_static)
@@ -618,6 +680,16 @@ if(AMA_BUILD_TESTS)
     if(AMA_AES_CONSTTIME)
         target_compile_definitions(ama_cryptography_test PRIVATE AMA_AES_CONSTTIME)
     endif()
+    # The test library is the only target that legitimately needs the
+    # printf-heavy Kyber NTT/CPA diagnostic block (test_kyber_cpa,
+    # test_kyber_debug).  Force-enable here so the test executables
+    # find the extern symbols they declare; the production shared /
+    # static libraries above continue to build without the diagnostic
+    # block (smaller .so / .a, no stdio coupling, no intermediate poly
+    # state surfaced over stdout).  Operators can also enable this
+    # globally with -DAMA_KYBER_BUILD_DIAGNOSTICS=ON when running a
+    # tools-only build outside the CMake test target.
+    target_compile_definitions(ama_cryptography_test PRIVATE AMA_KYBER_BUILD_DIAGNOSTICS)
     ama_apply_donna_settings(ama_cryptography_test)
     ama_apply_integrity_anchor(ama_cryptography_test)
 
@@ -692,6 +764,8 @@ message(STATUS "  Sanitizers:     ${AMA_ENABLE_SANITIZERS}")
 message(STATUS "  Fuzzing:        ${AMA_BUILD_FUZZ}")
 message(STATUS "  dudect:         ${AMA_ENABLE_DUDECT}")
 message(STATUS "  AES consttime:  ${AMA_AES_CONSTTIME}")
+message(STATUS "  AES table-insecure opt-in: ${AMA_AES_TABLE_INSECURE}")
+message(STATUS "  Kyber diagnostics: ${AMA_KYBER_BUILD_DIAGNOSTICS} (forced ON for tests target only)")
 message(STATUS "  LTO:            ${AMA_ENABLE_LTO}")
 if(MSVC AND AMA_ED25519_ASSEMBLY)
     message(STATUS "  Ed25519 donna:  Auto (MSVC — fe51 requires __uint128_t)")

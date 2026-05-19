@@ -54,6 +54,47 @@
 #include <stdint.h>
 
 /* ============================================================================
+ * NIST SP 800-38D length limits (audit Issue 6)
+ * ----------------------------------------------------------------------------
+ *
+ * §5.2.1.1 fixes the AEAD parameter space:
+ *
+ *   IV (nonce): 1 ≤ len(IV) ≤ 2^64 − 1 bits  (we mandate 96-bit IVs).
+ *   AAD:        0 ≤ len(A)  ≤ 2^64 − 1 bits  (~ 2^61 − 1 bytes).
+ *   Plaintext:  0 ≤ len(P)  ≤ 2^39 − 256 bits = 2^36 − 32 bytes.
+ *
+ * The 2^36 − 32 byte limit is derived twice on purpose:
+ *
+ *   AMA_AES_GCM_MAX_PLAINTEXT_BYTES_DERIVED  — algebraic form
+ *       ((2^32 − 2) * 16) matches the original GCM block-count limit
+ *       (every 128-bit AES block ≤ 16 bytes, counter wraparound at
+ *       2^32 − 2 distinct counter values, so the safe payload is
+ *       (2^32 − 2) blocks).
+ *
+ *   AMA_AES_GCM_MAX_PLAINTEXT_BYTES         — direct NIST form
+ *       (1ULL << 36) − 32 bytes  — literally the spec sentence.
+ *
+ * The static_assert below guarantees the two forms agree to the byte
+ * at compile time, so a future refactor cannot silently drift one
+ * without the other.  These constants live at TU scope (not inside
+ * the encrypt/decrypt entry points) so consumers can include the
+ * value from a single source of truth.
+ * ============================================================================ */
+#define AMA_AES_GCM_MAX_PLAINTEXT_BYTES_DERIVED  (((uint64_t)UINT32_MAX - 1ULL) * 16ULL)
+#define AMA_AES_GCM_MAX_PLAINTEXT_BYTES          ((((uint64_t)1) << 36) - 32ULL)
+#define AMA_AES_GCM_MAX_AAD_BYTES                (((uint64_t)1 << 61) - 1ULL)
+
+/* Compile-time cross-check: the two forms above must be the same
+ * value.  C11 _Static_assert is available on every supported toolchain
+ * (GCC ≥ 4.6, Clang ≥ 3.0, MSVC ≥ VS2019 16.10).  If this trips, a
+ * future edit changed one constant without the other — audit the
+ * macro definitions above against NIST SP 800-38D §5.2.1.1 before
+ * silencing. */
+_Static_assert(
+    AMA_AES_GCM_MAX_PLAINTEXT_BYTES == AMA_AES_GCM_MAX_PLAINTEXT_BYTES_DERIVED,
+    "NIST SP 800-38D plaintext byte limits diverged");
+
+/* ============================================================================
  * AES-256 CORE (T-table free, standard S-box lookup)
  * ============================================================================ */
 
@@ -274,7 +315,12 @@ static inline void ghash_mul_x4(uint8_t Z[16]) {
  * Constant-time in H: the doubling cascade uses ghash_mul_x (no
  * H-dependent branch) and the 11 composite entries are XOR-only. */
 static void ghash_table_init(ghash_table_t *t, const uint8_t H[16]) {
-    memset(t->T[0], 0, 16);
+    /* T[0] is GF(2^128) zero (identity for XOR-accumulation).  The
+     * entry is fixed by the GHASH spec, but `t->T` overall holds H-
+     * derived secret state — use the secure scrub primitive so the
+     * one-zero entry stays in the same scrub class as the rest of
+     * the table (INVARIANT-6 / Copilot review #3251987718). */
+    ama_secure_memzero(t->T[0], 16);
     memcpy(t->T[8], H, 16);                /* T[8]  = H        (q(8)=1)   */
     memcpy(t->T[4], t->T[8], 16); ghash_mul_x(t->T[4]);  /* T[4] = x·H    */
     memcpy(t->T[2], t->T[4], 16); ghash_mul_x(t->T[2]);  /* T[2] = x^2·H  */
@@ -357,7 +403,11 @@ static void ghash(const uint8_t H[16],
     size_t i, full_blocks, remaining;
 
     ghash_table_init(&H_table, H);
-    memset(S, 0, 16);
+    /* `S` is the GHASH running accumulator, built from XORs against the
+     * secret subkey-derived `H_table`.  Use the secure scrub primitive
+     * to initialize so the zero-write is in the same scrub class as
+     * the final scrub at function exit (INVARIANT-6). */
+    ama_secure_memzero(S, 16);
 
     /* Process AAD */
     full_blocks = aad_len / 16;
@@ -368,7 +418,10 @@ static void ghash(const uint8_t H[16],
     }
     remaining = aad_len % 16;
     if (remaining > 0) {
-        memset(block, 0, 16);
+        /* `block` will absorb the tail of the AAD/CT stream; same scrub
+         * class as the function-exit scrub below — keep all of its zero
+         * writes on the secure path. */
+        ama_secure_memzero(block, 16);
         memcpy(block, aad + full_blocks * 16, remaining);
         for (int j = 0; j < 16; j++)
             S[j] ^= block[j];
@@ -384,15 +437,17 @@ static void ghash(const uint8_t H[16],
     }
     remaining = ct_len % 16;
     if (remaining > 0) {
-        memset(block, 0, 16);
+        ama_secure_memzero(block, 16);
         memcpy(block, ciphertext + full_blocks * 16, remaining);
         for (int j = 0; j < 16; j++)
             S[j] ^= block[j];
         ghash_mul_table(&H_table, S);
     }
 
-    /* Length block: [len(A) in bits || len(C) in bits] as big-endian uint64 */
-    memset(block, 0, 16);
+    /* Length block: [len(A) in bits || len(C) in bits] as big-endian uint64.
+     * Lengths are public, but `block` is in the same scrub class — see
+     * the partial-block initializations above. */
+    ama_secure_memzero(block, 16);
     {
         uint64_t aad_bits = (uint64_t)aad_len * 8;
         uint64_t ct_bits  = (uint64_t)ct_len * 8;
@@ -486,11 +541,14 @@ ama_error_t ama_aes256_gcm_encrypt(
     if (pt_len > 0 && (!plaintext || !ciphertext)) return AMA_ERROR_INVALID_PARAM;
     if (aad_len > 0 && !aad) return AMA_ERROR_INVALID_PARAM;
 
-    /* NIST SP 800-38D length limits (uint64_t to avoid 32-bit UB):
-     *   Plaintext: at most (2^32 - 2) * 128 bits = (2^32 - 2) * 16 bytes
-     *   AAD:       at most 2^61 - 1 bytes                                */
-#define AMA_AES_GCM_MAX_PLAINTEXT_BYTES (((uint64_t)UINT32_MAX - 1) * 16ULL)
-#define AMA_AES_GCM_MAX_AAD_BYTES       ((uint64_t)(((uint64_t)1 << 61) - 1))
+    /* NIST SP 800-38D §5.2.1.1 explicit length-limit guard (audit Issue 6).
+     * The constants are defined at TU scope above as both the algebraic
+     * form ((2^32 - 2)*16) and the direct NIST form ((1<<36) - 32);
+     * the _Static_assert ties them together so a future refactor cannot
+     * drift one without the other.  Casts to uint64_t prevent 32-bit
+     * size_t overflow on hosts where size_t is 32 bits — the check
+     * still fires even though pt_len cannot represent the limit at all
+     * on such hosts. */
     if ((uint64_t)pt_len > AMA_AES_GCM_MAX_PLAINTEXT_BYTES)
         return AMA_ERROR_INVALID_PARAM;
     if ((uint64_t)aad_len > AMA_AES_GCM_MAX_AAD_BYTES)
@@ -503,7 +561,12 @@ ama_error_t ama_aes256_gcm_encrypt(
      * MUST add a corresponding ama_secure_memzero call before the early
      * return. */
 
-    /* Dispatch to AVX2/AES-NI implementation when available */
+    /* Dispatch to AVX2/AES-NI implementation when available.  The
+     * length-limit guard above runs FIRST so a SIMD kernel cannot
+     * receive an oversized buffer — the SIMD kernels do not re-check
+     * the limit (intentionally; one check on the entry path is the
+     * single source of truth).  See dispatch wiring in
+     * src/c/dispatch/ama_dispatch.c. */
     const ama_dispatch_table_t *dt = ama_get_dispatch_table();
     if (dt->aes_gcm_encrypt) {
         dt->aes_gcm_encrypt(plaintext, pt_len, aad, aad_len, key, nonce,
@@ -514,8 +577,11 @@ ama_error_t ama_aes256_gcm_encrypt(
     /* Key expansion */
     aes256_key_expansion(key, round_keys);
 
-    /* H = AES_K(0^128) */
-    memset(H, 0, 16);
+    /* H = AES_K(0^128) — `H` becomes the secret GHASH subkey on the
+     * very next instruction.  Use the secure scrub primitive to write
+     * the zero block, matching the final scrub at function exit
+     * (INVARIANT-6). */
+    ama_secure_memzero(H, 16);
     aes256_encrypt_block(round_keys, H, H);
 
     /* J0 = nonce || 0x00000001 (for 96-bit nonce) */
@@ -602,13 +668,11 @@ ama_error_t ama_aes256_gcm_decrypt(
     if (ct_len > 0 && (!ciphertext || !plaintext)) return AMA_ERROR_INVALID_PARAM;
     if (aad_len > 0 && !aad) return AMA_ERROR_INVALID_PARAM;
 
-    /* NIST SP 800-38D length limits (same as encrypt path) */
-#ifndef AMA_AES_GCM_MAX_PLAINTEXT_BYTES
-#define AMA_AES_GCM_MAX_PLAINTEXT_BYTES (((uint64_t)UINT32_MAX - 1) * 16ULL)
-#endif
-#ifndef AMA_AES_GCM_MAX_AAD_BYTES
-#define AMA_AES_GCM_MAX_AAD_BYTES       ((uint64_t)(((uint64_t)1 << 61) - 1))
-#endif
+    /* NIST SP 800-38D length limits — single source of truth at TU scope.
+     * Symmetric to the encrypt path: the limit on ciphertext is the
+     * same as the limit on plaintext (cipher is length-preserving) and
+     * AAD is bounded independently.  Both checks fire BEFORE the
+     * dispatcher hands off to a SIMD kernel. */
     if ((uint64_t)ct_len > AMA_AES_GCM_MAX_PLAINTEXT_BYTES)
         return AMA_ERROR_INVALID_PARAM;
     if ((uint64_t)aad_len > AMA_AES_GCM_MAX_AAD_BYTES)
@@ -631,8 +695,8 @@ ama_error_t ama_aes256_gcm_decrypt(
     /* Key expansion */
     aes256_key_expansion(key, round_keys);
 
-    /* H = AES_K(0^128) */
-    memset(H, 0, 16);
+    /* H = AES_K(0^128) — see encrypt path for INVARIANT-6 rationale. */
+    ama_secure_memzero(H, 16);
     aes256_encrypt_block(round_keys, H, H);
 
     /* J0 */
