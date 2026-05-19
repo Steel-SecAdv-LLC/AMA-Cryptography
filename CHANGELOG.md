@@ -85,9 +85,23 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   catches the uninitialized-read class that ASan masks; TSan covers
   the once-primitive races in `ama_cpuid.c` / `ama_dispatch.c`; the
   Valgrind pass is a defense-in-depth second opinion; clang-tidy
-  drives off a checked-in `.clang-tidy` config and fails on
-  `bugprone-*` / `cert-*` / `clang-analyzer-*` findings.  Scheduled
-  weekly to keep PR latency low.
+  drives off a checked-in `.clang-tidy` config and surfaces the
+  `bugprone-*` / `cert-*` / `clang-analyzer-*` / `concurrency-*` /
+  `performance-*` / `portability-*` finding set.  MSan / TSan /
+  Valgrind run weekly to keep PR latency low; clang-tidy also runs
+  per-PR.
+
+  **clang-tidy posture is currently ADVISORY** (`continue-on-error:
+  true` on the job, `WarningsAsErrors: ''` in `.clang-tidy`).  The
+  pre-existing C codebase carries ~250 legitimate findings (mostly
+  `bugprone-implicit-widening-of-multiplication-result` and
+  `readability-redundant-declaration`) that are NOT regressions
+  introduced by this PR — flipping the gate fail-closed today would
+  block every subsequent PR.  `.clang-tidy` documents a phased
+  promotion roadmap (cleanup → category-by-category
+  `WarningsAsErrors` → flip the job to fail-closed).  Findings are
+  uploaded as a per-run artefact (`clang-tidy-findings`) so they
+  remain reviewable without a local replay.
 
 ### Changed
 - **Bandit + pip-audit fail-closed (audit Issue 8).**  Both

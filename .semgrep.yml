@@ -347,63 +347,20 @@ rules:
       subcategory: secret-handling
       cwe: "CWE-226: Sensitive Information in Resource Not Removed Before Reuse"
 
-  - id: bare-memset-zero-key-or-iv-sized-buffer
-    # Companion rule to bare-memset-zero-secret-named-buffer (above)
-    # that catches secret zero-writes by size when the destination
-    # name itself is generic.  Sizes match common cryptographic
-    # buffer geometries:
-    #   12  — AES-GCM nonce / ChaCha20-Poly1305 nonce (96-bit)
-    #   16  — AES block / GHASH state / AES tag / AES-128 key
-    #   24  — XSalsa20 / XChaCha20 nonce
-    #   32  — Curve25519 / Ed25519 secret / AES-256 key / SHA-256 digest
-    #   48  — SHA-384 digest
-    #   64  — SHA-512 digest / HMAC-SHA-256 block
-    #   240 — AES-256 expanded round keys (15 rounds × 16 bytes)
-    #
-    # NOTE: This rule is intentionally narrower than the name-based one
-    # above because it triggers on size alone — many non-secret buffers
-    # happen to have these sizes (hash output buffers, IV-shaped public
-    # nonces).  We only fire on the names we KNOW are problematic
-    # without a justification comment; the rule is `WARNING` (not
-    # `ERROR`) so it can be triaged at PR time without blocking merge
-    # until a justification reflows through nosec_disposition.md.
-    patterns:
-      - pattern-either:
-          - pattern: memset($DST, 0, 12)
-          - pattern: memset($DST, 0, 16)
-          - pattern: memset($DST, 0, 24)
-          - pattern: memset($DST, 0, 32)
-          - pattern: memset($DST, 0, 48)
-          - pattern: memset($DST, 0, 64)
-          - pattern: memset($DST, 0, 240)
-      - metavariable-regex:
-          metavariable: $DST
-          # Same secret-name set as the unsized rule (above), so the two
-          # don't double-fire on the same identifier.  This pass exists
-          # to catch the generic-name + cryptographic-size combination
-          # — e.g., `memset(my_buf, 0, 32)` where `my_buf` slips through
-          # the strict secret-naming pattern but the 32-byte size is
-          # screaming "this is a Curve25519 secret".
-          regex: '^(secret_[A-Za-z0-9_]+|private_[A-Za-z0-9_]+|master_[A-Za-z0-9_]+|seed_[A-Za-z0-9_]+|key_[A-Za-z0-9_]+|sk_[A-Za-z0-9_]+|priv_[A-Za-z0-9_]+|kp_[A-Za-z0-9_]+|round_keys?|tag_mask|k_prime|scalar_reduced|wnaf|hram|inner_hash|opad|ipad|h_table|ghash_key|poly_key|chaining_state|nu_state)$|^[A-Za-z0-9_]+_(key|secret|seed|state|priv|kp|sk|ks)$'
-    paths:
-      include:
-        - "src/c/"
-        - "src/c/**/*.c"
-        - "src/c/**/*.h"
-      exclude:
-        - "src/c/vendor/"
-        - "src/c/vendor/**"
-    message: |
-      Bare `memset(BUF, 0, KEY_OR_IV_SIZE)` on a buffer with a name in
-      the cryptographic identifier family.  Prefer `ama_secure_memzero`
-      so the compiler's as-if rule cannot elide the scrub.
-      (INVARIANT-6 / audit Issue 4.)
-    languages: [c]
-    severity: WARNING
-    metadata:
-      category: security
-      subcategory: secret-handling
-      cwe: "CWE-226"
+  # The earlier-drafted companion rule `bare-memset-zero-key-or-iv-sized-buffer`
+  # was removed (Copilot review #322 follow-up) because it shared the
+  # secret-name regex with the ERROR rule above — so it would either
+  # double-fire on the SAME identifier (every flagged site getting both
+  # an ERROR and a WARNING) or, if the regex were INVERTED to match
+  # generic names, produce a torrent of false positives on innocent
+  # `memset(digest, 0, 32)` / `memset(nonce, 0, 12)` / `memset(addr, 0, 32)`
+  # sites where the buffer holds public material (a SHA-256 output, a
+  # public IV, a SPHINCS+ address word).  The ERROR rule above is the
+  # SINGLE source of truth for this anti-pattern; if a future codebase
+  # change introduces generically-named buffers that hold secrets, the
+  # right fix is to RENAME them into the secret-name pattern (so the
+  # ERROR rule catches the issue) rather than to widen the rule's
+  # false-positive surface.
 
 # --------------------------------------------------------------------------
 # Rule design notes (2026-04-27 audit follow-up)

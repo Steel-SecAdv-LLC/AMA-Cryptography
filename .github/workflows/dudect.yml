@@ -73,6 +73,19 @@ concurrency:
 jobs:
   dudect-utility:
     name: dudect - Utility Functions
+    # The four legacy dudect lanes (utility / pqc / legacy-harnesses /
+    # x25519-avx2-batch) only fire on:
+    #   - push / pull_request (path-filtered above)
+    #   - workflow_dispatch (operator-triggered)
+    #   - the WEEKLY schedule '0 2 * * 0' (Sunday 02:00 UTC)
+    # The new NIGHTLY schedule '30 3 * * *' (audit Issue 3) is for the
+    # `dudect-simd-sweep` job only.  Without this guard, every nightly
+    # run would also re-execute the four legacy lanes — wasted compute
+    # the SIMD sweep doesn't need and explicit operational cost the
+    # weekly schedule already covers.  Copilot review #322 follow-up.
+    if: |
+      github.event_name != 'schedule' ||
+      github.event.schedule == '0 2 * * 0'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -105,6 +118,11 @@ jobs:
 
   dudect-pqc:
     name: dudect - PQC Primitives
+    # Same legacy-lane schedule guard as dudect-utility — see that
+    # job's header for rationale.
+    if: |
+      github.event_name != 'schedule' ||
+      github.event.schedule == '0 2 * * 0'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -137,6 +155,10 @@ jobs:
 
   dudect-legacy-harnesses:
     name: dudect - Legacy Harnesses (tools/constant_time)
+    # Same legacy-lane schedule guard as dudect-utility.
+    if: |
+      github.event_name != 'schedule' ||
+      github.event.schedule == '0 2 * * 0'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -172,6 +194,10 @@ jobs:
     # CHANGELOG [3.0.0] §Performance for the rationale) and the SIMD
     # kernel's constant-time signal is never sampled in CI.
     name: dudect - X25519 AVX2 4-way (opt-in)
+    # Same legacy-lane schedule guard as dudect-utility.
+    if: |
+      github.event_name != 'schedule' ||
+      github.event.schedule == '0 2 * * 0'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -238,7 +264,15 @@ jobs:
   # any new SIMD work.
   dudect-simd-sweep:
     name: dudect - SIMD sweep (${{ matrix.os }} / ${{ matrix.slot }})
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Fires on:
+    #   - the NIGHTLY schedule '30 3 * * *' (audit Issue 3)
+    #   - workflow_dispatch (operator-triggered)
+    # The WEEKLY '0 2 * * 0' schedule is reserved for the four legacy
+    # lanes above; running the sweep on both weekly and nightly would
+    # double-bill compute without adding coverage.
+    if: |
+      (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
