@@ -49,12 +49,20 @@ The system combines NIST-standardized post-quantum algorithms with a 3R runtime 
 
 **Protecting people, data, and networks with quantum-resistant cryptography**
 
-> **Design Philosophy:** Built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the multi-layer defense architecture, double-helix key evolution, and adaptive posture system) is an original design by Steel Security Advisors LLC.
+> **Design Philosophy:** Built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol — how primitives are combined into the multi-layer defense architecture, double-helix key evolution, and adaptive posture system — is an original design by Steel Security Advisors LLC. AMA Cryptography provides post-quantum cryptography for <a href="https://github.com/Steel-SecAdv-LLC/Mercury-Agent">Mercury Agent</a> and FINDΩYOU™, both of which derive their cryptographic foundation from this library.
+>
+> **The Trio — Kin Systems:** AMA Cryptography, Mercury Agent, and FINDΩYOU™ form a single civilization-first lineage. Each is independently deployable, but they are designed as kin — sharing the same cryptographic backbone, the same ethical alignment posture, and the same survivor-first mission.
+>
+> - **AMA Cryptography ♱** — the cryptographic foundation. Hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Standalone library; any Python project can install and use it independently.
+>
+> - **Mercury Agent ♱** — a neuro-symbolic autonomous AI prototype built on a 7-phase cognitive architecture (Neural Memory → Symbolic Logic → Hybrid Fusion → Enhanced Detection → Autonomous OODA Agent → Ethical Bounding → Cognitive Evolution). Pairs a cognitive subsystem (`NeuralPredicateEncoder`, `DifferentiableRuleModule`, `NeuralTheoremProver`, `CounterfactualReasoner`) with a 22+ detector ensemble measured across 65 real-world datasets (mean ROC-AUC 0.8464). Every decision is gated by a dual hard-enforcement layer: Benevolence ≥ 0.99 (Gini-equity + empathy + value-preservation) and σ_Immutable (a trained 99.6% val-acc gate over a signed corpus). Designed for STEM exploration, humanitarian crisis response, and civilization-first/AI evolution.
+>
+> - **FINDΩYOU™** — a near-future addition with a people-first mission: locating the lost, missing, and abducted to reunite families, and accounting for the predators responsible so they answer to justice. A comprehensive, ethical biometric platform — facial, iris, fingerprint, and voice recognition with AgeTransGAN-driven age progression — bound by neuro-symbolic ethical constraints (Logic Tensor Networks) and audited for bias. Integrates real-time emergency channels (FEMA IPAWS Amber Alerts, NOAA, USGS) and operates under geo-consent with strict privacy compliance (BIPA, CCPA/CPRA, GDPR, COPPA). US-focused, survivor-first.
 >
 > **Integration:** AMA Cryptography is a standalone cryptographic library — any Python project can install and use it independently for quantum-resistant security. The library is designed for general-purpose use across AI agents, AI systems, and any application requiring post-quantum protection.
+>
+> **Project Philosophy:** Promoting action over inaction in the hope of helping secure critical systems against emerging quantum threats. This project is under active development. While we strive for cryptographic rigor, users should remain cautious and conduct independent security reviews before production deployment. The perceived absence of a threat does not constitute the lack of a threat. Our goal is to deter, mitigate, and elevate security posture — not create new vulnerabilities.
 
-> **Project Philosophy:** Promoting action over inaction in the hope of helping secure critical systems against emerging quantum threats. This project is under active development. While we strive for cryptographic rigor, users should remain cautious and conduct independent security reviews before production deployment. The perceived absence of a threat does not constitute the lack of a threat. Our goal is to deter, mitigate, and elevate security posture—not create new vulnerabilities.
-> 
 > **Security Disclosure:** This is a self-assessed cryptographic implementation without third-party audit. Production use REQUIRES:
 > - FIPS 140-2 Level 3+ HSM for master secrets (no software-only keys in high-security environments)
 > - Independent security review by qualified cryptographers
@@ -443,13 +451,14 @@ Complete security package with all defense layers (Python API via ctypes):
 
 | Chart | Description |
 |-------|-------------|
-| ![Signature Performance](benchmarks/charts/signature_performance.svg) | Signature algorithm throughput and latency |
+| ![Signature Performance](benchmarks/charts/signature_performance.svg) | Signature algorithm throughput and latency (includes SLH-DSA Verify + secp256k1) |
 | ![C vs Python](benchmarks/charts/c_vs_python.svg) | Native C vs Python performance comparison |
 | ![Layer Breakdown](benchmarks/charts/layer_breakdown.svg) | Per-layer timing breakdown of the 4-layer defense |
 | ![KEM Performance](benchmarks/charts/kem_performance.svg) | ML-KEM-1024 key encapsulation benchmarks |
 | ![Scalability](benchmarks/charts/scalability.svg) | Package creation scalability across data sizes |
+| ![PQC Benchmark Overview](benchmarks/charts/pqc_benchmark_overview.svg) | 2×2 collage of the 2026-05 coverage expansion: X25519 MULX/ADX kernel on-vs-off, ML-DSA-65 NTT/invNTT scalar-vs-dispatched, signature-family sign latency (log), and FROST 2-of-3 per-role cost |
 
-*All charts generated from live benchmark data with professional dark theme. Regenerate with `python benchmarks/generate_charts.py`.*
+*Charts generated by `python benchmarks/generate_charts.py` with a professional dark theme. The X25519 MULX on/off panel of the PQC Benchmark Overview collage is regenerated from the raw-C harness output (`benchmarks/benchmark_c_raw_results.json`) when present; the other three panels of that collage (ML-DSA-65 NTT/invNTT, signature-family sign latency, FROST 2-of-3) and the remaining standalone charts render from anchored measurement constants checked in alongside the generator. The anchors are refreshed whenever the published numbers change so the charts track the documented measurements without requiring a local benchmark run.*
 
 </details>
 

@@ -1053,6 +1053,146 @@ AMA_API ama_error_t ama_x25519_scalarmult_batch(
  */
 AMA_API const char *ama_x25519_field_path(void);
 
+/**
+ * @brief Benchmark/test-only override for the X25519 fe64 MULX+ADX runtime gate.
+ *
+ * Sets a process-wide override for the BMI2 (MULX) + ADX (ADCX/ADOX) bundle
+ * gate consulted by `x25519_scalarmult()` (see `ama_cpuid_has_x25519_mulx()`).
+ * Used by `benchmarks/benchmark_c_raw.c` to measure the MULX+ADX kernel on-vs-
+ * off without rebuilding, and by equivalence tests that pin the pure-C fe64
+ * path on hosts where the kernel would otherwise be selected.
+ *
+ * **NOT a production policy knob.** The default policy (CPUID-driven auto-
+ * selection) is byte-identical across both paths; this override exists only
+ * for measurement and equivalence-test harnesses.
+ *
+ * @param mode  -1 = auto (default; honour CPUID),
+ *               0 = force kernel off (pure-C fe64 even when CPUID + build
+ *                   would otherwise select the MULX+ADX kernel),
+ *               1 = force kernel on  (only takes effect when the kernel TU
+ *                   was actually compiled in via `AMA_HAVE_X25519_FE64_MULX_IMPL`
+ *                   AND the host CPUID exposes BMI2+ADX; otherwise pure-C
+ *                   fe64 still runs and the call is a no-op).
+ *
+ * On non-x86-64 toolchains, on builds without `AMA_HAVE_X25519_FE64_MULX_IMPL`,
+ * and on field paths other than fe64 (fe51 / gf16), this call is a documented
+ * no-op so benchmark/test code can call it unconditionally.
+ *
+ * **Scope.** The override is consulted by the single-shot scalarmult driver
+ * `x25519_scalarmult()` — the path that backs every `ama_x25519_key_exchange()`
+ * call and the per-lane scalar tail of `ama_x25519_scalarmult_batch()` (lanes
+ * outside the full 4-lane chunks the opt-in `tbl->x25519_x4` kernel processes,
+ * including any short batch of 1/2/3 lanes that bypasses that kernel
+ * entirely). It is NOT consulted inside the 4-lane AVX2/IFMA `x25519_x4`
+ * dispatch kernel itself, which has its own field-arithmetic body and is
+ * gated by `AMA_DISPATCH_USE_X25519_AVX2` rather than by this override.
+ * Benchmark callers wanting MULX-on-vs-off coverage of batch lanes should
+ * stay on the single-shot path (or rebuild without the 4-way kernel).
+ *
+ * **Threading contract.** The override backing store is consulted on the hot
+ * path of every single-shot scalarmult call (above) without internal
+ * synchronisation. Callers MUST invoke `ama_x25519_set_mulx_override()`
+ * only from a single thread during harness / test setup, with **no**
+ * concurrent scalarmult work in flight on any thread. Calling the setter
+ * while X25519 operations execute on other threads is **undefined behaviour
+ * at the C language level** (an unsynchronised read racing with the
+ * setter's write is a data race under the C11 memory model —
+ * `<stdatomic.h>` is not used here intentionally, because adding atomicity
+ * would imply this is a runtime-safe knob, which it is not). The
+ * single-threaded-setup contract is the safety guarantee; no
+ * architecture-level claim about word-write tearing is made.
+ */
+AMA_API void ama_x25519_set_mulx_override(int mode);
+
+/**
+ * @brief Read the currently-effective MULX override value (after clamp).
+ *
+ * Returns -1 (auto), 0 (force off), or 1 (force on). Any setter call with a
+ * mode outside {-1, 0, 1} is coerced to -1 before it lands here, so this
+ * getter is the authoritative observation of what
+ * `ama_x25519_set_mulx_override()` actually stored. Bench/test harnesses
+ * use this to verify the clamp behaviour directly rather than inferring it
+ * from byte-identical shared secrets (which is necessary but not sufficient).
+ *
+ * Same single-threaded contract as the setter — see
+ * `ama_x25519_set_mulx_override()` above.
+ */
+AMA_API int ama_x25519_get_mulx_override(void);
+
+/* Test-only symbol `ama_x25519_mulx_last_used_get(void)` — reports which fe64
+ * kernel the most recent `x25519_scalarmult()` actually selected (-1 = no fe64
+ * scalarmult has run yet, or this build has no fe64/MULX path; 0 = pure-C
+ * fe64 schoolbook; 1 = BMI2+ADX MULX kernel). Compiled only into the test
+ * library (AMA_TESTING_MODE), declared as `extern` directly in tests that
+ * need it (see `tests/c/test_x25519_mulx_override.c`) — same pattern as
+ * `ama_dilithium_randombytes_hook`. Intentionally NOT declared here so it
+ * cannot be referenced from production code. */
+
+/**
+ * @brief Benchmark-only forward NTT over the static Dilithium zetas table.
+ *
+ * Runs one forward Number-Theoretic Transform (NTT) over `poly[256]` using the
+ * compiled-in zetas constants. `use_dispatch != 0` selects the dispatched SIMD
+ * kernel (AVX2 / NEON / SVE2 / AVX-512 when wired and runtime-gated on); `0`
+ * selects the scalar reference loop. Exposed so `benchmark_c_raw.c` can isolate
+ * the NTT kernel cost from the surrounding ML-DSA-65 sign/verify code that
+ * `bench_dilithium_sign()` measures end-to-end.
+ *
+ * Not part of the production ML-DSA API; production callers go through
+ * `ama_dilithium_sign()` / `ama_dilithium_verify()` (FIPS 204 §6.1 / §6.2).
+ */
+AMA_API void ama_dilithium_ntt_bench(int32_t poly[256], int use_dispatch);
+
+/**
+ * @brief Benchmark-only inverse NTT over the static Dilithium zetas table.
+ *
+ * Inverse counterpart of `ama_dilithium_ntt_bench()`. Includes the final
+ * Montgomery-domain scaling by `f = 41978 = R^2 / N mod q` (where `R = 2^32
+ * mod q`, `N = 256`), so the output is in the same Montgomery domain ML-DSA
+ * uses internally — i.e. `invntt_bench(ntt_bench(a))[j] = a[j] * R mod q`,
+ * not `a[j]` byte-for-byte. To recover the original standard-domain
+ * polynomial from the round-trip output, apply a single Montgomery
+ * reduction per coefficient. Same `use_dispatch` semantics.
+ */
+AMA_API void ama_dilithium_invntt_bench(int32_t poly[256], int use_dispatch);
+
+/**
+ * @brief Read which path the most recent `ama_dilithium_ntt_bench()` call took.
+ *
+ * Returns -1 if the wrapper has not been called yet in this process, 0 if
+ * the scalar reference loop ran, or 1 if the dispatched SIMD kernel ran.
+ * Lets a regression test verify the selector wiring directly instead of
+ * inferring it from output byte-equality (which is necessary but not
+ * sufficient — both paths are designed to produce identical bytes).
+ *
+ * Pair with `ama_dilithium_ntt_dispatch_slot_wired()` to predict the
+ * expected value on hosts without the SIMD slot installed (where
+ * `use_dispatch=1` falls through to scalar).
+ */
+AMA_API int ama_dilithium_ntt_bench_last_dispatch_get(void);
+
+/**
+ * @brief Inverse-NTT counterpart of `ama_dilithium_ntt_bench_last_dispatch_get()`.
+ */
+AMA_API int ama_dilithium_invntt_bench_last_dispatch_get(void);
+
+/**
+ * @brief Report whether the dispatched Dilithium forward-NTT SIMD slot
+ *        is non-NULL on this host (CPUID + build-time slot population).
+ *
+ * Returns 1 if the dispatch table has a non-NULL `dilithium_ntt` pointer
+ * (AVX2 / NEON / SVE2 / AVX-512 wired), 0 otherwise. Bench/test code
+ * uses this to predict what `ama_dilithium_ntt_bench(poly, 1)` will
+ * actually do: when the slot is NULL, even `use_dispatch=1` falls through
+ * to the scalar reference and the last-dispatch tracker will read 0.
+ */
+AMA_API int ama_dilithium_ntt_dispatch_slot_wired(void);
+
+/**
+ * @brief Inverse-NTT counterpart of `ama_dilithium_ntt_dispatch_slot_wired()`.
+ */
+AMA_API int ama_dilithium_invntt_dispatch_slot_wired(void);
+
 /* ============================================================================
  * ARGON2ID KEY DERIVATION (RFC 9106)
  * ============================================================================ */

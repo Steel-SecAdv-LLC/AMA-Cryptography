@@ -59,10 +59,37 @@ make -C benchmarks benchmark_c_raw
 | Hash | SHA3-256 (32B, 1KB), SHA3-512 (32B, 1KB) |
 | MAC | HMAC-SHA3-256 (32B, 1KB) |
 | KDF | HKDF-SHA3-256 (96B output) |
-| Signatures | Ed25519 (keygen/sign/verify), ML-DSA-65 (keygen/sign/verify) |
-| KEM | ML-KEM-1024 (keygen/encaps/decaps) |
-| AEAD | AES-256-GCM (1KB/4KB/64KB enc+dec) |
-| Key Exchange | X25519 (keygen, DH exchange) |
+| Signatures (classical) | Ed25519 (keygen/sign/verify, plus Shamir wNAF double-scalar-mult) |
+| Signatures (PQC) | ML-DSA-65 (keygen/sign/verify); ML-DSA-65 NTT / invNTT kernel isolation (scalar vs dispatched); SLH-DSA-SHAKE-128s (FIPS 205 L1 keygen/sign/verify) |
+| KEM | ML-KEM-1024 (keygen/encaps/decaps); ML-KEM-1024 poly add/sub/reduce kernels (scalar vs dispatched) |
+| AEAD | AES-256-GCM (1KB/4KB/16KB/64KB enc+dec), ChaCha20-Poly1305 (256B/1KB/4KB/64KB) |
+| Password hashing | Argon2id (m=64 KiB, m=1 MiB) |
+| Key Exchange | X25519 (keygen, DH exchange, batch×{1,4,8,16}); X25519 DH with MULX/ADX kernel **off** vs **on** (BMI2+ADX gate quantification) |
+| Elliptic curves (Bitcoin) | secp256k1 pubkey-from-privkey (SEC1 compressed) |
+| Threshold signatures | FROST 2-of-3 round1 commit / round2 sign / aggregate (RFC 9591) |
+
+#### Kernel-isolation rows
+
+Three benchmark families produce paired `(scalar)` / `(dispatch)` rows so
+the per-kernel SIMD win is measurable directly, not folded into an
+end-to-end primitive cost:
+
+- **ML-DSA-65 NTT / invNTT** — uses the benchmark-only
+  `ama_dilithium_ntt_bench()` / `ama_dilithium_invntt_bench()` entry
+  points (in `include/ama_cryptography.h`) which route through the
+  exact same `dil_ntt_cached` / `dil_invntt_cached` code paths as
+  production sign/verify but bind the dispatch slot explicitly.
+- **ML-KEM-1024 poly\_{add,sub,reduce}** — runs the SVE2-targeted
+  helper-kernel pair against the inline scalar reference; on AVX2 / NEON
+  hosts the dispatch slot is NULL and both rows time the same
+  compiler auto-vectorised loop (which is itself useful: the
+  zero-delta is the documented contract on those hosts).
+- **X25519 DH (MULX off / MULX on)** — uses the benchmark/test-only
+  `ama_x25519_set_mulx_override()` API to pin the runtime BMI2+ADX
+  gate without rebuilding. On hosts without the kernel (CPUID gate
+  fails or `AMA_HAVE_X25519_FE64_MULX_IMPL` not defined at build),
+  both rows time the pure-C fe64 path and the equal numbers are
+  themselves informative ("no kernel on this host").
 
 ### Methodology
 
@@ -131,6 +158,33 @@ of a constant-time guarantee.  Making those trade-offs explicit is the
 point of this table: a 5× speedup that comes via pulling in 500 k
 additional audit LoC is a different engineering choice than a 5×
 speedup that comes from a better in-tree algorithm.
+
+## Benchmark coverage map (2026-05)
+
+The raw-C harness was extended in 2026-05 to close the explicit coverage gaps
+called out in the May 2026 brief. Each gap is now backed by at least one
+benchmark row in `benchmark_c_raw.c`, named so it can be grepped from JSON
+output:
+
+| Gap (May 2026 brief)                                | Status | Row(s) in `benchmark_c_raw` |
+|-----------------------------------------------------|--------|-----------------------------|
+| MULX/ADX on-vs-off X25519 ratio                     | ✅ closed | `X25519 DH (MULX off)`, `X25519 DH (MULX on)` |
+| SLH-DSA / SPHINCS+ (FIPS 205)                       | ✅ closed | `SLH-DSA-SHAKE-128s KeyGen` / `Sign` / `Verify` (NIST L1) |
+| secp256k1                                            | ✅ closed | `secp256k1 pubkey` (compressed SEC1) |
+| FROST                                                | ✅ closed | `FROST round1 commit` / `round2 sign` / `aggregate` (2-of-3, RFC 9591) |
+| Dilithium NTT kernel isolation                       | ✅ closed | `ML-DSA-65 NTT (scalar)` / `NTT (dispatch)` / `invNTT (scalar)` / `invNTT (dispatch)` |
+| ML-KEM-1024 decapsulate                              | ✅ already covered | `ML-KEM-1024 Decaps` (`benchmark_c_raw.c` decaps row) |
+| X25519 batch×4 (no env gating)                       | ✅ already covered | `X25519 DH Batch×4` (unconditional) |
+| Argon2id                                             | ✅ already covered | `Argon2id (m=64KiB,t=1)`, `Argon2id (m=1MiB,t=1)` |
+| Raw HKDF-SHA3-256                                    | ✅ already covered | `HKDF-SHA3-256 (96B)` |
+
+The benchmark/test-only entry points that enable the new rows
+(`ama_x25519_set_mulx_override`, `ama_dilithium_ntt_bench`,
+`ama_dilithium_invntt_bench`) are documented in
+`include/ama_cryptography.h` and explicitly marked as **not part of the
+production crypto surface**. They exist so a single shipped binary can
+measure paired scalar-vs-dispatched and kernel-on-vs-off rows without
+rebuilding the library with different `-D` flags.
 
 ## VAES AES-256-GCM dispatch (PR A, 2026-04)
 

@@ -147,7 +147,7 @@ dev = [
     # Black 26.3.1 contains the GHSA-fc3w-v5rg-v7q6 fix and requires Python
     # 3.10+, so do not install a vulnerable 3.9-only fallback.
     "black>=26.3.1; python_version >= '3.10'",
-    "ruff>=0.15.12",
+    "ruff>=0.15.13",
     "mypy>=1.9.0",
     "bandit>=1.7.0",
     "safety>=2.3.0",
@@ -271,10 +271,17 @@ ignore = []  # Do not add ignores without a comment explaining why.
 # benchmarks/benchmark_suite.py: E402 because psutil optional-import block precedes ama_cryptography imports
 "benchmarks/benchmark_suite.py" = ["C901", "UP006", "UP035", "E501", "E402"]  # C901: generate_markdown complexity
 "setup.py" = ["E501", "RUF005", "S603", "S607"]
+# benchmarks/* — chart generation and bench-harness scripts:
+#   C901: matplotlib chart builders unavoidably exceed McCabe complexity (many panels, axes, annotations).
+#   RUF001: chart captions and axis labels use the Unicode multiplication sign (×) and Greek letters intentionally.
+#   E402/E501/F541/I001/RUF059/RUF100/UP006/UP035: same legacy-formatting / typing-imports patterns the
+#         rest of the codebase carries (see "ama_cryptography/*" header above).
+#   S603/S607: subprocess calls with bare executable name (git, cmake, ...) are intentional in benchmark tooling.
 "benchmarks/*" = [
+    "C901",
     "E402", "E501", "F541", "I001",
-    "RUF059", "RUF100",
-    "S603", "S607",  # subprocess calls with bare executable name (git, cmake, ...) are intentional in benchmark tooling
+    "RUF001", "RUF059", "RUF100",
+    "S603", "S607",
     "UP006", "UP035",
 ]
 # examples/**  (double-star) is required — scripts live in examples/python/

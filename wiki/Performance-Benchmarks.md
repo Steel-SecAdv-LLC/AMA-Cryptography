@@ -108,9 +108,12 @@ Cython acceleration does **not** affect C-implemented cryptographic primitives (
 | Ed25519 | 0.09 | 0.14 | 64 bytes |
 | ML-DSA-65 | 0.53 | 0.15 | 3,309 bytes |
 | Hybrid (Ed25519 + ML-DSA-65) | ~0.62 | ~0.29 | 3,373 bytes |
-| SPHINCS+-SHA2-256f | ~230 | ~5.90 | 49,856 bytes |
+| SLH-DSA-SHAKE-128s (FIPS 205 L1) | ~1,250 | ~1.15 | 7,856 bytes |
+| SPHINCS+-SHA2-256f (FIPS 205 L5, legacy alias) | ~230 | ~5.90 | 49,856 bytes |
 
 > ML-DSA-65 is ~6× slower to sign than Ed25519 on this host (pre-SIMD scalar NTT path) but provides NIST category III quantum security. Sign/verify latency shifts substantially with CPU microarchitecture — re-run `benchmarks/benchmark_suite.py` on your deployment host before quoting numbers externally.
+>
+> SLH-DSA-SHAKE-128s sign (~1,250 ms) is the slowest signer in the table — roughly **four orders of magnitude** slower than Ed25519 sign (~0.09 ms) and **three orders** slower than ML-DSA-65 sign (~0.53 ms). That is **by design** (FIPS 205 hash-based one-shot signatures trade sign-time for the smallest, most conservative cryptographic assumption). The raw-C harness now measures all three SLH-DSA ops (`benchmark_c_raw.c` rows `SLH-DSA-SHAKE-128s KeyGen / Sign / Verify`); the sign row uses a dedicated `iters_slh_sign = 5` tier so the whole family stays inside the 60 s subprocess timeout that downstream runners enforce on `benchmark_c_raw` (5 iterations × 1.25 s ≈ 6 s for sign; keygen and verify use the standard `iters_slow = 200` tier).
 
 ### X25519 Field-Path Selection (3.0.0)
 
@@ -340,3 +343,34 @@ _Headline source: `benchmarks/benchmark-results.json` (run 2026-04-27). Regressi
 ## Standards Compliance Note
 
 This library implements algorithms specified in FIPS 203 (ML-KEM), FIPS 204 (ML-DSA), FIPS 205 (SLH-DSA), and FIPS 202 (SHA-3). This implementation has **NOT** been submitted for CMVP validation and is **NOT** FIPS 140-3 certified. See `CSRC_STANDARDS.md` for detailed compliance status.
+
+---
+
+## Benchmark coverage map (2026-05)
+
+The raw-C harness (`build/bin/benchmark_c_raw`) was extended in 2026-05
+to close every gap called out in the May 2026 coverage review
+(MULX/ADX on-vs-off X25519, SLH-DSA-SHAKE-128s, secp256k1, FROST
+2-of-3, and ML-DSA-65 NTT/invNTT kernel isolation).
+
+To avoid duplicating numbers across the repo, the canonical references
+live in one place each — pick the right one for your question:
+
+- **Gap → row mapping** (which `benchmark_c_raw` rows close which
+  audit gaps): [`benchmarks/README.md`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/benchmarks/README.md)
+  *Benchmark coverage map (2026-05)*.
+- **Sample sandbox medians + full provenance** (one-off measurements
+  for sanity-checking only): [`docs/BENCHMARK_HISTORY.md`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/docs/BENCHMARK_HISTORY.md)
+  *2026-05: Benchmark coverage expansion*.
+- **Visual summary** (2×2 chart collage of the four new families):
+  [`benchmarks/charts/pqc_benchmark_overview.svg`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/benchmarks/charts/pqc_benchmark_overview.svg).
+
+The benchmark/test-only C entry points that enable the paired
+scalar-vs-dispatched and MULX on-vs-off rows
+(`ama_dilithium_ntt_bench`, `ama_dilithium_invntt_bench`,
+`ama_x25519_set_mulx_override`) are documented in
+[`include/ama_cryptography.h`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/include/ama_cryptography.h) and are
+explicitly **not part of the production crypto surface**. Production
+callers continue to go through `ama_dilithium_sign()` /
+`ama_dilithium_verify()` (FIPS 204 §6.1 / §6.2) and
+`ama_x25519_key_exchange()` (RFC 7748).

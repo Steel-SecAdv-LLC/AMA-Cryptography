@@ -100,6 +100,14 @@ if(AMA_USE_NATIVE_PQC)
                              SKIP_RETURN_CODE 77)
     endif()
 
+    # 2026-05 — public-API regression for `ama_x25519_set_mulx_override()`.
+    # Exercises the production `ama_x25519_key_exchange()` entry point under
+    # mode=-1 / 0 / 1 / 42 and asserts byte-equality of the shared secret
+    # across all four cases. Does NOT skip on hosts without BMI2+ADX —
+    # the override is a documented no-op there, and the byte-equality
+    # claim across all modes is exactly what verifies the no-op semantics.
+    add_ama_test(test_x25519_mulx_override test_x25519_mulx_override.c)
+
     add_ama_test(test_chacha20poly1305 test_chacha20poly1305.c)
     add_ama_test(test_argon2id test_argon2id.c)
     # secp256k1 and FROST are also gated on AMA_USE_NATIVE_PQC (they live in
@@ -141,6 +149,14 @@ if(AMA_USE_NATIVE_PQC)
     add_ama_test(test_dilithium_ntt_equiv test_dilithium_ntt_equiv.c)
     set_tests_properties(test_dilithium_ntt_equiv PROPERTIES SKIP_RETURN_CODE 77)
     add_ama_test(test_dilithium_rej_equiv test_dilithium_rej_equiv.c)
+    # 2026-05 — public-API regression for `ama_dilithium_{ntt,invntt}_bench()`.
+    # The two new benchmark wrappers route through `dil_{ntt,invntt}_cached`
+    # with the dispatch slot bound explicitly. This test pairs the wrapper
+    # under `use_dispatch=1` and `use_dispatch=0` against each other and
+    # against an in-test scalar FIPS 204 reference, then closes with a
+    # forward/inverse round-trip identity. Does NOT skip — both wrappers
+    # are unconditionally available wherever Dilithium itself is.
+    add_ama_test(test_dilithium_ntt_bench test_dilithium_ntt_bench.c)
     # PR A (2026-04) — VAES + VPCLMULQDQ AES-GCM YMM dispatch
     # equivalence test.  SKIPs on hosts where the dispatcher leaves
     # aes_gcm_encrypt / aes_gcm_decrypt NULL (non-x86-64, or x86-64
