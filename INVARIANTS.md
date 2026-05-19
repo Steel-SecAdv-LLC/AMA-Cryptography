@@ -312,6 +312,186 @@ macOS (Apple SDK has never shipped `<threads.h>`) and unreliable on MSVC
 `find_package(Threads REQUIRED)` and links `Threads::Threads` to all library
 targets.
 
+## INVARIANT-16 — Honest Compliance and Audit Claims
+
+AMA Cryptography **must not** overstate validation, certification, audit, or
+compliance status. Documentation and metadata must preserve the distinction
+between implementation conformance, self-attestation, formal validation, and
+independent review.
+
+Required posture:
+
+- **Algorithm-compliant** means the implementation is intended to follow the
+  cited NIST/IETF/SEC/BIP specification and is tested against the project's
+  available vectors. It does **not** imply formal laboratory validation.
+- **ACVP self-attested** means AMA's CI has run the documented vector harness
+  and published the resulting artifacts. It does **not** imply a NIST-issued
+  CAVP certificate.
+- **CAVP validated** may be claimed only after a corresponding certificate has
+  been issued and can be cited.
+- **CMVP / FIPS 140-3 validated** may be claimed only after a corresponding
+  module certificate has been issued and can be cited.
+- **Externally audited** may be claimed only after an independent qualified
+  reviewer has produced an audit report or equivalent written attestation that
+  can be cited. Community testing, internal review, CI, fuzzing, and static
+  analysis are valuable but are **not** substitutes for an external audit.
+
+Any README, package metadata, badge, release note, website/wiki page,
+compliance report, or customer-facing text that mentions FIPS, ACVP, CAVP,
+CMVP, certification, validation, attestation, or audit status **must** preserve
+this exact claims boundary.
+
+## INVARIANT-17 — Module Integrity Signing Must Remain Build-Time and Ephemeral
+
+The module-integrity signing path (`ama_cryptography/_build_sign.py` and any
+successor) **must** remain a build-pipeline-only mechanism. Runtime package
+code must verify integrity artifacts; it must never be able to mint a new
+trusted integrity signature over modified package contents.
+
+Required properties:
+
+- The signing command must be gated to the wheel/release build pipeline.
+- The private signing key must never ship in wheels, source distributions,
+  repository files, generated runtime artifacts, logs, caches, test fixtures,
+  or package data.
+- Default local builds must use an ephemeral per-build keypair and discard the
+  private key before the build completes.
+- Release CI may derive or inject the signing key from a CI-controlled seed or
+  trust-anchor mechanism only when the release pipeline explicitly opts in and
+  verifies the resulting public key against the compiled trust anchor.
+- The only shipped integrity artifact should contain public verification data
+  such as digest, public key, and signature.
+- Missing, mismatched, malformed, or untrusted integrity artifacts must produce
+  an observable failure state and must not silently bless modified Python
+  modules as trusted runtime code.
+
+This invariant exists to preserve post-build tamper detection without turning
+integrity signing into a local attacker-controlled resigning oracle.
+
+## INVARIANT-18 — ACVP Self-Attestation Must Stay Coupled to CI Coverage Floors
+
+The ACVP self-attestation documents and CI vector-validation workflow **must**
+remain in lockstep. Coverage must not silently shrink, drift from published
+attestation artifacts, or pass CI merely because an expected-count constant was
+not updated.
+
+Any change that adds, removes, renames, skips, reclassifies, or retargets ACVP
+vectors **must** update all affected artifacts in the same commit:
+
+1. `.github/workflows/acvp_validation.yml` vector floor and ACVP reference.
+2. `nist_vectors/` fetch/run logic and default ACVP reference, if changed.
+3. `docs/compliance/acvp_attestation.json` totals and per-algorithm counts.
+4. Customer-facing compliance reports that cite vector counts, pass/fail totals,
+   skipped-vector semantics, or upstream ACVP reference.
+
+The workflow must fail if any of the following drift from the published
+attestation artifacts:
+
+- total vectors tested;
+- total vectors passed or failed;
+- per-algorithm vector counts;
+- algorithm names;
+- upstream ACVP reference;
+- expected floor semantics; or
+- all-zero coverage for a listed algorithm.
+
+Expanding coverage is welcome, but it must move the attestation JSON, CI floor,
+ACVP reference, and compliance prose together so the published claim always
+matches the evidence CI just produced.
+
+## INVARIANT-19 — Hybrid KEM Combiner Construction Is Security-Critical
+
+The hybrid KEM combiner is security-critical and **must** preserve the current
+binding construction unless a cryptographic review explicitly approves a new
+construction and the transcript test vectors are updated in the same change.
+
+The production combiner must retain all of the following properties:
+
+- HKDF-SHA3-256 using the RFC 5869 Extract-then-Expand construction;
+- native constant-time HKDF backend for production secret-dependent operation;
+- domain-separation label bound into `info`;
+- explicit two-component binding (`component_count = 2` or equivalent);
+- length-prefixed classical ciphertext and PQC ciphertext bound into `salt`;
+- concatenated classical and PQC shared secrets as the input keying material;
+- length-prefixed classical public key and PQC public key bound into `info`;
+- fixed transcript ordering that cannot be canonicalized ambiguously; and
+- fail-closed behavior when the native HKDF backend is unavailable.
+
+Do **not** refactor, simplify, reorder, remove length prefixes, remove public-key
+binding, change labels, substitute a KDF, or introduce an experimental combiner
+in production paths without documenting the security rationale and updating the
+relevant tests and compliance/design notes. Research KDFs or alternate combiners
+may live only in clearly non-production modules that cannot be reached by the
+production hybrid KEM provider.
+
+## INVARIANT-20 — Constant-Time AES Must Remain the Default
+
+The default AES-GCM build **must** use the constant-time cache-safe AES path
+(`AMA_AES_CONSTTIME=ON`, implemented by `ama_aes_bitsliced.c` or a reviewed
+constant-time successor). Table-based AES must never become the default again.
+
+Required properties:
+
+- CMake's default configuration must enable the constant-time AES path.
+- Build output must clearly identify whether constant-time AES is enabled.
+- Disabling constant-time AES must require an explicit opt-out build flag and
+  must emit a clear warning that the resulting table-based path is not suitable
+  for shared-tenant or side-channel-sensitive deployments.
+- CI timing harnesses and constant-time verification tools must compile and
+  exercise the production-default constant-time AES path, not a faster
+  non-default table path.
+- Documentation must describe table-based AES, if present, as an opt-out or
+  test/benchmark compatibility path rather than the recommended build.
+
+This invariant protects the project from regressing from the bitsliced/cache-safe
+AES default back to lookup-table behavior that can leak through cache timing on
+shared hardware.
+
+## INVARIANT-21 — X25519 Low-Order Outputs Must Be Rejected
+
+X25519 key exchange **must** reject all-zero shared secrets produced by low-order
+or otherwise invalid peer public inputs.
+
+Required behavior:
+
+- `ama_x25519_key_exchange()` and any successor API must OR-reduce or otherwise
+  constant-time check the full 32-byte shared-secret output for all-zero.
+- On all-zero output, the shared-secret buffer must be securely zeroed before
+  returning failure.
+- The API must return a hard cryptographic error, not a warning, partial result,
+  nullable success value, or caller-configurable soft failure.
+- Batch APIs must preserve equivalent fail-closed semantics: if any lane
+  produces an all-zero shared secret, all batch outputs must be scrubbed and the
+  batch must fail rather than exposing partially successful lane outputs.
+- Tests must cover single-shot low-order rejection and batch all-zero rejection
+  so future ladder or SIMD refactors cannot silently remove the check.
+
+## INVARIANT-22 — AEAD Nonce Durability Must Fail Closed
+
+AEAD nonce/counter tracking in the Python orchestration layer **must** remain
+durable across process restarts and safe across concurrent processes for every
+production path that auto-generates or tracks nonces.
+
+Required behavior:
+
+- Per-key nonce counters must be persisted before or atomically with exposure of
+  a nonce to encryption, so a crash or restart cannot forget a used counter slot.
+- Multi-process access to the same counter state must use an inter-process lock
+  or an equivalently strong atomic update mechanism.
+- Multi-threaded access within one process must serialize counter mutation.
+- Malformed persistence files, truncated entries, invalid hex, lock failures,
+  fsync/write failures, permission errors, or counter-state corruption must
+  raise a hard error rather than continuing with partial nonce history.
+- Nonce reuse detection must not use probabilistic data structures that can
+  produce false negatives.
+- Ephemeral mode is permitted only as an explicit test/hermetic-mode opt-in and
+  must not be silently enabled for production encryption.
+- Exceeding the configured per-key nonce safety limit must force re-keying or
+  hard failure; it must not wrap, reset, or continue with a warning.
+
+This invariant treats forgotten nonce history as a cryptographic safety failure,
+not as recoverable telemetry loss.
+
 ---
 
 ## Vendored Dependencies
@@ -350,4 +530,4 @@ targets.
 ---
 
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-05-16_
+_Last updated: 2026-05-19_
