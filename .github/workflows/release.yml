@@ -203,9 +203,16 @@ jobs:
           # an isolated build env that only sees pyproject.toml's
           # [build-system].requires, so any missing build-time dep
           # fails the wheel build closed.
-          CIBW_BEFORE_BUILD_LINUX: "pip install cmake>=4.3.2 cython>=3.2.4 numpy>=1.24.0"
-          CIBW_BEFORE_BUILD_MACOS: "pip install cmake>=4.3.2 cython>=3.2.4 numpy>=1.24.0"
-          CIBW_BEFORE_BUILD_WINDOWS: "pip install cmake>=4.3.2 cython>=3.2.4 numpy>=1.24.0"
+          #
+          # Each requirement specifier is single-quoted so the cibuildwheel
+          # subshell doesn't interpret `>=` as output redirection
+          # (Copilot review #322 — without the quotes, `pip install
+          # cmake>=4.3.2` runs as `pip install cmake` plus `>` redirect
+          # to a file named `=4.3.2`, silently floating to whatever
+          # pip resolves and missing the INVARIANT-8 toolchain floor).
+          CIBW_BEFORE_BUILD_LINUX: "pip install 'cmake>=4.3.2' 'cython>=3.2.4' 'numpy>=1.24.0'"
+          CIBW_BEFORE_BUILD_MACOS: "pip install 'cmake>=4.3.2' 'cython>=3.2.4' 'numpy>=1.24.0'"
+          CIBW_BEFORE_BUILD_WINDOWS: "pip install 'cmake>=4.3.2' 'cython>=3.2.4' 'numpy>=1.24.0'"
           # MANYLINUX BASELINE: manylinux_2_28 has GCC 12 baseline (the
           # INVARIANT-8 minimum), AVX-512 intrinsics, and is supported
           # by every modern pip.
@@ -377,7 +384,15 @@ jobs:
   publish-pypi:
     name: Publish to PyPI (Trusted Publishing)
     needs: [preflight, sign, provenance]
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)
+    # Publish ONLY on tag pushes.  A manually-dispatched run from an
+    # arbitrary branch ref bypasses the preflight tag-vs-pyproject
+    # version check (which only fires under `github.event_name ==
+    # 'push'`), so allowing workflow_dispatch + dry_run=false to
+    # publish would let any branch land an unverified release on
+    # PyPI.  Copilot review #322: restrict to `refs/tags/v*`.  The
+    # workflow_dispatch dry-run path still exercises the entire
+    # build/sign/provenance flow — it just stops before the upload.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:
@@ -417,8 +432,15 @@ jobs:
 
   github-release:
     name: Create GitHub Release
-    needs: [preflight, sign, provenance]
-    if: github.event_name == 'push'
+    # MUST depend on publish-pypi (Copilot review #322).  Without it,
+    # a tag push that succeeds at sign+provenance but fails at PyPI
+    # upload (rejected by the trusted-publisher rule, environment
+    # approval timeout, transient PyPI 5xx) would still publish the
+    # GitHub Release with body text "Published to PyPI" — false
+    # advertising and a credibility hit.  Sequencing via `needs` makes
+    # the release announcement strictly downstream of the PyPI upload.
+    needs: [preflight, sign, provenance, publish-pypi]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

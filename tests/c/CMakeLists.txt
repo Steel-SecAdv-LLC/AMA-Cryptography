@@ -14,8 +14,11 @@ add_ama_test(test_consttime test_consttime.c)
 add_ama_test(test_core test_core.c)
 add_ama_test(test_aes_gcm_scalar_kat test_aes_gcm_scalar_kat.c)
 # Audit Issues 5+6 (2026-05): runtime backend introspection + NIST
-# SP 800-38D length-limit regression.
+# SP 800-38D length-limit regression.  Returns 77 on 32-bit hosts
+# where size_t cannot reach 2^36; CTest surfaces those as "Skipped"
+# rather than passing silently (Copilot review #322 follow-up).
 add_ama_test(test_aes_gcm_backend_introspect test_aes_gcm_backend_introspect.c)
+set_tests_properties(test_aes_gcm_backend_introspect PROPERTIES SKIP_RETURN_CODE 77)
 
 # Cryptographic primitive tests
 add_ama_test(test_sha3 test_sha3.c)

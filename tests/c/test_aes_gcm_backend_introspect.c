@@ -20,10 +20,14 @@
  *      length is sufficient to exercise the guard.
  *   4. AAD length is similarly bounded at 2^61 - 1 bytes.
  *
- * The test uses ctest skip code 77 when running on a host where
- * size_t cannot represent 2^36 (32-bit hosts) — the limit is still
- * enforced, but the test can only exercise it where the platform
- * permits the comparison.
+ * The test returns CTest's reserved skip code 77 when running on a
+ * host where size_t cannot represent 2^36 (32-bit hosts) — the C
+ * limit check in ama_aes_gcm.c is still enforced at runtime; the
+ * length-limit assertion below can only EXERCISE the guard where
+ * the platform permits the comparison.  tests/c/CMakeLists.txt
+ * propagates the skip code via `SKIP_RETURN_CODE 77` so CTest
+ * surfaces the lane as "Skipped" instead of a silent pass on those
+ * hosts (Copilot review #322).
  */
 
 #include "ama_cryptography.h"
@@ -113,7 +117,14 @@ int main(void) {
               "encrypt accepts normal-sized pt_len");
     }
 #else
-    printf("SKIP: 32-bit host — size_t cannot represent 2^36, length check still enforced\n");
+    printf("SKIP: 32-bit host — size_t cannot represent 2^36; length-check\n");
+    printf("       enforcement in ama_aes_gcm.c is unchanged.  CTest treats\n");
+    printf("       exit code 77 as Skipped (SKIP_RETURN_CODE in CMakeLists.txt).\n");
+    if (g_failures) {
+        fprintf(stderr, "%d assertion(s) failed before skip\n", g_failures);
+        return 1;
+    }
+    return 77;
 #endif
 
     if (g_failures) {

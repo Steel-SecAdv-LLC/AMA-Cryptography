@@ -269,12 +269,16 @@ jobs:
           # mode (below) is reproducible across runner image versions.
           pip install -r requirements-lock.txt
 
-      # FAIL-CLOSED (INVARIANT-2 / audit Issue 8): --strict gates merge
-      # on any vulnerable package; the bare `pip-audit` invocation only
-      # printed.  CVE ignores must be declared in INVARIANT-14's table
-      # with the canonical comment, never silently here.
-      - name: Audit dependencies (strict)
-        run: pip-audit --strict --desc
+      # FAIL-CLOSED on the LOCK FILE (INVARIANT-2 / audit Issue 8 +
+      # Copilot review #322): --strict gates merge on any vulnerable
+      # package; `--requirement requirements-lock.txt` scopes the audit
+      # to the pinned dependency closure rather than whatever the
+      # `pip install pip-audit bandit` step transitively pulled in,
+      # so the gate is reproducible across reruns.  CVE ignores must
+      # be declared in INVARIANT-14's table with the canonical
+      # comment, never silently here.
+      - name: Audit dependencies (strict, lock-file scoped)
+        run: pip-audit --strict --desc --requirement requirements-lock.txt
 
       # FAIL-CLOSED on Bandit Medium+: any unjustified Medium/High
       # finding fails the build.  Justified suppressions must carry an

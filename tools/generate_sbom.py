@@ -57,17 +57,17 @@ DEFAULT_OUTPUT = REPO / "docs" / "compliance" / "sbom-c-library.json"
 # a diff between two SBOM revisions is easy to read.
 # ---------------------------------------------------------------------------
 C_COMPONENTS: list[tuple[str, str]] = [
-    ("ama_aes_gcm",            "AES-256-GCM AEAD (NIST SP 800-38D)"),
-    ("ama_argon2",             "Argon2id password hashing (RFC 9106)"),
-    ("ama_chacha20poly1305",   "ChaCha20-Poly1305 AEAD (RFC 8439)"),
-    ("ama_dilithium",          "ML-DSA-65 post-quantum signatures (NIST FIPS 204)"),
-    ("ama_ed25519",            "Ed25519 digital signatures (RFC 8032)"),
-    ("ama_hkdf",               "HKDF-SHA3-256 key derivation (RFC 5869)"),
-    ("ama_kyber",              "Kyber-1024 ML-KEM (NIST FIPS 203)"),
-    ("ama_secp256k1",          "secp256k1 elliptic curve operations"),
-    ("ama_sha3",               "SHA3-256/512, SHAKE128/256 (NIST FIPS 202)"),
-    ("ama_sphincs",            "SPHINCS+-256f SLH-DSA (NIST FIPS 205)"),
-    ("ama_x25519",             "X25519 ECDH key exchange (RFC 7748)"),
+    ("ama_aes_gcm", "AES-256-GCM AEAD (NIST SP 800-38D)"),
+    ("ama_argon2", "Argon2id password hashing (RFC 9106)"),
+    ("ama_chacha20poly1305", "ChaCha20-Poly1305 AEAD (RFC 8439)"),
+    ("ama_dilithium", "ML-DSA-65 post-quantum signatures (NIST FIPS 204)"),
+    ("ama_ed25519", "Ed25519 digital signatures (RFC 8032)"),
+    ("ama_hkdf", "HKDF-SHA3-256 key derivation (RFC 5869)"),
+    ("ama_kyber", "Kyber-1024 ML-KEM (NIST FIPS 203)"),
+    ("ama_secp256k1", "secp256k1 elliptic curve operations"),
+    ("ama_sha3", "SHA3-256/512, SHAKE128/256 (NIST FIPS 202)"),
+    ("ama_sphincs", "SPHINCS+-256f SLH-DSA (NIST FIPS 205)"),
+    ("ama_x25519", "X25519 ECDH key exchange (RFC 7748)"),
 ]
 
 
@@ -85,7 +85,7 @@ def read_package_version() -> str:
     if match is None:
         raise SystemExit(
             "ERROR: tools/generate_sbom.py: could not locate "
-            "`version = \"...\"` in pyproject.toml [project] block"
+            '`version = "..."` in pyproject.toml [project] block'
         )
     return match.group(1)
 

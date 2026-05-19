@@ -44,16 +44,21 @@ jobs:
         # reproducible across runs.
         pip install -r requirements-lock.txt
 
-    # pip-audit STRICT MODE (INVARIANT-2 / audit Issue 8): the previous
-    # `pip-audit --desc` invocation surfaced findings but did not fail
-    # CI.  --strict flips the exit status to non-zero on ANY vulnerable
-    # package, gating merge.  The CVE ignore-list lives in
-    # INVARIANT-14's table; new --ignore-vuln entries must arrive with
-    # the documented justification.  See nosec_disposition.md for the
-    # company-wide hygiene policy.
-    - name: Run pip-audit (strict, fail-closed)
+    # pip-audit STRICT MODE on the LOCK FILE (INVARIANT-2 / audit
+    # Issue 8 + Copilot review #322): the previous `pip-audit --desc`
+    # invocation surfaced findings but did not fail CI; --strict flips
+    # the exit status to non-zero on ANY vulnerable package.  Targeting
+    # `requirements-lock.txt` (instead of the live environment) means
+    # the audit closes over a pinned dependency set rather than over
+    # whatever transitive versions `pip install bandit pip-audit`
+    # happened to resolve in the CI runner image — so the gate is
+    # reproducible across reruns and across runner image rolls.  The
+    # CVE ignore-list lives in INVARIANT-14's table; new --ignore-vuln
+    # entries must arrive with the documented justification.  See
+    # nosec_disposition.md for the company-wide hygiene policy.
+    - name: Run pip-audit (strict, lock-file scoped)
       run: |
-        pip-audit --strict --desc
+        pip-audit --strict --desc --requirement requirements-lock.txt
 
     # Bandit FAIL-CLOSED (INVARIANT-2 / INVARIANT-13 / audit Issue 8):
     # the previous `bandit -l` flagged Medium+ findings to stdout but
@@ -68,9 +73,17 @@ jobs:
     #      two checks combine to give us: "every Medium+ finding either
     #      passes a code-review approved nosec with tracking ID, or
     #      the build breaks."
-    - name: Run Bandit security linter (JSON report)
+    - name: Run Bandit security linter (JSON report, non-blocking)
+      # `--exit-zero` makes this step strictly diagnostic — it writes
+      # the JSON artefact for downstream tooling and uploads.  The
+      # severity gate below is the actual fail-closed enforcement.
+      # Without `--exit-zero` this step exits non-zero on any Low+
+      # finding, which would short-circuit the Medium+ gate and turn
+      # the JSON-emit step itself into an enforcement layer with a
+      # different (looser) threshold than the documented policy
+      # (Copilot review #322).
       run: |
-        bandit -r ama_cryptography/ -f json -o bandit-report.json -l
+        bandit -r ama_cryptography/ -f json -o bandit-report.json -l --exit-zero
 
     - name: Run Bandit security linter (severity gate, fail-closed)
       run: |
