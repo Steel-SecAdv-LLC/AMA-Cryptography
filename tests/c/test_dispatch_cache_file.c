@@ -41,7 +41,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
 
 #include "ama_dispatch.h"
 
@@ -224,62 +223,125 @@ int main(void) {
         return 1;
     }
 
-    /* Sanitizer rejection contract — fork a child per bad path, set
-     * AMA_DISPATCH_CACHE_FILE to the rejected value, run
-     * ama_dispatch_init(), and assert NO file was created at that
-     * path.  Forking is required because dispatch_init_internal is
-     * `pthread_once`-protected — we can't re-init the parent
-     * process.  Pins CodeQL #535 / #537 close-out: env var → path
-     * sanitizer → NULL → cache code path treats as "env unset", so
-     * no fopen(__file) call is reachable from a tainted source. */
-    const char *bad_paths[] = {
-        "/tmp/ama_disp_test_traversal/../etc/ama_evil",   /* `..` segment */
-        "/tmp/ama_disp_test_relative/..",                  /* trailing `..` */
-        "",                                                 /* empty (already handled at call-site, but defence-in-depth) */
-        NULL,
-    };
-    for (int i = 0; bad_paths[i] != NULL; i++) {
-        const char *bad = bad_paths[i];
-        /* Build a probe path the child would write to IF the sanitizer
-         * mis-honoured the bad input.  For the `..` cases the canonical
-         * resolution lands at /tmp/etc/ama_evil or /tmp — both checkable
-         * via stat() after the child exits. */
-        const char *probe = "/tmp/etc/ama_evil";
-        (void)unlink(probe);   /* clean slate */
+    /* Sanitizer rejection contract — direct unit test of
+     * `dispatch_cache_path_sanitize`.  Pins CodeQL #535 / #537
+     * close-out: env var → path sanitizer → NULL → cache code path
+     * treats as "env unset", so no fopen(__file) call is reachable
+     * from a tainted source.
+     *
+     * Architecturally we cannot exercise the rejection contract via
+     * fork+ama_dispatch_init in the same test process: Linux
+     * fork() inherits the parent's `pthread_once` state, so the
+     * child sees the dispatch table as "already initialised" and
+     * never re-enters dispatch_init_internal() (and never calls
+     * the sanitizer on the bad env value).  An earlier draft of
+     * this test fell into exactly that trap — Copilot review #326
+     * r3275565655 surfaced that the hardcoded `/tmp/etc/ama_evil`
+     * probe never appeared in any run, not because the sanitizer
+     * rejected the path, but because the cache code path never
+     * fired in the child at all.
+     *
+     * The clean alternative is the direct unit test below: the
+     * sanitizer is a pure-input pure-output predicate, so calling
+     * the test-mode-exported `ama_test_dispatch_cache_path_sanitize`
+     * with every "must reject" class and every "must accept"
+     * class IS the contract.  No fork, no filesystem side-effect
+     * dependency, no race with pthread_once. */
+    extern const char *ama_test_dispatch_cache_path_sanitize(const char *path);
 
-        pid_t pid = fork();
-        if (pid == 0) {
-            /* Child: set the bad env var and trigger init. */
-            setenv("AMA_DISPATCH_CACHE_FILE", bad, 1);
-            unsetenv("AMA_DISPATCH_NO_AUTOTUNE");
-            ama_dispatch_init();
-            /* If the sanitizer worked, no file under /tmp/etc/ exists. */
-            _exit(0);
-        } else if (pid < 0) {
+    typedef struct {
+        const char *description;
+        const char *input;
+        int         expect_accept;  /* 1 = must return == input; 0 = must return NULL */
+    } sanitizer_case_t;
+
+    /* MUST-REJECT inputs — every one closes a documented attack class:
+     *   `..` segments (path traversal / CodeQL #535/#537)
+     *   embedded ASCII control chars (log-injection via verbose log line)
+     *   empty (degenerate)
+     *   oversized (DoS / stack overflow defence)
+     * MUST-ACCEPT inputs — the routine MUST NOT over-reject and break
+     * the documented opt-in feature for users who supply normal paths:
+     *   absolute paths
+     *   relative paths
+     *   high-bit UTF-8 (valid filenames on every Unix filesystem)
+     *   parentheses, dashes, dots-not-followed-by-dot
+     */
+    static const sanitizer_case_t cases[] = {
+        /* --- MUST-REJECT --- */
+        { "embedded `..`",         "/tmp/foo/../etc/passwd",         0 },
+        { "leading `..`",          "../etc/passwd",                  0 },
+        { "trailing `..`",         "/tmp/foo/..",                    0 },
+        { "`..` mid-segment",      "/tmp/a/../b",                    0 },
+        { "empty",                 "",                               0 },
+        { "newline injection",     "/tmp/x\nFAKE=value",             0 },
+        { "carriage return",       "/tmp/x\r",                       0 },
+        { "tab character",         "/tmp/x\ty",                      0 },
+        { "DEL (0x7F)",            "/tmp/x\x7F",                     0 },
+        { "low control 0x01",      "/tmp/\x01x",                     0 },
+        /* --- MUST-ACCEPT --- */
+        { "simple absolute path",  "/tmp/ama-cache.txt",             1 },
+        { "relative path",         "ama-cache.txt",                  1 },
+        { "subdir path",           "/var/cache/ama/cache.v1",        1 },
+        { "single dot in name",    "/tmp/ama.cache",                 1 },
+        { "dots-no-double-dot",    "/tmp/a.b.c.d.cache",             1 },
+        { "high-bit UTF-8",        "/tmp/\xe2\x9c\x94/cache",        1 },
+        { "parens and dashes",     "/tmp/ama-(v3.2.0)/cache",        1 },
+    };
+    int sanitizer_failures = 0;
+    int n_cases = (int)(sizeof(cases) / sizeof(cases[0]));
+    for (int i = 0; i < n_cases; i++) {
+        const char *got = ama_test_dispatch_cache_path_sanitize(cases[i].input);
+        int accepted = (got != NULL);
+        int expected_accept = cases[i].expect_accept;
+        if (accepted != expected_accept) {
             fprintf(stderr,
-                "FAIL: fork() failed while testing sanitizer rejection "
-                "for bad path '%s'\n", bad);
-            return 1;
-        }
-        int wstatus = 0;
-        (void)waitpid(pid, &wstatus, 0);
-        /* Independent of the child's exit code, the file MUST NOT
-         * exist — the sanitizer should have rejected the path before
-         * any open() call. */
-        if (file_exists(probe)) {
+                "FAIL: dispatch_cache_path_sanitize(case='%s', "
+                "input=%s) returned %s; expected %s\n",
+                cases[i].description,
+                cases[i].input[0] ? cases[i].input : "(empty string)",
+                accepted ? "ACCEPT (non-NULL)" : "REJECT (NULL)",
+                expected_accept ? "ACCEPT" : "REJECT");
+            sanitizer_failures++;
+        } else if (accepted && got != cases[i].input) {
+            /* Sanitizer must return the SAME pointer on accept — it's
+             * not allowed to allocate or mutate (the cache code path
+             * uses the returned pointer directly with fopen/open). */
             fprintf(stderr,
-                "FAIL: sanitizer accepted bad path '%s' — wrote to "
-                "'%s' (must be rejected per dispatch_cache_path_sanitize)\n",
-                bad, probe);
-            (void)unlink(probe);
-            return 1;
+                "FAIL: dispatch_cache_path_sanitize(case='%s') accepted "
+                "but returned a different pointer than the input — "
+                "contract requires identity, not a copy\n",
+                cases[i].description);
+            sanitizer_failures++;
         }
+    }
+
+    /* Oversized input — separate from the table because we build it
+     * dynamically (4001 chars including NUL, exceeds the documented
+     * 4000-byte limit). */
+    {
+        char oversized[4002];
+        memset(oversized, 'a', sizeof(oversized) - 1);
+        oversized[sizeof(oversized) - 1] = '\0';
+        if (ama_test_dispatch_cache_path_sanitize(oversized) != NULL) {
+            fprintf(stderr,
+                "FAIL: dispatch_cache_path_sanitize accepted a "
+                "4001-character path; must reject anything >4000 "
+                "bytes (snprintf reserve for `.tmp.<pid>` suffix)\n");
+            sanitizer_failures++;
+        }
+    }
+
+    if (sanitizer_failures > 0) {
+        (void)unlink(cache_path);
+        return 1;
     }
 
     printf("OK: dispatch cache roundtrip (mode=0600, "
            "schema+timings+ownership all pin OK, "
-           "keccak_simd_ns=%lld, sanitizer rejects traversal+empty)\n",
-           ns_value);
+           "keccak_simd_ns=%lld, sanitizer accept+reject contract "
+           "pinned across %d input classes + oversized)\n",
+           ns_value, n_cases);
     (void)unlink(cache_path);
     return 0;
 }

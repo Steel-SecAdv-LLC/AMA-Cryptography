@@ -208,6 +208,46 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   Returns 77 (Skipped) on MSVC builds where the cache code path
   is compiled out.
 
+#### PR #326 follow-up: sanitizer rejection test rebuilt as direct unit test (Copilot review r3275565655)
+- **Root cause of the earlier fork-based test's false sense of
+  security.**  The first version of
+  `tests/c/test_dispatch_cache_file.c`'s sanitizer-rejection probe
+  forked a child per bad path, set `AMA_DISPATCH_CACHE_FILE` to
+  the rejected value, called `ama_dispatch_init()`, and asserted
+  that no file appeared at a hardcoded `/tmp/etc/ama_evil` probe.
+  Two problems:
+    1. Linux `fork()` inherits the parent's `pthread_once` state,
+       so the child saw the dispatch table as "already initialised"
+       and never re-entered `dispatch_init_internal()` — the
+       sanitizer was never called on the bad env value.
+    2. The hardcoded probe path lives in `/tmp/etc/`, which by
+       default doesn't exist, so even a hypothetically bypassed
+       sanitizer would fail to create the probe (ENOENT) for a
+       reason unrelated to the rejection contract.
+  Result: a passing test that was not actually exercising the
+  contract.  Both surfaced by Copilot review #326 r3275565655.
+- **Surgical correction.**  Replaced the fork+probe approach with
+  a direct unit test of the sanitizer:
+    1. `src/c/dispatch/ama_dispatch.c` exports
+       `ama_test_dispatch_cache_path_sanitize(path)` under
+       `#ifdef AMA_TESTING_MODE` (mirroring the existing
+       `ama_test_force_*_scalar` pattern) so the test binary can
+       call the predicate directly.
+    2. `tests/c/test_dispatch_cache_file.c` now enumerates 17
+       inputs across must-reject classes (embedded / leading /
+       trailing / mid-segment `..`, empty, ASCII control chars —
+       newline, CR, tab, DEL, 0x01) and must-accept classes
+       (absolute, relative, subdir, single-dot-in-name, multi-dot,
+       high-bit UTF-8, parens+dashes), plus a dynamically-built
+       oversized (4001-byte) input.  Every class is independently
+       verified.  Accept cases also assert pointer identity
+       (sanitizer must not allocate or mutate — the cache code path
+       passes the returned pointer directly to fopen/open).
+  Sanity-checked end-to-end: temporarily commenting out the
+  `if (strstr(path, "..") != NULL) return NULL;` line correctly
+  triggers four FAIL lines (one per `..` class) on the next
+  ctest run.
+
 #### PR #326 follow-up: vulnerable transitive `safety` chain removed (pip-audit close-out)
 - **`safety>=2.3.0` dev-dep + its transitive chain removed entirely.**
   `pip-audit --strict --requirement requirements-lock.txt` in

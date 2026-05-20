@@ -1964,6 +1964,37 @@ const ama_dispatch_table_t *ama_get_dispatch_table(void) {
 }
 
 #ifdef AMA_TESTING_MODE
+/* Test-only export of `dispatch_cache_path_sanitize` so the
+ * `test_dispatch_cache_file` ctest case can pin the rejection
+ * contract directly (Copilot review #326 r3275565655).
+ *
+ * The fork-based probe variant of the test cannot exercise the
+ * sanitizer's effect on the cache code path because Linux fork()
+ * inherits the parent's `pthread_once` state — the child sees the
+ * dispatch table as "already initialised" and never re-enters
+ * `dispatch_init_internal()` (and therefore never calls the
+ * sanitizer on the bad env var).  Re-exec'ing the test binary
+ * with a sentinel arg works but adds significant test-harness
+ * complexity for a function that is a pure-input pure-output
+ * predicate.  Direct unit-test via this stub is a tighter, more
+ * specific check: every bad input class is independently verified
+ * to return NULL, every good input class is independently verified
+ * to pass through unchanged.  The MSVC `#else` stub below mirrors
+ * the same shape as the MSVC #else of `dispatch_cache_load` —
+ * always returns NULL since the cache code path is compiled out. */
+#if !defined(_MSC_VER)
+const char *ama_test_dispatch_cache_path_sanitize(const char *path) {
+    return dispatch_cache_path_sanitize(path);
+}
+#else
+const char *ama_test_dispatch_cache_path_sanitize(const char *path) {
+    (void)path;
+    return NULL;
+}
+#endif
+#endif
+
+#ifdef AMA_TESTING_MODE
 /* ============================================================================
  * Test-only dispatch overrides.
  *
