@@ -208,6 +208,67 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   Returns 77 (Skipped) on MSVC builds where the cache code path
   is compiled out.
 
+#### PR #326 follow-up: Windows Python lanes + Copilot review r3276471155 / r3276471202
+- **Root cause of every `Python {3.9..3.13} on windows-latest` and
+  `Test windows-latest / Python ...` lane being red since `40a933c`:
+  the new v3.2.0 `ama_hmac_sha256` / `ama_hmac_sha256_2` C symbols
+  (`src/c/ama_hmac_sha256.h`) were declared without `AMA_API` —
+  which expands to `__declspec(dllexport)` on MSVC shared-library
+  builds (`AMA_BUILDING_SHARED` defined) but to nothing on
+  GCC/Clang where default symbol visibility already exposes the
+  function from the .so / .dylib.  Linux + macOS lanes therefore
+  bound `lib.ama_hmac_sha256` successfully at module import time,
+  but Windows-latest's `libama_cryptography.dll` had no entry for
+  the symbol in its export table.  `_setup_hmac_sha256_ctypes()`
+  caught the `AttributeError`, set
+  `_HMAC_SHA256_NATIVE_AVAILABLE = False`, and the six new
+  `TestHMACFunctions::test_native_hmac_sha256_*` cases (decorated
+  only with `@skip_no_native` which checks `_native_lib is not None`,
+  not the per-symbol availability flag) then raised
+  `RuntimeError("HMAC-SHA-256 native backend not available...")`
+  from `native_hmac_sha256()` — failing every Python version on
+  windows-latest across both `ci-build-test.yml::python-package`
+  and `ci.yml::test`.  `_native_lib` itself was loaded fine; only
+  the new HMAC-SHA-256 symbols were missing.  Fix: add `AMA_API`
+  to both `ama_hmac_sha256` and `ama_hmac_sha256_2` declarations in
+  `src/c/ama_hmac_sha256.h` (matches the existing pattern on
+  `ama_hmac_sha3_256` / `ama_hmac_sha512` in
+  `include/ama_cryptography.h`).  The header also gains an
+  `#include "ama_cryptography.h"` so the `AMA_API` macro
+  definition is in scope.  No-op on GCC/Clang (visibility already
+  public); load-bearing on MSVC.  The .c definition picks up the
+  dllexport attribute via the declaration that's `#include`'d
+  first.  PR #323 (the merge-base for #326) was green on Windows
+  Python — the regression was introduced by `40a933c`, NOT a
+  pre-existing weakness.
+- **Copilot review r3276471155 — `dispatch_bench_keccak_x4()`
+  pre-revert baseline.**  Slot 2 (`keccak_f1600_x4`) bench used
+  `dispatch_table.keccak_f1600` as its 4× scalar baseline at a
+  point where slot 1's verdict has been COMPUTED (`v.keccak_regressed`)
+  but the revert (`dispatch_table.keccak_f1600 = ama_keccak_f1600_generic`
+  if `v.keccak_regressed`) hasn't been APPLIED yet — so a regressed
+  AVX2 single-state kernel was being used as the "scalar" baseline
+  for the x4 comparison, inflating the baseline timing past what the
+  runtime actually does (the runtime would resolve to
+  `ama_keccak_f1600_x4_generic` ≈ 4× generic).  An x4 SIMD kernel
+  that's actually slower than 4× generic could be misclassified as
+  non-regressed.  Fix: pass `ama_keccak_f1600_generic` directly to
+  `dispatch_bench_keccak_x4` as the single-state baseline.  Slot 1's
+  verdict is now decoupled from slot 2's comparison, matching the
+  decoupled-verdict architecture this code path was designed around.
+- **Copilot review r3276471202 — `include/ama_dispatch.h` cache-doc
+  ownership note misleading.**  The block-comment previously
+  suggested packagers can ship a pre-warmed cache in `/etc` — but
+  `dispatch_cache_save()` creates files with mode 0600 owned by the
+  writing EUID, so a root-owned `/etc/ama-cryptography.cache` would
+  be unreadable by a non-root service (perpetual miss + verbose-log
+  read-failure spam) AND unwritable on its own atomic-rename path.
+  Replaced the misleading paragraph with the corrected per-user
+  guidance: `$XDG_CACHE_HOME/ama-cryptography/<file>` is the
+  recommended location, and packagers wishing to ship a pre-warmed
+  cache should write per-user files (`install -m 0600 -o $user -g
+  $user ...`) rather than a single root-owned file.
+
 #### PR #326 follow-up: every-Python-lane CI failure + CodeQL path-injection + clang-tidy CERT-ERR34-C close-out
 - **Root cause of the "every Python lane on every OS" CI failure:
   conftest's CI-mode skip→failure hook over-attributed multi-skipif

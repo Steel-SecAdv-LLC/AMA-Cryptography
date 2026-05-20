@@ -303,12 +303,30 @@ AMA_API const char *ama_aes_gcm_active_backend(void);
  * cache path.  Cache files are created with mode 0600 (user-only).
  *
  * Default (env unset) — no file I/O on this code path, strictly opt-in.
- * Distribution packagers can ship a pre-warmed cache in /etc or under
- * `$XDG_CACHE_HOME/ama-cryptography/` and have downstream processes
- * pick it up by exporting `AMA_DISPATCH_CACHE_FILE` in their service
- * wrappers.  See `src/c/dispatch/ama_dispatch.c::dispatch_cache_save`
- * for the (text, one key=value per line) file format and forward-
- * compatibility behaviour.
+ *
+ * Permission / ownership contract: cache files are created with mode
+ * 0600 and owned by the EUID that runs the writing process (the
+ * canonical setuid env-var hardening — see `dispatch_cache_env_is_safe`
+ * in `src/c/dispatch/ama_dispatch.c`).  That makes
+ * `$XDG_CACHE_HOME/ama-cryptography/<file>` (i.e., per-user
+ * `~/.cache/ama-cryptography/<file>` on a Linux/XDG host, or a
+ * caller-chosen path under the process's HOME on Apple / BSD) the
+ * recommended location: each user's processes can read/write their own
+ * cache, and a privileged process never trusts an unprivileged caller's
+ * env var (Copilot review #326 r3276471202).
+ *
+ * Distribution packagers wishing to ship a pre-warmed cache should
+ * write per-target-user files under that user's `$XDG_CACHE_HOME`
+ * (`install -m 0600 -o $user -g $user ...`) rather than a single
+ * root-owned file under `/etc`: a non-root service running with
+ * `AMA_DISPATCH_CACHE_FILE=/etc/ama-cryptography.cache` would be
+ * unable to read a root-owned 0600 file (perpetual cache miss + a
+ * verbose-log read-failure line per init) AND unable to atomically
+ * `rename(2)` its own tmp file over a directory it doesn't own
+ * (the writer side would log a write FAILED entry on every init).
+ * See `src/c/dispatch/ama_dispatch.c::dispatch_cache_save` for the
+ * (text, one key=value per line) file format and forward-compatibility
+ * behaviour.
  *
  * The cache is bypassed when `AMA_DISPATCH_NO_AUTOTUNE=1` is set — the
  * opt-out env var takes precedence and the bench is skipped without

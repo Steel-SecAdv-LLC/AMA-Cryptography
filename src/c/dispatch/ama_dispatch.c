@@ -1843,9 +1843,22 @@ static void dispatch_init_internal(void) {
          * Benched independently — the AVX-512 4-way kernel is a
          * fundamentally different implementation from the AVX2 single-
          * state kernel, so the slot-1 verdict cannot proxy for it.
-         * The 4× scalar baseline uses `dispatch_table.keccak_f1600`
-         * (the kernel slot 1 just settled on), matching what
-         * `ama_keccak_f1600_x4_generic` does at runtime.  Fewer iters
+         * The 4× scalar baseline uses `ama_keccak_f1600_generic`
+         * directly (NOT the current `dispatch_table.keccak_f1600`
+         * pointer): the latter is still the SIMD kernel at this
+         * point in init — slot 1's verdict has been computed but
+         * the revert (`dispatch_table.keccak_f1600 = ama_keccak_f1600_generic`
+         * if `v.keccak_regressed`) hasn't been applied yet.  If slot 1
+         * IS regressed, using its current SIMD pointer as the x4
+         * baseline would inflate the baseline timing past what the
+         * runtime actually does (the runtime would resolve to
+         * `ama_keccak_f1600_x4_generic` ≈ 4× generic), making the
+         * x4 SIMD look faster than it really is and potentially
+         * masking an x4 regression — Copilot review #326 r3276471155.
+         * Pinning the baseline to the generic kernel keeps the
+         * comparison apples-to-apples regardless of slot 1's
+         * outcome, since `ama_keccak_f1600_x4_generic` is itself
+         * `4 × ama_keccak_f1600_generic` by definition.  Fewer iters
          * than slot 1 because each call permutes 4× the state. */
         if (dispatch_table.keccak_f1600_x4 != ama_keccak_f1600_x4_generic) {
             uint64_t states[4][25];
@@ -1854,7 +1867,7 @@ static void dispatch_init_internal(void) {
             int64_t generic_best = -1, simd_best = -1;
             dispatch_bench_keccak_x4(
                 dispatch_table.keccak_f1600_x4,
-                dispatch_table.keccak_f1600,
+                ama_keccak_f1600_generic,
                 states,
                 /*warmup=*/100, /*trials=*/5, /*iters=*/500,
                 &generic_best, &simd_best);
