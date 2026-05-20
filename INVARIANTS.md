@@ -290,6 +290,25 @@ detection of secret-dependent variable-time constructs.  The project's
 `CONSTANT_TIME_VERIFICATION.md` is the authoritative artifact for
 verification methodology.
 
+### INVARIANT-12 Addendum — Per-slot SIMD dudect coverage is enforced, not implied
+
+The `dudect-simd-sweep` job in `.github/workflows/dudect.yml` exercises
+**each** SIMD slot in isolation via the `AMA_DISPATCH_ONLY=<slot>`
+env-var contract introduced for audit Issue 3 deferral close-out
+(2026-05).  Sampling the default-dispatch lane alone is **not**
+sufficient — a t-value regression in a single SIMD kernel can be
+masked by the host's selection of a different tier in the same family
+(e.g., a leak in `kyber-sve2` is invisible if the runner only wires
+NEON Kyber).
+
+The dispatcher's filter logic (`src/c/dispatch/ama_dispatch.c`)
+preserves INVARIANT-15 (the once-init primitive is unchanged — filter
+runs inside the same `pthread_once` / `InitOnceExecuteOnce` callback)
+and INVARIANT-12 (the wired slot uses the same production kernel —
+no parallel branch, no debug-only fork).  When a slot is named but
+not available on the runner, the dispatcher exits 77 and the workflow
+treats the cell as Skipped, never as a silent pass.
+
 ## INVARIANT-13 — No Unjustified Static-Analysis Suppressions
 
 Use of `# noqa`, `# nosec`, `# pylint: disable`, `# type: ignore`, or any

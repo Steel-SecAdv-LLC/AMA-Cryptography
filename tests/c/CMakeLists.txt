@@ -20,6 +20,15 @@ add_ama_test(test_aes_gcm_scalar_kat test_aes_gcm_scalar_kat.c)
 add_ama_test(test_aes_gcm_backend_introspect test_aes_gcm_backend_introspect.c)
 set_tests_properties(test_aes_gcm_backend_introspect PROPERTIES SKIP_RETURN_CODE 77)
 
+# Audit Issue 3 deferral close-out (2026-05): per-slot dispatch
+# isolation via AMA_DISPATCH_ONLY=<slot>.  Pins the env-var contract
+# AND the new ama_dispatch_active_slot() label.  Returns 77 on hosts
+# where the per-arch canonical slot is not wired (architecture
+# mismatch, CI runner with masked ISA bits, build flag off) — CTest
+# surfaces those as Skipped rather than Passed.
+add_ama_test(test_dispatch_only_env test_dispatch_only_env.c)
+set_tests_properties(test_dispatch_only_env PROPERTIES SKIP_RETURN_CODE 77)
+
 # Cryptographic primitive tests
 add_ama_test(test_sha3 test_sha3.c)
 add_ama_test(test_sha3_512_stream test_sha3_512_stream.c)

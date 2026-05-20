@@ -268,6 +268,39 @@ AMA_API const char *ama_impl_level_name(ama_impl_level_t level);
  */
 AMA_API const char *ama_aes_gcm_active_backend(void);
 
+/* ============================================================================
+ * Per-slot dispatch isolation (audit Issue 3 deferral close-out)
+ * ============================================================================
+ *
+ * Returns a constant NUL-terminated label naming the SIMD slot
+ * filtered in by the `AMA_DISPATCH_ONLY=<slot>` env var, or
+ * "default-dispatch" when the var is unset/empty.
+ *
+ * The full slot inventory honoured by the dispatcher is:
+ *
+ *   "sha3-avx512x4"      x86-64 AVX-512 4-way Keccak (PR C kernel)
+ *   "kyber-ntt-avx2"     x86-64 AVX2 Kyber NTT / inv-NTT / pointwise / cbd2
+ *   "dilithium-ntt-avx2" x86-64 AVX2 Dilithium NTT / inv-NTT / pointwise /
+ *                         rej-uniform
+ *   "chacha20-avx2x8"    x86-64 AVX2 ChaCha20 8-way block
+ *   "argon2-g-avx2"      x86-64 AVX2 Argon2 G permutation
+ *   "x25519-avx2"        x86-64 AVX2 X25519 4-way ladder (composes with
+ *                         AMA_DISPATCH_USE_X25519_AVX2=1; otherwise the
+ *                         slot resolves as "unavailable")
+ *   "aes-gcm-neon"       AArch64 NEON + ARMv8 Crypto Extensions AES-GCM
+ *   "chacha20-neon"      AArch64 NEON ChaCha20 8-way block
+ *   "sha3-neon"          AArch64 NEON Keccak + SHA3-256 sponge
+ *   "kyber-sve2"         AArch64 SVE2 Kyber NTT + poly add/sub/reduce
+ *   "sha3-sve2"          AArch64 SVE2 Keccak + SHA3-256 sponge
+ *
+ * When AMA_DISPATCH_ONLY names a slot that the build/host does not
+ * support, ama_dispatch_init() exits cleanly (77 = CTest SKIP) before
+ * this function returns.  When AMA_DISPATCH_ONLY names a slot not in
+ * the inventory above, ama_dispatch_init() exits 1.  Production
+ * callers MUST NOT set AMA_DISPATCH_ONLY — this is a CI / debug knob.
+ */
+AMA_API const char *ama_dispatch_active_slot(void);
+
 #ifdef __cplusplus
 }
 #endif

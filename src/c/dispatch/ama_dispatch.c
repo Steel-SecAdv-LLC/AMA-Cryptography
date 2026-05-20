@@ -79,6 +79,21 @@ static ama_dispatch_info_t dispatch_info;
 static ama_dispatch_table_t dispatch_table;
 static AMA_ONCE_FLAG dispatch_once_flag = AMA_ONCE_FLAG_INIT;
 
+/* AMA_DISPATCH_ONLY=<slot> filter state (audit Issue 3 deferral
+ * close-out).  Resolved once at init; checked by ama_dispatch_init()
+ * to surface unsupported / unknown slots as CTest skip / fail.
+ * INVARIANT-15: written exactly once, inside dispatch_init_internal,
+ * under the same pthread_once barrier as the rest of init. */
+typedef enum {
+    DISPATCH_ONLY_OFF         = 0,  /* AMA_DISPATCH_ONLY not set / empty */
+    DISPATCH_ONLY_WIRED       = 1,  /* recognized + available + filter applied */
+    DISPATCH_ONLY_UNAVAILABLE = 2,  /* recognized but no kernel on this host */
+    DISPATCH_ONLY_UNKNOWN     = 3,  /* slot name not in the inventory */
+} dispatch_only_status_t;
+
+static dispatch_only_status_t g_dispatch_only_status = DISPATCH_ONLY_OFF;
+static const char *g_dispatch_only_slot_label = "default-dispatch";
+
 #ifdef AMA_TESTING_MODE
 /* Snapshot of dispatch_table immediately after dispatch_init_internal
  * completes. Used by ama_test_restore_*_avx2() so "restore" returns to
@@ -895,6 +910,183 @@ static void dispatch_init_internal(void) {
         fprintf(stderr, "[AMA Dispatch] ed25519      -> scalar (no SIMD wired; backend chosen at build time)\n");
     }
 
+    /* ====================================================================
+     * Phase 4: AMA_DISPATCH_ONLY=<slot> filter (audit Issue 3 deferral
+     * close-out — 2026-05).
+     *
+     * When set, the dispatcher leaves every kernel pointer at scalar
+     * (NULL or the generic-tier function pointer) EXCEPT the named
+     * slot, which is left at its just-resolved kernel.  Composes
+     * orthogonally with the existing AMA_DISPATCH_NO_*_AVX2 opt-outs
+     * and AMA_DISPATCH_USE_X25519_AVX2 opt-in surface — the filter
+     * runs AFTER those, so the post-filter table reflects exactly the
+     * slot's normal init outcome, no parallel branch.
+     *
+     * Recognized slot inventory (matches CHANGELOG audit Issue 3
+     * close-out wording verbatim):
+     *   sha3-avx512x4, kyber-ntt-avx2, dilithium-ntt-avx2,
+     *   chacha20-avx2x8, argon2-g-avx2, aes-gcm-neon, chacha20-neon,
+     *   sha3-neon, kyber-sve2, sha3-sve2, x25519-avx2
+     *
+     * Outcomes:
+     *   - Slot recognized AND available on this host: filter applied;
+     *     ama_dispatch_active_slot() returns the slot label.
+     *   - Slot recognized BUT not available (wrong arch, missing
+     *     ISA bit, or auto-tune reverted): table left at default;
+     *     ama_dispatch_init() exits 77 (CTest SKIP).
+     *   - Slot unknown: table left at default; ama_dispatch_init()
+     *     exits 1 (test failure).
+     * ==================================================================== */
+    {
+        const char *only = getenv("AMA_DISPATCH_ONLY");
+        if (only && only[0] != '\0') {
+            ama_dispatch_table_t current = dispatch_table;
+            ama_dispatch_table_t filtered;
+            memset(&filtered, 0, sizeof(filtered));
+            /* keccak_f1600 / keccak_f1600_x4 are documented as always
+             * non-NULL after init (include/ama_dispatch.h); preserve
+             * the generic-tier default so non-target callers stay
+             * within the contract. */
+            filtered.keccak_f1600    = ama_keccak_f1600_generic;
+            filtered.keccak_f1600_x4 = ama_keccak_f1600_x4_generic;
+
+            int recognized = 1;
+            int available  = 0;
+            const char *label = NULL;
+
+            if (strcmp(only, "sha3-avx512x4") == 0) {
+#if defined(AMA_HAVE_AVX512_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+                if (current.keccak_f1600_x4 == ama_keccak_f1600_x4_avx512) {
+                    filtered.keccak_f1600_x4 = ama_keccak_f1600_x4_avx512;
+                    available = 1; label = "sha3-avx512x4";
+                }
+#endif
+            } else if (strcmp(only, "kyber-ntt-avx2") == 0) {
+#ifdef AMA_HAVE_AVX2_IMPL
+                if (current.kyber_ntt == ama_kyber_ntt_avx2) {
+                    filtered.kyber_ntt        = ama_kyber_ntt_avx2;
+                    filtered.kyber_invntt     = ama_kyber_invntt_avx2;
+                    filtered.kyber_pointwise  = ama_kyber_poly_pointwise_avx2;
+                    filtered.kyber_cbd2       = ama_kyber_cbd2_avx2;
+                    available = 1; label = "kyber-ntt-avx2";
+                }
+#endif
+            } else if (strcmp(only, "dilithium-ntt-avx2") == 0) {
+#ifdef AMA_HAVE_AVX2_IMPL
+                if (current.dilithium_ntt == ama_dilithium_ntt_avx2) {
+                    filtered.dilithium_ntt           = ama_dilithium_ntt_avx2;
+                    filtered.dilithium_invntt        = ama_dilithium_invntt_avx2;
+                    filtered.dilithium_pointwise     = ama_dilithium_poly_pointwise_avx2;
+                    filtered.dilithium_rej_uniform   = ama_dilithium_rej_uniform_avx2;
+                    available = 1; label = "dilithium-ntt-avx2";
+                }
+#endif
+            } else if (strcmp(only, "chacha20-avx2x8") == 0) {
+#ifdef AMA_HAVE_AVX2_IMPL
+                if (current.chacha20_block_x8 == ama_chacha20_block_x8_avx2) {
+                    filtered.chacha20_block_x8 = ama_chacha20_block_x8_avx2;
+                    available = 1; label = "chacha20-avx2x8";
+                }
+#endif
+            } else if (strcmp(only, "argon2-g-avx2") == 0) {
+#ifdef AMA_HAVE_AVX2_IMPL
+                if (current.argon2_g == ama_argon2_g_avx2) {
+                    filtered.argon2_g = ama_argon2_g_avx2;
+                    available = 1; label = "argon2-g-avx2";
+                }
+#endif
+            } else if (strcmp(only, "x25519-avx2") == 0) {
+#ifdef AMA_HAVE_AVX2_IMPL
+                /* x25519-avx2 is opt-in — composes with the existing
+                 * AMA_DISPATCH_USE_X25519_AVX2=1 env var.  When the
+                 * caller sets ONLY=x25519-avx2 without USE_X25519_AVX2,
+                 * current.x25519_x4 is NULL and this resolves as
+                 * "unavailable" — exit 77 below. */
+                if (current.x25519_x4 == ama_x25519_scalarmult_x4_avx2) {
+                    filtered.x25519_x4 = ama_x25519_scalarmult_x4_avx2;
+                    available = 1; label = "x25519-avx2";
+                }
+#endif
+            } else if (strcmp(only, "aes-gcm-neon") == 0) {
+#ifdef AMA_HAVE_NEON_IMPL
+                if (current.aes_gcm_encrypt == ama_aes256_gcm_encrypt_neon) {
+                    filtered.aes_gcm_encrypt = ama_aes256_gcm_encrypt_neon;
+                    filtered.aes_gcm_decrypt = ama_aes256_gcm_decrypt_neon;
+                    available = 1; label = "aes-gcm-neon";
+                }
+#endif
+            } else if (strcmp(only, "chacha20-neon") == 0) {
+#ifdef AMA_HAVE_NEON_IMPL
+                if (current.chacha20_block_x8 == ama_chacha20_block_x8_neon) {
+                    filtered.chacha20_block_x8 = ama_chacha20_block_x8_neon;
+                    available = 1; label = "chacha20-neon";
+                }
+#endif
+            } else if (strcmp(only, "sha3-neon") == 0) {
+#ifdef AMA_HAVE_NEON_IMPL
+                if (current.keccak_f1600 == ama_keccak_f1600_neon) {
+                    filtered.keccak_f1600 = ama_keccak_f1600_neon;
+                    filtered.sha3_256     = ama_sha3_256_neon;
+                    available = 1; label = "sha3-neon";
+                }
+#endif
+            } else if (strcmp(only, "kyber-sve2") == 0) {
+#ifdef AMA_HAVE_SVE2_IMPL
+                if (current.kyber_ntt == ama_kyber_ntt_sve2) {
+                    filtered.kyber_ntt        = ama_kyber_ntt_sve2;
+                    filtered.kyber_invntt     = ama_kyber_invntt_sve2;
+                    filtered.kyber_pointwise  = ama_kyber_poly_pointwise_sve2;
+                    filtered.kyber_poly_add    = ama_kyber_poly_add_sve2;
+                    filtered.kyber_poly_sub    = ama_kyber_poly_sub_sve2;
+                    filtered.kyber_poly_reduce = ama_kyber_poly_reduce_sve2;
+                    available = 1; label = "kyber-sve2";
+                }
+#endif
+            } else if (strcmp(only, "sha3-sve2") == 0) {
+#ifdef AMA_HAVE_SVE2_IMPL
+                if (current.keccak_f1600 == ama_keccak_f1600_sve2) {
+                    filtered.keccak_f1600 = ama_keccak_f1600_sve2;
+                    filtered.sha3_256     = ama_sha3_256_sve2;
+                    available = 1; label = "sha3-sve2";
+                }
+#endif
+            } else {
+                recognized = 0;
+            }
+
+            if (!recognized) {
+                fprintf(stderr,
+                    "[AMA Dispatch] AMA_DISPATCH_ONLY='%s' — unknown slot.  "
+                    "Valid: sha3-avx512x4, kyber-ntt-avx2, "
+                    "dilithium-ntt-avx2, chacha20-avx2x8, argon2-g-avx2, "
+                    "aes-gcm-neon, chacha20-neon, sha3-neon, kyber-sve2, "
+                    "sha3-sve2, x25519-avx2\n", only);
+                g_dispatch_only_status = DISPATCH_ONLY_UNKNOWN;
+                g_dispatch_only_slot_label = "unknown-slot";
+            } else if (!available) {
+                fprintf(stderr,
+                    "[AMA Dispatch] AMA_DISPATCH_ONLY='%s' — slot "
+                    "recognized but not wired on this build/host "
+                    "(missing ISA bit, wrong arch, build flag off, or "
+                    "auto-tune reverted).  ama_dispatch_init() will "
+                    "exit 77 — CTest treats this as Skipped.\n",
+                    only);
+                g_dispatch_only_status = DISPATCH_ONLY_UNAVAILABLE;
+                g_dispatch_only_slot_label = "unavailable";
+            } else {
+                dispatch_table = filtered;
+                g_dispatch_only_status     = DISPATCH_ONLY_WIRED;
+                g_dispatch_only_slot_label = label;
+                if (dispatch_verbose())
+                    fprintf(stderr,
+                        "[AMA Dispatch] AMA_DISPATCH_ONLY='%s' — slot "
+                        "filter applied; all other SIMD slots reverted "
+                        "to scalar for measurement isolation.\n",
+                        label);
+            }
+        }
+    }
+
 #ifdef AMA_TESTING_MODE
     /* Snapshot post-init dispatch state for ama_test_restore_*_avx2().
      * Captures the actual choices the dispatcher made — including any
@@ -911,6 +1103,32 @@ static void dispatch_init_internal(void) {
 
 void ama_dispatch_init(void) {
     AMA_DISPATCH_CALL_ONCE(dispatch_once_flag, dispatch_init_internal);
+    /* AMA_DISPATCH_ONLY=<slot> abort-on-unsupported contract.  The
+     * filter logic in dispatch_init_internal records its verdict in
+     * g_dispatch_only_status; we surface unsupported / unknown slots
+     * AFTER the once-callback returns (calling exit() inside a
+     * pthread_once callback is portable but uses _exit semantics on
+     * some libcs, which skips atexit handlers like fflush — surface
+     * here instead so flushing happens cleanly).  Test binaries set
+     * AMA_DISPATCH_ONLY; production callers never do, so this exit
+     * path is only reachable in CI / debug runs. */
+    if (g_dispatch_only_status == DISPATCH_ONLY_UNKNOWN) {
+        /* exit(1) — clear failure: caller typo'd the slot name. */
+        exit(1);
+    }
+    if (g_dispatch_only_status == DISPATCH_ONLY_UNAVAILABLE) {
+        /* exit(77) — CTest skip code.  Workflow run steps must accept
+         * 77 as a non-failing outcome (see .github/workflows/dudect.yml
+         * dudect-simd-sweep run step). */
+        exit(77);
+    }
+}
+
+const char *ama_dispatch_active_slot(void) {
+    ama_dispatch_init();
+    /* If init exited above, this line is unreachable; reached only
+     * when status is OFF (default-dispatch) or WIRED (slot label). */
+    return g_dispatch_only_slot_label;
 }
 
 const char *ama_impl_level_name(ama_impl_level_t level) {

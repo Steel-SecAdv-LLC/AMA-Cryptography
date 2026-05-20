@@ -72,6 +72,26 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   on a nightly cron, including both the default dispatch and the
   AVX2 X25519 4-way opt-in.  Per-PR latency unchanged: the existing
   jobs still gate on source touched.
+  **Audit Issue 3 deferral close-out (2026-05):** the sweep matrix is
+  now per-slot, not aggregate.  New env-var contract
+  `AMA_DISPATCH_ONLY=<slot>` (recognized by
+  `src/c/dispatch/ama_dispatch.c::dispatch_init_internal`) wires only
+  the named slot's kernel and scalarizes everything else, so the
+  per-cell t-value is attributable to a specific SIMD kernel.  Slot
+  inventory: `sha3-avx512x4`, `kyber-ntt-avx2`, `dilithium-ntt-avx2`,
+  `chacha20-avx2x8`, `argon2-g-avx2`, `aes-gcm-neon`, `chacha20-neon`,
+  `sha3-neon`, `kyber-sve2`, `sha3-sve2`, `x25519-avx2` (composes with
+  the existing `AMA_DISPATCH_USE_X25519_AVX2=1` opt-in).  Companion
+  introspection API `ama_dispatch_active_slot()` declared in
+  `include/ama_dispatch.h`, defined in `ama_dispatch.c`, returning
+  the resolved label.  Pinned by
+  `tests/c/test_dispatch_only_env.c` (CTest `SKIP_RETURN_CODE 77` on
+  hosts where the per-arch canonical slot is not wired).  On an
+  unsupported slot, the dispatcher exits 77 from
+  `ama_dispatch_init()` and the workflow's run step translates that
+  to a non-failing notice — never a silent pass.  INVARIANT-12
+  addendum documents the enforcement; INVARIANT-15 unchanged (filter
+  runs inside the same `pthread_once` callback).
 - **Reproducible-build verification (audit Issue 10 / INVARIANT-8).**
   New `reproducible-build` job in `.github/workflows/static-analysis.yml`
   builds the wheel twice from identical inputs (pinned
