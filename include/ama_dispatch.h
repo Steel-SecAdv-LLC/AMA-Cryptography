@@ -324,7 +324,7 @@ AMA_API const char *ama_aes_gcm_active_backend(void);
  * verbose-log read-failure line per init) AND unable to atomically
  * `rename(2)` its own tmp file over a directory it doesn't own
  * (the writer side would log a write FAILED entry on every init).
- * See `src/c/dispatch/ama_dispatch.c::dispatch_cache_save` for the
+ * See `src/c/dispatch/ama_dispatch.c::dispatch_cache_save_at` for the
  * (text, one key=value per line) file format and forward-compatibility
  * behaviour.
  *

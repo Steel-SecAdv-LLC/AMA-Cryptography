@@ -86,7 +86,7 @@
 /* <limits.h> brings in PATH_MAX on glibc / musl / Apple libc / *BSD —
  * needed for the realpath()-canonicalised cache path buffer.  Where the
  * platform leaves PATH_MAX undefined (some musl configs), the
- * dispatch_cache_path_canonicalize fallback below applies its own bound. */
+ * dispatch_cache_path_split fallback below applies its own bound. */
 #include <limits.h>
 /* getauxval(AT_SECURE) lives in <sys/auxv.h> on glibc / Bionic / musl
  * (recent).  Wrapped in __has_include so older musl and the BSDs
@@ -102,7 +102,7 @@
  * via <limits.h> on all platforms we ship to; the fallback keeps the
  * code compilable on libcs that leave it undefined (a known musl quirk).
  * 4096 matches the Linux kernel's PATH_MAX and the tmppath buffer in
- * dispatch_cache_save() so the canonical-path stage cannot widen the
+ * dispatch_cache_save_at() so the canonical-path stage cannot widen the
  * effective bound the rest of the cache layer enforces. */
 #if !defined(PATH_MAX)
 #  define AMA_DISPATCH_PATH_MAX 4096
@@ -870,66 +870,44 @@ static int dispatch_cache_env_is_safe(void) {
 #endif
 }
 
-/* Canonicalize `path` into the caller-supplied `out` buffer via
- * realpath().  Returns 0 on success, -1 on failure.  Handles the
- * "file doesn't exist yet" write case by canonicalising the dirname
- * and reconstructing `<canonical-dir>/<basename>`.
+/* Validate an opt-in AMA_DISPATCH_CACHE_FILE path string.  Returns 0
+ * and populates `dir_out` + `base_out` on success, non-zero on rejection.
+ * The raw environment string never reaches a file-access syscall:
+ * call sites open the already-canonicalized parent directory first and
+ * then use openat() / fdopen() by basename.
  *
- * Why realpath():
- *   CodeQL's cpp/path-injection model recognises realpath() as a
- *   path-injection sanitizer because the returned canonical path has
- *   all symlinks resolved and `.`/`..` components collapsed — it can
- *   no longer be steered out of the directory whose write/read access
- *   the caller's own uid already implies.  The pre-existing
- *   strstr("..") and control-char rejections in
- *   dispatch_cache_path_sanitize() above remain as a fast-path defence
- *   AND because they reject inputs realpath() would happily resolve
- *   into a legitimate-but-attacker-chosen location.
+ * Layered sanitization:
+ *   1. non-empty + bounded byte length (<= 4000)
+ *   2. ASCII-control rejection (prevents verbose-log injection)
+ *   3. basename-only `..` / `.` rejection and no slash inside basename
+ *   4. realpath() canonicalization of the parent directory
  *
- * Why split on the basename for write paths:
- *   realpath() requires every component to exist on disk.  The cache
- *   file itself does not exist on first write — realpath() would
- *   return NULL with ENOENT and the caller would have no canonical
- *   path to hand to open().  Splitting on the final '/' and
- *   canonicalising only the parent directory keeps realpath() in the
- *   flow (so CodeQL's sanitizer model fires) without imposing a
- *   "must pre-create the cache file" restriction on the user. */
-static int dispatch_cache_path_canonicalize(const char *path,
-                                             char *out, size_t outlen) {
-    if (!path || !out || outlen == 0) return -1;
-
-    char resolved[AMA_DISPATCH_PATH_MAX];
-
-    /* Read-side fast path: file exists, realpath resolves the whole
-     * thing in one syscall. */
-    if (realpath(path, resolved) != NULL) {
-        size_t rlen = strlen(resolved);
-        if (rlen >= outlen) return -1;
-        memcpy(out, resolved, rlen + 1);
-        return 0;
+ * The parent-directory descriptor is the authority boundary: once the
+ * directory has been opened, the only attacker-controlled component left
+ * is a single filename segment passed to *at() APIs relative to that fd.
+ */
+static int dispatch_cache_path_split(const char *path,
+                                     char *dir_out, size_t dir_outlen,
+                                     char *base_out, size_t base_outlen) {
+    if (!path || !dir_out || !base_out || dir_outlen == 0 || base_outlen == 0) {
+        return -1;
     }
-    if (errno != ENOENT) return -1;
 
-    /* Write-side fall-through: split on the final '/' and canonicalise
-     * the parent directory.  Anything else (missing intermediate
-     * component, permission error) was caught by the realpath() above
-     * via an errno != ENOENT. */
+    size_t len = 0;
+    while (len < 4001 && path[len] != '\0') {
+        unsigned char c = (unsigned char)path[len];
+        if (c < 0x20 || c == 0x7F) return -1;
+        len++;
+    }
+    if (len == 0 || len > 4000) return -1;
+
     const char *last_slash = strrchr(path, '/');
     const char *basename = last_slash ? last_slash + 1 : path;
-    if (basename[0] == '\0') return -1;  /* path ended with '/' */
-    if (strlen(basename) >= sizeof(resolved)) return -1;
+    if (basename[0] == '\0') return -1;
+    if (strcmp(basename, ".") == 0 || strcmp(basename, "..") == 0) return -1;
+    if (strchr(basename, '/') != NULL) return -1;
+    if (strlen(basename) >= base_outlen) return -1;
 
-    /* Re-check the basename for traversal segments — strrchr only
-     * splits on the LAST slash, so a basename like "..foo" or "foo.."
-     * (legal filenames, already passed the earlier strstr filter) is
-     * fine, but a "naked" ".." (legal literal name on disk yet
-     * semantically equivalent to the parent reference) is refused
-     * here so the final reconstructed path cannot escape resolved_dir. */
-    if (strcmp(basename, "..") == 0 || strcmp(basename, ".") == 0) return -1;
-
-    /* Determine the dirname segment.  No '/' → CWD; leading '/' alone
-     * (path = "/foo") → root.  Bounded copy into a local stack buffer
-     * keeps realpath()'s input lifetime clearly scoped. */
     char dir[AMA_DISPATCH_PATH_MAX];
     if (!last_slash) {
         dir[0] = '.';
@@ -945,91 +923,30 @@ static int dispatch_cache_path_canonicalize(const char *path,
             dir[dlen] = '\0';
         }
     }
-    if (realpath(dir, resolved) == NULL) return -1;
 
-    /* Reconstruct `<resolved_dir>/<basename>`, avoiding a double slash
-     * when resolved_dir is the root "/". */
+    char resolved[AMA_DISPATCH_PATH_MAX];
+    if (realpath(dir, resolved) == NULL) return -1;
     size_t rlen = strlen(resolved);
-    int wrote;
-    if (rlen == 1 && resolved[0] == '/') {
-        wrote = snprintf(out, outlen, "/%s", basename);
-    } else {
-        wrote = snprintf(out, outlen, "%s/%s", resolved, basename);
-    }
-    if (wrote < 0 || (size_t)wrote >= outlen) return -1;
+    if (rlen == 0 || rlen >= dir_outlen) return -1;
+
+    memcpy(dir_out, resolved, rlen + 1);
+    memcpy(base_out, basename, strlen(basename) + 1);
     return 0;
 }
 
-/* Validate an opt-in AMA_DISPATCH_CACHE_FILE path string.  Returns a
- * pointer to a canonicalised copy on success, NULL on rejection — the
- * caller treats NULL the same as "env var unset".  Layered sanitization:
- *
- *   1. NUL check + length bounds.  `getenv` returns a NUL-terminated
- *      string with no embedded NULs, but the contract is asserted
- *      explicitly for static analysers (CodeQL flow tracker) and to
- *      reject empty/oversized values cheaply.
- *
- *   2. Path traversal rejection.  Any `..` component anywhere in the
- *      path is rejected.  Together with the `dispatch_cache_env_is_safe`
- *      gate above this closes the "env-var-controlled file overwrite"
- *      escalation primitive that CodeQL flags as
- *      "Uncontrolled data used in path expression" (#535 / #537):
- *      a privileged process never sees the env var, and an
- *      unprivileged process can only write into directories its uid
- *      already has write access to without traversal escapes.
- *
- *   3. Control-character rejection.  Newlines / CR in the path would
- *      corrupt the verbose-log line format and could be abused to
- *      inject log entries; reject them up front.
- *
- *   4. realpath() canonicalisation via dispatch_cache_path_canonicalize.
- *      Resolves all symlinks and `.`/`..` components against the
- *      filesystem; the call sites pass the canonical pointer (not the
- *      raw env-var pointer) to fopen / open.  This is the load-bearing
- *      step for CodeQL's cpp/path-injection sanitizer model — realpath
- *      is on its recognized sanitizer list, so the tainted-data flow
- *      from getenv → open/fopen is terminated at the realpath barrier.
- *
- * Returns a pointer into a function-local static buffer.  The buffer
- * is overwritten on each call; dispatch init invokes this exactly once
- * per process under pthread_once / InitOnceExecuteOnce, so single-use
- * lifetime is sufficient and the static storage is unaliased. */
-static const char *dispatch_cache_path_sanitize(const char *path) {
-    if (!path) return NULL;
-
-    size_t len = 0;
-    /* Bounded strlen — refuse anything longer than 4000 bytes (the
-     * reserve in dispatch_cache_save's tmppath buffer assumes
-     * pathlen + sizeof(".tmp.<20-digit-pid>") < 4096).  Walks the
-     * string ourselves rather than calling strlen() so a missing-NUL
-     * pathological input (impossible from getenv but defensive) is
-     * caught before it overruns. */
-    while (len < 4001 && path[len] != '\0') {
-        unsigned char c = (unsigned char)path[len];
-        /* Reject ASCII control chars (NUL was the loop termination
-         * above; ranges 0x01..0x1F + 0x7F).  Printable bytes (0x20..
-         * 0x7E) and high-bit bytes (valid for UTF-8 filenames) pass. */
-        if (c < 0x20 || c == 0x7F) return NULL;
-        len++;
+static int dispatch_cache_open_dir(const char *dirpath) {
+    int dfd = open(dirpath, O_RDONLY | O_CLOEXEC);
+    if (dfd < 0) return -1;
+#if !defined(O_CLOEXEC)
+    int flags = fcntl(dfd, F_GETFD, 0);
+    if (flags >= 0) (void)fcntl(dfd, F_SETFD, flags | FD_CLOEXEC);
+#endif
+    struct stat st;
+    if (fstat(dfd, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        close(dfd);
+        return -1;
     }
-    if (len == 0 || len > 4000) return NULL;
-
-    /* Path-traversal rejection: any `..` segment anywhere.  Catches
-     * "../../etc/shadow", "/var/../etc/shadow", and the trailing
-     * "/foo/.." form.  We reject the literal substring outright;
-     * filenames legitimately containing `..` as part of their name
-     * (e.g., `my..cache`) are an acceptable casualty for an opt-in
-     * env-controlled feature. */
-    if (strstr(path, "..") != NULL) return NULL;
-
-    /* realpath()-backed canonicalisation.  The returned pointer
-     * references a static buffer owned by this function — the env-var
-     * pointer never reaches the file-access call sites. */
-    static char canonical[AMA_DISPATCH_PATH_MAX];
-    if (dispatch_cache_path_canonicalize(path, canonical, sizeof(canonical)) != 0) {
-        return NULL;
-    }
-    return canonical;
+    return dfd;
 }
 
 static void dispatch_cache_fingerprint(char *out, size_t outlen) {
@@ -1078,30 +995,27 @@ static void rstrip(char *s) {
     }
 }
 
-/* Returns 0 on cache hit, non-zero on miss.  Verdict struct is left
- * untouched on miss so the surrounding code can populate it via
- * benches.  Path validity is the caller's responsibility — this
- * function trusts `path` after `dispatch_cache_env_is_safe()` has
- * approved the env-var source. */
-static int dispatch_cache_load(const char *path, const char *fingerprint,
-                                dispatch_autotune_verdicts_t *v) {
-    /* Use plain "r" + explicit FD_CLOEXEC via fcntl rather than the
-     * glibc-specific `"re"` mode (the "e" extension is not portable
-     * to Apple libc and silently no-ops on some BSDs, leaving the FD
-     * to leak across exec — Copilot review #325). */
-    FILE *fp = fopen(path, "r");
-    if (!fp) return -1;
-    {
-        int fd = fileno(fp);
-        if (fd >= 0) {
-            int flags = fcntl(fd, F_GETFD, 0);
-            if (flags >= 0)
-                (void)fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
-        }
+static int dispatch_cache_load_at(int dfd, const char *basename,
+                                  const char *fingerprint,
+                                  dispatch_autotune_verdicts_t *v) {
+    int fd = openat(dfd, basename, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+#if !defined(O_CLOEXEC)
+    int flags = fcntl(fd, F_GETFD, 0);
+    if (flags >= 0) (void)fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+#endif
+    /* Per-slot regression flags are written as literal "0" or "1";
+     * parse via strtol with full endpoint + errno validation rather
+     * than atoi() (CERT ERR34-C).  Timing fields round-trip for
+     * diagnostic verbose logs only; they never drive security state. */
+    FILE *fp = fdopen(fd, "r");
+    if (!fp) {
+        close(fd);
+        return -1;
     }
 
     char line[512];
-    int  fp_matched = 0;
+    int fp_matched = 0;
     dispatch_autotune_verdicts_t tmp;
     memset(&tmp, 0, sizeof(tmp));  // PUBLIC-DATA: tmp — zero-init cache parsing scratch (PUBLIC)
 
@@ -1116,22 +1030,12 @@ static int dispatch_cache_load(const char *path, const char *fingerprint,
 
         if (strcmp(key, "fingerprint") == 0) {
             fp_matched = (strcmp(val, fingerprint) == 0);
-        }
-        /* Per-slot regression flags are written as the literal "0" or
-         * "1" by dispatch_cache_save (see fprintf("...=%d\n", ...) in
-         * the writer); parse via strtol with full endpoint + errno
-         * validation rather than atoi() (CERT ERR34-C / clang-tidy
-         * cert-err34-c).  A garbled cache line — partial digits,
-         * trailing junk, overflow — yields a 0 regression flag, which
-         * matches the surrounding code's "no measurement" fallback.
-         * Each parse is local to its branch so a single malformed
-         * field can't poison the others. */
-        else if (strcmp(key, "keccak_regressed") == 0
-                 || strcmp(key, "keccak_x4_regressed") == 0
-                 || strcmp(key, "kyber_ntt_regressed") == 0
-                 || strcmp(key, "kyber_invntt_regressed") == 0
-                 || strcmp(key, "dilithium_ntt_regressed") == 0
-                 || strcmp(key, "dilithium_invntt_regressed") == 0) {
+        } else if (strcmp(key, "keccak_regressed") == 0
+                   || strcmp(key, "keccak_x4_regressed") == 0
+                   || strcmp(key, "kyber_ntt_regressed") == 0
+                   || strcmp(key, "kyber_invntt_regressed") == 0
+                   || strcmp(key, "dilithium_ntt_regressed") == 0
+                   || strcmp(key, "dilithium_invntt_regressed") == 0) {
             char *endptr = NULL;
             errno = 0;
             long parsed = strtol(val, &endptr, 10);
@@ -1146,21 +1050,7 @@ static int dispatch_cache_load(const char *path, const char *fingerprint,
             else if (strcmp(key, "kyber_invntt_regressed")      == 0) tmp.kyber_invntt_regressed      = flag;
             else if (strcmp(key, "dilithium_ntt_regressed")     == 0) tmp.dilithium_ntt_regressed     = flag;
             else if (strcmp(key, "dilithium_invntt_regressed")  == 0) tmp.dilithium_invntt_regressed  = flag;
-        }
-        /* Timing fields populate the verdict struct so a verbose
-         * cache-hit log reports the cached ns readings rather than
-         * misleading zeros (Copilot review #325).  strtoll saturates
-         * to LLONG_MIN/LLONG_MAX on overflow and returns 0 only when
-         * no digits were parsed (Copilot review #326 follow-up — the
-         * earlier comment incorrectly claimed "out-of-range falls
-         * back to 0").  Both behaviours are safe for our consumer:
-         * a saturated reading is treated as a "very large ns" which
-         * compares correctly under bench_slot_regressed's >10%
-         * threshold, and a 0 (no-digits) is treated as "no
-         * measurement" by the verbose log.  The surrounding code
-         * never trusts these timings for security decisions — they
-         * are diagnostic-only. */
-        else if (strcmp(key, "keccak_simd_ns") == 0) {
+        } else if (strcmp(key, "keccak_simd_ns") == 0) {
             tmp.keccak_simd_ns = (int64_t)strtoll(val, NULL, 10);
         } else if (strcmp(key, "keccak_generic_ns") == 0) {
             tmp.keccak_generic_ns = (int64_t)strtoll(val, NULL, 10);
@@ -1185,7 +1075,6 @@ static int dispatch_cache_load(const char *path, const char *fingerprint,
         } else if (strcmp(key, "dilithium_invntt_generic_ns") == 0) {
             tmp.dilithium_invntt_generic_ns = (int64_t)strtoll(val, NULL, 10);
         }
-        /* Unknown keys silently skipped for forward compatibility. */
     }
     fclose(fp);
 
@@ -1194,58 +1083,41 @@ static int dispatch_cache_load(const char *path, const char *fingerprint,
     return 0;
 }
 
-static void dispatch_cache_save(const char *path, const char *fingerprint,
-                                 const dispatch_autotune_verdicts_t *v) {
-    /* tmp-file + rename for atomicity.  No fsync — this is best-effort
-     * diagnostic state; a crash mid-write leaves the prior cache (if
-     * any) intact and a future init just re-runs the bench. */
-    size_t pathlen = strlen(path);
-    if (pathlen == 0) return;
-    /* Reserve space for the worst-case suffix ".tmp." + decimal pid +
-     * NUL terminator.  PID_MAX is platform-defined; reserve 20 bytes
-     * (enough for any int64-shaped decimal).  Bailing on
-     * length-before-snprintf prevents silent truncation that would
-     * make `rename(tmppath, path)` clobber an unintended file
-     * (Copilot review #325). */
-    char tmppath[4096];
-    const size_t SUFFIX_RESERVE = sizeof(".tmp.") + 20;
-    if (pathlen + SUFFIX_RESERVE >= sizeof(tmppath)) return;
-    int wrote = snprintf(tmppath, sizeof(tmppath),
-                         "%s.tmp.%ld", path, (long)getpid());
-    if (wrote < 0 || (size_t)wrote >= sizeof(tmppath)) {
-        /* snprintf truncated or errored — refuse to rename a partial
-         * filename onto the cache path. */
-        if (dispatch_verbose())
+static void dispatch_cache_save_at(int dfd, const char *basename,
+                                   const char *fingerprint,
+                                   const dispatch_autotune_verdicts_t *v) {
+    char tmpbase[256];
+    int wrote = snprintf(tmpbase, sizeof(tmpbase), "%s.tmp.%ld",
+                         basename, (long)getpid());
+    if (wrote < 0 || (size_t)wrote >= sizeof(tmpbase)) {
+        if (dispatch_verbose()) {
             fprintf(stderr,
-                "[AMA Dispatch] cache write SKIPPED: tmp path would "
-                "exceed %zu bytes\n", sizeof(tmppath));
+                "[AMA Dispatch] cache write SKIPPED: tmp basename would "
+                "exceed %zu bytes\n", sizeof(tmpbase));
+        }
         return;
     }
 
-    /* O_CREAT with explicit mode 0600 (user-only read/write) — closes
-     * the CodeQL "file created without restricting permissions" alert
-     * #534 that the prior `fopen(tmppath, "we")` triggered on hosts
-     * with `umask 0` (which would yield 0666 — world-writable).
-     * O_CLOEXEC keeps the FD out of any child exec().  No "e" mode
-     * dependency (Apple libc doesn't implement it). */
-    int fd = open(tmppath,
-                  O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
-                  S_IRUSR | S_IWUSR);
+    int fd = openat(dfd, tmpbase,
+                    O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
+                    S_IRUSR | S_IWUSR);
     if (fd < 0) {
-        if (dispatch_verbose())
+        if (dispatch_verbose()) {
             fprintf(stderr,
-                "[AMA Dispatch] cache write FAILED (open '%s' errno=%d)\n",
-                tmppath, errno);
+                "[AMA Dispatch] cache write FAILED (openat '%s' errno=%d)\n",
+                tmpbase, errno);
+        }
         return;
     }
     FILE *fp = fdopen(fd, "w");
     if (!fp) {
-        if (dispatch_verbose())
+        if (dispatch_verbose()) {
             fprintf(stderr,
                 "[AMA Dispatch] cache write FAILED (fdopen '%s' errno=%d)\n",
-                tmppath, errno);
+                tmpbase, errno);
+        }
         close(fd);
-        (void)unlink(tmppath);
+        (void)unlinkat(dfd, tmpbase, 0);
         return;
     }
     fprintf(fp, "# AMA Cryptography dispatch auto-tune cache v1\n");
@@ -1270,33 +1142,34 @@ static void dispatch_cache_save(const char *path, const char *fingerprint,
     fprintf(fp, "dilithium_ntt_generic_ns=%lld\n",  (long long)v->dilithium_ntt_generic_ns);
     fprintf(fp, "dilithium_invntt_simd_ns=%lld\n",  (long long)v->dilithium_invntt_simd_ns);
     fprintf(fp, "dilithium_invntt_generic_ns=%lld\n", (long long)v->dilithium_invntt_generic_ns);
-    fclose(fp);
-
-    if (rename(tmppath, path) != 0) {
-        if (dispatch_verbose())
-            fprintf(stderr,
-                "[AMA Dispatch] cache rename FAILED ('%s' -> '%s' errno=%d)\n",
-                tmppath, path, errno);
-        (void)unlink(tmppath);
+    if (fclose(fp) != 0) {
+        (void)unlinkat(dfd, tmpbase, 0);
         return;
     }
-
-    if (dispatch_verbose())
-        fprintf(stderr, "[AMA Dispatch] Auto-tune verdict cached to '%s'\n",
-                path);
+    if (renameat(dfd, tmpbase, dfd, basename) != 0) {
+        if (dispatch_verbose()) {
+            fprintf(stderr,
+                "[AMA Dispatch] cache write FAILED (renameat '%s' -> '%s' errno=%d)\n",
+                tmpbase, basename, errno);
+        }
+        (void)unlinkat(dfd, tmpbase, 0);
+        return;
+    }
 }
 #else  /* _MSC_VER — no POSIX clock_gettime, no microbench, no cache. */
 static void dispatch_cache_fingerprint(char *out, size_t outlen) {
     if (out && outlen) out[0] = '\0';
 }
-static int dispatch_cache_load(const char *path, const char *fingerprint,
-                                dispatch_autotune_verdicts_t *v) {
-    (void)path; (void)fingerprint; (void)v;
+static int dispatch_cache_load_at(int dfd, const char *basename,
+                                  const char *fingerprint,
+                                  dispatch_autotune_verdicts_t *v) {
+    (void)dfd; (void)basename; (void)fingerprint; (void)v;
     return -1;
 }
-static void dispatch_cache_save(const char *path, const char *fingerprint,
-                                 const dispatch_autotune_verdicts_t *v) {
-    (void)path; (void)fingerprint; (void)v;
+static void dispatch_cache_save_at(int dfd, const char *basename,
+                                   const char *fingerprint,
+                                   const dispatch_autotune_verdicts_t *v) {
+    (void)dfd; (void)basename; (void)fingerprint; (void)v;
 }
 #endif
 
@@ -1781,24 +1654,43 @@ static void dispatch_init_internal(void) {
      * compose:
      *   1. dispatch_cache_env_is_safe() rejects tainted-exec contexts
      *      entirely (issetugid / AT_SECURE / uid-gid compare).
-     *   2. dispatch_cache_path_sanitize() rejects empty / oversized /
+     *   2. dispatch_cache_path_split() rejects empty / oversized /
      *      ASCII-control / `..`-containing path strings, terminating
      *      the tainted-data flow that CodeQL tracks from getenv to
-     *      open/fopen.
-     * Either rejection routes the same code path (`cache_path == NULL`),
-     * which the surrounding logic treats as "env var unset". */
+     *      openat.
+     * Either rejection leaves `cache_dfd < 0`, which the surrounding logic treats as "env var unset". */
     const char *cache_path_env = getenv("AMA_DISPATCH_CACHE_FILE");
     int env_safe = (cache_path_env && cache_path_env[0]
                     && dispatch_cache_env_is_safe());
-    const char *cache_path = env_safe
-                             ? dispatch_cache_path_sanitize(cache_path_env)
-                             : NULL;
-    if (cache_path_env && cache_path_env[0] && !cache_path && dispatch_verbose()) {
+    char cache_dir[AMA_DISPATCH_PATH_MAX];
+    char cache_base[AMA_DISPATCH_PATH_MAX];
+    char cache_display[AMA_DISPATCH_PATH_MAX];
+    cache_dir[0] = '\0';
+    cache_base[0] = '\0';
+    cache_display[0] = '\0';
+    int cache_dfd = -1;
+    int path_ok = 0;
+    if (env_safe
+        && dispatch_cache_path_split(cache_path_env,
+                                     cache_dir, sizeof(cache_dir),
+                                     cache_base, sizeof(cache_base)) == 0) {
+        int wrote;
+        if (strcmp(cache_dir, "/") == 0) {
+            wrote = snprintf(cache_display, sizeof(cache_display), "/%s", cache_base);
+        } else {
+            wrote = snprintf(cache_display, sizeof(cache_display), "%s/%s", cache_dir, cache_base);
+        }
+        if (wrote >= 0 && (size_t)wrote < sizeof(cache_display)) {
+            path_ok = 1;
+            cache_dfd = dispatch_cache_open_dir(cache_dir);
+        }
+    }
+    if (cache_path_env && cache_path_env[0] && (!path_ok || cache_dfd < 0) && dispatch_verbose()) {
         fprintf(stderr,
             "[AMA Dispatch] Auto-tune: AMA_DISPATCH_CACHE_FILE ignored — "
             "%s\n",
             env_safe
-                ? "path rejected by sanitizer (empty/oversized/control char/'..' segment)"
+                ? "path rejected by sanitizer or parent directory could not be opened"
                 : "process is setuid/setgid or running under a secure-exec context");
     }
 
@@ -1806,19 +1698,19 @@ static void dispatch_init_internal(void) {
     dispatch_cache_fingerprint(fingerprint, sizeof(fingerprint));
     int cache_hit = 0;
 
-    if (!autotune_disabled && cache_path) {
-        if (dispatch_cache_load(cache_path, fingerprint, &v) == 0) {
+    if (!autotune_disabled && cache_dfd >= 0) {
+        if (dispatch_cache_load_at(cache_dfd, cache_base, fingerprint, &v) == 0) {
             cache_hit = 1;
             if (dispatch_verbose())
                 fprintf(stderr,
                     "[AMA Dispatch] Auto-tune: cache HIT from '%s' "
                     "(fingerprint=%s) — skipping microbench\n",
-                    cache_path, fingerprint);
+                    cache_display, fingerprint);
         } else if (dispatch_verbose()) {
             fprintf(stderr,
                 "[AMA Dispatch] Auto-tune: cache MISS for '%s' "
                 "(fingerprint=%s) — running microbench\n",
-                cache_path, fingerprint);
+                cache_display, fingerprint);
         }
     }
 
@@ -2011,14 +1903,18 @@ static void dispatch_init_internal(void) {
          * on cache hit so a re-init doesn't keep rewriting the same
          * bytes; skip if AMA_DISPATCH_CACHE_FILE is unset or refused
          * by dispatch_cache_env_is_safe() (privileged process);
-         * `cache_path` already encodes both checks. */
-        if (!cache_hit && cache_path) {
-            dispatch_cache_save(cache_path, fingerprint, &v);
+         * `cache_dfd >= 0` already encodes both checks. */
+        if (!cache_hit && cache_dfd >= 0) {
+            dispatch_cache_save_at(cache_dfd, cache_base, fingerprint, &v);
+            if (dispatch_verbose())
+                fprintf(stderr, "[AMA Dispatch] Auto-tune verdict cached to '%s'\n",
+                        cache_display);
         }
     } else if (autotune_disabled && dispatch_verbose()) {
         fprintf(stderr,
             "[AMA Dispatch] Auto-tune: disabled via AMA_DISPATCH_NO_AUTOTUNE=1\n");
     }
+    if (cache_dfd >= 0) close(cache_dfd);
 #endif /* !_MSC_VER */
 
     if (dispatch_verbose()) {
@@ -2146,37 +2042,25 @@ const ama_dispatch_table_t *ama_get_dispatch_table(void) {
 }
 
 #ifdef AMA_TESTING_MODE
-/* Test-only export of `dispatch_cache_path_sanitize` so the
- * `test_dispatch_cache_file` ctest case can pin the rejection
- * contract directly (Copilot review #326 r3275565655).
- *
- * The fork-based probe variant of the test cannot exercise the
- * sanitizer's effect on the cache code path because Linux fork()
- * inherits the parent's `pthread_once` state — the child sees the
- * dispatch table as "already initialised" and never re-enters
- * `dispatch_init_internal()` (and therefore never calls the
- * sanitizer on the bad env var).  Re-exec'ing the test binary
- * with a sentinel arg works but adds significant test-harness
- * complexity for a function that is a pure-input pure-output
- * predicate.  Direct unit-test via this stub is a tighter, more
- * specific check: every bad input class is independently verified
- * to return NULL, every good input class is independently verified
- * to pass through unchanged.  The MSVC `#else` stub below mirrors
- * the same shape as the MSVC #else of `dispatch_cache_load` —
- * always returns NULL since the cache code path is compiled out. */
-#if !defined(_MSC_VER)
-const char *ama_test_dispatch_cache_path_sanitize(const char *path) {
-    return dispatch_cache_path_sanitize(path);
+/* Test-only canonical surface for tests/c/test_dispatch_cache_file.c. */
+const char *dispatch_cache_path_sanitize_for_tests(const char *path);
+const char *dispatch_cache_path_sanitize_for_tests(const char *path) {
+    static char canonical[AMA_DISPATCH_PATH_MAX];
+    char dir[AMA_DISPATCH_PATH_MAX];
+    char base[AMA_DISPATCH_PATH_MAX];
+    if (dispatch_cache_path_split(path, dir, sizeof(dir), base, sizeof(base)) != 0) {
+        return NULL;
+    }
+    int wrote;
+    if (strcmp(dir, "/") == 0) {
+        wrote = snprintf(canonical, sizeof(canonical), "/%s", base);
+    } else {
+        wrote = snprintf(canonical, sizeof(canonical), "%s/%s", dir, base);
+    }
+    if (wrote < 0 || (size_t)wrote >= sizeof(canonical)) return NULL;
+    return canonical;
 }
-#else
-const char *ama_test_dispatch_cache_path_sanitize(const char *path) {
-    (void)path;
-    return NULL;
-}
-#endif
-#endif
 
-#ifdef AMA_TESTING_MODE
 /* ============================================================================
  * Test-only dispatch overrides.
  *

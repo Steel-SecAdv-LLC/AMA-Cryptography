@@ -53,6 +53,8 @@ int main(void) {
 }
 #else
 
+extern const char *dispatch_cache_path_sanitize_for_tests(const char *path);
+
 static int file_exists(const char *path) {
     struct stat st;
     return stat(path, &st) == 0;
@@ -224,9 +226,9 @@ int main(void) {
     }
 
     /* Sanitizer rejection contract — direct unit test of
-     * `dispatch_cache_path_sanitize`.  Pins CodeQL #535 / #537
-     * close-out: env var → path sanitizer → NULL → cache code path
-     * treats as "env unset", so no fopen(__file) call is reachable
+     * `dispatch_cache_path_sanitize_for_tests`.  Pins CodeQL #535 / #537
+     * close-out: env var → path splitter rejection → cache code path
+     * treats as "env unset", so no openat(__file) call is reachable
      * from a tainted source.
      *
      * Architecturally we cannot exercise the rejection contract via
@@ -243,22 +245,18 @@ int main(void) {
      *
      * The clean alternative is the direct unit test below: the
      * sanitizer is a pure-input pure-output predicate, so calling
-     * the test-mode-exported `ama_test_dispatch_cache_path_sanitize`
+     * the test-mode-exported `dispatch_cache_path_sanitize_for_tests`
      * with every "must reject" class and every "must accept"
      * class IS the contract.  No fork, no filesystem side-effect
      * dependency, no race with pthread_once.
      *
-     * Pointer-identity contract was relaxed in the realpath()
-     * close-out of CodeQL #535 / #537: the sanitizer now returns a
-     * pointer into a function-local static buffer holding the
-     * realpath()-canonicalised form, not the input pointer.  The
-     * tests below assert the returned pointer is non-NULL on accept
-     * (and additionally that the canonical form re-resolves stably
-     * for a couple of well-known cases), which is the only contract
-     * the call sites in dispatch_cache_load / dispatch_cache_save
-     * actually rely on. */
-    extern const char *ama_test_dispatch_cache_path_sanitize(const char *path);
-
+     * Pointer-identity is intentionally not part of the contract: the
+     * production path splits into a canonicalized parent-directory fd
+     * plus a validated basename.  The test shim reconstructs the same
+     * canonical display form for accept-class assertions.  The tests
+     * below assert non-NULL on accept and stable canonicalization for
+     * representative dot-segment inputs, which is the only contract
+     * dispatch_cache_load_at / dispatch_cache_save_at rely on. */
     typedef struct {
         const char *description;
         const char *input;
@@ -313,7 +311,7 @@ int main(void) {
     int sanitizer_failures = 0;
     int n_cases = (int)(sizeof(cases) / sizeof(cases[0]));
     for (int i = 0; i < n_cases; i++) {
-        const char *got = ama_test_dispatch_cache_path_sanitize(cases[i].input);
+        const char *got = dispatch_cache_path_sanitize_for_tests(cases[i].input);
         int accepted = (got != NULL);
         int expected_accept = cases[i].expect_accept;
         if (accepted != expected_accept) {
@@ -358,9 +356,9 @@ int main(void) {
         char oversized[4002];
         memset(oversized, 'a', sizeof(oversized) - 1);
         oversized[sizeof(oversized) - 1] = '\0';
-        if (ama_test_dispatch_cache_path_sanitize(oversized) != NULL) {
+        if (dispatch_cache_path_sanitize_for_tests(oversized) != NULL) {
             fprintf(stderr,
-                "FAIL: dispatch_cache_path_sanitize accepted a "
+                "FAIL: dispatch_cache_path_sanitize_for_tests accepted a "
                 "4001-character path; must reject anything >4000 "
                 "bytes (snprintf reserve for `.tmp.<pid>` suffix)\n");
             sanitizer_failures++;
@@ -386,7 +384,7 @@ int main(void) {
         /* Both inputs share a `.` segment — strstr("..") doesn't fire
          * on a single dot, so they reach realpath().  realpath()
          * collapses the `./` and yields identical canonical forms. */
-        const char *got_dot = ama_test_dispatch_cache_path_sanitize(dot_form);
+        const char *got_dot = dispatch_cache_path_sanitize_for_tests(dot_form);
         if (got_dot == NULL) {
             fprintf(stderr,
                 "FAIL: realpath probe — dot-form input '%s' rejected; "
@@ -401,7 +399,7 @@ int main(void) {
              * was already rejected by the 4000-byte length cap above. */
             char dot_canon[4096];
             (void)snprintf(dot_canon, sizeof(dot_canon), "%s", got_dot);
-            const char *got_plain = ama_test_dispatch_cache_path_sanitize(plain);
+            const char *got_plain = dispatch_cache_path_sanitize_for_tests(plain);
             if (got_plain == NULL) {
                 fprintf(stderr,
                     "FAIL: realpath probe — plain-form input '%s' rejected; "
