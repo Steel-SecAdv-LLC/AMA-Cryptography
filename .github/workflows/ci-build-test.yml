@@ -122,7 +122,16 @@ jobs:
           exit "$rc"
 
       - name: Test
-        run: cd build && ctest --output-on-failure
+        # `--output-on-failure` + `--verbose` together print the full
+        # stdout/stderr of every failing test directly into the CI log,
+        # plus a one-line per-passing-test trace.  Without `--verbose`
+        # ctest swallows the diagnostic output of an exit-code-only
+        # failure, which is how the `C Library (*, clang)` lanes
+        # previously reported only "Process completed with exit code 8"
+        # without ever revealing which 8 tests failed.  PR #326
+        # follow-up: every failing C test now self-diagnoses in the
+        # job log.
+        run: cd build && ctest --output-on-failure --verbose
 
   # Python Package Build and Test
   python-package:

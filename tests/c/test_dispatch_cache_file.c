@@ -299,7 +299,15 @@ int main(void) {
         { "simple absolute path",  "/tmp/ama-cache.txt",             1 },
         { "single dot in name",    "/tmp/ama.cache",                 1 },
         { "dots-no-double-dot",    "/tmp/a.b.c.d.cache",             1 },
-        { "high-bit UTF-8",        "/tmp/\xe2\x9c\x94cache",         1 },
+        /* `\xe2\x9c\x94` is the UTF-8 encoding of U+2714 HEAVY CHECK
+         * MARK; the trailing string literal is kept separate so the
+         * compiler's hex-escape lexer does not extend `\x94` into
+         * `\x94c` (3-digit hex = 0x94C, which clang rejects under
+         * `-Wall -Werror` with "hex escape sequence out of range").
+         * The two adjacent string literals are concatenated at
+         * translation phase 6 per C11 §5.1.1.2, so the on-wire byte
+         * sequence is unchanged. */
+        { "high-bit UTF-8",        "/tmp/\xe2\x9c\x94" "cache",      1 },
         { "parens and dashes",     "/tmp/ama-(v3.2.0).cache",        1 },
     };
     int sanitizer_failures = 0;
