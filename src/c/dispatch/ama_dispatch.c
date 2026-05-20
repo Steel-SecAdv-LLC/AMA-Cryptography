@@ -310,7 +310,7 @@ static const char *apply_dispatch_only(const char *slot) {
      * the dispatch-table contract per include/ama_dispatch.h. */
     const ama_dispatch_table_t saved = dispatch_table;
 
-    memset(&dispatch_table, 0, sizeof(dispatch_table));
+    memset(&dispatch_table, 0, sizeof(dispatch_table));  // PUBLIC-DATA: dispatch_table — scrub dispatch state before AMA_DISPATCH_ONLY rewires it (PUBLIC global state — CPU feature info + function pointers, no secrets)
     dispatch_table.keccak_f1600    = ama_keccak_f1600_generic;
     dispatch_table.keccak_f1600_x4 = ama_keccak_f1600_x4_generic;
 
@@ -452,7 +452,7 @@ static const char *apply_dispatch_only(const char *slot) {
  * CPU features.  Called once via ama_dispatch_init().
  * ============================================================================ */
 static void dispatch_init_internal(void) {
-    memset(&dispatch_info, 0, sizeof(dispatch_info));
+    memset(&dispatch_info, 0, sizeof(dispatch_info));  // PUBLIC-DATA: dispatch_info — init global dispatch_info (PUBLIC — CPU arch label + per-slot impl level)
 
 #if defined(__x86_64__) || defined(_M_X64)
     dispatch_info.arch_name = "x86-64";

@@ -285,7 +285,7 @@ static void spx_thash(uint8_t *out, const uint8_t *in, unsigned int inblocks,
         size_t total = SPX_N + (128 - SPX_N) + 22 + msg_len;
         uint8_t *buf = (uint8_t *)calloc((size_t)1, total);
         if (!buf) {
-            memset(out, 0, SPX_N);
+            memset(out, 0, SPX_N);  // PUBLIC-DATA: out — SPHINCS+ Wots output slot, pre-use init filled by wots chain hash
             return;
         }
         memcpy(buf, pub_seed, SPX_N);
@@ -831,7 +831,7 @@ static void spx_ht_sign(uint8_t *sig, const uint8_t *msg,
     uint8_t root[SPX_N];
     unsigned int layer;
 
-    memset(addr, 0, sizeof(addr));
+    memset(addr, 0, sizeof(addr));  // PUBLIC-DATA: addr — SPHINCS+ tree-address struct, pre-use init filled by set_layer/tree/keypair
 
     /* Sign at bottom layer */
     spx_set_layer_addr(addr, 0);
@@ -879,7 +879,7 @@ static int spx_ht_verify(const uint8_t *msg, const uint8_t *sig,
     uint8_t wots_pk[SPX_WOTS_BYTES];
     unsigned int layer;
 
-    memset(addr, 0, sizeof(addr));
+    memset(addr, 0, sizeof(addr));  // PUBLIC-DATA: addr — SPHINCS+ tree-address struct, pre-use init
 
     /* Verify at bottom layer */
     spx_set_layer_addr(addr, 0);
@@ -995,7 +995,7 @@ AMA_API ama_error_t ama_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    memset(addr, 0, sizeof(addr));
+    memset(addr, 0, sizeof(addr));  // PUBLIC-DATA: addr — SPHINCS+ tree-address struct, pre-use init
 
     /* Generate random seeds: sk_seed, sk_prf, pub_seed */
     rc = spx_randombytes(secret_key, 3 * SPX_N);
@@ -1090,7 +1090,7 @@ AMA_API ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
     }
 
     /* FORS signature */
-    memset(fors_addr, 0, sizeof(fors_addr));
+    memset(fors_addr, 0, sizeof(fors_addr));  // PUBLIC-DATA: fors_addr — SPHINCS+ FORS-address struct, pre-use init
     spx_set_tree_addr(fors_addr, tree);
     spx_set_type(fors_addr, SPX_ADDR_TYPE_FORSTREE);
     spx_set_keypair_addr(fors_addr, leaf_idx);
@@ -1152,7 +1152,7 @@ AMA_API ama_error_t ama_sphincs_verify(const uint8_t *message, size_t message_le
     }
 
     /* Reconstruct FORS public key from signature */
-    memset(fors_addr, 0, sizeof(fors_addr));
+    memset(fors_addr, 0, sizeof(fors_addr));  // PUBLIC-DATA: fors_addr — SPHINCS+ FORS-address struct, pre-use init
     spx_set_tree_addr(fors_addr, tree);
     spx_set_type(fors_addr, SPX_ADDR_TYPE_FORSTREE);
     spx_set_keypair_addr(fors_addr, leaf_idx);

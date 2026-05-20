@@ -943,7 +943,7 @@ static void dil_poly_challenge(dil_poly *c, const uint8_t seed[DIL_CTILDEBYTES])
         signs |= (uint64_t)buf[i] << (8 * i);
     }
 
-    memset(c->coeffs, 0, sizeof(c->coeffs));
+    memset(c->coeffs, 0, sizeof(c->coeffs));  // PUBLIC-DATA: c->coeffs — ML-DSA challenge polynomial (public part of signature), pre-use init filled by rejection sampling
 
     pos = 8;
     for (i = DIL_N - DIL_TAU; i < DIL_N; ++i) {
@@ -1116,7 +1116,7 @@ static void dil_polyveck_use_hint(dil_polyveck *w, const dil_polyveck *v,
 
     /* Unpack hint bits into per-coefficient flags */
     uint8_t hint_flags[DIL_K][DIL_N];
-    memset(hint_flags, 0, sizeof(hint_flags));
+    memset(hint_flags, 0, sizeof(hint_flags));  // PUBLIC-DATA: hint_flags — ML-DSA hint flags (public part of signature), pre-use init filled by make_hint
     k_idx = 0;
     for (i = 0; i < DIL_K; ++i) {
         unsigned int limit = hint[DIL_OMEGA + i];
@@ -1510,7 +1510,7 @@ AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len
     uint16_t nonce = 0;
     int reject;
 
-    memset(hint, 0, sizeof(hint));
+    memset(hint, 0, sizeof(hint));  // PUBLIC-DATA: hint — ML-DSA hint buffer (public part of signature), pre-use init filled by make_hint
 
     if (!signature || !signature_len || !message || !secret_key) {
         return AMA_ERROR_INVALID_PARAM;
@@ -1589,7 +1589,7 @@ AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len
      * together with the FIPS 204/205 KAT pin.
      */
     memcpy(hashbuf, key, DIL_SEEDBYTES);
-    memset(hashbuf + DIL_SEEDBYTES, 0, DIL_RNDBYTES);  /* rnd = 0^256 (deterministic) */
+    memset(hashbuf + DIL_SEEDBYTES, 0, DIL_RNDBYTES);  /* rnd = 0^256 (deterministic) */  // PUBLIC-DATA: rnd portion — FIPS 204 deterministic-signer fills rnd field with zeros (public spec'd constant)
     memcpy(hashbuf + DIL_SEEDBYTES + DIL_RNDBYTES, mu, DIL_CRHBYTES);
     ama_shake256(hashbuf, DIL_SEEDBYTES + DIL_RNDBYTES + DIL_CRHBYTES,
                  rhoprime, DIL_CRHBYTES);
@@ -1699,7 +1699,7 @@ AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len
             continue;
 
         /* Compute hints: make_hint(w0-cs2+ct0, w1) per FIPS 204 */
-        memset(hint, 0, sizeof(hint));
+        memset(hint, 0, sizeof(hint));  // PUBLIC-DATA: hint — ML-DSA hint buffer (public part of signature), pre-use init
         dil_polyveck_add(&w0, &w0, &ct0);
         n = dil_polyveck_make_hint(hint, &w0, &w1);
         if (n > DIL_OMEGA)

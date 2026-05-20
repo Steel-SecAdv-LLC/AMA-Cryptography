@@ -251,7 +251,7 @@ ama_error_t ama_sha3_256_avx2(const uint8_t *input, size_t input_len, uint8_t ou
     if (!input || !output) return AMA_ERROR_INVALID_PARAM;
 
     uint64_t state[25];
-    memset(state, 0, sizeof(state));
+    memset(state, 0, sizeof(state));  // PUBLIC-DATA: state — AVX2 Keccak permutation buffer, pre-use init
 
     const size_t rate = 136; /* SHA3-256 rate in bytes */
     size_t offset = 0;
@@ -269,7 +269,7 @@ ama_error_t ama_sha3_256_avx2(const uint8_t *input, size_t input_len, uint8_t ou
 
     /* Absorb final block with padding */
     uint8_t block[200];
-    memset(block, 0, sizeof(block));
+    memset(block, 0, sizeof(block));  // PUBLIC-DATA: block — AVX2 SHA3 rate-block padding buffer, pre-use init
     size_t remaining = input_len - offset;
     if (remaining > 0)
         memcpy(block, input + offset, remaining);

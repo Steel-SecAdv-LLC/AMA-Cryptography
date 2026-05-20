@@ -178,7 +178,7 @@ static void blake2b_compress(blake2b_state *S, const uint8_t block[BLAKE2B_BLOCK
 
 static void blake2b_init_param(blake2b_state *S, size_t outlen, const uint8_t *key, size_t keylen)
 {
-    memset(S, 0, sizeof(*S));
+    memset(S, 0, sizeof(*S));  // PUBLIC-DATA: S (blake2b state) — Blake2b state init to zero (RFC 7693 §3.3); state immediately filled with IV
 
     for (int i = 0; i < 8; i++) {
         S->h[i] = blake2b_IV[i];
@@ -191,7 +191,7 @@ static void blake2b_init_param(blake2b_state *S, size_t outlen, const uint8_t *k
 
     if (keylen > 0 && key != NULL) {
         uint8_t block[BLAKE2B_BLOCKBYTES];
-        memset(block, 0, sizeof(block));
+        memset(block, 0, sizeof(block));  // PUBLIC-DATA: block padding — Blake2b input-block pre-use init; immediately filled via memcpy
         memcpy(block, key, keylen);
         S->t[0] = BLAKE2B_BLOCKBYTES;
         blake2b_compress(S, block);
@@ -245,7 +245,7 @@ static void blake2b_final(blake2b_state *S, uint8_t *out)
     S->f[0] = UINT64_C(0xFFFFFFFFFFFFFFFF);
 
     /* Pad with zeros */
-    memset(S->buf + S->buflen, 0, BLAKE2B_BLOCKBYTES - S->buflen);
+    memset(S->buf + S->buflen, 0, BLAKE2B_BLOCKBYTES - S->buflen);  // PUBLIC-DATA: block tail padding — Blake2b last-block tail zero-pad; rate-block bytes [S->buflen..BLOCKBYTES) before final compress
     blake2b_compress(S, S->buf);
 
     /* Output */
@@ -738,8 +738,8 @@ static ama_error_t ama_argon2id_core(
                 int data_independent = (pass == 0 && slice < 2);
 
                 if (data_independent) {
-                    memset(&zero_block, 0, sizeof(argon2_block));
-                    memset(&input_block, 0, sizeof(argon2_block));
+                    memset(&zero_block, 0, sizeof(argon2_block));  // PUBLIC-DATA: zero_block — Argon2 constant zero block passed to argon2_G as Y operand; PUBLIC by design
+                    memset(&input_block, 0, sizeof(argon2_block));  // PUBLIC-DATA: input_block — Argon2 address-generation input block, pre-use init filled by .v[0..6]= public counters (pass/lane/slice/...)
                     input_block.v[0] = pass;
                     input_block.v[1] = lane;
                     input_block.v[2] = slice;

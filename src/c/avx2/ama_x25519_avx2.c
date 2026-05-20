@@ -183,7 +183,7 @@ static void fe25519_10_contract(uint8_t out[32], const fe25519_10 in) {
     f[8] <<= 4;
     f[9] <<= 6;
 
-    memset(out, 0, 32);
+    memset(out, 0, 32);  // PUBLIC-DATA: out — AVX2 X25519 4-way output slot pre-clear; immediately written by the AVX2 ladder squeeze
 #define F(i, s)                                                   \
     out[(s) + 0] |= (uint8_t)(f[i] & 0xff);                       \
     out[(s) + 1]  = (uint8_t)((f[i] >> 8)  & 0xff);               \

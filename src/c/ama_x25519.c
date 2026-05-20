@@ -728,7 +728,7 @@ AMA_API ama_error_t ama_x25519_keypair(
     secret_key[31] |= 64;
 
     uint8_t basepoint[32];
-    memset(basepoint, 0, sizeof(basepoint));
+    memset(basepoint, 0, sizeof(basepoint));  // PUBLIC-DATA: basepoint — hardcoded X25519 base {9,0,...,0}, pre-use init filled by basepoint[0]=9
     basepoint[0] = 9;
 
     x25519_scalarmult(public_key, secret_key, basepoint);

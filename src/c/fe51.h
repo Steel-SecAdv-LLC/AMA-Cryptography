@@ -32,7 +32,7 @@ typedef uint64_t fe51[5];
 #define FE51_MASK51 ((uint64_t)0x7ffffffffffff)  /* (1 << 51) - 1 */
 
 static inline void fe51_0(fe51 h) {
-    memset(h, 0, 5 * sizeof(uint64_t));
+    memset(h, 0, 5 * sizeof(uint64_t));  // PUBLIC-DATA: h — fe51 set-to-zero helper; callers fill h[0..4] immediately (write-then-read)
 }
 
 static inline void fe51_1(fe51 h) {

@@ -191,6 +191,35 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   `ama_consttime.c`.  Also added a defense-in-depth scrub of
   `scalar_reduced` and `e` in `ge25519_scalarmult_base_comb_signed`,
   closing a stack residue that survived the function return.
+
+  **Audit Issue 4 close-out (2026-05): full 109-site bare-memset
+  sweep.**  Every `memset(BUF, 0, LEN)` call under `src/c/`
+  (excluding `src/c/vendor/`) was walked.  Result: **0 sites
+  reclassified to `ama_secure_memzero`** (every bare memset is a
+  pre-use initialisation or a write of public zero-padding bytes —
+  the compiler cannot elide it because the buffer is read by
+  subsequent code before the function returns); **109 sites
+  annotated `// PUBLIC-DATA:`** with the buffer name and a
+  one-line justification rooted in the surrounding code (so a
+  future audit walk recognises the prior triage and does not have
+  to re-derive the classification).  The semgrep ERROR rule
+  `bare-memset-zero-secret-named-buffer` continues to catch any
+  future regression that introduces a bare memset on a
+  secret-NAMED buffer.
+
+  **Adjacent gap closures surfaced by the walk (INVARIANT-6).**
+  Two stack-resident scratch buffers in `src/c/ama_frost.c` were
+  left holding secret-derived scalar bytes on function return:
+    - `scalar_negate()::tmp[64]` (the reduced negated scalar
+      copied out to `neg` but never scrubbed in the source
+      buffer).
+    - `scalar_inv()::tmp[32]` (the last squared / multiplied
+      scalar accumulator in the square-and-multiply loop).
+  Both are now scrubbed with `ama_secure_memzero` on the
+  function's only exit path.  These were `memset`-less gaps
+  (no bare memset, no `ama_secure_memzero` at all), so neither
+  the original PR #322 sweep nor the semgrep rule would have
+  surfaced them; the audit Issue 4 close-out walk did.
 - **Semgrep C rules for bare memset of secret-named buffers (audit
   Issue 4).**  Two new rules in `.semgrep.yml`
   (`bare-memset-zero-secret-named-buffer` ERROR and
