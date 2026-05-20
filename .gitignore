@@ -261,3 +261,7 @@ aarch64-toolchain.cmake
 
 # Local clang-tidy build dir (compile_commands.json scratch)
 build-tidy/
+
+# Local clang-explicit build dir (used to reproduce the
+# `C Library (*, clang)` CI lanes — see PR #326 follow-up)
+build-clang/
