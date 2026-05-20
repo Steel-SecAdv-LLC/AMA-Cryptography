@@ -269,6 +269,40 @@ AMA_API const char *ama_impl_level_name(ama_impl_level_t level);
 AMA_API const char *ama_aes_gcm_active_backend(void);
 
 /* ============================================================================
+ * Cross-process auto-tune cache (opt-in)
+ * ============================================================================
+ *
+ * `AMA_DISPATCH_CACHE_FILE=<path>` — when set in the environment before
+ * the first `ama_dispatch_init()` call, the per-slot auto-tune
+ * microbench writes its regressed/kept verdict for each SIMD slot to
+ * <path>, and subsequent processes with the same env var (and matching
+ * CPU-feature fingerprint) skip the microbench entirely and apply the
+ * cached verdict.  Removes the ~10K-Keccak-iteration startup latency
+ * on warm hosts without sacrificing the per-host accuracy of the
+ * regression heuristic.
+ *
+ * Cache key — a deterministic string built from `arch_name` plus the
+ * runtime CPU-feature probe results (`avx2`, `avx512f`,
+ * `avx512_keccak_bundle`, `aes_ni`, `pclmulqdq`, `vaes_aesgcm_bundle`,
+ * `arm_aes`, `arm_pmull`).  A kernel upgrade or microcode change that
+ * shifts any flag invalidates the cache automatically — no manual
+ * flush.  Mismatched fingerprints are treated as a cache miss; the
+ * bench runs and rewrites the file.
+ *
+ * Default (env unset) — no file I/O on this code path, strictly opt-in.
+ * Distribution packagers can ship a pre-warmed cache in /etc or under
+ * `$XDG_CACHE_HOME/ama-cryptography/` and have downstream processes
+ * pick it up by exporting `AMA_DISPATCH_CACHE_FILE` in their service
+ * wrappers.  See `src/c/dispatch/ama_dispatch.c::dispatch_cache_save`
+ * for the (text, one key=value per line) file format and forward-
+ * compatibility behaviour.
+ *
+ * The cache is bypassed when `AMA_DISPATCH_NO_AUTOTUNE=1` is set — the
+ * opt-out env var takes precedence and the bench is skipped without
+ * any cache read or write.
+ */
+
+/* ============================================================================
  * Per-slot dispatch isolation (audit Issue 3 close-out / INVARIANT-12)
  * ============================================================================
  *

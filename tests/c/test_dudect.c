@@ -81,24 +81,46 @@ static void random_bytes(uint8_t *buf, size_t len) {
  *
  * Class 0: Compare identical buffers (result = 0)
  * Class 1: Compare buffers differing at random position (result != 0)
+ *
+ * Setup-symmetry rule: both classes perform identical pre-timer work
+ * (two memcpys + one rand for the differ-position + one branchless
+ * conditional XOR), then a pointer select chooses which buffer is fed
+ * into the constant-time compare.  Without the symmetry, class 1 used
+ * to do an extra `rand()` and a conditional branch BEFORE the timer
+ * started — those side effects (libc call frequency, branch-predictor
+ * state, cache line touched by the XOR write) bled into the timed
+ * window and surfaced as a >+12σ false-positive leak on shared CI
+ * runners, while the underlying `ama_consttime_memcmp` is byte-by-
+ * byte branchless (src/c/ama_consttime.c).  Mirrors the same
+ * pointer-select-out-of-timer pattern the FROST / Kyber-decaps /
+ * Dilithium-sign lanes already use.
  * ----------------------------------------------------------------------- */
 static double test_consttime_memcmp(int iterations) {
     dudect_ctx_t ctx;
     dudect_ctx_init(&ctx, "ama_consttime_memcmp");
 
-    uint8_t a[BUFFER_SIZE], b[BUFFER_SIZE];
+    uint8_t a[BUFFER_SIZE];
+    uint8_t b_equal[BUFFER_SIZE];
+    uint8_t b_diff[BUFFER_SIZE];
 
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        /* Symmetric setup — same number of rand() draws, memcpys, and
+         * conditional writes for both classes.  Performed BEFORE the
+         * class selection so neither buffer has a pre-timer history
+         * the other lacks. */
         random_bytes(a, BUFFER_SIZE);
-        memcpy(b, a, BUFFER_SIZE);
+        memcpy(b_equal, a, BUFFER_SIZE);
+        memcpy(b_diff,  a, BUFFER_SIZE);
+        size_t xor_pos = (size_t)(rand() % BUFFER_SIZE);
+        b_diff[xor_pos] ^= 0x01;
 
         int class_idx = rand() & 1;
-        if (class_idx == 1) {
-            b[rand() % BUFFER_SIZE] ^= 0x01;
-        }
+        /* Pointer-select OUTSIDE the timing region (no class-correlated
+         * branch in the timed window). */
+        const uint8_t *b_use = class_idx ? b_diff : b_equal;
 
         uint64_t start = dudect_get_time_ns();
-        volatile int result = ama_consttime_memcmp(a, b, BUFFER_SIZE);
+        volatile int result = ama_consttime_memcmp(a, b_use, BUFFER_SIZE);
         uint64_t end = dudect_get_time_ns();
         (void)result;
 
@@ -1182,8 +1204,21 @@ static double test_frost_scalar_negate_midrange(int iterations) {
     dudect_ctx_t ctx;
     dudect_ctx_init(&ctx, "FROST scalar_negate (0x00 vs mid-range)");
 
-    uint8_t s0[32], neg[32];
+    /* Both reference scalars MUST live in the same memory class so
+     * the kernel reads them through equivalent cache paths.  Pre-fix,
+     * `s0` was stack-resident (memset on a local array) while the
+     * mid-range scalar was read directly from `SCALAR_NEGATE_MID`
+     * in `.rodata` — two cache-line provenance classes, which on
+     * shared CI runners injected a structural ~6σ delta into the
+     * Welch t-test that was not actually a leak in
+     * `ama_frost_test_scalar_negate` (the borrow loop is branchless
+     * — see src/c/ama_frost.c::scalar_negate).  Staging the mid-range
+     * scalar into a stack buffer at function entry removes the
+     * provenance asymmetry while preserving the algebraic
+     * extremes-vs-mid-range coverage the lane exists to provide. */
+    uint8_t s0[32], s1[32], neg[32];
     memset(s0, 0x00, 32);
+    memcpy(s1, SCALAR_NEGATE_MID, 32);
 
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
@@ -1195,7 +1230,7 @@ static double test_frost_scalar_negate_midrange(int iterations) {
          * (src/c/ama_frost.c).  Fixed: select the input pointer up
          * front so the timed region is one indirect call with no
          * class-correlated control flow. */
-        const uint8_t *s = class_idx ? SCALAR_NEGATE_MID : s0;
+        const uint8_t *s = class_idx ? s1 : s0;
 
         uint64_t start = dudect_get_time_ns();
         ama_frost_test_scalar_negate(neg, s);

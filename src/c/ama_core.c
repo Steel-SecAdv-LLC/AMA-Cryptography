@@ -61,6 +61,27 @@ extern ama_error_t ama_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
 extern ama_error_t ama_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
                                           const uint8_t* sk, size_t sk_len,
                                           uint8_t* ss, size_t ss_len);
+
+/* Ed25519 — concrete backend is either the fe51 reference (default) or the
+ * donna shim (AMA_ED25519_ASSEMBLY=ON); both expose the same three symbols.
+ * Selected at build time via CMakeLists.txt, not at runtime — the dispatcher
+ * reports `ed25519 = AMA_IMPL_GENERIC` either way. */
+extern ama_error_t ama_ed25519_keypair(uint8_t public_key[32],
+                                        uint8_t secret_key[64]);
+extern ama_error_t ama_ed25519_sign(uint8_t signature[64],
+                                     const uint8_t *message,
+                                     size_t message_len,
+                                     const uint8_t secret_key[64]);
+extern ama_error_t ama_ed25519_verify(const uint8_t signature[64],
+                                       const uint8_t *message,
+                                       size_t message_len,
+                                       const uint8_t public_key[32]);
+
+/* Platform CSPRNG (src/c/ama_platform_rand.c).  Used to derive the 32-byte
+ * Ed25519 seed inside `ama_keypair_generate(AMA_ALG_ED25519)` before
+ * delegating to `ama_ed25519_keypair`, whose contract requires the caller
+ * to supply the seed in `secret_key[0..31]`. */
+extern ama_error_t ama_randombytes(uint8_t *buf, size_t len);
 #endif
 
 /**
@@ -234,8 +255,23 @@ ama_error_t ama_keypair_generate(
         case AMA_ALG_SPHINCS_256F:
             return ama_sphincs_keypair(public_key, secret_key);
 
-        case AMA_ALG_ED25519:
-            return AMA_ERROR_NOT_IMPLEMENTED;
+        case AMA_ALG_ED25519: {
+            /* AMA Ed25519 convention: caller fills secret_key[0..31] with
+             * seed bytes before invoking ama_ed25519_keypair.  Draw the
+             * seed from the platform CSPRNG, then delegate.  Scrub on
+             * any failure path — INVARIANT-6. */
+            ama_error_t rc_rand = ama_randombytes(secret_key, 32);
+            if (rc_rand != AMA_SUCCESS) {
+                ama_secure_memzero(secret_key, expected_sk_size);
+                return rc_rand;
+            }
+            ama_error_t rc = ama_ed25519_keypair(public_key, secret_key);
+            if (rc != AMA_SUCCESS) {
+                ama_secure_memzero(secret_key, expected_sk_size);
+                ama_secure_memzero(public_key, expected_pk_size);
+            }
+            return rc;
+        }
 
         case AMA_ALG_HYBRID:
             /* Hybrid: generate Dilithium keypair */
@@ -296,6 +332,20 @@ ama_error_t ama_sign(
 
         case AMA_ALG_KYBER_1024:
             return AMA_ERROR_INVALID_PARAM;  /* KEM doesn't support signing */
+
+        case AMA_ALG_ED25519:
+            if (secret_key_len < AMA_ED25519_SECRET_KEY_BYTES) {
+                return AMA_ERROR_INVALID_PARAM;
+            }
+            if (*signature_len < AMA_ED25519_SIGNATURE_BYTES) {
+                *signature_len = AMA_ED25519_SIGNATURE_BYTES;
+                return AMA_ERROR_INVALID_PARAM;
+            }
+            /* Ed25519 sig is fixed-size; the in/out signature_len protocol
+             * matches ML-DSA / SPHINCS+ even though the backend doesn't
+             * write the length itself. */
+            *signature_len = AMA_ED25519_SIGNATURE_BYTES;
+            return ama_ed25519_sign(signature, message, message_len, secret_key);
 
         case AMA_ALG_HYBRID:
             /* Hybrid: sign with Dilithium */
@@ -361,6 +411,16 @@ ama_error_t ama_verify(
 
         case AMA_ALG_KYBER_1024:
             return AMA_ERROR_INVALID_PARAM;  /* KEM doesn't support verification */
+
+        case AMA_ALG_ED25519:
+            if (public_key_len < AMA_ED25519_PUBLIC_KEY_BYTES) {
+                return AMA_ERROR_INVALID_PARAM;
+            }
+            if (signature_len < AMA_ED25519_SIGNATURE_BYTES) {
+                return AMA_ERROR_VERIFY_FAILED;
+            }
+            return ama_ed25519_verify(signature, message, message_len,
+                                      public_key);
 
         case AMA_ALG_HYBRID:
             if (public_key_len < AMA_ML_DSA_65_PUBLIC_KEY_BYTES) {

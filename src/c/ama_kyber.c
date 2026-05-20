@@ -1889,6 +1889,60 @@ static const int16_t zetas[128] = {
  * Gentleman-Sande butterfly with the same twiddle factor correctly
  * inverts the Cooley-Tukey butterfly. See NIST FIPS 203 / pqcrystals. */
 
+/* Scalar reference exposed so the dispatch auto-tune can microbench
+ * the SIMD NTT slots against a single source of truth — `poly_ntt` /
+ * `poly_invntt` below delegate to the same helpers. */
+void ama_kyber_ntt_generic_ref(int16_t coeffs[256], const int16_t zetas_tab[128]);
+void ama_kyber_invntt_generic_ref(int16_t coeffs[256], const int16_t zetas_tab[128]);
+
+static void kyber_ntt_scalar(int16_t coeffs[256], const int16_t zetas_tab[128]) {
+    unsigned int len, start, j, k;
+    int16_t t, zeta;
+
+    k = 1;
+    for (len = 128; len >= 2; len >>= 1) {
+        for (start = 0; start < KYBER_N; start = j + len) {
+            zeta = zetas_tab[k++];
+            for (j = start; j < start + len; j++) {
+                t = montgomery_reduce((int32_t)zeta * coeffs[j + len]);
+                coeffs[j + len] = coeffs[j] - t;
+                coeffs[j] = coeffs[j] + t;
+            }
+        }
+    }
+}
+
+static void kyber_invntt_scalar(int16_t coeffs[256], const int16_t zetas_tab[128]) {
+    unsigned int len, start, j, k;
+    int16_t t, zeta;
+    const int16_t f = 1441;  /* f = 128^{-1} mod q, in Montgomery form */
+
+    k = 127;
+    for (len = 2; len <= 128; len <<= 1) {
+        for (start = 0; start < KYBER_N; start = j + len) {
+            zeta = zetas_tab[k--];
+            for (j = start; j < start + len; j++) {
+                t = coeffs[j];
+                coeffs[j] = barrett_reduce(t + coeffs[j + len]);
+                coeffs[j + len] = montgomery_reduce((int32_t)zeta * (coeffs[j + len] - t));
+            }
+        }
+    }
+
+    /* Multiply by f = 128^{-1} */
+    for (j = 0; j < KYBER_N; j++) {
+        coeffs[j] = montgomery_reduce((int32_t)f * coeffs[j]);
+    }
+}
+
+void ama_kyber_ntt_generic_ref(int16_t coeffs[256], const int16_t zetas_tab[128]) {
+    kyber_ntt_scalar(coeffs, zetas_tab);
+}
+
+void ama_kyber_invntt_generic_ref(int16_t coeffs[256], const int16_t zetas_tab[128]) {
+    kyber_invntt_scalar(coeffs, zetas_tab);
+}
+
 /**
  * Number Theoretic Transform (forward NTT)
  * Converts polynomial from coefficient form to NTT form for fast multiplication.
@@ -1901,22 +1955,7 @@ static void poly_ntt(poly* r) {
         dt->kyber_ntt(r->coeffs, zetas);
         return;
     }
-
-    /* Generic C implementation */
-    unsigned int len, start, j, k;
-    int16_t t, zeta;
-
-    k = 1;
-    for (len = 128; len >= 2; len >>= 1) {
-        for (start = 0; start < KYBER_N; start = j + len) {
-            zeta = zetas[k++];
-            for (j = start; j < start + len; j++) {
-                t = montgomery_reduce((int32_t)zeta * r->coeffs[j + len]);
-                r->coeffs[j + len] = r->coeffs[j] - t;
-                r->coeffs[j] = r->coeffs[j] + t;
-            }
-        }
-    }
+    kyber_ntt_scalar(r->coeffs, zetas);
 }
 
 /**
@@ -1931,28 +1970,7 @@ static void poly_invntt(poly* r) {
         dt->kyber_invntt(r->coeffs, zetas);
         return;
     }
-
-    /* Generic C implementation */
-    unsigned int len, start, j, k;
-    int16_t t, zeta;
-    const int16_t f = 1441;  /* f = 128^{-1} mod q, in Montgomery form */
-
-    k = 127;
-    for (len = 2; len <= 128; len <<= 1) {
-        for (start = 0; start < KYBER_N; start = j + len) {
-            zeta = zetas[k--];
-            for (j = start; j < start + len; j++) {
-                t = r->coeffs[j];
-                r->coeffs[j] = barrett_reduce(t + r->coeffs[j + len]);
-                r->coeffs[j + len] = montgomery_reduce((int32_t)zeta * (r->coeffs[j + len] - t));
-            }
-        }
-    }
-
-    /* Multiply by f = 128^{-1} */
-    for (j = 0; j < KYBER_N; j++) {
-        r->coeffs[j] = montgomery_reduce((int32_t)f * r->coeffs[j]);
-    }
+    kyber_invntt_scalar(r->coeffs, zetas);
 }
 
 /**

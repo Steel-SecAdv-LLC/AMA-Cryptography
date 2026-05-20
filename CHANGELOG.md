@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Applies to Release | 3.1.0 |
-| Last Updated | 2026-05-16 |
+| Applies to Release | 3.2.0 |
+| Last Updated | 2026-05-20 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -19,7 +19,138 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+(empty — every entry from the previous `[Unreleased]` section moved to
+`[3.2.0]` below.)
+
+---
+
+## [3.2.0] - 2026-05-20
+
 ### Added
+- **Per-slot SIMD auto-tune with file-based cross-process cache
+  (dispatch surgical close-out).**  `src/c/dispatch/ama_dispatch.c`
+  benches each SIMD slot (`keccak_f1600`, `keccak_f1600_x4`,
+  `kyber_ntt` / `invntt`, `dilithium_ntt` / `invntt`) **independently**
+  against its scalar reference and reverts the slot pointer
+  per-bench when the SIMD path regresses past the 10 % hysteresis
+  band.  Replaces the prior one-bench-drives-everything design that
+  could discard a working AVX-512 4-way kernel whenever the AVX2
+  single-state kernel regressed on a noisy host
+  (`BUG_pr-review-job-f0260c65de73482bb856b1b86b90eda3_0001`):
+    - The `keccak_f1600_x4` bench uses an inline 4× single-state
+      fold as its scalar baseline (rather than re-entering
+      `ama_keccak_f1600_x4_generic`, which would deadlock the
+      currently-running `pthread_once`), and the verdict is acted on
+      alone — never lockstepped with the single-state verdict.
+    - The `kyber_ntt` / `kyber_invntt` / `dilithium_ntt` /
+      `dilithium_invntt` benches use new `ama_kyber_ntt_generic_ref`
+      / `ama_kyber_invntt_generic_ref` /
+      `ama_dilithium_ntt_generic_ref` /
+      `ama_dilithium_invntt_generic_ref` symbols (extracted from
+      the inline scalar paths in `src/c/ama_kyber.c` and
+      `src/c/ama_dilithium.c`).  The production fallback path in
+      `poly_ntt` / `poly_invntt` / `dil_ntt_cached` /
+      `dil_invntt_cached` now delegates to the same scalar helper
+      the bench measures — single source of truth for the scalar
+      reference.
+    - `AMA_DISPATCH_CACHE_FILE=<path>` (declared in
+      `include/ama_dispatch.h`) is the new opt-in env-var contract
+      for cross-process auto-tune caching.  When set, the per-slot
+      verdict is written to <path> after a successful bench;
+      subsequent processes with the same env var and a matching
+      CPU-feature fingerprint load the verdict and skip the
+      ~10 K-Keccak-iteration microbench entirely.  Cache key is a
+      deterministic string of `arch_name` + each runtime CPU-feature
+      probe result (`avx2`, `avx512f`, `avx512_keccak_bundle`,
+      `aes_ni`, `pclmulqdq`, `vaes_aesgcm_bundle`, `arm_aes`,
+      `arm_pmull`) — kernel upgrades / microcode changes that shift
+      any flag invalidate the cache automatically.  Default
+      (env unset) does no file I/O.  Bypassed entirely when
+      `AMA_DISPATCH_NO_AUTOTUNE=1` is also set.
+    - Lockstep tie preserved (carved out): the single-state
+      `keccak_f1600` verdict still drives the `sha3_256` and
+      `kyber_poly_{add,sub,reduce}` slots in lockstep, because the
+      SVE2 `sha3_256` wrapper embeds `ama_keccak_f1600_sve2` and
+      the three `kyber_poly_*` slots share the SVE2 codegen tier
+      with no independent kernel.  Documented at the apply-verdicts
+      block in `dispatch_init_internal`.
+- **`ama_keypair_generate(AMA_ALG_ED25519)` wired through to the
+  Ed25519 backend (functional-completeness close-out).**
+  `src/c/ama_core.c::ama_keypair_generate` previously returned
+  `AMA_ERROR_NOT_IMPLEMENTED` for `AMA_ALG_ED25519`; it now draws a
+  32-byte seed from the platform CSPRNG (`ama_randombytes`) and
+  delegates to `ama_ed25519_keypair` (which honours the AMA
+  convention that the caller supplies the seed in
+  `secret_key[0..31]`).  `ama_sign` and `ama_verify` gained matching
+  `AMA_ALG_ED25519` arms so the generated keypair is usable through
+  the algorithm-agnostic API end-to-end.  INVARIANT-6 preserved:
+  the secret-key buffer is `ama_secure_memzero`-scrubbed if the
+  CSPRNG draw fails or the Ed25519 keypair derivation returns an
+  error.  Public-key buffer scrubbed on the same error path so a
+  partial public key cannot leak.
+- **`AMA_DISPATCH_CACHE_FILE` env-var contract documented in
+  `include/ama_dispatch.h`.**  Full opt-in semantics, fingerprint
+  composition, cache-miss / cache-hit / NO_AUTOTUNE precedence,
+  and forward-compat file-format rules — see the "Cross-process
+  auto-tune cache" header block.
+
+### Changed
+- **`tests/c/test_dudect.c::test_consttime_memcmp` — symmetric
+  setup discipline.**  Pre-fix, class 0 did `random_bytes(a) +
+  memcpy(b,a)` while class 1 added an extra `rand()` draw and an
+  in-place XOR on `b`.  Those pre-timer asymmetries (libc-call
+  frequency, branch-predictor state, cache line provenance of the
+  XOR write) bled into the timing window and produced a +12σ
+  false-positive on the CI dudect run — the underlying
+  `ama_consttime_memcmp` is byte-by-byte branchless in source
+  (`src/c/ama_consttime.c`).  Post-fix, both classes compute
+  `b_equal = a` and `b_diff = a with one bit flipped at a random
+  position` BEFORE the class selection, and a pointer-select-out-of-
+  timer chooses which buffer is fed to the constant-time compare.
+  Reading on a contended Linux runner dropped from t = +12.36 to
+  t = -1.82 (well below the 4.5 threshold).  Same setup-symmetry
+  pattern the FROST / Kyber-decaps / Dilithium-sign lanes already
+  use.
+- **`tests/c/test_dudect.c::test_frost_scalar_negate_midrange` —
+  memory-class symmetry.**  Pre-fix, the class-0 reference scalar
+  was stack-resident (a `memset`-zeroed local array) while the
+  class-1 reference scalar was read directly from
+  `SCALAR_NEGATE_MID` in `.rodata`.  The cache-line provenance
+  asymmetry surfaced as a structural −6σ delta in the Welch t-test
+  even though `ama_frost_test_scalar_negate` is byte-by-byte
+  branchless (`src/c/ama_frost.c`).  Post-fix, the mid-range scalar
+  is staged into a stack buffer at function entry so both inputs
+  live in the same memory class; pointer-select stays outside the
+  timer.  Reading dropped from t = -6.70 to t = +1.86.  Documented
+  at the lane header so future readers see the prior triage.
+- **`src/c/ama_kyber.c` and `src/c/ama_dilithium.c` — scalar NTT
+  paths extracted as named static helpers.**  `poly_ntt` /
+  `poly_invntt` (Kyber) and `dil_ntt_cached` / `dil_invntt_cached`
+  (Dilithium) now delegate their scalar fallback to
+  `kyber_ntt_scalar` / `kyber_invntt_scalar` / `dil_ntt_scalar` /
+  `dil_invntt_scalar` (each `static`-linkage, matching the
+  `ama_kyber_ntt_fn` / `ama_dilithium_ntt_fn` signatures).  The
+  same helpers are wrapped by the new `ama_*_generic_ref` extern
+  symbols that the dispatch auto-tune microbenches.  Single
+  source of truth: the algorithm has not moved, only its scope —
+  pinned by every existing ML-KEM-1024 / ML-DSA-65 KAT.
+
+### Documentation
+- **`CONSTANT_TIME_VERIFICATION.md` — "Harness Setup-Symmetry
+  Discipline" subsection.**  Codifies the three-rule pattern
+  (identical setup work / same-memory-class staged inputs /
+  pointer-select-out-of-timer) that future dudect lanes must follow,
+  with a forward pointer to the two v3.2.0 hardenings.
+- **`CHANGELOG.md` — release line for v3.2.0.**  Moves every entry
+  from the previous `[Unreleased]` section into `[3.2.0] -
+  2026-05-20`.  No silent additions — the dispatch surgical
+  close-out, Ed25519 wiring, and dudect setup hardenings all land
+  here.
+
+### Earlier in the 3.2.0 cycle (carried forward from prior
+`[Unreleased]` section — full text below)
+
+### Added (carried forward from the prior `[Unreleased]` section)
 - **Tagged-release pipeline (audit Issue 1).** New
   `.github/workflows/release.yml` runs cibuildwheel across Linux x86-64,
   Linux ARM64, macOS x86-64, macOS arm64, and Windows AMD64 for
