@@ -281,13 +281,26 @@ AMA_API const char *ama_aes_gcm_active_backend(void);
  * on warm hosts without sacrificing the per-host accuracy of the
  * regression heuristic.
  *
- * Cache key — a deterministic string built from `arch_name` plus the
- * runtime CPU-feature probe results (`avx2`, `avx512f`,
- * `avx512_keccak_bundle`, `aes_ni`, `pclmulqdq`, `vaes_aesgcm_bundle`,
- * `arm_aes`, `arm_pmull`).  A kernel upgrade or microcode change that
- * shifts any flag invalidates the cache automatically — no manual
- * flush.  Mismatched fingerprints are treated as a cache miss; the
- * bench runs and rewrites the file.
+ * Cache key — a deterministic string built from `arch_name`, the
+ * per-slot impl level the dispatcher resolved this run (`sha3`,
+ * `kyber`, `dilithium`, `aes_gcm`, `chacha20`, `argon2`, `x25519`,
+ * `ed25519`, `sphincs` — each 0=Generic, 1=AVX2, 2=AVX-512, 3=NEON,
+ * 4=SVE2), and the runtime CPU-feature probe results (`avx2`,
+ * `avx512f`, `avx512kc`, `aesni`, `pclmul`, `vaes`, `arm_aes`,
+ * `arm_pmull`).  Key names match the emitted fingerprint string
+ * verbatim — see `dispatch_cache_fingerprint()` in
+ * `src/c/dispatch/ama_dispatch.c`.  A kernel upgrade, microcode
+ * change, or library version that re-wires which tier owns a slot
+ * invalidates the cache automatically — no manual flush.
+ * Mismatched fingerprints are treated as a cache miss; the bench
+ * runs and rewrites the file.
+ *
+ * Security — the env var is HONOURED only when the process is not
+ * setuid / setgid and not running under a kernel-flagged secure
+ * exec context (issetugid() / AT_SECURE).  A privileged process
+ * silently ignores the env var: an unprivileged user must not be
+ * able to point a privileged binary at an attacker-controlled
+ * cache path.  Cache files are created with mode 0600 (user-only).
  *
  * Default (env unset) — no file I/O on this code path, strictly opt-in.
  * Distribution packagers can ship a pre-warmed cache in /etc or under

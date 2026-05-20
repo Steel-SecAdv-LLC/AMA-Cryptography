@@ -112,8 +112,16 @@ jobs:
         env:
           MEASUREMENTS: ${{ github.event.inputs.measurements || '100000' }}
         run: |
-          # Pin to single core and elevate priority to reduce noise
-          taskset -c 0 nice -n -10 \
+          # Pin to single core; best-effort priority elevation.
+          # GHA hosted runners lack CAP_SYS_NICE so `nice -n -10` would
+          # print "Permission denied" but still exec the binary —
+          # detect that once up front and drop the nice prefix so the
+          # log stays clean.  The harness setup-symmetry fixes
+          # (v3.2.0) made the lanes noise-tolerant enough that
+          # taskset-only pinning is the load-bearing CI gate.
+          NICE_PREFIX=""
+          if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+          taskset -c 0 $NICE_PREFIX \
             ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 300
 
   dudect-pqc:
@@ -150,7 +158,10 @@ jobs:
         env:
           MEASUREMENTS: ${{ github.event.inputs.measurements || '100000' }}
         run: |
-          taskset -c 0 nice -n -10 \
+          # Best-effort priority elevation — see `dudect-utility` for rationale.
+          NICE_PREFIX=""
+          if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+          taskset -c 0 $NICE_PREFIX \
             ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 600
 
   dudect-legacy-harnesses:
@@ -180,10 +191,13 @@ jobs:
         run: |
           cd tools/constant_time
           make clean && make all
+          # Best-effort priority elevation — see `dudect-utility` for rationale.
+          NICE_PREFIX=""
+          if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
           echo "=== Utility function timing analysis ==="
-          taskset -c 0 nice -n -10 ./dudect_harness 50000
+          taskset -c 0 $NICE_PREFIX ./dudect_harness 50000
           echo "=== Crypto primitive timing analysis ==="
-          taskset -c 0 nice -n -10 ./dudect_crypto 50000
+          taskset -c 0 $NICE_PREFIX ./dudect_crypto 50000
 
   dudect-x25519-avx2-batch:
     # Re-runs the dudect binary with AMA_DISPATCH_USE_X25519_AVX2=1 so
@@ -225,7 +239,10 @@ jobs:
           MEASUREMENTS: ${{ github.event.inputs.measurements || '100000' }}
           AMA_DISPATCH_USE_X25519_AVX2: '1'
         run: |
-          taskset -c 0 nice -n -10 \
+          # Best-effort priority elevation — see `dudect-utility` for rationale.
+          NICE_PREFIX=""
+          if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+          taskset -c 0 $NICE_PREFIX \
             ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 300
 
   # ===========================================================================
@@ -414,5 +431,8 @@ jobs:
           AMA_DISPATCH_USE_X25519_AVX2: '1'
           AMA_DISPATCH_NO_AUTOTUNE: '1'
         run: |
-          taskset -c 0 nice -n -10 \
+          # Best-effort priority elevation — see `dudect-utility` for rationale.
+          NICE_PREFIX=""
+          if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+          taskset -c 0 $NICE_PREFIX \
             ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 900

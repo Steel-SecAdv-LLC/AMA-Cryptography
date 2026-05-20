@@ -52,6 +52,14 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+/* getauxval(AT_SECURE) lives in <sys/auxv.h> on glibc / Bionic / musl
+ * (recent).  Wrapped in __has_include so older musl and the BSDs
+ * (which expose issetugid() instead) build cleanly. */
+#if defined(__has_include)
+#  if __has_include(<sys/auxv.h>)
+#    include <sys/auxv.h>
+#  endif
+#endif
 #endif
 
 /* Scalar reference NTT entry points exposed by src/c/ama_kyber.c and
@@ -611,9 +619,24 @@ static void dispatch_bench_keccak_x4(ama_keccak_f1600_x4_fn simd_x4_fn,
     }
 }
 
+/* Kyber / Dilithium NTT bench helpers.
+ *
+ * The NTT kernels are in-place — repeated application to the same
+ * buffer would accumulate coefficient magnitude past int16/int32 range,
+ * which is undefined behaviour and would silently bias the regression
+ * verdict (Copilot review #325).  Each timed call therefore restores
+ * the input from a const seed buffer via memcpy before invocation.
+ *
+ * The memcpy is on the SAME memory range each iteration (well inside
+ * L1) and identical between the SIMD and generic loops, so the per-
+ * iteration overhead is symmetric and cannot bias the comparison —
+ * `simd_best - generic_best` cancels the memcpy term.  Net effect: a
+ * fixed additive ns offset on every measurement that doesn't move the
+ * regression decision (which is a >10 % ratio threshold). */
 static void dispatch_bench_kyber_ntt(ama_kyber_ntt_fn generic_fn,
                                       ama_kyber_ntt_fn simd_fn,
-                                      int16_t poly[256],
+                                      const int16_t poly_seed[256],
+                                      int16_t poly_scratch[256],
                                       const int16_t zetas_bench[128],
                                       int64_t *generic_best,
                                       int64_t *simd_best) {
@@ -625,21 +648,33 @@ static void dispatch_bench_kyber_ntt(ama_kyber_ntt_fn generic_fn,
     const int TRIALS = 5;
     const int ITERS  = 2000;
 
-    for (int w = 0; w < WARMUP; w++) generic_fn(poly, zetas_bench);
-    for (int w = 0; w < WARMUP; w++) simd_fn(poly, zetas_bench);
+    for (int w = 0; w < WARMUP; w++) {
+        memcpy(poly_scratch, poly_seed, 256 * sizeof(int16_t));
+        generic_fn(poly_scratch, zetas_bench);
+    }
+    for (int w = 0; w < WARMUP; w++) {
+        memcpy(poly_scratch, poly_seed, 256 * sizeof(int16_t));
+        simd_fn(poly_scratch, zetas_bench);
+    }
 
     *generic_best = -1;
     *simd_best    = -1;
     for (int trial = 0; trial < TRIALS; trial++) {
         struct timespec t0, t1;
         clock_gettime(CLOCK_MONOTONIC, &t0);
-        for (int i = 0; i < ITERS; i++) generic_fn(poly, zetas_bench);
+        for (int i = 0; i < ITERS; i++) {
+            memcpy(poly_scratch, poly_seed, 256 * sizeof(int16_t));
+            generic_fn(poly_scratch, zetas_bench);
+        }
         clock_gettime(CLOCK_MONOTONIC, &t1);
         int64_t g = timespec_delta_ns(t0, t1);
         if (*generic_best < 0 || g < *generic_best) *generic_best = g;
 
         clock_gettime(CLOCK_MONOTONIC, &t0);
-        for (int i = 0; i < ITERS; i++) simd_fn(poly, zetas_bench);
+        for (int i = 0; i < ITERS; i++) {
+            memcpy(poly_scratch, poly_seed, 256 * sizeof(int16_t));
+            simd_fn(poly_scratch, zetas_bench);
+        }
         clock_gettime(CLOCK_MONOTONIC, &t1);
         int64_t s = timespec_delta_ns(t0, t1);
         if (*simd_best < 0 || s < *simd_best) *simd_best = s;
@@ -648,7 +683,8 @@ static void dispatch_bench_kyber_ntt(ama_kyber_ntt_fn generic_fn,
 
 static void dispatch_bench_dilithium_ntt(ama_dilithium_ntt_fn generic_fn,
                                           ama_dilithium_ntt_fn simd_fn,
-                                          int32_t poly[256],
+                                          const int32_t poly_seed[256],
+                                          int32_t poly_scratch[256],
                                           const int32_t zetas_bench[256],
                                           int64_t *generic_best,
                                           int64_t *simd_best) {
@@ -656,21 +692,33 @@ static void dispatch_bench_dilithium_ntt(ama_dilithium_ntt_fn generic_fn,
     const int TRIALS = 5;
     const int ITERS  = 2000;
 
-    for (int w = 0; w < WARMUP; w++) generic_fn(poly, zetas_bench);
-    for (int w = 0; w < WARMUP; w++) simd_fn(poly, zetas_bench);
+    for (int w = 0; w < WARMUP; w++) {
+        memcpy(poly_scratch, poly_seed, 256 * sizeof(int32_t));
+        generic_fn(poly_scratch, zetas_bench);
+    }
+    for (int w = 0; w < WARMUP; w++) {
+        memcpy(poly_scratch, poly_seed, 256 * sizeof(int32_t));
+        simd_fn(poly_scratch, zetas_bench);
+    }
 
     *generic_best = -1;
     *simd_best    = -1;
     for (int trial = 0; trial < TRIALS; trial++) {
         struct timespec t0, t1;
         clock_gettime(CLOCK_MONOTONIC, &t0);
-        for (int i = 0; i < ITERS; i++) generic_fn(poly, zetas_bench);
+        for (int i = 0; i < ITERS; i++) {
+            memcpy(poly_scratch, poly_seed, 256 * sizeof(int32_t));
+            generic_fn(poly_scratch, zetas_bench);
+        }
         clock_gettime(CLOCK_MONOTONIC, &t1);
         int64_t g = timespec_delta_ns(t0, t1);
         if (*generic_best < 0 || g < *generic_best) *generic_best = g;
 
         clock_gettime(CLOCK_MONOTONIC, &t0);
-        for (int i = 0; i < ITERS; i++) simd_fn(poly, zetas_bench);
+        for (int i = 0; i < ITERS; i++) {
+            memcpy(poly_scratch, poly_seed, 256 * sizeof(int32_t));
+            simd_fn(poly_scratch, zetas_bench);
+        }
         clock_gettime(CLOCK_MONOTONIC, &t1);
         int64_t s = timespec_delta_ns(t0, t1);
         if (*simd_best < 0 || s < *simd_best) *simd_best = s;
@@ -686,11 +734,24 @@ static void dispatch_bench_dilithium_ntt(ama_dilithium_ntt_fn generic_fn,
  *   - Save:  after a successful microbench, write the verdict struct
  *            to <path> using a tmp-file + rename for atomicity.
  *
- * The fingerprint is a deterministic string built from the dispatch
- * info (arch_name + per-slot impl level) and the CPU feature probes
- * already exposed by ama_cpuid.h.  Any change to the host CPU's
- * detected features (kernel upgrade, microcode change, hypervisor
- * masking) invalidates the cache automatically — no manual flush.
+ * Security model — the env var is honoured ONLY for non-tainted
+ * processes (see dispatch_cache_env_is_safe).  When a setuid / setgid
+ * binary launches with `AMA_DISPATCH_CACHE_FILE` set, the env var is
+ * ignored entirely (no read, no write) so a lower-privileged caller
+ * cannot point a privileged process at an attacker-controlled path.
+ * The cache file is created with mode 0600 (user-only read/write) via
+ * `open(O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0600)` + `fdopen` to close
+ * the default-umask 0666 risk that `fopen("we")` would otherwise leave
+ * on a host with `umask 0`.
+ *
+ * The fingerprint is a deterministic string built from arch_name +
+ * per-slot impl level (so a dispatch-wiring change invalidates the
+ * cache even when the underlying CPU features are unchanged) + the
+ * runtime CPU feature probes already exposed by ama_cpuid.h.  Any
+ * change to the host CPU's detected features (kernel upgrade,
+ * microcode change, hypervisor masking) or to the per-slot wiring
+ * (library upgrade) invalidates the cache automatically — no manual
+ * flush.
  *
  * Format (text, one key=value per line, leading `#` are comments):
  *
@@ -706,11 +767,11 @@ static void dispatch_bench_dilithium_ntt(ama_dilithium_ntt_fn generic_fn,
  *     keccak_generic_ns=<int64>
  *     ...
  *
- * The verdict timings are written for diagnostic value (a future
- * operator can `cat` the cache file and see WHY the dispatcher reverted
- * a slot); they are ignored on load — only the per-slot regressed
- * flags drive kernel revert decisions.  Unknown lines are skipped so
- * old binaries reading a newer cache file degrade gracefully.
+ * The verdict timings are written for diagnostic value AND parsed on
+ * load so a verbose cache-hit log shows the cached `simd / generic`
+ * ns readings instead of zeros.  Only the per-slot `regressed` flags
+ * drive kernel revert decisions either way.  Unknown lines are skipped
+ * so old binaries reading a newer cache file degrade gracefully.
  *
  * The fingerprint check is a strict string equality — if any feature
  * differs between the cached header and the current host, the cache
@@ -718,6 +779,49 @@ static void dispatch_bench_dilithium_ntt(ama_dilithium_ntt_fn generic_fn,
  * choice: a false-positive cache hit could install a regressed kernel
  * pointer that the bench would have caught.
  */
+
+/* Returns 1 iff the current process is "safe" to honour the
+ * AMA_DISPATCH_CACHE_FILE env var.  A setuid / setgid process must
+ * NOT trust environment-controlled paths — opening or writing an
+ * attacker-controlled file under elevated privileges is the canonical
+ * setuid env-var escalation primitive.
+ *
+ * - issetugid()        — BSD / Apple / musl, returns 1 if the process
+ *                        was started setuid/setgid OR if the auxiliary
+ *                        vector indicates a tainted exec.  Strictly
+ *                        the right gate where available.
+ * - getauxval(AT_SECURE) — glibc fallback that mirrors the same
+ *                        secure-exec bit the dynamic linker uses to
+ *                        scrub LD_LIBRARY_PATH; 1 iff the kernel
+ *                        marked the exec as secure.
+ * - getuid()/geteuid() comparison — last-resort fallback for libcs
+ *                        that expose neither of the above.  Same
+ *                        check for the gid pair.
+ *
+ * On platforms where none of these apply (MSVC builds skip the cache
+ * entirely via the #else stub below), the gate degrades open. */
+static int dispatch_cache_env_is_safe(void) {
+#if defined(_MSC_VER)
+    return 1;   /* The cache code path is compiled out under MSVC. */
+#else
+    /* Prefer issetugid() where available (BSDs / Apple / musl). */
+#  if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
+      defined(__NetBSD__) || defined(__DragonFly__)
+    if (issetugid()) return 0;
+    return 1;
+#  elif defined(AT_SECURE)
+    /* glibc / Bionic / recent musl. */
+    if (getauxval(AT_SECURE) != 0) return 0;
+    return 1;
+#  else
+    /* Last-resort fallback. */
+    if (getuid()  != geteuid()) return 0;
+    if (getgid()  != getegid()) return 0;
+    return 1;
+#  endif
+#endif
+}
+
 static void dispatch_cache_fingerprint(char *out, size_t outlen) {
     int avx2 = 0, avx512f = 0, avx512kc = 0, aesni = 0, pclmul = 0;
     int vaes = 0, arm_aes = 0, arm_pmull = 0;
@@ -734,12 +838,23 @@ static void dispatch_cache_fingerprint(char *out, size_t outlen) {
     arm_aes   = ama_has_arm_aes();
     arm_pmull = ama_has_arm_pmull();
 #endif
-    /* `dispatch_info.arch_name` already set by the architecture
-     * detection block above; this helper runs strictly after that. */
+    /* `dispatch_info` already set by the architecture detection block
+     * above; this helper runs strictly after that.  Per-slot impl
+     * level included so a release that re-wires which tier owns a
+     * slot (e.g., promoting a new AVX-512 kernel) automatically
+     * invalidates caches written by the previous release — the cache
+     * key matches CHANGELOG / include/ama_dispatch.h verbatim. */
     snprintf(out, outlen,
-        "v1|%s|avx2=%d|avx512f=%d|avx512kc=%d|aesni=%d|pclmul=%d|vaes=%d|"
+        "v1|%s|sha3=%d|kyber=%d|dilithium=%d|aes_gcm=%d|chacha20=%d|argon2=%d|"
+        "x25519=%d|ed25519=%d|sphincs=%d|"
+        "avx2=%d|avx512f=%d|avx512kc=%d|aesni=%d|pclmul=%d|vaes=%d|"
         "arm_aes=%d|arm_pmull=%d",
         dispatch_info.arch_name ? dispatch_info.arch_name : "unknown",
+        (int)dispatch_info.sha3, (int)dispatch_info.kyber,
+        (int)dispatch_info.dilithium, (int)dispatch_info.aes_gcm,
+        (int)dispatch_info.chacha20poly1305, (int)dispatch_info.argon2,
+        (int)dispatch_info.x25519, (int)dispatch_info.ed25519,
+        (int)dispatch_info.sphincs,
         avx2, avx512f, avx512kc, aesni, pclmul, vaes,
         arm_aes, arm_pmull);
 }
@@ -755,11 +870,25 @@ static void rstrip(char *s) {
 
 /* Returns 0 on cache hit, non-zero on miss.  Verdict struct is left
  * untouched on miss so the surrounding code can populate it via
- * benches. */
+ * benches.  Path validity is the caller's responsibility — this
+ * function trusts `path` after `dispatch_cache_env_is_safe()` has
+ * approved the env-var source. */
 static int dispatch_cache_load(const char *path, const char *fingerprint,
                                 dispatch_autotune_verdicts_t *v) {
-    FILE *fp = fopen(path, "re");
+    /* Use plain "r" + explicit FD_CLOEXEC via fcntl rather than the
+     * glibc-specific `"re"` mode (the "e" extension is not portable
+     * to Apple libc and silently no-ops on some BSDs, leaving the FD
+     * to leak across exec — Copilot review #325). */
+    FILE *fp = fopen(path, "r");
     if (!fp) return -1;
+    {
+        int fd = fileno(fp);
+        if (fd >= 0) {
+            int flags = fcntl(fd, F_GETFD, 0);
+            if (flags >= 0)
+                (void)fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+        }
+    }
 
     char line[512];
     int  fp_matched = 0;
@@ -790,8 +919,37 @@ static int dispatch_cache_load(const char *path, const char *fingerprint,
         } else if (strcmp(key, "dilithium_invntt_regressed") == 0) {
             tmp.dilithium_invntt_regressed = atoi(val);
         }
-        /* timing fields are diagnostic; ignored on load.  Unknown keys
-         * silently skipped for forward compatibility. */
+        /* Timing fields populate the verdict struct so a verbose
+         * cache-hit log reports the cached ns readings rather than
+         * misleading zeros (Copilot review #325).  strtoll handles
+         * the int64 range cleanly; out-of-range parses fall back to
+         * 0 which the surrounding code treats as "no measurement". */
+        else if (strcmp(key, "keccak_simd_ns") == 0) {
+            tmp.keccak_simd_ns = (int64_t)strtoll(val, NULL, 10);
+        } else if (strcmp(key, "keccak_generic_ns") == 0) {
+            tmp.keccak_generic_ns = (int64_t)strtoll(val, NULL, 10);
+        } else if (strcmp(key, "keccak_x4_simd_ns") == 0) {
+            tmp.keccak_x4_simd_ns = (int64_t)strtoll(val, NULL, 10);
+        } else if (strcmp(key, "keccak_x4_generic_ns") == 0) {
+            tmp.keccak_x4_generic_ns = (int64_t)strtoll(val, NULL, 10);
+        } else if (strcmp(key, "kyber_ntt_simd_ns") == 0) {
+            tmp.kyber_ntt_simd_ns = (int64_t)strtoll(val, NULL, 10);
+        } else if (strcmp(key, "kyber_ntt_generic_ns") == 0) {
+            tmp.kyber_ntt_generic_ns = (int64_t)strtoll(val, NULL, 10);
+        } else if (strcmp(key, "kyber_invntt_simd_ns") == 0) {
+            tmp.kyber_invntt_simd_ns = (int64_t)strtoll(val, NULL, 10);
+        } else if (strcmp(key, "kyber_invntt_generic_ns") == 0) {
+            tmp.kyber_invntt_generic_ns = (int64_t)strtoll(val, NULL, 10);
+        } else if (strcmp(key, "dilithium_ntt_simd_ns") == 0) {
+            tmp.dilithium_ntt_simd_ns = (int64_t)strtoll(val, NULL, 10);
+        } else if (strcmp(key, "dilithium_ntt_generic_ns") == 0) {
+            tmp.dilithium_ntt_generic_ns = (int64_t)strtoll(val, NULL, 10);
+        } else if (strcmp(key, "dilithium_invntt_simd_ns") == 0) {
+            tmp.dilithium_invntt_simd_ns = (int64_t)strtoll(val, NULL, 10);
+        } else if (strcmp(key, "dilithium_invntt_generic_ns") == 0) {
+            tmp.dilithium_invntt_generic_ns = (int64_t)strtoll(val, NULL, 10);
+        }
+        /* Unknown keys silently skipped for forward compatibility. */
     }
     fclose(fp);
 
@@ -806,16 +964,52 @@ static void dispatch_cache_save(const char *path, const char *fingerprint,
      * diagnostic state; a crash mid-write leaves the prior cache (if
      * any) intact and a future init just re-runs the bench. */
     size_t pathlen = strlen(path);
-    if (pathlen == 0 || pathlen > 4000) return;
+    if (pathlen == 0) return;
+    /* Reserve space for the worst-case suffix ".tmp." + decimal pid +
+     * NUL terminator.  PID_MAX is platform-defined; reserve 20 bytes
+     * (enough for any int64-shaped decimal).  Bailing on
+     * length-before-snprintf prevents silent truncation that would
+     * make `rename(tmppath, path)` clobber an unintended file
+     * (Copilot review #325). */
     char tmppath[4096];
-    snprintf(tmppath, sizeof(tmppath), "%s.tmp.%ld", path, (long)getpid());
+    const size_t SUFFIX_RESERVE = sizeof(".tmp.") + 20;
+    if (pathlen + SUFFIX_RESERVE >= sizeof(tmppath)) return;
+    int wrote = snprintf(tmppath, sizeof(tmppath),
+                         "%s.tmp.%ld", path, (long)getpid());
+    if (wrote < 0 || (size_t)wrote >= sizeof(tmppath)) {
+        /* snprintf truncated or errored — refuse to rename a partial
+         * filename onto the cache path. */
+        if (dispatch_verbose())
+            fprintf(stderr,
+                "[AMA Dispatch] cache write SKIPPED: tmp path would "
+                "exceed %zu bytes\n", sizeof(tmppath));
+        return;
+    }
 
-    FILE *fp = fopen(tmppath, "we");
-    if (!fp) {
+    /* O_CREAT with explicit mode 0600 (user-only read/write) — closes
+     * the CodeQL "file created without restricting permissions" alert
+     * #534 that the prior `fopen(tmppath, "we")` triggered on hosts
+     * with `umask 0` (which would yield 0666 — world-writable).
+     * O_CLOEXEC keeps the FD out of any child exec().  No "e" mode
+     * dependency (Apple libc doesn't implement it). */
+    int fd = open(tmppath,
+                  O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
+                  S_IRUSR | S_IWUSR);
+    if (fd < 0) {
         if (dispatch_verbose())
             fprintf(stderr,
                 "[AMA Dispatch] cache write FAILED (open '%s' errno=%d)\n",
                 tmppath, errno);
+        return;
+    }
+    FILE *fp = fdopen(fd, "w");
+    if (!fp) {
+        if (dispatch_verbose())
+            fprintf(stderr,
+                "[AMA Dispatch] cache write FAILED (fdopen '%s' errno=%d)\n",
+                tmppath, errno);
+        close(fd);
+        (void)unlink(tmppath);
         return;
     }
     fprintf(fp, "# AMA Cryptography dispatch auto-tune cache v1\n");
@@ -1341,12 +1535,26 @@ static void dispatch_init_internal(void) {
     dispatch_autotune_verdicts_t v;
     memset(&v, 0, sizeof(v));  // PUBLIC-DATA: v — zero-init verdict struct (PUBLIC; no secret material)
 
-    const char *cache_path = getenv("AMA_DISPATCH_CACHE_FILE");
-    char fingerprint[256];
+    /* Suppress AMA_DISPATCH_CACHE_FILE in setuid/setgid (or otherwise
+     * "tainted") processes — environment-controlled file writes are a
+     * classic privilege-escalation primitive (Copilot review #325).
+     * A privileged process must not be steerable by env into reading
+     * or writing an attacker-supplied path. */
+    const char *cache_path_env = getenv("AMA_DISPATCH_CACHE_FILE");
+    const char *cache_path = (cache_path_env && cache_path_env[0]
+                              && dispatch_cache_env_is_safe())
+                             ? cache_path_env : NULL;
+    if (cache_path_env && cache_path_env[0] && !cache_path && dispatch_verbose()) {
+        fprintf(stderr,
+            "[AMA Dispatch] Auto-tune: AMA_DISPATCH_CACHE_FILE ignored — "
+            "process is setuid/setgid or running under a secure-exec context\n");
+    }
+
+    char fingerprint[512];
     dispatch_cache_fingerprint(fingerprint, sizeof(fingerprint));
     int cache_hit = 0;
 
-    if (!autotune_disabled && cache_path && cache_path[0]) {
+    if (!autotune_disabled && cache_path) {
         if (dispatch_cache_load(cache_path, fingerprint, &v) == 0) {
             cache_hit = 1;
             if (dispatch_verbose())
@@ -1403,17 +1611,23 @@ static void dispatch_init_internal(void) {
             v.keccak_x4_generic_ns = generic_best;
         }
 
-        /* ----- Slot 3: kyber_ntt (forward NTT) ------------------------ */
+        /* ----- Slot 3: kyber_ntt (forward NTT) ------------------------
+         * `poly_seed` is the immutable input domain; `poly_scratch` is
+         * memcpy-restored before each NTT call so 4000 in-place
+         * applications can't accumulate coefficients past int16
+         * range — see dispatch_bench_kyber_ntt header for the
+         * memcpy-symmetry argument. */
         if (dispatch_table.kyber_ntt != NULL) {
-            int16_t poly[256];
+            int16_t poly_seed[256];
+            int16_t poly_scratch[256];
             int16_t zetas_bench[128];
-            for (int i = 0; i < 256; i++) poly[i] = (int16_t)((i * 37) & 0x7FF);
+            for (int i = 0; i < 256; i++) poly_seed[i] = (int16_t)((i * 37) & 0x7FF);
             for (int i = 0; i < 128; i++) zetas_bench[i] = (int16_t)((i * 91) & 0x7FF);
 
             int64_t generic_best = -1, simd_best = -1;
             dispatch_bench_kyber_ntt(
                 ama_kyber_ntt_generic_ref, dispatch_table.kyber_ntt,
-                poly, zetas_bench, &generic_best, &simd_best);
+                poly_seed, poly_scratch, zetas_bench, &generic_best, &simd_best);
             v.kyber_ntt_regressed = bench_slot_regressed(simd_best, generic_best);
             v.kyber_ntt_simd_ns    = simd_best;
             v.kyber_ntt_generic_ns = generic_best;
@@ -1421,15 +1635,16 @@ static void dispatch_init_internal(void) {
 
         /* ----- Slot 4: kyber_invntt (inverse NTT) --------------------- */
         if (dispatch_table.kyber_invntt != NULL) {
-            int16_t poly[256];
+            int16_t poly_seed[256];
+            int16_t poly_scratch[256];
             int16_t zetas_bench[128];
-            for (int i = 0; i < 256; i++) poly[i] = (int16_t)((i * 53) & 0x7FF);
+            for (int i = 0; i < 256; i++) poly_seed[i] = (int16_t)((i * 53) & 0x7FF);
             for (int i = 0; i < 128; i++) zetas_bench[i] = (int16_t)((i * 67) & 0x7FF);
 
             int64_t generic_best = -1, simd_best = -1;
             dispatch_bench_kyber_ntt(
                 ama_kyber_invntt_generic_ref, dispatch_table.kyber_invntt,
-                poly, zetas_bench, &generic_best, &simd_best);
+                poly_seed, poly_scratch, zetas_bench, &generic_best, &simd_best);
             v.kyber_invntt_regressed = bench_slot_regressed(simd_best, generic_best);
             v.kyber_invntt_simd_ns    = simd_best;
             v.kyber_invntt_generic_ns = generic_best;
@@ -1437,17 +1652,18 @@ static void dispatch_init_internal(void) {
 
         /* ----- Slot 5: dilithium_ntt (forward NTT) -------------------- */
         if (dispatch_table.dilithium_ntt != NULL) {
-            int32_t poly[256];
+            int32_t poly_seed[256];
+            int32_t poly_scratch[256];
             int32_t zetas_bench[256];
             for (int i = 0; i < 256; i++) {
-                poly[i]        = (int32_t)((i * 1337) & 0x7FFFFF);
+                poly_seed[i]   = (int32_t)((i * 1337) & 0x7FFFFF);
                 zetas_bench[i] = (int32_t)((i * 4093) & 0x7FFFFF);
             }
 
             int64_t generic_best = -1, simd_best = -1;
             dispatch_bench_dilithium_ntt(
                 ama_dilithium_ntt_generic_ref, dispatch_table.dilithium_ntt,
-                poly, zetas_bench, &generic_best, &simd_best);
+                poly_seed, poly_scratch, zetas_bench, &generic_best, &simd_best);
             v.dilithium_ntt_regressed = bench_slot_regressed(simd_best, generic_best);
             v.dilithium_ntt_simd_ns    = simd_best;
             v.dilithium_ntt_generic_ns = generic_best;
@@ -1455,17 +1671,18 @@ static void dispatch_init_internal(void) {
 
         /* ----- Slot 6: dilithium_invntt (inverse NTT) ----------------- */
         if (dispatch_table.dilithium_invntt != NULL) {
-            int32_t poly[256];
+            int32_t poly_seed[256];
+            int32_t poly_scratch[256];
             int32_t zetas_bench[256];
             for (int i = 0; i < 256; i++) {
-                poly[i]        = (int32_t)((i * 5119) & 0x7FFFFF);
+                poly_seed[i]   = (int32_t)((i * 5119) & 0x7FFFFF);
                 zetas_bench[i] = (int32_t)((i * 7919) & 0x7FFFFF);
             }
 
             int64_t generic_best = -1, simd_best = -1;
             dispatch_bench_dilithium_ntt(
                 ama_dilithium_invntt_generic_ref, dispatch_table.dilithium_invntt,
-                poly, zetas_bench, &generic_best, &simd_best);
+                poly_seed, poly_scratch, zetas_bench, &generic_best, &simd_best);
             v.dilithium_invntt_regressed = bench_slot_regressed(simd_best, generic_best);
             v.dilithium_invntt_simd_ns    = simd_best;
             v.dilithium_invntt_generic_ns = generic_best;
@@ -1527,11 +1744,10 @@ static void dispatch_init_internal(void) {
 
         /* Save the verdict to the cache file (opt-in, miss-only).  Skip
          * on cache hit so a re-init doesn't keep rewriting the same
-         * bytes; skip if AMA_DISPATCH_CACHE_FILE is unset (default
-         * deployment writes no files); skip if any slot bench
-         * disagrees with the cached entry — which can't happen on a
-         * cache hit because the verdict came straight from the file. */
-        if (!cache_hit && cache_path && cache_path[0]) {
+         * bytes; skip if AMA_DISPATCH_CACHE_FILE is unset or refused
+         * by dispatch_cache_env_is_safe() (privileged process);
+         * `cache_path` already encodes both checks. */
+        if (!cache_hit && cache_path) {
             dispatch_cache_save(cache_path, fingerprint, &v);
         }
     } else if (autotune_disabled && dispatch_verbose()) {

@@ -58,15 +58,25 @@ All notable changes to AMA Cryptography will be documented in this file. The for
       for cross-process auto-tune caching.  When set, the per-slot
       verdict is written to <path> after a successful bench;
       subsequent processes with the same env var and a matching
-      CPU-feature fingerprint load the verdict and skip the
+      fingerprint load the verdict and skip the
       ~10 K-Keccak-iteration microbench entirely.  Cache key is a
-      deterministic string of `arch_name` + each runtime CPU-feature
-      probe result (`avx2`, `avx512f`, `avx512_keccak_bundle`,
-      `aes_ni`, `pclmulqdq`, `vaes_aesgcm_bundle`, `arm_aes`,
-      `arm_pmull`) — kernel upgrades / microcode changes that shift
-      any flag invalidate the cache automatically.  Default
-      (env unset) does no file I/O.  Bypassed entirely when
-      `AMA_DISPATCH_NO_AUTOTUNE=1` is also set.
+      deterministic string of `arch_name`, the per-slot impl level
+      the dispatcher resolved this run (`sha3`, `kyber`,
+      `dilithium`, `aes_gcm`, `chacha20`, `argon2`, `x25519`,
+      `ed25519`, `sphincs`), and each runtime CPU-feature probe
+      result (`avx2`, `avx512f`, `avx512kc`, `aesni`, `pclmul`,
+      `vaes`, `arm_aes`, `arm_pmull`) — kernel upgrades /
+      microcode changes / library upgrades that re-wire a slot
+      invalidate the cache automatically.  Default (env unset)
+      does no file I/O.  Bypassed entirely when
+      `AMA_DISPATCH_NO_AUTOTUNE=1` is also set.  In setuid /
+      setgid (or otherwise secure-exec-flagged) processes the env
+      var is ignored entirely so an unprivileged caller cannot
+      steer a privileged binary at an attacker-controlled path;
+      cache files are created with mode 0600 (user-only) via
+      `open(O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0600)` + `fdopen`
+      to close the default-umask 0666 risk on hosts that set
+      `umask 0`.
     - Lockstep tie preserved (carved out): the single-state
       `keccak_f1600` verdict still drives the `sha3_256` and
       `kyber_poly_{add,sub,reduce}` slots in lockstep, because the
@@ -93,6 +103,77 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   composition, cache-miss / cache-hit / NO_AUTOTUNE precedence,
   and forward-compat file-format rules — see the "Cross-process
   auto-tune cache" header block.
+
+### Hardened
+- **Dispatch cache file safety + portability (Copilot review #325
+  + CodeQL alerts #534 / #535 / #536 close-out).** Multiple
+  surgical corrections layered onto the v3.2.0 dispatch-cache
+  surface:
+    - **Mode 0600 cache files.** `dispatch_cache_save` now opens
+      the tmp-file via `open(O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,
+      0600)` + `fdopen`, closing the default-umask 0666 risk that
+      the prior `fopen("we")` left open on hosts running with
+      `umask 0` (CodeQL #534).
+    - **Setuid / setgid env-var suppression.** `AMA_DISPATCH_CACHE_FILE`
+      is now ignored entirely in tainted-exec contexts.  Detected
+      via `issetugid()` on BSDs / Apple / musl, `getauxval(AT_SECURE)`
+      on glibc / Bionic, with a `getuid()/geteuid()` fallback.  A
+      privileged process cannot be steered at an attacker-supplied
+      path by a lower-privileged caller (CodeQL #535 / #536).
+    - **Portable CLOEXEC.** Replaced `fopen(path, "re")` /
+      `fopen(tmp, "we")` (the glibc-only `e` extension) with plain
+      `fopen` + explicit `fcntl(F_SETFD, FD_CLOEXEC)` on the read
+      side and `open()` + `fdopen()` on the write side. Apple
+      libc / older BSD libcs that silently ignore `e` now get the
+      same close-on-exec behaviour as glibc.
+    - **`snprintf` truncation check + reserved suffix length.**
+      `dispatch_cache_save` now refuses to write when the
+      `path + ".tmp.<pid>"` suffix would truncate the resulting
+      `tmppath`, preventing a corner case where `rename(tmppath,
+      path)` would clobber a different file than intended.
+    - **Cache-hit log shows cached timings.** `dispatch_cache_load`
+      now parses every `*_simd_ns=` / `*_generic_ns=` field on the
+      file so the verbose post-init log reports the cached
+      readings rather than the misleading `simd=0 ns vs
+      generic=0 ns` it previously emitted on a cache hit.
+    - **NTT bench in-place overflow guard.** Kyber and Dilithium
+      NTT microbenches now `memcpy` the input from an immutable
+      `poly_seed` to a `poly_scratch` buffer before every timed
+      call, so 4000 in-place transforms can't accumulate
+      coefficient magnitude past `int16_t` / `int32_t` range
+      (undefined behaviour that would silently bias the regression
+      verdict).  The memcpy is symmetric between SIMD and generic
+      branches so the regression decision is unbiased.
+    - **Per-slot impl level + CPU-feature bundle in the cache
+      fingerprint.** The cache key now embeds `sha3 / kyber /
+      dilithium / aes_gcm / chacha20 / argon2 / x25519 / ed25519 /
+      sphincs` impl levels alongside the previous CPU-feature
+      probes.  A library upgrade that re-wires which tier owns a
+      slot now invalidates the cache automatically — caches
+      written by the previous release no longer apply to the next.
+      Field names in the emitted fingerprint match the
+      `include/ama_dispatch.h` documentation verbatim (`avx512kc`,
+      `vaes`, `aesni`, `pclmul`).
+- **`.github/workflows/dudect.yml` — best-effort `nice` priority
+  elevation.**  All five dudect job steps now probe whether
+  `nice -n -10` succeeds before prepending it to the test command,
+  silently dropping the prefix when the runner lacks CAP_SYS_NICE
+  (GHA hosted runners) so the `nice: cannot set niceness:
+  Permission denied` warning stops appearing in CI logs.  The
+  harness setup-symmetry hardenings above made the lanes
+  noise-tolerant enough that `taskset -c 0` pinning is the
+  load-bearing CI gate; the nice prefix is opportunistic on
+  privileged self-hosted runners.
+- **`tests/c/test_dispatch_cache_file.c` — roundtrip + safety
+  contract test.**  New ctest case pins (1) the mode-0600
+  cache-file creation, (2) the per-slot impl-level fingerprint
+  schema (with verbatim key-name assertions matching
+  `include/ama_dispatch.h` v3.2.0 and the release-line
+  documentation in this file), (3) the timing-fields-on-load
+  contract that the verbose cache-hit log depends on, and
+  (4) cache-file ownership equal to the effective uid.  Returns
+  77 (Skipped) on MSVC builds where the cache code path is
+  compiled out.
 
 ### Changed
 - **`tests/c/test_dudect.c::test_consttime_memcmp` — symmetric
