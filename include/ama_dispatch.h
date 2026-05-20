@@ -300,10 +300,14 @@ AMA_API const char *ama_aes_gcm_active_backend(void);
  * pointer is a string literal with static storage duration; do not
  * free it.
  *
- * An unsupported-slot request emits a clear error to stderr and
- * leaves every kernel pointer at scalar fallback — the dudect test
- * harness in `tests/c/test_dispatch_only_env.c` interprets the
- * `"all-default-dispatch"` return as a CTest skip (exit code 77).
+ * An unsupported-slot request (either an unrecognised slot name OR
+ * a recognised slot whose CPU feature is absent on this host) emits
+ * a single, unconditional `[AMA Dispatch] ERROR:` line on stderr —
+ * not gated on `AMA_DISPATCH_VERBOSE` — and leaves every kernel
+ * pointer at scalar fallback.  `ama_dispatch_active_slot()` reports
+ * the `"all-default-dispatch"` sentinel in that case, which the
+ * dudect test harness in `tests/c/test_dispatch_only_env.c`
+ * interprets as a CTest skip (exit code 77).
  */
 AMA_API const char *ama_dispatch_active_slot(void);
 

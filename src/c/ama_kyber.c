@@ -675,7 +675,7 @@ static void kyber_cpapke_enc(uint8_t *ct, const uint8_t *m,
     poly_add(&v, &v, &epp);
 
     /* Encode message into polynomial */
-    memset(&mp_poly, 0, sizeof(mp_poly));  // PUBLIC-DATA: mp_poly — ML-KEM CPA message polynomial, pre-use init filled by bit-unpacking inside the production decrypt path
+    memset(&mp_poly, 0, sizeof(mp_poly));  // PUBLIC-DATA: mp_poly — ML-KEM CPA encryption message polynomial, pre-use init filled by Encode_1 bit-unpacking of plaintext `m` below (`mp_poly.coeffs[8*i + j] = ((m[i] >> j) & 1) * ...`)
     for (i = 0; i < 32; i++) {
         unsigned int j;
         for (j = 0; j < 8; j++) {

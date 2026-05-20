@@ -1088,15 +1088,25 @@ static void dispatch_init_internal(void) {
                         "[AMA Dispatch] AMA_DISPATCH_ONLY='%s' honored — "
                         "every other slot is scalar fallback.\n", resolved);
             } else {
-                /* apply_dispatch_only() already emitted the clear
-                 * error to stderr and left dispatch_table at scalar
-                 * fallback.  dispatch_active_slot_label stays at
-                 * the default "all-default-dispatch" sentinel — the
-                 * test harness reads that as a skip signal. */
-                if (dispatch_verbose())
-                    fprintf(stderr,
-                        "[AMA Dispatch] AMA_DISPATCH_ONLY='%s' unsupported on "
-                        "this host — dispatch left scalar.\n", only);
+                /* apply_dispatch_only() emits a stderr error for the
+                 * unrecognised-slot branch (which enumerates the
+                 * known slot inventory so an operator who fat-fingered
+                 * the env var sees the fix), but the known-but-not-
+                 * supported-on-this-host branches return NULL silently
+                 * — `dispatch_verbose()` is too narrow a gate for the
+                 * second class (it requires `AMA_DISPATCH_VERBOSE=1`
+                 * which a caller asking for `AMA_DISPATCH_ONLY` is
+                 * unlikely to also have set).  Emit a clear stderr
+                 * line unconditionally so the contract in
+                 * `include/ama_dispatch.h`'s header comment
+                 * ("emits a clear error to stderr") matches the
+                 * implementation — Copilot review #323 follow-up. */
+                fprintf(stderr,
+                    "[AMA Dispatch] ERROR: AMA_DISPATCH_ONLY='%s' could not be "
+                    "honored — the requested slot is either not recognised on "
+                    "this build or not supported by this host's CPU.  Dispatch "
+                    "left at scalar fallback; ama_dispatch_active_slot() will "
+                    "report \"all-default-dispatch\".\n", only);
             }
         }
     }

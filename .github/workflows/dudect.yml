@@ -362,8 +362,13 @@ jobs:
         # per-slot contract test that AMA_DISPATCH_ONLY actually
         # honored the requested slot on this runner.  Exit code 77
         # from the contract binary means "Skipped" — propagate that
-        # as a job-level skip so we don't burn the full dudect run
-        # measuring scalar fallback.
+        # as a step output (`supported=false`) so the dudect step
+        # below skips this matrix cell entirely.  Without the
+        # supported-flag + downstream `if:`, a `exit 0` here would
+        # NOT prevent the subsequent dudect lane from firing on a
+        # scalar-fallback dispatch table — Copilot review #323
+        # follow-up.
+        id: confirm
         env:
           AMA_DISPATCH_ONLY: ${{ matrix.slot }}
           # x25519-avx2 requires the opt-in flag in addition to
@@ -387,14 +392,22 @@ jobs:
           rc=0
           "$TEST_BIN" || rc=$?
           if [ "$rc" -eq 77 ]; then
+            echo "supported=false" >> "$GITHUB_OUTPUT"
             echo "::warning::Slot '${{ matrix.slot }}' unsupported on this host — skipping dudect lane."
             exit 0
           elif [ "$rc" -ne 0 ]; then
+            echo "supported=false" >> "$GITHUB_OUTPUT"
             echo "::error::Dispatch contract test failed for '${{ matrix.slot }}' (exit=$rc)"
             exit "$rc"
           fi
+          echo "supported=true" >> "$GITHUB_OUTPUT"
 
       - name: Run dudect with AMA_DISPATCH_ONLY=${{ matrix.slot }}
+        # Skip this lane entirely when the confirmation step above
+        # reported the slot as unsupported — measuring a scalar
+        # fallback under the per-slot label would produce a
+        # misleading t-value attributed to a kernel that didn't run.
+        if: steps.confirm.outputs.supported == 'true'
         env:
           MEASUREMENTS: ${{ github.event.inputs.measurements || '100000' }}
           AMA_DISPATCH_ONLY: ${{ matrix.slot }}

@@ -283,7 +283,7 @@ static ama_error_t hkdf_expand(
         expand_on_heap = 1;
     }
 
-    memset(T, 0, sizeof(T));  // PUBLIC-DATA: T — HKDF T buffer, pre-use init; immediately filled by ama_sha3_256() — caller-side scrub of T at function exit follows
+    memset(T, 0, sizeof(T));  // PUBLIC-DATA: T — HKDF-Expand T(i) buffer, pre-use init; immediately filled by hmac_sha3_256(PRK, T(i-1)||info||counter, T) inside the expand loop — caller-side scrub of T at function exit follows (T holds keying material once the loop fills it)
 
     while (done < okm_len) {
         size_t offset = 0;
