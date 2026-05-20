@@ -208,6 +208,33 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   Returns 77 (Skipped) on MSVC builds where the cache code path
   is compiled out.
 
+#### PR #326 follow-up: vulnerable transitive `safety` chain removed (pip-audit close-out)
+- **`safety>=2.3.0` dev-dep + its transitive chain removed entirely.**
+  `pip-audit --strict --requirement requirements-lock.txt` in
+  `.github/workflows/ci-build-test.yml::security` and
+  `.github/workflows/security.yml::security-audit` was failing on two
+  CVEs with no upstream fix versions:
+    - `joblib 1.5.3` (PYSEC-2024-277) — disputed
+      NumpyArrayWrapper deserialization vulnerability, only used
+      during caching of trusted content per the supplier.
+    - `nltk 3.9.4` (PYSEC-2026-97) — `filestring()` arbitrary file
+      read in `nltk.util`.
+  Both packages were pulled in transitively by `safety` (security
+  scanner) which was declared in `pyproject.toml::[project.optional-dependencies].dev`
+  but **never invoked by any CI workflow** (verified via `grep -rn`).
+  Vulnerability scanning is already covered by `pip-audit`, run with
+  `--strict --requirement requirements-lock.txt` in both audit
+  workflows above; `safety` was redundant.  Removing the dev-dep
+  deletes the entire vulnerable chain (`safety`, `safety-schemas`,
+  `nltk`, `joblib`, `dparse`, `ruamel.yaml`, `tenacity`, `tomlkit`,
+  `typer`, `Authlib`, `pydantic`, `httpx`, `httpcore`, `h11`,
+  `anyio`, ...) from `requirements-lock.txt` rather than annotating
+  an `--ignore-vuln` suppression — INVARIANT-1 (zero-runtime-dep
+  posture) and INVARIANT-14 (CVE-ignore-list hygiene) both improve.
+  Lock file regenerated from a fresh `pip install
+  "ama-cryptography[dev]"` resolve; `pip-audit --strict` post-fix:
+  "No known vulnerabilities found".
+
 #### PR #326 follow-up corrections (Copilot review + CodeQL re-scan)
 - **CodeQL #535 / #537 path-injection close-out.**  New
   `dispatch_cache_path_sanitize()` rejects empty,
