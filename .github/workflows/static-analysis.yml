@@ -6,12 +6,17 @@ on:
   pull_request:
     branches: [ main, develop ]
   schedule:
-    # Weekly extended sanitizer matrix at 04:00 UTC Saturdays (audit
-    # Issue 9).  MSan and TSan have higher false-positive rates than
-    # ASan+UBSan and a per-PR latency cost we're not willing to pay,
-    # so we run them weekly out of the merge-critical path.  Failures
-    # surface on the scheduled run and a follow-up PR fixes them.
-    - cron: '0 4 * * 6'
+    # Nightly extended sanitizer matrix at 04:00 UTC (audit Issue 9
+    # close-out, promoted from weekly to nightly).  MSan and TSan have
+    # higher false-positive rates than ASan+UBSan and a per-PR latency
+    # cost we're not willing to pay, so we run them out of the
+    # merge-critical path.  Nightly cadence shortens the regression
+    # window from up-to-7-days to up-to-24-hours — the operational
+    # cost is one extra runner-hour per night for the four scheduled
+    # jobs (MSan, TSan, Valgrind, reproducible-build), which is in
+    # the noise compared with the bounded-bisect benefit when a real
+    # sanitiser regression does land.
+    - cron: '0 4 * * *'
   # workflow_dispatch enables on-demand runs of the extended matrix —
   # several jobs below predicate on `github.event_name ==
   # 'workflow_dispatch'`, so the trigger MUST be declared here or the

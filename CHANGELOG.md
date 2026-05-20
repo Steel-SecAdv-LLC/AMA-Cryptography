@@ -88,8 +88,8 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   drives off a checked-in `.clang-tidy` config and surfaces the
   `bugprone-*` / `cert-*` / `clang-analyzer-*` / `concurrency-*` /
   `performance-*` / `portability-*` finding set.  MSan / TSan /
-  Valgrind run weekly to keep PR latency low; clang-tidy also runs
-  per-PR.
+  Valgrind run nightly (promoted from weekly in the audit Issue 9
+  close-out — see *Changed* below); clang-tidy also runs per-PR.
 
   **clang-tidy posture is currently ADVISORY** (`continue-on-error:
   true` on the job, `WarningsAsErrors: ''` in `.clang-tidy`).  The
@@ -104,6 +104,15 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   remain reviewable without a local replay.
 
 ### Changed
+- **Sanitiser cadence promoted weekly → nightly (audit Issue 9
+  close-out).**  `.github/workflows/static-analysis.yml` cron flipped
+  from `'0 4 * * 6'` (Saturday 04:00 UTC) to `'0 4 * * *'` (every
+  day 04:00 UTC).  Each of the four scheduled jobs already gates on
+  `schedule || workflow_dispatch || pull_request`, so no `if:`
+  predicates needed adjustment.  Shrinks the regression window for
+  MSan / TSan / Valgrind / reproducible-build from up-to-7-days to
+  up-to-24-hours at a marginal compute cost.  This is a defensive
+  knob, not a security contract — no INVARIANT addendum.
 - **Bandit + pip-audit fail-closed (audit Issue 8).**  Both
   `.github/workflows/security.yml::security-audit` and
   `.github/workflows/ci-build-test.yml::security` now run
