@@ -675,7 +675,7 @@ static void kyber_cpapke_enc(uint8_t *ct, const uint8_t *m,
     poly_add(&v, &v, &epp);
 
     /* Encode message into polynomial */
-    memset(&mp_poly, 0, sizeof(mp_poly));
+    memset(&mp_poly, 0, sizeof(mp_poly));  // PUBLIC-DATA: mp_poly — ML-KEM CPA encryption message polynomial, pre-use init filled by Encode_1 bit-unpacking of plaintext `m` below (`mp_poly.coeffs[8*i + j] = ((m[i] >> j) & 1) * ...`)
     for (i = 0; i < 32; i++) {
         unsigned int j;
         for (j = 0; j < 8; j++) {
@@ -960,8 +960,8 @@ int ama_kyber_debug_ntt_roundtrip(void) {
      * a = [1, 0, 0, ...], b = [1, 0, 0, ...]
      * a * b should = [1, 0, 0, ...] in R_q = Z_q[X]/(X^256+1) */
     printf("  --- Poly mul test: [1,0,...] * [1,0,...] ---\n");
-    memset(&a, 0, sizeof(a));
-    memset(&b, 0, sizeof(b));
+    memset(&a, 0, sizeof(a));  // PUBLIC-DATA: a (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — test vector polynomial; gated out of production .so
+    memset(&b, 0, sizeof(b));  // PUBLIC-DATA: b (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — test vector polynomial; gated out of production .so
     a.coeffs[0] = 1;
     b.coeffs[0] = 1;
 
@@ -990,7 +990,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
 
     /* Test 0b: [1,0,...] * [0,1,0,...] = [0,1,0,...] (X * 1 = X) */
     printf("  --- Poly mul test: [1,0,...] * [0,1,0,...] ---\n");
-    memset(&b, 0, sizeof(b));
+    memset(&b, 0, sizeof(b));  // PUBLIC-DATA: b (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — roundtrip test vector
     b.coeffs[1] = 1;
     memcpy(&d, &b, sizeof(poly));
     poly_ntt(&d);
@@ -1011,8 +1011,8 @@ int ama_kyber_debug_ntt_roundtrip(void) {
     {
         polyvec sv, uv;
         poly ip;
-        memset(&sv, 0, sizeof(sv));
-        memset(&uv, 0, sizeof(uv));
+        memset(&sv, 0, sizeof(sv));  // PUBLIC-DATA: sv (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — encryption test vector
+        memset(&uv, 0, sizeof(uv));  // PUBLIC-DATA: uv (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — encryption test vector
         sv.vec[0].coeffs[0] = 1;
         uv.vec[0].coeffs[0] = 3;
 
@@ -1037,19 +1037,19 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         unsigned int ii, jj;
 
         /* A = identity matrix (in NTT domain) */
-        memset(A, 0, sizeof(A));
+        memset(A, 0, sizeof(A));  // PUBLIC-DATA: A (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — test matrix
         for (ii = 0; ii < KYBER_K; ii++) {
             A[ii].vec[ii].coeffs[0] = 1;  /* A[i][i] = 1 polynomial */
             poly_ntt(&A[ii].vec[ii]);       /* Convert to NTT domain */
         }
 
         /* s = ([1,0,...], [0,...], [0,...], [0,...]) */
-        memset(&sv, 0, sizeof(sv));
+        memset(&sv, 0, sizeof(sv));  // PUBLIC-DATA: sv (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — encapsulation test vector
         sv.vec[0].coeffs[0] = 1;
         polyvec_ntt(&sv);
 
         /* e = zero */
-        memset(&ev, 0, sizeof(ev));
+        memset(&ev, 0, sizeof(ev));  // PUBLIC-DATA: ev (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — encapsulation test vector
         polyvec_ntt(&ev);
 
         /* t = A*s + e (in NTT domain) */
@@ -1061,13 +1061,13 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         polyvec_reduce(&pkpv_test);
 
         /* r = ([2,0,...], [0,...], ...) */
-        memset(&sp_test, 0, sizeof(sp_test));
+        memset(&sp_test, 0, sizeof(sp_test));  // PUBLIC-DATA: sp_test (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — secret-portion test vector
         sp_test.vec[0].coeffs[0] = 2;
         polyvec_ntt(&sp_test);
 
         /* e1 = 0, e2 = 0 */
-        memset(&ep_test, 0, sizeof(ep_test));
-        memset(&epp_test, 0, sizeof(epp_test));
+        memset(&ep_test, 0, sizeof(ep_test));  // PUBLIC-DATA: ep_test (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — error-portion test vector
+        memset(&epp_test, 0, sizeof(epp_test));  // PUBLIC-DATA: epp_test (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — error-prime-prime test vector
 
         /* u = INVNTT(A^T * r) + e1 */
         /* For A=I, A^T=I, so A^T*r = r. u should = [2,0,...] in vec[0] */
@@ -1092,7 +1092,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         poly_add(&v_test, &v_test, &epp_test);
 
         /* Add message = all zeros for simplicity */
-        memset(&mp_test, 0, sizeof(mp_test));
+        memset(&mp_test, 0, sizeof(mp_test));  // PUBLIC-DATA: mp_test (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — message polynomial test vector
         poly_add(&v_test, &v_test, &mp_test);
         poly_reduce(&v_test);
 
@@ -1132,8 +1132,8 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         int pi;
 
         /* pa = [1, 2, 3, 4, 0, 0, ...], pb = [5, 6, 0, ...] */
-        memset(&pa, 0, sizeof(pa));
-        memset(&pb, 0, sizeof(pb));
+        memset(&pa, 0, sizeof(pa));  // PUBLIC-DATA: pa (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — schoolbook test matrix
+        memset(&pb, 0, sizeof(pb));  // PUBLIC-DATA: pb (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — schoolbook test matrix
         pa.coeffs[0] = 1; pa.coeffs[1] = 2; pa.coeffs[2] = 3; pa.coeffs[3] = 4;
         pb.coeffs[0] = 5; pb.coeffs[1] = 6;
 
@@ -1147,7 +1147,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         poly_invntt(&pc_ntt);
 
         /* Naive multiplication in Z_q[X]/(X^256+1) */
-        memset(&pc_naive, 0, sizeof(pc_naive));
+        memset(&pc_naive, 0, sizeof(pc_naive));  // PUBLIC-DATA: pc_naive (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — naive multiply result
         for (pi = 0; pi < KYBER_N; pi++) {
             if (pa.coeffs[pi] == 0) continue;
             int pj;
@@ -1201,7 +1201,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         poly_invntt(&pc_ntt);
 
         /* Naive multiplication */
-        memset(&pc_naive, 0, sizeof(pc_naive));
+        memset(&pc_naive, 0, sizeof(pc_naive));  // PUBLIC-DATA: pc_naive (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — naive multiply result
         for (pi = 0; pi < KYBER_N; pi++) {
             int pj;
             for (pj = 0; pj < KYBER_N; pj++) {
@@ -1244,7 +1244,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         unsigned int ii, jj;
 
         /* A = simple known matrix (each entry is a constant polynomial) */
-        memset(A_man, 0, sizeof(A_man));
+        memset(A_man, 0, sizeof(A_man));  // PUBLIC-DATA: A_man (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — manual-encoding test matrix
         for (ii = 0; ii < KYBER_K; ii++) {
             for (jj = 0; jj < KYBER_K; jj++) {
                 A_man[ii].vec[jj].coeffs[0] = (int16_t)((ii * KYBER_K + jj + 1) % KYBER_Q);
@@ -1253,7 +1253,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         }
 
         /* s = ([1, -1, 0, ...], [2, 0, ...], [0, 1, ...], [-1, 0, ...]) */
-        memset(&s_man, 0, sizeof(s_man));
+        memset(&s_man, 0, sizeof(s_man));  // PUBLIC-DATA: s_man (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — manual test vector
         s_man.vec[0].coeffs[0] = 1; s_man.vec[0].coeffs[1] = -1;
         s_man.vec[1].coeffs[0] = 2;
         s_man.vec[2].coeffs[1] = 1;
@@ -1261,7 +1261,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         polyvec_ntt(&s_man);
 
         /* e = zero for simplicity */
-        memset(&e_man, 0, sizeof(e_man));
+        memset(&e_man, 0, sizeof(e_man));  // PUBLIC-DATA: e_man (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — manual test vector
         polyvec_ntt(&e_man);
 
         /* t = A*s + e (NTT domain) */
@@ -1273,13 +1273,13 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         polyvec_reduce(&t_man);
 
         /* r = ([1, 0, ...], [0, ...], [0, ...], [0, ...]) */
-        memset(&sp_man, 0, sizeof(sp_man));
+        memset(&sp_man, 0, sizeof(sp_man));  // PUBLIC-DATA: sp_man (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — manual test vector
         sp_man.vec[0].coeffs[0] = 1;
         polyvec_ntt(&sp_man);
 
         /* e1 = 0, e2 = 0 */
-        memset(&ep_man, 0, sizeof(ep_man));
-        memset(&epp_man, 0, sizeof(epp_man));
+        memset(&ep_man, 0, sizeof(ep_man));  // PUBLIC-DATA: ep_man (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — manual test vector
+        memset(&epp_man, 0, sizeof(epp_man));  // PUBLIC-DATA: epp_man (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — manual test vector
 
         /* Encrypt: u = INVNTT(A^T * r) + e1, v = INVNTT(t^T * r) + e2 + m */
         /* A^T: transpose A_man */
@@ -1300,7 +1300,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         poly_add(&v_man, &v_man, &epp_man);
 
         /* Add message = 0xAB */
-        memset(&mp_man, 0, sizeof(mp_man));
+        memset(&mp_man, 0, sizeof(mp_man));  // PUBLIC-DATA: mp_man (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — manual message polynomial test
         uint8_t test_msg[32];
         memset(test_msg, 0xAB, 32);
         for (ii = 0; ii < 32; ii++) {
@@ -1380,11 +1380,11 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         poly epp3, v3, stu3, mp3;
         uint8_t msg3[32], msg_dec3[32];
         memset(msg3, 0xAB, 32);
-        memset(&sp3, 0, sizeof(sp3));
+        memset(&sp3, 0, sizeof(sp3));  // PUBLIC-DATA: sp3 (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — round-3 test vector
         sp3.vec[0].coeffs[0] = 1; /* Simple r */
         polyvec_ntt(&sp3);
-        memset(&ep3, 0, sizeof(ep3));
-        memset(&epp3, 0, sizeof(epp3));
+        memset(&ep3, 0, sizeof(ep3));  // PUBLIC-DATA: ep3 (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — round-3 test vector
+        memset(&epp3, 0, sizeof(epp3));  // PUBLIC-DATA: epp3 (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — round-3 test vector
 
         /* A^T for encryption */
         polyvec A3T[KYBER_K];
@@ -1410,7 +1410,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         /* v = INVNTT(t^T * r) + msg */
         polyvec_basemul_acc(&v3, &t3, &sp3);
         poly_invntt(&v3);
-        memset(&mp3, 0, sizeof(mp3));
+        memset(&mp3, 0, sizeof(mp3));  // PUBLIC-DATA: mp3 (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — round-3 message polynomial test
         for (ki = 0; ki < 32; ki++) {
             unsigned int kj;
             for (kj = 0; kj < 8; kj++)
@@ -1596,7 +1596,7 @@ int ama_kyber_debug_cpa_roundtrip(void) {
         poly_invntt(&v_poly);
         poly_add(&v_poly, &v_poly, &epp);
 
-        memset(&mp_poly, 0, sizeof(mp_poly));
+        memset(&mp_poly, 0, sizeof(mp_poly));  // PUBLIC-DATA: mp_poly — ML-KEM CPA decryption message polynomial, pre-use init filled by decapsulate
         for (i = 0; i < 32; i++) {
             unsigned int j;
             for (j = 0; j < 8; j++) {

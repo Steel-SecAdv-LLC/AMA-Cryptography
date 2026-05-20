@@ -258,3 +258,6 @@ build-warn/
 build-arm/
 build-aarch64/
 aarch64-toolchain.cmake
+
+# Local clang-tidy build dir (compile_commands.json scratch)
+build-tidy/

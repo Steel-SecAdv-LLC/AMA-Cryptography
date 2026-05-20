@@ -348,7 +348,7 @@ void ama_aes256_gcm_encrypt_neon(
         vst1q_u8(ct_buf, ct);
         memcpy(ciphertext + full_blocks * 16, ct_buf, remaining);
 
-        memset(ct_buf + remaining, 0, 16 - remaining);
+        memset(ct_buf + remaining, 0, 16 - remaining);  // PUBLIC-DATA: ct_buf trailing zero-pad — AES-GCM partial-block GHASH input: pad bytes [remaining..16) zero so GHASH absorbs the public ciphertext + zero pad
         ct = vld1q_u8(ct_buf);
         ghash_acc = veorq_u8(ghash_acc, ct);
         ghash_acc = ghash_mul_neon(ghash_acc, H);

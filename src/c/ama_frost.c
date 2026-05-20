@@ -88,9 +88,14 @@ static void scalar_negate(uint8_t neg[32], const uint8_t s[32]) {
     /* If s was 0, we get l — reduce to get 0 */
     uint8_t tmp[64];
     memcpy(tmp, neg, 32);
-    memset(tmp + 32, 0, 32);
+    memset(tmp + 32, 0, 32);  // PUBLIC-DATA: tmp+32 padding — zero-extend lower 32 bytes of tmp[64] before sc_reduce; tmp itself scrubbed at function exit (added in this commit)
     ama_ed25519_sc_reduce(tmp);
     memcpy(neg, tmp, 32);
+    /* Scrub tmp before return: tmp[0..31] holds the reduced negated
+     * scalar (secret-derived) and was previously left on the stack
+     * for the next caller to overwrite.  INVARIANT-6 (audit Issue 4
+     * close-out walk surfaced this gap). */
+    ama_secure_memzero(tmp, sizeof(tmp));
 }
 
 static void scalar_sub(uint8_t c[32], const uint8_t a[32], const uint8_t b[32]) {
@@ -139,7 +144,7 @@ static void scalar_inv(uint8_t result[32], const uint8_t s[32]) {
     /* Square-and-multiply: result = s^exp mod l */
     uint8_t base[32], tmp[32];
     memcpy(base, s, 32);
-    memset(result, 0, 32);
+    memset(result, 0, 32);  // PUBLIC-DATA: result — scalar accumulator init to 1 (result[0]=1 follows); filled by square-and-multiply loop
     result[0] = 1;
 
     for (int bit = 0; bit < 253; bit++) {
@@ -155,6 +160,10 @@ static void scalar_inv(uint8_t result[32], const uint8_t s[32]) {
 
     ama_secure_memzero(base, 32);
     ama_secure_memzero(exp, 32);
+    /* tmp held the last squared/multiplied scalar (secret-derived).
+     * Previously left on the stack — INVARIANT-6 gap surfaced by the
+     * audit Issue 4 close-out walk. */
+    ama_secure_memzero(tmp, sizeof(tmp));
 }
 
 /* ======================================================================
@@ -166,7 +175,7 @@ static void poly_eval(uint8_t *result, const uint8_t coeffs[][32],
 {
     memcpy(result, coeffs[degree], 32);
     uint8_t x_scalar[32];
-    memset(x_scalar, 0, 32);
+    memset(x_scalar, 0, 32);  // PUBLIC-DATA: x_scalar — scalar value with byte x in slot 0; pre-use init then x_scalar[0]=x
     x_scalar[0] = x;
 
     for (int i = degree - 1; i >= 0; i--) {
@@ -184,9 +193,9 @@ static void compute_lagrange_coeff(uint8_t lambda[32], uint8_t participant_idx,
     const uint8_t *signer_indices, uint8_t num_signers)
 {
     uint8_t num[32], den[32], tmp[32], den_inv[32];
-    memset(num, 0, 32);
+    memset(num, 0, 32);  // PUBLIC-DATA: num — Lagrange numerator init to 1 (num[0]=1 follows)
     num[0] = 1;
-    memset(den, 0, 32);
+    memset(den, 0, 32);  // PUBLIC-DATA: den — Lagrange denominator scalar, pre-use init
     den[0] = 1;
 
     for (int k = 0; k < num_signers; k++) {
@@ -194,9 +203,9 @@ static void compute_lagrange_coeff(uint8_t lambda[32], uint8_t participant_idx,
         if (j == participant_idx) continue;
 
         uint8_t j_scalar[32], i_scalar[32], diff[32];
-        memset(j_scalar, 0, 32);
+        memset(j_scalar, 0, 32);  // PUBLIC-DATA: j_scalar — FROST participant scalar slot, pre-use init then filled by signer_indices[j]
         j_scalar[0] = j;
-        memset(i_scalar, 0, 32);
+        memset(i_scalar, 0, 32);  // PUBLIC-DATA: i_scalar — FROST participant scalar slot, pre-use init
         i_scalar[0] = participant_idx;
 
         scalar_mul(tmp, num, j_scalar);
@@ -266,7 +275,7 @@ static ama_error_t compute_group_commitment(uint8_t R[32],
 {
     /* Identity point: (0, 1) compressed */
     uint8_t accum[32];
-    memset(accum, 0, 32);
+    memset(accum, 0, 32);  // PUBLIC-DATA: accum — scalar accumulator init to 0; filled by mod-l accumulation loop
     accum[0] = 1;
 
     for (int i = 0; i < num_signers; i++) {
@@ -370,7 +379,7 @@ AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
     if (secret_key) {
         uint8_t wide[64];
         memcpy(wide, secret_key, 32);
-        memset(wide + 32, 0, 32);
+        memset(wide + 32, 0, 32);  // PUBLIC-DATA: wide+32 padding — zero-extend lower 32 bytes of wide[64] before sc_reduce
         ama_ed25519_sc_reduce(wide);
         memcpy(group_secret, wide, 32);
         ama_secure_memzero(wide, 64);
@@ -563,7 +572,7 @@ AMA_API ama_error_t ama_frost_aggregate(
 
     /* Aggregate z = sum(z_i) mod l */
     uint8_t z[32];
-    memset(z, 0, 32);
+    memset(z, 0, 32);  // PUBLIC-DATA: z — FROST signature share output slot, pre-use init filled by scalar_add
     for (int i = 0; i < num_signers; i++) {
         uint8_t tmp[32];
         scalar_add(tmp, z, sig_shares + i * 32);

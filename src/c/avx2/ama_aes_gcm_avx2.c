@@ -295,7 +295,7 @@ void ama_aes256_gcm_encrypt_avx2(
         memcpy(ciphertext + full_blocks * 16, pad_ct, remaining);
 
         /* GHASH on padded ciphertext block */
-        memset(pad_ct + remaining, 0, 16 - remaining);
+        memset(pad_ct + remaining, 0, 16 - remaining);  // PUBLIC-DATA: pad_ct trailing zero-pad — AES-GCM partial-block GHASH input: pad bytes [remaining..16) zero so GHASH absorbs the public ciphertext + zero pad
         ct_block = _mm_loadu_si128((const __m128i *)pad_ct);
         ghash_acc = ghash_mul_pclmul(_mm_xor_si128(ghash_acc, ct_block), H);
     }

@@ -229,39 +229,39 @@ jobs:
             ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 300
 
   # ===========================================================================
-  # SIMD sweep — nightly cron only (audit Issue 3)
+  # SIMD sweep — nightly cron only (audit Issue 3 close-out)
   # ===========================================================================
   #
-  # The four jobs above sample the scalar / generic paths and a single
-  # opt-in AVX2 X25519 lane.  Every OTHER dispatch slot — AVX-512 SHA3
-  # 4-way, AVX2 Kyber NTT, AVX2 Dilithium NTT, AVX2 ChaCha20 8-way,
-  # AVX2 Argon2 G, NEON AES-GCM, NEON ChaCha20, NEON SHA3, SVE2 Kyber,
-  # SVE2 SHA3 — was previously sampled only indirectly through the
-  # general PQC / utility lanes when the runner happened to be on an
-  # x86-64 host with the right feature bits set.
+  # The four legacy jobs above sample the scalar / generic paths and a
+  # single opt-in AVX2 X25519 lane.  This sweep is now PER-SLOT: each
+  # matrix cell sets `AMA_DISPATCH_ONLY=<slot>` so the dispatcher
+  # leaves every kernel pointer at its scalar fallback EXCEPT the
+  # named one.  The resulting t-value is attributable to ONE SIMD
+  # kernel rather than to whichever AVX2 paths happened to fire under
+  # the same dispatch invocation.  See `apply_dispatch_only()` in
+  # src/c/dispatch/ama_dispatch.c for the per-slot resolution and
+  # `tests/c/test_dispatch_only_env.c` for the end-to-end contract
+  # check that pins the env-var → active-slot mapping.
   #
-  # This sweep job runs the full dudect lane inventory on each
-  # supported architecture, with environment toggles set to force
-  # each slot to wire in its SIMD kernel (where the runner's CPU
-  # supports it; otherwise the lane gracefully degrades to scalar
-  # and the t-value is reported INFO-only).
+  # Matrix:
   #
-  # Matrix dimensions:
+  #   os = ubuntu-latest     (x86-64 host)
+  #        ubuntu-24.04-arm  (AArch64 / NEON / [SVE2 if available] host)
   #
-  #   os           = ubuntu-latest             (x86-64 host)
-  #                  ubuntu-24.04-arm          (ARM64 / NEON host)
-  #
-  #   slot         = "x25519-avx2"             AMA_DISPATCH_USE_X25519_AVX2=1
-  #                  "all-default-dispatch"    runs every wired SIMD slot
-  #                                            simply by being on the host
-  #                                            that detects them
+  #   slot — the full dispatch-table-routable SIMD inventory.  The
+  #   `exclude:` entries below remove cells that the runner's CPU
+  #   architecture cannot satisfy (e.g., NEON / SVE2 / aes-gcm-neon
+  #   on an x86-64 host; AVX-* slots on an ARM host).  Slots whose
+  #   CPU feature is *not* present at runtime on a host that COULD
+  #   theoretically satisfy them (e.g., ubuntu-24.04-arm without
+  #   SVE2 silicon) self-skip via CTest exit 77 inside test_dudect.
   #
   # The sweep is scheduled-only (cron) to keep PR latency low.  The
   # legacy per-PR jobs above remain the gate for changed source code.
-  # If a sweep lane FAILS its strict t-value threshold, the failure is
-  # raised as a regular GitHub Actions failure on the schedule run —
-  # the project owner reviews it and files a follow-up before merging
-  # any new SIMD work.
+  # If a sweep lane FAILS its strict t-value threshold, the failure
+  # is raised as a regular GitHub Actions failure on the schedule
+  # run — the project owner reviews it and files a follow-up before
+  # merging any new SIMD work.
   dudect-simd-sweep:
     name: dudect - SIMD sweep (${{ matrix.os }} / ${{ matrix.slot }})
     # Fires on:
@@ -279,11 +279,51 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
-        slot: [all-default-dispatch, x25519-avx2]
+        slot:
+          - sha3-avx512x4
+          - kyber-ntt-avx2
+          - dilithium-ntt-avx2
+          - chacha20-avx2x8
+          - argon2-g-avx2
+          - aes-gcm-neon
+          - chacha20-neon
+          - sha3-neon
+          - kyber-sve2
+          - sha3-sve2
+          - x25519-avx2
         exclude:
-          # ARM hosts don't have an AVX2 X25519 kernel — the slot is
-          # not implemented on AArch64, and the env var is a no-op.
-          # Run only the default-dispatch sweep there.
+          # x86-64 hosts (ubuntu-latest): exclude NEON + SVE2 slots.
+          # The kernels are AArch64-only; the dispatcher will report
+          # the slot unsupported and CTest will treat the cell as a
+          # silent pass — wasting compute and producing a confusing
+          # green run.  Skip them at the matrix level instead.
+          - os: ubuntu-latest
+            slot: aes-gcm-neon
+          - os: ubuntu-latest
+            slot: chacha20-neon
+          - os: ubuntu-latest
+            slot: sha3-neon
+          - os: ubuntu-latest
+            slot: kyber-sve2
+          - os: ubuntu-latest
+            slot: sha3-sve2
+          # AArch64 hosts (ubuntu-24.04-arm): exclude AVX-* slots and
+          # the AVX2 X25519 lane.  Same rationale as above, with
+          # `aes-gcm-neon` / `chacha20-neon` / `sha3-neon` retained
+          # on this side because AArch64 mandates NEON.  SVE2 slots
+          # are KEPT on this side — when the runner's silicon lacks
+          # SVE2 the dispatcher reports the slot unsupported and the
+          # test exits 77 (Skipped), preserving an audit trail.
+          - os: ubuntu-24.04-arm
+            slot: sha3-avx512x4
+          - os: ubuntu-24.04-arm
+            slot: kyber-ntt-avx2
+          - os: ubuntu-24.04-arm
+            slot: dilithium-ntt-avx2
+          - os: ubuntu-24.04-arm
+            slot: chacha20-avx2x8
+          - os: ubuntu-24.04-arm
+            slot: argon2-g-avx2
           - os: ubuntu-24.04-arm
             slot: x25519-avx2
     steps:
@@ -306,6 +346,7 @@ jobs:
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DAMA_ENABLE_DUDECT=ON \
+            -DAMA_BUILD_TESTS=ON \
             -DAMA_USE_NATIVE_PQC=ON \
             -DAMA_AES_CONSTTIME=ON \
             -DAMA_ENABLE_SIMD=ON \
@@ -316,28 +357,62 @@ jobs:
             -DAMA_BUILD_EXAMPLES=OFF
           cmake --build build -j$(nproc)
 
-      - name: Show dispatch info (which SIMD slots are wired)
-        run: |
-          # Print the dispatcher's selection before starting timing —
-          # surfaces which slots actually got SIMD kernels on this
-          # runner (CPUID-gated; e.g., an x86-64 runner without VAES
-          # falls back to AES-NI silently, and the dispatcher banner
-          # reports the active path).
-          ./build/bin/test_dudect --measurements 1000 --timeout 5 || true
-
-      - name: Run dudect (all-default-dispatch)
-        if: matrix.slot == 'all-default-dispatch'
+      - name: Confirm dispatch slot resolves on this host
+        # Before burning a 15-minute dudect run, assert via the
+        # per-slot contract test that AMA_DISPATCH_ONLY actually
+        # honored the requested slot on this runner.  Exit code 77
+        # from the contract binary means "Skipped" — propagate that
+        # as a step output (`supported=false`) so the dudect step
+        # below skips this matrix cell entirely.  Without the
+        # supported-flag + downstream `if:`, a `exit 0` here would
+        # NOT prevent the subsequent dudect lane from firing on a
+        # scalar-fallback dispatch table — Copilot review #323
+        # follow-up.
+        id: confirm
         env:
-          MEASUREMENTS: ${{ github.event.inputs.measurements || '100000' }}
-        run: |
-          taskset -c 0 nice -n -10 \
-            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 900
-
-      - name: Run dudect (x25519-avx2)
-        if: matrix.slot == 'x25519-avx2'
-        env:
-          MEASUREMENTS: ${{ github.event.inputs.measurements || '100000' }}
+          AMA_DISPATCH_ONLY: ${{ matrix.slot }}
+          # x25519-avx2 requires the opt-in flag in addition to
+          # AMA_DISPATCH_ONLY (see dispatch_init_internal()
+          # rationale in src/c/dispatch/ama_dispatch.c — the AVX2
+          # 4-way ladder is opt-in by default because the scalar fe64
+          # path beats it on Skylake-Cascade-class cores).  Setting
+          # the flag here for every cell is a no-op for the others.
           AMA_DISPATCH_USE_X25519_AVX2: '1'
+          # Pin off the auto-tune microbench so a noisy runner can't
+          # demote the requested SIMD slot back to generic and turn
+          # the dudect measurement into a scalar-baseline run.
+          AMA_DISPATCH_NO_AUTOTUNE: '1'
+        run: |
+          set -e
+          if [ -x ./build/bin/test_dispatch_only_env ]; then
+            TEST_BIN=./build/bin/test_dispatch_only_env
+          else
+            TEST_BIN=./build/tests/c/test_dispatch_only_env
+          fi
+          rc=0
+          "$TEST_BIN" || rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "supported=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Slot '${{ matrix.slot }}' unsupported on this host — skipping dudect lane."
+            exit 0
+          elif [ "$rc" -ne 0 ]; then
+            echo "supported=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Dispatch contract test failed for '${{ matrix.slot }}' (exit=$rc)"
+            exit "$rc"
+          fi
+          echo "supported=true" >> "$GITHUB_OUTPUT"
+
+      - name: Run dudect with AMA_DISPATCH_ONLY=${{ matrix.slot }}
+        # Skip this lane entirely when the confirmation step above
+        # reported the slot as unsupported — measuring a scalar
+        # fallback under the per-slot label would produce a
+        # misleading t-value attributed to a kernel that didn't run.
+        if: steps.confirm.outputs.supported == 'true'
+        env:
+          MEASUREMENTS: ${{ github.event.inputs.measurements || '100000' }}
+          AMA_DISPATCH_ONLY: ${{ matrix.slot }}
+          AMA_DISPATCH_USE_X25519_AVX2: '1'
+          AMA_DISPATCH_NO_AUTOTUNE: '1'
         run: |
           taskset -c 0 nice -n -10 \
             ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 900

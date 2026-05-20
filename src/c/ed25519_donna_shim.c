@@ -173,10 +173,14 @@ ama_error_t ama_ed25519_batch_verify(
     const unsigned char **sigs = (const unsigned char **)malloc(count * sizeof(const unsigned char *));
 
     if (!msgs || !mlens || !pks || !sigs) {
-        free(msgs);
-        free(mlens);
-        free(pks);
-        free(sigs);
+        /* Explicit (void *) casts: free() takes `void *` but `msgs` /
+         * `pks` / `sigs` are `const unsigned char **`.  Without the
+         * cast, clang-tidy's bugprone-multi-level-implicit-pointer-conversion
+         * fires (audit Issue 9 fail-closed). */
+        free((void *)msgs);
+        free((void *)mlens);
+        free((void *)pks);
+        free((void *)sigs);
         return AMA_ERROR_MEMORY;
     }
 
@@ -192,10 +196,12 @@ ama_error_t ama_ed25519_batch_verify(
      * Per-entry results are written to the valid[] array (1=valid, 0=invalid). */
     int ret = ed25519_sign_open_batch(msgs, mlens, pks, sigs, count, results);
 
-    free(msgs);
-    free(mlens);
-    free(pks);
-    free(sigs);
+    /* Same explicit (void *) casts as the early-error path above —
+     * bugprone-multi-level-implicit-pointer-conversion (audit Issue 9). */
+    free((void *)msgs);
+    free((void *)mlens);
+    free((void *)pks);
+    free((void *)sigs);
 
     /* Map donna's return: 0 = all valid, nonzero = at least one invalid */
     return (ret == 0) ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
@@ -214,6 +220,13 @@ AMA_API void ama_ed25519_point_from_scalar(uint8_t point[32],
     bignum256modm s;
     ge25519 ALIGN(16) R;
     expand256_modm(s, scalar, 32);
+    /* NOLINTNEXTLINE(clang-analyzer-core.UndefinedBinaryOperatorResult,clang-analyzer-core.uninitialized.Assign,clang-analyzer-core.uninitialized.UndefReturn): vendor (ed25519-donna) initialisation pattern.  donna's curve25519-donna-64bit.h
+     * line 85 reads `out[0] = a[0] + fourP0 - b[0]` with `a` filled by
+     * the donna macros above; the analyzer's interprocedural pass
+     * misses the macro write and flags `a[0]` as garbage.  donna is
+     * in src/c/vendor/, gets no project-side modifications, and is
+     * KAT-verified.  INVARIANT-13 justification: vendor false positive,
+     * tracked under audit Issue 9 close-out. */
     ge25519_scalarmult_base_niels(&R, ge25519_niels_base_multiples, s);
     ge25519_pack(point, &R);
 }

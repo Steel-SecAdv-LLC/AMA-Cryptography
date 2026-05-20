@@ -6,12 +6,17 @@ on:
   pull_request:
     branches: [ main, develop ]
   schedule:
-    # Weekly extended sanitizer matrix at 04:00 UTC Saturdays (audit
-    # Issue 9).  MSan and TSan have higher false-positive rates than
-    # ASan+UBSan and a per-PR latency cost we're not willing to pay,
-    # so we run them weekly out of the merge-critical path.  Failures
-    # surface on the scheduled run and a follow-up PR fixes them.
-    - cron: '0 4 * * 6'
+    # Nightly extended sanitizer matrix at 04:00 UTC (audit Issue 9
+    # close-out, promoted from weekly to nightly).  MSan and TSan have
+    # higher false-positive rates than ASan+UBSan and a per-PR latency
+    # cost we're not willing to pay, so we run them out of the
+    # merge-critical path.  Nightly cadence shortens the regression
+    # window from up-to-7-days to up-to-24-hours — the operational
+    # cost is one extra runner-hour per night for the four scheduled
+    # jobs (MSan, TSan, Valgrind, reproducible-build), which is in
+    # the noise compared with the bounded-bisect benefit when a real
+    # sanitiser regression does land.
+    - cron: '0 4 * * *'
   # workflow_dispatch enables on-demand runs of the extended matrix —
   # several jobs below predicate on `github.event_name ==
   # 'workflow_dispatch'`, so the trigger MUST be declared here or the
@@ -377,26 +382,20 @@ jobs:
           done
 
   clang-tidy:
-    name: clang-tidy (security + correctness, advisory)
+    name: clang-tidy (security + correctness, fail-closed)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Advisory: clang-tidy is being introduced as a NEW gate by audit
-    # Issue 9 against a codebase that has never been clang-tidy-clean.
-    # The existing source has ~250+ pre-existing findings in the
-    # `bugprone-implicit-widening-of-multiplication-result` and
-    # `readability-redundant-declaration` categories (legitimate
-    # findings, but not regressions introduced by this PR).  Flipping
-    # the gate to fail-closed on day one would block every subsequent
-    # PR until a separate cleanup pass lands.  Instead we run
-    # clang-tidy as advisory (continue-on-error: true) so the findings
-    # surface in CI logs for triage, and once the codebase is
-    # clang-tidy-clean we drop this flag and promote the gate to
-    # fail-closed.  This is the standard gradual-rollout pattern; the
-    # alternative is a debt-for-debt trade (introduce a 100-line
-    # `NOLINT` baseline today to suppress the existing findings, then
-    # never clean them up).
-    continue-on-error: true
+    # FAIL-CLOSED (audit Issue 9 close-out).  The codebase is
+    # clang-tidy-clean against the enabled check inventory in
+    # `.clang-tidy`; `WarningsAsErrors: '*'` there flips every finding
+    # to a hard error.  A new finding fails this job, which fails the
+    # workflow, which fails the PR.  See `.clang-tidy` header for the
+    # three checks dropped from the enabled list with rationale (each
+    # incompatible with the project's cryptographic-C style — dropped
+    # explicitly, not silenced per-site).  The previous advisory
+    # posture (continue-on-error + trailing exit 0) was removed in
+    # this commit.
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -418,12 +417,20 @@ jobs:
             -DAMA_ENABLE_LTO=OFF \
             -DAMA_AES_CONSTTIME=ON
 
-      - name: Run clang-tidy on our C sources (advisory)
+      - name: Run clang-tidy on our C sources (fail-closed)
         # Only run on src/c/ and include/, excluding vendored code under
-        # src/c/vendor/.  The .clang-tidy config file at repo root drives
-        # check selection; CI just enumerates the input files.  Output
-        # is uploaded as an artefact so reviewers can scan the findings
-        # without re-running locally.
+        # src/c/vendor/.  The .clang-tidy config file at repo root
+        # drives check selection AND the WarningsAsErrors flip; CI
+        # just enumerates the input files and propagates the exit
+        # status.  Output is captured to an artefact regardless of
+        # status so reviewers can scan findings without re-running
+        # locally.
+        #
+        # FAIL-CLOSED semantics (audit Issue 9 close-out): no
+        # `continue-on-error`, no `set +e`, no `exit 0`.  `clang-tidy`
+        # exits non-zero when it emits any error (which it now does
+        # for every enabled check, per `.clang-tidy::WarningsAsErrors`),
+        # and that exit status fails this step.
         run: |
           files=$(find src/c include \
             -type d -name vendor -prune -o \
@@ -433,25 +440,19 @@ jobs:
             exit 1
           fi
           # `--quiet` suppresses the "X warnings generated" per-file
-          # banner; diagnostics still print.  Capture stdout+stderr to
-          # an artefact regardless of exit code.  The `continue-on-error`
-          # at the job level keeps a non-zero exit advisory until the
-          # codebase is clang-tidy-clean — see job-level rationale.
-          set +e
+          # banner; diagnostics still print.  Serial run so output is
+          # ordered; tidy itself is single-threaded per TU.
           : > clang-tidy-findings.txt
-          # serial run so output is ordered; tidy itself is single-
-          # threaded per TU, parallelising at the xargs layer just
-          # interleaves diagnostics from different files.
+          rc=0
           while IFS= read -r f; do
-            clang-tidy -p build-tidy --quiet "$f" 2>&1 | tee -a clang-tidy-findings.txt
+            if ! clang-tidy -p build-tidy --quiet "$f" 2>&1 | tee -a clang-tidy-findings.txt; then
+              rc=1
+            fi
           done <<< "$files"
-          # Always exit 0 — the `continue-on-error: true` on the job
-          # ALSO masks failures, but exiting 0 here makes the run
-          # status reflect what we actually want (advisory) instead of
-          # `success-with-issues` cosmetic noise.  When the gate is
-          # promoted to fail-closed, drop both this `exit 0` and the
-          # job-level `continue-on-error`.
-          exit 0
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::clang-tidy found errors — see uploaded clang-tidy-findings artefact."
+          fi
+          exit "$rc"
 
       - name: Upload clang-tidy findings
         if: always()
@@ -462,61 +463,124 @@ jobs:
           retention-days: 30
 
   reproducible-build:
-    name: Reproducible Build (digest + .py byte-equality)
-    # INVARIANT-8 declares deterministic builds.  Audit Issue 10 closes
-    # the missing verification step: build the wheel twice from
-    # identical inputs and assert that the load-bearing artefacts are
-    # byte-identical.
+    name: Reproducible Build (digest + .py + native artefact byte-equality)
+    # INVARIANT-8 declares deterministic builds.  Audit Issue 10
+    # close-out: in addition to the STRICT digest + .py check that
+    # PR #322 introduced, this job now ALSO strictly diffs the
+    # compiled native artefacts (libama_cryptography.so / Cython
+    # extension .so) between the two passes.
     #
-    # SCOPE OF THIS JOB (Copilot review #322):
+    # SCOPE OF THIS JOB:
     #
     #   STRICT  — INTEGRITY_DIGEST_HEX in _integrity_signature.py must
-    #             match across both builds.  This is the artefact whose
-    #             stability the import-time integrity gate depends on;
-    #             any drift here turns the gate into a coin flip across
-    #             redeploys.
+    #             match across both builds.  Artefact whose stability
+    #             the import-time integrity gate depends on.
     #   STRICT  — Every .py file inside the wheel must be byte-identical
-    #             across both builds.  The digest above is the SHA3-256
-    #             of these files, so this is implied by the digest check
-    #             but we assert it independently to surface the offending
-    #             filename when a regression happens.
-    #   ADVISORY — Compiled native artefacts (libama_cryptography.so,
-    #             .pyd, Cython-generated .so) may differ between two
-    #             builds even with `SOURCE_DATE_EPOCH` pinned: GCC/clang
-    #             can embed build-host paths in DWARF debug info, the
-    #             linker can place symbols differently across runs, and
-    #             we do not yet build under a reproducible-libc /
-    #             musl-cross image.  Reaching strict .so reproducibility
-    #             is a separate worktree (reprotest, musl-cross builds);
-    #             that scope is documented in INVARIANT-8 as a roadmap
-    #             item, not a today-blocker.
+    #             across both builds (excluding the per-build ephemeral
+    #             `_integrity_signature.py` — INVARIANT-17 keeps that
+    #             file non-byte-stable; the digest check above
+    #             validates the OTHER .py files that the digest is
+    #             computed over).
+    #   STRICT  — Native artefacts (.so / .pyd / Cython-built .so)
+    #             must be byte-identical across both builds.
+    #             Promoted from ADVISORY in the audit Issue 10
+    #             close-out.  Achieved by:
+    #               1. Pinned manylinux_2_28 container — locks the
+    #                  gcc / glibc / binutils / cmake versions so the
+    #                  host toolchain cannot drift between two CI runs.
+    #               2. -fdebug-prefix-map=$PWD=. strips host paths
+    #                  from DWARF debug info (otherwise the path
+    #                  difference between two checkout dirs leaks into
+    #                  the .so).
+    #               3. -Wl,--build-id=sha1 forces the linker's build-id
+    #                  to a content-derived hash instead of the default
+    #                  "random" mode that picks a fresh build-id per
+    #                  invocation.
+    #               4. AR_FLAGS=Drcs forces archive members to be
+    #                  emitted with the deterministic flag (no
+    #                  timestamps / UID / GID); harmless on modern
+    #                  binutils where it's already the default, but
+    #                  defends against an older ar on a future runner
+    #                  image.
     #
-    # Inputs we hold steady on both passes:
-    #   - SOURCE_DATE_EPOCH pinned to a fixed value so any embedded
-    #     timestamp is identical across builds.
-    #   - PYTHONHASHSEED=0 so dict iteration order is deterministic.
-    #   - PYTHONDONTWRITEBYTECODE=1 so no .pyc files end up in the wheel.
-    #   - Same Python version (single setup-python step).
+    # The signature artefact `_integrity_signature.py` legitimately
+    # differs between builds (INVARIANT-17 ephemeral per-build keypair).
+    # The wheel `RECORD` file is regenerated by pip with hashes of all
+    # OTHER files, so its byte-equality follows transitively from the
+    # rest — but it pins a relative path that pip canonicalises, so
+    # for the native-artefact diff we exclude RECORD explicitly and
+    # rely on the .py check above to catch any drift in inputs.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    container:
+      # PINNED manylinux_2_28 image (audit Issue 10 close-out).  This
+      # is the toolchain anchor that makes native-artefact byte-equality
+      # achievable on a public CI runner.  The tag is the date-stamped
+      # form `YYYY.MM.DD-N` (NOT `:latest`, NOT the floating
+      # `:manylinux_2_28` rolling tag) so this gate stays stable across
+      # the manylinux project's rolling updates.  When a tag bump is
+      # needed (e.g., the pinned tag is yanked from the registry), do
+      # it as its own commit so the reproducible-build delta is
+      # auditable in isolation.  Promoting to a `@sha256:` digest pin
+      # is a follow-up — INVARIANT-8 addendum.
+      #
+      # Tag verified against
+      # https://quay.io/api/v1/repository/pypa/manylinux_2_28_x86_64/tag/
+      # at PR #323 ready-for-review time (2026-05-20).  The previous
+      # fabricated tag `:2026-04-21-f5ec593` did not exist and the
+      # docker pull failed with "manifest not found" — Copilot review
+      # #323 follow-up (CI failure on first run).
+      image: quay.io/pypa/manylinux_2_28_x86_64:2026.05.17-1
     timeout-minutes: 30
+    # AR_FLAGS=Drcs was set here in the audit Issue 10 close-out
+    # commit but turned out to be a no-op: CMake's archive creation
+    # invokes `<CMAKE_AR> qc <TARGET> ...` directly and does NOT
+    # honour the GNU-make `AR_FLAGS` (or `ARFLAGS`) env var
+    # (Copilot review #323 round 2).  Modern binutils' `ar` defaults
+    # to deterministic mode anyway (the `--enable-deterministic-archives`
+    # configure-time default since binutils 2.27, March 2016), so
+    # archive metadata determinism is implicit on every reasonable
+    # toolchain.  If a future regression brings back a non-deterministic
+    # `ar`, the strict native-artefact diff below will catch it and
+    # the fix is to use `CMAKE_C_ARCHIVE_CREATE` overrides, not an
+    # env var the build doesn't read.
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install dependencies
+      - name: Install build prerequisites (manylinux_2_28 / AlmaLinux 8)
         run: |
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake libssl-dev
-          python -m pip install --upgrade pip
-          pip install build
+          # The manylinux_2_28 image carries gcc-toolset, cmake, and
+          # CPython 3.9–3.13 under /opt/python/.  Pre-install every
+          # build dep into the container's CPython 3.11 — `build` /
+          # `setuptools` / `wheel` / `cmake` / `Cython` / `numpy` —
+          # so the wheel build can run with `--no-isolation` below.
+          #
+          # WHY `--no-isolation`: PEP 517 build isolation creates a
+          # fresh `/tmp/build-env-<random8>/` directory per invocation
+          # and stages build deps inside it.  When Cython compiles
+          # `.pyx -> .c -> .so`, the NumPy include path (and other
+          # header paths) inside that random directory get expanded
+          # via `__FILE__` macros into rodata strings inside the
+          # resulting native artefact.  Two builds produce two
+          # different random suffixes → two different rodata strings
+          # → byte-different `.so` (and a downstream
+          # `--build-id=sha1` mismatch because the build-ID is a
+          # hash of section content).  `--no-isolation` skips the
+          # random isolation dir entirely; build deps come from the
+          # container's pre-installed CPython site-packages, which
+          # is the same on every run.  This is what the manylinux
+          # image is designed for.
+          /opt/python/cp311-cp311/bin/python -m pip install --upgrade pip
+          /opt/python/cp311-cp311/bin/pip install \
+            'build>=1.0' \
+            'setuptools>=78.1.1' 'wheel>=0.47.0' \
+            'cmake>=4.3.2' 'Cython>=3.2.4' 'numpy>=1.24.0'
+          # Front-load the manylinux Python on PATH so subsequent
+          # steps see `python` / `pip` as the pinned 3.11 from the
+          # base image (and not a stray host Python that GitHub's
+          # ubuntu host might have leaked through into the container).
+          echo "/opt/python/cp311-cp311/bin" >> "$GITHUB_PATH"
 
       - name: Build wheel — pass 1
         env:
@@ -524,9 +588,38 @@ jobs:
           SOURCE_DATE_EPOCH: "1700000000"   # 2023-11-14 — stable reference epoch
           PYTHONHASHSEED: "0"
           PYTHONDONTWRITEBYTECODE: "1"
+          # CFLAGS — three overlapping prefix-map flags so every
+          # variant of host-path leakage gets neutralised inside
+          # the workspace tree:
+          #   -fdebug-prefix-map  : strips host paths from DWARF
+          #                          debug-info.
+          #   -ffile-prefix-map   : superset that ALSO covers __FILE__
+          #                          macro expansion (some C code
+          #                          embeds __FILE__ for logging).
+          #   -fmacro-prefix-map  : the macro half of file-prefix-map,
+          #                          explicit for older GCC that split
+          #                          the two flags.
+          # The PEP 517 isolation dir is handled separately via the
+          # `--no-isolation` flag on `python -m build` below — see
+          # the install step's WHY paragraph for the full rationale.
+          # LDFLAGS — `--build-id=sha1` makes the build-id a content
+          # hash instead of a fresh random value per link.  Combined
+          # with deterministic section content, this produces an
+          # identical build-id across two passes.
+          # `MAKEFLAGS=-j1` and `CMAKE_BUILD_PARALLEL_LEVEL=1` force
+          # sequential compilation so parallel-build write-order
+          # variation cannot leak into the .so.
+          CFLAGS: "-fdebug-prefix-map=${GITHUB_WORKSPACE}=. -ffile-prefix-map=${GITHUB_WORKSPACE}=. -fmacro-prefix-map=${GITHUB_WORKSPACE}=."
+          LDFLAGS: "-Wl,--build-id=sha1"
+          MAKEFLAGS: "-j1"
+          CMAKE_BUILD_PARALLEL_LEVEL: "1"
         run: |
           rm -rf build dist
-          python -m build --wheel --outdir dist1/
+          # `--no-isolation`: see Install step's WHY paragraph.  The
+          # build deps are pre-installed into the container Python in
+          # the previous step, so the wheel build can run against
+          # them directly without staging into /tmp/build-env-<random>.
+          python -m build --wheel --no-isolation --outdir dist1/
           ls -lh dist1/
 
       - name: Build wheel — pass 2 (independent rebuild)
@@ -535,9 +628,13 @@ jobs:
           SOURCE_DATE_EPOCH: "1700000000"
           PYTHONHASHSEED: "0"
           PYTHONDONTWRITEBYTECODE: "1"
+          CFLAGS: "-fdebug-prefix-map=${GITHUB_WORKSPACE}=. -ffile-prefix-map=${GITHUB_WORKSPACE}=. -fmacro-prefix-map=${GITHUB_WORKSPACE}=."
+          LDFLAGS: "-Wl,--build-id=sha1"
+          MAKEFLAGS: "-j1"
+          CMAKE_BUILD_PARALLEL_LEVEL: "1"
         run: |
           rm -rf build
-          python -m build --wheel --outdir dist2/
+          python -m build --wheel --no-isolation --outdir dist2/
           ls -lh dist2/
 
       - name: Compare integrity digest + .py content across builds
@@ -680,20 +777,83 @@ jobs:
           )
           PY
 
-      - name: Diff native artefacts (advisory — known non-reproducible)
-        # Surface .so / .pyd / Cython _bin.so diffs as an artefact for
-        # diagnostic visibility.  This step is informational only —
-        # the gate is the digest+.py check above (the load-bearing
-        # contract).  See job-level header for the roadmap toward
-        # fully byte-reproducible native artefacts.
-        continue-on-error: true
+      - name: Diff native artefacts (STRICT)
+        # Audit Issue 10 close-out: promoted from ADVISORY to STRICT.
+        # `.so` / `.pyd` / Cython-built native artefacts must now be
+        # byte-identical across both passes.  This is the affirmative
+        # side of INVARIANT-8 (deterministic reproducible builds).
+        #
+        # Exclusions:
+        #   *.py       — covered by the digest + .py byte-equality
+        #                check above, including the legitimate
+        #                INVARIANT-17 exemption for the per-build
+        #                ephemeral `_integrity_signature.py`.  Re-diffing
+        #                them here would tautologically fail on that one
+        #                file.
+        #   RECORD     — pip regenerates the wheel `RECORD` manifest
+        #                per build; the manifest's hashes already cover
+        #                every other artefact, so its byte-equality
+        #                follows transitively from the rest.
+        #
+        # No `continue-on-error`, no `|| true`: a divergence here is a
+        # hard fail.  When a previously-non-deterministic artefact
+        # becomes deterministic, tighten the exclude list — do NOT
+        # add a new per-path exemption to absorb a regression.
+        #
+        # On failure, emits per-file diagnostic info (size delta,
+        # first-divergence offset via `cmp -l`, and `objdump -h`
+        # section headers when the differing file is an ELF object)
+        # so a maintainer reading the CI log can identify the
+        # category of non-determinism (build-id, DWARF, sections,
+        # .note metadata, etc.) without having to download the wheel
+        # artefact and diff locally.
         run: |
+          set -e
           mkdir -p /tmp/w1 /tmp/w2
           (cd /tmp/w1 && unzip -q "$GITHUB_WORKSPACE"/dist1/*.whl)
           (cd /tmp/w2 && unzip -q "$GITHUB_WORKSPACE"/dist2/*.whl)
-          echo "=== Native artefact diff (informational) ==="
-          diff --brief --recursive --exclude='*.py' --exclude=RECORD \
-            /tmp/w1 /tmp/w2 || true
+          echo "=== Native artefact diff (strict) ==="
+          # Capture --brief output without exiting; the diagnostic
+          # block below depends on us reaching it.
+          diff_rc=0
+          differ=$(diff --brief --recursive --exclude='*.py' --exclude=RECORD \
+            /tmp/w1 /tmp/w2 || true)
+          if [ -z "$differ" ]; then
+            echo "OK: wheel native artefacts byte-equal across both builds."
+            exit 0
+          fi
+          echo "$differ"
+          echo
+          echo "=== Per-file divergence diagnostic ==="
+          # Parse `diff --brief`'s "Files X and Y differ" lines and
+          # emit size delta + first-divergence offset + (for ELF)
+          # section-header diff for each.  Helps identify whether the
+          # delta is in .note.gnu.build-id, .debug_info, .text, .data,
+          # or somewhere else.
+          echo "$differ" | while IFS= read -r line; do
+            f1=$(echo "$line" | awk '{print $2}')
+            f2=$(echo "$line" | awk '{print $4}')
+            [ -f "$f1" ] && [ -f "$f2" ] || continue
+            sz1=$(stat -c '%s' "$f1")
+            sz2=$(stat -c '%s' "$f2")
+            echo "---"
+            echo "File: $(basename "$f1")"
+            echo "  size pass1=$sz1  pass2=$sz2  delta=$((sz2 - sz1))"
+            # First-divergence offset via cmp.
+            off=$(cmp "$f1" "$f2" 2>&1 | head -1 || true)
+            echo "  $off"
+            # If the file is an ELF object, dump and diff section
+            # header sizes so the maintainer can see which section
+            # carries the delta.
+            if file "$f1" 2>/dev/null | grep -q ELF; then
+              echo "  ELF section-header diff (size column):"
+              diff <(objdump -h "$f1" | awk '/^ *[0-9]+ /{print $2,$3}') \
+                   <(objdump -h "$f2" | awk '/^ *[0-9]+ /{print $2,$3}') | head -20 || true
+            fi
+          done
+          echo
+          echo "::error::Reproducible-build native-artefact diff failed — see per-file diagnostic above."
+          exit 1
 
       - name: Upload both wheels for offline diff
         if: failure()

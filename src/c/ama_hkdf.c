@@ -215,7 +215,7 @@ static ama_error_t hkdf_extract(
 
     /* If no salt, use zeros */
     if (salt == NULL || salt_len == 0) {
-        memset(default_salt, 0, sizeof(default_salt));
+        memset(default_salt, 0, sizeof(default_salt));  // PUBLIC-DATA: default_salt — HKDF default zero salt (RFC 5869 §2.2: if salt not provided, set to a string of HashLen zeros)
         salt = default_salt;
         salt_len = sizeof(default_salt);
     }
@@ -283,7 +283,7 @@ static ama_error_t hkdf_expand(
         expand_on_heap = 1;
     }
 
-    memset(T, 0, sizeof(T));
+    memset(T, 0, sizeof(T));  // PUBLIC-DATA: T — HKDF-Expand T(i) buffer, pre-use init; immediately filled by hmac_sha3_256(PRK, T(i-1)||info||counter, T) inside the expand loop — caller-side scrub of T at function exit follows (T holds keying material once the loop fills it)
 
     while (done < okm_len) {
         size_t offset = 0;

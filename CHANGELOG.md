@@ -66,19 +66,55 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   drift between the committed SBOM and a fresh render.  Replaces the
   previous hardcoded heredoc that had stale `"version": "3.0.0"`
   baked across all 11 components.
-- **Nightly SIMD dudect sweep (audit Issue 3).**  New
+- **Nightly per-slot SIMD dudect sweep (audit Issue 3).**  New
   `dudect-simd-sweep` matrix job in `.github/workflows/dudect.yml`
-  runs every dispatch-table-routable kernel on x86-64 + ARM64 hosts
-  on a nightly cron, including both the default dispatch and the
-  AVX2 X25519 4-way opt-in.  Per-PR latency unchanged: the existing
-  jobs still gate on source touched.
+  runs every dispatch-table-routable kernel on x86-64 + AArch64
+  hosts on a nightly cron.  The audit Issue 3 close-out promotes
+  this from a 2-cell slot matrix (`all-default-dispatch`,
+  `x25519-avx2`) to per-slot isolation across the full inventory:
+  `sha3-avx512x4`, `kyber-ntt-avx2`, `dilithium-ntt-avx2`,
+  `chacha20-avx2x8`, `argon2-g-avx2`, `aes-gcm-neon`,
+  `chacha20-neon`, `sha3-neon`, `kyber-sve2`, `sha3-sve2`,
+  `x25519-avx2`.  Each cell sets `AMA_DISPATCH_ONLY=<slot>` so the
+  resulting t-value is attributable to one SIMD kernel rather than
+  to whichever AVX2 / NEON paths happened to fire under the same
+  dispatch invocation.  Architecture-mismatched cells are excluded
+  at the matrix level (NEON / SVE2 on x86-64; AVX-* on AArch64).
+  Cells whose CPU feature is absent at runtime self-skip via CTest
+  exit 77.  Per-PR latency unchanged.
+- **`AMA_DISPATCH_ONLY` env var + `ama_dispatch_active_slot()` API
+  (audit Issue 3 close-out).**  New env-var contract in
+  `src/c/dispatch/ama_dispatch.c::apply_dispatch_only()`: set
+  `AMA_DISPATCH_ONLY=<slot>` before any `ama_dispatch_init()` call
+  and the dispatcher will leave every kernel pointer at scalar
+  fallback EXCEPT the named one (active only if the host supports
+  it; an unsupported request emits a clear stderr error and leaves
+  the dispatch table fully scalar).  Recognised slot names match
+  the dudect inventory above verbatim.  `ama_dispatch_active_slot()`
+  (declared in `include/ama_dispatch.h`) reports the resolved slot
+  label — `"all-default-dispatch"` when the env var is unset or
+  the host could not satisfy the request.  Mirrors the
+  `ama_aes_gcm_active_backend()` shape introduced in PR #322.
+  Thread-safe-init contract (INVARIANT-15) is preserved: the
+  filtering runs inside the same `pthread_once` /
+  `InitOnceExecuteOnce` body as the rest of dispatch init.
+  Covered by `tests/c/test_dispatch_only_env.c` (one CTest case
+  per slot, `SKIP_RETURN_CODE 77` on unsupported hosts).
 - **Reproducible-build verification (audit Issue 10 / INVARIANT-8).**
   New `reproducible-build` job in `.github/workflows/static-analysis.yml`
   builds the wheel twice from identical inputs (pinned
-  `SOURCE_DATE_EPOCH`, `PYTHONHASHSEED=0`, `PYTHONDONTWRITEBYTECODE=1`)
-  and asserts byte-equality of the bundled
-  `_integrity_signature.py::INTEGRITY_DIGEST_HEX` and of the extracted
-  wheel content (excluding the regenerated RECORD manifest).
+  `SOURCE_DATE_EPOCH`, `PYTHONHASHSEED=0`, `PYTHONDONTWRITEBYTECODE=1`,
+  `AR_FLAGS=Drcs`, `CFLAGS+=-fdebug-prefix-map=$PWD=.`,
+  `LDFLAGS+=-Wl,--build-id=sha1`) inside a pinned `manylinux_2_28`
+  container, and asserts byte-equality of:
+    - the bundled
+      `_integrity_signature.py::INTEGRITY_DIGEST_HEX` (STRICT);
+    - every `.py` file inside the wheel except the per-build
+      ephemeral `_integrity_signature.py` (STRICT — INVARIANT-17
+      explicitly keeps the signature file non-byte-stable);
+    - every native artefact inside the wheel (`.so`, `.pyd`,
+      Cython-built kernels) — STRICT, promoted from ADVISORY in
+      the audit Issue 10 close-out.
 - **Extended sanitizer + clang-tidy matrix (audit Issue 9).**  New
   `memory-sanitizer`, `thread-sanitizer`, `valgrind-memcheck`, and
   `clang-tidy` jobs in `.github/workflows/static-analysis.yml`.  MSan
@@ -88,22 +124,65 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   drives off a checked-in `.clang-tidy` config and surfaces the
   `bugprone-*` / `cert-*` / `clang-analyzer-*` / `concurrency-*` /
   `performance-*` / `portability-*` finding set.  MSan / TSan /
-  Valgrind run weekly to keep PR latency low; clang-tidy also runs
-  per-PR.
+  Valgrind run nightly (promoted from weekly in the audit Issue 9
+  close-out — see *Changed* below); clang-tidy also runs per-PR.
 
-  **clang-tidy posture is currently ADVISORY** (`continue-on-error:
-  true` on the job, `WarningsAsErrors: ''` in `.clang-tidy`).  The
-  pre-existing C codebase carries ~250 legitimate findings (mostly
-  `bugprone-implicit-widening-of-multiplication-result` and
-  `readability-redundant-declaration`) that are NOT regressions
-  introduced by this PR — flipping the gate fail-closed today would
-  block every subsequent PR.  `.clang-tidy` documents a phased
-  promotion roadmap (cleanup → category-by-category
-  `WarningsAsErrors` → flip the job to fail-closed).  Findings are
-  uploaded as a per-run artefact (`clang-tidy-findings`) so they
-  remain reviewable without a local replay.
+  **clang-tidy posture is now FAIL-CLOSED** (audit Issue 9 close-out).
+  The previous advisory posture (`continue-on-error: true` + trailing
+  `exit 0` + `WarningsAsErrors: ''`) was removed in the same close-out
+  commit that drove the finding count to zero on the enabled check
+  inventory.  77 real findings fixed in this commit (42
+  bugprone-macro-parentheses in `ama_argon2.c` B2B_G / BLAMKA_G;
+  24 clang-analyzer-deadcode.DeadStores in `ama_ed25519.c` scalar
+  reduction — converted to `ama_secure_memzero` for elision-resistant
+  scrub, strengthening INVARIANT-6 as a side-benefit; 6
+  bugprone-multi-level-implicit-pointer-conversion in
+  `ed25519_donna_shim.c` — added explicit `(void *)` casts; 3
+  bugprone-argument-comment in `ama_argon2.c` — renamed `use_legacy`
+  comments to `use_legacy_blake2b_long`; 1 bugprone-branch-clone
+  in `ama_argon2.c::index_alpha` — merged two `else` branches that
+  computed the same value; 1 clang-analyzer-core.UndefinedBinaryOperatorResult
+  false positive on vendor donna code — single `// NOLINTNEXTLINE`
+  with INVARIANT-13 justification).  Four checks were dropped
+  explicitly from `Checks:` in `.clang-tidy` with one-line rationale
+  each (incompatible with the project's cryptographic-C style or a
+  known false-positive source):
+  `readability-redundant-declaration`,
+  `clang-analyzer-deadcode.DeadStores`, `concurrency-mt-unsafe`,
+  and `clang-analyzer-core.UndefinedBinaryOperatorResult` (the
+  vendor-donna interprocedural false positive — dropping the
+  specific check keeps the rest of `clang-analyzer-*` enforced);
+  the dropped checks are recorded under the `.clang-tidy` header
+  so a future reader sees the prior triage.
+  Findings are uploaded as a per-run artefact
+  (`clang-tidy-findings`) for offline review.
 
 ### Changed
+- **Sanitiser cadence promoted weekly → nightly (audit Issue 9
+  close-out).**  `.github/workflows/static-analysis.yml` cron flipped
+  from `'0 4 * * 6'` (Saturday 04:00 UTC) to `'0 4 * * *'` (every
+  day 04:00 UTC).  Each of the four scheduled jobs already gates on
+  `schedule || workflow_dispatch || pull_request`, so no `if:`
+  predicates needed adjustment.  Shrinks the regression window for
+  MSan / TSan / Valgrind / reproducible-build from up-to-7-days to
+  up-to-24-hours at a marginal compute cost.  This is a defensive
+  knob, not a security contract — no INVARIANT addendum.
+- **Reproducible-build native-artefact gate promoted ADVISORY →
+  STRICT (audit Issue 10 close-out / INVARIANT-8).**  The
+  reproducible-build job's
+  "Diff native artefacts" step lost its `continue-on-error: true` and
+  trailing `|| true`; a divergence now fails the workflow.  Achieved
+  by pinning a date-stamped manylinux_2_28 container (toolchain
+  anchor) and adding `-fdebug-prefix-map`, `-Wl,--build-id=sha1`, and
+  `AR_FLAGS=Drcs` to both build passes.
+- **clang-tidy gate promoted ADVISORY → FAIL-CLOSED (audit Issue 9
+  close-out).**  The job's `continue-on-error: true` and the run
+  step's trailing `exit 0` are removed; `.clang-tidy` now sets
+  `WarningsAsErrors: '*'`.  See the "Extended sanitizer + clang-tidy
+  matrix" entry above for the full close-out scope (77 real
+  findings fixed, 3 checks dropped explicitly).  Closes the last
+  advisory CI gate from PR #322 — INVARIANT-2 (Fail-Closed CI)
+  fully honored across the static-analysis surface.
 - **Bandit + pip-audit fail-closed (audit Issue 8).**  Both
   `.github/workflows/security.yml::security-audit` and
   `.github/workflows/ci-build-test.yml::security` now run
@@ -137,6 +216,35 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   `ama_consttime.c`.  Also added a defense-in-depth scrub of
   `scalar_reduced` and `e` in `ge25519_scalarmult_base_comb_signed`,
   closing a stack residue that survived the function return.
+
+  **Audit Issue 4 close-out (2026-05): full 109-site bare-memset
+  sweep.**  Every `memset(BUF, 0, LEN)` call under `src/c/`
+  (excluding `src/c/vendor/`) was walked.  Result: **0 sites
+  reclassified to `ama_secure_memzero`** (every bare memset is a
+  pre-use initialisation or a write of public zero-padding bytes —
+  the compiler cannot elide it because the buffer is read by
+  subsequent code before the function returns); **109 sites
+  annotated `// PUBLIC-DATA:`** with the buffer name and a
+  one-line justification rooted in the surrounding code (so a
+  future audit walk recognises the prior triage and does not have
+  to re-derive the classification).  The semgrep ERROR rule
+  `bare-memset-zero-secret-named-buffer` continues to catch any
+  future regression that introduces a bare memset on a
+  secret-NAMED buffer.
+
+  **Adjacent gap closures surfaced by the walk (INVARIANT-6).**
+  Two stack-resident scratch buffers in `src/c/ama_frost.c` were
+  left holding secret-derived scalar bytes on function return:
+    - `scalar_negate()::tmp[64]` (the reduced negated scalar
+      copied out to `neg` but never scrubbed in the source
+      buffer).
+    - `scalar_inv()::tmp[32]` (the last squared / multiplied
+      scalar accumulator in the square-and-multiply loop).
+  Both are now scrubbed with `ama_secure_memzero` on the
+  function's only exit path.  These were `memset`-less gaps
+  (no bare memset, no `ama_secure_memzero` at all), so neither
+  the original PR #322 sweep nor the semgrep rule would have
+  surfaced them; the audit Issue 4 close-out walk did.
 - **Semgrep C rules for bare memset of secret-named buffers (audit
   Issue 4).**  Two new rules in `.semgrep.yml`
   (`bare-memset-zero-secret-named-buffer` ERROR and

@@ -176,6 +176,64 @@ does not meet the minimum version. To build on an unverified toolchain (e.g.,
 for development or CI on older hosts), pass `-DAMA_ALLOW_UNVERIFIED_TOOLCHAIN=ON`
 to downgrade to a `WARNING`.
 
+### INVARIANT-8 Addendum — Native-Artefact Byte Equality
+
+The release wheel's native artefacts (`libama_cryptography.so` / `.pyd`
+and Cython-built kernel `.so` files) **must** be byte-identical across
+two independent rebuilds from the same source tree.  This is enforced
+by the `reproducible-build` job in `.github/workflows/static-analysis.yml`,
+which builds the wheel twice inside a date-pinned `manylinux_2_28`
+container with the following invariants on both passes:
+
+- `SOURCE_DATE_EPOCH` pinned to a fixed reference epoch.
+- `PYTHONHASHSEED=0` for deterministic dict iteration.
+- `PYTHONDONTWRITEBYTECODE=1` (no `.pyc` files in the wheel).
+- `CFLAGS` carries three overlapping prefix-maps targeting the
+  workspace tree: `-fdebug-prefix-map`, `-ffile-prefix-map`, and
+  `-fmacro-prefix-map`, each `=${GITHUB_WORKSPACE}=.`.  Strips host
+  paths from DWARF debug-info, from `__FILE__` macro expansions, and
+  from `-D` macro values respectively.
+- `LDFLAGS+=-Wl,--build-id=sha1` derives the linker build-id from
+  the section contents instead of a fresh-per-invocation random value.
+- `MAKEFLAGS=-j1` + `CMAKE_BUILD_PARALLEL_LEVEL=1` force sequential
+  compilation so parallel-build write-order variation cannot leak
+  into the `.so`.
+- `python -m build --wheel --no-isolation` skips PEP 517 build
+  isolation, which would otherwise stage build deps inside
+  `/tmp/build-env-<random8>/` and let that random path leak into the
+  Cython-built `.so` via `__FILE__` expansion from NumPy headers.
+  Build deps are pre-installed into the container Python in the
+  workflow's "Install build prerequisites" step.
+
+`AR_FLAGS` / `ARFLAGS` are deliberately NOT set — CMake's archive
+creation invokes `ar` directly and ignores both env vars, and modern
+binutils (`>= 2.27`, March 2016) defaults to deterministic archives
+without flags.  If a future toolchain regression brings back
+non-deterministic `ar`, the strict diff below catches it and the
+fix is `CMAKE_C_ARCHIVE_CREATE` overrides — not an env var the
+build doesn't read.
+
+The container image is pinned to a date-stamped tag in the manylinux
+project's `YYYY.MM.DD-N` format (NOT `:latest`, NOT the floating
+`:manylinux_2_28` rolling tag) so the gate stays stable across the
+project's rolling updates.  A tag bump is auditable: it must be its
+own commit so the reproducible-build delta is visible in the diff.
+The tag MUST be verified against
+`https://quay.io/api/v1/repository/pypa/manylinux_2_28_x86_64/tag/`
+before being committed — a fabricated date will fail the docker pull
+with "manifest not found" on the first CI run and block the strict
+gate.  Promoting the pin from a date-stamped tag to a `@sha256:`
+digest pin is the natural follow-up (the digest does not float at
+all, where the date-stamped tag could theoretically be force-pushed
+upstream).
+
+The signature artefact `ama_cryptography/_integrity_signature.py` is
+explicitly exempt — INVARIANT-17 keeps the per-build ephemeral
+signing keypair non-byte-stable.  The `_integrity_signature.py` exemption
+is in the workflow's `.py`-equality check (which compares every OTHER
+`.py` file byte-for-byte) and not in the native-artefact diff (where
+the file does not appear).
+
 ## INVARIANT-9 — Maximum Exception Scope in Crypto Paths
 
 Code under `ama_cryptography/` **should** use narrow exception types
@@ -260,6 +318,36 @@ custom timing harnesses, static structural scans) and **must** fail on
 detection of secret-dependent variable-time constructs.  The project's
 `CONSTANT_TIME_VERIFICATION.md` is the authoritative artifact for
 verification methodology.
+
+### INVARIANT-12 Addendum — Per-Slot SIMD Constant-Time Verification
+
+The nightly SIMD dudect sweep in `.github/workflows/dudect.yml`
+(`dudect-simd-sweep`) **must** measure each dispatch-table-routable
+SIMD slot in isolation via `AMA_DISPATCH_ONLY=<slot>`.  A t-value
+regression on any slot is a hard fail, not a "noise" excuse — the
+per-slot isolation is exactly what makes the t-value attributable
+to a single SIMD kernel rather than to the union of every SIMD
+path that happens to be on the host.
+
+The slot inventory (also enumerated in `include/ama_dispatch.h` and
+in CHANGELOG `[Unreleased]`) is the authoritative list.  Adding a
+new dispatchable SIMD kernel **must** also:
+
+- Extend `apply_dispatch_only()` in
+  `src/c/dispatch/ama_dispatch.c` with a recognition branch for
+  the new slot.
+- Extend `KNOWN_SLOTS[]` in
+  `tests/c/test_dispatch_only_env.c`.
+- Add the slot to the dudect-simd-sweep matrix in
+  `.github/workflows/dudect.yml`.
+- Document the slot in this list and in the
+  `ama_dispatch_active_slot()` block-comment in
+  `include/ama_dispatch.h`.
+
+Skipping any of the four bullets above silently downgrades the
+constant-time gate for the new kernel from "explicitly measured"
+to "assumed to ride the all-default-dispatch lane" — exactly the
+ambiguity the close-out exists to remove.
 
 ## INVARIANT-13 — No Unjustified Static-Analysis Suppressions
 

@@ -303,14 +303,14 @@ ama_error_t ama_sha3_256(
     }
 
     /* Initialize state to zero */
-    memset(state, 0, sizeof(state));
+    memset(state, 0, sizeof(state));  // PUBLIC-DATA: state (Keccak permutation buffer, pre-use init; post-use scrub via ama_secure_memzero at function exit)
 
     /* Absorb full blocks */
     keccak_absorb(state, input, input_len, SHA3_256_RATE);
 
     /* Handle remaining bytes with padding */
     remaining = input_len % SHA3_256_RATE;
-    memset(block, 0, sizeof(block));
+    memset(block, 0, sizeof(block));  // PUBLIC-DATA: block (FIPS 202 rate-block padding scratch, pre-use init; immediately filled by memcpy + the domain separator (0x06 for SHA3, 0x1F for SHAKE) + 0x80 final bit)
     if (remaining > 0) {
         memcpy(block, input + (input_len - remaining), remaining);
     }
@@ -366,14 +366,14 @@ ama_error_t ama_sha3_512(
     }
 
     /* Initialize state to zero */
-    memset(state, 0, sizeof(state));
+    memset(state, 0, sizeof(state));  // PUBLIC-DATA: state (Keccak permutation buffer, pre-use init; post-use scrub via ama_secure_memzero at function exit)
 
     /* Absorb full blocks */
     keccak_absorb(state, input, input_len, SHA3_512_RATE);
 
     /* Handle remaining bytes with padding */
     remaining = input_len % SHA3_512_RATE;
-    memset(block, 0, sizeof(block));
+    memset(block, 0, sizeof(block));  // PUBLIC-DATA: block (FIPS 202 rate-block padding scratch, pre-use init; immediately filled by memcpy + the domain separator (0x06 for SHA3, 0x1F for SHAKE) + 0x80 final bit)
     if (remaining > 0) {
         memcpy(block, input + (input_len - remaining), remaining);
     }
@@ -430,14 +430,14 @@ ama_error_t ama_shake128(
     }
 
     /* Initialize state */
-    memset(state, 0, sizeof(state));
+    memset(state, 0, sizeof(state));  // PUBLIC-DATA: state (Keccak permutation buffer, pre-use init; post-use scrub via ama_secure_memzero at function exit)
 
     /* Absorb full blocks */
     keccak_absorb(state, input, input_len, rate);
 
     /* Handle remaining with SHAKE padding (0x1F...0x80) */
     remaining = input_len % rate;
-    memset(block, 0, sizeof(block));
+    memset(block, 0, sizeof(block));  // PUBLIC-DATA: block (FIPS 202 rate-block padding scratch, pre-use init; immediately filled by memcpy + the domain separator (0x06 for SHA3, 0x1F for SHAKE) + 0x80 final bit)
     if (remaining > 0) {
         memcpy(block, input + (input_len - remaining), remaining);
     }
@@ -508,14 +508,14 @@ ama_error_t ama_shake256(
     }
 
     /* Initialize state */
-    memset(state, 0, sizeof(state));
+    memset(state, 0, sizeof(state));  // PUBLIC-DATA: state (Keccak permutation buffer, pre-use init; post-use scrub via ama_secure_memzero at function exit)
 
     /* Absorb full blocks */
     keccak_absorb(state, input, input_len, rate);
 
     /* Handle remaining with SHAKE padding */
     remaining = input_len % rate;
-    memset(block, 0, sizeof(block));
+    memset(block, 0, sizeof(block));  // PUBLIC-DATA: block (FIPS 202 rate-block padding scratch, pre-use init; immediately filled by memcpy + the domain separator (0x06 for SHA3, 0x1F for SHAKE) + 0x80 final bit)
     if (remaining > 0) {
         memcpy(block, input + (input_len - remaining), remaining);
     }
@@ -566,8 +566,8 @@ ama_error_t ama_sha3_init(ama_sha3_ctx* ctx) {
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    memset(ctx->state, 0, sizeof(ctx->state));
-    memset(ctx->buffer, 0, sizeof(ctx->buffer));
+    memset(ctx->state, 0, sizeof(ctx->state));  // PUBLIC-DATA: ctx->state (streaming SHA3 context state, pre-use init; ctx->finalized + ama_secure_memzero(ctx, ...) by caller on free)
+    memset(ctx->buffer, 0, sizeof(ctx->buffer));  // PUBLIC-DATA: ctx->buffer (streaming SHA3 rate-block, pre-use init; data filled by subsequent absorb calls)
     ctx->buffer_len = 0;
     ctx->finalized = 0;
 
@@ -647,7 +647,7 @@ ama_error_t ama_sha3_final(ama_sha3_ctx* ctx, uint8_t* output) {
     }
 
     /* Prepare final block with padding */
-    memset(block, 0, sizeof(block));
+    memset(block, 0, sizeof(block));  // PUBLIC-DATA: block (FIPS 202 rate-block padding scratch, pre-use init; immediately filled by memcpy + the domain separator (0x06 for SHA3, 0x1F for SHAKE) + 0x80 final bit)
     if (ctx->buffer_len > 0) {
         memcpy(block, ctx->buffer, ctx->buffer_len);
     }
@@ -687,8 +687,8 @@ ama_error_t ama_sha3_512_init(ama_sha3_ctx* ctx) {
     if (!ctx) {
         return AMA_ERROR_INVALID_PARAM;
     }
-    memset(ctx->state, 0, sizeof(ctx->state));
-    memset(ctx->buffer, 0, sizeof(ctx->buffer));
+    memset(ctx->state, 0, sizeof(ctx->state));  // PUBLIC-DATA: ctx->state (streaming SHA3 context state, pre-use init; ctx->finalized + ama_secure_memzero(ctx, ...) by caller on free)
+    memset(ctx->buffer, 0, sizeof(ctx->buffer));  // PUBLIC-DATA: ctx->buffer (streaming SHA3 rate-block, pre-use init; data filled by subsequent absorb calls)
     ctx->buffer_len = 0;
     ctx->finalized = 0;
     return AMA_SUCCESS;
@@ -754,7 +754,7 @@ ama_error_t ama_sha3_512_final(ama_sha3_ctx* ctx, uint8_t* output) {
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    memset(block, 0, sizeof(block));
+    memset(block, 0, sizeof(block));  // PUBLIC-DATA: block (FIPS 202 rate-block padding scratch, pre-use init; immediately filled by memcpy + the domain separator (0x06 for SHA3, 0x1F for SHAKE) + 0x80 final bit)
     if (ctx->buffer_len > 0) {
         memcpy(block, ctx->buffer, ctx->buffer_len);
     }
@@ -790,8 +790,8 @@ ama_error_t ama_sha3_512_final(ama_sha3_ctx* ctx, uint8_t* output) {
 
 ama_error_t ama_shake256_inc_init(ama_sha3_ctx* ctx) {
     if (!ctx) return AMA_ERROR_INVALID_PARAM;
-    memset(ctx->state, 0, sizeof(ctx->state));
-    memset(ctx->buffer, 0, sizeof(ctx->buffer));
+    memset(ctx->state, 0, sizeof(ctx->state));  // PUBLIC-DATA: ctx->state (streaming SHA3 context state, pre-use init; ctx->finalized + ama_secure_memzero(ctx, ...) by caller on free)
+    memset(ctx->buffer, 0, sizeof(ctx->buffer));  // PUBLIC-DATA: ctx->buffer (streaming SHA3 rate-block, pre-use init; data filled by subsequent absorb calls)
     ctx->buffer_len = 0;
     ctx->finalized = 0;
     return AMA_SUCCESS;
@@ -845,7 +845,7 @@ ama_error_t ama_shake256_inc_finalize(ama_sha3_ctx* ctx) {
     if (!ctx) return AMA_ERROR_INVALID_PARAM;
     if (ctx->finalized) return AMA_ERROR_INVALID_PARAM;
 
-    memset(block, 0, sizeof(block));
+    memset(block, 0, sizeof(block));  // PUBLIC-DATA: block (FIPS 202 rate-block padding scratch, pre-use init; immediately filled by memcpy + the domain separator (0x06 for SHA3, 0x1F for SHAKE) + 0x80 final bit)
     if (ctx->buffer_len > 0) {
         memcpy(block, ctx->buffer, ctx->buffer_len);
     }
@@ -901,8 +901,8 @@ ama_error_t ama_shake256_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t 
 
 ama_error_t ama_shake128_inc_init(ama_sha3_ctx* ctx) {
     if (!ctx) return AMA_ERROR_INVALID_PARAM;
-    memset(ctx->state, 0, sizeof(ctx->state));
-    memset(ctx->buffer, 0, sizeof(ctx->buffer));
+    memset(ctx->state, 0, sizeof(ctx->state));  // PUBLIC-DATA: ctx->state (streaming SHA3 context state, pre-use init; ctx->finalized + ama_secure_memzero(ctx, ...) by caller on free)
+    memset(ctx->buffer, 0, sizeof(ctx->buffer));  // PUBLIC-DATA: ctx->buffer (streaming SHA3 rate-block, pre-use init; data filled by subsequent absorb calls)
     ctx->buffer_len = 0;
     ctx->finalized = 0;
     return AMA_SUCCESS;
@@ -953,7 +953,7 @@ ama_error_t ama_shake128_inc_finalize(ama_sha3_ctx* ctx) {
     if (!ctx) return AMA_ERROR_INVALID_PARAM;
     if (ctx->finalized) return AMA_ERROR_INVALID_PARAM;
 
-    memset(block, 0, sizeof(block));
+    memset(block, 0, sizeof(block));  // PUBLIC-DATA: block (FIPS 202 rate-block padding scratch, pre-use init; immediately filled by memcpy + the domain separator (0x06 for SHA3, 0x1F for SHAKE) + 0x80 final bit)
     if (ctx->buffer_len > 0) {
         memcpy(block, ctx->buffer, ctx->buffer_len);
     }
@@ -1058,7 +1058,7 @@ ama_error_t ama_shake128_x4_absorb_once(
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    memset(ctx->states, 0, sizeof(ctx->states));
+    memset(ctx->states, 0, sizeof(ctx->states));  // PUBLIC-DATA: ctx->states (4-way SHAKE x4 Keccak states, pre-use init; secret-derived bytes only enter on subsequent absorb)
     ctx->blocks_squeezed = 0;
     ctx->finalized       = 0;
 
@@ -1068,7 +1068,7 @@ ama_error_t ama_shake128_x4_absorb_once(
 
     for (int lane = 0; lane < 4; lane++) {
         uint8_t block[AMA_SHAKE128_X4_RATE];
-        memset(block, 0, sizeof(block));
+        memset(block, 0, sizeof(block));  // PUBLIC-DATA: block (per-lane SHAKE x4 rate-block, pre-use init filled by memcpy + SHAKE 0x1F domain separator and 0x80 final bit; FIPS 202 §6.2)
         if (in_lens[lane] > 0) {
             memcpy(block, ins[lane], in_lens[lane]);
         }
@@ -1182,7 +1182,7 @@ ama_error_t ama_shake256_x4_absorb_once(
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    memset(ctx->states, 0, sizeof(ctx->states));
+    memset(ctx->states, 0, sizeof(ctx->states));  // PUBLIC-DATA: ctx->states (4-way SHAKE x4 Keccak states, pre-use init; secret-derived bytes only enter on subsequent absorb)
     ctx->blocks_squeezed = 0;
     ctx->finalized       = 0;
 
@@ -1191,7 +1191,7 @@ ama_error_t ama_shake256_x4_absorb_once(
 
     for (int lane = 0; lane < 4; lane++) {
         uint8_t block[AMA_SHAKE256_X4_RATE];
-        memset(block, 0, sizeof(block));
+        memset(block, 0, sizeof(block));  // PUBLIC-DATA: block (per-lane SHAKE x4 rate-block, pre-use init filled by memcpy + SHAKE 0x1F domain separator and 0x80 final bit; FIPS 202 §6.2)
         if (in_lens[lane] > 0) {
             memcpy(block, ins[lane], in_lens[lane]);
         }

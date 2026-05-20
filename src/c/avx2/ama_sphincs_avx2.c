@@ -194,7 +194,7 @@ static AMA_MAYBE_UNUSED void ama_sha256_compress_x4_avx2(uint32_t state[4][8],
     /* Initialize upper 4 instances with SHA-256 IV and zero blocks */
     for (int i = 4; i < 8; i++) {
         memcpy(state8[i], H256, sizeof(H256));
-        memset(blocks8[i], 0, 64);
+        memset(blocks8[i], 0, 64);  // PUBLIC-DATA: blocks8[i] — AVX2 SPHINCS+ 8-way SHA-256 padded input block i, pre-use init filled by chain-data memcpy
     }
 
     /* Cast suppresses ISO-C-before-C2X -Wpedantic on the inner-array
@@ -256,7 +256,7 @@ AMA_MAYBE_UNUSED void ama_sphincs_wots_chain_avx2(uint8_t *out, const uint8_t *i
 
         /* Single-chain SHA-256: prepare 64-byte block */
         uint8_t block[64];
-        memset(block, 0, 64);
+        memset(block, 0, 64);  // PUBLIC-DATA: block — AVX2 SPHINCS+ SHA-256 padded input block, pre-use init filled by chain-data memcpy
         /* [pub_seed || addr || value] compressed into block */
         memcpy(block, out, n < 32 ? n : 32);
         block[32] = (uint8_t)(addr[0] >> 24);

@@ -896,27 +896,27 @@ static void sc25519_reduce(uint8_t *s) {
     /* First pass: reduce s23..s18 into s11..s16 range */
     s11 += s23 * 666643; s12 += s23 * 470296; s13 += s23 * 654183;
     s14 -= s23 * 997805; s15 += s23 * 136657; s16 -= s23 * 683901;
-    s23 = 0;
+    ama_secure_memzero(&s23, sizeof(s23));
 
     s10 += s22 * 666643; s11 += s22 * 470296; s12 += s22 * 654183;
     s13 -= s22 * 997805; s14 += s22 * 136657; s15 -= s22 * 683901;
-    s22 = 0;
+    ama_secure_memzero(&s22, sizeof(s22));
 
     s9 += s21 * 666643; s10 += s21 * 470296; s11 += s21 * 654183;
     s12 -= s21 * 997805; s13 += s21 * 136657; s14 -= s21 * 683901;
-    s21 = 0;
+    ama_secure_memzero(&s21, sizeof(s21));
 
     s8 += s20 * 666643; s9 += s20 * 470296; s10 += s20 * 654183;
     s11 -= s20 * 997805; s12 += s20 * 136657; s13 -= s20 * 683901;
-    s20 = 0;
+    ama_secure_memzero(&s20, sizeof(s20));
 
     s7 += s19 * 666643; s8 += s19 * 470296; s9 += s19 * 654183;
     s10 -= s19 * 997805; s11 += s19 * 136657; s12 -= s19 * 683901;
-    s19 = 0;
+    ama_secure_memzero(&s19, sizeof(s19));
 
     s6 += s18 * 666643; s7 += s18 * 470296; s8 += s18 * 654183;
     s9 -= s18 * 997805; s10 += s18 * 136657; s11 -= s18 * 683901;
-    s18 = 0;
+    ama_secure_memzero(&s18, sizeof(s18));
 
     /* Carry propagation (first round)
      * Use multiplication instead of left-shift to avoid UB on negative carry
@@ -937,27 +937,27 @@ static void sc25519_reduce(uint8_t *s) {
     /* Second pass: reduce s17..s12 into s5..s10 range */
     s5 += s17 * 666643; s6 += s17 * 470296; s7 += s17 * 654183;
     s8 -= s17 * 997805; s9 += s17 * 136657; s10 -= s17 * 683901;
-    s17 = 0;
+    ama_secure_memzero(&s17, sizeof(s17));
 
     s4 += s16 * 666643; s5 += s16 * 470296; s6 += s16 * 654183;
     s7 -= s16 * 997805; s8 += s16 * 136657; s9 -= s16 * 683901;
-    s16 = 0;
+    ama_secure_memzero(&s16, sizeof(s16));
 
     s3 += s15 * 666643; s4 += s15 * 470296; s5 += s15 * 654183;
     s6 -= s15 * 997805; s7 += s15 * 136657; s8 -= s15 * 683901;
-    s15 = 0;
+    ama_secure_memzero(&s15, sizeof(s15));
 
     s2 += s14 * 666643; s3 += s14 * 470296; s4 += s14 * 654183;
     s5 -= s14 * 997805; s6 += s14 * 136657; s7 -= s14 * 683901;
-    s14 = 0;
+    ama_secure_memzero(&s14, sizeof(s14));
 
     s1 += s13 * 666643; s2 += s13 * 470296; s3 += s13 * 654183;
     s4 -= s13 * 997805; s5 += s13 * 136657; s6 -= s13 * 683901;
-    s13 = 0;
+    ama_secure_memzero(&s13, sizeof(s13));
 
     s0 += s12 * 666643; s1 += s12 * 470296; s2 += s12 * 654183;
     s3 -= s12 * 997805; s4 += s12 * 136657; s5 -= s12 * 683901;
-    s12 = 0;
+    ama_secure_memzero(&s12, sizeof(s12));
 
     /* Carry propagation — interleaved evens then odds (ref10 pattern) */
     carry = (s0 + ((int64_t)1 << 20)) >> 21; s1 += carry; s0 -= carry * ((int64_t)1 << 21);
@@ -977,7 +977,7 @@ static void sc25519_reduce(uint8_t *s) {
     /* Reduce s12 overflow via L coefficients */
     s0 += s12 * 666643; s1 += s12 * 470296; s2 += s12 * 654183;
     s3 -= s12 * 997805; s4 += s12 * 136657; s5 -= s12 * 683901;
-    s12 = 0;
+    ama_secure_memzero(&s12, sizeof(s12));
 
     /* Sequential carry using floor division (>> 21) */
     carry = s0 >> 21; s1 += carry; s0 -= carry * ((int64_t)1 << 21);
@@ -996,7 +996,7 @@ static void sc25519_reduce(uint8_t *s) {
     /* Second s12 wrap-around */
     s0 += s12 * 666643; s1 += s12 * 470296; s2 += s12 * 654183;
     s3 -= s12 * 997805; s4 += s12 * 136657; s5 -= s12 * 683901;
-    s12 = 0;
+    ama_secure_memzero(&s12, sizeof(s12));
 
     /* Final sequential carry */
     carry = s0 >> 21; s1 += carry; s0 -= carry * ((int64_t)1 << 21);
@@ -1145,27 +1145,27 @@ static void sc25519_muladd(uint8_t *s, const uint8_t *a, const uint8_t *b, const
     /* Reduce high limbs */
     s11 += s23 * 666643; s12 += s23 * 470296; s13 += s23 * 654183;
     s14 -= s23 * 997805; s15 += s23 * 136657; s16 -= s23 * 683901;
-    s23 = 0;
+    ama_secure_memzero(&s23, sizeof(s23));
 
     s10 += s22 * 666643; s11 += s22 * 470296; s12 += s22 * 654183;
     s13 -= s22 * 997805; s14 += s22 * 136657; s15 -= s22 * 683901;
-    s22 = 0;
+    ama_secure_memzero(&s22, sizeof(s22));
 
     s9 += s21 * 666643; s10 += s21 * 470296; s11 += s21 * 654183;
     s12 -= s21 * 997805; s13 += s21 * 136657; s14 -= s21 * 683901;
-    s21 = 0;
+    ama_secure_memzero(&s21, sizeof(s21));
 
     s8 += s20 * 666643; s9 += s20 * 470296; s10 += s20 * 654183;
     s11 -= s20 * 997805; s12 += s20 * 136657; s13 -= s20 * 683901;
-    s20 = 0;
+    ama_secure_memzero(&s20, sizeof(s20));
 
     s7 += s19 * 666643; s8 += s19 * 470296; s9 += s19 * 654183;
     s10 -= s19 * 997805; s11 += s19 * 136657; s12 -= s19 * 683901;
-    s19 = 0;
+    ama_secure_memzero(&s19, sizeof(s19));
 
     s6 += s18 * 666643; s7 += s18 * 470296; s8 += s18 * 654183;
     s9 -= s18 * 997805; s10 += s18 * 136657; s11 -= s18 * 683901;
-    s18 = 0;
+    ama_secure_memzero(&s18, sizeof(s18));
 
     carry = (s6 + ((int64_t)1 << 20)) >> 21; s7 += carry; s6 -= carry * ((int64_t)1 << 21);
     carry = (s8 + ((int64_t)1 << 20)) >> 21; s9 += carry; s8 -= carry * ((int64_t)1 << 21);
@@ -1182,27 +1182,27 @@ static void sc25519_muladd(uint8_t *s, const uint8_t *a, const uint8_t *b, const
 
     s5 += s17 * 666643; s6 += s17 * 470296; s7 += s17 * 654183;
     s8 -= s17 * 997805; s9 += s17 * 136657; s10 -= s17 * 683901;
-    s17 = 0;
+    ama_secure_memzero(&s17, sizeof(s17));
 
     s4 += s16 * 666643; s5 += s16 * 470296; s6 += s16 * 654183;
     s7 -= s16 * 997805; s8 += s16 * 136657; s9 -= s16 * 683901;
-    s16 = 0;
+    ama_secure_memzero(&s16, sizeof(s16));
 
     s3 += s15 * 666643; s4 += s15 * 470296; s5 += s15 * 654183;
     s6 -= s15 * 997805; s7 += s15 * 136657; s8 -= s15 * 683901;
-    s15 = 0;
+    ama_secure_memzero(&s15, sizeof(s15));
 
     s2 += s14 * 666643; s3 += s14 * 470296; s4 += s14 * 654183;
     s5 -= s14 * 997805; s6 += s14 * 136657; s7 -= s14 * 683901;
-    s14 = 0;
+    ama_secure_memzero(&s14, sizeof(s14));
 
     s1 += s13 * 666643; s2 += s13 * 470296; s3 += s13 * 654183;
     s4 -= s13 * 997805; s5 += s13 * 136657; s6 -= s13 * 683901;
-    s13 = 0;
+    ama_secure_memzero(&s13, sizeof(s13));
 
     s0 += s12 * 666643; s1 += s12 * 470296; s2 += s12 * 654183;
     s3 -= s12 * 997805; s4 += s12 * 136657; s5 -= s12 * 683901;
-    s12 = 0;
+    ama_secure_memzero(&s12, sizeof(s12));
 
     /* Carry propagation — interleaved evens then odds (ref10 pattern) */
     carry = (s0 + ((int64_t)1 << 20)) >> 21; s1 += carry; s0 -= carry * ((int64_t)1 << 21);
@@ -1222,7 +1222,7 @@ static void sc25519_muladd(uint8_t *s, const uint8_t *a, const uint8_t *b, const
     /* Reduce s12 overflow via L coefficients */
     s0 += s12 * 666643; s1 += s12 * 470296; s2 += s12 * 654183;
     s3 -= s12 * 997805; s4 += s12 * 136657; s5 -= s12 * 683901;
-    s12 = 0;
+    ama_secure_memzero(&s12, sizeof(s12));
 
     /* Sequential carry using floor division (>> 21) */
     carry = s0 >> 21; s1 += carry; s0 -= carry * ((int64_t)1 << 21);
@@ -1241,7 +1241,7 @@ static void sc25519_muladd(uint8_t *s, const uint8_t *a, const uint8_t *b, const
     /* Second s12 wrap-around */
     s0 += s12 * 666643; s1 += s12 * 470296; s2 += s12 * 654183;
     s3 -= s12 * 997805; s4 += s12 * 136657; s5 -= s12 * 683901;
-    s12 = 0;
+    ama_secure_memzero(&s12, sizeof(s12));
 
     /* Final sequential carry */
     carry = s0 >> 21; s1 += carry; s0 -= carry * ((int64_t)1 << 21);

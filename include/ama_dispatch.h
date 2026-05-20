@@ -268,6 +268,60 @@ AMA_API const char *ama_impl_level_name(ama_impl_level_t level);
  */
 AMA_API const char *ama_aes_gcm_active_backend(void);
 
+/* ============================================================================
+ * Per-slot dispatch isolation (audit Issue 3 close-out / INVARIANT-12)
+ * ============================================================================
+ *
+ * `AMA_DISPATCH_ONLY=<slot>` (read at `ama_dispatch_init()` time) leaves
+ * every dispatch kernel pointer at its scalar fallback EXCEPT the named
+ * slot, which is forced active if and only if the host supports it.
+ * Lets the dudect SIMD sweep attribute a per-slot t-value to a single
+ * kernel without interference from the rest of the dispatch table.
+ *
+ * Recognised slot names (must match the CHANGELOG inventory verbatim):
+ *
+ *   "sha3-avx512x4"        — keccak_f1600_x4 -> AVX-512 (vprolq + vpternlogq)
+ *   "kyber-ntt-avx2"       — kyber_ntt / invntt / pointwise / cbd2 -> AVX2
+ *   "dilithium-ntt-avx2"   — dilithium_ntt / invntt / pointwise / rej_uniform -> AVX2
+ *   "chacha20-avx2x8"      — chacha20_block_x8 -> AVX2 8-way
+ *   "argon2-g-avx2"        — argon2_g -> AVX2 BlaMka
+ *   "aes-gcm-neon"         — aes_gcm_encrypt / decrypt -> ARMv8 AES + PMULL
+ *   "chacha20-neon"        — chacha20_block_x8 -> NEON
+ *   "sha3-neon"            — keccak_f1600 / sha3_256 -> NEON
+ *   "kyber-sve2"           — kyber_ntt / invntt / pointwise / poly_{add,sub,reduce} -> SVE2
+ *   "sha3-sve2"            — keccak_f1600 / sha3_256 -> SVE2
+ *   "x25519-avx2"          — x25519_x4 -> AVX2 4-way ladder
+ *                            (requires AMA_DISPATCH_USE_X25519_AVX2=1 also set)
+ *
+ * `ama_dispatch_active_slot()` returns the resolved slot label on a
+ * host that honored `AMA_DISPATCH_ONLY`, or the literal string
+ * `"all-default-dispatch"` on a host where `AMA_DISPATCH_ONLY` was
+ * unset OR set to a slot the host could not satisfy.  The returned
+ * pointer is a string literal with static storage duration; do not
+ * free it.
+ *
+ * A failing `AMA_DISPATCH_ONLY` request emits exactly one
+ * unconditional `[AMA Dispatch] ERROR:` line on stderr (NOT gated
+ * on `AMA_DISPATCH_VERBOSE`) and leaves every kernel pointer at
+ * scalar fallback.  Two distinct error messages cover the two
+ * failure modes:
+ *
+ *   UNRECOGNISED — the slot name is not in the inventory above.
+ *                  The error line enumerates the known slot names
+ *                  so an operator who fat-fingered the env var
+ *                  sees the right spelling.
+ *   UNSUPPORTED  — the slot name is known, but the host's CPU does
+ *                  not satisfy it (or the build did not compile
+ *                  the kernel).  The error line names the slot
+ *                  and the cause class.
+ *
+ * `ama_dispatch_active_slot()` reports the `"all-default-dispatch"`
+ * sentinel in either case, which the dudect test harness in
+ * `tests/c/test_dispatch_only_env.c` interprets as a CTest skip
+ * (exit code 77).
+ */
+AMA_API const char *ama_dispatch_active_slot(void);
+
 #ifdef __cplusplus
 }
 #endif

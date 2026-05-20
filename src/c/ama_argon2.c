@@ -116,17 +116,22 @@ static void store64_le(uint8_t *dst, uint64_t w)
     }
 }
 
-/* BLAKE2b mixing function G */
-#define B2B_G(a, b, c, d, x, y)   \
-    do {                           \
-        a = a + b + x;             \
-        d = rotr64(d ^ a, 32);     \
-        c = c + d;                 \
-        b = rotr64(b ^ c, 24);     \
-        a = a + b + y;             \
-        d = rotr64(d ^ a, 16);     \
-        c = c + d;                 \
-        b = rotr64(b ^ c, 63);     \
+/* BLAKE2b mixing function G.
+ * All arguments are parenthesised so the macro is safe under any
+ * legitimate caller form (callers today pass simple l-values like
+ * `v[8]`, `m[0]`, but a future caller that passes an expression
+ * would otherwise hit precedence surprises — bugprone-macro-parentheses
+ * fail-closed under the audit Issue 9 close-out). */
+#define B2B_G(a, b, c, d, x, y)         \
+    do {                                 \
+        (a) = (a) + (b) + (x);           \
+        (d) = rotr64((d) ^ (a), 32);     \
+        (c) = (c) + (d);                 \
+        (b) = rotr64((b) ^ (c), 24);     \
+        (a) = (a) + (b) + (y);           \
+        (d) = rotr64((d) ^ (a), 16);     \
+        (c) = (c) + (d);                 \
+        (b) = rotr64((b) ^ (c), 63);     \
     } while (0)
 
 typedef struct {
@@ -178,7 +183,7 @@ static void blake2b_compress(blake2b_state *S, const uint8_t block[BLAKE2B_BLOCK
 
 static void blake2b_init_param(blake2b_state *S, size_t outlen, const uint8_t *key, size_t keylen)
 {
-    memset(S, 0, sizeof(*S));
+    memset(S, 0, sizeof(*S));  // PUBLIC-DATA: S (blake2b state) — Blake2b state init to zero (RFC 7693 §3.3); state immediately filled with IV
 
     for (int i = 0; i < 8; i++) {
         S->h[i] = blake2b_IV[i];
@@ -191,7 +196,7 @@ static void blake2b_init_param(blake2b_state *S, size_t outlen, const uint8_t *k
 
     if (keylen > 0 && key != NULL) {
         uint8_t block[BLAKE2B_BLOCKBYTES];
-        memset(block, 0, sizeof(block));
+        memset(block, 0, sizeof(block));  // PUBLIC-DATA: block padding — Blake2b input-block pre-use init; immediately filled via memcpy
         memcpy(block, key, keylen);
         S->t[0] = BLAKE2B_BLOCKBYTES;
         blake2b_compress(S, block);
@@ -245,7 +250,7 @@ static void blake2b_final(blake2b_state *S, uint8_t *out)
     S->f[0] = UINT64_C(0xFFFFFFFFFFFFFFFF);
 
     /* Pad with zeros */
-    memset(S->buf + S->buflen, 0, BLAKE2B_BLOCKBYTES - S->buflen);
+    memset(S->buf + S->buflen, 0, BLAKE2B_BLOCKBYTES - S->buflen);  // PUBLIC-DATA: block tail padding — Blake2b last-block tail zero-pad; rate-block bytes [S->buflen..BLOCKBYTES) before final compress
     blake2b_compress(S, S->buf);
 
     /* Output */
@@ -384,17 +389,18 @@ static uint64_t fBlaMka(uint64_t x, uint64_t y)
     return x + y + 2 * xy;
 }
 
-/* BlaMka G mixing function (operates on 4 uint64_t values) */
-#define BLAMKA_G(a, b, c, d)         \
-    do {                              \
-        a = fBlaMka(a, b);            \
-        d = rotr64(d ^ a, 32);        \
-        c = fBlaMka(c, d);            \
-        b = rotr64(b ^ c, 24);        \
-        a = fBlaMka(a, b);            \
-        d = rotr64(d ^ a, 16);        \
-        c = fBlaMka(c, d);            \
-        b = rotr64(b ^ c, 63);        \
+/* BlaMka G mixing function (operates on 4 uint64_t values).
+ * Same macro-parenthesisation rationale as B2B_G above. */
+#define BLAMKA_G(a, b, c, d)              \
+    do {                                   \
+        (a) = fBlaMka((a), (b));           \
+        (d) = rotr64((d) ^ (a), 32);       \
+        (c) = fBlaMka((c), (d));           \
+        (b) = rotr64((b) ^ (c), 24);       \
+        (a) = fBlaMka((a), (b));           \
+        (d) = rotr64((d) ^ (a), 16);       \
+        (c) = fBlaMka((c), (d));           \
+        (b) = rotr64((b) ^ (c), 63);       \
     } while (0)
 
 /**
@@ -738,8 +744,8 @@ static ama_error_t ama_argon2id_core(
                 int data_independent = (pass == 0 && slice < 2);
 
                 if (data_independent) {
-                    memset(&zero_block, 0, sizeof(argon2_block));
-                    memset(&input_block, 0, sizeof(argon2_block));
+                    memset(&zero_block, 0, sizeof(argon2_block));  // PUBLIC-DATA: zero_block — Argon2 constant zero block passed to argon2_G as Y operand; PUBLIC by design
+                    memset(&input_block, 0, sizeof(argon2_block));  // PUBLIC-DATA: input_block — Argon2 address-generation input block, pre-use init filled by .v[0..6]= public counters (pass/lane/slice/...)
                     input_block.v[0] = pass;
                     input_block.v[1] = lane;
                     input_block.v[2] = slice;
@@ -766,13 +772,20 @@ static ama_error_t ama_argon2id_core(
                     /* Current block position */
                     uint32_t curr_offset = lane * lane_length + slice * segment_length + idx;
 
-                    /* Previous block (wraps around within lane) */
+                    /* Previous block (wraps around within lane).
+                     *
+                     * Two cases: pass-zero / slice-zero / idx-zero wraps
+                     * to the last block of this lane; every other shape
+                     * uses the immediately-preceding block in linear
+                     * order (which crosses segment boundaries naturally
+                     * since segments are contiguous within a lane).  The
+                     * `else if (idx == 0)` branch from the pre-cleanup
+                     * code merged with `else` because both computed
+                     * `curr_offset - 1` (audit Issue 9 close-out fixed
+                     * bugprone-branch-clone). */
                     uint32_t prev_offset;
                     if (idx == 0 && slice == 0) {
-                        /* Wrap to last block of this lane */
                         prev_offset = lane * lane_length + lane_length - 1;
-                    } else if (idx == 0) {
-                        prev_offset = curr_offset - 1;
                     } else {
                         prev_offset = curr_offset - 1;
                     }
@@ -861,7 +874,7 @@ AMA_API ama_error_t ama_argon2id(
 {
     return ama_argon2id_core(password, pwd_len, salt, salt_len,
                              t_cost, m_cost, parallelism,
-                             output, out_len, /*use_legacy=*/0);
+                             output, out_len, /*use_legacy_blake2b_long=*/0);
 }
 
 AMA_API ama_error_t ama_argon2id_legacy(
@@ -872,7 +885,7 @@ AMA_API ama_error_t ama_argon2id_legacy(
 {
     return ama_argon2id_core(password, pwd_len, salt, salt_len,
                              t_cost, m_cost, parallelism,
-                             output, out_len, /*use_legacy=*/1);
+                             output, out_len, /*use_legacy_blake2b_long=*/1);
 }
 
 AMA_API ama_error_t ama_argon2id_legacy_verify(
@@ -904,7 +917,7 @@ AMA_API ama_error_t ama_argon2id_legacy_verify(
 
     ama_error_t rc = ama_argon2id_core(password, pwd_len, salt, salt_len,
                                         t_cost, m_cost, parallelism,
-                                        computed, tag_len, /*use_legacy=*/1);
+                                        computed, tag_len, /*use_legacy_blake2b_long=*/1);
     if (rc != AMA_SUCCESS) {
         ama_secure_memzero(computed, tag_len);
         free(computed);

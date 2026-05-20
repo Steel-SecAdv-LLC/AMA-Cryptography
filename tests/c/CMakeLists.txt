@@ -20,6 +20,50 @@ add_ama_test(test_aes_gcm_scalar_kat test_aes_gcm_scalar_kat.c)
 add_ama_test(test_aes_gcm_backend_introspect test_aes_gcm_backend_introspect.c)
 set_tests_properties(test_aes_gcm_backend_introspect PROPERTIES SKIP_RETURN_CODE 77)
 
+# Audit Issue 3 close-out (2026-05): per-slot AMA_DISPATCH_ONLY contract
+# test.  Single executable, one CTest case per known slot.  Each case
+# sets AMA_DISPATCH_ONLY in the test's ENVIRONMENT and asserts the
+# dispatcher honored it via ama_dispatch_active_slot().  CTest skip
+# code 77 surfaces unsupported-on-this-host cells as Skipped rather
+# than passing silently (mirrors test_aes_gcm_backend_introspect).
+#
+# The slot list MUST match KNOWN_SLOTS[] in
+# tests/c/test_dispatch_only_env.c and the per-slot dispatch
+# resolution branches in src/c/dispatch/ama_dispatch.c —
+# apply_dispatch_only().  Both are tied together by name, so any
+# inventory drift is caught either at build time (linker complains
+# of a missing extern) or at the first CTest run (the test sees
+# an unknown slot and fails).
+add_executable(test_dispatch_only_env test_dispatch_only_env.c)
+target_link_libraries(test_dispatch_only_env ama_cryptography_test)
+
+# `x25519-avx2` requires an additional opt-in env var
+# (AMA_DISPATCH_USE_X25519_AVX2=1) to flip the dispatcher's opt-in
+# kernel on; without it, saved.x25519_x4 is NULL and the slot reads
+# as unsupported.  Handled inline below.
+foreach(slot
+    sha3-avx512x4
+    kyber-ntt-avx2
+    dilithium-ntt-avx2
+    chacha20-avx2x8
+    argon2-g-avx2
+    aes-gcm-neon
+    chacha20-neon
+    sha3-neon
+    kyber-sve2
+    sha3-sve2)
+    add_test(NAME test_dispatch_only_${slot}
+             COMMAND test_dispatch_only_env)
+    set_tests_properties(test_dispatch_only_${slot} PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "AMA_DISPATCH_ONLY=${slot};AMA_DISPATCH_NO_AUTOTUNE=1")
+endforeach()
+add_test(NAME test_dispatch_only_x25519-avx2
+         COMMAND test_dispatch_only_env)
+set_tests_properties(test_dispatch_only_x25519-avx2 PROPERTIES
+    SKIP_RETURN_CODE 77
+    ENVIRONMENT "AMA_DISPATCH_ONLY=x25519-avx2;AMA_DISPATCH_USE_X25519_AVX2=1;AMA_DISPATCH_NO_AUTOTUNE=1")
+
 # Cryptographic primitive tests
 add_ama_test(test_sha3 test_sha3.c)
 add_ama_test(test_sha3_512_stream test_sha3_512_stream.c)
