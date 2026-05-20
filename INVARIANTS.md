@@ -292,6 +292,36 @@ detection of secret-dependent variable-time constructs.  The project's
 `CONSTANT_TIME_VERIFICATION.md` is the authoritative artifact for
 verification methodology.
 
+### INVARIANT-12 Addendum — Per-Slot SIMD Constant-Time Verification
+
+The nightly SIMD dudect sweep in `.github/workflows/dudect.yml`
+(`dudect-simd-sweep`) **must** measure each dispatch-table-routable
+SIMD slot in isolation via `AMA_DISPATCH_ONLY=<slot>`.  A t-value
+regression on any slot is a hard fail, not a "noise" excuse — the
+per-slot isolation is exactly what makes the t-value attributable
+to a single SIMD kernel rather than to the union of every SIMD
+path that happens to be on the host.
+
+The slot inventory (also enumerated in `include/ama_dispatch.h` and
+in CHANGELOG `[Unreleased]`) is the authoritative list.  Adding a
+new dispatchable SIMD kernel **must** also:
+
+- Extend `apply_dispatch_only()` in
+  `src/c/dispatch/ama_dispatch.c` with a recognition branch for
+  the new slot.
+- Extend `KNOWN_SLOTS[]` in
+  `tests/c/test_dispatch_only_env.c`.
+- Add the slot to the dudect-simd-sweep matrix in
+  `.github/workflows/dudect.yml`.
+- Document the slot in this list and in the
+  `ama_dispatch_active_slot()` block-comment in
+  `include/ama_dispatch.h`.
+
+Skipping any of the four bullets above silently downgrades the
+constant-time gate for the new kernel from "explicitly measured"
+to "assumed to ride the all-default-dispatch lane" — exactly the
+ambiguity the close-out exists to remove.
+
 ## INVARIANT-13 — No Unjustified Static-Analysis Suppressions
 
 Use of `# noqa`, `# nosec`, `# pylint: disable`, `# type: ignore`, or any

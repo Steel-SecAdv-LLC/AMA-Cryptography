@@ -66,12 +66,40 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   drift between the committed SBOM and a fresh render.  Replaces the
   previous hardcoded heredoc that had stale `"version": "3.0.0"`
   baked across all 11 components.
-- **Nightly SIMD dudect sweep (audit Issue 3).**  New
+- **Nightly per-slot SIMD dudect sweep (audit Issue 3).**  New
   `dudect-simd-sweep` matrix job in `.github/workflows/dudect.yml`
-  runs every dispatch-table-routable kernel on x86-64 + ARM64 hosts
-  on a nightly cron, including both the default dispatch and the
-  AVX2 X25519 4-way opt-in.  Per-PR latency unchanged: the existing
-  jobs still gate on source touched.
+  runs every dispatch-table-routable kernel on x86-64 + AArch64
+  hosts on a nightly cron.  The audit Issue 3 close-out promotes
+  this from a 2-cell slot matrix (`all-default-dispatch`,
+  `x25519-avx2`) to per-slot isolation across the full inventory:
+  `sha3-avx512x4`, `kyber-ntt-avx2`, `dilithium-ntt-avx2`,
+  `chacha20-avx2x8`, `argon2-g-avx2`, `aes-gcm-neon`,
+  `chacha20-neon`, `sha3-neon`, `kyber-sve2`, `sha3-sve2`,
+  `x25519-avx2`.  Each cell sets `AMA_DISPATCH_ONLY=<slot>` so the
+  resulting t-value is attributable to one SIMD kernel rather than
+  to whichever AVX2 / NEON paths happened to fire under the same
+  dispatch invocation.  Architecture-mismatched cells are excluded
+  at the matrix level (NEON / SVE2 on x86-64; AVX-* on AArch64).
+  Cells whose CPU feature is absent at runtime self-skip via CTest
+  exit 77.  Per-PR latency unchanged.
+- **`AMA_DISPATCH_ONLY` env var + `ama_dispatch_active_slot()` API
+  (audit Issue 3 close-out).**  New env-var contract in
+  `src/c/dispatch/ama_dispatch.c::apply_dispatch_only()`: set
+  `AMA_DISPATCH_ONLY=<slot>` before any `ama_dispatch_init()` call
+  and the dispatcher will leave every kernel pointer at scalar
+  fallback EXCEPT the named one (active only if the host supports
+  it; an unsupported request emits a clear stderr error and leaves
+  the dispatch table fully scalar).  Recognised slot names match
+  the dudect inventory above verbatim.  `ama_dispatch_active_slot()`
+  (declared in `include/ama_dispatch.h`) reports the resolved slot
+  label — `"all-default-dispatch"` when the env var is unset or
+  the host could not satisfy the request.  Mirrors the
+  `ama_aes_gcm_active_backend()` shape introduced in PR #322.
+  Thread-safe-init contract (INVARIANT-15) is preserved: the
+  filtering runs inside the same `pthread_once` /
+  `InitOnceExecuteOnce` body as the rest of dispatch init.
+  Covered by `tests/c/test_dispatch_only_env.c` (one CTest case
+  per slot, `SKIP_RETURN_CODE 77` on unsupported hosts).
 - **Reproducible-build verification (audit Issue 10 / INVARIANT-8).**
   New `reproducible-build` job in `.github/workflows/static-analysis.yml`
   builds the wheel twice from identical inputs (pinned
