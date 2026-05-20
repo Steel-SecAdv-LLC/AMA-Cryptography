@@ -219,8 +219,19 @@ static int32_t dil_freeze(int32_t a) {
  */
 /* Scalar reference exposed so the dispatch auto-tune can microbench
  * the SIMD NTT slots against a single source of truth — `dil_ntt_cached`
- * / `dil_invntt_cached` below delegate to the same helpers. */
+ * / `dil_invntt_cached` below delegate to the same helpers.
+ *
+ * Hidden visibility — see the matching block in `src/c/ama_kyber.c`
+ * (Copilot review #326): these symbols are internal contract surface
+ * between this TU and `src/c/dispatch/ama_dispatch.c` only and must
+ * not expand the libama_cryptography.so user-observable ABI. */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((visibility("hidden")))
+#endif
 void ama_dilithium_ntt_generic_ref(int32_t poly[DIL_N], const int32_t zetas_tab[DIL_N]);
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((visibility("hidden")))
+#endif
 void ama_dilithium_invntt_generic_ref(int32_t poly[DIL_N], const int32_t zetas_tab[DIL_N]);
 
 static void dil_ntt_scalar(int32_t a[DIL_N], const int32_t zetas_tab[DIL_N]) {
@@ -263,10 +274,16 @@ static void dil_invntt_scalar(int32_t a[DIL_N], const int32_t zetas_tab[DIL_N]) 
     }
 }
 
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((visibility("hidden")))
+#endif
 void ama_dilithium_ntt_generic_ref(int32_t poly[DIL_N], const int32_t zetas_tab[DIL_N]) {
     dil_ntt_scalar(poly, zetas_tab);
 }
 
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((visibility("hidden")))
+#endif
 void ama_dilithium_invntt_generic_ref(int32_t poly[DIL_N], const int32_t zetas_tab[DIL_N]) {
     dil_invntt_scalar(poly, zetas_tab);
 }

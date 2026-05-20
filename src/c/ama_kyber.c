@@ -1891,8 +1891,25 @@ static const int16_t zetas[128] = {
 
 /* Scalar reference exposed so the dispatch auto-tune can microbench
  * the SIMD NTT slots against a single source of truth — `poly_ntt` /
- * `poly_invntt` below delegate to the same helpers. */
+ * `poly_invntt` below delegate to the same helpers.
+ *
+ * Hidden visibility — these symbols are internal contract surface
+ * between this TU and `src/c/dispatch/ama_dispatch.c` only; they
+ * are NOT public ABI.  Without the visibility attribute, the
+ * default on every non-MSVC build is "exported from libama_cryptography.so"
+ * (Copilot review #326), which would expand the user-observable
+ * symbol surface and lock the project into back-compat for an
+ * internal helper.  MSVC has no equivalent for static-archive
+ * symbols at this scope; the surface there is governed by the
+ * separate `__declspec(dllexport)`-driven AMA_API macro which is
+ * deliberately not applied here. */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((visibility("hidden")))
+#endif
 void ama_kyber_ntt_generic_ref(int16_t coeffs[256], const int16_t zetas_tab[128]);
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((visibility("hidden")))
+#endif
 void ama_kyber_invntt_generic_ref(int16_t coeffs[256], const int16_t zetas_tab[128]);
 
 static void kyber_ntt_scalar(int16_t coeffs[256], const int16_t zetas_tab[128]) {
@@ -1935,10 +1952,16 @@ static void kyber_invntt_scalar(int16_t coeffs[256], const int16_t zetas_tab[128
     }
 }
 
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((visibility("hidden")))
+#endif
 void ama_kyber_ntt_generic_ref(int16_t coeffs[256], const int16_t zetas_tab[128]) {
     kyber_ntt_scalar(coeffs, zetas_tab);
 }
 
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((visibility("hidden")))
+#endif
 void ama_kyber_invntt_generic_ref(int16_t coeffs[256], const int16_t zetas_tab[128]) {
     kyber_invntt_scalar(coeffs, zetas_tab);
 }

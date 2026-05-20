@@ -822,6 +822,65 @@ static int dispatch_cache_env_is_safe(void) {
 #endif
 }
 
+/* Validate an opt-in AMA_DISPATCH_CACHE_FILE path string.  Returns
+ * `path` unchanged on success, NULL on rejection — the caller treats
+ * NULL the same as "env var unset".  Layered sanitization:
+ *
+ *   1. NUL check + length bounds.  `getenv` returns a NUL-terminated
+ *      string with no embedded NULs, but the contract is asserted
+ *      explicitly for static analysers (CodeQL flow tracker) and to
+ *      reject empty/oversized values cheaply.
+ *
+ *   2. Path traversal rejection.  Any `..` component anywhere in the
+ *      path is rejected.  Together with the `dispatch_cache_env_is_safe`
+ *      gate above this closes the "env-var-controlled file overwrite"
+ *      escalation primitive that CodeQL flags as
+ *      "Uncontrolled data used in path expression" (#535 / #537):
+ *      a privileged process never sees the env var, and an
+ *      unprivileged process can only write into directories its uid
+ *      already has write access to without traversal escapes.
+ *
+ *   3. Control-character rejection.  Newlines / CR in the path would
+ *      corrupt the verbose-log line format and could be abused to
+ *      inject log entries; reject them up front.
+ *
+ * This validator is recognised by CodeQL's path-injection sanitizer
+ * model when it sees the explicit `strstr(p, "..")` rejection — the
+ * tainted flow from `getenv` is terminated at this function.  The
+ * return value is the SAME pointer the caller already had (we never
+ * mutate `getenv`'s storage), so call sites pass the sanitized
+ * pointer to `fopen` / `open` directly. */
+static const char *dispatch_cache_path_sanitize(const char *path) {
+    if (!path) return NULL;
+
+    size_t len = 0;
+    /* Bounded strlen — refuse anything longer than 4000 bytes (the
+     * reserve in dispatch_cache_save's tmppath buffer assumes
+     * pathlen + sizeof(".tmp.<20-digit-pid>") < 4096).  Walks the
+     * string ourselves rather than calling strlen() so a missing-NUL
+     * pathological input (impossible from getenv but defensive) is
+     * caught before it overruns. */
+    while (len < 4001 && path[len] != '\0') {
+        unsigned char c = (unsigned char)path[len];
+        /* Reject ASCII control chars (NUL was the loop termination
+         * above; ranges 0x01..0x1F + 0x7F).  Printable bytes (0x20..
+         * 0x7E) and high-bit bytes (valid for UTF-8 filenames) pass. */
+        if (c < 0x20 || c == 0x7F) return NULL;
+        len++;
+    }
+    if (len == 0 || len > 4000) return NULL;
+
+    /* Path-traversal rejection: any `..` segment anywhere.  Catches
+     * "../../etc/shadow", "/var/../etc/shadow", and the trailing
+     * "/foo/.." form.  We reject the literal substring outright;
+     * filenames legitimately containing `..` as part of their name
+     * (e.g., `my..cache`) are an acceptable casualty for an opt-in
+     * env-controlled feature. */
+    if (strstr(path, "..") != NULL) return NULL;
+
+    return path;
+}
+
 static void dispatch_cache_fingerprint(char *out, size_t outlen) {
     int avx2 = 0, avx512f = 0, avx512kc = 0, aesni = 0, pclmul = 0;
     int vaes = 0, arm_aes = 0, arm_pmull = 0;
@@ -921,9 +980,17 @@ static int dispatch_cache_load(const char *path, const char *fingerprint,
         }
         /* Timing fields populate the verdict struct so a verbose
          * cache-hit log reports the cached ns readings rather than
-         * misleading zeros (Copilot review #325).  strtoll handles
-         * the int64 range cleanly; out-of-range parses fall back to
-         * 0 which the surrounding code treats as "no measurement". */
+         * misleading zeros (Copilot review #325).  strtoll saturates
+         * to LLONG_MIN/LLONG_MAX on overflow and returns 0 only when
+         * no digits were parsed (Copilot review #326 follow-up — the
+         * earlier comment incorrectly claimed "out-of-range falls
+         * back to 0").  Both behaviours are safe for our consumer:
+         * a saturated reading is treated as a "very large ns" which
+         * compares correctly under bench_slot_regressed's >10%
+         * threshold, and a 0 (no-digits) is treated as "no
+         * measurement" by the verbose log.  The surrounding code
+         * never trusts these timings for security decisions — they
+         * are diagnostic-only. */
         else if (strcmp(key, "keccak_simd_ns") == 0) {
             tmp.keccak_simd_ns = (int64_t)strtoll(val, NULL, 10);
         } else if (strcmp(key, "keccak_generic_ns") == 0) {
@@ -1537,17 +1604,33 @@ static void dispatch_init_internal(void) {
 
     /* Suppress AMA_DISPATCH_CACHE_FILE in setuid/setgid (or otherwise
      * "tainted") processes — environment-controlled file writes are a
-     * classic privilege-escalation primitive (Copilot review #325).
-     * A privileged process must not be steerable by env into reading
-     * or writing an attacker-supplied path. */
+     * classic privilege-escalation primitive (Copilot review #325 /
+     * CodeQL #535 / #537).  A privileged process must not be
+     * steerable by env into reading or writing an attacker-supplied
+     * path; an unprivileged process must not be steered via path
+     * traversal or control-character injection.  Two sanitizers
+     * compose:
+     *   1. dispatch_cache_env_is_safe() rejects tainted-exec contexts
+     *      entirely (issetugid / AT_SECURE / uid-gid compare).
+     *   2. dispatch_cache_path_sanitize() rejects empty / oversized /
+     *      ASCII-control / `..`-containing path strings, terminating
+     *      the tainted-data flow that CodeQL tracks from getenv to
+     *      open/fopen.
+     * Either rejection routes the same code path (`cache_path == NULL`),
+     * which the surrounding logic treats as "env var unset". */
     const char *cache_path_env = getenv("AMA_DISPATCH_CACHE_FILE");
-    const char *cache_path = (cache_path_env && cache_path_env[0]
-                              && dispatch_cache_env_is_safe())
-                             ? cache_path_env : NULL;
+    int env_safe = (cache_path_env && cache_path_env[0]
+                    && dispatch_cache_env_is_safe());
+    const char *cache_path = env_safe
+                             ? dispatch_cache_path_sanitize(cache_path_env)
+                             : NULL;
     if (cache_path_env && cache_path_env[0] && !cache_path && dispatch_verbose()) {
         fprintf(stderr,
             "[AMA Dispatch] Auto-tune: AMA_DISPATCH_CACHE_FILE ignored — "
-            "process is setuid/setgid or running under a secure-exec context\n");
+            "%s\n",
+            env_safe
+                ? "path rejected by sanitizer (empty/oversized/control char/'..' segment)"
+                : "process is setuid/setgid or running under a secure-exec context");
     }
 
     char fingerprint[512];

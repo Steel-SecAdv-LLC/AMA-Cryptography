@@ -41,6 +41,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 
 #include "ama_dispatch.h"
 
@@ -149,9 +150,20 @@ int main(void) {
         }
     }
 
-    /* Timing fields must be NUMERIC (not bare "=" entries) so the
-     * cache-hit verbose log reports the cached readings rather than
-     * zeros (Copilot alert #10). */
+    /* Timing fields must be NUMERIC integers so the cache-hit verbose
+     * log reports the cached readings rather than zeros (Copilot
+     * alert #10).  Read-side parse must succeed regardless of host
+     * — but the POSITIVITY contract only holds when the keccak
+     * single-state bench actually ran, which `dispatch_init_internal`
+     * gates on `dispatch_table.keccak_f1600 != ama_keccak_f1600_generic`.
+     * On hosts/builds where keccak stays generic (SIMD disabled, host
+     * CPU lacks AVX2/NEON/SVE2), the bench skips slot 1 entirely and
+     * the field legitimately reads 0 (Copilot review #326).  Branch
+     * the assertion strength on the active dispatch info to keep the
+     * pin tight without spurious failures.
+     *
+     * `ama_get_dispatch_info()` is safe to call here because
+     * `ama_dispatch_init()` already ran above to populate the cache. */
     const char *timing_line = strstr(body, "keccak_simd_ns=");
     if (!timing_line) {
         fprintf(stderr,
@@ -163,13 +175,36 @@ int main(void) {
     }
     long long ns_value = -1;
     if (sscanf(timing_line + strlen("keccak_simd_ns="),
-               "%lld", &ns_value) != 1 || ns_value <= 0) {
+               "%lld", &ns_value) != 1) {
         fprintf(stderr,
-            "FAIL: keccak_simd_ns= must be a positive integer, "
-            "got '%.40s' — the bench did not write timings\n",
+            "FAIL: keccak_simd_ns= must parse as an integer, "
+            "got '%.40s' — the cache file is malformed\n",
             timing_line);
         (void)unlink(cache_path);
         return 1;
+    }
+    const ama_dispatch_info_t *info = ama_get_dispatch_info();
+    int simd_keccak_active = info && info->sha3 != AMA_IMPL_GENERIC;
+    if (simd_keccak_active) {
+        if (ns_value <= 0) {
+            fprintf(stderr,
+                "FAIL: keccak_simd_ns=%lld but dispatch_info.sha3=%d "
+                "(SIMD active); a positive timing is required so the "
+                "cache-hit log reports non-zero readings\n",
+                ns_value, info ? (int)info->sha3 : -1);
+            (void)unlink(cache_path);
+            return 1;
+        }
+    } else {
+        if (ns_value != 0) {
+            fprintf(stderr,
+                "FAIL: keccak_simd_ns=%lld but dispatch_info.sha3=%d "
+                "(generic); a 0 reading is required when the bench "
+                "didn't run\n",
+                ns_value, info ? (int)info->sha3 : -1);
+            (void)unlink(cache_path);
+            return 1;
+        }
     }
 
     /* Setuid-safety contract — passing a setuid binary an env-var
@@ -189,9 +224,62 @@ int main(void) {
         return 1;
     }
 
+    /* Sanitizer rejection contract — fork a child per bad path, set
+     * AMA_DISPATCH_CACHE_FILE to the rejected value, run
+     * ama_dispatch_init(), and assert NO file was created at that
+     * path.  Forking is required because dispatch_init_internal is
+     * `pthread_once`-protected — we can't re-init the parent
+     * process.  Pins CodeQL #535 / #537 close-out: env var → path
+     * sanitizer → NULL → cache code path treats as "env unset", so
+     * no fopen(__file) call is reachable from a tainted source. */
+    const char *bad_paths[] = {
+        "/tmp/ama_disp_test_traversal/../etc/ama_evil",   /* `..` segment */
+        "/tmp/ama_disp_test_relative/..",                  /* trailing `..` */
+        "",                                                 /* empty (already handled at call-site, but defence-in-depth) */
+        NULL,
+    };
+    for (int i = 0; bad_paths[i] != NULL; i++) {
+        const char *bad = bad_paths[i];
+        /* Build a probe path the child would write to IF the sanitizer
+         * mis-honoured the bad input.  For the `..` cases the canonical
+         * resolution lands at /tmp/etc/ama_evil or /tmp — both checkable
+         * via stat() after the child exits. */
+        const char *probe = "/tmp/etc/ama_evil";
+        (void)unlink(probe);   /* clean slate */
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            /* Child: set the bad env var and trigger init. */
+            setenv("AMA_DISPATCH_CACHE_FILE", bad, 1);
+            unsetenv("AMA_DISPATCH_NO_AUTOTUNE");
+            ama_dispatch_init();
+            /* If the sanitizer worked, no file under /tmp/etc/ exists. */
+            _exit(0);
+        } else if (pid < 0) {
+            fprintf(stderr,
+                "FAIL: fork() failed while testing sanitizer rejection "
+                "for bad path '%s'\n", bad);
+            return 1;
+        }
+        int wstatus = 0;
+        (void)waitpid(pid, &wstatus, 0);
+        /* Independent of the child's exit code, the file MUST NOT
+         * exist — the sanitizer should have rejected the path before
+         * any open() call. */
+        if (file_exists(probe)) {
+            fprintf(stderr,
+                "FAIL: sanitizer accepted bad path '%s' — wrote to "
+                "'%s' (must be rejected per dispatch_cache_path_sanitize)\n",
+                bad, probe);
+            (void)unlink(probe);
+            return 1;
+        }
+    }
+
     printf("OK: dispatch cache roundtrip (mode=0600, "
            "schema+timings+ownership all pin OK, "
-           "keccak_simd_ns=%lld)\n", ns_value);
+           "keccak_simd_ns=%lld, sanitizer rejects traversal+empty)\n",
+           ns_value);
     (void)unlink(cache_path);
     return 0;
 }

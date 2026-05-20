@@ -170,10 +170,65 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   schema (with verbatim key-name assertions matching
   `include/ama_dispatch.h` v3.2.0 and the release-line
   documentation in this file), (3) the timing-fields-on-load
-  contract that the verbose cache-hit log depends on, and
-  (4) cache-file ownership equal to the effective uid.  Returns
-  77 (Skipped) on MSVC builds where the cache code path is
-  compiled out.
+  contract that the verbose cache-hit log depends on, (4)
+  cache-file ownership equal to the effective uid, and
+  (5) sanitizer rejection of path-traversal / empty / control-
+  char inputs (fork-per-bad-path because `dispatch_init_internal`
+  is `pthread_once`-protected — the parent process can't re-init).
+  Returns 77 (Skipped) on MSVC builds where the cache code path
+  is compiled out.
+
+#### PR #326 follow-up corrections (Copilot review + CodeQL re-scan)
+- **CodeQL #535 / #537 path-injection close-out.**  New
+  `dispatch_cache_path_sanitize()` rejects empty,
+  oversized (>4000 bytes), ASCII-control-containing, or
+  `..`-segment paths before `AMA_DISPATCH_CACHE_FILE` reaches
+  any file-access primitive.  The explicit `strstr(path, "..")`
+  rejection is recognised by CodeQL's path-traversal sanitizer
+  model and terminates the tainted-data flow from `getenv` —
+  composes with the existing `dispatch_cache_env_is_safe()`
+  setuid / setgid gate for layered defence.  Verbose log
+  distinguishes the two rejection reasons.
+- **Legacy dudect harness link failure (`tools/constant_time/Makefile`).**
+  `dudect_crypto` linked `src/c/dispatch/ama_dispatch.c` (with
+  the new v3.2.0 NTT auto-tune block) but not `ama_kyber.c` /
+  `ama_dilithium.c`, so four `ama_*_generic_ref` symbols were
+  undefined.  Added the two TUs plus `ama_platform_rand.c`
+  (transitive dependency) to `CRYPTO_SRCS`.  Same Makefile drives
+  the `Constant-Time Verification (Smoke Test)` job in
+  `.github/workflows/ci.yml`, so the fix closes both failing CI
+  lanes simultaneously.  Best-effort `nice` probe also applied to
+  the ci.yml step to suppress the `nice: cannot set niceness`
+  warning on GHA hosted runners (consistent with all five
+  `dudect.yml` jobs).
+- **`ama_*_generic_ref` hidden visibility (Copilot review #326).**
+  `ama_kyber_ntt_generic_ref` / `ama_kyber_invntt_generic_ref` /
+  `ama_dilithium_ntt_generic_ref` /
+  `ama_dilithium_invntt_generic_ref` are now declared and
+  defined with `__attribute__((visibility("hidden")))` under
+  GCC/Clang so the shared library does not export them.  These
+  are an internal contract surface between the kyber / dilithium
+  TUs and `src/c/dispatch/ama_dispatch.c`'s auto-tune block;
+  exporting them would silently expand the user-observable ABI.
+  Static linking (legacy dudect harnesses, test binaries)
+  continues to see the symbols normally.
+- **`strtoll` comment correction (Copilot review #326).**
+  Updated the inline comment in `dispatch_cache_load()` to
+  reflect `strtoll`'s actual overflow behaviour (saturate to
+  LLONG_MIN/LLONG_MAX + set errno) rather than the incorrect
+  "falls back to 0" claim.  No code change — the consumer is
+  diagnostic-only and behaves correctly on either reading.
+- **`test_dispatch_cache_file.c` SIMD-aware timing assertion
+  (Copilot review #326).**  The positivity check on
+  `keccak_simd_ns` was unconditional, but
+  `dispatch_init_internal` only runs the keccak microbench when
+  `dispatch_table.keccak_f1600 != ama_keccak_f1600_generic`.
+  On hosts/builds where keccak stays generic (SIMD disabled,
+  CPU lacks AVX2/NEON/SVE2) the field legitimately reads 0.
+  Assertion now branches on
+  `ama_get_dispatch_info()->sha3 != AMA_IMPL_GENERIC`: requires
+  a positive reading when SIMD is active, requires exactly 0
+  otherwise.  Tight in both directions, no spurious failures.
 
 ### Changed
 - **`tests/c/test_dudect.c::test_consttime_memcmp` — symmetric

@@ -515,23 +515,29 @@ jobs:
         make all
         # Run smoke tests with 50K iterations (faster for CI).
         #
-        # Pin to a single core (`taskset -c 0`) and elevate priority
-        # (`nice -n -10`) to suppress CPU-contention noise on shared
-        # GitHub-hosted runners. Without this, the dudect t-statistic
-        # at 50K iterations can drift past its leakage threshold from
-        # background noise alone — producing a CI false-positive on a
-        # tree that has not regressed (the failure mode observed on
-        # commit 8b8fe23, where this PR touched no C source). Mirrors
-        # the pattern dudect.yml::dudect-legacy-harnesses already uses
-        # for the identical binaries at the identical iteration count.
-        # The full dudect.yml gate (path-filtered to src/c/** changes)
-        # remains the authoritative constant-time check; this smoke
-        # test exists as a fast pre-gate for every PR regardless of
-        # path filter.
+        # Pin to a single core (`taskset -c 0`) and best-effort
+        # elevate priority (`nice -n -10`) to suppress CPU-contention
+        # noise on shared GitHub-hosted runners. Without this, the
+        # dudect t-statistic at 50K iterations can drift past its
+        # leakage threshold from background noise alone.
+        #
+        # GHA hosted runners lack CAP_SYS_NICE so the negative-nice
+        # request prints "Permission denied" but still execs the
+        # binary; probe once up front and drop the prefix when the
+        # runner refuses (PR #326), so the log stays clean.  The
+        # v3.2.0 dudect setup-symmetry harness fixes made the lanes
+        # noise-tolerant enough that taskset-only pinning is the
+        # load-bearing CI gate; the nice prefix is opportunistic on
+        # privileged self-hosted runners.  The full dudect.yml gate
+        # (path-filtered to src/c/** changes) remains the
+        # authoritative constant-time check; this smoke test exists
+        # as a fast pre-gate for every PR regardless of path filter.
+        NICE_PREFIX=""
+        if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
         echo "=== Utility function timing analysis ==="
-        taskset -c 0 nice -n -10 ./dudect_harness 50000
+        taskset -c 0 $NICE_PREFIX ./dudect_harness 50000
         echo "=== Crypto primitive timing analysis ==="
-        taskset -c 0 nice -n -10 ./dudect_crypto 50000
+        taskset -c 0 $NICE_PREFIX ./dudect_crypto 50000
 
     - name: Upload timing analysis results
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
