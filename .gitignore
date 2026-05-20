@@ -247,6 +247,7 @@ build-fuzz-ct/
 build-asan/
 build-scan/
 build-strict/
+build-tidy/
 build-verify/
 build-verify2/
 build-rollback/
