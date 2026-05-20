@@ -516,17 +516,21 @@ jobs:
       # PINNED manylinux_2_28 image (audit Issue 10 close-out).  This
       # is the toolchain anchor that makes native-artefact byte-equality
       # achievable on a public CI runner.  The tag is the date-stamped
-      # form (NOT `:latest`) so this gate stays stable across the
-      # manylinux project's rolling updates.
+      # form `YYYY.MM.DD-N` (NOT `:latest`, NOT the floating
+      # `:manylinux_2_28` rolling tag) so this gate stays stable across
+      # the manylinux project's rolling updates.  When a tag bump is
+      # needed (e.g., the pinned tag is yanked from the registry), do
+      # it as its own commit so the reproducible-build delta is
+      # auditable in isolation.  Promoting to a `@sha256:` digest pin
+      # is a follow-up — INVARIANT-8 addendum.
       #
-      # TODO(verify-pin): cross-check this tag against the latest
-      # stable manylinux_2_28_x86_64 release at
-      # https://quay.io/repository/pypa/manylinux_2_28_x86_64 when
-      # this PR enters review.  A tag bump must be its own commit so
-      # the reproducible-build delta is auditable.  Ideally we promote
-      # this to a `@sha256:` digest pin in a follow-up — INVARIANT-8
-      # addendum.
-      image: quay.io/pypa/manylinux_2_28_x86_64:2026-04-21-f5ec593
+      # Tag verified against
+      # https://quay.io/api/v1/repository/pypa/manylinux_2_28_x86_64/tag/
+      # at PR #323 ready-for-review time (2026-05-20).  The previous
+      # fabricated tag `:2026-04-21-f5ec593` did not exist and the
+      # docker pull failed with "manifest not found" — Copilot review
+      # #323 follow-up (CI failure on first run).
+      image: quay.io/pypa/manylinux_2_28_x86_64:2026.05.17-1
     timeout-minutes: 30
     env:
       # AR_FLAGS applies to every `ar` invocation inside this job.

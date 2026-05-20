@@ -195,10 +195,19 @@ container with the following invariants on both passes:
 - `AR_FLAGS=Drcs` so any `.a` archive members emit no timestamps or
   UID/GID.
 
-The container image is pinned to a date-stamped tag (NOT `:latest`) so
-the gate stays stable across the manylinux project's rolling updates.
-A tag bump is auditable: it must be its own commit so the
-reproducible-build delta is visible in the diff.
+The container image is pinned to a date-stamped tag in the manylinux
+project's `YYYY.MM.DD-N` format (NOT `:latest`, NOT the floating
+`:manylinux_2_28` rolling tag) so the gate stays stable across the
+project's rolling updates.  A tag bump is auditable: it must be its
+own commit so the reproducible-build delta is visible in the diff.
+The tag MUST be verified against
+`https://quay.io/api/v1/repository/pypa/manylinux_2_28_x86_64/tag/`
+before being committed — a fabricated date will fail the docker pull
+with "manifest not found" on the first CI run and block the strict
+gate.  Promoting the pin from a date-stamped tag to a `@sha256:`
+digest pin is the natural follow-up (the digest does not float at
+all, where the date-stamped tag could theoretically be force-pushed
+upstream).
 
 The signature artefact `ama_cryptography/_integrity_signature.py` is
 explicitly exempt — INVARIANT-17 keeps the per-build ephemeral
