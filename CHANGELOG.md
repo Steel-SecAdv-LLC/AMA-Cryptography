@@ -75,10 +75,18 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 - **Reproducible-build verification (audit Issue 10 / INVARIANT-8).**
   New `reproducible-build` job in `.github/workflows/static-analysis.yml`
   builds the wheel twice from identical inputs (pinned
-  `SOURCE_DATE_EPOCH`, `PYTHONHASHSEED=0`, `PYTHONDONTWRITEBYTECODE=1`)
-  and asserts byte-equality of the bundled
-  `_integrity_signature.py::INTEGRITY_DIGEST_HEX` and of the extracted
-  wheel content (excluding the regenerated RECORD manifest).
+  `SOURCE_DATE_EPOCH`, `PYTHONHASHSEED=0`, `PYTHONDONTWRITEBYTECODE=1`,
+  `AR_FLAGS=Drcs`, `CFLAGS+=-fdebug-prefix-map=$PWD=.`,
+  `LDFLAGS+=-Wl,--build-id=sha1`) inside a pinned `manylinux_2_28`
+  container, and asserts byte-equality of:
+    - the bundled
+      `_integrity_signature.py::INTEGRITY_DIGEST_HEX` (STRICT);
+    - every `.py` file inside the wheel except the per-build
+      ephemeral `_integrity_signature.py` (STRICT — INVARIANT-17
+      explicitly keeps the signature file non-byte-stable);
+    - every native artefact inside the wheel (`.so`, `.pyd`,
+      Cython-built kernels) — STRICT, promoted from ADVISORY in
+      the audit Issue 10 close-out.
 - **Extended sanitizer + clang-tidy matrix (audit Issue 9).**  New
   `memory-sanitizer`, `thread-sanitizer`, `valgrind-memcheck`, and
   `clang-tidy` jobs in `.github/workflows/static-analysis.yml`.  MSan
@@ -113,6 +121,15 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   MSan / TSan / Valgrind / reproducible-build from up-to-7-days to
   up-to-24-hours at a marginal compute cost.  This is a defensive
   knob, not a security contract — no INVARIANT addendum.
+- **Reproducible-build native-artefact gate promoted ADVISORY →
+  STRICT (audit Issue 10 close-out / INVARIANT-8).**  The
+  reproducible-build job's
+  "Diff native artefacts" step lost its `continue-on-error: true` and
+  trailing `|| true`; a divergence now fails the workflow.  Achieved
+  by pinning a date-stamped manylinux_2_28 container (toolchain
+  anchor) and adding `-fdebug-prefix-map`, `-Wl,--build-id=sha1`, and
+  `AR_FLAGS=Drcs` to both build passes.  Closes the last advisory
+  surface from PR #322.
 - **Bandit + pip-audit fail-closed (audit Issue 8).**  Both
   `.github/workflows/security.yml::security-audit` and
   `.github/workflows/ci-build-test.yml::security` now run

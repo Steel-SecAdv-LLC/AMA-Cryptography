@@ -176,6 +176,37 @@ does not meet the minimum version. To build on an unverified toolchain (e.g.,
 for development or CI on older hosts), pass `-DAMA_ALLOW_UNVERIFIED_TOOLCHAIN=ON`
 to downgrade to a `WARNING`.
 
+### INVARIANT-8 Addendum — Native-Artefact Byte Equality
+
+The release wheel's native artefacts (`libama_cryptography.so` / `.pyd`
+and Cython-built kernel `.so` files) **must** be byte-identical across
+two independent rebuilds from the same source tree.  This is enforced
+by the `reproducible-build` job in `.github/workflows/static-analysis.yml`,
+which builds the wheel twice inside a date-pinned `manylinux_2_28`
+container with the following invariants on both passes:
+
+- `SOURCE_DATE_EPOCH` pinned to a fixed reference epoch.
+- `PYTHONHASHSEED=0` for deterministic dict iteration.
+- `PYTHONDONTWRITEBYTECODE=1` (no `.pyc` files in the wheel).
+- `CFLAGS+=-fdebug-prefix-map=$GITHUB_WORKSPACE=.` to strip host
+  paths from DWARF debug-info.
+- `LDFLAGS+=-Wl,--build-id=sha1` to derive the linker build-id from
+  the section contents instead of a fresh-per-invocation random value.
+- `AR_FLAGS=Drcs` so any `.a` archive members emit no timestamps or
+  UID/GID.
+
+The container image is pinned to a date-stamped tag (NOT `:latest`) so
+the gate stays stable across the manylinux project's rolling updates.
+A tag bump is auditable: it must be its own commit so the
+reproducible-build delta is visible in the diff.
+
+The signature artefact `ama_cryptography/_integrity_signature.py` is
+explicitly exempt — INVARIANT-17 keeps the per-build ephemeral
+signing keypair non-byte-stable.  The `_integrity_signature.py` exemption
+is in the workflow's `.py`-equality check (which compares every OTHER
+`.py` file byte-for-byte) and not in the native-artefact diff (where
+the file does not appear).
+
 ## INVARIANT-9 — Maximum Exception Scope in Crypto Paths
 
 Code under `ama_cryptography/` **should** use narrow exception types
