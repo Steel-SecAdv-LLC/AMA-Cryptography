@@ -61,22 +61,41 @@ def _is_backend_skip(marker: Any) -> bool:
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item: Any, call: Any) -> Any:
-    """In CI, convert any backend-related skip into a hard failure."""
+    """In CI, convert any backend-related skip into a hard failure.
+
+    A test may carry several ``@pytest.mark.skipif`` decorators (for example
+    ``TestAESGCMInterop`` has both ``@skip_no_native`` and ``@skip_no_pyca``).
+    The skip we receive came from whichever marker's condition evaluated
+    truthy at collection time; iterating ``item.iter_markers('skipif')``
+    yields *all* of them regardless of which actually triggered, so we
+    must re-check each marker's condition before treating it as the cause
+    of the skip.  Without this scoping a test skipped for an unrelated
+    reason (e.g. a broken PyCA install) would be incorrectly reported as
+    a backend-missing failure because a sibling backend-related skipif
+    happens to be attached to the same item.
+    """
     outcome = yield
     if not _CI:
         return
     rep = outcome.get_result()
-    if rep.skipped:
-        for marker in item.iter_markers("skipif"):
-            if _is_backend_skip(marker):
-                reason = marker.kwargs.get("reason", "backend unavailable")
-                rep.outcome = "failed"
-                rep.longrepr = (
-                    f"CI FAILURE: {reason} — "
-                    "all cryptographic backends must be available in CI. "
-                    "The C library must be built before running tests."
-                )
-                break
+    if not rep.skipped:
+        return
+    for marker in item.iter_markers("skipif"):
+        if not _is_backend_skip(marker):
+            continue
+        condition = marker.args[0] if marker.args else marker.kwargs.get("condition")
+        if not condition:
+            # The backend-related condition was false at evaluation time —
+            # the backend is present, so this marker did not cause the skip.
+            continue
+        reason = marker.kwargs.get("reason", "backend unavailable")
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"CI FAILURE: {reason} — "
+            "all cryptographic backends must be available in CI. "
+            "The C library must be built before running tests."
+        )
+        break
 
 
 # =============================================================================

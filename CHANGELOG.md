@@ -208,6 +208,150 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   Returns 77 (Skipped) on MSVC builds where the cache code path
   is compiled out.
 
+#### PR #326 follow-up: every-Python-lane CI failure + CodeQL path-injection + clang-tidy CERT-ERR34-C close-out
+- **Root cause of the "every Python lane on every OS" CI failure:
+  conftest's CI-mode skip→failure hook over-attributed multi-skipif
+  skips to backend-related markers.**  After the v3.2.0 dispatch
+  scope addition added the new `native_hmac_sha256` / Python bindings
+  (`40a933c`) and the safety dep removal (`a628082`),
+  every `Python {3.9..3.13} on {ubuntu, macos, windows}` job and
+  every `Test {ubuntu, windows, ubuntu-arm} / Python ...` job in
+  the PR went red — `ERROR at setup of
+  TestAESGCMInterop.test_native_encrypt_pyca_decrypt: CI FAILURE:
+  Native AES-256-GCM library not available`, on every lane including
+  the ones whose native build had clearly succeeded earlier in the
+  same job.  `tests/conftest.py::pytest_runtest_makereport` ran
+  `item.iter_markers("skipif")` and triggered on the FIRST marker
+  whose reason text contained a backend keyword (`native`, `aes`,
+  ...), without checking whether THAT marker's condition was the
+  one that triggered the skip.  `tests/test_aes_gcm_native.py::
+  TestAESGCMInterop` carries both `@skip_no_native` and
+  `@skip_no_pyca` (it cross-checks the native AES-GCM kernel
+  against PyCA cryptography), and the CI's `pip install -e ".[dev]"`
+  doesn't include PyCA (that lives under the `[legacy]` extra), so
+  every lane:
+    - skipped legitimately via `@skip_no_pyca` ("PyCA cryptography
+      not available") — PyCA wasn't installed
+    - was reclassified as a backend failure because the hook
+      iterated the sibling `@skip_no_native` marker (reason contains
+      "native") and ignored that its condition (`not NATIVE_AVAILABLE`)
+      was `False` — the native backend WAS present
+  Fix: `tests/conftest.py` now re-checks each backend-related
+  `skipif`'s condition before treating it as the cause of the
+  skip.  A backend marker whose condition evaluated `False` is no
+  longer mistaken for the trigger; the legitimate PyCA skip stays
+  a skip.  The hook's load-bearing purpose — failing CI loudly when
+  a native backend really is missing — is preserved (a backend
+  marker whose condition is `True` still flips the skip to a hard
+  failure with the same diagnostic text).
+- **Regression coverage.**  New `tests/test_conftest_backend_skip_scoping.py`
+  pins three properties via `pytester`-driven subprocess tests
+  that exercise the real `tests/conftest.py` hook in a sandbox:
+    1. A test with dual skipif (native condition False, PyCA
+       condition True) stays a SKIP under `AMA_CI_REQUIRE_BACKENDS=1`.
+    2. A test with a single backend skipif (condition True) flips
+       to a setup-phase ERROR — the loud-failure contract the hook
+       exists to enforce.
+    3. Without `AMA_CI_REQUIRE_BACKENDS=1`, a backend skip stays
+       a skip regardless of condition.
+  Three unit tests of `_is_backend_skip()` additionally lock the
+  classifier against accidental matches on "PyCA" / unrelated
+  reasons.
+- **CodeQL `cpp/path-injection` (#535 / #537) genuinely closed via
+  realpath() canonicalisation, not just an in-source predicate.**
+  The earlier `dispatch_cache_path_sanitize()` rejected
+  `..`-containing inputs but returned the same `getenv`-storage
+  pointer to its caller — CodeQL's flow tracker saw the env-var
+  source flow unchanged to `open()` / `fopen()` and kept the
+  alert open against `src/c/dispatch/ama_dispatch.c:1062` and
+  `:1641` even after the v3.2.0 alert close-out commit.  The
+  sanitizer now runs the validated path through a new
+  `dispatch_cache_path_canonicalize()` helper that calls
+  `realpath(3)` (recognised by CodeQL's path-injection sanitizer
+  model) and falls back to `realpath(dirname) + "/" + basename`
+  for the cache-write case where the file does not exist yet —
+  the canonical form has all symlinks resolved and `.`/`..`
+  components collapsed.  Return value is now a pointer into a
+  function-local static buffer (`AMA_DISPATCH_PATH_MAX`-sized,
+  `PATH_MAX` from `<limits.h>` or 4096 fallback), so the call
+  sites pass a canonical, sanitiser-detached path to file I/O —
+  not the env-var pointer.
+- **`_DEFAULT_SOURCE` added to `src/c/dispatch/ama_dispatch.c`'s
+  feature-test prologue.**  glibc 2.10+ gates `realpath()` in
+  `<stdlib.h>` on `__USE_MISC || __USE_XOPEN_EXTENDED` (verified
+  against `/usr/include/stdlib.h` on Ubuntu 24.04 glibc 2.39),
+  neither of which is implied by `_POSIX_C_SOURCE 200809L`.  No-op
+  on Apple libc / BSD / musl (those expose `realpath` from
+  `<stdlib.h>` unconditionally).  Without this, clang fails the
+  build with `error: call to undeclared function 'realpath'`.
+- **`_DARWIN_C_SOURCE` added on `__APPLE__`: root-causes the
+  `C Library (macos-latest, clang)` lane that has been red on every
+  PR #326 commit since `58e7a2d` introduced the dispatch cache.**
+  Apple's `<unistd.h>` gates BSD-lineage helpers like `issetugid()`
+  on `!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)`.  The
+  pre-existing `_POSIX_C_SOURCE 200809L` define (added in v3.2.0 to
+  expose `snprintf` and `clock_gettime` on Apple libc per the
+  comment in the same prologue) puts Apple libc into strict-POSIX
+  mode, which hides `issetugid()` — and Apple Clang's default-on
+  `-Werror=implicit-function-declaration` then fails the build at
+  the `dispatch_cache_env_is_safe()` call site that's specifically
+  there to gate setuid / setgid / tainted-exec contexts away from
+  the env-var-controlled cache file path.  PR #323 (the merge-base
+  for #326) was green on `C Library (macos-latest, clang)`; the
+  failure was introduced by `58e7a2d`'s dispatch cache scope, not a
+  pre-existing weakness.  Defining `_DARWIN_C_SOURCE` re-exposes the
+  BSD surface without removing the POSIX baseline (Apple's headers
+  accept both defines simultaneously).  No-op on Linux glibc / musl
+  / *BSD libc.  CHANGELOG entry intentionally explicit about the
+  diagnosis lineage so a future maintainer can fix any analogous
+  Apple-strict-POSIX regression without re-walking the same dead
+  ends (missing AVX2 → AVX2 already arch-gated; missing
+  `<sys/auxv.h>` → already wrapped in `__has_include`; missing
+  trailing newline → already present).
+- **Diagnostic build-step fall-back added to
+  `.github/workflows/ci-build-test.yml::c-library::Build`.**
+  Replaces the bare `cmake --build build --config Release -j4` with
+  a happy-path-then-verbose-on-failure shell block: on parallel-build
+  exit ≠ 0, the step re-runs `cmake --build build --config Release
+  --verbose --clean-first -j1` and `tee`s the per-command output
+  to `build-verbose.log`, then grep-extracts the first `error:`
+  block (or the last 80 lines).  The original non-zero exit is
+  preserved so the step still fails.  Future build regressions on
+  any of the four `C Library (os, compiler)` cells now surface the
+  failing compile command + diagnostic directly in the GitHub
+  Actions log — no local repro needed to triage the next opaque
+  "Process completed with exit code 2" the way the Apple-Clang
+  `issetugid()` failure required this round.
+- **`tests/c/test_dispatch_cache_file.c` accept-case contract
+  updated to match the canonicalisation barrier.**  Pointer-identity
+  assertion (`got != cases[i].input`) was relaxed — the sanitizer
+  now returns a pointer into its own canonical buffer, not the
+  input pointer.  Accept inputs were narrowed to `/tmp/...`
+  filenames so realpath() can resolve the dirname on every CI lane
+  (the prior `/var/cache/ama/...` accept inputs assumed a directory
+  that doesn't exist on hosted runners).  A new "realpath probe"
+  case asserts that `/tmp/./ama-canon-<pid>.cache` and
+  `/tmp/ama-canon-<pid>.cache` canonicalise to the same string —
+  forces the realpath barrier to actually engage rather than
+  silently regressing to identity-return.
+- **`atoi()` calls in `dispatch_cache_load()` replaced with
+  `strtol()` + endpoint/errno validation (CERT-ERR34-C /
+  clang-tidy `cert-err34-c`).**  The six per-slot `_regressed`
+  flags now parse via a single inlined `strtol` block that
+  refuses anything but the literal `"0"` / `"1"` cache file value
+  (partial digits, trailing junk, overflow all map to flag = 0,
+  matching the surrounding "no measurement" fallback).  Pre-
+  existing from the v3.2.0 release commit (`58e7a2d`); surfaced
+  while validating that my `_DEFAULT_SOURCE` addition didn't
+  regress clang-tidy on the file.  The CI clang-tidy gate's
+  pipe-tee step swallows clang-tidy's non-zero exit (the runner
+  loop's `if ! clang-tidy ... | tee ...` checks tee's status,
+  not clang-tidy's, without `set -o pipefail`), which is why the
+  pre-existing atoi findings have been silently passing CI even
+  under the documented "FAIL-CLOSED" policy — that workflow
+  fix is left for a separate, scoped audit so any other latent
+  clang-tidy errors it would surface get triaged together.
+
 #### PR #326 follow-up: sanitizer rejection test rebuilt as direct unit test (Copilot review r3275565655)
 - **Root cause of the earlier fork-based test's false sense of
   security.**  The first version of

@@ -39,6 +39,37 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 
+/* glibc 2.10+ gates ``realpath()`` in <stdlib.h> on __USE_MISC ||
+ * __USE_XOPEN_EXTENDED, neither of which is implied by
+ * _POSIX_C_SOURCE 200809L (verified against
+ * /usr/include/stdlib.h on Ubuntu 24.04, glibc 2.39 — the relevant
+ * `#if defined __USE_MISC || defined __USE_XOPEN_EXTENDED`).  Define
+ * _DEFAULT_SOURCE here so glibc exposes realpath (and the other BSD-
+ * lineage helpers our cache code path uses) without otherwise
+ * widening the POSIX surface area.  No-op on Apple libc / BSD /
+ * musl (those expose realpath unconditionally from <stdlib.h>). */
+#if !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE 1
+#endif
+
+/* Apple libc gates BSD-lineage helpers like ``issetugid()`` (in
+ * <unistd.h>) on `!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)`.
+ * The _POSIX_C_SOURCE define above puts Apple libc into strict-POSIX
+ * mode, which hides ``issetugid()`` — Apple Clang then fails the build
+ * with `-Werror=implicit-function-declaration` (default-on) at the
+ * dispatch_cache_env_is_safe() call site below.  This is the root
+ * cause of the `C Library (macos-latest, clang)` lane failing on every
+ * commit since `58e7a2d` introduced the dispatch cache.  Defining
+ * _DARWIN_C_SOURCE re-exposes the BSD surface without removing the
+ * _POSIX_C_SOURCE 200809L baseline (Apple's headers accept both
+ * defines simultaneously: POSIX functions stay declared from
+ * _POSIX_C_SOURCE, and BSD extensions are additionally declared
+ * because _DARWIN_C_SOURCE is set).  No-op on non-Apple platforms —
+ * `_DARWIN_C_SOURCE` is not recognised by glibc / musl / BSD libc. */
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE 1
+#endif
+
 #include "ama_dispatch.h"
 #include <stdint.h>
 #include <stddef.h>
@@ -52,6 +83,11 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+/* <limits.h> brings in PATH_MAX on glibc / musl / Apple libc / *BSD —
+ * needed for the realpath()-canonicalised cache path buffer.  Where the
+ * platform leaves PATH_MAX undefined (some musl configs), the
+ * dispatch_cache_path_canonicalize fallback below applies its own bound. */
+#include <limits.h>
 /* getauxval(AT_SECURE) lives in <sys/auxv.h> on glibc / Bionic / musl
  * (recent).  Wrapped in __has_include so older musl and the BSDs
  * (which expose issetugid() instead) build cleanly. */
@@ -60,6 +96,18 @@
 #    include <sys/auxv.h>
 #  endif
 #endif
+#endif
+
+/* Local bound for realpath() output.  POSIX.1-2008 guarantees PATH_MAX
+ * via <limits.h> on all platforms we ship to; the fallback keeps the
+ * code compilable on libcs that leave it undefined (a known musl quirk).
+ * 4096 matches the Linux kernel's PATH_MAX and the tmppath buffer in
+ * dispatch_cache_save() so the canonical-path stage cannot widen the
+ * effective bound the rest of the cache layer enforces. */
+#if !defined(PATH_MAX)
+#  define AMA_DISPATCH_PATH_MAX 4096
+#else
+#  define AMA_DISPATCH_PATH_MAX PATH_MAX
 #endif
 
 /* Scalar reference NTT entry points exposed by src/c/ama_kyber.c and
@@ -822,9 +870,99 @@ static int dispatch_cache_env_is_safe(void) {
 #endif
 }
 
-/* Validate an opt-in AMA_DISPATCH_CACHE_FILE path string.  Returns
- * `path` unchanged on success, NULL on rejection — the caller treats
- * NULL the same as "env var unset".  Layered sanitization:
+/* Canonicalize `path` into the caller-supplied `out` buffer via
+ * realpath().  Returns 0 on success, -1 on failure.  Handles the
+ * "file doesn't exist yet" write case by canonicalising the dirname
+ * and reconstructing `<canonical-dir>/<basename>`.
+ *
+ * Why realpath():
+ *   CodeQL's cpp/path-injection model recognises realpath() as a
+ *   path-injection sanitizer because the returned canonical path has
+ *   all symlinks resolved and `.`/`..` components collapsed — it can
+ *   no longer be steered out of the directory whose write/read access
+ *   the caller's own uid already implies.  The pre-existing
+ *   strstr("..") and control-char rejections in
+ *   dispatch_cache_path_sanitize() above remain as a fast-path defence
+ *   AND because they reject inputs realpath() would happily resolve
+ *   into a legitimate-but-attacker-chosen location.
+ *
+ * Why split on the basename for write paths:
+ *   realpath() requires every component to exist on disk.  The cache
+ *   file itself does not exist on first write — realpath() would
+ *   return NULL with ENOENT and the caller would have no canonical
+ *   path to hand to open().  Splitting on the final '/' and
+ *   canonicalising only the parent directory keeps realpath() in the
+ *   flow (so CodeQL's sanitizer model fires) without imposing a
+ *   "must pre-create the cache file" restriction on the user. */
+static int dispatch_cache_path_canonicalize(const char *path,
+                                             char *out, size_t outlen) {
+    if (!path || !out || outlen == 0) return -1;
+
+    char resolved[AMA_DISPATCH_PATH_MAX];
+
+    /* Read-side fast path: file exists, realpath resolves the whole
+     * thing in one syscall. */
+    if (realpath(path, resolved) != NULL) {
+        size_t rlen = strlen(resolved);
+        if (rlen >= outlen) return -1;
+        memcpy(out, resolved, rlen + 1);
+        return 0;
+    }
+    if (errno != ENOENT) return -1;
+
+    /* Write-side fall-through: split on the final '/' and canonicalise
+     * the parent directory.  Anything else (missing intermediate
+     * component, permission error) was caught by the realpath() above
+     * via an errno != ENOENT. */
+    const char *last_slash = strrchr(path, '/');
+    const char *basename = last_slash ? last_slash + 1 : path;
+    if (basename[0] == '\0') return -1;  /* path ended with '/' */
+    if (strlen(basename) >= sizeof(resolved)) return -1;
+
+    /* Re-check the basename for traversal segments — strrchr only
+     * splits on the LAST slash, so a basename like "..foo" or "foo.."
+     * (legal filenames, already passed the earlier strstr filter) is
+     * fine, but a "naked" ".." (legal literal name on disk yet
+     * semantically equivalent to the parent reference) is refused
+     * here so the final reconstructed path cannot escape resolved_dir. */
+    if (strcmp(basename, "..") == 0 || strcmp(basename, ".") == 0) return -1;
+
+    /* Determine the dirname segment.  No '/' → CWD; leading '/' alone
+     * (path = "/foo") → root.  Bounded copy into a local stack buffer
+     * keeps realpath()'s input lifetime clearly scoped. */
+    char dir[AMA_DISPATCH_PATH_MAX];
+    if (!last_slash) {
+        dir[0] = '.';
+        dir[1] = '\0';
+    } else {
+        size_t dlen = (size_t)(last_slash - path);
+        if (dlen == 0) {
+            dir[0] = '/';
+            dir[1] = '\0';
+        } else {
+            if (dlen >= sizeof(dir)) return -1;
+            memcpy(dir, path, dlen);
+            dir[dlen] = '\0';
+        }
+    }
+    if (realpath(dir, resolved) == NULL) return -1;
+
+    /* Reconstruct `<resolved_dir>/<basename>`, avoiding a double slash
+     * when resolved_dir is the root "/". */
+    size_t rlen = strlen(resolved);
+    int wrote;
+    if (rlen == 1 && resolved[0] == '/') {
+        wrote = snprintf(out, outlen, "/%s", basename);
+    } else {
+        wrote = snprintf(out, outlen, "%s/%s", resolved, basename);
+    }
+    if (wrote < 0 || (size_t)wrote >= outlen) return -1;
+    return 0;
+}
+
+/* Validate an opt-in AMA_DISPATCH_CACHE_FILE path string.  Returns a
+ * pointer to a canonicalised copy on success, NULL on rejection — the
+ * caller treats NULL the same as "env var unset".  Layered sanitization:
  *
  *   1. NUL check + length bounds.  `getenv` returns a NUL-terminated
  *      string with no embedded NULs, but the contract is asserted
@@ -844,12 +982,18 @@ static int dispatch_cache_env_is_safe(void) {
  *      corrupt the verbose-log line format and could be abused to
  *      inject log entries; reject them up front.
  *
- * This validator is recognised by CodeQL's path-injection sanitizer
- * model when it sees the explicit `strstr(p, "..")` rejection — the
- * tainted flow from `getenv` is terminated at this function.  The
- * return value is the SAME pointer the caller already had (we never
- * mutate `getenv`'s storage), so call sites pass the sanitized
- * pointer to `fopen` / `open` directly. */
+ *   4. realpath() canonicalisation via dispatch_cache_path_canonicalize.
+ *      Resolves all symlinks and `.`/`..` components against the
+ *      filesystem; the call sites pass the canonical pointer (not the
+ *      raw env-var pointer) to fopen / open.  This is the load-bearing
+ *      step for CodeQL's cpp/path-injection sanitizer model — realpath
+ *      is on its recognized sanitizer list, so the tainted-data flow
+ *      from getenv → open/fopen is terminated at the realpath barrier.
+ *
+ * Returns a pointer into a function-local static buffer.  The buffer
+ * is overwritten on each call; dispatch init invokes this exactly once
+ * per process under pthread_once / InitOnceExecuteOnce, so single-use
+ * lifetime is sufficient and the static storage is unaliased. */
 static const char *dispatch_cache_path_sanitize(const char *path) {
     if (!path) return NULL;
 
@@ -878,7 +1022,14 @@ static const char *dispatch_cache_path_sanitize(const char *path) {
      * env-controlled feature. */
     if (strstr(path, "..") != NULL) return NULL;
 
-    return path;
+    /* realpath()-backed canonicalisation.  The returned pointer
+     * references a static buffer owned by this function — the env-var
+     * pointer never reaches the file-access call sites. */
+    static char canonical[AMA_DISPATCH_PATH_MAX];
+    if (dispatch_cache_path_canonicalize(path, canonical, sizeof(canonical)) != 0) {
+        return NULL;
+    }
+    return canonical;
 }
 
 static void dispatch_cache_fingerprint(char *out, size_t outlen) {
@@ -965,18 +1116,36 @@ static int dispatch_cache_load(const char *path, const char *fingerprint,
 
         if (strcmp(key, "fingerprint") == 0) {
             fp_matched = (strcmp(val, fingerprint) == 0);
-        } else if (strcmp(key, "keccak_regressed") == 0) {
-            tmp.keccak_regressed = atoi(val);
-        } else if (strcmp(key, "keccak_x4_regressed") == 0) {
-            tmp.keccak_x4_regressed = atoi(val);
-        } else if (strcmp(key, "kyber_ntt_regressed") == 0) {
-            tmp.kyber_ntt_regressed = atoi(val);
-        } else if (strcmp(key, "kyber_invntt_regressed") == 0) {
-            tmp.kyber_invntt_regressed = atoi(val);
-        } else if (strcmp(key, "dilithium_ntt_regressed") == 0) {
-            tmp.dilithium_ntt_regressed = atoi(val);
-        } else if (strcmp(key, "dilithium_invntt_regressed") == 0) {
-            tmp.dilithium_invntt_regressed = atoi(val);
+        }
+        /* Per-slot regression flags are written as the literal "0" or
+         * "1" by dispatch_cache_save (see fprintf("...=%d\n", ...) in
+         * the writer); parse via strtol with full endpoint + errno
+         * validation rather than atoi() (CERT ERR34-C / clang-tidy
+         * cert-err34-c).  A garbled cache line — partial digits,
+         * trailing junk, overflow — yields a 0 regression flag, which
+         * matches the surrounding code's "no measurement" fallback.
+         * Each parse is local to its branch so a single malformed
+         * field can't poison the others. */
+        else if (strcmp(key, "keccak_regressed") == 0
+                 || strcmp(key, "keccak_x4_regressed") == 0
+                 || strcmp(key, "kyber_ntt_regressed") == 0
+                 || strcmp(key, "kyber_invntt_regressed") == 0
+                 || strcmp(key, "dilithium_ntt_regressed") == 0
+                 || strcmp(key, "dilithium_invntt_regressed") == 0) {
+            char *endptr = NULL;
+            errno = 0;
+            long parsed = strtol(val, &endptr, 10);
+            int flag = 0;
+            if (endptr != NULL && endptr != val && *endptr == '\0'
+                && errno == 0 && (parsed == 0 || parsed == 1)) {
+                flag = (int)parsed;
+            }
+            if      (strcmp(key, "keccak_regressed")            == 0) tmp.keccak_regressed            = flag;
+            else if (strcmp(key, "keccak_x4_regressed")         == 0) tmp.keccak_x4_regressed         = flag;
+            else if (strcmp(key, "kyber_ntt_regressed")         == 0) tmp.kyber_ntt_regressed         = flag;
+            else if (strcmp(key, "kyber_invntt_regressed")      == 0) tmp.kyber_invntt_regressed      = flag;
+            else if (strcmp(key, "dilithium_ntt_regressed")     == 0) tmp.dilithium_ntt_regressed     = flag;
+            else if (strcmp(key, "dilithium_invntt_regressed")  == 0) tmp.dilithium_invntt_regressed  = flag;
         }
         /* Timing fields populate the verdict struct so a verbose
          * cache-hit log reports the cached ns readings rather than

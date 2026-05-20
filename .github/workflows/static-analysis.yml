@@ -431,7 +431,18 @@ jobs:
         # exits non-zero when it emits any error (which it now does
         # for every enabled check, per `.clang-tidy::WarningsAsErrors`),
         # and that exit status fails this step.
+        #
+        # `set -o pipefail` IS load-bearing here (PR #326 follow-up):
+        # without it the inner `if ! clang-tidy ... | tee ...` only
+        # sees `tee`'s exit code (always 0), so any clang-tidy error
+        # is silently swallowed and `rc` never flips off 0 — which
+        # is how the pre-existing `cert-err34-c` findings in
+        # `dispatch_cache_load()` (atoi() calls introduced in
+        # `58e7a2d`) were passing CI even under this section's
+        # "FAIL-CLOSED" claim.  Now genuinely fail-closed.
+        shell: bash
         run: |
+          set -o pipefail
           files=$(find src/c include \
             -type d -name vendor -prune -o \
             -type f \( -name '*.c' -o -name '*.h' \) -print)

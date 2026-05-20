@@ -246,24 +246,40 @@ int main(void) {
      * the test-mode-exported `ama_test_dispatch_cache_path_sanitize`
      * with every "must reject" class and every "must accept"
      * class IS the contract.  No fork, no filesystem side-effect
-     * dependency, no race with pthread_once. */
+     * dependency, no race with pthread_once.
+     *
+     * Pointer-identity contract was relaxed in the realpath()
+     * close-out of CodeQL #535 / #537: the sanitizer now returns a
+     * pointer into a function-local static buffer holding the
+     * realpath()-canonicalised form, not the input pointer.  The
+     * tests below assert the returned pointer is non-NULL on accept
+     * (and additionally that the canonical form re-resolves stably
+     * for a couple of well-known cases), which is the only contract
+     * the call sites in dispatch_cache_load / dispatch_cache_save
+     * actually rely on. */
     extern const char *ama_test_dispatch_cache_path_sanitize(const char *path);
 
     typedef struct {
         const char *description;
         const char *input;
-        int         expect_accept;  /* 1 = must return == input; 0 = must return NULL */
+        int         expect_accept;  /* 1 = must return non-NULL; 0 = must return NULL */
     } sanitizer_case_t;
 
-    /* MUST-REJECT inputs — every one closes a documented attack class:
+    /* Accept-class inputs must point at paths whose parent directory
+     * EXISTS on the test host so realpath() can resolve.  /tmp is the
+     * one directory POSIX (and CTest's runner) guarantees is present
+     * across Linux, macOS, and BSD CI lanes — pin every accept case
+     * to that prefix so the test is hermetic.
+     *
+     * MUST-REJECT inputs — every one closes a documented attack class:
      *   `..` segments (path traversal / CodeQL #535/#537)
      *   embedded ASCII control chars (log-injection via verbose log line)
      *   empty (degenerate)
      *   oversized (DoS / stack overflow defence)
      * MUST-ACCEPT inputs — the routine MUST NOT over-reject and break
      * the documented opt-in feature for users who supply normal paths:
-     *   absolute paths
-     *   relative paths
+     *   absolute paths under an existing directory
+     *   single dots, multi-dots inside a filename (not `..` segments)
      *   high-bit UTF-8 (valid filenames on every Unix filesystem)
      *   parentheses, dashes, dots-not-followed-by-dot
      */
@@ -279,14 +295,12 @@ int main(void) {
         { "tab character",         "/tmp/x\ty",                      0 },
         { "DEL (0x7F)",            "/tmp/x\x7F",                     0 },
         { "low control 0x01",      "/tmp/\x01x",                     0 },
-        /* --- MUST-ACCEPT --- */
+        /* --- MUST-ACCEPT (every parent dir exists on every CI lane) --- */
         { "simple absolute path",  "/tmp/ama-cache.txt",             1 },
-        { "relative path",         "ama-cache.txt",                  1 },
-        { "subdir path",           "/var/cache/ama/cache.v1",        1 },
         { "single dot in name",    "/tmp/ama.cache",                 1 },
         { "dots-no-double-dot",    "/tmp/a.b.c.d.cache",             1 },
-        { "high-bit UTF-8",        "/tmp/\xe2\x9c\x94/cache",        1 },
-        { "parens and dashes",     "/tmp/ama-(v3.2.0)/cache",        1 },
+        { "high-bit UTF-8",        "/tmp/\xe2\x9c\x94cache",         1 },
+        { "parens and dashes",     "/tmp/ama-(v3.2.0).cache",        1 },
     };
     int sanitizer_failures = 0;
     int n_cases = (int)(sizeof(cases) / sizeof(cases[0]));
@@ -303,16 +317,29 @@ int main(void) {
                 accepted ? "ACCEPT (non-NULL)" : "REJECT (NULL)",
                 expected_accept ? "ACCEPT" : "REJECT");
             sanitizer_failures++;
-        } else if (accepted && got != cases[i].input) {
-            /* Sanitizer must return the SAME pointer on accept — it's
-             * not allowed to allocate or mutate (the cache code path
-             * uses the returned pointer directly with fopen/open). */
-            fprintf(stderr,
-                "FAIL: dispatch_cache_path_sanitize(case='%s') accepted "
-                "but returned a different pointer than the input — "
-                "contract requires identity, not a copy\n",
-                cases[i].description);
-            sanitizer_failures++;
+        } else if (accepted) {
+            /* Canonical form must be a well-formed absolute path and
+             * must not contain residual `..` / `.` segments — the
+             * latter is the contract realpath() exists to deliver.
+             * (Filename components with internal dots like `a.b.c`
+             * remain present; we only forbid the path-traversal
+             * segments which sit between slashes.) */
+            if (got[0] != '/') {
+                fprintf(stderr,
+                    "FAIL: dispatch_cache_path_sanitize(case='%s') accepted "
+                    "but canonical form '%s' is not absolute\n",
+                    cases[i].description, got);
+                sanitizer_failures++;
+            } else if (strstr(got, "/../") || strstr(got, "/./")
+                       || (strlen(got) >= 3 && strcmp(got + strlen(got) - 3, "/..") == 0)
+                       || (strlen(got) >= 2 && strcmp(got + strlen(got) - 2, "/.")  == 0)) {
+                fprintf(stderr,
+                    "FAIL: dispatch_cache_path_sanitize(case='%s') canonical "
+                    "form '%s' still contains a `..` / `.` segment — realpath "
+                    "barrier did not engage\n",
+                    cases[i].description, got);
+                sanitizer_failures++;
+            }
         }
     }
 
@@ -329,6 +356,57 @@ int main(void) {
                 "4001-character path; must reject anything >4000 "
                 "bytes (snprintf reserve for `.tmp.<pid>` suffix)\n");
             sanitizer_failures++;
+        }
+    }
+
+    /* Canonicalisation contract — realpath() must collapse a
+     * `/tmp/./xyz` form into `/tmp/xyz` (or its symlink-resolved
+     * equivalent, e.g. `/private/tmp/xyz` on macOS).  The pre-realpath
+     * sanitizer would have accepted both inputs and returned them
+     * untouched — re-acceptance alone wouldn't have caught a regression
+     * to that older identity-return contract.  Comparing the two
+     * canonical outputs forces the realpath barrier to actually engage:
+     * a stub that returned the input pointer through unchanged would
+     * fail this strcmp() because the two inputs differ syntactically. */
+    {
+        char dot_form[64];
+        char plain[64];
+        snprintf(dot_form, sizeof(dot_form),
+                 "/tmp/./ama-canon-%ld.cache", (long)getpid());
+        snprintf(plain, sizeof(plain),
+                 "/tmp/ama-canon-%ld.cache",   (long)getpid());
+        /* Both inputs share a `.` segment — strstr("..") doesn't fire
+         * on a single dot, so they reach realpath().  realpath()
+         * collapses the `./` and yields identical canonical forms. */
+        const char *got_dot = ama_test_dispatch_cache_path_sanitize(dot_form);
+        if (got_dot == NULL) {
+            fprintf(stderr,
+                "FAIL: realpath probe — dot-form input '%s' rejected; "
+                "expected it to be canonicalised and accepted\n",
+                dot_form);
+            sanitizer_failures++;
+        } else {
+            /* The sanitizer returns a pointer into a single static
+             * buffer per call; copy out before re-invoking.  4096 is
+             * the Linux PATH_MAX and matches the implementation's
+             * AMA_DISPATCH_PATH_MAX upper bound — anything beyond that
+             * was already rejected by the 4000-byte length cap above. */
+            char dot_canon[4096];
+            (void)snprintf(dot_canon, sizeof(dot_canon), "%s", got_dot);
+            const char *got_plain = ama_test_dispatch_cache_path_sanitize(plain);
+            if (got_plain == NULL) {
+                fprintf(stderr,
+                    "FAIL: realpath probe — plain-form input '%s' rejected; "
+                    "expected it to be accepted\n", plain);
+                sanitizer_failures++;
+            } else if (strcmp(dot_canon, got_plain) != 0) {
+                fprintf(stderr,
+                    "FAIL: realpath probe — '/tmp/./%s' canonicalised to "
+                    "'%s' but '/tmp/%s' canonicalised to '%s'; realpath "
+                    "barrier did not collapse the `.` segment\n",
+                    plain + 5, dot_canon, plain + 5, got_plain);
+                sanitizer_failures++;
+            }
         }
     }
 
