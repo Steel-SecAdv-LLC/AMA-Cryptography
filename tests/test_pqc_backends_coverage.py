@@ -708,10 +708,7 @@ class TestHMACFunctions:
 
         key = bytes.fromhex("0b" * 20)
         data = b"Hi There"
-        expected = bytes.fromhex(
-            "b0344c61d8db38535ca8afceaf0bf12b"
-            "881dc200c9833da726e9376c2e32cff7"
-        )
+        expected = bytes.fromhex("b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7")
         assert native_hmac_sha256(key, data) == expected
 
     def test_native_hmac_sha256_rfc4231_long_key(self) -> None:
@@ -730,10 +727,7 @@ class TestHMACFunctions:
 
         key = bytes.fromhex("aa" * 131)
         data = b"Test Using Larger Than Block-Size Key - Hash Key First"
-        expected = bytes.fromhex(
-            "60e431591ee0b67f0d8a26aacbf5b77f"
-            "8e0bc6213728c5140546040f0ee37f54"
-        )
+        expected = bytes.fromhex("60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54")
         assert native_hmac_sha256(key, data) == expected
 
     def test_native_hmac_sha256_matches_stdlib(self) -> None:
@@ -742,8 +736,8 @@ class TestHMACFunctions:
         consumer migrates from stdlib `hmac.new(..., 'sha256').digest()`
         to the AMA binding without changing what wire bytes appear in a
         JWT / TLS PRF / similar."""
-        import hmac
         import hashlib
+        import hmac
 
         from ama_cryptography.pqc_backends import native_hmac_sha256
 
@@ -751,9 +745,9 @@ class TestHMACFunctions:
             (b"", b""),
             (b"key", b"message"),
             (b"k" * 32, b"m" * 1),
-            (b"k" * 63, b"m" * 64),     # boundary: key == block-1
-            (b"k" * 64, b"m" * 65),     # boundary: key == block
-            (b"k" * 65, b"m" * 128),    # oversized key, must be hashed
+            (b"k" * 63, b"m" * 64),  # boundary: key == block-1
+            (b"k" * 64, b"m" * 65),  # boundary: key == block
+            (b"k" * 65, b"m" * 128),  # oversized key, must be hashed
             (b"k" * 200, b"m" * 1024),  # comfortably oversized
         ]
         for key, msg in cases:
