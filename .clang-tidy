@@ -15,13 +15,14 @@
 # promoted to error via `WarningsAsErrors: '*'` below; the corresponding
 # CI job (`.github/workflows/static-analysis.yml::clang-tidy`) no
 # longer carries `continue-on-error: true` or an `exit 0` trailer.  A
-# new finding fails the workflow.  Three checks that the audit
+# new finding fails the workflow.  Four checks that the audit
 # Issue 9 close-out walk surfaced as genuinely incompatible with the
-# project's cryptographic-C style are explicitly dropped from the
-# `Checks:` list with a one-line rationale below, NOT silenced
-# per-site (the user-facing contract is "the listed categories are
-# fail-closed" — if a category genuinely doesn't belong on the list,
-# drop it explicitly, do not pretend it's enforced).
+# project's cryptographic-C style or as known false-positive sources
+# are explicitly dropped from the `Checks:` list with a one-line
+# rationale below, NOT silenced per-site (the user-facing contract is
+# "the listed categories are fail-closed" — if a category genuinely
+# doesn't belong on the list, drop it explicitly, do not pretend it's
+# enforced).
 #
 # Inline `// NOLINT(check-name)` comments are subject to INVARIANT-13
 # (justification + tracking ID required) — same hygiene policy as
@@ -64,7 +65,7 @@ Checks: >
   -concurrency-mt-unsafe,
   -clang-analyzer-core.UndefinedBinaryOperatorResult
 
-# Three categories dropped from `Checks:` above with rationale (audit
+# Four checks dropped from `Checks:` above with rationale (audit
 # Issue 9 close-out walk — surfaced ~50 false-positive-class findings
 # that no inline NOLINT could honestly justify):
 #

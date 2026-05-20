@@ -532,11 +532,18 @@ jobs:
       # #323 follow-up (CI failure on first run).
       image: quay.io/pypa/manylinux_2_28_x86_64:2026.05.17-1
     timeout-minutes: 30
-    env:
-      # AR_FLAGS applies to every `ar` invocation inside this job.
-      # `D` = deterministic (no timestamps / UID / GID in archive
-      # member headers), `rcs` matches CMake's default ar mode.
-      AR_FLAGS: Drcs
+    # AR_FLAGS=Drcs was set here in the audit Issue 10 close-out
+    # commit but turned out to be a no-op: CMake's archive creation
+    # invokes `<CMAKE_AR> qc <TARGET> ...` directly and does NOT
+    # honour the GNU-make `AR_FLAGS` (or `ARFLAGS`) env var
+    # (Copilot review #323 round 2).  Modern binutils' `ar` defaults
+    # to deterministic mode anyway (the `--enable-deterministic-archives`
+    # configure-time default since binutils 2.27, March 2016), so
+    # archive metadata determinism is implicit on every reasonable
+    # toolchain.  If a future regression brings back a non-deterministic
+    # `ar`, the strict native-artefact diff below will catch it and
+    # the fix is to use `CMAKE_C_ARCHIVE_CREATE` overrides, not an
+    # env var the build doesn't read.
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -544,11 +551,31 @@ jobs:
       - name: Install build prerequisites (manylinux_2_28 / AlmaLinux 8)
         run: |
           # The manylinux_2_28 image carries gcc-toolset, cmake, and
-          # CPython 3.9–3.13 under /opt/python/.  Only `build` (PyPA)
-          # needs to be added at job time; everything else is in the
-          # base image and is part of the toolchain anchor above.
+          # CPython 3.9–3.13 under /opt/python/.  Pre-install every
+          # build dep into the container's CPython 3.11 — `build` /
+          # `setuptools` / `wheel` / `cmake` / `Cython` / `numpy` —
+          # so the wheel build can run with `--no-isolation` below.
+          #
+          # WHY `--no-isolation`: PEP 517 build isolation creates a
+          # fresh `/tmp/build-env-<random8>/` directory per invocation
+          # and stages build deps inside it.  When Cython compiles
+          # `.pyx -> .c -> .so`, the NumPy include path (and other
+          # header paths) inside that random directory get expanded
+          # via `__FILE__` macros into rodata strings inside the
+          # resulting native artefact.  Two builds produce two
+          # different random suffixes → two different rodata strings
+          # → byte-different `.so` (and a downstream
+          # `--build-id=sha1` mismatch because the build-ID is a
+          # hash of section content).  `--no-isolation` skips the
+          # random isolation dir entirely; build deps come from the
+          # container's pre-installed CPython site-packages, which
+          # is the same on every run.  This is what the manylinux
+          # image is designed for.
           /opt/python/cp311-cp311/bin/python -m pip install --upgrade pip
-          /opt/python/cp311-cp311/bin/pip install build
+          /opt/python/cp311-cp311/bin/pip install \
+            'build>=1.0' \
+            'setuptools>=78.1.1' 'wheel>=0.47.0' \
+            'cmake>=4.3.2' 'Cython>=3.2.4' 'numpy>=1.24.0'
           # Front-load the manylinux Python on PATH so subsequent
           # steps see `python` / `pip` as the pinned 3.11 from the
           # base image (and not a stray host Python that GitHub's
@@ -562,7 +589,8 @@ jobs:
           PYTHONHASHSEED: "0"
           PYTHONDONTWRITEBYTECODE: "1"
           # CFLAGS — three overlapping prefix-map flags so every
-          # variant of build-path leakage gets neutralised:
+          # variant of host-path leakage gets neutralised inside
+          # the workspace tree:
           #   -fdebug-prefix-map  : strips host paths from DWARF
           #                          debug-info.
           #   -ffile-prefix-map   : superset that ALSO covers __FILE__
@@ -571,21 +599,27 @@ jobs:
           #   -fmacro-prefix-map  : the macro half of file-prefix-map,
           #                          explicit for older GCC that split
           #                          the two flags.
+          # The PEP 517 isolation dir is handled separately via the
+          # `--no-isolation` flag on `python -m build` below — see
+          # the install step's WHY paragraph for the full rationale.
           # LDFLAGS — `--build-id=sha1` makes the build-id a content
-          # hash instead of a fresh random value per link.
+          # hash instead of a fresh random value per link.  Combined
+          # with deterministic section content, this produces an
+          # identical build-id across two passes.
           # `MAKEFLAGS=-j1` and `CMAKE_BUILD_PARALLEL_LEVEL=1` force
           # sequential compilation so parallel-build write-order
-          # variation cannot leak into the .so (parallel jobs can
-          # interleave .o creation, which the linker then incorporates
-          # in observation order — sequential builds remove that
-          # variable entirely).
+          # variation cannot leak into the .so.
           CFLAGS: "-fdebug-prefix-map=${GITHUB_WORKSPACE}=. -ffile-prefix-map=${GITHUB_WORKSPACE}=. -fmacro-prefix-map=${GITHUB_WORKSPACE}=."
           LDFLAGS: "-Wl,--build-id=sha1"
           MAKEFLAGS: "-j1"
           CMAKE_BUILD_PARALLEL_LEVEL: "1"
         run: |
           rm -rf build dist
-          python -m build --wheel --outdir dist1/
+          # `--no-isolation`: see Install step's WHY paragraph.  The
+          # build deps are pre-installed into the container Python in
+          # the previous step, so the wheel build can run against
+          # them directly without staging into /tmp/build-env-<random>.
+          python -m build --wheel --no-isolation --outdir dist1/
           ls -lh dist1/
 
       - name: Build wheel — pass 2 (independent rebuild)
@@ -600,7 +634,7 @@ jobs:
           CMAKE_BUILD_PARALLEL_LEVEL: "1"
         run: |
           rm -rf build
-          python -m build --wheel --outdir dist2/
+          python -m build --wheel --no-isolation --outdir dist2/
           ls -lh dist2/
 
       - name: Compare integrity digest + .py content across builds

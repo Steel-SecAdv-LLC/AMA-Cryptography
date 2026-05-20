@@ -300,14 +300,25 @@ AMA_API const char *ama_aes_gcm_active_backend(void);
  * pointer is a string literal with static storage duration; do not
  * free it.
  *
- * An unsupported-slot request (either an unrecognised slot name OR
- * a recognised slot whose CPU feature is absent on this host) emits
- * a single, unconditional `[AMA Dispatch] ERROR:` line on stderr —
- * not gated on `AMA_DISPATCH_VERBOSE` — and leaves every kernel
- * pointer at scalar fallback.  `ama_dispatch_active_slot()` reports
- * the `"all-default-dispatch"` sentinel in that case, which the
- * dudect test harness in `tests/c/test_dispatch_only_env.c`
- * interprets as a CTest skip (exit code 77).
+ * A failing `AMA_DISPATCH_ONLY` request emits exactly one
+ * unconditional `[AMA Dispatch] ERROR:` line on stderr (NOT gated
+ * on `AMA_DISPATCH_VERBOSE`) and leaves every kernel pointer at
+ * scalar fallback.  Two distinct error messages cover the two
+ * failure modes:
+ *
+ *   UNRECOGNISED — the slot name is not in the inventory above.
+ *                  The error line enumerates the known slot names
+ *                  so an operator who fat-fingered the env var
+ *                  sees the right spelling.
+ *   UNSUPPORTED  — the slot name is known, but the host's CPU does
+ *                  not satisfy it (or the build did not compile
+ *                  the kernel).  The error line names the slot
+ *                  and the cause class.
+ *
+ * `ama_dispatch_active_slot()` reports the `"all-default-dispatch"`
+ * sentinel in either case, which the dudect test harness in
+ * `tests/c/test_dispatch_only_env.c` interprets as a CTest skip
+ * (exit code 77).
  */
 AMA_API const char *ama_dispatch_active_slot(void);
 

@@ -143,13 +143,17 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   in `ama_argon2.c::index_alpha` — merged two `else` branches that
   computed the same value; 1 clang-analyzer-core.UndefinedBinaryOperatorResult
   false positive on vendor donna code — single `// NOLINTNEXTLINE`
-  with INVARIANT-13 justification).  Three checks were dropped
+  with INVARIANT-13 justification).  Four checks were dropped
   explicitly from `Checks:` in `.clang-tidy` with one-line rationale
-  each (incompatible with the project's cryptographic-C style):
+  each (incompatible with the project's cryptographic-C style or a
+  known false-positive source):
   `readability-redundant-declaration`,
-  `clang-analyzer-deadcode.DeadStores`, and `concurrency-mt-unsafe`;
-  the dropped checks are recorded under the
-  `.clang-tidy` header so a future reader sees the prior triage.
+  `clang-analyzer-deadcode.DeadStores`, `concurrency-mt-unsafe`,
+  and `clang-analyzer-core.UndefinedBinaryOperatorResult` (the
+  vendor-donna interprocedural false positive — dropping the
+  specific check keeps the rest of `clang-analyzer-*` enforced);
+  the dropped checks are recorded under the `.clang-tidy` header
+  so a future reader sees the prior triage.
   Findings are uploaded as a per-run artefact
   (`clang-tidy-findings`) for offline review.
 

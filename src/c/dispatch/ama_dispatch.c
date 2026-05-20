@@ -293,16 +293,35 @@ static int dispatch_verbose(void) {
  * `saved` against the architecture-specific kernel symbol.  A
  * mismatch (the wired pointer is generic, a different SIMD tier, or
  * NULL) means the host does not satisfy the requested slot — return
- * NULL so the caller emits a clear error to stderr and leaves the
- * dispatch_table at scalar fallback.  The test harness in
- * tests/c/test_dispatch_only_env.c surfaces that state as a CTest
- * skip (exit 77).
+ * AMA_DISPATCH_ONLY_UNSUPPORTED so the caller emits a clear error
+ * and leaves the dispatch_table at scalar fallback.  An unknown
+ * slot name returns AMA_DISPATCH_ONLY_UNRECOGNISED.  Either way the
+ * test harness in tests/c/test_dispatch_only_env.c surfaces that
+ * state as a CTest skip (exit 77) via the `"all-default-dispatch"`
+ * sentinel from ama_dispatch_active_slot().
+ *
+ * The function itself emits NO stderr — every diagnostic is the
+ * caller's responsibility.  This is deliberate (Copilot review #323
+ * follow-up): when apply_dispatch_only() ALSO printed a stderr line
+ * for the unrecognised-slot branch, the caller's own diagnostic
+ * doubled it for that case while leaving the unsupported-slot case
+ * silent under the verbose gate.  The status-enum return restores
+ * the "exactly one diagnostic per failure" contract the header
+ * promises.
  *
  * INVARIANT-15 is preserved: this function runs inside the
  * pthread_once / InitOnceExecuteOnce body, on the same once-init
  * code path as the rest of dispatch_init_internal().
  * ============================================================================ */
-static const char *apply_dispatch_only(const char *slot) {
+typedef enum {
+    AMA_DISPATCH_ONLY_HONORED      = 0,
+    AMA_DISPATCH_ONLY_UNRECOGNISED = 1,  /* slot name not in the inventory */
+    AMA_DISPATCH_ONLY_UNSUPPORTED  = 2,  /* slot name known, but the CPU /
+                                          * build does not satisfy it */
+} apply_dispatch_only_result_t;
+
+static apply_dispatch_only_result_t apply_dispatch_only(
+        const char *slot, const char **resolved_label_out) {
     /* Save the wired state so we can selectively restore the
      * requested slot's kernel pointer(s).  Then zero the table and
      * restore the two always-non-NULL slots (keccak_f1600 +
@@ -319,9 +338,10 @@ static const char *apply_dispatch_only(const char *slot) {
     if (strcmp(slot, "sha3-avx512x4") == 0) {
         if (saved.keccak_f1600_x4 == ama_keccak_f1600_x4_avx512) {
             dispatch_table.keccak_f1600_x4 = saved.keccak_f1600_x4;
-            return "sha3-avx512x4";
+            *resolved_label_out = "sha3-avx512x4";
+            return AMA_DISPATCH_ONLY_HONORED;
         }
-        return NULL;
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
 #endif
 #endif
@@ -333,9 +353,10 @@ static const char *apply_dispatch_only(const char *slot) {
             dispatch_table.kyber_invntt    = saved.kyber_invntt;
             dispatch_table.kyber_pointwise = saved.kyber_pointwise;
             dispatch_table.kyber_cbd2      = saved.kyber_cbd2;
-            return "kyber-ntt-avx2";
+            *resolved_label_out = "kyber-ntt-avx2";
+            return AMA_DISPATCH_ONLY_HONORED;
         }
-        return NULL;
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
     if (strcmp(slot, "dilithium-ntt-avx2") == 0) {
         if (saved.dilithium_ntt == ama_dilithium_ntt_avx2) {
@@ -343,23 +364,26 @@ static const char *apply_dispatch_only(const char *slot) {
             dispatch_table.dilithium_invntt      = saved.dilithium_invntt;
             dispatch_table.dilithium_pointwise   = saved.dilithium_pointwise;
             dispatch_table.dilithium_rej_uniform = saved.dilithium_rej_uniform;
-            return "dilithium-ntt-avx2";
+            *resolved_label_out = "dilithium-ntt-avx2";
+            return AMA_DISPATCH_ONLY_HONORED;
         }
-        return NULL;
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
     if (strcmp(slot, "chacha20-avx2x8") == 0) {
         if (saved.chacha20_block_x8 == ama_chacha20_block_x8_avx2) {
             dispatch_table.chacha20_block_x8 = saved.chacha20_block_x8;
-            return "chacha20-avx2x8";
+            *resolved_label_out = "chacha20-avx2x8";
+            return AMA_DISPATCH_ONLY_HONORED;
         }
-        return NULL;
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
     if (strcmp(slot, "argon2-g-avx2") == 0) {
         if (saved.argon2_g == ama_argon2_g_avx2) {
             dispatch_table.argon2_g = saved.argon2_g;
-            return "argon2-g-avx2";
+            *resolved_label_out = "argon2-g-avx2";
+            return AMA_DISPATCH_ONLY_HONORED;
         }
-        return NULL;
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
     if (strcmp(slot, "x25519-avx2") == 0) {
         /* x25519_x4 is opt-in via AMA_DISPATCH_USE_X25519_AVX2=1.
@@ -368,9 +392,10 @@ static const char *apply_dispatch_only(const char *slot) {
          * slot is unsatisfied — surface that as a CTest skip. */
         if (saved.x25519_x4 == ama_x25519_scalarmult_x4_avx2) {
             dispatch_table.x25519_x4 = saved.x25519_x4;
-            return "x25519-avx2";
+            *resolved_label_out = "x25519-avx2";
+            return AMA_DISPATCH_ONLY_HONORED;
         }
-        return NULL;
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
 #endif
 
@@ -379,24 +404,27 @@ static const char *apply_dispatch_only(const char *slot) {
         if (saved.aes_gcm_encrypt == ama_aes256_gcm_encrypt_neon) {
             dispatch_table.aes_gcm_encrypt = saved.aes_gcm_encrypt;
             dispatch_table.aes_gcm_decrypt = saved.aes_gcm_decrypt;
-            return "aes-gcm-neon";
+            *resolved_label_out = "aes-gcm-neon";
+            return AMA_DISPATCH_ONLY_HONORED;
         }
-        return NULL;
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
     if (strcmp(slot, "chacha20-neon") == 0) {
         if (saved.chacha20_block_x8 == ama_chacha20_block_x8_neon) {
             dispatch_table.chacha20_block_x8 = saved.chacha20_block_x8;
-            return "chacha20-neon";
+            *resolved_label_out = "chacha20-neon";
+            return AMA_DISPATCH_ONLY_HONORED;
         }
-        return NULL;
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
     if (strcmp(slot, "sha3-neon") == 0) {
         if (saved.keccak_f1600 == ama_keccak_f1600_neon) {
             dispatch_table.keccak_f1600 = saved.keccak_f1600;
             dispatch_table.sha3_256     = saved.sha3_256;
-            return "sha3-neon";
+            *resolved_label_out = "sha3-neon";
+            return AMA_DISPATCH_ONLY_HONORED;
         }
-        return NULL;
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
 #endif
 
@@ -409,17 +437,19 @@ static const char *apply_dispatch_only(const char *slot) {
             dispatch_table.kyber_poly_add    = saved.kyber_poly_add;
             dispatch_table.kyber_poly_sub    = saved.kyber_poly_sub;
             dispatch_table.kyber_poly_reduce = saved.kyber_poly_reduce;
-            return "kyber-sve2";
+            *resolved_label_out = "kyber-sve2";
+            return AMA_DISPATCH_ONLY_HONORED;
         }
-        return NULL;
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
     if (strcmp(slot, "sha3-sve2") == 0) {
         if (saved.keccak_f1600 == ama_keccak_f1600_sve2) {
             dispatch_table.keccak_f1600 = saved.keccak_f1600;
             dispatch_table.sha3_256     = saved.sha3_256;
-            return "sha3-sve2";
+            *resolved_label_out = "sha3-sve2";
+            return AMA_DISPATCH_ONLY_HONORED;
         }
-        return NULL;
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
 #endif
 
@@ -431,18 +461,12 @@ static const char *apply_dispatch_only(const char *slot) {
      * if all branches are #ifdef'd out, the compiler can't see that. */
     (void)saved;
 
-    /* Unknown slot name (or every recognising branch was compiled
-     * out).  Emit a clear error so an operator who fat-fingered the
-     * env var sees what's wrong. */
-    fprintf(stderr,
-        "[AMA Dispatch] ERROR: AMA_DISPATCH_ONLY='%s' is not a recognised slot\n"
-        "[AMA Dispatch]        on this build.  Known slots: sha3-avx512x4,\n"
-        "[AMA Dispatch]        kyber-ntt-avx2, dilithium-ntt-avx2,\n"
-        "[AMA Dispatch]        chacha20-avx2x8, argon2-g-avx2, aes-gcm-neon,\n"
-        "[AMA Dispatch]        chacha20-neon, sha3-neon, kyber-sve2, sha3-sve2,\n"
-        "[AMA Dispatch]        x25519-avx2.  Dispatch left at scalar fallback.\n",
-        slot);
-    return NULL;
+    /* Slot name doesn't match any of our recognised entries (the
+     * inventory the slot inventory in include/ama_dispatch.h
+     * documents).  No stderr here — the caller's diagnostic in
+     * dispatch_init_internal() carries the inventory list for the
+     * unrecognised case (single line of stderr, no duplication). */
+    return AMA_DISPATCH_ONLY_UNRECOGNISED;
 }
 
 /* ============================================================================
@@ -1080,33 +1104,45 @@ static void dispatch_init_internal(void) {
     {
         const char *only = getenv("AMA_DISPATCH_ONLY");
         if (only && only[0]) {
-            const char *resolved = apply_dispatch_only(only);
-            if (resolved) {
+            /* Status-enum return + out-parameter for the resolved
+             * label.  Lets the caller emit exactly one diagnostic
+             * per outcome (Copilot review #323 round 2 follow-up):
+             * HONORED       — verbose-gated info line only.
+             * UNRECOGNISED  — one stderr ERROR with the slot inventory.
+             * UNSUPPORTED   — one stderr ERROR naming the slot.
+             * No outcome produces two stderr lines, satisfying the
+             * "single clear error" contract in
+             * include/ama_dispatch.h. */
+            const char *resolved = NULL;
+            apply_dispatch_only_result_t r = apply_dispatch_only(only, &resolved);
+            switch (r) {
+            case AMA_DISPATCH_ONLY_HONORED:
                 dispatch_active_slot_label = resolved;
                 if (dispatch_verbose())
                     fprintf(stderr,
                         "[AMA Dispatch] AMA_DISPATCH_ONLY='%s' honored — "
                         "every other slot is scalar fallback.\n", resolved);
-            } else {
-                /* apply_dispatch_only() emits a stderr error for the
-                 * unrecognised-slot branch (which enumerates the
-                 * known slot inventory so an operator who fat-fingered
-                 * the env var sees the fix), but the known-but-not-
-                 * supported-on-this-host branches return NULL silently
-                 * — `dispatch_verbose()` is too narrow a gate for the
-                 * second class (it requires `AMA_DISPATCH_VERBOSE=1`
-                 * which a caller asking for `AMA_DISPATCH_ONLY` is
-                 * unlikely to also have set).  Emit a clear stderr
-                 * line unconditionally so the contract in
-                 * `include/ama_dispatch.h`'s header comment
-                 * ("emits a clear error to stderr") matches the
-                 * implementation — Copilot review #323 follow-up. */
+                break;
+            case AMA_DISPATCH_ONLY_UNRECOGNISED:
                 fprintf(stderr,
-                    "[AMA Dispatch] ERROR: AMA_DISPATCH_ONLY='%s' could not be "
-                    "honored — the requested slot is either not recognised on "
-                    "this build or not supported by this host's CPU.  Dispatch "
-                    "left at scalar fallback; ama_dispatch_active_slot() will "
-                    "report \"all-default-dispatch\".\n", only);
+                    "[AMA Dispatch] ERROR: AMA_DISPATCH_ONLY='%s' is not a "
+                    "recognised slot on this build.  Known slots: "
+                    "sha3-avx512x4, kyber-ntt-avx2, dilithium-ntt-avx2, "
+                    "chacha20-avx2x8, argon2-g-avx2, aes-gcm-neon, "
+                    "chacha20-neon, sha3-neon, kyber-sve2, sha3-sve2, "
+                    "x25519-avx2.  Dispatch left at scalar fallback; "
+                    "ama_dispatch_active_slot() will report "
+                    "\"all-default-dispatch\".\n", only);
+                break;
+            case AMA_DISPATCH_ONLY_UNSUPPORTED:
+                fprintf(stderr,
+                    "[AMA Dispatch] ERROR: AMA_DISPATCH_ONLY='%s' is "
+                    "recognised, but the required CPU feature is not "
+                    "present on this host (or the build did not compile "
+                    "the kernel).  Dispatch left at scalar fallback; "
+                    "ama_dispatch_active_slot() will report "
+                    "\"all-default-dispatch\".\n", only);
+                break;
             }
         }
     }

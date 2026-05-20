@@ -188,12 +188,30 @@ container with the following invariants on both passes:
 - `SOURCE_DATE_EPOCH` pinned to a fixed reference epoch.
 - `PYTHONHASHSEED=0` for deterministic dict iteration.
 - `PYTHONDONTWRITEBYTECODE=1` (no `.pyc` files in the wheel).
-- `CFLAGS+=-fdebug-prefix-map=$GITHUB_WORKSPACE=.` to strip host
-  paths from DWARF debug-info.
-- `LDFLAGS+=-Wl,--build-id=sha1` to derive the linker build-id from
+- `CFLAGS` carries three overlapping prefix-maps targeting the
+  workspace tree: `-fdebug-prefix-map`, `-ffile-prefix-map`, and
+  `-fmacro-prefix-map`, each `=${GITHUB_WORKSPACE}=.`.  Strips host
+  paths from DWARF debug-info, from `__FILE__` macro expansions, and
+  from `-D` macro values respectively.
+- `LDFLAGS+=-Wl,--build-id=sha1` derives the linker build-id from
   the section contents instead of a fresh-per-invocation random value.
-- `AR_FLAGS=Drcs` so any `.a` archive members emit no timestamps or
-  UID/GID.
+- `MAKEFLAGS=-j1` + `CMAKE_BUILD_PARALLEL_LEVEL=1` force sequential
+  compilation so parallel-build write-order variation cannot leak
+  into the `.so`.
+- `python -m build --wheel --no-isolation` skips PEP 517 build
+  isolation, which would otherwise stage build deps inside
+  `/tmp/build-env-<random8>/` and let that random path leak into the
+  Cython-built `.so` via `__FILE__` expansion from NumPy headers.
+  Build deps are pre-installed into the container Python in the
+  workflow's "Install build prerequisites" step.
+
+`AR_FLAGS` / `ARFLAGS` are deliberately NOT set — CMake's archive
+creation invokes `ar` directly and ignores both env vars, and modern
+binutils (`>= 2.27`, March 2016) defaults to deterministic archives
+without flags.  If a future toolchain regression brings back
+non-deterministic `ar`, the strict diff below catches it and the
+fix is `CMAKE_C_ARCHIVE_CREATE` overrides — not an env var the
+build doesn't read.
 
 The container image is pinned to a date-stamped tag in the manylinux
 project's `YYYY.MM.DD-N` format (NOT `:latest`, NOT the floating
