@@ -6,12 +6,14 @@ on:
   pull_request:
     branches: [ main, develop ]
   schedule:
-    # Weekly extended sanitizer matrix at 04:00 UTC Saturdays (audit
-    # Issue 9).  MSan and TSan have higher false-positive rates than
-    # ASan+UBSan and a per-PR latency cost we're not willing to pay,
-    # so we run them weekly out of the merge-critical path.  Failures
+    # Nightly extended sanitizer matrix at 04:00 UTC (audit Issue 9
+    # deferral close-out).  MSan and TSan have higher false-positive
+    # rates than ASan+UBSan and a per-PR latency cost we're not
+    # willing to pay, so we run them out of the merge-critical path —
+    # but nightly rather than weekly so a regression introduced on
+    # day N surfaces by day N+1, not up to a week later.  Failures
     # surface on the scheduled run and a follow-up PR fixes them.
-    - cron: '0 4 * * 6'
+    - cron: '0 4 * * *'
   # workflow_dispatch enables on-demand runs of the extended matrix —
   # several jobs below predicate on `github.event_name ==
   # 'workflow_dispatch'`, so the trigger MUST be declared here or the
@@ -24,7 +26,7 @@ permissions:
   security-events: write  # Required for CodeQL SARIF upload
 
 # Collapse overlapping runs on the same ref; main and scheduled runs
-# (the weekly extended sanitizer matrix) are preserved.
+# (the nightly extended sanitizer matrix) are preserved.
 concurrency:
   group: static-analysis-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}
@@ -225,11 +227,12 @@ jobs:
 
   # =========================================================================
   # Extended sanitizer + clang-tidy + reproducible-build matrix
-  # (audit Issues 9 + 10) — runs weekly on the schedule above plus on
-  # manual workflow_dispatch.  PR-time and push-time runs only invoke
-  # the original ASan+UBSan gate above; this matrix is intentionally
-  # out of the merge critical path because MSan/TSan/clang-tidy/
-  # reproducible-build can each take 15-25 minutes by themselves.
+  # (audit Issues 9 + 10) — runs nightly on the schedule above plus
+  # on manual workflow_dispatch.  PR-time and push-time runs only
+  # invoke the original ASan+UBSan gate above; this matrix is
+  # intentionally out of the merge critical path because MSan/TSan/
+  # clang-tidy/reproducible-build can each take 15-25 minutes by
+  # themselves.
   # =========================================================================
 
   memory-sanitizer:

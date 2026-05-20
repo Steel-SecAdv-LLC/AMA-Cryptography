@@ -88,8 +88,10 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   drives off a checked-in `.clang-tidy` config and surfaces the
   `bugprone-*` / `cert-*` / `clang-analyzer-*` / `concurrency-*` /
   `performance-*` / `portability-*` finding set.  MSan / TSan /
-  Valgrind run weekly to keep PR latency low; clang-tidy also runs
-  per-PR.
+  Valgrind run nightly (audit Issue 9 deferral close-out — tightened
+  from weekly so a regression on day N surfaces by day N+1 rather
+  than up to a week later) to keep PR latency low; clang-tidy also
+  runs per-PR.
 
   **clang-tidy posture is currently ADVISORY** (`continue-on-error:
   true` on the job, `WarningsAsErrors: ''` in `.clang-tidy`).  The
