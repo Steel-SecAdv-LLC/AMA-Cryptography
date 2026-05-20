@@ -1,7 +1,7 @@
 # Semgrep Configuration for AMA Cryptography
 # Custom cryptographic security rules
-# Version: 3.0.1
-# Last Updated: 2026-04-27
+# Version: 3.1.0
+# Last Updated: 2026-05-19
 #
 # D-6 (audit 2026-04-27): rules tightened to drop the previous false-positive
 # storm (`__version__ = "3.0.0"` flagged as a hardcoded secret, `len(key) == 32`
@@ -288,6 +288,79 @@ rules:
   # rationale (e.g., FIPS ERROR state transition, __del__ destructor).
   # Re-evaluate when semgrep adds Python except-clause pattern support.
   # See: INVARIANT-9 in .github/INVARIANTS.md
+
+  # --------------------------------------------------------------------------
+  # C rules
+  # --------------------------------------------------------------------------
+  - id: bare-memset-zero-secret-named-buffer
+    # INVARIANT-6 hardening (audit Issue 4): bare `memset(BUF, 0, LEN)`
+    # in C cryptographic code is fragile — the compiler is permitted by
+    # the as-if rule to elide the zero write when BUF is not subsequently
+    # read.  `ama_secure_memzero()` in src/c/ama_consttime.c uses a
+    # volatile pointer + asm-memory-barrier pair (or _ReadWriteBarrier
+    # on MSVC) that defeats the optimisation.
+    #
+    # This rule fires when the destination name unambiguously denotes
+    # secret state (private/secret/master/seed/key prefixes, or the
+    # _state / _key / _seed / _secret / _kp suffix, or known HMAC
+    # padding buffers).  Generic names like `block`, `buf`, `out` —
+    # which sometimes hold AAD/CT instead of key bytes — are NOT
+    # flagged; mass-flagging those names would just train the team to
+    # silence the rule with a comment, which is worse than nothing.
+    #
+    # Paths: any *.c / *.h under src/c/ except src/c/vendor/.  Tests
+    # are intentionally NOT excluded — a test that takes a memset of
+    # a secret-named buffer is exercising the same anti-pattern.
+    patterns:
+      - pattern: memset($DST, 0, $LEN)
+      - metavariable-regex:
+          metavariable: $DST
+          # Match destinations whose name is unambiguously secret-bearing:
+          #   PREFIX form  — names that START with one of these tokens
+          #                  followed by an underscore or word boundary:
+          #     secret_*, private_*, master_*, seed_*, key_*, sk_*,
+          #     priv_*, kp_*, round_key*, tag_mask*, k_prime,
+          #     scalar_reduced, wnaf, hram, inner_hash, opad, ipad,
+          #     h_table, ghash_key, poly_key, chaining_state, nu_state
+          #   SUFFIX form  — names that END in:
+          #     _key, _secret, _seed, _state, _priv, _kp, _sk, _ks
+          # The character classes use anchors (^…$) so the regex matches
+          # the WHOLE identifier (no substring matches like `mystate`).
+          regex: '^(secret_[A-Za-z0-9_]+|private_[A-Za-z0-9_]+|master_[A-Za-z0-9_]+|seed_[A-Za-z0-9_]+|key_[A-Za-z0-9_]+|sk_[A-Za-z0-9_]+|priv_[A-Za-z0-9_]+|kp_[A-Za-z0-9_]+|round_keys?|tag_mask|k_prime|scalar_reduced|wnaf|hram|inner_hash|opad|ipad|h_table|ghash_key|poly_key|chaining_state|nu_state)$|^[A-Za-z0-9_]+_(key|secret|seed|state|priv|kp|sk|ks)$'
+    paths:
+      include:
+        - "src/c/"
+        - "src/c/**/*.c"
+        - "src/c/**/*.h"
+      exclude:
+        - "src/c/vendor/"
+        - "src/c/vendor/**"
+    message: |
+      Bare `memset(BUF, 0, LEN)` on a secret-named buffer.
+      Use `ama_secure_memzero(BUF, LEN)` from src/c/ama_consttime.c —
+      the volatile pointer + memory barrier defeats the compiler
+      elision the as-if rule permits.  (INVARIANT-6 / audit Issue 4.)
+    languages: [c]
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: secret-handling
+      cwe: "CWE-226: Sensitive Information in Resource Not Removed Before Reuse"
+
+  # The earlier-drafted companion rule `bare-memset-zero-key-or-iv-sized-buffer`
+  # was removed (Copilot review #322 follow-up) because it shared the
+  # secret-name regex with the ERROR rule above — so it would either
+  # double-fire on the SAME identifier (every flagged site getting both
+  # an ERROR and a WARNING) or, if the regex were INVERTED to match
+  # generic names, produce a torrent of false positives on innocent
+  # `memset(digest, 0, 32)` / `memset(nonce, 0, 12)` / `memset(addr, 0, 32)`
+  # sites where the buffer holds public material (a SHA-256 output, a
+  # public IV, a SPHINCS+ address word).  The ERROR rule above is the
+  # SINGLE source of truth for this anti-pattern; if a future codebase
+  # change introduces generically-named buffers that hold secrets, the
+  # right fix is to RENAME them into the secret-name pattern (so the
+  # ERROR rule catches the issue) rather than to widen the rule's
+  # false-positive surface.
 
 # --------------------------------------------------------------------------
 # Rule design notes (2026-04-27 audit follow-up)

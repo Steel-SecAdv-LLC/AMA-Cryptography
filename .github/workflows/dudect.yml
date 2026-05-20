@@ -3,30 +3,40 @@ name: CI - dudect Constant-Time Verification
 # RULESET / REQUIRED-CHECKS NOTE
 # ------------------------------
 # This workflow is path-filtered to PRs that touch C source / dudect
-# harness code (see `paths:` blocks below). PRs that don't touch any of
-# those paths will NOT trigger this workflow, so its 4 job names
-# ('dudect - Utility Functions', 'dudect - PQC Primitives',
-#  'dudect - Legacy Harnesses (tools/constant_time)',
-#  'dudect - X25519 AVX2 4-way (opt-in)') do NOT emit a status check on
-# such PRs.
+# harness code (see `paths:` blocks below).  Audit Issue 11 widened the
+# trigger to also include include/** (where ama_dispatch.h declares
+# which SIMD slot is taken) and ama_cryptography/** (the Python-side
+# nonce state and ctypes shims that select between scalar / SIMD code
+# paths).  A change in either of those trees can flip which dispatch
+# lane the production library hits at runtime without modifying any
+# file under src/c/ — and before this widening the dudect gate would
+# silently skip such PRs.
 #
-# Consequence for branch rulesets: do NOT add these 4 names to the
-# `main` branch's required-status-check list. A required check that is
-# never reported on path-filtered PRs blocks merge indefinitely with
-# 'Expected — Waiting for status to be reported'. Same reasoning as
-# `baseline-guard.yml::Enforce baseline.json justification` and the
+# PRs that don't touch any of those paths still won't trigger this
+# workflow, so its named jobs do NOT emit a status check on such PRs.
+# Consequence for branch rulesets: do NOT add these names to the
+# `main` branch's required-status-check list.  A required check that
+# is never reported on path-filtered PRs blocks merge indefinitely
+# with 'Expected — Waiting for status to be reported'.  Same reasoning
+# as `baseline-guard.yml::Enforce baseline.json justification` and the
 # wiki-sync job — see PR #289 description ('Deliberately not included')
 # for the canonical exclusion list.
 #
 # The dudect gate still fails closed when it DOES run (no
-# `continue-on-error`, no silent skips inside the harness), which is the
-# regression case it exists to catch.
+# `continue-on-error`, no silent skips inside the harness), which is
+# the regression case it exists to catch.
+#
+# The nightly `dudect-simd-sweep` job (added 2026-05 — audit Issue 3)
+# runs unconditionally on a cron schedule even when no path-filter
+# fires, so the per-PR coverage shrinks to "changed code" and the
+# full SIMD dispatch-table sweep happens out of the critical path.
 on:
   push:
     branches: [ main, develop, 'feature/**', 'fix/**' ]
     paths:
       - 'src/c/**'
       - 'include/**'
+      - 'ama_cryptography/**'
       - 'tests/c/test_dudect.c'
       - 'tests/c/dudect/**'
       - '.github/workflows/dudect.yml'
@@ -35,11 +45,15 @@ on:
     paths:
       - 'src/c/**'
       - 'include/**'
+      - 'ama_cryptography/**'
       - 'tests/c/test_dudect.c'
       - 'tests/c/dudect/**'
   schedule:
-    # Run weekly on Sundays at 02:00 UTC
+    # Run weekly on Sundays at 02:00 UTC (existing schedule).
     - cron: '0 2 * * 0'
+    # Nightly SIMD sweep at 03:30 UTC (audit Issue 3) — see
+    # `dudect-simd-sweep` job below for the slot inventory.
+    - cron: '30 3 * * *'
   workflow_dispatch:
     inputs:
       measurements:
@@ -50,8 +64,8 @@ on:
 permissions:
   contents: read
 
-# Collapse overlapping runs on the same ref.  Main and the weekly
-# schedule (Sundays 02:00 UTC) are preserved.
+# Collapse overlapping runs on the same ref.  Main and the weekly +
+# nightly schedules are preserved.
 concurrency:
   group: dudect-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}
@@ -59,6 +73,19 @@ concurrency:
 jobs:
   dudect-utility:
     name: dudect - Utility Functions
+    # The four legacy dudect lanes (utility / pqc / legacy-harnesses /
+    # x25519-avx2-batch) only fire on:
+    #   - push / pull_request (path-filtered above)
+    #   - workflow_dispatch (operator-triggered)
+    #   - the WEEKLY schedule '0 2 * * 0' (Sunday 02:00 UTC)
+    # The new NIGHTLY schedule '30 3 * * *' (audit Issue 3) is for the
+    # `dudect-simd-sweep` job only.  Without this guard, every nightly
+    # run would also re-execute the four legacy lanes — wasted compute
+    # the SIMD sweep doesn't need and explicit operational cost the
+    # weekly schedule already covers.  Copilot review #322 follow-up.
+    if: |
+      github.event_name != 'schedule' ||
+      github.event.schedule == '0 2 * * 0'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -91,6 +118,11 @@ jobs:
 
   dudect-pqc:
     name: dudect - PQC Primitives
+    # Same legacy-lane schedule guard as dudect-utility — see that
+    # job's header for rationale.
+    if: |
+      github.event_name != 'schedule' ||
+      github.event.schedule == '0 2 * * 0'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -123,6 +155,10 @@ jobs:
 
   dudect-legacy-harnesses:
     name: dudect - Legacy Harnesses (tools/constant_time)
+    # Same legacy-lane schedule guard as dudect-utility.
+    if: |
+      github.event_name != 'schedule' ||
+      github.event.schedule == '0 2 * * 0'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -158,6 +194,10 @@ jobs:
     # CHANGELOG [3.0.0] §Performance for the rationale) and the SIMD
     # kernel's constant-time signal is never sampled in CI.
     name: dudect - X25519 AVX2 4-way (opt-in)
+    # Same legacy-lane schedule guard as dudect-utility.
+    if: |
+      github.event_name != 'schedule' ||
+      github.event.schedule == '0 2 * * 0'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -187,3 +227,117 @@ jobs:
         run: |
           taskset -c 0 nice -n -10 \
             ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 300
+
+  # ===========================================================================
+  # SIMD sweep — nightly cron only (audit Issue 3)
+  # ===========================================================================
+  #
+  # The four jobs above sample the scalar / generic paths and a single
+  # opt-in AVX2 X25519 lane.  Every OTHER dispatch slot — AVX-512 SHA3
+  # 4-way, AVX2 Kyber NTT, AVX2 Dilithium NTT, AVX2 ChaCha20 8-way,
+  # AVX2 Argon2 G, NEON AES-GCM, NEON ChaCha20, NEON SHA3, SVE2 Kyber,
+  # SVE2 SHA3 — was previously sampled only indirectly through the
+  # general PQC / utility lanes when the runner happened to be on an
+  # x86-64 host with the right feature bits set.
+  #
+  # This sweep job runs the full dudect lane inventory on each
+  # supported architecture, with environment toggles set to force
+  # each slot to wire in its SIMD kernel (where the runner's CPU
+  # supports it; otherwise the lane gracefully degrades to scalar
+  # and the t-value is reported INFO-only).
+  #
+  # Matrix dimensions:
+  #
+  #   os           = ubuntu-latest             (x86-64 host)
+  #                  ubuntu-24.04-arm          (ARM64 / NEON host)
+  #
+  #   slot         = "x25519-avx2"             AMA_DISPATCH_USE_X25519_AVX2=1
+  #                  "all-default-dispatch"    runs every wired SIMD slot
+  #                                            simply by being on the host
+  #                                            that detects them
+  #
+  # The sweep is scheduled-only (cron) to keep PR latency low.  The
+  # legacy per-PR jobs above remain the gate for changed source code.
+  # If a sweep lane FAILS its strict t-value threshold, the failure is
+  # raised as a regular GitHub Actions failure on the schedule run —
+  # the project owner reviews it and files a follow-up before merging
+  # any new SIMD work.
+  dudect-simd-sweep:
+    name: dudect - SIMD sweep (${{ matrix.os }} / ${{ matrix.slot }})
+    # Fires on:
+    #   - the NIGHTLY schedule '30 3 * * *' (audit Issue 3)
+    #   - workflow_dispatch (operator-triggered)
+    # The WEEKLY '0 2 * * 0' schedule is reserved for the four legacy
+    # lanes above; running the sweep on both weekly and nightly would
+    # double-bill compute without adding coverage.
+    if: |
+      (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+        slot: [all-default-dispatch, x25519-avx2]
+        exclude:
+          # ARM hosts don't have an AVX2 X25519 kernel — the slot is
+          # not implemented on AArch64, and the env var is a no-op.
+          # Run only the default-dispatch sweep there.
+          - os: ubuntu-24.04-arm
+            slot: x25519-avx2
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake
+
+      - name: Build with dudect + every SIMD path the host supports
+        run: |
+          # AMA_ENABLE_SIMD / NEON / AVX2 default ON in CMakeLists.txt;
+          # we set them explicitly here to insulate the sweep from a
+          # future change of those defaults.  AVX-512 is opt-in (see
+          # CMakeLists.txt:64); enable it on x86-64 so the AVX-512
+          # 4-way Keccak kernel is sampled when the runner exposes it.
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DAMA_ENABLE_DUDECT=ON \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_AES_CONSTTIME=ON \
+            -DAMA_ENABLE_SIMD=ON \
+            -DAMA_ENABLE_AVX2=ON \
+            -DAMA_ENABLE_AVX512=ON \
+            -DAMA_ENABLE_NEON=ON \
+            -DAMA_ENABLE_LTO=OFF \
+            -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build -j$(nproc)
+
+      - name: Show dispatch info (which SIMD slots are wired)
+        run: |
+          # Print the dispatcher's selection before starting timing —
+          # surfaces which slots actually got SIMD kernels on this
+          # runner (CPUID-gated; e.g., an x86-64 runner without VAES
+          # falls back to AES-NI silently, and the dispatcher banner
+          # reports the active path).
+          ./build/bin/test_dudect --measurements 1000 --timeout 5 || true
+
+      - name: Run dudect (all-default-dispatch)
+        if: matrix.slot == 'all-default-dispatch'
+        env:
+          MEASUREMENTS: ${{ github.event.inputs.measurements || '100000' }}
+        run: |
+          taskset -c 0 nice -n -10 \
+            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 900
+
+      - name: Run dudect (x25519-avx2)
+        if: matrix.slot == 'x25519-avx2'
+        env:
+          MEASUREMENTS: ${{ github.event.inputs.measurements || '100000' }}
+          AMA_DISPATCH_USE_X25519_AVX2: '1'
+        run: |
+          taskset -c 0 nice -n -10 \
+            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 900

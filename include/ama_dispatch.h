@@ -242,6 +242,32 @@ AMA_API void ama_print_dispatch_info(void);
 /** Implementation level name string. */
 AMA_API const char *ama_impl_level_name(ama_impl_level_t level);
 
+/* ============================================================================
+ * AES-GCM backend introspection (audit Issue 5 / INVARIANT-20)
+ * ============================================================================
+ *
+ * Identifies which AES-GCM kernel the runtime dispatcher actually
+ * selected on the current host.  Returned strings are constant and
+ * NUL-terminated.  Consumers (downstream packagers, integration
+ * tests, hardening verifiers) can assert at startup that they did
+ * not end up on a cache-timing-unsafe path.
+ *
+ * Possible values:
+ *   "aes-ni-pclmul"        — x86-64 AES-NI + PCLMULQDQ (CT by HW spec)
+ *   "vaes-avx2"            — x86-64 VAES + VPCLMULQDQ (CT by HW spec)
+ *   "arm-aes-pmull"        — ARMv8 crypto extension AES + PMULL (CT by HW spec)
+ *   "bitsliced-software"   — algebraic constant-time S-box (cache-timing safe)
+ *   "table-insecure"       — table-lookup S-box (NOT cache-timing safe;
+ *                            only present when the build was explicitly
+ *                            opted in via -DAMA_AES_TABLE_INSECURE=ON)
+ *
+ * A "table-insecure" return is the audit-trail evidence that the
+ * deployment is running on a host with no hardware AES support AND
+ * was built without the bitsliced fallback.  Callers should refuse
+ * to proceed in shared-tenant deployments under that condition.
+ */
+AMA_API const char *ama_aes_gcm_active_backend(void);
+
 #ifdef __cplusplus
 }
 #endif

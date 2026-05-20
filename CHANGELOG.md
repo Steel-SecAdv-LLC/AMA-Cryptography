@@ -20,6 +20,132 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 ## [Unreleased]
 
 ### Added
+- **Tagged-release pipeline (audit Issue 1).** New
+  `.github/workflows/release.yml` runs cibuildwheel across Linux x86-64,
+  Linux ARM64, macOS x86-64, macOS arm64, and Windows AMD64 for
+  CPython 3.9–3.13; signs every wheel and the sdist with
+  `sigstore-python` (keyless, OIDC-bound); attaches SLSA v1 provenance via
+  `slsa-framework/slsa-github-generator`; and publishes to PyPI via
+  Trusted Publishing (no long-lived API token).  The preflight stage
+  re-asserts the tag-vs-`pyproject.toml` version match, the
+  full `tools/check_version_consistency.py` cross-anchor check, and the
+  generated SBOM coherence check before any wheel build begins.  The
+  `publish-pypi` job is gated by a GitHub Actions `environment: pypi`
+  approval barrier so a stray tag push cannot ship a release without
+  human review.
+- **`ama_aes_gcm_active_backend()` runtime introspection (audit Issue 5 /
+  INVARIANT-20 addendum).** Public C API declared in
+  `include/ama_dispatch.h`, returning a constant string identifying the
+  AES-GCM kernel the dispatcher actually selected
+  (`"vaes-avx2"`, `"aes-ni-pclmul"`, `"arm-aes-pmull"`,
+  `"bitsliced-software"`, or `"table-insecure"`).  Lets downstream
+  consumers assert at startup that the host did not silently land on the
+  cache-timing-unsafe table path.  Covered by
+  `tests/c/test_aes_gcm_backend_introspect.c`.
+- **`AMA_KYBER_BUILD_DIAGNOSTICS` compile-time gate (audit Issue 7).**
+  The ~600-line printf-emitting Kyber NTT/CPA roundtrip debug block in
+  `src/c/ama_kyber.c` is now gated behind its own opt-in flag instead of
+  the broader `AMA_TESTING_MODE` umbrella.  CMake force-enables the
+  flag only for the test-only static library (`ama_cryptography_test`),
+  so the production shared library and static archive ship without the
+  diagnostic surface area — verified by `nm` to confirm
+  `ama_kyber_debug_*` symbols are absent from `libama_cryptography.so`.
+- **`AMA_AES_TABLE_INSECURE` build-time acknowledgement (audit Issue 5 /
+  INVARIANT-20 addendum).** Setting `-DAMA_AES_CONSTTIME=OFF` now
+  triggers a CMake `FATAL_ERROR` unless `-DAMA_AES_TABLE_INSECURE=ON`
+  is ALSO passed.  Closes the silent-footgun problem where a downstream
+  packager could disable the bitsliced default by mistake and ship a
+  table-based path vulnerable to Bernstein 2005 / Osvik-Shamir-Tromer
+  2006 cache-timing.  The bitsliced default is preserved.
+- **C-library SBOM generator + drift gate (audit Issue 2 / INVARIANT-11
+  addendum).**  New `tools/generate_sbom.py` renders the CycloneDX 1.5
+  SBOM for the eleven AMA C components from `pyproject.toml` as the
+  single source of truth, and writes
+  `docs/compliance/sbom-c-library.json`.  The `security.yml::sbom` job
+  runs the generator in `--check` mode and fails the workflow on any
+  drift between the committed SBOM and a fresh render.  Replaces the
+  previous hardcoded heredoc that had stale `"version": "3.0.0"`
+  baked across all 11 components.
+- **Nightly SIMD dudect sweep (audit Issue 3).**  New
+  `dudect-simd-sweep` matrix job in `.github/workflows/dudect.yml`
+  runs every dispatch-table-routable kernel on x86-64 + ARM64 hosts
+  on a nightly cron, including both the default dispatch and the
+  AVX2 X25519 4-way opt-in.  Per-PR latency unchanged: the existing
+  jobs still gate on source touched.
+- **Reproducible-build verification (audit Issue 10 / INVARIANT-8).**
+  New `reproducible-build` job in `.github/workflows/static-analysis.yml`
+  builds the wheel twice from identical inputs (pinned
+  `SOURCE_DATE_EPOCH`, `PYTHONHASHSEED=0`, `PYTHONDONTWRITEBYTECODE=1`)
+  and asserts byte-equality of the bundled
+  `_integrity_signature.py::INTEGRITY_DIGEST_HEX` and of the extracted
+  wheel content (excluding the regenerated RECORD manifest).
+- **Extended sanitizer + clang-tidy matrix (audit Issue 9).**  New
+  `memory-sanitizer`, `thread-sanitizer`, `valgrind-memcheck`, and
+  `clang-tidy` jobs in `.github/workflows/static-analysis.yml`.  MSan
+  catches the uninitialized-read class that ASan masks; TSan covers
+  the once-primitive races in `ama_cpuid.c` / `ama_dispatch.c`; the
+  Valgrind pass is a defense-in-depth second opinion; clang-tidy
+  drives off a checked-in `.clang-tidy` config and surfaces the
+  `bugprone-*` / `cert-*` / `clang-analyzer-*` / `concurrency-*` /
+  `performance-*` / `portability-*` finding set.  MSan / TSan /
+  Valgrind run weekly to keep PR latency low; clang-tidy also runs
+  per-PR.
+
+  **clang-tidy posture is currently ADVISORY** (`continue-on-error:
+  true` on the job, `WarningsAsErrors: ''` in `.clang-tidy`).  The
+  pre-existing C codebase carries ~250 legitimate findings (mostly
+  `bugprone-implicit-widening-of-multiplication-result` and
+  `readability-redundant-declaration`) that are NOT regressions
+  introduced by this PR — flipping the gate fail-closed today would
+  block every subsequent PR.  `.clang-tidy` documents a phased
+  promotion roadmap (cleanup → category-by-category
+  `WarningsAsErrors` → flip the job to fail-closed).  Findings are
+  uploaded as a per-run artefact (`clang-tidy-findings`) so they
+  remain reviewable without a local replay.
+
+### Changed
+- **Bandit + pip-audit fail-closed (audit Issue 8).**  Both
+  `.github/workflows/security.yml::security-audit` and
+  `.github/workflows/ci-build-test.yml::security` now run
+  `pip-audit --strict` (non-zero exit on any vulnerable package) and
+  enforce a Medium-or-higher Bandit severity threshold (any
+  un-`# nosec`-justified finding fails CI).  Aligned with
+  INVARIANT-2 (no `continue-on-error` on security gates) and
+  INVARIANT-13 (`# nosec` hygiene).
+- **dudect path filter widened (audit Issue 11).**  The trigger now
+  also fires on changes under `include/**` (where `ama_dispatch.h`
+  declares the dispatch table) and `ama_cryptography/**` (where the
+  Python-side ctypes shims select between scalar and SIMD paths).
+  Closes the gap where a SIMD-routing change in a header could ship
+  without dudect verification.
+- **`ama_aes256_gcm_encrypt` / `_decrypt` NIST length limits (audit
+  Issue 6).**  The `(2^32 - 2) × 16 = 2^36 − 32` byte plaintext limit
+  (NIST SP 800-38D §5.2.1.1) and the `2^61 − 1` byte AAD limit are now
+  declared at TU scope as both the algebraic form
+  `((uint64_t)UINT32_MAX - 1) * 16ULL` and the direct NIST form
+  `(1ULL << 36) - 32`, tied together by a `_Static_assert` so a future
+  refactor cannot drift one without the other.  The checks fire BEFORE
+  the SIMD dispatcher hands off, so VAES / AES-NI / NEON-AES paths
+  never receive an oversized buffer.  Pre-existing per-function macro
+  definitions removed; the TU-scope constants are now the single source
+  of truth.  Covered by `tests/c/test_aes_gcm_backend_introspect.c`.
+- **Bare `memset(BUF, 0, LEN)` → `ama_secure_memzero` (audit Issue 4 /
+  INVARIANT-6).**  Replaced 12 bare `memset` calls on key-dependent
+  intermediate state in `ama_ed25519.c`, `ama_chacha20poly1305.c`,
+  `ama_aes_gcm.c`, and `ama_hmac_sha256.c` with the
+  volatile-pointer-plus-memory-barrier scrub primitive in
+  `ama_consttime.c`.  Also added a defense-in-depth scrub of
+  `scalar_reduced` and `e` in `ge25519_scalarmult_base_comb_signed`,
+  closing a stack residue that survived the function return.
+- **Semgrep C rules for bare memset of secret-named buffers (audit
+  Issue 4).**  Two new rules in `.semgrep.yml`
+  (`bare-memset-zero-secret-named-buffer` ERROR and
+  `bare-memset-zero-key-or-iv-sized-buffer` WARNING) fail CI on the
+  same anti-pattern going forward.  Vendor sources under
+  `src/c/vendor/` are excluded; the rule scope is the AMA-authored
+  C codebase.
+
+### Added (earlier in the 3.1.0 cycle)
 - **Signed module-integrity release plumbing (PR #305/#306).** Added
   `ama_cryptography/_build_sign.py`, `_integrity_signature.py`, native trust-anchor
   access through `AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX`, and fail-closed

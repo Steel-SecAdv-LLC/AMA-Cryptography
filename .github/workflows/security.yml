@@ -37,15 +37,76 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install bandit pip-audit
+        # `requirements-lock.txt` is the audit-time dependency closure for
+        # pip-audit's strict mode below.  Without it, pip-audit only sees
+        # whatever happens to be in the GitHub Actions runner image —
+        # which drifts.  Pinning to the lock guarantees the report is
+        # reproducible across runs.
+        pip install -r requirements-lock.txt
 
-    - name: Run pip-audit
+    # pip-audit STRICT MODE on the LOCK FILE (INVARIANT-2 / audit
+    # Issue 8 + Copilot review #322): the previous `pip-audit --desc`
+    # invocation surfaced findings but did not fail CI; --strict flips
+    # the exit status to non-zero on ANY vulnerable package.  Targeting
+    # `requirements-lock.txt` (instead of the live environment) means
+    # the audit closes over a pinned dependency set rather than over
+    # whatever transitive versions `pip install bandit pip-audit`
+    # happened to resolve in the CI runner image — so the gate is
+    # reproducible across reruns and across runner image rolls.  The
+    # CVE ignore-list lives in INVARIANT-14's table; new --ignore-vuln
+    # entries must arrive with the documented justification.  See
+    # nosec_disposition.md for the company-wide hygiene policy.
+    - name: Run pip-audit (strict, lock-file scoped)
       run: |
-        pip-audit --desc
+        pip-audit --strict --desc --requirement requirements-lock.txt
 
-    - name: Run Bandit security linter
+    # Bandit FAIL-CLOSED (INVARIANT-2 / INVARIANT-13 / audit Issue 8):
+    # the previous `bandit -l` flagged Medium+ findings to stdout but
+    # never failed the job.  We now run bandit twice:
+    #   1. JSON report — uploaded as the artefact below.  Includes a
+    #      `--baseline` flag if nosec_disposition.md publishes a
+    #      pre-classified ignore list at .github/bandit-baseline.json.
+    #   2. Severity gate — `--severity-level medium` fails the job on
+    #      any Medium/High not justified inline via `# nosec`.  The
+    #      `# nosec` justifications are themselves gated by
+    #      tools/check_suppression_hygiene.py (INVARIANT-13), so the
+    #      two checks combine to give us: "every Medium+ finding either
+    #      passes a code-review approved nosec with tracking ID, or
+    #      the build breaks."
+    - name: Run Bandit security linter (JSON report, non-blocking)
+      # `--exit-zero` makes this step strictly diagnostic — it writes
+      # the JSON artefact for downstream tooling and uploads.  The
+      # severity gate below is the actual fail-closed enforcement.
+      # Without `--exit-zero` this step exits non-zero on any Low+
+      # finding, which would short-circuit the Medium+ gate and turn
+      # the JSON-emit step itself into an enforcement layer with a
+      # different (looser) threshold than the documented policy
+      # (Copilot review #322).
       run: |
-        bandit -r ama_cryptography/ -f json -o bandit-report.json -l
-        bandit -r ama_cryptography/ -l
+        bandit -r ama_cryptography/ -f json -o bandit-report.json -l --exit-zero
+
+    - name: Run Bandit security linter (severity gate, fail-closed)
+      run: |
+        bandit -r ama_cryptography/ \
+          --severity-level medium \
+          --confidence-level medium \
+          --exit-zero \
+          > bandit-medium-plus.txt
+        # Emit the high/medium findings to the job log for reviewer
+        # visibility, then count nosec-unjustified findings — exit
+        # non-zero if any exist.  We do not use bandit's native exit
+        # code here because the `-l` (low) baseline above already
+        # captures the same scope under a different cutoff; this is
+        # the dedicated medium+ enforcement pass.
+        echo "=== Bandit Medium/High findings (fail-closed below this threshold) ==="
+        cat bandit-medium-plus.txt
+        # `bandit-medium-plus.txt` reports the totals on a line like
+        # "Total issues (by severity):".  A clean run shows
+        # "Medium: 0" and "High: 0"; anything else fails.
+        if grep -E '^\s*(Medium|High):\s*[1-9]' bandit-medium-plus.txt; then
+          echo "::error::Bandit reports unjustified Medium/High findings — see report above and either fix or justify inline per INVARIANT-13."
+          exit 1
+        fi
 
     - name: Upload security reports
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -54,6 +115,7 @@ jobs:
         name: security-reports
         path: |
           bandit-report.json
+          bandit-medium-plus.txt
         retention-days: 90
 
   # INVARIANT-11: SBOM generation is required for release tags.
@@ -91,128 +153,71 @@ jobs:
       run: |
         pip-audit --format=json --output pip-audit.json
 
-    - name: Upload audit results
-      if: always()
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-      with:
-        name: pip-audit-results
-        path: pip-audit.json
-
-    - name: Annotate SBOM status
+    # SBOM DRIFT GATE (audit Issue 2):
+    #
+    # docs/compliance/sbom-c-library.json is the committed CycloneDX
+    # artefact for the C-library components.  It is rendered by
+    # tools/generate_sbom.py from pyproject.toml — single source of
+    # truth for the package version.  Before this PR, the SBOM was a
+    # heredoc inside this very workflow with `"version": "3.0.0"`
+    # hardcoded across 11 components.  The package had since bumped
+    # to 3.1.0 — and the workflow even emitted a `::warning::SBOM
+    # C-library component uses static metadata` that no one was
+    # gated on.  Drift on day one.
+    #
+    # The job now does TWO things:
+    #
+    #   1. Regenerates the SBOM from pyproject.toml and compares to
+    #      the committed copy; any drift FAILS the workflow.  A PR
+    #      that bumps pyproject.toml without regenerating the SBOM
+    #      cannot ship.
+    #
+    #   2. Cross-checks the rendered SBOM's metadata.component.version
+    #      and every components[].version against the package version
+    #      independently of bytewise equality, so a future formatting
+    #      change cannot mask a stale version that happened to pass
+    #      byte-equal because the formatter normalised something.
+    - name: Generate canonical C-library SBOM (no drift)
       run: |
-        echo "::warning::SBOM C-library component uses static metadata — version and purl fields must be updated on each release"
+        python tools/generate_sbom.py --check
+        cp docs/compliance/sbom-c-library.json sbom-c-library.json
 
-    - name: Create C library SBOM component
+    - name: Assert SBOM versions match pyproject.toml
       run: |
-        cat > sbom-c-library.json << 'SBOM_EOF'
-        {
-          "bomFormat": "CycloneDX",
-          "specVersion": "1.5",
-          "serialNumber": "urn:uuid:ama-cryptography-c-library",
-          "version": 1,
-          "metadata": {
-            "component": {
-              "type": "library",
-              "name": "ama-cryptography",
-              "version": "3.0.0",
-              "description": "Quantum-resistant cryptographic protection system",
-              "licenses": [{"license": {"id": "Apache-2.0"}}],
-              "supplier": {"name": "Steel Security Advisors LLC"}
-            }
-          },
-          "components": [
-            {
-              "type": "library",
-              "name": "ama_sha3",
-              "version": "3.0.0",
-              "description": "SHA3-256/512, SHAKE128/256 (NIST FIPS 202)",
-              "scope": "required",
-              "purl": "pkg:generic/ama_sha3@3.0.0"
-            },
-            {
-              "type": "library",
-              "name": "ama_ed25519",
-              "version": "3.0.0",
-              "description": "Ed25519 digital signatures (RFC 8032)",
-              "scope": "required",
-              "purl": "pkg:generic/ama_ed25519@3.0.0"
-            },
-            {
-              "type": "library",
-              "name": "ama_dilithium",
-              "version": "3.0.0",
-              "description": "ML-DSA-65 post-quantum signatures (NIST FIPS 204)",
-              "scope": "required",
-              "purl": "pkg:generic/ama_dilithium@3.0.0"
-            },
-            {
-              "type": "library",
-              "name": "ama_kyber",
-              "version": "3.0.0",
-              "description": "Kyber-1024 ML-KEM (NIST FIPS 203)",
-              "scope": "required",
-              "purl": "pkg:generic/ama_kyber@3.0.0"
-            },
-            {
-              "type": "library",
-              "name": "ama_sphincs",
-              "version": "3.0.0",
-              "description": "SPHINCS+-256f SLH-DSA (NIST FIPS 205)",
-              "scope": "required",
-              "purl": "pkg:generic/ama_sphincs@3.0.0"
-            },
-            {
-              "type": "library",
-              "name": "ama_aes_gcm",
-              "version": "3.0.0",
-              "description": "AES-256-GCM AEAD (NIST SP 800-38D)",
-              "scope": "required",
-              "purl": "pkg:generic/ama_aes_gcm@3.0.0"
-            },
-            {
-              "type": "library",
-              "name": "ama_chacha20poly1305",
-              "version": "3.0.0",
-              "description": "ChaCha20-Poly1305 AEAD (RFC 8439)",
-              "scope": "required",
-              "purl": "pkg:generic/ama_chacha20poly1305@3.0.0"
-            },
-            {
-              "type": "library",
-              "name": "ama_x25519",
-              "version": "3.0.0",
-              "description": "X25519 ECDH key exchange (RFC 7748)",
-              "scope": "required",
-              "purl": "pkg:generic/ama_x25519@3.0.0"
-            },
-            {
-              "type": "library",
-              "name": "ama_argon2",
-              "version": "3.0.0",
-              "description": "Argon2id password hashing (RFC 9106)",
-              "scope": "required",
-              "purl": "pkg:generic/ama_argon2@3.0.0"
-            },
-            {
-              "type": "library",
-              "name": "ama_hkdf",
-              "version": "3.0.0",
-              "description": "HKDF-SHA3-256 key derivation (RFC 5869)",
-              "scope": "required",
-              "purl": "pkg:generic/ama_hkdf@3.0.0"
-            },
-            {
-              "type": "library",
-              "name": "ama_secp256k1",
-              "version": "3.0.0",
-              "description": "secp256k1 elliptic curve operations",
-              "scope": "required",
-              "purl": "pkg:generic/ama_secp256k1@3.0.0"
-            }
-          ],
-          "dependencies": []
-        }
-        SBOM_EOF
+        python - <<'PY'
+        import json
+        import re
+        import sys
+        from pathlib import Path
+
+        pkg_version = re.search(
+            r'^version\s*=\s*"([^"]+)"',
+            Path("pyproject.toml").read_text(encoding="utf-8"),
+            re.MULTILINE,
+        ).group(1)
+        sbom = json.loads(Path("sbom-c-library.json").read_text(encoding="utf-8"))
+
+        metadata_version = sbom["metadata"]["component"]["version"]
+        if metadata_version != pkg_version:
+            sys.exit(
+                f"FAIL: SBOM metadata.component.version={metadata_version!r}, "
+                f"pyproject.toml=={pkg_version!r}"
+            )
+
+        for component in sbom["components"]:
+            if component["version"] != pkg_version:
+                sys.exit(
+                    f"FAIL: SBOM component {component['name']!r} version="
+                    f"{component['version']!r}, pyproject.toml=={pkg_version!r}"
+                )
+            expected_purl = f"pkg:generic/{component['name']}@{pkg_version}"
+            if component["purl"] != expected_purl:
+                sys.exit(
+                    f"FAIL: SBOM component {component['name']!r} purl="
+                    f"{component['purl']!r}, expected {expected_purl!r}"
+                )
+        print(f"OK: all {len(sbom['components'])} components pinned to {pkg_version}")
+        PY
 
     - name: Upload SBOM artifacts
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

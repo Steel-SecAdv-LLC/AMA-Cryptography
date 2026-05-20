@@ -32,8 +32,12 @@ void ama_hmac_sha256(const uint8_t *key, size_t key_len,
     ama_sha256_ctx ctx;
     unsigned int i;
 
-    /* Step 1: Derive K' from key */
-    memset(k_prime, 0, AMA_SHA256_BLOCK_SIZE);
+    /* Step 1: Derive K' from key.  `k_prime` will hold the HMAC key
+     * (possibly truncated via SHA-256) for the lifetime of the call —
+     * use the secure scrub primitive on the initial zero pad so the
+     * whole buffer lifecycle stays in the same scrub class as the
+     * exit scrub below (INVARIANT-6). */
+    ama_secure_memzero(k_prime, AMA_SHA256_BLOCK_SIZE);
     if (key_len > AMA_SHA256_BLOCK_SIZE) {
         /* Key longer than block size: K' = SHA-256(key), zero-padded */
         ama_sha256(k_prime, key, key_len);
@@ -78,7 +82,8 @@ void ama_hmac_sha256_2(const uint8_t *key, size_t key_len,
     ama_sha256_ctx ctx;
     unsigned int i;
 
-    memset(k_prime, 0, AMA_SHA256_BLOCK_SIZE);
+    /* Derive K' — see ama_hmac_sha256() for INVARIANT-6 rationale. */
+    ama_secure_memzero(k_prime, AMA_SHA256_BLOCK_SIZE);
     if (key_len > AMA_SHA256_BLOCK_SIZE) {
         ama_sha256(k_prime, key, key_len);
     } else {

@@ -198,12 +198,31 @@ model (T4.3). Branch protection rules should enforce this.
 ## INVARIANT-11 — SBOM as Release Gate
 
 CycloneDX SBOM generation (Python + C library) **must** succeed as a required
-check on release tags.
+check on release tags, and the rendered SBOM **must** be a deterministic
+function of the canonical package version in `pyproject.toml`.
 
 The `security.yml` workflow triggers on `v*` tags so the SBOM job executes
 automatically on every release. A repository administrator should add the
 `SBOM Generation (CycloneDX)` job as a required status check on tag protection
 rules to enforce the gate.
+
+### INVARIANT-11 Addendum — No Hardcoded SBOM Versions
+
+The committed CycloneDX SBOM for the C-library components
+(`docs/compliance/sbom-c-library.json`) **must** be rendered exclusively from
+`tools/generate_sbom.py`, which reads the package version from
+`pyproject.toml` as its single source of truth. Hardcoded `"version": "X.Y.Z"`
+literals inside CI workflows, heredoc-emitted SBOM fragments, or inline
+component lists are prohibited.
+
+**Enforcement:** The `sbom` job in `.github/workflows/security.yml` runs
+`python tools/generate_sbom.py --check` and fails the workflow if the
+on-disk SBOM diverges from a fresh render against pyproject.toml — so a PR
+that bumps the package version without regenerating the SBOM cannot ship.
+
+The `release.yml` workflow runs the same check inside its preflight stage
+so a tagged release that forgot to regenerate the SBOM is blocked before
+any wheel build happens.
 
 ## INVARIANT-12 — Constant-Time Required for All Secret-Dependent Operations
 
@@ -446,6 +465,28 @@ Required properties:
 This invariant protects the project from regressing from the bitsliced/cache-safe
 AES default back to lookup-table behavior that can leak through cache timing on
 shared hardware.
+
+### INVARIANT-20 Addendum — Explicit Opt-In for Table-Based AES
+
+Disabling the constant-time AES path with `-DAMA_AES_CONSTTIME=OFF` alone is
+**prohibited**. Operators who explicitly require the table-based path
+(legacy hardware compatibility benchmarks, etc.) **must** also pass
+`-DAMA_AES_TABLE_INSECURE=ON` to acknowledge the cache-timing exposure. The
+CMake build system fails configuration with `FATAL_ERROR` when
+`AMA_AES_CONSTTIME=OFF` is requested without the matching acknowledgement
+flag.
+
+The runtime API `ama_aes_gcm_active_backend()` (declared in
+`include/ama_dispatch.h`) returns a constant NUL-terminated string
+identifying the kernel actually selected by the dispatcher
+(`"vaes-avx2"`, `"aes-ni-pclmul"`, `"arm-aes-pmull"`,
+`"bitsliced-software"`, or `"table-insecure"`). Downstream integration
+tests **should** assert at startup that this label is never
+`"table-insecure"` unless the deployment is explicitly cleared for that
+path.
+
+**Test:** `tests/c/test_aes_gcm_backend_introspect.c` asserts both
+properties at build time when `AMA_AES_CONSTTIME` is defined.
 
 ## INVARIANT-21 — X25519 Low-Order Outputs Must Be Rejected
 
