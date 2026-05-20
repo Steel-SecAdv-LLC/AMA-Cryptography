@@ -79,6 +79,16 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   and asserts byte-equality of the bundled
   `_integrity_signature.py::INTEGRITY_DIGEST_HEX` and of the extracted
   wheel content (excluding the regenerated RECORD manifest).
+  **Audit Issue 10 deferral close-out:** the native-artefact diff lane
+  is now STRICT, not advisory.  Three controls make this reachable:
+  (1) the job runs inside a pinned `manylinux_2_28_x86_64:<dated-tag>`
+  container so the GCC + binutils + glibc set is bytewise-identical
+  across both passes; (2) `CFLAGS` carries
+  `-fdebug-prefix-map=${PWD}=. -ffile-prefix-map=${PWD}=.` so the
+  host cwd is stripped from DWARF debug info; (3) `AR_FLAGS=Drcs`
+  and `LDFLAGS=-Wl,--build-id=sha1` force deterministic archive
+  headers and build-IDs.  INVARIANT-8 addendum documents the policy.
+  `:latest` is prohibited as a container tag.
 - **Extended sanitizer + clang-tidy matrix (audit Issue 9).**  New
   `memory-sanitizer`, `thread-sanitizer`, `valgrind-memcheck`, and
   `clang-tidy` jobs in `.github/workflows/static-analysis.yml`.  MSan

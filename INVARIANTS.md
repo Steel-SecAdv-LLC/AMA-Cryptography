@@ -176,6 +176,35 @@ does not meet the minimum version. To build on an unverified toolchain (e.g.,
 for development or CI on older hosts), pass `-DAMA_ALLOW_UNVERIFIED_TOOLCHAIN=ON`
 to downgrade to a `WARNING`.
 
+### INVARIANT-8 Addendum — Reproducible-build CI gate is strict on native artefacts
+
+The `reproducible-build` job in `.github/workflows/static-analysis.yml`
+builds the wheel twice from identical inputs and **must** see byte-equal
+output across (a) `INTEGRITY_DIGEST_HEX`, (b) every shipped `.py` file
+except `_integrity_signature.py` (which is legitimately ephemeral per
+INVARIANT-17), and (c) every compiled native artefact (`.so` / `.pyd` /
+Cython `_bin.so`). The "(c)" lane was promoted from advisory to strict
+in the audit Issue 10 deferral close-out and stays strict.
+
+Three controls hold (c) reachable:
+
+- **Container pin:** the job runs inside a specific
+  `quay.io/pypa/manylinux_2_28_x86_64:<dated-tag>` image, both passes
+  on the same tag. `:latest` is prohibited — it re-introduces
+  host-toolchain drift between passes. If the pinned tag is yanked
+  upstream, refresh to the next dated tag in the same release line.
+- **Compiler flags:** `CFLAGS` includes
+  `-fdebug-prefix-map=${PWD}=. -ffile-prefix-map=${PWD}=.` so the host
+  cwd is stripped from DWARF debug info and `__FILE__` macros.
+- **Archiver flags:** `AR_FLAGS=Drcs` and `LDFLAGS=-Wl,--build-id=sha1`
+  drop per-object mtime in archives and force a deterministic build-ID
+  derived from input bits.
+
+If a new non-determinism surfaces (e.g., a future Cython release embeds
+a timestamp in generated C), the remediation is at the root cause, not
+a per-path exemption in the diff. Adding `--exclude` clauses to weaken
+the strict gate is prohibited.
+
 ## INVARIANT-9 — Maximum Exception Scope in Crypto Paths
 
 Code under `ama_cryptography/` **should** use narrow exception types

@@ -465,61 +465,82 @@ jobs:
           retention-days: 30
 
   reproducible-build:
-    name: Reproducible Build (digest + .py byte-equality)
-    # INVARIANT-8 declares deterministic builds.  Audit Issue 10 closes
-    # the missing verification step: build the wheel twice from
-    # identical inputs and assert that the load-bearing artefacts are
-    # byte-identical.
+    name: Reproducible Build (digest + .py + native byte-equality)
+    # INVARIANT-8 declares deterministic builds.  Audit Issue 10 closed
+    # the missing verification step (build the wheel twice from
+    # identical inputs); audit Issue 10 deferral close-out (this PR)
+    # promotes the native-artefact diff from advisory to strict.
     #
-    # SCOPE OF THIS JOB (Copilot review #322):
+    # SCOPE OF THIS JOB:
     #
-    #   STRICT  — INTEGRITY_DIGEST_HEX in _integrity_signature.py must
-    #             match across both builds.  This is the artefact whose
-    #             stability the import-time integrity gate depends on;
-    #             any drift here turns the gate into a coin flip across
-    #             redeploys.
-    #   STRICT  — Every .py file inside the wheel must be byte-identical
-    #             across both builds.  The digest above is the SHA3-256
-    #             of these files, so this is implied by the digest check
-    #             but we assert it independently to surface the offending
-    #             filename when a regression happens.
-    #   ADVISORY — Compiled native artefacts (libama_cryptography.so,
-    #             .pyd, Cython-generated .so) may differ between two
-    #             builds even with `SOURCE_DATE_EPOCH` pinned: GCC/clang
-    #             can embed build-host paths in DWARF debug info, the
-    #             linker can place symbols differently across runs, and
-    #             we do not yet build under a reproducible-libc /
-    #             musl-cross image.  Reaching strict .so reproducibility
-    #             is a separate worktree (reprotest, musl-cross builds);
-    #             that scope is documented in INVARIANT-8 as a roadmap
-    #             item, not a today-blocker.
+    #   STRICT — INTEGRITY_DIGEST_HEX in _integrity_signature.py must
+    #            match across both builds.  This is the artefact whose
+    #            stability the import-time integrity gate depends on;
+    #            any drift here turns the gate into a coin flip across
+    #            redeploys.
+    #   STRICT — Every .py file inside the wheel EXCEPT
+    #            _integrity_signature.py must be byte-identical across
+    #            both builds.  The digest above is the SHA3-256 of these
+    #            files, so this is implied by the digest check but we
+    #            assert it independently to surface the offending
+    #            filename when a regression happens.
+    #            _integrity_signature.py is legitimately ephemeral
+    #            per-build (INVARIANT-17 ephemeral signing keypair);
+    #            that exemption stays.
+    #   STRICT — Compiled native artefacts (libama_cryptography.so,
+    #            .pyd, Cython-generated .so) must be byte-identical
+    #            across both builds (audit Issue 10 deferral close-out).
+    #            The three controls below make this reachable today:
+    #              1. CFLAGS pin (`-fdebug-prefix-map` /
+    #                 `-ffile-prefix-map`) strips host-cwd from DWARF
+    #                 debug info and __FILE__ macros.
+    #              2. LDFLAGS pin (`--build-id=sha1`) forces a build-ID
+    #                 derived from input bits, not linker timestamp.
+    #              3. AR_FLAGS=Drcs forces deterministic archive headers
+    #                 (no mtime per .o), and the manylinux_2_28 container
+    #                 pin below keeps the toolchain bytewise-identical
+    #                 across passes.
     #
     # Inputs we hold steady on both passes:
     #   - SOURCE_DATE_EPOCH pinned to a fixed value so any embedded
     #     timestamp is identical across builds.
     #   - PYTHONHASHSEED=0 so dict iteration order is deterministic.
     #   - PYTHONDONTWRITEBYTECODE=1 so no .pyc files end up in the wheel.
-    #   - Same Python version (single setup-python step).
+    #   - Same Python version (manylinux ships /opt/python/cp311-cp311).
+    #   - Same container image both passes (see `container:` below).
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    # Pin the build environment to a specific manylinux_2_28 tag.  The
+    # tag carries a frozen GCC + glibc + cmake + binutils set, so the
+    # native artefact's bytes cannot drift between two consecutive
+    # runs because GitHub's `ubuntu-latest` upgraded its apt sources
+    # underneath us.  INVARIANT-8 addendum documents the policy.
+    # INVARIANT-20: this image's GCC default still produces
+    # constant-time AES (the default `-DAMA_AES_CONSTTIME=ON` is
+    # untouched by this pin — the only thing the image controls is the
+    # bytewise output of that same constant-time path, not which AES
+    # backend the build selects).
+    # DO NOT change the tag to `:latest`; that re-introduces exactly
+    # the host-toolchain non-determinism this gate now enforces against.
+    # If the tag is yanked from quay.io, refresh to the most recent
+    # dated tag in the same release line — never to `:latest`.
+    container:
+      image: quay.io/pypa/manylinux_2_28_x86_64:2024-12-01-c937a9c
     timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install dependencies
+      - name: Install build prerequisites
+        # manylinux_2_28 ships gcc-12, binutils, and cpython 3.9–3.13
+        # under /opt/python/ — no yum/dnf install is required for the
+        # wheel build itself.  We only install `build` plus the
+        # build-system requires into the bundled CPython 3.11
+        # interpreter that drives `python -m build`.
         run: |
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake libssl-dev
-          python -m pip install --upgrade pip
-          pip install build
+          /opt/python/cp311-cp311/bin/python -m pip install --upgrade pip
+          /opt/python/cp311-cp311/bin/python -m pip install \
+              build 'cmake>=4.3.2' 'cython>=3.2.4' 'numpy>=1.24.0'
 
       - name: Build wheel — pass 1
         env:
@@ -527,9 +548,24 @@ jobs:
           SOURCE_DATE_EPOCH: "1700000000"   # 2023-11-14 — stable reference epoch
           PYTHONHASHSEED: "0"
           PYTHONDONTWRITEBYTECODE: "1"
+          # Strip host-cwd from DWARF debug-info AND __FILE__ macros.
+          # Without these, two builds embed different /__w/...-suffixed
+          # paths in the .so's .debug_info / .debug_line sections, and
+          # the strict diff at the bottom of this job never converges.
+          CFLAGS: "-fdebug-prefix-map=${PWD}=. -ffile-prefix-map=${PWD}=."
+          # Deterministic build-ID derived from input bits.  Default
+          # `--build-id` mixes in a linker-state timestamp on some
+          # toolchains and defeats SOURCE_DATE_EPOCH on the linker side.
+          LDFLAGS: "-Wl,--build-id=sha1"
+          # Drop archive timestamps (`D` flag, conventional `rcs`
+          # otherwise).  Without `D`, the static-archive header carries
+          # the mtime of each .o at the moment ar added it — passes 1
+          # and 2 cannot match because the .o files were touched at
+          # different real wall-clock times.
+          AR_FLAGS: "Drcs"
         run: |
-          rm -rf build dist
-          python -m build --wheel --outdir dist1/
+          rm -rf build dist dist1
+          /opt/python/cp311-cp311/bin/python -m build --wheel --outdir dist1/
           ls -lh dist1/
 
       - name: Build wheel — pass 2 (independent rebuild)
@@ -538,9 +574,12 @@ jobs:
           SOURCE_DATE_EPOCH: "1700000000"
           PYTHONHASHSEED: "0"
           PYTHONDONTWRITEBYTECODE: "1"
+          CFLAGS: "-fdebug-prefix-map=${PWD}=. -ffile-prefix-map=${PWD}=."
+          LDFLAGS: "-Wl,--build-id=sha1"
+          AR_FLAGS: "Drcs"
         run: |
-          rm -rf build
-          python -m build --wheel --outdir dist2/
+          rm -rf build dist2
+          /opt/python/cp311-cp311/bin/python -m build --wheel --outdir dist2/
           ls -lh dist2/
 
       - name: Compare integrity digest + .py content across builds
@@ -572,7 +611,7 @@ jobs:
           #      them drifts, the digest above would also drift).
           #   3. EXPECTED-TO-DIFFER — _integrity_signature.py itself.
           #      Reported as advisory in the log; not a fail trigger.
-          python - <<'PY'
+          /opt/python/cp311-cp311/bin/python - <<'PY'
           import hashlib
           import re
           import sys
@@ -683,20 +722,36 @@ jobs:
           )
           PY
 
-      - name: Diff native artefacts (advisory — known non-reproducible)
-        # Surface .so / .pyd / Cython _bin.so diffs as an artefact for
-        # diagnostic visibility.  This step is informational only —
-        # the gate is the digest+.py check above (the load-bearing
-        # contract).  See job-level header for the roadmap toward
-        # fully byte-reproducible native artefacts.
-        continue-on-error: true
+      - name: Diff native artefacts (strict)
+        # Audit Issue 10 deferral close-out (promoted from advisory).
+        # The .so / .pyd / Cython _bin.so artefacts are now required
+        # to be byte-identical across the two passes.  Reachable today
+        # because of (a) the CFLAGS prefix-map pin, (b) the LDFLAGS
+        # --build-id=sha1 pin, (c) AR_FLAGS=Drcs deterministic
+        # archives, and (d) the manylinux_2_28 container tag pin at
+        # the job level — see job header for the full rationale.
+        #
+        # Exclusions, narrow and named:
+        #   --exclude='*.py'   the .py byte-equality block above is the
+        #                      strict gate for .py with the INVARIANT-17
+        #                      ephemeral-signature exemption built in;
+        #                      including .py here would deduplicate that
+        #                      exemption and fail on _integrity_signature.py.
+        #   --exclude=RECORD   the wheel RECORD carries SHA256 hashes of
+        #                      every wheel entry; the .py block above
+        #                      hashes those by byte-equality, and the
+        #                      native diff below hashes the bytes
+        #                      directly — RECORD here would double-count.
+        #
+        # The fail behaviour is now the diff's natural non-zero exit;
+        # no `continue-on-error: true`, no `|| true` swallow.
         run: |
           mkdir -p /tmp/w1 /tmp/w2
           (cd /tmp/w1 && unzip -q "$GITHUB_WORKSPACE"/dist1/*.whl)
           (cd /tmp/w2 && unzip -q "$GITHUB_WORKSPACE"/dist2/*.whl)
-          echo "=== Native artefact diff (informational) ==="
+          echo "=== Native artefact diff (strict) ==="
           diff --brief --recursive --exclude='*.py' --exclude=RECORD \
-            /tmp/w1 /tmp/w2 || true
+            /tmp/w1 /tmp/w2
 
       - name: Upload both wheels for offline diff
         if: failure()
