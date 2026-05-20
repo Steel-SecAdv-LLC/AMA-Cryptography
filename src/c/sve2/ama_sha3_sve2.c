@@ -131,7 +131,7 @@ ama_error_t ama_sha3_256_sve2(const uint8_t *input, size_t input_len, uint8_t ou
     if (!input && input_len > 0) return AMA_ERROR_INVALID_PARAM;
 
     uint64_t state[25];
-    memset(state, 0, sizeof(state));
+    memset(state, 0, sizeof(state));  /* PUBLIC-DATA: SHA3 sponge state init (pre-absorb) */
     const size_t rate = 136;
     size_t offset = 0;
 
@@ -156,7 +156,7 @@ ama_error_t ama_sha3_256_sve2(const uint8_t *input, size_t input_len, uint8_t ou
 
     /* Final block with SHA-3 padding (0x06 marker + 0x80 sentinel). */
     uint8_t block[200];
-    memset(block, 0, sizeof(block));
+    memset(block, 0, sizeof(block));  /* PUBLIC-DATA: SHA3 padding block init (zero-fill then 0x06/0x80 padding bytes) */
     size_t remaining = input_len - offset;
     if (remaining > 0)
         memcpy(block, input + offset, remaining);

@@ -212,6 +212,7 @@ void ama_sphincs_wots_chain_neon(uint8_t *out, const uint8_t *in,
     for (uint32_t i = start; i < start + steps && i < 256; i++) {
         addr[6] = i;
         uint8_t block[64];
+        /* PUBLIC-DATA: WOTS+ chain hash block init (zero-fill then overwritten by [pub_seed || addr || value]; all components public). */
         memset(block, 0, 64);
         memcpy(block, out, n < 32 ? n : 32);
         block[32] = (uint8_t)(addr[0] >> 24);

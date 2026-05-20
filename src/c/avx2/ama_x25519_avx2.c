@@ -183,6 +183,7 @@ static void fe25519_10_contract(uint8_t out[32], const fe25519_10 in) {
     f[8] <<= 4;
     f[9] <<= 6;
 
+    /* PUBLIC-DATA: serialization output init (out is overwritten by the F-macro OR-merge below; field-element bits provided by caller). */
     memset(out, 0, 32);
 #define F(i, s)                                                   \
     out[(s) + 0] |= (uint8_t)(f[i] & 0xff);                       \

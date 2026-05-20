@@ -728,6 +728,7 @@ AMA_API ama_error_t ama_x25519_keypair(
     secret_key[31] |= 64;
 
     uint8_t basepoint[32];
+    /* PUBLIC-DATA: basepoint — RFC 7748 §5 X25519 canonical generator (9, …). */
     memset(basepoint, 0, sizeof(basepoint));
     basepoint[0] = 9;
 

@@ -295,6 +295,7 @@ void ama_aes256_gcm_encrypt_avx2(
         memcpy(ciphertext + full_blocks * 16, pad_ct, remaining);
 
         /* GHASH on padded ciphertext block */
+        /* PUBLIC-DATA: ciphertext tail zero-pad for GHASH alignment (ct = public; pad-region bytes are zeros for GHASH). */
         memset(pad_ct + remaining, 0, 16 - remaining);
         ct_block = _mm_loadu_si128((const __m128i *)pad_ct);
         ghash_acc = ghash_mul_pclmul(_mm_xor_si128(ghash_acc, ct_block), H);

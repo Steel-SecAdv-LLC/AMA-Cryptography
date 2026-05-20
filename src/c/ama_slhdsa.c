@@ -251,7 +251,7 @@ static void sha2_F(const slhdsa_params_t *p, uint8_t *out,
     ama_sha256_ctx ctx;
 
     slh_addr_serialize(p, addr_c, adrs);
-    memset(padding, 0, sizeof(padding));
+    memset(padding, 0, sizeof(padding));  /* PUBLIC-DATA: FIPS 205 toByte(0,128-n) zero-pad bytes (hash-input domain separator). */
 
     ama_sha256_init(&ctx);
     ama_sha256_update(&ctx, pub_seed, p->n);
@@ -296,6 +296,7 @@ static void sha2_HT(const slhdsa_params_t *p, uint8_t *out,
         ama_secure_memzero(out, p->n);
         return;
     }
+    /* PUBLIC-DATA: SHA2_HT input buffer init — composes PK.seed || toByte(0,128-n) || ADRSc || M; padding region intentionally kept as zeros (FIPS 205 §11.2). */
     memset(buf, 0, total);
     memcpy(buf, pub_seed, p->n);
     /* toByte(0, 128-n) is left as zeros from the memset above. */
@@ -317,7 +318,7 @@ static void sha2_PRF(const slhdsa_params_t *p, uint8_t *out,
     ama_sha256_ctx ctx;
 
     slh_addr_serialize(p, addr_c, adrs);
-    memset(padding, 0, sizeof(padding));
+    memset(padding, 0, sizeof(padding));  /* PUBLIC-DATA: FIPS 205 toByte(0,128-n) zero-pad bytes (hash-input domain separator). */
 
     ama_sha256_init(&ctx);
     ama_sha256_update(&ctx, pub_seed, p->n);
@@ -893,7 +894,7 @@ static void slh_ht_sign(const slhdsa_params_t *p, uint8_t *sig,
     uint32_t addr[8];
     uint8_t root[32];
     size_t layer;
-    memset(addr, 0, sizeof(addr));
+    memset(addr, 0, sizeof(addr));  /* PUBLIC-DATA: SLH-DSA ADRS struct init (32-byte address word; tree path is public) */
 
     slh_set_layer(addr, 0);
     slh_set_tree(addr, tree);
@@ -937,7 +938,7 @@ static int slh_ht_verify(const slhdsa_params_t *p, const uint8_t *msg,
     size_t layer;
     unsigned int h;
 
-    memset(addr, 0, sizeof(addr));
+    memset(addr, 0, sizeof(addr));  /* PUBLIC-DATA: SLH-DSA ADRS struct init (32-byte address word; tree path is public) */
     slh_set_layer(addr, 0);
     slh_set_tree(addr, tree);
 
@@ -1026,7 +1027,7 @@ static ama_error_t slh_keygen_internal(const slhdsa_params_t *p,
     uint8_t root[32];
     uint8_t auth_path[9 * 32];   /* h' ≤ 9 → ≤ 9*32 = 288 B */
 
-    memset(addr, 0, sizeof(addr));
+    memset(addr, 0, sizeof(addr));  /* PUBLIC-DATA: SLH-DSA ADRS struct init (32-byte address word; tree path is public) */
     slh_set_layer(addr, (uint32_t)(p->d - 1));
     slh_set_tree(addr, 0);
 
@@ -1112,7 +1113,7 @@ static ama_error_t slh_sign_internal(const slhdsa_params_t *p,
     slh_split_digest(p, fors_msg, &tree, &leaf_idx);
 
     /* FORS sign at (tree, leaf_idx). */
-    memset(fors_addr, 0, sizeof(fors_addr));
+    memset(fors_addr, 0, sizeof(fors_addr));  /* PUBLIC-DATA: SLH-DSA FORS ADRS struct init (32-byte address word; tree path is public) */
     slh_set_tree(fors_addr, tree);
     slh_set_type(fors_addr, SLH_ADDR_TYPE_FORSTREE);
     slh_set_keypair(fors_addr, leaf_idx);
@@ -1207,7 +1208,7 @@ static ama_error_t slh_verify_internal(const slhdsa_params_t *p,
     }
     slh_split_digest(p, fors_msg, &tree, &leaf_idx);
 
-    memset(fors_addr, 0, sizeof(fors_addr));
+    memset(fors_addr, 0, sizeof(fors_addr));  /* PUBLIC-DATA: SLH-DSA FORS ADRS struct init (32-byte address word; tree path is public) */
     slh_set_tree(fors_addr, tree);
     slh_set_type(fors_addr, SLH_ADDR_TYPE_FORSTREE);
     slh_set_keypair(fors_addr, leaf_idx);

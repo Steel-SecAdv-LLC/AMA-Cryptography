@@ -131,13 +131,13 @@ static void ama_sha512(const uint8_t *data, size_t len, uint8_t out[64]) {
         len -= 128;
     }
 
-    memset(block, 0, sizeof(block));
+    memset(block, 0, sizeof(block));  /* PUBLIC-DATA: SHA-512 padding block init (pre-fill; exit scrub uses ama_secure_memzero on line 150) */
     memcpy(block, data, len);
     block[len] = 0x80;
 
     if (len >= 112) {
         ama_sha512_transform(state, block);
-        memset(block, 0, sizeof(block));
+        memset(block, 0, sizeof(block));  /* PUBLIC-DATA: SHA-512 padding block init (pre-fill; exit scrub uses ama_secure_memzero on line 150) */
     }
 
     ama_sha512_store64_be(block + 120, bit_len);

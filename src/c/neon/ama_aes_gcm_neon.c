@@ -348,6 +348,7 @@ void ama_aes256_gcm_encrypt_neon(
         vst1q_u8(ct_buf, ct);
         memcpy(ciphertext + full_blocks * 16, ct_buf, remaining);
 
+        /* PUBLIC-DATA: ciphertext tail zero-pad for GHASH alignment (ct = public; pad-region bytes are zeros for GHASH). */
         memset(ct_buf + remaining, 0, 16 - remaining);
         ct = vld1q_u8(ct_buf);
         ghash_acc = veorq_u8(ghash_acc, ct);

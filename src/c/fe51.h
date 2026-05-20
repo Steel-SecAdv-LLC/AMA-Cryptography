@@ -32,6 +32,8 @@ typedef uint64_t fe51[5];
 #define FE51_MASK51 ((uint64_t)0x7ffffffffffff)  /* (1 << 51) - 1 */
 
 static inline void fe51_0(fe51 h) {
+    /* PUBLIC-DATA: field-element arithmetic init — buffer is overwritten
+     * by the caller's subsequent arithmetic (not a scrub-on-exit). */
     memset(h, 0, 5 * sizeof(uint64_t));
 }
 

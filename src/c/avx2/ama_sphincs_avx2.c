@@ -194,6 +194,7 @@ static AMA_MAYBE_UNUSED void ama_sha256_compress_x4_avx2(uint32_t state[4][8],
     /* Initialize upper 4 instances with SHA-256 IV and zero blocks */
     for (int i = 4; i < 8; i++) {
         memcpy(state8[i], H256, sizeof(H256));
+        /* PUBLIC-DATA: x8-SHA-256 dummy-lane block init (4 upper lanes are zero-message fillers; not absorbed downstream). */
         memset(blocks8[i], 0, 64);
     }
 
@@ -256,6 +257,7 @@ AMA_MAYBE_UNUSED void ama_sphincs_wots_chain_avx2(uint8_t *out, const uint8_t *i
 
         /* Single-chain SHA-256: prepare 64-byte block */
         uint8_t block[64];
+        /* PUBLIC-DATA: WOTS+ chain hash block init (zero-fill then overwritten by [pub_seed || addr || value]; all components public). */
         memset(block, 0, 64);
         /* [pub_seed || addr || value] compressed into block */
         memcpy(block, out, n < 32 ? n : 32);

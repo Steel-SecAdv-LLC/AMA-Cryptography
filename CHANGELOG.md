@@ -169,6 +169,25 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   `ama_consttime.c`.  Also added a defense-in-depth scrub of
   `scalar_reduced` and `e` in `ge25519_scalarmult_base_comb_signed`,
   closing a stack residue that survived the function return.
+  **Audit Issue 4 deferral close-out (2026-05): full 108-site
+  bare-memset audit.**  108 bare `memset(BUF, 0, LEN)` call sites
+  outside `src/c/vendor/` were walked; 2 reclassified to
+  `ama_secure_memzero` (`scalar_inv`'s result init in
+  `ama_frost.c` — secret-bearing scalar inverse; `blake2b_init_param`'s
+  state struct init in `ama_argon2.c` — Argon2 password-derived
+  chain values); 106 left as bare `memset` with an inline
+  `// PUBLIC-DATA: <name>` annotation explaining the
+  non-secret-bearing context (SHA3 sponge state init pre-absorb,
+  SPHINCS+ / SLH-DSA ADRS struct init, AES-GCM ciphertext tail
+  zero-pad for GHASH alignment, Dilithium signature hint bytes,
+  Kyber test-only diagnostic poly inits, etc.).  The semgrep ERROR
+  rule `bare-memset-zero-secret-named-buffer` does not fire on any
+  of these — its regex is unchanged.  The walk also surfaced four
+  previously-unscrubbed stack residues which were closed in the same
+  commit (initiative-in-scope per the bundle's terms): `tmp` in
+  `scalar_negate` (`ama_frost.c`); `mp_poly` + `sp` + `ep` + `epp` in
+  `kyber_cpapke_enc` (`ama_kyber.c`); `buffer` in `blake2b_final`
+  (`ama_argon2.c`).
 - **Semgrep C rules for bare memset of secret-named buffers (audit
   Issue 4).**  Two new rules in `.semgrep.yml`
   (`bare-memset-zero-secret-named-buffer` ERROR and

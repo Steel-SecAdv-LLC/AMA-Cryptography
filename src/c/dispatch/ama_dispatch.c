@@ -293,6 +293,7 @@ static int dispatch_verbose(void) {
  * CPU features.  Called once via ama_dispatch_init().
  * ============================================================================ */
 static void dispatch_init_internal(void) {
+    /* PUBLIC-DATA: dispatch_info — CPU-feature-detection result struct. */
     memset(&dispatch_info, 0, sizeof(dispatch_info));
 
 #if defined(__x86_64__) || defined(_M_X64)
@@ -942,6 +943,7 @@ static void dispatch_init_internal(void) {
         if (only && only[0] != '\0') {
             ama_dispatch_table_t current = dispatch_table;
             ama_dispatch_table_t filtered;
+            /* PUBLIC-DATA: dispatch-table-filter scratch struct init (function pointers only; no secret bytes). */
             memset(&filtered, 0, sizeof(filtered));
             /* keccak_f1600 / keccak_f1600_x4 are documented as always
              * non-NULL after init (include/ama_dispatch.h); preserve

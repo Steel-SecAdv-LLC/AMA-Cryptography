@@ -215,6 +215,7 @@ static ama_error_t hkdf_extract(
 
     /* If no salt, use zeros */
     if (salt == NULL || salt_len == 0) {
+        /* PUBLIC-DATA: default_salt — RFC 5869 §2.2 mandates a zero-byte salt when none is supplied. */
         memset(default_salt, 0, sizeof(default_salt));
         salt = default_salt;
         salt_len = sizeof(default_salt);
@@ -283,7 +284,7 @@ static ama_error_t hkdf_expand(
         expand_on_heap = 1;
     }
 
-    memset(T, 0, sizeof(T));
+    memset(T, 0, sizeof(T));  /* PUBLIC-DATA: HKDF expand T(0) init (RFC 5869 §2.3 starting value; T is overwritten by HMAC and exit-scrubbed via ama_secure_memzero on cleanup). */
 
     while (done < okm_len) {
         size_t offset = 0;

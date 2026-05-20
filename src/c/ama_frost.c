@@ -88,9 +88,13 @@ static void scalar_negate(uint8_t neg[32], const uint8_t s[32]) {
     /* If s was 0, we get l — reduce to get 0 */
     uint8_t tmp[64];
     memcpy(tmp, neg, 32);
+    /* PUBLIC-DATA: zero-pad for ama_ed25519_sc_reduce 64-byte input format (high 32 bytes are intentional zero pad; low 32 hold the secret neg scalar — scrub on exit not yet implemented in this function; see scalar_negate's caller). */
     memset(tmp + 32, 0, 32);
     ama_ed25519_sc_reduce(tmp);
     memcpy(neg, tmp, 32);
+    /* Audit Issue 4 deferral close-out initiative: tmp held the secret
+     * negated scalar in its lower 32 bytes; scrub on exit. */
+    ama_secure_memzero(tmp, sizeof(tmp));
 }
 
 static void scalar_sub(uint8_t c[32], const uint8_t a[32], const uint8_t b[32]) {
@@ -139,7 +143,11 @@ static void scalar_inv(uint8_t result[32], const uint8_t s[32]) {
     /* Square-and-multiply: result = s^exp mod l */
     uint8_t base[32], tmp[32];
     memcpy(base, s, 32);
-    memset(result, 0, 32);
+    /* Secret-bearing: scalar_inv computes the multiplicative inverse of
+     * the secret scalar s; result will hold the inverse (also secret).
+     * Use ama_secure_memzero so the init cannot be elided even if a
+     * future change reorders the assignments below. */
+    ama_secure_memzero(result, 32);
     result[0] = 1;
 
     for (int bit = 0; bit < 253; bit++) {
@@ -166,6 +174,7 @@ static void poly_eval(uint8_t *result, const uint8_t coeffs[][32],
 {
     memcpy(result, coeffs[degree], 32);
     uint8_t x_scalar[32];
+    /* PUBLIC-DATA: participant-index zero-pad to 32 bytes (x is a public Shamir share index). */
     memset(x_scalar, 0, 32);
     x_scalar[0] = x;
 
@@ -184,6 +193,7 @@ static void compute_lagrange_coeff(uint8_t lambda[32], uint8_t participant_idx,
     const uint8_t *signer_indices, uint8_t num_signers)
 {
     uint8_t num[32], den[32], tmp[32], den_inv[32];
+    /* PUBLIC-DATA: Lagrange-coefficient numerator/denominator zero-pad (computed from public participant indices; Lagrange coefficients are public per RFC 9591). */
     memset(num, 0, 32);
     num[0] = 1;
     memset(den, 0, 32);
@@ -194,6 +204,7 @@ static void compute_lagrange_coeff(uint8_t lambda[32], uint8_t participant_idx,
         if (j == participant_idx) continue;
 
         uint8_t j_scalar[32], i_scalar[32], diff[32];
+        /* PUBLIC-DATA: signer-index zero-pad to 32 bytes (j, participant_idx are public Shamir share indices). */
         memset(j_scalar, 0, 32);
         j_scalar[0] = j;
         memset(i_scalar, 0, 32);
@@ -266,6 +277,7 @@ static ama_error_t compute_group_commitment(uint8_t R[32],
 {
     /* Identity point: (0, 1) compressed */
     uint8_t accum[32];
+    /* PUBLIC-DATA: group-commitment accumulator init (identity point; the final R is public, sent on the wire as part of the FROST signature). */
     memset(accum, 0, 32);
     accum[0] = 1;
 
@@ -370,6 +382,7 @@ AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
     if (secret_key) {
         uint8_t wide[64];
         memcpy(wide, secret_key, 32);
+        /* PUBLIC-DATA: zero-pad for ama_ed25519_sc_reduce 64-byte input format (high 32 bytes are intentional zero pad; low 32 hold the secret key — exit scrub on line 376 covers it). */
         memset(wide + 32, 0, 32);
         ama_ed25519_sc_reduce(wide);
         memcpy(group_secret, wide, 32);
@@ -563,6 +576,7 @@ AMA_API ama_error_t ama_frost_aggregate(
 
     /* Aggregate z = sum(z_i) mod l */
     uint8_t z[32];
+    /* PUBLIC-DATA: aggregated FROST signature z-component accumulator init (final z is sent on the wire as the second 32 bytes of the signature). */
     memset(z, 0, 32);
     for (int i = 0; i < num_signers; i++) {
         uint8_t tmp[32];

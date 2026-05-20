@@ -178,7 +178,12 @@ static void blake2b_compress(blake2b_state *S, const uint8_t block[BLAKE2B_BLOCK
 
 static void blake2b_init_param(blake2b_state *S, size_t outlen, const uint8_t *key, size_t keylen)
 {
-    memset(S, 0, sizeof(*S));
+    /* Secret-bearing: the Blake2b state struct holds password-derived
+     * chain values during Argon2.  Use ama_secure_memzero so the
+     * compiler cannot elide the init even if it proves the subsequent
+     * writes cover the same bytes; defends against stale-residue reads
+     * if a future change reorders the assignments below. */
+    ama_secure_memzero(S, sizeof(*S));
 
     for (int i = 0; i < 8; i++) {
         S->h[i] = blake2b_IV[i];
@@ -191,6 +196,7 @@ static void blake2b_init_param(blake2b_state *S, size_t outlen, const uint8_t *k
 
     if (keylen > 0 && key != NULL) {
         uint8_t block[BLAKE2B_BLOCKBYTES];
+        /* PUBLIC-DATA: Blake2b key-block init (zero-fill; high bytes are intentional zero pad per RFC 7693; exit scrub via ama_secure_memzero below). */
         memset(block, 0, sizeof(block));
         memcpy(block, key, keylen);
         S->t[0] = BLAKE2B_BLOCKBYTES;
@@ -245,6 +251,7 @@ static void blake2b_final(blake2b_state *S, uint8_t *out)
     S->f[0] = UINT64_C(0xFFFFFFFFFFFFFFFF);
 
     /* Pad with zeros */
+    /* PUBLIC-DATA: Blake2b final-block padding zero-fill (high bytes of S->buf after S->buflen are intentional zero pad per RFC 7693). */
     memset(S->buf + S->buflen, 0, BLAKE2B_BLOCKBYTES - S->buflen);
     blake2b_compress(S, S->buf);
 
@@ -254,6 +261,13 @@ static void blake2b_final(blake2b_state *S, uint8_t *out)
         store64_le(buffer + i * 8, S->h[i]);
     }
     memcpy(out, buffer, S->outlen);
+    /* Audit Issue 4 deferral close-out initiative: scrub the local
+     * `buffer` — it holds the password-derived Blake2b digest bytes
+     * in Argon2's password-hashing path, and the caller already
+     * scrubs the state struct `S` (see callers of blake2b_final
+     * above), but `buffer` itself was previously left as stack
+     * residue. */
+    ama_secure_memzero(buffer, sizeof(buffer));
 }
 
 /**
@@ -738,6 +752,7 @@ static ama_error_t ama_argon2id_core(
                 int data_independent = (pass == 0 && slice < 2);
 
                 if (data_independent) {
+                    /* PUBLIC-DATA: Argon2id data-independent-addressing zero block + input block init (composed from public params: pass / lane / slice / counter). */
                     memset(&zero_block, 0, sizeof(argon2_block));
                     memset(&input_block, 0, sizeof(argon2_block));
                     input_block.v[0] = pass;
