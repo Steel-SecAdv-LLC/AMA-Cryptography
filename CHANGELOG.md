@@ -123,17 +123,31 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   than up to a week later) to keep PR latency low; clang-tidy also
   runs per-PR.
 
-  **clang-tidy posture is currently ADVISORY** (`continue-on-error:
-  true` on the job, `WarningsAsErrors: ''` in `.clang-tidy`).  The
-  pre-existing C codebase carries ~250 legitimate findings (mostly
-  `bugprone-implicit-widening-of-multiplication-result` and
-  `readability-redundant-declaration`) that are NOT regressions
-  introduced by this PR — flipping the gate fail-closed today would
-  block every subsequent PR.  `.clang-tidy` documents a phased
-  promotion roadmap (cleanup → category-by-category
-  `WarningsAsErrors` → flip the job to fail-closed).  Findings are
-  uploaded as a per-run artefact (`clang-tidy-findings`) so they
-  remain reviewable without a local replay.
+  **clang-tidy posture is FAIL-CLOSED** (audit Issue 9 deferral
+  close-out, 2026-05).  `WarningsAsErrors: '*'` in `.clang-tidy`
+  promotes every enabled finding to an error; the job no longer
+  carries `continue-on-error: true` and the run step's `exit 0`
+  swallow was removed.  The exclusion list in `.clang-tidy` grew to
+  cover the legitimate-but-stylistic categories that don't fit the
+  project's cryptographic-C style (`bugprone-macro-parentheses` for
+  the FIPS rotation/mix macros, `clang-analyzer-deadcode.DeadStores`
+  for the SUPERCOP Ed25519 sc_reduce reference idiom,
+  `readability-redundant-declaration` for the internal-AVX2-header
+  pattern, `clang-analyzer-core.UndefinedBinaryOperatorResult` for
+  vendor header garbage-value findings).  Each exclusion carries an
+  inline rationale in `.clang-tidy`'s header comment.  The
+  fail-closed walk closed the remaining real findings in the same
+  commit: argument-comment text corrections in `ama_argon2.c`
+  (`use_legacy` → `use_legacy_blake2b_long`); a redundant else-if
+  branch collapsed in `ama_argon2.c`'s prev-offset selection;
+  explicit `(void *)` casts on `free()` calls of
+  `const unsigned char **` arrays in `ed25519_donna_shim.c`; and a
+  centralized `dispatch_getenv()` + `dispatch_abort_unsupported()`
+  helper pair in `ama_dispatch.c` that consolidates the
+  concurrency-mt-unsafe-justified NOLINTs (3 total, all under the
+  `INVARIANT-15-DISPATCH` tracking ID per INVARIANT-13).  Findings
+  are uploaded as a per-run artefact (`clang-tidy-findings`) so the
+  failing diagnostic surfaces in CI without requiring a local replay.
 
 ### Changed
 - **Bandit + pip-audit fail-closed (audit Issue 8).**  Both

@@ -380,26 +380,20 @@ jobs:
           done
 
   clang-tidy:
-    name: clang-tidy (security + correctness, advisory)
+    name: clang-tidy (security + correctness, fail-closed)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Advisory: clang-tidy is being introduced as a NEW gate by audit
-    # Issue 9 against a codebase that has never been clang-tidy-clean.
-    # The existing source has ~250+ pre-existing findings in the
-    # `bugprone-implicit-widening-of-multiplication-result` and
-    # `readability-redundant-declaration` categories (legitimate
-    # findings, but not regressions introduced by this PR).  Flipping
-    # the gate to fail-closed on day one would block every subsequent
-    # PR until a separate cleanup pass lands.  Instead we run
-    # clang-tidy as advisory (continue-on-error: true) so the findings
-    # surface in CI logs for triage, and once the codebase is
-    # clang-tidy-clean we drop this flag and promote the gate to
-    # fail-closed.  This is the standard gradual-rollout pattern; the
-    # alternative is a debt-for-debt trade (introduce a 100-line
-    # `NOLINT` baseline today to suppress the existing findings, then
-    # never clean them up).
-    continue-on-error: true
+    # Audit Issue 9 deferral close-out (2026-05).  Promoted from
+    # advisory to fail-closed.  The `.clang-tidy` config drops every
+    # check sub-category that produced legitimate-but-stylistic noise
+    # on the cryptographic-C style (bugprone-macro-parentheses,
+    # clang-analyzer-deadcode.DeadStores, readability-redundant-
+    # declaration, etc. — see the inline rationale block in
+    # `.clang-tidy` for each).  Every surviving check is now fail-
+    # closed; `WarningsAsErrors: '*'` promotes findings to errors,
+    # and this job no longer carries `continue-on-error: true`.  A
+    # fresh finding in any enabled category fails the PR.
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -421,12 +415,14 @@ jobs:
             -DAMA_ENABLE_LTO=OFF \
             -DAMA_AES_CONSTTIME=ON
 
-      - name: Run clang-tidy on our C sources (advisory)
+      - name: Run clang-tidy on our C sources (fail-closed)
         # Only run on src/c/ and include/, excluding vendored code under
-        # src/c/vendor/.  The .clang-tidy config file at repo root drives
-        # check selection; CI just enumerates the input files.  Output
-        # is uploaded as an artefact so reviewers can scan the findings
-        # without re-running locally.
+        # src/c/vendor/.  The .clang-tidy config file at repo root
+        # drives check selection AND has `WarningsAsErrors: '*'`, so
+        # any surviving finding fails the per-file clang-tidy
+        # invocation with a non-zero exit.  Output is uploaded as an
+        # artefact so reviewers can scan the failing finding without
+        # re-running locally.
         run: |
           files=$(find src/c include \
             -type d -name vendor -prune -o \
@@ -435,26 +431,20 @@ jobs:
             echo "ERROR: no C/H source files found — is the layout intact?"
             exit 1
           fi
-          # `--quiet` suppresses the "X warnings generated" per-file
-          # banner; diagnostics still print.  Capture stdout+stderr to
-          # an artefact regardless of exit code.  The `continue-on-error`
-          # at the job level keeps a non-zero exit advisory until the
-          # codebase is clang-tidy-clean — see job-level rationale.
-          set +e
-          : > clang-tidy-findings.txt
-          # serial run so output is ordered; tidy itself is single-
+          # Serial run so output is ordered; tidy itself is single-
           # threaded per TU, parallelising at the xargs layer just
-          # interleaves diagnostics from different files.
+          # interleaves diagnostics from different files.  We capture
+          # each file's exit code and propagate the worst one — a
+          # `WarningsAsErrors`-promoted finding returns non-zero,
+          # which we surface as the job's overall exit.
+          : > clang-tidy-findings.txt
+          worst=0
           while IFS= read -r f; do
             clang-tidy -p build-tidy --quiet "$f" 2>&1 | tee -a clang-tidy-findings.txt
+            rc=${PIPESTATUS[0]}
+            if [ "$rc" -gt "$worst" ]; then worst=$rc; fi
           done <<< "$files"
-          # Always exit 0 — the `continue-on-error: true` on the job
-          # ALSO masks failures, but exiting 0 here makes the run
-          # status reflect what we actually want (advisory) instead of
-          # `success-with-issues` cosmetic noise.  When the gate is
-          # promoted to fail-closed, drop both this `exit 0` and the
-          # job-level `continue-on-error`.
-          exit 0
+          exit "$worst"
 
       - name: Upload clang-tidy findings
         if: always()

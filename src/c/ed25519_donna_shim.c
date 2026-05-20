@@ -173,10 +173,14 @@ ama_error_t ama_ed25519_batch_verify(
     const unsigned char **sigs = (const unsigned char **)malloc(count * sizeof(const unsigned char *));
 
     if (!msgs || !mlens || !pks || !sigs) {
-        free(msgs);
+        /* Explicit void* casts: free() expects void*, and the multi-
+         * level pointer types (`const unsigned char **`) trigger
+         * clang-tidy bugprone-multi-level-implicit-pointer-conversion
+         * without the cast. */
+        free((void *)msgs);
         free(mlens);
-        free(pks);
-        free(sigs);
+        free((void *)pks);
+        free((void *)sigs);
         return AMA_ERROR_MEMORY;
     }
 
@@ -192,10 +196,11 @@ ama_error_t ama_ed25519_batch_verify(
      * Per-entry results are written to the valid[] array (1=valid, 0=invalid). */
     int ret = ed25519_sign_open_batch(msgs, mlens, pks, sigs, count, results);
 
-    free(msgs);
+    /* Same explicit-cast rationale as the alloc-failure path above. */
+    free((void *)msgs);
     free(mlens);
-    free(pks);
-    free(sigs);
+    free((void *)pks);
+    free((void *)sigs);
 
     /* Map donna's return: 0 = all valid, nonzero = at least one invalid */
     return (ret == 0) ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;

@@ -276,11 +276,35 @@ extern void ama_dilithium_poly_pointwise_sve2(int32_t r[256],
 #endif
 
 
+/* Centralized getenv() wrapper for the dispatcher.  Every getenv()
+ * call in this TU runs inside dispatch_init_internal(), which itself
+ * runs inside the pthread_once / InitOnceExecuteOnce barrier per
+ * INVARIANT-15.  The POSIX-undefined thread-safety of getenv() does
+ * not apply here because exactly one thread can be inside this TU's
+ * init function at any time.  The single NOLINT below documents that
+ * justification once, rather than scattering it across the six call
+ * sites in dispatch_init_internal(). */
+static const char *dispatch_getenv(const char *name) {
+    return getenv(name);  // NOLINT(concurrency-mt-unsafe): INVARIANT-15 pthread_once-protected init; tracking-id INVARIANT-15-DISPATCH.
+}
+
+/* Centralized abort path used by ama_dispatch_init() when the
+ * AMA_DISPATCH_ONLY env var names an unsupported or unknown slot.
+ * exit() is documented as MT-unsafe (it calls atexit handlers from a
+ * single thread).  Production code does not set AMA_DISPATCH_ONLY,
+ * and the env-var contract is invoked only by tests / CI sweeps that
+ * run a single-threaded test binary, so the MT-safety concern does
+ * not apply in practice.  The single NOLINT centralizes the
+ * justification. */
+static void dispatch_abort_unsupported(int code) {
+    exit(code);  // NOLINT(concurrency-mt-unsafe): test-only path; production code does not set AMA_DISPATCH_ONLY; tracking-id INVARIANT-15-DISPATCH.
+}
+
 /* Check if AMA_DISPATCH_VERBOSE=1 is set at runtime. */
 static int dispatch_verbose(void) {
     static int v = -1;
     if (v < 0) {
-        const char *env = getenv("AMA_DISPATCH_VERBOSE");
+        const char *env = dispatch_getenv("AMA_DISPATCH_VERBOSE");
         v = (env && env[0] == '1') ? 1 : 0;
     }
     return v;
@@ -517,12 +541,12 @@ static void dispatch_init_internal(void) {
     if (dispatch_info.chacha20poly1305 >= AMA_IMPL_AVX2) {
         /* Env override honored for A/B benchmarking and smoke-testing
          * the scalar fallback in production builds without a rebuild. */
-        const char *no_chacha = getenv("AMA_DISPATCH_NO_CHACHA_AVX2");
+        const char *no_chacha = dispatch_getenv("AMA_DISPATCH_NO_CHACHA_AVX2");
         if (!(no_chacha && no_chacha[0] == '1'))
             dispatch_table.chacha20_block_x8 = ama_chacha20_block_x8_avx2;
     }
     if (dispatch_info.argon2 >= AMA_IMPL_AVX2) {
-        const char *no_argon = getenv("AMA_DISPATCH_NO_ARGON2_AVX2");
+        const char *no_argon = dispatch_getenv("AMA_DISPATCH_NO_ARGON2_AVX2");
         if (!(no_argon && no_argon[0] == '1'))
             dispatch_table.argon2_g = ama_argon2_g_avx2;
     }
@@ -547,7 +571,7 @@ static void dispatch_init_internal(void) {
          * or gf16 and the 4-way may break even, (d) eventual port
          * to AVX-512 IFMA / VPMADD52 which closes the gap.  Opt in
          * with `AMA_DISPATCH_USE_X25519_AVX2=1` to exercise it. */
-        const char *use_x25519 = getenv("AMA_DISPATCH_USE_X25519_AVX2");
+        const char *use_x25519 = dispatch_getenv("AMA_DISPATCH_USE_X25519_AVX2");
         if (use_x25519 && use_x25519[0] == '1')
             dispatch_table.x25519_x4 = ama_x25519_scalarmult_x4_avx2;
     }
@@ -596,12 +620,12 @@ static void dispatch_init_internal(void) {
     }
     if (dispatch_info.chacha20poly1305 >= AMA_IMPL_NEON) {
         /* Match the AVX2 env opt-out for parity across architectures. */
-        const char *no_chacha = getenv("AMA_DISPATCH_NO_CHACHA_AVX2");
+        const char *no_chacha = dispatch_getenv("AMA_DISPATCH_NO_CHACHA_AVX2");
         if (!(no_chacha && no_chacha[0] == '1'))
             dispatch_table.chacha20_block_x8 = ama_chacha20_block_x8_neon;
     }
     if (dispatch_info.argon2 >= AMA_IMPL_NEON) {
-        const char *no_argon = getenv("AMA_DISPATCH_NO_ARGON2_AVX2");
+        const char *no_argon = dispatch_getenv("AMA_DISPATCH_NO_ARGON2_AVX2");
         if (!(no_argon && no_argon[0] == '1'))
             dispatch_table.argon2_g = ama_argon2_g_neon;
     }
@@ -750,7 +774,7 @@ static void dispatch_init_internal(void) {
      * still skipped on MSVC (no POSIX clock_gettime).
      * ==================================================================== */
 #if !defined(_MSC_VER)
-    const char *no_autotune = getenv("AMA_DISPATCH_NO_AUTOTUNE");
+    const char *no_autotune = dispatch_getenv("AMA_DISPATCH_NO_AUTOTUNE");
     int autotune_disabled = (no_autotune && no_autotune[0] == '1');
 
     if (!autotune_disabled &&
@@ -939,7 +963,7 @@ static void dispatch_init_internal(void) {
      *     exits 1 (test failure).
      * ==================================================================== */
     {
-        const char *only = getenv("AMA_DISPATCH_ONLY");
+        const char *only = dispatch_getenv("AMA_DISPATCH_ONLY");
         if (only && only[0] != '\0') {
             ama_dispatch_table_t current = dispatch_table;
             ama_dispatch_table_t filtered;
@@ -956,7 +980,16 @@ static void dispatch_init_internal(void) {
             int available  = 0;
             const char *label = NULL;
 
-            if (strcmp(only, "sha3-avx512x4") == 0) {
+            /* clang-tidy bugprone-branch-clone fires on the if-else-if
+             * chain below because several arms collapse to empty
+             * bodies on builds where the matching AMA_HAVE_*_IMPL gate
+             * is off (AArch64 builds drop the AVX-* arms; x86-64
+             * builds drop the NEON / SVE2 arms).  The collapse is
+             * architectural — the chain is intentionally exhaustive
+             * across all arches in source form — so the warning is a
+             * conditional-compilation artefact, not a real defect.
+             * INVARIANT-15-DISPATCH justifies the single NOLINT. */
+            if (strcmp(only, "sha3-avx512x4") == 0) {  // NOLINT(bugprone-branch-clone): #ifdef-conditional arms; tracking-id INVARIANT-15-DISPATCH.
 #if defined(AMA_HAVE_AVX512_IMPL) && (defined(__x86_64__) || defined(_M_X64))
                 if (current.keccak_f1600_x4 == ama_keccak_f1600_x4_avx512) {
                     filtered.keccak_f1600_x4 = ama_keccak_f1600_x4_avx512;
@@ -1116,13 +1149,13 @@ void ama_dispatch_init(void) {
      * path is only reachable in CI / debug runs. */
     if (g_dispatch_only_status == DISPATCH_ONLY_UNKNOWN) {
         /* exit(1) — clear failure: caller typo'd the slot name. */
-        exit(1);
+        dispatch_abort_unsupported(1);
     }
     if (g_dispatch_only_status == DISPATCH_ONLY_UNAVAILABLE) {
         /* exit(77) — CTest skip code.  Workflow run steps must accept
          * 77 as a non-failing outcome (see .github/workflows/dudect.yml
          * dudect-simd-sweep run step). */
-        exit(77);
+        dispatch_abort_unsupported(77);
     }
 }
 

@@ -786,9 +786,11 @@ static ama_error_t ama_argon2id_core(
                     if (idx == 0 && slice == 0) {
                         /* Wrap to last block of this lane */
                         prev_offset = lane * lane_length + lane_length - 1;
-                    } else if (idx == 0) {
-                        prev_offset = curr_offset - 1;
                     } else {
+                        /* curr_offset - 1 — valid for both the first
+                         * block of a non-initial slice (where it
+                         * walks to the last block of the prior slice)
+                         * and any mid-segment block. */
                         prev_offset = curr_offset - 1;
                     }
 
@@ -876,7 +878,7 @@ AMA_API ama_error_t ama_argon2id(
 {
     return ama_argon2id_core(password, pwd_len, salt, salt_len,
                              t_cost, m_cost, parallelism,
-                             output, out_len, /*use_legacy=*/0);
+                             output, out_len, /*use_legacy_blake2b_long=*/0);
 }
 
 AMA_API ama_error_t ama_argon2id_legacy(
@@ -887,7 +889,7 @@ AMA_API ama_error_t ama_argon2id_legacy(
 {
     return ama_argon2id_core(password, pwd_len, salt, salt_len,
                              t_cost, m_cost, parallelism,
-                             output, out_len, /*use_legacy=*/1);
+                             output, out_len, /*use_legacy_blake2b_long=*/1);
 }
 
 AMA_API ama_error_t ama_argon2id_legacy_verify(
@@ -919,7 +921,7 @@ AMA_API ama_error_t ama_argon2id_legacy_verify(
 
     ama_error_t rc = ama_argon2id_core(password, pwd_len, salt, salt_len,
                                         t_cost, m_cost, parallelism,
-                                        computed, tag_len, /*use_legacy=*/1);
+                                        computed, tag_len, /*use_legacy_blake2b_long=*/1);
     if (rc != AMA_SUCCESS) {
         ama_secure_memzero(computed, tag_len);
         free(computed);
