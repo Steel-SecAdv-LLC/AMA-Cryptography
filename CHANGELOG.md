@@ -103,6 +103,36 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   composition, cache-miss / cache-hit / NO_AUTOTUNE precedence,
   and forward-compat file-format rules — see the "Cross-process
   auto-tune cache" header block.
+- **`native_hmac_sha256` / `native_hmac_sha256_2` Python bindings
+  (FIPS 198-1 inventory close-out).**  The
+  ACVP-validated `ama_hmac_sha256` C symbol (150/150 NIST CAVP
+  vectors per `docs/compliance/ACVP_SELF_ATTESTATION.md`, exported
+  from `libama_cryptography.so` since v3.1.0) is now wrapped at
+  the Python layer in `ama_cryptography/pqc_backends.py` to match
+  the existing `native_hmac_sha512` / `native_hmac_sha3_256`
+  pattern.  Closes the inventory gap that previously forced
+  downstream consumers needing HMAC-SHA-256 (JWT HS256 signers
+  per RFC 7518 §3.2, TLS 1.2/1.3 PRF call sites, HKDF-SHA-256
+  variants) to either fall back to stdlib `hmac.new(...,
+  'sha256')` — violating INVARIANT-1 ("zero external crypto
+  dependencies") — or maintain a parallel ctypes shim against
+  the same C symbol from a consumer repo (which would bypass
+  INVARIANT-7 Python-layer enforcement and be fragile across
+  AMA releases).  Two functions are exposed:
+    - `native_hmac_sha256(key, msg) -> bytes` — canonical
+      one-shot signer (RFC 2104 / FIPS 198-1).
+    - `native_hmac_sha256_2(key, msg1, msg2) -> bytes` — two-
+      segment variant exposing the existing `ama_hmac_sha256_2`
+      C entry point, byte-identical to
+      `native_hmac_sha256(key, msg1 + msg2)`.  Specifically
+      shaped for JWT signing input
+      (`b64(header) || '.' || b64(payload)`) so callers don't
+      have to materialise the concat in Python.
+  Tests at `tests/test_pqc_backends_coverage.py::TestHMACFunctions`:
+  shape, RFC 4231 §4.2 KAT (basic), RFC 4231 §4.7 KAT
+  (oversized key — exercises the RFC 2104 §2 internal-hash
+  path), stdlib byte-equivalence across key/message boundary
+  cases, two-segment equivalence, determinism.
 
 ### Hardened
 - **Dispatch cache file safety + portability (Copilot review #325

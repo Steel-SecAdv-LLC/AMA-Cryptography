@@ -569,6 +569,17 @@ _HMAC_SHA3_256_NATIVE_AVAILABLE = False
 # HMAC-SHA-512 native availability (for BIP32 key derivation)
 _HMAC_SHA512_NATIVE_AVAILABLE = False
 
+# HMAC-SHA-256 native availability — FIPS 198-1.  Surfaces the
+# ACVP-validated `ama_hmac_sha256` C symbol (150/150 vectors per
+# docs/compliance/ACVP_SELF_ATTESTATION.md) to Python so downstream
+# consumers (JWT HS256 signers, TLS 1.3 PRF, future HKDF-SHA-256, ...)
+# don't have to fall back to stdlib `hmac.new(..., 'sha256')` — which
+# would violate INVARIANT-1 ("zero external crypto dependencies") for
+# every consumer that imports AMA — and don't have to maintain a
+# parallel Mercury-/Omni-side ctypes shim against the same C symbol.
+# v3.2.0 closes the inventory gap.
+_HMAC_SHA256_NATIVE_AVAILABLE = False
+
 
 def _setup_hmac_sha512_ctypes(lib: ctypes.CDLL) -> bool:
     """Configure ctypes for HMAC-SHA-512."""
@@ -581,6 +592,48 @@ def _setup_hmac_sha512_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_char_p,  # out (64 bytes)
         ]
         lib.ama_hmac_sha512.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
+def _setup_hmac_sha256_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for HMAC-SHA-256 (FIPS 198-1).
+
+    Two callable entry points are wired:
+      * `ama_hmac_sha256(key, key_len, data, data_len, out[32])` —
+        the canonical one-shot signer.
+      * `ama_hmac_sha256_2(key, key_len, data1, data1_len, data2,
+        data2_len, out[32])` — two-segment variant exposed by
+        `src/c/ama_hmac_sha256.h`; lets callers avoid concatenating
+        when the upstream serializer already provides the message in
+        two pieces (matches the existing SPHINCS+ `spx_prf_msg` use).
+
+    Both C functions return `void` (the only failure mode at the C
+    level would be invalid pointers, which the wrapper has already
+    validated by the time ctypes marshalling completes), so
+    `restype = None` here.  Mirrors the SHA-512 / SHA3-256 pattern
+    above with the void-return adjustment.
+    """
+    try:
+        lib.ama_hmac_sha256.argtypes = [
+            ctypes.c_char_p,  # key
+            ctypes.c_size_t,  # key_len
+            ctypes.c_char_p,  # data
+            ctypes.c_size_t,  # data_len
+            ctypes.c_char_p,  # out (32 bytes)
+        ]
+        lib.ama_hmac_sha256.restype = None
+        lib.ama_hmac_sha256_2.argtypes = [
+            ctypes.c_char_p,  # key
+            ctypes.c_size_t,  # key_len
+            ctypes.c_char_p,  # data1
+            ctypes.c_size_t,  # data1_len
+            ctypes.c_char_p,  # data2
+            ctypes.c_size_t,  # data2_len
+            ctypes.c_char_p,  # out (32 bytes)
+        ]
+        lib.ama_hmac_sha256_2.restype = None
         return True
     except AttributeError:
         return False
@@ -924,6 +977,7 @@ if _native_lib is not None:
     _SHA3_256_NATIVE_AVAILABLE = _setup_sha3_256_ctypes(_native_lib)
     _HMAC_SHA3_256_NATIVE_AVAILABLE = _setup_hmac_sha3_256_ctypes(_native_lib)
     _HMAC_SHA512_NATIVE_AVAILABLE = _setup_hmac_sha512_ctypes(_native_lib)
+    _HMAC_SHA256_NATIVE_AVAILABLE = _setup_hmac_sha256_ctypes(_native_lib)
     _SECP256K1_NATIVE_AVAILABLE = _setup_secp256k1_ctypes(_native_lib)
     _X25519_NATIVE_AVAILABLE = _setup_x25519_ctypes(_native_lib)
     _ARGON2_NATIVE_AVAILABLE = _setup_argon2_ctypes(_native_lib)
@@ -3003,6 +3057,107 @@ def native_hmac_sha512(key: bytes, msg: bytes) -> bytes:
     )
     if rc != 0:
         raise RuntimeError(f"HMAC-SHA-512 failed (rc={rc})")
+
+    return bytes(out_buf)
+
+
+def native_hmac_sha256(key: bytes, msg: bytes) -> bytes:
+    """
+    HMAC-SHA-256 via native C implementation (ama_hmac_sha256).
+
+    Standards: RFC 2104 (HMAC), FIPS 198-1 (HMAC), FIPS 180-4 (SHA-256).
+    The C implementation is ACVP-validated against 150/150 NIST CAVP
+    vectors (docs/compliance/ACVP_SELF_ATTESTATION.md).  Same one-shot
+    contract as the existing `native_hmac_sha512` / `native_hmac_sha3_256`
+    bindings — the underlying C kernel internally hashes oversized keys
+    per RFC 2104 §2 ("Definition of HMAC") so callers do NOT need to
+    pre-hash; pass the key verbatim.
+
+    Intended consumers — every Python code path that today reaches for
+    `hmac.new(key, msg, 'sha256').digest()` and would otherwise violate
+    INVARIANT-1 ("zero external crypto dependencies") by routing
+    through stdlib hashlib.  Concrete v3.2.0 adopters:
+
+      * JWT HS256 signers (wire-defined as HMAC-SHA-256 by RFC 7518
+        §3.2; cannot substitute SHA-512 or SHA3-256 and remain RFC 7519
+        round-trippable).  Bound consumer: `omni-mercury-engine`'s
+        `security/native_jwt.py` `_sign` path — see Mercury PR thread
+        in the v3.2.0 release notes.
+      * Future TLS 1.2 / 1.3 PRF callers, BIP32 derivation variants
+        that prefer SHA-256, S/MIME / IPsec integrity tags.
+
+    Args:
+        key: HMAC key (any length; keys >64 bytes are SHA-256 hashed
+             first per RFC 2104 §2).  Pass raw bytes; do NOT pre-hash.
+        msg: Message to authenticate.
+
+    Returns:
+        32-byte HMAC-SHA-256 tag.
+
+    Raises:
+        RuntimeError: If the native library is not loaded or the
+                      ama_hmac_sha256 symbol was not bound at module
+                      init (older AMA build without the v3.2.0 wiring).
+    """
+    if _native_lib is None or not _HMAC_SHA256_NATIVE_AVAILABLE:
+        raise RuntimeError("HMAC-SHA-256 native backend not available. " + _INSTALL_HINT)
+
+    out_buf = ctypes.create_string_buffer(32)
+
+    # ama_hmac_sha256 returns void at the C level (no failure path that
+    # isn't a programmer error — invalid pointer / negative length /
+    # etc., all caught before the call by ctypes marshalling), so no
+    # rc check.  Matches the signature ama_hmac_sha256.h declares.
+    _native_lib.ama_hmac_sha256(
+        key,
+        ctypes.c_size_t(len(key)),
+        msg,
+        ctypes.c_size_t(len(msg)),
+        out_buf,
+    )
+
+    return bytes(out_buf)
+
+
+def native_hmac_sha256_2(key: bytes, msg1: bytes, msg2: bytes) -> bytes:
+    """
+    HMAC-SHA-256 with two concatenated message segments
+    (ama_hmac_sha256_2).
+
+    Equivalent to `native_hmac_sha256(key, msg1 + msg2)` but avoids
+    materialising the concatenation in Python.  Useful when the caller
+    already has the message in two pieces (e.g., JWT signing input is
+    `b64(header) || '.' || b64(payload)` — the separator is a fixed
+    single byte the caller would otherwise have to concat in).
+
+    Args:
+        key: HMAC key (any length; keys >64 bytes are SHA-256 hashed
+             first per RFC 2104 §2).
+        msg1: First message segment.
+        msg2: Second message segment.
+
+    Returns:
+        32-byte HMAC-SHA-256 tag identical to `native_hmac_sha256(key,
+        msg1 + msg2)`.
+
+    Raises:
+        RuntimeError: If the native library is not loaded or the
+                      ama_hmac_sha256_2 symbol was not bound.
+    """
+    if _native_lib is None or not _HMAC_SHA256_NATIVE_AVAILABLE:
+        raise RuntimeError("HMAC-SHA-256 native backend not available. " + _INSTALL_HINT)
+
+    out_buf = ctypes.create_string_buffer(32)
+
+    _native_lib.ama_hmac_sha256_2(
+        key,
+        ctypes.c_size_t(len(key)),
+        msg1,
+        ctypes.c_size_t(len(msg1)),
+        msg2,
+        ctypes.c_size_t(len(msg2)),
+        out_buf,
+    )
 
     return bytes(out_buf)
 
