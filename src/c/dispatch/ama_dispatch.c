@@ -47,6 +47,25 @@
 #include <string.h>
 #include <time.h>
 
+#if !defined(_MSC_VER)
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#endif
+
+/* Scalar reference NTT entry points exposed by src/c/ama_kyber.c and
+ * src/c/ama_dilithium.c.  The dispatch auto-tune below microbenches the
+ * AVX2 / NEON / SVE2 NTT kernels against these baselines and reverts
+ * the SIMD slot pointer when the SIMD path regresses past the 10 %
+ * hysteresis band.  Signatures match ama_kyber_ntt_fn /
+ * ama_dilithium_ntt_fn so the dispatched and reference forms are
+ * interchangeable at the call site. */
+extern void ama_kyber_ntt_generic_ref(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_kyber_invntt_generic_ref(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_dilithium_ntt_generic_ref(int32_t poly[256], const int32_t zetas[256]);
+extern void ama_dilithium_invntt_generic_ref(int32_t poly[256], const int32_t zetas[256]);
+
 /* ============================================================================
  * Platform once-primitive (mirrors ama_cpuid.c — INVARIANT-15 compliant)
  * ============================================================================ */
@@ -468,6 +487,388 @@ static apply_dispatch_only_result_t apply_dispatch_only(
      * unrecognised case (single line of stderr, no duplication). */
     return AMA_DISPATCH_ONLY_UNRECOGNISED;
 }
+
+/* ============================================================================
+ * Auto-tune verdict struct, bench helpers, and cross-process cache
+ * (Phase 3 of dispatch_init_internal — see the long comment below
+ * the kernel-wiring block for the design rationale).
+ *
+ * Verdict layout: one `<slot>_regressed` flag per benched slot plus
+ * the raw best-of-N nanosecond readings (for verbose diagnostics and
+ * cache-file round-trip).  Cache hit applies the flags; cache miss
+ * populates them from the benches.
+ * ============================================================================ */
+typedef struct {
+    int     keccak_regressed;
+    int     keccak_x4_regressed;
+    int     kyber_ntt_regressed;
+    int     kyber_invntt_regressed;
+    int     dilithium_ntt_regressed;
+    int     dilithium_invntt_regressed;
+    int64_t keccak_simd_ns,        keccak_generic_ns;
+    int64_t keccak_x4_simd_ns,     keccak_x4_generic_ns;
+    int64_t kyber_ntt_simd_ns,     kyber_ntt_generic_ns;
+    int64_t kyber_invntt_simd_ns,  kyber_invntt_generic_ns;
+    int64_t dilithium_ntt_simd_ns, dilithium_ntt_generic_ns;
+    int64_t dilithium_invntt_simd_ns, dilithium_invntt_generic_ns;
+} dispatch_autotune_verdicts_t;
+
+/* 10 % hysteresis band — same threshold as the original keccak
+ * auto-tune.  Within-band results keep the SIMD pointer (SIMD has
+ * lower peak latency even when averages overlap on noisy hosts);
+ * outside-band results revert to scalar.  Negative inputs (bench
+ * never ran) yield "not regressed" so the surrounding code can leave
+ * the dispatched pointer alone. */
+static int bench_slot_regressed(int64_t simd_best_ns, int64_t generic_best_ns) {
+    if (simd_best_ns < 0 || generic_best_ns < 0) return 0;
+    return simd_best_ns > (generic_best_ns + generic_best_ns / 10);
+}
+
+#if !defined(_MSC_VER)
+static int64_t timespec_delta_ns(struct timespec a, struct timespec b) {
+    return (int64_t)(b.tv_sec - a.tv_sec) * INT64_C(1000000000)
+         + (int64_t)(b.tv_nsec - a.tv_nsec);
+}
+
+/* Per-signature bench helpers.  Avoid the function-pointer-cast UB
+ * (C11 §6.3.2.3 / §6.5.2.2 — calling a function through a pointer of
+ * the wrong type is UB even when the ABIs match) by typing each
+ * helper to the kernel signature it benches. */
+static void dispatch_bench_keccak_single(ama_keccak_f1600_fn generic_fn,
+                                          ama_keccak_f1600_fn simd_fn,
+                                          uint64_t state[25],
+                                          int warmup, int trials, int iters,
+                                          int64_t *generic_best,
+                                          int64_t *simd_best) {
+    for (int w = 0; w < warmup; w++) generic_fn(state);
+    for (int w = 0; w < warmup; w++) simd_fn(state);
+
+    *generic_best = -1;
+    *simd_best    = -1;
+    for (int trial = 0; trial < trials; trial++) {
+        struct timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int i = 0; i < iters; i++) generic_fn(state);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        int64_t g = timespec_delta_ns(t0, t1);
+        if (*generic_best < 0 || g < *generic_best) *generic_best = g;
+
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int i = 0; i < iters; i++) simd_fn(state);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        int64_t s = timespec_delta_ns(t0, t1);
+        if (*simd_best < 0 || s < *simd_best) *simd_best = s;
+    }
+}
+
+/* x4 bench helper.  The "generic 4-way" reference here is INLINED as
+ * four sequential calls to the host's already-wired single-state
+ * keccak kernel rather than the public `ama_keccak_f1600_x4_generic`
+ * symbol.  The public symbol calls `ama_get_dispatch_table()` to
+ * resolve `keccak_f1600`, which would deadlock the pthread_once
+ * currently running this dispatch_init_internal — re-entering a
+ * once-init under the same thread is implementation-defined on
+ * POSIX and is undefined behaviour on Windows InitOnceExecuteOnce.
+ * Inlining the 4× scalar fold here uses the kernel pointer the
+ * dispatcher has already wired and stays inside the active once
+ * call, removing the re-entrancy hazard while preserving the
+ * apples-to-apples comparison (the public symbol does the same 4×
+ * fold via the same kernel pointer once init completes). */
+static void dispatch_bench_keccak_x4(ama_keccak_f1600_x4_fn simd_x4_fn,
+                                      ama_keccak_f1600_fn single_state_fn,
+                                      uint64_t states[4][25],
+                                      int warmup, int trials, int iters,
+                                      int64_t *generic_best,
+                                      int64_t *simd_best) {
+    for (int w = 0; w < warmup; w++) {
+        single_state_fn(states[0]);
+        single_state_fn(states[1]);
+        single_state_fn(states[2]);
+        single_state_fn(states[3]);
+    }
+    for (int w = 0; w < warmup; w++) simd_x4_fn(states);
+
+    *generic_best = -1;
+    *simd_best    = -1;
+    for (int trial = 0; trial < trials; trial++) {
+        struct timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int i = 0; i < iters; i++) {
+            single_state_fn(states[0]);
+            single_state_fn(states[1]);
+            single_state_fn(states[2]);
+            single_state_fn(states[3]);
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        int64_t g = timespec_delta_ns(t0, t1);
+        if (*generic_best < 0 || g < *generic_best) *generic_best = g;
+
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int i = 0; i < iters; i++) simd_x4_fn(states);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        int64_t s = timespec_delta_ns(t0, t1);
+        if (*simd_best < 0 || s < *simd_best) *simd_best = s;
+    }
+}
+
+static void dispatch_bench_kyber_ntt(ama_kyber_ntt_fn generic_fn,
+                                      ama_kyber_ntt_fn simd_fn,
+                                      int16_t poly[256],
+                                      const int16_t zetas_bench[128],
+                                      int64_t *generic_best,
+                                      int64_t *simd_best) {
+    /* Smaller workload than keccak — Kyber NTT is ~30× faster per
+     * call (8 layers × 128 butterflies, all in L1), so we crank ITERS
+     * up to keep the total runtime above the clock_gettime resolution
+     * floor (~50 ns on modern Linux). */
+    const int WARMUP = 100;
+    const int TRIALS = 5;
+    const int ITERS  = 2000;
+
+    for (int w = 0; w < WARMUP; w++) generic_fn(poly, zetas_bench);
+    for (int w = 0; w < WARMUP; w++) simd_fn(poly, zetas_bench);
+
+    *generic_best = -1;
+    *simd_best    = -1;
+    for (int trial = 0; trial < TRIALS; trial++) {
+        struct timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int i = 0; i < ITERS; i++) generic_fn(poly, zetas_bench);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        int64_t g = timespec_delta_ns(t0, t1);
+        if (*generic_best < 0 || g < *generic_best) *generic_best = g;
+
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int i = 0; i < ITERS; i++) simd_fn(poly, zetas_bench);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        int64_t s = timespec_delta_ns(t0, t1);
+        if (*simd_best < 0 || s < *simd_best) *simd_best = s;
+    }
+}
+
+static void dispatch_bench_dilithium_ntt(ama_dilithium_ntt_fn generic_fn,
+                                          ama_dilithium_ntt_fn simd_fn,
+                                          int32_t poly[256],
+                                          const int32_t zetas_bench[256],
+                                          int64_t *generic_best,
+                                          int64_t *simd_best) {
+    const int WARMUP = 100;
+    const int TRIALS = 5;
+    const int ITERS  = 2000;
+
+    for (int w = 0; w < WARMUP; w++) generic_fn(poly, zetas_bench);
+    for (int w = 0; w < WARMUP; w++) simd_fn(poly, zetas_bench);
+
+    *generic_best = -1;
+    *simd_best    = -1;
+    for (int trial = 0; trial < TRIALS; trial++) {
+        struct timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int i = 0; i < ITERS; i++) generic_fn(poly, zetas_bench);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        int64_t g = timespec_delta_ns(t0, t1);
+        if (*generic_best < 0 || g < *generic_best) *generic_best = g;
+
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int i = 0; i < ITERS; i++) simd_fn(poly, zetas_bench);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        int64_t s = timespec_delta_ns(t0, t1);
+        if (*simd_best < 0 || s < *simd_best) *simd_best = s;
+    }
+}
+
+/* ===== Cross-process auto-tune cache =====================================
+ *
+ * Opt-in via `AMA_DISPATCH_CACHE_FILE=<path>`.  When set:
+ *   - Load:  if <path> exists and the cached `fingerprint=` line matches
+ *            the current host's fingerprint, populate the verdict
+ *            struct from the file and skip the microbench entirely.
+ *   - Save:  after a successful microbench, write the verdict struct
+ *            to <path> using a tmp-file + rename for atomicity.
+ *
+ * The fingerprint is a deterministic string built from the dispatch
+ * info (arch_name + per-slot impl level) and the CPU feature probes
+ * already exposed by ama_cpuid.h.  Any change to the host CPU's
+ * detected features (kernel upgrade, microcode change, hypervisor
+ * masking) invalidates the cache automatically — no manual flush.
+ *
+ * Format (text, one key=value per line, leading `#` are comments):
+ *
+ *     # AMA Cryptography dispatch auto-tune cache v1
+ *     fingerprint=<deterministic-string>
+ *     keccak_regressed=<0|1>
+ *     keccak_x4_regressed=<0|1>
+ *     kyber_ntt_regressed=<0|1>
+ *     kyber_invntt_regressed=<0|1>
+ *     dilithium_ntt_regressed=<0|1>
+ *     dilithium_invntt_regressed=<0|1>
+ *     keccak_simd_ns=<int64>
+ *     keccak_generic_ns=<int64>
+ *     ...
+ *
+ * The verdict timings are written for diagnostic value (a future
+ * operator can `cat` the cache file and see WHY the dispatcher reverted
+ * a slot); they are ignored on load — only the per-slot regressed
+ * flags drive kernel revert decisions.  Unknown lines are skipped so
+ * old binaries reading a newer cache file degrade gracefully.
+ *
+ * The fingerprint check is a strict string equality — if any feature
+ * differs between the cached header and the current host, the cache
+ * is treated as a miss and the bench runs.  This is the conservative
+ * choice: a false-positive cache hit could install a regressed kernel
+ * pointer that the bench would have caught.
+ */
+static void dispatch_cache_fingerprint(char *out, size_t outlen) {
+    int avx2 = 0, avx512f = 0, avx512kc = 0, aesni = 0, pclmul = 0;
+    int vaes = 0, arm_aes = 0, arm_pmull = 0;
+#if defined(__x86_64__) || defined(_M_X64)
+    avx2     = ama_has_avx2();
+    avx512f  = ama_has_avx512f();
+    avx512kc = ama_cpuid_has_avx512_keccak();
+    aesni    = ama_has_aes_ni();
+    pclmul   = ama_has_pclmulqdq();
+#if !defined(_MSC_VER)
+    vaes     = ama_cpuid_has_vaes_aesgcm();
+#endif
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    arm_aes   = ama_has_arm_aes();
+    arm_pmull = ama_has_arm_pmull();
+#endif
+    /* `dispatch_info.arch_name` already set by the architecture
+     * detection block above; this helper runs strictly after that. */
+    snprintf(out, outlen,
+        "v1|%s|avx2=%d|avx512f=%d|avx512kc=%d|aesni=%d|pclmul=%d|vaes=%d|"
+        "arm_aes=%d|arm_pmull=%d",
+        dispatch_info.arch_name ? dispatch_info.arch_name : "unknown",
+        avx2, avx512f, avx512kc, aesni, pclmul, vaes,
+        arm_aes, arm_pmull);
+}
+
+/* Strip trailing newline / CR.  No allocation. */
+static void rstrip(char *s) {
+    if (!s) return;
+    size_t n = strlen(s);
+    while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r')) {
+        s[--n] = '\0';
+    }
+}
+
+/* Returns 0 on cache hit, non-zero on miss.  Verdict struct is left
+ * untouched on miss so the surrounding code can populate it via
+ * benches. */
+static int dispatch_cache_load(const char *path, const char *fingerprint,
+                                dispatch_autotune_verdicts_t *v) {
+    FILE *fp = fopen(path, "re");
+    if (!fp) return -1;
+
+    char line[512];
+    int  fp_matched = 0;
+    dispatch_autotune_verdicts_t tmp;
+    memset(&tmp, 0, sizeof(tmp));  // PUBLIC-DATA: tmp — zero-init cache parsing scratch (PUBLIC)
+
+    while (fgets(line, sizeof(line), fp)) {
+        rstrip(line);
+        if (line[0] == '\0' || line[0] == '#') continue;
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        const char *key = line;
+        const char *val = eq + 1;
+
+        if (strcmp(key, "fingerprint") == 0) {
+            fp_matched = (strcmp(val, fingerprint) == 0);
+        } else if (strcmp(key, "keccak_regressed") == 0) {
+            tmp.keccak_regressed = atoi(val);
+        } else if (strcmp(key, "keccak_x4_regressed") == 0) {
+            tmp.keccak_x4_regressed = atoi(val);
+        } else if (strcmp(key, "kyber_ntt_regressed") == 0) {
+            tmp.kyber_ntt_regressed = atoi(val);
+        } else if (strcmp(key, "kyber_invntt_regressed") == 0) {
+            tmp.kyber_invntt_regressed = atoi(val);
+        } else if (strcmp(key, "dilithium_ntt_regressed") == 0) {
+            tmp.dilithium_ntt_regressed = atoi(val);
+        } else if (strcmp(key, "dilithium_invntt_regressed") == 0) {
+            tmp.dilithium_invntt_regressed = atoi(val);
+        }
+        /* timing fields are diagnostic; ignored on load.  Unknown keys
+         * silently skipped for forward compatibility. */
+    }
+    fclose(fp);
+
+    if (!fp_matched) return -2;
+    *v = tmp;
+    return 0;
+}
+
+static void dispatch_cache_save(const char *path, const char *fingerprint,
+                                 const dispatch_autotune_verdicts_t *v) {
+    /* tmp-file + rename for atomicity.  No fsync — this is best-effort
+     * diagnostic state; a crash mid-write leaves the prior cache (if
+     * any) intact and a future init just re-runs the bench. */
+    size_t pathlen = strlen(path);
+    if (pathlen == 0 || pathlen > 4000) return;
+    char tmppath[4096];
+    snprintf(tmppath, sizeof(tmppath), "%s.tmp.%ld", path, (long)getpid());
+
+    FILE *fp = fopen(tmppath, "we");
+    if (!fp) {
+        if (dispatch_verbose())
+            fprintf(stderr,
+                "[AMA Dispatch] cache write FAILED (open '%s' errno=%d)\n",
+                tmppath, errno);
+        return;
+    }
+    fprintf(fp, "# AMA Cryptography dispatch auto-tune cache v1\n");
+    fprintf(fp, "# Generated automatically; safe to delete (a future "
+                "process will re-bench).\n");
+    fprintf(fp, "fingerprint=%s\n", fingerprint);
+    fprintf(fp, "keccak_regressed=%d\n",            v->keccak_regressed);
+    fprintf(fp, "keccak_x4_regressed=%d\n",         v->keccak_x4_regressed);
+    fprintf(fp, "kyber_ntt_regressed=%d\n",         v->kyber_ntt_regressed);
+    fprintf(fp, "kyber_invntt_regressed=%d\n",      v->kyber_invntt_regressed);
+    fprintf(fp, "dilithium_ntt_regressed=%d\n",     v->dilithium_ntt_regressed);
+    fprintf(fp, "dilithium_invntt_regressed=%d\n",  v->dilithium_invntt_regressed);
+    fprintf(fp, "keccak_simd_ns=%lld\n",            (long long)v->keccak_simd_ns);
+    fprintf(fp, "keccak_generic_ns=%lld\n",         (long long)v->keccak_generic_ns);
+    fprintf(fp, "keccak_x4_simd_ns=%lld\n",         (long long)v->keccak_x4_simd_ns);
+    fprintf(fp, "keccak_x4_generic_ns=%lld\n",      (long long)v->keccak_x4_generic_ns);
+    fprintf(fp, "kyber_ntt_simd_ns=%lld\n",         (long long)v->kyber_ntt_simd_ns);
+    fprintf(fp, "kyber_ntt_generic_ns=%lld\n",      (long long)v->kyber_ntt_generic_ns);
+    fprintf(fp, "kyber_invntt_simd_ns=%lld\n",      (long long)v->kyber_invntt_simd_ns);
+    fprintf(fp, "kyber_invntt_generic_ns=%lld\n",   (long long)v->kyber_invntt_generic_ns);
+    fprintf(fp, "dilithium_ntt_simd_ns=%lld\n",     (long long)v->dilithium_ntt_simd_ns);
+    fprintf(fp, "dilithium_ntt_generic_ns=%lld\n",  (long long)v->dilithium_ntt_generic_ns);
+    fprintf(fp, "dilithium_invntt_simd_ns=%lld\n",  (long long)v->dilithium_invntt_simd_ns);
+    fprintf(fp, "dilithium_invntt_generic_ns=%lld\n", (long long)v->dilithium_invntt_generic_ns);
+    fclose(fp);
+
+    if (rename(tmppath, path) != 0) {
+        if (dispatch_verbose())
+            fprintf(stderr,
+                "[AMA Dispatch] cache rename FAILED ('%s' -> '%s' errno=%d)\n",
+                tmppath, path, errno);
+        (void)unlink(tmppath);
+        return;
+    }
+
+    if (dispatch_verbose())
+        fprintf(stderr, "[AMA Dispatch] Auto-tune verdict cached to '%s'\n",
+                path);
+}
+#else  /* _MSC_VER — no POSIX clock_gettime, no microbench, no cache. */
+static void dispatch_cache_fingerprint(char *out, size_t outlen) {
+    if (out && outlen) out[0] = '\0';
+}
+static int dispatch_cache_load(const char *path, const char *fingerprint,
+                                dispatch_autotune_verdicts_t *v) {
+    (void)path; (void)fingerprint; (void)v;
+    return -1;
+}
+static void dispatch_cache_save(const char *path, const char *fingerprint,
+                                 const dispatch_autotune_verdicts_t *v) {
+    (void)path; (void)fingerprint; (void)v;
+}
+#endif
 
 /* ============================================================================
  * Dispatch initialization
@@ -912,110 +1313,180 @@ static void dispatch_init_internal(void) {
 #endif
 
     /* ====================================================================
-     * Phase 3: SIMD auto-tuning microbenchmark — hysteresis variant.
+     * Phase 3: per-slot SIMD auto-tune.
      *
-     * Prior versions compared a ~10 ms SIMD vs generic run and reverted
-     * the pointer whenever `simd_ns > generic_ns`. On noisy shared CI
-     * runners that comparison is within timing jitter of equality, so
-     * the hand-tuned AVX2 / NEON Keccak paths were being demoted to the
-     * scalar tier despite being structurally faster.
+     * Each SIMD slot is benched independently against its scalar
+     * reference and reverted alone on a >10 % regression.  Only the
+     * single-state `keccak_f1600` verdict carries a lockstep tie —
+     * to `sha3_256` and `kyber_poly_{add,sub,reduce}` — because the
+     * SVE2 `sha3_256` wrapper embeds `ama_keccak_f1600_sve2` directly
+     * and the three `kyber_poly_*` slots share the SVE2 codegen tier
+     * with no independent kernel.  Every other slot stands alone.
      *
-     * Fix: apply a 10 % hysteresis band and take the *best-of-N* trial
-     * (min_ns) rather than the total, which is dominated by stalls on
-     * contended hosts. The SIMD pointer is only reverted when the SIMD
-     * tier is clearly slower — more than 10 % over generic's best time
-     * — which is well outside the jitter of a modern clock_gettime()
-     * microbench. Set AMA_DISPATCH_NO_AUTOTUNE=1 in the environment to
-     * bypass entirely.
+     * `AMA_DISPATCH_CACHE_FILE=<path>` (opt-in): write the verdict
+     * after a successful bench; subsequent processes with the same
+     * env var and matching CPU-feature fingerprint load the verdict
+     * and skip the bench.  Default does no file I/O.
      *
-     * Opt-out is respected on all platforms; the microbench itself is
-     * still skipped on MSVC (no POSIX clock_gettime).
+     * `AMA_DISPATCH_NO_AUTOTUNE=1` bypasses every bench AND the cache.
+     * MSVC skips the whole phase (no POSIX clock_gettime).
      * ==================================================================== */
 #if !defined(_MSC_VER)
     const char *no_autotune = getenv("AMA_DISPATCH_NO_AUTOTUNE");
     int autotune_disabled = (no_autotune && no_autotune[0] == '1');
 
-    if (!autotune_disabled &&
-        dispatch_table.keccak_f1600 != ama_keccak_f1600_generic) {
-        uint64_t state[25];
-        memset(state, 0x42, sizeof(state));
+    /* Per-slot regression verdicts.  Default = "SIMD kept".  Each bench
+     * below sets its own field; the cache layer can also populate them
+     * before the benches run, in which case the benches are skipped. */
+    dispatch_autotune_verdicts_t v;
+    memset(&v, 0, sizeof(v));  // PUBLIC-DATA: v — zero-init verdict struct (PUBLIC; no secret material)
 
-        /* Warm-up: 200 iterations each to fill caches / branch predictors */
-        for (int w = 0; w < 200; w++) {
-            ama_keccak_f1600_generic(state);
+    const char *cache_path = getenv("AMA_DISPATCH_CACHE_FILE");
+    char fingerprint[256];
+    dispatch_cache_fingerprint(fingerprint, sizeof(fingerprint));
+    int cache_hit = 0;
+
+    if (!autotune_disabled && cache_path && cache_path[0]) {
+        if (dispatch_cache_load(cache_path, fingerprint, &v) == 0) {
+            cache_hit = 1;
+            if (dispatch_verbose())
+                fprintf(stderr,
+                    "[AMA Dispatch] Auto-tune: cache HIT from '%s' "
+                    "(fingerprint=%s) — skipping microbench\n",
+                    cache_path, fingerprint);
+        } else if (dispatch_verbose()) {
+            fprintf(stderr,
+                "[AMA Dispatch] Auto-tune: cache MISS for '%s' "
+                "(fingerprint=%s) — running microbench\n",
+                cache_path, fingerprint);
         }
-        for (int w = 0; w < 200; w++) {
-            dispatch_table.keccak_f1600(state);
+    }
+
+    if (!autotune_disabled && !cache_hit) {
+        /* ----- Slot 1: keccak_f1600 (single-state permutation) ------- */
+        if (dispatch_table.keccak_f1600 != ama_keccak_f1600_generic) {
+            uint64_t state[25];
+            memset(state, 0x42, sizeof(state));  // PUBLIC-DATA: state — bench scratch buffer (PUBLIC; KAT-irrelevant 0x42 fill)
+
+            int64_t generic_best = -1, simd_best = -1;
+            dispatch_bench_keccak_single(
+                ama_keccak_f1600_generic, dispatch_table.keccak_f1600,
+                state,
+                /*warmup=*/200, /*trials=*/5, /*iters=*/2000,
+                &generic_best, &simd_best);
+            v.keccak_regressed = bench_slot_regressed(simd_best, generic_best);
+            v.keccak_simd_ns    = simd_best;
+            v.keccak_generic_ns = generic_best;
         }
 
-        /* Run 5 trials of 2000 iterations each; take the minimum (best
-         * run) which is the most resistant to scheduling jitter.
-         *
-         * Use int64_t (not long) for nanosecond accumulators: on ILP32
-         * platforms long is 32-bit, and (tv_sec * 1000000000) overflows
-         * after ~2.1 s — easily reachable on a contended CI runner —
-         * which would silently flip the regression decision. */
-        const int TRIALS = 5;
-        const int ITERS  = 2000;
-        int64_t generic_best = -1;
-        int64_t simd_best    = -1;
-        ama_keccak_f1600_fn simd_fn = dispatch_table.keccak_f1600;
+        /* ----- Slot 2: keccak_f1600_x4 (batched 4-way permutation) ----
+         * Benched independently — the AVX-512 4-way kernel is a
+         * fundamentally different implementation from the AVX2 single-
+         * state kernel, so the slot-1 verdict cannot proxy for it.
+         * The 4× scalar baseline uses `dispatch_table.keccak_f1600`
+         * (the kernel slot 1 just settled on), matching what
+         * `ama_keccak_f1600_x4_generic` does at runtime.  Fewer iters
+         * than slot 1 because each call permutes 4× the state. */
+        if (dispatch_table.keccak_f1600_x4 != ama_keccak_f1600_x4_generic) {
+            uint64_t states[4][25];
+            memset(states, 0x42, sizeof(states));  // PUBLIC-DATA: states — bench scratch (PUBLIC)
 
-        for (int trial = 0; trial < TRIALS; trial++) {
-            struct timespec t0, t1;
+            int64_t generic_best = -1, simd_best = -1;
+            dispatch_bench_keccak_x4(
+                dispatch_table.keccak_f1600_x4,
+                dispatch_table.keccak_f1600,
+                states,
+                /*warmup=*/100, /*trials=*/5, /*iters=*/500,
+                &generic_best, &simd_best);
+            v.keccak_x4_regressed = bench_slot_regressed(simd_best, generic_best);
+            v.keccak_x4_simd_ns    = simd_best;
+            v.keccak_x4_generic_ns = generic_best;
+        }
 
-            clock_gettime(CLOCK_MONOTONIC, &t0);
-            for (int i = 0; i < ITERS; i++) {
-                ama_keccak_f1600_generic(state);
+        /* ----- Slot 3: kyber_ntt (forward NTT) ------------------------ */
+        if (dispatch_table.kyber_ntt != NULL) {
+            int16_t poly[256];
+            int16_t zetas_bench[128];
+            for (int i = 0; i < 256; i++) poly[i] = (int16_t)((i * 37) & 0x7FF);
+            for (int i = 0; i < 128; i++) zetas_bench[i] = (int16_t)((i * 91) & 0x7FF);
+
+            int64_t generic_best = -1, simd_best = -1;
+            dispatch_bench_kyber_ntt(
+                ama_kyber_ntt_generic_ref, dispatch_table.kyber_ntt,
+                poly, zetas_bench, &generic_best, &simd_best);
+            v.kyber_ntt_regressed = bench_slot_regressed(simd_best, generic_best);
+            v.kyber_ntt_simd_ns    = simd_best;
+            v.kyber_ntt_generic_ns = generic_best;
+        }
+
+        /* ----- Slot 4: kyber_invntt (inverse NTT) --------------------- */
+        if (dispatch_table.kyber_invntt != NULL) {
+            int16_t poly[256];
+            int16_t zetas_bench[128];
+            for (int i = 0; i < 256; i++) poly[i] = (int16_t)((i * 53) & 0x7FF);
+            for (int i = 0; i < 128; i++) zetas_bench[i] = (int16_t)((i * 67) & 0x7FF);
+
+            int64_t generic_best = -1, simd_best = -1;
+            dispatch_bench_kyber_ntt(
+                ama_kyber_invntt_generic_ref, dispatch_table.kyber_invntt,
+                poly, zetas_bench, &generic_best, &simd_best);
+            v.kyber_invntt_regressed = bench_slot_regressed(simd_best, generic_best);
+            v.kyber_invntt_simd_ns    = simd_best;
+            v.kyber_invntt_generic_ns = generic_best;
+        }
+
+        /* ----- Slot 5: dilithium_ntt (forward NTT) -------------------- */
+        if (dispatch_table.dilithium_ntt != NULL) {
+            int32_t poly[256];
+            int32_t zetas_bench[256];
+            for (int i = 0; i < 256; i++) {
+                poly[i]        = (int32_t)((i * 1337) & 0x7FFFFF);
+                zetas_bench[i] = (int32_t)((i * 4093) & 0x7FFFFF);
             }
-            clock_gettime(CLOCK_MONOTONIC, &t1);
-            int64_t g = (int64_t)(t1.tv_sec - t0.tv_sec) * INT64_C(1000000000)
-                      + (int64_t)(t1.tv_nsec - t0.tv_nsec);
-            if (generic_best < 0 || g < generic_best) generic_best = g;
 
-            clock_gettime(CLOCK_MONOTONIC, &t0);
-            for (int i = 0; i < ITERS; i++) {
-                simd_fn(state);
-            }
-            clock_gettime(CLOCK_MONOTONIC, &t1);
-            int64_t s = (int64_t)(t1.tv_sec - t0.tv_sec) * INT64_C(1000000000)
-                      + (int64_t)(t1.tv_nsec - t0.tv_nsec);
-            if (simd_best < 0 || s < simd_best) simd_best = s;
+            int64_t generic_best = -1, simd_best = -1;
+            dispatch_bench_dilithium_ntt(
+                ama_dilithium_ntt_generic_ref, dispatch_table.dilithium_ntt,
+                poly, zetas_bench, &generic_best, &simd_best);
+            v.dilithium_ntt_regressed = bench_slot_regressed(simd_best, generic_best);
+            v.dilithium_ntt_simd_ns    = simd_best;
+            v.dilithium_ntt_generic_ns = generic_best;
         }
 
-        /* Revert only if SIMD is more than 10 % slower than generic's
-         * best — i.e., clearly and repeatably regressed. Within-band
-         * results are treated as "SIMD wins" since SIMD has lower peak
-         * latency even when averages overlap on noisy hosts. */
-        int simd_regressed = (simd_best > (generic_best + generic_best / 10));
+        /* ----- Slot 6: dilithium_invntt (inverse NTT) ----------------- */
+        if (dispatch_table.dilithium_invntt != NULL) {
+            int32_t poly[256];
+            int32_t zetas_bench[256];
+            for (int i = 0; i < 256; i++) {
+                poly[i]        = (int32_t)((i * 5119) & 0x7FFFFF);
+                zetas_bench[i] = (int32_t)((i * 7919) & 0x7FFFFF);
+            }
 
-        if (simd_regressed) {
+            int64_t generic_best = -1, simd_best = -1;
+            dispatch_bench_dilithium_ntt(
+                ama_dilithium_invntt_generic_ref, dispatch_table.dilithium_invntt,
+                poly, zetas_bench, &generic_best, &simd_best);
+            v.dilithium_invntt_regressed = bench_slot_regressed(simd_best, generic_best);
+            v.dilithium_invntt_simd_ns    = simd_best;
+            v.dilithium_invntt_generic_ns = generic_best;
+        }
+    } /* end of bench block (cache miss + autotune enabled) */
+
+    if (!autotune_disabled) {
+        /* Apply per-slot verdicts.  Each block reverts at most one slot
+         * group; the keccak group carries the carved-out lockstep tie
+         * for sha3_256 / kyber_poly_{add,sub,reduce} described above. */
+        if (v.keccak_regressed) {
             if (pre_sve2_keccak != dispatch_table.keccak_f1600) {
                 dispatch_table.keccak_f1600 = pre_sve2_keccak;
             } else {
                 dispatch_table.keccak_f1600 = ama_keccak_f1600_generic;
             }
-            /* Lockstep revert sha3_256: the SVE2 sha3_256 wrapper
-             * embeds calls to `ama_keccak_f1600_sve2`, so if SVE2
-             * keccak regressed here, sha3_256 must move off SVE2 too. */
+            /* sha3_256 — SVE2 wrapper calls ama_keccak_f1600_sve2 directly */
             if (pre_sve2_sha3_256 != dispatch_table.sha3_256) {
                 dispatch_table.sha3_256 = pre_sve2_sha3_256;
             }
-            /* Lockstep revert the SVE2 kyber_poly_{add,sub,reduce}
-             * slots: a regressed SVE2 keccak is the canonical proxy
-             * for "the SVE2 codegen tier is a bad fit for this host",
-             * so the three thin int16 helpers that share that tier
-             * ride along.  pre_sve2_kyber_poly_* is NULL on every
-             * host today (no other tier wires these slots), so the
-             * effect on a regression is "demote the SVE2 helpers
-             * back to the inline scalar in ama_kyber.c"; the saved
-             * pointer makes the revert future-proof if a NEON/AVX2
-             * helper is wired in a later release.  Only touched when
-             * the SVE2 init above actually installed something
-             * different from the saved pointer — mirrors the
-             * keccak/sha3 guards above so that a non-SVE2 host
-             * (where the saved pointer already equals the current
-             * pointer) is a no-op. */
+            /* kyber_poly_{add,sub,reduce} — share the SVE2 codegen tier */
             if (pre_sve2_kyber_poly_add != dispatch_table.kyber_poly_add) {
                 dispatch_table.kyber_poly_add = pre_sve2_kyber_poly_add;
             }
@@ -1025,44 +1496,43 @@ static void dispatch_init_internal(void) {
             if (pre_sve2_kyber_poly_reduce != dispatch_table.kyber_poly_reduce) {
                 dispatch_table.kyber_poly_reduce = pre_sve2_kyber_poly_reduce;
             }
-            /* Revert the batched x4 kernel in lockstep ONLY when it points
-             * at a tier the auto-tune actually measured.  The single-state
-             * benchmark above exercises dispatch_table.keccak_f1600 (the
-             * AVX2/NEON single-state kernel); when it regresses, the
-             * matching AVX2/NEON 4-way kernel almost certainly does too,
-             * so reverting both makes sense.
-             *
-             * BUT — if dispatch_info.sha3 was promoted to AMA_IMPL_AVX512,
-             * keccak_f1600_x4 is the in-house AVX-512 kernel (PR C —
-             * vprolq + vpternlogq EVEX-YMM), a fundamentally different
-             * implementation that was never benchmarked here.  Reverting
-             * it on a single-state AVX2 regression would silently discard
-             * the ML-DSA / ML-KEM / SPHINCS+ matrix-expansion win for an
-             * unrelated reason (Devin Review
-             * BUG_pr-review-job-f0260c65de73482bb856b1b86b90eda3_0001).
-             * Leave the AVX-512 4-way pointer alone in that case. */
-            int x4_preserved_avx512 = 0;
-            if (dispatch_info.sha3 < AMA_IMPL_AVX512) {
-                dispatch_table.keccak_f1600_x4 = ama_keccak_f1600_x4_generic;
-            } else {
-                x4_preserved_avx512 = 1;
-            }
-            if (dispatch_verbose())
-                fprintf(stderr,
-                    "[AMA Dispatch] Auto-tune: SIMD keccak regressed >10%% "
-                    "(best %lld ns vs %lld ns generic) — reverted to %s; "
-                    "keccak_f1600_x4 = %s\n",
-                    (long long)simd_best, (long long)generic_best,
-                    dispatch_table.keccak_f1600 == ama_keccak_f1600_generic
-                        ? "generic" : "previous tier",
-                    x4_preserved_avx512
-                        ? "AVX-512 (preserved — not measured by single-state bench)"
-                        : "generic (lockstep revert)");
-        } else if (dispatch_verbose()) {
+        }
+
+        if (v.keccak_x4_regressed) {
+            dispatch_table.keccak_f1600_x4 = ama_keccak_f1600_x4_generic;
+        }
+
+        if (v.kyber_ntt_regressed)        dispatch_table.kyber_ntt        = NULL;
+        if (v.kyber_invntt_regressed)     dispatch_table.kyber_invntt     = NULL;
+        if (v.dilithium_ntt_regressed)    dispatch_table.dilithium_ntt    = NULL;
+        if (v.dilithium_invntt_regressed) dispatch_table.dilithium_invntt = NULL;
+
+        if (dispatch_verbose()) {
             fprintf(stderr,
-                "[AMA Dispatch] Auto-tune: SIMD keccak kept "
-                "(best %lld ns vs %lld ns generic, within 10%% band)\n",
-                (long long)simd_best, (long long)generic_best);
+                "[AMA Dispatch] Auto-tune verdicts (regressed=1 reverted): "
+                "keccak=%d (simd=%lld ns vs generic=%lld ns), "
+                "keccak_x4=%d (simd=%lld ns vs generic=%lld ns), "
+                "kyber_ntt=%d (simd=%lld ns vs generic=%lld ns), "
+                "kyber_invntt=%d (simd=%lld ns vs generic=%lld ns), "
+                "dilithium_ntt=%d (simd=%lld ns vs generic=%lld ns), "
+                "dilithium_invntt=%d (simd=%lld ns vs generic=%lld ns)%s\n",
+                v.keccak_regressed,        (long long)v.keccak_simd_ns,        (long long)v.keccak_generic_ns,
+                v.keccak_x4_regressed,     (long long)v.keccak_x4_simd_ns,     (long long)v.keccak_x4_generic_ns,
+                v.kyber_ntt_regressed,     (long long)v.kyber_ntt_simd_ns,     (long long)v.kyber_ntt_generic_ns,
+                v.kyber_invntt_regressed,  (long long)v.kyber_invntt_simd_ns,  (long long)v.kyber_invntt_generic_ns,
+                v.dilithium_ntt_regressed, (long long)v.dilithium_ntt_simd_ns, (long long)v.dilithium_ntt_generic_ns,
+                v.dilithium_invntt_regressed, (long long)v.dilithium_invntt_simd_ns, (long long)v.dilithium_invntt_generic_ns,
+                cache_hit ? " (from cache)" : "");
+        }
+
+        /* Save the verdict to the cache file (opt-in, miss-only).  Skip
+         * on cache hit so a re-init doesn't keep rewriting the same
+         * bytes; skip if AMA_DISPATCH_CACHE_FILE is unset (default
+         * deployment writes no files); skip if any slot bench
+         * disagrees with the cached entry — which can't happen on a
+         * cache hit because the verdict came straight from the file. */
+        if (!cache_hit && cache_path && cache_path[0]) {
+            dispatch_cache_save(cache_path, fingerprint, &v);
         }
     } else if (autotune_disabled && dispatch_verbose()) {
         fprintf(stderr,

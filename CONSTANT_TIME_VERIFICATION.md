@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 3.1.0 + Unreleased |
-| Last Updated | 2026-05-16 |
+| Document Version | 3.2.0 |
+| Last Updated | 2026-05-20 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -122,6 +122,38 @@ Overall: PASS - No timing leakage detected
 | |t| >= 10 | Strong evidence of timing leakage (FAIL) |
 
 **Note**: Environmental factors such as CPU frequency scaling, interrupts, and cache effects can cause false positives. Run the test multiple times and consider disabling CPU frequency scaling for more accurate results.
+
+### Harness Setup-Symmetry Discipline
+
+Two lanes in `tests/c/test_dudect.c` (`test_consttime_memcmp` and
+`test_frost_scalar_negate_midrange`) were hardened in v3.2.0 against a
+false-positive class identified on noisy CI runners.  The underlying
+primitives (`ama_consttime_memcmp` and FROST `scalar_negate`) are
+byte-by-byte branchless in source, but the harnesses fed them inputs
+through asymmetric setup paths — class 1 in `test_consttime_memcmp`
+made an extra `rand()` call and one extra branch-conditional write
+before the timer started, and `test_frost_scalar_negate_midrange`
+served class-0 inputs from a stack array while class-1 came from
+`.rodata`.  The pre-timer asymmetries (branch-predictor state, cache
+line provenance, libc call frequency) bled into the timed window and
+surfaced as ~+12σ and ~−6σ false-positive readings respectively.
+
+The post-fix pattern, codified at the top of each lane in
+`tests/c/test_dudect.c`:
+
+1. Perform identical setup work for both classes (same `rand()`
+   draws, same memcpy count, same conditional writes — driven by an
+   index that is independent of `class_idx`).
+2. Stage every reference input into the same memory class (typically
+   the local stack frame) so the kernel reads them through equivalent
+   cache paths.
+3. Pointer-select between the two staged inputs OUTSIDE the timing
+   region.  The timed window contains exactly one indirect call with
+   no class-correlated control flow.
+
+Future dudect lanes should follow the same discipline.  Helper
+patterns: a `b_equal` / `b_diff` pair for compare-style primitives, a
+single stack-staged reference for scalar-input primitives.
 
 ## ctgrind/Valgrind Verification
 
