@@ -561,15 +561,28 @@ jobs:
           SOURCE_DATE_EPOCH: "1700000000"   # 2023-11-14 — stable reference epoch
           PYTHONHASHSEED: "0"
           PYTHONDONTWRITEBYTECODE: "1"
-          # -fdebug-prefix-map: strip the checkout-dir prefix from
-          #   DWARF debug-info so /__w/.../src/c/foo.c and a future
-          #   checkout at a different mount point both encode as
-          #   `./src/c/foo.c`.
-          # -Wl,--build-id=sha1: derive the linker build-id from the
-          #   hash of the section contents rather than the default
-          #   "random" / "uuid" modes that re-roll on each invocation.
-          CFLAGS: "-fdebug-prefix-map=${GITHUB_WORKSPACE}=."
+          # CFLAGS — three overlapping prefix-map flags so every
+          # variant of build-path leakage gets neutralised:
+          #   -fdebug-prefix-map  : strips host paths from DWARF
+          #                          debug-info.
+          #   -ffile-prefix-map   : superset that ALSO covers __FILE__
+          #                          macro expansion (some C code
+          #                          embeds __FILE__ for logging).
+          #   -fmacro-prefix-map  : the macro half of file-prefix-map,
+          #                          explicit for older GCC that split
+          #                          the two flags.
+          # LDFLAGS — `--build-id=sha1` makes the build-id a content
+          # hash instead of a fresh random value per link.
+          # `MAKEFLAGS=-j1` and `CMAKE_BUILD_PARALLEL_LEVEL=1` force
+          # sequential compilation so parallel-build write-order
+          # variation cannot leak into the .so (parallel jobs can
+          # interleave .o creation, which the linker then incorporates
+          # in observation order — sequential builds remove that
+          # variable entirely).
+          CFLAGS: "-fdebug-prefix-map=${GITHUB_WORKSPACE}=. -ffile-prefix-map=${GITHUB_WORKSPACE}=. -fmacro-prefix-map=${GITHUB_WORKSPACE}=."
           LDFLAGS: "-Wl,--build-id=sha1"
+          MAKEFLAGS: "-j1"
+          CMAKE_BUILD_PARALLEL_LEVEL: "1"
         run: |
           rm -rf build dist
           python -m build --wheel --outdir dist1/
@@ -581,8 +594,10 @@ jobs:
           SOURCE_DATE_EPOCH: "1700000000"
           PYTHONHASHSEED: "0"
           PYTHONDONTWRITEBYTECODE: "1"
-          CFLAGS: "-fdebug-prefix-map=${GITHUB_WORKSPACE}=."
+          CFLAGS: "-fdebug-prefix-map=${GITHUB_WORKSPACE}=. -ffile-prefix-map=${GITHUB_WORKSPACE}=. -fmacro-prefix-map=${GITHUB_WORKSPACE}=."
           LDFLAGS: "-Wl,--build-id=sha1"
+          MAKEFLAGS: "-j1"
+          CMAKE_BUILD_PARALLEL_LEVEL: "1"
         run: |
           rm -rf build
           python -m build --wheel --outdir dist2/
@@ -750,13 +765,61 @@ jobs:
         # hard fail.  When a previously-non-deterministic artefact
         # becomes deterministic, tighten the exclude list — do NOT
         # add a new per-path exemption to absorb a regression.
+        #
+        # On failure, emits per-file diagnostic info (size delta,
+        # first-divergence offset via `cmp -l`, and `objdump -h`
+        # section headers when the differing file is an ELF object)
+        # so a maintainer reading the CI log can identify the
+        # category of non-determinism (build-id, DWARF, sections,
+        # .note metadata, etc.) without having to download the wheel
+        # artefact and diff locally.
         run: |
+          set -e
           mkdir -p /tmp/w1 /tmp/w2
           (cd /tmp/w1 && unzip -q "$GITHUB_WORKSPACE"/dist1/*.whl)
           (cd /tmp/w2 && unzip -q "$GITHUB_WORKSPACE"/dist2/*.whl)
           echo "=== Native artefact diff (strict) ==="
-          diff --brief --recursive --exclude='*.py' --exclude=RECORD \
-            /tmp/w1 /tmp/w2
+          # Capture --brief output without exiting; the diagnostic
+          # block below depends on us reaching it.
+          diff_rc=0
+          differ=$(diff --brief --recursive --exclude='*.py' --exclude=RECORD \
+            /tmp/w1 /tmp/w2 || true)
+          if [ -z "$differ" ]; then
+            echo "OK: wheel native artefacts byte-equal across both builds."
+            exit 0
+          fi
+          echo "$differ"
+          echo
+          echo "=== Per-file divergence diagnostic ==="
+          # Parse `diff --brief`'s "Files X and Y differ" lines and
+          # emit size delta + first-divergence offset + (for ELF)
+          # section-header diff for each.  Helps identify whether the
+          # delta is in .note.gnu.build-id, .debug_info, .text, .data,
+          # or somewhere else.
+          echo "$differ" | while IFS= read -r line; do
+            f1=$(echo "$line" | awk '{print $2}')
+            f2=$(echo "$line" | awk '{print $4}')
+            [ -f "$f1" ] && [ -f "$f2" ] || continue
+            sz1=$(stat -c '%s' "$f1")
+            sz2=$(stat -c '%s' "$f2")
+            echo "---"
+            echo "File: $(basename "$f1")"
+            echo "  size pass1=$sz1  pass2=$sz2  delta=$((sz2 - sz1))"
+            # First-divergence offset via cmp.
+            off=$(cmp "$f1" "$f2" 2>&1 | head -1 || true)
+            echo "  $off"
+            # If the file is an ELF object, dump and diff section
+            # header sizes so the maintainer can see which section
+            # carries the delta.
+            if file "$f1" 2>/dev/null | grep -q ELF; then
+              echo "  ELF section-header diff (size column):"
+              diff <(objdump -h "$f1" | awk '/^ *[0-9]+ /{print $2,$3}') \
+                   <(objdump -h "$f2" | awk '/^ *[0-9]+ /{print $2,$3}') | head -20 || true
+            fi
+          done
+          echo
+          echo "::error::Reproducible-build native-artefact diff failed — see per-file diagnostic above."
+          exit 1
 
       - name: Upload both wheels for offline diff
         if: failure()
