@@ -28,6 +28,16 @@ CONSTTIME_SRC = $(SRC_DIR)/ama_consttime.c
 # provides the constant-time S-box that ama_aes_gcm.c uses when
 # AMA_AES_CONSTTIME is defined; without it the link fails with an undefined
 # reference to ama_aes256_key_expansion_consttime.
+#
+# ama_kyber.c and ama_dilithium.c carry the scalar-reference NTT entry
+# points (`ama_kyber_*_generic_ref` / `ama_dilithium_*_generic_ref`) that
+# the v3.2.0 dispatch auto-tune block in ama_dispatch.c microbenches the
+# SIMD NTT kernels against.  The legacy crypto harness must link them in,
+# otherwise the auto-tune section of ama_dispatch.c emits four undefined
+# references (PR #326 CI fix).  These TUs also keep the harness binary
+# in lockstep with what `cmake -DAMA_USE_NATIVE_PQC=ON` produces for the
+# production build, which is the whole point of the AMA_AES_CONSTTIME
+# flag above.
 DISPATCH_DIR = ../../src/c/dispatch
 CRYPTO_SRCS = $(SRC_DIR)/ama_consttime.c \
               $(SRC_DIR)/ama_core.c \
@@ -37,6 +47,9 @@ CRYPTO_SRCS = $(SRC_DIR)/ama_consttime.c \
               $(SRC_DIR)/ama_aes_bitsliced.c \
               $(SRC_DIR)/ama_hkdf.c \
               $(SRC_DIR)/ama_cpuid.c \
+              $(SRC_DIR)/ama_kyber.c \
+              $(SRC_DIR)/ama_dilithium.c \
+              $(SRC_DIR)/ama_platform_rand.c \
               $(DISPATCH_DIR)/ama_dispatch.c
 
 .PHONY: all clean test test-full test-crypto test-crypto-full help

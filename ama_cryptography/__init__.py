@@ -33,7 +33,7 @@ import os as _os
 import sys as _sys
 from typing import TYPE_CHECKING, Any
 
-__version__ = "3.1.0"
+__version__ = "3.2.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
 # Windows DLL search-path registration (Python 3.8+).

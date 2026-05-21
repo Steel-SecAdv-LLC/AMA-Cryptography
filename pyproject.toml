@@ -23,7 +23,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ama-cryptography"
-version = "3.1.0"
+version = "3.2.0"
 description = "Quantum-resistant cryptographic protection system for helical mathematical Omni-Codes"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -150,7 +150,20 @@ dev = [
     "ruff>=0.15.13",
     "mypy>=1.9.0",
     "bandit>=1.7.0",
-    "safety>=2.3.0",
+    # `safety` was removed in v3.2.0: it was a dev-deps inventory entry
+    # that NO CI workflow ever invoked.  Vulnerability scanning is
+    # already covered by `pip-audit` (run with `--strict --requirement
+    # requirements-lock.txt` in both .github/workflows/ci-build-test.yml
+    # ::security and .github/workflows/security.yml::security-audit), so
+    # `safety` was pure transitive surface area.  Its dep closure
+    # (`nltk` + `joblib` in particular) carried two known CVEs with no
+    # upstream fix versions — joblib PYSEC-2024-277 (disputed
+    # NumpyArrayWrapper deserialization, only used during caching of
+    # trusted content) and nltk PYSEC-2026-97 (filestring() file-read,
+    # unreachable from AMA which never imports nltk).  Removing
+    # `safety` deletes the chain entirely rather than annotating an
+    # ignore-list — INVARIANT-14 hygiene + INVARIANT-1 zero-runtime-dep
+    # posture both improve.
     "Cython>=3.2.4",
     "numpy>=1.24.0",
     "scipy>=1.11.0",

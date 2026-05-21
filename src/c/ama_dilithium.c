@@ -217,21 +217,31 @@ static int32_t dil_freeze(int32_t a) {
  * Forward NTT (Number Theoretic Transform) for Dilithium.
  * Accepts a cached dispatch table pointer to avoid repeated ama_get_dispatch_table() calls.
  */
-static void dil_ntt_cached(int32_t a[DIL_N], const ama_dispatch_table_t *dt) {
-    /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
-    if (dt->dilithium_ntt) {
-        dt->dilithium_ntt(a, dil_zetas);
-        return;
-    }
+/* Scalar reference exposed so the dispatch auto-tune can microbench
+ * the SIMD NTT slots against a single source of truth — `dil_ntt_cached`
+ * / `dil_invntt_cached` below delegate to the same helpers.
+ *
+ * Hidden visibility — see the matching block in `src/c/ama_kyber.c`
+ * (Copilot review #326): these symbols are internal contract surface
+ * between this TU and `src/c/dispatch/ama_dispatch.c` only and must
+ * not expand the libama_cryptography.so user-observable ABI. */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((visibility("hidden")))
+#endif
+void ama_dilithium_ntt_generic_ref(int32_t poly[DIL_N], const int32_t zetas_tab[DIL_N]);
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((visibility("hidden")))
+#endif
+void ama_dilithium_invntt_generic_ref(int32_t poly[DIL_N], const int32_t zetas_tab[DIL_N]);
 
-    /* Generic C implementation */
+static void dil_ntt_scalar(int32_t a[DIL_N], const int32_t zetas_tab[DIL_N]) {
     unsigned int len, start, j, k;
     int32_t zeta, t;
 
     k = 0;
     for (len = 128; len > 0; len >>= 1) {
         for (start = 0; start < DIL_N; start = j + len) {
-            zeta = dil_zetas[++k];
+            zeta = zetas_tab[++k];
             for (j = start; j < start + len; ++j) {
                 t = dil_montgomery_reduce((int64_t)zeta * a[j + len]);
                 a[j + len] = a[j] - t;
@@ -241,18 +251,7 @@ static void dil_ntt_cached(int32_t a[DIL_N], const ama_dispatch_table_t *dt) {
     }
 }
 
-/**
- * Inverse NTT for Dilithium.
- * Accepts a cached dispatch table pointer to avoid repeated ama_get_dispatch_table() calls.
- */
-static void dil_invntt_cached(int32_t a[DIL_N], const ama_dispatch_table_t *dt) {
-    /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
-    if (dt->dilithium_invntt) {
-        dt->dilithium_invntt(a, dil_zetas);
-        return;
-    }
-
-    /* Generic C implementation */
+static void dil_invntt_scalar(int32_t a[DIL_N], const int32_t zetas_tab[DIL_N]) {
     unsigned int start, len, j, k;
     int32_t t, zeta;
     const int32_t f = 41978;  /* Mont^(-1) * N^(-1) mod q */
@@ -260,7 +259,7 @@ static void dil_invntt_cached(int32_t a[DIL_N], const ama_dispatch_table_t *dt) 
     k = 256;
     for (len = 1; len < DIL_N; len <<= 1) {
         for (start = 0; start < DIL_N; start = j + len) {
-            zeta = -dil_zetas[--k];
+            zeta = -zetas_tab[--k];
             for (j = start; j < start + len; ++j) {
                 t = a[j];
                 a[j] = t + a[j + len];
@@ -273,6 +272,42 @@ static void dil_invntt_cached(int32_t a[DIL_N], const ama_dispatch_table_t *dt) 
     for (j = 0; j < DIL_N; ++j) {
         a[j] = dil_montgomery_reduce((int64_t)f * a[j]);
     }
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((visibility("hidden")))
+#endif
+void ama_dilithium_ntt_generic_ref(int32_t poly[DIL_N], const int32_t zetas_tab[DIL_N]) {
+    dil_ntt_scalar(poly, zetas_tab);
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((visibility("hidden")))
+#endif
+void ama_dilithium_invntt_generic_ref(int32_t poly[DIL_N], const int32_t zetas_tab[DIL_N]) {
+    dil_invntt_scalar(poly, zetas_tab);
+}
+
+static void dil_ntt_cached(int32_t a[DIL_N], const ama_dispatch_table_t *dt) {
+    /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
+    if (dt->dilithium_ntt) {
+        dt->dilithium_ntt(a, dil_zetas);
+        return;
+    }
+    dil_ntt_scalar(a, dil_zetas);
+}
+
+/**
+ * Inverse NTT for Dilithium.
+ * Accepts a cached dispatch table pointer to avoid repeated ama_get_dispatch_table() calls.
+ */
+static void dil_invntt_cached(int32_t a[DIL_N], const ama_dispatch_table_t *dt) {
+    /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
+    if (dt->dilithium_invntt) {
+        dt->dilithium_invntt(a, dil_zetas);
+        return;
+    }
+    dil_invntt_scalar(a, dil_zetas);
 }
 
 /* ============================================================================

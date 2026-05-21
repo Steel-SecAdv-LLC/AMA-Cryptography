@@ -64,6 +64,15 @@ set_tests_properties(test_dispatch_only_x25519-avx2 PROPERTIES
     SKIP_RETURN_CODE 77
     ENVIRONMENT "AMA_DISPATCH_ONLY=x25519-avx2;AMA_DISPATCH_USE_X25519_AVX2=1;AMA_DISPATCH_NO_AUTOTUNE=1")
 
+# v3.2.0 — AMA_DISPATCH_CACHE_FILE roundtrip + safety contract.  Pins
+# the mode-0600 file creation, the per-slot impl-level fingerprint
+# schema, and the timing-fields-on-load contract that the verbose
+# cache-hit log depends on.  Returns 77 (Skipped) on MSVC builds where
+# the cache code path is compiled out.
+add_ama_test(test_dispatch_cache_file test_dispatch_cache_file.c)
+set_tests_properties(test_dispatch_cache_file PROPERTIES
+    SKIP_RETURN_CODE 77)
+
 # Cryptographic primitive tests
 add_ama_test(test_sha3 test_sha3.c)
 add_ama_test(test_sha3_512_stream test_sha3_512_stream.c)

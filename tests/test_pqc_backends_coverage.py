@@ -687,6 +687,106 @@ class TestHMACFunctions:
         result = native_hmac_sha512(b"key", b"message")
         assert len(result) == 64
 
+    def test_native_hmac_sha256_shape(self) -> None:
+        """native_hmac_sha256 produces a 32-byte tag."""
+        from ama_cryptography.pqc_backends import native_hmac_sha256
+
+        result = native_hmac_sha256(b"key", b"message")
+        assert len(result) == 32
+
+    def test_native_hmac_sha256_rfc4231(self) -> None:
+        """native_hmac_sha256 matches RFC 4231 §4.2 test case 1
+        (HMAC-SHA-256 KAT — also covers FIPS 198-1 PRF semantics).
+
+        Vector:
+          key  = 20 × 0x0b
+          data = b"Hi There"
+          mac  = b0344c61 d8db3853 5ca8afce af0bf12b
+                 881dc200 c9833da7 26e9376c 2e32cff7
+        """
+        from ama_cryptography.pqc_backends import native_hmac_sha256
+
+        key = bytes.fromhex("0b" * 20)
+        data = b"Hi There"
+        expected = bytes.fromhex("b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7")
+        assert native_hmac_sha256(key, data) == expected
+
+    def test_native_hmac_sha256_rfc4231_long_key(self) -> None:
+        """native_hmac_sha256 matches RFC 4231 §4.7 test case 6
+        (oversized key — must be SHA-256 hashed first per RFC 2104 §2;
+        validates the C kernel handles long keys without caller
+        pre-hashing).
+
+        Vector:
+          key  = 131 × 0xaa
+          data = b"Test Using Larger Than Block-Size Key - Hash Key First"
+          mac  = 60e43159 1ee0b67f 0d8a26aa cbf5b77f
+                 8e0bc621 3728c514 0546040f 0ee37f54
+        """
+        from ama_cryptography.pqc_backends import native_hmac_sha256
+
+        key = bytes.fromhex("aa" * 131)
+        data = b"Test Using Larger Than Block-Size Key - Hash Key First"
+        expected = bytes.fromhex("60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54")
+        assert native_hmac_sha256(key, data) == expected
+
+    def test_native_hmac_sha256_matches_stdlib(self) -> None:
+        """native_hmac_sha256 is byte-identical to stdlib HMAC-SHA-256
+        across a range of key/message sizes — closes the path where a
+        consumer migrates from stdlib `hmac.new(..., 'sha256').digest()`
+        to the AMA binding without changing what wire bytes appear in a
+        JWT / TLS PRF / similar."""
+        import hashlib
+        import hmac
+
+        from ama_cryptography.pqc_backends import native_hmac_sha256
+
+        cases = [
+            (b"", b""),
+            (b"key", b"message"),
+            (b"k" * 32, b"m" * 1),
+            (b"k" * 63, b"m" * 64),  # boundary: key == block-1
+            (b"k" * 64, b"m" * 65),  # boundary: key == block
+            (b"k" * 65, b"m" * 128),  # oversized key, must be hashed
+            (b"k" * 200, b"m" * 1024),  # comfortably oversized
+        ]
+        for key, msg in cases:
+            stdlib = hmac.new(key, msg, hashlib.sha256).digest()
+            native = native_hmac_sha256(key, msg)
+            assert native == stdlib, (
+                f"HMAC-SHA-256 divergence for key_len={len(key)} "
+                f"msg_len={len(msg)}: native={native.hex()} "
+                f"stdlib={stdlib.hex()}"
+            )
+
+    def test_native_hmac_sha256_2_equivalent_to_concat(self) -> None:
+        """native_hmac_sha256_2(key, m1, m2) == native_hmac_sha256(key, m1+m2).
+        Validates the two-segment fast path (intended for JWT
+        `b64(header)||'.'||b64(payload)` and similar concat-avoiding
+        callers) is byte-identical to the materialised concat."""
+        from ama_cryptography.pqc_backends import (
+            native_hmac_sha256,
+            native_hmac_sha256_2,
+        )
+
+        cases = [
+            (b"k", b"", b""),
+            (b"k", b"a", b""),
+            (b"k", b"", b"b"),
+            (b"k", b"abc", b"def"),
+            (b"k" * 64, b"hdr" * 10, b"payload" * 20),
+        ]
+        for key, m1, m2 in cases:
+            assert native_hmac_sha256_2(key, m1, m2) == native_hmac_sha256(key, m1 + m2)
+
+    def test_native_hmac_sha256_deterministic(self) -> None:
+        """native_hmac_sha256 is deterministic (PRF invariant)."""
+        from ama_cryptography.pqc_backends import native_hmac_sha256
+
+        r1 = native_hmac_sha256(b"k", b"m")
+        r2 = native_hmac_sha256(b"k", b"m")
+        assert r1 == r2
+
 
 # ===========================================================================
 # SHA3-256 Function Tests

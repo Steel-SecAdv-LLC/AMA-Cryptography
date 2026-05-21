@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Applies to Release | 3.1.0 |
-| Last Updated | 2026-05-16 |
+| Applies to Release | 3.2.0 |
+| Last Updated | 2026-05-20 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -19,7 +19,576 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+(empty — every entry from the previous `[Unreleased]` section moved to
+`[3.2.0]` below.)
+
+---
+
+## [3.2.0] - 2026-05-20
+
 ### Added
+- **Per-slot SIMD auto-tune with file-based cross-process cache
+  (dispatch surgical close-out).**  `src/c/dispatch/ama_dispatch.c`
+  benches each SIMD slot (`keccak_f1600`, `keccak_f1600_x4`,
+  `kyber_ntt` / `invntt`, `dilithium_ntt` / `invntt`) **independently**
+  against its scalar reference and reverts the slot pointer
+  per-bench when the SIMD path regresses past the 10 % hysteresis
+  band.  Replaces the prior one-bench-drives-everything design that
+  could discard a working AVX-512 4-way kernel whenever the AVX2
+  single-state kernel regressed on a noisy host
+  (`BUG_pr-review-job-f0260c65de73482bb856b1b86b90eda3_0001`):
+    - The `keccak_f1600_x4` bench uses an inline 4× single-state
+      fold as its scalar baseline (rather than re-entering
+      `ama_keccak_f1600_x4_generic`, which would deadlock the
+      currently-running `pthread_once`), and the verdict is acted on
+      alone — never lockstepped with the single-state verdict.
+    - The `kyber_ntt` / `kyber_invntt` / `dilithium_ntt` /
+      `dilithium_invntt` benches use new `ama_kyber_ntt_generic_ref`
+      / `ama_kyber_invntt_generic_ref` /
+      `ama_dilithium_ntt_generic_ref` /
+      `ama_dilithium_invntt_generic_ref` symbols (extracted from
+      the inline scalar paths in `src/c/ama_kyber.c` and
+      `src/c/ama_dilithium.c`).  The production fallback path in
+      `poly_ntt` / `poly_invntt` / `dil_ntt_cached` /
+      `dil_invntt_cached` now delegates to the same scalar helper
+      the bench measures — single source of truth for the scalar
+      reference.
+    - `AMA_DISPATCH_CACHE_FILE=<path>` (declared in
+      `include/ama_dispatch.h`) is the new opt-in env-var contract
+      for cross-process auto-tune caching.  When set, the per-slot
+      verdict is written to <path> after a successful bench;
+      subsequent processes with the same env var and a matching
+      fingerprint load the verdict and skip the
+      ~10 K-Keccak-iteration microbench entirely.  Cache key is a
+      deterministic string of `arch_name`, the per-slot impl level
+      the dispatcher resolved this run (`sha3`, `kyber`,
+      `dilithium`, `aes_gcm`, `chacha20`, `argon2`, `x25519`,
+      `ed25519`, `sphincs`), and each runtime CPU-feature probe
+      result (`avx2`, `avx512f`, `avx512kc`, `aesni`, `pclmul`,
+      `vaes`, `arm_aes`, `arm_pmull`) — kernel upgrades /
+      microcode changes / library upgrades that re-wire a slot
+      invalidate the cache automatically.  Default (env unset)
+      does no file I/O.  Bypassed entirely when
+      `AMA_DISPATCH_NO_AUTOTUNE=1` is also set.  In setuid /
+      setgid (or otherwise secure-exec-flagged) processes the env
+      var is ignored entirely so an unprivileged caller cannot
+      steer a privileged binary at an attacker-controlled path;
+      cache files are created with mode 0600 (user-only) via
+      `open(O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0600)` + `fdopen`
+      to close the default-umask 0666 risk on hosts that set
+      `umask 0`.
+    - Lockstep tie preserved (carved out): the single-state
+      `keccak_f1600` verdict still drives the `sha3_256` and
+      `kyber_poly_{add,sub,reduce}` slots in lockstep, because the
+      SVE2 `sha3_256` wrapper embeds `ama_keccak_f1600_sve2` and
+      the three `kyber_poly_*` slots share the SVE2 codegen tier
+      with no independent kernel.  Documented at the apply-verdicts
+      block in `dispatch_init_internal`.
+- **`ama_keypair_generate(AMA_ALG_ED25519)` wired through to the
+  Ed25519 backend (functional-completeness close-out).**
+  `src/c/ama_core.c::ama_keypair_generate` previously returned
+  `AMA_ERROR_NOT_IMPLEMENTED` for `AMA_ALG_ED25519`; it now draws a
+  32-byte seed from the platform CSPRNG (`ama_randombytes`) and
+  delegates to `ama_ed25519_keypair` (which honours the AMA
+  convention that the caller supplies the seed in
+  `secret_key[0..31]`).  `ama_sign` and `ama_verify` gained matching
+  `AMA_ALG_ED25519` arms so the generated keypair is usable through
+  the algorithm-agnostic API end-to-end.  INVARIANT-6 preserved:
+  the secret-key buffer is `ama_secure_memzero`-scrubbed if the
+  CSPRNG draw fails or the Ed25519 keypair derivation returns an
+  error.  Public-key buffer scrubbed on the same error path so a
+  partial public key cannot leak.
+- **`AMA_DISPATCH_CACHE_FILE` env-var contract documented in
+  `include/ama_dispatch.h`.**  Full opt-in semantics, fingerprint
+  composition, cache-miss / cache-hit / NO_AUTOTUNE precedence,
+  and forward-compat file-format rules — see the "Cross-process
+  auto-tune cache" header block.
+- **`native_hmac_sha256` / `native_hmac_sha256_2` Python bindings
+  (FIPS 198-1 inventory close-out).**  The
+  ACVP-validated `ama_hmac_sha256` C symbol (150/150 NIST CAVP
+  vectors per `docs/compliance/ACVP_SELF_ATTESTATION.md`, exported
+  from `libama_cryptography.so` since v3.1.0) is now wrapped at
+  the Python layer in `ama_cryptography/pqc_backends.py` to match
+  the existing `native_hmac_sha512` / `native_hmac_sha3_256`
+  pattern.  Closes the inventory gap that previously forced
+  downstream consumers needing HMAC-SHA-256 (JWT HS256 signers
+  per RFC 7518 §3.2, TLS 1.2/1.3 PRF call sites, HKDF-SHA-256
+  variants) to either fall back to stdlib `hmac.new(...,
+  'sha256')` — violating INVARIANT-1 ("zero external crypto
+  dependencies") — or maintain a parallel ctypes shim against
+  the same C symbol from a consumer repo (which would bypass
+  INVARIANT-7 Python-layer enforcement and be fragile across
+  AMA releases).  Two functions are exposed:
+    - `native_hmac_sha256(key, msg) -> bytes` — canonical
+      one-shot signer (RFC 2104 / FIPS 198-1).
+    - `native_hmac_sha256_2(key, msg1, msg2) -> bytes` — two-
+      segment variant exposing the existing `ama_hmac_sha256_2`
+      C entry point, byte-identical to
+      `native_hmac_sha256(key, msg1 + msg2)`.  Specifically
+      shaped for JWT signing input
+      (`b64(header) || '.' || b64(payload)`) so callers don't
+      have to materialise the concat in Python.
+  Tests at `tests/test_pqc_backends_coverage.py::TestHMACFunctions`:
+  shape, RFC 4231 §4.2 KAT (basic), RFC 4231 §4.7 KAT
+  (oversized key — exercises the RFC 2104 §2 internal-hash
+  path), stdlib byte-equivalence across key/message boundary
+  cases, two-segment equivalence, determinism.
+
+### Hardened
+- **Dispatch cache file safety + portability (Copilot review #325
+  + CodeQL alerts #534 / #535 / #536 close-out).** Multiple
+  surgical corrections layered onto the v3.2.0 dispatch-cache
+  surface:
+    - **Mode 0600 cache files.** `dispatch_cache_save` now opens
+      the tmp-file via `open(O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,
+      0600)` + `fdopen`, closing the default-umask 0666 risk that
+      the prior `fopen("we")` left open on hosts running with
+      `umask 0` (CodeQL #534).
+    - **Setuid / setgid env-var suppression.** `AMA_DISPATCH_CACHE_FILE`
+      is now ignored entirely in tainted-exec contexts.  Detected
+      via `issetugid()` on BSDs / Apple / musl, `getauxval(AT_SECURE)`
+      on glibc / Bionic, with a `getuid()/geteuid()` fallback.  A
+      privileged process cannot be steered at an attacker-supplied
+      path by a lower-privileged caller (CodeQL #535 / #536).
+    - **Portable CLOEXEC.** Replaced `fopen(path, "re")` /
+      `fopen(tmp, "we")` (the glibc-only `e` extension) with plain
+      `fopen` + explicit `fcntl(F_SETFD, FD_CLOEXEC)` on the read
+      side and `open()` + `fdopen()` on the write side. Apple
+      libc / older BSD libcs that silently ignore `e` now get the
+      same close-on-exec behaviour as glibc.
+    - **`snprintf` truncation check + reserved suffix length.**
+      `dispatch_cache_save` now refuses to write when the
+      `path + ".tmp.<pid>"` suffix would truncate the resulting
+      `tmppath`, preventing a corner case where `rename(tmppath,
+      path)` would clobber a different file than intended.
+    - **Cache-hit log shows cached timings.** `dispatch_cache_load`
+      now parses every `*_simd_ns=` / `*_generic_ns=` field on the
+      file so the verbose post-init log reports the cached
+      readings rather than the misleading `simd=0 ns vs
+      generic=0 ns` it previously emitted on a cache hit.
+    - **NTT bench in-place overflow guard.** Kyber and Dilithium
+      NTT microbenches now `memcpy` the input from an immutable
+      `poly_seed` to a `poly_scratch` buffer before every timed
+      call, so 4000 in-place transforms can't accumulate
+      coefficient magnitude past `int16_t` / `int32_t` range
+      (undefined behaviour that would silently bias the regression
+      verdict).  The memcpy is symmetric between SIMD and generic
+      branches so the regression decision is unbiased.
+    - **Per-slot impl level + CPU-feature bundle in the cache
+      fingerprint.** The cache key now embeds `sha3 / kyber /
+      dilithium / aes_gcm / chacha20 / argon2 / x25519 / ed25519 /
+      sphincs` impl levels alongside the previous CPU-feature
+      probes.  A library upgrade that re-wires which tier owns a
+      slot now invalidates the cache automatically — caches
+      written by the previous release no longer apply to the next.
+      Field names in the emitted fingerprint match the
+      `include/ama_dispatch.h` documentation verbatim (`avx512kc`,
+      `vaes`, `aesni`, `pclmul`).
+- **`.github/workflows/dudect.yml` — best-effort `nice` priority
+  elevation.**  All five dudect job steps now probe whether
+  `nice -n -10` succeeds before prepending it to the test command,
+  silently dropping the prefix when the runner lacks CAP_SYS_NICE
+  (GHA hosted runners) so the `nice: cannot set niceness:
+  Permission denied` warning stops appearing in CI logs.  The
+  harness setup-symmetry hardenings above made the lanes
+  noise-tolerant enough that `taskset -c 0` pinning is the
+  load-bearing CI gate; the nice prefix is opportunistic on
+  privileged self-hosted runners.
+- **`tests/c/test_dispatch_cache_file.c` — roundtrip + safety
+  contract test.**  New ctest case pins (1) the mode-0600
+  cache-file creation, (2) the per-slot impl-level fingerprint
+  schema (with verbatim key-name assertions matching
+  `include/ama_dispatch.h` v3.2.0 and the release-line
+  documentation in this file), (3) the timing-fields-on-load
+  contract that the verbose cache-hit log depends on, (4)
+  cache-file ownership equal to the effective uid, and
+  (5) sanitizer rejection of path-traversal / empty / control-
+  char inputs (fork-per-bad-path because `dispatch_init_internal`
+  is `pthread_once`-protected — the parent process can't re-init).
+  Returns 77 (Skipped) on MSVC builds where the cache code path
+  is compiled out.
+
+#### PR #326 follow-up: Windows Python lanes + Copilot review r3276471155 / r3276471202
+- **Root cause of every `Python {3.9..3.13} on windows-latest` and
+  `Test windows-latest / Python ...` lane being red since `40a933c`:
+  the new v3.2.0 `ama_hmac_sha256` / `ama_hmac_sha256_2` C symbols
+  (`src/c/ama_hmac_sha256.h`) were declared without `AMA_API` —
+  which expands to `__declspec(dllexport)` on MSVC shared-library
+  builds (`AMA_BUILDING_SHARED` defined) but to nothing on
+  GCC/Clang where default symbol visibility already exposes the
+  function from the .so / .dylib.  Linux + macOS lanes therefore
+  bound `lib.ama_hmac_sha256` successfully at module import time,
+  but Windows-latest's `libama_cryptography.dll` had no entry for
+  the symbol in its export table.  `_setup_hmac_sha256_ctypes()`
+  caught the `AttributeError`, set
+  `_HMAC_SHA256_NATIVE_AVAILABLE = False`, and the six new
+  `TestHMACFunctions::test_native_hmac_sha256_*` cases (decorated
+  only with `@skip_no_native` which checks `_native_lib is not None`,
+  not the per-symbol availability flag) then raised
+  `RuntimeError("HMAC-SHA-256 native backend not available...")`
+  from `native_hmac_sha256()` — failing every Python version on
+  windows-latest across both `ci-build-test.yml::python-package`
+  and `ci.yml::test`.  `_native_lib` itself was loaded fine; only
+  the new HMAC-SHA-256 symbols were missing.  Fix: add `AMA_API`
+  to both `ama_hmac_sha256` and `ama_hmac_sha256_2` declarations in
+  `src/c/ama_hmac_sha256.h` (matches the existing pattern on
+  `ama_hmac_sha3_256` / `ama_hmac_sha512` in
+  `include/ama_cryptography.h`).  The header also gains an
+  `#include "ama_cryptography.h"` so the `AMA_API` macro
+  definition is in scope.  No-op on GCC/Clang (visibility already
+  public); load-bearing on MSVC.  The .c definition picks up the
+  dllexport attribute via the declaration that's `#include`'d
+  first.  PR #323 (the merge-base for #326) was green on Windows
+  Python — the regression was introduced by `40a933c`, NOT a
+  pre-existing weakness.
+- **Copilot review r3276471155 — `dispatch_bench_keccak_x4()`
+  pre-revert baseline.**  Slot 2 (`keccak_f1600_x4`) bench used
+  `dispatch_table.keccak_f1600` as its 4× scalar baseline at a
+  point where slot 1's verdict has been COMPUTED (`v.keccak_regressed`)
+  but the revert (`dispatch_table.keccak_f1600 = ama_keccak_f1600_generic`
+  if `v.keccak_regressed`) hasn't been APPLIED yet — so a regressed
+  AVX2 single-state kernel was being used as the "scalar" baseline
+  for the x4 comparison, inflating the baseline timing past what the
+  runtime actually does (the runtime would resolve to
+  `ama_keccak_f1600_x4_generic` ≈ 4× generic).  An x4 SIMD kernel
+  that's actually slower than 4× generic could be misclassified as
+  non-regressed.  Fix: pass `ama_keccak_f1600_generic` directly to
+  `dispatch_bench_keccak_x4` as the single-state baseline.  Slot 1's
+  verdict is now decoupled from slot 2's comparison, matching the
+  decoupled-verdict architecture this code path was designed around.
+- **Copilot review r3276471202 — `include/ama_dispatch.h` cache-doc
+  ownership note misleading.**  The block-comment previously
+  suggested packagers can ship a pre-warmed cache in `/etc` — but
+  `dispatch_cache_save()` creates files with mode 0600 owned by the
+  writing EUID, so a root-owned `/etc/ama-cryptography.cache` would
+  be unreadable by a non-root service (perpetual miss + verbose-log
+  read-failure spam) AND unwritable on its own atomic-rename path.
+  Replaced the misleading paragraph with the corrected per-user
+  guidance: `$XDG_CACHE_HOME/ama-cryptography/<file>` is the
+  recommended location, and packagers wishing to ship a pre-warmed
+  cache should write per-user files (`install -m 0600 -o $user -g
+  $user ...`) rather than a single root-owned file.
+
+#### PR #326 follow-up: every-Python-lane CI failure + CodeQL path-injection + clang-tidy CERT-ERR34-C close-out
+- **Root cause of the "every Python lane on every OS" CI failure:
+  conftest's CI-mode skip→failure hook over-attributed multi-skipif
+  skips to backend-related markers.**  After the v3.2.0 dispatch
+  scope addition added the new `native_hmac_sha256` / Python bindings
+  (`40a933c`) and the safety dep removal (`a628082`),
+  every `Python {3.9..3.13} on {ubuntu, macos, windows}` job and
+  every `Test {ubuntu, windows, ubuntu-arm} / Python ...` job in
+  the PR went red — `ERROR at setup of
+  TestAESGCMInterop.test_native_encrypt_pyca_decrypt: CI FAILURE:
+  Native AES-256-GCM library not available`, on every lane including
+  the ones whose native build had clearly succeeded earlier in the
+  same job.  `tests/conftest.py::pytest_runtest_makereport` ran
+  `item.iter_markers("skipif")` and triggered on the FIRST marker
+  whose reason text contained a backend keyword (`native`, `aes`,
+  ...), without checking whether THAT marker's condition was the
+  one that triggered the skip.  `tests/test_aes_gcm_native.py::
+  TestAESGCMInterop` carries both `@skip_no_native` and
+  `@skip_no_pyca` (it cross-checks the native AES-GCM kernel
+  against PyCA cryptography), and the CI's `pip install -e ".[dev]"`
+  doesn't include PyCA (that lives under the `[legacy]` extra), so
+  every lane:
+    - skipped legitimately via `@skip_no_pyca` ("PyCA cryptography
+      not available") — PyCA wasn't installed
+    - was reclassified as a backend failure because the hook
+      iterated the sibling `@skip_no_native` marker (reason contains
+      "native") and ignored that its condition (`not NATIVE_AVAILABLE`)
+      was `False` — the native backend WAS present
+  Fix: `tests/conftest.py` now re-checks each backend-related
+  `skipif`'s condition before treating it as the cause of the
+  skip.  A backend marker whose condition evaluated `False` is no
+  longer mistaken for the trigger; the legitimate PyCA skip stays
+  a skip.  The hook's load-bearing purpose — failing CI loudly when
+  a native backend really is missing — is preserved (a backend
+  marker whose condition is `True` still flips the skip to a hard
+  failure with the same diagnostic text).
+- **Regression coverage.**  New `tests/test_conftest_backend_skip_scoping.py`
+  pins three properties via `pytester`-driven subprocess tests
+  that exercise the real `tests/conftest.py` hook in a sandbox:
+    1. A test with dual skipif (native condition False, PyCA
+       condition True) stays a SKIP under `AMA_CI_REQUIRE_BACKENDS=1`.
+    2. A test with a single backend skipif (condition True) flips
+       to a setup-phase ERROR — the loud-failure contract the hook
+       exists to enforce.
+    3. Without `AMA_CI_REQUIRE_BACKENDS=1`, a backend skip stays
+       a skip regardless of condition.
+  Three unit tests of `_is_backend_skip()` additionally lock the
+  classifier against accidental matches on "PyCA" / unrelated
+  reasons.
+- **CodeQL `cpp/path-injection` (#535 / #537) genuinely closed via
+  realpath() canonicalisation, not just an in-source predicate.**
+  The earlier `dispatch_cache_path_sanitize()` rejected
+  `..`-containing inputs but returned the same `getenv`-storage
+  pointer to its caller — CodeQL's flow tracker saw the env-var
+  source flow unchanged to `open()` / `fopen()` and kept the
+  alert open against `src/c/dispatch/ama_dispatch.c:1062` and
+  `:1641` even after the v3.2.0 alert close-out commit.  The
+  sanitizer now runs the validated path through a new
+  `dispatch_cache_path_canonicalize()` helper that calls
+  `realpath(3)` (recognised by CodeQL's path-injection sanitizer
+  model) and falls back to `realpath(dirname) + "/" + basename`
+  for the cache-write case where the file does not exist yet —
+  the canonical form has all symlinks resolved and `.`/`..`
+  components collapsed.  Return value is now a pointer into a
+  function-local static buffer (`AMA_DISPATCH_PATH_MAX`-sized,
+  `PATH_MAX` from `<limits.h>` or 4096 fallback), so the call
+  sites pass a canonical, sanitiser-detached path to file I/O —
+  not the env-var pointer.
+- **`_DEFAULT_SOURCE` added to `src/c/dispatch/ama_dispatch.c`'s
+  feature-test prologue.**  glibc 2.10+ gates `realpath()` in
+  `<stdlib.h>` on `__USE_MISC || __USE_XOPEN_EXTENDED` (verified
+  against `/usr/include/stdlib.h` on Ubuntu 24.04 glibc 2.39),
+  neither of which is implied by `_POSIX_C_SOURCE 200809L`.  No-op
+  on Apple libc / BSD / musl (those expose `realpath` from
+  `<stdlib.h>` unconditionally).  Without this, clang fails the
+  build with `error: call to undeclared function 'realpath'`.
+- **`_DARWIN_C_SOURCE` added on `__APPLE__`: root-causes the
+  `C Library (macos-latest, clang)` lane that has been red on every
+  PR #326 commit since `58e7a2d` introduced the dispatch cache.**
+  Apple's `<unistd.h>` gates BSD-lineage helpers like `issetugid()`
+  on `!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)`.  The
+  pre-existing `_POSIX_C_SOURCE 200809L` define (added in v3.2.0 to
+  expose `snprintf` and `clock_gettime` on Apple libc per the
+  comment in the same prologue) puts Apple libc into strict-POSIX
+  mode, which hides `issetugid()` — and Apple Clang's default-on
+  `-Werror=implicit-function-declaration` then fails the build at
+  the `dispatch_cache_env_is_safe()` call site that's specifically
+  there to gate setuid / setgid / tainted-exec contexts away from
+  the env-var-controlled cache file path.  PR #323 (the merge-base
+  for #326) was green on `C Library (macos-latest, clang)`; the
+  failure was introduced by `58e7a2d`'s dispatch cache scope, not a
+  pre-existing weakness.  Defining `_DARWIN_C_SOURCE` re-exposes the
+  BSD surface without removing the POSIX baseline (Apple's headers
+  accept both defines simultaneously).  No-op on Linux glibc / musl
+  / *BSD libc.  CHANGELOG entry intentionally explicit about the
+  diagnosis lineage so a future maintainer can fix any analogous
+  Apple-strict-POSIX regression without re-walking the same dead
+  ends (missing AVX2 → AVX2 already arch-gated; missing
+  `<sys/auxv.h>` → already wrapped in `__has_include`; missing
+  trailing newline → already present).
+- **Diagnostic build-step fall-back added to
+  `.github/workflows/ci-build-test.yml::c-library::Build`.**
+  Replaces the bare `cmake --build build --config Release -j4` with
+  a happy-path-then-verbose-on-failure shell block: on parallel-build
+  exit ≠ 0, the step re-runs `cmake --build build --config Release
+  --verbose --clean-first -j1` and `tee`s the per-command output
+  to `build-verbose.log`, then grep-extracts the first `error:`
+  block (or the last 80 lines).  The original non-zero exit is
+  preserved so the step still fails.  Future build regressions on
+  any of the four `C Library (os, compiler)` cells now surface the
+  failing compile command + diagnostic directly in the GitHub
+  Actions log — no local repro needed to triage the next opaque
+  "Process completed with exit code 2" the way the Apple-Clang
+  `issetugid()` failure required this round.
+- **`tests/c/test_dispatch_cache_file.c` accept-case contract
+  updated to match the canonicalisation barrier.**  Pointer-identity
+  assertion (`got != cases[i].input`) was relaxed — the sanitizer
+  now returns a pointer into its own canonical buffer, not the
+  input pointer.  Accept inputs were narrowed to `/tmp/...`
+  filenames so realpath() can resolve the dirname on every CI lane
+  (the prior `/var/cache/ama/...` accept inputs assumed a directory
+  that doesn't exist on hosted runners).  A new "realpath probe"
+  case asserts that `/tmp/./ama-canon-<pid>.cache` and
+  `/tmp/ama-canon-<pid>.cache` canonicalise to the same string —
+  forces the realpath barrier to actually engage rather than
+  silently regressing to identity-return.
+- **`atoi()` calls in `dispatch_cache_load()` replaced with
+  `strtol()` + endpoint/errno validation (CERT-ERR34-C /
+  clang-tidy `cert-err34-c`).**  The six per-slot `_regressed`
+  flags now parse via a single inlined `strtol` block that
+  refuses anything but the literal `"0"` / `"1"` cache file value
+  (partial digits, trailing junk, overflow all map to flag = 0,
+  matching the surrounding "no measurement" fallback).  Pre-
+  existing from the v3.2.0 release commit (`58e7a2d`); surfaced
+  while validating that my `_DEFAULT_SOURCE` addition didn't
+  regress clang-tidy on the file.  The CI clang-tidy gate's
+  pipe-tee step swallows clang-tidy's non-zero exit (the runner
+  loop's `if ! clang-tidy ... | tee ...` checks tee's status,
+  not clang-tidy's, without `set -o pipefail`), which is why the
+  pre-existing atoi findings have been silently passing CI even
+  under the documented "FAIL-CLOSED" policy — that workflow
+  fix is left for a separate, scoped audit so any other latent
+  clang-tidy errors it would surface get triaged together.
+
+#### PR #326 follow-up: sanitizer rejection test rebuilt as direct unit test (Copilot review r3275565655)
+- **Root cause of the earlier fork-based test's false sense of
+  security.**  The first version of
+  `tests/c/test_dispatch_cache_file.c`'s sanitizer-rejection probe
+  forked a child per bad path, set `AMA_DISPATCH_CACHE_FILE` to
+  the rejected value, called `ama_dispatch_init()`, and asserted
+  that no file appeared at a hardcoded `/tmp/etc/ama_evil` probe.
+  Two problems:
+    1. Linux `fork()` inherits the parent's `pthread_once` state,
+       so the child saw the dispatch table as "already initialised"
+       and never re-entered `dispatch_init_internal()` — the
+       sanitizer was never called on the bad env value.
+    2. The hardcoded probe path lives in `/tmp/etc/`, which by
+       default doesn't exist, so even a hypothetically bypassed
+       sanitizer would fail to create the probe (ENOENT) for a
+       reason unrelated to the rejection contract.
+  Result: a passing test that was not actually exercising the
+  contract.  Both surfaced by Copilot review #326 r3275565655.
+- **Surgical correction.**  Replaced the fork+probe approach with
+  a direct unit test of the sanitizer:
+    1. `src/c/dispatch/ama_dispatch.c` exports
+       `ama_test_dispatch_cache_path_sanitize(path)` under
+       `#ifdef AMA_TESTING_MODE` (mirroring the existing
+       `ama_test_force_*_scalar` pattern) so the test binary can
+       call the predicate directly.
+    2. `tests/c/test_dispatch_cache_file.c` now enumerates 17
+       inputs across must-reject classes (embedded / leading /
+       trailing / mid-segment `..`, empty, ASCII control chars —
+       newline, CR, tab, DEL, 0x01) and must-accept classes
+       (absolute, relative, subdir, single-dot-in-name, multi-dot,
+       high-bit UTF-8, parens+dashes), plus a dynamically-built
+       oversized (4001-byte) input.  Every class is independently
+       verified.  Accept cases also assert pointer identity
+       (sanitizer must not allocate or mutate — the cache code path
+       passes the returned pointer directly to fopen/open).
+  Sanity-checked end-to-end: temporarily commenting out the
+  `if (strstr(path, "..") != NULL) return NULL;` line correctly
+  triggers four FAIL lines (one per `..` class) on the next
+  ctest run.
+
+#### PR #326 follow-up: vulnerable transitive `safety` chain removed (pip-audit close-out)
+- **`safety>=2.3.0` dev-dep + its transitive chain removed entirely.**
+  `pip-audit --strict --requirement requirements-lock.txt` in
+  `.github/workflows/ci-build-test.yml::security` and
+  `.github/workflows/security.yml::security-audit` was failing on two
+  CVEs with no upstream fix versions:
+    - `joblib 1.5.3` (PYSEC-2024-277) — disputed
+      NumpyArrayWrapper deserialization vulnerability, only used
+      during caching of trusted content per the supplier.
+    - `nltk 3.9.4` (PYSEC-2026-97) — `filestring()` arbitrary file
+      read in `nltk.util`.
+  Both packages were pulled in transitively by `safety` (security
+  scanner) which was declared in `pyproject.toml::[project.optional-dependencies].dev`
+  but **never invoked by any CI workflow** (verified via `grep -rn`).
+  Vulnerability scanning is already covered by `pip-audit`, run with
+  `--strict --requirement requirements-lock.txt` in both audit
+  workflows above; `safety` was redundant.  Removing the dev-dep
+  deletes the entire vulnerable chain (`safety`, `safety-schemas`,
+  `nltk`, `joblib`, `dparse`, `ruamel.yaml`, `tenacity`, `tomlkit`,
+  `typer`, `Authlib`, `pydantic`, `httpx`, `httpcore`, `h11`,
+  `anyio`, ...) from `requirements-lock.txt` rather than annotating
+  an `--ignore-vuln` suppression — INVARIANT-1 (zero-runtime-dep
+  posture) and INVARIANT-14 (CVE-ignore-list hygiene) both improve.
+  Lock file regenerated from a fresh `pip install
+  "ama-cryptography[dev]"` resolve; `pip-audit --strict` post-fix:
+  "No known vulnerabilities found".
+
+#### PR #326 follow-up corrections (Copilot review + CodeQL re-scan)
+- **CodeQL #535 / #537 path-injection close-out.**  New
+  `dispatch_cache_path_sanitize()` rejects empty,
+  oversized (>4000 bytes), ASCII-control-containing, or
+  `..`-segment paths before `AMA_DISPATCH_CACHE_FILE` reaches
+  any file-access primitive.  The explicit `strstr(path, "..")`
+  rejection is recognised by CodeQL's path-traversal sanitizer
+  model and terminates the tainted-data flow from `getenv` —
+  composes with the existing `dispatch_cache_env_is_safe()`
+  setuid / setgid gate for layered defence.  Verbose log
+  distinguishes the two rejection reasons.
+- **Legacy dudect harness link failure (`tools/constant_time/Makefile`).**
+  `dudect_crypto` linked `src/c/dispatch/ama_dispatch.c` (with
+  the new v3.2.0 NTT auto-tune block) but not `ama_kyber.c` /
+  `ama_dilithium.c`, so four `ama_*_generic_ref` symbols were
+  undefined.  Added the two TUs plus `ama_platform_rand.c`
+  (transitive dependency) to `CRYPTO_SRCS`.  Same Makefile drives
+  the `Constant-Time Verification (Smoke Test)` job in
+  `.github/workflows/ci.yml`, so the fix closes both failing CI
+  lanes simultaneously.  Best-effort `nice` probe also applied to
+  the ci.yml step to suppress the `nice: cannot set niceness`
+  warning on GHA hosted runners (consistent with all five
+  `dudect.yml` jobs).
+- **`ama_*_generic_ref` hidden visibility (Copilot review #326).**
+  `ama_kyber_ntt_generic_ref` / `ama_kyber_invntt_generic_ref` /
+  `ama_dilithium_ntt_generic_ref` /
+  `ama_dilithium_invntt_generic_ref` are now declared and
+  defined with `__attribute__((visibility("hidden")))` under
+  GCC/Clang so the shared library does not export them.  These
+  are an internal contract surface between the kyber / dilithium
+  TUs and `src/c/dispatch/ama_dispatch.c`'s auto-tune block;
+  exporting them would silently expand the user-observable ABI.
+  Static linking (legacy dudect harnesses, test binaries)
+  continues to see the symbols normally.
+- **`strtoll` comment correction (Copilot review #326).**
+  Updated the inline comment in `dispatch_cache_load()` to
+  reflect `strtoll`'s actual overflow behaviour (saturate to
+  LLONG_MIN/LLONG_MAX + set errno) rather than the incorrect
+  "falls back to 0" claim.  No code change — the consumer is
+  diagnostic-only and behaves correctly on either reading.
+- **`test_dispatch_cache_file.c` SIMD-aware timing assertion
+  (Copilot review #326).**  The positivity check on
+  `keccak_simd_ns` was unconditional, but
+  `dispatch_init_internal` only runs the keccak microbench when
+  `dispatch_table.keccak_f1600 != ama_keccak_f1600_generic`.
+  On hosts/builds where keccak stays generic (SIMD disabled,
+  CPU lacks AVX2/NEON/SVE2) the field legitimately reads 0.
+  Assertion now branches on
+  `ama_get_dispatch_info()->sha3 != AMA_IMPL_GENERIC`: requires
+  a positive reading when SIMD is active, requires exactly 0
+  otherwise.  Tight in both directions, no spurious failures.
+
+### Changed
+- **`tests/c/test_dudect.c::test_consttime_memcmp` — symmetric
+  setup discipline.**  Pre-fix, class 0 did `random_bytes(a) +
+  memcpy(b,a)` while class 1 added an extra `rand()` draw and an
+  in-place XOR on `b`.  Those pre-timer asymmetries (libc-call
+  frequency, branch-predictor state, cache line provenance of the
+  XOR write) bled into the timing window and produced a +12σ
+  false-positive on the CI dudect run — the underlying
+  `ama_consttime_memcmp` is byte-by-byte branchless in source
+  (`src/c/ama_consttime.c`).  Post-fix, both classes compute
+  `b_equal = a` and `b_diff = a with one bit flipped at a random
+  position` BEFORE the class selection, and a pointer-select-out-of-
+  timer chooses which buffer is fed to the constant-time compare.
+  Reading on a contended Linux runner dropped from t = +12.36 to
+  t = -1.82 (well below the 4.5 threshold).  Same setup-symmetry
+  pattern the FROST / Kyber-decaps / Dilithium-sign lanes already
+  use.
+- **`tests/c/test_dudect.c::test_frost_scalar_negate_midrange` —
+  memory-class symmetry.**  Pre-fix, the class-0 reference scalar
+  was stack-resident (a `memset`-zeroed local array) while the
+  class-1 reference scalar was read directly from
+  `SCALAR_NEGATE_MID` in `.rodata`.  The cache-line provenance
+  asymmetry surfaced as a structural −6σ delta in the Welch t-test
+  even though `ama_frost_test_scalar_negate` is byte-by-byte
+  branchless (`src/c/ama_frost.c`).  Post-fix, the mid-range scalar
+  is staged into a stack buffer at function entry so both inputs
+  live in the same memory class; pointer-select stays outside the
+  timer.  Reading dropped from t = -6.70 to t = +1.86.  Documented
+  at the lane header so future readers see the prior triage.
+- **`src/c/ama_kyber.c` and `src/c/ama_dilithium.c` — scalar NTT
+  paths extracted as named static helpers.**  `poly_ntt` /
+  `poly_invntt` (Kyber) and `dil_ntt_cached` / `dil_invntt_cached`
+  (Dilithium) now delegate their scalar fallback to
+  `kyber_ntt_scalar` / `kyber_invntt_scalar` / `dil_ntt_scalar` /
+  `dil_invntt_scalar` (each `static`-linkage, matching the
+  `ama_kyber_ntt_fn` / `ama_dilithium_ntt_fn` signatures).  The
+  same helpers are wrapped by the new `ama_*_generic_ref` extern
+  symbols that the dispatch auto-tune microbenches.  Single
+  source of truth: the algorithm has not moved, only its scope —
+  pinned by every existing ML-KEM-1024 / ML-DSA-65 KAT.
+
+### Documentation
+- **`CONSTANT_TIME_VERIFICATION.md` — "Harness Setup-Symmetry
+  Discipline" subsection.**  Codifies the three-rule pattern
+  (identical setup work / same-memory-class staged inputs /
+  pointer-select-out-of-timer) that future dudect lanes must follow,
+  with a forward pointer to the two v3.2.0 hardenings.
+- **`CHANGELOG.md` — release line for v3.2.0.**  Moves every entry
+  from the previous `[Unreleased]` section into `[3.2.0] -
+  2026-05-20`.  No silent additions — the dispatch surgical
+  close-out, Ed25519 wiring, and dudect setup hardenings all land
+  here.
+
+### Earlier in the 3.2.0 cycle (carried forward from prior
+`[Unreleased]` section — full text below)
+
+### Added (carried forward from the prior `[Unreleased]` section)
 - **Tagged-release pipeline (audit Issue 1).** New
   `.github/workflows/release.yml` runs cibuildwheel across Linux x86-64,
   Linux ARM64, macOS x86-64, macOS arm64, and Windows AMD64 for

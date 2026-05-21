@@ -86,10 +86,52 @@ jobs:
             -DAMA_ENABLE_AVX2=ON
 
       - name: Build
-        run: cmake --build build --config Release -j4
+        # PR #326 follow-up: re-emit per-command verbose output on
+        # failure so the actual compiler diagnostic surfaces in the
+        # job log without needing local repro.  The parallel-j4 form
+        # is the fast happy path; the serial-verbose form runs only
+        # if the fast path returned non-zero AND propagates that
+        # non-zero exit so the step still fails.  Diagnoses the
+        # otherwise opaque "Process completed with exit code 2"
+        # surfaced on the macos-latest-clang lane that's been red
+        # since `58e7a2d` introduced the dispatch cache code.
+        shell: bash
+        run: |
+          set -o pipefail
+          if cmake --build build --config Release -j4; then
+            exit 0
+          fi
+          rc=$?
+          echo "::group::Re-running build with --verbose to surface the failing command"
+          # `--clean-first` discards the partial build state from the
+          # failed parallel pass so the verbose pass actually re-runs
+          # the failing compile (otherwise cmake/ninja/make caches the
+          # failure and just exits non-zero without re-emitting it).
+          cmake --build build --config Release --verbose --clean-first -j1 \
+            2>&1 | tee build-verbose.log || true
+          echo "::endgroup::"
+          # First few lines of the verbose log are the most useful —
+          # they show the failing TU and the diagnostic text immediately,
+          # without the reviewer having to scroll through every
+          # successful compile that ran before it.
+          if [ -s build-verbose.log ]; then
+            echo "::group::First failure block from verbose log"
+            grep -m1 -B0 -A40 'error:' build-verbose.log || tail -80 build-verbose.log
+            echo "::endgroup::"
+          fi
+          exit "$rc"
 
       - name: Test
-        run: cd build && ctest --output-on-failure
+        # `--output-on-failure` + `--verbose` together print the full
+        # stdout/stderr of every failing test directly into the CI log,
+        # plus a one-line per-passing-test trace.  Without `--verbose`
+        # ctest swallows the diagnostic output of an exit-code-only
+        # failure, which is how the `C Library (*, clang)` lanes
+        # previously reported only "Process completed with exit code 8"
+        # without ever revealing which 8 tests failed.  PR #326
+        # follow-up: every failing C test now self-diagnoses in the
+        # job log.
+        run: cd build && ctest --output-on-failure --verbose
 
   # Python Package Build and Test
   python-package:
