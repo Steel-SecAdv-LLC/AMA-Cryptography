@@ -16,7 +16,7 @@ requires = [
     "setuptools>=78.1.1",
     "wheel>=0.47.0",
     "cmake>=4.3.2",
-    "Cython>=3.2.4",
+    "Cython>=3.2.5",
     "numpy>=1.24.0",
 ]
 build-backend = "setuptools.build_meta"
@@ -78,7 +78,7 @@ math = [
     # Not required for core cryptographic operations.
     # Install with: pip install "ama-cryptography[math]"
     "numpy>=1.24.0,<3.0.0",
-    "Cython>=3.2.4",
+    "Cython>=3.2.5",
 ]
 monitoring = [
     # NumPy/SciPy for mathematical monitoring (equations, double_helix_engine)
@@ -164,7 +164,7 @@ dev = [
     # `safety` deletes the chain entirely rather than annotating an
     # ignore-list — INVARIANT-14 hygiene + INVARIANT-1 zero-runtime-dep
     # posture both improve.
-    "Cython>=3.2.4",
+    "Cython>=3.2.5",
     "numpy>=1.24.0",
     "scipy>=1.11.0",
 ]
