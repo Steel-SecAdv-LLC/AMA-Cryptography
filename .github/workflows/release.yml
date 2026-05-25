@@ -418,7 +418,7 @@ jobs:
           ls -la signatures/
 
       - name: Publish to PyPI (Trusted Publishing)
-        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc  # v1.13.0
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.13.0
         with:
           packages-dir: dist/
           # No `password` — Trusted Publishing handles OIDC exchange.
