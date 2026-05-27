@@ -16,7 +16,7 @@ requires = [
     "setuptools>=78.1.1",
     "wheel>=0.47.0",
     "cmake>=4.3.2",
-    "Cython>=3.2.4",
+    "Cython>=3.2.5",
     "numpy>=1.24.0",
 ]
 build-backend = "setuptools.build_meta"
@@ -78,7 +78,7 @@ math = [
     # Not required for core cryptographic operations.
     # Install with: pip install "ama-cryptography[math]"
     "numpy>=1.24.0,<3.0.0",
-    "Cython>=3.2.4",
+    "Cython>=3.2.5",
 ]
 monitoring = [
     # NumPy/SciPy for mathematical monitoring (equations, double_helix_engine)
@@ -147,7 +147,7 @@ dev = [
     # Black 26.3.1 contains the GHSA-fc3w-v5rg-v7q6 fix and requires Python
     # 3.10+, so do not install a vulnerable 3.9-only fallback.
     "black>=26.3.1; python_version >= '3.10'",
-    "ruff>=0.15.13",
+    "ruff>=0.15.14",
     "mypy>=1.9.0",
     "bandit>=1.7.0",
     # `safety` was removed in v3.2.0: it was a dev-deps inventory entry
@@ -164,7 +164,7 @@ dev = [
     # `safety` deletes the chain entirely rather than annotating an
     # ignore-list — INVARIANT-14 hygiene + INVARIANT-1 zero-runtime-dep
     # posture both improve.
-    "Cython>=3.2.4",
+    "Cython>=3.2.5",
     "numpy>=1.24.0",
     "scipy>=1.11.0",
 ]
@@ -278,6 +278,11 @@ ignore = []  # Do not add ignores without a comment explaining why.
     "RUF003", "RUF022", "RUF023",
     "UP006", "UP015", "UP035",
 ]
+"ama_cryptography/monitoring.py" = [
+    "I001", "N806",
+    "RUF003", "RUF022", "RUF023",
+    "UP006", "UP015", "UP035",
+]
 # Demo script for the monitoring module
 "tools/monitoring/ama_cryptography_monitor_demo.py" = ["B007", "RUF001"]
 # Benchmark and tooling scripts — not part of the core library
@@ -365,13 +370,15 @@ module = "ama_cryptography.hmac_binding"
 ignore_missing_imports = true
 
 # ama_cryptography_monitor — compatibility shim for production monitoring.
-# tools.monitoring.ama_cryptography_monitor — production monitoring, relax generic-type-arg.
+# ama_cryptography.monitoring / tools.monitoring.ama_cryptography_monitor —
+# production monitoring, relax generic-type-arg.
 # NOTE: ama_cryptography.* is NOT blanket-relaxed. Only specific modules that
 # have pre-existing bare generic annotations (dict, list, tuple without type
 # params) are individually listed here. New modules must use strict generics.
 [[tool.mypy.overrides]]
 module = [
     "ama_cryptography_monitor",
+    "ama_cryptography.monitoring",
     "tools.monitoring.ama_cryptography_monitor",
     "ama_cryptography.pqc_backends",
     "ama_cryptography.crypto_api",

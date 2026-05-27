@@ -833,7 +833,7 @@ setup(
     ],
     python_requires=">=3.9",
     packages=find_packages(
-        include=["ama_cryptography", "ama_cryptography.*", "tools", "tools.*"],
+        include=["ama_cryptography", "ama_cryptography.*"],
         exclude=["tests", "tests.*", "examples", "examples.*", "src", "src.*"],
     ),
     py_modules=["ama_cryptography_monitor"],

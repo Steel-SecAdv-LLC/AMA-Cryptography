@@ -418,7 +418,7 @@ jobs:
           ls -la signatures/
 
       - name: Publish to PyPI (Trusted Publishing)
-        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc  # v1.13.0
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.13.0
         with:
           packages-dir: dist/
           # No `password` — Trusted Publishing handles OIDC exchange.
@@ -469,7 +469,7 @@ jobs:
           ls -la release-assets/
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090  # v2.4.0
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v2.4.0
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
