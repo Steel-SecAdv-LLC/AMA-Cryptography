@@ -28,6 +28,13 @@ class TestMonitorShim:
         for required in ("AmaCryptographyMonitor", "create_monitor", "TimingAnomaly"):
             assert required in shim.__all__
 
+    def test_canonical_monitoring_module_is_importable(self) -> None:
+        """The packaged source path must not depend on top-level tools imports."""
+        module = importlib.import_module("ama_cryptography.monitoring")
+
+        for required in ("AmaCryptographyMonitor", "create_monitor", "TimingAnomaly"):
+            assert required in module.__all__
+
     def test_shim_re_exports_classes_are_identical(self) -> None:
         """Each symbol exported by the shim must be `is`-identical to the
         object bound to the same name in the historical top-level module.

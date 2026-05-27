@@ -26,8 +26,8 @@ contract and the many tests that still import from the historical name.
 
 import sys
 
-from tools.monitoring import ama_cryptography_monitor as _monitor_module
-from tools.monitoring.ama_cryptography_monitor import (
+from ama_cryptography import monitoring as _monitor_module
+from ama_cryptography.monitoring import (
     AmaCryptographyMonitor,
     EWMAStats,
     ImportHijackViolation,
