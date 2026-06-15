@@ -13,7 +13,7 @@
 #   here are now FATAL unless AMA_NO_CYTHON=1 (D-4).  Users on pure-Python
 #   environments are still supported via the opt-out env var.
 requires = [
-    "setuptools>=78.1.1",
+    "setuptools>=82.0.1",
     "wheel>=0.47.0",
     "cmake>=4.3.2",
     "Cython>=3.2.5",
@@ -125,8 +125,8 @@ benchmark = [
     # implementations needed to reproduce the numbers in
     # benchmark-report.md.  Mirrors benchmarks/requirements-bench.txt.
     # Install with: pip install "ama-cryptography[benchmark]"
-    "pynacl>=1.5.0",
-    "liboqs-python>=0.10.0",
+    "pynacl>=1.6.2",
+    "liboqs-python>=0.14.1",
     # Same 46.0.7 floor as [legacy] above — closes CVE-2026-26007 /
     # -34073 that 42.x still has open. Mirrors the bump in
     # benchmarks/requirements-bench.txt.
