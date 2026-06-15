@@ -25,6 +25,17 @@ updates:
     ignore:
       - dependency-name: "cryptography"
         update-types: ["version-update:semver-major"]
+    # Batch routine version bumps into ONE PR per scheduled run so CI is
+    # invoked once for the whole set instead of once per dependency. This
+    # replaces the recurring manual-consolidation chore (see PRs #320, #334,
+    # #341). `applies-to: version-updates` is explicit so SECURITY updates are
+    # NOT batched — Dependabot still opens those as individual, immediate PRs,
+    # preserving fast CVE response (INVARIANT-14 hygiene is unaffected).
+    groups:
+      python-dependencies:
+        applies-to: version-updates
+        patterns:
+          - "*"
 
   # Enable security updates for GitHub Actions
   - package-ecosystem: "github-actions"
@@ -40,3 +51,10 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
+    # Same rationale as the pip group above: one grouped PR per weekly run
+    # keeps CI invocations down. Security updates remain ungrouped/immediate.
+    groups:
+      github-actions:
+        applies-to: version-updates
+        patterns:
+          - "*"
