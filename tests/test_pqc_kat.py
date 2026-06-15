@@ -161,7 +161,7 @@ def dilithium_provider() -> Any:
     from ama_cryptography.pqc_backends import DILITHIUM_AVAILABLE
 
     if not DILITHIUM_AVAILABLE:
-        pytest.skip("Dilithium backend not available (install oqs package)")
+        pytest.skip("Dilithium backend unavailable (build with -DAMA_USE_NATIVE_PQC=ON)")
 
     from ama_cryptography.pqc_backends import DilithiumProvider
 
@@ -174,7 +174,7 @@ def kyber_provider() -> Any:
     from ama_cryptography.pqc_backends import KYBER_AVAILABLE
 
     if not KYBER_AVAILABLE:
-        pytest.skip("Kyber backend not available (install oqs package)")
+        pytest.skip("Kyber backend unavailable (build with -DAMA_USE_NATIVE_PQC=ON)")
 
     from ama_cryptography.pqc_backends import KyberProvider
 

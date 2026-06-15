@@ -118,7 +118,7 @@ ML-DSA-65 Sign                 |          1053  |     950.00 us
 | `performance_suite.py` | Comprehensive Python vs Cython vs C comparison |
 | `phase0_baseline.py` | Establishes ctypes-based performance baselines |
 | `validation_suite.py` | Validates documented claims against measured performance |
-| `comparative_benchmark.py` | Compares AMA vs OpenSSL+liboqs |
+| `comparative_benchmark.py` | Compares AMA vs libsodium + OpenSSL |
 
 ### Running CI Benchmarks
 
@@ -215,5 +215,5 @@ validated by ACVP and is byte-identical to the VAES path
 See `BENCHMARKS.md` (generated locally by running `python benchmarks/benchmark_suite.py`; not checked into version control) for the authoritative performance document, including:
 
 - Three-column comparison (Raw C | Python/ctypes | ctypes overhead)
-- Competitive context against libsodium, liboqs, and OpenSSL
+- Competitive context against libsodium and OpenSSL
 - Detailed analysis of ctypes overhead impact per operation
