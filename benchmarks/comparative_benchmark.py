@@ -11,7 +11,6 @@ libraries for the primitives AMA implements:
 
 - **libsodium via PyNaCl** — Ed25519 keygen / sign / verify reference.
 - **cryptography library (OpenSSL backend)** — Ed25519 sign / verify.
-- **liboqs-python** — ML-DSA-65 sign / verify and ML-KEM-1024 encap / decap.
 - **AMA Cryptography** — Ed25519 and ML-DSA-65 signatures, ML-KEM-1024
   encap / decap, via the existing ctypes FFI to libama_cryptography.so.
 
@@ -21,7 +20,7 @@ library is not installed in the environment are reported as
 ``available=False`` so the output is self-descriptive rather than
 silently dropping columns.
 
-Peer libraries (PyNaCl / libsodium, liboqs-python, cryptography) are
+Peer libraries (PyNaCl / libsodium, cryptography) are
 BENCHMARK-ONLY comparison targets. They are **NOT** dependencies of
 AMA Cryptography and **are NOT used in any production code path** —
 they appear in this file, in ``benchmarks/requirements-bench.txt``,
@@ -151,7 +150,7 @@ class ComparativeBenchmark:
         harness binary, reviewers can see:
           - the raw C number (what the library actually does),
           - the ctypes-taxed number (what Python callers see today), and
-          - the peer library (PyNaCl / liboqs / cryptography) on the same
+          - the peer library (PyNaCl / cryptography) on the same
             Python surface.
 
         The "Ed25519 Verify" row exercises the build-selected verify
@@ -481,81 +480,6 @@ class ComparativeBenchmark:
                     )
                 )
 
-    def benchmark_liboqs_ml_kem(self):
-        """Benchmark liboqs ML-KEM-1024 encap/decap.
-
-        liboqs 0.10+ exposes the NIST-final ML-KEM-1024 name directly.
-        Older liboqs builds shipped ``Kyber1024`` instead — the try/except
-        handles both so the harness does not silently skip on pre-0.10
-        installs.
-        """
-        print("\n" + "=" * 70)
-        print("LIBOQS ML-KEM-1024 (Direct)")
-        print("=" * 70)
-
-        try:
-            import oqs
-
-            algo = None
-            last_probe_err: Optional[str] = None
-            for candidate in ("ML-KEM-1024", "Kyber1024"):
-                try:
-                    probe = oqs.KeyEncapsulation(candidate)
-                    probe.generate_keypair()
-                    algo = candidate
-                    break
-                except Exception as probe_exc:  # noqa: BLE001 - any liboqs error is "not supported"
-                    # liboqs raises different exception types per build (LibraryError,
-                    # MechanismNotSupportedError, RuntimeError). Anything here means
-                    # this build doesn't support the candidate name — probe the next.
-                    last_probe_err = f"{type(probe_exc).__name__}: {probe_exc}"
-                    continue
-            if algo is None:
-                raise RuntimeError(
-                    f"liboqs has no ML-KEM-1024 / Kyber1024 (last probe: {last_probe_err})"
-                )
-
-            client = oqs.KeyEncapsulation(algo)
-            public_key = client.generate_keypair()
-
-            # Encapsulation uses the public key — instantiate a separate
-            # session to match production usage (one side encaps for the
-            # other).
-            peer = oqs.KeyEncapsulation(algo)
-            ciphertext, _shared = peer.encap_secret(public_key)
-
-            self.results.append(
-                self.benchmark_operation(
-                    "liboqs-python",
-                    "ML-KEM-1024 Encap",
-                    lambda: peer.encap_secret(public_key),
-                )
-            )
-
-            self.results.append(
-                self.benchmark_operation(
-                    "liboqs-python",
-                    "ML-KEM-1024 Decap",
-                    lambda: client.decap_secret(ciphertext),
-                )
-            )
-
-        except (ImportError, Exception) as e:
-            print(f"  SKIP: liboqs ML-KEM not available ({type(e).__name__})")
-            for op in ("ML-KEM-1024 Encap", "ML-KEM-1024 Decap"):
-                self.results.append(
-                    BenchmarkResult(
-                        implementation="liboqs-python",
-                        operation=op,
-                        iterations=0,
-                        mean_time_ms=0,
-                        median_time_ms=0,
-                        ops_per_sec=0,
-                        available=False,
-                        error=f"liboqs ML-KEM not available: {type(e).__name__}",
-                    )
-                )
-
     def benchmark_cryptography_ed25519(self):
         """Benchmark cryptography library (OpenSSL backend) Ed25519"""
         print("\n" + "=" * 70)
@@ -748,140 +672,6 @@ class ComparativeBenchmark:
                 )
             )
 
-    def benchmark_liboqs_direct(self):
-        """Benchmark pure liboqs-python (if available)"""
-        print("\n" + "=" * 70)
-        print("LIBOQS-PYTHON (Direct)")
-        print("=" * 70)
-
-        try:
-            import oqs
-
-            test_data = b"Test message for benchmarking performance" * 10
-
-            # Test ML-DSA-65 (official NIST name, replaces Dilithium3)
-            try:
-                signer = oqs.Signature("ML-DSA-65")
-                public_key = signer.generate_keypair()
-
-                self.results.append(
-                    self.benchmark_operation(
-                        "liboqs-python",
-                        "ML-DSA-65 Sign",
-                        lambda: signer.sign(test_data),
-                    )
-                )
-
-                signature = signer.sign(test_data)
-                self.results.append(
-                    self.benchmark_operation(
-                        "liboqs-python",
-                        "ML-DSA-65 Verify",
-                        lambda: signer.verify(test_data, signature, public_key),
-                    )
-                )
-            except Exception as e:
-                print(f"  SKIP: ML-DSA-65 error: {e}")
-                self.results.append(
-                    BenchmarkResult(
-                        implementation="liboqs-python",
-                        operation="ML-DSA-65",
-                        iterations=0,
-                        mean_time_ms=0,
-                        median_time_ms=0,
-                        ops_per_sec=0,
-                        available=False,
-                        error=str(e),
-                    )
-                )
-
-        except (ImportError, Exception) as e:
-            print(f"  SKIP: liboqs-python not available ({type(e).__name__})")
-            self.results.append(
-                BenchmarkResult(
-                    implementation="liboqs-python",
-                    operation="ML-DSA-65",
-                    iterations=0,
-                    mean_time_ms=0,
-                    median_time_ms=0,
-                    ops_per_sec=0,
-                    available=False,
-                    error=f"liboqs-python not available: {type(e).__name__}",
-                )
-            )
-
-    def benchmark_hybrid_openssl_liboqs(self):
-        """Benchmark hybrid Ed25519 (OpenSSL) + ML-DSA-65 (liboqs)"""
-        print("\n" + "=" * 70)
-        print("HYBRID: OpenSSL Ed25519 + liboqs ML-DSA-65")
-        print("=" * 70)
-
-        try:
-            # Pre-check: verify both libraries are functional
-            import subprocess
-
-            check = subprocess.run(
-                [
-                    sys.executable,
-                    "-c",
-                    "import oqs; from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey",
-                ],
-                capture_output=True,
-                timeout=5,
-            )
-            if check.returncode != 0:
-                raise ImportError("oqs and/or cryptography library not available")
-
-            import oqs
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
-            test_data = b"Test message for benchmarking performance" * 10
-
-            # Setup Ed25519
-            ed_private = Ed25519PrivateKey.generate()
-            ed_public = ed_private.public_key()
-
-            # Setup ML-DSA-65
-            ml_signer = oqs.Signature("ML-DSA-65")
-            ml_public = ml_signer.generate_keypair()
-
-            # Hybrid sign (both signatures)
-            def hybrid_sign():
-                ed_private.sign(test_data)
-                ml_signer.sign(test_data)
-
-            # Hybrid verify (both verifications)
-            ed_sig = ed_private.sign(test_data)
-            ml_sig = ml_signer.sign(test_data)
-
-            def hybrid_verify():
-                ed_public.verify(ed_sig, test_data)
-                ml_signer.verify(test_data, ml_sig, ml_public)
-
-            self.results.append(
-                self.benchmark_operation("OpenSSL+liboqs", "Hybrid Sign", hybrid_sign)
-            )
-            self.results.append(
-                self.benchmark_operation("OpenSSL+liboqs", "Hybrid Verify", hybrid_verify)
-            )
-
-        except (ImportError, Exception) as e:
-            print(
-                f"  SKIP: Hybrid benchmark requires both cryptography and liboqs ({type(e).__name__})"
-            )
-            self.results.append(
-                BenchmarkResult(
-                    implementation="OpenSSL+liboqs",
-                    operation="Hybrid",
-                    iterations=0,
-                    mean_time_ms=0,
-                    median_time_ms=0,
-                    ops_per_sec=0,
-                    available=False,
-                    error=f"Dependencies not available: {type(e).__name__}",
-                )
-            )
-
     def calculate_comparative_metrics(self) -> Dict:
         """Calculate comparative metrics between implementations"""
         print("\n" + "=" * 70)
@@ -1002,7 +792,6 @@ def main():
     print("Comparing AMA Cryptography against:")
     print("  1. libsodium via PyNaCl (Ed25519)")
     print("  2. cryptography library (OpenSSL backend, Ed25519)")
-    print("  3. liboqs-python — ML-DSA-65 and ML-KEM-1024")
     print()
 
     bench = ComparativeBenchmark(iterations=1000)
@@ -1015,9 +804,6 @@ def main():
     bench.benchmark_libsodium_ed25519()
     bench.benchmark_cryptography_ed25519()
     bench.benchmark_aes_gcm_comparison()
-    bench.benchmark_liboqs_direct()
-    bench.benchmark_liboqs_ml_kem()
-    bench.benchmark_hybrid_openssl_liboqs()
 
     # Calculate and display comparisons
     comparisons = bench.calculate_comparative_metrics()
