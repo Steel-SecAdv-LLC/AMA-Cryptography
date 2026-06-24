@@ -168,48 +168,59 @@ static void slh_copy_keypair_for_wotspk(uint32_t out[8], const uint32_t in[8]) {
     out[7] = 0;
 }
 
-/* Serialize ADRS into compressed (22 B) or uncompressed (32 B) form. */
-static void slh_addr_serialize(const slhdsa_params_t *p, uint8_t *out,
-                               const uint32_t a[8]) {
-    if (p->use_compressed_adrs) {
-        /* 22-byte ADRSc per FIPS 205 §11.2:
-         *   ADRS[3] || ADRS[8:16] || ADRS[19] || ADRS[20:32]
-         * Mirrors spx_addr_compress() in ama_sphincs.c byte-for-byte. */
-        out[0]  = (uint8_t)a[0];
-        out[1]  = (uint8_t)(a[1] >> 24); out[2]  = (uint8_t)(a[1] >> 16);
-        out[3]  = (uint8_t)(a[1] >> 8);  out[4]  = (uint8_t)a[1];
-        out[5]  = (uint8_t)(a[2] >> 24); out[6]  = (uint8_t)(a[2] >> 16);
-        out[7]  = (uint8_t)(a[2] >> 8);  out[8]  = (uint8_t)a[2];
-        out[9]  = (uint8_t)a[3];
-        out[10] = (uint8_t)(a[5] >> 24); out[11] = (uint8_t)(a[5] >> 16);
-        out[12] = (uint8_t)(a[5] >> 8);  out[13] = (uint8_t)a[5];
-        out[14] = (uint8_t)(a[6] >> 24); out[15] = (uint8_t)(a[6] >> 16);
-        out[16] = (uint8_t)(a[6] >> 8);  out[17] = (uint8_t)a[6];
-        out[18] = (uint8_t)(a[7] >> 24); out[19] = (uint8_t)(a[7] >> 16);
-        out[20] = (uint8_t)(a[7] >> 8);  out[21] = (uint8_t)a[7];
-    } else {
-        /* 32-byte uncompressed ADRS per FIPS 205 §4.2:
-         *   layer(4) || tree(12 = high32 || mid32 || low32) || type(4) ||
-         *   keypair(4) || chain/height(4) || hash/index(4)
-         * Tree's high 32 bits sit in bytes [4:8] and are zero in our 64-bit
-         * tree usage (FIPS 205 caps tree at 2^(h-h'); both 256f and 128s fit
-         * in 64 bits, so the top 4 bytes are always zero). */
-        out[0]  = (uint8_t)(a[0] >> 24); out[1]  = (uint8_t)(a[0] >> 16);
-        out[2]  = (uint8_t)(a[0] >> 8);  out[3]  = (uint8_t)a[0];
-        out[4]  = 0; out[5] = 0; out[6] = 0; out[7] = 0;
-        out[8]  = (uint8_t)(a[1] >> 24); out[9]  = (uint8_t)(a[1] >> 16);
-        out[10] = (uint8_t)(a[1] >> 8);  out[11] = (uint8_t)a[1];
-        out[12] = (uint8_t)(a[2] >> 24); out[13] = (uint8_t)(a[2] >> 16);
-        out[14] = (uint8_t)(a[2] >> 8);  out[15] = (uint8_t)a[2];
-        out[16] = (uint8_t)(a[3] >> 24); out[17] = (uint8_t)(a[3] >> 16);
-        out[18] = (uint8_t)(a[3] >> 8);  out[19] = (uint8_t)a[3];
-        out[20] = (uint8_t)(a[5] >> 24); out[21] = (uint8_t)(a[5] >> 16);
-        out[22] = (uint8_t)(a[5] >> 8);  out[23] = (uint8_t)a[5];
-        out[24] = (uint8_t)(a[6] >> 24); out[25] = (uint8_t)(a[6] >> 16);
-        out[26] = (uint8_t)(a[6] >> 8);  out[27] = (uint8_t)a[6];
-        out[28] = (uint8_t)(a[7] >> 24); out[29] = (uint8_t)(a[7] >> 16);
-        out[30] = (uint8_t)(a[7] >> 8);  out[31] = (uint8_t)a[7];
-    }
+/* Serialize ADRS into compressed (22 B) form, FIPS 205 §11.2 (SHA2 family).
+ *   ADRSc = ADRS[3] || ADRS[8:16] || ADRS[19] || ADRS[20:32]
+ * Mirrors spx_addr_compress() in ama_sphincs.c byte-for-byte.
+ *
+ * The destination is declared ``uint8_t out[static 22]`` so the compiler can
+ * prove every write is in-bounds at each call site. Splitting the former
+ * branch-on-``use_compressed_adrs`` helper into two fixed-width functions
+ * (this one + slh_addr_serialize_full) is byte-for-byte equivalent to the
+ * runtime branch — each SLH-DSA hash family already calls exactly one form
+ * with a matching-width buffer (sha2_* → addr_c[22], shake_* → addr_full[32])
+ * — and removes a -Wstringop-overflow false positive GCC raised when the
+ * 32-byte ``else`` branch was inlined into a 22-byte caller it can never reach. */
+static void slh_addr_serialize_compressed(uint8_t out[static 22],
+                                          const uint32_t a[8]) {
+    out[0]  = (uint8_t)a[0];
+    out[1]  = (uint8_t)(a[1] >> 24); out[2]  = (uint8_t)(a[1] >> 16);
+    out[3]  = (uint8_t)(a[1] >> 8);  out[4]  = (uint8_t)a[1];
+    out[5]  = (uint8_t)(a[2] >> 24); out[6]  = (uint8_t)(a[2] >> 16);
+    out[7]  = (uint8_t)(a[2] >> 8);  out[8]  = (uint8_t)a[2];
+    out[9]  = (uint8_t)a[3];
+    out[10] = (uint8_t)(a[5] >> 24); out[11] = (uint8_t)(a[5] >> 16);
+    out[12] = (uint8_t)(a[5] >> 8);  out[13] = (uint8_t)a[5];
+    out[14] = (uint8_t)(a[6] >> 24); out[15] = (uint8_t)(a[6] >> 16);
+    out[16] = (uint8_t)(a[6] >> 8);  out[17] = (uint8_t)a[6];
+    out[18] = (uint8_t)(a[7] >> 24); out[19] = (uint8_t)(a[7] >> 16);
+    out[20] = (uint8_t)(a[7] >> 8);  out[21] = (uint8_t)a[7];
+}
+
+/* Serialize ADRS into uncompressed (32 B) form, FIPS 205 §4.2 (SHAKE family).
+ *   layer(4) || tree(12 = high32 || mid32 || low32) || type(4) ||
+ *   keypair(4) || chain/height(4) || hash/index(4)
+ * Tree's high 32 bits sit in bytes [4:8] and are zero in our 64-bit tree
+ * usage (FIPS 205 caps tree at 2^(h-h'); both 256f and 128s fit in 64 bits,
+ * so the top 4 bytes are always zero). Destination declared
+ * ``uint8_t out[static 32]`` for the same bound-provability reason as the
+ * compressed form above. */
+static void slh_addr_serialize_full(uint8_t out[static 32],
+                                    const uint32_t a[8]) {
+    out[0]  = (uint8_t)(a[0] >> 24); out[1]  = (uint8_t)(a[0] >> 16);
+    out[2]  = (uint8_t)(a[0] >> 8);  out[3]  = (uint8_t)a[0];
+    out[4]  = 0; out[5] = 0; out[6] = 0; out[7] = 0;
+    out[8]  = (uint8_t)(a[1] >> 24); out[9]  = (uint8_t)(a[1] >> 16);
+    out[10] = (uint8_t)(a[1] >> 8);  out[11] = (uint8_t)a[1];
+    out[12] = (uint8_t)(a[2] >> 24); out[13] = (uint8_t)(a[2] >> 16);
+    out[14] = (uint8_t)(a[2] >> 8);  out[15] = (uint8_t)a[2];
+    out[16] = (uint8_t)(a[3] >> 24); out[17] = (uint8_t)(a[3] >> 16);
+    out[18] = (uint8_t)(a[3] >> 8);  out[19] = (uint8_t)a[3];
+    out[20] = (uint8_t)(a[5] >> 24); out[21] = (uint8_t)(a[5] >> 16);
+    out[22] = (uint8_t)(a[5] >> 8);  out[23] = (uint8_t)a[5];
+    out[24] = (uint8_t)(a[6] >> 24); out[25] = (uint8_t)(a[6] >> 16);
+    out[26] = (uint8_t)(a[6] >> 8);  out[27] = (uint8_t)a[6];
+    out[28] = (uint8_t)(a[7] >> 24); out[29] = (uint8_t)(a[7] >> 16);
+    out[30] = (uint8_t)(a[7] >> 8);  out[31] = (uint8_t)a[7];
 }
 
 /* ============================================================================
@@ -250,7 +261,7 @@ static void sha2_F(const slhdsa_params_t *p, uint8_t *out,
     uint8_t hash[32];
     ama_sha256_ctx ctx;
 
-    slh_addr_serialize(p, addr_c, adrs);
+    slh_addr_serialize_compressed(addr_c, adrs);
     memset(padding, 0, sizeof(padding));  // PUBLIC-DATA: padding — SLH-DSA SHA2 H-padding scratch, pre-use init filled by HMAC-style block construction
 
     ama_sha256_init(&ctx);
@@ -286,7 +297,7 @@ static void sha2_HT(const slhdsa_params_t *p, uint8_t *out,
     uint8_t buf[AMA_SLHDSA_SHA2_HT_BUF_BYTES];
     size_t total, msglen;
 
-    slh_addr_serialize(p, addr_c, adrs);
+    slh_addr_serialize_compressed(addr_c, adrs);
     msglen = inblocks * p->n;
     total = p->n + (128 - p->n) + 22 + msglen;
     /* Defensive bound check: any future parameter set exceeding the static
@@ -316,7 +327,7 @@ static void sha2_PRF(const slhdsa_params_t *p, uint8_t *out,
     uint8_t hash[32];
     ama_sha256_ctx ctx;
 
-    slh_addr_serialize(p, addr_c, adrs);
+    slh_addr_serialize_compressed(addr_c, adrs);
     memset(padding, 0, sizeof(padding));  // PUBLIC-DATA: padding — SLH-DSA SHA2 H-padding scratch, pre-use init
 
     ama_sha256_init(&ctx);
@@ -421,7 +432,7 @@ static void shake_F(const slhdsa_params_t *p, uint8_t *out,
                     const uint8_t *m) {
     /* F(PK.seed, ADRS, M_1) = SHAKE-256(PK.seed || ADRS || M_1, 8n) */
     uint8_t addr_full[32];
-    slh_addr_serialize(p, addr_full, adrs);
+    slh_addr_serialize_full(addr_full, adrs);
     (void)shake_absorb_three(pub_seed, p->n, addr_full, 32, m, p->n, out, p->n);
     ama_secure_memzero(addr_full, sizeof(addr_full));
 }
@@ -431,7 +442,7 @@ static void shake_HT(const slhdsa_params_t *p, uint8_t *out,
                      const uint8_t *m, size_t inblocks) {
     /* H(PK.seed, ADRS, M_2) = T_l(...) = SHAKE-256(PK.seed || ADRS || M, 8n) */
     uint8_t addr_full[32];
-    slh_addr_serialize(p, addr_full, adrs);
+    slh_addr_serialize_full(addr_full, adrs);
     (void)shake_absorb_three(pub_seed, p->n, addr_full, 32,
                              m, inblocks * p->n, out, p->n);
     ama_secure_memzero(addr_full, sizeof(addr_full));
@@ -442,7 +453,7 @@ static void shake_PRF(const slhdsa_params_t *p, uint8_t *out,
                       const uint8_t *sk_seed) {
     /* PRF(PK.seed, SK.seed, ADRS) = SHAKE-256(PK.seed || ADRS || SK.seed, 8n) */
     uint8_t addr_full[32];
-    slh_addr_serialize(p, addr_full, adrs);
+    slh_addr_serialize_full(addr_full, adrs);
     (void)shake_absorb_three(pub_seed, p->n, addr_full, 32,
                              sk_seed, p->n, out, p->n);
     ama_secure_memzero(addr_full, sizeof(addr_full));
