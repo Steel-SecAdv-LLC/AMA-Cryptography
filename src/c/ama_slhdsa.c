@@ -180,7 +180,7 @@ static void slh_copy_keypair_for_wotspk(uint32_t out[8], const uint32_t in[8]) {
  * with a matching-width buffer (sha2_* → addr_c[22], shake_* → addr_full[32])
  * — and removes a -Wstringop-overflow false positive GCC raised when the
  * 32-byte ``else`` branch was inlined into a 22-byte caller it can never reach. */
-static void slh_addr_serialize_compressed(uint8_t out[static 22],
+static void slh_addr_serialize_compressed(uint8_t out[22],
                                           const uint32_t a[8]) {
     out[0]  = (uint8_t)a[0];
     out[1]  = (uint8_t)(a[1] >> 24); out[2]  = (uint8_t)(a[1] >> 16);
@@ -204,7 +204,7 @@ static void slh_addr_serialize_compressed(uint8_t out[static 22],
  * so the top 4 bytes are always zero). Destination declared
  * ``uint8_t out[static 32]`` for the same bound-provability reason as the
  * compressed form above. */
-static void slh_addr_serialize_full(uint8_t out[static 32],
+static void slh_addr_serialize_full(uint8_t out[32],
                                     const uint32_t a[8]) {
     out[0]  = (uint8_t)(a[0] >> 24); out[1]  = (uint8_t)(a[0] >> 16);
     out[2]  = (uint8_t)(a[0] >> 8);  out[3]  = (uint8_t)a[0];
