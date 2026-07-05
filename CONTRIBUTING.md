@@ -41,7 +41,7 @@ This project adheres to a Code of Conduct that all contributors are expected to 
 
 ### Prerequisites
 
-- Python 3.9 or higher
+- Python 3.10 or higher
 - Git
 - Basic understanding of cryptography
 - Familiarity with NIST and IETF standards
@@ -407,7 +407,7 @@ When you open a PR, include:
 2. **Code Review:** At least one maintainer approval required
 3. **Security Review:** Cryptographic changes require additional review
 4. **Documentation Review:** All docs must be accurate
-5. **Testing:** All tests must pass on Python 3.9-3.13
+5. **Testing:** All tests must pass on Python 3.10-3.13
 
 ### After Approval
 

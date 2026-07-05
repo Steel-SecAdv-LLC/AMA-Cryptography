@@ -23,7 +23,7 @@ name: Release — Build, Sign, and Publish
 #                        FAILS the release if anything drifted.
 #
 #   2. build-wheels    — cibuildwheel matrix across Linux/macOS/Windows
-#                        and Python 3.9–3.13.  Each wheel ships the
+#                        and Python 3.10–3.13.  Each wheel ships the
 #                        Ed25519-signed _integrity_signature.py
 #                        artefact via setup.py's AMA_BUILD_PIPELINE
 #                        hook.
@@ -177,11 +177,11 @@ jobs:
         env:
           # PYTHON VERSION MATRIX:
           # Build for the same Python range the test workflows already
-          # cover (3.9–3.13).  Skip PyPy and 32-bit musllinux variants;
+          # cover (3.10–3.13).  Skip PyPy and 32-bit musllinux variants;
           # the native build under setup.py CMakeBuild is x86-64 / arm64
           # only, and the ctypes shims in ama_cryptography/ don't gain
           # anything from PyPy's tracing JIT.
-          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-* cp313-*"
+          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
           CIBW_SKIP: "pp* *_i686 *_ppc64le *_s390x *-musllinux_*"
           CIBW_ARCHS_LINUX: "auto64"
           CIBW_ARCHS_MACOS: "auto64"

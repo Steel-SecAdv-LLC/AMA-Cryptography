@@ -804,7 +804,6 @@ setup(
         "Programming Language :: C",
         "Programming Language :: Cython",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
@@ -831,7 +830,7 @@ setup(
         "integrity-protection",
         "digital-signatures",
     ],
-    python_requires=">=3.9",
+    python_requires=">=3.10",
     packages=find_packages(
         include=["ama_cryptography", "ama_cryptography.*"],
         exclude=["tests", "tests.*", "examples", "examples.*", "src", "src.*"],

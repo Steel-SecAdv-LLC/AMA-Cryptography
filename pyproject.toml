@@ -60,7 +60,6 @@ classifiers = [
     "Programming Language :: C",
     "Programming Language :: Cython",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -69,7 +68,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Typing :: Typed"
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
@@ -143,9 +142,10 @@ dev = [
     "pytest-benchmark>=4.0.0",
     "pytest-xdist>=3.0.0",
     "hypothesis>=6.155.7",
-    # Black 26.3.1 contains the GHSA-fc3w-v5rg-v7q6 fix and requires Python
-    # 3.10+, so do not install a vulnerable 3.9-only fallback.
-    "black>=26.5.1; python_version >= '3.10'",
+    # Black 26.5.1 carries the GHSA-fc3w-v5rg-v7q6 fix and requires Python
+    # 3.10+ — consistent with this project's requires-python >= 3.10 floor,
+    # so no version guard is needed.
+    "black>=26.5.1",
     "ruff>=0.15.20",
     "mypy>=2.1.0",
     "bandit>=1.7.0",
@@ -197,6 +197,13 @@ ama_cryptography = [
 
 # Ruff configuration — replaces flake8, isort
 [tool.ruff]
+# The runtime SUPPORT floor is Python 3.10 (see requires-python / classifiers /
+# CI matrix).  ruff's target-version is deliberately pinned one release lower so
+# its pyupgrade lane does NOT force a codebase-wide PEP 604 (`X | None`) / PEP
+# 585 rewrite: this project intentionally keeps explicit Optional[...] / List /
+# Dict typing (mirrored by the UP006/UP035 per-file ignores below).  Pinning is
+# required because an unset target-version would otherwise be inferred from
+# requires-python and re-trigger those ~200 style rewrites.
 target-version = "py39"
 line-length = 100
 
@@ -255,8 +262,9 @@ ignore = []  # Do not add ignores without a comment explaining why.
     "B028",
     "UP006", "UP015", "UP035",  # UP006/UP035: deprecated typing imports (existing pattern)
 ]
-# _build_sign.py intentionally keeps Optional[...] annotations for Python 3.9
-# parser compatibility; PEP 604 `X | None` syntax is not valid on 3.9.
+# _build_sign.py intentionally keeps explicit Optional[...] annotations in the
+# release-signing bootstrap for readability; UP045 would rewrite them to PEP 604
+# `X | None` unions.  A deliberate style retention, not a compatibility guard.
 "ama_cryptography/_build_sign.py" = ["UP045"]
 # ama_cryptography/legacy_compat.py — ported from code_guardian_secure.py
 #   UP007/UP045: PEP 604 union syntax (existing pattern)
@@ -325,16 +333,16 @@ max-complexity = 15
 # Black configuration
 [tool.black]
 line-length = 100
-target-version = ["py39", "py310", "py311", "py312"]
+target-version = ["py310", "py311", "py312"]
 skip-string-normalization = false
 
 # MyPy configuration — strict mode
 [tool.mypy]
-# Static-analysis target floor.  mypy >= 2.0 (bumped to 2.1.0 with the
-# python-dependencies group, incorporating #357) refuses python_version="3.9"
-# and requires >= 3.10.  This raises only the *type-analysis* baseline to
-# mypy's floor; runtime support for Python 3.9 is unchanged and remains
-# independently validated by the 3.9 lane of the CI test matrix.
+# Static-analysis target = the project's minimum supported runtime.  The
+# project dropped Python 3.9 (requires-python >= 3.10; see the classifiers and
+# CI matrix), so 3.10 is now both the runtime floor and the type-analysis
+# floor.  This also satisfies mypy >= 2.0 (2.1.0 via the python-dependencies
+# group), which refuses python_version="3.9".
 python_version = "3.10"
 strict = true
 disallow_untyped_defs = true
@@ -463,12 +471,19 @@ omit = [
 [tool.coverage.report]
 precision = 2
 # Coverage floor: fail the build if package coverage regresses below this.
-# Set as a conservative catastrophic-regression catch (well below the actual
-# figure the CI suite achieves), NOT an aspirational target — ratchet it up
-# toward the measured value in a dedicated commit rather than letting coverage
-# silently drift down.  Previously there was no gate at all, so a large drop
-# could land unnoticed (only reported to Codecov).
-fail_under = 60
+# A conservative catastrophic-regression catch, NOT an aspirational target.
+# Measured on the full ubuntu-latest suite: ~87% package coverage, and it holds
+# at ~87% with OR without the Linux-only differential/interop lane (that lane
+# adds assertions, not much unique line coverage).  The floor is set to 75 — a
+# ~12-point margin below the measurement — because the --cov gate runs on every
+# OS × Python cell (ci-build-test.yml) and the windows-latest / macos-latest
+# cells cannot be measured here: they exercise different platform paths
+# (VirtualLock vs POSIX mlock in secure_memory, etc.) and skip the Linux-gated
+# differential libraries, so their totals drift a few points from Linux.
+# Ratcheted up from the previous blind 60 now that the real figure is measured;
+# raise it further toward the measured value in a dedicated commit rather than
+# letting coverage silently drift down.
+fail_under = 75
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",

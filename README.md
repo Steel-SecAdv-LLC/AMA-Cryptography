@@ -6,7 +6,7 @@
 </div>
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org)
+[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org)
 [![C](https://img.shields.io/badge/C-C11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 [![Cython](https://img.shields.io/badge/Cython-3.0+-yellow.svg)](https://cython.org)
 [![PQC](https://img.shields.io/badge/PQC-ML--DSA--65%20%7C%20ML--KEM--1024%20%7C%20SLH--DSA-purple.svg)](CRYPTOGRAPHY.md)
@@ -731,14 +731,14 @@ GitHub Actions automatically tests:
 | Check | Description |
 |-------|-------------|
 | C library | GCC, Clang on Ubuntu/macOS |
-| Python package | Python 3.9-3.13 on Linux |
+| Python package | Python 3.10-3.13 on Linux |
 | Code quality | ruff (lint + import sorting), black, mypy --strict |
 | Security scanning | pip-audit, bandit, Semgrep, CodeQL static analysis |
 | Docker builds | Ubuntu + Alpine images |
 
 ### CI Matrix
 
-- **Python Versions**: 3.9, 3.10, 3.11, 3.12, 3.13
+- **Python Versions**: 3.10, 3.11, 3.12, 3.13
 - **Platforms**: Ubuntu Latest, macOS Latest, Windows Latest
 - **Jobs**: test, code-quality, security-checks
 

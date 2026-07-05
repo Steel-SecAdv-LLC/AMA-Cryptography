@@ -562,7 +562,7 @@ jobs:
       - name: Install build prerequisites (manylinux_2_28 / AlmaLinux 8)
         run: |
           # The manylinux_2_28 image carries gcc-toolset, cmake, and
-          # CPython 3.9–3.13 under /opt/python/.  Pre-install every
+          # CPython 3.10–3.13 under /opt/python/.  Pre-install every
           # build dep into the container's CPython 3.11 — `build` /
           # `setuptools` / `wheel` / `cmake` / `Cython` / `numpy` —
           # so the wheel build can run with `--no-isolation` below.

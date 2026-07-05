@@ -74,7 +74,7 @@ C_COMPONENTS: list[tuple[str, str]] = [
 def read_package_version() -> str:
     """Read the project version from pyproject.toml.
 
-    Hand-rolled TOML parsing (no `tomllib` dependency on the Python 3.9
+    Hand-rolled TOML parsing (no `tomllib` dependency on the Python 3.10
     end of the matrix).  The pattern anchors ``^version = "X.Y.Z"`` at
     line start so the ``project.version`` field is the only thing that
     can match — a ``dependencies = [...]`` block that happened to
