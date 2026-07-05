@@ -39,9 +39,24 @@ CONSTTIME_SRC = $(SRC_DIR)/ama_consttime.c
 # production build, which is the whole point of the AMA_AES_CONSTTIME
 # flag above.
 DISPATCH_DIR = ../../src/c/dispatch
+# ama_hkdf.c defines the public HKDF-SHA-2 variants (ama_hkdf_sha256/384/512),
+# which call ama_hmac_sha256 / ama_hmac_sha384; ama_hmac_sha256.c in turn calls
+# the SHA-256 core in ama_sha256.c.  These must be linked in or the harness
+# fails with undefined references to ama_hmac_sha256 / ama_hmac_sha384.
+#
+# We deliberately do NOT link the hardware SHA-256 kernels (ama_sha256_ni.c /
+# neon).  Their per-file ISA flags (-msha / -march=armv8-a+crypto) do not fit
+# this single-invocation build, and ama_sha256.c gates its accelerated backends
+# behind AMA_HAVE_X86_SHANI_IMPL / AMA_HAVE_NEON_IMPL (undefined here), so it
+# resolves to the scalar SHA-256 core — sufficient for the harness, which does
+# not measure SHA-256 timing (the authoritative HW-kernel byte-identity check
+# is tests/c/test_sha256_dispatch_equiv.c under the full CMake build).
 CRYPTO_SRCS = $(SRC_DIR)/ama_consttime.c \
               $(SRC_DIR)/ama_core.c \
               $(SRC_DIR)/ama_sha3.c \
+              $(SRC_DIR)/ama_sha256.c \
+              $(SRC_DIR)/ama_hmac_sha256.c \
+              $(SRC_DIR)/ama_hmac_sha384.c \
               $(SRC_DIR)/ama_ed25519.c \
               $(SRC_DIR)/ama_aes_gcm.c \
               $(SRC_DIR)/ama_aes_bitsliced.c \

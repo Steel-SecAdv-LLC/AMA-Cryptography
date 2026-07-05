@@ -396,6 +396,13 @@ endif()
 # NOTE: Independent of AMA_ENABLE_SIMD — AES-NI is a distinct ISA extension
 # from AVX2/SSE. Disabling SIMD should not disable hardware AES acceleration.
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86")
+    # ama_sha256_ni.c is unconditionally compiled into the library on x86
+    # (its body is #if-guarded to x86), so the SHA-NI compression kernel is
+    # always linked.  Tell the ama_sha256.c dispatcher it may reference the
+    # kernel — mirrors AMA_HAVE_NEON_IMPL / AMA_HAVE_SVE2_IMPL below.  Builds
+    # that do NOT link the kernel (e.g. the standalone dudect harness) leave
+    # this undefined and fall back to the scalar SHA-256 core.
+    add_compile_definitions(AMA_HAVE_X86_SHANI_IMPL)
     if(NOT MSVC)
         set_source_files_properties(src/c/ama_aes_gcm.c PROPERTIES
             COMPILE_FLAGS "-maes -mpclmul")
@@ -424,6 +431,20 @@ set(AMA_SOURCES
     src/c/ama_consttime.c
     src/c/ama_sha3.c
     src/c/ama_hkdf.c
+    # SHA-2 primitives and their HMAC keyed constructions.  These are NOT
+    # PQC-specific: the always-built ama_hkdf.c defines the public HKDF-SHA-2
+    # variants (ama_hkdf_sha256/384/512) which call ama_hmac_sha256 /
+    # ama_hmac_sha384, and ama_hmac_sha256 in turn calls the runtime-dispatched
+    # SHA-256 core (scalar + x86 SHA-NI kernel).  Keeping them here — rather
+    # than in the AMA_USE_NATIVE_PQC block below — means the SHA-2/HMAC symbols
+    # resolve for every configuration (including AMA_USE_NATIVE_PQC=OFF) so the
+    # library and the standalone dudect harness both link.  The x86 SHA-NI
+    # per-file flags (-msha -mssse3 -msse4.1) are applied to ama_sha256_ni.c
+    # further down, independent of which source list it sits in.
+    src/c/ama_sha256.c
+    src/c/ama_sha256_ni.c
+    src/c/ama_hmac_sha256.c
+    src/c/ama_hmac_sha384.c
     src/c/ama_ed25519.c
     src/c/ama_aes_gcm.c
     src/c/ama_cpuid.c
@@ -436,14 +457,15 @@ set(AMA_SOURCES
     ${AMA_SVE2_SOURCES}
 )
 
-# Add native PQC source files when enabled
+# Add native PQC source files when enabled.  NOTE: the SHA-2 / HMAC-SHA-2
+# sources (ama_sha256.c, ama_sha256_ni.c, ama_hmac_sha256.c,
+# ama_hmac_sha384.c) were moved UP into the unconditional AMA_SOURCES list
+# above — they back the always-built HKDF-SHA-2 public API and are not
+# PQC-specific.  Leaving them here would fail AMA_USE_NATIVE_PQC=OFF builds
+# with undefined references from ama_hkdf.c.
 if(AMA_USE_NATIVE_PQC)
     list(APPEND AMA_SOURCES
         src/c/ama_platform_rand.c
-        src/c/ama_sha256.c
-        src/c/ama_sha256_ni.c
-        src/c/ama_hmac_sha256.c
-        src/c/ama_hmac_sha384.c
         src/c/ama_kyber.c
         src/c/ama_dilithium.c
         src/c/ama_sphincs.c

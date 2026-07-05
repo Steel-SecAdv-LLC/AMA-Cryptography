@@ -28,11 +28,23 @@ extern int ama_has_arm_sha2(void);
 /* Hardware-accelerated single-block compression kernels, selected at runtime.
  * x86: SHA-NI (src/c/ama_sha256_ni.c); AArch64: ARMv8 SHA2 Crypto Extensions
  * (ama_sha256_compress_neon in src/c/neon/ama_sphincs_neon.c).  Absent kernels
- * simply leave the scalar fallback in place. */
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+ * simply leave the scalar fallback in place.
+ *
+ * Each backend is gated on the build-system "impl linked" macro
+ * (AMA_HAVE_X86_SHANI_IMPL / AMA_HAVE_NEON_IMPL), mirroring the existing
+ * AMA_HAVE_NEON_IMPL / AMA_HAVE_SVE2_IMPL / AMA_HAVE_X25519_FE64_MULX_IMPL
+ * dispatch convention (see CMakeLists.txt).  This keeps the accelerated
+ * kernel's extern reference OUT of translation units that do not link the
+ * kernel object — e.g. the standalone tools/constant_time dudect harness,
+ * or an AArch64 build configured with -DAMA_ENABLE_NEON=OFF — so those builds
+ * resolve to the scalar path instead of failing at link time.  The full
+ * library (CMake) defines the matching macro, so the accelerated path stays
+ * active and byte-identity is still pinned by tests/c/test_sha256_dispatch_equiv.c. */
+#if (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)) \
+    && defined(AMA_HAVE_X86_SHANI_IMPL)
 extern void ama_sha256_compress_x86_shani(uint32_t state[8], const uint8_t block[64]);
 #define AMA_SHA256_HAVE_X86_SHANI 1
-#elif defined(__aarch64__) || defined(_M_ARM64)
+#elif (defined(__aarch64__) || defined(_M_ARM64)) && defined(AMA_HAVE_NEON_IMPL)
 extern void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]);
 #define AMA_SHA256_HAVE_ARM_SHA2 1
 #endif
