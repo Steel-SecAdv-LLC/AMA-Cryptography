@@ -523,6 +523,11 @@ def _setup_aes_gcm_ctypes(lib: ctypes.CDLL) -> bool:
 # HKDF native availability
 _HKDF_NATIVE_AVAILABLE = False
 
+# HKDF-SHA-2 (RFC 5869) native availability — the SHA-256/384/512 PRF variants
+# that interoperate with TLS 1.3 / HPKE / non-AMA stacks (the default ama_hkdf
+# uses HMAC-SHA3-256).  Mirrors the _HKDF/_HMAC flags; fail-closed.
+_HKDF_SHA2_NATIVE_AVAILABLE = False
+
 
 def _setup_hkdf_ctypes(lib: ctypes.CDLL) -> bool:
     """Configure ctypes for HKDF functions. Separate from PQC setup."""
@@ -539,6 +544,27 @@ def _setup_hkdf_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_hkdf.restype = ctypes.c_int
 
+        return True
+    except AttributeError:
+        return False
+
+
+def _setup_hkdf_sha2_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for the HKDF-SHA-256/384/512 (RFC 5869) variants."""
+    try:
+        for name in ("ama_hkdf_sha256", "ama_hkdf_sha384", "ama_hkdf_sha512"):
+            fn = getattr(lib, name)
+            fn.argtypes = [
+                ctypes.c_void_p,  # salt
+                ctypes.c_size_t,  # salt_len
+                ctypes.c_void_p,  # ikm
+                ctypes.c_size_t,  # ikm_len
+                ctypes.c_void_p,  # info
+                ctypes.c_size_t,  # info_len
+                ctypes.c_void_p,  # okm
+                ctypes.c_size_t,  # okm_len
+            ]
+            fn.restype = ctypes.c_int
         return True
     except AttributeError:
         return False
@@ -1003,6 +1029,7 @@ if _native_lib is not None:
     _ED25519_NATIVE_AVAILABLE = _setup_ed25519_ctypes(_native_lib)
     _AES_GCM_NATIVE_AVAILABLE = _setup_aes_gcm_ctypes(_native_lib)
     _HKDF_NATIVE_AVAILABLE = _setup_hkdf_ctypes(_native_lib)
+    _HKDF_SHA2_NATIVE_AVAILABLE = _setup_hkdf_sha2_ctypes(_native_lib)
     _SHA3_256_NATIVE_AVAILABLE = _setup_sha3_256_ctypes(_native_lib)
     _HMAC_SHA3_256_NATIVE_AVAILABLE = _setup_hmac_sha3_256_ctypes(_native_lib)
     _HMAC_SHA512_NATIVE_AVAILABLE = _setup_hmac_sha512_ctypes(_native_lib)
@@ -2952,6 +2979,92 @@ def native_hkdf(
         raise RuntimeError(f"HKDF derivation failed (rc={rc})")
 
     return bytes(okm_buf)
+
+
+def _native_hkdf_sha2(
+    fn_name: str,
+    digest_size: int,
+    ikm: bytes,
+    length: int,
+    salt: "Optional[bytes]",
+    info: bytes,
+) -> bytes:
+    """Shared body for the HKDF-SHA-256/384/512 (RFC 5869) bindings."""
+    max_len = 255 * digest_size
+    if length <= 0:
+        raise ValueError(f"HKDF output length must be > 0, got {length}")
+    if length > max_len:
+        raise ValueError(f"HKDF output length must be <= {max_len}, got {length}")
+    if _native_lib is None or not _HKDF_SHA2_NATIVE_AVAILABLE:
+        raise RuntimeError("HKDF-SHA-2 native backend not available. " + _INSTALL_HINT)
+
+    okm_buf = ctypes.create_string_buffer(length)
+    salt_len = len(salt) if salt else 0
+    info_len = len(info)
+    rc = getattr(_native_lib, fn_name)(
+        salt if salt_len > 0 else None,
+        ctypes.c_size_t(salt_len),
+        ikm if len(ikm) > 0 else None,
+        ctypes.c_size_t(len(ikm)),
+        info if info_len > 0 else None,
+        ctypes.c_size_t(info_len),
+        okm_buf,
+        ctypes.c_size_t(length),
+    )
+    if rc != 0:
+        raise RuntimeError(f"{fn_name} failed (rc={rc})")
+    return bytes(okm_buf)
+
+
+def native_hkdf_sha256(
+    ikm: bytes, length: int, salt: "Optional[bytes]" = None, info: bytes = b""
+) -> bytes:
+    """
+    HKDF-SHA-256 (RFC 5869) via native C implementation (ama_hkdf_sha256).
+
+    The canonical interoperable KDF: TLS 1.3 (RFC 8446), HPKE (RFC 9180), and
+    most non-AMA stacks derive keys with HKDF-SHA-256.  Output is byte-identical
+    to a stdlib hmac+hashlib HKDF reference and validated against the RFC 5869
+    Appendix A.1-A.3 test vectors.  INVARIANT-1 compliant.
+
+    Args:
+        ikm: Input key material.
+        length: Desired output length in bytes (max 255*32 = 8160).
+        salt: Optional salt (None/empty -> 32 zero bytes per RFC 5869 §2.2).
+        info: Optional context/application info.
+
+    Returns:
+        `length` bytes of output key material.
+
+    Raises:
+        RuntimeError: native backend unavailable.
+        ValueError: length out of range.
+    """
+    return _native_hkdf_sha2("ama_hkdf_sha256", 32, ikm, length, salt, info)
+
+
+def native_hkdf_sha384(
+    ikm: bytes, length: int, salt: "Optional[bytes]" = None, info: bytes = b""
+) -> bytes:
+    """
+    HKDF-SHA-384 (RFC 5869) via native C implementation (ama_hkdf_sha384).
+
+    Output is byte-identical to a stdlib hmac+hashlib HKDF reference.
+    INVARIANT-1 compliant.  Max output length 255*48 = 12240 bytes.
+    """
+    return _native_hkdf_sha2("ama_hkdf_sha384", 48, ikm, length, salt, info)
+
+
+def native_hkdf_sha512(
+    ikm: bytes, length: int, salt: "Optional[bytes]" = None, info: bytes = b""
+) -> bytes:
+    """
+    HKDF-SHA-512 (RFC 5869) via native C implementation (ama_hkdf_sha512).
+
+    Output is byte-identical to a stdlib hmac+hashlib HKDF reference.
+    INVARIANT-1 compliant.  Max output length 255*64 = 16320 bytes.
+    """
+    return _native_hkdf_sha2("ama_hkdf_sha512", 64, ikm, length, salt, info)
 
 
 # ============================================================================

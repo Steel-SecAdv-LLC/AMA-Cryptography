@@ -646,6 +646,46 @@ AMA_API ama_error_t ama_hkdf(
     size_t okm_len
 );
 
+/**
+ * @brief HKDF-SHA-256 / -384 / -512 key derivation (RFC 5869)
+ *
+ * Extract-then-Expand HKDF using HMAC-SHA-256/384/512 as the PRF — the
+ * interoperable KDF variants used by TLS 1.3 (RFC 8446), HPKE (RFC 9180),
+ * and most non-AMA stacks (the default ama_hkdf() uses HMAC-SHA3-256).
+ * Output is byte-identical to a stdlib hmac+hashlib HKDF reference.
+ *
+ * @param salt     Optional salt (NULL/zero-length -> HashLen zero bytes per §2.2)
+ * @param salt_len Salt length
+ * @param ikm      Input key material
+ * @param ikm_len  IKM length
+ * @param info     Optional context/application info (may be NULL)
+ * @param info_len Info length
+ * @param okm      Output key material buffer
+ * @param okm_len  Desired output length (max 255 * HashLen)
+ * @return AMA_SUCCESS, AMA_ERROR_INVALID_PARAM (bad pointer / okm_len too large),
+ *         AMA_ERROR_OVERFLOW, or AMA_ERROR_MEMORY
+ *
+ * INVARIANT-1 compliant: built on the native ama_hmac_sha* primitives.
+ */
+AMA_API ama_error_t ama_hkdf_sha256(
+    const uint8_t* salt, size_t salt_len,
+    const uint8_t* ikm, size_t ikm_len,
+    const uint8_t* info, size_t info_len,
+    uint8_t* okm, size_t okm_len
+);
+AMA_API ama_error_t ama_hkdf_sha384(
+    const uint8_t* salt, size_t salt_len,
+    const uint8_t* ikm, size_t ikm_len,
+    const uint8_t* info, size_t info_len,
+    uint8_t* okm, size_t okm_len
+);
+AMA_API ama_error_t ama_hkdf_sha512(
+    const uint8_t* salt, size_t salt_len,
+    const uint8_t* ikm, size_t ikm_len,
+    const uint8_t* info, size_t info_len,
+    uint8_t* okm, size_t okm_len
+);
+
 /* ============================================================================
  * ED25519 STANDALONE API
  * ============================================================================ */
