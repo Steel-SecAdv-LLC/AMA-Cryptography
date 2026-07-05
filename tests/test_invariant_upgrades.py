@@ -277,7 +277,11 @@ class TestConstantTimeRequirements:
         for py_file in sorted(crypto_dir.rglob("*.py")):
             try:
                 tree = ast.parse(py_file.read_text(encoding="utf-8"))
-            except SyntaxError:
+            except SyntaxError as exc:
+                # A module that fails to parse must not silently escape the scan
+                # (an unparseable file could hide a banned import). Treat it as a
+                # violation so the invariant cannot be bypassed.
+                violations.append(f"{py_file.name}: unparseable ({exc})")
                 continue
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
@@ -316,7 +320,11 @@ class TestConstantTimeRequirements:
         for py_file in sorted(crypto_dir.rglob("*.py")):
             try:
                 tree = ast.parse(py_file.read_text(encoding="utf-8"))
-            except SyntaxError:
+            except SyntaxError as exc:
+                # A module that fails to parse must not silently escape the scan
+                # (an unparseable file could hide a banned import). Treat it as a
+                # violation so the invariant cannot be bypassed.
+                violations.append(f"{py_file.name}: unparseable ({exc})")
                 continue
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):

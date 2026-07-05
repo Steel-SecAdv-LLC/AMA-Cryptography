@@ -1853,31 +1853,26 @@ class AmaCryptography:
         Returns:
             Hash digest
 
-        Prefers the native FIPS 202 C kernels (ama_sha3_256/512, ama_shake256);
-        stdlib hashlib is used only when the native backend is unavailable
-        (e.g. a build without the native library), since plain hashing is
-        INVARIANT-1-permitted but the vetted native path is preferred.
+        Always uses the native FIPS 202 C kernels (ama_sha3_256/512,
+        ama_shake256). Per INVARIANT-7 there is no hashlib fallback: a hash is a
+        cryptographic primitive, so when the native backend is unavailable the
+        underlying ``native_sha3_*`` / ``native_shake256`` helpers raise
+        ``RuntimeError`` (fail closed) rather than substituting stdlib hashing —
+        including under the docs-build import override, where call-time
+        enforcement still refuses to operate without the native library.
         """
         from ama_cryptography.pqc_backends import (
-            _SHA3_256_NATIVE_AVAILABLE,
-            _SHA3_EXT_NATIVE_AVAILABLE,
             native_sha3_256,
             native_sha3_512,
             native_shake256,
         )
 
         if algorithm == "sha3-256":
-            if _SHA3_256_NATIVE_AVAILABLE:
-                return native_sha3_256(message)
-            return hashlib.sha3_256(message).digest()
+            return native_sha3_256(message)
         elif algorithm == "sha3-512":
-            if _SHA3_EXT_NATIVE_AVAILABLE:
-                return native_sha3_512(message)
-            return hashlib.sha3_512(message).digest()
+            return native_sha3_512(message)
         elif algorithm == "shake256":
-            if _SHA3_EXT_NATIVE_AVAILABLE:
-                return native_shake256(message, 32)
-            return hashlib.shake_256(message).digest(32)
+            return native_shake256(message, 32)
         else:
             raise ValueError(f"Unsupported hash algorithm: {algorithm}")
 

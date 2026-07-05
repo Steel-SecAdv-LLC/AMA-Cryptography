@@ -18,9 +18,21 @@ import pytest
 from ama_cryptography import pqc_backends
 from ama_cryptography.crypto_api import quick_hkdf, quick_hmac
 
+# These suites exercise the full public HMAC/HKDF surface — HMAC-SHA-256/384/512,
+# HMAC-SHA3-256, HKDF-SHA-2 (256/384/512) and HKDF-SHA3 — each of which loads from
+# an independent ctypes setup, so any one of them can be unavailable on its own.
+# Require them all so a build missing any single backend skips cleanly instead of
+# failing a test with RuntimeError.
 skip_no_native = pytest.mark.skipif(
-    not pqc_backends._HMAC_SHA256_NATIVE_AVAILABLE,
-    reason="native HMAC backend not available",
+    not (
+        pqc_backends._HMAC_SHA256_NATIVE_AVAILABLE
+        and pqc_backends._HMAC_SHA384_NATIVE_AVAILABLE
+        and pqc_backends._HMAC_SHA512_NATIVE_AVAILABLE
+        and pqc_backends._HMAC_SHA3_256_NATIVE_AVAILABLE
+        and pqc_backends._HKDF_SHA2_NATIVE_AVAILABLE
+        and pqc_backends._HKDF_NATIVE_AVAILABLE
+    ),
+    reason="native HMAC/HKDF backend not available",
 )
 
 
