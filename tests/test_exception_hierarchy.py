@@ -13,6 +13,8 @@ for backward compatibility.
 
 from __future__ import annotations
 
+import pytest
+
 from ama_cryptography.exceptions import (
     AmaCryptographyError,
     AmaHSMUnavailableError,
@@ -72,13 +74,14 @@ def test_security_warning_is_not_an_error() -> None:
 
 
 def test_catch_all_via_root() -> None:
+    # Every library error must be catchable via the single AmaCryptographyError
+    # root.  pytest.raises asserts the raise actually happened and that the
+    # raised type is (a subclass of) the root — so there is no unreachable
+    # "not caught" branch to carry (CodeQL alert #538).
     for cls in ALL_ERRORS:
-        try:
+        with pytest.raises(AmaCryptographyError) as exc_info:
             raise cls("boom")
-        except AmaCryptographyError as exc:
-            assert isinstance(exc, cls)
-        else:  # pragma: no cover
-            raise AssertionError(f"{cls.__name__} not caught by root")
+        assert isinstance(exc_info.value, cls)
 
 
 def test_root_exported_at_top_level() -> None:

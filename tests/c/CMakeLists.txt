@@ -13,6 +13,10 @@ endmacro()
 add_ama_test(test_consttime test_consttime.c)
 add_ama_test(test_core test_core.c)
 add_ama_test(test_aes_gcm_scalar_kat test_aes_gcm_scalar_kat.c)
+# Standalone SHA-512 (FIPS 180-4) byte-exact KAT over the exported
+# ama_ed25519_sha512 one-shot (the shipped FIPS 180-4 SHA-512 core shared by
+# HMAC-SHA-512/384, HKDF-SHA-512, Ed25519 and SLH-DSA-SHA2 H_msg).
+add_ama_test(test_sha512_kat test_sha512_kat.c)
 # Audit Issues 5+6 (2026-05): runtime backend introspection + NIST
 # SP 800-38D length-limit regression.  Returns 77 on 32-bit hosts
 # where size_t cannot reach 2^36; CTest surfaces those as "Skipped"
