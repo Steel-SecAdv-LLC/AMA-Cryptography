@@ -354,8 +354,9 @@ t = native_hmac_sha512(b"key", b"msg")
 t = native_hmac_sha3_256(b"key", b"msg")
 
 # HKDF (RFC 5869): native_hkdf is the HMAC-SHA3-256 default; the _sha* variants
-# are the interoperable HKDF-SHA-2 profiles. Signature:
-#   native_hkdf(ikm: bytes, length: int, salt: bytes = b"", info: bytes = b"") -> bytes
+# are the interoperable HKDF-SHA-2 profiles. Signature (salt=None means a
+# zero-length salt per RFC 5869; the _sha* variants share this signature):
+#   native_hkdf(ikm: bytes, length: int, salt: bytes | None = None, info: bytes = b"") -> bytes
 okm = native_hkdf(b"ikm", 32, salt=b"salt", info=b"context")
 okm = native_hkdf_sha256(b"ikm", 32, salt=b"salt", info=b"context")
 ```
