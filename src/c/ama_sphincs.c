@@ -363,20 +363,18 @@ static int spx_hash_message(uint8_t *digest, uint64_t *tree, uint32_t *leaf_idx,
         /* MGF1 seed: R(32) + PK.seed(32) + SHA-512_hash(64) = 128 bytes */
         uint8_t mgf_seed[SPX_N + SPX_N + 64];
 
-        /* Inner hash: SHA-512(R || PK.seed || PK.root || M) */
+        /* Inner hash: SHA-512(R || PK.seed || PK.root || M), streamed through
+         * the SHA-512 context so no message-length-dependent heap buffer is
+         * needed (byte-identical to the prior calloc-then-hash path). */
         {
-            /* Build input: R || PK.seed || PK.root || M */
-            size_t inner_len = SPX_N + 2 * SPX_N + msglen;
-            uint8_t *inner_buf = (uint8_t *)calloc((size_t)1, inner_len);
-            if (!inner_buf) {
-                return -1;
+            ama_sha512_ctx sctx;
+            ama_sha512_ctx_init(&sctx);
+            ama_sha512_ctx_update(&sctx, R, SPX_N);
+            ama_sha512_ctx_update(&sctx, pk, 2 * SPX_N);
+            if (msglen > 0) {
+                ama_sha512_ctx_update(&sctx, msg, msglen);
             }
-            memcpy(inner_buf, R, SPX_N);
-            memcpy(inner_buf + SPX_N, pk, 2 * SPX_N);
-            memcpy(inner_buf + 3 * SPX_N, msg, msglen);
-            ama_sha512(inner_buf, inner_len, hash);
-            ama_secure_memzero(inner_buf, inner_len);
-            free(inner_buf);
+            ama_sha512_ctx_final(&sctx, hash, 64);
         }
 
         /* Build MGF1 seed: R || PK.seed || SHA-512(inner) */

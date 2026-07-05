@@ -350,21 +350,20 @@ static int sha2_H_msg(const slhdsa_params_t *p, uint8_t *out,
      * Categories 3/5 only — see FIPS 205 §11.2 Table 5. */
     uint8_t hash[64];
     uint8_t mgf_seed[160];   /* n + n + 64, ≤ 32+32+64 = 128 */
-    uint8_t *inner_buf;
-    size_t inner_len;
     size_t mgf_seed_len = p->n + p->n + 64;
 
-    inner_len = p->n + 2 * p->n + msglen;
-    inner_buf = (uint8_t *)calloc((size_t)1, inner_len);
-    if (!inner_buf) {
-        return -1;
+    /* Inner hash: SHA-512(R || PK.seed || PK.root || M), streamed through the
+     * SHA-512 context so no message-length-dependent heap buffer is needed. */
+    {
+        ama_sha512_ctx sctx;
+        ama_sha512_ctx_init(&sctx);
+        ama_sha512_ctx_update(&sctx, R, p->n);
+        ama_sha512_ctx_update(&sctx, pk, 2 * p->n);
+        if (msglen > 0) {
+            ama_sha512_ctx_update(&sctx, msg, msglen);
+        }
+        ama_sha512_ctx_final(&sctx, hash, 64);
     }
-    memcpy(inner_buf, R, p->n);
-    memcpy(inner_buf + p->n, pk, 2 * p->n);
-    memcpy(inner_buf + 3 * p->n, msg, msglen);
-    ama_sha512(inner_buf, inner_len, hash);
-    ama_secure_memzero(inner_buf, inner_len);
-    free(inner_buf);
 
     memcpy(mgf_seed, R, p->n);
     memcpy(mgf_seed + p->n, pk, p->n);   /* PK.seed only */

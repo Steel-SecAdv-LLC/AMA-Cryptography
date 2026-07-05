@@ -1,13 +1,26 @@
 /**
  * @file internal/ama_sha2.h
- * @brief Shared SHA-512 and HMAC-SHA-512 implementation (header-only, static)
+ * @brief Shared SHA-512 / SHA-384 core + HMAC (header-only, static)
  *
  * Used by:
- *   - ama_ed25519.c (Ed25519 requires SHA-512 per RFC 8032)
- *   - ama_sphincs.c (SLH-DSA-SHA2-256f uses SHA-512 for H_msg, H, T_l, PRF_msg
- *                    per FIPS 205 Section 11.2, Table 5, security category 5)
+ *   - ama_ed25519.c    (Ed25519 requires SHA-512 per RFC 8032)
+ *   - ama_sphincs.c    (SLH-DSA-SHA2-256f: H_msg / H / T_l / PRF_msg, FIPS 205 §11.2)
+ *   - ama_slhdsa.c     (parameterised SLH-DSA-SHA2 variant)
+ *   - ama_hkdf.c       (public HMAC-SHA-512 for BIP32)
+ *   - ama_hmac_sha384.c(public HMAC-SHA-384 — shares the SHA-512 core with a
+ *                       distinct IV + 384-bit truncation per FIPS 180-4 §5.3.4)
  *
- * Zero external dependencies. All functions are static to avoid symbol conflicts.
+ * The SHA-512 compression function is shared verbatim by SHA-512 and SHA-384;
+ * only the IV (FIPS 180-4 §5.3.4 vs §5.3.5) and the output width differ.  A
+ * single streaming context (ama_sha512_ctx) drives both one-shot hashing and
+ * the HMAC/H_msg constructions, so callers stream ipad/opad and message
+ * segments through init/update/final with ZERO heap allocation — no temporary
+ * concatenation buffer is ever materialised.
+ *
+ * Zero external dependencies.  All functions are static (header-only) to avoid
+ * symbol conflicts; those not referenced by a given translation unit carry the
+ * AMA_SHA2_MAYBE_UNUSED attribute so the strict -Werror=unused-function lane
+ * stays clean without per-includer workarounds.
  */
 
 #ifndef AMA_INTERNAL_SHA2_H
@@ -22,8 +35,21 @@
 /* Forward declaration — provided by the including translation unit */
 extern void ama_secure_memzero(void *ptr, size_t len);
 
+/* Suppress -Wunused-function for the header-static functions a given TU does
+ * not reference.  GCC/Clang honour the attribute; other compilers get the
+ * empty fallback (no worse than today's behaviour). */
+#if defined(__GNUC__) || defined(__clang__)
+#  define AMA_SHA2_MAYBE_UNUSED __attribute__((unused))
+#else
+#  define AMA_SHA2_MAYBE_UNUSED
+#endif
+
+#define AMA_SHA512_BLOCK_SIZE  128
+#define AMA_SHA512_DIGEST_SIZE  64
+#define AMA_SHA384_DIGEST_SIZE  48
+
 /* ============================================================================
- * SHA-512 CONSTANTS
+ * SHA-512 CONSTANTS (FIPS 180-4 §4.2.3)
  * ============================================================================ */
 
 static const uint64_t ama_sha512_k[80] = {
@@ -72,10 +98,10 @@ static inline void ama_sha512_store64_be(uint8_t *p, uint64_t x) {
 }
 
 /* ============================================================================
- * SHA-512 TRANSFORM
+ * SHA-512 COMPRESSION (FIPS 180-4 §6.4.2)
  * ============================================================================ */
 
-static void ama_sha512_transform(uint64_t state[8], const uint8_t block[128]) {
+static void ama_sha512_transform(uint64_t state[8], const uint8_t block[AMA_SHA512_BLOCK_SIZE]) {
     uint64_t a, b, c, d, e, f, g, h;
     uint64_t W[80];
     uint64_t t1, t2;
@@ -84,7 +110,6 @@ static void ama_sha512_transform(uint64_t state[8], const uint8_t block[128]) {
     for (i = 0; i < 16; i++) {
         W[i] = ama_sha512_load64_be(block + i * 8);
     }
-
     for (i = 16; i < 80; i++) {
         uint64_t s0 = ama_sha512_rotr64(W[i-15], 1) ^ ama_sha512_rotr64(W[i-15], 8) ^ (W[i-15] >> 7);
         uint64_t s1 = ama_sha512_rotr64(W[i-2], 19) ^ ama_sha512_rotr64(W[i-2], 61) ^ (W[i-2] >> 6);
@@ -111,62 +136,133 @@ static void ama_sha512_transform(uint64_t state[8], const uint8_t block[128]) {
 }
 
 /* ============================================================================
- * SHA-512 ONE-SHOT
+ * STREAMING CONTEXT (drives SHA-512 and SHA-384)
+ *
+ * The padding, block size, and length encoding are identical for SHA-512 and
+ * SHA-384; only the IV (init) and the final truncation width (final) differ.
  * ============================================================================ */
 
-static void ama_sha512(const uint8_t *data, size_t len, uint8_t out[64]) {
-    uint64_t state[8] = {
-        0x6a09e667f3bcc908ULL, 0xbb67ae8584caa73bULL,
-        0x3c6ef372fe94f82bULL, 0xa54ff53a5f1d36f1ULL,
-        0x510e527fade682d1ULL, 0x9b05688c2b3e6c1fULL,
-        0x1f83d9abfb41bd6bULL, 0x5be0cd19137e2179ULL
-    };
-    uint8_t block[128];
-    unsigned int i;
-    uint64_t bit_len = (uint64_t)len * 8;
+typedef struct {
+    uint64_t state[8];                     /* Hash state H0..H7 */
+    uint8_t  buffer[AMA_SHA512_BLOCK_SIZE]; /* Partial block buffer */
+    size_t   buffer_len;                   /* Bytes currently in buffer */
+    uint64_t total_len;                    /* Total bytes absorbed */
+} ama_sha512_ctx;
 
-    while (len >= 128) {
-        ama_sha512_transform(state, data);
-        data += 128;
-        len -= 128;
+static AMA_SHA2_MAYBE_UNUSED void ama_sha512_ctx_init(ama_sha512_ctx *ctx) {
+    /* SHA-512 initial hash values (FIPS 180-4 §5.3.5) */
+    ctx->state[0] = 0x6a09e667f3bcc908ULL; ctx->state[1] = 0xbb67ae8584caa73bULL;
+    ctx->state[2] = 0x3c6ef372fe94f82bULL; ctx->state[3] = 0xa54ff53a5f1d36f1ULL;
+    ctx->state[4] = 0x510e527fade682d1ULL; ctx->state[5] = 0x9b05688c2b3e6c1fULL;
+    ctx->state[6] = 0x1f83d9abfb41bd6bULL; ctx->state[7] = 0x5be0cd19137e2179ULL;
+    ctx->buffer_len = 0;
+    ctx->total_len = 0;
+}
+
+static AMA_SHA2_MAYBE_UNUSED void ama_sha384_ctx_init(ama_sha512_ctx *ctx) {
+    /* SHA-384 initial hash values (FIPS 180-4 §5.3.4) */
+    ctx->state[0] = 0xcbbb9d5dc1059ed8ULL; ctx->state[1] = 0x629a292a367cd507ULL;
+    ctx->state[2] = 0x9159015a3070dd17ULL; ctx->state[3] = 0x152fecd8f70e5939ULL;
+    ctx->state[4] = 0x67332667ffc00b31ULL; ctx->state[5] = 0x8eb44a8768581511ULL;
+    ctx->state[6] = 0xdb0c2e0d64f98fa7ULL; ctx->state[7] = 0x47b5481dbefa4fa4ULL;
+    ctx->buffer_len = 0;
+    ctx->total_len = 0;
+}
+
+static AMA_SHA2_MAYBE_UNUSED void ama_sha512_ctx_update(ama_sha512_ctx *ctx,
+                                                        const uint8_t *data, size_t len) {
+    /* Fill partial buffer first */
+    ctx->total_len += len;
+    if (ctx->buffer_len > 0) {
+        size_t fill = AMA_SHA512_BLOCK_SIZE - ctx->buffer_len;
+        if (len < fill) {
+            memcpy(ctx->buffer + ctx->buffer_len, data, len);
+            ctx->buffer_len += len;
+            return;
+        }
+        memcpy(ctx->buffer + ctx->buffer_len, data, fill);
+        ama_sha512_transform(ctx->state, ctx->buffer);
+        data += fill;
+        len -= fill;
+        ctx->buffer_len = 0;
     }
 
-    memset(block, 0, sizeof(block));  // PUBLIC-DATA: block — SHA2 padding block, pre-use init; immediately filled with length-bytes for final compress
-    memcpy(block, data, len);
-    block[len] = 0x80;
-
-    if (len >= 112) {
-        ama_sha512_transform(state, block);
-        memset(block, 0, sizeof(block));  // PUBLIC-DATA: block — SHA2 second padding block, pre-use init
+    /* Process full blocks directly from input */
+    while (len >= AMA_SHA512_BLOCK_SIZE) {
+        ama_sha512_transform(ctx->state, data);
+        data += AMA_SHA512_BLOCK_SIZE;
+        len -= AMA_SHA512_BLOCK_SIZE;
     }
 
-    ama_sha512_store64_be(block + 120, bit_len);
-    ama_sha512_transform(state, block);
+    /* Buffer the remainder */
+    if (len > 0) {
+        memcpy(ctx->buffer, data, len);
+        ctx->buffer_len = len;
+    }
+}
 
-    for (i = 0; i < 8; i++) {
-        ama_sha512_store64_be(out + i * 8, state[i]);
+/**
+ * Finalize into out_len bytes (48 for SHA-384, 64 for SHA-512).  Padding uses
+ * a single bulk memset — no byte-at-a-time loop — and the 128-bit big-endian
+ * length is encoded per FIPS 180-4 §5.1.2 (high 64 bits from total_len >> 61).
+ */
+static AMA_SHA2_MAYBE_UNUSED void ama_sha512_ctx_final(ama_sha512_ctx *ctx,
+                                                       uint8_t *out, size_t out_len) {
+    uint64_t bits_hi = ctx->total_len >> 61;
+    uint64_t bits_lo = ctx->total_len << 3;
+    size_t rem = ctx->buffer_len;              /* 0..127 */
+    uint8_t pad[AMA_SHA512_BLOCK_SIZE + 16];   /* 0x80 + zeros + 16-byte length */
+    size_t padlen;
+    size_t words;
+    size_t i;
+
+    /* Bytes of {0x80, 0x00...} so that (rem + padlen) % 128 == 112, leaving
+     * exactly the trailing 16 bytes for the length field. */
+    padlen = (rem < 112) ? (112 - rem) : (240 - rem);
+    memset(pad, 0, padlen + 16);
+    pad[0] = 0x80;
+    ama_sha512_store64_be(pad + padlen, bits_hi);
+    ama_sha512_store64_be(pad + padlen + 8, bits_lo);
+    ama_sha512_ctx_update(ctx, pad, padlen + 16);
+
+    /* Emit leftmost out_len bytes of the state (out_len is a multiple of 8) */
+    words = out_len / 8;
+    for (i = 0; i < words; i++) {
+        ama_sha512_store64_be(out + i * 8, ctx->state[i]);
     }
 
-    ama_secure_memzero(block, sizeof(block));
-    ama_secure_memzero(state, sizeof(state));
+    ama_secure_memzero(ctx, sizeof(*ctx));
 }
 
 /* ============================================================================
- * HMAC-SHA-512 (FIPS 198-1)
- *
- * Required by FIPS 205 Section 11.2 Table 5 for PRF_msg in security
- * categories {3, 5}: PRF_msg(SK.prf, opt_rand, M) = HMAC-SHA-512(SK.prf, opt_rand || M)
+ * ONE-SHOT HASHES
  * ============================================================================ */
 
-#define AMA_SHA512_BLOCK_SIZE  128
-#define AMA_SHA512_DIGEST_SIZE  64
+static AMA_SHA2_MAYBE_UNUSED void ama_sha512(const uint8_t *data, size_t len, uint8_t out[64]) {
+    ama_sha512_ctx ctx;
+    ama_sha512_ctx_init(&ctx);
+    ama_sha512_ctx_update(&ctx, data, len);
+    ama_sha512_ctx_final(&ctx, out, AMA_SHA512_DIGEST_SIZE);
+}
 
-/**
- * HMAC-SHA-512 with three-part message: HMAC-SHA-512(key, part1 || part2 || part3)
+static AMA_SHA2_MAYBE_UNUSED void ama_sha384(const uint8_t *data, size_t len, uint8_t out[48]) {
+    ama_sha512_ctx ctx;
+    ama_sha384_ctx_init(&ctx);
+    ama_sha512_ctx_update(&ctx, data, len);
+    ama_sha512_ctx_final(&ctx, out, AMA_SHA384_DIGEST_SIZE);
+}
+
+/* ============================================================================
+ * HMAC-SHA-512 (FIPS 198-1), three-part message: HMAC(key, p1 || p2 || p3)
  *
- * This avoids concatenation into a temporary buffer.
- */
-static int ama_hmac_sha512_3(
+ * Streams the pads and message segments through the SHA-512 context so no
+ * heap concatenation buffer is required.  Return contract preserved for
+ * back-compat: 0 = success (the only outcome now that no alloc/overflow path
+ * remains — callers that still map -1/-2 stay correct, those branches are
+ * simply unreachable).
+ * ============================================================================ */
+
+static AMA_SHA2_MAYBE_UNUSED int ama_hmac_sha512_3(
     const uint8_t *key, size_t key_len,
     const uint8_t *part1, size_t part1_len,
     const uint8_t *part2, size_t part2_len,
@@ -175,10 +271,11 @@ static int ama_hmac_sha512_3(
 {
     uint8_t k_pad[AMA_SHA512_BLOCK_SIZE];
     uint8_t inner_hash[AMA_SHA512_DIGEST_SIZE];
+    uint8_t key_hash[AMA_SHA512_DIGEST_SIZE];
+    ama_sha512_ctx ctx;
     unsigned int i;
 
-    /* If key > block size, hash it first */
-    uint8_t key_hash[AMA_SHA512_DIGEST_SIZE];
+    /* If key > block size, hash it first (RFC 2104 §2) */
     if (key_len > AMA_SHA512_BLOCK_SIZE) {
         ama_sha512(key, key_len, key_hash);
         key = key_hash;
@@ -190,49 +287,22 @@ static int ama_hmac_sha512_3(
     for (i = 0; i < key_len; i++) {
         k_pad[i] ^= key[i];
     }
-
-    /* Build inner message: k_pad || part1 || part2 || part3 */
-    {
-        /* Overflow guard: ensure sum does not wrap size_t.
-         * Returns internal sentinel -2; ama_hkdf.c maps -2 → AMA_ERROR_OVERFLOW (-8).
-         * Do NOT compare this return value directly to AMA_ERROR_OVERFLOW. */
-        if (part1_len > SIZE_MAX - AMA_SHA512_BLOCK_SIZE ||
-            part2_len > SIZE_MAX - AMA_SHA512_BLOCK_SIZE - part1_len ||
-            part3_len > SIZE_MAX - AMA_SHA512_BLOCK_SIZE - part1_len - part2_len) {
-            ama_secure_memzero(k_pad, sizeof(k_pad));
-            ama_secure_memzero(key_hash, sizeof(key_hash));
-            return -2;
-        }
-        size_t inner_len = AMA_SHA512_BLOCK_SIZE + part1_len + part2_len + part3_len;
-        uint8_t *inner_buf = (uint8_t *)calloc((size_t)1, inner_len);
-        if (!inner_buf) {
-            ama_secure_memzero(k_pad, sizeof(k_pad));
-            ama_secure_memzero(key_hash, sizeof(key_hash));
-            return -1;
-        }
-        memcpy(inner_buf, k_pad, AMA_SHA512_BLOCK_SIZE);
-        if (part1_len > 0) memcpy(inner_buf + AMA_SHA512_BLOCK_SIZE, part1, part1_len);
-        if (part2_len > 0) memcpy(inner_buf + AMA_SHA512_BLOCK_SIZE + part1_len, part2, part2_len);
-        if (part3_len > 0) memcpy(inner_buf + AMA_SHA512_BLOCK_SIZE + part1_len + part2_len, part3, part3_len);
-
-        ama_sha512(inner_buf, inner_len, inner_hash);
-        ama_secure_memzero(inner_buf, inner_len);
-        free(inner_buf);
-    }
+    ama_sha512_ctx_init(&ctx);
+    ama_sha512_ctx_update(&ctx, k_pad, AMA_SHA512_BLOCK_SIZE);
+    if (part1_len > 0) ama_sha512_ctx_update(&ctx, part1, part1_len);
+    if (part2_len > 0) ama_sha512_ctx_update(&ctx, part2, part2_len);
+    if (part3_len > 0) ama_sha512_ctx_update(&ctx, part3, part3_len);
+    ama_sha512_ctx_final(&ctx, inner_hash, AMA_SHA512_DIGEST_SIZE);
 
     /* Outer hash: SHA-512((K ^ opad) || inner_hash) */
     memset(k_pad, 0x5c, AMA_SHA512_BLOCK_SIZE);
     for (i = 0; i < key_len; i++) {
         k_pad[i] ^= key[i];
     }
-
-    {
-        uint8_t outer_buf[AMA_SHA512_BLOCK_SIZE + AMA_SHA512_DIGEST_SIZE];
-        memcpy(outer_buf, k_pad, AMA_SHA512_BLOCK_SIZE);
-        memcpy(outer_buf + AMA_SHA512_BLOCK_SIZE, inner_hash, AMA_SHA512_DIGEST_SIZE);
-        ama_sha512(outer_buf, sizeof(outer_buf), out);
-        ama_secure_memzero(outer_buf, sizeof(outer_buf));
-    }
+    ama_sha512_ctx_init(&ctx);
+    ama_sha512_ctx_update(&ctx, k_pad, AMA_SHA512_BLOCK_SIZE);
+    ama_sha512_ctx_update(&ctx, inner_hash, AMA_SHA512_DIGEST_SIZE);
+    ama_sha512_ctx_final(&ctx, out, AMA_SHA512_DIGEST_SIZE);
 
     ama_secure_memzero(k_pad, sizeof(k_pad));
     ama_secure_memzero(inner_hash, sizeof(inner_hash));
