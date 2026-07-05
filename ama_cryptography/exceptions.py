@@ -29,15 +29,34 @@ class SecurityWarning(UserWarning):
     pass
 
 
-class PQCUnavailableError(RuntimeError):
+class AmaCryptographyError(Exception):
+    """
+    Root of the AMA Cryptography exception hierarchy.
+
+    Every error raised by the library derives (directly or transitively) from
+    this class, so a single ``except AmaCryptographyError`` catches all of
+    them — including the module-specific errors (TimestampError, SessionError,
+    ChannelError, SecureMemoryError) defined outside this module.
+
+    ``SecurityWarning`` is intentionally NOT a subclass: it is a ``UserWarning``,
+    not an error.  Classes that historically subclass ``RuntimeError`` (e.g.
+    ``PQCUnavailableError``, ``CryptoModuleError``) additionally inherit from
+    ``RuntimeError`` so existing ``except RuntimeError`` sites keep working.
+    """
+
+    pass
+
+
+class PQCUnavailableError(AmaCryptographyError, RuntimeError):
     """
     Raised when post-quantum cryptography is required but unavailable.
 
     This exception indicates that a PQC operation was requested but the
     native C backend is not available.
 
-    Inherits from RuntimeError to maintain backward compatibility with
-    existing tests and code that expects this exception hierarchy.
+    Inherits from AmaCryptographyError (catch-all root) and RuntimeError
+    (backward compatibility with existing tests and code that expects this
+    exception hierarchy).
 
     To resolve, build the native C library:
         cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
@@ -60,14 +79,14 @@ class QuantumSignatureUnavailableError(PQCUnavailableError):
     pass
 
 
-class QuantumSignatureRequiredError(Exception):
+class QuantumSignatureRequiredError(AmaCryptographyError):
     """Raised when quantum-resistant signatures are required by policy but
     Dilithium is not available or the package lacks quantum signatures."""
 
     pass
 
 
-class CryptoConfigError(Exception):
+class CryptoConfigError(AmaCryptographyError):
     """
     Raised when cryptographic configuration is invalid.
 
@@ -78,7 +97,7 @@ class CryptoConfigError(Exception):
     pass
 
 
-class KeyManagementError(Exception):
+class KeyManagementError(AmaCryptographyError):
     """
     Base exception for key management operations.
 
@@ -88,7 +107,7 @@ class KeyManagementError(Exception):
     pass
 
 
-class SignatureVerificationError(Exception):
+class SignatureVerificationError(AmaCryptographyError):
     """
     Raised when signature verification fails.
 
@@ -99,7 +118,7 @@ class SignatureVerificationError(Exception):
     pass
 
 
-class IntegrityError(Exception):
+class IntegrityError(AmaCryptographyError):
     """
     Raised when data integrity verification fails.
 
@@ -110,7 +129,7 @@ class IntegrityError(Exception):
     pass
 
 
-class CryptoModuleError(RuntimeError):
+class CryptoModuleError(AmaCryptographyError, RuntimeError):
     """
     Raised when the cryptographic module is in a FIPS 140-3 error state.
 
@@ -121,7 +140,7 @@ class CryptoModuleError(RuntimeError):
     pass
 
 
-class AmaHSMUnavailableError(RuntimeError):
+class AmaHSMUnavailableError(AmaCryptographyError, RuntimeError):
     """Raised when an HSM operation is requested but PyKCS11 is not installed.
 
     PyKCS11 is an optional dependency for hardware security module support.
@@ -136,6 +155,7 @@ class AmaHSMUnavailableError(RuntimeError):
 
 
 __all__ = [
+    "AmaCryptographyError",
     "SecurityWarning",
     "PQCUnavailableError",
     "QuantumSignatureUnavailableError",

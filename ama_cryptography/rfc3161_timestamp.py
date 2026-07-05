@@ -50,13 +50,16 @@ except ImportError:
     RemoteTimestamper = None
 
 
-class TimestampUnavailableError(Exception):
+from ama_cryptography.exceptions import AmaCryptographyError
+
+
+class TimestampUnavailableError(AmaCryptographyError):
     """Raised when RFC 3161 timestamping is requested but not available."""
 
     pass
 
 
-class TimestampError(Exception):
+class TimestampError(AmaCryptographyError):
     """Raised when timestamp request fails."""
 
     pass

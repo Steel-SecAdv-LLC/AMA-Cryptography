@@ -69,7 +69,10 @@ from typing import Any, Callable, Dict, Generator, Optional, Type, Union
 logger = logging.getLogger(__name__)
 
 
-class SecureMemoryError(Exception):
+from ama_cryptography.exceptions import AmaCryptographyError
+
+
+class SecureMemoryError(AmaCryptographyError):
     """Exception raised for secure memory operation failures."""
 
     pass

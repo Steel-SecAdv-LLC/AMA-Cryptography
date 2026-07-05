@@ -94,7 +94,10 @@ class ChannelState(Enum):
     CLOSED = auto()
 
 
-class ChannelError(Exception):
+from ama_cryptography.exceptions import AmaCryptographyError
+
+
+class ChannelError(AmaCryptographyError):
     """Base exception for secure channel errors."""
 
     pass

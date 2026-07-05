@@ -112,6 +112,9 @@ from ama_cryptography._self_test import (
     secure_token_bytes as secure_token_bytes,
 )
 from ama_cryptography.exceptions import (
+    AmaCryptographyError as AmaCryptographyError,
+)
+from ama_cryptography.exceptions import (
     CryptoModuleError as CryptoModuleError,
 )
 
@@ -200,6 +203,7 @@ def __getattr__(name: str) -> Any:
 __all__ = [
     "__version__",
     "__author__",
+    "AmaCryptographyError",
     "CryptoModuleError",
     "check_operational",
     "module_status",
