@@ -80,7 +80,7 @@ if _sys.platform == "win32":
                 _os.add_dll_directory(_here)  # type: ignore[attr-defined]  # Windows-only API; mypy on Linux/macOS (where strict CI runs) does not see it (WIN-001)
             )
         except (OSError, AttributeError):
-            # AttributeError on Python <3.8 (we require >=3.9 so this is
+            # AttributeError on Python <3.8 (we require >=3.10 so this is
             # defence in depth); OSError on the rare case the directory
             # is unreadable.  Either way, fall through and let the
             # downstream import surface a clear error.  The list stays

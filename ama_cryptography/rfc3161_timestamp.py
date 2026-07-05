@@ -125,30 +125,17 @@ def allow_mock_tsa() -> Generator[None, None, None]:
 
 
 def _hmac_sha256(key: bytes, msg: bytes) -> bytes:
-    """RFC 2104 HMAC-SHA-256.
+    """RFC 2104 HMAC-SHA-256 via the native ama_hmac_sha256 kernel.
 
-    Prefers the native ama_hmac_sha256 kernel (INVARIANT-1: AMA's own HMAC
-    rather than a stdlib-hashlib construction).  Falls back to a pure-Python
-    hashlib construction only when the native backend is unavailable — MockTSA
-    is test-only, so the fallback never runs a production authentication path.
-    Both paths are byte-identical.
+    INVARIANT-1 (AMA's own HMAC, never a stdlib-hashlib construction) and
+    INVARIANT-7 (no cryptographic fallback, ever) — there is deliberately no
+    pure-Python fallback.  When the native backend is unavailable,
+    ``native_hmac_sha256`` raises ``RuntimeError`` and MockTSA fails closed;
+    tests skip accordingly rather than silently exercising a non-native HMAC.
     """
-    from ama_cryptography.pqc_backends import (
-        _HMAC_SHA256_NATIVE_AVAILABLE,
-        native_hmac_sha256,
-    )
+    from ama_cryptography.pqc_backends import native_hmac_sha256
 
-    if _HMAC_SHA256_NATIVE_AVAILABLE:
-        return native_hmac_sha256(key, msg)
-
-    # Fallback (no native backend): hashlib-only HMAC construction.
-    block_size = 64
-    if len(key) > block_size:
-        key = hashlib.sha256(key).digest()
-    key = key.ljust(block_size, b"\x00")
-    o_key_pad = bytes(k ^ 0x5C for k in key)
-    i_key_pad = bytes(k ^ 0x36 for k in key)
-    return hashlib.sha256(o_key_pad + hashlib.sha256(i_key_pad + msg).digest()).digest()
+    return native_hmac_sha256(key, msg)
 
 
 class MockTSA:

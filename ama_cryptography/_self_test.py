@@ -671,10 +671,9 @@ def _kat_slh_dsa_shake_128s() -> Tuple[Optional[bool], str]:
         if not SPHINCS_AVAILABLE:
             return None, "SLH-DSA-SHAKE-128s KAT skipped (backend unavailable)"
 
-        try:
-            from importlib.resources import files as _resfiles
-        except ImportError:  # pragma: no cover - Py<3.9 not supported in this lib
-            return False, "SLH-DSA-SHAKE-128s KAT: importlib.resources unavailable"
+        # importlib.resources.files is stdlib from Python 3.9; guaranteed at
+        # this project's >=3.10 floor, so no import fallback is needed.
+        from importlib.resources import files as _resfiles
 
         kat_path = _resfiles("ama_cryptography").joinpath(
             "_post_kats/slh_dsa_shake_128s_sigver.json"

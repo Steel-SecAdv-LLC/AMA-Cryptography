@@ -3030,10 +3030,10 @@ def native_hkdf(
 def _native_hkdf_sha2(
     fn_name: str,
     digest_size: int,
-    ikm: bytes,
+    ikm: _BufferInput,
     length: int,
-    salt: "Optional[bytes]",
-    info: bytes,
+    salt: "Optional[_BufferInput]",
+    info: _BufferInput,
 ) -> bytes:
     """Shared body for the HKDF-SHA-256/384/512 (RFC 5869) bindings."""
     max_len = 255 * digest_size
@@ -3046,24 +3046,38 @@ def _native_hkdf_sha2(
 
     okm_buf = ctypes.create_string_buffer(length)
     salt_len = len(salt) if salt else 0
+    ikm_len = len(ikm)
     info_len = len(info)
-    rc = getattr(_native_lib, fn_name)(
-        salt if salt_len > 0 else None,
-        ctypes.c_size_t(salt_len),
-        ikm if len(ikm) > 0 else None,
-        ctypes.c_size_t(len(ikm)),
-        info if info_len > 0 else None,
-        ctypes.c_size_t(info_len),
-        okm_buf,
-        ctypes.c_size_t(length),
-    )
+    # Borrow stable pointers via the buffer protocol (mirrors native_hkdf).
+    # Immutable bytes are passed through; writable bytearray / memoryview key
+    # material is read in place through a c_char view rather than coerced via
+    # the c_void_p argtype — the latter rejects bytearray outright (TypeError)
+    # and never exposes the wipeable buffer to the native kernel directly.
+    with (
+        _c_buffer_view(ikm) as ikm_buf,
+        _c_buffer_view(salt if salt is not None else b"") as salt_buf,
+        _c_buffer_view(info) as info_buf,
+    ):
+        rc = getattr(_native_lib, fn_name)(
+            salt_buf if salt_len > 0 else None,
+            ctypes.c_size_t(salt_len),
+            ikm_buf if ikm_len > 0 else None,
+            ctypes.c_size_t(ikm_len),
+            info_buf if info_len > 0 else None,
+            ctypes.c_size_t(info_len),
+            okm_buf,
+            ctypes.c_size_t(length),
+        )
     if rc != 0:
         raise RuntimeError(f"{fn_name} failed (rc={rc})")
     return bytes(okm_buf)
 
 
 def native_hkdf_sha256(
-    ikm: bytes, length: int, salt: "Optional[bytes]" = None, info: bytes = b""
+    ikm: _BufferInput,
+    length: int,
+    salt: "Optional[_BufferInput]" = None,
+    info: _BufferInput = b"",
 ) -> bytes:
     """
     HKDF-SHA-256 (RFC 5869) via native C implementation (ama_hkdf_sha256).
@@ -3090,7 +3104,10 @@ def native_hkdf_sha256(
 
 
 def native_hkdf_sha384(
-    ikm: bytes, length: int, salt: "Optional[bytes]" = None, info: bytes = b""
+    ikm: _BufferInput,
+    length: int,
+    salt: "Optional[_BufferInput]" = None,
+    info: _BufferInput = b"",
 ) -> bytes:
     """
     HKDF-SHA-384 (RFC 5869) via native C implementation (ama_hkdf_sha384).
@@ -3102,7 +3119,10 @@ def native_hkdf_sha384(
 
 
 def native_hkdf_sha512(
-    ikm: bytes, length: int, salt: "Optional[bytes]" = None, info: bytes = b""
+    ikm: _BufferInput,
+    length: int,
+    salt: "Optional[_BufferInput]" = None,
+    info: _BufferInput = b"",
 ) -> bytes:
     """
     HKDF-SHA-512 (RFC 5869) via native C implementation (ama_hkdf_sha512).
