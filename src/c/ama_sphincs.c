@@ -94,12 +94,16 @@
 #define SPX_WOTS_LEN (SPX_WOTS_LEN1 + SPX_WOTS_LEN2)  /* 67 */
 #define SPX_WOTS_BYTES (SPX_WOTS_LEN * SPX_N)  /* 67 * 32 = 2144 */
 
-/* Address types */
+/* Address types (FIPS 205 §4.2, Table 1) */
 #define SPX_ADDR_TYPE_WOTS 0
 #define SPX_ADDR_TYPE_WOTSPK 1
 #define SPX_ADDR_TYPE_HASHTREE 2
 #define SPX_ADDR_TYPE_FORSTREE 3
 #define SPX_ADDR_TYPE_FORSPK 4
+/* PRF input ADRS uses dedicated type codes so the WOTS/FORS secret-value
+ * derivation is domain-separated from the chain/tree hashing (FIPS 205 §4.2). */
+#define SPX_ADDR_TYPE_WOTSPRF 5
+#define SPX_ADDR_TYPE_FORSPRF 6
 
 /* Signature sizes */
 #define SPX_FORS_MSG_BYTES ((SPX_FORS_HEIGHT * SPX_FORS_TREES + 7) / 8)
@@ -363,20 +367,18 @@ static int spx_hash_message(uint8_t *digest, uint64_t *tree, uint32_t *leaf_idx,
         /* MGF1 seed: R(32) + PK.seed(32) + SHA-512_hash(64) = 128 bytes */
         uint8_t mgf_seed[SPX_N + SPX_N + 64];
 
-        /* Inner hash: SHA-512(R || PK.seed || PK.root || M) */
+        /* Inner hash: SHA-512(R || PK.seed || PK.root || M), streamed through
+         * the SHA-512 context so no message-length-dependent heap buffer is
+         * needed (byte-identical to the prior calloc-then-hash path). */
         {
-            /* Build input: R || PK.seed || PK.root || M */
-            size_t inner_len = SPX_N + 2 * SPX_N + msglen;
-            uint8_t *inner_buf = (uint8_t *)calloc((size_t)1, inner_len);
-            if (!inner_buf) {
-                return -1;
+            ama_sha512_ctx sctx;
+            ama_sha512_ctx_init(&sctx);
+            ama_sha512_ctx_update(&sctx, R, SPX_N);
+            ama_sha512_ctx_update(&sctx, pk, 2 * SPX_N);
+            if (msglen > 0) {
+                ama_sha512_ctx_update(&sctx, msg, msglen);
             }
-            memcpy(inner_buf, R, SPX_N);
-            memcpy(inner_buf + SPX_N, pk, 2 * SPX_N);
-            memcpy(inner_buf + 3 * SPX_N, msg, msglen);
-            ama_sha512(inner_buf, inner_len, hash);
-            ama_secure_memzero(inner_buf, inner_len);
-            free(inner_buf);
+            ama_sha512_ctx_final(&sctx, hash, 64);
         }
 
         /* Build MGF1 seed: R || PK.seed || SHA-512(inner) */
@@ -479,9 +481,15 @@ static void spx_wots_gen_pk(uint8_t *pk, const uint8_t *sk_seed,
     uint8_t chain_in[SPX_N];
 
     for (i = 0; i < SPX_WOTS_LEN; ++i) {
+        uint32_t saved_type = addr[3];
         spx_set_chain_addr(addr, i);
         spx_set_hash_addr(addr, 0);
+        /* Switch only the type word to WOTS_PRF (FIPS 205 §4.2); assign
+         * directly rather than via spx_set_type() so the keypair/chain/hash
+         * fields survive for the PRF input and the following chain hashing. */
+        addr[3] = SPX_ADDR_TYPE_WOTSPRF;
         spx_prf(chain_in, pub_seed, sk_seed, addr);
+        addr[3] = saved_type;                        /* restore for chain hashing */
         spx_wots_gen_chain(pk + i * SPX_N, chain_in, 0, SPX_WOTS_W - 1,
                            pub_seed, addr);
     }
@@ -505,9 +513,13 @@ static void spx_wots_sign(uint8_t *sig, const uint8_t *msg,
     }
 
     for (i = 0; i < SPX_WOTS_LEN; ++i) {
+        uint32_t saved_type = addr[3];
         spx_set_chain_addr(addr, i);
         spx_set_hash_addr(addr, 0);
+        /* WOTS_PRF for the secret-value derivation only (see spx_wots_gen_pk). */
+        addr[3] = SPX_ADDR_TYPE_WOTSPRF;
         spx_prf(chain_in, pub_seed, sk_seed, addr);
+        addr[3] = saved_type;                        /* restore for chain hashing */
         spx_wots_gen_chain(sig + i * SPX_N, chain_in, 0, basew[i],
                            pub_seed, addr);
     }
@@ -546,7 +558,13 @@ static void spx_wots_pk_from_sig(uint8_t *pk, const uint8_t *sig,
  */
 static void spx_fors_gen_sk(uint8_t *sk, const uint8_t *sk_seed,
                               const uint8_t *pub_seed, spx_addr addr) {
+    /* FIPS 205 §4.2: FORS secret values derive under the FORS_PRF type, then
+     * the surrounding FORS_TREE type is restored for leaf/tree hashing. Assign
+     * addr[3] directly so the tree-height/index fields survive the switch. */
+    uint32_t saved_type = addr[3];
+    addr[3] = SPX_ADDR_TYPE_FORSPRF;
     spx_prf(sk, pub_seed, sk_seed, addr);
+    addr[3] = saved_type;
 }
 
 /**

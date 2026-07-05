@@ -416,6 +416,32 @@ AMA_API ama_error_t ama_sha3_512(
     uint8_t* output
 );
 
+/**
+ * @brief SHAKE128 / SHAKE256 extendable-output functions (FIPS 202)
+ *
+ * One-shot XOF: absorb `input`, squeeze `output_len` bytes into `output`.
+ * SHAKE128 uses rate 168, SHAKE256 rate 136.  Byte-identical to
+ * hashlib.shake_128(input).digest(output_len) / shake_256(...).
+ *
+ * @param input      Input data (may be NULL iff input_len == 0)
+ * @param input_len  Input length in bytes
+ * @param output     Output buffer of at least output_len bytes
+ * @param output_len Desired output length in bytes
+ * @return AMA_SUCCESS or an error code
+ */
+AMA_API ama_error_t ama_shake128(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output,
+    size_t output_len
+);
+AMA_API ama_error_t ama_shake256(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output,
+    size_t output_len
+);
+
 /* ============================================================================
  * STREAMING SHA3-256 API (init/update/final)
  * Enables hashing of large data streams without loading everything into memory
@@ -594,6 +620,31 @@ AMA_API ama_error_t ama_hmac_sha512(
 );
 
 /**
+ * @brief HMAC-SHA-384 (RFC 2104 / FIPS 198-1)
+ *
+ * Computes HMAC using SHA-384 for general-purpose keyed authentication.
+ * SHA-384 uses the 128-byte SHA-512 block size, so keys longer than
+ * 128 bytes are SHA-384-hashed first per RFC 2104 Section 2.  Output is
+ * byte-identical to hmac.new(key, msg, hashlib.sha384).digest().
+ *
+ * @param key       HMAC key
+ * @param key_len   Length of key in bytes
+ * @param msg       Message to authenticate
+ * @param msg_len   Length of message in bytes
+ * @param out       Output buffer (must be at least 48 bytes)
+ * @return          AMA_SUCCESS on success, AMA_ERROR_INVALID_PARAM if key or
+ *                  out is NULL (or msg is NULL with msg_len > 0)
+ *
+ * INVARIANT-1 compliant: self-contained SHA-384 — zero external crypto
+ * dependencies.
+ */
+AMA_API ama_error_t ama_hmac_sha384(
+    const uint8_t *key, size_t key_len,
+    const uint8_t *msg, size_t msg_len,
+    uint8_t out[48]
+);
+
+/**
  * @brief HKDF key derivation (RFC 5869)
  *
  * Derives key material using HKDF with HMAC-SHA3-256.
@@ -619,6 +670,46 @@ AMA_API ama_error_t ama_hkdf(
     size_t info_len,
     uint8_t* okm,
     size_t okm_len
+);
+
+/**
+ * @brief HKDF-SHA-256 / -384 / -512 key derivation (RFC 5869)
+ *
+ * Extract-then-Expand HKDF using HMAC-SHA-256/384/512 as the PRF — the
+ * interoperable KDF variants used by TLS 1.3 (RFC 8446), HPKE (RFC 9180),
+ * and most non-AMA stacks (the default ama_hkdf() uses HMAC-SHA3-256).
+ * Output is byte-identical to a stdlib hmac+hashlib HKDF reference.
+ *
+ * @param salt     Optional salt (NULL/zero-length -> HashLen zero bytes per §2.2)
+ * @param salt_len Salt length
+ * @param ikm      Input key material
+ * @param ikm_len  IKM length
+ * @param info     Optional context/application info (may be NULL)
+ * @param info_len Info length
+ * @param okm      Output key material buffer
+ * @param okm_len  Desired output length (max 255 * HashLen)
+ * @return AMA_SUCCESS, AMA_ERROR_INVALID_PARAM (bad pointer / okm_len too large),
+ *         AMA_ERROR_OVERFLOW, or AMA_ERROR_MEMORY
+ *
+ * INVARIANT-1 compliant: built on the native ama_hmac_sha* primitives.
+ */
+AMA_API ama_error_t ama_hkdf_sha256(
+    const uint8_t* salt, size_t salt_len,
+    const uint8_t* ikm, size_t ikm_len,
+    const uint8_t* info, size_t info_len,
+    uint8_t* okm, size_t okm_len
+);
+AMA_API ama_error_t ama_hkdf_sha384(
+    const uint8_t* salt, size_t salt_len,
+    const uint8_t* ikm, size_t ikm_len,
+    const uint8_t* info, size_t info_len,
+    uint8_t* okm, size_t okm_len
+);
+AMA_API ama_error_t ama_hkdf_sha512(
+    const uint8_t* salt, size_t salt_len,
+    const uint8_t* ikm, size_t ikm_len,
+    const uint8_t* info, size_t info_len,
+    uint8_t* okm, size_t okm_len
 );
 
 /* ============================================================================

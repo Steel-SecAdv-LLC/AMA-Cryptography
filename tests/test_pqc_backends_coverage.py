@@ -687,6 +687,91 @@ class TestHMACFunctions:
         result = native_hmac_sha512(b"key", b"message")
         assert len(result) == 64
 
+    def test_native_hmac_sha512_rfc4231(self) -> None:
+        """native_hmac_sha512 matches every RFC 4231 SHA-512 KAT (test cases
+        1-7).  Case 5 (§4.6) publishes a 128-bit-truncated tag, so it is checked
+        against the leftmost 16 bytes; cases 6/7 use 131-byte keys (> the
+        128-byte block) exercising the RFC 2104 §2 oversized-key path."""
+        from ama_cryptography.pqc_backends import native_hmac_sha512
+
+        # (key, data, expected_hex, truncate_or_None)
+        vectors = [
+            (
+                bytes.fromhex("0b" * 20),
+                b"Hi There",
+                "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cde"
+                "daa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854",
+                None,
+            ),
+            (
+                b"Jefe",
+                b"what do ya want for nothing?",
+                "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea250554"
+                "9758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737",
+                None,
+            ),
+            (
+                bytes.fromhex("aa" * 20),
+                bytes.fromhex("dd" * 50),
+                "fa73b0089d56a284efb0f0756c890be9b1b5dbdd8ee81a3655f83e33b2279d39"
+                "bf3e848279a722c806b485a47e67c807b946a337bee8942674278859e13292fb",
+                None,
+            ),
+            (
+                bytes.fromhex("0102030405060708090a0b0c0d0e0f10111213141516171819"),
+                bytes.fromhex("cd" * 50),
+                "b0ba465637458c6990e5a8c5f61d4af7e576d97ff94b872de76f8050361ee3db"
+                "a91ca5c11aa25eb4d679275cc5788063a5f19741120c4f2de2adebeb10a298dd",
+                None,
+            ),
+            (
+                bytes.fromhex("0c" * 20),
+                b"Test With Truncation",
+                "415fad6271580a531d4179bc891d87a6",
+                16,
+            ),
+            (
+                bytes.fromhex("aa" * 131),
+                b"Test Using Larger Than Block-Size Key - Hash Key First",
+                "80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f352"
+                "6b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598",
+                None,
+            ),
+            (
+                bytes.fromhex("aa" * 131),
+                b"This is a test using a larger than block-size key and a "
+                b"larger than block-size data. The key needs to be hashed "
+                b"before being used by the HMAC algorithm.",
+                "e37b6a775dc87dbaa4dfa9f96e5e3ffddebd71f8867289865df5a32d20cdc944"
+                "b6022cac3c4982b10d5eeb55c3e4de15134676fb6de0446065c97440fa8c6a58",
+                None,
+            ),
+        ]
+        for i, (key, data, expected_hex, trunc) in enumerate(vectors, start=1):
+            expected = bytes.fromhex(expected_hex)
+            tag = native_hmac_sha512(key, data)
+            got = tag[:trunc] if trunc is not None else tag
+            assert got == expected, f"RFC 4231 SHA-512 test case {i} mismatch"
+
+    def test_native_hmac_sha512_matches_stdlib(self) -> None:
+        """native_hmac_sha512 is byte-identical to stdlib across key/message
+        sizes straddling the 128-byte block boundary."""
+        import hashlib
+        import hmac
+
+        from ama_cryptography.pqc_backends import native_hmac_sha512
+
+        cases = [
+            (b"", b""),
+            (b"key", b"message"),
+            (b"k" * 127, b"m" * 128),
+            (b"k" * 128, b"m" * 129),
+            (b"k" * 129, b"m" * 256),
+            (b"k" * 300, b"m" * 1024),
+        ]
+        for key, msg in cases:
+            assert native_hmac_sha512(key, msg) == hmac.new(key, msg, hashlib.sha512).digest()
+
     def test_native_hmac_sha256_shape(self) -> None:
         """native_hmac_sha256 produces a 32-byte tag."""
         from ama_cryptography.pqc_backends import native_hmac_sha256
@@ -787,6 +872,122 @@ class TestHMACFunctions:
         r2 = native_hmac_sha256(b"k", b"m")
         assert r1 == r2
 
+    def test_native_hmac_sha384_shape(self) -> None:
+        """native_hmac_sha384 produces a 48-byte tag."""
+        from ama_cryptography.pqc_backends import native_hmac_sha384
+
+        result = native_hmac_sha384(b"key", b"message")
+        assert len(result) == 48
+
+    def test_native_hmac_sha384_rfc4231(self) -> None:
+        """native_hmac_sha384 matches every RFC 4231 SHA-384 KAT
+        (test cases 1-7 — the acceptance bar for the HS384 binding).
+
+        RFC 4231 publishes the full 48-byte tag for cases 1-4, 6, 7 and a
+        128-bit-truncated tag for case 5 (§4.6, "Test With Truncation"), so
+        case 5 is validated against the leftmost 16 bytes only.  Case 6/7
+        keys are 131 bytes (> the 128-byte SHA-384 block) and must be
+        SHA-384-hashed first per RFC 2104 §2 — validating the C kernel's
+        oversized-key path without caller pre-hashing.
+        """
+        from ama_cryptography.pqc_backends import native_hmac_sha384
+
+        # (key, data, expected_hex, truncate_bytes_or_None)
+        vectors = [
+            (  # §4.2 Test Case 1
+                bytes.fromhex("0b" * 20),
+                b"Hi There",
+                "afd03944d84895626b0825f4ab46907f15f9dadbe4101ec6"
+                "82aa034c7cebc59cfaea9ea9076ede7f4af152e8b2fa9cb6",
+                None,
+            ),
+            (  # §4.3 Test Case 2
+                b"Jefe",
+                b"what do ya want for nothing?",
+                "af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47"
+                "e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649",
+                None,
+            ),
+            (  # §4.4 Test Case 3
+                bytes.fromhex("aa" * 20),
+                bytes.fromhex("dd" * 50),
+                "88062608d3e6ad8a0aa2ace014c8a86f0aa635d947ac9feb"
+                "e83ef4e55966144b2a5ab39dc13814b94e3ab6e101a34f27",
+                None,
+            ),
+            (  # §4.5 Test Case 4
+                bytes.fromhex("0102030405060708090a0b0c0d0e0f10111213141516171819"),
+                bytes.fromhex("cd" * 50),
+                "3e8a69b7783c25851933ab6290af6ca77a9981480850009c"
+                "c5577c6e1f573b4e6801dd23c4a7d679ccf8a386c674cffb",
+                None,
+            ),
+            (  # §4.6 Test Case 5 (truncation to 128 bits)
+                bytes.fromhex("0c" * 20),
+                b"Test With Truncation",
+                "3abf34c3503b2a23a46efc619baef897",
+                16,
+            ),
+            (  # §4.7 Test Case 6 (key > block size)
+                bytes.fromhex("aa" * 131),
+                b"Test Using Larger Than Block-Size Key - Hash Key First",
+                "4ece084485813e9088d2c63a041bc5b44f9ef1012a2b588f"
+                "3cd11f05033ac4c60c2ef6ab4030fe8296248df163f44952",
+                None,
+            ),
+            (  # §4.8 Test Case 7 (key > block size, larger data)
+                bytes.fromhex("aa" * 131),
+                b"This is a test using a larger than block-size key and a "
+                b"larger than block-size data. The key needs to be hashed "
+                b"before being used by the HMAC algorithm.",
+                "6617178e941f020d351e2f254e8fd32c602420feb0b8fb9a"
+                "dccebb82461e99c5a678cc31e799176d3860e6110c46523e",
+                None,
+            ),
+        ]
+        for i, (key, data, expected_hex, trunc) in enumerate(vectors, start=1):
+            expected = bytes.fromhex(expected_hex)
+            tag = native_hmac_sha384(key, data)
+            got = tag[:trunc] if trunc is not None else tag
+            assert got == expected, f"RFC 4231 SHA-384 test case {i} mismatch"
+
+    def test_native_hmac_sha384_matches_stdlib(self) -> None:
+        """native_hmac_sha384 is byte-identical to stdlib HMAC-SHA-384
+        across key/message sizes that straddle the 128-byte block
+        boundary — closes the path where a consumer migrates from stdlib
+        `hmac.new(..., 'sha384').digest()` to the AMA binding without
+        changing what wire bytes appear."""
+        import hashlib
+        import hmac
+
+        from ama_cryptography.pqc_backends import native_hmac_sha384
+
+        cases = [
+            (b"", b""),
+            (b"key", b"message"),
+            (b"k" * 48, b"m" * 1),
+            (b"k" * 127, b"m" * 128),  # boundary: key == block-1
+            (b"k" * 128, b"m" * 129),  # boundary: key == block
+            (b"k" * 129, b"m" * 256),  # oversized key, must be hashed
+            (b"k" * 300, b"m" * 1024),  # comfortably oversized
+        ]
+        for key, msg in cases:
+            stdlib = hmac.new(key, msg, hashlib.sha384).digest()
+            native = native_hmac_sha384(key, msg)
+            assert native == stdlib, (
+                f"HMAC-SHA-384 divergence for key_len={len(key)} "
+                f"msg_len={len(msg)}: native={native.hex()} "
+                f"stdlib={stdlib.hex()}"
+            )
+
+    def test_native_hmac_sha384_deterministic(self) -> None:
+        """native_hmac_sha384 is deterministic (PRF invariant)."""
+        from ama_cryptography.pqc_backends import native_hmac_sha384
+
+        r1 = native_hmac_sha384(b"k", b"m")
+        r2 = native_hmac_sha384(b"k", b"m")
+        assert r1 == r2
+
 
 # ===========================================================================
 # SHA3-256 Function Tests
@@ -818,6 +1019,37 @@ class TestSHA3Functions:
 
         result = native_sha3_256(b"")
         assert len(result) == 32
+
+    def test_sha3_512_matches_hashlib(self) -> None:
+        """native_sha3_512 is byte-identical to hashlib.sha3_512 (FIPS 202)."""
+        import hashlib
+
+        from ama_cryptography.pqc_backends import native_sha3_512
+
+        for n in (0, 1, 71, 72, 73, 135, 136, 137, 1000):
+            msg = bytes((i * 13 + 3) & 0xFF for i in range(n))
+            got = native_sha3_512(msg)
+            assert len(got) == 64
+            assert got == hashlib.sha3_512(msg).digest(), f"sha3_512 mismatch len={n}"
+
+    def test_shake_matches_hashlib(self) -> None:
+        """native_shake128/256 are byte-identical to hashlib across the rate
+        boundary and output lengths (FIPS 202 XOF)."""
+        import hashlib
+
+        from ama_cryptography.pqc_backends import native_shake128, native_shake256
+
+        for n in (0, 1, 135, 136, 137, 167, 168, 169, 500):
+            msg = bytes((i * 7 + 1) & 0xFF for i in range(n))
+            for length in (0, 1, 16, 32, 64, 200):
+                assert native_shake128(msg, length) == hashlib.shake_128(msg).digest(length)
+                assert native_shake256(msg, length) == hashlib.shake_256(msg).digest(length)
+
+    def test_sha3_512_deterministic(self) -> None:
+        """native_sha3_512 is deterministic."""
+        from ama_cryptography.pqc_backends import native_sha3_512
+
+        assert native_sha3_512(b"data") == native_sha3_512(b"data")
 
 
 # ===========================================================================

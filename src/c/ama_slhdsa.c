@@ -88,11 +88,11 @@ typedef struct slhdsa_params {
     size_t fors_bytes;    /* k * (a+1) * n */
     size_t wots_sig_bytes;/* len * n */
     int    use_compressed_adrs; /* 1 for SHA2 family, 0 for SHAKE family */
-    /* Address type codes used when calling PRF.
-     * SHA2 family: same as the surrounding chain/tree type (the existing
-     *   -256f path passes NIST ACVP using WOTS_HASH/FORS_TREE for PRF).
-     * SHAKE family: FIPS 205 §6 Algorithms 5/16 use separate WOTS_PRF=5
-     *   and FORS_PRF=6 type codes for the PRF input ADRS. */
+    /* Address type codes used when calling PRF. FIPS 205 §4.2 (Table 1)
+     * assigns separate WOTS_PRF=5 / FORS_PRF=6 type codes for the PRF input
+     * ADRS. These codes are a property of the address structure, not of the
+     * hash instantiation — §11.1 (SHAKE) and §11.2 (SHA-2) differ only in the
+     * hash functions, so BOTH families use WOTS_PRF/FORS_PRF here. */
     uint32_t wots_prf_type;
     uint32_t fors_prf_type;
 
@@ -350,21 +350,20 @@ static int sha2_H_msg(const slhdsa_params_t *p, uint8_t *out,
      * Categories 3/5 only — see FIPS 205 §11.2 Table 5. */
     uint8_t hash[64];
     uint8_t mgf_seed[160];   /* n + n + 64, ≤ 32+32+64 = 128 */
-    uint8_t *inner_buf;
-    size_t inner_len;
     size_t mgf_seed_len = p->n + p->n + 64;
 
-    inner_len = p->n + 2 * p->n + msglen;
-    inner_buf = (uint8_t *)calloc((size_t)1, inner_len);
-    if (!inner_buf) {
-        return -1;
+    /* Inner hash: SHA-512(R || PK.seed || PK.root || M), streamed through the
+     * SHA-512 context so no message-length-dependent heap buffer is needed. */
+    {
+        ama_sha512_ctx sctx;
+        ama_sha512_ctx_init(&sctx);
+        ama_sha512_ctx_update(&sctx, R, p->n);
+        ama_sha512_ctx_update(&sctx, pk, 2 * p->n);
+        if (msglen > 0) {
+            ama_sha512_ctx_update(&sctx, msg, msglen);
+        }
+        ama_sha512_ctx_final(&sctx, hash, 64);
     }
-    memcpy(inner_buf, R, p->n);
-    memcpy(inner_buf + p->n, pk, 2 * p->n);
-    memcpy(inner_buf + 3 * p->n, msg, msglen);
-    ama_sha512(inner_buf, inner_len, hash);
-    ama_secure_memzero(inner_buf, inner_len);
-    free(inner_buf);
 
     memcpy(mgf_seed, R, p->n);
     memcpy(mgf_seed + p->n, pk, p->n);   /* PK.seed only */
@@ -491,9 +490,9 @@ static const slhdsa_params_t SLHDSA_PARAMS_SHA2_256F = {
     11200,
     2144,
     1,
-    /* SHA2 path PRF call sites leave the type at WOTS_HASH/FORS_TREE — the
-     * existing -256f code is byte-exact against NIST ACVP that way. */
-    SLH_ADDR_TYPE_WOTS, SLH_ADDR_TYPE_FORSTREE,
+    /* FIPS 205 §4.2: PRF input ADRS uses WOTS_PRF=5 / FORS_PRF=6, identical to
+     * the SHAKE family — the address type codes do not depend on the hash. */
+    SLH_ADDR_TYPE_WOTS_PRF, SLH_ADDR_TYPE_FORS_PRF,
     sha2_F, sha2_HT, sha2_PRF, sha2_PRF_msg, sha2_H_msg
 };
 
@@ -649,7 +648,7 @@ static void slh_wots_gen_pk(const slhdsa_params_t *p, uint8_t *pk,
     for (i = 0; i < p->wots_len; ++i) {
         slh_set_chain(addr, (uint32_t)i);
         slh_set_hash(addr, 0);
-        addr[3] = p->wots_prf_type;            /* WOTS_PRF for SHAKE family */
+        addr[3] = p->wots_prf_type;            /* WOTS_PRF (FIPS 205 §4.2) */
         p->prf(p, chain_in, pub_seed, addr, sk_seed);
         addr[3] = saved_type;                  /* restore for chain hashing */
         slh_wots_chain(p, pk + i * p->n, chain_in, 0,
@@ -705,9 +704,8 @@ static void slh_wots_pk_from_sig(const slhdsa_params_t *p, uint8_t *pk,
 static void slh_fors_gen_sk(const slhdsa_params_t *p, uint8_t *sk,
                             const uint8_t *sk_seed, const uint8_t *pub_seed,
                             uint32_t addr[8]) {
-    /* Save the surrounding type (FORS_TREE), switch to FORS_PRF for SHAKE
-     * family, call PRF, restore. SHA2 family's wots_prf_type/fors_prf_type
-     * equal the surrounding type so this is a no-op there. */
+    /* Save the surrounding type (FORS_TREE), switch to FORS_PRF for the PRF
+     * call (FIPS 205 §4.2 — both hash families), then restore for tree hashing. */
     uint32_t saved_type = addr[3];
     addr[3] = p->fors_prf_type;
     p->prf(p, sk, pub_seed, addr, sk_seed);

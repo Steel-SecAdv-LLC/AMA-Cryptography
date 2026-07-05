@@ -208,6 +208,9 @@ def _make_entries() -> list[tuple[str, Callable[[], Any]]]:
     # Top-level convenience helpers.
     entries += [
         ("quick_hash", lambda: quick_hash(dummy_bytes)),
+        # hash_message is a documented public static method; it must enforce the
+        # gate standalone, not only via its quick_hash wrapper.
+        ("AmaCryptography.hash_message", lambda: AmaCryptography.hash_message(dummy_bytes)),
         ("quick_sign", lambda: quick_sign(dummy_bytes)),
         ("quick_verify", lambda: quick_verify(dummy_bytes, dummy_bytes, dummy_bytes)),
         ("quick_kem", lambda: quick_kem()),

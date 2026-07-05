@@ -70,6 +70,23 @@ __all__ = [
     "FROST_NONCE_BYTES",
     "FROST_COMMITMENT_BYTES",
     "FROST_SIG_SHARE_BYTES",
+    # Native HMAC (RFC 2104 / FIPS 198-1) — direct-consumer surface (Mercury)
+    "native_hmac_sha256",
+    "native_hmac_sha256_2",
+    "native_hmac_sha384",
+    "native_hmac_sha512",
+    "native_hmac_sha3_256",
+    "hmac_sha3_256",
+    # Native HKDF (RFC 5869)
+    "native_hkdf",
+    "native_hkdf_sha256",
+    "native_hkdf_sha384",
+    "native_hkdf_sha512",
+    # Native FIPS 202 hashes / XOFs
+    "native_sha3_256",
+    "native_sha3_512",
+    "native_shake128",
+    "native_shake256",
 ]
 
 
@@ -523,6 +540,11 @@ def _setup_aes_gcm_ctypes(lib: ctypes.CDLL) -> bool:
 # HKDF native availability
 _HKDF_NATIVE_AVAILABLE = False
 
+# HKDF-SHA-2 (RFC 5869) native availability — the SHA-256/384/512 PRF variants
+# that interoperate with TLS 1.3 / HPKE / non-AMA stacks (the default ama_hkdf
+# uses HMAC-SHA3-256).  Mirrors the _HKDF/_HMAC flags; fail-closed.
+_HKDF_SHA2_NATIVE_AVAILABLE = False
+
 
 def _setup_hkdf_ctypes(lib: ctypes.CDLL) -> bool:
     """Configure ctypes for HKDF functions. Separate from PQC setup."""
@@ -544,8 +566,34 @@ def _setup_hkdf_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
+def _setup_hkdf_sha2_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for the HKDF-SHA-256/384/512 (RFC 5869) variants."""
+    try:
+        for name in ("ama_hkdf_sha256", "ama_hkdf_sha384", "ama_hkdf_sha512"):
+            fn = getattr(lib, name)
+            fn.argtypes = [
+                ctypes.c_void_p,  # salt
+                ctypes.c_size_t,  # salt_len
+                ctypes.c_void_p,  # ikm
+                ctypes.c_size_t,  # ikm_len
+                ctypes.c_void_p,  # info
+                ctypes.c_size_t,  # info_len
+                ctypes.c_void_p,  # okm
+                ctypes.c_size_t,  # okm_len
+            ]
+            fn.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
 # SHA3-256 native availability (raw hash, not HMAC)
 _SHA3_256_NATIVE_AVAILABLE = False
+
+# SHA3-512 + SHAKE128/256 native availability (raw hash / XOF, FIPS 202).
+# These C symbols existed but were never surfaced to Python, forcing callers
+# (crypto_api.hash_message, rfc3161_timestamp) onto stdlib hashlib.  Fail-closed.
+_SHA3_EXT_NATIVE_AVAILABLE = False
 
 
 def _setup_sha3_256_ctypes(lib: ctypes.CDLL) -> bool:
@@ -563,11 +611,42 @@ def _setup_sha3_256_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
+def _setup_sha3_ext_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for SHA3-512 and SHAKE128/256 (FIPS 202)."""
+    try:
+        lib.ama_sha3_512.argtypes = [
+            ctypes.c_char_p,  # input
+            ctypes.c_size_t,  # input_len
+            ctypes.c_char_p,  # output (64 bytes)
+        ]
+        lib.ama_sha3_512.restype = ctypes.c_int
+        for name in ("ama_shake128", "ama_shake256"):
+            fn = getattr(lib, name)
+            fn.argtypes = [
+                ctypes.c_char_p,  # input
+                ctypes.c_size_t,  # input_len
+                ctypes.c_char_p,  # output
+                ctypes.c_size_t,  # output_len
+            ]
+            fn.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
 # HMAC-SHA3-256 native availability (independent of HKDF)
 _HMAC_SHA3_256_NATIVE_AVAILABLE = False
 
 # HMAC-SHA-512 native availability (for BIP32 key derivation)
 _HMAC_SHA512_NATIVE_AVAILABLE = False
+
+# HMAC-SHA-384 native availability — RFC 2104 / FIPS 198-1.  Surfaces the
+# self-contained `ama_hmac_sha384` C symbol (validated against RFC 4231
+# test cases 1-7) to Python so consumers that need HMAC-SHA-384 (e.g. JWS
+# HS384 signers, TLS PRF variants) don't fall back to stdlib
+# `hmac.new(..., 'sha384')` — which would violate INVARIANT-1 ("zero
+# external crypto dependencies").  Mirrors the _256/_512 flags exactly.
+_HMAC_SHA384_NATIVE_AVAILABLE = False
 
 # HMAC-SHA-256 native availability — FIPS 198-1.  Surfaces the
 # ACVP-validated `ama_hmac_sha256` C symbol (150/150 vectors per
@@ -592,6 +671,27 @@ def _setup_hmac_sha512_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_char_p,  # out (64 bytes)
         ]
         lib.ama_hmac_sha512.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
+def _setup_hmac_sha384_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for HMAC-SHA-384 (RFC 2104 / FIPS 198-1).
+
+    Single-segment signer only (no `_2` fast-path — HS384, like HS512,
+    has no default hot-path caller that would justify one).  Mirrors the
+    SHA-512 binding's `restype = c_int` rc-checked contract exactly.
+    """
+    try:
+        lib.ama_hmac_sha384.argtypes = [
+            ctypes.c_char_p,  # key
+            ctypes.c_size_t,  # key_len
+            ctypes.c_char_p,  # msg
+            ctypes.c_size_t,  # msg_len
+            ctypes.c_char_p,  # out (48 bytes)
+        ]
+        lib.ama_hmac_sha384.restype = ctypes.c_int
         return True
     except AttributeError:
         return False
@@ -974,9 +1074,12 @@ if _native_lib is not None:
     _ED25519_NATIVE_AVAILABLE = _setup_ed25519_ctypes(_native_lib)
     _AES_GCM_NATIVE_AVAILABLE = _setup_aes_gcm_ctypes(_native_lib)
     _HKDF_NATIVE_AVAILABLE = _setup_hkdf_ctypes(_native_lib)
+    _HKDF_SHA2_NATIVE_AVAILABLE = _setup_hkdf_sha2_ctypes(_native_lib)
     _SHA3_256_NATIVE_AVAILABLE = _setup_sha3_256_ctypes(_native_lib)
+    _SHA3_EXT_NATIVE_AVAILABLE = _setup_sha3_ext_ctypes(_native_lib)
     _HMAC_SHA3_256_NATIVE_AVAILABLE = _setup_hmac_sha3_256_ctypes(_native_lib)
     _HMAC_SHA512_NATIVE_AVAILABLE = _setup_hmac_sha512_ctypes(_native_lib)
+    _HMAC_SHA384_NATIVE_AVAILABLE = _setup_hmac_sha384_ctypes(_native_lib)
     _HMAC_SHA256_NATIVE_AVAILABLE = _setup_hmac_sha256_ctypes(_native_lib)
     _SECP256K1_NATIVE_AVAILABLE = _setup_secp256k1_ctypes(_native_lib)
     _X25519_NATIVE_AVAILABLE = _setup_x25519_ctypes(_native_lib)
@@ -2924,6 +3027,112 @@ def native_hkdf(
     return bytes(okm_buf)
 
 
+def _native_hkdf_sha2(
+    fn_name: str,
+    digest_size: int,
+    ikm: _BufferInput,
+    length: int,
+    salt: "Optional[_BufferInput]",
+    info: _BufferInput,
+) -> bytes:
+    """Shared body for the HKDF-SHA-256/384/512 (RFC 5869) bindings."""
+    max_len = 255 * digest_size
+    if length <= 0:
+        raise ValueError(f"HKDF output length must be > 0, got {length}")
+    if length > max_len:
+        raise ValueError(f"HKDF output length must be <= {max_len}, got {length}")
+    if _native_lib is None or not _HKDF_SHA2_NATIVE_AVAILABLE:
+        raise RuntimeError("HKDF-SHA-2 native backend not available. " + _INSTALL_HINT)
+
+    okm_buf = ctypes.create_string_buffer(length)
+    salt_len = len(salt) if salt else 0
+    ikm_len = len(ikm)
+    info_len = len(info)
+    # Borrow stable pointers via the buffer protocol (mirrors native_hkdf).
+    # Immutable bytes are passed through; writable bytearray / memoryview key
+    # material is read in place through a c_char view rather than coerced via
+    # the c_void_p argtype — the latter rejects bytearray outright (TypeError)
+    # and never exposes the wipeable buffer to the native kernel directly.
+    with (
+        _c_buffer_view(ikm) as ikm_buf,
+        _c_buffer_view(salt if salt is not None else b"") as salt_buf,
+        _c_buffer_view(info) as info_buf,
+    ):
+        rc = getattr(_native_lib, fn_name)(
+            salt_buf if salt_len > 0 else None,
+            ctypes.c_size_t(salt_len),
+            ikm_buf if ikm_len > 0 else None,
+            ctypes.c_size_t(ikm_len),
+            info_buf if info_len > 0 else None,
+            ctypes.c_size_t(info_len),
+            okm_buf,
+            ctypes.c_size_t(length),
+        )
+    if rc != 0:
+        raise RuntimeError(f"{fn_name} failed (rc={rc})")
+    return bytes(okm_buf)
+
+
+def native_hkdf_sha256(
+    ikm: _BufferInput,
+    length: int,
+    salt: "Optional[_BufferInput]" = None,
+    info: _BufferInput = b"",
+) -> bytes:
+    """
+    HKDF-SHA-256 (RFC 5869) via native C implementation (ama_hkdf_sha256).
+
+    The canonical interoperable KDF: TLS 1.3 (RFC 8446), HPKE (RFC 9180), and
+    most non-AMA stacks derive keys with HKDF-SHA-256.  Output is byte-identical
+    to a stdlib hmac+hashlib HKDF reference and validated against the RFC 5869
+    Appendix A.1-A.3 test vectors.  INVARIANT-1 compliant.
+
+    Args:
+        ikm: Input key material.
+        length: Desired output length in bytes (max 255*32 = 8160).
+        salt: Optional salt (None/empty -> 32 zero bytes per RFC 5869 §2.2).
+        info: Optional context/application info.
+
+    Returns:
+        `length` bytes of output key material.
+
+    Raises:
+        RuntimeError: native backend unavailable.
+        ValueError: length out of range.
+    """
+    return _native_hkdf_sha2("ama_hkdf_sha256", 32, ikm, length, salt, info)
+
+
+def native_hkdf_sha384(
+    ikm: _BufferInput,
+    length: int,
+    salt: "Optional[_BufferInput]" = None,
+    info: _BufferInput = b"",
+) -> bytes:
+    """
+    HKDF-SHA-384 (RFC 5869) via native C implementation (ama_hkdf_sha384).
+
+    Output is byte-identical to a stdlib hmac+hashlib HKDF reference.
+    INVARIANT-1 compliant.  Max output length 255*48 = 12240 bytes.
+    """
+    return _native_hkdf_sha2("ama_hkdf_sha384", 48, ikm, length, salt, info)
+
+
+def native_hkdf_sha512(
+    ikm: _BufferInput,
+    length: int,
+    salt: "Optional[_BufferInput]" = None,
+    info: _BufferInput = b"",
+) -> bytes:
+    """
+    HKDF-SHA-512 (RFC 5869) via native C implementation (ama_hkdf_sha512).
+
+    Output is byte-identical to a stdlib hmac+hashlib HKDF reference.
+    INVARIANT-1 compliant.  Max output length 255*64 = 16320 bytes.
+    """
+    return _native_hkdf_sha2("ama_hkdf_sha512", 64, ikm, length, salt, info)
+
+
 # ============================================================================
 # SHA3-256 NATIVE C BACKEND (FIPS 202)
 # ============================================================================
@@ -2984,6 +3193,89 @@ def native_sha3_256(data: bytes) -> bytes:
         raise RuntimeError(f"SHA3-256 failed (rc={rc})")
 
     return bytes(out_buf)
+
+
+def native_sha3_512(data: bytes) -> bytes:
+    """
+    SHA3-512 via native C implementation (ama_sha3_512).
+
+    FIPS 202 compliant.  INVARIANT-1 compliant — lets callers stop falling
+    back to stdlib `hashlib.sha3_512` for a primitive the native core already
+    provides.  Byte-identical to `hashlib.sha3_512(data).digest()`.
+
+    Args:
+        data: Input bytes to hash.
+
+    Returns:
+        64-byte SHA3-512 digest.
+
+    Raises:
+        RuntimeError: If the native backend is not available.
+    """
+    if _native_lib is None or not _SHA3_EXT_NATIVE_AVAILABLE:
+        raise RuntimeError("SHA3-512 native backend not available. " + _INSTALL_HINT)
+
+    out_buf = ctypes.create_string_buffer(64)
+    rc = _native_lib.ama_sha3_512(data, ctypes.c_size_t(len(data)), out_buf)
+    if rc != 0:
+        raise RuntimeError(f"SHA3-512 failed (rc={rc})")
+    return bytes(out_buf)
+
+
+def _native_shake(fn_name: str, data: bytes, length: int) -> bytes:
+    """Shared body for the SHAKE128/256 one-shot XOF bindings."""
+    if length < 0:
+        raise ValueError(f"SHAKE output length must be >= 0, got {length}")
+    if _native_lib is None or not _SHA3_EXT_NATIVE_AVAILABLE:
+        raise RuntimeError("SHAKE native backend not available. " + _INSTALL_HINT)
+    # Zero-length squeeze matches hashlib.shake_*.digest(0) == b"".  The C
+    # kernel rejects a NULL output pointer, so short-circuit here.
+    if length == 0:
+        return b""
+    out_buf = ctypes.create_string_buffer(length)
+    rc = getattr(_native_lib, fn_name)(
+        data,
+        ctypes.c_size_t(len(data)),
+        out_buf,
+        ctypes.c_size_t(length),
+    )
+    if rc != 0:
+        raise RuntimeError(f"{fn_name} failed (rc={rc})")
+    return bytes(out_buf.raw[:length])
+
+
+def native_shake128(data: bytes, length: int) -> bytes:
+    """
+    SHAKE128 XOF via native C implementation (ama_shake128).
+
+    FIPS 202 compliant.  Byte-identical to
+    `hashlib.shake_128(data).digest(length)`.  INVARIANT-1 compliant.
+
+    Args:
+        data: Input bytes to absorb.
+        length: Desired output length in bytes.
+
+    Returns:
+        `length` bytes of XOF output.
+    """
+    return _native_shake("ama_shake128", data, length)
+
+
+def native_shake256(data: bytes, length: int) -> bytes:
+    """
+    SHAKE256 XOF via native C implementation (ama_shake256).
+
+    FIPS 202 compliant.  Byte-identical to
+    `hashlib.shake_256(data).digest(length)`.  INVARIANT-1 compliant.
+
+    Args:
+        data: Input bytes to absorb.
+        length: Desired output length in bytes.
+
+    Returns:
+        `length` bytes of XOF output.
+    """
+    return _native_shake("ama_shake256", data, length)
 
 
 # ============================================================================
@@ -3057,6 +3349,51 @@ def native_hmac_sha512(key: bytes, msg: bytes) -> bytes:
     )
     if rc != 0:
         raise RuntimeError(f"HMAC-SHA-512 failed (rc={rc})")
+
+    return bytes(out_buf)
+
+
+def native_hmac_sha384(key: bytes, msg: bytes) -> bytes:
+    """
+    HMAC-SHA-384 via native C implementation (ama_hmac_sha384).
+
+    Standards: RFC 2104 (HMAC), FIPS 198-1 (HMAC), FIPS 180-4 (SHA-384).
+    The C kernel is validated against RFC 4231 test cases 1-7.  Same
+    one-shot, rc-checked contract as the existing `native_hmac_sha512`
+    binding — the underlying C kernel internally hashes oversized keys
+    per RFC 2104 Section 2 (SHA-384's block size is 128 bytes, so the
+    key-prep threshold is 128, not 64), so callers do NOT need to
+    pre-hash; pass the key verbatim.
+
+    INVARIANT-1 compliant — zero external crypto dependencies.
+
+    Args:
+        key: HMAC key (any length; keys > 128 bytes are SHA-384 hashed
+             first per RFC 2104 Section 2).  Pass raw bytes; do NOT pre-hash.
+        msg: Message to authenticate.
+
+    Returns:
+        48-byte HMAC-SHA-384 tag, byte-identical to
+        `hmac.new(key, msg, hashlib.sha384).digest()`.
+
+    Raises:
+        RuntimeError: If the native library is not loaded or the
+                      ama_hmac_sha384 symbol was not bound at module init.
+    """
+    if _native_lib is None or not _HMAC_SHA384_NATIVE_AVAILABLE:
+        raise RuntimeError("HMAC-SHA-384 native backend not available. " + _INSTALL_HINT)
+
+    out_buf = ctypes.create_string_buffer(48)
+
+    rc = _native_lib.ama_hmac_sha384(
+        key,
+        ctypes.c_size_t(len(key)),
+        msg,
+        ctypes.c_size_t(len(msg)),
+        out_buf,
+    )
+    if rc != 0:
+        raise RuntimeError(f"HMAC-SHA-384 failed (rc={rc})")
 
     return bytes(out_buf)
 

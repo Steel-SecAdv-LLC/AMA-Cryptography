@@ -50,13 +50,16 @@ except ImportError:
     RemoteTimestamper = None
 
 
-class TimestampUnavailableError(Exception):
+from ama_cryptography.exceptions import AmaCryptographyError
+
+
+class TimestampUnavailableError(AmaCryptographyError):
     """Raised when RFC 3161 timestamping is requested but not available."""
 
     pass
 
 
-class TimestampError(Exception):
+class TimestampError(AmaCryptographyError):
     """Raised when timestamp request fails."""
 
     pass
@@ -122,17 +125,17 @@ def allow_mock_tsa() -> Generator[None, None, None]:
 
 
 def _hmac_sha256(key: bytes, msg: bytes) -> bytes:
-    """RFC 2104 HMAC-SHA-256 without importing stdlib hmac (INVARIANT-1).
+    """RFC 2104 HMAC-SHA-256 via the native ama_hmac_sha256 kernel.
 
-    Uses hashlib.sha256 directly.  Block size for SHA-256 is 64 bytes.
+    INVARIANT-1 (AMA's own HMAC, never a stdlib-hashlib construction) and
+    INVARIANT-7 (no cryptographic fallback, ever) — there is deliberately no
+    pure-Python fallback.  When the native backend is unavailable,
+    ``native_hmac_sha256`` raises ``RuntimeError`` and MockTSA fails closed;
+    tests skip accordingly rather than silently exercising a non-native HMAC.
     """
-    block_size = 64
-    if len(key) > block_size:
-        key = hashlib.sha256(key).digest()
-    key = key.ljust(block_size, b"\x00")
-    o_key_pad = bytes(k ^ 0x5C for k in key)
-    i_key_pad = bytes(k ^ 0x36 for k in key)
-    return hashlib.sha256(o_key_pad + hashlib.sha256(i_key_pad + msg).digest()).digest()
+    from ama_cryptography.pqc_backends import native_hmac_sha256
+
+    return native_hmac_sha256(key, msg)
 
 
 class MockTSA:

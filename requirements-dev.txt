@@ -5,30 +5,29 @@
 # Native C backend: Ed25519, AES-256-GCM, HKDF, ML-DSA-65, Kyber-1024, SPHINCS+.
 # Build with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
 
-# Build dependencies (required for Cython extensions)
-Cython>=3.0.0,<3.1.0; python_version < "3.9"
-Cython>=3.2.5; python_version >= "3.9"
+# Build dependencies (required for Cython extensions).
+# The project floor is Python 3.10 (requires-python >= 3.10), so these are
+# unconditional — no version-gated fallback rows for EOL interpreters.
+Cython>=3.2.6
 
-# NumPy: 1.24.x is last version supporting Python 3.8
-numpy>=1.24.0,<2.0.0; python_version < "3.9"
-numpy>=1.24.0; python_version >= "3.9"
+# NumPy for the optional math / monitoring extensions.
+numpy>=1.24.0
 
-# SciPy: 1.10.x is last version supporting Python 3.8, 1.11+ requires Python 3.9+
-scipy>=1.10.0,<1.11.0; python_version < "3.9"
-scipy>=1.11.0; python_version >= "3.9"
+# SciPy for the monitoring extension (1.11+ supports the 3.10+ floor).
+scipy>=1.11.0
 
 # Testing
-pytest>=7.0.0
+pytest>=9.1.1
 pytest-cov>=4.0.0
 pytest-timeout>=2.1.0
 pytest-benchmark>=4.0.0
 pytest-xdist>=3.0.0
-hypothesis>=6.0.0
+hypothesis>=6.155.7
 
 # Code Quality
-black>=26.3.1; python_version >= "3.10"
-ruff>=0.15.17
-mypy>=1.9.0
+black>=26.5.1
+ruff>=0.15.20
+mypy>=2.1.0
 
 # Security Scanning
 bandit>=1.7.0
@@ -40,4 +39,4 @@ bandit>=1.7.0
 # Build and packaging
 setuptools>=82.0.1
 wheel>=0.47.0
-build>=1.4.4
+build>=1.5.0

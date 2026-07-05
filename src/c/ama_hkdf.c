@@ -88,12 +88,11 @@ static ama_error_t hmac_sha3_256(
     uint8_t k_opad[SHA3_256_BLOCK_SIZE];
     uint8_t key_hash[SHA3_256_DIGEST_SIZE];
     uint8_t inner_hash[SHA3_256_DIGEST_SIZE];
-    uint8_t* inner_data = NULL;
-    uint8_t* outer_data = NULL;
     const uint8_t* actual_key;
     size_t actual_key_len;
     size_t i;
     ama_error_t rc;
+    ama_sha3_ctx ctx;
 
     /* If key is longer than block size, hash it first */
     if (key_len > SHA3_256_BLOCK_SIZE) {
@@ -118,38 +117,24 @@ static ama_error_t hmac_sha3_256(
         k_opad[i] ^= actual_key[i];
     }
 
-    /* SECURITY FIX: Guard against integer overflow in allocation size.
-     * SHA3_256_BLOCK_SIZE + data_len could wrap on 32-bit platforms if
-     * data_len is near SIZE_MAX (audit finding HKDF-OVF-1). */
-    if (data_len > SIZE_MAX - SHA3_256_BLOCK_SIZE) {
-        rc = AMA_ERROR_OVERFLOW;
-        goto cleanup;
-    }
-
-    /* Inner hash: H(K XOR ipad || data) */
-    inner_data = (uint8_t*)malloc(SHA3_256_BLOCK_SIZE + data_len);
-    if (!inner_data) {
-        rc = AMA_ERROR_MEMORY;
-        goto cleanup;
-    }
-    memcpy(inner_data, k_ipad, SHA3_256_BLOCK_SIZE);
-    if (data_len > 0) {
-        memcpy(inner_data + SHA3_256_BLOCK_SIZE, data, data_len);
-    }
-    rc = ama_sha3_256(inner_data, SHA3_256_BLOCK_SIZE + data_len, inner_hash);
+    /* Inner hash: H(K XOR ipad || data), streamed through the SHA3-256
+     * absorb API so no heap concatenation buffer is allocated (previously
+     * two malloc/free per call; hkdf_expand invokes this once per output
+     * block).  The block-size + data_len overflow guard is no longer needed
+     * because no single buffer of that size is ever materialised. */
+    rc = ama_sha3_init(&ctx);
+    if (rc == AMA_SUCCESS) rc = ama_sha3_update(&ctx, k_ipad, SHA3_256_BLOCK_SIZE);
+    if (rc == AMA_SUCCESS && data_len > 0) rc = ama_sha3_update(&ctx, data, data_len);
+    if (rc == AMA_SUCCESS) rc = ama_sha3_final(&ctx, inner_hash);
     if (rc != AMA_SUCCESS) {
         goto cleanup;
     }
 
     /* Outer hash: H(K XOR opad || inner_hash) */
-    outer_data = (uint8_t*)malloc(SHA3_256_BLOCK_SIZE + SHA3_256_DIGEST_SIZE);
-    if (!outer_data) {
-        rc = AMA_ERROR_MEMORY;
-        goto cleanup;
-    }
-    memcpy(outer_data, k_opad, SHA3_256_BLOCK_SIZE);
-    memcpy(outer_data + SHA3_256_BLOCK_SIZE, inner_hash, SHA3_256_DIGEST_SIZE);
-    rc = ama_sha3_256(outer_data, SHA3_256_BLOCK_SIZE + SHA3_256_DIGEST_SIZE, output);
+    rc = ama_sha3_init(&ctx);
+    if (rc == AMA_SUCCESS) rc = ama_sha3_update(&ctx, k_opad, SHA3_256_BLOCK_SIZE);
+    if (rc == AMA_SUCCESS) rc = ama_sha3_update(&ctx, inner_hash, SHA3_256_DIGEST_SIZE);
+    if (rc == AMA_SUCCESS) rc = ama_sha3_final(&ctx, output);
 
 cleanup:
     /* Scrub sensitive data */
@@ -157,14 +142,7 @@ cleanup:
     ama_secure_memzero(k_opad, sizeof(k_opad));
     ama_secure_memzero(key_hash, sizeof(key_hash));
     ama_secure_memzero(inner_hash, sizeof(inner_hash));
-    if (inner_data) {
-        ama_secure_memzero(inner_data, SHA3_256_BLOCK_SIZE + data_len);
-        free(inner_data);
-    }
-    if (outer_data) {
-        ama_secure_memzero(outer_data, SHA3_256_BLOCK_SIZE + SHA3_256_DIGEST_SIZE);
-        free(outer_data);
-    }
+    ama_secure_memzero(&ctx, sizeof(ctx));
 
     return rc;
 }
@@ -379,4 +357,142 @@ cleanup:
     ama_secure_memzero(prk, sizeof(prk));
 
     return rc;
+}
+
+/* ========================================================================== */
+/* HKDF-SHA-2 (RFC 5869) — SHA-256/384/512 PRF variants                       */
+/*                                                                            */
+/* The default ama_hkdf() above uses HMAC-SHA3-256 as its PRF.  These add the */
+/* SHA-2 PRF variants that external systems interoperate on: HKDF-SHA-256 is  */
+/* the canonical KDF for TLS 1.3 (RFC 8446), HPKE (RFC 9180), and most non-AMA*/
+/* stacks; SHA-384/512 variants cover the higher-strength deployments.  Built */
+/* on the native ama_hmac_sha{256,384,512} primitives (INVARIANT-1).          */
+/* ========================================================================== */
+
+/* ama_hmac_sha256 is declared in src/c/ama_hmac_sha256.h; forward-declare it
+ * here (its header is not on this TU's include path) — ama_hmac_sha384/512 are
+ * declared in ama_cryptography.h already included above. */
+extern void ama_hmac_sha256(const uint8_t *key, size_t key_len,
+                            const uint8_t *data, size_t data_len,
+                            uint8_t out[32]);
+
+typedef void (*ama_hkdf_prf_fn)(const uint8_t *key, size_t key_len,
+                                const uint8_t *msg, size_t msg_len,
+                                uint8_t *out);
+
+static void ama_hkdf_prf_sha256(const uint8_t *k, size_t kl,
+                                const uint8_t *m, size_t ml, uint8_t *o) {
+    ama_hmac_sha256(k, kl, m, ml, o);
+}
+static void ama_hkdf_prf_sha384(const uint8_t *k, size_t kl,
+                                const uint8_t *m, size_t ml, uint8_t *o) {
+    /* ama_hmac_sha384 only fails on NULL key/out — never passed here. */
+    (void)ama_hmac_sha384(k, kl, m, ml, o);
+}
+static void ama_hkdf_prf_sha512(const uint8_t *k, size_t kl,
+                                const uint8_t *m, size_t ml, uint8_t *o) {
+    (void)ama_hmac_sha512(k, kl, m, ml, o);
+}
+
+/* RFC 5869 Extract-then-Expand, parameterised by PRF + hash length. */
+static ama_error_t ama_hkdf_sha2_generic(
+    ama_hkdf_prf_fn prf, size_t hashlen,
+    const uint8_t *salt, size_t salt_len,
+    const uint8_t *ikm, size_t ikm_len,
+    const uint8_t *info, size_t info_len,
+    uint8_t *okm, size_t okm_len)
+{
+    uint8_t prk[64];             /* max hashlen (SHA-512) = 64 */
+    uint8_t T[64];
+    uint8_t default_salt[64];
+    uint8_t stack_buf[256];      /* T(i-1) || info || counter, common case */
+    uint8_t *msg = stack_buf;
+    int msg_on_heap = 0;
+    size_t msg_cap = 0;
+    size_t done = 0;
+    unsigned int counter = 1;
+    ama_error_t rc = AMA_SUCCESS;
+
+    if (!okm && okm_len > 0) return AMA_ERROR_INVALID_PARAM;
+    if ((!ikm && ikm_len > 0) || (!info && info_len > 0) ||
+        (!salt && salt_len > 0)) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (okm_len == 0) return AMA_SUCCESS;
+    /* RFC 5869 §2.3: L <= 255 * HashLen. */
+    if (okm_len > (size_t)255 * hashlen) return AMA_ERROR_INVALID_PARAM;
+
+    /* Extract: PRK = HMAC-Hash(salt, IKM).  Absent/empty salt -> HashLen zeros
+     * (RFC 5869 §2.2). */
+    if (!salt || salt_len == 0) {
+        memset(default_salt, 0, hashlen);
+        salt = default_salt;
+        salt_len = hashlen;
+    }
+    prf(salt, salt_len, ikm, ikm_len, prk);
+
+    /* Expand.  T(i) = HMAC-Hash(PRK, T(i-1) || info || i). */
+    if (info_len > SIZE_MAX - hashlen - 1) { rc = AMA_ERROR_OVERFLOW; goto cleanup; }
+    msg_cap = hashlen + info_len + 1;
+    if (msg_cap > sizeof(stack_buf)) {
+        msg = (uint8_t *)malloc(msg_cap);
+        if (!msg) { rc = AMA_ERROR_MEMORY; goto cleanup; }
+        msg_on_heap = 1;
+    }
+
+    while (done < okm_len) {
+        size_t off = 0;
+        size_t todo;
+        if (counter > 1) { memcpy(msg, T, hashlen); off = hashlen; }
+        if (info_len > 0) { memcpy(msg + off, info, info_len); off += info_len; }
+        msg[off++] = (uint8_t)counter;   /* counter stays 1..255 (L bound above) */
+        prf(prk, hashlen, msg, off, T);
+        todo = okm_len - done;
+        if (todo > hashlen) todo = hashlen;
+        memcpy(okm + done, T, todo);
+        done += todo;
+        counter++;
+    }
+
+cleanup:
+    ama_secure_memzero(prk, sizeof(prk));
+    ama_secure_memzero(T, sizeof(T));
+    ama_secure_memzero(default_salt, sizeof(default_salt));
+    if (msg_on_heap) {
+        ama_secure_memzero(msg, msg_cap);
+        free(msg);
+    } else {
+        ama_secure_memzero(stack_buf, sizeof(stack_buf));
+    }
+    return rc;
+}
+
+AMA_API ama_error_t ama_hkdf_sha256(
+    const uint8_t *salt, size_t salt_len,
+    const uint8_t *ikm, size_t ikm_len,
+    const uint8_t *info, size_t info_len,
+    uint8_t *okm, size_t okm_len) {
+    return ama_hkdf_sha2_generic(ama_hkdf_prf_sha256, 32,
+                                 salt, salt_len, ikm, ikm_len,
+                                 info, info_len, okm, okm_len);
+}
+
+AMA_API ama_error_t ama_hkdf_sha384(
+    const uint8_t *salt, size_t salt_len,
+    const uint8_t *ikm, size_t ikm_len,
+    const uint8_t *info, size_t info_len,
+    uint8_t *okm, size_t okm_len) {
+    return ama_hkdf_sha2_generic(ama_hkdf_prf_sha384, 48,
+                                 salt, salt_len, ikm, ikm_len,
+                                 info, info_len, okm, okm_len);
+}
+
+AMA_API ama_error_t ama_hkdf_sha512(
+    const uint8_t *salt, size_t salt_len,
+    const uint8_t *ikm, size_t ikm_len,
+    const uint8_t *info, size_t info_len,
+    uint8_t *okm, size_t okm_len) {
+    return ama_hkdf_sha2_generic(ama_hkdf_prf_sha512, 64,
+                                 salt, salt_len, ikm, ikm_len,
+                                 info, info_len, okm, okm_len);
 }

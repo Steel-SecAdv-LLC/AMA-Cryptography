@@ -193,6 +193,7 @@ class TestModuleExports:
         from ama_cryptography import exceptions as mod
 
         expected = {
+            "AmaCryptographyError",
             "SecurityWarning",
             "PQCUnavailableError",
             "QuantumSignatureUnavailableError",

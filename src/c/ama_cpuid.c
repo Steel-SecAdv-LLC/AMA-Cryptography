@@ -136,6 +136,10 @@ static int has_avx512_zmm_state_cached = 0;
  * reordering, no new call sites in dispatch_init_internal()). */
 static int has_bmi2_cached = 0;
 static int has_adx_cached = 0;
+/* Intel SHA Extensions (SHA-NI): CPUID.(EAX=7,ECX=0):EBX[29].  Gates the
+ * x86 SHA-256 compression kernel (src/c/ama_sha256_ni.c).  Shares cpuid_once
+ * with the fields above (INVARIANT-15 unchanged). */
+static int has_sha_ni_cached = 0;
 
 /* Read XCR0 via XGETBV and confirm the OS has enabled SSE + AVX state.
  *
@@ -244,6 +248,7 @@ static void detect_x86_features(void) {
     has_avx512vl_cached   = (info[1] >> 31) & 1;
     has_vaes_cached       = (info[2] >> 9)  & 1;
     has_vpclmulqdq_cached = (info[2] >> 10) & 1;
+    has_sha_ni_cached     = (info[1] >> 29) & 1;  /* EBX bit 29 — SHA-NI */
     has_avx_osxsave_cached = osxsave ? xcr0_has_avx_state() : 0;
     /* AVX-512 ZMM/opmask save-area state in XCR0 (bits 5+6+7) is a
      * superset gate: only meaningful when the AVX state gate already
@@ -275,6 +280,7 @@ static void detect_x86_features(void) {
         has_avx512vl_cached   = (ebx >> 31) & 1;
         has_vaes_cached       = (ecx >> 9)  & 1;
         has_vpclmulqdq_cached = (ecx >> 10) & 1;
+        has_sha_ni_cached     = (ebx >> 29) & 1;  /* EBX bit 29 — SHA-NI */
     }
     has_avx_osxsave_cached = osxsave ? xcr0_has_avx_state() : 0;
     has_avx512_zmm_state_cached =
@@ -420,6 +426,17 @@ int ama_has_adx(void) {
     return has_adx_cached;
 }
 
+int ama_has_sha_ni(void) {
+    AMA_CALL_ONCE(cpuid_once, detect_x86_features);
+    /* SHA-NI operates on XMM registers with legacy SSE encoding; the SSE
+     * XCR0 state bit is architecturally always enabled on any OS that runs
+     * 64-bit code, so no additional XGETBV gate is required. */
+    return has_sha_ni_cached;
+}
+
+/* SHA-256 ARM Crypto Extension probe — always 0 on x86. */
+int ama_has_arm_sha2(void) { return 0; }
+
 int ama_cpuid_has_x25519_mulx(void) {
     /* Bundle gate for the in-house MULX+ADX X25519 fe64 kernel
      * (src/c/internal/ama_x25519_fe64_mulx.c).  All getters share the
@@ -458,6 +475,7 @@ static int has_arm_aes_cached = 0;
 static int has_arm_pmull_cached = 0;
 static int has_arm_neon_cached = 0;
 static int has_arm_sve2_cached = 0;
+static int has_arm_sha2_cached = 0;
 
 #if defined(__linux__)
 #include <sys/auxv.h>
@@ -466,6 +484,9 @@ static int has_arm_sve2_cached = 0;
 #endif
 #ifndef HWCAP_PMULL
 #define HWCAP_PMULL (1 << 4)
+#endif
+#ifndef HWCAP_SHA2
+#define HWCAP_SHA2 (1 << 6)
 #endif
 #ifndef AT_HWCAP2
 #define AT_HWCAP2 26
@@ -478,6 +499,8 @@ static void detect_arm_features(void) {
     unsigned long hwcap = getauxval(AT_HWCAP);
     has_arm_aes_cached = (hwcap & HWCAP_AES) ? 1 : 0;
     has_arm_pmull_cached = (hwcap & HWCAP_PMULL) ? 1 : 0;
+    /* ARMv8 SHA-256 Crypto Extension (vsha256hq_u32 / vsha256su0q_u32 ...) */
+    has_arm_sha2_cached = (hwcap & HWCAP_SHA2) ? 1 : 0;
     /* NEON is mandatory on AArch64 */
     has_arm_neon_cached = 1;
     /* SVE2 detection via AT_HWCAP2 */
@@ -505,6 +528,13 @@ static void detect_arm_features(void) {
     } else {
         has_arm_pmull_cached = 1;
     }
+    val = 0;
+    len = sizeof(val);
+    if (sysctlbyname("hw.optional.arm.FEAT_SHA256", &val, &len, NULL, 0) == 0) {
+        has_arm_sha2_cached = val;
+    } else {
+        has_arm_sha2_cached = 1;  /* every Apple Silicon core ships FEAT_SHA256 */
+    }
     has_arm_neon_cached = 1;
     /* Apple Silicon does not support SVE2 as of M4 */
     has_arm_sve2_cached = 0;
@@ -514,6 +544,7 @@ static void detect_arm_features(void) {
 static void detect_arm_features(void) {
     has_arm_aes_cached = 0;
     has_arm_pmull_cached = 0;
+    has_arm_sha2_cached = 0;
     has_arm_neon_cached = 0;
     has_arm_sve2_cached = 0;
 }
@@ -552,6 +583,14 @@ int ama_has_arm_sve2(void) {
     return has_arm_sve2_cached;
 }
 
+int ama_has_arm_sha2(void) {
+    AMA_CALL_ONCE(arm_once, detect_arm_features);
+    return has_arm_sha2_cached;
+}
+
+/* Intel SHA-NI probe — always 0 on AArch64. */
+int ama_has_sha_ni(void) { return 0; }
+
 int ama_cpuid_has_arm_aes(void) {
     /* Bundle gate for the NEON AES-GCM kernel
      * (src/c/neon/ama_aes_gcm_neon.c).  Returns 1 only when both
@@ -580,10 +619,12 @@ int ama_cpuid_has_vaes_aesgcm(void) { return 0; }
 int ama_has_bmi2(void) { return 0; }
 int ama_has_adx(void) { return 0; }
 int ama_cpuid_has_x25519_mulx(void) { return 0; }
+int ama_has_sha_ni(void) { return 0; }
 int ama_has_arm_aes(void) { return 0; }
 int ama_has_arm_pmull(void) { return 0; }
 int ama_has_arm_neon(void) { return 0; }
 int ama_has_arm_sve2(void) { return 0; }
+int ama_has_arm_sha2(void) { return 0; }
 int ama_cpuid_has_arm_aes(void) { return 0; }
 
 #endif

@@ -30,15 +30,11 @@ Usage:
 
 from __future__ import annotations
 
-# `from __future__ import annotations` (above) makes every annotation in
-# this module a lazy string at parse time, so the PEP 604 ``X | None``
-# syntax used in def signatures below parses fine on Python 3.9 even
-# though that release predates PEP 604's runtime support.  Ruff's UP045
-# rule actively prefers this form across the rest of the project, so
-# downgrading to ``Optional[str]`` would create cross-rule churn (the
-# original PR review suggestion mistakenly flagged this as a 3.9
-# SyntaxError; from __future__ annotations defers evaluation, the
-# parser only needs to recognise the syntax — which it does in 3.9).
+# The PEP 604 ``X | None`` union syntax in the def signatures below is
+# natively supported at this project's >=3.10 floor.  Ruff's UP045 rule
+# prefers this form across the rest of the project, so it is used here for
+# consistency; ``from __future__ import annotations`` (above) additionally
+# keeps every annotation a lazy string at parse time.
 
 import argparse
 import datetime as _dt

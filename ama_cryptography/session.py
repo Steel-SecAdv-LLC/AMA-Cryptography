@@ -41,7 +41,10 @@ REPLAY_WINDOW_SIZE = 256
 MAX_SESSIONS = 1024  # prevent unbounded memory growth
 
 
-class SessionError(Exception):
+from ama_cryptography.exceptions import AmaCryptographyError
+
+
+class SessionError(AmaCryptographyError):
     """Base exception for session management errors."""
 
     pass

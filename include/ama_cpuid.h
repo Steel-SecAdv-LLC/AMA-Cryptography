@@ -267,10 +267,34 @@ int ama_has_adx(void);
 int ama_cpuid_has_x25519_mulx(void);
 
 /**
+ * @brief Check for Intel SHA Extensions (SHA-NI) support.
+ *
+ * CPUID.(EAX=7,ECX=0):EBX[29].  Gates the x86 SHA-256 compression kernel
+ * (src/c/ama_sha256_ni.c) that accelerates every SHA-256 consumer:
+ * HMAC-SHA-256, HKDF-SHA-256, SPHINCS+/SLH-DSA-SHA2, and BIP32.  SHA-NI
+ * uses legacy-SSE-encoded XMM ops, so no XCR0 SIMD-state gate is required.
+ *
+ * @return 1 if SHA-NI is reported by CPUID, 0 otherwise.  Cached after
+ *         first call.  Always 0 on non-x86 targets.
+ */
+int ama_has_sha_ni(void);
+
+/**
  * @brief Check for ARMv8 AES Crypto Extension support.
  * @return 1 if ARM AES is available, 0 otherwise. Cached after first call.
  */
 int ama_has_arm_aes(void);
+
+/**
+ * @brief Check for ARMv8 SHA-256 Crypto Extension support (FEAT_SHA256).
+ *
+ * Gates the AArch64 SHA-256 compression kernel (ama_sha256_compress_neon in
+ * src/c/neon/ama_sphincs_neon.c) for the general dispatched SHA-256 path.
+ *
+ * @return 1 if ARM SHA2 is available, 0 otherwise. Cached after first call.
+ *         Always 0 on non-ARM targets.
+ */
+int ama_has_arm_sha2(void);
 
 /**
  * @brief Check for ARMv8 PMULL (polynomial multiply) support.

@@ -823,3 +823,148 @@ class TestSLHDSA_SHAKE_128s_ACVP:
             assert slhdsa_verify(
                 msg, sig, pk, ctx, param_set="SHAKE-128s"
             ), f"NIST sig tc{v['tcId']} did not verify under AMA verifier"
+
+
+class TestSLHDSA_SHA2_256f_ACVP_sigGen:
+    """NIST ACVP sigGen vectors for the production SLH-DSA-SHA2-256f param set.
+
+    Vectors: ``tests/kat/fips205/SLH-DSA-SHA2-256f-sigGen-FIPS205.json`` — four
+    external/pure NIST ACVP-Server ``v1.1.0.42`` vectors (2 deterministic,
+    2 hedged), each carrying full sk / message / context / signature (plus
+    ``additionalRandomness`` for hedged).
+
+    The native SHA2-256f signer is byte-identical to the FIPS 205 / NIST ACVP
+    reference for both the deterministic and hedged interfaces (see
+    ``test_acvp_siggen_byte_exact``), matching SLH-DSA-SHAKE-128s.  Signing uses
+    the FIPS 205 §4.2 WOTS_PRF / FORS_PRF address types for secret-value
+    derivation; the earlier divergence in the FORS / WOTS+ / hypertree body came
+    from reusing the chain/tree address types there and was corrected in the
+    native ``ama_slhdsa.c`` / ``ama_sphincs.c`` signers.
+    """
+
+    VECTORS_PATH = (
+        Path(__file__).parent / "kat" / "fips205" / "SLH-DSA-SHA2-256f-sigGen-FIPS205.json"
+    )
+
+    @pytest.fixture(scope="class")
+    def vectors(self) -> list[dict[str, Any]]:
+        if not self.VECTORS_PATH.exists():
+            pytest.skip(f"NIST ACVP SLH-DSA-SHA2-256f vectors not present at {self.VECTORS_PATH}")
+        with open(self.VECTORS_PATH) as f:
+            data = json.load(f)
+        vectors: list[dict[str, Any]] = data["vectors"]
+        if not vectors:
+            pytest.skip("No SLH-DSA-SHA2-256f vectors in JSON")
+        return vectors
+
+    @staticmethod
+    def _produce(v: dict[str, Any]) -> bytes:
+        """Reproduce the signature for a vector via the byte-exact ACVP interface."""
+        from ama_cryptography.pqc_backends import (
+            slhdsa_sign_deterministic,
+            slhdsa_sign_internal,
+        )
+
+        sk = bytes.fromhex(v["sk"])
+        msg = bytes.fromhex(v["message"])
+        ctx = bytes.fromhex(v.get("context", ""))
+        if v.get("deterministic"):
+            return slhdsa_sign_deterministic(msg, sk, ctx, param_set="SHA2-256f")
+        # Hedged: replay NIST additionalRandomness through the internal interface
+        # after applying the FIPS 205 §10.2 context wrapper (the M' the public
+        # sign() would build).
+        addrnd = bytes.fromhex(v["additionalRandomness"])
+        wrapped = b"\x00" + bytes([len(ctx)]) + ctx + msg
+        return slhdsa_sign_internal(wrapped, sk, addrnd, param_set="SHA2-256f")
+
+    def test_size_constants(self) -> None:
+        from ama_cryptography.pqc_backends import (
+            SLHDSA_SHA2_256F_PUBLIC_KEY_BYTES,
+            SLHDSA_SHA2_256F_SECRET_KEY_BYTES,
+            SLHDSA_SHA2_256F_SIGNATURE_BYTES,
+        )
+
+        assert SLHDSA_SHA2_256F_PUBLIC_KEY_BYTES == 64
+        assert SLHDSA_SHA2_256F_SECRET_KEY_BYTES == 128
+        assert SLHDSA_SHA2_256F_SIGNATURE_BYTES == 49856
+
+    def test_round_trip(self) -> None:
+        """SHA2-256f fresh keygen -> sign -> verify holds; negatives reject."""
+        from ama_cryptography.pqc_backends import (
+            generate_slhdsa_keypair,
+            slhdsa_sign,
+            slhdsa_verify,
+        )
+
+        kp = generate_slhdsa_keypair("SHA2-256f")
+        assert len(kp.public_key) == 64 and len(kp.secret_key) == 128
+        sig = slhdsa_sign(b"hello SHA2-256f", kp.secret_key, b"", param_set="SHA2-256f")
+        assert len(sig) == 49856
+        assert slhdsa_verify(b"hello SHA2-256f", sig, kp.public_key, b"", param_set="SHA2-256f")
+        assert not slhdsa_verify(b"different", sig, kp.public_key, b"", param_set="SHA2-256f")
+        assert not slhdsa_verify(
+            b"hello SHA2-256f", sig, kp.public_key, b"x", param_set="SHA2-256f"
+        )
+        kp2 = generate_slhdsa_keypair("SHA2-256f")
+        assert not slhdsa_verify(
+            b"hello SHA2-256f", sig, kp2.public_key, b"", param_set="SHA2-256f"
+        )
+
+    def test_acvp_siggen_randomizer_byte_exact(self, vectors: list[dict[str, Any]]) -> None:
+        """The 32-byte message randomizer R IS byte-exact to NIST for both modes.
+
+        R = PRF_msg(SK.prf, opt_rand, M') — proves the SHA-512-based message
+        digest path of SHA2-256f matches FIPS 205 exactly (the divergence is
+        strictly downstream, in the FORS/WOTS+/hypertree body).
+        """
+        det = hedged = 0
+        for v in vectors:
+            produced = self._produce(v)
+            expected = bytes.fromhex(v["signature"])
+            assert len(produced) == 49856, f"tc{v['tcId']}: sig length"
+            assert produced[:32] == expected[:32], f"tc{v['tcId']}: randomizer R differs from NIST"
+            if v.get("deterministic"):
+                det += 1
+            else:
+                hedged += 1
+        assert det >= 1 and hedged >= 1
+
+    def test_acvp_siggen_deterministic_reproducible(self, vectors: list[dict[str, Any]]) -> None:
+        """Signing is byte-reproducible for fixed inputs (deterministic + fixed addrnd)."""
+        for v in vectors:
+            assert self._produce(v) == self._produce(v), f"tc{v['tcId']}: signing not reproducible"
+
+    def test_acvp_siggen_verify_round_trip(self, vectors: list[dict[str, Any]]) -> None:
+        """Every NIST signature verifies under the AMA verifier (verifier interop)."""
+        from ama_cryptography.pqc_backends import slhdsa_verify
+
+        for v in vectors:
+            sk = bytes.fromhex(v["sk"])
+            pk = sk[64:]  # PK.seed || PK.root for n=32 (FIPS 205 §10.1)
+            msg = bytes.fromhex(v["message"])
+            ctx = bytes.fromhex(v.get("context", ""))
+            sig = bytes.fromhex(v["signature"])
+            assert slhdsa_verify(
+                msg, sig, pk, ctx, param_set="SHA2-256f"
+            ), f"NIST sig tc{v['tcId']} did not verify under AMA verifier"
+
+    def test_acvp_siggen_byte_exact(self, vectors: list[dict[str, Any]]) -> None:
+        """FULL byte-exact NIST ACVP sigGen contract for SHA2-256f.
+
+        Mirrors ``TestSLHDSA_SHAKE_128s_ACVP.test_acvp_siggen_byte_exact``: every
+        NIST ACVP signature (deterministic and hedged) is reproduced byte-for-byte
+        through the internal / deterministic signing interfaces.
+        """
+        det = hedged = 0
+        for v in vectors:
+            produced = self._produce(v)
+            expected = bytes.fromhex(v["signature"])
+            assert produced == expected, (
+                f"SLH-DSA-SHA2-256f sigGen tc{v['tcId']}: "
+                "AMA signature differs from NIST reference."
+            )
+            if v.get("deterministic"):
+                det += 1
+            else:
+                hedged += 1
+        assert det >= 1 and hedged >= 1

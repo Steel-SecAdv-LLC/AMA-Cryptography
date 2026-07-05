@@ -477,7 +477,12 @@ class TestLargeSequenceGapDoS:
         rw.check_and_accept(1_000_000)
         elapsed = time.perf_counter() - start
 
-        assert elapsed < 0.01, f"Large gap took {elapsed:.4f}s — should be <10ms (O(1))"
+        # Guards against an accidental O(gap) blow-up (e.g. iterating/allocating
+        # over the ~10^6 sequence-number gap), which would take seconds.  The
+        # budget is deliberately generous (1s, ~100x a true O(1) op) so it does
+        # not flake on a loaded CI runner; fine-grained constant-time rigor is
+        # owned by the dudect harness, not this wall-clock proxy.
+        assert elapsed < 1.0, f"Large gap took {elapsed:.4f}s — expected O(1), not O(gap)"
 
     def test_replay_window_base_advances_correctly(self) -> None:
         """After exceeding window capacity, base advances and seen set stays bounded."""
@@ -493,7 +498,7 @@ class TestLargeSequenceGapDoS:
 
     def test_secure_session_large_gap(self) -> None:
         """SecureSession handles large sequence gap without DoS."""
-        from ama_cryptography.session import ReplayWindow
+        from ama_cryptography.session import REPLAY_WINDOW_SIZE, ReplayWindow
 
         rw = ReplayWindow()
         # Accept 0, 1, 2, then jump to 1_000_000
@@ -502,10 +507,18 @@ class TestLargeSequenceGapDoS:
         rw.check_and_accept(2)
 
         start = time.perf_counter()
+        # Accept is implicit: check_and_accept returns None and raises only on
+        # replay/too-old.  Reaching the next line means the large gap accepted.
         rw.check_and_accept(1_000_000)
         elapsed = time.perf_counter() - start
 
-        assert elapsed < 0.01
+        # Primary assertion is STRUCTURAL, not timing: the anti-DoS guarantee is
+        # that a huge gap does not grow the seen-set unbounded (it stays within
+        # the window).  The wall-clock check is a generous secondary guard
+        # against an O(gap) regression, not a constant-time measurement.
+        assert 1_000_000 in rw._seen
+        assert len(rw._seen) <= REPLAY_WINDOW_SIZE
+        assert elapsed < 1.0, f"Large gap took {elapsed:.4f}s — expected O(1), not O(gap)"
 
 
 # ===========================================================================

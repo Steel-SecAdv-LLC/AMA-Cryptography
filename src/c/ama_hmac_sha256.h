@@ -31,7 +31,7 @@
  * builds of the shared library — without it the symbol is hidden
  * from libama_cryptography.dll's export table and the Python
  * binding's ``lib.ama_hmac_sha256`` lookup raises AttributeError at
- * import time, which is how every `Python {3.9..3.13} on
+ * import time, which is how every `Python {3.10..3.13} on
  * windows-latest` lane on PR #326 (and the parallel
  * `Test windows-latest / Python ...` lane) regressed from green on
  * `ef4b561` to red on `58e7a2d`+ once the v3.2.0 Python binding
