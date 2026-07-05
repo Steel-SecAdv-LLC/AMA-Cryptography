@@ -122,10 +122,23 @@ def allow_mock_tsa() -> Generator[None, None, None]:
 
 
 def _hmac_sha256(key: bytes, msg: bytes) -> bytes:
-    """RFC 2104 HMAC-SHA-256 without importing stdlib hmac (INVARIANT-1).
+    """RFC 2104 HMAC-SHA-256.
 
-    Uses hashlib.sha256 directly.  Block size for SHA-256 is 64 bytes.
+    Prefers the native ama_hmac_sha256 kernel (INVARIANT-1: AMA's own HMAC
+    rather than a stdlib-hashlib construction).  Falls back to a pure-Python
+    hashlib construction only when the native backend is unavailable — MockTSA
+    is test-only, so the fallback never runs a production authentication path.
+    Both paths are byte-identical.
     """
+    from ama_cryptography.pqc_backends import (
+        _HMAC_SHA256_NATIVE_AVAILABLE,
+        native_hmac_sha256,
+    )
+
+    if _HMAC_SHA256_NATIVE_AVAILABLE:
+        return native_hmac_sha256(key, msg)
+
+    # Fallback (no native backend): hashlib-only HMAC construction.
     block_size = 64
     if len(key) > block_size:
         key = hashlib.sha256(key).digest()
