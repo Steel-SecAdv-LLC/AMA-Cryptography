@@ -75,6 +75,17 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   3.10+. Python 3.9 is end-of-life in October 2025 and is no longer installed,
   tested, or supported. Consumers on 3.9 must upgrade to 3.10 or newer.
 
+### Dependencies
+- **Rolled the pending Dependabot dependency-group bumps into the release**
+  (supersedes #360 and #361) so 3.3.0 ships current tooling and pinned
+  actions. All are dev/build/CI-only forward bumps — the runtime library keeps
+  zero external dependencies (INVARIANT-1). Python/build/dev: `setuptools`
+  82.0.1→83.0.0, `Cython` 3.2.6→3.2.8, `hypothesis` 6.155.7→6.156.1,
+  `coverage` 7.14.3→7.15.0, `typing_extensions` 4.15.0→4.16.0. SHA-pinned
+  GitHub Actions: `docker/setup-buildx-action`, `docker/login-action`,
+  `docker/build-push-action`, `trufflesecurity/trufflehog` v3.95.6→v3.95.8,
+  and `github/codeql-action` (init + analyze) v4.36.2→v4.36.3.
+
 ### Fixed
 - **SLH-DSA-SHA2-256f signer now byte-exact against FIPS 205 / NIST ACVP.**
   The native SHA-2 signer (now unified in `src/c/ama_slhdsa.c`; see the

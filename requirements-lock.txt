@@ -27,8 +27,8 @@ pytest-benchmark==5.2.3
 pytest-cov==7.1.0
 pytest-timeout==2.4.0
 pytest-xdist==3.8.0
-hypothesis==6.155.7
-coverage==7.14.3
+hypothesis==6.156.1
+coverage==7.15.0
 
 # --- Linting & formatting ---
 black==26.5.1
@@ -64,4 +64,4 @@ pytokens==0.4.1
 rich==15.0.0
 sortedcontainers==2.4.0
 stevedore==5.8.0
-typing_extensions==4.15.0
+typing_extensions==4.16.0
