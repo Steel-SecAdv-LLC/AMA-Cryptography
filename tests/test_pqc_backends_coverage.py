@@ -935,6 +935,37 @@ class TestSHA3Functions:
         result = native_sha3_256(b"")
         assert len(result) == 32
 
+    def test_sha3_512_matches_hashlib(self) -> None:
+        """native_sha3_512 is byte-identical to hashlib.sha3_512 (FIPS 202)."""
+        import hashlib
+
+        from ama_cryptography.pqc_backends import native_sha3_512
+
+        for n in (0, 1, 71, 72, 73, 135, 136, 137, 1000):
+            msg = bytes((i * 13 + 3) & 0xFF for i in range(n))
+            got = native_sha3_512(msg)
+            assert len(got) == 64
+            assert got == hashlib.sha3_512(msg).digest(), f"sha3_512 mismatch len={n}"
+
+    def test_shake_matches_hashlib(self) -> None:
+        """native_shake128/256 are byte-identical to hashlib across the rate
+        boundary and output lengths (FIPS 202 XOF)."""
+        import hashlib
+
+        from ama_cryptography.pqc_backends import native_shake128, native_shake256
+
+        for n in (0, 1, 135, 136, 137, 167, 168, 169, 500):
+            msg = bytes((i * 7 + 1) & 0xFF for i in range(n))
+            for length in (0, 1, 16, 32, 64, 200):
+                assert native_shake128(msg, length) == hashlib.shake_128(msg).digest(length)
+                assert native_shake256(msg, length) == hashlib.shake_256(msg).digest(length)
+
+    def test_sha3_512_deterministic(self) -> None:
+        """native_sha3_512 is deterministic."""
+        from ama_cryptography.pqc_backends import native_sha3_512
+
+        assert native_sha3_512(b"data") == native_sha3_512(b"data")
+
 
 # ===========================================================================
 # Additional Native Functions

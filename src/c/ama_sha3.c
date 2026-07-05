@@ -411,7 +411,7 @@ ama_error_t ama_sha3_512(
  * @param output_len Desired output length
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_shake128(
+AMA_API ama_error_t ama_shake128(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output,
@@ -489,7 +489,7 @@ ama_error_t ama_shake128(
  * @param output_len Desired output length
  * @return AMA_SUCCESS or error code
  */
-ama_error_t ama_shake256(
+AMA_API ama_error_t ama_shake256(
     const uint8_t* input,
     size_t input_len,
     uint8_t* output,

@@ -573,6 +573,11 @@ def _setup_hkdf_sha2_ctypes(lib: ctypes.CDLL) -> bool:
 # SHA3-256 native availability (raw hash, not HMAC)
 _SHA3_256_NATIVE_AVAILABLE = False
 
+# SHA3-512 + SHAKE128/256 native availability (raw hash / XOF, FIPS 202).
+# These C symbols existed but were never surfaced to Python, forcing callers
+# (crypto_api.hash_message, rfc3161_timestamp) onto stdlib hashlib.  Fail-closed.
+_SHA3_EXT_NATIVE_AVAILABLE = False
+
 
 def _setup_sha3_256_ctypes(lib: ctypes.CDLL) -> bool:
     """Configure ctypes for raw SHA3-256 hash (FIPS 202)."""
@@ -584,6 +589,29 @@ def _setup_sha3_256_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_sha3_256.restype = ctypes.c_int
 
+        return True
+    except AttributeError:
+        return False
+
+
+def _setup_sha3_ext_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for SHA3-512 and SHAKE128/256 (FIPS 202)."""
+    try:
+        lib.ama_sha3_512.argtypes = [
+            ctypes.c_char_p,  # input
+            ctypes.c_size_t,  # input_len
+            ctypes.c_char_p,  # output (64 bytes)
+        ]
+        lib.ama_sha3_512.restype = ctypes.c_int
+        for name in ("ama_shake128", "ama_shake256"):
+            fn = getattr(lib, name)
+            fn.argtypes = [
+                ctypes.c_char_p,  # input
+                ctypes.c_size_t,  # input_len
+                ctypes.c_char_p,  # output
+                ctypes.c_size_t,  # output_len
+            ]
+            fn.restype = ctypes.c_int
         return True
     except AttributeError:
         return False
@@ -1031,6 +1059,7 @@ if _native_lib is not None:
     _HKDF_NATIVE_AVAILABLE = _setup_hkdf_ctypes(_native_lib)
     _HKDF_SHA2_NATIVE_AVAILABLE = _setup_hkdf_sha2_ctypes(_native_lib)
     _SHA3_256_NATIVE_AVAILABLE = _setup_sha3_256_ctypes(_native_lib)
+    _SHA3_EXT_NATIVE_AVAILABLE = _setup_sha3_ext_ctypes(_native_lib)
     _HMAC_SHA3_256_NATIVE_AVAILABLE = _setup_hmac_sha3_256_ctypes(_native_lib)
     _HMAC_SHA512_NATIVE_AVAILABLE = _setup_hmac_sha512_ctypes(_native_lib)
     _HMAC_SHA384_NATIVE_AVAILABLE = _setup_hmac_sha384_ctypes(_native_lib)
@@ -3127,6 +3156,89 @@ def native_sha3_256(data: bytes) -> bytes:
         raise RuntimeError(f"SHA3-256 failed (rc={rc})")
 
     return bytes(out_buf)
+
+
+def native_sha3_512(data: bytes) -> bytes:
+    """
+    SHA3-512 via native C implementation (ama_sha3_512).
+
+    FIPS 202 compliant.  INVARIANT-1 compliant — lets callers stop falling
+    back to stdlib `hashlib.sha3_512` for a primitive the native core already
+    provides.  Byte-identical to `hashlib.sha3_512(data).digest()`.
+
+    Args:
+        data: Input bytes to hash.
+
+    Returns:
+        64-byte SHA3-512 digest.
+
+    Raises:
+        RuntimeError: If the native backend is not available.
+    """
+    if _native_lib is None or not _SHA3_EXT_NATIVE_AVAILABLE:
+        raise RuntimeError("SHA3-512 native backend not available. " + _INSTALL_HINT)
+
+    out_buf = ctypes.create_string_buffer(64)
+    rc = _native_lib.ama_sha3_512(data, ctypes.c_size_t(len(data)), out_buf)
+    if rc != 0:
+        raise RuntimeError(f"SHA3-512 failed (rc={rc})")
+    return bytes(out_buf)
+
+
+def _native_shake(fn_name: str, data: bytes, length: int) -> bytes:
+    """Shared body for the SHAKE128/256 one-shot XOF bindings."""
+    if length < 0:
+        raise ValueError(f"SHAKE output length must be >= 0, got {length}")
+    if _native_lib is None or not _SHA3_EXT_NATIVE_AVAILABLE:
+        raise RuntimeError("SHAKE native backend not available. " + _INSTALL_HINT)
+    # Zero-length squeeze matches hashlib.shake_*.digest(0) == b"".  The C
+    # kernel rejects a NULL output pointer, so short-circuit here.
+    if length == 0:
+        return b""
+    out_buf = ctypes.create_string_buffer(length)
+    rc = getattr(_native_lib, fn_name)(
+        data,
+        ctypes.c_size_t(len(data)),
+        out_buf,
+        ctypes.c_size_t(length),
+    )
+    if rc != 0:
+        raise RuntimeError(f"{fn_name} failed (rc={rc})")
+    return bytes(out_buf.raw[:length])
+
+
+def native_shake128(data: bytes, length: int) -> bytes:
+    """
+    SHAKE128 XOF via native C implementation (ama_shake128).
+
+    FIPS 202 compliant.  Byte-identical to
+    `hashlib.shake_128(data).digest(length)`.  INVARIANT-1 compliant.
+
+    Args:
+        data: Input bytes to absorb.
+        length: Desired output length in bytes.
+
+    Returns:
+        `length` bytes of XOF output.
+    """
+    return _native_shake("ama_shake128", data, length)
+
+
+def native_shake256(data: bytes, length: int) -> bytes:
+    """
+    SHAKE256 XOF via native C implementation (ama_shake256).
+
+    FIPS 202 compliant.  Byte-identical to
+    `hashlib.shake_256(data).digest(length)`.  INVARIANT-1 compliant.
+
+    Args:
+        data: Input bytes to absorb.
+        length: Desired output length in bytes.
+
+    Returns:
+        `length` bytes of XOF output.
+    """
+    return _native_shake("ama_shake256", data, length)
 
 
 # ============================================================================

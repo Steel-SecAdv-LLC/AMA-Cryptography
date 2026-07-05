@@ -416,6 +416,32 @@ AMA_API ama_error_t ama_sha3_512(
     uint8_t* output
 );
 
+/**
+ * @brief SHAKE128 / SHAKE256 extendable-output functions (FIPS 202)
+ *
+ * One-shot XOF: absorb `input`, squeeze `output_len` bytes into `output`.
+ * SHAKE128 uses rate 168, SHAKE256 rate 136.  Byte-identical to
+ * hashlib.shake_128(input).digest(output_len) / shake_256(...).
+ *
+ * @param input      Input data (may be NULL iff input_len == 0)
+ * @param input_len  Input length in bytes
+ * @param output     Output buffer of at least output_len bytes
+ * @param output_len Desired output length in bytes
+ * @return AMA_SUCCESS or an error code
+ */
+AMA_API ama_error_t ama_shake128(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output,
+    size_t output_len
+);
+AMA_API ama_error_t ama_shake256(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output,
+    size_t output_len
+);
+
 /* ============================================================================
  * STREAMING SHA3-256 API (init/update/final)
  * Enables hashing of large data streams without loading everything into memory
