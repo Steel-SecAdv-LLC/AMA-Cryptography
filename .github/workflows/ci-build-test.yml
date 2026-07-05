@@ -240,6 +240,18 @@ jobs:
         # than the legacy requirements-dev.txt.  Matches ci.yml::test.
         run: pip install -e ".[dev]"
 
+      - name: Install differential/interop reference libraries (test-only)
+        # Independent third-party implementations that let the cross-library
+        # differential tests (tests/test_differential.py and the PyCA-interop
+        # tests) actually EXECUTE rather than skip — previously they were dead
+        # in every CI lane because these libs were never installed.  They are
+        # test-only references, NOT a runtime dependency (INVARIANT-1 forbids
+        # product code importing them; the invariant lint enforces that only
+        # ama_cryptography/*.py stays clean).  Linux-gated to avoid cross-OS
+        # wheel flakiness on the primary differential lane.
+        if: runner.os == 'Linux'
+        run: pip install cryptography pynacl pycryptodome
+
       - name: Verify module integrity
         run: python -m ama_cryptography.integrity --verify
 

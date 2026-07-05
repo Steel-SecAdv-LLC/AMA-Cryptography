@@ -687,6 +687,91 @@ class TestHMACFunctions:
         result = native_hmac_sha512(b"key", b"message")
         assert len(result) == 64
 
+    def test_native_hmac_sha512_rfc4231(self) -> None:
+        """native_hmac_sha512 matches every RFC 4231 SHA-512 KAT (test cases
+        1-7).  Case 5 (§4.6) publishes a 128-bit-truncated tag, so it is checked
+        against the leftmost 16 bytes; cases 6/7 use 131-byte keys (> the
+        128-byte block) exercising the RFC 2104 §2 oversized-key path."""
+        from ama_cryptography.pqc_backends import native_hmac_sha512
+
+        # (key, data, expected_hex, truncate_or_None)
+        vectors = [
+            (
+                bytes.fromhex("0b" * 20),
+                b"Hi There",
+                "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cde"
+                "daa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854",
+                None,
+            ),
+            (
+                b"Jefe",
+                b"what do ya want for nothing?",
+                "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea250554"
+                "9758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737",
+                None,
+            ),
+            (
+                bytes.fromhex("aa" * 20),
+                bytes.fromhex("dd" * 50),
+                "fa73b0089d56a284efb0f0756c890be9b1b5dbdd8ee81a3655f83e33b2279d39"
+                "bf3e848279a722c806b485a47e67c807b946a337bee8942674278859e13292fb",
+                None,
+            ),
+            (
+                bytes.fromhex("0102030405060708090a0b0c0d0e0f10111213141516171819"),
+                bytes.fromhex("cd" * 50),
+                "b0ba465637458c6990e5a8c5f61d4af7e576d97ff94b872de76f8050361ee3db"
+                "a91ca5c11aa25eb4d679275cc5788063a5f19741120c4f2de2adebeb10a298dd",
+                None,
+            ),
+            (
+                bytes.fromhex("0c" * 20),
+                b"Test With Truncation",
+                "415fad6271580a531d4179bc891d87a6",
+                16,
+            ),
+            (
+                bytes.fromhex("aa" * 131),
+                b"Test Using Larger Than Block-Size Key - Hash Key First",
+                "80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f352"
+                "6b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598",
+                None,
+            ),
+            (
+                bytes.fromhex("aa" * 131),
+                b"This is a test using a larger than block-size key and a "
+                b"larger than block-size data. The key needs to be hashed "
+                b"before being used by the HMAC algorithm.",
+                "e37b6a775dc87dbaa4dfa9f96e5e3ffddebd71f8867289865df5a32d20cdc944"
+                "b6022cac3c4982b10d5eeb55c3e4de15134676fb6de0446065c97440fa8c6a58",
+                None,
+            ),
+        ]
+        for i, (key, data, expected_hex, trunc) in enumerate(vectors, start=1):
+            expected = bytes.fromhex(expected_hex)
+            tag = native_hmac_sha512(key, data)
+            got = tag[:trunc] if trunc is not None else tag
+            assert got == expected, f"RFC 4231 SHA-512 test case {i} mismatch"
+
+    def test_native_hmac_sha512_matches_stdlib(self) -> None:
+        """native_hmac_sha512 is byte-identical to stdlib across key/message
+        sizes straddling the 128-byte block boundary."""
+        import hashlib
+        import hmac
+
+        from ama_cryptography.pqc_backends import native_hmac_sha512
+
+        cases = [
+            (b"", b""),
+            (b"key", b"message"),
+            (b"k" * 127, b"m" * 128),
+            (b"k" * 128, b"m" * 129),
+            (b"k" * 129, b"m" * 256),
+            (b"k" * 300, b"m" * 1024),
+        ]
+        for key, msg in cases:
+            assert native_hmac_sha512(key, msg) == hmac.new(key, msg, hashlib.sha512).digest()
+
     def test_native_hmac_sha256_shape(self) -> None:
         """native_hmac_sha256 produces a 32-byte tag."""
         from ama_cryptography.pqc_backends import native_hmac_sha256

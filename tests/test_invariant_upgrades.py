@@ -290,6 +290,48 @@ class TestConstantTimeRequirements:
 
         assert not violations, f"INVARIANT-1/12: stdlib hmac imported in: {violations}"
 
+    def test_no_third_party_crypto_imports_in_product_code(self) -> None:
+        """INVARIANT-1: no third-party crypto library may be imported by product
+        code (ama_cryptography/*.py).
+
+        AMA ships its own primitives; importing PyCA cryptography, PyNaCl,
+        pycryptodome, or pyOpenSSL in the runtime package would violate the
+        zero-external-crypto-dependency invariant.  The stdlib-``hmac`` check
+        above closed only one bypass class; this closes the other the audit
+        flagged — a module could previously ``import cryptography`` with no
+        automated tripwire (``.semgrep.yml`` and the test suite did not ban it).
+
+        Test code (tests/) is exempt: differential/interop tests legitimately
+        import these libraries via the ``[benchmark]`` extra to cross-check AMA
+        output against an independent implementation.
+        """
+        import ast
+
+        # Top-level module names that are third-party crypto providers.
+        banned = {"cryptography", "nacl", "Crypto", "Cryptodome", "OpenSSL"}
+        repo_root = Path(__file__).resolve().parent.parent
+        crypto_dir = repo_root / "ama_cryptography"
+
+        violations: list[str] = []
+        for py_file in sorted(crypto_dir.rglob("*.py")):
+            try:
+                tree = ast.parse(py_file.read_text(encoding="utf-8"))
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.split(".")[0] in banned:
+                            violations.append(f"{py_file.name}:{node.lineno} ({alias.name})")
+                elif isinstance(node, ast.ImportFrom):
+                    root = (node.module or "").split(".")[0]
+                    if root in banned:
+                        violations.append(f"{py_file.name}:{node.lineno} ({node.module})")
+
+        assert not violations, (
+            "INVARIANT-1: third-party crypto library imported in product code: " f"{violations}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Upgrade C — INVARIANT-13: No Unjustified Static-Analysis Suppressions

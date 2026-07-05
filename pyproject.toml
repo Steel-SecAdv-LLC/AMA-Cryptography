@@ -462,6 +462,13 @@ omit = [
 
 [tool.coverage.report]
 precision = 2
+# Coverage floor: fail the build if package coverage regresses below this.
+# Set as a conservative catastrophic-regression catch (well below the actual
+# figure the CI suite achieves), NOT an aspirational target — ratchet it up
+# toward the measured value in a dedicated commit rather than letting coverage
+# silently drift down.  Previously there was no gate at all, so a large drop
+# could land unnoticed (only reported to Codecov).
+fail_under = 60
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
