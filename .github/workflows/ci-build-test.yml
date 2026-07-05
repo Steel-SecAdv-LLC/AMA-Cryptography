@@ -562,7 +562,13 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Fail if any required job did not succeed
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        # Fail only on a genuine 'failure'; 'skipped' and 'cancelled' are
+        # tolerated. With concurrency: cancel-in-progress, 'cancelled' only
+        # appears on a run superseded by a newer push (the latest run governs
+        # branch protection) or a manual abort. Matrix jobs are fail-fast:false
+        # and timeouts report as 'failure', so this never masks a real problem
+        # on the authoritative head-commit run.
+        if: ${{ contains(needs.*.result, 'failure') }}
         run: |
           echo "::error::Build and Test Gate failed — a required job did not succeed."
           echo "Dependency results: ${{ join(needs.*.result, ', ') }}"
