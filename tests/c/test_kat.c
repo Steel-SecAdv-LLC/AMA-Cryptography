@@ -22,8 +22,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include <openssl/evp.h>
-#include <openssl/aes.h>
 
 /* ============================================================================
  * TEST INFRASTRUCTURE
@@ -70,17 +68,19 @@ typedef struct {
 static nist_drbg_ctx g_drbg;
 
 /**
- * AES-256-ECB encrypt a single 16-byte block
+ * AES-256-ECB encrypt a single 16-byte block.
+ *
+ * Uses AMA's own constant-time AES-256 (the same primitive that backs
+ * production AES-256-GCM) — no third-party crypto. AES-256-ECB on one block
+ * is deterministic, so the NIST DRBG stream this drives is byte-identical to
+ * any conformant AES-256 and the reproduced KAT vectors are unchanged.
  */
 static void aes256_ecb_encrypt(const uint8_t key[32], const uint8_t in[16],
                                 uint8_t out[16]) {
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    int outlen = 0;
-    EVP_EncryptInit_ex(ctx, EVP_aes_256_ecb(), NULL, key, NULL);
-    EVP_CIPHER_CTX_set_padding(ctx, 0);
-    EVP_EncryptUpdate(ctx, out, &outlen, in, 16);
-    EVP_EncryptFinal_ex(ctx, out + outlen, &outlen);
-    EVP_CIPHER_CTX_free(ctx);
+    uint8_t round_keys[240];
+    ama_aes256_key_expansion_consttime(key, round_keys);
+    ama_aes256_encrypt_block_consttime(round_keys, in, out);
+    ama_secure_memzero(round_keys, sizeof(round_keys));
 }
 
 /**
@@ -914,22 +914,6 @@ static int test_kyber_compress_roundtrip(void) {
 int main(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
-
-#if defined(__has_feature)
-#  if __has_feature(memory_sanitizer)
-    /* MemorySanitizer requires EVERY linked object to be MSan-instrumented
-     * (including libc / libcrypto).  This test links the system OpenSSL
-     * (OpenSSL::Crypto) for its NIST AES-256-CTR DRBG, and MSan reports
-     * false-positive uninitialised reads inside libcrypto's own lazy
-     * OPENSSL_init_crypto / config-file load (BIO_new_file) — not in AMA code.
-     * The AMA cryptographic paths this harness covers (Kyber / Dilithium /
-     * SPHINCS+) are exercised uninit-read-clean under MSan by the other C
-     * tests; skip the OpenSSL-linked harness rather than chase an
-     * uninstrumented-libcrypto false positive. */
-    printf("SKIP: test_kat links uninstrumented OpenSSL — incompatible with MemorySanitizer\n");
-    return 77;
-#  endif
-#endif
 
     /* Disable output buffering for real-time progress */
     setbuf(stdout, NULL);

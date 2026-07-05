@@ -190,19 +190,19 @@ endif()
 
 # PQC Known Answer Tests (KAT) and debug tests
 if(AMA_USE_NATIVE_PQC)
-    # test_kat uses OpenSSL EVP for NIST AES-256-CTR DRBG to reproduce KAT vectors
-    if(OPENSSL_FOUND)
+    # test_kat reproduces NIST PQC KAT vectors via an AES-256-CTR DRBG driven
+    # entirely by AMA's own constant-time AES-256 (ama_aes256_*_consttime) — no
+    # third-party crypto, so it is fully sanitizer-instrumented (MSan-clean).
+    # Those symbols are only exported when the constant-time backend is active,
+    # so gate on AMA_AES_CONSTTIME exactly like test_aes_bitsliced above.
+    if(AMA_AES_CONSTTIME)
         add_executable(test_kat test_kat.c)
-        target_link_libraries(test_kat ama_cryptography_test OpenSSL::Crypto)
+        target_link_libraries(test_kat ama_cryptography_test)
         add_test(NAME test_kat COMMAND test_kat
                  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-        # test_kat self-skips (exit 77) under MemorySanitizer: it links the
-        # system OpenSSL, which is not MSan-instrumented, so libcrypto's own
-        # lazy-init emits false-positive uninitialised reads.  Surface as
-        # Skipped rather than Failed on the MSan lane.
-        set_tests_properties(test_kat PROPERTIES SKIP_RETURN_CODE 77)
     else()
-        message(STATUS "OpenSSL not found — skipping test_kat (NIST KAT vectors)")
+        message(STATUS "AMA_AES_CONSTTIME=OFF — skipping test_kat "
+                       "(native AES-256 DRBG symbols not exported)")
     endif()
 
     # Kyber debug / CPA isolation tests (run manually or via ctest)
