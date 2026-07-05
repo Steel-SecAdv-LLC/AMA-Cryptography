@@ -36,7 +36,7 @@
 **Author/Inventor:** Andrew E. A.
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
-**Version:** 3.2.0 (current branch includes unreleased changes)
+**Version:** 3.3.0
 **AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
@@ -260,8 +260,7 @@ NIST-standardized post-quantum algorithms:
 - `ama_aes_gcm.c`: AES-256-GCM authenticated encryption (NIST SP 800-38D)
 - `ama_kyber.c`: ML-KEM-1024 full native (NTT, IND-CCA2, Fujisaki-Okamoto transform)
 - `ama_dilithium.c`: ML-DSA-65 full native (NTT q=8380417, rejection sampling, constant-time)
-- `ama_sphincs.c`: legacy SLH-DSA-SHA2-256f-compatible API surface (SPHINCS+ lineage)
-- `ama_slhdsa.c`: parameterized SLH-DSA implementation for SHA2-256f and SHAKE-128s (FIPS 205)
+- `ama_slhdsa.c`: parameterized SLH-DSA implementation for SHA2-256f and SHAKE-128s (FIPS 205); also provides the legacy SLH-DSA-SHA2-256f-compatible `ama_sphincs_*` API surface (SPHINCS+ lineage)
 - `ama_consttime.c`: Constant-time utilities (memcmp, memzero, swap, lookup, copy)
 - `ama_cpuid.c`: CPU feature detection (AES-NI, PCLMULQDQ, AVX2, AVX-512F/VL, BMI2, ADX, VAES, VPCLMULQDQ, SHA-NI, NEON, SVE2 — with bundle gates `ama_cpuid_has_vaes_aesgcm()`, `ama_cpuid_has_avx512_keccak()`, `ama_cpuid_has_x25519_mulx()`)
 - `ama_secure_memory.c`: Secure memory zeroing and page locking (mlock/munlock)

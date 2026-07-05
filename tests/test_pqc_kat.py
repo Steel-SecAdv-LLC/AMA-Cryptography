@@ -839,7 +839,7 @@ class TestSLHDSA_SHA2_256f_ACVP_sigGen:
     the FIPS 205 §4.2 WOTS_PRF / FORS_PRF address types for secret-value
     derivation; the earlier divergence in the FORS / WOTS+ / hypertree body came
     from reusing the chain/tree address types there and was corrected in the
-    native ``ama_slhdsa.c`` / ``ama_sphincs.c`` signers.
+    native ``ama_slhdsa.c`` signer.
     """
 
     VECTORS_PATH = (

@@ -208,6 +208,35 @@ layout across systems, the result dict fields can be concatenated as
 `nonce || ciphertext || tag`; unpack them symmetrically on the
 receive side.
 
+### MAC and KDF helpers
+
+Two module-level convenience dispatchers wrap the native C MAC/KDF kernels
+with a one-call surface. Both are native-only (INVARIANT-1 — no stdlib
+`hmac`/`hashlib`): an unsupported `algorithm` raises **`ValueError`**, and a
+missing native backend raises **`RuntimeError`**.
+
+```python
+from ama_cryptography.crypto_api import quick_hmac, quick_hkdf
+
+# HMAC (RFC 2104 / FIPS 198-1). algorithm ∈ {"sha256", "sha384", "sha512",
+# "sha3-256"}; digest length is 32 / 48 / 64 / 32 bytes respectively.
+tag: bytes = quick_hmac(key: bytes, message: bytes, algorithm: str = "sha256")
+
+# HKDF (RFC 5869). "sha256"/"sha384"/"sha512" are interoperable HKDF-SHA-2
+# (TLS 1.3 / HPKE); "sha3-256" is AMA's default HMAC-SHA3-256 HKDF.
+okm: bytes = quick_hkdf(
+    ikm: bytes,
+    length: int,
+    salt: bytes | None = None,
+    info: bytes = b"",
+    algorithm: str = "sha256",
+)
+```
+
+These dispatch to the native `native_hmac_*` / `native_hkdf_*` interfaces in
+[`pqc_backends`](#pqc_backends); use those directly when you want to pin one
+algorithm without the string dispatch.
+
 ---
 
 ## `pqc_backends`
@@ -285,6 +314,39 @@ sig: bytes = sphincs_sign(message: bytes, secret_key: bytes) -> bytes
 
 # Verify a signature
 valid: bool = sphincs_verify(message: bytes, signature: bytes, public_key: bytes) -> bool
+```
+
+#### Native hashes, HMAC, and HKDF
+
+Direct one-call bindings to the native C kernels. All are INVARIANT-1
+compliant (no stdlib `hashlib` / `hmac`) and raise **`RuntimeError`** when the
+native backend is unavailable. The [`quick_hmac` / `quick_hkdf`](#crypto_api)
+dispatchers in `crypto_api` are thin string-selectable wrappers over these.
+
+```python
+from ama_cryptography.pqc_backends import (
+    native_sha256, native_sha3_256, native_sha3_512, native_shake128, native_shake256,
+    native_hmac_sha256, native_hmac_sha384, native_hmac_sha512, native_hmac_sha3_256,
+    native_hkdf, native_hkdf_sha256, native_hkdf_sha384, native_hkdf_sha512,
+)
+
+# Raw hashes (FIPS 180-4 / FIPS 202) — byte-identical to the hashlib equivalents.
+d: bytes = native_sha256(data: bytes)                 # 32 bytes (SHA-256)
+d: bytes = native_sha3_256(data: bytes)               # 32 bytes (SHA3-256)
+d: bytes = native_sha3_512(data: bytes)               # 64 bytes (SHA3-512)
+x: bytes = native_shake128(data: bytes, length: int)  # XOF
+x: bytes = native_shake256(data: bytes, length: int)  # XOF
+
+# HMAC (RFC 2104 / FIPS 198-1) -> 32 / 48 / 64 / 32-byte tags.
+t: bytes = native_hmac_sha256(key: bytes, msg: bytes)
+t: bytes = native_hmac_sha384(key: bytes, msg: bytes)
+t: bytes = native_hmac_sha512(key: bytes, msg: bytes)
+t: bytes = native_hmac_sha3_256(key: bytes, msg: bytes)
+
+# HKDF (RFC 5869). native_hkdf is the HMAC-SHA3-256 default; the _sha* variants
+# are the interoperable HKDF-SHA-2 profiles.
+okm: bytes = native_hkdf(ikm: bytes, length: int, salt: bytes = b"", info: bytes = b"")
+okm: bytes = native_hkdf_sha256(ikm: bytes, length: int, salt: bytes = b"", info: bytes = b"")
 ```
 
 ---
@@ -597,42 +659,47 @@ raised if online mode is requested without the dependency.
 
 ```python
 from ama_cryptography.exceptions import (
-    CryptoModuleError,                # FIPS 140-3 error-state module lock (RuntimeError)
-    CryptoConfigError,                # Configuration / environment problems (Exception)
-    IntegrityError,                   # Integrity-check failure (Exception)
-    SignatureVerificationError,       # Signature rejected (Exception)
-    KeyManagementError,               # Key lifecycle errors (Exception)
-    PQCUnavailableError,              # Native C PQC library not loaded (RuntimeError)
+    AmaCryptographyError,             # catch-all root of the exception hierarchy (Exception)
+    CryptoModuleError,                # FIPS 140-3 error-state module lock (also RuntimeError)
+    CryptoConfigError,                # Configuration / environment problems
+    IntegrityError,                   # Integrity-check failure
+    SignatureVerificationError,       # Signature rejected
+    KeyManagementError,               # Key lifecycle errors
+    PQCUnavailableError,              # Native C PQC library not loaded (also RuntimeError)
     QuantumSignatureUnavailableError, # PQC signer requested but unavailable (subclass of PQCUnavailableError)
-    QuantumSignatureRequiredError,    # Policy requires PQC; classical-only refused (Exception)
-    AmaHSMUnavailableError,           # HSM path requested without PyKCS11 (RuntimeError)
+    QuantumSignatureRequiredError,    # Policy requires PQC; classical-only refused
+    AmaHSMUnavailableError,           # HSM path requested without PyKCS11 (also RuntimeError)
     SecurityWarning,                  # Non-fatal security warnings (UserWarning)
 )
 ```
 
 ### Exception hierarchy
 
-AMA's exceptions are **not** rooted under a single base class — most
-derive directly from `Exception` or `RuntimeError`. Use the actual base
-when writing `except` clauses; `except Exception` will catch all of them
-but will over-catch.
+Every error raised by the library derives — directly or transitively — from
+the single root **`AmaCryptographyError`**, so `except AmaCryptographyError`
+catches all of them (including the module-specific `TimestampError`,
+`SessionError`, `ChannelError`, and `SecureMemoryError` defined in their own
+modules). The classes that historically subclass `RuntimeError`
+(`PQCUnavailableError`, `CryptoModuleError`, `AmaHSMUnavailableError`)
+*additionally* inherit from `RuntimeError`, so existing `except RuntimeError`
+sites keep working. `SecurityWarning` is intentionally **not** an
+`AmaCryptographyError` — it is a `UserWarning`, not an error.
 
 ```
-RuntimeError (builtin)
-├── CryptoModuleError             # FIPS 140-3 error-state module lock
-├── PQCUnavailableError
-│   └── QuantumSignatureUnavailableError
-└── AmaHSMUnavailableError        # PyKCS11 missing
-
 Exception (builtin)
-├── CryptoConfigError
-├── KeyManagementError
-├── SignatureVerificationError
-├── IntegrityError
-└── QuantumSignatureRequiredError # note: NOT a PQCUnavailableError subclass
+└── AmaCryptographyError               # catch-all root — every library error derives from this
+    ├── PQCUnavailableError            # also inherits RuntimeError
+    │   └── QuantumSignatureUnavailableError
+    ├── QuantumSignatureRequiredError  # note: NOT a PQCUnavailableError subclass
+    ├── CryptoConfigError
+    ├── KeyManagementError
+    ├── SignatureVerificationError
+    ├── IntegrityError
+    ├── CryptoModuleError              # FIPS 140-3 error-state module lock; also inherits RuntimeError
+    └── AmaHSMUnavailableError         # PyKCS11 missing; also inherits RuntimeError
 
 UserWarning (builtin)
-└── SecurityWarning               # warnings.warn() for non-fatal security issues
+└── SecurityWarning                    # warnings.warn() for non-fatal security issues
 ```
 
 > **There is no `RFC3161Error` class.** The RFC 3161 timestamp module

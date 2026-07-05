@@ -23,7 +23,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ama-cryptography"
-version = "3.2.0"
+version = "3.3.0"
 description = "Quantum-resistant cryptographic protection system for helical mathematical Omni-Codes"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -197,14 +197,13 @@ ama_cryptography = [
 
 # Ruff configuration — replaces flake8, isort
 [tool.ruff]
-# The runtime SUPPORT floor is Python 3.10 (see requires-python / classifiers /
-# CI matrix).  ruff's target-version is deliberately pinned one release lower so
-# its pyupgrade lane does NOT force a codebase-wide PEP 604 (`X | None`) / PEP
-# 585 rewrite: this project intentionally keeps explicit Optional[...] / List /
-# Dict typing (mirrored by the UP006/UP035 per-file ignores below).  Pinning is
-# required because an unset target-version would otherwise be inferred from
-# requires-python and re-trigger those ~200 style rewrites.
-target-version = "py39"
+# target-version tracks the runtime SUPPORT floor (Python 3.10 — see
+# requires-python / classifiers / CI matrix), so ruff evaluates every lint
+# against the exact minimum the package supports.  The project intentionally
+# keeps explicit Optional[...] / Union[...] / List / Dict typing; that style is
+# preserved by ignoring the pyupgrade PEP 604 / PEP 585 rewrites (UP006, UP007,
+# UP035, UP045) below rather than by holding target-version one release lower.
+target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
@@ -221,7 +220,25 @@ select = [
     "N",   # pep8-naming
     "RUF", # ruff-specific rules
 ]
-ignore = []  # Do not add ignores without a comment explaining why.
+# Do not add ignores without a comment explaining why.
+ignore = [
+    # PEP 604 / PEP 585 pyupgrade rewrites. This project intentionally keeps
+    # explicit Optional[...] / Union[...] / List / Dict typing (see the
+    # [tool.ruff] note above). UP006/UP015 stay scoped to ama_cryptography/*
+    # below; UP007 (Union -> X | Y), UP045 (Optional -> X | None) and UP035
+    # (deprecated typing imports) fire codebase-wide once target-version is
+    # py310, so they are ignored globally to preserve that deliberate style
+    # everywhere rather than triggering ~200 mechanical annotation rewrites.
+    "UP007",
+    "UP035",
+    "UP045",
+    # B905: zip(..., strict=...) only became expressible at Python 3.10, so
+    # this bugbear rule activates with the target-version bump. The existing
+    # zip() call sites are length-matched by construction; leaving them
+    # non-strict keeps the bump behaviour-neutral (no new runtime exceptions)
+    # instead of mechanically editing 40+ call sites during a version bump.
+    "B905",
+]
 
 [tool.ruff.lint.per-file-ignores]
 # assert is valid in pytest tests; hardcoded passwords are test fixtures;

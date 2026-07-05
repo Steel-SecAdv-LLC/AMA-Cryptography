@@ -4,7 +4,6 @@
  *
  * Used by:
  *   - ama_ed25519.c    (Ed25519 requires SHA-512 per RFC 8032)
- *   - ama_sphincs.c    (SLH-DSA-SHA2-256f: H_msg / H / T_l / PRF_msg, FIPS 205 §11.2)
  *   - ama_slhdsa.c     (parameterised SLH-DSA-SHA2 variant)
  *   - ama_hkdf.c       (public HMAC-SHA-512 for BIP32)
  *   - ama_hmac_sha384.c(public HMAC-SHA-384 — shares the SHA-512 core with a

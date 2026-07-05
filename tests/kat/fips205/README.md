@@ -28,7 +28,7 @@ from the NIST ACVP-Server repository (SLH-DSA-sigVer-FIPS205).
   matches SLH-DSA-SHAKE-128s. Signing derives WOTS+/FORS secret values under the
   FIPS 205 §4.2 `WOTS_PRF=5` / `FORS_PRF=6` address types; an earlier divergence
   in the FORS/WOTS+/hypertree body (from reusing the chain/tree address types
-  there) was corrected in the native `ama_slhdsa.c` / `ama_sphincs.c` signers.
+  there) was corrected in the native `ama_slhdsa.c` signer.
 
 ### Test Coverage
 

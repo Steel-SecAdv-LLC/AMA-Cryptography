@@ -875,3 +875,80 @@ jobs:
             dist1/*.whl
             dist2/*.whl
           retention-days: 14
+
+  memory-sanitizer-kat:
+    name: MemorySanitizer (fast KAT lane, per-PR)
+    # Fast per-PR MSan lane: build ONLY the OpenSSL-free `test_kat` target under
+    # MemorySanitizer and run it. Feasible on every PR because test_kat drives an
+    # AES-256-CTR DRBG entirely through AMA's own constant-time AES (no
+    # third-party crypto), so the whole binary is MSan-instrumented. It mirrors
+    # the nightly `memory-sanitizer` job's flags EXACTLY (clang-18, libc++,
+    # -fsanitize-memory-track-origins=2, SIMD off), so a green nightly implies a
+    # green fast lane and vice-versa. No schedule `if:` guard — this one runs on
+    # every push/PR; the heavier full-suite MSan/TSan/Valgrind stay nightly-only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y cmake clang-18 libc++-18-dev libc++abi-18-dev
+
+      - name: Configure with MSan (KAT-only, SIMD off, const-time AES)
+        run: |
+          cmake -B build-msan-kat \
+            -DCMAKE_C_COMPILER=clang-18 \
+            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_C_FLAGS="-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1 -stdlib=libc++" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=memory -stdlib=libc++" \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_ENABLE_LTO=OFF \
+            -DAMA_ENABLE_SIMD=OFF \
+            -DAMA_AES_CONSTTIME=ON
+
+      - name: Build only the test_kat target (+ its deps)
+        run: cmake --build build-msan-kat --target test_kat -j"$(nproc)"
+
+      - name: Run test_kat under MSan
+        env:
+          MSAN_OPTIONS: print_stacktrace=1:halt_on_error=1:abort_on_error=1
+        # `ctest -R` honours the add_test WORKING_DIRECTORY (repo root) needed to
+        # locate the NIST KAT vector files. Anchored regex matches exactly test_kat.
+        run: ctest --test-dir build-msan-kat -R '^test_kat$' --output-on-failure
+
+  static-analysis-gate:
+    name: Static Analysis Gate
+    # Single aggregating status check for this workflow (see the matching gate
+    # in ci.yml). `needs:` is workflow-local, so this covers only the per-PR
+    # static-analysis jobs — the schedule/dispatch-only memory-sanitizer,
+    # thread-sanitizer and valgrind-memcheck are intentionally excluded because
+    # they do not run on pull_request.
+    if: always()
+    needs:
+      - cppcheck
+      - clang-analyzer
+      - codeql
+      - compiler-warnings
+      - version-consistency
+      - address-sanitizer
+      - clang-tidy
+      - reproducible-build
+      - memory-sanitizer-kat
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Fail if any required job did not succeed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "::error::Static Analysis Gate failed — a required job did not succeed."
+          echo "Dependency results: ${{ join(needs.*.result, ', ') }}"
+          exit 1
+      - name: All required jobs succeeded
+        run: echo "Static Analysis Gate passed — all required jobs are green."

@@ -87,6 +87,8 @@ __all__ = [
     "native_sha3_512",
     "native_shake128",
     "native_shake256",
+    # Native FIPS 180-4 hash (raw one-shot SHA-256)
+    "native_sha256",
 ]
 
 
@@ -611,6 +613,33 @@ def _setup_sha3_256_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
+# SHA-256 one-shot native availability (raw hash, FIPS 180-4).  Surfaces the
+# ama_sha256(out, in, inlen) C symbol so crypto_api key_id derivation keeps
+# byte-identical SHA-256 semantics without stdlib hashlib (INVARIANT-1/7).
+_SHA256_NATIVE_AVAILABLE = False
+
+
+def _setup_sha256_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for raw one-shot SHA-256 (FIPS 180-4).
+
+    NOTE the argument order differs from ama_sha3_256(input, input_len,
+    output): the C symbol is ``void ama_sha256(uint8_t *out, const uint8_t
+    *in, size_t inlen)`` — OUTPUT FIRST, void return — so restype is None,
+    matching the ama_hmac_sha256 void-return pattern rather than the SHA3
+    rc-checked one.
+    """
+    try:
+        lib.ama_sha256.argtypes = [
+            ctypes.c_char_p,  # out (32 bytes)
+            ctypes.c_char_p,  # in
+            ctypes.c_size_t,  # inlen
+        ]
+        lib.ama_sha256.restype = None
+        return True
+    except AttributeError:
+        return False
+
+
 def _setup_sha3_ext_ctypes(lib: ctypes.CDLL) -> bool:
     """Configure ctypes for SHA3-512 and SHAKE128/256 (FIPS 202)."""
     try:
@@ -1076,6 +1105,7 @@ if _native_lib is not None:
     _HKDF_NATIVE_AVAILABLE = _setup_hkdf_ctypes(_native_lib)
     _HKDF_SHA2_NATIVE_AVAILABLE = _setup_hkdf_sha2_ctypes(_native_lib)
     _SHA3_256_NATIVE_AVAILABLE = _setup_sha3_256_ctypes(_native_lib)
+    _SHA256_NATIVE_AVAILABLE = _setup_sha256_ctypes(_native_lib)
     _SHA3_EXT_NATIVE_AVAILABLE = _setup_sha3_ext_ctypes(_native_lib)
     _HMAC_SHA3_256_NATIVE_AVAILABLE = _setup_hmac_sha3_256_ctypes(_native_lib)
     _HMAC_SHA512_NATIVE_AVAILABLE = _setup_hmac_sha512_ctypes(_native_lib)
@@ -3192,6 +3222,32 @@ def native_sha3_256(data: bytes) -> bytes:
     if rc != 0:
         raise RuntimeError(f"SHA3-256 failed (rc={rc})")
 
+    return bytes(out_buf)
+
+
+def native_sha256(data: bytes) -> bytes:
+    """SHA-256 (FIPS 180-4) via native C implementation (ama_sha256).
+
+    Byte-identical to ``hashlib.sha256(data).digest()``.  INVARIANT-1
+    compliant (zero external crypto dependencies); fail-closed per
+    INVARIANT-7 (no stdlib fallback).
+
+    Args:
+        data: Input bytes to hash.
+
+    Returns:
+        32-byte SHA-256 digest.
+
+    Raises:
+        RuntimeError: If the native library / ama_sha256 symbol is unavailable.
+    """
+    if _native_lib is None or not _SHA256_NATIVE_AVAILABLE:
+        raise RuntimeError("SHA-256 native backend not available. " + _INSTALL_HINT)
+
+    out_buf = ctypes.create_string_buffer(32)
+    # C signature is OUTPUT-FIRST: ama_sha256(out, in, inlen).  Do NOT reorder
+    # to match ama_sha3_256(in, len, out) — that would corrupt memory.
+    _native_lib.ama_sha256(out_buf, data, ctypes.c_size_t(len(data)))
     return bytes(out_buf)
 
 

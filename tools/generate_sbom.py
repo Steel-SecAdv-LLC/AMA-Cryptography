@@ -66,7 +66,7 @@ C_COMPONENTS: list[tuple[str, str]] = [
     ("ama_kyber", "Kyber-1024 ML-KEM (NIST FIPS 203)"),
     ("ama_secp256k1", "secp256k1 elliptic curve operations"),
     ("ama_sha3", "SHA3-256/512, SHAKE128/256 (NIST FIPS 202)"),
-    ("ama_sphincs", "SPHINCS+-256f SLH-DSA (NIST FIPS 205)"),
+    ("ama_slhdsa", "SLH-DSA-SHA2-256f + SHAKE-128s (NIST FIPS 205); legacy ama_sphincs_* API"),
     ("ama_x25519", "X25519 ECDH key exchange (RFC 7748)"),
 ]
 

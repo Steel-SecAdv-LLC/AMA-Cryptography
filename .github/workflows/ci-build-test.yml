@@ -543,3 +543,29 @@ jobs:
       - name: Test Alpine image
         run: |
           docker run --rm ama-cryptography:alpine python3 -c "import ama_cryptography; print('OK')"
+
+  ci-gate:
+    name: Build and Test Gate
+    # Single aggregating status check for this workflow (see the matching gate
+    # in ci.yml). `needs:` is workflow-local, so this gate covers only the jobs
+    # defined in ci-build-test.yml. Branch protection should require this
+    # context instead of the individual job names.
+    if: always()
+    needs:
+      - c-library
+      - python-package
+      - lint
+      - security
+      - benchmark-regression
+      - docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Fail if any required job did not succeed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "::error::CI Gate failed — a required job did not succeed."
+          echo "Dependency results: ${{ join(needs.*.result, ', ') }}"
+          exit 1
+      - name: All required jobs succeeded
+        run: echo "CI Gate passed — all required jobs are green."

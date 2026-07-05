@@ -17,6 +17,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "ama_cryptography.h"  /* AMA_API export-attribute macro */
+
 #define AMA_SHA256_DIGEST_SIZE 32
 #define AMA_SHA256_BLOCK_SIZE  64
 
@@ -47,13 +49,17 @@ void ama_sha256_final(ama_sha256_ctx *ctx, uint8_t digest[32]);
 
 /**
  * @brief One-shot SHA-256: hash input to 32-byte output
+ *
+ * AMA_API-exported so the Python ctypes layer (pqc_backends.native_sha256)
+ * can bind it on every platform, including MSVC DLL builds where symbols are
+ * not exported without the attribute.
  */
-void ama_sha256(uint8_t *out, const uint8_t *in, size_t inlen);
+AMA_API void ama_sha256(uint8_t *out, const uint8_t *in, size_t inlen);
 
 /**
  * @brief SHA-256 with two concatenated inputs: SHA-256(in1 || in2)
  */
-void ama_sha256_2(uint8_t *out, const uint8_t *in1, size_t in1len,
-                   const uint8_t *in2, size_t in2len);
+AMA_API void ama_sha256_2(uint8_t *out, const uint8_t *in1, size_t in1len,
+                          const uint8_t *in2, size_t in2len);
 
 #endif /* AMA_SHA256_H */

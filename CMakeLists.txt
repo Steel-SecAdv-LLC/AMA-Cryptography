@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.15)
 
 project(AmaCryptography
-    VERSION 3.2.0
+    VERSION 3.3.0
     DESCRIPTION "Quantum-Resistant Cryptographic Protection System"
     LANGUAGES C CXX
 )
@@ -468,7 +468,6 @@ if(AMA_USE_NATIVE_PQC)
         src/c/ama_platform_rand.c
         src/c/ama_kyber.c
         src/c/ama_dilithium.c
-        src/c/ama_sphincs.c
         src/c/ama_slhdsa.c
         src/c/ama_secp256k1.c
         src/c/ama_frost.c
@@ -810,7 +809,7 @@ message(STATUS "Post-Quantum Cryptography:")
 message(STATUS "  Native PQC:     ${AMA_USE_NATIVE_PQC}")
 if(AMA_USE_NATIVE_PQC)
     message(STATUS "  PQC backend:    NATIVE")
-    message(STATUS "  PQC algorithms: ML-DSA-65 (ama_dilithium.c), Kyber-1024 (ama_kyber.c), SPHINCS+-256f (ama_sphincs.c)")
+    message(STATUS "  PQC algorithms: ML-DSA-65 (ama_dilithium.c), Kyber-1024 (ama_kyber.c), SLH-DSA-SHA2-256f / SPHINCS+-256f (ama_slhdsa.c)")
     message(STATUS "  FIPS compliance: FIPS 203 (ML-KEM), FIPS 204 (ML-DSA), FIPS 205 (SLH-DSA)")
 else()
     message(STATUS "  PQC backend:    NONE (use -DAMA_USE_NATIVE_PQC=ON)")

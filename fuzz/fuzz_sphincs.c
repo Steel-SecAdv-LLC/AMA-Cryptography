@@ -15,7 +15,7 @@
  * Build (standalone):
  *   clang -fsanitize=fuzzer,address -O1 -g -I../include \
  *         -DAMA_USE_NATIVE_PQC \
- *         fuzz_sphincs.c ../src/c/ama_sphincs.c ../src/c/ama_sha3.c \
+ *         fuzz_sphincs.c ../src/c/ama_slhdsa.c ../src/c/ama_sha3.c \
  *         ../src/c/ama_sha256.c ../src/c/ama_consttime.c ../src/c/ama_core.c \
  *         ../src/c/ama_platform_rand.c -o fuzz_sphincs
  */
