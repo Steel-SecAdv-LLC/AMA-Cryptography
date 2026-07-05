@@ -22,16 +22,13 @@ from the NIST ACVP-Server repository (SLH-DSA-sigVer-FIPS205).
   (tcIds 351, 356, with `additionalRandomness`). Curated from the same
   NIST ACVP-Server `v1.1.0.42` `SLH-DSA-sigGen-FIPS205/internalProjection.json`.
 
-  > **KNOWN DEFECT (tracked — PR #358).** The native SHA2-256f **signer** is
-  > NOT byte-identical to the FIPS 205 / NIST ACVP reference: the 32-byte
-  > message randomizer `R` matches byte-for-byte, but the FORS/WOTS+/hypertree
-  > body diverges, and the signer's own signatures do not verify against a
-  > NIST-generated public key. The **verifier** correctly accepts genuine NIST
-  > signatures, and fresh library keygen → sign → verify round-trips. The gap
-  > is isolated to the SHA-2 256-bit signing chain (an `F`/`H`/`T` or ADRS-
-  > compression detail); SHAKE-128s sigGen is fully byte-exact. The full
-  > byte-exact assertion in the test class is `xfail(strict)` so CI records the
-  > gap and turns red the moment the signer is corrected.
+  The native SHA2-256f **signer** is byte-identical to the FIPS 205 / NIST ACVP
+  reference for both the deterministic and hedged interfaces — signatures match
+  the pinned vectors byte-for-byte and reproduce the NIST public-key root. This
+  matches SLH-DSA-SHAKE-128s. Signing derives WOTS+/FORS secret values under the
+  FIPS 205 §4.2 `WOTS_PRF=5` / `FORS_PRF=6` address types; an earlier divergence
+  in the FORS/WOTS+/hypertree body (from reusing the chain/tree address types
+  there) was corrected in the native `ama_slhdsa.c` / `ama_sphincs.c` signers.
 
 ### Test Coverage
 
@@ -40,9 +37,9 @@ The SLH-DSA implementation is validated via:
   `tests/test_pqc_kat.py::TestSLHDSA_SHA2_256f_KAT`
 - NIST ACVP sigGen vectors for SHAKE-128s (byte-exact) in
   `tests/test_pqc_kat.py::TestSLHDSA_SHAKE_128s_ACVP`
-- NIST ACVP sigGen vectors for SHA2-256f (randomizer byte-exact + verifier
-  interop + self-consistency; full byte-exact `xfail(strict)`, see defect note
-  above) in `tests/test_pqc_kat.py::TestSLHDSA_SHA2_256f_ACVP_sigGen`
+- NIST ACVP sigGen vectors for SHA2-256f (full byte-exact — deterministic and
+  hedged — plus verifier interop and self-consistency) in
+  `tests/test_pqc_kat.py::TestSLHDSA_SHA2_256f_ACVP_sigGen`
 - Self-consistency roundtrip tests (sign/verify) in `tests/c/test_kat.c`
 - Tamper detection tests in `tests/c/test_kat.c`
 - FIPS 140-3 POST KAT in `ama_cryptography/_self_test.py`

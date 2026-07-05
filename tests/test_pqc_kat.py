@@ -833,19 +833,13 @@ class TestSLHDSA_SHA2_256f_ACVP_sigGen:
     2 hedged), each carrying full sk / message / context / signature (plus
     ``additionalRandomness`` for hedged).
 
-    KNOWN DEFECT (tracked — see PR #358 / CHANGELOG):  unlike SLH-DSA-SHAKE-128s
-    (``TestSLHDSA_SHAKE_128s_ACVP``, byte-exact), the native SHA2-256f *signer*
-    is NOT byte-identical to the FIPS 205 / NIST ACVP reference.  Its 32-byte
-    message randomizer ``R`` is byte-exact (``PRF_msg`` / ``H_msg`` are correct),
-    but the FORS / WOTS+ / hypertree body (bytes ``>= n``) diverges — the
-    signer's own signatures do not verify against a NIST-generated public key.
-    The *verifier* correctly accepts genuine NIST signatures, and fresh library
-    keygen -> sign -> verify round-trips, so the defect is isolated to the
-    SHA-2 256-bit signing chain (an ``F``/``H``/``T`` or ADRS-compression
-    detail).  The full byte-exact assertion below is therefore ``xfail(strict)``
-    so CI records the gap and flips to a hard failure the instant the signer is
-    corrected; the randomizer, verifier-interop, determinism and self-
-    consistency assertions are enforced normally.
+    The native SHA2-256f signer is byte-identical to the FIPS 205 / NIST ACVP
+    reference for both the deterministic and hedged interfaces (see
+    ``test_acvp_siggen_byte_exact``), matching SLH-DSA-SHAKE-128s.  Signing uses
+    the FIPS 205 §4.2 WOTS_PRF / FORS_PRF address types for secret-value
+    derivation; the earlier divergence in the FORS / WOTS+ / hypertree body came
+    from reusing the chain/tree address types there and was corrected in the
+    native ``ama_slhdsa.c`` / ``ama_sphincs.c`` signers.
     """
 
     VECTORS_PATH = (
@@ -954,22 +948,12 @@ class TestSLHDSA_SHA2_256f_ACVP_sigGen:
                 msg, sig, pk, ctx, param_set="SHA2-256f"
             ), f"NIST sig tc{v['tcId']} did not verify under AMA verifier"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "KNOWN DEFECT (PR #358): the native SLH-DSA-SHA2-256f signer is not "
-            "byte-identical to the FIPS 205 / NIST ACVP reference (randomizer R "
-            "matches; FORS/WOTS+/hypertree body diverges). SHAKE-128s IS "
-            "byte-exact. Remove this marker once the SHA-2 256f signer is fixed."
-        ),
-    )
     def test_acvp_siggen_byte_exact(self, vectors: list[dict[str, Any]]) -> None:
         """FULL byte-exact NIST ACVP sigGen contract for SHA2-256f.
 
-        Mirrors ``TestSLHDSA_SHAKE_128s_ACVP.test_acvp_siggen_byte_exact``.
-        ``xfail(strict)`` pending the tracked signer defect documented on the
-        class — it becomes a hard CI failure (xpass) the moment the signer turns
-        byte-exact, forcing removal of the marker.
+        Mirrors ``TestSLHDSA_SHAKE_128s_ACVP.test_acvp_siggen_byte_exact``: every
+        NIST ACVP signature (deterministic and hedged) is reproduced byte-for-byte
+        through the internal / deterministic signing interfaces.
         """
         det = hedged = 0
         for v in vectors:

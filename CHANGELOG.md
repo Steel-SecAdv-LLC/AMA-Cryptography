@@ -19,8 +19,23 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
-(empty — every entry from the previous `[Unreleased]` section moved to
-`[3.2.0]` below.)
+### Fixed
+- **SLH-DSA-SHA2-256f signer now byte-exact against FIPS 205 / NIST ACVP.**
+  Both native SHA-2 signers (`src/c/ama_slhdsa.c`, `src/c/ama_sphincs.c`)
+  derived WOTS+ and FORS secret values under the chain/tree address types
+  (`WOTS_HASH=0` / `FORS_TREE=3`) instead of the FIPS 205 §4.2 PRF address
+  types (`WOTS_PRF=5` / `FORS_PRF=6`). The 32-byte message randomizer `R`
+  (from `PRF_msg`) was already correct, so signatures matched NIST for the
+  first `n` bytes but diverged through the FORS/WOTS+/hypertree body and did
+  not reproduce the NIST public-key root. The address type codes are a
+  property of the ADRS structure, not of the hash instantiation, so both the
+  SHA-2 and SHAKE parameter sets use `WOTS_PRF` / `FORS_PRF` — the SHAKE-128s
+  set was already correct and stays byte-exact. The verifier never calls
+  `PRF`, so `sigVer` KATs and prior round-trips were unaffected.
+  `tests/test_pqc_kat.py::TestSLHDSA_SHA2_256f_ACVP_sigGen::test_acvp_siggen_byte_exact`
+  is now a hard byte-exact assertion (the previous `xfail(strict)` marker is
+  removed) covering all four NIST ACVP sigGen vectors (2 deterministic,
+  2 hedged).
 
 ---
 
