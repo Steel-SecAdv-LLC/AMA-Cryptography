@@ -386,6 +386,13 @@ if(AMA_USE_NATIVE_PQC)
         SKIP_RETURN_CODE 77)
 endif()
 
+# Byte-identity KAT for the runtime-dispatched SHA-256 core (x86 SHA-NI /
+# AArch64 SHA2 / scalar).  Runs on every host — validates whichever backend the
+# CPU selects against an independent reference + FIPS 180-4 vectors.
+add_executable(test_sha256_dispatch_equiv test_sha256_dispatch_equiv.c)
+target_link_libraries(test_sha256_dispatch_equiv ama_cryptography_test)
+add_test(NAME test_sha256_dispatch_equiv COMMAND test_sha256_dispatch_equiv)
+
 # Performance benchmark (not added to ctest - run manually)
 add_executable(test_benchmark test_benchmark.c)
 target_link_libraries(test_benchmark ama_cryptography_test)

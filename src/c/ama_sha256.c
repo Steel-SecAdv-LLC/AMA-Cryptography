@@ -19,6 +19,24 @@
 /* Scrub sensitive state — compiler cannot optimize this away */
 extern void ama_secure_memzero(void *ptr, size_t len);
 
+/* CPU-feature probes (defined in ama_cpuid.c) — forward-declared to avoid an
+ * include-path dependency; see include/ama_cpuid.h for contracts.  Both are
+ * once-guarded/cached, so calling them per block is cheap after warm-up. */
+extern int ama_has_sha_ni(void);
+extern int ama_has_arm_sha2(void);
+
+/* Hardware-accelerated single-block compression kernels, selected at runtime.
+ * x86: SHA-NI (src/c/ama_sha256_ni.c); AArch64: ARMv8 SHA2 Crypto Extensions
+ * (ama_sha256_compress_neon in src/c/neon/ama_sphincs_neon.c).  Absent kernels
+ * simply leave the scalar fallback in place. */
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+extern void ama_sha256_compress_x86_shani(uint32_t state[8], const uint8_t block[64]);
+#define AMA_SHA256_HAVE_X86_SHANI 1
+#elif defined(__aarch64__) || defined(_M_ARM64)
+extern void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]);
+#define AMA_SHA256_HAVE_ARM_SHA2 1
+#endif
+
 /* ============================================================================
  * SHA-256 CONSTANTS (FIPS 180-4 Section 4.2.2)
  * First 32 bits of fractional parts of cube roots of first 64 primes.
@@ -85,7 +103,7 @@ static inline void store_be64(uint8_t *p, uint64_t v) {
  * SHA-256 COMPRESSION FUNCTION (FIPS 180-4 Section 6.2.2)
  * ============================================================================ */
 
-static void sha256_compress(uint32_t state[8], const uint8_t block[64]) {
+static void sha256_compress_scalar(uint32_t state[8], const uint8_t block[64]) {
     uint32_t W[64];
     uint32_t a, b, c, d, e, f, g, h;
     uint32_t T1, T2;
@@ -120,6 +138,28 @@ static void sha256_compress(uint32_t state[8], const uint8_t block[64]) {
     /* Compute intermediate hash (Step 4) */
     state[0] += a; state[1] += b; state[2] += c; state[3] += d;
     state[4] += e; state[5] += f; state[6] += g; state[7] += h;
+}
+
+/* Runtime-dispatched single-block compression.  The CPU-feature probe is
+ * once-guarded and cached in ama_cpuid.c, so the per-block check collapses to
+ * a predictable branch after the first call.  Selecting per block (rather than
+ * caching a function pointer) keeps ama_sha256_ctx unchanged and avoids any
+ * shared mutable dispatch state — INVARIANT-15 thread-safety with no data
+ * race.  All backends are byte-identical to sha256_compress_scalar (pinned by
+ * tests/c/test_sha256_dispatch_equiv.c). */
+static void sha256_compress(uint32_t state[8], const uint8_t block[64]) {
+#if defined(AMA_SHA256_HAVE_X86_SHANI)
+    if (ama_has_sha_ni()) {
+        ama_sha256_compress_x86_shani(state, block);
+        return;
+    }
+#elif defined(AMA_SHA256_HAVE_ARM_SHA2)
+    if (ama_has_arm_sha2()) {
+        ama_sha256_compress_neon(state, block);
+        return;
+    }
+#endif
+    sha256_compress_scalar(state, block);
 }
 
 /* ============================================================================

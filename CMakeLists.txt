@@ -402,8 +402,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86")
         # Note: ama_aes_bitsliced.c intentionally does NOT get -maes/-mpclmul
         # — it is the constant-time software fallback for CPUs without AES-NI.
         message(STATUS "AES-NI/PCLMULQDQ: per-file flags for ama_aes_gcm.c only")
+        # SHA-NI (Intel SHA Extensions) for the x86 SHA-256 compression kernel.
+        # Per-file only — the whole-library scalar SHA-256 stays baseline so the
+        # binary runs on CPUs without SHA-NI; ama_cpuid.c selects at runtime.
+        set_source_files_properties(src/c/ama_sha256_ni.c PROPERTIES
+            COMPILE_FLAGS "-msha -mssse3 -msse4.1")
+        message(STATUS "SHA-NI: per-file flags for ama_sha256_ni.c only")
     else()
-        message(STATUS "AES-NI/PCLMULQDQ: MSVC detected — intrinsics available by default")
+        message(STATUS "AES-NI/PCLMULQDQ/SHA-NI: MSVC detected — intrinsics available by default")
     endif()
 endif()
 
@@ -435,6 +441,7 @@ if(AMA_USE_NATIVE_PQC)
     list(APPEND AMA_SOURCES
         src/c/ama_platform_rand.c
         src/c/ama_sha256.c
+        src/c/ama_sha256_ni.c
         src/c/ama_hmac_sha256.c
         src/c/ama_hmac_sha384.c
         src/c/ama_kyber.c
