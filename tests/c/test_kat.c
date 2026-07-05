@@ -915,6 +915,22 @@ int main(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
+#if defined(__has_feature)
+#  if __has_feature(memory_sanitizer)
+    /* MemorySanitizer requires EVERY linked object to be MSan-instrumented
+     * (including libc / libcrypto).  This test links the system OpenSSL
+     * (OpenSSL::Crypto) for its NIST AES-256-CTR DRBG, and MSan reports
+     * false-positive uninitialised reads inside libcrypto's own lazy
+     * OPENSSL_init_crypto / config-file load (BIO_new_file) — not in AMA code.
+     * The AMA cryptographic paths this harness covers (Kyber / Dilithium /
+     * SPHINCS+) are exercised uninit-read-clean under MSan by the other C
+     * tests; skip the OpenSSL-linked harness rather than chase an
+     * uninstrumented-libcrypto false positive. */
+    printf("SKIP: test_kat links uninstrumented OpenSSL — incompatible with MemorySanitizer\n");
+    return 77;
+#  endif
+#endif
+
     /* Disable output buffering for real-time progress */
     setbuf(stdout, NULL);
     setbuf(stderr, NULL);

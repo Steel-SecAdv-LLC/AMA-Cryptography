@@ -44,11 +44,31 @@
 
 #include "ama_dispatch.h"
 
+/* Detect a MemorySanitizer build (clang __has_feature). */
+#if defined(__has_feature)
+#  if __has_feature(memory_sanitizer)
+#    define AMA_TEST_UNDER_MSAN 1
+#  endif
+#endif
+
 #if defined(_MSC_VER)
 int main(void) {
     /* The dispatch cache code path is compiled out under MSVC (no
      * POSIX clock_gettime / open / fdopen). Surface as Skipped. */
     printf("SKIP: dispatch cache is a no-op under MSVC\n");
+    return 77;
+}
+#elif defined(AMA_TEST_UNDER_MSAN)
+int main(void) {
+    /* The MSan lane builds with -DAMA_ENABLE_SIMD=OFF, so the keccak SIMD
+     * bench never runs and keccak_simd_ns legitimately reads 0 — while the
+     * dispatch info can still report a non-generic sha3 slot, tripping this
+     * test's SIMD-active positivity assertion.  The cache-file mode / schema /
+     * timing / path-sanitizer contracts this test pins are uninit-read-free
+     * and are fully exercised under the ASan+UBSan, TSan and regular ctest
+     * lanes (SIMD on).  Skip under MSan rather than assert a SIMD timing the
+     * MSan build deliberately compiles out. */
+    printf("SKIP: keccak SIMD timing contract needs SIMD (disabled in the MSan build)\n");
     return 77;
 }
 #else

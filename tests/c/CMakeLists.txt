@@ -196,6 +196,11 @@ if(AMA_USE_NATIVE_PQC)
         target_link_libraries(test_kat ama_cryptography_test OpenSSL::Crypto)
         add_test(NAME test_kat COMMAND test_kat
                  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        # test_kat self-skips (exit 77) under MemorySanitizer: it links the
+        # system OpenSSL, which is not MSan-instrumented, so libcrypto's own
+        # lazy-init emits false-positive uninitialised reads.  Surface as
+        # Skipped rather than Failed on the MSan lane.
+        set_tests_properties(test_kat PROPERTIES SKIP_RETURN_CODE 77)
     else()
         message(STATUS "OpenSSL not found — skipping test_kat (NIST KAT vectors)")
     endif()
