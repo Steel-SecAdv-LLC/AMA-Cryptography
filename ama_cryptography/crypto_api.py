@@ -1659,9 +1659,7 @@ class HybridSignatureProvider(CryptoProvider):
         pqc_sk = secret_key[self.ED25519_SK_SIZE :]
 
         # Compute hash once and pass to both providers
-        msg_hash = (
-            precomputed_hash if precomputed_hash is not None else native_sha3_256(message)
-        )
+        msg_hash = precomputed_hash if precomputed_hash is not None else native_sha3_256(message)
 
         # Create both signatures using native backends, passing precomputed hash
         classical_sig = self.classical_provider.sign(
