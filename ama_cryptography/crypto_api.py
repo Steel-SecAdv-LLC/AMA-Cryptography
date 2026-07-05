@@ -1974,8 +1974,7 @@ def quick_hmac(key: bytes, message: bytes, algorithm: str = "sha256") -> bytes:
     }
     if algorithm not in dispatch:
         raise ValueError(
-            f"Unsupported HMAC algorithm: {algorithm}. "
-            f"Supported: {sorted(dispatch)}"
+            f"Unsupported HMAC algorithm: {algorithm}. " f"Supported: {sorted(dispatch)}"
         )
     return dispatch[algorithm](key, message)
 
