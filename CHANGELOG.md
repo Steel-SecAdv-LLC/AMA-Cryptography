@@ -19,6 +19,15 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Changed
+- **Minimum runtime Python raised from 3.9 to 3.10.** `requires-python`
+  (`pyproject.toml`), `python_requires` and the `Programming Language :: Python`
+  classifiers (`setup.py`), `requirements-dev.txt`, and every CI matrix now
+  target `>=3.10` (3.10–3.13); the `[tool.mypy] python_version` floor moved to
+  3.10 in step with the mypy 2.x / black 26.x toolchain, which already required
+  3.10+. Python 3.9 is end-of-life in October 2025 and is no longer installed,
+  tested, or supported. Consumers on 3.9 must upgrade to 3.10 or newer.
+
 ### Fixed
 - **SLH-DSA-SHA2-256f signer now byte-exact against FIPS 205 / NIST ACVP.**
   Both native SHA-2 signers (`src/c/ama_slhdsa.c`, `src/c/ama_sphincs.c`)

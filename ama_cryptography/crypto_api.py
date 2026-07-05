@@ -1860,7 +1860,15 @@ class AmaCryptography:
         ``RuntimeError`` (fail closed) rather than substituting stdlib hashing —
         including under the docs-build import override, where call-time
         enforcement still refuses to operate without the native library.
+
+        Enforces the invariant/operational gate itself so it is safe to call
+        standalone (not only via :func:`quick_hash`): a caller cannot bypass the
+        module's INVARIANT-7 refusal or the FIPS operational error-state lockout
+        by invoking this static method directly.
         """
+        _enforce_invariant7()
+        _check_operational()
+
         from ama_cryptography.pqc_backends import (
             native_sha3_256,
             native_sha3_512,
@@ -1922,8 +1930,8 @@ def quick_hash(
         >>> digest = quick_hash(b"Hello from AI agent")
         >>> assert len(digest) == 32  # SHA3-256
     """
-    _enforce_invariant7()
-    _check_operational()
+    # hash_message() now enforces the invariant/operational gate itself, so it
+    # is the single enforcement point (no redundant double-check here).
     return AmaCryptography.hash_message(message, algorithm)
 
 
