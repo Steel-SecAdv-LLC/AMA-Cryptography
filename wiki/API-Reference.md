@@ -215,22 +215,32 @@ with a one-call surface. Both are native-only (INVARIANT-1 — no stdlib
 `hmac`/`hashlib`): an unsupported `algorithm` raises **`ValueError`**, and a
 missing native backend raises **`RuntimeError`**.
 
+Signatures (`algorithm ∈ {"sha256", "sha384", "sha512", "sha3-256"}`; HMAC
+digest length is 32 / 48 / 64 / 32 bytes respectively):
+
 ```python
-from ama_cryptography.crypto_api import quick_hmac, quick_hkdf
+def quick_hmac(key: bytes, message: bytes, algorithm: str = "sha256") -> bytes: ...
 
-# HMAC (RFC 2104 / FIPS 198-1). algorithm ∈ {"sha256", "sha384", "sha512",
-# "sha3-256"}; digest length is 32 / 48 / 64 / 32 bytes respectively.
-tag: bytes = quick_hmac(key: bytes, message: bytes, algorithm: str = "sha256")
-
-# HKDF (RFC 5869). "sha256"/"sha384"/"sha512" are interoperable HKDF-SHA-2
-# (TLS 1.3 / HPKE); "sha3-256" is AMA's default HMAC-SHA3-256 HKDF.
-okm: bytes = quick_hkdf(
+def quick_hkdf(
     ikm: bytes,
     length: int,
     salt: bytes | None = None,
     info: bytes = b"",
     algorithm: str = "sha256",
-)
+) -> bytes: ...
+```
+
+Usage:
+
+```python
+from ama_cryptography.crypto_api import quick_hmac, quick_hkdf
+
+# HMAC (RFC 2104 / FIPS 198-1).
+tag = quick_hmac(b"key", b"message", "sha256")
+
+# HKDF (RFC 5869): sha256/384/512 = interoperable HKDF-SHA-2 (TLS 1.3 / HPKE);
+# sha3-256 = AMA's default HMAC-SHA3-256 HKDF.
+okm = quick_hkdf(b"input-key-material", 32, salt=b"salt", info=b"context")
 ```
 
 These dispatch to the native `native_hmac_*` / `native_hkdf_*` interfaces in
@@ -331,22 +341,23 @@ from ama_cryptography.pqc_backends import (
 )
 
 # Raw hashes (FIPS 180-4 / FIPS 202) — byte-identical to the hashlib equivalents.
-d: bytes = native_sha256(data: bytes)                 # 32 bytes (SHA-256)
-d: bytes = native_sha3_256(data: bytes)               # 32 bytes (SHA3-256)
-d: bytes = native_sha3_512(data: bytes)               # 64 bytes (SHA3-512)
-x: bytes = native_shake128(data: bytes, length: int)  # XOF
-x: bytes = native_shake256(data: bytes, length: int)  # XOF
+d = native_sha256(b"data")           # 32-byte SHA-256
+d = native_sha3_256(b"data")         # 32-byte SHA3-256
+d = native_sha3_512(b"data")         # 64-byte SHA3-512
+x = native_shake128(b"data", 32)     # SHAKE-128 XOF; second arg is output length in bytes
+x = native_shake256(b"data", 64)     # SHAKE-256 XOF
 
 # HMAC (RFC 2104 / FIPS 198-1) -> 32 / 48 / 64 / 32-byte tags.
-t: bytes = native_hmac_sha256(key: bytes, msg: bytes)
-t: bytes = native_hmac_sha384(key: bytes, msg: bytes)
-t: bytes = native_hmac_sha512(key: bytes, msg: bytes)
-t: bytes = native_hmac_sha3_256(key: bytes, msg: bytes)
+t = native_hmac_sha256(b"key", b"msg")
+t = native_hmac_sha384(b"key", b"msg")
+t = native_hmac_sha512(b"key", b"msg")
+t = native_hmac_sha3_256(b"key", b"msg")
 
-# HKDF (RFC 5869). native_hkdf is the HMAC-SHA3-256 default; the _sha* variants
-# are the interoperable HKDF-SHA-2 profiles.
-okm: bytes = native_hkdf(ikm: bytes, length: int, salt: bytes = b"", info: bytes = b"")
-okm: bytes = native_hkdf_sha256(ikm: bytes, length: int, salt: bytes = b"", info: bytes = b"")
+# HKDF (RFC 5869): native_hkdf is the HMAC-SHA3-256 default; the _sha* variants
+# are the interoperable HKDF-SHA-2 profiles. Signature:
+#   native_hkdf(ikm: bytes, length: int, salt: bytes = b"", info: bytes = b"") -> bytes
+okm = native_hkdf(b"ikm", 32, salt=b"salt", info=b"context")
+okm = native_hkdf_sha256(b"ikm", 32, salt=b"salt", info=b"context")
 ```
 
 ---
