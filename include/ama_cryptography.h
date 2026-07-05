@@ -594,6 +594,31 @@ AMA_API ama_error_t ama_hmac_sha512(
 );
 
 /**
+ * @brief HMAC-SHA-384 (RFC 2104 / FIPS 198-1)
+ *
+ * Computes HMAC using SHA-384 for general-purpose keyed authentication.
+ * SHA-384 uses the 128-byte SHA-512 block size, so keys longer than
+ * 128 bytes are SHA-384-hashed first per RFC 2104 Section 2.  Output is
+ * byte-identical to hmac.new(key, msg, hashlib.sha384).digest().
+ *
+ * @param key       HMAC key
+ * @param key_len   Length of key in bytes
+ * @param msg       Message to authenticate
+ * @param msg_len   Length of message in bytes
+ * @param out       Output buffer (must be at least 48 bytes)
+ * @return          AMA_SUCCESS on success, AMA_ERROR_INVALID_PARAM if key or
+ *                  out is NULL (or msg is NULL with msg_len > 0)
+ *
+ * INVARIANT-1 compliant: self-contained SHA-384 — zero external crypto
+ * dependencies.
+ */
+AMA_API ama_error_t ama_hmac_sha384(
+    const uint8_t *key, size_t key_len,
+    const uint8_t *msg, size_t msg_len,
+    uint8_t out[48]
+);
+
+/**
  * @brief HKDF key derivation (RFC 5869)
  *
  * Derives key material using HKDF with HMAC-SHA3-256.

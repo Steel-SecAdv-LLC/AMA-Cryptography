@@ -436,6 +436,7 @@ if(AMA_USE_NATIVE_PQC)
         src/c/ama_platform_rand.c
         src/c/ama_sha256.c
         src/c/ama_hmac_sha256.c
+        src/c/ama_hmac_sha384.c
         src/c/ama_kyber.c
         src/c/ama_dilithium.c
         src/c/ama_sphincs.c

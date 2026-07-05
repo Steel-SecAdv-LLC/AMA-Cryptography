@@ -569,6 +569,14 @@ _HMAC_SHA3_256_NATIVE_AVAILABLE = False
 # HMAC-SHA-512 native availability (for BIP32 key derivation)
 _HMAC_SHA512_NATIVE_AVAILABLE = False
 
+# HMAC-SHA-384 native availability — RFC 2104 / FIPS 198-1.  Surfaces the
+# self-contained `ama_hmac_sha384` C symbol (validated against RFC 4231
+# test cases 1-7) to Python so consumers that need HMAC-SHA-384 (e.g. JWS
+# HS384 signers, TLS PRF variants) don't fall back to stdlib
+# `hmac.new(..., 'sha384')` — which would violate INVARIANT-1 ("zero
+# external crypto dependencies").  Mirrors the _256/_512 flags exactly.
+_HMAC_SHA384_NATIVE_AVAILABLE = False
+
 # HMAC-SHA-256 native availability — FIPS 198-1.  Surfaces the
 # ACVP-validated `ama_hmac_sha256` C symbol (150/150 vectors per
 # docs/compliance/ACVP_SELF_ATTESTATION.md) to Python so downstream
@@ -592,6 +600,27 @@ def _setup_hmac_sha512_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_char_p,  # out (64 bytes)
         ]
         lib.ama_hmac_sha512.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
+def _setup_hmac_sha384_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for HMAC-SHA-384 (RFC 2104 / FIPS 198-1).
+
+    Single-segment signer only (no `_2` fast-path — HS384, like HS512,
+    has no default hot-path caller that would justify one).  Mirrors the
+    SHA-512 binding's `restype = c_int` rc-checked contract exactly.
+    """
+    try:
+        lib.ama_hmac_sha384.argtypes = [
+            ctypes.c_char_p,  # key
+            ctypes.c_size_t,  # key_len
+            ctypes.c_char_p,  # msg
+            ctypes.c_size_t,  # msg_len
+            ctypes.c_char_p,  # out (48 bytes)
+        ]
+        lib.ama_hmac_sha384.restype = ctypes.c_int
         return True
     except AttributeError:
         return False
@@ -977,6 +1006,7 @@ if _native_lib is not None:
     _SHA3_256_NATIVE_AVAILABLE = _setup_sha3_256_ctypes(_native_lib)
     _HMAC_SHA3_256_NATIVE_AVAILABLE = _setup_hmac_sha3_256_ctypes(_native_lib)
     _HMAC_SHA512_NATIVE_AVAILABLE = _setup_hmac_sha512_ctypes(_native_lib)
+    _HMAC_SHA384_NATIVE_AVAILABLE = _setup_hmac_sha384_ctypes(_native_lib)
     _HMAC_SHA256_NATIVE_AVAILABLE = _setup_hmac_sha256_ctypes(_native_lib)
     _SECP256K1_NATIVE_AVAILABLE = _setup_secp256k1_ctypes(_native_lib)
     _X25519_NATIVE_AVAILABLE = _setup_x25519_ctypes(_native_lib)
@@ -3057,6 +3087,51 @@ def native_hmac_sha512(key: bytes, msg: bytes) -> bytes:
     )
     if rc != 0:
         raise RuntimeError(f"HMAC-SHA-512 failed (rc={rc})")
+
+    return bytes(out_buf)
+
+
+def native_hmac_sha384(key: bytes, msg: bytes) -> bytes:
+    """
+    HMAC-SHA-384 via native C implementation (ama_hmac_sha384).
+
+    Standards: RFC 2104 (HMAC), FIPS 198-1 (HMAC), FIPS 180-4 (SHA-384).
+    The C kernel is validated against RFC 4231 test cases 1-7.  Same
+    one-shot, rc-checked contract as the existing `native_hmac_sha512`
+    binding — the underlying C kernel internally hashes oversized keys
+    per RFC 2104 Section 2 (SHA-384's block size is 128 bytes, so the
+    key-prep threshold is 128, not 64), so callers do NOT need to
+    pre-hash; pass the key verbatim.
+
+    INVARIANT-1 compliant — zero external crypto dependencies.
+
+    Args:
+        key: HMAC key (any length; keys > 128 bytes are SHA-384 hashed
+             first per RFC 2104 Section 2).  Pass raw bytes; do NOT pre-hash.
+        msg: Message to authenticate.
+
+    Returns:
+        48-byte HMAC-SHA-384 tag, byte-identical to
+        `hmac.new(key, msg, hashlib.sha384).digest()`.
+
+    Raises:
+        RuntimeError: If the native library is not loaded or the
+                      ama_hmac_sha384 symbol was not bound at module init.
+    """
+    if _native_lib is None or not _HMAC_SHA384_NATIVE_AVAILABLE:
+        raise RuntimeError("HMAC-SHA-384 native backend not available. " + _INSTALL_HINT)
+
+    out_buf = ctypes.create_string_buffer(48)
+
+    rc = _native_lib.ama_hmac_sha384(
+        key,
+        ctypes.c_size_t(len(key)),
+        msg,
+        ctypes.c_size_t(len(msg)),
+        out_buf,
+    )
+    if rc != 0:
+        raise RuntimeError(f"HMAC-SHA-384 failed (rc={rc})")
 
     return bytes(out_buf)
 
