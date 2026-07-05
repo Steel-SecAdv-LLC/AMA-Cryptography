@@ -1932,6 +1932,106 @@ def quick_hash(
     return AmaCryptography.hash_message(message, algorithm)
 
 
+def quick_hmac(key: bytes, message: bytes, algorithm: str = "sha256") -> bytes:
+    """
+    Quick HMAC: compute a keyed MAC in one call via the native backend.
+
+    Unified dispatcher over the native ama_hmac_* kernels so callers do not
+    have to reach into ``ama_cryptography.pqc_backends`` and pick a variant by
+    hand.  INVARIANT-1 compliant (no stdlib hmac).
+
+    Args:
+        key: HMAC key (any length; oversized keys are hashed per RFC 2104 §2).
+        message: Message to authenticate.
+        algorithm: One of "sha256" (32-byte tag), "sha384" (48), "sha512" (64),
+            or "sha3-256" (32).
+
+    Returns:
+        The HMAC tag, byte-identical to ``hmac.new(key, message, <hash>)``.
+
+    Raises:
+        ValueError: Unsupported algorithm.
+        RuntimeError: Native backend unavailable.
+
+    Example:
+        >>> tag = quick_hmac(b"key", b"message", "sha256")
+        >>> assert len(tag) == 32
+    """
+    _enforce_invariant7()
+    _check_operational()
+    from ama_cryptography.pqc_backends import (
+        native_hmac_sha3_256,
+        native_hmac_sha256,
+        native_hmac_sha384,
+        native_hmac_sha512,
+    )
+
+    dispatch = {
+        "sha256": native_hmac_sha256,
+        "sha384": native_hmac_sha384,
+        "sha512": native_hmac_sha512,
+        "sha3-256": native_hmac_sha3_256,
+    }
+    if algorithm not in dispatch:
+        raise ValueError(
+            f"Unsupported HMAC algorithm: {algorithm}. "
+            f"Supported: {sorted(dispatch)}"
+        )
+    return dispatch[algorithm](key, message)
+
+
+def quick_hkdf(
+    ikm: bytes,
+    length: int,
+    salt: "Optional[bytes]" = None,
+    info: bytes = b"",
+    algorithm: str = "sha256",
+) -> bytes:
+    """
+    Quick HKDF (RFC 5869): derive key material in one call via the native
+    backend.
+
+    Unified dispatcher over the native HKDF kernels.  "sha256"/"sha384"/"sha512"
+    select the interoperable HKDF-SHA-2 variants (TLS 1.3 / HPKE); "sha3-256"
+    selects AMA's default HMAC-SHA3-256 HKDF.  INVARIANT-1 compliant.
+
+    Args:
+        ikm: Input key material.
+        length: Desired output length in bytes (max 255 * HashLen).
+        salt: Optional salt (None -> HashLen zero bytes per RFC 5869 §2.2).
+        info: Optional context/application info.
+        algorithm: "sha256" (default), "sha384", "sha512", or "sha3-256".
+
+    Returns:
+        `length` bytes of derived key material.
+
+    Raises:
+        ValueError: Unsupported algorithm or length out of range.
+        RuntimeError: Native backend unavailable.
+    """
+    _enforce_invariant7()
+    _check_operational()
+    from ama_cryptography.pqc_backends import (
+        native_hkdf,
+        native_hkdf_sha256,
+        native_hkdf_sha384,
+        native_hkdf_sha512,
+    )
+
+    if algorithm == "sha256":
+        return native_hkdf_sha256(ikm, length, salt, info)
+    if algorithm == "sha384":
+        return native_hkdf_sha384(ikm, length, salt, info)
+    if algorithm == "sha512":
+        return native_hkdf_sha512(ikm, length, salt, info)
+    if algorithm == "sha3-256":
+        return native_hkdf(ikm, length, salt=salt, info=info)
+    raise ValueError(
+        f"Unsupported HKDF algorithm: {algorithm}. "
+        "Supported: ['sha256', 'sha384', 'sha512', 'sha3-256']"
+    )
+
+
 def quick_sign(
     message: bytes, algorithm: AlgorithmType = AlgorithmType.HYBRID_SIG
 ) -> Tuple[KeyPair, Signature]:
@@ -2712,6 +2812,8 @@ __all__ = [
     "AmaCryptography",
     # Convenience functions (AI-agent friendly)
     "quick_hash",
+    "quick_hmac",
+    "quick_hkdf",
     "quick_sign",
     "quick_verify",
     "quick_kem",

@@ -70,6 +70,23 @@ __all__ = [
     "FROST_NONCE_BYTES",
     "FROST_COMMITMENT_BYTES",
     "FROST_SIG_SHARE_BYTES",
+    # Native HMAC (RFC 2104 / FIPS 198-1) — direct-consumer surface (Mercury)
+    "native_hmac_sha256",
+    "native_hmac_sha256_2",
+    "native_hmac_sha384",
+    "native_hmac_sha512",
+    "native_hmac_sha3_256",
+    "hmac_sha3_256",
+    # Native HKDF (RFC 5869)
+    "native_hkdf",
+    "native_hkdf_sha256",
+    "native_hkdf_sha384",
+    "native_hkdf_sha512",
+    # Native FIPS 202 hashes / XOFs
+    "native_sha3_256",
+    "native_sha3_512",
+    "native_shake128",
+    "native_shake256",
 ]
 
 
