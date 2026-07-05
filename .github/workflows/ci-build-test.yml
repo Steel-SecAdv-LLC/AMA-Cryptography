@@ -568,4 +568,4 @@ jobs:
           echo "Dependency results: ${{ join(needs.*.result, ', ') }}"
           exit 1
       - name: All required jobs succeeded
-        run: echo "CI Gate passed — all required jobs are green."
+        run: echo "Build and Test Gate passed — all required jobs are green."
