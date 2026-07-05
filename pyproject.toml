@@ -15,8 +15,8 @@
 requires = [
     "setuptools>=82.0.1",
     "wheel>=0.47.0",
-    "cmake>=4.3.2",
-    "Cython>=3.2.5",
+    "cmake>=4.3.4",
+    "Cython>=3.2.6",
     "numpy>=1.24.0",
 ]
 build-backend = "setuptools.build_meta"
@@ -78,7 +78,7 @@ math = [
     # Not required for core cryptographic operations.
     # Install with: pip install "ama-cryptography[math]"
     "numpy>=1.24.0,<3.0.0",
-    "Cython>=3.2.5",
+    "Cython>=3.2.6",
 ]
 monitoring = [
     # NumPy/SciPy for mathematical monitoring (equations, double_helix_engine)
@@ -132,22 +132,22 @@ benchmark = [
     "cryptography>=46.0.7",
 ]
 docs = [
-    "sphinx>=7.4.7",
+    "sphinx>=8.1.3",
     "sphinx-rtd-theme>=3.1.0",
-    "sphinx-autodoc-typehints>=2.3.0",
+    "sphinx-autodoc-typehints>=3.0.1",
 ]
 dev = [
-    "pytest>=7.0.0",
+    "pytest>=9.1.1",
     "pytest-cov>=4.0.0",
     "pytest-timeout>=2.1.0",
     "pytest-benchmark>=4.0.0",
     "pytest-xdist>=3.0.0",
-    "hypothesis>=6.0.0",
+    "hypothesis>=6.155.7",
     # Black 26.3.1 contains the GHSA-fc3w-v5rg-v7q6 fix and requires Python
     # 3.10+, so do not install a vulnerable 3.9-only fallback.
-    "black>=26.3.1; python_version >= '3.10'",
-    "ruff>=0.15.17",
-    "mypy>=1.9.0",
+    "black>=26.5.1; python_version >= '3.10'",
+    "ruff>=0.15.20",
+    "mypy>=2.1.0",
     "bandit>=1.7.0",
     # `safety` was removed in v3.2.0: it was a dev-deps inventory entry
     # that NO CI workflow ever invoked.  Vulnerability scanning is
@@ -163,7 +163,7 @@ dev = [
     # `safety` deletes the chain entirely rather than annotating an
     # ignore-list — INVARIANT-14 hygiene + INVARIANT-1 zero-runtime-dep
     # posture both improve.
-    "Cython>=3.2.5",
+    "Cython>=3.2.6",
     "numpy>=1.24.0",
     "scipy>=1.11.0",
 ]
@@ -330,7 +330,12 @@ skip-string-normalization = false
 
 # MyPy configuration — strict mode
 [tool.mypy]
-python_version = "3.9"
+# Static-analysis target floor.  mypy >= 2.0 (bumped to 2.1.0 with the
+# python-dependencies group, incorporating #357) refuses python_version="3.9"
+# and requires >= 3.10.  This raises only the *type-analysis* baseline to
+# mypy's floor; runtime support for Python 3.9 is unchanged and remains
+# independently validated by the 3.9 lane of the CI test matrix.
+python_version = "3.10"
 strict = true
 disallow_untyped_defs = true
 disallow_any_generics = true

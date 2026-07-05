@@ -22,19 +22,19 @@
 # dep posture and INVARIANT-14 CVE-ignore-list hygiene both improve.
 
 # --- Core test framework ---
-pytest==9.0.3
+pytest==9.1.1
 pytest-benchmark==5.2.3
 pytest-cov==7.1.0
 pytest-timeout==2.4.0
 pytest-xdist==3.8.0
-hypothesis==6.151.10
-coverage==7.13.5
+hypothesis==6.155.7
+coverage==7.14.3
 
 # --- Linting & formatting ---
-black==26.3.1
-mypy==1.19.1
+black==26.5.1
+mypy==2.1.0
 mypy_extensions==1.1.0
-ruff==0.15.17
+ruff==0.15.20
 
 # --- Security scanning ---
 bandit==1.9.4
@@ -47,13 +47,13 @@ numpy==2.4.4
 scipy==1.17.1
 
 # --- Transitive dependencies ---
-click==8.3.1
+click==8.4.2
 execnet==2.1.2
 iniconfig==2.3.0
-markdown-it-py==4.0.0
+markdown-it-py==4.2.0
 mdurl==0.1.2
 pathspec==1.1.1
-platformdirs==4.9.4
+platformdirs==4.10.0
 pluggy==1.6.0
 py-cpuinfo==9.0.0
 # Pygments 2.20.0 includes the CVE-2026-4539 AdlLexer ReDoS fix.
@@ -63,5 +63,5 @@ PyYAML==6.0.3
 pytokens==0.4.1
 rich==15.0.0
 sortedcontainers==2.4.0
-stevedore==5.7.0
+stevedore==5.8.0
 typing_extensions==4.15.0
