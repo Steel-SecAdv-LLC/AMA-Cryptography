@@ -502,20 +502,20 @@ jobs:
           echo "::warning::All 5 pull attempts for ${IMAGE} failed; buildx setup will retry internally"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4
 
       - name: Log in to Docker Hub (optional, avoids rate limits)
         # Gate on BOTH secrets: a half-configured fork (e.g. username
         # set but token missing) would otherwise reach docker/login-action
         # and fail noisily, defeating the "optional" intent of the step.
         if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ env.DOCKERHUB_TOKEN }}
 
       - name: Build Ubuntu image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7
         with:
           context: .
           file: docker/Dockerfile
@@ -526,7 +526,7 @@ jobs:
           cache-to: ${{ github.event_name == 'push' && 'type=gha,scope=ubuntu,mode=max' || '' }}
 
       - name: Build Alpine image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7
         with:
           context: .
           file: docker/Dockerfile.alpine
