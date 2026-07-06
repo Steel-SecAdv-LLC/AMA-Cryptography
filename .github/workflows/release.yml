@@ -75,8 +75,10 @@ on:
         default: true
 
 # Top-level permissions are minimal.  Each job below grants the
-# additional permissions it needs (id-token for OIDC, contents:write
-# only on the github-release job).
+# additional permissions it needs: id-token for OIDC; contents:write on
+# the provenance job (the slsa-github-generator reusable workflow's
+# internal upload-assets job statically requires it) and on the
+# github-release job (to publish the release + assets).
 permissions:
   contents: read
 
