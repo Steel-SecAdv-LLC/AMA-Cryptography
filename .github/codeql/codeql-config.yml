@@ -35,32 +35,25 @@ paths-ignore:
 #   code so accidental `#include "foo.c"` patterns continue to surface.
 
 # ─────────────────────────────────────────────────────────────────────
-# Dismissal procedure for ed25519-donna cosmetic noise (#500, #499 and
-# any future cpp/unused-static-variable that leaks past paths-ignore)
+# reduce_mask_40 / reduce_mask_56 (#500 / #499) — resolved at source
 # ─────────────────────────────────────────────────────────────────────
-# Findings to dismiss:
-#   • #500  cpp/unused-static-variable on reduce_mask_40
-#   • #499  cpp/unused-static-variable on reduce_mask_56
-#   (Both in src/c/vendor/ed25519-donna/curve25519-donna-64bit.h —
-#    upstream code, intentionally unmodified, only referenced from
-#    build configurations donna compiles for other targets.)
+# cpp/unused-static-variable fired on donna's reduce_mask_40 / reduce_mask_56
+# (src/c/vendor/ed25519-donna/curve25519-donna-64bit.h): the 64-bit backend
+# defines them at file scope but only reads them from the emulated-multiply
+# path guarded by `#if !defined(HAVE_NATIVE_UINT128)`, which AMA's native-
+# __int128 targets (x86-64, aarch64) compile out — so CodeQL saw them as
+# unused, and paths-ignore does not stop it (the C/C++ extractor inlines the
+# vendored header into the analysed first-party translation unit).
 #
-# Steps (must be performed by a repo admin with security_events write):
-#   1. Open https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/security/code-scanning
-#   2. Filter by rule "cpp/unused-static-variable" + file "src/c/vendor/**"
-#   3. Select the affected alerts (one at a time, or bulk).
-#   4. Choose "Dismiss alert" → "Won't fix" → comment:
-#        "Third-party library cosmetic — public-domain ed25519-donna,
-#         intentionally unmodified upstream code, scoped out per
-#         .github/codeql/codeql-config.yml paths-ignore. AMA does not
-#         compile the unreferenced configuration these constants
-#         belong to (gated via AMA_ED25519_ASSEMBLY)."
-#   5. Confirm the alerts move to "Closed / Won't fix" state.
+# These are NOT dismissed. They are resolved at the source: the project-local
+# shim src/c/ed25519_donna_shim.c anchors a genuine, hidden-visibility,
+# zero-runtime reference to both masks (compiled only under ED25519_64BIT),
+# so the constants are legitimately used and the rule stays fully enforced.
+# Upstream donna is unmodified. See the "CodeQL cpp/unused-static-variable
+# resolution" block in ed25519_donna_shim.c.
 #
-# Why dismissal is needed even with paths-ignore:
-#   CodeQL's C/C++ extractor inlines vendored headers reachable from
-#   first-party translation units, so a cosmetic alert on a vendor
-#   header can still surface attributed to the analysed first-party
-#   file. paths-ignore stops most of these, dismissal handles the
-#   residue. This is the project policy for the donna unit only —
-#   first-party cpp/unused-static-variable findings are NOT dismissed.
+# Policy for any FUTURE analogous vendor-cosmetic cpp/unused-static-variable
+# that leaks past paths-ignore: prefer the same source-level anchor in the
+# project-local shim over a Security-UI dismissal, so the rule stays a live
+# detector for first-party code. Do not disable the rule or broaden the
+# paths-ignore beyond src/c/vendor/**.
