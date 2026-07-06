@@ -15,13 +15,14 @@ name: "AMA Cryptography CodeQL"
 #     checks via the AMA_ED25519_ASSEMBLY build flag.
 #     CodeQL's `cpp/unused-static-variable` may still surface on
 #     curve25519-donna-64bit.h's reduce_mask_40 / reduce_mask_56
-#     constants (referenced from build configurations donna compiles
-#     for other targets but not ours). These alerts are tagged
-#     "Library" by CodeQL and should be dismissed in the GitHub
-#     Security UI as "Won't fix — third-party library cosmetic" if
-#     they leak through paths-ignore (CodeQL's path filtering is
+#     constants (defined by donna's 64-bit backend but only read from
+#     the emulated-multiply path AMA's native-__int128 build compiles
+#     out). paths-ignore does not stop this (CodeQL's path filtering is
 #     only fully reliable for interpreted languages; for C/C++ the
-#     extractor traces through included files).
+#     extractor traces through included files), so these are resolved
+#     at the source with a genuine reference in ed25519_donna_shim.c —
+#     NOT dismissed in the Security UI. See the "resolved at source"
+#     block below.
 
 paths-ignore:
   - "src/c/vendor/**"
