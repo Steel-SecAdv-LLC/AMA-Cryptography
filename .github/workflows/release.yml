@@ -319,7 +319,14 @@ jobs:
     needs: [hash-artefacts]
     permissions:
       id-token: write       # OIDC for the keyless attestation
-      contents: read
+      # The slsa-github-generator reusable workflow's internal upload-assets
+      # job statically declares `contents: write`.  A called workflow cannot be
+      # granted more than the caller allows, so `contents: read` here fails the
+      # whole run at startup ("nested job 'upload-assets' is requesting
+      # 'contents: write', but is only allowed 'contents: read'") — even though
+      # upload-assets is false.  The generator's documented caller permissions
+      # require write; grant it here (the top-level default stays read).
+      contents: write
       actions: read
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
