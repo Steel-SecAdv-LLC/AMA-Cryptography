@@ -104,6 +104,33 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   is now a hard byte-exact assertion (the previous `xfail(strict)` marker is
   removed) covering all four NIST ACVP sigGen vectors (2 deterministic,
   2 hedged).
+- **Tagged-release workflow now clears startup validation (SLSA provenance
+  permissions).** `.github/workflows/release.yml`'s `provenance` job calls the
+  `slsa-framework/slsa-github-generator` reusable workflow, whose internal
+  `upload-assets` job statically declares `contents: write`. The caller granted
+  only `contents: read`, and a called workflow cannot be granted more than its
+  caller, so GitHub rejected the entire run at creation-time validation — a
+  whole-run `startup_failure` with zero jobs ("nested job 'upload-assets' is
+  requesting 'contents: write', but is only allowed 'contents: read'"),
+  independent of `upload-assets: false`. Granting `contents: write` on the
+  `provenance` job (top-level workflow permissions stay `contents: read`; no
+  other job changes) lets the signed-release pipeline (cibuildwheel → sigstore →
+  SLSA v1 provenance → PyPI Trusted Publishing → GitHub Release) execute.
+  Closes out the tagged-release supply chain introduced in v3.2.0.
+- **Code scanning: closed the two `cpp/unused-static-variable` alerts on the
+  vendored ed25519-donna reduction masks (#499 / #500).** donna's 64-bit backend
+  defines `reduce_mask_40` / `reduce_mask_56` at file scope but only reads them
+  from the emulated-multiply path guarded by `#if !defined(HAVE_NATIVE_UINT128)`;
+  on AMA's native-`__int128` targets (x86-64, aarch64) that path is compiled out,
+  so CodeQL saw the two constants as unused in the translation unit. Rather than
+  dismiss the alerts in the Security UI (the previously documented procedure) or
+  suppress the rule, they are resolved at the source: `src/c/ed25519_donna_shim.c`
+  anchors a genuine reference to both masks — a hidden-visibility, external-
+  linkage, zero-runtime table of their addresses, compiled only under
+  `ED25519_64BIT` (exactly where the constants exist). Upstream donna stays
+  byte-for-byte identical, and `cpp/unused-static-variable` remains fully enforced
+  on all first-party and vendor code. `.github/codeql/codeql-config.yml` records
+  the source-level resolution in place of the retired dismissal procedure.
 
 ---
 

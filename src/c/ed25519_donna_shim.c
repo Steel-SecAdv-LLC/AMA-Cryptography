@@ -59,6 +59,42 @@ ed25519_randombytes_unsafe(void *p, size_t len) {
 #pragma GCC diagnostic pop
 #endif
 
+/* ----------------------------------------------------------------------------
+ * CodeQL cpp/unused-static-variable resolution (code-scanning alerts #499/#500)
+ *
+ * donna's 64-bit backend (curve25519-donna-64bit.h) defines the field-reduction
+ * masks reduce_mask_40 / reduce_mask_51 / reduce_mask_56 at file scope, but the
+ * 40- and 56-bit masks are only *read* from the emulated 128-bit multiply path
+ * guarded by `#if !defined(HAVE_NATIVE_UINT128)`. AMA builds on targets with a
+ * native 128-bit integer (x86-64, aarch64), so that path is compiled out and
+ * CodeQL sees reduce_mask_40 / reduce_mask_56 as unused *in this translation
+ * unit* (reduce_mask_51 is read from the always-compiled reduce path, so it is
+ * never flagged).
+ *
+ * We resolve the finding at the source with a genuine reference — not a
+ * Security-UI "Won't fix" dismissal and not a rule/path suppression — so
+ * cpp/unused-static-variable stays fully enforced on all first-party and vendor
+ * code, and upstream donna stays byte-for-byte identical (the reference lives
+ * here in the project-local shim, never in the vendored header).
+ *
+ * Form: an external-linkage (non-static, so out of scope for the
+ * static-only unused rule), hidden-visibility (unexported from
+ * libama_cryptography), zero-runtime-cost table of the two mask addresses.
+ * Taking &reduce_mask_40 / &reduce_mask_56 is a real use of each constant.
+ * Compiled only under ED25519_64BIT — i.e. exactly the configuration in which
+ * curve25519-donna-64bit.h defines these two symbols (never on the 32-bit
+ * backend or MSVC, where they do not exist).
+ * ------------------------------------------------------------------------- */
+#if defined(ED25519_64BIT)
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((visibility("hidden")))
+#endif
+const uint64_t *const ama_ed25519_donna_reduce_mask_anchor[2] = {
+    &reduce_mask_40,
+    &reduce_mask_56,
+};
+#endif /* ED25519_64BIT */
+
 /* ============================================================================
  * AMA API WRAPPERS
  *
