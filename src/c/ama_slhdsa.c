@@ -40,17 +40,20 @@
  *
  * Validation:
  *   - SHA2-256f path: byte-exact against NIST ACVP SLH-DSA-sigVer-FIPS205
- *     (existing tests/kat/fips205/SLH-DSA-sigVer-FIPS205.json), reused via
- *     the legacy ama_sphincs_* shim.
+ *     (existing tests/kat/fips205/SLH-DSA-sigVer-FIPS205.json).
  *   - SHAKE-128s path: byte-exact against NIST ACVP SLH-DSA-sigGen-FIPS205
  *     deterministic external/pure vectors (tcIds 214–220). See
  *     tests/kat/fips205/slhdsa_shake_128s_siggen_acvp.json.
  *
- * Backward compatibility:
- *   ama_sphincs_keypair / ama_sphincs_sign / ama_sphincs_verify and the
- *   legacy AMA_SPHINCS_256F_*_BYTES constants are preserved; the legacy
- *   entry points thin-wrap into this file's parameter-driven core with
- *   AMA_SLHDSA_SHA2_256F.
+ * Backward compatibility (single canonical signer):
+ *   The legacy SPHINCS+-SHA2-256f-simple API — ama_sphincs_keypair /
+ *   ama_sphincs_sign / ama_sphincs_verify / ama_sphincs_verify_ctx and the
+ *   AMA_SPHINCS_256F_*_BYTES constants — is DEFINED at the foot of this file
+ *   (search "Legacy SPHINCS+ ... compatibility API"). Those entry points
+ *   dispatch into this file's parameter-driven core with AMA_SLHDSA_SHA2_256F;
+ *   ama_sphincs_sign/verify sign/verify the RAW message (no §10.2 wrapper).
+ *   The former standalone src/c/ama_sphincs.c has been removed — its signer
+ *   was proven byte-identical to this core, so there is no drift to maintain.
  */
 
 #include "../include/ama_cryptography.h"
@@ -119,7 +122,7 @@ typedef struct slhdsa_params {
  * serialize to either 22-byte compressed (SHA2) or 32-byte uncompressed
  * (SHAKE) form at hashing time, per FIPS 205 §4.2 / §4.3 / §11.2.
  *
- * Layout matches ama_sphincs.c:
+ * Address word layout (FIPS 205 §4.2):
  *   adrs[0]   = layer            (1 byte effective in compressed form)
  *   adrs[1]   = tree (high 32 bits)
  *   adrs[2]   = tree (low  32 bits)
@@ -134,9 +137,9 @@ typedef struct slhdsa_params {
 #define SLH_ADDR_TYPE_HASHTREE 2
 #define SLH_ADDR_TYPE_FORSTREE 3
 #define SLH_ADDR_TYPE_FORSPK   4
-/* SHAKE family uses separate PRF address types (FIPS 205 §6 / §8). For the
- * SHA2 family ama_sphincs.c proves byte-exact NIST ACVP compliance with the
- * surrounding chain/tree type left in place; the per-family wots_prf_type /
+/* SHAKE family uses separate PRF address types (FIPS 205 §6 / §8). Both
+ * families derive secret values with the dedicated WOTS_PRF/FORS_PRF address
+ * types (proven byte-exact against NIST ACVP); the per-family wots_prf_type /
  * fors_prf_type fields in slhdsa_params_t encode this distinction. */
 #define SLH_ADDR_TYPE_WOTS_PRF 5
 #define SLH_ADDR_TYPE_FORS_PRF 6
@@ -174,7 +177,7 @@ static void slh_addr_serialize(const slhdsa_params_t *p, uint8_t *out,
     if (p->use_compressed_adrs) {
         /* 22-byte ADRSc per FIPS 205 §11.2:
          *   ADRS[3] || ADRS[8:16] || ADRS[19] || ADRS[20:32]
-         * Mirrors spx_addr_compress() in ama_sphincs.c byte-for-byte. */
+         * 22-byte compressed ADRSc per FIPS 205 §11.2. */
         out[0]  = (uint8_t)a[0];
         out[1]  = (uint8_t)(a[1] >> 24); out[2]  = (uint8_t)(a[1] >> 16);
         out[3]  = (uint8_t)(a[1] >> 8);  out[4]  = (uint8_t)a[1];
@@ -245,7 +248,11 @@ static void sha2_F(const slhdsa_params_t *p, uint8_t *out,
                    const uint8_t *pub_seed, const uint32_t adrs[8],
                    const uint8_t *m) {
     /* F = Trunc_n(SHA-256(PK.seed || toByte(0, 64-n) || ADRSc || M_1)) */
-    uint8_t addr_c[22];
+    /* 32 bytes (not 22) so the buffer covers slh_addr_serialize's worst-case
+     * write regardless of param set: the SHA2 family only ever emits the
+     * 22-byte compressed ADRSc here, but sizing to the uncompressed 32-byte
+     * form keeps -Wstringop-overflow quiet without any behavioural change. */
+    uint8_t addr_c[32];
     uint8_t padding[64];
     uint8_t hash[32];
     ama_sha256_ctx ctx;
@@ -281,7 +288,11 @@ static void sha2_HT(const slhdsa_params_t *p, uint8_t *out,
                     const uint8_t *pub_seed, const uint32_t adrs[8],
                     const uint8_t *m, size_t inblocks) {
     /* H / T_l = Trunc_n(SHA-512(PK.seed || toByte(0, 128-n) || ADRSc || M)) */
-    uint8_t addr_c[22];
+    /* 32 bytes (not 22) so the buffer covers slh_addr_serialize's worst-case
+     * write regardless of param set: the SHA2 family only ever emits the
+     * 22-byte compressed ADRSc here, but sizing to the uncompressed 32-byte
+     * form keeps -Wstringop-overflow quiet without any behavioural change. */
+    uint8_t addr_c[32];
     uint8_t hash[64];
     uint8_t buf[AMA_SLHDSA_SHA2_HT_BUF_BYTES];
     size_t total, msglen;
@@ -311,7 +322,11 @@ static void sha2_PRF(const slhdsa_params_t *p, uint8_t *out,
                      const uint8_t *pub_seed, const uint32_t adrs[8],
                      const uint8_t *sk_seed) {
     /* PRF = Trunc_n(SHA-256(PK.seed || toByte(0, 64-n) || ADRSc || SK.seed)) */
-    uint8_t addr_c[22];
+    /* 32 bytes (not 22) so the buffer covers slh_addr_serialize's worst-case
+     * write regardless of param set: the SHA2 family only ever emits the
+     * 22-byte compressed ADRSc here, but sizing to the uncompressed 32-byte
+     * form keeps -Wstringop-overflow quiet without any behavioural change. */
+    uint8_t addr_c[32];
     uint8_t padding[64];
     uint8_t hash[32];
     ama_sha256_ctx ctx;
@@ -478,8 +493,8 @@ static int shake_H_msg(const slhdsa_params_t *p, uint8_t *out,
  *     k*a bits for FORS indices (= 35*9 = 315 bits → 40 bytes)
  *     ceil((h - h/d) / 8) = ceil(64/8) = 8 bytes for tree index
  *     ceil((h/d) / 8) = ceil(4/8) = 1 byte for leaf index
- *     => 40 + 8 + 1 = 49 ✓ (matches existing SPX_FORS_MSG_BYTES + 8 + 4 logic)
- * Mirrors ama_sphincs.c byte-for-byte.
+ *     => 40 + 8 + 1 = 49 ✓
+ * Byte-exact against NIST ACVP SLH-DSA-SHA2-256f vectors (FIPS 205).
  */
 static const slhdsa_params_t SLHDSA_PARAMS_SHA2_256F = {
     AMA_SLHDSA_SHA2_256F,
@@ -1324,4 +1339,116 @@ AMA_API ama_error_t ama_slhdsa_sign_internal(ama_slhdsa_param_set_t ps,
     rc = slh_sign_internal(p, signature, addrnd, message, message_len, sk);
     if (rc == AMA_SUCCESS) *signature_len = p->sig_bytes;
     return rc;
+}
+
+/* ============================================================================
+ * Legacy SPHINCS+-SHA2-256f-simple compatibility API
+ *
+ * These four entry points ARE the historical ama_sphincs_* surface (formerly
+ * a standalone src/c/ama_sphincs.c). They now dispatch into the single
+ * parameter-driven core above with AMA_SLHDSA_SHA2_256F, eliminating the
+ * duplicate signer that would otherwise have to be kept byte-for-byte in
+ * lockstep. The two implementations were proven byte-identical before the
+ * merge (identical pk/sk/signature for the same seeds and addrnd), so this is
+ * a true consolidation, not a shim over a divergent code path.
+ *
+ * Semantic contract preserved from the original SPHINCS+ API:
+ *   - ama_sphincs_sign / ama_sphincs_verify operate on the RAW message with
+ *     NO FIPS 205 §10.2 context wrapper (they dispatch to the unwrapped
+ *     slh_sign_internal / slh_verify_internal).
+ *   - ama_sphincs_verify_ctx applies the §9.2 M' = 0x00 || len(ctx) || ctx ||
+ *     M wrapper, which is byte-identical to the §10.2 wrapper, so it delegates
+ *     to ama_slhdsa_verify.
+ *   - ama_sphincs_sign stays HEDGED: it draws a fresh n-byte opt_rand per call.
+ * ============================================================================ */
+
+/* Deterministic-randomness hook for KAT testing (test-only), preserved from
+ * the original ama_sphincs.c so tests/c/test_kat.c keeps linking and driving
+ * the SPHINCS+ vectors deterministically. Kept distinct from
+ * ama_slhdsa_randombytes_hook. */
+#ifdef AMA_TESTING_MODE
+ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t *buf, size_t len) = NULL;
+#endif
+
+static ama_error_t spx_compat_randombytes(uint8_t *buf, size_t len) {
+#ifdef AMA_TESTING_MODE
+    if (ama_sphincs_randombytes_hook) {
+        return ama_sphincs_randombytes_hook(buf, len);
+    }
+#endif
+    return ama_randombytes(buf, len);
+}
+
+AMA_API ama_error_t ama_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key) {
+    const slhdsa_params_t *p = slh_lookup(AMA_SLHDSA_SHA2_256F);
+    uint8_t seeds[3 * 32];
+    ama_error_t rc;
+
+    if (!p || !public_key || !secret_key) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    /* Draw SK.seed || SK.prf || PK.seed (3n bytes) and derive the keypair. */
+    rc = spx_compat_randombytes(seeds, 3 * p->n);
+    if (rc != AMA_SUCCESS) {
+        return rc;
+    }
+    rc = slh_keygen_internal(p, seeds, seeds + p->n, seeds + 2 * p->n,
+                             public_key, secret_key);
+    ama_secure_memzero(seeds, sizeof(seeds));
+    return rc;
+}
+
+AMA_API ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
+                                     const uint8_t *message, size_t message_len,
+                                     const uint8_t *secret_key) {
+    const slhdsa_params_t *p = slh_lookup(AMA_SLHDSA_SHA2_256F);
+    uint8_t opt_rand[32];
+    ama_error_t rc;
+
+    if (!p || !signature || !signature_len || !message || !secret_key) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (*signature_len < p->sig_bytes) {
+        *signature_len = p->sig_bytes;
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    /* Hedged randomizer: fresh addrnd per signature. */
+    rc = spx_compat_randombytes(opt_rand, p->n);
+    if (rc != AMA_SUCCESS) {
+        return rc;
+    }
+    /* RAW message — no §10.2 context wrapper (legacy SPHINCS+ semantics). */
+    rc = slh_sign_internal(p, signature, opt_rand, message, message_len, secret_key);
+    if (rc == AMA_SUCCESS) {
+        *signature_len = p->sig_bytes;
+    }
+    ama_secure_memzero(opt_rand, sizeof(opt_rand));
+    return rc;
+}
+
+AMA_API ama_error_t ama_sphincs_verify(const uint8_t *message, size_t message_len,
+                                       const uint8_t *signature, size_t signature_len,
+                                       const uint8_t *public_key) {
+    const slhdsa_params_t *p = slh_lookup(AMA_SLHDSA_SHA2_256F);
+
+    if (!p || !message || !signature || !public_key) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    /* RAW message verify — no §10.2 context wrapper. slh_verify_internal
+     * enforces the exact-length precondition (VERIFY_FAILED on mismatch). */
+    return slh_verify_internal(p, signature, signature_len,
+                               message, message_len, public_key);
+}
+
+AMA_API ama_error_t ama_sphincs_verify_ctx(
+    const uint8_t *message, size_t message_len,
+    const uint8_t *ctx, size_t ctx_len,
+    const uint8_t *signature, size_t signature_len,
+    const uint8_t *public_key) {
+    /* M' = 0x00 || IntegerToBytes(|ctx|, 1) || ctx || M, then verify. This is
+     * exactly what ama_slhdsa_verify does for AMA_SLHDSA_SHA2_256F. */
+    return ama_slhdsa_verify(AMA_SLHDSA_SHA2_256F, signature, signature_len,
+                             message, message_len, ctx, ctx_len, public_key);
 }

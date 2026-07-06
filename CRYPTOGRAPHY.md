@@ -21,7 +21,7 @@ This document provides an overview of the cryptographic algorithms used in AMA C
 |-----------|------|----------------|----------|----------------|--------|
 | ML-DSA-65 (Dilithium) | Digital Signature | NIST Level 3 (192-bit) | FIPS 204 | Native C (`ama_dilithium.c`) | Primary PQC |
 | ML-KEM-1024 (Kyber) | Key Encapsulation | NIST Level 5 (256-bit) | FIPS 203 | Native C (`ama_kyber.c`) | Backend Ready |
-| SPHINCS+-SHA2-256f | Hash-Based Signature | NIST Level 5 (256-bit) | FIPS 205 | Native C (`ama_sphincs.c`) | Backend Ready |
+| SPHINCS+-SHA2-256f | Hash-Based Signature | NIST Level 5 (256-bit) | FIPS 205 | Native C (`ama_slhdsa.c`) | Backend Ready |
 | AES-256-GCM | Authenticated Encryption | 256-bit | SP 800-38D | Native C (`ama_aes_gcm.c`) | Full |
 | Ed25519 | Digital Signature | 128-bit classical | RFC 8032 | Native C (`ama_ed25519.c`) | Classical + Hybrid |
 | SHA3-256 | Hash Function | 128-bit collision | FIPS 202 | Native C (`ama_sha3.c`) | Content Hashing |
@@ -93,7 +93,7 @@ SLH-DSA (FIPS 205, SPHINCS+ lineage) provides stateless hash-based signatures wi
 ### Implementation Provenance
 
 All three post-quantum primitives (`ama_kyber.c`, `ama_dilithium.c`,
-`ama_sphincs.c`) were **written directly from the NIST FIPS 203 / 204 / 205
+`ama_slhdsa.c`) were **written directly from the NIST FIPS 203 / 204 / 205
 specifications**. No source-level code is derived from pq-crystals,
 PQClean, liboqs, or any other third-party PQC tree. This distinguishes
 AMA from the common pattern in the ecosystem (liboqs, AWS-LC,
@@ -105,7 +105,7 @@ readers can audit the derivation status.
 |-----------|------|------------|----------|
 | ML-KEM-1024 | `src/c/ama_kyber.c` | Clean-room from FIPS 203 §5–§7 | 25/25 KeyGen, 25/25 EncapDecap |
 | ML-DSA-65 | `src/c/ama_dilithium.c` | Clean-room from FIPS 204 §5–§8 | 25/25 KeyGen, 15/15 SigVer (TG3) |
-| SLH-DSA-SHA2-256f | `src/c/ama_sphincs.c` | Clean-room from FIPS 205 §9–§11 | 14/14 SigVer (TG5) |
+| SLH-DSA-SHA2-256f | `src/c/ama_slhdsa.c` | Clean-room from FIPS 205 §9–§11 | 14/14 SigVer (TG5) |
 
 "Clean-room" here means the C source was written against the FIPS normative
 text — it is **not** a claim of independent formal proof. For the
@@ -281,7 +281,7 @@ All cryptographic primitives are implemented natively in C with zero external de
 | `ama_aes_gcm.c` | AES-256-GCM | SP 800-38D |
 | `ama_dilithium.c` | ML-DSA-65 | FIPS 204 |
 | `ama_kyber.c` | ML-KEM-1024 | FIPS 203 |
-| `ama_sphincs.c` | SPHINCS+-SHA2-256f | FIPS 205 |
+| `ama_slhdsa.c` | SLH-DSA-SHA2-256f (SPHINCS+ lineage) | FIPS 205 |
 | `ama_consttime.c` | Constant-time utilities | — |
 | `ama_platform_rand.c` | Platform CSPRNG | — |
 | `ama_x25519.c` | X25519 key exchange | RFC 7748 |

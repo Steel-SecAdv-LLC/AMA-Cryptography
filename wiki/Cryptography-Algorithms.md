@@ -12,7 +12,7 @@ Complete reference for all cryptographic algorithms used in AMA Cryptography, th
 |-----------|------|---------------|----------|----------|--------|
 | ML-DSA-65 (Dilithium) | Digital Signature | NIST Level 3 (192-bit quantum) | FIPS 204 | `ama_dilithium.c` | Primary PQC |
 | ML-KEM-1024 (Kyber) | Key Encapsulation | NIST Level 5 (256-bit quantum) | FIPS 203 | `ama_kyber.c` | Available |
-| SPHINCS+-SHA2-256f | Hash-Based Signature | NIST Level 5 (256-bit quantum) | FIPS 205 | `ama_sphincs.c` | Available |
+| SPHINCS+-SHA2-256f | Hash-Based Signature | NIST Level 5 (256-bit quantum) | FIPS 205 | `ama_slhdsa.c` | Available |
 | Ed25519 | Digital Signature | 128-bit classical | RFC 8032 | `ama_ed25519.c` | Classical + Hybrid |
 | AES-256-GCM | Authenticated Encryption | 256-bit key / 128-bit quantum | SP 800-38D | `ama_aes_gcm.c` | Full |
 | ChaCha20-Poly1305 | Authenticated Encryption | 256-bit key / 128-bit security | RFC 8439 | `ama_chacha20poly1305.c` | Full |

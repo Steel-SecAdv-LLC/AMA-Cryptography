@@ -76,7 +76,7 @@ Section 2.1 are the correctness bar.
 Source files:
 - `src/c/ama_kyber.c` — ML-KEM-1024 (FIPS 203), clean-room from §5–§7
 - `src/c/ama_dilithium.c` — ML-DSA-65 (FIPS 204), clean-room from §5–§8
-- `src/c/ama_sphincs.c` — SLH-DSA-SHA2-256f (FIPS 205), clean-room from §9–§11
+- `src/c/ama_slhdsa.c` — SLH-DSA-SHA2-256f (FIPS 205), clean-room from §9–§11
 - `src/c/internal/ama_sha2.h` — Shared SHA-512/HMAC-SHA-512 (used by Ed25519 + SLH-DSA)
 - `src/c/PROVENANCE.md` — Per-primitive derivation status, known divergences, and the clean-room attestation
 
@@ -156,7 +156,7 @@ wrapper. The internal verify function remains unchanged.
 ### 2.3 Resolved: SLH-DSA-SHA2-256f SigVer (previously 2 failures, now 14/14 pass)
 
 **Root cause:** Multiple deviations from FIPS 205 Section 11.2 (SHA-2
-instantiation for security categories {3, 5}) in `src/c/ama_sphincs.c`:
+instantiation for security categories {3, 5}) in `src/c/ama_slhdsa.c`:
 
 1. **H_msg used SHA-256 instead of SHA-512.** FIPS 205 Table 5 specifies
    MGF1-SHA-512 for H_msg in categories {3, 5}. The implementation used
@@ -172,7 +172,7 @@ instantiation for security categories {3, 5}) in `src/c/ama_sphincs.c`:
    compression address, contrary to FIPS 205 Algorithms 7, 16, and 18
    which preserve the keypair through these operations.
 
-**Fix:** SHA-512 hash function added to `ama_sphincs.c` (zero external
+**Fix:** SHA-512 hash function added to `ama_slhdsa.c` (zero external
 dependencies). H_msg, H, and T_l updated to use SHA-512 for category 5.
 ADRSc compression corrected to FIPS 205 byte layout. Keypair address
 preserved in FORS and WOTS+ pk compression addresses.
@@ -201,7 +201,7 @@ Public-API callers map the raw return to a typed error:
 
 - `ama_hkdf.c:54–57` — `ama_hmac_sha512()` maps `-2 → AMA_ERROR_OVERFLOW`
   and any other non-zero → `AMA_ERROR_MEMORY`.
-- `ama_sphincs.c:1065–1067` — `spx_prf_msg()` propagates any non-zero
+- `ama_slhdsa.c` `sha2_PRF_msg()` propagates any non-zero
   return as `AMA_ERROR_MEMORY`, causing signing to fail rather than
   producing a signature with corrupted or zeroed randomness.
 
@@ -210,8 +210,9 @@ exhaustion or pathological input sizes.
 
 ### 2.5 Remediation: SHA-512 duplication eliminated (v3.0.0)
 
-**Root cause:** Identical SHA-512 implementations existed in both
-`ama_sphincs.c` and `ama_ed25519.c`.
+**Root cause:** Identical SHA-512 implementations existed in both signers;
+they are now the shared SHA-512 in `internal/ama_sha2.h` (used by
+`ama_slhdsa.c` and `ama_ed25519.c`).
 
 **Fix:** Extracted shared SHA-512 to `src/c/internal/ama_sha2.h` (header-only,
 static linkage). Both source files now include the shared header. Zero external

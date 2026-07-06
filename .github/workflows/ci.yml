@@ -585,3 +585,45 @@ jobs:
     - name: Run AVX-512 KAT test (byte-identity vs scalar + AVX2)
       if: steps.cpu.outputs.have_avx512 == '1'
       run: ctest --test-dir build -R test_sha3_avx512_kat --output-on-failure
+
+  ci-gate:
+    name: CI Gate
+    # Single aggregating status check for this workflow. Branch protection
+    # should require ONLY this context (one per primary CI workflow) instead of
+    # the individual job names: adding, renaming, or matrix-expanding a job then
+    # updates this needs: list under code review rather than drifting the
+    # branch-protection config out of sync (required-context drift). `needs:` is
+    # workflow-local, so each of ci.yml / ci-build-test.yml / static-analysis.yml
+    # carries its own gate.
+    #
+    # if: always() so the gate always resolves to a definitive red/green even
+    # when a dependency fails — otherwise it would be reported as `skipped` and
+    # leave the PR stuck "waiting for status".
+    if: always()
+    needs:
+      - test
+      - code-quality
+      - docs-build
+      - security-checks
+      - benchmark-regression
+      - constant-time-check
+      - test-avx512
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+    - name: Fail if any required job did not succeed
+      # Fail only on a genuine 'failure'. 'skipped' is tolerated (an upstream
+      # failure that skips a dependent is already caught via that upstream job's
+      # own 'failure'), and 'cancelled' is tolerated because — with this repo's
+      # concurrency: cancel-in-progress — it only appears on a run superseded by
+      # a newer push (the latest run governs branch protection) or a manual
+      # abort (never merged). Matrix jobs are fail-fast:false and timeouts
+      # report as 'failure', so 'cancelled' never masks a real job problem on
+      # the authoritative head-commit run.
+      if: ${{ contains(needs.*.result, 'failure') }}
+      run: |
+        echo "::error::CI Gate failed — a required job did not succeed."
+        echo "Dependency results: ${{ join(needs.*.result, ', ') }}"
+        exit 1
+    - name: All required jobs succeeded
+      run: echo "CI Gate passed — all required jobs are green."

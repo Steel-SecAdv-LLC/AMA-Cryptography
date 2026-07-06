@@ -25,7 +25,6 @@ PQC Backend:
 
 import concurrent.futures
 import contextlib
-import hashlib
 import logging
 import os
 import pathlib
@@ -92,6 +91,8 @@ from ama_cryptography.pqc_backends import (
     native_ed25519_verify,
     native_hkdf,
     native_hmac_sha3_256,
+    native_sha3_256,
+    native_sha256,
 )
 
 _HMAC_NATIVE = _HMAC_SHA3_256_NATIVE_AVAILABLE
@@ -412,7 +413,7 @@ class MLDSAProvider(CryptoProvider):
 
         sig_bytes = dilithium_sign(message, secret_key)
         message_hash = (
-            precomputed_hash if precomputed_hash is not None else hashlib.sha3_256(message).digest()
+            precomputed_hash if precomputed_hash is not None else native_sha3_256(message)
         )
 
         return Signature(
@@ -514,7 +515,7 @@ class Ed25519Provider(CryptoProvider):
 
         sig_bytes = native_ed25519_sign(message, full_sk)
         message_hash = (
-            precomputed_hash if precomputed_hash is not None else hashlib.sha3_256(message).digest()
+            precomputed_hash if precomputed_hash is not None else native_sha3_256(message)
         )
 
         return Signature(
@@ -845,7 +846,7 @@ class SphincsProvider(CryptoProvider):
         _enforce_invariant7()
         sig_bytes = sphincs_sign(message, secret_key)
         message_hash = (
-            precomputed_hash if precomputed_hash is not None else hashlib.sha3_256(message).digest()
+            precomputed_hash if precomputed_hash is not None else native_sha3_256(message)
         )
 
         return Signature(
@@ -1356,7 +1357,13 @@ class AESGCMProvider:
         if nonce is not None and len(nonce) != 12:
             raise ValueError(f"AES-256-GCM nonce must be 12 bytes, got {len(nonce)}")
 
-        key_id: bytes = hashlib.sha256(key).digest()
+        # SHA-256 (NOT SHA3-256): key_id is the persisted namespace for the
+        # AES-GCM nonce-counter high-water mark. native_sha256 is byte-identical
+        # to hashlib.sha256, so on-disk counters keep matching across the
+        # upgrade; switching the algorithm would remap every key to a fresh
+        # counter, reset the 2^32 birthday-safety limit, and risk random-nonce
+        # reuse (INVARIANT-1: native, no stdlib hashlib).
+        key_id: bytes = native_sha256(key)
 
         # Reserve a counter slot atomically.  This is the critical
         # change vs. the previous "increment in memory, batch-persist
@@ -1652,9 +1659,7 @@ class HybridSignatureProvider(CryptoProvider):
         pqc_sk = secret_key[self.ED25519_SK_SIZE :]
 
         # Compute hash once and pass to both providers
-        msg_hash = (
-            precomputed_hash if precomputed_hash is not None else hashlib.sha3_256(message).digest()
-        )
+        msg_hash = precomputed_hash if precomputed_hash is not None else native_sha3_256(message)
 
         # Create both signatures using native backends, passing precomputed hash
         classical_sig = self.classical_provider.sign(
@@ -2466,7 +2471,7 @@ def create_crypto_package(
     # ========================================================================
     # LAYER 1: Content Integrity — SHA3-256 (NIST FIPS 202)
     # ========================================================================
-    content_hash = hashlib.sha3_256(content).hexdigest()
+    content_hash = native_sha3_256(content).hex()
 
     # Precompute the SHA3-256 digest once for reuse across sign() calls.
     # This eliminates redundant hash computations: Layer 1 computes the hash,
@@ -2660,7 +2665,7 @@ def verify_crypto_package(
     # ========================================================================
     # LAYER 1: Content Integrity — SHA3-256
     # ========================================================================
-    computed_hash = hashlib.sha3_256(content).hexdigest()
+    computed_hash = native_sha3_256(content).hex()
     results["content_hash"] = computed_hash == package.content_hash
 
     # ========================================================================

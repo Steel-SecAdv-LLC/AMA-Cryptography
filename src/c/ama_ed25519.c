@@ -88,7 +88,7 @@
 #define AMA_INIT_IN_PROGRESS  1
 #define AMA_INIT_READY        2
 
-/* SHA-512 provided by internal/ama_sha2.h (shared with ama_sphincs.c) */
+/* SHA-512 provided by internal/ama_sha2.h (shared with ama_slhdsa.c) */
 
 /* sha512() is now ama_sha512() from internal/ama_sha2.h */
 #define sha512 ama_sha512

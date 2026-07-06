@@ -8,7 +8,7 @@
  * @date 2026-04-06
  *
  * Full SHA-256 per FIPS 180-4. Replaces OpenSSL EVP_Digest(SHA-256) calls
- * in ama_sphincs.c for zero-dependency SPHINCS+ operation.
+ * in ama_slhdsa.c for zero-dependency SLH-DSA/SPHINCS+ operation.
  *
  * Reference: NIST FIPS 180-4, Secure Hash Standard (SHS), August 2015.
  */

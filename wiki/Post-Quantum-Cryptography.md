@@ -212,7 +212,7 @@ SPHINCS+ is a **stateless hash-based signature scheme** whose security relies on
 
 ### Native C Implementation
 
-**File:** `src/c/ama_sphincs.c`
+**File:** `src/c/ama_slhdsa.c`
 
 Features:
 - Full WOTS+ one-time signature scheme

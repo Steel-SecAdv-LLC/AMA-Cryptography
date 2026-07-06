@@ -4,7 +4,7 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 3.1.0 + Unreleased |
+| Document Version | 3.3.0 |
 | Last Updated | 2026-05-16 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
@@ -131,7 +131,7 @@ AMA Cryptography is designed as a standalone cryptographic library. Any Python o
 | Classical Signature | Ed25519 | RFC 8032 | 128-bit classical security | **Full** (ama_ed25519.c) |
 | Quantum-Resistant Signature | ML-DSA-65 (Dilithium) | NIST FIPS 204 | 192-bit quantum security | **Full** (ama_dilithium.c) |
 | Key Encapsulation | ML-KEM-1024 (Kyber) | NIST FIPS 203 | 256-bit quantum security | **Full** (ama_kyber.c) |
-| Hash-Based Signature | SLH-DSA-SHA2-256f | NIST FIPS 205 | 256-bit quantum security | **Full** (ama_sphincs.c / ama_slhdsa.c) |
+| Hash-Based Signature | SLH-DSA-SHA2-256f | NIST FIPS 205 | 256-bit quantum security | **Full** (ama_slhdsa.c) |
 | Hash-Based Signature | SLH-DSA-SHAKE-128s | NIST FIPS 205 | NIST L1 | **Full** (ama_slhdsa.c) |
 | Authenticated Encryption | AES-256-GCM | NIST SP 800-38D | 256-bit key, 128-bit security | **Full** (ama_aes_gcm.c) |
 | Key Derivation | HKDF-SHA3-256 | RFC 5869 | 256-bit derived keys | **Full** (ama_hkdf.c) |
@@ -160,8 +160,7 @@ Signature and key exchange:
 - `src/c/ama_ed25519.c` - Ed25519 keygen/sign/verify with windowed scalar mult
 - `src/c/ama_kyber.c` - ML-KEM-1024 full native implementation (NTT, IND-CCA2, Fujisaki-Okamoto)
 - `src/c/ama_dilithium.c` - ML-DSA-65 full native implementation (NTT q=8380417, rejection sampling)
-- `src/c/ama_sphincs.c` - legacy SLH-DSA-SHA2-256f-compatible API surface (WOTS+, FORS, hypertree)
-- `src/c/ama_slhdsa.c` - parameterized SLH-DSA implementation for SHA2-256f and SHAKE-128s (FIPS 205)
+- `src/c/ama_slhdsa.c` - parameterized SLH-DSA implementation for SHA2-256f and SHAKE-128s (FIPS 205; WOTS+, FORS, hypertree); also provides the legacy SLH-DSA-SHA2-256f-compatible `ama_sphincs_*` API surface
 - `src/c/ama_x25519.c` - X25519 Diffie-Hellman key exchange (RFC 7748)
 - `src/c/ama_secp256k1.c` - secp256k1 elliptic curve operations (HD key derivation)
 

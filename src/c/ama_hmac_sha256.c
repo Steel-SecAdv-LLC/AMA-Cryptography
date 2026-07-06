@@ -8,7 +8,7 @@
  * @date 2026-04-06
  *
  * Replaces OpenSSL EVP_MAC(HMAC-SHA256) / HMAC_CTX calls in
- * ama_sphincs.c spx_prf_msg() for zero-dependency SPHINCS+ operation.
+ * ama_slhdsa.c sha2_PRF_msg() for zero-dependency SLH-DSA/SPHINCS+ operation.
  *
  * Construction: HMAC(K, m) = SHA-256((K' XOR opad) || SHA-256((K' XOR ipad) || m))
  * Where K' = key padded to SHA-256 block size (64 bytes).

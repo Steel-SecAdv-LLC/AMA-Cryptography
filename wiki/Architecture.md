@@ -81,7 +81,7 @@ flowchart TD
         kyber["ama_kyber.c\nML-KEM-1024 (FIPS 203)"]:::gold
         ed["ama_ed25519.c\nEd25519 C11 atomics"]:::gold
         sha3["ama_sha3.c\nSHA3-256 / SHAKE128 / SHAKE256"]:::black
-        sphincs["ama_sphincs.c\nSLH-DSA-SHA2-256f"]:::black
+        sphincs["ama_slhdsa.c\nSLH-DSA-SHA2-256f"]:::black
         aesgcm["ama_aes_gcm.c\nAES-256-GCM"]:::black
         ct["ama_consttime.c\nSide-channel resistant ops"]:::black
     end
@@ -214,7 +214,7 @@ classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 | `ama_aes_bitsliced.c` | Constant-time AES S-box | — |
 | `ama_dilithium.c` | ML-DSA-65 (Dilithium) | NIST FIPS 204 |
 | `ama_kyber.c` | ML-KEM-1024 (Kyber) | NIST FIPS 203 |
-| `ama_sphincs.c` | SLH-DSA-SHA2-256f | NIST FIPS 205 |
+| `ama_slhdsa.c` | SLH-DSA-SHA2-256f | NIST FIPS 205 |
 | `ama_x25519.c` | X25519 key exchange | RFC 7748 |
 | `ama_chacha20poly1305.c` | ChaCha20-Poly1305 AEAD | RFC 8439 |
 | `ama_argon2.c` | Argon2id password hashing | RFC 9106 |
@@ -317,7 +317,7 @@ See [Key Management](Key-Management) for full details.
 | NIST FIPS 202 | SHA3-256/512, SHAKE | `ama_sha3.c` |
 | NIST FIPS 203 | ML-KEM-1024 (Kyber) | `ama_kyber.c` |
 | NIST FIPS 204 | ML-DSA-65 (Dilithium) | `ama_dilithium.c` |
-| NIST FIPS 205 | SLH-DSA-SHA2-256f | `ama_sphincs.c` |
+| NIST FIPS 205 | SLH-DSA-SHA2-256f | `ama_slhdsa.c` |
 | NIST SP 800-38D | AES-256-GCM | `ama_aes_gcm.c` |
 | RFC 2104 | HMAC | `ama_hkdf.c` |
 | RFC 5869 | HKDF | `ama_hkdf.c` |

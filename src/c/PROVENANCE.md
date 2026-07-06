@@ -13,7 +13,7 @@ what was transcribed from the standard, and where the two diverge.
 
 It is the companion for file-level `Provenance:` comments added to
 [`ama_kyber.c`](ama_kyber.c), [`ama_dilithium.c`](ama_dilithium.c), and
-[`ama_sphincs.c`](ama_sphincs.c). When provenance claims here and in a
+[`ama_slhdsa.c`](ama_slhdsa.c). When provenance claims here and in a
 source file conflict, **the source file is authoritative** — this document
 must be updated to match.
 
@@ -30,7 +30,7 @@ and continuously enforced in
 |-----------|-------------|------------|--------------|---------|----------|
 | ML-KEM-1024 (FIPS 203) | `ama_kyber.c` | Written from FIPS 203 spec | None (no upstream code copied) | N/A (clean-room) | 25/25 KeyGen, 25/25 EncapDecap |
 | ML-DSA-65 (FIPS 204) | `ama_dilithium.c` | Written from FIPS 204 spec | None (no upstream code copied) | N/A (clean-room) | 25/25 KeyGen, 15/15 SigVer (TG3) |
-| SLH-DSA-SHA2-256f (FIPS 205) | `ama_sphincs.c` | Written from FIPS 205 spec | None (no upstream code copied) | N/A (clean-room) | 14/14 SigVer (TG5) |
+| SLH-DSA-SHA2-256f (FIPS 205) | `ama_slhdsa.c` | Written from FIPS 205 spec | None (no upstream code copied) | N/A (clean-room) | 14/14 SigVer (TG5) |
 | Ed25519 | `ama_ed25519.c` + `vendor/ed25519-donna/` | Vendored | [floodyberry/ed25519-donna](https://github.com/floodyberry/ed25519-donna) | Public domain (see `vendor/ed25519-donna/LICENSE`) | Sign/verify round-trip |
 | SHA3-256 / SHA3-512 / SHAKE | `ama_sha3.c` | Written from FIPS 202 spec | None | N/A (clean-room) | 554 AFT + 400 MCT (151/86/174/143 AFT + 100 MCT per algo) |
 | SHA-256 | `ama_sha256.c` | Written from FIPS 180-4 spec | None | N/A (clean-room) | FIPS 180-4 §B.1 refs |
@@ -136,7 +136,7 @@ AMA mitigates via hedged randomness (the `rnd` byte per FIPS 204 §5.3).
 
 ---
 
-## SLH-DSA-SHA2-256f — `ama_sphincs.c`
+## SLH-DSA-SHA2-256f — `ama_slhdsa.c` (consolidated from the former standalone SPHINCS+ signer)
 
 **Standard:** NIST FIPS 205 (SLH-DSA, August 2024 final).
 **Parameter set:** SLH-DSA-SHA2-256f (n=32, h=68, d=17, h'=4, a=9, k=35,
@@ -150,7 +150,7 @@ algorithms (`slh_keygen`, `slh_sign`, `slh_verify`, WOTS+ 8/9/10, FORS
 transcribing FIPS 205 §9–§11 into C.
 
 **Hash instantiation (FIPS 205 §11.2, security categories {3,5}):**
-`ama_sphincs.c` uses:
+`ama_slhdsa.c` uses:
 - `H_msg` = MGF1-SHA-512 (with `toByte(0, 64 − n)` padding) — full
   resolution is documented in [`CSRC_ALIGN_REPORT.md §2.3`](../../docs/compliance/CSRC_ALIGN_REPORT.md).
 - `PRF_msg` = `Trunc_n(HMAC-SHA-512(SK.prf, opt_rand || M))` — see
@@ -245,7 +245,7 @@ signed-digit comb).
 ## Clean-room statement
 
 For the three PQC primitives (`ama_kyber.c`, `ama_dilithium.c`,
-`ama_sphincs.c`), the maintainer (Andrew E. A., Steel Security Advisors
+`ama_slhdsa.c`), the maintainer (Andrew E. A., Steel Security Advisors
 LLC) attests that:
 
 1. The C source was written directly against the FIPS 203 / 204 / 205
@@ -283,6 +283,6 @@ a PQClean fork with the identifiers renamed, or something in between.
 
 The file-level `Provenance:` comments in the three PQC sources plus
 this document make the answer auditable: everything in `ama_kyber.c`,
-`ama_dilithium.c`, and `ama_sphincs.c` was written here, against the
+`ama_dilithium.c`, and `ama_slhdsa.c` was written here, against the
 NIST standards, and is held to the same ACVP bar any FIPS-aspiring
 implementation must clear.

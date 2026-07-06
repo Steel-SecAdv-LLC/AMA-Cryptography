@@ -24,7 +24,7 @@
  * ============
  * This file dispatches PQC operations to the native C backend:
  * - AMA_USE_NATIVE_PQC (default): Uses native C implementations from
- *   ama_dilithium.c, ama_kyber.c, and ama_sphincs.c
+ *   ama_dilithium.c, ama_kyber.c, and ama_slhdsa.c
  * - All implementations pass NIST FIPS 203/204/205 KAT validation
  *
  * Build (default):

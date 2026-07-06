@@ -70,7 +70,7 @@ Source files for post-quantum algorithms:
 
 - `src/c/ama_kyber.c` — ML-KEM-1024 (FIPS 203)
 - `src/c/ama_dilithium.c` — ML-DSA-65 (FIPS 204)
-- `src/c/ama_sphincs.c` — SLH-DSA-SHA2-256f (FIPS 205)
+- `src/c/ama_slhdsa.c` — SLH-DSA-SHA2-256f (FIPS 205)
 - `src/c/internal/ama_sha2.h` — Shared SHA-512 / HMAC-SHA-512 internals
 
 ---
@@ -242,7 +242,7 @@ now all 15 TG 3 vectors pass.
 ### 6.2 SLH-DSA-SHA2-256f — FIPS 205 hash alignment (now 14/14)
 
 From [§2.3 of the source report](CSRC_ALIGN_REPORT.md). Four
-deviations from FIPS 205 §11.2 were corrected in `src/c/ama_sphincs.c`:
+deviations from FIPS 205 §11.2 were corrected in `src/c/ama_slhdsa.c`:
 
 - `H_msg`, `H`, and `T_l` now use SHA-512 with `toByte(0, 128-n)` padding
   for security category 5 (previously SHA-256).
@@ -265,7 +265,7 @@ Public-API callers map the raw return:
 
 - `ama_hkdf.c:54–57` — `ama_hmac_sha512()` maps `-2 → AMA_ERROR_OVERFLOW`
   and any other non-zero → `AMA_ERROR_MEMORY`.
-- `ama_sphincs.c:1065–1067` — `spx_prf_msg()` wraps
+- `ama_slhdsa.c` `sha2_PRF_msg()` wraps
   `ama_hmac_sha512_3()` and propagates any non-zero return as
   `AMA_ERROR_MEMORY` upward, so signing fails fail-closed rather than
   emitting a signature with zeroed or corrupted randomness.
@@ -273,8 +273,9 @@ Public-API callers map the raw return:
 ### 6.4 SHA-512 duplication eliminated
 
 From [§2.5 of the source report](CSRC_ALIGN_REPORT.md). The two
-identical SHA-512 copies in `ama_sphincs.c` and `ama_ed25519.c` were
-extracted to the header-only `src/c/internal/ama_sha2.h` with static
+identical SHA-512 copies in the SLH-DSA signer (`ama_slhdsa.c`) and
+`ama_ed25519.c` were extracted to the header-only
+`src/c/internal/ama_sha2.h` with static
 linkage. Zero external dependencies maintained.
 
 ### 6.5 Native HMAC-SHA3-256 promoted to public API

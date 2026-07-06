@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Applies to Release | 3.2.0 |
-| Last Updated | 2026-05-20 |
+| Applies to Release | 3.3.0 |
+| Last Updated | 2026-07-05 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -19,7 +19,54 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-07-05
+
+### Added
+- **Native one-shot SHA-256 (`native_sha256`) in `ama_cryptography.pqc_backends`.**
+  Binds the exported `ama_sha256(out, in, inlen)` C symbol (FIPS 180-4) so
+  callers get a raw SHA-256 digest without stdlib `hashlib` (INVARIANT-1).
+  `ama_sha256` / `ama_sha256_2` are now `AMA_API`-exported so the binding
+  resolves on every platform, including MSVC DLL builds.
+- **Documented public convenience + native MAC/KDF surface.** The unified
+  `quick_hmac(key, message, algorithm)` and `quick_hkdf(ikm, length, salt,
+  info, algorithm)` dispatchers (`crypto_api`), the native `native_hmac_sha256`
+  / `native_hmac_sha384` / `native_hmac_sha512` / `native_hmac_sha3_256` and
+  `native_hkdf` / `native_hkdf_sha256` / `native_hkdf_sha384` /
+  `native_hkdf_sha512` interfaces (`pqc_backends`), and the
+  `AmaCryptographyError` exception root hierarchy (`exceptions`) are now
+  documented as first-class public API.
+
 ### Changed
+- **Consolidated the two SLH-DSA-SHA2-256f C signers into one.** The standalone
+  `src/c/ama_sphincs.c` is removed; its `ama_sphincs_keypair` /
+  `ama_sphincs_sign` / `ama_sphincs_verify` / `ama_sphincs_verify_ctx` public
+  API is preserved byte-for-byte and now dispatches into the single
+  parameter-driven core in `src/c/ama_slhdsa.c` (`AMA_SLHDSA_SHA2_256F`). The
+  two implementations were proven byte-identical before the merge, so there is
+  no behavioural change — only the removal of a duplicated ~1250-line signer
+  that would otherwise have to be kept in lockstep. `ama_sphincs_sign` /
+  `ama_sphincs_verify` keep their raw-message (non-context) semantics;
+  `ama_sphincs_verify_ctx` keeps the FIPS 205 §9.2 context wrapper.
+- **Completed native-hashing purity in `crypto_api`.** The remaining
+  `hashlib.sha3_256` / `hashlib.sha256` call sites are replaced with
+  `native_sha3_256` / `native_sha256`, and `import hashlib` is removed. The
+  AES-GCM nonce-counter `key_id` intentionally stays SHA-256 (via the new
+  `native_sha256`, byte-identical to `hashlib.sha256`) so persisted nonce
+  counters keep matching across the upgrade rather than resetting the
+  birthday-safety high-water mark.
+- **Bumped the ruff `target-version` from `py39` to `py310`** to track the
+  `requires-python >= 3.10` floor. The project's deliberate `Optional[...]` /
+  `Union[...]` typing style is preserved via explicit `UP007` / `UP035` /
+  `UP045` ignores (and `B905` for the existing non-strict `zip()` call sites),
+  so the bump activates no mechanical annotation rewrites.
+- **CI: single aggregating gate per workflow + per-PR MemorySanitizer KAT
+  lane.** Each of `ci.yml`, `ci-build-test.yml` and `static-analysis.yml` now
+  ends in an always-run aggregation job (`CI Gate` / `Build and Test Gate` /
+  `Static Analysis Gate`) that `needs:` every job in its workflow, so branch
+  protection can require one stable context per workflow instead of ~19
+  individually-named jobs (eliminating required-context drift at the root). A
+  fast `memory-sanitizer-kat` job now runs MSan over the OpenSSL-free `test_kat`
+  target on every PR, mirroring the nightly MSan flags.
 - **Minimum runtime Python raised from 3.9 to 3.10.** `requires-python`
   (`pyproject.toml`), `python_requires` and the `Programming Language :: Python`
   classifiers (`setup.py`), `requirements-dev.txt`, and every CI matrix now
@@ -28,9 +75,21 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   3.10+. Python 3.9 is end-of-life in October 2025 and is no longer installed,
   tested, or supported. Consumers on 3.9 must upgrade to 3.10 or newer.
 
+### Dependencies
+- **Rolled the pending Dependabot dependency-group bumps into the release**
+  (supersedes #360 and #361) so 3.3.0 ships current tooling and pinned
+  actions. All are dev/build/CI-only forward bumps — the runtime library keeps
+  zero external dependencies (INVARIANT-1). Python/build/dev: `setuptools`
+  82.0.1→83.0.0, `Cython` 3.2.6→3.2.8, `hypothesis` 6.155.7→6.156.1,
+  `coverage` 7.14.3→7.15.0, `typing_extensions` 4.15.0→4.16.0. SHA-pinned
+  GitHub Actions: `docker/setup-buildx-action`, `docker/login-action`,
+  `docker/build-push-action`, `trufflesecurity/trufflehog` v3.95.6→v3.95.8,
+  and `github/codeql-action` (init + analyze) v4.36.2→v4.36.3.
+
 ### Fixed
 - **SLH-DSA-SHA2-256f signer now byte-exact against FIPS 205 / NIST ACVP.**
-  Both native SHA-2 signers (`src/c/ama_slhdsa.c`, `src/c/ama_sphincs.c`)
+  The native SHA-2 signer (now unified in `src/c/ama_slhdsa.c`; see the
+  consolidation note above) previously
   derived WOTS+ and FORS secret values under the chain/tree address types
   (`WOTS_HASH=0` / `FORS_TREE=3`) instead of the FIPS 205 §4.2 PRF address
   types (`WOTS_PRF=5` / `FORS_PRF=6`). The 32-byte message randomizer `R`
