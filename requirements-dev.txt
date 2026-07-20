@@ -22,12 +22,12 @@ pytest-cov>=4.0.0
 pytest-timeout>=2.1.0
 pytest-benchmark>=4.0.0
 pytest-xdist>=3.0.0
-hypothesis>=6.156.1
+hypothesis>=6.157.0
 
 # Code Quality
 black>=26.5.1
-ruff>=0.15.20
-mypy>=2.1.0
+ruff>=0.15.22
+mypy>=2.3.0
 
 # Security Scanning
 bandit>=1.7.0
