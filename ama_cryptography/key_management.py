@@ -16,6 +16,7 @@ Enterprise-grade key management with:
 """
 
 import base64
+import contextlib
 import hashlib
 import json
 import logging
@@ -75,29 +76,44 @@ def _atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None:
     """
     directory = str(path.parent) or "."
     fd, tmp_name = tempfile.mkstemp(prefix="." + path.name + ".", suffix=".tmp", dir=directory)
+
+    # Track descriptor ownership explicitly rather than closing blind on the
+    # error path.  ``os.fdopen`` takes ownership of ``fd``: once it returns, the
+    # file object owns the descriptor and closes it, and a later ``os.close(fd)``
+    # would be a double close — which either raises EBADF or, worse, closes an
+    # unrelated descriptor that the runtime has since handed out under the same
+    # number.  The earlier version wrapped that close in ``except OSError: pass``,
+    # which hid exactly that bug class (and CodeQL flagged the silent handler).
+    # Knowing precisely who owns the descriptor removes the need to guess.
+    fd_is_ours = True
     try:
         if hasattr(os, "fchmod"):
+            # Best-effort: mkstemp already creates the file 0o600 on POSIX, so a
+            # platform without fchmod (or a filesystem that refuses it) is not a
+            # failure — the restrictive creation mode still holds.
             try:
                 os.fchmod(fd, mode)
-            except OSError:  # pragma: no cover - platform dependent
-                pass
-        with os.fdopen(fd, "wb") as handle:
+            except OSError as exc:  # pragma: no cover - platform dependent
+                logger.debug("fchmod(%s) unsupported here: %s", tmp_name, exc)
+
+        handle = os.fdopen(fd, "wb")
+        fd_is_ours = False  # ownership transferred to ``handle``
+        with handle:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_name, path)
     except BaseException:
-        # ``os.fdopen`` takes ownership of ``fd`` and closes it; guard against a
-        # failure that occurs before that hand-off, and swallow the resulting
-        # bad-fd error if it already closed.
-        try:
+        if fd_is_ours:
+            # fdopen never took the descriptor, so closing it here is correct
+            # and cannot double-close.  Any error from this close is a real
+            # fault and is allowed to propagate.
             os.close(fd)
-        except OSError:
-            pass
-        try:
+        # The staging file may already have been consumed by os.replace or never
+        # created; a missing file is the expected benign case and the only one
+        # suppressed here.  Any other OSError (EACCES, EIO, ...) propagates.
+        with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp_name)
-        except OSError:
-            pass
         raise
 
 

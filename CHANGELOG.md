@@ -121,6 +121,18 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   suite is now handled by an explicit, justified path allowlist entry instead,
   so the exception is visible and auditable rather than hidden in how the
   fixtures are spelled. Pinned by `TestCatchesSplitLiteralEvasion`.
+- **Removed a silent double-close in `_atomic_write_bytes` (CodeQL finding).**
+  The error path closed the raw descriptor inside `except OSError: pass` on
+  every failure. Once `os.fdopen` has taken the descriptor, closing it again is
+  a double close — it raises `EBADF`, or worse, closes an unrelated descriptor
+  the runtime has since reissued under the same number — and the empty handler
+  hid exactly that. The fix tracks descriptor ownership explicitly (`fd_is_ours`)
+  so the cleanup path closes only when `fdopen` never took it, and a genuine
+  close failure now propagates instead of being swallowed. Staging-file removal
+  narrowed from bare `except OSError` to `contextlib.suppress(FileNotFoundError)`,
+  so only the expected benign case is ignored. Three tests pin the behaviour,
+  including that no double close occurs when the failure happens after
+  ownership transfer.
 - **`os.fdopen` leak gate now verifies the property, not the filename.**
   `tools/check_fdopen_safety.py` parses the AST and confirms every `os.fdopen`
   call sits inside a `try` whose handlers (or `finally`) can close the raw

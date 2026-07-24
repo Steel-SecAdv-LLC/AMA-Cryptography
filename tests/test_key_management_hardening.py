@@ -27,7 +27,7 @@ from typing import Any, Optional
 
 import pytest
 
-from ama_cryptography.key_management import SecureKeyStorage
+from ama_cryptography.key_management import SecureKeyStorage, _atomic_write_bytes
 
 PASSWORD = "correct horse battery staple 123!"
 _KEYS = {"alpha": b"A" * 32, "beta": b"B" * 32, "gamma": b"C" * 32}
@@ -80,6 +80,77 @@ class TestFilePermissions:
             mode = stat.S_IMODE(os.stat(tmp_path / f"{key_id}.json").st_mode)
             assert mode == 0o600, f"{key_id}.json is {oct(mode)}"
         assert stat.S_IMODE(os.stat(store.salt_file).st_mode) == 0o600
+
+
+class TestAtomicWriteFdOwnership:
+    """Descriptor ownership on the error path of ``_atomic_write_bytes``.
+
+    The first version closed the raw descriptor inside ``except OSError: pass``
+    on every failure.  That silently swallowed a double-close: once
+    ``os.fdopen`` has taken the descriptor, closing it again either raises
+    EBADF or — far worse — closes an unrelated descriptor the runtime has since
+    reissued under the same number.  CodeQL flagged the empty handler; the fix
+    was to track ownership explicitly rather than to annotate the swallow.
+    These tests pin the resulting behaviour.
+    """
+
+    def test_write_succeeds_and_leaves_no_staging_file(self, tmp_path: Path) -> None:
+        target = tmp_path / "payload.bin"
+        _atomic_write_bytes(target, b"contents")
+        assert target.read_bytes() == b"contents"
+        assert [p.name for p in tmp_path.iterdir()] == ["payload.bin"]
+
+    def test_failure_before_fdopen_closes_fd_and_removes_staging_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Force os.fdopen itself to fail: ownership never transfers, so the
+        # cleanup path must close the descriptor we still own.
+        closed: list[int] = []
+        real_close = os.close
+
+        def tracking_close(fd: int) -> None:
+            closed.append(fd)
+            real_close(fd)
+
+        def exploding_fdopen(*_args: object, **_kwargs: object) -> object:
+            raise OSError("simulated fdopen failure")
+
+        # key_management does `import os`, so its `os` IS this module object;
+        # patching here intercepts the call it makes.
+        monkeypatch.setattr(os, "close", tracking_close)
+        monkeypatch.setattr(os, "fdopen", exploding_fdopen)
+
+        with pytest.raises(OSError):
+            _atomic_write_bytes(tmp_path / "x.bin", b"data")
+
+        assert closed, "descriptor must be closed when fdopen never took ownership"
+        assert list(tmp_path.iterdir()) == [], "staging file must be removed"
+
+    def test_failure_after_fdopen_does_not_double_close(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Fail AFTER ownership transferred (during os.replace).  The file object
+        # closes the descriptor; the cleanup path must NOT close it again.
+        closed: list[int] = []
+        real_close = os.close
+
+        def tracking_close(fd: int) -> None:
+            closed.append(fd)
+            real_close(fd)
+
+        def exploding_replace(*_args: object, **_kwargs: object) -> None:
+            raise OSError("simulated replace failure")
+
+        # key_management does `import os`, so its `os` IS this module object;
+        # patching here intercepts the call it makes.
+        monkeypatch.setattr(os, "close", tracking_close)
+        monkeypatch.setattr(os, "replace", exploding_replace)
+
+        with pytest.raises(OSError):
+            _atomic_write_bytes(tmp_path / "y.bin", b"data")
+
+        assert closed == [], "fdopen owned the fd; cleanup must not close it again"
+        assert list(tmp_path.iterdir()) == [], "staging file must be removed"
 
 
 class TestMigrationCrashSafety:

@@ -114,6 +114,21 @@ def _try_protects(try_node: ast.Try) -> bool:
     return any(_handler_guards(h) for h in try_node.handlers)
 
 
+def count_call_sites(source: str) -> int:
+    """Number of real ``os.fdopen`` CALL nodes in ``source``.
+
+    Counted from the AST rather than by text search: this repository's own test
+    fixtures embed ``os.fdopen(...)`` inside string literals, and counting those
+    would report a call-site total that does not exist.  A checker that prints a
+    number it cannot justify is not worth trusting on the numbers that matter.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return 0
+    return sum(1 for node in ast.walk(tree) if _is_fdopen_call(node))
+
+
 def check_source(rel_path: str, source: str) -> list[Violation]:
     """Return violations for ``source`` (already-loaded Python text)."""
     try:
@@ -204,7 +219,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             continue
         if "fdopen" not in source:
             continue
-        call_sites += source.count("fdopen(")
+        call_sites += count_call_sites(source)
         violations.extend(check_source(rel, source))
 
     if violations:
