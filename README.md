@@ -508,6 +508,127 @@ python benchmarks/benchmark_suite.py   # includes ethical overhead breakdown
 <details>
 <summary><strong>Installation</strong></summary>
 
+### Distribution Channels
+
+AMA Cryptography is distributed from **its own repository first**. No package
+index is a required part of the supply chain: the library itself has zero
+runtime cryptographic dependencies (INVARIANT-1), so a package index is a
+delivery convenience, never an architectural dependency. Every channel below
+installs byte-identical source.
+
+| Channel | Status | Needs a C toolchain? |
+|---|---|---|
+| Source install from a git tag | **Verified working today** | Yes |
+| Prebuilt wheel from a GitHub Release | From the first release built by `release.yml` onward | No |
+| PyPI (`pip install ama-cryptography`) | Optional convenience mirror | No |
+| Self-hosted PEP 503 index | Supported pattern, opt-in | No |
+
+---
+
+#### 1. Source install from a git tag — no index involved
+
+The primary channel, and the one to use if you want zero third-party
+intermediaries. Pin to a **tag**, never a branch, so the install is
+reproducible:
+
+```bash
+pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.3.0"
+```
+
+This clones at the tag and builds the native C library and Cython extensions
+locally, so it needs a build toolchain (see *Platform-Specific Notes* below):
+a C11 compiler, `cmake >= 4.3.4`, `Cython >= 3.2.8`, and `numpy >= 1.24.0`.
+
+To verify the tag is the one you expect before installing:
+
+```bash
+git ls-remote --tags https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git v3.3.0
+```
+
+Confirm the install landed and the native backends are live:
+
+```bash
+python -c "
+from ama_cryptography import pqc_backends as p
+pk, sk = p.native_ed25519_keypair()
+sig = p.native_ed25519_sign(b'smoke test', sk)
+assert p.native_ed25519_verify(sig, b'smoke test', pk)
+kp = p.generate_kyber_keypair(); e = p.kyber_encapsulate(kp.public_key)
+assert p.kyber_decapsulate(e.ciphertext, kp.secret_key) == e.shared_secret
+print('native Ed25519 + ML-KEM-1024 OK;',
+      'Kyber:', p.KYBER_AVAILABLE, 'Dilithium:', p.DILITHIUM_AVAILABLE,
+      'SPHINCS+:', p.SPHINCS_AVAILABLE)
+"
+```
+
+#### 2. Prebuilt wheel from a GitHub Release — no index, no toolchain
+
+`release.yml` builds wheels with `cibuildwheel` for CPython 3.10–3.13 across
+Linux x86-64, Linux aarch64, macOS x86-64, macOS arm64 and Windows AMD64, and
+attaches them to the GitHub Release together with the sdist, sigstore bundles
+and SLSA v1 provenance.
+
+> **Availability:** releases published *before* this pipeline first ran carry
+> no binary assets — for those tags, use channel 1. Check the release page for
+> a given tag before relying on this channel:
+> <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases>
+
+```bash
+# Pick the wheel matching your platform + Python from the release page, then:
+pip install "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases/download/<TAG>/<WHEEL_FILENAME>"
+```
+
+Verify before installing — the artifacts are signed precisely so you do not
+have to trust the transport:
+
+```bash
+# Keyless sigstore signature (identity is the release workflow itself)
+pip install sigstore
+sigstore verify identity \
+  --cert-identity "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/.github/workflows/release.yml@refs/tags/<TAG>" \
+  --cert-oidc-issuer "https://token.actions.githubusercontent.com" \
+  <WHEEL_FILENAME>
+
+# SLSA v1 build provenance
+pip install slsa-verifier || true   # or use the slsa-verifier binary
+slsa-verifier verify-artifact <WHEEL_FILENAME> \
+  --provenance-path ama-cryptography.intoto.jsonl \
+  --source-uri github.com/Steel-SecAdv-LLC/AMA-Cryptography
+```
+
+#### 3. PyPI — optional convenience mirror
+
+```bash
+pip install ama-cryptography
+```
+
+PyPI is treated as a *mirror of convenience*, not the source of truth. It
+exists so that downstream projects can resolve `ama-cryptography` as an
+ordinary dependency; nothing in this library requires it, and channels 1 and 2
+remain fully supported and independently verifiable if it is ever unavailable.
+
+#### 4. Self-hosted index (PEP 503) — full independence
+
+If you prefer to serve artifacts from infrastructure you control, any static
+web host that can serve a PEP 503 "simple" directory tree works. Publish the
+wheels under `/simple/ama-cryptography/` and point pip at it:
+
+```bash
+# Use as an additional source (PyPI still available for other packages)
+pip install --extra-index-url https://<your-host>/simple/ ama-cryptography
+
+# Or as the ONLY source — no third-party index consulted at all
+pip install --index-url https://<your-host>/simple/ ama-cryptography
+```
+
+Two requirements are easy to get wrong and worth stating: the host must serve
+real directory listings (an SPA/website builder that rewrites unknown paths to
+`index.html` will not work), and it must be HTTPS with a valid certificate or
+pip will refuse it. Pin hashes with `--require-hashes` in a requirements file
+for a fully locked, index-independent install.
+
+---
+
 ### Standard Installation
 
 ```bash

@@ -99,6 +99,33 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   comments that referenced it. Suppression hygiene remains enforced by
   `tools/check_suppression_hygiene.py` (INVARIANT-13).
 
+### Documentation
+
+- **Distribution channels documented and exercised** (`README.md` →
+  *Distribution Channels*). Four independent install paths are now written
+  down with verification steps: source install from a git tag (no index
+  involved), prebuilt wheel from a GitHub Release with sigstore + SLSA
+  verification commands, PyPI as an optional convenience mirror, and a
+  self-hosted PEP 503 index via `--extra-index-url` / `--index-url`.
+
+  The source-install path was **verified end-to-end** before being documented:
+  `pip install git+…@v3.3.0` into a clean venv on Python 3.11 builds the native
+  C library and Cython extensions, loads the native backend, and passes an
+  Ed25519 sign/verify and ML-KEM-1024 encapsulate/decapsulate round-trip with
+  Kyber/Dilithium/SPHINCS+ all reporting available. The smoke-test command in
+  the README is the exact command that was run.
+
+  The GitHub Release wheel path is documented as available *from the first
+  release the pipeline actually builds onward*, and explicitly notes that
+  earlier tags carry no binary assets — rather than implying a download that
+  does not exist. The self-hosted section states the two constraints that
+  actually break PEP 503 hosting (a host that rewrites unknown paths to
+  `index.html`, and non-HTTPS or invalid certificates).
+
+  Framing throughout: the library has zero runtime cryptographic dependencies
+  (INVARIANT-1), so a package index is a delivery convenience, never an
+  architectural dependency.
+
 ### Hardening
 
 - **In-house secret scanner (INVARIANT-23).** `tools/check_secrets.py` blocks
