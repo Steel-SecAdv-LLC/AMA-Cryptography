@@ -585,8 +585,8 @@ jobs:
           /opt/python/cp311-cp311/bin/python -m pip install --upgrade pip
           /opt/python/cp311-cp311/bin/pip install \
             'build>=1.0' \
-            'setuptools>=78.1.1' 'wheel>=0.47.0' \
-            'cmake>=4.3.2' 'Cython>=3.2.4' 'numpy>=1.24.0'
+            'setuptools>=83.0.0' 'wheel>=0.47.0' \
+            'cmake>=4.3.4' 'Cython>=3.2.8' 'numpy>=1.24.0'
           # Front-load the manylinux Python on PATH so subsequent
           # steps see `python` / `pip` as the pinned 3.11 from the
           # base image (and not a stray host Python that GitHub's
@@ -620,7 +620,11 @@ jobs:
           # `MAKEFLAGS=-j1` and `CMAKE_BUILD_PARALLEL_LEVEL=1` force
           # sequential compilation so parallel-build write-order
           # variation cannot leak into the .so.
-          CFLAGS: "-fdebug-prefix-map=${GITHUB_WORKSPACE}=. -ffile-prefix-map=${GITHUB_WORKSPACE}=. -fmacro-prefix-map=${GITHUB_WORKSPACE}=."
+          # Use ${{ github.workspace }} (expanded by Actions) rather than the
+          # POSIX ${GITHUB_WORKSPACE}, which is NOT expanded inside an env: map
+          # and would reach the compiler as a literal string that never matches
+          # the checkout path — silently disabling all three prefix-map flags.
+          CFLAGS: "-fdebug-prefix-map=${{ github.workspace }}=. -ffile-prefix-map=${{ github.workspace }}=. -fmacro-prefix-map=${{ github.workspace }}=."
           LDFLAGS: "-Wl,--build-id=sha1"
           MAKEFLAGS: "-j1"
           CMAKE_BUILD_PARALLEL_LEVEL: "1"
@@ -639,7 +643,11 @@ jobs:
           SOURCE_DATE_EPOCH: "1700000000"
           PYTHONHASHSEED: "0"
           PYTHONDONTWRITEBYTECODE: "1"
-          CFLAGS: "-fdebug-prefix-map=${GITHUB_WORKSPACE}=. -ffile-prefix-map=${GITHUB_WORKSPACE}=. -fmacro-prefix-map=${GITHUB_WORKSPACE}=."
+          # Use ${{ github.workspace }} (expanded by Actions) rather than the
+          # POSIX ${GITHUB_WORKSPACE}, which is NOT expanded inside an env: map
+          # and would reach the compiler as a literal string that never matches
+          # the checkout path — silently disabling all three prefix-map flags.
+          CFLAGS: "-fdebug-prefix-map=${{ github.workspace }}=. -ffile-prefix-map=${{ github.workspace }}=. -fmacro-prefix-map=${{ github.workspace }}=."
           LDFLAGS: "-Wl,--build-id=sha1"
           MAKEFLAGS: "-j1"
           CMAKE_BUILD_PARALLEL_LEVEL: "1"

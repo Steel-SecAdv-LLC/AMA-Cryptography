@@ -209,12 +209,14 @@ jobs:
           # Each requirement specifier is single-quoted so the cibuildwheel
           # subshell doesn't interpret `>=` as output redirection
           # (Copilot review #322 — without the quotes, `pip install
-          # cmake>=4.3.2` runs as `pip install cmake` plus `>` redirect
-          # to a file named `=4.3.2`, silently floating to whatever
+          # cmake>=4.3.4` runs as `pip install cmake` plus `>` redirect
+          # to a file named `=4.3.4`, silently floating to whatever
           # pip resolves and missing the INVARIANT-8 toolchain floor).
-          CIBW_BEFORE_BUILD_LINUX: "pip install 'cmake>=4.3.2' 'cython>=3.2.4' 'numpy>=1.24.0'"
-          CIBW_BEFORE_BUILD_MACOS: "pip install 'cmake>=4.3.2' 'cython>=3.2.4' 'numpy>=1.24.0'"
-          CIBW_BEFORE_BUILD_WINDOWS: "pip install 'cmake>=4.3.2' 'cython>=3.2.4' 'numpy>=1.24.0'"
+          # Floors match pyproject.toml [build-system].requires + setup.py's
+          # preflight so all three build-dependency sources stay in lockstep.
+          CIBW_BEFORE_BUILD_LINUX: "pip install 'cmake>=4.3.4' 'cython>=3.2.8' 'numpy>=1.24.0'"
+          CIBW_BEFORE_BUILD_MACOS: "pip install 'cmake>=4.3.4' 'cython>=3.2.8' 'numpy>=1.24.0'"
+          CIBW_BEFORE_BUILD_WINDOWS: "pip install 'cmake>=4.3.4' 'cython>=3.2.8' 'numpy>=1.24.0'"
           # MANYLINUX BASELINE: manylinux_2_28 has GCC 12 baseline (the
           # INVARIANT-8 minimum), AVX-512 intrinsics, and is supported
           # by every modern pip.

@@ -290,7 +290,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install "black==26.3.1" "ruff>=0.4" "mypy>=1.9,<2"
+          # Pinned to requirements-lock.txt so this gate matches the dev
+          # toolchain and pre-commit (no unpinned ruff, no mypy 1.x/2.x split).
+          pip install "black==26.5.1" "ruff==0.15.20" "mypy==2.1.0"
 
       - name: Lint (ruff)
         run: ruff check .
