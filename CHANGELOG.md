@@ -19,6 +19,86 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Security
+
+- **`SecureKeyStorage.migrate_kdf` is now crash-safe.** A KDF migration that
+  failed partway through previously re-encrypted some keys under the new key
+  while the persisted salt still selected the old key, permanently orphaning
+  the migrated keys; the rollback also failed to restore the in-memory salt.
+  Migration now snapshots every touched file, writes atomically, and on any
+  failure restores the exact prior on-disk state plus both the encryption key
+  and salt in memory (`ama_cryptography/key_management.py`).
+- **Path-traversal guard applied to `retrieve_key` / `delete_key`.** Both now
+  validate `key_id` with the same alphanumeric guard `store_key` already
+  enforced, so a crafted id (e.g. `../../etc/foo`) can no longer read or
+  overwrite-and-unlink a file outside the key store.
+- **Key/salt files are written without a world-readable window.** A new atomic
+  writer creates staging files `0o600` at creation (not `open()` then
+  `chmod`), and the key store directory is created `0o700`.
+- **Adaptive-posture rotation no longer fails open.** A rotation that was
+  attempted and failed (e.g. KMS unavailable) no longer arms the cooldown, so
+  retries are not suppressed for the full cooldown window
+  (`adaptive_posture.py`).
+- **Runtime integrity baseline fails closed.** If the startup baseline cannot
+  be established, `verify_integrity` now reports a violation instead of an
+  empty (looks-clean) result (`monitoring.py`).
+- **Thread-safety for concurrent detectors.** `NonceTracker.check_and_record`
+  (check-then-record) and `ResonanceTimingMonitor.record_timing` (Welford/EWMA
+  read-modify-write on the concurrent crypto hot path) are now serialised with
+  a lock (`monitoring.py`).
+- **`legacy_compat.verify_crypto_package` documents its trust model.** The
+  `ed25519`/`dilithium` results attest signature *validity* against the
+  package-embedded key, not origin authenticity — only the keyed `hmac` layer
+  authenticates provenance; the docstring now states this explicitly.
+- **`secure_channel` forward-secrecy properties documented accurately.** The
+  handshake is KEM-to-static (no forward secrecy against responder static-key
+  compromise); the intra-session ratchet is forward-secure between epochs. The
+  module docstring no longer implies handshake forward secrecy via "new KEM
+  exchanges."
+
+### Fixed
+
+- `legacy_compat._verify_timestamp_value` no longer raises `TypeError` on a
+  timezone-naive ISO-8601 timestamp (treated as UTC).
+- Key-expiry monitoring now interprets `expires_at` given as a `datetime` or
+  ISO-8601 string, not only a Unix number, so such expiries are actually
+  enforced (`monitoring._coerce_expiry_to_unix`).
+- `ARCHITECTURE.md` pointed FIPS 205 SigVer vectors at a non-existent
+  `nist_vectors/` path; corrected to `tests/kat/fips205/`.
+- Fixed 5 repo-root-relative links in `docs/compliance/CSRC_ALIGN_REPORT.md`
+  that broke when rendered from the subdirectory, and a broken
+  `#implementation-status-matrix` anchor in `README.md`.
+
+### Changed
+
+- **CI / pre-commit linter versions pinned to the `requirements-lock.txt`
+  toolchain** (black 26.5.1, ruff 0.15.20, mypy 2.1.0): removes an unpinned
+  `ruff>=0.4` in CI and the mypy 1.x/2.x split between CI and the dev extra.
+  Verified the codebase passes all three at these versions (mypy `--strict`
+  clean).
+- **Build-dependency floors reconciled.** `setup.py`'s preflight floors and
+  the pyproject/workflow comments now match `[build-system].requires` exactly
+  (setuptools 83.0.0, cmake 4.3.4, Cython 3.2.8) instead of asserting a match
+  that was false.
+- Reproducible-build prefix-map flags in `static-analysis.yml` now use
+  `${{ github.workspace }}` (expanded) instead of the literal
+  `${GITHUB_WORKSPACE}`, which is not expanded in an `env:` map.
+- Dropped the unused `issues: write` permission from `auto-docs.yml`; switched
+  the `dist` Makefile target to `python -m build`; aligned the `[monitoring]`
+  scipy floor to `>=1.11.0`.
+- Standardised stale document version headers (several docs read 3.0.0 or
+  "3.1.0 + Unreleased") to 3.3.0, and added the missing 3.2.0/3.3.0
+  revision-history rows to `ARCHITECTURE.md` and `SECURITY.md`. Corrected the
+  `README.md` C-file count (23 top-level `.c`) and documented the previously
+  omitted `ama_sha256_ni.c` and `ama_hmac_sha384.c`.
+
+### Removed
+
+- Removed the internal `# nosec` disposition/remediation-tracking audit
+  (`nosec_disposition.md`) from the public tree and tidied the two workflow
+  comments that referenced it. Suppression hygiene remains enforced by
+  `tools/check_suppression_hygiene.py` (INVARIANT-13).
+
 ## [3.3.0] - 2026-07-05
 
 ### Added

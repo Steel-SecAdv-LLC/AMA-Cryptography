@@ -1,15 +1,15 @@
 # CSRC Alignment Report — NIST ACVP Vector Validation
 
-**Version:** 3.1.0 + Unreleased
+**Version:** 3.3.0
 **Date:** 2026-05-16
 **Organization:** Steel Security Advisors LLC
 **Author:** Andrew E. A.
 
 > **Customer-facing attestation:** this report is the technical evidence
-> underlying [`docs/compliance/ACVP_SELF_ATTESTATION.md`](docs/compliance/ACVP_SELF_ATTESTATION.md)
-> (human-readable) and [`docs/compliance/acvp_attestation.json`](docs/compliance/acvp_attestation.json)
+> underlying [`docs/compliance/ACVP_SELF_ATTESTATION.md`](ACVP_SELF_ATTESTATION.md)
+> (human-readable) and [`docs/compliance/acvp_attestation.json`](acvp_attestation.json)
 > (machine-readable). Continuous validation runs in
-> [`.github/workflows/acvp_validation.yml`](.github/workflows/acvp_validation.yml).
+> [`.github/workflows/acvp_validation.yml`](../../.github/workflows/acvp_validation.yml).
 
 ---
 
@@ -68,7 +68,7 @@ from pq-crystals, PQClean, liboqs, or any other third-party PQC source tree.
 This is the opposite of the common ecosystem pattern (liboqs, AWS-LC,
 BoringSSL, OpenSSL 3.5+, and CIRCL all derive from pq-crystals or PQClean and
 say so explicitly), and is stated in the file-level `Provenance:` block of
-each PQC source and in full in [`src/c/PROVENANCE.md`](src/c/PROVENANCE.md).
+each PQC source and in full in [`src/c/PROVENANCE.md`](../../src/c/PROVENANCE.md).
 "Clean-room" here means a clean-room transcription of the standard's
 pseudocode into C, not a formal proof of correctness — the ACVP vectors in
 Section 2.1 are the correctness bar.
@@ -273,7 +273,7 @@ optimization.
 
 ## Section 2.9: Performance Summary
 
-![Performance Dashboard](assets/performance_dashboard.png)
+![Performance Dashboard](../../assets/performance_dashboard.png)
 
 *Benchmark results from the post-fix unified codebase. All measurements use the native C backend with zero external dependencies.*
 

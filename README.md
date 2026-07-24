@@ -223,6 +223,8 @@ NIST-standardized post-quantum algorithms:
 
 </details>
 
+<a id="implementation-status-matrix"></a>
+
 <details>
 <summary><strong>Implementation Status Matrix</strong></summary>
 
@@ -248,12 +250,14 @@ NIST-standardized post-quantum algorithms:
 - **Full (native)**: Complete native C implementation — no external PQC dependency required.
 - **Note**: Ed25519 C implementation uses radix 2^51 field arithmetic (fe51.h — 25 cross-products vs 100 in ref10) with a signed 4-bit window comb for fixed-base scalar mult (64 mixed adds + 4 doublings, per Bernstein–Duif–Lange–Schwabe–Yang 2012). The ed25519-donna x86-64 assembly backend is now the default on x86-64 builds (`AMA_ED25519_ASSEMBLY=ON` auto-set by CMake on x86-64 and MSVC x64); pass `-DAMA_ED25519_ASSEMBLY=OFF` to force the in-tree fe51+comb backend for auditing. Full RFC 8032 sign/verify roundtrip verified on both backends.
 
-**C Library Implementations (3.1.0 + unreleased) — measured 2026-05-16: 22 top-level `.c` files, 2 internal headers, 1 internal `.c`, and 4 public headers across `src/c/` and `include/`:**
+**C Library Implementations (v3.3.0): 23 top-level `.c` files, 2 internal headers, 1 internal `.c`, and 4 public headers across `src/c/` and `include/`:**
 - `ama_core.c`: Library initialization, version, feature detection, shared utilities
 - `ama_sha3.c`: SHA3-256, SHAKE128, SHAKE256 (Keccak-f[1600] sponge construction)
 - `ama_sha256.c`: Native SHA-256 (FIPS 180-4), used by SPHINCS+ internally
+- `ama_sha256_ni.c`: x86 SHA-NI (Intel SHA Extensions) single-block SHA-256 compression kernel, dispatch-selected on SHA-NI-capable hosts (byte-equivalent to `ama_sha256.c`, verified by `tests/c/test_sha256_dispatch_equiv.c`)
 - `ama_hkdf.c`: HKDF-SHA3-256 with HMAC-SHA3-256 (RFC 5869 compliant)
 - `ama_hmac_sha256.c`: Native HMAC-SHA-256 (RFC 2104), used by SPHINCS+ PRF_msg
+- `ama_hmac_sha384.c`: Native HMAC-SHA-384 (RFC 2104 / FIPS 198-1), mirroring the HMAC-SHA-512 public surface
 - `ama_ed25519.c`: Ed25519 keygen/sign/verify (SHA-512, field arithmetic for GF(2^255-19), C11 atomics, Shamir/Straus joint scalar mult with width-5 wNAF in verify path)
 - `ama_frost.c`: FROST threshold Ed25519 signatures (RFC 9591) — t-of-n Schnorr threshold over the Ed25519 group, two-round binding-commitment protocol, trusted-dealer keygen
 - `ed25519_donna_shim.c`: Ed25519 AMA-API shim over the vendored ed25519-donna assembly backend (`AMA_ED25519_ASSEMBLY=ON`, default on x86-64)
@@ -1262,7 +1266,7 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) file for 
 
 ### Third-Party Dependencies
 
-AMA Cryptography v3.1.0 has **zero core cryptographic dependencies** — all cryptographic primitives are implemented natively in C.
+AMA Cryptography v3.3.0 has **zero core cryptographic dependencies** — all cryptographic primitives are implemented natively in C.
 
 **Algorithm implementations (all native, public domain references):**
 - **ML-DSA-65** (Dilithium): Public domain (NIST FIPS 204)
@@ -1274,9 +1278,9 @@ AMA Cryptography v3.1.0 has **zero core cryptographic dependencies** — all cry
 - **SHA3-256/SHAKE**: Public domain (NIST FIPS 202)
 
 **Optional dependency groups:**
-- `[math]`: numpy (≥ 1.24), Cython (≥ 3.2.4) — required only for the optional `math_engine` Cython extension
+- `[math]`: numpy (≥ 1.24), Cython (≥ 3.2.8) — required only for the optional `math_engine` Cython extension
 - `[monitoring]`: numpy, scipy (3R engine)
-- `[legacy]`: cryptography (fallback)
+- `[legacy]`: cryptography — used ONLY by tests/benchmarks for cross-checking; NOT a runtime fallback (INVARIANT-1 prohibits a PyCA dependency in the production path)
 - `[hsm]`: PyKCS11 ≥ 1.5.18 (HSM support)
 - `[docs]`: sphinx, sphinx-rtd-theme ≥ 3.1.0 (documentation build)
 - `[benchmark]`: pynacl, liboqs-python, cryptography (peer libraries for `benchmarks/comparative_benchmark.py` only — not linked into the production library; INVARIANT-1 still holds)
