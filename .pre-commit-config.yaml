@@ -58,6 +58,17 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # Verifies the property that prevents descriptor leaks (every os.fdopen
+      # is enclosed in a try that can close the fd on the failure path) by
+      # parsing the AST — not by checking filenames against an allowlist, which
+      # cannot distinguish a guarded call from a leaking one.
+      - id: ama-fdopen-safety
+        name: AMA fd-ownership check (os.fdopen leak guard)
+        entry: python3 tools/check_fdopen_safety.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
 # Configuration notes:
 # - black: Code formatter with 100 char line length
 # - ruff: Fast linter (replaces flake8 + isort); config in pyproject.toml

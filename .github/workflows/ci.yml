@@ -398,27 +398,20 @@ jobs:
       run: |
         python tools/check_secrets.py
 
-    - name: Enforce safe os.fdopen usage
+    - name: Enforce safe os.fdopen usage (fd-ownership, AST-verified)
+      # Replaces a grep-plus-filename-allowlist check.  That construction could
+      # not tell a correctly guarded call from a leaking one — it only asked
+      # whether the file was on a list, so it was satisfied by editing the list
+      # — and it had already rotted: the allowlist named `key_storage.py`, a
+      # module that does not exist in this package, while omitting the module
+      # that actually performs the call.  tools/check_fdopen_safety.py instead
+      # parses the AST and verifies the property that prevents the leak: every
+      # os.fdopen call sits in a try whose handlers (or finally) can close the
+      # raw descriptor when the hand-off fails.  No allowlist to maintain, and
+      # it applies to every tracked module rather than three named ones.
+      # Both directions are pinned by tests/test_fdopen_safety.py.
       run: |
-        # All os.fdopen calls must be wrapped in try/except BaseException so an
-        # exception raised before os.fdopen takes ownership of the descriptor
-        # cannot leak it.  Approved (reviewed) call sites:
-        #   - key_management.py  (_atomic_write_bytes: mkstemp -> fdopen -> replace)
-        #   - legacy_compat.py
-        #   - crypto_api.py
-        # Restrict the scan to *.py so compiled artefacts under __pycache__ are
-        # not scanned, match only real call sites (`os.fdopen(`), and drop
-        # whole-line comments so prose about the guard cannot trip the gate.
-        # Verified against a planted violation (detected) and a comment-only
-        # mention (ignored).
-        if grep -rnE '[[:alnum:]_.]*os\.fdopen\(' ama_cryptography/ --include='*.py' \
-            | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' \
-            | grep -v 'ama_cryptography/key_management\.py:' \
-            | grep -v 'ama_cryptography/legacy_compat\.py:' \
-            | grep -v 'ama_cryptography/crypto_api\.py:'; then
-          echo "::error::Direct os.fdopen call found outside approved modules — wrap in try/except BaseException to guard the fd"
-          exit 1
-        fi
+        python tools/check_fdopen_safety.py
 
   benchmark-regression:
     name: Benchmark Regression Detection (${{ matrix.runner_cpu_class }})

@@ -202,7 +202,8 @@ citing the passing gate.
 | Property-based invariants | `tests/test_property_based_crypto.py` |
 | Fuzzing | `fuzz/` (12 targets), OSS-Fuzz integration |
 | Dependency audit | `pip-audit --strict --requirement requirements-lock.txt` |
-| Secret scanning | `tools/check_secrets.py` (INVARIANT-23) |
+| Secret scanning | `tools/check_secrets.py` (INVARIANT-23) — folds concatenated literals, so split credentials are caught |
+| FD-ownership (os.fdopen leak guard) | `tools/check_fdopen_safety.py` (AST-verified, no allowlist) |
 | Suppression hygiene | `tools/check_suppression_hygiene.py` (INVARIANT-13) |
 | Version consistency | `tools/check_version_consistency.py` |
 | Reproducible build | byte-equality lane in `static-analysis.yml` |

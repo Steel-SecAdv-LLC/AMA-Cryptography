@@ -112,7 +112,30 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   file, is what lets a real key through later. Wired as a fail-closed CI gate
   and a `pre-commit` hook; every allowlist entry carries a written
   justification. Scans clean across 504 tracked files.
-- **Detection tests for the scanner** (`tests/test_secret_scanner.py`, 26
+- **Evasion resistance in the secret scanner.** The scanner folds concatenated
+  string literals before matching, so a credential split across adjacent
+  literals (`"ghp_" + "..."`) is caught like a contiguous one. This closed a
+  hole the control's own development exposed: splitting the test fixtures had
+  been used to get them past both this scanner and GitHub push protection —
+  passing the gate while proving the gate was weak. The scanner's own detection
+  suite is now handled by an explicit, justified path allowlist entry instead,
+  so the exception is visible and auditable rather than hidden in how the
+  fixtures are spelled. Pinned by `TestCatchesSplitLiteralEvasion`.
+- **`os.fdopen` leak gate now verifies the property, not the filename.**
+  `tools/check_fdopen_safety.py` parses the AST and confirms every `os.fdopen`
+  call sits inside a `try` whose handlers (or `finally`) can close the raw
+  descriptor when the hand-off fails. It replaces a grep-plus-filename
+  allowlist that could not tell a guarded call from a leaking one — it only
+  asked whether the file was on a list, so it was satisfied by editing the
+  list — and that had already rotted, naming a `key_storage.py` which does not
+  exist while omitting the module that actually performs the call. The new
+  check needs no allowlist, covers every tracked module, and correctly rejects
+  subtle cases (a handler too narrow to catch `OSError`; a call in an `except`
+  clause rather than the protected body). 14 tests pin both directions.
+- **Removed a `# noqa: S105` suppression by removing its cause** — the
+  constant was renamed from `_SECRET_NAME` to `_SENSITIVE_IDENT_RE`, so the
+  linter finding no longer arises and nothing is silenced.
+- **Detection tests for the scanner** (`tests/test_secret_scanner.py`, 33
   tests) pin both directions — each credential class is caught, and published
   vectors/public keys/placeholders do not fire. These tests caught a real gap
   in the scanner's own regex: a `\b` anchor never matches inside `db_password`
