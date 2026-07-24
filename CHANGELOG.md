@@ -23,6 +23,17 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ### Release
 
+- **SBOM regenerated for 3.4.0** (`docs/compliance/sbom-c-library.json`) — the
+  CycloneDX document embeds the release version in `metadata.component.version`
+  and in all 11 component entries.
+- **`tools/check_version_consistency.py` now covers the SBOM.** The 3.3.0 →
+  3.4.0 bump exposed a completeness gap: the script printed "All declarations
+  agree" while the SBOM was still on 3.3.0, and the drift was only caught later
+  by the CI `generate_sbom.py --check` gate. A completeness gate that is not
+  itself complete is worse than no gate, because it is believed. The SBOM is
+  now the eleventh checked site, so one local command covers every
+  version-carrying artefact. Verified in both directions: planted drift fails
+  with a precise message and exit 1; the clean tree passes.
 - **Version bumped 3.3.0 → 3.4.0** across all ten declaration sites
   (`pyproject.toml`, `setup.py`, `ama_cryptography/__init__.py`,
   `CMakeLists.txt`, `include/ama_cryptography.h` MINOR + STRING,
