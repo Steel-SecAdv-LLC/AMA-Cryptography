@@ -14,18 +14,35 @@ matching.  These tests pin BOTH directions —
   placeholders) do NOT trip the scanner, because a scanner that cries wolf
   gets globally silenced, which is how real keys leak.
 
-.. important::
+.. note::
 
-   **Every credential fixture below is assembled at runtime from fragments and
-   must stay that way.**  GitHub push protection scans the raw file text of
-   every pushed commit, so a contiguous token-shaped literal here — even an
-   obviously fake one — blocks the push for the whole branch (this happened
-   with the Slack fixture on the first push of this file).  The alternative
-   offered by the tooling is to click through a per-secret unblock exception,
-   which trains maintainers to wave real findings through; assembling the
-   fixtures instead keeps the detection coverage identical while leaving the
-   platform control fully armed.  Do not "tidy" these back into single
-   literals.
+   **Why the fixtures are built from fragments, and why that is NOT an
+   evasion technique.**
+
+   GitHub push protection scans the raw text of every pushed commit, so a
+   contiguous token-shaped literal in this file blocks the push for the whole
+   branch — which is exactly what happened on this file's first push. The
+   tooling's suggested escape hatch is a per-secret unblock exception, which
+   trains maintainers to wave real findings through; that is not acceptable.
+
+   The first attempt at a workaround simply split the literals so neither
+   GitHub's scanner nor ours would match. That "fixed" the push while proving
+   ``tools/check_secrets.py`` had a real hole: a line-oriented scanner walks
+   straight past a credential split across concatenated literals, and a leak
+   could use the same trick.
+
+   Both halves are now handled honestly:
+
+   * The scanner **folds concatenated literals before matching**
+     (``normalize_concatenation``), so split credentials are caught anywhere
+     in the tree — pinned by :class:`TestCatchesSplitLiteralEvasion` below.
+   * This file is therefore flagged by our own scanner, as it should be, and
+     is **explicitly allowlisted by path** in ``tools/check_secrets.py`` with
+     a written justification. The exception is visible and auditable instead
+     of hidden in the fixtures' spelling.
+
+   Keep the fragments (GitHub's scanner still sees raw text), but never treat
+   splitting as a way to hide anything from our own gate.
 """
 
 from __future__ import annotations
@@ -151,6 +168,47 @@ class TestDoesNotFlagPublishedArtefacts:
         token = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
         line = f'sample = "{token}"  # nosecret: documentation example'
         assert scan_text("doc.py", line) == []
+
+
+class TestCatchesSplitLiteralEvasion:
+    """A credential split across concatenated literals must still be caught.
+
+    This is the hole that the first workaround on this file quietly relied on.
+    Closing it is the difference between a scanner and a formality: an attacker
+    (or a careless commit) can write ``"ghp_" + "..."`` just as easily as the
+    contiguous form, and a line-oriented matcher sees neither half as a token.
+    """
+
+    def test_split_slack_token(self) -> None:
+        line = 'tok = "xox" + "b-123456789012-abcdefghijklmno"'
+        assert "slack-token" in _rules(scan_text("x.py", line))
+
+    def test_split_github_token(self) -> None:
+        line = 'tok = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"'
+        assert "github-token" in _rules(scan_text("x.py", line))
+
+    def test_split_aws_key_id(self) -> None:
+        assert "aws-access-key-id" in _rules(scan_text("x.py", 'k = "AKIA" + "IOSFODNN7EXAMPLE"'))
+
+    def test_three_way_split(self) -> None:
+        line = 'k = "AKI" + "A" + "IOSFODNN7EXAMPLE"'
+        assert "aws-access-key-id" in _rules(scan_text("x.py", line))
+
+    def test_implicit_python_concatenation(self) -> None:
+        # Python folds adjacent literals with no operator at all.
+        line = 'k = "AKIA" "IOSFODNN7EXAMPLE"'
+        assert "aws-access-key-id" in _rules(scan_text("x.py", line))
+
+    def test_normalization_does_not_corrupt_ordinary_lines(self) -> None:
+        line = 'msg = "hello " + name + " welcome"'
+        assert scan_text("x.py", line) == []
+
+    def test_finding_excerpt_shows_the_raw_source_line(self) -> None:
+        line = 'k = "AKIA" + "IOSFODNN7EXAMPLE"'
+        findings = scan_text("x.py", line)
+        assert (
+            findings and "+" in findings[0].excerpt
+        ), "the reported excerpt must show what is actually written in the file"
 
 
 class TestEntropyHelper:

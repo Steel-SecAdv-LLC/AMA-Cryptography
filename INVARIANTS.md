@@ -692,10 +692,22 @@ This dual duty is not optional: the detection tests are what caught a real gap
 in the scanner's own identifier regex (a `\b` anchor never matches inside
 `db_password`, because `_` is a word character).
 
+**Evasion resistance (learned the hard way).** The scanner folds concatenated
+string literals before matching, so a credential split across adjacent literals
+(`"ghp_" + "..."`) is caught like any other. This is not hypothetical: during
+this control's own development, splitting the test fixtures was used to get
+them past both this scanner and GitHub push protection. That workaround passed
+the gate while proving the gate had a hole. The hole is now closed and pinned
+by `TestCatchesSplitLiteralEvasion`; obfuscating a value to avoid a finding is
+a violation of this invariant, not a fix for one.
+
 **Allowlist discipline.** Every allowlist entry in `tools/check_secrets.py`
 carries a written justification for why that path cannot contain a live secret.
-Silencing the scanner globally, or adding an unjustified entry, violates this
-invariant.
+Silencing the scanner globally, adding an unjustified entry, or spelling a
+value so it evades detection all violate this invariant. Where an exception is
+genuinely required — as for the scanner's own detection suite, which must
+contain credential shapes — it is taken as a **visible, path-based allowlist
+entry with a written reason**, never hidden in how the value is written.
 
 ---
 

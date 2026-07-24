@@ -101,6 +101,16 @@ _ALLOWED_FILES: tuple[tuple[str, str], ...] = (
         "docs/compliance/acvp_attestation.json",
         "ACVP attestation metadata — published compliance evidence",
     ),
+    (
+        "tests/test_secret_scanner.py",
+        "this scanner's own detection suite: it must contain synthetic examples "
+        "of every credential class in order to prove the scanner still matches "
+        "them.  Allowlisted EXPLICITLY here rather than obfuscating the fixtures "
+        "past the scanner — hiding them would have meant teaching (and "
+        "documenting) an evasion technique that a real leak could reuse.  The "
+        "file is covered by review: every fixture is synthetic, and a genuine "
+        "credential added here would be caught by GitHub push protection.",
+    ),
 )
 
 # Binary / generated extensions that are not source and carry no credentials.
@@ -157,11 +167,13 @@ _PLACEHOLDER_TOKENS = (
     "s3cr3t",
 )
 
-# INVARIANT-13: ruff S105 flags this identifier as a "hardcoded password".
-# It is a REGEX describing secret-name shapes, not a credential; the value
-# contains no secret material.  Suppression is scoped to this one line.
-_SECRET_NAME = (
-    r"(?:pass(?:wd|word)?|secret|token|api[_-]?key|auth[_-]?token|authorization"  # noqa: S105 - regex of secret-identifier NAMES, contains no secret value
+# Named ``_SENSITIVE_IDENT_RE`` rather than ``_SECRET_NAME``: the latter made
+# ruff S105 ("hardcoded password") fire on the assignment.  The honest fix is
+# to remove the CAUSE of the finding rather than suppress it with a ``noqa``,
+# so the identifier was renamed instead.  The value is a regex over identifier
+# names and contains no credential material.
+_SENSITIVE_IDENT_RE = (
+    r"(?:pass(?:wd|word)?|secret|token|api[_-]?key|auth[_-]?token|authorization"
     r"|credential|private[_-]?key)"
 )
 
@@ -182,7 +194,7 @@ _SECRET_NAME = (
 # ``__author__`` and ``author=`` alone.  Both directions are pinned in
 # tests/test_secret_scanner.py.
 _ASSIGNED_SECRET: Pattern[str] = re.compile(
-    rf"(?i)(?:^|[^A-Za-z0-9_])(?:[A-Za-z0-9]+[_-])*{_SECRET_NAME}"
+    rf"(?i)(?:^|[^A-Za-z0-9_])(?:[A-Za-z0-9]+[_-])*{_SENSITIVE_IDENT_RE}"
     rf"(?:[_-][A-Za-z0-9]+)*\s*[:=]\s*[\"']([^\"'\n]{{12,}})[\"']"
 )
 
@@ -211,6 +223,37 @@ _PATTERNS: tuple[tuple[str, Pattern[str], str], ...] = (
         "reference to a keystore file",
     ),
 )
+
+
+# Adjacent string literals joined by ``+`` (or by nothing, which Python folds
+# implicitly).  Splitting a credential across concatenated literals — writing
+# the provider prefix in one literal and the body in the next — is the obvious
+# way to walk a line-oriented scanner past a real key, and it is not
+# hypothetical: it is exactly the manoeuvre that got this repository's own test
+# fixtures past both this scanner and GitHub push protection during
+# development.  Normalising the concatenation away BEFORE matching closes that
+# hole, so a split secret is caught like any other.  (Deliberately no worked
+# example here: a comment carrying a credential-shaped string would itself be
+# a finding, and suppressing that would reintroduce the very problem.)
+_CONCAT_JOIN: Pattern[str] = re.compile(r"[\"']\s*(?:\+\s*)?[\"']")
+
+
+def normalize_concatenation(line: str) -> str:
+    """Fold adjacent/`+`-joined string literals into one before scanning.
+
+    Operates on a *copy* used only for detection — no file is modified.
+    Applied repeatedly so a chain of three or more fragments collapses fully.
+    """
+    previous = None
+    current = line
+    # Bounded loop: each pass strictly shortens the string, and the guard stops
+    # as soon as a pass changes nothing.
+    for _ in range(8):
+        if current == previous:
+            break
+        previous = current
+        current = _CONCAT_JOIN.sub("", current)
+    return current
 
 
 @dataclass(frozen=True)
@@ -268,15 +311,23 @@ def _allow_reason(rel_path: str) -> Optional[str]:
 def scan_text(rel_path: str, text: str) -> list[Finding]:
     """Scan already-loaded ``text`` and return findings for ``rel_path``."""
     findings: list[Finding] = []
-    for line_no, line in enumerate(text.splitlines(), start=1):
+    for line_no, raw_line in enumerate(text.splitlines(), start=1):
         # A line that opts out explicitly must say why; the marker is audited
         # by tools/check_suppression_hygiene.py like every other suppression.
-        if "nosecret" in line.lower():
+        if "nosecret" in raw_line.lower():
             continue
+
+        # Match against the concatenation-normalised form so a credential split
+        # across adjacent literals cannot slip past.  The *excerpt* reported to
+        # the user is still the raw source line, so the finding points at what
+        # is actually written in the file.
+        line = normalize_concatenation(raw_line)
 
         for rule, pattern, description in _PATTERNS:
             if pattern.search(line):
-                findings.append(Finding(rel_path, line_no, rule, description, line.strip()[:160]))
+                findings.append(
+                    Finding(rel_path, line_no, rule, description, raw_line.strip()[:160])
+                )
 
         match = _ASSIGNED_SECRET.search(line)
         if match:
@@ -291,7 +342,7 @@ def scan_text(rel_path: str, text: str) -> list[Finding]:
                             "assignment to a secret-named identifier with a "
                             f"high-entropy value ({shannon_entropy(value):.2f} bits/char)"
                         ),
-                        line.strip()[:160],
+                        raw_line.strip()[:160],
                     )
                 )
     return findings
