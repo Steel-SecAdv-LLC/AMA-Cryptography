@@ -990,6 +990,12 @@ def _verify_timestamp_value(timestamp_str: str) -> bool:
         ts = datetime.fromisoformat(timestamp_str)
     except (ValueError, TypeError) as e:
         raise ValueError(f"Invalid timestamp format '{timestamp_str}': {e}") from e
+    # A timezone-naive timestamp (no UTC offset) would raise TypeError when
+    # compared against the aware ``now`` below — an unhandled crash on
+    # attacker-controlled input.  Treat naive input as UTC so the function
+    # always returns a clean bool.
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
     now = datetime.now(timezone.utc)
     return ts <= now and (now - ts).days < 3650
 
@@ -1050,6 +1056,18 @@ def verify_crypto_package(
 
     .. deprecated::
         Use :func:`ama_cryptography.crypto_api.verify_crypto_package` instead.
+
+    .. warning::
+        **The ``ed25519`` and ``dilithium`` results attest signature *validity*,
+        not *origin authenticity*.**  Both verify against the public keys carried
+        *inside* ``package`` (``package.ed25519_pubkey`` /
+        ``package.dilithium_pubkey``).  An adversary who controls ``codes`` can
+        generate their own keypair, re-sign, and embed the matching public key,
+        making those two results ``True`` for content they authored.  Only the
+        ``hmac`` result — keyed with the caller-supplied ``hmac_key`` — proves
+        the package originated from a holder of that shared secret.  Treat
+        ``results["hmac"]`` (and a matching ``content_hash``) as the authenticity
+        gate; do not rely on the signature layers alone for provenance.
     """
     _enforce_invariant7_lc()
     import warnings

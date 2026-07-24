@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import secrets
+import tempfile
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -53,6 +54,51 @@ from ama_cryptography.secure_memory import secure_memzero
 def _env_flag_enabled(name: str) -> bool:
     """Return True only for an explicit truthy env value (INVARIANT-7)."""
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None:
+    """Atomically write ``data`` to ``path`` with restrictive permissions.
+
+    Two properties matter for on-disk key material:
+
+    * **No world-readable window.**  The staging file is created by
+      ``tempfile.mkstemp`` (mode ``0o600`` at creation on POSIX) and its
+      permissions are set *before* any bytes are written, so a concurrent
+      local user can never open the file while it is briefly ``0o644`` — the
+      race that the previous ``open()`` + ``os.chmod()`` ordering left open.
+    * **Atomicity + durability.**  Contents are flushed and ``fsync``-ed, then
+      ``os.replace`` swaps the staging file into place.  A crash leaves either
+      the complete old file or the complete new file — never a truncated one.
+
+    The staging file is created in the destination directory so ``os.replace``
+    stays within one filesystem (a cross-device rename is not atomic).
+    """
+    directory = str(path.parent) or "."
+    fd, tmp_name = tempfile.mkstemp(prefix="." + path.name + ".", suffix=".tmp", dir=directory)
+    try:
+        if hasattr(os, "fchmod"):
+            try:
+                os.fchmod(fd, mode)
+            except OSError:  # pragma: no cover - platform dependent
+                pass
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        # ``os.fdopen`` takes ownership of ``fd`` and closes it; guard against a
+        # failure that occurs before that hand-off, and swallow the resulting
+        # bad-fd error if it already closed.
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 _HMAC_SHA512_NATIVE = _HMAC_SHA512_NATIVE_AVAILABLE
@@ -558,7 +604,16 @@ class SecureKeyStorage:
             master_password: Master password for encryption
         """
         self.storage_path = Path(storage_path)
-        self.storage_path.mkdir(parents=True, exist_ok=True)
+        # Create the key store 0o700 so key-id filenames are not enumerable and
+        # the encrypted key files are not world-traversable.  ``mkdir(mode=...)``
+        # is subject to umask and is a no-op when the directory already exists,
+        # so follow with a best-effort ``chmod`` to tighten a pre-existing dir.
+        self.storage_path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if hasattr(os, "chmod"):
+            try:
+                os.chmod(self.storage_path, 0o700)
+            except OSError:  # pragma: no cover - platform dependent
+                pass
 
         # Key derivation parameters (versioned for future upgrades)
         self.KDF_VERSION = 3  # v3 = Argon2id, v2 = PBKDF2 600k, v1 = PBKDF2 100k
@@ -603,10 +658,8 @@ class SecureKeyStorage:
             # New installation: generate random salt
             self.salt = secrets.token_bytes(self.KDF_SALT_BYTES)
 
-            # Save salt with secure permissions (0600)
-            with open(self.salt_file, "wb") as f:
-                f.write(self.salt)
-            os.chmod(self.salt_file, 0o600)
+            # Save salt with secure permissions (0600), no world-readable window.
+            _atomic_write_bytes(self.salt_file, self.salt)
 
             # Determine algorithm: prefer Argon2id, fall back to PBKDF2
             from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE
@@ -754,21 +807,44 @@ class SecureKeyStorage:
                 )
             )
 
-        # Re-encrypt all keys
+        # Re-encrypt all keys under the new key.  This is the dangerous part:
+        # each ``{key_id}.json`` is rewritten in place under ``new_encryption_key``
+        # while the persisted ``.salt`` still selects the *old* key until the
+        # very end.  If the process dies partway through, the keys already
+        # rewritten are encrypted under a key that the on-disk salt can no longer
+        # reproduce — i.e. permanently undecryptable.  The previous rollback
+        # restored only ``self.encryption_key`` (not ``self.salt``, and not the
+        # rewritten files), so any interrupted migration lost data.
+        #
+        # Crash-safety strategy:
+        #   * snapshot the raw bytes of every file the migration overwrites,
+        #   * write each key + the salt + metadata via ``_atomic_write_bytes``
+        #     (atomic replace, so no file is ever torn),
+        #   * on any exception restore the exact prior on-disk state from the
+        #     snapshot and restore both ``encryption_key`` and ``salt`` in memory.
         old_key = self.encryption_key
+        old_salt = self.salt
+
+        snapshot: Dict[Path, Optional[bytes]] = {}
+        for key_id in old_keys:
+            key_path = self.storage_path / f"{key_id}.json"
+            snapshot[key_path] = key_path.read_bytes() if key_path.exists() else None
+        snapshot[self.salt_file] = self.salt_file.read_bytes() if self.salt_file.exists() else None
+        snapshot[self.metadata_file] = (
+            self.metadata_file.read_bytes() if self.metadata_file.exists() else None
+        )
+
         self.encryption_key = new_encryption_key
         self.salt = new_salt
 
         try:
-            for key_id, (key_data, metadata) in old_keys.items():
-                self.store_key(key_id, key_data, metadata)
+            for key_id, (key_data, key_metadata) in old_keys.items():
+                self.store_key(key_id, key_data, key_metadata)
 
-            # Update salt file
-            with open(self.salt_file, "wb") as f:
-                f.write(new_salt)
-            os.chmod(self.salt_file, 0o600)
+            # Update salt file (atomic, 0600).
+            _atomic_write_bytes(self.salt_file, new_salt)
 
-            # Update metadata
+            # Update metadata (atomic, 0600).
             metadata = {
                 "version": self.KDF_VERSION if use_argon2 else 2,
                 "algorithm": "Argon2id" if use_argon2 else "PBKDF2-HMAC-SHA256",
@@ -781,13 +857,28 @@ class SecureKeyStorage:
                 metadata["parallelism"] = self.ARGON2_PARALLELISM
             else:
                 metadata["iterations"] = self.KDF_ITERATIONS
-            with open(self.metadata_file, "w") as f:
-                json.dump(metadata, f, indent=2)
+            _atomic_write_bytes(self.metadata_file, json.dumps(metadata, indent=2).encode("utf-8"))
 
             return True
         except Exception:
-            # Rollback on failure
+            # Restore the prior on-disk state so no key is left encrypted under a
+            # key the persisted salt cannot reproduce, then restore in-memory key
+            # and salt together (the old code left ``self.salt`` inconsistent).
+            for path, original in snapshot.items():
+                try:
+                    if original is None:
+                        if path.exists():
+                            path.unlink()
+                    else:
+                        _atomic_write_bytes(path, original)
+                except OSError:
+                    logger.error(
+                        "migrate_kdf rollback could not restore %s; the key store "
+                        "may need manual recovery from backup",
+                        path,
+                    )
             self.encryption_key = old_key
+            self.salt = old_salt
             raise
 
     @classmethod
@@ -812,6 +903,21 @@ class SecureKeyStorage:
         storage._derive_key_from_password(master_password)
         return storage
 
+    @staticmethod
+    def _validate_key_id(key_id: str) -> None:
+        """Reject ``key_id`` values that could escape ``storage_path``.
+
+        ``key_id`` is interpolated directly into a filename
+        (``storage_path / f"{key_id}.json"``), so it is the only thing standing
+        between a caller-supplied identifier and a path-traversal write/read
+        (``../../etc/foo``).  Restricting it to ``[A-Za-z0-9_-]`` makes any
+        separator or ``..`` component impossible.  ``store_key``,
+        ``retrieve_key`` and ``delete_key`` all funnel through this guard so the
+        three cannot drift apart again.
+        """
+        if not key_id or not key_id.replace("-", "").replace("_", "").isalnum():
+            raise ValueError("key_id must be non-empty alphanumeric (with - and _ allowed)")
+
     def store_key(
         self, key_id: str, key_data: bytes, metadata: Optional[Dict[str, Any]] = None
     ) -> None:
@@ -828,9 +934,9 @@ class SecureKeyStorage:
         """
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
-        # Validate key_id
-        if not key_id or not key_id.replace("-", "").replace("_", "").isalnum():
-            raise ValueError("key_id must be non-empty alphanumeric (with - and _ allowed)")
+        # Validate key_id (this is the guard that keeps a caller-supplied id
+        # from escaping ``storage_path`` — see ``_validate_key_id``).
+        self._validate_key_id(key_id)
 
         nonce = secrets.token_bytes(12)  # 96-bit nonce for GCM (NIST recommended)
 
@@ -853,9 +959,9 @@ class SecureKeyStorage:
         }
 
         key_file = self.storage_path / f"{key_id}.json"
-        with open(key_file, "w") as f:
-            json.dump(storage_data, f, indent=2)
-        os.chmod(key_file, 0o600)
+        # Atomic 0600 write: no world-readable window and no torn file if the
+        # process dies mid-write (load-bearing for crash-safe ``migrate_kdf``).
+        _atomic_write_bytes(key_file, json.dumps(storage_data, indent=2).encode("utf-8"))
 
     def retrieve_key(self, key_id: str) -> Optional[bytes]:
         """
@@ -871,6 +977,10 @@ class SecureKeyStorage:
             ValueError: If authentication fails (tampering detected) or unknown algorithm
         """
         from ama_cryptography.pqc_backends import native_aes256_gcm_decrypt
+
+        # Same traversal guard as ``store_key`` — a store you cannot write with
+        # a malicious id must not be readable with one either.
+        self._validate_key_id(key_id)
 
         key_file = self.storage_path / f"{key_id}.json"
         if not key_file.exists():
@@ -922,11 +1032,18 @@ class SecureKeyStorage:
         Returns:
             True if deleted, False if not found
         """
+        # Traversal guard: without it, a crafted key_id would let this method
+        # overwrite-with-random-bytes and unlink an arbitrary writable *.json.
+        self._validate_key_id(key_id)
+
         key_file = self.storage_path / f"{key_id}.json"
         if key_file.exists():
-            # Overwrite file before deleting
+            # Best-effort overwrite before unlinking (see note below on the
+            # limits of this on journaling/CoW/SSD filesystems).
             with open(key_file, "wb") as f:
                 f.write(secrets.token_bytes(1024))
+                f.flush()
+                os.fsync(f.fileno())
             key_file.unlink()
             return True
         return False
