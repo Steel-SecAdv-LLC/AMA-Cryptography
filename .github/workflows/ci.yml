@@ -351,8 +351,17 @@ jobs:
         python -m pip install --upgrade pip
         pip install pip-audit bandit
 
-    - name: Audit dependencies
-      run: pip-audit
+    - name: Audit dependencies (strict, lock-file scoped)
+      # Scope the audit to requirements-lock.txt — this project's pinned
+      # dependency set — rather than auditing the whole runner environment.
+      # A bare `pip-audit` reports CVEs in packages AMA does not ship (pip,
+      # pyjwt, urllib3 and whatever else the GitHub runner image preinstalls),
+      # so the gate turned red for reasons unrelated to this repository and
+      # unfixable from it.  Lock-file scoping makes the result reproducible
+      # across reruns and runner-image rolls, and matches the contract already
+      # used by security.yml.  `--strict` still fails the job on any
+      # vulnerability found in our own pinned set.
+      run: pip-audit --strict --desc --requirement requirements-lock.txt
 
     - name: Security linting with Bandit
       run: |

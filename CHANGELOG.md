@@ -101,6 +101,15 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ### CI signal recovery
 
+- **Fixed the pre-existing `security-checks` failure on `main`.** The
+  "Audit dependencies" step ran a bare `pip-audit`, which audits the entire
+  GitHub runner environment rather than this project's dependencies — so CVEs
+  in preinstalled packages AMA does not ship (`pip`, `pyjwt`, `urllib3`)
+  turned the gate red for reasons unfixable from this repository. It is now
+  scoped to `requirements-lock.txt` with `--strict`, matching the contract
+  `security.yml` already documented and used. AMA's own pinned dependency set
+  reports **no known vulnerabilities**, so the gate is still fail-closed on
+  anything this project actually ships.
 - **Fixed the `security-checks` CI failure.** The "Enforce safe `os.fdopen`
   usage" gate allowlisted `key_storage.py` — a module that does not exist —
   and therefore failed on the new (correctly guarded) `os.fdopen` call site in
