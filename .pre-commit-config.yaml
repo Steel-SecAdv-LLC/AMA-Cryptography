@@ -42,6 +42,22 @@ repos:
         args: ['-r', '-ll', '--skip=B101']
         exclude: ^tests/
 
+  # INVARIANT-23: in-house secret scanner (tools/check_secrets.py).
+  # Written in house rather than adopting a third-party scanner: this tree is
+  # full of high-entropy public material (NIST KAT vectors, ACVP responses,
+  # fuzz corpora, the Ed25519 integrity public key), which a generic entropy
+  # scanner floods with false positives — and the usual fix, a blanket ignore
+  # file, is exactly what lets a real key through later.  Detection and
+  # non-detection are both pinned by tests/test_secret_scanner.py.
+  - repo: local
+    hooks:
+      - id: ama-secret-scan
+        name: AMA secret scan (INVARIANT-23)
+        entry: python3 tools/check_secrets.py --staged
+        language: system
+        pass_filenames: false
+        always_run: true
+
 # Configuration notes:
 # - black: Code formatter with 100 char line length
 # - ruff: Fast linter (replaces flake8 + isort); config in pyproject.toml

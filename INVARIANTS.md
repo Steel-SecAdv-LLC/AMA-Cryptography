@@ -658,5 +658,46 @@ not as recoverable telemetry loss.
 
 ---
 
+## INVARIANT-23 — No Credential Material in the Public Tree
+
+**Statement.** No live credential material — private keys, provider tokens, or
+high-entropy secrets assigned to secret-named identifiers — may be committed to
+this repository, and the gate that enforces this must itself be tested in both
+directions.
+
+**Why.** AMA Cryptography is a public repository whose tracked content is
+largely *published high-entropy material*: NIST KAT vectors, ACVP responses,
+fuzz seed corpora, and the Ed25519 public key plus detached signature in
+`ama_cryptography/_integrity_signature.py`. That combination is the worst case
+for an off-the-shelf secret scanner — it produces so many false positives that
+teams reach for a blanket ignore file, and the blanket is what lets a real key
+through later.
+
+**Enforcement.** `tools/check_secrets.py` is an in-house scanner written
+against this repository's actual layout (no third-party dependency, consistent
+with INVARIANT-1). It runs as a fail-closed CI gate and as a `pre-commit` hook
+in `--staged` mode.
+
+**Testing duty (the load-bearing half).** A scanner that is never tested against
+real credential shapes silently degrades into a no-op. `tests/test_secret_scanner.py`
+pins BOTH directions:
+
+- **Detection** — PEM/OpenSSH private keys, AWS access-key ids, GitHub PATs,
+  Slack tokens, Google API keys, `Authorization` headers, tracked `.env` files,
+  and high-entropy assignments to secret-named identifiers are each caught.
+- **Non-detection** — published KAT vectors, the integrity public key, and
+  documentation placeholders do NOT fire.
+
+This dual duty is not optional: the detection tests are what caught a real gap
+in the scanner's own identifier regex (a `\b` anchor never matches inside
+`db_password`, because `_` is a word character).
+
+**Allowlist discipline.** Every allowlist entry in `tools/check_secrets.py`
+carries a written justification for why that path cannot contain a live secret.
+Silencing the scanner globally, or adding an unjustified entry, violates this
+invariant.
+
+---
+
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-05-19_
+_Last updated: 2026-07-24_

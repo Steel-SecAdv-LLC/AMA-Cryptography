@@ -388,6 +388,16 @@ jobs:
         name: semgrep-security-report
         path: semgrep-report.json
 
+    - name: "INVARIANT-23: Secret scan (in-house)"
+      # tools/check_secrets.py is written in house rather than adopting a
+      # third-party scanner — see the module docstring for why a generic
+      # entropy scanner is the wrong tool for a repository whose tracked
+      # content is largely published high-entropy test vectors.  Detection
+      # and non-detection are pinned by tests/test_secret_scanner.py, so this
+      # gate cannot silently degrade into a no-op.
+      run: |
+        python tools/check_secrets.py
+
     - name: Enforce safe os.fdopen usage
       run: |
         # All os.fdopen calls must be wrapped in try/except BaseException so an
