@@ -13,6 +13,23 @@ Comprehensive demonstration of all AMA Cryptography capabilities:
 - Hybrid classical+PQC signatures
 - Double-helix evolution engine (all 18+ variants)
 - Performance benchmarking
+
+.. warning::
+
+   **DEMONSTRATION CODE — NOT FOR PRODUCTION USE.**
+
+   This walkthrough favours a single readable script over safe operations:
+
+   * ``master_password="strong_master_password_123!"`` is hardcoded; a real
+     deployment must source the passphrase from an operator prompt, a secrets
+     manager, or an HSM.
+   * The key store is created inside a temporary directory that is deleted on
+     exit — keys created here are unrecoverable by design.
+   * The double-helix / 3R sections are **non-cryptographic** analytics and
+     must not be relied on for any security property (see the module
+     docstring of ``ama_cryptography.double_helix_engine``).
+
+   See ``IMPLEMENTATION_GUIDE.md`` before adapting any of this for real use.
 """
 
 import sys

@@ -26,6 +26,24 @@ Then visit:
     http://localhost:8000/docs - Interactive API documentation
     http://localhost:8000/api/health
     http://localhost:8000/api/sign
+
+.. warning::
+
+   **DEMONSTRATION CODE — NOT FOR PRODUCTION USE.**
+
+   The cryptographic calls are representative, but the surrounding service is
+   not production-ready:
+
+   * Signing keys are generated in-process at start-up and lost on restart,
+     so previously issued signatures become unverifiable.  Production must use
+     a persisted, rotated, access-controlled key store (or an HSM).
+   * The development server binds ``127.0.0.1`` and terminates no TLS; deploy
+     behind a hardened ASGI server with TLS enabled.
+   * There is no authentication, authorization, rate limiting, replay window,
+     or audit logging on the endpoints.
+
+   See ``THREAT_MODEL.md`` for the assumptions this library does and does not
+   make about its callers.
 """
 
 import asyncio

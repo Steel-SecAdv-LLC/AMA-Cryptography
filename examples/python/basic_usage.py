@@ -19,6 +19,23 @@ Usage:
 Requirements:
     pip install cryptography
     # Optional: build native C library for quantum-resistant signatures
+
+.. warning::
+
+   **DEMONSTRATION CODE — NOT FOR PRODUCTION USE.**
+
+   This example is written for readability, not for deployment.  Specifically:
+
+   * ``master_password="your_secure_password_here"`` is a hardcoded literal.
+     Production code must take the passphrase from an operator prompt, a
+     secrets manager, or an HSM — never from source.
+   * Generated keypairs are ephemeral and are discarded when the process
+     exits; no key backup, escrow, or rotation policy is applied.
+   * No access control, rate limiting, or audit logging is performed around
+     the cryptographic operations.
+
+   See ``IMPLEMENTATION_GUIDE.md`` for production key-management guidance and
+   ``SECURITY.md`` for the supported deployment posture.
 """
 
 import sys

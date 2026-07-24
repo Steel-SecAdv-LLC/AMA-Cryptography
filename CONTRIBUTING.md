@@ -425,6 +425,12 @@ Maintainers will:
 
 ### Security Review Requirements
 
+> **Required gate:** any change touching cryptographic code must complete the
+> [Cryptographic Review Checklist](CRYPTO_REVIEW_CHECKLIST.md). Copy the
+> sections that apply into your pull-request description and answer each item;
+> most items can be satisfied by citing the automated gate that already
+> enforces them. An unanswered item blocks merge.
+
 Changes affecting cryptographic operations require:
 
 1. **Specification Citation:** Cite the specification being implemented (NIST FIPS, RFC, or peer-reviewed paper)

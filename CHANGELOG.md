@@ -99,6 +99,53 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   comments that referenced it. Suppression hygiene remains enforced by
   `tools/check_suppression_hygiene.py` (INVARIANT-13).
 
+### Hardening
+
+- **In-house secret scanner (INVARIANT-23).** `tools/check_secrets.py` blocks
+  credential material from the public tree — private-key armour, AWS/GitHub/
+  Slack/Google credentials, `Authorization` headers, tracked `.env` files, and
+  high-entropy assignments to secret-named identifiers. Written in house rather
+  than adopting a third-party scanner: this repository's tracked content is
+  largely *published* high-entropy material (NIST KAT vectors, ACVP responses,
+  fuzz corpora, the Ed25519 integrity public key), which a generic entropy
+  scanner floods with false positives — and the usual remedy, a blanket ignore
+  file, is what lets a real key through later. Wired as a fail-closed CI gate
+  and a `pre-commit` hook; every allowlist entry carries a written
+  justification. Scans clean across 504 tracked files.
+- **Detection tests for the scanner** (`tests/test_secret_scanner.py`, 26
+  tests) pin both directions — each credential class is caught, and published
+  vectors/public keys/placeholders do not fire. These tests caught a real gap
+  in the scanner's own regex: a `\b` anchor never matches inside `db_password`
+  because `_` is a word character, so the most common real-world naming was
+  being missed.
+- **Property-based invariants for AEAD / KEM / KDF**
+  (`tests/test_property_based_crypto.py`, 16 tests). The existing property
+  suites covered HMAC, Ed25519 and the non-cryptographic math engine; the AEAD,
+  KEM and KDF contracts were pinned only by fixed vectors. Now asserted across
+  generated input spaces: AES-256-GCM and ChaCha20-Poly1305 round-trip,
+  authenticity under single-bit mutation of ciphertext/tag/nonce/AAD, and key
+  separation; ML-KEM-1024 encapsulate/decapsulate agreement, decapsulation
+  determinism, and independence of separate encapsulations; HKDF determinism,
+  length honesty, and IKM/info separation.
+- **Cryptographic Review Checklist** (`CRYPTO_REVIEW_CHECKLIST.md`) — a
+  required, evidence-based review gate for changes touching cryptographic code,
+  covering algorithm/parameter selection, randomness, key lifecycle,
+  constant-time requirements, memory safety, API contracts, testing evidence,
+  supply chain, secrets hygiene, and documentation duties. Each item names the
+  automated gate that already enforces it, so reviewers cite evidence rather
+  than opinion. Linked as mandatory from `CONTRIBUTING.md`.
+- **"Not for production" warnings on all demonstration code.** Each example in
+  `examples/python/` now names the specific unsafe patterns it contains
+  (hardcoded passphrases, ephemeral in-process signing keys that make prior
+  signatures unverifiable after restart, no TLS/authn/authz/rate limiting)
+  rather than carrying a generic disclaimer.
+- **Known API asymmetry documented:** AEAD authentication failure raises
+  `ValueError` from AES-256-GCM but `RuntimeError` from ChaCha20-Poly1305. The
+  property tests pin each type explicitly rather than asserting a blanket
+  `Exception`, so the contract is executable and any change is caught. Left
+  unchanged pending a deliberate decision, since altering a raised exception
+  type is a breaking change for callers.
+
 ### CI signal recovery
 
 - **Fixed the pre-existing `pip-audit` environment-scoping failure** in both
