@@ -120,7 +120,14 @@ jobs:
       run: |
         python -m pip install --upgrade pip setuptools wheel
         pip install "Cython>=3.0.0" "numpy>=1.24.0,<3.0.0"
-        pip install -e ".[dev]"
+        # [legacy] + [benchmark] supply PyCA cryptography / PyNaCl, and
+        # pycryptodome backs the AES-GCM differential harness.  Without them the
+        # cross-implementation validation tests (tests/test_differential.py,
+        # the PyCA interop cases in test_ed25519_native.py / test_aes_gcm_native.py
+        # / test_hkdf_sha3_256.py) silently SKIP, so a divergence between AMA's
+        # native C primitives and a reference implementation would go unnoticed.
+        # Installing them converts those skips into real assertions.
+        pip install -e ".[dev,legacy,benchmark]" pycryptodome
 
     - name: Verify module integrity digest is current
       shell: bash
@@ -161,6 +168,37 @@ jobs:
                 'The C library must be built before running tests.'
             )
         print('All crypto backends verified.')
+        "
+
+    - name: Verify cross-implementation reference libraries are importable
+      shell: bash
+      # The differential / interop suites validate AMA's native C primitives
+      # against independent reference implementations.  They are written to SKIP
+      # when a reference library is absent, which means a missing install would
+      # quietly delete that coverage instead of failing.  Assert the imports here
+      # so the skip path can never silently return in CI.
+      run: |
+        python -c "
+        import importlib
+        refs = {
+            'cryptography': 'PyCA interop (Ed25519 / AES-GCM / HKDF cross-checks)',
+            'nacl': 'PyNaCl differential validation',
+            'Crypto': 'pycryptodome AES-GCM differential validation',
+        }
+        missing = []
+        for mod, why in refs.items():
+            try:
+                importlib.import_module(mod)
+                print(f'  {mod}: OK ({why})')
+            except ImportError:
+                missing.append(f'{mod} ({why})')
+                print(f'  {mod}: MISSING ({why})')
+        if missing:
+            raise SystemExit(
+                'FATAL: cross-implementation reference libraries missing in CI: '
+                f'{missing}. Interop tests would SKIP and silently drop coverage.'
+            )
+        print('All cross-implementation reference libraries verified.')
         "
 
     - name: Run pytest test suite
@@ -343,10 +381,20 @@ jobs:
 
     - name: Enforce safe os.fdopen usage
       run: |
-        # All os.fdopen calls must be wrapped in try/except to prevent fd leaks.
-        # Approved call sites: key_storage.py, legacy_compat.py, crypto_api.py
-        if grep -rn 'os\.fdopen\|_os\.fdopen' ama_cryptography/ \
-            | grep -v 'ama_cryptography/key_storage\.py:' \
+        # All os.fdopen calls must be wrapped in try/except BaseException so an
+        # exception raised before os.fdopen takes ownership of the descriptor
+        # cannot leak it.  Approved (reviewed) call sites:
+        #   - key_management.py  (_atomic_write_bytes: mkstemp -> fdopen -> replace)
+        #   - legacy_compat.py
+        #   - crypto_api.py
+        # Restrict the scan to *.py so compiled artefacts under __pycache__ are
+        # not scanned, match only real call sites (`os.fdopen(`), and drop
+        # whole-line comments so prose about the guard cannot trip the gate.
+        # Verified against a planted violation (detected) and a comment-only
+        # mention (ignored).
+        if grep -rnE '[[:alnum:]_.]*os\.fdopen\(' ama_cryptography/ --include='*.py' \
+            | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' \
+            | grep -v 'ama_cryptography/key_management\.py:' \
             | grep -v 'ama_cryptography/legacy_compat\.py:' \
             | grep -v 'ama_cryptography/crypto_api\.py:'; then
           echo "::error::Direct os.fdopen call found outside approved modules — wrap in try/except BaseException to guard the fd"

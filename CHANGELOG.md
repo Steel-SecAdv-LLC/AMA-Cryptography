@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 3.3.0 |
-| Last Updated | 2026-07-05 |
+| Last Updated | 2026-07-24 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -98,6 +98,32 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   (`nosec_disposition.md`) from the public tree and tidied the two workflow
   comments that referenced it. Suppression hygiene remains enforced by
   `tools/check_suppression_hygiene.py` (INVARIANT-13).
+
+### CI signal recovery
+
+- **Fixed the `security-checks` CI failure.** The "Enforce safe `os.fdopen`
+  usage" gate allowlisted `key_storage.py` — a module that does not exist —
+  and therefore failed on the new (correctly guarded) `os.fdopen` call site in
+  `key_management.py`. The allowlist now names the real module, the scan is
+  restricted to `*.py`, and it matches only real call sites so a comment
+  mentioning the function cannot trip it. Verified against a planted violation
+  (detected) and a comment-only mention (ignored) — the gate was corrected,
+  not weakened.
+- **Interop/differential coverage no longer silently skips in CI.** The test
+  job now installs `[dev,legacy,benchmark]` + `pycryptodome`, and a new
+  fail-closed step asserts PyCA `cryptography`, PyNaCl, and pycryptodome are
+  importable. Previously ~11 cross-implementation validation tests skipped in
+  CI, so a divergence between AMA's native C primitives and a reference
+  implementation would have gone unnoticed. All of them pass against the
+  reference implementations.
+- Investigated all 24 local test skips: 22 were environment-gated (missing
+  reference libraries, unbuilt Cython extensions, uninstalled package,
+  SoftHSM2) and **all pass once the dependency is actually provided** — no
+  defect was hiding behind a skip. The remaining skip is a live-TSA
+  integration test that requires an external network endpoint by design.
+- Refreshed the `Last Updated` metadata on the documents revised in this pass
+  and corrected `SECURITY.md`'s supported-versions table, which still listed
+  3.1.x as the actively maintained line.
 
 ## [3.3.0] - 2026-07-05
 
