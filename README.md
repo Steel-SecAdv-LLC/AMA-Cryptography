@@ -629,6 +629,58 @@ for a fully locked, index-independent install.
 
 ---
 
+### Downstream Consumers (hard runtime dependency)
+
+Mercury Agent and FINDΩYOU™ import this library on their runtime path — they
+do not start without it. For a dependency of that class, declare it with an
+exact, verifiable pin rather than a floating range.
+
+**Pin by tag, no index required** (PEP 508 direct reference — valid in
+`requirements.txt` and in a `pyproject.toml` `dependencies` list):
+
+```
+ama-cryptography @ git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.4.0
+```
+
+**Pin by wheel + hash**, once a release carries built artifacts — the
+strongest form, because pip refuses anything whose hash does not match:
+
+```
+# requirements.txt  (install with: pip install --require-hashes -r requirements.txt)
+ama-cryptography @ https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases/download/v3.4.0/<WHEEL_FILENAME> \
+    --hash=sha256:<DIGEST>
+```
+
+> **One constraint worth knowing before choosing.** A distribution whose
+> metadata contains a direct URL reference **cannot be uploaded to PyPI** —
+> PyPI rejects `Requires-Dist` entries carrying direct references. So the
+> choice is a stack-wide one, not a per-project one:
+>
+> - If Mercury Agent / FINDΩYOU™ are themselves distributed from GitHub, the
+>   `git+https` pin above is fully supported and no index is involved anywhere.
+> - If any of them is to be installable from PyPI, then `ama-cryptography`
+>   must also resolve from PyPI (or from an index configured via
+>   `--extra-index-url`), because a direct reference would block their upload.
+
+**Fail closed at import.** Because the dependency is load-bearing, verify the
+native backend is actually present at start-up instead of discovering it at
+first use:
+
+```python
+from ama_cryptography import pqc_backends as p
+
+if not (p.KYBER_AVAILABLE and p.DILITHIUM_AVAILABLE and p.SPHINCS_AVAILABLE):
+    raise SystemExit(
+        "FATAL: AMA Cryptography native backend unavailable — refusing to start. "
+        "Rebuild with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+    )
+```
+
+This mirrors the library's own INVARIANT-7 posture: with no native
+constant-time backend, refuse to operate rather than fall back.
+
+---
+
 ### Standard Installation
 
 ```bash

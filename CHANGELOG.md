@@ -4,7 +4,7 @@
 
 | Property | Value |
 |----------|-------|
-| Applies to Release | 3.3.0 |
+| Applies to Release | 3.4.0 |
 | Last Updated | 2026-07-24 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
@@ -18,6 +18,28 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 ---
 
 ## [Unreleased]
+
+## [3.4.0] - 2026-07-24
+
+### Release
+
+- **Version bumped 3.3.0 → 3.4.0** across all ten declaration sites
+  (`pyproject.toml`, `setup.py`, `ama_cryptography/__init__.py`,
+  `CMakeLists.txt`, `include/ama_cryptography.h` MINOR + STRING,
+  `docs/conf.py` version + release, `docker/Dockerfile`,
+  `docker/Dockerfile.c-api`), verified by
+  `tools/check_version_consistency.py`.
+- **Version-pinning tests no longer hardcode the release literal.**
+  `test_basic.py::test_version` now compares `__version__` against the
+  version declared in `pyproject.toml`, and
+  `test_lazy_imports.py::test_import_without_numpy` compares the
+  numpy-less subprocess against the parent's `__version__`. Both
+  previously asserted a literal that had to be hand-edited every
+  release — friction that eventually gets forgotten, leaving the test
+  failing for a reason unrelated to the defect it exists to catch.
+  Minor (not patch) because the release adds public surface
+  (`CRYPTO_REVIEW_CHECKLIST.md`, two new tools, INVARIANT-23) and
+  tightens `retrieve_key`/`delete_key` input validation.
 
 ### Security
 
@@ -100,6 +122,24 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   `tools/check_suppression_hygiene.py` (INVARIANT-13).
 
 ### Documentation
+
+- **Downstream consumer guidance for a hard runtime dependency** (`README.md` →
+  *Downstream Consumers*). Mercury Agent and FINDΩYOU™ import this library on
+  their runtime path and do not start without it, so the docs now give exact
+  pinning forms for that class of dependency: a PEP 508 direct reference
+  (`ama-cryptography @ git+…@v3.4.0`, no index involved), and a wheel-plus-hash
+  pin for `--require-hashes` installs.
+
+  It also states the constraint that decides the stack-wide index question: a
+  distribution whose metadata carries a direct URL reference **cannot be
+  uploaded to PyPI**. If the dependent projects are themselves distributed from
+  GitHub, the git pin works everywhere and no index is involved; if any of them
+  is to be installable from PyPI, `ama-cryptography` must resolve from an index
+  too.
+
+  Includes a fail-closed start-up check (assert the native backends are present
+  rather than discovering their absence at first cryptographic call), mirroring
+  the library's own INVARIANT-7 posture. The snippet was executed as written.
 
 - **Distribution channels documented and exercised** (`README.md` →
   *Distribution Channels*). Four independent install paths are now written
