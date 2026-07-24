@@ -150,9 +150,18 @@ jobs:
       run: |
         pip list --format=json > pip-list.json
 
-    - name: Run dependency audit
+    - name: Run dependency audit (lock-file scoped)
+      # Scope to requirements-lock.txt — the same pinned dependency set the
+      # SBOM describes — instead of auditing the whole runner environment.
+      # A bare `pip-audit` here reported vulnerabilities in packages AMA does
+      # not ship (GitHub runner preinstalls such as pip / pyjwt / urllib3),
+      # failing the SBOM job for reasons unrelated to and unfixable from this
+      # repository, and producing an evidence artefact that did not describe
+      # the audited artefact.  Matches the "Run pip-audit (strict, lock-file
+      # scoped)" step in the security-scan job above.
       run: |
-        pip-audit --format=json --output pip-audit.json
+        pip-audit --format=json --output pip-audit.json \
+          --requirement requirements-lock.txt
 
     # SBOM DRIFT GATE (audit Issue 2):
     #
