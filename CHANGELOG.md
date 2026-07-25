@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 3.4.0 |
-| Last Updated | 2026-07-24 |
+| Last Updated | 2026-07-25 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -19,11 +19,44 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
-## [3.4.0] - 2026-07-24
+## [3.4.0] - 2026-07-25
 
 ### Fixed
 
-- **The release pipeline's actual blocker: a GitHub Action pinned to a commit
+- **Three further release blockers, found by actually running the release
+  pipeline.** Repinning cibuildwheel let the wheel jobs start for the first
+  time, and they immediately exposed defects that had been sitting behind it.
+  Each was independently sufficient to produce a release with no artefacts:
+  - **A retired runner label.** The wheel matrix named `macos-13`, an image
+    GitHub has withdrawn. The job did not fail fast — it queued for a runner
+    that would never arrive until `timeout-minutes` expired, failing
+    `build-wheels` and every stage downstream. Replaced with `macos-15-intel`
+    (x86_64). `macos-14` is marked deprecated upstream and was the next latent
+    outage in the same matrix, so the Apple-Silicon entry moved to `macos-15`.
+  - **`CIBW_TEST_COMMAND` broken by YAML folding.** The smoke test was a
+    folded scalar (`>-`), which joins the block's lines with a space; the
+    payload reached the interpreter with a leading space and raised
+    `IndentationError: unexpected indent`. Confirmed on Linux x86_64, Linux
+    aarch64 and macOS arm64: **every wheel built and passed `auditwheel`
+    repair, then died on this one command.** Replaced with a real script
+    (below).
+  - **POSIX quoting handed to `cmd.exe`.** `CIBW_BEFORE_BUILD_WINDOWS` used
+    single quotes to shield `>=` from redirection. `cmd.exe` does not treat a
+    single quote as a quoting operator, so pip received it literally and every
+    Windows wheel job died on
+    `ERROR: Invalid requirement: "'cmake": Expected package name`. Switched to
+    double quotes, which `cmd.exe` honours and which still shield `>=`.
+- **A release-workflow comment that described enforcement it did not perform.**
+  The `CIBW_ENVIRONMENT` block claimed to set `AMA_USE_NATIVE_PQC=ON`
+  (INVARIANT-7) and `AMA_AES_CONSTTIME=ON` (INVARIANT-20); neither was set
+  there. Both guarantees are real but enforced closer to the compiler —
+  `setup.py` passes `-DAMA_USE_NATIVE_PQC=ON` unconditionally, and
+  `CMakeLists.txt` defaults `AMA_AES_CONSTTIME=ON` and *fails configuration*
+  if it is disabled without an explicit `-DAMA_AES_TABLE_INSECURE=ON`
+  acknowledgement. The comment now describes where the enforcement actually
+  lives, so a reader is not left believing a layer protects them when it does
+  not.
+- **The release pipeline's first blocker: a GitHub Action pinned to a commit
   that does not exist.** `release.yml` carried
   `pypa/cibuildwheel@e9c4a96e93b86beae8e0a78eef4b54cbc81e9a47  # v3.2.0`. That
   SHA is present nowhere in `pypa/cibuildwheel` — neither the `v3.2.0` tag
@@ -43,6 +76,35 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ### Added
 
+- **`tools/check_workflow_commands.py` (INVARIANT-25)** — verifies the parts of
+  a workflow that otherwise fail only when it runs, which for `release.yml`
+  means release day. It resolves every `runs-on:` label through
+  `strategy.matrix` (including `include:` entries) against the set of
+  GitHub-hosted images that currently exist, compiles every embedded
+  `python -c` payload after applying the shell's own double-quote unescaping,
+  and rejects POSIX single-quoting in `*_WINDOWS` cibuildwheel variables and
+  `shell: cmd` steps. A label it cannot resolve statically is reported
+  separately and excluded from the verified count — unresolved is never
+  counted as checked. The runner-label table is curated, not queried (GitHub
+  publishes no API for it), and the module says so plainly along with what
+  that does and does not catch. Verified in both directions: replanting all
+  three defects into the real `release.yml` reproduces all three findings with
+  the same errors the runners produced, including
+  `IndentationError: unexpected indent`.
+- **`tools/wheel_smoke_test.py`** — the release gate each built wheel must pass
+  before it is signed or published, replacing the `python -c` one-liner that
+  had never once executed successfully. It runs inside cibuildwheel's
+  throwaway virtualenv and answers the questions only a *packaged* build can:
+  did the native extension load on this platform and interpreter, did the
+  power-on self test (signed integrity check plus 11 KATs) pass, did any
+  primitive degrade to a fallback backend (INVARIANT-7), and does every shipped
+  algorithm — ML-KEM-1024, ML-DSA-65, SLH-DSA, Ed25519, X25519, AES-256-GCM,
+  ChaCha20-Poly1305 — round-trip *and reject tampering*. It refuses to run
+  against a source checkout: a smoke test that imports the repository instead
+  of the installed artefact reports success for a wheel it never touched, which
+  is worse than no gate. Every check group runs even if an earlier one raises,
+  so one broken wheel yields one complete report rather than a series of
+  release attempts.
 - **`tools/check_action_pins.py` (INVARIANT-24)** — resolves every SHA-pinned
   action against upstream with `git ls-remote` and fails on any pin that
   matches no advertised ref. `--strict` additionally verifies the trailing

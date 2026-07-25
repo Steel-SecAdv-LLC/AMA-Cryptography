@@ -739,5 +739,54 @@ passing.
 
 ---
 
+## INVARIANT-25 — Workflow Runner Labels and Command Strings Must Be Valid
+
+**Statement.** Every runner label named in `.github/workflows/**` must be a
+GitHub-hosted image that currently exists, every embedded `python -c` payload
+must compile, and every command string destined for `cmd.exe` must use quoting
+`cmd.exe` actually honours.
+
+**Why.** `release.yml` triggers on `push: tags: ['v*']` and nothing else, so a
+defect inside it is invisible until a release is attempted. Three shipped that
+way, each independently sufficient to produce a release with no artefacts:
+
+1. **A retired runner label.** The wheel matrix named `macos-13` after GitHub
+   retired that image. The job did not fail fast — it queued for a runner that
+   would never arrive until `timeout-minutes` expired, failing `build-wheels`
+   and every stage downstream of it.
+2. **An inline Python payload broken by YAML folding.** `CIBW_TEST_COMMAND` was
+   a folded scalar (`>-`), which joins the block's lines with a space. The
+   payload reached the interpreter with a leading space and raised
+   `IndentationError: unexpected indent`. Every wheel on every platform built
+   correctly and then failed this one command.
+3. **POSIX quoting handed to `cmd.exe`.** `CIBW_BEFORE_BUILD_WINDOWS` used
+   single quotes to shield `>=` from redirection. `cmd.exe` does not treat a
+   single quote as a quoting operator, so pip received it literally and every
+   Windows wheel job died on `Invalid requirement: "'cmake"`.
+
+All three are decidable without running anything.
+
+**Enforcement.** `tools/check_workflow_commands.py` runs in CI on every PR. It
+resolves `runs-on:` through `strategy.matrix` (including `include:` entries),
+compiles every extracted `python -c` payload after applying the shell's own
+double-quote unescaping, and rejects POSIX single-quoting in `*_WINDOWS`
+cibuildwheel variables and `shell: cmd` steps. Both directions are pinned by
+`tests/test_workflow_command_checks.py`, which replays all three historical
+defects and asserts the legitimate shapes do not false-positive.
+
+**Unresolved is not verified.** A label the checker cannot resolve statically
+(an `inputs.*` expression, a matrix it cannot expand) is reported separately
+and excluded from the verified count. It is never quietly counted as passing.
+
+**Stated limitation.** GitHub publishes no API enumerating available hosted
+labels, so `SUPPORTED_LABELS` is a curated table carrying the date and source
+it was verified against. It catches an already-retired label, a typo, and a
+label that never existed — it cannot predict a *future* retirement. The
+authoritative detector for that is a `workflow_dispatch` dry run of
+`release.yml` before cutting a tag, which is a release-procedure obligation,
+not something this checker can discharge.
+
+---
+
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-07-24_
+_Last updated: 2026-07-25_

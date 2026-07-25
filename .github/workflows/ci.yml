@@ -281,7 +281,11 @@ jobs:
         # (previously ``ruff>=0.4``) lets a routine ruff release start failing
         # an unrelated PR; mypy floated on 1.x while the [dev] extra and
         # [tool.mypy] config target 2.x, so local and CI could disagree.
-        pip install "black==26.5.1" "ruff==0.15.20" "mypy==2.1.0"
+        # types-PyYAML keeps tools/check_workflow_commands.py and its tests
+        # inside `mypy --strict` rather than behind an ignore_missing_imports
+        # override; tests/ imports the tool, so mypy follows into it.
+        pip install "black==26.5.1" "ruff==0.15.20" "mypy==2.1.0" \
+                    "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260724"
 
     - name: Lint with ruff
       run: |
@@ -349,7 +353,10 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pip-audit bandit
+        # PyYAML is pinned to the requirements-lock.txt version because
+        # tools/check_workflow_commands.py (INVARIANT-25) runs in this job and
+        # parses the workflow files structurally.
+        pip install pip-audit bandit "PyYAML==6.0.3"
 
     - name: Audit dependencies (strict, lock-file scoped)
       # Scope the audit to requirements-lock.txt — this project's pinned
@@ -398,6 +405,20 @@ jobs:
       # that introduces it, not on release day.
       run: |
         python tools/check_action_pins.py --strict
+
+    - name: "INVARIANT-25: Verify workflow runner labels and command strings"
+      # release.yml runs only on a tag push, so anything wrong inside it stays
+      # invisible until release day.  Three defects shipped that way, each on
+      # its own enough to produce a release with zero binary artefacts: a
+      # retired `macos-13` runner label (the job queued until timeout), a
+      # `python -c` payload broken by YAML folding (every wheel built, then
+      # failed with IndentationError), and POSIX single-quoting handed to
+      # cmd.exe (every Windows wheel died on `Invalid requirement: "'cmake"`).
+      # All three are decidable without running anything, so they are decided
+      # here — on the pull request that introduces them.  Both directions are
+      # pinned by tests/test_workflow_command_checks.py.
+      run: |
+        python tools/check_workflow_commands.py
 
     - name: "INVARIANT-23: Secret scan (in-house)"
       # tools/check_secrets.py is written in house rather than adopting a

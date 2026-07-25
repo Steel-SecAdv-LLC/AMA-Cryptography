@@ -292,7 +292,10 @@ jobs:
         run: |
           # Pinned to requirements-lock.txt so this gate matches the dev
           # toolchain and pre-commit (no unpinned ruff, no mypy 1.x/2.x split).
-          pip install "black==26.5.1" "ruff==0.15.20" "mypy==2.1.0"
+          # types-PyYAML keeps tools/check_workflow_commands.py inside
+          # `mypy --strict`; tests/ imports it, so mypy follows into it.
+          pip install "black==26.5.1" "ruff==0.15.20" "mypy==2.1.0" \
+                      "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260724"
 
       - name: Lint (ruff)
         run: ruff check .
