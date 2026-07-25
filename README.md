@@ -36,7 +36,7 @@
 **Author/Inventor:** Andrew E. A.
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
-**Version:** 3.3.0
+**Version:** 3.4.0
 **AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
@@ -223,6 +223,8 @@ NIST-standardized post-quantum algorithms:
 
 </details>
 
+<a id="implementation-status-matrix"></a>
+
 <details>
 <summary><strong>Implementation Status Matrix</strong></summary>
 
@@ -248,12 +250,14 @@ NIST-standardized post-quantum algorithms:
 - **Full (native)**: Complete native C implementation — no external PQC dependency required.
 - **Note**: Ed25519 C implementation uses radix 2^51 field arithmetic (fe51.h — 25 cross-products vs 100 in ref10) with a signed 4-bit window comb for fixed-base scalar mult (64 mixed adds + 4 doublings, per Bernstein–Duif–Lange–Schwabe–Yang 2012). The ed25519-donna x86-64 assembly backend is now the default on x86-64 builds (`AMA_ED25519_ASSEMBLY=ON` auto-set by CMake on x86-64 and MSVC x64); pass `-DAMA_ED25519_ASSEMBLY=OFF` to force the in-tree fe51+comb backend for auditing. Full RFC 8032 sign/verify roundtrip verified on both backends.
 
-**C Library Implementations (3.1.0 + unreleased) — measured 2026-05-16: 22 top-level `.c` files, 2 internal headers, 1 internal `.c`, and 4 public headers across `src/c/` and `include/`:**
+**C Library Implementations (v3.4.0): 23 top-level `.c` files, 2 internal headers, 1 internal `.c`, and 4 public headers across `src/c/` and `include/`:**
 - `ama_core.c`: Library initialization, version, feature detection, shared utilities
 - `ama_sha3.c`: SHA3-256, SHAKE128, SHAKE256 (Keccak-f[1600] sponge construction)
 - `ama_sha256.c`: Native SHA-256 (FIPS 180-4), used by SPHINCS+ internally
+- `ama_sha256_ni.c`: x86 SHA-NI (Intel SHA Extensions) single-block SHA-256 compression kernel, dispatch-selected on SHA-NI-capable hosts (byte-equivalent to `ama_sha256.c`, verified by `tests/c/test_sha256_dispatch_equiv.c`)
 - `ama_hkdf.c`: HKDF-SHA3-256 with HMAC-SHA3-256 (RFC 5869 compliant)
 - `ama_hmac_sha256.c`: Native HMAC-SHA-256 (RFC 2104), used by SPHINCS+ PRF_msg
+- `ama_hmac_sha384.c`: Native HMAC-SHA-384 (RFC 2104 / FIPS 198-1), mirroring the HMAC-SHA-512 public surface
 - `ama_ed25519.c`: Ed25519 keygen/sign/verify (SHA-512, field arithmetic for GF(2^255-19), C11 atomics, Shamir/Straus joint scalar mult with width-5 wNAF in verify path)
 - `ama_frost.c`: FROST threshold Ed25519 signatures (RFC 9591) — t-of-n Schnorr threshold over the Ed25519 group, two-round binding-commitment protocol, trusted-dealer keygen
 - `ed25519_donna_shim.c`: Ed25519 AMA-API shim over the vendored ed25519-donna assembly backend (`AMA_ED25519_ASSEMBLY=ON`, default on x86-64)
@@ -503,6 +507,181 @@ python benchmarks/benchmark_suite.py   # includes ethical overhead breakdown
 
 <details>
 <summary><strong>Installation</strong></summary>
+
+### Distribution Channels
+
+AMA Cryptography is distributed from **its own repository first**. No package
+index is a required part of the supply chain: the library itself has zero
+runtime cryptographic dependencies (INVARIANT-1), so a package index is a
+delivery convenience, never an architectural dependency. Every channel below
+installs byte-identical source.
+
+| Channel | Status | Needs a C toolchain? |
+|---|---|---|
+| Source install from a git tag | **Verified working today** | Yes |
+| Prebuilt wheel from a GitHub Release | From the first release built by `release.yml` onward | No |
+| PyPI (`pip install ama-cryptography`) | Optional convenience mirror | No |
+| Self-hosted PEP 503 index | Supported pattern, opt-in | No |
+
+---
+
+#### 1. Source install from a git tag — no index involved
+
+The primary channel, and the one to use if you want zero third-party
+intermediaries. Pin to a **tag**, never a branch, so the install is
+reproducible:
+
+```bash
+# Replace the tag with the release you want; any published tag works.
+# Tags: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/tags
+pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.4.0"
+```
+
+This clones at the tag and builds the native C library and Cython extensions
+locally, so it needs a build toolchain (see *Platform-Specific Notes* below):
+a C11 compiler, `cmake >= 4.3.4`, `Cython >= 3.2.8`, and `numpy >= 1.24.0`.
+
+To verify the tag is the one you expect before installing:
+
+```bash
+git ls-remote --tags https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git v3.4.0
+```
+
+Confirm the install landed and the native backends are live:
+
+```bash
+python -c "
+from ama_cryptography import pqc_backends as p
+pk, sk = p.native_ed25519_keypair()
+sig = p.native_ed25519_sign(b'smoke test', sk)
+assert p.native_ed25519_verify(sig, b'smoke test', pk)
+kp = p.generate_kyber_keypair(); e = p.kyber_encapsulate(kp.public_key)
+assert p.kyber_decapsulate(e.ciphertext, kp.secret_key) == e.shared_secret
+print('native Ed25519 + ML-KEM-1024 OK;',
+      'Kyber:', p.KYBER_AVAILABLE, 'Dilithium:', p.DILITHIUM_AVAILABLE,
+      'SPHINCS+:', p.SPHINCS_AVAILABLE)
+"
+```
+
+#### 2. Prebuilt wheel from a GitHub Release — no index, no toolchain
+
+`release.yml` builds wheels with `cibuildwheel` for CPython 3.10–3.13 across
+Linux x86-64, Linux aarch64, macOS x86-64, macOS arm64 and Windows AMD64, and
+attaches them to the GitHub Release together with the sdist, sigstore bundles
+and SLSA v1 provenance.
+
+> **Availability:** releases published *before* this pipeline first ran carry
+> no binary assets — for those tags, use channel 1. Check the release page for
+> a given tag before relying on this channel:
+> <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases>
+
+```bash
+# Pick the wheel matching your platform + Python from the release page, then:
+pip install "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases/download/<TAG>/<WHEEL_FILENAME>"
+```
+
+Verify before installing — the artifacts are signed precisely so you do not
+have to trust the transport:
+
+```bash
+# Keyless sigstore signature (identity is the release workflow itself)
+pip install sigstore
+sigstore verify identity \
+  --cert-identity "https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/.github/workflows/release.yml@refs/tags/<TAG>" \
+  --cert-oidc-issuer "https://token.actions.githubusercontent.com" \
+  <WHEEL_FILENAME>
+
+# SLSA v1 build provenance
+pip install slsa-verifier || true   # or use the slsa-verifier binary
+slsa-verifier verify-artifact <WHEEL_FILENAME> \
+  --provenance-path ama-cryptography.intoto.jsonl \
+  --source-uri github.com/Steel-SecAdv-LLC/AMA-Cryptography
+```
+
+#### 3. PyPI — optional convenience mirror
+
+```bash
+pip install ama-cryptography
+```
+
+PyPI is treated as a *mirror of convenience*, not the source of truth. It
+exists so that downstream projects can resolve `ama-cryptography` as an
+ordinary dependency; nothing in this library requires it, and channels 1 and 2
+remain fully supported and independently verifiable if it is ever unavailable.
+
+#### 4. Self-hosted index (PEP 503) — full independence
+
+If you prefer to serve artifacts from infrastructure you control, any static
+web host that can serve a PEP 503 "simple" directory tree works. Publish the
+wheels under `/simple/ama-cryptography/` and point pip at it:
+
+```bash
+# Use as an additional source (PyPI still available for other packages)
+pip install --extra-index-url https://<your-host>/simple/ ama-cryptography
+
+# Or as the ONLY source — no third-party index consulted at all
+pip install --index-url https://<your-host>/simple/ ama-cryptography
+```
+
+Two requirements are easy to get wrong and worth stating: the host must serve
+real directory listings (an SPA/website builder that rewrites unknown paths to
+`index.html` will not work), and it must be HTTPS with a valid certificate or
+pip will refuse it. Pin hashes with `--require-hashes` in a requirements file
+for a fully locked, index-independent install.
+
+---
+
+### Downstream Consumers (hard runtime dependency)
+
+Mercury Agent and FINDΩYOU™ import this library on their runtime path — they
+do not start without it. For a dependency of that class, declare it with an
+exact, verifiable pin rather than a floating range.
+
+**Pin by tag, no index required** (PEP 508 direct reference — valid in
+`requirements.txt` and in a `pyproject.toml` `dependencies` list):
+
+```
+ama-cryptography @ git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.4.0
+```
+
+**Pin by wheel + hash**, once a release carries built artifacts — the
+strongest form, because pip refuses anything whose hash does not match:
+
+```
+# requirements.txt  (install with: pip install --require-hashes -r requirements.txt)
+ama-cryptography @ https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases/download/v3.4.0/<WHEEL_FILENAME> \
+    --hash=sha256:<DIGEST>
+```
+
+> **One constraint worth knowing before choosing.** A distribution whose
+> metadata contains a direct URL reference **cannot be uploaded to PyPI** —
+> PyPI rejects `Requires-Dist` entries carrying direct references. So the
+> choice is a stack-wide one, not a per-project one:
+>
+> - If Mercury Agent / FINDΩYOU™ are themselves distributed from GitHub, the
+>   `git+https` pin above is fully supported and no index is involved anywhere.
+> - If any of them is to be installable from PyPI, then `ama-cryptography`
+>   must also resolve from PyPI (or from an index configured via
+>   `--extra-index-url`), because a direct reference would block their upload.
+
+**Fail closed at import.** Because the dependency is load-bearing, verify the
+native backend is actually present at start-up instead of discovering it at
+first use:
+
+```python
+from ama_cryptography import pqc_backends as p
+
+if not (p.KYBER_AVAILABLE and p.DILITHIUM_AVAILABLE and p.SPHINCS_AVAILABLE):
+    raise SystemExit(
+        "FATAL: AMA Cryptography native backend unavailable — refusing to start. "
+        "Rebuild with: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+    )
+```
+
+This mirrors the library's own INVARIANT-7 posture: with no native
+constant-time backend, refuse to operate rather than fall back.
+
+---
 
 ### Standard Installation
 
@@ -1262,7 +1441,7 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) file for 
 
 ### Third-Party Dependencies
 
-AMA Cryptography v3.1.0 has **zero core cryptographic dependencies** — all cryptographic primitives are implemented natively in C.
+AMA Cryptography v3.4.0 has **zero core cryptographic dependencies** — all cryptographic primitives are implemented natively in C.
 
 **Algorithm implementations (all native, public domain references):**
 - **ML-DSA-65** (Dilithium): Public domain (NIST FIPS 204)
@@ -1274,9 +1453,9 @@ AMA Cryptography v3.1.0 has **zero core cryptographic dependencies** — all cry
 - **SHA3-256/SHAKE**: Public domain (NIST FIPS 202)
 
 **Optional dependency groups:**
-- `[math]`: numpy (≥ 1.24), Cython (≥ 3.2.4) — required only for the optional `math_engine` Cython extension
+- `[math]`: numpy (≥ 1.24), Cython (≥ 3.2.8) — required only for the optional `math_engine` Cython extension
 - `[monitoring]`: numpy, scipy (3R engine)
-- `[legacy]`: cryptography (fallback)
+- `[legacy]`: cryptography — used ONLY by tests/benchmarks for cross-checking; NOT a runtime fallback (INVARIANT-1 prohibits a PyCA dependency in the production path)
 - `[hsm]`: PyKCS11 ≥ 1.5.18 (HSM support)
 - `[docs]`: sphinx, sphinx-rtd-theme ≥ 3.1.0 (documentation build)
 - `[benchmark]`: pynacl, liboqs-python, cryptography (peer libraries for `benchmarks/comparative_benchmark.py` only — not linked into the production library; INVARIANT-1 still holds)

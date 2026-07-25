@@ -28,6 +28,11 @@ hypothesis>=6.156.1
 black>=26.5.1
 ruff>=0.15.20
 mypy>=2.1.0
+# PyYAML powers tools/check_workflow_commands.py (INVARIANT-25), which parses
+# .github/workflows/** structurally rather than by regex.  types-PyYAML keeps
+# that tool and its tests inside `mypy --strict` instead of behind an override.
+PyYAML>=6.0.3
+types-PyYAML>=6.0.12.20260724
 
 # Security Scanning
 bandit>=1.7.0

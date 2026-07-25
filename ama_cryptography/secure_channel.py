@@ -44,7 +44,26 @@ Protocol flow:
     5. Both derive session keys via HKDF-SHA3-256
     6. Responder sends authenticated response with hybrid signature
     7. Session established with encrypt/decrypt/rekey capabilities
-    8. Forward secrecy via periodic re-keying using new KEM exchanges
+    8. Intra-session HKDF ratchet re-keying (see ``SecureSession.rekey``)
+
+Forward-secrecy properties (read before deploying):
+    The session secret is derived by encapsulating to the Responder's
+    *static* hybrid-KEM public key — a KEM-to-static (HPKE-base-style)
+    handshake.  The Initiator's ephemeral key authenticates/binds the
+    exchange but does NOT contribute an ephemeral-ephemeral secret, so the
+    forward-secrecy guarantees are asymmetric:
+
+    * The intra-session ratchet (``rekey``) IS forward-secure.  Old key
+      material is wiped and each epoch key is a one-way HKDF-SHA3-256 of the
+      previous one, so compromise of an epoch key does not reveal traffic
+      from earlier epochs of the same session.
+    * The handshake is NOT forward-secure against compromise of the
+      Responder's *static* KEM private key.  An adversary who records a
+      session and later recovers that static key can decapsulate the
+      recorded ciphertext and reconstruct every session (and epoch) key.
+      Deployments that require forward secrecy against static-key compromise
+      MUST rotate the Responder's static KEM keypair frequently and guard its
+      confidentiality accordingly.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.

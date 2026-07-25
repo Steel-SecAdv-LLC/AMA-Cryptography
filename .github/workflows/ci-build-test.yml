@@ -290,7 +290,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install "black==26.3.1" "ruff>=0.4" "mypy>=1.9,<2"
+          # Pinned to requirements-lock.txt so this gate matches the dev
+          # toolchain and pre-commit (no unpinned ruff, no mypy 1.x/2.x split).
+          # types-PyYAML keeps tools/check_workflow_commands.py inside
+          # `mypy --strict`; tests/ imports it, so mypy follows into it.
+          pip install "black==26.5.1" "ruff==0.15.20" "mypy==2.1.0" \
+                      "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260724"
 
       - name: Lint (ruff)
         run: ruff check .
@@ -509,7 +514,7 @@ jobs:
         # set but token missing) would otherwise reach docker/login-action
         # and fail noisily, defeating the "optional" intent of the step.
         if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4.4.0
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ env.DOCKERHUB_TOKEN }}

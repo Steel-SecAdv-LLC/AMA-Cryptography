@@ -10,8 +10,33 @@ import ama_cryptography
 
 
 def test_version() -> None:
-    """Test that version is correctly set"""
-    assert ama_cryptography.__version__ == "3.3.0"
+    """``__version__`` matches the version declared in ``pyproject.toml``.
+
+    Compared against the packaging source of truth rather than a hardcoded
+    literal.  A literal here had to be hand-edited on every release — friction
+    that eventually gets forgotten, at which point the test pins a stale
+    version and fails for a reason that has nothing to do with the defect it
+    was meant to catch.  Deriving it keeps the real property (``__init__.py``
+    must not drift from the packaging metadata) while costing nothing per
+    release.  ``tools/check_version_consistency.py`` enforces agreement across
+    all ten declaration sites; this is the fast in-suite check of the pair
+    that matters most at import time.
+
+    Parsed with a regex rather than ``tomllib`` so the test also runs on the
+    project's Python 3.10 floor, where ``tomllib`` is unavailable.
+    """
+    import re
+    from pathlib import Path
+
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    if not pyproject.is_file():
+        pytest.skip("pyproject.toml not present (installed-package checkout)")
+
+    match = re.search(
+        r'^\s*version\s*=\s*"([^"]+)"', pyproject.read_text(encoding="utf-8"), re.MULTILINE
+    )
+    assert match is not None, "could not locate [project].version in pyproject.toml"
+    assert ama_cryptography.__version__ == match.group(1)
 
 
 def test_version_consistency() -> None:

@@ -52,13 +52,44 @@ import hashlib
 import logging
 import math
 import os
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar, Deque, Dict, List, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_expiry_to_unix(value: Any) -> Optional[float]:
+    """Best-effort conversion of an ``expires_at`` value to a Unix timestamp.
+
+    Accepts a Unix ``int``/``float``, a ``datetime`` (naive treated as UTC), or
+    an ISO-8601 string.  Returns ``None`` when the value cannot be interpreted
+    so the caller can warn instead of silently skipping expiry enforcement (the
+    previous ``isinstance(..., (int, float))``-only guard let ``datetime``/ISO
+    expiries slip through as "never expired").
+    """
+    # ``bool`` is an ``int`` subclass — reject it so ``True`` is not read as
+    # the epoch-second timestamp 1.0.
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    if isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    return None
 
 
 def _median_sorted(values: List[float]) -> float:
@@ -474,6 +505,11 @@ class NonceTracker:
         self._seen: Set[Tuple[str, str]] = set()
         # Per-key counters for 2^32 safety limit
         self._counters: Dict[str, int] = {}
+        # Serialises the check-then-record critical section: without it two
+        # threads presenting the same (key, nonce) can both observe it absent
+        # and both return "fresh", defeating the reuse guard.  Re-entrant so a
+        # future in-lock helper call cannot self-deadlock.
+        self._lock = threading.RLock()
         if not ephemeral:
             self._load_persisted()
 
@@ -555,32 +591,37 @@ class NonceTracker:
         nonce_hex = nonce.hex()
         entry = (key_hash, nonce_hex)
 
-        if entry in self._seen:
-            return {
-                "type": "nonce_reuse",
-                "severity": "critical",
-                "key_id_hash": key_hash,
-                "nonce": nonce_hex,
-                "message": "CRITICAL: Nonce reuse detected! Same (key, nonce) pair used twice.",
-                "timestamp": time.time(),
-            }
+        # The membership test, counter read, mutation and durable persist must
+        # be one atomic unit or concurrent callers can race past the guard.
+        with self._lock:
+            if entry in self._seen:
+                return {
+                    "type": "nonce_reuse",
+                    "severity": "critical",
+                    "key_id_hash": key_hash,
+                    "nonce": nonce_hex,
+                    "message": "CRITICAL: Nonce reuse detected! Same (key, nonce) pair used twice.",
+                    "timestamp": time.time(),
+                }
 
-        # Check counter limit
-        count = self._counters.get(key_hash, 0)
-        if count >= self._NONCE_SAFETY_LIMIT:
-            return {
-                "type": "nonce_limit_exceeded",
-                "severity": "critical",
-                "key_id_hash": key_hash,
-                "count": count,
-                "message": "CRITICAL: Nonce safety limit (2^32) exceeded for key. Re-key required.",
-                "timestamp": time.time(),
-            }
+            # Check counter limit
+            count = self._counters.get(key_hash, 0)
+            if count >= self._NONCE_SAFETY_LIMIT:
+                return {
+                    "type": "nonce_limit_exceeded",
+                    "severity": "critical",
+                    "key_id_hash": key_hash,
+                    "count": count,
+                    "message": (
+                        "CRITICAL: Nonce safety limit (2^32) exceeded for key. Re-key required."
+                    ),
+                    "timestamp": time.time(),
+                }
 
-        self._seen.add(entry)
-        self._counters[key_hash] = count + 1
-        self._persist_entry(key_hash, nonce_hex)
-        return None
+            self._seen.add(entry)
+            self._counters[key_hash] = count + 1
+            self._persist_entry(key_hash, nonce_hex)
+            return None
 
     def get_counter(self, key_id: bytes) -> int:
         """Get current nonce count for a key."""
@@ -589,7 +630,8 @@ class NonceTracker:
 
     def get_all_counters(self) -> Dict[str, int]:
         """Get all persisted counters (key_hash -> count)."""
-        return dict(self._counters)
+        with self._lock:
+            return dict(self._counters)
 
 
 class ResonanceTimingMonitor:
@@ -675,8 +717,26 @@ class ResonanceTimingMonitor:
         self.anomaly_profiles: Dict[str, Dict[str, Any]] = dict(self.DEFAULT_ANOMALY_PROFILES)
         if anomaly_profiles:
             self.anomaly_profiles.update(anomaly_profiles)
+        # ``record_timing`` runs on the concurrent crypto hot path (crypto_api
+        # calls it from sign/verify/encrypt/decrypt, and HybridSignatureProvider
+        # verifies via a ThreadPoolExecutor).  Its read-modify-write of the
+        # Welford/EWMA/baseline state is not atomic, so concurrent calls would
+        # corrupt the baselines and could suppress a genuine timing-anomaly
+        # signal.  A re-entrant lock serialises the whole update (including the
+        # nested ``_update_timing_ratios``).
+        self._lock = threading.RLock()
 
     def record_timing(
+        self,
+        operation: str,
+        duration_ms: float,
+        input_size: Optional[int] = None,
+    ) -> Optional[TimingAnomaly]:
+        """Thread-safe wrapper around the timing-record critical section."""
+        with self._lock:
+            return self._record_timing_locked(operation, duration_ms, input_size)
+
+    def _record_timing_locked(
         self,
         operation: str,
         duration_ms: float,
@@ -1151,7 +1211,17 @@ class RecursionPatternMonitor:
         # Check expiration
         if expires_at is not None:
             now = time.time()
-            if isinstance(expires_at, (int, float)) and now > expires_at:
+            expires_ts = _coerce_expiry_to_unix(expires_at)
+            if expires_ts is None:
+                # Do not silently pass an expired key just because its expiry was
+                # expressed in a format we could not parse.
+                logger.warning(
+                    "Key %s has an uninterpretable expires_at (%r); expiry cannot "
+                    "be enforced for this key",
+                    key_id,
+                    expires_at,
+                )
+            elif now > expires_ts:
                 anomalies.append(
                     {
                         "type": "key_expired",
@@ -1246,6 +1316,10 @@ class RefactoringAnalyzer:
         self.analysis_cache: Dict[str, Dict] = {}
         # Priority 9: Runtime code integrity baselines
         self._integrity_baselines: Dict[str, str] = {}
+        # True only once every guarded crypto module has been baselined.  Left
+        # False on any failure so ``verify_integrity`` can tell "no baseline"
+        # apart from "verified clean" instead of failing open.
+        self._integrity_baseline_ready: bool = False
         # Priority 10: Import chain baselines
         self._import_baselines: Dict[str, str] = {}
         self._initialize_integrity_baselines()
@@ -1260,18 +1334,26 @@ class RefactoringAnalyzer:
                 # Try relative to current file
                 crypto_pkg = Path(__file__).parent.parent / "ama_cryptography"
 
+            modules_found = 0
             for module_name in self.CRYPTO_MODULES:
                 module_path = crypto_pkg / module_name
                 if module_path.exists():
                     content_hash = self._hash_file(module_path)
                     self._integrity_baselines[str(module_path)] = content_hash
+                    modules_found += 1
 
             # Also hash the monitor module itself
             monitor_path = Path(__file__)
             if monitor_path.exists():
                 self._integrity_baselines[str(monitor_path)] = self._hash_file(monitor_path)
+
+            # The baseline is only trustworthy if every guarded crypto module was
+            # actually hashed.  A partial/empty baseline must NOT later be
+            # reported as "clean" — see verify_integrity's fail-closed guard.
+            self._integrity_baseline_ready = modules_found == len(self.CRYPTO_MODULES)
         except Exception as e:
             logger.warning("Failed to initialize integrity baselines: %s", e)
+            self._integrity_baseline_ready = False
 
     def _initialize_import_baselines(self) -> None:
         """Record resolved filesystem paths of all imported crypto modules."""
@@ -1313,6 +1395,26 @@ class RefactoringAnalyzer:
             List of IntegrityViolation for any files whose hash has changed
         """
         violations: List[IntegrityViolation] = []
+
+        # Fail closed: if the startup baseline was never established (package
+        # dir not found, unreadable source, etc.) we cannot attest anything.
+        # Reporting an empty violation list here would be indistinguishable from
+        # "all files verified clean" — the exact fail-open the baseline exists
+        # to prevent.
+        if not self._integrity_baseline_ready:
+            logger.critical(
+                "Runtime code integrity baseline unavailable — cannot attest "
+                "module integrity; reporting as a violation (fail-closed)."
+            )
+            violations.append(
+                IntegrityViolation(
+                    file_path="<integrity-baseline>",
+                    expected_hash="BASELINE_ESTABLISHED",
+                    actual_hash="BASELINE_UNAVAILABLE",
+                )
+            )
+            return violations
+
         for filepath_str, expected_hash in self._integrity_baselines.items():
             filepath = Path(filepath_str)
             if not filepath.exists():

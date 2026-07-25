@@ -24,6 +24,24 @@ Then visit:
     http://localhost:5000/api/health
     http://localhost:5000/api/sign
     http://localhost:5000/api/protected-data
+
+.. warning::
+
+   **DEMONSTRATION CODE — NOT FOR PRODUCTION USE.**
+
+   The cryptographic calls are representative, but the surrounding service is
+   not production-ready:
+
+   * Signing keys are generated in-process at start-up and lost on restart,
+     so previously issued signatures become unverifiable.  Production must use
+     a persisted, rotated, access-controlled key store (or an HSM).
+   * The development server binds ``127.0.0.1`` and terminates no TLS; deploy
+     behind a hardened WSGI server with TLS enabled.
+   * There is no authentication, authorization, rate limiting, replay window,
+     or audit logging on the endpoints.
+
+   See ``THREAT_MODEL.md`` for the assumptions this library does and does not
+   make about its callers.
 """
 
 import json

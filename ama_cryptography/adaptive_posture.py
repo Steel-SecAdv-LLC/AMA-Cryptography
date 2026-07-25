@@ -718,14 +718,19 @@ class CryptoPostureController:
 
     def _trigger_rotation(self) -> None:
         """Trigger key rotation through existing infrastructure."""
-        self._last_rotation_time = time.time()
         self._rotation_count += 1
 
         derivation_path: Optional[str] = None
+        # ``attempted`` = a rotation mechanism was actually invoked;
+        # ``succeeded`` = it completed without raising.  These gate whether the
+        # cooldown timer is armed (see the end of the method).
+        attempted = False
+        succeeded = False
 
         if self.rotation_manager is not None:
             active_key = self.rotation_manager.get_active_key()
             if active_key is not None:
+                attempted = True
                 new_key_id = f"posture-rotation-{self._rotation_count}"
 
                 # Derive new key material via BIP32 if HD derivation is available
@@ -746,14 +751,26 @@ class CryptoPostureController:
                     )
                     self.rotation_manager.initiate_rotation(active_key, new_key_id)
                     logger.info("Posture-triggered key rotation: %s → %s", active_key, new_key_id)
+                    succeeded = True
                 except Exception as e:
                     logger.warning("Posture key rotation failed: %s", e)
 
         if self.on_rotation is not None:
+            attempted = True
             try:
                 self.on_rotation()
+                succeeded = True
             except Exception as e:
                 logger.warning("Rotation callback failed: %s", e)
+
+        # Arm the cooldown only when a rotation actually happened, or when there
+        # was no mechanism to attempt (a no-op trigger — preserves prior
+        # behaviour).  A rotation that was *attempted and failed* (e.g. the KMS
+        # is unreachable) must NOT arm the cooldown: otherwise the posture
+        # engine "believes it acted", suppressing every retry for the full
+        # cooldown window while the threat that demanded rotation persists.
+        if succeeded or not attempted:
+            self._last_rotation_time = time.time()
 
     def _trigger_algorithm_switch(self) -> None:
         """Switch to a stronger algorithm."""

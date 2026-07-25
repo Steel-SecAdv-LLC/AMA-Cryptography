@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 3.0.0 |
-| Last Updated | 2026-04-21 |
+| Document Version | 3.4.0 |
+| Last Updated | 2026-07-24 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -424,6 +424,12 @@ Maintainers will:
 **DO NOT** open public issues for security vulnerabilities. See [SECURITY.md](SECURITY.md) for reporting process.
 
 ### Security Review Requirements
+
+> **Required gate:** any change touching cryptographic code must complete the
+> [Cryptographic Review Checklist](CRYPTO_REVIEW_CHECKLIST.md). Copy the
+> sections that apply into your pull-request description and answer each item;
+> most items can be satisfied by citing the automated gate that already
+> enforces them. An unanswered item blocks merge.
 
 Changes affecting cryptographic operations require:
 

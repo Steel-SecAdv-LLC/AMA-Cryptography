@@ -57,10 +57,29 @@ name: Release — Build, Sign, and Publish
 #
 # Operator runbook:
 #
-#   $ git tag -s v3.1.0 -m "ama-cryptography 3.1.0"
-#   $ git push origin v3.1.0
+#   1. Dry run FIRST, from the branch you intend to tag:
 #
-# All of stages 1-7 run automatically.  A failure in any stage halts
+#        Actions -> "Release — Build, Sign, and Publish" -> Run workflow
+#        (dry_run defaults to true; publish-pypi and github-release are
+#        gated on a tag push and cannot fire from a dispatch.)
+#
+#      This is not optional ceremony.  Everything below stage 1 runs ONLY
+#      on a tag push, so nothing else in CI ever executes it.  Four
+#      independent release blockers reached production that way — a
+#      cibuildwheel pin to a nonexistent commit, a retired `macos-13`
+#      runner label, a `python -c` payload broken by YAML folding, and
+#      POSIX quoting handed to cmd.exe — and the v3.2.0 and v3.3.0
+#      releases both shipped with zero artefacts as a result.
+#      tools/check_workflow_commands.py now catches those three classes
+#      statically on every PR, but a dry run is the only thing that
+#      exercises the real matrix against the real runner fleet.
+#
+#   2. Tag only after the dry run is green:
+#
+#        $ git tag -s v3.4.0 -m "ama-cryptography 3.4.0"
+#        $ git push origin v3.4.0
+#
+# All of stages 1-7 then run automatically.  A failure in any stage halts
 # the pipeline before the next; the published artefact is exactly the
 # one that passed every gate.
 
@@ -164,7 +183,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-13, macos-14, windows-latest]
+        # RUNNER LABELS ARE RELEASE-CRITICAL.  This matrix carried `macos-13`
+        # long after GitHub retired that image; the job never got a runner,
+        # sat queued until `timeout-minutes`, and failed build-wheels — and
+        # with it every downstream release stage.  Nothing caught it because
+        # release.yml only runs on a tag push.
+        #
+        # `macos-15-intel` (x86_64) and `macos-15` (arm64) are the current
+        # generally-available macOS labels; `macos-14` is marked deprecated
+        # upstream and was the next latent outage in this same matrix.  Both
+        # architectures need their own runner because CIBW_ARCHS_MACOS=auto64
+        # builds for the host architecture only.
+        # tools/check_workflow_commands.py fails the build on retired labels.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-15, windows-latest]
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -175,7 +206,13 @@ jobs:
           python-version: "3.11"
 
       - name: Build wheels via cibuildwheel
-        uses: pypa/cibuildwheel@e9c4a96e93b86beae8e0a78eef4b54cbc81e9a47  # v3.2.0
+        # Real v3.2.0 commit, verified with
+        #   git ls-remote https://github.com/pypa/cibuildwheel.git refs/tags/v3.2.0^{}
+        # The previous pin (e9c4a96e…) did not exist in pypa/cibuildwheel at
+        # all — it matched neither the v3.2.0 tag object nor its commit — so
+        # every wheel job aborted with "Unable to resolve action … unable to
+        # find version".  That is why no release has ever produced artifacts.
+        uses: pypa/cibuildwheel@7c619efba910c04005a835b110b057fc28fd6e93  # v3.2.0
         env:
           # PYTHON VERSION MATRIX:
           # Build for the same Python range the test workflows already
@@ -190,13 +227,20 @@ jobs:
           CIBW_ARCHS_WINDOWS: "AMD64"
           # WHEEL BUILD ENVIRONMENT:
           # AMA_BUILD_PIPELINE=1 enables setup.py's post-build integrity
-          # signer.  AMA_USE_NATIVE_PQC=ON keeps the native PQC kernels
-          # in the build (no opt-out at release time — INVARIANT-7).
-          # AMA_AES_CONSTTIME=ON locks in the bitsliced AES default
-          # (INVARIANT-20).  AMA_KYBER_BUILD_DIAGNOSTICS is INTENTIONALLY
-          # left unset so the production wheels ship without the
-          # ~600 lines of printf-emitting Kyber debug code (audit
-          # Issue 7).
+          # signer.  The native-PQC and constant-time-AES guarantees are
+          # NOT set here — they are enforced closer to the compiler, which
+          # is why nothing needs to repeat them at this layer:
+          #   * INVARIANT-7  — setup.py passes -DAMA_USE_NATIVE_PQC=ON
+          #                    unconditionally, and CMakeLists.txt defaults
+          #                    the option ON.
+          #   * INVARIANT-20 — CMakeLists.txt defaults AMA_AES_CONSTTIME=ON
+          #                    and *fails configuration* if it is turned off
+          #                    without an explicit -DAMA_AES_TABLE_INSECURE=ON
+          #                    acknowledgement, so a table-S-box wheel cannot
+          #                    be produced by accident.
+          # AMA_KYBER_BUILD_DIAGNOSTICS is INTENTIONALLY left unset so the
+          # production wheels ship without the ~600 lines of printf-emitting
+          # Kyber debug code (audit Issue 7).
           CIBW_ENVIRONMENT: >-
             AMA_BUILD_PIPELINE=1
             CMAKE_BUILD_PARALLEL_LEVEL=4
@@ -209,34 +253,44 @@ jobs:
           # Each requirement specifier is single-quoted so the cibuildwheel
           # subshell doesn't interpret `>=` as output redirection
           # (Copilot review #322 — without the quotes, `pip install
-          # cmake>=4.3.2` runs as `pip install cmake` plus `>` redirect
-          # to a file named `=4.3.2`, silently floating to whatever
+          # cmake>=4.3.4` runs as `pip install cmake` plus `>` redirect
+          # to a file named `=4.3.4`, silently floating to whatever
           # pip resolves and missing the INVARIANT-8 toolchain floor).
-          CIBW_BEFORE_BUILD_LINUX: "pip install 'cmake>=4.3.2' 'cython>=3.2.4' 'numpy>=1.24.0'"
-          CIBW_BEFORE_BUILD_MACOS: "pip install 'cmake>=4.3.2' 'cython>=3.2.4' 'numpy>=1.24.0'"
-          CIBW_BEFORE_BUILD_WINDOWS: "pip install 'cmake>=4.3.2' 'cython>=3.2.4' 'numpy>=1.24.0'"
+          # Floors match pyproject.toml [build-system].requires + setup.py's
+          # preflight so all three build-dependency sources stay in lockstep.
+          #
+          # The Windows variant uses DOUBLE quotes.  cibuildwheel runs
+          # before-build commands through `cmd.exe` on Windows, where a single
+          # quote is an ordinary character rather than a quoting operator, so
+          # the POSIX form reached pip verbatim and every Windows wheel job
+          # died on `Invalid requirement: "'cmake"`.  Double quotes are honoured
+          # by cmd.exe *and* still shield `>=` from being read as redirection,
+          # which is the property the quoting exists for in the first place.
+          CIBW_BEFORE_BUILD_LINUX: "pip install 'cmake>=4.3.4' 'cython>=3.2.8' 'numpy>=1.24.0'"
+          CIBW_BEFORE_BUILD_MACOS: "pip install 'cmake>=4.3.4' 'cython>=3.2.8' 'numpy>=1.24.0'"
+          CIBW_BEFORE_BUILD_WINDOWS: 'pip install "cmake>=4.3.4" "cython>=3.2.8" "numpy>=1.24.0"'
           # MANYLINUX BASELINE: manylinux_2_28 has GCC 12 baseline (the
           # INVARIANT-8 minimum), AVX-512 intrinsics, and is supported
           # by every modern pip.
           CIBW_MANYLINUX_X86_64_IMAGE: "manylinux_2_28"
           CIBW_MANYLINUX_AARCH64_IMAGE: "manylinux_2_28"
-          # TEST COMMAND: smoke-test the wheel after build.  The full
-          # pytest suite runs in ci-build-test.yml; here we just verify
-          # the wheel imports + the native library loads + a single
-          # KEM keypair round-trip succeeds.  A regression in any of
-          # these stops the release before publishing.
-          CIBW_TEST_COMMAND: >-
-            python -c "
-            import ama_cryptography as a;
-            print('version', a.__version__);
-            from ama_cryptography import crypto_api;
-            kem = crypto_api.KyberProvider();
-            kp = kem.generate_keypair();
-            enc = kem.encapsulate(kp.public_key);
-            ss2 = kem.decapsulate(enc.ciphertext, kp.secret_key);
-            assert enc.shared_secret == ss2, 'ML-KEM round-trip failed in smoke test';
-            print('OK smoke test')
-            "
+          # TEST COMMAND: smoke-test the built wheel inside the throwaway
+          # virtualenv cibuildwheel creates for it.  The full pytest suite
+          # runs in ci-build-test.yml; this gate answers the narrower
+          # question only a packaged build can answer — did the native
+          # extension load, did anything degrade to a fallback backend,
+          # does every shipped primitive round-trip and reject tampering.
+          #
+          # This is a FILE, not an inline `python -c`.  It used to be a
+          # folded YAML scalar (`>-`), which joins the block's lines with a
+          # space — so the payload reaching the interpreter began with a
+          # leading space and every wheel on every platform died with
+          # `IndentationError: unexpected indent` after building perfectly.
+          # A script has no folding or shell-quoting layer between what is
+          # written and what runs, and it can be executed locally.
+          # tools/check_workflow_commands.py compiles any remaining inline
+          # `python -c` payload so this cannot regress silently.
+          CIBW_TEST_COMMAND: "python {project}/tools/wheel_smoke_test.py"
 
       - name: Upload wheel artefacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

@@ -54,8 +54,9 @@ jobs:
     # happened to resolve in the CI runner image — so the gate is
     # reproducible across reruns and across runner image rolls.  The
     # CVE ignore-list lives in INVARIANT-14's table; new --ignore-vuln
-    # entries must arrive with the documented justification.  See
-    # nosec_disposition.md for the company-wide hygiene policy.
+    # entries must arrive with the documented justification.  Suppression
+    # hygiene (`# nosec`) is enforced by tools/check_suppression_hygiene.py
+    # (INVARIANT-13).
     - name: Run pip-audit (strict, lock-file scoped)
       run: |
         pip-audit --strict --desc --requirement requirements-lock.txt
@@ -64,8 +65,8 @@ jobs:
     # the previous `bandit -l` flagged Medium+ findings to stdout but
     # never failed the job.  We now run bandit twice:
     #   1. JSON report — uploaded as the artefact below.  Includes a
-    #      `--baseline` flag if nosec_disposition.md publishes a
-    #      pre-classified ignore list at .github/bandit-baseline.json.
+    #      `--baseline` flag if a pre-classified ignore list is published
+    #      at .github/bandit-baseline.json.
     #   2. Severity gate — `--severity-level medium` fails the job on
     #      any Medium/High not justified inline via `# nosec`.  The
     #      `# nosec` justifications are themselves gated by
@@ -149,9 +150,18 @@ jobs:
       run: |
         pip list --format=json > pip-list.json
 
-    - name: Run dependency audit
+    - name: Run dependency audit (lock-file scoped)
+      # Scope to requirements-lock.txt — the same pinned dependency set the
+      # SBOM describes — instead of auditing the whole runner environment.
+      # A bare `pip-audit` here reported vulnerabilities in packages AMA does
+      # not ship (GitHub runner preinstalls such as pip / pyjwt / urllib3),
+      # failing the SBOM job for reasons unrelated to and unfixable from this
+      # repository, and producing an evidence artefact that did not describe
+      # the audited artefact.  Matches the "Run pip-audit (strict, lock-file
+      # scoped)" step in the security-scan job above.
       run: |
-        pip-audit --format=json --output pip-audit.json
+        pip-audit --format=json --output pip-audit.json \
+          --requirement requirements-lock.txt
 
     # SBOM DRIFT GATE (audit Issue 2):
     #

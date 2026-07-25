@@ -56,9 +56,9 @@ extern "C" {
  * ============================================================================ */
 
 #define AMA_CRYPTOGRAPHY_VERSION_MAJOR 3
-#define AMA_CRYPTOGRAPHY_VERSION_MINOR 3
+#define AMA_CRYPTOGRAPHY_VERSION_MINOR 4
 #define AMA_CRYPTOGRAPHY_VERSION_PATCH 0
-#define AMA_CRYPTOGRAPHY_VERSION_STRING "3.3.0"
+#define AMA_CRYPTOGRAPHY_VERSION_STRING "3.4.0"
 
 /* ============================================================================
  * ALGORITHM IDENTIFIERS

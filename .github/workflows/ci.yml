@@ -120,7 +120,14 @@ jobs:
       run: |
         python -m pip install --upgrade pip setuptools wheel
         pip install "Cython>=3.0.0" "numpy>=1.24.0,<3.0.0"
-        pip install -e ".[dev]"
+        # [legacy] + [benchmark] supply PyCA cryptography / PyNaCl, and
+        # pycryptodome backs the AES-GCM differential harness.  Without them the
+        # cross-implementation validation tests (tests/test_differential.py,
+        # the PyCA interop cases in test_ed25519_native.py / test_aes_gcm_native.py
+        # / test_hkdf_sha3_256.py) silently SKIP, so a divergence between AMA's
+        # native C primitives and a reference implementation would go unnoticed.
+        # Installing them converts those skips into real assertions.
+        pip install -e ".[dev,legacy,benchmark]" pycryptodome
 
     - name: Verify module integrity digest is current
       shell: bash
@@ -161,6 +168,37 @@ jobs:
                 'The C library must be built before running tests.'
             )
         print('All crypto backends verified.')
+        "
+
+    - name: Verify cross-implementation reference libraries are importable
+      shell: bash
+      # The differential / interop suites validate AMA's native C primitives
+      # against independent reference implementations.  They are written to SKIP
+      # when a reference library is absent, which means a missing install would
+      # quietly delete that coverage instead of failing.  Assert the imports here
+      # so the skip path can never silently return in CI.
+      run: |
+        python -c "
+        import importlib
+        refs = {
+            'cryptography': 'PyCA interop (Ed25519 / AES-GCM / HKDF cross-checks)',
+            'nacl': 'PyNaCl differential validation',
+            'Crypto': 'pycryptodome AES-GCM differential validation',
+        }
+        missing = []
+        for mod, why in refs.items():
+            try:
+                importlib.import_module(mod)
+                print(f'  {mod}: OK ({why})')
+            except ImportError:
+                missing.append(f'{mod} ({why})')
+                print(f'  {mod}: MISSING ({why})')
+        if missing:
+            raise SystemExit(
+                'FATAL: cross-implementation reference libraries missing in CI: '
+                f'{missing}. Interop tests would SKIP and silently drop coverage.'
+            )
+        print('All cross-implementation reference libraries verified.')
         "
 
     - name: Run pytest test suite
@@ -238,7 +276,16 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install "black==26.3.1" "ruff>=0.4" "mypy>=1.9,<2"
+        # Pin the exact linter versions from requirements-lock.txt so the gate
+        # matches the pinned dev toolchain and pre-commit.  An unpinned ruff
+        # (previously ``ruff>=0.4``) lets a routine ruff release start failing
+        # an unrelated PR; mypy floated on 1.x while the [dev] extra and
+        # [tool.mypy] config target 2.x, so local and CI could disagree.
+        # types-PyYAML keeps tools/check_workflow_commands.py and its tests
+        # inside `mypy --strict` rather than behind an ignore_missing_imports
+        # override; tests/ imports the tool, so mypy follows into it.
+        pip install "black==26.5.1" "ruff==0.15.20" "mypy==2.1.0" \
+                    "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260724"
 
     - name: Lint with ruff
       run: |
@@ -306,10 +353,22 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pip-audit bandit
+        # PyYAML is pinned to the requirements-lock.txt version because
+        # tools/check_workflow_commands.py (INVARIANT-25) runs in this job and
+        # parses the workflow files structurally.
+        pip install pip-audit bandit "PyYAML==6.0.3"
 
-    - name: Audit dependencies
-      run: pip-audit
+    - name: Audit dependencies (strict, lock-file scoped)
+      # Scope the audit to requirements-lock.txt — this project's pinned
+      # dependency set — rather than auditing the whole runner environment.
+      # A bare `pip-audit` reports CVEs in packages AMA does not ship (pip,
+      # pyjwt, urllib3 and whatever else the GitHub runner image preinstalls),
+      # so the gate turned red for reasons unrelated to this repository and
+      # unfixable from it.  Lock-file scoping makes the result reproducible
+      # across reruns and runner-image rolls, and matches the contract already
+      # used by security.yml.  `--strict` still fails the job on any
+      # vulnerability found in our own pinned set.
+      run: pip-audit --strict --desc --requirement requirements-lock.txt
 
     - name: Security linting with Bandit
       run: |
@@ -336,17 +395,55 @@ jobs:
         name: semgrep-security-report
         path: semgrep-report.json
 
-    - name: Enforce safe os.fdopen usage
+    - name: "INVARIANT-24: Verify pinned action SHAs resolve upstream"
+      # A SHA-pinned action is only a supply-chain control if the SHA is real.
+      # release.yml carried a pypa/cibuildwheel pin whose commit existed
+      # nowhere upstream, so EVERY wheel job aborted with "unable to find
+      # version" — which is why the v3.2.0 and v3.3.0 releases shipped with
+      # zero binary artefacts.  Nothing caught it because release.yml only
+      # runs on a tag push.  Checking here means a bad pin fails on the PR
+      # that introduces it, not on release day.
       run: |
-        # All os.fdopen calls must be wrapped in try/except to prevent fd leaks.
-        # Approved call sites: key_storage.py, legacy_compat.py, crypto_api.py
-        if grep -rn 'os\.fdopen\|_os\.fdopen' ama_cryptography/ \
-            | grep -v 'ama_cryptography/key_storage\.py:' \
-            | grep -v 'ama_cryptography/legacy_compat\.py:' \
-            | grep -v 'ama_cryptography/crypto_api\.py:'; then
-          echo "::error::Direct os.fdopen call found outside approved modules — wrap in try/except BaseException to guard the fd"
-          exit 1
-        fi
+        python tools/check_action_pins.py --strict
+
+    - name: "INVARIANT-25: Verify workflow runner labels and command strings"
+      # release.yml runs only on a tag push, so anything wrong inside it stays
+      # invisible until release day.  Three defects shipped that way, each on
+      # its own enough to produce a release with zero binary artefacts: a
+      # retired `macos-13` runner label (the job queued until timeout), a
+      # `python -c` payload broken by YAML folding (every wheel built, then
+      # failed with IndentationError), and POSIX single-quoting handed to
+      # cmd.exe (every Windows wheel died on `Invalid requirement: "'cmake"`).
+      # All three are decidable without running anything, so they are decided
+      # here — on the pull request that introduces them.  Both directions are
+      # pinned by tests/test_workflow_command_checks.py.
+      run: |
+        python tools/check_workflow_commands.py
+
+    - name: "INVARIANT-23: Secret scan (in-house)"
+      # tools/check_secrets.py is written in house rather than adopting a
+      # third-party scanner — see the module docstring for why a generic
+      # entropy scanner is the wrong tool for a repository whose tracked
+      # content is largely published high-entropy test vectors.  Detection
+      # and non-detection are pinned by tests/test_secret_scanner.py, so this
+      # gate cannot silently degrade into a no-op.
+      run: |
+        python tools/check_secrets.py
+
+    - name: Enforce safe os.fdopen usage (fd-ownership, AST-verified)
+      # Replaces a grep-plus-filename-allowlist check.  That construction could
+      # not tell a correctly guarded call from a leaking one — it only asked
+      # whether the file was on a list, so it was satisfied by editing the list
+      # — and it had already rotted: the allowlist named `key_storage.py`, a
+      # module that does not exist in this package, while omitting the module
+      # that actually performs the call.  tools/check_fdopen_safety.py instead
+      # parses the AST and verifies the property that prevents the leak: every
+      # os.fdopen call sits in a try whose handlers (or finally) can close the
+      # raw descriptor when the hand-off fails.  No allowlist to maintain, and
+      # it applies to every tracked module rather than three named ones.
+      # Both directions are pinned by tests/test_fdopen_safety.py.
+      run: |
+        python tools/check_fdopen_safety.py
 
   benchmark-regression:
     name: Benchmark Regression Detection (${{ matrix.runner_cpu_class }})

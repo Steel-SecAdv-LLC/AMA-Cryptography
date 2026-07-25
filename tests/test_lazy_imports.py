@@ -45,7 +45,14 @@ class TestImportWithoutExternalDeps:
         assert (
             result.returncode == 0
         ), f"Import failed with numpy blocked.\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        assert result.stdout.strip() == "3.3.0"
+        # Compare against the version this process imported, not a hardcoded
+        # literal: the property under test is "the numpy-less subprocess
+        # exposes the SAME __version__", not "the version happens to be
+        # x.y.z".  A literal here silently became a release chore and would
+        # fail on every bump for a reason unrelated to lazy imports.
+        import ama_cryptography
+
+        assert result.stdout.strip() == ama_cryptography.__version__
 
     def test_phi_accessible_without_numpy(self) -> None:
         """PHI is accessible without numpy (uses pure-Python _numeric)."""

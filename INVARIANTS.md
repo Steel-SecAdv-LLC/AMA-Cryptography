@@ -658,5 +658,135 @@ not as recoverable telemetry loss.
 
 ---
 
+## INVARIANT-23 — No Credential Material in the Public Tree
+
+**Statement.** No live credential material — private keys, provider tokens, or
+high-entropy secrets assigned to secret-named identifiers — may be committed to
+this repository, and the gate that enforces this must itself be tested in both
+directions.
+
+**Why.** AMA Cryptography is a public repository whose tracked content is
+largely *published high-entropy material*: NIST KAT vectors, ACVP responses,
+fuzz seed corpora, and the Ed25519 public key plus detached signature in
+`ama_cryptography/_integrity_signature.py`. That combination is the worst case
+for an off-the-shelf secret scanner — it produces so many false positives that
+teams reach for a blanket ignore file, and the blanket is what lets a real key
+through later.
+
+**Enforcement.** `tools/check_secrets.py` is an in-house scanner written
+against this repository's actual layout (no third-party dependency, consistent
+with INVARIANT-1). It runs as a fail-closed CI gate and as a `pre-commit` hook
+in `--staged` mode.
+
+**Testing duty (the load-bearing half).** A scanner that is never tested against
+real credential shapes silently degrades into a no-op. `tests/test_secret_scanner.py`
+pins BOTH directions:
+
+- **Detection** — PEM/OpenSSH private keys, AWS access-key ids, GitHub PATs,
+  Slack tokens, Google API keys, `Authorization` headers, tracked `.env` files,
+  and high-entropy assignments to secret-named identifiers are each caught.
+- **Non-detection** — published KAT vectors, the integrity public key, and
+  documentation placeholders do NOT fire.
+
+This dual duty is not optional: the detection tests are what caught a real gap
+in the scanner's own identifier regex (a `\b` anchor never matches inside
+`db_password`, because `_` is a word character).
+
+**Evasion resistance (learned the hard way).** The scanner folds concatenated
+string literals before matching, so a credential split across adjacent literals
+(`"ghp_" + "..."`) is caught like any other. This is not hypothetical: during
+this control's own development, splitting the test fixtures was used to get
+them past both this scanner and GitHub push protection. That workaround passed
+the gate while proving the gate had a hole. The hole is now closed and pinned
+by `TestCatchesSplitLiteralEvasion`; obfuscating a value to avoid a finding is
+a violation of this invariant, not a fix for one.
+
+**Allowlist discipline.** Every allowlist entry in `tools/check_secrets.py`
+carries a written justification for why that path cannot contain a live secret.
+Silencing the scanner globally, adding an unjustified entry, or spelling a
+value so it evades detection all violate this invariant. Where an exception is
+genuinely required — as for the scanner's own detection suite, which must
+contain credential shapes — it is taken as a **visible, path-based allowlist
+entry with a written reason**, never hidden in how the value is written.
+
+---
+
+## INVARIANT-24 — Pinned Action SHAs Must Resolve Upstream
+
+**Statement.** Every SHA-pinned GitHub Action in `.github/workflows/**` must
+reference a commit that actually exists in the upstream repository, and the
+trailing version comment must name a tag that SHA really points at.
+
+**Why.** SHA-pinning is a supply-chain control only if the SHA is real. A pin
+to a commit that exists nowhere is not "secure by accident" — it is a latent
+outage that fires at the worst possible moment. `release.yml` carried
+`pypa/cibuildwheel@e9c4a96e…  # v3.2.0`, a SHA present neither as the `v3.2.0`
+tag object nor its dereferenced commit. Every wheel job aborted with
+"Unable to resolve action … unable to find version", which is why the v3.2.0
+and v3.3.0 releases both published **zero binary artefacts**. Nothing caught
+it because `release.yml` only runs on a tag push — the pin was never resolved
+until release day, and by then the release had already failed.
+
+**Enforcement.** `tools/check_action_pins.py --strict` resolves every pin with
+`git ls-remote` (read-only, no clone, no auth) and fails on any SHA that
+matches no advertised ref, or whose version comment names a tag the SHA is not
+actually under. Run in CI on every PR, so a bad pin fails on the change that
+introduces it rather than on a release.
+
+**Unverifiable is not valid.** If upstream cannot be reached, the checker exits
+2 and reports the pin as inconclusive. It never treats an unverifiable pin as
+passing.
+
+---
+
+## INVARIANT-25 — Workflow Runner Labels and Command Strings Must Be Valid
+
+**Statement.** Every runner label named in `.github/workflows/**` must be a
+GitHub-hosted image that currently exists, every embedded `python -c` payload
+must compile, and every command string destined for `cmd.exe` must use quoting
+`cmd.exe` actually honours.
+
+**Why.** `release.yml` triggers on `push: tags: ['v*']` and nothing else, so a
+defect inside it is invisible until a release is attempted. Three shipped that
+way, each independently sufficient to produce a release with no artefacts:
+
+1. **A retired runner label.** The wheel matrix named `macos-13` after GitHub
+   retired that image. The job did not fail fast — it queued for a runner that
+   would never arrive until `timeout-minutes` expired, failing `build-wheels`
+   and every stage downstream of it.
+2. **An inline Python payload broken by YAML folding.** `CIBW_TEST_COMMAND` was
+   a folded scalar (`>-`), which joins the block's lines with a space. The
+   payload reached the interpreter with a leading space and raised
+   `IndentationError: unexpected indent`. Every wheel on every platform built
+   correctly and then failed this one command.
+3. **POSIX quoting handed to `cmd.exe`.** `CIBW_BEFORE_BUILD_WINDOWS` used
+   single quotes to shield `>=` from redirection. `cmd.exe` does not treat a
+   single quote as a quoting operator, so pip received it literally and every
+   Windows wheel job died on `Invalid requirement: "'cmake"`.
+
+All three are decidable without running anything.
+
+**Enforcement.** `tools/check_workflow_commands.py` runs in CI on every PR. It
+resolves `runs-on:` through `strategy.matrix` (including `include:` entries),
+compiles every extracted `python -c` payload after applying the shell's own
+double-quote unescaping, and rejects POSIX single-quoting in `*_WINDOWS`
+cibuildwheel variables and `shell: cmd` steps. Both directions are pinned by
+`tests/test_workflow_command_checks.py`, which replays all three historical
+defects and asserts the legitimate shapes do not false-positive.
+
+**Unresolved is not verified.** A label the checker cannot resolve statically
+(an `inputs.*` expression, a matrix it cannot expand) is reported separately
+and excluded from the verified count. It is never quietly counted as passing.
+
+**Stated limitation.** GitHub publishes no API enumerating available hosted
+labels, so `SUPPORTED_LABELS` is a curated table carrying the date and source
+it was verified against. It catches an already-retired label, a typo, and a
+label that never existed — it cannot predict a *future* retirement. The
+authoritative detector for that is a `workflow_dispatch` dry run of
+`release.yml` before cutting a tag, which is a release-procedure obligation,
+not something this checker can discharge.
+
+---
+
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-05-19_
+_Last updated: 2026-07-25_

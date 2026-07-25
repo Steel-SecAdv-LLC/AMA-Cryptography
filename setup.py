@@ -33,20 +33,20 @@ from pathlib import Path
 from typing import Optional
 
 # D-9: Preflight version checks for every build-time dependency listed in
-# pyproject.toml's [build-system].requires.  Each floor matches the version
-# pinned there, so the comment "enforced by setup.py's preflight check" is
-# now factually accurate (Copilot review #5 / D-9-extended).
+# pyproject.toml's [build-system].requires.  Each floor here is kept IDENTICAL
+# to the version pinned there, so the guard enforces exactly what an isolated
+# PEP 517 build installs — the comment "enforced by setup.py's preflight check"
+# is factually accurate (Copilot review #5 / D-9-extended).
 #
-#   * setuptools >= 70.0.0:  Debian's patched setuptools 68.x raises
+#   * setuptools >= 83.0.0:  Debian's patched setuptools 68.x raises
 #     AttributeError(install_layout) deep inside pip's bdist_wheel subprocess.
-#     70.0.0 also closes GHSA-cx63-2mw6-8hw5; we float to 78.1.1 in
-#     pyproject.toml to also pick up PYSEC-2025-49.
+#     70.0.0 closes GHSA-cx63-2mw6-8hw5 and 78.1.1 closes PYSEC-2025-49; the
+#     floor is pinned at 83.0.0 to match pyproject.toml's [build-system].
 #   * wheel >= 0.47.0:        closes GHSA-8rrh-rw8j-w5fx.
-#   * cmake >= 4.3.2:         Dependabot supply-chain floor (matches
-#     pyproject.toml's [build-system].requires).  CMakeLists.txt's
-#     cmake_minimum_required is 3.15, but this higher floor is enforced
-#     for supply-chain security.
-#   * Cython >= 3.2.4:        floor for the math_engine extension's
+#   * cmake >= 4.3.4:         supply-chain floor (matches pyproject.toml's
+#     [build-system].requires).  CMakeLists.txt's cmake_minimum_required is
+#     3.15, but this higher floor is enforced for supply-chain security.
+#   * Cython >= 3.2.8:        floor for the math_engine extension's
 #     `cimport numpy` typed-memoryview surface.
 #   * numpy >= 1.24.0:        provides the `numpy.pxd` headers the Cython
 #     extension absorbs at C-compile time.
@@ -62,15 +62,15 @@ from typing import Optional
 # (very old build environments), we pad the digit-only tuple to length 3
 # so 70.0+ still satisfies (70, 0, 0).
 _BUILD_REQS = {
-    "setuptools": ((70, 0, 0), "AttributeError(install_layout) on bdist_wheel"),
+    "setuptools": ((83, 0, 0), "AttributeError(install_layout) on bdist_wheel"),
     "wheel": ((0, 47, 0), "GHSA-8rrh-rw8j-w5fx"),
     "cmake": (
-        (4, 3, 2),
+        (4, 3, 4),
         "Dependabot supply-chain floor (pyproject.toml [build-system].requires);"
         " CMakeLists.txt cmake_minimum_required is 3.15 but this higher"
         " floor is enforced for supply-chain security",
     ),
-    "Cython": ((3, 2, 4), "math_engine cimport numpy stability floor"),
+    "Cython": ((3, 2, 8), "math_engine cimport numpy stability floor"),
     "numpy": ((1, 24, 0), "numpy.pxd headers required by math_engine"),
 }
 
@@ -101,8 +101,8 @@ def _parse_version(raw: str) -> tuple:
 
 _REMEDY = (
     "  python3 -m pip install --upgrade "
-    "'setuptools>=78.1.1' 'wheel>=0.47.0' 'cmake>=4.3.2' "
-    "'Cython>=3.2.4' 'numpy>=1.24.0'\n"
+    "'setuptools>=83.0.0' 'wheel>=0.47.0' 'cmake>=4.3.4' "
+    "'Cython>=3.2.8' 'numpy>=1.24.0'\n"
 )
 
 
@@ -274,7 +274,7 @@ except ImportError:  # pragma: no cover - preflight should have caught this
     np = None
 
 # Configuration
-VERSION = "3.3.0"
+VERSION = "3.4.0"
 USE_CYTHON = CYTHON_AVAILABLE and not os.getenv("AMA_NO_CYTHON")
 USE_C_EXTENSIONS = not os.getenv("AMA_NO_C_EXTENSIONS")
 DEBUG = bool(os.getenv("AMA_DEBUG"))

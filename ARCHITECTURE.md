@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 3.3.0 |
-| Last Updated | 2026-05-16 |
+| Document Version | 3.4.0 |
+| Last Updated | 2026-07-24 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -818,7 +818,7 @@ Cryptographic implementations are validated against:
 - NIST FIPS 202 SHA3-256, SHA3-512, SHAKE-128, SHAKE-256 test vectors
 - NIST FIPS 203 ML-KEM-1024 KAT vectors (10/10 pass — `tests/kat/fips203/`)
 - NIST FIPS 204 ML-DSA-65 KAT vectors (10/10 pass — `tests/kat/fips204/`)
-- NIST FIPS 205 SPHINCS+-SHA2-256f-simple SigVer vectors (`nist_vectors/SLH-DSA-sigVer-FIPS205.json`)
+- NIST FIPS 205 SPHINCS+-SHA2-256f-simple SigVer vectors (`tests/kat/fips205/SLH-DSA-sigVer-FIPS205.json`)
 - NIST FIPS 180-4 SHA-256 reference vectors
 - NIST SP 800-38D AES-256-GCM test vectors
 - RFC 2104 HMAC-SHA-256 test vectors
@@ -904,6 +904,8 @@ Cryptographic implementations are validated against:
 | 2.1.5 | 2026-04-17 | Steel Security Advisors LLC | Security audit fixes (length-prefixed HKDF encoding, constant-time ops), HSM support via PyKCS11, fd leak protection, INVARIANT-13 restoration with 52 tracked suppressions, comprehensive test coverage for secure_memory/crypto_api/PQC backends, documentation version alignment |
 | 3.0.0 | 2026-04-27 | Steel Security Advisors LLC | RFC 9106 Argon2id byte-identity fix (BREAKING — `ama_argon2id_legacy` / `native_argon2id_legacy` verify-only shim) and `out_len` cap at `AMA_ARGON2ID_MAX_TAG_LEN = 1024`; in-house AVX-512 4-way Keccak permutation kernel (opt-in `-DAMA_ENABLE_AVX512=ON`, EVEX YMM-width `vprolq` + `vpternlogq`, XCR0 5+6+7 gated) with `docs/AVX512_KECCAK_ADR.md` ADR; X25519 fe64 (radix-2⁶⁴) ladder + hand-written MULX+ADX inline-asm kernel (`fe64_mul512_mulx` / `fe64_sq512_mulx` / `fe64_reduce512_mulx`) under BMI2∧ADX bundle gate; X25519 4-way AVX2 Montgomery-ladder kernel + `ama_x25519_scalarmult_batch` API (opt-in `AMA_DISPATCH_USE_X25519_AVX2=1`); VAES + VPCLMULQDQ YMM AES-256-GCM clean replacement; Ed25519 verify-path SWE rectification + base-point comb table + merged NTT + AVX2 rejection (Tier-B PQC); batch ML-DSA-65 / ML-KEM-1024 sampling via 4-way SHAKE128/SHAKE256 + CBD2 AVX2; ChaCha20-Poly1305 8-way AVX2 (≥ 512 B) and Argon2 BlaMka G AVX2; SHA-3 auto-tune hysteresis (best-of-5, 10% revert threshold); NIST ACVP self-attestation (815/815 AFT, weekly continuous validation); D-1…D-10 distribution / tooling audit (wheel SONAME bundling with `$ORIGIN`/`@loader_path` runtime_library_dirs, CLI subprocess test self-contained, isolated `setup.py` CMake build dir, fatal Cython failures + `numpy>=1.24.0` / `Cython>=3.2.4` build pins, dudect AES-GCM tag-compare redesign, `.semgrep.yml` 341 FP → 0, X25519 dispatch-policy contract test, `setuptools>=78.1.1` / `wheel>=0.46.2` supply-chain pins, `setuptools<70` preflight, ed25519-donna fallthrough annotations) |
 | 3.1.0 | 2026-05-14 | Steel Security Advisors LLC | Public documentation alignment, v3.1.0 release hygiene, INVARIANT-14 CVE-ignore review, and no public API changes since v3.0.0 |
+| 3.2.0 | 2026-05-20 | Steel Security Advisors LLC | Mercury Agent v1.7.0 alignment; per-slot SIMD auto-tune with file-based cross-process dispatch cache (`AMA_DISPATCH_CACHE_FILE`) + dispatch cache safety; `ama_keypair_generate(AMA_ALG_ED25519)` wiring; NTT benchmark overflow guard; dudect CI hygiene; native `native_hmac_sha256` Python bindings |
+| 3.3.0 | 2026-07-05 | Steel Security Advisors LLC | Native one-shot SHA-256 (`native_sha256`); documented public convenience + native MAC/KDF surface (`quick_hmac` / `quick_hkdf`, native HMAC/HKDF SHA-2/3, `AmaCryptographyError` exception root); consolidated the two SLH-DSA-SHA2-256f C signers into one; completed native-hashing purity in `crypto_api`; SLSA provenance permissions + CodeQL unused-static resolution |
 
 ---
 

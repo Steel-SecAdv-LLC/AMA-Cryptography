@@ -9,7 +9,7 @@ Documentation for AMA Cryptography's security properties, threat model, side-cha
 | Property | Value |
 |----------|-------|
 | Audit Status | Community-tested; **not externally audited** |
-| Version | 3.3.0 |
+| Version | 3.4.0 |
 | Last Updated | 2026-06-15 |
 | Responsible Disclosure | steel.sa.llc@gmail.com |
 

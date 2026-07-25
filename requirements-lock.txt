@@ -64,4 +64,5 @@ pytokens==0.4.1
 rich==15.0.0
 sortedcontainers==2.4.0
 stevedore==5.8.0
+types-PyYAML==6.0.12.20260724
 typing_extensions==4.16.0

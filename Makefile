@@ -122,7 +122,7 @@ docker:
 # Create release distribution
 dist: clean
 	@echo "Creating distribution packages..."
-	@python3 setup.py sdist bdist_wheel
+	@python3 -m build
 	@echo "✓ Distribution packages created in dist/"
 
 # Security audit (basic)

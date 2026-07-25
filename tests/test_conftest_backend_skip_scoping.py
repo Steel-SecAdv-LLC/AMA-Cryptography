@@ -28,6 +28,7 @@ tests pin that behavior so the regression cannot silently come back.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +88,9 @@ def test_is_backend_skip_rejects_unrelated_reasons() -> None:
 
 
 @pytest.fixture
-def isolated_conftest(pytester: pytest.Pytester) -> pytest.Pytester:
+def isolated_conftest(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> pytest.Pytester:
     """Drop the real ``tests/conftest.py`` into a pytester sandbox so the
     test runs the exact production hook implementation.
 
@@ -96,6 +99,18 @@ def isolated_conftest(pytester: pytest.Pytester) -> pytest.Pytester:
     the assertion outcomes below — there's no shadow copy to forget to
     update.
     """
+    # The copied conftest imports ``ama_cryptography`` at ``pytest_configure``
+    # time.  In CI the package is pip-installed, so the pytester *subprocess*
+    # can import it; run from a bare source checkout it cannot, and these tests
+    # would fail with ModuleNotFoundError unrelated to what they pin.  Put the
+    # repo root on PYTHONPATH so the subprocess resolves the in-tree package
+    # either way.
+    repo_root = Path(__file__).resolve().parent.parent
+    existing = os.environ.get("PYTHONPATH", "")
+    monkeypatch.setenv(
+        "PYTHONPATH",
+        str(repo_root) + (os.pathsep + existing if existing else ""),
+    )
     conftest_src = (Path(__file__).parent / "conftest.py").read_text()
     pytester.makepyfile(conftest=conftest_src)
     return pytester

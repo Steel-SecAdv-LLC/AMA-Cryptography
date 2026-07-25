@@ -58,7 +58,7 @@ Mathematical Foundation
 Security
 ~~~~~~~~
 
-- NIST PQC Round 3 algorithms
+- NIST-standardized PQC algorithms (FIPS 203 ML-KEM, FIPS 204 ML-DSA, FIPS 205 SLH-DSA)
 - Constant-time cryptographic operations
 - Memory scrubbing for sensitive data
 - Side-channel resistance

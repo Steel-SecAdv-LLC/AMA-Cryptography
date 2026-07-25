@@ -15,20 +15,20 @@ repos:
       - id: detect-private-key
 
   - repo: https://github.com/psf/black
-    rev: 26.3.1
+    rev: 26.5.1
     hooks:
       - id: black
         language_version: python3
         args: ['--line-length=100']
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.6
+    rev: v0.15.20
     hooks:
       - id: ruff
         args: ['--fix', '--exit-non-zero-on-fix']
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.9.0
+    rev: v2.1.0
     hooks:
       - id: mypy
         args: ['--ignore-missing-imports', '--no-warn-unused-ignores']
@@ -41,6 +41,33 @@ repos:
       - id: bandit
         args: ['-r', '-ll', '--skip=B101']
         exclude: ^tests/
+
+  # INVARIANT-23: in-house secret scanner (tools/check_secrets.py).
+  # Written in house rather than adopting a third-party scanner: this tree is
+  # full of high-entropy public material (NIST KAT vectors, ACVP responses,
+  # fuzz corpora, the Ed25519 integrity public key), which a generic entropy
+  # scanner floods with false positives — and the usual fix, a blanket ignore
+  # file, is exactly what lets a real key through later.  Detection and
+  # non-detection are both pinned by tests/test_secret_scanner.py.
+  - repo: local
+    hooks:
+      - id: ama-secret-scan
+        name: AMA secret scan (INVARIANT-23)
+        entry: python3 tools/check_secrets.py --staged
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      # Verifies the property that prevents descriptor leaks (every os.fdopen
+      # is enclosed in a try that can close the fd on the failure path) by
+      # parsing the AST — not by checking filenames against an allowlist, which
+      # cannot distinguish a guarded call from a leaking one.
+      - id: ama-fdopen-safety
+        name: AMA fd-ownership check (os.fdopen leak guard)
+        entry: python3 tools/check_fdopen_safety.py
+        language: system
+        pass_filenames: false
+        always_run: true
 
 # Configuration notes:
 # - black: Code formatter with 100 char line length
