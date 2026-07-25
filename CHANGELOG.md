@@ -56,10 +56,21 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   assertions, on both backends).
 - **`tests/test_secp256k1_ecdsa.py`** (32) and
   **`tests/test_x25519_canonical_u.py`** (11).
-- **Aggregating gate jobs** for `acvp_validation.yml`, `fuzzing.yml`,
-  `security.yml` (strict: any result other than `success` fails) and
-  `dudect.yml` (tolerates `skipped`, because all five of its jobs are
-  schedule-scoped by design — stated at the gate).
+- **Aggregating gate jobs** for `acvp_validation.yml`, `fuzzing.yml` and
+  `security.yml` — strict, so any result other than `success` fails and a
+  `skipped` or `cancelled` job cannot report green.
+
+  `dudect.yml` gets a **context-aware** gate instead, because all five of its
+  jobs carry schedule-scoping `if:` conditions and `dudect-simd-sweep` is
+  skipped on pull requests by design: a plain strict gate would be red on
+  every PR, and one that tolerated `skipped` would let a job that silently
+  stopped running report green. The gate re-derives each job's own trigger
+  condition and asserts the job reached the state that condition implies —
+  `should run -> success`, `should skip -> skipped`. That is stronger than
+  either alternative: a job skipped when it should have run fails the gate,
+  and so does a job that ran when it should not have (`if:` drift). The
+  branch logic is exercised across all five trigger contexts and six failure
+  modes.
 
 - **`src/c/internal/ama_ed25519_canonical.h`** — RFC 8032 canonical-scalar
   check shared by both Ed25519 backends. Header-only by necessity:
@@ -180,10 +191,19 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   unpatched code too. The repository carried an apparent test for this defect
   for as long as the defect existed. It now says what it proves, and points at
   the case that actually requires the range check.
-- **Docker BuildKit pre-pull widened** from 5 attempts / ~150s to 8 attempts
-  with capped exponential backoff / ~340s, after Docker Hub timeouts blocked
-  this PR three times in one day. Still fail-closed: a real build or
-  smoke-test regression is still a red job.
+- **Docker Hub is no longer on the critical path for an unauthenticated
+  pull.** `docker.io` is routed through `mirror.gcr.io` via
+  `buildkitd-config-inline` on `setup-buildx-action` — a parameter of an
+  action already in use, not a new dependency. This is what actually matters:
+  the base-image pulls (`ubuntu:22.04`, `alpine:3.18`) happen *inside* the
+  BuildKit container, which does not share the runner's image cache, so the
+  host-side pre-pull could never cover them, and they were where all three of
+  this PR's Docker Hub timeouts landed. Strictly additive — BuildKit falls
+  back to the source registry when a mirror lacks an image — and it cannot
+  weaken the gate, since images are content-addressed. The pre-pull ladder is
+  also widened from 5 attempts / ~150s to 8 / ~340s and tries the mirror
+  first. Still fail-closed: a real build or smoke-test regression is still a
+  red job, and no `continue-on-error` was added.
 
 ### Known coverage limits (stated, not silently dropped)
 

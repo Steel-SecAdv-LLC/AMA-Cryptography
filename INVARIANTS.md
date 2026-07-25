@@ -73,9 +73,22 @@ the path a downstream consumer hits on `docker pull`).
 What the job actually does about Docker Hub flakiness, none of which weakens
 the gate:
 
+- **Routes `docker.io` through `mirror.gcr.io`** via
+  `buildkitd-config-inline` on `setup-buildx-action`. This is the important
+  one: the base-image pulls (`ubuntu:22.04`, `alpine:3.18`) happen *inside*
+  the BuildKit container, which does not share the runner's local image
+  cache, so a host-side pre-pull cannot cover them — and they were the part
+  of the job still exposed to unauthenticated Docker Hub. `mirror.gcr.io` is
+  a pull-through cache that serves official images without a token and is
+  therefore not subject to Docker Hub's anonymous rate limit. It is strictly
+  additive: BuildKit falls back to the source registry when a mirror lacks an
+  image or does not answer, so it cannot make a pull fail that would
+  otherwise have succeeded, and it cannot weaken the gate — images are
+  content-addressed, so a mirror cannot serve different bytes under the same
+  digest.
 - **Pre-pulls the BuildKit image with 8 attempts and capped exponential
   backoff** (10s, 20s, 40s, 60s, 60s, 60s, 90s — roughly 5.5 minutes of
-  tolerance) before `setup-buildx-action` runs.
+  tolerance), trying the mirror before Docker Hub on each attempt.
 - **Optional Docker Hub login**, gated on *both* `DOCKERHUB_USERNAME` and
   `DOCKERHUB_TOKEN` being present, so a half-configured fork degrades cleanly
   instead of failing noisily. An authenticated pull carries a far higher rate
@@ -91,12 +104,6 @@ GitHub-hosted Windows runners (toolcache / cache-restore); the retry is the
 mitigation and a genuine failure still fails the job at the retry. Neither is
 a security gate. They are named here so that grepping for
 `continue-on-error` does not appear to contradict this document.
-
-Known limitation, stated rather than implied: the base-image pulls
-(`ubuntu:22.04`, `alpine:3.18`) happen *inside* the BuildKit container, which
-does not share the runner's local image cache, so they are not covered by the
-pre-pull ladder above. Configuring a registry mirror or authenticating the
-pull is the remedy; pre-pulling on the host is not.
 
 ## INVARIANT-3 — Observable Failure States
 
