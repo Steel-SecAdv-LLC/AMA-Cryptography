@@ -1244,9 +1244,13 @@ ama_error_t ama_secp256k1_pubkey_from_privkey(const uint8_t privkey[32],
  *    signatures discloses the private key by elementary algebra.  Rather
  *    than depend on an RNG at signing time, `k` is derived from the
  *    private key and message digest with HMAC-SHA-256, per RFC 6979
- *    §3.2, using AMA's own `ama_hmac_sha256`.  Signing therefore needs no
- *    entropy source at all and is reproducible against the RFC's own
- *    A.2.5 test vectors (pinned in tests/c/test_secp256k1_ecdsa.c).
+ *    §3.2, using AMA's own `ama_hmac_sha256`.  The digest is reduced mod n
+ *    before it enters the DRBG (RFC 6979 §2.3.4 `bits2octets`; libsecp256k1
+ *    reduces here too), so signatures are byte-identical to libsecp256k1
+ *    and trezor-crypto for every digest, in range or not.  Signing needs no
+ *    entropy source at all.  Anchored to RFC 6979's own P-256 A.2.5 DRBG
+ *    output and to trezor's secp256k1 vectors — including one whose digest
+ *    is >= n — in tests/test_secp256k1_ecdsa_rfc6979.py.
  *
  * 2. **Low-s normalization.**  For any valid signature `(r, s)`,
  *    `(r, n - s)` is also valid: the verification equation is symmetric
@@ -1548,7 +1552,22 @@ static void sc_mul(secp256k1_sc *r, const secp256k1_sc *a, const secp256k1_sc *b
 static void rfc6979_nonce(uint8_t k_out[32], const uint8_t privkey[32], const uint8_t h1[32]) {
     uint8_t V[32], K[32];
     uint8_t buf[32 + 1 + 32 + 32];
+    uint8_t h1oct[32];
     int attempt;
+
+    /* RFC 6979 §2.3.4 bits2octets(h1) = int2octets(bits2int(h1) mod q): the
+     * message digest is reduced mod n BEFORE it enters the HMAC_DRBG seed.
+     * For a 256-bit digest, bits2int is the plain integer, so this is one
+     * conditional subtraction of n.  Omitting it (using the raw digest) is
+     * a silent divergence from RFC 6979 for any digest >= n, and from
+     * libsecp256k1, which reduces here too ("reduced message", RFC 6979
+     * §3.2d).  int2octets(x) needs no reduction — the caller has already
+     * rejected any private key outside [1, n-1]. */
+    {
+        secp256k1_sc h1sc;
+        (void)sc_from_bytes(&h1sc, h1);
+        sc_to_bytes(h1oct, &h1sc);
+    }
 
     memset(V, 0x01, sizeof(V));
     memset(K, 0x00, sizeof(K));
@@ -1557,7 +1576,7 @@ static void rfc6979_nonce(uint8_t k_out[32], const uint8_t privkey[32], const ui
     memcpy(buf, V, 32);
     buf[32] = 0x00;
     memcpy(buf + 33, privkey, 32);
-    memcpy(buf + 65, h1, 32);
+    memcpy(buf + 65, h1oct, 32);
     ama_hmac_sha256(K, 32, buf, sizeof(buf), K);
     ama_hmac_sha256(K, 32, V, 32, V);
 
@@ -1565,7 +1584,7 @@ static void rfc6979_nonce(uint8_t k_out[32], const uint8_t privkey[32], const ui
     memcpy(buf, V, 32);
     buf[32] = 0x01;
     memcpy(buf + 33, privkey, 32);
-    memcpy(buf + 65, h1, 32);
+    memcpy(buf + 65, h1oct, 32);
     ama_hmac_sha256(K, 32, buf, sizeof(buf), K);
     ama_hmac_sha256(K, 32, V, 32, V);
 
@@ -1591,6 +1610,7 @@ static void rfc6979_nonce(uint8_t k_out[32], const uint8_t privkey[32], const ui
     ama_secure_memzero(V, sizeof(V));
     ama_secure_memzero(K, sizeof(K));
     ama_secure_memzero(buf, sizeof(buf));
+    ama_secure_memzero(h1oct, sizeof(h1oct));
 }
 
 /* ============================================================================
