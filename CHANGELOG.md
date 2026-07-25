@@ -21,6 +21,38 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [3.4.0] - 2026-07-24
 
+### Fixed
+
+- **The release pipeline's actual blocker: a GitHub Action pinned to a commit
+  that does not exist.** `release.yml` carried
+  `pypa/cibuildwheel@e9c4a96e93b86beae8e0a78eef4b54cbc81e9a47  # v3.2.0`. That
+  SHA is present nowhere in `pypa/cibuildwheel` — neither the `v3.2.0` tag
+  object (`5825949b…`) nor its dereferenced commit (`7c619efb…`) — so all five
+  wheel jobs aborted instantly with "Unable to resolve action … unable to find
+  version". This, not only the SLSA permissions bug, is why the v3.2.0 and
+  v3.3.0 releases published zero wheels, sdists, signatures or provenance.
+  Repinned to the real `v3.2.0` commit, verified by
+  `git ls-remote … refs/tags/v3.2.0^{}`.
+- **Audited all 15 distinct pinned actions.** 14 resolved correctly; the
+  cibuildwheel pin was the only fabricated one, so this was a single bad pin
+  rather than systemic pin rot.
+- **Corrected a misleading version comment**: `docker/login-action` was
+  commented `# v4` while its SHA is tagged `v4.4.0`, and `v4` does not point
+  there — a reviewer reading the comment would believe a different version was
+  pinned.
+
+### Added
+
+- **`tools/check_action_pins.py` (INVARIANT-24)** — resolves every SHA-pinned
+  action against upstream with `git ls-remote` and fails on any pin that
+  matches no advertised ref. `--strict` additionally verifies the trailing
+  version comment names a tag the SHA is actually under. Wired into CI so a bad
+  pin fails on the PR that introduces it rather than on release day, which is
+  the only reason the cibuildwheel pin survived two releases. An unreachable
+  upstream exits 2 (inconclusive) rather than silently passing. Verified in
+  both directions: restoring the original bad pin reproduces the failure with
+  file, line and the misleading comment named.
+
 ### Release
 
 - **20 further stale version references corrected.** The 3.4.0 bump initially

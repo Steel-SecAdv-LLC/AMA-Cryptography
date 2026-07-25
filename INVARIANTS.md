@@ -711,5 +711,33 @@ entry with a written reason**, never hidden in how the value is written.
 
 ---
 
+## INVARIANT-24 — Pinned Action SHAs Must Resolve Upstream
+
+**Statement.** Every SHA-pinned GitHub Action in `.github/workflows/**` must
+reference a commit that actually exists in the upstream repository, and the
+trailing version comment must name a tag that SHA really points at.
+
+**Why.** SHA-pinning is a supply-chain control only if the SHA is real. A pin
+to a commit that exists nowhere is not "secure by accident" — it is a latent
+outage that fires at the worst possible moment. `release.yml` carried
+`pypa/cibuildwheel@e9c4a96e…  # v3.2.0`, a SHA present neither as the `v3.2.0`
+tag object nor its dereferenced commit. Every wheel job aborted with
+"Unable to resolve action … unable to find version", which is why the v3.2.0
+and v3.3.0 releases both published **zero binary artefacts**. Nothing caught
+it because `release.yml` only runs on a tag push — the pin was never resolved
+until release day, and by then the release had already failed.
+
+**Enforcement.** `tools/check_action_pins.py --strict` resolves every pin with
+`git ls-remote` (read-only, no clone, no auth) and fails on any SHA that
+matches no advertised ref, or whose version comment names a tag the SHA is not
+actually under. Run in CI on every PR, so a bad pin fails on the change that
+introduces it rather than on a release.
+
+**Unverifiable is not valid.** If upstream cannot be reached, the checker exits
+2 and reports the pin as inconclusive. It never treats an unverifiable pin as
+passing.
+
+---
+
 _Maintained by Steel Security Advisors LLC._
 _Last updated: 2026-07-24_

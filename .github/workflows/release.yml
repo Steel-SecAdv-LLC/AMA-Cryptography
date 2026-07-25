@@ -175,7 +175,13 @@ jobs:
           python-version: "3.11"
 
       - name: Build wheels via cibuildwheel
-        uses: pypa/cibuildwheel@e9c4a96e93b86beae8e0a78eef4b54cbc81e9a47  # v3.2.0
+        # Real v3.2.0 commit, verified with
+        #   git ls-remote https://github.com/pypa/cibuildwheel.git refs/tags/v3.2.0^{}
+        # The previous pin (e9c4a96e…) did not exist in pypa/cibuildwheel at
+        # all — it matched neither the v3.2.0 tag object nor its commit — so
+        # every wheel job aborted with "Unable to resolve action … unable to
+        # find version".  That is why no release has ever produced artifacts.
+        uses: pypa/cibuildwheel@7c619efba910c04005a835b110b057fc28fd6e93  # v3.2.0
         env:
           # PYTHON VERSION MATRIX:
           # Build for the same Python range the test workflows already

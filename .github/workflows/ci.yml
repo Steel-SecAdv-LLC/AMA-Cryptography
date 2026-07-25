@@ -388,6 +388,17 @@ jobs:
         name: semgrep-security-report
         path: semgrep-report.json
 
+    - name: "INVARIANT-24: Verify pinned action SHAs resolve upstream"
+      # A SHA-pinned action is only a supply-chain control if the SHA is real.
+      # release.yml carried a pypa/cibuildwheel pin whose commit existed
+      # nowhere upstream, so EVERY wheel job aborted with "unable to find
+      # version" — which is why the v3.2.0 and v3.3.0 releases shipped with
+      # zero binary artefacts.  Nothing caught it because release.yml only
+      # runs on a tag push.  Checking here means a bad pin fails on the PR
+      # that introduces it, not on release day.
+      run: |
+        python tools/check_action_pins.py --strict
+
     - name: "INVARIANT-23: Secret scan (in-house)"
       # tools/check_secrets.py is written in house rather than adopting a
       # third-party scanner — see the module docstring for why a generic
