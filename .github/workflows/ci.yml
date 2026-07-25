@@ -711,7 +711,10 @@ jobs:
     # test, not a KAT: it does not care which answer is right, only that the
     # two backends cannot disagree without failing the build.
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Two full CMake builds of the native library plus a C test run.  Measured
+    # at roughly 4 minutes locally; 30 leaves headroom for a cold runner
+    # without letting a genuinely hung build sit for an hour.
+    timeout-minutes: 30
     steps:
     - name: Checkout code
       uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0

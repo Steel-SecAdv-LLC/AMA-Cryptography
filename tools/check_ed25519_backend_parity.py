@@ -73,6 +73,7 @@ import argparse
 import ctypes
 import hashlib
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -159,38 +160,69 @@ def _flip_bit(data: bytes, bit: int) -> bytes:
 
 
 def _with_s(signature: bytes, s_value: int) -> bytes:
-    """Rebuild a signature with a replacement S, or None-equivalent if too big."""
-    return signature[:32] + (s_value % (2**256)).to_bytes(32, "little")
+    """Rebuild a signature with ``s_value`` as its S half.
+
+    ``s_value`` must already fit in 32 bytes.  An earlier version silently
+    reduced mod 2**256, which would have turned a caller's arithmetic mistake
+    into a quietly different test case instead of an error — the opposite of
+    what a differential harness should do.
+    """
+    if not 0 <= s_value < 2**256:
+        raise ValueError(f"S must fit in 32 bytes, got {s_value.bit_length()} bits")
+    return signature[:32] + s_value.to_bytes(32, "little")
 
 
-def build_cases(signer: Backend) -> list[tuple[str, bytes, bytes, bytes]]:
-    """Return ``(label, message, signature, public_key)`` tuples to compare."""
-    cases: list[tuple[str, bytes, bytes, bytes]] = []
+@dataclass(frozen=True)
+class Case:
+    """One (message, signature, public key) triple to put to both backends.
+
+    ``must_verify`` is carried as a field rather than inferred from ``label``.
+    The first version of this file decided whether a case was a genuine
+    signature by testing ``label.startswith("honest")`` — so renaming a label
+    would have silently switched that assertion off while the tool went on
+    reporting success.  That is the same "gate that reports coverage it does
+    not have" failure this repository has already been bitten by twice.
+    """
+
+    label: str
+    message: bytes
+    signature: bytes
+    public_key: bytes
+    must_verify: bool = False
+
+
+def build_cases(signer: Backend) -> list[Case]:
+    """Return the cases to put to both backends."""
+    cases: list[Case] = []
 
     for index in range(KEYPAIRS):
         public, secret = signer.keypair()
         message = _deterministic_bytes(index, 1 + (index * 37) % 200)
         signature = signer.sign(message, secret)
 
-        cases.append((f"honest[{index}]", message, signature, public))
+        cases.append(Case(f"honest[{index}]", message, signature, public, must_verify=True))
 
         # The INVARIANT-26 defect itself.  S + L must be rejected; before the
         # fix it verified.  A backend that regressed here would disagree with
         # the other, which is exactly what this file exists to catch.
         s = int.from_bytes(signature[32:], "little")
         if s + L < 2**256:
-            cases.append((f"malleable S+L[{index}]", message, _with_s(signature, s + L), public))
+            cases.append(
+                Case(f"malleable S+L[{index}]", message, _with_s(signature, s + L), public)
+            )
 
         # Boundary values around L.  These fail the group equation too, so they
         # are not regression pins on their own — they catch a range check with
         # the bound in the wrong place, or one applied inconsistently.
         for label, value in (("S=L", L), ("S=L+1", L + 1), ("S=L-1", L - 1), ("S=max", 2**256 - 1)):
-            cases.append((f"{label}[{index}]", message, _with_s(signature, value), public))
+            cases.append(Case(f"{label}[{index}]", message, _with_s(signature, value), public))
 
-        # Structured corruption across every field the verifier reads.
+        # Structured corruption across every field the verifier reads.  The
+        # message is never empty (see its length expression above), so every
+        # mutation below always applies.
         for bit in (0, 1, 7, 8, 63, 127, 254, 255):
             cases.append(
-                (
+                Case(
                     f"R bitflip {bit}[{index}]",
                     message,
                     _flip_bit(signature[:32], bit) + signature[32:],
@@ -198,18 +230,19 @@ def build_cases(signer: Backend) -> list[tuple[str, bytes, bytes, bytes]]:
                 )
             )
             cases.append(
-                (
+                Case(
                     f"S bitflip {bit}[{index}]",
                     message,
                     signature[:32] + _flip_bit(signature[32:], bit),
                     public,
                 )
             )
-            cases.append((f"pk bitflip {bit}[{index}]", message, signature, _flip_bit(public, bit)))
-            if message:
-                cases.append(
-                    (f"msg bitflip {bit}[{index}]", _flip_bit(message, bit), signature, public)
-                )
+            cases.append(
+                Case(f"pk bitflip {bit}[{index}]", message, signature, _flip_bit(public, bit))
+            )
+            cases.append(
+                Case(f"msg bitflip {bit}[{index}]", _flip_bit(message, bit), signature, public)
+            )
 
     return cases
 
@@ -241,30 +274,45 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     # Sign with each backend in turn so the corpus covers both signers.  A
     # divergence in signing shows up here as a cross-verification failure.
+    must_verify_seen = 0
+
     for signer in (donna, fe51):
-        for label, message, signature, public in build_cases(signer):
+        for case in build_cases(signer):
             checked += 1
-            a = donna.verify(message, signature, public)
-            b = fe51.verify(message, signature, public)
+            a = donna.verify(case.message, case.signature, case.public_key)
+            b = fe51.verify(case.message, case.signature, case.public_key)
             if a != b:
                 disagreements.append(
-                    f"  signed-by={signer.name:<5} case={label}\n"
+                    f"  signed-by={signer.name:<5} case={case.label}\n"
                     f"      donna={a}  fe51={b}\n"
-                    f"      msg={message.hex()[:64]}\n"
-                    f"      sig={signature.hex()}\n"
-                    f"      pk ={public.hex()}"
+                    f"      msg={case.message.hex()[:64]}\n"
+                    f"      sig={case.signature.hex()}\n"
+                    f"      pk ={case.public_key.hex()}"
                 )
-            # Honest signatures must additionally be ACCEPTED by both, not
+            # Genuine signatures must additionally be ACCEPTED by both, not
             # merely agreed upon — two backends that both reject a valid
             # signature agree, and are both broken.
-            if label.startswith("honest") and not (a and b):
-                disagreements.append(
-                    f"  signed-by={signer.name:<5} case={label}\n"
-                    f"      a genuine signature was rejected: donna={a} fe51={b}\n"
-                    f"      (agreement alone is not correctness)\n"
-                    f"      sig={signature.hex()}\n"
-                    f"      pk ={public.hex()}"
-                )
+            if case.must_verify:
+                must_verify_seen += 1
+                if not (a and b):
+                    disagreements.append(
+                        f"  signed-by={signer.name:<5} case={case.label}\n"
+                        f"      a genuine signature was rejected: donna={a} fe51={b}\n"
+                        f"      (agreement alone is not correctness)\n"
+                        f"      sig={case.signature.hex()}\n"
+                        f"      pk ={case.public_key.hex()}"
+                    )
+
+    # A corpus with no must-verify case would let a pair of backends that
+    # reject everything pass as "in agreement".  Fail closed rather than
+    # report a green run over an assertion that never executed.
+    if must_verify_seen == 0:
+        print(
+            "BACKEND DIFFERENTIAL INCONCLUSIVE — the corpus contained no genuine\n"
+            "signature, so 'both accept valid input' was never asserted.",
+            file=sys.stderr,
+        )
+        return 2
 
     print(f"Compared {checked} Ed25519 verification case(s) across both backends.")
     print(f"  donna: {args.donna}")

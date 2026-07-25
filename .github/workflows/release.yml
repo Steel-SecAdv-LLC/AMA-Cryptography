@@ -533,13 +533,21 @@ jobs:
     #   * publish-pypi FAILED   -> no release  (the original hazard)
     #   * publish-pypi SKIPPED  -> release proceeds, notes say PyPI was skipped
     #   * sign / provenance not successful -> no release, unconditionally
+    #
+    # Bracket indexing, not dot notation: `needs.publish-pypi.result` asks an
+    # expression grammar in which `-` is also subtraction to read a hyphenated
+    # job id as a single identifier.  No other workflow here dereferences a
+    # hyphenated job name, so there is no in-repo evidence the dot form is
+    # safe, and this file only ever executes on a tag push — the one place a
+    # wrong guess is discovered at the worst moment.  `needs['publish-pypi']`
+    # is unambiguous under any reading.
     if: >-
       !cancelled()
       && github.event_name == 'push'
       && startsWith(github.ref, 'refs/tags/v')
       && needs.sign.result == 'success'
       && needs.provenance.result == 'success'
-      && needs.publish-pypi.result != 'failure'
+      && needs['publish-pypi'].result != 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -552,6 +560,26 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           path: artefacts
+
+      - name: Resolve the PyPI line for the release notes
+        id: pypi_line
+        # Computed in a step rather than inline in the release body.  The
+        # inline form needed a multi-line ${{ }} expression inside a `|` block
+        # scalar — syntax that nothing in CI would ever exercise, because this
+        # workflow only runs on a tag push.  That is the same class of defect
+        # (invisible until release day) that INVARIANT-25 exists to catch, so
+        # it does not belong in the fix for it.  A shell conditional over a
+        # single simple expression is testable by reading it.
+        env:
+          PYPI_RESULT: ${{ needs['publish-pypi'].result }}
+        run: |
+          if [ "$PYPI_RESULT" = "success" ]; then
+            line="published via Trusted Publishing (no long-lived token)."
+          else
+            line="not published — PyPI distribution is not enabled for this repository. Install from this release's assets, a git tag, or the private index (see README, Distribution Channels)."
+          fi
+          echo "line=$line" >> "$GITHUB_OUTPUT"
+          echo "PyPI publish result: ${PYPI_RESULT:-<none>}"
 
       - name: Aggregate release assets
         run: |
@@ -578,9 +606,7 @@ jobs:
             * Wheels signed via sigstore (keyless, OIDC-bound).
             * SLSA v1 provenance attestations attached.
             * Python SBOM + C-library SBOM (CycloneDX) attached.
-            * PyPI: ${{ needs.publish-pypi.result == 'success'
-                && 'published via Trusted Publishing (no long-lived token).'
-                || 'not published — PyPI distribution is not enabled for this repository. Install from this release''s assets, a git tag, or the private index (see README, Distribution Channels).' }}
+            * PyPI: ${{ steps.pypi_line.outputs.line }}
 
             Verify with:
 
