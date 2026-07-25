@@ -416,11 +416,19 @@ def diagnose(text: str, style: str) -> str | None:
             return "non-canonical license header"
         return "missing license header"
     # Header is in place; nothing else in the file may look like license text.
+    #
+    # An indented `#` line is not a header — a real one always starts at
+    # column 0.  Indented ones are documentation showing what the header
+    # looks like, which is exactly what this module's own docstring does.
+    # C block comments are exempt from the column rule: their ` * ` body
+    # lines are legitimately indented.
     skip = set(range(at, at + len(header))) | quoted_lines(text)
     residue = [
         f"{i + 1}: {line.strip()}"
         for i, line in enumerate(lines)
-        if i not in skip and is_license_line(line)
+        if i not in skip
+        and is_license_line(line)
+        and not (style == "hash" and line != line.lstrip())
     ]
     if residue:
         return f"residual license text at line {residue[0]}"

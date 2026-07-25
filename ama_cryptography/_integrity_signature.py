@@ -15,13 +15,13 @@ SECURITY.md "Module Integrity Verification" for the threat model.
 
 # SHA3-256 digest of the package's .py files at build time (raw 32 bytes,
 # hex-encoded for embeddability).
-INTEGRITY_DIGEST_HEX = "907ec409b25249fa5c125f856768cfb3e04fc436ab9553a0c9a9763695d2d9f5"
+INTEGRITY_DIGEST_HEX = "456c4fe22387250c22f7cb4c2823772399004a6046bd6752b80980eb7524b7b4"
 
 # Ephemeral build-time Ed25519 public key (raw 32 bytes, hex-encoded).
-INTEGRITY_PUBKEY_HEX = "2275d47696f5b7c62ced6ed70a00d2819ca791c4a84210f07079b92b5d5c27fc"
+INTEGRITY_PUBKEY_HEX = "cc15144ab604fda7e2178b3f49f477b3ba5fa17183e069c31ffe1ee7b100348e"
 
 # Ed25519 signature over the raw digest above (raw 64 bytes, hex-encoded).
-INTEGRITY_SIGNATURE_HEX = "a9262bf73fdf24557035b3f5f46eee03a3a6625e70b0679afd8dec80902ae6df22efbc97ed5d5ce51c725dfdf27b8e559dab49c12c7e10495ab26c8e8f210d0a"
+INTEGRITY_SIGNATURE_HEX = "e6e74f32ed643f1e1b80e0300320284a1c99142330a466bacc6577e827c3b5c29af83ceb68f34103a6ebef2d451a131c30fa287dd5f6fbb17b76b46282fbfd0f"
 
 # Build metadata — informational only, not part of the integrity contract.
 BUILD_PIPELINE_VERSION = "1"

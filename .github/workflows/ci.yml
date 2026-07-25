@@ -209,6 +209,22 @@ jobs:
       run: |
         python -m pytest tests/ -v --tb=short --no-cov
 
+    - name: "Wycheproof corpus (vendored, offline, fail-closed)"
+      # Google's Project Wycheproof is a corpus of the cases that *break*
+      # implementations. Running it against this library for the first time
+      # found a real Ed25519 malleability defect (RFC 8032 §5.1.7) in under a
+      # minute — and then a second divergence in X25519 non-canonical
+      # u-coordinate handling. Neither had any standing gate; this is it.
+      #
+      # The corpus is vendored under wycheproof_vectors/ and pinned by
+      # manifest.json (upstream commit, per-file SHA-256, per-file vector
+      # count), so nothing is fetched at test time and a swapped vector file
+      # fails before a single vector runs. Every one of the 2,733 vectors
+      # lands in a named bucket with an asserted count — there is no silent
+      # skip, and an unrunnable vector is a red build with a reason.
+      run: |
+        python wycheproof_vectors/run_wycheproof.py
+
     - name: Run demonstration
       env:
         PYTHONUTF8: "1"

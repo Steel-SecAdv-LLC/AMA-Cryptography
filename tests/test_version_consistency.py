@@ -12,6 +12,7 @@ default safety-net assertion is durable).
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -53,6 +54,60 @@ def test_github_invariants_file_is_pointer() -> None:
     assert (
         pointer.read_text(encoding="utf-8")
         == "# AMA Cryptography invariants\n\nCanonical copy: ../INVARIANTS.md\n"
+    )
+
+
+def _match_header(tool_module: ModuleType, text: str) -> tuple[str, str] | None:
+    """First (version, trailing-qualifier) pair any doc-header pattern finds."""
+    for pat in tool_module.DOC_HEADER_PATTERNS:
+        m = pat.search(text)
+        if m:
+            return m.group(1), m.group(2).strip()
+    return None
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("**Version:** 3.4.0", ("3.4.0", "")),
+        ("**Document Version:** 3.4.0", ("3.4.0", "")),
+        ("| Version | 3.4.0 |", ("3.4.0", "")),
+        ("| Document Version | 3.4.0 |", ("3.4.0", "")),
+        ("**Project Release:** 3.4.0", ("3.4.0", "")),
+        # The shape that escaped the scan entirely: a version header with a
+        # trailing qualifier matched no pattern, so docs/DESIGN_NOTES.md and
+        # docs/METRICS_REPORT.md sat on 3.1.0 across three releases while the
+        # script reported "All declarations agree".
+        ("**Version:** 3.1.0 + Unreleased", ("3.1.0", "+ Unreleased")),
+        ("| Version | 3.1.0 + Unreleased |", ("3.1.0", "+ Unreleased")),
+    ],
+)
+def test_doc_header_shapes_are_matched(
+    tool_module: ModuleType, header: str, expected: tuple[str, str]
+) -> None:
+    """Every document-header shape in the tree must be *seen* by the scan.
+    A shape that matches no pattern is reported as neither stale nor
+    checked, which is the failure mode that let two documents drift."""
+    assert _match_header(tool_module, header) == expected
+
+
+def test_project_release_header_is_covered(tool_module: ModuleType) -> None:
+    """CODE_OF_CONDUCT.md declares the release as `**Project Release:**`
+    rather than `**Version:**`. It carried 3.0.0 through three releases
+    because no pattern reached it."""
+    coc = (REPO_ROOT / "CODE_OF_CONDUCT.md").read_text(encoding="utf-8")
+    found = tool_module.DOC_HEADER_PATTERNS[2].search(coc)
+    assert found is not None, "Project Release header is no longer being scanned"
+
+
+def test_wiki_footer_badge_is_covered() -> None:
+    """The wiki footer renders on every wiki page and carries a release
+    badge in prose, so the *.md header scan cannot see it. It is checked
+    by name; this pins that the text the check greps for still exists."""
+    footer = (REPO_ROOT / "wiki" / "_Footer.md").read_text(encoding="utf-8")
+    assert re.search(r"Not externally audited\s*·\s*v\d+\.\d+\.\d+", footer), (
+        "wiki/_Footer.md release badge changed shape — "
+        "tools/check_version_consistency.py greps for it by name"
     )
 
 

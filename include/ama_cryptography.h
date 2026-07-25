@@ -1025,6 +1025,106 @@ AMA_API ama_error_t ama_secp256k1_pubkey_from_privkey(
     uint8_t compressed_pubkey[33]
 );
 
+/**
+ * Maximum length of a DER-encoded secp256k1 ECDSA signature, in bytes.
+ *
+ * 2 (SEQUENCE tag + length) + 2 * (2 (INTEGER tag + length) + 33 (a
+ * 32-byte value plus a leading zero when its top bit is set)) = 72.
+ * The encoding is variable length: `ama_secp256k1_ecdsa_sign` writes
+ * between 8 and 72 bytes and reports the exact count.
+ */
+#define AMA_SECP256K1_ECDSA_MAX_SIG_LEN 72
+
+/**
+ * @brief Sign a 32-byte message digest with ECDSA over secp256k1
+ *
+ * Deterministic per RFC 6979 §3.2 using HMAC-SHA-256: the nonce is
+ * derived from the private key and the digest, so signing consumes no
+ * randomness and the same inputs always produce the same signature.
+ * This removes the single most destructive ECDSA failure mode — a
+ * repeated or biased nonce discloses the private key outright.
+ *
+ * **Low-s policy.** For every valid `(r, s)` the pair `(r, n - s)` also
+ * verifies, so a signature is not by itself a unique identifier. This
+ * function always emits the canonical low representative
+ * (`s <= (n-1)/2`), and `ama_secp256k1_ecdsa_verify` rejects the high
+ * one. That is stricter than X9.62 requires, and it is deliberate: it
+ * is the same malleability class as the Ed25519 non-canonical-`S`
+ * defect (RFC 8032 §5.1.7), and callers routinely treat signature bytes
+ * as an identity.
+ *
+ * Constant time with respect to `private_key` and the derived nonce.
+ *
+ * **Length contract.** There is no length parameter for `message` or
+ * `private_key`, and no runtime length validation is possible: the
+ * array sizes below decay to pointers at the ABI boundary. The caller
+ * MUST supply exactly 32 readable bytes for each. Supplying fewer is
+ * undefined behaviour (an out-of-bounds read); supplying more is not an
+ * error but the excess is ignored, not rejected.
+ *
+ * @param signature      Output buffer, at least
+ *                       AMA_SECP256K1_ECDSA_MAX_SIG_LEN bytes. The
+ *                       caller MUST provide that much space; the
+ *                       function does not know the buffer's size and
+ *                       cannot check it.
+ * @param signature_len  Output: number of bytes actually written
+ *                       (8..AMA_SECP256K1_ECDSA_MAX_SIG_LEN).
+ * @param message        Exactly 32 bytes: the message *digest*, not the
+ *                       message. This function does not hash its input.
+ * @param private_key    Exactly 32 bytes, big-endian, in [1, n-1].
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM on a NULL argument or
+ *         a private key outside [1, n-1].
+ */
+AMA_API ama_error_t ama_secp256k1_ecdsa_sign(
+    uint8_t *signature,
+    size_t *signature_len,
+    const uint8_t message[32],
+    const uint8_t private_key[32]
+);
+
+/**
+ * @brief Verify a DER-encoded ECDSA signature over secp256k1
+ *
+ * **Strict DER.** Only the canonical encoding is accepted:
+ * `30 <len> 02 <rlen> <r> 02 <slen> <s>` with short-form lengths,
+ * minimal INTEGER encodings, no superfluous leading zero, no negative
+ * INTEGER, and no trailing bytes. Non-minimal lengths, indefinite
+ * length, and appended data are all rejected rather than tolerated.
+ *
+ * **Range and low-s.** `r` and `s` must each lie in `[1, n-1]`. A value
+ * `>= n` is rejected rather than reduced — reducing would let a second,
+ * distinct byte string verify for the same message. High `s` is
+ * rejected for the same reason (see `ama_secp256k1_ecdsa_sign`).
+ *
+ * **Variable time by design.** Every input is public — the public key,
+ * the signature, and the message digest — so verification does not
+ * carry a constant-time obligation and does not claim one. This matches
+ * what `ama_ed25519_batch_verify` states for the same reason.
+ *
+ * **Length contract.** `signature_len` bounds `signature` and IS
+ * checked. `message` and `public_key` have no length parameter and no
+ * runtime length validation: the caller MUST supply exactly 32 and
+ * exactly 64 readable bytes respectively. Fewer is undefined behaviour;
+ * more is ignored rather than rejected.
+ *
+ * @param signature      DER-encoded signature.
+ * @param signature_len  Length of `signature` in bytes. Bounds every
+ *                       read from that buffer.
+ * @param message        Exactly 32 bytes: the message digest.
+ * @param public_key     Exactly 64 bytes: the uncompressed affine point
+ *                       as X||Y, big-endian, WITHOUT the SEC 1 `0x04`
+ *                       prefix. Verified to satisfy the curve equation.
+ * @return AMA_SUCCESS when the signature is valid,
+ *         AMA_ERROR_VERIFY_FAILED when it is not,
+ *         AMA_ERROR_INVALID_PARAM on a NULL argument.
+ */
+AMA_API ama_error_t ama_secp256k1_ecdsa_verify(
+    const uint8_t *signature,
+    size_t signature_len,
+    const uint8_t message[32],
+    const uint8_t public_key[64]
+);
+
 /* ============================================================================
  * X25519 KEY EXCHANGE (RFC 7748)
  * ============================================================================ */

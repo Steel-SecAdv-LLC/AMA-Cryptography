@@ -62,6 +62,18 @@ _C_VERSION_IDENT_RE = re.compile(
 )
 
 
+# Document-header shapes that declare the package version.  Group 1 is the
+# version; group 2 is whatever trailed it on the same line, which is a
+# finding in its own right — see the commentary at the use site in main().
+# Module-level so tests/test_version_consistency.py can exercise them
+# directly rather than only through a whole-tree run.
+DOC_HEADER_PATTERNS = [
+    re.compile(r"^\|\s*(?:Document )?Version\s*\|\s*(\d+\.\d+\.\d+)([^|]*)\|$", re.M),
+    re.compile(r"^\*\*(?:Document )?Version:\*\*\s*(\d+\.\d+\.\d+)(.*)$", re.M),
+    re.compile(r"^\*\*Project Release:\*\*\s*(\d+\.\d+\.\d+)(.*)$", re.M),
+]
+
+
 def scan_c_sources_for_version_literals(root: Path) -> list[str]:
     """Scan every ``*.c`` / ``*.h`` under ``root`` for hardcoded
     ``"X.Y.Z"`` literals that sit near a ``VERSION`` / ``version``
@@ -229,6 +241,16 @@ def main() -> int:
             r'^\s*LABEL\s+org\.opencontainers\.image\.version\s*=\s*"([^"]+)"',
             "docker/Dockerfile.c-api LABEL org.opencontainers.image.version",
         ),
+        (
+            # Release badge in the wiki footer, rendered on EVERY wiki page.
+            # It is prose rather than a header field, so the *.md header
+            # scan below cannot see it — and it sat on v3.0.0 across three
+            # releases, making the most-viewed surface in the project the
+            # most out of date. Named explicitly for that reason.
+            "wiki/_Footer.md",
+            r"Not externally audited\s*·\s*v(\d+\.\d+\.\d+)",
+            "wiki/_Footer.md release badge",
+        ),
     ]
 
     failures: list[str] = []
@@ -257,10 +279,17 @@ def main() -> int:
     # Historical rows (revision-history tables, CHANGELOG entries) are not
     # matched because they are not header fields — the patterns are anchored
     # to the document-header shapes only.
-    doc_header_pats = [
-        re.compile(r"^\|\s*(?:Document )?Version\s*\|\s*(\d+\.\d+\.\d+)\s*\|$", re.M),
-        re.compile(r"^\*\*(?:Document )?Version:\*\*\s*(\d+\.\d+\.\d+)\s*$", re.M),
-    ]
+    #
+    # The trailing group is captured rather than anchored away.  The
+    # previous ``\s*$`` anchor meant a header carrying a *qualifier* —
+    # ``**Version:** 3.1.0 + Unreleased``, which is what
+    # docs/DESIGN_NOTES.md and docs/METRICS_REPORT.md both said — matched
+    # no pattern at all and was therefore reported as neither stale nor
+    # checked.  Two documents sat three releases behind while this script
+    # printed "All declarations agree".  A qualifier is now a finding in
+    # its own right: a version header states one version, not a version
+    # and a mood.
+    doc_header_pats = DOC_HEADER_PATTERNS
     doc_checked = 0
     doc_stale: list[str] = []
     for md in sorted(REPO.rglob("*.md")):
@@ -285,10 +314,15 @@ def main() -> int:
         for pat in doc_header_pats:
             for m in pat.finditer(text):
                 doc_checked += 1
+                rel = md.relative_to(REPO)
                 if m.group(1) != canonical:
-                    rel = md.relative_to(REPO)
                     doc_stale.append(
                         f"{rel}: header version {m.group(1)!r} != canonical {canonical!r}"
+                    )
+                elif m.group(2).strip():
+                    doc_stale.append(
+                        f"{rel}: header version carries the trailing qualifier "
+                        f"{m.group(2).strip()!r} — state one version, not a version and a mood"
                     )
     if doc_stale:
         failures.append(f"  - documentation version headers ({len(doc_stale)} stale):")

@@ -83,6 +83,11 @@ typedef unsigned __int128 uint128_t;
 #define MUL64(a, b) ((uint128_t)(a) * (uint128_t)(b))
 #define LO64(x)     ((uint64_t)(x))
 #define HI64(x)     ((uint64_t)((x) >> 64))
+/* Mirror the two helpers the portable branch below provides, so code
+ * that needs 128-bit accumulation (the mod-n Montgomery multiply used
+ * by ECDSA) compiles identically on both paths. */
+#define ADD128(a, b)     ((a) + (b))
+#define U128_FROM_U64(v) ((uint128_t)(v))
 #else
 /* Portable 64x64 -> 128 multiplication */
 typedef struct { uint64_t lo; uint64_t hi; } uint128_t;
@@ -1218,5 +1223,618 @@ ama_error_t ama_secp256k1_pubkey_from_privkey(const uint8_t privkey[32],
     ama_secure_memzero(pub_x, sizeof(pub_x));
     ama_secure_memzero(pub_y, sizeof(pub_y));
 
+    return AMA_SUCCESS;
+}
+
+/**
+ * @brief ECDSA over secp256k1 — RFC 6979 deterministic signing, low-s policy,
+ *        strict DER (SEC 1 / X9.62)
+ *
+ * Builds on the field and group arithmetic already in `ama_secp256k1.c`
+ * (which is included below rather than linked, so its `static` field ops
+ * stay internal and this file adds no new export beyond the two ECDSA
+ * entry points).  Everything here is written in-house; no external
+ * dependency is introduced.
+ *
+ * Three properties are load-bearing and each is enforced rather than
+ * assumed:
+ *
+ * 1. **Deterministic nonces (RFC 6979).**  ECDSA is catastrophically
+ *    sensitive to nonce reuse or bias — a single repeated `k` across two
+ *    signatures discloses the private key by elementary algebra.  Rather
+ *    than depend on an RNG at signing time, `k` is derived from the
+ *    private key and message digest with HMAC-SHA-256, per RFC 6979
+ *    §3.2, using AMA's own `ama_hmac_sha256`.  Signing therefore needs no
+ *    entropy source at all and is reproducible against the RFC's own
+ *    A.2.5 test vectors (pinned in tests/c/test_secp256k1_ecdsa.c).
+ *
+ * 2. **Low-s normalization.**  For any valid signature `(r, s)`,
+ *    `(r, n - s)` is also valid: the verification equation is symmetric
+ *    in the sign of `s`.  That is the same malleability class as the
+ *    Ed25519 `S + L` defect this library fixed in
+ *    `internal/ama_ed25519_canonical.h` — an attacker with no key
+ *    material can produce a second, distinct byte string that verifies
+ *    for the same message.  Signing always emits the canonical low
+ *    representative (`s <= (n-1)/2`), and **verification rejects high
+ *    `s` outright**.  This is a deliberate policy choice, stated in the
+ *    public header: it is strictly stronger than the X9.62 requirement,
+ *    and it makes a signature a unique identifier for a (key, message)
+ *    pair.  Callers needing to verify third-party signatures that do not
+ *    follow the low-s convention will see them rejected.
+ *
+ * 3. **Strict DER.**  Wycheproof's ECDSA corpus is largely an
+ *    encoding-abuse suite: non-minimal lengths, non-minimal INTEGERs,
+ *    leading zeros, negative INTEGERs, trailing garbage, indefinite
+ *    length.  `der_parse_signature` below accepts exactly the canonical
+ *    encoding and rejects everything else, including a trailing byte
+ *    after a structurally valid signature.
+ *
+ * Timing posture.  Signing is constant time with respect to the private
+ * key and the nonce: scalar arithmetic mod n runs in Montgomery form
+ * with no data-dependent branches, the inversion uses a fixed addition
+ * chain over the public exponent `n - 2`, and the scalar multiply reuses
+ * the existing constant-time Montgomery ladder.  **Verification is
+ * variable time by design** — every input to it (public key, signature,
+ * message) is public — which is the same posture `ama_ed25519.c` states
+ * for batch verification.
+ */
+
+#include "ama_hmac_sha256.h" /* RFC 6979 nonce derivation (HMAC-SHA-256) */
+
+/* ============================================================================
+ * SCALAR ARITHMETIC MOD n  (the order of G)
+ *
+ * 4 limbs, radix 2^64, little-endian.  Multiplication is Montgomery (CIOS)
+ * so that reduction carries no data-dependent branch; the transform in and
+ * out costs one extra multiply each way and is only paid on the signing
+ * path, which is where constant time matters.
+ * ============================================================================ */
+
+#define SC_LIMBS 4
+
+typedef struct {
+    uint64_t v[SC_LIMBS];
+} secp256k1_sc;
+
+/* n = 2^256 - 432420386565659656852420866394968145599 */
+static const uint64_t SC_N[SC_LIMBS] = {
+    0xBFD25E8CD0364141ULL, 0xBAAEDCE6AF48A03BULL, 0xFFFFFFFFFFFFFFFEULL, 0xFFFFFFFFFFFFFFFFULL
+};
+
+/* -n^-1 mod 2^64, the Montgomery reduction constant. */
+static const uint64_t SC_N0_INV = 0x4B0DFF665588B13FULL;
+
+/* R^2 mod n, R = 2^256 — converts into Montgomery form. */
+static const uint64_t SC_R2[SC_LIMBS] = {
+    0x896CF21467D7D140ULL, 0x741496C20E7CF878ULL, 0xE697F5E45BCD07C6ULL, 0x9D671CD581C69BC5ULL
+};
+
+/* (n - 1) / 2 — the low-s threshold. */
+static const uint64_t SC_HALF_N[SC_LIMBS] = {
+    0xDFE92F46681B20A0ULL, 0x5D576E7357A4501DULL, 0xFFFFFFFFFFFFFFFFULL, 0x7FFFFFFFFFFFFFFFULL
+};
+
+static void sc_zero(secp256k1_sc *r) {
+    memset(r->v, 0, sizeof(r->v));
+}
+
+static int sc_is_zero(const secp256k1_sc *a) {
+    uint64_t acc = 0;
+    int i;
+    for (i = 0; i < SC_LIMBS; i++)
+        acc |= a->v[i];
+    return acc == 0;
+}
+
+/* Constant-time compare: 1 when a < b, else 0. */
+static int sc_lt(const uint64_t a[SC_LIMBS], const uint64_t b[SC_LIMBS]) {
+    uint64_t borrow = 0;
+    int i;
+    for (i = 0; i < SC_LIMBS; i++) {
+        uint64_t d = a[i] - b[i] - borrow;
+        borrow = ((~a[i] & b[i]) | ((~(a[i] ^ b[i])) & d)) >> 63;
+    }
+    return (int)borrow;
+}
+
+/* r = a - n when a >= n, else r = a.  Constant time. */
+static void sc_cond_sub_n(secp256k1_sc *r, const uint64_t a[SC_LIMBS]) {
+    uint64_t t[SC_LIMBS];
+    uint64_t borrow = 0, mask;
+    int i;
+    for (i = 0; i < SC_LIMBS; i++) {
+        uint64_t d = a[i] - SC_N[i] - borrow;
+        borrow = ((~a[i] & SC_N[i]) | ((~(a[i] ^ SC_N[i])) & d)) >> 63;
+        t[i] = d;
+    }
+    mask = 0ULL - borrow; /* all ones when a < n: keep a */
+    for (i = 0; i < SC_LIMBS; i++)
+        r->v[i] = (a[i] & mask) | (t[i] & ~mask);
+}
+
+/* Load 32 big-endian bytes and reduce mod n.  Returns 1 when the input was
+ * already < n (i.e. no reduction was needed), 0 otherwise — verification
+ * uses that to reject r/s values that are out of range rather than
+ * silently reducing them, which is what Wycheproof's `r = 1 + n` cases
+ * probe for. */
+static int sc_from_bytes(secp256k1_sc *r, const uint8_t b[32]) {
+    uint64_t raw[SC_LIMBS];
+    int i, in_range;
+    for (i = 0; i < SC_LIMBS; i++) {
+        const uint8_t *p = b + (SC_LIMBS - 1 - i) * 8;
+        raw[i] = ((uint64_t)p[0] << 56) | ((uint64_t)p[1] << 48) | ((uint64_t)p[2] << 40) |
+                 ((uint64_t)p[3] << 32) | ((uint64_t)p[4] << 24) | ((uint64_t)p[5] << 16) |
+                 ((uint64_t)p[6] << 8) | (uint64_t)p[7];
+    }
+    in_range = sc_lt(raw, SC_N);
+    sc_cond_sub_n(r, raw);
+    return in_range;
+}
+
+static void sc_to_bytes(uint8_t b[32], const secp256k1_sc *a) {
+    int i;
+    for (i = 0; i < SC_LIMBS; i++) {
+        uint8_t *p = b + (SC_LIMBS - 1 - i) * 8;
+        uint64_t x = a->v[i];
+        p[0] = (uint8_t)(x >> 56); p[1] = (uint8_t)(x >> 48);
+        p[2] = (uint8_t)(x >> 40); p[3] = (uint8_t)(x >> 32);
+        p[4] = (uint8_t)(x >> 24); p[5] = (uint8_t)(x >> 16);
+        p[6] = (uint8_t)(x >> 8);  p[7] = (uint8_t)x;
+    }
+}
+
+/* CIOS Montgomery multiplication: r = a * b * R^-1 mod n. */
+static void sc_mont_mul(secp256k1_sc *r, const secp256k1_sc *a, const secp256k1_sc *b) {
+    uint64_t t[SC_LIMBS + 2];
+    int i, j;
+
+    memset(t, 0, sizeof(t));
+    for (i = 0; i < SC_LIMBS; i++) {
+        uint64_t carry = 0, m;
+        for (j = 0; j < SC_LIMBS; j++) {
+            uint128_t p = MUL64(a->v[j], b->v[i]);
+            p = ADD128(p, U128_FROM_U64(t[j]));
+            p = ADD128(p, U128_FROM_U64(carry));
+            t[j] = LO64(p);
+            carry = HI64(p);
+        }
+        {
+            uint128_t s = ADD128(U128_FROM_U64(t[SC_LIMBS]), U128_FROM_U64(carry));
+            t[SC_LIMBS] = LO64(s);
+            t[SC_LIMBS + 1] = HI64(s);
+        }
+
+        m = t[0] * SC_N0_INV;
+        carry = 0;
+        for (j = 0; j < SC_LIMBS; j++) {
+            uint128_t p = MUL64(m, SC_N[j]);
+            p = ADD128(p, U128_FROM_U64(t[j]));
+            p = ADD128(p, U128_FROM_U64(carry));
+            t[j] = LO64(p);
+            carry = HI64(p);
+        }
+        {
+            uint128_t s = ADD128(U128_FROM_U64(t[SC_LIMBS]), U128_FROM_U64(carry));
+            t[SC_LIMBS] = LO64(s);
+            t[SC_LIMBS + 1] += HI64(s);
+        }
+
+        for (j = 0; j <= SC_LIMBS; j++)
+            t[j] = t[j + 1];
+        t[SC_LIMBS + 1] = 0;
+    }
+
+    /* t is now < 2n; one conditional subtraction finishes it.  The extra
+     * high word must be folded in first: if it is set, t >= 2^256 > n. */
+    if (t[SC_LIMBS]) {
+        uint64_t borrow = 0;
+        for (i = 0; i < SC_LIMBS; i++) {
+            uint64_t d = t[i] - SC_N[i] - borrow;
+            borrow = ((~t[i] & SC_N[i]) | ((~(t[i] ^ SC_N[i])) & d)) >> 63;
+            t[i] = d;
+        }
+    }
+    sc_cond_sub_n(r, t);
+}
+
+static void sc_to_mont(secp256k1_sc *r, const secp256k1_sc *a) {
+    secp256k1_sc r2;
+    memcpy(r2.v, SC_R2, sizeof(r2.v));
+    sc_mont_mul(r, a, &r2);
+}
+
+static void sc_from_mont(secp256k1_sc *r, const secp256k1_sc *a) {
+    secp256k1_sc one;
+    sc_zero(&one);
+    one.v[0] = 1;
+    sc_mont_mul(r, a, &one);
+}
+
+/* r = a + b mod n. */
+static void sc_add(secp256k1_sc *r, const secp256k1_sc *a, const secp256k1_sc *b) {
+    uint64_t t[SC_LIMBS];
+    uint64_t carry = 0;
+    int i;
+    for (i = 0; i < SC_LIMBS; i++) {
+        uint64_t lo = a->v[i] + b->v[i];
+        uint64_t c1 = (lo < a->v[i]) ? 1u : 0u;
+        uint64_t sum = lo + carry;
+        carry = c1 + ((sum < lo) ? 1u : 0u);
+        t[i] = sum;
+    }
+    /* carry can only be 0 or 1; when set the sum exceeded 2^256 and is
+     * certainly >= n, so fold it by subtracting n unconditionally first. */
+    if (carry) {
+        uint64_t borrow = 0;
+        for (i = 0; i < SC_LIMBS; i++) {
+            uint64_t d = t[i] - SC_N[i] - borrow;
+            borrow = ((~t[i] & SC_N[i]) | ((~(t[i] ^ SC_N[i])) & d)) >> 63;
+            t[i] = d;
+        }
+    }
+    sc_cond_sub_n(r, t);
+}
+
+/* r = n - a mod n (r = 0 when a = 0). */
+static void sc_negate(secp256k1_sc *r, const secp256k1_sc *a) {
+    uint64_t t[SC_LIMBS];
+    uint64_t borrow = 0, mask;
+    int i;
+    for (i = 0; i < SC_LIMBS; i++) {
+        uint64_t d = SC_N[i] - a->v[i] - borrow;
+        borrow = ((~SC_N[i] & a->v[i]) | ((~(SC_N[i] ^ a->v[i])) & d)) >> 63;
+        t[i] = d;
+    }
+    mask = 0ULL - (uint64_t)(sc_is_zero(a) ? 1 : 0);
+    for (i = 0; i < SC_LIMBS; i++)
+        r->v[i] = t[i] & ~mask;
+}
+
+/* 1 when a > (n-1)/2 — the "high s" half of the signature space. */
+static int sc_is_high(const secp256k1_sc *a) {
+    return !sc_lt(a->v, SC_HALF_N) && memcmp(a->v, SC_HALF_N, sizeof(a->v)) != 0;
+}
+
+/* r = a^-1 mod n by Fermat: a^(n-2).  The exponent is a fixed public
+ * constant, so plain square-and-multiply over its bits is constant time
+ * with respect to `a` — the only secret operand. */
+static void sc_inv(secp256k1_sc *r, const secp256k1_sc *a) {
+    /* n - 2, big-endian bytes. */
+    static const uint8_t N_MINUS_2[32] = {
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF, 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFE,
+        0xBA,0xAE,0xDC,0xE6,0xAF,0x48,0xA0,0x3B, 0xBF,0xD2,0x5E,0x8C,0xD0,0x36,0x41,0x3F
+    };
+    secp256k1_sc base, acc;
+    int i, bit, started = 0;
+
+    sc_to_mont(&base, a);
+    /* acc = 1, in Montgomery form (= R mod n) */
+    {
+        secp256k1_sc one;
+        sc_zero(&one);
+        one.v[0] = 1;
+        sc_to_mont(&acc, &one);
+    }
+
+    for (i = 0; i < 256; i++) {
+        bit = (N_MINUS_2[i >> 3] >> (7 - (i & 7))) & 1;
+        if (started)
+            sc_mont_mul(&acc, &acc, &acc);
+        if (bit) {
+            sc_mont_mul(&acc, &acc, &base);
+            started = 1;
+        }
+    }
+    sc_from_mont(r, &acc);
+    ama_secure_memzero(&base, sizeof(base));
+    ama_secure_memzero(&acc, sizeof(acc));
+}
+
+/* r = a * b mod n, in normal (non-Montgomery) form. */
+static void sc_mul(secp256k1_sc *r, const secp256k1_sc *a, const secp256k1_sc *b) {
+    secp256k1_sc am, bm, rm;
+    sc_to_mont(&am, a);
+    sc_to_mont(&bm, b);
+    sc_mont_mul(&rm, &am, &bm);
+    sc_from_mont(r, &rm);
+    ama_secure_memzero(&am, sizeof(am));
+    ama_secure_memzero(&bm, sizeof(bm));
+    ama_secure_memzero(&rm, sizeof(rm));
+}
+
+/* ============================================================================
+ * RFC 6979 §3.2 — deterministic nonce generation with HMAC-SHA-256
+ * ============================================================================ */
+static void rfc6979_nonce(uint8_t k_out[32], const uint8_t privkey[32], const uint8_t h1[32]) {
+    uint8_t V[32], K[32];
+    uint8_t buf[32 + 1 + 32 + 32];
+    int attempt;
+
+    memset(V, 0x01, sizeof(V));
+    memset(K, 0x00, sizeof(K));
+
+    /* K = HMAC_K(V || 0x00 || int2octets(x) || bits2octets(h1)) */
+    memcpy(buf, V, 32);
+    buf[32] = 0x00;
+    memcpy(buf + 33, privkey, 32);
+    memcpy(buf + 65, h1, 32);
+    ama_hmac_sha256(K, 32, buf, sizeof(buf), K);
+    ama_hmac_sha256(K, 32, V, 32, V);
+
+    /* K = HMAC_K(V || 0x01 || int2octets(x) || bits2octets(h1)) */
+    memcpy(buf, V, 32);
+    buf[32] = 0x01;
+    memcpy(buf + 33, privkey, 32);
+    memcpy(buf + 65, h1, 32);
+    ama_hmac_sha256(K, 32, buf, sizeof(buf), K);
+    ama_hmac_sha256(K, 32, V, 32, V);
+
+    /* Generate candidates until one lands in [1, n-1].  RFC 6979 §3.2 step h;
+     * the loop bound is a belt-and-braces guard — the probability of even one
+     * retry is about 2^-128. */
+    for (attempt = 0; attempt < 1024; attempt++) {
+        secp256k1_sc cand;
+        ama_hmac_sha256(K, 32, V, 32, V);
+        if (sc_from_bytes(&cand, V) && !sc_is_zero(&cand)) {
+            memcpy(k_out, V, 32);
+            ama_secure_memzero(&cand, sizeof(cand));
+            break;
+        }
+        ama_secure_memzero(&cand, sizeof(cand));
+        /* K = HMAC_K(V || 0x00); V = HMAC_K(V) */
+        memcpy(buf, V, 32);
+        buf[32] = 0x00;
+        ama_hmac_sha256(K, 32, buf, 33, K);
+        ama_hmac_sha256(K, 32, V, 32, V);
+    }
+
+    ama_secure_memzero(V, sizeof(V));
+    ama_secure_memzero(K, sizeof(K));
+    ama_secure_memzero(buf, sizeof(buf));
+}
+
+/* ============================================================================
+ * STRICT DER (SEC 1 / X9.62)
+ *
+ * Accepts exactly:
+ *   30 <len> 02 <rlen> <r> 02 <slen> <s>
+ * with short-form lengths only, minimal INTEGER encodings, no leading
+ * zero unless required to keep the value positive, no negative values,
+ * and no trailing bytes.  Everything else is rejected — Wycheproof's
+ * ECDSA suite is mostly probes at exactly these rules.
+ * ============================================================================ */
+static int der_parse_integer(const uint8_t *buf, size_t len, size_t *off, uint8_t out[32]) {
+    size_t ilen, i;
+    const uint8_t *p;
+
+    if (*off + 2 > len) return 0;
+    if (buf[*off] != 0x02) return 0;          /* not an INTEGER */
+    ilen = buf[*off + 1];
+    if (ilen & 0x80) return 0;                /* long-form / indefinite length */
+    if (ilen == 0) return 0;                  /* INTEGER must have content */
+    *off += 2;
+    if (*off + ilen > len) return 0;
+    p = buf + *off;
+
+    if (p[0] & 0x80) return 0;                /* negative */
+    if (p[0] == 0x00) {
+        if (ilen == 1) {
+            /* the value zero: legal DER, but r = 0 / s = 0 is not a legal
+             * ECDSA component, so let the range check above reject it. */
+        } else if (!(p[1] & 0x80)) {
+            return 0;                         /* non-minimal leading zero */
+        }
+    }
+    if (ilen > 33) return 0;
+    if (ilen == 33 && p[0] != 0x00) return 0;
+
+    memset(out, 0, 32);
+    if (ilen > 32) {
+        /* 33 bytes with a leading zero: the value still fits in 32. */
+        for (i = 0; i < 32; i++)
+            out[i] = p[1 + i];
+    } else {
+        for (i = 0; i < ilen; i++)
+            out[32 - ilen + i] = p[i];
+    }
+    *off += ilen;
+    return 1;
+}
+
+static int der_parse_signature(const uint8_t *sig, size_t sig_len, uint8_t r[32], uint8_t s[32]) {
+    size_t off = 0, seq_len;
+
+    if (sig_len < 8) return 0;
+    if (sig[0] != 0x30) return 0;             /* not a SEQUENCE */
+    seq_len = sig[1];
+    if (seq_len & 0x80) return 0;             /* long-form / indefinite length */
+    if (2 + seq_len != sig_len) return 0;     /* trailing bytes, or short */
+    off = 2;
+
+    if (!der_parse_integer(sig, sig_len, &off, r)) return 0;
+    if (!der_parse_integer(sig, sig_len, &off, s)) return 0;
+    if (off != sig_len) return 0;             /* content after s */
+    return 1;
+}
+
+static size_t der_encode_integer(uint8_t *out, const uint8_t v[32]) {
+    size_t lead = 0, len, i, n = 0;
+    while (lead < 31 && v[lead] == 0x00)
+        lead++;
+    len = 32 - lead;
+    out[n++] = 0x02;
+    if (v[lead] & 0x80) {
+        out[n++] = (uint8_t)(len + 1);
+        out[n++] = 0x00;
+    } else {
+        out[n++] = (uint8_t)len;
+    }
+    for (i = 0; i < len; i++)
+        out[n++] = v[lead + i];
+    return n;
+}
+
+static size_t der_encode_signature(uint8_t out[AMA_SECP256K1_ECDSA_MAX_SIG_LEN],
+                                   const uint8_t r[32], const uint8_t s[32]) {
+    uint8_t body[72];
+    size_t n = 0;
+    n += der_encode_integer(body + n, r);
+    n += der_encode_integer(body + n, s);
+    out[0] = 0x30;
+    out[1] = (uint8_t)n;
+    memcpy(out + 2, body, n);
+    return n + 2;
+}
+
+/* ============================================================================
+ * PUBLIC API
+ * ============================================================================ */
+
+AMA_API ama_error_t ama_secp256k1_ecdsa_sign(uint8_t *signature, size_t *signature_len,
+                                             const uint8_t message[32],
+                                             const uint8_t private_key[32]) {
+    secp256k1_sc d, k, kinv, z, r_sc, s_sc, tmp;
+    secp256k1_jac R;
+    secp256k1_aff Raff;
+    uint8_t k_bytes[32], r_bytes[32], s_bytes[32], x_bytes[32];
+    ama_error_t rc = AMA_ERROR_INVALID_PARAM;
+
+    if (!signature || !signature_len || !message || !private_key)
+        return AMA_ERROR_INVALID_PARAM;
+
+    /* d must be in [1, n-1]. */
+    if (!sc_from_bytes(&d, private_key) || sc_is_zero(&d))
+        return AMA_ERROR_INVALID_PARAM;
+
+    /* z = the leftmost 256 bits of the digest, reduced mod n.  For
+     * SHA-256 the digest is exactly 256 bits, so this is a reduction only. */
+    (void)sc_from_bytes(&z, message);
+
+    rfc6979_nonce(k_bytes, private_key, message);
+    if (!sc_from_bytes(&k, k_bytes) || sc_is_zero(&k))
+        goto done;
+
+    /* R = k*G;  r = R.x mod n */
+    {
+        secp256k1_aff G;
+        secp256k1_fe_from_bytes(&G.x, SECP256K1_GX_BYTES);
+        secp256k1_fe_from_bytes(&G.y, SECP256K1_GY_BYTES);
+        secp256k1_point_mul_ladder(&R, k_bytes, &G);
+    }
+    if (secp256k1_jac_is_infinity(&R))
+        goto done;
+    secp256k1_jac_to_affine(&Raff, &R);
+    secp256k1_fe_to_bytes(x_bytes, &Raff.x);
+    (void)sc_from_bytes(&r_sc, x_bytes);
+    if (sc_is_zero(&r_sc))
+        goto done;
+
+    /* s = k^-1 (z + r*d) mod n */
+    sc_inv(&kinv, &k);
+    sc_mul(&tmp, &r_sc, &d);
+    sc_add(&tmp, &tmp, &z);
+    sc_mul(&s_sc, &kinv, &tmp);
+    if (sc_is_zero(&s_sc))
+        goto done;
+
+    /* Low-s normalization: emit the canonical representative. */
+    if (sc_is_high(&s_sc))
+        sc_negate(&s_sc, &s_sc);
+
+    sc_to_bytes(r_bytes, &r_sc);
+    sc_to_bytes(s_bytes, &s_sc);
+    *signature_len = der_encode_signature(signature, r_bytes, s_bytes);
+    rc = AMA_SUCCESS;
+
+done:
+    ama_secure_memzero(&d, sizeof(d));
+    ama_secure_memzero(&k, sizeof(k));
+    ama_secure_memzero(&kinv, sizeof(kinv));
+    ama_secure_memzero(&z, sizeof(z));
+    ama_secure_memzero(&s_sc, sizeof(s_sc));
+    ama_secure_memzero(&tmp, sizeof(tmp));
+    ama_secure_memzero(k_bytes, sizeof(k_bytes));
+    ama_secure_memzero(s_bytes, sizeof(s_bytes));
+    return rc;
+}
+
+AMA_API ama_error_t ama_secp256k1_ecdsa_verify(const uint8_t *signature, size_t signature_len,
+                                               const uint8_t message[32],
+                                               const uint8_t public_key[64]) {
+    uint8_t r_bytes[32], s_bytes[32];
+    secp256k1_sc r_sc, s_sc, z, w, u1, u2;
+    secp256k1_aff Q, G;
+    secp256k1_jac P1, P2, Rj;
+    secp256k1_aff Raff;
+    uint8_t x_bytes[32];
+    secp256k1_sc xr;
+    secp256k1_fe lhs, rhs, t;
+
+    if (!signature || !message || !public_key)
+        return AMA_ERROR_INVALID_PARAM;
+
+    if (!der_parse_signature(signature, signature_len, r_bytes, s_bytes))
+        return AMA_ERROR_VERIFY_FAILED;
+
+    /* r and s must both be in [1, n-1] — NOT reduced into range.  A value
+     * >= n is a different byte string that would otherwise verify, which
+     * is the malleability this policy exists to prevent. */
+    if (!sc_from_bytes(&r_sc, r_bytes) || sc_is_zero(&r_sc))
+        return AMA_ERROR_VERIFY_FAILED;
+    if (!sc_from_bytes(&s_sc, s_bytes) || sc_is_zero(&s_sc))
+        return AMA_ERROR_VERIFY_FAILED;
+
+    /* Low-s policy: reject the high representative outright. */
+    if (sc_is_high(&s_sc))
+        return AMA_ERROR_VERIFY_FAILED;
+
+    /* Public key must be a point on the curve, and not the identity. */
+    secp256k1_fe_from_bytes(&Q.x, public_key);
+    secp256k1_fe_from_bytes(&Q.y, public_key + 32);
+    secp256k1_fe_sqr(&lhs, &Q.y);                 /* y^2 */
+    secp256k1_fe_sqr(&t, &Q.x);
+    secp256k1_fe_mul(&rhs, &t, &Q.x);             /* x^3 */
+    {
+        secp256k1_fe seven = SECP256K1_FE_ZERO;
+        seven.v[0] = 7;
+        secp256k1_fe_add(&rhs, &rhs, &seven);     /* x^3 + 7 */
+    }
+    secp256k1_fe_normalize(&lhs);
+    secp256k1_fe_normalize(&rhs);
+    {
+        uint8_t a[32], b[32];
+        secp256k1_fe_to_bytes(a, &lhs);
+        secp256k1_fe_to_bytes(b, &rhs);
+        if (memcmp(a, b, 32) != 0)
+            return AMA_ERROR_VERIFY_FAILED;
+    }
+
+    (void)sc_from_bytes(&z, message);
+
+    /* w = s^-1;  u1 = z*w;  u2 = r*w */
+    sc_inv(&w, &s_sc);
+    sc_mul(&u1, &z, &w);
+    sc_mul(&u2, &r_sc, &w);
+
+    secp256k1_fe_from_bytes(&G.x, SECP256K1_GX_BYTES);
+    secp256k1_fe_from_bytes(&G.y, SECP256K1_GY_BYTES);
+
+    {
+        uint8_t u1b[32], u2b[32];
+        sc_to_bytes(u1b, &u1);
+        sc_to_bytes(u2b, &u2);
+        secp256k1_point_mul_ladder(&P1, u1b, &G);
+        secp256k1_point_mul_ladder(&P2, u2b, &Q);
+    }
+    secp256k1_jac_add(&Rj, &P1, &P2);
+    if (secp256k1_jac_is_infinity(&Rj))
+        return AMA_ERROR_VERIFY_FAILED;
+
+    secp256k1_jac_to_affine(&Raff, &Rj);
+    secp256k1_fe_to_bytes(x_bytes, &Raff.x);
+    (void)sc_from_bytes(&xr, x_bytes);
+
+    if (memcmp(xr.v, r_sc.v, sizeof(xr.v)) != 0)
+        return AMA_ERROR_VERIFY_FAILED;
     return AMA_SUCCESS;
 }
