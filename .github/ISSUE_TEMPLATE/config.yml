@@ -1,3 +1,5 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 blank_issues_enabled: false
 contact_links:
   - name: Security Vulnerability

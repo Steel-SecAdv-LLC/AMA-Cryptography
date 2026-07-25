@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 """
 Generate professional multi-panel dashboard images for AMA Cryptography.
 
@@ -9,8 +11,6 @@ Outputs:
   assets/performance_dashboard.png  - Cryptographic operations overview
   assets/benchmark_report.png       - Detailed benchmark analysis
 
-Copyright 2025-2026 Steel Security Advisors LLC
-Licensed under the Apache License, Version 2.0
 """
 
 import json

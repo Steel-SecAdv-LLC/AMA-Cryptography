@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file test_aes_gcm_scalar_kat.c
  * @brief AES-256-GCM scalar reference (ama_aes_gcm.c) byte-identity test
  *

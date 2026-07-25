@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file tests/c/test_x25519_mulx_override.c
  * @brief End-to-end regression coverage for `ama_x25519_set_mulx_override()`.
  * @date 2026-05-18

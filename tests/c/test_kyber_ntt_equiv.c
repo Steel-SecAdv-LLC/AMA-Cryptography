@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file test_kyber_ntt_equiv.c
  * @brief Multi-lane equivalence test for the ML-KEM-1024 NTT /
  *        inverse NTT against the scalar reference lifted from

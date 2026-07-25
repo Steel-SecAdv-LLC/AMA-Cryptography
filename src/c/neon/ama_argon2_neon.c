@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file ama_argon2_neon.c
  * @brief ARM NEON-optimized Argon2 memory-hard function
  *

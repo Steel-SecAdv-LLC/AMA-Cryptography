@@ -1,3 +1,5 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
  * Ed25519 end-to-end benchmark — measures keygen, sign, verify ops/sec.
  * Uses rdtsc for cycle counting.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2025-2026 Steel Security Advisors LLC
-# Licensed under the Apache License, Version 2.0
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 """
 Ed25519 canonical-S enforcement (RFC 8032 §5.1.7) — INVARIANT-26.
 

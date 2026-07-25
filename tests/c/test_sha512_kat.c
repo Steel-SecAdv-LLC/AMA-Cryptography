@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file test_sha512_kat.c
  * @brief Standalone SHA-512 (FIPS 180-4) byte-exact known-answer test.
  *

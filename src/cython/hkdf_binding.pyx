@@ -1,11 +1,10 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 # cython: language_level=3
 # cython: boundscheck=False
 # cython: wraparound=False
 
 """
-Copyright 2025-2026 Steel Security Advisors LLC
-Licensed under the Apache License, Version 2.0
-
 AMA Cryptography — Native HKDF-SHA3-256 Cython Binding
 ======================================================
 

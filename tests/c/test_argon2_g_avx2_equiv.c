@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file test_argon2_g_avx2_equiv.c
  * @brief Byte-for-byte equivalence test for the AVX2 Argon2 BlaMka G
  *        compression kernel (ama_argon2_g_avx2) against the scalar

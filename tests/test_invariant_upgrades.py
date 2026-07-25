@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025-2026 Steel Security Advisors LLC
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
 # SPDX-License-Identifier: Apache-2.0
 """Tests for Invariant Upgrades A-D.
 

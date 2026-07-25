@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 """
 AMA Cryptography - Post-Quantum Cryptography Backend Tests
 
@@ -8,8 +10,6 @@ Kyber-1024 (ML-KEM), and SPHINCS+-256f.
 
 AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
-Copyright 2025-2026 Steel Security Advisors LLC
-Licensed under the Apache License, Version 2.0
 """
 
 from unittest.mock import patch

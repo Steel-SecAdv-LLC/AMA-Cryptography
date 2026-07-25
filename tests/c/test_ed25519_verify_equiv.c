@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file test_ed25519_verify_equiv.c
  * @brief Behavioral + byte-identity equivalence tests for the Ed25519
  *        verify path (both the Shamir/Straus joint layout and the

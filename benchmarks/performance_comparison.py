@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2025-2026 Steel Security Advisors LLC
-# Licensed under the Apache License 2.0
-
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 """
 Ed25519 Performance Comparison: Native C vs Python ctypes
 ==========================================================

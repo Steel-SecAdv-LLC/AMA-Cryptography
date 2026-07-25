@@ -1,3 +1,5 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file internal/ama_sha2.h
  * @brief Shared SHA-512 / SHA-384 core + HMAC (header-only, static)

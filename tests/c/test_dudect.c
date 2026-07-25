@@ -1,10 +1,9 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /* Enable POSIX APIs (alarm, signal) */
 #define _POSIX_C_SOURCE 200809L
 
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * Empirical Constant-Time Verification using dudect
  * ==================================================
  *

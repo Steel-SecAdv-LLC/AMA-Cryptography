@@ -1,3 +1,5 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 name: "AMA Cryptography CodeQL"
 
 # CodeQL settings for the static-analysis CodeQL Security Analysis job.

@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file internal/ama_sha3_x4.h
  * @brief 4-way batched SHAKE128 / SHAKE256 wrappers (internal, not exported)
  *

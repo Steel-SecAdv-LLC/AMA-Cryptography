@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file test_aes_gcm_backend_introspect.c
  * @brief Audit-trail test for ama_aes_gcm_active_backend() and the
  *        NIST SP 800-38D length-limit enforcement (audit Issues 5+6).

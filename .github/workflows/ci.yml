@@ -1,3 +1,5 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 name: CI - Testing and Code Quality
 
 on:
@@ -303,6 +305,19 @@ jobs:
     - name: "INVARIANT-13: Suppression hygiene check"
       run: |
         python tools/check_suppression_hygiene.py
+
+    - name: "Uniform license headers (SPDX)"
+      # The tree carried five different header shapes at once — a two-line
+      # Apache note, the full thirteen-line boilerplate block, a bare SPDX
+      # tag on four files, a one-off "Apache License 2.0" spelling, and the
+      # C block-comment forms of each.  No machine license scanner could
+      # read that reliably and a new file could pick any shape.  This gate
+      # pins the canonical two-line header with the *registered* SPDX
+      # identifier (`Apache-2.0`; `Apache 2.0` is not a valid identifier).
+      # Detection and normalization are both pinned by tests/test_headers.py,
+      # so the gate cannot silently degrade into a no-op.
+      run: |
+        python tools/check_headers.py --check
 
   docs-build:
     # Run sphinx-build with -W on every PR / push so any docstring-format

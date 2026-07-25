@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * fe51 vs fe64 byte-equivalence test for X25519 scalar multiplication.
  *
  * Two wrapper TUs (`x25519_equiv_fe{51,64}.c`) compile ama_x25519.c

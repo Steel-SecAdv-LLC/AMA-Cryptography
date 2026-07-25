@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 """
 Generate benchmark visualization charts for AMA Cryptography.
 
@@ -12,8 +14,6 @@ Usage:
     python benchmarks/generate_charts.py
     python benchmarks/generate_charts.py --output-dir docs/images
 
-Copyright 2025-2026 Steel Security Advisors LLC
-Licensed under the Apache License, Version 2.0
 """
 
 import argparse

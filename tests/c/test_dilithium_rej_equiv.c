@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * Byte-equivalence test for the dispatched ML-DSA-65 rejection sampler
  * (typically ama_dilithium_rej_uniform_avx2 when AVX2 is available, NULL
  * on non-x86 or AVX2-less hosts) against a scalar reference that

@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file test_keccak_equiv.c
  * @brief Byte-equivalence test for the dispatched Keccak-f[1600]
  *        permutation (AVX2 on x86-64, NEON on AArch64, AVX-512 4-way

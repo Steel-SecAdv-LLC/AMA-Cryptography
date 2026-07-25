@@ -1,3 +1,5 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 """Tests for 4-Layer Defense-in-Depth crypto package creation and verification."""
 
 import hashlib

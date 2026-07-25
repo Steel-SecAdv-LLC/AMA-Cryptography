@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file test_sha3_x4.c
  * @brief Byte-for-byte equivalence test: 4-way batched SHAKE128 vs.
  *        four independent scalar ama_shake128_inc_* streams.

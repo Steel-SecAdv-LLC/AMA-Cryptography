@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file ama_hmac_sha256.c
  * @brief Native HMAC-SHA-256 implementation (RFC 2104 / FIPS 198-1)
  * @author Andrew E. A., Steel Security Advisors LLC

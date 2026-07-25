@@ -1,3 +1,5 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /* POSIX feature test macro — must precede all #includes.
  * 200809L (POSIX.1-2008) covers clock_gettime, gmtime_r, ctime_r.
  * The earlier 199309L only guaranteed clock_gettime and caused
@@ -8,9 +10,6 @@
 #endif
 
 /*
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * Raw C Benchmark Harness for AMA Cryptography
  * ==============================================
  *

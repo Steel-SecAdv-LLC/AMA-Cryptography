@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * Protocol-level tests for FROST threshold Ed25519 signatures (RFC 9591).
  *
  * FROST nonces are derived from OS randomness (scalar_random), so we cannot
