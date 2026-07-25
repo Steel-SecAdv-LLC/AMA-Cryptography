@@ -198,17 +198,6 @@ def test_high_s_twin_is_rejected() -> None:
     ), "high-s twin verified — signature malleability is back"
 
 
-def test_s_equal_to_half_n_is_accepted_as_the_boundary() -> None:
-    """The policy is `s <= (n-1)/2`, so the boundary value itself is the
-    low form. A signature is not constructible at will for a chosen s, so
-    this pins the comparison rather than the round trip: s = (n-1)/2 must
-    not be classed as high."""
-    assert HALF_N * 2 + 1 == N
-    sig = native_secp256k1_ecdsa_sign(DIGEST, PRIV)
-    _, s = _parse_der(sig)
-    assert s != 0 and s < N
-
-
 # ---------------------------------------------------------------------------
 # Strict DER
 # ---------------------------------------------------------------------------

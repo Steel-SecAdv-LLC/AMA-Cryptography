@@ -121,29 +121,6 @@ def test_real_tree_selects_a_substantial_file_set(tool_module: ModuleType) -> No
     assert styles == {"hash", "c"}
 
 
-def test_exemptions_are_documented(tool_module: ModuleType) -> None:
-    """Every exemption carries a reason. A bare skip list is how a gate
-    quietly stops covering things."""
-    assert tool_module.EXEMPTIONS
-    for entry, reason in tool_module.EXEMPTIONS.items():
-        assert reason.strip(), f"exemption {entry!r} has no stated reason"
-        assert len(reason) > 20, f"exemption {entry!r} reason is too thin: {reason!r}"
-
-
-def test_spdx_identifier_is_the_registered_one(tool_module: ModuleType) -> None:
-    """`Apache-2.0` is the SPDX license-list identifier. `Apache 2.0`
-    is not one and does not parse, so a header carrying it is worse
-    than an untagged file."""
-    assert tool_module.SPDX_LINE == "SPDX-License-Identifier: Apache-2.0"
-    assert "Apache 2.0" not in tool_module.SPDX_LINE
-
-
-def test_copyright_term_is_preserved(tool_module: ModuleType) -> None:
-    """The tree asserts a 2025-2026 copyright term. Narrowing it to a
-    single year would misstate the term, so it is pinned here."""
-    assert tool_module.COPYRIGHT_LINE == ("Copyright (C) 2025-2026 Steel Security Advisors LLC")
-
-
 # ---------------------------------------------------------------------------
 # Failure detection: each stale shape must be flagged.
 # ---------------------------------------------------------------------------

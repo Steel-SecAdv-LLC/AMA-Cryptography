@@ -1,63 +1,29 @@
 #!/usr/bin/env python3
 # Copyright (C) 2025-2026 Steel Security Advisors LLC
 # SPDX-License-Identifier: Apache-2.0
-"""Enforce one canonical license header on every source file in the tree.
+"""Enforce one canonical license header on every tracked source file.
 
-Before this gate existed the repository carried five different header
-shapes at once — a two-line ``Licensed under the Apache License,
-Version 2.0`` note, the full thirteen-line Apache boilerplate block, a
-``SPDX-License-Identifier`` tag on four files, a one-off
-``Licensed under the Apache License 2.0`` variant, and the same
-variations again in C block-comment form.  Machine license scanners
-(SPDX / REUSE) could read none of them reliably, and a new file could
-pick any shape without anything noticing.
+    #-comment files:   # Copyright (C) 2025-2026 Steel Security Advisors LLC
+                       # SPDX-License-Identifier: Apache-2.0
 
-The canonical header is two lines and carries a *registered* SPDX
-identifier.  ``Apache-2.0`` is the identifier from the SPDX license
-list; ``Apache 2.0`` is not one and does not parse.  The copyright
-line keeps the ``2025-2026`` term the tree already asserted.
+    .c / .h files:     /* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+                       /* SPDX-License-Identifier: Apache-2.0 */
 
-For ``#``-comment files (Python, Cython, YAML, shell, CMake, Docker,
-pkg-config templates, tool configs)::
+A shebang stays first and the header follows it; otherwise the header is
+the first thing in the file, above any module docstring. Existing license
+text is removed from wherever it sits, including from inside a C doc block
+that also carries @file/@brief content, which is preserved.
 
-    # Copyright (C) 2025-2026 Steel Security Advisors LLC
-    # SPDX-License-Identifier: Apache-2.0
-
-For C translation units and headers::
-
-    /* Copyright (C) 2025-2026 Steel Security Advisors LLC */
-    /* SPDX-License-Identifier: Apache-2.0 */
-
-Placement rules:
-    * A ``#!`` shebang stays the first line; the header follows it.
-    * Otherwise the header is the first thing in the file.
-    * For Python the header sits *above* the module docstring and the
-      docstring is left alone.
-    * Existing license text — any of the five shapes — is removed from
-      wherever it sits, including from inside a C doc block that also
-      carries ``@file`` / ``@brief`` content.  Non-license content in
-      that block is preserved.
-
-The root ``LICENSE`` file remains the authoritative license text and
-``NOTICE`` is untouched; the per-file header is a pointer, not a
-restatement.
-
-Enumeration is via ``git ls-files``, so untracked scratch files are
-never rewritten.  Files are selected by extension or exact name (see
-``_HASH_SUFFIXES`` / ``_HASH_NAMES`` / ``_C_SUFFIXES``) and then
-filtered through ``EXEMPTIONS``, which is explicit and carries a
-reason per entry — there is no silent skip.
+Files are enumerated with `git ls-files`, selected by extension or exact
+name, then filtered through EXEMPTIONS.
 
 Exit codes:
     0  every selected file carries the canonical header
-    1  one or more files are missing it, carry a stale shape, or
-       retain residual license text elsewhere in the file
+    1  a file is missing it, carries a stale shape, or has residual
+       license text elsewhere
 
-Usage (CI):
-    python tools/check_headers.py --check
-
-Usage (developer):
-    python tools/check_headers.py --apply
+    python tools/check_headers.py --check    # CI
+    python tools/check_headers.py --apply    # rewrite in place
 """
 
 from __future__ import annotations
@@ -102,32 +68,18 @@ _HASH_NAMES = frozenset(
 # Files that must carry the C block-comment header, by suffix.
 _C_SUFFIXES = frozenset({".c", ".h"})
 
-# Explicit exemptions, each with the reason it is exempt.  Entries are
-# matched as exact repo-relative paths or, when they end in ``/``, as
-# directory prefixes.  Nothing is skipped that is not named here.
+# Exact repo-relative paths, or directory prefixes when ending in "/".
 EXEMPTIONS: dict[str, str] = {
-    "LICENSE": "authoritative license text; a header pointing at itself is circular",
-    "NOTICE": "attribution notice required verbatim by Apache-2.0 section 4(d)",
-    "src/c/vendor/": (
-        "vendored third-party sources (ed25519-donna, public domain) — upstream "
-        "provenance must stay byte-identical; see src/c/PROVENANCE.md"
-    ),
-    "tests/c/dudect/": (
-        "vendored third-party test harness (dudect, MIT) — upstream provenance "
-        "must stay byte-identical"
-    ),
-    ".well-known/security.txt": (
-        "RFC 9116 security.txt — the format is a fixed field list and a "
-        "clear-signed body; a license header would break parsers"
-    ),
+    "LICENSE": "the license text itself",
+    "NOTICE": "required verbatim by Apache-2.0 section 4(d)",
+    "src/c/vendor/": "vendored ed25519-donna; must stay byte-identical to upstream",
+    "tests/c/dudect/": "vendored dudect harness; must stay byte-identical to upstream",
+    ".well-known/security.txt": "RFC 9116 fixed field list; a header breaks parsers",
 }
 
-# Phrases that identify a line as license boilerplate.  A line matches
-# when, after stripping whitespace and any leading comment punctuation,
-# it *begins* with one of these.  The "begins with" rule is what lets
-# this module scan itself without matching its own pattern table: the
-# entries below are source lines beginning with a quote character, not
-# with the phrase.
+# A line is license boilerplate when, after stripping whitespace and one
+# comment marker, it BEGINS with one of these. "Begins with" is what lets
+# this module scan itself: the entries below start with a quote character.
 _LICENSE_PHRASES: tuple[str, ...] = (
     "Copyright 2025",
     "Copyright (C) 2025",
@@ -174,15 +126,12 @@ def _is_bare_comment(line: str, style: str) -> bool:
 
 
 def _strip_hash_license(lines: list[str]) -> list[str]:
-    """Remove ``#``-comment license text, and the spacers inside it.
+    """Remove #-comment license text and the spacers inside it.
 
-    The removal window runs from the first license line to the last, so
-    the blank ``#`` spacers *within* the Apache boilerplate go with it
-    while a spacer separating the header from unrelated comment content
-    below survives.  A blank line orphaned at the top of a module
-    docstring — the shape left behind when the license was the
-    docstring's opening paragraph, as in the Cython bindings — is
-    dropped too.
+    The window runs first-license-line..last, so blank `#` spacers inside
+    the Apache block go with it while one separating the header from
+    unrelated comments below survives. A blank line orphaned at the top of
+    a module docstring (the Cython bindings' shape) is dropped too.
     """
     idxs = [i for i, line in enumerate(lines) if is_license_line(line)]
     if not idxs:
@@ -213,14 +162,9 @@ def _find_block(lines: list[str], i: int) -> int | None:
 
 
 def _block_content(lines: list[str], i: int, j: int) -> list[tuple[int, str]]:
-    """``(index, content)`` for each line of the block spanning ``i..j``.
-
-    The ``/*`` opener and ``*/`` closer tokens are stripped so a line
-    that carries license text *inline with a delimiter* — the shape in
-    ``ama_ed25519_canonical.h``, whose block opened
-    ``/* Copyright ...`` — is classified on its text, not its
-    punctuation.
-    """
+    """(index, content) per line of the block i..j, delimiters stripped,
+    so a line carrying license text inline with `/*` is classified on its
+    text rather than its punctuation."""
     out: list[tuple[int, str]] = []
     for k in range(i, j + 1):
         text = lines[k]
@@ -235,12 +179,10 @@ def _block_content(lines: list[str], i: int, j: int) -> list[tuple[int, str]]:
 def _strip_c_license(lines: list[str]) -> list[str]:
     """Remove license text from C sources, block by block.
 
-    Operating per block — rather than over a flat line window — is what
-    keeps the two mixed shapes in this tree correct.  A block that holds
-    *only* license text is deleted outright; a block that opens with
-    license lines and continues into ``@file`` / ``@brief`` content
-    keeps that content, losing just the license lines and the spacer
-    that separated them from it.
+    Per block rather than over a flat line window: a block holding only
+    license text is deleted outright, while one that continues into
+    @file/@brief content keeps it, losing only the license lines and the
+    spacer above them.
     """
     drop: set[int] = set()
     i = 0
@@ -366,22 +308,17 @@ def selected_files(root: Path) -> list[tuple[str, str]]:
 
 
 def quoted_lines(text: str) -> frozenset[int]:
-    """0-based line numbers inside a Python string literal, docstring aside.
+    """0-based line numbers inside a Python string literal, module
+    docstring excluded.
 
-    ``ama_cryptography/_build_sign.py`` holds the *template* for the
-    generated ``_integrity_signature.py``, and that template contains a
-    literal ``# SPDX-License-Identifier:`` line.  Read as raw text it is
-    indistinguishable from a stray second header, so the residual scan
-    has to know it is data inside a string rather than a comment.
+    _build_sign.py holds the template for the generated
+    _integrity_signature.py, which contains a literal SPDX line; as raw
+    text that is indistinguishable from a stray second header. The module
+    docstring is deliberately NOT excluded, because the Cython bindings
+    carried their license there.
 
-    The module docstring is deliberately *not* excluded: the Cython
-    bindings used to carry their license as the docstring's opening
-    paragraph, and that shape must still be caught.
-
-    Returns an empty set when ``text`` does not parse as Python — a
-    ``.pyx`` using Cython-only syntax, for instance — which leaves the
-    scan in its stricter whole-file mode rather than silently trusting
-    an unparsed file.
+    Returns empty when `text` does not parse as Python (a .pyx using
+    Cython-only syntax), leaving the scan in its stricter whole-file mode.
     """
     try:
         tree = ast.parse(text)
@@ -415,13 +352,10 @@ def diagnose(text: str, style: str) -> str | None:
         if any(is_license_line(line) for line in lines):
             return "non-canonical license header"
         return "missing license header"
-    # Header is in place; nothing else in the file may look like license text.
-    #
-    # An indented `#` line is not a header — a real one always starts at
-    # column 0.  Indented ones are documentation showing what the header
-    # looks like, which is exactly what this module's own docstring does.
-    # C block comments are exempt from the column rule: their ` * ` body
-    # lines are legitimately indented.
+    # Header is in place; nothing else may look like license text. An
+    # indented `#` line is documentation showing what a header looks like
+    # (this module's own docstring does that), not a header — those start
+    # at column 0. C block comments are exempt: ` * ` bodies are indented.
     skip = set(range(at, at + len(header))) | quoted_lines(text)
     residue = [
         f"{i + 1}: {line.strip()}"

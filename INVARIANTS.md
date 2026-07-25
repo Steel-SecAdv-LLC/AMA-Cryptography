@@ -56,54 +56,24 @@ Security-critical CI steps (pip-audit, bandit, Semgrep, KAT tests when oqs is
 present, secret scanning) **must not** use `continue-on-error: true`.
 Failures in these steps **must** block the pipeline.
 
-**There are no exceptions.** No workflow in this repository carries
-`continue-on-error: true` on a security-critical step.
+**No exceptions.** An earlier revision of this document recorded one, for
+the Docker build job in `ci-build-test.yml`, on the grounds that it used
+`continue-on-error: true`. It does not and never did, and the comment above
+the job forbids adding one. The false exemption was an invitation to
+"restore" it on the next flake.
 
-This paragraph previously recorded a "documented exception" for the Docker
-build job in `ci-build-test.yml`, stating that it used
-`continue-on-error: true` for transient Docker Hub failures. **That was
-false.** The `docker` job has never carried `continue-on-error` in the tree
-this document describes, and the comment directly above the job explicitly
-forbids re-adding one. An invariants document that grants an exemption the
-code does not take is worse than no document: it invites someone to "restore"
-the exemption on the next flake, which would silence exactly the
-customer-visible regression the job exists to catch (its smoke tests exercise
-the path a downstream consumer hits on `docker pull`).
+That job mitigates Docker Hub flakiness without weakening the gate: it routes
+`docker.io` through `mirror.gcr.io` (`buildkitd-config-inline`), so the
+base-image pulls that happen inside the BuildKit container — which the
+runner's local cache cannot serve — are off the unauthenticated Docker Hub
+path; it pre-pulls the BuildKit image with 8 attempts and capped backoff,
+mirror first; and it logs in to Docker Hub when both credentials are set. A
+real build or smoke-test failure is still a red job.
 
-What the job actually does about Docker Hub flakiness, none of which weakens
-the gate:
-
-- **Routes `docker.io` through `mirror.gcr.io`** via
-  `buildkitd-config-inline` on `setup-buildx-action`. This is the important
-  one: the base-image pulls (`ubuntu:22.04`, `alpine:3.18`) happen *inside*
-  the BuildKit container, which does not share the runner's local image
-  cache, so a host-side pre-pull cannot cover them — and they were the part
-  of the job still exposed to unauthenticated Docker Hub. `mirror.gcr.io` is
-  a pull-through cache that serves official images without a token and is
-  therefore not subject to Docker Hub's anonymous rate limit. It is strictly
-  additive: BuildKit falls back to the source registry when a mirror lacks an
-  image or does not answer, so it cannot make a pull fail that would
-  otherwise have succeeded, and it cannot weaken the gate — images are
-  content-addressed, so a mirror cannot serve different bytes under the same
-  digest.
-- **Pre-pulls the BuildKit image with 8 attempts and capped exponential
-  backoff** (10s, 20s, 40s, 60s, 60s, 60s, 90s — roughly 5.5 minutes of
-  tolerance), trying the mirror before Docker Hub on each attempt.
-- **Optional Docker Hub login**, gated on *both* `DOCKERHUB_USERNAME` and
-  `DOCKERHUB_TOKEN` being present, so a half-configured fork degrades cleanly
-  instead of failing noisily. An authenticated pull carries a far higher rate
-  limit than an anonymous one.
-- **Fails the build on any real build or smoke-test regression.** A genuine
-  failure is still a red job.
-
-**Two non-security uses of `continue-on-error` exist and are intentional.**
-`ci.yml` and `ci-build-test.yml` each set it on the `actions/setup-python`
-step, which is immediately followed by a first-party retry step gated on
-`steps.setup-python.outcome == 'failure'`. `setup-python` flakes on
-GitHub-hosted Windows runners (toolcache / cache-restore); the retry is the
-mitigation and a genuine failure still fails the job at the retry. Neither is
-a security gate. They are named here so that grepping for
-`continue-on-error` does not appear to contradict this document.
+`continue-on-error: true` does appear twice, on the `actions/setup-python`
+step in `ci.yml` and `ci-build-test.yml`, each followed by a retry step gated
+on `steps.setup-python.outcome == 'failure'`. Neither is a security gate and
+a genuine failure still fails at the retry.
 
 ## INVARIANT-3 — Observable Failure States
 
