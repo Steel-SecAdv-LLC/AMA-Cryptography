@@ -56,17 +56,61 @@ Security-critical CI steps (pip-audit, bandit, Semgrep, KAT tests when oqs is
 present, secret scanning) **must not** use `continue-on-error: true`.
 Failures in these steps **must** block the pipeline.
 
-**Documented exception:** The Docker build job in `ci-build-test.yml` uses
-`continue-on-error: true` because transient Docker Hub auth/rate-limit
-failures must not gate PRs. This job is infrastructure (image build + smoke
-test), not a primary security gate — the KAT test suite runs independently
-in the test matrix.
+**There are no exceptions.** No workflow in this repository carries
+`continue-on-error: true` on a security-critical step.
+
+This paragraph previously recorded a "documented exception" for the Docker
+build job in `ci-build-test.yml`, stating that it used
+`continue-on-error: true` for transient Docker Hub failures. **That was
+false.** The `docker` job has never carried `continue-on-error` in the tree
+this document describes, and the comment directly above the job explicitly
+forbids re-adding one. An invariants document that grants an exemption the
+code does not take is worse than no document: it invites someone to "restore"
+the exemption on the next flake, which would silence exactly the
+customer-visible regression the job exists to catch (its smoke tests exercise
+the path a downstream consumer hits on `docker pull`).
+
+What the job actually does about Docker Hub flakiness, none of which weakens
+the gate:
+
+- **Pre-pulls the BuildKit image with 8 attempts and capped exponential
+  backoff** (10s, 20s, 40s, 60s, 60s, 60s, 90s — roughly 5.5 minutes of
+  tolerance) before `setup-buildx-action` runs.
+- **Optional Docker Hub login**, gated on *both* `DOCKERHUB_USERNAME` and
+  `DOCKERHUB_TOKEN` being present, so a half-configured fork degrades cleanly
+  instead of failing noisily. An authenticated pull carries a far higher rate
+  limit than an anonymous one.
+- **Fails the build on any real build or smoke-test regression.** A genuine
+  failure is still a red job.
+
+**Two non-security uses of `continue-on-error` exist and are intentional.**
+`ci.yml` and `ci-build-test.yml` each set it on the `actions/setup-python`
+step, which is immediately followed by a first-party retry step gated on
+`steps.setup-python.outcome == 'failure'`. `setup-python` flakes on
+GitHub-hosted Windows runners (toolcache / cache-restore); the retry is the
+mitigation and a genuine failure still fails the job at the retry. Neither is
+a security gate. They are named here so that grepping for
+`continue-on-error` does not appear to contradict this document.
+
+Known limitation, stated rather than implied: the base-image pulls
+(`ubuntu:22.04`, `alpine:3.18`) happen *inside* the BuildKit container, which
+does not share the runner's local image cache, so they are not covered by the
+pre-pull ladder above. Configuring a registry mirror or authenticating the
+pull is the remedy; pre-pulling on the host is not.
 
 ## INVARIANT-3 — Observable Failure States
 
 - No bare `except …: pass` that swallows security-relevant errors.
 - No bare `return` that silently skips a test — use `pytest.skip(reason=…)`.
-- No `2>/dev/null` or other stderr suppression in workflow scripts.
+- No `2>/dev/null` or other stderr suppression used to hide the failure of a
+  *substantive* step. Suppressing stderr on a pure **capability probe** — a
+  command run only to discover whether a feature is available, whose failure
+  is the answer rather than an error — is permitted and is what the tree
+  does: `nice -n -10 true 2>/dev/null` (can this runner raise scheduling
+  priority?) and `file "$f" 2>/dev/null | grep -q ELF` (is this an ELF
+  object?). The distinguishing test is whether the suppressed output could
+  have reported a real problem; for a probe whose result is immediately
+  branched on, it cannot.
 - Mock assertions must verify **call signatures**, not just call occurrence.
 
 ### INVARIANT-3 Addendum — Finalizer Failures Must Be Observable
@@ -829,12 +873,113 @@ a data-dependent branch here leaks nothing secret. The check is written
 branch-free because it costs nothing at this size, not because INVARIANT-12
 requires it here.
 
-**Verification.** `tests/test_ed25519_canonical_s.py` pins the behaviour, and
-the Wycheproof corpus covers the boundary case that a synthetic test cannot
-construct without reimplementing signing. Measured against a deliberately
+**Verification.** `tests/test_ed25519_canonical_s.py` pins the behaviour from
+Python, `tests/c/test_ed25519_canonical_s.c` pins it from C across the
+single-verify and batch paths, and the vendored Wycheproof corpus
+(`wycheproof_vectors/`) runs all 150 Ed25519 vectors on every PR.
+
+Note that `tests/c/test_ed25519_verify_equiv.c` case D.3 — "s-half replaced
+with the group order `l`" — is **not** coverage for this defect, though it
+reads like it. It rejects because `[l]B = identity` makes the *group equation*
+fail, which it did against the unpatched code too. Only `S = s + L`, which
+satisfies the group equation, isolates the range check. That distinction is
+now recorded at both sites. Measured against a deliberately
 unpatched build: `S + L` verified as **True** before the fix and **False**
 after, with honest signatures verifying in both. Both backends were built and
 run separately — 150/150 Wycheproof Ed25519 vectors pass on each.
+
+## INVARIANT-27 — X25519 u-Coordinates Must Be Reduced Before Use
+
+**Statement.** Every X25519 field path must reduce the received u-coordinate
+modulo `p = 2^255 - 19` after masking bit 255, so that a non-canonical
+encoding and its canonical form produce the same shared secret.
+
+**Why.** RFC 7748 §5 `decodeUCoordinate` masks bit 255 and stops, so a decoded
+u can land anywhere in `[0, 2^255)`. Nineteen of those values — `[p, 2^255)` —
+are representable but not canonical: each names a field element that also has
+a smaller encoding. The RFC then performs arithmetic mod `p`, so the element
+such an encoding denotes is unambiguously `u mod p`.
+
+All three field paths in `src/c/ama_x25519.c` (fe64, fe51, gf16) masked the
+top bit and never reduced, so a u in that band was consumed unreduced.
+Wycheproof `x25519_test` **tc88** is exactly this case: its u is `p + 3`, and
+AMA derived a shared secret that no other implementation computes.
+
+RFC 7748 does not *require* the reduction and Wycheproof scores the case
+`acceptable`, so this is an interoperability decision rather than a break. It
+is decided in favour of reducing because the failure mode is silent and
+undiagnosable: two peers that agree on a public key derive different shared
+secrets, and the handshake simply fails. Every reference implementation
+(ref10, curve25519-donna, libsodium) normalizes and therefore agrees with the
+reduced interpretation.
+
+**Enforcement.** `x25519_canonicalize_u()` in `src/c/ama_x25519.c` masks bit
+255 and performs one conditional subtraction of `p` — one suffices, because
+after masking the value is below `2^255 = p + 19`. All three ladders call it
+before decoding. The subtraction is performed unconditionally and the result
+selected with an arithmetic mask, so there is no branch and no value-dependent
+memory access.
+
+It is applied to the 32-byte encoding rather than inside `fe51_frombytes` /
+`fe64_frombytes` because those helpers are shared with Ed25519, whose point
+decoding has the opposite rule: RFC 8032 §5.1.3 requires a non-canonical `y`
+to be **rejected**, not reduced. Changing them would silently alter signature
+verification.
+
+**Not a constant-time requirement.** The u-coordinate is a peer's public key
+and is public. The implementation is constant time regardless.
+
+**Verification.** `tests/test_x25519_canonical_u.py` pins tc88, the general
+non-canonical/canonical agreement property, the full `[p, p+18]` band, and
+the bit-255 masking rule. The Wycheproof gate runs all 518 X25519 vectors on
+every PR; `wycheproof_vectors/run_wycheproof.py` additionally pins that
+exactly 31 low-order public keys are rejected under RFC 7748 §6.1 rather than
+returning an all-zero shared secret.
+
+## INVARIANT-28 — ECDSA Signatures Must Be Low-s and Strictly Encoded
+
+**Statement.** `ama_secp256k1_ecdsa_sign` must emit only the canonical low
+representative (`s <= (n-1)/2`), and `ama_secp256k1_ecdsa_verify` must reject
+a high `s`, an `r` or `s` outside `[1, n-1]`, and any signature that is not
+minimal DER.
+
+**Why.** ECDSA's verification equation is symmetric in the sign of `s`: for
+every valid `(r, s)`, the pair `(r, n - s)` also verifies. That is signature
+malleability — the same defect class as INVARIANT-26 — and it is reachable by
+anyone holding a signature, with no private key. Range and encoding
+permissiveness are the same problem by other means: an `r >= n` that is
+silently reduced, or a non-minimal INTEGER, each yields a second distinct byte
+string that verifies for one message.
+
+Wycheproof's ECDSA suite is largely an encoding-abuse corpus; a permissive
+parser fails it loudly, which is the point.
+
+**Enforcement.** In `src/c/ama_secp256k1.c`: `sc_is_high()` decides the low-s
+question against `(n-1)/2`; signing negates a high `s` before encoding;
+verification rejects one. `der_parse_signature()` accepts only
+`30 <len> 02 <rlen> <r> 02 <slen> <s>` with short-form lengths, minimal
+INTEGERs, no superfluous leading zero, no negative value, and no trailing
+bytes. `sc_from_bytes()` reports whether its input was already `< n`, so an
+out-of-range `r`/`s` is rejected rather than reduced.
+
+**Deliberate divergence from Wycheproof, declared.** The corpus scores
+high-`s` signatures `valid`, because plain X9.62 accepts them. AMA rejects
+them. All 72 such vectors are claimed by the named
+`ecdsa/high-s-rejected` policy in `wycheproof_vectors/run_wycheproof.py`,
+with the reason and an exact expected count, so the divergence is visible in
+the gate's output rather than absorbed into a pass.
+
+**Timing posture.** Signing is constant time with respect to the private key
+and the RFC 6979 nonce: scalar arithmetic mod `n` is Montgomery form with no
+data-dependent branch, and inversion uses a fixed chain over the public
+exponent `n - 2`. Verification is variable time by design — every input is
+public — matching what `ama_ed25519_batch_verify` states.
+
+**Verification.** `tests/test_secp256k1_ecdsa.py` (32 tests) covers RFC 6979
+determinism, nonce non-reuse across messages and across keys, rejection of the
+high-`s` twin of a signature the library itself produced, and each strict-DER
+rule. All 476 Wycheproof ECDSA vectors run on every PR; 308/308 of the
+`invalid` (encoding-abuse) vectors reject correctly.
 
 ---
 

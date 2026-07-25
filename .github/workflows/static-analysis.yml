@@ -948,6 +948,15 @@ jobs:
       - compiler-warnings
       - version-consistency
       - address-sanitizer
+      # memory-sanitizer / thread-sanitizer / valgrind-memcheck run only on
+      # the schedule and on workflow_dispatch, so they report `skipped` on
+      # every PR — which this gate tolerates. They were nonetheless absent
+      # from this list, so a genuine MSAN/TSAN/Valgrind *failure* on a
+      # scheduled run did not turn the gate red and nothing surfaced it.
+      # Listing them costs nothing on PRs and closes that hole.
+      - memory-sanitizer
+      - thread-sanitizer
+      - valgrind-memcheck
       - clang-tidy
       - reproducible-build
       - memory-sanitizer-kat

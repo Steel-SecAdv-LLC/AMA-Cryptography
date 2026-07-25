@@ -472,7 +472,8 @@ jobs:
   # so a build/runtime regression here is a customer-visible regression
   # and must block merge. Transient Docker Hub auth/rate-limit failures
   # are mitigated in-job via:
-  #   * Pre-pulling the BuildKit image with 5 retries + exponential backoff
+  #   * Pre-pulling the BuildKit image with 8 retries + capped exponential
+  #     backoff (~340s of tolerance)
   #   * Optional Docker Hub login (gated on both DOCKERHUB_USERNAME and
   #     DOCKERHUB_TOKEN being set, so a half-configured fork degrades
   #     cleanly rather than failing noisily)
@@ -496,17 +497,36 @@ jobs:
         run: |
           # Pre-pull the BuildKit image used by setup-buildx-action to
           # survive transient Docker Hub outages (504, network timeouts).
+          #
+          # Widened from 5 attempts / ~150s to 8 attempts / ~340s after
+          # Docker Hub timeouts blocked PR #370 three times in one day.
+          # The backoff is capped rather than doubling without bound: past
+          # ~90s per gap the extra wait buys little and the job's 20-minute
+          # timeout starts to bind.
+          #
+          # This is a retry, not a bypass. If the image genuinely cannot be
+          # fetched the job still proceeds to buildx setup and fails there
+          # on a real error. Do NOT add continue-on-error here (INVARIANT-2)
+          # — the smoke tests below exercise the exact path a downstream
+          # consumer hits on `docker pull`, so silencing this job hides a
+          # customer-visible regression.
           IMAGE="moby/buildkit:buildx-stable-1"
-          for attempt in 1 2 3 4 5; do
-            echo "Attempt ${attempt}/5: pulling ${IMAGE}..."
+          BACKOFF="10 20 40 60 60 60 90"
+          attempt=1
+          for delay in ${BACKOFF} final; do
+            echo "Attempt ${attempt}/8: pulling ${IMAGE}..."
             if docker pull "${IMAGE}"; then
-              echo "Successfully pulled ${IMAGE}"
+              echo "Successfully pulled ${IMAGE} on attempt ${attempt}"
               exit 0
             fi
-            echo "Pull failed, waiting $((attempt * 10))s before retry..."
-            sleep $((attempt * 10))
+            if [ "${delay}" = "final" ]; then
+              break
+            fi
+            echo "Pull failed, waiting ${delay}s before retry..."
+            sleep "${delay}"
+            attempt=$((attempt + 1))
           done
-          echo "::warning::All 5 pull attempts for ${IMAGE} failed; buildx setup will retry internally"
+          echo "::warning::All 8 pull attempts for ${IMAGE} failed over ~340s; buildx setup will retry internally"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4

@@ -702,6 +702,47 @@ AMA_API ama_error_t ama_hkdf_sha512(
  * ED25519 STANDALONE API
  * ============================================================================ */
 
+/* ----------------------------------------------------------------------------
+ * Ed25519 fixed-length buffer contract  (applies to every declaration below)
+ *
+ * The Ed25519 entry points take their key and signature arguments as sized
+ * array parameters — `signature[64]`, `public_key[32]`, `secret_key[64]`.
+ * In C that notation is NOT a guarantee and NOT a constraint. A sized array
+ * parameter decays to a plain pointer at the ABI boundary, so:
+ *
+ *   - the compiler does not check the argument's length,
+ *   - `sizeof` inside the function yields the size of a pointer,
+ *   - there is no length parameter, so no runtime validation is possible.
+ *
+ * The size in the declaration is documentation of what the callee will read
+ * or write. It is the CALLER's obligation to satisfy it. Concretely:
+ *
+ *   TOO FEW BYTES  — undefined behaviour. The function reads (or writes)
+ *                    the full declared width regardless, running off the end
+ *                    of the caller's buffer. There is no error return for
+ *                    this case because the overrun has already happened by
+ *                    the time anything could detect it.
+ *
+ *   TOO MANY BYTES — silently ignored, NOT rejected. Passing a 65-byte
+ *                    signature yields a verdict computed over the first 64
+ *                    bytes and AMA_SUCCESS if those 64 verify. The trailing
+ *                    byte is never examined. A caller that treats the whole
+ *                    buffer as "the signature that verified" is therefore
+ *                    working from a different byte string than the one that
+ *                    was actually checked — the same class of confusion the
+ *                    RFC 8032 canonical-S rule exists to prevent.
+ *
+ * The Python layer (`ama_cryptography.pqc_backends`) rejects wrong lengths
+ * before calling in, so this contract binds C consumers specifically.
+ *
+ * Callers holding variable-length input MUST check the length themselves
+ * before calling, e.g.
+ *
+ *     if (sig_len != 64) return REJECT;
+ *     ama_ed25519_verify(sig, msg, msg_len, pk);
+ *
+ * ---------------------------------------------------------------------------- */
+
 /**
  * @brief Generate Ed25519 keypair
  *
@@ -709,9 +750,16 @@ AMA_API ama_error_t ama_hkdf_sha512(
  * seed data in secret_key[0..31] before calling. The function will compute
  * the public key and store it in both public_key and secret_key[32..63].
  *
- * @param public_key Output: 32-byte public key
- * @param secret_key Input/Output: 64-byte buffer (seed in, seed||pk out)
+ * @param public_key Output. Caller MUST supply exactly 32 writable bytes;
+ *                   all 32 are written. No length parameter, no validation.
+ * @param secret_key Input/Output. Caller MUST supply exactly 64 writable
+ *                   bytes, with the 32-byte seed already in [0..31]; bytes
+ *                   [32..63] are overwritten with the public key. No length
+ *                   parameter, no validation.
  * @return AMA_SUCCESS or error code
+ *
+ * See the fixed-length buffer contract above: a short buffer is undefined
+ * behaviour, and a longer one has its excess ignored rather than rejected.
  */
 AMA_API ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]);
 
@@ -721,11 +769,22 @@ AMA_API ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_k
  * Creates an Ed25519 signature for a message using the secret key.
  * Implements RFC 8032 Ed25519 (pure EdDSA).
  *
- * @param signature Output: 64-byte signature
- * @param message Message to sign
- * @param message_len Length of message
- * @param secret_key 64-byte secret key (seed || public_key)
+ * @param signature   Output. Caller MUST supply exactly 64 writable bytes;
+ *                     all 64 are written. There is no output-length
+ *                     parameter — an Ed25519 signature is always 64 bytes —
+ *                     and no way for this function to detect a shorter
+ *                     buffer before overrunning it.
+ * @param message      Message to sign. Bounded by `message_len`, which IS
+ *                     checked; a zero-length message is valid.
+ * @param message_len  Length of `message` in bytes.
+ * @param secret_key   Caller MUST supply exactly 64 readable bytes, laid
+ *                     out as seed(32) || public_key(32) — the form
+ *                     `ama_ed25519_keypair` produces. No length parameter,
+ *                     no validation. Passing only the 32-byte seed reads 32
+ *                     bytes past the end of the buffer.
  * @return AMA_SUCCESS or error code
+ *
+ * See the fixed-length buffer contract above.
  */
 AMA_API ama_error_t ama_ed25519_sign(
     uint8_t signature[64],
@@ -740,11 +799,26 @@ AMA_API ama_error_t ama_ed25519_sign(
  * Verifies an Ed25519 signature on a message.
  * Implements RFC 8032 Ed25519 verification.
  *
- * @param signature 64-byte signature
- * @param message Message to verify
- * @param message_len Length of message
- * @param public_key 32-byte public key
+ * @param signature    Caller MUST supply exactly 64 readable bytes. There
+ *                      is no length parameter and no runtime length check.
+ *                      Fewer than 64 readable bytes is undefined behaviour
+ *                      (out-of-bounds read). MORE than 64 is not an error:
+ *                      the verdict is computed over the first 64 bytes and
+ *                      the remainder is ignored, so a caller passing a
+ *                      65-byte buffer can receive AMA_SUCCESS for a string
+ *                      that was never fully examined. Check the length
+ *                      yourself before calling.
+ * @param message       Message to verify. Bounded by `message_len`, which
+ *                      IS checked.
+ * @param message_len   Length of `message` in bytes.
+ * @param public_key    Caller MUST supply exactly 32 readable bytes. Same
+ *                      terms as `signature`: no length parameter, short is
+ *                      undefined behaviour, long is ignored not rejected.
  * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
+ *
+ * See the fixed-length buffer contract above. Note that a rejected
+ * signature and a malformed-length signature are NOT distinguishable
+ * through this API — the latter is not detected at all.
  */
 AMA_API ama_error_t ama_ed25519_verify(
     const uint8_t signature[64],
@@ -759,10 +833,23 @@ AMA_API ama_error_t ama_ed25519_verify(
  * Each entry contains a message, signature, and public key to verify.
  */
 typedef struct {
-    const uint8_t *message;     /**< Message bytes */
-    size_t         message_len; /**< Length of message */
-    const uint8_t *signature;   /**< 64-byte Ed25519 signature */
-    const uint8_t *public_key;  /**< 32-byte Ed25519 public key */
+    /** Message bytes. Bounded by `message_len`, which IS checked. */
+    const uint8_t *message;
+    /** Length of `message` in bytes. */
+    size_t         message_len;
+    /**
+     * Ed25519 signature. MUST point at exactly 64 readable bytes.
+     *
+     * These two fields are plain pointers with no accompanying length,
+     * so the same contract as `ama_ed25519_verify` applies and is if
+     * anything easier to get wrong here: nothing in the struct records
+     * how long the buffers are. Fewer than 64 readable bytes is
+     * undefined behaviour; more than 64 is ignored, not rejected.
+     */
+    const uint8_t *signature;
+    /** Ed25519 public key. MUST point at exactly 32 readable bytes. Same
+     *  terms as `signature` above. */
+    const uint8_t *public_key;
 } ama_ed25519_batch_entry;
 
 /**
@@ -774,9 +861,16 @@ typedef struct {
  * This is intentionally non-constant-time (vartime) because verification
  * scalars are public. This is safe and documented.
  *
- * @param entries   Array of batch entries to verify
- * @param count     Number of entries
- * @param results   Output: array of int (1=valid, 0=invalid), must be >= count
+ * @param entries   Array of `count` batch entries. Each entry's
+ *                  `signature` and `public_key` must satisfy the
+ *                  fixed-length contract documented on the struct above;
+ *                  none of it is checked here.
+ * @param count     Number of entries in `entries`, and the minimum number
+ *                  of `int` slots in `results`.
+ * @param results   Output: caller MUST supply at least `count` writable
+ *                  `int` slots. Exactly `count` are written (1=valid,
+ *                  0=invalid). There is no capacity parameter, so a
+ *                  short array is undefined behaviour.
  * @return AMA_SUCCESS if all verified, AMA_ERROR_VERIFY_FAILED if any failed,
  *         AMA_ERROR_INVALID_PARAM if entries or results is NULL
  */

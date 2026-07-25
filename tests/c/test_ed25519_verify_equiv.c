@@ -452,8 +452,9 @@ int main(void) {
      *         constrains s to a specific function of h, A — which our
      *         random msg/pk does not satisfy.  Reject.
      *   D.3 — s-half of signature replaced with the group order l.
-     *         [l]B = identity, so R_check = [h](-A), which equals R
-     *         only if R = [h](-A).  For our random R, reject.
+     *         NOT a malleability test — see the note at the case
+     *         itself.  [l]B = identity, so R_check = [h](-A), which
+     *         equals R only if R = [h](-A).  For our random R, reject.
      *   D.4 — pk's y-coordinate is tampered to a non-canonical value
      *         that still decompresses (high bit of byte 30 flipped,
      *         keeping the sign bit of byte 31 untouched).  This yields
@@ -489,14 +490,30 @@ int main(void) {
                   "D.2: signature R = identity is rejected");
         }
 
-        /* D.3: signature s-half replaced with the group order l. */
+        /* D.3: signature s-half replaced with the group order l.
+         *
+         * READ THIS BEFORE TREATING IT AS MALLEABILITY COVERAGE — it is
+         * not, and it was mistaken for it.  This case rejects because
+         * the *group equation* fails: [l]B = identity, so R_check
+         * reduces to [h](-A), which equals our randomly-derived R only
+         * by coincidence.  It passed against the code that had no
+         * canonical-S range check at all, so it can never have been
+         * evidence that one existed.
+         *
+         * The case that actually requires RFC 8032 §5.1.7 is S = s + L:
+         * the genuine scalar plus the group order, which *satisfies*
+         * the group equation and is caught only by the range check.
+         * That case, and the L-1 / L / L+1 boundaries, live in
+         * tests/c/test_ed25519_canonical_s.c — which is built against
+         * both backends and the batch path, unlike this file. */
         {
             uint8_t bad_sig[64];
             memcpy(bad_sig, sig, 64);
             memcpy(bad_sig + 32, ED25519_L, 32);
             err = ama_ed25519_verify(bad_sig, msg, sizeof(msg), pk);
             CHECK(err != AMA_SUCCESS,
-                  "D.3: signature s = l (forces [s]B = identity) is rejected");
+                  "D.3: s = l is rejected by the GROUP EQUATION "
+                  "([l]B = identity), not by a range check");
         }
 
         /* D.4: tamper a y-bit of the pk — yields a different valid

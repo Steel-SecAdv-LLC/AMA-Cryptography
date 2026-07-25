@@ -438,3 +438,47 @@ jobs:
           if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
           taskset -c 0 $NICE_PREFIX \
             ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 900
+
+  dudect-gate:
+    name: Constant-Time Gate
+    # Single aggregating status check for this workflow, matching the
+    # `ci-gate` pattern in ci.yml. Branch protection should require ONLY
+    # this context instead of the individual job names, so adding or
+    # renaming a job updates this needs: list under code review rather than
+    # drifting the branch-protection config out of sync.
+    #
+    # if: always() so the gate resolves to a definitive red/green even when a
+    # dependency fails, rather than reporting `skipped` and leaving the PR
+    # stuck "waiting for status".
+    if: always()
+    needs:
+      - dudect-utility
+      - dudect-pqc
+      - dudect-legacy-harnesses
+      - dudect-x25519-avx2-batch
+      - dudect-simd-sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+    - name: Fail if any required job did not succeed
+      # `skipped` is tolerated HERE and only here, because in this workflow a
+      # skip is the designed outcome rather than a silent gap: every one of
+      # the five jobs carries a schedule-scoping `if:`. The first four run on
+      # push, pull_request, workflow_dispatch and the Sunday 02:00 schedule,
+      # and skip on every other schedule; `dudect-simd-sweep` runs ONLY on
+      # the 03:30 schedule and on workflow_dispatch, so it is skipped on every
+      # pull request by design. A gate that failed on `skipped` would
+      # therefore be red on every PR and every non-Sunday nightly, which
+      # would make it worthless rather than strict.
+      #
+      # `cancelled` IS a failure here, unlike ci.yml's gate: dudect jobs are
+      # long-running timing measurements and a cancellation part-way through
+      # leaves no verdict at all.
+      if: ${{ contains(needs.*.result, 'failure')
+           || contains(needs.*.result, 'cancelled') }}
+      run: |
+        echo "::error::Constant-Time Gate failed — a required job did not succeed."
+        echo "Dependency results: ${{ join(needs.*.result, ', ') }}"
+        exit 1
+    - name: All required jobs succeeded
+      run: echo "Constant-Time Gate passed — no constant-time job failed."

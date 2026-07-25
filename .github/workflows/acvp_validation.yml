@@ -564,3 +564,38 @@ jobs:
             echo "See \`docs/compliance/ACVP_SELF_ATTESTATION.md\` for the"
             echo "customer-facing attestation this job underwrites."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  acvp-gate:
+    name: ACVP Validation Gate
+    # Single aggregating status check for this workflow. Branch protection
+    # should require ONLY this context instead of the individual job names:
+    # adding, renaming, or matrix-expanding a job then updates this needs:
+    # list under code review rather than drifting the branch-protection
+    # config out of sync (required-context drift). `needs:` is
+    # workflow-local, so every workflow carries its own gate.
+    #
+    # if: always() so the gate resolves to a definitive red/green even when a
+    # dependency fails — otherwise it would report as `skipped` and leave the
+    # PR stuck "waiting for status".
+    if: always()
+    needs:
+      - acvp-vectors
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+    - name: Fail if any required job did not succeed
+      # STRICT: anything other than `success` is a failure, so a `skipped` or
+      # `cancelled` dependency cannot report green. Every job in this
+      # workflow is unconditional (no job-level `if:`), so on any trigger
+      # they are all expected to run to completion — a skip here would mean
+      # something silently did not happen, which is exactly what this gate
+      # exists to catch.
+      if: ${{ contains(needs.*.result, 'failure')
+             || contains(needs.*.result, 'cancelled')
+             || contains(needs.*.result, 'skipped') }}
+      run: |
+        echo "::error::ACVP Validation Gate failed — a required job did not succeed."
+        echo "Dependency results: ${{ join(needs.*.result, ', ') }}"
+        exit 1
+    - name: All required jobs succeeded
+      run: echo "ACVP Validation Gate passed — all required jobs are green."

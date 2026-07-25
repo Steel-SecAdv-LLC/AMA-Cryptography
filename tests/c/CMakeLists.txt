@@ -104,6 +104,14 @@ endif()
 add_ama_test(test_hkdf test_hkdf.c)
 add_ama_test(test_ed25519 test_ed25519.c)
 
+# RFC 8032 5.1.7 canonical-S enforcement (INVARIANT-26).  Built
+# UNCONDITIONALLY, unlike test_ed25519_verify_equiv below: the fix
+# lands at three sites — ama_ed25519_verify in each backend plus the
+# donna batch wrapper, which calls its own ed25519_sign_open — so the
+# test has to run against whichever backend CMake selected, and it
+# drives the batch API as well as the single-verify path.
+add_ama_test(test_ed25519_canonical_s test_ed25519_canonical_s.c)
+
 # test_ed25519_comb_equiv validates the in-tree signed 4-bit window comb
 # (ge25519_scalarmult_base_comb_signed) against the variable-base wNAF
 # reference.  When AMA_ED25519_ASSEMBLY=ON (default on x86-64), the donna
