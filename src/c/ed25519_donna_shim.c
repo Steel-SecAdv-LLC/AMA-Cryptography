@@ -55,6 +55,12 @@ ed25519_randombytes_unsafe(void *p, size_t len) {
  * rule remains enabled for first-party code. */
 #include "vendor/ed25519-donna/ama_donna_unit.h"
 
+/* RFC 8032 §5.1.7 canonical-S check, shared with the portable fe51 backend
+ * in ama_ed25519.c.  Header-only because the two backends are mutually
+ * exclusive at build time (CMakeLists.txt swaps one source for the other),
+ * so a shared .c would be linked in only one configuration. */
+#include "internal/ama_ed25519_canonical.h"
+
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
@@ -158,6 +164,16 @@ ama_error_t ama_ed25519_verify(
         return AMA_ERROR_INVALID_PARAM;
     }
 
+    /* RFC 8032 §5.1.7: S must decode in the range 0 <= S < L, and a
+     * signature whose S falls outside it is invalid.  donna's own guard is
+     * `RS[63] & 224`, which only rejects S >= 2^253; since L is just above
+     * 2^252 the band L <= S < 2^253 passes it, so (R, S + L) verifies
+     * alongside (R, S).  Wycheproof tc63/tc85 catch exactly that.  See
+     * internal/ama_ed25519_canonical.h. */
+    if (!ama_ed25519_signature_s_is_canonical(signature)) {
+        return AMA_ERROR_VERIFY_FAILED;
+    }
+
     /* donna returns 0 on success, -1 on failure */
     int result = ed25519_sign_open(message, message_len, public_key, signature);
 
@@ -231,6 +247,27 @@ ama_error_t ama_ed25519_batch_verify(
     /* donna's batch verify: returns 0 if all valid, nonzero otherwise.
      * Per-entry results are written to the valid[] array (1=valid, 0=invalid). */
     int ret = ed25519_sign_open_batch(msgs, mlens, pks, sigs, count, results);
+
+    /* RFC 8032 §5.1.7 canonical-S enforcement, applied per entry.
+     *
+     * This cannot be delegated to the single-signature path: donna's batch
+     * routine calls its own ed25519_sign_open() internally (see
+     * ed25519-donna-batchverify.h), never ama_ed25519_verify(), so the check
+     * added there does not reach here.  Without this loop, batch verification
+     * would accept malleable signatures that single verification rejects —
+     * a difference in accepted-signature sets between two APIs documented to
+     * agree, which is worse than either behaviour on its own.
+     *
+     * Applied after the batch rather than before it so donna's multi-scalar
+     * arithmetic runs over the inputs it was handed; the override below is
+     * what decides the result.  S is public, so no timing property is at
+     * stake in overriding rather than skipping. */
+    for (size_t i = 0; i < count; i++) {
+        if (!ama_ed25519_signature_s_is_canonical(entries[i].signature)) {
+            results[i] = 0;
+            ret = -1;
+        }
+    }
 
     /* Same explicit (void *) casts as the early-error path above —
      * bugprone-multi-level-implicit-pointer-conversion (audit Issue 9). */

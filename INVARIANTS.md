@@ -788,5 +788,55 @@ not something this checker can discharge.
 
 ---
 
+## INVARIANT-26 — Ed25519 Signatures Must Have a Canonical S
+
+**Statement.** Every Ed25519 verification path must reject a signature whose
+scalar half `S` is not in the range `0 <= S < L`, where
+`L = 2^252 + 27742317777372353535851937790883648493` is the order of the base
+point. This applies to single verification, batch verification, and both
+compiled backends.
+
+**Why.** RFC 8032 §5.1.7 requires the verifier to decode `S` "in the range
+`0 <= S < L`" and to treat the signature as invalid if that decoding fails.
+Neither backend enforced it, and Wycheproof `eddsa_verify_schema_v1` found it:
+`tc63` (*checking malleability*) and `tc85` (*Signature with S just above the
+bound*) both verified as **valid**.
+
+* The vendored **ed25519-donna** path (x86-64 default) tested only
+  `RS[63] & 224`, rejecting `S >= 2^253`. `L` is just above `2^252`, so the
+  band `L <= S < 2^253` passed — exactly where `S + L` lands.
+* The portable **fe51** path (`ama_ed25519.c`) performed no range check, and
+  its scalar-multiply reduces mod `L` internally, so `S` and `S + L` produce
+  the identical point.
+
+The defect is signature malleability. Given any valid `(R, S)`, anyone can
+emit `(R, S + L)` — a distinct 64-byte string that also verifies — without the
+private key. Systems treating signature bytes as an identity (deduplication
+caches, replay windows, content addressing, transaction ids) can be shown two
+"different" signatures for one authenticated message.
+
+**Enforcement.** `src/c/internal/ama_ed25519_canonical.h` provides the range
+check as a `static inline`, included by **both** backends. It is header-only
+because CMakeLists.txt swaps one backend source for the other, so a shared `.c`
+would compile into only one configuration and the check could regress silently
+in the other. Applied at three sites: `ama_ed25519_verify` in each backend, and
+the donna batch wrapper — donna's batch routine calls its own
+`ed25519_sign_open` rather than `ama_ed25519_verify`, so without the third site
+batch verification would accept what single verification rejects.
+
+**Not claimed as constant time.** `S` arrives in the signature and is public, so
+a data-dependent branch here leaks nothing secret. The check is written
+branch-free because it costs nothing at this size, not because INVARIANT-12
+requires it here.
+
+**Verification.** `tests/test_ed25519_canonical_s.py` pins the behaviour, and
+the Wycheproof corpus covers the boundary case that a synthetic test cannot
+construct without reimplementing signing. Measured against a deliberately
+unpatched build: `S + L` verified as **True** before the fix and **False**
+after, with honest signatures verifying in both. Both backends were built and
+run separately — 150/150 Wycheproof Ed25519 vectors pass on each.
+
+---
+
 _Maintained by Steel Security Advisors LLC._
 _Last updated: 2026-07-25_

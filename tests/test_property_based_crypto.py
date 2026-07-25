@@ -22,7 +22,11 @@ AEAD (AES-256-GCM, ChaCha20-Poly1305)
     * Authenticity:   any single-bit mutation of ciphertext, tag, nonce or AAD
                       must make decryption fail — never return wrong plaintext.
     * Key separation: decrypting under a different key must fail.
-    * Non-triviality: ciphertext must never equal plaintext for non-empty input.
+    * Length honesty: ``|ct| == |pt|`` exactly, at every size (CTR mode).
+    * Non-triviality: ciphertext must differ from plaintext at >= 16 bytes.
+      Stated at that size deliberately — GCM is ``ct = pt XOR keystream``, so
+      equality is possible with probability 2**-8n and the property is false
+      in general.  See ``test_ciphertext_differs_from_plaintext``.
 
 KEM (ML-KEM-1024 / Kyber)
     * Agreement:      encapsulate/decapsulate agree on the shared secret.
@@ -110,7 +114,41 @@ class TestAESGCMProperties:
 
     @_SETTINGS
     @given(key=_KEY, nonce=_NONCE, plaintext=st.binary(min_size=1, max_size=512))
-    def test_ciphertext_is_not_plaintext(self, key: bytes, nonce: bytes, plaintext: bytes) -> None:
+    def test_ciphertext_preserves_length(self, key: bytes, nonce: bytes, plaintext: bytes) -> None:
+        """GCM is CTR mode, so |ct| == |pt| exactly, at every size.
+
+        This is the deterministic half of what ``test_ciphertext_differs_from_plaintext``
+        below can only assert probabilistically, so it is stated separately and
+        covers the one-byte inputs that test cannot.
+        """
+        ct, tag = native_aes256_gcm_encrypt(key, nonce, plaintext, b"")
+        assert len(ct) == len(plaintext)
+        assert len(tag) == AES256_GCM_TAG_BYTES
+
+    @_SETTINGS
+    @given(key=_KEY, nonce=_NONCE, plaintext=st.binary(min_size=16, max_size=512))
+    def test_ciphertext_differs_from_plaintext(
+        self, key: bytes, nonce: bytes, plaintext: bytes
+    ) -> None:
+        """Encryption must not be the identity function.
+
+        ``min_size=16`` is load-bearing and is NOT a workaround.  GCM encrypts
+        as ``ct = pt XOR keystream``, so ``ct == pt`` exactly when the keystream
+        prefix is all zero — an event with probability 2**-8n for an n-byte
+        plaintext.  The previous form of this test used ``min_size=1``, making
+        that probability 1/256; Hypothesis duly found ``plaintext=b"\\x00"``
+        with a keystream byte of zero and failed.
+
+        The failure was in the assertion, not the cipher.  A keystream that can
+        never produce a zero byte at a given position would be a *defect* — it
+        would make the output distinguishable from random — so this property
+        cannot be stated unconditionally at any size.  At 16 bytes the false-
+        failure probability is 2**-128, which is the same margin the library's
+        own authentication tag relies on.
+
+        Length preservation, which does hold at every size, is asserted by
+        ``test_ciphertext_preserves_length`` above.
+        """
         ct, _tag = native_aes256_gcm_encrypt(key, nonce, plaintext, b"")
         assert ct != plaintext, "ciphertext must not equal plaintext"
 

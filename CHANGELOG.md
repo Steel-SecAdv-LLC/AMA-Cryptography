@@ -19,6 +19,77 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ed25519 signature malleability — RFC 8032 §5.1.7 canonical-S check was
+  missing from both backends (INVARIANT-26).** Found by running Google's
+  Project Wycheproof corpus against the library for the first time:
+  `tc63` (*checking malleability*) and `tc85` (*Signature with S just above
+  the bound*) both verified as **valid** when both must be rejected.
+
+  RFC 8032 §5.1.7 requires the verifier to decode `S` in the range
+  `0 <= S < L` and treat an out-of-range `S` as invalid. Neither backend did:
+  - the vendored **ed25519-donna** path (x86-64 default) tested only
+    `RS[63] & 224`, rejecting `S >= 2^253`; `L` sits just above `2^252`, so
+    the band `L <= S < 2^253` — exactly where `S + L` lands — passed;
+  - the portable **fe51** path (`ama_ed25519.c`, ARM and non-x86) had no
+    range check, and its scalar-multiply reduces mod `L` internally, so `S`
+    and `S + L` yield the identical point.
+
+  **Impact:** given any valid `(R, S)`, an attacker with no access to the
+  private key can emit `(R, S + L)` — a distinct 64-byte string that also
+  verifies. Anything treating signature bytes as an identity (deduplication
+  caches, replay windows, content addressing, transaction ids) can be shown
+  two "different" signatures for one authenticated message. The signing key is
+  not compromised; the uniqueness property callers assume is.
+
+  Fixed at three sites via a shared header-only check
+  (`src/c/internal/ama_ed25519_canonical.h`): `ama_ed25519_verify` in each
+  backend, plus the donna **batch** wrapper. The third site is not redundant —
+  donna's batch routine calls its own `ed25519_sign_open` rather than
+  `ama_ed25519_verify`, so without it batch verification accepted signatures
+  that single verification rejected.
+
+  Verified against a deliberately unpatched build: `S + L` verified **True**
+  before and **False** after, honest signatures verifying throughout. Both
+  backends were configured and built separately (`-DAMA_ED25519_ASSEMBLY=OFF`
+  forces fe51) and each passes **150/150** Wycheproof Ed25519 vectors.
+
+- **A property test asserted something false about AES-GCM.**
+  `test_ciphertext_is_not_plaintext` required `ct != pt` for plaintexts as
+  short as one byte. GCM is CTR mode — `ct = pt XOR keystream` — so `ct == pt`
+  whenever the keystream prefix is zero, with probability 2^-8n. Hypothesis
+  found `plaintext=b"\x00"`. The assertion was wrong, not the cipher: a
+  keystream that could never emit a zero byte at a given position would be a
+  *defect*. Split into `test_ciphertext_preserves_length` (deterministic, all
+  sizes) and `test_ciphertext_differs_from_plaintext` (>= 16 bytes, false-
+  failure probability 2^-128), with the reasoning recorded in both.
+
+### Added
+
+- **`src/c/internal/ama_ed25519_canonical.h`** — RFC 8032 canonical-scalar
+  check shared by both Ed25519 backends. Header-only by necessity:
+  CMakeLists.txt swaps one backend source for the other, so a shared `.c`
+  would compile into only one configuration and could regress silently in the
+  other. Not claimed as constant time — `S` is public — and the file says so
+  rather than implying a security property it does not provide.
+- **`tests/test_ed25519_canonical_s.py`** — regression pin for the above.
+  Marks explicitly which assertions are true regression pins (`S + L`) and
+  which are boundary documentation that passed before the fix too, rather
+  than implying uniform coverage.
+
+### Known coverage limits (stated, not silently dropped)
+
+- Wycheproof has **no** ML-KEM / ML-DSA / SLH-DSA vectors — it is classical
+  only. PQC coverage remains ACVP's job; nothing here validates it.
+- `ama_ed25519_verify` takes `const uint8_t signature[64]` with no length
+  parameter, so a C caller passing a longer buffer gets a verdict on its
+  first 64 bytes. The Python layer rejects wrong-length signatures; C API
+  consumers must enforce the length themselves.
+- No CI job builds `-DAMA_ED25519_ASSEMBLY=OFF` on x86-64, so the fe51 backend
+  is exercised only on the `ubuntu-24.04-arm` lanes.
+
+
 ## [3.4.0] - 2026-07-25
 
 ### Fixed

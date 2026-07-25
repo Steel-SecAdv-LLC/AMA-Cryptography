@@ -40,6 +40,10 @@
 
 #include "../include/ama_cryptography.h"
 #include "internal/ama_sha2.h"
+/* RFC 8032 §5.1.7 canonical-S check, shared with the donna backend in
+ * ed25519_donna_shim.c.  Header-only because the two backends are mutually
+ * exclusive at build time (CMakeLists.txt swaps one source for the other). */
+#include "internal/ama_ed25519_canonical.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -1447,6 +1451,19 @@ ama_error_t ama_ed25519_verify(
 
     if (!signature || !public_key || (!message && message_len > 0)) {
         return AMA_ERROR_INVALID_PARAM;
+    }
+
+    /* RFC 8032 §5.1.7: S must decode in the range 0 <= S < L, and a
+     * signature whose S falls outside it is invalid.
+     *
+     * This check is load-bearing on this path, not belt-and-braces: the
+     * scalar-multiply below canonicalises its input via sc25519_reduce()
+     * (see the contract above ge25519_scalarmult_base), so S and S + L
+     * produce the identical point and both satisfy the group equation.
+     * Without this, (R, S + L) verifies wherever (R, S) does.  Wycheproof
+     * tc63/tc85.  See internal/ama_ed25519_canonical.h. */
+    if (!ama_ed25519_signature_s_is_canonical(signature)) {
+        return AMA_ERROR_VERIFY_FAILED;
     }
 
     /* Decode public key */
