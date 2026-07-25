@@ -242,6 +242,62 @@ def main() -> int:
         else:
             print(f"OK    {desc:<60s} = {found}")
 
+    # -------------------------------------------------------------------
+    # Documentation version headers.
+    #
+    # Every public document carries a "Document Version" / "Version" field in
+    # its header block, and the project convention is that it tracks the
+    # package version.  Nothing checked them, so on the 3.3.0 -> 3.4.0 bump
+    # SEVENTEEN headers silently stayed on the old release while this script
+    # reported "All declarations agree" — the same failure mode as the SBOM,
+    # at seventeen times the blast radius.
+    #
+    # Discovered by scanning rather than declared by hand: any *.md carrying a
+    # recognised header form is checked, so a NEW document is covered the day
+    # it is added instead of the day someone remembers to list it here.
+    # Historical rows (revision-history tables, CHANGELOG entries) are not
+    # matched because they are not header fields — the patterns are anchored
+    # to the document-header shapes only.
+    doc_header_pats = [
+        re.compile(r"^\|\s*(?:Document )?Version\s*\|\s*(\d+\.\d+\.\d+)\s*\|$", re.M),
+        re.compile(r"^\*\*(?:Document )?Version:\*\*\s*(\d+\.\d+\.\d+)\s*$", re.M),
+    ]
+    doc_checked = 0
+    doc_stale: list[str] = []
+    for md in sorted(REPO.rglob("*.md")):
+        if any(part in {".git", "build", "node_modules"} for part in md.parts):
+            continue
+        if md.name == "CHANGELOG.md":
+            continue  # historical by definition
+        if "compliance" in md.parts:
+            # docs/compliance/** are DATED ATTESTATION RECORDS.  Their
+            # "Version" field names the library version the attestation was
+            # generated against — bound to an immutable upstream ACVP ref and
+            # a generation date — NOT a document revision that tracks the
+            # current release.  Auto-bumping them on a release would assert
+            # validation that was never performed, which INVARIANT-16
+            # (Honest Compliance and Audit Claims) prohibits.  Refreshing an
+            # attestation is a deliberate act with its own procedure (see
+            # acvp_attestation.json::acvp_ref_note).
+            continue
+        text = _read(md)
+        if not text:
+            continue
+        for pat in doc_header_pats:
+            for m in pat.finditer(text):
+                doc_checked += 1
+                if m.group(1) != canonical:
+                    rel = md.relative_to(REPO)
+                    doc_stale.append(
+                        f"{rel}: header version {m.group(1)!r} != canonical {canonical!r}"
+                    )
+    if doc_stale:
+        failures.append(f"  - documentation version headers ({len(doc_stale)} stale):")
+        for row in doc_stale:
+            failures.append(f"      {row}")
+    else:
+        print(f"OK    documentation version headers ({doc_checked} checked)     = {canonical}")
+
     # Invariants pointer check (audit 6a).
     root_inv_path = REPO / "INVARIANTS.md"
     github_inv_path = REPO / ".github" / "INVARIANTS.md"

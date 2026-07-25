@@ -4,7 +4,7 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 3.3.0 |
+| Document Version | 3.4.0 |
 | Last Updated | 2026-07-24 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
@@ -23,7 +23,8 @@ We actively maintain and provide security updates for the following versions:
 
 | Version | Supported | Status |
 |---------|-----------|--------|
-| 3.3.x | Yes | Active development and security updates |
+| 3.4.x | Yes | Active development and security updates |
+| 3.3.x | No | Superseded by v3.4; no public API removals |
 | 3.2.x | No | Superseded by v3.3; no public API removals |
 | 3.1.x | No | Superseded by v3.2; no public API removals |
 | 3.0.x | No | Superseded by v3.1; no public API removals |

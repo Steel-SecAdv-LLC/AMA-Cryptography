@@ -23,6 +23,26 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ### Release
 
+- **20 further stale version references corrected.** The 3.4.0 bump initially
+  updated only the ten sites `check_version_consistency.py` knew about. A full
+  sweep found more: 17 documentation version headers, 2 README prose
+  references, and `SECURITY.md`'s **Supported Versions** table, which still
+  listed `3.3.x` as the actively-supported line — a security-relevant claim.
+  Two of the headers (`CODE_OF_CONDUCT.md`,
+  `docs/compliance/ACVP_SELF_ATTESTATION.md`) had been stale since **3.0.0**,
+  predating this release entirely.
+- **`tools/check_version_consistency.py` now checks documentation headers.**
+  Discovered by scanning every tracked `*.md` for the recognised header forms
+  rather than from a hand-maintained list, so a newly added document is
+  covered the day it lands instead of the day someone remembers to register
+  it. 17 headers are checked. Verified in both directions: planted drift
+  fails with the offending file named and exit 1.
+- **`docs/compliance/**` is deliberately excluded from that check.** Those
+  documents' `Version` field names the library version an attestation was
+  *generated against* — bound to an immutable upstream ACVP ref and a
+  generation date — not a document revision that follows the current release.
+  Auto-bumping them would assert validation that was never performed, which
+  INVARIANT-16 (Honest Compliance and Audit Claims) prohibits.
 - **SBOM regenerated for 3.4.0** (`docs/compliance/sbom-c-library.json`) — the
   CycloneDX document embeds the release version in `metadata.component.version`
   and in all 11 component entries.
