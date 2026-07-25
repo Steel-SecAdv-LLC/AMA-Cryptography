@@ -72,8 +72,13 @@ from pathlib import Path
 
 # NOTE: no import of anything in this repository.  The module under test must
 # be the installed distribution, resolved through the normal import system.
+#
+# All three use the plain `import` form rather than mixing in `from ... import`
+# (CodeQL py/import-and-import-from).  The top-level module object is needed
+# anyway for the wheel-not-source guard, which reads its ``__file__``.
 import ama_cryptography
-from ama_cryptography import crypto_api, pqc_backends
+import ama_cryptography.crypto_api as crypto_api
+import ama_cryptography.pqc_backends as pqc_backends
 
 _FAILURES: list[str] = []
 
