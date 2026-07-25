@@ -10,7 +10,7 @@ Post-quantum cryptographic security system with rigorous mathematical foundation
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
-Version: 3.1.0
+Version: 3.4.0
 
 AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛

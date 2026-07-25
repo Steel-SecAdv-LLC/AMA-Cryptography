@@ -250,6 +250,9 @@ build-strict/
 build-verify/
 build-verify2/
 build-rollback/
+# Ed25519 backend differential (ci.yml ed25519-backend-differential job)
+build-donna/
+build-fe51/
 build-on/
 build-dudect/
 build-warn/

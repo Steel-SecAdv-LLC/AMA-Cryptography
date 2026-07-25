@@ -11,14 +11,24 @@
  * test_ed25519_verify_equiv.c case D.3 was never coverage for this defect.
  *
  * Each assertion below is marked PIN (fails against a build with the check
- * removed) or SMOKE (does not). Verified: with the check neutered, every
- * PIN fails and no SMOKE does, on both backends.
+ * removed at the verify sites), SMOKE (does not), or RANGE (a direct unit
+ * test of the §5.1.7 predicate `ama_ed25519_scalar_is_canonical`, pinning
+ * the L-1 / L / L+1 boundary — including the accept side, S = L-1, that the
+ * integration PINs cannot reach). Verified: with the check neutered at the
+ * three verify sites, every PIN fails and no SMOKE does, on both backends;
+ * the RANGE checks exercise the predicate itself and hold regardless.
  *
  * Covers single verify and batch verify; the fix has a third site in the
  * donna batch wrapper, which calls its own ed25519_sign_open.
  */
 
 #include "../../include/ama_cryptography.h"
+/* White-box: the §5.1.7 range predicate the three verify sites call, tested
+ * directly so the L-1/L/L+1 boundary is pinned at the check itself, not only
+ * through the full verify path (where a spliced boundary value rejects for
+ * the unrelated group-equation reason). Header-only static inline — no link
+ * dependency; it is the identical function each backend compiles in. */
+#include "../../src/c/internal/ama_ed25519_canonical.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -121,11 +131,15 @@ int main(void) {
     CHECK(!batch_accepts(forged, msg, sizeof(msg), pk),
           "PIN   S = s + 2L rejected (batch, fe51 path)");
 
-    /* Absolute L-1 / L / L+1. Splicing these into an honest signature
-     * breaks the group equation, so they reject with or without the range
-     * check — SMOKE, not pins. Kept because they document the boundary
-     * the check is specified against and would catch a check that
-     * rejected the wrong side of it. */
+    /* Absolute L-1 / L / L+1 spliced into an honest signature. Splicing
+     * breaks the group equation, so the full verify rejects all three with
+     * or without the range check — SMOKE, not pins for the integrated path.
+     * They confirm the verify path tolerates these exact S values without
+     * misbehaving. What they do NOT prove is that the range check keeps the
+     * LOW side of the boundary: a spliced S = L-1 rejects here for the
+     * unrelated group-equation reason, so it cannot show L-1 is accepted.
+     * The RANGE block below proves that directly against the §5.1.7
+     * predicate. */
     {
         uint8_t probe[64], one[32];
         memset(one, 0, 32); one[0] = 1;
@@ -134,7 +148,7 @@ int main(void) {
         memcpy(probe + 32, ED25519_L, 32);
         probe[32] -= 1; /* L-1; L[0] = 0xed, so no borrow */
         CHECK(ama_ed25519_verify(probe, msg, sizeof(msg), pk) != AMA_SUCCESS,
-              "SMOKE S = L-1 spliced into an honest signature rejects");
+              "SMOKE S = L-1 spliced into an honest signature rejects (group eq)");
 
         memcpy(probe, sig, 64);
         memcpy(probe + 32, ED25519_L, 32);
@@ -145,6 +159,52 @@ int main(void) {
         (void)add256(probe + 32, ED25519_L, one);
         CHECK(ama_ed25519_verify(probe, msg, sizeof(msg), pk) != AMA_SUCCESS,
               "SMOKE S = L+1 rejects");
+    }
+
+    /* RANGE: RFC 8032 §5.1.7 requires 0 <= S < L. Test that boundary
+     * directly against the predicate the three verify sites call — this is
+     * what pins "S = L-1 is accepted, S = L and S = L+1 are rejected", which
+     * the group-equation splices above cannot. A predicate that fenced the
+     * wrong side of the boundary (`<=` for `<`, an off-by-one on L, an early
+     * latch) fails one of these while every other test in this file still
+     * passes. */
+    {
+        uint8_t s[32], one[32];
+        memset(one, 0, 32); one[0] = 1;
+
+        CHECK(ama_ed25519_scalar_is_canonical(ED25519_L) == 0,
+              "RANGE S = L is non-canonical (rejected)");
+
+        memcpy(s, ED25519_L, 32);
+        s[0] -= 1; /* L-1; L[0] = 0xed, so no borrow */
+        CHECK(ama_ed25519_scalar_is_canonical(s) == 1,
+              "RANGE S = L-1 is canonical (accepted)");
+
+        (void)add256(s, ED25519_L, one); /* L+1 */
+        CHECK(ama_ed25519_scalar_is_canonical(s) == 0,
+              "RANGE S = L+1 is non-canonical (rejected)");
+
+        memset(s, 0, 32);
+        CHECK(ama_ed25519_scalar_is_canonical(s) == 1,
+              "RANGE S = 0 is canonical (accepted)");
+
+        memset(s, 0xff, 32);
+        CHECK(ama_ed25519_scalar_is_canonical(s) == 0,
+              "RANGE S = 2^256-1 is non-canonical (rejected)");
+
+        /* The 64-byte signature wrapper agrees with the scalar predicate on
+         * the S half (bytes 32..63). */
+        {
+            uint8_t probe[64];
+            memcpy(probe, sig, 64);
+            memcpy(probe + 32, ED25519_L, 32);
+            probe[32] -= 1; /* S = L-1 */
+            CHECK(ama_ed25519_signature_s_is_canonical(probe) == 1,
+                  "RANGE signature S-half = L-1 is canonical");
+            memcpy(probe + 32, ED25519_L, 32);
+            CHECK(ama_ed25519_signature_s_is_canonical(probe) == 0,
+                  "RANGE signature S-half = L is non-canonical");
+        }
     }
 
     printf("\n");

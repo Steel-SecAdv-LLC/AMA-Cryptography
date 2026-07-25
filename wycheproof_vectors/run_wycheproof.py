@@ -422,9 +422,28 @@ def load_manifest() -> dict[str, Any]:
 
 
 def verify_and_load(manifest: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
-    """Load every vendored file after checking its digest and vector count."""
+    """Load every vendored file after checking its digest and vector count.
+
+    The manifest is authoritative in BOTH directions.  Loading iterates the
+    manifest, so a vendored file that is deleted or truncated is caught (its
+    digest/count no longer matches, and the total falls short).  The reverse
+    hole — a ``.json`` dropped into ``vectors/`` but never listed in the
+    manifest — would be silently un-run: no digest, no count, no vectors, and
+    nothing to notice.  So the directory is enumerated too, and any unlisted
+    corpus file is a hard problem rather than a blind spot.
+    """
     problems: list[str] = []
     corpora: dict[str, Any] = {}
+
+    listed = set(manifest["files"])
+    present = {p.name for p in sorted((VECTORS_DIR / "vectors").glob("*.json"))}
+    for name in sorted(present - listed):
+        problems.append(
+            f"{name}: present under vectors/ but absent from manifest.json — "
+            "add it (with its sha256 and vector count) or remove it; an "
+            "unlisted corpus file is never run and would otherwise go uncovered"
+        )
+
     for name, meta in sorted(manifest["files"].items()):
         path = VECTORS_DIR / "vectors" / name
         if not path.is_file():

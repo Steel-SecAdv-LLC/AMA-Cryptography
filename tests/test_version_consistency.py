@@ -111,6 +111,55 @@ def test_wiki_footer_badge_is_covered() -> None:
     )
 
 
+def test_package_docstring_version_agrees_with_dunder(tool_module: ModuleType) -> None:
+    """The package module docstring's ``Version:`` field must match the
+    authoritative ``__version__`` in the same file.  This is the exact
+    self-contradiction that shipped: docstring on 3.1.0, ``__version__``
+    on 3.4.0, and the checker reported agreement because it only read the
+    dunder."""
+    init = (REPO_ROOT / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8")
+    doc = re.search(tool_module.PACKAGE_DOCSTRING_VERSION_RE, init, re.M)
+    dunder = re.search(r'^__version__\s*=\s*"([^"]+)"', init, re.M)
+    assert doc is not None, "docstring Version field no longer matched — pattern drifted"
+    assert dunder is not None
+    doc_v, dunder_v = doc.group(1), dunder.group(1)
+    assert doc_v == dunder_v, f"docstring Version {doc_v!r} != __version__ {dunder_v!r}"
+
+
+def test_header_doxygen_version_agrees_with_macro(tool_module: ModuleType) -> None:
+    """The public header's Doxygen ``@version`` tag must match its
+    ``AMA_CRYPTOGRAPHY_VERSION_STRING`` macro — the second half of the
+    same self-contradiction, on the C side."""
+    hdr = (REPO_ROOT / "include" / "ama_cryptography.h").read_text(encoding="utf-8")
+    tag = re.search(tool_module.HEADER_DOXYGEN_VERSION_RE, hdr, re.M)
+    macro = re.search(r'AMA_CRYPTOGRAPHY_VERSION_STRING\s+"([^"]+)"', hdr)
+    assert tag is not None, "@version tag no longer matched — pattern drifted"
+    assert macro is not None
+    assert tag.group(1) == macro.group(1), f"@version {tag.group(1)!r} != macro {macro.group(1)!r}"
+
+
+def test_new_canonical_checks_catch_a_mismatch(tool_module: ModuleType) -> None:
+    """The two new patterns must actually *see* a stale value so main()
+    can flag it — a pattern that matches nothing would silently restore
+    the original blind spot."""
+    doc = re.search(tool_module.PACKAGE_DOCSTRING_VERSION_RE, "Version: 3.1.0\n", re.M)
+    tag = re.search(tool_module.HEADER_DOXYGEN_VERSION_RE, " * @version 3.1.0\n", re.M)
+    assert doc is not None and doc.group(1) == "3.1.0"
+    assert tag is not None and tag.group(1) == "3.1.0"
+
+
+def test_main_covers_the_two_canonical_in_file_declarations(
+    tool_module: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """End-to-end: main() runs green on the real tree AND its output shows
+    the two previously-uncovered declarations are now checked."""
+    rc = tool_module.main()
+    out = capsys.readouterr().out
+    assert rc == 0, "version consistency check failed on the real tree"
+    assert "ama_cryptography/__init__.py docstring Version field" in out
+    assert "include/ama_cryptography.h @version tag" in out
+
+
 def test_synthetic_c_file_is_flagged(tool_module: ModuleType, tmp_path: Path) -> None:
     """Drop a fake `#define MY_VERSION "9.9.9"` into a temp directory
     and confirm the scanner picks it up. Mirrors the pattern a future

@@ -1,0 +1,8 @@
+# Vendored Wycheproof corpus is hash-pinned by wycheproof_vectors/manifest.json
+# (per-file SHA-256).  The runner hashes the raw checked-out bytes, so any
+# end-of-line conversion changes the digest and fails the gate on platforms
+# whose checkout default is CRLF (Windows).  Mark the corpus and its manifest
+# as non-text so git performs no smudge/clean EOL translation and the working
+# tree is byte-identical to the committed blob on every platform.
+/wycheproof_vectors/vectors/*.json -text
+/wycheproof_vectors/manifest.json -text

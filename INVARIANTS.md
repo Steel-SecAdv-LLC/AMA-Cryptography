@@ -179,11 +179,15 @@ is preserved by a hop from import-time enforcement to call-time
 enforcement under the documented docs-only flag, never weakened.
 
 **Enforcement:** Module-level guards in `crypto_api.py`, `key_management.py`,
-`legacy_compat.py`, and `pqc_backends.py` raise `RuntimeError` at import
-time when the native C backend is unavailable, except under the
-documented Sphinx/docs-build override above; under that override,
-call-time enforcement (`_enforce_invariant7*`) still refuses any
-cryptographic work without the native backend.
+and `legacy_compat.py` raise `RuntimeError` at import time when the native C
+backend is unavailable, except under the documented Sphinx/docs-build
+override above.  `pqc_backends.py` enforces the same guarantee at **call
+time** rather than import time: it records the backend as unavailable at
+import (`*_NATIVE_AVAILABLE = False`) and every wrapper raises `RuntimeError`
+before performing any operation without the native backend — and
+`crypto_api.py`, which imports `pqc_backends`, layers the import-time gate on
+top.  Under the docs override, call-time enforcement (`_enforce_invariant7*`)
+still refuses any cryptographic work without the native backend.
 
 ## INVARIANT-8 — Deterministic Reproducible Builds
 
@@ -211,9 +215,13 @@ container with the following invariants on both passes:
 - `PYTHONDONTWRITEBYTECODE=1` (no `.pyc` files in the wheel).
 - `CFLAGS` carries three overlapping prefix-maps targeting the
   workspace tree: `-fdebug-prefix-map`, `-ffile-prefix-map`, and
-  `-fmacro-prefix-map`, each `=${GITHUB_WORKSPACE}=.`.  Strips host
-  paths from DWARF debug-info, from `__FILE__` macro expansions, and
-  from `-D` macro values respectively.
+  `-fmacro-prefix-map`, each `=${{ github.workspace }}=.` (the
+  Actions-expanded workspace root; the POSIX `${GITHUB_WORKSPACE}`
+  form is deliberately NOT used, because it is not expanded inside an
+  `env:` map and would reach the compiler as a literal string,
+  silently disabling all three flags).  Strips host paths from DWARF
+  debug-info, from `__FILE__` macro expansions, and from `-D` macro
+  values respectively.
 - `LDFLAGS+=-Wl,--build-id=sha1` derives the linker build-id from
   the section contents instead of a fresh-per-invocation random value.
 - `MAKEFLAGS=-j1` + `CMAKE_BUILD_PARALLEL_LEVEL=1` force sequential

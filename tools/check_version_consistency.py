@@ -73,6 +73,18 @@ DOC_HEADER_PATTERNS = [
     re.compile(r"^\*\*Project Release:\*\*\s*(\d+\.\d+\.\d+)(.*)$", re.M),
 ]
 
+# Second, in-file version declarations that live ALONGSIDE the authoritative
+# ``__version__`` / ``AMA_CRYPTOGRAPHY_VERSION_STRING`` in the very same file
+# and must agree with it.  These were the blind spot: the package's own module
+# docstring carried ``Version: 3.1.0`` while ``__version__`` was ``3.4.0`` a
+# few lines below, and the public header's Doxygen ``@version`` tag sat on
+# ``3.1.0`` while its macro was ``3.4.0`` — each canonical file contradicting
+# itself while this script reported agreement, because it only ever read the
+# one authoritative declaration per file.  Module-level (like
+# ``DOC_HEADER_PATTERNS``) so tests can exercise the extraction directly.
+PACKAGE_DOCSTRING_VERSION_RE = r"^Version:\s*(\d+\.\d+\.\d+)"
+HEADER_DOXYGEN_VERSION_RE = r"^\s*\*\s*@version\s+(\d+\.\d+\.\d+)"
+
 
 def scan_c_sources_for_version_literals(root: Path) -> list[str]:
     """Scan every ``*.c`` / ``*.h`` under ``root`` for hardcoded
@@ -185,6 +197,27 @@ def main() -> int:
 
     # (file, regex-with-one-capture-group, description)
     checks = [
+        (
+            # The package's own module docstring carries a `Version:` field in
+            # its Organization/Author/Version block, a SECOND declaration from
+            # the authoritative `__version__` a few lines below.  Nothing
+            # compared them, so the docstring sat on 3.1.0 while `__version__`
+            # was 3.4.0 — the canonical package file contradicting itself while
+            # this script reported "All declarations agree".
+            "ama_cryptography/__init__.py",
+            PACKAGE_DOCSTRING_VERSION_RE,
+            "ama_cryptography/__init__.py docstring Version field",
+        ),
+        (
+            # The main public C header opens with a Doxygen file block whose
+            # `@version` tag is a second version declaration from the
+            # AMA_CRYPTOGRAPHY_VERSION_STRING macro checked below.  It sat on
+            # 3.1.0 while the macro was 3.4.0 — the header disagreeing with
+            # itself, invisible to a scan that only read the macro.
+            "include/ama_cryptography.h",
+            HEADER_DOXYGEN_VERSION_RE,
+            "include/ama_cryptography.h @version tag",
+        ),
         ("setup.py", r'^VERSION\s*=\s*"([^"]+)"', "setup.py VERSION literal"),
         ("pyproject.toml", r'^version\s*=\s*"([^"]+)"', "pyproject.toml [project].version"),
         (

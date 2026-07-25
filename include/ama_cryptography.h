@@ -3,7 +3,7 @@
 /**
  * @file ama_cryptography.h
  * @brief AMA Cryptography - Core C API for Post-Quantum Cryptography
- * @version 3.1.0
+ * @version 3.4.0
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2026-04-25
  *
@@ -1246,6 +1246,20 @@ AMA_API ama_error_t ama_x25519_keypair(
  * Computes shared_secret = X25519(our_secret_key, their_public_key).
  * Returns AMA_ERROR_CRYPTO if result is all-zero (low-order point rejection).
  *
+ * **Non-canonical u-coordinate.** RFC 7748 §5 masks bit 255 of the peer's
+ * u-coordinate and then works modulo p = 2^255 - 19, which leaves 19
+ * encodings — the values in [p, 2^255) — that are representable but not
+ * canonical.  This library REDUCES such a u modulo p before the ladder, so
+ * the shared secret is the one every reference implementation (ref10,
+ * curve25519-donna, libsodium) computes for the reduced value: the
+ * Wycheproof x25519 tc88 input `p + 3`, for instance, is treated as `3`.
+ * RFC 7748 permits either reducing or consuming the value unreduced;
+ * reducing is chosen deliberately, so two peers that agree on a public key
+ * can never derive different secrets.  The reduction is constant time (one
+ * unconditional conditional subtraction of p) and is applied on every field
+ * path and in `ama_x25519_scalarmult_batch`.  Pinned by
+ * tests/test_x25519_canonical_u.py; see INVARIANT-27.
+ *
  * @param shared_secret Output: 32-byte shared secret
  * @param our_secret_key Our 32-byte secret key
  * @param their_public_key Their 32-byte public key
@@ -1287,7 +1301,9 @@ AMA_API ama_error_t ama_x25519_key_exchange(
  * batch result.
  *
  * Standards reference: RFC 7748 §5 (clamp + scalar mult) and §6.1
- * (low-order rejection).
+ * (low-order rejection).  Each `points[k]` u-coordinate is reduced modulo
+ * p = 2^255 - 19 if non-canonical, exactly as `ama_x25519_key_exchange`
+ * documents.
  *
  * @param out      Output: count × 32-byte shared-secret slots
  * @param scalars  Input:  count × 32-byte secret keys (pre-clamping)

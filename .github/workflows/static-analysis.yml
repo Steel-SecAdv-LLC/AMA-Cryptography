@@ -509,12 +509,15 @@ jobs:
     #                  to a content-derived hash instead of the default
     #                  "random" mode that picks a fresh build-id per
     #                  invocation.
-    #               4. AR_FLAGS=Drcs forces archive members to be
-    #                  emitted with the deterministic flag (no
-    #                  timestamps / UID / GID); harmless on modern
-    #                  binutils where it's already the default, but
-    #                  defends against an older ar on a future runner
-    #                  image.
+    #               4. Deterministic `ar` archive members (no
+    #                  timestamps / UID / GID).  This comes from
+    #                  binutils' `--enable-deterministic-archives`
+    #                  default, NOT from an `AR_FLAGS`/`ARFLAGS` env
+    #                  var: CMake invokes `<CMAKE_AR> qc` directly and
+    #                  does not read those (see the AR_FLAGS note below
+    #                  the container block).  A future non-deterministic
+    #                  `ar` is caught by the strict native-artefact diff
+    #                  below.
     #
     # The signature artefact `_integrity_signature.py` legitimately
     # differs between builds (INVARIANT-17 ephemeral per-build keypair).
