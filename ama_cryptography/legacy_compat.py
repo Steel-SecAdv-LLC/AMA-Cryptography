@@ -25,7 +25,7 @@ symbols — they are intentionally excluded to prevent name collisions.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 3.0.0
+Version: 3.4.0
 """
 
 from __future__ import annotations

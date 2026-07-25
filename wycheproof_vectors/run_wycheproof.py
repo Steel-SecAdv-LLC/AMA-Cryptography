@@ -375,6 +375,94 @@ DRIVERS: dict[str, Callable[[Case], tuple[bool, str]]] = {
 
 
 # ---------------------------------------------------------------------------
+# Driver tripwire — proof that each driver actually consults the library
+# ---------------------------------------------------------------------------
+# The classifier trusts every driver to call into AMA and report honestly. A
+# driver rigged to return a pass for every case would sail through: for an
+# `invalid` vector, "the library rejected it" and "the driver ignored its
+# input and said pass" reduce to the same PASS, so nothing downstream can tell
+# them apart. Only the ECDSA high-`s` divergence count happens to catch a
+# hollow ECDSA driver (it would collapse the 72 to 0); HMAC, HKDF, AEAD,
+# EdDSA and X25519 had no such backstop.
+#
+# So before scoring, each driver is handed a vector it genuinely passes and
+# then the SAME vector with one byte of a real *input* flipped — the
+# signature, the peer key, the MAC/AEAD key, or the HKDF IKM. A correct driver
+# must now report a failure (the signature no longer verifies, the shared
+# secret / tag / OKM no longer matches) with overwhelming probability; a
+# hollow one returns the same verdict for both and fails the gate by name.
+# The flipped byte is chosen to avoid the X25519 clamp (byte 0 of the *peer*
+# key, which is not masked), so the change always propagates.
+DRIVER_TRIPWIRE: dict[str, str] = {
+    "eddsa_verify_schema_v1.json": "sig",
+    "xdh_comp_schema_v1.json": "public",
+    "aead_test_schema_v1.json": "key",
+    "mac_test_schema_v1.json": "key",
+    "hkdf_test_schema_v1.json": "ikm",
+    "ecdsa_verify_schema_v1.json": "sig",
+}
+
+
+def _flip_first_byte(hexstr: str) -> str:
+    raw = bytearray.fromhex(hexstr)
+    raw[0] ^= 0x01
+    return raw.hex()
+
+
+def driver_tripwires(corpora: dict[str, Any], only: str | None = None) -> list[str]:
+    """Confirm every in-play driver flips its verdict when an input byte does.
+
+    Returns a list of problems, empty when every driver demonstrably consults
+    the library. Runs once per vendored file, on a single vector, so it adds
+    negligible time to the full sweep.
+    """
+    problems: list[str] = []
+    for name, data in sorted(corpora.items()):
+        if only and only not in name:
+            continue
+        schema = data["schema"]
+        driver = DRIVERS.get(schema)
+        field = DRIVER_TRIPWIRE.get(schema)
+        if driver is None:
+            problems.append(f"{name}: no driver for schema {schema!r} (cannot tripwire)")
+            continue
+        if field is None:
+            problems.append(f"{name}: no tripwire field defined for schema {schema!r}")
+            continue
+
+        # A vector the driver genuinely passes (skips out-of-scope variants the
+        # driver rejects, e.g. AES-128 under an AES-256-only decryptor).
+        probe: tuple[dict[str, Any], dict[str, Any]] | None = None
+        for raw_group in data["testGroups"]:
+            group = dict(raw_group, _schema=schema)
+            for test in group["tests"]:
+                if test.get("result") == "valid" and test.get(field):
+                    ok, _ = driver(Case(file=name, group=group, test=test))
+                    if ok:
+                        probe = (group, test)
+                        break
+            if probe is not None:
+                break
+        if probe is None:
+            problems.append(
+                f"{name}: found no passing `valid` vector with a '{field}' field to "
+                f"tripwire the {schema} driver — its honesty cannot be demonstrated"
+            )
+            continue
+
+        group, test = probe
+        corrupted = dict(test)
+        corrupted[field] = _flip_first_byte(str(test[field]))
+        ok_bad, detail_bad = driver(Case(file=name, group=group, test=corrupted))
+        if ok_bad:
+            problems.append(
+                f"{name}: the {schema} driver still PASSED after one byte of '{field}' was "
+                f"flipped — it is not consulting the library (hollow-driver tripwire; {detail_bad})"
+            )
+    return problems
+
+
+# ---------------------------------------------------------------------------
 # Divergence policies — where this library deliberately disagrees
 # ---------------------------------------------------------------------------
 def _ecdsa_high_s_valid(c: Case) -> bool:
@@ -418,7 +506,8 @@ class Outcome:
 
 
 def load_manifest() -> dict[str, Any]:
-    return json.loads((VECTORS_DIR / "manifest.json").read_text(encoding="utf-8"))
+    data: dict[str, Any] = json.loads((VECTORS_DIR / "manifest.json").read_text(encoding="utf-8"))
+    return data
 
 
 def verify_and_load(manifest: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -597,6 +686,7 @@ def run(only: str | None = None) -> int:
     outcome, ran_files = score(corpora, only)
     report(manifest, outcome, ran_files, partial)
     problems += audit(manifest, outcome, partial)
+    problems += driver_tripwires(corpora, only)
 
     if outcome.failures:
         print(f"FAILURES ({len(outcome.failures)}):", file=sys.stderr)

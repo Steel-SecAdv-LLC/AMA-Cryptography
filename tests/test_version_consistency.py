@@ -253,3 +253,31 @@ def test_standalone_titlecase_version_identifier_is_flagged(
     f.write_text('#define Version "2.0.0"\n')
     hits = tool_module.scan_c_sources_for_version_literals(src_dir)
     assert any("2.0.0" in hit for hit in hits), f"Version was not flagged: {hits}"
+
+
+def test_declared_version_scan_covers_the_tree(tool_module: ModuleType) -> None:
+    """Every ``__version__``, docstring ``Version:`` and ``@version`` across the
+    shipped Python and C trees is found and equals the canonical version. This
+    is the whole-tree sweep the file-by-file checks are not — thirteen module
+    stamps sat on 3.0.0 for four releases before it existed."""
+    init = (REPO_ROOT / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8")
+    m = re.search(r'^__version__\s*=\s*"([^"]+)"', init, re.M)
+    assert m is not None
+    canonical = m.group(1)
+    stamps = tool_module.scan_declared_versions(REPO_ROOT)
+    assert stamps, "scan found no version stamps — it is not looking where it should"
+    stale = [(rel, ln, label, val) for rel, ln, label, val in stamps if val != canonical]
+    assert stale == [], f"stale version stamps: {stale}"
+
+
+def test_declared_version_scan_flags_a_stale_stamp(tool_module: ModuleType, tmp_path: Path) -> None:
+    """A synthetic module carrying an old ``__version__`` and docstring
+    ``Version:`` under a mocked tree must be flagged — the scan must actually
+    detect drift, not walk quietly. Both stamp kinds are exercised."""
+    pkg = tmp_path / "ama_cryptography"
+    pkg.mkdir()
+    (pkg / "stale.py").write_text('"""m\n\nVersion: 3.0.0\n"""\n__version__ = "3.0.0"\n')
+    stamps = tool_module.scan_declared_versions(tmp_path)
+    seen = {(label, val) for _rel, _ln, label, val in stamps}
+    assert ("__version__", "3.0.0") in seen
+    assert ("Version:", "3.0.0") in seen

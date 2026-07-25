@@ -939,10 +939,10 @@ jobs:
   static-analysis-gate:
     name: Static Analysis Gate
     # Single aggregating status check for this workflow (see the matching gate
-    # in ci.yml). `needs:` is workflow-local, so this covers only the per-PR
-    # static-analysis jobs — the schedule/dispatch-only memory-sanitizer,
-    # thread-sanitizer and valgrind-memcheck are intentionally excluded because
-    # they do not run on pull_request.
+    # in ci.yml). `needs:` is workflow-local. It lists EVERY job, including the
+    # schedule/dispatch-only sanitizer deep-lanes: a genuine MSAN/TSAN/Valgrind
+    # *failure* on a scheduled run must turn this gate red, and it did not while
+    # they were omitted.
     if: always()
     needs:
       - cppcheck
@@ -951,12 +951,6 @@ jobs:
       - compiler-warnings
       - version-consistency
       - address-sanitizer
-      # memory-sanitizer / thread-sanitizer / valgrind-memcheck run only on
-      # the schedule and on workflow_dispatch, so they report `skipped` on
-      # every PR — which this gate tolerates. They were nonetheless absent
-      # from this list, so a genuine MSAN/TSAN/Valgrind *failure* on a
-      # scheduled run did not turn the gate red and nothing surfaced it.
-      # Listing them costs nothing on PRs and closes that hole.
       - memory-sanitizer
       - thread-sanitizer
       - valgrind-memcheck
@@ -966,17 +960,91 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Fail if any required job did not succeed
-        # Fail only on a genuine 'failure'; 'skipped' and 'cancelled' are
-        # tolerated. With concurrency: cancel-in-progress, 'cancelled' only
-        # appears on a run superseded by a newer push (the latest run governs
-        # branch protection) or a manual abort. Matrix jobs are fail-fast:false
-        # and timeouts report as 'failure', so this never masks a real problem
-        # on the authoritative head-commit run.
-        if: ${{ contains(needs.*.result, 'failure') }}
+      - name: Fail unless every job reached the state this trigger requires
+        # A gate that demanded `success` from all twelve jobs would be red on
+        # every pull request, because memory-sanitizer / thread-sanitizer /
+        # valgrind-memcheck are schedule/dispatch-only and skip on PRs by
+        # design, and clang-tidy / reproducible-build skip on a non-PR push. A
+        # gate that tolerates `skipped` unconditionally (the previous behaviour)
+        # has the opposite problem: a job that silently stopped running reports
+        # green.
+        #
+        # So, like dudect-gate, this re-derives each job's own trigger and
+        # asserts the state that trigger implies:
+        #   should run  -> result MUST be `success`  (a skip is a silent gap)
+        #   should skip -> result MUST be `skipped`  (a run is `if:` drift)
+        #
+        # The conditions below MUST mirror the job-level `if:` on each job:
+        #   sanitizer deep-lanes : schedule || workflow_dispatch
+        #   clang-tidy / repro   : schedule || workflow_dispatch || pull_request
+        #   everything else      : unconditional
+        # GitHub Actions cannot reference another job's condition, so this
+        # duplication is the cost of checking it at all.
+        env:
+          EVENT: ${{ github.event_name }}
+          R_CPPCHECK: ${{ needs.cppcheck.result }}
+          R_CLANG_ANALYZER: ${{ needs.clang-analyzer.result }}
+          R_CODEQL: ${{ needs.codeql.result }}
+          R_WARNINGS: ${{ needs.compiler-warnings.result }}
+          R_VERSION: ${{ needs.version-consistency.result }}
+          R_ASAN: ${{ needs.address-sanitizer.result }}
+          R_MSAN: ${{ needs.memory-sanitizer.result }}
+          R_TSAN: ${{ needs.thread-sanitizer.result }}
+          R_VALGRIND: ${{ needs.valgrind-memcheck.result }}
+          R_CLANG_TIDY: ${{ needs.clang-tidy.result }}
+          R_REPRO: ${{ needs.reproducible-build.result }}
+          R_MSAN_KAT: ${{ needs.memory-sanitizer-kat.result }}
         run: |
-          echo "::error::Static Analysis Gate failed — a required job did not succeed."
-          echo "Dependency results: ${{ join(needs.*.result, ', ') }}"
-          exit 1
-      - name: All required jobs succeeded
-        run: echo "Static Analysis Gate passed — all required jobs are green."
+          set -euo pipefail
+          rc=0
+
+          # Sanitizer deep-lanes: schedule or manual dispatch only.
+          if [ "${EVENT}" = "schedule" ] || [ "${EVENT}" = "workflow_dispatch" ]; then
+            sanitizer_expected="success"
+          else
+            sanitizer_expected="skipped"
+          fi
+          # clang-tidy + reproducible-build: also on pull_request.
+          if [ "${EVENT}" = "schedule" ] || [ "${EVENT}" = "workflow_dispatch" ] \
+             || [ "${EVENT}" = "pull_request" ]; then
+            prlane_expected="success"
+          else
+            prlane_expected="skipped"
+          fi
+
+          check() {
+            job="$1"; actual="$2"; expected="$3"
+            if [ "${actual}" = "${expected}" ]; then
+              echo "  OK    ${job}: ${actual} (expected ${expected})"
+              return 0
+            fi
+            if [ "${expected}" = "success" ] && [ "${actual}" = "skipped" ]; then
+              echo "::error::${job} was SKIPPED but this trigger requires it to run."
+            elif [ "${expected}" = "skipped" ]; then
+              echo "::error::${job} ran (${actual}) but this trigger should skip it — its \`if:\` condition drifted."
+            else
+              echo "::error::${job} did not succeed: ${actual}"
+            fi
+            rc=1
+          }
+
+          echo "event=${EVENT}"
+          echo "expected: sanitizer deep-lanes=${sanitizer_expected}, clang-tidy/repro=${prlane_expected}"
+          check cppcheck             "${R_CPPCHECK}"       success
+          check clang-analyzer       "${R_CLANG_ANALYZER}" success
+          check codeql               "${R_CODEQL}"         success
+          check compiler-warnings    "${R_WARNINGS}"       success
+          check version-consistency  "${R_VERSION}"        success
+          check address-sanitizer    "${R_ASAN}"           success
+          check memory-sanitizer-kat "${R_MSAN_KAT}"       success
+          check memory-sanitizer     "${R_MSAN}"           "${sanitizer_expected}"
+          check thread-sanitizer     "${R_TSAN}"           "${sanitizer_expected}"
+          check valgrind-memcheck    "${R_VALGRIND}"       "${sanitizer_expected}"
+          check clang-tidy           "${R_CLANG_TIDY}"     "${prlane_expected}"
+          check reproducible-build   "${R_REPRO}"          "${prlane_expected}"
+
+          if [ "${rc}" -ne 0 ]; then
+            echo "::error::Static Analysis Gate failed."
+            exit 1
+          fi
+          echo "Static Analysis Gate passed — every job reached the state this trigger requires."

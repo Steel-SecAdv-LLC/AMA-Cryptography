@@ -168,6 +168,54 @@ def scan_c_sources_for_version_literals(root: Path) -> list[str]:
     return hits
 
 
+_PY_DUNDER_RE = re.compile(r'^__version__\s*=\s*["\'](\d+\.\d+\.\d+)["\']', re.M)
+_PY_DOCSTRING_RE = re.compile(r"^Version:\s*(\d+\.\d+\.\d+)\s*$", re.M)
+_C_ATVERSION_RE = re.compile(r"@version\s+(\d+\.\d+\.\d+)")
+
+
+def scan_declared_versions(repo: Path) -> list[tuple[str, int, str, str]]:
+    """Find EVERY version declaration across the shipped Python and C trees.
+
+    Covers ``__version__ = "X"`` and module-docstring ``Version: X`` under
+    ``ama_cryptography/`` and ``tools/``, plus Doxygen ``@version X`` under
+    ``src/c/`` and ``include/``.  Each must equal the canonical package
+    version.  This is what stops a *per-module* stamp from silently drifting:
+    thirteen files sat on ``3.0.0`` across four releases — a stamp the earlier,
+    file-by-file checks never looked at — while this script reported "All
+    declarations agree".  Returns ``(relpath, lineno, label, value)`` tuples;
+    ``main()`` flags any whose value is not canonical.
+
+    Vendored third-party trees are skipped: their version tags describe the
+    upstream project, not this library (the same exemption
+    ``tools/check_headers.py`` applies).
+    """
+    found: list[tuple[str, int, str, str]] = []
+
+    def _skip(path: Path) -> bool:
+        return any(p in {"__pycache__", "build", "vendor"} for p in path.parts)
+
+    for root in (repo / "ama_cryptography", repo / "tools"):
+        for path in sorted(root.rglob("*.py")):
+            if _skip(path):
+                continue
+            text = path.read_text(encoding="utf-8")
+            rel = str(path.relative_to(repo))
+            for pat, label in ((_PY_DUNDER_RE, "__version__"), (_PY_DOCSTRING_RE, "Version:")):
+                for m in pat.finditer(text):
+                    found.append((rel, text[: m.start()].count("\n") + 1, label, m.group(1)))
+
+    for root in (repo / "src" / "c", repo / "include"):
+        for path in sorted(root.rglob("*")):
+            if path.suffix not in (".c", ".h") or not path.is_file() or _skip(path):
+                continue
+            text = path.read_text(encoding="utf-8")
+            rel = str(path.relative_to(repo))
+            for m in _C_ATVERSION_RE.finditer(text):
+                found.append((rel, text[: m.start()].count("\n") + 1, "@version", m.group(1)))
+
+    return found
+
+
 def extract(file: str, pattern: str) -> str | None:
     """Return the single capture group from `pattern`, or None if not found.
 
@@ -394,6 +442,23 @@ def main() -> int:
             failures.append(f"      {hit}")
     else:
         print("OK    src/c/ embedded-version-literal scan: 0 hits")
+
+    # Every declared version stamp across the Python and C trees — the whole-
+    # tree sweep that the file-by-file checks above cannot be, so a per-module
+    # `__version__` / docstring `Version:` / Doxygen `@version` cannot drift
+    # unnoticed the way thirteen of them did (all stuck on 3.0.0).
+    stamps = scan_declared_versions(REPO)
+    stamp_offenders = [
+        f"{rel}:{ln}: {label} = {val!r} != canonical {canonical!r}"
+        for rel, ln, label, val in stamps
+        if val != canonical
+    ]
+    if stamp_offenders:
+        failures.append(f"  - declared version stamps out of sync ({len(stamp_offenders)}):")
+        for row in stamp_offenders:
+            failures.append(f"      {row}")
+    else:
+        print(f"OK    declared version stamps ({len(stamps)} checked)          = {canonical}")
 
     if failures:
         print(
